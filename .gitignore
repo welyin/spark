@@ -1,7 +1,7 @@
 # Rust 构建产物
 core/target/
 
-# Node / 前端（阶段③④壳工程）
+# Node / 前端（壳工程）
 node_modules/
 dist/
 dist-ssr/
@@ -10,7 +10,7 @@ dist-ssr/
 desktop/src-tauri/target/
 mobile/src-tauri/target/
 
-# 插件市场本地发布产物（打包脚本输出，见 plugins/README.md）
+# 插件市场本地发布产物（打包脚本输出，见 wiki 插件开发指南）
 desktop/dist-market/
 
 # 签名私钥等本地机密
