@@ -1,0 +1,53 @@
+[package]
+name = "spark-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+aes = "0.9.1"
+aes-gcm = "0.11.0"
+base64 = "0.22.1"
+bip39 = { version = "2.2", features = ["chinese-simplified"] }
+cbc = { version = "0.2.1", features = ["alloc"] }
+ed25519-dalek = "3.0.0"
+hex = "0.4.3"
+hmac = "0.13.0"
+libc = "0.2.189"
+pbkdf2 = "0.13.0"
+rand = "0.10.2"
+scrypt = "0.12.0"
+serde = { version = "1.0.229", features = ["derive"] }
+# preserve_order：pubsub 信封签名输入的键序 = 对象插入序（对齐 JS JSON.parse/stringify），
+# 默认 BTreeMap 会破坏该口径，见 core/spec/p2p-messages.md §3.3。
+serde_json = { version = "1.0.151", features = ["preserve_order"] }
+sha2 = "0.11.0"
+# sled：纯 Rust 嵌入式 KV（维护模式，API 冻结可接受），kernel 门面的持久化后端。
+sled = "0.34.7"
+thiserror = "2.0.19"
+
+# p2p 模块网络栈（core/spec/p2p-messages.md §1）：
+# rust-libp2p 已弃 mplex，多路复用器用 yamux（TS 侧后续加 yamux 互通）。
+libp2p = { version = "0.56.0", features = [
+  "tcp",
+  "dns",
+  "websocket",
+  "noise",
+  "yamux",
+  "gossipsub",
+  "mdns",
+  "identify",
+  "ping",
+  "relay",
+  "autonat",
+  "upnp",
+  "request-response",
+  "macros",
+  "tokio",
+] }
+tokio = { version = "1.47", features = ["macros", "rt-multi-thread", "sync", "time"] }
+# request_response::Codec 以 async_trait 声明，实现侧需要同名宏。
+async-trait = "0.1.89"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1.47", features = ["full"] }

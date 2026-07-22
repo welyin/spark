@@ -1,0 +1,36 @@
+[package]
+name = "spark-desktop"
+version = "0.1.0"
+description = "Spark desktop shell (Tauri 2.x)"
+edition = "2021"
+
+[lib]
+# 移动端复用同一 lib 入口（staticlib/cdylib），桌面仅使用 rlib。
+name = "spark_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Rust 内核：身份/文档/组织/数据治理/P2P 的门面单例（同步 API）。
+spark-core = { path = "../../core" }
+tauri = { version = "2", features = [] }
+# 保存/打开对话框（data-export 导出路径选择，前端适配层经 @tauri-apps/plugin-dialog 调用）。
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1" }
+# broadcast::Receiver<P2pEvent> 的类型命名（事件转发任务）。
+tokio = { version = "1", features = ["sync"] }
+# 插件市场：包 sha256 校验 / PEM 与签名 base64 / hex 摘要。
+sha2 = "0.11"
+base64 = "0.22"
+hex = "0.4"
+# 插件市场：https 清单/包下载（本地 dist-market 与 file:// 优先；
+# native-tls 走系统信任库，避免引入 rustls C 依赖链，对齐旧 Node https 语义）。
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "native-tls"] }
+
+[dev-dependencies]
+tempfile = "3"
+# 市场服务测试：构造签名密钥对（内核同款 crate，仅测试用）。
+ed25519-dalek = "3.0.0"

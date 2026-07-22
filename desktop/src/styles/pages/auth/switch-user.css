@@ -1,0 +1,36 @@
+/* 切换用户面板 */
+
+.auth-title {
+  margin: 0;
+  font-size: 18px;
+  color: var(--spark-text-1);
+}
+
+.identity-table {
+  margin-top: 12px;
+  width: 100%;
+}
+
+.user-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.user-cell-name {
+  font-weight: 500;
+  color: var(--spark-text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.submit-btn {
+  width: 100%;
+  margin-top: 14px;
+}
+
+.entry-link {
+  margin-top: 10px;
+  text-align: center;
+}

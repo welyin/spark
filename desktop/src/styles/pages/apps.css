@@ -1,0 +1,69 @@
+/* 插件市场页 */
+
+.card-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spark-gap-page);
+  padding: var(--spark-padding-page);
+}
+
+.card-page h1 {
+  margin: 0;
+}
+
+.plugin-card {
+  min-height: 290px;
+  margin-bottom: 12px;
+  transition: box-shadow 0.15s ease;
+}
+
+.plugin-card:hover {
+  box-shadow: var(--spark-shadow-hover);
+}
+
+.plugin-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.plugin-head h3 {
+  margin: 0;
+}
+
+.plugin-head p {
+  margin: 4px 0 0;
+  color: var(--spark-text-3);
+  font-size: 12px;
+}
+
+.plugin-card .desc {
+  min-height: 40px;
+}
+
+.meta {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--spark-text-2);
+}
+
+.state-row {
+  margin-top: 8px;
+  display: flex;
+  gap: 8px;
+}
+
+.actions {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.reason {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--spark-text-3);
+}

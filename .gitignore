@@ -1,0 +1,20 @@
+# Rust 构建产物
+core/target/
+
+# Node / 前端（阶段③④壳工程）
+node_modules/
+dist/
+dist-ssr/
+
+# Tauri 打包产物
+desktop/src-tauri/target/
+mobile/src-tauri/target/
+
+# 插件市场本地发布产物（打包脚本输出，见 plugins/README.md）
+desktop/dist-market/
+
+# 签名私钥等本地机密
+.secrets/
+
+# 系统文件
+.DS_Store

@@ -1,0 +1,17 @@
+/* 头像选择器：预览 + 上传/移除 */
+
+.avatar-picker {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.avatar-picker-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.hidden-input {
+  display: none;
+}

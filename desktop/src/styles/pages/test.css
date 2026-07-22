@@ -1,0 +1,91 @@
+/* 测试页（开发调试面板） */
+
+.card-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spark-gap-page);
+  padding: var(--spark-padding-page);
+}
+
+.card-page h1 {
+  margin: 0;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.panel-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.panel-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.subtitle,
+.muted,
+.address-text,
+.error-text,
+.empty-state {
+  color: var(--spark-text-2);
+}
+
+.node-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.node-card {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.node-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  align-items: center;
+}
+
+.node-card-head strong {
+  flex: 1;
+  min-width: 0;
+  word-break: break-all;
+}
+
+.node-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.node-meta span {
+  font-size: 12px;
+}
+
+.message {
+  margin-bottom: 12px;
+}
+
+.inner-card {
+  margin-top: 16px;
+}
+
+.address-text,
+.error-text {
+  margin: 0;
+  word-break: break-all;
+}

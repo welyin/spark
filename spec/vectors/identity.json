@@ -1,0 +1,108 @@
+{
+  "meta": {
+    "title": "identity golden vectors（identity.md §7）",
+    "generatedBy": "desktop/scripts/extract-vectors.mts（npm run vectors:extract）",
+    "source": "desktop/src/main/identity/root-id.ts",
+    "deterministic": "所有随机值硬编码为常量；重复运行字节级一致",
+    "crossChecks": [
+      "rootId/publicKey：复刻 bip39→SLIP-0010→ed25519 管线 === RootIdentityManager 真实 recover 流程输出",
+      "scrypt v2：复刻 decrypt 成功解开真实 initialize()（内部 encryptRootSecret）落盘的密文",
+      "pbkdf2 v1：真实 unlock() 成功解开复刻 encrypt 产出的 v1 密文身份文件"
+    ]
+  },
+  "constants": {
+    "bip39": {
+      "entropyBits": 256,
+      "passphrase": "Polykey",
+      "defaultWordlist": "chinese_simplified",
+      "recoveryWordlists": [
+        "chinese_simplified",
+        "english"
+      ]
+    },
+    "derivationPath": "m/44'/607'/0'/0'/0'",
+    "rootIdRule": "rootId = sha256hex(publicKey)；publicKey = ed25519(nacl 兼容) fromSeed(SLIP-0010 末级节点 key)"
+  },
+  "rootIdentityChinese": {
+    "mnemonic": "与 祝 产 鸡 永 烂 施 师 蓝 荷 有 邓 朗 防 管 李 原 芳 饿 万 措 走 腰 旅",
+    "wordlist": "chinese_simplified",
+    "derivationPath": "m/44'/607'/0'/0'/0'",
+    "seedHex": "c6cbbce5bb8438b2bb931d684cb429505c597cf6abd76e069b7afd77e10775a6feb450b9deeab53e2d72f55cb917aa3c52e7a3eb6b3dca48d3988232d1ad5835",
+    "publicKeyHex": "ad0c44e66913ea7ea9061f6cf940b7ea148d3c9417262cd8a10711dab42928b0",
+    "publicKeyBase64": "rQxE5mkT6n6pBh9s+UC36hSNPJQXJizYoQcR2rQpKLA=",
+    "rootId": "c0eb52b9d522c8646fa7a075ce117bc6bd1b832de6a4b135e47f0b996ef6fb34"
+  },
+  "domainIdentities": [
+    {
+      "domain": "chat",
+      "domainSha256Hex": "31e06f7d89feb99a0e6c0affe198748c3bb5bef5e3cc92d95cb9e996197d3fc3",
+      "idxA": 836792189,
+      "idxB": 167688602,
+      "derivationPath": "m/44'/607'/0'/0'/0'/836792189'/167688602'",
+      "publicKeyHex": "5f17980a9846fc567724c8f3880f77b1b69a59eb566ff85ea484b1b2b686f92a",
+      "publicKeyBase64": "XxeYCphG/FZ3JMjziA93sbaaWetWb/hepISxsraG+So=",
+      "domainId": "267f5b213da0d0c7c17c440c3234ecbb68cbabb575749a0a5267cbc4ea462ce0"
+    },
+    {
+      "domain": "文档协作",
+      "domainSha256Hex": "915a9af477d3dda96ef24e51e32417262d1f5986a5a2b913d833eebbe6601a14",
+      "idxA": 291150580,
+      "idxB": 2010373545,
+      "derivationPath": "m/44'/607'/0'/0'/0'/291150580'/2010373545'",
+      "publicKeyHex": "490eb869322f3c2007d8f19f01626b68bc6d2f412bf8cd6c7010277fb2e7d44e",
+      "publicKeyBase64": "SQ64aTIvPCAH2PGfAWJraLxtL0Er+M1scBAnf7Ln1E4=",
+      "domainId": "12a4d598cf8b7654a12b039edd4c8be9b74718c033974cb95f93f3531580c15c"
+    }
+  ],
+  "rootIdentityEnglishV1": {
+    "mnemonic": "wage secret force quantum hurt village fire success duck leader virus off flip possible ethics muscle actual cannon ritual express often wall excess room",
+    "wordlist": "english",
+    "derivationPath": "m/44'/607'/0'/0'/0'",
+    "seedHex": "f4b1f5485dd7817ac9a5662d92a4719415186f801da50b0cf2e1a1afa2ba092aff0fe85fceb1345379a7e08d188ab0c0ff315118b0ffd81b9670addc5f22c8f8",
+    "publicKeyHex": "a397aee29aa9e053dab17459c8d9b9d518806fb4accfe5c1ea00ad46eb9818f6",
+    "publicKeyBase64": "o5eu4pqp4FPasXRZyNm51RiAb7Ssz+XB6gCtRuuYGPY=",
+    "rootId": "2f28bdecd12669f3215368f14927c5a1decb801ecc0bfd304020679b95aefbfd"
+  },
+  "scryptV2": {
+    "kdf": {
+      "name": "scrypt",
+      "N": 32768,
+      "r": 8,
+      "p": 1,
+      "keyLen": 32,
+      "maxmem": 67108864
+    },
+    "cipher": "aes-256-gcm",
+    "password": "Vec0-Passw0rd!",
+    "saltHex": "00112233445566778899aabbccddeeff",
+    "saltBase64": "ABEiM0RVZneImaq7zN3u/w==",
+    "ivHex": "0102030405060708090a0b0c",
+    "ivBase64": "AQIDBAUGBwgJCgsM",
+    "plaintextJson": "{\"mnemonic\":\"与 祝 产 鸡 永 烂 施 师 蓝 荷 有 邓 朗 防 管 李 原 芳 饿 万 措 走 腰 旅\",\"derivationPath\":\"m/44'/607'/0'/0'/0'\"}",
+    "ciphertextHex": "ed04968f3de5fae6b91451f02aeff1315eb96c7b0067ec3d0c7bac3e798156713073c77989d0a076e27175ce99b91a71388ec12e1868863d2cf384e35ac57a0e78acdd75541e5e52d61e21f7afa6834f4525bc231f138ebd3a0bd90ca2caa4f48fb5cf6be2ad3d507e6fad6e3bdf4043ca4f39bbc3c7fc9d698fb9589239dd8cf6a3e9f187b4da5621648ff3c0401b31b930fc9030",
+    "ciphertextBase64": "7QSWjz3l+ua5FFHwKu/xMV65bHsAZ+w9DHusPnmBVnEwc8d5idCgduJxdc6ZuRpxOI7BLhhohj0s84TjWsV6Dnis3XVUHl5S1h4h96+mg09FJbwjHxOOvToL2QyiyqT0j7XPa+KtPVB+b61uO99AQ8pPObvDx/ydaY+5WJI53Yz2o+nxh7TaViFkj/PAQBsxuTD8kDA=",
+    "authTagHex": "dbccf5c1e6b521a7bab2c76b6d662e46",
+    "authTagBase64": "28z1wea1Iae6ssdrbWYuRg==",
+    "roundtrip": "ok",
+    "realImplCrossCheck": "ok（复刻 decrypt 解开真实 encryptRootSecret 输出；kdf/cipher 参数与真实落盘文件一致）"
+  },
+  "pbkdf2V1": {
+    "kdf": {
+      "name": "pbkdf2",
+      "iterations": 210000,
+      "digest": "sha512",
+      "keyLen": 32
+    },
+    "cipher": "aes-256-cbc",
+    "password": "Vec0-Passw0rd!",
+    "saltHex": "ffeeddccbbaa99887766554433221100",
+    "saltBase64": "/+7dzLuqmYh3ZlVEMyIRAA==",
+    "ivHex": "0f0e0d0c0b0a09080706050403020100",
+    "ivBase64": "Dw4NDAsKCQgHBgUEAwIBAA==",
+    "plaintextJson": "{\"mnemonic\":\"wage secret force quantum hurt village fire success duck leader virus off flip possible ethics muscle actual cannon ritual express often wall excess room\",\"derivationPath\":\"m/44'/607'/0'/0'/0'\"}",
+    "ciphertextHex": "8038ac1092f3b83b4eefd7c4477e70c6fa4af76783b3df70df5506749b351ccd70677e31fecbf5e8d1a3661810a92f3982e42d8654397d97fb707366f7f124c93c17c4219c9fb6351c52c149a474dd4c8b8fb0b37071f4afe6058eb0cc10da62764e81ebf2e547488062e521819a31e2df5227a5339b25d0ed3c3b732a1eca8b21cc7720407ead633648b2f1d957230b678be68e6244efaa426169b31f364c9dd2127e156cf5863f41925e5477fe3e06eae9d7e3b94fa5d939e0f0180382a846edc4c5e6281b194ef2ba10326d216e88",
+    "ciphertextBase64": "gDisEJLzuDtO79fER35wxvpK92eDs99w31UGdJs1HM1wZ34x/sv16NGjZhgQqS85guQthlQ5fZf7cHNm9/EkyTwXxCGcn7Y1HFLBSaR03UyLj7CzcHH0r+YFjrDMENpidk6B6/LlR0iAYuUhgZox4t9SJ6UzmyXQ7Tw7cyoeyoshzHcgQH6tYzZIsvHZVyMLZ4vmjmJE76pCYWmzHzZMndISfhVs9YY/QZJeVHf+Pgbq6dfjuU+l2Tng8BgDgqhG7cTF5igbGU7yuhAybSFuiA==",
+    "roundtrip": "ok",
+    "realImplCrossCheck": "ok（真实 unlock() 解开复刻 encrypt 产出的 v1 密文身份文件）"
+  }
+}

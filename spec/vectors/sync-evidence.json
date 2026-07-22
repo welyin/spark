@@ -1,0 +1,603 @@
+{
+  "meta": {
+    "title": "sync-evidence golden vectors（sync-evidence.md §5）",
+    "generatedBy": "desktop/scripts/extract-vectors.mts（npm run vectors:extract）",
+    "source": "desktop/src/main/db/{evidence,sync,schema}.ts",
+    "deterministic": "所有输入（含 timestamp）硬编码为常量；重复运行字节级一致",
+    "crossChecks": [
+      "normalizeObject 为 evidence.ts 私有函数：脚本逐行复刻，每个用例经真实 buildEvidencePayloadHash 做 sha256 交叉校验（顶层直接 + {v:...} 包裹两种）",
+      "hash/链/vv/lww/schema 用例全部直接调用真实导出函数",
+      "evidenceChain.verifyChainResult 为真实 verifyEvidenceChain 在内存 fake LevelDB 上的执行结果"
+    ]
+  },
+  "normalizeObject": [
+    {
+      "name": "nested-object",
+      "inputExpr": "{\"z\":{\"b\":2,\"a\":1},\"a\":[{\"x\":null}],\"s\":\"hi\"}",
+      "expected": "{\"a\":\"{\\\"0\\\":\\\"{\\\\\\\"x\\\\\\\":\\\\\\\"null\\\\\\\"}\\\"}\",\"s\":\"\\\"hi\\\"\",\"z\":\"{\\\"a\\\":\\\"1\\\",\\\"b\\\":\\\"2\\\"}\"}",
+      "verifiedAgainstRealImpl": true,
+      "input": {
+        "z": {
+          "b": 2,
+          "a": 1
+        },
+        "a": [
+          {
+            "x": null
+          }
+        ],
+        "s": "hi"
+      }
+    },
+    {
+      "name": "array-indices-numeric-order",
+      "inputExpr": "[0,1,2,3,4,5,6,7,8,9,10]",
+      "expected": "{\"0\":\"0\",\"1\":\"1\",\"2\":\"2\",\"3\":\"3\",\"4\":\"4\",\"5\":\"5\",\"6\":\"6\",\"7\":\"7\",\"8\":\"8\",\"9\":\"9\",\"10\":\"10\"}",
+      "verifiedAgainstRealImpl": true,
+      "input": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ]
+    },
+    {
+      "name": "integer-like-keys-ordering",
+      "inputExpr": "{\"2\":\"a\",\"10\":\"b\",\"4294967295\":\"c\"}",
+      "expected": "{\"2\":\"\\\"a\\\"\",\"10\":\"\\\"b\\\"\",\"4294967295\":\"\\\"c\\\"\"}",
+      "verifiedAgainstRealImpl": true,
+      "input": {
+        "2": "a",
+        "10": "b",
+        "4294967295": "c"
+      }
+    },
+    {
+      "name": "array-mixed-nesting",
+      "inputExpr": "[1,\"two\",null,{\"k\":\"v\"},[true]]",
+      "expected": "{\"0\":\"1\",\"1\":\"\\\"two\\\"\",\"2\":\"null\",\"3\":\"{\\\"k\\\":\\\"\\\\\\\"v\\\\\\\"\\\"}\",\"4\":\"{\\\"0\\\":\\\"true\\\"}\"}",
+      "verifiedAgainstRealImpl": true,
+      "input": [
+        1,
+        "two",
+        null,
+        {
+          "k": "v"
+        },
+        [
+          true
+        ]
+      ]
+    },
+    {
+      "name": "null-literal",
+      "inputExpr": "null",
+      "expected": "null",
+      "verifiedAgainstRealImpl": true,
+      "input": null
+    },
+    {
+      "name": "undefined-literal",
+      "inputExpr": "undefined",
+      "expected": "undefined",
+      "verifiedAgainstRealImpl": true
+    },
+    {
+      "name": "integer",
+      "inputExpr": "42",
+      "expected": "42",
+      "verifiedAgainstRealImpl": true,
+      "input": 42
+    },
+    {
+      "name": "float",
+      "inputExpr": "3.14",
+      "expected": "3.14",
+      "verifiedAgainstRealImpl": true,
+      "input": 3.14
+    },
+    {
+      "name": "float-precision",
+      "inputExpr": "0.1 + 0.2",
+      "expected": "0.30000000000000004",
+      "verifiedAgainstRealImpl": true,
+      "input": 0.30000000000000004
+    },
+    {
+      "name": "large-number-exponent",
+      "inputExpr": "1e21",
+      "expected": "1e+21",
+      "verifiedAgainstRealImpl": true,
+      "input": 1e+21
+    },
+    {
+      "name": "negative-zero",
+      "inputExpr": "-0",
+      "expected": "0",
+      "verifiedAgainstRealImpl": true
+    },
+    {
+      "name": "chinese-string",
+      "inputExpr": "\"你好，世界\"",
+      "expected": "\"你好，世界\"",
+      "verifiedAgainstRealImpl": true,
+      "input": "你好，世界"
+    },
+    {
+      "name": "escape-string",
+      "inputExpr": "\"换行\\n引号\\\"反斜杠\\\\\"",
+      "expected": "\"换行\\n引号\\\"反斜杠\\\\\"",
+      "verifiedAgainstRealImpl": true,
+      "input": "换行\n引号\"反斜杠\\"
+    },
+    {
+      "name": "unsorted-keys",
+      "inputExpr": "{\"b\":1,\"a\":2,\"A\":3}（key 按 UTF-16 code unit 排序）",
+      "expected": "{\"A\":\"3\",\"a\":\"2\",\"b\":\"1\"}",
+      "verifiedAgainstRealImpl": true,
+      "input": {
+        "b": 1,
+        "a": 2,
+        "A": 3
+      }
+    },
+    {
+      "name": "boolean",
+      "inputExpr": "true",
+      "expected": "true",
+      "verifiedAgainstRealImpl": true,
+      "input": true
+    },
+    {
+      "name": "empty-array-becomes-object",
+      "inputExpr": "[]",
+      "expected": "{}",
+      "verifiedAgainstRealImpl": true,
+      "input": []
+    },
+    {
+      "name": "empty-object",
+      "inputExpr": "{}",
+      "expected": "{}",
+      "verifiedAgainstRealImpl": true,
+      "input": {}
+    }
+  ],
+  "payloadHash": [
+    {
+      "input": {
+        "text": "你好",
+        "seq": 1
+      },
+      "note": "object",
+      "payloadHash": "3dacccb4823b5db858b24fd3725bae5ec310ab2a945899af9fe4931bc412bd13"
+    },
+    {
+      "input": "纯字符串 payload",
+      "note": "string",
+      "payloadHash": "890276fba0f9288ab97287fa9bee29cd419a892b1060a8180fbba87a53482575"
+    },
+    {
+      "input": 42,
+      "note": "number",
+      "payloadHash": "73475cb40a568e8da8a045ced110137e159f890ac4da883b6b17dc651b3a8049"
+    },
+    {
+      "input": null,
+      "note": "null → null（短路，不哈希）",
+      "payloadHash": null
+    },
+    {
+      "input": null,
+      "inputKind": "undefined",
+      "note": "undefined → null（短路，不哈希）",
+      "payloadHash": null
+    }
+  ],
+  "metaHash": [
+    {
+      "input": {
+        "vv": {
+          "nodeA": 1
+        },
+        "ts": 1700000000000,
+        "nodeId": "nodeA"
+      },
+      "note": "sync meta",
+      "metaHash": "08b7375a58d072fff1a395e437aa9cd29edfa2c715268c2bfe447633b2f3881a"
+    },
+    {
+      "input": {
+        "vv": {
+          "nodeA": 3
+        },
+        "ts": 1700000002000,
+        "tombstone": true
+      },
+      "note": "tombstone meta",
+      "metaHash": "ecd6d266428b15a8fb07bdc98cbf53a4404acf0b5fc27812b13a7de432a9a19d"
+    },
+    {
+      "input": null,
+      "note": "null → null",
+      "metaHash": null
+    }
+  ],
+  "dataHash": [
+    {
+      "domain": "chat",
+      "collection": "messages",
+      "id": "msg-001",
+      "op": "put",
+      "payloadHash": "3dacccb4823b5db858b24fd3725bae5ec310ab2a945899af9fe4931bc412bd13",
+      "metaHash": "08b7375a58d072fff1a395e437aa9cd29edfa2c715268c2bfe447633b2f3881a",
+      "dataHash": "c3c99a2d703e26cc47d371b19dc1304704150081b2535e2737566b0feff1bde6"
+    },
+    {
+      "domain": "chat",
+      "collection": "messages",
+      "id": "msg-001",
+      "op": "delete",
+      "payloadHash": null,
+      "metaHash": "61a6e58c69ee3bb6ec2594ac6865424bfc2c2ad0d7b68c024bcc4534c853c2c6",
+      "dataHash": "6842ae9780d9910c329b57d8dc87a4378fe7b90885e199cb15db7bf8e3efc778"
+    }
+  ],
+  "entryHash": [
+    {
+      "entry": {
+        "seq": 1,
+        "prevHash": null,
+        "domain": "chat",
+        "collection": "messages",
+        "id": "msg-001",
+        "op": "put",
+        "dataHash": "c3c99a2d703e26cc47d371b19dc1304704150081b2535e2737566b0feff1bde6",
+        "payloadHash": "3dacccb4823b5db858b24fd3725bae5ec310ab2a945899af9fe4931bc412bd13",
+        "metaHash": "08b7375a58d072fff1a395e437aa9cd29edfa2c715268c2bfe447633b2f3881a",
+        "timestamp": 1700000000000,
+        "nodeId": "nodeA"
+      },
+      "hash": "3c180604e347851618829828e4fb392f1a89f234490fe2a1d3b9c8b24d0a575e"
+    }
+  ],
+  "evidenceChain": {
+    "storageKeys": {
+      "proofKeyPattern": "doc:evidence:proof:{seq 左补零至 12 位}",
+      "proofKeys": [
+        "doc:evidence:proof:000000000001",
+        "doc:evidence:proof:000000000002",
+        "doc:evidence:proof:000000000003"
+      ],
+      "headKey": "doc:evidence:head"
+    },
+    "entries": [
+      {
+        "domain": "chat",
+        "collection": "messages",
+        "id": "msg-001",
+        "op": "put",
+        "dataHash": "c3c99a2d703e26cc47d371b19dc1304704150081b2535e2737566b0feff1bde6",
+        "payloadHash": "3dacccb4823b5db858b24fd3725bae5ec310ab2a945899af9fe4931bc412bd13",
+        "metaHash": "08b7375a58d072fff1a395e437aa9cd29edfa2c715268c2bfe447633b2f3881a",
+        "timestamp": 1700000000000,
+        "nodeId": "nodeA",
+        "seq": 1,
+        "prevHash": null,
+        "hash": "3c180604e347851618829828e4fb392f1a89f234490fe2a1d3b9c8b24d0a575e"
+      },
+      {
+        "domain": "chat",
+        "collection": "messages",
+        "id": "msg-002",
+        "op": "put",
+        "dataHash": "f87c66240c118856b395b16e25f16b7af2d5aef91643667517ff0c9cbc8c60dc",
+        "payloadHash": "44615cd8abf4a319a66931eec442d4d7a55b1ee1298885fcbbf735efe0012703",
+        "metaHash": "af9fb3758094b9144ee9f022d3d5bfbdda73ef54cd23011b94a93b17e5a290c4",
+        "timestamp": 1700000001000,
+        "nodeId": "nodeA",
+        "seq": 2,
+        "prevHash": "3c180604e347851618829828e4fb392f1a89f234490fe2a1d3b9c8b24d0a575e",
+        "hash": "af5c98a2db4193bd3134ef8527e3071bd3cb9f3f0e073583d11ca9441fc0ff5c"
+      },
+      {
+        "domain": "chat",
+        "collection": "messages",
+        "id": "msg-001",
+        "op": "delete",
+        "dataHash": "ac512b54cbe11a66a7a1737190dc2bf9fdc4381e43a9ce858d80efb6afb1cbb4",
+        "payloadHash": null,
+        "metaHash": "988fdfb1e1a11b695a02233f738883f1bfa31ffbdb62a4eef0b360a760b651c4",
+        "timestamp": 1700000002000,
+        "nodeId": "nodeA",
+        "seq": 3,
+        "prevHash": "af5c98a2db4193bd3134ef8527e3071bd3cb9f3f0e073583d11ca9441fc0ff5c",
+        "hash": "484ccf7dcb708e8b4f3945f4946249bb795576921e8ca7af0f15455da29d8a16"
+      }
+    ],
+    "head": {
+      "seq": 3,
+      "hash": "484ccf7dcb708e8b4f3945f4946249bb795576921e8ca7af0f15455da29d8a16"
+    },
+    "verifyChainResult": true
+  },
+  "compareVersionVectors": [
+    {
+      "local": null,
+      "remote": null,
+      "branch": "both-null → equal",
+      "result": "equal"
+    },
+    {
+      "local": {
+        "a": 1
+      },
+      "remote": null,
+      "branch": "remote-null → local",
+      "result": "local"
+    },
+    {
+      "local": null,
+      "remote": {
+        "a": 1
+      },
+      "branch": "local-null → remote",
+      "result": "remote"
+    },
+    {
+      "local": {
+        "a": 2
+      },
+      "remote": {
+        "a": 1
+      },
+      "branch": "local strictly greater → local",
+      "result": "local"
+    },
+    {
+      "local": {
+        "a": 1
+      },
+      "remote": {
+        "a": 2
+      },
+      "branch": "remote strictly greater → remote",
+      "result": "remote"
+    },
+    {
+      "local": {
+        "a": 1
+      },
+      "remote": {
+        "a": 1
+      },
+      "branch": "identical → equal",
+      "result": "equal"
+    },
+    {
+      "local": {
+        "a": 1,
+        "b": 1
+      },
+      "remote": {
+        "a": 1
+      },
+      "branch": "local superset → local",
+      "result": "local"
+    },
+    {
+      "local": {
+        "a": 1
+      },
+      "remote": {
+        "a": 1,
+        "b": 1
+      },
+      "branch": "remote superset → remote",
+      "result": "remote"
+    },
+    {
+      "local": {
+        "a": 2,
+        "b": 1
+      },
+      "remote": {
+        "a": 1,
+        "b": 2
+      },
+      "branch": "each greater on some key → concurrent",
+      "result": "concurrent"
+    },
+    {
+      "local": {},
+      "remote": {},
+      "branch": "both empty → equal",
+      "result": "equal"
+    }
+  ],
+  "resolveConflictByLWW": [
+    {
+      "localTs": null,
+      "remoteTs": null,
+      "branch": "both null → 0 vs 0 → equal",
+      "result": "equal"
+    },
+    {
+      "localTs": 5,
+      "remoteTs": null,
+      "branch": "remote null 按 0 → local",
+      "result": "local"
+    },
+    {
+      "localTs": null,
+      "remoteTs": 5,
+      "branch": "local null 按 0 → remote",
+      "result": "remote"
+    },
+    {
+      "localTs": 10,
+      "remoteTs": 5,
+      "branch": "l > r → local",
+      "result": "local"
+    },
+    {
+      "localTs": 5,
+      "remoteTs": 10,
+      "branch": "r > l → remote",
+      "result": "remote"
+    },
+    {
+      "localTs": 7,
+      "remoteTs": 7,
+      "branch": "严格比较，相等 → equal",
+      "result": "equal"
+    },
+    {
+      "localTs": -5,
+      "remoteTs": null,
+      "branch": "负数时间戳：-5 < 0 → remote",
+      "result": "remote"
+    }
+  ],
+  "mergeVersionVectors": [
+    {
+      "local": {
+        "a": 1
+      },
+      "remote": {
+        "a": 2,
+        "b": 3
+      },
+      "merged": {
+        "a": 2,
+        "b": 3
+      },
+      "note": "replicated（mergeVersionVectors 未从 sync.ts 导出，按源码逐行复刻）"
+    },
+    {
+      "local": null,
+      "remote": {
+        "a": 1
+      },
+      "merged": {
+        "a": 1
+      },
+      "note": "replicated（mergeVersionVectors 未从 sync.ts 导出，按源码逐行复刻）"
+    },
+    {
+      "local": {
+        "a": 5
+      },
+      "remote": null,
+      "merged": {
+        "a": 5
+      },
+      "note": "replicated（mergeVersionVectors 未从 sync.ts 导出，按源码逐行复刻）"
+    },
+    {
+      "local": null,
+      "remote": null,
+      "merged": {},
+      "note": "replicated（mergeVersionVectors 未从 sync.ts 导出，按源码逐行复刻）"
+    }
+  ],
+  "resolveSchemaDeclaration": [
+    {
+      "name": "append-only 默认：enableEvidence 强制 true",
+      "declaration": {
+        "syncStrategy": "append-only"
+      },
+      "result": {
+        "syncStrategy": "append-only",
+        "governance": false,
+        "enableEvidence": true
+      }
+    },
+    {
+      "name": "append-only 显式关 evidence 仍强制 true",
+      "declaration": {
+        "syncStrategy": "append-only",
+        "enableEvidence": false
+      },
+      "result": {
+        "syncStrategy": "append-only",
+        "governance": false,
+        "enableEvidence": true
+      }
+    },
+    {
+      "name": "governance + append-only：evidence 强制 true",
+      "declaration": {
+        "syncStrategy": "append-only",
+        "governance": true
+      },
+      "result": {
+        "syncStrategy": "append-only",
+        "governance": true,
+        "enableEvidence": true
+      }
+    },
+    {
+      "name": "governance + lww：禁止降级，抛错",
+      "declaration": {
+        "syncStrategy": "lww",
+        "governance": true
+      },
+      "error": "Governance collections (votes, members, accounts) must use the append-only sync strategy; downgrade is not allowed"
+    },
+    {
+      "name": "lww 默认：enableEvidence=false",
+      "declaration": {
+        "syncStrategy": "lww"
+      },
+      "result": {
+        "syncStrategy": "lww",
+        "governance": false,
+        "enableEvidence": false
+      }
+    },
+    {
+      "name": "lww 显式开 evidence",
+      "declaration": {
+        "syncStrategy": "lww",
+        "enableEvidence": true
+      },
+      "result": {
+        "syncStrategy": "lww",
+        "governance": false,
+        "enableEvidence": true
+      }
+    },
+    {
+      "name": "非法 syncStrategy 抛错",
+      "declaration": {
+        "syncStrategy": "merge"
+      },
+      "error": "Invalid collection schema: syncStrategy must be declared as \"append-only\" or \"lww\""
+    },
+    {
+      "name": "空声明抛错",
+      "declaration": null,
+      "error": "Invalid collection schema: syncStrategy must be declared as \"append-only\" or \"lww\""
+    }
+  ],
+  "schemaDefaults": {
+    "DEFAULT_COLLECTION_POLICY": {
+      "syncStrategy": "append-only",
+      "governance": false,
+      "enableEvidence": true
+    },
+    "collectionSchemaKeyExample": {
+      "domain": "chat",
+      "collection": "messages",
+      "key": "doc:system:collection-schema:chat%2Fmessages"
+    }
+  }
+}

@@ -1,0 +1,12 @@
+/* 事务页 */
+
+.affairs-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spark-gap-page);
+  padding: var(--spark-padding-page);
+}
+
+.affairs-page h1 {
+  margin: 0;
+}

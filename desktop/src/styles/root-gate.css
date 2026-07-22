@@ -1,0 +1,70 @@
+/* RootGate 登录门：居中品牌区 + 白色登录面板 */
+
+.root-gate {
+  min-height: 100vh;
+}
+
+.gate-wrap {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 16px;
+}
+
+.brand {
+  text-align: center;
+  margin-bottom: 24px;
+}
+
+.brand-logo {
+  display: inline-flex;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--spark-radius-xl);
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, var(--spark-primary), var(--spark-primary-active));
+  color: #fff;
+  font-size: 22px;
+  font-weight: 700;
+  box-shadow: var(--spark-shadow-pop);
+}
+
+.brand-name {
+  margin: 12px 0 0;
+  font-size: 22px;
+  color: var(--spark-text-1);
+}
+
+.brand-slogan {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--spark-text-3);
+}
+
+.gate-panel {
+  width: 400px;
+  max-width: 100%;
+  background: var(--spark-bg-card);
+  border: 1px solid var(--spark-border-light);
+  border-radius: var(--spark-radius-xl);
+  box-shadow: var(--spark-shadow-pop);
+  padding: 24px;
+}
+
+.gate-loading {
+  margin: 24px 0;
+  text-align: center;
+}
+
+.ready-actions {
+  display: flex;
+  gap: 12px;
+  margin: 8px 0;
+}
+
+.gate-message {
+  margin-top: 14px;
+}

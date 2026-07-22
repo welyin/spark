@@ -1,0 +1,577 @@
+{
+  "meta": {
+    "title": "org golden vectors（org.md / p2p-messages.md §8.1）",
+    "generatedBy": "desktop/scripts/extract-org-vectors.mts（一次性运行，见脚本头注释）",
+    "source": "desktop/src/main/organization/{invite,node-info-claim,sync}.ts, p2p/org-recovery.ts, identity/root-id.ts",
+    "deterministic": "所有随机值与时间戳硬编码；Date.now 在解码/合并期间打桩为 NOW=1720000000000",
+    "crossChecks": [
+      "nodeInfoClaim：真实 RootIdentityManager.recover 中文 mnemonic → signWithRootIdentity 签名 → 真实 verifyNodeInfoClaim 判定 ok（负例 reason 一并记录）",
+      "邀请码：真实 encodeOrgInvite/decodeOrgInvite 往返；过期/格式错误消息来自真实抛错",
+      "recovery token / stale / buildSnapshot / merge：全部直接调用真实导出函数"
+    ]
+  },
+  "constants": {
+    "nowMs": 1720000000000,
+    "orgInviteMaxAgeMs": 86400000,
+    "nodeInfoClaimMaxAgeMs": 600000,
+    "recoveryTimeBucketMs": 600000,
+    "orgReplicaTarget": 3,
+    "orgReplicaFreshWindowMs": 2592000000
+  },
+  "nodeInfoClaim": {
+    "mnemonic": "与 祝 产 鸡 永 烂 施 师 蓝 荷 有 邓 朗 防 管 李 原 芳 饿 万 措 走 腰 旅",
+    "rootId": "c0eb52b9d522c8646fa7a075ce117bc6bd1b832de6a4b135e47f0b996ef6fb34",
+    "cases": [
+      {
+        "name": "with-peer-id",
+        "claim": {
+          "type": "spark-node-info-claim",
+          "version": 1,
+          "rootId": "c0eb52b9d522c8646fa7a075ce117bc6bd1b832de6a4b135e47f0b996ef6fb34",
+          "publicKey": "rQxE5mkT6n6pBh9s+UC36hSNPJQXJizYoQcR2rQpKLA=",
+          "nodeInfo": {
+            "peerId": "12D3KooWVectorPeerId",
+            "addresses": [
+              "/ip4/192.168.1.10/tcp/15002/ws",
+              "/dns4/node.example.com/tcp/15002/ws"
+            ]
+          },
+          "timestamp": 1720000000000,
+          "signature": "w5RRH0THj7+2yaL0yXYnoEuynRjaYBCpv/Z+HaWnAIwyhAawQJoXD1wuTiNoEtY+cpwm6nN7Y1Dqfvd1G35BDQ=="
+        },
+        "payload": "{\"type\":\"spark-node-info-claim\",\"version\":1,\"rootId\":\"c0eb52b9d522c8646fa7a075ce117bc6bd1b832de6a4b135e47f0b996ef6fb34\",\"publicKey\":\"rQxE5mkT6n6pBh9s+UC36hSNPJQXJizYoQcR2rQpKLA=\",\"nodeInfo\":{\"peerId\":\"12D3KooWVectorPeerId\",\"addresses\":[\"/ip4/192.168.1.10/tcp/15002/ws\",\"/dns4/node.example.com/tcp/15002/ws\"]},\"timestamp\":1720000000000}",
+        "verify": {
+          "ok": true
+        },
+        "verifyTampered": {
+          "ok": false,
+          "reason": "invalid-signature"
+        },
+        "verifyStale": {
+          "ok": false,
+          "reason": "stale-claim"
+        }
+      },
+      {
+        "name": "without-peer-id",
+        "claim": {
+          "type": "spark-node-info-claim",
+          "version": 1,
+          "rootId": "c0eb52b9d522c8646fa7a075ce117bc6bd1b832de6a4b135e47f0b996ef6fb34",
+          "publicKey": "rQxE5mkT6n6pBh9s+UC36hSNPJQXJizYoQcR2rQpKLA=",
+          "nodeInfo": {
+            "addresses": [
+              "/ip4/192.168.1.10/tcp/15002/ws",
+              "/dns4/node.example.com/tcp/15002/ws"
+            ]
+          },
+          "timestamp": 1720000000000,
+          "signature": "cUowYizDb4C+qNlZZCze24YMTDBqvts/XuCsPa0YZ/o26NxZ2708pdD6uidcBAgFjo7DuoWZy1M83sB/+F6YDg=="
+        },
+        "payload": "{\"type\":\"spark-node-info-claim\",\"version\":1,\"rootId\":\"c0eb52b9d522c8646fa7a075ce117bc6bd1b832de6a4b135e47f0b996ef6fb34\",\"publicKey\":\"rQxE5mkT6n6pBh9s+UC36hSNPJQXJizYoQcR2rQpKLA=\",\"nodeInfo\":{\"peerId\":null,\"addresses\":[\"/ip4/192.168.1.10/tcp/15002/ws\",\"/dns4/node.example.com/tcp/15002/ws\"]},\"timestamp\":1720000000000}",
+        "verify": {
+          "ok": true
+        },
+        "verifyTampered": {
+          "ok": false,
+          "reason": "invalid-signature"
+        },
+        "verifyStale": {
+          "ok": false,
+          "reason": "stale-claim"
+        }
+      }
+    ]
+  },
+  "invite": {
+    "cases": [
+      {
+        "name": "with-peer-id",
+        "payload": {
+          "type": "spark-org-invite",
+          "version": 1,
+          "orgId": "org_0123456789abcdef",
+          "orgName": "星火 组织",
+          "inviter": {
+            "rootId": "c0eb52b9d522c8646fa7a075ce117bc6bd1b832de6a4b135e47f0b996ef6fb34",
+            "peerId": "12D3KooWInviterPeer",
+            "addresses": [
+              "/ip4/10.0.0.8/tcp/15002/ws"
+            ]
+          },
+          "createdAt": 1719996400000
+        },
+        "code": "eyJ0eXBlIjoic3Bhcmstb3JnLWludml0ZSIsInZlcnNpb24iOjEsIm9yZ0lkIjoib3JnXzAxMjM0NTY3ODlhYmNkZWYiLCJvcmdOYW1lIjoi5pif54GrIOe7hOe7hyIsImludml0ZXIiOnsicm9vdElkIjoiYzBlYjUyYjlkNTIyYzg2NDZmYTdhMDc1Y2UxMTdiYzZiZDFiODMyZGU2YTRiMTM1ZTQ3ZjBiOTk2ZWY2ZmIzNCIsInBlZXJJZCI6IjEyRDNLb29XSW52aXRlclBlZXIiLCJhZGRyZXNzZXMiOlsiL2lwNC8xMC4wLjAuOC90Y3AvMTUwMDIvd3MiXX0sImNyZWF0ZWRBdCI6MTcxOTk5NjQwMDAwMH0",
+        "decoded": {
+          "type": "spark-org-invite",
+          "version": 1,
+          "orgId": "org_0123456789abcdef",
+          "orgName": "星火 组织",
+          "inviter": {
+            "rootId": "c0eb52b9d522c8646fa7a075ce117bc6bd1b832de6a4b135e47f0b996ef6fb34",
+            "peerId": "12D3KooWInviterPeer",
+            "addresses": [
+              "/ip4/10.0.0.8/tcp/15002/ws"
+            ]
+          },
+          "createdAt": 1719996400000
+        }
+      },
+      {
+        "name": "without-peer-id",
+        "payload": {
+          "type": "spark-org-invite",
+          "version": 1,
+          "orgId": "org_0123456789abcdef",
+          "orgName": "星火 组织",
+          "inviter": {
+            "rootId": "c0eb52b9d522c8646fa7a075ce117bc6bd1b832de6a4b135e47f0b996ef6fb34",
+            "addresses": [
+              "/ip4/10.0.0.8/tcp/15002/ws"
+            ]
+          },
+          "createdAt": 1719996400000
+        },
+        "code": "eyJ0eXBlIjoic3Bhcmstb3JnLWludml0ZSIsInZlcnNpb24iOjEsIm9yZ0lkIjoib3JnXzAxMjM0NTY3ODlhYmNkZWYiLCJvcmdOYW1lIjoi5pif54GrIOe7hOe7hyIsImludml0ZXIiOnsicm9vdElkIjoiYzBlYjUyYjlkNTIyYzg2NDZmYTdhMDc1Y2UxMTdiYzZiZDFiODMyZGU2YTRiMTM1ZTQ3ZjBiOTk2ZWY2ZmIzNCIsImFkZHJlc3NlcyI6WyIvaXA0LzEwLjAuMC44L3RjcC8xNTAwMi93cyJdfSwiY3JlYXRlZEF0IjoxNzE5OTk2NDAwMDAwfQ",
+        "decoded": {
+          "type": "spark-org-invite",
+          "version": 1,
+          "orgId": "org_0123456789abcdef",
+          "orgName": "星火 组织",
+          "inviter": {
+            "rootId": "c0eb52b9d522c8646fa7a075ce117bc6bd1b832de6a4b135e47f0b996ef6fb34",
+            "addresses": [
+              "/ip4/10.0.0.8/tcp/15002/ws"
+            ]
+          },
+          "createdAt": 1719996400000
+        }
+      },
+      {
+        "name": "normalized-messy-fields",
+        "code": "eyJ0eXBlIjoic3Bhcmstb3JnLWludml0ZSIsInZlcnNpb24iOjEsIm9yZ0lkIjoiICBvcmdfMDEyMzQ1Njc4OWFiY2RlZiAgIiwiaW52aXRlciI6eyJyb290SWQiOiIgQzBFQjUyQjlENTIyQzg2NDZGQTdBMDc1Q0UxMTdCQzZCRDFCODMyREU2QTRCMTM1RTQ3RjBCOTk2RUY2RkIzNCAiLCJhZGRyZXNzZXMiOlsiIC9pcDQvMTAuMC4wLjgvdGNwLzE1MDAyL3dzICIsNDIsIiJdfSwiY3JlYXRlZEF0IjoxNzE5OTk5OTk5MDAwfQ",
+        "decoded": {
+          "type": "spark-org-invite",
+          "version": 1,
+          "orgId": "org_0123456789abcdef",
+          "orgName": "",
+          "inviter": {
+            "rootId": "c0eb52b9d522c8646fa7a075ce117bc6bd1b832de6a4b135e47f0b996ef6fb34",
+            "addresses": [
+              " /ip4/10.0.0.8/tcp/15002/ws "
+            ]
+          },
+          "createdAt": 1719999999000
+        }
+      },
+      {
+        "name": "freshness-boundary-24h",
+        "code": "eyJ0eXBlIjoic3Bhcmstb3JnLWludml0ZSIsInZlcnNpb24iOjEsIm9yZ0lkIjoib3JnXzAxMjM0NTY3ODlhYmNkZWYiLCJvcmdOYW1lIjoiIiwiaW52aXRlciI6eyJyb290SWQiOiJjMGViNTJiOWQ1MjJjODY0NmZhN2EwNzVjZTExN2JjNmJkMWI4MzJkZTZhNGIxMzVlNDdmMGI5OTZlZjZmYjM0IiwicGVlcklkIjoiMTJEM0tvb1dJbnZpdGVyUGVlciIsImFkZHJlc3NlcyI6W119LCJjcmVhdGVkQXQiOjE3MTk5MTM2MDAwMDB9",
+        "decoded": {
+          "type": "spark-org-invite",
+          "version": 1,
+          "orgId": "org_0123456789abcdef",
+          "orgName": "",
+          "inviter": {
+            "rootId": "c0eb52b9d522c8646fa7a075ce117bc6bd1b832de6a4b135e47f0b996ef6fb34",
+            "peerId": "12D3KooWInviterPeer",
+            "addresses": []
+          },
+          "createdAt": 1719913600000
+        }
+      },
+      {
+        "name": "future-created-at-accepted",
+        "code": "eyJ0eXBlIjoic3Bhcmstb3JnLWludml0ZSIsInZlcnNpb24iOjEsIm9yZ0lkIjoib3JnXzAxMjM0NTY3ODlhYmNkZWYiLCJvcmdOYW1lIjoiIiwiaW52aXRlciI6eyJyb290SWQiOiJjMGViNTJiOWQ1MjJjODY0NmZhN2EwNzVjZTExN2JjNmJkMWI4MzJkZTZhNGIxMzVlNDdmMGI5OTZlZjZmYjM0IiwicGVlcklkIjoiMTJEM0tvb1dJbnZpdGVyUGVlciIsImFkZHJlc3NlcyI6W119LCJjcmVhdGVkQXQiOjIwMzUzNjAwMDAwMDB9",
+        "decoded": {
+          "type": "spark-org-invite",
+          "version": 1,
+          "orgId": "org_0123456789abcdef",
+          "orgName": "",
+          "inviter": {
+            "rootId": "c0eb52b9d522c8646fa7a075ce117bc6bd1b832de6a4b135e47f0b996ef6fb34",
+            "peerId": "12D3KooWInviterPeer",
+            "addresses": []
+          },
+          "createdAt": 2035360000000
+        }
+      }
+    ],
+    "errors": [
+      {
+        "name": "expired",
+        "error": "邀请码已过期，请让管理员重新生成"
+      },
+      {
+        "name": "empty",
+        "error": "邀请码为空"
+      },
+      {
+        "name": "malformed",
+        "error": "邀请码格式不正确"
+      },
+      {
+        "name": "wrong-type",
+        "error": "不是有效的星火组织邀请码"
+      }
+    ]
+  },
+  "recoveryToken": {
+    "orgId": "org_0123456789abcdef",
+    "recoverySecret": "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2",
+    "nowMs": 1720000000000,
+    "timeBucket": 2866666,
+    "token": "abfafbd5e1408a3d22f8912bffd966fcb9ce455e9778f709838cf359de84bca7",
+    "activeTokens": [
+      "abfafbd5e1408a3d22f8912bffd966fcb9ce455e9778f709838cf359de84bca7",
+      "50de050dd7678ee4360830bdc5199233642b02b9323462eeb2d1c6b193efb4b7"
+    ]
+  },
+  "sync": {
+    "staleCases": [
+      {
+        "name": "local-missing",
+        "incoming": {
+          "summaryVersion": 100,
+          "membersVersion": 100,
+          "memberDetailsVersion": 100,
+          "transactionsVersion": 100
+        },
+        "expected": true
+      },
+      {
+        "name": "equal",
+        "local": {
+          "summaryVersion": 100,
+          "membersVersion": 100,
+          "memberDetailsVersion": 100,
+          "transactionsVersion": 100
+        },
+        "incoming": {
+          "summaryVersion": 100,
+          "membersVersion": 100,
+          "memberDetailsVersion": 100,
+          "transactionsVersion": 100
+        },
+        "expected": false
+      },
+      {
+        "name": "incoming-newer-one-field",
+        "local": {
+          "summaryVersion": 100,
+          "membersVersion": 100,
+          "memberDetailsVersion": 100,
+          "transactionsVersion": 100
+        },
+        "incoming": {
+          "summaryVersion": 100,
+          "membersVersion": 100,
+          "memberDetailsVersion": 100,
+          "transactionsVersion": 101
+        },
+        "expected": true
+      },
+      {
+        "name": "incoming-older",
+        "local": {
+          "summaryVersion": 200,
+          "membersVersion": 200,
+          "memberDetailsVersion": 200,
+          "transactionsVersion": 200
+        },
+        "incoming": {
+          "summaryVersion": 100,
+          "membersVersion": 100,
+          "memberDetailsVersion": 100,
+          "transactionsVersion": 100
+        },
+        "expected": false
+      },
+      {
+        "name": "fork-a",
+        "local": {
+          "summaryVersion": 200,
+          "membersVersion": 100,
+          "memberDetailsVersion": 100,
+          "transactionsVersion": 100
+        },
+        "incoming": {
+          "summaryVersion": 100,
+          "membersVersion": 200,
+          "memberDetailsVersion": 100,
+          "transactionsVersion": 100
+        },
+        "expected": true
+      },
+      {
+        "name": "fork-b",
+        "local": {
+          "summaryVersion": 100,
+          "membersVersion": 200,
+          "memberDetailsVersion": 100,
+          "transactionsVersion": 100
+        },
+        "incoming": {
+          "summaryVersion": 200,
+          "membersVersion": 100,
+          "memberDetailsVersion": 100,
+          "transactionsVersion": 100
+        },
+        "expected": true
+      }
+    ],
+    "buildSnapshot": {
+      "record": {
+        "orgId": "org_0123456789abcdef",
+        "name": "星火组织",
+        "description": "desc",
+        "basePluginDomain": "plugin:chat",
+        "createdAt": 1699990000000,
+        "createdBy": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "updatedAt": 1700000001000,
+        "recoverySecret": "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2",
+        "customKey": "old",
+        "members": [
+          {
+            "rootId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "role": "admin",
+            "joinedAt": 1699990000000,
+            "addedBy": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          {
+            "rootId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "role": "member",
+            "joinedAt": 1699995000000,
+            "addedBy": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "nodeInfo": {
+              "peerId": "12D3KooWMemberB",
+              "addresses": [
+                "/ip4/9.9.9.9/tcp/15002/ws"
+              ]
+            }
+          }
+        ],
+        "sync": {
+          "versions": {
+            "summaryVersion": 1700000001000,
+            "membersVersion": 1700000001000,
+            "memberDetailsVersion": 1700000001000,
+            "transactionsVersion": 1700000000500
+          },
+          "sections": [
+            "transactions",
+            "summary",
+            "members",
+            "member-details"
+          ],
+          "lastSyncedAt": 0
+        }
+      },
+      "transactions": [
+        {
+          "txId": "0123456789abcdef",
+          "orgId": "org_0123456789abcdef",
+          "type": "member-add",
+          "createdAt": 1700000000800,
+          "actorRootId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "targetRootId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "summary": "添加成员 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      ],
+      "expected": {
+        "orgId": "org_0123456789abcdef",
+        "summary": {
+          "orgId": "org_0123456789abcdef",
+          "name": "星火组织",
+          "description": "desc",
+          "basePluginDomain": "plugin:chat",
+          "createdAt": 1699990000000,
+          "createdBy": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "updatedAt": 1700000001000,
+          "memberCount": 2,
+          "adminCount": 1,
+          "metadata": {
+            "recoverySecret": "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2",
+            "customKey": "old"
+          }
+        },
+        "members": [
+          {
+            "rootId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "role": "admin",
+            "joinedAt": 1699990000000,
+            "addedBy": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          {
+            "rootId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "role": "member",
+            "joinedAt": 1699995000000,
+            "addedBy": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "nodeInfo": {
+              "peerId": "12D3KooWMemberB",
+              "addresses": [
+                "/ip4/9.9.9.9/tcp/15002/ws"
+              ]
+            }
+          }
+        ],
+        "transactions": [
+          {
+            "txId": "0123456789abcdef",
+            "orgId": "org_0123456789abcdef",
+            "type": "member-add",
+            "createdAt": 1700000000800,
+            "actorRootId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "targetRootId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "summary": "添加成员 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        ],
+        "sync": {
+          "summaryVersion": 1700000001000,
+          "membersVersion": 1700000001000,
+          "memberDetailsVersion": 1700000001000,
+          "transactionsVersion": 1700000000800
+        }
+      }
+    },
+    "merge": {
+      "existing": {
+        "orgId": "org_0123456789abcdef",
+        "name": "星火组织",
+        "description": "desc",
+        "basePluginDomain": "plugin:chat",
+        "createdAt": 1699990000000,
+        "createdBy": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "updatedAt": 1700000001000,
+        "recoverySecret": "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2",
+        "customKey": "old",
+        "members": [
+          {
+            "rootId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "role": "admin",
+            "joinedAt": 1699990000000,
+            "addedBy": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          {
+            "rootId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "role": "member",
+            "joinedAt": 1699995000000,
+            "addedBy": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "nodeInfo": {
+              "peerId": "12D3KooWMemberB",
+              "addresses": [
+                "/ip4/9.9.9.9/tcp/15002/ws"
+              ]
+            }
+          }
+        ],
+        "sync": {
+          "versions": {
+            "summaryVersion": 1700000001000,
+            "membersVersion": 1700000001000,
+            "memberDetailsVersion": 1700000001000,
+            "transactionsVersion": 1700000000500
+          },
+          "sections": [
+            "transactions",
+            "summary",
+            "members",
+            "member-details"
+          ],
+          "lastSyncedAt": 0
+        }
+      },
+      "incoming": {
+        "orgId": "org_0123456789abcdef",
+        "name": "星火组织（新名）",
+        "description": "desc",
+        "basePluginDomain": "plugin:chat",
+        "createdAt": 1699990000000,
+        "createdBy": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "updatedAt": 1700000002000,
+        "recoverySecret": "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2",
+        "customKey": "new",
+        "members": [
+          {
+            "rootId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "role": "member",
+            "joinedAt": 1699990000000,
+            "addedBy": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          },
+          {
+            "rootId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "role": "member",
+            "joinedAt": 1699995000000,
+            "addedBy": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          {
+            "rootId": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "role": "member",
+            "joinedAt": 1700000001500,
+            "addedBy": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        ],
+        "anotherKey": 42
+      },
+      "expected": {
+        "recoverySecret": "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2",
+        "customKey": "new",
+        "anotherKey": 42,
+        "orgId": "org_0123456789abcdef",
+        "name": "星火组织（新名）",
+        "description": "desc",
+        "basePluginDomain": "plugin:chat",
+        "createdAt": 1699990000000,
+        "createdBy": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "updatedAt": 1700000002000,
+        "members": [
+          {
+            "rootId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "role": "member",
+            "joinedAt": 1699990000000,
+            "addedBy": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          },
+          {
+            "rootId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "role": "member",
+            "joinedAt": 1699995000000,
+            "addedBy": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "nodeInfo": {
+              "peerId": "12D3KooWMemberB",
+              "addresses": [
+                "/ip4/9.9.9.9/tcp/15002/ws"
+              ]
+            }
+          },
+          {
+            "rootId": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "role": "member",
+            "joinedAt": 1700000001500,
+            "addedBy": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        ],
+        "sync": {
+          "versions": {
+            "summaryVersion": 1700000002000,
+            "membersVersion": 1700000002000,
+            "memberDetailsVersion": 1700000002000,
+            "transactionsVersion": 1700000002000
+          },
+          "sections": [
+            "summary",
+            "members",
+            "member-details",
+            "transactions"
+          ],
+          "lastSyncedAt": 1720000000000
+        }
+      }
+    },
+    "versionsFromRecord": {
+      "summaryVersion": 1700000001000,
+      "membersVersion": 1700000001000,
+      "memberDetailsVersion": 1700000001000,
+      "transactionsVersion": 1700000000800
+    }
+  }
+}

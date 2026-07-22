@@ -1,0 +1,120 @@
+/* Element Plus 主题映射：把组件库变量对接到 Spark 令牌（钉钉风） */
+
+:root {
+  /* 主色阶梯（基于 --spark-primary: #3296fa） */
+  --el-color-primary: #3296fa;
+  --el-color-primary-light-3: #6cb0fc;
+  --el-color-primary-light-5: #99c8fd;
+  --el-color-primary-light-7: #c5dffe;
+  --el-color-primary-light-8: #d8e9fe;
+  --el-color-primary-light-9: #eaf4fe;
+  --el-color-primary-dark-2: #2b83dd;
+
+  /* 语义色 */
+  --el-color-success: #34c19b;
+  --el-color-warning: #f7b500;
+  --el-color-danger: #f54a45;
+  --el-color-error: #f54a45;
+
+  /* 文本与边框 */
+  --el-text-color-primary: #1f2329;
+  --el-text-color-regular: #3f4652;
+  --el-text-color-secondary: #646a73;
+  --el-text-color-placeholder: #8f959e;
+  --el-border-color: #dee0e3;
+  --el-border-color-light: #ebedf0;
+  --el-border-color-lighter: #eff0f1;
+  --el-border-color-extra-light: #f5f6f7;
+
+  /* 填充/背景 */
+  --el-fill-color: #f2f3f5;
+  --el-fill-color-light: #f5f6f7;
+  --el-fill-color-lighter: #f8f9fa;
+  --el-bg-color: #ffffff;
+  --el-bg-color-page: #f2f3f5;
+
+  /* 圆角 */
+  --el-border-radius-base: 6px;
+  --el-border-radius-small: 4px;
+  --el-border-radius-round: 16px;
+}
+
+/* 卡片：白底细边框、弱阴影，贴近钉钉的内容面板 */
+.el-card {
+  --el-card-border-color: var(--spark-border-light);
+  --el-card-border-radius: var(--spark-radius-l);
+  --el-card-padding: 20px;
+  border: 1px solid var(--el-card-border-color);
+  box-shadow: var(--spark-shadow-card);
+  color: var(--spark-text-1);
+}
+
+.el-card__header {
+  border-bottom: 1px solid var(--spark-border-light);
+  font-weight: 600;
+}
+
+.el-card__header h1,
+.el-card__header h2,
+.el-card__header h3 {
+  margin: 0;
+}
+
+/* 按钮：主按钮用钉钉蓝，hover/active 走令牌 */
+.el-button--primary {
+  --el-button-bg-color: var(--spark-primary);
+  --el-button-border-color: var(--spark-primary);
+  --el-button-hover-bg-color: var(--spark-primary-hover);
+  --el-button-hover-border-color: var(--spark-primary-hover);
+  --el-button-active-bg-color: var(--spark-primary-active);
+  --el-button-active-border-color: var(--spark-primary-active);
+}
+
+/* 对话框：圆角加大、标题加粗 */
+.el-dialog {
+  --el-dialog-border-radius: var(--spark-radius-xl);
+}
+
+.el-dialog__title {
+  font-weight: 600;
+  color: var(--spark-text-1);
+}
+
+/* 输入框聚焦色跟随品牌蓝 */
+.el-input {
+  --el-input-focus-border-color: var(--spark-primary);
+}
+
+.el-select__wrapper.is-focused {
+  box-shadow: 0 0 0 1px var(--spark-primary) inset;
+}
+
+/* 标签圆角收敛 */
+.el-tag {
+  --el-tag-border-radius: var(--spark-radius-s);
+}
+
+/* 统计数字颜色 */
+.el-statistic__head {
+  color: var(--spark-text-3);
+}
+
+.el-statistic__content {
+  color: var(--spark-text-1);
+}
+
+/* 描述列表边框弱化 */
+.el-descriptions {
+  --el-descriptions-item-bordered-label-background: var(--spark-bg-hover);
+}
+
+/* 消息框圆角 */
+.el-message-box {
+  --el-messagebox-border-radius: var(--spark-radius-xl);
+}
+
+/* el-menu 保留变量兜底（主界面已改用深色 rail，插件视图仍可能用菜单） */
+.el-menu {
+  --el-menu-active-color: var(--spark-primary);
+  --el-menu-hover-bg-color: var(--spark-bg-hover);
+}

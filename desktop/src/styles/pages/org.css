@@ -1,0 +1,142 @@
+/* 组织页 */
+
+.org-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spark-gap-page);
+  padding: var(--spark-padding-page);
+}
+
+.org-page h1,
+.org-page h2,
+.org-page h3,
+.org-page h4 {
+  margin: 0;
+}
+
+/* 数据治理对话框 */
+.purge-tip {
+  margin-top: 12px;
+}
+
+.purge-tip:first-child {
+  margin-top: 0;
+}
+
+.purge-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.purge-preview {
+  margin-top: 12px;
+}
+
+/* 组织卡片网格 */
+.org-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.org-item {
+  cursor: pointer;
+  transition:
+    box-shadow 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.org-item:hover {
+  border-color: var(--spark-primary);
+  box-shadow: var(--spark-shadow-hover);
+}
+
+.org-item-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.org-desc {
+  margin: 8px 0;
+  color: var(--spark-text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.org-meta {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  color: var(--spark-text-2);
+  font-size: 13px;
+}
+
+.org-item-actions {
+  margin-top: 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.org-plugin-domain {
+  color: var(--spark-text-3);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 邀请成员对话框 */
+.invite-advanced {
+  margin-bottom: 8px;
+}
+
+.invite-result {
+  margin-top: 12px;
+}
+
+/* 组织详情抽屉 */
+.drawer-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.drawer-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.replica-row {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.replica-hint {
+  color: var(--spark-text-2);
+  font-size: 13px;
+}
+
+.section-title {
+  margin: 18px 0 12px;
+}
+
+.drawer-actions {
+  margin-top: 16px;
+  display: flex;
+  gap: 8px;
+}
+
+.drawer-alert {
+  margin-top: 16px;
+}

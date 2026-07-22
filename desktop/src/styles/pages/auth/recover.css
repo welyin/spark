@@ -1,0 +1,67 @@
+/* 恢复账号面板 */
+
+.auth-title {
+  margin: 0;
+  font-size: 18px;
+  color: var(--spark-text-1);
+}
+
+.auth-tabs {
+  margin-top: 10px;
+}
+
+.auth-form {
+  margin-top: 12px;
+}
+
+.submit-btn {
+  width: 100%;
+}
+
+.mnemonic-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.mnemonic-word {
+  border: 1px solid var(--spark-border-light);
+  border-radius: var(--spark-radius-m);
+  padding: 6px 0;
+  text-align: center;
+  font-size: 15px;
+  background: var(--spark-bg-hover);
+}
+
+.mnemonic-word em {
+  display: block;
+  font-style: normal;
+  font-size: 10px;
+  color: var(--spark-text-3);
+}
+
+.mnemonic-word.invalid {
+  border-color: var(--spark-danger);
+  color: var(--spark-danger);
+  background: #fef0f0;
+}
+
+.row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.ok-text {
+  color: var(--spark-success);
+}
+
+.hidden-input {
+  display: none;
+}
+
+.entry-link {
+  margin-top: 10px;
+  text-align: center;
+}

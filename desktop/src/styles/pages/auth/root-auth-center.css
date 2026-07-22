@@ -1,0 +1,36 @@
+/* 我的-账号中心（MinePage 内嵌，登录前引导注册/登录） */
+
+.auth-center {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.auth-center h1,
+.auth-center h2 {
+  margin: 0;
+}
+
+.auth-center .lede {
+  margin: 0;
+}
+
+.status-grid {
+  margin-top: 10px;
+}
+
+.section-wrap {
+  margin-top: 14px;
+}
+
+.inner-card {
+  border-radius: var(--spark-radius-l);
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 10px;
+  align-items: center;
+}

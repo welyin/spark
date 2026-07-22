@@ -1,0 +1,48 @@
+/**
+ * Spark 设计令牌（参考钉钉桌面版）
+ * 全部视觉常量集中在此，换肤只改这里。
+ */
+:root {
+  /* 品牌色：钉钉蓝 */
+  --spark-primary: #3296fa;
+  --spark-primary-hover: #54a9fb;
+  --spark-primary-active: #2b83dd;
+  --spark-primary-light: #eaf4fe;
+
+  /* 语义色 */
+  --spark-success: #34c19b;
+  --spark-warning: #f7b500;
+  --spark-danger: #f54a45;
+
+  /* 中性色 */
+  --spark-bg-page: #f2f3f5;
+  --spark-bg-card: #ffffff;
+  --spark-bg-hover: #f5f6f7;
+  --spark-text-1: #1f2329;
+  --spark-text-2: #646a73;
+  --spark-text-3: #8f959e;
+  --spark-border: #dee0e3;
+  --spark-border-light: #ebedf0;
+
+  /* 深色导航栏（rail） */
+  --spark-rail-width: 64px;
+  --spark-rail-bg: #2b2f36;
+  --spark-rail-text: #a8abb2;
+  --spark-rail-item-hover: rgba(255, 255, 255, 0.06);
+  --spark-rail-item-active: rgba(255, 255, 255, 0.1);
+
+  /* 圆角 */
+  --spark-radius-s: 4px;
+  --spark-radius-m: 6px;
+  --spark-radius-l: 8px;
+  --spark-radius-xl: 12px;
+
+  /* 阴影 */
+  --spark-shadow-card: 0 1px 2px rgba(31, 35, 41, 0.04);
+  --spark-shadow-hover: 0 4px 16px rgba(31, 35, 41, 0.1);
+  --spark-shadow-pop: 0 6px 24px rgba(31, 35, 41, 0.12);
+
+  /* 间距 */
+  --spark-gap-page: 16px;
+  --spark-padding-page: 20px;
+}

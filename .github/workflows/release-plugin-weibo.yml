@@ -1,0 +1,123 @@
+name: Release Plugin Weibo
+
+# 插件发布流水线（移植自旧 desktop/.github/workflows/release-plugin-weibo.yml，
+# 路径适配 code/ monorepo 布局：打包脚本在 plugins/scripts/，产物落在
+# desktop/dist-market/plugins/<pluginId>/ 后重命名上传 Release）。
+#
+# 触发方式：
+# - 发布 GitHub Release（types: [published]）时自动跑；
+# - 或 workflow_dispatch 手动指定 tag / version / pluginId。
+# 签名私钥取自仓库 secret SPARK_PLUGIN_SIGNING_PRIVATE_KEY（PEM 全文）。
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (example: v0.2.0)"
+        required: true
+        type: string
+      version:
+        description: "Plugin version in manifest (optional, default from tag)"
+        required: false
+        type: string
+      pluginId:
+        description: "Plugin ID"
+        required: false
+        default: weibo-core
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-plugin-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Resolve release variables
+        id: vars
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            TAG="${{ github.event.release.tag_name }}"
+            VERSION="${TAG#v}"
+            PLUGIN_ID="weibo-core"
+          else
+            TAG="${{ inputs.tag }}"
+            VERSION="${{ inputs.version }}"
+            if [[ -z "$VERSION" ]]; then VERSION="${TAG#v}"; fi
+            PLUGIN_ID="${{ inputs.pluginId }}"
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "plugin_id=$PLUGIN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Verify release exists for manual runs
+        id: release_check
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          TAG="${{ steps.vars.outputs.tag }}"
+          NORMALIZED="${TAG#v}"
+
+          if gh api "repos/${{ github.repository }}/releases/tags/$TAG" --silent || \
+             gh api "repos/${{ github.repository }}/releases/tags/$NORMALIZED" --silent || \
+             gh api "repos/${{ github.repository }}/releases/tags/v$NORMALIZED" --silent; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Release tag '${{ steps.vars.outputs.tag }}' was not found. Skipping plugin manifest generation for this manual run."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and sign plugin release artifacts
+        if: github.event_name == 'release' || steps.release_check.outputs.skip == 'false'
+        env:
+          SPARK_PLUGIN_SIGNING_PRIVATE_KEY: ${{ secrets.SPARK_PLUGIN_SIGNING_PRIVATE_KEY }}
+        run: |
+          node plugins/scripts/build-weibo-package.mjs \
+            --pluginId "${{ steps.vars.outputs.plugin_id }}" \
+            --pluginDomain "plugin:${{ steps.vars.outputs.plugin_id }}" \
+            --version "${{ steps.vars.outputs.version }}" \
+            --repository "${{ github.repository }}" \
+            --releaseTag "${{ steps.vars.outputs.tag }}" \
+            --outputDir "desktop/dist-market/plugins/${{ steps.vars.outputs.plugin_id }}"
+
+      - name: Prepare named release assets
+        if: github.event_name == 'release' || steps.release_check.outputs.skip == 'false'
+        shell: bash
+        run: |
+          PLUGIN_ID="${{ steps.vars.outputs.plugin_id }}"
+          VERSION="${{ steps.vars.outputs.version }}"
+          SRC_DIR="desktop/dist-market/plugins/$PLUGIN_ID"
+
+          cp "$SRC_DIR/update-manifest.json" "$SRC_DIR/spark-plugin-$PLUGIN_ID-manifest.json"
+          cp "$SRC_DIR/update-manifest.sig" "$SRC_DIR/spark-plugin-$PLUGIN_ID-manifest.sig"
+          cp "$SRC_DIR/update-manifest.pub.pem" "$SRC_DIR/spark-plugin-$PLUGIN_ID-manifest.pub.pem"
+          cp "$SRC_DIR/plugin-checksums.txt" "$SRC_DIR/spark-plugin-$PLUGIN_ID-checksums.txt"
+
+          test -f "$SRC_DIR/spark-plugin-$PLUGIN_ID-$VERSION.spkg"
+
+      - name: Upload plugin artifacts to release
+        if: github.event_name == 'release' || steps.release_check.outputs.skip == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.vars.outputs.tag }}
+          files: |
+            desktop/dist-market/plugins/${{ steps.vars.outputs.plugin_id }}/spark-plugin-${{ steps.vars.outputs.plugin_id }}-${{ steps.vars.outputs.version }}.spkg
+            desktop/dist-market/plugins/${{ steps.vars.outputs.plugin_id }}/spark-plugin-${{ steps.vars.outputs.plugin_id }}-manifest.json
+            desktop/dist-market/plugins/${{ steps.vars.outputs.plugin_id }}/spark-plugin-${{ steps.vars.outputs.plugin_id }}-manifest.sig
+            desktop/dist-market/plugins/${{ steps.vars.outputs.plugin_id }}/spark-plugin-${{ steps.vars.outputs.plugin_id }}-manifest.pub.pem
+            desktop/dist-market/plugins/${{ steps.vars.outputs.plugin_id }}/spark-plugin-${{ steps.vars.outputs.plugin_id }}-checksums.txt

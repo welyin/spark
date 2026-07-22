@@ -1,0 +1,42 @@
+/* RootID 页 */
+
+.rootid-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spark-gap-page);
+}
+
+.rootid-page h1,
+.rootid-page h2,
+.rootid-page h3 {
+  margin: 0;
+}
+
+.info-card {
+  height: 100%;
+}
+
+.info-card p {
+  color: var(--spark-text-2);
+}
+
+.muted {
+  color: var(--spark-text-3);
+  font-size: 13px;
+}
+
+.split {
+  margin-top: 16px;
+}
+
+.mono-box {
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: var(--spark-radius-l);
+  background: #1f2329;
+  color: #e5e7eb;
+  font-family: Menlo, Monaco, Consolas, 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-x: auto;
+}

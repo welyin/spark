@@ -1,0 +1,256 @@
+/* 应用骨架：深色窄导航栏（rail）+ 内容区（参考钉钉桌面版） */
+
+.shell {
+  min-height: 100vh;
+}
+
+/* ---- 深色导航栏 ---- */
+
+.rail {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  z-index: 20;
+  width: var(--spark-rail-width);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 0;
+  background: var(--spark-rail-bg);
+  -webkit-app-region: drag; /* 栏体可拖动窗口（按钮内已禁用） */
+}
+
+.rail button {
+  -webkit-app-region: no-drag;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+/* 顶部头像（我的）：图像由 UserAvatar 提供，按钮只作容器 */
+.rail-avatar {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: transform 0.15s ease;
+}
+
+.rail-avatar:hover {
+  transform: scale(1.06);
+}
+
+.rail-avatar.active {
+  outline: 2px solid rgba(255, 255, 255, 0.55);
+  outline-offset: 2px;
+}
+
+/* 中部主导航 */
+.rail-main {
+  flex: 1;
+  width: 100%;
+  margin-top: 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.rail-main::-webkit-scrollbar {
+  width: 0;
+}
+
+.rail-bottom {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding-top: 8px;
+}
+
+.rail-item {
+  width: 52px;
+  min-height: 52px;
+  border-radius: var(--spark-radius-l);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  color: var(--spark-rail-text);
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.rail-item:hover {
+  background: var(--spark-rail-item-hover);
+  color: #fff;
+}
+
+.rail-item.active {
+  background: var(--spark-rail-item-active);
+  color: var(--spark-primary-hover);
+}
+
+.rail-label {
+  max-width: 52px;
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 插件 tab：emoji/字母圆块 */
+.rail-plugin-icon {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  line-height: 1;
+}
+
+/* ---- 内容区 ---- */
+
+.main {
+  margin-left: var(--spark-rail-width);
+  min-height: 100vh;
+  padding: 0;
+}
+
+/* ---- 插件宿主页（独立窗口模式） ---- */
+
+.plugin-host-wrap {
+  padding: 0;
+}
+
+/* ---- 页面通用头部条（钉钉风：标题+描述在左，操作在右） ---- */
+
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  background: var(--spark-bg-card);
+  border: 1px solid var(--spark-border-light);
+  border-radius: var(--spark-radius-l);
+  box-shadow: var(--spark-shadow-card);
+  padding: 20px;
+}
+
+.page-header h1 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.page-header-main {
+  min-width: 0;
+}
+
+.page-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.header-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.stat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 12px;
+  border-radius: 12px;
+  background: var(--spark-bg-hover);
+  font-size: 12px;
+  color: var(--spark-text-2);
+}
+
+.stat-chip b {
+  color: var(--spark-text-1);
+  font-weight: 600;
+}
+
+@media (max-width: 900px) {
+  .page-header {
+    flex-direction: column;
+  }
+
+  .page-header-actions {
+    align-self: flex-end;
+  }
+}
+
+/* ---- 插件 tab 页 ---- */
+
+.plugin-tab-card {
+  height: calc(100vh - 40px);
+  margin: var(--spark-padding-page);
+  display: flex;
+  flex-direction: column;
+}
+
+.plugin-tab-card .el-card__header {
+  flex-shrink: 0;
+}
+
+.plugin-tab-card .el-card__body {
+  flex: 1;
+  padding: 0;
+  min-height: 0;
+}
+
+.plugin-tab-header-bar {
+  display: grid;
+  grid-template-columns: 120px 1fr 120px;
+  align-items: center;
+}
+
+.plugin-tab-header-left {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.plugin-tab-header-center {
+  text-align: center;
+}
+
+.plugin-tab-header-center h1 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.plugin-tab-header-center p {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--spark-text-3);
+}
+
+.plugin-tab-header-right {
+  min-height: 1px;
+}
+
+.plugin-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
+  display: block;
+}

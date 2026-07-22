@@ -1,0 +1,10 @@
+{
+  "name": "spark-plugins",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Spark 插件源码与打包发布工具（市场链路见 README.md）",
+  "scripts": {
+    "build:weibo": "node scripts/build-weibo-package.mjs"
+  }
+}

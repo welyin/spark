@@ -1,0 +1,35 @@
+/* 登录面板（RootGate 白色面板内的无卡片内容区） */
+
+.auth-title {
+  margin: 0;
+  font-size: 18px;
+  color: var(--spark-text-1);
+}
+
+.auth-form {
+  margin-top: 16px;
+}
+
+.submit-btn {
+  width: 100%;
+}
+
+/* 登录目标账号：头像 + 昵称 */
+.login-profile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0 2px;
+}
+
+.login-profile-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--spark-text-1);
+}
+
+.entry-link {
+  margin-top: 10px;
+  text-align: center;
+}
