@@ -74,17 +74,17 @@ cd app && npm run tauri build
 
 详细文档见 [GitHub Wiki](https://github.com/welyin/spark/wiki)，主要入口：
 
-- [架构设计](https://github.com/welyin/spark/wiki/design/architecture)
-- [协议规格（字节级权威）](https://github.com/welyin/spark/wiki/protocol/)
-- [插件开发指南](https://github.com/welyin/spark/wiki/dev/plugin_development)
-- [开发计划](https://github.com/welyin/spark/wiki/dev/development_plan)
-- [测试体系](https://github.com/welyin/spark/wiki/dev/testing)
+- [架构设计](https://github.com/welyin/spark/wiki/architecture)
+- [协议规格（字节级权威）](https://github.com/welyin/spark/wiki/协议规格)
+- [插件开发指南](https://github.com/welyin/spark/wiki/plugin_development)
+- [开发计划](https://github.com/welyin/spark/wiki/development_plan)
+- [测试体系](https://github.com/welyin/spark/wiki/testing)
 
 ## 插件开发
 
 星火采用「核心骨架 + 插件应用」的开放架构，所有业务功能均可通过插件扩展。插件基于 TypeScript + Vue 3 开发，运行于独立插件域，通过标准化 SDK 调用底层能力；插件包经 Ed25519 签名后通过插件市场发布与安装。
 
-详细开发规范请参考 [插件开发指南](https://github.com/welyin/spark/wiki/dev/plugin_development)。
+详细开发规范请参考 [插件开发指南](https://github.com/welyin/spark/wiki/plugin_development)。
 
 ## 参与贡献
 
