@@ -5,7 +5,7 @@
  * 让每个插件在自身入口模块中调用 registerPluginView 完成注册。
  * 内核（App.vue / main.ts）无需感知具体插件。
  *
- * 插件目录在 src 之外（code/plugins，与 code/desktop 平级）：
+ * 插件目录在 src 之外（code/plugins，与 code/app 平级）：
  * - dev：依赖 vite.config.ts 的 server.fs.allow 放开上级目录；
  * - build：import.meta.glob 由 Vite 编译期展开，不受 fs.allow 限制。
  */

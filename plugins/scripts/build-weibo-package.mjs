@@ -3,7 +3,7 @@
 /**
  * 插件打包脚本（移植自旧 desktop/scripts/plugins/build-weibo-package.mjs）。
  *
- * 产物（默认输出到 code/desktop/dist-market/plugins/<pluginId>/）：
+ * 产物（默认输出到 code/app/dist-market/plugins/<pluginId>/）：
  * - spark-plugin-<pluginId>-<version>.spkg  JSON 包：{pluginId, domain, version, files:[{path, sha256, size, contentBase64}]}
  * - update-manifest.json                  更新清单（市场服务消费）
  * - update-manifest.sig                   Ed25519 分离签名（base64）
@@ -98,7 +98,7 @@ async function main() {
   const pluginRoot = path.join(pluginsRoot, pluginId);
   const outputDir = args.outputDir
     ? path.resolve(codeRoot, args.outputDir)
-    : path.join(codeRoot, 'desktop', 'dist-market', 'plugins', pluginId);
+    : path.join(codeRoot, 'app', 'dist-market', 'plugins', pluginId);
   const repository = args.repository ?? process.env.GITHUB_REPOSITORY ?? '';
   const releaseTag = args.releaseTag ?? '';
 

@@ -1,12 +1,12 @@
 [package]
-name = "spark-desktop"
+name = "spark-app"
 version = "0.1.0"
-description = "Spark desktop shell (Tauri 2.x)"
+description = "Spark app shell (Tauri 2.x, PC + mobile)"
 edition = "2021"
 
 [lib]
 # 移动端复用同一 lib 入口（staticlib/cdylib），桌面仅使用 rlib。
-name = "spark_desktop_lib"
+name = "spark_app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

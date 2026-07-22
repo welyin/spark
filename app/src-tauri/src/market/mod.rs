@@ -65,7 +65,7 @@ fn normalize_path(path: &Path) -> PathBuf {
 
 impl MarketPaths {
     /// 生产默认：状态/包目录在 app_data_dir 下；本地发布目录与源码目录按
-    /// 编译期 crate 位置（code/desktop/src-tauri）与运行时 cwd 双候选
+    /// 编译期 crate 位置（code/app/src-tauri）与运行时 cwd 双候选
     /// （对齐 TS 的 appPath/cwd 候选语义；打包安装后这些目录不存在即自动走远端 URL）。
     pub fn for_app(app_data_dir: &Path) -> Self {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));

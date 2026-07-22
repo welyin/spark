@@ -1,4 +1,4 @@
-import type { PluginSDK } from '../../desktop/src/plugin-sdk-browser';
+import type { PluginSDK } from '../../app/src/plugin-sdk-browser';
 import { normalizeWeiboText, type WeiboComment, type WeiboPost } from './model';
 
 export const WEIBO_COLLECTIONS = {

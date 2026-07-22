@@ -146,8 +146,8 @@
 <script lang="ts">
 import { computed, defineComponent, onMounted, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
-import { initializePluginSDK } from '../../desktop/src/plugin-sdk-browser';
-import type { PluginSDK } from '../../desktop/src/plugin-sdk-browser';
+import { initializePluginSDK } from '../../app/src/plugin-sdk-browser';
+import type { PluginSDK } from '../../app/src/plugin-sdk-browser';
 import { buildCommentThread, canPublishPost, validateWeiboText, type WeiboCommentNode } from './model';
 import { WeiboCoreService } from './service';
 

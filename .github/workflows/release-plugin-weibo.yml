@@ -2,7 +2,7 @@ name: Release Plugin Weibo
 
 # 插件发布流水线（移植自旧 desktop/.github/workflows/release-plugin-weibo.yml，
 # 路径适配 code/ monorepo 布局：打包脚本在 plugins/scripts/，产物落在
-# desktop/dist-market/plugins/<pluginId>/ 后重命名上传 Release）。
+# app/dist-market/plugins/<pluginId>/ 后重命名上传 Release）。
 #
 # 触发方式：
 # - 发布 GitHub Release（types: [published]）时自动跑；
@@ -93,7 +93,7 @@ jobs:
             --version "${{ steps.vars.outputs.version }}" \
             --repository "${{ github.repository }}" \
             --releaseTag "${{ steps.vars.outputs.tag }}" \
-            --outputDir "desktop/dist-market/plugins/${{ steps.vars.outputs.plugin_id }}"
+            --outputDir "app/dist-market/plugins/${{ steps.vars.outputs.plugin_id }}"
 
       - name: Prepare named release assets
         if: github.event_name == 'release' || steps.release_check.outputs.skip == 'false'
@@ -101,7 +101,7 @@ jobs:
         run: |
           PLUGIN_ID="${{ steps.vars.outputs.plugin_id }}"
           VERSION="${{ steps.vars.outputs.version }}"
-          SRC_DIR="desktop/dist-market/plugins/$PLUGIN_ID"
+          SRC_DIR="app/dist-market/plugins/$PLUGIN_ID"
 
           cp "$SRC_DIR/update-manifest.json" "$SRC_DIR/spark-plugin-$PLUGIN_ID-manifest.json"
           cp "$SRC_DIR/update-manifest.sig" "$SRC_DIR/spark-plugin-$PLUGIN_ID-manifest.sig"
@@ -116,8 +116,8 @@ jobs:
         with:
           tag_name: ${{ steps.vars.outputs.tag }}
           files: |
-            desktop/dist-market/plugins/${{ steps.vars.outputs.plugin_id }}/spark-plugin-${{ steps.vars.outputs.plugin_id }}-${{ steps.vars.outputs.version }}.spkg
-            desktop/dist-market/plugins/${{ steps.vars.outputs.plugin_id }}/spark-plugin-${{ steps.vars.outputs.plugin_id }}-manifest.json
-            desktop/dist-market/plugins/${{ steps.vars.outputs.plugin_id }}/spark-plugin-${{ steps.vars.outputs.plugin_id }}-manifest.sig
-            desktop/dist-market/plugins/${{ steps.vars.outputs.plugin_id }}/spark-plugin-${{ steps.vars.outputs.plugin_id }}-manifest.pub.pem
-            desktop/dist-market/plugins/${{ steps.vars.outputs.plugin_id }}/spark-plugin-${{ steps.vars.outputs.plugin_id }}-checksums.txt
+            app/dist-market/plugins/${{ steps.vars.outputs.plugin_id }}/spark-plugin-${{ steps.vars.outputs.plugin_id }}-${{ steps.vars.outputs.version }}.spkg
+            app/dist-market/plugins/${{ steps.vars.outputs.plugin_id }}/spark-plugin-${{ steps.vars.outputs.plugin_id }}-manifest.json
+            app/dist-market/plugins/${{ steps.vars.outputs.plugin_id }}/spark-plugin-${{ steps.vars.outputs.plugin_id }}-manifest.sig
+            app/dist-market/plugins/${{ steps.vars.outputs.plugin_id }}/spark-plugin-${{ steps.vars.outputs.plugin_id }}-manifest.pub.pem
+            app/dist-market/plugins/${{ steps.vars.outputs.plugin_id }}/spark-plugin-${{ steps.vars.outputs.plugin_id }}-checksums.txt

@@ -23,7 +23,7 @@ export default defineConfig({
     port: 1420,
     strictPort: true,
     // 插件目录在工程根之外（code/plugins，plugin-loader.ts 的 glob 指向它）；
-    // dev server 默认只允许 serve workspace 根（code/desktop），需显式放开上级。
+    // dev server 默认只允许 serve workspace 根（code/app），需显式放开上级。
     fs: {
       allow: ['..']
     },

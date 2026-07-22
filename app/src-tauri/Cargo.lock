@@ -5261,6 +5261,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "spark-app"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "ed25519-dalek 3.0.0",
+ "hex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "spark-core",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "spark-core"
 version = "0.1.0"
 dependencies = [
@@ -5283,25 +5302,6 @@ dependencies = [
  "sha2 0.11.0",
  "sled",
  "thiserror 2.0.19",
- "tokio",
-]
-
-[[package]]
-name = "spark-desktop"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "ed25519-dalek 3.0.0",
- "hex",
- "reqwest",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "spark-core",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tempfile",
  "tokio",
 ]
 

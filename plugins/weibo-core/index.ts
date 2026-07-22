@@ -1,4 +1,4 @@
-import { registerPluginView } from '../../desktop/src/plugin-view-registry';
+import { registerPluginView } from '../../app/src/plugin-view-registry';
 import WeiboCoreView from './WeiboCoreView.vue';
 import { WEIBO_CORE_PLUGIN_MANIFEST } from './manifest';
 

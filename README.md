@@ -30,9 +30,8 @@
 ```
 ├── core/      # spark-core：Rust 内核（身份/存储/集合同步/存证/组织/数据治理/P2P）
 ├── spec/      # golden vectors（协议规格文档在 wiki protocol/ 专区）
-├── desktop/   # PC 壳（Tauri 命令层 + Vue 3 前端）
+├── app/       # 应用壳（Tauri 2.x，PC 与移动端同一工程 + Vue 3 前端）
 ├── plugins/   # 插件（weibo-core 微博）与打包签名脚本
-├── mobile/    # 移动壳（规划中，Android 先行）
 └── .github/   # 插件发布 workflow
 ```
 
@@ -54,21 +53,21 @@ cd spark
 # 内核测试
 cd core && cargo test
 
-# PC 壳开发运行
-cd ../desktop && npm install && npm run tauri dev
+# 应用壳开发运行
+cd ../app && npm install && npm run tauri dev
 ```
 
 ### 测试与构建
 
 ```bash
-# PC 壳 Rust 命令层测试
-cd desktop/src-tauri && cargo test
+# 应用壳 Rust 命令层测试
+cd app/src-tauri && cargo test
 
 # 前端单元测试与生产构建
-cd desktop && npx vitest run && npm run build
+cd app && npx vitest run && npm run build
 
 # 打包当前平台安装包
-cd desktop && npm run tauri build
+cd app && npm run tauri build
 ```
 
 ## 文档

@@ -7,11 +7,10 @@ dist/
 dist-ssr/
 
 # Tauri 打包产物
-desktop/src-tauri/target/
-mobile/src-tauri/target/
+app/src-tauri/target/
 
 # 插件市场本地发布产物（打包脚本输出，见 wiki 插件开发指南）
-desktop/dist-market/
+app/dist-market/
 
 # 签名私钥等本地机密
 .secrets/
