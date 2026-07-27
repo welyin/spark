@@ -97,7 +97,10 @@ pub fn set_meta<S: StorageBackend>(
     id: &str,
     meta: &DocMeta,
 ) -> crate::sync::SyncResult<()> {
-    storage.put(&meta_key(domain, collection, id), &serde_json::to_string(meta)?)?;
+    storage.put(
+        &meta_key(domain, collection, id),
+        &serde_json::to_string(meta)?,
+    )?;
     Ok(())
 }
 

@@ -20,8 +20,14 @@ use super::types::{
 };
 use super::{OrgError, Result};
 
-/// 快照构建时的保留键（sync.ts:26-36）：其余键全部流入 `summary.metadata`。
-pub const ORGANIZATION_SYNC_RESERVED_KEYS: [&str; 9] = [
+/// 快照构建时的保留键（sync.ts:26-36 + org.md §4.1 的 gateways + §15/§16 的
+/// orgAddress/isPublic）：其余键全部流入 `summary.metadata`。
+///
+/// ⚠️ `orgRootSecret`（组织根私钥密文）**不在**此表——本表同时用于合并时剔除
+/// extra 保留键，会把本机持有的私钥抹掉；其"不进快照"由
+/// [`extract_metadata`] 显式剔除 + 推送侧 `strip_org_root_secret` + 合并侧
+/// [`merge_organization_sync_snapshot`] 插入处跳过 三处共同保证（§15）。
+pub const ORGANIZATION_SYNC_RESERVED_KEYS: [&str; 12] = [
     "orgId",
     "name",
     "description",
@@ -31,6 +37,9 @@ pub const ORGANIZATION_SYNC_RESERVED_KEYS: [&str; 9] = [
     "updatedAt",
     "members",
     "sync",
+    "gateways",
+    "orgAddress",
+    "isPublic",
 ];
 
 /// 快照中的成员条目（仅五字段；构建快照时成员对象的动态键被丢弃）。
@@ -76,7 +85,11 @@ pub struct OrganizationSyncSummary {
     #[serde(default)]
     pub description: String,
     /// 基础插件域。
-    #[serde(rename = "basePluginDomain", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "basePluginDomain",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub base_plugin_domain: Option<String>,
     /// 创建时间（ms）。
     #[serde(rename = "createdAt")]
@@ -93,7 +106,24 @@ pub struct OrganizationSyncSummary {
     /// admin 总数。
     #[serde(rename = "adminCount")]
     pub admin_count: i64,
-    /// 非保留键的剩余字段（`recoverySecret` 借此随快照流动）。
+    /// 组织网关 rootId 列表（org.md §14 保留键：不进 metadata，作为 summary
+    /// 显式字段随快照传播；缺省 = 发送方未设置，接收方保留本地值）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateways: Option<Vec<String>>,
+    /// 自认证组织地址（org.md §15 保留键：与 gateways 同口径传播/回退）。
+    #[serde(
+        rename = "orgAddress",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub org_address: Option<String>,
+    /// 公开组织标志（org.md §16 保留键：仅在 true 时显式传播；缺省保留本地值——
+    /// 关闭公开本期不跨节点传播，发布行为只发生在持钥节点，本地关闭即停止
+    /// 新签，DHT 旧记录随 8h TTL 与记录 ttl 自然过期）。
+    #[serde(rename = "isPublic", default, skip_serializing_if = "Option::is_none")]
+    pub is_public: Option<bool>,
+    /// 非保留键的剩余字段（`recoverySecret`/`orgSecret` 借此随快照流动；
+    /// `orgRootSecret` 被显式剔除——§15 不同步出本机）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<serde_json::Map<String, Value>>,
 }
@@ -151,12 +181,13 @@ pub fn pick_sync_sections_by_priority() -> Vec<OrganizationSyncSection> {
 ///
 /// Rust 侧记录的 `extra` 经 serde flatten 天然不含保留键，与 TS 的
 /// 「全部键 − 保留键」结果一致；为空时返回 `None`（TS 返回 undefined → 丢键）。
+///
+/// 例外剔除：`orgRootSecret`（组织根私钥密文，org.md §15 不同步出本机）——
+/// 它是 extra 动态键会被 flatten 捕获，但**绝不**进快照 metadata。
 fn extract_metadata(record: &OrganizationRecord) -> Option<serde_json::Map<String, Value>> {
-    if record.extra.is_empty() {
-        None
-    } else {
-        Some(record.extra.clone())
-    }
+    let mut extra = record.extra.clone();
+    extra.remove(OrganizationRecord::ORG_ROOT_SECRET_KEY);
+    if extra.is_empty() { None } else { Some(extra) }
 }
 
 /// `buildOrganizationSyncSnapshot`（sync.ts:59-91）。
@@ -183,6 +214,13 @@ pub fn build_organization_sync_snapshot(
             updated_at: record.updated_at,
             member_count: record.members.len() as i64,
             admin_count: record.admin_count() as i64,
+            gateways: if record.gateways.is_empty() {
+                None
+            } else {
+                Some(record.gateways.clone())
+            },
+            org_address: record.org_address.clone(),
+            is_public: record.is_public.then_some(true),
             metadata: extract_metadata(record),
         },
         members: record.members.iter().map(SnapshotMember::from).collect(),
@@ -194,7 +232,8 @@ pub fn build_organization_sync_snapshot(
 /// `mergeOrganizationSyncSnapshot`（sync.ts:93-164）。
 ///
 /// - 成员按 rootId 合并：incoming 覆盖同名字段，`nodeInfo` 为 `None` 时保留 existing
-/// - 动态字段：`{...existingExtra, ...incomingMetadata}` 合并后删除全部保留键
+/// - 动态字段：`{...existingExtra, ...incomingMetadata}` 合并后删除全部保留键；
+///   `orgRootSecret`（本机根私钥密文）在插入处显式跳过，绝不接受对端注入（§15）
 /// - 固定字段以 incoming 快照为准；`updatedAt = max(existing, incoming)`；
 ///   `basePluginDomain` 快照缺失时保留 existing
 /// - `sync = { versions: snapshot.sync, sections: [summary,members,member-details,transactions],
@@ -252,11 +291,16 @@ pub fn merge_organization_sync_snapshot(
     // 动态字段合并：existing.extra ∪ snapshot.metadata，删除保留键
     // （Rust flatten 保证两侧本就不含保留键，此处删除为防御性对齐 TS 的 delete 调用）
     let reserved: HashSet<&str> = ORGANIZATION_SYNC_RESERVED_KEYS.into_iter().collect();
-    let mut merged_extra = existing
-        .map(|e| e.extra.clone())
-        .unwrap_or_default();
+    let mut merged_extra = existing.map(|e| e.extra.clone()).unwrap_or_default();
     if let Some(metadata) = &snapshot.summary.metadata {
         for (key, value) in metadata {
+            // 入站防御：`orgRootSecret`（本机根私钥密文）绝不接受对端注入——
+            // 它不在保留键表内（见 [`OrganizationRecord::ORG_ROOT_SECRET_KEY`] 注释），
+            // 下方 retain 剔不掉，必须在插入处显式跳过（org.md §15 不同步出本机）；
+            // `orgSecret`/`recoverySecret` 等非敏感动态键不受影响，照常随快照流动（§13）
+            if key == OrganizationRecord::ORG_ROOT_SECRET_KEY {
+                continue;
+            }
             merged_extra.insert(key.clone(), value.clone());
         }
     }
@@ -277,6 +321,24 @@ pub fn merge_organization_sync_snapshot(
             .map(|e| e.updated_at)
             .unwrap_or(0)
             .max(snapshot.summary.updated_at),
+        // gateways（保留键）：incoming 显式携带则以其为准，缺省保留 existing
+        // （对齐 basePluginDomain 的缺省回退口径；org.md §14 经快照扩散）
+        gateways: snapshot
+            .summary
+            .gateways
+            .clone()
+            .or_else(|| existing.map(|e| e.gateways.clone()))
+            .unwrap_or_default(),
+        // orgAddress / isPublic（保留键，org.md §15/§16）：同 gateways 回退口径
+        org_address: snapshot
+            .summary
+            .org_address
+            .clone()
+            .or_else(|| existing.and_then(|e| e.org_address.clone())),
+        is_public: snapshot
+            .summary
+            .is_public
+            .unwrap_or_else(|| existing.is_some_and(|e| e.is_public)),
         members: merged_members,
         sync: Some(OrganizationSyncState {
             versions: snapshot.sync,
@@ -336,277 +398,4 @@ pub fn normalize_incoming_snapshot(value: &Value) -> Result<OrganizationSyncSnap
         })
         .unwrap_or_default();
     Ok(build_organization_sync_snapshot(&record, &transactions))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::org::tx::OrganizationTransactionType;
-
-    fn rid(ch: char) -> String {
-        ch.to_string().repeat(64)
-    }
-
-    fn member(root: char, role: OrganizationRole, joined: i64) -> OrganizationMember {
-        OrganizationMember {
-            root_id: rid(root),
-            role,
-            joined_at: joined,
-            added_by: rid('z'),
-            node_info: None,
-            extra: Default::default(),
-        }
-    }
-
-    fn sample_record() -> OrganizationRecord {
-        let mut record = OrganizationRecord {
-            org_id: "org_0123456789abcdef".to_string(),
-            name: "星火".to_string(),
-            description: "desc".to_string(),
-            base_plugin_domain: Some("plugin:chat".to_string()),
-            created_at: 1000,
-            created_by: rid('a'),
-            updated_at: 2000,
-            members: vec![
-                member('a', OrganizationRole::Admin, 1000),
-                member('b', OrganizationRole::Member, 1500),
-            ],
-            sync: None,
-            extra: Default::default(),
-        };
-        record.set_recovery_secret("cd".repeat(32));
-        record
-    }
-
-    fn versions(v: i64) -> OrganizationSyncVersions {
-        OrganizationSyncVersions {
-            summary_version: v,
-            members_version: v,
-            member_details_version: v,
-            transactions_version: v,
-        }
-    }
-
-    #[test]
-    fn versions_all_equal_updated_at() {
-        let record = sample_record();
-        let v = build_organization_sync_versions(&record, 1234);
-        assert_eq!(v.summary_version, 2000);
-        assert_eq!(v.members_version, 2000);
-        assert_eq!(v.member_details_version, 2000);
-        assert_eq!(v.transactions_version, 1234);
-        let d = build_organization_sync_versions_default(&record);
-        assert_eq!(d, versions(2000));
-    }
-
-    #[test]
-    fn build_snapshot_metadata_carries_recovery_secret() {
-        let record = sample_record();
-        let snapshot = build_organization_sync_snapshot(&record, &[]);
-        assert_eq!(snapshot.summary.member_count, 2);
-        assert_eq!(snapshot.summary.admin_count, 1);
-        let metadata = snapshot.summary.metadata.as_ref().unwrap();
-        assert_eq!(
-            metadata.get("recoverySecret").and_then(Value::as_str),
-            Some("cd".repeat(32).as_str())
-        );
-        // 保留键不进 metadata
-        for key in ORGANIZATION_SYNC_RESERVED_KEYS {
-            assert!(!metadata.contains_key(key), "reserved key {key} leaked");
-        }
-        // 版本塌缩：空事务 → transactionsVersion = updatedAt
-        assert_eq!(snapshot.sync, versions(2000));
-    }
-
-    #[test]
-    fn build_snapshot_transactions_version_from_first_tx() {
-        let record = sample_record();
-        let txs = vec![super::super::tx::OrganizationTransactionRecord {
-            tx_id: "t1".to_string(),
-            org_id: record.org_id.clone(),
-            type_: OrganizationTransactionType::MemberAdd,
-            created_at: 7777,
-            actor_root_id: rid('a'),
-            target_root_id: None,
-            summary: "s".to_string(),
-            payload: None,
-        }];
-        let snapshot = build_organization_sync_snapshot(&record, &txs);
-        assert_eq!(snapshot.sync.transactions_version, 7777);
-        assert_eq!(snapshot.transactions.len(), 1);
-    }
-
-    #[test]
-    fn stale_rules() {
-        let local = versions(100);
-        // local 缺失 → stale
-        assert!(is_organization_sync_stale(None, &local));
-        // 完全等价 → 不 stale
-        assert!(!is_organization_sync_stale(Some(&local), &versions(100)));
-        // 任一字段严格更大 → stale
-        let mut incoming = versions(100);
-        incoming.transactions_version = 101;
-        assert!(is_organization_sync_stale(Some(&local), &incoming));
-        // 双向可同时为 true（分叉）
-        let mut fork_a = versions(100);
-        fork_a.summary_version = 200;
-        let mut fork_b = versions(100);
-        fork_b.members_version = 200;
-        assert!(is_organization_sync_stale(Some(&fork_a), &fork_b));
-        assert!(is_organization_sync_stale(Some(&fork_b), &fork_a));
-        // 全字段落后 → 不 stale
-        assert!(!is_organization_sync_stale(Some(&versions(200)), &versions(100)));
-    }
-
-    #[test]
-    fn merge_into_empty() {
-        let record = sample_record();
-        let snapshot = build_organization_sync_snapshot(&record, &[]);
-        let merged = merge_organization_sync_snapshot(None, &snapshot, 5555);
-        assert_eq!(merged.org_id, record.org_id);
-        assert_eq!(merged.name, "星火");
-        assert_eq!(merged.members.len(), 2);
-        assert_eq!(merged.updated_at, 2000);
-        let sync = merged.sync.as_ref().unwrap();
-        assert_eq!(sync.versions, versions(2000));
-        assert_eq!(sync.last_synced_at, 5555);
-        assert_eq!(
-            sync.sections,
-            vec![
-                OrganizationSyncSection::Summary,
-                OrganizationSyncSection::Members,
-                OrganizationSyncSection::MemberDetails,
-                OrganizationSyncSection::Transactions,
-            ]
-        );
-        // recoverySecret 经 metadata 落到 merged.extra
-        assert_eq!(merged.recovery_secret(), Some("cd".repeat(32).as_str()));
-    }
-
-    #[test]
-    fn merge_member_nodeinfo_fallback_and_order() {
-        let mut existing = sample_record();
-        existing.members[1].node_info = Some(OrganizationNodeInfo {
-            peer_id: Some("peer-b-123".to_string()),
-            addresses: vec!["/ip4/9.9.9.9/tcp/1".to_string()],
-        });
-        existing.updated_at = 3000; // 本地 updatedAt 更大 → max 保留
-
-        // incoming：b 不带 nodeInfo（应保留 existing），新成员 c，且 a 角色被覆盖
-        let mut incoming_record = sample_record();
-        incoming_record.members = vec![
-            {
-                let mut m = member('a', OrganizationRole::Member, 1000);
-                m.added_by = rid('y');
-                m
-            },
-            member('b', OrganizationRole::Member, 1500),
-            member('c', OrganizationRole::Member, 2500),
-        ];
-        let snapshot = build_organization_sync_snapshot(&incoming_record, &[]);
-
-        let merged = merge_organization_sync_snapshot(Some(&existing), &snapshot, 9999);
-        // 成员顺序：existing 原位（a, b），新成员 c 追加
-        let order: Vec<char> = merged
-            .members
-            .iter()
-            .map(|m| m.root_id.chars().next().unwrap())
-            .collect();
-        assert_eq!(order, vec!['a', 'b', 'c']);
-        // a 的字段被 incoming 覆盖
-        assert_eq!(merged.members[0].role, OrganizationRole::Member);
-        assert_eq!(merged.members[0].added_by, rid('y'));
-        // b 的 nodeInfo 保留 existing 值
-        assert_eq!(
-            merged.members[1].node_info.as_ref().unwrap().peer_id.as_deref(),
-            Some("peer-b-123")
-        );
-        // updatedAt = max(3000, 2000)
-        assert_eq!(merged.updated_at, 3000);
-    }
-
-    #[test]
-    fn merge_base_plugin_domain_fallback() {
-        let mut existing = sample_record();
-        existing.base_plugin_domain = Some("plugin:keep".to_string());
-        let mut snapshot = build_organization_sync_snapshot(&sample_record(), &[]);
-        snapshot.summary.base_plugin_domain = None;
-        let merged = merge_organization_sync_snapshot(Some(&existing), &snapshot, 1);
-        assert_eq!(merged.base_plugin_domain.as_deref(), Some("plugin:keep"));
-        // existing 缺失时则为 None
-        let merged = merge_organization_sync_snapshot(None, &snapshot, 1);
-        assert_eq!(merged.base_plugin_domain, None);
-    }
-
-    #[test]
-    fn merge_dynamic_metadata_overrides_and_strips_reserved() {
-        let mut existing = sample_record();
-        existing
-            .extra
-            .insert("customKey".to_string(), Value::from("old"));
-        let mut snapshot = build_organization_sync_snapshot(&sample_record(), &[]);
-        let mut metadata = serde_json::Map::new();
-        metadata.insert("customKey".to_string(), Value::from("new"));
-        metadata.insert("anotherKey".to_string(), Value::from(42));
-        // 恶意/异常 metadata 携带保留键 → 合并后必须被剔除
-        metadata.insert("name".to_string(), Value::from("hijack"));
-        snapshot.summary.metadata = Some(metadata);
-
-        let merged = merge_organization_sync_snapshot(Some(&existing), &snapshot, 1);
-        assert_eq!(
-            merged.extra.get("customKey").and_then(Value::as_str),
-            Some("new")
-        );
-        assert_eq!(merged.extra.get("anotherKey").cloned(), Some(Value::from(42)));
-        assert_eq!(merged.name, snapshot.summary.name, "保留键不得经 metadata 注入");
-        assert!(!merged.extra.contains_key("name"));
-    }
-
-    #[test]
-    fn normalize_snapshot_shape_passthrough() {
-        let snapshot = build_organization_sync_snapshot(&sample_record(), &[]);
-        let value = serde_json::to_value(&snapshot).unwrap();
-        let normalized = normalize_incoming_snapshot(&value).unwrap();
-        assert_eq!(normalized, snapshot);
-    }
-
-    #[test]
-    fn normalize_raw_record_collapses_versions() {
-        // 原始记录线形（org-share 推送路径）：sync 带 sections/lastSyncedAt
-        let mut record = sample_record();
-        record.sync = Some(OrganizationSyncState {
-            versions: OrganizationSyncVersions {
-                summary_version: 2000,
-                members_version: 2000,
-                member_details_version: 2000,
-                transactions_version: 8888, // 独立事务版本——重建后丢失
-            },
-            sections: pick_sync_sections_by_priority(),
-            last_synced_at: 4321,
-        });
-        let value = serde_json::to_value(&record).unwrap();
-        let normalized = normalize_incoming_snapshot(&value).unwrap();
-        // 版本塌缩：四字段全部 = updatedAt（spec §4.4 线形兼容行为）
-        assert_eq!(normalized.sync, versions(2000));
-        assert_eq!(normalized.summary.name, "星火");
-        assert_eq!(normalized.members.len(), 2);
-        // recoverySecret 经 record extra → metadata 保留
-        assert_eq!(
-            normalized
-                .summary
-                .metadata
-                .as_ref()
-                .unwrap()
-                .get("recoverySecret")
-                .and_then(Value::as_str),
-            Some("cd".repeat(32).as_str())
-        );
-    }
-
-    #[test]
-    fn normalize_rejects_garbage() {
-        assert!(normalize_incoming_snapshot(&Value::Null).is_err());
-        assert!(normalize_incoming_snapshot(&serde_json::json!({"foo": 1})).is_err());
-        assert!(normalize_incoming_snapshot(&serde_json::json!("str")).is_err());
-    }
 }

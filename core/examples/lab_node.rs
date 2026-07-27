@@ -4,7 +4,8 @@
 //! - stdout：`{"type":"ready",...}` 启动完成 / `{"type":"event",...}` 节点事件 /
 //!   `{"type":"applied",...}` 宿主落库回调 / `{"type":"result",...}` 命令响应；
 //! - stdin 命令（带 `"id"` 原样回显）：`info` / `broadcast-update` / `broadcast` /
-//!   `announce` / `exchange` / `connect` / `overlay-pool` / `seed-overlay` / `shutdown`。
+//!   `announce` / `exchange` / `connect` / `overlay-pool` / `seed-overlay` /
+//!   `dht-put` / `dht-get` / `shutdown`。
 //!
 //! 用法：`cargo run --example lab_node -- --port 16200`（端口 0 = OS 分配，见 ready 行）。
 //! 搭建方式参考 tests/p2p_integration.rs（SharedStorage + 最小内存宿主）。
@@ -94,11 +95,16 @@ fn print_line(value: &Value) {
 fn event_json(event: &P2pEvent) -> Option<Value> {
     let map = match event {
         P2pEvent::ListenPortPersisted { port } => json!({"event": "listen-port", "port": port}),
-        P2pEvent::PeerConnected { peer_id } => json!({"event": "peer-connected", "peerId": peer_id}),
+        P2pEvent::PeerConnected { peer_id } => {
+            json!({"event": "peer-connected", "peerId": peer_id})
+        }
         P2pEvent::PeerDisconnected { peer_id } => {
             json!({"event": "peer-disconnected", "peerId": peer_id})
         }
-        P2pEvent::PeerVersion { peer_id, app_version } => {
+        P2pEvent::PeerVersion {
+            peer_id,
+            app_version,
+        } => {
             json!({"event": "peer-version", "peerId": peer_id, "appVersion": app_version})
         }
         P2pEvent::AnnouncePublished { addresses } => {
@@ -110,13 +116,19 @@ fn event_json(event: &P2pEvent) -> Option<Value> {
         P2pEvent::PeerExchangeCompleted { responder, merged } => {
             json!({"event": "peer-exchange-completed", "responder": responder, "merged": merged})
         }
-        P2pEvent::OrgShareAccepted { org_id, sync_id, source } => {
+        P2pEvent::OrgShareAccepted {
+            org_id,
+            sync_id,
+            source,
+        } => {
             json!({"event": "org-share-accepted", "orgId": org_id, "syncId": sync_id, "source": source})
         }
         P2pEvent::SyncMessageApplied { msg_type, domain } => {
             json!({"event": "sync-applied", "msgType": msg_type, "domain": domain})
         }
-        P2pEvent::MessageDropped { reason } => json!({"event": "message-dropped", "reason": reason}),
+        P2pEvent::MessageDropped { reason } => {
+            json!({"event": "message-dropped", "reason": reason})
+        }
         P2pEvent::Warning(msg) => json!({"event": "warning", "message": msg}),
         P2pEvent::Stopped => json!({"event": "stopped"}),
         // ready 行单独打印；keepalive tick 在本例程禁用
@@ -156,7 +168,11 @@ async fn handle_command(
     let parsed: Value = match serde_json::from_str(text) {
         Ok(v) => v,
         Err(e) => {
-            print_line(&cmd_result(&Value::Null, false, Value::String(format!("invalid json: {e}"))));
+            print_line(&cmd_result(
+                &Value::Null,
+                false,
+                Value::String(format!("invalid json: {e}")),
+            ));
             return CmdOutcome::Continue;
         }
     };
@@ -176,38 +192,81 @@ async fn handle_command(
             Err(e) => Err(e.to_string()),
         },
         "broadcast-update" => {
-            let domain = parsed.get("domain").and_then(Value::as_str).unwrap_or("notes");
-            let collection = parsed.get("collection").and_then(Value::as_str).unwrap_or("items");
-            let doc_id = parsed.get("docId").and_then(Value::as_str).unwrap_or("doc-rust-1");
-            let payload = parsed.get("payload").cloned().unwrap_or_else(|| json!({"text": "hello from rust"}));
+            let domain = parsed
+                .get("domain")
+                .and_then(Value::as_str)
+                .unwrap_or("notes");
+            let collection = parsed
+                .get("collection")
+                .and_then(Value::as_str)
+                .unwrap_or("items");
+            let doc_id = parsed
+                .get("docId")
+                .and_then(Value::as_str)
+                .unwrap_or("doc-rust-1");
+            let payload = parsed
+                .get("payload")
+                .cloned()
+                .unwrap_or_else(|| json!({"text": "hello from rust"}));
             let meta = json!({
                 "vv": { self_peer_id: 1 },
                 "ts": now,
                 "nodeId": self_peer_id,
             });
             let body = build_update_body(domain, collection, doc_id, payload, meta, None);
-            node.broadcast("spark-sync", body).await.map(|()| json!({"sent": true})).map_err(|e| e.to_string())
+            node.broadcast("spark-sync", body)
+                .await
+                .map(|()| json!({"sent": true}))
+                .map_err(|e| e.to_string())
         }
         "broadcast" => {
-            let topic = parsed.get("topic").and_then(Value::as_str).unwrap_or("spark-sync");
-            let body = parsed.get("body").and_then(Value::as_object).cloned().unwrap_or_default();
-            node.broadcast(topic, body).await.map(|()| json!({"sent": true})).map_err(|e| e.to_string())
+            let topic = parsed
+                .get("topic")
+                .and_then(Value::as_str)
+                .unwrap_or("spark-sync");
+            let body = parsed
+                .get("body")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            node.broadcast(topic, body)
+                .await
+                .map(|()| json!({"sent": true}))
+                .map_err(|e| e.to_string())
         }
-        "announce" => node.announce_now().await.map(|published| json!({"published": published})).map_err(|e| e.to_string()),
+        "announce" => node
+            .announce_now()
+            .await
+            .map(|published| json!({"published": published}))
+            .map_err(|e| e.to_string()),
         "exchange" => {
             let peer = parsed.get("peerId").and_then(Value::as_str).unwrap_or("");
-            node.exchange_with_peer(peer).await.map(|merged| json!({"merged": merged})).map_err(|e| e.to_string())
+            node.exchange_with_peer(peer)
+                .await
+                .map(|merged| json!({"merged": merged}))
+                .map_err(|e| e.to_string())
         }
         "connect" => {
             let info = PeerNodeInfo {
-                peer_id: parsed.get("peerId").and_then(Value::as_str).map(ToString::to_string),
+                peer_id: parsed
+                    .get("peerId")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string),
                 addresses: parsed
                     .get("addresses")
                     .and_then(Value::as_array)
-                    .map(|arr| arr.iter().filter_map(Value::as_str).map(ToString::to_string).collect())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(Value::as_str)
+                            .map(ToString::to_string)
+                            .collect()
+                    })
                     .unwrap_or_default(),
             };
-            node.connect_peer(&info).await.map(|()| json!({"connected": true})).map_err(|e| e.to_string())
+            node.connect_peer(&info)
+                .await
+                .map(|()| json!({"connected": true}))
+                .map_err(|e| e.to_string())
         }
         "overlay-pool" => {
             let mut guard = storage.0.lock().unwrap();
@@ -222,14 +281,42 @@ async fn handle_command(
             let addresses: Vec<String> = parsed
                 .get("addresses")
                 .and_then(Value::as_array)
-                .map(|arr| arr.iter().filter_map(Value::as_str).map(ToString::to_string).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(Value::as_str)
+                        .map(ToString::to_string)
+                        .collect()
+                })
                 .unwrap_or_default();
-            let verified = parsed.get("verified").and_then(Value::as_bool).unwrap_or(false);
+            let verified = parsed
+                .get("verified")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             let mut guard = storage.0.lock().unwrap();
             let mut store = OverlayPeerStore::new(&mut *guard);
             store
                 .remember(peer, &addresses, OverlayPeerSource::Announce, verified, now)
                 .map(|()| json!({"seeded": true}))
+                .map_err(|e| e.to_string())
+        }
+        "dht-put" => {
+            let key = parsed.get("key").and_then(Value::as_str).unwrap_or("");
+            let value = parsed.get("value").and_then(Value::as_str).unwrap_or("");
+            node.dht_put_record(key.as_bytes(), value.as_bytes().to_vec())
+                .await
+                .map(|()| json!({"put": true}))
+                .map_err(|e| e.to_string())
+        }
+        "dht-get" => {
+            let key = parsed.get("key").and_then(Value::as_str).unwrap_or("");
+            node.dht_get_record(key.as_bytes())
+                .await
+                .map(|found| {
+                    json!({
+                        "found": found.is_some(),
+                        "value": found.and_then(|bytes| String::from_utf8(bytes).ok()),
+                    })
+                })
                 .map_err(|e| e.to_string())
         }
         "shutdown" => {
@@ -289,11 +376,15 @@ async fn main() {
         enable_upnp: false,
         // 由驱动脚本按需触发（announce/exchange 命令），保持输出确定性
         keepalive_interval: None,
+        dht_mode: spark_core::p2p::DhtMode::Server,
         now_fn: Arc::new(spark_core::p2p::node::system_now_ms),
     };
 
     let (notify_tx, mut notify_rx) = mpsc::unbounded_channel::<Value>();
-    let host = LabHost { root_id, notify: notify_tx };
+    let host = LabHost {
+        root_id,
+        notify: notify_tx,
+    };
     let storage = SharedStorage::default();
     let mut node = P2pNode::start(config, storage.clone(), Box::new(host))
         .await

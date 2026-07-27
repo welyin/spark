@@ -14,13 +14,17 @@ use std::time::Duration;
 
 use libp2p::swarm::NetworkBehaviour;
 use libp2p::swarm::behaviour::toggle::Toggle;
-use libp2p::{StreamProtocol, autonat, gossipsub, identify, mdns, ping, relay, request_response, upnp};
+use libp2p::{
+    StreamProtocol, autonat, gossipsub, identify, kad, mdns, ping, relay, request_response, upnp,
+};
 
 use super::constants::{
-    DIRECT_ORG_RECOVERY_PROTOCOL, DIRECT_ORG_SHARE_PROTOCOL, DIRECT_PEER_EXCHANGE_PROTOCOL,
-    DIRECT_VERSION_PROTOCOL, ORG_RECOVERY_READ_TIMEOUT_MS, ORG_SHARE_READ_TIMEOUT_MS,
-    PEER_EXCHANGE_READ_RESPONSE_TIMEOUT_MS, RELAY_DEFAULT_DATA_LIMIT_BYTES,
-    RELAY_DEFAULT_DURATION_LIMIT_SECS, RELAY_MAX_RESERVATIONS, VERSION_PROTOCOL_READ_TIMEOUT_MS,
+    DHT_RECORD_TTL_SECS, DIRECT_ORG_RECOVERY_PROTOCOL, DIRECT_ORG_SHARE_PROTOCOL,
+    DIRECT_PEER_EXCHANGE_PROTOCOL, DIRECT_VERSION_PROTOCOL, KAD_PROTOCOL_NAME,
+    NODE_CHALLENGE_PROTOCOL, NODE_CHALLENGE_READ_TIMEOUT_MS, ORG_RECOVERY_READ_TIMEOUT_MS,
+    ORG_SHARE_READ_TIMEOUT_MS, PEER_EXCHANGE_READ_RESPONSE_TIMEOUT_MS,
+    RELAY_DEFAULT_DATA_LIMIT_BYTES, RELAY_DEFAULT_DURATION_LIMIT_SECS, RELAY_MAX_RESERVATIONS,
+    VERSION_PROTOCOL_READ_TIMEOUT_MS,
 };
 
 /// 直连协议单帧上限（1 MiB，防畸形放大；正常帧远小于此）。
@@ -189,6 +193,40 @@ impl request_response::Codec for VersionFrameCodec {
     }
 }
 
+/// DHT（Kad）运行模式。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DhtMode {
+    /// 完全私有：不挂载 Kad 行为（隐私开关）。
+    Off,
+    /// 仅客户端：参与查询但不提供路由/存储服务（移动端预留）。
+    Client,
+    /// 全量节点：路由 + 记录存储（默认）。
+    #[default]
+    Server,
+}
+
+impl DhtMode {
+    /// 存储/命令线形字符串（off/client/server）。
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DhtMode::Off => "off",
+            DhtMode::Client => "client",
+            DhtMode::Server => "server",
+        }
+    }
+
+    /// 从线形字符串解析；非法值返回 None。
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim() {
+            "off" => Some(DhtMode::Off),
+            "client" => Some(DhtMode::Client),
+            "server" => Some(DhtMode::Server),
+            _ => None,
+        }
+    }
+}
+
 /// Spark 组合行为。
 #[derive(NetworkBehaviour)]
 pub struct SparkBehaviour {
@@ -200,10 +238,12 @@ pub struct SparkBehaviour {
     pub relay_client: relay::client::Behaviour,
     pub autonat: autonat::Behaviour,
     pub upnp: Toggle<upnp::tokio::Behaviour>,
+    pub kad: Toggle<kad::Behaviour<kad::store::MemoryStore>>,
     pub version_rr: request_response::Behaviour<VersionFrameCodec>,
     pub exchange_rr: request_response::Behaviour<JsonFrameCodec>,
     pub recovery_rr: request_response::Behaviour<JsonFrameCodec>,
     pub org_share_rr: request_response::Behaviour<JsonFrameCodec>,
+    pub node_challenge_rr: request_response::Behaviour<JsonFrameCodec>,
 }
 
 /// 装配开关（测试可关闭 mDNS/UPnP）。
@@ -211,6 +251,7 @@ pub struct SparkBehaviour {
 pub struct BehaviourOptions {
     pub enable_mdns: bool,
     pub enable_upnp: bool,
+    pub dht_mode: DhtMode,
 }
 
 impl Default for BehaviourOptions {
@@ -218,6 +259,7 @@ impl Default for BehaviourOptions {
         Self {
             enable_mdns: true,
             enable_upnp: true,
+            dht_mode: DhtMode::default(),
         }
     }
 }
@@ -284,8 +326,9 @@ pub fn build_behaviour(
             StreamProtocol::new(DIRECT_PEER_EXCHANGE_PROTOCOL),
             request_response::ProtocolSupport::Full,
         )],
-        request_response::Config::default()
-            .with_request_timeout(Duration::from_millis(PEER_EXCHANGE_READ_RESPONSE_TIMEOUT_MS)),
+        request_response::Config::default().with_request_timeout(Duration::from_millis(
+            PEER_EXCHANGE_READ_RESPONSE_TIMEOUT_MS,
+        )),
     );
     let recovery_rr = request_response::Behaviour::new(
         [(
@@ -303,6 +346,34 @@ pub fn build_behaviour(
         request_response::Config::default()
             .with_request_timeout(Duration::from_millis(ORG_SHARE_READ_TIMEOUT_MS)),
     );
+    let node_challenge_rr = request_response::Behaviour::new(
+        [(
+            StreamProtocol::new(NODE_CHALLENGE_PROTOCOL),
+            request_response::ProtocolSupport::Full,
+        )],
+        request_response::Config::default()
+            .with_request_timeout(Duration::from_millis(NODE_CHALLENGE_READ_TIMEOUT_MS)),
+    );
+
+    // Kad：Off 不挂载；Client 挂但只查不服务；Server 全量。
+    // MemoryStore + 本地周期重发即可（记录都带 TTL，不接 sled）。
+    // 注意：kad 默认 mode 是 Client（仅在有外部地址时自动升 Server），
+    // Client 模式下入站子流是 DeniedUpgrade，必须按 dht_mode 显式 set_mode。
+    let kad_behaviour = match options.dht_mode {
+        DhtMode::Off => Toggle::from(None),
+        mode => {
+            let store = kad::store::MemoryStore::new(local_peer_id);
+            let mut kad_config = kad::Config::new(StreamProtocol::new(KAD_PROTOCOL_NAME));
+            kad_config.set_record_ttl(Some(Duration::from_secs(DHT_RECORD_TTL_SECS)));
+            let mut behaviour = kad::Behaviour::with_config(local_peer_id, store, kad_config);
+            behaviour.set_mode(Some(match mode {
+                DhtMode::Client => kad::Mode::Client,
+                DhtMode::Server => kad::Mode::Server,
+                DhtMode::Off => unreachable!("Off handled above"),
+            }));
+            Toggle::from(Some(behaviour))
+        }
+    };
 
     Ok(SparkBehaviour {
         gossipsub: gossipsub_behaviour,
@@ -313,9 +384,11 @@ pub fn build_behaviour(
         relay_client,
         autonat: autonat::Behaviour::new(local_peer_id, autonat::Config::default()),
         upnp: upnp_behaviour,
+        kad: kad_behaviour,
         version_rr,
         exchange_rr,
         recovery_rr,
         org_share_rr,
+        node_challenge_rr,
     })
 }

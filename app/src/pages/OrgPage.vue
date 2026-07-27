@@ -1,3 +1,4 @@
+<!-- 组织页骨架：组织列表 + 详情抽屉结构 + 各面板/对话框的状态编排（面板实现见 src/components/org/） -->
 <template>
   <section class="org-page">
     <header class="page-header">
@@ -11,8 +12,8 @@
         </div>
       </div>
       <div class="page-header-actions">
-        <el-button type="primary" @click="openCreateDialog">创建组织</el-button>
-        <el-button @click="openJoinDialog">邀请码加入</el-button>
+        <el-button type="primary" @click="createDialogVisible = true">创建组织</el-button>
+        <el-button @click="joinDialogVisible = true">邀请码加入</el-button>
         <el-button text type="primary" @click="refreshOrganizations">刷新</el-button>
       </div>
     </header>
@@ -66,177 +67,30 @@
       </div>
     </el-card>
 
-    <!-- 创建组织对话框 -->
-    <el-dialog v-model="createDialogVisible" title="创建组织" width="520px">
-      <el-form label-position="top">
-        <el-form-item label="组织名称">
-          <el-input v-model="createForm.name" placeholder="例如：产品组" />
-        </el-form-item>
-        <el-form-item label="基础插件">
-          <el-select v-model="createForm.basePluginDomain" placeholder="请选择组织基础插件" style="width: 100%">
-            <el-option
-              v-for="plugin in foundationPlugins"
-              :key="plugin.domain"
-              :label="`${plugin.name} (${plugin.domain})`"
-              :value="plugin.domain"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="组织描述">
-          <el-input
-            v-model="createForm.description"
-            type="textarea"
-            :rows="3"
-            placeholder="可选，描述组织用途"
-          />
-        </el-form-item>
-      </el-form>
-      <p class="hint">创建人会自动成为该组织的管理员和首位成员。组织必须绑定一个基础插件。</p>
-      <template #footer>
-        <el-button @click="createDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="creating" @click="createOrganization">
-          {{ creating ? '创建中...' : '创建组织' }}
-        </el-button>
-      </template>
-    </el-dialog>
+    <DiscoverOrgsPanel />
 
-    <!-- 邀请码加入对话框 -->
-    <el-dialog v-model="joinDialogVisible" title="通过邀请码加入" width="520px">
-      <el-form label-position="top">
-        <el-form-item label="邀请码">
-          <el-input
-            v-model="joinCode"
-            type="textarea"
-            :rows="4"
-            placeholder="粘贴管理员分享给你的邀请码"
-          />
-        </el-form-item>
-      </el-form>
-      <p class="hint">加入前提：管理员已先将你的 RootID 录入组织成员。邀请码 24 小时内有效，用于连接管理员节点并拉取组织数据。</p>
-      <template #footer>
-        <el-button @click="joinDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="joining" @click="acceptInvite">
-          {{ joining ? '加入中...' : '加入组织' }}
-        </el-button>
-      </template>
-    </el-dialog>
+    <CreateOrgDialog
+      ref="createDialogRef"
+      v-model="createDialogVisible"
+      :creating="creating"
+      :foundation-plugins="foundationPlugins"
+      @submit="createOrganization"
+    />
 
-    <!-- 邀请成员对话框（两步：预录入 -> 生成邀请码） -->
-    <el-dialog v-model="inviteDialogVisible" title="邀请成员" width="520px" @closed="resetInviteDialog">
-      <template v-if="!inviteResult">
-        <el-form label-position="top">
-          <el-form-item label="成员 RootID">
-            <el-input v-model="inviteRootId" placeholder="64 位 RootID" />
-          </el-form-item>
-          <el-collapse class="invite-advanced">
-            <el-collapse-item title="高级选项：对方节点信息（可选）" name="advanced">
-              <el-form-item label="成员 PeerId（可选）">
-                <el-input v-model="invitePeerId" placeholder="例如：12D3KooW..." />
-              </el-form-item>
-              <el-form-item label="成员节点地址（可选，可多条，逗号/分号/换行分隔）">
-                <el-input
-                  v-model="inviteAddresses"
-                  type="textarea"
-                  :rows="3"
-                  placeholder="例如：/ip4/127.0.0.1/tcp/15002/ws"
-                />
-              </el-form-item>
-            </el-collapse-item>
-          </el-collapse>
-        </el-form>
-        <p class="hint">只填 RootID 即可预录入；对方凭邀请码加入时会自动回填节点地址。</p>
-      </template>
-      <template v-else>
-        <el-alert title="成员已预录入，邀请码已生成" type="success" :closable="false" show-icon />
-        <el-form label-position="top" class="invite-result">
-          <el-form-item label="邀请码（24 小时内有效）">
-            <el-input v-model="inviteResult" type="textarea" :rows="4" readonly />
-          </el-form-item>
-        </el-form>
-        <p class="hint">请通过线下渠道（微信/当面）把邀请码发给对方；对方凭码连接你的节点完成加入，期间你需要保持在线。</p>
-      </template>
-      <template #footer>
-        <template v-if="!inviteResult">
-          <el-button @click="inviteDialogVisible = false">取消</el-button>
-          <el-button type="primary" :loading="inviting" @click="addMemberAndInvite">
-            {{ inviting ? '处理中...' : '添加并生成邀请码' }}
-          </el-button>
-        </template>
-        <template v-else>
-          <el-button @click="inviteDialogVisible = false">完成</el-button>
-          <el-button type="primary" @click="copyInvite">复制邀请码</el-button>
-        </template>
-      </template>
-    </el-dialog>
+    <JoinOrgDialog
+      v-model="joinDialogVisible"
+      :joining="joining"
+      @submit="acceptInvite"
+    />
 
-    <!-- 数据治理对话框（管理员手动清理本机旧数据） -->
-    <el-dialog v-model="purgeDialogVisible" title="数据治理（清理本机旧数据）" width="560px" @closed="resetPurgeDialog">
-      <template v-if="!purgeResult">
-        <el-alert
-          title="只清理本机指定日期之前的旧数据；组织数据仍保留在其他成员副本中，且清理后同时代数据不会再被同步回本机。"
-          type="info"
-          :closable="false"
-          show-icon
-          class="purge-tip"
-        />
-        <el-form label-position="top">
-          <el-form-item label="清理该日期之前的数据">
-            <el-date-picker
-              v-model="purgeBeforeDate"
-              type="date"
-              placeholder="选择日期"
-              :disabled-date="disableFutureDate"
-              style="width: 100%"
-            />
-          </el-form-item>
-        </el-form>
-        <div class="purge-actions">
-          <el-button :loading="purgePreviewing" :disabled="!purgeBeforeDate" @click="runPurgePreview">预览影响</el-button>
-          <el-button :loading="purgeExporting" @click="exportBeforePurge">导出数据</el-button>
-        </div>
-        <template v-if="purgePreview">
-          <el-descriptions :column="1" border class="purge-preview">
-            <el-descriptions-item label="数据域">{{ purgePreview.domain }}</el-descriptions-item>
-            <el-descriptions-item label="将影响">
-              {{ purgePreview.preview.affectedDocs }} 条文档 · {{ formatBytes(purgePreview.preview.affectedBytes) }}
-              （集合：{{ purgePreview.preview.collections.join('、') || '-' }}）
-            </el-descriptions-item>
-            <el-descriptions-item label="K 副本">
-              <el-tag :type="purgeReplicaSufficient ? 'success' : 'danger'">
-                {{ purgePreview.replica ? `副本 ${purgePreview.replica.syncedPeers}/${purgePreview.replica.replicaTarget}` : '无法获取（P2P 未启动）' }}
-              </el-tag>
-            </el-descriptions-item>
-          </el-descriptions>
-          <el-alert
-            v-if="!purgeReplicaSufficient"
-            title="副本不足：此时清理本机副本可能造成组织数据丢失，已禁止执行。请等待成员同步补足副本，或改为增加磁盘空间。"
-            type="error"
-            :closable="false"
-            show-icon
-            class="purge-tip"
-          />
-          <el-checkbox v-model="purgeConfirmExported" class="purge-tip">
-            我已导出备份并妥善转移，确认清理
-          </el-checkbox>
-        </template>
-      </template>
-      <template v-else>
-        <el-alert title="清理完成" type="success" :closable="false" show-icon />
-        <p class="hint">
-          已清理 {{ purgeResult.removedDocs }} 条文档，释放 {{ formatBytes(purgeResult.freedBytes) }}；
-          同时代数据不会再同步回本机。
-        </p>
-      </template>
-      <template #footer>
-        <template v-if="!purgeResult">
-          <el-button @click="purgeDialogVisible = false">取消</el-button>
-          <el-button type="danger" :loading="purging" :disabled="!purgeExecutable" @click="executePurge">
-            {{ purging ? '清理中...' : '执行清理' }}
-          </el-button>
-        </template>
-        <el-button v-else @click="purgeDialogVisible = false">完成</el-button>
-      </template>
-    </el-dialog>
+    <InviteMemberDialog
+      v-model="inviteDialogVisible"
+      :org-id="selectedOrgId"
+      :before-write="notifyIfNetworkUnavailable"
+      :on-invited="refreshOrganizations"
+    />
+
+    <PurgeDataDialog v-model="purgeDialogVisible" :org-id="selectedOrgId" />
 
     <!-- 组织详情抽屉 -->
     <el-drawer v-model="drawerVisible" size="min(640px, 94%)" :with-header="false">
@@ -269,47 +123,42 @@
           </span>
         </div>
 
-        <h3 class="section-title">成员列表</h3>
-        <el-table :data="selectedOrganization.members" stripe>
-          <el-table-column prop="rootId" label="RootID" min-width="240" />
-          <el-table-column label="角色" width="100">
-            <template #default="scope">
-              <el-tag :type="scope.row.role === 'admin' ? 'danger' : 'info'">
-                {{ scope.row.role === 'admin' ? '管理员' : '成员' }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="加入时间" min-width="150">
-            <template #default="scope">{{ formatDate(scope.row.joinedAt) }}</template>
-          </el-table-column>
-          <el-table-column label="PeerId" min-width="200">
-            <template #default="scope">{{ scope.row.nodeInfo?.peerId || '-' }}</template>
-          </el-table-column>
-          <el-table-column label="最近同步" min-width="140">
-            <template #default="scope">{{ memberSyncLabel(scope.row.rootId) }}</template>
-          </el-table-column>
-          <el-table-column v-if="selectedOrganization.isCurrentUserAdmin" label="操作" width="90" fixed="right">
-            <template #default="scope">
-              <el-button
-                v-if="scope.row.rootId !== currentRootId"
-                text
-                type="danger"
-                size="small"
-                :loading="removingRootId === scope.row.rootId"
-                @click="removeMember(scope.row)"
-              >
-                移除
-              </el-button>
-            </template>
-          </el-table-column>
-        </el-table>
+        <MemberList
+          :members="selectedOrganization.members"
+          :is-admin="selectedOrganization.isCurrentUserAdmin"
+          :current-root-id="currentRootId"
+          :removing-root-id="removingRootId"
+          :member-sync-label="memberSyncLabel"
+          :format-date="formatDate"
+          @remove="removeMember"
+        />
+
+        <GatewayManager
+          v-model="gatewaySelection"
+          :members="selectedOrganization.members"
+          :gateways="currentGateways"
+          :is-admin="selectedOrganization.isCurrentUserAdmin"
+          :saving="savingGateways"
+          :valid="gatewaySelectionValid"
+          @save="saveGateways"
+        />
+
+        <PublicOrgPanel
+          :org="selectedOrganization"
+          v-model:enabled="publicEnabled"
+          v-model:display-name="publicDisplayName"
+          :saving="savingPublic"
+          @save="savePublic"
+        />
+
+        <RecoverConnectionPanel ref="recoverPanelRef" :org-id="selectedOrganization.orgId" />
 
         <div v-if="selectedOrganization.isCurrentUserAdmin" class="drawer-actions">
-          <el-button type="primary" @click="openInviteDialog">邀请成员</el-button>
+          <el-button type="primary" @click="inviteDialogVisible = true">邀请成员</el-button>
           <el-button v-if="selectedOrganization.basePluginDomain" @click="openOrgPlugin(selectedOrganization)">
             打开插件
           </el-button>
-          <el-button v-if="selectedOrganization.basePluginDomain" @click="openPurgeDialog">数据治理</el-button>
+          <el-button v-if="selectedOrganization.basePluginDomain" @click="purgeDialogVisible = true">数据治理</el-button>
           <el-button type="danger" plain :loading="deleting" @click="deleteOrganization">
             {{ deleting ? '删除中...' : '删除组织' }}
           </el-button>
@@ -330,105 +179,63 @@
 <script lang="ts">
 import { computed, defineComponent, onMounted, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { formatBytes } from '../utils/format';
-
-type OrganizationMember = {
-  rootId: string;
-  role: 'admin' | 'member';
-  joinedAt: number;
-  addedBy: string;
-  nodeInfo?: {
-    peerId?: string;
-    addresses: string[];
-  };
-};
-
-type OrganizationView = {
-  orgId: string;
-  name: string;
-  description: string;
-  basePluginDomain?: string;
-  createdAt: number;
-  createdBy: string;
-  updatedAt: number;
-  members: OrganizationMember[];
-  currentUserRole: 'admin' | 'member' | null;
-  isCurrentUserAdmin: boolean;
-  memberCount: number;
-  adminCount: number;
-};
-
-type CreateForm = {
-  name: string;
-  description: string;
-  basePluginDomain: string;
-};
-
-type OrgSyncOverview = {
-  orgId: string;
-  replicaTarget: number;
-  syncedPeers: number;
-  totalMembers: number;
-  members: Array<{
-    rootId: string;
-    peerId?: string;
-    isSelf: boolean;
-    everSynced: boolean;
-    lastSyncedAt: number | null;
-  }>;
-};
-
-type PurgePreviewResult = {
-  domain: string;
-  beforeTs: number;
-  preview: { collections: string[]; affectedDocs: number; affectedBytes: number };
-  replica: OrgSyncOverview | null;
-  isCurrentUserAdmin: boolean;
-};
-
-type PurgeExecuteResult = {
-  removedDocs: number;
-  freedBytes: number;
-};
-
-type PluginCatalogItem = {
-  id: string;
-  domain: string;
-  name: string;
-  description: string;
-  category: 'foundation' | 'business';
-  version: string;
-  views: string[];
-};
+import { currentOrgId } from '../stores/current-org';
+import type { OrgSyncOverviewDto as OrgSyncOverview } from '../api';
+import DiscoverOrgsPanel from '../components/org/DiscoverOrgsPanel.vue';
+import CreateOrgDialog from '../components/org/CreateOrgDialog.vue';
+import JoinOrgDialog from '../components/org/JoinOrgDialog.vue';
+import InviteMemberDialog from '../components/org/InviteMemberDialog.vue';
+import PurgeDataDialog from '../components/org/PurgeDataDialog.vue';
+import MemberList from '../components/org/MemberList.vue';
+import GatewayManager from '../components/org/GatewayManager.vue';
+import PublicOrgPanel from '../components/org/PublicOrgPanel.vue';
+import RecoverConnectionPanel from '../components/org/RecoverConnectionPanel.vue';
+import type { CreateForm, OrganizationMember, OrganizationView, PluginCatalogItem } from '../components/org/types';
 
 export default defineComponent({
   name: 'OrgPage',
+  components: {
+    DiscoverOrgsPanel,
+    CreateOrgDialog,
+    JoinOrgDialog,
+    InviteMemberDialog,
+    PurgeDataDialog,
+    MemberList,
+    GatewayManager,
+    PublicOrgPanel,
+    RecoverConnectionPanel
+  },
   emits: ['open-plugin-tab'],
   setup(_, { emit }) {
     const organizations = ref<OrganizationView[]>([]);
     const overviews = ref<Record<string, OrgSyncOverview | null>>({});
-    const selectedOrgId = ref('');
+    const selectedOrgId = currentOrgId;
     const currentRootId = ref('');
     const loading = ref(false);
 
     const createDialogVisible = ref(false);
     const joinDialogVisible = ref(false);
     const inviteDialogVisible = ref(false);
+    const purgeDialogVisible = ref(false);
     const drawerVisible = ref(false);
 
     const creating = ref(false);
     const joining = ref(false);
-    const inviting = ref(false);
     const deleting = ref(false);
     const removingRootId = ref('');
+    const gatewaySelection = ref<string[]>([]);
+    const savingGateways = ref(false);
+
+    // 公开组织（§15/§16）：管理员开关 + 展示名；组织地址全成员可见可复制
+    const publicEnabled = ref(false);
+    const publicDisplayName = ref('');
+    const savingPublic = ref(false);
+
+    // 子组件引用：创建对话框（成功后重置表单）、恢复连接面板（打开详情时重置）
+    const createDialogRef = ref<{ resetAfterCreate: () => void } | null>(null);
+    const recoverPanelRef = ref<{ reset: () => void } | null>(null);
 
     const pluginCatalog = ref<PluginCatalogItem[]>([]);
-    const createForm = ref<CreateForm>({ name: '', description: '', basePluginDomain: '' });
-    const joinCode = ref('');
-    const inviteRootId = ref('');
-    const invitePeerId = ref('');
-    const inviteAddresses = ref('');
-    const inviteResult = ref('');
 
     const foundationPlugins = computed(() => {
       return pluginCatalog.value.filter((plugin) => plugin.category === 'foundation');
@@ -446,6 +253,40 @@ export default defineComponent({
       return organizations.value.filter((organization) => organization.isCurrentUserAdmin).length;
     });
 
+    const currentGateways = computed(() => {
+      return selectedOrganization.value?.gateways ?? [];
+    });
+
+    const gatewaySelectionValid = computed(() => {
+      if (!selectedOrganization.value) {
+        return false;
+      }
+      const memberIds = new Set(selectedOrganization.value.members.map((member) => member.rootId));
+      return (
+        gatewaySelection.value.length >= 2 &&
+        gatewaySelection.value.length <= 3 &&
+        gatewaySelection.value.every((rootId) => memberIds.has(rootId))
+      );
+    });
+
+    const saveGateways = async () => {
+      if (!selectedOrganization.value || !gatewaySelectionValid.value) {
+        ElMessage.warning('请选择 2-3 名本组织成员作为网关');
+        return;
+      }
+      savingGateways.value = true;
+      try {
+        await notifyIfNetworkUnavailable();
+        await window.electronAPI.organization.setGateways(selectedOrganization.value.orgId, gatewaySelection.value);
+        ElMessage.success('网关设置已保存');
+        await refreshOrganizations();
+      } catch (error) {
+        ElMessage.error(`保存网关设置失败：${error}`);
+      } finally {
+        savingGateways.value = false;
+      }
+    };
+
     const overviewOf = (orgId: string) => {
       return overviews.value[orgId] ?? null;
     };
@@ -462,6 +303,24 @@ export default defineComponent({
         return 'info';
       }
       return overview.syncedPeers >= overview.replicaTarget ? 'success' : 'warning';
+    };
+
+    /**
+     * 写操作前网络检查（development_plan「组织网络状态 UI」）：
+     * 组织网络丢失/仅本地时提示「数据将在恢复后同步」——只提示，不阻断。
+     */
+    const notifyIfNetworkUnavailable = async () => {
+      if (!selectedOrgId.value) {
+        return;
+      }
+      try {
+        const overview = await window.electronAPI.organization.getSyncOverview(selectedOrgId.value);
+        if (overview && (overview.status === 'lost' || overview.status === 'localOnly')) {
+          ElMessage.warning('当前组织网络不可用，数据将在恢复后同步');
+        }
+      } catch {
+        // 状态读取失败不阻断操作
+      }
     };
 
     const loadCurrentRootId = async () => {
@@ -500,9 +359,6 @@ export default defineComponent({
     const loadPluginCatalog = async () => {
       try {
         pluginCatalog.value = await window.electronAPI.plugin.listCatalog();
-        if (!createForm.value.basePluginDomain) {
-          createForm.value.basePluginDomain = foundationPlugins.value[0]?.domain ?? '';
-        }
       } catch (error) {
         ElMessage.error(`加载插件目录失败：${error}`);
       }
@@ -510,6 +366,10 @@ export default defineComponent({
 
     const openDetail = (organization: OrganizationView) => {
       selectedOrgId.value = organization.orgId;
+      gatewaySelection.value = [...(organization.gateways ?? [])];
+      publicEnabled.value = organization.isPublic ?? false;
+      publicDisplayName.value = organization.orgDisplayName ?? '';
+      recoverPanelRef.value?.reset();
       drawerVisible.value = true;
     };
 
@@ -528,16 +388,12 @@ export default defineComponent({
       });
     };
 
-    const openCreateDialog = () => {
-      createDialogVisible.value = true;
-    };
-
-    const createOrganization = async () => {
-      if (!createForm.value.name.trim()) {
+    const createOrganization = async (form: CreateForm) => {
+      if (!form.name.trim()) {
         ElMessage.warning('请输入组织名称');
         return;
       }
-      if (!createForm.value.basePluginDomain) {
+      if (!form.basePluginDomain) {
         ElMessage.warning('请选择基础插件');
         return;
       }
@@ -545,20 +401,19 @@ export default defineComponent({
       creating.value = true;
       try {
         const created = await window.electronAPI.organization.create({
-          name: createForm.value.name,
-          description: createForm.value.description,
-          basePluginDomain: createForm.value.basePluginDomain
+          name: form.name,
+          description: form.description,
+          basePluginDomain: form.basePluginDomain
         });
         ElMessage.success(`组织已创建：${created.name}`);
-        createForm.value = {
-          name: '',
-          description: '',
-          basePluginDomain: createForm.value.basePluginDomain
-        };
+        createDialogRef.value?.resetAfterCreate();
         createDialogVisible.value = false;
         await refreshOrganizations();
-        selectedOrgId.value = created.orgId;
-        drawerVisible.value = true;
+        // 走 openDetail 初始化抽屉状态（网关选择/公开设置/恢复面板），避免残留上一个组织的数据
+        const createdView = organizations.value.find((item) => item.orgId === created.orgId);
+        if (createdView) {
+          openDetail(createdView);
+        }
       } catch (error) {
         ElMessage.error(`创建组织失败：${error}`);
       } finally {
@@ -566,26 +421,23 @@ export default defineComponent({
       }
     };
 
-    const openJoinDialog = () => {
-      joinCode.value = '';
-      joinDialogVisible.value = true;
-    };
-
-    const acceptInvite = async () => {
-      if (!joinCode.value.trim()) {
+    const acceptInvite = async (code: string) => {
+      if (!code.trim()) {
         ElMessage.warning('请输入邀请码');
         return;
       }
 
       joining.value = true;
       try {
-        const joined = await window.electronAPI.organization.acceptInvite(joinCode.value.trim());
+        const joined = await window.electronAPI.organization.acceptInvite(code.trim());
         ElMessage.success(`已加入组织：${joined.orgName}`);
         joinDialogVisible.value = false;
-        joinCode.value = '';
         await refreshOrganizations();
-        selectedOrgId.value = joined.orgId;
-        drawerVisible.value = true;
+        // 同上：走 openDetail 初始化抽屉状态，避免残留上一个组织的数据
+        const joinedView = organizations.value.find((item) => item.orgId === joined.orgId);
+        if (joinedView) {
+          openDetail(joinedView);
+        }
       } catch (error) {
         ElMessage.error(`加入组织失败：${error}`);
       } finally {
@@ -593,175 +445,23 @@ export default defineComponent({
       }
     };
 
-    const openInviteDialog = () => {
-      inviteRootId.value = '';
-      invitePeerId.value = '';
-      inviteAddresses.value = '';
-      inviteResult.value = '';
-      inviteDialogVisible.value = true;
-    };
-
-    const resetInviteDialog = () => {
-      inviteRootId.value = '';
-      invitePeerId.value = '';
-      inviteAddresses.value = '';
-      inviteResult.value = '';
-    };
-
-    const addMemberAndInvite = async () => {
+    const savePublic = async () => {
       if (!selectedOrganization.value) {
         return;
       }
-      if (!inviteRootId.value.trim()) {
-        ElMessage.warning('请输入成员 RootID');
-        return;
-      }
-
-      const addresses = inviteAddresses.value
-        .split(/\r?\n|,|;/)
-        .map((item) => item.trim())
-        .filter((item) => item.length > 0);
-      const nodeInfo = invitePeerId.value.trim() || addresses.length > 0
-        ? {
-            peerId: invitePeerId.value.trim() || undefined,
-            addresses
-          }
-        : undefined;
-
-      inviting.value = true;
+      savingPublic.value = true;
       try {
-        await window.electronAPI.organization.addMember(selectedOrganization.value.orgId, {
-          rootId: inviteRootId.value,
-          nodeInfo
-        });
-        const invite = await window.electronAPI.organization.createInvite(selectedOrganization.value.orgId);
-        inviteResult.value = invite.invite;
-        ElMessage.success('成员已预录入');
+        await window.electronAPI.organization.setPublic(
+          selectedOrganization.value.orgId,
+          publicEnabled.value,
+          publicDisplayName.value.trim() || undefined
+        );
+        ElMessage.success(publicEnabled.value ? '组织已公开' : '组织已取消公开');
         await refreshOrganizations();
       } catch (error) {
-        ElMessage.error(`邀请成员失败：${error}`);
+        ElMessage.error(`保存公开设置失败：${error}`);
       } finally {
-        inviting.value = false;
-      }
-    };
-
-    const copyInvite = async () => {
-      try {
-        await navigator.clipboard.writeText(inviteResult.value);
-        ElMessage.success('邀请码已复制');
-      } catch {
-        ElMessage.warning('复制失败，请手动选择文本复制');
-      }
-    };
-
-    // ------------------------------------------------------------------
-    // 数据治理：管理员手动清理本机旧数据（先导出转移，K 副本充足才允许执行）
-    // ------------------------------------------------------------------
-    const purgeDialogVisible = ref(false);
-    const purgeBeforeDate = ref<Date | null>(null);
-    const purgePreviewing = ref(false);
-    const purgeExporting = ref(false);
-    const purging = ref(false);
-    const purgeConfirmExported = ref(false);
-    const purgePreview = ref<PurgePreviewResult | null>(null);
-    const purgeResult = ref<PurgeExecuteResult | null>(null);
-
-    const purgeReplicaSufficient = computed(() => {
-      const replica = purgePreview.value?.replica;
-      return Boolean(replica) && replica!.syncedPeers >= replica!.replicaTarget;
-    });
-
-    const purgeExecutable = computed(() => {
-      return Boolean(
-        purgePreview.value &&
-          // 服务端 execute 仍会校验管理员身份；这里用 preview 返回的身份前置禁用，纵深防御
-          purgePreview.value.isCurrentUserAdmin &&
-          purgePreview.value.preview.affectedDocs > 0 &&
-          purgeReplicaSufficient.value &&
-          purgeConfirmExported.value
-      );
-    });
-
-    const resetPurgeDialog = () => {
-      purgeBeforeDate.value = null;
-      purgePreview.value = null;
-      purgeResult.value = null;
-      purgeConfirmExported.value = false;
-      purgePreviewing.value = false;
-      purgeExporting.value = false;
-      purging.value = false;
-    };
-
-    const openPurgeDialog = () => {
-      resetPurgeDialog();
-      purgeDialogVisible.value = true;
-    };
-
-    const disableFutureDate = (date: Date) => {
-      return date.getTime() > Date.now();
-    };
-
-    /** 选中日期的 00:00（本地时区）作为清理水位：清理该日期之前的数据 */
-    const purgeBeforeTs = () => {
-      if (!purgeBeforeDate.value) {
-        return 0;
-      }
-      const date = new Date(purgeBeforeDate.value);
-      date.setHours(0, 0, 0, 0);
-      return date.getTime();
-    };
-
-    const runPurgePreview = async () => {
-      if (!selectedOrganization.value || !purgeBeforeDate.value) {
-        return;
-      }
-      purgePreviewing.value = true;
-      purgePreview.value = null;
-      try {
-        purgePreview.value = await window.electronAPI.dataManagement.purgePreview(
-          selectedOrganization.value.orgId,
-          purgeBeforeTs()
-        );
-      } catch (error) {
-        ElMessage.error(`预览失败：${error}`);
-      } finally {
-        purgePreviewing.value = false;
-      }
-    };
-
-    const exportBeforePurge = async () => {
-      purgeExporting.value = true;
-      try {
-        const result = await window.electronAPI.dataManagement.exportData();
-        if (result.cancelled) {
-          ElMessage.info('已取消导出');
-        } else {
-          purgeConfirmExported.value = true;
-          ElMessage.success(`已导出 ${result.entries} 条数据到 ${result.path}`);
-        }
-      } catch (error) {
-        ElMessage.error(`导出失败：${error}`);
-      } finally {
-        purgeExporting.value = false;
-      }
-    };
-
-    const executePurge = async () => {
-      if (!selectedOrganization.value || !purgePreview.value) {
-        return;
-      }
-      purging.value = true;
-      try {
-        purgeResult.value = await window.electronAPI.dataManagement.purgeExecute(
-          selectedOrganization.value.orgId,
-          purgePreview.value.beforeTs,
-          purgeConfirmExported.value
-        );
-        ElMessage.success('清理完成');
-      } catch (error) {
-        ElMessage.error(`清理失败：${error}`);
-      } finally {
-        purging.value = false;
+        savingPublic.value = false;
       }
     };
 
@@ -782,6 +482,7 @@ export default defineComponent({
 
       removingRootId.value = member.rootId;
       try {
+        await notifyIfNetworkUnavailable();
         await window.electronAPI.organization.removeMember(selectedOrganization.value.orgId, member.rootId);
         ElMessage.success('成员已移除');
         await refreshOrganizations();
@@ -852,7 +553,6 @@ export default defineComponent({
 
     return {
       organizations,
-      overviews,
       overviewOf,
       selectedOrgId,
       selectedOrganization,
@@ -862,57 +562,41 @@ export default defineComponent({
       createDialogVisible,
       joinDialogVisible,
       inviteDialogVisible,
+      purgeDialogVisible,
       drawerVisible,
       creating,
       joining,
-      inviting,
       deleting,
       removingRootId,
+      gatewaySelection,
+      savingGateways,
+      publicEnabled,
+      publicDisplayName,
+      savingPublic,
+      createDialogRef,
+      recoverPanelRef,
+      currentGateways,
+      gatewaySelectionValid,
+      saveGateways,
       foundationPlugins,
       adminOrgCount,
-      createForm,
-      joinCode,
-      inviteRootId,
-      invitePeerId,
-      inviteAddresses,
-      inviteResult,
       replicaLabel,
       replicaTagType,
+      notifyIfNetworkUnavailable,
       refreshOrganizations,
       openDetail,
       openOrgPlugin,
-      openCreateDialog,
       createOrganization,
-      openJoinDialog,
       acceptInvite,
-      openInviteDialog,
-      resetInviteDialog,
-      addMemberAndInvite,
-      copyInvite,
+      savePublic,
       removeMember,
       deleteOrganization,
       memberSyncLabel,
-      formatDate,
-      purgeDialogVisible,
-      purgeBeforeDate,
-      purgePreviewing,
-      purgeExporting,
-      purging,
-      purgeConfirmExported,
-      purgePreview,
-      purgeResult,
-      purgeReplicaSufficient,
-      purgeExecutable,
-      openPurgeDialog,
-      resetPurgeDialog,
-      disableFutureDate,
-      runPurgePreview,
-      exportBeforePurge,
-      executePurge,
-      formatBytes
+      formatDate
     };
   }
 });
 </script>
 
-<style scoped src="../styles/pages/org.css"></style>
+<!-- 全局引入（非 scoped）：面板已拆到子组件，scoped 会导致 .org-page h2/h3 等后代选择器失效；类名与规则不变 -->
+<style src="../styles/pages/org.css"></style>

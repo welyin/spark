@@ -10,10 +10,10 @@
 use spark_core::identity::crypto::{
     decrypt_v1, decrypt_v2, encrypt_v1, encrypt_v2, pbkdf2_v1_key, scrypt_v2_key,
 };
+use spark_core::identity::derive::{derive_domain_identity, derive_root_identity, domain_indices};
 use spark_core::identity::file::{
     IdentityFile, migrate_v1_to_v2, unlock_identity, validate_nickname,
 };
-use spark_core::identity::derive::{derive_domain_identity, derive_root_identity, domain_indices};
 use spark_core::identity::mnemonic::{Wordlist, parse_mnemonic};
 use spark_core::identity::slip10::format_derivation_path;
 
@@ -54,7 +54,11 @@ fn domain_identities() {
 
         // 域哈希与索引
         let h = hex::encode(sha2_sm(domain));
-        assert_eq!(h, dv["domainSha256Hex"].as_str().unwrap(), "sha256({domain})");
+        assert_eq!(
+            h,
+            dv["domainSha256Hex"].as_str().unwrap(),
+            "sha256({domain})"
+        );
         let (idx_a, idx_b) = domain_indices(domain);
         assert_eq!(idx_a, dv["idxA"].as_u64().unwrap() as u32, "idxA({domain})");
         assert_eq!(idx_b, dv["idxB"].as_u64().unwrap() as u32, "idxB({domain})");
@@ -62,7 +66,10 @@ fn domain_identities() {
         // 完整路径
         let identity = derive_domain_identity(&parsed.seed, domain);
         assert_eq!(identity.path, dv["derivationPath"].as_str().unwrap());
-        assert_eq!(identity.public_key_hex(), dv["publicKeyHex"].as_str().unwrap());
+        assert_eq!(
+            identity.public_key_hex(),
+            dv["publicKeyHex"].as_str().unwrap()
+        );
         assert_eq!(identity.id(), dv["domainId"].as_str().unwrap());
     }
 }
@@ -174,7 +181,10 @@ fn v1_file_unlock_and_migrate_to_v2() {
     let (payload, identity) = unlock_identity(&v1_file, password).unwrap();
     assert_eq!(payload.mnemonic, rv["mnemonic"].as_str().unwrap());
     assert_eq!(payload.path, rv["derivationPath"].as_str().unwrap());
-    assert_eq!(identity.public_key_hex(), rv["publicKeyHex"].as_str().unwrap());
+    assert_eq!(
+        identity.public_key_hex(),
+        rv["publicKeyHex"].as_str().unwrap()
+    );
     assert_eq!(identity.id(), rv["rootId"].as_str().unwrap());
 
     // 迁移到 v2
@@ -231,12 +241,8 @@ fn update_profile_flow() {
     assert_eq!(file.nickname.as_deref(), Some("新昵称"));
 
     // 非法昵称/头像被拒
-    assert!(
-        update_profile(&mut file, "P@ssw0rd-test", Some(&"x".repeat(25)), None).is_err()
-    );
-    assert!(
-        update_profile(&mut file, "P@ssw0rd-test", None, Some(Some("http://a.png"))).is_err()
-    );
+    assert!(update_profile(&mut file, "P@ssw0rd-test", Some(&"x".repeat(25)), None).is_err());
+    assert!(update_profile(&mut file, "P@ssw0rd-test", None, Some(Some("http://a.png"))).is_err());
 
     // 错误密码不能解锁
     assert!(unlock_identity(&file, "bad-password").is_err());

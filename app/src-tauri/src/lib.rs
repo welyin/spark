@@ -8,8 +8,9 @@
 //! 的转发任务消费，P2pEvent 结构化序列化（`{kind, data}`）后以 `p2p-event`
 //! 全局事件发到 WebView。
 
-mod commands;
-mod market;
+// pub 以便 tests/ 下的集成测试（unit_app）按公开 API 直调；私有项保持原可见性。
+pub mod commands;
+pub mod market;
 
 use std::sync::Mutex;
 
@@ -112,6 +113,10 @@ pub fn run() {
             commands::org::org_delete,
             commands::org::org_add_member,
             commands::org::org_remove_member,
+            commands::org::org_set_gateways,
+            commands::org::org_set_public,
+            commands::org::org_resolve_address,
+            commands::org::org_search_known,
             commands::org::org_accept_invite,
             // 数据治理
             commands::data::data_usage,
@@ -131,6 +136,10 @@ pub fn run() {
             commands::p2p::p2p_clear_peer_records,
             commands::p2p::p2p_sync_peer_organizations,
             commands::p2p::p2p_list_peer_records,
+            commands::p2p::p2p_get_dht_mode,
+            commands::p2p::p2p_set_dht_mode,
+            commands::p2p::p2p_make_node_card,
+            commands::p2p::p2p_import_node_card,
             // 插件运行时（tab 模式语义，见 commands/plugin.rs 注记）
             commands::plugin::plugin_identity_sign,
             commands::plugin::plugin_identity_verify,

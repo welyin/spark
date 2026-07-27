@@ -89,7 +89,11 @@ fn canonical_array_index(key: &str) -> Option<u32> {
         return None;
     }
     let n: u64 = key.parse().ok()?;
-    if n < u64::from(u32::MAX) { Some(n as u32) } else { None }
+    if n < u64::from(u32::MAX) {
+        Some(n as u32)
+    } else {
+        None
+    }
 }
 
 /// JS `JSON.stringify(string)` 的转义规则：`"`、`\`、`\b \f \n \r \t` 短转义、
@@ -220,8 +224,14 @@ mod tests {
         assert_eq!(js_number_to_string(1e100), "1e+100");
         assert_eq!(js_number_to_string(-1e21), "-1e+21");
         assert_eq!(js_number_to_string(1.7e12), "1700000000000");
-        assert_eq!(js_number_to_string(1.2345678901234568e20), "123456789012345680000");
-        assert_eq!(js_number_to_string(1.7976931348623157e308), "1.7976931348623157e+308");
+        assert_eq!(
+            js_number_to_string(1.2345678901234568e20),
+            "123456789012345680000"
+        );
+        assert_eq!(
+            js_number_to_string(1.7976931348623157e308),
+            "1.7976931348623157e+308"
+        );
         assert_eq!(js_number_to_string(5e-324), "5e-324");
         assert_eq!(js_number_to_string(100.0), "100");
     }
@@ -234,13 +244,19 @@ mod tests {
         assert_eq!(js_json_escape_string("a\"b\\c"), "\"a\\\"b\\\\c\"");
         assert_eq!(js_json_escape_string("\u{0b}"), "\"\\u000b\""); // 小写 hex
         assert_eq!(js_json_escape_string("\u{7f}"), "\"\u{7f}\""); // DEL 不转义
-        assert_eq!(js_json_escape_string("\u{2028}\u{2029}"), "\"\u{2028}\u{2029}\"");
+        assert_eq!(
+            js_json_escape_string("\u{2028}\u{2029}"),
+            "\"\u{2028}\u{2029}\""
+        );
     }
 
     #[test]
     fn nested_object_stringified() {
         // 关键语义：嵌套对象 normalize 后作为字符串值嵌入
-        assert_eq!(normalize_object(&json!({"a": {"b": 1}})), "{\"a\":\"{\\\"b\\\":\\\"1\\\"}\"}");
+        assert_eq!(
+            normalize_object(&json!({"a": {"b": 1}})),
+            "{\"a\":\"{\\\"b\\\":\\\"1\\\"}\"}"
+        );
         assert_eq!(normalize_object(&json!({"a": 1})), "{\"a\":\"1\"}");
         assert_eq!(normalize_object(&json!([])), "{}");
         assert_eq!(normalize_object(&json!({})), "{}");

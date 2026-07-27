@@ -1,5 +1,5 @@
 /**
- * 宿主 API 适配层（Tauri 版）。
+ * 宿主 API 适配层（Tauri 版）——组装与安装门面。
  *
  * 设计要点：
  * - 页面组件只认 `window.electronAPI`（旧 Electron preload 暴露的形状）。
@@ -11,334 +11,25 @@
  *   `ARG_NAMES` 按位置给出参数名（camelCase —— Tauri 自动映射到 Rust 的
  *   snake_case 形参）。形状特殊（如 plugin.doc* 需要注入 domain）的走手写包装。
  * - 未实现的通道：`todo()` 生成明确报错的桩，错误信息含通道名，便于排查。
+ *
+ * 模块划分：类型在 ./types.ts，映射表在 ./command-map.ts，本文件保留
+ * call/installHostApi/createTauriApi/listenP2pEvents 并 re-export 全部类型，
+ * 既有 `from './api'` / `from '../api'` 引用路径不变。
  */
 
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { save as saveDialog } from '@tauri-apps/plugin-dialog';
+import { ARG_NAMES, COMMAND_MAP } from './command-map';
+import type { ElectronAPI, P2pEventDto } from './types';
 
-// ------------------------------------------------------------------
-// P2P 事件（src-tauri 把内核 `P2pEvent` 结构化后以 `p2p-event` 全局事件转发；
-// 线形为 serde 相邻标签 `{kind, data?}`，Lagged 由转发层合成）
-// ------------------------------------------------------------------
-
-/** P2P 事件载荷（与 spark-core `P2pEvent` 的 serde 形状一一对应）。 */
-export type P2pEventDto =
-  | { kind: 'Started'; data: { peerId: string; listenAddresses: string[] } }
-  | { kind: 'ListenPortPersisted'; data: { port: number } }
-  | { kind: 'PeerConnected'; data: { peerId: string } }
-  | { kind: 'PeerDisconnected'; data: { peerId: string } }
-  | { kind: 'PeerVersion'; data: { peerId: string; appVersion: string } }
-  | { kind: 'AnnouncePublished'; data: { addresses: number } }
-  | { kind: 'AnnounceAccepted'; data: { peerId: string } }
-  | { kind: 'PeerExchangeCompleted'; data: { responder: string; merged: number } }
-  | { kind: 'OrgShareAccepted'; data: { orgId: string; syncId: string | null; source: string } }
-  | { kind: 'SyncMessageApplied'; data: { msgType: string; domain: string } }
-  | { kind: 'MessageDropped'; data: { reason: string } }
-  | { kind: 'KeepaliveTick'; data: { overlayDialed: number; exchanged: number; announced: boolean } }
-  | { kind: 'Warning'; data: string }
-  | { kind: 'Stopped' }
-  | { kind: 'Lagged'; skipped: number };
+// 类型门面：既有引用一律走 './api'，此处统一 re-export
+export * from './types';
 
 /** 订阅内核 P2P 事件流；返回取消订阅函数。 */
 export function listenP2pEvents(handler: (event: P2pEventDto) => void): Promise<UnlistenFn> {
   return listen<P2pEventDto>('p2p-event', (event) => handler(event.payload));
 }
-
-// ------------------------------------------------------------------
-// 类型（对齐旧 desktop/src/main/preload.ts 的 ElectronAPI；
-// 内联 PluginPermission/DomainSignature 的最小定义，避免跨进程目录引用）
-// ------------------------------------------------------------------
-
-export type PluginPermission = string;
-export type DomainSignature = {
-  domain: string;
-  domainId: string;
-  publicKey: string;
-  signature: string;
-  payloadHash: string;
-};
-
-export type DataUsageReportDto = {
-  scannedAt: number;
-  classes: Record<
-    'documents' | 'indexes' | 'syncMeta' | 'evidence' | 'organization' | 'p2p' | 'system' | 'other',
-    { keys: number; bytes: number }
-  >;
-  totalKeys: number;
-  totalBytes: number;
-  disk: { path: string; freeBytes: number; totalBytes: number; freeRatio: number } | null;
-  warnings: { usageExceeded: boolean; diskLow: boolean };
-};
-
-// 插件市场线形（对齐旧 preload.ts pluginMarket 声明与 src-tauri market 模块 DTO）
-export type PluginMarketItemDto = {
-  id: string;
-  domain: string;
-  name: string;
-  description: string;
-  category: 'foundation' | 'business';
-  version: string;
-  views: string[];
-  permissions: PluginPermission[];
-  package: {
-    updateManifestUrl: string;
-    signatureUrl: string;
-    packageName: string;
-    installCommand: string;
-  };
-  installed: boolean;
-  enabled: boolean;
-  installedVersion: string | null;
-  latestVersion: string | null;
-  updateAvailable: boolean;
-  lastCheckedAt: number | null;
-  lastCheckReason: string;
-};
-
-export type PluginUpdateProbeDto = {
-  pluginId: string;
-  checkedAt: number;
-  latestVersion: string | null;
-  updateAvailable: boolean;
-  reason: string;
-};
-
-export type InstalledPluginStateDto = {
-  pluginId: string;
-  version: string;
-  packagePath: string;
-  sha256: string;
-  size: number;
-  installedAt: number;
-  enabled: boolean;
-  grantedPermissions: PluginPermission[];
-};
-
-export type OrgView = {
-  orgId: string;
-  name: string;
-  description: string;
-  basePluginDomain?: string;
-  createdAt: number;
-  createdBy: string;
-  updatedAt: number;
-  members: Array<{
-    rootId: string;
-    role: 'admin' | 'member';
-    joinedAt: number;
-    addedBy: string;
-    nodeInfo?: { peerId?: string; addresses: string[] };
-  }>;
-  currentUserRole: 'admin' | 'member' | null;
-  isCurrentUserAdmin: boolean;
-  memberCount: number;
-  adminCount: number;
-};
-
-export type OrgSyncOverviewDto = {
-  orgId: string;
-  replicaTarget: number;
-  syncedPeers: number;
-  totalMembers: number;
-  members: Array<{
-    rootId: string;
-    peerId?: string;
-    isSelf: boolean;
-    everSynced: boolean;
-    lastSyncedAt: number | null;
-  }>;
-};
-
-export type ElectronAPI = {
-  db: {
-    query: (prefix: string) => Promise<Array<{ key: string; value: string }>>;
-  };
-  evidence: {
-    headHash: () => Promise<{ hash: string | null }>;
-    verify: () => Promise<{ valid: boolean; height: number }>;
-  };
-  p2p: {
-    start: () => Promise<{ started: boolean }>;
-    stop: () => Promise<{ started: boolean }>;
-    broadcast: (topic: string, message: unknown) => Promise<{ success: boolean }>;
-    clearPeerRecords: () => Promise<{ cleared: number }>;
-    syncPeerOrganizations: (targetPeer: { peerId?: string; addresses: string[] }) => Promise<{
-      attempted: number; synced: number; pullChecked: number; pullSynced: number; removed: number;
-    }>;
-    info: () => Promise<{
-      initialized: boolean; started: boolean; peerId: string | null; addresses: string[];
-      connectedPeers: string[]; sparkSyncSubscribers: string[]; error?: string | null;
-    }>;
-  };
-  plugin: {
-    openView: (pluginDomain: string, pluginView?: string) => Promise<{ success: boolean; windowId: number }>;
-    listCatalog: () => Promise<unknown[]>;
-    currentRoot: () => Promise<{ unlocked: boolean; rootId: string | null }>;
-    identitySign: (payload: string, pluginDomain?: string) => Promise<DomainSignature>;
-    identityVerify: (payload: string, signature: string, publicKey: string) => Promise<{ valid: boolean }>;
-    syncOrganizationData: (orgId: string, pluginDomain?: string) => Promise<{ orgId: string; attempted: number; pulled: number }>;
-    listMineOrganizations: (pluginDomain?: string) => Promise<OrgView[]>;
-    docGet: <T extends Record<string, unknown> = Record<string, unknown>>(collection: string, id: string, pluginDomain?: string) => Promise<T | null>;
-    docDeclareCollection: (
-      collection: string,
-      schema: { syncStrategy: 'append-only' | 'lww'; governance?: boolean; enableEvidence?: boolean },
-      pluginDomain?: string
-    ) => Promise<{
-      collection: string;
-      syncStrategy: 'append-only' | 'lww';
-      governance: boolean;
-      enableEvidence: boolean;
-    }>;
-    docPut: (collection: string, id: string, doc: Record<string, unknown>, pluginDomain?: string) => Promise<{ success: boolean }>;
-    docDelete: (collection: string, id: string, pluginDomain?: string) => Promise<{ success: boolean }>;
-    docQuery: <T extends Record<string, unknown> = Record<string, unknown>>(
-      collection: string,
-      options?: {
-        limit?: number; reverse?: boolean;
-        filter?: Array<{ field: string; value: string | number | boolean; op?: 'eq' | 'startsWith' | 'gt' | 'lt' | 'gte' | 'lte' }>;
-      },
-      pluginDomain?: string
-    ) => Promise<{ items: Array<{ id: string; data: T }>; nextCursor?: string }>;
-  };
-  pluginMarket: {
-    list: () => Promise<PluginMarketItemDto[]>;
-    checkUpdates: (pluginId?: string) => Promise<PluginUpdateProbeDto[]>;
-    install: (pluginId: string) => Promise<InstalledPluginStateDto>;
-    upgrade: (pluginId: string) => Promise<InstalledPluginStateDto>;
-    setEnabled: (pluginId: string, enabled: boolean) => Promise<InstalledPluginStateDto>;
-  };
-  organization: {
-    listMine: () => Promise<OrgView[]>;
-    create: (input: { name: string; description?: string; basePluginDomain: string }) => Promise<OrgView>;
-    delete: (orgId: string) => Promise<{ success: boolean }>;
-    addMember: (orgId: string, input: { rootId: string; nodeInfo?: { peerId?: string; addresses: string[] } }) => Promise<OrgView>;
-    removeMember: (orgId: string, memberRootId: string) => Promise<OrgView>;
-    createInvite: (orgId: string) => Promise<{ invite: string; orgId: string; orgName: string }>;
-    acceptInvite: (code: string) => Promise<{ orgId: string; orgName: string; memberCount: number }>;
-    getSyncOverview: (orgId: string) => Promise<OrgSyncOverviewDto | null>;
-  };
-  rootIdentity: {
-    status: () => Promise<{ initialized: boolean; unlocked: boolean; rootId: string | null; nickname: string | null; avatar: string | null }>;
-    initialize: (password: string, nickname: string, avatar?: string | null) => Promise<{ rootId: string; mnemonic: string }>;
-    unlock: (password: string, rootId?: string) => Promise<{ rootId: string }>;
-    lock: () => Promise<{ success: boolean }>;
-    sign: (payload: string) => Promise<{ rootId: string; signature: string; payloadHash: string }>;
-    deriveDomain: (domain: string) => Promise<{ domain: string; domainId: string; publicKey: string; derivationPath: string }>;
-    listIdentities: () => Promise<Array<{ rootId: string; createdAt: number; active: boolean; nickname: string | null; avatar: string | null }>>;
-    setActive: (rootId: string) => Promise<{ success: boolean }>;
-    updateProfile: (profile: { nickname?: string | null; avatar?: string | null }) => Promise<{ nickname: string | null; avatar: string | null }>;
-    revealMnemonic: (password: string) => Promise<{ mnemonic: string }>;
-    backupPayload: () => Promise<{ payload: string }>;
-    checkMnemonic: (input: string) => Promise<{ words: string[]; invalidIndexes: number[] }>;
-    recoverMnemonic: (mnemonic: string, newPassword: string, nickname: string, avatar?: string | null) => Promise<{ rootId: string }>;
-    recoverBackup: (payload: string, password: string) => Promise<{ rootId: string }>;
-  };
-  updater: Record<string, (...args: never[]) => Promise<unknown>>;
-  dataManagement: {
-    usage: () => Promise<DataUsageReportDto>;
-    cleanupNow: () => Promise<{ ranAt: number; tombstones: number; peerRecords: number; orgSyncStates: number }>;
-    exportData: () => Promise<{ cancelled: true } | { cancelled: false; path: string; entries: number; bytes: number }>;
-    purgePreview: (orgId: string, beforeTs: number) => Promise<unknown>;
-    purgeExecute: (orgId: string, beforeTs: number, confirmExported: boolean) => Promise<unknown>;
-  };
-  getDomain: () => Promise<{ domain: string | null }>;
-};
-
-// ------------------------------------------------------------------
-// channel → command 映射
-// ------------------------------------------------------------------
-
-/** Electron 通道名 → Tauri command 名（snake_case）。 */
-const COMMAND_MAP: Record<string, string> = {
-  // 身份
-  'root-status': 'root_status',
-  'root-init': 'root_init',
-  'root-unlock': 'root_unlock',
-  'root-lock': 'root_lock',
-  'root-list-identities': 'root_list_identities',
-  'root-set-active': 'root_set_active',
-  'root-recover-mnemonic': 'root_recover_mnemonic',
-  'root-recover-backup': 'root_recover_backup',
-  'root-backup-payload': 'root_backup_payload',
-  'root-reveal-mnemonic': 'root_reveal_mnemonic',
-  'root-update-profile': 'root_update_profile',
-  'root-sign': 'root_sign',
-  'root-derive-domain': 'root_derive_domain',
-  'root-mnemonic-check': 'root_mnemonic_check',
-  // 文档（plugin.doc* 手写包装，不走通用表）
-  // 组织
-  'org-list-mine': 'org_list_mine',
-  'org-create': 'org_create',
-  'org-invite-create': 'org_create_invite',
-  'org-invite-accept': 'org_accept_invite',
-  'org-sync-overview': 'org_sync_overview',
-  'org-delete': 'org_delete',
-  'org-add-member': 'org_add_member',
-  'org-remove-member': 'org_remove_member',
-  // 数据治理
-  'data-usage': 'data_usage',
-  'data-cleanup-now': 'data_cleanup_now',
-  'data-export': 'data_export',
-  'data-purge-preview': 'data_purge_preview',
-  'data-purge-execute': 'data_purge_execute',
-  // 存证
-  'evidence-head-hash': 'evidence_head_hash',
-  'evidence-verify': 'evidence_verify',
-  // P2P
-  'p2p-start': 'p2p_start',
-  'p2p-stop': 'p2p_stop',
-  'p2p-info': 'p2p_status',
-  'p2p-broadcast': 'p2p_broadcast',
-  'p2p-clear-peer-records': 'p2p_clear_peer_records',
-  'p2p-sync-peer-organizations': 'p2p_sync_peer_organizations',
-  'p2p-list-peer-records': 'p2p_list_peer_records',
-  // 插件运行时（tab 模式语义，见下方注记）
-  'plugin-identity-sign': 'plugin_identity_sign',
-  'plugin-identity-verify': 'plugin_identity_verify',
-  'plugin-org-sync-now': 'plugin_org_sync_now',
-  // 插件市场
-  'plugin-market-list': 'plugin_market_list',
-  'plugin-market-check-updates': 'plugin_market_check_updates',
-  'plugin-market-install': 'plugin_market_install',
-  'plugin-market-upgrade': 'plugin_market_upgrade',
-  'plugin-market-set-enabled': 'plugin_market_set_enabled'
-};
-
-/**
- * 各通道的位置参数名（camelCase；Tauri 将其映射到 Rust snake_case 形参）。
- * 缺省为 []（无参通道）。undefined 值会被 JSON 序列化丢弃 → Rust 侧得 None。
- */
-const ARG_NAMES: Record<string, string[]> = {
-  'root-init': ['password', 'nickname', 'avatar'],
-  'root-unlock': ['password', 'rootId'],
-  'root-set-active': ['rootId'],
-  'root-recover-mnemonic': ['mnemonic', 'newPassword', 'nickname', 'avatar'],
-  'root-recover-backup': ['payload', 'password'],
-  'root-reveal-mnemonic': ['password'],
-  'root-sign': ['payload'],
-  'root-derive-domain': ['domain'],
-  'root-mnemonic-check': ['input'],
-  'org-create': ['input'],
-  'org-invite-create': ['orgId'],
-  'org-invite-accept': ['code'],
-  'org-sync-overview': ['orgId'],
-  'org-delete': ['orgId'],
-  'org-add-member': ['orgId', 'input'],
-  'org-remove-member': ['orgId', 'memberRootId'],
-  'data-export': ['filePath'],
-  'data-purge-preview': ['orgId', 'beforeTs'],
-  'data-purge-execute': ['orgId', 'beforeTs', 'confirmExported'],
-  'p2p-broadcast': ['topic', 'message'],
-  'p2p-sync-peer-organizations': ['targetPeer'],
-  'plugin-identity-sign': ['payload', 'pluginDomain'],
-  'plugin-identity-verify': ['payload', 'signature', 'publicKey'],
-  'plugin-org-sync-now': ['orgId', 'pluginDomain'],
-  'plugin-market-check-updates': ['pluginId'],
-  'plugin-market-install': ['pluginId'],
-  'plugin-market-upgrade': ['pluginId'],
-  'plugin-market-set-enabled': ['pluginId', 'enabled']
-};
 
 /** 通用调用：channel + 位置参数 → command + 命名参数。 */
 async function call<T>(channel: string, ...args: unknown[]): Promise<T> {
@@ -443,7 +134,13 @@ export function createTauriApi(): ElectronAPI {
       clearPeerRecords: () => call('p2p-clear-peer-records'),
       // 定向反熵对账：内核编排（双向 stale 推送 + org-pull + removed 清理），
       // 返回形状对齐 TS { attempted, synced, pullChecked, pullSynced, removed, skipped }
-      syncPeerOrganizations: (targetPeer) => call('p2p-sync-peer-organizations', targetPeer)
+      syncPeerOrganizations: (targetPeer) => call('p2p-sync-peer-organizations', targetPeer),
+      // DHT 隐私开关：off=完全私有 / server=开放（默认）；client 为移动端预留
+      getDhtMode: () => call('p2p-get-dht-mode'),
+      setDhtMode: (mode) => call('p2p-set-dht-mode', mode),
+      // 节点名片（org.md §17）：手动恢复连接的线下引导串；orgId 缺省=不附恢复 token
+      makeNodeCard: (orgId?: string) => call('p2p-make-node-card', orgId ?? undefined),
+      importNodeCard: (card: string) => call('p2p-import-node-card', card)
     },
     plugin: {
       // TODO: 插件独立窗口属于插件运行时，本期不在壳范围（插件走 tab 模式）
@@ -496,11 +193,16 @@ export function createTauriApi(): ElectronAPI {
       delete: (orgId) => call('org-delete', orgId),
       addMember: (orgId, input) => call('org-add-member', orgId, input),
       removeMember: (orgId, memberRootId) => call('org-remove-member', orgId, memberRootId),
+      setGateways: (orgId, gateways) => call('org-set-gateways', orgId, gateways),
       createInvite: (orgId) => call('org-invite-create', orgId),
       // 内核 accept_invite 已编排全段：解码邀请 → 连接邀请人 → claim 捎带 →
       // org-pull 拉取 → 成员确认（对齐 TS service.ts acceptOrgInvite）。
       acceptInvite: (code) => call('org-invite-accept', code),
-      getSyncOverview: (orgId) => call('org-sync-overview', orgId)
+      getSyncOverview: (orgId) => call('org-sync-overview', orgId),
+      setPublic: (orgId, isPublic, displayName) =>
+        call('org-set-public', orgId, isPublic, displayName ?? null),
+      resolveAddress: (orgAddress) => call('org-resolve-address', orgAddress),
+      searchKnown: (keyword) => call('org-search-known', keyword)
     },
     rootIdentity: {
       status: () => call('root-status'),

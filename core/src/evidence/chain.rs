@@ -269,7 +269,10 @@ pub fn append_evidence<S: StorageBackend>(
 }
 
 /// `getEvidenceEntry`：按 seq 读取条目；缺失或损坏时返回 `Ok(None)`。
-pub fn get_evidence_entry<S: StorageBackend>(storage: &S, seq: u64) -> Result<Option<EvidenceEntry>> {
+pub fn get_evidence_entry<S: StorageBackend>(
+    storage: &S,
+    seq: u64,
+) -> Result<Option<EvidenceEntry>> {
     let Some(raw) = storage.get(&evidence_key(seq))? else {
         return Ok(None);
     };

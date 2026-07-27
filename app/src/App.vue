@@ -54,6 +54,10 @@
       </div>
     </nav>
 
+    <header class="topbar">
+      <NetworkStatusBar />
+    </header>
+
     <main class="main">
       <AffairsPage v-if="activeTab === 'affairs'" />
       <OrgPage v-else-if="activeTab === 'org'" @open-plugin-tab="openPluginTab" />
@@ -88,6 +92,7 @@
 import { computed, defineComponent, onMounted, ref, shallowRef, type Component } from 'vue';
 import { Bell, Grid, OfficeBuilding, Tools } from '@element-plus/icons-vue';
 import { getPluginView } from './plugin-view-registry';
+import NetworkStatusBar from './components/NetworkStatusBar.vue';
 import UserAvatar from './components/UserAvatar.vue';
 import AffairsPage from './pages/AffairsPage.vue';
 import OrgPage from './pages/OrgPage.vue';
@@ -115,6 +120,7 @@ export default defineComponent({
     AppsPage,
     TestPage,
     MinePage,
+    NetworkStatusBar,
     UserAvatar,
     Bell,
     Grid,

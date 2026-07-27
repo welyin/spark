@@ -48,45 +48,8 @@
 
     <template v-else>
       <section v-if="!showRootPage" class="content-section">
-        <el-card shadow="never" class="panel-card">
-          <template #header>
-            <h2>节点状态</h2>
-          </template>
-          <el-descriptions :column="1" border>
-            <el-descriptions-item label="RootID">{{ rootStatus.rootId || '未创建' }}</el-descriptions-item>
-            <el-descriptions-item label="状态">已登录</el-descriptions-item>
-            <el-descriptions-item label="P2P 初始化">{{ p2pInfo.initialized ? '是' : '否' }}</el-descriptions-item>
-            <el-descriptions-item label="P2P 运行中">{{ p2pInfo.started ? '是' : '否' }}</el-descriptions-item>
-            <el-descriptions-item label="PeerId">{{ p2pInfo.peerId || '未获取' }}</el-descriptions-item>
-            <el-descriptions-item label="已连接 Peer">
-              <template v-if="p2pInfo.connectedPeers.length > 0">
-                <div v-for="peer in p2pInfo.connectedPeers" :key="peer" class="mono">{{ peer }}</div>
-              </template>
-              <span v-else>暂无</span>
-            </el-descriptions-item>
-            <el-descriptions-item label="spark-sync 订阅者">
-              <template v-if="p2pInfo.sparkSyncSubscribers.length > 0">
-                <div v-for="peer in p2pInfo.sparkSyncSubscribers" :key="`sub-${peer}`" class="mono">{{ peer }}</div>
-              </template>
-              <span v-else>暂无</span>
-            </el-descriptions-item>
-            <el-descriptions-item label="节点地址">
-              <template v-if="p2pInfo.addresses.length > 0">
-                <div v-for="addr in p2pInfo.addresses" :key="addr" class="mono">{{ addr }}</div>
-              </template>
-              <span v-else>未获取（可能仍在启动或未监听可拨号地址）</span>
-            </el-descriptions-item>
-          </el-descriptions>
-
-          <el-alert
-            v-if="p2pInfo.error"
-            :title="`P2P 启动异常：${p2pInfo.error}`"
-            type="warning"
-            :closable="false"
-            show-icon
-            class="block-gap"
-          />
-        </el-card>
+        <!-- 节点状态 + DHT 隐私开关 -->
+        <NetworkCard :root-id="rootStatus.rootId ?? ''" :p2p-info="p2pInfo" />
 
         <el-card shadow="never" class="panel-card">
           <template #header>
@@ -100,63 +63,8 @@
           </div>
         </el-card>
 
-        <el-card shadow="never" class="panel-card">
-          <template #header>
-            <h2>身份备份</h2>
-          </template>
-          <p class="hint">同一身份的两种备份形式：加密二维码（便捷恢复，可放相册，需配合登录密码）与助记词（离线兜底，最高权限）。</p>
-          <el-alert
-            v-if="!backupMarked"
-            title="尚未完成备份：建议立即保存备份二维码或抄写助记词，避免设备损坏后无法找回账号。"
-            type="warning"
-            :closable="false"
-            show-icon
-            class="block-gap"
-          />
-          <div class="row">
-            <el-button :loading="qrLoading" @click="showBackupQr">显示备份二维码</el-button>
-            <el-button @click="showRevealDialog = true">查看助记词</el-button>
-          </div>
-
-          <el-dialog v-model="showQrDialog" title="备份二维码" width="340px" append-to-body>
-            <div class="qr-wrap">
-              <img v-if="qrImageUrl" :src="qrImageUrl" alt="备份二维码" class="qr-image" />
-            </div>
-            <p class="hint">这是同一身份的加密备份，恢复时需输入登录密码。可保存到相册或发送给自己——内容已加密，但请勿与密码存放在一起。</p>
-            <div class="row">
-              <el-button type="primary" @click="saveQrImage">保存图片</el-button>
-            </div>
-          </el-dialog>
-
-          <el-dialog v-model="showRevealDialog" title="查看助记词" width="440px" append-to-body @closed="resetReveal">
-            <template v-if="!revealedMnemonic">
-              <p class="hint">输入登录密码以查看助记词。助记词是账号最高权限，请确认周围无人窥屏。</p>
-              <el-input
-                v-model="revealPassword"
-                type="password"
-                show-password
-                placeholder="登录密码"
-                class="block-gap"
-                @keyup.enter="revealMnemonic"
-              />
-              <div class="row">
-                <el-button type="primary" :loading="revealBusy" @click="revealMnemonic">确认查看</el-button>
-              </div>
-            </template>
-            <template v-else>
-              <el-alert title="请离线抄写并妥善保存，不要截图、拍照或通过网络发送。" type="warning" :closable="false" show-icon />
-              <div class="mnemonic-grid">
-                <span v-for="(word, index) in revealedWords" :key="index" class="mnemonic-word">
-                  <em>{{ index + 1 }}</em>
-                  {{ word }}
-                </span>
-              </div>
-              <div class="row">
-                <el-button type="primary" @click="copyRevealedMnemonic">复制助记词</el-button>
-              </div>
-            </template>
-          </el-dialog>
-        </el-card>
+        <!-- 身份备份（加密二维码 + 密码门控助记词） -->
+        <BackupCard :root-id="rootStatus.rootId" />
 
         <el-card shadow="never" class="panel-card">
           <template #header>
@@ -220,13 +128,13 @@
 <script lang="ts">
 import { computed, defineComponent, onMounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
-import QRCode from 'qrcode';
 import type { DataUsageReportDto } from '../../main/preload';
 import { formatBytes } from '../utils/format';
-import { isIdentityBackupMarked, markIdentityBackupDone } from '../utils/backup-state';
 import { errorMessage } from '../utils/ipc';
 import UserAvatar from '../components/UserAvatar.vue';
 import AvatarPicker from '../components/AvatarPicker.vue';
+import NetworkCard from '../components/NetworkCard.vue';
+import BackupCard from '../components/BackupCard.vue';
 import RootAuthCenter from './auth/RootAuthCenter.vue';
 import RootIDPage from './RootIDPage.vue';
 
@@ -264,6 +172,8 @@ export default defineComponent({
   components: {
     UserAvatar,
     AvatarPicker,
+    NetworkCard,
+    BackupCard,
     RootAuthCenter,
     RootIDPage
   },
@@ -380,87 +290,11 @@ export default defineComponent({
       }
     };
 
-    // ---------------- 身份备份（加密二维码 + 密码门控助记词） ----------------
-    const backupMarked = ref(true);
-    const showQrDialog = ref(false);
-    const qrImageUrl = ref('');
-    const qrLoading = ref(false);
-    const showRevealDialog = ref(false);
-    const revealPassword = ref('');
-    const revealBusy = ref(false);
-    const revealedMnemonic = ref('');
-
-    const refreshBackupMarked = () => {
-      backupMarked.value = isIdentityBackupMarked(rootStatus.value.rootId);
-    };
-
-    const markBackupDone = () => {
-      if (rootStatus.value.rootId) {
-        markIdentityBackupDone(rootStatus.value.rootId);
-        backupMarked.value = true;
-      }
-    };
-
-    const showBackupQr = async () => {
-      qrLoading.value = true;
-      try {
-        const { payload } = await window.electronAPI.rootIdentity.backupPayload();
-        qrImageUrl.value = await QRCode.toDataURL(payload, { errorCorrectionLevel: 'M', margin: 1, width: 280 });
-        showQrDialog.value = true;
-        markBackupDone();
-      } catch (error) {
-        ElMessage.error(`生成备份二维码失败：${errorMessage(error)}`);
-      } finally {
-        qrLoading.value = false;
-      }
-    };
-
-    const saveQrImage = () => {
-      const link = document.createElement('a');
-      link.href = qrImageUrl.value;
-      link.download = `spark-backup-${(rootStatus.value.rootId ?? 'root').slice(0, 8)}.png`;
-      link.click();
-    };
-
-    const revealMnemonic = async () => {
-      if (!revealPassword.value) {
-        ElMessage.warning('请输入登录密码');
-        return;
-      }
-      revealBusy.value = true;
-      try {
-        const result = await window.electronAPI.rootIdentity.revealMnemonic(revealPassword.value);
-        revealedMnemonic.value = result.mnemonic;
-        markBackupDone();
-      } catch (error) {
-        ElMessage.error(`查看失败：${errorMessage(error)}`);
-      } finally {
-        revealBusy.value = false;
-      }
-    };
-
-    const revealedWords = computed(() => (revealedMnemonic.value ? revealedMnemonic.value.split(' ') : []));
-
-    const copyRevealedMnemonic = async () => {
-      try {
-        await navigator.clipboard.writeText(revealedMnemonic.value);
-        ElMessage.success('已复制助记词');
-      } catch {
-        ElMessage.warning('复制失败，请手动抄写');
-      }
-    };
-
-    const resetReveal = () => {
-      revealPassword.value = '';
-      revealedMnemonic.value = '';
-    };
-
     const syncAuthState = (status: RootStatus) => {
       rootStatus.value = status;
       if (!status.unlocked) {
         showRootPage.value = false;
       }
-      refreshBackupMarked();
     };
 
     // ---------------- 资料编辑（昵称 + 头像） ----------------
@@ -504,7 +338,6 @@ export default defineComponent({
     onMounted(async () => {
       try {
         await refreshStatus();
-        refreshBackupMarked();
         await refreshNodeInfo();
         await refreshDataUsage();
       } catch (error) {
@@ -530,20 +363,6 @@ export default defineComponent({
       refreshDataUsage,
       runDataCleanup,
       exportData,
-      backupMarked,
-      showQrDialog,
-      qrImageUrl,
-      qrLoading,
-      showRevealDialog,
-      revealPassword,
-      revealBusy,
-      revealedMnemonic,
-      revealedWords,
-      showBackupQr,
-      saveQrImage,
-      revealMnemonic,
-      copyRevealedMnemonic,
-      resetReveal,
       profileDialogVisible,
       profileNickname,
       profileAvatar,

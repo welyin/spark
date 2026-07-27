@@ -21,7 +21,10 @@
 //! 兼容解包（[`sync_state::OrgSyncState`] 的反序列化），不会把 bug 传播回来。
 
 pub mod claim;
+pub mod gateway;
 pub mod invite;
+pub mod node_card;
+pub mod org_address;
 pub mod plugin_docs;
 pub mod pull;
 pub mod recovery;
@@ -36,26 +39,45 @@ pub use claim::{
     ClaimVerification, NODE_INFO_CLAIM_MAX_AGE_MS, NodeInfoClaim, NodeInfoClaimUnsigned,
     build_node_info_claim_payload, sign_node_info_claim, verify_node_info_claim,
 };
+pub use gateway::{ORG_MEMBERS_DHT_KEY_SUFFIX, OrgMemberHint, org_members_dht_key};
 pub use invite::{
     ORG_INVITE_MAX_AGE_MS, OrgInviteError, OrgInviteInviter, OrgInvitePayload, decode_org_invite,
     decode_org_invite_at, encode_org_invite,
+};
+pub use node_card::{
+    NODE_CARD_MAX_AGE_MS, NODE_CARD_TYPE, NodeCard, NodeCardReject, build_node_card_payload,
+    decode_node_card, encode_node_card, make_node_card, parse_and_verify_node_card, sign_node_card,
+    verify_node_card,
+};
+pub use org_address::{
+    ORG_ADDRESS_CACHE_PREFIX, ORG_ADDRESS_FUTURE_TOLERANCE_MS, ORG_ADDRESS_GOSSIP_TYPE,
+    ORG_ADDRESS_LEN, ORG_ADDRESS_RECORD_DEFAULT_TTL_MS, ORG_ADDRESS_RECORD_MAX_TTL_MS,
+    OrgAddressRecord, OrgAddressRecordUnsigned, OrgAddressVerification,
+    build_org_address_record_payload, cache_org_address_record, decode_org_address,
+    generate_org_root_signing_key, is_newer_org_address_record, is_valid_org_address,
+    open_org_root_secret, org_address_cache_key, org_address_dht_key, org_address_from_public_key,
+    org_address_record_expired, org_root_signing_key, read_cached_org_address_record,
+    seal_org_root_secret, search_cached_org_address_records, sign_org_address_record,
+    strip_org_root_secret, verify_org_address_record,
 };
 pub use plugin_docs::{
     PLUGIN_DOC_PREFIX, PluginDocSyncItem, apply_plugin_doc_sync_items,
     collect_syncable_plugin_docs, is_sync_disabled, parse_plugin_doc_key, resolve_org_id,
 };
 pub use pull::{
-    PullOrgOutcome, classify_pull_org_response, handle_pull_list_request,
-    handle_pull_org_request, member_auth_status, parse_pull_list_organizations,
-    resolve_local_versions, validate_incoming_share_payload,
+    PullOrgOutcome, classify_pull_org_response, handle_pull_list_request, handle_pull_org_request,
+    member_auth_status, parse_pull_list_organizations, resolve_local_versions,
+    validate_incoming_share_payload,
 };
 pub use recovery::{
     RECOVERY_TIME_BUCKET_MS, RecoveryViewItem, active_recovery_tokens, recovery_time_bucket,
     recovery_token,
 };
 pub use replica::{
-    MemberSyncOverview, ORG_REPLICA_FRESH_WINDOW_MS, ORG_REPLICA_TARGET, OrgSyncOverview,
-    compute_org_sync_overview, covers_current, member_ever_synced, replica_sufficient,
+    MemberSyncOverview, ORG_NETWORK_LOST_DEBOUNCE_MS, ORG_REPLICA_FRESH_WINDOW_MS,
+    ORG_REPLICA_TARGET, OrgNetworkStatus, OrgNetworkStatusInput, OrgSyncOverview,
+    compute_org_sync_overview, covers_current, decide_org_network_status, member_ever_synced,
+    replica_sufficient,
 };
 pub use service::OrganizationService;
 pub use snapshot::{
@@ -77,8 +99,8 @@ pub use tx::{
 pub use types::{
     ORG_META_PREFIX, OrganizationMember, OrganizationNodeInfo, OrganizationRecord,
     OrganizationRole, OrganizationSyncSection, OrganizationSyncState, OrganizationSyncVersions,
-    OrganizationView, generate_organization_id, generate_recovery_secret, is_valid_root_id,
-    normalize_node_info, normalize_optional_node_info, normalize_plugin_domain,
+    OrganizationView, generate_org_secret, generate_organization_id, generate_recovery_secret,
+    is_valid_root_id, normalize_node_info, normalize_optional_node_info, normalize_plugin_domain,
     normalize_root_id, normalize_text, organization_key, sort_members,
 };
 
@@ -124,6 +146,10 @@ pub enum OrgError {
     /// 组织必须保留至少一名管理员。
     #[error("Organization must keep at least one admin")]
     MustKeepAdmin,
+
+    /// 组织网关列表非法（org.md §14：须为 2–3 名本组织成员的 rootId）。
+    #[error("Gateways must be 2 to 3 member rootIds of the organization")]
+    InvalidGateways,
 
     /// 不能接受自己发出的邀请码（service.ts:349-351）。
     #[error("不能接受自己发出的邀请码")]

@@ -65,7 +65,10 @@ pub(crate) fn check_storage_contract<S: StorageBackend>(s: &mut S) {
     s.put("doc:a:中文", "2").unwrap();
     s.put("doc:a:😀", "3").unwrap();
     let items = s.scan(&ScanOptions::prefix("doc:a:")).unwrap();
-    assert_eq!(keys(&items), vec!["doc:a:1", "doc:a:2", "doc:a:中文", "doc:a:😀"]);
+    assert_eq!(
+        keys(&items),
+        vec!["doc:a:1", "doc:a:2", "doc:a:中文", "doc:a:😀"]
+    );
 
     // --- start 含下界 / end 排他上界 ---
     for i in 0..5 {

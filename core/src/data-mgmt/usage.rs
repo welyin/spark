@@ -8,8 +8,8 @@ use serde::Serialize;
 
 use crate::storage::{KEY_RANGE_UPPER_BOUND, ScanOptions, StorageBackend};
 
-use super::constants::{DISK_FREE_WARN_RATIO, USAGE_WARN_TOTAL_BYTES};
 use super::Result;
+use super::constants::{DISK_FREE_WARN_RATIO, USAGE_WARN_TOTAL_BYTES};
 
 /// 用量分类（usage.ts:12-20）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -171,8 +171,10 @@ pub fn measure_disk_info(path: &str) -> Option<DiskInfo> {
         }
         stat
     };
-    let free_bytes = u64::try_from((stat.f_bavail as u128).checked_mul(stat.f_bsize as u128)?).ok()?;
-    let total_bytes = u64::try_from((stat.f_blocks as u128).checked_mul(stat.f_bsize as u128)?).ok()?;
+    let free_bytes =
+        u64::try_from((stat.f_bavail as u128).checked_mul(stat.f_bsize as u128)?).ok()?;
+    let total_bytes =
+        u64::try_from((stat.f_blocks as u128).checked_mul(stat.f_bsize as u128)?).ok()?;
     if total_bytes == 0 {
         return None;
     }
@@ -243,17 +245,29 @@ mod tests {
 
     #[test]
     fn classify_key_all_classes_order_sensitive() {
-        assert_eq!(classify_key("doc:evidence:proof:000000000001"), UsageClass::Evidence);
+        assert_eq!(
+            classify_key("doc:evidence:proof:000000000001"),
+            UsageClass::Evidence
+        );
         assert_eq!(classify_key("doc:evidence:head"), UsageClass::Evidence);
-        assert_eq!(classify_key("doc:system:purge-watermark:x"), UsageClass::System);
-        assert_eq!(classify_key("doc:system:collection-schema:a%2Fb"), UsageClass::System);
+        assert_eq!(
+            classify_key("doc:system:purge-watermark:x"),
+            UsageClass::System
+        );
+        assert_eq!(
+            classify_key("doc:system:collection-schema:a%2Fb"),
+            UsageClass::System
+        );
         assert_eq!(classify_key("doc:system:purge-log:123"), UsageClass::System);
         assert_eq!(classify_key("doc:plugin:app:col:id"), UsageClass::Documents);
         assert_eq!(classify_key("doc:"), UsageClass::Documents);
         // 顺序敏感：doc:evidence: / doc:system: 先于 doc:
         assert_eq!(classify_key("doc:evidence"), UsageClass::Documents); // 无尾冒号
         assert_eq!(classify_key("doc:system"), UsageClass::Documents);
-        assert_eq!(classify_key("idx:plugin:app:col:byX:v:id"), UsageClass::Indexes);
+        assert_eq!(
+            classify_key("idx:plugin:app:col:byX:v:id"),
+            UsageClass::Indexes
+        );
         assert_eq!(classify_key("meta:plugin:app:col:id"), UsageClass::SyncMeta);
         assert_eq!(classify_key("org:meta:org1"), UsageClass::Organization);
         assert_eq!(classify_key("org:tx:org1:1"), UsageClass::Organization);
@@ -287,15 +301,28 @@ mod tests {
         assert_eq!(report.scanned_at, 1000);
         assert_eq!(report.total_keys, 9);
         // documents：("doc:plugin:app:c:中文id" 26B + 3B) + ("doc:plugin:app:c:id2" 20B + 2B)
-        let doc_bytes = ("doc:plugin:app:c:中文id".len() + "值".len()
+        let doc_bytes = ("doc:plugin:app:c:中文id".len()
+            + "值".len()
             + "doc:plugin:app:c:id2".len()
             + "v2".len()) as u64;
-        assert_eq!(report.classes.documents, UsageClassStat { keys: 2, bytes: doc_bytes });
-        assert_eq!(report.classes.evidence, UsageClassStat { keys: 1, bytes: 25 });
+        assert_eq!(
+            report.classes.documents,
+            UsageClassStat {
+                keys: 2,
+                bytes: doc_bytes
+            }
+        );
+        assert_eq!(
+            report.classes.evidence,
+            UsageClassStat { keys: 1, bytes: 25 }
+        );
         assert_eq!(report.classes.system, UsageClassStat { keys: 1, bytes: 22 });
         assert_eq!(report.classes.indexes.keys, 1);
         assert_eq!(report.classes.sync_meta.keys, 1);
-        assert_eq!(report.classes.organization, UsageClassStat { keys: 1, bytes: 13 });
+        assert_eq!(
+            report.classes.organization,
+            UsageClassStat { keys: 1, bytes: 13 }
+        );
         assert_eq!(report.classes.other, UsageClassStat { keys: 1, bytes: 10 });
         let sum: u64 = [
             report.classes.documents.bytes,
@@ -339,7 +366,10 @@ mod tests {
         };
         // diskLow 严格 <：恰好 0.15 不告警
         assert!(!build_warnings(0, Some(&disk_at_threshold)).disk_low);
-        let disk_below = DiskInfo { free_ratio: 0.149, ..disk_at_threshold.clone() };
+        let disk_below = DiskInfo {
+            free_ratio: 0.149,
+            ..disk_at_threshold.clone()
+        };
         assert!(build_warnings(0, Some(&disk_below)).disk_low);
         // disk 为 None：diskLow 恒 false
         assert!(!build_warnings(u64::MAX, None).disk_low);
@@ -369,7 +399,16 @@ mod tests {
         assert!(json["disk"].is_null());
         assert_eq!(json["warnings"]["usageExceeded"], false);
         assert_eq!(json["warnings"]["diskLow"], false);
-        for name in ["documents", "indexes", "syncMeta", "evidence", "organization", "p2p", "system", "other"] {
+        for name in [
+            "documents",
+            "indexes",
+            "syncMeta",
+            "evidence",
+            "organization",
+            "p2p",
+            "system",
+            "other",
+        ] {
             assert!(json["classes"][name].is_object(), "missing class {name}");
         }
     }

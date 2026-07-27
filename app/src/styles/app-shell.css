@@ -121,12 +121,31 @@
   line-height: 1;
 }
 
+/* ---- 顶栏（常驻网络状态） ---- */
+
+.topbar {
+  position: fixed;
+  top: 0;
+  left: var(--spark-rail-width);
+  right: 0;
+  z-index: 19;
+  height: var(--spark-topbar-height);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 16px;
+  background: var(--spark-bg-card);
+  border-bottom: 1px solid var(--spark-border-light);
+  -webkit-app-region: drag; /* 栏体可拖动窗口（状态按钮内已禁用） */
+}
+
 /* ---- 内容区 ---- */
 
 .main {
   margin-left: var(--spark-rail-width);
   min-height: 100vh;
   padding: 0;
+  padding-top: var(--spark-topbar-height);
 }
 
 /* ---- 插件宿主页（独立窗口模式） ---- */

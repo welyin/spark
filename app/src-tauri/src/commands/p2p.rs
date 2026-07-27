@@ -37,6 +37,28 @@ pub struct PeerRecordRowDto {
     pub value: String,
 }
 
+/// `p2p-get-dht-mode` / `p2p-set-dht-mode` 返回（DHT 模式线形：off/client/server）。
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct P2pDhtModeDto {
+    pub dht_mode: String,
+}
+
+/// `p2p-make-node-card` 返回：base64url 节点名片串（org.md §17）。
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct NodeCardDto {
+    pub card: String,
+}
+
+/// `p2p-import-node-card` 返回（kernel `NodeCardImport` 的 DTO）。
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeCardImportDto {
+    pub peer_id: String,
+    pub has_recovery_token: bool,
+    pub connect_error: Option<String>,
+}
+
 // ------------------------------------------------------------------
 // 核心实现（测试直调）
 // ------------------------------------------------------------------
@@ -57,7 +79,7 @@ pub(crate) fn stop_inner(kernel: &mut Kernel) -> Result<P2pStopResultDto, String
 pub(crate) fn status_inner(kernel: &Kernel) -> Result<P2pInfoDto, String> {
     match kernel.p2p_status().map_err(err)? {
         Some(info) => Ok(P2pInfoDto::from(info)),
-        None => Ok(P2pInfoDto::stopped()),
+        None => Ok(P2pInfoDto::stopped(kernel.p2p_start_error())),
     }
 }
 
@@ -103,6 +125,48 @@ pub(crate) fn list_peer_records_inner(kernel: &Kernel) -> Result<Vec<PeerRecordR
         .into_iter()
         .map(|(key, value)| PeerRecordRowDto { key, value })
         .collect())
+}
+
+/// `p2p-get-dht-mode`：读取 DHT 模式配置（缺省 server；需身份已解锁）。
+pub(crate) fn dht_mode_inner(kernel: &Kernel) -> Result<P2pDhtModeDto, String> {
+    let mode = kernel.p2p_dht_mode().map_err(err)?;
+    Ok(P2pDhtModeDto {
+        dht_mode: mode.as_str().to_string(),
+    })
+}
+
+/// `p2p-set-dht-mode`：写入 DHT 模式配置；p2p 运行中时内核重启节点使其生效。
+pub(crate) fn set_dht_mode_inner(kernel: &mut Kernel, mode: &str) -> Result<P2pDhtModeDto, String> {
+    let parsed = spark_core::p2p::DhtMode::parse(mode)
+        .ok_or_else(|| format!("invalid dht mode: {mode}"))?;
+    kernel.p2p_set_dht_mode(parsed).map_err(err)?;
+    Ok(P2pDhtModeDto {
+        dht_mode: parsed.as_str().to_string(),
+    })
+}
+
+/// `p2p-make-node-card`：生成本机节点名片串（org.md §17）；带 orgId 时附
+/// 当前组织恢复 token。需 P2P 已启动。
+pub(crate) fn make_node_card_inner(
+    kernel: &mut Kernel,
+    org_id: Option<String>,
+) -> Result<NodeCardDto, String> {
+    let card = kernel.make_node_card(org_id.as_deref()).map_err(err)?;
+    Ok(NodeCardDto { card })
+}
+
+/// `p2p-import-node-card`：验签 → 未验证口径入邻居池 → best-effort 连接
+/// （org.md §17.3-4；连接失败不使导入失败，错误在 connectError 中返回）。
+pub(crate) fn import_node_card_inner(
+    kernel: &mut Kernel,
+    card: &str,
+) -> Result<NodeCardImportDto, String> {
+    let result = kernel.import_node_card(card).map_err(err)?;
+    Ok(NodeCardImportDto {
+        peer_id: result.peer_id,
+        has_recovery_token: result.has_recovery_token,
+        connect_error: result.connect_error,
+    })
 }
 
 // ------------------------------------------------------------------
@@ -153,6 +217,35 @@ pub fn p2p_list_peer_records(
     state: tauri::State<'_, KernelState>,
 ) -> Result<Vec<PeerRecordRowDto>, String> {
     list_peer_records_inner(&*lock_kernel(&state)?)
+}
+
+#[tauri::command]
+pub fn p2p_get_dht_mode(state: tauri::State<'_, KernelState>) -> Result<P2pDhtModeDto, String> {
+    dht_mode_inner(&*lock_kernel(&state)?)
+}
+
+#[tauri::command]
+pub fn p2p_set_dht_mode(
+    state: tauri::State<'_, KernelState>,
+    mode: String,
+) -> Result<P2pDhtModeDto, String> {
+    set_dht_mode_inner(&mut *lock_kernel(&state)?, &mode)
+}
+
+#[tauri::command]
+pub fn p2p_make_node_card(
+    state: tauri::State<'_, KernelState>,
+    org_id: Option<String>,
+) -> Result<NodeCardDto, String> {
+    make_node_card_inner(&mut *lock_kernel(&state)?, org_id)
+}
+
+#[tauri::command]
+pub fn p2p_import_node_card(
+    state: tauri::State<'_, KernelState>,
+    card: String,
+) -> Result<NodeCardImportDto, String> {
+    import_node_card_inner(&mut *lock_kernel(&state)?, &card)
 }
 
 // ------------------------------------------------------------------
@@ -221,6 +314,27 @@ mod tests {
         assert_eq!(result.cleared, 0);
         // 空库时邻居列表亦为空
         assert!(list_peer_records_inner(&kernel).unwrap().is_empty());
+    }
+
+    #[test]
+    fn dht_mode_roundtrip_and_validation() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut kernel = Kernel::init(KernelConfig {
+            data_dir: dir.path().to_path_buf(),
+            app_version: "0.0.0-test".to_string(),
+            p2p: None,
+        })
+        .unwrap();
+        kernel.init_identity("correct-horse-battery", "alice", None).unwrap();
+
+        // 缺省 server（开放）
+        assert_eq!(dht_mode_inner(&kernel).unwrap().dht_mode, "server");
+        // 设置 off 持久化可读回
+        assert_eq!(set_dht_mode_inner(&mut kernel, "off").unwrap().dht_mode, "off");
+        assert_eq!(dht_mode_inner(&kernel).unwrap().dht_mode, "off");
+        // 非法值报错且不改变现状
+        assert!(set_dht_mode_inner(&mut kernel, "bogus").is_err());
+        assert_eq!(dht_mode_inner(&kernel).unwrap().dht_mode, "off");
     }
 
     #[test]

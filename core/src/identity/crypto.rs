@@ -61,7 +61,12 @@ pub fn pbkdf2_v1_key(password: &str, salt: &[u8]) -> [u8; KEY_LEN] {
 }
 
 /// v2 加密：aes-256-gcm。返回 (密文, authTag)。
-pub fn encrypt_v2(plaintext: &[u8], password: &str, salt: &[u8], iv: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
+pub fn encrypt_v2(
+    plaintext: &[u8],
+    password: &str,
+    salt: &[u8],
+    iv: &[u8],
+) -> Result<(Vec<u8>, Vec<u8>)> {
     if iv.len() != GCM_IV_LEN {
         return Err(IdentityError::Crypto(format!(
             "v2 iv must be {GCM_IV_LEN} bytes, got {}",
@@ -69,7 +74,8 @@ pub fn encrypt_v2(plaintext: &[u8], password: &str, salt: &[u8], iv: &[u8]) -> R
         )));
     }
     let key = scrypt_v2_key(password, salt)?;
-    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|e| IdentityError::Crypto(e.to_string()))?;
+    let cipher =
+        Aes256Gcm::new_from_slice(&key).map_err(|e| IdentityError::Crypto(e.to_string()))?;
     let nonce = nonce_from_iv(iv)?;
     let sealed = cipher
         .encrypt(&nonce, plaintext)
@@ -79,7 +85,13 @@ pub fn encrypt_v2(plaintext: &[u8], password: &str, salt: &[u8], iv: &[u8]) -> R
 }
 
 /// v2 解密：aes-256-gcm，authTag 单独传入。
-pub fn decrypt_v2(data: &[u8], auth_tag: &[u8], password: &str, salt: &[u8], iv: &[u8]) -> Result<Vec<u8>> {
+pub fn decrypt_v2(
+    data: &[u8],
+    auth_tag: &[u8],
+    password: &str,
+    salt: &[u8],
+    iv: &[u8],
+) -> Result<Vec<u8>> {
     if iv.len() != GCM_IV_LEN {
         return Err(IdentityError::Crypto(format!(
             "v2 iv must be {GCM_IV_LEN} bytes, got {}",
@@ -93,7 +105,8 @@ pub fn decrypt_v2(data: &[u8], auth_tag: &[u8], password: &str, salt: &[u8], iv:
         )));
     }
     let key = scrypt_v2_key(password, salt)?;
-    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|e| IdentityError::Crypto(e.to_string()))?;
+    let cipher =
+        Aes256Gcm::new_from_slice(&key).map_err(|e| IdentityError::Crypto(e.to_string()))?;
     let nonce = nonce_from_iv(iv)?;
     let mut sealed = Vec::with_capacity(data.len() + GCM_TAG_LEN);
     sealed.extend_from_slice(data);

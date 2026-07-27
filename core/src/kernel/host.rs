@@ -16,13 +16,17 @@ use serde_json::Value;
 use crate::collection::{CollectionConfig, DocumentCollection};
 use crate::data_mgmt::watermark::StoragePurgeWatermark;
 use crate::evidence::get_evidence_head_hash;
+use crate::org::gateway::OrgMemberHint;
 use crate::org::recovery::RecoveryViewItem;
 use crate::org::{
-    OrganizationService, PluginDocSyncItem, apply_plugin_doc_sync_items,
-    handle_pull_list_request, handle_pull_org_request, validate_incoming_share_payload,
+    OrganizationService, PluginDocSyncItem, apply_plugin_doc_sync_items, handle_pull_list_request,
+    handle_pull_org_request, validate_incoming_share_payload,
 };
 use crate::p2p::host::{OrgShareAck, P2pHost};
 use crate::p2p::node::system_now_ms;
+use crate::p2p::overlay_store::{OverlayPeerSource, OverlayPeerStore};
+use crate::p2p::peer_activity::{NodeObservation, PeerActivityStore};
+use crate::p2p::peer_targets::PeerNodeInfo;
 use crate::schema::CollectionSchemaDeclaration;
 use crate::storage::SledStorage;
 use crate::sync::apply::{ApplyRemoteOptions, apply_remote_update};
@@ -132,7 +136,11 @@ impl P2pHost for KernelHost {
             .map_err(|e| format!("invalid schema hint: {e}"))?
             .flatten();
         // delete 消息 payload 为 null → None
-        let payload_opt = if payload.is_null() { None } else { Some(payload) };
+        let payload_opt = if payload.is_null() {
+            None
+        } else {
+            Some(payload)
+        };
         apply_remote_update(
             &mut self.storage,
             &adapter,
@@ -166,12 +174,9 @@ impl P2pHost for KernelHost {
             return Ok(None);
         };
         let now = system_now_ms();
-        let merged = OrganizationService::apply_incoming_snapshot(
-            &mut self.storage,
-            &organization,
-            now,
-        )
-        .map_err(|e| e.to_string())?;
+        let merged =
+            OrganizationService::apply_incoming_snapshot(&mut self.storage, &organization, now)
+                .map_err(|e| e.to_string())?;
         // pluginDocs 随快照捎带（plugin-org-sync.ts `applyPluginDocSyncItems`）
         if !plugin_docs.is_empty() {
             let items: Vec<PluginDocSyncItem> = plugin_docs
@@ -179,15 +184,20 @@ impl P2pHost for KernelHost {
                 .filter_map(|v| serde_json::from_value(v.clone()).ok())
                 .collect();
             let configs = Arc::clone(&self.collection_configs);
-            apply_plugin_doc_sync_items(&mut self.storage, &items, |domain, collection| {
-                let config = configs
-                    .lock()
-                    .unwrap()
-                    .get(&(domain.to_string(), collection.to_string()))
-                    .cloned()
-                    .unwrap_or_default();
-                DocumentCollection::new(domain, collection, config)
-            }, now)
+            apply_plugin_doc_sync_items(
+                &mut self.storage,
+                &items,
+                |domain, collection| {
+                    let config = configs
+                        .lock()
+                        .unwrap()
+                        .get(&(domain.to_string(), collection.to_string()))
+                        .cloned()
+                        .unwrap_or_default();
+                    DocumentCollection::new(domain, collection, config)
+                },
+                now,
+            )
             .map_err(|e| e.to_string())?;
         }
         Ok(Some(OrgShareAck {
@@ -219,10 +229,12 @@ impl P2pHost for KernelHost {
         // claim 落库后向已知成员推送（actor = 本机当前用户，service.ts:450-451）
         if let Some(actor) = current {
             for org_id in applied_orgs {
-                let _ = self.push_notify.send(super::org_sync::OrgSyncRequest::PushOrg {
-                    org_id,
-                    actor_root_id: actor.clone(),
-                });
+                let _ = self
+                    .push_notify
+                    .send(super::org_sync::OrgSyncRequest::PushOrg {
+                        org_id,
+                        actor_root_id: actor.clone(),
+                    });
             }
         }
         Ok(response)
@@ -252,5 +264,38 @@ impl P2pHost for KernelHost {
             return;
         };
         self.org_acks.lock().unwrap().mark_ack(sync_id);
+    }
+
+    /// 组织私有 DHT 成员提示回填（p2p-messages.md §15）：按未验证口径入邻居池
+    /// + 活跃度 'seen' 记账；组织校验仍走 pull/claim 链路，信任边界不变。
+    fn on_org_member_hints(&mut self, hints: &[OrgMemberHint]) {
+        let now = system_now_ms();
+        for hint in hints {
+            if hint.peer_id.trim().is_empty() {
+                continue;
+            }
+            let info = PeerNodeInfo {
+                peer_id: Some(hint.peer_id.clone()),
+                addresses: hint.addresses.clone(),
+            };
+            {
+                let mut store = OverlayPeerStore::new(&mut self.storage);
+                if let Err(e) = store.remember(
+                    &hint.peer_id,
+                    &hint.addresses,
+                    OverlayPeerSource::Exchange,
+                    false,
+                    now,
+                ) {
+                    eprintln!("[kernel] org member hint overlay store failed: {e}");
+                }
+            }
+            {
+                let mut store = PeerActivityStore::new(&mut self.storage);
+                if let Err(e) = store.remember_node_info(&info, NodeObservation::Seen, None, now) {
+                    eprintln!("[kernel] org member hint activity store failed: {e}");
+                }
+            }
+        }
     }
 }

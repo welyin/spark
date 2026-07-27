@@ -5,6 +5,7 @@
 
 use serde_json::Value;
 
+use crate::org::gateway::OrgMemberHint;
 use crate::org::recovery::RecoveryViewItem;
 
 /// org-share 接收结果（accepted 时携带 ack 载荷）。
@@ -84,6 +85,11 @@ pub trait P2pHost: Send {
 
     /// org-share-ack 唤醒（按 payload.syncId 匹配发送方等待器）。
     fn on_org_share_ack(&mut self, _payload: Value) {}
+
+    /// 组织私有 DHT 命中的成员提示回填（p2p-messages.md §15）：网关提供的
+    /// `{peerId, addresses}` 条目，业务层按未验证口径入邻居池（`verified=false`）；
+    /// 组织校验仍走 pull/claim 链路，信任边界不变。
+    fn on_org_member_hints(&mut self, _hints: &[OrgMemberHint]) {}
 }
 
 /// 空宿主（测试/最小装配）。

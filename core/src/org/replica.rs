@@ -14,6 +14,7 @@
 use super::snapshot::is_organization_sync_stale;
 use super::sync_state::OrgSyncState;
 use super::types::{OrganizationMember, OrganizationSyncVersions};
+use crate::p2p::{DhtMode, RecoveryState};
 
 /// 副本目标 K（含本机，p2p/constants.ts:152）。
 pub const ORG_REPLICA_TARGET: u32 = 3;
@@ -49,6 +50,17 @@ pub struct OrgSyncOverview {
     pub total_members: u32,
     /// 逐成员状态（按记录 members 顺序）。
     pub members: Vec<MemberSyncOverview>,
+    /// 当前已连接的组织成员节点数（不含本机；含本机副本数 = `connected_peers + 1`）。
+    /// 由 kernel 按 P2P 连接表填充；纯统计路径（[`compute_org_sync_overview`]）为 0。
+    pub connected_peers: u32,
+    /// 恢复模式状态（kernel 从 `RecoveryTrigger` 快照填充）。
+    pub recovery_state: RecoveryState,
+    /// 最近一次与组织成员建立连接的时间（无记录为 `None`；含当前仍连接的成员）。
+    pub last_connected_at: Option<i64>,
+    /// DHT 模式（kernel 从持久化配置填充）。
+    pub dht_mode: DhtMode,
+    /// 组织网络状态判定结果（[`decide_org_network_status`]；纯统计路径为 `LocalOnly` 占位）。
+    pub status: OrgNetworkStatus,
 }
 
 impl OrgSyncOverview {
@@ -61,6 +73,87 @@ impl OrgSyncOverview {
 /// 副本达标判定。
 pub fn replica_sufficient(synced_peers: u32) -> bool {
     synced_peers >= ORG_REPLICA_TARGET
+}
+
+// ------------------------------------------------------------------
+// 组织网络状态判定（development_plan「组织网络状态 UI」；kernel 采集输入，纯函数判定）
+// ------------------------------------------------------------------
+
+/// 「丢失」判定防抖：连续无组织成员连接超过该时长才判 Lost（需求 10–30s，取 15s）。
+pub const ORG_NETWORK_LOST_DEBOUNCE_MS: i64 = 15_000;
+
+/// 组织网络状态（五层；线形字符串见 [`OrgNetworkStatus::as_str`]）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OrgNetworkStatus {
+    /// 组织网络良好：已连接副本达到目标（绿）。
+    Good,
+    /// 不稳定：有部分连接但少于目标，或断开仍在防抖窗口（黄）。
+    Unstable,
+    /// 组织网络丢失：所有已知成员地址失败（红；自动进入恢复模式）。
+    Lost,
+    /// 正在恢复中：DHT/恢复查询查找中（橙；超时由 `recovery_state` 转 failed 呈现）。
+    Recovering,
+    /// 仅本地：完全离线（灰）。
+    #[default]
+    LocalOnly,
+}
+
+impl OrgNetworkStatus {
+    /// 线形字符串（DTO/前端分支用）。
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            OrgNetworkStatus::Good => "good",
+            OrgNetworkStatus::Unstable => "unstable",
+            OrgNetworkStatus::Lost => "lost",
+            OrgNetworkStatus::Recovering => "recovering",
+            OrgNetworkStatus::LocalOnly => "localOnly",
+        }
+    }
+}
+
+/// [`decide_org_network_status`] 的输入（kernel 侧采集）。
+#[derive(Clone, Copy, Debug)]
+pub struct OrgNetworkStatusInput {
+    /// P2P 节点是否运行中。
+    pub p2p_running: bool,
+    /// 全网已连接 peer 数（区分「组织丢失」与「完全离线」）。
+    pub total_connected_peers: usize,
+    /// 已连接的组织成员节点数（不含本机）。
+    pub connected_peers: u32,
+    /// 副本目标 K。
+    pub replica_target: u32,
+    /// 有效成员数（小组织目标折算：`min(K, total_members)`）。
+    pub total_members: u32,
+    /// 恢复模式状态（`RecoveryTrigger::state` 快照）。
+    pub recovery_state: RecoveryState,
+    /// 连续无组织成员连接时长（有成员连接时为 0）。
+    pub unreachable_ms: i64,
+}
+
+/// 组织网络状态判定（纯函数）。
+///
+/// 优先级：仅本地（P2P 未启动）→ 良好（连接副本含本机达标，小组织按成员数
+/// 折算目标）→ 不稳定（有远端连接但不足目标，或断开未过防抖）→ 恢复中
+/// （恢复查询窗口内）→ 仅本地（全网零连接）→ 丢失。
+pub fn decide_org_network_status(input: &OrgNetworkStatusInput) -> OrgNetworkStatus {
+    if !input.p2p_running {
+        return OrgNetworkStatus::LocalOnly;
+    }
+    let effective_target = input.replica_target.min(input.total_members.max(1)).max(1);
+    // 本机恒算一个已连接副本
+    if input.connected_peers + 1 >= effective_target {
+        return OrgNetworkStatus::Good;
+    }
+    if input.connected_peers > 0 || input.unreachable_ms < ORG_NETWORK_LOST_DEBOUNCE_MS {
+        return OrgNetworkStatus::Unstable;
+    }
+    if matches!(input.recovery_state, RecoveryState::Recovering { .. }) {
+        return OrgNetworkStatus::Recovering;
+    }
+    if input.total_connected_peers == 0 {
+        return OrgNetworkStatus::LocalOnly;
+    }
+    OrgNetworkStatus::Lost
 }
 
 /// `coversCurrent`：sync-state 版本仍覆盖当前组织版本（不落后）。
@@ -125,8 +218,7 @@ pub fn compute_org_sync_overview(
             .map(str::to_string);
         let is_self = current_root_id == Some(member.root_id.as_str());
         let state = peer_id.as_deref().and_then(&mut state_lookup);
-        let ever_synced =
-            member_ever_synced(is_self, state.as_ref(), current_versions, now_ms);
+        let ever_synced = member_ever_synced(is_self, state.as_ref(), current_versions, now_ms);
         if ever_synced {
             synced_peers += 1;
         }
@@ -145,205 +237,11 @@ pub fn compute_org_sync_overview(
         synced_peers,
         total_members: overview_members.len() as u32,
         members: overview_members,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::org::types::{OrganizationNodeInfo, OrganizationRole};
-
-    const NOW: i64 = 100_000_000_000;
-
-    fn rid(ch: char) -> String {
-        ch.to_string().repeat(64)
-    }
-
-    fn versions(v: i64) -> OrganizationSyncVersions {
-        OrganizationSyncVersions {
-            summary_version: v,
-            members_version: v,
-            member_details_version: v,
-            transactions_version: v,
-        }
-    }
-
-    fn member(root: char, peer_id: Option<&str>) -> OrganizationMember {
-        OrganizationMember {
-            root_id: rid(root),
-            role: OrganizationRole::Member,
-            joined_at: 1000,
-            added_by: rid('z'),
-            node_info: peer_id.map(|p| OrganizationNodeInfo {
-                peer_id: Some(p.to_string()),
-                addresses: vec![],
-            }),
-            extra: Default::default(),
-        }
-    }
-
-    fn no_state() -> impl FnMut(&str) -> Option<OrgSyncState> {
-        |_| None
-    }
-
-    #[test]
-    fn self_always_counts() {
-        let members = vec![member('a', None)];
-        let overview =
-            compute_org_sync_overview("org_x", &members, Some(&rid('a')), None, no_state(), NOW);
-        assert_eq!(overview.synced_peers, 1);
-        assert!(overview.members[0].is_self);
-        assert!(overview.members[0].ever_synced);
-        assert_eq!(overview.members[0].last_synced_at, None);
-    }
-
-    #[test]
-    fn recently_synced_within_30d_window() {
-        let members = vec![member('b', Some("peer-b"))];
-        let state_at = |ts: i64| OrgSyncState {
-            versions: versions(50), // 落后于 current(100)：coversCurrent=false
-            last_synced_at: ts,
-        };
-        let current = versions(100);
-        // 窗口内（恰好 30 天边界） → 计入
-        let overview = compute_org_sync_overview(
-            "org_x",
-            &members,
-            None,
-            Some(&current),
-            |_| Some(state_at(NOW - ORG_REPLICA_FRESH_WINDOW_MS)),
-            NOW,
-        );
-        assert!(overview.members[0].ever_synced, "30 天边界仍计入");
-        // 超出窗口 1ms 且版本落后 → 不计入
-        let overview = compute_org_sync_overview(
-            "org_x",
-            &members,
-            None,
-            Some(&current),
-            |_| Some(state_at(NOW - ORG_REPLICA_FRESH_WINDOW_MS - 1)),
-            NOW,
-        );
-        assert!(!overview.members[0].ever_synced);
-        assert_eq!(overview.synced_peers, 0);
-    }
-
-    #[test]
-    fn covers_current_counts_stale_ttl_but_fresh_versions() {
-        // 静默组织：lastSyncedAt 远超 30 天，但版本仍覆盖当前 → 计入
-        let members = vec![member('b', Some("peer-b"))];
-        let current = versions(100);
-        let stale_ttl = OrgSyncState {
-            versions: versions(100),
-            last_synced_at: NOW - 365 * 24 * 60 * 60 * 1000,
-        };
-        assert!(covers_current(&stale_ttl, Some(&current)));
-        let overview = compute_org_sync_overview(
-            "org_x",
-            &members,
-            None,
-            Some(&current),
-            |_| Some(stale_ttl),
-            NOW,
-        );
-        assert!(overview.members[0].ever_synced);
-        assert_eq!(overview.synced_peers, 1);
-
-        // 版本落后（任一字段） → coversCurrent=false（TS 污染形状下恒 true，有意修复）
-        let lagging = OrgSyncState {
-            versions: OrganizationSyncVersions {
-                transactions_version: 99,
-                ..versions(100)
-            },
-            ..stale_ttl
-        };
-        assert!(!covers_current(&lagging, Some(&current)));
-        let overview = compute_org_sync_overview(
-            "org_x",
-            &members,
-            None,
-            Some(&current),
-            |_| Some(lagging),
-            NOW,
-        );
-        assert!(!overview.members[0].ever_synced);
-
-        // currentVersions 缺失 → coversCurrent=false
-        assert!(!covers_current(&stale_ttl, None));
-    }
-
-    #[test]
-    fn member_without_peer_has_no_state() {
-        let members = vec![member('b', None), member('c', Some("  "))];
-        let current = versions(100);
-        let overview =
-            compute_org_sync_overview("org_x", &members, None, Some(&current), no_state(), NOW);
-        assert_eq!(overview.synced_peers, 0);
-        assert_eq!(overview.total_members, 2);
-        assert_eq!(overview.members[0].peer_id, None);
-        assert_eq!(overview.members[1].peer_id, None);
-    }
-
-    #[test]
-    fn empty_root_id_members_skipped() {
-        let mut blank = member('b', Some("peer-b"));
-        blank.root_id = String::new();
-        let members = vec![blank, member('c', None)];
-        let overview = compute_org_sync_overview("org_x", &members, None, None, no_state(), NOW);
-        assert_eq!(overview.total_members, 1);
-    }
-
-    #[test]
-    fn peer_id_is_trimmed_for_state_lookup() {
-        let members = vec![member('b', Some("  peer-b  "))];
-        let state = OrgSyncState {
-            versions: versions(100),
-            last_synced_at: NOW,
-        };
-        let current = versions(100);
-        let overview = compute_org_sync_overview(
-            "org_x",
-            &members,
-            None,
-            Some(&current),
-            |peer| {
-                assert_eq!(peer, "peer-b", "lookup 必须用 trim 后的 peerId");
-                Some(state)
-            },
-            NOW,
-        );
-        assert_eq!(overview.members[0].peer_id.as_deref(), Some("peer-b"));
-        assert!(overview.members[0].ever_synced);
-    }
-
-    #[test]
-    fn replica_sufficiency() {
-        assert!(!replica_sufficient(0));
-        assert!(!replica_sufficient(2));
-        assert!(replica_sufficient(3));
-        assert!(replica_sufficient(4));
-
-        // 全链路：本机 + 两个窗口内同步过的成员 → 达标
-        let members = vec![
-            member('a', Some("peer-a")),
-            member('b', Some("peer-b")),
-            member('c', Some("peer-c")),
-        ];
-        let current = versions(100);
-        let fresh = OrgSyncState {
-            versions: versions(1),
-            last_synced_at: NOW,
-        };
-        let overview = compute_org_sync_overview(
-            "org_x",
-            &members,
-            Some(&rid('a')),
-            Some(&current),
-            |_| Some(fresh),
-            NOW,
-        );
-        assert_eq!(overview.synced_peers, 3);
-        assert_eq!(overview.replica_target, ORG_REPLICA_TARGET);
-        assert!(overview.is_replica_sufficient());
+        // 网络状态字段由 kernel.org_overview 采集后填充（纯统计路径无网络上下文）
+        connected_peers: 0,
+        recovery_state: RecoveryState::Idle,
+        last_connected_at: None,
+        dht_mode: DhtMode::default(),
+        status: OrgNetworkStatus::LocalOnly,
     }
 }

@@ -60,8 +60,8 @@ pub use usage::{
     classify_key, collect_data_usage, measure_disk_info,
 };
 pub use watermark::{
-    PURGE_WATERMARK_KEY_PREFIX, PurgeWatermarkRecord, StoragePurgeWatermark,
-    get_purge_watermark, is_purged_by_watermark, purge_watermark_key, raise_purge_watermark,
+    PURGE_WATERMARK_KEY_PREFIX, PurgeWatermarkRecord, StoragePurgeWatermark, get_purge_watermark,
+    is_purged_by_watermark, purge_watermark_key, raise_purge_watermark,
 };
 
 /// data-mgmt 模块错误。对外校验类消息文本与 TS 抛出的 `Error.message` 逐字一致。
@@ -88,7 +88,9 @@ pub enum DataMgmtError {
     P2PNotStarted,
 
     /// K 副本不足（ipc/data.ts:106-111）。
-    #[error("Replica insufficient ({synced}/{target}): purging local copies now may lose organization data. Wait for replicas to replenish or add disk space instead.")]
+    #[error(
+        "Replica insufficient ({synced}/{target}): purging local copies now may lose organization data. Wait for replicas to replenish or add disk space instead."
+    )]
     ReplicaInsufficient {
         /// 已同步副本数。
         synced: u32,

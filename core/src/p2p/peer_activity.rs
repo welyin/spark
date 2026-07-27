@@ -6,11 +6,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::storage::{ScanOptions, StorageBackend};
 
-use super::constants::{
-    PEER_ACTIVITY_FAILURE_PURGE_THRESHOLD, PEER_ACTIVITY_FAILURE_WEIGHT_MS,
-    PEER_ACTIVITY_SUCCESS_WEIGHT_MS, P2P_PEER_RECORD_PREFIX,
-};
 use super::Result;
+use super::constants::{
+    P2P_PEER_RECORD_PREFIX, PEER_ACTIVITY_FAILURE_PURGE_THRESHOLD, PEER_ACTIVITY_FAILURE_WEIGHT_MS,
+    PEER_ACTIVITY_SUCCESS_WEIGHT_MS,
+};
 use super::peer_targets::{PeerNodeInfo, extract_peer_id};
 
 /// 节点活跃度记录（TS `PeerActivityRecord`）。
@@ -52,8 +52,7 @@ pub enum NodeObservation {
 /// 打分公式：`cumulativeConnectedMs + success*60000 - failure*30000 - max(0, now-lastSeenAt)`。
 pub fn compute_priority(record: &PeerActivityRecord, now_ms: i64) -> i64 {
     let recency_penalty = (now_ms - record.last_seen_at).max(0);
-    record.cumulative_connected_ms
-        + record.success_count as i64 * PEER_ACTIVITY_SUCCESS_WEIGHT_MS
+    record.cumulative_connected_ms + record.success_count as i64 * PEER_ACTIVITY_SUCCESS_WEIGHT_MS
         - record.failure_count as i64 * PEER_ACTIVITY_FAILURE_WEIGHT_MS
         - recency_penalty
 }
@@ -105,7 +104,11 @@ impl<'a> PeerActivityStore<'a> {
         if let Some(streak) = record.consecutive_failure_count {
             return streak;
         }
-        if record.success_count == 0 { record.failure_count } else { 0 }
+        if record.success_count == 0 {
+            record.failure_count
+        } else {
+            0
+        }
     }
 
     /// "完全不活跃"：无成功历史、无在线时长、无当前会话、无 lastConnectedAt。
@@ -191,7 +194,9 @@ impl<'a> PeerActivityStore<'a> {
 
     /// 全量列出。
     pub fn list_all(&mut self) -> Result<Vec<PeerActivityRecord>> {
-        let rows = self.storage.scan(&ScanOptions::prefix(P2P_PEER_RECORD_PREFIX))?;
+        let rows = self
+            .storage
+            .scan(&ScanOptions::prefix(P2P_PEER_RECORD_PREFIX))?;
         Ok(rows
             .into_iter()
             .filter_map(|(_, v)| serde_json::from_str(&v).ok())
@@ -201,7 +206,9 @@ impl<'a> PeerActivityStore<'a> {
     /// 清空全部节点活跃度记录（peer-activity-store.ts:280-295 `clearAllRecords`；
     /// ipc `p2p-clear-peer-records` 用语）。返回删除条数。
     pub fn clear_all_records(&mut self) -> Result<usize> {
-        let rows = self.storage.scan(&ScanOptions::prefix(P2P_PEER_RECORD_PREFIX))?;
+        let rows = self
+            .storage
+            .scan(&ScanOptions::prefix(P2P_PEER_RECORD_PREFIX))?;
         let count = rows.len();
         for (key, _) in rows {
             self.storage.delete(&key)?;
@@ -218,7 +225,12 @@ impl<'a> PeerActivityStore<'a> {
         let records = self.list_all()?;
         let score = |info: &PeerNodeInfo| -> i64 {
             extract_peer_id(info)
-                .and_then(|pid| records.iter().find(|r| r.peer_id == pid).map(|r| compute_priority(r, now_ms)))
+                .and_then(|pid| {
+                    records
+                        .iter()
+                        .find(|r| r.peer_id == pid)
+                        .map(|r| compute_priority(r, now_ms))
+                })
                 .unwrap_or(NO_RECORD_PRIORITY)
         };
         let mut sorted = candidates.to_vec();
@@ -243,12 +255,16 @@ mod tests {
     fn remember_seen_success_failure() {
         let mut storage = MemoryStorage::new();
         let mut store = PeerActivityStore::new(&mut storage);
-        store.remember_node_info(&info("p1", 1), NodeObservation::Seen, None, 100).unwrap();
+        store
+            .remember_node_info(&info("p1", 1), NodeObservation::Seen, None, 100)
+            .unwrap();
         let rec = store.get("p1").unwrap().unwrap();
         assert_eq!(rec.success_count, 0);
         assert_eq!(rec.last_seen_at, 100);
 
-        store.remember_node_info(&info("p1", 1), NodeObservation::Success, None, 200).unwrap();
+        store
+            .remember_node_info(&info("p1", 1), NodeObservation::Success, None, 200)
+            .unwrap();
         let rec = store.get("p1").unwrap().unwrap();
         assert_eq!(rec.success_count, 1);
         assert_eq!(rec.last_connected_at, Some(200));
@@ -272,8 +288,13 @@ mod tests {
         legacy.failure_count = 3;
         legacy.consecutive_failure_count = None;
         store.save(&legacy).unwrap();
-        store.remember_node_info(&info("p1", 1), NodeObservation::Failure, None, 100).unwrap();
-        assert_eq!(store.get("p1").unwrap().unwrap().consecutive_failure_count, Some(4));
+        store
+            .remember_node_info(&info("p1", 1), NodeObservation::Failure, None, 100)
+            .unwrap();
+        assert_eq!(
+            store.get("p1").unwrap().unwrap().consecutive_failure_count,
+            Some(4)
+        );
     }
 
     #[test]
@@ -296,7 +317,9 @@ mod tests {
     fn no_purge_when_previously_active() {
         let mut storage = MemoryStorage::new();
         let mut store = PeerActivityStore::new(&mut storage);
-        store.remember_node_info(&info("p1", 1), NodeObservation::Success, None, 1).unwrap();
+        store
+            .remember_node_info(&info("p1", 1), NodeObservation::Success, None, 1)
+            .unwrap();
         store.mark_connected("p1", 2).unwrap();
         store.mark_disconnected("p1", 100).unwrap();
         for i in 0..10 {
@@ -339,10 +362,16 @@ mod tests {
     fn sort_candidates() {
         let mut storage = MemoryStorage::new();
         let mut store = PeerActivityStore::new(&mut storage);
-        store.remember_node_info(&info("good", 1), NodeObservation::Success, None, 1000).unwrap();
-        store.remember_node_info(&info("bad", 2), NodeObservation::Failure, None, 1000).unwrap();
+        store
+            .remember_node_info(&info("good", 1), NodeObservation::Success, None, 1000)
+            .unwrap();
+        store
+            .remember_node_info(&info("bad", 2), NodeObservation::Failure, None, 1000)
+            .unwrap();
         let candidates = vec![info("unknown", 3), info("bad", 2), info("good", 1)];
-        let sorted = store.sort_candidates_by_priority(&candidates, 1000).unwrap();
+        let sorted = store
+            .sort_candidates_by_priority(&candidates, 1000)
+            .unwrap();
         let order: Vec<String> = sorted.iter().filter_map(|c| c.peer_id.clone()).collect();
         assert_eq!(order, vec!["good", "bad", "unknown"]);
     }

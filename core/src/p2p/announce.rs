@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::constants::{
-    MAX_ANNOUNCE_ADDRESSES, MAX_ANNOUNCE_ADDRESS_LENGTH, NODE_ANNOUNCE_ACCEPT_MIN_INTERVAL_MS,
+    MAX_ANNOUNCE_ADDRESS_LENGTH, MAX_ANNOUNCE_ADDRESSES, NODE_ANNOUNCE_ACCEPT_MIN_INTERVAL_MS,
     NODE_ANNOUNCE_ACCEPT_MIN_INTERVAL_ON_CHANGE_MS, NODE_ANNOUNCE_MAX_AGE_MS,
 };
 
@@ -40,7 +40,10 @@ pub fn build_node_announce_payload(
     timestamp_ms: i64,
 ) -> String {
     let mut map = Map::new();
-    map.insert("type".to_string(), Value::String("spark-node-announce".to_string()));
+    map.insert(
+        "type".to_string(),
+        Value::String("spark-node-announce".to_string()),
+    );
     map.insert("version".to_string(), Value::Number(1.into()));
     map.insert("peerId".to_string(), Value::String(peer_id.to_string()));
     map.insert(
@@ -78,21 +81,43 @@ pub fn prepare_publish_addresses(addresses: &[String]) -> Option<Vec<String>> {
         .take(MAX_ANNOUNCE_ADDRESSES)
         .cloned()
         .collect();
-    if filtered.is_empty() { None } else { Some(filtered) }
+    if filtered.is_empty() {
+        None
+    } else {
+        Some(filtered)
+    }
 }
 
 /// 完整 announce 的紧凑 JSON（发布字节）。
 pub fn announce_to_json(announce: &NodeAnnounce) -> String {
     let mut map = Map::new();
     map.insert("type".to_string(), Value::String(announce.msg_type.clone()));
-    map.insert("version".to_string(), Value::Number(announce.version.into()));
-    map.insert("peerId".to_string(), Value::String(announce.peer_id.clone()));
+    map.insert(
+        "version".to_string(),
+        Value::Number(announce.version.into()),
+    );
+    map.insert(
+        "peerId".to_string(),
+        Value::String(announce.peer_id.clone()),
+    );
     map.insert(
         "addresses".to_string(),
-        Value::Array(announce.addresses.iter().map(|a| Value::String(a.clone())).collect()),
+        Value::Array(
+            announce
+                .addresses
+                .iter()
+                .map(|a| Value::String(a.clone()))
+                .collect(),
+        ),
     );
-    map.insert("timestamp".to_string(), Value::Number(announce.timestamp.into()));
-    map.insert("signature".to_string(), Value::String(announce.signature.clone()));
+    map.insert(
+        "timestamp".to_string(),
+        Value::Number(announce.timestamp.into()),
+    );
+    map.insert(
+        "signature".to_string(),
+        Value::String(announce.signature.clone()),
+    );
     serde_json::to_string(&Value::Object(map)).expect("announce is always serializable")
 }
 
@@ -149,6 +174,39 @@ fn read_unsigned_varint(bytes: &[u8]) -> Option<(u64, &[u8])> {
         }
     }
     None
+}
+
+/// 节点存在记录的 DHT key：sha256("spark:node:" + peerId) 的 hex 字符串。
+pub fn node_presence_record_key(peer_id: &str) -> String {
+    use sha2::Digest as _;
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(super::constants::DHT_NODE_RECORD_KEY_PREFIX.as_bytes());
+    hasher.update(peer_id.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+/// DHT 记录场景的结构 + 验签（不含新鲜度/限流：记录可能已重发多轮，
+/// 只要求"签名确为该 PeerId 持有者所签"，对应三层确认的第①层）。
+pub fn verify_announce_text(text: &str) -> Option<NodeAnnounce> {
+    let announce = parse_structure(text)?;
+    let raw_public = public_key_from_peer_id_str(&announce.peer_id)?;
+    let sig_bytes = B64.decode(&announce.signature).ok()?;
+    if sig_bytes.len() != 64 {
+        return None;
+    }
+    let mut sig_arr = [0u8; 64];
+    sig_arr.copy_from_slice(&sig_bytes);
+    let payload =
+        build_node_announce_payload(&announce.peer_id, &announce.addresses, announce.timestamp);
+    let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&raw_public).ok()?;
+    use ed25519_dalek::Verifier;
+    verifying_key
+        .verify(
+            payload.as_bytes(),
+            &ed25519_dalek::Signature::from_bytes(&sig_arr),
+        )
+        .ok()?;
+    Some(announce)
 }
 
 /// 结构校验（对齐 isNodeAnnounce，node-announce.ts:45-56）。
@@ -230,144 +288,41 @@ impl NodeAnnounceValidator {
         } else {
             NODE_ANNOUNCE_ACCEPT_MIN_INTERVAL_MS
         };
-        let last = self.last_accepted_at.get(&announce.peer_id).copied().unwrap_or(0);
+        let last = self
+            .last_accepted_at
+            .get(&announce.peer_id)
+            .copied()
+            .unwrap_or(0);
         if now_ms - last < min_interval {
             return Err(AnnounceReject::RateLimited);
         }
         // TS 口径：限流检查通过即消耗配额（node-announce.ts:180），先于验签
-        self.last_accepted_at.insert(announce.peer_id.clone(), now_ms);
+        self.last_accepted_at
+            .insert(announce.peer_id.clone(), now_ms);
 
         // 验签：peerId 内嵌公钥 + 固定键序载荷
-        let raw_public = public_key_from_peer_id_str(&announce.peer_id)
-            .ok_or(AnnounceReject::BadSignature)?;
-        let sig_bytes = B64.decode(&announce.signature).map_err(|_| AnnounceReject::BadSignature)?;
+        let raw_public =
+            public_key_from_peer_id_str(&announce.peer_id).ok_or(AnnounceReject::BadSignature)?;
+        let sig_bytes = B64
+            .decode(&announce.signature)
+            .map_err(|_| AnnounceReject::BadSignature)?;
         if sig_bytes.len() != 64 {
             return Err(AnnounceReject::BadSignature);
         }
         let mut sig_arr = [0u8; 64];
         sig_arr.copy_from_slice(&sig_bytes);
-        let payload = build_node_announce_payload(
-            &announce.peer_id,
-            &announce.addresses,
-            announce.timestamp,
-        );
+        let payload =
+            build_node_announce_payload(&announce.peer_id, &announce.addresses, announce.timestamp);
         let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&raw_public)
             .map_err(|_| AnnounceReject::BadSignature)?;
         use ed25519_dalek::Verifier;
         verifying_key
-            .verify(payload.as_bytes(), &ed25519_dalek::Signature::from_bytes(&sig_arr))
+            .verify(
+                payload.as_bytes(),
+                &ed25519_dalek::Signature::from_bytes(&sig_arr),
+            )
             .map_err(|_| AnnounceReject::BadSignature)?;
 
         Ok(announce)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn make_keypair() -> Keypair {
-        Keypair::generate_ed25519()
-    }
-
-    #[test]
-    fn payload_fixed_key_order() {
-        let payload = build_node_announce_payload(
-            "12D3KooWTest",
-            &["/ip4/1.2.3.4/tcp/15002/ws".to_string()],
-            1_720_000_000_000,
-        );
-        assert_eq!(
-            payload,
-            "{\"type\":\"spark-node-announce\",\"version\":1,\"peerId\":\"12D3KooWTest\",\"addresses\":[\"/ip4/1.2.3.4/tcp/15002/ws\"],\"timestamp\":1720000000000}"
-        );
-    }
-
-    #[test]
-    fn sign_and_accept_roundtrip() {
-        let keypair = make_keypair();
-        let peer_id = libp2p::PeerId::from_public_key(&keypair.public()).to_base58();
-        let addrs = vec!["/ip4/127.0.0.1/tcp/15002/ws".to_string()];
-        let announce = sign_node_announce(&keypair, &peer_id, &addrs, 1_000_000).unwrap();
-        let text = announce_to_json(&announce);
-
-        let mut validator = NodeAnnounceValidator::new();
-        let accepted = validator
-            .validate(&text, "12D3KooWSelfSelfSelf", &[], 1_000_000)
-            .expect("must accept");
-        assert_eq!(accepted.peer_id, peer_id);
-        assert_eq!(accepted.addresses, addrs);
-    }
-
-    #[test]
-    fn peer_id_pubkey_extraction_roundtrip() {
-        let keypair = make_keypair();
-        let peer_id = libp2p::PeerId::from_public_key(&keypair.public());
-        let raw = public_key_from_peer_id_str(&peer_id.to_base58()).expect("extractable");
-        let expect = keypair.public().try_into_ed25519().unwrap().to_bytes();
-        assert_eq!(raw, expect);
-    }
-
-    #[test]
-    fn reject_chain() {
-        let keypair = make_keypair();
-        let peer_id = libp2p::PeerId::from_public_key(&keypair.public()).to_base58();
-        let addrs = vec!["/ip4/127.0.0.1/tcp/15002/ws".to_string()];
-        let now = 1_000_000i64;
-
-        // 过期
-        let stale = sign_node_announce(&keypair, &peer_id, &addrs, now - NODE_ANNOUNCE_MAX_AGE_MS - 1).unwrap();
-        let mut v = NodeAnnounceValidator::new();
-        assert_eq!(
-            v.validate(&announce_to_json(&stale), "self", &[], now),
-            Err(AnnounceReject::Stale)
-        );
-
-        // 未来 10 min 内可接受（Math.abs 口径）
-        let future = sign_node_announce(&keypair, &peer_id, &addrs, now + NODE_ANNOUNCE_MAX_AGE_MS).unwrap();
-        assert!(v.validate(&announce_to_json(&future), "self", &[], now).is_ok());
-
-        // 本机
-        let fresh = sign_node_announce(&keypair, &peer_id, &addrs, now).unwrap();
-        let mut v = NodeAnnounceValidator::new();
-        assert_eq!(
-            v.validate(&announce_to_json(&fresh), &peer_id, &[], now),
-            Err(AnnounceReject::SelfPeer)
-        );
-
-        // 篡改签名
-        let mut tampered = fresh.clone();
-        tampered.timestamp = now + 1;
-        let mut v = NodeAnnounceValidator::new();
-        assert_eq!(
-            v.validate(&announce_to_json(&tampered), "self", &[], now),
-            Err(AnnounceReject::BadSignature)
-        );
-
-        // 限流：同一 peerId 60s 内第二次（无新地址）被拒
-        let mut v = NodeAnnounceValidator::new();
-        assert!(v.validate(&announce_to_json(&fresh), "self", &[], now).is_ok());
-        assert_eq!(
-            v.validate(&announce_to_json(&fresh), "self", &addrs, now + 10_000),
-            Err(AnnounceReject::RateLimited)
-        );
-        // 携带新地址放宽到 5s
-        let new_addrs = vec!["/ip4/10.0.0.9/tcp/15002/ws".to_string()];
-        let changed = sign_node_announce(&keypair, &peer_id, &new_addrs, now + 6_000).unwrap();
-        assert!(
-            v.validate(&announce_to_json(&changed), "self", &addrs, now + 6_000)
-                .is_ok()
-        );
-
-        // 空地址
-        let empty = NodeAnnounce {
-            addresses: vec![],
-            ..fresh.clone()
-        };
-        let mut v = NodeAnnounceValidator::new();
-        assert_eq!(
-            v.validate(&announce_to_json(&empty), "self", &[], now),
-            Err(AnnounceReject::AddressLimits)
-        );
     }
 }

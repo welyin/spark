@@ -85,6 +85,10 @@ pub const RECOVERY_COOLDOWN_MS: i64 = 10 * 60_000;
 /// 触发恢复查询前，组织侧"全员失联"需持续的 tick 数。
 pub const RECOVERY_TRIGGER_CONSECUTIVE_TICKS: u32 = 3;
 
+/// 「恢复中」状态的限时显示窗口（与冷却同周期：每轮恢复查询会刷新
+/// `last_query_at`；超过一个周期未再发起查询，视为自动恢复无果转 failed）。
+pub const RECOVERY_SEARCH_DISPLAY_MS: i64 = RECOVERY_COOLDOWN_MS;
+
 /// 单次恢复查询请求的成员条目上限。
 pub const RECOVERY_QUERY_WANT: usize = 8;
 
@@ -117,6 +121,36 @@ pub const ORG_RECOVERY_READ_TIMEOUT_MS: u64 = 3_000;
 
 /// 直连协议读超时：org-share / org-pull（4000ms）。
 pub const ORG_SHARE_READ_TIMEOUT_MS: u64 = 4_000;
+
+/// Kad（Kademlia DHT）协议名。
+pub const KAD_PROTOCOL_NAME: &str = "/spark/kad/1.0.0";
+
+/// DHT 记录 TTL（8 小时；本地周期重发保活）。
+pub const DHT_RECORD_TTL_SECS: u64 = 8 * 60 * 60;
+
+/// 节点存在记录重发间隔：keepalive tick（60s）计数，每 240 tick ≈ 4 小时重发一次。
+pub const DHT_REPUBLISH_TICKS: u64 = 240;
+
+/// DHT 路由表目标规模参考（5–10，预留：后续用于健康度判定）。
+pub const DHT_MIN_PEERS: usize = 5;
+
+/// 节点存在记录的 DHT key 前缀（key = sha256 前缀 + peerId 的 hex，见 announce.rs）。
+pub const DHT_NODE_RECORD_KEY_PREFIX: &str = "spark:node:";
+
+/// node-challenge 直连协议名。
+pub const NODE_CHALLENGE_PROTOCOL: &str = "/spark/node-challenge/1.0.0";
+
+/// 直连协议读超时：node-challenge（3000ms）。
+pub const NODE_CHALLENGE_READ_TIMEOUT_MS: u64 = 3_000;
+
+/// challenge 回执时间戳新鲜度窗口（±60s）。
+pub const CHALLENGE_MAX_AGE_MS: i64 = 60_000;
+
+/// challenge 应答侧限流：同一请求方两次服务的最小间隔（2s）。
+pub const CHALLENGE_MIN_INTERVAL_MS: i64 = 2_000;
+
+/// DHT 模式配置的存储键（值 = off/client/server，缺省 server）。
+pub const P2P_DHT_MODE_KEY: &str = "p2p:dht:mode";
 
 /// relay server 预约参数（对齐 TS circuitRelayServer 配置）。
 pub const RELAY_MAX_RESERVATIONS: usize = 15;

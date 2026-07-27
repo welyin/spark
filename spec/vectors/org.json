@@ -1,13 +1,14 @@
 {
   "meta": {
     "title": "org golden vectors（org.md / p2p-messages.md §8.1）",
-    "generatedBy": "desktop/scripts/extract-org-vectors.mts（一次性运行，见脚本头注释）",
-    "source": "desktop/src/main/organization/{invite,node-info-claim,sync}.ts, p2p/org-recovery.ts, identity/root-id.ts",
+    "generatedBy": "nodeInfoClaim/invite/recoveryToken/sync 节：desktop/scripts/extract-org-vectors.mts（一次性运行，见脚本头注释）；orgAddressRecord/nodeCard 节：core/examples/extract_{org_address,node_card}_vectors.rs；orgSecretKey 节：按 §15 公式直接计算",
+    "source": "nodeInfoClaim/invite/recoveryToken/sync 节：desktop/src/main/organization/{invite,node-info-claim,sync}.ts, p2p/org-recovery.ts, identity/root-id.ts（TS 真实实现提取）；orgAddressRecord/nodeCard/orgSecretKey 节：Rust 实现自提取（core/src/org/{org_address,node_card}.rs 等，TS 侧尚无对应实现）",
     "deterministic": "所有随机值与时间戳硬编码；Date.now 在解码/合并期间打桩为 NOW=1720000000000",
     "crossChecks": [
       "nodeInfoClaim：真实 RootIdentityManager.recover 中文 mnemonic → signWithRootIdentity 签名 → 真实 verifyNodeInfoClaim 判定 ok（负例 reason 一并记录）",
       "邀请码：真实 encodeOrgInvite/decodeOrgInvite 往返；过期/格式错误消息来自真实抛错",
-      "recovery token / stale / buildSnapshot / merge：全部直接调用真实导出函数"
+      "recovery token / stale / buildSnapshot / merge：全部直接调用真实导出函数",
+      "orgAddressRecord / nodeCard / orgSecretKey：Rust 自提取，自参考、未经 TS 交叉验证（待 TS 侧实现落地后复核）"
     ]
   },
   "constants": {
@@ -17,6 +18,137 @@
     "recoveryTimeBucketMs": 600000,
     "orgReplicaTarget": 3,
     "orgReplicaFreshWindowMs": 2592000000
+  },
+  "orgAddressRecord": {
+    "seedHex": "0707070707070707070707070707070707070707070707070707070707070707",
+    "nowMs": 1720000000000,
+    "cases": [
+      {
+        "name": "with-display-name",
+        "record": {
+          "orgAddress": "72asyextvngonlc5w2nmguxza3frweppip5thyss5577kurghceu47a",
+          "orgId": "org_0123456789abcdef",
+          "orgPublicKey": "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=",
+          "displayName": "星火公开组织",
+          "gateways": [
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          ],
+          "seq": 1,
+          "publishedAt": 1720000000000,
+          "ttl": 86400000,
+          "signature": "mh8a1HuOHoq5LM9GJuDO1rkBuEMVEjt/wbT7y2k1k2SA48hd5MCvWDi/ihBNbLq10yh4scK6JWLV7zuQylySCw=="
+        },
+        "payload": "{\"orgAddress\":\"72asyextvngonlc5w2nmguxza3frweppip5thyss5577kurghceu47a\",\"orgId\":\"org_0123456789abcdef\",\"orgPublicKey\":\"6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=\",\"displayName\":\"星火公开组织\",\"gateways\":[\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"],\"seq\":1,\"publishedAt\":1720000000000,\"ttl\":86400000}",
+        "verify": {
+          "ok": true
+        },
+        "verifyTampered": {
+          "ok": false,
+          "reason": "invalid-signature"
+        },
+        "verifyExpired": {
+          "ok": false,
+          "reason": "ttl-window"
+        }
+      },
+      {
+        "name": "without-display-name",
+        "record": {
+          "orgAddress": "72asyextvngonlc5w2nmguxza3frweppip5thyss5577kurghceu47a",
+          "orgId": "org_0123456789abcdef",
+          "orgPublicKey": "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=",
+          "gateways": [
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          ],
+          "seq": 1,
+          "publishedAt": 1720000000000,
+          "ttl": 86400000,
+          "signature": "2JP9qV/4pqqNWYEs8NSD+BCYk/3xgTjz6/guQZQepI4gO8BZ1QDgVLwSCYOpqIRf6wJLZzS3koU7ngul3/XZDw=="
+        },
+        "payload": "{\"orgAddress\":\"72asyextvngonlc5w2nmguxza3frweppip5thyss5577kurghceu47a\",\"orgId\":\"org_0123456789abcdef\",\"orgPublicKey\":\"6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=\",\"displayName\":null,\"gateways\":[\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"],\"seq\":1,\"publishedAt\":1720000000000,\"ttl\":86400000}",
+        "verify": {
+          "ok": true
+        },
+        "verifyTampered": {
+          "ok": false,
+          "reason": "invalid-signature"
+        },
+        "verifyExpired": {
+          "ok": false,
+          "reason": "ttl-window"
+        }
+      }
+    ]
+  },
+  "nodeCard": {
+    "seedHex": "0808080808080808080808080808080808080808080808080808080808080808",
+    "nowMs": 1720000000000,
+    "peerId": "12D3KooWB8sCGZCrwr79HtabLAn95qyPQx6RYHXjEbiD6QKou7ww",
+    "cases": [
+      {
+        "name": "with-recovery-token",
+        "card": {
+          "type": "spark-node-card",
+          "version": 1,
+          "peerId": "12D3KooWB8sCGZCrwr79HtabLAn95qyPQx6RYHXjEbiD6QKou7ww",
+          "addresses": [
+            "/ip4/127.0.0.1/tcp/15002/ws"
+          ],
+          "timestamp": 1720000000000,
+          "recoveryToken": "0bfef5aa98859edef54c1c58c263092bbc2e769fe6f5cc128d509cede4a7f7a5",
+          "signature": "k9XDtAlK4ds4a4Nii1h43FcTXvTUtRDG219WBaZd8GC03Mb2SSHwOwGQDFL8Ff/xn8/UWYLlEZpfo8KUPVyEDQ=="
+        },
+        "code": "eyJ0eXBlIjoic3Bhcmstbm9kZS1jYXJkIiwidmVyc2lvbiI6MSwicGVlcklkIjoiMTJEM0tvb1dCOHNDR1pDcndyNzlIdGFiTEFuOTVxeVBReDZSWUhYakViaUQ2UUtvdTd3dyIsImFkZHJlc3NlcyI6WyIvaXA0LzEyNy4wLjAuMS90Y3AvMTUwMDIvd3MiXSwidGltZXN0YW1wIjoxNzIwMDAwMDAwMDAwLCJyZWNvdmVyeVRva2VuIjoiMGJmZWY1YWE5ODg1OWVkZWY1NGMxYzU4YzI2MzA5MmJiYzJlNzY5ZmU2ZjVjYzEyOGQ1MDljZWRlNGE3ZjdhNSIsInNpZ25hdHVyZSI6Ims5WER0QWxLNGRzNGE0TmlpMWg0M0ZjVFh2VFV0UkRHMjE5V0JhWmQ4R0MwM01iMlNTSHdPd0dRREZMOEZmL3huOC9VV1lMbEVacGZvOEtVUFZ5RURRPT0ifQ",
+        "payload": "{\"type\":\"spark-node-card\",\"version\":1,\"peerId\":\"12D3KooWB8sCGZCrwr79HtabLAn95qyPQx6RYHXjEbiD6QKou7ww\",\"addresses\":[\"/ip4/127.0.0.1/tcp/15002/ws\"],\"timestamp\":1720000000000,\"recoveryToken\":\"0bfef5aa98859edef54c1c58c263092bbc2e769fe6f5cc128d509cede4a7f7a5\"}",
+        "verify": {
+          "ok": true
+        },
+        "verifyStale": {
+          "ok": false,
+          "reason": "stale"
+        },
+        "verifyTampered": {
+          "ok": false,
+          "reason": "invalid-signature"
+        },
+        "verifyBadToken": {
+          "ok": false,
+          "reason": "bad-recovery-token"
+        }
+      },
+      {
+        "name": "without-recovery-token",
+        "card": {
+          "type": "spark-node-card",
+          "version": 1,
+          "peerId": "12D3KooWB8sCGZCrwr79HtabLAn95qyPQx6RYHXjEbiD6QKou7ww",
+          "addresses": [
+            "/ip4/127.0.0.1/tcp/15002/ws"
+          ],
+          "timestamp": 1720000000000,
+          "signature": "B+ksTpS/b7XI0TZEU0u26xV+AT/PTRmb/qdG01OmuWmtB7jdpXepI6EZoTZH9ybsDczN5aOt6+C/I2nGmSxoAQ=="
+        },
+        "code": "eyJ0eXBlIjoic3Bhcmstbm9kZS1jYXJkIiwidmVyc2lvbiI6MSwicGVlcklkIjoiMTJEM0tvb1dCOHNDR1pDcndyNzlIdGFiTEFuOTVxeVBReDZSWUhYakViaUQ2UUtvdTd3dyIsImFkZHJlc3NlcyI6WyIvaXA0LzEyNy4wLjAuMS90Y3AvMTUwMDIvd3MiXSwidGltZXN0YW1wIjoxNzIwMDAwMDAwMDAwLCJzaWduYXR1cmUiOiJCK2tzVHBTL2I3WEkwVFpFVTB1MjZ4VitBVC9QVFJtYi9xZEcwMU9tdVdtdEI3amRwWGVwSTZFWm9UWkg5eWJzRGN6TjVhT3Q2K0MvSTJuR21TeG9BUT09In0",
+        "payload": "{\"type\":\"spark-node-card\",\"version\":1,\"peerId\":\"12D3KooWB8sCGZCrwr79HtabLAn95qyPQx6RYHXjEbiD6QKou7ww\",\"addresses\":[\"/ip4/127.0.0.1/tcp/15002/ws\"],\"timestamp\":1720000000000,\"recoveryToken\":null}",
+        "verify": {
+          "ok": true
+        },
+        "verifyStale": {
+          "ok": false,
+          "reason": "stale"
+        },
+        "verifyTampered": {
+          "ok": false,
+          "reason": "invalid-signature"
+        },
+        "verifyBadToken": {
+          "ok": false,
+          "reason": "bad-recovery-token"
+        }
+      }
+    ]
   },
   "nodeInfoClaim": {
     "mnemonic": "与 祝 产 鸡 永 烂 施 师 蓝 荷 有 邓 朗 防 管 李 原 芳 饿 万 措 走 腰 旅",
@@ -573,5 +705,26 @@
       "memberDetailsVersion": 1700000001000,
       "transactionsVersion": 1700000000800
     }
+  },
+  "orgSecretKey": {
+    "spec": "wiki/protocol/p2p-messages.md §15、org.md §13",
+    "formula": "key = sha256hex(orgSecret + \":members\")（输入为拼接字符串的 UTF-8）",
+    "cases": [
+      {
+        "name": "zero-secret",
+        "orgSecret": "0000000000000000000000000000000000000000000000000000000000000000",
+        "key": "616a1b869c4380200bdfb31bb34545aab3bd751bf2c99b761cfae4e47b0f8830"
+      },
+      {
+        "name": "ab-secret",
+        "orgSecret": "abababababababababababababababababababababababababababababababab",
+        "key": "d33776dc52123760e40d53f53f12cf3a5aeca290973b278248b957119606affa"
+      },
+      {
+        "name": "random-secret",
+        "orgSecret": "9f3c1a7e52d84b06c1f9e2a4d6b870153f0e9d8c7b6a594837261504f3e2d1c0b",
+        "key": "e68f6bf38c29a4752c901fbc05106883ec6f60f6dc49c32edf399e2a8ede0c9c"
+      }
+    ]
   }
 }

@@ -61,9 +61,7 @@ impl StorageBackend for SledStorage {
             .get(key.as_bytes())
             .map_err(|e| backend_err("get", e))?;
         value
-            .map(|v| {
-                String::from_utf8(v.to_vec()).map_err(|e| backend_err("get utf8", e))
-            })
+            .map(|v| String::from_utf8(v.to_vec()).map_err(|e| backend_err("get utf8", e)))
             .transpose()
     }
 
@@ -105,12 +103,13 @@ impl StorageBackend for SledStorage {
         let range = self
             .db
             .range((Bound::Included(start), Bound::Excluded(end)));
-        let iter: Box<dyn Iterator<Item = std::result::Result<(sled::IVec, sled::IVec), sled::Error>>> =
-            if options.reverse {
-                Box::new(range.rev())
-            } else {
-                Box::new(range)
-            };
+        let iter: Box<
+            dyn Iterator<Item = std::result::Result<(sled::IVec, sled::IVec), sled::Error>>,
+        > = if options.reverse {
+            Box::new(range.rev())
+        } else {
+            Box::new(range)
+        };
         let mut items = Vec::new();
         for item in iter.take(options.limit.unwrap_or(usize::MAX)) {
             let (k, v) = item.map_err(|e| backend_err("scan", e))?;
@@ -149,10 +148,7 @@ mod tests {
         }
         let s = SledStorage::open(dir.path()).unwrap();
         assert_eq!(s.get("doc:a:1").unwrap(), Some("v1".to_string()));
-        assert_eq!(
-            s.scan(&ScanOptions::prefix("doc:a:")).unwrap().len(),
-            2
-        );
+        assert_eq!(s.scan(&ScanOptions::prefix("doc:a:")).unwrap().len(), 2);
     }
 
     #[test]

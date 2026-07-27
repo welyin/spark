@@ -1,0 +1,139 @@
+//! 组织创建与删除（service.ts `createOrganization`/`deleteOrganization`）。
+//!
+//! 创建：创建者为唯一初始 admin，生成 orgId/recoverySecret/orgSecret/组织根
+//! 密钥对与 orgAddress（org.md §13/§15），追加 `create` 事务并落库。
+//! 删除：admin 校验 + `delete` 事务 + 删记录。
+
+use serde_json::Value;
+
+use crate::storage::StorageBackend;
+
+use super::super::snapshot::{build_organization_sync_versions, pick_sync_sections_by_priority};
+use super::super::tx::{
+    OrganizationTransactionRecord, OrganizationTransactionType, append_organization_transaction,
+};
+use super::super::types::{
+    OrganizationMember, OrganizationRecord, OrganizationRole, OrganizationSyncState,
+    generate_org_secret, generate_organization_id, generate_recovery_secret,
+    normalize_plugin_domain, normalize_text, organization_key,
+};
+use super::super::{Result, org_address};
+use super::{CreateOrganizationInput, OrganizationService};
+
+impl OrganizationService {
+    /// `createOrganization`（service.ts:110-150）：创建者为唯一初始 admin，
+    /// 生成 orgId/recoverySecret，追加 `create` 事务并落库。
+    pub fn create_organization<S: StorageBackend>(
+        storage: &mut S,
+        input: &CreateOrganizationInput,
+        current_root_id: &str,
+        now_ms: i64,
+    ) -> Result<OrganizationRecord> {
+        let name = normalize_text(&input.name, "Organization name")?;
+        let description = input
+            .description
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or("")
+            .to_string();
+        let base_plugin_domain = normalize_plugin_domain(&input.base_plugin_domain)?;
+
+        let mut record = OrganizationRecord {
+            org_id: generate_organization_id(),
+            name: name.clone(),
+            description: description.clone(),
+            base_plugin_domain: Some(base_plugin_domain.clone()),
+            created_at: now_ms,
+            created_by: current_root_id.to_string(),
+            updated_at: now_ms,
+            members: vec![OrganizationMember {
+                root_id: current_root_id.to_string(),
+                role: OrganizationRole::Admin,
+                joined_at: now_ms,
+                added_by: current_root_id.to_string(),
+                node_info: None,
+                extra: Default::default(),
+            }],
+            sync: None,
+            gateways: Vec::new(),
+            org_address: None,
+            is_public: false,
+            extra: Default::default(),
+        };
+        record.set_recovery_secret(generate_recovery_secret());
+        // orgSecret（org.md §13）：创建时生成，经 extra 动态键随快照在成员间流动
+        record.set_org_secret(generate_org_secret());
+        // 组织根密钥对与 orgAddress（org.md §15）：创建时生成独立 Ed25519 密钥对，
+        // orgAddress 落记录（保留键）；根私钥加密存 extra（不进快照、不同步出本机）
+        let org_root_key = org_address::generate_org_root_signing_key();
+        record.org_address = Some(org_address::org_address_from_public_key(
+            &org_root_key.verifying_key().to_bytes(),
+        ));
+        record.set_org_root_secret(org_address::seal_org_root_secret(
+            &org_root_key,
+            record.org_secret().expect("orgSecret just set"),
+        ));
+
+        let transaction = append_organization_transaction(
+            storage,
+            OrganizationTransactionRecord {
+                tx_id: String::new(),
+                org_id: record.org_id.clone(),
+                type_: OrganizationTransactionType::Create,
+                created_at: now_ms,
+                actor_root_id: current_root_id.to_string(),
+                target_root_id: None,
+                summary: format!("创建组织 {name}"),
+                payload: Some(
+                    [
+                        ("name".to_string(), Value::from(name)),
+                        ("description".to_string(), Value::from(description)),
+                        (
+                            "basePluginDomain".to_string(),
+                            Value::from(base_plugin_domain),
+                        ),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+            },
+        )?;
+        record.sync = Some(OrganizationSyncState {
+            versions: build_organization_sync_versions(&record, transaction.created_at),
+            sections: pick_sync_sections_by_priority(),
+            last_synced_at: 0,
+        });
+        Self::save_record(storage, &record)?;
+        Ok(record)
+    }
+
+    /// `deleteOrganization`（service.ts:199-214）：admin 校验 + `delete` 事务 + 删记录。
+    pub fn delete_organization<S: StorageBackend>(
+        storage: &mut S,
+        org_id: &str,
+        current_root_id: &str,
+        now_ms: i64,
+    ) -> Result<()> {
+        let record = Self::require_organization(storage, org_id)?;
+        Self::require_admin(&record, current_root_id)?;
+        append_organization_transaction(
+            storage,
+            OrganizationTransactionRecord {
+                tx_id: String::new(),
+                org_id: org_id.to_string(),
+                type_: OrganizationTransactionType::Delete,
+                created_at: now_ms,
+                actor_root_id: current_root_id.to_string(),
+                target_root_id: None,
+                summary: format!("删除组织 {}", record.name),
+                payload: Some(
+                    [("orgId".to_string(), Value::from(org_id))]
+                        .into_iter()
+                        .collect(),
+                ),
+            },
+        )?;
+        storage.delete(&organization_key(org_id))?;
+        Ok(())
+    }
+}

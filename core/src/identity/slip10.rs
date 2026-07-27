@@ -50,7 +50,9 @@ impl Slip10Node {
 
     /// 沿索引序列逐层强化派生。
     pub fn derive_path(&self, indices: &[u32]) -> Self {
-        indices.iter().fold(self.clone(), |node, &idx| node.derive_child(idx))
+        indices
+            .iter()
+            .fold(self.clone(), |node, &idx| node.derive_child(idx))
     }
 
     fn from_i(i: &[u8; 64]) -> Self {
@@ -90,24 +92,4 @@ pub fn format_derivation_path(indices: &[u32]) -> String {
         s.push_str(&format!("/{idx}'"));
     }
     s
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn path_roundtrip() {
-        let path = "m/44'/607'/0'/0'/0'";
-        let indices = parse_derivation_path(path).unwrap();
-        assert_eq!(indices, vec![44, 607, 0, 0, 0]);
-        assert_eq!(format_derivation_path(&indices), path);
-    }
-
-    #[test]
-    fn rejects_non_hardened() {
-        assert!(parse_derivation_path("m/44'/607'/0").is_err());
-        assert!(parse_derivation_path("m/44'/x'/0'").is_err());
-        assert!(parse_derivation_path("m/").is_err());
-    }
 }

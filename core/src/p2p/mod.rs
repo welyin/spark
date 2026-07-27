@@ -9,6 +9,7 @@
 
 pub mod announce;
 pub mod behaviour;
+pub mod challenge;
 pub mod constants;
 pub mod direct;
 pub mod envelope;
@@ -23,15 +24,17 @@ pub mod peer_targets;
 
 pub use announce::{
     AnnounceReject, NodeAnnounce, NodeAnnounceValidator, announce_to_json,
-    build_node_announce_payload, prepare_publish_addresses, public_key_from_peer_id_str,
-    sign_node_announce,
+    build_node_announce_payload, node_presence_record_key, prepare_publish_addresses,
+    public_key_from_peer_id_str, sign_node_announce, verify_announce_text,
 };
+pub use behaviour::DhtMode;
 pub use envelope::{
     ENVELOPE_VERSION, Envelope, EnvelopeSigner, VerifiedEnvelope, build_delete_body,
     build_org_body, build_update_body, decode_envelope_public_key, is_signature_mandatory_type,
     parse_and_verify_envelope, spki_der_base64, spki_der_from_raw, spki_der_pem,
 };
 pub use host::{OrgShareAck, P2pHost};
+pub use keepalive::RecoveryState;
 pub use node::{KeepaliveStats, LocalP2PNodeInfo, P2pConfig, P2pEvent, P2pNode};
 pub use overlay_store::{OverlayPeerRecord, OverlayPeerSource, OverlayPeerStore};
 pub use peer_activity::{

@@ -31,6 +31,9 @@
   --spark-rail-item-hover: rgba(255, 255, 255, 0.06);
   --spark-rail-item-active: rgba(255, 255, 255, 0.1);
 
+  /* 顶栏（常驻网络状态） */
+  --spark-topbar-height: 44px;
+
   /* 圆角 */
   --spark-radius-s: 4px;
   --spark-radius-m: 6px;

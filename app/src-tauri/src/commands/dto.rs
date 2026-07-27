@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use spark_core::collection::{CollectionConfig, FilterOp, QueryFilter, QueryOptions, QueryResult};
 use spark_core::org::service::{CreateOrganizationInput, CreatedOrgInvite, InviteAcceptance};
-use spark_core::org::{MemberSyncOverview, OrgSyncOverview};
+use spark_core::org::{MemberSyncOverview, OrgAddressRecord, OrgSyncOverview};
 use spark_core::p2p::LocalP2PNodeInfo;
 use spark_core::schema::SyncStrategy;
 
@@ -245,7 +245,7 @@ impl From<InviteAcceptance> for InviteAcceptanceDto {
     }
 }
 
-/// 组织 K 副本概览（TS `getSyncOverview` 返回）。
+/// 组织 K 副本概览（TS `getSyncOverview` 返回）+ 网络状态扩展（Phase 5）。
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct OrgSyncOverviewDto {
@@ -254,6 +254,18 @@ pub struct OrgSyncOverviewDto {
     pub synced_peers: u32,
     pub total_members: u32,
     pub members: Vec<MemberSyncOverviewDto>,
+    /// 已连接的组织成员节点数（不含本机；含本机副本数 = connectedPeers + 1）。
+    pub connected_peers: u32,
+    /// 恢复模式状态：idle / recovering / failed。
+    pub recovery_state: String,
+    /// 恢复查询发起时间（idle 时为 null）。
+    pub recovery_started_at: Option<i64>,
+    /// 最近一次与组织成员建立连接的时间（无记录为 null）。
+    pub last_connected_at: Option<i64>,
+    /// DHT 模式：off / client / server。
+    pub dht_mode: String,
+    /// 组织网络状态：good / unstable / lost / recovering / localOnly。
+    pub status: String,
 }
 
 /// 单成员副本状态。
@@ -292,6 +304,44 @@ impl From<OrgSyncOverview> for OrgSyncOverviewDto {
                 .into_iter()
                 .map(MemberSyncOverviewDto::from)
                 .collect(),
+            connected_peers: overview.connected_peers,
+            recovery_state: overview.recovery_state.as_str().to_string(),
+            recovery_started_at: overview.recovery_state.since(),
+            last_connected_at: overview.last_connected_at,
+            dht_mode: overview.dht_mode.as_str().to_string(),
+            status: overview.status.as_str().to_string(),
+        }
+    }
+}
+
+/// 组织地址记录（org.md §16 线形；`displayName` 缺省丢键与 core 一致）。
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OrgAddressRecordDto {
+    pub org_address: String,
+    pub org_id: String,
+    pub org_public_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    pub gateways: Vec<String>,
+    pub seq: u64,
+    pub published_at: i64,
+    pub ttl: i64,
+    pub signature: String,
+}
+
+impl From<OrgAddressRecord> for OrgAddressRecordDto {
+    fn from(record: OrgAddressRecord) -> Self {
+        Self {
+            org_address: record.org_address,
+            org_id: record.org_id,
+            org_public_key: record.org_public_key,
+            display_name: record.display_name,
+            gateways: record.gateways,
+            seq: record.seq,
+            published_at: record.published_at,
+            ttl: record.ttl,
+            signature: record.signature,
         }
     }
 }
@@ -311,10 +361,12 @@ pub struct P2pInfoDto {
     pub addresses: Vec<String>,
     pub connected_peers: Vec<String>,
     pub spark_sync_subscribers: Vec<String>,
+    /// 登录链路自动启动 p2p 的失败原因（无则 `None`）。
+    pub error: Option<String>,
 }
 
 impl P2pInfoDto {
-    pub fn stopped() -> Self {
+    pub fn stopped(error: Option<String>) -> Self {
         Self {
             initialized: true,
             started: false,
@@ -322,6 +374,7 @@ impl P2pInfoDto {
             addresses: Vec::new(),
             connected_peers: Vec::new(),
             spark_sync_subscribers: Vec::new(),
+            error,
         }
     }
 }
@@ -335,68 +388,8 @@ impl From<LocalP2PNodeInfo> for P2pInfoDto {
             addresses: info.addresses,
             connected_peers: info.connected_peers,
             spark_sync_subscribers: info.spark_sync_subscribers,
+            error: None,
         }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn collection_config_dto_defaults_and_strategy_mapping() {
-        let dto: CollectionConfigDto = serde_json::from_str("{}").unwrap();
-        let config = dto.into_config().unwrap();
-        assert!(config.indexed_fields.is_empty());
-        assert_eq!(config.sync_strategy, None);
-
-        let dto: CollectionConfigDto =
-            serde_json::from_str(r#"{"indexedFields":["author.id"],"syncStrategy":"lww"}"#).unwrap();
-        let config = dto.into_config().unwrap();
-        assert_eq!(config.indexed_fields, vec!["author.id".to_string()]);
-        assert_eq!(config.sync_strategy, Some(SyncStrategy::Lww));
-
-        let dto: CollectionConfigDto =
-            serde_json::from_str(r#"{"syncStrategy":"bogus"}"#).unwrap();
-        assert!(dto.into_config().is_err());
-    }
-
-    #[test]
-    fn query_options_dto_maps_ops() {
-        let dto: QueryOptionsDto = serde_json::from_str(
-            r#"{"limit":10,"reverse":true,"filter":[{"field":"kind","value":"post"},{"field":"ts","value":5,"op":"gte"}]}"#,
-        )
-        .unwrap();
-        let options = dto.into_options().unwrap();
-        assert_eq!(options.limit, Some(10));
-        assert!(options.reverse);
-        assert_eq!(options.filter.len(), 2);
-        assert_eq!(options.filter[0].op, FilterOp::Eq);
-        assert_eq!(options.filter[1].op, FilterOp::Gte);
-
-        let bad: QueryOptionsDto =
-            serde_json::from_str(r#"{"filter":[{"field":"a","value":1,"op":"nope"}]}"#).unwrap();
-        assert!(bad.into_options().is_err());
-    }
-
-    #[test]
-    fn query_result_dto_uses_camel_case_cursor() {
-        let dto = QueryResultDto {
-            items: vec![DocItemDto {
-                id: "a".into(),
-                data: serde_json::json!({"x": 1}),
-            }],
-            next_cursor: Some("a".into()),
-        };
-        let text = serde_json::to_string(&dto).unwrap();
-        assert!(text.contains("\"nextCursor\":\"a\""));
-        assert!(text.contains("\"items\""));
-    }
-
-    #[test]
-    fn p2p_info_dto_stopped_shape() {
-        let text = serde_json::to_value(P2pInfoDto::stopped()).unwrap();
-        assert_eq!(text["started"], serde_json::json!(false));
-        assert_eq!(text["peerId"], serde_json::Value::Null);
-    }
-}

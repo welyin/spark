@@ -99,7 +99,9 @@ impl ScanOptions {
 
     /// 解析后的排他上界。
     pub fn resolved_end(&self) -> String {
-        self.end.clone().unwrap_or_else(|| prefix_range_end(&self.prefix))
+        self.end
+            .clone()
+            .unwrap_or_else(|| prefix_range_end(&self.prefix))
     }
 }
 
@@ -323,6 +325,9 @@ mod tests {
     fn prefix_range_end_uses_u10ffff() {
         let end = prefix_range_end("doc:");
         assert_eq!(end, "doc:\u{10FFFF}");
-        assert_eq!(end.as_bytes(), &[b'd', b'o', b'c', b':', 0xF4, 0x8F, 0xBF, 0xBF]);
+        assert_eq!(
+            end.as_bytes(),
+            &[b'd', b'o', b'c', b':', 0xF4, 0x8F, 0xBF, 0xBF]
+        );
     }
 }

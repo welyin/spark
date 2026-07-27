@@ -104,10 +104,9 @@ pub fn verify_ed25519_signature(
     signature_base64: &str,
     public_key_base64: &str,
 ) -> bool {
-    let (Ok(sig_bytes), Ok(pk_bytes)) = (
-        B64.decode(signature_base64),
-        B64.decode(public_key_base64),
-    ) else {
+    let (Ok(sig_bytes), Ok(pk_bytes)) =
+        (B64.decode(signature_base64), B64.decode(public_key_base64))
+    else {
         return false;
     };
     let (Ok(sig_arr), Ok(pk_arr)) = (

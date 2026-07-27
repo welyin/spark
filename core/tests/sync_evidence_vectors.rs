@@ -12,8 +12,8 @@ use std::collections::BTreeMap;
 use serde_json::Value;
 use spark_core::evidence::{
     EvidenceEntry, EvidenceOp, NewEvidenceEntry, append_evidence, build_evidence_data_hash,
-    build_evidence_entry_hash, build_evidence_meta_hash, build_evidence_payload_hash,
-    evidence_key, get_evidence_head, normalize_object, normalize_value, verify_evidence_chain,
+    build_evidence_entry_hash, build_evidence_meta_hash, build_evidence_payload_hash, evidence_key,
+    get_evidence_head, normalize_object, normalize_value, verify_evidence_chain,
 };
 use spark_core::schema::{
     CollectionSchemaDeclaration, DEFAULT_COLLECTION_POLICY, SyncStrategy, collection_schema_key,
@@ -26,7 +26,10 @@ use spark_core::sync::{
 };
 
 fn vectors() -> Value {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../spec/vectors/sync-evidence.json");
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../spec/vectors/sync-evidence.json"
+    );
     let raw = std::fs::read_to_string(path).expect("read sync-evidence vectors");
     serde_json::from_str(&raw).expect("parse sync-evidence vectors")
 }
@@ -54,7 +57,8 @@ fn payload_hash_cases() {
     for case in v["payloadHash"].as_array().unwrap() {
         let note = case["note"].as_str().unwrap_or("");
         // TS 对 null/undefined 短路返回 null；Rust 侧统一以 None 表达
-        let input: Option<&Value> = if case.get("inputKind").and_then(Value::as_str) == Some("undefined")
+        let input: Option<&Value> = if case.get("inputKind").and_then(Value::as_str)
+            == Some("undefined")
             || case["input"].is_null()
         {
             None
@@ -142,7 +146,10 @@ fn evidence_chain_cases() {
 
         // 存储键：doc:evidence:proof:{seq 左补零至 12 位}
         let seq = appended.seq;
-        assert_eq!(evidence_key(seq), chain["storageKeys"]["proofKeys"][i].as_str().unwrap());
+        assert_eq!(
+            evidence_key(seq),
+            chain["storageKeys"]["proofKeys"][i].as_str().unwrap()
+        );
         assert!(storage.get(&evidence_key(seq)).unwrap().is_some());
     }
 
@@ -198,7 +205,8 @@ fn merge_version_vector_cases() {
         let local: Option<VersionVector> = serde_json::from_value(case["local"].clone()).unwrap();
         let remote: Option<VersionVector> = serde_json::from_value(case["remote"].clone()).unwrap();
         let merged = merge_version_vectors(local.as_ref(), remote.as_ref());
-        let expected: BTreeMap<String, i64> = serde_json::from_value(case["merged"].clone()).unwrap();
+        let expected: BTreeMap<String, i64> =
+            serde_json::from_value(case["merged"].clone()).unwrap();
         assert_eq!(merged, expected);
     }
 }
@@ -240,7 +248,10 @@ fn resolve_schema_declaration_cases() {
 fn schema_defaults_cases() {
     let v = vectors();
     let defaults = &v["schemaDefaults"]["DEFAULT_COLLECTION_POLICY"];
-    assert_eq!(DEFAULT_COLLECTION_POLICY.sync_strategy, SyncStrategy::AppendOnly);
+    assert_eq!(
+        DEFAULT_COLLECTION_POLICY.sync_strategy,
+        SyncStrategy::AppendOnly
+    );
     assert_eq!(
         DEFAULT_COLLECTION_POLICY.sync_strategy.as_str(),
         defaults["syncStrategy"].as_str().unwrap()

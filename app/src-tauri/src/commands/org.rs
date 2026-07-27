@@ -9,7 +9,7 @@ use spark_core::org::{OrgInvitePayload, OrganizationView};
 
 use super::dto::{
     AddOrgMemberInputDto, CreateOrgInputDto, CreatedOrgInviteDto, InviteAcceptanceDto,
-    OrgSyncOverviewDto, SuccessResult,
+    OrgAddressRecordDto, OrgSyncOverviewDto, SuccessResult,
 };
 use super::{err, lock_kernel};
 use crate::KernelState;
@@ -88,6 +88,45 @@ pub(crate) fn remove_member_inner(
     member_root_id: &str,
 ) -> Result<OrganizationView, String> {
     kernel.org_remove_member(org_id, member_root_id).map_err(err)
+}
+
+pub(crate) fn set_gateways_inner(
+    kernel: &mut Kernel,
+    org_id: &str,
+    gateways: Vec<String>,
+) -> Result<OrganizationView, String> {
+    kernel.org_set_gateways(org_id, &gateways).map_err(err)
+}
+
+pub(crate) fn set_public_inner(
+    kernel: &mut Kernel,
+    org_id: &str,
+    public: bool,
+    display_name: Option<String>,
+) -> Result<OrganizationView, String> {
+    kernel
+        .org_set_public(org_id, public, display_name.as_deref())
+        .map_err(err)
+}
+
+pub(crate) fn resolve_address_inner(
+    kernel: &Kernel,
+    org_address: &str,
+) -> Result<Option<OrgAddressRecordDto>, String> {
+    kernel
+        .resolve_org_address(org_address)
+        .map(|record| record.map(OrgAddressRecordDto::from))
+        .map_err(err)
+}
+
+pub(crate) fn search_known_inner(
+    kernel: &Kernel,
+    keyword: &str,
+) -> Result<Vec<OrgAddressRecordDto>, String> {
+    kernel
+        .search_known_orgs(keyword)
+        .map(|records| records.into_iter().map(OrgAddressRecordDto::from).collect())
+        .map_err(err)
 }
 
 pub(crate) fn accept_invite_inner(
@@ -177,6 +216,45 @@ pub fn org_remove_member(
     remove_member_inner(&mut *lock_kernel(&state)?, &org_id, &member_root_id)
 }
 
+/// 指定组织网关（仅 admin；2–3 名本组织成员的 rootId，org.md §14）。
+#[tauri::command]
+pub fn org_set_gateways(
+    state: tauri::State<'_, KernelState>,
+    org_id: String,
+    gateways: Vec<String>,
+) -> Result<OrganizationView, String> {
+    set_gateways_inner(&mut *lock_kernel(&state)?, &org_id, gateways)
+}
+
+/// 开关组织公开标志（仅 admin；org.md §16），可选更新地址记录展示名。
+#[tauri::command]
+pub fn org_set_public(
+    state: tauri::State<'_, KernelState>,
+    org_id: String,
+    public: bool,
+    display_name: Option<String>,
+) -> Result<OrganizationView, String> {
+    set_public_inner(&mut *lock_kernel(&state)?, &org_id, public, display_name)
+}
+
+/// 解析组织地址（缓存 → DHT，org.md §16.4）；未命中返回 null。
+#[tauri::command]
+pub fn org_resolve_address(
+    state: tauri::State<'_, KernelState>,
+    org_address: String,
+) -> Result<Option<OrgAddressRecordDto>, String> {
+    resolve_address_inner(&*lock_kernel(&state)?, &org_address)
+}
+
+/// 本地搜索已知组织（缓存按 displayName/orgAddress 子串匹配，纯本地）。
+#[tauri::command]
+pub fn org_search_known(
+    state: tauri::State<'_, KernelState>,
+    keyword: String,
+) -> Result<Vec<OrgAddressRecordDto>, String> {
+    search_known_inner(&*lock_kernel(&state)?, &keyword)
+}
+
 /// 接受邀请码（内核编排：解码 → 连接邀请人 → claim 捎带 → 拉取 → 成员确认）。
 #[tauri::command]
 pub fn org_accept_invite(
@@ -187,147 +265,8 @@ pub fn org_accept_invite(
 }
 
 // ------------------------------------------------------------------
-// 单元测试
+// 单元测试（tests.rs）
 // ------------------------------------------------------------------
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use spark_core::kernel::KernelConfig;
-
-    const PASSWORD: &str = "correct-horse-battery";
-
-    fn unlocked_kernel() -> (tempfile::TempDir, Kernel) {
-        let dir = tempfile::tempdir().unwrap();
-        let mut kernel = Kernel::init(KernelConfig {
-            data_dir: dir.path().to_path_buf(),
-            app_version: "0.0.0-test".to_string(),
-            p2p: None,
-        })
-        .unwrap();
-        kernel.init_identity(PASSWORD, "alice", None).unwrap();
-        (dir, kernel)
-    }
-
-    fn input() -> CreateOrgInputDto {
-        serde_json::from_value(serde_json::json!({
-            "name": "测试组织",
-            "description": "demo",
-            "basePluginDomain": "plugin:base"
-        }))
-        .unwrap()
-    }
-
-    #[test]
-    fn create_and_list_roundtrip() {
-        let (_dir, mut kernel) = unlocked_kernel();
-        assert!(list_mine_inner(&kernel).unwrap().is_empty());
-
-        let view = create_inner(&mut kernel, input()).unwrap();
-        assert_eq!(view.record.name, "测试组织");
-        assert!(view.is_current_user_admin);
-        assert_eq!(view.member_count, 1);
-
-        let mine = list_mine_inner(&kernel).unwrap();
-        assert_eq!(mine.len(), 1);
-        assert_eq!(mine[0].record.org_id, view.record.org_id);
-
-        // 副本概览：本机恒已同步
-        let overview = sync_overview_inner(&kernel, &view.record.org_id).unwrap();
-        assert_eq!(overview.total_members, 1);
-        assert!(overview.synced_peers >= 1);
-        assert!(overview.members[0].is_self);
-    }
-
-    #[test]
-    fn invite_requires_p2p_and_bad_code_errors() {
-        let (_dir, mut kernel) = unlocked_kernel();
-        let view = create_inner(&mut kernel, input()).unwrap();
-
-        // P2P 未启动 → 生成邀请码报专用文案（内核语义：邀请码须携带本机节点信息）
-        assert_eq!(
-            create_invite_inner(&kernel, &view.record.org_id).unwrap_err(),
-            "本机 P2P 节点尚未启动，请先启动网络后再生成邀请码"
-        );
-
-        // 坏邀请码 → 解析失败
-        assert!(join_by_invite_inner(&kernel, "not-a-code").is_err());
-
-        // 未知组织 → check_join 失败（本地无成员记录）
-        assert!(check_join_inner(&kernel, "org_0000000000000000").is_err());
-    }
-
-    #[test]
-    fn overview_unknown_org_errors() {
-        let (_dir, kernel) = unlocked_kernel();
-        assert!(sync_overview_inner(&kernel, "org_0000000000000000").is_err());
-    }
-
-    #[test]
-    fn member_management_and_delete() {
-        let (_dir, mut kernel) = unlocked_kernel();
-        let view = create_inner(&mut kernel, input()).unwrap();
-        let org_id = view.record.org_id.clone();
-        let member_root = "ab".repeat(32);
-
-        // 添加成员（无 nodeInfo）
-        let input: AddOrgMemberInputDto =
-            serde_json::from_value(serde_json::json!({ "rootId": member_root })).unwrap();
-        let view = add_member_inner(&mut kernel, &org_id, input).unwrap();
-        assert_eq!(view.member_count, 2);
-        assert!(!view.members.iter().all(|m| m.root_id != member_root));
-
-        // 非法 rootId / 未知组织
-        let bad: AddOrgMemberInputDto =
-            serde_json::from_value(serde_json::json!({ "rootId": "zz" })).unwrap();
-        assert_eq!(
-            add_member_inner(&mut kernel, &org_id, bad).unwrap_err(),
-            "Invalid member rootId"
-        );
-        let input: AddOrgMemberInputDto =
-            serde_json::from_value(serde_json::json!({ "rootId": member_root })).unwrap();
-        assert_eq!(
-            add_member_inner(&mut kernel, "org_nope", input).unwrap_err(),
-            "Organization not found"
-        );
-
-        // 移除成员；移除唯一 admin 被拒
-        let view = remove_member_inner(&mut kernel, &org_id, &member_root).unwrap();
-        assert_eq!(view.member_count, 1);
-        let self_root = kernel.current_root_id().unwrap().unwrap();
-        assert_eq!(
-            remove_member_inner(&mut kernel, &org_id, &self_root).unwrap_err(),
-            "Organization must keep at least one admin"
-        );
-
-        // 删除组织
-        delete_inner(&mut kernel, &org_id).unwrap();
-        assert!(list_mine_inner(&kernel).unwrap().is_empty());
-        assert_eq!(
-            delete_inner(&mut kernel, &org_id).unwrap_err(),
-            "Organization not found"
-        );
-    }
-
-    #[test]
-    fn accept_invite_error_paths() {
-        let (_dir, mut kernel) = unlocked_kernel();
-        // 坏邀请码
-        assert!(accept_invite_inner(&mut kernel, "not-a-code").is_err());
-        // 合法邀请码但 p2p 未启动
-        let code = spark_core::org::encode_org_invite(&spark_core::org::OrgInvitePayload::new(
-            "org_abc".to_string(),
-            "组织".to_string(),
-            spark_core::org::OrgInviteInviter {
-                root_id: "cd".repeat(32),
-                peer_id: Some("peer-1234567890".to_string()),
-                addresses: vec![],
-            },
-            spark_core::p2p::node::system_now_ms(),
-        ));
-        assert_eq!(
-            accept_invite_inner(&mut kernel, &code).unwrap_err(),
-            "P2P 网络未启动，无法通过邀请码加入"
-        );
-    }
-}
+mod tests;

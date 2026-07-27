@@ -12,11 +12,12 @@ use spark_core::org::claim::{
     ClaimVerification, NodeInfoClaim, build_node_info_claim_payload, sign_node_info_claim,
     verify_node_info_claim,
 };
+use spark_core::org::gateway::org_members_dht_key;
 use spark_core::org::invite::{OrgInviteError, decode_org_invite_at, encode_org_invite};
 use spark_core::org::recovery::{active_recovery_tokens, recovery_time_bucket, recovery_token};
 use spark_core::org::snapshot::{
-    build_organization_sync_snapshot, build_organization_sync_versions,
-    is_organization_sync_stale, merge_organization_sync_snapshot,
+    build_organization_sync_snapshot, build_organization_sync_versions, is_organization_sync_stale,
+    merge_organization_sync_snapshot,
 };
 use spark_core::org::tx::OrganizationTransactionRecord;
 use spark_core::org::types::{OrganizationRecord, OrganizationSyncVersions};
@@ -49,7 +50,11 @@ fn node_info_claim_cross_validation() {
 
         // 1. 载荷逐字节一致（固定键序 + peerId ?? null 归一）
         let payload = build_node_info_claim_payload(&claim.unsigned());
-        assert_eq!(payload, case["payload"].as_str().unwrap(), "{name}: payload bytes");
+        assert_eq!(
+            payload,
+            case["payload"].as_str().unwrap(),
+            "{name}: payload bytes"
+        );
 
         // 2. dalek 验签 TS(nacl) 签名通过；负例 reason 对齐
         assert_eq!(
@@ -84,8 +89,14 @@ fn node_info_claim_cross_validation() {
             claim.node_info.clone(),
             claim.timestamp,
         );
-        assert_eq!(resigned.signature, claim.signature, "{name}: deterministic re-sign");
-        assert_eq!(resigned.public_key, claim.public_key, "{name}: publicKey base64");
+        assert_eq!(
+            resigned.signature, claim.signature,
+            "{name}: deterministic re-sign"
+        );
+        assert_eq!(
+            resigned.public_key, claim.public_key,
+            "{name}: publicKey base64"
+        );
         assert_eq!(resigned.root_id, claim.root_id, "{name}: rootId");
     }
 }
@@ -103,7 +114,11 @@ fn invite_cross_validation() {
 
         // 与 TS decode 归一化结果逐字段一致
         let expected = &case["decoded"];
-        assert_eq!(decoded.org_id, expected["orgId"].as_str().unwrap(), "{name}: orgId");
+        assert_eq!(
+            decoded.org_id,
+            expected["orgId"].as_str().unwrap(),
+            "{name}: orgId"
+        );
         assert_eq!(
             decoded.org_name,
             expected["orgName"].as_str().unwrap(),
@@ -126,7 +141,10 @@ fn invite_cross_validation() {
             .iter()
             .map(|a| a.as_str().unwrap().to_string())
             .collect();
-        assert_eq!(decoded.inviter.addresses, expected_addresses, "{name}: addresses");
+        assert_eq!(
+            decoded.inviter.addresses, expected_addresses,
+            "{name}: addresses"
+        );
         assert_eq!(
             decoded.created_at,
             expected["createdAt"].as_i64().unwrap(),
@@ -165,15 +183,33 @@ fn invite_cross_validation() {
             "empty" => decode_org_invite_at("", NOW).unwrap_err(),
             "malformed" => decode_org_invite_at("!!!not-base64!!!", NOW).unwrap_err(),
             "wrong-type" => {
-                let raw = r#"{"type":"other","version":1,"orgId":"org_x","inviter":{},"createdAt":1}"#;
+                let raw =
+                    r#"{"type":"other","version":1,"orgId":"org_x","inviter":{},"createdAt":1}"#;
                 use base64::Engine;
-                let code = base64::engine::general_purpose::URL_SAFE_NO_PAD
-                    .encode(raw.as_bytes());
+                let code = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw.as_bytes());
                 decode_org_invite_at(&code, NOW).unwrap_err()
             }
             other => panic!("unknown invite error case {other}"),
         };
         assert_eq!(err.to_string(), expected_message, "invite error {name}");
+    }
+}
+
+/// 组织私有 DHT key 派生（orgSecretKey 组，p2p-messages.md §15）：
+/// key = sha256hex(orgSecret + ":members")，逐 case 对齐。
+#[test]
+fn org_secret_key_cross_validation() {
+    let v = vectors();
+    let section = &v["orgSecretKey"];
+    for case in section["cases"].as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let secret = case["orgSecret"].as_str().unwrap();
+        let expected = case["key"].as_str().unwrap();
+        assert_eq!(
+            org_members_dht_key(secret),
+            expected,
+            "orgSecretKey case {name}"
+        );
     }
 }
 
@@ -262,4 +298,193 @@ fn merge_snapshot_cross_validation() {
         section["expected"],
         "mergeOrganizationSyncSnapshot 输出必须与 TS 逐字段一致"
     );
+}
+
+/// 组织地址记录（orgAddressRecord 组，org.md §16）：向量由
+/// `core/examples/extract_org_address_vectors.rs` 提取（固定 seed + nowMs）。
+/// 逐 case 断言：载荷逐字节、验签 ok、同 seed 确定性重签等于向量签名、
+/// 篡改 → invalid-signature、过期 → ttl-window，reason 与向量登记一致。
+#[test]
+fn org_address_record_cross_validation() {
+    use spark_core::org::{
+        OrgAddressRecord, OrgAddressVerification, build_org_address_record_payload,
+        sign_org_address_record, verify_org_address_record,
+    };
+
+    let v = vectors();
+    let section = &v["orgAddressRecord"];
+    let seed_hex = section["seedHex"].as_str().unwrap();
+    let seed: [u8; 32] = {
+        let bytes = (0..32)
+            .map(|i| u8::from_str_radix(&seed_hex[2 * i..2 * i + 2], 16).unwrap())
+            .collect::<Vec<u8>>();
+        bytes.try_into().unwrap()
+    };
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+    let now_ms = section["nowMs"].as_i64().unwrap();
+
+    for case in section["cases"].as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let record: OrgAddressRecord =
+            serde_json::from_value(case["record"].clone()).expect("record deserializes");
+
+        // 1. 载荷逐字节一致（固定键序 + displayName ?? null 归一）
+        let payload = build_org_address_record_payload(&record.unsigned());
+        assert_eq!(
+            payload,
+            case["payload"].as_str().unwrap(),
+            "{name}: payload bytes"
+        );
+
+        // 2. 验签正例
+        assert_eq!(
+            verify_org_address_record(&record, now_ms),
+            OrgAddressVerification::Ok,
+            "{name}: verify ok"
+        );
+        assert!(case["verify"]["ok"].as_bool().unwrap());
+
+        // 3. 同 seed 同字段重签：Ed25519 确定性签名 ⇒ 逐字节一致
+        let resigned = sign_org_address_record(
+            &signing_key,
+            &record.org_id,
+            record.display_name.clone(),
+            record.gateways.clone(),
+            record.seq,
+            record.published_at,
+            record.ttl,
+        );
+        assert_eq!(resigned, record, "{name}: deterministic re-sign");
+
+        // 4. 篡改 seq → invalid-signature（reason 对齐向量登记）
+        let mut tampered = record.clone();
+        tampered.seq += 1;
+        assert_eq!(
+            verify_org_address_record(&tampered, now_ms),
+            OrgAddressVerification::InvalidSignature,
+            "{name}: tampered seq"
+        );
+        assert_eq!(
+            case["verifyTampered"]["reason"].as_str().unwrap(),
+            "invalid-signature"
+        );
+
+        // 5. 越过 publishedAt + ttl → ttl-window（reason 对齐向量登记）
+        assert_eq!(
+            verify_org_address_record(&record, now_ms + record.ttl + 1),
+            OrgAddressVerification::TtlWindow,
+            "{name}: expired"
+        );
+        assert_eq!(
+            case["verifyExpired"]["reason"].as_str().unwrap(),
+            "ttl-window"
+        );
+    }
+}
+
+/// 节点名片（nodeCard 组，org.md §17）：向量由
+/// `core/examples/extract_node_card_vectors.rs` 提取（固定 libp2p seed + nowMs）。
+/// 逐 case 断言：载荷逐字节（recoveryToken ?? null 口径）、名片串解码往返、
+/// 验签 ok、同 seed 确定性重签等于向量名片、过期 → stale、篡改 →
+/// invalid-signature、token 形状非法 → bad-recovery-token，reason 与向量登记一致。
+#[test]
+fn node_card_cross_validation() {
+    use spark_core::org::{
+        NodeCard, NodeCardReject, build_node_card_payload, encode_node_card,
+        parse_and_verify_node_card, sign_node_card,
+    };
+
+    let v = vectors();
+    let section = &v["nodeCard"];
+    let seed_hex = section["seedHex"].as_str().unwrap();
+    let seed: [u8; 32] = {
+        let bytes = (0..32)
+            .map(|i| u8::from_str_radix(&seed_hex[2 * i..2 * i + 2], 16).unwrap())
+            .collect::<Vec<u8>>();
+        bytes.try_into().unwrap()
+    };
+    let secret_key = libp2p::identity::ed25519::SecretKey::try_from_bytes(seed).unwrap();
+    let keypair =
+        libp2p::identity::Keypair::from(libp2p::identity::ed25519::Keypair::from(secret_key));
+    let now_ms = section["nowMs"].as_i64().unwrap();
+    // 向量登记的 peerId 必须与 seed 派生一致
+    assert_eq!(
+        libp2p::PeerId::from_public_key(&keypair.public()).to_base58(),
+        section["peerId"].as_str().unwrap()
+    );
+
+    for case in section["cases"].as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let card: NodeCard =
+            serde_json::from_value(case["card"].clone()).expect("card deserializes");
+        let code = case["code"].as_str().unwrap();
+
+        // 1. 载荷逐字节一致（固定键序 + recoveryToken ?? null 归一）
+        let payload = build_node_card_payload(
+            &card.peer_id,
+            &card.addresses,
+            card.timestamp,
+            card.recovery_token.as_deref(),
+        );
+        assert_eq!(
+            payload,
+            case["payload"].as_str().unwrap(),
+            "{name}: payload bytes"
+        );
+
+        // 2. 编码往返：向量名片串解码归一后等于向量名片
+        let decoded = parse_and_verify_node_card(code, now_ms).expect("{name}: verify ok");
+        assert_eq!(decoded, card, "{name}: decode roundtrip");
+        assert!(case["verify"]["ok"].as_bool().unwrap());
+
+        // 3. 同 seed 同字段重签：Ed25519 确定性签名 ⇒ 逐字节一致（含名片串）
+        let resigned = sign_node_card(
+            &keypair,
+            &card.peer_id,
+            &card.addresses,
+            card.timestamp,
+            card.recovery_token.clone(),
+        )
+        .unwrap();
+        assert_eq!(resigned, card, "{name}: deterministic re-sign");
+        assert_eq!(
+            encode_node_card(&resigned),
+            code,
+            "{name}: deterministic code"
+        );
+
+        // 4. 过期 → stale（reason 对齐向量登记）
+        assert_eq!(
+            parse_and_verify_node_card(code, now_ms + spark_core::org::NODE_CARD_MAX_AGE_MS + 1),
+            Err(NodeCardReject::Stale),
+            "{name}: stale"
+        );
+        assert_eq!(case["verifyStale"]["reason"].as_str().unwrap(), "stale");
+
+        // 5. 篡改地址 → invalid-signature（reason 对齐向量登记）
+        let mut tampered = card.clone();
+        tampered.addresses = vec!["/ip4/9.9.9.9/tcp/15002/ws".to_string()];
+        assert_eq!(
+            parse_and_verify_node_card(&encode_node_card(&tampered), now_ms),
+            Err(NodeCardReject::BadSignature),
+            "{name}: tampered addresses"
+        );
+        assert_eq!(
+            case["verifyTampered"]["reason"].as_str().unwrap(),
+            "invalid-signature"
+        );
+
+        // 6. recoveryToken 形状非法 → bad-recovery-token（先于验签）
+        let mut bad_token = card.clone();
+        bad_token.recovery_token = Some("not-hex".to_string());
+        assert_eq!(
+            parse_and_verify_node_card(&encode_node_card(&bad_token), now_ms),
+            Err(NodeCardReject::BadRecoveryToken),
+            "{name}: bad token shape"
+        );
+        assert_eq!(
+            case["verifyBadToken"]["reason"].as_str().unwrap(),
+            "bad-recovery-token"
+        );
+    }
 }

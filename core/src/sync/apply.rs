@@ -18,11 +18,11 @@ use crate::schema::{
     sanitize_schema_hint,
 };
 use crate::storage::{BatchOperation, StorageBackend};
+use crate::sync::SyncResult;
 use crate::sync::meta::{
     CompareResult, DocMeta, RemoteMeta, compare_version_vectors, get_meta, merge_version_vectors,
     meta_key, resolve_conflict_by_lww,
 };
-use crate::sync::SyncResult;
 
 /// 集合适配器：对应 TS `collectionInstance` 被鸭子类型访问的 `get` 与私有方法
 /// `docKey` / `indexKey` / `buildIndexMap`。由调用方（如 data-mgmt 的 collection）实现。
@@ -182,10 +182,16 @@ fn apply_remote_append_only<S: StorageBackend, A: CollectionAdapter>(
         };
         let mut ops = vec![
             BatchOperation::put(adapter.doc_key(id), serde_json::to_string(payload)?),
-            BatchOperation::put(meta_key(domain, collection, id), serde_json::to_string(&stored_meta)?),
+            BatchOperation::put(
+                meta_key(domain, collection, id),
+                serde_json::to_string(&stored_meta)?,
+            ),
         ];
         for (field, value) in adapter.build_index_map(Some(payload)) {
-            ops.push(BatchOperation::put(adapter.index_key(&field, &value, id), ""));
+            ops.push(BatchOperation::put(
+                adapter.index_key(&field, &value, id),
+                "",
+            ));
         }
         if policy.enable_evidence {
             // 注意：metaHash 对入参 remoteMeta（{vv, ts, nodeId?}）计算，而非落盘的 {vv, ts}
@@ -250,21 +256,39 @@ fn apply_remote_lww<S: StorageBackend, A: CollectionAdapter>(
     now_ms: i64,
 ) -> SyncResult<ApplyOutcome> {
     let local_meta = get_meta(storage, domain, collection, id)?;
-    let cmp = compare_version_vectors(
-        local_meta.as_ref().map(|m| &m.vv),
-        Some(&remote_meta.vv),
-    );
+    let cmp = compare_version_vectors(local_meta.as_ref().map(|m| &m.vv), Some(&remote_meta.vv));
     match cmp {
         CompareResult::Remote => {
-            apply_lww_remote_win(storage, adapter, domain, collection, id, remote_payload, remote_meta, policy, now_ms)?;
+            apply_lww_remote_win(
+                storage,
+                adapter,
+                domain,
+                collection,
+                id,
+                remote_payload,
+                remote_meta,
+                policy,
+                now_ms,
+            )?;
             Ok(ApplyOutcome::LwwRemoteApplied)
         }
         CompareResult::Local => Ok(ApplyOutcome::LwwLocalKept),
         CompareResult::Equal => Ok(ApplyOutcome::LwwEqualNoop),
         CompareResult::Concurrent => {
-            let winner = resolve_conflict_by_lww(local_meta.as_ref().map(|m| m.ts), Some(remote_meta.ts));
+            let winner =
+                resolve_conflict_by_lww(local_meta.as_ref().map(|m| m.ts), Some(remote_meta.ts));
             if winner == CompareResult::Remote {
-                apply_lww_remote_win(storage, adapter, domain, collection, id, remote_payload, remote_meta, policy, now_ms)?;
+                apply_lww_remote_win(
+                    storage,
+                    adapter,
+                    domain,
+                    collection,
+                    id,
+                    remote_payload,
+                    remote_meta,
+                    policy,
+                    now_ms,
+                )?;
                 return Ok(ApplyOutcome::LwwConcurrentRemoteApplied);
             }
             Ok(ApplyOutcome::LwwConcurrentLocalKept)
@@ -293,7 +317,9 @@ fn apply_lww_remote_win<S: StorageBackend, A: CollectionAdapter>(
             if let Some(doc) = &local {
                 ops.push(BatchOperation::delete(adapter.doc_key(id)));
                 for (field, value) in adapter.build_index_map(Some(doc)) {
-                    ops.push(BatchOperation::delete(adapter.index_key(&field, &value, id)));
+                    ops.push(BatchOperation::delete(
+                        adapter.index_key(&field, &value, id),
+                    ));
                 }
             }
             let tombstone = DocMeta {
@@ -338,13 +364,18 @@ fn apply_lww_remote_win<S: StorageBackend, A: CollectionAdapter>(
             // 删除旧索引中已变化的项
             for (field, old_value) in &old_index_map {
                 if new_index_map.get(field) != Some(old_value) {
-                    ops.push(BatchOperation::delete(adapter.index_key(field, old_value, id)));
+                    ops.push(BatchOperation::delete(
+                        adapter.index_key(field, old_value, id),
+                    ));
                 }
             }
             // 新增索引项
             for (field, new_value) in &new_index_map {
                 if old_index_map.get(field) != Some(new_value) {
-                    ops.push(BatchOperation::put(adapter.index_key(field, new_value, id), ""));
+                    ops.push(BatchOperation::put(
+                        adapter.index_key(field, new_value, id),
+                        "",
+                    ));
                 }
             }
             let meta = DocMeta {

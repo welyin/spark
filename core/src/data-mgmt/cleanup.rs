@@ -19,10 +19,10 @@ use serde_json::Value;
 use crate::org::sync_state::ORG_SYNC_STATE_PREFIX;
 use crate::storage::{BatchOperation, ScanOptions, StorageBackend};
 
+use super::Result;
 use super::constants::{
     ORG_SYNC_STATE_RETENTION_MS, PEER_RECORD_RETENTION_MS, TOMBSTONE_RETENTION_MS,
 };
-use super::Result;
 
 /// p2p 节点活跃记录前缀（p2p/constants.ts:30 `P2P_PEER_RECORD_PREFIX`；
 /// Rust p2p 模块尚未实现，常量暂定义于此）。
@@ -102,10 +102,9 @@ fn cleanup_peer_records<S: StorageBackend>(storage: &mut S, now_ms: i64) -> Resu
     let expired: Vec<String> = rows
         .into_iter()
         .filter(|(_, value)| {
-            as_number(value.as_ref().and_then(|v| v.get("lastSeenAt")))
-                .is_some_and(|last_seen_at| {
-                    now_ms as f64 - last_seen_at > PEER_RECORD_RETENTION_MS as f64
-                })
+            as_number(value.as_ref().and_then(|v| v.get("lastSeenAt"))).is_some_and(
+                |last_seen_at| now_ms as f64 - last_seen_at > PEER_RECORD_RETENTION_MS as f64,
+            )
         })
         .map(|(key, _)| key)
         .collect();
@@ -120,10 +119,11 @@ fn cleanup_org_sync_states<S: StorageBackend>(storage: &mut S, now_ms: i64) -> R
     let expired: Vec<String> = rows
         .into_iter()
         .filter(|(_, value)| {
-            as_number(value.as_ref().and_then(|v| v.get("lastSyncedAt")))
-                .is_some_and(|last_synced_at| {
+            as_number(value.as_ref().and_then(|v| v.get("lastSyncedAt"))).is_some_and(
+                |last_synced_at| {
                     now_ms as f64 - last_synced_at > ORG_SYNC_STATE_RETENTION_MS as f64
-                })
+                },
+            )
         })
         .map(|(key, _)| key)
         .collect();
@@ -137,7 +137,10 @@ fn cleanup_org_sync_states<S: StorageBackend>(storage: &mut S, now_ms: i64) -> R
 /// `now_ms` 取一次三类共用。三类各自独立容错：单类失败仅告警
 /// （对齐 TS try/catch + `console.warn`），不影响其余类别；失败类别计数为 0。
 pub fn run_auto_cleanup<S: StorageBackend>(storage: &mut S, now_ms: i64) -> AutoCleanupResult {
-    let mut result = AutoCleanupResult { ran_at: now_ms, ..AutoCleanupResult::default() };
+    let mut result = AutoCleanupResult {
+        ran_at: now_ms,
+        ..AutoCleanupResult::default()
+    };
 
     match cleanup_tombstones(storage, now_ms) {
         Ok(n) => result.tombstones = n,
@@ -170,21 +173,38 @@ mod tests {
     fn tombstone_cleanup_strict_boundary_and_filters() {
         let mut s = MemoryStorage::new();
         // now - ts > 90d（超期 1ms）→ 删
-        s.put("meta:d:c:expired", &tombstone_json(NOW - TOMBSTONE_RETENTION_MS - 1))
-            .unwrap();
+        s.put(
+            "meta:d:c:expired",
+            &tombstone_json(NOW - TOMBSTONE_RETENTION_MS - 1),
+        )
+        .unwrap();
         // now - ts == 90d（恰好满保留期，严格 > 不删）→ 留
-        s.put("meta:d:c:exact", &tombstone_json(NOW - TOMBSTONE_RETENTION_MS))
-            .unwrap();
+        s.put(
+            "meta:d:c:exact",
+            &tombstone_json(NOW - TOMBSTONE_RETENTION_MS),
+        )
+        .unwrap();
         // now - ts < 90d → 留
-        s.put("meta:d:c:fresh", &tombstone_json(NOW - TOMBSTONE_RETENTION_MS + 1))
-            .unwrap();
+        s.put(
+            "meta:d:c:fresh",
+            &tombstone_json(NOW - TOMBSTONE_RETENTION_MS + 1),
+        )
+        .unwrap();
         // 非 tombstone → 留
-        s.put("meta:d:c:live", "{\"vv\":{\"n1\":1},\"ts\":1}").unwrap();
-        // tombstone 非 true（false）→ 留
-        s.put("meta:d:c:false", &format!("{{\"ts\":{},\"tombstone\":false}}", NOW - TOMBSTONE_RETENTION_MS - 1))
+        s.put("meta:d:c:live", "{\"vv\":{\"n1\":1},\"ts\":1}")
             .unwrap();
+        // tombstone 非 true（false）→ 留
+        s.put(
+            "meta:d:c:false",
+            &format!(
+                "{{\"ts\":{},\"tombstone\":false}}",
+                NOW - TOMBSTONE_RETENTION_MS - 1
+            ),
+        )
+        .unwrap();
         // ts 非 number → 留
-        s.put("meta:d:c:strts", "{\"ts\":\"old\",\"tombstone\":true}").unwrap();
+        s.put("meta:d:c:strts", "{\"ts\":\"old\",\"tombstone\":true}")
+            .unwrap();
         // ts 缺失 → 留
         s.put("meta:d:c:nots", "{\"tombstone\":true}").unwrap();
         // 损坏 JSON → 留（坑 #3：损坏行永不清理）
@@ -193,7 +213,10 @@ mod tests {
         assert_eq!(cleanup_tombstones(&mut s, NOW).unwrap(), 1);
         assert!(s.get("meta:d:c:expired").unwrap().is_none());
         for kept in ["exact", "fresh", "live", "false", "strts", "nots", "broken"] {
-            assert!(s.get(&format!("meta:d:c:{kept}")).unwrap().is_some(), "{kept} should be kept");
+            assert!(
+                s.get(&format!("meta:d:c:{kept}")).unwrap().is_some(),
+                "{kept} should be kept"
+            );
         }
     }
 
@@ -201,17 +224,24 @@ mod tests {
     fn peer_record_cleanup_boundaries() {
         let mut s = MemoryStorage::new();
         let old = NOW - PEER_RECORD_RETENTION_MS - 1;
-        s.put("p2p:peer:record:old", &format!("{{\"peerId\":\"old\",\"lastSeenAt\":{old}}}"))
-            .unwrap();
+        s.put(
+            "p2p:peer:record:old",
+            &format!("{{\"peerId\":\"old\",\"lastSeenAt\":{old}}}"),
+        )
+        .unwrap();
         s.put(
             "p2p:peer:record:exact",
             &format!("{{\"lastSeenAt\":{}}}", NOW - PEER_RECORD_RETENTION_MS),
         )
         .unwrap();
-        s.put("p2p:peer:record:fresh", &format!("{{\"lastSeenAt\":{NOW}}}"))
-            .unwrap();
+        s.put(
+            "p2p:peer:record:fresh",
+            &format!("{{\"lastSeenAt\":{NOW}}}"),
+        )
+        .unwrap();
         // lastSeenAt 非 number → 留
-        s.put("p2p:peer:record:str", "{\"lastSeenAt\":\"x\"}").unwrap();
+        s.put("p2p:peer:record:str", "{\"lastSeenAt\":\"x\"}")
+            .unwrap();
         // 损坏 JSON → 留
         s.put("p2p:peer:record:broken", "{").unwrap();
         // 非 record 前缀的 p2p key 不在扫描范围
@@ -240,7 +270,8 @@ mod tests {
             &format!("{{\"lastSyncedAt\":{}}}", NOW - ORG_SYNC_STATE_RETENTION_MS),
         )
         .unwrap();
-        s.put("p2p:org-sync-state:p1:o3", "{\"lastSyncedAt\":\"x\"}").unwrap();
+        s.put("p2p:org-sync-state:p1:o3", "{\"lastSyncedAt\":\"x\"}")
+            .unwrap();
 
         assert_eq!(cleanup_org_sync_states(&mut s, NOW).unwrap(), 1);
         assert!(s.get("p2p:org-sync-state:p1:o1").unwrap().is_none());
@@ -251,8 +282,11 @@ mod tests {
     #[test]
     fn run_auto_cleanup_all_categories_shared_now() {
         let mut s = MemoryStorage::new();
-        s.put("meta:d:c:t", &tombstone_json(NOW - TOMBSTONE_RETENTION_MS - 1))
-            .unwrap();
+        s.put(
+            "meta:d:c:t",
+            &tombstone_json(NOW - TOMBSTONE_RETENTION_MS - 1),
+        )
+        .unwrap();
         s.put(
             "p2p:peer:record:p",
             &format!("{{\"lastSeenAt\":{}}}", NOW - PEER_RECORD_RETENTION_MS - 1),
@@ -260,14 +294,22 @@ mod tests {
         .unwrap();
         s.put(
             "p2p:org-sync-state:p:o",
-            &format!("{{\"lastSyncedAt\":{}}}", NOW - ORG_SYNC_STATE_RETENTION_MS - 1),
+            &format!(
+                "{{\"lastSyncedAt\":{}}}",
+                NOW - ORG_SYNC_STATE_RETENTION_MS - 1
+            ),
         )
         .unwrap();
 
         let result = run_auto_cleanup(&mut s, NOW);
         assert_eq!(
             result,
-            AutoCleanupResult { ran_at: NOW, tombstones: 1, peer_records: 1, org_sync_states: 1 }
+            AutoCleanupResult {
+                ran_at: NOW,
+                tombstones: 1,
+                peer_records: 1,
+                org_sync_states: 1
+            }
         );
         assert_eq!(result.total_deleted(), 3);
         assert_eq!(s.len(), 0);
@@ -316,7 +358,10 @@ mod tests {
     fn single_category_failure_does_not_affect_others() {
         let mut s = FlakyStorage::failing_on("meta:");
         s.inner
-            .put("meta:d:c:t", &tombstone_json(NOW - TOMBSTONE_RETENTION_MS - 1))
+            .put(
+                "meta:d:c:t",
+                &tombstone_json(NOW - TOMBSTONE_RETENTION_MS - 1),
+            )
             .unwrap();
         s.inner
             .put(
@@ -339,7 +384,10 @@ mod tests {
         let mut s = FlakyStorage::failing_on("__never__");
         // 仅 tombstone 有过期项 → 只触发 1 次 batch
         s.inner
-            .put("meta:d:c:t", &tombstone_json(NOW - TOMBSTONE_RETENTION_MS - 1))
+            .put(
+                "meta:d:c:t",
+                &tombstone_json(NOW - TOMBSTONE_RETENTION_MS - 1),
+            )
             .unwrap();
         let result = run_auto_cleanup(&mut s, NOW);
         assert_eq!(result.total_deleted(), 1);

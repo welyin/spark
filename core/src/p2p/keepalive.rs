@@ -6,9 +6,46 @@ use std::collections::HashSet;
 
 use super::constants::{
     OVERLAY_DIAL_TARGET, OVERLAY_TICK_DIAL_BUDGET, RECOVERY_COOLDOWN_MS,
-    RECOVERY_TRIGGER_CONSECUTIVE_TICKS,
+    RECOVERY_SEARCH_DISPLAY_MS, RECOVERY_TRIGGER_CONSECUTIVE_TICKS,
 };
 use super::peer_targets::PeerNodeInfo;
+
+/// 恢复模式对外状态（网络状态 UI 的数据源，org.md §12 扩展）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RecoveryState {
+    /// 未在恢复（组织可达，或从未触发恢复查询）。
+    #[default]
+    Idle,
+    /// 恢复查找中（DHT/恢复查询已发起，限时显示）。
+    Recovering {
+        /// 本轮恢复查询发起时间。
+        since: i64,
+    },
+    /// 自动恢复无果（超过显示窗口未再查询）。
+    Failed {
+        /// 最近一轮恢复查询发起时间。
+        since: i64,
+    },
+}
+
+impl RecoveryState {
+    /// 线形字符串（DTO/前端展示分支用）。
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RecoveryState::Idle => "idle",
+            RecoveryState::Recovering { .. } => "recovering",
+            RecoveryState::Failed { .. } => "failed",
+        }
+    }
+
+    /// 恢复查询发起时间（Idle 为 `None`）。
+    pub fn since(&self) -> Option<i64> {
+        match self {
+            RecoveryState::Idle => None,
+            RecoveryState::Recovering { since } | RecoveryState::Failed { since } => Some(*since),
+        }
+    }
+}
 
 /// keepalive tick 的组织拨号计划：按打分排序的候选 → (待拨号, 已连接)。
 ///
@@ -43,7 +80,11 @@ pub fn overlay_dial_budget(connected_count: usize) -> usize {
 }
 
 /// peer-exchange 轮选：已连接邻居排序后按游标轮转。
-pub fn pick_exchange_target(connected: &HashSet<String>, self_peer_id: &str, cursor: u64) -> Option<String> {
+pub fn pick_exchange_target(
+    connected: &HashSet<String>,
+    self_peer_id: &str,
+    cursor: u64,
+) -> Option<String> {
     let mut neighbors: Vec<String> = connected
         .iter()
         .filter(|p| p.as_str() != self_peer_id)
@@ -103,6 +144,19 @@ impl RecoveryTrigger {
     pub fn reset_cooldown(&mut self) {
         self.last_query_at = None;
     }
+
+    /// 只读状态快照（网络状态 UI 用）：最近一轮恢复查询距今一个显示窗口
+    /// （[`RECOVERY_SEARCH_DISPLAY_MS`]`）内视为「恢复中」；超过窗口视为
+    /// 「自动恢复无果」；从未发起查询为 `Idle`。
+    pub fn state(&self, now_ms: i64) -> RecoveryState {
+        match self.last_query_at {
+            Some(since) if now_ms - since <= RECOVERY_SEARCH_DISPLAY_MS => {
+                RecoveryState::Recovering { since }
+            }
+            Some(since) => RecoveryState::Failed { since },
+            None => RecoveryState::Idle,
+        }
+    }
 }
 
 /// 恢复候选合并去重（每轮最多 16 条、最多拨号 4 个候选）。
@@ -121,77 +175,4 @@ pub fn plan_recovery_dials(candidates: &[PeerNodeInfo], max_dials: usize) -> Vec
         out.push(candidate.clone());
     }
     out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn info(peer_id: &str) -> PeerNodeInfo {
-        PeerNodeInfo {
-            peer_id: Some(peer_id.to_string()),
-            addresses: vec!["/ip4/1.2.3.4/tcp/1/ws".to_string()],
-        }
-    }
-
-    #[test]
-    fn overlay_budget() {
-        assert_eq!(overlay_dial_budget(0), 2);
-        assert_eq!(overlay_dial_budget(3), 1);
-        assert_eq!(overlay_dial_budget(4), 0);
-        assert_eq!(overlay_dial_budget(10), 0);
-    }
-
-    #[test]
-    fn org_dial_plan_caps_at_max() {
-        let candidates = vec![info("a"), info("b"), info("c"), info("d"), info("e")];
-        let connected = HashSet::from(["a".to_string()]);
-        let (to_dial, conn) = plan_organization_dials(&candidates, &connected, 3);
-        assert_eq!(conn.len(), 1);
-        assert_eq!(to_dial.len(), 3);
-        let ids: Vec<String> = to_dial.iter().filter_map(|c| c.peer_id.clone()).collect();
-        assert_eq!(ids, vec!["b", "c", "d"]);
-    }
-
-    #[test]
-    fn exchange_target_rotates() {
-        let connected: HashSet<String> = ["a", "b", "c", "self"].iter().map(ToString::to_string).collect();
-        assert_eq!(pick_exchange_target(&connected, "self", 0).as_deref(), Some("a"));
-        assert_eq!(pick_exchange_target(&connected, "self", 1).as_deref(), Some("b"));
-        assert_eq!(pick_exchange_target(&connected, "self", 3).as_deref(), Some("a"));
-        let empty: HashSet<String> = HashSet::new();
-        assert_eq!(pick_exchange_target(&empty, "self", 0), None);
-    }
-
-    #[test]
-    fn recovery_trigger_cadence() {
-        let mut trigger = RecoveryTrigger::new();
-        // 连续 2 个 tick 不触发
-        assert!(!trigger.on_tick(true, 1000));
-        assert!(!trigger.on_tick(true, 2000));
-        // 第 3 个 tick 触发并记录查询时间
-        assert!(trigger.on_tick(true, 3000));
-        // 冷却期内不触发（即使连续 tick）
-        assert!(!trigger.on_tick(true, 4000));
-        // 可达时清零
-        assert!(!trigger.on_tick(false, 5000));
-        assert!(!trigger.on_tick(true, 6000));
-        // 冷却过后 + 连续 3 tick 再次触发
-        assert!(!trigger.on_tick(true, 7000));
-        assert!(!trigger.on_tick(true, 8000));
-        assert!(trigger.on_tick(true, 3000 + RECOVERY_COOLDOWN_MS + 1));
-    }
-
-    #[test]
-    fn recovery_dial_plan_dedupes() {
-        let candidates = vec![
-            info("a"),
-            info("a"),
-            PeerNodeInfo { peer_id: None, addresses: vec!["/x".to_string()] },
-            PeerNodeInfo { peer_id: None, addresses: vec!["/x".to_string()] },
-            info("b"),
-        ];
-        let plan = plan_recovery_dials(&candidates, 4);
-        assert_eq!(plan.len(), 3);
-    }
 }
