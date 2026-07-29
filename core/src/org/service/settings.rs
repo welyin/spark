@@ -1,5 +1,5 @@
-//! 组织设置：网关列表（`setOrgGateways`，org.md §14）与公开标志
-//! （`setOrgPublic`，org.md §16）。
+//! 组织设置：名称/描述（`updateOrgInfo`）、网关列表（`setOrgGateways`，
+//! org.md §14）与公开标志（`setOrgPublic`，org.md §16）。
 //!
 //! 两者同口径：admin 校验、无变化时幂等返回（不 bump 版本）、变更后追加
 //! 事务并重建 sync；写入结果经既有快照同步广播扩散，推送由调用方以
@@ -12,11 +12,82 @@ use crate::storage::StorageBackend;
 use super::super::tx::{
     OrganizationTransactionRecord, OrganizationTransactionType, append_organization_transaction,
 };
-use super::super::types::{OrganizationRecord, generate_org_secret, normalize_root_id};
+use super::super::types::{
+    OrganizationRecord, generate_org_secret, normalize_root_id, normalize_text,
+};
 use super::super::{OrgError, Result, org_address};
 use super::OrganizationService;
 
 impl OrganizationService {
+    /// `updateOrgInfo`：管理员更新组织名称/描述。
+    ///
+    /// - `name` 提供时按 `normalize_text` 同口径 trim 且不可为空；`description`
+    ///   提供时 trim 后覆盖（空串 = 清除描述）；未提供的字段不变
+    /// - 无变化时幂等返回（不 bump 版本），与 [`Self::set_org_gateways`] 同口径
+    pub fn update_org_info<S: StorageBackend>(
+        storage: &mut S,
+        org_id: &str,
+        name: Option<&str>,
+        description: Option<&str>,
+        current_root_id: &str,
+        now_ms: i64,
+    ) -> Result<OrganizationRecord> {
+        let mut record = Self::require_organization(storage, org_id)?;
+        Self::require_admin(&record, current_root_id)?;
+
+        let name = name
+            .map(|value| normalize_text(value, "Organization name"))
+            .transpose()?;
+        let description = description.map(str::trim);
+        let name_unchanged = name.as_deref().map_or(true, |value| value == record.name);
+        let description_unchanged = description.map_or(true, |value| value == record.description);
+        if name_unchanged && description_unchanged {
+            return Ok(record);
+        }
+
+        if let Some(value) = &name {
+            record.name = value.clone();
+        }
+        if let Some(value) = description {
+            record.description = value.to_string();
+        }
+        record.updated_at = now_ms;
+        let previous_last_synced_at = record.sync.as_ref().map(|s| s.last_synced_at).unwrap_or(0);
+        let transaction = append_organization_transaction(
+            storage,
+            OrganizationTransactionRecord {
+                tx_id: String::new(),
+                org_id: org_id.to_string(),
+                type_: OrganizationTransactionType::MemberUpdate,
+                created_at: now_ms,
+                actor_root_id: current_root_id.to_string(),
+                target_root_id: None,
+                summary: "更新组织信息".to_string(),
+                payload: Some(
+                    [
+                        (
+                            "name".to_string(),
+                            name.as_deref().map(Value::from).unwrap_or(Value::Null),
+                        ),
+                        (
+                            "description".to_string(),
+                            description.map(Value::from).unwrap_or(Value::Null),
+                        ),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+            },
+        )?;
+        Self::rebuild_sync_after_mutation(
+            &mut record,
+            previous_last_synced_at,
+            transaction.created_at,
+        );
+        Self::save_record(storage, &record)?;
+        Ok(record)
+    }
+
     /// `setOrgGateways`（org.md §14）：管理员指定 2–3 名本组织成员作为组织网关。
     ///
     /// - 每个 rootId 规范化后查重；数量须为 2–3；必须是本组织成员

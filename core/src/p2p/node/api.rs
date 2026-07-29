@@ -8,6 +8,7 @@ use std::time::Duration;
 use serde_json::{Map, Value};
 use tokio::sync::oneshot;
 
+use crate::p2p::constants::DM_READ_TIMEOUT_MS;
 use crate::p2p::peer_targets::PeerNodeInfo;
 use crate::p2p::{P2pError, Result};
 
@@ -44,6 +45,11 @@ pub(super) enum Command {
     OrgPullRequest {
         node_info: PeerNodeInfo,
         request_json: String,
+        tx: oneshot::Sender<Result<Option<Value>>>,
+    },
+    DmDirect {
+        node_info: PeerNodeInfo,
+        payload: Value,
         tx: oneshot::Sender<Result<Option<Value>>>,
     },
     LocalNodeInfo {
@@ -181,6 +187,30 @@ impl P2pNode {
         tokio::time::timeout(Duration::from_secs(15), rx)
             .await
             .map_err(|_| P2pError::Protocol("org-pull timeout".to_string()))?
+            .map_err(|_| P2pError::NotStarted)?
+    }
+
+    /// dm 直连投递（`/spark/dm/1.0.0`，1:1 聊天消息与好友请求）：
+    /// payload 为 dm 信封 JSON（透明搬运，不验签）；返回对方应用层应答 JSON，
+    /// 无应答/不可解析/投递失败返回 `Ok(None)`。
+    ///
+    /// 外层超时 15s（略大于一次完整逐地址尝试量级：协议单请求 10s + 拨号余量）。
+    /// 注意：超时/None 不代表对端未收到——调用方放弃后 attempt 仍可能送达；
+    /// 重发可能产生重复，接收侧应按消息 id 去重兜底（kernel 层职责）。
+    pub async fn dm_direct(
+        &self,
+        node_info: &PeerNodeInfo,
+        payload: Value,
+    ) -> Result<Option<Value>> {
+        let (tx, rx) = oneshot::channel();
+        self.send_cmd(Command::DmDirect {
+            node_info: node_info.clone(),
+            payload,
+            tx,
+        })?;
+        tokio::time::timeout(Duration::from_millis(DM_READ_TIMEOUT_MS + 5_000), rx)
+            .await
+            .map_err(|_| P2pError::Protocol("dm timeout".to_string()))?
             .map_err(|_| P2pError::NotStarted)?
     }
 

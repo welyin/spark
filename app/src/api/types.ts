@@ -27,6 +27,7 @@ export type P2pEventDto =
   | { kind: 'ChatReceived'; data: { spaceKey: string; conversation: ConversationDto; message: ChatMessageDto } }
   | { kind: 'ChatStatus'; data: { spaceKey: string; convId: string; messageId?: string; status?: MessageStatusDto; recalled?: boolean; peerRead?: boolean } }
   | { kind: 'FriendRequestReceived'; data: { request: FriendRequestDto } }
+  | { kind: 'FriendRequestSent'; data: { request: FriendRequestDto } }
   | { kind: 'FriendRequestAccepted'; data: { request: FriendRequestDto; friend: FriendDto } }
   | { kind: 'Warning'; data: string }
   | { kind: 'Stopped' }
@@ -228,8 +229,8 @@ export interface FriendRequestDto {
   status: 'pending' | 'accepted' | 'ignored' | 'replied' | 'failed';
   /** 申请发出/收到时间。 */
   createdAt?: number;
-  /** 最近一次状态变化/新回复时间。 */
-  updatedAt?: number;
+  /** 最近一次状态变化/新回复时间（毫秒；内核必填，前端映射仍保留缺省兜底）。 */
+  updatedAt: number;
   /** 有未看的新变化。 */
   unread?: boolean;
   /** 来回回复记录。 */

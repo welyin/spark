@@ -39,8 +39,8 @@ pub struct CreateOrganizationInput {
     pub name: String,
     /// 描述（trim，可省）。
     pub description: Option<String>,
-    /// 基础插件域（`plugin:` 前缀，必填）。
-    pub base_plugin_domain: String,
+    /// 基础插件域（`plugin:` 前缀，可省——组织与插件不再强关联，设计 §7.2）。
+    pub base_plugin_domain: Option<String>,
 }
 
 /// `createOrgInvite` 的返回（service.ts:315-339）。

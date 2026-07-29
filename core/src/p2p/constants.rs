@@ -13,6 +13,9 @@ pub const DIRECT_PEER_EXCHANGE_PROTOCOL: &str = "/spark/peer-exchange/1.0.0";
 /// org-recovery 直连协议名。
 pub const DIRECT_ORG_RECOVERY_PROTOCOL: &str = "/spark/org-recovery/1.0.0";
 
+/// dm（direct message：1:1 聊天消息与好友请求投递）直连协议名。
+pub const DIRECT_DM_PROTOCOL: &str = "/spark/dm/1.0.0";
+
 /// 本地持久化 libp2p 私钥的存储键（值 = protobuf 序列化的 base64）。
 pub const P2P_IDENTITY_PRIVATE_KEY: &str = "p2p:identity:privateKey";
 
@@ -121,6 +124,12 @@ pub const ORG_RECOVERY_READ_TIMEOUT_MS: u64 = 3_000;
 
 /// 直连协议读超时：org-share / org-pull（4000ms）。
 pub const ORG_SHARE_READ_TIMEOUT_MS: u64 = 4_000;
+
+/// 直连协议读超时：dm（10000ms，对齐 dm 单地址尝试量级；命令侧外层超时 15s）。
+pub const DM_READ_TIMEOUT_MS: u64 = 10_000;
+
+/// dm 应答侧限流：同一请求方两次服务的最小间隔（1s）。
+pub const DM_MIN_INTERVAL_MS: i64 = 1_000;
 
 /// Kad（Kademlia DHT）协议名。
 pub const KAD_PROTOCOL_NAME: &str = "/spark/kad/1.0.0";

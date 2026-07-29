@@ -8,7 +8,7 @@
 //!
 //! 纯逻辑全在 org 模块（snapshot/pull/plugin_docs），本层只做编排与错误映射。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
@@ -22,15 +22,19 @@ use crate::org::{
     OrganizationService, PluginDocSyncItem, apply_plugin_doc_sync_items, handle_pull_list_request,
     handle_pull_org_request, validate_incoming_share_payload,
 };
-use crate::p2p::host::{OrgShareAck, P2pHost};
+use crate::p2p::host::{DmHandler, OrgShareAck, P2pHost};
 use crate::p2p::node::system_now_ms;
 use crate::p2p::overlay_store::{OverlayPeerSource, OverlayPeerStore};
 use crate::p2p::peer_activity::{NodeObservation, PeerActivityStore};
 use crate::p2p::peer_targets::PeerNodeInfo;
+use crate::p2p::P2pNode;
 use crate::schema::CollectionSchemaDeclaration;
 use crate::storage::SledStorage;
 use crate::sync::apply::{ApplyRemoteOptions, apply_remote_update};
 use crate::sync::meta::RemoteMeta;
+
+use super::dm_envelope::{self, KIND_FRIEND_ACCEPT};
+use super::inbound_dm::AutoAccept;
 
 /// 集合配置注册表：`(domain, collection) → CollectionConfig`。
 ///
@@ -93,6 +97,21 @@ pub(crate) struct KernelHost {
     /// claim 落库后的推送通知（org-sync 请求队列）：host 处于同步上下文，
     /// 异步推送由 kernel 的 org-sync worker 消费（对齐 service.ts:450）。
     pub(crate) push_notify: tokio::sync::mpsc::UnboundedSender<super::org_sync::OrgSyncRequest>,
+    /// dm 入站事件的广播通道（ChatReceived/ChatStatus/FriendRequest* 由
+    /// [`super::inbound_dm`] 产出，host 在此 emit 给壳层订阅者）。
+    pub(crate) event_tx: tokio::sync::broadcast::Sender<crate::p2p::P2pEvent>,
+    /// 当前身份昵称共享格（kernel 在解锁/资料更新时刷新、lock 清空；
+    /// 避免事件循环线程逐条 dm 读身份文件）。
+    pub(crate) nickname_shared: Arc<Mutex<String>>,
+    /// p2p 节点句柄共享格（start 后由 kernel 回填；auto_accept 回发
+    /// friend-accept 用——host 在事件循环线程内不能 block_on，改为
+    /// `tokio::spawn` 驱动节点命令通道）。
+    pub(crate) node_shared: Arc<Mutex<Option<Arc<P2pNode>>>>,
+    /// 解锁期签名私钥共享格（auto_accept 回发信封签名用；lock 时清除）。
+    pub(crate) signing_key_shared: Arc<Mutex<Option<ed25519_dalek::SigningKey>>>,
+    /// 存储读写互斥（与 kernel 变更类门面方法同一把；`handle_dm` 的入站
+    /// 落库在锁内执行，避免与 Tauri 命令线程的 read-modify-write 交错）。
+    pub(crate) io_lock: Arc<Mutex<()>>,
 }
 
 impl KernelHost {
@@ -101,17 +120,148 @@ impl KernelHost {
         let config = self
             .collection_configs
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .get(&(domain.to_string(), collection.to_string()))
             .cloned()
             .unwrap_or_default();
         DocumentCollection::new(domain, collection, config)
     }
+
+    /// 由共享字段组装可在事件循环线程外执行的 dm 入站处理器。
+    fn dm_handler_impl(&self) -> KernelDmHandler {
+        KernelDmHandler {
+            storage: self.storage.clone(),
+            current_root_id: Arc::clone(&self.current_root_id),
+            nickname_shared: Arc::clone(&self.nickname_shared),
+            event_tx: self.event_tx.clone(),
+            node_shared: Arc::clone(&self.node_shared),
+            signing_key_shared: Arc::clone(&self.signing_key_shared),
+            io_lock: Arc::clone(&self.io_lock),
+        }
+    }
+}
+
+/// kernel 的 dm 入站处理器：字段全部为 `Arc`/`SledStorage` 克隆，`Send + Sync`，
+/// 由事件循环 spawn 到阻塞线程池执行（验签/落库等重 IO 不占事件循环线程）。
+pub(crate) struct KernelDmHandler {
+    storage: SledStorage,
+    current_root_id: Arc<Mutex<Option<String>>>,
+    nickname_shared: Arc<Mutex<String>>,
+    event_tx: tokio::sync::broadcast::Sender<crate::p2p::P2pEvent>,
+    node_shared: Arc<Mutex<Option<Arc<P2pNode>>>>,
+    signing_key_shared: Arc<Mutex<Option<ed25519_dalek::SigningKey>>>,
+    io_lock: Arc<Mutex<()>>,
+}
+
+impl KernelDmHandler {
+    /// 设备配对自动接受的回发：取本机节点信息装配 friend-accept 信封
+    /// （from==to==我，同身份设备间），经节点命令通道尽力投递。
+    ///
+    /// 本方法在阻塞线程池线程内运行（不能 `block_on`）——`tokio::spawn`
+    /// 到同一 runtime 驱动（事件循环空闲时处理 DmDirect 命令）；节点未回填或
+    /// 身份已锁（无签名私钥）时静默跳过，不影响已完成的本地落库。
+    fn spawn_auto_accept(&self, my_root_id: &str, nickname: &str, auto_accept: AutoAccept) {
+        let node = self
+            .node_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let signing_key = self
+            .signing_key_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let (Some(node), Some(signing_key)) = (node, signing_key) else {
+            return;
+        };
+        let from = my_root_id.to_string();
+        let nickname = nickname.to_string();
+        tokio::spawn(async move {
+            let local = node.local_node_info().await.ok();
+            let mut body = serde_json::json!({
+                "requestId": auto_accept.request_id,
+                "nickname": nickname,
+            });
+            if let Some(info) = local {
+                body["nodeInfo"] = serde_json::json!({
+                    "peerId": info.peer_id,
+                    "addresses": info.addresses,
+                });
+            }
+            // from==to==我：同身份设备间信封，验签侧 to==自己 自然通过
+            let envelope = dm_envelope::build_envelope(
+                KIND_FRIEND_ACCEPT,
+                &from,
+                &from,
+                system_now_ms(),
+                body,
+                &signing_key,
+            );
+            let _ = node.dm_direct(&auto_accept.target, envelope).await;
+        });
+    }
+}
+
+impl DmHandler for KernelDmHandler {
+    /// dm 直连接收：委托 kernel 入站编排（验签/落库/事件），应答帧回传
+    /// 发送方；产出的事件逐个 emit 到壳层广播通道。
+    fn handle_dm(
+        &self,
+        payload: Value,
+        remote_peer_id: &str,
+        online_peers: &HashSet<String>,
+    ) -> std::result::Result<Value, String> {
+        let root_id = self
+            .current_root_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .ok_or_else(|| "no active identity".to_string())?;
+        // 昵称为空时回退 rootId 前 8 位（与 kernel my_nickname 的出站口径一致）
+        let nickname = {
+            let shared = self
+                .nickname_shared
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            if shared.trim().is_empty() {
+                root_id.chars().take(8).collect()
+            } else {
+                shared
+            }
+        };
+        let mut storage = self.storage.clone();
+        // 入站落库整体在 io_lock 内执行（与 Tauri 命令线程的变更互斥）
+        let result = {
+            let _io = self.io_lock.lock().unwrap_or_else(|e| e.into_inner());
+            super::inbound_dm::handle_inbound_dm(
+                &mut storage,
+                &root_id,
+                &nickname,
+                payload,
+                remote_peer_id,
+                online_peers,
+                system_now_ms(),
+            )
+            .map_err(|e| e.to_string())?
+        };
+        for event in result.events {
+            // 无订阅者时忽略发送失败
+            let _ = self.event_tx.send(event);
+        }
+        if let Some(auto_accept) = result.auto_accept {
+            self.spawn_auto_accept(&root_id, &nickname, auto_accept);
+        }
+        Ok(result.response)
+    }
 }
 
 impl P2pHost for KernelHost {
     fn current_root_id(&mut self) -> Option<String> {
-        self.current_root_id.lock().unwrap().clone()
+        self.current_root_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     fn evidence_head_hash(&mut self) -> Option<String> {
@@ -166,7 +316,11 @@ impl P2pHost for KernelHost {
         payload: Value,
         _source: &'static str,
     ) -> std::result::Result<Option<OrgShareAck>, String> {
-        let current = self.current_root_id.lock().unwrap().clone();
+        let current = self
+            .current_root_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         let Ok((target_root_id, organization, sync_id, plugin_docs)) =
             validate_incoming_share_payload(&payload, current.as_deref())
         else {
@@ -190,7 +344,7 @@ impl P2pHost for KernelHost {
                 |domain, collection| {
                     let config = configs
                         .lock()
-                        .unwrap()
+                        .unwrap_or_else(|e| e.into_inner())
                         .get(&(domain.to_string(), collection.to_string()))
                         .cloned()
                         .unwrap_or_default();
@@ -216,7 +370,11 @@ impl P2pHost for KernelHost {
         payload: Value,
         remote_peer_id: Option<String>,
     ) -> std::result::Result<Value, String> {
-        let current = self.current_root_id.lock().unwrap().clone();
+        let current = self
+            .current_root_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         let now = system_now_ms();
         let (response, applied_orgs) = handle_pull_list_request(
             &mut self.storage,
@@ -251,7 +409,12 @@ impl P2pHost for KernelHost {
     }
 
     fn recovery_view(&mut self) -> Vec<RecoveryViewItem> {
-        let Some(root_id) = self.current_root_id.lock().unwrap().clone() else {
+        let Some(root_id) = self
+            .current_root_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        else {
             return Vec::new();
         };
         OrganizationService::get_recovery_view(&mut self.storage, &root_id, system_now_ms())
@@ -263,7 +426,27 @@ impl P2pHost for KernelHost {
         let Some(sync_id) = payload.get("syncId").and_then(Value::as_str) else {
             return;
         };
-        self.org_acks.lock().unwrap().mark_ack(sync_id);
+        self.org_acks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .mark_ack(sync_id);
+    }
+
+    /// dm 直连接收（同步回退路径）：事件循环优先走 [`Self::dm_handler`]
+    /// 的异步处理器；此路径仅在宿主句柄不可用时触发，在线集合不可得，
+    /// 传空集（ChatReceived 事件 online 恒 false，仅影响展示）。
+    fn handle_dm(
+        &mut self,
+        payload: Value,
+        remote_peer_id: &str,
+    ) -> std::result::Result<Value, String> {
+        self.dm_handler_impl()
+            .handle_dm(payload, remote_peer_id, &HashSet::new())
+    }
+
+    /// dm 入站重 IO（验签/落库）交给阻塞线程池执行的异步处理器。
+    fn dm_handler(&self) -> Option<Arc<dyn DmHandler>> {
+        Some(Arc::new(self.dm_handler_impl()))
     }
 
     /// 组织私有 DHT 成员提示回填（p2p-messages.md §15）：按未验证口径入邻居池

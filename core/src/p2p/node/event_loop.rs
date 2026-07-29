@@ -53,12 +53,15 @@ pub(super) enum OrgAttemptKind {
     Share { expected_sync_id: String },
     /// org-pull：返回首个可解析响应 JSON。
     Pull,
+    /// dm 直连投递（`/spark/dm/1.0.0`）：返回对方应用层应答 JSON。
+    Dm,
 }
 
-/// org 直连尝试的最终结果通道（按类别直接回传给调用方）。
+/// org/dm 直连尝试的最终结果通道（按类别直接回传给调用方）。
 pub(super) enum OrgTx {
     Share(oneshot::Sender<Result<bool>>),
     Pull(oneshot::Sender<Result<Option<Value>>>),
+    Dm(oneshot::Sender<Result<Option<Value>>>),
 }
 
 pub(super) struct OrgAttempt {
@@ -71,6 +74,9 @@ pub(super) struct OrgAttempt {
     pub(super) tx: OrgTx,
 }
 
+/// dm 入站异步任务完成消息：(任务 id, 对端 peerId base58, 宿主处理结果)。
+pub(super) type DmCompletion = (u64, String, std::result::Result<Value, String>);
+
 impl OrgAttempt {
     /// 地址/重试耗尽：按类别回传终态。
     pub(super) fn finish_exhausted(self) {
@@ -79,6 +85,9 @@ impl OrgAttempt {
                 let _ = tx.send(Ok(false));
             }
             OrgTx::Pull(tx) => {
+                let _ = tx.send(Ok(None));
+            }
+            OrgTx::Dm(tx) => {
                 let _ = tx.send(Ok(None));
             }
         }
@@ -119,6 +128,8 @@ pub(super) struct EventLoop<S: StorageBackend> {
     pub(super) pending_org_attempts: Vec<OrgAttempt>,
     /// node-challenge 应答侧限流。
     pub(super) challenge_limiter: MinIntervalRateLimiter,
+    /// dm 应答侧限流（同一对端最小间隔）。
+    pub(super) dm_limiter: MinIntervalRateLimiter,
     /// identify 上报的对端协议清单（三层确认第②层）。
     pub(super) peer_protocols: HashMap<PeerId, HashSet<String>>,
     /// 显式 challenge 命令：请求 id →（对端、nonce、调用方等待器）。
@@ -138,6 +149,13 @@ pub(super) struct EventLoop<S: StorageBackend> {
     pub(super) provided_records: HashMap<Vec<u8>, Vec<u8>>,
     /// keepalive tick 计数（DHT 节点存在记录按间隔重发）。
     pub(super) dht_tick_counter: u64,
+    /// dm 入站异步处理完成通道：任务经 tx 送回结果，事件循环收到后
+    /// 按任务 id 找回 ResponseChannel 并 send_response。
+    pub(super) dm_completion_tx: mpsc::UnboundedSender<DmCompletion>,
+    pub(super) dm_completion_rx: mpsc::UnboundedReceiver<DmCompletion>,
+    /// dm 入站进行中：任务 id → ResponseChannel。
+    pub(super) pending_dm_inbound: HashMap<u64, request_response::ResponseChannel<String>>,
+    pub(super) next_dm_task_id: u64,
 }
 
 impl<S: StorageBackend> EventLoop<S> {
@@ -178,6 +196,9 @@ impl<S: StorageBackend> EventLoop<S> {
                     if self.handle_command(cmd) {
                         break;
                     }
+                }
+                Some(completion) = self.dm_completion_rx.recv() => {
+                    self.finish_dm_inbound(completion);
                 }
                 _ = async {
                     match keepalive.as_mut() {
@@ -230,6 +251,13 @@ impl<S: StorageBackend> EventLoop<S> {
                     OrgTx::Pull(tx),
                     false,
                 );
+            }
+            Command::DmDirect {
+                node_info,
+                payload,
+                tx,
+            } => {
+                self.begin_dm_attempt(node_info, payload, tx);
             }
             Command::LocalNodeInfo { tx } => {
                 let _ = tx.send(self.local_node_info());

@@ -161,6 +161,32 @@ impl Kernel {
         Ok(OrganizationService::to_view(&record, &root_id))
     }
 
+    /// 更新组织名称/描述（仅 admin）。落库后经 org-sync worker 向已知成员
+    /// 推送快照（与 setGateways/setPublic 同模式，尽力而为）。
+    pub fn org_update_info(
+        &mut self,
+        org_id: &str,
+        name: Option<&str>,
+        description: Option<&str>,
+    ) -> Result<OrganizationView> {
+        let root_id = self.require_unlocked_root_id()?;
+        let record = OrganizationService::update_org_info(
+            self.require_storage_mut()?,
+            org_id,
+            name,
+            description,
+            &root_id,
+            system_now_ms(),
+        )?;
+        if let Some(tx) = &self.org_sync_tx {
+            let _ = tx.send(OrgSyncRequest::PushOrg {
+                org_id: record.org_id.clone(),
+                actor_root_id: root_id.clone(),
+            });
+        }
+        Ok(OrganizationService::to_view(&record, &root_id))
+    }
+
     /// 开关组织公开标志（仅 admin；org.md §16），可选更新地址记录展示名。
     ///
     /// 落库后经 org-sync worker 向已知成员推送快照（与 setGateways 同模式）；
@@ -226,7 +252,7 @@ impl Kernel {
         };
 
         if self.p2p.is_none() {
-            return Err(KernelError::Message(
+            return Err(KernelError::Internal(
                 "P2P 网络未启动，无法通过邀请码加入".to_string(),
             ));
         }
@@ -254,7 +280,7 @@ impl Kernel {
             .handle()
             .block_on(node.connect_peer(&inviter))
             .map_err(|e| {
-                KernelError::Message(format!("Failed to connect peer by provided addresses: {e}"))
+                KernelError::Internal(format!("Failed to connect peer by provided addresses: {e}"))
             })?;
 
         // org-pull-list：本流程只借其捎带 claim 的副作用（管理员侧回填），
@@ -369,7 +395,7 @@ impl Kernel {
         self.runtime
             .handle()
             .block_on(ctx.sync_org_to_member(&peer, target_root_id, org_id))
-            .map_err(KernelError::Message)
+            .map_err(KernelError::Internal)
     }
 
     /// `p2p-sync-peer-organizations`（ipc/p2p.ts:72-93）：从指定 peer 反熵
@@ -380,13 +406,13 @@ impl Kernel {
         target_peer: &OrganizationNodeInfo,
     ) -> Result<PeerOrgSyncResult> {
         let ctx = self.org_sync_context().ok_or_else(|| {
-            KernelError::Message(
+            KernelError::Internal(
                 "P2P node is not started. Start P2P before syncing organizations.".to_string(),
             )
         })?;
         self.require_unlocked_root_id()?;
         if target_peer.addresses.is_empty() {
-            return Err(KernelError::Message(
+            return Err(KernelError::Internal(
                 "Target peer addresses are required".to_string(),
             ));
         }
@@ -398,7 +424,7 @@ impl Kernel {
             .runtime
             .handle()
             .block_on(ctx.reconcile_from_peer(&peer, false))
-            .map_err(KernelError::Message)?;
+            .map_err(KernelError::Internal)?;
         Ok(stats.into())
     }
 

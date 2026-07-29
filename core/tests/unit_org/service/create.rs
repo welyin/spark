@@ -53,17 +53,32 @@ fn create_organization_validates_input() {
         Err(OrgError::Required(label)) if label == "Organization name"
     ));
     let mut bad = input();
-    bad.base_plugin_domain = "chat".to_string();
+    bad.base_plugin_domain = Some("chat".to_string());
     assert!(matches!(
         OrganizationService::create_organization(&mut storage, &bad, &admin, NOW),
         Err(OrgError::InvalidBasePluginDomain)
     ));
-    let mut bad = input();
-    bad.base_plugin_domain = "   ".to_string();
-    assert!(matches!(
-        OrganizationService::create_organization(&mut storage, &bad, &admin, NOW),
-        Err(OrgError::Required(label)) if label == "Base plugin"
-    ));
+}
+
+#[test]
+fn create_organization_without_base_plugin_domain() {
+    let mut storage = MemoryStorage::new();
+    let admin = rid('a');
+    // base_plugin_domain 省略（None）或空白均视为未设置：组织与插件不再强关联（设计 §7.2）
+    for base_plugin_domain in [None, Some("   ".to_string())] {
+        let input = CreateOrganizationInput {
+            base_plugin_domain,
+            ..input()
+        };
+        let record =
+            OrganizationService::create_organization(&mut storage, &input, &admin, NOW).unwrap();
+        assert_eq!(record.base_plugin_domain, None);
+        // create 事务 payload 不含 basePluginDomain 键
+        let txs = spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 1)
+            .unwrap();
+        let payload = txs[0].payload.as_ref().unwrap();
+        assert!(!payload.contains_key("basePluginDomain"));
+    }
 }
 
 #[test]

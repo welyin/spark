@@ -55,7 +55,7 @@ impl Kernel {
                 .ok_or(KernelError::NotInitialized)?,
         };
         let Some(mut file) = self.read_identity_file(&target)? else {
-            return Err(KernelError::Message("该账号不在本设备上".to_string()));
+            return Err(KernelError::Internal("该账号不在本设备上".to_string()));
         };
         if file.version == identity::file::FILE_VERSION_V1 {
             file =
@@ -65,7 +65,7 @@ impl Kernel {
         let (payload, identity) =
             identity::unlock_identity(&file, password).map_err(map_identity_decrypt_error)?;
         if identity.id() != file.root_id {
-            return Err(KernelError::Message(
+            return Err(KernelError::Internal(
                 "Root identity verification failed".to_string(),
             ));
         }
@@ -84,6 +84,7 @@ impl Kernel {
         let _ = self.stop_p2p();
         self.unlocked = None;
         *self.signing_key_shared.lock().unwrap() = None;
+        *self.nickname_shared.lock().unwrap() = String::new();
         if let Ok(active) = self.read_active_root_id() {
             *self.current_root_id_shared.lock().unwrap() = active;
         }
@@ -94,7 +95,7 @@ impl Kernel {
     /// `setActive` 的"仅改指针，解锁时生效"语义）。
     pub fn set_active_identity(&self, root_id: &str) -> Result<()> {
         if self.read_identity_file(root_id)?.is_none() {
-            return Err(KernelError::Message("该账号不在本设备上".to_string()));
+            return Err(KernelError::Internal("该账号不在本设备上".to_string()));
         }
         self.write_active_root_id(root_id)
     }
@@ -113,14 +114,14 @@ impl Kernel {
         let (file, identity) =
             identity::recover_identity(&normalized, new_password, nickname, avatar).map_err(
                 |e| match e {
-                    identity::IdentityError::InvalidMnemonic(_) => KernelError::Message(
+                    identity::IdentityError::InvalidMnemonic(_) => KernelError::Internal(
                         "助记词校验失败：请检查是否有错别字、漏字或顺序错误".to_string(),
                     ),
                     other => KernelError::Identity(other),
                 },
             )?;
         if self.read_identity_file(&file.root_id)?.is_some() {
-            return Err(KernelError::Message(
+            return Err(KernelError::Internal(
                 "该账号已在本设备上，请直接登录".to_string(),
             ));
         }
@@ -148,24 +149,24 @@ impl Kernel {
     /// 结构无效与密码错误分别报错；写入前 sanitize 外部资料字段。
     pub fn recover_backup(&mut self, payload_json: &str, password: &str) -> Result<String> {
         let file = IdentityFile::from_json(payload_json)
-            .map_err(|_| KernelError::Message("备份数据无效或已损坏".to_string()))?;
+            .map_err(|_| KernelError::Internal("备份数据无效或已损坏".to_string()))?;
         let (payload, identity) =
             identity::unlock_identity(&file, password).map_err(|e| match e {
                 identity::IdentityError::DecryptionFailed => {
-                    KernelError::Message("密码不正确".to_string())
+                    KernelError::Internal("密码不正确".to_string())
                 }
                 identity::IdentityError::InvalidMnemonic(_) | identity::IdentityError::Json(_) => {
-                    KernelError::Message("备份数据无效或已损坏".to_string())
+                    KernelError::Internal("备份数据无效或已损坏".to_string())
                 }
                 other => KernelError::Identity(other),
             })?;
         if identity.id() != file.root_id {
-            return Err(KernelError::Message(
+            return Err(KernelError::Internal(
                 "备份数据校验失败：rootId 不匹配".to_string(),
             ));
         }
         if self.read_identity_file(&file.root_id)?.is_some() {
-            return Err(KernelError::Message(
+            return Err(KernelError::Internal(
                 "该账号已在本设备上，请直接登录".to_string(),
             ));
         }

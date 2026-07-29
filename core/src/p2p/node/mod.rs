@@ -13,11 +13,12 @@
 //! `api`，事件循环主体在 `event_loop`，swarm 事件分发在 `swarm_events`，gossip
 //! 入站与信封发布在 `gossip`，version/peer-exchange/org-recovery 三个
 //! request-response 协议在 `rr_protocols`，org-share/org-pull 直连在
-//! `org_direct`，Kad DHT 与 node-challenge 三层确认在 `dht`，keepalive tick
-//! 编排在 `tick`。
+//! `org_direct`，dm（1:1 聊天/好友请求）直连在 `dm`，Kad DHT 与 node-challenge
+//! 三层确认在 `dht`，keepalive tick 编排在 `tick`。
 
 mod api;
 mod dht;
+mod dm;
 mod event_loop;
 mod gossip;
 mod org_direct;
@@ -37,7 +38,7 @@ use crate::storage::StorageBackend;
 use super::announce::NodeAnnounceValidator;
 use super::behaviour::{BehaviourOptions, DhtMode, SparkBehaviour, build_behaviour};
 use super::constants::{
-    CHALLENGE_MIN_INTERVAL_MS, ORG_KEEPALIVE_INTERVAL_MS, P2P_LISTEN_WS_PORT,
+    CHALLENGE_MIN_INTERVAL_MS, DM_MIN_INTERVAL_MS, ORG_KEEPALIVE_INTERVAL_MS, P2P_LISTEN_WS_PORT,
     PEER_EXCHANGE_MIN_INTERVAL_MS, RECOVERY_QUERY_MIN_INTERVAL_MS,
 };
 use super::direct::MinIntervalRateLimiter;
@@ -176,6 +177,18 @@ pub enum P2pEvent {
         msg_type: String,
         domain: String,
     },
+    /// dm 聊天消息投递通知（kernel 层 handle_dm 验签落库后发出；
+    /// newtype 变体以序列化为 `{kind, data}` 形状）。
+    ChatReceived(serde_json::Value),
+    /// dm 消息状态（已读/撤回）通知。
+    ChatStatus(serde_json::Value),
+    /// 好友请求投递通知。
+    FriendRequestReceived(serde_json::Value),
+    /// 好友请求被接受通知。
+    FriendRequestAccepted(serde_json::Value),
+    /// 我发出的好友申请投递终态（pending=已送达等对方确认 / failed=投递失败
+    /// 可重试；data 为 `{"request": <outbox 记录>}`，前端按 id upsert）。
+    FriendRequestSent(serde_json::Value),
     /// 消息被丢弃（验签失败/强制签名缺失/形状非法）。
     MessageDropped {
         reason: String,
@@ -258,6 +271,7 @@ impl P2pNode {
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (event_tx, event_rx) = mpsc::unbounded_channel();
+        let (dm_completion_tx, dm_completion_rx) = mpsc::unbounded_channel();
         let event_loop = EventLoop {
             swarm,
             storage,
@@ -286,6 +300,7 @@ impl P2pNode {
             pending_forward_extra: HashMap::new(),
             pending_org_attempts: Vec::new(),
             challenge_limiter: MinIntervalRateLimiter::new(CHALLENGE_MIN_INTERVAL_MS),
+            dm_limiter: MinIntervalRateLimiter::new(DM_MIN_INTERVAL_MS),
             peer_protocols: HashMap::new(),
             pending_challenge: HashMap::new(),
             pending_challenge_confirm: HashMap::new(),
@@ -294,6 +309,10 @@ impl P2pNode {
             pending_dht_providers: HashMap::new(),
             provided_records: HashMap::new(),
             dht_tick_counter: 0,
+            dm_completion_tx,
+            dm_completion_rx,
+            pending_dm_inbound: HashMap::new(),
+            next_dm_task_id: 0,
         };
         let keepalive_interval = config.keepalive_interval;
         let task = tokio::spawn(async move {

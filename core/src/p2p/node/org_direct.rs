@@ -34,6 +34,9 @@ impl<S: StorageBackend> EventLoop<S> {
                     OrgTx::Pull(tx) => {
                         let _ = tx.send(Err(e));
                     }
+                    OrgTx::Dm(tx) => {
+                        let _ = tx.send(Err(e));
+                    }
                 }
                 return;
             }
@@ -161,15 +164,24 @@ impl<S: StorageBackend> EventLoop<S> {
     // ------------------------------------------------------------------
     // org 直连 outbound 汇总
     // ------------------------------------------------------------------
+    //
+    // `from_dm` 标记事件来源协议：`org_share_rr` 与 `dm_rr` 的
+    // OutboundRequestId 各自从 1 递增，同一 id 在两个 behaviour 上并存；
+    // 两个分支共用 pending_org_attempts，必须按 kind 类别过滤——DmRr 分支
+    // 只匹配 Dm attempt，OrgShareRr 分支只匹配 Share/Pull，否则「边同步边
+    // 聊天」时 org ack 会被当成 dm 应答（反之亦然）。
 
     pub(super) fn resolve_org_response(
         &mut self,
         request_id: request_response::OutboundRequestId,
         response: String,
+        from_dm: bool,
     ) {
         let mut i = 0;
         while i < self.pending_org_attempts.len() {
-            if self.pending_org_attempts[i].in_flight == Some(request_id) {
+            let same_protocol =
+                matches!(self.pending_org_attempts[i].kind, OrgAttemptKind::Dm) == from_dm;
+            if self.pending_org_attempts[i].in_flight == Some(request_id) && same_protocol {
                 let mut attempt = self.pending_org_attempts.remove(i);
                 attempt.in_flight = None;
                 let delivered = match &attempt.kind {
@@ -179,6 +191,7 @@ impl<S: StorageBackend> EventLoop<S> {
                     OrgAttemptKind::Pull => {
                         matches!(serde_json::from_str::<Value>(&response), Ok(v) if v.is_object())
                     }
+                    OrgAttemptKind::Dm => direct::parse_dm_response(&response).is_some(),
                 };
                 if delivered {
                     match (&attempt.kind, attempt.tx) {
@@ -189,6 +202,10 @@ impl<S: StorageBackend> EventLoop<S> {
                             let value = serde_json::from_str::<Value>(&response).ok();
                             let _ = tx.send(Ok(value));
                         }
+                        (OrgAttemptKind::Dm, OrgTx::Dm(tx)) => {
+                            let value = direct::parse_dm_response(&response);
+                            let _ = tx.send(Ok(value));
+                        }
                         // 类别与通道不匹配属内部错误，按耗尽处理
                         (kind, tx) => {
                             let _ = kind;
@@ -197,6 +214,9 @@ impl<S: StorageBackend> EventLoop<S> {
                                     let _ = tx.send(Ok(false));
                                 }
                                 OrgTx::Pull(tx) => {
+                                    let _ = tx.send(Ok(None));
+                                }
+                                OrgTx::Dm(tx) => {
                                     let _ = tx.send(Ok(None));
                                 }
                             }
@@ -216,12 +236,22 @@ impl<S: StorageBackend> EventLoop<S> {
             }
             i += 1;
         }
+        // 未知 id（attempt 已完结/类别错配）：忽略，不 panic
+        self.emit(P2pEvent::Warning(format!(
+            "org/dm response for unknown request id {request_id:?} (from_dm={from_dm})"
+        )));
     }
 
-    pub(super) fn resolve_org_failure(&mut self, request_id: request_response::OutboundRequestId) {
+    pub(super) fn resolve_org_failure(
+        &mut self,
+        request_id: request_response::OutboundRequestId,
+        from_dm: bool,
+    ) {
         let mut i = 0;
         while i < self.pending_org_attempts.len() {
-            if self.pending_org_attempts[i].in_flight == Some(request_id) {
+            let same_protocol =
+                matches!(self.pending_org_attempts[i].kind, OrgAttemptKind::Dm) == from_dm;
+            if self.pending_org_attempts[i].in_flight == Some(request_id) && same_protocol {
                 let mut attempt = self.pending_org_attempts.remove(i);
                 attempt.in_flight = None;
                 attempt.current_target = None;
@@ -235,5 +265,9 @@ impl<S: StorageBackend> EventLoop<S> {
             }
             i += 1;
         }
+        // 未知 id（attempt 已完结/类别错配）：忽略，不 panic
+        self.emit(P2pEvent::Warning(format!(
+            "org/dm failure for unknown request id {request_id:?} (from_dm={from_dm})"
+        )));
     }
 }

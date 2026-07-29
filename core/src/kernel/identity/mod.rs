@@ -311,6 +311,14 @@ impl Kernel {
     ) {
         *self.current_root_id_shared.lock().unwrap() = Some(identity.id());
         *self.signing_key_shared.lock().unwrap() = Some(identity.signing_key.clone());
+        // 昵称共享格同步（dm 入站应答用；身份文件在调用点前已落盘）
+        let nickname = self
+            .read_identity_file(&identity.id())
+            .ok()
+            .flatten()
+            .and_then(|f| f.nickname)
+            .unwrap_or_default();
+        *self.nickname_shared.lock().unwrap() = nickname;
         self.unlocked = Some(UnlockedIdentity {
             identity,
             seed,

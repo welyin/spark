@@ -164,3 +164,54 @@ fn rate_limiter() {
     assert!(!limiter.is_rate_limited("p1", 61_000));
     assert!(!limiter.is_rate_limited("p2", 61_000));
 }
+
+#[test]
+fn dm_request_frame_roundtrip() {
+    // 请求帧 = 信封本体序列化（透明搬运，不解析字段）
+    let envelope = json!({"kind": "chat", "messageId": "m1", "body": "hi"});
+    let text = build_dm_request(&envelope);
+    assert_eq!(parse_dm_request(&text), Some(envelope.clone()));
+    // 非 JSON / 非对象（数组、标量、空串）一律拒绝
+    assert_eq!(parse_dm_request("garbage"), None);
+    assert_eq!(parse_dm_request("[1,2]"), None);
+    assert_eq!(parse_dm_request("\"str\""), None);
+    assert_eq!(parse_dm_request(""), None);
+}
+
+#[test]
+fn dm_response_frame_roundtrip() {
+    // 应用层应答 JSON 对象即视为有应答
+    let ok = json!({"ok": true});
+    assert_eq!(parse_dm_response(&ok.to_string()), Some(ok));
+    // 非对象应答视为无应答
+    assert_eq!(parse_dm_response("null"), None);
+    assert_eq!(parse_dm_response("garbage"), None);
+    assert_eq!(parse_dm_response("[true]"), None);
+}
+
+#[test]
+fn dm_error_response_shape() {
+    // 应答侧三类错误路径的帧形状（node/dm.rs 事件循环不可测，在此固定其组合行为；
+    // reason 枚举：invalid-request / rate-limited / internal-error）
+    let request = "not json";
+    assert!(parse_dm_request(request).is_none());
+    for reason in ["invalid-request", "rate-limited", "internal-error"] {
+        let frame = build_dm_error_response(reason);
+        assert_eq!(
+            parse_dm_response(&frame),
+            Some(json!({"ok": false, "reason": reason}))
+        );
+    }
+}
+
+#[test]
+fn dm_rate_limiter_window() {
+    // dm 应答侧限流口径：同一对端 1s 最小间隔（首请求记录，窗口内命中）
+    let mut limiter = MinIntervalRateLimiter::new(spark_core::p2p::constants::DM_MIN_INTERVAL_MS);
+    let now = 1_720_000_000_000i64;
+    assert!(!limiter.is_rate_limited("peer-a", now));
+    assert!(limiter.is_rate_limited("peer-a", now + 999));
+    assert!(!limiter.is_rate_limited("peer-a", now + 1_000));
+    // 不同对端互不影响
+    assert!(!limiter.is_rate_limited("peer-b", now));
+}

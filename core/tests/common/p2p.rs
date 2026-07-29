@@ -56,6 +56,8 @@ pub struct HostState {
     pub recovery_view: Vec<RecoveryViewItem>,
     /// 组织私有 DHT 命中的成员提示（on_org_member_hints 回调记录）。
     pub org_member_hints: Vec<spark_core::org::OrgMemberHint>,
+    /// dm 直连接收记录（handle_dm 回调：(payload, remote_peer_id)）。
+    pub dms: Vec<(Value, String)>,
 }
 
 pub struct TestHost {
@@ -157,6 +159,16 @@ impl P2pHost for TestHost {
 
     fn on_org_share_ack(&mut self, payload: Value) {
         self.state.lock().unwrap().acks.push(payload);
+    }
+
+    /// dm 直连接收：记录信封与对端 peerId，回 `{"ok": true}` 应答。
+    fn handle_dm(&mut self, payload: Value, remote_peer_id: &str) -> Result<Value, String> {
+        self.state
+            .lock()
+            .unwrap()
+            .dms
+            .push((payload, remote_peer_id.to_string()));
+        Ok(serde_json::json!({"ok": true}))
     }
 
     /// 组织私有 DHT 成员提示回填（§15）：记录回调 + 按未验证口径入邻居池

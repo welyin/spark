@@ -45,7 +45,7 @@ impl Kernel {
 
         let normalized = org_address.trim();
         let Some(dht_key) = oa::org_address_dht_key(normalized) else {
-            return Err(KernelError::Message("Invalid org address".to_string()));
+            return Err(KernelError::Internal("Invalid org address".to_string()));
         };
         let now = system_now_ms();
         let storage = self.require_storage()?;
@@ -120,6 +120,11 @@ impl Kernel {
             collection_configs: Arc::clone(&self.collection_configs),
             org_acks: Arc::clone(&self.org_acks),
             push_notify: org_sync_tx.clone(),
+            event_tx: self.event_tx.clone(),
+            nickname_shared: Arc::clone(&self.nickname_shared),
+            node_shared: Arc::clone(&self.p2p_node_shared),
+            signing_key_shared: Arc::clone(&self.signing_key_shared),
+            io_lock: Arc::clone(&self.io_lock),
         });
         let mut node =
             self.runtime
@@ -129,6 +134,7 @@ impl Kernel {
         self.p2p_start_error = None;
         let mut events = node.take_events();
         let node = Arc::new(node);
+        *self.p2p_node_shared.lock().unwrap() = Some(Arc::clone(&node));
 
         // org-sync worker：推送/保活串行消费
         let ctx = OrgSyncContext {
@@ -168,6 +174,7 @@ impl Kernel {
     /// 停止 P2P 节点（幂等）：org-sync worker / 事件泵一并停止。
     pub fn stop_p2p(&mut self) -> Result<()> {
         self.org_sync_tx = None;
+        *self.p2p_node_shared.lock().unwrap() = None;
         if let Some(worker) = self.org_sync_worker.take() {
             worker.abort();
         }
@@ -230,7 +237,7 @@ impl Kernel {
             if let Err(e) = self.start_p2p() {
                 let msg = format!("{e}（DHT 模式配置已保存，将在下次启动生效）");
                 self.p2p_start_error = Some(msg.clone());
-                return Err(KernelError::Message(msg));
+                return Err(KernelError::Internal(msg));
             }
         }
         Ok(())
@@ -259,14 +266,14 @@ impl Kernel {
         let local = self.runtime.handle().block_on(node.local_node_info())?;
         let peer_id = local
             .peer_id
-            .ok_or_else(|| KernelError::Message("p2p node not started".to_string()))?;
+            .ok_or_else(|| KernelError::Internal("p2p node not started".to_string()))?;
         let now = system_now_ms();
         let recovery_token = match org_id {
             Some(org_id) => {
                 let record = OrganizationService::get_record(self.require_storage()?, org_id)?
                     .ok_or(crate::org::OrgError::OrganizationNotFound)?;
                 let secret = record.recovery_secret().ok_or_else(|| {
-                    KernelError::Message(
+                    KernelError::Internal(
                         "该组织暂无恢复密钥，请稍后重试或不附带恢复 token".to_string(),
                     )
                 })?;
@@ -281,7 +288,7 @@ impl Kernel {
         let keypair =
             crate::p2p::identity_store::get_or_create_libp2p_keypair(self.require_storage_mut()?)?;
         crate::org::make_node_card(&keypair, &peer_id, &local.addresses, now, recovery_token)
-            .map_err(|e| KernelError::Message(format!("node card signing failed: {e}")))
+            .map_err(|e| KernelError::Internal(format!("node card signing failed: {e}")))
     }
 
     /// 导入节点名片（org.md §17.3-4）：完整校验链（结构 → 新鲜度 → token
@@ -291,7 +298,7 @@ impl Kernel {
     pub fn import_node_card(&mut self, card: &str) -> Result<NodeCardImport> {
         let now = system_now_ms();
         let parsed = crate::org::parse_and_verify_node_card(card, now)
-            .map_err(|e| KernelError::Message(e.to_string()))?;
+            .map_err(|e| KernelError::Internal(e.to_string()))?;
         {
             let storage = self.require_storage_mut()?;
             let mut store = crate::p2p::OverlayPeerStore::new(storage);

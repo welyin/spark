@@ -8,8 +8,11 @@ import { contactsApi, contactsOf, demoContacts, spaces } from './store';
 
 /**
  * 发出添加请求（添加朋友三入口 / 组织成员转个人联系人 §9.3）。
- * 本地先写 outbox（同步语义），Tauri 下再由内核真实投递（§4.1 双向确认）；
- * 投递失败（对方离线等）记录置 failed，可在「新的朋友」里重试；
+ * 本地先写 outbox（同步语义），Tauri 下由内核投递：sendRequest 命令立即返回
+ * pending，投递终态经 FriendRequestSent 事件异步按 id 回写（送达等确认 pending /
+ * 投递失败 failed）；.catch 只在命令立即报错（已是朋友/寻址失败）时触发，届时置
+ * failed 可重试。两侧都按 id 作用于同一条记录，catch 有 pending 守卫，若事件已先
+ * 回写终态则 catch 空转，以事件为准收敛。
  * 等待对方确认后由 FriendRequestAccepted 事件落成朋友。
  */
 export function sendFriendRequest(
@@ -46,7 +49,8 @@ export function sendFriendRequest(
   }
 }
 
-/** 重试投递失败的发出申请：重置为 pending 重新投递，失败会再次置 failed */
+/** 重试投递失败的发出申请：重置为 pending 重新投递；终态同样由 FriendRequestSent
+ *  事件回写，.catch 仅覆盖命令立即报错（守卫 pending，与事件按 id 收敛） */
 export function retryOutgoing(spaceKey: string, requestId: string): void {
   const request = contactsOf(spaceKey).outgoing.find((item) => item.id === requestId);
   if (!request || request.status !== 'failed') {

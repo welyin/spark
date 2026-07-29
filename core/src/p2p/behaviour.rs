@@ -1,6 +1,6 @@
 //! libp2p 装配（core/spec/p2p-messages.md §1.1）：
 //! TCP（noise + yamux）+ WebSocket 双栈 + relay client；mDNS、identify、ping、
-//! relay server、AutoNAT、UPnP、gossipsub（flood_publish）与四个直连协议。
+//! relay server、AutoNAT、UPnP、gossipsub（flood_publish）与六个直连协议。
 //!
 //! 与 TS 的差异（有意决策）：
 //! - 多路复用器 yamux（rust-libp2p 已弃 mplex；TS 侧已按迁移桥接追加 yamux，
@@ -19,12 +19,12 @@ use libp2p::{
 };
 
 use super::constants::{
-    DHT_RECORD_TTL_SECS, DIRECT_ORG_RECOVERY_PROTOCOL, DIRECT_ORG_SHARE_PROTOCOL,
-    DIRECT_PEER_EXCHANGE_PROTOCOL, DIRECT_VERSION_PROTOCOL, KAD_PROTOCOL_NAME,
-    NODE_CHALLENGE_PROTOCOL, NODE_CHALLENGE_READ_TIMEOUT_MS, ORG_RECOVERY_READ_TIMEOUT_MS,
-    ORG_SHARE_READ_TIMEOUT_MS, PEER_EXCHANGE_READ_RESPONSE_TIMEOUT_MS,
-    RELAY_DEFAULT_DATA_LIMIT_BYTES, RELAY_DEFAULT_DURATION_LIMIT_SECS, RELAY_MAX_RESERVATIONS,
-    VERSION_PROTOCOL_READ_TIMEOUT_MS,
+    DHT_RECORD_TTL_SECS, DIRECT_DM_PROTOCOL, DIRECT_ORG_RECOVERY_PROTOCOL,
+    DIRECT_ORG_SHARE_PROTOCOL, DIRECT_PEER_EXCHANGE_PROTOCOL, DIRECT_VERSION_PROTOCOL,
+    DM_READ_TIMEOUT_MS, KAD_PROTOCOL_NAME, NODE_CHALLENGE_PROTOCOL,
+    NODE_CHALLENGE_READ_TIMEOUT_MS, ORG_RECOVERY_READ_TIMEOUT_MS, ORG_SHARE_READ_TIMEOUT_MS,
+    PEER_EXCHANGE_READ_RESPONSE_TIMEOUT_MS, RELAY_DEFAULT_DATA_LIMIT_BYTES,
+    RELAY_DEFAULT_DURATION_LIMIT_SECS, RELAY_MAX_RESERVATIONS, VERSION_PROTOCOL_READ_TIMEOUT_MS,
 };
 
 /// 直连协议单帧上限（1 MiB，防畸形放大；正常帧远小于此）。
@@ -244,6 +244,7 @@ pub struct SparkBehaviour {
     pub recovery_rr: request_response::Behaviour<JsonFrameCodec>,
     pub org_share_rr: request_response::Behaviour<JsonFrameCodec>,
     pub node_challenge_rr: request_response::Behaviour<JsonFrameCodec>,
+    pub dm_rr: request_response::Behaviour<JsonFrameCodec>,
 }
 
 /// 装配开关（测试可关闭 mDNS/UPnP）。
@@ -354,6 +355,14 @@ pub fn build_behaviour(
         request_response::Config::default()
             .with_request_timeout(Duration::from_millis(NODE_CHALLENGE_READ_TIMEOUT_MS)),
     );
+    let dm_rr = request_response::Behaviour::new(
+        [(
+            StreamProtocol::new(DIRECT_DM_PROTOCOL),
+            request_response::ProtocolSupport::Full,
+        )],
+        request_response::Config::default()
+            .with_request_timeout(Duration::from_millis(DM_READ_TIMEOUT_MS)),
+    );
 
     // Kad：Off 不挂载；Client 挂但只查不服务；Server 全量。
     // MemoryStore + 本地周期重发即可（记录都带 TTL，不接 sled）。
@@ -390,5 +399,6 @@ pub fn build_behaviour(
         recovery_rr,
         org_share_rr,
         node_challenge_rr,
+        dm_rr,
     })
 }

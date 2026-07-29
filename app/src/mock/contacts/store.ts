@@ -5,7 +5,7 @@
  */
 import { reactive, watch } from 'vue';
 import { isTauri, listenP2pEvents } from '../../api';
-import type { FriendDto, FriendRequestDto, SpaceContactsDto } from '../../api';
+import type { FriendDto, FriendRequestDto, P2pEventDto, SpaceContactsDto } from '../../api';
 import type { ContactProfile, FriendRequest, MockFriend, SpaceContacts } from './types';
 import { emptyProfile } from './types';
 import { seedOrg, seedPersonal } from './seed';
@@ -31,8 +31,8 @@ function toFriend(dto: FriendDto): MockFriend {
 }
 
 function toRequest(dto: FriendRequestDto): FriendRequest {
-  // createdAt/updatedAt 为可选字段，缺省时兜底为当前时间（混入按时间排序的列表尾部）；
-  // 有值则以 DTO 为准（展开在兜底之后，覆盖兜底值）
+  // updatedAt 内核契约必填，createdAt 可选；缺省时兜底为当前时间（混入按时间
+  // 排序的列表尾部），有值则以 DTO 为准（展开在兜底之后，覆盖兜底值）
   return { createdAt: Date.now(), updatedAt: Date.now(), ...dto };
 }
 
@@ -132,34 +132,61 @@ function ensureEventSubscription(): void {
     return;
   }
   eventsSubscribed = true;
-  listenP2pEvents((event) => {
-    if (event.kind === 'FriendRequestReceived') {
-      // 收到好友申请（仅个人空间）：按 id 去重后追加，置未读提醒
-      const space = contactsOf('personal');
-      const request = toRequest(event.data.request);
-      if (!space.requests.some((item) => item.id === request.id)) {
-        request.unread = true;
-        space.requests.push(request);
-      }
-      return;
-    }
-    if (event.kind === 'FriendRequestAccepted') {
-      // 对方接受了我的申请：outbox 置 accepted + 未读，朋友按 rootId 去重后落本地
-      const space = contactsOf('personal');
-      const outgoing = space.outgoing.find((item) => item.id === event.data.request.id);
-      if (outgoing) {
-        outgoing.status = 'accepted';
-        outgoing.updatedAt = Date.now();
-        outgoing.unread = true;
-      }
-      const friend = toFriend(event.data.friend);
-      if (!space.friends.some((item) => item.rootId === friend.rootId)) {
-        space.friends.push(friend);
-      }
-    }
-  }).catch(() => {
+  listenP2pEvents(handleContactsP2pEvent).catch(() => {
     eventsSubscribed = false;
   });
+}
+
+/**
+ * 通讯录域 P2P 事件处理（个人空间）。导出供单测直接驱动。
+ * - FriendRequestReceived：按 id upsert——同 id 重复到达是对端重试的内容更新，
+ *   替换字段并置未读；不存在则新增。
+ * - FriendRequestSent：我发出申请的投递终态，按 id upsert outbox（回填 nickname/
+ *   status/updatedAt）；status 'failed' 置未读提醒可重试。
+ * - FriendRequestAccepted：outbox 置 accepted + 未读，朋友按 rootId 去重落本地。
+ */
+export function handleContactsP2pEvent(event: P2pEventDto): void {
+  if (event.kind === 'FriendRequestReceived') {
+    const space = contactsOf('personal');
+    const request = toRequest(event.data.request);
+    const existing = space.requests.find((item) => item.id === request.id);
+    if (existing) {
+      Object.assign(existing, request);
+      existing.unread = true;
+    } else {
+      request.unread = true;
+      space.requests.push(request);
+    }
+    return;
+  }
+  if (event.kind === 'FriendRequestSent') {
+    const space = contactsOf('personal');
+    const request = toRequest(event.data.request);
+    const existing = space.outgoing.find((item) => item.id === request.id);
+    if (existing) {
+      Object.assign(existing, request);
+    } else {
+      space.outgoing.push(request);
+    }
+    const record = existing ?? request;
+    if (record.status === 'failed') {
+      record.unread = true;
+    }
+    return;
+  }
+  if (event.kind === 'FriendRequestAccepted') {
+    const space = contactsOf('personal');
+    const outgoing = space.outgoing.find((item) => item.id === event.data.request.id);
+    if (outgoing) {
+      outgoing.status = 'accepted';
+      outgoing.updatedAt = event.data.request.updatedAt ?? Date.now();
+      outgoing.unread = true;
+    }
+    const friend = toFriend(event.data.friend);
+    if (!space.friends.some((item) => item.rootId === friend.rootId)) {
+      space.friends.push(friend);
+    }
+  }
 }
 
 /**

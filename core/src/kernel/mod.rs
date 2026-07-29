@@ -19,12 +19,20 @@
 //! 代码组织：本文件为 [`Kernel`] 结构、生命周期（init/shutdown）与存储对齐；
 //! 文档/数据治理/存证门面在 `doc_ops`，组织门面与同步编排包装在 `org_ops`，
 //! 副本概览在 `org_overview`，P2P/节点名片/组织地址门面在 `p2p_ops`，身份 API
-//! 在 `identity/`，组织同步编排（async worker）在 `org_sync/`。
+//! 在 `identity/`，组织同步编排（async worker）在 `org_sync/`，消息门面在
+//! `message_ops`（出站投递机器在 `dm_delivery`），通讯录门面在 `contact_ops`，
+//! dm 信封构造/校验在 `dm_envelope`，dm 入站编排在 `inbound_dm`（host.rs 的
+//! `handle_dm` 接线）。
 
+mod contact_ops;
+mod dm_delivery;
 mod doc_ops;
+pub mod dm_envelope;
 mod error;
 mod host;
 mod identity;
+mod inbound_dm;
+mod message_ops;
 mod org_ops;
 mod org_overview;
 mod org_sync;
@@ -36,12 +44,15 @@ use std::sync::{Arc, Mutex};
 
 use tokio::sync::broadcast;
 
+pub use contact_ops::SendFriendRequestInput;
 pub use doc_ops::{EvidenceChainStatus, PurgePreviewInfo};
 pub use error::{KernelError, Result};
 pub use identity::{
     DerivedDomainIdentityInfo, DomainSignatureInfo, IdentityStatus, IdentitySummary,
     InitIdentityResult, MnemonicCheckInfo, ProfileInfo, PublicIdentity, RootSignatureInfo,
 };
+pub use inbound_dm::{AutoAccept, InboundDmError, InboundDmResult, handle_inbound_dm};
+pub use message_ops::{ChatMessageView, ConversationView, direct_conversation_id};
 pub use org_sync::{OrgReconcileStats, PeerOrgSyncResult};
 pub use p2p_ops::NodeCardImport;
 
@@ -110,6 +121,11 @@ pub struct Kernel {
     pub(crate) event_tx: broadcast::Sender<P2pEvent>,
     /// p2p 宿主可见的当前身份指针（事件循环线程共享）。
     pub(crate) current_root_id_shared: Arc<Mutex<Option<String>>>,
+    /// p2p 宿主可见的当前身份昵称（dm 入站应答/回发用；随解锁/资料更新
+    /// 刷新，lock 清空——避免事件循环线程逐条 dm 读身份文件）。
+    pub(crate) nickname_shared: Arc<Mutex<String>>,
+    /// p2p 节点句柄共享格（host 回发 auto_accept 用；start 后回填、stop 清空）。
+    pub(crate) p2p_node_shared: Arc<Mutex<Option<Arc<P2pNode>>>>,
     /// 解锁期签名私钥（org-sync worker 自签 nodeInfoClaim 用；lock 时清除）。
     pub(crate) signing_key_shared: Arc<Mutex<Option<ed25519_dalek::SigningKey>>>,
     /// org-share-ack 等待器注册表（host 与 worker 共享）。
@@ -120,6 +136,10 @@ pub struct Kernel {
     pub(crate) org_address_publish: Arc<Mutex<HashMap<String, i64>>>,
     /// doc_* 调用登记的集合配置（远端应用的索引维护依据，见 host.rs）。
     pub(crate) collection_configs: CollectionConfigs,
+    /// 存储读写互斥：p2p 事件循环（host `handle_dm`）与 Tauri 命令线程的
+    /// read-modify-write 串行化。锁顺序：Tauri `Mutex<Kernel>` → `io_lock`
+    /// （host 只拿 `io_lock`，不会死锁）；查询类方法可不加。
+    pub(crate) io_lock: Arc<Mutex<()>>,
 }
 
 impl Kernel {
@@ -146,11 +166,14 @@ impl Kernel {
             org_sync_tx: None,
             event_tx,
             current_root_id_shared: Arc::new(Mutex::new(None)),
+            nickname_shared: Arc::new(Mutex::new(String::new())),
+            p2p_node_shared: Arc::new(Mutex::new(None)),
             signing_key_shared: Arc::new(Mutex::new(None)),
             org_acks: Arc::new(Mutex::new(Default::default())),
             recovery_trigger: Arc::new(Mutex::new(RecoveryTrigger::new())),
             org_address_publish: Arc::new(Mutex::new(HashMap::new())),
             collection_configs: Arc::new(Mutex::new(HashMap::new())),
+            io_lock: Arc::new(Mutex::new(())),
         };
         kernel.migrate_legacy_identity_if_needed()?;
         if let Some(root_id) = kernel.read_active_root_id()? {

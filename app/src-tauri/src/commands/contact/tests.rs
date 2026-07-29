@@ -225,8 +225,14 @@ fn profile_blocked_group_remove_friend_flow() {
     let friends = overview_inner(&mut kernel, PERSONAL).unwrap().friends;
     assert!(friends.iter().all(|f| f.root_id != bob));
     assert_eq!(friends.len(), 1, "仅剩自己条目");
-    // 资料操作目标不存在 → 报错透传
-    assert!(set_blocked_inner(&mut kernel, PERSONAL, &bob, true).is_err());
+    // 拉黑是独立集合（`ct:blocked:`）：删友后拉黑/解禁仍生效，
+    // 重新加回或收到其私信时仍以拉黑处理
+    assert!(set_blocked_inner(&mut kernel, PERSONAL, &bob, true)
+        .unwrap()
+        .success);
+    assert!(set_blocked_inner(&mut kernel, PERSONAL, &bob, false)
+        .unwrap()
+        .success);
 }
 
 #[test]

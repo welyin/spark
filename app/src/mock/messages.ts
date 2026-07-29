@@ -193,8 +193,13 @@ function subscribeP2pEvents(): void {
   }).catch(() => {});
 }
 
-/** 对方发来的新消息：定位/创建会话，按 id 去重入列，维护未读与 updatedAt */
-function onChatReceived(data: { spaceKey: string; conversation: Conversation; message: ChatMessage }): void {
+/**
+ * 对端新消息：定位/创建会话，按 id 去重入列，维护未读与 updatedAt。
+ * data.conversation 是内核回写本条消息之后的权威快照（unreadCount/updatedAt 已含
+ * 本条；自设备同步来的 senderId='me' 消息内核不计未读），前端始终信任快照、不再
+ * 本地 +1；仅活跃会话保持清零 + markRead。
+ */
+export function onChatReceived(data: { spaceKey: string; conversation: Conversation; message: ChatMessage }): void {
   const key = data.spaceKey;
   const space = ensureSpace(key);
   let conv =
@@ -206,14 +211,14 @@ function onChatReceived(data: { spaceKey: string; conversation: Conversation; me
   }
   const list = (space.messages[conv.id] ??= []);
   if (!list.some((m) => m.id === data.message.id)) list.push({ ...data.message });
-  conv.updatedAt = data.message.createdAt;
+  conv.updatedAt = data.conversation.updatedAt;
   if (activeConversation[key] === conv.id) {
     conv.unreadCount = 0;
     void messagesApi()
       ?.markRead(key, conv.id)
       .catch(() => {});
   } else {
-    conv.unreadCount += 1;
+    conv.unreadCount = data.conversation.unreadCount;
   }
 }
 

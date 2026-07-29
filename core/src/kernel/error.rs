@@ -38,6 +38,14 @@ pub enum KernelError {
     #[error(transparent)]
     P2p(#[from] crate::p2p::P2pError),
 
+    /// 通讯录模块错误。
+    #[error(transparent)]
+    Contact(#[from] crate::contact::ContactError),
+
+    /// 消息模块错误。
+    #[error(transparent)]
+    Message(#[from] crate::message::MessageError),
+
     /// 文件 IO 错误。
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
@@ -68,7 +76,7 @@ pub enum KernelError {
 
     /// 其他流程错误（消息文本与 TS 对应分支一致）。
     #[error("{0}")]
-    Message(String),
+    Internal(String),
 }
 
 /// kernel 门面 Result 别名。

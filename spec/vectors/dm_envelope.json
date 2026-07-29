@@ -1,0 +1,18 @@
+{
+  "description": "dm 签名载荷 golden vector：固定测试密钥 → build_signing_payload 确定输出 + ed25519 签名（kernel/dm_envelope.rs）",
+  "secretKeyHex": "0707070707070707070707070707070707070707070707070707070707070707",
+  "pubKeyBase64": "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=",
+  "rootId": "fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889",
+  "kind": "chat",
+  "to": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "ts": 1720000000000,
+  "body": {
+    "spaceKey": "personal",
+    "message": {
+      "id": "m1720000000000-0",
+      "content": "hello golden"
+    }
+  },
+  "payload": "{\"body\":{\"spaceKey\":\"personal\",\"message\":{\"id\":\"m1720000000000-0\",\"content\":\"hello golden\"}},\"from\":\"fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889\",\"kind\":\"chat\",\"to\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"ts\":1720000000000}",
+  "sigBase64": "azgHVsIqiIClhJtMpWyr0LNWas3JWq90pMO5OvK6XmfZwseXOS4ESyieMrfL/pMW3K4MxaIQC21A/2Mnt+AUDg=="
+}

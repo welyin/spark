@@ -40,7 +40,7 @@ fn reconcile_and_keepalive_converge() {
         .create_org(CreateOrganizationInput {
             name: "反熵组织".to_string(),
             description: None,
-            base_plugin_domain: "plugin:app".to_string(),
+            base_plugin_domain: Some("plugin:app".to_string()),
         })
         .unwrap();
     let org_id = view.record.org_id.clone();
@@ -130,7 +130,7 @@ fn node_card_import_lands_unverified_pool_entry() {
         .create_org(CreateOrganizationInput {
             name: "名片组织".to_string(),
             description: None,
-            base_plugin_domain: "plugin:app".to_string(),
+            base_plugin_domain: Some("plugin:app".to_string()),
         })
         .unwrap();
     let card = kernel_a.make_node_card(Some(&view.record.org_id)).unwrap();

@@ -3,10 +3,12 @@
 pub mod identity;
 
 pub mod collection;
+pub mod contact;
 #[path = "data-mgmt/mod.rs"]
 pub mod data_mgmt;
 pub mod evidence;
 pub mod kernel;
+pub mod message;
 pub mod org;
 pub mod p2p;
 pub mod schema;

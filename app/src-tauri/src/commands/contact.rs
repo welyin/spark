@@ -2,7 +2,8 @@
 //!
 //! 视图/资料薄封装直通内核 `contact_*` 门面；标签/分组/组织树的 id 一律由
 //! 前端生成透传（client id 幂等键）。好友申请投递为尽力而为——寻址失败才报错，
-//! 投递失败 outbox 保留 pending（内核语义，见 core contact_ops.rs）。
+//! 命令落库 pending 即返回，投递终态（failed/回填昵称）经 FriendRequestSent
+//! 事件回传（内核语义，见 core contact_ops.rs）。
 
 use spark_core::contact::{
     ContactGroup, ContactTag, FriendRequestRecord, OrgGroupNode, ProfilePatch, SpaceContactsView,
@@ -240,7 +241,8 @@ pub fn contact_remove_friend(
     remove_friend_inner(&mut *lock_kernel(&state)?, &root_id)
 }
 
-/// 发出好友申请（寻址失败报错；投递失败不报错，outbox 保留 pending）。
+/// 发出好友申请（寻址失败报错；投递终态经 FriendRequestSent 事件回传，
+/// 前端可用同 id 重试失败申请）。
 #[tauri::command]
 pub fn contact_send_request(
     state: tauri::State<'_, KernelState>,

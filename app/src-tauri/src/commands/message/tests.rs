@@ -40,6 +40,7 @@ fn seed_message(kernel: &mut Kernel, conv_id: &str, id: &str, created_at: i64, s
         created_at,
         status: status.map(str::to_string),
         recalled: false,
+        read: false,
     };
     let mut storage = kernel.__test_storage().unwrap();
     MessageService::append_message(&mut storage, PERSONAL, conv_id, &record).unwrap();
@@ -100,11 +101,11 @@ fn send_text_persists_failed_without_p2p() {
     // resend：failed 可重发，p2p 未启动仍 failed
     let view = resend_inner(&mut kernel, PERSONAL, &conv.id, "msg_001").unwrap();
     assert_eq!(view.status.as_deref(), Some("failed"));
-    // 非 failed 状态不可重发
+    // 非 failed/sending 状态不可重发
     seed_message(&mut kernel, &conv.id, "msg_003", system_now_ms(), Some("delivered"));
     assert_eq!(
         resend_inner(&mut kernel, PERSONAL, &conv.id, "msg_003").unwrap_err(),
-        "Only failed messages can be resent"
+        "仅失败或发送中的消息可以重发"
     );
 }
 

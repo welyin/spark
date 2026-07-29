@@ -229,11 +229,11 @@ impl Kernel {
             .into_iter()
             .find(|item| item.record.org_id == org_id)
             .ok_or_else(|| {
-                KernelError::Message("Organization not found or not a member".to_string())
+                KernelError::Internal("Organization not found or not a member".to_string())
             })?;
         let domain = view.record.base_plugin_domain.clone();
         if domain.is_empty() {
-            return Err(KernelError::Message(format!(
+            return Err(KernelError::Internal(format!(
                 "Organization {org_id} has no base plugin domain; cannot locate its data domain"
             )));
         }

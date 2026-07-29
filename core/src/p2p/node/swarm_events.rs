@@ -18,7 +18,7 @@ use crate::p2p::peer_targets::extract_peer_id;
 use crate::storage::StorageBackend;
 
 use super::P2pEvent;
-use super::event_loop::EventLoop;
+use super::event_loop::{EventLoop, OrgAttemptKind};
 
 impl<S: StorageBackend> EventLoop<S> {
     pub(super) fn handle_swarm_event(&mut self, event: SwarmEvent<SparkBehaviourEvent>) {
@@ -104,24 +104,34 @@ impl<S: StorageBackend> EventLoop<S> {
                         i += 1;
                     }
                 }
-                // org 直连尝试匹配：连接成功即发请求
+                // org/dm 直连尝试匹配：连接成功即发请求
+                // （in_flight 非空说明请求已发出——双连接并存时不重复发）
                 let mut j = 0;
                 while j < self.pending_org_attempts.len() {
                     let matched = {
                         let a = &self.pending_org_attempts[j];
-                        a.current_target.as_deref().is_some_and(|t| {
-                            remote == t
-                                || remote.starts_with(&format!("{t}/"))
-                                || t.starts_with(&remote)
-                        }) || a.current_peer == Some(peer_id)
+                        a.in_flight.is_none()
+                            && (a.current_target.as_deref().is_some_and(|t| {
+                                remote == t
+                                    || remote.starts_with(&format!("{t}/"))
+                                    || t.starts_with(&remote)
+                            }) || a.current_peer == Some(peer_id))
                     };
                     if matched {
                         let attempt = &mut self.pending_org_attempts[j];
-                        let request_id = self
-                            .swarm
-                            .behaviour_mut()
-                            .org_share_rr
-                            .send_request(&peer_id, attempt.request_json.clone());
+                        // dm 尝试走 /spark/dm/1.0.0，org-share/pull 走 /spark/org-share/1.0.0
+                        let request_id = match attempt.kind {
+                            OrgAttemptKind::Dm => self
+                                .swarm
+                                .behaviour_mut()
+                                .dm_rr
+                                .send_request(&peer_id, attempt.request_json.clone()),
+                            _ => self
+                                .swarm
+                                .behaviour_mut()
+                                .org_share_rr
+                                .send_request(&peer_id, attempt.request_json.clone()),
+                        };
                         attempt.in_flight = Some(request_id);
                         attempt.current_peer = Some(peer_id);
                         break;
@@ -392,14 +402,38 @@ impl<S: StorageBackend> EventLoop<S> {
                     response,
                     ..
                 } => {
-                    self.resolve_org_response(request_id, response);
+                    self.resolve_org_response(request_id, response, false);
                 }
             },
             SparkBehaviourEvent::OrgShareRr(request_response::Event::OutboundFailure {
                 request_id,
                 ..
             }) => {
-                self.resolve_org_failure(request_id);
+                self.resolve_org_failure(request_id, false);
+            }
+            SparkBehaviourEvent::DmRr(request_response::Event::Message {
+                peer,
+                message,
+                ..
+            }) => match message {
+                request_response::Message::Request {
+                    request, channel, ..
+                } => {
+                    self.handle_dm_inbound(peer, request, channel);
+                }
+                request_response::Message::Response {
+                    request_id,
+                    response,
+                    ..
+                } => {
+                    self.resolve_org_response(request_id, response, true);
+                }
+            },
+            SparkBehaviourEvent::DmRr(request_response::Event::OutboundFailure {
+                request_id,
+                ..
+            }) => {
+                self.resolve_org_failure(request_id, true);
             }
             _ => {}
         }

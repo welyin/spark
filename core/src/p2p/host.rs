@@ -2,6 +2,11 @@
 //!
 //! 全部方法为同步调用（与 [`crate::storage::StorageBackend`] 的同步口径一致），
 //! 在节点事件循环内被调用——实现应保持轻量（KV 读写级别），禁止阻塞。
+//! 重 IO 的 dm 入站处理经 [`P2pHost::dm_handler`] 返回的 [`DmHandler`] 句柄
+//! 由事件循环 spawn 到阻塞线程池执行，不占用事件循环线程。
+
+use std::collections::HashSet;
+use std::sync::Arc;
 
 use serde_json::Value;
 
@@ -80,6 +85,24 @@ pub trait P2pHost: Send {
         Vec::new()
     }
 
+    /// dm 直连接收（`/spark/dm/1.0.0`）：payload 为 dm 信封 JSON（透明搬运，
+    /// 验签/落库由 kernel 层负责），`remote_peer_id` 为连接层对端；
+    /// 返回值序列化为直连响应帧回传发送方。
+    fn handle_dm(
+        &mut self,
+        _payload: Value,
+        _remote_peer_id: &str,
+    ) -> std::result::Result<Value, String> {
+        Err("dm not supported".into())
+    }
+
+    /// 重 IO dm 入站处理器：返回 `Some` 时事件循环把 dm 请求 spawn 到阻塞
+    /// 线程池调用该句柄（完成后再回到事件循环 send_response），事件循环
+    /// 线程不再执行存储 IO；返回 `None` 退化为事件循环内同步 `handle_dm`。
+    fn dm_handler(&self) -> Option<Arc<dyn DmHandler>> {
+        None
+    }
+
     /// 对端版本观察上报（`/spark/version/1.0.0`）。
     fn on_peer_version(&mut self, _version: &str, _peer_id: &str) {}
 
@@ -90,6 +113,19 @@ pub trait P2pHost: Send {
     /// `{peerId, addresses}` 条目，业务层按未验证口径入邻居池（`verified=false`）；
     /// 组织校验仍走 pull/claim 链路，信任边界不变。
     fn on_org_member_hints(&mut self, _hints: &[OrgMemberHint]) {}
+}
+
+/// 可在事件循环线程外执行的 dm 入站处理器（实现须 `Send + Sync`，
+/// 通常由宿主字段的 Arc 克隆组装）。
+pub trait DmHandler: Send + Sync {
+    /// 语义同 [`P2pHost::handle_dm`]；`online_peers` 为当前已连接的
+    /// libp2p peerId 集合（事件循环在分发请求时快照）。
+    fn handle_dm(
+        &self,
+        payload: Value,
+        remote_peer_id: &str,
+        online_peers: &HashSet<String>,
+    ) -> std::result::Result<Value, String>;
 }
 
 /// 空宿主（测试/最小装配）。

@@ -33,7 +33,7 @@ pub use envelope::{
     build_org_body, build_update_body, decode_envelope_public_key, is_signature_mandatory_type,
     parse_and_verify_envelope, spki_der_base64, spki_der_from_raw, spki_der_pem,
 };
-pub use host::{OrgShareAck, P2pHost};
+pub use host::{DmHandler, OrgShareAck, P2pHost};
 pub use keepalive::RecoveryState;
 pub use node::{KeepaliveStats, LocalP2PNodeInfo, P2pConfig, P2pEvent, P2pNode};
 pub use overlay_store::{OverlayPeerRecord, OverlayPeerSource, OverlayPeerStore};

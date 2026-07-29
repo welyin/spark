@@ -131,6 +131,18 @@ fn event_json(event: &P2pEvent) -> Option<Value> {
         }
         P2pEvent::Warning(msg) => json!({"event": "warning", "message": msg}),
         P2pEvent::Stopped => json!({"event": "stopped"}),
+        // dm 事件（kernel 层发出；例程不消费，原样透出 data）
+        P2pEvent::ChatReceived(data) => json!({"event": "chat-received", "data": data}),
+        P2pEvent::ChatStatus(data) => json!({"event": "chat-status", "data": data}),
+        P2pEvent::FriendRequestReceived(data) => {
+            json!({"event": "friend-request-received", "data": data})
+        }
+        P2pEvent::FriendRequestAccepted(data) => {
+            json!({"event": "friend-request-accepted", "data": data})
+        }
+        P2pEvent::FriendRequestSent(data) => {
+            json!({"event": "friend-request-sent", "data": data})
+        }
         // ready 行单独打印；keepalive tick 在本例程禁用
         P2pEvent::Started { .. } | P2pEvent::KeepaliveTick(_) => return None,
     };

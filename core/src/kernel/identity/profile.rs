@@ -45,6 +45,7 @@ impl Kernel {
         identity::update_profile(&mut file, password, nickname, avatar)
             .map_err(map_identity_decrypt_error)?;
         self.write_identity_file(&file)?;
+        *self.nickname_shared.lock().unwrap() = file.nickname.clone().unwrap_or_default();
         Ok(ProfileInfo {
             nickname: file.nickname.clone(),
             avatar: file.avatar.clone(),
@@ -70,6 +71,7 @@ impl Kernel {
         };
         identity::update_profile(&mut file, &password, nickname, avatar)?;
         self.write_identity_file(&file)?;
+        *self.nickname_shared.lock().unwrap() = file.nickname.clone().unwrap_or_default();
         Ok(ProfileInfo {
             nickname: file.nickname.clone(),
             avatar: file.avatar.clone(),
@@ -95,7 +97,7 @@ impl Kernel {
     pub fn derive_domain_identity(&self, domain: &str) -> Result<DerivedDomainIdentityInfo> {
         let unlocked = self.unlocked.as_ref().ok_or(KernelError::Locked)?;
         if domain.trim().is_empty() {
-            return Err(KernelError::Message("Domain is required".to_string()));
+            return Err(KernelError::Internal("Domain is required".to_string()));
         }
         let derived = identity::derive_domain_identity(&unlocked.seed, domain);
         Ok(DerivedDomainIdentityInfo {
@@ -116,7 +118,7 @@ impl Kernel {
     ) -> Result<DomainSignatureInfo> {
         let unlocked = self.unlocked.as_ref().ok_or(KernelError::Locked)?;
         if domain.trim().is_empty() {
-            return Err(KernelError::Message("Domain is required".to_string()));
+            return Err(KernelError::Internal("Domain is required".to_string()));
         }
         let derived = identity::derive_domain_identity(&unlocked.seed, domain);
         let signature = derived.signing_key.sign(payload.as_bytes());

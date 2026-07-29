@@ -1,9 +1,93 @@
 //! 组织设置：`setOrgGateways` 规则（数量/成员校验、去重归一、幂等）与
-//! `setOrgPublic`（展示名更新、幂等、存量组织根密钥对懒补齐，org.md §16/§15）。
+//! `setOrgPublic`（展示名更新、幂等、存量组织根密钥对懒补齐，org.md §16/§15）、
+//! `updateOrgInfo`（名称/描述更新、幂等、admin 校验）。
 
 use super::*;
 
 use spark_core::org::OrgError;
+
+#[test]
+fn update_org_info_rules() {
+    let mut storage = MemoryStorage::new();
+    let (admin, record) = setup_org(&mut storage);
+
+    // 非 admin 拒绝 / 组织不存在
+    assert!(matches!(
+        OrganizationService::update_org_info(
+            &mut storage,
+            &record.org_id,
+            Some("新名字"),
+            None,
+            &rid('x'),
+            NOW + 1
+        ),
+        Err(OrgError::AdminRequired)
+    ));
+    assert!(matches!(
+        OrganizationService::update_org_info(&mut storage, "org_nope", Some("新名字"), None, &admin, NOW + 1),
+        Err(OrgError::OrganizationNotFound)
+    ));
+    // 名称 trim 后为空：拒绝
+    assert!(matches!(
+        OrganizationService::update_org_info(&mut storage, &record.org_id, Some("   "), None, &admin, NOW + 1),
+        Err(OrgError::Required(_))
+    ));
+
+    // 更新名称（含 trim 归一），描述不变
+    let updated = OrganizationService::update_org_info(
+        &mut storage,
+        &record.org_id,
+        Some("  星火团队  "),
+        None,
+        &admin,
+        NOW + 2,
+    )
+    .unwrap();
+    assert_eq!(updated.name, "星火团队");
+    assert_eq!(updated.description, record.description);
+    assert_eq!(updated.updated_at, NOW + 2);
+    assert_eq!(
+        updated.sync.as_ref().unwrap().versions.summary_version,
+        NOW + 2
+    );
+    let txs = spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 1).unwrap();
+    assert_eq!(txs[0].summary, "更新组织信息");
+    assert_eq!(
+        txs[0].payload.as_ref().unwrap()["name"],
+        serde_json::json!("星火团队")
+    );
+
+    // 幂等：同值重复设置不 bump 版本
+    let same = OrganizationService::update_org_info(
+        &mut storage,
+        &record.org_id,
+        Some("星火团队"),
+        None,
+        &admin,
+        NOW + 99,
+    )
+    .unwrap();
+    assert_eq!(same.updated_at, NOW + 2);
+
+    // 只更新描述（空串 = 清除描述）
+    let cleared = OrganizationService::update_org_info(
+        &mut storage,
+        &record.org_id,
+        None,
+        Some("   "),
+        &admin,
+        NOW + 3,
+    )
+    .unwrap();
+    assert_eq!(cleared.name, "星火团队");
+    assert_eq!(cleared.description, "");
+    assert_eq!(cleared.updated_at, NOW + 3, "清除是一次真实变更，bump 版本");
+    let txs = spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 1).unwrap();
+    assert_eq!(
+        txs[0].payload.as_ref().unwrap()["description"],
+        serde_json::json!("")
+    );
+}
 
 #[test]
 fn set_org_gateways_rules() {

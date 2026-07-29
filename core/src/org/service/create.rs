@@ -36,13 +36,20 @@ impl OrganizationService {
             .map(str::trim)
             .unwrap_or("")
             .to_string();
-        let base_plugin_domain = normalize_plugin_domain(&input.base_plugin_domain)?;
+        // 基础插件域可省（组织与插件不再强关联，设计 §7.2）；
+        // 空白等同未设置（与 description 归一口径一致），非空时校验 `plugin:` 前缀
+        let base_plugin_domain = input
+            .base_plugin_domain
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .map(normalize_plugin_domain)
+            .transpose()?;
 
         let mut record = OrganizationRecord {
             org_id: generate_organization_id(),
             name: name.clone(),
             description: description.clone(),
-            base_plugin_domain: Some(base_plugin_domain.clone()),
+            base_plugin_domain: base_plugin_domain.clone(),
             created_at: now_ms,
             created_by: current_root_id.to_string(),
             updated_at: now_ms,
@@ -74,6 +81,13 @@ impl OrganizationService {
             record.org_secret().expect("orgSecret just set"),
         ));
 
+        let mut tx_payload = serde_json::Map::from_iter([
+            ("name".to_string(), Value::from(name.clone())),
+            ("description".to_string(), Value::from(description.clone())),
+        ]);
+        if let Some(domain) = base_plugin_domain {
+            tx_payload.insert("basePluginDomain".to_string(), Value::from(domain));
+        }
         let transaction = append_organization_transaction(
             storage,
             OrganizationTransactionRecord {
@@ -84,18 +98,7 @@ impl OrganizationService {
                 actor_root_id: current_root_id.to_string(),
                 target_root_id: None,
                 summary: format!("创建组织 {name}"),
-                payload: Some(
-                    [
-                        ("name".to_string(), Value::from(name)),
-                        ("description".to_string(), Value::from(description)),
-                        (
-                            "basePluginDomain".to_string(),
-                            Value::from(base_plugin_domain),
-                        ),
-                    ]
-                    .into_iter()
-                    .collect(),
-                ),
+                payload: Some(tx_payload),
             },
         )?;
         record.sync = Some(OrganizationSyncState {
