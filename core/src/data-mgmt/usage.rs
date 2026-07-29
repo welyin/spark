@@ -155,26 +155,18 @@ pub fn classify_key(key: &str) -> UsageClass {
 
 /// `measureDiskInfo`（usage.ts:74-86）：读取数据目录所在磁盘的可用空间。
 ///
-/// - `freeBytes = bavail * bsize`（**bavail**，非 bfree），`totalBytes = blocks * bsize`；
-/// - 任一乘积超出可表示范围（对应 TS 的非有限数）或 `totalBytes <= 0` → `None`；
-/// - `statfs` 失败静默返回 `None`（不影响用量统计）。
+/// - `freeBytes` 为可用字节数，`totalBytes` 为总字节数；
+/// - 任一值超出可表示范围或 `totalBytes <= 0` → `None`；
+/// - 获取失败静默返回 `None`（不影响用量统计）。
 pub fn measure_disk_info(path: &str) -> Option<DiskInfo> {
-    use std::ffi::CString;
-    use std::os::unix::ffi::OsStrExt;
-
-    let c_path = CString::new(std::path::Path::new(path).as_os_str().as_bytes()).ok()?;
-    // SAFETY: `stat` 为零初始化结构体，`c_path` 以 NUL 结尾；返回值检查后字段才可读。
-    let stat = unsafe {
-        let mut stat: libc::statfs = std::mem::zeroed();
-        if libc::statfs(c_path.as_ptr(), &mut stat) != 0 {
-            return None;
-        }
-        stat
-    };
-    let free_bytes =
-        u64::try_from((stat.f_bavail as u128).checked_mul(stat.f_bsize as u128)?).ok()?;
-    let total_bytes =
-        u64::try_from((stat.f_blocks as u128).checked_mul(stat.f_bsize as u128)?).ok()?;
+    // Windows 下 fs4 对不存在的路径会回退到当前盘根目录，先显式判存在以
+    // 保持与 Unix `statfs` 失败语义一致（路径不存在 → `None`）。
+    let p = std::path::Path::new(path);
+    if !p.exists() {
+        return None;
+    }
+    let total_bytes = fs4::total_space(p).ok()?;
+    let free_bytes = fs4::available_space(p).ok()?;
     if total_bytes == 0 {
         return None;
     }
@@ -377,8 +369,10 @@ mod tests {
 
     #[test]
     fn measure_disk_info_real_and_missing_paths() {
-        let info = measure_disk_info("/").expect("rootfs statfs should succeed");
-        assert_eq!(info.path, "/");
+        let real_path = std::env::current_dir().expect("current dir");
+        let real_path = real_path.to_str().expect("utf8 path");
+        let info = measure_disk_info(real_path).expect("current dir disk info should succeed");
+        assert_eq!(info.path, real_path);
         assert!(info.total_bytes > 0);
         assert!(info.free_bytes <= info.total_bytes);
         assert!(info.free_ratio > 0.0 && info.free_ratio <= 1.0);
