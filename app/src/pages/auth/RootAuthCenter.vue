@@ -33,9 +33,16 @@
             v-else-if="authMode === 'switch'"
             @select="handleSwitchSelect"
             @register="authMode = 'register'"
+            @recover="authMode = 'recover'"
             @back="authMode = 'login'"
           />
-          <RegisterPage v-else-if="authMode === 'register'" @registered="handleRegistered" @recover="authMode = 'recover'" />
+          <RegisterPage
+            v-else-if="authMode === 'register'"
+            show-back
+            @registered="handleRegistered"
+            @recover="authMode = 'recover'"
+            @back="authMode = 'login'"
+          />
           <RecoverPage v-else back-label="返回用户列表" @recovered="handleRecovered" @back="authMode = 'switch'" />
         </template>
 
@@ -44,7 +51,6 @@
             <h2>已登录</h2>
           </template>
           <div class="row">
-            <el-button @click="openRootPage">RootID</el-button>
             <el-button type="danger" plain @click="handleLogout">退出登录</el-button>
           </div>
         </el-card>
@@ -63,14 +69,7 @@ import LoginPage from './LoginPage.vue';
 import RecoverPage from './RecoverPage.vue';
 import SwitchUserPage from './SwitchUserPage.vue';
 import { errorMessage } from '../../utils/ipc';
-
-type RootStatus = {
-  initialized: boolean;
-  unlocked: boolean;
-  rootId: string | null;
-  nickname: string | null;
-  avatar: string | null;
-};
+import type { RootStatusDto as RootStatus } from '../../api';
 
 type AuthMode = 'login' | 'switch' | 'register' | 'recover';
 
@@ -82,7 +81,7 @@ export default defineComponent({
     RecoverPage,
     SwitchUserPage
   },
-  emits: ['open-root-page', 'update-auth-state'],
+  emits: ['update-auth-state'],
   setup(_, { emit }) {
     const rootStatus = ref<RootStatus>({ initialized: false, unlocked: false, rootId: null, nickname: null, avatar: null });
     const message = ref('');
@@ -147,10 +146,6 @@ export default defineComponent({
       }
     };
 
-    const openRootPage = () => {
-      emit('open-root-page');
-    };
-
     onMounted(async () => {
       await refreshStatus();
     });
@@ -164,8 +159,7 @@ export default defineComponent({
       handleRecovered,
       handleLogin,
       handleSwitchSelect,
-      handleLogout,
-      openRootPage
+      handleLogout
     };
   }
 });

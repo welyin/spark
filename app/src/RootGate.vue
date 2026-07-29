@@ -4,8 +4,8 @@
 
     <div v-else class="gate-wrap" v-loading="authBusy" element-loading-text="正在登录...">
       <header class="brand">
-        <span class="brand-logo">S</span>
-        <h1 class="brand-name">Spark</h1>
+        <img class="brand-logo" :src="sparkLogo" alt="星火" />
+        <h1 class="brand-name">星火</h1>
         <p class="brand-slogan">去中心化的组织协作网络</p>
       </header>
 
@@ -31,9 +31,16 @@
             v-else-if="authMode === 'switch'"
             @select="handleSwitchSelect"
             @register="authMode = 'register'"
+            @recover="authMode = 'recover'"
             @back="authMode = 'login'"
           />
-          <RegisterPage v-else-if="authMode === 'register'" @registered="handleRegistered" @recover="authMode = 'recover'" />
+          <RegisterPage
+            v-else-if="authMode === 'register'"
+            show-back
+            @registered="handleRegistered"
+            @recover="authMode = 'recover'"
+            @back="authMode = 'login'"
+          />
           <RecoverPage v-else back-label="返回用户列表" @recovered="handleRecovered" @back="authMode = 'switch'" />
         </template>
 
@@ -49,21 +56,15 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, onMounted, ref } from 'vue';
+import { defineComponent, nextTick, onMounted, ref } from 'vue';
 import App from './App.vue';
+import sparkLogo from './assets/spark-logo.png';
+import type { RootStatusDto as RootStatus } from './api';
 import RegisterPage from './pages/auth/RegisterPage.vue';
 import LoginPage from './pages/auth/LoginPage.vue';
 import RecoverPage from './pages/auth/RecoverPage.vue';
 import SwitchUserPage from './pages/auth/SwitchUserPage.vue';
 import { errorMessage } from './utils/ipc';
-
-type RootStatus = {
-  initialized: boolean;
-  unlocked: boolean;
-  rootId: string | null;
-  nickname: string | null;
-  avatar: string | null;
-};
 
 type AuthMode = 'login' | 'switch' | 'register' | 'recover';
 
@@ -110,6 +111,9 @@ export default defineComponent({
 
     const handleLogin = async (password: string) => {
       authBusy.value = true;
+      // 先让 Vue 渲染并绘制出蒙版，再开始解锁（避免事件回合内的同步工作挤掉蒙版绘制）
+      await nextTick();
+      await new Promise((resolve) => setTimeout(resolve, 0));
       try {
         const result = await window.electronAPI.rootIdentity.unlock(password);
         message.value = `登录成功，RootID=${result.rootId}`;
@@ -154,6 +158,7 @@ export default defineComponent({
 
     return {
       isPluginWindow,
+      sparkLogo,
       rootStatus,
       showApp,
       authBusy,

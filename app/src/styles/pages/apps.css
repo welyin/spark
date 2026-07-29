@@ -1,69 +1,366 @@
-/* 插件市场页 */
+/* 应用页（已安装列表 / 应用市场 / 详情），设计：ui-apps-market */
 
-.card-page {
+.apps-page {
   display: flex;
   flex-direction: column;
   gap: var(--spark-gap-page);
-  padding: var(--spark-padding-page);
+  /* 顶部不留 padding：应用市场固定头从滚动起点贴顶（列表视图的上间距由 .apps-list 自担）；
+     overflow-x 裁剪市场分区负边距产生的横向滚动条 */
+  padding: 0 var(--spark-padding-page) var(--spark-padding-page);
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
-.card-page h1 {
+/* 加载错误提示：顶部补回间距（无 .apps-page 顶部 padding 后） */
+.apps-load-error {
+  margin-top: var(--spark-padding-page);
+}
+
+.apps-title {
   margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--spark-text-1);
+  white-space: nowrap;
 }
 
-.plugin-card {
-  min-height: 290px;
-  margin-bottom: 12px;
-  transition: box-shadow 0.15s ease;
+.apps-search {
+  flex: 1;
+  max-width: 320px;
 }
 
-.plugin-card:hover {
+/* ---------- 应用列表（§2） ---------- */
+
+.apps-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spark-gap-page);
+  /* .apps-page 已无顶部 padding，列表视图自行补回 */
+  padding-top: var(--spark-padding-page);
+}
+
+.apps-list-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.app-group {
+  background: var(--spark-bg-card);
+  border-radius: var(--spark-radius-l);
+  box-shadow: var(--spark-shadow-card);
+  padding: 8px 12px 12px;
+}
+
+.app-group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 0;
+  cursor: pointer;
+  user-select: none;
+}
+
+.app-group-arrow {
+  color: var(--spark-text-3);
+  font-size: 14px;
+  transition: transform 0.15s ease;
+  transform: rotate(90deg);
+}
+
+.app-group-arrow.collapsed {
+  transform: rotate(0deg);
+}
+
+.app-group-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--spark-text-1);
+}
+
+.app-group-count {
+  font-size: 12px;
+  color: var(--spark-text-3);
+}
+
+.app-group-actions {
+  margin-left: auto;
+  display: none;
+  align-items: center;
+  gap: 2px;
+}
+
+.app-group-header:hover .app-group-actions {
+  display: flex;
+}
+
+.app-group-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--spark-radius-s);
+  background: transparent;
+  color: var(--spark-text-3);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.app-group-action:hover {
+  background: var(--spark-bg-hover);
+  color: var(--spark-text-1);
+}
+
+/* 拖放目标分区：整个分区（组头+卡片区）高亮 */
+.app-group.drop-target .app-group-header {
+  background: var(--spark-primary-light);
+  border-radius: var(--spark-radius-m);
+}
+
+/* 拖拽中的源卡片：从布局中摘除（延迟一帧应用，避免 WebKit 取消拖拽会话），落点由占位块表达 */
+.app-card.drag-source {
+  display: none;
+}
+
+/* 落点预测占位块：与卡片同占一个网格格位，虚线框+浅底与真实卡片明显区分；
+   pointer-events:none 避免占位块自身参与命中测试引起落点闪动 */
+.app-card-drop-placeholder {
+  min-height: 92px;
+  border: 2px dashed var(--spark-primary);
+  border-radius: var(--spark-radius-l);
+  background: var(--spark-primary-light);
+  opacity: 0.75;
+  pointer-events: none;
+}
+
+.app-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 10px;
+}
+
+/* 已安装应用卡片：图标 + 名称/状态标签/简介 + 操作按钮 */
+.app-card {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--spark-border-light);
+  border-radius: var(--spark-radius-l);
+  background: var(--spark-bg-card);
+  transition: box-shadow 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+}
+
+.app-card:hover {
+  border-color: var(--spark-primary);
+  box-shadow: var(--spark-shadow-hover);
+  transform: translateY(-2px);
+}
+
+.app-card[draggable='true'] {
+  cursor: grab;
+}
+
+.app-card.disabled .app-card-icon,
+.app-card.disabled .app-card-name,
+.app-card.disabled .app-card-desc {
+  filter: grayscale(1);
+  opacity: 0.45;
+}
+
+.app-card-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: var(--spark-radius-l);
+  background: var(--spark-primary-light);
+  color: #fff;
+  font-size: 20px;
+  font-weight: 600;
+  flex-shrink: 0;
+  box-shadow: inset 0 -2px 6px rgba(0, 0, 0, 0.08);
+}
+
+.app-card-body {
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.app-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.app-card-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--spark-text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-card-desc {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--spark-text-3);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.app-card-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.app-card-actions .el-button + .el-button {
+  margin-left: 0;
+}
+
+/* 「添加应用」虚线入口卡片：位于 .app-cards 网格内，与已安装卡片同尺寸 */
+.app-add-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 96px;
+  border: 1px dashed var(--spark-border);
+  border-radius: var(--spark-radius-l);
+  background: transparent;
+  color: var(--spark-text-3);
+  font-size: 14px;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.app-add-card:hover {
+  color: var(--spark-primary);
+  border-color: var(--spark-primary);
+  background: var(--spark-primary-light);
+}
+
+/* ---------- 应用详情（§3.4） ---------- */
+
+.app-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spark-gap-page);
+  max-width: 640px;
+}
+
+.app-detail-hero {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  padding: 24px;
+  border: 1px solid var(--spark-border-light);
+  border-radius: var(--spark-radius-xl);
+  background: linear-gradient(135deg, var(--spark-primary-light), var(--spark-bg-card) 60%);
+  box-shadow: var(--spark-shadow-card);
+}
+
+.app-detail-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 72px;
+  height: 72px;
+  border-radius: var(--spark-radius-xl);
+  background: var(--spark-primary-light);
+  color: #fff;
+  font-size: 30px;
+  font-weight: 600;
+  flex-shrink: 0;
   box-shadow: var(--spark-shadow-hover);
 }
 
-.plugin-head {
+.app-detail-hero-info {
+  min-width: 0;
+}
+
+.app-detail-hero-info h1 {
   display: flex;
-  justify-content: space-between;
-  gap: 12px;
   align-items: center;
+  gap: 8px;
+  margin: 0 0 6px;
+  font-size: 18px;
+  color: var(--spark-text-1);
 }
 
-.plugin-head h3 {
+.app-detail-meta {
+  margin: 2px 0;
+  font-size: 12px;
+  color: var(--spark-text-2);
+  word-break: break-all;
+}
+
+.app-detail-section {
+  padding: 16px 20px;
+  border: 1px solid var(--spark-border-light);
+  border-radius: var(--spark-radius-l);
+  background: var(--spark-bg-card);
+  box-shadow: var(--spark-shadow-card);
+}
+
+.app-detail-section h2 {
+  margin: 0 0 10px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--spark-text-1);
+}
+
+.app-detail-section p {
   margin: 0;
+  font-size: 13px;
+  color: var(--spark-text-2);
+  line-height: 1.6;
 }
 
-.plugin-head p {
-  margin: 4px 0 0;
-  color: var(--spark-text-3);
-  font-size: 12px;
-}
-
-.plugin-card .desc {
-  min-height: 40px;
-}
-
-.meta {
-  display: grid;
-  gap: 4px;
-  font-size: 12px;
+.app-detail-permissions {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
   color: var(--spark-text-2);
 }
 
-.state-row {
-  margin-top: 8px;
-  display: flex;
-  gap: 8px;
+.permission-check {
+  color: var(--spark-success);
+  margin-right: 4px;
 }
 
-.actions {
-  margin-top: 10px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.reason {
-  margin: 10px 0 0;
-  font-size: 12px;
+.permission-code {
+  margin-left: 6px;
+  font-size: 11px;
   color: var(--spark-text-3);
+}
+
+.app-detail-muted {
+  color: var(--spark-text-3) !important;
+}
+
+.app-detail-actions {
+  display: flex;
+  gap: 10px;
+  padding: 16px 4px;
+  border-top: 1px solid var(--spark-border-light);
 }

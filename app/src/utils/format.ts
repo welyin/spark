@@ -11,3 +11,9 @@ export function formatBytes(bytes: number): string {
   } while (value >= 1024 && unit < units.length - 1);
   return `${value.toFixed(1)} ${units[unit]}`;
 }
+
+/** 长编码中间缩略（默认前 8…后 8），短文本原样返回 */
+export function shortenMiddle(text: string, head = 8, tail = 8): string {
+  if (!text || text.length <= head + tail + 3) return text;
+  return `${text.slice(0, head)}…${text.slice(-tail)}`;
+}

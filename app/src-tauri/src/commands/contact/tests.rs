@@ -1,0 +1,278 @@
+//! 通讯录命令单测：直调 *_inner，不依赖 WebView。
+
+use super::*;
+use spark_core::contact::{ContactService, FriendRecord};
+use spark_core::kernel::KernelConfig;
+
+const PASSWORD: &str = "correct-horse-battery";
+const PERSONAL: &str = "personal";
+const ORG_SPACE: &str = "org:org_test00000001";
+
+fn unlocked_kernel() -> (tempfile::TempDir, Kernel) {
+    let dir = tempfile::tempdir().unwrap();
+    let mut kernel = Kernel::init(KernelConfig {
+        data_dir: dir.path().to_path_buf(),
+        app_version: "0.0.0-test".to_string(),
+        p2p: None,
+    })
+    .unwrap();
+    kernel.init_identity(PASSWORD, "alice", None).unwrap();
+    (dir, kernel)
+}
+
+/// 直接向个人空间写入一个朋友（测试辅助；绕开 p2p 申请流程）。
+fn seed_friend(kernel: &mut Kernel, root_id: &str) {
+    let friend = FriendRecord {
+        root_id: root_id.to_string(),
+        nickname: "Bob".to_string(),
+        signature: String::new(),
+        gender: None,
+        added_at: 1,
+        peer: None,
+        remark: String::new(),
+        phones: Vec::new(),
+        tag_ids: Vec::new(),
+        group_id: String::new(),
+        memo: String::new(),
+        photos: Vec::new(),
+        permission: "open".to_string(),
+        blocked: false,
+    };
+    let mut storage = kernel.__test_storage().unwrap();
+    ContactService::upsert_friend(&mut storage, &friend).unwrap();
+}
+
+#[test]
+fn overview_empty_shape() {
+    let (_dir, mut kernel) = unlocked_kernel();
+    let my_root = kernel.current_root_id().unwrap().unwrap();
+    let view = overview_inner(&mut kernel, PERSONAL).unwrap();
+    // friends 恒含自己（nickname 取当前身份昵称）
+    assert_eq!(view.friends.len(), 1);
+    assert_eq!(view.friends[0].root_id, my_root);
+    assert_eq!(view.friends[0].nickname, "alice");
+    assert!(view.requests.is_empty());
+    assert!(view.outgoing.is_empty());
+    assert!(view.tags.is_empty());
+    assert!(view.groups.is_empty());
+    assert!(view.group_tree.is_empty());
+    assert!(view.member_extras.is_empty());
+
+    // 序列化线形：七字段 camelCase 全在
+    let json = serde_json::to_value(&view).unwrap();
+    for key in [
+        "friends",
+        "requests",
+        "outgoing",
+        "tags",
+        "groups",
+        "groupTree",
+        "memberExtras",
+    ] {
+        assert!(json.get(key).is_some(), "missing key {key}");
+    }
+}
+
+#[test]
+fn tag_create_rename_delete_flow() {
+    let (_dir, mut kernel) = unlocked_kernel();
+
+    // client id 透传
+    let tag = tag_create_inner(&mut kernel, PERSONAL, "tag_001", "家人").unwrap();
+    assert_eq!(tag.id, "tag_001");
+    assert_eq!(tag.name, "家人");
+    assert_eq!(overview_inner(&mut kernel, PERSONAL).unwrap().tags.len(), 1);
+
+    assert!(tag_rename_inner(&mut kernel, PERSONAL, "tag_001", "亲属").unwrap().success);
+    let view = overview_inner(&mut kernel, PERSONAL).unwrap();
+    assert_eq!(view.tags[0].name, "亲属");
+
+    assert!(tag_delete_inner(&mut kernel, PERSONAL, "tag_001").unwrap().success);
+    assert!(overview_inner(&mut kernel, PERSONAL).unwrap().tags.is_empty());
+}
+
+#[test]
+fn group_create_rename_move_delete_flow() {
+    let (_dir, mut kernel) = unlocked_kernel();
+
+    // client id 透传（space_key 仅对齐前端参数表，inner 不落空间维度）
+    let g1 = group_create_inner(&mut kernel, "grp_001", "同事").unwrap();
+    let g2 = group_create_inner(&mut kernel, "grp_002", "同学").unwrap();
+    assert_eq!((g1.id.as_str(), g2.id.as_str()), ("grp_001", "grp_002"));
+    let groups = overview_inner(&mut kernel, PERSONAL).unwrap().groups;
+    assert_eq!(groups.len(), 2);
+
+    assert!(group_rename_inner(&mut kernel, "grp_001", "工友").unwrap().success);
+    let groups = overview_inner(&mut kernel, PERSONAL).unwrap().groups;
+    assert_eq!(groups[0].name, "工友");
+
+    // 拖拽重排：grp_002 移到最前
+    assert!(group_move_inner(&mut kernel, "grp_002", 0).unwrap().success);
+    let groups = overview_inner(&mut kernel, PERSONAL).unwrap().groups;
+    assert_eq!(groups[0].id, "grp_002");
+    assert_eq!(groups[1].id, "grp_001");
+
+    assert!(group_delete_inner(&mut kernel, "grp_001").unwrap().success);
+    let groups = overview_inner(&mut kernel, PERSONAL).unwrap().groups;
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].id, "grp_002");
+}
+
+#[test]
+fn org_group_tree_flow() {
+    let (_dir, mut kernel) = unlocked_kernel();
+
+    // 根层节点（client id 透传）
+    let root = org_group_create_inner(&mut kernel, ORG_SPACE, "", "og_root", "总部")
+        .unwrap()
+        .expect("root node created");
+    assert_eq!(root.id, "og_root");
+    // 子节点
+    let child = org_group_create_inner(&mut kernel, ORG_SPACE, "og_root", "og_child", "研发部")
+        .unwrap()
+        .expect("child node created");
+    assert_eq!(child.id, "og_child");
+    // 父不存在 → None（前端得 null）
+    assert!(
+        org_group_create_inner(&mut kernel, ORG_SPACE, "og_nope", "og_x", "幻影")
+            .unwrap()
+            .is_none()
+    );
+
+    let tree = overview_inner(&mut kernel, ORG_SPACE).unwrap().group_tree;
+    assert_eq!(tree.len(), 1);
+    assert_eq!(tree[0].children.len(), 1);
+    assert_eq!(tree[0].children[0].id, "og_child");
+
+    // 改名 / 同级重排 / 删除（子节点提升一层）
+    assert!(org_group_rename_inner(&mut kernel, ORG_SPACE, "og_child", "研发一部")
+        .unwrap()
+        .success);
+    let sibling = org_group_create_inner(&mut kernel, ORG_SPACE, "", "og_root2", "分部")
+        .unwrap()
+        .unwrap();
+    assert_eq!(sibling.id, "og_root2");
+    assert!(org_group_move_inner(&mut kernel, ORG_SPACE, "og_root2", 0)
+        .unwrap()
+        .success);
+    let tree = overview_inner(&mut kernel, ORG_SPACE).unwrap().group_tree;
+    assert_eq!(tree[0].id, "og_root2");
+    assert_eq!(tree[1].children[0].name, "研发一部");
+
+    assert!(org_group_delete_inner(&mut kernel, ORG_SPACE, "og_root")
+        .unwrap()
+        .success);
+    let tree = overview_inner(&mut kernel, ORG_SPACE).unwrap().group_tree;
+    // og_root 删除后子节点提升一层：og_root2 + og_child 同级
+    assert_eq!(tree.len(), 2);
+    assert!(tree.iter().any(|n| n.id == "og_child"));
+}
+
+#[test]
+fn profile_blocked_group_remove_friend_flow() {
+    let (_dir, mut kernel) = unlocked_kernel();
+    let bob = "bb".repeat(32);
+    seed_friend(&mut kernel, &bob);
+
+    // overview 含「自己」条目：按 rootId 找 bob，不依赖数组位置
+    let friend_of = |kernel: &mut Kernel| {
+        overview_inner(kernel, PERSONAL)
+            .unwrap()
+            .friends
+            .into_iter()
+            .find(|f| f.root_id == bob)
+            .expect("bob 在 friends 中")
+    };
+
+    // update_profile：camelCase 入参直接反序列化为 ProfilePatch
+    let patch: ProfilePatch = serde_json::from_value(serde_json::json!({
+        "remark": "小博",
+        "tagIds": ["tag_a"],
+        "memo": "前同事"
+    }))
+    .unwrap();
+    assert!(update_profile_inner(&mut kernel, PERSONAL, &bob, patch)
+        .unwrap()
+        .success);
+    let friend = friend_of(&mut kernel);
+    assert_eq!(friend.remark, "小博");
+    assert_eq!(friend.tag_ids, vec!["tag_a".to_string()]);
+    assert_eq!(friend.memo, "前同事");
+
+    // set_blocked 往返
+    assert!(set_blocked_inner(&mut kernel, PERSONAL, &bob, true)
+        .unwrap()
+        .success);
+    assert!(friend_of(&mut kernel).blocked);
+    assert!(set_blocked_inner(&mut kernel, PERSONAL, &bob, false)
+        .unwrap()
+        .success);
+    assert!(!friend_of(&mut kernel).blocked);
+
+    // set_group：建组 → 挂组 → 复位未分组
+    group_create_inner(&mut kernel, "grp_001", "同事").unwrap();
+    assert!(set_group_inner(&mut kernel, PERSONAL, &bob, "grp_001")
+        .unwrap()
+        .success);
+    assert_eq!(friend_of(&mut kernel).group_id, "grp_001");
+    assert!(set_group_inner(&mut kernel, PERSONAL, &bob, "")
+        .unwrap()
+        .success);
+    assert!(friend_of(&mut kernel).group_id.is_empty());
+
+    // remove_friend（自己条目保留）
+    assert!(remove_friend_inner(&mut kernel, &bob).unwrap().success);
+    let friends = overview_inner(&mut kernel, PERSONAL).unwrap().friends;
+    assert!(friends.iter().all(|f| f.root_id != bob));
+    assert_eq!(friends.len(), 1, "仅剩自己条目");
+    // 资料操作目标不存在 → 报错透传
+    assert!(set_blocked_inner(&mut kernel, PERSONAL, &bob, true).is_err());
+}
+
+#[test]
+fn self_blocked_and_remove_rejected() {
+    let (_dir, mut kernel) = unlocked_kernel();
+    let my_root = kernel.current_root_id().unwrap().unwrap();
+    assert_eq!(
+        set_blocked_inner(&mut kernel, PERSONAL, &my_root, true).unwrap_err(),
+        "不能拉黑自己"
+    );
+    assert_eq!(
+        remove_friend_inner(&mut kernel, &my_root).unwrap_err(),
+        "不能删除自己"
+    );
+    // 自己条目仍在
+    let friends = overview_inner(&mut kernel, PERSONAL).unwrap().friends;
+    assert!(friends.iter().any(|f| f.root_id == my_root));
+}
+
+#[test]
+fn resolve_request_unknown_errors() {
+    let (_dir, mut kernel) = unlocked_kernel();
+    assert_eq!(
+        resolve_request_inner(&mut kernel, "req_nope", true, None).unwrap_err(),
+        "好友申请不存在或已处理"
+    );
+    assert_eq!(
+        resolve_request_inner(&mut kernel, "req_nope", false, Some("chatOnly")).unwrap_err(),
+        "好友申请不存在或已处理"
+    );
+}
+
+#[test]
+fn send_request_unaddressable_errors() {
+    let (_dir, mut kernel) = unlocked_kernel();
+    // raw 既不是节点名片、组织成员里也没有该 rootId → 寻址失败
+    let input: SendFriendRequestInput = serde_json::from_value(serde_json::json!({
+        "id": "req_001",
+        "rootId": "cc".repeat(32),
+        "raw": "not-a-node-card",
+        "source": "RootID 搜索",
+        "message": "你好"
+    }))
+    .unwrap();
+    assert_eq!(
+        send_request_inner(&mut kernel, input).unwrap_err(),
+        "无法确定对方节点地址，请使用扫码名片添加"
+    );
+}

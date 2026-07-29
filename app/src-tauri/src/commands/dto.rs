@@ -163,12 +163,13 @@ impl From<QueryResult> for QueryResultDto {
 // ------------------------------------------------------------------
 
 /// 创建组织入参（TS `CreateOrganizationInput`）。
+/// `basePluginDomain` 可选：组织与插件不再强关联（设计 §7.2）。
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateOrgInputDto {
     pub name: String,
     pub description: Option<String>,
-    pub base_plugin_domain: String,
+    pub base_plugin_domain: Option<String>,
 }
 
 impl From<CreateOrgInputDto> for CreateOrganizationInput {

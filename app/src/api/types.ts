@@ -24,6 +24,10 @@ export type P2pEventDto =
   | { kind: 'SyncMessageApplied'; data: { msgType: string; domain: string } }
   | { kind: 'MessageDropped'; data: { reason: string } }
   | { kind: 'KeepaliveTick'; data: { overlayDialed: number; exchanged: number; announced: boolean } }
+  | { kind: 'ChatReceived'; data: { spaceKey: string; conversation: ConversationDto; message: ChatMessageDto } }
+  | { kind: 'ChatStatus'; data: { spaceKey: string; convId: string; messageId?: string; status?: MessageStatusDto; recalled?: boolean; peerRead?: boolean } }
+  | { kind: 'FriendRequestReceived'; data: { request: FriendRequestDto } }
+  | { kind: 'FriendRequestAccepted'; data: { request: FriendRequestDto; friend: FriendDto } }
   | { kind: 'Warning'; data: string }
   | { kind: 'Stopped' }
   | { kind: 'Lagged'; skipped: number };
@@ -36,6 +40,30 @@ export type DomainSignature = {
   signature: string;
   payloadHash: string;
 };
+
+/** 插件目录项（静态目录 PLUGIN_CATALOG 的 DTO，api/index.ts）。 */
+export type PluginCatalogItem = {
+  id: string;
+  domain: string;
+  name: string;
+  description: string;
+  category: 'foundation' | 'business';
+  version: string;
+  views: string[];
+  permissions?: string[];
+  package?: {
+    updateManifestUrl: string;
+    signatureUrl: string;
+    packageName: string;
+    installCommand: string;
+  };
+};
+
+/** RootID 状态（rootIdentity.status 返回，派生自 ElectronAPI，组件侧不再本地重复声明）。 */
+export type RootStatusDto = Awaited<ReturnType<ElectronAPI['rootIdentity']['status']>>;
+
+/** P2P 节点信息（p2p.info 返回，派生自 ElectronAPI；stores/network-status 与各组件共用）。 */
+export type P2pInfoDto = Awaited<ReturnType<ElectronAPI['p2p']['info']>>;
 
 export type DataUsageReportDto = {
   scannedAt: number;
@@ -160,6 +188,134 @@ export type OrgSyncOverviewDto = {
   status: OrgNetworkStatus;
 };
 
+// ------------------------------------------------------------------
+// 通讯录 / 消息 DTO（与 src/mock/contacts/、src/mock/messages.ts
+// 顶部类型逐字段对齐，camelCase 线形）
+// ------------------------------------------------------------------
+
+/** 朋友权限（开放 / 仅聊天），仅个人空间使用。 */
+export type FriendPermissionDto = 'open' | 'chatOnly';
+
+/** 联系人本地资料（备注/电话/标签/备忘/照片/拉黑，仅自己可见）。 */
+export interface ContactProfileDto {
+  remark: string;
+  phones: string[];
+  tagIds: string[];
+  /** 所属分组：个人空间=ContactGroupDto.id，组织空间=树节点 id；'' = 未分组 */
+  groupId: string;
+  memo: string;
+  photos: string[];
+  permission: FriendPermissionDto;
+  blocked: boolean;
+}
+
+/** 个人空间朋友。 */
+export interface FriendDto extends ContactProfileDto {
+  rootId: string;
+  nickname: string;
+  signature: string;
+  gender?: 'male' | 'female';
+  addedAt: number;
+}
+
+/** 朋友/成员申请。 */
+export interface FriendRequestDto {
+  id: string;
+  rootId: string;
+  nickname: string;
+  message: string;
+  source: string;
+  status: 'pending' | 'accepted' | 'ignored' | 'replied' | 'failed';
+  /** 申请发出/收到时间。 */
+  createdAt?: number;
+  /** 最近一次状态变化/新回复时间。 */
+  updatedAt?: number;
+  /** 有未看的新变化。 */
+  unread?: boolean;
+  /** 来回回复记录。 */
+  thread?: Array<{ from: 'me' | 'peer'; text: string; ts: number }>;
+  /** 组织邀请码（我发出的组织成员邀请）。 */
+  inviteCode?: string;
+}
+
+/** 通讯录标签。 */
+export interface ContactTagDto {
+  id: string;
+  name: string;
+}
+
+/** 个人空间分组（扁平一层，数组顺序即显示顺序）。 */
+export interface ContactGroupDto {
+  id: string;
+  name: string;
+}
+
+/** 组织空间分组树节点（数组顺序即同级排序）。 */
+export interface OrgGroupNodeDto {
+  id: string;
+  name: string;
+  children: OrgGroupNodeDto[];
+}
+
+/** 单空间通讯录总览。 */
+export interface SpaceContactsDto {
+  friends: FriendDto[];
+  requests: FriendRequestDto[];
+  outgoing: FriendRequestDto[];
+  tags: ContactTagDto[];
+  groups: ContactGroupDto[];
+  groupTree: OrgGroupNodeDto[];
+  memberExtras: Record<string, ContactProfileDto>;
+}
+
+export type MessageTypeDto = 'text' | 'image' | 'file' | 'link' | 'voice' | 'system';
+export type MessageStatusDto = 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
+
+/** 链接预览卡片。 */
+export interface LinkPreviewDto {
+  url: string;
+  title: string;
+  description: string;
+  siteName: string;
+  domain: string;
+}
+
+/** 引用回复携带的原消息片段。 */
+export interface QuoteRefDto {
+  messageId: string;
+  senderName: string;
+  preview: string;
+}
+
+export interface ChatMessageDto {
+  id: string;
+  senderId: string;
+  senderName: string;
+  type: MessageTypeDto;
+  content: string;
+  fileSize?: number;
+  duration?: number;
+  link?: LinkPreviewDto;
+  quote?: QuoteRefDto;
+  createdAt: number;
+  /** 仅自己发送的消息有状态 */
+  status?: MessageStatusDto;
+  recalled: boolean;
+}
+
+export interface ConversationDto {
+  id: string;
+  kind: 'direct' | 'system';
+  title: string;
+  peerId: string;
+  unreadCount: number;
+  pinnedAt: number;
+  muted: boolean;
+  online: boolean;
+  draft: string;
+  updatedAt: number;
+}
+
 export type ElectronAPI = {
   db: {
     query: (prefix: string) => Promise<Array<{ key: string; value: string }>>;
@@ -187,7 +343,7 @@ export type ElectronAPI = {
   };
   plugin: {
     openView: (pluginDomain: string, pluginView?: string) => Promise<{ success: boolean; windowId: number }>;
-    listCatalog: () => Promise<unknown[]>;
+    listCatalog: () => Promise<PluginCatalogItem[]>;
     currentRoot: () => Promise<{ unlocked: boolean; rootId: string | null }>;
     identitySign: (payload: string, pluginDomain?: string) => Promise<DomainSignature>;
     identityVerify: (payload: string, signature: string, publicKey: string) => Promise<{ valid: boolean }>;
@@ -224,7 +380,7 @@ export type ElectronAPI = {
   };
   organization: {
     listMine: () => Promise<OrgView[]>;
-    create: (input: { name: string; description?: string; basePluginDomain: string }) => Promise<OrgView>;
+    create: (input: { name: string; description?: string; basePluginDomain?: string }) => Promise<OrgView>;
     delete: (orgId: string) => Promise<{ success: boolean }>;
     addMember: (orgId: string, input: { rootId: string; nodeInfo?: { peerId?: string; addresses: string[] } }) => Promise<OrgView>;
     removeMember: (orgId: string, memberRootId: string) => Promise<OrgView>;
@@ -233,8 +389,44 @@ export type ElectronAPI = {
     acceptInvite: (code: string) => Promise<{ orgId: string; orgName: string; memberCount: number }>;
     getSyncOverview: (orgId: string) => Promise<OrgSyncOverviewDto | null>;
     setPublic: (orgId: string, isPublic: boolean, displayName?: string) => Promise<OrgView>;
+    updateInfo: (orgId: string, patch: { name?: string; description?: string }) => Promise<OrgView>;
     resolveAddress: (orgAddress: string) => Promise<OrgAddressRecordDto | null>;
     searchKnown: (keyword: string) => Promise<OrgAddressRecordDto[]>;
+  };
+  contacts: {
+    overview: (spaceKey: string) => Promise<SpaceContactsDto>;
+    updateProfile: (spaceKey: string, rootId: string, patch: Partial<ContactProfileDto>) => Promise<{ success: boolean }>;
+    setBlocked: (spaceKey: string, rootId: string, blocked: boolean) => Promise<{ success: boolean }>;
+    removeFriend: (rootId: string) => Promise<{ success: boolean }>;
+    sendRequest: (input: { id: string; rootId: string; raw: string; source: string; message: string }) => Promise<FriendRequestDto>;
+    resolveRequest: (requestId: string, accept: boolean, permission: FriendPermissionDto) => Promise<{ success: boolean }>;
+    tagCreate: (spaceKey: string, id: string, name: string) => Promise<ContactTagDto>;
+    tagRename: (spaceKey: string, tagId: string, name: string) => Promise<{ success: boolean }>;
+    tagDelete: (spaceKey: string, tagId: string) => Promise<{ success: boolean }>;
+    groupCreate: (spaceKey: string, id: string, name: string) => Promise<ContactGroupDto>;
+    groupRename: (spaceKey: string, groupId: string, name: string) => Promise<{ success: boolean }>;
+    groupDelete: (spaceKey: string, groupId: string) => Promise<{ success: boolean }>;
+    groupMove: (spaceKey: string, groupId: string, toIndex: number) => Promise<{ success: boolean }>;
+    setGroup: (spaceKey: string, rootId: string, groupId: string) => Promise<{ success: boolean }>;
+    orgGroupCreate: (spaceKey: string, parentId: string, id: string, name: string) => Promise<OrgGroupNodeDto | null>;
+    orgGroupRename: (spaceKey: string, id: string, name: string) => Promise<{ success: boolean }>;
+    orgGroupDelete: (spaceKey: string, id: string) => Promise<{ success: boolean }>;
+    orgGroupMove: (spaceKey: string, id: string, toIndex: number) => Promise<{ success: boolean }>;
+  };
+  messages: {
+    listConversations: (spaceKey: string) => Promise<ConversationDto[]>;
+    listMessages: (spaceKey: string, convId: string) => Promise<ChatMessageDto[]>;
+    ensureDirect: (spaceKey: string, peerId: string, title: string) => Promise<ConversationDto>;
+    sendText: (spaceKey: string, convId: string, messageId: string, text: string, quote?: QuoteRefDto) => Promise<ChatMessageDto>;
+    resend: (spaceKey: string, convId: string, messageId: string) => Promise<ChatMessageDto>;
+    recall: (spaceKey: string, convId: string, messageId: string) => Promise<{ success: boolean }>;
+    deleteMessage: (spaceKey: string, convId: string, messageId: string) => Promise<{ success: boolean }>;
+    markRead: (spaceKey: string, convId: string) => Promise<{ success: boolean }>;
+    setDraft: (spaceKey: string, convId: string, draft: string) => Promise<{ success: boolean }>;
+    togglePin: (spaceKey: string, convId: string) => Promise<{ success: boolean }>;
+    toggleMute: (spaceKey: string, convId: string) => Promise<{ success: boolean }>;
+    clear: (spaceKey: string, convId: string) => Promise<{ success: boolean }>;
+    deleteConversation: (spaceKey: string, convId: string) => Promise<{ success: boolean }>;
   };
   rootIdentity: {
     status: () => Promise<{ initialized: boolean; unlocked: boolean; rootId: string | null; nickname: string | null; avatar: string | null }>;

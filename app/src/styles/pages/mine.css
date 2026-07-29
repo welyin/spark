@@ -1,10 +1,13 @@
-/* 我的页 */
+/* 我的页（个人设置）：四栏布局「rail 64 | 二级导航 280（固定） | 列表/概览 | 详情/编辑」，钉钉桌面风，token 见 tokens.css。
+   栏位样式与消息页会话列表统一：贴边、无卡片线框，仅栏间分隔线；
+   第三、四栏按 4:6 弹性分配剩余宽度（各最小 280px，不小于第二栏）——窗口最小宽度 = 64+280+280+280 = 904px。
+   本文件以非 scoped 方式引入（同 settings.css）：.mine-list / .mine-detail 等栏位与列表项样式
+   由 components/mine/ 下各模块组件共用（各模块以 fragment 同时渲染第三、四栏）。 */
 
 .mine-page {
   display: flex;
-  flex-direction: column;
-  gap: var(--spark-gap-page);
-  padding: var(--spark-padding-page);
+  height: 100%;
+  background: var(--spark-bg-card);
 }
 
 .mine-page h1,
@@ -12,35 +15,253 @@
   margin: 0;
 }
 
-.content-section {
+/* 未登录引导：单列滚动容器 */
+.mine-plain {
   display: flex;
+  flex: 1;
+  min-width: 0;
   flex-direction: column;
   gap: var(--spark-gap-page);
+  padding: var(--spark-padding-page);
+  overflow-y: auto;
 }
 
+/* 未登录时的页头（登录门控） */
 .mine-header-main {
   display: flex;
   align-items: center;
   gap: 14px;
 }
 
-.share-block {
-  margin: 10px 0 0;
-  padding: 12px;
-  border-radius: var(--spark-radius-l);
-  background: #1f2329;
-  color: #e5e7eb;
-  white-space: pre-wrap;
-  word-break: break-all;
-  font-family: Menlo, Monaco, Consolas, 'Courier New', monospace;
-  font-size: 12px;
-  line-height: 1.7;
+/* ---- 第二栏：用户信息 + 功能菜单（280px，与消息页会话列表同宽） ---- */
+.mine-menu {
+  display: flex;
+  flex-direction: column;
+  width: 280px;
+  flex-shrink: 0;
+  border-right: 2px solid var(--spark-border);
 }
 
-.row {
+/* 用户信息头部：贴边栏内自带内边距，底部分隔线对齐消息页搜索区 */
+.mine-menu-header {
   display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-top: 12px;
   align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--spark-border-light);
+}
+
+.mine-menu-user {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.mine-menu-user b {
+  font-size: 15px;
+  color: var(--spark-text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mine-menu-user span {
+  font-size: 12px;
+  color: var(--spark-text-3);
+}
+
+.mine-menu-list {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 菜单项：58px 内容行（与各模块列表行同高）；裸 button 需显式 margin: 0，否则 UA 默认 margin 会在行间留出缝隙 */
+.mine-menu-item {
+  display: flex;
+  width: 100%;
+  height: 58px;
+  align-items: center;
+  gap: 12px;
+  margin: 0;
+  padding: 0 16px;
+  border: 0;
+  background: transparent;
+  font-size: 14px;
+  color: var(--spark-text-1);
+  cursor: pointer;
+  text-align: left;
+}
+
+/* hover/active 背景铺满整行（border-box），行间不留分隔线，避免选中态与悬停态之间露白缝 */
+.mine-menu-item:hover {
+  background: var(--spark-bg-hover);
+}
+
+.mine-menu-item.active {
+  background: var(--spark-primary-light);
+  color: var(--spark-primary);
+  font-weight: 600;
+}
+
+.mine-menu-icon {
+  flex-shrink: 0;
+  color: var(--spark-text-3);
+}
+
+.mine-menu-item.active .mine-menu-icon {
+  color: var(--spark-primary);
+}
+
+.mine-menu-label {
+  flex: 1;
+}
+
+/* 第三栏：模块列表/概览。三/四栏按 4:6 弹性分配剩余宽度、各自最小 280px（不小于第二栏），
+   保证窗口宽度不变时栏宽恒定；贴边无卡片框，由各模块组件渲染 */
+.mine-list {
+  display: flex;
+  flex-direction: column;
+  flex: 4 1 0;
+  min-width: 280px;
+  border-right: 2px solid var(--spark-border);
+  overflow-y: auto;
+}
+
+/* 设置页等「双列表」场景：两个 .mine-list 并列时，第二个即第四栏，占 6 份 */
+.mine-list ~ .mine-list {
+  flex: 6 1 0;
+}
+
+.mine-list-title {
+  margin: 0;
+  padding: 12px 16px 4px;
+  font-size: 15px;
+  color: var(--spark-text-1);
+}
+
+.mine-list-items {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 第三栏列表项：58px 双行内容行（与消息页会话行同高），图标 + 主文案（+ 可选副文案/右侧缩略内容），整行可点；
+   裸 button 需显式 margin: 0 消除行间缝隙 */
+.mine-list-item {
+  display: flex;
+  width: 100%;
+  height: 58px;
+  align-items: center;
+  gap: 12px;
+  margin: 0;
+  padding: 0 16px;
+  border: 0;
+  background: transparent;
+  font-size: 14px;
+  color: var(--spark-text-1);
+  cursor: pointer;
+  text-align: left;
+}
+
+.mine-list-item:hover {
+  background: var(--spark-bg-hover);
+}
+
+.mine-list-item.active {
+  background: var(--spark-primary-light);
+  color: var(--spark-primary);
+  font-weight: 600;
+}
+
+.mine-list-item:disabled {
+  cursor: not-allowed;
+  color: var(--spark-text-3);
+}
+
+.mine-list-item-icon {
+  flex-shrink: 0;
+  color: var(--spark-text-3);
+}
+
+.mine-list-item.active .mine-list-item-icon {
+  color: var(--spark-primary);
+}
+
+.mine-list-item-text {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mine-list-item-text b {
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mine-list-item.active .mine-list-item-text b {
+  font-weight: 600;
+}
+
+.mine-list-item-text span {
+  font-size: 12px;
+  color: var(--spark-text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mine-list-item-aside {
+  flex-shrink: 0;
+  color: var(--spark-text-3);
+}
+
+/* ---- 第四栏：选中项详情/编辑（与第三栏按 4:6 弹性分配剩余宽度，最小 280px，内部独立滚动） ---- */
+/* 内容铺满整栏（白底）：栏内卡片退化为无边框内容区，仅保留标题分隔线，不再悬浮在灰底上 */
+.mine-detail {
+  flex: 6 1 0;
+  min-width: 280px;
+  overflow-y: auto;
+  padding: 24px;
+  background: var(--spark-bg-card);
+}
+
+.mine-detail > * {
+  width: 100%;
+  max-width: 640px;
+}
+
+.mine-detail .el-card {
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+  --el-card-padding: 0;
+}
+
+.mine-detail .el-card__header {
+  padding-bottom: 12px;
+  margin-bottom: 16px;
+  /* 去卡片化：标题栏下不再保留 el-card 默认横线（与无卡片的内容标题统一） */
+  border-bottom: 0;
+}
+
+/* 详情/抽屉标题统一：覆盖 UA 默认 h2 大小，与 .perm-title 等自定义标题一致 */
+.mine-detail .el-card__header h2 {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+/* 资料字段行：字段名居左，当前值居右弱色缩略 */
+.mine-list-item-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--spark-text-3);
 }

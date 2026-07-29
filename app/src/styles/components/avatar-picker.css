@@ -12,6 +12,18 @@
   gap: 4px;
 }
 
+/* 未上传且无昵称预览时的灰底占位（相机图标，替代彩色「未」字圆） */
+.avatar-picker-placeholder {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--spark-bg-hover);
+  border: 1px dashed var(--spark-border);
+  color: var(--spark-text-3);
+  flex-shrink: 0;
+}
+
 .hidden-input {
   display: none;
 }

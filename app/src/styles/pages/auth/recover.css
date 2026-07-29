@@ -10,6 +10,53 @@
   margin-top: 10px;
 }
 
+/* 分步引导指示 */
+.auth-steps {
+  margin: 8px 0 16px;
+}
+
+/* 二维码恢复第一步：说明卡片 */
+.qr-guide {
+  display: flex;
+  gap: 12px;
+  padding: 14px;
+  margin-bottom: 16px;
+  border: 1px solid var(--spark-border-light);
+  border-radius: var(--spark-radius-l);
+  background: var(--spark-primary-light);
+}
+
+.qr-guide-icon {
+  flex-shrink: 0;
+  color: var(--spark-primary);
+}
+
+.qr-guide-title {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--spark-text-1);
+}
+
+.qr-guide-desc {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--spark-text-2);
+}
+
+.qr-select-btn {
+  height: 44px;
+  font-size: 15px;
+}
+
+/* 头像选择器占位加深对比（注册/恢复页共用 AvatarPicker，此处仅加深本页观感） */
+.auth-panel :deep(.avatar-picker-placeholder) {
+  border: 2px dashed var(--spark-text-3);
+  background: var(--spark-border-light);
+  color: var(--spark-text-2);
+}
+
 .auth-form {
   margin-top: 12px;
 }
@@ -44,13 +91,7 @@
 .mnemonic-word.invalid {
   border-color: var(--spark-danger);
   color: var(--spark-danger);
-  background: #fef0f0;
-}
-
-.row {
-  display: flex;
-  gap: 12px;
-  align-items: center;
+  background: var(--spark-danger-bg);
 }
 
 .ok-text {

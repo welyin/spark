@@ -1,24 +1,81 @@
-/* 应用骨架：深色窄导航栏（rail）+ 内容区（参考钉钉桌面版） */
+/* 应用骨架：顶栏（全宽）+ 深色窄导航栏（rail）+ 内容区（参考钉钉桌面版）。
+   shell 固定 100vh 不滚动，只有 .main 及页内分栏各自内部滚动 */
 
 .shell {
-  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
 }
 
-/* ---- 深色导航栏 ---- */
+/* 顶栏在最上横跨全宽，下面一行为「rail + main」横向 flex */
+.shell-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+/* ---- 浅色导航栏 ---- */
 
 .rail {
-  position: fixed;
-  top: 0;
-  left: 0;
-  bottom: 0;
-  z-index: 20;
+  position: relative;
+  flex-shrink: 0;
   width: var(--spark-rail-width);
   display: flex;
   flex-direction: column;
   align-items: center;
   padding: 12px 0;
   background: var(--spark-rail-bg);
+  border-right: 2px solid var(--spark-border-light);
+  transition: width 0.2s ease;
   -webkit-app-region: drag; /* 栏体可拖动窗口（按钮内已禁用） */
+}
+
+/* 宽栏状态：左图标右文字、行高 40px（.rail-item 行布局见下） */
+.rail.expanded {
+  width: var(--spark-rail-width-expanded);
+  align-items: stretch;
+  padding: 12px 6px;
+}
+
+.rail.expanded .rail-main,
+.rail.expanded .rail-bottom {
+  align-items: stretch;
+}
+
+.rail.expanded .rail-item {
+  flex-direction: row;
+  justify-content: flex-start;
+  width: 100%;
+  min-height: 40px;
+  gap: 10px;
+  padding: 0 12px;
+}
+
+.rail.expanded .rail-label {
+  max-width: none;
+  font-size: 14px;
+}
+
+.rail.expanded .rail-identity {
+  justify-content: flex-start;
+  padding: 0 0 6px;
+}
+
+.rail.expanded .rail-divider {
+  width: auto;
+}
+
+/* 宽窄切换把手：覆盖在右侧 2px 分隔线上的隐形热区，col-resize 光标，点击切换状态 */
+.rail-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -6px;
+  width: 12px;
+  cursor: col-resize;
+  z-index: 10;
+  -webkit-app-region: no-drag;
 }
 
 .rail button {
@@ -29,32 +86,18 @@
   font-family: inherit;
 }
 
-/* 顶部头像（我的）：图像由 UserAvatar 提供，按钮只作容器 */
-.rail-avatar {
-  width: 38px;
-  height: 38px;
-  border-radius: 50%;
+/* 顶部当前身份头像（钉钉风：比 rail 图标项稍大） */
+.rail-identity {
   display: flex;
-  align-items: center;
   justify-content: center;
-  padding: 0;
-  transition: transform 0.15s ease;
-}
-
-.rail-avatar:hover {
-  transform: scale(1.06);
-}
-
-.rail-avatar.active {
-  outline: 2px solid rgba(255, 255, 255, 0.55);
-  outline-offset: 2px;
+  padding-bottom: 6px;
 }
 
 /* 中部主导航 */
 .rail-main {
   flex: 1;
   width: 100%;
-  margin-top: 18px;
+  margin-top: 8px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -65,6 +108,15 @@
 
 .rail-main::-webkit-scrollbar {
   width: 0;
+}
+
+/* rail 底部工具组（测试/设置）与上方功能导航之间的分隔线 */
+.rail-divider {
+  width: 32px;
+  height: 1px;
+  margin: 4px 0;
+  background: var(--spark-border-light);
+  flex-shrink: 0;
 }
 
 .rail-bottom {
@@ -93,12 +145,12 @@
 
 .rail-item:hover {
   background: var(--spark-rail-item-hover);
-  color: #fff;
+  color: var(--spark-text-1);
 }
 
 .rail-item.active {
   background: var(--spark-rail-item-active);
-  color: var(--spark-primary-hover);
+  color: var(--spark-primary);
 }
 
 .rail-label {
@@ -121,31 +173,28 @@
   line-height: 1;
 }
 
-/* ---- 顶栏（常驻网络状态） ---- */
+/* ---- 顶栏（浅色：左=空间切换+网络状态，右=「⋯」更多） ---- */
 
 .topbar {
-  position: fixed;
-  top: 0;
-  left: var(--spark-rail-width);
-  right: 0;
-  z-index: 19;
+  flex-shrink: 0;
+  width: 100%;
   height: var(--spark-topbar-height);
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  padding: 0 16px;
-  background: var(--spark-bg-card);
-  border-bottom: 1px solid var(--spark-border-light);
-  -webkit-app-region: drag; /* 栏体可拖动窗口（状态按钮内已禁用） */
+  padding: 0 12px 0 16px;
+  background: var(--spark-topbar-bg);
+  border-bottom: 2px solid var(--spark-border);
+  -webkit-app-region: drag; /* 栏体可拖动窗口（内部按钮已禁用） */
 }
 
-/* ---- 内容区 ---- */
+/* ---- 内容区（唯一滚动容器之一：页内分栏自行滚动的页面占满高度） ---- */
 
 .main {
-  margin-left: var(--spark-rail-width);
-  min-height: 100vh;
-  padding: 0;
-  padding-top: var(--spark-topbar-height);
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--spark-main-bg);
 }
 
 /* ---- 插件宿主页（独立窗口模式） ---- */
@@ -170,7 +219,7 @@
 
 .page-header h1 {
   margin: 0;
-  font-size: 20px;
+  font-size: var(--spark-font-size-title);
 }
 
 .page-header-main {
@@ -198,7 +247,7 @@
   padding: 3px 12px;
   border-radius: 12px;
   background: var(--spark-bg-hover);
-  font-size: 12px;
+  font-size: var(--spark-font-size-secondary);
   color: var(--spark-text-2);
 }
 
@@ -220,7 +269,7 @@
 /* ---- 插件 tab 页 ---- */
 
 .plugin-tab-card {
-  height: calc(100vh - 40px);
+  height: calc(100% - 40px);
   margin: var(--spark-padding-page);
   display: flex;
   flex-direction: column;
@@ -270,6 +319,51 @@
   width: 100%;
   height: 100%;
   border: 0;
-  background: #fff;
+  background: var(--spark-bg-card);
   display: block;
+}
+
+/* ---- 全 app 抽屉统一：去默认头部小标题、内容卡片去边框（卡片标题即抽屉标题） ---- */
+.app-drawer .el-drawer__body {
+  padding: 0;
+  position: relative;
+}
+
+/* 抽屉内容铺满（配合 .mine-detail 等已有栏内样式使用） */
+.app-drawer-fill {
+  height: 100%;
+  box-sizing: border-box;
+}
+
+/* 抽屉通用内容容器（无自带栏样式的内容，如联系人资料卡） */
+.app-drawer-body {
+  height: 100%;
+  box-sizing: border-box;
+  padding: 20px 24px;
+  overflow-y: auto;
+}
+
+/* 自定义关闭按钮（with-header=false 后替代默认头部） */
+.app-drawer-close {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--spark-text-3);
+  cursor: pointer;
+}
+
+.app-drawer-close:hover {
+  background: var(--spark-bg-hover);
+  color: var(--spark-text-1);
 }

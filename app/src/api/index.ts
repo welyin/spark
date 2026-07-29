@@ -21,7 +21,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { ARG_NAMES, COMMAND_MAP } from './command-map';
-import type { ElectronAPI, P2pEventDto } from './types';
+import type { ElectronAPI, P2pEventDto, PluginCatalogItem } from './types';
 
 // 类型门面：既有引用一律走 './api'，此处统一 re-export
 export * from './types';
@@ -85,7 +85,7 @@ function requireDomain(pluginDomain: string | undefined): string {
  * 插件运行时（安装/验签/独立窗口）本期不在壳范围，目录本身是纯静态数据，
  * OrgPage 建组织时依赖它解析 basePluginDomain。
  */
-const PLUGIN_CATALOG = [
+const PLUGIN_CATALOG: PluginCatalogItem[] = [
   {
     id: 'weibo-core',
     domain: 'plugin:weibo-core',
@@ -201,8 +201,47 @@ export function createTauriApi(): ElectronAPI {
       getSyncOverview: (orgId) => call('org-sync-overview', orgId),
       setPublic: (orgId, isPublic, displayName) =>
         call('org-set-public', orgId, isPublic, displayName ?? null),
+      updateInfo: (orgId, patch) =>
+        // 与 rootIdentity.updateProfile 同约定：字段缺省（undefined）= 不变，null = 明确清除
+        call('org-update-info', orgId, patch.name ?? undefined, patch.description ?? undefined),
       resolveAddress: (orgAddress) => call('org-resolve-address', orgAddress),
       searchKnown: (keyword) => call('org-search-known', keyword)
+    },
+    contacts: {
+      overview: (spaceKey) => call('contact-overview', spaceKey),
+      updateProfile: (spaceKey, rootId, patch) => call('contact-update-profile', spaceKey, rootId, patch),
+      setBlocked: (spaceKey, rootId, blocked) => call('contact-set-blocked', spaceKey, rootId, blocked),
+      removeFriend: (rootId) => call('contact-remove-friend', rootId),
+      sendRequest: (input) => call('contact-send-request', input),
+      resolveRequest: (requestId, accept, permission) =>
+        call('contact-resolve-request', requestId, accept, permission),
+      tagCreate: (spaceKey, id, name) => call('contact-tag-create', spaceKey, id, name),
+      tagRename: (spaceKey, tagId, name) => call('contact-tag-rename', spaceKey, tagId, name),
+      tagDelete: (spaceKey, tagId) => call('contact-tag-delete', spaceKey, tagId),
+      groupCreate: (spaceKey, id, name) => call('contact-group-create', spaceKey, id, name),
+      groupRename: (spaceKey, groupId, name) => call('contact-group-rename', spaceKey, groupId, name),
+      groupDelete: (spaceKey, groupId) => call('contact-group-delete', spaceKey, groupId),
+      groupMove: (spaceKey, groupId, toIndex) => call('contact-group-move', spaceKey, groupId, toIndex),
+      setGroup: (spaceKey, rootId, groupId) => call('contact-set-group', spaceKey, rootId, groupId),
+      orgGroupCreate: (spaceKey, parentId, id, name) => call('contact-org-group-create', spaceKey, parentId, id, name),
+      orgGroupRename: (spaceKey, id, name) => call('contact-org-group-rename', spaceKey, id, name),
+      orgGroupDelete: (spaceKey, id) => call('contact-org-group-delete', spaceKey, id),
+      orgGroupMove: (spaceKey, id, toIndex) => call('contact-org-group-move', spaceKey, id, toIndex)
+    },
+    messages: {
+      listConversations: (spaceKey) => call('message-list-conversations', spaceKey),
+      listMessages: (spaceKey, convId) => call('message-list-messages', spaceKey, convId),
+      ensureDirect: (spaceKey, peerId, title) => call('message-ensure-direct', spaceKey, peerId, title),
+      sendText: (spaceKey, convId, messageId, text, quote) => call('message-send-text', spaceKey, convId, messageId, text, quote),
+      resend: (spaceKey, convId, messageId) => call('message-resend', spaceKey, convId, messageId),
+      recall: (spaceKey, convId, messageId) => call('message-recall', spaceKey, convId, messageId),
+      deleteMessage: (spaceKey, convId, messageId) => call('message-delete', spaceKey, convId, messageId),
+      markRead: (spaceKey, convId) => call('message-mark-read', spaceKey, convId),
+      setDraft: (spaceKey, convId, draft) => call('message-set-draft', spaceKey, convId, draft),
+      togglePin: (spaceKey, convId) => call('message-toggle-pin', spaceKey, convId),
+      toggleMute: (spaceKey, convId) => call('message-toggle-mute', spaceKey, convId),
+      clear: (spaceKey, convId) => call('message-clear', spaceKey, convId),
+      deleteConversation: (spaceKey, convId) => call('message-delete-conversation', spaceKey, convId)
     },
     rootIdentity: {
       status: () => call('root-status'),

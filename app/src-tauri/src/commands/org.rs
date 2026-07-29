@@ -109,6 +109,17 @@ pub(crate) fn set_public_inner(
         .map_err(err)
 }
 
+pub(crate) fn update_info_inner(
+    kernel: &mut Kernel,
+    org_id: &str,
+    name: Option<String>,
+    description: Option<String>,
+) -> Result<OrganizationView, String> {
+    kernel
+        .org_update_info(org_id, name.as_deref(), description.as_deref())
+        .map_err(err)
+}
+
 pub(crate) fn resolve_address_inner(
     kernel: &Kernel,
     org_address: &str,
@@ -235,6 +246,17 @@ pub fn org_set_public(
     display_name: Option<String>,
 ) -> Result<OrganizationView, String> {
     set_public_inner(&mut *lock_kernel(&state)?, &org_id, public, display_name)
+}
+
+/// 更新组织名称/描述（仅 admin；未提供的字段不变）。
+#[tauri::command]
+pub fn org_update_info(
+    state: tauri::State<'_, KernelState>,
+    org_id: String,
+    name: Option<String>,
+    description: Option<String>,
+) -> Result<OrganizationView, String> {
+    update_info_inner(&mut *lock_kernel(&state)?, &org_id, name, description)
 }
 
 /// 解析组织地址（缓存 → DHT，org.md §16.4）；未命中返回 null。

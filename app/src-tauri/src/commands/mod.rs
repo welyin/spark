@@ -4,12 +4,14 @@
 //! 每个命令的 `*_inner` 核心函数直接接收 `&Kernel` / `&mut Kernel`，
 //! 不依赖 Tauri State，单元测试直调。
 
+pub mod contact;
 pub mod data;
 pub mod docs;
 pub mod dto;
 pub mod evidence;
 pub mod identity;
 pub mod market;
+pub mod message;
 pub mod org;
 pub mod p2p;
 pub mod plugin;

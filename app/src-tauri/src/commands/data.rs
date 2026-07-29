@@ -168,7 +168,7 @@ mod tests {
             .create_org(spark_core::org::service::CreateOrganizationInput {
                 name: "org".into(),
                 description: None,
-                base_plugin_domain: "plugin:base".into(),
+                base_plugin_domain: Some("plugin:base".into()),
             })
             .unwrap();
         // 未确认导出 → 拒绝执行

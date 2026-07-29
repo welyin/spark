@@ -10,6 +10,13 @@
   margin-top: 16px;
 }
 
+/* 头像选择器占位加深对比（虚线圆圈 + 相机图标更清晰） */
+.auth-panel :deep(.avatar-picker-placeholder) {
+  border: 2px dashed var(--spark-text-3);
+  background: var(--spark-border-light);
+  color: var(--spark-text-2);
+}
+
 .submit-btn {
   width: 100%;
 }

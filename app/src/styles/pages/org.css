@@ -14,6 +14,25 @@
   margin: 0;
 }
 
+/* 嵌入设置页「当前空间」分页：去掉页面级留白（外层分页已有内边距） */
+.org-page-embedded {
+  padding: 0;
+}
+
+/* 列表卡片头部：标题 + 嵌入模式下的操作入口 */
+.org-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.org-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 /* 数据治理对话框 */
 .purge-tip {
   margin-top: 12px;
@@ -92,8 +111,28 @@
 }
 
 /* 邀请成员对话框 */
+.invite-rootid-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.invite-local-alert {
+  margin-bottom: 12px;
+}
+
+.invite-input-hint {
+  margin: 6px 0 0;
+  width: 100%;
+}
+
+/* 高级选项：带边框底色的折叠面板分区，而非一行右箭头 */
 .invite-advanced {
   margin-bottom: 8px;
+  padding: 0 12px;
+  border: 1px solid var(--spark-border-light);
+  border-radius: var(--spark-radius-m);
+  background: var(--spark-bg-page);
 }
 
 .invite-result {
@@ -193,7 +232,7 @@
 .node-card-qr {
   width: 220px;
   height: 220px;
-  border: 1px solid var(--spark-border, #e4e7ed);
+  border: 1px solid var(--spark-border);
   border-radius: 4px;
 }
 

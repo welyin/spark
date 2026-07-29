@@ -19,16 +19,10 @@
 }
 
 .brand-logo {
-  display: inline-flex;
+  display: inline-block;
   width: 44px;
   height: 44px;
   border-radius: var(--spark-radius-xl);
-  align-items: center;
-  justify-content: center;
-  background: linear-gradient(135deg, var(--spark-primary), var(--spark-primary-active));
-  color: #fff;
-  font-size: 22px;
-  font-weight: 700;
   box-shadow: var(--spark-shadow-pop);
 }
 
@@ -49,7 +43,7 @@
   max-width: 100%;
   background: var(--spark-bg-card);
   border: 1px solid var(--spark-border-light);
-  border-radius: var(--spark-radius-xl);
+  border-radius: var(--spark-radius-l);
   box-shadow: var(--spark-shadow-pop);
   padding: 24px;
 }

@@ -1,0 +1,13 @@
+/* 占位页（消息/通讯录共用，后续实现落地后各自拆回独立样式） */
+
+.placeholder-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spark-gap-page);
+  padding: var(--spark-padding-page);
+}
+
+.placeholder-page h1,
+.placeholder-page h2 {
+  margin: 0;
+}

@@ -1,119 +1,140 @@
+<!-- 测试页（开发调试）：二栏菜单 + 内容区结构（与个人设置/设置页同一布局语言，复用 mine.css 栏位类）。
+     菜单：节点面板（本地节点数据与组织同步）/ 更新调试（GitHub Releases 更新链路） -->
 <template>
-  <section class="card-page">
-    <header class="page-header">
-      <div class="page-header-main">
-        <p class="eyebrow">开发调试</p>
-        <h1>测试</h1>
-        <p class="lede">数据库、节点与更新链路的调试面板。</p>
-      </div>
-    </header>
-
-    <el-card class="node-panel">
-      <div class="panel-title">
-        <div>
-          <h2>节点面板</h2>
-          <p class="subtitle">展示本地保存的所有节点数据，并可按节点触发组织同步。</p>
+  <section class="mine-page test-page">
+    <!-- 第二栏：调试菜单 -->
+    <div class="mine-menu">
+      <header class="mine-menu-header">
+        <div class="mine-menu-user">
+          <b>测试</b>
+          <span>开发调试面板</span>
         </div>
-        <div class="panel-actions">
-          <el-button type="danger" plain @click="clearNodes" :loading="clearingNodes" :disabled="loadingNodes || clearingNodes">
-            {{ clearingNodes ? '清空中...' : '清空所有节点' }}
-          </el-button>
-          <el-button type="primary" @click="refreshNodes" :loading="loadingNodes" :disabled="loadingNodes || clearingNodes">
-            {{ loadingNodes ? '刷新中...' : '刷新节点' }}
-          </el-button>
-        </div>
-      </div>
+      </header>
+      <nav class="mine-menu-list">
+        <button
+          v-for="item in menuItems"
+          :key="item.key"
+          type="button"
+          class="mine-menu-item"
+          :class="{ active: activeMenu === item.key }"
+          @click="activeMenu = item.key"
+        >
+          <el-icon class="mine-menu-icon" :size="17"><component :is="item.icon" /></el-icon>
+          <span class="mine-menu-label">{{ item.label }}</span>
+        </button>
+      </nav>
+    </div>
 
-      <el-alert v-if="nodeMessage" class="message" :title="nodeMessage" type="info" :closable="false" show-icon />
-      <div v-if="loadingNodes" class="empty-state">正在加载节点...</div>
-      <div v-else-if="nodeRecords.length === 0" class="empty-state">暂无保存的节点记录。</div>
-      <div v-else class="node-grid">
-        <el-card v-for="node in nodeRecords" :key="node.nodeKey" class="node-card" shadow="never">
-          <div class="node-card-head">
-            <strong>{{ node.peerId || '未解析 PeerId' }}</strong>
-            <el-button type="success" @click="syncNode(node)" :loading="syncingNodeKey === node.nodeKey" :disabled="syncingNodeKey === node.nodeKey">
-              {{ syncingNodeKey === node.nodeKey ? '同步中...' : '同步' }}
+    <!-- 第三、四栏：当前面板内容 -->
+    <div class="mine-detail test-detail">
+      <el-card v-if="activeMenu === 'nodes'" class="node-panel">
+        <div class="panel-title">
+          <div>
+            <h2>节点面板</h2>
+            <p class="subtitle">展示本地保存的所有节点数据，并可按节点触发组织同步。</p>
+          </div>
+          <div class="panel-actions">
+            <el-button type="danger" plain @click="clearNodes" :loading="clearingNodes" :disabled="loadingNodes || clearingNodes">
+              {{ clearingNodes ? '清空中...' : '清空所有节点' }}
+            </el-button>
+            <el-button type="primary" @click="refreshNodes" :loading="loadingNodes" :disabled="loadingNodes || clearingNodes">
+              {{ loadingNodes ? '刷新中...' : '刷新节点' }}
             </el-button>
           </div>
-          <p class="muted">{{ node.addresses.length }} 个地址 · 最近 {{ formatDate(node.lastSeenAt) }}</p>
-          <div class="node-meta">
-            <el-tag effect="plain">成功 {{ node.successCount }}</el-tag>
-            <el-tag type="danger" effect="plain">失败 {{ node.failureCount }}</el-tag>
-            <el-tag type="info" effect="plain">累计在线 {{ formatDuration(node.cumulativeConnectedMs) }}</el-tag>
-          </div>
-          <p v-if="node.lastError" class="error-text">最后错误：{{ node.lastError }}</p>
-          <p class="address-text">{{ node.addresses.join(' , ') }}</p>
-        </el-card>
-      </div>
-    </el-card>
-
-    <el-card class="updater-panel">
-      <div class="panel-title">
-        <div>
-          <h2>更新调试面板</h2>
-          <p class="subtitle">用于联调 GitHub Releases 更新链路：检查、下载、应用重启。</p>
         </div>
-        <el-button @click="refreshUpdaterStatus" :loading="loadingUpdater">刷新状态</el-button>
-      </div>
 
-      <el-alert v-if="updaterMessage" class="message" :title="updaterMessage" type="info" :closable="false" show-icon />
-
-      <el-descriptions :column="1" border>
-        <el-descriptions-item label="是否已配置">{{ updaterStatus?.configured ? '是' : '否' }}</el-descriptions-item>
-        <el-descriptions-item label="应用标识">{{ updaterStatus?.appId || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="通道">{{ updaterStatus?.channel || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="当前版本">{{ updaterStatus?.currentVersion || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="最高接受版本">{{ updaterStatus?.highestAcceptedVersion || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="最近检查">
-          <template v-if="updaterStatus?.latestCheck">
-            {{ formatDate(updaterStatus.latestCheck.checkedAt) }} · {{ updaterStatus.latestCheck.reason }}
-          </template>
-          <template v-else>暂无</template>
-        </el-descriptions-item>
-        <el-descriptions-item label="可用版本">{{ updaterStatus?.latestCheck?.availableVersion || '无' }}</el-descriptions-item>
-        <el-descriptions-item label="已暂存安装包">
-          <template v-if="updaterStatus?.staged">
-            {{ updaterStatus.staged.fileName }} ({{ updaterStatus.staged.version }})
-          </template>
-          <template v-else>无</template>
-        </el-descriptions-item>
-      </el-descriptions>
-
-      <div class="row">
-        <el-button type="primary" @click="checkUpdates" :loading="checkingUpdate" :disabled="checkingUpdate">检查更新</el-button>
-        <el-button @click="stageLatestUpdate" :loading="stagingUpdate" :disabled="stagingUpdate">下载并校验</el-button>
-        <el-button type="danger" plain @click="applyUpdateRestart" :loading="applyingUpdate" :disabled="applyingUpdate">
-          应用并重启
-        </el-button>
-      </div>
-
-      <el-card shadow="never" class="inner-card">
-        <template #header>
-          <h3>对端版本观测</h3>
-        </template>
-        <div v-if="!updaterStatus?.peerObservations?.length" class="empty-state">暂无观测记录。</div>
-        <el-table v-else :data="updaterStatus.peerObservations" size="small" stripe>
-          <el-table-column prop="peerId" label="PeerId" min-width="220" />
-          <el-table-column prop="observedVersion" label="对端版本" width="130" />
-          <el-table-column label="观测时间" min-width="170">
-            <template #default="scope">{{ formatDate(scope.row.observedAt) }}</template>
-          </el-table-column>
-          <el-table-column label="触发检查" width="100">
-            <template #default="scope">
-              <el-tag :type="scope.row.triggeredCheck ? 'success' : 'info'" effect="plain">
-                {{ scope.row.triggeredCheck ? '是' : '否' }}
-              </el-tag>
-            </template>
-          </el-table-column>
-        </el-table>
+        <el-alert v-if="nodeMessage" class="message" :title="nodeMessage" type="info" :closable="false" show-icon />
+        <div v-if="loadingNodes" class="empty-state">正在加载节点...</div>
+        <div v-else-if="nodeRecords.length === 0" class="empty-state">暂无保存的节点记录。</div>
+        <div v-else class="node-grid">
+          <el-card v-for="node in nodeRecords" :key="node.nodeKey" class="node-card" shadow="never">
+            <div class="node-card-head">
+              <strong>{{ node.peerId || '未解析 PeerId' }}</strong>
+              <el-button type="success" @click="syncNode(node)" :loading="syncingNodeKey === node.nodeKey" :disabled="syncingNodeKey === node.nodeKey">
+                {{ syncingNodeKey === node.nodeKey ? '同步中...' : '同步' }}
+              </el-button>
+            </div>
+            <p class="muted">{{ node.addresses.length }} 个地址 · 最近 {{ formatDate(node.lastSeenAt) }}</p>
+            <div class="node-meta">
+              <el-tag effect="plain">成功 {{ node.successCount }}</el-tag>
+              <el-tag type="danger" effect="plain">失败 {{ node.failureCount }}</el-tag>
+              <el-tag type="info" effect="plain">累计在线 {{ formatDuration(node.cumulativeConnectedMs) }}</el-tag>
+            </div>
+            <p v-if="node.lastError" class="error-text">最后错误：{{ node.lastError }}</p>
+            <p class="address-text">{{ node.addresses.join(' , ') }}</p>
+          </el-card>
+        </div>
       </el-card>
-    </el-card>
+
+      <el-card v-else class="updater-panel">
+        <div class="panel-title">
+          <div>
+            <h2>更新调试面板</h2>
+            <p class="subtitle">用于联调 GitHub Releases 更新链路：检查、下载、应用重启。</p>
+          </div>
+          <el-button @click="refreshUpdaterStatus" :loading="loadingUpdater">刷新状态</el-button>
+        </div>
+
+        <el-alert v-if="updaterMessage" class="message" :title="updaterMessage" type="info" :closable="false" show-icon />
+
+        <el-descriptions :column="1" border>
+          <el-descriptions-item label="是否已配置">{{ updaterStatus?.configured ? '是' : '否' }}</el-descriptions-item>
+          <el-descriptions-item label="应用标识">{{ updaterStatus?.appId || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="通道">{{ updaterStatus?.channel || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="当前版本">{{ updaterStatus?.currentVersion || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="最高接受版本">{{ updaterStatus?.highestAcceptedVersion || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="最近检查">
+            <template v-if="updaterStatus?.latestCheck">
+              {{ formatDate(updaterStatus.latestCheck.checkedAt) }} · {{ updaterStatus.latestCheck.reason }}
+            </template>
+            <template v-else>暂无</template>
+          </el-descriptions-item>
+          <el-descriptions-item label="可用版本">{{ updaterStatus?.latestCheck?.availableVersion || '无' }}</el-descriptions-item>
+          <el-descriptions-item label="已暂存安装包">
+            <template v-if="updaterStatus?.staged">
+              {{ updaterStatus.staged.fileName }} ({{ updaterStatus.staged.version }})
+            </template>
+            <template v-else>无</template>
+          </el-descriptions-item>
+        </el-descriptions>
+
+        <div class="row">
+          <el-button type="primary" @click="checkUpdates" :loading="checkingUpdate" :disabled="checkingUpdate">检查更新</el-button>
+          <el-button @click="stageLatestUpdate" :loading="stagingUpdate" :disabled="stagingUpdate">下载并校验</el-button>
+          <el-button type="danger" plain @click="applyUpdateRestart" :loading="applyingUpdate" :disabled="applyingUpdate">
+            应用并重启
+          </el-button>
+        </div>
+
+        <el-card shadow="never" class="inner-card">
+          <template #header>
+            <h3>对端版本观测</h3>
+          </template>
+          <div v-if="!updaterStatus?.peerObservations?.length" class="empty-state">暂无观测记录。</div>
+          <el-table v-else :data="updaterStatus.peerObservations" size="small" stripe>
+            <el-table-column prop="peerId" label="PeerId" min-width="220" />
+            <el-table-column prop="observedVersion" label="对端版本" width="130" />
+            <el-table-column label="观测时间" min-width="170">
+              <template #default="scope">{{ formatDate(scope.row.observedAt) }}</template>
+            </el-table-column>
+            <el-table-column label="触发检查" width="100">
+              <template #default="scope">
+                <el-tag :type="scope.row.triggeredCheck ? 'success' : 'info'" effect="plain">
+                  {{ scope.row.triggeredCheck ? '是' : '否' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-card>
+      </el-card>
+    </div>
   </section>
 </template>
 
 <script lang="ts">
-import { defineComponent, onMounted, ref } from 'vue';
+import { defineComponent, onMounted, ref, type Component } from 'vue';
 import { ElMessageBox } from 'element-plus';
+import { Connection, Download } from '@element-plus/icons-vue';
 
 type SavedNodeRecord = {
   nodeKey: string;
@@ -162,9 +183,17 @@ type UpdaterStatus = {
   }>;
 };
 
+type MenuKey = 'nodes' | 'updater';
+
+const MENU_ITEMS: Array<{ key: MenuKey; label: string; icon: Component }> = [
+  { key: 'nodes', label: '节点面板', icon: Connection },
+  { key: 'updater', label: '更新调试', icon: Download }
+];
+
 export default defineComponent({
   name: 'TestPage',
   setup() {
+    const activeMenu = ref<MenuKey>('nodes');
     const nodeRecords = ref<SavedNodeRecord[]>([]);
     const loadingNodes = ref(false);
     const clearingNodes = ref(false);
@@ -334,6 +363,8 @@ export default defineComponent({
     });
 
     return {
+      activeMenu,
+      menuItems: MENU_ITEMS,
       nodeRecords,
       loadingNodes,
       clearingNodes,
@@ -359,4 +390,5 @@ export default defineComponent({
 });
 </script>
 
+<style src="../styles/pages/mine.css"></style>
 <style scoped src="../styles/pages/test.css"></style>

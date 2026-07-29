@@ -58,10 +58,16 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .map_err(|e| std::io::Error::other(format!("app_data_dir unavailable: {e}")))?;
+            let app_version = app.package_info().version.to_string();
             let kernel = Kernel::init(KernelConfig {
                 data_dir: data_dir.clone(),
-                app_version: app.package_info().version.to_string(),
-                p2p: None,
+                app_version: app_version.clone(),
+                // 必须给 p2p 配置：kernel 登录链路（unlock/init/recover）的自动启动
+                // 以 config.p2p 存在为开关（ensure_p2p_after_login，"登录即在线"）
+                p2p: Some(spark_core::p2p::P2pConfig {
+                    app_version,
+                    ..Default::default()
+                }),
             })
             .map_err(|e| std::io::Error::other(e.to_string()))?;
             let events = kernel.subscribe_p2p_events();
@@ -115,9 +121,43 @@ pub fn run() {
             commands::org::org_remove_member,
             commands::org::org_set_gateways,
             commands::org::org_set_public,
+            commands::org::org_update_info,
             commands::org::org_resolve_address,
             commands::org::org_search_known,
             commands::org::org_accept_invite,
+            // 通讯录
+            commands::contact::contact_overview,
+            commands::contact::contact_update_profile,
+            commands::contact::contact_set_blocked,
+            commands::contact::contact_remove_friend,
+            commands::contact::contact_send_request,
+            commands::contact::contact_resolve_request,
+            commands::contact::contact_tag_create,
+            commands::contact::contact_tag_rename,
+            commands::contact::contact_tag_delete,
+            commands::contact::contact_group_create,
+            commands::contact::contact_group_rename,
+            commands::contact::contact_group_delete,
+            commands::contact::contact_group_move,
+            commands::contact::contact_set_group,
+            commands::contact::contact_org_group_create,
+            commands::contact::contact_org_group_rename,
+            commands::contact::contact_org_group_delete,
+            commands::contact::contact_org_group_move,
+            // 消息
+            commands::message::message_list_conversations,
+            commands::message::message_list_messages,
+            commands::message::message_ensure_direct,
+            commands::message::message_send_text,
+            commands::message::message_resend,
+            commands::message::message_recall,
+            commands::message::message_delete,
+            commands::message::message_mark_read,
+            commands::message::message_set_draft,
+            commands::message::message_toggle_pin,
+            commands::message::message_toggle_mute,
+            commands::message::message_clear,
+            commands::message::message_delete_conversation,
             // 数据治理
             commands::data::data_usage,
             commands::data::data_cleanup_now,

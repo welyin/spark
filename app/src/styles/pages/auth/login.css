@@ -14,19 +14,25 @@
   width: 100%;
 }
 
-/* 登录目标账号：头像 + 昵称 */
+/* 登录目标账号：小头像 + 昵称横向紧凑排列 */
 .login-profile {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 10px;
-  margin: 18px 0 2px;
+  gap: 12px;
+  margin: 16px 0 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--spark-border-light);
+  border-radius: var(--spark-radius-l);
+  background: var(--spark-bg-hover);
 }
 
 .login-profile-name {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--spark-text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .entry-link {

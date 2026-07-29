@@ -1,0 +1,27 @@
+/* 设置页：二栏菜单 + 内容区结构（栏位类复用 mine.css，见 SettingsPage 引入顺序） */
+
+/* 存储卡操作按钮行（SystemSettingsPanel） */
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 12px;
+  align-items: center;
+}
+
+/* 个人设置第三栏模块菜单项标签：常规字重，选中行加粗 */
+.settings-module-label {
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.mine-list-item.active .settings-module-label {
+  font-weight: 600;
+}
+
+/* 未选模块时的占位：空状态垂直居中 */
+.settings-module-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}

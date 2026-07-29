@@ -1,14 +1,9 @@
-/* 测试页（开发调试面板） */
+/* 测试页（开发调试面板）：二栏菜单 + 内容区（栏位类复用 mine.css） */
 
-.card-page {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spark-gap-page);
-  padding: var(--spark-padding-page);
-}
-
-.card-page h1 {
-  margin: 0;
+/* 内容区：面板卡片纵向排布 */
+.test-detail .node-panel,
+.test-detail .updater-panel {
+  width: 100%;
 }
 
 .row {

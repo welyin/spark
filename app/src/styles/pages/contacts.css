@@ -1,0 +1,518 @@
+/* 通讯录页（ui-contacts）：页内两栏「联系人列表 | 联系人资料」（与消息页同构），钉钉桌面风，token 见 tokens.css */
+.contacts-page {
+  display: flex;
+  height: 100%;
+  background: var(--spark-bg-card);
+}
+
+/* ---- 左栏：搜索 + 功能区 + 分组列表（280px，与消息页会话列表同宽、贴边无卡片框） ---- */
+.contacts-list {
+  display: flex;
+  flex-direction: column;
+  width: 280px;
+  flex-shrink: 0;
+  border-right: 2px solid var(--spark-border);
+}
+
+/* ---- 右栏：详情面板常驻（出现第三栏时与其按 4:6 弹性分配剩余宽度），内部独立滚动 ---- */
+/* 白底铺满（与个人设置第四栏统一），不再使用灰底 */
+.contacts-detail {
+  flex: 6 1 0;
+  min-width: 280px;
+  overflow-y: auto;
+  padding: 24px;
+  background: var(--spark-bg-card);
+}
+
+.contacts-detail .contact-panel {
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+.contacts-detail-empty {
+  padding-top: 96px;
+}
+
+/* ---- 顶部工具行：搜索框 + 操作按钮（§2.1），底部分隔线对齐消息页搜索区 ---- */
+.contacts-toolbar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--spark-border-light);
+}
+.contacts-search { flex: 1; min-width: 0; }
+
+/* ---- 第二栏统一列表（§2.2）：功能行 + 分组行共用 .request-item/.row-icon 结构 ---- */
+/* 功能行图标配色：品牌色/语义色的浅底 + 同色图标，不用彩色实底方块 */
+.row-icon-new { background: var(--spark-primary-light); color: var(--spark-primary); }
+.row-icon-tag { background: var(--spark-success-bg); color: var(--spark-success); }
+.row-badge {
+  margin-right: 4px;
+}
+
+/* ---- 第二栏列表区：分组列表 / 搜索结果（§2.2），填满剩余高度并滚动 ---- */
+.contacts-list > .group-panel,
+.contacts-list > .contact-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* 底部留出舒适的拖放落点区：拖到列表最末端时不必精确对准最后一行 */
+.group-panel {
+  padding-bottom: 58px;
+}
+
+/* 分组行：58px（复用 .request-item 结构），个人/组织均可拖拽重排 */
+.group-row {
+  cursor: pointer;
+}
+.group-row[draggable='true'] {
+  cursor: grab;
+}
+/* 落点预测占位条：与分组行同高（58px），插入后布局即最终结果——占位条过矮会让行位移
+   与放下时不一致，光标相对行的位置来回跳、落点震荡吞掉 drop（拖拽时好时坏的根因）。
+   占位条自身就是预测落点，挂 dragover/drop 处理（不能再 pointer-events:none，
+   否则直接落在占位条上的 drop 穿透到面板背景被吞，表现为移动失败） */
+.group-drop-placeholder {
+  height: 52px;
+  margin: 3px 8px;
+  border: 2px dashed var(--spark-primary);
+  border-radius: var(--spark-radius-m);
+  background: var(--spark-primary-light);
+  opacity: 0.8;
+}
+/* drop 指示：作为目标的子分组（管理员跨级拖拽的 into 模式），整行描边 */
+.group-row.drag-into {
+  box-shadow: inset 0 0 0 2px var(--spark-primary);
+  border-radius: var(--spark-radius-m);
+}
+/* 拖拽中的源分组行：从布局中摘除（延迟一帧应用，避免 WebKit 取消拖拽会话），落点由占位条表达 */
+.group-row.drag-source {
+  display: none;
+}
+.group-caret {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--spark-text-3);
+  cursor: pointer;
+}
+.group-caret-empty {
+  cursor: default;
+}
+.group-count {
+  flex-shrink: 0;
+  color: var(--spark-text-3);
+  font-size: 12px;
+}
+/* 行尾操作按钮：hover 行时显示，并让位隐藏人数避免挤压 */
+.group-actions {
+  display: none;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.group-row:hover .group-actions {
+  display: flex;
+}
+.group-row:hover .group-actions ~ .group-count {
+  display: none;
+}
+/* 黑名单虚拟组已移除（拉黑者不进通讯录，黑名单在个人设置管理） */
+
+/* 搜索命中高亮 */
+.request-item-main mark {
+  background: var(--el-color-warning-light-5);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+/* 角色标签轻量化：小号描边，不抢视觉重心 */
+.contact-role-tag {
+  --el-tag-bg-color: transparent;
+  padding: 0 6px;
+  font-size: 11px;
+}
+/* 列表行尾角色标签：靠右、上下居中、不压缩 */
+.contact-role-side {
+  flex-shrink: 0;
+  margin-left: auto;
+  align-self: center;
+}
+/* 列表行昵称旁的性别图标：与名字基线对齐、留小间距 */
+.request-item-main b .gender-icon {
+  margin-left: 4px;
+  vertical-align: -2px;
+}
+
+/* 第三栏联系人列表：拼音首字母分组头（§2.3），sticky 吸顶 */
+.contact-letter-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--spark-text-3);
+  background: var(--spark-bg-card);
+}
+
+/* ---- 个人面板（§5） ---- */
+.contact-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.contact-panel-hero {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 0 4px;
+}
+.contact-panel-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 18px;
+}
+/* 性别图标（参考微信）：男蓝女粉 */
+.gender-male {
+  color: var(--spark-gender-male);
+}
+.gender-female {
+  color: var(--spark-gender-female);
+}
+.contact-panel-identity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--spark-text-2);
+}
+.contact-panel-rows {
+  border-top: 1px solid var(--spark-border-light);
+}
+.info-row {
+  display: flex;
+  gap: 16px;
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--spark-border-light);
+  font-size: 14px;
+}
+.info-label {
+  flex: 0 0 56px;
+  color: var(--spark-text-3);
+}
+.contact-panel-signature {
+  margin: 0;
+  color: var(--spark-text-2);
+  font-size: 13px;
+}
+.contact-panel-meta {
+  margin: 0;
+  color: var(--spark-text-3);
+  font-size: 12px;
+}
+/* 可编辑字段行：点击值进入编辑态，右侧出现保存/取消 */
+.edit-row {
+  align-items: center;
+}
+.edit-value {
+  flex: 1;
+  min-width: 0;
+  margin: -2px -6px;
+  padding: 2px 6px;
+  border-radius: var(--spark-radius-s);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.edit-value:hover {
+  background: var(--spark-bg-hover);
+}
+.edit-value-empty {
+  color: var(--spark-text-3);
+}
+.edit-value-readonly,
+.edit-value-readonly:hover {
+  cursor: default;
+  background: transparent;
+}
+.edit-input {
+  flex: 1;
+  min-width: 0;
+}
+.edit-actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.edit-actions .el-button + .el-button {
+  margin-left: 8px;
+}
+.info-row-photos {
+  align-items: flex-start;
+}
+.photo-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.photo-thumb {
+  width: 48px;
+  height: 48px;
+  border: 0;
+  border-radius: var(--spark-radius-m);
+  cursor: pointer;
+}
+.photo-add {
+  width: 48px;
+  height: 48px;
+  border: 1px dashed var(--spark-border);
+  border-radius: var(--spark-radius-m);
+  background: transparent;
+  color: var(--spark-text-3);
+  font-size: 18px;
+  cursor: pointer;
+}
+.photo-add:hover {
+  color: var(--spark-primary);
+  border-color: var(--spark-primary);
+}
+.contact-panel-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/* 通栏长按钮（发送消息/添加为个人联系人）：el-button 默认文字居中 */
+.contact-panel-actions .el-button { width: 100%; margin-left: 0; }
+.contact-panel-ops { border-top: 1px solid var(--spark-border-light); }
+.op-row {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 12px 4px;
+  border: 0;
+  border-bottom: 1px solid var(--spark-border-light);
+  background: transparent;
+  font-size: 14px;
+  color: var(--spark-text-1);
+  cursor: pointer;
+  text-align: center;
+}
+.op-row:hover {
+  background: var(--spark-bg-hover);
+}
+.op-danger {
+  color: var(--spark-danger);
+}
+.permission-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+.permission-group .el-radio {
+  height: auto;
+  align-items: flex-start;
+  white-space: normal;
+}
+
+/* ---- 添加朋友（§4.1） ---- */
+.scan-placeholder {
+  display: flex;
+  height: 160px;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--spark-border);
+  border-radius: var(--spark-radius-l);
+  color: var(--spark-text-3);
+  background: var(--spark-bg-page);
+}
+
+/* ---- 新的朋友/标签（§2.2）：第三栏列表 + 第四栏详情 ---- */
+.contacts-request-list {
+  display: flex;
+  flex-direction: column;
+  flex: 4 1 0;
+  min-width: 280px;
+  border-right: 2px solid var(--spark-border);
+  overflow-y: auto;
+}
+
+.contacts-request-title {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0;
+  padding: 12px 16px 4px;
+  font-size: 15px;
+  color: var(--spark-text-1);
+  /* 滚动时标题吸顶（滚动容器为 .contacts-request-list / .group-panel） */
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--spark-bg-card);
+}
+
+/* 第三栏标题行右侧工具按钮（如「新建标签」） */
+.request-head-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--spark-radius-m);
+  background: transparent;
+  color: var(--spark-text-3);
+  cursor: pointer;
+}
+.request-head-btn:hover {
+  background: var(--spark-bg-hover);
+  color: var(--spark-text-1);
+}
+
+/* 申请行：58px 内容行（与会话行同高）；裸 button 需显式 margin: 0 消除行间缝隙；
+   flex-shrink: 0——作为 flex 列子项默认会被压缩，导致内容超出时不出滚动条而是挤变形 */
+.request-item {
+  display: flex;
+  flex-shrink: 0;
+  width: 100%;
+  height: 58px;
+  align-items: center;
+  gap: 12px;
+  margin: 0;
+  padding: 0 16px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+.request-item:hover {
+  background: var(--spark-bg-hover);
+}
+.request-item.active {
+  background: var(--spark-primary-light);
+}
+.request-item-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.request-item-main b {
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--spark-text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.request-item.active .request-item-main b {
+  font-weight: 600;
+}
+.request-item-main span {
+  font-size: 12px;
+  color: var(--spark-text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 第四栏：申请人资料卡（与联系人资料面板同宽居中） */
+.request-profile {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 640px;
+  margin: 0 auto;
+}
+.request-rootid {
+  word-break: break-all;
+  user-select: text;
+}
+.request-permission {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+.request-permission-title {
+  font-size: 14px;
+  color: var(--spark-text-1);
+}
+.request-detail-actions {
+  display: flex;
+  gap: 12px;
+}
+.request-detail-actions .el-button + .el-button {
+  margin-left: 0;
+}
+
+/* ---- 标签（§8）：第三栏标签列表行 + 第四栏成员管理 ---- */
+/* 列表行图标块（与申请行头像位同尺寸）：标签行、分组行共用 */
+.row-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--spark-primary-light);
+  color: var(--spark-primary);
+}
+
+/* 第四栏：标签名 + 操作 */
+.tag-detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.tag-detail-name {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--spark-text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tag-detail-actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.tag-detail-actions .el-button + .el-button {
+  margin-left: 0;
+}
+
+.tag-add-row { display: flex; gap: 8px; align-items: center; }
+.tag-add-select { flex: 1; min-width: 0; }
+
+/* 成员行：复用 .request-item 行结构，仅去掉点击态 */
+.tag-member-row {
+  cursor: default;
+  padding: 0;
+}
+/* 可点击成员行：点击打开详情抽屉 */
+.tag-member-clickable {
+  cursor: pointer;
+}

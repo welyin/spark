@@ -4,24 +4,28 @@
     <p class="hint">首次注册将创建 RootID（仅本地存储）。</p>
 
     <template v-if="step === 'password'">
-      <el-form label-position="top" class="auth-form">
+      <!-- 回车与点击统一走 submit：输入框 @keydown.enter.prevent 显式触发（keydown 阶段掐掉隐式提交，
+           其默认动作会同步卡主线程），按钮 native-type="button" + @click；@submit.prevent 纯兜底防刷新 -->
+      <el-form label-position="top" class="auth-form" @submit.prevent>
         <el-form-item label="昵称">
-          <el-input v-model="nickname" placeholder="中英文均可，最长 24 个字符" maxlength="24" :disabled="busy" />
+          <el-input v-model="nickname" placeholder="中英文均可，最长 24 个字符" maxlength="24" :disabled="busy" @keydown.enter.prevent="submit" />
         </el-form-item>
         <el-form-item label="头像（可选）">
           <AvatarPicker v-model="avatarDataUrl" :nickname="nickname" :disabled="busy" />
           <p class="hint">不上传时将按账号自动生成配色头像，之后可在"我的"页随时更换。</p>
         </el-form-item>
         <el-form-item label="登录密码">
-          <el-input v-model="password" type="password" show-password placeholder="至少 8 位" :disabled="busy" />
+          <el-input v-model="password" type="password" show-password placeholder="至少 8 位" :disabled="busy" @keydown.enter.prevent="submit" />
+          <PasswordStrengthMeter :password="password" />
         </el-form-item>
         <el-form-item label="确认密码">
-          <el-input v-model="confirmPassword" type="password" show-password placeholder="重复输入密码" :disabled="busy" />
+          <el-input v-model="confirmPassword" type="password" show-password placeholder="重复输入密码" :disabled="busy" @keydown.enter.prevent="submit" />
         </el-form-item>
+        <el-button class="submit-btn" type="primary" native-type="button" :loading="busy" :disabled="busy" @click="submit">创建账号</el-button>
       </el-form>
-      <el-button class="submit-btn" type="primary" :loading="busy" :disabled="busy" @click="submit">创建 RootID</el-button>
       <div class="entry-link">
         <el-button link type="primary" @click="emit('recover')">已有助记词或备份二维码？恢复账号</el-button>
+        <el-button v-if="showBack" link type="info" @click="emit('back')">返回登录</el-button>
       </div>
     </template>
 
@@ -62,15 +66,24 @@
 import { computed, defineComponent, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import AvatarPicker from '../../components/AvatarPicker.vue';
+import PasswordStrengthMeter from '../../components/common/PasswordStrengthMeter.vue';
 import { markIdentityBackupDone } from '../../utils/backup-state';
 import { errorMessage } from '../../utils/ipc';
 
 export default defineComponent({
   name: 'RegisterPage',
   components: {
-    AvatarPicker
+    AvatarPicker,
+    PasswordStrengthMeter
   },
-  emits: ['registered', 'recover'],
+  props: {
+    /** 是否显示「返回登录」链接（已有账号、从切换用户进入注册时显示） */
+    showBack: {
+      type: Boolean,
+      default: false
+    }
+  },
+  emits: ['registered', 'recover', 'back'],
   setup(_, { emit }) {
     const step = ref<'password' | 'mnemonic'>('password');
     const nickname = ref('');
@@ -86,6 +99,9 @@ export default defineComponent({
     const mnemonicWords = computed(() => (mnemonic.value ? mnemonic.value.split(' ') : []));
 
     const submit = async () => {
+      if (busy.value) {
+        return;
+      }
       if (!nickname.value.trim()) {
         message.value = '请先填写昵称';
         return;

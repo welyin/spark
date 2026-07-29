@@ -1,9 +1,10 @@
 <template>
-  <el-popover placement="bottom-end" :width="330" trigger="click">
+  <el-popover placement="bottom-end" :width="330" trigger="hover">
     <template #reference>
-      <button class="net-status-trigger" :title="statusLabel">
+      <button class="net-status-tag" :class="`is-${statusKind}`" :title="statusLabel">
         <span class="net-status-dot" :class="`is-${statusKind}`" />
         <span class="net-status-label">{{ statusLabel }}</span>
+        <span class="net-status-count">{{ peerCountText }}</span>
       </button>
     </template>
 
@@ -46,7 +47,7 @@
           <span>网络连接</span>
           <b>{{ p2pInfo?.started ? `${p2pInfo.connectedPeers.length} 个节点` : '未启动' }}</b>
         </div>
-        <p class="net-status-hint">加入或选中组织后，这里显示副本级状态。</p>
+        <p class="net-status-hint">加入或切换到组织空间后，这里显示副本级状态。</p>
       </template>
     </div>
   </el-popover>
@@ -56,16 +57,8 @@
 import { computed, defineComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { listenP2pEvents, type OrgNetworkStatus, type OrgSyncOverviewDto, type OrgView } from '../api';
 import { currentOrgId } from '../stores/current-org';
-
-type P2pInfo = {
-  initialized: boolean;
-  started: boolean;
-  peerId: string | null;
-  addresses: string[];
-  connectedPeers: string[];
-  sparkSyncSubscribers: string[];
-  error?: string | null;
-};
+import { findOrg, refreshOrganizations } from '../stores/org-membership';
+import { refreshNetworkStatus, useNetworkStatus } from '../stores/network-status';
 
 const STATUS_LABELS: Record<OrgNetworkStatus, string> = {
   good: '组织网络良好',
@@ -75,7 +68,7 @@ const STATUS_LABELS: Record<OrgNetworkStatus, string> = {
   localOnly: '仅本地'
 };
 
-/** 事件刷新最小间隔（连接/断开事件可能成对突发，避免连发 invoke）。 */
+/** 组织 overview 事件刷新最小间隔（连接/断开事件可能成对突发，避免连发 invoke）。 */
 const EVENT_REFRESH_MIN_INTERVAL_MS = 2_000;
 /** 轮询兜底周期。 */
 const POLL_INTERVAL_MS = 30_000;
@@ -83,20 +76,17 @@ const POLL_INTERVAL_MS = 30_000;
 export default defineComponent({
   name: 'NetworkStatusBar',
   setup() {
-    const organizations = ref<OrgView[]>([]);
     const overview = ref<OrgSyncOverviewDto | null>(null);
-    const p2pInfo = ref<P2pInfo | null>(null);
+    // 全局 P2P 状态共享自 network-status store（统一轮询，避免与消息页等各自调接口）
+    const { p2pInfoSnapshot: p2pInfo, connectedPeerCount } = useNetworkStatus();
     let pollTimer: ReturnType<typeof setInterval> | null = null;
     let unlisten: (() => void) | null = null;
     let lastEventRefreshAt = 0;
 
-    // 当前组织：OrgPage 写入的选中项优先，否则兜底第一个组织
+    // 当前组织：只跟随当前空间（currentOrgId 由 currentSpace 派生）；
+    // 个人空间（空串）不再回退第一个组织，弹层显示全局 P2P 状态（ui-space-navbar §4.1）
     const currentOrg = computed<OrgView | null>(() => {
-      return (
-        organizations.value.find((org) => org.orgId === currentOrgId.value) ??
-        organizations.value[0] ??
-        null
-      );
+      return findOrg(currentOrgId.value);
     });
     const currentOrgName = computed(() => currentOrg.value?.name ?? '-');
 
@@ -104,17 +94,21 @@ export default defineComponent({
       if (overview.value) {
         return overview.value.status;
       }
-      // 无组织（或未选中）时的全局最简状态
+      // 无组织（或未选中）时的全局最简状态：
+      // 未启动=仅本地；已启动未连上节点=unstable（弱提示，不阻断操作）；已连接=good
       const info = p2pInfo.value;
-      if (info?.started && info.connectedPeers.length > 0) {
-        return 'good';
+      if (!info?.started) {
+        return 'localOnly';
       }
-      return 'localOnly';
+      return info.connectedPeers.length > 0 ? 'good' : 'unstable';
     });
 
     const statusLabel = computed(() => {
       if (!overview.value && statusKind.value === 'good') {
         return '网络已连接';
+      }
+      if (!overview.value && statusKind.value === 'unstable') {
+        return '暂未连接节点';
       }
       return STATUS_LABELS[statusKind.value];
     });
@@ -126,7 +120,9 @@ export default defineComponent({
             ? '可连接多数目标副本，数据同步正常。'
             : '已连接到网络。';
         case 'unstable':
-          return '仅部分副本可连接（少于 K），数据同步可能延迟。';
+          return overview.value
+            ? '仅部分副本可连接（少于 K），数据同步可能延迟。'
+            : 'P2P 已启动，暂未连接到任何节点；请求将照常发出，送达失败可重试。';
         case 'lost':
           return overview.value?.recoveryState === 'failed'
             ? '所有已知成员地址连接失败，自动恢复暂无结果；请在组织详情页通过「恢复连接」手动添加节点。'
@@ -134,7 +130,7 @@ export default defineComponent({
         case 'recovering':
           return '正在通过 DHT / 恢复查询查找组织成员…';
         case 'localOnly':
-          return '当前完全离线，仅本地可用；数据将在网络恢复后同步。';
+          return 'P2P 未启动，当前仅本地可用；数据将在网络恢复后同步。';
       }
     });
 
@@ -174,6 +170,14 @@ export default defineComponent({
       return '-';
     });
 
+    /** 胶囊上的数量：组织空间=已同步成员数，个人空间=已连接节点数 */
+    const peerCountText = computed(() => {
+      if (overview.value) {
+        return `${overview.value.syncedPeers} 成员已同步`;
+      }
+      return `${connectedPeerCount.value} 节点`;
+    });
+
     const refreshOverview = async () => {
       const org = currentOrg.value;
       if (!org) {
@@ -189,15 +193,11 @@ export default defineComponent({
 
     const refreshAll = async () => {
       try {
-        organizations.value = await window.electronAPI.organization.listMine();
+        await refreshOrganizations();
       } catch {
         // 同上
       }
-      try {
-        p2pInfo.value = await window.electronAPI.p2p.info();
-      } catch {
-        // 同上
-      }
+      await refreshNetworkStatus();
       await refreshOverview();
     };
 
@@ -236,6 +236,7 @@ export default defineComponent({
     return {
       overview,
       p2pInfo,
+      peerCountText,
       currentOrgName,
       statusKind,
       statusLabel,
@@ -249,62 +250,91 @@ export default defineComponent({
 </script>
 
 <style scoped>
-.net-status-trigger {
+/* 状态胶囊：在线=绿、弱网/部分离线/同步中=黄、离线=红、未启动/仅本地=灰 */
+.net-status-tag {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   border: 0;
-  background: transparent;
   cursor: pointer;
   font-family: inherit;
-  font-size: 12px;
-  color: var(--spark-text-2);
-  padding: 4px 8px;
-  border-radius: var(--spark-radius-l);
+  font-size: var(--spark-font-size-secondary);
+  line-height: 1.4;
+  padding: 3px 10px;
+  border-radius: 999px;
   -webkit-app-region: no-drag;
 }
 
-.net-status-trigger:hover {
+.net-status-tag:hover {
+  opacity: 0.85;
+}
+
+.net-status-tag.is-good {
+  background: var(--spark-success-bg);
+  color: var(--spark-success);
+}
+
+.net-status-tag.is-unstable,
+.net-status-tag.is-recovering {
+  background: var(--spark-warning-bg);
+  color: var(--spark-warning);
+}
+
+.net-status-tag.is-lost {
+  background: var(--spark-danger-bg);
+  color: var(--spark-danger);
+}
+
+.net-status-tag.is-localOnly {
   background: var(--spark-bg-hover);
+  color: var(--spark-text-2);
 }
 
 .net-status-dot {
-  width: 9px;
-  height: 9px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
 }
 
-.net-status-dot.is-good {
-  background: var(--el-color-success);
+/* 常驻数量（已连接节点数/已同步成员数）：比状态文字弱一级 */
+.net-status-count {
+  opacity: 0.75;
+  font-size: 11px;
 }
 
-.net-status-dot.is-unstable {
-  background: var(--el-color-warning);
+.net-status-count::before {
+  content: '·';
+  margin-right: 4px;
+}
+
+.net-status-dot.is-good {
+  background: var(--spark-success);
+}
+
+.net-status-dot.is-unstable,
+.net-status-dot.is-recovering {
+  background: var(--spark-warning);
 }
 
 .net-status-dot.is-lost {
-  background: var(--el-color-danger);
-}
-
-.net-status-dot.is-recovering {
-  background: #ee8c2b;
+  background: var(--spark-danger);
 }
 
 .net-status-dot.is-localOnly {
-  background: var(--el-color-info);
+  background: var(--spark-text-3);
 }
 
 .net-status-panel-title {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 13px;
+  font-size: var(--spark-font-size-placeholder);
 }
 
 .net-status-desc {
   margin: 8px 0 10px;
-  font-size: 12px;
+  font-size: var(--spark-font-size-secondary);
   color: var(--spark-text-2);
   line-height: 1.5;
 }
@@ -313,7 +343,7 @@ export default defineComponent({
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  font-size: 12px;
+  font-size: var(--spark-font-size-secondary);
   padding: 3px 0;
   color: var(--spark-text-2);
 }
@@ -327,7 +357,7 @@ export default defineComponent({
 
 .net-status-hint {
   margin: 8px 0 0;
-  font-size: 12px;
+  font-size: var(--spark-font-size-secondary);
   color: var(--spark-text-3);
 }
 </style>

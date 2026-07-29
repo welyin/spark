@@ -1,6 +1,7 @@
-<!-- 职责：数据治理对话框——管理员手动清理本机旧数据（先导出转移，K 副本充足才允许执行） -->
+<!-- 职责：数据治理面板（组织设置第四栏）——管理员手动清理本机旧数据（先导出转移，K 副本充足才允许执行）。
+     由原对话框改造：内容直接铺在第四栏，无弹窗/遮罩 -->
 <template>
-  <el-dialog v-model="dialogVisible" title="数据治理（清理本机旧数据）" width="560px" @closed="resetPurgeDialog">
+  <div class="purge-panel">
     <template v-if="!purgeResult">
       <el-alert
         title="只清理本机指定日期之前的旧数据；组织数据仍保留在其他成员副本中，且清理后同时代数据不会再被同步回本机。"
@@ -48,6 +49,11 @@
         <el-checkbox v-model="purgeConfirmExported" class="purge-tip">
           我已导出备份并妥善转移，确认清理
         </el-checkbox>
+        <div class="purge-actions">
+          <el-button type="danger" :loading="purging" :disabled="!purgeExecutable" @click="executePurge">
+            {{ purging ? '清理中...' : '执行清理' }}
+          </el-button>
+        </div>
       </template>
     </template>
     <template v-else>
@@ -56,17 +62,11 @@
         已清理 {{ purgeResult.removedDocs }} 条文档，释放 {{ formatBytes(purgeResult.freedBytes) }}；
         同时代数据不会再同步回本机。
       </p>
+      <div class="purge-actions">
+        <el-button @click="resetPurge">继续清理</el-button>
+      </div>
     </template>
-    <template #footer>
-      <template v-if="!purgeResult">
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="danger" :loading="purging" :disabled="!purgeExecutable" @click="executePurge">
-          {{ purging ? '清理中...' : '执行清理' }}
-        </el-button>
-      </template>
-      <el-button v-else @click="dialogVisible = false">完成</el-button>
-    </template>
-  </el-dialog>
+  </div>
 </template>
 
 <script lang="ts">
@@ -89,14 +89,11 @@ type PurgeExecuteResult = {
 };
 
 export default defineComponent({
-  name: 'PurgeDataDialog',
+  name: 'PurgeDataPanel',
   props: {
-    // 对话框可见性（v-model）
-    modelValue: { type: Boolean, required: true },
     orgId: { type: String, required: true }
   },
-  emits: ['update:modelValue'],
-  setup(props, { emit }) {
+  setup(props) {
     // ------------------------------------------------------------------
     // 数据治理：管理员手动清理本机旧数据（先导出转移，K 副本充足才允许执行）
     // ------------------------------------------------------------------
@@ -107,11 +104,6 @@ export default defineComponent({
     const purgeConfirmExported = ref(false);
     const purgePreview = ref<PurgePreviewResult | null>(null);
     const purgeResult = ref<PurgeExecuteResult | null>(null);
-
-    const dialogVisible = computed({
-      get: () => props.modelValue,
-      set: (value: boolean) => emit('update:modelValue', value)
-    });
 
     const purgeReplicaSufficient = computed(() => {
       const replica = purgePreview.value?.replica;
@@ -129,7 +121,7 @@ export default defineComponent({
       );
     });
 
-    const resetPurgeDialog = () => {
+    const resetPurge = () => {
       purgeBeforeDate.value = null;
       purgePreview.value = null;
       purgeResult.value = null;
@@ -139,13 +131,11 @@ export default defineComponent({
       purging.value = false;
     };
 
-    // 打开对话框时重置状态（对齐原 openPurgeDialog 行为）
+    // 切换组织时重置状态（对齐原对话框每次打开重置的行为）
     watch(
-      () => props.modelValue,
-      (visible) => {
-        if (visible) {
-          resetPurgeDialog();
-        }
+      () => props.orgId,
+      () => {
+        resetPurge();
       }
     );
 
@@ -218,7 +208,6 @@ export default defineComponent({
     };
 
     return {
-      dialogVisible,
       purgeBeforeDate,
       purgePreviewing,
       purgeExporting,
@@ -228,7 +217,7 @@ export default defineComponent({
       purgeResult,
       purgeReplicaSufficient,
       purgeExecutable,
-      resetPurgeDialog,
+      resetPurge,
       disableFutureDate,
       runPurgePreview,
       exportBeforePurge,

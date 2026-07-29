@@ -1,28 +1,18 @@
-<!-- 职责：邀请成员对话框（两步：预录入成员 RootID -> 生成邀请码） -->
+<!-- 职责：添加成员对话框（与添加朋友同一套名片输入；预录入成员 -> 生成邀请码） -->
 <template>
-  <el-dialog v-model="dialogVisible" title="邀请成员" width="520px" @closed="resetInviteDialog">
+  <el-dialog v-model="dialogVisible" title="添加成员" width="480px" @closed="resetInviteDialog">
+    <!-- TODO(mock): 仅本地模式下邀请无法送达对方，前端先行拦截（真实实现应由内核/网关拒绝或排队） -->
+    <el-alert
+      v-if="isLocalOnly"
+      title="当前为仅本地模式，无法发送邀请"
+      type="warning"
+      :closable="false"
+      show-icon
+      class="invite-local-alert"
+    />
     <template v-if="!inviteResult">
-      <el-form label-position="top">
-        <el-form-item label="成员 RootID">
-          <el-input v-model="inviteRootId" placeholder="64 位 RootID" />
-        </el-form-item>
-        <el-collapse class="invite-advanced">
-          <el-collapse-item title="高级选项：对方节点信息（可选）" name="advanced">
-            <el-form-item label="成员 PeerId（可选）">
-              <el-input v-model="invitePeerId" placeholder="例如：12D3KooW..." />
-            </el-form-item>
-            <el-form-item label="成员节点地址（可选，可多条，逗号/分号/换行分隔）">
-              <el-input
-                v-model="inviteAddresses"
-                type="textarea"
-                :rows="3"
-                placeholder="例如：/ip4/127.0.0.1/tcp/15002/ws"
-              />
-            </el-form-item>
-          </el-collapse-item>
-        </el-collapse>
-      </el-form>
-      <p class="hint">只填 RootID 即可预录入；对方凭邀请码加入时会自动回填节点地址。</p>
+      <p class="hint">让对方打开「个人设置 → 我的名片」，把二维码名片图片或名片内容发给你。</p>
+      <CardInput v-model="cardRaw" />
     </template>
     <template v-else>
       <el-alert title="成员已预录入，邀请码已生成" type="success" :closable="false" show-icon />
@@ -51,9 +41,14 @@
 <script lang="ts">
 import { computed, defineComponent, ref, watch, type PropType } from 'vue';
 import { ElMessage } from 'element-plus';
+import CardInput from '../common/CardInput.vue';
+import { parseCard } from '../../utils/card';
+import { recordOutgoing } from '../../mock/contacts';
+import { useNetworkStatus } from '../../stores/network-status';
 
 export default defineComponent({
   name: 'InviteMemberDialog',
+  components: { CardInput },
   props: {
     // 对话框可见性（v-model）
     modelValue: { type: Boolean, required: true },
@@ -65,11 +60,10 @@ export default defineComponent({
   },
   emits: ['update:modelValue'],
   setup(props, { emit }) {
-    const inviteRootId = ref('');
-    const invitePeerId = ref('');
-    const inviteAddresses = ref('');
+    const cardRaw = ref('');
     const inviteResult = ref('');
     const inviting = ref(false);
+    const { isLocalOnly } = useNetworkStatus();
 
     const dialogVisible = computed({
       get: () => props.modelValue,
@@ -77,9 +71,7 @@ export default defineComponent({
     });
 
     const resetInviteDialog = () => {
-      inviteRootId.value = '';
-      invitePeerId.value = '';
-      inviteAddresses.value = '';
+      cardRaw.value = '';
       inviteResult.value = '';
     };
 
@@ -97,19 +89,26 @@ export default defineComponent({
       if (!props.orgId) {
         return;
       }
-      if (!inviteRootId.value.trim()) {
-        ElMessage.warning('请输入成员 RootID');
+      // TODO(mock): 仅本地拦截为前端演示逻辑；真实实现应由内核/网关层拒绝或排队
+      if (isLocalOnly.value) {
+        ElMessage.warning('仅本地模式下无法发送邀请');
+        return;
+      }
+      const raw = cardRaw.value.trim();
+      if (!raw) {
+        ElMessage.warning('请上传名片图片或粘贴名片内容');
+        return;
+      }
+      const card = parseCard(raw);
+      if (!card) {
+        ElMessage.warning('未从内容中识别到有效的身份 ID，请确认名片内容完整');
         return;
       }
 
-      const addresses = inviteAddresses.value
-        .split(/\r?\n|,|;/)
-        .map((item) => item.trim())
-        .filter((item) => item.length > 0);
-      const nodeInfo = invitePeerId.value.trim() || addresses.length > 0
+      const nodeInfo = card.peerId || card.addresses?.length
         ? {
-            peerId: invitePeerId.value.trim() || undefined,
-            addresses
+            peerId: card.peerId,
+            addresses: card.addresses ?? []
           }
         : undefined;
 
@@ -117,11 +116,13 @@ export default defineComponent({
       try {
         await props.beforeWrite();
         await window.electronAPI.organization.addMember(props.orgId, {
-          rootId: inviteRootId.value,
+          rootId: card.rootId,
           nodeInfo
         });
         const invite = await window.electronAPI.organization.createInvite(props.orgId);
         inviteResult.value = invite.invite;
+        // 「新的成员」里留一条我发出的邀请记录，可看到对方反应/再复制邀请码
+        recordOutgoing(`org:${props.orgId}`, { rootId: card.rootId, source: '名片', inviteCode: invite.invite });
         ElMessage.success('成员已预录入');
         await props.onInvited();
       } catch (error) {
@@ -142,11 +143,10 @@ export default defineComponent({
 
     return {
       dialogVisible,
-      inviteRootId,
-      invitePeerId,
-      inviteAddresses,
+      cardRaw,
       inviteResult,
       inviting,
+      isLocalOnly,
       resetInviteDialog,
       addMemberAndInvite,
       copyInvite
@@ -154,3 +154,13 @@ export default defineComponent({
   }
 });
 </script>
+
+<style scoped>
+.invite-local-alert {
+  margin-bottom: 12px;
+}
+
+.invite-result {
+  margin-top: 12px;
+}
+</style>

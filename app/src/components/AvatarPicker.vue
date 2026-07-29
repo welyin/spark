@@ -1,6 +1,10 @@
 <template>
   <div class="avatar-picker">
-    <UserAvatar :nickname="nickname" :avatar="modelValue" :size="size" />
+    <!-- 有上传图或昵称时预览（自动配色头像）；否则灰底相机占位，避免「未」字彩色圆 -->
+    <UserAvatar v-if="modelValue || nickname.trim()" :root-id="seed" :nickname="nickname" :avatar="modelValue" :size="size" />
+    <span v-else class="avatar-picker-placeholder" :style="{ width: `${size}px`, height: `${size}px` }">
+      <el-icon :size="Math.round(size * 0.4)"><Camera /></el-icon>
+    </span>
     <div class="avatar-picker-actions">
       <el-button size="small" :disabled="disabled" @click="triggerSelect">上传图片</el-button>
       <el-button v-if="modelValue" size="small" text type="danger" :disabled="disabled" @click="emit('update:modelValue', '')">
@@ -14,6 +18,7 @@
 <script lang="ts">
 import { defineComponent, ref } from 'vue';
 import { ElMessage } from 'element-plus';
+import { Camera } from '@element-plus/icons-vue';
 import UserAvatar from './UserAvatar.vue';
 import { fileToAvatarDataUrl } from '../utils/avatar';
 
@@ -30,6 +35,11 @@ export default defineComponent({
     },
     /** 预览自动头像时取首字与配色的昵称 */
     nickname: {
+      type: String,
+      default: ''
+    },
+    /** 自动头像配色种子（rootId 或 rootId@orgId）；缺省按昵称哈希（注册预览等无身份场景） */
+    seed: {
       type: String,
       default: ''
     },
@@ -68,6 +78,7 @@ export default defineComponent({
       fileInput,
       triggerSelect,
       onChange,
+      Camera,
       emit
     };
   }

@@ -1,44 +1,63 @@
 /**
- * Spark 设计令牌（参考钉钉桌面版）
- * 全部视觉常量集中在此，换肤只改这里。
+ * Spark 设计令牌
+ * 颜色一律别名到 Element Plus 变量（组件库默认颜色方案；深色由 html.dark 下的官方 dark/css-vars 接管），
+ * 深浅色切换无需改动这里；尺寸、圆角、阴影等结构常量仍在下方集中定义。
  */
 :root {
-  /* 品牌色：钉钉蓝 */
-  --spark-primary: #3296fa;
-  --spark-primary-hover: #54a9fb;
-  --spark-primary-active: #2b83dd;
-  --spark-primary-light: #eaf4fe;
+  /* 品牌色 → 组件库主色阶梯 */
+  --spark-primary: var(--el-color-primary);
+  --spark-primary-hover: var(--el-color-primary-light-3);
+  --spark-primary-active: var(--el-color-primary-dark-2);
+  --spark-primary-light: var(--el-color-primary-light-9);
 
-  /* 语义色 */
-  --spark-success: #34c19b;
-  --spark-warning: #f7b500;
-  --spark-danger: #f54a45;
+  /* 语义色（成功 / 警告 / 危险）及浅底（状态标签/徽标底，如网络状态胶囊） */
+  --spark-success: var(--el-color-success);
+  --spark-warning: var(--el-color-warning);
+  --spark-danger: var(--el-color-danger);
+  --spark-success-bg: var(--el-color-success-light-9);
+  --spark-warning-bg: var(--el-color-warning-light-9);
+  --spark-danger-bg: var(--el-color-danger-light-9);
+
+  /* 性别图标色（参考微信：男蓝女粉；业务语义色，深浅色一致） */
+  --spark-gender-male: #3296fa;
+  --spark-gender-female: #eb2f96;
 
   /* 中性色 */
-  --spark-bg-page: #f2f3f5;
-  --spark-bg-card: #ffffff;
-  --spark-bg-hover: #f5f6f7;
-  --spark-text-1: #1f2329;
-  --spark-text-2: #646a73;
-  --spark-text-3: #8f959e;
-  --spark-border: #dee0e3;
-  --spark-border-light: #ebedf0;
+  --spark-bg-page: var(--el-bg-color-page);
+  --spark-bg-card: var(--el-bg-color);
+  --spark-bg-hover: var(--el-fill-color-light);
+  --spark-text-1: var(--el-text-color-primary);
+  --spark-text-2: var(--el-text-color-secondary);
+  --spark-text-3: var(--el-text-color-placeholder);
+  --spark-border: var(--el-border-color);
+  --spark-border-light: var(--el-border-color-light);
 
-  /* 深色导航栏（rail） */
+  /* 左侧导航栏（rail）：浅色主题（随组件库变量，深色模式自动转深），激活项用品牌蓝浅底+蓝字。
+     两种宽度：窄栏 64px（图标在上文字在下）/ 宽栏 155px（左图标右文字，行高 40px），点分隔线切换。
+     注：参考尺寸按 Retina 屏设备像素测量（310/80），CSS 值为其一半 */
   --spark-rail-width: 64px;
-  --spark-rail-bg: #2b2f36;
-  --spark-rail-text: #a8abb2;
-  --spark-rail-item-hover: rgba(255, 255, 255, 0.06);
-  --spark-rail-item-active: rgba(255, 255, 255, 0.1);
+  --spark-rail-width-expanded: 155px;
+  --spark-rail-bg: var(--el-bg-color);
+  --spark-rail-text: var(--el-text-color-secondary);
+  --spark-rail-item-hover: var(--el-fill-color-light);
+  --spark-rail-item-active: var(--el-color-primary-light-9);
 
-  /* 顶栏（常驻网络状态） */
+  /* 顶栏（浅色模式下 #f8fafc + 底部细分隔线，见 app-shell.css）与主内容区底色 */
   --spark-topbar-height: 44px;
+  --spark-topbar-bg: #f8fafc;
+  --spark-main-bg: var(--spark-bg-page);
 
-  /* 圆角 */
+  /* 圆角（各司其职：s=标签/小元素，m=按钮/输入框/菜单项，l=卡片/面板，xl=弹窗） */
   --spark-radius-s: 4px;
-  --spark-radius-m: 6px;
-  --spark-radius-l: 8px;
-  --spark-radius-xl: 12px;
+  --spark-radius-m: 8px;
+  --spark-radius-l: 12px;
+  --spark-radius-xl: 16px;
+
+  /* 字号层级（标题 / 正文 / 辅助说明 / 占位弱提示） */
+  --spark-font-size-title: 20px;
+  --spark-font-size-base: 14px;
+  --spark-font-size-secondary: 12px;
+  --spark-font-size-placeholder: 13px;
 
   /* 阴影 */
   --spark-shadow-card: 0 1px 2px rgba(31, 35, 41, 0.04);
@@ -48,4 +67,12 @@
   /* 间距 */
   --spark-gap-page: 16px;
   --spark-padding-page: 20px;
+}
+
+/* 深色模式：顶栏/阴影跟随组件库深色底（rail 固定深色，两种模式一致） */
+html.dark {
+  --spark-topbar-bg: var(--el-bg-color);
+  --spark-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --spark-shadow-hover: 0 4px 16px rgba(0, 0, 0, 0.4);
+  --spark-shadow-pop: 0 6px 24px rgba(0, 0, 0, 0.45);
 }

@@ -1,378 +1,179 @@
+<!-- 我的页（个人设置）四栏架构：rail | 二级导航(280px) | 列表/概览(280px) | 详情/编辑(自适应)。
+     MinePage 只做编排（登录门控 / P2P 信息 / 菜单切换），每个模块的第三、四栏为
+     components/mine/ 下的独立组件（以 fragment 同时渲染两栏），编辑全部内联在第四栏。
+     第三、四栏按 2:3 弹性分配剩余宽度（各最小 280px）；窗口最小宽度 904px（tauri 配置 960px 已覆盖）。
+     组织空间下头像入口只显示「组织身份」模块，不展示个人设置菜单项；
+     头部身份在组织空间显示组织头像/昵称，个人空间显示个人资料 -->
 <template>
   <section class="mine-page">
-    <header v-if="!showRootPage" class="page-header">
-      <div class="page-header-main mine-header-main">
-        <UserAvatar
-          v-if="rootStatus.unlocked"
-          :root-id="rootStatus.rootId ?? ''"
-          :nickname="rootStatus.nickname ?? ''"
-          :avatar="rootStatus.avatar ?? ''"
-          :size="48"
-        />
-        <div>
-          <p class="eyebrow">个人中心</p>
-          <h1>{{ rootStatus.unlocked ? rootStatus.nickname || '未命名用户' : '我的' }}</h1>
-          <p v-if="!rootStatus.initialized || !rootStatus.unlocked" class="lede">
-            账号登录前不会显示主界面，先完成 RootID 注册 / 登录。
-          </p>
-          <p v-else class="lede">RootID 已就绪，可将下方信息发给组织管理员用于添加成员。</p>
+    <!-- 未登录：登录/注册引导 -->
+    <div v-if="!rootStatus.initialized || !rootStatus.unlocked" class="mine-plain">
+      <header class="page-header">
+        <div class="page-header-main mine-header-main">
+          <div>
+            <p class="eyebrow">个人设置</p>
+            <h1>我的</h1>
+            <p class="lede">账号登录前不会显示主界面，先完成 RootID 注册 / 登录。</p>
+          </div>
         </div>
-      </div>
-      <div v-if="rootStatus.initialized && rootStatus.unlocked" class="page-header-actions">
-        <el-button @click="openProfileEditor">编辑资料</el-button>
-        <el-button @click="showRootPage = true">RootID</el-button>
-        <el-button type="danger" plain @click="handleLogout">退出登录</el-button>
-      </div>
-    </header>
-
-    <!-- 编辑资料对话框 -->
-    <el-dialog v-model="profileDialogVisible" title="编辑资料" width="420px" append-to-body @closed="resetProfileForm">
-      <el-form label-position="top">
-        <el-form-item label="头像">
-          <AvatarPicker v-model="profileAvatar" :nickname="profileNickname" :disabled="profileSaving" />
-          <p class="hint">移除上传图后将恢复为按账号自动生成的配色头像。</p>
-        </el-form-item>
-        <el-form-item label="昵称">
-          <el-input v-model="profileNickname" maxlength="24" placeholder="中英文均可，最长 24 个字符" :disabled="profileSaving" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="profileDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="profileSaving" @click="saveProfile">保存</el-button>
-      </template>
-    </el-dialog>
-
-    <template v-if="!rootStatus.initialized || !rootStatus.unlocked">
-      <RootAuthCenter @open-root-page="showRootPage = true" @update-auth-state="syncAuthState" />
-    </template>
+      </header>
+      <RootAuthCenter @update-auth-state="syncAuthState" />
+    </div>
 
     <template v-else>
-      <section v-if="!showRootPage" class="content-section">
-        <!-- 节点状态 + DHT 隐私开关 -->
-        <NetworkCard :root-id="rootStatus.rootId ?? ''" :p2p-info="p2pInfo" />
-
-        <el-card shadow="never" class="panel-card">
-          <template #header>
-            <h2>成员添加资料</h2>
-          </template>
-          <p class="hint">管理员添加你为成员时需要 RootID 与节点信息。</p>
-          <pre class="share-block">{{ shareText }}</pre>
-          <div class="row">
-            <el-button type="primary" @click="copyShareText">复制资料</el-button>
-            <el-button @click="refreshNodeInfo">刷新节点信息</el-button>
+      <!-- 第二栏：用户信息 + 功能菜单 -->
+      <div class="mine-menu">
+        <header class="mine-menu-header">
+          <UserAvatar
+            :root-id="headerSource.seed"
+            :nickname="headerSource.name"
+            :avatar="headerSource.image"
+            :size="44"
+          />
+          <div class="mine-menu-user">
+            <b>{{ headerSource.name }}</b>
+            <span>{{ headerSubtitle }}</span>
           </div>
-        </el-card>
+        </header>
 
-        <!-- 身份备份（加密二维码 + 密码门控助记词） -->
-        <BackupCard :root-id="rootStatus.rootId" />
+        <nav class="mine-menu-list">
+          <button
+            v-for="item in menuItems"
+            :key="item.key"
+            type="button"
+            class="mine-menu-item"
+            :class="{ active: activeMenu === item.key }"
+            @click="activeMenu = item.key"
+          >
+            <el-icon class="mine-menu-icon" :size="17"><component :is="item.icon" /></el-icon>
+            <span class="mine-menu-label">{{ item.label }}</span>
+          </button>
+        </nav>
+      </div>
 
-        <el-card shadow="never" class="panel-card">
-          <template #header>
-            <h2>数据管理</h2>
-          </template>
-          <p class="hint">容灾由组织 K 副本网络承担；此处提供用量可见、过期状态清理与手动导出转移。</p>
-
-          <template v-if="dataUsage">
-            <el-descriptions :column="1" border class="block-gap">
-              <el-descriptions-item
-                v-for="row in usageRows"
-                :key="row.key"
-                :label="row.label"
-              >
-                {{ row.keys }} 条 · {{ formatBytes(row.bytes) }}
-              </el-descriptions-item>
-              <el-descriptions-item label="合计">
-                {{ dataUsage.totalKeys }} 条 · {{ formatBytes(dataUsage.totalBytes) }}
-              </el-descriptions-item>
-              <el-descriptions-item v-if="dataUsage.disk" label="磁盘可用">
-                {{ formatBytes(dataUsage.disk.freeBytes) }} / {{ formatBytes(dataUsage.disk.totalBytes) }}
-                （{{ Math.round(dataUsage.disk.freeRatio * 100) }}%）
-              </el-descriptions-item>
-            </el-descriptions>
-
-            <el-alert
-              v-if="dataUsage.warnings.diskLow"
-              title="磁盘可用空间不足：请组织管理员尽快处理——增加磁盘、导出旧数据转移，或在组织详情中执行手动清理。"
-              type="error"
-              :closable="false"
-              show-icon
-              class="block-gap"
-            />
-            <el-alert
-              v-else-if="dataUsage.warnings.usageExceeded"
-              title="本地数据量较大：建议管理员导出旧数据转移后执行手动清理（组织详情 → 数据治理）。"
-              type="warning"
-              :closable="false"
-              show-icon
-              class="block-gap"
-            />
-          </template>
-          <p v-else class="hint block-gap">用量统计加载中…</p>
-
-          <div class="row">
-            <el-button :loading="dataActionRunning" @click="runDataCleanup">立即清理</el-button>
-            <el-button :loading="dataActionRunning" @click="exportData">导出数据</el-button>
-            <el-button @click="refreshDataUsage">刷新用量</el-button>
-          </div>
-          <el-alert v-if="dataMessage" :title="dataMessage" type="info" :closable="false" show-icon class="block-gap" />
-        </el-card>
-
-        <el-alert v-if="message" :title="message" type="info" :closable="false" show-icon />
-      </section>
-
-      <RootIDPage v-else @logout="handleLogout" @back="showRootPage = false" />
+      <!-- 第三、四栏：当前菜单对应模块（默认「我的资料」），各模块自带列表栏与详情栏 -->
+      <ProfileModule
+        v-if="activeMenu === 'profile'"
+        :root-id="rootStatus.rootId ?? ''"
+        :nickname="rootStatus.nickname ?? ''"
+        :avatar="rootStatus.avatar ?? ''"
+        @profile-updated="onProfileUpdated"
+      />
+      <MyCardModule v-else-if="activeMenu === 'card'" />
+      <BackupModule v-else-if="activeMenu === 'backup'" :root-id="rootStatus.rootId" />
+      <!-- 组织身份（仅组织空间出现在菜单中） -->
+      <OrgIdentityModule v-else-if="activeMenu === 'org'" />
+      <!-- 朋友权限（个人：仅聊天+黑名单）/ 成员权限（组织：仅黑名单） -->
+      <PermissionModule v-else-if="activeMenu === 'permission'" :mode="currentSpace.type === 'org' ? 'org' : 'personal'" />
     </template>
   </section>
 </template>
 
 <script lang="ts">
-import { computed, defineComponent, onMounted, ref } from 'vue';
+import { computed, defineComponent, onMounted, ref, watch, type Component } from 'vue';
 import { ElMessage } from 'element-plus';
-import type { DataUsageReportDto } from '../../main/preload';
-import { formatBytes } from '../utils/format';
-import { errorMessage } from '../utils/ipc';
+import { Key, Lock, OfficeBuilding, Postcard, User } from '@element-plus/icons-vue';
+import { currentSpace, currentSpaceOrgId } from '../stores/current-space';
+import type { RootStatusDto as RootStatus } from '../api';
+import { orgIdentityAvatarSource, personalAvatarSource } from '../stores/avatar-sources';
 import UserAvatar from '../components/UserAvatar.vue';
-import AvatarPicker from '../components/AvatarPicker.vue';
-import NetworkCard from '../components/NetworkCard.vue';
-import BackupCard from '../components/BackupCard.vue';
+import ProfileModule from '../components/mine/ProfileModule.vue';
+import MyCardModule from '../components/mine/MyCardModule.vue';
+import BackupModule from '../components/mine/BackupModule.vue';
+import OrgIdentityModule from '../components/mine/OrgIdentityModule.vue';
+import PermissionModule from '../components/mine/PermissionModule.vue';
 import RootAuthCenter from './auth/RootAuthCenter.vue';
-import RootIDPage from './RootIDPage.vue';
 
-type RootStatus = {
-  initialized: boolean;
-  unlocked: boolean;
-  rootId: string | null;
-  nickname: string | null;
-  avatar: string | null;
-};
-
-type P2PInfo = {
-  initialized: boolean;
-  started: boolean;
-  peerId: string | null;
-  addresses: string[];
-  connectedPeers: string[];
-  sparkSyncSubscribers: string[];
-  error?: string | null;
-};
-
-const USAGE_CLASS_LABELS: Array<{ key: keyof DataUsageReportDto['classes']; label: string }> = [
-  { key: 'documents', label: '业务文档' },
-  { key: 'indexes', label: '索引' },
-  { key: 'syncMeta', label: '同步元数据' },
-  { key: 'evidence', label: '存证链' },
-  { key: 'organization', label: '组织' },
-  { key: 'p2p', label: '网络状态' },
-  { key: 'system', label: '系统' },
-  { key: 'other', label: '其他' }
-];
+type MenuKey = 'profile' | 'card' | 'backup' | 'org' | 'permission';
 
 export default defineComponent({
   name: 'MinePage',
   components: {
     UserAvatar,
-    AvatarPicker,
-    NetworkCard,
-    BackupCard,
-    RootAuthCenter,
-    RootIDPage
+    ProfileModule,
+    MyCardModule,
+    BackupModule,
+    OrgIdentityModule,
+    PermissionModule,
+    RootAuthCenter
   },
-  setup() {
+  emits: ['profile-updated'],
+  setup(_, { emit }) {
     const rootStatus = ref<RootStatus>({ initialized: false, unlocked: false, rootId: null, nickname: null, avatar: null });
-    const showRootPage = ref(false);
-    const message = ref('');
-    const p2pInfo = ref<P2PInfo>({ initialized: false, started: false, peerId: null, addresses: [], connectedPeers: [], sparkSyncSubscribers: [], error: null });
-    const dataUsage = ref<DataUsageReportDto | null>(null);
-    const dataMessage = ref('');
-    const dataActionRunning = ref(false);
+    // 组织空间下头像入口只承载「组织身份」及其编辑，默认即选中
+    const activeMenu = ref<MenuKey>(currentSpace.value.type === 'org' ? 'org' : 'profile');
 
-    const usageRows = computed(() =>
-      USAGE_CLASS_LABELS.map((item) => ({
-        key: item.key,
-        label: item.label,
-        keys: dataUsage.value?.classes[item.key]?.keys ?? 0,
-        bytes: dataUsage.value?.classes[item.key]?.bytes ?? 0
-      }))
+    const menuItems = computed<Array<{ key: MenuKey; label: string; icon: Component }>>(() => {
+      // 组织空间：不显示个人设置菜单，仅保留组织身份与成员权限
+      if (currentSpace.value.type === 'org') {
+        return [
+          { key: 'org', label: '组织身份', icon: OfficeBuilding },
+          { key: 'permission', label: '成员权限', icon: Key }
+        ];
+      }
+      // 网络状态/设备管理在系统设置中，此处不再重复
+      return [
+        { key: 'profile', label: '我的资料', icon: User },
+        { key: 'card', label: '我的名片', icon: Postcard },
+        { key: 'permission', label: '朋友权限', icon: Key },
+        { key: 'backup', label: '账号备份', icon: Lock }
+      ];
+    });
+
+    // 空间切换时同步选中项：进组织空间锁定到「组织身份」，回个人空间恢复默认面板
+    watch(
+      () => currentSpace.value,
+      (space) => {
+        if (space.type === 'org') {
+          activeMenu.value = 'org';
+        } else if (activeMenu.value === 'org') {
+          activeMenu.value = 'profile';
+        }
+      }
     );
 
-    const refreshDataUsage = async () => {
-      try {
-        dataUsage.value = await window.electronAPI.dataManagement.usage();
-      } catch (error) {
-        dataMessage.value = `读取用量失败：${error}`;
-      }
-    };
-
-    const runDataCleanup = async () => {
-      dataActionRunning.value = true;
-      try {
-        const result = await window.electronAPI.dataManagement.cleanupNow();
-        dataMessage.value = `清理完成：tombstone ${result.tombstones} 条、节点记录 ${result.peerRecords} 条、同步记账 ${result.orgSyncStates} 条`;
-        await refreshDataUsage();
-      } catch (error) {
-        dataMessage.value = `清理失败：${error}`;
-      } finally {
-        dataActionRunning.value = false;
-      }
-    };
-
-    const exportData = async () => {
-      dataActionRunning.value = true;
-      try {
-        const result = await window.electronAPI.dataManagement.exportData();
-        dataMessage.value = result.cancelled
-          ? '已取消导出'
-          : `已导出 ${result.entries} 条数据（${formatBytes(result.bytes)}）到 ${result.path}`;
-      } catch (error) {
-        dataMessage.value = `导出失败：${error}`;
-      } finally {
-        dataActionRunning.value = false;
-      }
-    };
+    // 头部身份：组织空间显示组织身份（+「组织身份」副标题），个人空间显示个人资料；取数统一走 avatar-sources
+    const isOrgSpace = computed(() => currentSpace.value.type === 'org');
+    const headerSource = computed(() =>
+      isOrgSpace.value ? orgIdentityAvatarSource(currentSpaceOrgId.value) : personalAvatarSource()
+    );
+    const headerSubtitle = computed(() => (isOrgSpace.value ? '组织身份' : '个人设置'));
 
     const refreshStatus = async () => {
       rootStatus.value = await window.electronAPI.rootIdentity.status();
     };
 
-    const refreshNodeInfo = async () => {
-      try {
-        p2pInfo.value = await window.electronAPI.p2p.info();
-        if (!p2pInfo.value.started || p2pInfo.value.addresses.length === 0) {
-          setTimeout(async () => {
-            try {
-              p2pInfo.value = await window.electronAPI.p2p.info();
-            } catch {
-              // Keep current p2p state on retry failure.
-            }
-          }, 1200);
-        }
-      } catch (error) {
-        message.value = `读取 P2P 信息失败：${error}`;
-        ElMessage.error(message.value);
-      }
-    };
-
-    const shareText = computed(() => {
-      const addressesText = p2pInfo.value.addresses.length > 0
-        ? p2pInfo.value.addresses.join('\n')
-        : '未获取';
-
-      return [
-        `RootID: ${rootStatus.value.rootId || '未创建'}`,
-        `PeerId: ${p2pInfo.value.peerId || '未获取'}`,
-        'P2P Addresses:',
-        addressesText
-      ].join('\n');
-    });
-
-    const copyShareText = async () => {
-      try {
-        await navigator.clipboard.writeText(shareText.value);
-        message.value = '成员添加资料已复制';
-        ElMessage.success(message.value);
-      } catch (error) {
-        message.value = `复制失败：${error}`;
-        ElMessage.error(message.value);
-      }
-    };
-
-    const handleLogout = async () => {
-      try {
-        await window.electronAPI.rootIdentity.lock();
-        showRootPage.value = false;
-        message.value = '';
-        p2pInfo.value = { initialized: false, started: false, peerId: null, addresses: [], connectedPeers: [], sparkSyncSubscribers: [], error: null };
-        await refreshStatus();
-        ElMessage.success('已退出登录');
-      } catch (error) {
-        message.value = `退出失败：${error}`;
-        ElMessage.error(message.value);
-      }
-    };
-
     const syncAuthState = (status: RootStatus) => {
       rootStatus.value = status;
-      if (!status.unlocked) {
-        showRootPage.value = false;
-      }
     };
 
-    // ---------------- 资料编辑（昵称 + 头像） ----------------
-    const profileDialogVisible = ref(false);
-    const profileNickname = ref('');
-    const profileAvatar = ref('');
-    const profileSaving = ref(false);
-
-    const openProfileEditor = () => {
-      profileNickname.value = rootStatus.value.nickname ?? '';
-      profileAvatar.value = rootStatus.value.avatar ?? '';
-      profileDialogVisible.value = true;
-    };
-
-    const resetProfileForm = () => {
-      profileNickname.value = '';
-      profileAvatar.value = '';
-    };
-
-    const saveProfile = async () => {
-      if (!profileNickname.value.trim()) {
-        ElMessage.warning('昵称不能为空');
-        return;
-      }
-      profileSaving.value = true;
-      try {
-        const result = await window.electronAPI.rootIdentity.updateProfile({
-          nickname: profileNickname.value.trim(),
-          avatar: profileAvatar.value || null
-        });
-        rootStatus.value = { ...rootStatus.value, nickname: result.nickname, avatar: result.avatar };
-        profileDialogVisible.value = false;
-        ElMessage.success('资料已更新');
-      } catch (error) {
-        ElMessage.error(`保存失败：${errorMessage(error)}`);
-      } finally {
-        profileSaving.value = false;
-      }
+    const onProfileUpdated = (result: { nickname: string | null; avatar: string | null }) => {
+      rootStatus.value = { ...rootStatus.value, nickname: result.nickname, avatar: result.avatar };
+      // 通知外壳刷新 rail 头像与空间切换器的个人空间头像（与 SettingsPage 同口径）
+      emit('profile-updated');
     };
 
     onMounted(async () => {
       try {
         await refreshStatus();
-        await refreshNodeInfo();
-        await refreshDataUsage();
       } catch (error) {
-        message.value = `读取状态失败：${error}`;
+        ElMessage.error(`读取状态失败：${error}`);
       }
     });
 
     return {
       rootStatus,
-      showRootPage,
-      p2pInfo,
-      message,
-      shareText,
-      copyShareText,
-      refreshNodeInfo,
-      handleLogout,
+      activeMenu,
+      menuItems,
+      currentSpace,
+      headerSource,
+      headerSubtitle,
       syncAuthState,
-      dataUsage,
-      dataMessage,
-      dataActionRunning,
-      usageRows,
-      formatBytes,
-      refreshDataUsage,
-      runDataCleanup,
-      exportData,
-      profileDialogVisible,
-      profileNickname,
-      profileAvatar,
-      profileSaving,
-      openProfileEditor,
-      resetProfileForm,
-      saveProfile
+      onProfileUpdated
     };
   }
 });
 </script>
 
-<style scoped src="../styles/pages/mine.css"></style>
+<!-- 非 scoped（同 settings.css）：.mine-list / .mine-detail 等栏位样式由各模块组件共用 -->
+<style src="../styles/pages/mine.css"></style>
