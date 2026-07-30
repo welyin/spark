@@ -64,7 +64,8 @@ pub use org_address::{
 };
 pub use plugin_docs::{
     PLUGIN_DOC_PREFIX, PluginDocSyncItem, apply_plugin_doc_sync_items,
-    collect_syncable_plugin_docs, is_sync_disabled, parse_plugin_doc_key, resolve_org_id,
+    collect_org_plugin_domains, collect_syncable_plugin_docs, is_sync_disabled,
+    parse_plugin_doc_key, resolve_org_id,
 };
 pub use pull::{
     PullOrgOutcome, classify_pull_org_response, handle_pull_list_request, handle_pull_org_request,
@@ -157,6 +158,10 @@ pub enum OrgError {
     /// 组织网关列表非法（org.md §14：须为 2–3 名本组织成员的 rootId）。
     #[error("Gateways must be 2 to 3 member rootIds of the organization")]
     InvalidGateways,
+
+    /// 成员身份字段 / 组织 logo 非法（校验口径复用 identity 资料校验）。
+    #[error("{0}")]
+    InvalidIdentityField(String),
 
     /// 不能接受自己发出的邀请码（service.ts:349-351）。
     #[error("不能接受自己发出的邀请码")]

@@ -59,8 +59,12 @@ pub(crate) fn identity_verify_inner(
     }
 }
 
-/// `plugin-org-sync-now`（ipc/plugin.ts:71-136）：校验组织归属当前插件域后
+/// `plugin-org-sync-now`（ipc/plugin.ts:71-136）：按 orgId 直接同步——
 /// 逐成员（admin 优先、跳过自己）定向拉取，返回尝试/成功计数。
+///
+/// 组织与插件无绑定（`basePluginDomain` 已删除）：不再有「组织归属当前
+/// 插件域」校验；`plugin_domain` 仅保留为命令入参（空值校验），不再参与
+/// 组织匹配。
 ///
 /// 与 TS 的两处实现差异（语义等价）：
 /// - TS `ensureCoreServicesStarted` → 内核幂等 `start_p2p`；
@@ -92,10 +96,6 @@ pub(crate) fn org_sync_now_inner(
         .iter()
         .find(|item| item.record.org_id == org_id)
         .ok_or_else(|| "Organization not found or not joined".to_string())?;
-
-    if target.record.base_plugin_domain != plugin_domain {
-        return Err("Organization does not belong to current plugin domain".to_string());
-    }
 
     let current_root_id = kernel
         .current_root_id()
@@ -294,26 +294,20 @@ mod tests {
     }
 
     #[test]
-    fn org_sync_now_domain_mismatch_and_self_only_org() {
+    fn org_sync_now_ignores_domain_and_self_only_org() {
         let (_dir, mut kernel) = unlocked_kernel();
 
-        // 建一个绑定本插件域的组织（仅自己一个成员）
+        // 组织与插件无绑定：建组织不带插件域；不同插件域入参同样按 orgId 同步
         let input: super::super::dto::CreateOrgInputDto = serde_json::from_value(serde_json::json!({
-            "name": "微博组织",
-            "basePluginDomain": DOMAIN
+            "name": "微博组织"
         }))
         .unwrap();
         let view = kernel.create_org(input.into()).unwrap();
         let org_id = view.record.org_id.clone();
 
-        // 域不匹配 → TS `Organization does not belong to current plugin domain`
-        assert_eq!(
-            org_sync_now_inner(&mut kernel, &org_id, "plugin:chat").unwrap_err(),
-            "Organization does not belong to current plugin domain"
-        );
-
-        // 无其他成员 → 无候选，attempted/pulled 均 0（P2P 已幂等启动）
-        let result = org_sync_now_inner(&mut kernel, &org_id, DOMAIN).unwrap();
+        // 无其他成员 → 无候选，attempted/pulled 均 0（P2P 已幂等启动）；
+        // 插件域入参不再参与组织匹配，传任意域结果一致
+        let result = org_sync_now_inner(&mut kernel, &org_id, "plugin:chat").unwrap();
         assert_eq!(
             result,
             OrgSyncNowResultDto {

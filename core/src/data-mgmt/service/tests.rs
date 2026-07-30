@@ -220,6 +220,16 @@ fn execute_purge_rejection_order() {
         )
         .unwrap_err();
     assert!(matches!(err, DataMgmtError::NonPluginDomain(_)));
+    // 空域（组织无插件文档时 resolveOrg 定位为 ""）同样按非插件域拒绝；
+    // kernel 单节点路径被副本护栏（K=3）先行拦截，此处直接覆盖模块层行为
+    let err = service()
+        .execute_purge(&mut purge_fixture(), "", 200, true, true, replica_ok(), NOW)
+        .unwrap_err();
+    assert!(matches!(err, DataMgmtError::NonPluginDomain(_)));
+    assert_eq!(
+        err.to_string(),
+        "Refused to purge non-plugin domain \"\": only plugin domains can be purged"
+    );
 }
 
 #[test]

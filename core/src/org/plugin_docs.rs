@@ -167,6 +167,41 @@ pub fn collect_syncable_plugin_docs<S: StorageBackend>(
     Ok(results)
 }
 
+/// 扫描定位组织的插件域：收集 `doc:plugin:` 键中 `payload.orgId == org_id`
+/// 出现过的全部插件域（扫描键升序去重，结果确定性）。
+///
+/// 用途：purge 的数据域定位——组织记录已无 `basePluginDomain` 字段，数据域
+/// 只能从存储的插件文档反推。调用方按数量分派：0 个 → 无数据域（返回空串，
+/// preview affectedDocs=0 自然拦截 execute）；1 个 → 用之；多个 → 取第一个，
+/// 保持单 domain 语义（purge 按单域执行）。
+pub fn collect_org_plugin_domains<S: StorageBackend>(
+    storage: &S,
+    org_id: &str,
+) -> Result<Vec<String>> {
+    let target_org_id = org_id.trim();
+    if target_org_id.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let rows = storage.scan(&ScanOptions::prefix(PLUGIN_DOC_PREFIX))?;
+    let mut domains: Vec<String> = Vec::new();
+    for (key, value) in rows {
+        let Some((domain, _, _)) = parse_plugin_doc_key(&key) else {
+            continue;
+        };
+        let Ok(payload) = serde_json::from_str::<Value>(&value) else {
+            continue;
+        };
+        if resolve_org_id(&payload) != target_org_id {
+            continue;
+        }
+        if !domains.contains(&domain) {
+            domains.push(domain);
+        }
+    }
+    Ok(domains)
+}
+
 /// `applyPluginDocSyncItems`（plugin-org-sync.ts:126-147）：逐条
 /// `applyRemoteUpdate`，返回应用条数。
 ///

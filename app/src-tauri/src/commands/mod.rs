@@ -10,11 +10,13 @@ pub mod docs;
 pub mod dto;
 pub mod evidence;
 pub mod identity;
+pub mod link_preview;
 pub mod market;
 pub mod message;
 pub mod org;
 pub mod p2p;
 pub mod plugin;
+pub mod system;
 
 use std::sync::MutexGuard;
 

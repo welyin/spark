@@ -141,6 +141,14 @@ export type OrgView = {
     joinedAt: number;
     addedBy: string;
     nodeInfo?: { peerId?: string; addresses: string[] };
+    // 组织身份字段（F2a）：仅本人可改，未设置时键不出现
+    nickname?: string;
+    avatar?: string;
+    signature?: string;
+    gender?: string;
+    region?: string;
+    /** true = 组织内展示个人身份；缺省键不出现（视为 false） */
+    usePersonalIdentity?: boolean;
   }>;
   currentUserRole: 'admin' | 'member' | null;
   isCurrentUserAdmin: boolean;
@@ -418,6 +426,23 @@ export type ElectronAPI = {
     getSyncOverview: (orgId: string) => Promise<OrgSyncOverviewDto | null>;
     setPublic: (orgId: string, isPublic: boolean, displayName?: string) => Promise<OrgView>;
     updateInfo: (orgId: string, patch: { name?: string; description?: string; avatar?: string }) => Promise<OrgView>;
+    /**
+     * 成员更新自己的组织内身份（F2a `org_update_my_identity`）：
+     * 字段缺省（undefined）= 不变；avatar null/'' = 清除（B1：IPC 边界 null 会坍塌，
+     * 适配层统一归一为 '' 发送，与 gender/region/signature 的空串清除同口径）；
+     * gender/region/signature 空串 = 清除；nickname 不可清除（内核校验 1–24 字符）。
+     */
+    updateMyIdentity: (
+      orgId: string,
+      patch: {
+        nickname?: string;
+        avatar?: string | null;
+        gender?: string;
+        region?: string;
+        signature?: string;
+        usePersonalIdentity?: boolean;
+      }
+    ) => Promise<OrgView>;
     resolveAddress: (orgAddress: string) => Promise<OrgAddressRecordDto | null>;
     searchKnown: (keyword: string) => Promise<OrgAddressRecordDto[]>;
     /** 组织邀请走 DM：仅管理员；寻址 显式参数 → 预录成员 nodeInfo → 朋友记录 */
@@ -437,8 +462,9 @@ export type ElectronAPI = {
     overview: (spaceKey: string) => Promise<SpaceContactsDto>;
     updateProfile: (spaceKey: string, rootId: string, patch: Partial<ContactProfileDto>) => Promise<{ success: boolean }>;
     setBlocked: (spaceKey: string, rootId: string, blocked: boolean) => Promise<{ success: boolean }>;
-    removeFriend: (rootId: string) => Promise<{ success: boolean }>;
+    removeFriend: (rootId: string, block?: boolean) => Promise<{ success: boolean }>;
     sendRequest: (input: { id: string; rootId: string; raw: string; peerId?: string; addresses?: string[]; source: string; message: string }) => Promise<FriendRequestDto>;
+    replyRequest: (requestId: string, text: string) => Promise<FriendRequestDto>;
     resolveRequest: (requestId: string, accept: boolean, permission: FriendPermissionDto) => Promise<{ success: boolean }>;
     tagCreate: (spaceKey: string, id: string, name: string) => Promise<ContactTagDto>;
     tagRename: (spaceKey: string, tagId: string, name: string) => Promise<{ success: boolean }>;
@@ -451,7 +477,7 @@ export type ElectronAPI = {
     orgGroupCreate: (spaceKey: string, parentId: string, id: string, name: string) => Promise<OrgGroupNodeDto | null>;
     orgGroupRename: (spaceKey: string, id: string, name: string) => Promise<{ success: boolean }>;
     orgGroupDelete: (spaceKey: string, id: string) => Promise<{ success: boolean }>;
-    orgGroupMove: (spaceKey: string, id: string, toIndex: number) => Promise<{ success: boolean }>;
+    orgGroupMove: (spaceKey: string, id: string, toIndex: number, newParentId?: string) => Promise<{ success: boolean }>;
   };
   messages: {
     listConversations: (spaceKey: string) => Promise<ConversationDto[]>;
@@ -469,15 +495,27 @@ export type ElectronAPI = {
     deleteConversation: (spaceKey: string, convId: string) => Promise<{ success: boolean }>;
   };
   rootIdentity: {
-    status: () => Promise<{ initialized: boolean; unlocked: boolean; rootId: string | null; nickname: string | null; avatar: string | null }>;
+    status: () => Promise<{
+      initialized: boolean; unlocked: boolean; rootId: string | null; nickname: string | null; avatar: string | null;
+      // 扩展字段：None 序列化为 null（无 serde skip），故类型为 `| null`（与 .vue 初始字面量兼容）
+      gender?: string | null; region?: string | null; signature?: string | null;
+    }>;
     initialize: (password: string, nickname: string, avatar?: string | null) => Promise<{ rootId: string; mnemonic: string }>;
     unlock: (password: string, rootId?: string) => Promise<{ rootId: string }>;
     lock: () => Promise<{ success: boolean }>;
     sign: (payload: string) => Promise<{ rootId: string; signature: string; payloadHash: string }>;
     deriveDomain: (domain: string) => Promise<{ domain: string; domainId: string; publicKey: string; derivationPath: string }>;
-    listIdentities: () => Promise<Array<{ rootId: string; createdAt: number; active: boolean; nickname: string | null; avatar: string | null }>>;
+    listIdentities: () => Promise<Array<{ rootId: string; createdAt: number; active: boolean; nickname: string | null; avatar: string | null; gender?: string | null; region?: string | null; signature?: string | null }>>;
     setActive: (rootId: string) => Promise<{ success: boolean }>;
-    updateProfile: (profile: { nickname?: string | null; avatar?: string | null }) => Promise<{ nickname: string | null; avatar: string | null }>;
+    // 扩展字段性别/地区/签名：undefined/null = 不变，'' = 清除，其余 = 设置（与内核 patch 语义对齐）；
+    // avatar：undefined = 不变，null/'' = 清除（B1：null 由适配层归一为 '' 发送）
+    updateProfile: (profile: {
+      nickname?: string | null; avatar?: string | null;
+      gender?: string | null; region?: string | null; signature?: string | null;
+    }) => Promise<{
+      nickname: string | null; avatar: string | null;
+      gender: string | null; region: string | null; signature: string | null;
+    }>;
     revealMnemonic: (password: string) => Promise<{ mnemonic: string }>;
     backupPayload: () => Promise<{ payload: string }>;
     checkMnemonic: (input: string) => Promise<{ words: string[]; invalidIndexes: number[] }>;
@@ -485,6 +523,10 @@ export type ElectronAPI = {
     recoverBackup: (payload: string, password: string) => Promise<{ rootId: string }>;
   };
   updater: Record<string, (...args: never[]) => Promise<unknown>>;
+  system: {
+    /** 未读角标 → 系统徽标（dock/任务栏）；平台不支持时命令侧静默，始终 resolve */
+    setBadge: (count: number) => Promise<void>;
+  };
   dataManagement: {
     usage: () => Promise<DataUsageReportDto>;
     cleanupNow: () => Promise<{ ranAt: number; tombstones: number; peerRecords: number; orgSyncStates: number }>;

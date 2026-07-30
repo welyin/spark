@@ -1,5 +1,6 @@
-//! 通讯录门面（`Kernel` 的通讯录 API）：空间总览、资料/拉黑/分组薄封装，
+//! 通讯录门面（`Kernel` 的通讯录 API）：空间总览、资料/拉黑薄封装，
 //! 以及好友申请出站（名片寻址 + dm 信封投递）与入站确认编排。
+//! 标签/分组/组织分组树在 `contact_group_ops.rs`（本文件长度上限拆出）。
 //!
 //! 标签/分组/组织树的 id 一律由前端生成传入（contact 服务层的 `*_with_id`
 //! 变体落库）；好友申请/确认的投递为尽力而为——投递 spawn 到 kernel
@@ -9,12 +10,13 @@
 
 use serde::Deserialize;
 
-use super::dm_envelope::{KIND_FRIEND_ACCEPT, KIND_FRIEND_REQUEST};
+use super::dm_envelope::{KIND_FRIEND_ACCEPT, KIND_FRIEND_REPLY, KIND_FRIEND_REQUEST};
 use super::{Kernel, KernelError, Result};
 use crate::contact::{
-    ContactGroup, ContactService, ContactTag, FriendRecord, FriendRequestRecord,
-    FriendRequestStatus, OrgGroupNode, PeerRef, ProfilePatch, SpaceContactsView,
+    ContactService, FriendRecord, FriendRequestRecord, FriendRequestStatus, PeerRef,
+    ProfilePatch, RequestThreadMessage, SpaceContactsView, ThreadFrom,
 };
+use crate::message::MAX_TEXT_BYTES;
 use crate::org::OrganizationService;
 use crate::p2p::{P2pEvent, PeerNodeInfo};
 use crate::p2p::node::system_now_ms;
@@ -137,14 +139,25 @@ impl Kernel {
         Ok(())
     }
 
-    /// 删除朋友（个人空间；自己 rootId 拒绝）。
-    pub fn contact_remove_friend(&mut self, root_id: &str) -> Result<()> {
+    /// 删除朋友（个人空间；自己 rootId 拒绝）。`block` 为 true 时删除后
+    /// 同时写入拉黑集合（§5.5「删除同时拉黑」；陌生人可拉黑语义同
+    /// `contact_set_blocked`，删除朋友本就不清拉黑状态）。
+    pub fn contact_remove_friend(&mut self, root_id: &str, block: bool) -> Result<()> {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
         if self.current_root_id()?.as_deref() == Some(root_id) {
             return Err(KernelError::Internal("不能删除自己".to_string()));
         }
         ContactService::remove_friend(self.require_storage_mut()?, root_id)?;
+        if block {
+            ContactService::set_blocked(
+                self.require_storage_mut()?,
+                "personal",
+                root_id,
+                true,
+                system_now_ms(),
+            )?;
+        }
         Ok(())
     }
 
@@ -159,116 +172,6 @@ impl Kernel {
             group_id,
             system_now_ms(),
         )?;
-        Ok(())
-    }
-
-    // ------------------------------------------------------------------
-    // 标签 / 分组 / 组织分组树（id 由前端生成传入）
-    // ------------------------------------------------------------------
-
-    /// 新建标签。
-    pub fn contact_tag_create(&mut self, space: &str, id: &str, name: &str) -> Result<ContactTag> {
-        let __io = std::sync::Arc::clone(&self.io_lock);
-        let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        Ok(ContactService::create_tag_with_id(
-            self.require_storage_mut()?,
-            space,
-            id,
-            name,
-        )?)
-    }
-
-    /// 重命名标签。
-    pub fn contact_tag_rename(&mut self, space: &str, id: &str, name: &str) -> Result<()> {
-        let __io = std::sync::Arc::clone(&self.io_lock);
-        let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        ContactService::rename_tag(self.require_storage_mut()?, space, id, name)?;
-        Ok(())
-    }
-
-    /// 删除标签（从所有资料中摘除）。
-    pub fn contact_tag_delete(&mut self, space: &str, id: &str) -> Result<()> {
-        let __io = std::sync::Arc::clone(&self.io_lock);
-        let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        ContactService::delete_tag(self.require_storage_mut()?, space, id)?;
-        Ok(())
-    }
-
-    /// 新建个人空间扁平分组。
-    pub fn contact_group_create(&mut self, id: &str, name: &str) -> Result<ContactGroup> {
-        let __io = std::sync::Arc::clone(&self.io_lock);
-        let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        Ok(ContactService::create_group_with_id(
-            self.require_storage_mut()?,
-            id,
-            name,
-        )?)
-    }
-
-    /// 重命名分组。
-    pub fn contact_group_rename(&mut self, id: &str, name: &str) -> Result<()> {
-        let __io = std::sync::Arc::clone(&self.io_lock);
-        let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        ContactService::rename_group(self.require_storage_mut()?, id, name)?;
-        Ok(())
-    }
-
-    /// 删除分组（组内朋友复位为未分组）。
-    pub fn contact_group_delete(&mut self, id: &str) -> Result<()> {
-        let __io = std::sync::Arc::clone(&self.io_lock);
-        let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        ContactService::delete_group(self.require_storage_mut()?, id)?;
-        Ok(())
-    }
-
-    /// 拖拽重排分组（越界夹紧）。
-    pub fn contact_group_move(&mut self, id: &str, to_index: usize) -> Result<()> {
-        let __io = std::sync::Arc::clone(&self.io_lock);
-        let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        ContactService::move_group(self.require_storage_mut()?, id, to_index)?;
-        Ok(())
-    }
-
-    /// 新建组织分组（`parent_id` 为 `""` 挂根层；父不存在返回 `Ok(None)`）。
-    pub fn contact_org_group_create(
-        &mut self,
-        space: &str,
-        parent_id: &str,
-        id: &str,
-        name: &str,
-    ) -> Result<Option<OrgGroupNode>> {
-        let __io = std::sync::Arc::clone(&self.io_lock);
-        let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        Ok(ContactService::create_org_group_with_id(
-            self.require_storage_mut()?,
-            space,
-            parent_id,
-            id,
-            name,
-        )?)
-    }
-
-    /// 重命名组织分组。
-    pub fn contact_org_group_rename(&mut self, space: &str, id: &str, name: &str) -> Result<()> {
-        let __io = std::sync::Arc::clone(&self.io_lock);
-        let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        ContactService::rename_org_group(self.require_storage_mut()?, space, id, name)?;
-        Ok(())
-    }
-
-    /// 删除组织分组（子节点提升一层）。
-    pub fn contact_org_group_delete(&mut self, space: &str, id: &str) -> Result<()> {
-        let __io = std::sync::Arc::clone(&self.io_lock);
-        let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        ContactService::delete_org_group(self.require_storage_mut()?, space, id)?;
-        Ok(())
-    }
-
-    /// 同级拖拽重排组织分组。
-    pub fn contact_org_group_move(&mut self, space: &str, id: &str, to_index: usize) -> Result<()> {
-        let __io = std::sync::Arc::clone(&self.io_lock);
-        let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        ContactService::move_org_group_sibling(self.require_storage_mut()?, space, id, to_index)?;
         Ok(())
     }
 
@@ -335,6 +238,8 @@ impl Kernel {
             created_at: now,
             updated_at: now,
             peer: Some(peer),
+            thread: Vec::new(),
+            invite_code: None,
         };
         ContactService::put_outgoing_request(self.require_storage_mut()?, &request)?;
         self.deliver_friend_request(&request, &my_root_id)?;
@@ -389,9 +294,14 @@ impl Kernel {
 
     /// spawn 好友申请投递任务（句柄先克隆再 move，不捕获 `&Kernel`，模式同
     /// dm_delivery 的 `spawn_chat_delivery`）：ok 应答捎带对方昵称时回填
-    /// outbox 记录昵称（「新的朋友」列表展示名），无应答/失败置 Failed；
+    /// outbox 记录昵称（「新的朋友」列表展示名；昵称缺失/超上限按未提供
+    /// 处理——投递已成功，**不动状态**），无应答/失败置 Failed；
     /// 两种结局都 emit `FriendRequestSent`（data 为最终 outbox 记录，前端
     /// 按 id upsert）。命令侧立即返回 pending 记录，前端按事件更新。
+    ///
+    /// 终态回写为读-改-写（锁内重读当前记录，只动 status/updatedAt/nickname）
+    /// ——投递等待期间记录可能已被 friend-reply 入站等路径更新（thread 追加、
+    /// replied），整写旧快照会回退这些变更。
     fn spawn_friend_request_delivery(
         &self,
         request: FriendRequestRecord,
@@ -405,27 +315,49 @@ impl Kernel {
         let io_lock = std::sync::Arc::clone(&self.io_lock);
         self.runtime.handle().spawn(async move {
             let resp = node.dm_direct(&peer, envelope).await.ok().flatten();
-            let mut record = request;
-            match resp {
-                Some(resp) if resp.get("ok").and_then(serde_json::Value::as_bool) == Some(true) => {
-                    let nickname = resp
-                        .get("nickname")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or_default();
-                    if !nickname.is_empty() {
-                        record.nickname = nickname.to_string();
-                        record.updated_at = system_now_ms();
+            let delivered_ok = resp
+                .as_ref()
+                .and_then(|r| r.get("ok"))
+                .and_then(serde_json::Value::as_bool)
+                == Some(true);
+            // 应答捎带的对端自报昵称：trim 后超上限/为空一律按未提供处理——
+            // 对端可控字段只受帧上限约束，原样落库会刷大记录、撑破列表 UI。
+            // 「ok 但昵称缺失/非法」与「无应答/投递失败」必须正交判定：
+            // 前者投递已成功（保持 Pending），后者才允许置 Failed
+            let ok_nickname = if delivered_ok {
+                resp.as_ref()
+                    .and_then(|r| r.get("nickname"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| {
+                        !s.is_empty() && s.chars().count() <= crate::identity::NICKNAME_MAX_CHARS
+                    })
+                    .map(str::to_string)
+            } else {
+                None
+            };
+            let record = {
+                let _io = io_lock.lock().unwrap_or_else(|e| e.into_inner());
+                let read = ContactService::get_outgoing_request(&storage, &request.id);
+                let Ok(Some(mut current)) = read else {
+                    return;
+                };
+                if let Some(nickname) = ok_nickname {
+                    current.nickname = nickname;
+                    current.updated_at = system_now_ms();
+                } else if !delivered_ok {
+                    // 仅仍 Pending 时置 Failed——投递等待期间对方可能已
+                    // accept（→Accepted）或 reply（→Replied）入站，无条件
+                    // 回退会丢终态/询问 UI 态，且 Failed 允许重发会在对端
+                    // 再造一条 pending 申请
+                    if current.status == FriendRequestStatus::Pending {
+                        current.status = FriendRequestStatus::Failed;
+                        current.updated_at = system_now_ms();
                     }
                 }
-                _ => {
-                    record.status = FriendRequestStatus::Failed;
-                    record.updated_at = system_now_ms();
-                }
-            }
-            {
-                let _io = io_lock.lock().unwrap_or_else(|e| e.into_inner());
-                let _ = ContactService::put_outgoing_request(&mut storage, &record);
-            }
+                let _ = ContactService::put_outgoing_request(&mut storage, &current);
+                current
+            };
             let _ = event_tx.send(P2pEvent::FriendRequestSent(
                 serde_json::json!({ "request": record }),
             ));
@@ -532,6 +464,59 @@ impl Kernel {
             }
         }
         Ok(())
+    }
+
+    /// 回复对方的询问（好友申请的来回回复，ui-contacts §4）：本地 outbox
+    /// thread 追加 from=me（status 回 pending 等待对方），并向对方尽力投递
+    /// friend-reply 信封（`spawn_deliveries` 无应答处理，同
+    /// [`Self::accept_request_side_effects`]；p2p 未运行则跳过投递不置失败
+    /// ——回复无失败 UI，本地记录已落）。不发额外事件（与
+    /// [`Self::contact_resolve_request`] 一致，命令返回记录由前端本地收敛）。
+    ///
+    /// text trim 后为空或超 [`MAX_TEXT_BYTES`]、申请不存在、非 replied 状态
+    /// （前端只在 replied 开放回复框）或记录无 peer 寻址（不重解析名片，复用
+    /// 已存 peer 先例同重试路径）时报错。
+    pub fn contact_reply_request(
+        &mut self,
+        request_id: &str,
+        text: &str,
+    ) -> Result<FriendRequestRecord> {
+        let __io = std::sync::Arc::clone(&self.io_lock);
+        let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
+        self.require_unlocked_root_id()?;
+        let text = text.trim();
+        if text.is_empty() || text.len() > MAX_TEXT_BYTES {
+            return Err(KernelError::Internal("回复内容为空或过长".to_string()));
+        }
+        let now = system_now_ms();
+        let Some(record) = ContactService::get_outgoing_request(self.require_storage()?, request_id)?
+        else {
+            return Err(KernelError::Internal("申请不存在".to_string()));
+        };
+        if record.status != FriendRequestStatus::Replied {
+            return Err(KernelError::Internal("当前状态不可回复".to_string()));
+        }
+        if record.peer.is_none() {
+            return Err(KernelError::Internal("无法确定对方节点地址".to_string()));
+        }
+        let msg = RequestThreadMessage {
+            from: ThreadFrom::Me,
+            text: text.to_string(),
+            ts: now,
+        };
+        let record =
+            ContactService::append_outgoing_thread(self.require_storage_mut()?, request_id, msg, now)?
+                .expect("outgoing request just fetched");
+        let body = super::dm_envelope::friend_reply_body(&record.id, text);
+        if let Ok(envelope) = self.build_dm_envelope(KIND_FRIEND_REPLY, &record.root_id, body) {
+            let peer = record.peer.as_ref().expect("checked above");
+            let target = PeerNodeInfo {
+                peer_id: (!peer.peer_id.is_empty()).then(|| peer.peer_id.clone()),
+                addresses: peer.addresses.clone(),
+            };
+            self.spawn_deliveries(vec![(target, envelope)]);
+        }
+        Ok(record)
     }
 
     /// 好友申请寻址：前端解析名片上行的 peerId/addresses → 节点名片（raw）

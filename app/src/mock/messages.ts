@@ -12,6 +12,11 @@
  * - 远端推送：经 listenP2pEvents 订阅 ChatReceived（新消息）/ ChatStatus
  *   （已读/撤回/状态流转）事件就地合并进缓存。
  * 非 Tauri 环境（vitest / 纯前端预览）不发任何调用，退化为纯内存 store。
+ *
+ * 链接预览（§6）：发送方壳层（src-tauri）抓取 OG/Twitter Card 元数据随消息
+ * 携带投递，接收方只展示不访问 URL。发送时先上 `buildLinkPreview` 的诚实占位
+ * （域名白名单站点名 + 空描述），抓取结果随 sendText 的 dto.link 回来后替换；
+ * 非 Tauri/demo 环境就停留在诚实占位。
  */
 import { computed, reactive, watch } from 'vue';
 import { isTauri, listenP2pEvents, type ElectronAPI } from '../api';
@@ -100,7 +105,12 @@ const KNOWN_SITES: Record<string, string> = {
   'github.com': 'GitHub'
 };
 
-// TODO: 真实实现应由发送方本地抓取 OG/Twitter Card 元数据（§6.4），此处按域名映射生成
+/**
+ * 发送前的诚实占位卡片（§6）：真实元数据由发送方壳层（src-tauri）抓取，
+ * 随 message-send-text 的 dto.link 回来后替换本地占位；Tauri 抓取失败或非
+ * Tauri/demo 环境就停留在这个占位——只展示能确定的事实（域名白名单站点名），
+ * 不编造标题/描述。
+ */
 export function buildLinkPreview(url: string): LinkPreview {
   let domain = url;
   try {
@@ -109,13 +119,7 @@ export function buildLinkPreview(url: string): LinkPreview {
     // 非法 URL 时原样展示
   }
   const siteName = KNOWN_SITES[domain] ?? domain;
-  return {
-    url,
-    domain,
-    siteName,
-    title: `${siteName}：示例页面标题`,
-    description: '这是链接预览的示例描述。真实环境中由发送方抓取网页元数据生成，接收方只展示不主动访问。'
-  };
+  return { url, domain, siteName, title: siteName, description: '' };
 }
 
 // ---------- 响应式缓存 ----------
@@ -134,6 +138,14 @@ type MessagesApi = ElectronAPI['messages'];
 function messagesApi(): MessagesApi | undefined {
   if (!isTauri()) return undefined;
   return (window as unknown as { electronAPI?: ElectronAPI }).electronAPI?.messages;
+}
+
+type SystemApi = ElectronAPI['system'];
+
+/** 系统桥接接口（徽标等）：守卫同 messagesApi，非 Tauri 环境返回 undefined */
+function systemApi(): SystemApi | undefined {
+  if (!isTauri()) return undefined;
+  return (window as unknown as { electronAPI?: ElectronAPI }).electronAPI?.system;
 }
 
 /** 空间 key 约定（与 mock/contacts 同一份）：唯一定义在 ./space-key，此处 re-export 保持调用方路径不变 */
@@ -397,7 +409,9 @@ function setStatus(space: SpaceData, convId: string, messageId: string, status: 
   if (msg && !msg.recalled) msg.status = status;
 }
 
-/** 发送文本消息：本地乐观入列（status 'sending'），内核落库后回写最终状态，失败置 'failed' */
+/** 发送文本消息：本地乐观入列（status 'sending'，含 URL 时上诚实占位卡片），
+ *  内核落库后回写最终状态与抓取到的链接预览（dto.link 存在才替换占位；
+ *  不存在则保留诚实占位），失败置 'failed' */
 export function sendText(key: SpaceKey, convId: string, text: string, quote?: QuoteRef): ChatMessage | undefined {
   const space = ensureSpace(key);
   const conv = findConversation(space, convId);
@@ -422,6 +436,14 @@ export function sendText(key: SpaceKey, convId: string, text: string, quote?: Qu
     ?.sendText(key, convId, message.id, text, quote)
     .then((dto) => {
       if (dto.status) setStatus(space, convId, message.id, dto.status);
+      // 抓取到的真实元数据替换占位卡片；消息已撤回/被删则不回写。
+      // siteName 空串（页面无 og:site_name）时回退占位白名单/域名，不覆盖成空
+      if (dto.link) {
+        const msg = space.messages[convId]?.find((m) => m.id === message.id);
+        if (msg && !msg.recalled) {
+          msg.link = { ...dto.link, siteName: dto.link.siteName || msg.link?.siteName || dto.link.domain };
+        }
+      }
     })
     .catch(() => setStatus(space, convId, message.id, 'failed'));
   return message;
@@ -540,12 +562,16 @@ export function unreadCountOf(key: SpaceKey): number {
   return total;
 }
 
-// TODO: 标题未读数（§7.1）已实现；系统托盘角标与任务栏徽标待真实通知能力
+// 未读数对外双通道（§7.1）：document.title 前缀 + 系统徽标（F4，
+// 经 system-set-badge 命令桥到 dock/任务栏；非 Tauri 或平台不支持时静默跳过）
 watch(
   totalUnread,
   (n) => {
-    if (typeof document === 'undefined') return;
-    document.title = n > 0 ? `(${n > 99 ? '…' : n}) 星火 Spark` : '星火 Spark';
+    if (typeof document !== 'undefined') {
+      document.title = n > 0 ? `(${n > 99 ? '…' : n}) 星火 Spark` : '星火 Spark';
+    }
+    // 运行期静默（平台不支持为 no-op）；开发期 bug（命令未注册/参数错）留线索
+    void systemApi()?.setBadge(n).catch((e) => console.warn('[badge] setBadge 失败', e));
   },
   { immediate: true }
 );

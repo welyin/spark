@@ -169,6 +169,9 @@ fn v1_file_unlock_and_migrate_to_v2() {
         root_id: rv["rootId"].as_str().unwrap().to_string(),
         nickname: Some("  Vec User  ".to_string()),
         avatar: None,
+        gender: None,
+        region: None,
+        signature: None,
         created_at: 1_700_000_000_000,
         updated_at: 1_700_000_000_000,
     };
@@ -221,6 +224,9 @@ fn update_profile_flow() {
         "P@ssw0rd-test",
         Some("新昵称"),
         Some(Some("data:image/png;base64,iVBORw0KGgo=")),
+        None,
+        None,
+        None,
     )
     .unwrap();
     assert_eq!(file.nickname.as_deref(), Some("新昵称"));
@@ -236,13 +242,16 @@ fn update_profile_flow() {
     assert_eq!(unlocked.public_key_hex(), identity.public_key_hex());
 
     // 清除头像（Some(None)），昵称不变（None）
-    update_profile(&mut file, "P@ssw0rd-test", None, Some(None)).unwrap();
+    update_profile(&mut file, "P@ssw0rd-test", None, Some(None), None, None, None).unwrap();
     assert_eq!(file.avatar, None);
     assert_eq!(file.nickname.as_deref(), Some("新昵称"));
 
     // 非法昵称/头像被拒
-    assert!(update_profile(&mut file, "P@ssw0rd-test", Some(&"x".repeat(25)), None).is_err());
-    assert!(update_profile(&mut file, "P@ssw0rd-test", None, Some(Some("http://a.png"))).is_err());
+    assert!(update_profile(&mut file, "P@ssw0rd-test", Some(&"x".repeat(25)), None, None, None, None).is_err());
+    assert!(
+        update_profile(&mut file, "P@ssw0rd-test", None, Some(Some("http://a.png")), None, None, None)
+            .is_err()
+    );
 
     // 错误密码不能解锁
     assert!(unlock_identity(&file, "bad-password").is_err());

@@ -32,7 +32,7 @@ fn member(root: char, peer_id: Option<&str>) -> OrganizationMember {
             peer_id: Some(p.to_string()),
             addresses: vec![],
         }),
-        extra: Default::default(),
+        ..Default::default()
     }
 }
 

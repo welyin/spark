@@ -21,7 +21,7 @@ use super::types::{
 use super::{OrgError, Result};
 
 /// 快照构建时的保留键（sync.ts:26-36 + org.md §4.1 的 gateways + §15/§16 的
-/// orgAddress/isPublic）：其余键全部流入 `summary.metadata`。
+/// orgAddress/isPublic + 组织 logo `avatar`）：其余键全部流入 `summary.metadata`。
 ///
 /// ⚠️ `orgRootSecret`（组织根私钥密文）**不在**此表——本表同时用于合并时剔除
 /// extra 保留键，会把本机持有的私钥抹掉；其"不进快照"由
@@ -43,7 +43,17 @@ pub const ORGANIZATION_SYNC_RESERVED_KEYS: [&str; 13] = [
     "isPublic",
 ];
 
-/// 快照中的成员条目（仅五字段；构建快照时成员对象的动态键被丢弃）。
+/// 快照中的成员条目（固定字段 + 身份字段；构建快照时成员对象的动态键被丢弃）。
+///
+/// 身份字符串字段（nickname/avatar/signature/gender/region）M1 起采用显式墓碑
+/// 线形：构建时 `None`（未设置/已清除）一律上线为空串 `""`，合并侧 `""` →
+/// `None`（清除生效）、非空 → `Some`、键缺失（旧对端不携带，serde default →
+/// `None`）→ 保留 existing。`usePersonalIdentity` 为 `Option<bool>` 原样上线
+/// （`Some(false)` 也发——true→false 的关闭可传播），合并侧 `Some` → 采用、
+/// 键缺失 → 保留 existing。
+///
+/// ⚠️ 该线形相对 TS 已扩展（TS 旧实现 None=丢键，无法传播清除）；TS 侧追赶前，
+/// 旧对端收到 `""` 会按普通空串处理，不会复活已清除值——兼容方向成立。
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SnapshotMember {
     /// 成员 rootId。
@@ -57,9 +67,32 @@ pub struct SnapshotMember {
     /// 录入人 rootId。
     #[serde(rename = "addedBy")]
     pub added_by: String,
-    /// 节点信息。
+    /// 节点信息（`None` = 未携带，合并保留 existing——无清除语义，与身份字段不同）。
     #[serde(rename = "nodeInfo", default, skip_serializing_if = "Option::is_none")]
     pub node_info: Option<OrganizationNodeInfo>,
+    /// 组织内昵称（`""` = 已清除；键缺失 = 旧对端未携带）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nickname: Option<String>,
+    /// 组织内头像（data URL；`""` = 已清除）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<String>,
+    /// 个性签名（`""` = 已清除）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
+    /// 性别（`""` = 已清除）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gender: Option<String>,
+    /// 地区（`""` = 已清除）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+    /// 是否展示个人身份（M1：`Option<bool>` 原样上线，`Some(false)` 也发，
+    /// true→false 的关闭可经快照传播；键缺失 = 旧对端未携带，合并保留 existing）。
+    #[serde(
+        rename = "usePersonalIdentity",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub use_personal_identity: Option<bool>,
 }
 
 impl From<&OrganizationMember> for SnapshotMember {
@@ -70,6 +103,14 @@ impl From<&OrganizationMember> for SnapshotMember {
             joined_at: member.joined_at,
             added_by: member.added_by.clone(),
             node_info: member.node_info.clone(),
+            // 显式墓碑：None（未设置/已清除）→ `""` 上线，让清除可传播
+            nickname: Some(member.nickname.clone().unwrap_or_default()),
+            avatar: Some(member.avatar.clone().unwrap_or_default()),
+            signature: Some(member.signature.clone().unwrap_or_default()),
+            gender: Some(member.gender.clone().unwrap_or_default()),
+            region: Some(member.region.clone().unwrap_or_default()),
+            // Option 原样上线：Some(false) 也发（true→false 可传播）
+            use_personal_identity: member.use_personal_identity,
         }
     }
 }
@@ -236,13 +277,43 @@ pub fn build_organization_sync_snapshot(
     }
 }
 
+/// nodeInfo/布尔字段合并：incoming 覆盖、`None` 保留 existing（无清除语义）。
+fn or_existing<T: Clone>(incoming: &Option<T>, existing: Option<&T>) -> Option<T> {
+    incoming.clone().or_else(|| existing.cloned())
+}
+
+/// 身份字符串字段合并（M1 墓碑）：`""` → `None`（清除生效）、非空 → `Some`、
+/// 键缺失（`None`）→ 保留 existing。
+fn merge_tombstone(incoming: &Option<String>, existing: Option<&String>) -> Option<String> {
+    match incoming {
+        Some(value) if value.is_empty() => None,
+        Some(value) => Some(value.clone()),
+        None => existing.cloned(),
+    }
+}
+
+/// avatar 合并：tombstone 语义同上，但非空 incoming 须过 data-URL/200KB 校验
+/// （快照由组织成员 serve，属内部威胁面——恶意成员塞超大/非图片字符串会随
+/// 快照传遍全组织；本地写路径有 `validate_avatar`，merge 是同口径的入站闸）。
+/// 非法 incoming 忽略（保留 existing），不清除不误删。
+fn merge_avatar(incoming: &Option<String>, existing: Option<&String>) -> Option<String> {
+    match incoming {
+        Some(value) if value.is_empty() => None,
+        Some(value) if crate::identity::validate_avatar(value).is_ok() => Some(value.clone()),
+        Some(_) => existing.cloned(),
+        None => existing.cloned(),
+    }
+}
+
 /// `mergeOrganizationSyncSnapshot`（sync.ts:93-164）。
 ///
 /// - 成员按 rootId 合并：incoming 覆盖同名字段，`nodeInfo` 为 `None` 时保留 existing
+/// - 身份字符串字段（M1 显式墓碑）：incoming `""` → `None`（清除生效）、非空 →
+///   `Some`、键缺失（旧对端未携带）→ 保留 existing；`usePersonalIdentity`：
+///   incoming `Some` → 采用（含 `false`，true→false 可传播）、`None` → 保留 existing
 /// - 动态字段：`{...existingExtra, ...incomingMetadata}` 合并后删除全部保留键；
 ///   `orgRootSecret`（本机根私钥密文）在插入处显式跳过，绝不接受对端注入（§15）
 /// - 固定字段以 incoming 快照为准；`updatedAt = max(existing, incoming)`；
-///   `basePluginDomain` 快照缺失时保留 existing
 /// - `sync = { versions: snapshot.sync, sections: [summary,members,member-details,transactions],
 ///   lastSyncedAt: now }`（注意此处的 sections 顺序与
 ///   [`pick_sync_sections_by_priority`] 不同，如实复刻 sync.ts:156-160）
@@ -262,35 +333,41 @@ pub fn merge_organization_sync_snapshot(
         }
     }
     for incoming in &snapshot.members {
-        let node_info = incoming.node_info.clone().or_else(|| {
-            index_by_root_id
-                .get(&incoming.root_id)
-                .and_then(|&i| merged_members[i].node_info.clone())
-        });
+        let existing_member = index_by_root_id
+            .get(&incoming.root_id)
+            .map(|&i| merged_members[i].clone());
+        let existing_ref = existing_member.as_ref();
+        // {...existingMember, ...incoming}：五字段以 incoming 为准，nodeInfo/身份
+        // 字段 incoming 缺省（None）时保留 existing，existing 的动态键保留
+        let member = OrganizationMember {
+            root_id: incoming.root_id.clone(),
+            role: incoming.role,
+            joined_at: incoming.joined_at,
+            added_by: incoming.added_by.clone(),
+            node_info: or_existing(
+                &incoming.node_info,
+                existing_ref.and_then(|m| m.node_info.as_ref()),
+            ),
+            nickname: merge_tombstone(&incoming.nickname, existing_ref.and_then(|m| m.nickname.as_ref())),
+            avatar: merge_avatar(&incoming.avatar, existing_ref.and_then(|m| m.avatar.as_ref())),
+            signature: merge_tombstone(
+                &incoming.signature,
+                existing_ref.and_then(|m| m.signature.as_ref()),
+            ),
+            gender: merge_tombstone(&incoming.gender, existing_ref.and_then(|m| m.gender.as_ref())),
+            region: merge_tombstone(&incoming.region, existing_ref.and_then(|m| m.region.as_ref())),
+            // incoming Some → 采用（含 false）；None（键缺失）→ 保留 existing
+            use_personal_identity: or_existing(
+                &incoming.use_personal_identity,
+                existing_ref.and_then(|m| m.use_personal_identity.as_ref()),
+            ),
+            extra: existing_member.map(|m| m.extra).unwrap_or_default(),
+        };
         match index_by_root_id.get(&incoming.root_id) {
-            Some(&i) => {
-                // {...existingMember, ...incoming, nodeInfo: incoming ?? existing}：
-                // 五字段以 incoming 为准，existing 的动态键保留
-                let existing_member = &merged_members[i];
-                merged_members[i] = OrganizationMember {
-                    root_id: incoming.root_id.clone(),
-                    role: incoming.role,
-                    joined_at: incoming.joined_at,
-                    added_by: incoming.added_by.clone(),
-                    node_info,
-                    extra: existing_member.extra.clone(),
-                };
-            }
+            Some(&i) => merged_members[i] = member,
             None => {
                 index_by_root_id.insert(incoming.root_id.clone(), merged_members.len());
-                merged_members.push(OrganizationMember {
-                    root_id: incoming.root_id.clone(),
-                    role: incoming.role,
-                    joined_at: incoming.joined_at,
-                    added_by: incoming.added_by.clone(),
-                    node_info,
-                    extra: Default::default(),
-                });
+                merged_members.push(member);
             }
         }
     }
@@ -338,7 +415,7 @@ pub fn merge_organization_sync_snapshot(
             .unwrap_or(0)
             .max(snapshot.summary.updated_at),
         // gateways（保留键）：incoming 显式携带则以其为准，缺省保留 existing
-        // （对齐 basePluginDomain 的缺省回退口径；org.md §14 经快照扩散）
+        // （org.md §14 经快照扩散）
         gateways: snapshot
             .summary
             .gateways

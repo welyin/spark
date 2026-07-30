@@ -89,3 +89,45 @@ export function emptyProfile(): ContactProfile {
 
 /** 个人空间 key 固定为 'personal'，组织空间为 'org:<orgId>'（唯一定义在 mock/space-key.ts，此处 re-export） */
 export { spaceKeyOf } from '../space-key';
+
+// ------------------------------------------------------------------
+// 组织成员的组织身份（昵称/性别/签名）。
+// TODO(mock): 内核组织成员已携带真实身份字段（OrganizationMember 的
+// nickname/avatar/signature/gender/region，经快照传播，F2 落地）；本池仍按
+// rootId 哈希从固定池里确定性取假数据（同一成员恒定），是 mock 的有意降级
+// ——消费端 use-contacts-data 属冻结前端，整体替换待前端排期（ui-space-navbar §9.2）
+// ------------------------------------------------------------------
+
+export type MemberIdentity = {
+  nickname: string;
+  signature: string;
+  gender?: 'male' | 'female';
+};
+
+const MEMBER_NAME_POOL = [
+  '张伟', '李娜', '王芳', '刘洋', '陈静', '杨帆',
+  '赵磊', '黄敏', '周涛', '吴倩', '徐斌', '孙悦'
+];
+
+const MEMBER_SIGNATURE_POOL = [
+  '越努力越幸运', '静水流深', '今天也要加油', '保持热爱',
+  '行胜于言', '', '慢慢来吧', '专注当下'
+];
+
+const hashText = (text: string): number => {
+  let hash = 0;
+  for (let i = 0; i < text.length; i++) {
+    hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
+  }
+  return hash;
+};
+
+/** 组织成员的组织身份（确定性 mock：同一 spaceKey+rootId 恒定） */
+export function memberIdentityOf(spaceKey: string, rootId: string): MemberIdentity {
+  const hash = hashText(`${spaceKey}:${rootId}`);
+  return {
+    nickname: MEMBER_NAME_POOL[hash % MEMBER_NAME_POOL.length],
+    signature: MEMBER_SIGNATURE_POOL[hash % MEMBER_SIGNATURE_POOL.length],
+    gender: hash % 3 === 0 ? undefined : hash % 2 === 0 ? 'male' : 'female'
+  };
+}

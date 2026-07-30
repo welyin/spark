@@ -5,6 +5,7 @@
 use spark_core::contact::{
     ContactError, ContactProfileRecord, ContactService, ContactTag, FriendRecord,
     FriendRequestRecord, FriendRequestStatus, OrgGroupNode, PeerRef, ProfilePatch,
+    RequestThreadMessage, ThreadFrom,
 };
 use spark_core::storage::MemoryStorage;
 
@@ -48,9 +49,22 @@ fn incoming(id: &str, root_id: &str) -> FriendRequestRecord {
         created_at: NOW,
         updated_at: NOW,
         peer: None,
+        thread: Vec::new(),
+        invite_code: None,
     }
 }
 
+fn tree_ids(tree: &[OrgGroupNode]) -> Vec<&str> {
+    tree.iter().map(|n| n.id.as_str()).collect()
+}
+
+
+#[path = "unit_contact/org_group.rs"]
+mod org_group;
+#[path = "unit_contact/org_invite.rs"]
+mod org_invite;
+#[path = "unit_contact/request.rs"]
+mod request;
 // ------------------------------------------------------------------
 // 朋友 CRUD
 // ------------------------------------------------------------------
@@ -199,141 +213,6 @@ fn blocked_survives_remove_friend_and_overview_overlays() {
 }
 
 // ------------------------------------------------------------------
-// 好友申请状态机
-// ------------------------------------------------------------------
-
-#[test]
-fn incoming_request_state_machine() {
-    let mut s = MemoryStorage::new();
-    ContactService::put_incoming_request(&mut s, &incoming("req-1", &rid('r'))).unwrap();
-    assert_eq!(
-        ContactService::get_incoming_request(&s, "req-1").unwrap().unwrap().status,
-        FriendRequestStatus::Pending
-    );
-
-    // 接受：pending → accepted
-    assert!(ContactService::resolve_incoming_request(&mut s, "req-1", true, NOW).unwrap());
-    assert_eq!(
-        ContactService::get_incoming_request(&s, "req-1").unwrap().unwrap().status,
-        FriendRequestStatus::Accepted
-    );
-    // 非 pending 忽略并返回 false
-    assert!(!ContactService::resolve_incoming_request(&mut s, "req-1", false, NOW).unwrap());
-    assert_eq!(
-        ContactService::get_incoming_request(&s, "req-1").unwrap().unwrap().status,
-        FriendRequestStatus::Accepted
-    );
-    // 不存在返回 false
-    assert!(!ContactService::resolve_incoming_request(&mut s, "req-x", true, NOW).unwrap());
-
-    // 拒绝：pending → ignored
-    ContactService::put_incoming_request(&mut s, &incoming("req-2", &rid('s'))).unwrap();
-    assert!(ContactService::resolve_incoming_request(&mut s, "req-2", false, NOW).unwrap());
-    assert_eq!(
-        ContactService::get_incoming_request(&s, "req-2").unwrap().unwrap().status,
-        FriendRequestStatus::Ignored
-    );
-}
-
-#[test]
-fn outgoing_request_lifecycle() {
-    let mut s = MemoryStorage::new();
-    // 同毫秒两条：id 不冲突
-    let first = ContactService::create_outgoing_request(
-        &mut s,
-        &rid('a'),
-        "阿强",
-        "加个朋友",
-        "RootID 搜索",
-        None,
-        NOW,
-    )
-    .unwrap();
-    let second = ContactService::create_outgoing_request(
-        &mut s,
-        &rid('b'),
-        "博哥",
-        "",
-        "扫码",
-        Some(PeerRef {
-            peer_id: "peer-2".to_string(),
-            addresses: vec![],
-        }),
-        NOW,
-    )
-    .unwrap();
-    assert!(first.id.starts_with(&format!("out-{NOW}-")));
-    assert_ne!(first.id, second.id);
-    assert_eq!(first.status, FriendRequestStatus::Pending);
-    assert_eq!(first.created_at, NOW);
-
-    // find_outgoing_by_root
-    let found = ContactService::find_outgoing_by_root(&s, &rid('b')).unwrap().unwrap();
-    assert_eq!(found.id, second.id);
-    assert_eq!(found.peer.as_ref().unwrap().peer_id, "peer-2");
-    assert_eq!(ContactService::find_outgoing_by_root(&s, &rid('z')).unwrap(), None);
-
-    // mark_outgoing_accepted：pending → accepted；重复与非存在返回 false
-    assert!(ContactService::mark_outgoing_accepted(&mut s, &first.id, NOW).unwrap());
-    assert!(!ContactService::mark_outgoing_accepted(&mut s, &first.id, NOW).unwrap());
-    assert!(!ContactService::mark_outgoing_accepted(&mut s, "out-x", NOW).unwrap());
-    let accepted = ContactService::find_outgoing_by_root(&s, &rid('a')).unwrap().unwrap();
-    assert_eq!(accepted.status, FriendRequestStatus::Accepted);
-}
-
-#[test]
-fn request_writes_maintain_updated_at() {
-    let mut s = MemoryStorage::new();
-
-    // 新建 = created_at
-    let outgoing = ContactService::create_outgoing_request(
-        &mut s,
-        &rid('a'),
-        "阿强",
-        "加个朋友",
-        "RootID 搜索",
-        None,
-        NOW,
-    )
-    .unwrap();
-    assert_eq!(outgoing.updated_at, NOW);
-
-    // 入站处理刷新 updated_at、保留 created_at
-    ContactService::put_incoming_request(&mut s, &incoming("req-1", &rid('r'))).unwrap();
-    assert!(ContactService::resolve_incoming_request(&mut s, "req-1", true, NOW + 10).unwrap());
-    let resolved = ContactService::get_incoming_request(&s, "req-1").unwrap().unwrap();
-    assert_eq!(resolved.created_at, NOW);
-    assert_eq!(resolved.updated_at, NOW + 10);
-
-    // 出站被接受刷新 updated_at
-    assert!(ContactService::mark_outgoing_accepted(&mut s, &outgoing.id, NOW + 20).unwrap());
-    let accepted = ContactService::get_outgoing_request(&s, &outgoing.id).unwrap().unwrap();
-    assert_eq!(accepted.created_at, NOW);
-    assert_eq!(accepted.updated_at, NOW + 20);
-
-    // put_outgoing_request 兜底：updated_at 未填（0）时取 created_at
-    let mut legacy = outgoing.clone();
-    legacy.id = "out-legacy".to_string();
-    legacy.updated_at = 0;
-    ContactService::put_outgoing_request(&mut s, &legacy).unwrap();
-    let stored = ContactService::get_outgoing_request(&s, "out-legacy").unwrap().unwrap();
-    assert_eq!(stored.updated_at, stored.created_at);
-}
-
-#[test]
-fn friend_request_status_failed_wire_form() {
-    // Failed 仅 outbox 用；线形对齐 camelCase rename
-    assert_eq!(
-        serde_json::to_value(FriendRequestStatus::Failed).unwrap(),
-        serde_json::json!("failed")
-    );
-    assert_eq!(
-        serde_json::from_value::<FriendRequestStatus>(serde_json::json!("failed")).unwrap(),
-        FriendRequestStatus::Failed
-    );
-}
-
-// ------------------------------------------------------------------
 // 标签
 // ------------------------------------------------------------------
 
@@ -476,122 +355,6 @@ fn personal_group_move_matches_frontend_splice() {
 }
 
 // ------------------------------------------------------------------
-// 组织空间分组树
-// ------------------------------------------------------------------
-
-fn seed_tree(s: &mut MemoryStorage) -> (OrgGroupNode, OrgGroupNode, OrgGroupNode, OrgGroupNode) {
-    let hq = ContactService::create_org_group_with_id(s, ORG, "", "og-hq", "总部")
-        .unwrap()
-        .unwrap();
-    let tech = ContactService::create_org_group_with_id(s, ORG, &hq.id, "og-tech", "技术部")
-        .unwrap()
-        .unwrap();
-    let market = ContactService::create_org_group_with_id(s, ORG, &hq.id, "og-market", "市场部")
-        .unwrap()
-        .unwrap();
-    let branch = ContactService::create_org_group_with_id(s, ORG, "", "og-branch", "分部")
-        .unwrap()
-        .unwrap();
-    (hq, tech, market, branch)
-}
-
-fn tree_ids(tree: &[OrgGroupNode]) -> Vec<&str> {
-    tree.iter().map(|n| n.id.as_str()).collect()
-}
-
-#[test]
-fn org_group_create_rename_and_invalid_parent() {
-    let mut s = MemoryStorage::new();
-    let (hq, tech, market, branch) = seed_tree(&mut s);
-
-    // 父不存在返回 None
-    assert!(
-        ContactService::create_org_group_with_id(&mut s, ORG, "og-x", "og-ghost", "幽灵部")
-            .unwrap()
-            .is_none()
-    );
-
-    // rename
-    ContactService::rename_org_group(&mut s, ORG, &tech.id, "研发部").unwrap();
-    ContactService::rename_org_group(&mut s, ORG, "og-x", "无效").unwrap(); // 不存在忽略
-
-    let view = ContactService::overview(&s, ORG).unwrap();
-    assert_eq!(tree_ids(&view.group_tree), vec![hq.id.as_str(), branch.id.as_str()]);
-    let hq_node = &view.group_tree[0];
-    assert_eq!(tree_ids(&hq_node.children), vec![tech.id.as_str(), market.id.as_str()]);
-    assert_eq!(hq_node.children[0].name, "研发部");
-}
-
-#[test]
-fn org_group_move_sibling_only() {
-    let mut s = MemoryStorage::new();
-    let (hq, tech, market, branch) = seed_tree(&mut s);
-    let fin = ContactService::create_org_group_with_id(&mut s, ORG, &hq.id, "og-fin", "财务部")
-        .unwrap()
-        .unwrap();
-
-    // 根层重排：[总部, 分部] → [分部, 总部]
-    ContactService::move_org_group_sibling(&mut s, ORG, &branch.id, 0).unwrap();
-    // 同级内移动：[技术部, 市场部, 财务部] → [市场部, 技术部, 财务部]
-    ContactService::move_org_group_sibling(&mut s, ORG, &market.id, 0).unwrap();
-    // 不存在忽略；越界夹紧到 len（toIndex == len 表示移到末尾）
-    ContactService::move_org_group_sibling(&mut s, ORG, "og-x", 0).unwrap();
-    ContactService::move_org_group_sibling(&mut s, ORG, &tech.id, 99).unwrap();
-    // 对齐 TS splice 语义（toIndex 以原序为准，源在目标位之前时摘除后前移一位）：
-    // [市场部, 财务部, 技术部] 把市场部移到下标 2（原技术部之前）→ [财务部, 市场部, 技术部]
-    ContactService::move_org_group_sibling(&mut s, ORG, &market.id, 2).unwrap();
-
-    let view = ContactService::overview(&s, ORG).unwrap();
-    assert_eq!(tree_ids(&view.group_tree), vec![branch.id.as_str(), hq.id.as_str()]);
-    assert_eq!(
-        tree_ids(&view.group_tree[1].children),
-        vec![fin.id.as_str(), market.id.as_str(), tech.id.as_str()]
-    );
-}
-
-#[test]
-fn org_group_delete_promotes_children_and_resets_members() {
-    let mut s = MemoryStorage::new();
-    let (hq, tech, market, branch) = seed_tree(&mut s);
-    // 技术部下的孙节点
-    let backend = ContactService::create_org_group_with_id(&mut s, ORG, &tech.id, "og-backend", "后端组")
-        .unwrap()
-        .unwrap();
-
-    // 成员挂到 tech / backend / market
-    for (ch, group_id) in [('a', &tech.id), ('b', &backend.id), ('c', &market.id)] {
-        ContactService::set_contact_group(&mut s, ORG, &rid(ch), group_id, NOW).unwrap();
-    }
-
-    // 删除技术部：后端组提升到总部层；tech/backend 涉及的成员复位，market 不受影响
-    ContactService::delete_org_group(&mut s, ORG, &tech.id).unwrap();
-    let view = ContactService::overview(&s, ORG).unwrap();
-    assert_eq!(tree_ids(&view.group_tree), vec![hq.id.as_str(), branch.id.as_str()]);
-    assert_eq!(
-        tree_ids(&view.group_tree[0].children),
-        vec![backend.id.as_str(), market.id.as_str()]
-    );
-    assert_eq!(view.member_extras.get(&rid('a')).unwrap().group_id, "");
-    assert_eq!(view.member_extras.get(&rid('b')).unwrap().group_id, "");
-    assert_eq!(
-        view.member_extras.get(&rid('c')).unwrap().group_id,
-        market.id
-    );
-
-    // 删除不存在节点忽略
-    ContactService::delete_org_group(&mut s, ORG, "og-x").unwrap();
-}
-
-#[test]
-fn org_group_requires_org_space() {
-    let mut s = MemoryStorage::new();
-    let err = ContactService::create_org_group_with_id(&mut s, PERSONAL, "", "og-hq", "总部").unwrap_err();
-    assert!(matches!(err, ContactError::InvalidSpace));
-    let err = ContactService::overview(&s, "weird-space").unwrap_err();
-    assert!(matches!(err, ContactError::InvalidSpace));
-}
-
-// ------------------------------------------------------------------
 // overview 形状
 // ------------------------------------------------------------------
 
@@ -704,3 +467,4 @@ fn contact_profile_record_default_matches_empty_profile() {
     assert!(profile.phones.is_empty());
     assert!(profile.photos.is_empty());
 }
+

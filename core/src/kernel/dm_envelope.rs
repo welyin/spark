@@ -2,7 +2,7 @@
 //!
 //! 线形 JSON：
 //! ```json
-//! { "kind": "chat|read|recall|friend-request|friend-accept|org-invite|org-invite-reply",
+//! { "kind": "chat|read|recall|friend-request|friend-accept|friend-reply|org-invite|org-invite-reply",
 //!   "from": "<rootId>", "to": "<rootId>", "ts": 123,
 //!   "body": { ... }, "pubKey": "<base64>", "sig": "<base64>" }
 //! ```
@@ -39,6 +39,9 @@ pub(crate) const KIND_PROFILE_SYNC: &str = "profile-sync";
 pub const KIND_ORG_INVITE: &str = "org-invite";
 /// 信封 kind：组织邀请回执（被邀请人接受/拒绝）。
 pub const KIND_ORG_INVITE_REPLY: &str = "org-invite-reply";
+/// 信封 kind：好友申请回复（接收方询问 / 申请方回答同 kind，接收侧按本端
+/// 记录匹配方向）。
+pub const KIND_FRIEND_REPLY: &str = "friend-reply";
 
 /// 签名载荷：固定键序 body/from/kind/to/ts 的紧凑 JSON 串。
 pub fn build_signing_payload(kind: &str, from: &str, to: &str, ts: i64, body: &Value) -> String {
@@ -77,6 +80,15 @@ pub fn build_envelope(
         Value::from(B64.encode(signature.to_bytes())),
     );
     Value::Object(map)
+}
+
+/// friend-reply 的 body 线形 `{requestId, text}`：出站构造（contact_ops）与
+/// 入站测试共用同一构造函数，防两侧键名漂移。
+pub fn friend_reply_body(request_id: &str, text: &str) -> Value {
+    Value::Object(Map::from_iter([
+        ("requestId".to_string(), Value::from(request_id)),
+        ("text".to_string(), Value::from(text)),
+    ]))
 }
 
 /// 信封时间戳新鲜度窗口（±10 分钟，与 node-challenge 窗口口径一致）：

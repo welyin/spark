@@ -26,7 +26,7 @@ fn purge_preview_and_execute_guards() {
             name: "组织".to_string(),
             description: None,
             avatar: None,
-            base_plugin_domain: Some("plugin:app".to_string()),
+            base_plugin_domain: None,
         })
         .unwrap();
     let org_id = view.record.org_id.clone();
@@ -34,12 +34,14 @@ fn purge_preview_and_execute_guards() {
     kernel
         .declare_collection("plugin:app", "notes", lww_evidence_declaration())
         .unwrap();
+    // 文档 payload 带 orgId：purge 的数据域由 doc:plugin: 键扫描定位
+    // （collect_org_plugin_domains，不取组织记录的 basePluginDomain）
     kernel
         .doc_put(
             "plugin:app",
             "notes",
             "n1",
-            json!({"v": 1}),
+            json!({"v": 1, "orgId": org_id.clone()}),
             CollectionConfig::default(),
         )
         .unwrap();
@@ -48,7 +50,7 @@ fn purge_preview_and_execute_guards() {
             "plugin:app",
             "notes",
             "n2",
-            json!({"v": 2}),
+            json!({"v": 2, "orgId": org_id.clone()}),
             CollectionConfig::default(),
         )
         .unwrap();
@@ -90,6 +92,44 @@ fn purge_preview_and_execute_guards() {
          Wait for replicas to replenish or add disk space instead."
     );
     kernel.stop_p2p().unwrap();
+    kernel.shutdown().unwrap();
+}
+
+#[test]
+fn purge_preview_empty_domain_short_circuit() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut kernel = fresh_kernel(dir.path());
+    init_identity(&mut kernel);
+    kernel.stop_p2p().unwrap();
+    let view = kernel
+        .create_org(CreateOrganizationInput {
+            name: "组织".to_string(),
+            description: None,
+            avatar: None,
+            base_plugin_domain: None,
+        })
+        .unwrap();
+    let org_id = view.record.org_id.clone();
+    let before_ts = system_now_ms() + 3_600_000;
+
+    // 组织存在但无任何插件文档 → 空域短路：domain 为 ""、affectedDocs=0
+    // （前端据此自然拦截 execute，不下到 data-mgmt）
+    let preview = kernel.preview_purge(&org_id, before_ts).unwrap();
+    assert_eq!(preview.domain, "");
+    assert_eq!(preview.preview.affected_docs, 0);
+    assert_eq!(preview.preview.affected_bytes, 0);
+    assert!(preview.preview.collections.is_empty());
+
+    // before_ts 校验先于空域短路：与有域路径（data-mgmt 拒绝）行为一致
+    for bad_ts in [0, -1] {
+        let err = kernel.preview_purge(&org_id, bad_ts).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "beforeTs must be a positive timestamp",
+            "before_ts={bad_ts}"
+        );
+    }
+
     kernel.shutdown().unwrap();
 }
 

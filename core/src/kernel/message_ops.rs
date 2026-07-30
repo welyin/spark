@@ -26,6 +26,43 @@ use crate::p2p::node::system_now_ms;
 /// direct 会话 id 前缀（`dm:{peerRootId}`）。
 pub const DIRECT_CONV_PREFIX: &str = "dm:";
 
+/// 链接预览各字段入库上限（字符数，trim 后超限截断而非报错，ui-messages.md §6）。
+/// 仅 `sanitize_link_preview` 内部使用（测试断言字面量），不导出。
+const LINK_URL_MAX_CHARS: usize = 2048;
+/// 标题上限。
+const LINK_TITLE_MAX_CHARS: usize = 256;
+/// 描述上限。
+const LINK_DESCRIPTION_MAX_CHARS: usize = 512;
+/// 来源 APP 名上限。
+const LINK_SITE_NAME_MAX_CHARS: usize = 64;
+/// 域名上限（DNS 标签全长上限 253）。
+const LINK_DOMAIN_MAX_CHARS: usize = 253;
+
+/// 按字符数截断（`chars` 计数，避免按字节截断出半个 UTF-8 序列）。
+fn truncate_chars(s: &str, max: usize) -> String {
+    s.chars().take(max).collect()
+}
+
+/// 链接预览入库守卫：五字段各自 trim 后限长截断（超限截断而非报错）；
+/// url 为空或非 http(s) scheme 则整条不落（`None`——`javascript:`/`data:` 等
+/// scheme 在卡片点击/渲染面是注入向量，对端自报的 link 字段同样过此守卫）。
+/// 抓取在 src-tauri 壳层完成，内核只认入参形状、不信任其内容，故入库前
+/// 统一收敛。
+pub fn sanitize_link_preview(link: LinkPreview) -> Option<LinkPreview> {
+    let url = truncate_chars(link.url.trim(), LINK_URL_MAX_CHARS);
+    let lower = url.to_ascii_lowercase();
+    if url.is_empty() || !(lower.starts_with("http://") || lower.starts_with("https://")) {
+        return None;
+    }
+    Some(LinkPreview {
+        url,
+        title: truncate_chars(link.title.trim(), LINK_TITLE_MAX_CHARS),
+        description: truncate_chars(link.description.trim(), LINK_DESCRIPTION_MAX_CHARS),
+        site_name: truncate_chars(link.site_name.trim(), LINK_SITE_NAME_MAX_CHARS),
+        domain: truncate_chars(link.domain.trim(), LINK_DOMAIN_MAX_CHARS),
+    })
+}
+
 /// direct 会话 id（前端契约：确定性 id）。
 pub fn direct_conversation_id(peer_root_id: &str) -> String {
     format!("{DIRECT_CONV_PREFIX}{peer_root_id}")
@@ -283,7 +320,10 @@ impl Kernel {
     /// （`failed`，不 spawn）。
     ///
     /// `message_id` 由客户端生成（内核不做同 id 去重，重试会产生重复消息）；
-    /// `quote` 为可选引用回复。正文超过 [`MAX_TEXT_BYTES`]（16 KiB）拒绝。
+    /// `quote` 为可选引用回复；`link` 为发送方本地抓取的链接预览（ui-messages.md
+    /// §6，抓取在 src-tauri 壳层），入库前经 [`sanitize_link_preview`] 收敛
+    /// （trim + 限长截断，url 为空则整条不落）。正文超过 [`MAX_TEXT_BYTES`]
+    /// （16 KiB）拒绝。
     pub fn message_send_text(
         &mut self,
         space: &str,
@@ -291,6 +331,7 @@ impl Kernel {
         message_id: &str,
         text: &str,
         quote: Option<QuoteRef>,
+        link: Option<LinkPreview>,
     ) -> Result<ChatMessageView> {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
@@ -311,7 +352,7 @@ impl Kernel {
             content: text.to_string(),
             file_size: None,
             duration: None,
-            link: None,
+            link: link.and_then(sanitize_link_preview),
             quote,
             created_at: now,
             status: Some("sending".to_string()),

@@ -62,8 +62,9 @@ fn full_identity_lifecycle() {
     let revealed = reveal_mnemonic_inner(&kernel, PASSWORD).unwrap();
     assert_eq!(revealed.mnemonic, init.mnemonic);
 
-    // update_profile（免密码会话版）：改昵称、清头像
-    let profile = update_profile_inner(&mut kernel, Some("alice-2"), Some(None)).unwrap();
+    // update_profile（免密码会话版）：改昵称、清头像（B1：清除以空串表达，
+    // present-but-null 在 IPC 边界会坍塌为 None 永远到不了内核）
+    let profile = update_profile_inner(&mut kernel, Some("alice-2"), Some(""), None, None, None).unwrap();
     assert_eq!(profile.nickname.as_deref(), Some("alice-2"));
     assert_eq!(profile.avatar, None);
 
@@ -192,4 +193,48 @@ fn sign_derive_domain_and_mnemonic_check() {
     let continuous = mnemonic_check_inner("与祝产");
     assert_eq!(continuous.words, vec!["与", "祝", "产"]);
     assert!(continuous.invalid_indexes.is_empty());
+}
+
+#[test]
+fn update_profile_extra_fields_patch_semantics() {
+    let (_dir, mut kernel) = temp_kernel();
+    init_inner(&mut kernel, PASSWORD, "alice", None).unwrap();
+
+    // 设置扩展字段；昵称/头像不变
+    let profile =
+        update_profile_inner(&mut kernel, None, None, Some("女"), Some("杭州"), Some("保持热爱"))
+            .unwrap();
+    assert_eq!(profile.nickname.as_deref(), Some("alice"));
+    assert_eq!(profile.gender.as_deref(), Some("女"));
+    assert_eq!(profile.region.as_deref(), Some("杭州"));
+    assert_eq!(profile.signature.as_deref(), Some("保持热爱"));
+
+    // 缺省（None）= 不变；空串 = 清除
+    let profile = update_profile_inner(&mut kernel, None, None, Some(""), None, None).unwrap();
+    assert_eq!(profile.gender, None);
+    assert_eq!(profile.region.as_deref(), Some("杭州"));
+    assert_eq!(profile.signature.as_deref(), Some("保持热爱"));
+
+    // avatar：设置后空串清除（B1：锁死 IPC 边界 Some("") = 清除）
+    let profile = update_profile_inner(
+        &mut kernel,
+        None,
+        Some("data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        profile.avatar.as_deref(),
+        Some("data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==")
+    );
+    let profile = update_profile_inner(&mut kernel, None, Some(""), None, None, None).unwrap();
+    assert_eq!(profile.avatar, None);
+
+    // root_status 视图回读扩展字段
+    let status = status_inner(&kernel).unwrap();
+    assert_eq!(status.gender, None);
+    assert_eq!(status.region.as_deref(), Some("杭州"));
+    assert_eq!(status.signature.as_deref(), Some("保持热爱"));
 }

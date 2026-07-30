@@ -396,3 +396,13 @@ impl From<LocalP2PNodeInfo> for P2pInfoDto {
     }
 }
 
+
+/// IPC 边界 avatar 口径（B1 修复）：serde_json 对 present-but-null 的键反序列化
+/// `Option<Option<String>>` 会坍塌为 `None`，「清除」永远到不了内核；故命令层参数
+/// 用扁平的 `Option<String>`，约定 `Some("")` = 清除（与 gender/region/signature
+/// 的 `''` = 清除同口径），在此映射回内核三态 `Option<Option<_>>`。
+/// 泛型兼容 `Option<&str>`（org_update_info）与 `Option<String>`（OrgIdentityPatch/
+/// update_profile_session）两类调用方。
+pub(crate) fn avatar_patch<S: AsRef<str>>(avatar: Option<S>) -> Option<Option<S>> {
+    avatar.map(|value| (!value.as_ref().is_empty()).then_some(value))
+}

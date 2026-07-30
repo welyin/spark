@@ -162,7 +162,7 @@ impl DataManagementService {
     ///
     /// 校验顺序固定，任一失败即返回错误：
     /// **管理员 → confirmExported → P2P 启动 → 副本充足 → in-flight**。
-    /// （TS 的 `resolveOrg` 由调用方完成，`domain` 即 `org.basePluginDomain`。）
+    /// （TS 的 `resolveOrg` 由调用方完成，`domain` 为调用方扫描定位的组织数据域。）
     ///
     /// - 坑 #6 如实复刻：`confirm_exported` 仅为调用方传入的布尔确认，
     ///   **无导出事实核验**；

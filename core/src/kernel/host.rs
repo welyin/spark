@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex};
 use serde_json::Value;
 
 use crate::collection::{CollectionConfig, DocumentCollection};
+use crate::contact::ContactService;
 use crate::data_mgmt::watermark::StoragePurgeWatermark;
 use crate::evidence::get_evidence_head_hash;
 use crate::org::gateway::OrgMemberHint;
@@ -35,7 +36,6 @@ use crate::sync::meta::RemoteMeta;
 
 use super::dm_envelope::{self, KIND_FRIEND_ACCEPT, KIND_PROFILE_SYNC};
 use super::inbound_dm::AutoAccept;
-use crate::contact::ContactService;
 
 /// 集合配置注册表：`(domain, collection) → CollectionConfig`。
 ///
@@ -416,14 +416,16 @@ impl P2pHost for KernelHost {
         Ok(response)
     }
 
-    /// org-pull-org 响应（org-pull-sync.ts:200-241）。
+    /// org-pull-org 响应（org-pull-sync.ts:200-241）。纯逻辑层
+    /// `handle_pull_org_request` 保持只读。
     fn handle_org_pull_org(
         &mut self,
         payload: Value,
         remote_peer_id: Option<String>,
     ) -> std::result::Result<Value, String> {
-        handle_pull_org_request(&self.storage, &payload, remote_peer_id.as_deref())
-            .map_err(|e| e.to_string())
+        let response = handle_pull_org_request(&self.storage, &payload, remote_peer_id.as_deref())
+            .map_err(|e| e.to_string())?;
+        Ok(response)
     }
 
     fn recovery_view(&mut self) -> Vec<RecoveryViewItem> {

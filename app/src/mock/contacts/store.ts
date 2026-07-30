@@ -41,9 +41,9 @@ function toFriend(dto: FriendDto): MockFriend {
 }
 
 function toRequest(dto: FriendRequestDto): FriendRequest {
-  // updatedAt 内核契约必填，createdAt 可选；缺省时兜底为当前时间（混入按时间
-  // 排序的列表尾部），有值则以 DTO 为准（展开在兜底之后，覆盖兜底值）
-  return { createdAt: Date.now(), updatedAt: Date.now(), ...dto };
+  // updatedAt 内核契约必填（以 DTO 为准）；createdAt 可选，缺省兜底当前时间
+  // （混入按时间排序的列表尾部）
+  return { createdAt: Date.now(), ...dto };
 }
 
 /** 内核组织邀请记录 → 「新的成员」我发出的邀请条目（组织空间 outgoing）。
@@ -116,9 +116,16 @@ async function hydrateOrgInvites(spaceKey: string, space: SpaceContacts): Promis
 
 /**
  * 首次建空间时异步水合 overview：friends/requests/outgoing/tags/groups/groupTree
- * 直接以服务端为准替换；memberExtras 用服务端值覆盖同 key、保留本地已惰性新建
- * 但服务端没有的 key（水合完成前组件可能已写入本地附加资料）。
+ * 以服务端为准；requests/outgoing 按 id 合并——服务端同 id 覆盖本地，同时保留
+ * 服务端还没有的本地记录（水合窗口内 sendInvite/事件已先落的记录不被抹掉）；
+ * memberExtras 用服务端值覆盖同 key、保留本地已惰性新建但服务端没有的 key
+ * （水合完成前组件可能已写入本地附加资料）。
  */
+function mergeRequestsById(server: FriendRequest[], local: FriendRequest[]): FriendRequest[] {
+  const ids = new Set(server.map((request) => request.id));
+  return [...server, ...local.filter((request) => !ids.has(request.id))];
+}
+
 function hydrate(spaceKey: string, space: SpaceContacts): void {
   const api = contactsApi();
   if (!api) {
@@ -131,15 +138,19 @@ function hydrate(spaceKey: string, space: SpaceContacts): void {
       try {
         space.friends = dto.friends.map(toFriend);
         // 内核不持久化已读状态：重启后待处理的收到申请按未读恢复（仍待我处理，
-        // 需要角标/红点提示；查看详情后清除，与在线到达的申请同口径）
-        space.requests = dto.requests.map((item) => {
-          const request = toRequest(item);
-          if (request.status === 'pending') {
-            request.unread = true;
-          }
-          return request;
-        });
-        space.outgoing = dto.outgoing.map(toRequest);
+        // 需要角标/红点提示；查看详情后清除，与在线到达的申请同口径）；
+        // 与本地按 id 合并（水合窗口内事件已先落的记录不被抹掉）
+        space.requests = mergeRequestsById(
+          dto.requests.map((item) => {
+            const request = toRequest(item);
+            if (request.status === 'pending') {
+              request.unread = true;
+            }
+            return request;
+          }),
+          space.requests
+        );
+        space.outgoing = mergeRequestsById(dto.outgoing.map(toRequest), space.outgoing);
         space.tags = dto.tags.map((tag) => ({ ...tag }));
         space.groups = dto.groups.map((group) => ({ ...group }));
         space.groupTree = dto.groupTree;
@@ -227,11 +238,14 @@ function ensureEventSubscription(): void {
 }
 
 /**
- * 通讯录域 P2P 事件处理（个人空间）。导出供单测直接驱动。
+ * 通讯录域 P2P 事件处理（个人空间申请事件 + 组织空间邀请状态事件）。
+ * 导出供单测直接驱动。
  * - FriendRequestReceived：按 id upsert——同 id 重复到达是对端重试的内容更新，
  *   替换字段并置未读；不存在则新增。
- * - FriendRequestSent：我发出申请的投递终态，按 id upsert outbox（回填 nickname/
- *   status/updatedAt）；status 'failed' 置未读提醒可重试。
+ * - FriendRequestSent：我发出申请的投递终态/对方新询问，按 id upsert outbox
+ *   （回填 nickname/status/thread/updatedAt）；事件 updatedAt 早于本地视为过期
+ *   快照丢弃（防本地回复被对方询问的旧快照事件回退）；status 'failed'/'replied'
+ *   置未读（失败提醒可重试 / 对方新询问=未读新变化）。
  * - FriendRequestAccepted：outbox 置 accepted + 未读，朋友按 rootId 去重落本地。
  * - FriendProfileUpdated：对端资料同步（昵称/头像），按 rootId 就地更新朋友条目；
  *   仅改 nickname/avatar（持久化兜底 watch 只回写本地资料字段，不会把头像写回内核）。
@@ -257,12 +271,17 @@ export function handleContactsP2pEvent(event: P2pEventDto): void {
     const request = toRequest(event.data.request);
     const existing = space.outgoing.find((item) => item.id === request.id);
     if (existing) {
+      // 过期事件守卫：本地已有更新的收敛（如我回复询问置 pending）时，丢弃
+      // 携带旧快照的事件（对方询问 replied），避免状态回退/回答行丢失
+      if (request.updatedAt < existing.updatedAt) {
+        return;
+      }
       Object.assign(existing, request);
     } else {
       space.outgoing.push(request);
     }
     const record = existing ?? request;
-    if (record.status === 'failed') {
+    if (record.status === 'failed' || record.status === 'replied') {
       record.unread = true;
     }
     return;

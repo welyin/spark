@@ -36,3 +36,40 @@ fn sanitize_drops_invalid() {
     let (n, a) = sanitize_profile(None, None);
     assert!(n.is_none() && a.is_none());
 }
+
+#[test]
+fn legacy_json_without_extra_fields_parses() {
+    use spark_core::identity::file::{IdentityFile, IdentityPayload};
+
+    // F1 之前的旧身份文件：文件层无 gender/region/signature 字段，须可读且为 None
+    let old_file = r#"{
+        "version": 2,
+        "kdf": "scrypt",
+        "salt": "00",
+        "iv": "00",
+        "data": "00",
+        "authTag": "00",
+        "publicKeyHex": "ab",
+        "rootId": "cd",
+        "nickname": "旧用户",
+        "createdAt": 1,
+        "updatedAt": 2
+    }"#;
+    let file = IdentityFile::from_json(old_file).unwrap();
+    assert_eq!(file.gender, None);
+    assert_eq!(file.region, None);
+    assert_eq!(file.signature, None);
+
+    // 旧 payload 明文同样无扩展字段，须可反序列化且为 None
+    let old_payload = r#"{"mnemonic":"m","derivationPath":"p","version":2,"nickname":"旧用户"}"#;
+    let payload: IdentityPayload = serde_json::from_str(old_payload).unwrap();
+    assert_eq!(payload.gender, None);
+    assert_eq!(payload.region, None);
+    assert_eq!(payload.signature, None);
+
+    // None 字段不序列化（写回旧格式不引入新键）
+    let json = serde_json::to_string(&payload).unwrap();
+    assert!(!json.contains("gender"));
+    assert!(!json.contains("region"));
+    assert!(!json.contains("signature"));
+}

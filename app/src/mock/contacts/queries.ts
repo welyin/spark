@@ -57,12 +57,17 @@ export function addFriend(spaceKey: string, rootId: string, nickname: string): M
   return friend;
 }
 
-/** 删除朋友（设计 §5.5：保留为陌生人，即只删关系不清拉黑状态） */
-export function removeFriend(spaceKey: string, rootId: string): void {
+/** 删除朋友（设计 §5.5：保留为陌生人，即只删关系不清拉黑状态；block=true 时同时写入拉黑集合） */
+export function removeFriend(spaceKey: string, rootId: string, block = false): void {
   const space = contactsOf(spaceKey);
   space.friends = space.friends.filter((item) => item.rootId !== rootId);
+  // block=true：本地拉黑标记同步置位（内核侧已独立落拉黑集合；这里让水合前的
+  // 本地拉黑列表立即一致，与 setBlocked 同一存储位）
+  if (block) {
+    profileOf(spaceKey, rootId).blocked = true;
+  }
   contactsApi()
-    ?.removeFriend(rootId)
+    ?.removeFriend(rootId, block)
     .catch(() => {});
 }
 

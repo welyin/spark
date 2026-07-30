@@ -39,6 +39,12 @@ pub struct IdentityStatus {
     pub nickname: Option<String>,
     /// 当前身份头像 dataURL。
     pub avatar: Option<String>,
+    /// 当前身份性别（扩展字段，未设置为 `None`）。
+    pub gender: Option<String>,
+    /// 当前身份地区（扩展字段）。
+    pub region: Option<String>,
+    /// 当前身份个性签名（扩展字段）。
+    pub signature: Option<String>,
 }
 
 /// `IdentitySummary`（root-id.ts:304-311）：切换用户列表项。
@@ -56,6 +62,12 @@ pub struct IdentitySummary {
     pub nickname: Option<String>,
     /// 头像 dataURL（非 `data:image/` 前缀的非法值为 `None`）。
     pub avatar: Option<String>,
+    /// 性别（扩展字段，未设置为 `None`）。
+    pub gender: Option<String>,
+    /// 地区（扩展字段）。
+    pub region: Option<String>,
+    /// 个性签名（扩展字段）。
+    pub signature: Option<String>,
 }
 
 /// `initialize` 的返回：rootId 与明文助记词（仅此一次展示，供用户备份）。
@@ -80,6 +92,12 @@ pub struct PublicIdentity {
     pub nickname: Option<String>,
     /// 头像 dataURL。
     pub avatar: Option<String>,
+    /// 性别（扩展字段）。
+    pub gender: Option<String>,
+    /// 地区（扩展字段）。
+    pub region: Option<String>,
+    /// 个性签名（扩展字段）。
+    pub signature: Option<String>,
     /// 创建时间（ms）。
     #[serde(rename = "createdAt")]
     pub created_at: u64,
@@ -92,6 +110,12 @@ pub struct ProfileInfo {
     pub nickname: Option<String>,
     /// 头像 dataURL。
     pub avatar: Option<String>,
+    /// 性别（扩展字段，未设置为 `None`）。
+    pub gender: Option<String>,
+    /// 地区（扩展字段）。
+    pub region: Option<String>,
+    /// 个性签名（扩展字段）。
+    pub signature: Option<String>,
 }
 
 /// `sign` 的返回（TS `RootSignature`）。
@@ -347,6 +371,9 @@ impl Kernel {
             root_id,
             nickname: current.and_then(|item| item.nickname.clone()),
             avatar: current.and_then(|item| item.avatar.clone()),
+            gender: current.and_then(|item| item.gender.clone()),
+            region: current.and_then(|item| item.region.clone()),
+            signature: current.and_then(|item| item.signature.clone()),
         })
     }
 
@@ -382,6 +409,9 @@ impl Kernel {
                 avatar: file
                     .avatar
                     .filter(|a| a.starts_with(identity::file::AVATAR_PREFIX)),
+                gender: file.gender,
+                region: file.region,
+                signature: file.signature,
                 created_at: file.created_at,
                 root_id: file.root_id,
             });

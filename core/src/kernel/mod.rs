@@ -20,10 +20,11 @@
 //! 文档/数据治理/存证门面在 `doc_ops`，组织门面与同步编排包装在 `org_ops`，
 //! 副本概览在 `org_overview`，P2P/节点名片/组织地址门面在 `p2p_ops`，身份 API
 //! 在 `identity/`，组织同步编排（async worker）在 `org_sync/`，消息门面在
-//! `message_ops`（出站投递机器在 `dm_delivery`），通讯录门面在 `contact_ops`，
-//! dm 信封构造/校验在 `dm_envelope`，dm 入站编排在 `inbound_dm`（host.rs 的
-//! `handle_dm` 接线）。
+//! `message_ops`（出站投递机器在 `dm_delivery`），通讯录门面在 `contact_ops`
+//! （标签/分组树在 `contact_group_ops`），dm 信封构造/校验在
+//! `dm_envelope`，dm 入站编排在 `inbound_dm`（host.rs 的 `handle_dm` 接线）。
 
+mod contact_group_ops;
 mod contact_ops;
 mod dm_delivery;
 mod doc_ops;
@@ -52,7 +53,9 @@ pub use identity::{
     InitIdentityResult, MnemonicCheckInfo, ProfileInfo, PublicIdentity, RootSignatureInfo,
 };
 pub use inbound_dm::{AutoAccept, InboundDmError, InboundDmResult, handle_inbound_dm};
-pub use message_ops::{ChatMessageView, ConversationView, direct_conversation_id};
+pub use message_ops::{
+    ChatMessageView, ConversationView, direct_conversation_id, sanitize_link_preview,
+};
 pub use org_sync::{OrgReconcileStats, PeerOrgSyncResult};
 pub use p2p_ops::NodeCardImport;
 

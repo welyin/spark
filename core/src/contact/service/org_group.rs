@@ -117,6 +117,89 @@ impl ContactService {
         siblings.insert(insert_at, moved);
         write_json(storage, &key, &tree)
     }
+
+    /// 跨级拖拽移动（仅管理员）：把节点移动到新父级（`""` = 根层）下的指定
+    /// 位置（对齐 TS `moveOrgGroup`）。
+    ///
+    /// 错误口径与同级重排一致取「静默忽略」：源节点不存在、目标父不存在、
+    /// 或目标父是被移动节点自身/其子树（成环）时均不做任何改动返回 `Ok(())`
+    /// ——对应 TS `moveOrgGroup` 返回 false 的分支；前端本地树已完成同样的
+    /// 防环校验，内核侧兜底保持双写一致。
+    ///
+    /// 落点 `to_index` 语义与 `move_org_group_sibling` 一致（TS splice 语义：
+    /// 以移动前原序为准、越界夹紧到 [0, len]；同层移动且源在目标位之前时，
+    /// 摘除后目标索引前移一位）。
+    pub fn move_org_group<S: StorageBackend>(
+        storage: &mut S,
+        space: &str,
+        id: &str,
+        new_parent_id: &str,
+        to_index: usize,
+    ) -> Result<()> {
+        let org_id = require_org_space(space)?;
+        let key = org_tree_key(org_id);
+        let mut tree: Vec<OrgGroupNode> = read_vec(storage, &key)?;
+        // 源节点定位（不存在忽略）
+        let (from, node) = {
+            let Some(siblings) = find_siblings_mut(&mut tree, id) else {
+                return Ok(());
+            };
+            let from = siblings
+                .iter()
+                .position(|item| item.id == id)
+                .expect("siblings located by id");
+            (from, siblings[from].clone())
+        };
+        // 防环：目标父级落在被移动节点的子树（含自身）内 → 静默忽略
+        if !new_parent_id.is_empty() && collect_ids(&node).iter().any(|sub| sub == new_parent_id) {
+            return Ok(());
+        }
+        // 目标父级存在性预检（不存在忽略；先查再摘，避免摘除后无处回插）
+        if !new_parent_id.is_empty() && find_siblings_mut(&mut tree, new_parent_id).is_none() {
+            return Ok(());
+        }
+        // 同层移动判定（对齐 TS `targetSiblings === found.siblings`：源父级 == 新父级）
+        let same_level = parent_id_of(&tree, id).as_deref() == Some(new_parent_id);
+        // 摘除源节点
+        find_siblings_mut(&mut tree, id)
+            .expect("located above")
+            .remove(from);
+        // 同层且源在目标位之前时，摘除后目标索引前移一位
+        let index = if same_level && from < to_index {
+            to_index - 1
+        } else {
+            to_index
+        };
+        let target: &mut Vec<OrgGroupNode> = if new_parent_id.is_empty() {
+            &mut tree
+        } else {
+            let siblings = find_siblings_mut(&mut tree, new_parent_id).expect("located above");
+            &mut siblings
+                .iter_mut()
+                .find(|item| item.id == new_parent_id)
+                .expect("siblings located by parent_id")
+                .children
+        };
+        let clamped = index.min(target.len());
+        target.insert(clamped, node);
+        write_json(storage, &key, &tree)
+    }
+}
+
+/// 查找 id 的父级 id（根层节点返回 `Some("")`；不存在返回 `None`）。
+fn parent_id_of(tree: &[OrgGroupNode], id: &str) -> Option<String> {
+    fn walk(nodes: &[OrgGroupNode], id: &str, parent: &str) -> Option<String> {
+        for node in nodes {
+            if node.id == id {
+                return Some(parent.to_string());
+            }
+            if let Some(found) = walk(&node.children, id, &node.id) {
+                return Some(found);
+            }
+        }
+        None
+    }
+    walk(tree, id, "")
 }
 
 /// 子树（含自身）是否包含指定 id。

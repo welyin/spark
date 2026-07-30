@@ -170,8 +170,8 @@ export function moveOrgGroupSibling(spaceKey: string, id: string, toIndex: numbe
 /**
  * 跨级拖拽移动（仅管理员）：把节点移动到新父级（'' = 根层）下的指定位置。
  * 禁止移入自己或自己的子树（成环），命中时返回 false 不做任何改动。
- * TODO(mock): 桥接接口 orgGroupMove 目前只有 (spaceKey, id, toIndex)，不含新父级，
- * 待内核接口支持后把 newParentId 一并上传
+ * 桥接把 newParentId 一并上传（内核 contact_org_group_move 的 Some(parent)，
+ * '' = 根层）；内核侧同口径防环兜底，目标父不存在/成环时静默忽略。
  */
 export function moveOrgGroup(spaceKey: string, id: string, newParentId: string, toIndex: number): boolean {
   const space = contactsOf(spaceKey);
@@ -198,7 +198,9 @@ export function moveOrgGroup(spaceKey: string, id: string, newParentId: string, 
   const clamped = Math.max(0, Math.min(index, targetSiblings.length));
   targetSiblings.splice(clamped, 0, moved);
   contactsApi()
-    ?.orgGroupMove(spaceKey, id, clamped)
+    // 上传原序裸值 toIndex：同层前移调整由内核统一做（与 moveGroup/
+    // moveOrgGroupSibling 同口径），上传调整后的值会被二次前移
+    ?.orgGroupMove(spaceKey, id, toIndex, newParentId)
     .catch(() => {});
   return true;
 }

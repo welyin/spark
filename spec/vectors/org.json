@@ -457,7 +457,6 @@
         "orgId": "org_0123456789abcdef",
         "name": "星火组织",
         "description": "desc",
-        "basePluginDomain": "plugin:chat",
         "createdAt": 1699990000000,
         "createdBy": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "updatedAt": 1700000001000,
@@ -516,12 +515,12 @@
           "orgId": "org_0123456789abcdef",
           "name": "星火组织",
           "description": "desc",
-          "basePluginDomain": "plugin:chat",
           "createdAt": 1699990000000,
           "createdBy": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "updatedAt": 1700000001000,
           "memberCount": 2,
           "adminCount": 1,
+          "avatar": "",
           "metadata": {
             "recoverySecret": "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2",
             "customKey": "old"
@@ -532,7 +531,12 @@
             "rootId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "role": "admin",
             "joinedAt": 1699990000000,
-            "addedBy": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            "addedBy": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "nickname": "",
+            "avatar": "",
+            "signature": "",
+            "gender": "",
+            "region": ""
           },
           {
             "rootId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -544,7 +548,12 @@
               "addresses": [
                 "/ip4/9.9.9.9/tcp/15002/ws"
               ]
-            }
+            },
+            "nickname": "",
+            "avatar": "",
+            "signature": "",
+            "gender": "",
+            "region": ""
           }
         ],
         "transactions": [
@@ -571,7 +580,6 @@
         "orgId": "org_0123456789abcdef",
         "name": "星火组织",
         "description": "desc",
-        "basePluginDomain": "plugin:chat",
         "createdAt": 1699990000000,
         "createdBy": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "updatedAt": 1700000001000,
@@ -617,7 +625,6 @@
         "orgId": "org_0123456789abcdef",
         "name": "星火组织（新名）",
         "description": "desc",
-        "basePluginDomain": "plugin:chat",
         "createdAt": 1699990000000,
         "createdBy": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "updatedAt": 1700000002000,
@@ -652,7 +659,6 @@
         "orgId": "org_0123456789abcdef",
         "name": "星火组织（新名）",
         "description": "desc",
-        "basePluginDomain": "plugin:chat",
         "createdAt": 1699990000000,
         "createdBy": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "updatedAt": 1700000002000,

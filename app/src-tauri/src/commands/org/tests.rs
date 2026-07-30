@@ -20,10 +20,20 @@ fn unlocked_kernel() -> (tempfile::TempDir, Kernel) {
 fn input() -> CreateOrgInputDto {
     serde_json::from_value(serde_json::json!({
         "name": "测试组织",
-        "description": "demo",
-        "basePluginDomain": "plugin:base"
+        "description": "demo"
     }))
     .unwrap()
+}
+
+#[test]
+fn create_org_input_ignores_legacy_base_plugin_domain() {
+    // 兼容：旧前端可能仍传 basePluginDomain（无 deny_unknown_fields，静默忽略）
+    let input: CreateOrgInputDto = serde_json::from_value(serde_json::json!({
+        "name": "测试组织",
+        "basePluginDomain": "plugin:base"
+    }))
+    .unwrap();
+    assert_eq!(input.name, "测试组织");
 }
 
 #[test]
@@ -267,5 +277,116 @@ fn accept_invite_error_paths() {        let (_dir, mut kernel) = unlocked_kernel
     assert_eq!(
         accept_invite_inner(&mut kernel, &code).unwrap_err(),
         "P2P 网络未启动，无法通过邀请码加入"
+    );
+}
+
+// ------------------------------------------------------------------
+// 命令层 patch 语义：org_update_info avatar 三态 / org_update_my_identity
+// ------------------------------------------------------------------
+
+const CMD_AVATAR: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==";
+
+#[test]
+fn update_info_avatar_patch_semantics() {
+    let (_dir, mut kernel) = unlocked_kernel();
+    let view = create_inner(&mut kernel, input()).unwrap();
+    let org_id = view.record.org_id.clone();
+
+    // None = 不变
+    let view = update_info_inner(&mut kernel, &org_id, None, None, None).unwrap();
+    assert!(view.record.avatar.is_empty());
+
+    // Some(非空) = 设置
+    let view = update_info_inner(
+        &mut kernel,
+        &org_id,
+        None,
+        None,
+        Some(CMD_AVATAR.to_string()),
+    )
+    .unwrap();
+    assert_eq!(view.record.avatar, CMD_AVATAR);
+
+    // 非法值拒绝
+    assert!(
+        update_info_inner(
+            &mut kernel,
+            &org_id,
+            None,
+            None,
+            Some("https://x.png".to_string())
+        )
+        .is_err()
+    );
+
+    // Some("") = 清除（内核 settings 口径：空串 = 清除 logo，命令层直传）
+    let view = update_info_inner(&mut kernel, &org_id, None, None, Some("".to_string())).unwrap();
+    assert!(view.record.avatar.is_empty());
+}
+
+#[test]
+fn update_my_identity_patch_semantics() {
+    let (_dir, mut kernel) = unlocked_kernel();
+    let view = create_inner(&mut kernel, input()).unwrap();
+    let org_id = view.record.org_id.clone();
+    let self_root = kernel.current_root_id().unwrap().unwrap();
+
+    // 全字段设置（avatar 三态映射与命令壳同口径走 avatar_patch）
+    let view = update_my_identity_inner(
+        &mut kernel,
+        &org_id,
+        &OrgIdentityPatch {
+            nickname: Some("小火".to_string()),
+            avatar: avatar_patch(Some(CMD_AVATAR.to_string())),
+            gender: Some("女".to_string()),
+            region: Some("杭州".to_string()),
+            signature: Some("保持热爱".to_string()),
+            use_personal_identity: Some(true),
+        },
+    )
+    .unwrap();
+    let me = view.members.iter().find(|m| m.root_id == self_root).unwrap();
+    assert_eq!(me.nickname.as_deref(), Some("小火"));
+    assert_eq!(me.avatar.as_deref(), Some(CMD_AVATAR));
+    assert_eq!(me.gender.as_deref(), Some("女"));
+    assert_eq!(me.region.as_deref(), Some("杭州"));
+    assert_eq!(me.signature.as_deref(), Some("保持热爱"));
+    assert_eq!(me.use_personal_identity, Some(true));
+
+    // 缺省字段不变 + avatar Some("") 清除 + signature 空串清除
+    let view = update_my_identity_inner(
+        &mut kernel,
+        &org_id,
+        &OrgIdentityPatch {
+            nickname: None,
+            avatar: avatar_patch(Some("".to_string())),
+            gender: None,
+            region: None,
+            signature: Some("".to_string()),
+            use_personal_identity: None,
+        },
+    )
+    .unwrap();
+    let me = view.members.iter().find(|m| m.root_id == self_root).unwrap();
+    assert_eq!(me.nickname.as_deref(), Some("小火"), "缺省不变");
+    assert_eq!(me.avatar, None, "空串清除（B1：IPC 边界清除以空串表达）");
+    assert_eq!(me.signature, None, "空串清除");
+    assert_eq!(me.use_personal_identity, Some(true), "缺省不变");
+
+    // 昵称超长拒绝
+    assert!(
+        update_my_identity_inner(
+            &mut kernel,
+            &org_id,
+            &OrgIdentityPatch {
+                nickname: Some("啊".repeat(25)),
+                avatar: None,
+                gender: None,
+                region: None,
+                signature: None,
+                use_personal_identity: None,
+            },
+        )
+        .is_err()
     );
 }

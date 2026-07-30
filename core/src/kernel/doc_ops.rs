@@ -13,14 +13,14 @@ use super::{Kernel, KernelError, Result};
 use crate::collection::{CollectionConfig, DocumentCollection, QueryOptions, QueryResult};
 use crate::data_mgmt::service::ReplicaStatus;
 use crate::data_mgmt::{
-    AutoCleanupResult, DataUsageReport, ExportWriteResult, PurgePreview, PurgeResult,
-    write_export_dump,
+    AutoCleanupResult, DataMgmtError, DataUsageReport, ExportWriteResult, PurgePreview,
+    PurgeResult, write_export_dump,
 };
 use crate::evidence::{
     EvidenceEntry, get_evidence_entry, get_evidence_head_hash, get_evidence_height,
     verify_evidence_chain,
 };
-use crate::org::{OrgSyncOverview, OrganizationView};
+use crate::org::{OrgSyncOverview, OrganizationView, collect_org_plugin_domains};
 use crate::p2p::constants::SYNC_TOPIC;
 use crate::p2p::node::system_now_ms;
 use crate::p2p::{P2pEvent, build_delete_body, build_update_body};
@@ -33,7 +33,7 @@ use crate::schema::{
 pub struct PurgePreviewInfo {
     /// 组织 id。
     pub org_id: String,
-    /// 组织基础插件域。
+    /// 扫描定位的组织数据域（`doc:plugin:` 键反推；无插件文档时为 `""`）。
     pub domain: String,
     /// 清理阈值时间戳（ms）。
     pub before_ts: i64,
@@ -222,7 +222,13 @@ impl Kernel {
         )?)
     }
 
-    /// 解析目标组织（ipc/data.ts `resolveOrg`）：必须存在且带基础插件域。
+    /// 解析目标组织（ipc/data.ts `resolveOrg` 的组织查找部分）：必须存在。
+    ///
+    /// 数据域定位：组织记录已无 `basePluginDomain` 字段，改为扫描存储的
+    /// `doc:plugin:` 键，收集 `payload.orgId` 命中该组织的插件域——
+    /// 0 个 → 返回 `""`（preview 展示空、affectedDocs=0，前端自然拦截 execute）；
+    /// 1 个 → 用之；多个 → 取第一个（扫描键升序，结果确定），保持单 domain
+    /// 语义（前端只显示一个；purge 按单 domain 执行）。
     fn resolve_org(&self, org_id: &str) -> Result<(OrganizationView, String)> {
         let view = self
             .list_orgs()?
@@ -231,23 +237,36 @@ impl Kernel {
             .ok_or_else(|| {
                 KernelError::Internal("Organization not found or not a member".to_string())
             })?;
-        let domain = view.record.base_plugin_domain.clone();
-        if domain.is_empty() {
-            return Err(KernelError::Internal(format!(
-                "Organization {org_id} has no base plugin domain; cannot locate its data domain"
-            )));
-        }
+        let domain = collect_org_plugin_domains(self.require_storage()?, org_id)?
+            .into_iter()
+            .next()
+            .unwrap_or_default();
         Ok((view, domain))
     }
 
     /// purge 预览（不鉴权管理员，对齐 TS；管理员标记随结果返回供壳层判断）。
     pub fn preview_purge(&self, org_id: &str, before_ts: i64) -> Result<PurgePreviewInfo> {
         let (view, domain) = self.resolve_org(org_id)?;
-        let preview = self
-            .data_mgmt
-            .as_ref()
-            .ok_or(KernelError::StorageNotReady)?
-            .preview_purge(self.require_storage()?, &domain, before_ts)?;
+        // before_ts 校验先于空域短路：有域路径由 data-mgmt 校验（purge.rs
+        // select_expired_metas，同口径 `before_ts <= 0`），空域路径不下到
+        // data-mgmt，在此复用同一错误补齐校验，保持两条路径行为一致
+        if before_ts <= 0 {
+            return Err(DataMgmtError::InvalidBeforeTs.into());
+        }
+        // 扫描不到插件文档（domain 为 ""）→ 直接返回空影响面：前端展示空、
+        // affectedDocs=0 自然拦截 execute；不下到 data-mgmt（其拒绝非插件域）
+        let preview = if domain.is_empty() {
+            PurgePreview {
+                collections: Vec::new(),
+                affected_docs: 0,
+                affected_bytes: 0,
+            }
+        } else {
+            self.data_mgmt
+                .as_ref()
+                .ok_or(KernelError::StorageNotReady)?
+                .preview_purge(self.require_storage()?, &domain, before_ts)?
+        };
         let replica = if self.p2p.is_some() {
             Some(self.org_overview(org_id)?)
         } else {

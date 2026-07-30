@@ -97,7 +97,7 @@ fn update_profile_blocked_remove_friend() {
     assert_eq!(friend.memo, "备忘");
     assert!(friend.blocked);
 
-    kernel.contact_remove_friend(&root_id).unwrap();
+    kernel.contact_remove_friend(&root_id, false).unwrap();
     assert!(ContactService::get_friend(&storage, &root_id).unwrap().is_none());
 
     // 删除后再改资料报 ContactNotFound
@@ -184,6 +184,8 @@ fn resolve_request_accept_creates_friend() {
                 peer_id: "peer-1".to_string(),
                 addresses: vec!["/ip4/1.2.3.4/tcp/9000".to_string()],
             }),
+            thread: Vec::new(),
+            invite_code: None,
         },
     )
     .unwrap();
@@ -396,6 +398,8 @@ fn send_request_retry_reuses_stored_record() {
                 peer_id: "peer-1".to_string(),
                 addresses: vec!["/ip4/1.2.3.4/tcp/9000".to_string()],
             }),
+            thread: Vec::new(),
+            invite_code: None,
         },
     )
     .unwrap();
@@ -476,7 +480,9 @@ fn overview_contains_self_and_refreshes_nickname() {
     let added_at = me.added_at;
 
     // 改名后再次 overview：nickname 刷新、addedAt 保留首次创建时间
-    kernel.update_profile_session(Some("新名字"), None).unwrap();
+    kernel
+        .update_profile_session(Some("新名字"), None, None, None, None)
+        .unwrap();
     let view = kernel.contact_overview(PERSONAL).unwrap();
     let me = view.friends.iter().find(|f| f.root_id == root_id).unwrap();
     assert_eq!(me.nickname, "新名字");
@@ -499,7 +505,7 @@ fn self_blocked_and_remove_rejected() {
         .contact_set_blocked(PERSONAL, &root_id, true)
         .unwrap_err();
     assert_eq!(err.to_string(), "不能拉黑自己");
-    let err = kernel.contact_remove_friend(&root_id).unwrap_err();
+    let err = kernel.contact_remove_friend(&root_id, false).unwrap_err();
     assert_eq!(err.to_string(), "不能删除自己");
 
     // 自己条目仍在
@@ -560,6 +566,8 @@ fn resolve_request_accept_merges_existing_friend() {
                 peer_id: "peer-1".to_string(),
                 addresses: vec!["/ip4/1.2.3.4/tcp/9000".to_string()],
             }),
+            thread: Vec::new(),
+            invite_code: None,
         },
     )
     .unwrap();
@@ -592,9 +600,37 @@ fn blocked_stranger_and_blocked_survives_remove_friend() {
     // 加成朋友后删除：拉黑仍生效；overview 以集合为准
     ContactService::upsert_friend(&mut kernel.__test_storage().unwrap(), &friend_record(&peer_root))
         .unwrap();
-    kernel.contact_remove_friend(&peer_root).unwrap();
+    kernel.contact_remove_friend(&peer_root, false).unwrap();
     assert!(
         ContactService::is_blocked(&storage, &peer_root).unwrap(),
         "删除朋友后拉黑仍生效"
     );
+}
+
+#[test]
+fn remove_friend_with_block_writes_blocked_set() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut kernel = fresh_kernel(dir.path());
+    init_identity(&mut kernel);
+    kernel.stop_p2p().unwrap();
+    let peer_root = "dd".repeat(32);
+    ContactService::upsert_friend(&mut kernel.__test_storage().unwrap(), &friend_record(&peer_root))
+        .unwrap();
+
+    // 删除 + 同时拉黑（§5.5）：friend 记录删除、拉黑集合写入
+    kernel.contact_remove_friend(&peer_root, true).unwrap();
+    let storage = kernel.__test_storage().unwrap();
+    assert!(ContactService::get_friend(&storage, &peer_root).unwrap().is_none());
+    assert!(ContactService::is_blocked(&storage, &peer_root).unwrap());
+
+    // overview：friends 不含该人（仅剩自己条目）
+    let view = kernel.contact_overview(PERSONAL).unwrap();
+    assert!(view.friends.iter().all(|f| f.root_id != peer_root));
+
+    // 重新加回朋友：overview 的 blocked 以拉黑集合为准 overlay
+    ContactService::upsert_friend(&mut kernel.__test_storage().unwrap(), &friend_record(&peer_root))
+        .unwrap();
+    let view = kernel.contact_overview(PERSONAL).unwrap();
+    let friend = view.friends.iter().find(|f| f.root_id == peer_root).unwrap();
+    assert!(friend.blocked, "重新加回后仍以拉黑集合为准");
 }

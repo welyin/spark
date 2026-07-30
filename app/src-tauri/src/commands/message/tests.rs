@@ -73,7 +73,7 @@ fn send_text_persists_failed_without_p2p() {
     let conv = ensure_direct_inner(&mut kernel, PERSONAL, &peer, "Bob").unwrap();
 
     // p2p 未启动 → 落库且 status=failed；视图层 senderId/senderName 映射 me/我
-    let view = send_text_inner(&mut kernel, PERSONAL, &conv.id, "msg_001", "你好", None).unwrap();
+    let view = send_text_inner(&mut kernel, PERSONAL, &conv.id, "msg_001", "你好", None, None).unwrap();
     assert_eq!(view.id, "msg_001");
     assert_eq!(view.sender_id, "me");
     assert_eq!(view.sender_name, "我");
@@ -94,9 +94,30 @@ fn send_text_persists_failed_without_p2p() {
     }))
     .unwrap();
     let view =
-        send_text_inner(&mut kernel, PERSONAL, &conv.id, "msg_002", "引用回复", Some(quote))
+        send_text_inner(&mut kernel, PERSONAL, &conv.id, "msg_002", "引用回复", Some(quote), None)
             .unwrap();
     assert_eq!(view.quote.as_ref().unwrap().message_id, "msg_001");
+
+    // 链接预览透传落库（抓取在壳层，见 link_preview.rs）
+    let link: spark_core::message::LinkPreview = serde_json::from_value(serde_json::json!({
+        "url": "https://github.com/spark",
+        "title": "Spark",
+        "description": "",
+        "siteName": "GitHub",
+        "domain": "github.com"
+    }))
+    .unwrap();
+    let view = send_text_inner(
+        &mut kernel,
+        PERSONAL,
+        &conv.id,
+        "msg_004",
+        "看 https://github.com/spark",
+        None,
+        Some(link.clone()),
+    )
+    .unwrap();
+    assert_eq!(view.link, Some(link));
 
     // resend：failed 可重发，p2p 未启动仍 failed
     let view = resend_inner(&mut kernel, PERSONAL, &conv.id, "msg_001").unwrap();
@@ -116,7 +137,7 @@ fn recall_window_semantics() {
     let conv = ensure_direct_inner(&mut kernel, PERSONAL, &peer, "Bob").unwrap();
 
     // 窗口内：撤回成功，视图 recalled=true
-    let view = send_text_inner(&mut kernel, PERSONAL, &conv.id, "msg_001", "撤回我", None).unwrap();
+    let view = send_text_inner(&mut kernel, PERSONAL, &conv.id, "msg_001", "撤回我", None, None).unwrap();
     assert!(!view.recalled);
     assert!(recall_inner(&mut kernel, PERSONAL, &conv.id, "msg_001")
         .unwrap()
@@ -146,7 +167,7 @@ fn mark_read_clear_delete_conversation_flow() {
     let (_dir, mut kernel) = unlocked_kernel();
     let peer = peer_id();
     let conv = ensure_direct_inner(&mut kernel, PERSONAL, &peer, "Bob").unwrap();
-    send_text_inner(&mut kernel, PERSONAL, &conv.id, "msg_001", "hi", None).unwrap();
+    send_text_inner(&mut kernel, PERSONAL, &conv.id, "msg_001", "hi", None, None).unwrap();
 
     // 手动置未读 → mark_read 清零
     let mut storage = kernel.__test_storage().unwrap();
@@ -174,7 +195,7 @@ fn mark_read_clear_delete_conversation_flow() {
     assert!(list_messages_inner(&kernel, PERSONAL, &conv.id).unwrap().is_empty());
 
     // clear：清空消息保留会话入口
-    send_text_inner(&mut kernel, PERSONAL, &conv.id, "msg_002", "again", None).unwrap();
+    send_text_inner(&mut kernel, PERSONAL, &conv.id, "msg_002", "again", None, None).unwrap();
     assert!(clear_inner(&mut kernel, PERSONAL, &conv.id).unwrap().success);
     assert!(list_messages_inner(&kernel, PERSONAL, &conv.id).unwrap().is_empty());
     assert_eq!(list_conversations_inner(&kernel, PERSONAL).unwrap().len(), 1);
@@ -243,7 +264,7 @@ fn send_text_to_self_delivered_and_online() {
 
     // 无 p2p、无配对设备：本机副本天然送达，status 直接 delivered
     let view =
-        send_text_inner(&mut kernel, PERSONAL, &conv.id, "msg_self_1", "同步到各设备", None)
+        send_text_inner(&mut kernel, PERSONAL, &conv.id, "msg_self_1", "同步到各设备", None, None)
             .unwrap();
     assert_eq!(view.sender_id, "me");
     assert_eq!(view.status.as_deref(), Some("delivered"));

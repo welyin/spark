@@ -75,11 +75,13 @@ fn identity_full_lifecycle() {
     assert_eq!(err.to_string(), "Invalid password");
 
     // 更新资料
-    let profile = kernel.update_profile(PASSWORD, Some("小红"), None).unwrap();
+    let profile = kernel
+        .update_profile(PASSWORD, Some("小红"), None, None, None, None)
+        .unwrap();
     assert_eq!(profile.nickname.as_deref(), Some("小红"));
     assert_eq!(kernel.status().unwrap().nickname.as_deref(), Some("小红"));
     let err = kernel
-        .update_profile("wrong-password", Some("x"), None)
+        .update_profile("wrong-password", Some("x"), None, None, None, None)
         .unwrap_err();
     assert!(matches!(err, KernelError::InvalidPassword));
 
@@ -274,7 +276,7 @@ fn update_profile_session_flow() {
     // 无会话（未解锁）→ Locked
     assert_eq!(
         kernel
-            .update_profile_session(Some("x"), None)
+            .update_profile_session(Some("x"), None, None, None, None)
             .unwrap_err()
             .to_string(),
         "Root identity is locked"
@@ -285,7 +287,7 @@ fn update_profile_session_flow() {
 
     // 会话版：免密码改昵称 + 设头像
     let profile = kernel
-        .update_profile_session(Some("  小明二号  "), Some(Some(avatar)))
+        .update_profile_session(Some("  小明二号  "), Some(Some(avatar)), None, None, None)
         .unwrap();
     assert_eq!(profile.nickname.as_deref(), Some("小明二号"));
     assert_eq!(profile.avatar.as_deref(), Some(avatar));
@@ -294,14 +296,16 @@ fn update_profile_session_flow() {
     assert_eq!(status.avatar.as_deref(), Some(avatar));
 
     // 清头像（恢复自动头像）；昵称不变
-    let profile = kernel.update_profile_session(None, Some(None)).unwrap();
+    let profile = kernel
+        .update_profile_session(None, Some(None), None, None, None)
+        .unwrap();
     assert_eq!(profile.nickname.as_deref(), Some("小明二号"));
     assert_eq!(profile.avatar, None);
 
     // 非法昵称报错
     assert!(
         kernel
-            .update_profile_session(Some(&"长".repeat(25)), None)
+            .update_profile_session(Some(&"长".repeat(25)), None, None, None, None)
             .is_err()
     );
 
@@ -309,7 +313,7 @@ fn update_profile_session_flow() {
     kernel.lock();
     assert_eq!(
         kernel
-            .update_profile_session(Some("x"), None)
+            .update_profile_session(Some("x"), None, None, None, None)
             .unwrap_err()
             .to_string(),
         "Root identity is locked"
@@ -322,4 +326,104 @@ fn update_profile_session_flow() {
     assert_eq!(kernel.reveal_mnemonic(PASSWORD).unwrap(), mnemonic);
     let _ = root_id;
     kernel.shutdown().unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// 资料扩展字段（性别/地区/签名）：patch 语义 + 视图回读 + 重启持久
+// ---------------------------------------------------------------------------
+
+#[test]
+fn update_profile_extra_fields_flow() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut kernel = fresh_kernel(dir.path());
+    let (_root_id, _mnemonic) = init_identity(&mut kernel);
+
+    // 初始：三字段均未设置
+    let status = kernel.status().unwrap();
+    assert_eq!(status.gender, None);
+    assert_eq!(status.region, None);
+    assert_eq!(status.signature, None);
+
+    // 设置扩展字段；昵称/头像不变
+    let profile = kernel
+        .update_profile_session(None, None, Some("女"), Some("杭州"), Some("保持热爱"))
+        .unwrap();
+    assert_eq!(profile.gender.as_deref(), Some("女"));
+    assert_eq!(profile.region.as_deref(), Some("杭州"));
+    assert_eq!(profile.signature.as_deref(), Some("保持热爱"));
+    assert_eq!(profile.nickname.as_deref(), Some("小明"));
+
+    // 部分补丁：只改签名，性别/地区不变
+    let profile = kernel
+        .update_profile_session(None, None, None, None, Some("奔赴山海"))
+        .unwrap();
+    assert_eq!(profile.gender.as_deref(), Some("女"));
+    assert_eq!(profile.region.as_deref(), Some("杭州"));
+    assert_eq!(profile.signature.as_deref(), Some("奔赴山海"));
+
+    // 空串 = 清除（对齐前端 '' = 未设置）
+    let profile = kernel
+        .update_profile_session(None, None, Some(""), None, None)
+        .unwrap();
+    assert_eq!(profile.gender, None);
+    assert_eq!(profile.region.as_deref(), Some("杭州"));
+
+    // 视图回读：status / current_identity / list_identities 一致
+    let status = kernel.status().unwrap();
+    assert_eq!(status.gender, None);
+    assert_eq!(status.region.as_deref(), Some("杭州"));
+    assert_eq!(status.signature.as_deref(), Some("奔赴山海"));
+    let public = kernel.current_identity().unwrap().expect("unlocked");
+    assert_eq!(public.region.as_deref(), Some("杭州"));
+    assert_eq!(public.signature.as_deref(), Some("奔赴山海"));
+    let list = kernel.list_identities().unwrap();
+    assert_eq!(list[0].region.as_deref(), Some("杭州"));
+    assert_eq!(list[0].signature.as_deref(), Some("奔赴山海"));
+
+    kernel.shutdown().unwrap();
+
+    // 重启后（未解锁，仅活动指针）：status 仍能读出扩展字段（文件层落盘）
+    let kernel = fresh_kernel(dir.path());
+    let status = kernel.status().unwrap();
+    assert!(!status.unlocked);
+    assert_eq!(status.region.as_deref(), Some("杭州"));
+    assert_eq!(status.signature.as_deref(), Some("奔赴山海"));
+}
+
+#[test]
+fn update_profile_extra_fields_whitespace_clear_and_length_caps() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut kernel = fresh_kernel(dir.path());
+    init_identity(&mut kernel);
+
+    kernel
+        .update_profile_session(None, None, Some("女"), Some("杭州"), Some("签名"))
+        .unwrap();
+    // 全空白 = 清除（与 Some("") 同口径）
+    let profile = kernel
+        .update_profile_session(None, None, Some("   "), None, None)
+        .unwrap();
+    assert_eq!(profile.gender, None);
+
+    // 字符数上限（超出拒绝且不破坏原值）
+    let long_region = "杭".repeat(65);
+    let err = kernel
+        .update_profile_session(None, None, None, Some(&long_region), None)
+        .unwrap_err();
+    assert!(err.to_string().contains("region too long"));
+    let profile = kernel
+        .update_profile_session(None, None, None, Some(&"杭".repeat(64)), None)
+        .unwrap();
+    assert_eq!(profile.region.as_deref(), Some("杭".repeat(64).as_str()));
+
+    let long_signature = "签".repeat(129);
+    let err = kernel
+        .update_profile_session(None, None, None, None, Some(&long_signature))
+        .unwrap_err();
+    assert!(err.to_string().contains("signature too long"));
+    let long_gender = "性".repeat(17);
+    let err = kernel
+        .update_profile_session(None, None, Some(&long_gender), None, None)
+        .unwrap_err();
+    assert!(err.to_string().contains("gender too long"));
 }

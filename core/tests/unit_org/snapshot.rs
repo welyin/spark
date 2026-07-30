@@ -20,7 +20,7 @@ fn member(root: char, role: OrganizationRole, joined: i64) -> OrganizationMember
         joined_at: joined,
         added_by: rid('z'),
         node_info: None,
-        extra: Default::default(),
+        ..Default::default()
     }
 }
 
@@ -398,4 +398,175 @@ fn normalize_rejects_garbage() {
     assert!(normalize_incoming_snapshot(&Value::Null).is_err());
     assert!(normalize_incoming_snapshot(&serde_json::json!({"foo": 1})).is_err());
     assert!(normalize_incoming_snapshot(&serde_json::json!("str")).is_err());
+}
+
+// ---------------------------------------------------------------------------
+// 成员身份字段（M1 显式墓碑）：快照流动/清除传播/入站校验/旧线形兼容
+// ---------------------------------------------------------------------------
+
+const ORG_AVATAR: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==";
+
+#[test]
+fn snapshot_member_identity_fields_flow() {
+    let mut record = sample_record();
+    record.members[0].nickname = Some("管理员小A".to_string());
+    record.members[0].signature = Some("保持热爱".to_string());
+    record.members[0].use_personal_identity = Some(true);
+
+    // 构建：members 段带身份字段（M1：未设置的身份字符串字段上线为 ""）
+    let snapshot = build_organization_sync_snapshot(&record, &[]);
+    assert_eq!(snapshot.members[0].nickname.as_deref(), Some("管理员小A"));
+    assert_eq!(snapshot.members[0].use_personal_identity, Some(true));
+    assert_eq!(snapshot.members[0].avatar.as_deref(), Some(""), "未设置 → 显式空串上线");
+    assert_eq!(snapshot.members[1].nickname.as_deref(), Some(""));
+
+    // 合并：incoming 覆盖、键缺失（None）保留 existing
+    let existing = merge_organization_sync_snapshot(None, &snapshot, 5000);
+    let mut incoming = build_organization_sync_snapshot(&record, &[]);
+    incoming.members[0].nickname = None; // 旧对端未携带
+    incoming.members[0].signature = Some("奔赴山海".to_string()); // 覆盖
+    incoming.members[0].use_personal_identity = None; // 旧对端未携带
+    let merged = merge_organization_sync_snapshot(Some(&existing), &incoming, 6000);
+    let member = &merged.members[0];
+    assert_eq!(
+        member.nickname.as_deref(),
+        Some("管理员小A"),
+        "incoming 为 None（键缺失）时保留 existing"
+    );
+    assert_eq!(
+        member.signature.as_deref(),
+        Some("奔赴山海"),
+        "incoming 携带时覆盖"
+    );
+    assert_eq!(
+        member.use_personal_identity,
+        Some(true),
+        "incoming 未携带 usePersonalIdentity 时保留 existing"
+    );
+}
+
+#[test]
+fn snapshot_identity_clear_propagates_via_tombstone() {
+    // M1 墓碑：A 清除身份字段 → 快照携带 "" → B 合并后为 None（不被本地旧值复活）
+    let mut record_a = sample_record();
+    record_a.members[0].nickname = Some("旧昵称".to_string());
+    record_a.members[0].avatar = Some(ORG_AVATAR.to_string());
+    record_a.members[0].signature = Some("保持热爱".to_string());
+    record_a.members[0].gender = Some("女".to_string());
+    record_a.members[0].region = Some("杭州".to_string());
+    record_a.members[0].use_personal_identity = Some(true);
+    let existing = merge_organization_sync_snapshot(
+        None,
+        &build_organization_sync_snapshot(&record_a, &[]),
+        5000,
+    );
+    assert_eq!(existing.members[0].nickname.as_deref(), Some("旧昵称"));
+
+    // A 清除全部身份字段并关闭 usePersonalIdentity：本地记录为 None / Some(false)
+    let mut record_cleared = record_a.clone();
+    record_cleared.members[0].nickname = None;
+    record_cleared.members[0].avatar = None;
+    record_cleared.members[0].signature = None;
+    record_cleared.members[0].gender = None;
+    record_cleared.members[0].region = None;
+    record_cleared.members[0].use_personal_identity = Some(false);
+    let snapshot = build_organization_sync_snapshot(&record_cleared, &[]);
+    // 上线线形：字符串字段为显式 ""，usePersonalIdentity 为 Some(false)
+    assert_eq!(snapshot.members[0].nickname.as_deref(), Some(""));
+    assert_eq!(snapshot.members[0].use_personal_identity, Some(false));
+
+    let merged = merge_organization_sync_snapshot(Some(&existing), &snapshot, 6000);
+    let member = &merged.members[0];
+    assert_eq!(member.nickname, None, "清除可传播：'' → None");
+    assert_eq!(member.avatar, None);
+    assert_eq!(member.signature, None);
+    assert_eq!(member.gender, None);
+    assert_eq!(member.region, None);
+    assert_eq!(
+        member.use_personal_identity,
+        Some(false),
+        "true→false 可传播"
+    );
+}
+
+#[test]
+fn snapshot_merge_rejects_invalid_member_avatar_and_keeps_existing() {
+    // 入站校验（R1 review m3）：快照 serve 方是组织成员（内部威胁面）——
+    // 非 data:image / 超 200KB 的成员 avatar 不采用（保留 existing），
+    // 与本地写路径 validate_avatar 同口径
+    let mut record = sample_record();
+    record.members[0].avatar = Some(ORG_AVATAR.to_string());
+    let existing = merge_organization_sync_snapshot(
+        None,
+        &build_organization_sync_snapshot(&record, &[]),
+        5000,
+    );
+
+    let mut snapshot = build_organization_sync_snapshot(&record, &[]);
+    snapshot.members[0].avatar = Some("data:text/html;base64,PHNjcmlwdA==".to_string());
+    snapshot.members[1].avatar = Some(format!("data:image/png;base64,{}", "A".repeat(300_000)));
+    let merged = merge_organization_sync_snapshot(Some(&existing), &snapshot, 6000);
+    assert_eq!(
+        merged.members[0].avatar.as_deref(),
+        Some(ORG_AVATAR),
+        "成员 avatar 非法值忽略，保留 existing"
+    );
+    assert_eq!(
+        merged.members[1].avatar, None,
+        "超大 avatar 忽略（existing 本就无）"
+    );
+}
+
+#[test]
+fn legacy_record_and_snapshot_without_identity_fields() {
+    // 旧记录：无 avatar、成员无身份字段 → serde default 兼容
+    let record: OrganizationRecord = serde_json::from_value(serde_json::json!({
+        "orgId": "org_0123456789abcdef",
+        "name": "星火",
+        "createdAt": 1000,
+        "createdBy": rid('a'),
+        "updatedAt": 2000,
+        "members": [{
+            "rootId": rid('a'),
+            "role": "admin",
+            "joinedAt": 1000,
+            "addedBy": rid('a')
+        }]
+    }))
+    .unwrap();
+    assert_eq!(record.avatar, "", "旧记录缺省 avatar 为空串");
+    assert_eq!(record.members[0].nickname, None);
+    assert_eq!(record.members[0].use_personal_identity, None);
+
+    // 旧对端快照：summary 无 avatar、members 无身份字段（线形兼容）——
+    // 反序列化为 None 后合并，保留 existing 的身份字段
+    let mut with_identity = record.clone();
+    with_identity.avatar = ORG_AVATAR.to_string();
+    with_identity.members[0].nickname = Some("旧昵称".to_string());
+    with_identity.members[0].use_personal_identity = Some(true);
+
+    let mut value = serde_json::to_value(build_organization_sync_snapshot(&record, &[])).unwrap();
+    value["summary"].as_object_mut().unwrap().remove("avatar");
+    for member in value["members"].as_array_mut().unwrap() {
+        let obj = member.as_object_mut().unwrap();
+        for key in [
+            "nickname",
+            "avatar",
+            "signature",
+            "gender",
+            "region",
+            "usePersonalIdentity",
+        ] {
+            obj.remove(key);
+        }
+    }
+    let legacy_snapshot: OrganizationSyncSnapshot = serde_json::from_value(value).unwrap();
+    assert_eq!(legacy_snapshot.summary.avatar, None);
+    assert_eq!(legacy_snapshot.members[0].nickname, None);
+    assert_eq!(legacy_snapshot.members[0].use_personal_identity, None);
+
+    let merged = merge_organization_sync_snapshot(Some(&with_identity), &legacy_snapshot, 7000);
+    assert_eq!(merged.avatar, ORG_AVATAR, "缺省 avatar 保留 existing");
+    assert_eq!(merged.members[0].nickname.as_deref(), Some("旧昵称"));
+    assert_eq!(merged.members[0].use_personal_identity, Some(true));
 }

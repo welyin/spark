@@ -45,7 +45,6 @@ export interface PluginRuntimeAPI {
     orgId: string;
     name: string;
     description: string;
-    basePluginDomain?: string;
     currentUserRole: 'admin' | 'member' | null;
     isCurrentUserAdmin: boolean;
     memberCount: number;

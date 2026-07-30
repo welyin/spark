@@ -4,6 +4,7 @@
 use super::*;
 
 use spark_core::org::OrgError;
+use spark_core::org::service::OrgIdentityPatch;
 use spark_core::org::tx::OrganizationTransactionType;
 use spark_core::org::types::{
     OrganizationMember, OrganizationNodeInfo, OrganizationRecord, OrganizationRole,
@@ -160,7 +161,7 @@ fn list_mine_filters_and_sorts() {
         joined_at: NOW,
         added_by: rid('z'),
         node_info: None,
-        extra: Default::default(),
+        ..Default::default()
     });
     OrganizationService::save_record(&mut storage, &other).unwrap();
 
@@ -199,4 +200,161 @@ fn sync_recipients_filters() {
     let recipients = OrganizationService::sync_recipients(&record, &admin);
     assert_eq!(recipients.len(), 1, "排除 actor 与无 nodeInfo 成员");
     assert_eq!(recipients[0].root_id, with_peer);
+}
+
+// ------------------------------------------------------------------
+// updateMyIdentity：成员身份 patch（仅本人可改、校验、幂等、清除语义）
+// ------------------------------------------------------------------
+
+const IDENTITY_AVATAR: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==";
+
+fn setup_two_member_org(storage: &mut MemoryStorage) -> (String, String, OrganizationRecord) {
+    let (admin, record) = setup_org(storage);
+    let member_id = root_id_of(MNEMONIC2);
+    OrganizationService::add_member(storage, &record.org_id, &member_id, None, &admin, NOW + 1)
+        .unwrap();
+    (admin, member_id, record)
+}
+
+#[test]
+fn update_my_identity_patch_and_merge_semantics() {
+    let mut storage = MemoryStorage::new();
+    let (admin, member_id, record) = setup_two_member_org(&mut storage);
+
+    // 非成员不可改（他人记录不可改：非成员一律 MemberNotFound）
+    let patch = OrgIdentityPatch {
+        nickname: Some("他人".to_string()),
+        ..Default::default()
+    };
+    assert!(matches!(
+        OrganizationService::update_my_identity(&mut storage, &record.org_id, &patch, &rid('q'), NOW + 2),
+        Err(OrgError::MemberNotFound)
+    ));
+
+    // 普通成员改自己（无需 admin）：全字段设置，昵称 trim
+    let patch = OrgIdentityPatch {
+        nickname: Some("  小火  ".to_string()),
+        avatar: Some(Some(IDENTITY_AVATAR.to_string())),
+        gender: Some("女".to_string()),
+        region: Some("杭州".to_string()),
+        signature: Some("保持热爱".to_string()),
+        use_personal_identity: Some(true),
+    };
+    let updated = OrganizationService::update_my_identity(
+        &mut storage,
+        &record.org_id,
+        &patch,
+        &member_id,
+        NOW + 3,
+    )
+    .unwrap();
+    let member = updated.find_member(&member_id).unwrap();
+    assert_eq!(member.nickname.as_deref(), Some("小火"));
+    assert_eq!(member.avatar.as_deref(), Some(IDENTITY_AVATAR));
+    assert_eq!(member.gender.as_deref(), Some("女"));
+    assert_eq!(member.region.as_deref(), Some("杭州"));
+    assert_eq!(member.signature.as_deref(), Some("保持热爱"));
+    assert_eq!(member.use_personal_identity, Some(true));
+    assert_eq!(updated.updated_at, NOW + 3);
+    // 他人（admin）记录不受影响
+    assert_eq!(updated.find_member(&admin).unwrap().nickname, None);
+    // 记事务（对齐 update_info/members 写法）
+    let txs = spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 1).unwrap();
+    assert_eq!(txs[0].type_, OrganizationTransactionType::MemberUpdate);
+    assert_eq!(txs[0].target_root_id.as_deref(), Some(member_id.as_str()));
+    assert_eq!(txs[0].summary, "更新组织身份信息");
+    // m1：avatar/gender/region/signature 纳入审计但只记摘要（设置 → 长度）
+    let payload = txs[0].payload.as_ref().unwrap();
+    assert_eq!(payload["nickname"], serde_json::json!("  小火  "));
+    assert_eq!(
+        payload["avatar"],
+        serde_json::json!(IDENTITY_AVATAR.len() as i64),
+        "审计只记长度，不落 data URL"
+    );
+    assert_eq!(payload["gender"], serde_json::json!("女".len() as i64));
+    assert_eq!(payload["region"], serde_json::json!("杭州".len() as i64));
+    assert_eq!(payload["signature"], serde_json::json!("保持热爱".len() as i64));
+    assert_eq!(payload["usePersonalIdentity"], serde_json::json!(true));
+
+    // 幂等：同值重复设置不 bump 版本
+    let same = OrganizationService::update_my_identity(
+        &mut storage,
+        &record.org_id,
+        &patch,
+        &member_id,
+        NOW + 99,
+    )
+    .unwrap();
+    assert_eq!(same.updated_at, NOW + 3);
+
+    // None 不变 / Some(None) 清除 avatar / Some("") 清除签名
+    let clear = OrgIdentityPatch {
+        avatar: Some(None),
+        signature: Some("   ".to_string()),
+        ..Default::default()
+    };
+    let cleared = OrganizationService::update_my_identity(
+        &mut storage,
+        &record.org_id,
+        &clear,
+        &member_id,
+        NOW + 4,
+    )
+    .unwrap();
+    let member = cleared.find_member(&member_id).unwrap();
+    assert_eq!(member.avatar, None, "Some(None) 清除头像");
+    assert_eq!(member.signature, None, "Some(空白) 清除签名");
+    assert_eq!(member.nickname.as_deref(), Some("小火"), "None 不变");
+    assert_eq!(member.gender.as_deref(), Some("女"), "None 不变");
+    assert_eq!(member.use_personal_identity, Some(true), "None 不变");
+    // m1：清除的审计摘要为 false；未变更字段为 Null
+    let txs = spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 1).unwrap();
+    let payload = txs[0].payload.as_ref().unwrap();
+    assert_eq!(payload["avatar"], serde_json::json!(false), "清除 → false");
+    assert_eq!(payload["signature"], serde_json::json!(false), "空白清除 → false");
+    assert_eq!(payload["gender"], serde_json::Value::Null, "未变更 → Null");
+}
+
+#[test]
+fn update_my_identity_rejects_invalid_fields() {
+    let mut storage = MemoryStorage::new();
+    let (_, member_id, record) = setup_two_member_org(&mut storage);
+    let mut reject = |patch: OrgIdentityPatch| {
+        assert!(
+            matches!(
+                OrganizationService::update_my_identity(
+                    &mut storage,
+                    &record.org_id,
+                    &patch,
+                    &member_id,
+                    NOW + 2
+                ),
+                Err(OrgError::InvalidIdentityField(_))
+            ),
+            "应拒绝非法字段"
+        );
+    };
+    // 昵称 > 24 字符
+    reject(OrgIdentityPatch {
+        nickname: Some("啊".repeat(25)),
+        ..Default::default()
+    });
+    // 头像非 data:image/ 前缀
+    reject(OrgIdentityPatch {
+        avatar: Some(Some("https://example.com/a.png".to_string())),
+        ..Default::default()
+    });
+    // 性别 > 16 / 地区 > 64 / 签名 > 128 字符
+    reject(OrgIdentityPatch {
+        gender: Some("x".repeat(17)),
+        ..Default::default()
+    });
+    reject(OrgIdentityPatch {
+        region: Some("x".repeat(65)),
+        ..Default::default()
+    });
+    reject(OrgIdentityPatch {
+        signature: Some("x".repeat(129)),
+        ..Default::default()
+    });
 }

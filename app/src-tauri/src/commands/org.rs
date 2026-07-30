@@ -5,11 +5,12 @@
 //! `join_by_invite` / `check_join` 两个拆步命令保留（调试/分步场景可用）。
 
 use spark_core::kernel::Kernel;
+use spark_core::org::service::OrgIdentityPatch;
 use spark_core::org::{OrgInvitePayload, OrgInviteRecord, OrganizationView};
 
 use super::dto::{
     AddOrgMemberInputDto, CreateOrgInputDto, CreatedOrgInviteDto, InviteAcceptanceDto,
-    OrgAddressRecordDto, OrgSyncOverviewDto, SuccessResult,
+    OrgAddressRecordDto, OrgSyncOverviewDto, SuccessResult, avatar_patch,
 };
 use super::{err, lock_kernel};
 use crate::KernelState;
@@ -109,6 +110,9 @@ pub(crate) fn set_public_inner(
         .map_err(err)
 }
 
+// `org_update_my_identity` 的 avatar 三态映射走 `dto::avatar_patch`（B1 口径注释
+// 也在那里）；`org_update_info` 的 avatar 直传内核（空串 = 清除，内核 settings 口径）。
+
 pub(crate) fn update_info_inner(
     kernel: &mut Kernel,
     org_id: &str,
@@ -124,6 +128,16 @@ pub(crate) fn update_info_inner(
             avatar.as_deref(),
         )
         .map_err(err)
+}
+
+/// `OrgIdentityPatch` 的组装在命令壳完成（IPC 扁平参数 → 结构体），inner 直接
+/// 收结构体（§2.4：参数超过 4 个用结构体传参）。
+pub(crate) fn update_my_identity_inner(
+    kernel: &mut Kernel,
+    org_id: &str,
+    patch: &OrgIdentityPatch,
+) -> Result<OrganizationView, String> {
+    kernel.org_update_my_identity(org_id, patch).map_err(err)
 }
 
 pub(crate) fn resolve_address_inner(
@@ -298,6 +312,32 @@ pub fn org_update_info(
     avatar: Option<String>,
 ) -> Result<OrganizationView, String> {
     update_info_inner(&mut *lock_kernel(&state)?, &org_id, name, description, avatar)
+}
+
+/// 更新自己的组织内身份（任何成员可改，仅改本人成员记录；字段语义同
+/// root_update_profile：nickname 设置即校验；avatar 缺省不变 / `""` 清除 /
+/// 非空设置；gender/region/signature 空串清除；usePersonalIdentity 缺省不变）。
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub fn org_update_my_identity(
+    state: tauri::State<'_, KernelState>,
+    org_id: String,
+    nickname: Option<String>,
+    avatar: Option<String>,
+    gender: Option<String>,
+    region: Option<String>,
+    signature: Option<String>,
+    use_personal_identity: Option<bool>,
+) -> Result<OrganizationView, String> {
+    let patch = OrgIdentityPatch {
+        nickname,
+        avatar: avatar_patch(avatar),
+        gender,
+        region,
+        signature,
+        use_personal_identity,
+    };
+    update_my_identity_inner(&mut *lock_kernel(&state)?, &org_id, &patch)
 }
 
 /// 解析组织地址（缓存 → DHT，org.md §16.4）；未命中返回 null。

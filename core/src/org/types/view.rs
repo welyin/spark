@@ -23,12 +23,12 @@ pub struct OrganizationView {
     /// admin 总数。
     #[serde(rename = "adminCount")]
     pub admin_count: usize,
-    /// 底层记录（`basePluginDomain` 缺省归一为 `""`，对齐 TS toView）。
+    /// 底层记录。
     #[serde(flatten)]
     pub record: OrganizationRecordFlattened,
 }
 
-/// `OrganizationView` 的记录部分（`basePluginDomain` 归一为非可选字符串）。
+/// `OrganizationView` 的记录部分。
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct OrganizationRecordFlattened {
     /// `org_` + 16 hex。

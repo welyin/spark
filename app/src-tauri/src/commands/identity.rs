@@ -9,6 +9,7 @@ use spark_core::kernel::{
     ProfileInfo, PublicIdentity, RootSignatureInfo,
 };
 
+use super::dto::avatar_patch;
 use super::{err, lock_kernel};
 use crate::KernelState;
 
@@ -126,12 +127,27 @@ pub(crate) fn reveal_mnemonic_inner(
 
 /// `root-update-profile`（TS 为免密码会话版）：内核以 unlock 会话缓存口令重封，
 /// 参数形状对齐 preload 的 `profile` 对象字段。
+/// avatar：`None` 不变；`Some("")` 清除（恢复自动头像）；`Some(非空)` 设置——
+/// IPC 边界 `Option<Option<String>>` 会被 serde_json 的 present-but-null 坍塌
+/// （B1 修复），故命令层用扁平 `Option<&str>` 在此映射回内核三态。
+/// 扩展字段性别/地区/签名：`None` 不变；`Some("")` 清除；`Some(非空)` 设置。
 pub(crate) fn update_profile_inner(
     kernel: &mut Kernel,
     nickname: Option<&str>,
-    avatar: Option<Option<&str>>,
+    avatar: Option<&str>,
+    gender: Option<&str>,
+    region: Option<&str>,
+    signature: Option<&str>,
 ) -> Result<ProfileInfo, String> {
-    kernel.update_profile_session(nickname, avatar).map_err(err)
+    kernel
+        .update_profile_session(
+            nickname,
+            avatar_patch(avatar),
+            gender,
+            region,
+            signature,
+        )
+        .map_err(err)
 }
 
 pub(crate) fn current_identity_inner(
@@ -249,12 +265,18 @@ pub fn root_reveal_mnemonic(
 pub fn root_update_profile(
     state: tauri::State<'_, KernelState>,
     nickname: Option<String>,
-    avatar: Option<Option<String>>,
+    avatar: Option<String>,
+    gender: Option<String>,
+    region: Option<String>,
+    signature: Option<String>,
 ) -> Result<ProfileInfo, String> {
     update_profile_inner(
         &mut *lock_kernel(&state)?,
         nickname.as_deref(),
-        avatar.as_ref().map(|inner| inner.as_deref()),
+        avatar.as_deref(),
+        gender.as_deref(),
+        region.as_deref(),
+        signature.as_deref(),
     )
 }
 

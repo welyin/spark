@@ -27,6 +27,10 @@ pub enum IdentityError {
     #[error("invalid avatar: {0}")]
     InvalidAvatar(String),
 
+    /// 资料扩展字段（性别/地区/签名）非法。
+    #[error("invalid profile field: {0}")]
+    InvalidProfileField(String),
+
     /// 不支持的身份文件版本。
     #[error("unsupported identity file version: {0}")]
     UnsupportedVersion(u32),

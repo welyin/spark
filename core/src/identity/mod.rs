@@ -16,8 +16,10 @@ pub use derive::{
 };
 pub use error::{IdentityError, Result};
 pub use file::{
-    IdentityFile, IdentityPayload, create_identity, migrate_v1_to_v2, recover_identity,
-    sanitize_profile, unlock_identity, update_profile, validate_avatar, validate_nickname,
+    AVATAR_MAX_SERIALIZED_BYTES, AVATAR_PREFIX, GENDER_MAX_CHARS, IdentityFile, IdentityPayload,
+    NICKNAME_MAX_CHARS, REGION_MAX_CHARS, SIGNATURE_MAX_CHARS, create_identity, migrate_v1_to_v2,
+    patch_extra_field, recover_identity, sanitize_profile, unlock_identity, update_profile,
+    validate_avatar, validate_nickname,
 };
 pub use mnemonic::{Wordlist, find_invalid_mnemonic_words, generate_mnemonic, parse_mnemonic};
 pub use slip10::{Slip10Node, format_derivation_path, parse_derivation_path};

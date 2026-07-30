@@ -1,5 +1,5 @@
 // 分组 mock store 单测：个人扁平分组 CRUD/重排、组织分组树结构操作/同级重排、成员归属
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   contactsOf,
   createGroup,
@@ -106,5 +106,40 @@ describe('组织空间分组树', () => {
     deleteOrgGroup(ORG, grandchild!.id);
     deleteOrgGroup(ORG, rootA!.id);
     deleteOrgGroup(ORG, rootB!.id);
+  });
+
+  it('桥接上传原序裸值 toIndex（同层前移调整由内核统一做）', async () => {
+    const orgGroupMove = vi.fn().mockResolvedValue({ success: true });
+    const ok = () => Promise.resolve({ success: true });
+    (window as any).__TAURI_INTERNALS__ = {};
+    (window as any).electronAPI = {
+      contacts: {
+        orgGroupMove,
+        orgGroupCreate: vi.fn(ok),
+        orgGroupRename: vi.fn(ok),
+        orgGroupDelete: vi.fn(ok)
+      }
+    };
+    try {
+      const space = contactsOf(ORG);
+      const root = createOrgGroup(ORG, '', '桥接根');
+      const a = createOrgGroup(ORG, root!.id, '桥接A');
+      createOrgGroup(ORG, root!.id, '桥接B');
+      createOrgGroup(ORG, root!.id, '桥接C');
+
+      // 同层 [A,B,C] 把 A 移到下标 2：上传原序 2（不是本地调整后的 1）
+      expect(moveOrgGroup(ORG, a!.id, root!.id, 2)).toBe(true);
+      expect(root!.children.map((n) => n.id).indexOf(a!.id)).toBe(1);
+      expect(orgGroupMove).toHaveBeenCalledWith(ORG, a!.id, 2, root!.id);
+
+      for (const child of [...root!.children]) {
+        deleteOrgGroup(ORG, child.id);
+      }
+      deleteOrgGroup(ORG, root!.id);
+      expect(space.groupTree.some((n) => n.id === root!.id)).toBe(false);
+    } finally {
+      delete (window as any).__TAURI_INTERNALS__;
+      delete (window as any).electronAPI;
+    }
   });
 });

@@ -52,8 +52,9 @@ pub(crate) fn set_blocked_inner(
 pub(crate) fn remove_friend_inner(
     kernel: &mut Kernel,
     root_id: &str,
+    block: bool,
 ) -> Result<SuccessResult, String> {
-    kernel.contact_remove_friend(root_id).map_err(err)?;
+    kernel.contact_remove_friend(root_id, block).map_err(err)?;
     Ok(SuccessResult::ok())
 }
 
@@ -74,6 +75,14 @@ pub(crate) fn resolve_request_inner(
         .contact_resolve_request(request_id, accept, permission)
         .map_err(err)?;
     Ok(SuccessResult::ok())
+}
+
+pub(crate) fn reply_request_inner(
+    kernel: &mut Kernel,
+    request_id: &str,
+    text: &str,
+) -> Result<FriendRequestRecord, String> {
+    kernel.contact_reply_request(request_id, text).map_err(err)
 }
 
 pub(crate) fn tag_create_inner(
@@ -189,9 +198,10 @@ pub(crate) fn org_group_move_inner(
     space: &str,
     id: &str,
     to_index: usize,
+    new_parent_id: Option<&str>,
 ) -> Result<SuccessResult, String> {
     kernel
-        .contact_org_group_move(space, id, to_index)
+        .contact_org_group_move(space, id, to_index, new_parent_id)
         .map_err(err)?;
     Ok(SuccessResult::ok())
 }
@@ -232,13 +242,14 @@ pub fn contact_set_blocked(
     set_blocked_inner(&mut *lock_kernel(&state)?, &space_key, &root_id, blocked)
 }
 
-/// 删除朋友（个人空间）。
+/// 删除朋友（个人空间；`block` 为 true 时同时拉黑，缺省 false）。
 #[tauri::command]
 pub fn contact_remove_friend(
     state: tauri::State<'_, KernelState>,
     root_id: String,
+    block: Option<bool>,
 ) -> Result<SuccessResult, String> {
-    remove_friend_inner(&mut *lock_kernel(&state)?, &root_id)
+    remove_friend_inner(&mut *lock_kernel(&state)?, &root_id, block.unwrap_or(false))
 }
 
 /// 发出好友申请（寻址失败报错；投递终态经 FriendRequestSent 事件回传，
@@ -265,6 +276,17 @@ pub fn contact_resolve_request(
         accept,
         permission.as_deref(),
     )
+}
+
+/// 回复对方对发出申请的询问（本地落 thread 回 pending 并尽力投递
+/// friend-reply 信封；返回更新后的申请记录）。
+#[tauri::command]
+pub fn contact_reply_request(
+    state: tauri::State<'_, KernelState>,
+    request_id: String,
+    text: String,
+) -> Result<FriendRequestRecord, String> {
+    reply_request_inner(&mut *lock_kernel(&state)?, &request_id, &text)
 }
 
 /// 新建标签（id 前端生成透传）。
@@ -390,15 +412,22 @@ pub fn contact_org_group_delete(
     org_group_delete_inner(&mut *lock_kernel(&state)?, &space_key, &id)
 }
 
-/// 同级拖拽重排组织分组。
+/// 拖拽移动组织分组（`new_parent_id` 缺省 = 同级重排；`Some("")` = 移到根层）。
 #[tauri::command]
 pub fn contact_org_group_move(
     state: tauri::State<'_, KernelState>,
     space_key: String,
     id: String,
     to_index: usize,
+    new_parent_id: Option<String>,
 ) -> Result<SuccessResult, String> {
-    org_group_move_inner(&mut *lock_kernel(&state)?, &space_key, &id, to_index)
+    org_group_move_inner(
+        &mut *lock_kernel(&state)?,
+        &space_key,
+        &id,
+        to_index,
+        new_parent_id.as_deref(),
+    )
 }
 
 // ------------------------------------------------------------------

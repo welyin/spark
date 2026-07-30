@@ -25,10 +25,11 @@ impl Kernel {
         Ok(payload.mnemonic)
     }
 
-    /// `updateProfile`：更新当前已解锁身份的资料（昵称/头像）。
+    /// `updateProfile`：更新当前已解锁身份的资料（昵称/头像 + 扩展字段性别/地区/签名）。
     ///
     /// - `nickname`：`Some(n)` 修改；`None` 不变
     /// - `avatar`：`Some(Some(a))` 设置；`Some(None)` 清除（恢复自动头像）；`None` 不变
+    /// - `gender`/`region`/`signature`：`Some(非空)` 设置；`Some("")` 清除；`None` 不变
     ///
     /// 内核身份文件把资料字段同时放在加密 payload 内（spec §5），故需要密码重新
     /// 封装；密码错误返回 `InvalidPassword`。
@@ -37,12 +38,15 @@ impl Kernel {
         password: &str,
         nickname: Option<&str>,
         avatar: Option<Option<&str>>,
+        gender: Option<&str>,
+        region: Option<&str>,
+        signature: Option<&str>,
     ) -> Result<ProfileInfo> {
         let root_id = self.require_unlocked_root_id()?;
         let Some(mut file) = self.read_identity_file(&root_id)? else {
             return Err(KernelError::NotInitialized);
         };
-        identity::update_profile(&mut file, password, nickname, avatar)
+        identity::update_profile(&mut file, password, nickname, avatar, gender, region, signature)
             .map_err(map_identity_decrypt_error)?;
         self.write_identity_file(&file)?;
         *self.nickname_shared.lock().unwrap() = file.nickname.clone().unwrap_or_default();
@@ -52,6 +56,9 @@ impl Kernel {
         Ok(ProfileInfo {
             nickname: file.nickname.clone(),
             avatar: file.avatar.clone(),
+            gender: file.gender.clone(),
+            region: file.region.clone(),
+            signature: file.signature.clone(),
         })
     }
 
@@ -64,6 +71,9 @@ impl Kernel {
         &mut self,
         nickname: Option<&str>,
         avatar: Option<Option<&str>>,
+        gender: Option<&str>,
+        region: Option<&str>,
+        signature: Option<&str>,
     ) -> Result<ProfileInfo> {
         let (root_id, password) = {
             let unlocked = self.unlocked.as_ref().ok_or(KernelError::Locked)?;
@@ -72,7 +82,7 @@ impl Kernel {
         let Some(mut file) = self.read_identity_file(&root_id)? else {
             return Err(KernelError::NotInitialized);
         };
-        identity::update_profile(&mut file, &password, nickname, avatar)?;
+        identity::update_profile(&mut file, &password, nickname, avatar, gender, region, signature)?;
         self.write_identity_file(&file)?;
         *self.nickname_shared.lock().unwrap() = file.nickname.clone().unwrap_or_default();
         *self.avatar_shared.lock().unwrap() = file.avatar.clone().unwrap_or_default();
@@ -82,6 +92,9 @@ impl Kernel {
         Ok(ProfileInfo {
             nickname: file.nickname.clone(),
             avatar: file.avatar.clone(),
+            gender: file.gender.clone(),
+            region: file.region.clone(),
+            signature: file.signature.clone(),
         })
     }
 
@@ -162,6 +175,9 @@ impl Kernel {
             public_key_hex: unlocked.identity.public_key_hex(),
             nickname: file.nickname.clone(),
             avatar: file.avatar.clone(),
+            gender: file.gender.clone(),
+            region: file.region.clone(),
+            signature: file.signature.clone(),
             created_at: file.created_at,
             root_id,
         }))

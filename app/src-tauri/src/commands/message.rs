@@ -6,10 +6,10 @@
 //! 可经 `message_resend` 重发。
 
 use spark_core::kernel::{ChatMessageView, ConversationView, Kernel};
-use spark_core::message::QuoteRef;
+use spark_core::message::{LinkPreview, QuoteRef};
 
 use super::dto::SuccessResult;
-use super::{err, lock_kernel};
+use super::{err, link_preview, lock_kernel};
 use crate::KernelState;
 
 // ------------------------------------------------------------------
@@ -49,9 +49,10 @@ pub(crate) fn send_text_inner(
     message_id: &str,
     text: &str,
     quote: Option<QuoteRef>,
+    link: Option<LinkPreview>,
 ) -> Result<ChatMessageView, String> {
     kernel
-        .message_send_text(space, conv_id, message_id, text, quote)
+        .message_send_text(space, conv_id, message_id, text, quote, link)
         .map_err(err)
 }
 
@@ -188,8 +189,12 @@ pub fn message_ensure_direct(
 }
 
 /// 发送文本消息（`message_id` 客户端生成作幂等键；`quote` 可选引用回复）。
+/// 正文含首个 http(s) URL 时先在壳层抓取链接预览（ui-messages.md §6；
+/// 失败/超时/非 HTML/内网一律 None 静默降级——失败不阻塞发送，但对端挂起
+/// 时最坏延迟本条约 20s 落库，见 link_preview.rs 头注）。抓取走
+/// `spawn_blocking`（blocking reqwest），命令改 async——invoke 形状对前端透明。
 #[tauri::command]
-pub fn message_send_text(
+pub async fn message_send_text(
     state: tauri::State<'_, KernelState>,
     space_key: String,
     conv_id: String,
@@ -197,6 +202,15 @@ pub fn message_send_text(
     text: String,
     quote: Option<QuoteRef>,
 ) -> Result<ChatMessageView, String> {
+    let link = match link_preview::extract_first_url(&text) {
+        Some(url) => {
+            tauri::async_runtime::spawn_blocking(move || link_preview::fetch_link_preview(&url))
+                .await
+                .ok()
+                .flatten()
+        }
+        None => None,
+    };
     send_text_inner(
         &mut *lock_kernel(&state)?,
         &space_key,
@@ -204,6 +218,7 @@ pub fn message_send_text(
         &message_id,
         &text,
         quote,
+        link,
     )
 }
 

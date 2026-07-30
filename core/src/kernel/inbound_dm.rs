@@ -12,14 +12,14 @@ use std::collections::HashSet;
 
 use serde_json::{Value, json};
 
+mod friend;
+
 use super::dm_envelope::{
-    KIND_CHAT, KIND_FRIEND_ACCEPT, KIND_FRIEND_REQUEST, KIND_ORG_INVITE, KIND_ORG_INVITE_REPLY,
-    KIND_PROFILE_SYNC, KIND_READ, KIND_RECALL, verify_envelope,
+    KIND_CHAT, KIND_FRIEND_ACCEPT, KIND_FRIEND_REPLY, KIND_FRIEND_REQUEST, KIND_ORG_INVITE,
+    KIND_ORG_INVITE_REPLY, KIND_PROFILE_SYNC, KIND_READ, KIND_RECALL, verify_envelope,
 };
-use super::message_ops::{conversation_view, direct_conversation_id, message_view};
-use crate::contact::{
-    ContactError, ContactService, FriendRecord, FriendRequestRecord, FriendRequestStatus,
-};
+use super::message_ops::{conversation_view, direct_conversation_id, message_view, sanitize_link_preview};
+use crate::contact::{ContactError, ContactService, FriendRecord, FriendRequestStatus};
 use crate::message::{
     ConversationKind, ConversationRecord, LinkPreview, MAX_TEXT_BYTES, MessageError,
     MessageRecord, MessageService, MessageType, PeerRef,
@@ -147,29 +147,6 @@ fn valid_space_key(space: &str) -> bool {
 /// 顶部，拒收（invalid-message）。
 const MAX_FUTURE_SKEW_MS: i64 = 10 * 60_000;
 
-/// 解析 body.nodeInfo（`{peerId, addresses}`）为 PeerRef。
-fn parse_node_info(body: &Value) -> Option<PeerRef> {
-    let info = body.get("nodeInfo")?;
-    let peer_id = info.get("peerId").and_then(Value::as_str).unwrap_or_default();
-    let addresses: Vec<String> = info
-        .get("addresses")
-        .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default();
-    if peer_id.is_empty() && addresses.is_empty() {
-        return None;
-    }
-    Some(PeerRef {
-        peer_id: peer_id.to_string(),
-        addresses,
-    })
-}
-
 /// 合并式建/更新朋友：已有记录保留本地资料（备注/标签/分组/照片/addedAt），
 /// 仅刷新非空 nickname、Some 的 avatar 与 Some 的 peer；不存在才新建。返回
 /// 最终记录。（friend-accept 与 chat 隐含确认共用）
@@ -240,9 +217,14 @@ pub fn handle_inbound_dm<S: StorageBackend>(
         KIND_READ => handle_read(storage, &ctx, &envelope.from, &envelope.body),
         KIND_RECALL => handle_recall(storage, &ctx, &envelope.from, &envelope.body),
         KIND_FRIEND_REQUEST => {
-            handle_friend_request(storage, &ctx, &envelope.from, &envelope.body)
+            friend::handle_friend_request(storage, &ctx, &envelope.from, &envelope.body)
         }
-        KIND_FRIEND_ACCEPT => handle_friend_accept(storage, &ctx, &envelope.from, &envelope.body),
+        KIND_FRIEND_ACCEPT => {
+            friend::handle_friend_accept(storage, &ctx, &envelope.from, &envelope.body)
+        }
+        KIND_FRIEND_REPLY => {
+            friend::handle_friend_reply(storage, &ctx, &envelope.from, &envelope.body)
+        }
         KIND_PROFILE_SYNC => handle_profile_sync(storage, &envelope.from, &envelope.body),
         KIND_ORG_INVITE => handle_org_invite(storage, &ctx, &envelope.from, &envelope.body),
         KIND_ORG_INVITE_REPLY => {
@@ -329,7 +311,10 @@ fn ensure_inbound_conversation<S: StorageBackend>(
 /// senderId 强制绑定信封 from（忽略对端自报值，防伪造渲染成「我」）；
 /// created_at 必须为正且不超过 now + 10 分钟（负/零值会破坏消息键的字典
 /// 序=时间序，远未来消息会把会话钉在列表顶部，均拒收）；文本正文超过
-/// [`MAX_TEXT_BYTES`]（16 KiB）拒收。from==我（同身份另一台设备同步过来
+/// [`MAX_TEXT_BYTES`]（16 KiB）拒收；link 为对端自报字段，入库前与出站
+/// 同口径经 `sanitize_link_preview` 收敛（限长截断、空 url 或非 http(s)
+/// scheme 整条丢弃）。
+/// from==我（同身份另一台设备同步过来
 /// 的自消息）时不增加未读，且落库即置本地已读标记。
 fn handle_chat<S: StorageBackend>(
     storage: &mut S,
@@ -359,6 +344,8 @@ fn handle_chat<S: StorageBackend>(
     message.status = None;
     // senderId 绑定信封 from（忽略对端自报值）
     message.sender_id = from.to_string();
+    // link 为对端自报字段：入库前与出站同口径收敛（限长截断、空 url 整条丢弃）
+    message.link = message.link.and_then(sanitize_link_preview);
     // 自消息（另一台设备同步）不产生未读，落库即置本地已读标记
     // （delete_message 的未读 -1 判定依据）
     message.read = from == ctx.my_root_id;
@@ -510,242 +497,6 @@ fn handle_recall<S: StorageBackend>(
         Vec::new()
     };
     done(ok_response(), events)
-}
-
-// ---------------------------------------------------------------------------
-// friend-request / friend-accept
-// ---------------------------------------------------------------------------
-
-/// friend-request 的 from==我 分支（同身份另一台设备的配对请求）：自动
-/// 接受——落/更新设备 FriendRecord（已有条目保留 addedAt 与缺省字段），
-/// 不产生「新的朋友」申请；返回 [`AutoAccept`] 指令由 host 回发
-/// friend-accept 完成双向配对（A 扫码加 B 名片 → B 自动接受 → A 收到
-/// accept，双方互有设备记录）。
-fn handle_self_friend_request<S: StorageBackend>(
-    storage: &mut S,
-    ctx: &InboundContext<'_>,
-    request_id: &str,
-    nickname: &str,
-    peer: Option<PeerRef>,
-) -> Result<InboundDmResult> {
-    let existing = ContactService::get_friend(storage, ctx.my_root_id)?;
-    let mut friend = existing.unwrap_or(FriendRecord {
-        root_id: ctx.my_root_id.to_string(),
-        nickname: String::new(),
-        avatar: None,
-        signature: String::new(),
-        gender: None,
-        added_at: ctx.now_ms,
-        peer: None,
-        remark: String::new(),
-        phones: Vec::new(),
-        tag_ids: Vec::new(),
-        group_id: String::new(),
-        memo: String::new(),
-        photos: Vec::new(),
-        permission: "open".to_string(),
-        blocked: false,
-    });
-    if !nickname.is_empty() {
-        friend.nickname = nickname.to_string();
-    }
-    if peer.is_some() {
-        friend.peer = peer.clone();
-    }
-    ContactService::upsert_friend(storage, &friend)?;
-    // 回发目标取请求方本次捎带的 nodeInfo（无则无法回发，host 跳过）
-    let auto_accept = peer.map(|p| AutoAccept {
-        target: PeerNodeInfo {
-            peer_id: (!p.peer_id.is_empty()).then_some(p.peer_id),
-            addresses: p.addresses,
-        },
-        request_id: request_id.to_string(),
-        // 设备配对：from==to==我（同身份设备间信封，验签侧 to==自己 自然通过）
-        to_root_id: ctx.my_root_id.to_string(),
-    });
-    Ok(InboundDmResult {
-        response: json!({ "ok": true, "nickname": ctx.my_nickname }),
-        events: Vec::new(),
-        auto_accept,
-    })
-}
-
-/// friend-request：幂等落库收到的申请（同 rootId 已有 pending 则更新内容：
-/// nickname/message/source 非空才覆盖、peer 为 None 保留原值——对端重试
-/// 不带 nodeInfo 时不抹寻址信息），应答捎带本机昵称；from==我 走
-/// [`handle_self_friend_request`] 自动接受；from 已是朋友（对方未收到我
-/// 此前的 accept 回执又发来申请）不再生成申请，直接回发 friend-accept
-/// 重确认（同样走 [`AutoAccept`] 指令）。
-///
-/// 新建申请的 id 用复合形式 `{from}:{原requestId}`（存储键随之带发送者
-/// 命名空间 `ct:req:in:{from}:{id}`）——两个发送者同毫秒撞 id 时不再
-/// 互相覆盖；事件与 overview 暴露给前端的即复合 id，resolve 按键直取。
-fn handle_friend_request<S: StorageBackend>(
-    storage: &mut S,
-    ctx: &InboundContext<'_>,
-    from: &str,
-    body: &Value,
-) -> Result<InboundDmResult> {
-    if is_blocked(storage, "personal", from)? {
-        return done(fail_response("blocked"), Vec::new());
-    }
-    let Some(request_id) = body.get("requestId").and_then(Value::as_str) else {
-        return done(fail_response("invalid-body"), Vec::new());
-    };
-    let nickname = body
-        .get("nickname")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let message = body
-        .get("message")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let source = body
-        .get("source")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    // 头像为对端自报字段：校验通过才采纳，非法则忽略该字段（不拒绝整个请求）
-    let avatar = body
-        .get("avatar")
-        .and_then(Value::as_str)
-        .filter(|a| crate::identity::validate_avatar(a).is_ok())
-        .map(str::to_string);
-    let peer = parse_node_info(body);
-
-    if from == ctx.my_root_id {
-        return handle_self_friend_request(storage, ctx, request_id, nickname, peer);
-    }
-
-    // 已是朋友却又收到其申请：对方多半没收到我此前的 accept 回执（其 outbox
-    // 仍 pending）——不再生成申请，直接回发 friend-accept 重确认（对方收到
-    // 后 outbox 置 accepted 并建朋友）；重确认捎带的 avatar 同样刷新朋友记录
-    if let Some(mut friend) = ContactService::get_friend(storage, from)? {
-        if let Some(avatar) = &avatar {
-            friend.avatar = Some(avatar.clone());
-            ContactService::upsert_friend(storage, &friend)?;
-        }
-        let auto_accept = peer.map(|p| AutoAccept {
-            target: PeerNodeInfo {
-                peer_id: (!p.peer_id.is_empty()).then_some(p.peer_id),
-                addresses: p.addresses,
-            },
-            request_id: request_id.to_string(),
-            to_root_id: from.to_string(),
-        });
-        return Ok(InboundDmResult {
-            response: json!({ "ok": true, "nickname": ctx.my_nickname }),
-            events: Vec::new(),
-            auto_accept,
-        });
-    }
-
-    // 幂等：同 rootId 已有 pending 申请则原地更新内容（保留原 id）
-    let existing = ContactService::overview(storage, "personal")?
-        .requests
-        .into_iter()
-        .find(|r| r.root_id == from && r.status == FriendRequestStatus::Pending);
-    let record = match existing {
-        Some(mut r) => {
-            if !nickname.is_empty() {
-                r.nickname = nickname.to_string();
-            }
-            if avatar.is_some() {
-                r.avatar = avatar.clone();
-            }
-            if !message.is_empty() {
-                r.message = message.to_string();
-            }
-            if !source.is_empty() {
-                r.source = source.to_string();
-            }
-            if peer.is_some() {
-                r.peer = peer;
-            }
-            // 内容更新只刷新 updated_at，保留首次到达的 created_at
-            r.updated_at = ctx.now_ms;
-            r
-        }
-        None => FriendRequestRecord {
-            // 复合 id：{from}:{原 requestId}（防跨发送者撞 id 覆盖）
-            id: format!("{from}:{request_id}"),
-            root_id: from.to_string(),
-            nickname: nickname.to_string(),
-            avatar,
-            message: message.to_string(),
-            source: source.to_string(),
-            status: FriendRequestStatus::Pending,
-            created_at: ctx.now_ms,
-            updated_at: ctx.now_ms,
-            peer,
-        },
-    };
-    ContactService::put_incoming_request(storage, &record)?;
-    let event = P2pEvent::FriendRequestReceived(json!({
-        "request": serde_json::to_value(&record)?,
-    }));
-    done(
-        json!({ "ok": true, "nickname": ctx.my_nickname }),
-        vec![event],
-    )
-}
-
-/// friend-accept：outbox 标记 accepted 并建朋友（peer 取对方捎带的 nodeInfo）。
-///
-/// 安全校验（任一不满足即拒，不改状态、不发事件）：from 未被拉黑 &&
-/// 出站申请记录存在 && 仍为 pending && record.rootId == from——否则任何
-/// 验签通过的对端都能把指向第三方的申请标记 accepted，或在我从未申请时
-/// 直接成为「朋友」。
-fn handle_friend_accept<S: StorageBackend>(
-    storage: &mut S,
-    ctx: &InboundContext<'_>,
-    from: &str,
-    body: &Value,
-) -> Result<InboundDmResult> {
-    // friend-accept 仅存在于个人空间：被拉黑者的接受直接拒绝（不建朋友）
-    if is_blocked(storage, "personal", from)? {
-        return done(fail_response("blocked"), Vec::new());
-    }
-    let Some(request_id) = body.get("requestId").and_then(Value::as_str) else {
-        return done(fail_response("invalid-body"), Vec::new());
-    };
-    // 兼容旧版对端：其回发的 requestId 可能误带 `{from}:` 复合前缀（inbound
-    // 复合 id 原样回发），归一化为原始 id 再查 outbox
-    let request_id = request_id
-        .strip_prefix(&format!("{from}:"))
-        .unwrap_or(request_id);
-    let nickname = body
-        .get("nickname")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    // 头像为对端自报字段：校验通过才采纳，非法忽略（不拒绝整个 accept）
-    let avatar = body
-        .get("avatar")
-        .and_then(Value::as_str)
-        .filter(|a| crate::identity::validate_avatar(a).is_ok())
-        .map(str::to_string);
-    let peer = parse_node_info(body);
-
-    let request = ContactService::get_outgoing_request(storage, request_id)?;
-    let valid = request
-        .as_ref()
-        .is_some_and(|r| r.status == FriendRequestStatus::Pending && r.root_id == from);
-    if !valid {
-        return done(fail_response("invalid-body"), Vec::new());
-    }
-
-    ContactService::mark_outgoing_accepted(storage, request_id, ctx.now_ms)?;
-    let request = ContactService::get_outgoing_request(storage, request_id)?;
-    // 合并式 upsert：已有记录保留本地资料（备注/标签/分组/照片/addedAt），
-    // 仅刷新非空 nickname、Some 的 avatar 与 Some 的 peer；不存在才新建
-    let friend = merge_friend_record(storage, from, &nickname, avatar.as_deref(), peer, ctx.now_ms)?;
-    let request_json = request.map(serde_json::to_value).transpose()?;
-    let friend_json = serde_json::to_value(&friend)?;
-    let event = P2pEvent::FriendRequestAccepted(json!({
-        "request": request_json,
-        "friend": friend_json,
-    }));
-    done(ok_response(), vec![event])
 }
 
 // ---------------------------------------------------------------------------

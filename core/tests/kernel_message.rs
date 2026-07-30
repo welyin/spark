@@ -1,6 +1,7 @@
 //! kernel 消息门面与 dm 入站编排集成测试：
 //! - 门面：ensure_direct 幂等与 `dm:` id 约定、无 p2p 发送落库 failed、
-//!   resend 状态门槛、recall 窗口、mark_read/clear/delete、视图 'me' 映射；
+//!   resend 状态门槛、recall 窗口、mark_read/clear/delete、视图 'me' 映射、
+//!   链接预览落库与 `sanitize_link_preview` 收敛（ui-messages.md §6）；
 //! - 入站：手工签名 chat/read/recall/friend-request/friend-accept 信封直调
 //!   `handle_inbound_dm`，断言落库、事件、拉黑拒收、验签失败、组织非成员拒绝。
 
@@ -11,10 +12,13 @@ use std::collections::HashSet;
 use ed25519_dalek::SigningKey;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use spark_core::contact::{ContactService, FriendRecord};
-use spark_core::kernel::{direct_conversation_id, dm_envelope, handle_inbound_dm};
+use spark_core::contact::{
+    ContactService, FriendRecord, FriendRequestRecord, FriendRequestStatus, RequestThreadMessage,
+    ThreadFrom,
+};
+use spark_core::kernel::{direct_conversation_id, dm_envelope, handle_inbound_dm, sanitize_link_preview};
 use spark_core::message::{
-    ConversationKind, ConversationRecord, MessageRecord, MessageService, MessageType,
+    ConversationKind, ConversationRecord, LinkPreview, MessageRecord, MessageService, MessageType,
 };
 use spark_core::org::{
     OrgInviteDirection, OrgInviteRecord, OrgInviteStatus, OrganizationService,
@@ -128,7 +132,7 @@ fn send_text_without_p2p_fails_and_persists() {
     let conv = kernel.message_ensure_direct(PERSONAL, &peer, "对方").unwrap();
 
     let view = kernel
-        .message_send_text(PERSONAL, &conv.id, "msg-1", "你好", None)
+        .message_send_text(PERSONAL, &conv.id, "msg-1", "你好", None, None)
         .unwrap();
     assert_eq!(view.sender_id, "me", "自己发的消息 senderId 映射为 me");
     assert_eq!(view.sender_name, "我", "自己发的消息 senderName 映射为 我");
@@ -169,7 +173,7 @@ fn resend_requires_failed_status() {
 
     // failed 消息可重发（无 p2p 仍 failed，但流程走通）
     kernel
-        .message_send_text(PERSONAL, &conv.id, "msg-failed", "重发我", None)
+        .message_send_text(PERSONAL, &conv.id, "msg-failed", "重发我", None, None)
         .unwrap();
     let view = kernel
         .message_resend(PERSONAL, &conv.id, "msg-failed")
@@ -186,7 +190,7 @@ fn recall_window_and_local_ops() {
     let (_, peer) = peer_root(7);
     let conv = kernel.message_ensure_direct(PERSONAL, &peer, "对方").unwrap();
     kernel
-        .message_send_text(PERSONAL, &conv.id, "msg-1", "撤回我", None)
+        .message_send_text(PERSONAL, &conv.id, "msg-1", "撤回我", None, None)
         .unwrap();
 
     // 窗口内：撤回成功；重复撤回失败
@@ -221,7 +225,7 @@ fn recall_window_and_local_ops() {
 
     // delete：会话与消息一并删除
     kernel
-        .message_send_text(PERSONAL, &conv.id, "msg-2", "再发", None)
+        .message_send_text(PERSONAL, &conv.id, "msg-2", "再发", None, None)
         .unwrap();
     kernel.message_delete(PERSONAL, &conv.id, "msg-2").unwrap();
     kernel.message_delete_conversation(PERSONAL, &conv.id).unwrap();
@@ -544,6 +548,186 @@ fn inbound_friend_accept_forgery_rejected() {
 }
 
 // ---------------------------------------------------------------------------
+// 入站编排：friend-reply（好友申请来回回复）
+// ---------------------------------------------------------------------------
+
+/// 构造 friend-reply 信封（body 线形与出站侧共用 `friend_reply_body`，防键名漂移）。
+fn reply_envelope(key: &SigningKey, from: &str, my_root: &str, request_id: &str, text: &str) -> Value {
+    dm_envelope::build_envelope(
+        "friend-reply",
+        from,
+        my_root,
+        NOW,
+        dm_envelope::friend_reply_body(request_id, text),
+        key,
+    )
+}
+
+#[test]
+fn inbound_friend_reply_outbox_pending_to_replied() {
+    let mut s = MemoryStorage::new();
+    let my_root = "aa".repeat(32);
+    let (key, from) = peer_root(7);
+    let outgoing =
+        ContactService::create_outgoing_request(&mut s, &from, "", "hi", "扫码", None, NOW).unwrap();
+
+    // 对方（接收方）来询问：pending → replied，thread 追加（trim 后落库），FriendRequestSent 事件
+    let envelope = reply_envelope(&key, &from, &my_root, &outgoing.id, " 请问你是哪位？ ");
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    assert_eq!(result.response, json!({ "ok": true }));
+    let P2pEvent::FriendRequestSent(data) = &result.events[0] else {
+        panic!("应发出 FriendRequestSent 事件");
+    };
+    assert_eq!(data["request"]["id"], json!(outgoing.id));
+    assert_eq!(data["request"]["status"], "replied");
+    assert_eq!(data["request"]["thread"][0]["from"], "peer");
+    assert_eq!(data["request"]["thread"][0]["text"], "请问你是哪位？");
+
+    let stored = ContactService::get_outgoing_request(&s, &outgoing.id).unwrap().unwrap();
+    assert_eq!(stored.status, FriendRequestStatus::Replied);
+    assert_eq!(stored.thread.len(), 1);
+
+    // replied 状态下对方继续回复仍受理（thread 续接、仍 replied）
+    let envelope2 = reply_envelope(&key, &from, &my_root, &outgoing.id, "再想想？");
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope2, "peer-a", &HashSet::new(), NOW).unwrap();
+    assert_eq!(result.response, json!({ "ok": true }));
+    let stored = ContactService::get_outgoing_request(&s, &outgoing.id).unwrap().unwrap();
+    assert_eq!(stored.status, FriendRequestStatus::Replied);
+    assert_eq!(stored.thread.len(), 2);
+}
+
+#[test]
+fn inbound_friend_reply_inbox_composite_id() {
+    let mut s = MemoryStorage::new();
+    let my_root = "aa".repeat(32);
+    let (key, from) = peer_root(7);
+    // 我收到的申请（复合 id `{from}:{requestId}`）：对方（原申请方）回答我的询问
+    let composite = format!("{from}:req-1");
+    ContactService::put_incoming_request(
+        &mut s,
+        &FriendRequestRecord {
+            id: composite.clone(),
+            root_id: from.clone(),
+            nickname: "申请人".to_string(),
+            avatar: None,
+            message: "hi".to_string(),
+            source: "扫码".to_string(),
+            status: FriendRequestStatus::Pending,
+            created_at: NOW,
+            updated_at: NOW,
+            peer: None,
+            thread: Vec::new(),
+            invite_code: None,
+        },
+    )
+    .unwrap();
+
+    let envelope = reply_envelope(&key, &from, &my_root, "req-1", "我是张三");
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    assert_eq!(result.response, json!({ "ok": true }));
+    let P2pEvent::FriendRequestReceived(data) = &result.events[0] else {
+        panic!("应发出 FriendRequestReceived 事件");
+    };
+    assert_eq!(data["request"]["id"], json!(composite));
+
+    let stored = ContactService::get_incoming_request(&s, &composite).unwrap().unwrap();
+    assert_eq!(stored.status, FriendRequestStatus::Pending, "入站申请仍待我接受/忽略");
+    assert_eq!(stored.thread.len(), 1);
+    assert_eq!(stored.thread[0].from, ThreadFrom::Peer);
+}
+
+#[test]
+fn inbound_friend_reply_rejected_paths() {
+    let my_root = "aa".repeat(32);
+    let (key, from) = peer_root(7);
+
+    // 未知 requestId → invalid-body（outbox/inbox 皆不命中）
+    let mut s = MemoryStorage::new();
+    let envelope = reply_envelope(&key, &from, &my_root, "req-x", "hi");
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    assert_eq!(result.response, json!({ "ok": false, "reason": "invalid-body" }));
+    assert!(result.events.is_empty());
+
+    // text trim 后为空 → invalid-body
+    let mut s = MemoryStorage::new();
+    let outgoing =
+        ContactService::create_outgoing_request(&mut s, &from, "", "hi", "扫码", None, NOW).unwrap();
+    let envelope = reply_envelope(&key, &from, &my_root, &outgoing.id, "   ");
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    assert_eq!(result.response, json!({ "ok": false, "reason": "invalid-body" }));
+    assert!(result.events.is_empty());
+
+    // outbox root_id 不匹配（record 指向第三方）→ invalid-body，thread 不动
+    let mut s = MemoryStorage::new();
+    let third = "dd".repeat(32);
+    let outgoing =
+        ContactService::create_outgoing_request(&mut s, &third, "", "hi", "扫码", None, NOW).unwrap();
+    let envelope = reply_envelope(&key, &from, &my_root, &outgoing.id, "hi");
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    assert_eq!(result.response, json!({ "ok": false, "reason": "invalid-body" }));
+    assert!(result.events.is_empty());
+    let stored = ContactService::get_outgoing_request(&s, &outgoing.id).unwrap().unwrap();
+    assert!(stored.thread.is_empty());
+    assert_eq!(stored.status, FriendRequestStatus::Pending);
+
+    // 已 accepted 的申请收到 reply → invalid-body（终态不再受理回复）
+    let mut s = MemoryStorage::new();
+    let outgoing =
+        ContactService::create_outgoing_request(&mut s, &from, "", "hi", "扫码", None, NOW).unwrap();
+    ContactService::mark_outgoing_accepted(&mut s, &outgoing.id, NOW).unwrap();
+    let envelope = reply_envelope(&key, &from, &my_root, &outgoing.id, "hi");
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    assert_eq!(result.response, json!({ "ok": false, "reason": "invalid-body" }));
+    assert!(result.events.is_empty());
+}
+
+#[test]
+fn inbound_friend_reply_rejected_when_blocked() {
+    let mut s = MemoryStorage::new();
+    let my_root = "aa".repeat(32);
+    let (key, from) = peer_root(7);
+    let outgoing =
+        ContactService::create_outgoing_request(&mut s, &from, "", "hi", "扫码", None, NOW).unwrap();
+    ContactService::set_blocked(&mut s, PERSONAL, &from, true, NOW).unwrap();
+
+    let envelope = reply_envelope(&key, &from, &my_root, &outgoing.id, "hi");
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    assert_eq!(result.response, json!({ "ok": false, "reason": "blocked" }));
+    assert!(result.events.is_empty());
+    let stored = ContactService::get_outgoing_request(&s, &outgoing.id).unwrap().unwrap();
+    assert!(stored.thread.is_empty(), "被拉黑不落 thread");
+}
+
+#[test]
+fn inbound_friend_accept_allowed_when_replied() {
+    // 回归：replied 状态下对方接受应通过（此前 valid 校验只认 pending 会误拒）
+    let mut s = MemoryStorage::new();
+    let my_root = "aa".repeat(32);
+    let (key, from) = peer_root(7);
+    let outgoing =
+        ContactService::create_outgoing_request(&mut s, &from, "", "hi", "扫码", None, NOW).unwrap();
+    let msg = RequestThreadMessage {
+        from: ThreadFrom::Peer,
+        text: "请问你是哪位？".to_string(),
+        ts: NOW,
+    };
+    ContactService::append_outgoing_thread(&mut s, &outgoing.id, msg, NOW).unwrap();
+
+    let body = json!({ "requestId": outgoing.id, "nickname": "对方昵称" });
+    let envelope = dm_envelope::build_envelope("friend-accept", &from, &my_root, NOW, body, &key);
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    assert_eq!(result.response, json!({ "ok": true }));
+    let P2pEvent::FriendRequestAccepted(data) = &result.events[0] else {
+        panic!("应发出 FriendRequestAccepted 事件");
+    };
+    assert_eq!(data["request"]["status"], "accepted");
+    let stored = ContactService::get_outgoing_request(&s, &outgoing.id).unwrap().unwrap();
+    assert_eq!(stored.status, FriendRequestStatus::Accepted);
+    assert_eq!(stored.thread.len(), 1, "thread 保留");
+    assert!(ContactService::get_friend(&s, &from).unwrap().is_some());
+}
+
+// ---------------------------------------------------------------------------
 // 入站编排：拒绝路径
 // ---------------------------------------------------------------------------
 
@@ -700,7 +884,7 @@ fn send_text_to_self_delivered_and_online() {
 
     // 无 p2p、无配对设备：本机副本天然送达，status 仍 delivered
     let view = kernel
-        .message_send_text(PERSONAL, &conv.id, "msg-self-1", "同步到各设备", None)
+        .message_send_text(PERSONAL, &conv.id, "msg-self-1", "同步到各设备", None, None)
         .unwrap();
     assert_eq!(view.status.as_deref(), Some("delivered"));
     assert_eq!(view.sender_id, "me");
@@ -904,7 +1088,7 @@ fn send_falls_back_to_friend_addresses_when_conv_peer_empty() {
     });
     ContactService::upsert_friend(&mut storage, &f).unwrap();
     let view = kernel
-        .message_send_text(PERSONAL, &conv.id, "msg-f2", "hi", None)
+        .message_send_text(PERSONAL, &conv.id, "msg-f2", "hi", None, None)
         .unwrap();
     assert_eq!(
         view.status.as_deref(),
@@ -918,7 +1102,7 @@ fn send_falls_back_to_friend_addresses_when_conv_peer_empty() {
     f.peer = None;
     ContactService::upsert_friend(&mut storage, &f).unwrap();
     let view = kernel
-        .message_send_text(PERSONAL, &conv.id, "msg-f1", "hi", None)
+        .message_send_text(PERSONAL, &conv.id, "msg-f1", "hi", None, None)
         .unwrap();
     assert_eq!(view.status.as_deref(), Some("failed"));
 }
@@ -1165,7 +1349,7 @@ fn resend_rejects_recalled_and_allows_sending() {
 
     // 已撤回的消息不可重发（防对端「复活」已撤回内容；自己会话同口径）
     kernel
-        .message_send_text(PERSONAL, &conv.id, "msg-recall", "撤回后重发", None)
+        .message_send_text(PERSONAL, &conv.id, "msg-recall", "撤回后重发", None, None)
         .unwrap();
     assert!(kernel.message_recall(PERSONAL, &conv.id, "msg-recall").unwrap());
     let err = kernel
@@ -1389,7 +1573,7 @@ fn send_text_rejects_oversize_text() {
 
     let big = "x".repeat(spark_core::message::MAX_TEXT_BYTES + 1);
     let err = kernel
-        .message_send_text(PERSONAL, &conv.id, "msg-big", &big, None)
+        .message_send_text(PERSONAL, &conv.id, "msg-big", &big, None, None)
         .unwrap_err();
     assert!(
         err.to_string().contains("长度上限"),
@@ -1403,7 +1587,7 @@ fn send_text_rejects_oversize_text() {
     // 恰好 16 KiB：放行（无 p2p 落库 failed）
     let exact = "x".repeat(spark_core::message::MAX_TEXT_BYTES);
     let view = kernel
-        .message_send_text(PERSONAL, &conv.id, "msg-exact", &exact, None)
+        .message_send_text(PERSONAL, &conv.id, "msg-exact", &exact, None, None)
         .unwrap();
     assert_eq!(view.status.as_deref(), Some("failed"));
 }
@@ -1893,4 +2077,123 @@ fn inbound_org_invite_reply_security_rejects() {
     assert_eq!(result.response, json!({ "ok": false, "reason": "blocked" }));
     let stored = OrganizationService::get_outgoing_invite(&s, ORG_ID, &from).unwrap().unwrap();
     assert_eq!(stored.status, OrgInviteStatus::Pending);
+}
+
+#[test]
+fn send_text_persists_link_preview() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut kernel = fresh_kernel(dir.path());
+    init_identity(&mut kernel);
+    kernel.stop_p2p().unwrap();
+    let (_, peer) = peer_root(7);
+    let conv = kernel.message_ensure_direct(PERSONAL, &peer, "对方").unwrap();
+
+    // 带链接预览发送：落库且视图回读一致（发送方抓取随消息携带，§6.4）
+    let link = LinkPreview {
+        url: "https://zhihu.com/question/1".to_string(),
+        title: "知乎问题".to_string(),
+        description: "问题描述".to_string(),
+        site_name: "知乎".to_string(),
+        domain: "zhihu.com".to_string(),
+    };
+    let view = kernel
+        .message_send_text(
+            PERSONAL,
+            &conv.id,
+            "msg-link",
+            "看看 https://zhihu.com/question/1",
+            None,
+            Some(link.clone()),
+        )
+        .unwrap();
+    assert_eq!(view.link, Some(link.clone()));
+    let messages = kernel.message_list_messages(PERSONAL, &conv.id).unwrap();
+    assert_eq!(messages[0].link, Some(link), "list 视图回读携带 link");
+
+    // url 仅空白 → 整条不落 link
+    let view = kernel
+        .message_send_text(
+            PERSONAL,
+            &conv.id,
+            "msg-no-link",
+            "hi",
+            None,
+            Some(LinkPreview {
+                url: "  ".to_string(),
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+    assert_eq!(view.link, None, "url 为空则整条不落");
+    let messages = kernel.message_list_messages(PERSONAL, &conv.id).unwrap();
+    assert_eq!(messages[1].link, None);
+}
+
+#[test]
+fn sanitize_link_preview_trims_and_truncates() {
+    // 五字段各自 trim 后按字符限长截断（超限截断而非报错）
+    let out = sanitize_link_preview(LinkPreview {
+        url: format!("  https://{}  ", "u".repeat(3000)),
+        title: "t".repeat(300),
+        description: "d".repeat(600),
+        site_name: "s".repeat(100),
+        domain: "w".repeat(300),
+    })
+    .unwrap();
+    assert_eq!(out.url.chars().count(), 2048);
+    assert!(out.url.starts_with("https://"));
+    assert_eq!(out.title.chars().count(), 256);
+    assert_eq!(out.description.chars().count(), 512);
+    assert_eq!(out.site_name.chars().count(), 64);
+    assert_eq!(out.domain.chars().count(), 253);
+
+    // trim 生效；url 空（含全空白）→ None
+    let trimmed = sanitize_link_preview(LinkPreview {
+        url: " https://a.com/x ".to_string(),
+        title: " 标题 ".to_string(),
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(trimmed.url, "https://a.com/x");
+    assert_eq!(trimmed.title, "标题");
+    assert!(sanitize_link_preview(LinkPreview::default()).is_none());
+    assert!(
+        sanitize_link_preview(LinkPreview {
+            url: "   ".to_string(),
+            ..Default::default()
+        })
+        .is_none()
+    );
+}
+
+#[test]
+fn sanitize_link_preview_rejects_non_http_schemes() {
+    // 非 http(s) scheme 整条不落：javascript:/data:/file: 等在卡片点击/渲染面
+    // 是注入向量（对端自报 link 与出站同过此守卫）；scheme 判定大小写不敏感
+    for url in [
+        "javascript:alert(1)",
+        "JavaScript:alert(1)",
+        "data:text/html,<script>x</script>",
+        "file:///etc/passwd",
+        "ftp://a.com/x",
+        "//a.com/x",
+        "a.com/x",
+    ] {
+        assert!(
+            sanitize_link_preview(LinkPreview {
+                url: url.to_string(),
+                ..Default::default()
+            })
+            .is_none(),
+            "{url} 应整条丢弃"
+        );
+    }
+    // 大小写混写的 http(s) 放行
+    assert!(
+        sanitize_link_preview(LinkPreview {
+            url: "HTTPS://a.com/x".to_string(),
+            ..Default::default()
+        })
+        .is_some()
+    );
 }

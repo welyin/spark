@@ -20,8 +20,9 @@ impl ContactService {
     /// 空间通讯录总览（对齐 TS `SpaceContacts` 形状）。
     ///
     /// 个人空间：`group_tree`/`member_extras` 为空；组织空间：
-    /// `friends`/`requests`/`outgoing`/`groups` 为空（成员名单本身来自组织模块，
-    /// 「新的成员」申请走邀请码流程，不入库）。
+    /// `friends`/`requests`/`groups` 为空（成员名单本身来自组织模块，
+    /// 「新的成员」入站申请走邀请码流程，不入库；`outgoing` 为我发出的
+    /// 邀请记录 `ct:org:{orgId}:req:out:`，跨重启水合回来）。
     ///
     /// 个人空间 friends 的 `blocked` 字段以拉黑集合（`ct:blocked:`）为准
     /// overlay（friend 记录上的同名字段仅是展示镜像，集合才是事实来源）。
@@ -60,6 +61,7 @@ impl ContactService {
                         })
                         .collect();
                 Ok(SpaceContactsView {
+                    outgoing: Self::list_org_outgoing_requests(storage, org_id)?,
                     tags: read_vec(storage, &org_tags_key(org_id))?,
                     group_tree: read_vec(storage, &org_tree_key(org_id))?,
                     member_extras,

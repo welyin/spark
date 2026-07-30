@@ -155,7 +155,6 @@ type OrganizationView = {
   orgId: string;
   name: string;
   description: string;
-  basePluginDomain?: string;
   members: Array<{
     rootId: string;
     role: 'admin' | 'member';
@@ -260,9 +259,9 @@ export default defineComponent({
     const loadOrganizations = async () => {
       const plugin = await ensureSdk();
       const all = await plugin.runtime.listMineOrganizations();
-      const domain = plugin.domain;
 
-      orgOptions.value = all.filter((org) => org.basePluginDomain === domain) as OrganizationView[];
+      // 组织与插件无绑定（basePluginDomain 已删除）：全部已加入组织皆可选
+      orgOptions.value = all as OrganizationView[];
 
       const preferredOrgId = props.pluginContext?.orgId;
       if (preferredOrgId && orgOptions.value.some((org) => org.orgId === preferredOrgId)) {

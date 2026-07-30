@@ -72,6 +72,27 @@ pub struct InviteAcceptance {
 /// 组织服务（无状态；全部方法以存储与参数为输入）。
 pub struct OrganizationService;
 
+/// `updateMyIdentity` 的身份补丁（成员更新自己的组织内身份字段）。
+///
+/// 语义对齐 identity `update_profile`：字符串字段 `None` 不变；
+/// `avatar` 三态（`Some(Some)` 设置 / `Some(None)` 清除 / `None` 不变）；
+/// `gender`/`region`/`signature` `Some("")`（或全空白）= 清除。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OrgIdentityPatch {
+    /// 昵称（trim 后 1–24 字符；`None` 不变，不可清除）。
+    pub nickname: Option<String>,
+    /// 头像 data URL（三态；见上）。
+    pub avatar: Option<Option<String>>,
+    /// 性别（≤16 字符；`Some("")` 清除）。
+    pub gender: Option<String>,
+    /// 地区（≤64 字符；`Some("")` 清除）。
+    pub region: Option<String>,
+    /// 个性签名（≤128 字符；`Some("")` 清除）。
+    pub signature: Option<String>,
+    /// 是否在组织内展示个人身份（`None` 不变）。
+    pub use_personal_identity: Option<bool>,
+}
+
 impl OrganizationService {
     /// 读取单个组织记录；不存在返回 `Ok(None)`。
     pub fn get_record<S: StorageBackend>(
@@ -148,4 +169,25 @@ fn node_info_payload(node_info: Option<&OrganizationNodeInfo>) -> serde_json::Ma
         map.insert("nodeInfo".to_string(), value);
     }
     map
+}
+
+/// 三态字段（`Option<Option<&str>>`，如 avatar）的事务审计摘要（m1：payload
+/// 不落完整内容——data URL 序列化可达 200KB）：`None` 未变更 → Null；
+/// `Some(None)` 清除 → `false`；`Some(Some(_))` 设置 → 仅记内容长度。
+fn tri_state_audit(value: Option<Option<&str>>) -> Value {
+    match value {
+        None => Value::Null,
+        Some(None) => Value::from(false),
+        Some(Some(content)) => Value::from(content.len() as i64),
+    }
+}
+
+/// 空串清除字段（`Option<&str>`，空白 = 清除）的事务审计摘要（m1，口径同上）：
+/// `None` 未变更 → Null；空白清除 → `false`；非空设置 → 仅记内容长度。
+fn clearable_audit(value: Option<&str>) -> Value {
+    match value {
+        None => Value::Null,
+        Some(content) if content.trim().is_empty() => Value::from(false),
+        Some(content) => Value::from(content.len() as i64),
+    }
 }

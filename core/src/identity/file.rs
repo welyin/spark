@@ -2,11 +2,12 @@
 //!
 //! 磁盘文件 `{rootId}.json`，UTF-8 JSON：
 //! - v2 字段：`{version, kdf, salt, iv, data, authTag, publicKeyHex, rootId,
-//!   nickname?, avatar?, createdAt, updatedAt}`（全 hex 编码，authTag 单独存储）
+//!   nickname?, avatar?, gender?, region?, signature?, createdAt, updatedAt}`
+//!   （全 hex 编码，authTag 单独存储；三个扩展字段为明文可选键）
 //! - v1 legacy：同布局但 `kdf:"pbkdf2"`、无 authTag、iv 16B（只读兼容，解锁后迁移 v2）
 //!
 //! 加密 payload 明文 JSON：`{mnemonic, derivationPath, version, wordlist?,
-//! nickname?, avatar?, createdAt}`。
+//! nickname?, avatar?, gender?, region?, signature?, createdAt}`。
 //!
 //! 注：规格 §5 将 payload 路径字段记作 `path`，但 golden vectors 的真实明文
 //! （从 TS 实现逐字节复刻）使用 `derivationPath`。此处以向量为准，序列化输出
@@ -30,6 +31,10 @@ pub const KDF_SCRYPT: &str = "scrypt";
 pub const KDF_PBKDF2: &str = "pbkdf2";
 /// 昵称最大长度（trim 后字符数）。
 pub const NICKNAME_MAX_CHARS: usize = 24;
+/// 扩展字段字符数上限（宽限口径；UI 上限更小：性别单选、地区 20、签名 30）。
+pub const GENDER_MAX_CHARS: usize = 16;
+pub const REGION_MAX_CHARS: usize = 64;
+pub const SIGNATURE_MAX_CHARS: usize = 128;
 /// 头像序列化后最大字节数（200KB）。
 pub const AVATAR_MAX_SERIALIZED_BYTES: usize = 200 * 1024;
 /// 头像 data URL 前缀。
@@ -66,6 +71,15 @@ pub struct IdentityPayload {
     /// 头像 data URL。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub avatar: Option<String>,
+    /// 性别（扩展字段；缺省字段按 `None` 反序列化，旧文件向后兼容）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gender: Option<String>,
+    /// 地区（扩展字段）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+    /// 个性签名（扩展字段）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
     /// 创建时间（ms）。
     #[serde(rename = "createdAt", skip_serializing_if = "Option::is_none")]
     pub created_at: Option<u64>,
@@ -99,6 +113,15 @@ pub struct IdentityFile {
     /// 头像 data URL。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub avatar: Option<String>,
+    /// 性别（扩展字段；旧文件无此字段可读，`None` 不序列化）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gender: Option<String>,
+    /// 地区（扩展字段）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+    /// 个性签名（扩展字段）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
     /// 创建时间（ms）。
     #[serde(rename = "createdAt")]
     pub created_at: u64,
@@ -195,6 +218,9 @@ pub fn recover_identity(
         wordlist: Some(parsed.wordlist.as_str().to_string()),
         nickname: Some(nickname.clone()),
         avatar: avatar.map(str::to_string),
+        gender: None,
+        region: None,
+        signature: None,
         created_at: Some(now),
     };
     let file = seal_v2(
@@ -204,6 +230,9 @@ pub fn recover_identity(
         identity.id(),
         Some(nickname),
         avatar.map(str::to_string),
+        None,
+        None,
+        None,
         now,
         now,
     )?;
@@ -241,6 +270,10 @@ pub fn migrate_v1_to_v2(file: &IdentityFile, password: &str) -> Result<IdentityF
             .or_else(|| Some(Wordlist::English.as_str().to_string())),
         nickname: nickname.clone(),
         avatar: avatar.clone(),
+        // v1 时代无扩展字段，解密结果中必然为 None，原样保留
+        gender: payload.gender,
+        region: payload.region,
+        signature: payload.signature,
         created_at: Some(file.created_at),
     };
     seal_v2(
@@ -250,20 +283,29 @@ pub fn migrate_v1_to_v2(file: &IdentityFile, password: &str) -> Result<IdentityF
         file.root_id.clone(),
         nickname,
         avatar,
+        new_payload.gender.clone(),
+        new_payload.region.clone(),
+        new_payload.signature.clone(),
         file.created_at,
         now,
     )
 }
 
-/// 更新资料（改昵称/头像）：payload 重新加密，文件层字段同步，updatedAt 刷新。
+/// 更新资料（昵称/头像 + 扩展字段性别/地区/签名）：payload 重新加密，文件层
+/// 字段同步，updatedAt 刷新。
 ///
 /// - `nickname`：`Some(n)` 修改；`None` 不变。
 /// - `avatar`：`Some(Some(a))` 设置；`Some(None)` 清除；`None` 不变。
+/// - `gender`/`region`/`signature`：`Some(非空)` 设置；`Some("")` 清除；
+///   `None` 不变（与前端 `'' = 未设置` 的模型对齐）。
 pub fn update_profile(
     file: &mut IdentityFile,
     password: &str,
     nickname: Option<&str>,
     avatar: Option<Option<&str>>,
+    gender: Option<&str>,
+    region: Option<&str>,
+    signature: Option<&str>,
 ) -> Result<()> {
     if file.version != FILE_VERSION_V2 {
         return Err(IdentityError::UnsupportedVersion(file.version));
@@ -282,6 +324,10 @@ pub fn update_profile(
             None => None,
         };
     }
+    payload.gender = patch_extra_field(payload.gender, gender, "gender", GENDER_MAX_CHARS)?;
+    payload.region = patch_extra_field(payload.region, region, "region", REGION_MAX_CHARS)?;
+    payload.signature =
+        patch_extra_field(payload.signature, signature, "signature", SIGNATURE_MAX_CHARS)?;
 
     let updated = seal_v2(
         &payload,
@@ -290,11 +336,39 @@ pub fn update_profile(
         file.root_id.clone(),
         payload.nickname.clone(),
         payload.avatar.clone(),
+        payload.gender.clone(),
+        payload.region.clone(),
+        payload.signature.clone(),
         file.created_at,
         now_ms(),
     )?;
     *file = updated;
     Ok(())
+}
+
+/// 扩展字段补丁语义：`None` 不变；`Some("")`（或全空白）清除；其余校验长度后设置
+/// （字符数上限防身份文件被刷大；UI 自身上限更小——地区 20/签名 30，此处取宽限）。
+///
+/// pub：组织成员身份写路径（org::service `update_my_identity`）复用同一口径。
+pub fn patch_extra_field(
+    current: Option<String>,
+    patch: Option<&str>,
+    field: &str,
+    max_chars: usize,
+) -> Result<Option<String>> {
+    match patch {
+        None => Ok(current),
+        Some(v) if v.trim().is_empty() => Ok(None),
+        Some(v) => {
+            let chars = v.chars().count();
+            if chars > max_chars {
+                return Err(IdentityError::InvalidProfileField(format!(
+                    "{field} too long: {chars} chars > {max_chars}"
+                )));
+            }
+            Ok(Some(v.trim().to_string()))
+        }
+    }
 }
 
 /// 解密身份文件 payload（按 version 分派 v2/v1）。
@@ -339,6 +413,9 @@ fn seal_v2(
     root_id: String,
     nickname: Option<String>,
     avatar: Option<String>,
+    gender: Option<String>,
+    region: Option<String>,
+    signature: Option<String>,
     created_at: u64,
     updated_at: u64,
 ) -> Result<IdentityFile> {
@@ -360,6 +437,9 @@ fn seal_v2(
         root_id,
         nickname,
         avatar,
+        gender,
+        region,
+        signature,
         created_at,
         updated_at,
     })

@@ -180,3 +180,108 @@ fn collect_carries_schema_when_declared() {
     let schema = items[0].schema.as_ref().unwrap();
     assert_eq!(schema.sync_strategy, Some(spark_core::schema::SyncStrategy::Lww));
 }
+
+#[test]
+fn collect_org_plugin_domains_counts() {
+    let mut storage = MemoryStorage::new();
+    // 0 域：无任何插件文档
+    assert!(
+        collect_org_plugin_domains(&storage, "org_x")
+            .unwrap()
+            .is_empty()
+    );
+    // 0 域：只有别的 orgId 的文档
+    put_doc(
+        &mut storage,
+        "plugin:chat",
+        "messages",
+        "m1",
+        &json!({"orgId": "org_other"}),
+        false,
+    );
+    assert!(
+        collect_org_plugin_domains(&storage, "org_x")
+            .unwrap()
+            .is_empty()
+    );
+    // 1 域（同域多篇去重）
+    put_doc(
+        &mut storage,
+        "plugin:chat",
+        "messages",
+        "m2",
+        &json!({"orgId": "org_x"}),
+        false,
+    );
+    put_doc(
+        &mut storage,
+        "plugin:chat",
+        "messages",
+        "m3",
+        &json!({"orgId": "org_x"}),
+        false,
+    );
+    assert_eq!(
+        collect_org_plugin_domains(&storage, "org_x").unwrap(),
+        vec!["plugin:chat"]
+    );
+    // 2 域：扫描键升序 → 返回顺序确定；多域时由调用方取第一个（保持单 domain 语义）
+    put_doc(
+        &mut storage,
+        "plugin:aaa",
+        "notes",
+        "n1",
+        &json!({"orgId": "org_x"}),
+        false,
+    );
+    let domains = collect_org_plugin_domains(&storage, "org_x").unwrap();
+    assert_eq!(domains, vec!["plugin:aaa", "plugin:chat"]);
+    assert_eq!(domains.into_iter().next().unwrap(), "plugin:aaa");
+}
+
+#[test]
+fn collect_org_plugin_domains_skips_bad_rows() {
+    let mut storage = MemoryStorage::new();
+    put_doc(
+        &mut storage,
+        "plugin:chat",
+        "messages",
+        "ok",
+        &json!({"orgId": "org_x"}),
+        false,
+    );
+    // payload 非 JSON → 跳过
+    storage
+        .put("doc:plugin:chat:messages:broken", "{broken")
+        .unwrap();
+    // payload 无 orgId → 跳过
+    put_doc(
+        &mut storage,
+        "plugin:chat",
+        "messages",
+        "noorg",
+        &json!({"v": 1}),
+        false,
+    );
+    // 键形不符（doc:plugin: 前缀内但非 doc:plugin:{domain}:{collection}:{id} 三段式）→ 跳过
+    storage
+        .put(
+            "doc:plugin::messages:x",
+            &json!({"orgId": "org_x"}).to_string(),
+        )
+        .unwrap();
+    storage
+        .put("doc:plugin:chat::x", &json!({"orgId": "org_x"}).to_string())
+        .unwrap();
+
+    assert_eq!(
+        collect_org_plugin_domains(&storage, "org_x").unwrap(),
+        vec!["plugin:chat"]
+    );
+    // 空 orgId → 空集
+    assert!(
+        collect_org_plugin_domains(&storage, "  ")
+            .unwrap()
+            .is_empty()
+    );
+}

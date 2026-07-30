@@ -22,19 +22,12 @@ fn root_id_validation() {
 }
 
 #[test]
-fn text_and_domain_normalization() {
+fn text_normalization() {
     assert_eq!(
         normalize_text("  hello   world \n ", "Name").unwrap(),
         "hello world"
     );
     assert!(normalize_text("   ", "Name").is_err());
-    assert_eq!(
-        normalize_plugin_domain(" plugin:chat ").unwrap(),
-        "plugin:chat"
-    );
-    assert!(normalize_plugin_domain("chat").is_err());
-    assert!(normalize_plugin_domain("plugin:").is_err());
-    assert!(normalize_plugin_domain("  ").is_err());
 }
 
 #[test]
@@ -94,7 +87,7 @@ fn sort_members_admin_first_then_joined_at() {
         joined_at: joined,
         added_by: rid('f'),
         node_info: None,
-        extra: Default::default(),
+        ..Default::default()
     };
     let members = vec![
         m('a', OrganizationRole::Member, 300),

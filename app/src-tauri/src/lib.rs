@@ -124,6 +124,7 @@ pub fn run() {
             commands::org::org_set_gateways,
             commands::org::org_set_public,
             commands::org::org_update_info,
+            commands::org::org_update_my_identity,
             commands::org::org_resolve_address,
             commands::org::org_search_known,
             commands::org::org_accept_invite,
@@ -137,6 +138,7 @@ pub fn run() {
             commands::contact::contact_remove_friend,
             commands::contact::contact_send_request,
             commands::contact::contact_resolve_request,
+            commands::contact::contact_reply_request,
             commands::contact::contact_tag_create,
             commands::contact::contact_tag_rename,
             commands::contact::contact_tag_delete,
@@ -195,6 +197,8 @@ pub fn run() {
             commands::market::plugin_market_install,
             commands::market::plugin_market_upgrade,
             commands::market::plugin_market_set_enabled,
+            // 系统桥接（未读角标 → dock/任务栏徽标）
+            commands::system::system_set_badge,
         ])
         .build(tauri::generate_context!())
         .expect("error while building spark desktop");

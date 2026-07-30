@@ -104,6 +104,31 @@ pub struct OrganizationMember {
     /// 节点信息（可后续经 nodeInfoClaim 回填）。
     #[serde(rename = "nodeInfo", default, skip_serializing_if = "Option::is_none")]
     pub node_info: Option<OrganizationNodeInfo>,
+    /// 组织内昵称（组织身份；全部身份字段仅本人可改，经快照 members 段传播）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nickname: Option<String>,
+    /// 组织内头像（data URL）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<String>,
+    /// 个性签名。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
+    /// 性别。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gender: Option<String>,
+    /// 地区。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+    /// 是否在组织内展示个人身份（`None` = 未设置，语义视同 false；
+    /// `Some(false)` = 显式关闭——M1 墓碑语义：true→false 必须能经快照传播，
+    /// 故升级为 `Option<bool>`；旧数据 true/false 读为 `Some`，缺键读为
+    /// `None`（serde default 兼容）。
+    #[serde(
+        rename = "usePersonalIdentity",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub use_personal_identity: Option<bool>,
     /// 非标准动态键。
     #[serde(flatten)]
     pub extra: serde_json::Map<String, Value>,

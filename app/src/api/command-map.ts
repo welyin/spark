@@ -41,6 +41,7 @@ export const COMMAND_MAP: Record<string, string> = {
   'org-set-gateways': 'org_set_gateways',
   'org-set-public': 'org_set_public',
   'org-update-info': 'org_update_info',
+  'org-update-my-identity': 'org_update_my_identity',
   'org-resolve-address': 'org_resolve_address',
   'org-search-known': 'org_search_known',
   // 通讯录
@@ -49,6 +50,7 @@ export const COMMAND_MAP: Record<string, string> = {
   'contact-set-blocked': 'contact_set_blocked',
   'contact-remove-friend': 'contact_remove_friend',
   'contact-send-request': 'contact_send_request',
+  'contact-reply-request': 'contact_reply_request',
   'contact-resolve-request': 'contact_resolve_request',
   'contact-tag-create': 'contact_tag_create',
   'contact-tag-rename': 'contact_tag_rename',
@@ -106,7 +108,9 @@ export const COMMAND_MAP: Record<string, string> = {
   'plugin-market-check-updates': 'plugin_market_check_updates',
   'plugin-market-install': 'plugin_market_install',
   'plugin-market-upgrade': 'plugin_market_upgrade',
-  'plugin-market-set-enabled': 'plugin_market_set_enabled'
+  'plugin-market-set-enabled': 'plugin_market_set_enabled',
+  // 系统桥接（未读角标 → dock/任务栏徽标）
+  'system-set-badge': 'system_set_badge'
 };
 
 /**
@@ -136,13 +140,15 @@ export const ARG_NAMES: Record<string, string[]> = {
   'org-set-gateways': ['orgId', 'gateways'],
   'org-set-public': ['orgId', 'public', 'displayName'],
   'org-update-info': ['orgId', 'name', 'description', 'avatar'],
+  'org-update-my-identity': ['orgId', 'nickname', 'avatar', 'gender', 'region', 'signature', 'usePersonalIdentity'],
   'org-resolve-address': ['orgAddress'],
   'org-search-known': ['keyword'],
   'contact-overview': ['spaceKey'],
   'contact-update-profile': ['spaceKey', 'rootId', 'patch'],
   'contact-set-blocked': ['spaceKey', 'rootId', 'blocked'],
-  'contact-remove-friend': ['rootId'],
+  'contact-remove-friend': ['rootId', 'block'],
   'contact-send-request': ['input'],
+  'contact-reply-request': ['requestId', 'text'],
   'contact-resolve-request': ['requestId', 'accept', 'permission'],
   'contact-tag-create': ['spaceKey', 'id', 'name'],
   'contact-tag-rename': ['spaceKey', 'tagId', 'name'],
@@ -155,7 +161,7 @@ export const ARG_NAMES: Record<string, string[]> = {
   'contact-org-group-create': ['spaceKey', 'parentId', 'id', 'name'],
   'contact-org-group-rename': ['spaceKey', 'id', 'name'],
   'contact-org-group-delete': ['spaceKey', 'id'],
-  'contact-org-group-move': ['spaceKey', 'id', 'toIndex'],
+  'contact-org-group-move': ['spaceKey', 'id', 'toIndex', 'newParentId'],
   'message-list-conversations': ['spaceKey'],
   'message-list-messages': ['spaceKey', 'convId'],
   'message-ensure-direct': ['spaceKey', 'peerId', 'title'],
@@ -183,5 +189,6 @@ export const ARG_NAMES: Record<string, string[]> = {
   'plugin-market-check-updates': ['pluginId'],
   'plugin-market-install': ['pluginId'],
   'plugin-market-upgrade': ['pluginId'],
-  'plugin-market-set-enabled': ['pluginId', 'enabled']
+  'plugin-market-set-enabled': ['pluginId', 'enabled'],
+  'system-set-badge': ['count']
 };

@@ -43,7 +43,7 @@ export {
   markRequestRead
 } from './queries';
 
-export { sendFriendRequest, retryOutgoing, replyOutgoing, recordOutgoing } from './requests';
+export { sendFriendRequest, retryOutgoing, replyOutgoing } from './requests';
 
 export { createTag, renameTag, deleteTag } from './tags';
 

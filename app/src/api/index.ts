@@ -83,7 +83,7 @@ function requireDomain(pluginDomain: string | undefined): string {
 /**
  * 插件目录静态清单（vendored 自 TS main/plugins/catalog.ts）。
  * 插件运行时（安装/验签/独立窗口）本期不在壳范围，目录本身是纯静态数据，
- * OrgPage 建组织时依赖它解析 basePluginDomain。
+ * 经 plugin.listCatalog 下发给前端（组织与插件无绑定，不参与建组织）。
  */
 const PLUGIN_CATALOG: PluginCatalogItem[] = [
   {
@@ -205,6 +205,20 @@ export function createTauriApi(): ElectronAPI {
         // 与 rootIdentity.updateProfile 同约定：字段缺省（undefined）= 不变，null = 明确清除；
         // avatar 空串 = 清除 logo（内核 settings.rs 口径）
         call('org-update-info', orgId, patch.name ?? undefined, patch.description ?? undefined, patch.avatar ?? undefined),
+      // 成员更新自己的组织内身份（F2a）：缺省字段不传 = 不变；avatar null/'' = 清除
+      // （B1：present-but-null 在 IPC 边界会被 serde 坍塌，故 null 归一为 '' 发送）；
+      // gender/region/signature 空串 = 清除
+      updateMyIdentity: (orgId, patch) =>
+        call(
+          'org-update-my-identity',
+          orgId,
+          patch.nickname ?? undefined,
+          patch.avatar === undefined ? undefined : (patch.avatar ?? ''),
+          patch.gender ?? undefined,
+          patch.region ?? undefined,
+          patch.signature ?? undefined,
+          patch.usePersonalIdentity ?? undefined
+        ),
       resolveAddress: (orgAddress) => call('org-resolve-address', orgAddress),
       searchKnown: (keyword) => call('org-search-known', keyword),
       // 组织邀请走 DM：管理员定向发送（寻址线索可省，内核按 显式参数→预录成员
@@ -225,8 +239,10 @@ export function createTauriApi(): ElectronAPI {
       overview: (spaceKey) => call('contact-overview', spaceKey),
       updateProfile: (spaceKey, rootId, patch) => call('contact-update-profile', spaceKey, rootId, patch),
       setBlocked: (spaceKey, rootId, blocked) => call('contact-set-blocked', spaceKey, rootId, blocked),
-      removeFriend: (rootId) => call('contact-remove-friend', rootId),
+      // block 缺省（undefined）= 只删不拉黑；true = §5.5 删除同时拉黑
+      removeFriend: (rootId, block) => call('contact-remove-friend', rootId, block),
       sendRequest: (input) => call('contact-send-request', input),
+      replyRequest: (requestId, text) => call('contact-reply-request', requestId, text),
       resolveRequest: (requestId, accept, permission) =>
         call('contact-resolve-request', requestId, accept, permission),
       tagCreate: (spaceKey, id, name) => call('contact-tag-create', spaceKey, id, name),
@@ -240,7 +256,8 @@ export function createTauriApi(): ElectronAPI {
       orgGroupCreate: (spaceKey, parentId, id, name) => call('contact-org-group-create', spaceKey, parentId, id, name),
       orgGroupRename: (spaceKey, id, name) => call('contact-org-group-rename', spaceKey, id, name),
       orgGroupDelete: (spaceKey, id) => call('contact-org-group-delete', spaceKey, id),
-      orgGroupMove: (spaceKey, id, toIndex) => call('contact-org-group-move', spaceKey, id, toIndex)
+      // newParentId 缺省（undefined）= 同级重排；'' = 移到根层（跨级移动）
+      orgGroupMove: (spaceKey, id, toIndex, newParentId) => call('contact-org-group-move', spaceKey, id, toIndex, newParentId)
     },
     messages: {
       listConversations: (spaceKey) => call('message-list-conversations', spaceKey),
@@ -269,11 +286,16 @@ export function createTauriApi(): ElectronAPI {
       updateProfile: (profile) =>
         // TS 主进程为免密码会话语义（root-id.ts updateProfile）；内核以 unlock 会话
         // 缓存口令重封加密 payload（spec §5），语义对齐。形状抹平：preload 传单个
-        // profile 对象，命令侧按字段可选传递（avatar: null = 清除恢复自动头像；
-        // 字段缺省 = 不变）。
+        // profile 对象，命令侧按字段可选传递（avatar: null/'' = 清除恢复自动头像；
+        // 字段缺省 = 不变）。B1：present-but-null 在 IPC 边界会被 serde 坍塌为
+        // 「缺省」，故 null 统一归一为 '' 发送（命令层 Some("") = 清除）。
+        // 扩展字段性别/地区/签名：缺省/null = 不变，'' = 清除。
         invoke('root_update_profile', {
           nickname: profile.nickname ?? undefined,
-          avatar: profile.avatar === undefined ? undefined : profile.avatar
+          avatar: profile.avatar === undefined ? undefined : (profile.avatar ?? ''),
+          gender: profile.gender ?? undefined,
+          region: profile.region ?? undefined,
+          signature: profile.signature ?? undefined
         }),
       revealMnemonic: (password) => call('root-reveal-mnemonic', password),
       backupPayload: () => call('root-backup-payload'),
@@ -286,6 +308,11 @@ export function createTauriApi(): ElectronAPI {
       // TODO: 更新器为 Electron 专属流程；Tauri 版应改用 tauri-plugin-updater
       get: (_, prop) => todo(`update-${String(prop)}`)
     }),
+    system: {
+      // 未读角标 → 系统徽标（F4）：macOS dock 角标 / Linux 任务栏计数，
+      // 平台不支持时命令侧静默降级（见 src-tauri commands/system.rs）
+      setBadge: (count) => call('system-set-badge', count)
+    },
     dataManagement: {
       usage: () => call('data-usage'),
       cleanupNow: () => call('data-cleanup-now'),

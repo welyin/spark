@@ -6,6 +6,10 @@
 
 use serde_json::Value;
 
+use crate::identity::{
+    GENDER_MAX_CHARS, REGION_MAX_CHARS, SIGNATURE_MAX_CHARS, patch_extra_field, validate_avatar,
+    validate_nickname,
+};
 use crate::storage::StorageBackend;
 
 use super::super::recovery::RecoveryViewItem;
@@ -19,11 +23,11 @@ use super::super::types::{
     normalize_optional_node_info, normalize_root_id, sort_members,
 };
 use super::super::{OrgError, Result};
-use super::{OrganizationService, node_info_payload};
+use super::{OrganizationService, OrgIdentityPatch, clearable_audit, node_info_payload, tri_state_audit};
 
 impl OrganizationService {
     /// `toView`（service.ts:573-587）：成员排序（admin 优先，joinedAt 升序）+
-    /// 角色/计数；`basePluginDomain` 缺省归一为 `""`。
+    /// 角色/计数。
     pub fn to_view(record: &OrganizationRecord, current_root_id: &str) -> OrganizationView {
         let members = sort_members(&record.members);
         let current_role = members
@@ -116,6 +120,12 @@ impl OrganizationService {
                 joined_at: now_ms,
                 added_by: current_root_id.to_string(),
                 node_info: normalized_node_info.clone(),
+                nickname: None,
+                avatar: None,
+                signature: None,
+                gender: None,
+                region: None,
+                use_personal_identity: None,
                 extra: Default::default(),
             });
             tx_type = OrganizationTransactionType::MemberAdd;
@@ -134,6 +144,105 @@ impl OrganizationService {
                 target_root_id: Some(normalized_root_id),
                 summary: tx_summary,
                 payload: Some(node_info_payload(normalized_node_info.as_ref())),
+            },
+        )?;
+        Self::rebuild_sync_after_mutation(
+            &mut record,
+            previous_last_synced_at,
+            transaction.created_at,
+        );
+        Self::save_record(storage, &record)?;
+        Ok(record)
+    }
+
+    /// `updateMyIdentity`：成员更新自己的组织内身份字段（昵称/头像/签名/性别/
+    /// 地区/usePersonalIdentity）。仅改调用者本人的成员记录——他人记录不可改；
+    /// 无需 admin（任何成员可改自己的身份）。
+    ///
+    /// - 字段校验复用 identity 资料口径（昵称 24 字符、头像 data URL +
+    ///   序列化 200KB、性别 16/地区 64/签名 128 字符）
+    /// - 无变化时幂等返回（不 bump 版本），与 `updateOrgInfo` 同口径
+    /// - 变更后追加事务并重建 sync，经既有快照同步广播扩散（与 addMember 同模式）
+    pub fn update_my_identity<S: StorageBackend>(
+        storage: &mut S,
+        org_id: &str,
+        patch: &OrgIdentityPatch,
+        current_root_id: &str,
+        now_ms: i64,
+    ) -> Result<OrganizationRecord> {
+        let mut record = Self::require_organization(storage, org_id)?;
+        let Some(index) = record
+            .members
+            .iter()
+            .position(|m| m.root_id == current_root_id)
+        else {
+            return Err(OrgError::MemberNotFound);
+        };
+        let member = &record.members[index];
+        let values = resolve_identity_patch(member, patch)?;
+
+        // 幂等：全部字段无变化时不 bump 版本
+        let unchanged = values.nickname == member.nickname
+            && values.avatar == member.avatar
+            && values.gender == member.gender
+            && values.region == member.region
+            && values.signature == member.signature
+            && values.use_personal_identity == member.use_personal_identity;
+        if unchanged {
+            return Ok(record);
+        }
+
+        let member = &mut record.members[index];
+        member.nickname = values.nickname;
+        member.avatar = values.avatar;
+        member.gender = values.gender;
+        member.region = values.region;
+        member.signature = values.signature;
+        member.use_personal_identity = values.use_personal_identity;
+        record.updated_at = now_ms;
+        let previous_last_synced_at = record.sync.as_ref().map(|s| s.last_synced_at).unwrap_or(0);
+        let transaction = append_organization_transaction(
+            storage,
+            OrganizationTransactionRecord {
+                tx_id: String::new(),
+                org_id: org_id.to_string(),
+                type_: OrganizationTransactionType::MemberUpdate,
+                created_at: now_ms,
+                actor_root_id: current_root_id.to_string(),
+                target_root_id: Some(current_root_id.to_string()),
+                summary: "更新组织身份信息".to_string(),
+                payload: Some(
+                    [
+                        (
+                            "nickname".to_string(),
+                            patch.nickname.as_deref().map(Value::from).unwrap_or(Value::Null),
+                        ),
+                        // avatar/gender/region/signature 变更纳入审计，但只记
+                        // 摘要（不变 Null / 清除 false / 设置记长度），不落完整内容
+                        (
+                            "avatar".to_string(),
+                            tri_state_audit(patch.avatar.as_ref().map(|inner| inner.as_deref())),
+                        ),
+                        (
+                            "gender".to_string(),
+                            clearable_audit(patch.gender.as_deref()),
+                        ),
+                        (
+                            "region".to_string(),
+                            clearable_audit(patch.region.as_deref()),
+                        ),
+                        (
+                            "signature".to_string(),
+                            clearable_audit(patch.signature.as_deref()),
+                        ),
+                        (
+                            "usePersonalIdentity".to_string(),
+                            patch.use_personal_identity.map(Value::from).unwrap_or(Value::Null),
+                        ),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
             },
         )?;
         Self::rebuild_sync_after_mutation(
@@ -272,4 +381,68 @@ impl OrganizationService {
         }
         Ok(view)
     }
+}
+
+/// `update_my_identity` 的字段计算结果（校验已全部通过）。
+struct IdentityPatchValues {
+    nickname: Option<String>,
+    avatar: Option<String>,
+    gender: Option<String>,
+    region: Option<String>,
+    signature: Option<String>,
+    use_personal_identity: Option<bool>,
+}
+
+/// 按补丁语义计算成员身份新值（复用 identity 的校验函数与常量；
+/// 全部校验通过后才返回，不落库）。
+fn resolve_identity_patch(
+    member: &OrganizationMember,
+    patch: &OrgIdentityPatch,
+) -> Result<IdentityPatchValues> {
+    let nickname = match &patch.nickname {
+        Some(value) => Some(
+            validate_nickname(value).map_err(|e| OrgError::InvalidIdentityField(e.to_string()))?,
+        ),
+        None => member.nickname.clone(),
+    };
+    let avatar = match &patch.avatar {
+        Some(Some(value)) => {
+            validate_avatar(value).map_err(|e| OrgError::InvalidIdentityField(e.to_string()))?;
+            Some(value.clone())
+        }
+        Some(None) => None,
+        None => member.avatar.clone(),
+    };
+    let map_field_err =
+        |e: crate::identity::IdentityError| OrgError::InvalidIdentityField(e.to_string());
+    let gender = patch_extra_field(
+        member.gender.clone(),
+        patch.gender.as_deref(),
+        "gender",
+        GENDER_MAX_CHARS,
+    )
+    .map_err(map_field_err)?;
+    let region = patch_extra_field(
+        member.region.clone(),
+        patch.region.as_deref(),
+        "region",
+        REGION_MAX_CHARS,
+    )
+    .map_err(map_field_err)?;
+    let signature = patch_extra_field(
+        member.signature.clone(),
+        patch.signature.as_deref(),
+        "signature",
+        SIGNATURE_MAX_CHARS,
+    )
+    .map_err(map_field_err)?;
+    let use_personal_identity = patch.use_personal_identity.or(member.use_personal_identity);
+    Ok(IdentityPatchValues {
+        nickname,
+        avatar,
+        gender,
+        region,
+        signature,
+        use_personal_identity,
+    })
 }

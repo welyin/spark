@@ -8,8 +8,9 @@
 //! 投递与双向确认的网络流程属 p2p 模块职责，本层只负责本地落库与状态机。
 //!
 //! 空间模型：`space` 为 `'personal'`（个人空间：朋友/申请/标签/扁平分组）或
-//! `'org:<orgId>'`（组织空间：成员附加资料/标签/分组树；组织「新的成员」申请不
-//! 入库，真实流程走邀请码）。存储已是「每身份一个 sled 库」，键不再带身份前缀。
+//! `'org:<orgId>'`（组织空间：成员附加资料/标签/分组树 + 我发出的邀请记录；
+//! 组织「新的成员」入站申请不入库，真实流程走邀请码）。存储已是「每身份一个
+//! sled 库」，键不再带身份前缀。
 //!
 //! 存储键（值均为紧凑 JSON，serde camelCase）：
 //! - `ct:friend:{rootId}` → [`FriendRecord`]（个人空间）
@@ -19,6 +20,8 @@
 //! - `ct:blocked:{rootId}` → `"1"`（个人空间拉黑集合，独立于朋友记录）
 //! - `ct:org:{orgId}:extra:{rootId}` → [`ContactProfileRecord`]（组织成员附加资料）
 //! - `ct:org:{orgId}:tags` → 标签数组；`ct:org:{orgId}:tree` → `Vec<OrgGroupNode>`
+//! - `ct:org:{orgId}:req:out:{id}` → [`FriendRequestRecord`]（组织空间我发出的
+//!   邀请记录；邀请人本机数据，不随组织快照同步）
 //!
 //! 时间一律以 `now_ms` 参数注入，保证纯函数可测。[`FriendRequestRecord`] 带
 //! `updatedAt`（新建 = createdAt，后续变更由写路径刷新）；其余记录尚无
@@ -52,6 +55,11 @@ pub(crate) const BLOCKED_PREFIX: &str = "ct:blocked:";
 /// 组织空间成员附加资料键前缀（`ct:org:{orgId}:extra:{rootId}`）。
 pub(crate) fn org_extra_prefix(org_id: &str) -> String {
     format!("ct:org:{org_id}:extra:")
+}
+
+/// 组织空间我发出的邀请记录键前缀（`ct:org:{orgId}:req:out:{id}`）。
+pub(crate) fn org_req_out_prefix(org_id: &str) -> String {
+    format!("ct:org:{org_id}:req:out:")
 }
 
 /// 组织空间标签数组键。
@@ -111,7 +119,9 @@ pub struct FriendRecord {
 
 /// 好友申请状态（设计 §4：pending → accepted / ignored）。
 ///
-/// `Failed` 仅 outbox（我发出的申请）使用：投递无应答/失败时由投递任务置位，
+/// `Replied` 仅 outbox（我发出的申请）使用：对方回复询问（friend-reply
+/// 信封），等待我回复；我回复后状态回 Pending。
+/// `Failed` 仅 outbox 使用：投递无应答/失败时由投递任务置位，
 /// 前端可据此展示「发送失败」并以同 id 重试。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -119,7 +129,25 @@ pub enum FriendRequestStatus {
     Pending,
     Accepted,
     Ignored,
+    Replied,
     Failed,
+}
+
+/// 申请回复线程消息方向（我 / 对方）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThreadFrom {
+    Me,
+    Peer,
+}
+
+/// 好友申请回复线程消息（来回询问/回答，设计 §4 的「回复询问」）。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestThreadMessage {
+    pub from: ThreadFrom,
+    pub text: String,
+    pub ts: i64,
 }
 
 /// 好友申请记录（`ct:req:in:` 收到 / `ct:req:out:` 发出）。
@@ -145,6 +173,12 @@ pub struct FriendRequestRecord {
     pub updated_at: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub peer: Option<PeerRef>,
+    /// 来回回复线程（对方询问/我方回答；default 兼容旧数据无此字段）。
+    #[serde(default)]
+    pub thread: Vec<RequestThreadMessage>,
+    /// 组织邀请码（仅组织空间我发出的邀请记录；camelCase `inviteCode`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invite_code: Option<String>,
 }
 
 /// 组织成员本地附加资料（仅自己可见，设计 §5.4）。
@@ -227,7 +261,8 @@ pub struct ProfilePatch {
 
 /// `overview` 返回的空间通讯录视图（对齐 TS `SpaceContacts`）：
 /// 个人空间 `group_tree`/`member_extras` 为空；组织空间
-/// `friends`/`requests`/`outgoing`/`groups` 为空。
+/// `friends`/`requests`/`groups` 为空（`outgoing` 为我发出的邀请记录，
+/// 对方凭码加入后由 org-pull-org 响应路径置 accepted）。
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpaceContactsView {

@@ -8,7 +8,9 @@ use super::org_sync::OrgSyncRequest;
 use super::{Kernel, KernelError, PeerOrgSyncResult, Result};
 use crate::collection::DocumentCollection;
 use crate::contact::ContactService;
-use crate::org::service::{CreateOrganizationInput, CreatedOrgInvite, InviteAcceptance};
+use crate::org::service::{
+    CreateOrganizationInput, CreatedOrgInvite, InviteAcceptance, OrgIdentityPatch,
+};
 use crate::org::sync_state::{org_sync_state_key, sync_state_after_pull_synced};
 use crate::org::{
     OrgInviteDirection, OrgInvitePayload, OrgInviteRecord, OrgInviteStatus, OrganizationNodeInfo,
@@ -179,6 +181,30 @@ impl Kernel {
             name,
             description,
             avatar,
+            &root_id,
+            system_now_ms(),
+        )?;
+        if let Some(tx) = &self.org_sync_tx {
+            let _ = tx.send(OrgSyncRequest::PushOrg {
+                org_id: record.org_id.clone(),
+                actor_root_id: root_id.clone(),
+            });
+        }
+        Ok(OrganizationService::to_view(&record, &root_id))
+    }
+
+    /// 更新自己的组织内身份字段（任何成员可改，仅改本人成员记录）。
+    /// 落库后经 org-sync worker 向已知成员推送快照（与 updateOrgInfo 同模式）。
+    pub fn org_update_my_identity(
+        &mut self,
+        org_id: &str,
+        patch: &OrgIdentityPatch,
+    ) -> Result<OrganizationView> {
+        let root_id = self.require_unlocked_root_id()?;
+        let record = OrganizationService::update_my_identity(
+            self.require_storage_mut()?,
+            org_id,
+            patch,
             &root_id,
             system_now_ms(),
         )?;

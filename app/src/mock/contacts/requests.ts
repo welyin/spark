@@ -98,45 +98,41 @@ export function retryOutgoing(spaceKey: string, requestId: string): void {
 /**
  * 回复对方的询问（对方回复「你是谁」后，双方可继续互复，直到对方拒绝/接受）。
  * 我回复后状态回到 pending（等待对方回应），对方再回复时回到 replied。
- * TODO(api): 真实环境应由内核把回复投递给对方（contacts 暂无此接口）。
+ * Tauri 下由内核投递 friend-reply 信封：本地先乐观更新，命令失败（状态
+ * 守卫/超长等）时回滚本地 thread 与状态，避免与内核静默分叉；对方的新询问
+ * 经 FriendRequestSent 事件回写。无桥接/demo 模式走本地模拟跟进。
  */
+/** 回复正文上限（UTF-8 字节，与内核 MAX_TEXT_BYTES 对齐；超长直接不发避免乐观更新闪回） */
+const REPLY_MAX_BYTES = 16 * 1024;
+
 export function replyOutgoing(spaceKey: string, requestId: string, text: string): void {
   const request = contactsOf(spaceKey).outgoing.find((item) => item.id === requestId);
   const trimmed = text.trim();
   if (!request || !trimmed || request.status !== 'replied') {
     return;
   }
+  if (new TextEncoder().encode(trimmed).length > REPLY_MAX_BYTES) {
+    return;
+  }
   (request.thread ??= []).push({ from: 'me', text: trimmed, ts: Date.now() });
   request.status = 'pending';
   request.updatedAt = Date.now();
-  if (!contactsApi() || demoContacts()) {
+  const api = demoContacts() ? undefined : contactsApi();
+  if (api) {
+    api.replyRequest(requestId, trimmed).catch(() => {
+      // 命令拒绝（状态守卫等）：回滚乐观更新，保持与内核一致
+      const thread = request.thread ?? [];
+      for (let i = thread.length - 1; i >= 0; i -= 1) {
+        if (thread[i].from === 'me' && thread[i].text === trimmed) {
+          thread.splice(i, 1);
+          break;
+        }
+      }
+      request.status = 'replied';
+      request.updatedAt = Date.now();
+    });
+  } else {
     simulatePeerFollowUp(spaceKey, requestId);
-  }
-}
-
-/**
- * 本地记录一条我发出的邀请（组织添加成员等不走 contacts.sendRequest 的场景）。
- * TODO(mock): 组织邀请的发出/对方反应应由内核组织模块回传事件，本地记录仅供展示。
- */
-export function recordOutgoing(
-  spaceKey: string,
-  input: { rootId: string; source: string; inviteCode?: string }
-): void {
-  const space = contactsOf(spaceKey);
-  const id = `out-${Date.now()}-${space.outgoing.length}`;
-  space.outgoing.push({
-    id,
-    rootId: input.rootId,
-    nickname: '待加入成员',
-    message: '',
-    source: input.source,
-    status: 'pending',
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    inviteCode: input.inviteCode
-  });
-  if (!contactsApi() || demoContacts()) {
-    simulatePeerReaction(spaceKey, id);
   }
 }
 
