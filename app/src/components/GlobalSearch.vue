@@ -53,6 +53,7 @@ import { organizations, refreshOrganizations } from '../stores/org-membership';
 import { contactsOf, profileOf, spaceKeyOf as contactsSpaceKeyOf } from '../mock/contacts';
 import { listConversations, spaceKeyOf } from '../mock/messages';
 import { listMockApps } from '../mock/apps';
+import { mockMode } from '../mock/mode';
 import { appIconBackground, marketItemMatches } from './apps/apps-store';
 import UserAvatar from './UserAvatar.vue';
 import OrgAvatar from './OrgAvatar.vue';
@@ -97,10 +98,12 @@ export default defineComponent({
       try {
         appItems.value = await window.electronAPI.pluginMarket.list();
       } catch {
-        // 真实市场不可用时仅搜索 mock 应用
+        // 真实市场不可用时仍可搜索 mock 应用（mock 模式）
       }
-      // 与应用页同一合并策略：真实市场条目 + mock 应用
-      appItems.value = [...appItems.value, ...listMockApps()];
+      // 与应用页同一合并策略：仅 mock 模式追加 mock 应用
+      if (mockMode()) {
+        appItems.value = [...appItems.value, ...listMockApps()];
+      }
     });
 
     // ---------------- 分组结果 ----------------

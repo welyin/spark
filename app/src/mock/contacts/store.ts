@@ -9,6 +9,7 @@ import type { FriendDto, FriendRequestDto, P2pEventDto, SpaceContactsDto } from 
 import type { ContactProfile, FriendRequest, MockFriend, SpaceContacts } from './types';
 import { emptyProfile } from './types';
 import { seedOrg, seedPersonal } from './seed';
+import { mockMode } from '../mode';
 
 /** 全部空间的通讯录缓存：同一空间 key 恒得同一响应式对象（模块级唯一单例） */
 export const spaces = reactive<Record<string, SpaceContacts>>({});
@@ -190,26 +191,30 @@ export function handleContactsP2pEvent(event: P2pEventDto): void {
 }
 
 /**
- * 开发环境演示数据开关（localStorage 'spark:demo-contacts'）：
- * dev 构建默认开——即使 Tauri 环境也用种子假数据、跳过内核水合，
- * 便于 UI 调试；置 '0' 后刷新即可回到内核真实数据。生产构建恒 false。
+ * 演示数据开关：默认关闭（真实内核数据）。
+ * 开启方式：`npm run tauri:mock`（VITE_MOCK=1），或 localStorage
+ * 'spark:demo-contacts' 置 '1'；置 '0' 则强制关闭（优先级高于环境变量）。
  */
 export function demoContacts(): boolean {
-  if (!import.meta.env.DEV) {
-    return false;
-  }
   try {
-    return localStorage.getItem('spark:demo-contacts') !== '0';
+    const override = localStorage.getItem('spark:demo-contacts');
+    if (override === '1') {
+      return true;
+    }
+    if (override === '0') {
+      return false;
+    }
   } catch {
-    return true;
+    // localStorage 不可用时跟随环境变量
   }
+  return mockMode();
 }
 
 /** 取（并按需建空 + 水合）某空间的通讯录数据；同一空间 key 恒得同一响应式对象 */
 export function contactsOf(spaceKey: string): SpaceContacts {
   if (!spaces[spaceKey]) {
     if (!isTauri() || demoContacts()) {
-      // 非 Tauri（单测/纯前端开发）或 dev 演示模式：本地种子数据，完全不触网
+      // 非 Tauri（单测/纯前端开发）或 mock 模式：本地种子数据，完全不触网
       spaces[spaceKey] = spaceKey === 'personal' ? seedPersonal() : seedOrg();
       return spaces[spaceKey];
     }

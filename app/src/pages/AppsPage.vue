@@ -64,6 +64,7 @@ import { currentSpace } from '../stores/current-space';
 import { isAdmin, refreshOrganizations } from '../stores/org-membership';
 import { consumePendingAppDetail, pendingAppDetail } from '../stores/pending-app';
 import { isMockApp, listMockApps, setMockAppEnabled, setMockAppInstalled } from '../mock/apps';
+import { mockMode } from '../mock/mode';
 import AppListPanel from '../components/apps/AppListPanel.vue';
 import AppMarketPanel from '../components/apps/AppMarketPanel.vue';
 import AppDetailPanel from '../components/apps/AppDetailPanel.vue';
@@ -141,9 +142,9 @@ export default defineComponent({
       () => items.value.find((item) => item.id === selectedId.value) ?? null
     );
 
-    // TODO(mock): mock 应用与真实市场结果合并展示（mock 数据见 src/mock/apps.ts），待市场数据充足后删除
+    // 仅 mock 模式（npm run tauri:mock）把 mock 应用（src/mock/apps.ts）合并进真实市场结果
     const mergeItems = () => {
-      items.value = [...realItems.value, ...listMockApps()];
+      items.value = mockMode() ? [...realItems.value, ...listMockApps()] : [...realItems.value];
     };
 
     const refresh = async () => {
@@ -156,7 +157,7 @@ export default defineComponent({
         await refresh();
         loadError.value = '';
       } catch (error) {
-        // 真实市场不可用时仍展示 mock 应用，保证 UI 可看
+        // 真实市场不可用时仍展示已有条目（mock 模式下含 mock 应用），保证 UI 可看
         mergeItems();
         loadError.value = `加载应用市场失败：${error}`;
       }

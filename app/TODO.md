@@ -53,7 +53,7 @@
 
 ## 通讯录（ui-contacts）
 
-> ✅ 已落地：内核 `contact` 模块（朋友/申请/标签/分组树/成员附加资料 sled 持久化）+ `contacts.*` 命令域；好友申请双向确认走 `/spark/dm/1.0.0` 直连（扫码名片解析节点地址，申请/接受互推，事件 `FriendRequestReceived`/`FriendRequestAccepted` 实时入账）。**个人空间联系人默认包含自己**（内核 overview 恒注入自条目；给自己发消息=向所有已配对个人设备直发同步；设备配对=扫自己另一台设备名片，对端自动接受）。`src/mock/contacts.ts` 已改为「内核真实数据 + 内存响应式缓存」接入层（导出签名与本地逻辑不变，组件与 contact-groups 测试零改动）；组件直写 reactive 对象的路径（标签成员/照片增删）由 deep watch 兜底持久化。非 Tauri 环境保留种子数据（渲染单测依赖）。
+> ✅ 已落地：内核 `contact` 模块（朋友/申请/标签/分组树/成员附加资料 sled 持久化）+ `contacts.*` 命令域；好友申请双向确认走 `/spark/dm/1.0.0` 直连（扫码名片解析节点地址，申请/接受互推，事件 `FriendRequestReceived`/`FriendRequestAccepted` 实时入账）。**个人空间联系人默认包含自己**（内核 overview 恒注入自条目；给自己发消息=向所有已配对个人设备直发同步；设备配对=扫自己另一台设备名片，对端自动接受）。`src/mock/contacts.ts` 已改为「内核真实数据 + 内存响应式缓存」接入层（导出签名与本地逻辑不变，组件与 contact-groups 测试零改动）；组件直写 reactive 对象的路径（标签成员/照片增删）由 deep watch 兜底持久化。非 Tauri 环境保留种子数据（渲染单测依赖）；Tauri 下默认真实内核数据，种子演示数据仅在 mock 模式（`npm run tauri:mock`，或 localStorage `spark:demo-contacts` 置 '1'，见 `demoContacts()`）启用。
 
 - 多设备配对 | 存储模型每 rootId 一条联系人记录，至多配对一台设备 | 多设备需设备清单模型（协议 §19.4），待专项
 
@@ -76,7 +76,7 @@
 
 ## 应用与市场（ui-apps-market）
 
-- `src/mock/apps.ts:11` | 伪造 6 个市场应用（论坛/投票/日历/任务看板/朋友圈/文件） | 真实市场仅 weibo-core，UI 太空；与 `pluginMarket.list()` 结果合并展示（`AppsPage.vue:131` mergeItems），待市场数据充足后整体删除
+- `src/mock/apps.ts:11` | 伪造 6 个市场应用（论坛/投票/日历/任务看板/朋友圈/文件） | 真实市场仅 weibo-core，UI 太空；仅 mock 模式（`npm run tauri:mock`，`VITE_MOCK=1`）与 `pluginMarket.list()` 结果合并展示（`AppsPage.vue` mergeItems / `GlobalSearch.vue`，开关 `src/mock/mode.ts`），待市场数据充足后整体删除
 - `src/mock/apps.ts:125` | mock 应用安装/启用状态存 localStorage（`spark:mock-apps-state`，默认预装日历+任务看板） | 「打开」为 toast 占位不走插件链路；安装/启停在 `AppsPage.vue` 按 `isMockApp` 分支处理；待真实市场接口替换
 - `src/components/apps/apps-store.ts:39` | 市场细分分类前端映射 | 市场条目只有 `foundation`/`business` 粗分类，§3.3 的办公/社交/工具/其他按名称+简介关键字启发式映射；待市场数据带分类字段后删除
 - `src/components/apps/apps-store.ts:95` | 应用分组归属 localStorage | 分组归属、自定义分组内核无接口，按空间存 localStorage（`spark:apps-groups:*`）；待内核分组模型替换
