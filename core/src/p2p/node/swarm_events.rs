@@ -142,6 +142,7 @@ impl<S: StorageBackend> EventLoop<S> {
                     self.emit(P2pEvent::PeerConnected {
                         peer_id: peer_id.to_base58(),
                     });
+                    self.host.on_peer_connected(&peer_id.to_base58());
                 }
                 // 版本探测（in-flight 去重）
                 self.begin_version_probe(peer_id);

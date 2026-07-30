@@ -106,6 +106,9 @@ pub trait P2pHost: Send {
     /// 对端版本观察上报（`/spark/version/1.0.0`）。
     fn on_peer_version(&mut self, _version: &str, _peer_id: &str) {}
 
+    /// 新对端建连（首个连接确认；事件循环线程内调用，保持轻量、禁止阻塞）。
+    fn on_peer_connected(&mut self, _peer_id: &str) {}
+
     /// org-share-ack 唤醒（按 payload.syncId 匹配发送方等待器）。
     fn on_org_share_ack(&mut self, _payload: Value) {}
 

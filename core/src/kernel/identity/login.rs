@@ -85,6 +85,7 @@ impl Kernel {
         self.unlocked = None;
         *self.signing_key_shared.lock().unwrap() = None;
         *self.nickname_shared.lock().unwrap() = String::new();
+        *self.avatar_shared.lock().unwrap() = String::new();
         if let Ok(active) = self.read_active_root_id() {
             *self.current_root_id_shared.lock().unwrap() = active;
         }

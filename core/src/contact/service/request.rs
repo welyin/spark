@@ -95,6 +95,7 @@ impl ContactService {
             id,
             root_id: root_id.to_string(),
             nickname: nickname.to_string(),
+            avatar: None,
             message: message.to_string(),
             source: source.to_string(),
             status: FriendRequestStatus::Pending,

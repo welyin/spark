@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use super::dm_envelope::{self, KIND_CHAT};
+use super::dm_envelope::{self, KIND_CHAT, KIND_PROFILE_SYNC};
 use super::{Kernel, KernelError, Result};
 use crate::contact::ContactService;
 use crate::message::{ConversationRecord, MessageRecord, MessageService};
@@ -213,6 +213,40 @@ impl Kernel {
             return;
         };
         self.spawn_deliveries(vec![(peer, envelope)]);
+    }
+
+    /// 资料变更后向所有有寻址信息的朋友（含同身份已配对设备）逐个尽力投递
+    /// profile-sync dm（`{"nickname", "avatar"?}`；单点失败静默，不阻塞资料
+    /// 更新本身；p2p 未运行/无投递目标时为空操作）。
+    pub(crate) fn broadcast_profile_sync(&self, nickname: &str, avatar: Option<&str>) {
+        if self.p2p.is_none() {
+            return;
+        }
+        let Ok(storage) = self.require_storage() else {
+            return;
+        };
+        let friends = ContactService::overview(storage, "personal")
+            .map(|view| view.friends)
+            .unwrap_or_default();
+        let deliveries: Vec<(PeerNodeInfo, Value)> = friends
+            .into_iter()
+            .filter_map(|friend| {
+                let peer = friend.peer?;
+                let mut body = serde_json::json!({ "nickname": nickname });
+                if let Some(avatar) = avatar {
+                    body["avatar"] = Value::from(avatar);
+                }
+                let envelope = self
+                    .build_dm_envelope(KIND_PROFILE_SYNC, &friend.root_id, body)
+                    .ok()?;
+                let target = PeerNodeInfo {
+                    peer_id: (!peer.peer_id.is_empty()).then_some(peer.peer_id),
+                    addresses: peer.addresses,
+                };
+                Some((target, envelope))
+            })
+            .collect();
+        self.spawn_deliveries(deliveries);
     }
 
 }

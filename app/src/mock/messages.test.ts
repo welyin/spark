@@ -101,4 +101,16 @@ describe('onChatReceived（信任内核会话快照）', () => {
     const stored = getMessages(key, conversation.id)[0];
     expect(stored.senderId).toBe('me');
   });
+
+  it('已有会话：merge 快照里的 online（上下线随后续消息快照刷新）', () => {
+    const key = 'test:chat-online';
+    const first = makeConversation({ online: false, updatedAt: 2_000 });
+    onChatReceived({ spaceKey: key, conversation: first, message: makeMessage(first) });
+    expect(getConversation(key, first.id)?.online).toBe(false);
+    const snapshot = { ...first, online: true, updatedAt: 3_000 };
+    onChatReceived({ spaceKey: key, conversation: snapshot, message: makeMessage(snapshot) });
+    const conv = getConversation(key, first.id);
+    expect(conv?.online).toBe(true);
+    expect(conv?.updatedAt).toBe(3_000);
+  });
 });

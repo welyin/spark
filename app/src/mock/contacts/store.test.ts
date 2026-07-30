@@ -1,8 +1,9 @@
 // mock/contacts/store P2P 事件单测：FriendRequestReceived 按 id upsert、
-// FriendRequestSent 投递终态回写 outbox
+// FriendRequestSent 投递终态回写 outbox、FriendProfileUpdated 资料同步
 import { describe, it, expect } from 'vitest';
 import type { FriendRequestDto } from '../../api';
 import { handleContactsP2pEvent, contactsOf } from './store';
+import { emptyProfile } from './types';
 
 let dtoSeq = 0;
 
@@ -107,5 +108,47 @@ describe('FriendRequestSent（我发出申请的投递终态）', () => {
     expect(record).toBeDefined();
     expect(record?.status).toBe('pending');
     expect(record?.updatedAt).toBe(9_000);
+  });
+});
+
+describe('FriendProfileUpdated（对端资料同步）', () => {
+  it('按 rootId 就地更新好友昵称与头像', () => {
+    const space = contactsOf('personal');
+    space.friends.push({
+      ...emptyProfile(),
+      rootId: 'root-profile-1',
+      nickname: '旧昵称',
+      signature: '',
+      addedAt: 1_000
+    });
+    handleContactsP2pEvent({
+      kind: 'FriendProfileUpdated',
+      data: { rootId: 'root-profile-1', nickname: '新昵称', avatar: 'data:image/png;base64,xxx' }
+    });
+    const friend = space.friends.find((item) => item.rootId === 'root-profile-1');
+    expect(friend?.nickname).toBe('新昵称');
+    expect(friend?.avatar).toBe('data:image/png;base64,xxx');
+  });
+
+  it('avatar 缺省时保留既有头像；未知 rootId 不产生副作用', () => {
+    const space = contactsOf('personal');
+    space.friends.push({
+      ...emptyProfile(),
+      rootId: 'root-profile-2',
+      nickname: '甲',
+      signature: '',
+      avatar: 'data:image/png;base64,old',
+      addedAt: 1_000
+    });
+    const before = space.friends.length;
+    handleContactsP2pEvent({ kind: 'FriendProfileUpdated', data: { rootId: 'root-profile-2', nickname: '乙' } });
+    handleContactsP2pEvent({
+      kind: 'FriendProfileUpdated',
+      data: { rootId: 'root-unknown', nickname: '陌生人', avatar: 'data:x' }
+    });
+    const friend = space.friends.find((item) => item.rootId === 'root-profile-2');
+    expect(friend?.nickname).toBe('乙');
+    expect(friend?.avatar).toBe('data:image/png;base64,old');
+    expect(space.friends.length).toBe(before);
   });
 });

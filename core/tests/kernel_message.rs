@@ -74,6 +74,7 @@ fn friend_record(root_id: &str, blocked: bool) -> FriendRecord {
     FriendRecord {
         root_id: root_id.to_string(),
         nickname: "朋友昵称".to_string(),
+        avatar: None,
         signature: String::new(),
         gender: None,
         added_at: NOW,
@@ -1440,4 +1441,187 @@ fn inbound_chat_event_online_flag_follows_online_peers() {
         panic!("应发出 ChatReceived 事件");
     };
     assert_eq!(data["conversation"]["online"], false, "对端不在线时 online 为 false");
+}
+
+// ---------------------------------------------------------------------------
+// 入站编排：profile-sync（朋友资料推送）
+// ---------------------------------------------------------------------------
+
+const VALID_AVATAR: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
+fn profile_sync_envelope(key: &SigningKey, from: &str, to: &str, body: Value) -> Value {
+    dm_envelope::build_envelope("profile-sync", from, to, NOW, body, key)
+}
+
+#[test]
+fn inbound_profile_sync_updates_friend_and_emits_event() {
+    let mut s = MemoryStorage::new();
+    let my_root = "aa".repeat(32);
+    let (key, from) = peer_root(7);
+    ContactService::upsert_friend(&mut s, &friend_record(&from, false)).unwrap();
+
+    let envelope = profile_sync_envelope(
+        &key,
+        &from,
+        &my_root,
+        json!({ "nickname": "新昵称", "avatar": VALID_AVATAR }),
+    );
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    assert_eq!(result.response, json!({ "ok": true }));
+    let P2pEvent::FriendProfileUpdated(data) = &result.events[0] else {
+        panic!("应发出 FriendProfileUpdated 事件");
+    };
+    assert_eq!(data["rootId"], json!(from));
+    assert_eq!(data["nickname"], json!("新昵称"));
+    assert_eq!(data["avatar"], json!(VALID_AVATAR));
+
+    let friend = ContactService::get_friend(&s, &from).unwrap().unwrap();
+    assert_eq!(friend.nickname, "新昵称");
+    assert_eq!(friend.avatar.as_deref(), Some(VALID_AVATAR));
+
+    // 幂等：同内容重复推送不再落库变更、不发事件
+    let envelope = profile_sync_envelope(
+        &key,
+        &from,
+        &my_root,
+        json!({ "nickname": "新昵称", "avatar": VALID_AVATAR }),
+    );
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    assert_eq!(result.response, json!({ "ok": true }));
+    assert!(result.events.is_empty(), "重复推送幂等无副作用");
+}
+
+#[test]
+fn inbound_profile_sync_from_stranger_ignored() {
+    let mut s = MemoryStorage::new();
+    let my_root = "aa".repeat(32);
+    let (key, from) = peer_root(7);
+    // 不是朋友：忽略（ok 应答，不建朋友、不发事件、不暴露关系状态）
+    let envelope = profile_sync_envelope(
+        &key,
+        &from,
+        &my_root,
+        json!({ "nickname": "陌生人", "avatar": VALID_AVATAR }),
+    );
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    assert_eq!(result.response, json!({ "ok": true }));
+    assert!(result.events.is_empty());
+    assert!(ContactService::get_friend(&s, &from).unwrap().is_none());
+}
+
+#[test]
+fn inbound_profile_sync_empty_nickname_and_invalid_avatar_ignored() {
+    let mut s = MemoryStorage::new();
+    let my_root = "aa".repeat(32);
+    let (key, from) = peer_root(7);
+    let mut friend = friend_record(&from, false);
+    friend.avatar = Some(VALID_AVATAR.to_string());
+    ContactService::upsert_friend(&mut s, &friend).unwrap();
+
+    // 空 nickname 不覆盖；非法 avatar 不覆盖（既存值保留）
+    let envelope = profile_sync_envelope(
+        &key,
+        &from,
+        &my_root,
+        json!({ "nickname": "", "avatar": "https://evil.example/x.png" }),
+    );
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    assert_eq!(result.response, json!({ "ok": true }));
+    assert!(result.events.is_empty(), "无实际变更不发事件");
+    let friend = ContactService::get_friend(&s, &from).unwrap().unwrap();
+    assert_eq!(friend.nickname, "朋友昵称", "空 nickname 不覆盖");
+    assert_eq!(
+        friend.avatar.as_deref(),
+        Some(VALID_AVATAR),
+        "非法 avatar 不覆盖既存值"
+    );
+
+    // 省略 avatar 字段：只更新昵称，头像保留
+    let envelope = profile_sync_envelope(&key, &from, &my_root, json!({ "nickname": "改名" }));
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let P2pEvent::FriendProfileUpdated(data) = &result.events[0] else {
+        panic!("昵称变更应发出 FriendProfileUpdated 事件");
+    };
+    assert_eq!(data["nickname"], json!("改名"));
+    assert_eq!(data["avatar"], json!(VALID_AVATAR));
+}
+
+#[test]
+fn inbound_chat_backfilled_conv_peer_takes_precedence_for_online_flag() {
+    // 会话 peer 缺失（ensure_direct 先建的会话）时，入站先用连接层对端回填
+    // conv.peer（ensure_inbound_conversation），事件 online 判定以回填后的
+    // conv.peer 为准——朋友记录的 peerId 回退仅在 conv.peer 仍为 None 时
+    // 生效（列表水合路径；见 message_ops 的 conversation_view 单元测试）
+    let mut s = MemoryStorage::new();
+    let my_root = "aa".repeat(32);
+    let (key, from) = peer_root(7);
+    let mut friend = friend_record(&from, false);
+    friend.peer = Some(spark_core::message::PeerRef {
+        peer_id: "peer-friend".to_string(),
+        addresses: Vec::new(),
+    });
+    ContactService::upsert_friend(&mut s, &friend).unwrap();
+    // 预建无 peer 的 direct 会话（模拟 message_ensure_direct 先建）
+    MessageService::upsert_conversation(&mut s, PERSONAL, &make_conversation(&direct_conversation_id(&from), &from)).unwrap();
+
+    let online: HashSet<String> = ["peer-friend".to_string()].into_iter().collect();
+    let envelope = dm_envelope::build_envelope(
+        "chat",
+        &from,
+        &my_root,
+        NOW,
+        chat_body(PERSONAL, &from, "m1", "hi"),
+        &key,
+    );
+    // 连接层对端 peer-xyz 不在在线集合：回填后 conv.peer=peer-xyz 优先，
+    // 朋友记录的 peer-friend 不回退 → online=false
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-xyz", &online, NOW).unwrap();
+    let P2pEvent::ChatReceived(data) = &result.events[0] else {
+        panic!("应发出 ChatReceived 事件");
+    };
+    assert_eq!(
+        data["conversation"]["online"],
+        false,
+        "回填后的 conv.peer 优先于朋友记录回退"
+    );
+}
+
+#[test]
+fn inbound_friend_request_carries_valid_avatar_only() {
+    let mut s = MemoryStorage::new();
+    let my_root = "aa".repeat(32);
+    let (key, from) = peer_root(7);
+    let envelope = dm_envelope::build_envelope(
+        "friend-request",
+        &from,
+        &my_root,
+        NOW,
+        json!({ "requestId": "req-1", "nickname": "申请人", "avatar": VALID_AVATAR }),
+        &key,
+    );
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    assert_eq!(result.response["ok"], json!(true));
+    let requests = ContactService::overview(&s, PERSONAL).unwrap().requests;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].avatar.as_deref(),
+        Some(VALID_AVATAR),
+        "合法 avatar 随申请落库"
+    );
+
+    // 非法 avatar：忽略该字段（不拒绝整个请求）
+    let (key2, from2) = peer_root(9);
+    let envelope = dm_envelope::build_envelope(
+        "friend-request",
+        &from2,
+        &my_root,
+        NOW,
+        json!({ "requestId": "req-2", "nickname": "申请人2", "avatar": "https://evil.example/x.png" }),
+        &key2,
+    );
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    assert_eq!(result.response["ok"], json!(true));
+    let requests = ContactService::overview(&s, PERSONAL).unwrap().requests;
+    let r2 = requests.iter().find(|r| r.root_id == from2).unwrap();
+    assert_eq!(r2.avatar, None, "非法 avatar 不落库");
 }

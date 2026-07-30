@@ -20,6 +20,7 @@ fn friend_record(root_id: &str) -> FriendRecord {
     FriendRecord {
         root_id: root_id.to_string(),
         nickname: "朋友昵称".to_string(),
+        avatar: None,
         signature: String::new(),
         gender: None,
         added_at: NOW,
@@ -173,6 +174,7 @@ fn resolve_request_accept_creates_friend() {
             id: "req-1".to_string(),
             root_id: peer_root.clone(),
             nickname: "申请人".to_string(),
+            avatar: None,
             message: "hi".to_string(),
             source: "扫码".to_string(),
             status: FriendRequestStatus::Pending,
@@ -313,7 +315,7 @@ fn send_request_persists_across_restart() {
                 peer_id: Some("12D3KooWPeer".to_string()),
                 addresses: Some(vec!["/ip4/192.168.31.98/tcp/15002".to_string()]),
                 source: "名片".to_string(),
-                message: "交个朋友".to_string(),
+            message: "交个朋友".to_string(),
             })
             .unwrap();
         kernel.shutdown().unwrap();
@@ -384,6 +386,7 @@ fn send_request_retry_reuses_stored_record() {
             id: "req-1".to_string(),
             root_id: peer_root.clone(),
             nickname: "对方昵称".to_string(),
+            avatar: None,
             message: "旧验证消息".to_string(),
             source: "扫码".to_string(),
             status: FriendRequestStatus::Failed,
@@ -547,6 +550,7 @@ fn resolve_request_accept_merges_existing_friend() {
             id: format!("{peer_root}:req-1"),
             root_id: peer_root.clone(),
             nickname: "新昵称".to_string(),
+            avatar: None,
             message: "hi".to_string(),
             source: "扫码".to_string(),
             status: FriendRequestStatus::Pending,

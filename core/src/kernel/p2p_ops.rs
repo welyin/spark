@@ -122,6 +122,7 @@ impl Kernel {
             push_notify: org_sync_tx.clone(),
             event_tx: self.event_tx.clone(),
             nickname_shared: Arc::clone(&self.nickname_shared),
+            avatar_shared: Arc::clone(&self.avatar_shared),
             node_shared: Arc::clone(&self.p2p_node_shared),
             signing_key_shared: Arc::clone(&self.signing_key_shared),
             io_lock: Arc::clone(&self.io_lock),

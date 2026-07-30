@@ -124,6 +124,9 @@ pub struct Kernel {
     /// p2p 宿主可见的当前身份昵称（dm 入站应答/回发用；随解锁/资料更新
     /// 刷新，lock 清空——避免事件循环线程逐条 dm 读身份文件）。
     pub(crate) nickname_shared: Arc<Mutex<String>>,
+    /// p2p 宿主可见的当前身份头像（data URL，空串=无头像；口径与
+    /// `nickname_shared` 相同，随解锁/资料更新刷新、lock 清空）。
+    pub(crate) avatar_shared: Arc<Mutex<String>>,
     /// p2p 节点句柄共享格（host 回发 auto_accept 用；start 后回填、stop 清空）。
     pub(crate) p2p_node_shared: Arc<Mutex<Option<Arc<P2pNode>>>>,
     /// 解锁期签名私钥（org-sync worker 自签 nodeInfoClaim 用；lock 时清除）。
@@ -167,6 +170,7 @@ impl Kernel {
             event_tx,
             current_root_id_shared: Arc::new(Mutex::new(None)),
             nickname_shared: Arc::new(Mutex::new(String::new())),
+            avatar_shared: Arc::new(Mutex::new(String::new())),
             p2p_node_shared: Arc::new(Mutex::new(None)),
             signing_key_shared: Arc::new(Mutex::new(None)),
             org_acks: Arc::new(Mutex::new(Default::default())),

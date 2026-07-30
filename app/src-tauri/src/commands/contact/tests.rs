@@ -25,6 +25,7 @@ fn seed_friend(kernel: &mut Kernel, root_id: &str) {
     let friend = FriendRecord {
         root_id: root_id.to_string(),
         nickname: "Bob".to_string(),
+        avatar: None,
         signature: String::new(),
         gender: None,
         added_at: 1,

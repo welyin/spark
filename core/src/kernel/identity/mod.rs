@@ -311,14 +311,18 @@ impl Kernel {
     ) {
         *self.current_root_id_shared.lock().unwrap() = Some(identity.id());
         *self.signing_key_shared.lock().unwrap() = Some(identity.signing_key.clone());
-        // 昵称共享格同步（dm 入站应答用；身份文件在调用点前已落盘）
-        let nickname = self
+        // 昵称/头像共享格同步（dm 入站应答用；身份文件在调用点前已落盘）
+        let profile = self
             .read_identity_file(&identity.id())
             .ok()
-            .flatten()
-            .and_then(|f| f.nickname)
+            .flatten();
+        let nickname = profile
+            .as_ref()
+            .and_then(|f| f.nickname.clone())
             .unwrap_or_default();
         *self.nickname_shared.lock().unwrap() = nickname;
+        let avatar = profile.and_then(|f| f.avatar).unwrap_or_default();
+        *self.avatar_shared.lock().unwrap() = avatar;
         self.unlocked = Some(UnlockedIdentity {
             identity,
             seed,

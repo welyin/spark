@@ -33,8 +33,9 @@ use crate::storage::SledStorage;
 use crate::sync::apply::{ApplyRemoteOptions, apply_remote_update};
 use crate::sync::meta::RemoteMeta;
 
-use super::dm_envelope::{self, KIND_FRIEND_ACCEPT};
+use super::dm_envelope::{self, KIND_FRIEND_ACCEPT, KIND_PROFILE_SYNC};
 use super::inbound_dm::AutoAccept;
+use crate::contact::ContactService;
 
 /// 集合配置注册表：`(domain, collection) → CollectionConfig`。
 ///
@@ -103,6 +104,8 @@ pub(crate) struct KernelHost {
     /// 当前身份昵称共享格（kernel 在解锁/资料更新时刷新、lock 清空；
     /// 避免事件循环线程逐条 dm 读身份文件）。
     pub(crate) nickname_shared: Arc<Mutex<String>>,
+    /// 当前身份头像共享格（data URL，空串=无头像；口径同 nickname_shared）。
+    pub(crate) avatar_shared: Arc<Mutex<String>>,
     /// p2p 节点句柄共享格（start 后由 kernel 回填；auto_accept 回发
     /// friend-accept 用——host 在事件循环线程内不能 block_on，改为
     /// `tokio::spawn` 驱动节点命令通道）。
@@ -133,6 +136,7 @@ impl KernelHost {
             storage: self.storage.clone(),
             current_root_id: Arc::clone(&self.current_root_id),
             nickname_shared: Arc::clone(&self.nickname_shared),
+            avatar_shared: Arc::clone(&self.avatar_shared),
             event_tx: self.event_tx.clone(),
             node_shared: Arc::clone(&self.node_shared),
             signing_key_shared: Arc::clone(&self.signing_key_shared),
@@ -147,6 +151,7 @@ pub(crate) struct KernelDmHandler {
     storage: SledStorage,
     current_root_id: Arc<Mutex<Option<String>>>,
     nickname_shared: Arc<Mutex<String>>,
+    avatar_shared: Arc<Mutex<String>>,
     event_tx: tokio::sync::broadcast::Sender<crate::p2p::P2pEvent>,
     node_shared: Arc<Mutex<Option<Arc<P2pNode>>>>,
     signing_key_shared: Arc<Mutex<Option<ed25519_dalek::SigningKey>>>,
@@ -178,12 +183,24 @@ impl KernelDmHandler {
         let from = my_root_id.to_string();
         let to = auto_accept.to_root_id.clone();
         let nickname = nickname.to_string();
+        // 头像共享格（空串=无头像，body 省略 avatar 字段）
+        let avatar = {
+            let shared = self
+                .avatar_shared
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            (!shared.trim().is_empty()).then_some(shared)
+        };
         tokio::spawn(async move {
             let local = node.local_node_info().await.ok();
             let mut body = serde_json::json!({
                 "requestId": auto_accept.request_id,
                 "nickname": nickname,
             });
+            if let Some(avatar) = avatar {
+                body["avatar"] = serde_json::Value::from(avatar);
+            }
             if let Some(info) = local {
                 body["nodeInfo"] = serde_json::json!({
                     "peerId": info.peer_id,
@@ -448,6 +465,88 @@ impl P2pHost for KernelHost {
     /// dm 入站重 IO（验签/落库）交给阻塞线程池执行的异步处理器。
     fn dm_handler(&self) -> Option<Arc<dyn DmHandler>> {
         Some(Arc::new(self.dm_handler_impl()))
+    }
+
+    /// 朋友建连：按 peer_id 扫描 `ct:friend:` 记录找匹配的朋友，命中则向其
+    /// 尽力投递 profile-sync dm（`{"nickname", "avatar"?}`，寻址用朋友记录
+    /// 的 peer 信息）。事件循环线程内执行：只做 KV 扫描与共享格读取，信封
+    /// 装配与投递 `tokio::spawn` 到 runtime（同 `spawn_auto_accept` 模式，
+    /// 不能 block_on）；节点未回填/身份已锁/无匹配朋友时静默跳过。
+    fn on_peer_connected(&mut self, peer_id: &str) {
+        let friend = ContactService::overview(&self.storage, "personal")
+            .map(|view| view.friends)
+            .unwrap_or_default()
+            .into_iter()
+            .find(|f| f.peer.as_ref().is_some_and(|p| p.peer_id == peer_id));
+        let Some(friend) = friend else {
+            return;
+        };
+        let Some(peer) = friend.peer else {
+            return;
+        };
+        let Some(my_root_id) = self
+            .current_root_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        else {
+            return;
+        };
+        let node = self
+            .node_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let signing_key = self
+            .signing_key_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let (Some(node), Some(signing_key)) = (node, signing_key) else {
+            return;
+        };
+        // 昵称为空时回退 rootId 前 8 位（与 dm 入站应答/出站口径一致）
+        let nickname = {
+            let shared = self
+                .nickname_shared
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            if shared.trim().is_empty() {
+                my_root_id.chars().take(8).collect()
+            } else {
+                shared
+            }
+        };
+        let avatar = {
+            let shared = self
+                .avatar_shared
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            (!shared.trim().is_empty()).then_some(shared)
+        };
+        let target = PeerNodeInfo {
+            peer_id: (!peer.peer_id.is_empty()).then_some(peer.peer_id),
+            addresses: peer.addresses,
+        };
+        let to = friend.root_id;
+        let from = my_root_id;
+        tokio::spawn(async move {
+            let mut body = serde_json::json!({ "nickname": nickname });
+            if let Some(avatar) = avatar {
+                body["avatar"] = serde_json::Value::from(avatar);
+            }
+            let envelope = dm_envelope::build_envelope(
+                KIND_PROFILE_SYNC,
+                &from,
+                &to,
+                system_now_ms(),
+                body,
+                &signing_key,
+            );
+            let _ = node.dm_direct(&target, envelope).await;
+        });
     }
 
     /// 组织私有 DHT 成员提示回填（p2p-messages.md §15）：按未验证口径入邻居池

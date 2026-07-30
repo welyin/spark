@@ -9,12 +9,13 @@
 //!   事件回写（可经 [`Kernel::message_resend`] 重发）；
 //! - 查询类方法同步执行，p2p 调用以 `Handle::block_on` 驱动（线程模型见 kernel/mod.rs）。
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
 use super::dm_envelope::{KIND_CHAT, KIND_READ, KIND_RECALL};
 use super::{Kernel, KernelError, Result};
+use crate::contact::ContactService;
 use crate::message::types::ConversationKind;
 use crate::message::{
     ConversationRecord, LinkPreview, MAX_TEXT_BYTES, MessageRecord, MessageService, MessageType,
@@ -77,16 +78,24 @@ pub struct ChatMessageView {
 
 /// 会话记录 → 视图（`online_peers` 为当前连接的 libp2p peerId 集合；
 /// `my_root_id` 命中的会话是自己的会话，online 恒 true——自己永远在线）。
+///
+/// `fallback_peer_id`：`conv.peer` 缺失时（`message_ensure_direct` 从通讯录
+/// 先建的会话没有寻址信息，peer 要等对方入站消息才回填）的寻址回退——朋友
+/// 记录（`ct:friend:{peerRootId}`）里的 peerId，与 `resolve_conv_peer` 的
+/// 回退口径对齐；回退也没有就不在线。
 pub(crate) fn conversation_view(
     conv: &ConversationRecord,
     online_peers: &HashSet<String>,
     my_root_id: Option<&str>,
+    fallback_peer_id: Option<&str>,
 ) -> ConversationView {
+    let peer_id = conv
+        .peer
+        .as_ref()
+        .map(|p| p.peer_id.as_str())
+        .or(fallback_peer_id);
     let online = my_root_id.is_some_and(|me| me == conv.peer_root_id)
-        || conv
-            .peer
-            .as_ref()
-            .is_some_and(|p| online_peers.contains(&p.peer_id));
+        || peer_id.is_some_and(|p| online_peers.contains(p));
     ConversationView {
         id: conv.id.clone(),
         kind: conv.kind,
@@ -144,6 +153,32 @@ impl Kernel {
             .unwrap_or_else(|| root_id.chars().take(8).collect())
     }
 
+    /// 当前已解锁身份的头像（data URL；无头像/空串归一为 None）。
+    pub(crate) fn my_avatar(&self, root_id: &str) -> Option<String> {
+        self.read_identity_file(root_id)
+            .ok()
+            .flatten()
+            .and_then(|f| f.avatar)
+            .filter(|a| !a.trim().is_empty())
+    }
+
+    /// rootId → libp2p peerId 映射（朋友记录的寻址回退，`conv.peer` 缺失时
+    /// 的 online 判定依据，与 `resolve_conv_peer` 的朋友回退口径对齐）。
+    pub(crate) fn friend_peer_map(&self) -> HashMap<String, String> {
+        let Ok(storage) = self.require_storage() else {
+            return HashMap::new();
+        };
+        ContactService::overview(storage, "personal")
+            .map(|view| view.friends)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|f| {
+                f.peer
+                    .and_then(|p| (!p.peer_id.is_empty()).then_some((f.root_id, p.peer_id)))
+            })
+            .collect()
+    }
+
     /// 当前在线的 libp2p peerId 集合（p2p 未启动为空集）。
     pub(crate) fn online_peer_ids(&self) -> HashSet<String> {
         self.p2p_status()
@@ -168,9 +203,17 @@ impl Kernel {
         });
         let online = self.online_peer_ids();
         let my_root_id = self.current_root_id().ok().flatten();
+        let friend_peers = self.friend_peer_map();
         Ok(convs
             .iter()
-            .map(|c| conversation_view(c, &online, my_root_id.as_deref()))
+            .map(|c| {
+                conversation_view(
+                    c,
+                    &online,
+                    my_root_id.as_deref(),
+                    friend_peers.get(&c.peer_root_id).map(String::as_str),
+                )
+            })
             .collect())
     }
 
@@ -220,7 +263,13 @@ impl Kernel {
         };
         let online = self.online_peer_ids();
         let my_root_id = self.current_root_id().ok().flatten();
-        Ok(conversation_view(&conv, &online, my_root_id.as_deref()))
+        let fallback = self.friend_peer_map().get(peer_root_id).cloned();
+        Ok(conversation_view(
+            &conv,
+            &online,
+            my_root_id.as_deref(),
+            fallback.as_deref(),
+        ))
     }
 
     // ------------------------------------------------------------------
@@ -477,5 +526,71 @@ impl Kernel {
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
         MessageService::delete_conversation(self.require_storage_mut()?, space, conv_id)?;
         Ok(())
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::message::PeerRef;
+
+    fn conv(peer: Option<PeerRef>) -> ConversationRecord {
+        ConversationRecord {
+            id: "dm:peer-root".to_string(),
+            kind: ConversationKind::Direct,
+            title: "对方".to_string(),
+            peer_root_id: "peer-root".to_string(),
+            peer,
+            ..Default::default()
+        }
+    }
+
+    fn online(peers: &[&str]) -> HashSet<String> {
+        peers.iter().map(|p| p.to_string()).collect()
+    }
+
+    #[test]
+    fn online_uses_conv_peer_first() {
+        let set = online(&["peer-conv"]);
+        assert!(conversation_view(
+            &conv(Some(PeerRef {
+                peer_id: "peer-conv".to_string(),
+                addresses: Vec::new(),
+            })),
+            &set,
+            None,
+            None,
+        )
+        .online);
+    }
+
+    #[test]
+    fn online_falls_back_to_friend_peer_when_conv_peer_missing() {
+        let set = online(&["peer-friend"]);
+        let c = conv(None);
+        // 朋友记录也没有寻址信息 → 不在线
+        assert!(!conversation_view(&c, &set, None, None).online);
+        // conv.peer 缺失时回退朋友记录的 peerId → 在线
+        assert!(conversation_view(&c, &set, None, Some("peer-friend")).online);
+    }
+
+    #[test]
+    fn conv_peer_takes_precedence_over_fallback() {
+        // conv.peer 存在但与回退不同源：以 conv.peer 为准（它才是会话寻址）
+        let set = online(&["peer-friend"]);
+        let c = conv(Some(PeerRef {
+            peer_id: "peer-conv".to_string(),
+            addresses: Vec::new(),
+        }));
+        assert!(!conversation_view(&c, &set, None, Some("peer-friend")).online);
+    }
+
+    #[test]
+    fn self_conversation_always_online() {
+        let set = online(&[]);
+        let mut c = conv(None);
+        c.peer_root_id = "me".to_string();
+        assert!(conversation_view(&c, &set, Some("me"), None).online);
     }
 }

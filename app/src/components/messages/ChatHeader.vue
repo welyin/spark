@@ -2,7 +2,7 @@
 <template>
   <header class="chat-header">
     <el-button text :icon="ArrowLeft" class="chat-back" @click="$emit('back')" />
-    <UserAvatar :root-id="conversation.peerId" :nickname="conversation.title" :size="32" />
+    <UserAvatar :root-id="conversation.peerId" :nickname="conversation.title" :avatar="peerAvatar" :size="32" />
     <div class="chat-title">
       <span class="chat-name">{{ conversation.title }}</span>
       <span class="chat-sub">
@@ -66,6 +66,7 @@ import {
 } from '@element-plus/icons-vue';
 import UserAvatar from '../UserAvatar.vue';
 import { isLocalOnly } from '../../stores/network-status';
+import { friendOf } from '../../mock/contacts';
 import {
   clearMessages,
   deleteConversation,
@@ -95,6 +96,11 @@ export default defineComponent({
     });
     const presenceText = computed(() =>
       isLocalOnly.value ? '仅本地·不可达' : props.conversation.online ? '在线' : '离线'
+    );
+
+    // direct 会话的 peerId 即对方 rootId：有好友记录时用其同步头像，无则走自动头像
+    const peerAvatar = computed(() =>
+      props.conversation.kind === 'direct' ? friendOf(props.spaceKey, props.conversation.peerId)?.avatar ?? '' : ''
     );
 
     // TODO(mock): 音视频通话下一期实现，点击仅提示
@@ -140,6 +146,7 @@ export default defineComponent({
       presenceClass,
       presenceIcon,
       presenceText,
+      peerAvatar,
       ArrowLeft,
       Phone,
       VideoCamera,

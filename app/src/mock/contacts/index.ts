@@ -34,6 +34,7 @@ export { demoContacts, contactsOf } from './store';
 
 export {
   profileOf,
+  friendOf,
   updateProfile,
   setBlocked,
   addFriend,

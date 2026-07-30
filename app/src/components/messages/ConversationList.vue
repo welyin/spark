@@ -21,7 +21,7 @@
             <span v-if="conv.kind === 'system'" class="conv-sys-avatar">
               <el-icon :size="20"><BellFilled /></el-icon>
             </span>
-            <UserAvatar v-else :root-id="conv.peerId" :nickname="conv.title" :size="40" />
+            <UserAvatar v-else :root-id="conv.peerId" :nickname="conv.title" :avatar="peerAvatar(conv)" :size="40" />
           </div>
           <div class="conv-main">
             <div class="conv-line1">
@@ -82,6 +82,7 @@ import { computed, defineComponent, reactive, ref } from 'vue';
 import { ElMessageBox } from 'element-plus';
 import { BellFilled, Brush, Delete, MuteNotification, Search, Top } from '@element-plus/icons-vue';
 import UserAvatar from '../UserAvatar.vue';
+import { friendOf } from '../../mock/contacts';
 import {
   clearMessages,
   deleteConversation,
@@ -118,6 +119,11 @@ export default defineComponent({
         return previewText(lastMessage(props.spaceKey, conv.id)).toLowerCase().includes(kw);
       });
     });
+
+    // direct 会话的 peerId 即对方 rootId：有好友记录时用其同步头像，无则走自动头像
+    function peerAvatar(conv: Conversation): string {
+      return conv.kind === 'direct' ? friendOf(props.spaceKey, conv.peerId)?.avatar ?? '' : '';
+    }
 
     // 空状态（设计 §2.4）：区分无会话与搜索无结果
     const emptyText = computed(() => {
@@ -203,6 +209,7 @@ export default defineComponent({
       sections,
       emptyText,
       menu,
+      peerAvatar,
       openMenu,
       closeMenu,
       onPin,

@@ -28,6 +28,8 @@ export type MockFriend = ContactProfile & {
   signature: string;
   /** 对方性别（详情页昵称旁图标；缺省则不显示） */
   gender?: 'male' | 'female';
+  /** 对端同步过来的头像（data URL）；缺省走自动头像 */
+  avatar?: string;
   addedAt: number;
 };
 
@@ -61,6 +63,8 @@ export type FriendRequest = {
   thread?: RequestMessage[];
   /** 组织邀请码（我发出的组织成员邀请，待对方凭码加入时可再复制） */
   inviteCode?: string;
+  /** 对端同步过来的头像（data URL）；缺省走自动头像 */
+  avatar?: string;
 };
 
 export type SpaceContacts = {

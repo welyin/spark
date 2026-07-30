@@ -33,6 +33,8 @@ pub const KIND_RECALL: &str = "recall";
 pub const KIND_FRIEND_REQUEST: &str = "friend-request";
 /// 信封 kind：好友申请通过。
 pub const KIND_FRIEND_ACCEPT: &str = "friend-accept";
+/// 信封 kind：资料同步（朋友建连后/资料变更后互推 nickname/avatar）。
+pub(crate) const KIND_PROFILE_SYNC: &str = "profile-sync";
 
 /// 签名载荷：固定键序 body/from/kind/to/ts 的紧凑 JSON 串。
 pub fn build_signing_payload(kind: &str, from: &str, to: &str, ts: i64, body: &Value) -> String {

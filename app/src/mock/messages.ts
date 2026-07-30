@@ -190,7 +190,38 @@ function subscribeP2pEvents(): void {
   void listenP2pEvents((event) => {
     if (event.kind === 'ChatReceived') onChatReceived(event.data);
     else if (event.kind === 'ChatStatus') onChatStatus(event.data);
+    else if (event.kind === 'PeerConnected' || event.kind === 'PeerDisconnected') scheduleOnlineRefresh();
   }).catch(() => {});
+}
+
+/**
+ * 对端上下线（PeerConnected/PeerDisconnected）后的 online 刷新：
+ * 重拉已水合空间的会话列表，只 merge online 字段（不动 unreadCount 等本地态）。
+ * 简单去抖：密集事件（启动时成批 PeerConnected）合并为一次刷新。
+ */
+let onlineRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+
+function scheduleOnlineRefresh(): void {
+  if (onlineRefreshTimer !== undefined) return;
+  onlineRefreshTimer = setTimeout(() => {
+    onlineRefreshTimer = undefined;
+    const api = messagesApi();
+    if (!api) return;
+    for (const key of Object.keys(spaces)) {
+      const space = spaces[key];
+      if (!space) continue;
+      void api
+        .listConversations(key)
+        .then((dtos) => {
+          const onlineById = new Map(dtos.map((dto) => [dto.id, dto.online]));
+          for (const conv of space.conversations) {
+            const online = onlineById.get(conv.id);
+            if (online !== undefined) conv.online = online;
+          }
+        })
+        .catch(() => {});
+    }
+  }, 300);
 }
 
 /**
@@ -212,6 +243,7 @@ export function onChatReceived(data: { spaceKey: string; conversation: Conversat
   const list = (space.messages[conv.id] ??= []);
   if (!list.some((m) => m.id === data.message.id)) list.push({ ...data.message });
   conv.updatedAt = data.conversation.updatedAt;
+  conv.online = data.conversation.online;
   if (activeConversation[key] === conv.id) {
     conv.unreadCount = 0;
     void messagesApi()

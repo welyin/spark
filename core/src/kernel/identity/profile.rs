@@ -46,6 +46,9 @@ impl Kernel {
             .map_err(map_identity_decrypt_error)?;
         self.write_identity_file(&file)?;
         *self.nickname_shared.lock().unwrap() = file.nickname.clone().unwrap_or_default();
+        *self.avatar_shared.lock().unwrap() = file.avatar.clone().unwrap_or_default();
+        let nickname = self.my_nickname(&root_id);
+        self.broadcast_profile_sync(&nickname, file.avatar.as_deref());
         Ok(ProfileInfo {
             nickname: file.nickname.clone(),
             avatar: file.avatar.clone(),
@@ -72,6 +75,10 @@ impl Kernel {
         identity::update_profile(&mut file, &password, nickname, avatar)?;
         self.write_identity_file(&file)?;
         *self.nickname_shared.lock().unwrap() = file.nickname.clone().unwrap_or_default();
+        *self.avatar_shared.lock().unwrap() = file.avatar.clone().unwrap_or_default();
+        // 资料变更后向所有朋友尽力推送 profile-sync（失败静默，不阻塞更新）
+        let nickname = self.my_nickname(&root_id);
+        self.broadcast_profile_sync(&nickname, file.avatar.as_deref());
         Ok(ProfileInfo {
             nickname: file.nickname.clone(),
             avatar: file.avatar.clone(),

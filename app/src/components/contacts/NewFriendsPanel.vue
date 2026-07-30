@@ -42,7 +42,7 @@
       </el-icon>
       <!-- 有未读新变化时头像右上角红点 -->
       <span class="request-avatar" :class="{ unread: entry.request.unread }">
-        <UserAvatar :root-id="entry.request.rootId" :nickname="entry.request.nickname" :size="40" />
+        <UserAvatar :root-id="entry.request.rootId" :nickname="entry.request.nickname" :avatar="entry.request.avatar" :size="40" />
       </span>
       <span class="request-item-main">
         <b>{{ entry.request.nickname }}</b>
@@ -62,7 +62,7 @@
   <div class="contacts-detail">
     <div v-if="activeEntry" class="request-profile">
       <div class="contact-panel-hero">
-        <UserAvatar :root-id="activeEntry.request.rootId" :nickname="activeEntry.request.nickname" :size="64" />
+        <UserAvatar :root-id="activeEntry.request.rootId" :nickname="activeEntry.request.nickname" :avatar="activeEntry.request.avatar" :size="64" />
         <h2 class="contact-panel-name">{{ activeEntry.request.nickname }}</h2>
         <el-tag size="small" :type="statusTagType(activeEntry.request.status)">
           {{ statusLabel(activeEntry.dir, activeEntry.request.status) }}

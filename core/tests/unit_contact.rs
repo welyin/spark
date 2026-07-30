@@ -20,6 +20,7 @@ fn friend(root_id: &str, nickname: &str) -> FriendRecord {
     FriendRecord {
         root_id: root_id.to_string(),
         nickname: nickname.to_string(),
+        avatar: None,
         signature: String::new(),
         gender: None,
         added_at: NOW,
@@ -40,6 +41,7 @@ fn incoming(id: &str, root_id: &str) -> FriendRequestRecord {
         id: id.to_string(),
         root_id: root_id.to_string(),
         nickname: "申请人".to_string(),
+        avatar: None,
         message: "你好".to_string(),
         source: "RootID 搜索".to_string(),
         status: FriendRequestStatus::Pending,

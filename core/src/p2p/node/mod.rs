@@ -189,6 +189,9 @@ pub enum P2pEvent {
     /// 我发出的好友申请投递终态（pending=已送达等对方确认 / failed=投递失败
     /// 可重试；data 为 `{"request": <outbox 记录>}`，前端按 id upsert）。
     FriendRequestSent(serde_json::Value),
+    /// 朋友资料更新通知（profile-sync 入站落库后发出；data 为
+    /// `{"rootId", "nickname", "avatar"?}`，前端按 rootId 更新朋友资料）。
+    FriendProfileUpdated(serde_json::Value),
     /// 消息被丢弃（验签失败/强制签名缺失/形状非法）。
     MessageDropped {
         reason: String,

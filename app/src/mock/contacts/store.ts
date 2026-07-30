@@ -153,6 +153,8 @@ function ensureEventSubscription(): void {
  * - FriendRequestSent：我发出申请的投递终态，按 id upsert outbox（回填 nickname/
  *   status/updatedAt）；status 'failed' 置未读提醒可重试。
  * - FriendRequestAccepted：outbox 置 accepted + 未读，朋友按 rootId 去重落本地。
+ * - FriendProfileUpdated：对端资料同步（昵称/头像），按 rootId 就地更新朋友条目；
+ *   仅改 nickname/avatar（持久化兜底 watch 只回写本地资料字段，不会把头像写回内核）。
  */
 export function handleContactsP2pEvent(event: P2pEventDto): void {
   if (event.kind === 'FriendRequestReceived') {
@@ -194,6 +196,20 @@ export function handleContactsP2pEvent(event: P2pEventDto): void {
     const friend = toFriend(event.data.friend);
     if (!space.friends.some((item) => item.rootId === friend.rootId)) {
       space.friends.push(friend);
+    }
+    return;
+  }
+  if (event.kind === 'FriendProfileUpdated') {
+    const { rootId, nickname, avatar } = event.data;
+    for (const space of Object.values(spaces)) {
+      const friend = space.friends.find((item) => item.rootId === rootId);
+      if (!friend) {
+        continue;
+      }
+      friend.nickname = nickname;
+      if (avatar !== undefined) {
+        friend.avatar = avatar;
+      }
     }
   }
 }

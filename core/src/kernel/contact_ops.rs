@@ -81,6 +81,7 @@ impl Kernel {
                 let friend = FriendRecord {
                     root_id,
                     nickname,
+                    avatar: None,
                     signature: String::new(),
                     gender: None,
                     added_at: system_now_ms(),
@@ -327,6 +328,7 @@ impl Kernel {
             id: input.id.clone(),
             root_id: input.root_id.clone(),
             nickname: String::new(),
+            avatar: None,
             message: input.message.clone(),
             source: input.source.clone(),
             status: FriendRequestStatus::Pending,
@@ -357,6 +359,9 @@ impl Kernel {
             "message": request.message,
             "source": request.source,
         });
+        if let Some(avatar) = self.my_avatar(my_root_id) {
+            body["avatar"] = serde_json::Value::from(avatar);
+        }
         if let Some(node_info) = self.local_node_info_json() {
             body["nodeInfo"] = node_info;
         }
@@ -474,6 +479,7 @@ impl Kernel {
         let mut friend = existing.unwrap_or(FriendRecord {
             root_id: request.root_id.clone(),
             nickname: String::new(),
+            avatar: None,
             signature: String::new(),
             gender: None,
             added_at: now,
@@ -489,6 +495,9 @@ impl Kernel {
         });
         if !request.nickname.is_empty() {
             friend.nickname = request.nickname.clone();
+        }
+        if let Some(avatar) = &request.avatar {
+            friend.avatar = Some(avatar.clone());
         }
         if request.peer.is_some() {
             friend.peer = request.peer.clone();
@@ -506,6 +515,9 @@ impl Kernel {
                 "requestId": original_request_id,
                 "nickname": self.my_nickname(my_root_id),
             });
+            if let Some(avatar) = self.my_avatar(my_root_id) {
+                body["avatar"] = serde_json::Value::from(avatar);
+            }
             if let Some(node_info) = self.local_node_info_json() {
                 body["nodeInfo"] = node_info;
             }

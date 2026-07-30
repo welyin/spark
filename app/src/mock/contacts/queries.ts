@@ -6,6 +6,11 @@ import type { ContactProfile, FriendPermission, MockFriend } from './types';
 import { emptyProfile } from './types';
 import { contactsApi, contactsOf } from './store';
 
+/** 按 rootId 查朋友条目（无则 undefined）；会话头像等只读场景用 */
+export function friendOf(spaceKey: string, rootId: string): MockFriend | undefined {
+  return contactsOf(spaceKey).friends.find((item) => item.rootId === rootId);
+}
+
 /** 取联系人的本地资料：个人空间读朋友条目，组织空间读成员附加资料（惰性建默认） */
 export function profileOf(spaceKey: string, rootId: string): ContactProfile {
   const space = contactsOf(spaceKey);

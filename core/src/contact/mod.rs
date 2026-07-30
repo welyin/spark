@@ -77,6 +77,9 @@ pub struct FriendRecord {
     pub root_id: String,
     #[serde(default)]
     pub nickname: String,
+    /// 对方头像（data URL；无头像为 None，序列化时省略）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<String>,
     #[serde(default)]
     pub signature: String,
     /// 对方性别（`"male"` / `"female"`；缺省不展示）。
@@ -127,6 +130,9 @@ pub struct FriendRequestRecord {
     pub root_id: String,
     #[serde(default)]
     pub nickname: String,
+    /// 申请人头像（data URL；无头像为 None，序列化时省略）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<String>,
     #[serde(default)]
     pub message: String,
     /// 来源展示文案（如「RootID 搜索」「扫码」「邀请码」）。

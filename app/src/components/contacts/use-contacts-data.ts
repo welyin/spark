@@ -76,7 +76,7 @@ export function useContactsData(ctx: ContactsDataContext) {
           displayName: friend.remark || friend.nickname,
           // 第二行展示签名（无签名则不显示），RootID 属隐私不上列表
           subtitle: signature,
-          avatarImage: isSelf ? currentUser.avatar : '',
+          avatarImage: isSelf ? currentUser.avatar : friend.avatar ?? '',
           signature,
           gender,
           nickname: friend.nickname,

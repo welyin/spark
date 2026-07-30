@@ -29,6 +29,7 @@ export type P2pEventDto =
   | { kind: 'FriendRequestReceived'; data: { request: FriendRequestDto } }
   | { kind: 'FriendRequestSent'; data: { request: FriendRequestDto } }
   | { kind: 'FriendRequestAccepted'; data: { request: FriendRequestDto; friend: FriendDto } }
+  | { kind: 'FriendProfileUpdated'; data: { rootId: string; nickname: string; avatar?: string } }
   | { kind: 'Warning'; data: string }
   | { kind: 'Stopped' }
   | { kind: 'Lagged'; skipped: number };
@@ -216,6 +217,8 @@ export interface FriendDto extends ContactProfileDto {
   nickname: string;
   signature: string;
   gender?: 'male' | 'female';
+  /** 对端同步过来的头像（data URL）；缺省走自动头像 */
+  avatar?: string;
   addedAt: number;
 }
 
@@ -237,6 +240,8 @@ export interface FriendRequestDto {
   thread?: Array<{ from: 'me' | 'peer'; text: string; ts: number }>;
   /** 组织邀请码（我发出的组织成员邀请）。 */
   inviteCode?: string;
+  /** 对端同步过来的头像（data URL）；缺省走自动头像 */
+  avatar?: string;
 }
 
 /** 通讯录标签。 */
