@@ -17,3 +17,6 @@ app/dist-market/
 
 # 系统文件
 .DS_Store
+
+# 单机多开开发实例数据（npm run tauri dev N）
+app/.dev-data/

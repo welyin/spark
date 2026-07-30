@@ -56,10 +56,22 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let data_dir = app
-                .path()
-                .app_data_dir()
-                .map_err(|e| std::io::Error::other(format!("app_data_dir unavailable: {e}")))?;
+            // 单机多开测试：SPARK_DATA_DIR 显式指定数据目录（每实例一个），
+            // 未设置时走平台默认 app_data_dir。sled 单目录独占，多开必须隔离。
+            let data_dir = match std::env::var("SPARK_DATA_DIR") {
+                Ok(dir) if !dir.trim().is_empty() => {
+                    let dir = std::path::PathBuf::from(dir);
+                    std::fs::create_dir_all(&dir).map_err(|e| {
+                        std::io::Error::other(format!(
+                            "SPARK_DATA_DIR create failed: {e}"
+                        ))
+                    })?;
+                    dir
+                }
+                _ => app.path().app_data_dir().map_err(|e| {
+                    std::io::Error::other(format!("app_data_dir unavailable: {e}"))
+                })?,
+            };
             let app_version = app.package_info().version.to_string();
             let kernel = Kernel::init(KernelConfig {
                 data_dir: data_dir.clone(),

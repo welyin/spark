@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "vue-tsc --noEmit || tsc --noEmit",
-    "tauri": "tauri",
+    "tauri": "node scripts/dev-multi.mjs",
     "tauri:mock": "VITE_MOCK=1 tauri dev",
     "test": "vitest",
     "test:unit": "vitest run"
