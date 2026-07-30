@@ -26,7 +26,8 @@ const MOCK_APPS: PluginMarketItemDto[] = [
     latestVersion: '1.2.0',
     updateAvailable: false,
     lastCheckedAt: null,
-    lastCheckReason: ''
+    lastCheckReason: '',
+    grantedPermissions: []
   },
   {
     id: 'mock-vote',
@@ -44,7 +45,8 @@ const MOCK_APPS: PluginMarketItemDto[] = [
     latestVersion: '0.9.1',
     updateAvailable: false,
     lastCheckedAt: null,
-    lastCheckReason: ''
+    lastCheckReason: '',
+    grantedPermissions: []
   },
   {
     id: 'mock-calendar',
@@ -62,7 +64,8 @@ const MOCK_APPS: PluginMarketItemDto[] = [
     latestVersion: '2.0.3',
     updateAvailable: false,
     lastCheckedAt: null,
-    lastCheckReason: ''
+    lastCheckReason: '',
+    grantedPermissions: []
   },
   {
     id: 'mock-kanban',
@@ -80,7 +83,8 @@ const MOCK_APPS: PluginMarketItemDto[] = [
     latestVersion: '1.5.0',
     updateAvailable: false,
     lastCheckedAt: null,
-    lastCheckReason: ''
+    lastCheckReason: '',
+    grantedPermissions: []
   },
   {
     id: 'mock-moments',
@@ -98,7 +102,8 @@ const MOCK_APPS: PluginMarketItemDto[] = [
     latestVersion: '1.0.6',
     updateAvailable: false,
     lastCheckedAt: null,
-    lastCheckReason: ''
+    lastCheckReason: '',
+    grantedPermissions: []
   },
   {
     id: 'mock-files',
@@ -116,7 +121,8 @@ const MOCK_APPS: PluginMarketItemDto[] = [
     latestVersion: '3.1.2',
     updateAvailable: false,
     lastCheckedAt: null,
-    lastCheckReason: ''
+    lastCheckReason: '',
+    grantedPermissions: []
   }
 ];
 

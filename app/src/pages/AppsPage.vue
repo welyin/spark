@@ -14,6 +14,7 @@
       :installed-items="installedItems"
       :recent-items="recentItems"
       :is-enabled="isEnabled"
+      :is-suspended="isSuspended"
       :groups="groups"
       @open="openApp"
       @detail="(item) => openDetail(item)"
@@ -61,6 +62,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { Close } from '@element-plus/icons-vue';
 import type { PluginMarketItemDto } from '../api/types';
 import { currentSpace } from '../stores/current-space';
+import { enablePluginInstance, isPluginInstanceDisabled, pluginInstanceKey } from '../plugin-disabled';
 import { isAdmin, refreshOrganizations } from '../stores/org-membership';
 import { consumePendingAppDetail, pendingAppDetail } from '../stores/pending-app';
 import { isMockApp, listMockApps, setMockAppEnabled, setMockAppInstalled } from '../mock/apps';
@@ -130,6 +132,16 @@ export default defineComponent({
     const isEnabled = (item: PluginMarketItemDto): boolean =>
       isOrgSpace.value ? orgEnabled.isOrgEnabled(item.id) : item.enabled;
 
+    /** 熔断实例键：卡片置灰与打开拦截同一口径（plugin-disabled.ts） */
+    const instanceKeyOf = (item: PluginMarketItemDto) =>
+      pluginInstanceKey(item.id, {
+        type: currentSpace.value.type,
+        id: currentSpace.value.type === 'org' ? currentSpace.value.orgId : 'personal'
+      });
+
+    /** 崩溃环自动停用（卡片级置灰 + 「已停用」徽标）；localStorage 读取，页面重进时刷新 */
+    const isSuspended = (item: PluginMarketItemDto): boolean => isPluginInstanceDisabled(instanceKeyOf(item));
+
     const installedItems = computed(() => items.value.filter((item) => item.installed));
 
     const recentItems = computed(() =>
@@ -187,7 +199,7 @@ export default defineComponent({
     };
     watch([pendingAppDetail, items], openPendingAppDetail);
 
-    const openApp = (item: PluginMarketItemDto) => {
+    const openApp = async (item: PluginMarketItemDto) => {
       if (!isEnabled(item)) {
         openDetail(item);
         return;
@@ -197,6 +209,20 @@ export default defineComponent({
         recent.recordOpen(item.id);
         ElMessage.info(`「${item.name}」为演示应用，暂无真实插件视图`);
         return;
+      }
+      // 熔断自动停用（崩溃环）：入口拦截 + 提示，确认后手动重新启用（清零计数）
+      const instanceKey = instanceKeyOf(item);
+      if (isPluginInstanceDisabled(instanceKey)) {
+        try {
+          await ElMessageBox.confirm(
+            `「${item.name}」在当前空间因多次异常已自动停用。重新启用将清零异常计数。`,
+            '应用已自动停用',
+            { confirmButtonText: '重新启用', cancelButtonText: '取消', type: 'warning' }
+          );
+        } catch {
+          return; // 用户取消，保持停用
+        }
+        enablePluginInstance(instanceKey);
       }
       recent.recordOpen(item.id);
       emit('open-plugin-tab', {
@@ -336,6 +362,7 @@ export default defineComponent({
       installedItems,
       recentItems,
       isEnabled,
+      isSuspended,
       openApp,
       openDetail,
       installApp,

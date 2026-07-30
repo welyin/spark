@@ -37,7 +37,7 @@
             v-for="item in visibleRecent"
             :key="`recent-${item.id}`"
             class="app-card"
-            :class="{ disabled: !isEnabled(item), 'drag-source': hiddenAppId === item.id }"
+            :class="{ disabled: !isEnabled(item) || isSuspended(item), 'drag-source': hiddenAppId === item.id }"
             draggable="true"
             @dragstart="onDragStart($event, item.id)"
             @dragend="onDragEnd"
@@ -46,6 +46,7 @@
             <div class="app-card-body" @click="onCardClick(item)">
               <div class="app-card-head">
                 <span class="app-card-name">{{ item.name }}</span>
+                <el-tag v-if="isSuspended(item)" size="small" type="warning">已停用</el-tag>
                 <el-tag size="small" effect="plain" :type="isEnabled(item) ? 'success' : 'info'">
                   {{ isEnabled(item) ? '启用' : '禁用' }}
                 </el-tag>
@@ -91,7 +92,7 @@
             <div v-if="isDropBefore(section.name, index)" class="app-card-drop-placeholder" />
             <div
               class="app-card"
-              :class="{ disabled: !isEnabled(item), 'drag-source': hiddenAppId === item.id }"
+              :class="{ disabled: !isEnabled(item) || isSuspended(item), 'drag-source': hiddenAppId === item.id }"
               draggable="true"
               @dragstart="onDragStart($event, item.id)"
               @dragenter.prevent
@@ -102,6 +103,7 @@
             <div class="app-card-body" @click="onCardClick(item)">
               <div class="app-card-head">
                 <span class="app-card-name">{{ item.name }}</span>
+                <el-tag v-if="isSuspended(item)" size="small" type="warning">已停用</el-tag>
                 <el-tag size="small" effect="plain" :type="isEnabled(item) ? 'success' : 'info'">
                   {{ isEnabled(item) ? '启用' : '禁用' }}
                 </el-tag>
@@ -144,6 +146,8 @@ export default defineComponent({
     installedItems: { type: Array as PropType<PluginMarketItemDto[]>, required: true },
     recentItems: { type: Array as PropType<PluginMarketItemDto[]>, required: true },
     isEnabled: { type: Function as PropType<(item: PluginMarketItemDto) => boolean>, required: true },
+    /** 熔断自动停用判定（崩溃环）：命中卡片置灰 + 「已停用」徽标 */
+    isSuspended: { type: Function as PropType<(item: PluginMarketItemDto) => boolean>, required: true },
     groups: { type: Object as PropType<ReturnType<typeof useAppGroups>>, required: true }
   },
   emits: ['open', 'detail', 'toggle', 'add-app'],

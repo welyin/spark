@@ -52,9 +52,9 @@ function todo(channel: string): (...args: any[]) => Promise<never> {
 }
 
 /**
- * 插件域解析（本期沿用旧 tab 模式语义）：
- * 插件视图跑在 system 域窗口的 iframe tab 内，URL query 带 `pluginDomain`
- * （App.vue `pluginFrameSrc` 注入）；主窗口无该参数 → null。
+ * 插件域解析（命令层遗留回退）：
+ * iframe 沙箱化后插件 SDK 调用一律经桥 dispatcher 显式带域（plugin-bridge-dispatcher.ts），
+ * 此 URL query 回退仅保留给历史 tab 同进程语境，正常路径下解析不到 → null。
  * 独立插件窗口由宿主绑定域 + 强制权限校验待插件运行时排期。
  */
 function resolveTabPluginDomain(): string | null {

@@ -14,11 +14,13 @@ fn install_from_local_release_copies_package_and_persists() {
     let installed = service.install("weibo-core").unwrap();
     assert_eq!(installed.version, "0.1.0");
     assert!(installed.enabled);
-    // 包被复制到 packages_root/<id>/packages/
+    // 包被复制到 packages_root/<id>/packages/（跨平台：按路径组件比较，不比较字符串分隔符）
     let copied = fixture
         .packages_root
-        .join("weibo-core/packages/spark-plugin-weibo-core-0.1.0.spkg");
-    assert_eq!(installed.package_path, copied.to_string_lossy());
+        .join("weibo-core")
+        .join("packages")
+        .join("spark-plugin-weibo-core-0.1.0.spkg");
+    assert_eq!(PathBuf::from(&installed.package_path), copied);
     assert!(copied.is_file());
     assert_eq!(service.update_probes["weibo-core"].reason, "installed");
 

@@ -1,12 +1,5 @@
 <template>
-  <section v-if="isPluginViewMode" class="plugin-host-wrap">
-    <el-card shadow="never">
-      <el-alert v-if="pluginHostMessage" :title="pluginHostMessage" type="warning" :closable="false" show-icon />
-      <component v-if="activePluginView" :is="activePluginView" />
-    </el-card>
-  </section>
-
-  <div v-else class="shell">
+  <div class="shell">
     <!-- 顶部导航栏（最外层，横跨全宽）：左侧=空间切换+网络状态，右侧=「⋯」更多（切换账号/退出登录） -->
     <header class="topbar">
       <TopNavbar
@@ -119,10 +112,15 @@
               <div class="plugin-tab-header-right" />
             </div>
           </template>
-          <iframe
-            class="plugin-frame"
-            :src="pluginFrameSrc"
-            :title="`${activePluginTab.pluginDomain}/${activePluginTab.pluginView}`"
+          <!-- iframe 沙箱运行时（插件加载唯一路径，阶段 A 第三波起）：
+               独立 origin iframe + postMessage 桥 + 权限中间件 + 心跳熔断；
+               space 切换经 :key 重建实例 -->
+          <PluginIframeHost
+            :key="`${activePluginTab.id}|${pluginSpace.id}`"
+            :plugin-id="activePluginTab.pluginDomain.slice('plugin:'.length)"
+            :view-id="activePluginTab.pluginView"
+            :space="pluginSpace"
+            @close="closePluginTab"
           />
         </el-card>
       </main>
@@ -131,15 +129,15 @@
 </template>
 
 <script lang="ts">
-import { computed, defineComponent, onMounted, onUnmounted, ref, shallowRef, type Component } from 'vue';
+import { computed, defineComponent, onMounted, onUnmounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { ChatDotRound, Cpu, Grid, Notebook, Setting } from '@element-plus/icons-vue';
-import { getPluginView } from './plugin-view-registry';
+import type { PluginSpaceContext } from '../../packages/plugin-sdk/src';
+import PluginIframeHost from './components/plugin/PluginIframeHost.vue';
 import { unreadCountOf } from './mock/messages';
 import { requestBadgeCount, spaceKeyOf } from './mock/contacts';
 import {
   currentSpace,
-  currentSpaceOrgId,
   validateCurrentSpace
 } from './stores/current-space';
 import { refreshCurrentUser } from './stores/current-user';
@@ -178,6 +176,7 @@ export default defineComponent({
     MinePage,
     TopNavbar,
     UserAvatarMenu,
+    PluginIframeHost,
     ChatDotRound,
     Notebook,
     Grid,
@@ -185,13 +184,6 @@ export default defineComponent({
     Setting
   },
   setup() {
-    const search = new URLSearchParams(window.location.search);
-    const pluginWindowDomain = search.get('pluginDomain');
-    const pluginWindowView = search.get('pluginView') ?? 'default';
-    const isPluginViewMode = ref(Boolean(pluginWindowDomain));
-    const activePluginView = shallowRef<Component | null>(null);
-    const pluginHostMessage = ref('');
-
     const activeTab = ref<string>('messages');
     const pluginTabs = ref<PluginTab[]>([]);
     // rail 宽窄状态（持久化）：false=64px 窄栏（图标+小字），true=155px 宽栏（左图标右文字）
@@ -221,24 +213,21 @@ export default defineComponent({
       return pluginTabs.value.find((tab) => tab.id === activeTab.value) ?? null;
     });
 
-    const pluginFrameSrc = computed(() => {
+    /** 插件运行 space 上下文（透传 PluginIframeHost；个人空间 id 恒 'personal'） */
+    const pluginSpace = computed<PluginSpaceContext>(() => ({
+      type: currentSpace.value.type,
+      id: currentSpace.value.type === 'org' ? currentSpace.value.orgId : 'personal'
+    }));
+
+    /** 关闭当前插件 tab（熔断覆盖层「关闭」；移除 tab 并回来源页） */
+    const closePluginTab = () => {
       const tab = activePluginTab.value;
       if (!tab) {
-        return '';
+        return;
       }
-
-      const url = new URL(window.location.href);
-      url.search = '';
-      url.searchParams.set('pluginDomain', tab.pluginDomain);
-      url.searchParams.set('pluginView', tab.pluginView);
-      if (tab.pluginContext?.orgId) {
-        url.searchParams.set('orgId', tab.pluginContext.orgId);
-      }
-      // 当前空间透传给插件 iframe（ui-space-navbar §10.1）
-      url.searchParams.set('spaceType', currentSpace.value.type);
-      url.searchParams.set('spaceId', currentSpaceOrgId.value || 'personal');
-      return url.toString();
-    });
+      pluginTabs.value = pluginTabs.value.filter((item) => item.id !== tab.id);
+      activeTab.value = tab.sourceTab ?? 'apps';
+    };
 
     const handleMenuSelect = (index: string) => {
       activeTab.value = index;
@@ -328,16 +317,6 @@ export default defineComponent({
     };
 
     onMounted(() => {
-      if (isPluginViewMode.value && pluginWindowDomain) {
-        const view = getPluginView(pluginWindowDomain, pluginWindowView);
-        if (view) {
-          activePluginView.value = view;
-        } else {
-          pluginHostMessage.value = `未找到插件视图：${pluginWindowDomain} / ${pluginWindowView}`;
-        }
-        return;
-      }
-
       void loadCurrentUser();
       // 懒校验启动恢复的组织空间：组织已不存在时回退个人空间
       void validateCurrentSpace();
@@ -355,11 +334,6 @@ export default defineComponent({
     });
 
     return {
-      isPluginViewMode,
-      pluginWindowDomain,
-      pluginWindowView,
-      activePluginView,
-      pluginHostMessage,
       activeTab,
       pluginTabs,
       railExpanded,
@@ -368,7 +342,8 @@ export default defineComponent({
       messagesBadge,
       contactsBadge,
       activePluginTab,
-      pluginFrameSrc,
+      pluginSpace,
+      closePluginTab,
       handleMenuSelect,
       openPluginTab,
       goBackFromPlugin,

@@ -82,6 +82,12 @@ jobs:
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Install app dependencies (plugin build reuses the app toolchain)
+        run: npm ci --prefix app
+
+      - name: Build plugin dist (vite ESM bundle + manifest)
+        run: npm run build:weibo --prefix plugins
+
       - name: Build and sign plugin release artifacts
         if: github.event_name == 'release' || steps.release_check.outputs.skip == 'false'
         env:

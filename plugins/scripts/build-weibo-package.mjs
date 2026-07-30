@@ -17,7 +17,7 @@
  */
 
 import { createHash, createPrivateKey, createPublicKey, sign } from 'crypto';
-import { mkdir, readFile, writeFile } from 'fs/promises';
+import { mkdir, readdir, readFile, writeFile } from 'fs/promises';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -29,14 +29,31 @@ const pluginsRoot = path.resolve(__dirname, '..');
 const codeRoot = path.resolve(pluginsRoot, '..');
 const workspaceRoot = path.resolve(codeRoot, '..');
 
-/** 打进 .spkg 的插件源文件（插件运行全量，deterministic 顺序）。 */
-const sourceFiles = [
-  'manifest.json',
-  'index.ts',
-  'model.ts',
-  'service.ts',
-  'WeiboCoreView.vue'
-];
+/**
+ * 打进 .spkg 的插件产物文件（dist/ 全量，deterministic 顺序）。
+ * dist 由 build:weibo 生成（vite ESM bundle + manifest.json + assets/），
+ * 本脚本不再直接收集 TS/Vue 源码。
+ */
+async function collectDistFiles(pluginId) {
+  const distDir = path.join(pluginsRoot, pluginId, 'dist');
+  if (!fs.existsSync(path.join(distDir, 'manifest.json'))) {
+    throw new Error(`缺少 ${distDir}（含 manifest.json），请先运行 npm run build:weibo 生成插件产物`);
+  }
+  const walk = async (dir) => {
+    const entries = await readdir(dir, { withFileTypes: true });
+    const files = [];
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        files.push(...await walk(fullPath));
+      } else {
+        files.push(path.relative(distDir, fullPath).split(path.sep).join('/'));
+      }
+    }
+    return files;
+  };
+  return (await walk(distDir)).sort();
+}
 
 const PRIVATE_KEY_FALLBACK_PATHS = [
   path.join(workspaceRoot, '.secrets', 'spark-update-signing-private-key.pem'),
@@ -104,9 +121,12 @@ async function main() {
 
   await mkdir(outputDir, { recursive: true });
 
+  const sourceFiles = await collectDistFiles(pluginId);
+  const distDir = path.join(pluginRoot, 'dist');
+
   const bundledFiles = [];
   for (const relativePath of sourceFiles) {
-    const sourcePath = path.join(pluginRoot, relativePath);
+    const sourcePath = path.join(distDir, relativePath);
     const content = await readFile(sourcePath);
     const digest = sha256(content);
 

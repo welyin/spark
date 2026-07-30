@@ -13,7 +13,7 @@
 - `src/components/org/OrgIdentityCard.vue:22` | 「使用个人身份」开关仅本地生效（MinePage「组织身份」卡片，原 UserAvatarMenu 下拉项） | 待后端组织身份接口（设计 §9.3）
 - `src/App.vue`（rail 测试入口） | 测试页正式发版隐藏 | 通过构建配置/环境变量隐藏测试入口且不打包其路由（设计 §6.4），当前始终可见
 - `src/components/SpaceSwitcher.vue` 等 | 组织 logo 展示链路 | 统一走 org-avatars store；后端字段落地后整体替换
-- 插件 SDK `sdk.space` | spaceType/spaceId 已注入插件 iframe URL（设计 §10.1） | `plugin-sdk-browser.ts` 读取 `sdk.space` 属 SDK 侧工作（设计 §11.4），未做
+- 插件 SDK `sdk.space` | 当前 space 经桥握手 ctx.space（PluginContext）注入插件 | `sdk.space` 属性属 SDK 侧工作（设计 §11.4），未做
 - `src/components/GlobalSearch.vue` | 顶栏全局搜索（纯前端模糊匹配，分组：联系人/会话/应用/组织） | 数据源复用 mock/contacts、mock/messages、mock/apps + 真实 `organization.listMine`/`pluginMarket.list`，随各 mock 替换自动切换真实数据
 - `src/components/common/TermLabel.vue` | 术语通俗化映射表（RootID→身份 ID、PeerID→节点 ID、P2P Addresses→节点地址） | 前端展示层约定；tooltip 白话解释如需改文案统一改这里
 
@@ -85,5 +85,6 @@
 - `src/components/apps/AppDetailPanel.vue:108` | 无卸载按钮 | `pluginMarket` 无 `uninstall` 接口（设计 §4.1 有卸载语义），待内核补接口
 - `src/pages/AppsPage.vue:274` | 联系管理员 toast 占位 | 非管理员点「启用」按 §5.2 弹确认框；点联系管理员仅 toast，待打开与管理员 1:1 聊天并发送应用链接卡片（§5.2 第 4-5 步，可复用 `spark:open-chat` 链路）
 - `src/stores/pending-app.ts` | 跨页「打开应用详情」请求（全局搜索→应用页详情视图） | 联动链路已通；条目来自真实 pluginMarket.list + mock 合并列表
-- 插件入口契约已落地 | 插件与壳层双向耦合已消除：独立 SDK 包 `@spark/plugin-sdk`（`../packages/plugin-sdk`，纯类型 + `definePlugin` 入口契约 + `getPluginSDK`/`ensurePluginSDK` 全局注入点读取），插件侧只依赖该包 + 声明式 `manifest.json`（`../plugins/weibo-core`）；壳层 `plugin-loader.ts` 读默认导出、校验 manifest 后调 `setup(ctx)` 桥接注册；插件测试已迁至 `../plugins/weibo-core/tests/` | iframe 运行时（独立窗口/宿主绑定域/强制权限校验）仍待做
+- 插件入口契约已落地 | 插件与壳层双向耦合已消除：独立 SDK 包 `@spark/plugin-sdk`（`../packages/plugin-sdk`，纯类型 + `definePlugin` 入口契约（第三方约定保留）+ `getPluginSDK`/`ensurePluginSDK` 全局注入点读取），插件侧只依赖该包 + 声明式 `manifest.json`（`../plugins/weibo-core`）；壳层编译期注册（plugin-loader/plugin-view-registry）已退役，插件装载统一走 iframe 沙箱桥握手；插件测试已迁至 `../plugins/weibo-core/tests/`
+- iframe 沙箱运行时（阶段 A 第三波收尾） | 已落地：`plugin://` 源服务（`src-tauri/src/plugin_src.rs`，安装包 .spkg 优先、内置 dist 兜底，CSP + 路径穿越防护；Windows 经 `http://plugin.localhost` workaround）+ vite dev 中间件（`vite.config.ts`）+ 宿主组件 `src/components/plugin/PluginIframeHost.vue`（srcdoc 沙箱 iframe + 桥握手）+ 权限中间件 `src/plugin-bridge-dispatcher.ts`（grantedPermissions ∩ view 裁剪 ∩ space 三重过滤，identity:sign 使用时询问）+ 熔断 `src/plugin-watchdog.ts`/`src/plugin-disabled.ts`（心跳无响应覆盖层、崩溃环自动停用、错误经桥 `runtime-error` 上报）；旧 registry tab 路径已退役（`plugin-view-registry.ts`/`plugin-loader.ts` 删除，`plugin-sdk-browser.ts` 收敛为桥后端工厂，App.vue 插件 tab 统一 PluginIframeHost——iframe 成为唯一加载路径，weibo-core 全面迁移），AppsPage 卡片级「已停用」置灰+徽标（读 plugin-disabled） | 遗留：停用状态存 localStorage `spark:plugin-disabled` 待内核实例状态接口；.spkg 解析缓存、sdk.space（见上）、message-card 端到端、桥调用限流
 - 未做条目 | 拖拽移动分组（现为右键菜单）、分组重命名/删除、开发者模式安装未签名应用（§6.2） | 拖拽为体验增强；开发者模式待内核验签策略

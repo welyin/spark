@@ -104,6 +104,8 @@ export type PluginMarketItemDto = {
   updateAvailable: boolean;
   lastCheckedAt: number | null;
   lastCheckReason: string;
+  /** 已授权权限清单（桥 dispatcher 权限中间件数据源；未安装时为空） */
+  grantedPermissions: PluginPermission[];
 };
 
 export type PluginUpdateProbeDto = {

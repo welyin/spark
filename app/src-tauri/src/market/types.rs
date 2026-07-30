@@ -84,6 +84,9 @@ pub struct PluginMarketItem {
     pub update_available: bool,
     pub last_checked_at: Option<u64>,
     pub last_check_reason: String,
+    /// 已授权权限清单（grantedPermissions）：桥 dispatcher 权限中间件的数据源；
+    /// 未安装（仅 dev-source 兜底也没有）时为空清单
+    pub granted_permissions: Vec<String>,
 }
 
 /// 持久化状态文件形状（TS `PersistedPluginState`：plugin-market-state.json）。

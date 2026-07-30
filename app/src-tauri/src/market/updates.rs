@@ -85,6 +85,9 @@ impl PluginMarketService {
                     last_check_reason: probe
                         .map(|p| p.reason.clone())
                         .unwrap_or_else(|| "not-checked".to_string()),
+                    granted_permissions: installed
+                        .map(|s| s.granted_permissions)
+                        .unwrap_or_default(),
                     catalog: item,
                 }
             })

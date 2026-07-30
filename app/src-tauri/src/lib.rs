@@ -11,7 +11,9 @@
 // pub 以便 tests/ 下的集成测试（unit_app）按公开 API 直调；私有项保持原可见性。
 pub mod commands;
 pub mod market;
+pub mod plugin_src;
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
@@ -51,27 +53,50 @@ fn spawn_p2p_event_forwarder(app: tauri::AppHandle, mut rx: tokio::sync::broadca
     });
 }
 
+/// 数据目录解析：SPARK_DATA_DIR 显式指定优先（单机多开测试，每实例一个），
+/// 未设置时走平台默认 app_data_dir。setup 与 plugin:// 协议回调共用，
+/// 保证内核数据、市场状态与插件源服务读同一目录。
+fn resolve_data_dir(app: &tauri::App) -> Result<PathBuf, std::io::Error> {
+    match std::env::var("SPARK_DATA_DIR") {
+        Ok(dir) if !dir.trim().is_empty() => {
+            let dir = PathBuf::from(dir);
+            std::fs::create_dir_all(&dir)
+                .map_err(|e| std::io::Error::other(format!("SPARK_DATA_DIR create failed: {e}")))?;
+            Ok(dir)
+        }
+        _ => app
+            .path()
+            .app_data_dir()
+            .map_err(|e| std::io::Error::other(format!("app_data_dir unavailable: {e}"))),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .setup(|app| {
-            // 单机多开测试：SPARK_DATA_DIR 显式指定数据目录（每实例一个），
-            // 未设置时走平台默认 app_data_dir。sled 单目录独占，多开必须隔离。
+        // 插件源服务：plugin://localhost/<pluginId>/<path>（插件 iframe 沙箱化阶段 A；
+        // Windows 上页面实际引用 http://plugin.localhost/...，由 wry 拦截后 revert，
+        // 见 plugin_src.rs 的 URL 形态说明）。已安装包（app_data_dir/plugins/<id>/
+        // packages/*.spkg）优先，内置开发插件 dist（code/plugins/<id>/dist/）兜底。
+        .register_uri_scheme_protocol("plugin", |ctx, request| {
             let data_dir = match std::env::var("SPARK_DATA_DIR") {
-                Ok(dir) if !dir.trim().is_empty() => {
-                    let dir = std::path::PathBuf::from(dir);
-                    std::fs::create_dir_all(&dir).map_err(|e| {
-                        std::io::Error::other(format!(
-                            "SPARK_DATA_DIR create failed: {e}"
-                        ))
-                    })?;
-                    dir
-                }
-                _ => app.path().app_data_dir().map_err(|e| {
-                    std::io::Error::other(format!("app_data_dir unavailable: {e}"))
-                })?,
+                Ok(dir) if !dir.trim().is_empty() => PathBuf::from(dir),
+                _ => match ctx.app_handle().path().app_data_dir() {
+                    Ok(dir) => dir,
+                    Err(_) => {
+                        return tauri::http::Response::builder()
+                            .status(tauri::http::StatusCode::INTERNAL_SERVER_ERROR)
+                            .body(b"app_data_dir unavailable".to_vec())
+                            .expect("plugin:// error response build failed");
+                    }
+                },
             };
+            plugin_src::handle_plugin_request(&data_dir, request.uri())
+        })
+        .setup(|app| {
+            // sled 单目录独占，多开必须隔离（resolve_data_dir 注释）
+            let data_dir = resolve_data_dir(app)?;
             let app_version = app.package_info().version.to_string();
             let kernel = Kernel::init(KernelConfig {
                 data_dir: data_dir.clone(),

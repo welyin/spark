@@ -237,8 +237,8 @@ export default defineComponent({
 
     const ensureSdk = async () => {
       if (!sdk.value) {
-        // SDK 由壳层在插件 tab 启动时注入 window.__sparkPluginSDK，
-        // 挂起等待注入完成（对齐原 initializePluginSDK 的异步时序）
+        // SDK 由插件入口在桥握手完成时注入 window.__sparkPluginSDK，
+        // 视图挂载可能先于握手完成，挂起等待注入
         sdk.value = await ensurePluginSDK();
         service.value = new WeiboCoreService(sdk.value);
       }

@@ -4,10 +4,10 @@
  * 纯类型 + 入口契约包，零运行时依赖（不依赖 vue/element-plus/Tauri）：
  * - SDK 类型（PluginSDK 等）：插件与壳层共享的唯一类型来源，
  *   壳层 src/plugin-sdk-browser.ts 从这里 re-export 并持有 Tauri 实现；
- * - definePlugin：插件入口契约，插件默认导出 definePlugin 的返回值，
- *   壳层 plugin-loader 读取默认导出、校验 manifest 后调用 setup(ctx)；
+ * - definePlugin：插件入口契约（第三方插件约定，保留）——沙箱化后壳层不再
+ *   编译期装载，插件 bundle 在沙箱 iframe 内经 bridge/client 握手自挂载；
  * - getPluginSDK/ensurePluginSDK：从全局注入点 window.__sparkPluginSDK
- *   读取壳层注入的 SDK 实例（壳层 initializePluginSDK 完成时写入）。
+ *   读取宿主注入的 SDK 实例（插件入口在桥握手完成时写入）。
  *
  * app 与 plugins 均经相对路径引用本包（../../packages/plugin-sdk/src），不发布 npm。
  */
@@ -119,6 +119,23 @@ export interface PluginDeclaredCollectionSchema {
   enableEvidence: boolean;
 }
 
+// ------------------------------------------------------------------
+// 事件模块（随桥协议落地，见 bridge/client.ts）
+// ------------------------------------------------------------------
+
+/** 系统事件回调（payload 为结构化克隆安全的 JSON） */
+export type PluginEventHandler = (payload: unknown) => void;
+
+/**
+ * 事件模块：订阅/取消订阅系统事件。
+ * iframe 桥模式下由 connectPluginBridge 提供；tab 模式（同进程注入）未实现，
+ * 故在 PluginSDK 上为可选字段。
+ */
+export interface PluginEventsAPI {
+  subscribe: (event: string, handler: PluginEventHandler) => Promise<void>;
+  unsubscribe: (event: string, handler?: PluginEventHandler) => Promise<void>;
+}
+
 export interface PluginSDK {
   /** 当前插件的域身份：tab 模式下由 URL query `pluginDomain` 解析（对齐旧 tab 语义） */
   domain: string;
@@ -127,7 +144,38 @@ export interface PluginSDK {
   runtime: PluginRuntimeAPI;
   docs: PluginDocAPI;
   identity: PluginIdentityAPI;
+  /** 事件模块：仅 iframe 桥模式可用（tab 模式未注入） */
+  events?: PluginEventsAPI;
 }
+
+// ------------------------------------------------------------------
+// 插件运行上下文（桥握手 ready 时由宿主下发，见 bridge/protocol.ts）
+// ------------------------------------------------------------------
+
+/** 插件运行的空间容器（个人空间与组织并列的顶层容器） */
+export type PluginSpaceContext = {
+  type: 'personal' | 'org';
+  /** 空间 id：个人空间为 'personal'，组织空间为 orgId */
+  id: string;
+};
+
+/** 视图挂载信息（壳层分配；挂载区域矩形随宿主组件波次补充） */
+export type PluginMountInfo = {
+  /** 视图类型，对齐 manifest.views[].type */
+  viewType: 'app' | 'message-card';
+};
+
+/** 桥握手 ready 下发的插件运行上下文 */
+export type PluginContext = {
+  pluginId: string;
+  viewId: string;
+  /** 插件域身份（plugin: 前缀） */
+  domain: string;
+  space: PluginSpaceContext;
+  /** 壳层当前主题（变更经事件桥推送） */
+  theme: 'light' | 'dark';
+  mount: PluginMountInfo;
+};
 
 // ------------------------------------------------------------------
 // 入口契约（definePlugin）
@@ -176,14 +224,15 @@ export type PluginDefinition = {
 
 /**
  * 插件入口契约：插件 index.ts 默认导出 definePlugin 的返回值。
- * 运行时为 identity 函数，仅做类型约束；真正的装载由壳层 plugin-loader 完成。
+ * 运行时为 identity 函数，仅做类型约束（第三方插件约定保留；壳层编译期
+ * 装载已退役，沙箱 iframe 内插件经 bridge/client 握手自挂载）。
  */
 export function definePlugin(def: PluginDefinition): PluginDefinition {
   return def;
 }
 
 // ------------------------------------------------------------------
-// 全局注入点（壳层 initializePluginSDK 完成时写入）
+// 全局注入点（插件入口在桥握手完成时写入）
 // ------------------------------------------------------------------
 
 declare global {
@@ -206,8 +255,8 @@ export function getPluginSDK(): PluginSDK {
 }
 
 /**
- * 挂起等待壳层注入插件 SDK（对齐原 initializePluginSDK 的异步时序：
- * 插件视图 onMounted 时壳层注入可能尚未完成，轮询直至就绪）。
+ * 挂起等待宿主注入插件 SDK（插件视图 onMounted 时入口的桥握手可能尚未完成，
+ * 轮询直至就绪）。
  *
  * @throws 超时（默认 10s）仍未注入，说明当前不处于插件运行上下文
  */

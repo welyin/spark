@@ -205,12 +205,6 @@
   background: var(--spark-main-bg);
 }
 
-/* ---- 插件宿主页（独立窗口模式） ---- */
-
-.plugin-host-wrap {
-  padding: 0;
-}
-
 /* ---- 页面通用头部条（钉钉风：标题+描述在左，操作在右） ---- */
 
 .page-header {
@@ -321,14 +315,6 @@
 
 .plugin-tab-header-right {
   min-height: 1px;
-}
-
-.plugin-frame {
-  width: 100%;
-  height: 100%;
-  border: 0;
-  background: var(--spark-bg-card);
-  display: block;
 }
 
 /* ---- 全 app 抽屉统一：去默认头部小标题、内容卡片去边框（卡片标题即抽屉标题） ---- */
