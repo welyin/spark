@@ -51,7 +51,6 @@
       :space-type="spaceType"
       :space-key="spaceKey"
       @resolve="onResolveRequest"
-      @view-contact="onViewRequestContact"
       @retry="onRetryOutgoing"
       @reply="onReplyOutgoing"
     />
@@ -225,7 +224,6 @@ export default defineComponent({
       onDeleteContact,
       onAddFriendSubmit,
       onResolveRequest,
-      onViewRequestContact,
       onRetryOutgoing,
       onReplyOutgoing,
       onAddAsFriend,
@@ -286,7 +284,6 @@ export default defineComponent({
       onDeleteContact,
       onAddFriendSubmit,
       onResolveRequest,
-      onViewRequestContact,
       onRetryOutgoing,
       onReplyOutgoing,
       onAddAsFriend,

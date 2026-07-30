@@ -21,11 +21,11 @@
             <span v-if="conv.kind === 'system'" class="conv-sys-avatar">
               <el-icon :size="20"><BellFilled /></el-icon>
             </span>
-            <UserAvatar v-else :root-id="conv.peerId" :nickname="conv.title" :avatar="peerAvatar(conv)" :size="40" />
+            <UserAvatar v-else :root-id="conv.peerId" :nickname="convName(conv)" :avatar="peerAvatar(conv)" :size="40" />
           </div>
           <div class="conv-main">
             <div class="conv-line1">
-              <span class="conv-name">{{ conv.title }}</span>
+              <span class="conv-name">{{ convName(conv) }}</span>
             </div>
             <div class="conv-line2">
               <span class="conv-preview">
@@ -82,7 +82,7 @@ import { computed, defineComponent, reactive, ref } from 'vue';
 import { ElMessageBox } from 'element-plus';
 import { BellFilled, Brush, Delete, MuteNotification, Search, Top } from '@element-plus/icons-vue';
 import UserAvatar from '../UserAvatar.vue';
-import { friendOf } from '../../mock/contacts';
+import { personAvatarSource, personDisplayName } from '../../stores/avatar-sources';
 import {
   clearMessages,
   deleteConversation,
@@ -110,20 +110,25 @@ export default defineComponent({
 
     const sorted = computed(() => listConversations(props.spaceKey));
 
+    // direct 会话的 peerId 即对方 rootId：统一头像入口（朋友记录优先），无则走自动头像
+    function peerAvatar(conv: Conversation): string {
+      return conv.kind === 'direct' ? personAvatarSource(props.spaceKey, conv.peerId).image : '';
+    }
+
+    // 会话名：direct 走统一展示名入口（备注>昵称>原标题），改备注后列表/搜索同步生效
+    function convName(conv: Conversation): string {
+      return conv.kind === 'direct' ? personDisplayName(props.spaceKey, conv.peerId, conv.title) : conv.title;
+    }
+
     // 按名称/最新消息内容模糊搜索（设计 §2.5）
     const filtered = computed(() => {
       const kw = keyword.value.trim().toLowerCase();
       if (!kw) return sorted.value;
       return sorted.value.filter((conv) => {
-        if (conv.title.toLowerCase().includes(kw)) return true;
+        if (convName(conv).toLowerCase().includes(kw)) return true;
         return previewText(lastMessage(props.spaceKey, conv.id)).toLowerCase().includes(kw);
       });
     });
-
-    // direct 会话的 peerId 即对方 rootId：有好友记录时用其同步头像，无则走自动头像
-    function peerAvatar(conv: Conversation): string {
-      return conv.kind === 'direct' ? friendOf(props.spaceKey, conv.peerId)?.avatar ?? '' : '';
-    }
 
     // 空状态（设计 §2.4）：区分无会话与搜索无结果
     const emptyText = computed(() => {
@@ -175,7 +180,7 @@ export default defineComponent({
       closeMenu();
       if (!conv) return;
       try {
-        await ElMessageBox.confirm('仅删除本地消息记录，不影响对方设备。', `清空与「${conv.title}」的聊天记录？`, {
+        await ElMessageBox.confirm('仅删除本地消息记录，不影响对方设备。', `清空与「${convName(conv)}」的聊天记录？`, {
           confirmButtonText: '清空',
           cancelButtonText: '取消',
           type: 'warning'
@@ -191,7 +196,7 @@ export default defineComponent({
       closeMenu();
       if (!conv) return;
       try {
-        await ElMessageBox.confirm('仅删除会话列表入口。', `删除与「${conv.title}」的会话？`, {
+        await ElMessageBox.confirm('仅删除会话列表入口。', `删除与「${convName(conv)}」的会话？`, {
           confirmButtonText: '删除',
           cancelButtonText: '取消',
           type: 'warning'
@@ -210,6 +215,7 @@ export default defineComponent({
       emptyText,
       menu,
       peerAvatar,
+      convName,
       openMenu,
       closeMenu,
       onPin,

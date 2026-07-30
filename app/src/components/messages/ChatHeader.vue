@@ -2,9 +2,9 @@
 <template>
   <header class="chat-header">
     <el-button text :icon="ArrowLeft" class="chat-back" @click="$emit('back')" />
-    <UserAvatar :root-id="conversation.peerId" :nickname="conversation.title" :avatar="peerAvatar" :size="32" />
+    <UserAvatar :root-id="conversation.peerId" :nickname="peerName" :avatar="peerAvatar" :size="32" />
     <div class="chat-title">
-      <span class="chat-name">{{ conversation.title }}</span>
+      <span class="chat-name">{{ peerName }}</span>
       <span class="chat-sub">
         <template v-if="conversation.kind === 'system'">系统通知</template>
         <template v-else>
@@ -66,7 +66,7 @@ import {
 } from '@element-plus/icons-vue';
 import UserAvatar from '../UserAvatar.vue';
 import { isLocalOnly } from '../../stores/network-status';
-import { friendOf } from '../../mock/contacts';
+import { personAvatarSource, personDisplayName } from '../../stores/avatar-sources';
 import {
   clearMessages,
   deleteConversation,
@@ -98,9 +98,16 @@ export default defineComponent({
       isLocalOnly.value ? '仅本地·不可达' : props.conversation.online ? '在线' : '离线'
     );
 
-    // direct 会话的 peerId 即对方 rootId：有好友记录时用其同步头像，无则走自动头像
+    // direct 会话的 peerId 即对方 rootId：统一头像入口（朋友记录优先），无则走自动头像
     const peerAvatar = computed(() =>
-      props.conversation.kind === 'direct' ? friendOf(props.spaceKey, props.conversation.peerId)?.avatar ?? '' : ''
+      props.conversation.kind === 'direct' ? personAvatarSource(props.spaceKey, props.conversation.peerId).image : ''
+    );
+
+    // 会话标题：direct 会话走统一展示名入口（备注>昵称>会话原标题），改备注全网同步
+    const peerName = computed(() =>
+      props.conversation.kind === 'direct'
+        ? personDisplayName(props.spaceKey, props.conversation.peerId, props.conversation.title)
+        : props.conversation.title
     );
 
     // TODO(mock): 音视频通话下一期实现，点击仅提示
@@ -116,7 +123,7 @@ export default defineComponent({
         toggleMute(props.spaceKey, conv.id);
       } else if (command === 'clear') {
         try {
-          await ElMessageBox.confirm('仅删除本地消息记录，不影响对方设备。', `清空与「${conv.title}」的聊天记录？`, {
+          await ElMessageBox.confirm('仅删除本地消息记录，不影响对方设备。', `清空与「${peerName.value}」的聊天记录？`, {
             confirmButtonText: '清空',
             cancelButtonText: '取消',
             type: 'warning'
@@ -127,7 +134,7 @@ export default defineComponent({
         }
       } else if (command === 'delete') {
         try {
-          await ElMessageBox.confirm('仅删除会话列表入口。', `删除与「${conv.title}」的会话？`, {
+          await ElMessageBox.confirm('仅删除会话列表入口。', `删除与「${peerName.value}」的会话？`, {
             confirmButtonText: '删除',
             cancelButtonText: '取消',
             type: 'warning'
@@ -147,6 +154,7 @@ export default defineComponent({
       presenceIcon,
       presenceText,
       peerAvatar,
+      peerName,
       ArrowLeft,
       Phone,
       VideoCamera,

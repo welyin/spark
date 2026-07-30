@@ -85,8 +85,8 @@ import { computed, defineComponent, type PropType } from 'vue';
 import { Document, Link, Microphone, Picture } from '@element-plus/icons-vue';
 import UserAvatar from '../UserAvatar.vue';
 import { formatBytes } from '../../utils/format';
-import { personalAvatarSource } from '../../stores/avatar-sources';
-import type { ChatMessage } from '../../mock/messages';
+import { personalAvatarSource, personAvatarSource, personDisplayName } from '../../stores/avatar-sources';
+import type { ChatMessage, SpaceKey } from '../../mock/messages';
 
 export default defineComponent({
   name: 'MessageBubble',
@@ -95,7 +95,9 @@ export default defineComponent({
     message: { type: Object as PropType<ChatMessage>, required: true },
     isMine: { type: Boolean, default: false },
     /** 同一分钟内连续消息合并头像（§3.2） */
-    showAvatar: { type: Boolean, default: true }
+    showAvatar: { type: Boolean, default: true },
+    /** 所在空间：对方消息按 senderId(rootId) 查好友同步头像用 */
+    spaceKey: { type: String as () => SpaceKey, required: true }
   },
   emits: ['menu', 'resend'],
   setup(props, { emit }) {
@@ -108,12 +110,20 @@ export default defineComponent({
     });
     const avatarName = computed(() => {
       if (!props.isMine) {
-        return props.message.senderName;
+        // 统一展示名入口（备注>昵称>消息自报快照名）
+        return personDisplayName(props.spaceKey, props.message.senderId, props.message.senderName);
       }
       const source = personalAvatarSource();
       return source.seed ? source.name : props.message.senderName;
     });
-    const avatarImage = computed(() => (props.isMine ? personalAvatarSource().image : ''));
+    // 对方消息：统一头像入口（senderId 即 rootId，朋友记录头像与聊天头/会话列表一致），
+    // 未同步到头像时回退自动头像
+    const avatarImage = computed(() => {
+      if (props.isMine) {
+        return personalAvatarSource().image;
+      }
+      return personAvatarSource(props.spaceKey, props.message.senderId).image;
+    });
 
     function onMenu(event: MouseEvent) {
       emit('menu', { event, message: props.message });

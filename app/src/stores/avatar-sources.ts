@@ -8,6 +8,7 @@
 import { currentUser } from './current-user';
 import { getOrgIdentity } from './org-identity';
 import { orgAvatars } from './org-avatars';
+import { friendOf } from '../mock/contacts';
 
 export type AvatarSource = {
   /** 自动配色哈希种子（传 UserAvatar 的 root-id） */
@@ -45,4 +46,34 @@ export function orgLogoSource(orgId: string, name: string): AvatarSource {
     name,
     image: orgAvatars.value[orgId] ?? ''
   };
+}
+
+/** 任意个人（按 rootId）的统一头像入口：自己→个人身份；朋友→朋友记录（网络同步来的
+ *  头像实时生效，名称备注优先）；其余（未接受的申请人/陌生人）→ 调用方快照兜底，
+ *  再退自动配色头像。图片与名称按「朋友记录 > 快照」分别归并（快照只补朋友记录缺的），
+ *  各展示位（新朋友列表/聊天头/会话列表/消息气泡）一律从这里取，不再各自查好友记录。 */
+export function personAvatarSource(
+  spaceKey: string,
+  rootId: string,
+  fallback?: { name?: string; image?: string }
+): AvatarSource {
+  if (rootId && rootId === currentUser.rootId) {
+    return personalAvatarSource();
+  }
+  const friend = friendOf(spaceKey, rootId);
+  if (friend) {
+    return {
+      seed: rootId,
+      name: friend.remark || friend.nickname || fallback?.name || '',
+      image: friend.avatar || fallback?.image || ''
+    };
+  }
+  return { seed: rootId, name: fallback?.name ?? '', image: fallback?.image ?? '' };
+}
+
+/** 个人展示名统一入口（备注 > 昵称 > 调用方兜底）：与 personAvatarSource 同一套归并逻辑。
+ *  所有展示「这个人叫什么」的位置（联系人/会话列表/聊天窗/新朋友列表…）一律从这里取，
+ *  改了备注名全网展示位同步生效，新增展示位也不要再各自拼 remark||nickname。 */
+export function personDisplayName(spaceKey: string, rootId: string, fallback = ''): string {
+  return personAvatarSource(spaceKey, rootId, { name: fallback }).name || fallback;
 }

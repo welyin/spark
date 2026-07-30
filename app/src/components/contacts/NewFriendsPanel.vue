@@ -1,7 +1,7 @@
 <!-- 新的朋友/新的成员（通讯录第三、四栏，ui-contacts §2.2）：
      第三栏=收到的申请与我发出的混排列表（按时间倒序，行首箭头区分收/发，右上角可筛选）；
      点击行在第四栏展示详情。收到的申请：接受前选择「向其开放的权限」（§6，仅个人空间），
-     已接受可直接查看资料；我发出的：展示对方反应（等待确认/已回复询问/已拒绝/已接受/
+     已接受（个人空间）直接内嵌联系人资料卡（可编辑备注等）；我发出的：展示对方反应（等待确认/已回复询问/已拒绝/已接受/
      连接失败可重试），组织邀请可复制邀请码。与个人设置模块同构，以 fragment 渲染两栏 -->
 <template>
   <!-- 第三栏：申请列表（收发混排，按时间倒序） -->
@@ -42,10 +42,10 @@
       </el-icon>
       <!-- 有未读新变化时头像右上角红点 -->
       <span class="request-avatar" :class="{ unread: entry.request.unread }">
-        <UserAvatar :root-id="entry.request.rootId" :nickname="entry.request.nickname" :avatar="entry.request.avatar" :size="40" />
+        <UserAvatar :root-id="entry.request.rootId" :nickname="entry.request.nickname" :avatar="personImage(entry.request)" :size="40" />
       </span>
       <span class="request-item-main">
-        <b>{{ entry.request.nickname }}</b>
+        <b>{{ personName(entry.request) }}</b>
         <span>{{ rowSubtitle(entry.dir, entry.request) }}</span>
       </span>
       <el-tag
@@ -58,12 +58,27 @@
     </button>
   </div>
 
-  <!-- 第四栏：选中申请详情 -->
+  <!-- 第四栏：已接受（个人空间）直接展示联系人资料卡（可编辑备注等）；
+       其余为选中申请详情 -->
   <div class="contacts-detail">
-    <div v-if="activeEntry" class="request-profile">
+    <ContactPanel
+      v-if="acceptedContact && acceptedProfile"
+      :key="acceptedContact.rootId"
+      :contact="acceptedContact"
+      space-type="personal"
+      :profile="acceptedProfile"
+      :all-tags="tags"
+      :group-options="groupOptions"
+      :on-create-tag="onCreateTag"
+      @save-profile="onSaveProfile"
+      @set-blocked="onSetBlocked"
+      @delete="onDeleteFriend"
+      @send-message="onSendMessage"
+    />
+    <div v-else-if="activeEntry" class="request-profile">
       <div class="contact-panel-hero">
-        <UserAvatar :root-id="activeEntry.request.rootId" :nickname="activeEntry.request.nickname" :avatar="activeEntry.request.avatar" :size="64" />
-        <h2 class="contact-panel-name">{{ activeEntry.request.nickname }}</h2>
+        <UserAvatar :root-id="activeEntry.request.rootId" :nickname="personName(activeEntry.request)" :avatar="personImage(activeEntry.request)" :size="64" />
+        <h2 class="contact-panel-name">{{ personName(activeEntry.request) }}</h2>
         <el-tag size="small" :type="statusTagType(activeEntry.request.status)">
           {{ statusLabel(activeEntry.dir, activeEntry.request.status) }}
         </el-tag>
@@ -139,14 +154,6 @@
       >
         <el-button type="primary" @click="emit('retry', activeEntry.request.id)">重新发送</el-button>
       </div>
-
-      <!-- 已接受（个人空间）：已成为朋友，可查看资料卡 -->
-      <div
-        v-else-if="activeEntry.request.status === 'accepted' && spaceType === 'personal'"
-        class="request-detail-actions"
-      >
-        <el-button type="primary" @click="emit('view-contact', activeEntry.request.rootId)">查看资料</el-button>
-      </div>
     </div>
     <el-empty v-else class="contacts-detail-empty" :image-size="110" description="选择左侧申请查看详情" />
   </div>
@@ -154,17 +161,35 @@
 
 <script lang="ts">
 import { computed, defineComponent, ref, watch, type PropType } from 'vue';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { ArrowDown, BottomLeft, TopRight } from '@element-plus/icons-vue';
 import UserAvatar from '../UserAvatar.vue';
-import { markRequestRead, type FriendPermission, type FriendRequest } from '../../mock/contacts';
+import ContactPanel from './ContactPanel.vue';
+import { currentUser } from '../../stores/current-user';
+import { getProfileExtra } from '../../stores/profile-extra';
+import { personAvatarSource, personDisplayName } from '../../stores/avatar-sources';
+import {
+  contactsOf,
+  createTag,
+  friendOf,
+  markRequestRead,
+  profileOf,
+  removeFriend,
+  setBlocked,
+  updateProfile,
+  type ContactProfile,
+  type ContactTag,
+  type FriendPermission,
+  type FriendRequest
+} from '../../mock/contacts';
+import type { ContactItem, GroupOption } from './types';
 
 type Direction = 'in' | 'out';
 type Filter = 'all' | Direction;
 
 export default defineComponent({
   name: 'NewFriendsPanel',
-  components: { UserAvatar, ArrowDown, BottomLeft, TopRight },
+  components: { UserAvatar, ContactPanel, ArrowDown, BottomLeft, TopRight },
   props: {
     /** 收到的申请 */
     requests: { type: Array as PropType<FriendRequest[]>, required: true },
@@ -174,7 +199,7 @@ export default defineComponent({
     /** 所属空间 key（查看详情时清除未读） */
     spaceKey: { type: String, required: true }
   },
-  emits: ['resolve', 'view-contact', 'retry', 'reply'],
+  emits: ['resolve', 'retry', 'reply'],
   setup(props, { emit }) {
     const activeKey = ref('');
     const filter = ref<Filter>('all');
@@ -234,27 +259,114 @@ export default defineComponent({
       markRead(entries.value.find((entry) => rowKey(entry.dir, entry.request.id) === activeKey.value) ?? null);
     };
 
-    // 添加好友成功（我接受对方 / 对方接受我经事件回写）后，详情直接切到联系人
-    // 资料卡（可编辑备注等）：仅响应同一条目状态迁移为 accepted（含 replied →
-    // accepted），选中历史已接受条目不跳转（`activeKey|status` 复合键，key 变
-    // 化不算迁移）
-    watch(
-      () => `${activeKey.value}|${activeEntry.value?.request.status ?? ''}`,
-      (curr, prev) => {
-        const [prevKey, prevStatus] = (prev ?? '|').split('|');
-        const [currKey, currStatus] = curr.split('|');
-        if (
-          currKey === prevKey &&
-          prevStatus !== '' &&
-          prevStatus !== 'accepted' &&
-          currStatus === 'accepted' &&
-          props.spaceType === 'personal' &&
-          activeEntry.value
-        ) {
-          emit('view-contact', activeEntry.value.request.rootId);
-        }
+    // ---- 已接受（个人空间）：详情栏直接内嵌联系人资料卡（可编辑备注等），
+    // 状态迁移为 accepted 后自动切换，无需再跳转联系人页 ----
+
+    /** 列表行/详情头头像：统一入口（朋友记录优先、申请快照兜底，申请人还不是朋友也能显示快照） */
+    const personImage = (request: FriendRequest): string =>
+      personAvatarSource(props.spaceKey, request.rootId, { image: request.avatar }).image;
+
+    /** 列表行/详情头名称：统一展示名入口（备注>昵称>申请快照昵称） */
+    const personName = (request: FriendRequest): string =>
+      personDisplayName(props.spaceKey, request.rootId, request.nickname);
+
+    /** 当前选中条目对应的朋友记录（仅已接受 + 个人空间 + 朋友关系仍在时存在） */
+    const acceptedFriend = computed(() => {
+      const entry = activeEntry.value;
+      if (!entry || entry.request.status !== 'accepted' || props.spaceType !== 'personal') {
+        return null;
       }
+      return friendOf(props.spaceKey, entry.request.rootId) ?? null;
+    });
+
+    // 与 use-contacts-data 个人空间分支同口径：自己取本地真实资料，其余用内核朋友记录
+    const acceptedContact = computed<ContactItem | null>(() => {
+      const friend = acceptedFriend.value;
+      if (!friend) {
+        return null;
+      }
+      const isSelf = friend.rootId === currentUser.rootId;
+      const extra = isSelf ? getProfileExtra(friend.rootId) : null;
+      const signature = extra ? extra.signature : friend.signature;
+      const gender = extra
+        ? extra.gender === '男'
+          ? ('male' as const)
+          : extra.gender === '女'
+            ? ('female' as const)
+            : undefined
+        : friend.gender;
+      return {
+        rootId: friend.rootId,
+        displayName: friend.remark || friend.nickname,
+        subtitle: signature,
+        // 统一入口：自己→个人身份头像，朋友→朋友记录头像（含同步更新）
+        avatarImage: personAvatarSource(props.spaceKey, friend.rootId).image,
+        signature,
+        gender,
+        nickname: friend.nickname,
+        blocked: friend.blocked,
+        isSelf
+      };
+    });
+
+    const acceptedProfile = computed<ContactProfile | null>(() =>
+      acceptedFriend.value ? profileOf(props.spaceKey, acceptedFriend.value.rootId) : null
     );
+
+    const tags = computed(() => contactsOf(props.spaceKey).tags);
+
+    /** 资料卡「分组」下拉（个人空间扁平，'' = 未分组；与 use-contact-groups 同口径） */
+    const groupOptions = computed<GroupOption[]>(() => [
+      { id: '', label: '未分组' },
+      ...contactsOf(props.spaceKey).groups.map((group) => ({ id: group.id, label: group.name }))
+    ]);
+
+    const onSaveProfile = (patch: Partial<ContactProfile>) => {
+      if (acceptedFriend.value) {
+        updateProfile(props.spaceKey, acceptedFriend.value.rootId, patch);
+      }
+    };
+
+    const onSetBlocked = (blocked: boolean) => {
+      if (!acceptedFriend.value) {
+        return;
+      }
+      setBlocked(props.spaceKey, acceptedFriend.value.rootId, blocked);
+      ElMessage.success(blocked ? '已加入黑名单' : '已移出黑名单');
+    };
+
+    const onDeleteFriend = async () => {
+      const contact = acceptedContact.value;
+      if (!contact || contact.isSelf) {
+        return;
+      }
+      try {
+        await ElMessageBox.confirm(`确认删除朋友「${contact.displayName}」？`, '删除朋友', {
+          type: 'warning',
+          confirmButtonText: '删除',
+          cancelButtonText: '取消'
+        });
+      } catch {
+        return;
+      }
+      removeFriend(props.spaceKey, contact.rootId);
+      ElMessage.success('朋友已删除');
+    };
+
+    /** 发送消息：派发 `spark:open-chat`，App.vue 切到消息页并打开/创建 1:1 会话（§5.3） */
+    const onSendMessage = () => {
+      const contact = acceptedContact.value;
+      if (!contact) {
+        return;
+      }
+      window.dispatchEvent(
+        new CustomEvent('spark:open-chat', {
+          detail: { rootId: contact.rootId, name: contact.displayName }
+        })
+      );
+    };
+
+    const onCreateTag = (name: string): ContactTag => createTag(props.spaceKey, name);
 
     const accept = () => {
       if (activeEntry.value?.dir === 'in') {
@@ -340,6 +452,17 @@ export default defineComponent({
       statusLabel,
       statusTagType,
       rowSubtitle,
+      personImage,
+      personName,
+      acceptedContact,
+      acceptedProfile,
+      tags,
+      groupOptions,
+      onSaveProfile,
+      onSetBlocked,
+      onDeleteFriend,
+      onSendMessage,
+      onCreateTag,
       emit
     };
   }

@@ -200,14 +200,6 @@ export function useContactPanel(ctx: ContactPanelContext) {
     }
   };
 
-  /** 申请详情里的「查看资料」：已接受的朋友切到其联系人资料卡 */
-  const onViewRequestContact = (rootId: string) => {
-    const contact = ctx.contacts.value.find((item) => item.rootId === rootId);
-    if (contact) {
-      openPanel(contact);
-    }
-  };
-
   /** 组织成员 -> 个人联系人：向个人空间发一条待确认请求（mock，§9.3 双向确认） */
   const onAddAsFriend = () => {
     const contact = selectedContact.value;
@@ -242,7 +234,6 @@ export function useContactPanel(ctx: ContactPanelContext) {
     onDeleteContact,
     onAddFriendSubmit,
     onResolveRequest,
-    onViewRequestContact,
     onRetryOutgoing,
     onReplyOutgoing,
     onAddAsFriend,

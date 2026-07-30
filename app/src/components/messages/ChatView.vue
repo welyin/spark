@@ -20,6 +20,7 @@
           :message="item.msg"
           :is-mine="item.msg.senderId === 'me'"
           :show-avatar="item.showAvatar"
+          :space-key="spaceKey"
           @menu="openMsgMenu"
           @resend="onResend"
         />
