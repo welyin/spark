@@ -3,6 +3,7 @@
 
 use serde_json::{Map, Value};
 
+use super::dm_delivery::DM_RETRY_DELAYS;
 use super::dm_envelope::{KIND_ORG_INVITE, KIND_ORG_INVITE_REPLY};
 use super::org_sync::OrgSyncRequest;
 use super::{Kernel, KernelError, PeerOrgSyncResult, Result};
@@ -507,7 +508,8 @@ impl Kernel {
             body["inviterAvatar"] = Value::from(avatar);
         }
         let envelope = self.build_dm_envelope(KIND_ORG_INVITE, target_root_id, body)?;
-        self.spawn_deliveries(vec![(target, envelope)]);
+        // 邀请丢失即对端永远不可见（无失败 UI），带退避重试防拨号竞争瞬态失败
+        self.spawn_deliveries_with_retry(vec![(target, envelope)], &DM_RETRY_DELAYS);
         Ok(record)
     }
 
@@ -640,7 +642,8 @@ impl Kernel {
         if let Ok(envelope) =
             self.build_dm_envelope(KIND_ORG_INVITE_REPLY, &record.peer_root_id, body)
         {
-            self.spawn_deliveries(vec![(inviter, envelope)]);
+            // 应答丢失则邀请人侧永远 pending，同样带退避重试
+            self.spawn_deliveries_with_retry(vec![(inviter, envelope)], &DM_RETRY_DELAYS);
         }
     }
 

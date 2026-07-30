@@ -7,7 +7,9 @@ sys:notice 系统会话链接卡片 → B org-respond-invite(accept) → B org-l
 A 改组织 logo → B 可见。
 """
 
-from node import Node, check, poll_until, run_scenario
+import time
+
+from node import Node, NodeError, check, poll_until, run_scenario
 
 # 1x1 PNG data URL（内核 avatar 校验要求 data:image/ 前缀）
 TINY_PNG = (
@@ -32,12 +34,8 @@ def main():
             rootId=b.root_id,
             nodeInfo={"peerId": b.peer_id, "addresses": b.addresses},
         )
-        # 等 org-share 推送落地（A→B 连接建立）再发邀请：立即连发时邀请 dm
-        # 与推送直连的拨号竞争，dm 投递尽力而为无重试，可能丢失（见汇报发现#2）
-        poll_until(
-            lambda: any(o["orgId"] == org_id for o in b.send("org-list")),
-            what="B 收到预录组织快照",
-        )
+        # 立即连发邀请：首投若与 org-share 推送拨号竞争失败，内核
+        # spawn_deliveries_with_retry 退避重试兜底（+2s/+5s）
 
         # ---- 经 DM 发邀请 → B 收事件 + 系统会话卡片 ------------------------
         invite = a.send(
@@ -68,7 +66,25 @@ def main():
         check(card["message"]["link"]["title"] == "E2E 组织", "卡片标题为组织名")
 
         # ---- B 接受 → 双方状态收敛 ----------------------------------------
-        responded = b.send("org-respond-invite", inviteId=invite_id, accept=True)
+        # 接受编排是 pull-list + pull-org 连发（org-pull 有 per-peer 限流），
+        # B 无本地记录时全靠拉取会确定性被限；真实流程里管理员的快照推送
+        # 先于用户点确认到达，这里等推送落地再应答（邀请 DM 仍是预录后
+        # 立即连发，重试兜底已在上面卡片断言中验证）
+        poll_until(
+            lambda: any(o["orgId"] == org_id for o in b.send("org-list")),
+            what="B 收到预录组织快照",
+        )
+        # 接受触发凭码加入编排（connectAndPull）：失败保持 pending 可安全
+        # 重试（等价 UI 用户再点一次确认）
+        responded = None
+        for attempt in range(3):
+            try:
+                responded = b.send("org-respond-invite", inviteId=invite_id, accept=True)
+                break
+            except NodeError:
+                if attempt == 2:
+                    raise
+                time.sleep(2)
         check(responded["status"] == "accepted", "B 侧邀请记录置 accepted")
         mine_b = b.send("org-list")
         org_b = next((o for o in mine_b if o["orgId"] == org_id), None)

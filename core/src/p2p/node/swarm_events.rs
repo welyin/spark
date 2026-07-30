@@ -216,7 +216,7 @@ impl<S: StorageBackend> EventLoop<S> {
                         let mut a = self.pending_org_attempts.remove(j);
                         a.current_target = None;
                         self.dial_next_org_target(&mut a);
-                        if a.current_target.is_some() {
+                        if a.current_target.is_some() || a.in_flight.is_some() {
                             self.pending_org_attempts.push(a);
                         } else {
                             a.finish_exhausted();

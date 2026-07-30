@@ -64,7 +64,8 @@ impl<S: StorageBackend> EventLoop<S> {
             kind,
             targets,
             current_target: None,
-            current_peer: None,
+            // 目标 peer 在构建时即记录（同 begin_dm_attempt 的并发恢复口径）
+            current_peer: extract_peer_id(&node_info).and_then(|s| s.parse::<PeerId>().ok()),
             request_json,
             in_flight: None,
             tx,
@@ -86,7 +87,7 @@ impl<S: StorageBackend> EventLoop<S> {
             return;
         }
         self.dial_next_org_target(&mut attempt);
-        if attempt.current_target.is_some() {
+        if attempt.current_target.is_some() || attempt.in_flight.is_some() {
             self.pending_org_attempts.push(attempt);
         } else {
             attempt.finish_exhausted();
@@ -94,7 +95,44 @@ impl<S: StorageBackend> EventLoop<S> {
     }
 
     pub(super) fn dial_next_org_target(&mut self, attempt: &mut OrgAttempt) {
+        // 同地址并发拨号恢复：并行尝试（如 org-share 推送与 dm 邀请同时
+        // 拨同一 peer）已建好连接时，本 attempt 的拨号会同步报错/异步
+        // DialFailure——此时直接复用已建连接发请求，而不是误走下一目标
+        // 或耗尽放弃（放弃侧无任何重试，推送丢失只能等下次变更触发）。
+        if let Some(peer) = attempt
+            .current_peer
+            .filter(|p| self.swarm.is_connected(p))
+        {
+            let request_id = match attempt.kind {
+                OrgAttemptKind::Dm => self
+                    .swarm
+                    .behaviour_mut()
+                    .dm_rr
+                    .send_request(&peer, attempt.request_json.clone()),
+                _ => self
+                    .swarm
+                    .behaviour_mut()
+                    .org_share_rr
+                    .send_request(&peer, attempt.request_json.clone()),
+            };
+            attempt.in_flight = Some(request_id);
+            attempt.current_peer = Some(peer);
+            attempt.current_target = None;
+            return;
+        }
         while let Some(target) = attempt.targets.pop_front() {
+            // 同地址拨号去重：另一 attempt 正在拨同一地址时不重复拨（并发
+            // 同地址拨号在 loopback 上确定性 EADDRINUSE），仅登记
+            // current_target——ConnectionEstablished 按地址匹配时本 attempt
+            // 会随那路连接一起发请求；若那路失败，OutgoingConnectionError
+            // 的重试路径轮到本 attempt 时对方已拨完，不再冲突
+            let already_dialing = self.pending_org_attempts.iter().any(|a| {
+                a.in_flight.is_none() && a.current_target.as_deref() == Some(target.as_str())
+            });
+            if already_dialing {
+                attempt.current_target = Some(target);
+                return;
+            }
             match target.parse::<Multiaddr>() {
                 Ok(ma) => {
                     let opts = if target.contains("/p2p/") {
@@ -227,7 +265,7 @@ impl<S: StorageBackend> EventLoop<S> {
                 // 未送达/不可解析：下一个地址
                 attempt.current_target = None;
                 self.dial_next_org_target(&mut attempt);
-                if attempt.current_target.is_some() {
+                if attempt.current_target.is_some() || attempt.in_flight.is_some() {
                     self.pending_org_attempts.push(attempt);
                 } else {
                     attempt.finish_exhausted();
@@ -256,7 +294,7 @@ impl<S: StorageBackend> EventLoop<S> {
                 attempt.in_flight = None;
                 attempt.current_target = None;
                 self.dial_next_org_target(&mut attempt);
-                if attempt.current_target.is_some() {
+                if attempt.current_target.is_some() || attempt.in_flight.is_some() {
                     self.pending_org_attempts.push(attempt);
                 } else {
                     attempt.finish_exhausted();

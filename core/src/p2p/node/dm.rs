@@ -73,13 +73,15 @@ impl<S: StorageBackend> EventLoop<S> {
             kind: OrgAttemptKind::Dm,
             targets,
             current_target: None,
-            current_peer: None,
+            // 目标 peer 在构建时即记录：并发拨号冲突（EADDRINUSE）后的
+            // 「已建连接复用」恢复与错误匹配都依赖它
+            current_peer: extract_peer_id(&node_info).and_then(|s| s.parse::<PeerId>().ok()),
             request_json: direct::build_dm_request(&payload),
             in_flight: None,
             tx: OrgTx::Dm(tx),
         };
         self.dial_next_org_target(&mut attempt);
-        if attempt.current_target.is_some() {
+        if attempt.current_target.is_some() || attempt.in_flight.is_some() {
             self.pending_org_attempts.push(attempt);
         } else {
             attempt.finish_exhausted();

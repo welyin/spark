@@ -12,6 +12,12 @@ use serde_json::Value;
 
 use super::dm_envelope::{self, KIND_CHAT, KIND_PROFILE_SYNC};
 use super::{Kernel, KernelError, Result};
+
+/// 退避重试节奏（[`Kernel::spawn_deliveries_with_retry`]）：首次失败后 +2s、+5s。
+pub(crate) const DM_RETRY_DELAYS: [std::time::Duration; 2] = [
+    std::time::Duration::from_secs(2),
+    std::time::Duration::from_secs(5),
+];
 use crate::contact::ContactService;
 use crate::message::{ConversationRecord, MessageRecord, MessageService};
 use crate::org::OrganizationService;
@@ -42,6 +48,37 @@ impl Kernel {
         self.runtime.handle().spawn(async move {
             for (peer, envelope) in deliveries {
                 let _ = node.dm_direct(&peer, envelope).await;
+            }
+        });
+    }
+
+    /// spawn 顺序投递任务（带退避重试）：首次未送达按 `retry_delays` 逐个等待
+    /// 后重试。用于组织邀请/邀请应答这类**丢失即静默卡死**且无失败 UI 的
+    /// 信封——预录成员后立即发邀请时，dm 拨号与 org-share 推送直连竞争可致
+    /// 首投失败（瞬态：连接建立后 `begin_dm_attempt` 有 is_connected 短路，
+    /// 重试基本必成）。
+    ///
+    /// 重试判定：应答 `ok:true` 停止；终态拒绝（blocked/invalid-body 等
+    /// 语义性 reason）重试无意义直接放弃；`Ok(None)`（投递失败）/超时/
+    /// `rate-limited` 属瞬态，进入下一次退避。
+    pub(crate) fn spawn_deliveries_with_retry(
+        &self,
+        deliveries: Vec<(PeerNodeInfo, Value)>,
+        retry_delays: &'static [std::time::Duration],
+    ) {
+        let Some(node) = self.p2p.clone() else {
+            return;
+        };
+        self.runtime.handle().spawn(async move {
+            for (peer, envelope) in deliveries {
+                let mut result = node.dm_direct(&peer, envelope.clone()).await;
+                for delay in retry_delays {
+                    if !delivery_needs_retry(&result) {
+                        break;
+                    }
+                    tokio::time::sleep(*delay).await;
+                    result = node.dm_direct(&peer, envelope.clone()).await;
+                }
             }
         });
     }
@@ -249,4 +286,23 @@ impl Kernel {
         self.spawn_deliveries(deliveries);
     }
 
+}
+
+/// `spawn_deliveries_with_retry` 的重试判定（语义见该函数文档）。
+fn delivery_needs_retry(
+    result: &std::result::Result<Option<Value>, crate::p2p::P2pError>,
+) -> bool {
+    match result {
+        Ok(Some(resp)) => {
+            if resp.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+                false
+            } else {
+                matches!(
+                    resp.get("reason").and_then(Value::as_str),
+                    Some("rate-limited")
+                )
+            }
+        }
+        Ok(None) | Err(_) => true,
+    }
 }
