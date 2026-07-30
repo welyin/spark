@@ -9,6 +9,9 @@ use serde_json::{Value, json};
 
 use spark_core::org::invite::{OrgInviteInviter, OrgInvitePayload, encode_org_invite};
 use spark_core::org::service::CreateOrganizationInput;
+use spark_core::org::{
+    OrgInviteDirection, OrgInviteRecord, OrgInviteStatus, OrganizationNodeInfo, OrganizationService,
+};
 use spark_core::p2p::P2pEvent;
 use spark_core::p2p::node::system_now_ms;
 
@@ -379,4 +382,191 @@ fn accept_invite_two_kernels_full() {
 
     kernel_a.shutdown().unwrap();
     kernel_b.shutdown().unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// DM 组织邀请：org_send_invite / org_respond_invite / org_invite_records
+// ---------------------------------------------------------------------------
+
+const ORG_ID_FIXED: &str = "org_aaaabbbbccccdddd";
+
+fn incoming_invite_record(id: &str, inviter_root: &str, code: &str) -> OrgInviteRecord {
+    let now = system_now_ms();
+    OrgInviteRecord {
+        id: id.to_string(),
+        org_id: ORG_ID_FIXED.to_string(),
+        org_name: "星火组织".to_string(),
+        org_avatar: None,
+        peer_root_id: inviter_root.to_string(),
+        peer_nickname: "管理员".to_string(),
+        direction: OrgInviteDirection::Incoming,
+        status: OrgInviteStatus::Pending,
+        invite_code: Some(code.to_string()),
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+#[test]
+fn org_send_invite_persists_outgoing_record_idempotent() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut kernel = fresh_kernel(dir.path());
+    let (_root_id, _) = init_identity(&mut kernel); // 登录即在线（p2p 自动启动）
+    let org = kernel
+        .create_org(CreateOrganizationInput {
+            name: "星火组织".to_string(),
+            ..Default::default()
+        })
+        .unwrap();
+    let target = "cd".repeat(32);
+
+    let record = kernel
+        .org_send_invite(&org.record.org_id, &target, Some("peer-target-123"), &[], Some("小张"))
+        .unwrap();
+    assert_eq!(record.direction, OrgInviteDirection::Outgoing);
+    assert_eq!(record.status, OrgInviteStatus::Pending);
+    assert_eq!(record.org_id, org.record.org_id);
+    assert_eq!(record.peer_root_id, target);
+    assert_eq!(record.peer_nickname, "小张");
+    assert!(record.invite_code.is_none(), "出站记录不存邀请码");
+    assert!(record.id.starts_with("inv-"), "邀请 id 为 inv- 前缀");
+
+    // 重复邀请：原地更新（新邀请 id、回 pending），同 (orgId, peer) 只留一条
+    let again = kernel
+        .org_send_invite(&org.record.org_id, &target, Some("peer-target-123"), &[], None)
+        .unwrap();
+    assert_ne!(again.id, record.id, "重复邀请生成新邀请 id");
+    assert_eq!(again.status, OrgInviteStatus::Pending);
+    assert_eq!(again.peer_nickname, "小张", "未提供昵称时保留已有展示名");
+    assert_eq!(again.created_at, record.created_at, "保留首次 createdAt");
+    let records = kernel.org_invite_records(&org.record.org_id).unwrap();
+    assert_eq!(records.len(), 1, "同 (orgId, peer) 只留一条");
+    assert_eq!(records[0].id, again.id);
+
+    kernel.shutdown().unwrap();
+}
+
+#[test]
+fn org_send_invite_resolves_peer_from_preregistered_member() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut kernel = fresh_kernel(dir.path());
+    let (_root_id, _) = init_identity(&mut kernel);
+    let org = kernel
+        .create_org(CreateOrganizationInput {
+            name: "星火组织".to_string(),
+            ..Default::default()
+        })
+        .unwrap();
+    let target = "cd".repeat(32);
+    // 前端 InviteMemberDialog 的预录行为：先 addMember 携带 nodeInfo
+    kernel
+        .org_add_member(
+            &org.record.org_id,
+            &target,
+            Some(&OrganizationNodeInfo {
+                peer_id: Some("peer-member-123".to_string()),
+                addresses: vec![],
+            }),
+        )
+        .unwrap();
+    // 不带显式寻址：从预录成员 nodeInfo 解析
+    let record = kernel
+        .org_send_invite(&org.record.org_id, &target, None, &[], None)
+        .unwrap();
+    assert_eq!(record.peer_nickname, "待加入成员", "未提供昵称用占位名");
+    kernel.shutdown().unwrap();
+}
+
+#[test]
+fn org_send_invite_guard_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut kernel = fresh_kernel(dir.path());
+    // 未解锁 → Locked
+    assert_eq!(
+        kernel
+            .org_send_invite(ORG_ID_FIXED, &"cd".repeat(32), None, &[], None)
+            .unwrap_err()
+            .to_string(),
+        "Root identity is locked"
+    );
+    let (root_id, _) = init_identity(&mut kernel);
+    let org = kernel
+        .create_org(CreateOrganizationInput {
+            name: "星火组织".to_string(),
+            ..Default::default()
+        })
+        .unwrap();
+    // 邀请自己 → 拒绝
+    assert_eq!(
+        kernel
+            .org_send_invite(&org.record.org_id, &root_id, Some("peer-x"), &[], None)
+            .unwrap_err()
+            .to_string(),
+        "不能邀请自己"
+    );
+    // 无任何寻址信息 → 报错（记录不落库）
+    let err = kernel
+        .org_send_invite(&org.record.org_id, &"cd".repeat(32), None, &[], None)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("无法确定对方节点地址"), "得到 {err}");
+    assert!(kernel.org_invite_records(&org.record.org_id).unwrap().is_empty());
+    // 组织不存在
+    assert!(
+        kernel
+            .org_send_invite("org_eeeeffff00001111", &"cd".repeat(32), Some("peer-x"), &[], None)
+            .is_err()
+    );
+    kernel.shutdown().unwrap();
+}
+
+#[test]
+fn org_respond_invite_decline_marks_declined_idempotent() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut kernel = fresh_kernel(dir.path());
+    let (_root_id, _) = init_identity(&mut kernel);
+    let inviter_root = "cd".repeat(32);
+    // 合法邀请码（inviter 寻址可供回执投递解析；对端不存在，投递尽力而为）
+    let code = encode_org_invite(&OrgInvitePayload::new(
+        ORG_ID_FIXED.to_string(),
+        "星火组织".to_string(),
+        OrgInviteInviter {
+            root_id: inviter_root.clone(),
+            peer_id: Some("peer-inviter-123".to_string()),
+            addresses: vec![],
+        },
+        system_now_ms(),
+    ));
+    // 模拟此前入站 org-invite 已落库的记录
+    let mut storage = kernel.__test_storage().unwrap();
+    OrganizationService::put_invite_record(
+        &mut storage,
+        &incoming_invite_record("inv-1", &inviter_root, &code),
+    )
+    .unwrap();
+
+    // 拒绝 → declined，幂等（已终态直接返回，不再刷新）
+    let updated = kernel.org_respond_invite("inv-1", false).unwrap();
+    assert_eq!(updated.status, OrgInviteStatus::Declined);
+    let again = kernel.org_respond_invite("inv-1", false).unwrap();
+    assert_eq!(again.status, OrgInviteStatus::Declined);
+    assert_eq!(again.updated_at, updated.updated_at, "终态不再刷新");
+    // 终态不可逆：再 accept 也直接返回 declined（不走加入编排）
+    let third = kernel.org_respond_invite("inv-1", true).unwrap();
+    assert_eq!(third.status, OrgInviteStatus::Declined);
+
+    // 不存在的邀请 → 报错
+    assert_eq!(
+        kernel
+            .org_respond_invite("inv-x", false)
+            .unwrap_err()
+            .to_string(),
+        "组织邀请不存在"
+    );
+
+    let records = kernel.org_invite_records(ORG_ID_FIXED).unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].status, OrgInviteStatus::Declined);
+
+    kernel.shutdown().unwrap();
 }

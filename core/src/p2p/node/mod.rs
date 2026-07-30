@@ -192,6 +192,12 @@ pub enum P2pEvent {
     /// 朋友资料更新通知（profile-sync 入站落库后发出；data 为
     /// `{"rootId", "nickname", "avatar"?}`，前端按 rootId 更新朋友资料）。
     FriendProfileUpdated(serde_json::Value),
+    /// 组织邀请投递通知（入站 org-invite 落库后发出；data 为落库后的
+    /// `OrgInviteRecord` JSON，前端按 id upsert）。
+    OrgInviteReceived(serde_json::Value),
+    /// 组织邀请状态更新（入站 org-invite-reply 校验通过并落库后发出；
+    /// data 为更新后的 `OrgInviteRecord` JSON，前端按 id upsert）。
+    OrgInviteUpdated(serde_json::Value),
     /// 消息被丢弃（验签失败/强制签名缺失/形状非法）。
     MessageDropped {
         reason: String,

@@ -330,6 +330,7 @@ export default defineComponent({
         if (status === 'accepted') return '已接受';
         if (status === 'replied') return '对方已回复';
         if (status === 'failed') return '连接失败';
+        if (status === 'declined') return '已拒绝';
         return '对方已拒绝';
       }
       if (status === 'pending') return '等待处理';

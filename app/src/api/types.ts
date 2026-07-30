@@ -30,6 +30,8 @@ export type P2pEventDto =
   | { kind: 'FriendRequestSent'; data: { request: FriendRequestDto } }
   | { kind: 'FriendRequestAccepted'; data: { request: FriendRequestDto; friend: FriendDto } }
   | { kind: 'FriendProfileUpdated'; data: { rootId: string; nickname: string; avatar?: string } }
+  | { kind: 'OrgInviteReceived'; data: OrgInviteRecordDto }
+  | { kind: 'OrgInviteUpdated'; data: OrgInviteRecordDto }
   | { kind: 'Warning'; data: string }
   | { kind: 'Stopped' }
   | { kind: 'Lagged'; skipped: number };
@@ -246,6 +248,24 @@ export interface FriendRequestDto {
   avatar?: string;
 }
 
+/** 组织邀请记录（内核 org/invite_record.rs serde camelCase 直出；出/入站共用）。 */
+export type OrgInviteRecordDto = {
+  id: string;
+  orgId: string;
+  orgName: string;
+  /** 组织 logo（data URL）；可省 */
+  orgAvatar?: string;
+  /** 对端 rootId（outgoing=被邀请人；incoming=邀请人） */
+  peerRootId: string;
+  peerNickname: string;
+  direction: 'outgoing' | 'incoming';
+  status: 'pending' | 'accepted' | 'declined';
+  /** 邀请码（仅 incoming 记录携带，供重启后仍能加入） */
+  inviteCode?: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
 /** 通讯录标签。 */
 export interface ContactTagDto {
   id: string;
@@ -400,6 +420,18 @@ export type ElectronAPI = {
     updateInfo: (orgId: string, patch: { name?: string; description?: string; avatar?: string }) => Promise<OrgView>;
     resolveAddress: (orgAddress: string) => Promise<OrgAddressRecordDto | null>;
     searchKnown: (keyword: string) => Promise<OrgAddressRecordDto[]>;
+    /** 组织邀请走 DM：仅管理员；寻址 显式参数 → 预录成员 nodeInfo → 朋友记录 */
+    sendInvite: (input: {
+      orgId: string;
+      targetRootId: string;
+      targetPeerId?: string | null;
+      targetAddresses?: string[] | null;
+      targetNickname?: string | null;
+    }) => Promise<OrgInviteRecordDto>;
+    /** 被邀请人确认/拒绝（幂等；accept 先执行加入编排，成功才落 accepted） */
+    respondInvite: (input: { inviteId: string; accept: boolean }) => Promise<OrgInviteRecordDto>;
+    /** 某组织的邀请记录（出/入站合并） */
+    inviteRecords: (orgId: string) => Promise<OrgInviteRecordDto[]>;
   };
   contacts: {
     overview: (spaceKey: string) => Promise<SpaceContactsDto>;

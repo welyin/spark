@@ -146,6 +146,12 @@ fn event_json(event: &P2pEvent) -> Option<Value> {
         P2pEvent::FriendProfileUpdated(data) => {
             json!({"event": "friend-profile-updated", "data": data})
         }
+        P2pEvent::OrgInviteReceived(data) => {
+            json!({"event": "org-invite-received", "data": data})
+        }
+        P2pEvent::OrgInviteUpdated(data) => {
+            json!({"event": "org-invite-updated", "data": data})
+        }
         // ready 行单独打印；keepalive tick 在本例程禁用
         P2pEvent::Started { .. } | P2pEvent::KeepaliveTick(_) => return None,
     };

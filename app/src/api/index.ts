@@ -202,10 +202,24 @@ export function createTauriApi(): ElectronAPI {
       setPublic: (orgId, isPublic, displayName) =>
         call('org-set-public', orgId, isPublic, displayName ?? null),
       updateInfo: (orgId, patch) =>
-        // 与 rootIdentity.updateProfile 同约定：字段缺省（undefined）= 不变，null = 明确清除
-        call('org-update-info', orgId, patch.name ?? undefined, patch.description ?? undefined),
+        // 与 rootIdentity.updateProfile 同约定：字段缺省（undefined）= 不变，null = 明确清除；
+        // avatar 空串 = 清除 logo（内核 settings.rs 口径）
+        call('org-update-info', orgId, patch.name ?? undefined, patch.description ?? undefined, patch.avatar ?? undefined),
       resolveAddress: (orgAddress) => call('org-resolve-address', orgAddress),
-      searchKnown: (keyword) => call('org-search-known', keyword)
+      searchKnown: (keyword) => call('org-search-known', keyword),
+      // 组织邀请走 DM：管理员定向发送（寻址线索可省，内核按 显式参数→预录成员
+      // nodeInfo→朋友记录 解析；都无线索报错）；被邀请人确认/拒绝幂等
+      sendInvite: (input) =>
+        call(
+          'org-send-invite',
+          input.orgId,
+          input.targetRootId,
+          input.targetPeerId ?? null,
+          input.targetAddresses ?? null,
+          input.targetNickname ?? null
+        ),
+      respondInvite: (input) => call('org-respond-invite', input.inviteId, input.accept),
+      inviteRecords: (orgId) => call('org-invite-records', orgId)
     },
     contacts: {
       overview: (spaceKey) => call('contact-overview', spaceKey),

@@ -7,8 +7,10 @@
      CRUD 直写 mock store（同 TagManager 模式），仅 select 上报给 ContactsPage -->
 <template>
   <div class="group-panel" @dragover="onPanelDragOver" @drop.prevent="onPanelDrop">
-    <!-- 功能区：新的朋友/新的成员、标签（与分组同属一个滚动列表，共享唯一选中态） -->
+    <!-- 功能区：新的朋友/新的成员、标签（与分组同属一个滚动列表，共享唯一选中态）。
+         组织普通成员无权处理入组织申请，不显示「新的成员」行 -->
     <div
+      v-if="mode === 'personal' || canEditStructure"
       class="request-item group-row"
       :class="{ active: activeId === 'new-friends' }"
       @click="$emit('select', 'new-friends')"
@@ -39,7 +41,13 @@
 
     <div class="contacts-request-title">
       <span>分组</span>
-      <button class="request-head-btn" title="新建分组" @click="createRow('')">
+      <!-- 组织普通成员无权改树结构，不显示新建分组按钮（行内操作同理有 canEditStructure 守卫） -->
+      <button
+        v-if="mode === 'personal' || canEditStructure"
+        class="request-head-btn"
+        title="新建分组"
+        @click="createRow('')"
+      >
         <el-icon :size="16"><Plus /></el-icon>
       </button>
     </div>

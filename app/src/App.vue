@@ -35,8 +35,8 @@
             :class="{ active: activeTab === item.id }"
             @click="handleMenuSelect(item.id)"
           >
-            <!-- 消息入口挂未读总数角标（免打扰不计入，>99 显示 99+），品牌红 -->
-            <el-badge v-if="item.id === 'messages'" :value="totalUnread" :max="99" :hidden="totalUnread === 0">
+            <!-- 消息入口挂当前空间未读总数角标（免打扰不计入，>99 显示 99+），品牌红 -->
+            <el-badge v-if="item.id === 'messages'" :value="messagesBadge" :max="99" :hidden="messagesBadge === 0">
               <el-icon :size="20"><component :is="item.icon" /></el-icon>
             </el-badge>
             <!-- 通讯录入口挂「新的朋友/成员」未读角标（当前空间） -->
@@ -135,7 +135,7 @@ import { computed, defineComponent, onMounted, onUnmounted, ref, shallowRef, typ
 import { ElMessage } from 'element-plus';
 import { ChatDotRound, Cpu, Grid, Notebook, Setting } from '@element-plus/icons-vue';
 import { getPluginView } from './plugin-view-registry';
-import { totalUnread } from './mock/messages';
+import { unreadCountOf } from './mock/messages';
 import { requestBadgeCount, spaceKeyOf } from './mock/contacts';
 import {
   currentSpace,
@@ -213,6 +213,9 @@ export default defineComponent({
 
     /** 通讯录入口角标：当前空间「新的朋友/成员」未读条目数 */
     const contactsBadge = computed(() => requestBadgeCount(spaceKeyOf(currentSpace.value)));
+
+    /** 消息入口角标：当前空间未读消息总数（与通讯录角标一样按空间隔离） */
+    const messagesBadge = computed(() => unreadCountOf(spaceKeyOf(currentSpace.value)));
 
     const activePluginTab = computed(() => {
       return pluginTabs.value.find((tab) => tab.id === activeTab.value) ?? null;
@@ -362,7 +365,7 @@ export default defineComponent({
       railExpanded,
       toggleRail,
       navItems,
-      totalUnread,
+      messagesBadge,
       contactsBadge,
       activePluginTab,
       pluginFrameSrc,

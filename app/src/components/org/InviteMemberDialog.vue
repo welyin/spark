@@ -1,4 +1,4 @@
-<!-- 职责：添加成员对话框（与添加朋友同一套名片输入；预录入成员 -> 生成邀请码） -->
+<!-- 职责：添加成员对话框（与添加朋友同一套名片输入；预录入成员 -> 定向 DM 邀请对方确认） -->
 <template>
   <el-dialog v-model="dialogVisible" title="添加成员" width="480px" @closed="resetInviteDialog">
     <!-- TODO(mock): 仅本地模式下邀请无法送达对方，前端先行拦截（真实实现应由内核/网关拒绝或排队） -->
@@ -10,30 +10,13 @@
       show-icon
       class="invite-local-alert"
     />
-    <template v-if="!inviteResult">
-      <p class="hint">让对方打开「个人设置 → 我的名片」，把二维码名片图片或名片内容发给你。</p>
-      <CardInput v-model="cardRaw" />
-    </template>
-    <template v-else>
-      <el-alert title="成员已预录入，邀请码已生成" type="success" :closable="false" show-icon />
-      <el-form label-position="top" class="invite-result">
-        <el-form-item label="邀请码（24 小时内有效）">
-          <el-input v-model="inviteResult" type="textarea" :rows="4" readonly />
-        </el-form-item>
-      </el-form>
-      <p class="hint">请通过线下渠道（微信/当面）把邀请码发给对方；对方凭码连接你的节点完成加入，期间你需要保持在线。</p>
-    </template>
+    <p class="hint">让对方打开「个人设置 → 我的名片」，把二维码名片图片或名片内容发给你。</p>
+    <CardInput v-model="cardRaw" />
     <template #footer>
-      <template v-if="!inviteResult">
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="inviting" @click="addMemberAndInvite">
-          {{ inviting ? '处理中...' : '添加并生成邀请码' }}
-        </el-button>
-      </template>
-      <template v-else>
-        <el-button @click="dialogVisible = false">完成</el-button>
-        <el-button type="primary" @click="copyInvite">复制邀请码</el-button>
-      </template>
+      <el-button @click="dialogVisible = false">取消</el-button>
+      <el-button type="primary" :loading="inviting" @click="addMemberAndInvite">
+        {{ inviting ? '处理中...' : '添加并发送邀请' }}
+      </el-button>
     </template>
   </el-dialog>
 </template>
@@ -43,7 +26,7 @@ import { computed, defineComponent, ref, watch, type PropType } from 'vue';
 import { ElMessage } from 'element-plus';
 import CardInput from '../common/CardInput.vue';
 import { parseCard } from '../../utils/card';
-import { recordOutgoing, spaceKeyOf } from '../../mock/contacts';
+import { applyOrgOutgoingInvite } from '../../mock/contacts';
 import { useNetworkStatus } from '../../stores/network-status';
 
 export default defineComponent({
@@ -61,7 +44,6 @@ export default defineComponent({
   emits: ['update:modelValue'],
   setup(props, { emit }) {
     const cardRaw = ref('');
-    const inviteResult = ref('');
     const inviting = ref(false);
     const { isLocalOnly } = useNetworkStatus();
 
@@ -72,7 +54,6 @@ export default defineComponent({
 
     const resetInviteDialog = () => {
       cardRaw.value = '';
-      inviteResult.value = '';
     };
 
     // 打开对话框时重置表单（对齐原 openInviteDialog 行为）
@@ -115,45 +96,39 @@ export default defineComponent({
       inviting.value = true;
       try {
         await props.beforeWrite();
+        // 预录成员（保留）：记录 rootId + 名片寻址线索，成员列表即时可见
         await window.electronAPI.organization.addMember(props.orgId, {
           rootId: card.rootId,
           nodeInfo
         });
-        const invite = await window.electronAPI.organization.createInvite(props.orgId);
-        inviteResult.value = invite.invite;
-        // 「新的成员」里留一条我发出的邀请记录，可看到对方反应/再复制邀请码
-        recordOutgoing(spaceKeyOf({ type: 'org', orgId: props.orgId }), {
-          rootId: card.rootId,
-          source: '名片',
-          inviteCode: invite.invite
+        // 定向 DM 邀请：名片寻址线索显式上送；发送成功后出站记录落库，
+        // 「新的成员 → 我发出的邀请」经 inviteRecords 水合/OrgInviteUpdated 事件展示
+        const invite = await window.electronAPI.organization.sendInvite({
+          orgId: props.orgId,
+          targetRootId: card.rootId,
+          targetPeerId: card.peerId ?? null,
+          targetAddresses: card.addresses ?? null
         });
-        ElMessage.success('成员已预录入');
+        // 空间可能早已水合：即合入刚发出的记录，面板无需等下次水合/对方回执
+        applyOrgOutgoingInvite(invite);
+        ElMessage.success('邀请已发送，等待对方确认');
+        dialogVisible.value = false;
         await props.onInvited();
       } catch (error) {
-        ElMessage.error(`邀请成员失败：${error}`);
+        // 内核错误原文提示（如「无法确定对方节点地址」）
+        ElMessage.error(`${error}`);
       } finally {
         inviting.value = false;
-      }
-    };
-
-    const copyInvite = async () => {
-      try {
-        await navigator.clipboard.writeText(inviteResult.value);
-        ElMessage.success('邀请码已复制');
-      } catch {
-        ElMessage.warning('复制失败，请手动选择文本复制');
       }
     };
 
     return {
       dialogVisible,
       cardRaw,
-      inviteResult,
       inviting,
       isLocalOnly,
       resetInviteDialog,
-      addMemberAndInvite,
-      copyInvite
+      addMemberAndInvite
     };
   }
 });
@@ -162,9 +137,5 @@ export default defineComponent({
 <style scoped>
 .invite-local-alert {
   margin-bottom: 12px;
-}
-
-.invite-result {
-  margin-top: 12px;
 }
 </style>

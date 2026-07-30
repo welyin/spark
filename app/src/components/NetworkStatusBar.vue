@@ -55,7 +55,7 @@
 
 <script lang="ts">
 import { computed, defineComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { listenP2pEvents, type OrgNetworkStatus, type OrgSyncOverviewDto, type OrgView } from '../api';
+import { listenP2pEvents, type OrgNetworkStatus, type OrgSyncOverviewDto, type OrgView, type P2pEventDto } from '../api';
 import { currentOrgId } from '../stores/current-org';
 import { findOrg, refreshOrganizations } from '../stores/org-membership';
 import { refreshNetworkStatus, useNetworkStatus } from '../stores/network-status';
@@ -201,13 +201,18 @@ export default defineComponent({
       await refreshOverview();
     };
 
-    const onP2pEvent = () => {
+    const onP2pEvent = (event: P2pEventDto) => {
       const now = Date.now();
       if (now - lastEventRefreshAt < EVENT_REFRESH_MIN_INTERVAL_MS) {
         return;
       }
       lastEventRefreshAt = now;
       void refreshOverview();
+      // 组织快照被接受落库（名称/logo 等可能已变）：立即刷新组织列表缓存，
+      // 不等下一轮 30s 轮询
+      if (event.kind === 'OrgShareAccepted') {
+        void refreshOrganizations().catch(() => {});
+      }
     };
 
     // 切换组织后旧 overview 立即作废，避免弹层出现「新组织名 + 旧 overview」错配（最长持续一个轮询周期）

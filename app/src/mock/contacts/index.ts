@@ -29,7 +29,7 @@ export type {
 } from './types';
 export { emptyProfile, spaceKeyOf } from './types';
 
-export { demoContacts, contactsOf } from './store';
+export { demoContacts, contactsOf, applyOrgOutgoingInvite } from './store';
 
 export {
   profileOf,

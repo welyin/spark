@@ -23,6 +23,7 @@
 pub mod claim;
 pub mod gateway;
 pub mod invite;
+pub mod invite_record;
 pub mod node_card;
 pub mod org_address;
 pub mod plugin_docs;
@@ -44,6 +45,7 @@ pub use invite::{
     ORG_INVITE_MAX_AGE_MS, OrgInviteError, OrgInviteInviter, OrgInvitePayload, decode_org_invite,
     decode_org_invite_at, encode_org_invite,
 };
+pub use invite_record::{OrgInviteDirection, OrgInviteRecord, OrgInviteStatus};
 pub use node_card::{
     NODE_CARD_MAX_AGE_MS, NODE_CARD_TYPE, NodeCard, NodeCardReject, build_node_card_payload,
     decode_node_card, encode_node_card, make_node_card, parse_and_verify_node_card, sign_node_card,

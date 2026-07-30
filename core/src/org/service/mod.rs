@@ -16,6 +16,7 @@
 //! 单测按域拆在 `tests/`。
 
 mod create;
+mod invite_records;
 mod invites;
 mod members;
 mod settings;

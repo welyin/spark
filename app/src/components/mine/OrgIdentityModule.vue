@@ -58,7 +58,7 @@
         <h2>组织内昵称</h2>
       </template>
       <div class="org-field-form">
-        <el-input v-model="draft.nickname" maxlength="24" placeholder="留空则显示占位名「成员」" @keyup.enter="save" />
+        <el-input v-model="draft.nickname" maxlength="24" placeholder="留空则显示个人昵称占位" @keyup.enter="save" />
         <div class="org-form-actions">
           <el-button type="primary" :disabled="!dirty" @click="save">保存</el-button>
           <el-button :disabled="!dirty" @click="resetDraft">还原</el-button>

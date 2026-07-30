@@ -6,10 +6,12 @@
            mock 的 senderId 'me' 会得到不同哈希色，不能直接用） -->
       <UserAvatar
         v-if="showAvatar"
+        class="msg-avatar-clickable"
         :root-id="avatarSeed"
         :nickname="avatarName"
         :avatar="avatarImage"
         :size="36"
+        @click="onAvatarClick"
       />
     </div>
     <div class="msg-body">
@@ -48,14 +50,15 @@
           <span class="msg-text">{{ message.content }}</span>
         </template>
 
-        <!-- 链接预览卡片（设计 §6）：标题 + 图标 + 描述 + 来源 -->
+        <!-- 链接预览卡片（设计 §6）：标题 + 图标 + 描述 + 来源；
+             spark-org-invite:// 为组织邀请卡片，拦截跳转改为弹出确认抽屉 -->
         <a
           v-if="message.link"
           class="link-card"
           :href="message.link.url"
           target="_blank"
           rel="noreferrer"
-          @click.stop
+          @click.stop="onLinkClick"
         >
           <div class="link-card-head">
             <el-icon :size="16" class="link-card-icon"><Link /></el-icon>
@@ -88,6 +91,9 @@ import { formatBytes } from '../../utils/format';
 import { personalAvatarSource, personAvatarSource, personDisplayName } from '../../stores/avatar-sources';
 import type { ChatMessage, SpaceKey } from '../../mock/messages';
 
+/** 组织邀请链接协议（内核系统会话卡片消息：url = spark-org-invite://{inviteId}） */
+const ORG_INVITE_SCHEME = 'spark-org-invite://';
+
 export default defineComponent({
   name: 'MessageBubble',
   components: { UserAvatar, Picture, Document, Microphone, Link },
@@ -99,7 +105,7 @@ export default defineComponent({
     /** 所在空间：对方消息按 senderId(rootId) 查好友同步头像用 */
     spaceKey: { type: String as () => SpaceKey, required: true }
   },
-  emits: ['menu', 'resend'],
+  emits: ['menu', 'resend', 'avatar-click', 'org-invite-click'],
   setup(props, { emit }) {
     // 自己的消息统一走 avatar-sources（未加载完成时回退消息自带字段）
     const avatarSeed = computed(() => {
@@ -128,7 +134,28 @@ export default defineComponent({
     function onMenu(event: MouseEvent) {
       emit('menu', { event, message: props.message });
     }
-    return { onMenu, formatBytes, avatarSeed, avatarName, avatarImage };
+
+    // 点头像看资料卡：rootId 取现成口径（对方=senderId；自己=personalAvatarSource().seed 即 currentUser.rootId）
+    function onAvatarClick() {
+      emit('avatar-click', avatarSeed.value);
+    }
+
+    // 组织邀请卡片（系统会话 link 消息，url=spark-org-invite://{inviteId}，
+    // link.domain=orgId）：拦截跳转，交给上层弹确认/拒绝抽屉；普通链接照原样新开
+    function onLinkClick(event: MouseEvent) {
+      const link = props.message.link;
+      if (!link || !link.url.startsWith(ORG_INVITE_SCHEME)) {
+        return;
+      }
+      event.preventDefault();
+      emit('org-invite-click', {
+        inviteId: link.url.slice(ORG_INVITE_SCHEME.length),
+        orgId: link.domain,
+        title: link.title,
+        description: link.description
+      });
+    }
+    return { onMenu, onAvatarClick, onLinkClick, formatBytes, avatarSeed, avatarName, avatarImage };
   }
 });
 </script>

@@ -9,6 +9,8 @@ mod create;
 mod incoming;
 #[path = "service/invite.rs"]
 mod invite;
+#[path = "service/invite_records.rs"]
+mod invite_records;
 #[path = "service/members.rs"]
 mod members;
 #[path = "service/settings.rs"]

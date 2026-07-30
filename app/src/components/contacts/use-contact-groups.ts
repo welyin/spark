@@ -4,8 +4,9 @@
  * 当前分组名/成员、管理员虚拟行与分组被删后的兜底回退。
  */
 import { computed, watch, type ComputedRef, type Ref } from 'vue';
-import { profileOf, requestBadgeCount, type OrgGroupNode, type SpaceContacts } from '../../mock/contacts';
+import { profileOf, requestBadgeCount, type SpaceContacts } from '../../mock/contacts';
 import { compareNames } from '../../utils/pinyin';
+import { orgGroupOptions } from './contact-item';
 import type { ContactItem, GroupOption, RightView } from './types';
 
 export interface ContactGroupsContext {
@@ -19,22 +20,14 @@ export interface ContactGroupsContext {
 }
 
 export function useContactGroups(ctx: ContactGroupsContext) {
-  /** 组织树扁平化（带深度），供分组选项与组名查找复用 */
-  const flattenOrgTree = (nodes: OrgGroupNode[], depth = 0): Array<{ id: string; name: string; depth: number }> =>
-    nodes.flatMap((node) => [{ id: node.id, name: node.name, depth }, ...flattenOrgTree(node.children, depth + 1)]);
-
-  /** 资料卡「分组」下拉选项：'' = 未分组；组织按树深度缩进 */
+  /** 资料卡「分组」下拉选项：'' = 未分组；个人扁平，组织按树深度缩进（与 contact-item.orgGroupOptions 同口径） */
   const groupOptions = computed<GroupOption[]>(() => {
-    const options: GroupOption[] = [{ id: '', label: '未分组' }];
     if (ctx.isPersonal.value) {
-      return options.concat(ctx.spaceData.value.groups.map((group) => ({ id: group.id, label: group.name })));
+      return [{ id: '', label: '未分组' }].concat(
+        ctx.spaceData.value.groups.map((group) => ({ id: group.id, label: group.name }))
+      );
     }
-    return options.concat(
-      flattenOrgTree(ctx.spaceData.value.groupTree).map((node) => ({
-        id: node.id,
-        label: `${'　'.repeat(node.depth)}${node.name}`
-      }))
-    );
+    return orgGroupOptions(ctx.spaceData.value.groupTree);
   });
 
   /** 各分组人数（含虚拟组 ungrouped），第二栏分组行右侧灰字 */

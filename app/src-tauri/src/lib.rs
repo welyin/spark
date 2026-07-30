@@ -127,6 +127,9 @@ pub fn run() {
             commands::org::org_resolve_address,
             commands::org::org_search_known,
             commands::org::org_accept_invite,
+            commands::org::org_send_invite,
+            commands::org::org_respond_invite,
+            commands::org::org_invite_records,
             // 通讯录
             commands::contact::contact_overview,
             commands::contact::contact_update_profile,

@@ -531,6 +531,15 @@ export function hasUnreadMessages(key: SpaceKey): boolean {
   return ensureSpace(key).conversations.some((conv) => !conv.muted && conv.unreadCount > 0);
 }
 
+/** 某空间未读总数（免打扰会话不计；角标按空间隔离，不用全局 totalUnread） */
+export function unreadCountOf(key: SpaceKey): number {
+  let total = 0;
+  for (const conv of ensureSpace(key).conversations) {
+    if (!conv.muted) total += conv.unreadCount;
+  }
+  return total;
+}
+
 // TODO: 标题未读数（§7.1）已实现；系统托盘角标与任务栏徽标待真实通知能力
 watch(
   totalUnread,

@@ -186,6 +186,24 @@
 .messages-page .chat-back { padding: 4px; }
 .messages-page .chat-title { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 
+/* 聊天头头像+昵称区域：direct 会话整块可点（弹资料卡抽屉） */
+.messages-page .chat-profile {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.messages-page .chat-profile-clickable {
+  cursor: pointer;
+  margin: -6px -8px;
+  padding: 6px 8px;
+  border-radius: var(--spark-radius-s);
+}
+
+.messages-page .chat-profile-clickable:hover { background: var(--spark-bg-hover); }
+
 .messages-page .chat-name {
   font-size: 15px;
   font-weight: 600;
@@ -253,6 +271,8 @@
 .messages-page .msg-row { display: flex; gap: 8px; align-items: flex-start; }
 .messages-page .msg-row.mine { flex-direction: row-reverse; }
 .messages-page .msg-avatar { width: 36px; flex-shrink: 0; }
+/* 气泡头像可点（弹资料卡抽屉）；showAvatar=false 的占位无头像不响应 */
+.messages-page .msg-avatar-clickable { cursor: pointer; }
 
 .messages-page .msg-body {
   display: flex;

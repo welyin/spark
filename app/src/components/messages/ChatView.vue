@@ -6,6 +6,7 @@
       :conversation="conversation"
       @back="$emit('back')"
       @removed="$emit('removed', $event)"
+      @show-profile="openProfileCard(conversation.peerId)"
     />
 
     <div ref="scrollRef" class="msg-scroll">
@@ -23,6 +24,8 @@
           :space-key="spaceKey"
           @menu="openMsgMenu"
           @resend="onResend"
+          @avatar-click="openProfileCard"
+          @org-invite-click="openOrgInvite"
         />
       </template>
       <el-empty
@@ -58,6 +61,18 @@
         </ul>
       </div>
     </teleport>
+
+    <!-- 联系人资料卡抽屉：聊天气泡头像 / 聊天头点击弹出（复用通讯录 ContactPanel） -->
+    <ContactCardDrawer v-model="profileCardVisible" :root-id="profileCardRootId" :space-key="spaceKey" />
+
+    <!-- 组织邀请确认抽屉：系统会话邀请卡片（spark-org-invite:// 链接）点击弹出 -->
+    <OrgInviteDrawer
+      v-model="orgInviteVisible"
+      :invite-id="orgInvite.inviteId"
+      :org-id="orgInvite.orgId"
+      :fallback-title="orgInvite.title"
+      :fallback-description="orgInvite.description"
+    />
   </section>
 </template>
 
@@ -68,6 +83,8 @@ import { Close, WarningFilled } from '@element-plus/icons-vue';
 import ChatHeader from './ChatHeader.vue';
 import MessageBubble from './MessageBubble.vue';
 import MessageInput from './MessageInput.vue';
+import ContactCardDrawer from '../contacts/ContactCardDrawer.vue';
+import OrgInviteDrawer from '../org/OrgInviteDrawer.vue';
 import { useNetworkStatus } from '../../stores/network-status';
 import { personDisplayName } from '../../stores/avatar-sources';
 import {
@@ -97,7 +114,7 @@ const RECALL_WINDOW = 2 * 60_000;
 
 export default defineComponent({
   name: 'ChatView',
-  components: { ChatHeader, MessageBubble, MessageInput, Close, WarningFilled },
+  components: { ChatHeader, MessageBubble, MessageInput, ContactCardDrawer, OrgInviteDrawer, Close, WarningFilled },
   props: {
     spaceKey: { type: String as () => SpaceKey, required: true },
     conversationId: { type: String, required: true }
@@ -238,6 +255,30 @@ export default defineComponent({
       resendMessage(props.spaceKey, props.conversationId, msg.id);
     }
 
+    // ---- 联系人资料卡抽屉：气泡头像（senderId 即 rootId，MessageBubble 已换算 'me'）/ 聊天头点击 ----
+    const profileCardVisible = ref(false);
+    const profileCardRootId = ref('');
+
+    function openProfileCard(rootId: string) {
+      if (!rootId) {
+        return;
+      }
+      profileCardRootId.value = rootId;
+      profileCardVisible.value = true;
+    }
+
+    // ---- 组织邀请抽屉：系统会话邀请卡片点击（MessageBubble 已解析 inviteId/orgId） ----
+    const orgInviteVisible = ref(false);
+    const orgInvite = ref({ inviteId: '', orgId: '', title: '', description: '' });
+
+    function openOrgInvite(payload: { inviteId: string; orgId: string; title: string; description: string }) {
+      if (!payload.inviteId) {
+        return;
+      }
+      orgInvite.value = payload;
+      orgInviteVisible.value = true;
+    }
+
     return {
       conversation,
       renderItems,
@@ -258,6 +299,12 @@ export default defineComponent({
       onDeleteMsg,
       onSend,
       onResend,
+      profileCardVisible,
+      profileCardRootId,
+      openProfileCard,
+      orgInviteVisible,
+      orgInvite,
+      openOrgInvite,
       formatDividerTime
     };
   }

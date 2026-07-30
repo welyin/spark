@@ -2,7 +2,7 @@
 //!
 //! 线形 JSON：
 //! ```json
-//! { "kind": "chat|read|recall|friend-request|friend-accept",
+//! { "kind": "chat|read|recall|friend-request|friend-accept|org-invite|org-invite-reply",
 //!   "from": "<rootId>", "to": "<rootId>", "ts": 123,
 //!   "body": { ... }, "pubKey": "<base64>", "sig": "<base64>" }
 //! ```
@@ -35,6 +35,10 @@ pub const KIND_FRIEND_REQUEST: &str = "friend-request";
 pub const KIND_FRIEND_ACCEPT: &str = "friend-accept";
 /// 信封 kind：资料同步（朋友建连后/资料变更后互推 nickname/avatar）。
 pub(crate) const KIND_PROFILE_SYNC: &str = "profile-sync";
+/// 信封 kind：组织邀请（body 携带 inviteCode 与自报展示字段）。
+pub const KIND_ORG_INVITE: &str = "org-invite";
+/// 信封 kind：组织邀请回执（被邀请人接受/拒绝）。
+pub const KIND_ORG_INVITE_REPLY: &str = "org-invite-reply";
 
 /// 签名载荷：固定键序 body/from/kind/to/ts 的紧凑 JSON 串。
 pub fn build_signing_payload(kind: &str, from: &str, to: &str, ts: i64, body: &Value) -> String {

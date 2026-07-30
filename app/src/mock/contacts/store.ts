@@ -5,7 +5,7 @@
  */
 import { reactive, watch } from 'vue';
 import { isTauri, listenP2pEvents } from '../../api';
-import type { FriendDto, FriendRequestDto, P2pEventDto, SpaceContactsDto } from '../../api';
+import type { FriendDto, FriendRequestDto, OrgInviteRecordDto, P2pEventDto, SpaceContactsDto } from '../../api';
 import type { ContactProfile, FriendRequest, MockFriend, SpaceContacts } from './types';
 import { emptyProfile } from './types';
 import { seedOrg, seedPersonal } from './seed';
@@ -23,6 +23,15 @@ export function contactsApi() {
     .electronAPI?.contacts;
 }
 
+/** 内核 organization API（组织邀请记录水合用；守卫口径同 contactsApi） */
+export function organizationApi() {
+  if (!isTauri()) {
+    return undefined;
+  }
+  return (window as unknown as { electronAPI?: { organization?: import('../../api').ElectronAPI['organization'] } })
+    .electronAPI?.organization;
+}
+
 /** 正在水合的空间：水合赋值期间跳过兜底 watch 回写，避免写风暴 */
 const hydrating = new Set<string>();
 
@@ -35,6 +44,74 @@ function toRequest(dto: FriendRequestDto): FriendRequest {
   // updatedAt 内核契约必填，createdAt 可选；缺省时兜底为当前时间（混入按时间
   // 排序的列表尾部），有值则以 DTO 为准（展开在兜底之后，覆盖兜底值）
   return { createdAt: Date.now(), updatedAt: Date.now(), ...dto };
+}
+
+/** 内核组织邀请记录 → 「新的成员」我发出的邀请条目（组织空间 outgoing）。
+ *  状态直映射：pending→pending / accepted→accepted / declined→declined（面板文案「已拒绝」）。 */
+function toOrgOutgoingInvite(record: OrgInviteRecordDto): FriendRequest {
+  return {
+    id: record.id,
+    rootId: record.peerRootId,
+    nickname: record.peerNickname,
+    message: `邀请加入「${record.orgName}」`,
+    source: 'org-invite',
+    status: record.status,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt
+  };
+}
+
+/** 组织空间我发出的邀请按 id upsert（存在更新 status/updatedAt 等，不存在插入）。 */
+function upsertOrgOutgoingInvite(space: SpaceContacts, record: OrgInviteRecordDto): FriendRequest {
+  const request = toOrgOutgoingInvite(record);
+  const existing = space.outgoing.find((item) => item.id === request.id);
+  if (existing) {
+    Object.assign(existing, request);
+    return existing;
+  }
+  space.outgoing.push(request);
+  return request;
+}
+
+/**
+ * 发送组织邀请成功后即合入「新的成员 → 我发出的邀请」：空间可能早已水合，
+ * 不等下次水合/对方回执事件，面板立即可见刚发出的 pending 记录。
+ */
+export function applyOrgOutgoingInvite(record: OrgInviteRecordDto): void {
+  if (record.direction !== 'outgoing') {
+    return;
+  }
+  upsertOrgOutgoingInvite(contactsOf(`org:${record.orgId}`), record);
+}
+
+/**
+ * 组织空间水合组织邀请（内核 overview 对组织空间恒空，邀请走独立 IPC）：
+ * direction=outgoing 的记录合入「新的成员 → 我发出的邀请」。须在 overview
+ * 覆盖赋值完成之后执行，避免被 outgoing 整体替换清掉。
+ */
+async function hydrateOrgInvites(spaceKey: string, space: SpaceContacts): Promise<void> {
+  if (!spaceKey.startsWith('org:')) {
+    return;
+  }
+  const api = organizationApi();
+  if (!api) {
+    return;
+  }
+  try {
+    const records = await api.inviteRecords(spaceKey.slice('org:'.length));
+    hydrating.add(spaceKey);
+    try {
+      for (const record of records) {
+        if (record.direction === 'outgoing') {
+          upsertOrgOutgoingInvite(space, record);
+        }
+      }
+    } finally {
+      hydrating.delete(spaceKey);
+    }
+  } catch {
+    // 邀请记录拉取失败不打扰：面板退化为仅 overview 数据
+  }
 }
 
 /**
@@ -73,7 +150,10 @@ function hydrate(spaceKey: string, space: SpaceContacts): void {
         hydrating.delete(spaceKey);
       }
     })
-    .catch(() => {});
+    .catch(() => {})
+    // 组织空间邀请合入排在 overview 覆盖之后（组织空间 overview 恒空，
+    // 个人空间此调用为 no-op），两套水合互不覆盖
+    .then(() => hydrateOrgInvites(spaceKey, space));
 }
 
 /**
@@ -155,6 +235,8 @@ function ensureEventSubscription(): void {
  * - FriendRequestAccepted：outbox 置 accepted + 未读，朋友按 rootId 去重落本地。
  * - FriendProfileUpdated：对端资料同步（昵称/头像），按 rootId 就地更新朋友条目；
  *   仅改 nickname/avatar（持久化兜底 watch 只回写本地资料字段，不会把头像写回内核）。
+ * - OrgInviteUpdated（组织空间）：管理员收到对方回执，按 record.orgId 解析空间
+ *   （`org:{orgId}`）upsert 我发出的邀请，置未读。
  */
 export function handleContactsP2pEvent(event: P2pEventDto): void {
   if (event.kind === 'FriendRequestReceived') {
@@ -211,6 +293,19 @@ export function handleContactsP2pEvent(event: P2pEventDto): void {
         friend.avatar = avatar;
       }
     }
+    return;
+  }
+  // 管理员收到对方回执：按 record.orgId 解析组织空间，upsert 我发出的邀请
+  // （存在更新 status/updatedAt，不存在插入），对标 FriendRequestAccepted 写法；
+  // 状态变化置未读（入口角标提示）。OrgInviteReceived 为被邀请人侧入站通知，
+  // 入口是系统会话消息卡片，面板不处理。
+  if (event.kind === 'OrgInviteUpdated') {
+    const record = event.data;
+    if (record.direction !== 'outgoing') {
+      return;
+    }
+    const space = contactsOf(`org:${record.orgId}`);
+    upsertOrgOutgoingInvite(space, record).unread = true;
   }
 }
 

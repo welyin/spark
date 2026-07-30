@@ -16,7 +16,9 @@ use spark_core::kernel::{direct_conversation_id, dm_envelope, handle_inbound_dm}
 use spark_core::message::{
     ConversationKind, ConversationRecord, MessageRecord, MessageService, MessageType,
 };
-use spark_core::org::OrganizationService;
+use spark_core::org::{
+    OrgInviteDirection, OrgInviteRecord, OrgInviteStatus, OrganizationService,
+};
 use spark_core::org::service::CreateOrganizationInput;
 use spark_core::p2p::P2pEvent;
 use spark_core::p2p::node::system_now_ms;
@@ -1626,4 +1628,269 @@ fn inbound_friend_request_carries_valid_avatar_only() {
     let requests = ContactService::overview(&s, PERSONAL).unwrap().requests;
     let r2 = requests.iter().find(|r| r.root_id == from2).unwrap();
     assert_eq!(r2.avatar, None, "非法 avatar 不落库");
+}
+
+// ---------------------------------------------------------------------------
+// 入站编排：org-invite / org-invite-reply
+// ---------------------------------------------------------------------------
+
+const ORG_ID: &str = "org_aaaabbbbccccdddd";
+
+fn org_invite_body(invite_id: &str) -> Value {
+    json!({
+        "inviteId": invite_id,
+        "inviteCode": "code-abc",
+        "orgId": ORG_ID,
+        "orgName": "星火组织",
+        "orgDescription": "描述",
+        "orgAvatar": "data:image/png;base64,AA==",
+        "inviterNickname": "管理员",
+    })
+}
+
+fn outgoing_invite(id: &str, org_id: &str, peer: &str) -> OrgInviteRecord {
+    OrgInviteRecord {
+        id: id.to_string(),
+        org_id: org_id.to_string(),
+        org_name: "星火组织".to_string(),
+        org_avatar: None,
+        peer_root_id: peer.to_string(),
+        peer_nickname: "待加入成员".to_string(),
+        direction: OrgInviteDirection::Outgoing,
+        status: OrgInviteStatus::Pending,
+        invite_code: None,
+        created_at: NOW,
+        updated_at: NOW,
+    }
+}
+
+#[test]
+fn inbound_org_invite_persists_record_and_system_card() {
+    let mut s = MemoryStorage::new();
+    let my_root = "aa".repeat(32);
+    let (key, from) = peer_root(7);
+    let envelope =
+        dm_envelope::build_envelope("org-invite", &from, &my_root, NOW, org_invite_body("inv-1"), &key);
+    let result = handle_inbound_dm(&mut s, &my_root, "我", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    assert_eq!(result.response, json!({ "ok": true }));
+
+    // 入站邀请记录落库（pending、带 inviteCode 供重启后 accept）
+    let record = OrganizationService::get_incoming_invite(&s, ORG_ID, &from)
+        .unwrap()
+        .expect("入站邀请记录已落库");
+    assert_eq!(record.id, "inv-1");
+    assert_eq!(record.direction, OrgInviteDirection::Incoming);
+    assert_eq!(record.status, OrgInviteStatus::Pending);
+    assert_eq!(record.peer_nickname, "管理员");
+    assert_eq!(record.invite_code.as_deref(), Some("code-abc"));
+
+    // personal 空间系统会话：固定 id、kind=System、未读 +1
+    let conv = MessageService::get_conversation(&s, PERSONAL, "sys:notice")
+        .unwrap()
+        .expect("系统通知会话已建");
+    assert_eq!(conv.kind, ConversationKind::System);
+    assert_eq!(conv.peer_root_id, "system");
+    assert_eq!(conv.unread_count, 1);
+
+    // link 组织卡片消息（id 确定性 `org-invite-{inviteId}`）
+    let message = MessageService::get_message(&s, PERSONAL, "sys:notice", "org-invite-inv-1")
+        .unwrap()
+        .expect("组织卡片消息已落库");
+    assert_eq!(message.msg_type, MessageType::Link);
+    assert_eq!(message.sender_id, from);
+    let link = message.link.expect("link 预览存在");
+    assert_eq!(link.url, "spark-org-invite://inv-1");
+    assert_eq!(link.title, "星火组织");
+    assert_eq!(link.description, "管理员 正在邀请你加入");
+    assert_eq!(link.site_name, "组织邀请");
+    assert_eq!(link.domain, ORG_ID);
+
+    // 事件：ChatReceived（系统会话+卡片消息）+ OrgInviteReceived（记录 JSON）
+    assert_eq!(result.events.len(), 2);
+    let P2pEvent::ChatReceived(data) = &result.events[0] else {
+        panic!("首个事件应为 ChatReceived");
+    };
+    assert_eq!(data["spaceKey"], json!(PERSONAL));
+    assert_eq!(data["conversation"]["id"], json!("sys:notice"));
+    assert_eq!(data["conversation"]["kind"], json!("system"));
+    assert_eq!(data["conversation"]["unreadCount"], json!(1));
+    assert_eq!(data["message"]["id"], json!("org-invite-inv-1"));
+    assert_eq!(data["message"]["link"]["title"], json!("星火组织"));
+    let P2pEvent::OrgInviteReceived(data) = &result.events[1] else {
+        panic!("次个事件应为 OrgInviteReceived");
+    };
+    assert_eq!(data["id"], json!("inv-1"));
+    assert_eq!(data["direction"], json!("incoming"));
+    assert_eq!(data["status"], json!("pending"));
+}
+
+#[test]
+fn inbound_org_invite_idempotent_upsert() {
+    let mut s = MemoryStorage::new();
+    let my_root = "aa".repeat(32);
+    let (key, from) = peer_root(7);
+    let envelope =
+        dm_envelope::build_envelope("org-invite", &from, &my_root, NOW, org_invite_body("inv-1"), &key);
+    handle_inbound_dm(&mut s, &my_root, "我", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+
+    // 同 inviteId 重投（展示字段变化）：记录原地更新、消息按 id 去重、未读不重复
+    let mut body2 = org_invite_body("inv-1");
+    body2["orgName"] = json!("星火组织·新名");
+    body2["inviterNickname"] = json!("管理员2");
+    let envelope2 =
+        dm_envelope::build_envelope("org-invite", &from, &my_root, NOW + 1, body2, &key);
+    let result2 =
+        handle_inbound_dm(&mut s, &my_root, "我", envelope2, "peer-a", &HashSet::new(), NOW).unwrap();
+    assert_eq!(result2.response, json!({ "ok": true }));
+    assert_eq!(result2.events.len(), 1, "消息去重后只发 OrgInviteReceived");
+
+    let records = OrganizationService::list_invite_records(&s, ORG_ID).unwrap();
+    assert_eq!(records.len(), 1, "同 (orgId, peer) 只留一条");
+    assert_eq!(records[0].org_name, "星火组织·新名");
+    assert_eq!(records[0].peer_nickname, "管理员2");
+    assert_eq!(records[0].created_at, NOW, "保留首次 createdAt");
+
+    let messages = MessageService::get_messages(&s, PERSONAL, "sys:notice").unwrap();
+    assert_eq!(messages.len(), 1, "同 inviteId 消息幂等");
+    let conv = MessageService::get_conversation(&s, PERSONAL, "sys:notice").unwrap().unwrap();
+    assert_eq!(conv.unread_count, 1, "重投不重复未读");
+
+    // 终态不被重投重置：标记 accepted 后再次投递，status 保持 accepted
+    OrganizationService::mark_invite_status(
+        &mut s,
+        OrgInviteDirection::Incoming,
+        ORG_ID,
+        &from,
+        OrgInviteStatus::Accepted,
+        NOW + 2,
+    )
+    .unwrap();
+    let envelope3 =
+        dm_envelope::build_envelope("org-invite", &from, &my_root, NOW + 3, org_invite_body("inv-1"), &key);
+    handle_inbound_dm(&mut s, &my_root, "我", envelope3, "peer-a", &HashSet::new(), NOW).unwrap();
+    let record = OrganizationService::get_incoming_invite(&s, ORG_ID, &from).unwrap().unwrap();
+    assert_eq!(record.status, OrgInviteStatus::Accepted, "终态不重置");
+}
+
+#[test]
+fn inbound_org_invite_validation_rejects() {
+    let my_root = "aa".repeat(32);
+    let (key, from) = peer_root(7);
+
+    // (a) 必填字段缺失 → invalid-body（inviteCode 空）
+    let mut s = MemoryStorage::new();
+    let mut body = org_invite_body("inv-1");
+    body["inviteCode"] = json!("");
+    let envelope = dm_envelope::build_envelope("org-invite", &from, &my_root, NOW, body, &key);
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    assert_eq!(result.response, json!({ "ok": false, "reason": "invalid-body" }));
+    assert!(OrganizationService::get_incoming_invite(&s, ORG_ID, &from).unwrap().is_none());
+    assert!(MessageService::get_conversation(&s, PERSONAL, "sys:notice").unwrap().is_none());
+
+    // (b) from == 我 → invalid-body
+    let mut s = MemoryStorage::new();
+    let envelope =
+        dm_envelope::build_envelope("org-invite", &from, &from, NOW, org_invite_body("inv-1"), &key);
+    let result = handle_inbound_dm(&mut s, &from, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    assert_eq!(result.response, json!({ "ok": false, "reason": "invalid-body" }));
+    assert!(result.events.is_empty());
+
+    // (c) 被拉黑 → blocked
+    let mut s = MemoryStorage::new();
+    ContactService::set_blocked(&mut s, PERSONAL, &from, true, NOW).unwrap();
+    let envelope =
+        dm_envelope::build_envelope("org-invite", &from, &my_root, NOW, org_invite_body("inv-1"), &key);
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    assert_eq!(result.response, json!({ "ok": false, "reason": "blocked" }));
+    assert!(result.events.is_empty());
+}
+
+#[test]
+fn inbound_org_invite_reply_marks_outgoing_status() {
+    let my_root = "aa".repeat(32);
+    let (key, from) = peer_root(7);
+
+    // accept=true → accepted（nickname 刷新展示名）
+    let mut s = MemoryStorage::new();
+    OrganizationService::put_invite_record(&mut s, &outgoing_invite("inv-1", ORG_ID, &from)).unwrap();
+    let body = json!({ "inviteId": "inv-1", "orgId": ORG_ID, "accept": true, "nickname": "新成员" });
+    let envelope = dm_envelope::build_envelope("org-invite-reply", &from, &my_root, NOW, body, &key);
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    assert_eq!(result.response, json!({ "ok": true }));
+    let P2pEvent::OrgInviteUpdated(data) = &result.events[0] else {
+        panic!("应发出 OrgInviteUpdated 事件");
+    };
+    assert_eq!(data["status"], json!("accepted"));
+    assert_eq!(data["peerNickname"], json!("新成员"));
+    let stored = OrganizationService::get_outgoing_invite(&s, ORG_ID, &from).unwrap().unwrap();
+    assert_eq!(stored.status, OrgInviteStatus::Accepted);
+    assert_eq!(stored.updated_at, NOW);
+
+    // accept=false → declined
+    let mut s = MemoryStorage::new();
+    OrganizationService::put_invite_record(&mut s, &outgoing_invite("inv-2", ORG_ID, &from)).unwrap();
+    let body = json!({ "inviteId": "inv-2", "orgId": ORG_ID, "accept": false, "nickname": "" });
+    let envelope = dm_envelope::build_envelope("org-invite-reply", &from, &my_root, NOW, body, &key);
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    assert_eq!(result.response, json!({ "ok": true }));
+    let stored = OrganizationService::get_outgoing_invite(&s, ORG_ID, &from).unwrap().unwrap();
+    assert_eq!(stored.status, OrgInviteStatus::Declined);
+    assert_eq!(stored.peer_nickname, "待加入成员", "空 nickname 不覆盖展示名");
+}
+
+#[test]
+fn inbound_org_invite_reply_security_rejects() {
+    let my_root = "aa".repeat(32);
+    let (key, from) = peer_root(7);
+    let body = |org_id: &str| json!({ "inviteId": "inv-1", "orgId": org_id, "accept": true, "nickname": "x" });
+
+    // (a) 无出站记录 → invalid-body，不发事件
+    let mut s = MemoryStorage::new();
+    let envelope = dm_envelope::build_envelope("org-invite-reply", &from, &my_root, NOW, body(ORG_ID), &key);
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    assert_eq!(result.response, json!({ "ok": false, "reason": "invalid-body" }));
+    assert!(result.events.is_empty());
+
+    // (b) 出站记录指向别的 orgId → invalid-body（from 不能越权更新其他组织的邀请）
+    let mut s = MemoryStorage::new();
+    OrganizationService::put_invite_record(
+        &mut s,
+        &outgoing_invite("inv-1", "org_eeeeffff00001111", &from),
+    )
+    .unwrap();
+    let envelope = dm_envelope::build_envelope("org-invite-reply", &from, &my_root, NOW, body(ORG_ID), &key);
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    assert_eq!(result.response, json!({ "ok": false, "reason": "invalid-body" }));
+    let stored = OrganizationService::get_outgoing_invite(&s, "org_eeeeffff00001111", &from)
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.status, OrgInviteStatus::Pending, "其他组织记录不受影响");
+
+    // (c) 已终态（重放）→ invalid-body
+    let mut s = MemoryStorage::new();
+    OrganizationService::put_invite_record(&mut s, &outgoing_invite("inv-1", ORG_ID, &from)).unwrap();
+    OrganizationService::mark_invite_status(
+        &mut s,
+        OrgInviteDirection::Outgoing,
+        ORG_ID,
+        &from,
+        OrgInviteStatus::Declined,
+        NOW,
+    )
+    .unwrap();
+    let envelope = dm_envelope::build_envelope("org-invite-reply", &from, &my_root, NOW, body(ORG_ID), &key);
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    assert_eq!(result.response, json!({ "ok": false, "reason": "invalid-body" }));
+    let stored = OrganizationService::get_outgoing_invite(&s, ORG_ID, &from).unwrap().unwrap();
+    assert_eq!(stored.status, OrgInviteStatus::Declined, "重放不改终态");
+
+    // (d) 被拉黑 → blocked（出站记录保持 pending）
+    let mut s = MemoryStorage::new();
+    OrganizationService::put_invite_record(&mut s, &outgoing_invite("inv-1", ORG_ID, &from)).unwrap();
+    ContactService::set_blocked(&mut s, PERSONAL, &from, true, NOW).unwrap();
+    let envelope = dm_envelope::build_envelope("org-invite-reply", &from, &my_root, NOW, body(ORG_ID), &key);
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    assert_eq!(result.response, json!({ "ok": false, "reason": "blocked" }));
+    let stored = OrganizationService::get_outgoing_invite(&s, ORG_ID, &from).unwrap().unwrap();
+    assert_eq!(stored.status, OrgInviteStatus::Pending);
 }

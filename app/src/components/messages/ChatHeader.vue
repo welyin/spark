@@ -2,20 +2,29 @@
 <template>
   <header class="chat-header">
     <el-button text :icon="ArrowLeft" class="chat-back" @click="$emit('back')" />
-    <UserAvatar :root-id="conversation.peerId" :nickname="peerName" :avatar="peerAvatar" :size="32" />
-    <div class="chat-title">
-      <span class="chat-name">{{ peerName }}</span>
-      <span class="chat-sub">
-        <template v-if="conversation.kind === 'system'">系统通知</template>
-        <template v-else>
-          <!-- 真实状态优先：仅本地时统一「仅本地·不可达」，否则用 mock 的 online 字段 -->
-          <span class="chat-presence-tag" :class="presenceClass">
-            <el-icon :size="12"><component :is="presenceIcon" /></el-icon>
-            {{ presenceText }}
-          </span>
-          <span v-if="conversation.muted" class="chat-sub-extra">消息免打扰</span>
-        </template>
-      </span>
+    <!-- direct 会话：头像+昵称区域整块可点，弹出对方资料卡抽屉；system 会话不可点 -->
+    <div
+      class="chat-profile"
+      :class="{ 'chat-profile-clickable': profileClickable }"
+      :role="profileClickable ? 'button' : undefined"
+      :title="profileClickable ? '查看资料' : undefined"
+      @click="onProfileClick"
+    >
+      <UserAvatar :root-id="conversation.peerId" :nickname="peerName" :avatar="peerAvatar" :size="32" />
+      <div class="chat-title">
+        <span class="chat-name">{{ peerName }}</span>
+        <span class="chat-sub">
+          <template v-if="conversation.kind === 'system'">系统通知</template>
+          <template v-else>
+            <!-- 真实状态优先：仅本地时统一「仅本地·不可达」，否则用 mock 的 online 字段 -->
+            <span class="chat-presence-tag" :class="presenceClass">
+              <el-icon :size="12"><component :is="presenceIcon" /></el-icon>
+              {{ presenceText }}
+            </span>
+            <span v-if="conversation.muted" class="chat-sub-extra">消息免打扰</span>
+          </template>
+        </span>
+      </div>
     </div>
     <div class="chat-actions">
       <!-- TODO(mock): 音视频通话仅占位，点击提示下一期实现（设计 §3.1 注） -->
@@ -83,8 +92,15 @@ export default defineComponent({
     spaceKey: { type: String as () => SpaceKey, required: true },
     conversation: { type: Object as PropType<Conversation>, required: true }
   },
-  emits: ['back', 'removed'],
+  emits: ['back', 'removed', 'show-profile'],
   setup(props, { emit }) {
+    // 仅 direct 会话头部可点开资料卡（peerId 即对方 rootId）
+    const profileClickable = computed(() => props.conversation.kind === 'direct');
+    function onProfileClick() {
+      if (profileClickable.value) {
+        emit('show-profile');
+      }
+    }
     // 连接状态：仅本地（真实 P2P 状态）优先于 mock online 字段；免打扰后缀拆为独立弱提示
     const presenceClass = computed(() => {
       if (isLocalOnly.value) return 'is-local';
@@ -150,6 +166,8 @@ export default defineComponent({
     return {
       onCommand,
       onCallPlaceholder,
+      profileClickable,
+      onProfileClick,
       presenceClass,
       presenceIcon,
       presenceText,

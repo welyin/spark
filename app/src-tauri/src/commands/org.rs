@@ -5,7 +5,7 @@
 //! `join_by_invite` / `check_join` 两个拆步命令保留（调试/分步场景可用）。
 
 use spark_core::kernel::Kernel;
-use spark_core::org::{OrgInvitePayload, OrganizationView};
+use spark_core::org::{OrgInvitePayload, OrgInviteRecord, OrganizationView};
 
 use super::dto::{
     AddOrgMemberInputDto, CreateOrgInputDto, CreatedOrgInviteDto, InviteAcceptanceDto,
@@ -156,6 +156,40 @@ pub(crate) fn accept_invite_inner(
         .map_err(err)
 }
 
+pub(crate) fn send_invite_inner(
+    kernel: &mut Kernel,
+    org_id: &str,
+    target_root_id: &str,
+    target_peer_id: Option<String>,
+    target_addresses: Option<Vec<String>>,
+    target_nickname: Option<String>,
+) -> Result<OrgInviteRecord, String> {
+    kernel
+        .org_send_invite(
+            org_id,
+            target_root_id,
+            target_peer_id.as_deref(),
+            &target_addresses.unwrap_or_default(),
+            target_nickname.as_deref(),
+        )
+        .map_err(err)
+}
+
+pub(crate) fn respond_invite_inner(
+    kernel: &mut Kernel,
+    invite_id: &str,
+    accept: bool,
+) -> Result<OrgInviteRecord, String> {
+    kernel.org_respond_invite(invite_id, accept).map_err(err)
+}
+
+pub(crate) fn invite_records_inner(
+    kernel: &Kernel,
+    org_id: &str,
+) -> Result<Vec<OrgInviteRecord>, String> {
+    kernel.org_invite_records(org_id).map_err(err)
+}
+
 // ------------------------------------------------------------------
 // Tauri 命令
 // ------------------------------------------------------------------
@@ -291,6 +325,45 @@ pub fn org_accept_invite(
     code: String,
 ) -> Result<InviteAcceptanceDto, String> {
     accept_invite_inner(&mut *lock_kernel(&state)?, &code)
+}
+
+/// 经 DM 发出组织邀请（仅 admin；落出站记录 + org-invite 信封尽力投递）。
+#[tauri::command]
+pub fn org_send_invite(
+    state: tauri::State<'_, KernelState>,
+    org_id: String,
+    target_root_id: String,
+    target_peer_id: Option<String>,
+    target_addresses: Option<Vec<String>>,
+    target_nickname: Option<String>,
+) -> Result<OrgInviteRecord, String> {
+    send_invite_inner(
+        &mut *lock_kernel(&state)?,
+        &org_id,
+        &target_root_id,
+        target_peer_id,
+        target_addresses,
+        target_nickname,
+    )
+}
+
+/// 回应收到的组织邀请（accept=true 走加入编排，false 仅拒绝；幂等）。
+#[tauri::command]
+pub fn org_respond_invite(
+    state: tauri::State<'_, KernelState>,
+    invite_id: String,
+    accept: bool,
+) -> Result<OrgInviteRecord, String> {
+    respond_invite_inner(&mut *lock_kernel(&state)?, &invite_id, accept)
+}
+
+/// 指定组织的全部邀请记录（出/入站合并）。
+#[tauri::command]
+pub fn org_invite_records(
+    state: tauri::State<'_, KernelState>,
+    org_id: String,
+) -> Result<Vec<OrgInviteRecord>, String> {
+    invite_records_inner(&*lock_kernel(&state)?, &org_id)
 }
 
 // ------------------------------------------------------------------

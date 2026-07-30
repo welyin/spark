@@ -153,6 +153,14 @@
   color: var(--spark-primary);
 }
 
+/* rail 角标：Element Plus 默认把角标 translateX(100%) 推出图标右缘，窄栏下会探出
+ * .rail-main（overflow-x: hidden）被裁掉；收回到图标右上角内侧并抬层级 */
+.rail .el-badge__content {
+  right: 0;
+  transform: translate(20%, -50%);
+  z-index: 2;
+}
+
 .rail-label {
   max-width: 52px;
   font-size: 11px;

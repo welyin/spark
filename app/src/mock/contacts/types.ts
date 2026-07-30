@@ -52,7 +52,8 @@ export type FriendRequest = {
   nickname: string;
   message: string;
   source: string;
-  status: 'pending' | 'accepted' | 'ignored' | 'replied' | 'failed';
+  /** 状态（declined 为组织邀请对方拒绝的终态，个人空间申请不产生） */
+  status: 'pending' | 'accepted' | 'ignored' | 'replied' | 'failed' | 'declined';
   /** 申请发出/收到时间 */
   createdAt: number;
   /** 最近一次状态变化/新回复时间（列表按此倒序，有任何新变化都冒泡到顶部） */
