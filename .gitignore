@@ -20,3 +20,7 @@ app/dist-market/
 
 # 单机多开开发实例数据（npm run tauri dev N）
 app/.dev-data/
+
+# Python 缓存
+__pycache__/
+*.pyc
