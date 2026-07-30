@@ -1,12 +1,13 @@
 /**
  * 组织 logo（dataURL）本地存取——所有展示组织头像的位置统一走这里。
  *
- * 内核 OrgView 暂无 avatar 字段，本期前端方案：按 orgId 存 localStorage。
+ * 内核 OrgView.avatar 为权威来源：stores/org-membership 的 refreshOrganizations
+ * 会把内核非空 avatar 回写进本缓存（内核为空时保留本地值）；写入路径（创建组织/
+ * 组织设置 logo 编辑）先落内核再同步本缓存做即时展示。
  * 读取返回空串时由 OrgAvatar 按 orgId 哈希自动生成头像。
  */
 import { ref } from 'vue';
 
-// TODO(mock): 待 OrganizationRecord.avatar 后端字段落地后改为读写组织记录（ui-space-navbar §11.2）
 const STORAGE_KEY = 'spark:org-avatars';
 
 function load(): Record<string, string> {

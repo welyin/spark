@@ -2,7 +2,8 @@
  * 组织身份（组织内昵称/头像 + 「使用个人身份」开关）本地存取。
  *
  * 内核无组织身份接口（OrganizationMember 无 nickname/avatar 字段），
- * 本期前端方案：按 orgId 存 localStorage，缺省回退自动生成头像 + 「成员」占位名。
+ * 本期前端方案：按 orgId 存 localStorage；昵称为空时展示侧回退个人昵称
+ * （见 avatar-sources.ts orgIdentityAvatarSource），其它字段为空即为空、不做兜底。
  */
 import { ref } from 'vue';
 

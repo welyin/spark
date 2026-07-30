@@ -27,10 +27,11 @@ use super::{OrgError, Result};
 /// extra 保留键，会把本机持有的私钥抹掉；其"不进快照"由
 /// [`extract_metadata`] 显式剔除 + 推送侧 `strip_org_root_secret` + 合并侧
 /// [`merge_organization_sync_snapshot`] 插入处跳过 三处共同保证（§15）。
-pub const ORGANIZATION_SYNC_RESERVED_KEYS: [&str; 12] = [
+pub const ORGANIZATION_SYNC_RESERVED_KEYS: [&str; 13] = [
     "orgId",
     "name",
     "description",
+    "avatar",
     "basePluginDomain",
     "createdAt",
     "createdBy",
@@ -84,6 +85,10 @@ pub struct OrganizationSyncSummary {
     /// 描述。
     #[serde(default)]
     pub description: String,
+    /// 组织 logo（保留键：`data:image/` data URL，空串 = 清除；缺省 = 发送方
+    /// 不支持该字段，接收方保留本地值——与 gateways 同口径回退）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<String>,
     /// 基础插件域。
     #[serde(
         rename = "basePluginDomain",
@@ -208,6 +213,8 @@ pub fn build_organization_sync_snapshot(
             org_id: record.org_id.clone(),
             name: record.name.clone(),
             description: record.description.clone(),
+            // avatar 恒为 Some（空串也要显式传播，否则成员端收不到"清除 logo"）
+            avatar: Some(record.avatar.clone()),
             base_plugin_domain: record.base_plugin_domain.clone(),
             created_at: record.created_at,
             created_by: record.created_by.clone(),
@@ -310,6 +317,15 @@ pub fn merge_organization_sync_snapshot(
         org_id: snapshot.summary.org_id.clone(),
         name: snapshot.summary.name.clone(),
         description: snapshot.summary.description.clone(),
+        // avatar（保留键）：incoming 显式携带则以其为准（空串 = 清除），缺省保留
+        // existing（对齐 gateways/orgAddress 的缺省回退口径——旧版发送方不携带
+        // 该字段时不得抹掉本地 logo）
+        avatar: snapshot
+            .summary
+            .avatar
+            .clone()
+            .or_else(|| existing.map(|e| e.avatar.clone()))
+            .unwrap_or_default(),
         base_plugin_domain: snapshot
             .summary
             .base_plugin_domain

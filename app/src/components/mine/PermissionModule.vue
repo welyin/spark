@@ -57,7 +57,7 @@
       </div>
       <el-empty v-if="!currentPeople.length" :image-size="90" description="暂无联系人" />
       <div v-for="p in currentPeople" :key="p.rootId" class="perm-row">
-        <UserAvatar :root-id="p.rootId" :nickname="p.name" :size="36" />
+        <UserAvatar :root-id="p.avatarSeed ?? p.rootId" :nickname="p.name" :avatar="p.avatarImage ?? ''" :size="36" />
         <span class="perm-name">{{ p.name }}</span>
         <el-button text size="small" type="danger" @click="remove(p)">
           {{ view === 'chatOnly' ? '移出' : '移出黑名单' }}
@@ -73,11 +73,26 @@ import { ElMessage } from 'element-plus';
 import { ChatLineRound, Remove } from '@element-plus/icons-vue';
 import { currentSpace, currentSpaceOrgId } from '../../stores/current-space';
 import { findOrg, refreshOrganizations } from '../../stores/org-membership';
+import {
+  orgMemberAvatarSource,
+  orgMemberDisplayName,
+  personAvatarSource,
+  personDisplayName
+} from '../../stores/avatar-sources';
 import { contactsOf, profileOf, setBlocked, spaceKeyOf, updateProfile } from '../../mock/contacts';
 import UserAvatar from '../UserAvatar.vue';
 import MineDetailContainer from './MineDetailContainer.vue';
 
-type Person = { rootId: string; name: string; blocked: boolean; permission: string };
+type Person = {
+  rootId: string;
+  name: string;
+  blocked: boolean;
+  permission: string;
+  /** 头像配色种子：组织成员=rootId@orgId；缺省=rootId */
+  avatarSeed?: string;
+  /** 已上传的头像图片（dataURL）；空/缺省=自动配色头像 */
+  avatarImage?: string;
+};
 
 const shortRootId = (rootId: string) => `${rootId.slice(0, 10)}...`;
 
@@ -112,23 +127,25 @@ export default defineComponent({
       }
     });
 
-    /** 统一的人员视图：个人=mock 朋友；组织=真实成员 + 本地附加资料 */
+    /** 统一的人员视图：个人=mock 朋友；组织=真实成员 + 本地附加资料；名称/头像走统一入口 */
     const people = computed<Person[]>(() => {
       if (props.mode === 'personal') {
         return contactsOf('personal').friends.map((friend) => ({
           rootId: friend.rootId,
-          name: friend.remark || friend.nickname,
+          name: personDisplayName('personal', friend.rootId),
           blocked: friend.blocked,
-          permission: friend.permission
+          permission: friend.permission,
+          avatarImage: personAvatarSource('personal', friend.rootId).image
         }));
       }
       return orgMembers.value.map((member) => {
         const profile = profileOf(spaceKey.value, member.rootId);
         return {
           rootId: member.rootId,
-          name: profile.remark || shortRootId(member.rootId),
+          name: orgMemberDisplayName(currentSpaceOrgId.value, member.rootId, shortRootId(member.rootId)),
           blocked: profile.blocked,
-          permission: profile.permission
+          permission: profile.permission,
+          avatarSeed: orgMemberAvatarSource(currentSpaceOrgId.value, member.rootId).seed
         };
       });
     });

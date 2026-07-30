@@ -161,13 +161,14 @@ impl Kernel {
         Ok(OrganizationService::to_view(&record, &root_id))
     }
 
-    /// 更新组织名称/描述（仅 admin）。落库后经 org-sync worker 向已知成员
+    /// 更新组织名称/描述/logo（仅 admin）。落库后经 org-sync worker 向已知成员
     /// 推送快照（与 setGateways/setPublic 同模式，尽力而为）。
     pub fn org_update_info(
         &mut self,
         org_id: &str,
         name: Option<&str>,
         description: Option<&str>,
+        avatar: Option<&str>,
     ) -> Result<OrganizationView> {
         let root_id = self.require_unlocked_root_id()?;
         let record = OrganizationService::update_org_info(
@@ -175,6 +176,7 @@ impl Kernel {
             org_id,
             name,
             description,
+            avatar,
             &root_id,
             system_now_ms(),
         )?;

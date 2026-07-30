@@ -1,6 +1,6 @@
 /**
- * 通讯录共享类型与基础工具：全部空间的缓存模型、空资料工厂、空间 key 约定，
- * 以及组织成员身份的确定性 mock。本文件不依赖任何其他 contacts 模块，
+ * 通讯录共享类型与基础工具：全部空间的缓存模型、空资料工厂、空间 key 约定。
+ * 本文件不依赖任何其他 contacts 模块，
  * 处于依赖方向最底层（types <- seed/store <- queries <- requests/tags/groups）。
  */
 
@@ -86,48 +86,5 @@ export function emptyProfile(): ContactProfile {
   return { remark: '', phones: [], tagIds: [], groupId: '', memo: '', photos: [], permission: 'open', blocked: false };
 }
 
-/** 个人空间 key 固定为 'personal'，组织空间为 'org:<orgId>' */
-export function spaceKeyOf(space: { type: 'personal' } | { type: 'org'; orgId: string }): string {
-  return space.type === 'org' ? `org:${space.orgId}` : 'personal';
-}
-
-// ------------------------------------------------------------------
-// 组织成员的组织身份（昵称/性别/签名）。
-// TODO(mock): 内核组织成员接口只有 rootId/role/joinedAt，没有身份字段；
-// 这里按 rootId 哈希从固定池里确定性取假数据（同一成员恒定），待内核
-// 组织身份接口落地后整体替换（ui-space-navbar §9.2）
-// ------------------------------------------------------------------
-
-export type MemberIdentity = {
-  nickname: string;
-  signature: string;
-  gender?: 'male' | 'female';
-};
-
-const MEMBER_NAME_POOL = [
-  '张伟', '李娜', '王芳', '刘洋', '陈静', '杨帆',
-  '赵磊', '黄敏', '周涛', '吴倩', '徐斌', '孙悦'
-];
-
-const MEMBER_SIGNATURE_POOL = [
-  '越努力越幸运', '静水流深', '今天也要加油', '保持热爱',
-  '行胜于言', '', '慢慢来吧', '专注当下'
-];
-
-const hashText = (text: string): number => {
-  let hash = 0;
-  for (let i = 0; i < text.length; i++) {
-    hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
-  }
-  return hash;
-};
-
-/** 组织成员的组织身份（确定性 mock：同一 spaceKey+rootId 恒定） */
-export function memberIdentityOf(spaceKey: string, rootId: string): MemberIdentity {
-  const hash = hashText(`${spaceKey}:${rootId}`);
-  return {
-    nickname: MEMBER_NAME_POOL[hash % MEMBER_NAME_POOL.length],
-    signature: MEMBER_SIGNATURE_POOL[hash % MEMBER_SIGNATURE_POOL.length],
-    gender: hash % 3 === 0 ? undefined : hash % 2 === 0 ? 'male' : 'female'
-  };
-}
+/** 个人空间 key 固定为 'personal'，组织空间为 'org:<orgId>'（唯一定义在 mock/space-key.ts，此处 re-export） */
+export { spaceKeyOf } from '../space-key';

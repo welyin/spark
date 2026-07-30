@@ -40,13 +40,18 @@
 
 <script lang="ts">
 import { computed, defineComponent, type PropType } from 'vue';
+import { orgMemberDisplayName } from '../../stores/avatar-sources';
 import type { OrganizationMember } from './types';
+
+const shortRootId = (rootId: string) => `${rootId.slice(0, 12)}...`;
 
 export default defineComponent({
   name: 'GatewayManager',
   props: {
     // 当前选中的网关 rootId 列表（v-model）
     modelValue: { type: Array as PropType<string[]>, required: true },
+    /** 所属组织 id（成员展示名统一入口按 org:<orgId> 空间取备注） */
+    orgId: { type: String, required: true },
     members: { type: Array as PropType<OrganizationMember[]>, required: true },
     gateways: { type: Array as PropType<string[]>, required: true },
     isAdmin: { type: Boolean, required: true },
@@ -60,14 +65,15 @@ export default defineComponent({
       set: (value: string[]) => emit('update:modelValue', value)
     });
 
+    // 成员标签：统一展示名入口（备注 > 组织身份昵称）+ 角色后缀
     const memberLabel = (member: OrganizationMember) => {
       const role = member.role === 'admin' ? '管理员' : '成员';
-      return `${member.rootId.slice(0, 12)}...（${role}）`;
+      return `${orgMemberDisplayName(props.orgId, member.rootId, shortRootId(member.rootId))}（${role}）`;
     };
 
     const gatewayLabel = (rootId: string) => {
       const member = props.members.find((item) => item.rootId === rootId);
-      return member ? memberLabel(member) : `${rootId.slice(0, 12)}...`;
+      return member ? memberLabel(member) : shortRootId(rootId);
     };
 
     const onSave = () => {

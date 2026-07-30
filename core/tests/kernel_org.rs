@@ -23,6 +23,7 @@ fn org_create_invite_and_overview() {
         .create_org(CreateOrganizationInput {
             name: "  测试组织  ".to_string(),
             description: Some("描述".to_string()),
+            avatar: None,
             base_plugin_domain: Some("plugin:notes".to_string()),
         })
         .unwrap();
@@ -112,6 +113,7 @@ fn org_member_management() {
         .create_org(CreateOrganizationInput {
             name: "成员组织".to_string(),
             description: None,
+            avatar: None,
             base_plugin_domain: Some("plugin:app".to_string()),
         })
         .unwrap();

@@ -11,3 +11,10 @@ export const CONTACT_INTENT_ADD = '__add__';
 export function openContacts(intent: string): void {
   window.dispatchEvent(new CustomEvent('spark:open-contact', { detail: { rootId: intent } }));
 }
+
+/** 打开/创建 1:1 会话（App.vue 消费 `spark:open-chat`：记录请求并切到消息页，§5.3）。
+ *  所有「去找他聊天」的入口（通讯录资料卡/新朋友面板/全局搜索）统一从这里派发，
+ *  不再各自裸写 CustomEvent。name 为首建会话的兜底标题，conversationId 用于定位已存在的会话。 */
+export function openChat(detail: { rootId: string; name?: string; conversationId?: string }): void {
+  window.dispatchEvent(new CustomEvent('spark:open-chat', { detail }));
+}

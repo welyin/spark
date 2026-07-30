@@ -168,6 +168,7 @@ mod tests {
             .create_org(spark_core::org::service::CreateOrganizationInput {
                 name: "org".into(),
                 description: None,
+                avatar: None,
                 base_plugin_domain: Some("plugin:base".into()),
             })
             .unwrap();

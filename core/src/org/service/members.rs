@@ -40,6 +40,7 @@ impl OrganizationService {
                 org_id: record.org_id.clone(),
                 name: record.name.clone(),
                 description: record.description.clone(),
+                avatar: record.avatar.clone(),
                 base_plugin_domain: record.base_plugin_domain.clone().unwrap_or_default(),
                 created_at: record.created_at,
                 created_by: record.created_by.clone(),

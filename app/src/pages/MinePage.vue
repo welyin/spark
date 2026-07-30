@@ -74,6 +74,7 @@ import { computed, defineComponent, onMounted, ref, watch, type Component } from
 import { ElMessage } from 'element-plus';
 import { Key, Lock, OfficeBuilding, Postcard, User } from '@element-plus/icons-vue';
 import { currentSpace, currentSpaceOrgId } from '../stores/current-space';
+import { getOrgIdentity } from '../stores/org-identity';
 import type { RootStatusDto as RootStatus } from '../api';
 import { orgIdentityAvatarSource, personalAvatarSource } from '../stores/avatar-sources';
 import UserAvatar from '../components/UserAvatar.vue';
@@ -132,12 +133,16 @@ export default defineComponent({
       }
     );
 
-    // 头部身份：组织空间显示组织身份（+「组织身份」副标题），个人空间显示个人资料；取数统一走 avatar-sources
+    // 头部身份：组织空间且未开「使用个人身份」时显示组织身份（+「组织身份」副标题），
+    // 否则显示个人资料（与 UserAvatarMenu 同口径）；取数统一走 avatar-sources
     const isOrgSpace = computed(() => currentSpace.value.type === 'org');
-    const headerSource = computed(() =>
-      isOrgSpace.value ? orgIdentityAvatarSource(currentSpaceOrgId.value) : personalAvatarSource()
+    const isOrgIdentity = computed(
+      () => isOrgSpace.value && !getOrgIdentity(currentSpaceOrgId.value).usePersonalIdentity
     );
-    const headerSubtitle = computed(() => (isOrgSpace.value ? '组织身份' : '个人设置'));
+    const headerSource = computed(() =>
+      isOrgIdentity.value ? orgIdentityAvatarSource(currentSpaceOrgId.value) : personalAvatarSource()
+    );
+    const headerSubtitle = computed(() => (isOrgIdentity.value ? '组织身份' : '个人设置'));
 
     const refreshStatus = async () => {
       rootStatus.value = await window.electronAPI.rootIdentity.status();

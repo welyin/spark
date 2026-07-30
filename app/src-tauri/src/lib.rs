@@ -12,7 +12,7 @@
 pub mod commands;
 pub mod market;
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 use spark_core::kernel::{Kernel, KernelConfig};
@@ -23,7 +23,9 @@ use tauri::{Emitter, Manager, RunEvent};
 pub type KernelState = Mutex<Kernel>;
 
 /// 插件市场服务单例状态（壳侧服务，不依赖内核）。
-pub type MarketState = Mutex<market::PluginMarketService>;
+/// Arc 句柄：市场命令改为 async + spawn_blocking（更新探测/安装下载是阻塞网络 IO，
+/// 不能占用命令调用线程），需要 'static 的状态克隆移入阻塞任务。
+pub type MarketState = Arc<Mutex<market::PluginMarketService>>;
 
 /// P2pEvent → 前端载荷：`{kind, data?}`（serde 相邻标签；序列化失败保底
 /// `{kind:"Unknown", raw:Debug}`，事件流不因单事件中断）。
@@ -83,7 +85,7 @@ pub fn run() {
             market
                 .initialize()
                 .map_err(|e| std::io::Error::other(format!("plugin market init failed: {e}")))?;
-            app.manage(MarketState::new(market));
+            app.manage(MarketState::new(Mutex::new(market)));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

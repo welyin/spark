@@ -3,8 +3,23 @@
 
 use std::fs;
 use std::path::Path;
+use std::sync::OnceLock;
+use std::time::Duration;
 
 use sha2::Digest;
+
+/// 共享 blocking Client：显式连接/整体超时——市场源不可达（如直连 GitHub 被重置）
+/// 时在数秒内失败走错误路径，不允许无超时无限阻塞调用方。
+fn http_client() -> &'static reqwest::blocking::Client {
+    static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::blocking::Client::builder()
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(30))
+            .build()
+            .unwrap_or_default()
+    })
+}
 
 pub(crate) fn now_millis() -> u64 {
     std::time::SystemTime::now()
@@ -39,7 +54,10 @@ pub(crate) fn fetch_text_smart(url: &str) -> Result<String, String> {
     if url.starts_with("http://") {
         return Err("Insecure plugin manifest URL is not allowed".to_string());
     }
-    let response = reqwest::blocking::get(url).map_err(|e| format!("Request failed: {url}: {e}"))?;
+    let response = http_client()
+        .get(url)
+        .send()
+        .map_err(|e| format!("Request failed: {url}: {e}"))?;
     let status = response.status();
     if status.as_u16() >= 400 {
         return Err(format!("Request failed: {url}, status={status}"));
@@ -54,7 +72,10 @@ pub(crate) fn download_file(url: &str, destination: &Path) -> Result<(), String>
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("{e}"))?;
     }
-    let mut response = reqwest::blocking::get(url).map_err(|e| format!("Download failed: {url}: {e}"))?;
+    let mut response = http_client()
+        .get(url)
+        .send()
+        .map_err(|e| format!("Download failed: {url}: {e}"))?;
     let status = response.status();
     if status.as_u16() >= 400 {
         return Err(format!("Download failed: {url}, status={status}"));

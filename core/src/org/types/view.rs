@@ -38,6 +38,8 @@ pub struct OrganizationRecordFlattened {
     pub name: String,
     /// 描述。
     pub description: String,
+    /// 组织 logo（data URL；空串 = 无 logo，始终序列化为空串而非丢键）。
+    pub avatar: String,
     /// 基础插件域（缺省 `""`）。
     #[serde(rename = "basePluginDomain")]
     pub base_plugin_domain: String,

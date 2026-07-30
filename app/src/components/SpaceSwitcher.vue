@@ -80,6 +80,7 @@ import { organizations, refreshOrganizations as refreshOrgMembership } from '../
 import { hasSpaceNotification } from '../stores/space-notifications';
 import { setOrgAvatar } from '../stores/org-avatars';
 import { personalAvatarSource } from '../stores/avatar-sources';
+import { spaceKeyOf } from '../mock/contacts';
 import UserAvatar from './UserAvatar.vue';
 import OrgAvatar from './OrgAvatar.vue';
 import CreateOrgDialog from './org/CreateOrgDialog.vue';
@@ -111,8 +112,8 @@ export default defineComponent({
     const currentOrgId = currentSpaceOrgId;
 
     // 空间级未读提醒（红点、无数量）：任一未读消息或未读新朋友/成员申请即点亮
-    const personalNotification = computed(() => hasSpaceNotification('personal'));
-    const orgNotification = (orgId: string) => hasSpaceNotification(`org:${orgId}`);
+    const personalNotification = computed(() => hasSpaceNotification(spaceKeyOf({ type: 'personal' })));
+    const orgNotification = (orgId: string) => hasSpaceNotification(spaceKeyOf({ type: 'org', orgId }));
     const anySpaceNotification = computed(
       () => personalNotification.value || organizations.value.some((org) => orgNotification(org.orgId))
     );
@@ -188,8 +189,10 @@ export default defineComponent({
       try {
         const created = await window.electronAPI.organization.create({
           name: form.name,
-          description: form.description
+          description: form.description,
+          avatar: form.avatar || undefined
         });
+        // 本地缓存一份即时展示（refreshOrganizations 也会把内核 avatar 回写进缓存）
         if (form.avatar) {
           setOrgAvatar(created.orgId, form.avatar);
         }

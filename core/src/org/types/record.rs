@@ -63,6 +63,11 @@ pub struct OrganizationRecord {
     /// 描述。
     #[serde(default)]
     pub description: String,
+    /// 组织 logo（`data:image/` data URL；空串 = 无 logo，旧记录缺省为空串，
+    /// 经快照 summary 在成员间同步）。空串丢键：保持与 TS golden 向量及旧线形
+    /// 的字节一致（对齐 gateways/isPublic 的缺省丢键口径）。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub avatar: String,
     /// 基础插件域（`plugin:` 前缀；旧记录可缺省）。
     #[serde(
         rename = "basePluginDomain",

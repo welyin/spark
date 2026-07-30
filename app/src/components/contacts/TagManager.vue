@@ -56,7 +56,7 @@
         class="request-item tag-member-row tag-member-clickable"
         @click="$emit('view-member', m.rootId)"
       >
-        <UserAvatar :root-id="m.rootId" :nickname="m.displayName" :size="36" />
+        <UserAvatar :root-id="m.avatarSeed ?? m.rootId" :nickname="m.displayName" :avatar="m.avatarImage ?? ''" :size="36" />
         <span class="request-item-main"><b>{{ m.displayName }}</b></span>
         <el-button text size="small" type="danger" @click.stop="removeMember(m.rootId)">移除</el-button>
       </div>

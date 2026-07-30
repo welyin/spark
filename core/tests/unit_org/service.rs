@@ -37,6 +37,7 @@ fn input() -> CreateOrganizationInput {
     CreateOrganizationInput {
         name: "  星火   组织 ".to_string(),
         description: Some(" 描述 ".to_string()),
+        avatar: None,
         base_plugin_domain: Some(" plugin:chat ".to_string()),
     }
 }

@@ -37,7 +37,7 @@
             <span class="org-info-label">组织 logo</span>
             <div v-if="editingInfo === 'logo'" class="org-info-edit">
               <AvatarPicker v-model="editInfoValue" :nickname="organization.name" :seed="organization.orgId" :size="48" />
-              <el-button size="small" type="primary" @click="saveInfo">保存</el-button>
+              <el-button size="small" type="primary" :loading="savingInfo" @click="saveInfo">保存</el-button>
               <el-button size="small" @click="cancelEditInfo">取消</el-button>
             </div>
             <span
@@ -113,6 +113,7 @@
       <el-card v-else-if="activeSection === 'gateway'" shadow="never" class="panel-card">
         <GatewayManager
           v-model="gatewaySelection"
+          :org-id="organization.orgId"
           :members="organization.members"
           :gateways="organization.gateways ?? []"
           :is-admin="organization.isCurrentUserAdmin"
@@ -317,11 +318,22 @@ export default defineComponent({
         return;
       }
       const field = editingInfo.value;
-      // 组织 logo：本地 org-avatars store（内核暂无 avatar 字段，见 store 注释）
+      // 组织 logo：走内核 organization.updateInfo 持久化（同步给其他成员），
+      // 成功后写入本地 org-avatars 展示缓存（空串 = 清除 logo）
       if (field === 'logo') {
-        setOrgAvatar(organization.value.orgId, editInfoValue.value);
-        editingInfo.value = '';
-        ElMessage.success('已保存');
+        savingInfo.value = true;
+        try {
+          organization.value = await window.electronAPI.organization.updateInfo(organization.value.orgId, {
+            avatar: editInfoValue.value
+          });
+          setOrgAvatar(organization.value.orgId, editInfoValue.value);
+          editingInfo.value = '';
+          ElMessage.success('已保存');
+        } catch (error) {
+          ElMessage.error(`保存失败：${error}`);
+        } finally {
+          savingInfo.value = false;
+        }
         return;
       }
       const value = editInfoValue.value.trim();

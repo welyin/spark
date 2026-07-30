@@ -39,6 +39,9 @@ pub struct CreateOrganizationInput {
     pub name: String,
     /// 描述（trim，可省）。
     pub description: Option<String>,
+    /// 组织 logo（`data:image/` data URL，可省；空白等同未设置，非空时按
+    /// `identity::validate_avatar` 同口径校验）。
+    pub avatar: Option<String>,
     /// 基础插件域（`plugin:` 前缀，可省——组织与插件不再强关联，设计 §7.2）。
     pub base_plugin_domain: Option<String>,
 }

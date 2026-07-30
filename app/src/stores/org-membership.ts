@@ -13,6 +13,7 @@
  */
 import { ref } from 'vue';
 import type { OrgView } from '../api';
+import { setOrgAvatar } from './org-avatars';
 
 /** 我加入的组织列表缓存；只允许由 refreshOrganizations 写入 */
 export const organizations = ref<OrgView[]>([]);
@@ -29,6 +30,13 @@ export function refreshOrganizations(): Promise<OrgView[]> {
       .listMine()
       .then((list) => {
         organizations.value = list;
+        // 内核 OrgView.avatar（组织 logo）写入本地 org-avatars 展示缓存，让其他成员
+        // 也能看到组织 logo；内核为空时保留本地已有值，避免清掉存量本地 logo
+        for (const org of list) {
+          if (org.avatar) {
+            setOrgAvatar(org.orgId, org.avatar);
+          }
+        }
         return list;
       })
       .finally(() => {

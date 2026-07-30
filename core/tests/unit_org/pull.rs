@@ -26,6 +26,7 @@ fn setup() -> (MemoryStorage, String, OrganizationRecord) {
         &CreateOrganizationInput {
             name: "组织".to_string(),
             description: None,
+            avatar: None,
             base_plugin_domain: Some("plugin:app".to_string()),
         },
         &admin,

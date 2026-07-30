@@ -1,4 +1,4 @@
-//! 组织设置：名称/描述（`updateOrgInfo`）、网关列表（`setOrgGateways`，
+//! 组织设置：名称/描述/logo（`updateOrgInfo`）、网关列表（`setOrgGateways`，
 //! org.md §14）与公开标志（`setOrgPublic`，org.md §16）。
 //!
 //! 两者同口径：admin 校验、无变化时幂等返回（不 bump 版本）、变更后追加
@@ -19,16 +19,19 @@ use super::super::{OrgError, Result, org_address};
 use super::OrganizationService;
 
 impl OrganizationService {
-    /// `updateOrgInfo`：管理员更新组织名称/描述。
+    /// `updateOrgInfo`：管理员更新组织名称/描述/logo。
     ///
     /// - `name` 提供时按 `normalize_text` 同口径 trim 且不可为空；`description`
     ///   提供时 trim 后覆盖（空串 = 清除描述）；未提供的字段不变
+    /// - `avatar` 提供时 trim 后覆盖：空串 = 清除 logo，非空按
+    ///   `identity::validate_avatar` 同口径校验，非法拒绝
     /// - 无变化时幂等返回（不 bump 版本），与 [`Self::set_org_gateways`] 同口径
     pub fn update_org_info<S: StorageBackend>(
         storage: &mut S,
         org_id: &str,
         name: Option<&str>,
         description: Option<&str>,
+        avatar: Option<&str>,
         current_root_id: &str,
         now_ms: i64,
     ) -> Result<OrganizationRecord> {
@@ -39,9 +42,23 @@ impl OrganizationService {
             .map(|value| normalize_text(value, "Organization name"))
             .transpose()?;
         let description = description.map(str::trim);
-        let name_unchanged = name.as_deref().map_or(true, |value| value == record.name);
-        let description_unchanged = description.map_or(true, |value| value == record.description);
-        if name_unchanged && description_unchanged {
+        let avatar = avatar
+            .map(str::trim)
+            .map(|value| {
+                if value.is_empty() {
+                    // 空串 = 清除 logo
+                    Ok(String::new())
+                } else {
+                    crate::identity::validate_avatar(value)
+                        .map(|_| value.to_string())
+                        .map_err(|e| OrgError::InvalidAvatar(e.to_string()))
+                }
+            })
+            .transpose()?;
+        let name_unchanged = name.as_deref().is_none_or(|value| value == record.name);
+        let description_unchanged = description.is_none_or(|value| value == record.description);
+        let avatar_unchanged = avatar.as_deref().is_none_or(|value| value == record.avatar);
+        if name_unchanged && description_unchanged && avatar_unchanged {
             return Ok(record);
         }
 
@@ -50,6 +67,9 @@ impl OrganizationService {
         }
         if let Some(value) = description {
             record.description = value.to_string();
+        }
+        if let Some(value) = &avatar {
+            record.avatar = value.clone();
         }
         record.updated_at = now_ms;
         let previous_last_synced_at = record.sync.as_ref().map(|s| s.last_synced_at).unwrap_or(0);
@@ -72,6 +92,10 @@ impl OrganizationService {
                         (
                             "description".to_string(),
                             description.map(Value::from).unwrap_or(Value::Null),
+                        ),
+                        (
+                            "avatar".to_string(),
+                            avatar.as_deref().map(Value::from).unwrap_or(Value::Null),
                         ),
                     ]
                     .into_iter()

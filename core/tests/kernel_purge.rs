@@ -25,6 +25,7 @@ fn purge_preview_and_execute_guards() {
         .create_org(CreateOrganizationInput {
             name: "组织".to_string(),
             description: None,
+            avatar: None,
             base_plugin_domain: Some("plugin:app".to_string()),
         })
         .unwrap();

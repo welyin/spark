@@ -12,7 +12,7 @@
       <template v-for="item in renderItems" :key="item.key">
         <div v-if="item.kind === 'time'" class="msg-time">{{ formatDividerTime(item.ts) }}</div>
         <div v-else-if="item.msg.recalled" class="msg-system">
-          {{ item.msg.senderId === 'me' ? '你撤回了一条消息' : `「${item.msg.senderName}」撤回了一条消息` }}
+          {{ item.msg.senderId === 'me' ? '你撤回了一条消息' : `「${recallName(item.msg)}」撤回了一条消息` }}
         </div>
         <div v-else-if="item.msg.type === 'system'" class="msg-system">{{ item.msg.content }}</div>
         <MessageBubble
@@ -69,6 +69,7 @@ import ChatHeader from './ChatHeader.vue';
 import MessageBubble from './MessageBubble.vue';
 import MessageInput from './MessageInput.vue';
 import { useNetworkStatus } from '../../stores/network-status';
+import { personDisplayName } from '../../stores/avatar-sources';
 import {
   closeConversation,
   deleteMessage,
@@ -112,6 +113,9 @@ export default defineComponent({
 
     const conversation = computed(() => getConversation(props.spaceKey, props.conversationId));
     const messages = computed(() => getMessages(props.spaceKey, props.conversationId));
+
+    // 撤回提示：统一展示名入口（备注>昵称），消息上的 senderName 快照仅作兜底（快照语义不动）
+    const recallName = (msg: ChatMessage): string => personDisplayName(props.spaceKey, msg.senderId, msg.senderName);
 
     // 时间分隔（间隔 > 5 分钟）与同一分钟内连续消息头像合并（§3.2）
     const renderItems = computed<RenderItem[]>(() => {
@@ -242,6 +246,7 @@ export default defineComponent({
       scrollRef,
       isLocalOnly,
       localOnlyHintDismissed,
+      recallName,
       msgMenu,
       canCopy,
       canRecall,

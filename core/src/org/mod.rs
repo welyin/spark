@@ -119,6 +119,11 @@ pub enum OrgError {
     #[error("Invalid base plugin domain")]
     InvalidBasePluginDomain,
 
+    /// 组织 logo 非法（须 `data:image/` 前缀且序列化后不超限；消息沿用
+    /// `identity::validate_avatar` 的文案）。
+    #[error("{0}")]
+    InvalidAvatar(String),
+
     /// 成员 rootId 非法。
     #[error("Invalid member rootId")]
     InvalidMemberRootId,

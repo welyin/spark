@@ -278,8 +278,16 @@ fn build_snapshot_cross_validation() {
     let transactions: Vec<OrganizationTransactionRecord> =
         serde_json::from_value(section["transactions"].clone()).unwrap();
     let snapshot = build_organization_sync_snapshot(&record, &transactions);
+    let mut actual = serde_json::to_value(&snapshot).unwrap();
+    // avatar 是 TS 之后的 Rust 侧扩展（组织 logo，spec 向量不含该字段）：
+    // 恒为 Some 以传播"清除 logo"语义（空串显式携带），比对前剥离，
+    // 其余字段仍与 TS 逐字段一致
+    actual["summary"]
+        .as_object_mut()
+        .unwrap()
+        .remove("avatar");
     assert_eq!(
-        serde_json::to_value(&snapshot).unwrap(),
+        actual,
         section["expected"],
         "buildOrganizationSyncSnapshot 输出必须与 TS 逐字段一致"
     );

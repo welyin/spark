@@ -4,13 +4,20 @@
  * 数据装载：组织空间成员为真实数据（organization.listMine，经 stores/org-membership
  * 模块级缓存共享）；联系人合成：个人=mock 朋友；组织=真实成员 + 本地附加资料（mock）。
  */
-import { computed, onMounted, ref, type ComputedRef, type Ref } from 'vue';
+import { computed, onMounted, type ComputedRef, type Ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { currentUser } from '../../stores/current-user';
 import { getOrgIdentity } from '../../stores/org-identity';
 import { getProfileExtra } from '../../stores/profile-extra';
+import {
+  orgMemberAvatarSource,
+  orgMemberDisplayName,
+  personAvatarSource,
+  personDisplayName
+} from '../../stores/avatar-sources';
 import { organizations, refreshOrganizations as refreshOrgMembership } from '../../stores/org-membership';
-import { memberIdentityOf, profileOf, type SpaceContacts } from '../../mock/contacts';
+import { friendOf, profileOf, type SpaceContacts } from '../../mock/contacts';
+import { friendContactItem } from './contact-item';
 import type { ContactItem } from './types';
 
 export interface ContactsDataContext {
@@ -23,21 +30,10 @@ export interface ContactsDataContext {
 }
 
 export function useContactsData(ctx: ContactsDataContext) {
-  const currentRootId = ref('');
-
   const currentOrg = computed(() =>
     organizations.value.find((org) => org.orgId === ctx.currentSpaceOrgId.value) ?? null
   );
   const isOrgAdmin = computed(() => Boolean(currentOrg.value?.isCurrentUserAdmin));
-
-  const loadCurrentRootId = async () => {
-    try {
-      const status = await window.electronAPI.rootIdentity.status();
-      currentRootId.value = status.rootId ?? '';
-    } catch {
-      currentRootId.value = '';
-    }
-  };
 
   const refreshOrganizations = async () => {
     if (!ctx.isOrg.value) {
@@ -51,53 +47,47 @@ export function useContactsData(ctx: ContactsDataContext) {
   };
 
   onMounted(() => {
-    void loadCurrentRootId();
     void refreshOrganizations();
   });
 
   const contacts = computed<ContactItem[]>(() => {
     if (ctx.isPersonal.value) {
       // 拉黑的朋友不再出现在通讯录（黑名单管理在个人设置「朋友权限」）
-      return ctx.spaceData.value.friends.filter((friend) => !friend.blocked).map((friend) => {
-        const isSelf = friend.rootId === currentRootId.value;
-        // 自己：性别/签名/头像取本地真实资料（内核朋友记录的 gender/signature 目前不落库，
-        // 网络同步也还没有档案通道）；其他朋友用内核数据（gender 缺省则不显示图标，与组织同组件同规则）
-        const extra = isSelf ? getProfileExtra(friend.rootId) : null;
-        const signature = extra ? extra.signature : friend.signature;
-        const gender = extra
-          ? extra.gender === '男'
-            ? ('male' as const)
-            : extra.gender === '女'
-              ? ('female' as const)
-              : undefined
-          : friend.gender;
-        return {
-          rootId: friend.rootId,
-          displayName: friend.remark || friend.nickname,
-          // 第二行展示签名（无签名则不显示），RootID 属隐私不上列表
-          subtitle: signature,
-          avatarImage: isSelf ? currentUser.avatar : friend.avatar ?? '',
-          signature,
-          gender,
-          nickname: friend.nickname,
-          blocked: friend.blocked,
-          // 内核默认把自己作为联系人（发消息给自己=同步到所有个人节点）
-          isSelf
-        };
-      });
+      return ctx.spaceData.value.friends.filter((friend) => !friend.blocked).map(friendContactItem);
     }
     return (currentOrg.value?.members ?? [])
       .filter((member) => !profileOf(ctx.spaceKey.value, member.rootId).blocked)
       .map((member) => {
         const profile = profileOf(ctx.spaceKey.value, member.rootId);
-        const isSelf = member.rootId === currentRootId.value;
-        // 组织身份头像配色种子 rootId@orgId，与个人身份区分
-        const seed = `${member.rootId}@${ctx.currentSpaceOrgId.value}`;
-        // 自己：用真实组织身份（组织身份模块编辑的那份 + 扩展字段），不吃成员假数据
+        const isSelf = member.rootId === currentUser.rootId;
         if (isSelf) {
           const orgIdentity = getOrgIdentity(ctx.currentSpaceOrgId.value);
+          // 「使用个人身份」开启：该组织内自己按个人身份展示（与 UserAvatarMenu 同口径）
+          if (orgIdentity.usePersonalIdentity) {
+            const extra = getProfileExtra(member.rootId);
+            const name = personDisplayName('personal', member.rootId);
+            return {
+              rootId: member.rootId,
+              displayName: profile.remark || name,
+              subtitle: extra.signature,
+              // 个人身份配色种子 rootId（与个人空间一致），不走 rootId@orgId
+              avatarSeed: member.rootId,
+              avatarImage: personAvatarSource('personal', member.rootId).image,
+              signature: extra.signature,
+              gender: extra.gender === '男' ? ('male' as const) : extra.gender === '女' ? ('female' as const) : undefined,
+              nickname: name,
+              blocked: profile.blocked,
+              isSelf: true,
+              role: member.role,
+              joinedAt: member.joinedAt
+            };
+          }
+          // 自己（组织身份）：用真实组织身份（组织身份模块编辑的那份 + 扩展字段）
+          // 组织身份头像配色种子 rootId@orgId，与个人身份区分（统一入口 orgMemberAvatarSource）
+          const seed = orgMemberAvatarSource(ctx.currentSpaceOrgId.value, member.rootId).seed;
           const extra = getProfileExtra(seed);
-          const nickname = orgIdentity.nickname.trim() || '成员';
+          // 昵称为空时回退个人昵称（与 orgIdentityAvatarSource 同口径）；其它字段不回退
+          const nickname = orgIdentity.nickname.trim() || personDisplayName('personal', member.rootId);
           return {
             rootId: member.rootId,
             displayName: profile.remark || nickname,
@@ -113,16 +103,19 @@ export function useContactsData(ctx: ContactsDataContext) {
             joinedAt: member.joinedAt
           };
         }
-        // 其他成员：组织身份为确定性 mock（待内核组织身份接口）
-        const identity = memberIdentityOf(ctx.spaceKey.value, member.rootId);
+        // 其他成员：名称/头像走统一入口（个人朋友记录为唯一真实身份来源）；
+        // 签名/性别只在成员是个人朋友时取朋友记录字段，否则不显示
+        const source = orgMemberAvatarSource(ctx.currentSpaceOrgId.value, member.rootId);
+        const friend = friendOf('personal', member.rootId);
         return {
           rootId: member.rootId,
-          displayName: profile.remark || identity.nickname,
-          subtitle: identity.signature,
-          avatarSeed: seed,
-          signature: identity.signature,
-          gender: identity.gender,
-          nickname: identity.nickname,
+          displayName: orgMemberDisplayName(ctx.currentSpaceOrgId.value, member.rootId),
+          subtitle: friend?.signature ?? '',
+          avatarSeed: source.seed,
+          avatarImage: source.image,
+          signature: friend?.signature ?? '',
+          gender: friend?.gender,
+          nickname: friend?.nickname,
           blocked: profile.blocked,
           isSelf: false,
           role: member.role,

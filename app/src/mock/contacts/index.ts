@@ -25,10 +25,9 @@ export type {
   OrgGroupNode,
   RequestMessage,
   FriendRequest,
-  SpaceContacts,
-  MemberIdentity
+  SpaceContacts
 } from './types';
-export { emptyProfile, spaceKeyOf, memberIdentityOf } from './types';
+export { emptyProfile, spaceKeyOf } from './types';
 
 export { demoContacts, contactsOf } from './store';
 

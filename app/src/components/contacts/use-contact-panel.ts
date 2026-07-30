@@ -8,19 +8,16 @@ import { ElMessage } from 'element-plus';
 import { organizations } from '../../stores/org-membership';
 import { consumePendingContact, pendingContact } from '../../stores/pending-contact';
 import {
-  createTag,
   profileOf,
   replyOutgoing,
   resolveRequest,
   retryOutgoing,
   sendFriendRequest,
-  setBlocked,
-  updateProfile,
   type ContactProfile,
-  type ContactTag,
   type FriendPermission
 } from '../../mock/contacts';
 import { CONTACT_INTENT_ADD, CONTACT_INTENT_BROWSE } from './open-intents';
+import { useContactActions } from './use-contact-actions';
 import { useDeleteContact } from './use-delete-contact';
 import type { ContactItem, GroupOption, RightView } from './types';
 
@@ -127,34 +124,12 @@ export function useContactPanel(ctx: ContactPanelContext) {
   onMounted(openPendingContact);
   watch([pendingContact, ctx.contacts], openPendingContact);
 
-  const onSaveProfile = (patch: Partial<ContactProfile>) => {
-    if (ctx.selectedRootId.value) {
-      updateProfile(ctx.spaceKey.value, ctx.selectedRootId.value, patch);
-    }
-  };
-
-  const onSetBlocked = (blocked: boolean) => {
-    if (!ctx.selectedRootId.value) {
-      return;
-    }
-    setBlocked(ctx.spaceKey.value, ctx.selectedRootId.value, blocked);
-    ElMessage.success(blocked ? '已加入黑名单' : '已移出黑名单');
-  };
-
-  /** 发送消息：派发 `spark:open-chat`，App.vue 切到消息页并打开/创建 1:1 会话（§5.3） */
-  const onSendMessage = () => {
-    if (!ctx.selectedRootId.value) {
-      return;
-    }
-    window.dispatchEvent(
-      new CustomEvent('spark:open-chat', {
-        detail: {
-          rootId: ctx.selectedRootId.value,
-          name: selectedContact.value?.displayName ?? ''
-        }
-      })
-    );
-  };
+  // 资料卡动作（备注/拉黑/发消息/新建标签）收口在 use-contact-actions；删除走 use-delete-contact
+  const contactActions = useContactActions({ spaceKey: ctx.spaceKey, contact: selectedContact });
+  const onSaveProfile = contactActions.saveProfile;
+  const onSetBlocked = contactActions.setBlocked;
+  const onSendMessage = contactActions.sendMessage;
+  const onCreateTagReturn = contactActions.createTag;
 
   const onDeleteContact = useDeleteContact({
     spaceKey: ctx.spaceKey,
@@ -217,10 +192,8 @@ export function useContactPanel(ctx: ContactPanelContext) {
 
   // ------------------------------------------------------------------
   // 标签（§8.2）：新建/重命名/删除/成员编辑均在 TagManager 内直写 mock store；
-  // 这里仅保留 ContactPanel 备注对话框里的「新建标签并选中」入口
+  // 资料卡备注对话框里的「新建标签并选中」入口收口在 use-contact-actions.createTag
   // ------------------------------------------------------------------
-
-  const onCreateTagReturn = (name: string): ContactTag => createTag(ctx.spaceKey.value, name);
 
   return {
     selectedContact,

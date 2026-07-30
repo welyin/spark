@@ -114,9 +114,15 @@ pub(crate) fn update_info_inner(
     org_id: &str,
     name: Option<String>,
     description: Option<String>,
+    avatar: Option<String>,
 ) -> Result<OrganizationView, String> {
     kernel
-        .org_update_info(org_id, name.as_deref(), description.as_deref())
+        .org_update_info(
+            org_id,
+            name.as_deref(),
+            description.as_deref(),
+            avatar.as_deref(),
+        )
         .map_err(err)
 }
 
@@ -248,15 +254,16 @@ pub fn org_set_public(
     set_public_inner(&mut *lock_kernel(&state)?, &org_id, public, display_name)
 }
 
-/// 更新组织名称/描述（仅 admin；未提供的字段不变）。
+/// 更新组织名称/描述/logo（仅 admin；未提供的字段不变，avatar 空串 = 清除 logo）。
 #[tauri::command]
 pub fn org_update_info(
     state: tauri::State<'_, KernelState>,
     org_id: String,
     name: Option<String>,
     description: Option<String>,
+    avatar: Option<String>,
 ) -> Result<OrganizationView, String> {
-    update_info_inner(&mut *lock_kernel(&state)?, &org_id, name, description)
+    update_info_inner(&mut *lock_kernel(&state)?, &org_id, name, description, avatar)
 }
 
 /// 解析组织地址（缓存 → DHT，org.md §16.4）；未命中返回 null。

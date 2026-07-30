@@ -169,6 +169,7 @@ impl From<QueryResult> for QueryResultDto {
 pub struct CreateOrgInputDto {
     pub name: String,
     pub description: Option<String>,
+    pub avatar: Option<String>,
     pub base_plugin_domain: Option<String>,
 }
 
@@ -177,6 +178,7 @@ impl From<CreateOrgInputDto> for CreateOrganizationInput {
         Self {
             name: dto.name,
             description: dto.description,
+            avatar: dto.avatar,
             base_plugin_domain: dto.base_plugin_domain,
         }
     }

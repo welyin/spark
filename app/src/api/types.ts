@@ -127,6 +127,8 @@ export type OrgView = {
   orgId: string;
   name: string;
   description: string;
+  /** 组织 logo（data URL）；可能缺省/空串 */
+  avatar?: string;
   basePluginDomain?: string;
   createdAt: number;
   createdBy: string;
@@ -386,7 +388,7 @@ export type ElectronAPI = {
   };
   organization: {
     listMine: () => Promise<OrgView[]>;
-    create: (input: { name: string; description?: string; basePluginDomain?: string }) => Promise<OrgView>;
+    create: (input: { name: string; description?: string; avatar?: string; basePluginDomain?: string }) => Promise<OrgView>;
     delete: (orgId: string) => Promise<{ success: boolean }>;
     addMember: (orgId: string, input: { rootId: string; nodeInfo?: { peerId?: string; addresses: string[] } }) => Promise<OrgView>;
     removeMember: (orgId: string, memberRootId: string) => Promise<OrgView>;
@@ -395,7 +397,7 @@ export type ElectronAPI = {
     acceptInvite: (code: string) => Promise<{ orgId: string; orgName: string; memberCount: number }>;
     getSyncOverview: (orgId: string) => Promise<OrgSyncOverviewDto | null>;
     setPublic: (orgId: string, isPublic: boolean, displayName?: string) => Promise<OrgView>;
-    updateInfo: (orgId: string, patch: { name?: string; description?: string }) => Promise<OrgView>;
+    updateInfo: (orgId: string, patch: { name?: string; description?: string; avatar?: string }) => Promise<OrgView>;
     resolveAddress: (orgAddress: string) => Promise<OrgAddressRecordDto | null>;
     searchKnown: (keyword: string) => Promise<OrgAddressRecordDto[]>;
   };

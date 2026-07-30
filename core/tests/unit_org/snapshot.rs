@@ -29,6 +29,7 @@ fn sample_record() -> OrganizationRecord {
         org_id: "org_0123456789abcdef".to_string(),
         name: "星火".to_string(),
         description: "desc".to_string(),
+        avatar: String::new(),
         base_plugin_domain: Some("plugin:chat".to_string()),
         created_at: 1000,
         created_by: rid('a'),
@@ -120,6 +121,46 @@ fn gateways_ride_snapshot_summary_and_merge_fallback() {
     let merged = merge_organization_sync_snapshot(Some(&existing), &poisoned, 1);
     assert_eq!(merged.gateways, vec![rid('c')], "metadata 不得注入保留键");
     assert!(!merged.extra.contains_key("gateways"));
+}
+
+#[test]
+fn avatar_rides_snapshot_summary_and_merge_fallback() {
+    let logo = "data:image/png;base64,iVBORw0KGgo=";
+
+    // 构建：avatar 作为 summary 显式字段传播（恒 Some，空串也显式携带），不进 metadata
+    let mut record = sample_record();
+    record.avatar = logo.to_string();
+    let snapshot = build_organization_sync_snapshot(&record, &[]);
+    assert_eq!(snapshot.summary.avatar.as_deref(), Some(logo));
+    let metadata = snapshot.summary.metadata.as_ref().unwrap();
+    assert!(!metadata.contains_key("avatar"), "保留键不进 metadata");
+
+    // 合并：incoming 显式携带 → 以 incoming 为准
+    let merged = merge_organization_sync_snapshot(None, &snapshot, 1);
+    assert_eq!(merged.avatar, logo);
+
+    // incoming 缺省（旧版发送方不携带该字段）→ 保留 existing，不得抹掉本地 logo
+    let mut existing = sample_record();
+    existing.avatar = logo.to_string();
+    let mut bare_snapshot = build_organization_sync_snapshot(&sample_record(), &[]);
+    bare_snapshot.summary.avatar = None; // 模拟旧线形缺省
+    let merged = merge_organization_sync_snapshot(Some(&existing), &bare_snapshot, 1);
+    assert_eq!(merged.avatar, logo);
+
+    // incoming 显式空串 → 清除 logo（"清除"必须能跨节点传播）
+    let cleared_snapshot = build_organization_sync_snapshot(&sample_record(), &[]);
+    assert_eq!(cleared_snapshot.summary.avatar.as_deref(), Some(""));
+    let merged = merge_organization_sync_snapshot(Some(&existing), &cleared_snapshot, 1);
+    assert_eq!(merged.avatar, "");
+
+    // 恶意 metadata 携带保留键 avatar → 合并后被剔除
+    let mut poisoned = cleared_snapshot.clone();
+    let mut metadata = serde_json::Map::new();
+    metadata.insert("avatar".to_string(), Value::from(logo));
+    poisoned.summary.metadata = Some(metadata);
+    let merged = merge_organization_sync_snapshot(Some(&existing), &poisoned, 1);
+    assert_eq!(merged.avatar, "", "metadata 不得注入保留键");
+    assert!(!merged.extra.contains_key("avatar"));
 }
 
 #[test]

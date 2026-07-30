@@ -202,6 +202,46 @@ fn apply_incoming_snapshot_accepts_both_shapes() {
 }
 
 #[test]
+fn apply_incoming_snapshot_propagates_avatar() {
+    let mut storage = MemoryStorage::new();
+    let (admin, mut record) = setup_org(&mut storage);
+
+    // 无 logo 时 OrgView JSON 的 avatar 输出为空串（非丢键，对齐前端契约）
+    let view = OrganizationService::to_view(&record, &admin);
+    assert_eq!(
+        serde_json::to_value(&view).unwrap()["avatar"],
+        serde_json::json!("")
+    );
+
+    let logo = "data:image/png;base64,iVBORw0KGgo=";
+    record.avatar = logo.to_string();
+    OrganizationService::save_record(&mut storage, &record).unwrap();
+
+    // 成员端空存储：原始记录线形（org-share 推送）→ 落库带 avatar
+    let mut member_storage = MemoryStorage::new();
+    let value = serde_json::to_value(&record).unwrap();
+    let merged =
+        OrganizationService::apply_incoming_snapshot(&mut member_storage, &value, NOW + 1).unwrap();
+    assert_eq!(merged.avatar, logo);
+
+    // 快照线形（org-pull 响应）同样携带
+    let snapshot = spark_core::org::snapshot::build_organization_sync_snapshot(&record, &[]);
+    let value2 = serde_json::to_value(&snapshot).unwrap();
+    let merged2 =
+        OrganizationService::apply_incoming_snapshot(&mut member_storage, &value2, NOW + 2).unwrap();
+    assert_eq!(merged2.avatar, logo);
+
+    // listMine 的 OrgView 里可见 avatar
+    let views = OrganizationService::list_mine(&member_storage, &admin).unwrap();
+    assert_eq!(views.len(), 1);
+    assert_eq!(views[0].record.avatar, logo);
+    assert_eq!(
+        serde_json::to_value(&views[0]).unwrap()["avatar"],
+        serde_json::json!(logo)
+    );
+}
+
+#[test]
 fn snapshot_never_carries_org_root_secret() {
     let mut storage = MemoryStorage::new();
     let (_admin, record) = setup_org(&mut storage);

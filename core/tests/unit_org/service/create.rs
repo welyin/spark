@@ -82,6 +82,55 @@ fn create_organization_without_base_plugin_domain() {
 }
 
 #[test]
+fn create_organization_avatar_rules() {
+    let mut storage = MemoryStorage::new();
+    let admin = rid('a');
+    let logo = "data:image/png;base64,iVBORw0KGgo=";
+
+    // 合法 logo：trim 后落记录，create 事务 payload 携带 avatar
+    let mut with_logo = input();
+    with_logo.avatar = Some(format!("  {logo}  "));
+    let record =
+        OrganizationService::create_organization(&mut storage, &with_logo, &admin, NOW).unwrap();
+    assert_eq!(record.avatar, logo);
+    let txs = spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 1)
+        .unwrap();
+    assert_eq!(
+        txs[0].payload.as_ref().unwrap()["avatar"],
+        serde_json::json!(logo)
+    );
+
+    // 省略（None）或空白均视为未设置：空串落记录，payload 不含 avatar 键
+    for avatar in [None, Some("   ".to_string())] {
+        let input = CreateOrganizationInput {
+            avatar,
+            ..input()
+        };
+        let record =
+            OrganizationService::create_organization(&mut storage, &input, &admin, NOW).unwrap();
+        assert_eq!(record.avatar, "");
+        let txs = spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 1)
+            .unwrap();
+        assert!(!txs[0].payload.as_ref().unwrap().contains_key("avatar"));
+    }
+
+    // 非法 logo（非 data:image/ 前缀）：拒绝，不落库
+    let mut bad = input();
+    bad.avatar = Some("https://example.com/logo.png".to_string());
+    assert!(matches!(
+        OrganizationService::create_organization(&mut storage, &bad, &admin, NOW),
+        Err(OrgError::InvalidAvatar(_))
+    ));
+    // 超限 logo（JSON 序列化后 > 200KB）：拒绝
+    let mut bad = input();
+    bad.avatar = Some(format!("data:image/png;base64,{}", "A".repeat(300 * 1024)));
+    assert!(matches!(
+        OrganizationService::create_organization(&mut storage, &bad, &admin, NOW),
+        Err(OrgError::InvalidAvatar(_))
+    ));
+}
+
+#[test]
 fn create_organization_generates_org_root_keypair() {
     let mut storage = MemoryStorage::new();
     let (_admin, record) = setup_org(&mut storage);

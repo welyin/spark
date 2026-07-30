@@ -1,6 +1,6 @@
 //! 组织设置：`setOrgGateways` 规则（数量/成员校验、去重归一、幂等）与
 //! `setOrgPublic`（展示名更新、幂等、存量组织根密钥对懒补齐，org.md §16/§15）、
-//! `updateOrgInfo`（名称/描述更新、幂等、admin 校验）。
+//! `updateOrgInfo`（名称/描述/logo 更新、幂等、admin 校验）。
 
 use super::*;
 
@@ -18,19 +18,33 @@ fn update_org_info_rules() {
             &record.org_id,
             Some("新名字"),
             None,
+            None,
             &rid('x'),
             NOW + 1
         ),
         Err(OrgError::AdminRequired)
     ));
     assert!(matches!(
-        OrganizationService::update_org_info(&mut storage, "org_nope", Some("新名字"), None, &admin, NOW + 1),
+        OrganizationService::update_org_info(&mut storage, "org_nope", Some("新名字"), None, None, &admin, NOW + 1),
         Err(OrgError::OrganizationNotFound)
     ));
     // 名称 trim 后为空：拒绝
     assert!(matches!(
-        OrganizationService::update_org_info(&mut storage, &record.org_id, Some("   "), None, &admin, NOW + 1),
+        OrganizationService::update_org_info(&mut storage, &record.org_id, Some("   "), None, None, &admin, NOW + 1),
         Err(OrgError::Required(_))
+    ));
+    // 非法 logo（非 data:image/ 前缀）：拒绝
+    assert!(matches!(
+        OrganizationService::update_org_info(
+            &mut storage,
+            &record.org_id,
+            None,
+            None,
+            Some("https://example.com/logo.png"),
+            &admin,
+            NOW + 1
+        ),
+        Err(OrgError::InvalidAvatar(_))
     ));
 
     // 更新名称（含 trim 归一），描述不变
@@ -38,6 +52,7 @@ fn update_org_info_rules() {
         &mut storage,
         &record.org_id,
         Some("  星火团队  "),
+        None,
         None,
         &admin,
         NOW + 2,
@@ -63,6 +78,7 @@ fn update_org_info_rules() {
         &record.org_id,
         Some("星火团队"),
         None,
+        None,
         &admin,
         NOW + 99,
     )
@@ -75,6 +91,7 @@ fn update_org_info_rules() {
         &record.org_id,
         None,
         Some("   "),
+        None,
         &admin,
         NOW + 3,
     )
@@ -87,6 +104,77 @@ fn update_org_info_rules() {
         txs[0].payload.as_ref().unwrap()["description"],
         serde_json::json!("")
     );
+}
+
+#[test]
+fn update_org_info_avatar_rules() {
+    let mut storage = MemoryStorage::new();
+    let (admin, record) = setup_org(&mut storage);
+    let logo = "data:image/png;base64,iVBORw0KGgo=";
+
+    // 设置 logo（含 trim）
+    let updated = OrganizationService::update_org_info(
+        &mut storage,
+        &record.org_id,
+        None,
+        None,
+        Some(&format!("  {logo}  ")),
+        &admin,
+        NOW + 1,
+    )
+    .unwrap();
+    assert_eq!(updated.avatar, logo);
+    assert_eq!(updated.updated_at, NOW + 1);
+    assert_eq!(
+        updated.sync.as_ref().unwrap().versions.summary_version,
+        NOW + 1,
+        "与 name/description 同口径：版本字段 = updatedAt"
+    );
+    let txs = spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 1).unwrap();
+    assert_eq!(
+        txs[0].payload.as_ref().unwrap()["avatar"],
+        serde_json::json!(logo)
+    );
+
+    // 幂等：同值重复设置不 bump 版本
+    let same = OrganizationService::update_org_info(
+        &mut storage,
+        &record.org_id,
+        None,
+        None,
+        Some(logo),
+        &admin,
+        NOW + 99,
+    )
+    .unwrap();
+    assert_eq!(same.updated_at, NOW + 1);
+
+    // 空串 = 清除 logo（真实变更，bump 版本）
+    let cleared = OrganizationService::update_org_info(
+        &mut storage,
+        &record.org_id,
+        None,
+        None,
+        Some(""),
+        &admin,
+        NOW + 2,
+    )
+    .unwrap();
+    assert_eq!(cleared.avatar, "");
+    assert_eq!(cleared.updated_at, NOW + 2);
+
+    // 已清除后再传空串：无变化，幂等不 bump
+    let same = OrganizationService::update_org_info(
+        &mut storage,
+        &record.org_id,
+        None,
+        None,
+        Some("  "),
+        &admin,
+        NOW + 99,
+    )
+    .unwrap();
+    assert_eq!(same.updated_at, NOW + 2);
 }
 
 #[test]

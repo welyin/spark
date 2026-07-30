@@ -136,9 +136,8 @@ function messagesApi(): MessagesApi | undefined {
   return (window as unknown as { electronAPI?: ElectronAPI }).electronAPI?.messages;
 }
 
-export function spaceKeyOf(space: { type: 'personal' } | { type: 'org'; orgId: string }): SpaceKey {
-  return space.type === 'org' ? `org:${space.orgId}` : 'personal';
-}
+/** 空间 key 约定（与 mock/contacts 同一份）：唯一定义在 ./space-key，此处 re-export 保持调用方路径不变 */
+export { spaceKeyOf } from './space-key';
 
 function ensureSpace(key: SpaceKey): SpaceData {
   if (!spaces[key]) {

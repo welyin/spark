@@ -134,6 +134,7 @@ fn accept_invite_full_flow() {
         &CreateOrganizationInput {
             name: "邀请组织".to_string(),
             description: None,
+            avatar: None,
             base_plugin_domain: Some("plugin:app".to_string()),
         },
         &admin_root,
@@ -263,6 +264,7 @@ fn org_share_push_delivers_between_kernels() {
         .create_org(CreateOrganizationInput {
             name: "推送组织".to_string(),
             description: None,
+            avatar: None,
             base_plugin_domain: Some("plugin:app".to_string()),
         })
         .unwrap();
@@ -320,6 +322,7 @@ fn accept_invite_two_kernels_full() {
         .create_org(CreateOrganizationInput {
             name: "邀请组织".to_string(),
             description: None,
+            avatar: None,
             base_plugin_domain: Some("plugin:app".to_string()),
         })
         .unwrap();

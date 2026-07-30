@@ -26,8 +26,9 @@
           <button v-for="item in group.items" :key="item.key" type="button" class="gs-item" @click="select(item)">
             <UserAvatar
               v-if="item.kind === 'contact' || item.kind === 'conversation'"
-              :root-id="item.rootId ?? ''"
+              :root-id="item.avatarSeed ?? item.rootId ?? ''"
               :nickname="item.name"
+              :avatar="item.avatarImage ?? ''"
               :size="28"
             />
             <OrgAvatar v-else-if="item.kind === 'org'" :org-id="item.orgId ?? ''" :name="item.name" :size="28" />
@@ -50,11 +51,17 @@ import { Search } from '@element-plus/icons-vue';
 import type { PluginMarketItemDto } from '../api/types';
 import { currentSpace, switchSpace, type CurrentSpace } from '../stores/current-space';
 import { organizations, refreshOrganizations } from '../stores/org-membership';
-import { contactsOf, profileOf, spaceKeyOf as contactsSpaceKeyOf } from '../mock/contacts';
+import {
+  orgMemberAvatarSource,
+  personAvatarSource,
+  personDisplayName
+} from '../stores/avatar-sources';
+import { contactsOf } from '../mock/contacts';
 import { listConversations, spaceKeyOf } from '../mock/messages';
 import { listMockApps } from '../mock/apps';
 import { mockMode } from '../mock/mode';
 import { appIconBackground, marketItemMatches } from './apps/apps-store';
+import { openChat } from './contacts/open-intents';
 import UserAvatar from './UserAvatar.vue';
 import OrgAvatar from './OrgAvatar.vue';
 
@@ -73,6 +80,10 @@ type SearchItem = {
   pluginId?: string;
   orgId?: string;
   iconBackground?: string;
+  /** 头像配色种子：组织成员=rootId@orgId；缺省=rootId */
+  avatarSeed?: string;
+  /** 已上传的头像图片（dataURL）；空/缺省=自动配色头像 */
+  avatarImage?: string;
 };
 
 type SearchGroup = { label: string; items: SearchItem[] };
@@ -115,7 +126,8 @@ export default defineComponent({
       }
       const items: SearchItem[] = [];
       for (const friend of contactsOf('personal').friends) {
-        const name = friend.remark || friend.nickname;
+        // 统一展示名入口（备注>昵称），改备注后搜索结果同步生效
+        const name = personDisplayName('personal', friend.rootId);
         if (matches(kw, name, friend.nickname, friend.rootId)) {
           items.push({
             key: `friend:${friend.rootId}`,
@@ -123,23 +135,26 @@ export default defineComponent({
             name,
             subtitle: friend.remark ? friend.nickname : '个人空间 · 朋友',
             space: { type: 'personal' },
-            rootId: friend.rootId
+            rootId: friend.rootId,
+            avatarImage: personAvatarSource('personal', friend.rootId).image
           });
         }
       }
       for (const org of organizations.value) {
         const space: CurrentSpace = { type: 'org', orgId: org.orgId };
         for (const member of org.members) {
-          const profile = profileOf(contactsSpaceKeyOf(space), member.rootId);
-          const name = profile.remark || shortRootId(member.rootId);
-          if (matches(kw, name, profile.remark, member.rootId, org.name)) {
+          // 统一组织成员入口（备注 > 组织身份昵称），种子 rootId@orgId
+          const avatar = orgMemberAvatarSource(org.orgId, member.rootId, { name: shortRootId(member.rootId) });
+          if (matches(kw, avatar.name, member.rootId, org.name)) {
             items.push({
               key: `member:${org.orgId}:${member.rootId}`,
               kind: 'contact',
-              name,
+              name: avatar.name,
               subtitle: `${org.name} · ${member.role === 'admin' ? '管理员' : '成员'}`,
               space,
-              rootId: member.rootId
+              rootId: member.rootId,
+              avatarSeed: avatar.seed,
+              avatarImage: avatar.image
             });
           }
         }
@@ -159,7 +174,11 @@ export default defineComponent({
       const items: SearchItem[] = [];
       for (const space of spaces) {
         for (const conv of listConversations(spaceKeyOf(space))) {
-          if (matches(kw, conv.title, conv.peerId)) {
+          // 会话名：direct 走统一展示名入口（备注>昵称>原标题，与 ConversationList 的 convName 同写法），
+          // 改备注后搜索结果同步生效；搜索匹配也用展示名
+          const name =
+            conv.kind === 'direct' ? personDisplayName(spaceKeyOf(space), conv.peerId, conv.title) : conv.title;
+          if (matches(kw, name, conv.peerId)) {
             const orgName =
               space.type === 'org'
                 ? organizations.value.find((org) => org.orgId === space.orgId)?.name ?? '组织空间'
@@ -167,11 +186,12 @@ export default defineComponent({
             items.push({
               key: `conv:${spaceKeyOf(space)}:${conv.id}`,
               kind: 'conversation',
-              name: conv.title,
+              name,
               subtitle: orgName,
               space,
               rootId: conv.peerId,
-              conversationId: conv.id
+              conversationId: conv.id,
+              avatarImage: conv.kind === 'direct' ? personAvatarSource(spaceKeyOf(space), conv.peerId).image : ''
             });
           }
         }
@@ -244,11 +264,7 @@ export default defineComponent({
         window.dispatchEvent(new CustomEvent('spark:open-contact', { detail: { rootId: item.rootId } }));
       } else if (item.kind === 'conversation') {
         ensureSpace(item.space);
-        window.dispatchEvent(
-          new CustomEvent('spark:open-chat', {
-            detail: { rootId: item.rootId, name: item.name, conversationId: item.conversationId }
-          })
-        );
+        openChat({ rootId: item.rootId ?? '', name: item.name, conversationId: item.conversationId });
       } else if (item.kind === 'app') {
         window.dispatchEvent(new CustomEvent('spark:open-app', { detail: { id: item.pluginId } }));
       } else if (item.kind === 'org' && item.orgId) {

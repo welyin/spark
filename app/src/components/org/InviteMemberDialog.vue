@@ -43,7 +43,7 @@ import { computed, defineComponent, ref, watch, type PropType } from 'vue';
 import { ElMessage } from 'element-plus';
 import CardInput from '../common/CardInput.vue';
 import { parseCard } from '../../utils/card';
-import { recordOutgoing } from '../../mock/contacts';
+import { recordOutgoing, spaceKeyOf } from '../../mock/contacts';
 import { useNetworkStatus } from '../../stores/network-status';
 
 export default defineComponent({
@@ -122,7 +122,11 @@ export default defineComponent({
         const invite = await window.electronAPI.organization.createInvite(props.orgId);
         inviteResult.value = invite.invite;
         // 「新的成员」里留一条我发出的邀请记录，可看到对方反应/再复制邀请码
-        recordOutgoing(`org:${props.orgId}`, { rootId: card.rootId, source: '名片', inviteCode: invite.invite });
+        recordOutgoing(spaceKeyOf({ type: 'org', orgId: props.orgId }), {
+          rootId: card.rootId,
+          source: '名片',
+          inviteCode: invite.invite
+        });
         ElMessage.success('成员已预录入');
         await props.onInvited();
       } catch (error) {

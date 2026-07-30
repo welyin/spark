@@ -17,7 +17,7 @@ use super::super::types::{
     generate_org_secret, generate_organization_id, generate_recovery_secret,
     normalize_plugin_domain, normalize_text, organization_key,
 };
-use super::super::{Result, org_address};
+use super::super::{OrgError, Result, org_address};
 use super::{CreateOrganizationInput, OrganizationService};
 
 impl OrganizationService {
@@ -36,6 +36,20 @@ impl OrganizationService {
             .map(str::trim)
             .unwrap_or("")
             .to_string();
+        // 组织 logo 可省；空白等同未设置（与 description 归一口径一致），
+        // 非空时按 identity::validate_avatar 同口径校验，非法拒绝
+        let avatar = input
+            .avatar
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| {
+                crate::identity::validate_avatar(value)
+                    .map(|_| value.to_string())
+                    .map_err(|e| OrgError::InvalidAvatar(e.to_string()))
+            })
+            .transpose()?
+            .unwrap_or_default();
         // 基础插件域可省（组织与插件不再强关联，设计 §7.2）；
         // 空白等同未设置（与 description 归一口径一致），非空时校验 `plugin:` 前缀
         let base_plugin_domain = input
@@ -49,6 +63,7 @@ impl OrganizationService {
             org_id: generate_organization_id(),
             name: name.clone(),
             description: description.clone(),
+            avatar: avatar.clone(),
             base_plugin_domain: base_plugin_domain.clone(),
             created_at: now_ms,
             created_by: current_root_id.to_string(),
@@ -87,6 +102,9 @@ impl OrganizationService {
         ]);
         if let Some(domain) = base_plugin_domain {
             tx_payload.insert("basePluginDomain".to_string(), Value::from(domain));
+        }
+        if !avatar.is_empty() {
+            tx_payload.insert("avatar".to_string(), Value::from(avatar));
         }
         let transaction = append_organization_transaction(
             storage,

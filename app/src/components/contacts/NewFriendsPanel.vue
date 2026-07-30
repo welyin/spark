@@ -161,28 +161,22 @@
 
 <script lang="ts">
 import { computed, defineComponent, ref, watch, type PropType } from 'vue';
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { ElMessage } from 'element-plus';
 import { ArrowDown, BottomLeft, TopRight } from '@element-plus/icons-vue';
 import UserAvatar from '../UserAvatar.vue';
 import ContactPanel from './ContactPanel.vue';
-import { currentUser } from '../../stores/current-user';
-import { getProfileExtra } from '../../stores/profile-extra';
 import { personAvatarSource, personDisplayName } from '../../stores/avatar-sources';
+import { friendContactItem } from './contact-item';
+import { useContactActions } from './use-contact-actions';
 import {
   contactsOf,
-  createTag,
   friendOf,
   markRequestRead,
   profileOf,
-  removeFriend,
-  setBlocked,
-  updateProfile,
   type ContactProfile,
-  type ContactTag,
   type FriendPermission,
   type FriendRequest
 } from '../../mock/contacts';
-import type { ContactItem, GroupOption } from './types';
 
 type Direction = 'in' | 'out';
 type Filter = 'all' | Direction;
@@ -279,35 +273,8 @@ export default defineComponent({
       return friendOf(props.spaceKey, entry.request.rootId) ?? null;
     });
 
-    // 与 use-contacts-data 个人空间分支同口径：自己取本地真实资料，其余用内核朋友记录
-    const acceptedContact = computed<ContactItem | null>(() => {
-      const friend = acceptedFriend.value;
-      if (!friend) {
-        return null;
-      }
-      const isSelf = friend.rootId === currentUser.rootId;
-      const extra = isSelf ? getProfileExtra(friend.rootId) : null;
-      const signature = extra ? extra.signature : friend.signature;
-      const gender = extra
-        ? extra.gender === '男'
-          ? ('male' as const)
-          : extra.gender === '女'
-            ? ('female' as const)
-            : undefined
-        : friend.gender;
-      return {
-        rootId: friend.rootId,
-        displayName: friend.remark || friend.nickname,
-        subtitle: signature,
-        // 统一入口：自己→个人身份头像，朋友→朋友记录头像（含同步更新）
-        avatarImage: personAvatarSource(props.spaceKey, friend.rootId).image,
-        signature,
-        gender,
-        nickname: friend.nickname,
-        blocked: friend.blocked,
-        isSelf
-      };
-    });
+    // 与通讯录列表同一映射（components/contacts/contact-item.ts）：自己取本地真实资料，其余用内核朋友记录
+    const acceptedContact = computed(() => (acceptedFriend.value ? friendContactItem(acceptedFriend.value) : null));
 
     const acceptedProfile = computed<ContactProfile | null>(() =>
       acceptedFriend.value ? profileOf(props.spaceKey, acceptedFriend.value.rootId) : null
@@ -315,58 +282,18 @@ export default defineComponent({
 
     const tags = computed(() => contactsOf(props.spaceKey).tags);
 
-    /** 资料卡「分组」下拉（个人空间扁平，'' = 未分组；与 use-contact-groups 同口径） */
-    const groupOptions = computed<GroupOption[]>(() => [
-      { id: '', label: '未分组' },
-      ...contactsOf(props.spaceKey).groups.map((group) => ({ id: group.id, label: group.name }))
-    ]);
-
-    const onSaveProfile = (patch: Partial<ContactProfile>) => {
-      if (acceptedFriend.value) {
-        updateProfile(props.spaceKey, acceptedFriend.value.rootId, patch);
-      }
-    };
-
-    const onSetBlocked = (blocked: boolean) => {
-      if (!acceptedFriend.value) {
-        return;
-      }
-      setBlocked(props.spaceKey, acceptedFriend.value.rootId, blocked);
-      ElMessage.success(blocked ? '已加入黑名单' : '已移出黑名单');
-    };
-
-    const onDeleteFriend = async () => {
-      const contact = acceptedContact.value;
-      if (!contact || contact.isSelf) {
-        return;
-      }
-      try {
-        await ElMessageBox.confirm(`确认删除朋友「${contact.displayName}」？`, '删除朋友', {
-          type: 'warning',
-          confirmButtonText: '删除',
-          cancelButtonText: '取消'
-        });
-      } catch {
-        return;
-      }
-      removeFriend(props.spaceKey, contact.rootId);
-      ElMessage.success('朋友已删除');
-    };
-
-    /** 发送消息：派发 `spark:open-chat`，App.vue 切到消息页并打开/创建 1:1 会话（§5.3） */
-    const onSendMessage = () => {
-      const contact = acceptedContact.value;
-      if (!contact) {
-        return;
-      }
-      window.dispatchEvent(
-        new CustomEvent('spark:open-chat', {
-          detail: { rootId: contact.rootId, name: contact.displayName }
-        })
-      );
-    };
-
-    const onCreateTag = (name: string): ContactTag => createTag(props.spaceKey, name);
+    // 资料卡动作（备注/拉黑/删除/发消息/新建标签）与分组下拉收口在 use-contact-actions；
+    // 本面板无选中态，删除后无需收尾（不传 onDeleted）
+    const contactActions = useContactActions({
+      spaceKey: computed(() => props.spaceKey),
+      contact: acceptedContact
+    });
+    const groupOptions = contactActions.personalGroupOptions;
+    const onSaveProfile = contactActions.saveProfile;
+    const onSetBlocked = contactActions.setBlocked;
+    const onDeleteFriend = contactActions.deleteFriend;
+    const onSendMessage = contactActions.sendMessage;
+    const onCreateTag = contactActions.createTag;
 
     const accept = () => {
       if (activeEntry.value?.dir === 'in') {

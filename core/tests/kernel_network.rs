@@ -40,6 +40,7 @@ fn reconcile_and_keepalive_converge() {
         .create_org(CreateOrganizationInput {
             name: "反熵组织".to_string(),
             description: None,
+            avatar: None,
             base_plugin_domain: Some("plugin:app".to_string()),
         })
         .unwrap();
@@ -130,6 +131,7 @@ fn node_card_import_lands_unverified_pool_entry() {
         .create_org(CreateOrganizationInput {
             name: "名片组织".to_string(),
             description: None,
+            avatar: None,
             base_plugin_domain: Some("plugin:app".to_string()),
         })
         .unwrap();
