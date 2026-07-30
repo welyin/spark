@@ -53,7 +53,15 @@ function hydrate(spaceKey: string, space: SpaceContacts): void {
       hydrating.add(spaceKey);
       try {
         space.friends = dto.friends.map(toFriend);
-        space.requests = dto.requests.map(toRequest);
+        // 内核不持久化已读状态：重启后待处理的收到申请按未读恢复（仍待我处理，
+        // 需要角标/红点提示；查看详情后清除，与在线到达的申请同口径）
+        space.requests = dto.requests.map((item) => {
+          const request = toRequest(item);
+          if (request.status === 'pending') {
+            request.unread = true;
+          }
+          return request;
+        });
         space.outgoing = dto.outgoing.map(toRequest);
         space.tags = dto.tags.map((tag) => ({ ...tag }));
         space.groups = dto.groups.map((group) => ({ ...group }));

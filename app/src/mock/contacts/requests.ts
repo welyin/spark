@@ -61,11 +61,14 @@ export function sendFriendRequest(
   }
 }
 
-/** 重试投递失败的发出申请：重置为 pending 重新投递；终态同样由 FriendRequestSent
- *  事件回写，.catch 仅覆盖命令立即报错（守卫 pending，与事件按 id 收敛） */
+/** 重新发送发出申请：投递失败（对方离线）或等待确认中（对方接受的回执可能
+ *  丢失）均可重发——重置为 pending 重新投递；终态同样由 FriendRequestSent
+ *  事件回写，.catch 仅覆盖命令立即报错（守卫 pending，与事件按 id 收敛）。
+ *  对方已是朋友时会回发 accept 重确认，我方 outbox 经 FriendRequestAccepted
+ *  事件置 accepted 并落成朋友。 */
 export function retryOutgoing(spaceKey: string, requestId: string): void {
   const request = contactsOf(spaceKey).outgoing.find((item) => item.id === requestId);
-  if (!request || request.status !== 'failed') {
+  if (!request || (request.status !== 'failed' && request.status !== 'pending')) {
     return;
   }
   request.status = 'pending';

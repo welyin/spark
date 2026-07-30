@@ -443,10 +443,6 @@
   max-width: 640px;
   margin: 0 auto;
 }
-.request-rootid {
-  word-break: break-all;
-  user-select: text;
-}
 .request-permission {
   display: flex;
   flex-direction: column;

@@ -79,12 +79,11 @@ export function resolveRequest(spaceKey: string, requestId: string, accept: bool
     .catch(() => {});
 }
 
-/** 「新的朋友/新的成员」入口角标：待处理的收到申请 + 任何未读新变化 */
+/** 「新的朋友/新的成员」入口角标：列表中未读条目数（收到的 + 我发出的，
+ *  每条目最多计 1 次；查看详情后 markRequestRead 清除即不计） */
 export function requestBadgeCount(spaceKey: string): number {
   const space = contactsOf(spaceKey);
-  const pending = space.requests.filter((item) => item.status === 'pending').length;
-  const unread = [...space.requests, ...space.outgoing].filter((item) => item.unread).length;
-  return pending + unread;
+  return [...space.requests, ...space.outgoing].filter((item) => item.unread).length;
 }
 
 /** 查看申请详情后清除未读（收到的与我发出的共用 id 前缀，一并扫） */

@@ -30,17 +30,20 @@
       :class="{ active: activeKey === rowKey(entry.dir, entry.request.id) }"
       @click="selectRequest(entry.dir, entry.request.id)"
     >
-      <!-- 方向标识：左下箭头=收到（绿），右上箭头=发出（蓝）；有未读新变化时带红点 -->
+      <!-- 方向标识：左下箭头=收到（绿），右上箭头=发出（蓝） -->
       <el-icon
         :size="13"
         class="dir-icon"
-        :class="[entry.dir, { unread: entry.request.unread }]"
+        :class="entry.dir"
         :title="entry.dir === 'in' ? '收到的申请' : '我发出的'"
       >
         <BottomLeft v-if="entry.dir === 'in'" />
         <TopRight v-else />
       </el-icon>
-      <UserAvatar :root-id="entry.request.rootId" :nickname="entry.request.nickname" :size="40" />
+      <!-- 有未读新变化时头像右上角红点 -->
+      <span class="request-avatar" :class="{ unread: entry.request.unread }">
+        <UserAvatar :root-id="entry.request.rootId" :nickname="entry.request.nickname" :size="40" />
+      </span>
       <span class="request-item-main">
         <b>{{ entry.request.nickname }}</b>
         <span>{{ rowSubtitle(entry.dir, entry.request) }}</span>
@@ -67,10 +70,6 @@
       </div>
 
       <div class="contact-panel-rows">
-        <div class="info-row">
-          <span class="info-label">身份 ID</span>
-          <span class="mono request-rootid">{{ activeEntry.request.rootId }}</span>
-        </div>
         <div class="info-row">
           <span class="info-label">{{ activeEntry.dir === 'in' ? '验证消息' : '我的验证消息' }}</span>
           <span>{{ activeEntry.request.message || '无' }}</span>
@@ -130,6 +129,15 @@
         class="request-detail-actions"
       >
         <el-button type="primary" @click="copyInvite(activeEntry.request.inviteCode)">复制邀请码</el-button>
+      </div>
+
+      <!-- 我发出的：等待确认中也可重新发送（对方接受的回执可能丢失；
+           对方未处理则重新收到申请，已通过则回发确认、双方落成朋友） -->
+      <div
+        v-else-if="activeEntry.dir === 'out' && activeEntry.request.status === 'pending'"
+        class="request-detail-actions"
+      >
+        <el-button type="primary" @click="emit('retry', activeEntry.request.id)">重新发送</el-button>
       </div>
 
       <!-- 已接受（个人空间）：已成为朋友，可查看资料卡 -->
@@ -225,6 +233,28 @@ export default defineComponent({
       replyText.value = '';
       markRead(entries.value.find((entry) => rowKey(entry.dir, entry.request.id) === activeKey.value) ?? null);
     };
+
+    // 添加好友成功（我接受对方 / 对方接受我经事件回写）后，详情直接切到联系人
+    // 资料卡（可编辑备注等）：仅响应同一条目状态迁移为 accepted（含 replied →
+    // accepted），选中历史已接受条目不跳转（`activeKey|status` 复合键，key 变
+    // 化不算迁移）
+    watch(
+      () => `${activeKey.value}|${activeEntry.value?.request.status ?? ''}`,
+      (curr, prev) => {
+        const [prevKey, prevStatus] = (prev ?? '|').split('|');
+        const [currKey, currStatus] = curr.split('|');
+        if (
+          currKey === prevKey &&
+          prevStatus !== '' &&
+          prevStatus !== 'accepted' &&
+          currStatus === 'accepted' &&
+          props.spaceType === 'personal' &&
+          activeEntry.value
+        ) {
+          emit('view-contact', activeEntry.value.request.rootId);
+        }
+      }
+    );
 
     const accept = () => {
       if (activeEntry.value?.dir === 'in') {
@@ -358,15 +388,21 @@ export default defineComponent({
   color: var(--spark-primary);
 }
 
-/* 未读新变化：方向图标右上角红点 */
-.dir-icon.unread::after {
+/* 未读新变化：头像右上角红点（比方向图标角点更显眼，与会话未读红点同风格） */
+.request-avatar {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.request-avatar.unread::after {
   content: '';
   position: absolute;
-  top: -3px;
-  right: -3px;
-  width: 7px;
-  height: 7px;
+  top: -2px;
+  right: -2px;
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
+  border: 2px solid var(--spark-bg-card);
   background: var(--spark-danger);
 }
 

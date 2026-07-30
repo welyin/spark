@@ -458,6 +458,30 @@ fn inbound_friend_accept_builds_friend() {
 }
 
 #[test]
+fn inbound_friend_accept_composite_id_compat() {
+    // 旧版对端回发的 requestId 误带 `{from}:` 复合前缀（其本地入站记录 id），
+    // 接收侧归一化为原始 id 后照常接受
+    let mut s = MemoryStorage::new();
+    let my_root = "aa".repeat(32);
+    let (key, from) = peer_root(7);
+    let outgoing = ContactService::create_outgoing_request(
+        &mut s, &from, "", "hi", "扫码", None, NOW,
+    )
+    .unwrap();
+
+    let body = json!({
+        "requestId": format!("{from}:{}", outgoing.id),
+        "nickname": "对方昵称",
+    });
+    let envelope = dm_envelope::build_envelope("friend-accept", &from, &my_root, NOW, body, &key);
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    assert_eq!(result.response, json!({ "ok": true }));
+    let stored = ContactService::get_outgoing_request(&s, &outgoing.id).unwrap().unwrap();
+    assert_eq!(stored.status, spark_core::contact::FriendRequestStatus::Accepted);
+    assert!(ContactService::get_friend(&s, &from).unwrap().is_some());
+}
+
+#[test]
 fn inbound_friend_accept_forgery_rejected() {
     let my_root = "aa".repeat(32);
     let (key, from) = peer_root(7);
@@ -754,8 +778,69 @@ fn inbound_friend_request_from_self_auto_accept() {
     // auto_accept 回发指令：目标为请求方 nodeInfo，requestId 原样回显
     let auto = result.auto_accept.expect("带 auto_accept 标志");
     assert_eq!(auto.request_id, "req-dev-1");
+    assert_eq!(auto.to_root_id, my_root, "设备配对回发 to=自己");
     assert_eq!(auto.target.peer_id.as_deref(), Some("peer-dev-b"));
     assert_eq!(auto.target.addresses, vec!["/ip4/1.2.3.4/tcp/9001".to_string()]);
+}
+
+#[test]
+fn inbound_friend_request_from_friend_reaccepts() {
+    // 已是朋友（对方曾接受过我的申请，但没收到 accept 回执，其 outbox 仍
+    // pending）又发来申请：不再生成申请，回发 friend-accept 重确认
+    let mut s = MemoryStorage::new();
+    let my_root = "aa".repeat(32);
+    let (key, from) = peer_root(7);
+    ContactService::upsert_friend(&mut s, &friend_record(&from, false)).unwrap();
+    let body = json!({
+        "requestId": "req-retry-1",
+        "nickname": "对方",
+        "nodeInfo": { "peerId": "peer-a", "addresses": ["/ip4/1.2.3.4/tcp/9000"] },
+    });
+    let envelope = dm_envelope::build_envelope("friend-request", &from, &my_root, NOW, body, &key);
+    let result = handle_inbound_dm(&mut s, &my_root, "我昵称", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    assert_eq!(result.response, json!({ "ok": true, "nickname": "我昵称" }));
+
+    let overview = ContactService::overview(&s, PERSONAL).unwrap();
+    assert!(overview.requests.is_empty(), "已是朋友不再生成申请记录");
+    let auto = result.auto_accept.expect("回发 friend-accept 重确认");
+    assert_eq!(auto.request_id, "req-retry-1");
+    assert_eq!(auto.to_root_id, from, "重确认回发 to=请求方");
+    assert_eq!(auto.target.peer_id.as_deref(), Some("peer-a"));
+}
+
+#[test]
+fn inbound_chat_implicitly_accepts_pending_outgoing() {
+    // 我主动发过申请且仍 pending（对方接受了但 accept 回执丢失）：对方先来
+    // 消息即视为已通过——outbox 置 accepted、建朋友、发 FriendRequestAccepted，
+    // 消息照常落库
+    let mut s = MemoryStorage::new();
+    let my_root = "aa".repeat(32);
+    let (key, from) = peer_root(7);
+    let outgoing = ContactService::create_outgoing_request(
+        &mut s, &from, "", "交个朋友", "名片", None, NOW,
+    )
+    .unwrap();
+
+    let body = chat_body(PERSONAL, &from, "msg-1", "在吗");
+    let envelope = dm_envelope::build_envelope("chat", &from, &my_root, NOW, body, &key);
+    let result = handle_inbound_dm(&mut s, &my_root, "我", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    assert_eq!(result.response, json!({ "ok": true }));
+    assert_eq!(result.events.len(), 2, "FriendRequestAccepted + ChatReceived");
+    let P2pEvent::FriendRequestAccepted(data) = &result.events[0] else {
+        panic!("首个事件应为 FriendRequestAccepted");
+    };
+    assert_eq!(data["request"]["id"], json!(outgoing.id));
+    assert_eq!(data["request"]["status"], "accepted");
+    assert_eq!(data["friend"]["rootId"], json!(from));
+
+    let stored = ContactService::get_outgoing_request(&s, &outgoing.id).unwrap().unwrap();
+    assert_eq!(stored.status, spark_core::contact::FriendRequestStatus::Accepted);
+    let friend = ContactService::get_friend(&s, &from).unwrap().expect("隐含确认建朋友");
+    assert_eq!(friend.nickname, "对方昵称", "昵称取消息自报 senderName");
+    let conv = MessageService::find_direct_conversation(&s, PERSONAL, &from).unwrap().unwrap();
+    assert_eq!(conv.title, "对方昵称", "朋友先建，会话标题取朋友昵称");
+    let messages = MessageService::get_messages(&s, PERSONAL, &conv.id).unwrap();
+    assert_eq!(messages.len(), 1, "消息照常落库");
 }
 
 #[test]

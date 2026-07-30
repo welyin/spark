@@ -181,7 +181,7 @@ export function useContactPanel(ctx: ContactPanelContext) {
     ElMessage.success('添加请求已发送，等待对方确认（双向确认 §4.1）');
   };
 
-  /** 重试投递失败的发出申请（对方离线导致连接失败） */
+  /** 重新发送发出申请（投递失败重试 / 等待确认中重发——对方接受回执可能丢失） */
   const onRetryOutgoing = (requestId: string) => {
     retryOutgoing(ctx.spaceKey.value, requestId);
     ElMessage.success('已重新发送，等待对方确认');

@@ -495,8 +495,15 @@ impl Kernel {
         }
         ContactService::upsert_friend(self.require_storage_mut()?, &friend)?;
         if let Some(peer) = &request.peer {
+            // 入站申请记录 id 为复合形式 `{from}:{原 requestId}`（防跨发送者撞 id，
+            // 见 inbound_dm handle_friend_request）；回发必须带原 requestId——对方
+            // outbox 按原始 id 落库，复合 id 查无记录会被拒（对方状态永不更新）
+            let original_request_id = request
+                .id
+                .strip_prefix(&format!("{}:", request.root_id))
+                .unwrap_or(&request.id);
             let mut body = serde_json::json!({
-                "requestId": request.id,
+                "requestId": original_request_id,
                 "nickname": self.my_nickname(my_root_id),
             });
             if let Some(node_info) = self.local_node_info_json() {

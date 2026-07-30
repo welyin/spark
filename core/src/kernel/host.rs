@@ -154,8 +154,9 @@ pub(crate) struct KernelDmHandler {
 }
 
 impl KernelDmHandler {
-    /// 设备配对自动接受的回发：取本机节点信息装配 friend-accept 信封
-    /// （from==to==我，同身份设备间），经节点命令通道尽力投递。
+    /// 自动接受/重确认的回发：取本机节点信息装配 friend-accept 信封
+    /// （设备配对 from==to==我；重确认 to=请求方 rootId），经节点命令通道
+    /// 尽力投递。
     ///
     /// 本方法在阻塞线程池线程内运行（不能 `block_on`）——`tokio::spawn`
     /// 到同一 runtime 驱动（事件循环空闲时处理 DmDirect 命令）；节点未回填或
@@ -175,6 +176,7 @@ impl KernelDmHandler {
             return;
         };
         let from = my_root_id.to_string();
+        let to = auto_accept.to_root_id.clone();
         let nickname = nickname.to_string();
         tokio::spawn(async move {
             let local = node.local_node_info().await.ok();
@@ -188,11 +190,10 @@ impl KernelDmHandler {
                     "addresses": info.addresses,
                 });
             }
-            // from==to==我：同身份设备间信封，验签侧 to==自己 自然通过
             let envelope = dm_envelope::build_envelope(
                 KIND_FRIEND_ACCEPT,
                 &from,
-                &from,
+                &to,
                 system_now_ms(),
                 body,
                 &signing_key,
