@@ -40,6 +40,8 @@ fn request_input(id: &str, root_id: &str, raw: &str) -> SendFriendRequestInput {
         id: id.to_string(),
         root_id: root_id.to_string(),
         raw: raw.to_string(),
+        peer_id: None,
+        addresses: None,
         source: "扫码".to_string(),
         message: "交个朋友".to_string(),
     }
@@ -255,6 +257,85 @@ fn send_request_with_node_card() {
     assert_eq!(outgoing[0].root_id, peer_root);
 }
 
+#[test]
+fn send_request_with_explicit_peer_addresses() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut kernel = fresh_kernel(dir.path());
+    init_identity(&mut kernel);
+    kernel.stop_p2p().unwrap();
+    let peer_root = "ee".repeat(32);
+
+    // 前端已解析名片（spark-card JSON / 名片内容文本）上行 peerId/addresses：
+    // raw 为原文（内核解析不了也不影响），显式字段优先于节点名片解析
+    let record = kernel
+        .contact_send_request(SendFriendRequestInput {
+            id: "req-1".to_string(),
+            root_id: peer_root.clone(),
+            raw: "RootID: ...\nPeerId: ...\nP2P Addresses:\n...".to_string(),
+            peer_id: Some("12D3KooWPeer".to_string()),
+            addresses: Some(vec!["/ip4/192.168.31.98/tcp/15002".to_string()]),
+            source: "名片".to_string(),
+            message: String::new(),
+        })
+        .unwrap();
+    let peer = record.peer.as_ref().unwrap();
+    assert_eq!(peer.peer_id, "12D3KooWPeer");
+    assert_eq!(peer.addresses, vec!["/ip4/192.168.31.98/tcp/15002".to_string()]);
+
+    // 空 addresses 视为未提供，回退后续寻址（此处无名片/组织成员 → 报错）
+    let err = kernel
+        .contact_send_request(SendFriendRequestInput {
+            id: "req-2".to_string(),
+            root_id: peer_root.clone(),
+            raw: "x".to_string(),
+            peer_id: Some("12D3KooWPeer".to_string()),
+            addresses: Some(Vec::new()),
+            source: "名片".to_string(),
+            message: String::new(),
+        })
+        .unwrap_err();
+    assert_eq!(err.to_string(), "无法确定对方节点地址，请使用扫码名片添加");
+}
+
+#[test]
+fn send_request_persists_across_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let peer_root = "ee".repeat(32);
+    let root_id = {
+        let mut kernel = fresh_kernel(dir.path());
+        let (root_id, _) = init_identity(&mut kernel);
+        kernel.stop_p2p().unwrap();
+        kernel
+            .contact_send_request(SendFriendRequestInput {
+                id: "req-1".to_string(),
+                root_id: peer_root.clone(),
+                raw: "名片内容文本".to_string(),
+                peer_id: Some("12D3KooWPeer".to_string()),
+                addresses: Some(vec!["/ip4/192.168.31.98/tcp/15002".to_string()]),
+                source: "名片".to_string(),
+                message: "交个朋友".to_string(),
+            })
+            .unwrap();
+        kernel.shutdown().unwrap();
+        root_id
+    };
+
+    // 重启（重开同一数据目录 + 解锁）：outbox 记录应从库中水合回来
+    let mut kernel = fresh_kernel(dir.path());
+    kernel.unlock(PASSWORD, Some(&root_id)).unwrap();
+    kernel.stop_p2p().unwrap();
+    let outgoing = kernel.contact_overview(PERSONAL).unwrap().outgoing;
+    assert_eq!(outgoing.len(), 1, "重启后发出的申请应仍在");
+    assert_eq!(outgoing[0].id, "req-1");
+    assert_eq!(outgoing[0].root_id, peer_root);
+    assert_eq!(
+        outgoing[0].peer.as_ref().unwrap().addresses,
+        vec!["/ip4/192.168.31.98/tcp/15002".to_string()],
+        "peer 地址随记录持久化（重试/后续投递依赖）"
+    );
+    kernel.shutdown().unwrap();
+}
+
 // ---------------------------------------------------------------------------
 // 好友申请投递终态 / 重试
 // ---------------------------------------------------------------------------
@@ -323,6 +404,8 @@ fn send_request_retry_reuses_stored_record() {
             id: "req-1".to_string(),
             root_id: peer_root.clone(),
             raw: peer_root.clone(),
+            peer_id: None,
+            addresses: None,
             source: "RootID 搜索".to_string(),
             message: "新验证消息".to_string(),
         })

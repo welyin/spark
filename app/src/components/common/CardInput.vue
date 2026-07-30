@@ -3,7 +3,7 @@
     <div
       class="card-upload"
       :class="{ ok: status === 'ok' }"
-      @click="fileInput?.click()"
+      @click="openPicker"
     >
       <input
         ref="fileInput"
@@ -74,7 +74,11 @@ export default defineComponent({
       this.text = '';
       this.fileName = '';
       this.status = 'idle';
-      if (this.fileInput) this.fileInput.value = '';
+      const input = this.$refs.fileInput as HTMLInputElement | undefined;
+      if (input) input.value = '';
+    },
+    openPicker() {
+      (this.$refs.fileInput as HTMLInputElement | undefined)?.click();
     },
     emitValue() {
       this.$emit('update:modelValue', this.decoded || this.text.trim());

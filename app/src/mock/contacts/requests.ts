@@ -17,7 +17,7 @@ import { contactsApi, contactsOf, demoContacts, spaces } from './store';
  */
 export function sendFriendRequest(
   spaceKey: string,
-  input: { rootId: string; raw: string; source: string; message: string }
+  input: { rootId: string; raw: string; peerId?: string; addresses?: string[]; source: string; message: string }
 ): void {
   const space = contactsOf(spaceKey);
   const id = `out-${Date.now()}-${space.outgoing.length}`;
@@ -28,6 +28,8 @@ export function sendFriendRequest(
     message: input.message,
     source: input.source,
     status: 'pending',
+    // 新发出的申请置未读：「新的朋友」入口角标即时提示（查看详情后 markRequestRead 清除）
+    unread: true,
     createdAt: Date.now(),
     updatedAt: Date.now()
   };
@@ -35,7 +37,17 @@ export function sendFriendRequest(
   const api = demoContacts() ? undefined : contactsApi();
   if (api) {
     api
-      .sendRequest({ id, rootId: input.rootId, raw: input.raw, source: input.source, message: input.message })
+      .sendRequest({
+        id,
+        rootId: input.rootId,
+        raw: input.raw,
+        // 名片来源的申请：前端已解析出 peerId/addresses，上行给内核直接寻址
+        // （内核只认签名节点名片，解析不了 spark-card JSON / 名片内容文本）
+        peerId: input.peerId,
+        addresses: input.addresses,
+        source: input.source,
+        message: input.message
+      })
       .catch(() => {
         // 投递失败：对方可能离线，记录保留 + 未读提醒，允许重试
         if (record.status === 'pending') {

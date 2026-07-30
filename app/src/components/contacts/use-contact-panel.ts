@@ -169,7 +169,14 @@ export function useContactPanel(ctx: ContactPanelContext) {
   // 添加：朋友请求 / 申请处理 / 组织成员转个人联系人（§9.3）
   // ------------------------------------------------------------------
 
-  const onAddFriendSubmit = (payload: { rootId: string; raw: string; source: string; message: string }) => {
+  const onAddFriendSubmit = (payload: {
+    rootId: string;
+    raw: string;
+    peerId?: string;
+    addresses?: string[];
+    source: string;
+    message: string;
+  }) => {
     sendFriendRequest(ctx.spaceKey.value, payload);
     ElMessage.success('添加请求已发送，等待对方确认（双向确认 §4.1）');
   };

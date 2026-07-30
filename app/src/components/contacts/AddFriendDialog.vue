@@ -70,6 +70,10 @@ export default defineComponent({
       emit('submit', {
         rootId: card.rootId,
         raw,
+        // 解析出的节点信息一并上行：内核按此直接寻址投递（spark-card JSON /
+        // 名片内容文本内核解析不了，不传则寻址失败、申请直接置失败）
+        peerId: card.peerId,
+        addresses: card.addresses,
         source: '名片',
         message: message.value.trim()
       });

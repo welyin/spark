@@ -30,6 +30,13 @@ pub struct SendFriendRequestInput {
     /// 原始输入（扫码名片串 / 搜索关键字等；能按节点名片解析时取其中
     /// peerId/addresses 作为投递地址）。
     pub raw: String,
+    /// 可省：前端解析名片（spark-card JSON / 名片内容文本）得到的 peerId；
+    /// 与 `addresses` 同时提供时优先于 `raw` 的节点名片解析。
+    #[serde(default)]
+    pub peer_id: Option<String>,
+    /// 可省：前端解析名片得到的 multiaddr 列表（非空才生效）。
+    #[serde(default)]
+    pub addresses: Option<Vec<String>>,
     /// 来源展示文案（如「RootID 搜索」「扫码」）。
     pub source: String,
     /// 验证消息。
@@ -273,9 +280,9 @@ impl Kernel {
     ///    已存记录的 rootId/peer/message/source（忽略本次 `raw` 的名片解析
     ///    ——名片来源的申请重试时 raw 可能只是 rootId，重新寻址必败），重置
     ///    pending 并刷新 updated_at 后重新投递；
-    /// 2. 新申请：已是朋友 → 报错；寻址（`raw` 按节点名片（org.md §17）
-    ///    解析取 peerId/addresses，否则遍历我的组织成员 nodeInfo 匹配
-    ///    rootId）失败报错；
+    /// 2. 新申请：已是朋友 → 报错；寻址（优先入参显式携带的 peerId/addresses
+    ///    （前端已解析名片），否则 `raw` 按节点名片（org.md §17）解析，再否则
+    ///    遍历我的组织成员 nodeInfo 匹配 rootId）失败报错；
     /// 3. outbox 落库 pending（id 用 `input.id`）后立即返回；
     /// 4. 投递 spawn 到 kernel runtime（不在 io_lock 内 block_on 等应答，
     ///    模式同 dm_delivery 的 spawn_chat_delivery），终态经
@@ -508,9 +515,16 @@ impl Kernel {
         Ok(())
     }
 
-    /// 好友申请寻址：名片解析 → 组织成员 nodeInfo；均失败报错。
+    /// 好友申请寻址：前端解析名片上行的 peerId/addresses → 节点名片（raw）
+    /// → 组织成员 nodeInfo；均失败报错。
     fn resolve_request_peer(&self, input: &SendFriendRequestInput) -> Result<PeerRef> {
         let now = system_now_ms();
+        if let Some(addresses) = input.addresses.as_ref().filter(|list| !list.is_empty()) {
+            return Ok(PeerRef {
+                peer_id: input.peer_id.clone().unwrap_or_default(),
+                addresses: addresses.clone(),
+            });
+        }
         if let Ok(card) = crate::org::parse_and_verify_node_card(&input.raw, now) {
             return Ok(PeerRef {
                 peer_id: card.peer_id,
