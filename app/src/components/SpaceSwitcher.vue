@@ -4,14 +4,17 @@
     <el-popover ref="popoverRef" placement="bottom" :width="264" trigger="click" @show="refreshOrganizations">
       <template #reference>
         <button class="space-switcher-trigger" :title="`当前空间：${currentSpaceName}`">
-          <UserAvatar
-            v-if="isPersonal"
-            :root-id="personalSource.seed"
-            :nickname="personalSource.name"
-            :avatar="personalSource.image"
-            :size="26"
-          />
-          <OrgAvatar v-else :org-id="currentOrgId" :name="currentSpaceName" :size="26" />
+          <!-- 任一空间有未读（消息/新的朋友）时头像右上角红点提醒（无数量） -->
+          <span class="space-avatar" :class="{ 'has-dot': anySpaceNotification }">
+            <UserAvatar
+              v-if="isPersonal"
+              :root-id="personalSource.seed"
+              :nickname="personalSource.name"
+              :avatar="personalSource.image"
+              :size="26"
+            />
+            <OrgAvatar v-else :org-id="currentOrgId" :name="currentSpaceName" :size="26" />
+          </span>
           <span class="space-switcher-name">{{ currentSpaceName }}</span>
           <el-icon :size="12" class="space-switcher-arrow"><ArrowDown /></el-icon>
         </button>
@@ -19,7 +22,9 @@
 
       <div class="space-menu">
         <button class="space-menu-item" :class="{ active: isPersonal }" @click="selectPersonal">
-          <UserAvatar :root-id="personalSource.seed" :nickname="personalSource.name" :avatar="personalSource.image" :size="26" />
+          <span class="space-avatar" :class="{ 'has-dot': personalNotification }">
+            <UserAvatar :root-id="personalSource.seed" :nickname="personalSource.name" :avatar="personalSource.image" :size="26" />
+          </span>
           <span class="space-menu-name">个人空间</span>
           <el-icon v-if="isPersonal" class="space-menu-check"><Check /></el-icon>
         </button>
@@ -34,7 +39,9 @@
               :class="{ active: !isPersonal && currentOrgId === org.orgId }"
               @click="selectOrg(org.orgId)"
             >
-              <OrgAvatar :org-id="org.orgId" :name="org.name" :size="26" />
+              <span class="space-avatar" :class="{ 'has-dot': orgNotification(org.orgId) }">
+                <OrgAvatar :org-id="org.orgId" :name="org.name" :size="26" />
+              </span>
               <span class="space-menu-name">{{ org.name }}</span>
               <el-icon v-if="!isPersonal && currentOrgId === org.orgId" class="space-menu-check"><Check /></el-icon>
             </button>
@@ -70,6 +77,7 @@ import { ElMessage } from 'element-plus';
 import { ArrowDown, Check, Connection, Plus } from '@element-plus/icons-vue';
 import { currentSpace, currentSpaceOrgId, switchToOrg, switchToPersonal } from '../stores/current-space';
 import { organizations, refreshOrganizations as refreshOrgMembership } from '../stores/org-membership';
+import { hasSpaceNotification } from '../stores/space-notifications';
 import { setOrgAvatar } from '../stores/org-avatars';
 import { personalAvatarSource } from '../stores/avatar-sources';
 import UserAvatar from './UserAvatar.vue';
@@ -101,6 +109,13 @@ export default defineComponent({
 
     const isPersonal = computed(() => currentSpace.value.type === 'personal');
     const currentOrgId = currentSpaceOrgId;
+
+    // 空间级未读提醒（红点、无数量）：任一未读消息或未读新朋友/成员申请即点亮
+    const personalNotification = computed(() => hasSpaceNotification('personal'));
+    const orgNotification = (orgId: string) => hasSpaceNotification(`org:${orgId}`);
+    const anySpaceNotification = computed(
+      () => personalNotification.value || organizations.value.some((org) => orgNotification(org.orgId))
+    );
 
     const currentSpaceName = computed(() => {
       if (isPersonal.value) {
@@ -213,6 +228,9 @@ export default defineComponent({
       openJoinDialog,
       acceptInvite,
       createOrganization,
+      personalNotification,
+      orgNotification,
+      anySpaceNotification,
       // 个人空间头像统一从 avatar-sources 取数（种子=rootId），不再经 props 透传
       personalSource: computed(() => personalAvatarSource())
     };
@@ -223,6 +241,25 @@ export default defineComponent({
 <style scoped>
 .space-switcher {
   display: inline-flex;
+}
+
+/* 头像右上角未读红点（无数量），描边跟随卡片底色避免与头像粘连 */
+.space-avatar {
+  position: relative;
+  flex-shrink: 0;
+  display: inline-flex;
+}
+
+.space-avatar.has-dot::after {
+  content: '';
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 2px solid var(--spark-bg-card);
+  background: var(--spark-danger);
 }
 
 .space-switcher-trigger {

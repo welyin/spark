@@ -494,6 +494,12 @@ export const totalUnread = computed(() => {
   return total;
 });
 
+/** 某空间是否有未读消息（免打扰会话不计；首次访问触发该空间水合，
+ *  与 contactsOf 同模式——在 computed/渲染中调用即可保持响应式） */
+export function hasUnreadMessages(key: SpaceKey): boolean {
+  return ensureSpace(key).conversations.some((conv) => !conv.muted && conv.unreadCount > 0);
+}
+
 // TODO: 标题未读数（§7.1）已实现；系统托盘角标与任务栏徽标待真实通知能力
 watch(
   totalUnread,

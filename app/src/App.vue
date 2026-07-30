@@ -39,6 +39,15 @@
             <el-badge v-if="item.id === 'messages'" :value="totalUnread" :max="99" :hidden="totalUnread === 0">
               <el-icon :size="20"><component :is="item.icon" /></el-icon>
             </el-badge>
+            <!-- 通讯录入口挂「新的朋友/成员」未读角标（当前空间） -->
+            <el-badge
+              v-else-if="item.id === 'contacts'"
+              :value="contactsBadge"
+              :max="99"
+              :hidden="contactsBadge === 0"
+            >
+              <el-icon :size="20"><component :is="item.icon" /></el-icon>
+            </el-badge>
             <el-icon v-else :size="20"><component :is="item.icon" /></el-icon>
             <span class="rail-label">{{ item.label }}</span>
           </button>
@@ -127,6 +136,7 @@ import { ElMessage } from 'element-plus';
 import { ChatDotRound, Cpu, Grid, Notebook, Setting } from '@element-plus/icons-vue';
 import { getPluginView } from './plugin-view-registry';
 import { totalUnread } from './mock/messages';
+import { requestBadgeCount, spaceKeyOf } from './mock/contacts';
 import {
   currentSpace,
   currentSpaceOrgId,
@@ -200,6 +210,9 @@ export default defineComponent({
       { id: 'contacts', label: '通讯录', icon: Notebook },
       { id: 'apps', label: '应用', icon: Grid }
     ];
+
+    /** 通讯录入口角标：当前空间「新的朋友/成员」未读条目数 */
+    const contactsBadge = computed(() => requestBadgeCount(spaceKeyOf(currentSpace.value)));
 
     const activePluginTab = computed(() => {
       return pluginTabs.value.find((tab) => tab.id === activeTab.value) ?? null;
@@ -350,6 +363,7 @@ export default defineComponent({
       toggleRail,
       navItems,
       totalUnread,
+      contactsBadge,
       activePluginTab,
       pluginFrameSrc,
       handleMenuSelect,
