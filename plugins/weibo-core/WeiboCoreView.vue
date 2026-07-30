@@ -146,8 +146,8 @@
 <script lang="ts">
 import { computed, defineComponent, onMounted, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
-import { initializePluginSDK } from '../../app/src/plugin-sdk-browser';
-import type { PluginSDK } from '../../app/src/plugin-sdk-browser';
+import { ensurePluginSDK } from '../../packages/plugin-sdk/src';
+import type { PluginSDK } from '../../packages/plugin-sdk/src';
 import { buildCommentThread, canPublishPost, validateWeiboText, type WeiboCommentNode } from './model';
 import { WeiboCoreService } from './service';
 
@@ -237,7 +237,9 @@ export default defineComponent({
 
     const ensureSdk = async () => {
       if (!sdk.value) {
-        sdk.value = await initializePluginSDK();
+        // SDK 由壳层在插件 tab 启动时注入 window.__sparkPluginSDK，
+        // 挂起等待注入完成（对齐原 initializePluginSDK 的异步时序）
+        sdk.value = await ensurePluginSDK();
         service.value = new WeiboCoreService(sdk.value);
       }
       return sdk.value;

@@ -1,9 +1,13 @@
-import { registerPluginView } from '../../app/src/plugin-view-registry';
+import { definePlugin, type PluginManifest } from '../../packages/plugin-sdk/src';
 import WeiboCoreView from './WeiboCoreView.vue';
-import { WEIBO_CORE_PLUGIN_MANIFEST } from './manifest';
+import manifestJson from './manifest.json';
 
-registerPluginView(
-  WEIBO_CORE_PLUGIN_MANIFEST.domain,
-  WEIBO_CORE_PLUGIN_MANIFEST.entryView,
-  WeiboCoreView
-);
+// JSON import 的类型是放宽后的结构（views.type 推为 string），此处收敛到 PluginManifest
+const manifest = manifestJson as PluginManifest;
+
+export default definePlugin({
+  manifest,
+  setup(ctx) {
+    ctx.registerView('default', WeiboCoreView);
+  }
+});

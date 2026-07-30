@@ -85,4 +85,5 @@
 - `src/components/apps/AppDetailPanel.vue:108` | 无卸载按钮 | `pluginMarket` 无 `uninstall` 接口（设计 §4.1 有卸载语义），待内核补接口
 - `src/pages/AppsPage.vue:274` | 联系管理员 toast 占位 | 非管理员点「启用」按 §5.2 弹确认框；点联系管理员仅 toast，待打开与管理员 1:1 聊天并发送应用链接卡片（§5.2 第 4-5 步，可复用 `spark:open-chat` 链路）
 - `src/stores/pending-app.ts` | 跨页「打开应用详情」请求（全局搜索→应用页详情视图） | 联动链路已通；条目来自真实 pluginMarket.list + mock 合并列表
+- 插件入口契约已落地 | 插件与壳层双向耦合已消除：独立 SDK 包 `@spark/plugin-sdk`（`../packages/plugin-sdk`，纯类型 + `definePlugin` 入口契约 + `getPluginSDK`/`ensurePluginSDK` 全局注入点读取），插件侧只依赖该包 + 声明式 `manifest.json`（`../plugins/weibo-core`）；壳层 `plugin-loader.ts` 读默认导出、校验 manifest 后调 `setup(ctx)` 桥接注册；插件测试已迁至 `../plugins/weibo-core/tests/` | iframe 运行时（独立窗口/宿主绑定域/强制权限校验）仍待做
 - 未做条目 | 拖拽移动分组（现为右键菜单）、分组重命名/删除、开发者模式安装未签名应用（§6.2） | 拖拽为体验增强；开发者模式待内核验签策略

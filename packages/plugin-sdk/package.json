@@ -1,0 +1,11 @@
+{
+  "name": "@spark/plugin-sdk",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Spark 插件 SDK：纯类型 + 入口契约（definePlugin），零运行时依赖",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

@@ -1,5 +1,5 @@
 //! 插件市场内置目录（vendored 自 TS desktop/src/main/plugins/catalog.ts，
-//! 与 code/plugins/weibo-core/manifest.ts 的 package 字段保持一致）。
+//! 与 code/plugins/weibo-core/manifest.json 的 package 字段保持一致）。
 //!
 //! 本期为静态 vendored：远端目录服务未排期；新增插件 = 在此追加条目 +
 //! 打包脚本/发布 workflow 跟进（见 code/plugins/README.md）。

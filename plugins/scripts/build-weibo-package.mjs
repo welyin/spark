@@ -31,7 +31,7 @@ const workspaceRoot = path.resolve(codeRoot, '..');
 
 /** 打进 .spkg 的插件源文件（插件运行全量，deterministic 顺序）。 */
 const sourceFiles = [
-  'manifest.ts',
+  'manifest.json',
   'index.ts',
   'model.ts',
   'service.ts',

@@ -5,7 +5,7 @@ import {
   canPublishPost,
   validateWeiboText,
   type WeiboComment
-} from '../../../../plugins/weibo-core/model';
+} from '../model';
 
 describe('weibo-core model', () => {
   it('enforces publish permission to organization admins only', () => {

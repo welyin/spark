@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { WeiboCoreService, WEIBO_COLLECTIONS } from '../../../../plugins/weibo-core/service';
+import { WeiboCoreService, WEIBO_COLLECTIONS } from '../service';
 
 function createMockSdk() {
   return {

@@ -84,24 +84,29 @@ function requireDomain(pluginDomain: string | undefined): string {
  * 插件目录静态清单（vendored 自 TS main/plugins/catalog.ts）。
  * 插件运行时（安装/验签/独立窗口）本期不在壳范围，目录本身是纯静态数据，
  * 经 plugin.listCatalog 下发给前端（组织与插件无绑定，不参与建组织）。
+ * 重复字段（id/domain/name/version/views/package）派生自插件仓库内的
+ * manifest.json（code/plugins/weibo-core），消除双份维护；目录专属文案
+ * （description）与市场侧字段（signatureUrl/installCommand/permissions 展示口径）
+ * 仍在此保留。
  */
+import weiboCoreManifest from '../../../plugins/weibo-core/manifest.json';
+
 const PLUGIN_CATALOG: PluginCatalogItem[] = [
   {
-    id: 'weibo-core',
-    domain: 'plugin:weibo-core',
-    name: '组织微博基础插件',
+    id: weiboCoreManifest.id,
+    domain: weiboCoreManifest.domain,
+    name: weiboCoreManifest.name,
     description: '单主管理员发帖，组织成员评论/回复，基于插件域独立数据同步。',
     category: 'foundation' as const,
-    version: '0.1.0',
-    views: ['default'],
+    version: weiboCoreManifest.version,
+    views: weiboCoreManifest.views.map((view) => view.id),
     permissions: ['org:sync'],
     package: {
-      updateManifestUrl:
-        'https://github.com/welyin/spark/releases/latest/download/spark-plugin-weibo-core-manifest.json',
+      updateManifestUrl: weiboCoreManifest.package.updateManifestUrl,
       signatureUrl:
         'https://github.com/welyin/spark/releases/latest/download/spark-plugin-weibo-core-manifest.sig',
-      packageName: 'spark-plugin-weibo-core-0.1.0.spkg',
-      installCommand: 'spark-plugin install spark-plugin-weibo-core-0.1.0.spkg'
+      packageName: weiboCoreManifest.package.packageName,
+      installCommand: `spark-plugin install ${weiboCoreManifest.package.packageName}`
     }
   }
 ];
