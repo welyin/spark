@@ -10,9 +10,10 @@
 
 use base64::Engine;
 
-/// 内置默认公钥（TS trust.ts `DEFAULT_PLUGIN_PUBLIC_KEYS_PEM`，与旧世界一致）。
+/// 内置默认公钥（与 code/.secrets/spark-update-signing-private-key.pem 配对，
+/// 2026-07 统一密钥对，替换旧世界遗留公钥）。
 pub(crate) const DEFAULT_PLUGIN_PUBLIC_KEYS_PEM: [&str; 1] = [
-    "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAEIZeVVpcZ4HdWRzYhxNcXRNOH56yhcP8QQnAjvZSHBY=\n-----END PUBLIC KEY-----",
+    "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAtjpU+LsmJAd1H8OSkFLIEqd5fSGPj+G38TwfddtU6P0=\n-----END PUBLIC KEY-----",
 ];
 
 /// Ed25519 SPKI DER 前缀（id-Ed25519 算法标识 + bit string 头）。
@@ -132,6 +133,6 @@ pub(crate) mod tests {
         }
         // 未设置 env 时回落内置默认公钥
         assert_eq!(get_plugin_trust_config().len(), 1);
-        assert!(get_plugin_trust_config()[0].contains("MCowBQYDK2VwAyEAEIZeVVpc"));
+        assert!(get_plugin_trust_config()[0].contains("MCowBQYDK2VwAyEAtjpU+Lsm"));
     }
 }
