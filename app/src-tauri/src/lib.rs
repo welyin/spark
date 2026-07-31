@@ -151,6 +151,7 @@ pub fn run() {
             commands::contact::contact_send_request,
             commands::contact::contact_resolve_request,
             commands::contact::contact_reply_request,
+            commands::contact::contact_ask_request,
             commands::contact::contact_tag_create,
             commands::contact::contact_tag_rename,
             commands::contact::contact_tag_delete,

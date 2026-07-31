@@ -1,5 +1,5 @@
 //! 联系人命令：contact-overview/send-request/accept-request/reply-request/
-//! remove-friend/block-root。
+//! ask-request/remove-friend/block-root。
 
 use serde_json::{Value, json};
 use spark_core::kernel::{Kernel, SendFriendRequestInput};
@@ -55,6 +55,14 @@ pub fn reply_request(kernel: &mut Kernel, params: &Params) -> Result<Value, Stri
     let request_id = params.need_str("requestId")?;
     let text = params.need_str("text")?;
     to_json(kernel.contact_reply_request(request_id, text))
+}
+
+/// `ask-request`：接收方主动向申请方发起询问（本地 thread + 投递 friend-reply，
+/// requestId 为复合 id `{from}:{原id}`）。
+pub fn ask_request(kernel: &mut Kernel, params: &Params) -> Result<Value, String> {
+    let request_id = params.need_str("requestId")?;
+    let text = params.need_str("text")?;
+    to_json(kernel.contact_ask_request(request_id, text))
 }
 
 /// `remove-friend`：删除朋友（block=true 同时拉黑）。

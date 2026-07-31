@@ -53,6 +53,7 @@
       @resolve="onResolveRequest"
       @retry="onRetryOutgoing"
       @reply="onReplyOutgoing"
+      @ask="onAskRequest"
     />
 
     <!-- 标签：第三栏标签列表 + 第四栏成员管理（四栏结构，同新的朋友） -->
@@ -226,6 +227,7 @@ export default defineComponent({
       onResolveRequest,
       onRetryOutgoing,
       onReplyOutgoing,
+      onAskRequest,
       onAddAsFriend,
       onCreateTagReturn
     } = useContactPanel({
@@ -286,6 +288,7 @@ export default defineComponent({
       onResolveRequest,
       onRetryOutgoing,
       onReplyOutgoing,
+      onAskRequest,
       onAddAsFriend,
       onCreateTagReturn
     };

@@ -26,6 +26,7 @@
 
 mod contact_group_ops;
 mod contact_ops;
+mod contact_request_ops;
 mod dm_delivery;
 mod doc_ops;
 pub mod dm_envelope;

@@ -85,6 +85,14 @@ pub(crate) fn reply_request_inner(
     kernel.contact_reply_request(request_id, text).map_err(err)
 }
 
+pub(crate) fn ask_request_inner(
+    kernel: &mut Kernel,
+    request_id: &str,
+    text: &str,
+) -> Result<FriendRequestRecord, String> {
+    kernel.contact_ask_request(request_id, text).map_err(err)
+}
+
 pub(crate) fn tag_create_inner(
     kernel: &mut Kernel,
     space: &str,
@@ -287,6 +295,17 @@ pub fn contact_reply_request(
     text: String,
 ) -> Result<FriendRequestRecord, String> {
     reply_request_inner(&mut *lock_kernel(&state)?, &request_id, &text)
+}
+
+/// 向对方（申请方）主动发起询问（本地 inbox thread 追加、status 保持
+/// pending 并尽力投递 friend-reply 信封；返回更新后的申请记录）。
+#[tauri::command]
+pub fn contact_ask_request(
+    state: tauri::State<'_, KernelState>,
+    request_id: String,
+    text: String,
+) -> Result<FriendRequestRecord, String> {
+    ask_request_inner(&mut *lock_kernel(&state)?, &request_id, &text)
 }
 
 /// 新建标签（id 前端生成透传）。

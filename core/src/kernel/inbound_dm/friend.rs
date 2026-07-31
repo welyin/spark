@@ -287,12 +287,13 @@ pub(super) fn handle_friend_accept<S: StorageBackend>(
 /// status 置 replied + FriendRequestSent 事件）→ 本端 inbox 复合 id
 /// `{from}:{requestId}` 命中且 pending（对方=原申请方回答我的询问，
 /// thread 追加、status 不变 + FriendRequestReceived 事件）→ 皆不命中
-/// 回 `invalid-body`。
+/// 回 `invalid-body`。两分支均带重试重投幂等：投递层退避重试可能让同一
+/// 信封到达两次（首投成功但应答帧丢失），尾条同人同文即视为重放，
+/// 跳过追加并直接回 ok（不重复落库、不重发事件）。
 ///
-/// 分期说明：inbox 分支（对方回答我的询问）的应答链路完整，但「接收方主动
-/// 发起询问」的出站命令未实装——前端已定稿，收到的申请只有接受/忽略入口
-/// （ui-contacts §4 的询问 UI 未做），协议与入站匹配先行支持（其他客户端/
-/// 未来 UI 可对接）。
+/// 出站命令：接收方主动发起询问 `Kernel::contact_ask_request`、申请方答复
+/// `Kernel::contact_reply_request`（contact_request_ops.rs）——本地落
+/// thread 后投递同 kind 信封，由本函数在对端按上述方向匹配落库。
 pub(super) fn handle_friend_reply<S: StorageBackend>(
     storage: &mut S,
     ctx: &InboundContext<'_>,
@@ -329,6 +330,16 @@ pub(super) fn handle_friend_reply<S: StorageBackend>(
                 FriendRequestStatus::Pending | FriendRequestStatus::Replied
             );
         if valid {
+            // 重试重投幂等：投递层带退避重试，首投成功但应答帧丢失时同一
+            // friend-reply 会再次到达——尾条同人同文即重放，跳过追加仍回 ok
+            // （窗口内重放只可能重复尾条；不重复追加也不重发事件）
+            if record
+                .thread
+                .last()
+                .is_some_and(|m| m.from == ThreadFrom::Peer && m.text == text)
+            {
+                return done(ok_response(), Vec::new());
+            }
             let record = ContactService::append_outgoing_thread(storage, request_id, msg.clone(), ctx.now_ms)?
                 .expect("outgoing request just fetched");
             let event = P2pEvent::FriendRequestSent(json!({
@@ -344,6 +355,14 @@ pub(super) fn handle_friend_reply<S: StorageBackend>(
     if let Some(record) = ContactService::get_incoming_request(storage, &inbox_id)?
         && record.status == FriendRequestStatus::Pending
     {
+        // 重试重投幂等（同 outbox 分支注释）
+        if record
+            .thread
+            .last()
+            .is_some_and(|m| m.from == ThreadFrom::Peer && m.text == text)
+        {
+            return done(ok_response(), Vec::new());
+        }
         let record = ContactService::append_incoming_thread(storage, &inbox_id, msg, ctx.now_ms)?
             .expect("incoming request just fetched");
         let event = P2pEvent::FriendRequestReceived(json!({

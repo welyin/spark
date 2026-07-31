@@ -243,6 +243,7 @@ export function createTauriApi(): ElectronAPI {
       removeFriend: (rootId, block) => call('contact-remove-friend', rootId, block),
       sendRequest: (input) => call('contact-send-request', input),
       replyRequest: (requestId, text) => call('contact-reply-request', requestId, text),
+      askRequest: (requestId, text) => call('contact-ask-request', requestId, text),
       resolveRequest: (requestId, accept, permission) =>
         call('contact-resolve-request', requestId, accept, permission),
       tagCreate: (spaceKey, id, name) => call('contact-tag-create', spaceKey, id, name),

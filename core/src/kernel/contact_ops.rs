@@ -1,6 +1,7 @@
 //! 通讯录门面（`Kernel` 的通讯录 API）：空间总览、资料/拉黑薄封装，
 //! 以及好友申请出站（名片寻址 + dm 信封投递）与入站确认编排。
-//! 标签/分组/组织分组树在 `contact_group_ops.rs`（本文件长度上限拆出）。
+//! 标签/分组/组织分组树在 `contact_group_ops.rs`、好友申请来回回复
+//! （询问/答复）在 `contact_request_ops.rs`（本文件长度上限拆出）。
 //!
 //! 标签/分组/组织树的 id 一律由前端生成传入（contact 服务层的 `*_with_id`
 //! 变体落库）；好友申请/确认的投递为尽力而为——投递 spawn 到 kernel
@@ -10,13 +11,12 @@
 
 use serde::Deserialize;
 
-use super::dm_envelope::{KIND_FRIEND_ACCEPT, KIND_FRIEND_REPLY, KIND_FRIEND_REQUEST};
+use super::dm_envelope::{KIND_FRIEND_ACCEPT, KIND_FRIEND_REQUEST};
 use super::{Kernel, KernelError, Result};
 use crate::contact::{
-    ContactService, FriendRecord, FriendRequestRecord, FriendRequestStatus, PeerRef,
-    ProfilePatch, RequestThreadMessage, SpaceContactsView, ThreadFrom,
+    ContactService, FriendRecord, FriendRequestRecord, FriendRequestStatus, PeerRef, ProfilePatch,
+    SpaceContactsView,
 };
-use crate::message::MAX_TEXT_BYTES;
 use crate::org::OrganizationService;
 use crate::p2p::{P2pEvent, PeerNodeInfo};
 use crate::p2p::node::system_now_ms;
@@ -464,59 +464,6 @@ impl Kernel {
             }
         }
         Ok(())
-    }
-
-    /// 回复对方的询问（好友申请的来回回复，ui-contacts §4）：本地 outbox
-    /// thread 追加 from=me（status 回 pending 等待对方），并向对方尽力投递
-    /// friend-reply 信封（`spawn_deliveries` 无应答处理，同
-    /// [`Self::accept_request_side_effects`]；p2p 未运行则跳过投递不置失败
-    /// ——回复无失败 UI，本地记录已落）。不发额外事件（与
-    /// [`Self::contact_resolve_request`] 一致，命令返回记录由前端本地收敛）。
-    ///
-    /// text trim 后为空或超 [`MAX_TEXT_BYTES`]、申请不存在、非 replied 状态
-    /// （前端只在 replied 开放回复框）或记录无 peer 寻址（不重解析名片，复用
-    /// 已存 peer 先例同重试路径）时报错。
-    pub fn contact_reply_request(
-        &mut self,
-        request_id: &str,
-        text: &str,
-    ) -> Result<FriendRequestRecord> {
-        let __io = std::sync::Arc::clone(&self.io_lock);
-        let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        self.require_unlocked_root_id()?;
-        let text = text.trim();
-        if text.is_empty() || text.len() > MAX_TEXT_BYTES {
-            return Err(KernelError::Internal("回复内容为空或过长".to_string()));
-        }
-        let now = system_now_ms();
-        let Some(record) = ContactService::get_outgoing_request(self.require_storage()?, request_id)?
-        else {
-            return Err(KernelError::Internal("申请不存在".to_string()));
-        };
-        if record.status != FriendRequestStatus::Replied {
-            return Err(KernelError::Internal("当前状态不可回复".to_string()));
-        }
-        if record.peer.is_none() {
-            return Err(KernelError::Internal("无法确定对方节点地址".to_string()));
-        }
-        let msg = RequestThreadMessage {
-            from: ThreadFrom::Me,
-            text: text.to_string(),
-            ts: now,
-        };
-        let record =
-            ContactService::append_outgoing_thread(self.require_storage_mut()?, request_id, msg, now)?
-                .expect("outgoing request just fetched");
-        let body = super::dm_envelope::friend_reply_body(&record.id, text);
-        if let Ok(envelope) = self.build_dm_envelope(KIND_FRIEND_REPLY, &record.root_id, body) {
-            let peer = record.peer.as_ref().expect("checked above");
-            let target = PeerNodeInfo {
-                peer_id: (!peer.peer_id.is_empty()).then(|| peer.peer_id.clone()),
-                addresses: peer.addresses.clone(),
-            };
-            self.spawn_deliveries(vec![(target, envelope)]);
-        }
-        Ok(record)
     }
 
     /// 好友申请寻址：前端解析名片上行的 peerId/addresses → 节点名片（raw）

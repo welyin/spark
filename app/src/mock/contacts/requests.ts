@@ -114,25 +114,61 @@ export function replyOutgoing(spaceKey: string, requestId: string, text: string)
   if (new TextEncoder().encode(trimmed).length > REPLY_MAX_BYTES) {
     return;
   }
-  (request.thread ??= []).push({ from: 'me', text: trimmed, ts: Date.now() });
+  const optimistic = { from: 'me' as const, text: trimmed, ts: Date.now() };
+  (request.thread ??= []).push(optimistic);
   request.status = 'pending';
   request.updatedAt = Date.now();
   const api = demoContacts() ? undefined : contactsApi();
   if (api) {
     api.replyRequest(requestId, trimmed).catch(() => {
-      // 命令拒绝（状态守卫等）：回滚乐观更新，保持与内核一致
+      // 命令拒绝（状态守卫等）：回滚乐观更新，保持与内核一致。按对象
+      // 引用摘除——按文本匹配会在连续两条同文回复时误摘后发的这条
       const thread = request.thread ?? [];
-      for (let i = thread.length - 1; i >= 0; i -= 1) {
-        if (thread[i].from === 'me' && thread[i].text === trimmed) {
-          thread.splice(i, 1);
-          break;
-        }
+      const idx = thread.indexOf(optimistic);
+      if (idx >= 0) {
+        thread.splice(idx, 1);
       }
       request.status = 'replied';
       request.updatedAt = Date.now();
     });
   } else {
     simulatePeerFollowUp(spaceKey, requestId);
+  }
+}
+
+/**
+ * 收到的申请：向对方（申请方）主动发起询问（接收方侧的来回回复入口）。
+ * 我询问后状态保持 pending（申请仍待我接受/忽略），对方答复经
+ * FriendRequestReceived 事件续接 thread。Tauri 下由内核投递 friend-reply
+ * 信封：本地先乐观更新，命令失败（状态守卫/超长等）时回滚本地 thread，
+ * 避免与内核静默分叉。无桥接/demo 模式走本地模拟对方回答。
+ */
+export function askIncoming(spaceKey: string, requestId: string, text: string): void {
+  const request = contactsOf(spaceKey).requests.find((item) => item.id === requestId);
+  const trimmed = text.trim();
+  if (!request || !trimmed || request.status !== 'pending') {
+    return;
+  }
+  if (new TextEncoder().encode(trimmed).length > REPLY_MAX_BYTES) {
+    return;
+  }
+  const optimistic = { from: 'me' as const, text: trimmed, ts: Date.now() };
+  (request.thread ??= []).push(optimistic);
+  request.updatedAt = Date.now();
+  const api = demoContacts() ? undefined : contactsApi();
+  if (api) {
+    api.askRequest(requestId, trimmed).catch(() => {
+      // 命令拒绝（状态守卫等）：回滚乐观更新，保持与内核一致。按对象
+      // 引用摘除——按文本匹配会在连续两条同文询问时误摘后发的这条
+      const thread = request.thread ?? [];
+      const idx = thread.indexOf(optimistic);
+      if (idx >= 0) {
+        thread.splice(idx, 1);
+      }
+      request.updatedAt = Date.now();
+    });
+  } else {
+    simulatePeerAnswer(spaceKey, requestId);
   }
 }
 
@@ -185,6 +221,27 @@ function simulatePeerReaction(spaceKey: string, requestId: string): void {
     if (reaction.status === 'accepted') {
       acceptAsFriend(spaceKey, request);
     }
+  }, 4000);
+}
+
+/**
+ * 模拟对方（申请方）回答我的询问（4 秒后）：thread 追加 from=peer，status
+ * 保持 pending（申请仍待我接受/忽略），对齐内核 inbox 分支语义。仅当申请
+ * 仍 pending 且我已发起过询问才生效。
+ */
+function simulatePeerAnswer(spaceKey: string, requestId: string): void {
+  setTimeout(() => {
+    const request = spaces[spaceKey]?.requests.find((item) => item.id === requestId);
+    if (!request || request.status !== 'pending') {
+      return;
+    }
+    const meCount = (request.thread ?? []).filter((msg) => msg.from === 'me').length;
+    if (meCount === 0) {
+      return;
+    }
+    (request.thread ??= []).push({ from: 'peer', text: '我是你之前的同事小王', ts: Date.now() });
+    request.updatedAt = Date.now();
+    request.unread = true;
   }, 4000);
 }
 

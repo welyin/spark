@@ -6,7 +6,7 @@ mod common;
 use spark_core::contact::{
     ContactService, FriendRecord, FriendRequestRecord, FriendRequestStatus, PeerRef, ProfilePatch,
 };
-use spark_core::kernel::SendFriendRequestInput;
+use spark_core::kernel::{Kernel, SendFriendRequestInput};
 use spark_core::p2p::P2pEvent;
 use spark_core::p2p::node::system_now_ms;
 
@@ -633,4 +633,71 @@ fn remove_friend_with_block_writes_blocked_set() {
     let view = kernel.contact_overview(PERSONAL).unwrap();
     let friend = view.friends.iter().find(|f| f.root_id == peer_root).unwrap();
     assert!(friend.blocked, "重新加回后仍以拉黑集合为准");
+}
+
+#[test]
+fn ask_request_state_gate_and_thread() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut kernel = fresh_kernel(dir.path());
+    init_identity(&mut kernel);
+    kernel.stop_p2p().unwrap();
+    let peer_root = "ee".repeat(32);
+
+    // 申请不存在 / 空文本
+    let err = kernel.contact_ask_request("req-nope", "请问你是哪位？").unwrap_err();
+    assert_eq!(err.to_string(), "申请不存在");
+    let err = kernel.contact_ask_request("req-nope", "   ").unwrap_err();
+    assert_eq!(err.to_string(), "询问内容为空或过长");
+
+    let seed = |kernel: &mut Kernel, id: &str, status: FriendRequestStatus, peer: Option<PeerRef>| {
+        ContactService::put_incoming_request(
+            &mut kernel.__test_storage().unwrap(),
+            &FriendRequestRecord {
+                id: id.to_string(),
+                root_id: peer_root.clone(),
+                nickname: "申请人".to_string(),
+                avatar: None,
+                message: "hi".to_string(),
+                source: "扫码".to_string(),
+                status,
+                created_at: NOW,
+                updated_at: NOW,
+                peer,
+                thread: Vec::new(),
+                invite_code: None,
+            },
+        )
+        .unwrap();
+    };
+
+    // 无 peer 寻址：报错（不重解析名片，同 reply 先例）
+    seed(&mut kernel, "req-noaddr", FriendRequestStatus::Pending, None);
+    let err = kernel.contact_ask_request("req-noaddr", "请问你是哪位？").unwrap_err();
+    assert_eq!(err.to_string(), "无法确定对方节点地址");
+
+    let peer = || {
+        Some(PeerRef {
+            peer_id: "peer-1".to_string(),
+            addresses: vec![],
+        })
+    };
+
+    // 非 pending（已 accepted）不可询问
+    seed(&mut kernel, "req-accepted", FriendRequestStatus::Accepted, peer());
+    let err = kernel.contact_ask_request("req-accepted", "请问你是哪位？").unwrap_err();
+    assert_eq!(err.to_string(), "当前状态不可询问");
+
+    // pending → 询问成功：status 保持 pending（仍待我接受/忽略），thread 追加
+    // from=me（trim 后落库）；p2p 未运行跳过投递
+    seed(&mut kernel, "req-1", FriendRequestStatus::Pending, peer());
+    let record = kernel.contact_ask_request("req-1", " 请问你是哪位？ ").unwrap();
+    assert_eq!(record.status, FriendRequestStatus::Pending);
+    assert_eq!(record.thread.len(), 1);
+    assert_eq!(record.thread[0].text, "请问你是哪位？", "trim 后落库");
+    let storage = kernel.__test_storage().unwrap();
+    let stored = ContactService::get_incoming_request(&storage, "req-1")
+        .unwrap()
+        .expect("inbox 记录已落库");
+    assert_eq!(stored.status, FriendRequestStatus::Pending);
+    assert_eq!(stored.thread.len(), 1);
 }

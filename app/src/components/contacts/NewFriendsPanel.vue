@@ -1,7 +1,7 @@
 <!-- 新的朋友/新的成员（通讯录第三、四栏，ui-contacts §2.2）：
      第三栏=收到的申请与我发出的混排列表（按时间倒序，行首箭头区分收/发，右上角可筛选）；
      点击行在第四栏展示详情。收到的申请：接受前选择「向其开放的权限」（§6，仅个人空间），
-     已接受（个人空间）直接内嵌联系人资料卡（可编辑备注等）；我发出的：展示对方反应（等待确认/已回复询问/已拒绝/已接受/
+     接受/忽略前可「询问」对方（来回互复，§4），已接受（个人空间）直接内嵌联系人资料卡（可编辑备注等）；我发出的：展示对方反应（等待确认/已回复询问/已拒绝/已接受/
      连接失败可重试），组织邀请可复制邀请码。与个人设置模块同构，以 fragment 渲染两栏 -->
 <template>
   <!-- 第三栏：申请列表（收发混排，按时间倒序） -->
@@ -124,9 +124,16 @@
           </el-radio-group>
           <!-- TODO(mock): 按插件细分的子开关（§6.2）待插件数据共享落地后实现 -->
         </div>
+        <!-- 接收方主动询问：点开输入框发送，thread 展示更新（交互同申请方回复框；
+             仅个人空间——组织空间走邀请码流程，入站申请无 peer 寻址可询问） -->
+        <div v-if="spaceType === 'personal' && askEditorVisible" class="request-reply-editor">
+          <el-input v-model="askText" placeholder="询问对方…" @keydown.enter.prevent="sendAsk" />
+          <el-button type="primary" @click="sendAsk">发送</el-button>
+        </div>
         <div class="request-detail-actions">
           <el-button type="primary" @click="accept">接受</el-button>
           <el-button @click="ignore">忽略</el-button>
+          <el-button v-if="spaceType === 'personal'" @click="toggleAskEditor">询问</el-button>
         </div>
       </template>
 
@@ -193,11 +200,14 @@ export default defineComponent({
     /** 所属空间 key（查看详情时清除未读） */
     spaceKey: { type: String, required: true }
   },
-  emits: ['resolve', 'retry', 'reply'],
+  emits: ['resolve', 'retry', 'reply', 'ask'],
   setup(props, { emit }) {
     const activeKey = ref('');
     const filter = ref<Filter>('all');
     const replyText = ref('');
+    /** 收到的申请：询问输入框（点开「询问」展开，发送后保留展开看 thread 更新） */
+    const askText = ref('');
+    const askEditorVisible = ref(false);
     /** 接受时向其开放的权限（§6），每次切换申请重置为默认「开放」 */
     const permission = ref<FriendPermission>('open');
 
@@ -250,6 +260,8 @@ export default defineComponent({
       activeKey.value = rowKey(dir, id);
       permission.value = 'open';
       replyText.value = '';
+      askText.value = '';
+      askEditorVisible.value = false;
       markRead(entries.value.find((entry) => rowKey(entry.dir, entry.request.id) === activeKey.value) ?? null);
     };
 
@@ -315,6 +327,19 @@ export default defineComponent({
       }
     };
 
+    /** 展开/收起询问输入框（收到的待处理申请） */
+    const toggleAskEditor = () => {
+      askEditorVisible.value = !askEditorVisible.value;
+    };
+
+    /** 向对方（申请方）主动发起询问（status 保持 pending 等我接受/忽略） */
+    const sendAsk = () => {
+      if (activeEntry.value?.dir === 'in' && askText.value.trim()) {
+        emit('ask', activeEntry.value.request.id, askText.value.trim());
+        askText.value = '';
+      }
+    };
+
     const copyInvite = async (inviteCode: string) => {
       try {
         await navigator.clipboard.writeText(inviteCode);
@@ -370,12 +395,16 @@ export default defineComponent({
       onFilterCommand,
       permission,
       replyText,
+      askText,
+      askEditorVisible,
       entries,
       rowKey,
       selectRequest,
       accept,
       ignore,
       sendReply,
+      toggleAskEditor,
+      sendAsk,
       copyInvite,
       statusLabel,
       statusTagType,

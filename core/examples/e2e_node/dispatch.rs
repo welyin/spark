@@ -91,6 +91,7 @@ pub fn handle_line(text: &str, kernel: &mut Kernel) -> bool {
         "send-request" => contact::send_request(kernel, &params),
         "accept-request" => contact::accept_request(kernel, &params),
         "reply-request" => contact::reply_request(kernel, &params),
+        "ask-request" => contact::ask_request(kernel, &params),
         "remove-friend" => contact::remove_friend(kernel, &params),
         "block-root" => contact::block_root(kernel, &params),
         // 消息

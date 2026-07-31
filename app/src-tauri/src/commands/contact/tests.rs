@@ -327,6 +327,66 @@ fn reply_request_state_gate_and_thread() {
 }
 
 #[test]
+fn ask_request_state_gate_and_thread() {
+    use spark_core::contact::{FriendRequestRecord, FriendRequestStatus, PeerRef};
+
+    let (_dir, mut kernel) = unlocked_kernel();
+    // 申请不存在
+    assert_eq!(
+        ask_request_inner(&mut kernel, "req_nope", "请问你是哪位？").unwrap_err(),
+        "申请不存在"
+    );
+    // 空文本
+    assert_eq!(
+        ask_request_inner(&mut kernel, "req_nope", "   ").unwrap_err(),
+        "询问内容为空或过长"
+    );
+
+    let bob = "bb".repeat(32);
+    let seed = |kernel: &mut Kernel, status: FriendRequestStatus| {
+        let record = FriendRequestRecord {
+            id: "req-1".to_string(),
+            root_id: bob.clone(),
+            nickname: String::new(),
+            message: "hi".to_string(),
+            source: "扫码".to_string(),
+            status,
+            created_at: 1,
+            updated_at: 1,
+            peer: Some(PeerRef {
+                peer_id: "peer-1".to_string(),
+                addresses: vec![],
+            }),
+            thread: Vec::new(),
+            invite_code: None,
+            avatar: None,
+        };
+        let mut storage = kernel.__test_storage().unwrap();
+        ContactService::put_incoming_request(&mut storage, &record).unwrap();
+    };
+
+    // 非 pending 不可询问（已处理申请不再受理）
+    seed(&mut kernel, FriendRequestStatus::Accepted);
+    assert_eq!(
+        ask_request_inner(&mut kernel, "req-1", "请问你是哪位？").unwrap_err(),
+        "当前状态不可询问"
+    );
+
+    // pending → 询问成功：status 保持 pending、thread 追加 from=me（p2p 未运行跳过投递）
+    seed(&mut kernel, FriendRequestStatus::Pending);
+    let record = ask_request_inner(&mut kernel, "req-1", " 请问你是哪位？ ").unwrap();
+    assert_eq!(record.status, FriendRequestStatus::Pending);
+    assert_eq!(record.thread.len(), 1);
+    assert_eq!(record.thread[0].text, "请问你是哪位？", "trim 后落库");
+    let storage = kernel.__test_storage().unwrap();
+    let stored = ContactService::get_incoming_request(&storage, "req-1")
+        .unwrap()
+        .expect("inbox 记录已落库");
+    assert_eq!(stored.status, FriendRequestStatus::Pending);
+    assert_eq!(stored.thread.len(), 1);
+}
+
+#[test]
 fn send_request_unaddressable_errors() {
     let (_dir, mut kernel) = unlocked_kernel();
     // raw 既不是节点名片、组织成员里也没有该 rootId → 寻址失败

@@ -9,6 +9,7 @@ import { organizations } from '../../stores/org-membership';
 import { consumePendingContact, pendingContact } from '../../stores/pending-contact';
 import {
   profileOf,
+  askIncoming,
   replyOutgoing,
   resolveRequest,
   retryOutgoing,
@@ -167,6 +168,11 @@ export function useContactPanel(ctx: ContactPanelContext) {
     replyOutgoing(ctx.spaceKey.value, requestId, text);
   };
 
+  /** 收到的申请：向对方（申请方）主动发起询问（status 保持 pending 等我处理） */
+  const onAskRequest = (requestId: string, text: string) => {
+    askIncoming(ctx.spaceKey.value, requestId, text);
+  };
+
   const onResolveRequest = (requestId: string, accept: boolean, permission: FriendPermission) => {
     // TODO(mock): 组织空间的「接受」仅本地改状态；真实流程走邀请码（§4.2）
     resolveRequest(ctx.spaceKey.value, requestId, accept, permission);
@@ -209,6 +215,7 @@ export function useContactPanel(ctx: ContactPanelContext) {
     onResolveRequest,
     onRetryOutgoing,
     onReplyOutgoing,
+    onAskRequest,
     onAddAsFriend,
     onCreateTagReturn
   };

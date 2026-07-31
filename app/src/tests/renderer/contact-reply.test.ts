@@ -5,7 +5,7 @@
 //   （对方新询问 = 未读新变化，与 failed 同口径）。
 import { describe, expect, it, vi } from 'vitest';
 import type { FriendRequestDto } from '../../api';
-import { contactsOf, replyOutgoing } from '../../mock/contacts';
+import { contactsOf, askIncoming, replyOutgoing } from '../../mock/contacts';
 import { handleContactsP2pEvent } from '../../mock/contacts/store';
 
 const PERSONAL = 'personal';
@@ -137,6 +137,46 @@ describe('好友申请回复桥接', () => {
       const record = space.outgoing.find((item) => item.id === 'req-rollback');
       expect(record?.status).toBe('replied');
       expect(record?.thread?.some((msg) => msg.text === '我是李四')).toBe(false);
+    } finally {
+      delete (window as any).__TAURI_INTERNALS__;
+      delete (window as any).electronAPI;
+    }
+  });
+
+  it('桥接投递询问：askRequest 以 (requestId, trim 后 text) 调用，本地先收敛', async () => {
+    const askRequest = vi.fn().mockResolvedValue(makeRequest('req-in-1', 'pending'));
+    (window as any).__TAURI_INTERNALS__ = {};
+    (window as any).electronAPI = { contacts: { askRequest } };
+    try {
+      const space = contactsOf(PERSONAL);
+      space.requests.push(makeRequest('req-in-1', 'pending'));
+
+      askIncoming(PERSONAL, 'req-in-1', ' 请问你是哪位？ ');
+
+      expect(askRequest).toHaveBeenCalledWith('req-in-1', '请问你是哪位？');
+      const record = space.requests.find((item) => item.id === 'req-in-1');
+      expect(record?.status).toBe('pending');
+      expect(record?.thread?.[record.thread.length - 1]).toMatchObject({ from: 'me', text: '请问你是哪位？' });
+    } finally {
+      delete (window as any).__TAURI_INTERNALS__;
+      delete (window as any).electronAPI;
+    }
+  });
+
+  it('询问命令拒绝时回滚乐观更新（thread 摘除）', async () => {
+    const askRequest = vi.fn().mockRejectedValue(new Error('当前状态不可询问'));
+    (window as any).__TAURI_INTERNALS__ = {};
+    (window as any).electronAPI = { contacts: { askRequest } };
+    try {
+      const space = contactsOf(PERSONAL);
+      space.requests.push(makeRequest('req-in-rollback', 'pending'));
+
+      askIncoming(PERSONAL, 'req-in-rollback', '请问你是哪位？');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      const record = space.requests.find((item) => item.id === 'req-in-rollback');
+      expect(record?.status).toBe('pending');
+      expect(record?.thread?.some((msg) => msg.text === '请问你是哪位？')).toBe(false);
     } finally {
       delete (window as any).__TAURI_INTERNALS__;
       delete (window as any).electronAPI;

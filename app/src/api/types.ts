@@ -465,6 +465,7 @@ export type ElectronAPI = {
     removeFriend: (rootId: string, block?: boolean) => Promise<{ success: boolean }>;
     sendRequest: (input: { id: string; rootId: string; raw: string; peerId?: string; addresses?: string[]; source: string; message: string }) => Promise<FriendRequestDto>;
     replyRequest: (requestId: string, text: string) => Promise<FriendRequestDto>;
+    askRequest: (requestId: string, text: string) => Promise<FriendRequestDto>;
     resolveRequest: (requestId: string, accept: boolean, permission: FriendPermissionDto) => Promise<{ success: boolean }>;
     tagCreate: (spaceKey: string, id: string, name: string) => Promise<ContactTagDto>;
     tagRename: (spaceKey: string, tagId: string, name: string) => Promise<{ success: boolean }>;
