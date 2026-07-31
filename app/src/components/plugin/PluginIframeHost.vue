@@ -60,7 +60,7 @@ import { createBridgeHost, type BridgeHost } from '../../../../packages/plugin-s
 import { buildPluginHostSrcdoc, fetchPluginManifest } from '../../plugin-source';
 import { createPluginBridgeDispatcher } from '../../plugin-bridge-dispatcher';
 import { createPluginWatchdog, type PluginWatchdog } from '../../plugin-watchdog';
-import { registerMainViewInstance, unregisterMainViewInstance } from '../../plugin-card-actions';
+import { pluginSpaceKey, registerMainViewInstance, unregisterMainViewInstance } from '../../plugin-card-actions';
 import {
   disablePluginInstance,
   enablePluginInstance,
@@ -120,7 +120,7 @@ export default defineComponent({
       watchdog = null;
       // 主视图实例登记清理（仅清自己：同插件新实例已接管时不误删）
       if (host) {
-        unregisterMainViewInstance(props.pluginId, props.space.id, host);
+        unregisterMainViewInstance(props.pluginId, pluginSpaceKey(props.space), host);
       }
       host?.destroy();
       host = null;
@@ -220,8 +220,8 @@ export default defineComponent({
           return;
         }
         status.value = 'ready';
-        // 登记主视图实例：message-card 的按钮回调经 plugin-card-actions 路由到本实例
-        registerMainViewInstance(props.pluginId, props.space.id, host);
+        // 登记主视图实例：message-card 的按钮回调经 plugin-card-actions 按空间路由到本实例
+        registerMainViewInstance(props.pluginId, pluginSpaceKey(props.space), host);
         watchdog?.startHeartbeat();
       } catch {
         // 过期代的失败不计数不落地（新一代已接管，避免误记 ready 前错误）

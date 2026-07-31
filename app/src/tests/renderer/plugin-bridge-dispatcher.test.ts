@@ -208,15 +208,37 @@ describe('messages 域（应用会话 §20，pluginId/space 由桥注入）', ()
   });
 
   it('personal 空间注入：space key 为 personal', async () => {
-    mockGrantedPermissions(['message:app']);
+    // 独立插件身份，与其他用例无顺序耦合
+    mockGrantedPermissions(['message:app'], 'weibo-personal');
     const handler = await createPluginBridgeDispatcher({
       ...BASE_IDENTITY,
+      pluginId: 'weibo-personal',
+      domain: 'plugin:weibo-personal',
       space: { type: 'personal', id: 'personal' },
       supportedSpaces: ['personal', 'org']
     });
     await handler('messages', 'sendAppMessage', [{ summary: '个人空间通知' }]);
-    expect(getConversation('personal', 'app:weibo-core')?.kind).toBe('app');
-    expect(getConversation('org:org_1', 'app:weibo-core')?.unreadCount).toBe(1); // 上一用例的会话不受影响
+    expect(getConversation('personal', 'app:weibo-personal')?.kind).toBe('app');
+    expect(getConversation('personal', 'app:weibo-personal')?.unreadCount).toBe(1);
+    expect(getConversation('org:org_1', 'app:weibo-personal')).toBeUndefined();
+  });
+
+  it('message:app 授权通过：listAppMessages/markRead 走绑定身份的应用会话', async () => {
+    // 独立插件身份，与其他用例无顺序耦合
+    mockGrantedPermissions(['message:app'], 'weibo-reader');
+    const handler = await createPluginBridgeDispatcher({
+      ...BASE_IDENTITY,
+      pluginId: 'weibo-reader',
+      domain: 'plugin:weibo-reader'
+    });
+    await handler('messages', 'sendAppMessage', [{ summary: '一条' }]);
+    const list = (await handler('messages', 'listAppMessages', [])) as AppMessageDto[];
+    expect(list).toHaveLength(1);
+    expect(list[0].pluginId).toBe('weibo-reader');
+    expect(list[0].summary).toBe('一条');
+    await expect(handler('messages', 'markRead', [])).resolves.toEqual({ success: true });
+    expect(getConversation('org:org_1', 'app:weibo-reader')?.unreadCount).toBe(0);
+    expect(getAppMessages('org:org_1', 'app:weibo-reader').every((msg) => msg.read)).toBe(true);
   });
 
   it('message-card 视图：有 message:app 授权也拒绝应用会话读写（仅卡片回调经 action 上行）', async () => {

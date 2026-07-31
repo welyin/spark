@@ -10,11 +10,15 @@ import {
   openConversation,
   closeConversation,
   sendAppMessageLocal,
+  totalUnread,
+  hasUnreadMessages,
+  mergeAppMessages,
   unreadCountOf,
   type ChatMessage,
   type Conversation
 } from './messages';
 import { toggleAppConversationBlocked } from '../stores/app-conversations';
+import type { AppMessageDto } from '../api/types';
 
 let fixtureSeq = 0;
 
@@ -182,5 +186,57 @@ describe('应用消息内存镜像（§20，非 Tauri 环境）', () => {
     expect(unreadCountOf(key)).toBe(0);
     toggleAppConversationBlocked(key, 'weibo-core');
     expect(unreadCountOf(key)).toBe(1);
+  });
+});
+
+describe('应用消息内存镜像补充（pluginId 校验 / system 豁免 / 屏蔽聚合 / merge 排序）', () => {
+  it('pluginId 校验：非法 id 一律拒绝（invalid-plugin-id，与内核错误前缀一致）', () => {
+    const key = 'test:app-pid';
+    expect(() => sendAppMessageLocal(key, 'Weibo-Core', { summary: 'x' })).toThrow(/^invalid-plugin-id/);
+    expect(() => sendAppMessageLocal(key, 'evil/plugin', { summary: 'x' })).toThrow(/^invalid-plugin-id/);
+    expect(() => sendAppMessageLocal(key, '-bad', { summary: 'x' })).toThrow(/^invalid-plugin-id/);
+    // 校验先于落库与限流：不产生会话
+    expect(getConversation(key, 'app:Weibo-Core')).toBeUndefined();
+  });
+
+  it('内置 system 会话豁免限流（与内核 message_app_send 同口径）', () => {
+    const key = 'test:app-rl-system';
+    for (let i = 0; i < 12; i += 1) {
+      sendAppMessageLocal(key, 'system', { summary: `系统通知${i}` });
+    }
+    expect(getAppMessages(key, 'app:system')).toHaveLength(12);
+  });
+
+  it('totalUnread/hasUnreadMessages：被屏蔽会话不计入聚合（取消屏蔽恢复）', () => {
+    const key = 'test:app-blocked-agg';
+    const baseline = totalUnread.value;
+    sendAppMessageLocal(key, 'weibo-core', { summary: '通知' });
+    expect(hasUnreadMessages(key)).toBe(true);
+    expect(totalUnread.value).toBe(baseline + 1);
+    toggleAppConversationBlocked(key, 'weibo-core');
+    expect(hasUnreadMessages(key)).toBe(false);
+    expect(totalUnread.value).toBe(baseline);
+    toggleAppConversationBlocked(key, 'weibo-core');
+    expect(totalUnread.value).toBe(baseline + 1);
+  });
+
+  it('mergeAppMessages：按 id 合并后按 createdAt 升序归位（水合期间本地新增不串序）', () => {
+    const key = 'test:app-merge';
+    const local = sendAppMessageLocal(key, 'weibo-core', { summary: '本地新消息' });
+    const history = (id: string, createdAt: number): AppMessageDto => ({
+      id,
+      pluginId: 'weibo-core',
+      summary: id,
+      payload: { summary: id },
+      createdAt,
+      status: 'local',
+      read: true
+    });
+    // 内核快照只含水合前的历史（时间早于本地新增）
+    mergeAppMessages(key, 'app:weibo-core', [
+      history('h1', local.createdAt - 2000),
+      history('h2', local.createdAt - 1000)
+    ]);
+    expect(getAppMessages(key, 'app:weibo-core').map((m) => m.id)).toEqual(['h1', 'h2', local.id]);
   });
 });

@@ -32,8 +32,9 @@ export function appConversationId(pluginId: string): string {
 
 /**
  * 写入应用消息：payload 必须含非空 summary（内核/内存镜像同口径校验，
- * 错误前缀 missing-summary/summary-too-long；每插件每会话限流 10 条/60s，
- * 超限 rate-limited）。
+ * 错误前缀 missing-summary/summary-too-long/invalid-plugin-id；每插件每会话
+ * 限流 10 条/60s，超限 rate-limited；内置 system 会话豁免限流，见内核
+ * message_app_send 注释）。
  */
 export async function sendAppMessage(
   spaceKey: string,
@@ -61,8 +62,22 @@ export async function listAppMessages(spaceKey: string, pluginId: string): Promi
   return dtos;
 }
 
-/** 清零应用会话未读（本地缓存与内核一并清零，语义与人际会话一致） */
+/**
+ * 清零应用会话未读（本地缓存与内核一并清零，语义与人际会话一致）。
+ * Tauri 下透传内核调用结果：失败返回 success:false（本地缓存仍清零，
+ * 调用方可按结果提示/重试）；mock markRead 内部的 appMarkRead 为幂等重复调用。
+ */
 export async function markAppMessagesRead(spaceKey: string, pluginId: string): Promise<{ success: boolean }> {
+  const api = messagesApi();
+  if (!api) {
+    markConversationRead(spaceKey, appConversationId(pluginId));
+    return { success: true };
+  }
+  try {
+    await api.appMarkRead(spaceKey, pluginId);
+  } catch {
+    return { success: false };
+  }
   markConversationRead(spaceKey, appConversationId(pluginId));
   return { success: true };
 }
@@ -72,13 +87,13 @@ export async function markAppMessagesRead(spaceKey: string, pluginId: string): P
 // 本波只接「插件安装/升级成功」一条真实通知源作为样板，其余通知源待接（TODO.md）。
 // ------------------------------------------------------------------
 
-/** 插件安装成功系统通知（fire-and-forget：通知写入失败不影响安装主流程） */
+/** 插件安装成功系统通知（fire-and-forget：通知写入失败不影响安装主流程，留 warn 线索） */
 export function notifyPluginInstalled(spaceKey: string, pluginName: string): void {
   void sendAppMessage(spaceKey, SYSTEM_APP_PLUGIN_ID, {
     summary: `应用「${pluginName}」安装成功，启用后即可使用`,
     kind: 'plugin-installed',
     pluginName
-  }).catch(() => {});
+  }).catch((error) => console.warn('[app-messages] 插件安装系统通知写入失败', error));
 }
 
 /** 插件升级成功系统通知（fire-and-forget，同安装口径） */
@@ -87,5 +102,5 @@ export function notifyPluginUpgraded(spaceKey: string, pluginName: string): void
     summary: `应用「${pluginName}」已更新到最新版本`,
     kind: 'plugin-upgraded',
     pluginName
-  }).catch(() => {});
+  }).catch((error) => console.warn('[app-messages] 插件升级系统通知写入失败', error));
 }

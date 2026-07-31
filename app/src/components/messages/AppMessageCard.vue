@@ -27,7 +27,7 @@ import type { PluginContext, PluginSpaceContext } from '../../../../packages/plu
 import { createBridgeHost, type BridgeHost } from '../../../../packages/plugin-sdk/src/bridge/host';
 import { buildPluginHostSrcdoc, fetchPluginManifest } from '../../plugin-source';
 import { createPluginBridgeDispatcher } from '../../plugin-bridge-dispatcher';
-import { registerCard, routeCardAction, unregisterCard } from '../../plugin-card-actions';
+import { pluginSpaceKey, registerCard, routeCardAction, unregisterCard } from '../../plugin-card-actions';
 import { themeMode } from '../../stores/theme';
 
 /** 高度上下限（壳层封顶 400px，设计文档「UI 集成点」） */
@@ -64,8 +64,10 @@ export default defineComponent({
     const status = ref<'loading' | 'ready' | 'failed'>('loading');
     const height = ref(CARD_DEFAULT_HEIGHT);
 
-    // cardId 由壳层签发（插件自报一律忽略，见 onAction）；登记进归属映射
-    const cardId = `${props.pluginId}:${props.messageId}`;
+    // cardId 由壳层签发（编入 spaceKey：跨空间不撞、路由按空间精确匹配；
+    // 插件自报一律忽略，见 onAction）；登记进归属映射
+    const spaceKey = pluginSpaceKey(props.space);
+    const cardId = `${props.pluginId}:${spaceKey}:${props.messageId}`;
     const srcdoc = computed(() =>
       buildPluginHostSrcdoc(props.pluginId, {
         viewType: 'message-card',
@@ -97,6 +99,15 @@ export default defineComponent({
       }
       const manifest = await fetchPluginManifest(props.pluginId);
       if (gen !== generation) {
+        return;
+      }
+      // 握手前校验：卡片视图必须在该插件 manifest.views 中声明为 message-card
+      // （渲染未声明视图一律降级摘要；manifest 读取失败无法校验，同样降级）
+      const viewDeclared = manifest?.views.some(
+        (view) => view.id === props.viewId && view.type === 'message-card'
+      );
+      if (!viewDeclared) {
+        fail();
         return;
       }
       const domain = `plugin:${props.pluginId}`;
@@ -144,7 +155,7 @@ export default defineComponent({
           onAction: (_claimedCardId, actionId, data) => {
             // 归属校验在 plugin-card-actions（以桥绑定的 pluginId/cardId 为准，
             // 插件自报的 cardId 一律忽略）；主实例未运行时 action 丢弃（设计允许）
-            routeCardAction(props.pluginId, cardId, actionId, data);
+            routeCardAction(props.pluginId, spaceKey, cardId, actionId, data);
           }
         });
         await host.ready;
@@ -162,7 +173,7 @@ export default defineComponent({
     };
 
     onMounted(() => {
-      registerCard(cardId, props.pluginId);
+      registerCard(cardId, props.pluginId, spaceKey);
       void init();
     });
     onUnmounted(() => {

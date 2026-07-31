@@ -46,7 +46,7 @@
 - 离线投递 | 对端不可达即 failed（可手动重发），无离线队列 | 个人空间自动重发 + 组织网关暂存转发（§8.4）待后续专项
 - 消息加密 | 传输层依赖 libp2p Noise，信封 Ed25519 签名鉴权；未做应用层 E2E | §8.5 的 X25519 1:1 会话密钥协商待协议规格与专项
 - 系统会话（系统通知/组织公告） | 系统通知已有真实数据源：内置 system 应用会话（`app:system`，按空间隔离，p2p-messages.md §20），壳层经 `src/app-messages.ts` 以 pluginId='system' 写应用消息；本波只接「插件安装/升级成功」一条通知源作样板 | 其余通知源（安全告警、更新提示等）与组织公告（§8.3）待接
-- 应用会话（服务号模型 §20） | 已落地：SDK `sdk.messages`（sendAppMessage/listAppMessages/markRead/onCardAction + 卡片侧 triggerCardAction/requestCardHeight），桥 dispatcher messages 域按绑定身份注入 pluginId/space（`message:app` 高级权限，manifest 声明校验已加入内核权限表）；会话列表应用分组（标题取插件清单名、头像按 pluginId 哈希渐变）、聊天区卡片富渲染（`AppMessageCard.vue` 轻量 iframe 宿主，viewType='message-card'）/原生摘要降级（未装插件给「安装插件查看完整内容」跳市场）；免打扰/置顶/删除复用人际会话操作，屏蔽为本地持久化（`spark:app-conv-blocked`，抑制未读角标与聚合）
+- 应用会话（服务号模型 §20） | 已落地：SDK `sdk.messages`（sendAppMessage/listAppMessages/markRead/onCardAction + 卡片侧 triggerCardAction/requestCardHeight），桥 dispatcher messages 域按绑定身份注入 pluginId/space（`message:app` 高级权限，manifest 声明校验已加入内核权限表）；会话列表应用分组（标题取插件清单名、头像按 pluginId 哈希渐变）、聊天区卡片富渲染（`AppMessageCard.vue` 轻量 iframe 宿主，viewType='message-card'）/原生摘要降级（未装插件给「安装插件查看完整内容」跳市场）；免打扰/置顶/删除复用人际会话操作，屏蔽为本地持久化（`spark:app-conv-blocked`，抑制未读角标与聚合） | 用户→应用文本指令未实现（设计双向，阶段裁剪：输入区禁用「应用会话不支持回复」，ChatView 仅渲染应用消息流）
 - 应用会话-卡片回调 | 卡片按钮 action 经桥上行 → 壳层归属校验（cardId 必须为该插件在架卡片）→ 主视图实例 onCardAction | **主视图实例未运行时 action 直接丢弃**（设计允许；如需可靠投递需排队补投机制，待专项）
 - 应用会话-卡片高度 | 插件经 `sdk.messages.requestCardHeight` 申请，壳层封顶 400px | 默认高度 180px 为暂定值；卡片视图构建约定（插件如何区分打包 app/card 视图入口）随首个带卡插件落地
 - 应用会话-屏蔽 | 仅壳层本地持久化（localStorage），被屏蔽会话消息仍写入内核、列表可见 | 如需跨设备/内核级屏蔽（写入即丢弃）待内核接口

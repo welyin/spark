@@ -334,7 +334,8 @@ export function connectPluginBridge(options: ConnectPluginBridgeOptions): Promis
           post({ v: BRIDGE_PROTOCOL_VERSION, type: 'event', event: 'card-resize', payload: { height } });
         }
       },
-      events: {        subscribe: async (event, handler) => {
+      events: {
+        subscribe: async (event, handler) => {
           await request(
             { v: BRIDGE_PROTOCOL_VERSION, type: 'subscribe', id: nextId('sub'), event },
             callTimeoutMs

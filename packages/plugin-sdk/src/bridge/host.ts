@@ -206,11 +206,19 @@ export function createBridgeHost(options: CreateBridgeHostOptions): BridgeHost {
           return;
         }
         case 'event':
-          // 插件→宿主上行事件（runtime-error 错误上报等），与握手状态无关
+          // 插件→宿主上行事件（runtime-error 错误上报、card-resize 高度申请等）：
+          // 与 call 同口径按握手门控，握手完成前一律丢弃（避免未授权窗口期）
+          if (!handshakeSettled) {
+            return;
+          }
           options.onEvent?.(message.event, message.payload);
           return;
         case 'action':
-          // 插件（message-card）→宿主卡片按钮回调上行，归属校验与路由在壳层
+          // 插件（message-card）→宿主卡片按钮回调上行，归属校验与路由在壳层；
+          // 同样按握手门控，握手完成前一律丢弃
+          if (!handshakeSettled) {
+            return;
+          }
           options.onAction?.(message.cardId, message.actionId, message.data);
           return;
         default:

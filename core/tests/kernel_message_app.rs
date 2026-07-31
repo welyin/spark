@@ -3,7 +3,8 @@
 //!   状态恒 local、appList/appMarkRead/appDeleteConversation、水合（重启后仍在）；
 //! - 校验：summary 缺失/空白/超长、pluginId 字符集、校验先于限流（非法消息
 //!   不消耗配额）；
-//! - 限流：每插件每会话 10 条/分钟，超限拒绝并计数、窗口过期重置、插件间隔离。
+//! - 限流：每插件每会话 10 条/分钟，超限拒绝并计数、窗口过期重置、插件间隔离；
+//!   内置 system 会话（壳层系统通知）豁免限流。
 
 mod common;
 
@@ -312,5 +313,27 @@ fn app_messages_hydrate_after_restart() {
     let convs = kernel.message_list_conversations(PERSONAL).unwrap();
     assert_eq!(convs[0].id, "app:weibo-core");
     assert_eq!(convs[0].unread_count, 1);
+    kernel.shutdown().unwrap();
+}
+
+#[test]
+fn app_send_system_exempt_from_rate_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut kernel = fresh_kernel(dir.path());
+    init_identity(&mut kernel);
+    kernel.stop_p2p().unwrap();
+
+    // 内置 system 会话（壳层系统通知写入方）豁免限流：超过 10 条/60s 仍放行、
+    // 不累计拒绝计数；普通插件同窗口仍被限流
+    for i in 0..APP_MSG_RATE_LIMIT + 2 {
+        kernel
+            .message_app_send(PERSONAL, "system", payload(&format!("系统通知{i}")), None)
+            .unwrap();
+    }
+    assert_eq!(
+        kernel.message_app_list(PERSONAL, "system").unwrap().len() as u32,
+        APP_MSG_RATE_LIMIT + 2
+    );
+    assert_eq!(kernel.message_app_rate_rejected(PERSONAL, "system"), 0);
     kernel.shutdown().unwrap();
 }

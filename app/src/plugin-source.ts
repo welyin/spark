@@ -47,9 +47,9 @@ export function pluginSourceBaseUrl(pluginId: string): string {
   return isWindows ? `http://plugin.localhost/${encoded}` : `plugin://localhost/${encoded}`;
 }
 
-/** 源服务统一 CSP 口径（与 plugin_src.rs PLUGIN_CSP 一致） */
-const SOURCE_CSP =
-  "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:";
+/** 源服务统一 CSP 口径（与 plugin_src.rs PLUGIN_CSP 一致）；script-src 由变量拼接 */
+const sourceCsp = (scriptSrc: string): string =>
+  `default-src 'self'; script-src ${scriptSrc}; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:`;
 
 /**
  * 生成宿主 iframe 的 srcdoc：`<div id="app"></div>` + module bundle + 样式
@@ -72,9 +72,7 @@ export function buildPluginHostSrcdoc(pluginId: string, mount?: PluginViewBootst
   const scriptSrc = mount ? `${base} 'unsafe-inline'` : base;
   const csp = isTauri()
     ? `default-src 'none'; script-src ${scriptSrc}; style-src ${base} 'unsafe-inline'; connect-src ${base}; img-src ${base} data:; font-src ${base}`
-    : mount
-      ? SOURCE_CSP.replace("script-src 'self'", "script-src 'self' 'unsafe-inline'")
-      : SOURCE_CSP;
+    : sourceCsp(mount ? `'self' 'unsafe-inline'` : `'self'`);
   const mountScript = mount
     ? `<script>window.__sparkPluginView = ${JSON.stringify(mount).replace(/</g, '\\u003c')};</script>`
     : '';

@@ -614,6 +614,9 @@ impl Kernel {
     /// 校验链（按序）：pluginId 字符集 → payload.summary 非空且 ≤200 字符 →
     /// 限流（每插件每会话 10 条/分钟，超限报 [`MessageError::RateLimited`]
     /// 并累计拒绝计数）；校验先于限流，非法消息不消耗配额。
+    /// 内置 system 会话（壳层系统通知写入方，pluginId = "system"）豁免限流：
+    /// 限流防的是插件刷会话（§20.5），system 为壳层可信写入方，安装/升级
+    /// 等系统通知不应被配额挤掉（豁免不累计拒绝计数）。
     /// 会话由 pluginId 确定性派生（`app:{pluginId}`）并惰性创建——插件只能
     /// 写自己的会话（§20.4 不变量 2）；写入成功未读 +1，状态恒 `local`。
     pub fn message_app_send(
@@ -634,7 +637,7 @@ impl Kernel {
             generate_message_id(now),
             now,
         )?;
-        if !self.app_msg_limiter.check(space, plugin_id, now) {
+        if plugin_id != "system" && !self.app_msg_limiter.check(space, plugin_id, now) {
             return Err(MessageError::RateLimited.into());
         }
         AppMessageService::ensure_app_conversation(self.require_storage_mut()?, space, plugin_id, now)?;

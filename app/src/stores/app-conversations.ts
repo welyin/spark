@@ -70,6 +70,7 @@ function orgEnabledKey(spaceKey: string): string {
  * 与 apps-store useOrgEnabled 同源，best-effort 读取）。
  */
 export function isAppUsable(pluginId: string, spaceKey: string): boolean {
+  ensureMarketLoaded();
   const item = marketItems.value.find((entry) => entry.id === pluginId);
   if (!item?.installed) {
     return false;

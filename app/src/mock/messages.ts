@@ -20,7 +20,7 @@
  */
 import { computed, reactive, watch } from 'vue';
 import { isTauri, listenP2pEvents, type AppMessageCardDto, type AppMessageDto, type ElectronAPI } from '../api';
-import { isAppConversationBlocked } from '../stores/app-conversations';
+import { isAppConversationBlocked, SYSTEM_APP_PLUGIN_ID } from '../stores/app-conversations';
 
 /** 空间 key：个人空间为 'personal'，组织空间为 'org:<orgId>' */
 export type SpaceKey = string;
@@ -214,12 +214,15 @@ function hydrateMessages(key: SpaceKey, convId: string): void {
     .catch(() => {});
 }
 
-/** 内核 appList 结果按 id merge 进缓存（水合与桥 listAppMessages 调用共用） */
+/** 内核 appList 结果按 id merge 进缓存（水合与桥 listAppMessages 调用共用）；
+ *  合并后按 createdAt 升序归位：水合期间本地新增的消息可能晚于内核快照尾部 */
 export function mergeAppMessages(key: SpaceKey, convId: string, dtos: AppMessageDto[]): void {
   const space = spaces[key];
   if (!space) return;
   const localOnly = (space.appMessages[convId] ?? []).filter((m) => !dtos.some((d) => d.id === m.id));
-  space.appMessages[convId] = [...dtos.map((d) => ({ ...d })), ...localOnly];
+  space.appMessages[convId] = [...dtos.map((d) => ({ ...d })), ...localOnly].sort(
+    (a, b) => a.createdAt - b.createdAt
+  );
 }
 
 // ---------- 内核事件订阅（与 network-status 消费同一 p2p-event 通道） ----------
@@ -404,12 +407,16 @@ export function ingestAppMessage(key: SpaceKey, dto: AppMessageDto): void {
 const APP_SUMMARY_MAX_CHARS = 200;
 const APP_MSG_RATE_LIMIT = 10;
 const APP_MSG_RATE_WINDOW_MS = 60_000;
+/** 应用消息 pluginId 白名单（与内核 §20.1 同规格，错误串前缀一致：invalid-plugin-id） */
+const APP_PLUGIN_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 /** 限流记账：key = `${spaceKey}\n${pluginId}` → 窗口内写入时间戳（内存态，进程重启清零） */
 const appRateLog = new Map<string, number[]>();
 
 /**
- * 内存版应用消息写入：summary 校验（先于限流）与限流口径对齐内核
- * （错误串前缀一致：missing-summary/summary-too-long/rate-limited）
+ * 内存版应用消息写入：校验链（按序，先于限流，与内核口径一致）——
+ * summary 非空且 ≤200（missing-summary/summary-too-long）→ pluginId 字符集
+ * （invalid-plugin-id）→ 限流（rate-limited；内置 system 会话豁免，同内核
+ * message_app_send：限流防插件刷会话，system 为壳层可信写入方）
  */
 export function sendAppMessageLocal(
   key: SpaceKey,
@@ -424,14 +431,19 @@ export function sendAppMessageLocal(
   if (summary.length > APP_SUMMARY_MAX_CHARS) {
     throw new Error('summary-too-long: app message summary exceeds 200 chars');
   }
-  const now = Date.now();
-  const rateKey = `${key}\n${pluginId}`;
-  const windowLog = (appRateLog.get(rateKey) ?? []).filter((ts) => now - ts < APP_MSG_RATE_WINDOW_MS);
-  if (windowLog.length >= APP_MSG_RATE_LIMIT) {
-    throw new Error('rate-limited: app message rate limit exceeded (10/60s)');
+  if (!APP_PLUGIN_ID_PATTERN.test(pluginId)) {
+    throw new Error('invalid-plugin-id');
   }
-  windowLog.push(now);
-  appRateLog.set(rateKey, windowLog);
+  const now = Date.now();
+  if (pluginId !== SYSTEM_APP_PLUGIN_ID) {
+    const rateKey = `${key}\n${pluginId}`;
+    const windowLog = (appRateLog.get(rateKey) ?? []).filter((ts) => now - ts < APP_MSG_RATE_WINDOW_MS);
+    if (windowLog.length >= APP_MSG_RATE_LIMIT) {
+      throw new Error('rate-limited: app message rate limit exceeded (10/60s)');
+    }
+    windowLog.push(now);
+    appRateLog.set(rateKey, windowLog);
+  }
   const dto: AppMessageDto = {
     id: `m${now}-${++seq}`,
     pluginId,
