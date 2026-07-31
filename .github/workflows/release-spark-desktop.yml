@@ -123,12 +123,10 @@ jobs:
           gh release view "$RELEASE_TAG" --repo "$REPO" --json assets --jq '.assets[].name'
           # 逐个模式下载；.sig 可能只内嵌 latest.json 不单独上传，容忍缺项
           gh release download "$RELEASE_TAG" --repo "$REPO" --dir mirror --clobber -p 'latest.json'
-          gh release download "$RELEASE_TAG" --repo "$REPO" --dir mirror --clobber -p '*.app.tar.gz*' \
-            || echo "::warning::未找到 macOS updater 资产（.app.tar.gz*）"
-          gh release download "$RELEASE_TAG" --repo "$REPO" --dir mirror --clobber -p '*.msi.zip*' \
-            || echo "::warning::未找到 Windows updater 资产（.msi.zip*）"
-          gh release download "$RELEASE_TAG" --repo "$REPO" --dir mirror --clobber -p '*.nsis.zip*' \
-            || echo "无 .nsis.zip 资产（未启用 nsis 时可忽略）"
+          # updater 资产命名随 tauri 版本不同（旧版 .app.tar.gz/.msi.zip，新版直接
+          # .msi/.exe），按产物前缀宽匹配，避免因命名差异漏镜像
+          gh release download "$RELEASE_TAG" --repo "$REPO" --dir mirror --clobber -p 'Spark_*' \
+            || echo "::warning::未下载到任何 Spark_* 资产"
           ls -la mirror
           test -f mirror/latest.json
           # latest.json 的平台下载 URL 改写到 desktop-latest
