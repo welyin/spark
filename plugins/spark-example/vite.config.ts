@@ -31,6 +31,12 @@ const here = (path) => fileURLToPath(new URL(path, import.meta.url));
 export default {
   root: here('./'),
   plugins: [vue()],
+  // lib 模式不会自动替换 process.env.NODE_ENV（应用构建才会），
+  // 不替换则 vue/element-plus 源码里的 process.env.NODE_ENV 判断会原样进 bundle，
+  // WebView 中无 process 对象即抛 ReferenceError: process is not defined
+  define: {
+    'process.env.NODE_ENV': JSON.stringify('production')
+  },
   resolve: {
     alias: [
       { find: 'vue', replacement: here('../../app/node_modules/vue') },
