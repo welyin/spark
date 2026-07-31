@@ -3,12 +3,14 @@
 //! `publish_envelope` / `publish_raw` 出口。
 
 use libp2p::gossipsub;
+use libp2p::PeerId;
 use serde_json::{Map, Value};
 
 use crate::p2p::announce::{announce_to_json, prepare_publish_addresses, sign_node_announce};
-use crate::p2p::constants::{OVERLAY_TOPIC, SYNC_TOPIC};
+use crate::p2p::constants::{OVERLAY_TOPIC, PLUGIN_ANNOUNCE_TOPIC, SYNC_TOPIC};
 use crate::p2p::envelope::Envelope;
 use crate::p2p::overlay_store::{OverlayPeerSource, OverlayPeerStore};
+use crate::p2p::plugin_announce::{AnnounceUpsert, PluginAnnounceStore};
 use crate::p2p::{P2pError, Result};
 use crate::storage::StorageBackend;
 
@@ -97,6 +99,80 @@ impl<S: StorageBackend> EventLoop<S> {
                 });
             }
             Err(_) => { /* 静默丢弃（TS 口径） */ }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // plugin-announce（插件市场广播索引，plugin-dist §8）
+    // ------------------------------------------------------------------
+
+    /// 发布声明：消息自含签名与 PoW（§8.2），不走信封（与 node-announce 同口径）。
+    pub(super) fn publish_plugin_announce_raw(&mut self, json: &str) -> Result<()> {
+        self.publish_raw(PLUGIN_ANNOUNCE_TOPIC, json.as_bytes().to_vec())
+    }
+
+    /// 入站声明处理（§8.6）：校验链（结构/限流/TTL/PoW/签名）→ 入本地索引
+    /// （单 id 最新）→ 按传播源资历门控转发（Strict 验证模式显式上报：
+    /// 合格 Accept 转发 / 资历不足 Ignore 只收不转 / 校验失败 Reject 扣分）。
+    pub(super) fn handle_inbound_plugin_announce(
+        &mut self,
+        text: &str,
+        source: PeerId,
+        message_id: gossipsub::MessageId,
+    ) {
+        let now = self.now();
+        let source_str = source.to_base58();
+        match self
+            .plugin_announce_validator
+            .validate(text, &source_str, now)
+        {
+            Ok(announce) => {
+                let outcome = {
+                    let mut store = PluginAnnounceStore::new(&mut self.storage);
+                    store.upsert(&announce, now)
+                };
+                match outcome {
+                    Ok(AnnounceUpsert::Inserted) | Ok(AnnounceUpsert::Replaced) => {
+                        self.emit(P2pEvent::PluginAnnounceReceived {
+                            id: announce.id.clone(),
+                            publisher: announce.publisher.clone(),
+                        });
+                    }
+                    // Stale（同 id 已有更新）/ Duplicate：静默，不发事件
+                    _ => {}
+                }
+                // relay 资历制（§8.6）：本机自发消息不经此路径；传播源连续接入
+                // 时长不足阈值只收不转
+                let connected_since = self
+                    .peer_connected_since
+                    .get(&source)
+                    .copied()
+                    .unwrap_or(now);
+                let acceptance = if now.saturating_sub(connected_since)
+                    >= self.plugin_announce_tenure_ms
+                {
+                    gossipsub::MessageAcceptance::Accept
+                } else {
+                    gossipsub::MessageAcceptance::Ignore
+                };
+                let _ = self
+                    .swarm
+                    .behaviour_mut()
+                    .gossipsub
+                    .report_message_validation_result(&message_id, &source, acceptance);
+            }
+            Err(_) => {
+                // 校验失败：Reject（gossipsub peer scoring 扣传播源分数）
+                let _ = self
+                    .swarm
+                    .behaviour_mut()
+                    .gossipsub
+                    .report_message_validation_result(
+                        &message_id,
+                        &source,
+                        gossipsub::MessageAcceptance::Reject,
+                    );
+            }
         }
     }
 

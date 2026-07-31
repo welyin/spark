@@ -12,6 +12,7 @@
 pub mod commands;
 pub mod market;
 pub mod plugin_src;
+mod announce_verify;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -110,6 +111,7 @@ pub fn run() {
             })
             .map_err(|e| std::io::Error::other(e.to_string()))?;
             let events = kernel.subscribe_p2p_events();
+            let announce_events = kernel.subscribe_p2p_events();
             app.manage(KernelState::new(kernel));
             spawn_p2p_event_forwarder(app.handle().clone(), events);
             // 插件市场：状态/包目录在 app_data_dir，本地 dist-market 与插件源码
@@ -123,6 +125,9 @@ pub fn run() {
                 .initialize()
                 .map_err(|e| std::io::Error::other(format!("plugin market init failed: {e}")))?;
             app.manage(MarketState::new(Mutex::new(market)));
+            // 懒惰核查队列（plugin-dist §8.8）：新声明后台 resolve_repo_plugin 核查，
+            // verified 终态回写内核索引；worker 需在 KernelState/MarketState 就位后启动
+            announce_verify::spawn_announce_verify_worker(app.handle().clone(), announce_events);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -243,6 +248,10 @@ pub fn run() {
             // 插件市场·仓库锚定安装（plugin-dist）
             commands::market::plugin_market_resolve_repo,
             commands::market::plugin_market_install_from_repo,
+            // 插件市场·广播索引（plugin-dist §8：发布声明/索引查询）
+            commands::market::plugin_market_announce_publish,
+            commands::market::plugin_market_announce_list,
+            commands::market::plugin_market_announce_get,
             // 系统桥接（未读角标 → dock/任务栏徽标）
             commands::system::system_set_badge,
         ])

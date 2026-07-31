@@ -275,6 +275,10 @@ pub fn build_behaviour(
 
     let gossipsub_config = gossipsub::ConfigBuilder::default()
         .flood_publish(true)
+        // validate_messages：消息先入 mcache 等待应用层显式上报 Accept/Ignore/Reject
+        // 再决定转发（plugin-announce relay 资历制依赖此机制；overlay/sync 在
+        // 分发处无条件回报 Accept，语义与开启前一致）
+        .validate_messages()
         .validation_mode(gossipsub::ValidationMode::Strict)
         .build()?;
     let mut gossipsub_behaviour = gossipsub::Behaviour::new(
@@ -284,6 +288,9 @@ pub fn build_behaviour(
     .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     gossipsub_behaviour.subscribe(&gossipsub::IdentTopic::new(super::constants::SYNC_TOPIC))?;
     gossipsub_behaviour.subscribe(&gossipsub::IdentTopic::new(super::constants::OVERLAY_TOPIC))?;
+    // 插件市场广播索引（plugin-dist §8；启动即订阅，relay 校验链在 gossip 层）
+    gossipsub_behaviour
+        .subscribe(&gossipsub::IdentTopic::new(super::constants::PLUGIN_ANNOUNCE_TOPIC))?;
 
     let mdns_behaviour = if options.enable_mdns {
         Toggle::from(Some(mdns::tokio::Behaviour::new(

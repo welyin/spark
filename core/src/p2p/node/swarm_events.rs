@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::p2p::P2pError;
 use crate::p2p::behaviour::SparkBehaviourEvent;
-use crate::p2p::constants::{OVERLAY_TOPIC, P2P_LISTEN_WS_PORT};
+use crate::p2p::constants::{OVERLAY_TOPIC, PLUGIN_ANNOUNCE_TOPIC, P2P_LISTEN_WS_PORT};
 use crate::p2p::listen_port;
 use crate::p2p::overlay_store::{OverlayPeerSource, OverlayPeerStore};
 use crate::p2p::peer_activity::{NodeObservation, PeerActivityStore};
@@ -144,6 +144,8 @@ impl<S: StorageBackend> EventLoop<S> {
                     j += 1;
                 }
                 if num_established.get() == 1 {
+                    // relay 资历制依据（plugin-dist §8.6）：记录接入时刻
+                    self.peer_connected_since.insert(peer_id, now);
                     self.emit(P2pEvent::PeerConnected {
                         peer_id: peer_id.to_base58(),
                     });
@@ -159,6 +161,8 @@ impl<S: StorageBackend> EventLoop<S> {
             } => {
                 if num_established == 0 {
                     let now = self.now();
+                    // 断连资历清零（§8.6：重接重新熬资历）
+                    self.peer_connected_since.remove(&peer_id);
                     let mut store = PeerActivityStore::new(&mut self.storage);
                     let _ = store.mark_disconnected(&peer_id.to_base58(), now);
                     self.emit(P2pEvent::PeerDisconnected {
@@ -250,8 +254,44 @@ impl<S: StorageBackend> EventLoop<S> {
 
     fn handle_behaviour_event(&mut self, event: SparkBehaviourEvent) {
         match event {
-            SparkBehaviourEvent::Gossipsub(gossipsub::Event::Message { message, .. }) => {
+            SparkBehaviourEvent::Gossipsub(gossipsub::Event::Message {
+                propagation_source,
+                message_id,
+                message,
+            }) => {
+                if message.topic == gossipsub::IdentTopic::new(PLUGIN_ANNOUNCE_TOPIC).hash() {
+                    // plugin-announce：字节校验在校验链内做（失败 Reject 扣分），
+                    // 非 UTF-8 直接按结构非法上报
+                    match String::from_utf8(message.data) {
+                        Ok(text) => {
+                            self.handle_inbound_plugin_announce(&text, propagation_source, message_id)
+                        }
+                        Err(_) => {
+                            let _ = self
+                                .swarm
+                                .behaviour_mut()
+                                .gossipsub
+                                .report_message_validation_result(
+                                    &message_id,
+                                    &propagation_source,
+                                    gossipsub::MessageAcceptance::Reject,
+                                );
+                        }
+                    }
+                    return;
+                }
                 let Ok(text) = String::from_utf8(message.data) else {
+                    // 非 UTF-8：保持开启 validate_messages 前的语义（照常转发），
+                    // 无条件回报 Accept（overlay/sync 不在本波收紧评分）
+                    let _ = self
+                        .swarm
+                        .behaviour_mut()
+                        .gossipsub
+                        .report_message_validation_result(
+                            &message_id,
+                            &propagation_source,
+                            gossipsub::MessageAcceptance::Accept,
+                        );
                     return;
                 };
                 if message.topic == gossipsub::IdentTopic::new(OVERLAY_TOPIC).hash() {
@@ -270,6 +310,17 @@ impl<S: StorageBackend> EventLoop<S> {
                 } else {
                     self.handle_sync_message(&text);
                 }
+                // overlay/sync 保持历史语义（validate_messages 开启前一律转发）：
+                // 无条件回报 Accept，不引入新的评分行为
+                let _ = self
+                    .swarm
+                    .behaviour_mut()
+                    .gossipsub
+                    .report_message_validation_result(
+                        &message_id,
+                        &propagation_source,
+                        gossipsub::MessageAcceptance::Accept,
+                    );
             }
             SparkBehaviourEvent::Mdns(mdns::Event::Discovered(peers)) => {
                 let now = self.now();

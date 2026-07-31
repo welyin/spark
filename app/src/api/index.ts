@@ -193,7 +193,11 @@ export function createTauriApi(): ElectronAPI {
         call('plugin-market-set-enabled', pluginId, enabled),
       // 仓库锚定安装（plugin-dist）：先 resolveRepo 展示声明文件，确认后 installFromRepo
       resolveRepo: (id: string) => call('plugin-market-resolve-repo', id),
-      installFromRepo: (id: string) => call('plugin-market-install-from-repo', id)
+      installFromRepo: (id: string) => call('plugin-market-install-from-repo', id),
+      // 广播索引（plugin-dist §8）：开发者发布声明（签名+PoW+广播，秒级）与本地索引查询
+      announcePublish: (input) => call('plugin-market-announce-publish', input),
+      announceList: () => call('plugin-market-announce-list'),
+      announceGet: (id: string) => call('plugin-market-announce-get', id)
     },
     organization: {
       listMine: () => call('org-list-mine'),

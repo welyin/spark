@@ -41,13 +41,15 @@ use super::announce::NodeAnnounceValidator;
 use super::behaviour::{BehaviourOptions, DhtMode, SparkBehaviour, build_behaviour};
 use super::constants::{
     CHALLENGE_MIN_INTERVAL_MS, DM_MIN_INTERVAL_MS, ORG_KEEPALIVE_INTERVAL_MS, P2P_LISTEN_WS_PORT,
-    PEER_EXCHANGE_MIN_INTERVAL_MS, RECOVERY_QUERY_MIN_INTERVAL_MS,
+    PEER_EXCHANGE_MIN_INTERVAL_MS, PLUGIN_ANNOUNCE_MIN_POW_BITS, PLUGIN_ANNOUNCE_RELAY_TENURE_MS,
+    RECOVERY_QUERY_MIN_INTERVAL_MS,
 };
 use super::direct::MinIntervalRateLimiter;
 use super::envelope::EnvelopeSigner;
 use super::host::P2pHost;
 use super::identity_store::get_or_create_libp2p_keypair;
 use super::listen_port;
+use super::plugin_announce::PluginAnnounceValidator;
 use super::{P2pError, Result};
 
 use api::Command;
@@ -87,6 +89,10 @@ pub struct P2pConfig {
     pub keepalive_interval: Option<Duration>,
     /// DHT（Kad）运行模式；默认 Server。
     pub dht_mode: DhtMode,
+    /// plugin-announce PoW 最低难度覆盖（§8.4；None = 网络常量 20，测试调低）。
+    pub plugin_announce_pow_bits: Option<u32>,
+    /// plugin-announce relay 资历阈值覆盖（§8.6；None = 72h，测试调 0/调大）。
+    pub plugin_announce_relay_tenure_ms: Option<i64>,
     /// 时间源注入。
     pub now_fn: NowFn,
 }
@@ -104,6 +110,8 @@ impl Default for P2pConfig {
             enable_upnp: true,
             keepalive_interval: Some(Duration::from_millis(ORG_KEEPALIVE_INTERVAL_MS as u64)),
             dht_mode: DhtMode::default(),
+            plugin_announce_pow_bits: None,
+            plugin_announce_relay_tenure_ms: None,
             now_fn: Arc::new(system_now_ms),
         }
     }
@@ -203,6 +211,17 @@ pub enum P2pEvent {
     /// 消息被丢弃（验签失败/强制签名缺失/形状非法）。
     MessageDropped {
         reason: String,
+    },
+    /// plugin-announce 入站声明校验通过并入索引（plugin-dist §8.9）。
+    PluginAnnounceReceived {
+        id: String,
+        publisher: String,
+    },
+    /// plugin-announce 懒惰核查落终态（§8.8/§8.9；verified=false 时 error 记原因）。
+    PluginAnnounceVerified {
+        id: String,
+        verified: bool,
+        error: Option<String>,
     },
     /// keepalive tick 完成（宿主应执行组织层保活）。
     KeepaliveTick(KeepaliveStats),
@@ -324,6 +343,15 @@ impl P2pNode {
             dm_completion_rx,
             pending_dm_inbound: HashMap::new(),
             next_dm_task_id: 0,
+            plugin_announce_validator: PluginAnnounceValidator::new(
+                config
+                    .plugin_announce_pow_bits
+                    .unwrap_or(PLUGIN_ANNOUNCE_MIN_POW_BITS),
+            ),
+            plugin_announce_tenure_ms: config
+                .plugin_announce_relay_tenure_ms
+                .unwrap_or(PLUGIN_ANNOUNCE_RELAY_TENURE_MS),
+            peer_connected_since: HashMap::new(),
         };
         let keepalive_interval = config.keepalive_interval;
         let task = tokio::spawn(async move {

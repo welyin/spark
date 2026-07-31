@@ -23,6 +23,12 @@ pub(super) enum Command {
     AnnounceNow {
         tx: oneshot::Sender<Result<bool>>,
     },
+    /// 发布 plugin-announce 声明（原始 JSON 字节；消息自含签名与 PoW，
+    /// 不走信封——与 node-announce 同口径）。
+    PublishPluginAnnounce {
+        json: String,
+        tx: oneshot::Sender<Result<()>>,
+    },
     ConnectPeer {
         node_info: PeerNodeInfo,
         tx: oneshot::Sender<Result<()>>,
@@ -109,6 +115,18 @@ impl P2pNode {
     pub async fn announce_now(&self) -> Result<bool> {
         let (tx, rx) = oneshot::channel();
         self.send_cmd(Command::AnnounceNow { tx })?;
+        rx.await.map_err(|_| P2pError::NotStarted)?
+    }
+
+    /// 发布 plugin-announce 声明（plugin-dist §8）：调用方负责构造完整消息
+    /// （含签名与 PoW，见 `plugin_announce::build_signed_announce` /
+    /// `mine_announce_nonce`），本方法只做原始字节广播。零订阅者不算失败。
+    pub async fn publish_plugin_announce(&self, json: &str) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.send_cmd(Command::PublishPluginAnnounce {
+            json: json.to_string(),
+            tx,
+        })?;
         rx.await.map_err(|_| P2pError::NotStarted)?
     }
 

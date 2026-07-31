@@ -94,3 +94,110 @@ pub async fn plugin_market_install_from_repo(
 ) -> Result<InstalledPluginState, String> {
     run_market(state, move |svc| svc.install_from_repo(&id)).await
 }
+
+// ------------------------------------------------------------------
+// 广播索引（plugin-dist §8，阶段 C 波次 2a）：发布声明 / 索引查询。
+// 索引存内核 sled（`mkt:ann:`），内核 API 为同步且禁在 tokio 线程调用，
+// 与全命令层一致用同步 command（PoW 计算秒级，UI 在渲染进程不受影响）。
+// ------------------------------------------------------------------
+
+use spark_core::p2p::plugin_announce::{PluginAnnounceIndexEntry, PluginAnnounceInput};
+
+use super::{err, lock_kernel};
+use crate::KernelState;
+
+/// 发布插件声明（开发者模式）：字段校验 → 根身份签名 → 算 PoW → 广播 →
+/// 入本地索引。需身份已解锁且 P2P 已启动。
+#[tauri::command]
+pub fn plugin_market_announce_publish(
+    state: tauri::State<'_, KernelState>,
+    input: PluginAnnounceInput,
+) -> Result<PluginAnnounceIndexEntry, String> {
+    lock_kernel(&state)?
+        .publish_plugin_announce(&input)
+        .map_err(err)
+}
+
+/// 本地广播索引列表（含 verified 状态；市场视图只展示 verified 条目，波次 2b）。
+#[tauri::command]
+pub fn plugin_market_announce_list(
+    state: tauri::State<'_, KernelState>,
+) -> Result<Vec<PluginAnnounceIndexEntry>, String> {
+    lock_kernel(&state)?.list_plugin_announces().map_err(err)
+}
+
+/// 单条索引查询（verified 状态查询；id 为规范化线形）。
+#[tauri::command]
+pub fn plugin_market_announce_get(
+    state: tauri::State<'_, KernelState>,
+    id: String,
+) -> Result<Option<PluginAnnounceIndexEntry>, String> {
+    lock_kernel(&state)?.get_plugin_announce(&id).map_err(err)
+}
+
+#[cfg(test)]
+mod announce_tests {
+    use spark_core::kernel::{Kernel, KernelConfig};
+    use spark_core::p2p::plugin_announce::PluginAnnounceInput;
+
+    fn input(id: &str) -> PluginAnnounceInput {
+        PluginAnnounceInput {
+            id: id.to_string(),
+            name: "待办".to_string(),
+            icon: String::new(),
+            summary: "测试".to_string(),
+            category: "business".to_string(),
+            version: "0.1.0".to_string(),
+            release_url: String::new(),
+        }
+    }
+
+    #[test]
+    fn publish_requires_unlocked_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let kernel = Kernel::init(KernelConfig {
+            data_dir: dir.path().to_path_buf(),
+            app_version: "0.0.0-test".to_string(),
+            p2p: None,
+        })
+        .unwrap();
+        // 未初始化身份 → 锁定错误先于 P2P 检查
+        assert_eq!(
+            kernel
+                .publish_plugin_announce(&input("github.com/acme/todo"))
+                .unwrap_err()
+                .to_string(),
+            "Root identity is locked"
+        );
+    }
+
+    #[test]
+    fn publish_validates_id_before_p2p_check() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut kernel = Kernel::init(KernelConfig {
+            data_dir: dir.path().to_path_buf(),
+            app_version: "0.0.0-test".to_string(),
+            p2p: None,
+        })
+        .unwrap();
+        kernel.init_identity("correct-horse-battery", "alice", None).unwrap();
+        // 非法 id → 专用文案（在 P2P 未启动检查之前：先校验字段）
+        assert_eq!(
+            kernel
+                .publish_plugin_announce(&input("example.com/acme/todo"))
+                .unwrap_err()
+                .to_string(),
+            "Plugin announce id invalid: example.com/acme/todo"
+        );
+        // 合法 id 但 P2P 未启动
+        assert_eq!(
+            kernel
+                .publish_plugin_announce(&input("github.com/acme/todo"))
+                .unwrap_err()
+                .to_string(),
+            "p2p node not started"
+        );
+        // 索引初始为空
+        assert!(kernel.list_plugin_announces().unwrap().is_empty());
+    }
+}

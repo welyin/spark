@@ -29,6 +29,8 @@ pub fn test_p2p_config() -> P2pConfig {
         enable_upnp: false,
         keepalive_interval: None,
         dht_mode: spark_core::p2p::DhtMode::Server,
+        plugin_announce_pow_bits: None,
+        plugin_announce_relay_tenure_ms: None,
         now_fn: Arc::new(system_now_ms),
     }
 }

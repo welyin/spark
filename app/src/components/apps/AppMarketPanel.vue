@@ -17,6 +17,8 @@
       <!-- 仓库锚定安装入口（plugin-dist）：输入仓库地址 → 解析声明文件 → 确认安装 -->
       <div class="market-repo-entry">
         <el-button size="small" @click="openRepoDialog">按仓库地址安装</el-button>
+        <!-- 广播索引发布入口（plugin-dist §8，开发者模式）：解析声明 → 算 PoW → 广播 -->
+        <el-button size="small" @click="openAnnounceDialog">发布声明（开发者）</el-button>
       </div>
 
       <el-tabs v-model="activeCategory" class="market-tabs">
@@ -58,8 +60,48 @@
       </template>
     </el-dialog>
 
-    <el-empty v-if="filteredItems.length === 0" description="没有匹配的应用" />
+    <!-- 发布声明对话框（plugin-dist §8，开发者模式）：解析声明文件 → 确认 → 算 PoW 广播 -->
+    <el-dialog v-model="announceDialogVisible" title="发布插件声明（开发者）" width="480">
+      <div class="repo-install-dialog">
+        <el-input
+          v-model="announceIdInput"
+          placeholder="你的插件仓库地址，如 github.com/owner/repo"
+          clearable
+          @keyup.enter="resolveAnnounce"
+        >
+          <template #append>
+            <el-button :loading="announceResolving" @click="resolveAnnounce">解析</el-button>
+          </template>
+        </el-input>
+        <el-alert v-if="announceError" :title="announceError" type="error" :closable="false" show-icon />
+        <el-alert
+          v-if="announceDone"
+          title="声明已广播（PoW 已计算并签名），其他节点收到后将懒惰核查仓库声明文件"
+          type="success"
+          :closable="false"
+          show-icon
+        />
+        <div v-if="announcePreview" class="repo-preview">
+          <div class="repo-preview-head">
+            <img v-if="announcePreview.icon" :src="announcePreview.icon" class="repo-preview-icon" alt="" />
+            <span v-else class="repo-preview-icon repo-preview-icon-fallback">{{ announcePreview.name.slice(0, 1) }}</span>
+            <div>
+              <h3>{{ announcePreview.name }} <el-tag size="small" effect="plain">v{{ announcePreview.version }}</el-tag></h3>
+              <p class="repo-preview-id">{{ announcePreview.id }}</p>
+            </div>
+          </div>
+          <p class="repo-preview-summary">{{ announcePreview.summary }}</p>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="announceDialogVisible = false">取消</el-button>
+        <el-button type="primary" :disabled="!announcePreview" :loading="announcePublishing" @click="confirmAnnounce">
+          {{ announcePublishing ? '计算 PoW 并广播中…' : '广播声明' }}
+        </el-button>
+      </template>
+    </el-dialog>
 
+    <el-empty v-if="filteredItems.length === 0" description="没有匹配的应用" />
     <template v-else>
       <!-- 推荐区：取列表前 2 个大图卡片（ui-apps-market §3.2），与下方分类卡片样式拉开差异 -->
       <section v-if="featuredItems.length > 0" class="market-section">
@@ -174,6 +216,69 @@ export default defineComponent({
       emit('install-repo', declaration);
     };
 
+    // 发布声明（plugin-dist §8，开发者模式）：解析 spark-plugin.json 预填 →
+    // 内核签名 + 算 PoW（秒级）→ 广播；声明内容以仓库声明文件为准（id 一致性已由
+    // resolveRepo 校验），信任锚不变
+    const announceDialogVisible = ref(false);
+    const announceIdInput = ref('');
+    const announceResolving = ref(false);
+    const announcePublishing = ref(false);
+    const announceError = ref('');
+    const announceDone = ref(false);
+    const announcePreview = ref<RepoPluginDeclarationDto | null>(null);
+
+    const openAnnounceDialog = () => {
+      announceIdInput.value = '';
+      announceError.value = '';
+      announceDone.value = false;
+      announcePreview.value = null;
+      announceDialogVisible.value = true;
+    };
+
+    const resolveAnnounce = async () => {
+      const id = announceIdInput.value.trim();
+      if (!id) {
+        return;
+      }
+      announceResolving.value = true;
+      announceError.value = '';
+      announceDone.value = false;
+      announcePreview.value = null;
+      try {
+        announcePreview.value = await window.electronAPI.pluginMarket.resolveRepo(id);
+      } catch (error) {
+        announceError.value = `解析失败：${error}`;
+      } finally {
+        announceResolving.value = false;
+      }
+    };
+
+    const confirmAnnounce = async () => {
+      const declaration = announcePreview.value;
+      if (!declaration) {
+        return;
+      }
+      announcePublishing.value = true;
+      announceError.value = '';
+      announceDone.value = false;
+      try {
+        await window.electronAPI.pluginMarket.announcePublish({
+          id: declaration.id,
+          name: declaration.name,
+          icon: declaration.icon,
+          summary: declaration.summary,
+          category: declaration.category,
+          version: declaration.version,
+          releaseUrl: ''
+        });
+        announceDone.value = true;
+      } catch (error) {
+        announceError.value = `广播失败：${error}`;
+      } finally {
+        announcePublishing.value = false;
+      }
+    };
+
     const categoryTabs = ['全部', ...MARKET_CATEGORIES] as const;
 
     const filteredItems = computed(() =>
@@ -219,6 +324,16 @@ export default defineComponent({
       openRepoDialog,
       resolveRepo,
       confirmRepoInstall,
+      announceDialogVisible,
+      announceIdInput,
+      announceResolving,
+      announcePublishing,
+      announceError,
+      announceDone,
+      announcePreview,
+      openAnnounceDialog,
+      resolveAnnounce,
+      confirmAnnounce,
       ArrowLeft,
       Search,
       emit

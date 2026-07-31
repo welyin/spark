@@ -16,3 +16,5 @@ mod listen_port;
 mod overlay_store;
 #[path = "unit_p2p/peer_targets.rs"]
 mod peer_targets;
+#[path = "unit_p2p/plugin_announce.rs"]
+mod plugin_announce;

@@ -176,3 +176,49 @@ pub const PEER_ACTIVITY_SUCCESS_WEIGHT_MS: i64 = 60_000;
 
 /// 打分公式系数：失败一次 -30s。
 pub const PEER_ACTIVITY_FAILURE_WEIGHT_MS: i64 = 30_000;
+
+// ------------------------------------------------------------------
+// plugin-announce（插件市场广播索引，plugin-dist.md §8）
+// ------------------------------------------------------------------
+
+/// 插件声明广播 topic（§8.1）。
+pub const PLUGIN_ANNOUNCE_TOPIC: &str = "/spark/plugin-announce/1.0.0";
+
+/// 消息总大小上限 48 KiB（§8.1）。
+pub const PLUGIN_ANNOUNCE_MAX_BYTES: usize = 48 * 1024;
+
+/// 声明 TTL：30 天（§8.2/§8.5，本版固定值）。
+pub const PLUGIN_ANNOUNCE_TTL_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+
+/// timestamp 远未来容忍窗口（±10 min，对齐 node-announce，§8.5）。
+pub const PLUGIN_ANNOUNCE_MAX_FUTURE_MS: i64 = 10 * 60_000;
+
+/// PoW 最低难度（前导零 bit 数；§8.4，中档手机秒级）。
+pub const PLUGIN_ANNOUNCE_MIN_POW_BITS: u32 = 20;
+
+/// 逐 peer 限流：每小时接受条数上限（§8.6-2）。
+pub const PLUGIN_ANNOUNCE_RATE_LIMIT_PER_HOUR: usize = 10;
+
+/// 限流器跟踪 peer 数上限（满时回收过期、仍满清空，§8.6-2）。
+pub const PLUGIN_ANNOUNCE_RATE_LIMIT_TRACKED_PEERS: usize = 1024;
+
+/// relay 资历制阈值：传播源连续接入时长下限（72 小时，§8.6）。
+pub const PLUGIN_ANNOUNCE_RELAY_TENURE_MS: i64 = 72 * 60 * 60 * 1000;
+
+/// icon data:base64 字符数上限（20 KB 二进制，§8.2）。
+pub const PLUGIN_ANNOUNCE_ICON_MAX_CHARS: usize = 28 * 1024;
+
+/// releaseUrl / icon URL 长度上限（§8.2）。
+pub const PLUGIN_ANNOUNCE_URL_MAX_CHARS: usize = 512;
+
+/// version 字段长度上限（§8.2）。
+pub const PLUGIN_ANNOUNCE_VERSION_MAX_CHARS: usize = 32;
+
+/// 本地索引 sled 键前缀（§8.7）。
+pub const PLUGIN_MARKET_INDEX_PREFIX: &str = "mkt:ann:";
+
+/// 本地索引容量上限（§8.7，超限按 updatedAt 最旧 LRU 逐出）。
+pub const PLUGIN_MARKET_INDEX_MAX: usize = 10_000;
+
+/// 索引条目计数键（近似值，逐出时以全量扫描重写；注意避开 `mkt:ann:` 前缀）。
+pub const PLUGIN_MARKET_INDEX_COUNT_KEY: &str = "mkt:ann-count";

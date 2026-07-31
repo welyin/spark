@@ -143,6 +143,38 @@ export type RepoPluginDeclarationDto = {
   sdkVersion: string;
 };
 
+/** 广播索引声明消息（plugin-dist §8.2；发布输入为其子集） */
+export type PluginAnnounceInputDto = {
+  id: string;
+  name: string;
+  icon: string;
+  summary: string;
+  category: string;
+  version: string;
+  releaseUrl: string;
+};
+
+/** 广播索引完整声明消息（plugin-dist §8.2） */
+export type PluginAnnounceDto = PluginAnnounceInputDto & {
+  type: string;
+  timestamp: number;
+  ttl: number;
+  publisher: string;
+  pubKey: string;
+  pow: { bits: number; nonce: number };
+  signature: string;
+};
+
+/** 广播索引本地索引条目（plugin-dist §8.7；verified 只有 verified 态进市场视图） */
+export type PluginAnnounceIndexEntryDto = {
+  announce: PluginAnnounceDto;
+  firstSeenAt: number;
+  updatedAt: number;
+  verified: 'pending' | 'verified' | 'failed';
+  verifyError: string;
+  verifiedAt: number;
+};
+
 export type OrgView = {
   orgId: string;
   name: string;
@@ -457,6 +489,12 @@ export type ElectronAPI = {
     resolveRepo: (id: string) => Promise<RepoPluginDeclarationDto>;
     /** 仓库锚定安装（plugin-dist §4.2） */
     installFromRepo: (id: string) => Promise<InstalledPluginStateDto>;
+    /** 发布插件声明（plugin-dist §8，开发者模式：签名 + PoW + 广播；秒级） */
+    announcePublish: (input: PluginAnnounceInputDto) => Promise<PluginAnnounceIndexEntryDto>;
+    /** 本地广播索引列表（含 verified 状态；市场视图只展示 verified，波次 2b） */
+    announceList: () => Promise<PluginAnnounceIndexEntryDto[]>;
+    /** 单条广播索引查询（verified 状态） */
+    announceGet: (id: string) => Promise<PluginAnnounceIndexEntryDto | null>;
   };
   organization: {
     listMine: () => Promise<OrgView[]>;

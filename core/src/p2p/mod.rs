@@ -21,6 +21,7 @@ pub mod node;
 pub mod overlay_store;
 pub mod peer_activity;
 pub mod peer_targets;
+pub mod plugin_announce;
 
 pub use announce::{
     AnnounceReject, NodeAnnounce, NodeAnnounceValidator, announce_to_json,
@@ -41,6 +42,12 @@ pub use peer_activity::{
     NO_RECORD_PRIORITY, NodeObservation, PeerActivityRecord, PeerActivityStore, compute_priority,
 };
 pub use peer_targets::{PeerNodeInfo, build_dial_targets, extract_peer_id};
+pub use plugin_announce::{
+    AnnouncePow, AnnounceUpsert, AnnounceVerified, PLUGIN_ANNOUNCE_TYPE, PluginAnnounce,
+    PluginAnnounceIndexEntry, PluginAnnounceInput, PluginAnnounceReject, PluginAnnounceStore,
+    PluginAnnounceValidator, announce_id_valid, build_announce_payload, build_signed_announce,
+    leading_zero_bits, mine_announce_nonce, plugin_announce_to_json, verify_announce_pow,
+};
 
 /// p2p 模块统一错误。
 #[derive(Debug, thiserror::Error)]

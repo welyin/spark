@@ -182,6 +182,12 @@ pub(super) struct EventLoop<S: StorageBackend> {
     /// dm 入站进行中：任务 id → ResponseChannel。
     pub(super) pending_dm_inbound: HashMap<u64, request_response::ResponseChannel<String>>,
     pub(super) next_dm_task_id: u64,
+    /// plugin-announce 接收侧校验链 + 逐 peer 限流（plugin-dist §8.6）。
+    pub(super) plugin_announce_validator: crate::p2p::plugin_announce::PluginAnnounceValidator,
+    /// relay 资历阈值（§8.6：传播源连续接入时长下限，默认 72h）。
+    pub(super) plugin_announce_tenure_ms: i64,
+    /// 各 peer 当前连接建立时刻（资历制依据；断连清零重计）。
+    pub(super) peer_connected_since: HashMap<PeerId, i64>,
 }
 
 impl<S: StorageBackend> EventLoop<S> {
@@ -245,6 +251,9 @@ impl<S: StorageBackend> EventLoop<S> {
         match cmd {
             Command::Broadcast { topic, body, tx } => {
                 let _ = tx.send(self.publish_envelope(&topic, body));
+            }
+            Command::PublishPluginAnnounce { json, tx } => {
+                let _ = tx.send(self.publish_plugin_announce_raw(&json));
             }
             Command::AnnounceNow { tx } => {
                 let _ = tx.send(self.publish_announce());

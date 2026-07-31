@@ -22,7 +22,8 @@
 //! 在 `identity/`，组织同步编排（async worker）在 `org_sync/`，消息门面在
 //! `message_ops`（出站投递机器在 `dm_delivery`），通讯录门面在 `contact_ops`
 //! （标签/分组树在 `contact_group_ops`），dm 信封构造/校验在
-//! `dm_envelope`，dm 入站编排在 `inbound_dm`（host.rs 的 `handle_dm` 接线）。
+//! `dm_envelope`，dm 入站编排在 `inbound_dm`（host.rs 的 `handle_dm` 接线），
+//! 插件市场广播索引（发布/索引/核查回写）在 `plugin_announce_ops`。
 
 mod contact_group_ops;
 mod contact_ops;
@@ -39,6 +40,7 @@ mod org_ops;
 mod org_overview;
 mod org_sync;
 mod p2p_ops;
+mod plugin_announce_ops;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
