@@ -36,13 +36,15 @@
         class="market-card explore-card"
         @click="openDetail(entry)"
       >
-        <img v-if="entry.announce.icon" :src="entry.announce.icon" class="market-card-icon explore-card-icon" alt="" />
+        <!-- 展示字段以懒惰核查校正值（corrected）为准，announce 自报值仅占位；
+             icon 走 https/data:image 白名单 -->
+        <img v-if="announceDisplayIcon(entry)" :src="announceDisplayIcon(entry)" class="market-card-icon explore-card-icon" alt="" />
         <span v-else class="market-card-icon" :style="{ background: exploreIconBackground(entry) }">
-          {{ entry.announce.name.slice(0, 1) }}
+          {{ announceDisplayName(entry).slice(0, 1) }}
         </span>
         <div class="market-card-info">
-          <h3>{{ entry.announce.name }} <span class="explore-card-version">v{{ entry.announce.version }}</span></h3>
-          <p>{{ entry.announce.summary }}</p>
+          <h3>{{ announceDisplayName(entry) }} <span class="explore-card-version">v{{ announceDisplayVersion(entry) }}</span></h3>
+          <p>{{ announceDisplaySummary(entry) }}</p>
           <div class="market-card-tags">
             <el-tag size="small" effect="plain">{{ announceCategoryLabel(entry.announce.category) }}</el-tag>
             <el-tag v-if="installedIds.includes(entry.announce.id)" size="small" type="success">已安装</el-tag>
@@ -60,12 +62,12 @@
           <div>
             <h3>
               {{ detailName }}
-              <el-tag size="small" effect="plain">v{{ corrected?.version ?? detailEntry.announce.version }}</el-tag>
+              <el-tag size="small" effect="plain">v{{ corrected?.version ?? announceDisplayVersion(detailEntry) }}</el-tag>
             </h3>
             <p class="repo-preview-id">{{ detailEntry.announce.id }}</p>
           </div>
         </div>
-        <p class="repo-preview-summary">{{ corrected?.summary ?? detailEntry.announce.summary }}</p>
+        <p class="repo-preview-summary">{{ corrected?.summary ?? announceDisplaySummary(detailEntry) }}</p>
         <p class="explore-detail-meta">发布者：{{ detailEntry.announce.publisher }}</p>
         <p v-if="detailEntry.announce.releaseUrl" class="explore-detail-meta">
           发布地址：{{ detailEntry.announce.releaseUrl }}
@@ -117,8 +119,13 @@ import { listenPluginAnnounceEvents } from '../../api';
 import { hashGradient } from '../../utils/palette';
 import {
   announceCategoryLabel,
+  announceDisplayIcon,
+  announceDisplayName,
+  announceDisplaySummary,
+  announceDisplayVersion,
   announceMatches,
   filterVerifiedAnnounces,
+  safeAnnounceIcon,
   shuffleAnnounces,
   sortAnnouncesByUpdated
 } from './apps-explore';
@@ -194,7 +201,8 @@ export default defineComponent({
     };
 
     onMounted(async () => {
-      await reshuffle();
+      // 先注册监听再拉索引（I7）：监听建立前发生的 verified 事件由随后
+      // 的全量拉取补齐，监听建立后到达的事件经 upsert 幂等并入，不漏不重
       try {
         unlisten = await listenPluginAnnounceEvents((event) => {
           if (event.kind === 'verified' && event.verified) {
@@ -204,6 +212,7 @@ export default defineComponent({
       } catch {
         // 非 Tauri 环境（单测/纯前端预览）无事件通道，仅手动换一批
       }
+      await reshuffle();
     });
     onBeforeUnmount(() => unlisten?.());
 
@@ -229,8 +238,13 @@ export default defineComponent({
       }
     };
 
-    const detailName = computed(() => corrected.value?.name ?? detailEntry.value?.announce.name ?? '');
-    const detailIcon = computed(() => corrected.value?.icon || detailEntry.value?.announce.icon || '');
+    const detailName = computed(() =>
+      corrected.value?.name ?? (detailEntry.value ? announceDisplayName(detailEntry.value) : '')
+    );
+    const detailIcon = computed(() =>
+      safeAnnounceIcon(corrected.value?.icon || '') ||
+      (detailEntry.value ? announceDisplayIcon(detailEntry.value) : '')
+    );
     const detailPermissions = computed(() => corrected.value?.permissions ?? []);
 
     /** 复用波次 1 的安装链路：声明文件已校正，交给父组件权限确认 + installFromRepo */
@@ -265,6 +279,10 @@ export default defineComponent({
       confirmInstall,
       exploreIconBackground,
       announceCategoryLabel,
+      announceDisplayIcon,
+      announceDisplayName,
+      announceDisplaySummary,
+      announceDisplayVersion,
       Search
     };
   }

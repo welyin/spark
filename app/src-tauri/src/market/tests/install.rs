@@ -131,6 +131,29 @@ fn install_rejects_signature_id_domain_and_digest_problems() {
     );
 }
 
+/// B1：清单资产 fileName 消毒——拒绝穿越/绝对路径/多段文件名，
+/// 防任意路径写盘与跨插件覆盖提权（安装入口即拒，不落任何状态）。
+#[test]
+fn install_rejects_unsafe_asset_file_name() {
+    for bad_name in ["../evil.spkg", "..\\evil.spkg", "C:\\evil.spkg", "a/b.spkg", "/abs.spkg"] {
+        let fixture = Fixture::new();
+        write_release(
+            &fixture,
+            &ReleaseOpts {
+                file_name: Some(bad_name.to_string()),
+                ..Default::default()
+            },
+        );
+        // 不调 initialize：避免对账路径先行消费清单，直测 install 入口
+        let mut service = fixture.service();
+        assert_eq!(
+            service.install("spark-example").unwrap_err(),
+            format!("Plugin asset file name invalid: {bad_name}")
+        );
+        assert!(!service.state.installed.contains_key("spark-example"));
+    }
+}
+
 #[test]
 fn set_enabled_roundtrip_and_upgrade_flow() {
     let fixture = Fixture::new();

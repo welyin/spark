@@ -237,7 +237,7 @@
 
 <script lang="ts">
 import { computed, defineComponent, ref, type PropType } from 'vue';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { ArrowLeft, Search } from '@element-plus/icons-vue';
 import type { PluginMarketItemDto, RepoPluginDeclarationDto, SideloadPreviewDto } from '../../api/types';
 import { pickSpkgFile } from '../../api';
@@ -343,6 +343,18 @@ export default defineComponent({
       }
     };
 
+    /** 发布声明的 releaseUrl：按 §2.2 tag 规则从声明 id/version 推导
+     *  （根仓库 v<version>，monorepo <末段>-v<version>） */
+    const announceReleaseUrl = (declaration: RepoPluginDeclarationDto): string => {
+      const segments = declaration.id.split('/');
+      const base = segments.slice(0, 3).join('/');
+      const tag =
+        segments.length > 3
+          ? `${segments[segments.length - 1]}-v${declaration.version}`
+          : `v${declaration.version}`;
+      return `https://${base}/releases/tag/${tag}`;
+    };
+
     const confirmAnnounce = async () => {
       const declaration = announcePreview.value;
       if (!declaration) {
@@ -359,7 +371,7 @@ export default defineComponent({
           summary: declaration.summary,
           category: declaration.category,
           version: declaration.version,
-          releaseUrl: ''
+          releaseUrl: announceReleaseUrl(declaration)
         });
         announceDone.value = true;
       } catch (error) {
@@ -409,7 +421,33 @@ export default defineComponent({
         ElMessage.success(`「${preview.name}」导入成功，启用后即可使用`);
         emit('sideloaded');
       } catch (error) {
-        sideloadError.value = `导入失败：${error}`;
+        // 信任降级覆盖守卫（I2）：后端结构化前缀 → 确认框标注「将覆盖现有 xx 安装」，
+        // 用户同意后带 confirmOverwrite = true 重试
+        const message = `${error}`;
+        if (message.startsWith('Sideload overwrite requires confirmation')) {
+          const trust = /trust=([a-z-]+)/.exec(message)?.[1] ?? '';
+          const trustLabel = trust === 'signed' ? '签名信任链' : trust === 'repo-anchored' ? '仓库锚定' : trust;
+          try {
+            await ElMessageBox.confirm(
+              `将覆盖现有 ${trustLabel} 安装，信任层级降级为侧载导入（仅哈希核对）。确认继续？`,
+              '覆盖已有安装',
+              { confirmButtonText: '覆盖导入', cancelButtonText: '取消', type: 'warning' }
+            );
+          } catch {
+            sideloadImporting.value = false;
+            return; // 用户取消覆盖
+          }
+          try {
+            await window.electronAPI.pluginMarket.importLocal(sideloadPath.value, preview.sha256, true);
+            sideloadVisible.value = false;
+            ElMessage.success(`「${preview.name}」导入成功，启用后即可使用`);
+            emit('sideloaded');
+          } catch (retryError) {
+            sideloadError.value = `导入失败：${retryError}`;
+          }
+        } else {
+          sideloadError.value = `导入失败：${message}`;
+        }
       } finally {
         sideloadImporting.value = false;
       }

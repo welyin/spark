@@ -111,24 +111,27 @@ pub async fn plugin_market_inspect_local(
     run_market(state, move |svc| svc.inspect_local_package(&path)).await
 }
 
-/// 侧载导入：复核整包哈希（preview 后文件被替换即拒）→ 逐文件校验 →
-/// 落状态（trust = "sideloaded"）。
+/// 侧载导入：复核整包哈希（preview 后文件被替换即拒）→ 保留 id / 信任降级
+/// 守卫 → 逐文件校验 → 落状态（trust = "sideloaded"）。
+/// `confirm_overwrite`：覆盖既有更高信任安装时前端经确认对话框取得同意后传 true。
 #[tauri::command]
 pub async fn plugin_market_import_local(
     state: tauri::State<'_, MarketState>,
     path: String,
     expected_sha256: String,
+    confirm_overwrite: bool,
 ) -> Result<InstalledPluginState, String> {
     run_market(state, move |svc| {
-        svc.import_local_package(&path, &expected_sha256)
+        svc.import_local_package(&path, &expected_sha256, confirm_overwrite)
     })
     .await
 }
 
 // ------------------------------------------------------------------
 // 广播索引（plugin-dist §8，阶段 C 波次 2a）：发布声明 / 索引查询。
-// 索引存内核 sled（`mkt:ann:`），内核 API 为同步且禁在 tokio 线程调用，
-// 与全命令层一致用同步 command（PoW 计算秒级，UI 在渲染进程不受影响）。
+// 索引存内核 sled（`mkt:ann:`），内核 API 为同步且禁在 tokio 线程调用；
+// 发布命令含 PoW 计算（秒级 CPU），改 async + spawn_blocking
+// （announce_verify.rs 同款模式），不占命令调用线程。
 // ------------------------------------------------------------------
 
 use spark_core::p2p::plugin_announce::{PluginAnnounceIndexEntry, PluginAnnounceInput};
@@ -139,13 +142,19 @@ use crate::KernelState;
 /// 发布插件声明（开发者模式）：字段校验 → 根身份签名 → 算 PoW → 广播 →
 /// 入本地索引。需身份已解锁且 P2P 已启动。
 #[tauri::command]
-pub fn plugin_market_announce_publish(
+pub async fn plugin_market_announce_publish(
     state: tauri::State<'_, KernelState>,
     input: PluginAnnounceInput,
 ) -> Result<PluginAnnounceIndexEntry, String> {
-    lock_kernel(&state)?
-        .publish_plugin_announce(&input)
-        .map_err(err)
+    let kernel = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        let guard = kernel
+            .lock()
+            .map_err(|_| "kernel state lock poisoned".to_string())?;
+        guard.publish_plugin_announce(&input).map_err(err)
+    })
+    .await
+    .map_err(|e| format!("kernel task join failed: {e}"))?
 }
 
 /// 本地广播索引列表（含 verified 状态；市场视图只展示 verified 条目，波次 2b）。

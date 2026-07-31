@@ -64,8 +64,8 @@ export async function listAppMessages(spaceKey: string, pluginId: string): Promi
 
 /**
  * 清零应用会话未读（本地缓存与内核一并清零，语义与人际会话一致）。
- * Tauri 下透传内核调用结果：失败返回 success:false（本地缓存仍清零，
- * 调用方可按结果提示/重试）；mock markRead 内部的 appMarkRead 为幂等重复调用。
+ * Tauri 下透传内核调用结果：失败返回 success:false（本地缓存不清零、
+ * 保留未读，调用方可提示/重试）；成功才同步清零本地缓存。
  */
 export async function markAppMessagesRead(spaceKey: string, pluginId: string): Promise<{ success: boolean }> {
   const api = messagesApi();

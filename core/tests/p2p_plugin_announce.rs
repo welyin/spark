@@ -203,6 +203,7 @@ async fn announce_relay_tenure_gating() {
 }
 
 /// 无效声明（PoW 不足）拒收：不入索引、不发事件。
+/// 负向断言前先发一条合法声明证明通路正常（排除「通路本就断」的假性通过）。
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn announce_invalid_rejected() {
     let (mut a, _sa, _s_a) = start_announce_node(0).await;
@@ -214,6 +215,28 @@ async fn announce_invalid_rejected() {
         matches!(e, P2pEvent::PeerConnected { .. })
     })
     .await;
+
+    // 正向：合法声明必须能送达并入索引（每次重试换新 nonce 避免 gossipsub 去重）
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let mut nonce_offset = 0i64;
+    loop {
+        let json = make_announce_json("github.com/acme/good", NOW + nonce_offset);
+        a.publish_plugin_announce(&json).await.expect("publish ok");
+        for _ in 0..5 {
+            if index_has(&s_b, "github.com/acme/good") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        if index_has(&s_b, "github.com/acme/good") {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "valid announce not delivered"
+        );
+        nonce_offset += 1;
+    }
 
     // bits 低于节点下限（结构拒）
     let (mut bad, payload) =
@@ -227,9 +250,10 @@ async fn announce_invalid_rejected() {
         .await
         .expect("publish ok");
 
-    // 等足传播窗口：B 不得入索引
+    // 等足传播窗口：B 不得入索引（通路已被上面的正向声明证明是通的）
     tokio::time::sleep(Duration::from_secs(3)).await;
     assert!(!index_has(&s_b, "github.com/acme/bad"));
+    assert!(index_has(&s_b, "github.com/acme/good"));
     a.stop().await;
     b.stop().await;
 }

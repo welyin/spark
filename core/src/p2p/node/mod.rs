@@ -352,6 +352,7 @@ impl P2pNode {
                 .plugin_announce_relay_tenure_ms
                 .unwrap_or(PLUGIN_ANNOUNCE_RELAY_TENURE_MS),
             peer_connected_since: HashMap::new(),
+            topic_cache: HashMap::new(),
         };
         let keepalive_interval = config.keepalive_interval;
         let task = tokio::spawn(async move {

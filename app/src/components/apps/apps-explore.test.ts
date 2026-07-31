@@ -6,8 +6,13 @@ import { describe, expect, it } from 'vitest';
 import type { PluginAnnounceIndexEntryDto } from '../../api/types';
 import {
   announceCategoryLabel,
+  announceDisplayIcon,
+  announceDisplayName,
+  announceDisplaySummary,
+  announceDisplayVersion,
   announceMatches,
   filterVerifiedAnnounces,
+  safeAnnounceIcon,
   shuffleAnnounces,
   sortAnnouncesByUpdated
 } from './apps-explore';
@@ -16,7 +21,8 @@ function entry(
   id: string,
   verified: PluginAnnounceIndexEntryDto['verified'],
   overrides: Partial<PluginAnnounceIndexEntryDto['announce']> = {},
-  updatedAt = 0
+  updatedAt = 0,
+  corrected?: PluginAnnounceIndexEntryDto['corrected']
 ): PluginAnnounceIndexEntryDto {
   return {
     announce: {
@@ -40,7 +46,8 @@ function entry(
     updatedAt,
     verified,
     verifyError: '',
-    verifiedAt: 0
+    verifiedAt: 0,
+    corrected
   };
 }
 
@@ -103,5 +110,49 @@ describe('announceCategoryLabel', () => {
     expect(announceCategoryLabel('business')).toBe('应用');
     expect(announceCategoryLabel('social')).toBe('social');
     expect(announceCategoryLabel('')).toBe('其他');
+  });
+});
+
+describe('展示字段（plugin-dist §8.8 corrected 优先）', () => {
+  const corrected = { name: '校正版待办', icon: 'https://cdn.example.com/icon.png', summary: '校正简介', version: '2.0.0' };
+
+  it('corrected 在场时展示校正值，announce 自报值不展示', () => {
+    const e = entry('a', 'verified', { name: '自报名', summary: '自报简介', version: '1.0.0' }, 0, corrected);
+    expect(announceDisplayName(e)).toBe('校正版待办');
+    expect(announceDisplaySummary(e)).toBe('校正简介');
+    expect(announceDisplayVersion(e)).toBe('2.0.0');
+    expect(announceDisplayIcon(e)).toBe('https://cdn.example.com/icon.png');
+  });
+
+  it('corrected 缺席时回落 announce 自报值（占位）', () => {
+    const e = entry('a', 'verified', { name: '自报名', summary: '自报简介', version: '1.0.0' });
+    expect(announceDisplayName(e)).toBe('自报名');
+    expect(announceDisplaySummary(e)).toBe('自报简介');
+    expect(announceDisplayVersion(e)).toBe('1.0.0');
+    expect(announceDisplayIcon(e)).toBe('');
+  });
+
+  it('搜索匹配校正后的名称/简介', () => {
+    const e = entry('a', 'verified', { name: '自报名', summary: '自报简介' }, 0, corrected);
+    expect(announceMatches(e, '校正版')).toBe(true);
+    expect(announceMatches(e, '校正简介')).toBe(true);
+    expect(announceMatches(e, '自报名')).toBe(false);
+  });
+});
+
+describe('safeAnnounceIcon（渲染白名单）', () => {
+  it('仅放行 https 与 data:image/，其余一律空串', () => {
+    expect(safeAnnounceIcon('https://cdn.example.com/x.png')).toBe('https://cdn.example.com/x.png');
+    expect(safeAnnounceIcon('data:image/png;base64,AA==')).toBe('data:image/png;base64,AA==');
+    expect(safeAnnounceIcon('data:text/html,<script>1</script>')).toBe('');
+    expect(safeAnnounceIcon('javascript:alert(1)')).toBe('');
+    expect(safeAnnounceIcon('http://evil.com/x.png')).toBe('');
+    expect(safeAnnounceIcon('file:///etc/passwd')).toBe('');
+    expect(safeAnnounceIcon('')).toBe('');
+  });
+
+  it('announceDisplayIcon 对 corrected/announce 值统一过白名单', () => {
+    const bad = entry('a', 'verified', { icon: 'javascript:alert(1)' });
+    expect(announceDisplayIcon(bad)).toBe('');
   });
 });

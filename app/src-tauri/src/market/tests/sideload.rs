@@ -78,7 +78,7 @@ fn import_installs_and_marks_sideloaded_trust() {
     let mut service = fixture.service();
     let preview = service.inspect_local_package(spkg.to_str().unwrap()).unwrap();
     let state = service
-        .import_local_package(spkg.to_str().unwrap(), &preview.sha256)
+        .import_local_package(spkg.to_str().unwrap(), &preview.sha256, false)
         .unwrap();
     assert_eq!(state.plugin_id, "todo-local");
     assert_eq!(state.version, "1.0.0");
@@ -100,16 +100,93 @@ fn import_installs_and_marks_sideloaded_trust() {
 
 #[test]
 fn import_rejects_hash_change_after_preview() {
+    // 真实换文件：inspect 之后源 .spkg 被替换为另一份合法包，import 必须拒
     let fixture = Fixture::new();
     let spkg = good_spkg(&fixture);
     let mut service = fixture.service();
+    let preview = service.inspect_local_package(spkg.to_str().unwrap()).unwrap();
+    fs::write(
+        &spkg,
+        spkg_text("todo-local", &[("views/main.js", b"swapped")]),
+    )
+    .unwrap();
     assert_eq!(
         service
-            .import_local_package(spkg.to_str().unwrap(), &"00".repeat(32))
+            .import_local_package(spkg.to_str().unwrap(), &preview.sha256, false)
             .unwrap_err(),
         "Sideload package changed since preview: sha256 mismatch"
     );
     assert!(read_state_file(&fixture.state_file).installed.is_empty());
+}
+
+#[test]
+fn import_rejects_reserved_plugin_id() {
+    let fixture = Fixture::new();
+    let mut service = fixture.service();
+    // system 与内置目录 id（spark-example）不允许侧载顶替
+    for reserved in ["system", "spark-example"] {
+        let spkg = write_spkg(
+            &fixture,
+            &format!("{reserved}.spkg"),
+            &spkg_text(reserved, &[("views/main.js", b"x")]),
+        );
+        let preview = service.inspect_local_package(spkg.to_str().unwrap()).unwrap();
+        assert_eq!(
+            service
+                .import_local_package(spkg.to_str().unwrap(), &preview.sha256, false)
+                .unwrap_err(),
+            format!("Sideload import refused: reserved plugin id {reserved}")
+        );
+    }
+    assert!(read_state_file(&fixture.state_file).installed.is_empty());
+}
+
+#[test]
+fn import_overwrite_higher_trust_requires_confirmation() {
+    let fixture = Fixture::new();
+    let mut service = fixture.service();
+    // 预置 repo-anchored 安装（更高信任）
+    service.state.installed.insert(
+        "todo-local".to_string(),
+        InstalledPluginState {
+            plugin_id: "todo-local".to_string(),
+            version: "1.0.0".to_string(),
+            package_path: String::new(),
+            sha256: String::new(),
+            size: 0,
+            installed_at: 0,
+            enabled: true,
+            granted_permissions: vec![],
+            trust: Some("repo-anchored".to_string()),
+        },
+    );
+    let spkg = good_spkg(&fixture);
+    let preview = service.inspect_local_package(spkg.to_str().unwrap()).unwrap();
+    // 未确认 → 拒（结构化前缀供前端识别后弹确认框）
+    assert_eq!(
+        service
+            .import_local_package(spkg.to_str().unwrap(), &preview.sha256, false)
+            .unwrap_err(),
+        "Sideload overwrite requires confirmation: existing install trust=repo-anchored for todo-local"
+    );
+    // 确认后 → 覆盖为 sideloaded
+    let state = service
+        .import_local_package(spkg.to_str().unwrap(), &preview.sha256, true)
+        .unwrap();
+    assert_eq!(state.trust.as_deref(), Some("sideloaded"));
+
+    // 同级（sideloaded 覆盖 sideloaded）无需确认
+    let spkg = write_spkg(
+        &fixture,
+        "spark-plugin-todo-local-1.0.1.spkg",
+        &spkg_text("todo-local", &[("views/main.js", b"v2")]),
+    );
+    let preview = service.inspect_local_package(spkg.to_str().unwrap()).unwrap();
+    assert!(
+        service
+            .import_local_package(spkg.to_str().unwrap(), &preview.sha256, false)
+            .is_ok()
+    );
 }
 
 #[test]
@@ -127,7 +204,7 @@ fn import_rejects_tampered_file_entry() {
     let digest = hex::encode(sha2::Sha256::digest(fs::read(&spkg).unwrap()));
     assert_eq!(
         service
-            .import_local_package(spkg.to_str().unwrap(), &digest)
+            .import_local_package(spkg.to_str().unwrap(), &digest, false)
             .unwrap_err(),
         "Sideload package invalid: file views/main.js: sha256 mismatch"
     );

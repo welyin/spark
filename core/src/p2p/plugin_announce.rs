@@ -123,15 +123,19 @@ pub fn announce_id_valid(id: &str) -> bool {
     if !segment_valid(segments[1], 100) || !segment_valid(segments[2], 100) {
         return false;
     }
+    // repo 段带 `.git` 尾缀即未规范化（§1.2 规范化会剥掉一次）：广播侧直接拒
+    if segments[2].ends_with(".git") {
+        return false;
+    }
     segments[3..].iter().all(|s| segment_valid(s, 64))
 }
 
-/// semver 三段（x.y.z，可带 `-预发布后缀`；§2.1 口径的宽松形状校验）。
+/// semver 三段（x.y.z，可带 `-预发布后缀` 与 `+build` 元数据；§2.1 口径的宽松形状校验）。
 fn version_shape_valid(version: &str) -> bool {
     if version.is_empty() || version.chars().count() > PLUGIN_ANNOUNCE_VERSION_MAX_CHARS {
         return false;
     }
-    let core = version.split('-').next().unwrap_or("");
+    let core = version.split(['-', '+']).next().unwrap_or("");
     let parts: Vec<&str> = core.split('.').collect();
     parts.len() == 3
         && parts
@@ -442,6 +446,10 @@ fn parse_structure(text: &str, min_pow_bits: u32) -> Option<PluginAnnounce> {
     if announce.pow.bits < min_pow_bits {
         return None;
     }
+    // nonce 上限 < 2^63（§8.2：JSON number 互操作口径，超出按结构非法）
+    if announce.pow.nonce > i64::MAX as u64 {
+        return None;
+    }
     // publisher：64 位小写 hex（rootId 形状）
     if announce.publisher.len() != 64
         || !announce
@@ -474,6 +482,18 @@ pub enum AnnounceVerified {
     Failed,
 }
 
+/// 懒惰核查校正后的展示字段（§8.8：以仓库声明文件为准回写索引；
+/// announce 自报值仅在 corrected 缺席时作占位）。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CorrectedAnnounceFields {
+    pub name: String,
+    #[serde(default)]
+    pub icon: String,
+    pub summary: String,
+    pub version: String,
+}
+
 /// 索引条目（§8.7 值线形）。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -487,6 +507,9 @@ pub struct PluginAnnounceIndexEntry {
     pub verify_error: String,
     #[serde(default)]
     pub verified_at: i64,
+    /// 核查通过时回写的校正展示字段（§8.8）；同 id 新声明到达时重置为 None
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub corrected: Option<CorrectedAnnounceFields>,
 }
 
 /// upsert 结果（ stale = 同 id 已有更新 timestamp，未入索引）。
@@ -553,6 +576,8 @@ impl<'a> PluginAnnounceStore<'a> {
                     verified: AnnounceVerified::Pending,
                     verify_error: String::new(),
                     verified_at: 0,
+                    // 新声明到达：旧核查结论与校正字段一并作废
+                    corrected: None,
                 })?;
                 AnnounceUpsert::Replaced
             }
@@ -564,30 +589,44 @@ impl<'a> PluginAnnounceStore<'a> {
                     verified: AnnounceVerified::Pending,
                     verify_error: String::new(),
                     verified_at: 0,
+                    corrected: None,
                 })?;
                 AnnounceUpsert::Inserted
             }
         };
         if !matches!(outcome, AnnounceUpsert::Stale) {
-            self.evict_if_needed(now_ms)?;
+            self.evict_if_needed(now_ms, matches!(outcome, AnnounceUpsert::Inserted))?;
         }
         Ok(outcome)
     }
 
     /// 懒惰核查落终态（§8.8）：verified + 原因 + 时间；条目不存在返回 false。
+    /// `expected_timestamp` 绑定核查时读到的 announce.timestamp：核查期间同 id
+    /// 新声明到达（替换条目）则本次结论作废丢弃，防旧结论覆盖新声明。
+    /// 核查通过时回写校正展示字段（corrected）；失败清空 corrected。
     pub fn mark_verified(
         &mut self,
         id: &str,
         verified: AnnounceVerified,
         error: &str,
         now_ms: i64,
+        expected_timestamp: i64,
+        corrected: Option<CorrectedAnnounceFields>,
     ) -> super::Result<bool> {
         let Some(mut entry) = self.get(id)? else {
             return Ok(false);
         };
+        if entry.announce.timestamp != expected_timestamp {
+            return Ok(false);
+        }
         entry.verified = verified;
         entry.verify_error = error.to_string();
         entry.verified_at = now_ms;
+        entry.corrected = if verified == AnnounceVerified::Verified {
+            corrected
+        } else {
+            None
+        };
         self.save(&entry)?;
         Ok(true)
     }
@@ -623,16 +662,16 @@ impl<'a> PluginAnnounceStore<'a> {
         Ok(entries)
     }
 
-    /// 容量控制（§8.7）：读计数键，超限全量扫描按 updatedAt 最旧逐出到上限，
-    /// 并以扫描结果重写计数（顺带修正漂移）。计数键只增不减的近似值，
-    /// 逐出时以真实扫描为准。
-    fn evict_if_needed(&mut self, now_ms: i64) -> super::Result<()> {
+    /// 容量控制（§8.7）：读计数键，新插入（`count_new`）才递增——Replace/Duplicate
+    /// 不新增条目不递增，避免近似计数虚高触发无谓全量扫描；超限全量扫描按
+    /// updatedAt 最旧逐出到上限，并以扫描结果重写计数（顺带修正漂移）。
+    fn evict_if_needed(&mut self, now_ms: i64, count_new: bool) -> super::Result<()> {
         let count: u64 = self
             .storage
             .get(PLUGIN_MARKET_INDEX_COUNT_KEY)?
             .and_then(|v| v.trim().parse().ok())
             .unwrap_or(0);
-        let count = count + 1;
+        let count = count + u64::from(count_new);
         if count <= PLUGIN_MARKET_INDEX_MAX as u64 {
             self.storage
                 .put(PLUGIN_MARKET_INDEX_COUNT_KEY, &count.to_string())?;

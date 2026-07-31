@@ -179,6 +179,14 @@ export type PluginAnnounceDto = PluginAnnounceInputDto & {
   signature: string;
 };
 
+/** 懒惰核查校正后的展示字段（plugin-dist §8.8：以仓库声明文件为准；announce 自报值仅作占位） */
+export type CorrectedAnnounceFieldsDto = {
+  name: string;
+  icon: string;
+  summary: string;
+  version: string;
+};
+
 /** 广播索引本地索引条目（plugin-dist §8.7；verified 只有 verified 态进市场视图） */
 export type PluginAnnounceIndexEntryDto = {
   announce: PluginAnnounceDto;
@@ -187,6 +195,8 @@ export type PluginAnnounceIndexEntryDto = {
   verified: 'pending' | 'verified' | 'failed';
   verifyError: string;
   verifiedAt: number;
+  /** 核查通过时回写的校正展示字段；同 id 新声明到达时重置缺席 */
+  corrected?: CorrectedAnnounceFieldsDto;
 };
 
 export type OrgView = {
@@ -505,8 +515,9 @@ export type ElectronAPI = {
     installFromRepo: (id: string) => Promise<InstalledPluginStateDto>;
     /** .spkg 侧载预览：解析容器 + 整包哈希（网络差降级，波次 2b） */
     inspectLocal: (path: string) => Promise<SideloadPreviewDto>;
-    /** .spkg 侧载导入：复核整包哈希 → 逐文件校验 → 落状态（trust = 'sideloaded'） */
-    importLocal: (path: string, expectedSha256: string) => Promise<InstalledPluginStateDto>;
+    /** .spkg 侧载导入：复核整包哈希 → 逐文件校验 → 落状态（trust = 'sideloaded'）；
+     *  覆盖既有更高信任安装需 confirmOverwrite = true（后端报确认前缀后重试） */
+    importLocal: (path: string, expectedSha256: string, confirmOverwrite?: boolean) => Promise<InstalledPluginStateDto>;
     /** 发布插件声明（plugin-dist §8，开发者模式：签名 + PoW + 广播；秒级） */
     announcePublish: (input: PluginAnnounceInputDto) => Promise<PluginAnnounceIndexEntryDto>;
     /** 本地广播索引列表（含 verified 状态；市场视图只展示 verified，波次 2b） */

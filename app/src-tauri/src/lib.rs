@@ -23,7 +23,9 @@ use spark_core::p2p::P2pEvent;
 use tauri::{Emitter, Manager, RunEvent};
 
 /// 内核单例状态（全部命令共享；锁内只做同步调用）。
-pub type KernelState = Mutex<Kernel>;
+/// Arc 句柄：PoW 计算等 CPU 密集命令需 spawn_blocking（'static 状态克隆
+/// 移入阻塞任务），与 MarketState 同口径。
+pub type KernelState = Arc<Mutex<Kernel>>;
 
 /// 插件市场服务单例状态（壳侧服务，不依赖内核）。
 /// Arc 句柄：市场命令改为 async + spawn_blocking（更新探测/安装下载是阻塞网络 IO，
@@ -112,7 +114,7 @@ pub fn run() {
             .map_err(|e| std::io::Error::other(e.to_string()))?;
             let events = kernel.subscribe_p2p_events();
             let announce_events = kernel.subscribe_p2p_events();
-            app.manage(KernelState::new(kernel));
+            app.manage(Arc::new(Mutex::new(kernel)));
             spawn_p2p_event_forwarder(app.handle().clone(), events);
             // 插件市场：状态/包目录在 app_data_dir，本地 dist-market 与插件源码
             // 目录按编译期 crate 位置解析（见 market::MarketPaths::for_app）；

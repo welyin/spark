@@ -31,15 +31,46 @@ export function sortAnnouncesByUpdated(
   return [...entries].sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
-/** 探索页搜索：按名称 / 简介 / 插件 id（仓库地址）过滤，大小写不敏感。 */
+/** 探索页搜索：按名称 / 简介 / 插件 id（仓库地址）过滤，大小写不敏感；
+ *  名称/简介读校正后字段（corrected 缺席时回落 announce 自报值）。 */
 export function announceMatches(entry: PluginAnnounceIndexEntryDto, keyword: string): boolean {
   const kw = keyword.trim().toLowerCase();
   if (!kw) {
     return true;
   }
-  return [entry.announce.name, entry.announce.summary, entry.announce.id].some((field) =>
+  return [announceDisplayName(entry), announceDisplaySummary(entry), entry.announce.id].some((field) =>
     field.toLowerCase().includes(kw)
   );
+}
+
+/**
+ * 展示字段口径（plugin-dist §8.8）：懒惰核查通过时内核已把仓库声明文件的
+ * name/icon/summary/version 回写 corrected——列表一律以 corrected 为准，
+ * announce 自报值仅在 corrected 缺席时作占位（索引是提示层，自报不可信）。
+ */
+export function announceDisplayName(entry: PluginAnnounceIndexEntryDto): string {
+  return entry.corrected?.name || entry.announce.name;
+}
+
+/** 展示简介（同 announceDisplayName 口径） */
+export function announceDisplaySummary(entry: PluginAnnounceIndexEntryDto): string {
+  return entry.corrected?.summary || entry.announce.summary;
+}
+
+/** 展示版本（同 announceDisplayName 口径） */
+export function announceDisplayVersion(entry: PluginAnnounceIndexEntryDto): string {
+  return entry.corrected?.version || entry.announce.version;
+}
+
+/** icon 渲染白名单：仅 https URL 与 data:image/ 内联图，其余一律不渲染（防
+ *  javascript:/畸形 scheme 进 img src；空串走首字母占位） */
+export function safeAnnounceIcon(icon: string): string {
+  return icon.startsWith('https://') || icon.startsWith('data:image/') ? icon : '';
+}
+
+/** 展示 icon：corrected 优先，过 safeAnnounceIcon 白名单 */
+export function announceDisplayIcon(entry: PluginAnnounceIndexEntryDto): string {
+  return safeAnnounceIcon(entry.corrected?.icon || entry.announce.icon);
 }
 
 /** 广播声明分类的展示名（目录粗分类映射，未知值原样展示）。 */

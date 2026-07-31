@@ -301,10 +301,13 @@ export default defineComponent({
         ElMessage.success('应用安装成功，启用后即可使用');
         notifyPluginInstalled(spaceKeyOf(currentSpace.value), declaration.name);
       } catch (error) {
-        // 网络差降级（plugin_system.md「市场展示与排序」）：仓库不可达时提示手动侧载路径
+        // 网络差降级（plugin_system.md「市场展示与排序」）：仓库不可达时提示手动侧载路径；
+        // 判定走结构化前缀（plugin-dist §6 错误串统一 "Repo plugin ... fetch failed" 形态）
         const message = `${error}`;
+        const unreachable =
+          message.startsWith('Repo plugin') && message.includes('fetch failed');
         ElMessage.error(
-          message.includes('fetch failed') || message.includes('unreachable')
+          unreachable
             ? `应用安装失败：仓库不可达，可自行下载 .spkg 后用「导入 .spkg 文件」侧载安装（${message}）`
             : `应用安装失败：${message}`
         );
@@ -313,7 +316,8 @@ export default defineComponent({
       }
     };
 
-    const upgradeApp = async (item: PluginMarketItemDto) => {      if (isMockApp(item)) {
+    const upgradeApp = async (item: PluginMarketItemDto) => {
+      if (isMockApp(item)) {
         ElMessage.info('演示应用已是最新版本');
         return;
       }

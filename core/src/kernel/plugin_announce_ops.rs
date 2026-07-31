@@ -8,8 +8,9 @@
 use crate::p2p::constants::PLUGIN_ANNOUNCE_MIN_POW_BITS;
 use crate::p2p::node::system_now_ms;
 use crate::p2p::plugin_announce::{
-    AnnouncePow, AnnounceVerified, PluginAnnounceIndexEntry, PluginAnnounceInput,
-    PluginAnnounceStore, build_signed_announce, mine_announce_nonce, plugin_announce_to_json,
+    AnnouncePow, AnnounceVerified, CorrectedAnnounceFields, PluginAnnounceIndexEntry,
+    PluginAnnounceInput, PluginAnnounceStore, build_signed_announce, mine_announce_nonce,
+    plugin_announce_to_json,
 };
 use crate::p2p::{P2pError, P2pEvent};
 
@@ -66,13 +67,18 @@ impl Kernel {
     }
 
     /// 懒惰核查终态回写（§8.8，壳层核查队列调用）：verified=true 标
-    /// Verified（进入市场视图），false 标 Failed 并记原因；条目持久化，
-    /// 并向壳层/渲染端发 `PluginAnnounceVerified` 事件。条目不存在返回 false。
+    /// Verified（进入市场视图）并回写校正展示字段（corrected），false 标
+    /// Failed 并记原因；`expected_timestamp` 绑定核查时读到的条目 timestamp，
+    /// 不匹配（核查期间同 id 新声明到达）则丢弃本次结论返回 false。
+    /// 条目持久化，并向壳层/渲染端发 `PluginAnnounceVerified` 事件。
+    /// 条目不存在或 timestamp 不匹配返回 false（后者不发事件）。
     pub fn mark_plugin_announce_verified(
         &self,
         id: &str,
         verified: bool,
         error: Option<&str>,
+        expected_timestamp: i64,
+        corrected: Option<CorrectedAnnounceFields>,
     ) -> Result<bool> {
         let now = system_now_ms();
         let mut storage = self.require_storage()?.clone();
@@ -81,8 +87,14 @@ impl Kernel {
         } else {
             AnnounceVerified::Failed
         };
-        let marked =
-            PluginAnnounceStore::new(&mut storage).mark_verified(id, state, error.unwrap_or(""), now)?;
+        let marked = PluginAnnounceStore::new(&mut storage).mark_verified(
+            id,
+            state,
+            error.unwrap_or(""),
+            now,
+            expected_timestamp,
+            corrected,
+        )?;
         if marked {
             let _ = self.event_tx.send(P2pEvent::PluginAnnounceVerified {
                 id: id.to_string(),

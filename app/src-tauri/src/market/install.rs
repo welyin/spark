@@ -4,12 +4,32 @@
 use std::fs;
 use std::path::PathBuf;
 
+use sha2::Digest as _;
+
 use super::catalog::{PluginCatalogItem, find_catalog_item};
 use super::sources::{
     compute_file_sha256, download_file, fetch_text_smart, file_size, normalize_file_url, now_millis,
 };
 use super::types::{InstalledPluginState, PluginAsset, PluginReleaseManifest, PluginUpdateProbe};
 use super::{PluginMarketService, trust};
+
+/// 清单资产 fileName 消毒（B1）：必须是单段文件名——拒绝绝对路径、`\`、
+/// `/`、`..` 段与盘符（`C:`），防任意路径写盘与跨插件覆盖提权。
+/// 与 plugin_src.rs / sideload.rs 的路径段校验同思路，但更严：不允许多段。
+pub(crate) fn sanitize_asset_file_name(file_name: &str) -> Result<&str, String> {
+    let valid = !file_name.is_empty()
+        && file_name != "."
+        && file_name != ".."
+        && !file_name.contains('/')
+        && !file_name.contains('\\')
+        && !file_name.contains(':')
+        && !std::path::Path::new(file_name).is_absolute();
+    if valid {
+        Ok(file_name)
+    } else {
+        Err(format!("Plugin asset file name invalid: {file_name}"))
+    }
+}
 
 impl PluginMarketService {
     /// TS `loadVerifiedManifest`：取清单+签名 → 验签 → 解析 → id/domain 匹配。
@@ -43,32 +63,59 @@ impl PluginMarketService {
     }
 
     /// TS `downloadAndVerifyAsset`：落 <packages_root>/<id>/packages/<fileName>，
-    /// file:// 复制、https 下载，随后校验 sha256 与 size。
+    /// file:// 复制、https 下载，随后校验 sha256 与 size（校验不过删除残留文件）。
     pub(crate) fn download_and_verify_asset(
         &self,
         asset: &PluginAsset,
         plugin_id: &str,
     ) -> Result<(PathBuf, String, u64), String> {
+        let file_name = sanitize_asset_file_name(&asset.file_name)?;
         let plugin_dir = self.paths.packages_root.join(plugin_id).join("packages");
         fs::create_dir_all(&plugin_dir).map_err(|e| format!("{e}"))?;
-        let file_path = plugin_dir.join(&asset.file_name);
+        let file_path = plugin_dir.join(file_name);
 
         let url = normalize_file_url(&asset.url);
         if let Some(source) = url.strip_prefix("file://") {
             fs::copy(source, &file_path).map_err(|e| format!("{e}"))?;
         } else {
-            download_file(&url, &file_path)?;
+            download_file(&url, &file_path, asset.size)?;
         }
 
         let digest = compute_file_sha256(&file_path)?;
         if digest != asset.sha256 {
+            let _ = fs::remove_file(&file_path);
             return Err(format!("Plugin package sha256 mismatch for {plugin_id}"));
         }
         let actual_size = file_size(&file_path)?;
         if actual_size != asset.size {
+            let _ = fs::remove_file(&file_path);
             return Err(format!("Plugin package size mismatch for {plugin_id}"));
         }
         Ok((file_path, digest, actual_size))
+    }
+
+    /// 由已下载字节落包（repo.rs 仓库锚定链路：包体经抓取层有界读入内存）：
+    /// fileName 消毒 → sha256/size 校验（不过不写盘）→ 写盘。
+    pub(crate) fn save_verified_package_bytes(
+        &self,
+        asset: &PluginAsset,
+        plugin_id: &str,
+        bytes: &[u8],
+    ) -> Result<(PathBuf, String, u64), String> {
+        let file_name = sanitize_asset_file_name(&asset.file_name)?;
+        let digest = hex::encode(sha2::Sha256::digest(bytes));
+        if digest != asset.sha256 {
+            return Err(format!("Plugin package sha256 mismatch for {plugin_id}"));
+        }
+        let size = bytes.len() as u64;
+        if size != asset.size {
+            return Err(format!("Plugin package size mismatch for {plugin_id}"));
+        }
+        let plugin_dir = self.paths.packages_root.join(plugin_id).join("packages");
+        fs::create_dir_all(&plugin_dir).map_err(|e| format!("{e}"))?;
+        let file_path = plugin_dir.join(file_name);
+        fs::write(&file_path, bytes).map_err(|e| format!("{e}"))?;
+        Ok((file_path, digest, size))
     }
 
     /// TS `install`：验签 → 下载/复制 → 校验 → 落状态（enabled = true）。

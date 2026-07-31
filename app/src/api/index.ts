@@ -36,7 +36,8 @@ export type PluginAnnounceEvent =
   | { kind: 'received'; id: string; publisher: string }
   | { kind: 'verified'; id: string; verified: boolean; error: string | null };
 
-/** 订阅广播索引 received/verified 事件；返回取消订阅函数（两路一起退订）。 */
+/** 订阅广播索引 received/verified 事件；返回取消订阅函数（两路一起退订）。
+ *  一路注册失败时退订已成功的另一路，避免残留半订阅状态。 */
 export function listenPluginAnnounceEvents(
   handler: (event: PluginAnnounceEvent) => void
 ): Promise<UnlistenFn> {
@@ -47,10 +48,19 @@ export function listenPluginAnnounceEvents(
     'plugin-announce-verified',
     (event) => handler({ kind: 'verified', ...event.payload })
   );
-  return Promise.all([received, verified]).then(([unReceived, unVerified]) => () => {
-    unReceived();
-    unVerified();
-  });
+  return Promise.all([received, verified]).then(
+    ([unReceived, unVerified]) => () => {
+      unReceived();
+      unVerified();
+    },
+    async (error) => {
+      // 部分失败：两路都尝试退订（已成功的一侧返回 unlisten，失败侧忽略）
+      for (const pending of [received, verified]) {
+        await pending.then((unlisten) => unlisten()).catch(() => {});
+      }
+      throw error;
+    }
+  );
 }
 
 /** .spkg 侧载文件选择（网络差降级导入入口）；用户取消返回 null。 */
@@ -226,8 +236,8 @@ export function createTauriApi(): ElectronAPI {
       installFromRepo: (id: string) => call('plugin-market-install-from-repo', id),
       // .spkg 侧载导入（网络差降级）：inspect 预览哈希供核对 → import 复核落状态
       inspectLocal: (path: string) => call('plugin-market-inspect-local', path),
-      importLocal: (path: string, expectedSha256: string) =>
-        call('plugin-market-import-local', path, expectedSha256),
+      importLocal: (path: string, expectedSha256: string, confirmOverwrite = false) =>
+        call('plugin-market-import-local', path, expectedSha256, confirmOverwrite),
       // 广播索引（plugin-dist §8）：开发者发布声明（签名+PoW+广播，秒级）与本地索引查询
       announcePublish: (input) => call('plugin-market-announce-publish', input),
       announceList: () => call('plugin-market-announce-list'),

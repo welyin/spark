@@ -74,6 +74,8 @@ struct ReleaseOpts {
     tamper_sha256: bool,
     tamper_size: bool,
     bad_signature: bool,
+    /// 覆盖清单资产 fileName（默认按版本派生；负向用例注入非法文件名）
+    file_name: Option<String>,
 }
 
 impl Default for ReleaseOpts {
@@ -86,6 +88,7 @@ impl Default for ReleaseOpts {
             tamper_sha256: false,
             tamper_size: false,
             bad_signature: false,
+            file_name: None,
         }
     }
 }
@@ -95,7 +98,10 @@ fn write_release(fixture: &Fixture, opts: &ReleaseOpts) {
     let dir = fixture.release_dir();
     fs::create_dir_all(&dir).unwrap();
 
-    let file_name = format!("spark-plugin-spark-example-{}.spkg", opts.version);
+    let file_name = opts
+        .file_name
+        .clone()
+        .unwrap_or_else(|| format!("spark-plugin-spark-example-{}.spkg", opts.version));
     let package_payload = serde_json::json!({
         "pluginId": opts.plugin_id,
         "domain": opts.domain,
@@ -108,7 +114,15 @@ fn write_release(fixture: &Fixture, opts: &ReleaseOpts) {
         }]
     });
     let package_text = format!("{}\n", serde_json::to_string_pretty(&package_payload).unwrap());
-    fs::write(dir.join(&file_name), &package_text).unwrap();
+    // 非法 fileName（负向用例）不写包文件：manifest 引用即可，安装路径在
+    // fileName 消毒处即拒；也避免 join 绝对路径/穿越段写出临时目录
+    let single_segment = !file_name.is_empty()
+        && file_name != "."
+        && file_name != ".."
+        && !file_name.contains(['/', '\\', ':']);
+    if single_segment {
+        fs::write(dir.join(&file_name), &package_text).unwrap();
+    }
     let digest = if opts.tamper_sha256 {
         "ff".repeat(32)
     } else {

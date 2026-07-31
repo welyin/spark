@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
 use serde::Deserialize;
+use sha2::Digest as _;
 use tauri::http::{header, Response, StatusCode};
 
 use crate::market::types::PersistedPluginState;
@@ -103,6 +104,8 @@ fn read_from_spkg(spkg_path: &Path, rel_path: &str) -> Option<Vec<u8>> {
 /// 定位已安装插件的 .spkg：只信 plugin-market-state.json 记录的 packagePath
 /// （fail-closed：无记录、状态文件存在但解析失败、enabled = false、记录路径
 /// 缺失或不是 .spkg，一律拒服——不做 packages 目录扫描猜测，避免字典序取错版本）。
+/// 服务前对照状态记录的 sha256 复核整包：落盘包体被覆盖/替换（含恶意清单
+/// 跨插件覆盖写盘）即拒服，防被替换的包体继承原插件 grantedPermissions 运行。
 fn locate_installed_spkg(data_dir: &Path, plugin_id: &str) -> Option<PathBuf> {
     let state_text = fs::read_to_string(data_dir.join("plugin-market-state.json")).ok()?;
     let state: PersistedPluginState = serde_json::from_str(&state_text).ok()?;
@@ -111,10 +114,14 @@ fn locate_installed_spkg(data_dir: &Path, plugin_id: &str) -> Option<PathBuf> {
         return None;
     }
     let recorded = PathBuf::from(&installed.package_path);
-    if recorded.extension().is_some_and(|ext| ext == "spkg") && recorded.is_file() {
-        return Some(recorded);
+    if !(recorded.extension().is_some_and(|ext| ext == "spkg") && recorded.is_file()) {
+        return None;
     }
-    None
+    let bytes = fs::read(&recorded).ok()?;
+    if hex::encode(sha2::Sha256::digest(&bytes)) != installed.sha256 {
+        return None;
+    }
+    Some(recorded)
 }
 
 /// 内置开发插件 dist 候选根（对齐 market::MarketPaths::for_app 的 source_roots 语义）。
@@ -333,16 +340,17 @@ mod tests {
         fs::write(spkg_path, serde_json::json!({ "files": files }).to_string()).unwrap();
     }
 
-    /// 写 plugin-market-state.json（单插件记录；enabled 可配）
+    /// 写 plugin-market-state.json（单插件记录；enabled 可配；sha256/size 按包文件实算）
     fn write_market_state(data_dir: &Path, plugin_id: &str, spkg_path: &Path, enabled: bool) {
+        let bytes = fs::read(spkg_path).unwrap();
         let state = serde_json::json!({
             "installed": {
                 plugin_id: {
                     "pluginId": plugin_id,
                     "version": "1.0.0",
                     "packagePath": spkg_path.to_string_lossy(),
-                    "sha256": "",
-                    "size": 0,
+                    "sha256": hex::encode(sha2::Sha256::digest(&bytes)),
+                    "size": bytes.len(),
                     "installedAt": 0,
                     "enabled": enabled,
                     "grantedPermissions": []
@@ -393,6 +401,20 @@ mod tests {
         write_spkg(&spkg, &[("views/main.js", b"hello")]);
         fs::write(data_dir.join("plugin-market-state.json"), b"{ not json").unwrap();
 
+        assert!(resolve_plugin_resource(&data_dir, "demo-plugin", "views/main.js").is_none());
+    }
+
+    #[test]
+    fn overwritten_spkg_not_served() {
+        // 整包 sha256 复核（B1）：落盘包体被覆盖（含恶意清单跨插件写盘
+        // 替换目标插件包）即拒服，防被替换包体继承原插件权限运行
+        let data_dir = temp_data_dir("overwritten");
+        let spkg = data_dir.join("plugins/demo-plugin/packages/demo-plugin-1.0.0.spkg");
+        write_spkg(&spkg, &[("views/main.js", b"hello")]);
+        write_market_state(&data_dir, "demo-plugin", &spkg, true);
+        assert!(resolve_plugin_resource(&data_dir, "demo-plugin", "views/main.js").is_some());
+        // 包体被替换为另一份合法 .spkg（哈希与状态记录不符）
+        write_spkg(&spkg, &[("views/main.js", b"pwned")]);
         assert!(resolve_plugin_resource(&data_dir, "demo-plugin", "views/main.js").is_none());
     }
 

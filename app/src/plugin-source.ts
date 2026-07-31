@@ -25,7 +25,14 @@ const REPO_ID_PATTERN =
   /^(github\.com|gitlab\.com|gitee\.com)(\/[a-z0-9._-]{1,100}){2}(\/[a-z0-9._-]{1,64}){0,8}$/;
 
 export function isValidPluginId(pluginId: string): boolean {
-  return PLUGIN_ID_PATTERN.test(pluginId) || REPO_ID_PATTERN.test(pluginId);
+  if (PLUGIN_ID_PATTERN.test(pluginId)) {
+    return true;
+  }
+  if (!REPO_ID_PATTERN.test(pluginId)) {
+    return false;
+  }
+  // 段字符集允许点号，须显式排掉纯 `.`/`..` 段（与 §1.1「每段不得为 . / ..」一致）
+  return !pluginId.split('/').some((segment) => segment === '.' || segment === '..');
 }
 
 /** 入口校验：pluginId 将拼进 srcdoc/URL 路径段，不合规直接拒绝（防注入） */

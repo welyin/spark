@@ -211,7 +211,7 @@ export const ARG_NAMES: Record<string, string[]> = {
   'plugin-market-resolve-repo': ['id'],
   'plugin-market-install-from-repo': ['id'],
   'plugin-market-inspect-local': ['path'],
-  'plugin-market-import-local': ['path', 'expectedSha256'],
+  'plugin-market-import-local': ['path', 'expectedSha256', 'confirmOverwrite'],
   'plugin-market-announce-publish': ['input'],
   'plugin-market-announce-get': ['id'],
   'system-set-badge': ['count']

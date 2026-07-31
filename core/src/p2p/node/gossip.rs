@@ -10,7 +10,7 @@ use crate::p2p::announce::{announce_to_json, prepare_publish_addresses, sign_nod
 use crate::p2p::constants::{OVERLAY_TOPIC, PLUGIN_ANNOUNCE_TOPIC, SYNC_TOPIC};
 use crate::p2p::envelope::Envelope;
 use crate::p2p::overlay_store::{OverlayPeerSource, OverlayPeerStore};
-use crate::p2p::plugin_announce::{AnnounceUpsert, PluginAnnounceStore};
+use crate::p2p::plugin_announce::{AnnounceUpsert, PluginAnnounceReject, PluginAnnounceStore};
 use crate::p2p::{P2pError, Result};
 use crate::storage::StorageBackend;
 
@@ -31,7 +31,12 @@ impl<S: StorageBackend> EventLoop<S> {
     }
 
     fn publish_raw(&mut self, topic: &str, bytes: Vec<u8>) -> Result<()> {
-        let ident = gossipsub::IdentTopic::new(topic);
+        // IdentTopic 构造含 topic 字符串哈希：topic 集合为协议常量，缓存复用
+        let ident = self
+            .topic_cache
+            .entry(topic.to_string())
+            .or_insert_with(|| gossipsub::IdentTopic::new(topic))
+            .clone();
         match self.swarm.behaviour_mut().gossipsub.publish(ident, bytes) {
             Ok(_) => Ok(()),
             // 对齐 allowPublishToZeroTopicPeers：零订阅者不算失败
@@ -113,7 +118,8 @@ impl<S: StorageBackend> EventLoop<S> {
 
     /// 入站声明处理（§8.6）：校验链（结构/限流/TTL/PoW/签名）→ 入本地索引
     /// （单 id 最新）→ 按传播源资历门控转发（Strict 验证模式显式上报：
-    /// 合格 Accept 转发 / 资历不足 Ignore 只收不转 / 校验失败 Reject 扣分）。
+    /// 合格 Accept 转发 / 资历不足 Ignore 只收不转 / 限流 Ignore 不扣分 /
+    /// 其余校验失败 Reject 扣分）。
     pub(super) fn handle_inbound_plugin_announce(
         &mut self,
         text: &str,
@@ -161,17 +167,18 @@ impl<S: StorageBackend> EventLoop<S> {
                     .gossipsub
                     .report_message_validation_result(&message_id, &source, acceptance);
             }
-            Err(_) => {
-                // 校验失败：Reject（gossipsub peer scoring 扣传播源分数）
+            Err(reject) => {
+                // 校验失败上报（§8.6）：限流报 Ignore（诚实中继在高频转发时可能
+                // 撞限流，Reject 扣分会误伤）；其余校验失败 Reject 扣传播源分数
+                let acceptance = match reject {
+                    PluginAnnounceReject::RateLimited => gossipsub::MessageAcceptance::Ignore,
+                    _ => gossipsub::MessageAcceptance::Reject,
+                };
                 let _ = self
                     .swarm
                     .behaviour_mut()
                     .gossipsub
-                    .report_message_validation_result(
-                        &message_id,
-                        &source,
-                        gossipsub::MessageAcceptance::Reject,
-                    );
+                    .report_message_validation_result(&message_id, &source, acceptance);
             }
         }
     }

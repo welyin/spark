@@ -188,6 +188,8 @@ pub(super) struct EventLoop<S: StorageBackend> {
     pub(super) plugin_announce_tenure_ms: i64,
     /// 各 peer 当前连接建立时刻（资历制依据；断连清零重计）。
     pub(super) peer_connected_since: HashMap<PeerId, i64>,
+    /// gossipsub topic → IdentTopic 缓存（构造含字符串哈希；topic 为协议常量集合）。
+    pub(super) topic_cache: HashMap<String, gossipsub::IdentTopic>,
 }
 
 impl<S: StorageBackend> EventLoop<S> {

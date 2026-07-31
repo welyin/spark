@@ -3,7 +3,8 @@
 //! （单 id 最新·LRU·过期清理·verified 持久化）。
 
 use spark_core::p2p::constants::{
-    PLUGIN_ANNOUNCE_MAX_BYTES, PLUGIN_ANNOUNCE_MIN_POW_BITS, PLUGIN_ANNOUNCE_TTL_MS,
+    PLUGIN_ANNOUNCE_ICON_MAX_CHARS, PLUGIN_ANNOUNCE_MAX_BYTES, PLUGIN_ANNOUNCE_MIN_POW_BITS,
+    PLUGIN_ANNOUNCE_RATE_LIMIT_TRACKED_PEERS, PLUGIN_ANNOUNCE_TTL_MS,
     PLUGIN_MARKET_INDEX_COUNT_KEY, PLUGIN_MARKET_INDEX_MAX,
 };
 use spark_core::p2p::plugin_announce::*;
@@ -65,6 +66,7 @@ fn id_validation_matrix() {
         "github.com/owner/re po",     // 空白
         "github.com/owner/repo/../x", // 穿越
         "github.com/owner/re%20po",   // 转义
+        "github.com/owner/repo.git",  // 未规范化（.git 尾缀，§1.2 会剥掉）
     ] {
         assert!(!announce_id_valid(bad), "should reject: {bad}");
     }
@@ -135,14 +137,44 @@ fn pow_mine_and_verify() {
         &pow,
         PLUGIN_ANNOUNCE_MIN_POW_BITS
     ));
-    // 错 nonce → 拒（概率上几乎不可能仍满足）
-    let bad = AnnouncePow {
-        bits: TEST_BITS,
-        nonce: nonce + 1,
-    };
-    if verify_announce_pow(payload, &bad, TEST_BITS) {
-        // 偶然满足时不做强断言（1/256 概率），跳过
+    // 错 nonce → 拒（确定性构造：向后扫描首个不满足难度的 nonce，消除概率分支）
+    let mut bad_nonce = nonce + 1;
+    while verify_announce_pow(
+        payload,
+        &AnnouncePow {
+            bits: TEST_BITS,
+            nonce: bad_nonce,
+        },
+        TEST_BITS,
+    ) {
+        bad_nonce += 1;
     }
+    assert_ne!(bad_nonce, nonce);
+    assert!(!verify_announce_pow(
+        payload,
+        &AnnouncePow {
+            bits: TEST_BITS,
+            nonce: bad_nonce,
+        },
+        TEST_BITS
+    ));
+}
+
+/// PoW 黄金向量（§8.4）：固定载荷 + 固定 nonce 的摘要逐字节锁定算法口径
+/// （sha256(规范载荷 || decimal(nonce))，nonce 无前导零十进制 ASCII）。
+#[test]
+fn pow_golden_vector() {
+    use sha2::Digest as _;
+    let digest = sha2::Sha256::digest(b"payload-bytes12345");
+    assert_eq!(
+        hex::encode(digest),
+        "80485aac5fa4f41710a99c0b58cc476bb5b0e57a687afdd2c4ef67737e2a326a"
+    );
+    // 摘要首字节 0x80 → 前导零 0：bits=0 必过、bits=1 必拒（确定性）
+    let zero = AnnouncePow { bits: 0, nonce: 12345 };
+    assert!(verify_announce_pow("payload-bytes", &zero, 0));
+    let one = AnnouncePow { bits: 1, nonce: 12345 };
+    assert!(!verify_announce_pow("payload-bytes", &one, 1));
 }
 
 // ------------------------------------------------------------------
@@ -214,6 +246,87 @@ fn validate_rejects_stale_and_future() {
             .validate(&plugin_announce_to_json(&near_future), "peer-a", NOW)
             .is_ok()
     );
+}
+
+/// §8.2 字段矩阵：name/summary 长度、category、version semver、icon 三形态与
+/// 上限、releaseUrl https、publisher 64hex、timestamp>0、nonce<2^63。
+/// 结构校验先于 PoW/签名，破坏字段后无需重签即按 Structure 拒绝。
+#[test]
+fn structure_field_matrix() {
+    let base = plugin_announce_to_json(&make_announce(NOW));
+    let release_url = "https://github.com/acme/todo/releases/tag/v0.2.0";
+    let reject_cases: Vec<String> = vec![
+        // name：空 / 65 字符（上限 64）
+        base.replace("\"name\":\"待办\"", "\"name\":\"\""),
+        base.replace("\"name\":\"待办\"", &format!("\"name\":\"{}\"", "名".repeat(65))),
+        // summary：空 / 257 字符（上限 256）
+        base.replace("\"summary\":\"测试插件\"", "\"summary\":\"\""),
+        base.replace("\"summary\":\"测试插件\"", &format!("\"summary\":\"{}\"", "简".repeat(257))),
+        // category：白名单外
+        base.replace("\"category\":\"business\"", "\"category\":\"social\""),
+        // version：两段 / 非数字段 / 超 32 字符
+        base.replace("\"version\":\"0.2.0\"", "\"version\":\"0.2\""),
+        base.replace("\"version\":\"0.2.0\"", "\"version\":\"0.2.x\""),
+        base.replace("\"version\":\"0.2.0\"", &format!("\"version\":\"{}\"", "1".repeat(33))),
+        // icon：三形态外（http）/ https 超 512 / data 超 28672 字符
+        base.replace("\"icon\":\"\"", "\"icon\":\"http://evil.com/x.png\""),
+        base.replace("\"icon\":\"\"", &format!("\"icon\":\"https://{}\"", "a".repeat(512))),
+        base.replace(
+            "\"icon\":\"\"",
+            &format!("\"icon\":\"data:{}\"", "A".repeat(PLUGIN_ANNOUNCE_ICON_MAX_CHARS + 1)),
+        ),
+        // releaseUrl：非 https / 超 512 字符
+        base.replace(&format!("\"releaseUrl\":\"{release_url}\""), "\"releaseUrl\":\"http://github.com/x\""),
+        base.replace(
+            &format!("\"releaseUrl\":\"{release_url}\""),
+            &format!("\"releaseUrl\":\"https://{}\"", "a".repeat(512)),
+        ),
+    ];
+    for (index, text) in reject_cases.iter().enumerate() {
+        assert_eq!(
+            validator().validate(text, "peer-a", NOW),
+            Err(PluginAnnounceReject::Structure),
+            "case {index} should be rejected as Structure"
+        );
+    }
+    // publisher 非 64 位小写 hex / timestamp = 0 / nonce ≥ 2^63 → 结构非法
+    let mut bad = make_announce(NOW);
+    bad.publisher = "zz".to_string();
+    assert_eq!(
+        validator().validate(&plugin_announce_to_json(&bad), "peer-a", NOW),
+        Err(PluginAnnounceReject::Structure)
+    );
+    let mut bad = make_announce(NOW);
+    bad.timestamp = 0;
+    assert_eq!(
+        validator().validate(&plugin_announce_to_json(&bad), "peer-a", NOW),
+        Err(PluginAnnounceReject::Structure)
+    );
+    let mut bad = make_announce(NOW);
+    bad.pow.nonce = i64::MAX as u64 + 1;
+    assert_eq!(
+        validator().validate(&plugin_announce_to_json(&bad), "peer-a", NOW),
+        Err(PluginAnnounceReject::Structure)
+    );
+    // 正：version 带预发布后缀与 +build 元数据；icon 三形态（空/https/data:）
+    for version in ["0.2.0-rc.1", "0.2.0+build.5", "0.2.0-rc.1+build.5"] {
+        let mut a = make_announce(NOW);
+        a.version = version.to_string();
+        resign_and_mine(&mut a);
+        assert!(
+            validator().validate(&plugin_announce_to_json(&a), "peer-a", NOW).is_ok(),
+            "version {version} should pass"
+        );
+    }
+    for icon in ["https://cdn.example.com/icon.png", "data:image/png;base64,AA=="] {
+        let mut a = make_announce(NOW);
+        a.icon = icon.to_string();
+        resign_and_mine(&mut a);
+        assert!(
+            validator().validate(&plugin_announce_to_json(&a), "peer-a", NOW).is_ok(),
+            "icon {icon} should pass"
+        );
+    }
 }
 
 #[test]
@@ -310,35 +423,127 @@ fn store_mark_verified_persists() {
     let mut storage = MemoryStorage::new();
     let mut store = PluginAnnounceStore::new(&mut storage);
     store.upsert(&make_announce(NOW), NOW).unwrap();
+    let corrected = || CorrectedAnnounceFields {
+        name: "待办（校正）".to_string(),
+        icon: String::new(),
+        summary: "仓库声明文件校正后的简介".to_string(),
+        version: "0.2.0".to_string(),
+    };
+    // timestamp 不匹配 → 结论作废丢弃（防旧核查结论覆盖新声明）
+    assert!(
+        !store
+            .mark_verified(
+                "github.com/acme/todo",
+                AnnounceVerified::Verified,
+                "",
+                NOW + 1,
+                NOW + 999,
+                Some(corrected()),
+            )
+            .unwrap()
+    );
+    assert_eq!(
+        store.get("github.com/acme/todo").unwrap().unwrap().verified,
+        AnnounceVerified::Pending
+    );
+    // 绑定核查时 timestamp → 落终态并回写校正展示字段（§8.8）
     assert!(
         store
-            .mark_verified("github.com/acme/todo", AnnounceVerified::Verified, "", NOW + 1)
+            .mark_verified(
+                "github.com/acme/todo",
+                AnnounceVerified::Verified,
+                "",
+                NOW + 1,
+                NOW,
+                Some(corrected()),
+            )
             .unwrap()
     );
     let entry = store.get("github.com/acme/todo").unwrap().unwrap();
     assert_eq!(entry.verified, AnnounceVerified::Verified);
     assert_eq!(entry.verified_at, NOW + 1);
-    // 失败原因落库
+    assert_eq!(entry.corrected, Some(corrected()));
+    // 失败原因落库 + corrected 清空
     assert!(
         store
-            .mark_verified("github.com/acme/todo", AnnounceVerified::Failed, "unreachable", NOW + 2)
+            .mark_verified(
+                "github.com/acme/todo",
+                AnnounceVerified::Failed,
+                "unreachable",
+                NOW + 2,
+                NOW,
+                None,
+            )
             .unwrap()
     );
     let entry = store.get("github.com/acme/todo").unwrap().unwrap();
     assert_eq!(entry.verified, AnnounceVerified::Failed);
     assert_eq!(entry.verify_error, "unreachable");
+    assert_eq!(entry.corrected, None);
     // 不存在条目 → false
     assert!(
         !store
-            .mark_verified("github.com/ghost/none", AnnounceVerified::Verified, "", NOW)
+            .mark_verified("github.com/ghost/none", AnnounceVerified::Verified, "", NOW, NOW, None)
             .unwrap()
     );
-    // 更新声明到达后 verified 重置回 pending
-    store.upsert(&make_announce(NOW + 5000), NOW + 3).unwrap();
+    // 同 timestamp 重复到达（Duplicate）：verified 与 corrected 不重置
+    store
+        .mark_verified(
+            "github.com/acme/todo",
+            AnnounceVerified::Verified,
+            "",
+            NOW + 3,
+            NOW,
+            Some(corrected()),
+        )
+        .unwrap();
     assert_eq!(
-        store.get("github.com/acme/todo").unwrap().unwrap().verified,
-        AnnounceVerified::Pending
+        store.upsert(&make_announce(NOW), NOW + 4).unwrap(),
+        AnnounceUpsert::Duplicate
     );
+    let entry = store.get("github.com/acme/todo").unwrap().unwrap();
+    assert_eq!(entry.verified, AnnounceVerified::Verified);
+    assert_eq!(entry.corrected, Some(corrected()));
+    // 更新声明到达后 verified 重置回 pending 且 corrected 清空
+    store.upsert(&make_announce(NOW + 5000), NOW + 5).unwrap();
+    let entry = store.get("github.com/acme/todo").unwrap().unwrap();
+    assert_eq!(entry.verified, AnnounceVerified::Pending);
+    assert_eq!(entry.corrected, None);
+}
+
+/// 计数键只随新插入递增（§8.7 近似计数）：Replace/Duplicate/Stale 不递增。
+#[test]
+fn evict_count_only_grows_on_insert() {
+    let mut storage = MemoryStorage::new();
+    let mut store = PluginAnnounceStore::new(&mut storage);
+    let a1 = make_announce(NOW);
+    store.upsert(&a1, NOW).unwrap(); // Inserted → count 1
+    store.upsert(&a1, NOW + 1).unwrap(); // Duplicate → 不递增
+    store.upsert(&make_announce(NOW + 2000), NOW + 2).unwrap(); // Replaced → 不递增
+    store.upsert(&make_announce(NOW - 1000), NOW + 3).unwrap(); // Stale → 不动
+    let count: u64 = storage
+        .get(PLUGIN_MARKET_INDEX_COUNT_KEY)
+        .unwrap()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(count, 1);
+}
+
+/// 限流器容量满时的回收（§8.6-2：先回收过期条目，仍满则整体清空——
+/// 两条路径都不能误伤新 peer 的首条消息）。
+#[test]
+fn rate_limiter_recycles_when_full() {
+    let mut v = validator();
+    let text = plugin_announce_to_json(&make_announce(NOW));
+    // 填满跟踪容量（窗口内每 peer 一条）
+    for i in 0..PLUGIN_ANNOUNCE_RATE_LIMIT_TRACKED_PEERS {
+        assert!(v.validate(&text, &format!("peer-{i}"), NOW).is_ok());
+    }
+    // 满且无过期条目 → 整体清空后新 peer 首条仍接纳
+    assert!(v.validate(&text, "peer-overflow", NOW).is_ok());
+    // 窗口滑过后：过期条目被回收，新 peer 正常接纳
+    assert!(v.validate(&text, "peer-late", NOW + 3_600_001).is_ok());
 }
 
 #[test]
@@ -365,9 +570,11 @@ fn store_list_purges_expired() {
 #[test]
 fn store_lru_eviction() {
     let mut storage = MemoryStorage::new();
-    // 直接写存储绕过逐条 upsert 的成本：先灌 MAX 条原始记录
+    // 直接写存储绕过逐条 upsert 的成本：先灌 MAX 条原始记录；
+    // 基准消息只构造一次（直写不验 PoW/签名，克隆改 id 即可，省万次挖矿）
+    let base = make_announce(NOW);
     for i in 0..PLUGIN_MARKET_INDEX_MAX {
-        let mut a = make_announce(NOW);
+        let mut a = base.clone();
         a.id = format!("github.com/acme/plugin-{i}");
         let entry = PluginAnnounceIndexEntry {
             announce: a.clone(),
@@ -376,6 +583,7 @@ fn store_lru_eviction() {
             verified: AnnounceVerified::Pending,
             verify_error: String::new(),
             verified_at: 0,
+            corrected: None,
         };
         storage
             .put(

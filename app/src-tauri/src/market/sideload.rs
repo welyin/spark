@@ -3,8 +3,10 @@
 //! 两步命令：
 //! - inspect：只读解析 .spkg（容器字段 + 包内 manifest.json 的名称/权限），
 //!   计算整包 sha256/size，供前端确认对话框「显示包哈希供核对」；
-//! - import：复核整包哈希（inspect 之后文件被替换即拒）→ 逐文件 sha256/size
-//!   校验 → 复制进 packages 目录 → 落状态（trust = "sideloaded"）。
+//! - import：读一次字节（哈希复核/解析/落盘写同一份，消换文件窗口）→ 复核
+//!   整包哈希（inspect 之后文件被替换即拒）→ 保留 id（system/内置目录）拒载 →
+//!   覆盖更高信任安装需显式确认 → 逐文件 sha256/size 校验 → 写 packages 目录
+//!   → 落状态（trust = "sideloaded"）。
 //!
 //! 信任口径：侧载绕过签名信任链与仓库锚定，哈希核对责任在用户（与发布者
 //! 公布的哈希比对）；状态显式标记 trust = "sideloaded"，与 signed /
@@ -17,8 +19,9 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
+use super::catalog::list_plugin_catalog;
 use super::permissions::{normalize_declared_permissions, resolve_granted_permissions};
-use super::sources::{compute_file_sha256, file_size, now_millis};
+use super::sources::{file_size, now_millis};
 use super::types::{InstalledPluginState, PluginUpdateProbe};
 use super::PluginMarketService;
 
@@ -88,17 +91,22 @@ fn plugin_id_valid(id: &str) -> bool {
         })
 }
 
-/// 读取并解析 .spkg 容器（扩展名/大小上限/JSON 线形/容器字段校验）。
-fn read_container(path: &Path) -> Result<SpkgContainer, String> {
+/// 读取 .spkg 原始字节（扩展名/大小上限校验；import 全程复用同一份字节，
+/// 消除"读哈希后文件被换"的 TOCTOU 窗口）。
+fn read_container_bytes(path: &Path) -> Result<Vec<u8>, String> {
     if path.extension().and_then(|ext| ext.to_str()) != Some("spkg") {
         return Err(sideload_invalid("not a .spkg file"));
     }
     if file_size(path)? > SPKG_MAX_BYTES {
         return Err(sideload_invalid("package exceeds 64 MiB"));
     }
-    let text = fs::read_to_string(path).map_err(|e| format!("{e}"))?;
+    fs::read(path).map_err(|e| format!("{e}"))
+}
+
+/// 解析 .spkg 容器（JSON 线形/容器字段校验）。
+fn parse_container(bytes: &[u8]) -> Result<SpkgContainer, String> {
     let container: SpkgContainer =
-        serde_json::from_str(&text).map_err(|e| sideload_invalid(&format!("{e}")))?;
+        serde_json::from_slice(bytes).map_err(|e| sideload_invalid(&format!("{e}")))?;
     if !plugin_id_valid(&container.plugin_id) {
         return Err(sideload_invalid("pluginId invalid"));
     }
@@ -109,6 +117,16 @@ fn read_container(path: &Path) -> Result<SpkgContainer, String> {
         return Err(sideload_invalid("files empty"));
     }
     Ok(container)
+}
+
+/// 信任层级排序（signed > repo-anchored > sideloaded）：侧载覆盖更高信任
+/// 安装属降级，需用户显式确认（前端按错误前缀弹确认框后重试）。
+fn trust_rank(trust: &str) -> u8 {
+    match trust {
+        "signed" => 3,
+        "repo-anchored" => 2,
+        _ => 1,
+    }
 }
 
 /// 解码单个文件条目并校验 sha256/size（逐文件完整性，对齐打包脚本记录口径）。
@@ -136,7 +154,8 @@ impl PluginMarketService {
     /// 侧载预览（只读）：解析容器 + 计算整包哈希，不改任何状态。
     pub fn inspect_local_package(&self, path: &str) -> Result<SideloadPreview, String> {
         let source = Path::new(path);
-        let container = read_container(source)?;
+        let bytes = read_container_bytes(source)?;
+        let container = parse_container(&bytes)?;
         let inner = read_inner_manifest(&container);
         Ok(SideloadPreview {
             plugin_id: container.plugin_id.clone(),
@@ -151,8 +170,8 @@ impl PluginMarketService {
                 .and_then(|m| m.permissions)
                 .map(|raw| normalize_declared_permissions(&raw))
                 .unwrap_or_default(),
-            sha256: compute_file_sha256(source)?,
-            size: file_size(source)?,
+            sha256: hex::encode(sha2::Sha256::digest(&bytes)),
+            size: bytes.len() as u64,
             file_name: source
                 .file_name()
                 .map(|name| name.to_string_lossy().to_string())
@@ -160,22 +179,48 @@ impl PluginMarketService {
         })
     }
 
-    /// 侧载导入：复核整包哈希（preview 后文件被替换即拒）→ 逐文件完整性校验 →
-    /// 复制进 `<packages_root>/<id>/packages/` → 落状态（trust = "sideloaded"）。
+    /// 侧载导入：读一次字节（哈希复核/容器解析/落盘写同一份，消换文件窗口）→
+    /// 复核整包哈希（preview 后文件被替换即拒）→ 保留 id 与信任降级守卫 →
+    /// 逐文件完整性校验 → 写 packages 目录 → 落状态（trust = "sideloaded"）。
+    /// `confirm_overwrite`：覆盖既有更高信任安装（signed/repo-anchored）时须
+    /// 传 true（前端经确认对话框取得用户同意后重试）。
     pub fn import_local_package(
         &mut self,
         path: &str,
         expected_sha256: &str,
+        confirm_overwrite: bool,
     ) -> Result<InstalledPluginState, String> {
         let source = Path::new(path);
-        let container = read_container(source)?;
-        let digest = compute_file_sha256(source)?;
+        let bytes = read_container_bytes(source)?;
+        let digest = hex::encode(sha2::Sha256::digest(&bytes));
         if digest != expected_sha256 {
             return Err(
                 "Sideload package changed since preview: sha256 mismatch".to_string(),
             );
         }
-        let size = file_size(source)?;
+        let container = parse_container(&bytes)?;
+
+        // 保留 id 拒载（I2）：system 与内置目录 id 不允许侧载顶替
+        if container.plugin_id == "system"
+            || list_plugin_catalog().iter().any(|c| c.id == container.plugin_id)
+        {
+            return Err(format!(
+                "Sideload import refused: reserved plugin id {}",
+                container.plugin_id
+            ));
+        }
+        // 信任降级覆盖守卫（I2）：既有安装 trust 更高需显式确认
+        if let Some(existing) = self.state.installed.get(&container.plugin_id) {
+            let existing_trust = existing.trust.as_deref().unwrap_or("signed");
+            if trust_rank(existing_trust) > trust_rank("sideloaded") && !confirm_overwrite {
+                return Err(format!(
+                    "Sideload overwrite requires confirmation: existing install trust={existing_trust} for {}",
+                    container.plugin_id
+                ));
+            }
+        }
+
+        let size = bytes.len() as u64;
         // 逐文件完整性校验：条目记录与内容一致才可信（容器可能被篡改）
         for entry in &container.files {
             decode_and_verify_entry(entry)?;
@@ -195,7 +240,8 @@ impl PluginMarketService {
             .join("packages");
         fs::create_dir_all(&plugin_dir).map_err(|e| format!("{e}"))?;
         let file_path = plugin_dir.join(file_name);
-        fs::copy(source, &file_path).map_err(|e| format!("{e}"))?;
+        // 写入与哈希复核同一份字节：inspect/import 之后源文件再被换也不影响落盘内容
+        fs::write(&file_path, &bytes).map_err(|e| format!("{e}"))?;
 
         let installed_state = InstalledPluginState {
             plugin_id: container.plugin_id.clone(),
@@ -214,14 +260,19 @@ impl PluginMarketService {
         self.update_probes.insert(
             container.plugin_id.clone(),
             PluginUpdateProbe {
-                plugin_id: container.plugin_id,
+                plugin_id: container.plugin_id.clone(),
                 checked_at: now_millis(),
                 latest_version: Some(installed_state.version.clone()),
                 update_available: false,
                 reason: "installed".to_string(),
             },
         );
-        self.persist()?;
+        if let Err(e) = self.persist() {
+            // 持久化失败回滚内存插入，避免内存态与磁盘状态文件不一致
+            self.state.installed.remove(&container.plugin_id);
+            self.update_probes.remove(&container.plugin_id);
+            return Err(e);
+        }
         Ok(installed_state)
     }
 }
