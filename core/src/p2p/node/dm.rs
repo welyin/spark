@@ -38,6 +38,8 @@ impl<S: StorageBackend> EventLoop<S> {
         payload: Value,
         tx: oneshot::Sender<Result<Option<Value>>>,
     ) {
+        // 惰性回收调用方已放弃的滞留 attempt（同 begin_connect 口径）
+        self.pending_org_attempts.retain(|a| !a.tx.is_closed());
         // 已连接短路在拨号目标构建之前：已连接的 peer 空地址也能直发
         // （重拨同一地址会因 TCP 四元组冲突失败，也无必要）。
         let connected_peer = extract_peer_id(&node_info)

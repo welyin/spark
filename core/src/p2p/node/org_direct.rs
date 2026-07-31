@@ -31,6 +31,8 @@ impl<S: StorageBackend> EventLoop<S> {
         tx: OrgTx,
         is_share: bool,
     ) {
+        // 惰性回收调用方已放弃的滞留 attempt（同 begin_connect 口径）
+        self.pending_org_attempts.retain(|a| !a.tx.is_closed());
         let targets = match build_dial_targets(&node_info) {
             Ok(t) => VecDeque::from(t),
             Err(e) => {

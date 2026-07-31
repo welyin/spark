@@ -24,6 +24,8 @@ mod gossip;
 mod org_direct;
 mod rr_protocols;
 mod swarm_events;
+#[cfg(test)]
+mod tests;
 mod tick;
 
 use std::collections::{HashMap, HashSet};

@@ -69,6 +69,18 @@ pub(super) enum OrgTx {
     Dm(oneshot::Sender<Result<Option<Value>>>),
 }
 
+impl OrgTx {
+    /// 调用方已放弃等待（投递层超时后 rx 被 drop）——新 attempt 入队时
+    /// 据此惰性回收滞留 attempt（拨号无响应等无事件路径下 vec 才有界）
+    pub(super) fn is_closed(&self) -> bool {
+        match self {
+            OrgTx::Share(tx) => tx.is_closed(),
+            OrgTx::Pull(tx) => tx.is_closed(),
+            OrgTx::Dm(tx) => tx.is_closed(),
+        }
+    }
+}
+
 pub(super) struct OrgAttempt {
     pub(super) kind: OrgAttemptKind,
     pub(super) targets: VecDeque<String>,
@@ -316,7 +328,10 @@ impl<S: StorageBackend> EventLoop<S> {
     // 连接管理
     // ------------------------------------------------------------------
 
-    fn begin_connect(&mut self, node_info: PeerNodeInfo, tx: oneshot::Sender<Result<()>>) {
+    pub(super) fn begin_connect(&mut self, node_info: PeerNodeInfo, tx: oneshot::Sender<Result<()>>) {
+        // 惰性回收调用方已放弃的滞留项（connect_peer 10s 超时后 rx 被
+        // drop；拨号无响应时无事件触发清理，vec 只在新 connect 时有界）
+        self.pending_connects.retain(|p| !p.tx.is_closed());
         // 已连接即成功（重拨同一地址会因 TCP 四元组冲突失败，也无必要；
         // TS 侧 libp2p dial 已连接 peer 同样为 no-op 成功）
         if extract_peer_id(&node_info)
