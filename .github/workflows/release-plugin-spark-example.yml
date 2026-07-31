@@ -1,17 +1,19 @@
 name: Release Plugin Spark Example
 
-# 插件发布流水线（移植自旧 desktop/.github/workflows/release-plugin-weibo.yml，
-# 路径适配 code/ monorepo 布局：打包脚本在 plugins/scripts/，产物落在
-# app/dist-market/plugins/<pluginId>/ 后重命名上传 Release）。
+# 插件发布流水线（路径适配 code/ monorepo 布局：打包脚本在 plugins/scripts/，
+# 产物落在 app/dist-market/plugins/<pluginId>/ 后重命名上传 Release）。
 #
 # 触发方式：
-# - 发布 GitHub Release（types: [published]）时自动跑；
-# - 或 workflow_dispatch 手动指定 tag / version / pluginId。
+# - 推送版本 tag（git tag v0.2.0 && git push origin v0.2.0）：自动创建 Release、
+#   打包、签名、上传资产，全程无需网页操作（tag 版本号会与 manifest.json 比对，
+#   不一致直接失败，防 tag/版本脱钩）；
+# - 或 workflow_dispatch 手动指定 tag / version / pluginId（tag 需已存在 Release）。
 # 签名私钥取自仓库 secret SPARK_PLUGIN_SIGNING_PRIVATE_KEY（PEM 全文）。
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
     inputs:
       tag:
@@ -48,8 +50,8 @@ jobs:
         id: vars
         shell: bash
         run: |
-          if [[ "${{ github.event_name }}" == "release" ]]; then
-            TAG="${{ github.event.release.tag_name }}"
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            TAG="${{ github.ref_name }}"
             VERSION="${TAG#v}"
             PLUGIN_ID="spark-example"
           else
@@ -62,6 +64,16 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "plugin_id=$PLUGIN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Verify tag version matches plugin manifest
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          MANIFEST_VERSION=$(node -p "require('./plugins/${{ steps.vars.outputs.plugin_id }}/manifest.json').version")
+          if [[ "$MANIFEST_VERSION" != "${{ steps.vars.outputs.version }}" ]]; then
+            echo "::error::tag 版本 (${{ steps.vars.outputs.version }}) 与 manifest.json 版本 ($MANIFEST_VERSION) 不一致——先 bump 版本再发 tag"
+            exit 1
+          fi
 
       - name: Verify release exists for manual runs
         id: release_check
@@ -89,7 +101,7 @@ jobs:
         run: npm run build:example --prefix plugins
 
       - name: Build and sign plugin release artifacts
-        if: github.event_name == 'release' || steps.release_check.outputs.skip == 'false'
+        if: github.event_name != 'workflow_dispatch' || steps.release_check.outputs.skip == 'false'
         env:
           SPARK_PLUGIN_SIGNING_PRIVATE_KEY: ${{ secrets.SPARK_PLUGIN_SIGNING_PRIVATE_KEY }}
         run: |
@@ -102,7 +114,7 @@ jobs:
             --outputDir "app/dist-market/plugins/${{ steps.vars.outputs.plugin_id }}"
 
       - name: Prepare named release assets
-        if: github.event_name == 'release' || steps.release_check.outputs.skip == 'false'
+        if: github.event_name != 'workflow_dispatch' || steps.release_check.outputs.skip == 'false'
         shell: bash
         run: |
           PLUGIN_ID="${{ steps.vars.outputs.plugin_id }}"
@@ -117,10 +129,12 @@ jobs:
           test -f "$SRC_DIR/spark-plugin-$PLUGIN_ID-$VERSION.spkg"
 
       - name: Upload plugin artifacts to release
-        if: github.event_name == 'release' || steps.release_check.outputs.skip == 'false'
+        if: github.event_name != 'workflow_dispatch' || steps.release_check.outputs.skip == 'false'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.vars.outputs.tag }}
+          name: 示例插件 ${{ steps.vars.outputs.tag }}
+          generate_release_notes: true
           files: |
             app/dist-market/plugins/${{ steps.vars.outputs.plugin_id }}/spark-plugin-${{ steps.vars.outputs.plugin_id }}-${{ steps.vars.outputs.version }}.spkg
             app/dist-market/plugins/${{ steps.vars.outputs.plugin_id }}/spark-plugin-${{ steps.vars.outputs.plugin_id }}-manifest.json
