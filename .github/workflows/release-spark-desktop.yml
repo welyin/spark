@@ -110,9 +110,16 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p mirror
-          gh release download "$RELEASE_TAG" --dir mirror --clobber \
-            -p 'latest.json' -p '*.app.tar.gz' -p '*.app.tar.gz.sig'
+          echo "== assets on $RELEASE_TAG =="
+          gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name'
+          # 逐个模式下载；.sig 可能只内嵌 latest.json 不单独上传，容忍缺项
+          gh release download "$RELEASE_TAG" --dir mirror --clobber -p 'latest.json'
+          gh release download "$RELEASE_TAG" --dir mirror --clobber -p '*.app.tar.gz' \
+            || echo "::warning::未找到 .app.tar.gz 资产"
+          gh release download "$RELEASE_TAG" --dir mirror --clobber -p '*.app.tar.gz.sig' \
+            || echo "无独立 .sig 资产（签名已内嵌 latest.json，可忽略）"
           ls -la mirror
+          test -f mirror/latest.json
           # latest.json 的平台下载 URL 改写到 desktop-latest
           node -e '
             const fs = require("fs");
