@@ -3,8 +3,10 @@ name: Release Spark Desktop
 # 主程序发布流水线：tag（desktop-v*）触发 → tauri-action 构建 macOS 包 →
 # 用 minisign 私钥签名 updater 资产并生成 latest.json → 上传 GitHub Release。
 # 客户端 tauri-plugin-updater 的更新源即
-# https://github.com/welyin/spark/releases/latest/download/latest.json
-# （src-tauri/tauri.conf.json plugins.updater.endpoints）。
+# https://github.com/welyin/spark/releases/download/desktop-latest/latest.json
+# （src-tauri/tauri.conf.json plugins.updater.endpoints；滚动 release
+# 「desktop-latest」由本流水线镜像维护，避免 /releases/latest 别名被
+# 插件流水线的 release 抢占）。
 #
 # tag 前缀用 desktop-v* 而非 v*：v* 已被插件发布流水线
 # （release-plugin-spark-example.yml）占用，两套流水线必须互不触发。
@@ -95,3 +97,32 @@ jobs:
           releaseName: 'Spark Desktop v__VERSION__'
           releaseDraft: true
           prerelease: false
+
+      # 镜像 updater 资产到滚动 release「desktop-latest」：
+      # /releases/latest 别名会被任何新发布的 release（插件流水线也在发）抢走，
+      # 所以客户端更新端点固定指向 desktop-latest；镜像时把 latest.json 里的
+      # 下载 URL 一并改写到 desktop-latest，客户端不依赖版本号 release 是否公开。
+      - name: Mirror updater artifacts to rolling desktop-latest release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p mirror
+          gh release download "$RELEASE_TAG" --dir mirror --clobber \
+            -p 'latest.json' -p '*.app.tar.gz' -p '*.app.tar.gz.sig'
+          ls -la mirror
+          # latest.json 的平台下载 URL 改写到 desktop-latest
+          node -e '
+            const fs = require("fs");
+            const j = JSON.parse(fs.readFileSync("mirror/latest.json", "utf8"));
+            for (const p of Object.values(j.platforms)) {
+              p.url = p.url.replace(/\/download\/[^/]+\//, "/download/desktop-latest/");
+            }
+            fs.writeFileSync("mirror/latest.json", JSON.stringify(j, null, 2));
+          '
+          gh release view desktop-latest --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 || \
+            gh release create desktop-latest --title "Spark Desktop 最新版（滚动更新源）" \
+              --notes "由发布流水线自动维护，客户端更新端点固定指向此 release 的 latest.json。"
+          gh release upload desktop-latest mirror/* --clobber
