@@ -5,7 +5,7 @@
   "icon": "",
   "summary": "Spark 插件体系参考实现：组织微博，演示存储/签名/应用消息/消息卡片等核心能力。",
   "category": "foundation",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "release": {
     "assetNaming": "spark-plugin-spark-example-<version>.spkg",
     "updateManifestAsset": "spark-plugin-spark-example-manifest.json",

@@ -77,7 +77,7 @@ function parseArgs(argv) {
 
 function normalizeVersion(value) {
   if (!value) {
-    return '0.1.2';
+    return '0.1.3';
   }
   return value.startsWith('v') ? value.slice(1) : value;
 }
