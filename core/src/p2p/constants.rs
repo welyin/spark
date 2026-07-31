@@ -128,6 +128,10 @@ pub const ORG_SHARE_READ_TIMEOUT_MS: u64 = 4_000;
 /// 直连协议读超时：dm（10000ms，对齐 dm 单地址尝试量级；命令侧外层超时 15s）。
 pub const DM_READ_TIMEOUT_MS: u64 = 10_000;
 
+/// connect_peer 默认拨号超时（10s）：保活/反熵等后台路径沿用；
+/// 用户可感的手动 sync-now 路径由调用方传更短超时快速失败。
+pub const CONNECT_TIMEOUT_SECS: u64 = 10;
+
 /// dm 应答侧限流：同一请求方两次服务的最小间隔（1s）。
 pub const DM_MIN_INTERVAL_MS: i64 = 1_000;
 

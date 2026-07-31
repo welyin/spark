@@ -6,12 +6,19 @@
 //! 插件域一律由前端适配层显式传入（tab 场景取自 URL query `pluginDomain`）。
 //! 独立插件窗口绑定域 + 强制权限校验待插件运行时排期。
 
+use std::sync::Arc;
+use std::time::Duration;
+
 use serde::Serialize;
 use spark_core::kernel::{DomainSignatureInfo, Kernel};
 use spark_core::org::OrganizationRole;
 
 use super::{err, lock_kernel};
 use crate::KernelState;
+
+/// sync-now 手动同步的单 peer 拨号超时：全局默认 10s 面向后台保活/反熵；
+/// 手动刷新是用户可感路径，不可达成员 5s 快速失败，避免整批串行拨号拖住 UI。
+const SYNC_NOW_DIAL_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// `plugin-identity-verify` 返回（TS `{ valid: boolean }`）。
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -74,6 +81,9 @@ pub(crate) fn identity_verify_inner(
 ///   内核只看 `pull_synced`（内核 `synced` 是反推成功数，对应 TS `pushed`，
 ///   TS 未计入）。成员仅报 peerId 不带地址时内核对账报"地址缺失"，与 TS
 ///   拨号失败一样计入 attempted 后跳过。
+///
+/// 拨号走 `sync_peer_organizations_with_dial_timeout`（5s，见
+/// `SYNC_NOW_DIAL_TIMEOUT`）：手动同步是用户可感路径，不可达成员快速失败。
 pub(crate) fn org_sync_now_inner(
     kernel: &mut Kernel,
     org_id: &str,
@@ -133,7 +143,7 @@ pub(crate) fn org_sync_now_inner(
         }
 
         attempted += 1;
-        match kernel.sync_peer_organizations(&node_info) {
+        match kernel.sync_peer_organizations_with_dial_timeout(&node_info, SYNC_NOW_DIAL_TIMEOUT) {
             Ok(result) => {
                 if result.pull_synced > 0 {
                     pulled += 1;
@@ -179,12 +189,23 @@ pub fn plugin_identity_verify(
 }
 
 #[tauri::command]
-pub fn plugin_org_sync_now(
+pub async fn plugin_org_sync_now(
     state: tauri::State<'_, KernelState>,
     org_id: String,
     plugin_domain: String,
 ) -> Result<OrgSyncNowResultDto, String> {
-    org_sync_now_inner(&mut *lock_kernel(&state)?, &org_id, &plugin_domain)
+    // 逐成员定向拨号是阻塞网络 IO（不可达 peer 需等拨号超时），挪入阻塞
+    // 线程执行，不占命令调用线程（模式同 commands/market.rs `run_market`）；
+    // `org_sync_now_inner` 同步签名保留，测试直调不受影响。
+    let kernel = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut guard = kernel
+            .lock()
+            .map_err(|_| "kernel state lock poisoned".to_string())?;
+        org_sync_now_inner(&mut guard, &org_id, &plugin_domain)
+    })
+    .await
+    .map_err(|e| format!("kernel task join failed: {e}"))?
 }
 
 // ------------------------------------------------------------------
@@ -325,5 +346,42 @@ mod tests {
         let result = org_sync_now_inner(&mut kernel, &org_id, DOMAIN).unwrap();
         assert_eq!(result.attempted, 0);
         assert_eq!(result.pulled, 0);
+    }
+
+    #[test]
+    fn org_sync_now_unreachable_members_bounded() {
+        let (_dir, mut kernel) = unlocked_kernel();
+
+        let input: super::super::dto::CreateOrgInputDto = serde_json::from_value(serde_json::json!({
+            "name": "离线组织"
+        }))
+        .unwrap();
+        let view = kernel.create_org(input.into()).unwrap();
+        let org_id = view.record.org_id.clone();
+
+        // 两个 node_info 指向不可达地址（127.0.0.1:9 discard 端口，连接即拒）的成员
+        let node_info = spark_core::org::OrganizationNodeInfo {
+            peer_id: None,
+            addresses: vec!["/ip4/127.0.0.1/tcp/9".to_string()],
+        };
+        kernel
+            .org_add_member(&org_id, &"cd".repeat(32), Some(&node_info))
+            .unwrap();
+        kernel
+            .org_add_member(&org_id, &"ef".repeat(32), Some(&node_info))
+            .unwrap();
+
+        let started = std::time::Instant::now();
+        let result = org_sync_now_inner(&mut kernel, &org_id, DOMAIN).unwrap();
+        let elapsed = started.elapsed();
+
+        // 成员全不可达：计入 attempted 但 pulled=0；且整体在有限时间内返回
+        // （单 peer 拨号 5s 超时 × 串行 2 成员为上界量级，连接即拒场景远快于此）
+        assert_eq!(result.attempted, 2);
+        assert_eq!(result.pulled, 0);
+        assert!(
+            elapsed < Duration::from_secs(15),
+            "org_sync_now 耗时 {elapsed:?} 超出上界"
+        );
     }
 }

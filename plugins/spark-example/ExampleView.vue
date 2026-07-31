@@ -360,16 +360,18 @@ export default defineComponent({
       }
     };
 
-    const syncLatestFromPeers = async () => {
+    const syncLatestFromPeers = async (): Promise<boolean> => {
       if (!selectedOrgId.value) {
-        return;
+        return false;
       }
 
       const plugin = await ensureSdk();
       try {
         await plugin.runtime.syncOrganizationData(selectedOrgId.value);
+        return true;
       } catch (error) {
         setMessage(`成员数据同步失败：${error}`, 'warning');
+        return false;
       }
     };
 
@@ -381,8 +383,15 @@ export default defineComponent({
         currentRootId.value = identity.rootId;
 
         await loadOrganizations();
-        await syncLatestFromPeers();
+        // 同步后台化，避免不可达 peer 阻塞首屏：先渲染本地时间线，
+        // peer 同步在后台进行；同步成功后再走 loadTimeline 刷新
+        // （含 notifyTimelinePosts 本地通知链路），失败仅 warning 提示。
         await loadTimeline();
+        void syncLatestFromPeers().then(async (synced) => {
+          if (synced) {
+            await loadTimeline().catch(() => undefined);
+          }
+        });
       } catch (error) {
         setMessage(`加载失败：${error}`, 'error');
       } finally {

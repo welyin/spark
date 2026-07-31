@@ -130,14 +130,28 @@ impl P2pNode {
         rx.await.map_err(|_| P2pError::NotStarted)?
     }
 
-    /// 按候选地址列表拨号连接目标成员（10s 超时）。
+    /// 按候选地址列表拨号连接目标成员（默认 10s 超时）。
     pub async fn connect_peer(&self, node_info: &PeerNodeInfo) -> Result<()> {
+        self.connect_peer_with_timeout(
+            node_info,
+            Duration::from_secs(crate::p2p::constants::CONNECT_TIMEOUT_SECS),
+        )
+        .await
+    }
+
+    /// 带自定义超时的拨号：手动 sync-now 等用户可感路径传更短超时，
+    /// 让不可达 peer 快速失败，不拖累串行逐成员同步。
+    pub async fn connect_peer_with_timeout(
+        &self,
+        node_info: &PeerNodeInfo,
+        timeout: Duration,
+    ) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         self.send_cmd(Command::ConnectPeer {
             node_info: node_info.clone(),
             tx,
         })?;
-        tokio::time::timeout(Duration::from_secs(10), rx)
+        tokio::time::timeout(timeout, rx)
             .await
             .map_err(|_| P2pError::Dial("connect timeout".to_string()))?
             .map_err(|_| P2pError::NotStarted)?

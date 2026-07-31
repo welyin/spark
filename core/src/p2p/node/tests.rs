@@ -22,10 +22,12 @@ use super::event_loop::{EventLoop, OrgAttempt, OrgAttemptKind, OrgTx};
 use super::{BehaviourOptions, build_swarm};
 use crate::p2p::announce::NodeAnnounceValidator;
 use crate::p2p::behaviour::SparkBehaviourEvent;
+use crate::p2p::constants::{PLUGIN_ANNOUNCE_MIN_POW_BITS, PLUGIN_ANNOUNCE_RELAY_TENURE_MS};
 use crate::p2p::direct::MinIntervalRateLimiter;
 use crate::p2p::envelope::EnvelopeSigner;
 use crate::p2p::host::NoopHost;
 use crate::p2p::peer_targets::PeerNodeInfo;
+use crate::p2p::plugin_announce::PluginAnnounceValidator;
 use crate::storage::MemoryStorage;
 
 /// 测试用 EventLoop（内存存储 + NoopHost；字段初始化与 node/mod.rs 的
@@ -79,6 +81,10 @@ async fn test_loop() -> EventLoop<MemoryStorage> {
         dm_completion_rx,
         pending_dm_inbound: HashMap::new(),
         next_dm_task_id: 0,
+        plugin_announce_validator: PluginAnnounceValidator::new(PLUGIN_ANNOUNCE_MIN_POW_BITS),
+        plugin_announce_tenure_ms: PLUGIN_ANNOUNCE_RELAY_TENURE_MS,
+        peer_connected_since: HashMap::new(),
+        topic_cache: HashMap::new(),
     }
 }
 

@@ -2,6 +2,7 @@
 //! （捎带自签 nodeInfoClaim）→ 逐组织双向 stale 比较 → 拉取合并 / 反推 / 删除。
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use serde_json::Value;
 
@@ -45,12 +46,28 @@ impl OrgSyncContext {
         node_info: &PeerNodeInfo,
         with_claim: bool,
     ) -> Result<OrgReconcileStats, String> {
+        self.reconcile_from_peer_with_dial_timeout(
+            node_info,
+            with_claim,
+            Duration::from_secs(crate::p2p::constants::CONNECT_TIMEOUT_SECS),
+        )
+        .await
+    }
+
+    /// 同 `reconcile_from_peer`，但拨号超时由调用方指定：
+    /// 手动 sync-now 路径用更短超时让不可达成员快速失败（对账语义不变）。
+    pub(crate) async fn reconcile_from_peer_with_dial_timeout(
+        &self,
+        node_info: &PeerNodeInfo,
+        with_claim: bool,
+        dial_timeout: Duration,
+    ) -> Result<OrgReconcileStats, String> {
         let mut stats = OrgReconcileStats::default();
         let Some(root_id) = self.root_id() else {
             return Ok(stats);
         };
         self.node
-            .connect_peer(node_info)
+            .connect_peer_with_timeout(node_info, dial_timeout)
             .await
             .map_err(|e| e.to_string())?;
         let local_peer_id = self

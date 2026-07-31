@@ -1,6 +1,8 @@
 //! 组织门面（`Kernel` 的组织 API）：组织 CRUD/成员/邀请码、受邀加入编排与
 //! 组织同步编排的同步包装（委托 `org` 服务层与 `org_sync` worker 上下文）。
 
+use std::time::Duration;
+
 use serde_json::{Map, Value};
 
 use super::dm_delivery::DM_RETRY_DELAYS;
@@ -689,6 +691,21 @@ impl Kernel {
         &self,
         target_peer: &OrganizationNodeInfo,
     ) -> Result<PeerOrgSyncResult> {
+        self.sync_peer_organizations_with_dial_timeout(
+            target_peer,
+            Duration::from_secs(crate::p2p::constants::CONNECT_TIMEOUT_SECS),
+        )
+    }
+
+    /// 同 `sync_peer_organizations`，但单 peer 拨号超时由调用方指定：
+    /// 手动 sync-now（用户可感路径）传更短超时让不可达成员快速失败，
+    /// 避免整批串行拨号阻塞；对账语义（双向 stale 推送 + pull + removed
+    /// 清理）完全一致。
+    pub fn sync_peer_organizations_with_dial_timeout(
+        &self,
+        target_peer: &OrganizationNodeInfo,
+        dial_timeout: Duration,
+    ) -> Result<PeerOrgSyncResult> {
         let ctx = self.org_sync_context().ok_or_else(|| {
             KernelError::Internal(
                 "P2P node is not started. Start P2P before syncing organizations.".to_string(),
@@ -707,7 +724,7 @@ impl Kernel {
         let stats = self
             .runtime
             .handle()
-            .block_on(ctx.reconcile_from_peer(&peer, false))
+            .block_on(ctx.reconcile_from_peer_with_dial_timeout(&peer, false, dial_timeout))
             .map_err(KernelError::Internal)?;
         Ok(stats.into())
     }
