@@ -1,10 +1,19 @@
 name: Release Spark Desktop
 
-# 主程序发布流水线：tag（v*）触发 → tauri-action 构建 macOS 包 →
+# 主程序发布流水线：tag（desktop-v*）触发 → tauri-action 构建 macOS 包 →
 # 用 minisign 私钥签名 updater 资产并生成 latest.json → 上传 GitHub Release。
 # 客户端 tauri-plugin-updater 的更新源即
 # https://github.com/welyin/spark/releases/latest/download/latest.json
 # （src-tauri/tauri.conf.json plugins.updater.endpoints）。
+#
+# tag 前缀用 desktop-v* 而非 v*：v* 已被插件发布流水线
+# （release-plugin-spark-example.yml）占用，两套流水线必须互不触发。
+#
+# 发版方式（二选一）：
+# - Actions 页面运行「Bump Desktop Version」输入版本号：自动改版本文件 +
+#   提交打 tag + 触发本流水线（日常推荐）；
+# - 手动 git tag desktop-v0.2.0 && git push origin desktop-v0.2.0
+#   （tag 版本号会与 tauri.conf.json 比对，不一致直接失败，防 tag/版本脱钩）。
 #
 # 需要的仓库 Secrets（一次性配置，缺一不可，否则产出的更新包验签失败）：
 # - TAURI_SIGNING_PRIVATE_KEY：minisign 私钥全文
@@ -27,11 +36,11 @@ name: Release Spark Desktop
 on:
   push:
     tags:
-      - 'v*'
+      - 'desktop-v*'
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (example: v0.2.0)"
+        description: "Release tag (example: desktop-v0.2.0)"
         required: true
         type: string
 
@@ -45,6 +54,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Verify tag version matches tauri.conf.json
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#desktop-v}"
+          CONF_VERSION=$(sed -n 's/^\s*"version": "\([^"]*\)".*/\1/p' app/src-tauri/tauri.conf.json | head -1)
+          if [[ "$CONF_VERSION" != "$TAG_VERSION" ]]; then
+            echo "::error::tag 版本 ($TAG_VERSION) 与 tauri.conf.json 版本 ($CONF_VERSION) 不一致——先 bump 版本再发 tag"
+            exit 1
+          fi
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

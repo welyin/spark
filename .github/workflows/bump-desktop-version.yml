@@ -1,0 +1,85 @@
+name: Bump Desktop Version
+
+# 桌面端一键发版入口：Actions 页面手动运行，输入新版本号 →
+# 改三处版本文件（app/package.json、app/src-tauri/tauri.conf.json、
+# app/src-tauri/Cargo.toml，只动版本行保持其余格式）→ 提交 + 打
+# desktop-v* tag 推送 → 显式 dispatch 发布流水线（release-spark-desktop.yml）。
+#
+# 为什么不靠 tag push 触发：GitHub 防递归限制下，GITHUB_TOKEN 推送的
+# commit/tag 不会触发 on:push 工作流，所以最后一步用 gh workflow run
+# 显式触发（需要 permissions 里的 actions: write）。
+#
+# 幂等：版本号与当前一致时跳过版本提交，仅补 tag + 触发发布
+# （用于首发或重发当前版本）。
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "新版本号（例：0.2.0，不带 v 前缀）"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate version and tag
+        id: vars
+        shell: bash
+        run: |
+          VERSION="${{ inputs.version }}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::版本号必须是 x.y.z 形式（当前输入：$VERSION）"
+            exit 1
+          fi
+          if git rev-parse --verify --quiet "refs/tags/desktop-v$VERSION" > /dev/null; then
+            echo "::error::tag desktop-v$VERSION 已存在——换个版本号，或直接用 Release Spark Desktop 的 workflow_dispatch 重跑该 tag"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Bump version files
+        shell: bash
+        run: |
+          VERSION="${{ steps.vars.outputs.version }}"
+          # 只替换各文件首个版本行，不动其余格式（每文件单独 perl 调用：
+          # BEGIN 块每次调用只执行一次，多文件同调会漏替换后续文件）
+          perl -pi -e 'BEGIN{$d=0} if(!$d && s/^(\s*)"version": ".*"/$1"version": "'"$VERSION"'"/){$d=1}' app/package.json
+          perl -pi -e 'BEGIN{$d=0} if(!$d && s/^(\s*)"version": ".*"/$1"version": "'"$VERSION"'"/){$d=1}' app/src-tauri/tauri.conf.json
+          perl -pi -e 'BEGIN{$d=0} if(!$d && s/^version = ".*"/version = "'"$VERSION"'"/){$d=1}' app/src-tauri/Cargo.toml
+          grep -m1 '"version"' app/package.json app/src-tauri/tauri.conf.json
+          grep -m1 '^version' app/src-tauri/Cargo.toml
+
+      - name: Commit and tag
+        shell: bash
+        run: |
+          VERSION="${{ steps.vars.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/package.json app/src-tauri/tauri.conf.json app/src-tauri/Cargo.toml
+          if git diff --cached --quiet; then
+            echo "版本已是 $VERSION，跳过提交（幂等重发）"
+          else
+            git commit -m "chore(release): desktop bump $VERSION"
+          fi
+          git tag "desktop-v$VERSION"
+          git push origin HEAD:main
+          git push origin "desktop-v$VERSION"
+
+      - name: Trigger release workflow
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run release-spark-desktop.yml -f "tag=desktop-v${{ steps.vars.outputs.version }}"
+          echo "已触发发布流水线，请到 Actions 页面查看 Release Spark Desktop 运行状态"
