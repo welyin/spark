@@ -115,16 +115,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # 本 job 无 checkout，gh 必须显式 --repo（否则 gh 尝试从本地 .git 解析
+          # 仓库报 "failed to run git: fatal: not a git repository"）
+          REPO="$GITHUB_REPOSITORY"
           mkdir -p mirror
           echo "== assets on $RELEASE_TAG =="
-          gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name'
+          gh release view "$RELEASE_TAG" --repo "$REPO" --json assets --jq '.assets[].name'
           # 逐个模式下载；.sig 可能只内嵌 latest.json 不单独上传，容忍缺项
-          gh release download "$RELEASE_TAG" --dir mirror --clobber -p 'latest.json'
-          gh release download "$RELEASE_TAG" --dir mirror --clobber -p '*.app.tar.gz*' \
+          gh release download "$RELEASE_TAG" --repo "$REPO" --dir mirror --clobber -p 'latest.json'
+          gh release download "$RELEASE_TAG" --repo "$REPO" --dir mirror --clobber -p '*.app.tar.gz*' \
             || echo "::warning::未找到 macOS updater 资产（.app.tar.gz*）"
-          gh release download "$RELEASE_TAG" --dir mirror --clobber -p '*.msi.zip*' \
+          gh release download "$RELEASE_TAG" --repo "$REPO" --dir mirror --clobber -p '*.msi.zip*' \
             || echo "::warning::未找到 Windows updater 资产（.msi.zip*）"
-          gh release download "$RELEASE_TAG" --dir mirror --clobber -p '*.nsis.zip*' \
+          gh release download "$RELEASE_TAG" --repo "$REPO" --dir mirror --clobber -p '*.nsis.zip*' \
             || echo "无 .nsis.zip 资产（未启用 nsis 时可忽略）"
           ls -la mirror
           test -f mirror/latest.json
@@ -137,7 +140,7 @@ jobs:
             }
             fs.writeFileSync("mirror/latest.json", JSON.stringify(j, null, 2));
           '
-          gh release view desktop-latest --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 || \
-            gh release create desktop-latest --title "Spark Desktop 最新版（滚动更新源）" \
+          gh release view desktop-latest --repo "$REPO" > /dev/null 2>&1 || \
+            gh release create desktop-latest --repo "$REPO" --title "Spark Desktop 最新版（滚动更新源）" \
               --notes "由发布流水线自动维护，客户端更新端点固定指向此 release 的 latest.json。"
-          gh release upload desktop-latest mirror/* --clobber
+          gh release upload desktop-latest --repo "$REPO" mirror/* --clobber
