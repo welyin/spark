@@ -240,6 +240,28 @@ impl PluginMarketService {
             changed = true;
         }
 
+        // 清理化石记录：bundled-dev-source 记录对应的插件已不在目录（如插件更名）
+        // 或其源码路径已失效——保留会让插件源服务 404、市场出现无目录孤儿。
+        // 仅针对 sha256 == "bundled-dev-source" 的记录；显式安装/repo 安装不受影响。
+        let catalog_ids: std::collections::BTreeSet<String> =
+            list_plugin_catalog().iter().map(|item| item.id.clone()).collect();
+        let stale_ids: Vec<String> = self
+            .state
+            .installed
+            .values()
+            .filter(|record| {
+                record.sha256 == "bundled-dev-source"
+                    && (!catalog_ids.contains(&record.plugin_id)
+                        || !PathBuf::from(&record.package_path).is_dir())
+            })
+            .map(|record| record.plugin_id.clone())
+            .collect();
+        for id in stale_ids {
+            self.state.installed.remove(&id);
+            self.update_probes.remove(&id);
+            changed = true;
+        }
+
         if changed {
             self.persist()?;
         }

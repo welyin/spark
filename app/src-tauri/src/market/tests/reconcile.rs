@@ -81,6 +81,36 @@ fn reconcile_marks_dev_source_and_bundle_wins() {
 }
 
 #[test]
+fn reconcile_removes_stale_dev_source_records() {
+    // 化石记录：插件更名后 weibo-core 已不在目录，且其源码路径已失效
+    let fixture = Fixture::new();
+    let legacy = serde_json::json!({
+        "installed": {
+            "weibo-core": {
+                "pluginId": "weibo-core",
+                "version": "0.1.0",
+                "packagePath": "D:\\nonexistent\\weibo-core",
+                "sha256": "bundled-dev-source",
+                "size": 0,
+                "installedAt": 1,
+                "enabled": true,
+                "grantedPermissions": ["storage:read"]
+            }
+        }
+    });
+    fs::create_dir_all(fixture.state_file.parent().unwrap()).unwrap();
+    fs::write(&fixture.state_file, legacy.to_string()).unwrap();
+
+    let mut service = fixture.service();
+    service.initialize().unwrap();
+
+    assert!(!service.state.installed.contains_key("weibo-core"));
+    assert!(!service.update_probes.contains_key("weibo-core"));
+    let persisted = read_state_file(&fixture.state_file);
+    assert!(!persisted.installed.contains_key("weibo-core"));
+}
+
+#[test]
 fn backfill_fills_missing_granted_permissions() {
     let fixture = Fixture::new();
     // 手写一份缺 grantedPermissions 字段的旧版状态
