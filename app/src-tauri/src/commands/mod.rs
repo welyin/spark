@@ -17,6 +17,7 @@ pub mod org;
 pub mod p2p;
 pub mod plugin;
 pub mod system;
+pub mod updater;
 
 use std::sync::MutexGuard;
 

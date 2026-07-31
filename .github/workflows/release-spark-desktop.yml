@@ -1,0 +1,76 @@
+name: Release Spark Desktop
+
+# 主程序发布流水线：tag（v*）触发 → tauri-action 构建 macOS 包 →
+# 用 minisign 私钥签名 updater 资产并生成 latest.json → 上传 GitHub Release。
+# 客户端 tauri-plugin-updater 的更新源即
+# https://github.com/welyin/spark/releases/latest/download/latest.json
+# （src-tauri/tauri.conf.json plugins.updater.endpoints）。
+#
+# 需要的仓库 Secrets（一次性配置，缺一不可，否则产出的更新包验签失败）：
+# - TAURI_SIGNING_PRIVATE_KEY：minisign 私钥全文
+#   （本机 .secrets/spark-updater-signing.key 的内容；对应公钥已内置于
+#   tauri.conf.json plugins.updater.pubkey）
+# - TAURI_SIGNING_PRIVATE_KEY_PASSWORD：私钥密码
+#   （本机 .secrets/spark-updater-signing.password 的内容）
+#
+# 手动发布兜底（CI 不可用时）：本机执行
+#   cd app && npm run tauri build -- --bundles app
+#   然后用 `npx tauri signer sign` 对
+#   src-tauri/target/release/bundle/macos/*.app.tar.gz 签名生成 .sig，
+#   参照 https://v2.tauri.app/plugin/updater/ 手拼 latest.json（version /
+#   pub_date / platforms.darwin-aarch64.{url,signature}）并连同包一起
+#  上传到对应 Release。
+#
+# 后续扩展：windows/linux 加入 matrix（updater 资产命名按平台区分，
+# tauri-action 会自动归并到同一份 latest.json）。
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (example: v0.2.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-desktop-release:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+
+      - name: Install app dependencies
+        run: npm ci --prefix app
+
+      - name: Build and sign release (tauri-action 自动出 updater 资产与 latest.json)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: app
+          tagName: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          releaseName: 'Spark Desktop v__VERSION__'
+          releaseDraft: true
+          prerelease: false

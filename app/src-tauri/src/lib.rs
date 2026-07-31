@@ -78,6 +78,9 @@ fn resolve_data_dir(app: &tauri::App) -> Result<PathBuf, std::io::Error> {
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // 主程序自动更新：GitHub Releases latest.json 清单 + minisign 验签
+        // （端点与公钥在 tauri.conf.json plugins.updater）。
+        .plugin(tauri_plugin_updater::Builder::new().build())
         // 插件源服务：plugin://localhost/<pluginId>/<path>（插件 iframe 沙箱化阶段 A；
         // Windows 上页面实际引用 http://plugin.localhost/...，由 wry 拦截后 revert，
         // 见 plugin_src.rs 的 URL 形态说明）。已安装包（app_data_dir/plugins/<id>/
@@ -130,6 +133,11 @@ pub fn run() {
             // 懒惰核查队列（plugin-dist §8.8）：新声明后台 resolve_repo_plugin 核查，
             // verified 终态回写内核索引；worker 需在 KernelState/MarketState 就位后启动
             announce_verify::spawn_announce_verify_worker(app.handle().clone(), announce_events);
+            // 主程序自动更新：启动后延迟自动 检查+下载，就绪发 updater://ready
+            // 事件由前端弹窗引导重启（见 commands/updater.rs）。
+            let updater_state = commands::updater::UpdaterState::default();
+            commands::updater::spawn_auto_check(app.handle().clone(), updater_state.clone());
+            app.manage(updater_state);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -260,6 +268,11 @@ pub fn run() {
             commands::market::plugin_market_announce_get,
             // 系统桥接（未读角标 → dock/任务栏徽标）
             commands::system::system_set_badge,
+            // 主程序自动更新（GitHub Releases 清单；检查/下载/安装重启）
+            commands::updater::updater_status,
+            commands::updater::updater_check,
+            commands::updater::updater_stage_latest,
+            commands::updater::updater_apply_restart,
         ])
         .build(tauri::generate_context!())
         .expect("error while building spark desktop");
