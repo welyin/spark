@@ -60,7 +60,8 @@ jobs:
         shell: bash
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#desktop-v}"
-          CONF_VERSION=$(sed -n 's/^\s*"version": "\([^"]*\)".*/\1/p' app/src-tauri/tauri.conf.json | head -1)
+          # 注意 runner 是 BSD sed（不支持 \s），用 grep+cut 提取保持可移植
+          CONF_VERSION=$(grep -m1 '"version"' app/src-tauri/tauri.conf.json | cut -d'"' -f4)
           if [[ "$CONF_VERSION" != "$TAG_VERSION" ]]; then
             echo "::error::tag 版本 ($TAG_VERSION) 与 tauri.conf.json 版本 ($CONF_VERSION) 不一致——先 bump 版本再发 tag"
             exit 1
