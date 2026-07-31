@@ -276,7 +276,7 @@ export default defineComponent({
     // 关于·手动更新（自动检查就绪弹窗被取消后的入口；命令语义见
     // src-tauri commands/updater.rs。无桥接/未配置时按钮禁用）
     // ------------------------------------------------------------------
-    const appVersion = ref('0.1.0');
+    const appVersion = ref('0.2.0');
     const updaterAvailable = ref(false);
     const updateChecking = ref(false);
     const updateApplying = ref(false);
