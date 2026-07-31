@@ -100,11 +100,16 @@ async function main() {
       run('npx', ['tauri', 'dev'], env);
     } else {
       // 其余实例复用实例 1 的 dev server（--no-dev-server 在本 CLI 版本不生效，
-      // 用 -c 覆盖清空 beforeDevCommand 跳过重复起 vite，--no-watch 关掉文件监听）
+      // 用 -c 覆盖清空 beforeDevCommand 跳过重复起 vite，--no-watch 关掉文件监听）。
+      // 注意：Windows 下 spawn shell:true 经 cmd.exe 转发会剥掉 JSON 内的双引号，
+      // 内联 -c '{"build":...}' 会被 CLI 当成非法 JSON——改为写配置文件传路径，
+      // 相对路径 + 正斜杠，彻底绕开 cmd 引号语义。
+      const noServerConfig = path.join(appDir, '.dev-data', 'tauri-no-dev-server.json');
+      fs.writeFileSync(noServerConfig, JSON.stringify({ build: { beforeDevCommand: '' } }));
       await waitForDevServer();
       run(
         'npx',
-        ['tauri', 'dev', '-c', '{"build":{"beforeDevCommand":""}}', '--no-watch'],
+        ['tauri', 'dev', '-c', '.dev-data/tauri-no-dev-server.json', '--no-watch'],
         env,
       );
     }
