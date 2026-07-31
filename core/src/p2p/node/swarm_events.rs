@@ -134,7 +134,12 @@ impl<S: StorageBackend> EventLoop<S> {
                         };
                         attempt.in_flight = Some(request_id);
                         attempt.current_peer = Some(peer_id);
-                        break;
+                        // 不 break：同地址去重的等待 attempt 排在本条之后，也要
+                        // 随这路已建立连接发出请求（in_flight 非空检查已防
+                        // 双连接重复发）
+                        // 不 break：同地址去重的等待 attempt 排在本条之后，也要
+                        // 随这路已建立连接发出请求（in_flight 非空检查已防
+                        // 双连接重复发）
                     }
                     j += 1;
                 }
@@ -161,20 +166,16 @@ impl<S: StorageBackend> EventLoop<S> {
                     });
                 }
             }
-            SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
-                // connect 命令：失败则试下一目标
+            SwarmEvent::OutgoingConnectionError { peer_id, connection_id, error, .. } => {
+                // connect 命令：失败则试下一目标。按 ConnectionId 精确归属
+                // （同 org attempt 口径）——候选 1 的 unknown_peer_id 拨号失败
+                // 时 peer_id=None，按 peer 匹配会失配滞留：对端在线但首候选
+                // 撞 mdns/并发拨号竞争时，connect 空等超时、推送整体降级
                 let mut i = 0;
                 while i < self.pending_connects.len() {
                     let matched = {
                         let p = &self.pending_connects[i];
-                        match (
-                            peer_id,
-                            extract_peer_id(&p.node_info).and_then(|s| s.parse::<PeerId>().ok()),
-                        ) {
-                            (Some(actual), Some(expected)) => actual == expected,
-                            (None, None) => true,
-                            _ => false,
-                        }
+                        p.dial_conn_id == Some(connection_id)
                     };
                     if matched {
                         let mut p = self.pending_connects.remove(i);
@@ -198,27 +199,36 @@ impl<S: StorageBackend> EventLoop<S> {
                         i += 1;
                     }
                 }
-                // org 尝试：失败试下一目标
+                // org 尝试：失败试下一目标。按 ConnectionId 精确归属——
+                // 候选 1 用 unknown_peer_id 拨原始地址，失败事件 peer_id=None，
+                // 若按 peer/地址模糊匹配，一个 attempt 的失败会误推进同 peer
+                // 的所有 attempt（含未拨号的等待者），级联耗尽目标
                 let mut j = 0;
                 while j < self.pending_org_attempts.len() {
                     let should_retry = {
                         let a = &self.pending_org_attempts[j];
                         a.in_flight.is_none()
                             && a.current_target.is_some()
-                            && match (peer_id, a.current_peer) {
-                                (Some(actual), Some(expected)) => actual == expected,
-                                (None, None) => true,
-                                (Some(_), None) => true,
-                                _ => false,
-                            }
+                            && a.dial_issued
+                            && a.dial_conn_id == Some(connection_id)
                     };
                     if should_retry {
                         let mut a = self.pending_org_attempts.remove(j);
+                        let failed_base = a
+                            .current_target
+                            .as_deref()
+                            .map(super::org_direct::base_addr)
+                            .map(str::to_string);
                         a.current_target = None;
                         self.dial_next_org_target(&mut a);
                         if a.current_target.is_some() || a.in_flight.is_some() {
                             self.pending_org_attempts.push(a);
                         } else {
+                            // 拨号方耗尽：同地址的去重等待者所等的事件已不会
+                            // 发生，唤醒其自行走目标流程
+                            if let Some(base) = failed_base {
+                                self.wake_addr_waiters(&base);
+                            }
                             a.finish_exhausted();
                         }
                     } else {

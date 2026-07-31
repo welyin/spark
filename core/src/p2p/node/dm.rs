@@ -57,6 +57,8 @@ impl<S: StorageBackend> EventLoop<S> {
                 current_peer: Some(peer),
                 request_json,
                 in_flight: Some(request_id),
+                dial_issued: false,
+                dial_conn_id: None,
                 tx: OrgTx::Dm(tx),
             };
             self.pending_org_attempts.push(attempt);
@@ -78,6 +80,8 @@ impl<S: StorageBackend> EventLoop<S> {
             current_peer: extract_peer_id(&node_info).and_then(|s| s.parse::<PeerId>().ok()),
             request_json: direct::build_dm_request(&payload),
             in_flight: None,
+            dial_issued: false,
+            dial_conn_id: None,
             tx: OrgTx::Dm(tx),
         };
         self.dial_next_org_target(&mut attempt);

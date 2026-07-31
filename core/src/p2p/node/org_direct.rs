@@ -16,6 +16,13 @@ use crate::storage::StorageBackend;
 use super::P2pEvent;
 use super::event_loop::{EventLoop, OrgAttempt, OrgAttemptKind, OrgTx};
 
+/// 拨号去重的规范化地址：剥掉尾部 `/p2p/{peerId}` 段——同一地址的原始形式
+/// （unknown_peer_id 拨）与带 peer 段形式（`DialOpts::from` 拨）必须互认，
+/// 否则两个 attempt 会各拨一种形式，对同一端点建立双连接
+pub(super) fn base_addr(addr: &str) -> &str {
+    addr.split("/p2p/").next().unwrap_or(addr)
+}
+
 impl<S: StorageBackend> EventLoop<S> {
     pub(super) fn begin_org_attempt(
         &mut self,
@@ -68,6 +75,8 @@ impl<S: StorageBackend> EventLoop<S> {
             current_peer: extract_peer_id(&node_info).and_then(|s| s.parse::<PeerId>().ok()),
             request_json,
             in_flight: None,
+            dial_issued: false,
+            dial_conn_id: None,
             tx,
         };
         // 已连接则直接在现有连接上发请求：重拨同一地址会因 TCP 端口复用的
@@ -95,6 +104,9 @@ impl<S: StorageBackend> EventLoop<S> {
     }
 
     pub(super) fn dial_next_org_target(&mut self, attempt: &mut OrgAttempt) {
+        // 进入新一轮目标尝试：上一目标（如有）的拨号归属失效
+        attempt.dial_issued = false;
+        attempt.dial_conn_id = None;
         // 同地址并发拨号恢复：并行尝试（如 org-share 推送与 dm 邀请同时
         // 拨同一 peer）已建好连接时，本 attempt 的拨号会同步报错/异步
         // DialFailure——此时直接复用已建连接发请求，而不是误走下一目标
@@ -121,13 +133,19 @@ impl<S: StorageBackend> EventLoop<S> {
             return;
         }
         while let Some(target) = attempt.targets.pop_front() {
-            // 同地址拨号去重：另一 attempt 正在拨同一地址时不重复拨（并发
-            // 同地址拨号在 loopback 上确定性 EADDRINUSE），仅登记
+            // 同地址拨号去重：另一 attempt **正在实际拨**同一地址时不重复拨
+            // （并发同地址拨号在 loopback 上确定性 EADDRINUSE），仅登记
             // current_target——ConnectionEstablished 按地址匹配时本 attempt
             // 会随那路连接一起发请求；若那路失败，OutgoingConnectionError
-            // 的重试路径轮到本 attempt 时对方已拨完，不再冲突
+            // 的重试路径轮到本 attempt 时对方已拨完，不再冲突。必须认
+            // `dial_issued`：等待者同样持有 current_target，不区分会让
+            // 真实拨号方失败重试时被等待者误判「已在拨」，全员僵持
             let already_dialing = self.pending_org_attempts.iter().any(|a| {
-                a.in_flight.is_none() && a.current_target.as_deref() == Some(target.as_str())
+                a.dial_issued
+                    && a.in_flight.is_none()
+                    && a.current_target.as_deref().is_some_and(|t| {
+                        base_addr(t) == base_addr(target.as_str())
+                    })
             });
             if already_dialing {
                 attempt.current_target = Some(target);
@@ -140,12 +158,49 @@ impl<S: StorageBackend> EventLoop<S> {
                     } else {
                         DialOpts::unknown_peer_id().address(ma).build()
                     };
+                    // dial 前取出本次拨号的 ConnectionId：OutgoingConnectionError
+                    // 按它精确归属（unknown_peer_id 拨号失败时事件 peer_id=None，
+                    // 不能按 peer 匹配，否则无关失败会误推进本 attempt）
+                    let conn_id = opts.connection_id();
                     if self.swarm.dial(opts).is_ok() {
                         attempt.current_target = Some(target);
+                        attempt.dial_issued = true;
+                        attempt.dial_conn_id = Some(conn_id);
                         return;
                     }
                 }
                 Err(_) => continue,
+            }
+        }
+    }
+
+    /// 拨号方 attempt 耗尽后唤醒同地址等待者：去重等待者（登记等待、未实际
+    /// 拨号）所等的连接事件已不会发生，移交其自行走目标流程（dial_next 内
+    /// 有已连接短路，拨号方曾成功建连时直接复用；否则等待者自己拨号）。
+    /// 只在 OutgoingConnectionError 的耗尽分支需要：应答类失败时等待者早已
+    /// 在 ConnectionEstablished 被服务（不再是等待者）。
+    pub(super) fn wake_addr_waiters(&mut self, failed_base: &str) {
+        let mut i = 0;
+        while i < self.pending_org_attempts.len() {
+            let is_waiter = {
+                let a = &self.pending_org_attempts[i];
+                !a.dial_issued
+                    && a.in_flight.is_none()
+                    && a.current_target
+                        .as_deref()
+                        .is_some_and(|t| base_addr(t) == failed_base)
+            };
+            if is_waiter {
+                let mut w = self.pending_org_attempts.remove(i);
+                w.current_target = None;
+                self.dial_next_org_target(&mut w);
+                if w.current_target.is_some() || w.in_flight.is_some() {
+                    self.pending_org_attempts.push(w);
+                } else {
+                    w.finish_exhausted();
+                }
+            } else {
+                i += 1;
             }
         }
     }
@@ -307,5 +362,20 @@ impl<S: StorageBackend> EventLoop<S> {
         self.emit(P2pEvent::Warning(format!(
             "org/dm failure for unknown request id {request_id:?} (from_dm={from_dm})"
         )));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::base_addr;
+
+    #[test]
+    fn base_addr_strips_p2p_suffix() {
+        let raw = "/ip4/127.0.0.1/tcp/9100";
+        let with_peer = "/ip4/127.0.0.1/tcp/9100/p2p/12D3KooWExample";
+        assert_eq!(base_addr(raw), raw);
+        assert_eq!(base_addr(with_peer), raw);
+        // 两种形式互认（去重键规范化的目的）
+        assert_eq!(base_addr(raw), base_addr(with_peer));
     }
 }

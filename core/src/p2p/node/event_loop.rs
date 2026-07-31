@@ -31,6 +31,11 @@ pub(super) struct PendingConnect {
     pub(super) node_info: PeerNodeInfo,
     pub(super) targets: VecDeque<String>,
     pub(super) current: Option<String>,
+    /// 本次拨号的 [`ConnectionId`]（dial 前从 `DialOpts` 读取）——
+    /// OutgoingConnectionError 按它精确归属：unknown_peer_id 拨号失败时
+    /// 事件 peer_id=None，按 peer 匹配会让失败永久滞留（对端在线但首
+    /// 候选撞 mdns/并发拨号竞争时，connect 等到超时、推送整体降级）
+    pub(super) dial_conn_id: Option<libp2p::swarm::ConnectionId>,
     pub(super) tx: oneshot::Sender<Result<()>>,
     pub(super) last_error: Option<String>,
 }
@@ -71,6 +76,15 @@ pub(super) struct OrgAttempt {
     pub(super) current_peer: Option<PeerId>,
     pub(super) request_json: String,
     pub(super) in_flight: Option<request_response::OutboundRequestId>,
+    /// current_target 的地址是否由本 attempt 实际发起拨号（去重等待者为
+    /// false）——dial_next_org_target 的同地址去重只认真实拨号方，
+    /// 否则拨号方失败重试时会被等待者误判「已在拨」而全员僵持
+    pub(super) dial_issued: bool,
+    /// 本次拨号的 [`ConnectionId`]（`DialOpts::connection_id()` 在 dial 前
+    /// 读取）——OutgoingConnectionError 按它精确归属到发起拨号的 attempt：
+    /// `unknown_peer_id` 拨号失败时事件 peer_id=None，按 peer 匹配会让
+    /// 无关失败级联推进所有 attempt 至目标耗尽
+    pub(super) dial_conn_id: Option<libp2p::swarm::ConnectionId>,
     pub(super) tx: OrgTx,
 }
 
@@ -323,6 +337,7 @@ impl<S: StorageBackend> EventLoop<S> {
             node_info,
             targets,
             current: None,
+            dial_conn_id: None,
             tx,
             last_error: None,
         };
@@ -342,6 +357,8 @@ impl<S: StorageBackend> EventLoop<S> {
         &mut self,
         pending: &mut PendingConnect,
     ) -> Option<String> {
+        // 新一轮目标尝试：上一目标（如有）的拨号归属失效
+        pending.dial_conn_id = None;
         while let Some(target) = pending.targets.pop_front() {
             match target.parse::<Multiaddr>() {
                 Ok(ma) => {
@@ -350,8 +367,10 @@ impl<S: StorageBackend> EventLoop<S> {
                     } else {
                         DialOpts::unknown_peer_id().address(ma).build()
                     };
+                    let conn_id = opts.connection_id();
                     if self.swarm.dial(opts).is_ok() {
                         pending.current = Some(target);
+                        pending.dial_conn_id = Some(conn_id);
                         return None;
                     }
                     pending.last_error = Some(format!("dial rejected: {target}"));
