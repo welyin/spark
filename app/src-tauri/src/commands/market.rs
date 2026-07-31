@@ -1,5 +1,6 @@
 //! 插件市场命令：`plugin-market-list` / `plugin-market-check-updates` /
-//! `plugin-market-install` / `plugin-market-upgrade` / `plugin-market-set-enabled`
+//! `plugin-market-install` / `plugin-market-upgrade` / `plugin-market-set-enabled` /
+//! `plugin-market-uninstall`
 //!（语义对齐 TS desktop/src/main/ipc/plugin-market.ts，全部仅系统域使用）。
 //!
 //! 与 TS 的差异：旧 IPC 以 `requireSystemDomain(event)` 限制调用方为系统域；
@@ -73,6 +74,16 @@ pub async fn plugin_market_set_enabled(
     enabled: bool,
 ) -> Result<InstalledPluginState, String> {
     run_market(state, move |svc| svc.set_enabled(&plugin_id, enabled)).await
+}
+
+/// 卸载：移除状态记录 + 删除 app_data 插件目录内的包文件；
+/// dev-source / 目录外 packagePath 仅移除记录（详见 market/uninstall.rs）。
+#[tauri::command]
+pub async fn plugin_market_uninstall(
+    state: tauri::State<'_, MarketState>,
+    plugin_id: String,
+) -> Result<(), String> {
+    run_market(state, move |svc| svc.uninstall(&plugin_id)).await
 }
 
 /// 仓库锚定安装前置解析（plugin-dist §4.1）：拉取并校验 spark-plugin.json，

@@ -231,6 +231,8 @@ export function createTauriApi(): ElectronAPI {
       upgrade: (pluginId: string) => call('plugin-market-upgrade', pluginId),
       setEnabled: (pluginId: string, enabled: boolean) =>
         call('plugin-market-set-enabled', pluginId, enabled),
+      // 卸载：仅移除插件程序（包文件 + 状态记录），插件数据（文档/消息）保留在本机
+      uninstall: (pluginId: string) => call('plugin-market-uninstall', pluginId),
       // 仓库锚定安装（plugin-dist）：先 resolveRepo 展示声明文件，确认后 installFromRepo
       resolveRepo: (id: string) => call('plugin-market-resolve-repo', id),
       installFromRepo: (id: string) => call('plugin-market-install-from-repo', id),

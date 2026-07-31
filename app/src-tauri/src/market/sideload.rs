@@ -77,7 +77,8 @@ fn sideload_invalid(reason: &str) -> String {
 
 /// 插件 id 段校验（与 repo.rs 段规则一致：小写字母数字与 `. _ -`，拒空段与
 /// `.`/`..`）；repo 形态 id（含 `/` 段）同样合法，落盘逐段 join 无穿越。
-fn plugin_id_valid(id: &str) -> bool {
+/// pub(crate)：uninstall.rs 复用同一规则校验卸载目标 id。
+pub(crate) fn plugin_id_valid(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 256
         && id.split('/').all(|segment| {

@@ -229,6 +229,24 @@ export default defineComponent({
       activeTab.value = tab.sourceTab ?? 'apps';
     };
 
+    /** 卸载插件后联动关闭其全部已打开 tab（AppsPage 卸载成功时派发 spark:close-plugin） */
+    const onClosePluginEvent = (event: Event) => {
+      const detail = (event as CustomEvent<{ pluginDomain?: string }>).detail;
+      if (!detail?.pluginDomain) {
+        return;
+      }
+      const closing = pluginTabs.value.filter((tab) => tab.pluginDomain === detail.pluginDomain);
+      if (closing.length === 0) {
+        return;
+      }
+      pluginTabs.value = pluginTabs.value.filter((tab) => tab.pluginDomain !== detail.pluginDomain);
+      // 当前正停留在被关闭的 tab：回其来源页（缺省回应用页）
+      const active = closing.find((tab) => tab.id === activeTab.value);
+      if (active) {
+        activeTab.value = active.sourceTab ?? 'apps';
+      }
+    };
+
     const handleMenuSelect = (index: string) => {
       activeTab.value = index;
     };
@@ -326,11 +344,13 @@ export default defineComponent({
     onMounted(() => window.addEventListener('spark:open-contact', onOpenContactEvent));
     onMounted(() => window.addEventListener('spark:open-app', onOpenAppEvent));
     onMounted(() => window.addEventListener('spark:open-mine', onOpenMineEvent));
+    onMounted(() => window.addEventListener('spark:close-plugin', onClosePluginEvent));
     onUnmounted(() => {
       window.removeEventListener('spark:open-chat', onOpenChatEvent);
       window.removeEventListener('spark:open-contact', onOpenContactEvent);
       window.removeEventListener('spark:open-app', onOpenAppEvent);
       window.removeEventListener('spark:open-mine', onOpenMineEvent);
+      window.removeEventListener('spark:close-plugin', onClosePluginEvent);
     });
 
     return {

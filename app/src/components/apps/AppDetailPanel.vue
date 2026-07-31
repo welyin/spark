@@ -104,8 +104,11 @@
           >
             更新
           </el-button>
+          <!-- 卸载仅移除插件程序，插件数据保留在本机（确认框在 AppsPage） -->
+          <el-button type="danger" :loading="busy === 'uninstall'" @click="emit('uninstall', item)">
+            卸载
+          </el-button>
         </template>
-        <!-- TODO(mock): pluginMarket 无 uninstall 接口，暂不展示「卸载」按钮（设计 §4.1） -->
       </template>
     </section>
   </div>
@@ -126,7 +129,7 @@ export default defineComponent({
     isAdmin: { type: Boolean, required: true },
     busy: { type: String, default: '' }
   },
-  emits: ['back', 'open', 'install', 'upgrade', 'toggle', 'request-enable'],
+  emits: ['back', 'open', 'install', 'upgrade', 'toggle', 'uninstall', 'request-enable'],
   setup(props, { emit }) {
     // 模板中以 emit('xxx') 形式触发事件，必须把 emit 暴露出去（同 AppListPanel/AppMarketPanel）
     return { ArrowLeft, permissionLabel, appIconBackground, emit };

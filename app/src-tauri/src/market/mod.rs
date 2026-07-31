@@ -16,7 +16,7 @@
 //!
 //! 子模块划分：catalog（目录）/ permissions（权限）/ semver（版本比较）/ trust（验签）/
 //! types（线形）为纯数据与算法；sources（http/file 来源）、state（状态持久化）、
-//! service（初始化与启动对账）、install（安装链路）、updates（更新探测与列表聚合）
+//! service（初始化与启动对账）、install（安装链路）、uninstall（卸载）、updates（更新探测与列表聚合）
 //! 为服务实现；单测在 tests/ 下按职责对应分文件。
 
 pub mod catalog;
@@ -32,6 +32,7 @@ mod state;
 mod tests;
 pub mod trust;
 pub mod types;
+mod uninstall;
 mod updates;
 
 use std::path::{Component, Path, PathBuf};

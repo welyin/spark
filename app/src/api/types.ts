@@ -509,6 +509,8 @@ export type ElectronAPI = {
     install: (pluginId: string) => Promise<InstalledPluginStateDto>;
     upgrade: (pluginId: string) => Promise<InstalledPluginStateDto>;
     setEnabled: (pluginId: string, enabled: boolean) => Promise<InstalledPluginStateDto>;
+    /** 卸载：移除状态记录并删除包文件；插件数据（文档/消息）保留在本机 */
+    uninstall: (pluginId: string) => Promise<void>;
     /** 仓库锚定安装前置解析：拉取并校验 spark-plugin.json（plugin-dist §4.1） */
     resolveRepo: (id: string) => Promise<RepoPluginDeclarationDto>;
     /** 仓库锚定安装（plugin-dist §4.2） */

@@ -57,6 +57,8 @@
             <div class="app-card-actions">
               <el-button v-if="isEnabled(item)" size="small" type="primary" @click="emit('open', item)">打开</el-button>
               <el-button size="small" @click="emit('toggle', item)">{{ isEnabled(item) ? '禁用' : '启用' }}</el-button>
+              <!-- 卸载仅移除插件程序，插件数据保留在本机（确认框在 AppsPage） -->
+              <el-button size="small" type="danger" plain @click="emit('uninstall', item)">卸载</el-button>
             </div>
           </div>
         </div>
@@ -114,6 +116,8 @@
             <div class="app-card-actions">
               <el-button v-if="isEnabled(item)" size="small" type="primary" @click="emit('open', item)">打开</el-button>
               <el-button size="small" @click="emit('toggle', item)">{{ isEnabled(item) ? '禁用' : '启用' }}</el-button>
+              <!-- 卸载仅移除插件程序，插件数据保留在本机（确认框在 AppsPage） -->
+              <el-button size="small" type="danger" plain @click="emit('uninstall', item)">卸载</el-button>
             </div>
             </div>
           </template>
@@ -150,7 +154,7 @@ export default defineComponent({
     isSuspended: { type: Function as PropType<(item: PluginMarketItemDto) => boolean>, required: true },
     groups: { type: Object as PropType<ReturnType<typeof useAppGroups>>, required: true }
   },
-  emits: ['open', 'detail', 'toggle', 'add-app'],
+  emits: ['open', 'detail', 'toggle', 'uninstall', 'add-app'],
   setup(props, { emit }) {
     const keyword = ref('');
     const collapsed = ref<Record<string, boolean>>({});

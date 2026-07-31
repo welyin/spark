@@ -1,5 +1,5 @@
 //! 插件市场服务单测：注入临时目录直造服务实例，直调公共 API（不依赖 Tauri）。
-//! 夹具与共享辅助在本文件，用例按职责分文件（reconcile/install/updates/wire/e2e）。
+//! 夹具与共享辅助在本文件，用例按职责分文件（reconcile/install/uninstall/updates/wire/e2e）。
 
 use std::fs;
 use std::path::PathBuf;
@@ -17,6 +17,7 @@ mod install;
 mod reconcile;
 mod repo;
 mod sideload;
+mod uninstall;
 mod updates;
 mod wire;
 

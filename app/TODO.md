@@ -91,7 +91,6 @@
 - `src/components/apps/apps-store.ts:95` | 应用分组归属 localStorage | 分组归属、自定义分组内核无接口，按空间存 localStorage（`spark:apps-groups:*`）；待内核分组模型替换
 - `src/components/apps/apps-store.ts:156` | 组织空间启用状态 localStorage | 设计 §4.2 组织启用由管理员统一管理但内核无接口，按 orgId 存 localStorage（`spark:apps-org-enabled:*`）
 - `src/components/apps/AppDetailPanel.vue:51` | 源码仓库与签名指纹缺失 | 市场数据无源码仓库地址、Ed25519 域名签名/公钥指纹字段（设计 §3.4/§6.2），详情页显示占位文案；GitHub Star 等实时信息（§3.4）因此整体未做
-- `src/components/apps/AppDetailPanel.vue:108` | 无卸载按钮 | `pluginMarket` 无 `uninstall` 接口（设计 §4.1 有卸载语义），待内核补接口
 - `src/pages/AppsPage.vue:274` | 联系管理员 toast 占位 | 非管理员点「启用」按 §5.2 弹确认框；点联系管理员仅 toast，待打开与管理员 1:1 聊天并发送应用链接卡片（§5.2 第 4-5 步，可复用 `spark:open-chat` 链路）
 - `src/stores/pending-app.ts` | 跨页「打开应用详情」请求（全局搜索→应用页详情视图） | 联动链路已通；条目来自真实 pluginMarket.list + mock 合并列表
 - 插件入口契约已落地 | 插件与壳层双向耦合已消除：独立 SDK 包 `@spark/plugin-sdk`（`../packages/plugin-sdk`，纯类型 + `definePlugin` 入口契约（第三方约定保留）+ `getPluginSDK`/`ensurePluginSDK` 全局注入点读取），插件侧只依赖该包 + 声明式 `manifest.json`（`../plugins/spark-example`）；壳层编译期注册（plugin-loader/plugin-view-registry）已退役，插件装载统一走 iframe 沙箱桥握手；插件测试已迁至 `../plugins/spark-example/tests/`

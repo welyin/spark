@@ -19,6 +19,7 @@
       @open="openApp"
       @detail="(item) => openDetail(item)"
       @toggle="toggleEnabled"
+      @uninstall="uninstallApp"
       @add-app="view = 'market'"
     />
 
@@ -51,6 +52,7 @@
           @install="installApp"
           @upgrade="upgradeApp"
           @toggle="toggleEnabled"
+          @uninstall="uninstallApp"
           @request-enable="requestEnable"
         />
       </div>
@@ -92,7 +94,7 @@ export type OpenPluginTabPayload = {
 };
 
 type ViewName = 'list' | 'market';
-type BusyAction = '' | 'install' | 'upgrade' | 'toggle';
+type BusyAction = '' | 'install' | 'upgrade' | 'toggle' | 'uninstall';
 
 export default defineComponent({
   name: 'AppsPage',
@@ -335,6 +337,41 @@ export default defineComponent({
       }
     };
 
+    // 卸载：确认框明示「仅移除插件程序，数据保留在本机」；已打开的插件 tab
+    // 由 App.vue 监听 spark:close-plugin 事件联动关闭（复用 spark:open-* 同款事件模式）
+    const uninstallApp = async (item: PluginMarketItemDto) => {
+      try {
+        await ElMessageBox.confirm(
+          '卸载仅移除插件程序，插件数据（文档/消息）保留在本机。已打开的该应用页面将被关闭。',
+          `卸载 ${item.name}`,
+          { confirmButtonText: '卸载', cancelButtonText: '取消', type: 'warning' }
+        );
+      } catch {
+        return; // 用户取消
+      }
+      setBusy(item.id, 'uninstall');
+      // mock 应用：无真实插件可卸，卸载只写 localStorage 状态（同安装口径）
+      if (isMockApp(item)) {
+        setMockAppInstalled(item.id, false);
+        mergeItems();
+        setBusy(item.id, '');
+        ElMessage.success('应用已卸载');
+        return;
+      }
+      try {
+        await window.electronAPI.pluginMarket.uninstall(item.id);
+        window.dispatchEvent(
+          new CustomEvent('spark:close-plugin', { detail: { pluginDomain: item.domain } })
+        );
+        await refresh();
+        ElMessage.success('应用已卸载');
+      } catch (error) {
+        ElMessage.error(`应用卸载失败：${error}`);
+      } finally {
+        setBusy(item.id, '');
+      }
+    };
+
     const toggleEnabled = async (item: PluginMarketItemDto) => {
       if (isOrgSpace.value) {
         // 组织空间：仅管理员可操作，启用状态为本地 mock（见 apps-store.ts TODO(mock)；mock 应用同走此路径）
@@ -416,6 +453,7 @@ export default defineComponent({
       installApp,
       installRepoPlugin,
       upgradeApp,
+      uninstallApp,
       toggleEnabled,
       requestEnable,
       refreshSafe

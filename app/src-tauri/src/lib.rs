@@ -241,12 +241,13 @@ pub fn run() {
             commands::plugin::plugin_identity_sign,
             commands::plugin::plugin_identity_verify,
             commands::plugin::plugin_org_sync_now,
-            // 插件市场（目录/检查更新/安装/升级/启停）
+            // 插件市场（目录/检查更新/安装/升级/启停/卸载）
             commands::market::plugin_market_list,
             commands::market::plugin_market_check_updates,
             commands::market::plugin_market_install,
             commands::market::plugin_market_upgrade,
             commands::market::plugin_market_set_enabled,
+            commands::market::plugin_market_uninstall,
             // 插件市场·仓库锚定安装（plugin-dist）
             commands::market::plugin_market_resolve_repo,
             commands::market::plugin_market_install_from_repo,
