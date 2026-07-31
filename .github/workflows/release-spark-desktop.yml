@@ -1,12 +1,11 @@
 name: Release Spark Desktop
 
-# 主程序发布流水线：tag（desktop-v*）触发 → tauri-action 构建 macOS 包 →
-# 用 minisign 私钥签名 updater 资产并生成 latest.json → 上传 GitHub Release。
-# 客户端 tauri-plugin-updater 的更新源即
-# https://github.com/welyin/spark/releases/download/desktop-latest/latest.json
-# （src-tauri/tauri.conf.json plugins.updater.endpoints；滚动 release
-# 「desktop-latest」由本流水线镜像维护，避免 /releases/latest 别名被
-# 插件流水线的 release 抢占）。
+# 主程序发布流水线：tag（desktop-v*）触发 → tauri-action 按 matrix 构建
+# macOS + Windows 包 → 用 minisign 私钥签名 updater 资产并生成 latest.json →
+# 上传 GitHub Release → mirror 任务把 updater 资产镜像到滚动 release
+# 「desktop-latest」（客户端 tauri-plugin-updater 的更新源即
+# https://github.com/welyin/spark/releases/download/desktop-latest/latest.json，
+# 滚动 release 避免 /releases/latest 别名被插件流水线的 release 抢占）。
 #
 # tag 前缀用 desktop-v* 而非 v*：v* 已被插件发布流水线
 # （release-plugin-spark-example.yml）占用，两套流水线必须互不触发。
@@ -25,15 +24,12 @@ name: Release Spark Desktop
 #   （本机 .secrets/spark-updater-signing.password 的内容）
 #
 # 手动发布兜底（CI 不可用时）：本机执行
-#   cd app && npm run tauri build -- --bundles app
-#   然后用 `npx tauri signer sign` 对
-#   src-tauri/target/release/bundle/macos/*.app.tar.gz 签名生成 .sig，
-#   参照 https://v2.tauri.app/plugin/updater/ 手拼 latest.json（version /
-#   pub_date / platforms.darwin-aarch64.{url,signature}）并连同包一起
-#  上传到对应 Release。
-#
-# 后续扩展：windows/linux 加入 matrix（updater 资产命名按平台区分，
-# tauri-action 会自动归并到同一份 latest.json）。
+#   cd app && npm run tauri build -- --bundles app,msi
+#   然后用 `npx tauri signer sign` 对 bundle/macos/*.app.tar.gz 与
+#   bundle/msi/*.msi.zip 签名生成 .sig，参照
+#   https://v2.tauri.app/plugin/updater/ 手拼 latest.json（version /
+#   pub_date / platforms.{darwin-aarch64,windows-x86_64}.{url,signature}）
+#   并连同包一起上传到对应 Release。
 
 on:
   push:
@@ -51,7 +47,11 @@ permissions:
 
 jobs:
   build-desktop-release:
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.platform }}
 
     steps:
       - name: Checkout
@@ -62,7 +62,7 @@ jobs:
         shell: bash
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#desktop-v}"
-          # 注意 runner 是 BSD sed（不支持 \s），用 grep+cut 提取保持可移植
+          # 注意 macOS runner 是 BSD sed（不支持 \s），用 grep+cut 提取保持可移植
           CONF_VERSION=$(grep -m1 '"version"' app/src-tauri/tauri.conf.json | cut -d'"' -f4)
           if [[ "$CONF_VERSION" != "$TAG_VERSION" ]]; then
             echo "::error::tag 版本 ($TAG_VERSION) 与 tauri.conf.json 版本 ($CONF_VERSION) 不一致——先 bump 版本再发 tag"
@@ -98,10 +98,16 @@ jobs:
           releaseDraft: true
           prerelease: false
 
-      # 镜像 updater 资产到滚动 release「desktop-latest」：
-      # /releases/latest 别名会被任何新发布的 release（插件流水线也在发）抢走，
-      # 所以客户端更新端点固定指向 desktop-latest；镜像时把 latest.json 里的
-      # 下载 URL 一并改写到 desktop-latest，客户端不依赖版本号 release 是否公开。
+  # 镜像 updater 资产到滚动 release「desktop-latest」：
+  # /releases/latest 别名会被任何新发布的 release（插件流水线也在发）抢走，
+  # 所以客户端更新端点固定指向 desktop-latest；镜像时把 latest.json 里的
+  # 下载 URL 一并改写到 desktop-latest，客户端不依赖版本号 release 是否公开。
+  # 两个平台的构建都完成后执行一次（tauri-action 已把各平台资产归并到同一 Release，
+  # updater 资产按平台区分命名：macOS *.app.tar.gz、Windows *.msi.zip / *.nsis.zip）。
+  mirror-desktop-latest:
+    needs: build-desktop-release
+    runs-on: ubuntu-latest
+    steps:
       - name: Mirror updater artifacts to rolling desktop-latest release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -114,10 +120,12 @@ jobs:
           gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name'
           # 逐个模式下载；.sig 可能只内嵌 latest.json 不单独上传，容忍缺项
           gh release download "$RELEASE_TAG" --dir mirror --clobber -p 'latest.json'
-          gh release download "$RELEASE_TAG" --dir mirror --clobber -p '*.app.tar.gz' \
-            || echo "::warning::未找到 .app.tar.gz 资产"
-          gh release download "$RELEASE_TAG" --dir mirror --clobber -p '*.app.tar.gz.sig' \
-            || echo "无独立 .sig 资产（签名已内嵌 latest.json，可忽略）"
+          gh release download "$RELEASE_TAG" --dir mirror --clobber -p '*.app.tar.gz*' \
+            || echo "::warning::未找到 macOS updater 资产（.app.tar.gz*）"
+          gh release download "$RELEASE_TAG" --dir mirror --clobber -p '*.msi.zip*' \
+            || echo "::warning::未找到 Windows updater 资产（.msi.zip*）"
+          gh release download "$RELEASE_TAG" --dir mirror --clobber -p '*.nsis.zip*' \
+            || echo "无 .nsis.zip 资产（未启用 nsis 时可忽略）"
           ls -la mirror
           test -f mirror/latest.json
           # latest.json 的平台下载 URL 改写到 desktop-latest
