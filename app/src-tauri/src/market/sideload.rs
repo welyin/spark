@@ -45,11 +45,26 @@ struct SpkgContainer {
     files: Vec<SpkgFileEntry>,
 }
 
-/// 包内 manifest.json 消费字段（名称/权限用于预览与授权；其余字段忽略）。
+/// 包内 manifest.json 消费字段（名称/权限用于预览与授权；supportedSpaces 用于
+/// 市场按空间过滤；其余字段忽略）。
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SpkgInnerManifest {
     name: Option<String>,
     permissions: Option<Vec<String>>,
+    supported_spaces: Option<Vec<String>>,
+}
+
+/// supportedSpaces 归一化（宽进）：只保留 personal/org，去重；空结果按未声明
+/// 处理（None，前端按 ["org"] 过滤，spaces-and-plugins §4）。
+fn normalize_supported_spaces(raw: Option<Vec<String>>) -> Option<Vec<String>> {
+    let mut spaces: Vec<String> = Vec::new();
+    for space in raw? {
+        if (space == "personal" || space == "org") && !spaces.contains(&space) {
+            spaces.push(space);
+        }
+    }
+    if spaces.is_empty() { None } else { Some(spaces) }
 }
 
 /// inspect 出参（camelCase，与命令层线形一致）。
@@ -247,10 +262,13 @@ impl PluginMarketService {
         for entry in &container.files {
             decode_and_verify_entry(entry)?;
         }
-        let declared = read_inner_manifest(&container)
-            .and_then(|m| m.permissions)
+        let inner = read_inner_manifest(&container);
+        let declared = inner
+            .as_ref()
+            .and_then(|m| m.permissions.clone())
             .map(|raw| normalize_declared_permissions(&raw))
             .unwrap_or_default();
+        let supported_spaces = normalize_supported_spaces(inner.and_then(|m| m.supported_spaces));
 
         let file_name = source
             .file_name()
@@ -275,6 +293,7 @@ impl PluginMarketService {
             enabled: true,
             granted_permissions: resolve_granted_permissions(&declared),
             trust: Some("sideloaded".to_string()),
+            supported_spaces,
         };
         self.state
             .installed

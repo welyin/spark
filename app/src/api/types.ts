@@ -37,6 +37,8 @@ export type P2pEventDto =
   | { kind: 'Lagged'; skipped: number };
 
 export type PluginPermission = string;
+/** 插件可运行的空间类型（spaces-and-plugins §4）。 */
+export type PluginSpaceType = 'personal' | 'org';
 export type DomainSignature = {
   domain: string;
   domainId: string;
@@ -55,6 +57,8 @@ export type PluginCatalogItem = {
   version: string;
   views: string[];
   permissions?: string[];
+  /** 插件支持的空间类型；缺省按 ['org'] 处理（spaces-and-plugins §4） */
+  supportedSpaces?: PluginSpaceType[];
   package?: {
     updateManifestUrl: string;
     signatureUrl: string;
@@ -91,6 +95,8 @@ export type PluginMarketItemDto = {
   version: string;
   views: string[];
   permissions: PluginPermission[];
+  /** 插件支持的空间类型；缺省按 ['org'] 处理（spaces-and-plugins §4） */
+  supportedSpaces?: PluginSpaceType[];
   package: {
     updateManifestUrl: string;
     signatureUrl: string;
@@ -154,6 +160,8 @@ export type RepoPluginDeclarationDto = {
   releaseAssetPattern: string;
   permissions: string[];
   mirrors: string[];
+  /** 插件支持的空间类型（可选；缺省按 ['org'] 处理，§2.1） */
+  supportedSpaces?: PluginSpaceType[];
   sdkVersion: string;
 };
 
@@ -185,6 +193,8 @@ export type CorrectedAnnounceFieldsDto = {
   icon: string;
   summary: string;
   version: string;
+  /** 声明文件的 supportedSpaces（可选；缺省按 ['org'] 处理） */
+  supportedSpaces?: PluginSpaceType[];
 };
 
 /** 广播索引本地索引条目（plugin-dist §8.7；verified 只有 verified 态进市场视图） */

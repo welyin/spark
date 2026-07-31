@@ -179,6 +179,10 @@ pub struct SparkPluginDeclaration {
     pub permissions: Vec<String>,
     #[serde(default)]
     pub mirrors: Vec<String>,
+    /// 插件支持的空间类型（"personal" / "org" 子集，非空；可选，
+    /// 缺省按 ["org"] 处理——spaces-and-plugins §4，规格 §2.1）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supported_spaces: Option<Vec<String>>,
     pub sdk_version: String,
 }
 
@@ -236,6 +240,16 @@ fn validate_declaration(raw_text: &str, expected: &RepoId) -> Result<SparkPlugin
         || !declaration.release_asset_pattern.ends_with(".spkg")
     {
         return Err(invalid("releaseAssetPattern invalid"));
+    }
+    // supportedSpaces（规格 §2.1）：可选；声明时必须非空且只含 personal/org
+    if let Some(spaces) = &declaration.supported_spaces {
+        if spaces.is_empty()
+            || spaces
+                .iter()
+                .any(|space| space != "personal" && space != "org")
+        {
+            return Err(invalid("supportedSpaces invalid"));
+        }
     }
     // id 一致性（规格 §4.1-4）：声明文件 id 规范化后必须等于所在仓库地址
     let declared_id = RepoId::parse(&declaration.id).map_err(|_| {
@@ -652,6 +666,7 @@ impl PluginMarketService {
             enabled: true,
             granted_permissions: resolve_granted_permissions(&declared),
             trust: Some(trust_level.to_string()),
+            supported_spaces: declaration.supported_spaces.clone(),
         };
         self.state
             .installed
@@ -708,8 +723,14 @@ pub(crate) fn synthesize_catalog_entry(
             .unwrap_or_else(|| installed.version.clone()),
         views: vec!["default".to_string()],
         permissions: declaration
-            .map(|d| d.permissions)
+            .as_ref()
+            .map(|d| d.permissions.clone())
             .unwrap_or_default(),
+        // 支持空间：声明文件缓存优先，缺省回落安装时落库的 supportedSpaces
+        // （侧载插件无声明缓存，取包内 manifest.json 解析值）
+        supported_spaces: declaration
+            .and_then(|d| d.supported_spaces)
+            .or_else(|| installed.supported_spaces.clone()),
         package: super::catalog::PluginCatalogPackage {
             update_manifest_url: String::new(),
             signature_url: String::new(),
@@ -904,6 +925,7 @@ mod tests {
             release_asset_pattern: "spark-plugin-todo-<version>.spkg".to_string(),
             permissions: vec![],
             mirrors: vec![],
+            supported_spaces: None,
             sdk_version: "1.0.0".to_string(),
         };
         assert_eq!(
@@ -972,6 +994,39 @@ mod tests {
         let bad_mirror = declaration_text("github.com/acme/todo", "0.2.0")
             .replace("\"mirrors\":[]", "\"mirrors\":[\"example.com/x/y\"]");
         assert!(validate_declaration(&bad_mirror, &id).unwrap_err().contains("mirrors"));
+    }
+
+    // ---------- supportedSpaces 校验（规格 §2.1：可选；声明时非空且只含 personal/org） ----------
+
+    #[test]
+    fn declaration_supported_spaces_validation() {
+        let id = RepoId::parse("github.com/acme/todo").unwrap();
+        let with_spaces = |spaces: serde_json::Value| {
+            let mut obj: serde_json::Map<String, serde_json::Value> =
+                serde_json::from_str(&declaration_text("github.com/acme/todo", "0.2.0")).unwrap();
+            obj.insert("supportedSpaces".to_string(), spaces);
+            serde_json::Value::Object(obj).to_string()
+        };
+        // 正：缺省 = None（前端按 ["org"] 处理）/ personal / org / 两者
+        assert_eq!(
+            validate_declaration(&declaration_text("github.com/acme/todo", "0.2.0"), &id)
+                .unwrap()
+                .supported_spaces,
+            None
+        );
+        for spaces in [
+            serde_json::json!(["personal"]),
+            serde_json::json!(["org"]),
+            serde_json::json!(["personal", "org"]),
+        ] {
+            assert!(validate_declaration(&with_spaces(spaces), &id).is_ok());
+        }
+        // 反：空数组 / 非法值
+        for bad in [serde_json::json!([]), serde_json::json!(["personal", "team"])] {
+            assert!(validate_declaration(&with_spaces(bad), &id)
+                .unwrap_err()
+                .contains("supportedSpaces"));
+        }
     }
 
     // ---------- 字段形状校验（规格 §2.1：version semver / icon 三形态） ----------

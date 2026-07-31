@@ -30,6 +30,11 @@ pub struct PluginCatalogItem {
     pub views: Vec<String>,
     /// 插件声明的权限清单（基础权限无需声明，安装时向用户展示并授权）
     pub permissions: Vec<String>,
+    /// 插件支持的空间类型（"personal" / "org"；与插件 manifest.json 的
+    /// supportedSpaces 一致；None = 未声明，前端按 ["org"] 处理，
+    /// 设计 spaces-and-plugins §4）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supported_spaces: Option<Vec<String>>,
     pub package: PluginCatalogPackage,
 }
 
@@ -52,6 +57,8 @@ pub fn list_plugin_catalog() -> Vec<PluginCatalogItem> {
             "message:app".to_string(),
             "identity:sign".to_string(),
         ],
+        // 与 code/plugins/spark-example/manifest.json 的 supportedSpaces 保持一致
+        supported_spaces: Some(vec!["org".to_string()]),
         package: PluginCatalogPackage {
             update_manifest_url:
                 "https://github.com/welyin/spark/releases/latest/download/spark-plugin-spark-example-manifest.json"

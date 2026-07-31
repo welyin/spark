@@ -116,7 +116,9 @@ import { computed, defineComponent, onBeforeUnmount, onMounted, ref, type PropTy
 import { Search } from '@element-plus/icons-vue';
 import type { PluginAnnounceIndexEntryDto, RepoPluginDeclarationDto } from '../../api/types';
 import { listenPluginAnnounceEvents } from '../../api';
+import { currentSpace } from '../../stores/current-space';
 import { hashGradient } from '../../utils/palette';
+import { isPluginVisibleInSpace } from './space-visibility';
 import {
   announceCategoryLabel,
   announceDisplayIcon,
@@ -146,6 +148,11 @@ export default defineComponent({
 
     const searching = computed(() => keyword.value.trim().length > 0);
 
+    /** 按当前空间过滤（spaces-and-plugins §4）：广播条目本身无 supportedSpaces，
+     *  取懒惰核查回写的 corrected.supportedSpaces，缺省按 ['org'] 处理 */
+    const isEntryVisibleInSpace = (entry: PluginAnnounceIndexEntryDto): boolean =>
+      isPluginVisibleInSpace(entry.corrected?.supportedSpaces, currentSpace.value.type);
+
     /** 搜索直达：updatedAt 降序稳定序 + 名称/简介/id 过滤（不参与洗牌） */
     const searchResults = computed(() =>
       sortAnnouncesByUpdated(allVerified.value).filter((entry) => announceMatches(entry, keyword.value))
@@ -169,7 +176,7 @@ export default defineComponent({
     const reshuffle = async () => {
       try {
         const entries = await window.electronAPI.pluginMarket.announceList();
-        allVerified.value = filterVerifiedAnnounces(entries ?? []);
+        allVerified.value = filterVerifiedAnnounces(entries ?? []).filter(isEntryVisibleInSpace);
         displayed.value = shuffleAnnounces(allVerified.value);
       } catch {
         // 索引读取失败保留当前展示，不阻断浏览
@@ -182,7 +189,7 @@ export default defineComponent({
     const upsertVerified = async (id: string) => {
       try {
         const entry = await window.electronAPI.pluginMarket.announceGet(id);
-        if (!entry || entry.verified !== 'verified') {
+        if (!entry || entry.verified !== 'verified' || !isEntryVisibleInSpace(entry)) {
           return;
         }
         const index = allVerified.value.findIndex((item) => item.announce.id === id);

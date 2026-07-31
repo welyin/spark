@@ -428,6 +428,7 @@ fn store_mark_verified_persists() {
         icon: String::new(),
         summary: "仓库声明文件校正后的简介".to_string(),
         version: "0.2.0".to_string(),
+        supported_spaces: None,
     };
     // timestamp 不匹配 → 结论作废丢弃（防旧核查结论覆盖新声明）
     assert!(

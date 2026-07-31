@@ -47,6 +47,7 @@ fn wire_shapes_match_preload_declarations() {
         enabled: true,
         granted_permissions: vec!["org:sync".to_string()],
         trust: None,
+        supported_spaces: None,
     })
     .unwrap();
     for key in [

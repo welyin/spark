@@ -130,6 +130,7 @@ impl PluginMarketService {
             enabled: true,
             granted_permissions: resolve_granted_permissions(&item.permissions),
             trust: None,
+            supported_spaces: item.supported_spaces.clone(),
         })
     }
 
@@ -192,6 +193,7 @@ impl PluginMarketService {
                             enabled: true,
                             granted_permissions: granted,
                             trust: None,
+                            supported_spaces: item.supported_spaces.clone(),
                         },
                     );
                     self.update_probes.insert(
@@ -230,6 +232,7 @@ impl PluginMarketService {
                     enabled: true,
                     granted_permissions: resolve_granted_permissions(&item.permissions),
                     trust: None,
+                    supported_spaces: item.supported_spaces.clone(),
                 },
             );
             self.update_probes.insert(

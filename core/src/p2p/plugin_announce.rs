@@ -492,6 +492,10 @@ pub struct CorrectedAnnounceFields {
     pub icon: String,
     pub summary: String,
     pub version: String,
+    /// 插件支持的空间类型（"personal" / "org"；声明文件可选字段，
+    /// 缺省 = 未声明，市场按 ["org"] 过滤——spaces-and-plugins §4）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supported_spaces: Option<Vec<String>>,
 }
 
 /// 索引条目（§8.7 值线形）。

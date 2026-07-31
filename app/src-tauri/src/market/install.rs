@@ -139,6 +139,7 @@ impl PluginMarketService {
             enabled: true,
             granted_permissions: Self::resolve_declared_permissions(&item, Some(&manifest)),
             trust: None,
+            supported_spaces: item.supported_spaces.clone(),
         };
 
         self.state

@@ -63,6 +63,11 @@ pub struct InstalledPluginState {
     /// 现有签名信任链，不落字段保持线形不变
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trust: Option<String>,
+    /// 安装时记录的支持空间类型（"personal" / "org"）：目录安装取目录声明，
+    /// repo 安装取声明文件，侧载取包内 manifest.json；缺省 = 未声明，
+    /// 前端按 ["org"] 处理（spaces-and-plugins §4）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supported_spaces: Option<Vec<String>>,
 }
 
 /// 更新探测结果（TS `PluginUpdateProbe`；仅内存，不持久化）。

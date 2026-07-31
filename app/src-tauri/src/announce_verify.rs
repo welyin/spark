@@ -202,6 +202,7 @@ pub fn spawn_announce_verify_worker(
                             icon: declaration.icon,
                             summary: declaration.summary,
                             version: declaration.version,
+                            supported_spaces: declaration.supported_spaces,
                         })
                     }
                 })

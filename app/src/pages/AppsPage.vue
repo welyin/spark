@@ -28,7 +28,7 @@
 
     <AppMarketPanel
       v-else-if="view === 'market'"
-      :items="items"
+      :items="visibleItems"
       @back="view = 'list'"
       @detail="(item) => openDetail(item)"
       @install="installApp"
@@ -85,6 +85,7 @@ import {
   useOrgEnabled,
   useRecentApps
 } from '../components/apps/apps-store';
+import { isPluginVisibleInSpace } from '../components/apps/space-visibility';
 
 export type OpenPluginTabPayload = {
   pluginDomain: string;
@@ -119,6 +120,11 @@ export default defineComponent({
       currentSpace.value.type === 'org' ? currentSpace.value.orgId : 'personal'
     );
 
+    /** 插件按空间可见性（spaces-and-plugins §4）：supportedSpaces 缺省按 ['org']；
+     *  仅 UI 展示过滤，已装但当前空间不可见的插件其会话/消息链路不受影响 */
+    const isVisibleInCurrentSpace = (item: PluginMarketItemDto): boolean =>
+      isPluginVisibleInSpace(item.supportedSpaces, currentSpace.value.type);
+
     const groups = useAppGroups(spaceKey);
     const recent = useRecentApps(spaceKey);
     const orgEnabled = useOrgEnabled(spaceKey);
@@ -151,7 +157,12 @@ export default defineComponent({
     /** 崩溃环自动停用（卡片级置灰 + 「已停用」徽标）；localStorage 读取，页面重进时刷新 */
     const isSuspended = (item: PluginMarketItemDto): boolean => isPluginInstanceDisabled(instanceKeyOf(item));
 
-    const installedItems = computed(() => items.value.filter((item) => item.installed));
+    const installedItems = computed(() =>
+      items.value.filter((item) => item.installed && isVisibleInCurrentSpace(item))
+    );
+
+    /** 市场收录层条目：与已安装列表同口径按当前空间过滤（纯组织插件不进个人空间市场） */
+    const visibleItems = computed(() => items.value.filter(isVisibleInCurrentSpace));
 
     const recentItems = computed(() =>
       recent.recentIds.value
@@ -209,6 +220,16 @@ export default defineComponent({
     watch([pendingAppDetail, items], openPendingAppDetail);
 
     const openApp = async (item: PluginMarketItemDto) => {
+      // 空间直达守卫（spaces-and-plugins §4）：UI 已按空间过滤，此处兜底拦截
+      // 经其他入口（如全局搜索详情页「打开」）触达的隐藏项
+      if (!isVisibleInCurrentSpace(item)) {
+        ElMessage.warning(
+          currentSpace.value.type === 'personal'
+            ? `「${item.name}」仅支持组织空间，请切换到组织后使用`
+            : `「${item.name}」仅支持个人空间，请切换到个人空间后使用`
+        );
+        return;
+      }
       if (!isEnabled(item)) {
         openDetail(item);
         return;
@@ -447,6 +468,7 @@ export default defineComponent({
 
     return {
       items,
+      visibleItems,
       loadError,
       view,
       detailVisible,

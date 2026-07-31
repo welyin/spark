@@ -158,6 +158,7 @@ fn import_overwrite_higher_trust_requires_confirmation() {
             enabled: true,
             granted_permissions: vec![],
             trust: Some("repo-anchored".to_string()),
+            supported_spaces: None,
         },
     );
     let spkg = good_spkg(&fixture);
