@@ -16,6 +16,9 @@
       :is-enabled="isEnabled"
       :is-suspended="isSuspended"
       :groups="groups"
+      :is-org-space="isOrgSpace"
+      :is-admin="isCurrentUserAdmin"
+      :busy-by-plugin="busyByPlugin"
       @open="openApp"
       @detail="(item) => openDetail(item)"
       @toggle="toggleEnabled"
@@ -340,6 +343,12 @@ export default defineComponent({
     // 卸载：确认框明示「仅移除插件程序，数据保留在本机」；已打开的插件 tab
     // 由 App.vue 监听 spark:close-plugin 事件联动关闭（复用 spark:open-* 同款事件模式）
     const uninstallApp = async (item: PluginMarketItemDto) => {
+      // 组织空间权限守卫（与 toggleEnabled 的 isOrgSpace 口径一致）：
+      // 仅管理员可卸载；入口按钮已按角色隐藏，此处兜底拒绝直达调用
+      if (isOrgSpace.value && !isCurrentUserAdmin.value) {
+        ElMessage.warning('只有组织管理员可以卸载应用');
+        return;
+      }
       try {
         await ElMessageBox.confirm(
           '卸载仅移除插件程序，插件数据（文档/消息）保留在本机。已打开的该应用页面将被关闭。',
@@ -363,7 +372,9 @@ export default defineComponent({
         window.dispatchEvent(
           new CustomEvent('spark:close-plugin', { detail: { pluginDomain: item.domain } })
         );
-        await refresh();
+        // refreshSafe 不抛错：卸载已成功，刷新失败只置 loadError，
+        // 不能误报「卸载失败」（与 onMounted 初次加载同口径）
+        await refreshSafe();
         ElMessage.success('应用已卸载');
       } catch (error) {
         ElMessage.error(`应用卸载失败：${error}`);

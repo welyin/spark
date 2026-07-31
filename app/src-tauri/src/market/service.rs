@@ -139,6 +139,11 @@ impl PluginMarketService {
         let mut changed = false;
 
         for item in list_plugin_catalog() {
+            // 卸载墓碑：显式卸载过的插件不再由对账复活（bundled 与
+            // bundled-dev-source 两个登记分支统一跳过；显式安装会清除墓碑）
+            if self.state.uninstalled.contains(&item.id) {
+                continue;
+            }
             if self.state.installed.contains_key(&item.id) {
                 continue;
             }

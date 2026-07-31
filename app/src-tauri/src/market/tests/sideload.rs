@@ -226,8 +226,8 @@ fn reject_matrix() {
         .inspect_local_package(bad.to_str().unwrap())
         .unwrap_err()
         .starts_with("Sideload package invalid: "));
-    // 非法 pluginId（穿越 / 大写 / 空段）
-    for id in ["../evil", "Todo-Local", "a//b", "a/./b"] {
+    // 非法 pluginId（穿越 / 大写 / 空段 / Windows 保留设备名）
+    for id in ["../evil", "Todo-Local", "a//b", "a/./b", "con", "a/com1/b", "nul.txt"] {
         let spkg = write_spkg(&fixture, "badid.spkg", &spkg_text(id, &[("a.js", b"x")]));
         assert_eq!(
             service.inspect_local_package(spkg.to_str().unwrap()).unwrap_err(),

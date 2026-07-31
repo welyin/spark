@@ -7,7 +7,8 @@
 //! - 安装 = 验签（Ed25519 detached，见 trust.rs）→ 下载/复制 .spkg → 校验
 //!   sha256/size → 落状态（grantedPermissions = 基础 ∪ 声明∩高级，见 permissions.rs）。
 //! - 启动对账（reconcile）：本地 bundle 验签通过 → 标记已安装；
-//!   插件源码目录（code/plugins/<id>/ 含 manifest.ts/js）→ 标记 bundled-dev-source。
+//!   插件源码目录（code/plugins/<id>/ 含 manifest.ts/js）→ 标记 bundled-dev-source；
+//!   卸载墓碑（state.uninstalled）中的 id 跳过登记，显式安装清除墓碑。
 //! - 状态文件：<app_data_dir>/plugin-market-state.json（TS PersistedPluginState 同构）；
 //!   更新探测（updateProbes）与 TS 一致仅驻留内存，不持久化。
 //!

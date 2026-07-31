@@ -2,7 +2,7 @@
   "id": "spark-example",
   "domain": "plugin:spark-example",
   "name": "示例插件",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "entryView": "default",
   "description": "Spark 插件体系参考实现：组织微博（管理员发帖、成员评论），演示存储/签名/应用消息/消息卡片等核心能力。",
   "supportedSpaces": ["org"],
@@ -14,6 +14,6 @@
   "sdkVersion": "1",
   "package": {
     "updateManifestUrl": "https://github.com/welyin/spark/releases/latest/download/spark-plugin-spark-example-manifest.json",
-    "packageName": "spark-plugin-spark-example-0.1.0.spkg"
+    "packageName": "spark-plugin-spark-example-0.1.1.spkg"
   }
 }

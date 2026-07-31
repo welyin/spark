@@ -57,8 +57,18 @@
             <div class="app-card-actions">
               <el-button v-if="isEnabled(item)" size="small" type="primary" @click="emit('open', item)">打开</el-button>
               <el-button size="small" @click="emit('toggle', item)">{{ isEnabled(item) ? '禁用' : '启用' }}</el-button>
-              <!-- 卸载仅移除插件程序，插件数据保留在本机（确认框在 AppsPage） -->
-              <el-button size="small" type="danger" plain @click="emit('uninstall', item)">卸载</el-button>
+              <!-- 卸载仅移除插件程序，插件数据保留在本机（确认框在 AppsPage）；
+                   组织空间仅管理员可见；卸载进行中禁用防重复点击 -->
+              <el-button
+                v-if="canUninstall"
+                size="small"
+                type="danger"
+                plain
+                :disabled="busyByPlugin[item.id] === 'uninstall'"
+                @click="emit('uninstall', item)"
+              >
+                卸载
+              </el-button>
             </div>
           </div>
         </div>
@@ -116,8 +126,18 @@
             <div class="app-card-actions">
               <el-button v-if="isEnabled(item)" size="small" type="primary" @click="emit('open', item)">打开</el-button>
               <el-button size="small" @click="emit('toggle', item)">{{ isEnabled(item) ? '禁用' : '启用' }}</el-button>
-              <!-- 卸载仅移除插件程序，插件数据保留在本机（确认框在 AppsPage） -->
-              <el-button size="small" type="danger" plain @click="emit('uninstall', item)">卸载</el-button>
+              <!-- 卸载仅移除插件程序，插件数据保留在本机（确认框在 AppsPage）；
+                   组织空间仅管理员可见；卸载进行中禁用防重复点击 -->
+              <el-button
+                v-if="canUninstall"
+                size="small"
+                type="danger"
+                plain
+                :disabled="busyByPlugin[item.id] === 'uninstall'"
+                @click="emit('uninstall', item)"
+              >
+                卸载
+              </el-button>
             </div>
             </div>
           </template>
@@ -152,7 +172,12 @@ export default defineComponent({
     isEnabled: { type: Function as PropType<(item: PluginMarketItemDto) => boolean>, required: true },
     /** 熔断自动停用判定（崩溃环）：命中卡片置灰 + 「已停用」徽标 */
     isSuspended: { type: Function as PropType<(item: PluginMarketItemDto) => boolean>, required: true },
-    groups: { type: Object as PropType<ReturnType<typeof useAppGroups>>, required: true }
+    groups: { type: Object as PropType<ReturnType<typeof useAppGroups>>, required: true },
+    /** 空间/角色上下文：组织空间仅管理员可见卸载入口（与 toggleEnabled 的 isOrgSpace 口径一致） */
+    isOrgSpace: { type: Boolean, default: false },
+    isAdmin: { type: Boolean, default: false },
+    /** 各插件进行中的操作（'' | install | upgrade | toggle | uninstall），卸载按钮 busy 态用 */
+    busyByPlugin: { type: Object as PropType<Record<string, string>>, default: () => ({}) }
   },
   emits: ['open', 'detail', 'toggle', 'uninstall', 'add-app'],
   setup(props, { emit }) {
@@ -192,6 +217,9 @@ export default defineComponent({
     const toggleCollapse = (name: string) => {
       collapsed.value = { ...collapsed.value, [name]: !isCollapsed(name) };
     };
+
+    /** 卸载入口可见性：组织空间仅管理员（与 AppDetailPanel/AppsPage 守卫同口径） */
+    const canUninstall = computed(() => !props.isOrgSpace || props.isAdmin);
 
     /** 点卡片主体：启用中进入详情（打开走「打开」按钮）；已禁用进详情便于重新启用（§2.5） */
     const onCardClick = (item: PluginMarketItemDto) => {
@@ -331,6 +359,7 @@ export default defineComponent({
       dropTarget,
       isCollapsed,
       toggleCollapse,
+      canUninstall,
       onCardClick,
       onAddApp,
       onAddGroup,

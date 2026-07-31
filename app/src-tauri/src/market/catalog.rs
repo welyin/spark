@@ -42,7 +42,7 @@ pub fn list_plugin_catalog() -> Vec<PluginCatalogItem> {
         description: "插件体系参考实现：管理员发帖（域签名防抵赖）发应用会话卡片通知，成员评论/回复。"
             .to_string(),
         category: "foundation".to_string(),
-        version: "0.1.0".to_string(),
+        version: "0.1.1".to_string(),
         views: vec!["default".to_string(), "post-card".to_string()],
         permissions: vec![
             "storage:read".to_string(),
@@ -59,8 +59,8 @@ pub fn list_plugin_catalog() -> Vec<PluginCatalogItem> {
             signature_url:
                 "https://github.com/welyin/spark/releases/latest/download/spark-plugin-spark-example-manifest.sig"
                     .to_string(),
-            package_name: "spark-plugin-spark-example-0.1.0.spkg".to_string(),
-            install_command: "spark-plugin install spark-plugin-spark-example-0.1.0.spkg".to_string(),
+            package_name: "spark-plugin-spark-example-0.1.1.spkg".to_string(),
+            install_command: "spark-plugin install spark-plugin-spark-example-0.1.1.spkg".to_string(),
         },
     }]
 }

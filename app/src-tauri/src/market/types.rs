@@ -101,4 +101,10 @@ pub struct PluginMarketItem {
 pub struct PersistedPluginState {
     #[serde(default)]
     pub installed: std::collections::BTreeMap<String, InstalledPluginState>,
+    /// 卸载墓碑（tombstone）：显式卸载过的插件 id。启动对账（bundled /
+    /// bundled-dev-source 登记分支）跳过集合内 id，防卸载后重启复活；
+    /// 显式安装（install / install_from_repo / 侧载导入）成功时清除。
+    /// `#[serde(default)]`：旧版状态文件无此字段按空集兼容。
+    #[serde(default)]
+    pub uninstalled: std::collections::BTreeSet<String>,
 }

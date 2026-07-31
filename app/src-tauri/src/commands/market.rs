@@ -7,6 +7,12 @@
 //! Tauri 壳当前只有单一主窗口（系统域），插件以 iframe tab 跑在同窗口内，
 //! 域隔离待独立插件窗口排期时一并落地（见 commands/plugin.rs 注记）。
 //!
+//! 风险登记（域隔离未落地前的暴露面）：Tauri 命令无调用方域校验
+//! （requireSystemDomain 等价物缺失），插件 iframe 与系统域同源可 invoke 本文件
+//! 全部命令——其中 `plugin-market-uninstall` 为纯破坏性操作（删包文件 + 移除
+//! 状态记录），install/upgrade 同样暴露。前端仅有 UI 层入口隐藏/角色守卫，
+//! 不构成安全边界；跟踪见 code/app/TODO.md「应用与市场」。
+//!
 //! 业务逻辑全在 `crate::market::PluginMarketService`（单测直调），此处只做
 //! 锁与参数透传。更新探测/安装下载是阻塞网络 IO（市场源不可达时可能卡住数
 //! 十秒），全部命令为 async + spawn_blocking，不占命令调用线程；MarketState

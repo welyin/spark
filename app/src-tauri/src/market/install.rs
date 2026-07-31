@@ -144,6 +144,8 @@ impl PluginMarketService {
         self.state
             .installed
             .insert(plugin_id.to_string(), installed_state.clone());
+        // 显式安装成功 → 清除卸载墓碑（对账可正常登记该插件）
+        self.state.uninstalled.remove(plugin_id);
         self.update_probes.insert(
             plugin_id.to_string(),
             PluginUpdateProbe {

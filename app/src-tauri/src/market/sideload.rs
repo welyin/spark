@@ -77,6 +77,9 @@ fn sideload_invalid(reason: &str) -> String {
 
 /// 插件 id 段校验（与 repo.rs 段规则一致：小写字母数字与 `. _ -`，拒空段与
 /// `.`/`..`）；repo 形态 id（含 `/` 段）同样合法，落盘逐段 join 无穿越。
+/// 段另排除 Windows 保留设备名（con/nul/aux/prn/com1-9/lpt1-9，按 `.` 前词干
+/// 判定——`con.txt` 同属保留）：段字符集已限小写，直接小写比较即可；
+/// 保留名目录在 Windows 上不可创建，落盘会莫名失败。
 /// pub(crate)：uninstall.rs 复用同一规则校验卸载目标 id。
 pub(crate) fn plugin_id_valid(id: &str) -> bool {
     !id.is_empty()
@@ -89,7 +92,25 @@ pub(crate) fn plugin_id_valid(id: &str) -> bool {
                 && segment
                     .chars()
                     .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-'))
+                && !windows_reserved_segment(segment)
         })
+}
+
+/// Windows 保留设备名判定（按 `.` 前词干；段已限小写）。
+fn windows_reserved_segment(segment: &str) -> bool {
+    let stem = segment.split('.').next().unwrap_or(segment);
+    if matches!(stem, "con" | "prn" | "aux" | "nul") {
+        return true;
+    }
+    // com1-9 / lpt1-9
+    for prefix in ["com", "lpt"] {
+        if let Some(digit) = stem.strip_prefix(prefix) {
+            if digit.len() == 1 && digit.chars().all(|c| ('1'..='9').contains(&c)) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// 读取 .spkg 原始字节（扩展名/大小上限校验；import 全程复用同一份字节，
@@ -258,6 +279,8 @@ impl PluginMarketService {
         self.state
             .installed
             .insert(container.plugin_id.clone(), installed_state.clone());
+        // 显式安装成功 → 清除卸载墓碑
+        self.state.uninstalled.remove(&container.plugin_id);
         self.update_probes.insert(
             container.plugin_id.clone(),
             PluginUpdateProbe {

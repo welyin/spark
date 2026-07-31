@@ -53,7 +53,7 @@
     </section>
 
     <section class="app-detail-actions">
-      <!-- 组织空间：只暴露启用/禁用（设计 §4.2），安装/卸载/更新由管理员统一管理 -->
+      <!-- 组织空间：启用/禁用（设计 §4.2）+ 管理员卸载；非管理员不暴露安装/更新/卸载 -->
       <template v-if="isOrgSpace">
         <el-button v-if="enabled" type="primary" @click="emit('open', item)">打开</el-button>
         <el-button
@@ -78,6 +78,16 @@
           @click="emit('upgrade', item)"
         >
           更新
+        </el-button>
+        <!-- 卸载仅移除插件程序，插件数据保留在本机（确认框在 AppsPage）；
+             组织空间仅管理员可见，与个人空间分支同口径 -->
+        <el-button
+          v-if="isAdmin && item.installed"
+          type="danger"
+          :loading="busy === 'uninstall'"
+          @click="emit('uninstall', item)"
+        >
+          卸载
         </el-button>
       </template>
 

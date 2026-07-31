@@ -303,3 +303,38 @@ fn resolve_repo_plugin_uses_memory_then_sled_cache() {
     let resolved = reloaded.resolve_repo_plugin_with(&empty, REPO_ID).unwrap();
     assert_eq!(resolved.version, "0.2.0");
 }
+
+#[test]
+fn uninstall_repo_plugin_removes_files_and_empty_parent_dirs() {
+    let fixture = Fixture::new();
+    let (package_text, digest, size) = repo_package_text("0.2.0");
+    let manifest = repo_manifest_text("0.2.0", PACKAGE_URL, &digest, size, "spark-plugin-todo-0.2.0.spkg");
+    let declaration = repo_declaration_text("0.2.0");
+    let fetcher = fetcher_of(&[
+        (DECL_RELEASE_URL, declaration.clone()),
+        (DECL_PROXY_URL, declaration),
+        (MANIFEST_URL, manifest.clone()),
+        (MANIFEST_PROXY_URL, manifest),
+        (PACKAGE_URL, package_text),
+    ]);
+    let mut service = fixture.service();
+    service.install_from_repo_with(&fetcher, REPO_ID).unwrap();
+    let package = fixture
+        .packages_root
+        .join("github.com/acme/todo/packages/spark-plugin-todo-0.2.0.spkg");
+    assert!(package.is_file());
+
+    service.uninstall(REPO_ID).unwrap();
+    assert!(!service.state.installed.contains_key(REPO_ID));
+    assert!(!service.update_probes.contains_key(REPO_ID));
+    assert!(!package.exists());
+    // 多段 id：空父目录向上清理直到 packages_root（acme、github.com 均删）
+    assert!(!fixture.packages_root.join("github.com").exists());
+    // 墓碑同样写入（repo 插件不在内置目录，对账本就不涉及，语义保持一致）
+    assert!(service.state.uninstalled.contains(REPO_ID));
+    // 二次卸载：not installed
+    assert_eq!(
+        service.uninstall(REPO_ID).unwrap_err(),
+        format!("Plugin is not installed: {REPO_ID}")
+    );
+}
