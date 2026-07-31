@@ -62,6 +62,7 @@ import { appConversationName } from '../stores/app-conversations';
 import { listMockApps } from '../mock/apps';
 import { mockMode } from '../mock/mode';
 import { appIconBackground, marketItemMatches } from './apps/apps-store';
+import { isPluginVisibleInSpace } from './apps/space-visibility';
 import { openChat } from './contacts/open-intents';
 import UserAvatar from './UserAvatar.vue';
 import OrgAvatar from './OrgAvatar.vue';
@@ -211,6 +212,8 @@ export default defineComponent({
       }
       return appItems.value
         .filter((item) => marketItemMatches(item, kw))
+        // 与应用页同口径按当前空间过滤（spaces-and-plugins §4）：缺省按 ['org']
+        .filter((item) => isPluginVisibleInSpace(item.supportedSpaces, currentSpace.value.type))
         .slice(0, GROUP_LIMIT)
         .map((item) => ({
           key: `app:${item.id}`,

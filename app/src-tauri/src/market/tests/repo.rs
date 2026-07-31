@@ -338,3 +338,49 @@ fn uninstall_repo_plugin_removes_files_and_empty_parent_dirs() {
         format!("Plugin is not installed: {REPO_ID}")
     );
 }
+
+#[test]
+fn synthesize_catalog_entry_supported_spaces_two_level() {
+    use super::super::repo::{CachedRepoDeclaration, synthesize_catalog_entry};
+
+    let fixture = Fixture::new();
+    let installed = InstalledPluginState {
+        plugin_id: REPO_ID.to_string(),
+        version: "0.2.0".to_string(),
+        package_path: String::new(),
+        sha256: String::new(),
+        size: 0,
+        installed_at: 0,
+        enabled: true,
+        granted_permissions: vec![],
+        trust: Some("repo-anchored".to_string()),
+        supported_spaces: Some(vec!["personal".to_string()]),
+    };
+    // installed 回落：无声明缓存时取安装态落库值（侧载插件即此路径）
+    let service = fixture.service();
+    let entry = synthesize_catalog_entry(&service, &installed);
+    assert_eq!(entry.supported_spaces, Some(vec!["personal".to_string()]));
+
+    // 声明缓存优先：声明文件 supportedSpaces 覆盖安装态值
+    let mut service = fixture.service();
+    let mut declaration: serde_json::Value =
+        serde_json::from_str(&repo_declaration_text("0.2.0")).unwrap();
+    declaration["supportedSpaces"] = serde_json::json!(["org"]);
+    service.repo_decl_cache.insert(
+        REPO_ID.to_string(),
+        CachedRepoDeclaration {
+            fetched_at: 0,
+            text: declaration.to_string(),
+        },
+    );
+    let entry = synthesize_catalog_entry(&service, &installed);
+    assert_eq!(entry.supported_spaces, Some(vec!["org".to_string()]));
+
+    // 两级皆无 → None（前端按 ["org"] 处理，spaces-and-plugins §4）
+    let installed_none = InstalledPluginState {
+        supported_spaces: None,
+        ..installed
+    };
+    let entry = synthesize_catalog_entry(&fixture.service(), &installed_none);
+    assert_eq!(entry.supported_spaces, None);
+}

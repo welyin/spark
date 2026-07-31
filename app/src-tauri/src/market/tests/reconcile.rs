@@ -149,3 +149,31 @@ fn backfill_fills_missing_granted_permissions() {
     let persisted = read_state_file(&fixture.state_file);
     assert!(!persisted.installed["spark-example"].granted_permissions.is_empty());
 }
+
+#[test]
+fn legacy_state_without_supported_spaces_deserializes() {
+    // 旧版状态文件回归（spaces-and-plugins §4）：supportedSpaces 字段后落地，
+    // 旧记录缺该字段——serde default → None（按未声明 ["org"] 口径），不得反序列化失败
+    let fixture = Fixture::new();
+    let legacy = serde_json::json!({
+        "installed": {
+            "todo-local": {
+                "pluginId": "todo-local",
+                "version": "1.0.0",
+                "packagePath": "/tmp/x.spkg",
+                "sha256": "aa",
+                "size": 1,
+                "installedAt": 1,
+                "enabled": true,
+                "grantedPermissions": ["storage:read"],
+                "trust": "sideloaded"
+            }
+        }
+    });
+    fs::create_dir_all(fixture.state_file.parent().unwrap()).unwrap();
+    fs::write(&fixture.state_file, legacy.to_string()).unwrap();
+
+    let persisted = read_state_file(&fixture.state_file);
+    assert_eq!(persisted.installed["todo-local"].supported_spaces, None);
+    assert_eq!(persisted.installed["todo-local"].trust.as_deref(), Some("sideloaded"));
+}

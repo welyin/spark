@@ -126,6 +126,8 @@
         <p v-if="sideloadPreview.permissions.length > 0" class="repo-preview-permissions">
           声明权限：{{ sideloadPreview.permissions.join('、') }}
         </p>
+        <!-- 支持空间（spaces-and-plugins §4）：未声明按 ['org'] 口径展示 -->
+        <p class="repo-preview-permissions">支持空间：{{ sideloadSpacesText }}</p>
         <p class="repo-preview-permissions">文件：{{ sideloadPreview.fileName }}（{{ sideloadSizeText }}）</p>
         <!-- 侧载绕过签名信任链与仓库锚定，哈希核对责任在用户（trust = "sideloaded"） -->
         <el-alert type="warning" :closable="false" show-icon>
@@ -408,6 +410,14 @@ export default defineComponent({
       return size >= 1024 * 1024 ? `${(size / 1024 / 1024).toFixed(1)} MB` : `${Math.ceil(size / 1024)} KB`;
     });
 
+    /** 侧载预览支持空间展示（spaces-and-plugins §4）：未声明按 ['org'] 口径 */
+    const sideloadSpacesText = computed(() => {
+      const spaces = sideloadPreview.value?.supportedSpaces;
+      const effective = spaces && spaces.length > 0 ? spaces : ['org'];
+      const labels = effective.map((space) => (space === 'personal' ? '个人空间' : '组织空间'));
+      return labels.length === 2 ? '个人与组织空间' : `仅${labels[0]}`;
+    });
+
     const confirmSideload = async () => {
       const preview = sideloadPreview.value;
       if (!preview) {
@@ -517,6 +527,7 @@ export default defineComponent({
       sideloadError,
       sideloadImporting,
       sideloadSizeText,
+      sideloadSpacesText,
       openSideload,
       confirmSideload,
       ArrowLeft,

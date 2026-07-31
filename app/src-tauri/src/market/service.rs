@@ -37,10 +37,11 @@ impl PluginMarketService {
         }
     }
 
-    /// TS `initialize`：读状态 → 回填授权 → 启动对账。
+    /// TS `initialize`：读状态 → 回填授权 → 旧侧载 supportedSpaces 回填 → 启动对账。
     pub fn initialize(&mut self) -> Result<(), String> {
         self.state = read_state_file(&self.paths.state_file);
         self.backfill_granted_permissions()?;
+        self.backfill_sideload_supported_spaces()?;
         self.reconcile_bundled_installed_state()?;
         Ok(())
     }
@@ -58,6 +59,43 @@ impl PluginMarketService {
             };
             installed.granted_permissions = granted;
             changed = true;
+        }
+        if changed {
+            self.persist()?;
+        }
+        Ok(())
+    }
+
+    /// 旧侧载安装态 supportedSpaces 回填（spaces-and-plugins §4 历史数据迁移）：
+    /// supported_spaces 字段后于侧载链路落地，旧记录缺该值（serde default → None）；
+    /// 对 trust == "sideloaded" 且 supported_spaces 为 None 的记录重解析落盘 .spkg
+    /// 包内 manifest.json 回填。包丢失/解析失败/包内未声明均保持 None（按未声明
+    /// ["org"] 口径处理），不阻断启动；幂等，包内未声明时每次启动重读一次本地文件，
+    /// 代价可忽略故不引入额外迁移标记。
+    fn backfill_sideload_supported_spaces(&mut self) -> Result<(), String> {
+        let mut changed = false;
+        for installed in self.state.installed.values_mut() {
+            if installed.supported_spaces.is_some()
+                || installed.trust.as_deref() != Some("sideloaded")
+            {
+                continue;
+            }
+            let Ok(bytes) = fs::read(&installed.package_path) else {
+                continue;
+            };
+            let Ok(container) = super::sideload::parse_container(&bytes) else {
+                continue;
+            };
+            // 容器 id 与记录一致才回填（防状态文件指向无关包）
+            if container.plugin_id != installed.plugin_id {
+                continue;
+            }
+            let spaces = super::sideload::read_inner_manifest(&container)
+                .and_then(|m| m.supported_spaces);
+            if let Some(spaces) = super::sideload::normalize_supported_spaces(spaces) {
+                installed.supported_spaces = Some(spaces);
+                changed = true;
+            }
         }
         if changed {
             self.persist()?;

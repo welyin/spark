@@ -143,6 +143,8 @@ export type SideloadPreviewDto = {
   name: string;
   /** 包内 manifest.json 声明的权限（已规范化） */
   permissions: string[];
+  /** 包内 manifest.json 声明的支持空间（已规范化；缺省 = 未声明，按 ['org'] 口径） */
+  supportedSpaces?: PluginSpaceType[];
   /** 整包 sha256（确认对话框展示供核对；import 复核） */
   sha256: string;
   size: number;
@@ -195,6 +197,8 @@ export type CorrectedAnnounceFieldsDto = {
   version: string;
   /** 声明文件的 supportedSpaces（可选；缺省按 ['org'] 处理） */
   supportedSpaces?: PluginSpaceType[];
+  /** supportedSpaces 已核查标记（一次性迁移用；旧索引条目缺席 = 待重核，前端不消费） */
+  supportedSpacesChecked?: boolean;
 };
 
 /** 广播索引本地索引条目（plugin-dist §8.7；verified 只有 verified 态进市场视图） */

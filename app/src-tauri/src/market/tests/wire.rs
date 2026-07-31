@@ -31,6 +31,8 @@ fn wire_shapes_match_preload_declarations() {
     }
     assert!(item.get("catalog").is_none(), "catalog 应拍平而非嵌套");
     assert_eq!(item["lastCheckReason"], "not-checked");
+    // supportedSpaces：Some 出现（spark-example 目录声明 ["org"]）
+    assert_eq!(item["supportedSpaces"], serde_json::json!(["org"]));
     assert!(item["package"]["updateManifestUrl"]
         .as_str()
         .unwrap()
@@ -62,6 +64,26 @@ fn wire_shapes_match_preload_declarations() {
     ] {
         assert!(state.get(key).is_some(), "InstalledPluginState missing key {key}");
     }
+    // supportedSpaces：None 省略（缺省 = 未声明，按 ["org"] 口径）
+    assert!(state.get("supportedSpaces").is_none(), "supportedSpaces None 应省略");
+    // supportedSpaces：Some 出现
+    let state_with_spaces = serde_json::to_value(InstalledPluginState {
+        plugin_id: "spark-example".to_string(),
+        version: "0.1.0".to_string(),
+        package_path: "/tmp/x".to_string(),
+        sha256: "aa".to_string(),
+        size: 1,
+        installed_at: 2,
+        enabled: true,
+        granted_permissions: vec![],
+        trust: None,
+        supported_spaces: Some(vec!["personal".to_string()]),
+    })
+    .unwrap();
+    assert_eq!(
+        state_with_spaces["supportedSpaces"],
+        serde_json::json!(["personal"])
+    );
     let probe = serde_json::to_value(PluginUpdateProbe {
         plugin_id: "spark-example".to_string(),
         checked_at: 1,

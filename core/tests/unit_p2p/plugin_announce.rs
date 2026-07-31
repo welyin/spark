@@ -429,6 +429,7 @@ fn store_mark_verified_persists() {
         summary: "仓库声明文件校正后的简介".to_string(),
         version: "0.2.0".to_string(),
         supported_spaces: None,
+        supported_spaces_checked: true,
     };
     // timestamp 不匹配 → 结论作废丢弃（防旧核查结论覆盖新声明）
     assert!(
@@ -616,4 +617,21 @@ fn store_lru_eviction() {
     assert!(store.get("github.com/acme/newcomer").unwrap().is_some());
     assert!(store.get("github.com/acme/plugin-0").unwrap().is_none());
     assert_eq!(store.list(NOW).unwrap().len(), PLUGIN_MARKET_INDEX_MAX);
+}
+
+/// 旧索引条目回归（spaces-and-plugins §4 一次性迁移）：corrected 缺
+/// supportedSpaces/supportedSpacesChecked 字段时 serde default 兼容——
+/// supported_spaces → None（按未声明处理）、checked → false（壳层启动补扫
+/// 据此识别旧 verified 条目并重核查一次）。
+#[test]
+fn legacy_corrected_deserialize_defaults() {
+    let legacy = serde_json::json!({
+        "name": "待办（校正）",
+        "summary": "仓库声明文件校正后的简介",
+        "version": "0.2.0"
+    });
+    let corrected: CorrectedAnnounceFields = serde_json::from_value(legacy).unwrap();
+    assert_eq!(corrected.supported_spaces, None);
+    assert!(!corrected.supported_spaces_checked);
+    assert_eq!(corrected.icon, "");
 }

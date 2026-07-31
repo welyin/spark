@@ -210,7 +210,7 @@ fn validate_declaration(raw_text: &str, expected: &RepoId) -> Result<SparkPlugin
     if raw_text.len() > DECLARATION_MAX_BYTES {
         return Err(invalid("declaration exceeds 64 KiB"));
     }
-    let declaration: SparkPluginDeclaration =
+    let mut declaration: SparkPluginDeclaration =
         serde_json::from_str(raw_text).map_err(|e| invalid(&format!("{e}")))?;
     if declaration.name.is_empty() || declaration.name.chars().count() > 64 {
         return Err(invalid("name length out of range"));
@@ -241,8 +241,8 @@ fn validate_declaration(raw_text: &str, expected: &RepoId) -> Result<SparkPlugin
     {
         return Err(invalid("releaseAssetPattern invalid"));
     }
-    // supportedSpaces（规格 §2.1）：可选；声明时必须非空且只含 personal/org
-    if let Some(spaces) = &declaration.supported_spaces {
+    // supportedSpaces（规格 §2.1）：可选；声明时必须非空且只含 personal/org，重复值去重
+    if let Some(spaces) = &mut declaration.supported_spaces {
         if spaces.is_empty()
             || spaces
                 .iter()
@@ -250,6 +250,13 @@ fn validate_declaration(raw_text: &str, expected: &RepoId) -> Result<SparkPlugin
         {
             return Err(invalid("supportedSpaces invalid"));
         }
+        // 值域仅 personal/org 两个，线性查重即可（保持首次出现顺序）
+        let mut seen: Vec<String> = Vec::with_capacity(spaces.len());
+        spaces.retain(|space| {
+            let first_seen = !seen.contains(space);
+            seen.push(space.clone());
+            first_seen
+        });
     }
     // id 一致性（规格 §4.1-4）：声明文件 id 规范化后必须等于所在仓库地址
     let declared_id = RepoId::parse(&declaration.id).map_err(|_| {
@@ -1027,6 +1034,13 @@ mod tests {
                 .unwrap_err()
                 .contains("supportedSpaces"));
         }
+        // 重复值去重（保持首次出现顺序）
+        assert_eq!(
+            validate_declaration(&with_spaces(serde_json::json!(["org", "org", "personal"])), &id)
+                .unwrap()
+                .supported_spaces,
+            Some(vec!["org".to_string(), "personal".to_string()])
+        );
     }
 
     // ---------- 字段形状校验（规格 §2.1：version semver / icon 三形态） ----------

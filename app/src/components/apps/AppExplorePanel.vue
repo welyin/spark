@@ -141,15 +141,16 @@ export default defineComponent({
   emits: ['install-repo'],
   setup(props, { emit }) {
     const keyword = ref('');
-    /** 本地索引中全部 verified 条目（稳定数据源；搜索直达也用它） */
+    /** 本地索引中全部 verified 条目（全集稳定数据源；空间过滤在 computed 链路做） */
     const allVerified = ref<PluginAnnounceIndexEntryDto[]>([]);
-    /** 当前展示的洗牌结果（搜索时不用随机序，走 searchResults） */
+    /** 当前展示的洗牌结果（全集洗牌；搜索时不用随机序，走 searchResults） */
     const displayed = ref<PluginAnnounceIndexEntryDto[]>([]);
 
     const searching = computed(() => keyword.value.trim().length > 0);
 
     /** 按当前空间过滤（spaces-and-plugins §4）：广播条目本身无 supportedSpaces，
-     *  取懒惰核查回写的 corrected.supportedSpaces，缺省按 ['org'] 处理 */
+     *  取懒惰核查回写的 corrected.supportedSpaces，缺省按 ['org'] 处理；
+     *  仅在 computed 链路读取，随 currentSpace 切换自动重算 */
     const isEntryVisibleInSpace = (entry: PluginAnnounceIndexEntryDto): boolean =>
       isPluginVisibleInSpace(entry.corrected?.supportedSpaces, currentSpace.value.type);
 
@@ -158,7 +159,10 @@ export default defineComponent({
       sortAnnouncesByUpdated(allVerified.value).filter((entry) => announceMatches(entry, keyword.value))
     );
 
-    const visibleEntries = computed(() => (searching.value ? searchResults.value : displayed.value));
+    /** 可见集 = 洗牌序/搜索结果按当前空间过滤（computed 链路，切空间即时响应） */
+    const visibleEntries = computed(() =>
+      (searching.value ? searchResults.value : displayed.value).filter(isEntryVisibleInSpace)
+    );
 
     /** 新 verified 但尚未进入当前洗牌序的条目数（提示，不自动打断） */
     const pendingNewCount = computed(() => {
@@ -176,7 +180,7 @@ export default defineComponent({
     const reshuffle = async () => {
       try {
         const entries = await window.electronAPI.pluginMarket.announceList();
-        allVerified.value = filterVerifiedAnnounces(entries ?? []).filter(isEntryVisibleInSpace);
+        allVerified.value = filterVerifiedAnnounces(entries ?? []);
         displayed.value = shuffleAnnounces(allVerified.value);
       } catch {
         // 索引读取失败保留当前展示，不阻断浏览
@@ -184,12 +188,15 @@ export default defineComponent({
     };
 
     // 增量更新（plugin-dist §8.7 事件）：新 verified 条目并入数据源但不打断当前洗牌序；
-    // 已在展示序中的条目原地更新（resolveRepo 校正后的名称/图标随核查回写）
+    // 已在展示序中的条目原地更新（resolveRepo 校正后的名称/图标随核查回写）；
+    // 不再 verified（重核查失败/条目删除）时从数据源与展示序剔除，不留陈旧条目
     let unlisten: (() => void) | null = null;
     const upsertVerified = async (id: string) => {
       try {
         const entry = await window.electronAPI.pluginMarket.announceGet(id);
-        if (!entry || entry.verified !== 'verified' || !isEntryVisibleInSpace(entry)) {
+        if (!entry || entry.verified !== 'verified') {
+          allVerified.value = allVerified.value.filter((item) => item.announce.id !== id);
+          displayed.value = displayed.value.filter((item) => item.announce.id !== id);
           return;
         }
         const index = allVerified.value.findIndex((item) => item.announce.id === id);

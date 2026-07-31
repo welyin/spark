@@ -101,7 +101,8 @@ const MOCK_APPS: PluginMarketItemDto[] = [
     // 纯个人插件：演示「组织空间不展示 supportedSpaces 仅 ['personal'] 的插件」
     supportedSpaces: ['personal'],
     views: ['default'],
-    permissions: ['storage:read', 'storage:write', 'org:read'],
+    // 纯个人演示数据不声明组织权限（与 supportedSpaces 自洽）
+    permissions: ['storage:read', 'storage:write'],
     package: { updateManifestUrl: '', signatureUrl: '', packageName: 'mock-moments', installCommand: '' },
     installed: false,
     enabled: false,

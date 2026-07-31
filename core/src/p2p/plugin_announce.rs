@@ -496,6 +496,12 @@ pub struct CorrectedAnnounceFields {
     /// 缺省 = 未声明，市场按 ["org"] 过滤——spaces-and-plugins §4）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supported_spaces: Option<Vec<String>>,
+    /// supportedSpaces 已核查标记（一次性迁移用）：该字段后于 verified 链路落地，
+    /// 旧索引条目缺席此字段（serde default → false），壳层启动补扫对 verified 且
+    /// 未标记的条目重核查一次并回写 true；声明文件未声明 supportedSpaces 时
+    /// supported_spaces 仍为 None，靠此标记区分"旧条目"与"已核未声明"
+    #[serde(default)]
+    pub supported_spaces_checked: bool,
 }
 
 /// 索引条目（§8.7 值线形）。

@@ -28,7 +28,7 @@ use super::PluginMarketService;
 /// .spkg 容器文件条目（与 code/plugins/scripts/build-example-package.mjs 产物同构）。
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct SpkgFileEntry {
+pub(crate) struct SpkgFileEntry {
     path: String,
     sha256: String,
     size: u64,
@@ -38,8 +38,8 @@ struct SpkgFileEntry {
 /// .spkg 容器（pluginId/domain/version + 文件清单；未知字段忽略，前向兼容）。
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct SpkgContainer {
-    plugin_id: String,
+pub(crate) struct SpkgContainer {
+    pub(crate) plugin_id: String,
     domain: String,
     version: String,
     files: Vec<SpkgFileEntry>,
@@ -49,15 +49,16 @@ struct SpkgContainer {
 /// 市场按空间过滤；其余字段忽略）。
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct SpkgInnerManifest {
+pub(crate) struct SpkgInnerManifest {
     name: Option<String>,
     permissions: Option<Vec<String>>,
-    supported_spaces: Option<Vec<String>>,
+    pub(crate) supported_spaces: Option<Vec<String>>,
 }
 
 /// supportedSpaces 归一化（宽进）：只保留 personal/org，去重；空结果按未声明
 /// 处理（None，前端按 ["org"] 过滤，spaces-and-plugins §4）。
-fn normalize_supported_spaces(raw: Option<Vec<String>>) -> Option<Vec<String>> {
+/// pub(crate)：service.rs 旧侧载安装态回填复用同一归一化口径。
+pub(crate) fn normalize_supported_spaces(raw: Option<Vec<String>>) -> Option<Vec<String>> {
     let mut spaces: Vec<String> = Vec::new();
     for space in raw? {
         if (space == "personal" || space == "org") && !spaces.contains(&space) {
@@ -77,6 +78,9 @@ pub struct SideloadPreview {
     pub name: String,
     /// 包内 manifest.json 声明的权限（已规范化；缺省空清单）
     pub permissions: Vec<String>,
+    /// 包内 manifest.json 声明的支持空间（已规范化；缺省 = 未声明，按 ["org"] 口径）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supported_spaces: Option<Vec<String>>,
     /// 整包 sha256（前端展示供核对；import 复核）
     pub sha256: String,
     pub size: u64,
@@ -141,7 +145,8 @@ fn read_container_bytes(path: &Path) -> Result<Vec<u8>, String> {
 }
 
 /// 解析 .spkg 容器（JSON 线形/容器字段校验）。
-fn parse_container(bytes: &[u8]) -> Result<SpkgContainer, String> {
+/// pub(crate)：service.rs 旧侧载安装态回填复用同一解析。
+pub(crate) fn parse_container(bytes: &[u8]) -> Result<SpkgContainer, String> {
     let container: SpkgContainer =
         serde_json::from_slice(bytes).map_err(|e| sideload_invalid(&format!("{e}")))?;
     if !plugin_id_valid(&container.plugin_id) {
@@ -181,7 +186,8 @@ fn decode_and_verify_entry(entry: &SpkgFileEntry) -> Result<Vec<u8>, String> {
 }
 
 /// 取包内 manifest.json（缺失/损坏按 None 处理：名称回落 pluginId、权限空清单）。
-fn read_inner_manifest(container: &SpkgContainer) -> Option<SpkgInnerManifest> {
+/// pub(crate)：service.rs 旧侧载安装态回填复用同一读取。
+pub(crate) fn read_inner_manifest(container: &SpkgContainer) -> Option<SpkgInnerManifest> {
     let entry = container.files.iter().find(|f| f.path == "manifest.json")?;
     let bytes = decode_and_verify_entry(entry).ok()?;
     serde_json::from_slice(&bytes).ok()
@@ -194,6 +200,9 @@ impl PluginMarketService {
         let bytes = read_container_bytes(source)?;
         let container = parse_container(&bytes)?;
         let inner = read_inner_manifest(&container);
+        let supported_spaces = inner
+            .as_ref()
+            .and_then(|m| m.supported_spaces.clone());
         Ok(SideloadPreview {
             plugin_id: container.plugin_id.clone(),
             domain: container.domain.clone(),
@@ -207,6 +216,7 @@ impl PluginMarketService {
                 .and_then(|m| m.permissions)
                 .map(|raw| normalize_declared_permissions(&raw))
                 .unwrap_or_default(),
+            supported_spaces: normalize_supported_spaces(supported_spaces),
             sha256: hex::encode(sha2::Sha256::digest(&bytes)),
             size: bytes.len() as u64,
             file_name: source
@@ -317,5 +327,42 @@ impl PluginMarketService {
             return Err(e);
         }
         Ok(installed_state)
+    }
+}
+
+// ------------------------------------------------------------------
+// 单测：supportedSpaces 归一化（宽进口径）
+// ------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_supported_spaces;
+
+    #[test]
+    fn normalize_supported_spaces_matrix() {
+        // None / 空数组 / 全非法 → None（按未声明 ["org"] 口径处理）
+        for raw in [
+            None,
+            Some(vec![]),
+            Some(vec!["team".to_string()]),
+            Some(vec!["TEAM".to_string(), "Personal".to_string()]),
+        ] {
+            assert_eq!(normalize_supported_spaces(raw), None);
+        }
+        // 非法值丢弃，合法值保留
+        assert_eq!(
+            normalize_supported_spaces(Some(vec!["personal".to_string(), "team".to_string()])),
+            Some(vec!["personal".to_string()])
+        );
+        // 重复值去重（保持首次出现顺序）
+        assert_eq!(
+            normalize_supported_spaces(Some(vec![
+                "org".to_string(),
+                "org".to_string(),
+                "personal".to_string(),
+                "personal".to_string(),
+            ])),
+            Some(vec!["org".to_string(), "personal".to_string()])
+        );
     }
 }

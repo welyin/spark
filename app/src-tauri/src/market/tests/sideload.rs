@@ -242,3 +242,66 @@ fn reject_matrix() {
         "Sideload package invalid: files empty"
     );
 }
+
+#[test]
+fn inspect_reads_supported_spaces_and_initialize_backfills_legacy_records() {
+    // 包内 manifest 声明 supportedSpaces → inspect 预览可见
+    let fixture = Fixture::new();
+    let manifest = r#"{"id":"todo-local","name":"本地待办","supportedSpaces":["personal","team"]}"#;
+    let spkg = write_spkg(
+        &fixture,
+        "spark-plugin-todo-local-1.0.0.spkg",
+        &spkg_text(
+            "todo-local",
+            &[("manifest.json", manifest.as_bytes()), ("views/main.js", b"hello")],
+        ),
+    );
+    let mut service = fixture.service();
+    let preview = service.inspect_local_package(spkg.to_str().unwrap()).unwrap();
+    // 非法值丢弃（"team"），合法值保留
+    assert_eq!(preview.supported_spaces, Some(vec!["personal".to_string()]));
+    service
+        .import_local_package(spkg.to_str().unwrap(), &preview.sha256, false)
+        .unwrap();
+
+    // 包内未声明 supportedSpaces 的对照插件
+    let plain = write_spkg(
+        &fixture,
+        "spark-plugin-plain-local-1.0.0.spkg",
+        &spkg_text(
+            "plain-local",
+            &[("manifest.json", INNER_MANIFEST.replace("todo-local", "plain-local").as_bytes()), ("views/main.js", b"hi")],
+        ),
+    );
+    let plain_preview = service.inspect_local_package(plain.to_str().unwrap()).unwrap();
+    assert_eq!(plain_preview.supported_spaces, None);
+    service
+        .import_local_package(plain.to_str().unwrap(), &plain_preview.sha256, false)
+        .unwrap();
+
+    // 模拟旧版状态文件：抹掉 supportedSpaces 字段（旧记录无此字段，serde default → None）
+    let raw = fs::read_to_string(&fixture.state_file).unwrap();
+    let mut value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    for id in ["todo-local", "plain-local"] {
+        value["installed"][id]
+            .as_object_mut()
+            .unwrap()
+            .remove("supportedSpaces");
+    }
+    fs::write(&fixture.state_file, value.to_string()).unwrap();
+
+    // 启动对账：旧侧载记录重解析包内 manifest 回填；包内未声明的保持 None
+    let mut reloaded = fixture.service();
+    reloaded.initialize().unwrap();
+    assert_eq!(
+        reloaded.state.installed["todo-local"].supported_spaces,
+        Some(vec!["personal".to_string()])
+    );
+    assert_eq!(reloaded.state.installed["plain-local"].supported_spaces, None);
+    // 回填已落盘
+    let persisted = read_state_file(&fixture.state_file);
+    assert_eq!(
+        persisted.installed["todo-local"].supported_spaces,
+        Some(vec!["personal".to_string()])
+    );
+}

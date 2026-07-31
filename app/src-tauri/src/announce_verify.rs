@@ -66,6 +66,33 @@ fn failed_unreachable_ids(entries: &[PluginAnnounceIndexEntry]) -> Vec<String> {
         .collect()
 }
 
+/// 旧 verified 条目一次性迁移集（spaces-and-plugins §4）：supportedSpaces 字段
+/// 后于 verified 链路落地，旧索引 corrected 缺席该字段（serde default →
+/// supported_spaces=None 且 supported_spaces_checked=false）。对这些条目重核查
+/// 一次，回写带 supportedSpaces 与 checked=true 的 corrected；checked 标记使
+/// 已核但声明文件未声明 supportedSpaces 的条目不会在每次启动被反复重核。
+fn legacy_verified_ids(entries: &[PluginAnnounceIndexEntry]) -> Vec<String> {
+    entries
+        .iter()
+        .filter(|e| {
+            e.verified == AnnounceVerified::Verified
+                && e.corrected
+                    .as_ref()
+                    .is_none_or(|c| !c.supported_spaces_checked)
+        })
+        .map(|e| e.announce.id.clone())
+        .collect()
+}
+
+/// 条目是否需要（重）核查：未达 verified 终态，或属旧 verified 迁移集（同上）。
+fn needs_verify(entry: &PluginAnnounceIndexEntry) -> bool {
+    entry.verified != AnnounceVerified::Verified
+        || entry
+            .corrected
+            .as_ref()
+            .is_none_or(|c| !c.supported_spaces_checked)
+}
+
 /// 读内核索引（锁失败/内核错误一律按空集处理：补扫是尽力而为）。
 fn list_index_entries(app: &tauri::AppHandle) -> Option<Vec<PluginAnnounceIndexEntry>> {
     let state = app.state::<KernelState>();
@@ -127,11 +154,15 @@ pub fn spawn_announce_verify_worker(
         }
     });
 
-    // 核查 worker：串行逐条；启动时先把存量未核查条目入队（重启补核查）
+    // 核查 worker：串行逐条；启动时先把存量未核查条目入队（重启补核查），
+    // 连同旧 verified 条目一次性迁移集（supportedSpaces 字段补齐，见 legacy_verified_ids）
     tauri::async_runtime::spawn(async move {
         let backlog = run_blocking({
             let app = app.clone();
-            move || list_index_entries(&app).map(|entries| backlog_ids(&entries))
+            move || {
+                list_index_entries(&app)
+                    .map(|entries| [backlog_ids(&entries), legacy_verified_ids(&entries)].concat())
+            }
         })
         .await
         .flatten()
@@ -174,7 +205,8 @@ pub fn spawn_announce_verify_worker(
                 continue;
             }
             // 跳过期判定 + 绑定核查时 timestamp：条目不存在或已 verified
-            // （含同 id 已被前一次核查收敛）跳过；否则记下 timestamp 供终态回写绑定
+            // （含同 id 已被前一次核查收敛；旧 verified 迁移集除外，见 needs_verify）
+            // 跳过；否则记下 timestamp 供终态回写绑定
             let expect_timestamp = run_blocking({
                 let app = app.clone();
                 let id = id.clone();
@@ -182,7 +214,7 @@ pub fn spawn_announce_verify_worker(
                     let state = app.state::<KernelState>();
                     let kernel = state.inner().lock().ok()?;
                     let entry = kernel.get_plugin_announce(&id).ok()??;
-                    (entry.verified != AnnounceVerified::Verified).then_some(entry.announce.timestamp)
+                    needs_verify(&entry).then_some(entry.announce.timestamp)
                 }
             })
             .await
@@ -203,6 +235,9 @@ pub fn spawn_announce_verify_worker(
                             summary: declaration.summary,
                             version: declaration.version,
                             supported_spaces: declaration.supported_spaces,
+                            // 本次核查已读取 supportedSpaces（含"已核未声明"），
+                            // 旧 verified 条目一次性迁移据此收敛
+                            supported_spaces_checked: true,
                         })
                     }
                 })
@@ -321,6 +356,46 @@ mod tests {
             failed_unreachable_ids(&entries),
             vec!["github.com/a/unreachable".to_string()]
         );
+    }
+
+    /// 带 corrected 的条目（supported_spaces_checked 区分旧/新核查结论）。
+    fn corrected_entry(id: &str, checked: bool) -> PluginAnnounceIndexEntry {
+        let mut item = entry(id, AnnounceVerified::Verified, "");
+        item.corrected = Some(CorrectedAnnounceFields {
+            name: "n".to_string(),
+            icon: String::new(),
+            summary: "s".to_string(),
+            version: "0.1.0".to_string(),
+            supported_spaces: None,
+            supported_spaces_checked: checked,
+        });
+        item
+    }
+
+    #[test]
+    fn legacy_migration_filters_verified_without_spaces_check() {
+        let entries = vec![
+            entry("github.com/a/pending", AnnounceVerified::Pending, ""),
+            // 旧 verified：corrected 缺席 / 有 corrected 但缺 checked 标记 → 重核一次
+            entry("github.com/a/legacy-no-corrected", AnnounceVerified::Verified, ""),
+            corrected_entry("github.com/a/legacy-unchecked", false),
+            // 已核（含"已核未声明 supportedSpaces"）→ 不再重核
+            corrected_entry("github.com/a/checked", true),
+            entry("github.com/a/failed", AnnounceVerified::Failed, "unreachable"),
+        ];
+        assert_eq!(
+            legacy_verified_ids(&entries),
+            vec![
+                "github.com/a/legacy-no-corrected".to_string(),
+                "github.com/a/legacy-unchecked".to_string()
+            ]
+        );
+        // needs_verify 同口径：pending/failed 恒需核；verified 看 checked 标记
+        assert!(needs_verify(&entries[0]));
+        assert!(needs_verify(&entries[1]));
+        assert!(needs_verify(&entries[2]));
+        assert!(!needs_verify(&entries[3]));
+        assert!(needs_verify(&entries[4]));
     }
 
     #[test]

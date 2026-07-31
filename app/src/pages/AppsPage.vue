@@ -125,6 +125,15 @@ export default defineComponent({
     const isVisibleInCurrentSpace = (item: PluginMarketItemDto): boolean =>
       isPluginVisibleInSpace(item.supportedSpaces, currentSpace.value.type);
 
+    /** 空间守卫提示（spaces-and-plugins §4）：打开/安装/详情直达各入口同一文案口径 */
+    const spaceGuardToast = (name: string) => {
+      ElMessage.warning(
+        currentSpace.value.type === 'personal'
+          ? `「${name}」仅支持组织空间，请切换到组织后使用`
+          : `「${name}」仅支持个人空间，请切换到个人空间后使用`
+      );
+    };
+
     const groups = useAppGroups(spaceKey);
     const recent = useRecentApps(spaceKey);
     const orgEnabled = useOrgEnabled(spaceKey);
@@ -215,6 +224,12 @@ export default defineComponent({
         return;
       }
       consumePendingAppDetail();
+      // 空间守卫（spaces-and-plugins §4）：全局搜索已按空间过滤，此处兜底拦截
+      // 过滤生效前派发的直达请求——toast 提示而非静默打开详情
+      if (!isVisibleInCurrentSpace(item)) {
+        spaceGuardToast(item.name);
+        return;
+      }
       openDetail(item);
     };
     watch([pendingAppDetail, items], openPendingAppDetail);
@@ -223,11 +238,7 @@ export default defineComponent({
       // 空间直达守卫（spaces-and-plugins §4）：UI 已按空间过滤，此处兜底拦截
       // 经其他入口（如全局搜索详情页「打开」）触达的隐藏项
       if (!isVisibleInCurrentSpace(item)) {
-        ElMessage.warning(
-          currentSpace.value.type === 'personal'
-            ? `「${item.name}」仅支持组织空间，请切换到组织后使用`
-            : `「${item.name}」仅支持个人空间，请切换到个人空间后使用`
-        );
+        spaceGuardToast(item.name);
         return;
       }
       if (!isEnabled(item)) {
@@ -265,6 +276,11 @@ export default defineComponent({
     };
 
     const installApp = async (item: PluginMarketItemDto) => {
+      // 空间守卫（spaces-and-plugins §4）：与 openApp 同口径，拦截不可见项的安装直达
+      if (!isVisibleInCurrentSpace(item)) {
+        spaceGuardToast(item.name);
+        return;
+      }
       // 安装前明确展示所需权限（设计 §6.1），授权后才调真实安装接口
       if (item.permissions.length > 0) {
         const labels = item.permissions
@@ -306,6 +322,11 @@ export default defineComponent({
 
     // 仓库锚定安装（plugin-dist）：声明文件已在前置解析中展示，此处做权限确认后安装
     const installRepoPlugin = async (declaration: RepoPluginDeclarationDto) => {
+      // 空间守卫（spaces-and-plugins §4）：声明文件 supportedSpaces 缺省按 ['org']
+      if (!isPluginVisibleInSpace(declaration.supportedSpaces, currentSpace.value.type)) {
+        spaceGuardToast(declaration.name);
+        return;
+      }
       if (declaration.permissions.length > 0) {
         const labels = declaration.permissions
           .map((permission) => `${permissionLabel(permission)}（${permission}）`)
