@@ -18,13 +18,17 @@ use super::{Kernel, KernelError, Result};
 use crate::contact::ContactService;
 use crate::message::types::ConversationKind;
 use crate::message::{
-    ConversationRecord, LinkPreview, MAX_TEXT_BYTES, MessageRecord, MessageService, MessageType,
-    QuoteRef,
+    AppMessageCard, AppMessageRecord, AppMessageService, ConversationRecord, LinkPreview,
+    MAX_TEXT_BYTES, MessageError, MessageRecord, MessageService, MessageType, QuoteRef,
+    generate_message_id,
 };
 use crate::p2p::node::system_now_ms;
 
 /// direct 会话 id 前缀（`dm:{peerRootId}`）。
 pub const DIRECT_CONV_PREFIX: &str = "dm:";
+
+/// 应用会话 id（`app:{pluginId}`，确定性；p2p-messages.md §20.1）。
+pub use crate::message::app_conversation_id;
 
 /// 链接预览各字段入库上限（字符数，trim 后超限截断而非报错，ui-messages.md §6）。
 /// 仅 `sanitize_link_preview` 内部使用（测试断言字面量），不导出。
@@ -111,6 +115,39 @@ pub struct ChatMessageView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
     pub recalled: bool,
+}
+
+/// 应用消息视图（serde camelCase；= §20.2 记录线形原样，Tauri 命令直接返回）。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppMessageView {
+    pub id: String,
+    pub plugin_id: String,
+    /// 纯文本摘要（trim 后的 payload.summary；未装插件时壳层原生渲染此字段）。
+    pub summary: String,
+    /// 插件自描述 JSON（含 summary 字段）。
+    pub payload: serde_json::Value,
+    /// 可选卡片（message-card 富渲染视图）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card: Option<AppMessageCard>,
+    pub created_at: i64,
+    /// 本地状态集：恒 `"local"`（§20.3，无 delivered 语义）。
+    pub status: String,
+    pub read: bool,
+}
+
+/// 应用消息记录 → 视图（字段一一对应，无 `'me'` 映射——应用消息无发送者概念）。
+pub(crate) fn app_message_view(record: &AppMessageRecord) -> AppMessageView {
+    AppMessageView {
+        id: record.id.clone(),
+        plugin_id: record.plugin_id.clone(),
+        summary: record.summary.clone(),
+        payload: record.payload.clone(),
+        card: record.card.clone(),
+        created_at: record.created_at,
+        status: record.status.clone(),
+        read: record.read,
+    }
 }
 
 /// 会话记录 → 视图（`online_peers` 为当前连接的 libp2p peerId 集合；
@@ -567,6 +604,69 @@ impl Kernel {
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
         MessageService::delete_conversation(self.require_storage_mut()?, space, conv_id)?;
         Ok(())
+    }
+
+    // ------------------------------------------------------------------
+    // 应用消息（服务号模型，p2p-messages.md §20）
+    // ------------------------------------------------------------------
+
+    /// 写入应用消息（本地生成、本地消费；无 peer 投递、无 delivered）。
+    /// 校验链（按序）：pluginId 字符集 → payload.summary 非空且 ≤200 字符 →
+    /// 限流（每插件每会话 10 条/分钟，超限报 [`MessageError::RateLimited`]
+    /// 并累计拒绝计数）；校验先于限流，非法消息不消耗配额。
+    /// 会话由 pluginId 确定性派生（`app:{pluginId}`）并惰性创建——插件只能
+    /// 写自己的会话（§20.4 不变量 2）；写入成功未读 +1，状态恒 `local`。
+    pub fn message_app_send(
+        &mut self,
+        space: &str,
+        plugin_id: &str,
+        payload: serde_json::Value,
+        card: Option<AppMessageCard>,
+    ) -> Result<AppMessageView> {
+        let __io = std::sync::Arc::clone(&self.io_lock);
+        let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
+        self.require_unlocked_root_id()?;
+        let now = system_now_ms();
+        let record = AppMessageService::build_app_message(
+            plugin_id,
+            payload,
+            card,
+            generate_message_id(now),
+            now,
+        )?;
+        if !self.app_msg_limiter.check(space, plugin_id, now) {
+            return Err(MessageError::RateLimited.into());
+        }
+        AppMessageService::ensure_app_conversation(self.require_storage_mut()?, space, plugin_id, now)?;
+        AppMessageService::append_app_message(self.require_storage_mut()?, space, &record)?;
+        Ok(app_message_view(&record))
+    }
+
+    /// 应用会话消息列表（时间升序）。
+    pub fn message_app_list(&self, space: &str, plugin_id: &str) -> Result<Vec<AppMessageView>> {
+        let messages = AppMessageService::list_app_messages(self.require_storage()?, space, plugin_id)?;
+        Ok(messages.iter().map(app_message_view).collect())
+    }
+
+    /// 清零应用会话未读并把会话内未读消息批量置已读（语义与人际会话一致）。
+    pub fn message_app_mark_read(&mut self, space: &str, plugin_id: &str) -> Result<()> {
+        let __io = std::sync::Arc::clone(&self.io_lock);
+        let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
+        AppMessageService::mark_app_read(self.require_storage_mut()?, space, plugin_id)?;
+        Ok(())
+    }
+
+    /// 删除应用会话（会话与全部应用消息一并删除）。
+    pub fn message_app_delete_conversation(&mut self, space: &str, plugin_id: &str) -> Result<()> {
+        let __io = std::sync::Arc::clone(&self.io_lock);
+        let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
+        AppMessageService::delete_app_conversation(self.require_storage_mut()?, space, plugin_id)?;
+        Ok(())
+    }
+
+    /// 指定应用会话的限流累计拒绝数（熔断观测面；内存态，重启清零）。
+    pub fn message_app_rate_rejected(&self, space: &str, plugin_id: &str) -> u64 {
+        self.app_msg_limiter.rejected_count(space, plugin_id)
     }
 }
 

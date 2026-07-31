@@ -11,12 +11,13 @@
  * 2) view type 裁剪：app 主视图全量、message-card 仅 docs 只读与验签类
  *    （VIEW_ALLOWED_CALLS 映射表，后续按 view 扩充）；
  * 3) 当前 space：manifest supportedSpaces 不含当前 space 类型时整域拒绝；
- *    org 实参（runtime.syncOrganizationData）必须与当前 space 一致。
+ *    org 域调用（runtime.syncOrganizationData/listMineOrganizations）在 personal
+ *    空间下一律拒绝；org 空间下 syncOrganizationData 的 org 实参必须与当前 space 一致。
  *
  * 未授权一律抛 `Access denied: ...`（与 TS 旧权限中间件文案同前缀）。
  *
  * identity:sign 为「使用时询问」高危权限：首次调用经 ElMessageBox 确认，
- * 按 插件名+域名 记忆本次会话决定（会话级，不落盘）。
+ * 按 插件 ID+域名 记忆本次会话决定（会话级，不落盘）；并发首调复用同一确认。
  *
  * 身份三元组（pluginId/viewId/space）来自 createBridgeHost 绑定的值，
  * 不信插件自报（hello 自报仅做一致性核对，见 bridge/host.ts）。
@@ -49,6 +50,9 @@ const VIEW_ALLOWED_CALLS: Record<PluginViewType, ReadonlySet<string> | null> = {
   'message-card': new Set(['docs.get', 'docs.query', 'identity.verify', 'evidence.headHash', 'evidence.verify'])
 };
 
+/** org 域调用：需组织空间上下文，personal 空间下一律拒绝（无 org 实参可校验） */
+const ORG_SPACE_CALLS = new Set(['runtime.syncOrganizationData', 'runtime.listMineOrganizations']);
+
 export type PluginBridgeIdentity = {
   pluginId: string;
   viewId: string;
@@ -63,25 +67,39 @@ export type PluginBridgeIdentity = {
   viewType?: PluginViewType;
 };
 
-/** 使用时询问的会话级决定记忆：key = `${pluginName}|${domain}` */
+/** 使用时询问的会话级决定记忆：key = `${pluginId}|${domain}`（pluginName 仅用于弹窗文案） */
 const useTimeConsent = new Set<string>();
+/** 确认进行中的 in-flight Promise：并发首调复用同一确认，避免弹多个框 */
+const pendingConsent = new Map<string, Promise<void>>();
 
 /** identity:sign 首次使用确认；用户拒绝抛 Access denied */
-async function confirmIdentitySign(pluginName: string, domain: string): Promise<void> {
-  const consentKey = `${pluginName}|${domain}`;
+async function confirmIdentitySign(pluginId: string, pluginName: string, domain: string): Promise<void> {
+  const consentKey = `${pluginId}|${domain}`;
   if (useTimeConsent.has(consentKey)) {
     return;
   }
-  try {
-    await ElMessageBox.confirm(
-      `应用「${pluginName}」（${domain}）请求使用插件域身份签名。签名以该应用域身份出具，可用于数据确权与存证，是否允许？（本次会话内记住选择）`,
-      '签名确认',
-      { confirmButtonText: '允许', cancelButtonText: '拒绝', type: 'warning' }
-    );
-  } catch {
-    throw new Error('Access denied: identity:sign rejected by user');
+  const inflight = pendingConsent.get(consentKey);
+  if (inflight) {
+    return inflight;
   }
-  useTimeConsent.add(consentKey);
+  const prompt = (async () => {
+    try {
+      await ElMessageBox.confirm(
+        `应用「${pluginName}」（${domain}）请求使用插件域身份签名。签名以该应用域身份出具，可用于数据确权与存证，是否允许？（本次会话内记住选择）`,
+        '签名确认',
+        { confirmButtonText: '允许', cancelButtonText: '拒绝', type: 'warning' }
+      );
+    } catch {
+      throw new Error('Access denied: identity:sign rejected by user');
+    }
+    useTimeConsent.add(consentKey);
+  })();
+  pendingConsent.set(consentKey, prompt);
+  try {
+    await prompt;
+  } finally {
+    pendingConsent.delete(consentKey);
+  }
 }
 
 /**
@@ -154,6 +172,10 @@ export async function createPluginBridgeDispatcher(identity: PluginBridgeIdentit
         `Access denied: plugin ${identity.pluginId} does not support ${identity.space.type} space`
       );
     }
+    // personal 空间无 org 上下文：org 域调用一律拒绝
+    if (ORG_SPACE_CALLS.has(callKey) && identity.space.type === 'personal') {
+      throw new Error(`Access denied: ${callKey} requires org space`);
+    }
     if (
       callKey === 'runtime.syncOrganizationData' &&
       identity.space.type === 'org' &&
@@ -162,9 +184,9 @@ export async function createPluginBridgeDispatcher(identity: PluginBridgeIdentit
       throw new Error(`Access denied: org ${String(args[0])} is outside current space ${identity.space.id}`);
     }
 
-    // 使用时询问：identity:sign 首次确认（会话级记忆）
+    // 使用时询问：identity:sign 首次确认（会话级记忆，并发首调复用同一确认）
     if (callKey === 'identity.sign') {
-      await confirmIdentitySign(pluginName, identity.domain);
+      await confirmIdentitySign(identity.pluginId, pluginName, identity.domain);
     }
 
     return fn(...args);

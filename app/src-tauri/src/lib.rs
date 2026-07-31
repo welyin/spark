@@ -203,6 +203,11 @@ pub fn run() {
             commands::message::message_toggle_mute,
             commands::message::message_clear,
             commands::message::message_delete_conversation,
+            // 应用消息（服务号模型，p2p-messages.md §20）
+            commands::message::message_app_send,
+            commands::message::message_app_list,
+            commands::message::message_app_mark_read,
+            commands::message::message_app_delete_conversation,
             // 数据治理
             commands::data::data_usage,
             commands::data::data_cleanup_now,

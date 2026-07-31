@@ -5,8 +5,8 @@
 //! 约定为 `dm:{peerRootId}`。出站消息 p2p 未启动/投递失败落库为 `failed`，
 //! 可经 `message_resend` 重发。
 
-use spark_core::kernel::{ChatMessageView, ConversationView, Kernel};
-use spark_core::message::{LinkPreview, QuoteRef};
+use spark_core::kernel::{AppMessageView, ChatMessageView, ConversationView, Kernel};
+use spark_core::message::{AppMessageCard, LinkPreview, QuoteRef};
 
 use super::dto::SuccessResult;
 use super::{err, link_preview, lock_kernel};
@@ -150,6 +150,50 @@ pub(crate) fn delete_conversation_inner(
 ) -> Result<SuccessResult, String> {
     kernel
         .message_delete_conversation(space, conv_id)
+        .map_err(err)?;
+    Ok(SuccessResult::ok())
+}
+
+// ------------------------------------------------------------------
+// 应用消息（服务号模型，p2p-messages.md §20）
+// ------------------------------------------------------------------
+
+pub(crate) fn app_send_inner(
+    kernel: &mut Kernel,
+    space: &str,
+    plugin_id: &str,
+    payload: serde_json::Value,
+    card: Option<AppMessageCard>,
+) -> Result<AppMessageView, String> {
+    kernel
+        .message_app_send(space, plugin_id, payload, card)
+        .map_err(err)
+}
+
+pub(crate) fn app_list_inner(
+    kernel: &Kernel,
+    space: &str,
+    plugin_id: &str,
+) -> Result<Vec<AppMessageView>, String> {
+    kernel.message_app_list(space, plugin_id).map_err(err)
+}
+
+pub(crate) fn app_mark_read_inner(
+    kernel: &mut Kernel,
+    space: &str,
+    plugin_id: &str,
+) -> Result<SuccessResult, String> {
+    kernel.message_app_mark_read(space, plugin_id).map_err(err)?;
+    Ok(SuccessResult::ok())
+}
+
+pub(crate) fn app_delete_conversation_inner(
+    kernel: &mut Kernel,
+    space: &str,
+    plugin_id: &str,
+) -> Result<SuccessResult, String> {
+    kernel
+        .message_app_delete_conversation(space, plugin_id)
         .map_err(err)?;
     Ok(SuccessResult::ok())
 }
@@ -314,6 +358,55 @@ pub fn message_delete_conversation(
     conv_id: String,
 ) -> Result<SuccessResult, String> {
     delete_conversation_inner(&mut *lock_kernel(&state)?, &space_key, &conv_id)
+}
+
+/// 写入应用消息（服务号模型，§20）：payload 必须含非空 summary；
+/// 每插件每会话限流 10 条/分钟，超限报 rate-limited。
+#[tauri::command]
+pub fn message_app_send(
+    state: tauri::State<'_, KernelState>,
+    space_key: String,
+    plugin_id: String,
+    payload: serde_json::Value,
+    card: Option<AppMessageCard>,
+) -> Result<AppMessageView, String> {
+    app_send_inner(
+        &mut *lock_kernel(&state)?,
+        &space_key,
+        &plugin_id,
+        payload,
+        card,
+    )
+}
+
+/// 应用会话消息列表（时间升序）。
+#[tauri::command]
+pub fn message_app_list(
+    state: tauri::State<'_, KernelState>,
+    space_key: String,
+    plugin_id: String,
+) -> Result<Vec<AppMessageView>, String> {
+    app_list_inner(&*lock_kernel(&state)?, &space_key, &plugin_id)
+}
+
+/// 清零应用会话未读（语义与人际会话一致）。
+#[tauri::command]
+pub fn message_app_mark_read(
+    state: tauri::State<'_, KernelState>,
+    space_key: String,
+    plugin_id: String,
+) -> Result<SuccessResult, String> {
+    app_mark_read_inner(&mut *lock_kernel(&state)?, &space_key, &plugin_id)
+}
+
+/// 删除应用会话（会话与全部应用消息一并删除）。
+#[tauri::command]
+pub fn message_app_delete_conversation(
+    state: tauri::State<'_, KernelState>,
+    space_key: String,
+    plugin_id: String,
+) -> Result<SuccessResult, String> {
+    app_delete_conversation_inner(&mut *lock_kernel(&state)?, &space_key, &plugin_id)
 }
 
 // ------------------------------------------------------------------

@@ -79,6 +79,11 @@ export const COMMAND_MAP: Record<string, string> = {
   'message-toggle-mute': 'message_toggle_mute',
   'message-clear': 'message_clear',
   'message-delete-conversation': 'message_delete_conversation',
+  // 应用消息（服务号模型，p2p-messages.md §20）
+  'message-app-send': 'message_app_send',
+  'message-app-list': 'message_app_list',
+  'message-app-mark-read': 'message_app_mark_read',
+  'message-app-delete-conversation': 'message_app_delete_conversation',
   // 数据治理
   'data-usage': 'data_usage',
   'data-cleanup-now': 'data_cleanup_now',
@@ -177,6 +182,10 @@ export const ARG_NAMES: Record<string, string[]> = {
   'message-toggle-mute': ['spaceKey', 'convId'],
   'message-clear': ['spaceKey', 'convId'],
   'message-delete-conversation': ['spaceKey', 'convId'],
+  'message-app-send': ['spaceKey', 'pluginId', 'payload', 'card'],
+  'message-app-list': ['spaceKey', 'pluginId'],
+  'message-app-mark-read': ['spaceKey', 'pluginId'],
+  'message-app-delete-conversation': ['spaceKey', 'pluginId'],
   'data-export': ['filePath'],
   'data-purge-preview': ['orgId', 'beforeTs'],
   'data-purge-execute': ['orgId', 'beforeTs', 'confirmExported'],

@@ -3,9 +3,9 @@
 //! URL 形如 `plugin://<pluginId>/<path>`，解析顺序先安装包后内置 dist：
 //! - 已安装包：`<app_data_dir>/plugins/<id>/packages/*.spkg`（.spkg = JSON 容器
 //!   `{pluginId, domain, version, files:[{path, sha256, size, contentBase64}]}`，
-//!   见 code/plugins/scripts/build-weibo-package.mjs）。优先按
-//!   plugin-market-state.json 记录的 packagePath 定位，缺席时取目录内最新 .spkg；
-//!   状态里标记 `enabled = false` 的插件整域拒服（停用即关源）。
+//!   见 code/plugins/scripts/build-weibo-package.mjs）。定位只信
+//!   plugin-market-state.json 记录的 packagePath（fail-closed：无记录、状态
+//!   文件存在但解析失败、`enabled = false`，一律拒服，不做目录扫描猜测）。
 //! - 内置开发插件 dist：`code/plugins/<id>/dist/<path>`（编译期
 //!   CARGO_MANIFEST_DIR 与运行时 cwd 双候选，对齐 market::MarketPaths::for_app）。
 //!
@@ -100,33 +100,21 @@ fn read_from_spkg(spkg_path: &Path, rel_path: &str) -> Option<Vec<u8>> {
         .ok()
 }
 
-/// 定位已安装插件的 .spkg：优先市场状态记录的 packagePath，缺席取 packages 目录最新。
+/// 定位已安装插件的 .spkg：只信 plugin-market-state.json 记录的 packagePath
+/// （fail-closed：无记录、状态文件存在但解析失败、enabled = false、记录路径
+/// 缺失或不是 .spkg，一律拒服——不做 packages 目录扫描猜测，避免字典序取错版本）。
 fn locate_installed_spkg(data_dir: &Path, plugin_id: &str) -> Option<PathBuf> {
-    // 市场状态：enabled = false 整域拒服；packagePath 为首选定位
-    let state: PersistedPluginState = fs::read_to_string(data_dir.join("plugin-market-state.json"))
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_default();
-    if let Some(installed) = state.installed.get(plugin_id) {
-        if !installed.enabled {
-            return None;
-        }
-        let recorded = PathBuf::from(&installed.package_path);
-        if recorded.extension().is_some_and(|ext| ext == "spkg") && recorded.is_file() {
-            return Some(recorded);
-        }
+    let state_text = fs::read_to_string(data_dir.join("plugin-market-state.json")).ok()?;
+    let state: PersistedPluginState = serde_json::from_str(&state_text).ok()?;
+    let installed = state.installed.get(plugin_id)?;
+    if !installed.enabled {
+        return None;
     }
-
-    // 兜底：packages 目录内按文件名排序取最新（版本号单调，字典序即可）
-    let packages_dir = data_dir.join("plugins").join(plugin_id).join("packages");
-    let mut candidates: Vec<PathBuf> = fs::read_dir(&packages_dir)
-        .ok()?
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "spkg"))
-        .collect();
-    candidates.sort();
-    candidates.pop()
+    let recorded = PathBuf::from(&installed.package_path);
+    if recorded.extension().is_some_and(|ext| ext == "spkg") && recorded.is_file() {
+        return Some(recorded);
+    }
+    None
 }
 
 /// 内置开发插件 dist 候选根（对齐 market::MarketPaths::for_app 的 source_roots 语义）。
@@ -261,8 +249,15 @@ mod tests {
 
     #[test]
     fn builtin_dist_serves_weibo_bundle() {
+        // dist 为构建产物且被 gitignore：fresh clone 上缺席，此时跳过
+        // （构建：cd code/plugins/weibo-core && npm run build）。
         // 编译期候选根恒指向 code/plugins（CARGO_MANIFEST_DIR 语义），
         // weibo-core dist 已构建时应能取到 bundle 与 manifest
+        let dist_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/weibo-core/dist");
+        if !dist_root.join("views/main.js").is_file() {
+            eprintln!("skip: weibo-core dist 未构建（cd code/plugins/weibo-core && npm run build）");
+            return;
+        }
         let data_dir = Path::new("/nonexistent-spark-data-dir");
         let bundle = resolve_plugin_resource(data_dir, "weibo-core", "views/main.js");
         assert!(bundle.is_some(), "weibo-core dist/views/main.js 应可经内置 dist 解析");
@@ -276,5 +271,108 @@ mod tests {
         assert!(resolve_plugin_resource(data_dir, "weibo-core", "../manifest.json").is_none());
         assert!(resolve_plugin_resource(data_dir, "..", "views/main.js").is_none());
         assert!(resolve_plugin_resource(data_dir, "weibo-core", "..\\views\\main.js").is_none());
+    }
+
+    // ------------------------------------------------------------------
+    // 安装包定位（fail-closed：只信 plugin-market-state.json 的 packagePath）
+    // ------------------------------------------------------------------
+
+    /// 构造独立临时数据目录（tag 区分用例，避免并行测试互相踩）
+    fn temp_data_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("spark-plugin-src-test-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// 写一个最小 .spkg（JSON 容器：files 精确匹配 + base64 内容）
+    fn write_spkg(spkg_path: &Path, entries: &[(&str, &[u8])]) {
+        fs::create_dir_all(spkg_path.parent().unwrap()).unwrap();
+        let files: Vec<serde_json::Value> = entries
+            .iter()
+            .map(|(path, bytes)| {
+                serde_json::json!({
+                    "path": path,
+                    "contentBase64": base64::engine::general_purpose::STANDARD.encode(bytes),
+                })
+            })
+            .collect();
+        fs::write(spkg_path, serde_json::json!({ "files": files }).to_string()).unwrap();
+    }
+
+    /// 写 plugin-market-state.json（单插件记录；enabled 可配）
+    fn write_market_state(data_dir: &Path, plugin_id: &str, spkg_path: &Path, enabled: bool) {
+        let state = serde_json::json!({
+            "installed": {
+                plugin_id: {
+                    "pluginId": plugin_id,
+                    "version": "1.0.0",
+                    "packagePath": spkg_path.to_string_lossy(),
+                    "sha256": "",
+                    "size": 0,
+                    "installedAt": 0,
+                    "enabled": enabled,
+                    "grantedPermissions": []
+                }
+            }
+        });
+        fs::write(data_dir.join("plugin-market-state.json"), state.to_string()).unwrap();
+    }
+
+    #[test]
+    fn installed_spkg_served_via_recorded_package_path() {
+        // packagePath 首选定位：状态记录指向哪个包就服务哪个包
+        let data_dir = temp_data_dir("pkg-path");
+        let spkg = data_dir.join("plugins/demo-plugin/packages/demo-plugin-1.0.0.spkg");
+        write_spkg(&spkg, &[("views/main.js", b"hello")]);
+        write_market_state(&data_dir, "demo-plugin", &spkg, true);
+
+        let resolved = resolve_plugin_resource(&data_dir, "demo-plugin", "views/main.js");
+        assert_eq!(resolved, Some((b"hello".to_vec(), "text/javascript; charset=utf-8")));
+    }
+
+    #[test]
+    fn unrecorded_spkg_not_served() {
+        // 包文件存在但市场状态无记录：fail-closed 拒服（不再扫描 packages 目录猜测）
+        let data_dir = temp_data_dir("unrecorded");
+        let spkg = data_dir.join("plugins/demo-plugin/packages/demo-plugin-1.0.0.spkg");
+        write_spkg(&spkg, &[("views/main.js", b"hello")]);
+
+        assert!(resolve_plugin_resource(&data_dir, "demo-plugin", "views/main.js").is_none());
+    }
+
+    #[test]
+    fn disabled_plugin_not_served() {
+        // enabled = false 整域拒服（停用即关源）
+        let data_dir = temp_data_dir("disabled");
+        let spkg = data_dir.join("plugins/demo-plugin/packages/demo-plugin-1.0.0.spkg");
+        write_spkg(&spkg, &[("views/main.js", b"hello")]);
+        write_market_state(&data_dir, "demo-plugin", &spkg, false);
+
+        assert!(resolve_plugin_resource(&data_dir, "demo-plugin", "views/main.js").is_none());
+    }
+
+    #[test]
+    fn corrupt_market_state_not_served() {
+        // 状态文件存在但解析失败：fail-closed 拒服（不降级为目录扫描）
+        let data_dir = temp_data_dir("corrupt");
+        let spkg = data_dir.join("plugins/demo-plugin/packages/demo-plugin-1.0.0.spkg");
+        write_spkg(&spkg, &[("views/main.js", b"hello")]);
+        fs::write(data_dir.join("plugin-market-state.json"), b"{ not json").unwrap();
+
+        assert!(resolve_plugin_resource(&data_dir, "demo-plugin", "views/main.js").is_none());
+    }
+
+    #[test]
+    fn spkg_traversal_entry_not_served() {
+        // 固化精确匹配的安全性：容器内含 `../` 条目时，
+        // 规范化后的请求路径不会命中它，直接请求 `../` 又被路径校验拦下
+        let data_dir = temp_data_dir("traversal-entry");
+        let spkg = data_dir.join("plugins/demo-plugin/packages/demo-plugin-1.0.0.spkg");
+        write_spkg(&spkg, &[("../evil.js", b"pwned")]);
+        write_market_state(&data_dir, "demo-plugin", &spkg, true);
+
+        assert!(resolve_plugin_resource(&data_dir, "demo-plugin", "../evil.js").is_none());
+        assert_eq!(read_from_spkg(&spkg, "evil.js"), None);
     }
 }

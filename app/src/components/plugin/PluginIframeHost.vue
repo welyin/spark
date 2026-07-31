@@ -110,6 +110,9 @@ export default defineComponent({
 
     let host: BridgeHost | null = null;
     let watchdog: PluginWatchdog | null = null;
+    // 代际令牌（init 竞态防护）：每次 init/卸载递增，await 后校验，过期即弃——
+    // 保证任意时序下只有一个活 host，不会出现双 handler
+    let generation = 0;
 
     const destroyBridge = (): void => {
       watchdog?.dispose();
@@ -118,7 +121,11 @@ export default defineComponent({
       host = null;
     };
 
+    /** 代际失效判定（过期时新建对象已由后到的 init/卸载经 destroyBridge 销毁） */
+    const isStale = (gen: number): boolean => gen !== generation;
+
     const init = async (): Promise<void> => {
+      const gen = ++generation;
       destroyBridge();
       if (isPluginInstanceDisabled(instanceKey)) {
         disabledReason.value = getDisabledPluginInstance(instanceKey)?.reason ?? '';
@@ -131,6 +138,9 @@ export default defineComponent({
 
       // reload 后 iframe 经 :key 重建，等 DOM 更新再取 contentWindow
       await nextTick();
+      if (isStale(gen)) {
+        return;
+      }
       const iframe = iframeEl.value;
       if (!iframe || !iframe.contentWindow) {
         status.value = 'failed';
@@ -139,6 +149,9 @@ export default defineComponent({
 
       // manifest（best-effort）：supportedSpaces 与显示名；读取失败按无声明降级
       const manifest = await fetchPluginManifest(props.pluginId);
+      if (isStale(gen)) {
+        return;
+      }
       const domain = `plugin:${props.pluginId}`;
 
       watchdog = createPluginWatchdog({
@@ -165,6 +178,9 @@ export default defineComponent({
           supportedSpaces: manifest?.supportedSpaces,
           viewType: 'app'
         });
+        if (isStale(gen)) {
+          return;
+        }
 
         const ctx: PluginContext = {
           pluginId: props.pluginId,
@@ -195,9 +211,16 @@ export default defineComponent({
         });
 
         await host.ready;
+        if (isStale(gen)) {
+          return;
+        }
         status.value = 'ready';
-        watchdog.startHeartbeat();
+        watchdog?.startHeartbeat();
       } catch {
+        // 过期代的失败不计数不落地（新一代已接管，避免误记 ready 前错误）
+        if (isStale(gen)) {
+          return;
+        }
         // 握手超时/版本不兼容按一次 ready 前错误计（设计文档「熔断与治理」）
         if (watchdog) {
           watchdog.recordReadyError();
@@ -222,7 +245,11 @@ export default defineComponent({
     };
 
     onMounted(() => void init());
-    onUnmounted(destroyBridge);
+    // 卸载同样使代际失效：进行中的 init 在下一个 await 后即弃，不再落状态
+    onUnmounted(() => {
+      generation += 1;
+      destroyBridge();
+    });
 
     return {
       iframeEl,

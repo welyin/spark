@@ -55,7 +55,8 @@ pub use identity::{
 };
 pub use inbound_dm::{AutoAccept, InboundDmError, InboundDmResult, handle_inbound_dm};
 pub use message_ops::{
-    ChatMessageView, ConversationView, direct_conversation_id, sanitize_link_preview,
+    AppMessageView, ChatMessageView, ConversationView, app_conversation_id,
+    direct_conversation_id, sanitize_link_preview,
 };
 pub use org_sync::{OrgReconcileStats, PeerOrgSyncResult};
 pub use p2p_ops::NodeCardImport;
@@ -147,6 +148,8 @@ pub struct Kernel {
     /// read-modify-write 串行化。锁顺序：Tauri `Mutex<Kernel>` → `io_lock`
     /// （host 只拿 `io_lock`，不会死锁）；查询类方法可不加。
     pub(crate) io_lock: Arc<Mutex<()>>,
+    /// 应用消息限流器（内存态，p2p-messages.md §20.5；进程重启清零）。
+    pub(crate) app_msg_limiter: crate::message::AppMessageRateLimiter,
 }
 
 impl Kernel {
@@ -182,6 +185,7 @@ impl Kernel {
             org_address_publish: Arc::new(Mutex::new(HashMap::new())),
             collection_configs: Arc::new(Mutex::new(HashMap::new())),
             io_lock: Arc::new(Mutex::new(())),
+            app_msg_limiter: crate::message::AppMessageRateLimiter::default(),
         };
         kernel.migrate_legacy_identity_if_needed()?;
         if let Some(root_id) = kernel.read_active_root_id()? {

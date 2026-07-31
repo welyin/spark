@@ -103,13 +103,36 @@ export function connectPluginBridge(options: ConnectPluginBridgeOptions): Promis
     post({ v: BRIDGE_PROTOCOL_VERSION, type: 'event', event: 'runtime-error', payload: { message } });
   };
 
-  listenWindow.addEventListener('error', ((event: ErrorEvent) => {
+  /** 非 Error rejection 的稳妥字符串化（裸 String(obj) 只得 '[object Object]'） */
+  const stringifyRejectionReason = (reason: unknown): string => {
+    if (reason instanceof Error) {
+      return reason.message;
+    }
+    if (typeof reason === 'string') {
+      return reason;
+    }
+    try {
+      return JSON.stringify(reason) ?? String(reason);
+    } catch {
+      // 循环引用等序列化失败时兜底
+      return String(reason);
+    }
+  };
+
+  const onRuntimeError = ((event: ErrorEvent) => {
     reportRuntimeError(event.message || 'unknown error');
-  }) as EventListener);
-  listenWindow.addEventListener('unhandledrejection', ((event: PromiseRejectionEvent) => {
-    const reason: unknown = event.reason;
-    reportRuntimeError(reason instanceof Error ? reason.message : String(reason));
-  }) as EventListener);
+  }) as EventListener;
+  const onUnhandledRejection = ((event: PromiseRejectionEvent) => {
+    reportRuntimeError(stringifyRejectionReason(event.reason));
+  }) as EventListener;
+  listenWindow.addEventListener('error', onRuntimeError);
+  listenWindow.addEventListener('unhandledrejection', onUnhandledRejection);
+
+  /** 握手失败（超时/被拒）后摘除错误上报监听：桥已不可用，留着只会空报 */
+  const removeErrorListeners = (): void => {
+    listenWindow.removeEventListener('error', onRuntimeError);
+    listenWindow.removeEventListener('unhandledrejection', onUnhandledRejection);
+  };
 
   /** 发送一条期待 result 应答的消息（call/subscribe/unsubscribe），Promise 化等待 */
   const request = (message: { id: string } & Record<string, unknown>, timeoutMs: number): Promise<unknown> =>
@@ -166,6 +189,7 @@ export function connectPluginBridge(options: ConnectPluginBridgeOptions): Promis
       }
       handshakeSettled = true;
       listenWindow.removeEventListener('message', onMessage as EventListener);
+      removeErrorListeners();
       rejectHandshake(new Error(`Plugin bridge handshake timed out after ${handshakeTimeoutMs}ms`));
     }, handshakeTimeoutMs);
 
@@ -194,6 +218,7 @@ export function connectPluginBridge(options: ConnectPluginBridgeOptions): Promis
           handshakeSettled = true;
           clearTimeout(handshakeTimer);
           listenWindow.removeEventListener('message', onMessage as EventListener);
+          removeErrorListeners();
           rejectHandshake(
             Object.assign(new Error(`Plugin bridge handshake rejected: ${message.message}`), { code: message.code })
           );

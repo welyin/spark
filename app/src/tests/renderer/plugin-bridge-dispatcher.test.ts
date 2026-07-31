@@ -1,7 +1,7 @@
 /**
  * 桥 dispatcher 权限中间件测试（设计文档「权限模型」运行时强制）：
  * - 三重过滤：grantedPermissions ∩ view type 裁剪 ∩ 当前 space；
- * - identity:sign 使用时询问（ElMessageBox，按 插件名+域名 会话级记忆）；
+ * - identity:sign 使用时询问（ElMessageBox，按 插件 ID+域名 会话级记忆，并发首调复用同一确认）；
  * - 未授权一律 Access denied。
  */
 
@@ -37,9 +37,9 @@ const BASE_IDENTITY: PluginBridgeIdentity = {
 };
 
 /** 市场安装状态授权清单（grantedPermissions 数据源） */
-function mockGrantedPermissions(permissions: string[]): void {
+function mockGrantedPermissions(permissions: string[], pluginId = 'weibo-core'): void {
   (window.electronAPI as any).pluginMarket = {
-    list: async () => [{ id: 'weibo-core', grantedPermissions: permissions }]
+    list: async () => [{ id: pluginId, grantedPermissions: permissions }]
   };
 }
 
@@ -116,6 +116,18 @@ describe('三重过滤：当前 space', () => {
     await expect(handler('runtime', 'syncOrganizationData', ['org_2'])).rejects.toThrow(/Access denied/);
     await expect(handler('runtime', 'syncOrganizationData', ['org_1'])).resolves.toBeNull();
   });
+
+  it('personal 空间下 org 域调用一律拒绝（无 org 实参可校验）', async () => {
+    mockGrantedPermissions(['org:sync', 'org:read']);
+    const handler = await createPluginBridgeDispatcher({
+      ...BASE_IDENTITY,
+      space: { type: 'personal', id: 'personal' },
+      supportedSpaces: ['personal', 'org']
+    });
+    await expect(handler('runtime', 'syncOrganizationData', ['org_1'])).rejects.toThrow(/Access denied/);
+    await expect(handler('runtime', 'syncOrganizationData', ['personal'])).rejects.toThrow(/Access denied/);
+    await expect(handler('runtime', 'listMineOrganizations', [])).rejects.toThrow(/Access denied/);
+  });
 });
 
 describe('使用时询问：identity:sign', () => {
@@ -139,5 +151,31 @@ describe('使用时询问：identity:sign', () => {
     const identity = { ...BASE_IDENTITY, domain: 'plugin:sign-reject-test', pluginName: '签名拒绝' };
     const handler = await createPluginBridgeDispatcher(identity);
     await expect(handler('identity', 'sign', ['payload'])).rejects.toThrow(/Access denied/);
+  });
+
+  it('并发首调复用同一确认（in-flight），只弹一次框', async () => {
+    mockGrantedPermissions(['identity:sign'], 'sign-inflight-test');
+    // 确认 Promise 手动控制，保证两次调用都落在确认进行中
+    let resolveConfirm: (value: unknown) => void = () => {};
+    (ElMessageBox.confirm as ReturnType<typeof vi.fn>).mockImplementation(
+      () => new Promise((resolve) => { resolveConfirm = resolve; })
+    );
+    const identity = {
+      ...BASE_IDENTITY,
+      pluginId: 'sign-inflight-test',
+      domain: 'plugin:sign-inflight-test',
+      pluginName: '并发签名'
+    };
+    const handler = await createPluginBridgeDispatcher(identity);
+
+    const first = handler('identity', 'sign', ['payload-1']);
+    const second = handler('identity', 'sign', ['payload-2']);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(ElMessageBox.confirm).toHaveBeenCalledTimes(1);
+
+    resolveConfirm({});
+    await expect(first).resolves.toBeNull();
+    await expect(second).resolves.toBeNull();
+    expect(ElMessageBox.confirm).toHaveBeenCalledTimes(1);
   });
 });

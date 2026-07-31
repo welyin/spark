@@ -52,9 +52,9 @@ export type BridgeHost = {
   ready: Promise<PluginContext>;
   /** 向插件推送事件（仅当插件已订阅该事件时才发送） */
   pushEvent: (event: string, payload?: unknown) => void;
-  /** 心跳：发 ping 并等待 pong，超时 reject（默认 5s） */
+  /** 心跳：发 ping 并等待 pong，超时 reject（默认 5s）；destroy 后立即 reject */
   ping: (timeoutMs?: number) => Promise<void>;
-  /** 关闭桥：移除监听、清理定时器与待决请求 */
+  /** 关闭桥：移除监听、清理定时器与待决请求；握手未 settle 时 ready 以 destroyed 拒绝 */
   destroy: () => void;
 };
 
@@ -72,6 +72,8 @@ export function createBridgeHost(options: CreateBridgeHostOptions): BridgeHost {
   const pendingPings = new Map<string, { resolve: () => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   /** destroy 时移除握手监听/定时器（在 ready promise 执行器内赋值） */
   let readyCleanup: () => void = () => {};
+  /** destroy 时 reject 未 settle 的握手（在 ready promise 执行器内赋值，执行器同步运行故必先于任何 destroy 调用） */
+  let rejectReadyRef: (error: Error) => void = () => {};
 
   const post = (message: unknown): void => {
     if (destroyed) {
@@ -213,6 +215,15 @@ export function createBridgeHost(options: CreateBridgeHostOptions): BridgeHost {
       clearTimeout(handshakeTimer);
       listenWindow.removeEventListener('message', onMessage as EventListener);
     };
+    // destroy 需要 reject 未 settle 的握手（幂等：已 settle 则无操作）
+    rejectReadyRef = (error: Error) => {
+      if (handshakeSettled) {
+        return;
+      }
+      handshakeSettled = true;
+      clearTimeout(handshakeTimer);
+      rejectReady(error);
+    };
   });
 
   return {
@@ -224,6 +235,10 @@ export function createBridgeHost(options: CreateBridgeHostOptions): BridgeHost {
       post({ v: BRIDGE_PROTOCOL_VERSION, type: 'event', event, payload });
     },
     ping(timeoutMs = 5_000) {
+      // destroy 后立即拒绝（post 已静默丢弃，不立即拒绝则调用方只能等超时）
+      if (destroyed) {
+        return Promise.reject(new Error('Plugin bridge destroyed'));
+      }
       const id = `ping-${Date.now().toString(36)}-${++counter}`;
       return new Promise<void>((resolvePing, rejectPing) => {
         const timer = setTimeout(() => {
@@ -240,6 +255,8 @@ export function createBridgeHost(options: CreateBridgeHostOptions): BridgeHost {
       }
       destroyed = true;
       readyCleanup();
+      // 握手未 settle 时以 destroyed 拒绝 ready（幂等：已 settle 则无操作）
+      rejectReadyRef(new Error('Plugin bridge destroyed'));
       for (const [id, pending] of pendingPings) {
         clearTimeout(pending.timer);
         pending.reject(new Error('Plugin bridge destroyed'));

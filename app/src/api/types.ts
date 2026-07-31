@@ -343,6 +343,8 @@ export interface ChatMessageDto {
 
 export interface ConversationDto {
   id: string;
+  // §20 应用会话（app:{pluginId}）在 IPC 上以 kind='app' 到达；DTO 此处暂不
+  // 加宽（mock/messages.ts 的 Conversation 未含 'app'，壳层 UI 波次一并处理）
   kind: 'direct' | 'system';
   title: string;
   peerId: string;
@@ -352,6 +354,26 @@ export interface ConversationDto {
   online: boolean;
   draft: string;
   updatedAt: number;
+}
+
+/** 应用消息卡片（message-card 富渲染视图，p2p-messages.md §20.2）。 */
+export interface AppMessageCardDto {
+  viewId: string;
+  data?: unknown;
+}
+
+/** 应用消息（服务号模型；本地生成、本地消费，状态恒 'local'，无 delivered 语义）。 */
+export interface AppMessageDto {
+  id: string;
+  pluginId: string;
+  /** 纯文本摘要（trim 后的 payload.summary；未装插件时壳层原生渲染此字段） */
+  summary: string;
+  /** 插件自描述 JSON（必须含非空 summary 字段，否则内核拒绝写入） */
+  payload: Record<string, unknown>;
+  card?: AppMessageCardDto;
+  createdAt: number;
+  status: 'local';
+  read: boolean;
 }
 
 export type ElectronAPI = {
@@ -496,6 +518,12 @@ export type ElectronAPI = {
     toggleMute: (spaceKey: string, convId: string) => Promise<{ success: boolean }>;
     clear: (spaceKey: string, convId: string) => Promise<{ success: boolean }>;
     deleteConversation: (spaceKey: string, convId: string) => Promise<{ success: boolean }>;
+    // 应用消息（服务号模型，p2p-messages.md §20）：payload 必须含非空 summary；
+    // 每插件每会话限流 10 条/分钟，超限 reject rate-limited
+    appSend: (spaceKey: string, pluginId: string, payload: Record<string, unknown>, card?: AppMessageCardDto) => Promise<AppMessageDto>;
+    appList: (spaceKey: string, pluginId: string) => Promise<AppMessageDto[]>;
+    appMarkRead: (spaceKey: string, pluginId: string) => Promise<{ success: boolean }>;
+    appDeleteConversation: (spaceKey: string, pluginId: string) => Promise<{ success: boolean }>;
   };
   rootIdentity: {
     status: () => Promise<{

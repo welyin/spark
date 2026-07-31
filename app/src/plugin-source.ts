@@ -17,8 +17,23 @@
 import { isTauri } from './api';
 import type { PluginManifest } from '../../packages/plugin-sdk/src';
 
+/** 插件 id 白名单（与内核 §20 规格一致）：小写字母/数字/连字符，首字符非连字符，最长 64 */
+const PLUGIN_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+export function isValidPluginId(pluginId: string): boolean {
+  return PLUGIN_ID_PATTERN.test(pluginId);
+}
+
+/** 入口校验：pluginId 将拼进 srcdoc/URL 路径段，不合规直接拒绝（防注入） */
+function assertValidPluginId(pluginId: string): void {
+  if (!isValidPluginId(pluginId)) {
+    throw new Error(`Invalid plugin id: ${pluginId}`);
+  }
+}
+
 /** 插件源基址（不含尾部斜杠） */
 export function pluginSourceBaseUrl(pluginId: string): string {
+  assertValidPluginId(pluginId);
   if (!isTauri()) {
     return `${window.location.origin}/plugin/${pluginId}`;
   }
@@ -39,6 +54,7 @@ const SOURCE_CSP =
  * - 纯浏览器 dev：与壳层同 origin，'self' 即插件源。
  */
 export function buildPluginHostSrcdoc(pluginId: string): string {
+  assertValidPluginId(pluginId);
   const base = pluginSourceBaseUrl(pluginId);
   const csp = isTauri()
     ? `default-src 'none'; script-src ${base}; style-src ${base} 'unsafe-inline'; connect-src ${base}; img-src ${base} data:; font-src ${base}`

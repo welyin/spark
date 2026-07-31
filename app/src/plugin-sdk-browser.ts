@@ -41,25 +41,6 @@ declare global {
   }
 }
 
-function resolveElectronAPI(): ElectronAPI | null {
-  if (window.electronAPI) {
-    return window.electronAPI;
-  }
-
-  // 同源 iframe 场景兜底：可经 parent 取宿主 API（对齐旧语义；
-  // 沙箱 iframe 为 opaque origin，正常不会走到这里）
-  try {
-    const parentApi = (window.parent as Window & { electronAPI?: ElectronAPI } | null)?.electronAPI;
-    if (parentApi) {
-      return parentApi;
-    }
-  } catch {
-    // Ignore cross-frame access errors and fall through.
-  }
-
-  return null;
-}
-
 /**
  * 按域构造插件 SDK 后端。
  *
@@ -69,7 +50,8 @@ function resolveElectronAPI(): ElectronAPI | null {
  * @throws 如果宿主 API 不可用
  */
 export function createPluginBackend(domain: string): PluginSDK {
-  const electronAPI = resolveElectronAPI();
+  // 沙箱化后后端只在壳层主窗口构造，无跨 frame 回退的合法场景
+  const electronAPI: ElectronAPI | undefined = window.electronAPI;
   if (!electronAPI) {
     throw new Error('electronAPI is not available in the renderer context');
   }

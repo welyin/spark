@@ -20,6 +20,17 @@ pub(crate) const CONVERSATION_KEY_PREFIX: &str = "msg:conv:";
 pub(crate) const MESSAGE_KEY_PREFIX: &str = "msg:item:";
 /// 消息 id 二级索引键前缀。
 pub(crate) const MESSAGE_ID_INDEX_PREFIX: &str = "msg:byid:";
+/// 应用消息键前缀（p2p-messages.md §20.6）。
+pub(crate) const APP_MESSAGE_KEY_PREFIX: &str = "msg:app:";
+
+/// 应用会话 id 前缀（`app:{pluginId}`，p2p-messages.md §20.1）。
+pub const APP_CONV_PREFIX: &str = "app:";
+/// 应用消息 summary 上限（字符，trim 后；建议值即强制值，§20.2）。
+pub const APP_SUMMARY_MAX_CHARS: usize = 200;
+/// 应用消息限流：每 (space, pluginId) 每窗口最多写入条数（§20.5）。
+pub const APP_MSG_RATE_LIMIT: u32 = 10;
+/// 应用消息限流窗口（毫秒，固定窗口）。
+pub const APP_MSG_RATE_WINDOW_MS: i64 = 60_000;
 
 /// 撤回窗口：发送后 2 分钟内允许撤回（ui-messages.md §9.1）。
 pub const RECALL_WINDOW_MS: i64 = 2 * 60_000;
@@ -30,7 +41,7 @@ pub const RECALL_WINDOW_MS: i64 = 2 * 60_000;
 /// 限制在 16 KiB 可保证整条信封远低于帧上限，同时拦截畸形超大正文。
 pub const MAX_TEXT_BYTES: usize = 16 * 1024;
 
-/// 会话类型（`"direct"` 单聊 / `"system"` 系统通知、组织公告）。
+/// 会话类型（`"direct"` 单聊 / `"system"` 系统通知、组织公告 / `"app"` 应用会话）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ConversationKind {
@@ -38,6 +49,8 @@ pub enum ConversationKind {
     Direct,
     /// 系统通知 / 组织公告。
     System,
+    /// 应用会话（服务号模型，p2p-messages.md §20.1）。
+    App,
 }
 
 /// 消息类型。
@@ -229,4 +242,74 @@ pub fn generate_message_id(now_ms: i64) -> String {
 pub(crate) fn generate_conversation_id(now_ms: i64) -> String {
     let seq = ID_SEQ.fetch_add(1, Ordering::Relaxed);
     format!("c{now_ms}-{seq}")
+}
+
+// ----------------------------------------------------------------------
+// 应用消息（服务号模型，p2p-messages.md §20）
+// ----------------------------------------------------------------------
+
+/// 应用消息卡片（message-card 富渲染视图；内核只透传不校验 viewId 指向）。
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppMessageCard {
+    /// 插件清单声明的 message-card 视图 id。
+    pub view_id: String,
+    /// 视图数据（插件自描述）。
+    #[serde(default)]
+    pub data: serde_json::Value,
+}
+
+/// 应用消息记录（键 `msg:app:{space}:{pluginId}:{createdAt:013}:{msgId}`，§20.2）。
+///
+/// 本地生成、本地消费：无投递语义，`status` 恒 `"local"`（本地状态集，§20.3）；
+/// 未读/已读由 `read` 标记与会话 `unreadCount` 表达，与人际会话一致。
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppMessageRecord {
+    /// 消息 id（内核生成，插件不得自报）。
+    pub id: String,
+    /// 所属插件 id（冗余落盘，恒等于键内 pluginId）。
+    pub plugin_id: String,
+    /// 纯文本摘要（= trim 后的 `payload.summary`，冗余提升供壳层原生渲染）。
+    pub summary: String,
+    /// 插件自描述 JSON（必须含非空字符串 `summary` 字段，校验见
+    /// [`crate::message::app::AppMessageService::build_app_message`]）。
+    pub payload: serde_json::Value,
+    /// 可选卡片（message-card 富渲染）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card: Option<AppMessageCard>,
+    /// 生成时间（epoch 毫秒）。
+    pub created_at: i64,
+    /// 本地状态集：恒 `"local"`（落库即终态）。
+    pub status: String,
+    /// 本地已读标记（`appMarkRead` 批量置位）。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub read: bool,
+}
+
+/// 应用会话 id（`app:{pluginId}`，确定性，§20.1）。
+pub fn app_conversation_id(plugin_id: &str) -> String {
+    format!("{APP_CONV_PREFIX}{plugin_id}")
+}
+
+/// pluginId 字符集校验（`^[a-z0-9][a-z0-9-]{0,63}$`——不含 `:`，
+/// 保证存储键分段无歧义；桥层域形式 `plugin:{id}` 须先 strip 前缀）。
+pub fn is_valid_plugin_id(plugin_id: &str) -> bool {
+    let bytes = plugin_id.as_bytes();
+    if bytes.is_empty() || bytes.len() > 64 {
+        return false;
+    }
+    bytes
+        .iter()
+        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'-')
+}
+
+/// 应用消息存储键（`createdAt` 13 位零填充，scan 字典序 = 时间序）。
+pub fn app_message_key(space: &str, plugin_id: &str, created_at: i64, msg_id: &str) -> String {
+    format!("{APP_MESSAGE_KEY_PREFIX}{space}:{plugin_id}:{created_at:013}:{msg_id}")
+}
+
+/// 指定应用会话的消息键前缀（scan 用）。
+pub fn app_message_prefix(space: &str, plugin_id: &str) -> String {
+    format!("{APP_MESSAGE_KEY_PREFIX}{space}:{plugin_id}:")
 }

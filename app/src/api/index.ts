@@ -278,7 +278,12 @@ export function createTauriApi(): ElectronAPI {
       togglePin: (spaceKey, convId) => call('message-toggle-pin', spaceKey, convId),
       toggleMute: (spaceKey, convId) => call('message-toggle-mute', spaceKey, convId),
       clear: (spaceKey, convId) => call('message-clear', spaceKey, convId),
-      deleteConversation: (spaceKey, convId) => call('message-delete-conversation', spaceKey, convId)
+      deleteConversation: (spaceKey, convId) => call('message-delete-conversation', spaceKey, convId),
+      // 应用消息（服务号模型，p2p-messages.md §20；SDK messages 域经桥注入 pluginId 调用）
+      appSend: (spaceKey, pluginId, payload, card) => call('message-app-send', spaceKey, pluginId, payload, card),
+      appList: (spaceKey, pluginId) => call('message-app-list', spaceKey, pluginId),
+      appMarkRead: (spaceKey, pluginId) => call('message-app-mark-read', spaceKey, pluginId),
+      appDeleteConversation: (spaceKey, pluginId) => call('message-app-delete-conversation', spaceKey, pluginId)
     },
     rootIdentity: {
       status: () => call('root-status'),

@@ -242,6 +242,81 @@ describe('bridge 握手', () => {
     await readyExpectation;
     harness.bridge.destroy();
   });
+
+  it('hello 自报身份与桥绑定不一致：握手拒绝 identity-mismatch', async () => {
+    const harness = createHarness();
+    const readyExpectation = expect(harness.bridge.ready).rejects.toThrow(/identity mismatch/);
+    await expect(connect(harness, { pluginId: 'evil-plugin' })).rejects.toThrow(/identity mismatch/);
+    await readyExpectation;
+    harness.bridge.destroy();
+  });
+
+  it('重复 hello 被忽略（握手已 settle，不二次应答）', async () => {
+    const harness = createHarness();
+    const { sdk } = await connect(harness);
+    const received: BridgeMessage[] = [];
+    harness.plugin.addEventListener('message', ((event: MessageEvent) => {
+      received.push(event.data as BridgeMessage);
+    }) as EventListener);
+
+    harness.host.inject(
+      { v: BRIDGE_PROTOCOL_VERSION, type: 'hello', sdkVersion: '1', pluginId: 'weibo-core', viewId: 'default' },
+      PLUGIN_ORIGIN,
+      harness.pluginWindowRef
+    );
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    // 不再回 ready，也不回 error
+    expect(received.filter((m) => m.type === 'ready' || m.type === 'error')).toHaveLength(0);
+    // 桥仍可正常调用
+    await sdk.docs.get('weibo_posts', 'post-1');
+    expect(harness.handler).toHaveBeenCalledWith('docs', 'get', ['weibo_posts', 'post-1']);
+    harness.bridge.destroy();
+  });
+
+  it('握手未 settle 时 destroy 以 destroyed 拒绝 ready（幂等）', async () => {
+    const harness = createHarness();
+    const readyExpectation = expect(harness.bridge.ready).rejects.toThrow('Plugin bridge destroyed');
+    harness.bridge.destroy();
+    await readyExpectation;
+    // 二次 destroy 无操作
+    harness.bridge.destroy();
+  });
+
+  it('destroy 后 ping 立即拒绝（不再等超时）', async () => {
+    const harness = createHarness();
+    const readyExpectation = expect(harness.bridge.ready).rejects.toThrow('Plugin bridge destroyed');
+    harness.bridge.destroy();
+    await expect(harness.bridge.ping(10_000)).rejects.toThrow('Plugin bridge destroyed');
+    await readyExpectation;
+  });
+});
+
+describe('bridge 握手前调用', () => {
+  it('握手完成前的 call 一律回 not-ready，不分发给 handler', async () => {
+    const harness = createHarness({ handshakeTimeoutMs: 200 });
+    const readyExpectation = expect(harness.bridge.ready).rejects.toThrow(/timed out/);
+    const received: BridgeMessage[] = [];
+    harness.plugin.addEventListener('message', ((event: MessageEvent) => {
+      received.push(event.data as BridgeMessage);
+    }) as EventListener);
+
+    // 插件侧尚未 hello 就发 call：宿主必须拒绝（避免未授权窗口期）
+    harness.host.inject(
+      { v: BRIDGE_PROTOCOL_VERSION, type: 'call', id: 'c-early', module: 'docs', method: 'get', args: ['c', 'i'] },
+      PLUGIN_ORIGIN,
+      harness.pluginWindowRef
+    );
+    await waitFor(() => received.length === 1);
+    expect(received[0]).toMatchObject({
+      type: 'result',
+      id: 'c-early',
+      ok: false,
+      error: { code: 'not-ready' }
+    });
+    expect(harness.handler).not.toHaveBeenCalled();
+    await readyExpectation;
+    harness.bridge.destroy();
+  });
 });
 
 describe('bridge call/result 往返', () => {
