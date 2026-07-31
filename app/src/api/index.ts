@@ -190,7 +190,10 @@ export function createTauriApi(): ElectronAPI {
       install: (pluginId: string) => call('plugin-market-install', pluginId),
       upgrade: (pluginId: string) => call('plugin-market-upgrade', pluginId),
       setEnabled: (pluginId: string, enabled: boolean) =>
-        call('plugin-market-set-enabled', pluginId, enabled)
+        call('plugin-market-set-enabled', pluginId, enabled),
+      // 仓库锚定安装（plugin-dist）：先 resolveRepo 展示声明文件，确认后 installFromRepo
+      resolveRepo: (id: string) => call('plugin-market-resolve-repo', id),
+      installFromRepo: (id: string) => call('plugin-market-install-from-repo', id)
     },
     organization: {
       listMine: () => call('org-list-mine'),

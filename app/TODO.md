@@ -81,6 +81,7 @@
 
 ## 应用与市场（ui-apps-market）
 
+- 仓库锚定安装（阶段 C 波次 1） | 已落地：协议规格 wiki/protocol/plugin-dist.md；`src-tauri/src/market/repo.rs`（id 解析/规范化、三托管平台 URL 模板、gh-proxy 镜像展开、声明文件双源交叉、id 一致性校验、签名可选 trust=repo-anchored、声明缓存内存 10min + sled `plugin:repo:<id>`）；命令 `plugin-market-resolve-repo` / `plugin-market-install-from-repo`；市场页「按仓库地址安装」入口（AppMarketPanel 对话框：解析→预览名称/图标/简介/权限→授权安装）；目录外已装插件按声明缓存合成市场条目；插件源链路支持 repo id（前端 encodeURIComponent 单段传输，plugin_src.rs/vite 中间件解码） | 待做：广播索引（plugin-announce topic + PoW/TTL + relay 资历制，波次 2）；repo 插件升级/更新探测（现 upgrade 只认内置目录）；sled 声明缓存无刷新策略（装过的版本会长期命中缓存）；jsDelivr 源未消费
 - `src/mock/apps.ts:11` | 伪造 6 个市场应用（论坛/投票/日历/任务看板/朋友圈/文件） | 真实市场仅 weibo-core，UI 太空；仅 mock 模式（`npm run tauri:mock`，`VITE_MOCK=1`）与 `pluginMarket.list()` 结果合并展示（`AppsPage.vue` mergeItems / `GlobalSearch.vue`，开关 `src/mock/mode.ts`），待市场数据充足后整体删除
 - `src/mock/apps.ts:125` | mock 应用安装/启用状态存 localStorage（`spark:mock-apps-state`，默认预装日历+任务看板） | 「打开」为 toast 占位不走插件链路；安装/启停在 `AppsPage.vue` 按 `isMockApp` 分支处理；待真实市场接口替换
 - `src/components/apps/apps-store.ts:39` | 市场细分分类前端映射 | 市场条目只有 `foundation`/`business` 粗分类，§3.3 的办公/社交/工具/其他按名称+简介关键字启发式映射；待市场数据带分类字段后删除

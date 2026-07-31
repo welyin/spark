@@ -20,8 +20,12 @@ import type { PluginManifest, PluginViewBootstrap } from '../../packages/plugin-
 /** 插件 id 白名单（与内核 §20 规格一致）：小写字母/数字/连字符，首字符非连字符，最长 64 */
 const PLUGIN_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
+/** 仓库锚定 id（plugin-dist §1）：{host}/{owner}/{repo}[/path]，host 限三大托管平台 */
+const REPO_ID_PATTERN =
+  /^(github\.com|gitlab\.com|gitee\.com)(\/[a-z0-9._-]{1,100}){2}(\/[a-z0-9._-]{1,64}){0,8}$/;
+
 export function isValidPluginId(pluginId: string): boolean {
-  return PLUGIN_ID_PATTERN.test(pluginId);
+  return PLUGIN_ID_PATTERN.test(pluginId) || REPO_ID_PATTERN.test(pluginId);
 }
 
 /** 入口校验：pluginId 将拼进 srcdoc/URL 路径段，不合规直接拒绝（防注入） */
@@ -31,14 +35,16 @@ function assertValidPluginId(pluginId: string): void {
   }
 }
 
-/** 插件源基址（不含尾部斜杠） */
+/** 插件源基址（不含尾部斜杠）；repo id 含 `/`，经 encodeURIComponent 收成单段传输，
+ *  源服务（plugin_src.rs / vite dev 中间件）解码还原；旧短名 id 编码后为恒等 */
 export function pluginSourceBaseUrl(pluginId: string): string {
   assertValidPluginId(pluginId);
+  const encoded = encodeURIComponent(pluginId);
   if (!isTauri()) {
-    return `${window.location.origin}/plugin/${pluginId}`;
+    return `${window.location.origin}/plugin/${encoded}`;
   }
   const isWindows = navigator.userAgent.includes('Windows');
-  return isWindows ? `http://plugin.localhost/${pluginId}` : `plugin://localhost/${pluginId}`;
+  return isWindows ? `http://plugin.localhost/${encoded}` : `plugin://localhost/${encoded}`;
 }
 
 /** 源服务统一 CSP 口径（与 plugin_src.rs PLUGIN_CSP 一致） */

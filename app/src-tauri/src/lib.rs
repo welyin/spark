@@ -240,6 +240,9 @@ pub fn run() {
             commands::market::plugin_market_install,
             commands::market::plugin_market_upgrade,
             commands::market::plugin_market_set_enabled,
+            // 插件市场·仓库锚定安装（plugin-dist）
+            commands::market::plugin_market_resolve_repo,
+            commands::market::plugin_market_install_from_repo,
             // 系统桥接（未读角标 → dock/任务栏徽标）
             commands::system::system_set_badge,
         ])

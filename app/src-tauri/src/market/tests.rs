@@ -15,6 +15,7 @@ use super::*;
 mod e2e;
 mod install;
 mod reconcile;
+mod repo;
 mod updates;
 mod wire;
 
@@ -24,6 +25,7 @@ struct Fixture {
     release_root: PathBuf,
     source_root: PathBuf,
     packages_root: PathBuf,
+    repo_cache_dir: PathBuf,
     state_file: PathBuf,
     pem: String,
     signing_key: ed25519_dalek::SigningKey,
@@ -37,6 +39,7 @@ impl Fixture {
             release_root: tmp.path().join("dist-market/plugins"),
             source_root: tmp.path().join("plugins-src"),
             packages_root: tmp.path().join("data/plugins"),
+            repo_cache_dir: tmp.path().join("data/plugin-repo-cache"),
             state_file: tmp.path().join("data/plugin-market-state.json"),
             pem,
             signing_key,
@@ -51,6 +54,7 @@ impl Fixture {
                 packages_root: self.packages_root.clone(),
                 local_release_roots: vec![self.release_root.clone()],
                 local_source_roots: vec![self.source_root.clone()],
+                repo_cache_dir: self.repo_cache_dir.clone(),
             },
             vec![self.pem.clone()],
         )

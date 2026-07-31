@@ -54,16 +54,28 @@ pub(crate) fn fetch_text_smart(url: &str) -> Result<String, String> {
     if url.starts_with("http://") {
         return Err("Insecure plugin manifest URL is not allowed".to_string());
     }
+    fetch_text_http_optional(url)?.ok_or_else(|| format!("Request failed: {url}, status=404"))
+}
+
+/// https GET 文本（repo.rs 仓库锚定链路用）：404 → Ok(None)，其余 >=400 报错。
+pub(crate) fn fetch_text_http_optional(url: &str) -> Result<Option<String>, String> {
+    if url.starts_with("http://") {
+        return Err("Insecure plugin manifest URL is not allowed".to_string());
+    }
     let response = http_client()
         .get(url)
         .send()
         .map_err(|e| format!("Request failed: {url}: {e}"))?;
     let status = response.status();
+    if status.as_u16() == 404 {
+        return Ok(None);
+    }
     if status.as_u16() >= 400 {
         return Err(format!("Request failed: {url}, status={status}"));
     }
     response
         .text()
+        .map(Some)
         .map_err(|e| format!("Request failed: {url}: {e}"))
 }
 

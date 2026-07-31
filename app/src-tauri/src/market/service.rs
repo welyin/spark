@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use super::catalog::{PluginCatalogItem, list_plugin_catalog};
 use super::permissions::{basic_permissions, normalize_declared_permissions, resolve_granted_permissions};
+use super::repo::CachedRepoDeclaration;
 use super::sources::{compute_file_sha256, file_size, normalize_file_url, now_millis, to_file_url};
 use super::state::{read_state_file, write_state_file};
 use super::types::{
@@ -21,6 +22,8 @@ pub struct PluginMarketService {
     pub(crate) trust_keys: Vec<String>,
     pub(crate) state: PersistedPluginState,
     pub(crate) update_probes: BTreeMap<String, PluginUpdateProbe>,
+    /// 仓库声明文件内存缓存（TTL 10 分钟；sled 持久化见 repo.rs）
+    pub(crate) repo_decl_cache: BTreeMap<String, CachedRepoDeclaration>,
 }
 
 impl PluginMarketService {
@@ -30,6 +33,7 @@ impl PluginMarketService {
             trust_keys,
             state: PersistedPluginState::default(),
             update_probes: BTreeMap::new(),
+            repo_decl_cache: BTreeMap::new(),
         }
     }
 
@@ -125,6 +129,7 @@ impl PluginMarketService {
             installed_at: 0,
             enabled: true,
             granted_permissions: resolve_granted_permissions(&item.permissions),
+            trust: None,
         })
     }
 
@@ -181,6 +186,7 @@ impl PluginMarketService {
                             installed_at: now_millis(),
                             enabled: true,
                             granted_permissions: granted,
+                            trust: None,
                         },
                     );
                     self.update_probes.insert(
@@ -218,6 +224,7 @@ impl PluginMarketService {
                     installed_at: now_millis(),
                     enabled: true,
                     granted_permissions: resolve_granted_permissions(&item.permissions),
+                    trust: None,
                 },
             );
             self.update_probes.insert(

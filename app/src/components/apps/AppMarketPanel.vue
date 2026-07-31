@@ -14,10 +14,49 @@
         :prefix-icon="Search"
       />
 
+      <!-- 仓库锚定安装入口（plugin-dist）：输入仓库地址 → 解析声明文件 → 确认安装 -->
+      <div class="market-repo-entry">
+        <el-button size="small" @click="openRepoDialog">按仓库地址安装</el-button>
+      </div>
+
       <el-tabs v-model="activeCategory" class="market-tabs">
         <el-tab-pane v-for="category in categoryTabs" :key="category" :label="category" :name="category" />
       </el-tabs>
     </div>
+
+    <el-dialog v-model="repoDialogVisible" title="按仓库地址安装" width="480">
+      <div class="repo-install-dialog">
+        <el-input
+          v-model="repoIdInput"
+          placeholder="如 github.com/owner/repo（支持 gitlab.com / gitee.com）"
+          clearable
+          @keyup.enter="resolveRepo"
+        >
+          <template #append>
+            <el-button :loading="repoResolving" @click="resolveRepo">解析</el-button>
+          </template>
+        </el-input>
+        <el-alert v-if="repoError" :title="repoError" type="error" :closable="false" show-icon />
+        <div v-if="repoPreview" class="repo-preview">
+          <div class="repo-preview-head">
+            <img v-if="repoPreview.icon" :src="repoPreview.icon" class="repo-preview-icon" alt="" />
+            <span v-else class="repo-preview-icon repo-preview-icon-fallback">{{ repoPreview.name.slice(0, 1) }}</span>
+            <div>
+              <h3>{{ repoPreview.name }} <el-tag size="small" effect="plain">v{{ repoPreview.version }}</el-tag></h3>
+              <p class="repo-preview-id">{{ repoPreview.id }}</p>
+            </div>
+          </div>
+          <p class="repo-preview-summary">{{ repoPreview.summary }}</p>
+          <p v-if="repoPreview.permissions.length > 0" class="repo-preview-permissions">
+            声明权限：{{ repoPreview.permissions.join('、') }}
+          </p>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="repoDialogVisible = false">取消</el-button>
+        <el-button type="primary" :disabled="!repoPreview" @click="confirmRepoInstall">确认安装</el-button>
+      </template>
+    </el-dialog>
 
     <el-empty v-if="filteredItems.length === 0" description="没有匹配的应用" />
 
@@ -82,7 +121,7 @@
 <script lang="ts">
 import { computed, defineComponent, ref, type PropType } from 'vue';
 import { ArrowLeft, Search } from '@element-plus/icons-vue';
-import type { PluginMarketItemDto } from '../../api/types';
+import type { PluginMarketItemDto, RepoPluginDeclarationDto } from '../../api/types';
 import { MARKET_CATEGORIES, appIconBackground, marketCategoryOf, marketItemMatches } from './apps-store';
 
 export default defineComponent({
@@ -90,10 +129,50 @@ export default defineComponent({
   props: {
     items: { type: Array as PropType<PluginMarketItemDto[]>, required: true }
   },
-  emits: ['back', 'detail', 'install'],
+  emits: ['back', 'detail', 'install', 'install-repo'],
   setup(props, { emit }) {
     const keyword = ref('');
     const activeCategory = ref<string>('全部');
+
+    // 仓库锚定安装（plugin-dist）：解析 spark-plugin.json 预览，确认后由父组件安装
+    const repoDialogVisible = ref(false);
+    const repoIdInput = ref('');
+    const repoResolving = ref(false);
+    const repoError = ref('');
+    const repoPreview = ref<RepoPluginDeclarationDto | null>(null);
+
+    const openRepoDialog = () => {
+      repoIdInput.value = '';
+      repoError.value = '';
+      repoPreview.value = null;
+      repoDialogVisible.value = true;
+    };
+
+    const resolveRepo = async () => {
+      const id = repoIdInput.value.trim();
+      if (!id) {
+        return;
+      }
+      repoResolving.value = true;
+      repoError.value = '';
+      repoPreview.value = null;
+      try {
+        repoPreview.value = await window.electronAPI.pluginMarket.resolveRepo(id);
+      } catch (error) {
+        repoError.value = `解析失败：${error}`;
+      } finally {
+        repoResolving.value = false;
+      }
+    };
+
+    const confirmRepoInstall = () => {
+      if (!repoPreview.value) {
+        return;
+      }
+      const declaration = repoPreview.value;
+      repoDialogVisible.value = false;
+      emit('install-repo', declaration);
+    };
 
     const categoryTabs = ['全部', ...MARKET_CATEGORIES] as const;
 
@@ -132,6 +211,14 @@ export default defineComponent({
       groupedItems,
       marketCategoryOf,
       appIconBackground,
+      repoDialogVisible,
+      repoIdInput,
+      repoResolving,
+      repoError,
+      repoPreview,
+      openRepoDialog,
+      resolveRepo,
+      confirmRepoInstall,
       ArrowLeft,
       Search,
       emit

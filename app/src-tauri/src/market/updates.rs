@@ -64,8 +64,9 @@ impl PluginMarketService {
     }
 
     /// TS `listMarket`：目录 + 安装态 + 探测聚合；未安装时 dev-source 兜底展示。
+    /// 扩展（plugin-dist 波次 1）：目录外的仓库锚定已装插件按缓存声明文件合成条目。
     pub fn list_market(&self) -> Vec<PluginMarketItem> {
-        list_plugin_catalog()
+        let mut items: Vec<PluginMarketItem> = list_plugin_catalog()
             .into_iter()
             .map(|item| {
                 let installed = self
@@ -91,6 +92,28 @@ impl PluginMarketService {
                     catalog: item,
                 }
             })
-            .collect()
+            .collect();
+
+        // 仓库锚定安装（无内置目录条目）的已装插件：名称/简介/分类取自声明文件缓存
+        for installed in self.state.installed.values() {
+            if items.iter().any(|item| item.catalog.id == installed.plugin_id) {
+                continue;
+            }
+            let probe = self.update_probes.get(&installed.plugin_id);
+            items.push(PluginMarketItem {
+                catalog: super::repo::synthesize_catalog_entry(self, installed),
+                installed: true,
+                enabled: installed.enabled,
+                installed_version: Some(installed.version.clone()),
+                latest_version: probe.and_then(|p| p.latest_version.clone()),
+                update_available: probe.is_some_and(|p| p.update_available),
+                last_checked_at: probe.map(|p| p.checked_at),
+                last_check_reason: probe
+                    .map(|p| p.reason.clone())
+                    .unwrap_or_else(|| "not-checked".to_string()),
+                granted_permissions: installed.granted_permissions.clone(),
+            });
+        }
+        items
     }
 }

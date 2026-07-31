@@ -27,6 +27,7 @@ fn e2e_real_release_artifacts() {
         local_release_roots: vec![PathBuf::from(release_root)],
         // 不挂源码目录：隔离验证"已签名 bundle"路径，不混 bundled-dev-source
         local_source_roots: vec![],
+        repo_cache_dir: tmp.path().join("data/plugin-repo-cache"),
     };
 
     // 反：内置默认公钥（与本机 .secrets 签名钥不对应）必须拒装该产物

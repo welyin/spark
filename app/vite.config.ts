@@ -55,7 +55,22 @@ function pluginSourceMiddleware(): Plugin {
           res.end('bad plugin path');
           return;
         }
-        const [pluginId, ...rest] = segments;
+        const [rawPluginId, ...rest] = segments;
+        // repo id（plugin-dist §1）经 encodeURIComponent 收成单段传输，此处解码还原；
+        // 解码后仍须拒 `..` 与反斜杠（编码可绕过上方逐段校验，双保险）
+        let pluginId = rawPluginId;
+        try {
+          pluginId = decodeURIComponent(rawPluginId);
+        } catch {
+          res.statusCode = 400;
+          res.end('bad plugin id encoding');
+          return;
+        }
+        if (pluginId.includes('..') || pluginId.includes('\\')) {
+          res.statusCode = 400;
+          res.end('bad plugin path');
+          return;
+        }
         const relPath = rest.join('/');
         const filePath = path.join(pluginsRoot, pluginId, 'dist', relPath);
         // join 后仍须落在 dist 根内（双保险，段校验已拒 ..）

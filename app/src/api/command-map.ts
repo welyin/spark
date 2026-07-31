@@ -115,6 +115,8 @@ export const COMMAND_MAP: Record<string, string> = {
   'plugin-market-install': 'plugin_market_install',
   'plugin-market-upgrade': 'plugin_market_upgrade',
   'plugin-market-set-enabled': 'plugin_market_set_enabled',
+  'plugin-market-resolve-repo': 'plugin_market_resolve_repo',
+  'plugin-market-install-from-repo': 'plugin_market_install_from_repo',
   // 系统桥接（未读角标 → dock/任务栏徽标）
   'system-set-badge': 'system_set_badge'
 };
@@ -201,5 +203,7 @@ export const ARG_NAMES: Record<string, string[]> = {
   'plugin-market-install': ['pluginId'],
   'plugin-market-upgrade': ['pluginId'],
   'plugin-market-set-enabled': ['pluginId', 'enabled'],
+  'plugin-market-resolve-repo': ['id'],
+  'plugin-market-install-from-repo': ['id'],
   'system-set-badge': ['count']
 };

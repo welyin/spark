@@ -22,6 +22,7 @@
 pub mod catalog;
 mod install;
 pub mod permissions;
+pub mod repo;
 pub mod semver;
 mod service;
 mod sources;
@@ -49,6 +50,8 @@ pub struct MarketPaths {
     pub local_release_roots: Vec<PathBuf>,
     /// 插件源码目录候选根（各 root/<pluginId>/ 下找 manifest.ts/js）
     pub local_source_roots: Vec<PathBuf>,
+    /// 仓库锚定声明文件缓存 sled 目录（repo.rs，键 plugin:repo:<id>）
+    pub repo_cache_dir: PathBuf,
 }
 
 /// 词法归一化路径（折叠 `.`/`..`，TS path.normalize 同款；不做 symlink 解析）。
@@ -93,6 +96,7 @@ impl MarketPaths {
             packages_root: app_data_dir.join("plugins"),
             local_release_roots: dedupe(&release_roots),
             local_source_roots: dedupe(&source_roots),
+            repo_cache_dir: app_data_dir.join("plugin-repo-cache"),
         }
     }
 }

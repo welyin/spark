@@ -28,6 +28,7 @@
       @back="view = 'list'"
       @detail="(item) => openDetail(item)"
       @install="installApp"
+      @install-repo="installRepoPlugin"
     />
 
     <!-- 应用详情：全 app 统一抽屉（无头部小标题，右上角自定义关闭），不再整页切换；
@@ -60,7 +61,7 @@
 import { computed, defineComponent, onMounted, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Close } from '@element-plus/icons-vue';
-import type { PluginMarketItemDto } from '../api/types';
+import type { PluginMarketItemDto, RepoPluginDeclarationDto } from '../api/types';
 import { currentSpace } from '../stores/current-space';
 import { enablePluginInstance, isPluginInstanceDisabled, pluginInstanceKey } from '../plugin-disabled';
 import { isAdmin, refreshOrganizations } from '../stores/org-membership';
@@ -276,8 +277,36 @@ export default defineComponent({
       }
     };
 
-    const upgradeApp = async (item: PluginMarketItemDto) => {
-      if (isMockApp(item)) {
+    // 仓库锚定安装（plugin-dist）：声明文件已在前置解析中展示，此处做权限确认后安装
+    const installRepoPlugin = async (declaration: RepoPluginDeclarationDto) => {
+      if (declaration.permissions.length > 0) {
+        const labels = declaration.permissions
+          .map((permission) => `${permissionLabel(permission)}（${permission}）`)
+          .join('、');
+        try {
+          await ElMessageBox.confirm(
+            `该应用声明以下权限：${labels}。安装即视为授权，运行时可越权调用将被系统拦截。`,
+            `授权安装 ${declaration.name}`,
+            { confirmButtonText: '授权并安装', cancelButtonText: '取消', type: 'warning' }
+          );
+        } catch {
+          return; // 用户取消授权
+        }
+      }
+      setBusy(declaration.id, 'install');
+      try {
+        await window.electronAPI.pluginMarket.installFromRepo(declaration.id);
+        await refresh();
+        ElMessage.success('应用安装成功，启用后即可使用');
+        notifyPluginInstalled(spaceKeyOf(currentSpace.value), declaration.name);
+      } catch (error) {
+        ElMessage.error(`应用安装失败：${error}`);
+      } finally {
+        setBusy(declaration.id, '');
+      }
+    };
+
+    const upgradeApp = async (item: PluginMarketItemDto) => {      if (isMockApp(item)) {
         ElMessage.info('演示应用已是最新版本');
         return;
       }
@@ -374,6 +403,7 @@ export default defineComponent({
       openApp,
       openDetail,
       installApp,
+      installRepoPlugin,
       upgradeApp,
       toggleEnabled,
       requestEnable

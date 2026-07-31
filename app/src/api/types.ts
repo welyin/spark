@@ -125,6 +125,22 @@ export type InstalledPluginStateDto = {
   installedAt: number;
   enabled: boolean;
   grantedPermissions: PluginPermission[];
+  /** 信任层级（仓库锚定安装，plugin-dist §4.2）：'signed' | 'repo-anchored'；缺省 = 签名信任链 */
+  trust?: string;
+};
+
+/** 仓库声明文件 spark-plugin.json（plugin-dist §2；resolveRepo 出参，id 已规范化） */
+export type RepoPluginDeclarationDto = {
+  id: string;
+  name: string;
+  icon: string;
+  summary: string;
+  category: string;
+  version: string;
+  releaseAssetPattern: string;
+  permissions: string[];
+  mirrors: string[];
+  sdkVersion: string;
 };
 
 export type OrgView = {
@@ -437,6 +453,10 @@ export type ElectronAPI = {
     install: (pluginId: string) => Promise<InstalledPluginStateDto>;
     upgrade: (pluginId: string) => Promise<InstalledPluginStateDto>;
     setEnabled: (pluginId: string, enabled: boolean) => Promise<InstalledPluginStateDto>;
+    /** 仓库锚定安装前置解析：拉取并校验 spark-plugin.json（plugin-dist §4.1） */
+    resolveRepo: (id: string) => Promise<RepoPluginDeclarationDto>;
+    /** 仓库锚定安装（plugin-dist §4.2） */
+    installFromRepo: (id: string) => Promise<InstalledPluginStateDto>;
   };
   organization: {
     listMine: () => Promise<OrgView[]>;

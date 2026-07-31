@@ -180,6 +180,29 @@ fn respond(status: StatusCode, mime: &str, body: Vec<u8>) -> Response<Vec<u8>> {
         .expect("plugin:// response build failed")
 }
 
+/// 百分号解码 UTF-8（仓库锚定 repo id 含 `/`，前端经 encodeURIComponent 收成
+/// 单段传输；非法 % 序列 / 非 UTF-8 返回 None）。
+/// 只作用于 pluginId 段：rel path 保持既有行为不解码。
+fn percent_decode(input: &str) -> Option<String> {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            if index + 2 >= bytes.len() {
+                return None;
+            }
+            let hex = std::str::from_utf8(&bytes[index + 1..index + 3]).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            index += 3;
+        } else {
+            out.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
 /// 解析插件资源 URL。
 ///
 /// 跨平台 URL 形态（与 Tauri asset 协议同款 workaround，见 wry
@@ -202,6 +225,16 @@ pub fn handle_plugin_request(data_dir: &Path, uri: &tauri::http::Uri) -> Respons
     } else {
         // 兼容形态：plugin://<pluginId>/<path>
         (host.clone(), raw_path.to_string())
+    };
+
+    // repo id 经 encodeURIComponent 传输（plugin-source.ts），此处还原；
+    // 解码后的段校验在 resolve_plugin_resource 的 sanitize_segments 完成
+    let Some(plugin_id) = percent_decode(&plugin_id) else {
+        return respond(
+            StatusCode::BAD_REQUEST,
+            "text/plain; charset=utf-8",
+            b"plugin:// invalid percent-encoded plugin id".to_vec(),
+        );
     };
 
     if plugin_id.is_empty() || rel_path.is_empty() {

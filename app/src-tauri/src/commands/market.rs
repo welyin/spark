@@ -13,6 +13,7 @@
 
 use std::sync::Arc;
 
+use crate::market::repo::SparkPluginDeclaration;
 use crate::market::types::{InstalledPluginState, PluginMarketItem, PluginUpdateProbe};
 use crate::market::PluginMarketService;
 use crate::MarketState;
@@ -72,4 +73,24 @@ pub async fn plugin_market_set_enabled(
     enabled: bool,
 ) -> Result<InstalledPluginState, String> {
     run_market(state, move |svc| svc.set_enabled(&plugin_id, enabled)).await
+}
+
+/// 仓库锚定安装前置解析（plugin-dist §4.1）：拉取并校验 spark-plugin.json，
+/// 供前端「按仓库地址安装」确认前展示名称/图标/简介/权限。
+#[tauri::command]
+pub async fn plugin_market_resolve_repo(
+    state: tauri::State<'_, MarketState>,
+    id: String,
+) -> Result<SparkPluginDeclaration, String> {
+    run_market(state, move |svc| svc.resolve_repo_plugin(&id)).await
+}
+
+/// 仓库锚定安装（plugin-dist §4.2）：声明验证 → 派生资产 → 签名可选验签 /
+/// 双源交叉 → 复用现有 sha256 校验下载链路。
+#[tauri::command]
+pub async fn plugin_market_install_from_repo(
+    state: tauri::State<'_, MarketState>,
+    id: String,
+) -> Result<InstalledPluginState, String> {
+    run_market(state, move |svc| svc.install_from_repo(&id)).await
 }

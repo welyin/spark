@@ -44,7 +44,7 @@ impl PluginMarketService {
 
     /// TS `downloadAndVerifyAsset`：落 <packages_root>/<id>/packages/<fileName>，
     /// file:// 复制、https 下载，随后校验 sha256 与 size。
-    fn download_and_verify_asset(
+    pub(crate) fn download_and_verify_asset(
         &self,
         asset: &PluginAsset,
         plugin_id: &str,
@@ -91,6 +91,7 @@ impl PluginMarketService {
             installed_at: now_millis(),
             enabled: true,
             granted_permissions: Self::resolve_declared_permissions(&item, Some(&manifest)),
+            trust: None,
         };
 
         self.state

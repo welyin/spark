@@ -205,3 +205,53 @@
   margin-top: 8px;
 }
 
+
+/* 仓库锚定安装入口与预览（plugin-dist；样式复用市场卡片语言） */
+.market-repo-entry {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+.repo-install-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.repo-preview-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.repo-preview-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  object-fit: cover;
+}
+.repo-preview-icon-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--el-color-primary-light-5);
+  color: #fff;
+  font-size: 18px;
+}
+.repo-preview-head h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.repo-preview-id {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  word-break: break-all;
+}
+.repo-preview-summary {
+  margin: 8px 0 0;
+  font-size: 13px;
+}
+.repo-preview-permissions {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
