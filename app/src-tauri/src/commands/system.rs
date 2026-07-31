@@ -20,6 +20,30 @@ pub fn system_set_badge(window: tauri::Window, count: i64) {
     let _ = result;
 }
 
+// ------------------------------------------------------------------
+// HTTP 代理设置：读写 <data_dir>/spark-proxy.json 并同步注入进程环境变量
+// （持久化/校验/env 语义见 crate::proxy 模块注释）。
+// ------------------------------------------------------------------
+
+/// 读取当前代理配置：未设置（或文件损坏）返回 None。
+#[tauri::command]
+pub fn system_get_proxy(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let data_dir = crate::resolve_data_dir(&app).map_err(|e| e.to_string())?;
+    Ok(crate::proxy::load_proxy(&data_dir))
+}
+
+/// 设置代理：空串=关闭；否则须为 host:port（校验见 proxy::validate_proxy）。
+/// 保存后立即更新环境变量——后续新建的 reqwest 客户端生效；市场 OnceLock
+/// 客户端与 updater 客户端等已建立连接不追溯，需重启应用（前端已提示）。
+#[tauri::command]
+pub fn system_set_proxy(app: tauri::AppHandle, proxy: String) -> Result<(), String> {
+    let validated = crate::proxy::validate_proxy(&proxy)?;
+    let data_dir = crate::resolve_data_dir(&app).map_err(|e| e.to_string())?;
+    crate::proxy::save_proxy(&data_dir, validated.as_deref())?;
+    crate::proxy::apply_proxy_env(validated.as_deref());
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::badge_value;

@@ -26,6 +26,7 @@
     detail-mode="drawer"
     :root-id="rootStatus.rootId ?? ''"
     :p2p-info="p2pInfo"
+    show-proxy
     @refresh="refreshNodeInfo"
   />
   <DevicesModule

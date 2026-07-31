@@ -125,6 +125,9 @@ export const COMMAND_MAP: Record<string, string> = {
   'plugin-market-announce-get': 'plugin_market_announce_get',
   // 系统桥接（未读角标 → dock/任务栏徽标）
   'system-set-badge': 'system_set_badge',
+  // HTTP 代理设置（updater/市场链路 GitHub 直连失败的规避，见 src-tauri proxy.rs）
+  'system-get-proxy': 'system_get_proxy',
+  'system-set-proxy': 'system_set_proxy',
   // 主程序自动更新（tauri-plugin-updater + GitHub Releases 清单）
   'updater-status': 'updater_status',
   'updater-check': 'updater_check',
@@ -221,5 +224,6 @@ export const ARG_NAMES: Record<string, string[]> = {
   'plugin-market-import-local': ['path', 'expectedSha256', 'confirmOverwrite'],
   'plugin-market-announce-publish': ['input'],
   'plugin-market-announce-get': ['id'],
-  'system-set-badge': ['count']
+  'system-set-badge': ['count'],
+  'system-set-proxy': ['proxy']
 };

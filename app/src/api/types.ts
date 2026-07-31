@@ -704,6 +704,10 @@ export type ElectronAPI = {
   system: {
     /** 未读角标 → 系统徽标（dock/任务栏）；平台不支持时命令侧静默，始终 resolve */
     setBadge: (count: number) => Promise<void>;
+    /** 当前 HTTP 代理（"host:port"），未设置返回 null */
+    getProxy: () => Promise<string | null>;
+    /** 设置 HTTP 代理（host:port，空串关闭）；已建立的连接需重启应用后生效 */
+    setProxy: (proxy: string) => Promise<void>;
   };
   dataManagement: {
     usage: () => Promise<DataUsageReportDto>;

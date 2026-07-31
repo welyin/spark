@@ -35,7 +35,8 @@
       <template #header>
         <div class="network-detail-header">
           <h2>{{ currentCategory.label }}</h2>
-          <span class="network-advanced">
+          <!-- 高级模式只作用于 P2P 状态分类，代理设置页隐藏 -->
+          <span v-if="activeCategory !== 'proxy'" class="network-advanced">
             高级模式
             <el-switch :model-value="advanced" size="small" @change="toggleAdvanced" />
           </span>
@@ -106,6 +107,9 @@
         />
       </template>
 
+      <!-- 网络代理（HTTP 代理设置，真实生效；仅 show-proxy 时该分类存在） -->
+      <ProxySettings v-else-if="activeCategory === 'proxy'" />
+
       <!-- 同步状态 -->
       <template v-else>
         <div class="network-simple">
@@ -121,15 +125,16 @@
 <script lang="ts">
 import { computed, defineComponent, onMounted, ref, type Component, type PropType } from 'vue';
 import { ElMessage } from 'element-plus';
-import { Connection, Key, Refresh, Share } from '@element-plus/icons-vue';
+import { Connection, Key, Link, Refresh, Share } from '@element-plus/icons-vue';
 import { errorMessage } from '../../utils/ipc';
 import NodeIdentityInfo, { type NodeIdentityRow } from '../common/NodeIdentityInfo.vue';
+import ProxySettings from '../settings/ProxySettings.vue';
 import type { P2pInfoDto as P2PInfo } from '../../api';
 import MineDetailContainer from './MineDetailContainer.vue';
 
 type DhtMode = 'off' | 'client' | 'server';
 
-type CategoryKey = 'identity' | 'connection' | 'dht' | 'sync';
+type CategoryKey = 'identity' | 'connection' | 'dht' | 'sync' | 'proxy';
 
 /** 高级模式开关持久化 key（localStorage） */
 const ADVANCED_KEY = 'spark:network-advanced';
@@ -144,12 +149,14 @@ function readAdvanced(): boolean {
 
 export default defineComponent({
   name: 'NetworkModule',
-  components: { NodeIdentityInfo, MineDetailContainer },
+  components: { NodeIdentityInfo, MineDetailContainer, ProxySettings },
   props: {
     rootId: { type: String, default: '' },
     p2pInfo: { type: Object as PropType<P2PInfo>, required: true },
     /** 详情展示方式：column=第四栏（个人中心），drawer=抽屉（设置页） */
-    detailMode: { type: String as PropType<'column' | 'drawer'>, default: 'column' }
+    detailMode: { type: String as PropType<'column' | 'drawer'>, default: 'column' },
+    /** 是否显示「网络代理」分类（HTTP 代理设置，真实生效；仅系统设置页开启） */
+    showProxy: { type: Boolean, default: false }
   },
   emits: ['refresh'],
   setup(props, { emit }) {
@@ -171,17 +178,24 @@ export default defineComponent({
     const connected = computed(() => props.p2pInfo.started && props.p2pInfo.connectedPeers.length > 0);
     const syncHealthy = computed(() => props.p2pInfo.sparkSyncSubscribers.length > 0);
 
-    const categories = computed<Array<{ key: CategoryKey; label: string; summary: string; icon: Component }>>(() => [
-      { key: 'identity', label: '节点信息', summary: props.rootId ? '已登录' : '未登录', icon: Key },
-      {
-        key: 'connection',
-        label: '连接状态',
-        summary: connected.value ? `已连接 · 节点 ${props.p2pInfo.connectedPeers.length} 个` : '未连接',
-        icon: Connection
-      },
-      { key: 'dht', label: 'DHT 网络', summary: dhtMode.value === 'off' ? '完全私有' : '开放', icon: Share },
-      { key: 'sync', label: '同步状态', summary: syncHealthy.value ? '同步状态良好' : '等待同步', icon: Refresh }
-    ]);
+    const categories = computed<Array<{ key: CategoryKey; label: string; summary: string; icon: Component }>>(() => {
+      const list: Array<{ key: CategoryKey; label: string; summary: string; icon: Component }> = [
+        { key: 'identity', label: '节点信息', summary: props.rootId ? '已登录' : '未登录', icon: Key },
+        {
+          key: 'connection',
+          label: '连接状态',
+          summary: connected.value ? `已连接 · 节点 ${props.p2pInfo.connectedPeers.length} 个` : '未连接',
+          icon: Connection
+        },
+        { key: 'dht', label: 'DHT 网络', summary: dhtMode.value === 'off' ? '完全私有' : '开放', icon: Share },
+        { key: 'sync', label: '同步状态', summary: syncHealthy.value ? '同步状态良好' : '等待同步', icon: Refresh }
+      ];
+      // HTTP 代理设置（仅系统设置页传入 show-proxy 时出现）
+      if (props.showProxy) {
+        list.push({ key: 'proxy', label: '网络代理', summary: '更新与市场下载加速', icon: Link });
+      }
+      return list;
+    });
 
     const currentCategory = computed(
       () => categories.value.find((cat) => cat.key === activeCategory.value) ?? categories.value[0]

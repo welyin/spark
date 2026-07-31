@@ -37,6 +37,7 @@
 - `src/components/settings/SystemSettingsPanel.vue:157` | 系统设置「通知」开关组不生效 | 同上
 - `src/components/settings/SystemSettingsPanel.vue:164` | 系统设置「隐私」开关组不生效 | 同上
 - `src/components/settings/MockSettingGroup.vue:8` | 开关组统一 mock 说明 | 随上述各组落地后移除该组件
+- `src/components/settings/ProxySettings.vue`（网络状态-网络代理） | HTTP 代理设置已真实生效（`src-tauri/src/proxy.rs`：`spark-proxy.json` 持久化 + `SPARK_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` 环境变量注入，覆盖 updater 与市场 GitHub 链路） | 已知限制：市场 OnceLock 静态客户端与 updater 客户端创建后定型，修改代理需重启应用才对已建立链路生效（保存时 toast 已提示）
 
 ## 消息（ui-messages）
 

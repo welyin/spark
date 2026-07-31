@@ -382,7 +382,12 @@ export function createTauriApi(): ElectronAPI {
     system: {
       // 未读角标 → 系统徽标（F4）：macOS dock 角标 / Linux 任务栏计数，
       // 平台不支持时命令侧静默降级（见 src-tauri commands/system.rs）
-      setBadge: (count) => call('system-set-badge', count)
+      setBadge: (count) => call('system-set-badge', count),
+      // HTTP 代理（市场/更新链路直连 GitHub 失败时的规避）：返回当前
+      // "host:port"，未设置为 null；setProxy 传空串关闭。保存后已建立的
+      // 连接（市场 OnceLock 客户端、updater 客户端）需重启应用才生效
+      getProxy: () => call('system-get-proxy'),
+      setProxy: (proxy) => call('system-set-proxy', proxy)
     },
     dataManagement: {
       usage: () => call('data-usage'),

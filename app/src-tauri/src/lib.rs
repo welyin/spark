@@ -13,6 +13,8 @@ pub mod commands;
 pub mod market;
 pub mod plugin_src;
 mod announce_verify;
+// HTTP 代理配置（spark-proxy.json 持久化 + 环境变量注入），见 proxy.rs 模块注释
+mod proxy;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -59,7 +61,8 @@ fn spawn_p2p_event_forwarder(app: tauri::AppHandle, mut rx: tokio::sync::broadca
 /// 数据目录解析：SPARK_DATA_DIR 显式指定优先（单机多开测试，每实例一个），
 /// 未设置时走平台默认 app_data_dir。setup 与 plugin:// 协议回调共用，
 /// 保证内核数据、市场状态与插件源服务读同一目录。
-fn resolve_data_dir(app: &tauri::App) -> Result<PathBuf, std::io::Error> {
+/// 泛型 M 使 setup（&App）与命令层（&AppHandle，如 system_get_proxy）共用。
+fn resolve_data_dir<R: tauri::Runtime, M: tauri::Manager<R>>(app: &M) -> Result<PathBuf, std::io::Error> {
     match std::env::var("SPARK_DATA_DIR") {
         Ok(dir) if !dir.trim().is_empty() => {
             let dir = PathBuf::from(dir);
@@ -103,6 +106,10 @@ pub fn run() {
         .setup(|app| {
             // sled 单目录独占，多开必须隔离（resolve_data_dir 注释）
             let data_dir = resolve_data_dir(app)?;
+            // 代理注入必须最早：市场 OnceLock 静态客户端与 tauri-plugin-updater
+            // 的 reqwest 客户端在首次创建时定型读取 SPARK_PROXY/HTTPS_PROXY/
+            // ALL_PROXY（见 proxy.rs），晚于任一客户端创建注入则不生效
+            proxy::init_proxy_from_disk(&data_dir);
             let app_version = app.package_info().version.to_string();
             let kernel = Kernel::init(KernelConfig {
                 data_dir: data_dir.clone(),
@@ -268,6 +275,9 @@ pub fn run() {
             commands::market::plugin_market_announce_get,
             // 系统桥接（未读角标 → dock/任务栏徽标）
             commands::system::system_set_badge,
+            // HTTP 代理设置（updater/市场链路 GitHub 直连失败的规避，见 proxy.rs）
+            commands::system::system_get_proxy,
+            commands::system::system_set_proxy,
             // 主程序自动更新（GitHub Releases 清单；检查/下载/安装重启）
             commands::updater::updater_status,
             commands::updater::updater_check,
