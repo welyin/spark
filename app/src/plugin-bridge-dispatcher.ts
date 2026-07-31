@@ -2,7 +2,8 @@
  * 桥调用 dispatcher + 权限中间件（设计文档「权限模型」运行时强制）。
  *
  * createBridgeHost 的 handler 工厂：把桥 call（module/method/args）分发到
- * plugin-sdk-browser.ts 的后端实现（createPluginBackend，域一律显式下传），
+ * plugin-sdk-browser.ts 的后端实现（createPluginBackend，域一律显式下传；
+ * messages 域走 app-messages 壳层服务，pluginId/space 由桥按绑定身份注入），
  * 每次调用前做三重过滤：
  *
  * 1) grantedPermissions：读市场安装状态（pluginMarket.list 聚合的
@@ -27,6 +28,8 @@ import { ElMessageBox } from 'element-plus';
 import type { PluginSpaceContext } from '../../packages/plugin-sdk/src';
 import type { BridgeHostHandler } from '../../packages/plugin-sdk/src/bridge/host';
 import { createPluginBackend } from './plugin-sdk-browser';
+import { listAppMessages, markAppMessagesRead, sendAppMessage } from './app-messages';
+import type { AppMessageCardDto } from './api/types';
 
 type PluginViewType = 'app' | 'message-card';
 
@@ -40,13 +43,18 @@ const CALL_PERMISSIONS: Record<string, string> = {
   'runtime.listMineOrganizations': 'org:read',
   'runtime.syncOrganizationData': 'org:sync',
   'p2p.broadcast': 'network:broadcast',
-  'identity.sign': 'identity:sign'
+  'identity.sign': 'identity:sign',
+  // 应用会话读写（高级权限 + 内核限流 10 条/60s，§20.5）
+  'messages.sendAppMessage': 'message:app',
+  'messages.listAppMessages': 'message:app',
+  'messages.markRead': 'message:app'
 };
 
 /** view type 裁剪表：null = 全量（仅 grantedPermissions 过滤）；未列出的 view type 整域拒绝 */
 const VIEW_ALLOWED_CALLS: Record<PluginViewType, ReadonlySet<string> | null> = {
   app: null,
-  // 消息卡片：docs 只读 + 验签/存证读取（无网络、无签名，设计文档「UI 集成点」）
+  // 消息卡片：docs 只读 + 验签/存证读取（无网络、无签名，设计文档「UI 集成点」）；
+  // 不含 messages.*——卡片视图无应用会话写权限，卡片回调只经 action 上行（triggerCardAction）
   'message-card': new Set(['docs.get', 'docs.query', 'identity.verify', 'evidence.headHash', 'evidence.verify'])
 };
 
@@ -119,6 +127,15 @@ export async function createPluginBridgeDispatcher(identity: PluginBridgeIdentit
   }
 
   const backend = createPluginBackend(identity.domain);
+
+  // messages 域：pluginId/space 由桥按绑定身份注入（插件自报一律忽略）。
+  // pluginId 剥离域前缀（'plugin:weibo-core' → 'weibo-core'，§20.1 存储键口径；
+  // 与 identity.pluginId 同源，domain 推导失败时回退绑定 pluginId）
+  const boundPluginId = identity.domain.startsWith('plugin:')
+    ? identity.domain.slice('plugin:'.length)
+    : identity.pluginId;
+  const boundSpaceKey = identity.space.type === 'org' ? `org:${identity.space.id}` : 'personal';
+
   const modules: Record<string, Record<string, (...args: never[]) => Promise<unknown>>> = {
     docs: {
       get: backend.docs.get,
@@ -144,6 +161,13 @@ export async function createPluginBridgeDispatcher(identity: PluginBridgeIdentit
       currentRoot: backend.runtime.currentRoot,
       syncOrganizationData: backend.runtime.syncOrganizationData,
       listMineOrganizations: backend.runtime.listMineOrganizations
+    },
+    // 应用会话（服务号模型 §20）：SDK 调用不带 pluginId/space，此处按绑定身份注入
+    messages: {
+      sendAppMessage: (payload: Record<string, unknown>, card?: AppMessageCardDto) =>
+        sendAppMessage(boundSpaceKey, boundPluginId, payload, card),
+      listAppMessages: () => listAppMessages(boundSpaceKey, boundPluginId),
+      markRead: () => markAppMessagesRead(boundSpaceKey, boundPluginId)
     }
   };
 

@@ -34,7 +34,7 @@
       type="textarea"
       :autosize="{ minRows: 3, maxRows: 8 }"
       resize="none"
-      :placeholder="disabled ? '系统通知会话不支持回复' : '输入消息，Enter 发送，Shift+Enter 换行'"
+      :placeholder="disabled ? disabledHint : '输入消息，Enter 发送，Shift+Enter 换行'"
       :disabled="disabled"
       @update:model-value="(v: string) => $emit('update:modelValue', v)"
       @keydown.enter.exact.prevent="onSend"
@@ -63,7 +63,9 @@ export default defineComponent({
   props: {
     modelValue: { type: String, default: '' },
     quote: { type: Object as PropType<QuoteRef | null>, default: null },
-    disabled: { type: Boolean, default: false }
+    disabled: { type: Boolean, default: false },
+    /** 禁用态占位文案（系统通知/应用会话不支持回复） */
+    disabledHint: { type: String, default: '系统通知会话不支持回复' }
   },
   emits: ['update:modelValue', 'send', 'cancel-quote'],
   setup(props, { emit }) {

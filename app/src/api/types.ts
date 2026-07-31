@@ -343,9 +343,9 @@ export interface ChatMessageDto {
 
 export interface ConversationDto {
   id: string;
-  // §20 应用会话（app:{pluginId}）在 IPC 上以 kind='app' 到达；DTO 此处暂不
-  // 加宽（mock/messages.ts 的 Conversation 未含 'app'，壳层 UI 波次一并处理）
-  kind: 'direct' | 'system';
+  // §20 应用会话（app:{pluginId}）以 kind='app' 到达，peerId 占位填 pluginId；
+  // mock/messages.ts 的 Conversation 已同步加宽
+  kind: 'direct' | 'system' | 'app';
   title: string;
   peerId: string;
   unreadCount: number;

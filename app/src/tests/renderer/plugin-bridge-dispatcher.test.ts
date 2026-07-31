@@ -14,6 +14,8 @@ vi.mock('element-plus', async (importOriginal) => {
 
 import { ElMessageBox } from 'element-plus';
 import { createPluginBridgeDispatcher, type PluginBridgeIdentity } from '../../plugin-bridge-dispatcher';
+import { getAppMessages, getConversation } from '../../mock/messages';
+import type { AppMessageDto } from '../../api/types';
 
 /** 后端桩：任意层级任意方法返回 Promise<null>（test-setup 同款代理；
  * test-setup 把 electronAPI.plugin 覆盖成 listCatalog 桩，这里按测试需要重装） */
@@ -177,5 +179,51 @@ describe('使用时询问：identity:sign', () => {
     await expect(first).resolves.toBeNull();
     await expect(second).resolves.toBeNull();
     expect(ElMessageBox.confirm).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('messages 域（应用会话 §20，pluginId/space 由桥注入）', () => {
+  it('message:app 未授权：sendAppMessage/listAppMessages/markRead 一律拒绝', async () => {
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    await expect(handler('messages', 'sendAppMessage', [{ summary: 'x' }])).rejects.toThrow(/Access denied/);
+    await expect(handler('messages', 'listAppMessages', [])).rejects.toThrow(/Access denied/);
+    await expect(handler('messages', 'markRead', [])).rejects.toThrow(/Access denied/);
+  });
+
+  it('pluginId/space 注入：写入落在绑定身份的应用会话，插件自报一律忽略', async () => {
+    mockGrantedPermissions(['message:app']);
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    // payload 夹带 pluginId/spaceKey 不影响归属（桥按绑定身份注入，§20.4 归属不变量）
+    const dto = (await handler('messages', 'sendAppMessage', [
+      { summary: '新微博', pluginId: 'evil', spaceKey: 'personal' }
+    ])) as AppMessageDto;
+    expect(dto.pluginId).toBe('weibo-core');
+    expect(dto.status).toBe('local');
+    const conv = getConversation('org:org_1', 'app:weibo-core');
+    expect(conv?.kind).toBe('app');
+    expect(conv?.unreadCount).toBe(1);
+    expect(getConversation('org:org_1', 'app:evil')).toBeUndefined();
+    expect(getConversation('personal', 'app:weibo-core')).toBeUndefined();
+    expect(getAppMessages('org:org_1', 'app:weibo-core')).toHaveLength(1);
+  });
+
+  it('personal 空间注入：space key 为 personal', async () => {
+    mockGrantedPermissions(['message:app']);
+    const handler = await createPluginBridgeDispatcher({
+      ...BASE_IDENTITY,
+      space: { type: 'personal', id: 'personal' },
+      supportedSpaces: ['personal', 'org']
+    });
+    await handler('messages', 'sendAppMessage', [{ summary: '个人空间通知' }]);
+    expect(getConversation('personal', 'app:weibo-core')?.kind).toBe('app');
+    expect(getConversation('org:org_1', 'app:weibo-core')?.unreadCount).toBe(1); // 上一用例的会话不受影响
+  });
+
+  it('message-card 视图：有 message:app 授权也拒绝应用会话读写（仅卡片回调经 action 上行）', async () => {
+    mockGrantedPermissions(['message:app']);
+    const handler = await createPluginBridgeDispatcher({ ...BASE_IDENTITY, viewType: 'message-card' });
+    await expect(handler('messages', 'sendAppMessage', [{ summary: 'x' }])).rejects.toThrow(/Access denied/);
+    await expect(handler('messages', 'listAppMessages', [])).rejects.toThrow(/Access denied/);
+    await expect(handler('messages', 'markRead', [])).rejects.toThrow(/Access denied/);
   });
 });

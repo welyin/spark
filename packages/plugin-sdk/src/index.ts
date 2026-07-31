@@ -120,6 +120,69 @@ export interface PluginDeclaredCollectionSchema {
 }
 
 // ------------------------------------------------------------------
+// 消息模块（应用会话，服务号模型，p2p-messages.md §20）
+// ------------------------------------------------------------------
+
+/** 应用消息卡片（message-card 富渲染视图；viewId 为清单声明的 message-card 视图） */
+export type PluginAppMessageCard = {
+  viewId: string;
+  data?: unknown;
+};
+
+/** 应用消息（本地生成、本地消费，状态恒 'local'，无投递语义） */
+export type PluginAppMessage = {
+  id: string;
+  pluginId: string;
+  /** 纯文本摘要（未装插件时壳层原生渲染此字段） */
+  summary: string;
+  payload: Record<string, unknown>;
+  card?: PluginAppMessageCard;
+  createdAt: number;
+  status: 'local';
+  read: boolean;
+};
+
+/** 卡片按钮回调载荷（壳层从 message-card 收到 action 后路由给主视图实例） */
+export type PluginCardActionPayload = {
+  cardId: string;
+  actionId: string;
+  data?: unknown;
+};
+
+/**
+ * 消息模块：应用会话读写与卡片交互回调（高级权限 `message:app`，内核限流 10 条/60s）。
+ * 插件侧不传 pluginId/space——由桥按已认证身份注入，插件只能读写自己的应用会话；
+ * 桥协议层面不提供人际会话接口（隐私红线）。
+ * 仅 iframe 桥模式可用，故在 PluginSDK 上为可选字段（同 events）。
+ */
+export interface PluginMessagesAPI {
+  /** 写入应用消息：payload 必须含非空字符串 summary（trim 后 ≤200 字符，超限拒绝） */
+  sendAppMessage: (payload: Record<string, unknown>, card?: PluginAppMessageCard) => Promise<PluginAppMessage>;
+  /** 本插件在当前空间的应用消息（时间升序） */
+  listAppMessages: () => Promise<PluginAppMessage[]>;
+  /** 清零本插件应用会话未读（语义与人际会话一致） */
+  markRead: () => Promise<{ success: boolean }>;
+  /**
+   * 注册卡片按钮回调（主视图）：壳层从 message-card iframe 收到 action 并校验
+   * 卡片归属本插件后推送过来；返回注销函数
+   */
+  onCardAction: (handler: (action: PluginCardActionPayload) => void) => () => void;
+  /**
+   * 触发卡片按钮回调（仅 message-card 视图）：action 上行给壳层，
+   * 经归属校验后路由给本插件主视图实例的 onCardAction；cardId 取桥握手 ctx 注入值
+   *
+   * @throws 非 message-card 视图（ctx.mount 无 cardId）
+   */
+  triggerCardAction: (actionId: string, data?: unknown) => void;
+  /**
+   * 申请卡片高度（仅 message-card 视图）：壳层封顶 400px
+   *
+   * @throws 非 message-card 视图（ctx.mount 无 cardId）
+   */
+  requestCardHeight: (height: number) => void;
+}
+
+// ------------------------------------------------------------------
 // 事件模块（随桥协议落地，见 bridge/client.ts）
 // ------------------------------------------------------------------
 
@@ -146,6 +209,8 @@ export interface PluginSDK {
   identity: PluginIdentityAPI;
   /** 事件模块：仅 iframe 桥模式可用（tab 模式未注入） */
   events?: PluginEventsAPI;
+  /** 消息模块（应用会话）：仅 iframe 桥模式可用（tab 模式未注入） */
+  messages?: PluginMessagesAPI;
 }
 
 // ------------------------------------------------------------------
@@ -163,6 +228,19 @@ export type PluginSpaceContext = {
 export type PluginMountInfo = {
   /** 视图类型，对齐 manifest.views[].type */
   viewType: 'app' | 'message-card';
+  /** 卡片 id（仅 message-card 视图）：壳层分配，动作回调与归属校验的凭据 */
+  cardId?: string;
+  /** 卡片视图数据（仅 message-card 视图）：应用消息 card.data 透传 */
+  cardData?: unknown;
+};
+
+/** 宿主 srcdoc 注入的视图引导信息（`window.__sparkPluginView`）：
+ *  插件握手前唯一能拿到 viewId/卡片上下文的途径（hello 的 viewId 必须与桥绑定一致） */
+export type PluginViewBootstrap = {
+  viewId: string;
+  viewType: 'app' | 'message-card';
+  cardId?: string;
+  cardData?: unknown;
 };
 
 /** 桥握手 ready 下发的插件运行上下文 */
@@ -238,6 +316,8 @@ export function definePlugin(def: PluginDefinition): PluginDefinition {
 declare global {
   interface Window {
     __sparkPluginSDK?: PluginSDK;
+    /** 宿主 srcdoc 注入的视图引导信息（见 PluginViewBootstrap；握手前读取 viewId） */
+    __sparkPluginView?: PluginViewBootstrap;
   }
 }
 

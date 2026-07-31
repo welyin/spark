@@ -7,7 +7,7 @@
 //! 集合运算保持 TS Set 的插入序语义（基础权限在前，高级权限按声明序追加）。
 
 /// 全部合法权限（TS `PLUGIN_PERMISSIONS`）。
-pub const PLUGIN_PERMISSIONS: [&str; 7] = [
+pub const PLUGIN_PERMISSIONS: [&str; 8] = [
     "storage:read",
     "storage:write",
     "org:read",
@@ -15,13 +15,14 @@ pub const PLUGIN_PERMISSIONS: [&str; 7] = [
     "network:broadcast",
     "proof:verify",
     "identity:sign",
+    "message:app",
 ];
 
 /// 基础权限：默认授予所有插件，无需声明（TS `BASIC_PERMISSIONS`）。
 pub const BASIC_PERMISSIONS: [&str; 4] = ["storage:read", "storage:write", "org:read", "proof:verify"];
 
 /// 高级权限：必须声明并经安装时授权（TS `ADVANCED_PERMISSIONS`）。
-pub const ADVANCED_PERMISSIONS: [&str; 3] = ["org:sync", "network:broadcast", "identity:sign"];
+pub const ADVANCED_PERMISSIONS: [&str; 4] = ["org:sync", "network:broadcast", "identity:sign", "message:app"];
 
 pub fn is_plugin_permission(value: &str) -> bool {
     PLUGIN_PERMISSIONS.contains(&value)

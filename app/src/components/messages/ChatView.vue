@@ -10,34 +10,56 @@
     />
 
     <div ref="scrollRef" class="msg-scroll">
-      <template v-for="item in renderItems" :key="item.key">
-        <div v-if="item.kind === 'time'" class="msg-time">{{ formatDividerTime(item.ts) }}</div>
-        <div v-else-if="item.msg.recalled" class="msg-system">
-          {{ item.msg.senderId === 'me' ? '你撤回了一条消息' : `「${recallName(item.msg)}」撤回了一条消息` }}
-        </div>
-        <div v-else-if="item.msg.type === 'system'" class="msg-system">{{ item.msg.content }}</div>
-        <MessageBubble
-          v-else
-          :message="item.msg"
-          :is-mine="item.msg.senderId === 'me'"
-          :show-avatar="item.showAvatar"
-          :space-key="spaceKey"
-          @menu="openMsgMenu"
-          @resend="onResend"
-          @avatar-click="openProfileCard"
-          @org-invite-click="openOrgInvite"
+      <!-- 应用会话（服务号模型 §20）：应用消息流（卡片富渲染/原生摘要降级），无人际气泡 -->
+      <template v-if="isAppConversation">
+        <template v-for="item in appRenderItems" :key="item.key">
+          <div v-if="item.kind === 'time'" class="msg-time">{{ formatDividerTime(item.ts) }}</div>
+          <AppMessageView
+            v-else
+            :message="item.msg"
+            :space-key="spaceKey"
+            :space="pluginSpaceContext"
+            @open-market="openAppMarket"
+          />
+        </template>
+        <el-empty
+          v-if="!appRenderItems.length"
+          :image-size="80"
+          description="暂无应用消息"
+          class="chat-empty"
         />
       </template>
-      <el-empty
-        v-if="!renderItems.length"
-        :image-size="80"
-        description="暂无消息记录，开始聊天吧"
-        class="chat-empty"
-      />
+
+      <template v-else>
+        <template v-for="item in renderItems" :key="item.key">
+          <div v-if="item.kind === 'time'" class="msg-time">{{ formatDividerTime(item.ts) }}</div>
+          <div v-else-if="item.msg.recalled" class="msg-system">
+            {{ item.msg.senderId === 'me' ? '你撤回了一条消息' : `「${recallName(item.msg)}」撤回了一条消息` }}
+          </div>
+          <div v-else-if="item.msg.type === 'system'" class="msg-system">{{ item.msg.content }}</div>
+          <MessageBubble
+            v-else
+            :message="item.msg"
+            :is-mine="item.msg.senderId === 'me'"
+            :show-avatar="item.showAvatar"
+            :space-key="spaceKey"
+            @menu="openMsgMenu"
+            @resend="onResend"
+            @avatar-click="openProfileCard"
+            @org-invite-click="openOrgInvite"
+          />
+        </template>
+        <el-empty
+          v-if="!renderItems.length"
+          :image-size="80"
+          description="暂无消息记录，开始聊天吧"
+          class="chat-empty"
+        />
+      </template>
     </div>
 
-    <!-- 仅本地模式提示条（真实 P2P 状态）：可关闭，切换会话后重置 -->
-    <div v-if="isLocalOnly && !localOnlyHintDismissed" class="local-only-bar">
+    <!-- 仅本地模式提示条（真实 P2P 状态；仅人际会话有意义）：可关闭，切换会话后重置 -->
+    <div v-if="conversation.kind === 'direct' && isLocalOnly && !localOnlyHintDismissed" class="local-only-bar">
       <el-icon :size="14"><WarningFilled /></el-icon>
       <span class="local-only-bar-text">对方离线，消息将在其上线后自动送达</span>
       <el-icon class="local-only-bar-close" :size="14" @click="localOnlyHintDismissed = true"><Close /></el-icon>
@@ -46,7 +68,8 @@
     <MessageInput
       v-model="inputText"
       :quote="quote"
-      :disabled="conversation.kind === 'system'"
+      :disabled="conversation.kind !== 'direct'"
+      :disabled-hint="conversation.kind === 'app' ? '应用会话不支持回复' : '系统通知会话不支持回复'"
       @send="onSend"
       @cancel-quote="quote = null"
     />
@@ -80,16 +103,20 @@
 import { computed, defineComponent, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Close, WarningFilled } from '@element-plus/icons-vue';
+import type { PluginSpaceContext } from '../../../../packages/plugin-sdk/src';
 import ChatHeader from './ChatHeader.vue';
 import MessageBubble from './MessageBubble.vue';
 import MessageInput from './MessageInput.vue';
+import AppMessageView from './AppMessageView.vue';
 import ContactCardDrawer from '../contacts/ContactCardDrawer.vue';
 import OrgInviteDrawer from '../org/OrgInviteDrawer.vue';
 import { useNetworkStatus } from '../../stores/network-status';
 import { personDisplayName } from '../../stores/avatar-sources';
+import type { AppMessageDto } from '../../api/types';
 import {
   closeConversation,
   deleteMessage,
+  getAppMessages,
   getConversation,
   getMessages,
   markRead,
@@ -109,12 +136,15 @@ type RenderItem =
   | { kind: 'time'; ts: number; key: string }
   | { kind: 'msg'; msg: ChatMessage; showAvatar: boolean; key: string };
 
+/** 应用会话渲染项：时间分隔条 / 应用消息（无头像合并语义） */
+type AppRenderItem = { kind: 'time'; ts: number; key: string } | { kind: 'msg'; msg: AppMessageDto; key: string };
+
 const TIME_GAP = 5 * 60_000;
 const RECALL_WINDOW = 2 * 60_000;
 
 export default defineComponent({
   name: 'ChatView',
-  components: { ChatHeader, MessageBubble, MessageInput, ContactCardDrawer, OrgInviteDrawer, Close, WarningFilled },
+  components: { ChatHeader, MessageBubble, MessageInput, AppMessageView, ContactCardDrawer, OrgInviteDrawer, Close, WarningFilled },
   props: {
     spaceKey: { type: String as () => SpaceKey, required: true },
     conversationId: { type: String, required: true }
@@ -130,6 +160,37 @@ export default defineComponent({
 
     const conversation = computed(() => getConversation(props.spaceKey, props.conversationId));
     const messages = computed(() => getMessages(props.spaceKey, props.conversationId));
+
+    // 应用会话：消息走 appMessages 缓存（appList 水合），渲染分支在模板
+    const isAppConversation = computed(() => conversation.value?.kind === 'app');
+    const appMessages = computed(() =>
+      isAppConversation.value ? getAppMessages(props.spaceKey, props.conversationId) : []
+    );
+    /** 卡片 iframe 的运行上下文（spaceKey 反解；与 PluginIframeHost 的 space prop 同形） */
+    const pluginSpaceContext = computed<PluginSpaceContext>(() =>
+      props.spaceKey === 'personal'
+        ? { type: 'personal', id: 'personal' }
+        : { type: 'org', id: props.spaceKey.slice('org:'.length) }
+    );
+
+    /** 应用消息渲染项：仅时间分隔（间隔 > 5 分钟），无头像合并 */
+    const appRenderItems = computed<AppRenderItem[]>(() => {
+      const items: AppRenderItem[] = [];
+      let prev: AppMessageDto | null = null;
+      for (const msg of appMessages.value) {
+        if (!prev || msg.createdAt - prev.createdAt > TIME_GAP) {
+          items.push({ kind: 'time', ts: msg.createdAt, key: `t-${msg.id}` });
+        }
+        items.push({ kind: 'msg', msg, key: msg.id });
+        prev = msg;
+      }
+      return items;
+    });
+
+    /** 「安装插件查看完整内容」：跳应用市场详情（App.vue 监听 spark:open-app 切页） */
+    function openAppMarket(pluginId: string) {
+      window.dispatchEvent(new CustomEvent('spark:open-app', { detail: { id: pluginId } }));
+    }
 
     // 撤回提示：统一展示名入口（备注>昵称），消息上的 senderName 快照仅作兜底（快照语义不动）
     const recallName = (msg: ChatMessage): string => personDisplayName(props.spaceKey, msg.senderId, msg.senderName);
@@ -174,9 +235,9 @@ export default defineComponent({
       { immediate: true }
     );
 
-    // 新消息到达：若会话正打开则保持已读，并滚动到底部
+    // 新消息到达：若会话正打开则保持已读，并滚动到底部（应用会话同理）
     watch(
-      () => messages.value.length,
+      () => [messages.value.length, appMessages.value.length],
       () => {
         markRead(props.spaceKey, props.conversationId);
         scrollToBottom();
@@ -282,6 +343,10 @@ export default defineComponent({
     return {
       conversation,
       renderItems,
+      isAppConversation,
+      appRenderItems,
+      pluginSpaceContext,
+      openAppMarket,
       inputText,
       quote,
       scrollRef,

@@ -45,6 +45,11 @@ export type CreateBridgeHostOptions = {
    * 与宿主→插件的订阅推送共用 event 信封，方向相反
    */
   onEvent?: (event: string, payload: unknown) => void;
+  /**
+   * 插件（message-card）→宿主 action 上行通道（卡片按钮回调）；
+   * 宿主按桥绑定身份校验归属后路由给主视图实例（壳层 plugin-card-actions.ts）
+   */
+  onAction?: (cardId: string, actionId: string, data?: unknown) => void;
 };
 
 export type BridgeHost = {
@@ -52,6 +57,8 @@ export type BridgeHost = {
   ready: Promise<PluginContext>;
   /** 向插件推送事件（仅当插件已订阅该事件时才发送） */
   pushEvent: (event: string, payload?: unknown) => void;
+  /** 向插件推送卡片按钮回调（主视图实例的 onCardAction 接收；无订阅语义，直接下发） */
+  pushAction: (cardId: string, actionId: string, data?: unknown) => void;
   /** 心跳：发 ping 并等待 pong，超时 reject（默认 5s）；destroy 后立即 reject */
   ping: (timeoutMs?: number) => Promise<void>;
   /** 关闭桥：移除监听、清理定时器与待决请求；握手未 settle 时 ready 以 destroyed 拒绝 */
@@ -202,8 +209,12 @@ export function createBridgeHost(options: CreateBridgeHostOptions): BridgeHost {
           // 插件→宿主上行事件（runtime-error 错误上报等），与握手状态无关
           options.onEvent?.(message.event, message.payload);
           return;
+        case 'action':
+          // 插件（message-card）→宿主卡片按钮回调上行，归属校验与路由在壳层
+          options.onAction?.(message.cardId, message.actionId, message.data);
+          return;
         default:
-          // 其余方向的消息（ready/result/ping/action）不应由插件发出，忽略
+          // 其余方向的消息（ready/result/ping）不应由插件发出，忽略
           return;
       }
     };
@@ -233,6 +244,9 @@ export function createBridgeHost(options: CreateBridgeHostOptions): BridgeHost {
         return;
       }
       post({ v: BRIDGE_PROTOCOL_VERSION, type: 'event', event, payload });
+    },
+    pushAction(cardId, actionId, data) {
+      post({ v: BRIDGE_PROTOCOL_VERSION, type: 'action', cardId, actionId, data });
     },
     ping(timeoutMs = 5_000) {
       // destroy 后立即拒绝（post 已静默丢弃，不立即拒绝则调用方只能等超时）

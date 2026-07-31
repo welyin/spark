@@ -412,3 +412,93 @@ describe('bridge 心跳与事件', () => {
     harness.bridge.destroy();
   });
 });
+
+describe('bridge messages 域（应用会话 §20）', () => {
+  it('sendAppMessage 序列化为 messages.sendAppMessage（payload/card 透传，不含 pluginId/space）', async () => {
+    const harness = createHarness();
+    const { sdk } = await connect(harness);
+    const payload = { summary: '新微博', text: 'hello' };
+    const card = { viewId: 'post-card', data: { postId: 'p1' } };
+    const result = (await sdk.messages!.sendAppMessage(payload, card)) as Record<string, unknown>;
+
+    expect(harness.handler).toHaveBeenCalledTimes(1);
+    const [module, method, args] = harness.handler.mock.calls[0] as [string, string, unknown[]];
+    expect(module).toBe('messages');
+    expect(method).toBe('sendAppMessage');
+    // pluginId/space 由桥注入，插件侧不出现在调用参数里
+    expect(args).toEqual([payload, card]);
+    expect(result).toEqual({ module: 'messages', method: 'sendAppMessage', args: [payload, card] });
+    harness.bridge.destroy();
+  });
+
+  it('listAppMessages/markRead 序列化（无参调用）', async () => {
+    const harness = createHarness();
+    const { sdk } = await connect(harness);
+    await sdk.messages!.listAppMessages();
+    await sdk.messages!.markRead();
+    const calls = harness.handler.mock.calls.map((call) => [call[0], call[1], call[2]]);
+    expect(calls).toEqual([
+      ['messages', 'listAppMessages', []],
+      ['messages', 'markRead', []]
+    ]);
+    harness.bridge.destroy();
+  });
+
+  it('onCardAction：宿主 pushAction 下发到主视图回调；注销后不再接收', async () => {
+    const harness = createHarness();
+    const { sdk } = await connect(harness);
+    const received: unknown[] = [];
+    const off = sdk.messages!.onCardAction((action) => received.push(action));
+
+    harness.bridge.pushAction('weibo-core:m1', 'open', { postId: 'p1' });
+    await waitFor(() => received.length === 1);
+    expect(received[0]).toEqual({ cardId: 'weibo-core:m1', actionId: 'open', data: { postId: 'p1' } });
+
+    off();
+    harness.bridge.pushAction('weibo-core:m2', 'like');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(received).toHaveLength(1);
+    harness.bridge.destroy();
+  });
+
+  it('triggerCardAction：message-card 视图 action 上行（cardId 取自握手 ctx）', async () => {
+    const cardCtx: PluginContext = {
+      ...TEST_CTX,
+      viewId: 'post-card',
+      mount: { viewType: 'message-card', cardId: 'weibo-core:m1', cardData: { postId: 'p1' } }
+    };
+    const onAction = vi.fn();
+    const harness = createHarness({ ctx: cardCtx, viewId: 'post-card', onAction });
+    const { sdk, ctx } = await connect(harness, { viewId: 'post-card' });
+    expect(ctx.mount.cardId).toBe('weibo-core:m1');
+
+    sdk.messages!.triggerCardAction('like', { value: 1 });
+    await waitFor(() => onAction.mock.calls.length === 1);
+    expect(onAction).toHaveBeenCalledWith('weibo-core:m1', 'like', { value: 1 });
+    harness.bridge.destroy();
+  });
+
+  it('triggerCardAction/requestCardHeight：非 message-card 视图（无 cardId）抛错', async () => {
+    const harness = createHarness();
+    const { sdk } = await connect(harness);
+    expect(() => sdk.messages!.triggerCardAction('like')).toThrow(/message-card/);
+    expect(() => sdk.messages!.requestCardHeight(240)).toThrow(/message-card/);
+    harness.bridge.destroy();
+  });
+
+  it('requestCardHeight：message-card 视图经 event card-resize 上行', async () => {
+    const cardCtx: PluginContext = {
+      ...TEST_CTX,
+      viewId: 'post-card',
+      mount: { viewType: 'message-card', cardId: 'weibo-core:m1' }
+    };
+    const onEvent = vi.fn();
+    const harness = createHarness({ ctx: cardCtx, viewId: 'post-card', onEvent });
+    const { sdk } = await connect(harness, { viewId: 'post-card' });
+
+    sdk.messages!.requestCardHeight(240);
+    await waitFor(() => onEvent.mock.calls.length === 1);
+    expect(onEvent).toHaveBeenCalledWith('card-resize', { height: 240 });
+    harness.bridge.destroy();
+  });
+});

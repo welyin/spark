@@ -5,11 +5,16 @@ import {
   onChatReceived,
   getConversation,
   getMessages,
+  getAppMessages,
+  markRead,
   openConversation,
   closeConversation,
+  sendAppMessageLocal,
+  unreadCountOf,
   type ChatMessage,
   type Conversation
 } from './messages';
+import { toggleAppConversationBlocked } from '../stores/app-conversations';
 
 let fixtureSeq = 0;
 
@@ -112,5 +117,70 @@ describe('onChatReceived（信任内核会话快照）', () => {
     const conv = getConversation(key, first.id);
     expect(conv?.online).toBe(true);
     expect(conv?.updatedAt).toBe(3_000);
+  });
+});
+
+describe('应用消息内存镜像（§20，非 Tauri 环境）', () => {
+  it('summary 校验先于落库：缺失/空白/超长一律拒绝（错误前缀与内核一致）', () => {
+    const key = 'test:app-validate';
+    expect(() => sendAppMessageLocal(key, 'weibo-core', {})).toThrow(/^missing-summary/);
+    expect(() => sendAppMessageLocal(key, 'weibo-core', { summary: '   ' })).toThrow(/^missing-summary/);
+    expect(() => sendAppMessageLocal(key, 'weibo-core', { summary: 'x'.repeat(201) })).toThrow(/^summary-too-long/);
+    expect(getConversation(key, 'app:weibo-core')).toBeUndefined();
+  });
+
+  it('写入即建会话（惰性创建），summary 为 trim 后文本，未读 +1', () => {
+    const key = 'test:app-send';
+    const dto = sendAppMessageLocal(key, 'weibo-core', { summary: '  新微博  ', text: 'hello' });
+    expect(dto.summary).toBe('新微博');
+    expect(dto.status).toBe('local');
+    expect(dto.read).toBe(false);
+    const conv = getConversation(key, 'app:weibo-core');
+    expect(conv?.kind).toBe('app');
+    expect(conv?.peerId).toBe('weibo-core');
+    expect(conv?.unreadCount).toBe(1);
+    expect(getAppMessages(key, 'app:weibo-core')).toHaveLength(1);
+  });
+
+  it('限流：同空间同插件 60s 窗口内第 11 条拒绝（rate-limited）', () => {
+    const key = 'test:app-rl';
+    for (let i = 0; i < 10; i += 1) {
+      sendAppMessageLocal(key, 'weibo-core', { summary: `第${i + 1}条` });
+    }
+    expect(() => sendAppMessageLocal(key, 'weibo-core', { summary: '超限' })).toThrow(/^rate-limited/);
+    expect(getAppMessages(key, 'app:weibo-core')).toHaveLength(10);
+    // 另一插件/另一空间不受影响
+    sendAppMessageLocal(key, 'other-plugin', { summary: 'ok' });
+    sendAppMessageLocal('test:app-rl-2', 'weibo-core', { summary: 'ok' });
+  });
+
+  it('markRead：应用会话清零未读并把会话内消息批量置 read', () => {
+    const key = 'test:app-read';
+    sendAppMessageLocal(key, 'weibo-core', { summary: '一' });
+    sendAppMessageLocal(key, 'weibo-core', { summary: '二' });
+    expect(getConversation(key, 'app:weibo-core')?.unreadCount).toBe(2);
+    markRead(key, 'app:weibo-core');
+    expect(getConversation(key, 'app:weibo-core')?.unreadCount).toBe(0);
+    expect(getAppMessages(key, 'app:weibo-core').every((msg) => msg.read)).toBe(true);
+  });
+
+  it('活跃会话写入：未读保持清零（与 onChatReceived 同口径）', () => {
+    const key = 'test:app-active';
+    sendAppMessageLocal(key, 'weibo-core', { summary: '首条' });
+    openConversation(key, 'app:weibo-core');
+    sendAppMessageLocal(key, 'weibo-core', { summary: '次条' });
+    expect(getConversation(key, 'app:weibo-core')?.unreadCount).toBe(0);
+    expect(getAppMessages(key, 'app:weibo-core')[1].read).toBe(true);
+    closeConversation(key);
+  });
+
+  it('被屏蔽的应用会话不参与未读聚合（取消屏蔽后恢复）', () => {
+    const key = 'test:app-blocked';
+    sendAppMessageLocal(key, 'weibo-core', { summary: '通知' });
+    expect(unreadCountOf(key)).toBe(1);
+    toggleAppConversationBlocked(key, 'weibo-core');
+    expect(unreadCountOf(key)).toBe(0);
+    toggleAppConversationBlocked(key, 'weibo-core');
+    expect(unreadCountOf(key)).toBe(1);
   });
 });

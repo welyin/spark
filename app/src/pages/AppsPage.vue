@@ -67,6 +67,8 @@ import { isAdmin, refreshOrganizations } from '../stores/org-membership';
 import { consumePendingAppDetail, pendingAppDetail } from '../stores/pending-app';
 import { isMockApp, listMockApps, setMockAppEnabled, setMockAppInstalled } from '../mock/apps';
 import { mockMode } from '../mock/mode';
+import { spaceKeyOf } from '../mock/space-key';
+import { notifyPluginInstalled, notifyPluginUpgraded } from '../app-messages';
 import AppListPanel from '../components/apps/AppListPanel.vue';
 import AppMarketPanel from '../components/apps/AppMarketPanel.vue';
 import AppDetailPanel from '../components/apps/AppDetailPanel.vue';
@@ -251,18 +253,22 @@ export default defineComponent({
         }
       }
       setBusy(item.id, 'install');
-      // mock 应用：权限确认流程保留，安装只写 localStorage 状态（见 src/mock/apps.ts）
+      // mock 应用：权限确认流程保留，安装只写 localStorage 状态（见 src/mock/apps.ts）；
+      // 系统通知走同一入口（纯浏览器下由内存镜像入账，便于演示应用会话链路）
       if (isMockApp(item)) {
         setMockAppInstalled(item.id, true);
         mergeItems();
         setBusy(item.id, '');
         ElMessage.success('应用安装成功，启用后即可使用');
+        notifyPluginInstalled(spaceKeyOf(currentSpace.value), item.name);
         return;
       }
       try {
         await window.electronAPI.pluginMarket.install(item.id);
         await refresh();
         ElMessage.success('应用安装成功，启用后即可使用');
+        // 系统通知样板（app:system 内置应用会话，按当前空间隔离）
+        notifyPluginInstalled(spaceKeyOf(currentSpace.value), item.name);
       } catch (error) {
         ElMessage.error(`应用安装失败：${error}`);
       } finally {
@@ -280,6 +286,8 @@ export default defineComponent({
         await window.electronAPI.pluginMarket.upgrade(item.id);
         await refresh();
         ElMessage.success('应用已更新到最新版本');
+        // 系统通知样板（同安装口径，app:system 内置应用会话）
+        notifyPluginUpgraded(spaceKeyOf(currentSpace.value), item.name);
       } catch (error) {
         ElMessage.error(`应用更新失败：${error}`);
       } finally {

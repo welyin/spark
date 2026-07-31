@@ -11,6 +11,9 @@
  */
 
 import type {
+  PluginAppMessage,
+  PluginAppMessageCard,
+  PluginCardActionPayload,
   PluginContext,
   PluginCollectionSchema,
   PluginDeclaredCollectionSchema,
@@ -29,7 +32,12 @@ export type WindowMessageEndpoint = Pick<Window, 'addEventListener' | 'removeEve
 
 export type ConnectPluginBridgeOptions = {
   pluginId: string;
-  viewId: string;
+  /**
+   * 视图 id（必须与桥绑定值一致，否则握手 identity-mismatch）。
+   * 可缺省：从宿主 srcdoc 注入的 window.__sparkPluginView.viewId 读取；
+   * 两者都没有说明不在插件宿主上下文，抛错
+   */
+  viewId?: string;
   /** 插件依赖的 SDK 契约版本（应与 manifest.sdkVersion 一致），默认 '1' */
   sdkVersion?: string;
   /** 单次 call 超时（默认 10s） */
@@ -67,10 +75,20 @@ export function connectPluginBridge(options: ConnectPluginBridgeOptions): Promis
   const targetOrigin = options.targetOrigin ?? '*';
   const callTimeoutMs = options.callTimeoutMs ?? 10_000;
   const handshakeTimeoutMs = options.handshakeTimeoutMs ?? 10_000;
+  // viewId 缺省回退宿主 srcdoc 注入（hello 身份核对要求与桥绑定一致，
+  // 插件无法自报正确值时由宿主注入兜底）
+  const viewId = options.viewId ?? window.__sparkPluginView?.viewId;
+  if (!viewId) {
+    return Promise.reject(
+      new Error('connectPluginBridge: viewId missing (options and window.__sparkPluginView are both absent)')
+    );
+  }
 
   let counter = 0;
   const pending = new Map<string, PendingRequest>();
   const eventHandlers = new Map<string, Set<PluginEventHandler>>();
+  /** 卡片按钮回调（onCardAction 注册；宿主 action 下发时分发） */
+  const cardActionHandlers = new Set<(action: PluginCardActionPayload) => void>();
 
   const nextId = (prefix: string): string => `${prefix}-${Date.now().toString(36)}-${++counter}`;
 
@@ -230,8 +248,17 @@ export function connectPluginBridge(options: ConnectPluginBridgeOptions): Promis
         settleResult(message);
       } else if (message.type === 'event') {
         dispatchEvent(message.event, message.payload);
+      } else if (message.type === 'action') {
+        // 卡片按钮回调（宿主校验归属后下发）：分发给 onCardAction 注册的回调
+        const payload: PluginCardActionPayload = { cardId: message.cardId, actionId: message.actionId, data: message.data };
+        for (const handler of cardActionHandlers) {
+          try {
+            handler(payload);
+          } catch (error) {
+            console.error('[plugin-bridge] 卡片回调抛错：', error);
+          }
+        }
       }
-      // action（卡片回调预留）：本波不路由，直接忽略
     };
 
     const createBridgeSdk = (ctx: PluginContext): PluginSDK => ({
@@ -281,8 +308,33 @@ export function connectPluginBridge(options: ConnectPluginBridgeOptions): Promis
         verify: (payload, signature, publicKey) =>
           call('identity', 'verify', [payload, signature, publicKey]) as Promise<{ valid: boolean }>
       },
-      events: {
-        subscribe: async (event, handler) => {
+      messages: {
+        // pluginId/space 由桥按已认证身份注入，插件侧不传（自报一律被忽略）
+        sendAppMessage: (payload: Record<string, unknown>, card?: PluginAppMessageCard) =>
+          call('messages', 'sendAppMessage', card === undefined ? [payload] : [payload, card]) as Promise<PluginAppMessage>,
+        listAppMessages: () => call('messages', 'listAppMessages', []) as Promise<PluginAppMessage[]>,
+        markRead: () => call('messages', 'markRead', []) as Promise<{ success: boolean }>,
+        onCardAction: (handler) => {
+          cardActionHandlers.add(handler);
+          return () => {
+            cardActionHandlers.delete(handler);
+          };
+        },
+        triggerCardAction: (actionId, data) => {
+          const cardId = ctx.mount.cardId;
+          if (!cardId) {
+            throw new Error('messages.triggerCardAction is only available in message-card views');
+          }
+          post({ v: BRIDGE_PROTOCOL_VERSION, type: 'action', cardId, actionId, data });
+        },
+        requestCardHeight: (height) => {
+          if (!ctx.mount.cardId) {
+            throw new Error('messages.requestCardHeight is only available in message-card views');
+          }
+          post({ v: BRIDGE_PROTOCOL_VERSION, type: 'event', event: 'card-resize', payload: { height } });
+        }
+      },
+      events: {        subscribe: async (event, handler) => {
           await request(
             { v: BRIDGE_PROTOCOL_VERSION, type: 'subscribe', id: nextId('sub'), event },
             callTimeoutMs
@@ -318,7 +370,7 @@ export function connectPluginBridge(options: ConnectPluginBridgeOptions): Promis
       type: 'hello',
       sdkVersion: options.sdkVersion ?? '1',
       pluginId: options.pluginId,
-      viewId: options.viewId
+      viewId
     });
   });
 }

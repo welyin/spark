@@ -58,6 +58,7 @@ import {
 } from '../stores/avatar-sources';
 import { contactsOf } from '../mock/contacts';
 import { listConversations, spaceKeyOf } from '../mock/messages';
+import { appConversationName } from '../stores/app-conversations';
 import { listMockApps } from '../mock/apps';
 import { mockMode } from '../mock/mode';
 import { appIconBackground, marketItemMatches } from './apps/apps-store';
@@ -175,9 +176,13 @@ export default defineComponent({
       for (const space of spaces) {
         for (const conv of listConversations(spaceKeyOf(space))) {
           // 会话名：direct 走统一展示名入口（备注>昵称>原标题，与 ConversationList 的 convName 同写法），
-          // 改备注后搜索结果同步生效；搜索匹配也用展示名
+          // 改备注后搜索结果同步生效；app 走插件清单名称（缺省 pluginId）；搜索匹配也用展示名
           const name =
-            conv.kind === 'direct' ? personDisplayName(spaceKeyOf(space), conv.peerId, conv.title) : conv.title;
+            conv.kind === 'direct'
+              ? personDisplayName(spaceKeyOf(space), conv.peerId, conv.title)
+              : conv.kind === 'app'
+                ? appConversationName(conv.peerId, conv.title)
+                : conv.title;
           if (matches(kw, name, conv.peerId)) {
             const orgName =
               space.type === 'org'

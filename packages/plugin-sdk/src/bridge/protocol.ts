@@ -8,7 +8,8 @@
  * - 事件：插件→宿主 subscribe/unsubscribe，宿主→插件 event；event 信封亦用于
  *   插件→宿主的上行事件（runtime-error 错误上报，见 bridge/client.ts）；
  * - 熔断配套：宿主→插件 ping，插件侧自动回 pong；
- * - 卡片回调预留：action（消息卡片按钮回调，本波只定义类型，不实现路由）。
+ * - 卡片回调：action 双向——插件（message-card）→宿主的按钮回调上行，
+ *   宿主校验归属后 →主视图插件实例下发（路由见壳层 plugin-card-actions.ts）。
  *
  * 全部消息为结构化克隆安全的纯 JSON 对象，信封带协议版本字段 `v: 1`
  * （BRIDGE_PROTOCOL_VERSION；与 SDK 契约版本 sdkVersion 是两个维度：
@@ -72,7 +73,7 @@ export type BridgeCallMessage = {
   v: typeof BRIDGE_PROTOCOL_VERSION;
   type: 'call';
   id: string;
-  /** SDK 模块名（docs/identity/evidence/p2p/runtime） */
+  /** SDK 模块名（docs/identity/evidence/p2p/runtime/messages） */
   module: string;
   method: string;
   args: unknown[];
@@ -130,9 +131,13 @@ export type BridgePongMessage = {
   id: string;
 };
 
-// ---- 卡片回调（预留，本波只定义类型不实现路由） ----
+// ---- 卡片回调 ----
 
-/** 宿主→插件：消息卡片按钮回调 */
+/**
+ * 消息卡片按钮回调（双向复用同一信封）：
+ * - 插件（message-card）→宿主：triggerCardAction 上行（cardId 取自握手 ctx）；
+ * - 宿主→主视图插件实例：归属校验后下发（onCardAction）。
+ */
 export type BridgeActionMessage = {
   v: typeof BRIDGE_PROTOCOL_VERSION;
   type: 'action';
@@ -146,7 +151,8 @@ export type PluginToHostMessage =
   | BridgeCallMessage
   | BridgeSubscribeMessage
   | BridgeUnsubscribeMessage
-  | BridgePongMessage;
+  | BridgePongMessage
+  | BridgeActionMessage;
 
 export type HostToPluginMessage =
   | BridgeReadyMessage

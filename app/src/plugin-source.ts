@@ -15,7 +15,7 @@
  */
 
 import { isTauri } from './api';
-import type { PluginManifest } from '../../packages/plugin-sdk/src';
+import type { PluginManifest, PluginViewBootstrap } from '../../packages/plugin-sdk/src';
 
 /** 插件 id 白名单（与内核 §20 规格一致）：小写字母/数字/连字符，首字符非连字符，最长 64 */
 const PLUGIN_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -52,13 +52,26 @@ const SOURCE_CSP =
  * CSP 经 meta 施加（iframe 外层一重；源服务响应头为另一重）：
  * - Tauri：srcdoc opaque origin 下 'self' 无效，显式列插件源 origin；
  * - 纯浏览器 dev：与壳层同 origin，'self' 即插件源。
+ *
+ * mount（视图引导信息）：内联脚本注入 `window.__sparkPluginView`——插件握手前
+ * 唯一能拿到 viewId/卡片上下文的途径（hello 的 viewId 必须与桥绑定一致，
+ * 插件无法可靠自报时由注入兜底，见 bridge/client.ts）；JSON 转义 `<` 防 `</script>` 逃逸。
  */
-export function buildPluginHostSrcdoc(pluginId: string): string {
+export function buildPluginHostSrcdoc(pluginId: string, mount?: PluginViewBootstrap): string {
   assertValidPluginId(pluginId);
   const base = pluginSourceBaseUrl(pluginId);
+  // mount 引导脚本为内联 script：仅注入 mount 时给 script-src 追加 'unsafe-inline'
+  // 放行（iframe 沙箱内插件 bundle 本就是任意代码，CSP 的网络外联约束不受此影响；
+  // 主视图不传 mount 则 CSP 维持原口径）
+  const scriptSrc = mount ? `${base} 'unsafe-inline'` : base;
   const csp = isTauri()
-    ? `default-src 'none'; script-src ${base}; style-src ${base} 'unsafe-inline'; connect-src ${base}; img-src ${base} data:; font-src ${base}`
-    : SOURCE_CSP;
+    ? `default-src 'none'; script-src ${scriptSrc}; style-src ${base} 'unsafe-inline'; connect-src ${base}; img-src ${base} data:; font-src ${base}`
+    : mount
+      ? SOURCE_CSP.replace("script-src 'self'", "script-src 'self' 'unsafe-inline'")
+      : SOURCE_CSP;
+  const mountScript = mount
+    ? `<script>window.__sparkPluginView = ${JSON.stringify(mount).replace(/</g, '\\u003c')};</script>`
+    : '';
   return [
     '<!doctype html>',
     '<html>',
@@ -66,6 +79,7 @@ export function buildPluginHostSrcdoc(pluginId: string): string {
     '<meta charset="utf-8" />',
     `<meta http-equiv="Content-Security-Policy" content="${csp}" />`,
     `<link rel="stylesheet" href="${base}/assets/main.css" />`,
+    mountScript,
     '</head>',
     '<body>',
     '<div id="app"></div>',

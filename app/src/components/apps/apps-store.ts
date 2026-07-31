@@ -29,7 +29,8 @@ export const PERMISSION_LABELS: Record<string, string> = {
   'org:sync': '同步组织数据',
   'network:broadcast': '网络广播',
   'proof:verify': '存证核验',
-  'identity:sign': '域身份签名'
+  'identity:sign': '域身份签名',
+  'message:app': '发送应用消息'
 };
 
 export function permissionLabel(permission: string): string {

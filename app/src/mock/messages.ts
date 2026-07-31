@@ -19,7 +19,8 @@
  * 非 Tauri/demo 环境就停留在诚实占位。
  */
 import { computed, reactive, watch } from 'vue';
-import { isTauri, listenP2pEvents, type ElectronAPI } from '../api';
+import { isTauri, listenP2pEvents, type AppMessageCardDto, type AppMessageDto, type ElectronAPI } from '../api';
+import { isAppConversationBlocked } from '../stores/app-conversations';
 
 /** 空间 key：个人空间为 'personal'，组织空间为 'org:<orgId>' */
 export type SpaceKey = string;
@@ -66,8 +67,9 @@ export interface ChatMessage {
 
 export interface Conversation {
   id: string;
-  /** direct=1:1 单聊；system=系统通知/组织公告（设计 §8.3） */
-  kind: 'direct' | 'system';
+  /** direct=1:1 单聊；system=系统通知/组织公告（设计 §8.3）；
+   *  app=应用会话（服务号模型 §20，id 约定 `app:{pluginId}`，peerId 占位填 pluginId） */
+  kind: 'direct' | 'system' | 'app';
   title: string;
   peerId: string;
   unreadCount: number;
@@ -85,6 +87,8 @@ export interface Conversation {
 interface SpaceData {
   conversations: Conversation[];
   messages: Record<string, ChatMessage[]>;
+  /** 应用消息（§20）：键为应用会话 id（`app:{pluginId}`），与人际消息分开存储 */
+  appMessages: Record<string, AppMessageDto[]>;
 }
 
 const MIN = 60_000;
@@ -153,7 +157,7 @@ export { spaceKeyOf } from './space-key';
 
 function ensureSpace(key: SpaceKey): SpaceData {
   if (!spaces[key]) {
-    spaces[key] = { conversations: [], messages: {} };
+    spaces[key] = { conversations: [], messages: {}, appMessages: {} };
     subscribeP2pEvents();
     hydrateConversations(key);
   }
@@ -175,6 +179,14 @@ function hydrateConversations(key: SpaceKey): void {
     .catch(() => {});
 }
 
+/** 应用会话 id 前缀（§20.1：会话 id = `app:{pluginId}`） */
+const APP_CONV_PREFIX = 'app:';
+
+/** 应用会话 id → pluginId；非应用会话返回 null */
+export function appConversationPluginId(convId: string): string | null {
+  return convId.startsWith(APP_CONV_PREFIX) ? convId.slice(APP_CONV_PREFIX.length) : null;
+}
+
 /** 首次读取某会话消息时拉取历史水合缓存；按 id merge，保留水合期间本地新增的消息 */
 function hydrateMessages(key: SpaceKey, convId: string): void {
   const loadedKey = `${key}\n${convId}`;
@@ -182,6 +194,15 @@ function hydrateMessages(key: SpaceKey, convId: string): void {
   hydratedMessages.add(loadedKey);
   const api = messagesApi();
   if (!api) return;
+  const pluginId = appConversationPluginId(convId);
+  if (pluginId !== null) {
+    // 应用会话：消息在 `msg:app:` 键空间，走 appList 水合（§20.6）
+    void api
+      .appList(key, pluginId)
+      .then((dtos) => mergeAppMessages(key, convId, dtos))
+      .catch(() => {});
+    return;
+  }
   void api
     .listMessages(key, convId)
     .then((dtos) => {
@@ -191,6 +212,14 @@ function hydrateMessages(key: SpaceKey, convId: string): void {
       space.messages[convId] = [...dtos.map((d) => ({ ...d })), ...localOnly];
     })
     .catch(() => {});
+}
+
+/** 内核 appList 结果按 id merge 进缓存（水合与桥 listAppMessages 调用共用） */
+export function mergeAppMessages(key: SpaceKey, convId: string, dtos: AppMessageDto[]): void {
+  const space = spaces[key];
+  if (!space) return;
+  const localOnly = (space.appMessages[convId] ?? []).filter((m) => !dtos.some((d) => d.id === m.id));
+  space.appMessages[convId] = [...dtos.map((d) => ({ ...d })), ...localOnly];
 }
 
 // ---------- 内核事件订阅（与 network-status 消费同一 p2p-event 通道） ----------
@@ -316,6 +345,107 @@ export function getMessages(key: SpaceKey, convId: string): ChatMessage[] {
   return space.messages[convId] ?? [];
 }
 
+/** 应用会话消息（首次访问触发 appList 水合，与 getMessages 同模式） */
+export function getAppMessages(key: SpaceKey, convId: string): AppMessageDto[] {
+  const space = ensureSpace(key);
+  hydrateMessages(key, convId);
+  return space.appMessages[convId] ?? [];
+}
+
+/** 应用会话最新摘要（会话列表预览；无消息时空串） */
+export function lastAppSummary(key: SpaceKey, convId: string): string {
+  const list = getAppMessages(key, convId);
+  return list.length > 0 ? list[list.length - 1].summary : '';
+}
+
+/**
+ * 应用消息就地入账（§20）：桥 dispatcher/系统通知经壳层服务（app-messages.ts）
+ * 写入内核后调用，保证打开的会话与会话列表实时刷新，不必等下次水合。
+ * 未读语义与 onChatReceived 同口径：活跃会话清零并回读，否则本地 +1
+ * （内核侧已权威计数，下次水合自动对齐）。
+ */
+export function ingestAppMessage(key: SpaceKey, dto: AppMessageDto): void {
+  const space = ensureSpace(key);
+  const convId = `${APP_CONV_PREFIX}${dto.pluginId}`;
+  let conv = findConversation(space, convId);
+  if (!conv) {
+    conv = {
+      id: convId,
+      kind: 'app',
+      title: dto.pluginId,
+      peerId: dto.pluginId,
+      unreadCount: 0,
+      pinnedAt: 0,
+      muted: false,
+      online: false,
+      draft: '',
+      updatedAt: dto.createdAt
+    };
+    space.conversations.push(conv);
+  }
+  conv.updatedAt = Math.max(conv.updatedAt, dto.createdAt);
+  const list = (space.appMessages[convId] ??= []);
+  if (list.some((m) => m.id === dto.id)) return;
+  list.push({ ...dto });
+  if (activeConversation[key] === convId) {
+    conv.unreadCount = 0;
+    const stored = list.find((m) => m.id === dto.id);
+    if (stored) stored.read = true;
+    void messagesApi()
+      ?.appMarkRead(key, dto.pluginId)
+      .catch(() => {});
+  } else {
+    conv.unreadCount += 1;
+  }
+}
+
+// ---- 非 Tauri 环境的应用消息内存镜像（与内核 §20 语义对齐，mock 链路可演示） ----
+
+const APP_SUMMARY_MAX_CHARS = 200;
+const APP_MSG_RATE_LIMIT = 10;
+const APP_MSG_RATE_WINDOW_MS = 60_000;
+/** 限流记账：key = `${spaceKey}\n${pluginId}` → 窗口内写入时间戳（内存态，进程重启清零） */
+const appRateLog = new Map<string, number[]>();
+
+/**
+ * 内存版应用消息写入：summary 校验（先于限流）与限流口径对齐内核
+ * （错误串前缀一致：missing-summary/summary-too-long/rate-limited）
+ */
+export function sendAppMessageLocal(
+  key: SpaceKey,
+  pluginId: string,
+  payload: Record<string, unknown>,
+  card?: AppMessageCardDto
+): AppMessageDto {
+  const summary = typeof payload.summary === 'string' ? payload.summary.trim() : '';
+  if (!summary) {
+    throw new Error('missing-summary: app message payload requires a non-empty summary');
+  }
+  if (summary.length > APP_SUMMARY_MAX_CHARS) {
+    throw new Error('summary-too-long: app message summary exceeds 200 chars');
+  }
+  const now = Date.now();
+  const rateKey = `${key}\n${pluginId}`;
+  const windowLog = (appRateLog.get(rateKey) ?? []).filter((ts) => now - ts < APP_MSG_RATE_WINDOW_MS);
+  if (windowLog.length >= APP_MSG_RATE_LIMIT) {
+    throw new Error('rate-limited: app message rate limit exceeded (10/60s)');
+  }
+  windowLog.push(now);
+  appRateLog.set(rateKey, windowLog);
+  const dto: AppMessageDto = {
+    id: `m${now}-${++seq}`,
+    pluginId,
+    summary,
+    payload,
+    createdAt: now,
+    status: 'local',
+    read: false,
+    ...(card ? { card } : {})
+  };
+  ingestAppMessage(key, dto);
+  return dto;
+}
+
 export function lastMessage(key: SpaceKey, convId: string): ChatMessage | undefined {
   const list = getMessages(key, convId);
   return list[list.length - 1];
@@ -335,6 +465,15 @@ export function closeConversation(key: SpaceKey): void {
 export function markRead(key: SpaceKey, convId: string): void {
   const conv = findConversation(ensureSpace(key), convId);
   if (conv) conv.unreadCount = 0;
+  const pluginId = appConversationPluginId(convId);
+  if (pluginId !== null) {
+    // 应用会话：消息 read 批量置真 + 内核 appMarkRead（§20.3）
+    for (const msg of spaces[key]?.appMessages[convId] ?? []) msg.read = true;
+    void messagesApi()
+      ?.appMarkRead(key, pluginId)
+      .catch(() => {});
+    return;
+  }
   void messagesApi()
     ?.markRead(key, convId)
     .catch(() => {});
@@ -375,12 +514,20 @@ export function clearMessages(key: SpaceKey, convId: string): void {
     .catch(() => {});
 }
 
-/** 删除单聊会话：仅删除列表入口，消息随会话一并移除（§5.1） */
+/** 删除会话：仅删除列表入口，消息随会话一并移除（§5.1；应用会话走 appDeleteConversation，§20.7） */
 export function deleteConversation(key: SpaceKey, convId: string): void {
   const space = ensureSpace(key);
   space.conversations = space.conversations.filter((c) => c.id !== convId);
   delete space.messages[convId];
+  delete space.appMessages[convId];
   if (activeConversation[key] === convId) delete activeConversation[key];
+  const pluginId = appConversationPluginId(convId);
+  if (pluginId !== null) {
+    void messagesApi()
+      ?.appDeleteConversation(key, pluginId)
+      .catch(() => {});
+    return;
+  }
   void messagesApi()
     ?.deleteConversation(key, convId)
     .catch(() => {});
@@ -536,28 +683,35 @@ export function formatDividerTime(ts: number): string {
   return `${d.getMonth() + 1}月${d.getDate()}日 ${hhmm}`;
 }
 
-/** 全部空间未读总数（免打扰会话不计入角标，§5.1） */
+/** 未读聚合口径：免打扰会话不计；被屏蔽的应用会话同样抑制（屏蔽为本地持久化状态） */
+function isUnreadSuppressed(key: SpaceKey, conv: Conversation): boolean {
+  if (conv.muted) return true;
+  const pluginId = appConversationPluginId(conv.id);
+  return pluginId !== null && isAppConversationBlocked(key, pluginId);
+}
+
+/** 全部空间未读总数（免打扰/已屏蔽会话不计入角标，§5.1） */
 export const totalUnread = computed(() => {
   let total = 0;
   for (const key of Object.keys(spaces)) {
     for (const conv of spaces[key].conversations) {
-      if (!conv.muted) total += conv.unreadCount;
+      if (!isUnreadSuppressed(key, conv)) total += conv.unreadCount;
     }
   }
   return total;
 });
 
-/** 某空间是否有未读消息（免打扰会话不计；首次访问触发该空间水合，
+/** 某空间是否有未读消息（免打扰/已屏蔽会话不计；首次访问触发该空间水合，
  *  与 contactsOf 同模式——在 computed/渲染中调用即可保持响应式） */
 export function hasUnreadMessages(key: SpaceKey): boolean {
-  return ensureSpace(key).conversations.some((conv) => !conv.muted && conv.unreadCount > 0);
+  return ensureSpace(key).conversations.some((conv) => !isUnreadSuppressed(key, conv) && conv.unreadCount > 0);
 }
 
-/** 某空间未读总数（免打扰会话不计；角标按空间隔离，不用全局 totalUnread） */
+/** 某空间未读总数（免打扰/已屏蔽会话不计；角标按空间隔离，不用全局 totalUnread） */
 export function unreadCountOf(key: SpaceKey): number {
   let total = 0;
   for (const conv of ensureSpace(key).conversations) {
-    if (!conv.muted) total += conv.unreadCount;
+    if (!isUnreadSuppressed(key, conv)) total += conv.unreadCount;
   }
   return total;
 }
