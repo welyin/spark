@@ -25,6 +25,7 @@ pub mod permissions;
 pub mod repo;
 pub mod semver;
 mod service;
+pub mod sideload;
 mod sources;
 mod state;
 #[cfg(test)]

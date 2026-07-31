@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "主窗口默认能力集（核心事件/窗口 API + 导出保存对话框；业务全部走自定义 command）",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:allow-save"]
+  "permissions": ["core:default", "dialog:allow-save", "dialog:allow-open"]
 }

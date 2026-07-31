@@ -19,7 +19,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { save as saveDialog } from '@tauri-apps/plugin-dialog';
+import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { ARG_NAMES, COMMAND_MAP } from './command-map';
 import type { ElectronAPI, P2pEventDto, PluginCatalogItem } from './types';
 
@@ -29,6 +29,36 @@ export * from './types';
 /** 订阅内核 P2P 事件流；返回取消订阅函数。 */
 export function listenP2pEvents(handler: (event: P2pEventDto) => void): Promise<UnlistenFn> {
   return listen<P2pEventDto>('p2p-event', (event) => handler(event.payload));
+}
+
+/** 广播索引核查事件（announce_verify.rs 推渲染端的独立别名事件，载荷与 P2pEvent 相同）。 */
+export type PluginAnnounceEvent =
+  | { kind: 'received'; id: string; publisher: string }
+  | { kind: 'verified'; id: string; verified: boolean; error: string | null };
+
+/** 订阅广播索引 received/verified 事件；返回取消订阅函数（两路一起退订）。 */
+export function listenPluginAnnounceEvents(
+  handler: (event: PluginAnnounceEvent) => void
+): Promise<UnlistenFn> {
+  const received = listen<{ id: string; publisher: string }>('plugin-announce-received', (event) =>
+    handler({ kind: 'received', ...event.payload })
+  );
+  const verified = listen<{ id: string; verified: boolean; error: string | null }>(
+    'plugin-announce-verified',
+    (event) => handler({ kind: 'verified', ...event.payload })
+  );
+  return Promise.all([received, verified]).then(([unReceived, unVerified]) => () => {
+    unReceived();
+    unVerified();
+  });
+}
+
+/** .spkg 侧载文件选择（网络差降级导入入口）；用户取消返回 null。 */
+export function pickSpkgFile(): Promise<string | null> {
+  return openDialog({
+    title: '导入 .spkg 插件包',
+    filters: [{ name: 'Spark 插件包', extensions: ['spkg'] }]
+  });
 }
 
 /** 通用调用：channel + 位置参数 → command + 命名参数。 */
@@ -194,6 +224,10 @@ export function createTauriApi(): ElectronAPI {
       // 仓库锚定安装（plugin-dist）：先 resolveRepo 展示声明文件，确认后 installFromRepo
       resolveRepo: (id: string) => call('plugin-market-resolve-repo', id),
       installFromRepo: (id: string) => call('plugin-market-install-from-repo', id),
+      // .spkg 侧载导入（网络差降级）：inspect 预览哈希供核对 → import 复核落状态
+      inspectLocal: (path: string) => call('plugin-market-inspect-local', path),
+      importLocal: (path: string, expectedSha256: string) =>
+        call('plugin-market-import-local', path, expectedSha256),
       // 广播索引（plugin-dist §8）：开发者发布声明（签名+PoW+广播，秒级）与本地索引查询
       announcePublish: (input) => call('plugin-market-announce-publish', input),
       announceList: () => call('plugin-market-announce-list'),

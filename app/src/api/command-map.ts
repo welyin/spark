@@ -117,6 +117,8 @@ export const COMMAND_MAP: Record<string, string> = {
   'plugin-market-set-enabled': 'plugin_market_set_enabled',
   'plugin-market-resolve-repo': 'plugin_market_resolve_repo',
   'plugin-market-install-from-repo': 'plugin_market_install_from_repo',
+  'plugin-market-inspect-local': 'plugin_market_inspect_local',
+  'plugin-market-import-local': 'plugin_market_import_local',
   'plugin-market-announce-publish': 'plugin_market_announce_publish',
   'plugin-market-announce-list': 'plugin_market_announce_list',
   'plugin-market-announce-get': 'plugin_market_announce_get',
@@ -208,6 +210,8 @@ export const ARG_NAMES: Record<string, string[]> = {
   'plugin-market-set-enabled': ['pluginId', 'enabled'],
   'plugin-market-resolve-repo': ['id'],
   'plugin-market-install-from-repo': ['id'],
+  'plugin-market-inspect-local': ['path'],
+  'plugin-market-import-local': ['path', 'expectedSha256'],
   'plugin-market-announce-publish': ['input'],
   'plugin-market-announce-get': ['id'],
   'system-set-badge': ['count']

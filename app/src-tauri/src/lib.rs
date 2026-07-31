@@ -248,6 +248,9 @@ pub fn run() {
             // 插件市场·仓库锚定安装（plugin-dist）
             commands::market::plugin_market_resolve_repo,
             commands::market::plugin_market_install_from_repo,
+            // 插件市场·.spkg 侧载导入（网络差降级：预览哈希核对 / 导入）
+            commands::market::plugin_market_inspect_local,
+            commands::market::plugin_market_import_local,
             // 插件市场·广播索引（plugin-dist §8：发布声明/索引查询）
             commands::market::plugin_market_announce_publish,
             commands::market::plugin_market_announce_list,

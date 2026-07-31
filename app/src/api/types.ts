@@ -125,8 +125,22 @@ export type InstalledPluginStateDto = {
   installedAt: number;
   enabled: boolean;
   grantedPermissions: PluginPermission[];
-  /** 信任层级（仓库锚定安装，plugin-dist §4.2）：'signed' | 'repo-anchored'；缺省 = 签名信任链 */
+  /** 信任层级：'signed' | 'repo-anchored'（仓库锚定，plugin-dist §4.2）| 'sideloaded'（.spkg 侧载）；缺省 = 签名信任链 */
   trust?: string;
+};
+
+/** .spkg 侧载预览（plugin-market-inspect-local 出参；网络差降级，波次 2b） */
+export type SideloadPreviewDto = {
+  pluginId: string;
+  domain: string;
+  version: string;
+  name: string;
+  /** 包内 manifest.json 声明的权限（已规范化） */
+  permissions: string[];
+  /** 整包 sha256（确认对话框展示供核对；import 复核） */
+  sha256: string;
+  size: number;
+  fileName: string;
 };
 
 /** 仓库声明文件 spark-plugin.json（plugin-dist §2；resolveRepo 出参，id 已规范化） */
@@ -489,6 +503,10 @@ export type ElectronAPI = {
     resolveRepo: (id: string) => Promise<RepoPluginDeclarationDto>;
     /** 仓库锚定安装（plugin-dist §4.2） */
     installFromRepo: (id: string) => Promise<InstalledPluginStateDto>;
+    /** .spkg 侧载预览：解析容器 + 整包哈希（网络差降级，波次 2b） */
+    inspectLocal: (path: string) => Promise<SideloadPreviewDto>;
+    /** .spkg 侧载导入：复核整包哈希 → 逐文件校验 → 落状态（trust = 'sideloaded'） */
+    importLocal: (path: string, expectedSha256: string) => Promise<InstalledPluginStateDto>;
     /** 发布插件声明（plugin-dist §8，开发者模式：签名 + PoW + 广播；秒级） */
     announcePublish: (input: PluginAnnounceInputDto) => Promise<PluginAnnounceIndexEntryDto>;
     /** 本地广播索引列表（含 verified 状态；市场视图只展示 verified，波次 2b） */

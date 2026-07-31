@@ -29,6 +29,7 @@
       @detail="(item) => openDetail(item)"
       @install="installApp"
       @install-repo="installRepoPlugin"
+      @sideloaded="refreshSafe"
     />
 
     <!-- 应用详情：全 app 统一抽屉（无头部小标题，右上角自定义关闭），不再整页切换；
@@ -300,7 +301,13 @@ export default defineComponent({
         ElMessage.success('应用安装成功，启用后即可使用');
         notifyPluginInstalled(spaceKeyOf(currentSpace.value), declaration.name);
       } catch (error) {
-        ElMessage.error(`应用安装失败：${error}`);
+        // 网络差降级（plugin_system.md「市场展示与排序」）：仓库不可达时提示手动侧载路径
+        const message = `${error}`;
+        ElMessage.error(
+          message.includes('fetch failed') || message.includes('unreachable')
+            ? `应用安装失败：仓库不可达，可自行下载 .spkg 后用「导入 .spkg 文件」侧载安装（${message}）`
+            : `应用安装失败：${message}`
+        );
       } finally {
         setBusy(declaration.id, '');
       }
@@ -406,7 +413,8 @@ export default defineComponent({
       installRepoPlugin,
       upgradeApp,
       toggleEnabled,
-      requestEnable
+      requestEnable,
+      refreshSafe
     };
   }
 });

@@ -16,6 +16,7 @@ mod e2e;
 mod install;
 mod reconcile;
 mod repo;
+mod sideload;
 mod updates;
 mod wire;
 

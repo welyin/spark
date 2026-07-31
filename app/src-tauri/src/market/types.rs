@@ -58,8 +58,9 @@ pub struct InstalledPluginState {
     /// 安装时授权并持久化的权限清单（基础 ∪ 声明∩高级）
     #[serde(default)]
     pub granted_permissions: Vec<String>,
-    /// 信任层级（仓库锚定安装，plugin-dist §4.2）："signed" | "repo-anchored"；
-    /// 缺省（旧记录/目录安装）= 现有签名信任链，不落字段保持线形不变
+    /// 信任层级："signed" | "repo-anchored"（仓库锚定安装，plugin-dist §4.2）|
+    /// "sideloaded"（.spkg 侧载导入，sideload.rs）；缺省（旧记录/目录安装）=
+    /// 现有签名信任链，不落字段保持线形不变
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trust: Option<String>,
 }

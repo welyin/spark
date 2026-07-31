@@ -255,3 +255,80 @@
   font-size: 12px;
   color: var(--el-text-color-secondary);
 }
+
+/* ---------- 收录/探索分区与探索页（plugin_system.md「市场展示与排序」，波次 2b） ---------- */
+
+/* 收录/探索切换：居中分段控件 */
+.market-view-switch {
+  align-self: center;
+  margin-bottom: 12px;
+}
+
+/* 组织白名单占位：分组标题下的空态说明 */
+.market-org-whitelist-empty {
+  margin: 0;
+  font-size: 13px;
+  color: var(--spark-text-2);
+  text-align: center;
+}
+
+/* 探索页工具条：搜索框 + 换一批按钮同一行居中 */
+.explore-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 var(--spark-padding-page) 12px;
+}
+
+.explore-search {
+  width: 100%;
+  max-width: 420px;
+}
+
+.explore-shuffle {
+  flex-shrink: 0;
+}
+
+.explore-new-hint {
+  margin: 0 var(--spark-padding-page) 12px;
+}
+
+.explore-grid {
+  padding: 0 var(--spark-padding-page) 16px;
+}
+
+.explore-card-icon {
+  object-fit: cover;
+}
+
+.explore-card-version {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--spark-text-2);
+}
+
+.explore-detail-meta {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  word-break: break-all;
+}
+
+.explore-fallback-text {
+  margin: 4px 0 0;
+  font-size: 12px;
+}
+
+.explore-fallback-id {
+  font-family: monospace;
+  word-break: break-all;
+}
+
+/* 侧载导入确认框：包哈希等宽展示供核对 */
+.sideload-hash {
+  margin: 4px 0 0;
+  font-size: 12px;
+  font-family: monospace;
+  word-break: break-all;
+}

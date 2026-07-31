@@ -96,6 +96,36 @@ pub async fn plugin_market_install_from_repo(
 }
 
 // ------------------------------------------------------------------
+// .spkg 侧载导入（plugin_system.md「市场展示与排序 · 网络差降级」，波次 2b）：
+// inspect 只读预览（含整包哈希供核对）→ import 复核哈希后落状态。
+// ------------------------------------------------------------------
+
+use crate::market::sideload::SideloadPreview;
+
+/// 侧载预览：解析 .spkg 容器 + 计算整包 sha256/size，供确认对话框展示核对。
+#[tauri::command]
+pub async fn plugin_market_inspect_local(
+    state: tauri::State<'_, MarketState>,
+    path: String,
+) -> Result<SideloadPreview, String> {
+    run_market(state, move |svc| svc.inspect_local_package(&path)).await
+}
+
+/// 侧载导入：复核整包哈希（preview 后文件被替换即拒）→ 逐文件校验 →
+/// 落状态（trust = "sideloaded"）。
+#[tauri::command]
+pub async fn plugin_market_import_local(
+    state: tauri::State<'_, MarketState>,
+    path: String,
+    expected_sha256: String,
+) -> Result<InstalledPluginState, String> {
+    run_market(state, move |svc| {
+        svc.import_local_package(&path, &expected_sha256)
+    })
+    .await
+}
+
+// ------------------------------------------------------------------
 // 广播索引（plugin-dist §8，阶段 C 波次 2a）：发布声明 / 索引查询。
 // 索引存内核 sled（`mkt:ann:`），内核 API 为同步且禁在 tokio 线程调用，
 // 与全命令层一致用同步 command（PoW 计算秒级，UI 在渲染进程不受影响）。
