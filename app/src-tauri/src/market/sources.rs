@@ -20,10 +20,14 @@ const TEXT_FETCH_MAX_BYTES: u64 = 4 * 1024 * 1024;
 
 /// 共享 blocking Client：显式连接/整体超时——市场源不可达（如直连 GitHub 被重置）
 /// 时在数秒内失败走错误路径，不允许无超时无限阻塞调用方。
+///
+/// 代理：default-features 关闭后 reqwest 不含 system-proxy，环境变量不会自动生效，
+/// 这里显式读取 `SPARK_PROXY`（优先）或 `HTTPS_PROXY` / `https_proxy` / `ALL_PROXY` /
+/// `all_proxy`（如 `http://127.0.0.1:29290`）。未设置则直连。
 fn http_client() -> &'static reqwest::blocking::Client {
     static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
-        reqwest::blocking::Client::builder()
+        let mut builder = reqwest::blocking::Client::builder()
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(30))
             // 重定向加固：任何非 https 跳转目标（https→http 降级）即断，最多 5 跳
@@ -35,10 +39,29 @@ fn http_client() -> &'static reqwest::blocking::Client {
                 } else {
                     attempt.follow()
                 }
-            }))
-            .build()
-            .unwrap_or_default()
+            }));
+        if let Some(proxy) = proxy_from_env() {
+            match reqwest::Proxy::all(&proxy) {
+                Ok(p) => builder = builder.proxy(p),
+                Err(e) => eprintln!("[market] 代理配置无效已忽略（{proxy}）：{e}"),
+            }
+        }
+        builder.build().unwrap_or_default()
     })
+}
+
+/// 代理环境变量解析：SPARK_PROXY 优先，其次 HTTPS_PROXY/https_proxy/ALL_PROXY/all_proxy；
+/// 空串视为未设置（显式清空可禁用）。
+fn proxy_from_env() -> Option<String> {
+    for key in ["SPARK_PROXY", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"] {
+        if let Ok(value) = std::env::var(key) {
+            let value = value.trim().to_string();
+            if !value.is_empty() {
+                return Some(value);
+            }
+        }
+    }
+    None
 }
 
 pub(crate) fn now_millis() -> u64 {
