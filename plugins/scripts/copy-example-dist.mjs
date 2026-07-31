@@ -44,8 +44,11 @@ async function checkViewBundle(name) {
   if (bundle.length === 0) {
     fail(`dist/views/${name}.js 为空文件`);
   }
-  if (!/export\s*[{]/.test(bundle) && !/export\s+default/.test(bundle) && !/\bimport\(/.test(bundle) && !/\bimport\s/.test(bundle)) {
-    fail(`dist/views/${name}.js 不含 ESM 语法，产物形态异常`);
+  // ESM 正向断言：lib 模式 ES 产物必须含导出语法。不做 import 探测——
+  // CJS 产物里也可能出现动态 import()/注释中的 import 字样，判据过宽
+  // 会把错误产物误判为通过；形态异常交给下面的 CJS 负向检查兜底。
+  if (!/export\s*[{]/.test(bundle) && !/export\s+default/.test(bundle)) {
+    fail(`dist/views/${name}.js 不含 ESM 导出语法，产物形态异常`);
   }
   if (/^\s*(const|var|let)\s+\S+\s*=\s*require\(/m.test(bundle)) {
     fail(`dist/views/${name}.js 疑似 CJS 产物（含顶层 require）`);

@@ -69,12 +69,13 @@ describe('spark-example model', () => {
     expect(hashPostContent('')).toMatch(/^[0-9a-f]{8}$/);
   });
 
-  it('binds sign payload to org + post + content hash (anti replay across posts)', () => {
-    const payload = buildPostSignPayload('org-1', 'post-1', '正文');
-    expect(payload).toBe(`org-1:post-1:${hashPostContent('正文')}`);
-    // 同一正文换个帖子/组织，载荷不同——签名无法被剪贴重放
-    expect(buildPostSignPayload('org-1', 'post-2', '正文')).not.toBe(payload);
-    expect(buildPostSignPayload('org-2', 'post-1', '正文')).not.toBe(payload);
+  it('binds sign payload to org + post + author + content hash (anti replay, anti author-swap)', () => {
+    const payload = buildPostSignPayload('org-1', 'post-1', 'root-admin', '正文');
+    expect(payload).toBe(`org-1:post-1:root-admin:${hashPostContent('正文')}`);
+    // 同一正文换个帖子/组织/作者，载荷不同——签名无法被剪贴重放、作者无法被替换
+    expect(buildPostSignPayload('org-1', 'post-2', 'root-admin', '正文')).not.toBe(payload);
+    expect(buildPostSignPayload('org-2', 'post-1', 'root-admin', '正文')).not.toBe(payload);
+    expect(buildPostSignPayload('org-1', 'post-1', 'root-other', '正文')).not.toBe(payload);
   });
 
   it('builds self-contained app message summary (declarative fallback text)', () => {

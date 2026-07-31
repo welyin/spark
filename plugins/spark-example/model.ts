@@ -4,10 +4,14 @@
  * 教学要点：
  * - 本文件不依赖 SDK / Vue，全部是可单测的纯函数与类型——插件业务规则
  *   （长度约束、发帖权限、评论树组装、签名载荷、消息摘要）尽量沉淀在这一层；
- * - 集合名与文档字段（weibo_posts / weibo_comments / …）是数据键，
- *   跨版本必须保持稳定（存量数据兼容），因此更名 spark-example 后依然沿用；
- * - WeiboPost.signature 为可选新增字段：旧帖子文档没有它也能正常读写，
- *   这是插件演进数据结构的安全方式——只加可选字段，不改/不删既有字段。
+ * - 集合名沿用 weibo_* 旧称只是减少无谓 churn，**不等于存量数据兼容**：
+ *   内核存储键含插件域段（`doc:<domain>:<collection>:<id>`），域已从
+ *   weibo-core 更名为 spark-example，全部存储键随之改变——本次更名是
+ *   「不兼容升级」，旧 weibo-core 域的存量数据不迁移（0.1.0 预发布阶段
+ *   显式接受；正式版本若再更名/改域，必须提供迁移或兼容层）；
+ * - 真正的跨版本兼容手段在文档结构层：WeiboPost.signature 为可选新增字段，
+ *   旧帖子文档没有它也能正常读写——插件演进数据结构的安全方式是
+ *   只加可选字段，不改/不删既有字段。
  */
 
 export const WEIBO_MAX_TEXT_LENGTH = 260;
@@ -21,7 +25,7 @@ export const POST_SUMMARY_PREVIEW_LENGTH = 80;
  * 任何成员拿到 payload + signature + publicKey 都可用 identity.verify 免权限验签。
  */
 export type WeiboPostSignature = {
-  /** 被签名的原文（buildPostSignPayload 产物），验签时需原样回放 */
+  /** 被签名的原文（buildPostSignPayload 产物）；验签侧不直接回放，而是从帖子当前字段重算比对 */
   payload: string;
   signature: string;
   publicKey: string;
@@ -88,12 +92,14 @@ export function hashPostContent(content: string): string {
 }
 
 /**
- * 签名载荷：`{orgId}:{postId}:{内容哈希}`。
- * 把组织与帖子 id 编进载荷，签名即绑定「谁在哪个组织发了哪条帖」，
- * 无法被剪贴到别的帖子/组织上重放。
+ * 签名载荷：`{orgId}:{postId}:{authorRootId}:{内容哈希}`。
+ * 把组织、帖子 id、作者与内容指纹全部编进载荷：签名即绑定
+ * 「谁在哪个组织以哪个身份发了哪条帖」，无法被剪贴到别的帖子/组织上
+ * 重放，也无法在保留签名的前提下替换作者字段（验签侧会用帖子当前
+ * authorRootId 重算载荷比对，见 service.verifyPostSignature）。
  */
-export function buildPostSignPayload(orgId: string, postId: string, content: string): string {
-  return `${orgId}:${postId}:${hashPostContent(content)}`;
+export function buildPostSignPayload(orgId: string, postId: string, authorRootId: string, content: string): string {
+  return `${orgId}:${postId}:${authorRootId}:${hashPostContent(content)}`;
 }
 
 /**
@@ -102,8 +108,9 @@ export function buildPostSignPayload(orgId: string, postId: string, content: str
  * 不依赖卡片数据也能读懂——可达性不依赖成员是否安装插件代码。
  */
 export function buildPostSummary(content: string): string {
-  const preview = normalizeWeiboText(content).slice(0, POST_SUMMARY_PREVIEW_LENGTH);
-  const ellipsis = normalizeWeiboText(content).length > POST_SUMMARY_PREVIEW_LENGTH ? '…' : '';
+  const normalized = normalizeWeiboText(content);
+  const preview = normalized.slice(0, POST_SUMMARY_PREVIEW_LENGTH);
+  const ellipsis = normalized.length > POST_SUMMARY_PREVIEW_LENGTH ? '…' : '';
   return `【新帖】${preview}${ellipsis}`;
 }
 

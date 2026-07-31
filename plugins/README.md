@@ -6,10 +6,14 @@
 plugins/<id>/
   manifest.json      ← 声明式清单（唯一事实源）
   spark-plugin.json  ← 仓库声明文件（分发信任锚点雏形）
-  index.ts           ← 入口：export default definePlugin({ manifest, setup })
-  *.vue / *.ts       ← 视图与业务逻辑
+  index.ts           ← 主入口：connectPluginBridge 握手 + 按 __sparkPluginView 多视图分发
+  *.vue / *.ts       ← 视图与业务逻辑（主视图 + 可选 message-card 卡片视图）
+  vite.config.ts     ← 多入口构建配置（dist/views/main.js + views/<viewId>.js）
+  dist/              ← 构建产物（gitignored，npm run build:example 生成）
   tests/             ← 插件单测（随 code/app 的 vitest 一起执行）
 ```
+
+完整示例见 `spark-example/`（插件体系参考实现：多视图、应用通知、签名演示）。
 
 ## 边界约定
 

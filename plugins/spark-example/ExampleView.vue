@@ -3,10 +3,13 @@
 
   本文件是插件体系的参考实现，集中演示：
   - runtime.currentRoot / listMineOrganizations / syncOrganizationData（org:read、org:sync）；
-  - docs 读写（经 service 层，storage:read/write；集合名 weibo_* 为数据键，跨版本稳定）；
+  - docs 读写（经 service 层，storage:read/write；集合名沿用 weibo_* 旧称，
+    但存储键含插件域段，更名 spark-example 属不兼容升级，见 model.ts 头注）；
   - identity:sign 发帖防抵赖 + identity.verify 免权限验签（「已签名」徽标）；
-  - messages.sendAppMessage 发帖后通知组织应用会话（message:app）；
-  - messages.onCardAction 接收消息卡片「去评论」回调 → 定位该帖并展开评论区。
+  - messages.sendAppMessage 发帖后通知组织应用会话（message:app，仅发帖者本机
+    即时反馈）；成员侧通知在同步后由本机插件实例「本地生成」（§20.4.3，
+    见 loadTimeline → service.notifyTimelinePosts）；
+  - messages.onCardAction 接收消息卡片「去评论」回调 → 切到目标组织、定位该帖并展开评论区。
 -->
 <template>
   <section class="spark-example">
@@ -345,6 +348,16 @@ export default defineComponent({
 
       posts.value = await service.value.loadPosts(selectedOrgId.value);
       comments.value = await service.value.loadComments(selectedOrgId.value);
+
+      // 成员侧「本地生成」通知（服务号模型 §20.4.3）：应用消息不走网络，
+      // 发帖者的通知只到发帖者本机；本机作为成员设备，同步后出现的新帖
+      // 由本机插件实例各自生成本机应用消息（localStorage 台账去重）。
+      // 通知失败不影响时间线，仅降级少一条本机通知。
+      try {
+        await service.value.notifyTimelinePosts(selectedOrgId.value, posts.value);
+      } catch (error) {
+        console.warn('[spark-example] 成员侧本地生成通知失败（已降级）：', error);
+      }
     };
 
     const syncLatestFromPeers = async () => {
@@ -405,10 +418,17 @@ export default defineComponent({
           currentOrgRole.value
         );
         postDraft.value = '';
-        // 发帖成功 → 向组织应用会话发新帖通知（含 post-card 卡片），失败仅告警
-        await service.value.notifyNewPost(post);
+        // 发帖成功 → 向本机应用会话发新帖通知（含 post-card 卡片）。
+        // 注意语义：这条通知只是发帖者本机的即时反馈，组织其他成员的设备
+        // 靠同步后本地生成（loadTimeline → notifyTimelinePosts）。
+        const notified = await service.value.notifyNewPost(post);
         await loadTimeline();
-        setMessage('短文发布成功（已进入插件域数据并触发P2P同步，应用会话已收到新帖通知）', 'success');
+        setMessage(
+          notified
+            ? '短文发布成功（已进入插件域数据并触发P2P同步，本机应用会话已生成新帖通知）'
+            : '短文发布成功（已进入插件域数据并触发P2P同步；应用消息被权限/限流降级，未生成本机通知）',
+          'success'
+        );
       } catch (error) {
         setMessage(`发布失败：${error}`, 'error');
       } finally {
@@ -485,16 +505,29 @@ export default defineComponent({
 
     /**
      * 卡片回调（messages.onCardAction）：消息卡片「去评论」经壳层归属校验
-     * 后路由到这里。定位目标帖（不在当前时间线则先重载）→ 展开评论区 →
-     * 滚动到位并短暂高亮。主实例未运行时壳层直接丢弃 action（设计允许）。
+     * 后路由到这里。card.data 捎带 orgId（notifyNewPost 写入）——卡片可能
+     * 属于非当前选中组织的应用会话，定位前先切换组织，再定位目标帖
+     * （不在当前时间线则先重载）→ 展开评论区 → 滚动到位并短暂高亮。
+     * 主实例未运行时壳层直接丢弃 action（设计允许）。
      */
     const handleCardAction = async (action: PluginCardActionPayload) => {
       if (action.actionId !== 'goto-comments') {
         return;
       }
-      const postId = (action.data as { postId?: string } | undefined)?.postId;
+      const data = action.data as { postId?: string; orgId?: string } | undefined;
+      const postId = data?.postId;
       if (!postId) {
         return;
+      }
+      // 跨组织定位：目标帖不在当前选中组织时先切换（orgId 必须在本机已加入
+      // 的组织列表内，否则说明该组织对当前身份不可见）
+      if (data?.orgId && data.orgId !== selectedOrgId.value) {
+        if (!orgOptions.value.some((org) => org.orgId === data.orgId)) {
+          setMessage('目标帖子所属组织不在本机已加入的组织中。', 'warning');
+          return;
+        }
+        selectedOrgId.value = data.orgId;
+        posts.value = [];
       }
       if (!posts.value.some((post) => post.id === postId)) {
         // 目标帖不在当前视图（可能尚未加载/同步）：重载一次再定位
@@ -540,8 +573,17 @@ export default defineComponent({
       return buildCommentThread(postId, comments.value);
     };
 
+    // 评论数按 computed 聚合：comments 变更时一次归并，模板渲染不再逐帖 filter
+    const commentCountByPostId = computed<Record<string, number>>(() => {
+      const counts: Record<string, number> = {};
+      for (const comment of comments.value) {
+        counts[comment.postId] = (counts[comment.postId] ?? 0) + 1;
+      }
+      return counts;
+    });
+
     const commentCountByPost = (postId: string): number => {
-      return comments.value.filter((comment) => comment.postId === postId).length;
+      return commentCountByPostId.value[postId] ?? 0;
     };
 
     const formatDate = (timestamp: number) => {

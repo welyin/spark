@@ -2,10 +2,13 @@
  * 示例插件（spark-example）产物构建配置（插件 iframe 沙箱化阶段 A）。
  *
  * vite lib 模式多入口产出 ESM bundle：
- * - dist/views/main.js       主入口（宿主 srcdoc 固定加载它，内部按
- *   window.__sparkPluginView 分发主视图/卡片视图）；
+ * - dist/views/main.js       主入口（当前壳层 srcdoc 固定加载它，内部按
+ *   window.__sparkPluginView 分发主视图/卡片视图——这是现实约束下的
+ *   workaround，设计方向是壳层按 view 直载各视图 bundle，届时主入口的
+ *   分发职责即退役）；
  * - dist/views/post-card.js  消息卡片视图 bundle（设计文档「包形态」
- *   多视图约定：views/<viewId>.js；宿主经主入口动态 import 加载）；
+ *   多视图约定：views/<viewId>.js；当前经主入口动态 import 加载，
+ *   作为独立入口产出是为壳层按 view 直载预留的产物形态）；
  * - dist/chunks/*.js         两入口共享代码（vue/element-plus/SDK）自动
  *   切出的共享 chunk——多入口下无法 inlineDynamicImports，共享 chunk
  *   随 dist 一起分发，CSP script-src 插件源 origin 已覆盖；

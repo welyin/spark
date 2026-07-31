@@ -17,6 +17,7 @@
 <template>
   <section class="post-card">
     <div v-if="loading" class="state">加载中…</div>
+    <div v-else-if="loadError" class="state">卡片加载失败（请查看应用消息摘要）</div>
     <div v-else-if="!post" class="state">帖子不存在或尚未同步到本机</div>
     <template v-else>
       <div class="meta">
@@ -53,6 +54,7 @@ export default defineComponent({
   },
   setup(props) {
     const loading = ref(true);
+    const loadError = ref('');
     const post = ref<WeiboPost | null>(null);
     const commentCount = ref(0);
     const verified = ref(false);
@@ -69,32 +71,41 @@ export default defineComponent({
     };
 
     onMounted(async () => {
-      sdk = await ensurePluginSDK();
-      const postId = props.cardData?.postId;
-      if (!postId) {
-        loading.value = false;
-        return;
-      }
-
-      // docs 只读：卡片视图允许 docs.get / docs.query
-      post.value = await sdk.docs.get<WeiboPost>(WEIBO_COLLECTIONS.posts, postId);
-      if (post.value) {
-        const comments = await sdk.docs.query<WeiboComment>(WEIBO_COLLECTIONS.comments, {
-          filter: [{ field: 'postId', value: postId }],
-          limit: 500
-        });
-        commentCount.value = comments.items.length;
-
-        // 免权限验签：任何人可校验作者签名（防抵赖演示的另一半）
-        if (post.value.signature) {
-          const service = new WeiboService(sdk);
-          verified.value = await service.verifyPostSignature(post.value);
+      // 失败即降级：握手失败/超时由壳层宿主（AppMessageCard）emit('fallback')
+      // 降级为原生摘要；视图内运行期异常（docs 读取失败等）则落本组件的
+      // 错误占位——与「未装插件也能读懂摘要」的可达性原则一致，绝不卡在
+      // 永久「加载中」。
+      try {
+        sdk = await ensurePluginSDK();
+        const postId = props.cardData?.postId;
+        if (!postId) {
+          return;
         }
-      }
 
-      loading.value = false;
-      // 内容就绪后申请紧凑高度（壳层封顶 400px）
-      requestHeight(post.value ? 150 : 90);
+        // docs 只读：卡片视图允许 docs.get / docs.query
+        post.value = await sdk.docs.get<WeiboPost>(WEIBO_COLLECTIONS.posts, postId);
+        if (post.value) {
+          const comments = await sdk.docs.query<WeiboComment>(WEIBO_COLLECTIONS.comments, {
+            filter: [{ field: 'postId', value: postId }],
+            limit: 500
+          });
+          commentCount.value = comments.items.length;
+
+          // 免权限验签：任何人可校验作者签名（防抵赖演示的另一半）
+          if (post.value.signature) {
+            const service = new WeiboService(sdk);
+            verified.value = await service.verifyPostSignature(post.value);
+          }
+        }
+      } catch (error) {
+        console.error('[spark-example] post-card 加载失败：', error);
+        loadError.value = String(error);
+        post.value = null;
+      } finally {
+        loading.value = false;
+        // 内容就绪后申请紧凑高度（壳层封顶 400px）
+        requestHeight(post.value ? 150 : 90);
+      }
     });
 
     const gotoComments = () => {
@@ -108,7 +119,7 @@ export default defineComponent({
         new Date(timestamp)
       );
 
-    return { loading, post, commentCount, verified, gotoComments, formatDate };
+    return { loading, loadError, post, commentCount, verified, gotoComments, formatDate };
   }
 });
 </script>
