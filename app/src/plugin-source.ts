@@ -73,12 +73,17 @@ const sourceCsp = (scriptSrc: string): string =>
 export function buildPluginHostSrcdoc(pluginId: string, mount?: PluginViewBootstrap): string {
   assertValidPluginId(pluginId);
   const base = pluginSourceBaseUrl(pluginId);
+  // CSP 来源用插件源 origin（不含 id 路径段）：CSP 路径匹配规则下，
+  // 不带尾斜杠的路径只精确匹配该路径本身，不匹配子文件（weibo-core/views/main.js 会被
+  // script-src http://plugin.localhost/weibo-core 误挡）；origin 级来源才是正确粒度
+  // （各插件 id 本就共享同一 origin，路径段不构成隔离）。
+  const origin = base.slice(0, base.length - (encodeURIComponent(pluginId).length + 1));
   // mount 引导脚本为内联 script：仅注入 mount 时给 script-src 追加 'unsafe-inline'
   // 放行（iframe 沙箱内插件 bundle 本就是任意代码，CSP 的网络外联约束不受此影响；
   // 主视图不传 mount 则 CSP 维持原口径）
-  const scriptSrc = mount ? `${base} 'unsafe-inline'` : base;
+  const scriptSrc = mount ? `${origin} 'unsafe-inline'` : origin;
   const csp = isTauri()
-    ? `default-src 'none'; script-src ${scriptSrc}; style-src ${base} 'unsafe-inline'; connect-src ${base}; img-src ${base} data:; font-src ${base}`
+    ? `default-src 'none'; script-src ${scriptSrc}; style-src ${origin} 'unsafe-inline'; connect-src ${origin}; img-src ${origin} data:; font-src ${origin}`
     : sourceCsp(mount ? `'self' 'unsafe-inline'` : `'self'`);
   const mountScript = mount
     ? `<script>window.__sparkPluginView = ${JSON.stringify(mount).replace(/</g, '\\u003c')};</script>`
