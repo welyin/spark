@@ -146,6 +146,7 @@ import { requestOpenContact } from './stores/pending-contact';
 import { requestOpenAppDetail } from './stores/pending-app';
 import TopNavbar from './components/TopNavbar.vue';
 import UserAvatarMenu from './components/UserAvatarMenu.vue';
+import { useUpdaterReadyPrompt } from './components/updater/use-updater';
 import MessagesPage from './pages/MessagesPage.vue';
 import ContactsPage from './pages/ContactsPage.vue';
 import AppsPage, { type OpenPluginTabPayload } from './pages/AppsPage.vue';
@@ -339,6 +340,9 @@ export default defineComponent({
       // 懒校验启动恢复的组织空间：组织已不存在时回退个人空间
       void validateCurrentSpace();
     });
+
+    // 主程序更新：后台自动检查+下载就绪后弹重启确认（取消后可去 设置→关于 手动安装）
+    useUpdaterReadyPrompt();
 
     onMounted(() => window.addEventListener('spark:open-chat', onOpenChatEvent));
     onMounted(() => window.addEventListener('spark:open-contact', onOpenContactEvent));

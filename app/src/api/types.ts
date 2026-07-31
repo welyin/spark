@@ -6,6 +6,42 @@
  */
 
 // ------------------------------------------------------------------
+// 主程序自动更新（src-tauri commands/updater.rs；tauri-plugin-updater
+// + GitHub Releases 的 latest.json 清单，minisign 验签）
+// ------------------------------------------------------------------
+
+/** 更新状态（TestPage 调试面板字段对齐；`staged` = 已下载待重启安装的包） */
+export interface UpdaterStatusDto {
+  configured: boolean;
+  appId: string;
+  channel: string;
+  currentVersion: string;
+  lastCheck?: { checkedAt: number; reason: string; availableVersion?: string } | null;
+  staged?: { fileName: string; version: string } | null;
+}
+
+/** 手动检查结果（`availableVersion` 仅在有更新时存在） */
+export interface UpdaterCheckResultDto {
+  updateAvailable: boolean;
+  availableVersion?: string;
+  notes?: string;
+  date?: string;
+}
+
+/** 已下载待安装的包描述 */
+export interface UpdaterStagedDto {
+  fileName: string;
+  version: string;
+}
+
+/** `updater://ready` 事件载荷（后台自动检查+下载就绪，等待用户确认重启） */
+export interface UpdaterReadyInfo {
+  version: string;
+  notes?: string;
+  date?: string;
+}
+
+// ------------------------------------------------------------------
 // P2P 事件（src-tauri 把内核 `P2pEvent` 结构化后以 `p2p-event` 全局事件转发；
 // 线形为 serde 相邻标签 `{kind, data?}`，Lagged 由转发层合成）
 // ------------------------------------------------------------------
@@ -656,7 +692,15 @@ export type ElectronAPI = {
     recoverMnemonic: (mnemonic: string, newPassword: string, nickname: string, avatar?: string | null) => Promise<{ rootId: string }>;
     recoverBackup: (payload: string, password: string) => Promise<{ rootId: string }>;
   };
-  updater: Record<string, (...args: never[]) => Promise<unknown>>;
+  /** 主程序自动更新（tauri-plugin-updater + GitHub Releases 清单；src-tauri commands/updater.rs） */
+  updater: {
+    status: () => Promise<UpdaterStatusDto>;
+    check: () => Promise<UpdaterCheckResultDto>;
+    stageLatest: () => Promise<UpdaterStagedDto>;
+    applyRestart: () => Promise<void>;
+    /** 后台自动检查完成且更新已下载就绪（验签通过）：订阅重启确认弹窗（返回退订函数） */
+    onReady: (cb: (info: UpdaterReadyInfo) => void) => Promise<() => void>;
+  };
   system: {
     /** 未读角标 → 系统徽标（dock/任务栏）；平台不支持时命令侧静默，始终 resolve */
     setBadge: (count: number) => Promise<void>;

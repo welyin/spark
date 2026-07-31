@@ -82,14 +82,13 @@
           <el-descriptions-item label="应用标识">{{ updaterStatus?.appId || '-' }}</el-descriptions-item>
           <el-descriptions-item label="通道">{{ updaterStatus?.channel || '-' }}</el-descriptions-item>
           <el-descriptions-item label="当前版本">{{ updaterStatus?.currentVersion || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="最高接受版本">{{ updaterStatus?.highestAcceptedVersion || '-' }}</el-descriptions-item>
           <el-descriptions-item label="最近检查">
-            <template v-if="updaterStatus?.latestCheck">
-              {{ formatDate(updaterStatus.latestCheck.checkedAt) }} · {{ updaterStatus.latestCheck.reason }}
+            <template v-if="updaterStatus?.lastCheck">
+              {{ formatDate(updaterStatus.lastCheck.checkedAt) }} · {{ updaterStatus.lastCheck.reason }}
             </template>
             <template v-else>暂无</template>
           </el-descriptions-item>
-          <el-descriptions-item label="可用版本">{{ updaterStatus?.latestCheck?.availableVersion || '无' }}</el-descriptions-item>
+          <el-descriptions-item label="可用版本">{{ updaterStatus?.lastCheck?.availableVersion || '无' }}</el-descriptions-item>
           <el-descriptions-item label="已暂存安装包">
             <template v-if="updaterStatus?.staged">
               {{ updaterStatus.staged.fileName }} ({{ updaterStatus.staged.version }})
@@ -105,27 +104,6 @@
             应用并重启
           </el-button>
         </div>
-
-        <el-card shadow="never" class="inner-card">
-          <template #header>
-            <h3>对端版本观测</h3>
-          </template>
-          <div v-if="!updaterStatus?.peerObservations?.length" class="empty-state">暂无观测记录。</div>
-          <el-table v-else :data="updaterStatus.peerObservations" size="small" stripe>
-            <el-table-column prop="peerId" label="PeerId" min-width="220" />
-            <el-table-column prop="observedVersion" label="对端版本" width="130" />
-            <el-table-column label="观测时间" min-width="170">
-              <template #default="scope">{{ formatDate(scope.row.observedAt) }}</template>
-            </el-table-column>
-            <el-table-column label="触发检查" width="100">
-              <template #default="scope">
-                <el-tag :type="scope.row.triggeredCheck ? 'success' : 'info'" effect="plain">
-                  {{ scope.row.triggeredCheck ? '是' : '否' }}
-                </el-tag>
-              </template>
-            </el-table-column>
-          </el-table>
-        </el-card>
       </el-card>
     </div>
   </section>
@@ -135,6 +113,7 @@
 import { defineComponent, onMounted, ref, type Component } from 'vue';
 import { ElMessageBox } from 'element-plus';
 import { Connection, Download } from '@element-plus/icons-vue';
+import type { UpdaterStatusDto } from '../api';
 
 type SavedNodeRecord = {
   nodeKey: string;
@@ -149,38 +128,6 @@ type SavedNodeRecord = {
   cumulativeConnectedMs: number;
   currentSessionConnectedAt?: number;
   lastError?: string;
-};
-
-type UpdaterStatus = {
-  configured: boolean;
-  appId: string;
-  channel: 'stable' | 'canary';
-  currentVersion: string;
-  highestAcceptedVersion: string;
-  latestCheck: {
-    checkedAt: number;
-    source: 'manual' | 'startup' | 'peer-observed';
-    currentVersion: string;
-    availableVersion: string | null;
-    updateAvailable: boolean;
-    critical: boolean;
-    revokedCurrentVersion: boolean;
-    reason: string;
-  } | null;
-  staged: {
-    version: string;
-    filePath: string;
-    fileName: string;
-    sha256: string;
-    size: number;
-    stagedAt: number;
-  } | null;
-  peerObservations: Array<{
-    peerId: string;
-    observedVersion: string;
-    observedAt: number;
-    triggeredCheck: boolean;
-  }>;
 };
 
 type MenuKey = 'nodes' | 'updater';
@@ -199,7 +146,7 @@ export default defineComponent({
     const clearingNodes = ref(false);
     const syncingNodeKey = ref('');
     const nodeMessage = ref('');
-    const updaterStatus = ref<UpdaterStatus | null>(null);
+    const updaterStatus = ref<UpdaterStatusDto | null>(null);
     const updaterMessage = ref('');
     const loadingUpdater = ref(false);
     const checkingUpdate = ref(false);

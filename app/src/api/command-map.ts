@@ -124,7 +124,12 @@ export const COMMAND_MAP: Record<string, string> = {
   'plugin-market-announce-list': 'plugin_market_announce_list',
   'plugin-market-announce-get': 'plugin_market_announce_get',
   // 系统桥接（未读角标 → dock/任务栏徽标）
-  'system-set-badge': 'system_set_badge'
+  'system-set-badge': 'system_set_badge',
+  // 主程序自动更新（tauri-plugin-updater + GitHub Releases 清单）
+  'updater-status': 'updater_status',
+  'updater-check': 'updater_check',
+  'updater-stage-latest': 'updater_stage_latest',
+  'updater-apply-restart': 'updater_apply_restart'
 };
 
 /**

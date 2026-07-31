@@ -114,11 +114,27 @@
         <h2>关于</h2>
       </template>
       <el-descriptions :column="1" border>
-        <!-- TODO(mock): 版本号硬编码，待接入构建注入的真实版本/构建信息 -->
-        <el-descriptions-item label="版本">0.1.0</el-descriptions-item>
+        <el-descriptions-item label="版本">{{ appVersion }}</el-descriptions-item>
         <el-descriptions-item label="产品">Spark 桌面端 · 去中心化的组织协作网络</el-descriptions-item>
         <el-descriptions-item label="许可证">见仓库根目录 LICENSE</el-descriptions-item>
       </el-descriptions>
+      <!-- 手动更新（自动检查下载就绪后用户取消了弹窗时的入口；
+           无桥接/未配置更新源时按钮禁用） -->
+      <div class="about-update">
+        <el-button size="small" :loading="updateChecking" :disabled="!updaterAvailable" @click="checkUpdate">
+          检查更新
+        </el-button>
+        <el-button
+          v-if="updateStaged"
+          size="small"
+          type="primary"
+          :loading="updateApplying"
+          @click="applyUpdate"
+        >
+          重启安装 {{ updateStaged.version }}
+        </el-button>
+        <span v-if="updateMessage" class="about-update-message">{{ updateMessage }}</span>
+      </div>
     </el-card>
   </div>
 </template>
@@ -256,6 +272,75 @@ export default defineComponent({
       }
     };
 
+    // ------------------------------------------------------------------
+    // 关于·手动更新（自动检查就绪弹窗被取消后的入口；命令语义见
+    // src-tauri commands/updater.rs。无桥接/未配置时按钮禁用）
+    // ------------------------------------------------------------------
+    const appVersion = ref('0.1.0');
+    const updaterAvailable = ref(false);
+    const updateChecking = ref(false);
+    const updateApplying = ref(false);
+    const updateMessage = ref('');
+    const updateStaged = ref<{ fileName: string; version: string } | null>(null);
+
+    const refreshUpdater = async () => {
+      const updater = window.electronAPI?.updater;
+      if (!updater) {
+        return;
+      }
+      try {
+        const status = await updater.status();
+        appVersion.value = status.currentVersion || appVersion.value;
+        updaterAvailable.value = status.configured;
+        updateStaged.value = status.staged ?? null;
+        if (status.staged) {
+          updateMessage.value = `新版本 ${status.staged.version} 已就绪，点击「重启安装」完成更新`;
+        }
+      } catch {
+        // 读取失败保留默认展示（按钮保持禁用）
+      }
+    };
+
+    /** 检查更新：有更新时直接下载（就绪后出「重启安装」按钮，同 TestPage 调试面板流程） */
+    const checkUpdate = async () => {
+      const updater = window.electronAPI?.updater;
+      if (!updater) {
+        return;
+      }
+      updateChecking.value = true;
+      updateMessage.value = '';
+      try {
+        const result = await updater.check();
+        if (!result.updateAvailable) {
+          updateMessage.value = '当前已是最新版本';
+          return;
+        }
+        updateMessage.value = `发现新版本 ${result.availableVersion}，正在下载…`;
+        const staged = await updater.stageLatest();
+        updateStaged.value = staged;
+        updateMessage.value = `新版本 ${staged.version} 已就绪，点击「重启安装」完成更新`;
+      } catch (error) {
+        updateMessage.value = `检查或下载更新失败：${error}`;
+      } finally {
+        updateChecking.value = false;
+      }
+    };
+
+    const applyUpdate = async () => {
+      const updater = window.electronAPI?.updater;
+      if (!updater) {
+        return;
+      }
+      updateApplying.value = true;
+      try {
+        await updater.applyRestart();
+        // 成功路径应用随即重启；失败才走到下面
+      } catch (error) {
+        updateMessage.value = `应用更新失败：${error}`;
+        updateApplying.value = false;
+      }
+    };
+
     onMounted(async () => {
       try {
         rootStatus.value = await window.electronAPI.rootIdentity.status();
@@ -264,6 +349,7 @@ export default defineComponent({
       }
       await refreshNodeInfo();
       await refreshDataUsage();
+      await refreshUpdater();
     });
 
     return {
@@ -283,7 +369,15 @@ export default defineComponent({
       themeMode,
       generalStates,
       generalItems: GENERAL_ITEMS,
-      notifyItems: NOTIFY_ITEMS
+      notifyItems: NOTIFY_ITEMS,
+      appVersion,
+      updaterAvailable,
+      updateChecking,
+      updateApplying,
+      updateMessage,
+      updateStaged,
+      checkUpdate,
+      applyUpdate
     };
   }
 });
@@ -318,5 +412,18 @@ export default defineComponent({
 
 .settings-row + .settings-row {
   border-top: 1px solid var(--spark-border-light);
+}
+
+/* 关于·手动更新行：按钮组 + 状态文案（弱化的次要信息） */
+.about-update {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.about-update-message {
+  font-size: 12px;
+  color: var(--spark-text-2, #909399);
 }
 </style>

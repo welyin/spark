@@ -21,7 +21,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { ARG_NAMES, COMMAND_MAP } from './command-map';
-import type { ElectronAPI, P2pEventDto, PluginCatalogItem } from './types';
+import type { ElectronAPI, P2pEventDto, PluginCatalogItem, UpdaterReadyInfo } from './types';
 
 // 类型门面：既有引用一律走 './api'，此处统一 re-export
 export * from './types';
@@ -368,10 +368,17 @@ export function createTauriApi(): ElectronAPI {
         call('root-recover-mnemonic', mnemonic, newPassword, nickname, avatar ?? null),
       recoverBackup: (payload, password) => call('root-recover-backup', payload, password)
     },
-    updater: new Proxy({} as ElectronAPI['updater'], {
-      // TODO: 更新器为 Electron 专属流程；Tauri 版应改用 tauri-plugin-updater
-      get: (_, prop) => todo(`update-${String(prop)}`)
-    }),
+    // 主程序自动更新（tauri-plugin-updater + GitHub Releases 清单；
+    // commands/updater.rs）。onReady 订阅后台自动下载就绪事件，
+    // 由 use-updater 弹重启确认框
+    updater: {
+      status: () => call('updater-status'),
+      check: () => call('updater-check'),
+      stageLatest: () => call('updater-stage-latest'),
+      applyRestart: () => call('updater-apply-restart'),
+      onReady: (cb) =>
+        listen<UpdaterReadyInfo>('updater://ready', (event) => cb(event.payload)),
+    },
     system: {
       // 未读角标 → 系统徽标（F4）：macOS dock 角标 / Linux 任务栏计数，
       // 平台不支持时命令侧静默降级（见 src-tauri commands/system.rs）
