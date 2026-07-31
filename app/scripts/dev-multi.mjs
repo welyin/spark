@@ -99,6 +99,11 @@ async function main() {
       // 实例 1 正常 dev：经 beforeDevCommand 拉起 vite dev server
       run('npx', ['tauri', 'dev'], env);
     } else {
+      // 多实例必须隔离 cargo target 目录：Windows 上运行中的 exe 被独占锁定，
+      // 共享 target 时第二个实例无法覆盖 spark-app.exe（os error 5），
+      // 且会阻塞在 build 目录文件锁上。各实例独立 target-instance-<i>
+      // （代价是第二个实例首次全量编译较慢）。
+      env.CARGO_TARGET_DIR = path.join(appDir, 'src-tauri', `target-instance-${i}`);
       // 其余实例复用实例 1 的 dev server（--no-dev-server 在本 CLI 版本不生效，
       // 用 -c 覆盖清空 beforeDevCommand 跳过重复起 vite，--no-watch 关掉文件监听）。
       // 注意：Windows 下 spawn shell:true 经 cmd.exe 转发会剥掉 JSON 内的双引号，

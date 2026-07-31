@@ -8,6 +8,7 @@ dist-ssr/
 
 # Tauri 打包产物
 app/src-tauri/target/
+app/src-tauri/target-instance-*/
 
 # 插件市场本地发布产物（打包脚本输出，见 wiki 插件开发指南）
 app/dist-market/
