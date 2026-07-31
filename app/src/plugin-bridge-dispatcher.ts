@@ -129,7 +129,7 @@ export async function createPluginBridgeDispatcher(identity: PluginBridgeIdentit
   const backend = createPluginBackend(identity.domain);
 
   // messages 域：pluginId/space 由桥按绑定身份注入（插件自报一律忽略）。
-  // pluginId 剥离域前缀（'plugin:weibo-core' → 'weibo-core'，§20.1 存储键口径；
+  // pluginId 剥离域前缀（'plugin:spark-example' → 'spark-example'，§20.1 存储键口径；
   // 与 identity.pluginId 同源，domain 推导失败时回退绑定 pluginId）
   const boundPluginId = identity.domain.startsWith('plugin:')
     ? identity.domain.slice('plugin:'.length)

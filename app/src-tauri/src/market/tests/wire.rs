@@ -38,7 +38,7 @@ fn wire_shapes_match_preload_declarations() {
 
     // InstalledPluginState / PluginUpdateProbe 键名
     let state = serde_json::to_value(InstalledPluginState {
-        plugin_id: "weibo-core".to_string(),
+        plugin_id: "spark-example".to_string(),
         version: "0.1.0".to_string(),
         package_path: "/tmp/x".to_string(),
         sha256: "aa".to_string(),
@@ -62,7 +62,7 @@ fn wire_shapes_match_preload_declarations() {
         assert!(state.get(key).is_some(), "InstalledPluginState missing key {key}");
     }
     let probe = serde_json::to_value(PluginUpdateProbe {
-        plugin_id: "weibo-core".to_string(),
+        plugin_id: "spark-example".to_string(),
         checked_at: 1,
         latest_version: None,
         update_available: false,

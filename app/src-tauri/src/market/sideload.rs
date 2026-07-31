@@ -22,7 +22,7 @@ use super::sources::{compute_file_sha256, file_size, now_millis};
 use super::types::{InstalledPluginState, PluginUpdateProbe};
 use super::PluginMarketService;
 
-/// .spkg 容器文件条目（与 code/plugins/scripts/build-weibo-package.mjs 产物同构）。
+/// .spkg 容器文件条目（与 code/plugins/scripts/build-example-package.mjs 产物同构）。
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SpkgFileEntry {

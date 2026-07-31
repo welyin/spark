@@ -19,7 +19,7 @@ import {
   pluginInstanceKey
 } from '../../plugin-disabled';
 
-const KEY = 'weibo-core@org:org_1';
+const KEY = 'spark-example@org:org_1';
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -127,12 +127,12 @@ describe('停用状态持久化', () => {
   });
 
   it('实例键按 插件+space 隔离', () => {
-    expect(pluginInstanceKey('weibo-core', { type: 'org', id: 'org_1' })).toBe('weibo-core@org:org_1');
-    expect(pluginInstanceKey('weibo-core', { type: 'personal', id: 'personal' })).toBe(
-      'weibo-core@personal:personal'
+    expect(pluginInstanceKey('spark-example', { type: 'org', id: 'org_1' })).toBe('spark-example@org:org_1');
+    expect(pluginInstanceKey('spark-example', { type: 'personal', id: 'personal' })).toBe(
+      'spark-example@personal:personal'
     );
-    disablePluginInstance('weibo-core@org:org_1', 'ready-errors');
-    expect(isPluginInstanceDisabled('weibo-core@org:org_2')).toBe(false);
+    disablePluginInstance('spark-example@org:org_1', 'ready-errors');
+    expect(isPluginInstanceDisabled('spark-example@org:org_2')).toBe(false);
     expect(isPluginInstanceDisabled('other@org:org_1')).toBe(false);
   });
 });

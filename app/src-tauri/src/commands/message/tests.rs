@@ -297,42 +297,42 @@ fn app_send_list_mark_read_delete_flow() {
     let view = app_send_inner(
         &mut kernel,
         PERSONAL,
-        "weibo-core",
+        "spark-example",
         app_payload("系统升级通知"),
         Some(card),
     )
     .unwrap();
-    assert_eq!(view.plugin_id, "weibo-core");
+    assert_eq!(view.plugin_id, "spark-example");
     assert_eq!(view.summary, "系统升级通知");
     assert_eq!(view.status, "local");
     assert!(view.card.is_some());
 
     let convs = list_conversations_inner(&kernel, PERSONAL).unwrap();
     assert_eq!(convs.len(), 1);
-    assert_eq!(convs[0].id, "app:weibo-core");
+    assert_eq!(convs[0].id, "app:spark-example");
     assert_eq!(convs[0].kind, ConversationKind::App);
     assert_eq!(convs[0].unread_count, 1);
 
     // appList / appMarkRead
-    app_send_inner(&mut kernel, PERSONAL, "weibo-core", app_payload("第二条"), None).unwrap();
-    assert_eq!(app_list_inner(&kernel, PERSONAL, "weibo-core").unwrap().len(), 2);
-    assert!(app_mark_read_inner(&mut kernel, PERSONAL, "weibo-core")
+    app_send_inner(&mut kernel, PERSONAL, "spark-example", app_payload("第二条"), None).unwrap();
+    assert_eq!(app_list_inner(&kernel, PERSONAL, "spark-example").unwrap().len(), 2);
+    assert!(app_mark_read_inner(&mut kernel, PERSONAL, "spark-example")
         .unwrap()
         .success);
     assert_eq!(
         list_conversations_inner(&kernel, PERSONAL).unwrap()[0].unread_count,
         0
     );
-    assert!(app_list_inner(&kernel, PERSONAL, "weibo-core")
+    assert!(app_list_inner(&kernel, PERSONAL, "spark-example")
         .unwrap()
         .iter()
         .all(|m| m.read));
 
     // 删除应用会话：会话与消息一并删除
-    assert!(app_delete_conversation_inner(&mut kernel, PERSONAL, "weibo-core")
+    assert!(app_delete_conversation_inner(&mut kernel, PERSONAL, "spark-example")
         .unwrap()
         .success);
-    assert!(app_list_inner(&kernel, PERSONAL, "weibo-core").unwrap().is_empty());
+    assert!(app_list_inner(&kernel, PERSONAL, "spark-example").unwrap().is_empty());
     assert!(list_conversations_inner(&kernel, PERSONAL).unwrap().is_empty());
 }
 
@@ -346,22 +346,22 @@ fn app_send_validation_and_rate_limit() {
         serde_json::json!({ "summary": "   " }),
         app_payload(&"长".repeat(201)),
     ] {
-        assert!(app_send_inner(&mut kernel, PERSONAL, "weibo-core", bad, None).is_err());
+        assert!(app_send_inner(&mut kernel, PERSONAL, "spark-example", bad, None).is_err());
     }
     // pluginId 非法（含冒号/大写）→ 拒绝
     assert!(
-        app_send_inner(&mut kernel, PERSONAL, "plugin:weibo-core", app_payload("s"), None)
+        app_send_inner(&mut kernel, PERSONAL, "plugin:spark-example", app_payload("s"), None)
             .is_err()
     );
     assert!(list_conversations_inner(&kernel, PERSONAL).unwrap().is_empty());
 
     // 限流：10 条/分钟，第 11 条 rate-limited（不落库、未读不变）
     for i in 0..10 {
-        app_send_inner(&mut kernel, PERSONAL, "weibo-core", app_payload(&format!("第{i}条")), None)
+        app_send_inner(&mut kernel, PERSONAL, "spark-example", app_payload(&format!("第{i}条")), None)
             .unwrap();
     }
-    let err = app_send_inner(&mut kernel, PERSONAL, "weibo-core", app_payload("超限"), None)
+    let err = app_send_inner(&mut kernel, PERSONAL, "spark-example", app_payload("超限"), None)
         .unwrap_err();
     assert!(err.contains("rate-limited"), "限流错误应含 reason：{err}");
-    assert_eq!(app_list_inner(&kernel, PERSONAL, "weibo-core").unwrap().len(), 10);
+    assert_eq!(app_list_inner(&kernel, PERSONAL, "spark-example").unwrap().len(), 10);
 }

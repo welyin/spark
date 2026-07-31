@@ -31,7 +31,7 @@
 ├── core/      # spark-core：Rust 内核（身份/存储/集合同步/存证/组织/数据治理/P2P）
 ├── spec/      # golden vectors（协议规格文档在 wiki protocol/ 专区）
 ├── app/       # 应用壳（Tauri 2.x，PC 与移动端同一工程 + Vue 3 前端）
-├── plugins/   # 插件（weibo-core 微博）与打包签名脚本
+├── plugins/   # 插件（spark-example 示例插件：组织微博）与打包签名脚本
 └── .github/   # 插件发布 workflow
 ```
 

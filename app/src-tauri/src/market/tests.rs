@@ -62,7 +62,7 @@ impl Fixture {
     }
 
     fn release_dir(&self) -> PathBuf {
-        self.release_root.join("weibo-core")
+        self.release_root.join("spark-example")
     }
 }
 
@@ -80,8 +80,8 @@ impl Default for ReleaseOpts {
     fn default() -> Self {
         Self {
             version: "0.1.0".to_string(),
-            plugin_id: "weibo-core".to_string(),
-            domain: "plugin:weibo-core".to_string(),
+            plugin_id: "spark-example".to_string(),
+            domain: "plugin:spark-example".to_string(),
             permissions: None,
             tamper_sha256: false,
             tamper_size: false,
@@ -95,7 +95,7 @@ fn write_release(fixture: &Fixture, opts: &ReleaseOpts) {
     let dir = fixture.release_dir();
     fs::create_dir_all(&dir).unwrap();
 
-    let file_name = format!("spark-plugin-weibo-core-{}.spkg", opts.version);
+    let file_name = format!("spark-plugin-spark-example-{}.spkg", opts.version);
     let package_payload = serde_json::json!({
         "pluginId": opts.plugin_id,
         "domain": opts.domain,
@@ -150,7 +150,7 @@ fn write_release(fixture: &Fixture, opts: &ReleaseOpts) {
 }
 
 fn write_dev_source(fixture: &Fixture) {
-    let dir = fixture.source_root.join("weibo-core");
+    let dir = fixture.source_root.join("spark-example");
     fs::create_dir_all(&dir).unwrap();
     fs::write(dir.join("manifest.ts"), "export {};\n").unwrap();
 }

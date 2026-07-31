@@ -9,20 +9,28 @@ fn reconcile_marks_verified_bundle_installed() {
     let mut service = fixture.service();
     service.initialize().unwrap();
 
-    let installed = service.state.installed.get("weibo-core").unwrap();
+    let installed = service.state.installed.get("spark-example").unwrap();
     assert_eq!(installed.version, "0.1.0");
     assert!(installed.size > 0);
     assert!(installed.enabled);
     assert_eq!(
         installed.granted_permissions,
-        vec!["storage:read", "storage:write", "org:read", "proof:verify", "org:sync"]
+        vec![
+            "storage:read",
+            "storage:write",
+            "org:read",
+            "proof:verify",
+            "org:sync",
+            "message:app",
+            "identity:sign"
+        ]
     );
     assert!(installed.package_path.contains("dist-market"));
-    assert_eq!(service.update_probes["weibo-core"].reason, "bundled");
+    assert_eq!(service.update_probes["spark-example"].reason, "bundled");
 
     // 状态已持久化
     let persisted = read_state_file(&fixture.state_file);
-    assert!(persisted.installed.contains_key("weibo-core"));
+    assert!(persisted.installed.contains_key("spark-example"));
 
     let items = service.list_market();
     assert_eq!(items.len(), 1);
@@ -38,7 +46,7 @@ fn reconcile_skips_bad_signature_and_digest() {
     write_release(&fixture, &ReleaseOpts { bad_signature: true, ..Default::default() });
     let mut service = fixture.service();
     service.initialize().unwrap();
-    assert!(!service.state.installed.contains_key("weibo-core"));
+    assert!(!service.state.installed.contains_key("spark-example"));
     assert!(!service.list_market()[0].installed);
 
     // sha256 对不上 → 不安装
@@ -46,7 +54,7 @@ fn reconcile_skips_bad_signature_and_digest() {
     write_release(&fixture, &ReleaseOpts { tamper_sha256: true, ..Default::default() });
     let mut service = fixture.service();
     service.initialize().unwrap();
-    assert!(!service.state.installed.contains_key("weibo-core"));
+    assert!(!service.state.installed.contains_key("spark-example"));
 }
 
 #[test]
@@ -56,10 +64,10 @@ fn reconcile_marks_dev_source_and_bundle_wins() {
     write_dev_source(&fixture);
     let mut service = fixture.service();
     service.initialize().unwrap();
-    let installed = service.state.installed.get("weibo-core").unwrap();
+    let installed = service.state.installed.get("spark-example").unwrap();
     assert_eq!(installed.sha256, "bundled-dev-source");
     assert_eq!(installed.size, 0);
-    assert_eq!(service.update_probes["weibo-core"].reason, "bundled-dev-source");
+    assert_eq!(service.update_probes["spark-example"].reason, "bundled-dev-source");
 
     // bundle + 源码同时存在 → bundle 优先
     let fixture = Fixture::new();
@@ -67,9 +75,9 @@ fn reconcile_marks_dev_source_and_bundle_wins() {
     write_release(&fixture, &ReleaseOpts::default());
     let mut service = fixture.service();
     service.initialize().unwrap();
-    let installed = service.state.installed.get("weibo-core").unwrap();
+    let installed = service.state.installed.get("spark-example").unwrap();
     assert_ne!(installed.sha256, "bundled-dev-source");
-    assert_eq!(service.update_probes["weibo-core"].reason, "bundled");
+    assert_eq!(service.update_probes["spark-example"].reason, "bundled");
 }
 
 #[test]
@@ -78,8 +86,8 @@ fn backfill_fills_missing_granted_permissions() {
     // 手写一份缺 grantedPermissions 字段的旧版状态
     let legacy = serde_json::json!({
         "installed": {
-            "weibo-core": {
-                "pluginId": "weibo-core",
+            "spark-example": {
+                "pluginId": "spark-example",
                 "version": "0.1.0",
                 "packagePath": "/tmp/x.spkg",
                 "sha256": "aa",
@@ -94,12 +102,20 @@ fn backfill_fills_missing_granted_permissions() {
 
     let mut service = fixture.service();
     service.initialize().unwrap();
-    let installed = service.state.installed.get("weibo-core").unwrap();
+    let installed = service.state.installed.get("spark-example").unwrap();
     assert_eq!(
         installed.granted_permissions,
-        vec!["storage:read", "storage:write", "org:read", "proof:verify", "org:sync"]
+        vec![
+            "storage:read",
+            "storage:write",
+            "org:read",
+            "proof:verify",
+            "org:sync",
+            "message:app",
+            "identity:sign"
+        ]
     );
     // 回填已落盘
     let persisted = read_state_file(&fixture.state_file);
-    assert!(!persisted.installed["weibo-core"].granted_permissions.is_empty());
+    assert!(!persisted.installed["spark-example"].granted_permissions.is_empty());
 }

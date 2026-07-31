@@ -115,28 +115,28 @@ function requireDomain(pluginDomain: string | undefined): string {
  * 插件运行时（安装/验签/独立窗口）本期不在壳范围，目录本身是纯静态数据，
  * 经 plugin.listCatalog 下发给前端（组织与插件无绑定，不参与建组织）。
  * 重复字段（id/domain/name/version/views/package）派生自插件仓库内的
- * manifest.json（code/plugins/weibo-core），消除双份维护；目录专属文案
+ * manifest.json（code/plugins/spark-example），消除双份维护；目录专属文案
  * （description）与市场侧字段（signatureUrl/installCommand/permissions 展示口径）
  * 仍在此保留。
  */
-import weiboCoreManifest from '../../../plugins/weibo-core/manifest.json';
+import sparkExampleManifest from '../../../plugins/spark-example/manifest.json';
 
 const PLUGIN_CATALOG: PluginCatalogItem[] = [
   {
-    id: weiboCoreManifest.id,
-    domain: weiboCoreManifest.domain,
-    name: weiboCoreManifest.name,
-    description: '单主管理员发帖，组织成员评论/回复，基于插件域独立数据同步。',
+    id: sparkExampleManifest.id,
+    domain: sparkExampleManifest.domain,
+    name: sparkExampleManifest.name,
+    description: '插件体系参考实现：管理员发帖（域签名防抵赖）发应用会话卡片通知，成员评论/回复。',
     category: 'foundation' as const,
-    version: weiboCoreManifest.version,
-    views: weiboCoreManifest.views.map((view) => view.id),
-    permissions: ['org:sync'],
+    version: sparkExampleManifest.version,
+    views: sparkExampleManifest.views.map((view) => view.id),
+    permissions: ['storage:read', 'storage:write', 'org:read', 'org:sync', 'message:app', 'identity:sign'],
     package: {
-      updateManifestUrl: weiboCoreManifest.package.updateManifestUrl,
+      updateManifestUrl: sparkExampleManifest.package.updateManifestUrl,
       signatureUrl:
-        'https://github.com/welyin/spark/releases/latest/download/spark-plugin-weibo-core-manifest.sig',
-      packageName: weiboCoreManifest.package.packageName,
-      installCommand: `spark-plugin install ${weiboCoreManifest.package.packageName}`
+        'https://github.com/welyin/spark/releases/latest/download/spark-plugin-spark-example-manifest.sig',
+      packageName: sparkExampleManifest.package.packageName,
+      installCommand: `spark-plugin install ${sparkExampleManifest.package.packageName}`
     }
   }
 ];

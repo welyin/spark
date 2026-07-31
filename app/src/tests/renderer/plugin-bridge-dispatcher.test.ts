@@ -30,16 +30,16 @@ const makeNullApi = (): any =>
   });
 
 const BASE_IDENTITY: PluginBridgeIdentity = {
-  pluginId: 'weibo-core',
+  pluginId: 'spark-example',
   viewId: 'default',
-  domain: 'plugin:weibo-core',
+  domain: 'plugin:spark-example',
   space: { type: 'org', id: 'org_1' },
   pluginName: '组织微博',
   supportedSpaces: ['org']
 };
 
 /** 市场安装状态授权清单（grantedPermissions 数据源） */
-function mockGrantedPermissions(permissions: string[], pluginId = 'weibo-core'): void {
+function mockGrantedPermissions(permissions: string[], pluginId = 'spark-example'): void {
   (window.electronAPI as any).pluginMarket = {
     list: async () => [{ id: pluginId, grantedPermissions: permissions }]
   };
@@ -197,48 +197,48 @@ describe('messages 域（应用会话 §20，pluginId/space 由桥注入）', ()
     const dto = (await handler('messages', 'sendAppMessage', [
       { summary: '新微博', pluginId: 'evil', spaceKey: 'personal' }
     ])) as AppMessageDto;
-    expect(dto.pluginId).toBe('weibo-core');
+    expect(dto.pluginId).toBe('spark-example');
     expect(dto.status).toBe('local');
-    const conv = getConversation('org:org_1', 'app:weibo-core');
+    const conv = getConversation('org:org_1', 'app:spark-example');
     expect(conv?.kind).toBe('app');
     expect(conv?.unreadCount).toBe(1);
     expect(getConversation('org:org_1', 'app:evil')).toBeUndefined();
-    expect(getConversation('personal', 'app:weibo-core')).toBeUndefined();
-    expect(getAppMessages('org:org_1', 'app:weibo-core')).toHaveLength(1);
+    expect(getConversation('personal', 'app:spark-example')).toBeUndefined();
+    expect(getAppMessages('org:org_1', 'app:spark-example')).toHaveLength(1);
   });
 
   it('personal 空间注入：space key 为 personal', async () => {
     // 独立插件身份，与其他用例无顺序耦合
-    mockGrantedPermissions(['message:app'], 'weibo-personal');
+    mockGrantedPermissions(['message:app'], 'demo-personal');
     const handler = await createPluginBridgeDispatcher({
       ...BASE_IDENTITY,
-      pluginId: 'weibo-personal',
-      domain: 'plugin:weibo-personal',
+      pluginId: 'demo-personal',
+      domain: 'plugin:demo-personal',
       space: { type: 'personal', id: 'personal' },
       supportedSpaces: ['personal', 'org']
     });
     await handler('messages', 'sendAppMessage', [{ summary: '个人空间通知' }]);
-    expect(getConversation('personal', 'app:weibo-personal')?.kind).toBe('app');
-    expect(getConversation('personal', 'app:weibo-personal')?.unreadCount).toBe(1);
-    expect(getConversation('org:org_1', 'app:weibo-personal')).toBeUndefined();
+    expect(getConversation('personal', 'app:demo-personal')?.kind).toBe('app');
+    expect(getConversation('personal', 'app:demo-personal')?.unreadCount).toBe(1);
+    expect(getConversation('org:org_1', 'app:demo-personal')).toBeUndefined();
   });
 
   it('message:app 授权通过：listAppMessages/markRead 走绑定身份的应用会话', async () => {
     // 独立插件身份，与其他用例无顺序耦合
-    mockGrantedPermissions(['message:app'], 'weibo-reader');
+    mockGrantedPermissions(['message:app'], 'demo-reader');
     const handler = await createPluginBridgeDispatcher({
       ...BASE_IDENTITY,
-      pluginId: 'weibo-reader',
-      domain: 'plugin:weibo-reader'
+      pluginId: 'demo-reader',
+      domain: 'plugin:demo-reader'
     });
     await handler('messages', 'sendAppMessage', [{ summary: '一条' }]);
     const list = (await handler('messages', 'listAppMessages', [])) as AppMessageDto[];
     expect(list).toHaveLength(1);
-    expect(list[0].pluginId).toBe('weibo-reader');
+    expect(list[0].pluginId).toBe('demo-reader');
     expect(list[0].summary).toBe('一条');
     await expect(handler('messages', 'markRead', [])).resolves.toEqual({ success: true });
-    expect(getConversation('org:org_1', 'app:weibo-reader')?.unreadCount).toBe(0);
-    expect(getAppMessages('org:org_1', 'app:weibo-reader').every((msg) => msg.read)).toBe(true);
+    expect(getConversation('org:org_1', 'app:demo-reader')?.unreadCount).toBe(0);
+    expect(getAppMessages('org:org_1', 'app:demo-reader').every((msg) => msg.read)).toBe(true);
   });
 
   it('message-card 视图：有 message:app 授权也拒绝应用会话读写（仅卡片回调经 action 上行）', async () => {

@@ -1,14 +1,14 @@
 /**
  * 应用市场 mock 数据（ui-apps-market）。
  *
- * 真实市场（window.electronAPI.pluginMarket）目前只有 weibo-core 一个插件，
+ * 真实市场（window.electronAPI.pluginMarket）目前只有 spark-example 一个插件，
  * 列表/市场/分组 UI 太空，这里伪造若干应用填充展示。mock 条目与真实
  * pluginMarket.list() 结果合并展示；安装/启用状态存 localStorage，
  * 「打开」不进入真实插件链路（占位 toast）。待市场数据充足后整体删除本文件。
  */
 import type { PluginMarketItemDto } from '../api/types';
 
-// TODO(mock): 伪造市场应用（真实市场仅 weibo-core），待市场数据充足后删除
+// TODO(mock): 伪造市场应用（真实市场仅 spark-example），待市场数据充足后删除
 const MOCK_APPS: PluginMarketItemDto[] = [
   {
     id: 'mock-forum',

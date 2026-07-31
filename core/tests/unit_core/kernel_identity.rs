@@ -7,7 +7,7 @@ use spark_core::identity;
 use spark_core::kernel::{Kernel, KernelConfig};
 
 const PASSWORD: &str = "correct-horse-battery";
-const DOMAIN: &str = "plugin:weibo-core";
+const DOMAIN: &str = "plugin:spark-example";
 const PAYLOAD: &str = "org_123:post_456:hello spark";
 
 fn temp_kernel() -> (tempfile::TempDir, Kernel) {

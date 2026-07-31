@@ -1,5 +1,5 @@
 //! 插件市场内置目录（vendored 自 TS desktop/src/main/plugins/catalog.ts，
-//! 与 code/plugins/weibo-core/manifest.json 的 package 字段保持一致）。
+//! 与 code/plugins/spark-example/manifest.json 的 package 字段保持一致）。
 //!
 //! 本期为静态 vendored：远端目录服务未排期；新增插件 = 在此追加条目 +
 //! 打包脚本/发布 workflow 跟进（见 code/plugins/README.md）。
@@ -36,23 +36,31 @@ pub struct PluginCatalogItem {
 /// 内置目录（TS `CATALOG`；listPluginCatalog 同款深拷贝语义 → 每次返回新 Vec）。
 pub fn list_plugin_catalog() -> Vec<PluginCatalogItem> {
     vec![PluginCatalogItem {
-        id: "weibo-core".to_string(),
-        domain: "plugin:weibo-core".to_string(),
-        name: "组织微博基础插件".to_string(),
-        description: "单主管理员发帖，组织成员评论/回复，基于插件域独立数据同步。".to_string(),
+        id: "spark-example".to_string(),
+        domain: "plugin:spark-example".to_string(),
+        name: "示例插件".to_string(),
+        description: "插件体系参考实现：管理员发帖（域签名防抵赖）发应用会话卡片通知，成员评论/回复。"
+            .to_string(),
         category: "foundation".to_string(),
         version: "0.1.0".to_string(),
-        views: vec!["default".to_string()],
-        permissions: vec!["org:sync".to_string()],
+        views: vec!["default".to_string(), "post-card".to_string()],
+        permissions: vec![
+            "storage:read".to_string(),
+            "storage:write".to_string(),
+            "org:read".to_string(),
+            "org:sync".to_string(),
+            "message:app".to_string(),
+            "identity:sign".to_string(),
+        ],
         package: PluginCatalogPackage {
             update_manifest_url:
-                "https://github.com/welyin/spark/releases/latest/download/spark-plugin-weibo-core-manifest.json"
+                "https://github.com/welyin/spark/releases/latest/download/spark-plugin-spark-example-manifest.json"
                     .to_string(),
             signature_url:
-                "https://github.com/welyin/spark/releases/latest/download/spark-plugin-weibo-core-manifest.sig"
+                "https://github.com/welyin/spark/releases/latest/download/spark-plugin-spark-example-manifest.sig"
                     .to_string(),
-            package_name: "spark-plugin-weibo-core-0.1.0.spkg".to_string(),
-            install_command: "spark-plugin install spark-plugin-weibo-core-0.1.0.spkg".to_string(),
+            package_name: "spark-plugin-spark-example-0.1.0.spkg".to_string(),
+            install_command: "spark-plugin install spark-plugin-spark-example-0.1.0.spkg".to_string(),
         },
     }]
 }

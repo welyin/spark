@@ -127,64 +127,64 @@ describe('onChatReceived（信任内核会话快照）', () => {
 describe('应用消息内存镜像（§20，非 Tauri 环境）', () => {
   it('summary 校验先于落库：缺失/空白/超长一律拒绝（错误前缀与内核一致）', () => {
     const key = 'test:app-validate';
-    expect(() => sendAppMessageLocal(key, 'weibo-core', {})).toThrow(/^missing-summary/);
-    expect(() => sendAppMessageLocal(key, 'weibo-core', { summary: '   ' })).toThrow(/^missing-summary/);
-    expect(() => sendAppMessageLocal(key, 'weibo-core', { summary: 'x'.repeat(201) })).toThrow(/^summary-too-long/);
-    expect(getConversation(key, 'app:weibo-core')).toBeUndefined();
+    expect(() => sendAppMessageLocal(key, 'spark-example', {})).toThrow(/^missing-summary/);
+    expect(() => sendAppMessageLocal(key, 'spark-example', { summary: '   ' })).toThrow(/^missing-summary/);
+    expect(() => sendAppMessageLocal(key, 'spark-example', { summary: 'x'.repeat(201) })).toThrow(/^summary-too-long/);
+    expect(getConversation(key, 'app:spark-example')).toBeUndefined();
   });
 
   it('写入即建会话（惰性创建），summary 为 trim 后文本，未读 +1', () => {
     const key = 'test:app-send';
-    const dto = sendAppMessageLocal(key, 'weibo-core', { summary: '  新微博  ', text: 'hello' });
+    const dto = sendAppMessageLocal(key, 'spark-example', { summary: '  新微博  ', text: 'hello' });
     expect(dto.summary).toBe('新微博');
     expect(dto.status).toBe('local');
     expect(dto.read).toBe(false);
-    const conv = getConversation(key, 'app:weibo-core');
+    const conv = getConversation(key, 'app:spark-example');
     expect(conv?.kind).toBe('app');
-    expect(conv?.peerId).toBe('weibo-core');
+    expect(conv?.peerId).toBe('spark-example');
     expect(conv?.unreadCount).toBe(1);
-    expect(getAppMessages(key, 'app:weibo-core')).toHaveLength(1);
+    expect(getAppMessages(key, 'app:spark-example')).toHaveLength(1);
   });
 
   it('限流：同空间同插件 60s 窗口内第 11 条拒绝（rate-limited）', () => {
     const key = 'test:app-rl';
     for (let i = 0; i < 10; i += 1) {
-      sendAppMessageLocal(key, 'weibo-core', { summary: `第${i + 1}条` });
+      sendAppMessageLocal(key, 'spark-example', { summary: `第${i + 1}条` });
     }
-    expect(() => sendAppMessageLocal(key, 'weibo-core', { summary: '超限' })).toThrow(/^rate-limited/);
-    expect(getAppMessages(key, 'app:weibo-core')).toHaveLength(10);
+    expect(() => sendAppMessageLocal(key, 'spark-example', { summary: '超限' })).toThrow(/^rate-limited/);
+    expect(getAppMessages(key, 'app:spark-example')).toHaveLength(10);
     // 另一插件/另一空间不受影响
     sendAppMessageLocal(key, 'other-plugin', { summary: 'ok' });
-    sendAppMessageLocal('test:app-rl-2', 'weibo-core', { summary: 'ok' });
+    sendAppMessageLocal('test:app-rl-2', 'spark-example', { summary: 'ok' });
   });
 
   it('markRead：应用会话清零未读并把会话内消息批量置 read', () => {
     const key = 'test:app-read';
-    sendAppMessageLocal(key, 'weibo-core', { summary: '一' });
-    sendAppMessageLocal(key, 'weibo-core', { summary: '二' });
-    expect(getConversation(key, 'app:weibo-core')?.unreadCount).toBe(2);
-    markRead(key, 'app:weibo-core');
-    expect(getConversation(key, 'app:weibo-core')?.unreadCount).toBe(0);
-    expect(getAppMessages(key, 'app:weibo-core').every((msg) => msg.read)).toBe(true);
+    sendAppMessageLocal(key, 'spark-example', { summary: '一' });
+    sendAppMessageLocal(key, 'spark-example', { summary: '二' });
+    expect(getConversation(key, 'app:spark-example')?.unreadCount).toBe(2);
+    markRead(key, 'app:spark-example');
+    expect(getConversation(key, 'app:spark-example')?.unreadCount).toBe(0);
+    expect(getAppMessages(key, 'app:spark-example').every((msg) => msg.read)).toBe(true);
   });
 
   it('活跃会话写入：未读保持清零（与 onChatReceived 同口径）', () => {
     const key = 'test:app-active';
-    sendAppMessageLocal(key, 'weibo-core', { summary: '首条' });
-    openConversation(key, 'app:weibo-core');
-    sendAppMessageLocal(key, 'weibo-core', { summary: '次条' });
-    expect(getConversation(key, 'app:weibo-core')?.unreadCount).toBe(0);
-    expect(getAppMessages(key, 'app:weibo-core')[1].read).toBe(true);
+    sendAppMessageLocal(key, 'spark-example', { summary: '首条' });
+    openConversation(key, 'app:spark-example');
+    sendAppMessageLocal(key, 'spark-example', { summary: '次条' });
+    expect(getConversation(key, 'app:spark-example')?.unreadCount).toBe(0);
+    expect(getAppMessages(key, 'app:spark-example')[1].read).toBe(true);
     closeConversation(key);
   });
 
   it('被屏蔽的应用会话不参与未读聚合（取消屏蔽后恢复）', () => {
     const key = 'test:app-blocked';
-    sendAppMessageLocal(key, 'weibo-core', { summary: '通知' });
+    sendAppMessageLocal(key, 'spark-example', { summary: '通知' });
     expect(unreadCountOf(key)).toBe(1);
-    toggleAppConversationBlocked(key, 'weibo-core');
+    toggleAppConversationBlocked(key, 'spark-example');
     expect(unreadCountOf(key)).toBe(0);
-    toggleAppConversationBlocked(key, 'weibo-core');
+    toggleAppConversationBlocked(key, 'spark-example');
     expect(unreadCountOf(key)).toBe(1);
   });
 });
@@ -192,11 +192,11 @@ describe('应用消息内存镜像（§20，非 Tauri 环境）', () => {
 describe('应用消息内存镜像补充（pluginId 校验 / system 豁免 / 屏蔽聚合 / merge 排序）', () => {
   it('pluginId 校验：非法 id 一律拒绝（invalid-plugin-id，与内核错误前缀一致）', () => {
     const key = 'test:app-pid';
-    expect(() => sendAppMessageLocal(key, 'Weibo-Core', { summary: 'x' })).toThrow(/^invalid-plugin-id/);
+    expect(() => sendAppMessageLocal(key, 'Spark-Example', { summary: 'x' })).toThrow(/^invalid-plugin-id/);
     expect(() => sendAppMessageLocal(key, 'evil/plugin', { summary: 'x' })).toThrow(/^invalid-plugin-id/);
     expect(() => sendAppMessageLocal(key, '-bad', { summary: 'x' })).toThrow(/^invalid-plugin-id/);
     // 校验先于落库与限流：不产生会话
-    expect(getConversation(key, 'app:Weibo-Core')).toBeUndefined();
+    expect(getConversation(key, 'app:Spark-Example')).toBeUndefined();
   });
 
   it('内置 system 会话豁免限流（与内核 message_app_send 同口径）', () => {
@@ -210,22 +210,22 @@ describe('应用消息内存镜像补充（pluginId 校验 / system 豁免 / 屏
   it('totalUnread/hasUnreadMessages：被屏蔽会话不计入聚合（取消屏蔽恢复）', () => {
     const key = 'test:app-blocked-agg';
     const baseline = totalUnread.value;
-    sendAppMessageLocal(key, 'weibo-core', { summary: '通知' });
+    sendAppMessageLocal(key, 'spark-example', { summary: '通知' });
     expect(hasUnreadMessages(key)).toBe(true);
     expect(totalUnread.value).toBe(baseline + 1);
-    toggleAppConversationBlocked(key, 'weibo-core');
+    toggleAppConversationBlocked(key, 'spark-example');
     expect(hasUnreadMessages(key)).toBe(false);
     expect(totalUnread.value).toBe(baseline);
-    toggleAppConversationBlocked(key, 'weibo-core');
+    toggleAppConversationBlocked(key, 'spark-example');
     expect(totalUnread.value).toBe(baseline + 1);
   });
 
   it('mergeAppMessages：按 id 合并后按 createdAt 升序归位（水合期间本地新增不串序）', () => {
     const key = 'test:app-merge';
-    const local = sendAppMessageLocal(key, 'weibo-core', { summary: '本地新消息' });
+    const local = sendAppMessageLocal(key, 'spark-example', { summary: '本地新消息' });
     const history = (id: string, createdAt: number): AppMessageDto => ({
       id,
-      pluginId: 'weibo-core',
+      pluginId: 'spark-example',
       summary: id,
       payload: { summary: id },
       createdAt,
@@ -233,10 +233,10 @@ describe('应用消息内存镜像补充（pluginId 校验 / system 豁免 / 屏
       read: true
     });
     // 内核快照只含水合前的历史（时间早于本地新增）
-    mergeAppMessages(key, 'app:weibo-core', [
+    mergeAppMessages(key, 'app:spark-example', [
       history('h1', local.createdAt - 2000),
       history('h2', local.createdAt - 1000)
     ]);
-    expect(getAppMessages(key, 'app:weibo-core').map((m) => m.id)).toEqual(['h1', 'h2', local.id]);
+    expect(getAppMessages(key, 'app:spark-example').map((m) => m.id)).toEqual(['h1', 'h2', local.id]);
   });
 });

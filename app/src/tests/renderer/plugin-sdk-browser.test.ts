@@ -32,23 +32,23 @@ describe('createPluginBackend', () => {
     });
 
     const { createPluginBackend } = await import('../../plugin-sdk-browser');
-    const sdk = createPluginBackend('plugin:weibo-core');
+    const sdk = createPluginBackend('plugin:spark-example');
 
     const result = await sdk.runtime.syncOrganizationData('org_1');
 
-    expect(mockElectronApi.plugin.syncOrganizationData).toHaveBeenCalledWith('org_1', 'plugin:weibo-core');
+    expect(mockElectronApi.plugin.syncOrganizationData).toHaveBeenCalledWith('org_1', 'plugin:spark-example');
     expect(result).toEqual({ orgId: 'org_1', attempted: 1, pulled: 1 });
   });
 
   it('exposes identity.sign/verify；sign 带域、verify 免域', async () => {
-    mockElectronApi.plugin.identitySign.mockResolvedValueOnce({ domain: 'plugin:weibo-core', signature: 'sig' });
+    mockElectronApi.plugin.identitySign.mockResolvedValueOnce({ domain: 'plugin:spark-example', signature: 'sig' });
     mockElectronApi.plugin.identityVerify.mockResolvedValueOnce({ valid: true });
 
     const { createPluginBackend } = await import('../../plugin-sdk-browser');
-    const sdk = createPluginBackend('plugin:weibo-core');
+    const sdk = createPluginBackend('plugin:spark-example');
 
     await sdk.identity.sign('payload-1');
-    expect(mockElectronApi.plugin.identitySign).toHaveBeenCalledWith('payload-1', 'plugin:weibo-core');
+    expect(mockElectronApi.plugin.identitySign).toHaveBeenCalledWith('payload-1', 'plugin:spark-example');
 
     const result = await sdk.identity.verify('payload-1', 'sig', 'pk');
     expect(mockElectronApi.plugin.identityVerify).toHaveBeenCalledWith('payload-1', 'sig', 'pk');
@@ -64,14 +64,14 @@ describe('createPluginBackend', () => {
     });
 
     const { createPluginBackend } = await import('../../plugin-sdk-browser');
-    const sdk = createPluginBackend('plugin:weibo-core');
+    const sdk = createPluginBackend('plugin:spark-example');
 
     const declared = await sdk.docs.defineCollection('votes', { syncStrategy: 'append-only' });
 
     expect(mockElectronApi.plugin.docDeclareCollection).toHaveBeenCalledWith(
       'votes',
       { syncStrategy: 'append-only' },
-      'plugin:weibo-core'
+      'plugin:spark-example'
     );
     expect(declared).toMatchObject({ collection: 'votes', syncStrategy: 'append-only' });
   });
@@ -80,6 +80,6 @@ describe('createPluginBackend', () => {
     // @ts-expect-error 模拟无宿主环境
     delete window.electronAPI;
     const { createPluginBackend } = await import('../../plugin-sdk-browser');
-    expect(() => createPluginBackend('plugin:weibo-core')).toThrow(/electronAPI is not available/);
+    expect(() => createPluginBackend('plugin:spark-example')).toThrow(/electronAPI is not available/);
   });
 });

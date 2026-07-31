@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * 插件打包脚本（移植自旧 desktop/scripts/plugins/build-weibo-package.mjs）。
+ * 插件打包脚本（移植自旧 desktop/scripts/plugins/build-weibo-package.mjs，随插件更名同步）。
  *
  * 产物（默认输出到 code/app/dist-market/plugins/<pluginId>/）：
  * - spark-plugin-<pluginId>-<version>.spkg  JSON 包：{pluginId, domain, version, files:[{path, sha256, size, contentBase64}]}
@@ -31,13 +31,13 @@ const workspaceRoot = path.resolve(codeRoot, '..');
 
 /**
  * 打进 .spkg 的插件产物文件（dist/ 全量，deterministic 顺序）。
- * dist 由 build:weibo 生成（vite ESM bundle + manifest.json + assets/），
+ * dist 由 build:example 生成（vite ESM bundle + manifest.json + assets/），
  * 本脚本不再直接收集 TS/Vue 源码。
  */
 async function collectDistFiles(pluginId) {
   const distDir = path.join(pluginsRoot, pluginId, 'dist');
   if (!fs.existsSync(path.join(distDir, 'manifest.json'))) {
-    throw new Error(`缺少 ${distDir}（含 manifest.json），请先运行 npm run build:weibo 生成插件产物`);
+    throw new Error(`缺少 ${distDir}（含 manifest.json），请先运行 npm run build:example 生成插件产物`);
   }
   const walk = async (dir) => {
     const entries = await readdir(dir, { withFileTypes: true });
@@ -109,8 +109,8 @@ async function readSigningPrivateKey() {
 async function main() {
   const args = parseArgs(process.argv);
 
-  const pluginId = args.pluginId ?? 'weibo-core';
-  const pluginDomain = args.pluginDomain ?? 'plugin:weibo-core';
+  const pluginId = args.pluginId ?? 'spark-example';
+  const pluginDomain = args.pluginDomain ?? 'plugin:spark-example';
   const version = normalizeVersion(args.version);
   const pluginRoot = path.join(pluginsRoot, pluginId);
   const outputDir = args.outputDir

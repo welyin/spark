@@ -83,9 +83,9 @@ function createWindowPair(): WindowPair {
 }
 
 const TEST_CTX: PluginContext = {
-  pluginId: 'weibo-core',
+  pluginId: 'spark-example',
   viewId: 'default',
-  domain: 'plugin:weibo-core',
+  domain: 'plugin:spark-example',
   space: { type: 'org', id: 'org-1' },
   theme: 'light',
   mount: { viewType: 'app' }
@@ -102,7 +102,7 @@ function createHarness(overrides: Record<string, unknown> = {}): Harness {
   const handler = vi.fn(async (module: string, method: string, args: unknown[]) => ({ module, method, args }));
   const bridge = createBridgeHost({
     iframe: { contentWindow: pair.pluginWindowRef as unknown as Window },
-    pluginId: 'weibo-core',
+    pluginId: 'spark-example',
     viewId: 'default',
     expectedOrigin: PLUGIN_ORIGIN,
     ctx: TEST_CTX,
@@ -115,7 +115,7 @@ function createHarness(overrides: Record<string, unknown> = {}): Harness {
 
 function connect(harness: Harness, overrides: Record<string, unknown> = {}) {
   return connectPluginBridge({
-    pluginId: 'weibo-core',
+    pluginId: 'spark-example',
     viewId: 'default',
     sdkVersion: '1',
     listenWindow: harness.plugin,
@@ -138,7 +138,7 @@ async function waitFor(condition: () => boolean, timeoutMs = 1_000): Promise<voi
 describe('bridge/protocol 消息编解码', () => {
   it('合法消息经 JSON 往返后可解析', () => {
     const messages: BridgeMessage[] = [
-      { v: BRIDGE_PROTOCOL_VERSION, type: 'hello', sdkVersion: '1', pluginId: 'weibo-core', viewId: 'default' },
+      { v: BRIDGE_PROTOCOL_VERSION, type: 'hello', sdkVersion: '1', pluginId: 'spark-example', viewId: 'default' },
       { v: BRIDGE_PROTOCOL_VERSION, type: 'ready', sdkVersion: '1', ctx: TEST_CTX },
       { v: BRIDGE_PROTOCOL_VERSION, type: 'error', code: 'x', message: 'm' },
       { v: BRIDGE_PROTOCOL_VERSION, type: 'call', id: 'c1', module: 'docs', method: 'get', args: ['c', 'i'] },
@@ -192,7 +192,7 @@ describe('bridge 握手', () => {
     const harness = createHarness();
     const connection = await connect(harness);
     expect(connection.ctx).toEqual(TEST_CTX);
-    expect(connection.sdk.domain).toBe('plugin:weibo-core');
+    expect(connection.sdk.domain).toBe('plugin:spark-example');
     await expect(harness.bridge.ready).resolves.toEqual(TEST_CTX);
     harness.bridge.destroy();
   });
@@ -218,7 +218,7 @@ describe('bridge 握手', () => {
     const readyExpectation = expect(harness.bridge.ready).rejects.toThrow(/timed out/);
     // origin 不符但结构合法、source 正确的 hello：必须被 origin 校验拦下
     harness.host.inject(
-      { v: BRIDGE_PROTOCOL_VERSION, type: 'hello', sdkVersion: '1', pluginId: 'weibo-core', viewId: 'default' },
+      { v: BRIDGE_PROTOCOL_VERSION, type: 'hello', sdkVersion: '1', pluginId: 'spark-example', viewId: 'default' },
       'https://evil.example',
       harness.pluginWindowRef
     );
@@ -233,7 +233,7 @@ describe('bridge 握手', () => {
     const readyExpectation = expect(harness.bridge.ready).rejects.toThrow(/timed out/);
     // origin 正确但 source 不是绑定的 iframe contentWindow
     harness.host.inject(
-      { v: BRIDGE_PROTOCOL_VERSION, type: 'hello', sdkVersion: '1', pluginId: 'weibo-core', viewId: 'default' },
+      { v: BRIDGE_PROTOCOL_VERSION, type: 'hello', sdkVersion: '1', pluginId: 'spark-example', viewId: 'default' },
       PLUGIN_ORIGIN,
       harness.hostWindowRef // 宿主窗口自己伪造插件消息
     );
@@ -260,7 +260,7 @@ describe('bridge 握手', () => {
     }) as EventListener);
 
     harness.host.inject(
-      { v: BRIDGE_PROTOCOL_VERSION, type: 'hello', sdkVersion: '1', pluginId: 'weibo-core', viewId: 'default' },
+      { v: BRIDGE_PROTOCOL_VERSION, type: 'hello', sdkVersion: '1', pluginId: 'spark-example', viewId: 'default' },
       PLUGIN_ORIGIN,
       harness.pluginWindowRef
     );
@@ -450,12 +450,12 @@ describe('bridge messages 域（应用会话 §20）', () => {
     const received: unknown[] = [];
     const off = sdk.messages!.onCardAction((action) => received.push(action));
 
-    harness.bridge.pushAction('weibo-core:m1', 'open', { postId: 'p1' });
+    harness.bridge.pushAction('spark-example:m1', 'open', { postId: 'p1' });
     await waitFor(() => received.length === 1);
-    expect(received[0]).toEqual({ cardId: 'weibo-core:m1', actionId: 'open', data: { postId: 'p1' } });
+    expect(received[0]).toEqual({ cardId: 'spark-example:m1', actionId: 'open', data: { postId: 'p1' } });
 
     off();
-    harness.bridge.pushAction('weibo-core:m2', 'like');
+    harness.bridge.pushAction('spark-example:m2', 'like');
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(received).toHaveLength(1);
     harness.bridge.destroy();
@@ -465,16 +465,16 @@ describe('bridge messages 域（应用会话 §20）', () => {
     const cardCtx: PluginContext = {
       ...TEST_CTX,
       viewId: 'post-card',
-      mount: { viewType: 'message-card', cardId: 'weibo-core:m1', cardData: { postId: 'p1' } }
+      mount: { viewType: 'message-card', cardId: 'spark-example:m1', cardData: { postId: 'p1' } }
     };
     const onAction = vi.fn();
     const harness = createHarness({ ctx: cardCtx, viewId: 'post-card', onAction });
     const { sdk, ctx } = await connect(harness, { viewId: 'post-card' });
-    expect(ctx.mount.cardId).toBe('weibo-core:m1');
+    expect(ctx.mount.cardId).toBe('spark-example:m1');
 
     sdk.messages!.triggerCardAction('like', { value: 1 });
     await waitFor(() => onAction.mock.calls.length === 1);
-    expect(onAction).toHaveBeenCalledWith('weibo-core:m1', 'like', { value: 1 });
+    expect(onAction).toHaveBeenCalledWith('spark-example:m1', 'like', { value: 1 });
     harness.bridge.destroy();
   });
 
@@ -490,7 +490,7 @@ describe('bridge messages 域（应用会话 §20）', () => {
     const cardCtx: PluginContext = {
       ...TEST_CTX,
       viewId: 'post-card',
-      mount: { viewType: 'message-card', cardId: 'weibo-core:m1' }
+      mount: { viewType: 'message-card', cardId: 'spark-example:m1' }
     };
     const onEvent = vi.fn();
     const harness = createHarness({ ctx: cardCtx, viewId: 'post-card', onEvent });

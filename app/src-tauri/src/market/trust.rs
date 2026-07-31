@@ -95,7 +95,7 @@ pub(crate) mod tests {
     #[test]
     fn verify_roundtrip_and_negatives() {
         let (pem, signing_key) = test_keypair(7);
-        let payload = "{\"pluginId\":\"weibo-core\"}";
+        let payload = "{\"pluginId\":\"spark-example\"}";
         let signature = sign_text(&signing_key, payload);
 
         // 正：签名有效

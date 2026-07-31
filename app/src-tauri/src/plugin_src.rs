@@ -3,7 +3,7 @@
 //! URL 形如 `plugin://<pluginId>/<path>`，解析顺序先安装包后内置 dist：
 //! - 已安装包：`<app_data_dir>/plugins/<id>/packages/*.spkg`（.spkg = JSON 容器
 //!   `{pluginId, domain, version, files:[{path, sha256, size, contentBase64}]}`，
-//!   见 code/plugins/scripts/build-weibo-package.mjs）。定位只信
+//!   见 code/plugins/scripts/build-example-package.mjs）。定位只信
 //!   plugin-market-state.json 记录的 packagePath（fail-closed：无记录、状态
 //!   文件存在但解析失败、`enabled = false`，一律拒服，不做目录扫描猜测）。
 //! - 内置开发插件 dist：`code/plugins/<id>/dist/<path>`（编译期
@@ -281,29 +281,29 @@ mod tests {
     }
 
     #[test]
-    fn builtin_dist_serves_weibo_bundle() {
+    fn builtin_dist_serves_example_bundle() {
         // dist 为构建产物且被 gitignore：fresh clone 上缺席，此时跳过
-        // （构建：cd code/plugins/weibo-core && npm run build）。
+        // （构建：cd code/plugins && npm run build:example）。
         // 编译期候选根恒指向 code/plugins（CARGO_MANIFEST_DIR 语义），
-        // weibo-core dist 已构建时应能取到 bundle 与 manifest
-        let dist_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/weibo-core/dist");
+        // spark-example dist 已构建时应能取到 bundle 与 manifest
+        let dist_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/spark-example/dist");
         if !dist_root.join("views/main.js").is_file() {
-            eprintln!("skip: weibo-core dist 未构建（cd code/plugins/weibo-core && npm run build）");
+            eprintln!("skip: spark-example dist 未构建（cd code/plugins && npm run build:example）");
             return;
         }
         let data_dir = Path::new("/nonexistent-spark-data-dir");
-        let bundle = resolve_plugin_resource(data_dir, "weibo-core", "views/main.js");
-        assert!(bundle.is_some(), "weibo-core dist/views/main.js 应可经内置 dist 解析");
-        let manifest = resolve_plugin_resource(data_dir, "weibo-core", "manifest.json");
+        let bundle = resolve_plugin_resource(data_dir, "spark-example", "views/main.js");
+        assert!(bundle.is_some(), "spark-example dist/views/main.js 应可经内置 dist 解析");
+        let manifest = resolve_plugin_resource(data_dir, "spark-example", "manifest.json");
         assert!(manifest.is_some());
     }
 
     #[test]
     fn traversal_rejected_end_to_end() {
         let data_dir = Path::new("/nonexistent-spark-data-dir");
-        assert!(resolve_plugin_resource(data_dir, "weibo-core", "../manifest.json").is_none());
+        assert!(resolve_plugin_resource(data_dir, "spark-example", "../manifest.json").is_none());
         assert!(resolve_plugin_resource(data_dir, "..", "views/main.js").is_none());
-        assert!(resolve_plugin_resource(data_dir, "weibo-core", "..\\views\\main.js").is_none());
+        assert!(resolve_plugin_resource(data_dir, "spark-example", "..\\views\\main.js").is_none());
     }
 
     // ------------------------------------------------------------------

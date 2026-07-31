@@ -197,7 +197,7 @@ mod tests {
     use spark_core::kernel::KernelConfig;
 
     const PASSWORD: &str = "correct-horse-battery";
-    const DOMAIN: &str = "plugin:weibo-core";
+    const DOMAIN: &str = "plugin:spark-example";
 
     fn temp_kernel() -> (tempfile::TempDir, Kernel) {
         let dir = tempfile::tempdir().unwrap();

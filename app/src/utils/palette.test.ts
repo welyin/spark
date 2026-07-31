@@ -6,7 +6,7 @@ const GRADIENT_RE = /^linear-gradient\(135deg, #[0-9a-f]{6}, #[0-9a-f]{6}\)$/;
 
 describe('hashGradient', () => {
   it('同一 seed 恒得同一配色（确定性）', () => {
-    expect(hashGradient('plugin:weibo-core')).toBe(hashGradient('plugin:weibo-core'));
+    expect(hashGradient('plugin:spark-example')).toBe(hashGradient('plugin:spark-example'));
     expect(hashGradient('root-abc')).toBe(hashGradient('root-abc'));
   });
 

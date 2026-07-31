@@ -9,25 +9,25 @@ fn install_from_local_release_copies_package_and_persists() {
     // 不调 initialize：显式 install 路径（reconcile 已在其他用例覆盖，
     // 若先 initialize，本地 bundle 会被对账直接标记安装）
     let mut service = fixture.service();
-    assert!(!service.state.installed.contains_key("weibo-core"));
+    assert!(!service.state.installed.contains_key("spark-example"));
 
-    let installed = service.install("weibo-core").unwrap();
+    let installed = service.install("spark-example").unwrap();
     assert_eq!(installed.version, "0.1.0");
     assert!(installed.enabled);
     // 包被复制到 packages_root/<id>/packages/（跨平台：按路径组件比较，不比较字符串分隔符）
     let copied = fixture
         .packages_root
-        .join("weibo-core")
+        .join("spark-example")
         .join("packages")
-        .join("spark-plugin-weibo-core-0.1.0.spkg");
+        .join("spark-plugin-spark-example-0.1.0.spkg");
     assert_eq!(PathBuf::from(&installed.package_path), copied);
     assert!(copied.is_file());
-    assert_eq!(service.update_probes["weibo-core"].reason, "installed");
+    assert_eq!(service.update_probes["spark-example"].reason, "installed");
 
     // 新实例从状态文件恢复（持久化语义）；reconcile 跳过已安装条目
     let mut reloaded = fixture.service();
     reloaded.initialize().unwrap();
-    assert!(reloaded.state.installed.contains_key("weibo-core"));
+    assert!(reloaded.state.installed.contains_key("spark-example"));
     assert!(reloaded.list_market()[0].installed);
 }
 
@@ -48,7 +48,7 @@ fn install_normalizes_manifest_permissions() {
     );
     let mut service = fixture.service();
     service.initialize().unwrap();
-    let installed = service.install("weibo-core").unwrap();
+    let installed = service.install("spark-example").unwrap();
     assert_eq!(
         installed.granted_permissions,
         vec![
@@ -70,8 +70,8 @@ fn install_rejects_signature_id_domain_and_digest_problems() {
     let mut service = fixture.service();
     service.initialize().unwrap();
     assert_eq!(
-        service.install("weibo-core").unwrap_err(),
-        "Plugin manifest signature verification failed: weibo-core"
+        service.install("spark-example").unwrap_err(),
+        "Plugin manifest signature verification failed: spark-example"
     );
 
     // id 不匹配
@@ -83,8 +83,8 @@ fn install_rejects_signature_id_domain_and_digest_problems() {
     let mut service = fixture.service();
     service.initialize().unwrap();
     assert_eq!(
-        service.install("weibo-core").unwrap_err(),
-        "Plugin manifest id mismatch: expected weibo-core, got evil"
+        service.install("spark-example").unwrap_err(),
+        "Plugin manifest id mismatch: expected spark-example, got evil"
     );
 
     // domain 不匹配
@@ -96,8 +96,8 @@ fn install_rejects_signature_id_domain_and_digest_problems() {
     let mut service = fixture.service();
     service.initialize().unwrap();
     assert_eq!(
-        service.install("weibo-core").unwrap_err(),
-        "Plugin manifest domain mismatch: expected plugin:weibo-core, got plugin:evil"
+        service.install("spark-example").unwrap_err(),
+        "Plugin manifest domain mismatch: expected plugin:spark-example, got plugin:evil"
     );
 
     // sha256 不匹配
@@ -106,10 +106,10 @@ fn install_rejects_signature_id_domain_and_digest_problems() {
     let mut service = fixture.service();
     service.initialize().unwrap();
     assert_eq!(
-        service.install("weibo-core").unwrap_err(),
-        "Plugin package sha256 mismatch for weibo-core"
+        service.install("spark-example").unwrap_err(),
+        "Plugin package sha256 mismatch for spark-example"
     );
-    assert!(!service.state.installed.contains_key("weibo-core"));
+    assert!(!service.state.installed.contains_key("spark-example"));
 
     // size 不匹配
     let fixture = Fixture::new();
@@ -117,8 +117,8 @@ fn install_rejects_signature_id_domain_and_digest_problems() {
     let mut service = fixture.service();
     service.initialize().unwrap();
     assert_eq!(
-        service.install("weibo-core").unwrap_err(),
-        "Plugin package size mismatch for weibo-core"
+        service.install("spark-example").unwrap_err(),
+        "Plugin package size mismatch for spark-example"
     );
 
     // 未收录插件
@@ -140,34 +140,34 @@ fn set_enabled_roundtrip_and_upgrade_flow() {
 
     // 未安装不能启停/升级
     assert_eq!(
-        service.set_enabled("weibo-core", false).unwrap_err(),
-        "Plugin is not installed: weibo-core"
+        service.set_enabled("spark-example", false).unwrap_err(),
+        "Plugin is not installed: spark-example"
     );
     assert_eq!(
-        service.upgrade("weibo-core").unwrap_err(),
-        "Plugin is not installed: weibo-core"
+        service.upgrade("spark-example").unwrap_err(),
+        "Plugin is not installed: spark-example"
     );
 
-    service.install("weibo-core").unwrap();
-    let disabled = service.set_enabled("weibo-core", false).unwrap();
+    service.install("spark-example").unwrap();
+    let disabled = service.set_enabled("spark-example", false).unwrap();
     assert!(!disabled.enabled);
     let mut reloaded = fixture.service();
     reloaded.initialize().unwrap();
-    assert!(!reloaded.state.installed["weibo-core"].enabled);
+    assert!(!reloaded.state.installed["spark-example"].enabled);
     assert!(!reloaded.list_market()[0].enabled);
 
     // 发布 0.2.0 后升级
     write_release(&fixture, &ReleaseOpts { version: "0.2.0".to_string(), ..Default::default() });
-    let probes = reloaded.check_for_updates(Some("weibo-core")).unwrap();
+    let probes = reloaded.check_for_updates(Some("spark-example")).unwrap();
     assert!(probes[0].update_available);
     assert_eq!(probes[0].reason, "new-version-available");
     assert_eq!(probes[0].latest_version.as_deref(), Some("0.2.0"));
 
-    let upgraded = reloaded.upgrade("weibo-core").unwrap();
+    let upgraded = reloaded.upgrade("spark-example").unwrap();
     assert_eq!(upgraded.version, "0.2.0");
-    assert_eq!(reloaded.update_probes["weibo-core"].reason, "upgraded");
+    assert_eq!(reloaded.update_probes["spark-example"].reason, "upgraded");
     assert!(fixture
         .packages_root
-        .join("weibo-core/packages/spark-plugin-weibo-core-0.2.0.spkg")
+        .join("spark-example/packages/spark-plugin-spark-example-0.2.0.spkg")
         .is_file());
 }

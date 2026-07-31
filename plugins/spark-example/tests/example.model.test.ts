@@ -2,12 +2,15 @@ import { describe, expect, it } from 'vitest';
 import {
   WEIBO_MAX_TEXT_LENGTH,
   buildCommentThread,
+  buildPostSignPayload,
+  buildPostSummary,
   canPublishPost,
+  hashPostContent,
   validateWeiboText,
   type WeiboComment
 } from '../model';
 
-describe('weibo-core model', () => {
+describe('spark-example model', () => {
   it('enforces publish permission to organization admins only', () => {
     expect(canPublishPost('admin')).toBe(true);
     expect(canPublishPost('member')).toBe(false);
@@ -58,5 +61,29 @@ describe('weibo-core model', () => {
     expect(thread[0].replies).toHaveLength(1);
     expect(thread[0].replies[0].id).toBe('c2');
     expect(thread[1].comment.id).toBe('c3');
+  });
+
+  it('hashes post content deterministically (stable sign payload material)', () => {
+    expect(hashPostContent('hello spark')).toBe(hashPostContent('hello spark'));
+    expect(hashPostContent('hello spark')).not.toBe(hashPostContent('hello sparx'));
+    expect(hashPostContent('')).toMatch(/^[0-9a-f]{8}$/);
+  });
+
+  it('binds sign payload to org + post + content hash (anti replay across posts)', () => {
+    const payload = buildPostSignPayload('org-1', 'post-1', '正文');
+    expect(payload).toBe(`org-1:post-1:${hashPostContent('正文')}`);
+    // 同一正文换个帖子/组织，载荷不同——签名无法被剪贴重放
+    expect(buildPostSignPayload('org-1', 'post-2', '正文')).not.toBe(payload);
+    expect(buildPostSignPayload('org-2', 'post-1', '正文')).not.toBe(payload);
+  });
+
+  it('builds self-contained app message summary (declarative fallback text)', () => {
+    expect(buildPostSummary('  今天发布了新版本  ')).toBe('【新帖】今天发布了新版本');
+    // 摘要必须 ≤200 字符（内核硬约束）：长正文截断并加省略号
+    const long = '长'.repeat(300);
+    const summary = buildPostSummary(long);
+    expect(summary.length).toBeLessThanOrEqual(200);
+    expect(summary.endsWith('…')).toBe(true);
+    expect(summary.startsWith('【新帖】')).toBe(true);
   });
 });

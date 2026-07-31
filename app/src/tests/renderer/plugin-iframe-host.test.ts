@@ -59,7 +59,7 @@ vi.mock('../../plugin-bridge-dispatcher', () => ({
 }));
 
 const SPACE = { type: 'personal', id: 'personal' } as const;
-const INSTANCE_KEY = pluginInstanceKey('weibo-core', SPACE);
+const INSTANCE_KEY = pluginInstanceKey('spark-example', SPACE);
 
 /** 等组件异步 init 走完（nextTick + 宏任务 + nextTick） */
 async function flush(): Promise<void> {
@@ -74,7 +74,7 @@ function mountHost(): { el: HTMLElement; app: App } {
   const app = createApp({
     render: () =>
       h(PluginIframeHost, {
-        pluginId: 'weibo-core',
+        pluginId: 'spark-example',
         viewId: 'default',
         space: { ...SPACE }
       })

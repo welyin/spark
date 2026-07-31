@@ -1,0 +1,16 @@
+{
+  "comment": "id 暂用插件短名；随分发模型迁移后改为仓库地址（如 github.com/welyin/spark-plugins/spark-example）",
+  "id": "spark-example",
+  "name": "示例插件",
+  "icon": "",
+  "summary": "Spark 插件体系参考实现：组织微博，演示存储/签名/应用消息/消息卡片等核心能力。",
+  "category": "foundation",
+  "version": "0.1.0",
+  "release": {
+    "assetNaming": "spark-plugin-spark-example-<version>.spkg",
+    "updateManifestAsset": "spark-plugin-spark-example-manifest.json",
+    "signatureAsset": "spark-plugin-spark-example-manifest.sig"
+  },
+  "permissions": ["storage:read", "storage:write", "org:read", "org:sync", "message:app", "identity:sign"],
+  "mirrors": []
+}

@@ -4,12 +4,12 @@ use std::path::Path;
 
 use super::*;
 
-/// 验证打包脚本（code/plugins/scripts/build-weibo-package.mjs）的真实产物
+/// 验证打包脚本（code/plugins/scripts/build-example-package.mjs）的真实产物
 /// 经 file:// 全链路（验签 → 复制 → sha256/size 校验 → 落状态）可安装。
 ///
 /// 运行：
 ///   SPARK_MARKET_E2E_RELEASE_DIR=<repo>/code/desktop/dist-market/plugins \
-///   SPARK_MARKET_E2E_PUBLIC_KEY_PEM="$(cat <repo>/code/desktop/dist-market/plugins/weibo-core/update-manifest.pub.pem)" \
+///   SPARK_MARKET_E2E_PUBLIC_KEY_PEM="$(cat <repo>/code/desktop/dist-market/plugins/spark-example/update-manifest.pub.pem)" \
 ///   cargo test e2e_real_release_artifacts
 #[test]
 fn e2e_real_release_artifacts() {
@@ -41,8 +41,8 @@ fn e2e_real_release_artifacts() {
     untrusted.initialize().unwrap();
     assert!(!untrusted.list_market()[0].installed);
     assert_eq!(
-        untrusted.install("weibo-core").unwrap_err(),
-        "Plugin manifest signature verification failed: weibo-core"
+        untrusted.install("spark-example").unwrap_err(),
+        "Plugin manifest signature verification failed: spark-example"
     );
 
     // 正：产物自带公钥（env 覆盖场景同款）→ reconcile 直接标记已安装
@@ -54,14 +54,14 @@ fn e2e_real_release_artifacts() {
 
     // 显式 install（file:// 复制到 packages_root）+ .spkg 内部一致性：
     // 逐文件校验 contentBase64 解码后的 sha256/size 与清单一致
-    let installed = service.install("weibo-core").unwrap();
+    let installed = service.install("spark-example").unwrap();
     assert!(Path::new(&installed.package_path).is_file());
     let spkg: serde_json::Value = serde_json::from_str(
         &fs::read_to_string(&installed.package_path).unwrap(),
     )
     .unwrap();
-    assert_eq!(spkg["pluginId"], "weibo-core");
-    assert_eq!(spkg["domain"], "plugin:weibo-core");
+    assert_eq!(spkg["pluginId"], "spark-example");
+    assert_eq!(spkg["domain"], "plugin:spark-example");
     for file in spkg["files"].as_array().unwrap() {
         use base64::Engine as _;
         let content = base64::engine::general_purpose::STANDARD
@@ -77,7 +77,7 @@ fn e2e_real_release_artifacts() {
     }
 
     // 升级流：同版本 check → up-to-date；状态文件已落盘
-    let probes = service.check_for_updates(Some("weibo-core")).unwrap();
+    let probes = service.check_for_updates(Some("spark-example")).unwrap();
     assert_eq!(probes[0].reason, "up-to-date");
     assert!(paths.state_file.is_file());
 }

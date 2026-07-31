@@ -1,4 +1,4 @@
-name: Release Plugin Weibo
+name: Release Plugin Spark Example
 
 # 插件发布流水线（移植自旧 desktop/.github/workflows/release-plugin-weibo.yml，
 # 路径适配 code/ monorepo 布局：打包脚本在 plugins/scripts/，产物落在
@@ -25,7 +25,7 @@ on:
       pluginId:
         description: "Plugin ID"
         required: false
-        default: weibo-core
+        default: spark-example
         type: string
 
 permissions:
@@ -51,7 +51,7 @@ jobs:
           if [[ "${{ github.event_name }}" == "release" ]]; then
             TAG="${{ github.event.release.tag_name }}"
             VERSION="${TAG#v}"
-            PLUGIN_ID="weibo-core"
+            PLUGIN_ID="spark-example"
           else
             TAG="${{ inputs.tag }}"
             VERSION="${{ inputs.version }}"
@@ -86,14 +86,14 @@ jobs:
         run: npm ci --prefix app
 
       - name: Build plugin dist (vite ESM bundle + manifest)
-        run: npm run build:weibo --prefix plugins
+        run: npm run build:example --prefix plugins
 
       - name: Build and sign plugin release artifacts
         if: github.event_name == 'release' || steps.release_check.outputs.skip == 'false'
         env:
           SPARK_PLUGIN_SIGNING_PRIVATE_KEY: ${{ secrets.SPARK_PLUGIN_SIGNING_PRIVATE_KEY }}
         run: |
-          node plugins/scripts/build-weibo-package.mjs \
+          node plugins/scripts/build-example-package.mjs \
             --pluginId "${{ steps.vars.outputs.plugin_id }}" \
             --pluginDomain "plugin:${{ steps.vars.outputs.plugin_id }}" \
             --version "${{ steps.vars.outputs.version }}" \
