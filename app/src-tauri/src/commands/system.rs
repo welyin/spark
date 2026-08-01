@@ -7,17 +7,27 @@
 
 /// 未读数 → 徽标值：<=0 清除徽标（None），正数收敛到 1..=999（极端值不把
 /// 大数字直接贴上 dock；前端 title 侧 >99 已显示「…」，徽标只是装饰性近似）。
+#[cfg(not(target_os = "android"))]
 fn badge_value(count: i64) -> Option<i64> {
     (count > 0).then_some(count.min(999))
 }
 
 #[tauri::command]
 pub fn system_set_badge(window: tauri::Window, count: i64) {
+    // Android 不支持徽标（Tauri 文档明示），相关方法在 Android target 不存在，
+    // 编译期门控为 no-op；命令保留（前端 fire-and-forget 无需感知平台）。
+    #[cfg(target_os = "android")]
+    {
+        let _ = (window, count);
+    }
     #[cfg(target_os = "macos")]
-    let result = window.set_badge_label(badge_value(count).map(|n| n.to_string()));
-    #[cfg(not(target_os = "macos"))]
-    let result = window.set_badge_count(badge_value(count));
-    let _ = result;
+    {
+        let _ = window.set_badge_label(badge_value(count).map(|n| n.to_string()));
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "android")))]
+    {
+        let _ = window.set_badge_count(badge_value(count));
+    }
 }
 
 // ------------------------------------------------------------------
