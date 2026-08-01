@@ -24,7 +24,9 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 12px 0;
+  /* 安全区：下 padding 叠加 env(safe-area-inset-bottom)（桌面端恒为 0 无影响；
+     窄屏下 rail 整体不渲染，底部安全区由 MobileTabBar 承担） */
+  padding: 12px 0 calc(12px + env(safe-area-inset-bottom));
   background: var(--spark-rail-bg);
   border-right: 2px solid var(--spark-border-light);
   transition: width 0.2s ease;
@@ -186,10 +188,12 @@
 .topbar {
   flex-shrink: 0;
   width: 100%;
-  height: var(--spark-topbar-height);
+  /* 安全区：高度与上 padding 叠加 env(safe-area-inset-top)，内容避开系统状态栏；
+     桌面端 env() 恒为 0，calc 结果与原值一致，布局像素级不变 */
+  height: calc(var(--spark-topbar-height) + env(safe-area-inset-top));
   display: flex;
   align-items: center;
-  padding: 0 12px 0 16px;
+  padding: env(safe-area-inset-top) 12px 0 16px;
   background: var(--spark-topbar-bg);
   border-bottom: 2px solid var(--spark-border);
   -webkit-app-region: drag; /* 栏体可拖动窗口（内部按钮已禁用） */
@@ -360,4 +364,14 @@
 .app-drawer-close:hover {
   background: var(--spark-bg-hover);
   color: var(--spark-text-1);
+}
+
+/* ---- 移动端适配（波次 1）：窄屏 ≤768px，与 stores/ui-layout.ts 同一断点 ----
+   口径：断点以下由 App.vue 改渲染 MobileTabBar 底部导航（rail 不渲染），
+   这里只做壳层紧凑化；断点以上（≥769px）桌面 rail + 顶栏布局像素级不变。 */
+@media (max-width: 768px) {
+  /* 顶栏紧凑：收窄左右 padding（上 padding 保留 safe-area-inset-top） */
+  .topbar {
+    padding: env(safe-area-inset-top) 8px 0;
+  }
 }

@@ -5,14 +5,16 @@
       <TopNavbar
         @switch-account="handleSwitchAccount"
         @logout="handleLogout"
+        @open-tab="handleMenuSelect"
       />
     </header>
 
     <div class="shell-body">
       <!-- rail：顶部=当前身份头像（点击直达「我的资料」），中部=当前空间内的二级导航（ui-space-navbar §5）。
            两种状态：窄栏（64px，图标在上文字在下）/ 宽栏（155px，左图标右文字），
-           点右侧分隔线（col-resize 光标）切换，选择持久化在 localStorage -->
-      <nav class="rail" :class="{ expanded: railExpanded }">
+           点右侧分隔线（col-resize 光标）切换，选择持久化在 localStorage；
+           窄屏（≤768px）下不渲染，导航由底部 MobileTabBar 接管（ui-layout 断点） -->
+      <nav v-if="!isMobileLayout" class="rail" :class="{ expanded: railExpanded }">
         <div class="rail-identity">
           <UserAvatarMenu
             :avatar-size="36"
@@ -125,6 +127,15 @@
         </el-card>
       </main>
     </div>
+
+    <!-- 移动端底部 tab 导航：窄屏（≤768px）替代左侧 rail，与 rail 共用 activeTab 状态源 -->
+    <MobileTabBar
+      v-if="isMobileLayout"
+      :active-tab="activeTab"
+      :messages-badge="messagesBadge"
+      :contacts-badge="contactsBadge"
+      @select="handleMenuSelect"
+    />
   </div>
 </template>
 
@@ -146,6 +157,8 @@ import { requestOpenContact } from './stores/pending-contact';
 import { requestOpenAppDetail } from './stores/pending-app';
 import TopNavbar from './components/TopNavbar.vue';
 import UserAvatarMenu from './components/UserAvatarMenu.vue';
+import MobileTabBar from './components/MobileTabBar.vue';
+import { isMobileLayout } from './stores/ui-layout';
 import { useUpdaterReadyPrompt } from './components/updater/use-updater';
 import MessagesPage from './pages/MessagesPage.vue';
 import ContactsPage from './pages/ContactsPage.vue';
@@ -177,6 +190,7 @@ export default defineComponent({
     MinePage,
     TopNavbar,
     UserAvatarMenu,
+    MobileTabBar,
     PluginIframeHost,
     ChatDotRound,
     Notebook,
@@ -361,6 +375,7 @@ export default defineComponent({
       activeTab,
       pluginTabs,
       railExpanded,
+      isMobileLayout,
       toggleRail,
       navItems,
       messagesBadge,
