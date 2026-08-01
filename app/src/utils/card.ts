@@ -5,7 +5,7 @@
  * - 二维码名片：jsQR 解码出 spark-card JSON（节点在线）或裸 RootID（节点离线）
  * - 名片内容文本：「RootID / PeerId / P2P Addresses」多行格式（一键复制）
  */
-import jsQR from 'jsqr';
+import { decodeQrTextFromFile } from './qr-decode';
 
 export type CardInfo = {
   rootId: string;
@@ -51,29 +51,7 @@ export function parseCard(text: string): CardInfo | null {
   return bare ? { rootId: bare[1] } : null;
 }
 
-/** 上传名片图片：jsQR 本地识别二维码，返回解码文本（识别失败返回 ''） */
+/** 上传名片图片：jsQR 本地识别二维码（缩放阶梯），返回解码文本（识别失败返回 ''） */
 export function decodeCardImage(file: File): Promise<string> {
-  return new Promise((resolve) => {
-    const url = URL.createObjectURL(file);
-    const image = new Image();
-    image.onload = () => {
-      URL.revokeObjectURL(url);
-      const canvas = document.createElement('canvas');
-      canvas.width = image.naturalWidth;
-      canvas.height = image.naturalHeight;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) {
-        resolve('');
-        return;
-      }
-      ctx.drawImage(image, 0, 0);
-      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      resolve(jsQR(imageData.data, imageData.width, imageData.height)?.data ?? '');
-    };
-    image.onerror = () => {
-      URL.revokeObjectURL(url);
-      resolve('');
-    };
-    image.src = url;
-  });
+  return decodeQrTextFromFile(file);
 }

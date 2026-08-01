@@ -77,7 +77,7 @@
 import { defineComponent, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import QRCode from 'qrcode';
-import jsQR from 'jsqr';
+import { decodeQrTextFromFile } from '../../utils/qr-decode';
 
 export default defineComponent({
   name: 'RecoverConnectionPanel',
@@ -138,7 +138,7 @@ export default defineComponent({
       cardFileInput.value?.click();
     };
 
-    // 二维码图片 → jsqr 解码 → 填入名片串（RecoverPage.vue 同款模式）
+    // 二维码图片 → 缩放阶梯解码 → 填入名片串（RecoverPage.vue 同款模式）
     const onCardFileChange = async (event: Event) => {
       const input = event.target as HTMLInputElement;
       const file = input.files?.[0];
@@ -147,22 +147,12 @@ export default defineComponent({
         return;
       }
       try {
-        const bitmap = await createImageBitmap(file);
-        const canvas = document.createElement('canvas');
-        canvas.width = bitmap.width;
-        canvas.height = bitmap.height;
-        const context = canvas.getContext('2d');
-        if (!context) {
-          throw new Error('no-canvas');
-        }
-        context.drawImage(bitmap, 0, 0);
-        const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-        const decoded = jsQR(imageData.data, imageData.width, imageData.height);
-        if (!decoded?.data) {
+        const decoded = await decodeQrTextFromFile(file);
+        if (!decoded) {
           ElMessage.warning('无法识别图片中的二维码，请确认图片清晰完整');
           return;
         }
-        importCardText.value = decoded.data;
+        importCardText.value = decoded;
       } catch {
         ElMessage.error('图片读取失败，请换一张图片重试');
       }

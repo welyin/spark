@@ -25,7 +25,7 @@
 - `src/components/mine/ProfileModule.vue:113` | 「隐私设置」分组为占位说明（发现设置、黑名单、朋友权限） | 待真实隐私模型落地；设置页「当前空间」有同名 mock 开关组
 - `src/components/mine/MyCardModule.vue:99` | 名片「分享链接」为演示数据（按 RootID 拼的占位 URL） | 待名片链接服务与扫码/打开链路落地
 - `src/components/mine/BackupModule.vue:45` | 「加密导出」备份方式为占位 | 内核无对应接口，未来能力
-- `src/components/mine/BackupModule.vue`（验密） | 二维码/助记词备份统一先验登录密码 | 二维码备份走 `rootIdentity.backupPayloadQr`（内核验密并产出剔除头像的紧凑载荷，QR 渲染宽度按载荷长度自适应）；助记词备份仍复用 `rootIdentity.revealMnemonic` 验密
+- `src/components/mine/BackupModule.vue`（验密） | 二维码/助记词备份统一先验登录密码 | 二维码备份走 `rootIdentity.backupPayloadQr`（内核验密并产出剔除头像的紧凑载荷，QR 渲染宽度按载荷长度自适应）；助记词备份仍复用 `rootIdentity.revealMnemonic` 验密；解码侧统一走 `src/utils/qr-decode.ts` 缩放阶梯（jsQR 对部分 QR version 原图定位失败，按 [1, 0.75, 0.5, 0.35, 0.25] 缩小重试）
 - `src/components/mine/NetworkModule.vue` | 网络状态「高级模式」开关存 localStorage（`spark:network-advanced`） | 前端展示层偏好，普通用户视图只显示简单状态；如需跨设备同步待设置持久化方案
 
 ## 设置页（ui-space-navbar §6）

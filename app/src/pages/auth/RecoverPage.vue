@@ -125,11 +125,11 @@
 
 <script lang="ts">
 import { computed, defineComponent, ref, watch } from 'vue';
-import jsQR from 'jsqr';
 import { Grid } from '@element-plus/icons-vue';
 import AvatarPicker from '../../components/AvatarPicker.vue';
 import PasswordStrengthMeter from '../../components/common/PasswordStrengthMeter.vue';
 import { errorMessage } from '../../utils/ipc';
+import { decodeQrTextFromFile } from '../../utils/qr-decode';
 
 export default defineComponent({
   name: 'RecoverPage',
@@ -230,24 +230,14 @@ export default defineComponent({
       }
       message.value = '';
       try {
-        const bitmap = await createImageBitmap(file);
-        const canvas = document.createElement('canvas');
-        canvas.width = bitmap.width;
-        canvas.height = bitmap.height;
-        const context = canvas.getContext('2d');
-        if (!context) {
-          throw new Error('no-canvas');
-        }
-        context.drawImage(bitmap, 0, 0);
-        const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-        const decoded = jsQR(imageData.data, imageData.width, imageData.height);
-        if (!decoded?.data) {
+        const decoded = await decodeQrTextFromFile(file);
+        if (!decoded) {
           message.value = '无法识别图片中的二维码，请确认图片清晰完整';
           qrPayload.value = '';
           qrStep.value = 0;
           return;
         }
-        qrPayload.value = decoded.data;
+        qrPayload.value = decoded;
         qrStep.value = 1;
       } catch {
         message.value = '图片读取失败，请换一张图片重试';
