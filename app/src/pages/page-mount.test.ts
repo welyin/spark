@@ -9,9 +9,11 @@ import { describe, it, expect } from 'vitest';
 import { createApp, nextTick, type Component } from 'vue';
 import ElementPlus from 'element-plus';
 import App from '../App.vue';
+import { ensureDirectConversation } from '../mock/messages';
 import ContactsPage from './ContactsPage.vue';
 import AppsPage from './AppsPage.vue';
 import SettingsPage from './SettingsPage.vue';
+import MessagesPage from './MessagesPage.vue';
 import MinePage from './MinePage.vue';
 import TestPage from './TestPage.vue';
 
@@ -34,6 +36,13 @@ const mountPage = async (component: Component) => {
   return { el, errors, unmount };
 };
 
+const click = async (el: HTMLElement, selector: string) => {
+  const target = el.querySelector<HTMLElement>(selector);
+  expect(target, `应存在可点击元素 ${selector}`).toBeTruthy();
+  target!.click();
+  await nextTick();
+};
+
 describe('主页面挂载冒烟', () => {
   it('App 外壳：rail 导航 + 顶栏 + 默认消息页', async () => {
     const { el, errors, unmount } = await mountPage(App);
@@ -41,6 +50,21 @@ describe('主页面挂载冒烟', () => {
     expect(el.querySelector('.rail')).toBeTruthy();
     expect(el.querySelector('.topbar')).toBeTruthy();
     expect(el.querySelector('.messages-page')).toBeTruthy();
+    // 桌面端反断言：移动端底部 tab 导航不渲染（仅窄屏 ≤768px 出现）
+    expect(el.querySelector('.mobile-tab-bar')).toBeFalsy();
+    unmount();
+  });
+
+  it('消息页（桌面）：选中会话后 .conv-list 与聊天区同屏并存', async () => {
+    ensureDirectConversation('personal', 'root-peer-desktop', '桌面好友');
+    const { el, errors, unmount } = await mountPage(MessagesPage);
+    expect(errors.map(String)).toEqual([]);
+    await click(el, '.conv-item');
+    // 桌面端反断言：列表与聊天区并存（移动端整页切换只在其一）
+    expect(el.querySelector('.conv-list')).toBeTruthy();
+    expect(el.querySelector('.chat-view')).toBeTruthy();
+    // 卸载前收回聊天区：避免 el-input textarea 在卸载后量高（offsetHeight）报未处理拒绝
+    await click(el, '.chat-back');
     unmount();
   });
 

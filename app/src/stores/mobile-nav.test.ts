@@ -3,7 +3,7 @@
  * push/pop/reset 行为、canBack/currentPage 口径、各 tab 栈相互独立、同帧去重。
  */
 import { describe, expect, it } from 'vitest';
-import { canBack, currentPage, popPage, pushPage, resetStack } from './mobile-nav';
+import { canBack, currentPage, popPage, pushPage, removeFrames, resetStack } from './mobile-nav';
 
 describe('mobile-nav 移动端导航栈', () => {
   it('初始为栈深 1 的 root 帧：不可返回，currentPage 即 root', () => {
@@ -57,5 +57,22 @@ describe('mobile-nav 移动端导航栈', () => {
     // t-b 栈不受 t-a 复位影响（切 tab 各栈独立保持）
     expect(currentPage('t-b')).toEqual({ page: 'detail', params: { id: 'app1' } });
     expect(canBack('t-b')).toBe(true);
+  });
+
+  it('removeFrames 清掉所有匹配帧（含栈中间），栈底 root 恒保留', () => {
+    pushPage('t-rm', 'chat', { id: 'c1' });
+    pushPage('t-rm', 'chat', { id: 'c2' });
+    pushPage('t-rm', 'chat', { id: 'c1' });
+
+    // 删除会话 c1：其所有栈帧（栈中间 + 栈顶）一并移除
+    removeFrames('t-rm', (frame) => frame.page === 'chat' && frame.params?.id === 'c1');
+    expect(currentPage('t-rm')).toEqual({ page: 'chat', params: { id: 'c2' } });
+    popPage('t-rm');
+    expect(currentPage('t-rm')).toEqual({ page: 'root' });
+    expect(canBack('t-rm')).toBe(false);
+
+    // 无匹配帧为空操作；root 帧即使匹配也不移除
+    removeFrames('t-rm', () => true);
+    expect(currentPage('t-rm')).toEqual({ page: 'root' });
   });
 });

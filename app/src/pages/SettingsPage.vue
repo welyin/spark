@@ -94,6 +94,7 @@
 import { computed, defineComponent, onMounted, ref, watch, type Component } from 'vue';
 import { Key, Lock, OfficeBuilding, Postcard, Setting, User } from '@element-plus/icons-vue';
 import { currentSpace, currentSpaceOrgId } from '../stores/current-space';
+import { spaceKeyOf } from '../mock/space-key';
 import { nameOf, refreshOrganizations } from '../stores/org-membership';
 import { isMobileLayout } from '../stores/ui-layout';
 import { canBack, currentPage, popPage, pushPage, resetStack } from '../stores/mobile-nav';
@@ -137,6 +138,8 @@ export default defineComponent({
     const rootStatus = ref<RootStatus>({ initialized: false, unlocked: false, rootId: null, nickname: null, avatar: null });
 
     const isPersonal = computed(() => currentSpace.value.type === 'personal');
+    // 空间 key（'personal' / 'org:<orgId>'）：组织 A→B 切换时 isPersonal 不变，watch 须以 spaceKey 为口径
+    const spaceKey = computed(() => spaceKeyOf(currentSpace.value));
     const currentOrgName = computed(() => nameOf(currentSpaceOrgId.value) ?? '组织空间');
     // 页头个人头像：统一取数（stores/avatar-sources），与 rail/空间切换器同源
     const headerAvatar = computed(() => personalAvatarSource());
@@ -163,9 +166,9 @@ export default defineComponent({
       { key: 'backup', label: '账号备份', icon: Lock }
     ];
 
-    // 空间切换：菜单项集合变化，重置选中到各空间默认项，并清掉模块选中；移动端同步回栈底
-    watch(isPersonal, (personal) => {
-      activeMenu.value = personal ? 'mine' : 'space';
+    // 空间切换（个人↔组织及组织 A→B）：菜单项集合变化，重置选中到各空间默认项，并清掉模块选中；移动端同步回栈底
+    watch(spaceKey, () => {
+      activeMenu.value = isPersonal.value ? 'mine' : 'space';
       activeModule.value = null;
       resetStack(MOBILE_TAB);
     });

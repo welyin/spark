@@ -62,7 +62,7 @@ export default defineComponent({
   background: var(--spark-rail-bg);
   border-top: 2px solid var(--spark-border-light);
   /* 安全区：手势导航条占位（桌面端 env() 恒为 0） */
-  padding-bottom: env(safe-area-inset-bottom);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 .mobile-tab-item {

@@ -39,7 +39,7 @@ import ChatView from '../components/messages/ChatView.vue';
 import { currentSpace, currentSpaceType } from '../stores/current-space';
 import { consumePendingChat, pendingChat } from '../stores/pending-chat';
 import { isMobileLayout } from '../stores/ui-layout';
-import { currentPage, popPage, pushPage, resetStack } from '../stores/mobile-nav';
+import { currentPage, popPage, pushPage, removeFrames, resetStack } from '../stores/mobile-nav';
 import { ensureDirectConversation, spaceKeyOf } from '../mock/messages';
 import { CONTACT_INTENT_ADD, CONTACT_INTENT_BROWSE, openContacts } from '../components/contacts/open-intents';
 
@@ -61,16 +61,17 @@ export default defineComponent({
     });
 
     // 移动端（波次 2）：栈顶帧变化（重进 tab 按栈恢复 / 返回 pop / 重按 tab 复位）时同步选中会话；
-    // 桌面选中会话后拖窗进入窄屏时按当前选中补一帧聊天页，避免直接丢回列表
+    // 桌面选中会话后拖窗进入窄屏（isMobileLayout 由 false→true 跳变）时按当前选中补一帧聊天页，避免直接丢回列表；
+    // 移动端内的 resetStack（重按当前 tab）不补帧，否则复位会被立即撤销
     watch(
       [() => currentPage(MOBILE_TAB), isMobileLayout],
-      ([frame, mobile]) => {
+      ([frame, mobile], [, prevMobile]) => {
         if (!mobile) {
           return;
         }
         if (frame.page === 'chat') {
           activeId.value = frame.params?.id ?? '';
-        } else if (activeId.value) {
+        } else if (activeId.value && !prevMobile) {
           pushPage(MOBILE_TAB, 'chat', { id: activeId.value });
         } else {
           activeId.value = '';
@@ -113,9 +114,9 @@ export default defineComponent({
 
     function onRemoved(id: string) {
       if (activeId.value === id) activeId.value = '';
-      // 移动端：被删会话的栈帧一并弹出，避免返回到已删除的空会话页
-      if (isMobileLayout.value && currentPage(MOBILE_TAB).params?.id === id) {
-        popPage(MOBILE_TAB);
+      // 移动端：清掉被删会话的所有栈帧（含栈中间，栈底 root 保留），避免返回到已删除的空会话页
+      if (isMobileLayout.value) {
+        removeFrames(MOBILE_TAB, (frame) => frame.page === 'chat' && frame.params?.id === id);
       }
     }
 

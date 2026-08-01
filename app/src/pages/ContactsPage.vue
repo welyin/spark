@@ -73,7 +73,7 @@
           :on-create-tag="onCreateTagReturn"
           @save-profile="onSaveProfile"
           @set-blocked="onSetBlocked"
-          @delete="onDeleteContact"
+          @delete="onDeleteContactNav"
           @send-message="onSendMessage"
           @add-as-friend="onAddAsFriend"
         />
@@ -104,7 +104,7 @@
           :tags="spaceData.tags"
           :space-key="spaceKey"
           :contacts="contacts"
-          @view-member="onViewMember"
+          @view-member="onViewMemberNav"
         />
       </div>
     </div>
@@ -129,7 +129,7 @@
       :tags="spaceData.tags"
       :space-key="spaceKey"
       :contacts="contacts"
-      @view-member="onViewMember"
+      @view-member="onViewMemberNav"
     />
 
     <!-- 联系人（默认，§5）：第三栏组内联系人 + 第四栏资料卡 -->
@@ -157,7 +157,7 @@
           :on-create-tag="onCreateTagReturn"
           @save-profile="onSaveProfile"
           @set-blocked="onSetBlocked"
-          @delete="onDeleteContact"
+          @delete="onDeleteContactNav"
           @send-message="onSendMessage"
           @add-as-friend="onAddAsFriend"
         />
@@ -184,7 +184,7 @@
           :on-create-tag="onCreateTagReturn"
           @save-profile="onSaveProfile"
           @set-blocked="onSetBlocked"
-          @delete="onDeleteContact"
+          @delete="onDeleteContactNav"
           @send-message="onSendMessage"
           @add-as-friend="onAddAsFriend"
         />
@@ -349,14 +349,43 @@ export default defineComponent({
       }
     };
 
+    /** 标签页成员行点击：移动端只走导航栈（整页资料卡，不再叠加抽屉）；桌面保持抽屉原逻辑 */
+    const onViewMemberNav = (rootId: string) => {
+      if (!isMobileLayout.value) {
+        onViewMember(rootId);
+        return;
+      }
+      if (!contacts.value.some((contact) => contact.rootId === rootId)) {
+        return;
+      }
+      selectedRootId.value = rootId;
+      pushPage(MOBILE_TAB, 'contact', { rootId });
+    };
+
+    /** 删除联系人收尾：删除成功（selectedRootId 已被清空；取消/失败保持原值）后，
+        移动端若栈顶是被删联系人的资料卡帧则弹出，避免返回残留空页 */
+    const onDeleteContactNav = async () => {
+      const deletedRootId = selectedRootId.value;
+      await onDeleteContact();
+      if (
+        deletedRootId &&
+        !selectedRootId.value &&
+        isMobileLayout.value &&
+        currentPage(MOBILE_TAB).page === 'contact' &&
+        currentPage(MOBILE_TAB).params?.rootId === deletedRootId
+      ) {
+        popPage(MOBILE_TAB);
+      }
+    };
+
     /** 返回栏：弹出栈顶回上一栏 */
     const onMobileBack = () => popPage(MOBILE_TAB);
 
     // 栈顶帧变化（重进 tab 按栈恢复 / 返回 pop / 重按 tab 复位）时同步本地视图状态
     watch(
-      mobileFrame,
-      (frame) => {
-        if (!isMobileLayout.value) {
+      [mobileFrame, isMobileLayout],
+      ([frame, mobile]) => {
+        if (!mobile) {
           return;
         }
         if (frame.page === 'contact') {
@@ -412,7 +441,7 @@ export default defineComponent({
       selectedContact,
       selectedProfile,
       drawerVisible,
-      onViewMember,
+      onViewMemberNav,
       noopAsync,
       refreshOrganizations,
       onSelectGroup,
@@ -421,7 +450,7 @@ export default defineComponent({
       onSaveProfile,
       onSetBlocked,
       onSendMessage,
-      onDeleteContact,
+      onDeleteContactNav,
       onAddFriendSubmit,
       onResolveRequest,
       onRetryOutgoing,

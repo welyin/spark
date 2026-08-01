@@ -7,9 +7,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createApp, nextTick, type Component } from 'vue';
 import ElementPlus from 'element-plus';
 import { isMobileLayout } from '../stores/ui-layout';
-import { canBack, resetStack } from '../stores/mobile-nav';
+import { canBack, pushPage, resetStack } from '../stores/mobile-nav';
 import { ensureDirectConversation } from '../mock/messages';
 import MessagesPage from './MessagesPage.vue';
+import ContactsPage from './ContactsPage.vue';
 import MinePage from './MinePage.vue';
 
 const mountPage = async (component: Component) => {
@@ -42,12 +43,14 @@ describe('移动端整页 + 导航栈（波次 2）', () => {
   beforeEach(() => {
     isMobileLayout.value = true;
     resetStack('messages');
+    resetStack('contacts');
     resetStack('mine');
   });
 
   afterEach(() => {
     isMobileLayout.value = false;
     resetStack('messages');
+    resetStack('contacts');
     resetStack('mine');
   });
 
@@ -73,6 +76,41 @@ describe('移动端整页 + 导航栈（波次 2）', () => {
     expect(el.querySelector('.conv-list')).toBeTruthy();
     expect(el.querySelector('.chat-view')).toBeFalsy();
     expect(canBack('messages')).toBe(false);
+    unmount();
+  });
+
+  it('消息页：重按当前 tab 复位回栈底（reset 不被拖窗补栈逻辑撤销）', async () => {
+    ensureDirectConversation('personal', 'root-peer-mobile', '移动端好友');
+    const { el, errors, unmount } = await mountPage(MessagesPage);
+    expect(errors.map(String)).toEqual([]);
+
+    // 点开会话 → 栈2 聊天页整页
+    await click(el, '.conv-item');
+    expect(el.querySelector('.chat-view')).toBeTruthy();
+    expect(canBack('messages')).toBe(true);
+
+    // 模拟 App.vue 重按当前 tab：resetStack 回栈底，聊天帧不得被补栈逻辑压回
+    resetStack('messages');
+    await nextTick();
+    expect(el.querySelector('.conv-list')).toBeTruthy();
+    expect(el.querySelector('.chat-view')).toBeFalsy();
+    expect(canBack('messages')).toBe(false);
+    unmount();
+  });
+
+  it('通讯录页：标签页点成员只开栈页（单层资料卡，不叠加抽屉）', async () => {
+    const { el, errors, unmount } = await mountPage(ContactsPage);
+    expect(errors.map(String)).toEqual([]);
+
+    // 列表 → 标签整页（栈2）：种子首个标签「邻居」下有成员
+    pushPage('contacts', 'tags');
+    await nextTick();
+    expect(el.querySelector('.tag-member-row')).toBeTruthy();
+
+    // 点成员 → 栈3 资料卡整页；全文档只此一层 ContactPanel（移动端不再开抽屉叠加第二层）
+    await click(el, '.tag-member-row');
+    expect(el.querySelector('.mobile-stack-layer .contact-panel')).toBeTruthy();
+    expect(document.body.querySelectorAll('.contact-panel')).toHaveLength(1);
     unmount();
   });
 

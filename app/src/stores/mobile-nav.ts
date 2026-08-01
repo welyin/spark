@@ -61,3 +61,12 @@ export function popPage(tab: string): void {
 export function resetStack(tab: string): void {
   stacks[tab] = [{ ...ROOT_FRAME }];
 }
+
+/** 移除所有匹配栈帧（栈底 root 帧恒保留）：删除会话/联系人等实体时清掉其所有栈帧（含栈中间） */
+export function removeFrames(tab: string, predicate: (frame: MobileNavFrame) => boolean): void {
+  const stack = stackOf(tab);
+  const kept = stack.filter((frame, index) => index === 0 || !predicate(frame));
+  if (kept.length !== stack.length) {
+    stacks[tab] = kept;
+  }
+}

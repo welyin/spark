@@ -26,7 +26,7 @@
   align-items: center;
   /* 安全区：下 padding 叠加 env(safe-area-inset-bottom)（桌面端恒为 0 无影响；
      窄屏下 rail 整体不渲染，底部安全区由 MobileTabBar 承担） */
-  padding: 12px 0 calc(12px + env(safe-area-inset-bottom));
+  padding: 12px 0 calc(12px + env(safe-area-inset-bottom, 0px));
   background: var(--spark-rail-bg);
   border-right: 2px solid var(--spark-border-light);
   transition: width 0.2s ease;
@@ -190,10 +190,10 @@
   width: 100%;
   /* 安全区：高度与上 padding 叠加 env(safe-area-inset-top)，内容避开系统状态栏；
      桌面端 env() 恒为 0，calc 结果与原值一致，布局像素级不变 */
-  height: calc(var(--spark-topbar-height) + env(safe-area-inset-top));
+  height: calc(var(--spark-topbar-height) + env(safe-area-inset-top, 0px));
   display: flex;
   align-items: center;
-  padding: env(safe-area-inset-top) 12px 0 16px;
+  padding: env(safe-area-inset-top, 0px) 12px 0 16px;
   background: var(--spark-topbar-bg);
   border-bottom: 2px solid var(--spark-border);
   -webkit-app-region: drag; /* 栏体可拖动窗口（内部按钮已禁用） */
@@ -372,7 +372,7 @@
 @media (max-width: 768px) {
   /* 顶栏紧凑：收窄左右 padding（上 padding 保留 safe-area-inset-top） */
   .topbar {
-    padding: env(safe-area-inset-top) 8px 0;
+    padding: env(safe-area-inset-top, 0px) 8px 0;
   }
 
   /* ---- 移动端适配（波次 2）：整页 + 导航栈的共享层样式 ----
