@@ -18,15 +18,10 @@ spark-core = { path = "../../core" }
 tauri = { version = "2", features = [] }
 # 保存/打开对话框（data-export 导出路径选择，前端适配层经 @tauri-apps/plugin-dialog 调用）。
 tauri-plugin-dialog = "2"
-# 主程序自动更新（GitHub Releases 的 latest.json 清单 + minisign 验签，
-# 见 commands/updater.rs 与 .github/workflows/release-spark-desktop.yml）。
-tauri-plugin-updater = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
 # broadcast::Receiver<P2pEvent> 的类型命名（事件转发任务）。
 tokio = { version = "1", features = ["sync", "time"] }
-# 更新清单发布日期（tauri-plugin-updater 的 OffsetDateTime）RFC3339 格式化。
-time = { version = "0.3", features = ["formatting"] }
 # 插件市场：包 sha256 校验 / PEM 与签名 base64 / hex 摘要。
 sha2 = "0.11"
 base64 = "0.22"
@@ -35,6 +30,14 @@ hex = "0.4"
 # TLS 用 rustls + 系统根证书：native-tls 在 Android 交叉编译需要平台 OpenSSL
 # 开发包（openssl-sys 构建失败），rustls 为纯 Rust 实现跨平台零系统依赖。
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls"] }
+
+# 桌面平台专属依赖：tauri-plugin-updater 仅支持桌面（Android/iOS 无此插件，
+# 移动端更新走应用商店或自建 APK 渠道）。注意必须用内建 target_os 谓词——
+# tauri 的 cfg(desktop) 自定义标志只对 rustc 可见，Cargo 依赖解析器不识别。
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-updater = "2"
+# 更新清单发布日期（tauri-plugin-updater 的 OffsetDateTime）RFC3339 格式化。
+time = { version = "0.3", features = ["formatting"] }
 
 [dev-dependencies]
 tempfile = "3"

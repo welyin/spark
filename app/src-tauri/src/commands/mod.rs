@@ -17,6 +17,9 @@ pub mod org;
 pub mod p2p;
 pub mod plugin;
 pub mod system;
+// tauri-plugin-updater 仅桌面可用；门控用内建 target_os（与 Cargo.toml 的
+// target 依赖表一致），tauri 自定义 cfg(desktop) 对依赖解析器不可见
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod updater;
 
 use std::sync::MutexGuard;

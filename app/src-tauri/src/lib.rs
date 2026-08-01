@@ -79,11 +79,13 @@ fn resolve_data_dir<R: tauri::Runtime, M: tauri::Manager<R>>(app: &M) -> Result<
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let app = tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
-        // 主程序自动更新：GitHub Releases latest.json 清单 + minisign 验签
-        // （端点与公钥在 tauri.conf.json plugins.updater）。
-        .plugin(tauri_plugin_updater::Builder::new().build())
+    let builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init());
+    // 主程序自动更新：GitHub Releases latest.json 清单 + minisign 验签
+    // （端点与公钥在 tauri.conf.json plugins.updater）。tauri-plugin-updater
+    // 仅桌面可用，移动端不注册（更新走应用商店/自建渠道）。
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    let app = builder
         // 插件源服务：plugin://localhost/<pluginId>/<path>（插件 iframe 沙箱化阶段 A；
         // Windows 上页面实际引用 http://plugin.localhost/...，由 wry 拦截后 revert，
         // 见 plugin_src.rs 的 URL 形态说明）。已安装包（app_data_dir/plugins/<id>/
@@ -141,10 +143,13 @@ pub fn run() {
             // verified 终态回写内核索引；worker 需在 KernelState/MarketState 就位后启动
             announce_verify::spawn_announce_verify_worker(app.handle().clone(), announce_events);
             // 主程序自动更新：启动后延迟自动 检查+下载，就绪发 updater://ready
-            // 事件由前端弹窗引导重启（见 commands/updater.rs）。
-            let updater_state = commands::updater::UpdaterState::default();
-            commands::updater::spawn_auto_check(app.handle().clone(), updater_state.clone());
-            app.manage(updater_state);
+            // 事件由前端弹窗引导重启（见 commands/updater.rs）。仅桌面启用。
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            {
+                let updater_state = commands::updater::UpdaterState::default();
+                commands::updater::spawn_auto_check(app.handle().clone(), updater_state.clone());
+                app.manage(updater_state);
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -278,10 +283,14 @@ pub fn run() {
             // HTTP 代理设置（updater/市场链路 GitHub 直连失败的规避，见 proxy.rs）
             commands::system::system_get_proxy,
             commands::system::system_set_proxy,
-            // 主程序自动更新（GitHub Releases 清单；检查/下载/安装重启）
+            // 主程序自动更新（GitHub Releases 清单；检查/下载/安装重启）。仅桌面启用。
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             commands::updater::updater_status,
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             commands::updater::updater_check,
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             commands::updater::updater_stage_latest,
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             commands::updater::updater_apply_restart,
         ])
         .build(tauri::generate_context!())
