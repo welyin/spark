@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { inflateSync } from 'node:zlib';
 import QRCode from 'qrcode';
 import jsQR from 'jsqr';
-import { decodeQrTextFromImageData, type QrImageData } from '../../utils/qr-decode';
+import { decodeQrFastFromImageData, decodeQrTextFromImageData, type QrImageData } from '../../utils/qr-decode';
 
 /** 极简 PNG 解码器：仅支持 8bit RGB/RGBA、无隔行（qrcode 库 node 端输出即此格式） */
 function decodePng(dataUrl: string): QrImageData {
@@ -111,5 +111,27 @@ describe('decodeQrTextFromImageData（缩放阶梯）', () => {
       data[i] = Math.floor(Math.random() * 256);
     }
     expect(decodeQrTextFromImageData({ data, width: size, height: size })).toBe('');
+  });
+
+  it('拍屏摩尔纹图：快路径失败、抗摩尔纹路径（面积平均+阈值）解码成功且内容一致', async () => {
+    // 合成摩尔纹：2px 棋盘格高频条纹（±30 基准幅度）× 低频幅度带（模拟屏幕像素
+    // 网格与相机采样干涉产生的拍屏摩尔纹；纯 ±30 均匀条纹 jsQR 快路径即可容忍，
+    // 必须叠加幅度带才复现真实失败场景）
+    const payload = 'A'.repeat(900);
+    const image = await makeQrImage(payload, 640);
+    for (let y = 0; y < image.height; y++) {
+      for (let x = 0; x < image.width; x++) {
+        const checker = (Math.floor(x / 2) + Math.floor(y / 2)) % 2 === 0 ? -1 : 1;
+        const gain = 30 + 170 * Math.abs(Math.sin((Math.PI * (x + y)) / 60));
+        const delta = checker * gain;
+        const i = (y * image.width + x) * 4;
+        for (let c = 0; c < 3; c++) {
+          image.data[i + c] = Math.max(0, Math.min(255, image.data[i + c] + delta));
+        }
+      }
+    }
+    // 前提：快路径（最近邻阶梯）确实全部失败，否则样本失效
+    expect(decodeQrFastFromImageData(image)).toBe('');
+    expect(decodeQrTextFromImageData(image)).toBe(payload);
   });
 });
