@@ -163,6 +163,7 @@ pub fn run() {
             commands::identity::root_recover_mnemonic,
             commands::identity::root_recover_backup,
             commands::identity::root_backup_payload,
+            commands::identity::root_backup_payload_qr,
             commands::identity::root_reveal_mnemonic,
             commands::identity::root_update_profile,
             commands::identity::root_current_identity,

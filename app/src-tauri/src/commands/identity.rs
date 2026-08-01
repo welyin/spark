@@ -117,6 +117,14 @@ pub(crate) fn backup_payload_inner(kernel: &Kernel) -> Result<PayloadResultDto, 
     Ok(PayloadResultDto { payload })
 }
 
+pub(crate) fn backup_payload_qr_inner(
+    kernel: &Kernel,
+    password: &str,
+) -> Result<PayloadResultDto, String> {
+    let payload = kernel.backup_payload_qr(password).map_err(err)?;
+    Ok(PayloadResultDto { payload })
+}
+
 pub(crate) fn reveal_mnemonic_inner(
     kernel: &Kernel,
     password: &str,
@@ -251,6 +259,15 @@ pub fn root_backup_payload(
     state: tauri::State<'_, KernelState>,
 ) -> Result<PayloadResultDto, String> {
     backup_payload_inner(&*lock_kernel(&state)?)
+}
+
+/// 二维码备份载荷（验密；剔除 avatar 等大字段的紧凑 IdentityFile JSON）。
+#[tauri::command]
+pub fn root_backup_payload_qr(
+    state: tauri::State<'_, KernelState>,
+    password: String,
+) -> Result<PayloadResultDto, String> {
+    backup_payload_qr_inner(&*lock_kernel(&state)?, &password)
 }
 
 #[tauri::command]

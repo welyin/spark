@@ -146,6 +146,21 @@ impl Kernel {
         Ok(file.to_json()?)
     }
 
+    /// `getQrBackupPayload`：二维码备份载荷。验密取出 payload，剔除 avatar
+    /// （payload 内与文件外层）及其他可选大字段后同口令重新加密（新 salt/iv），
+    /// 产出紧凑 IdentityFile JSON（QR 码容量约 3KB，完整文件备份载荷实测
+    /// 远超上限无法扫码恢复）。完整文件备份见 `backup_payload`。
+    pub fn backup_payload_qr(&self, password: &str) -> Result<String> {
+        let target = self.current_root_id()?.ok_or(KernelError::NotInitialized)?;
+        let Some(file) = self.read_identity_file(&target)? else {
+            return Err(KernelError::NotInitialized);
+        };
+        let payload =
+            identity::file::decrypt_payload(&file, password).map_err(map_identity_decrypt_error)?;
+        let compact = identity::file::seal_compact_backup(&file, &payload, password)?;
+        Ok(compact.to_json()?)
+    }
+
     /// `recoverFromBackup`：备份码恢复。载荷即身份密文记录，解密口令为原登录密码；
     /// 结构无效与密码错误分别报错；写入前 sanitize 外部资料字段。
     pub fn recover_backup(&mut self, payload_json: &str, password: &str) -> Result<String> {

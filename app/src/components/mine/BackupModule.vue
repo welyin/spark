@@ -1,7 +1,8 @@
 <!-- 账号备份模块（MinePage「账号备份」第三、四栏）：
      第三栏=备份方式（二维码备份/助记词备份），原「加密导出」占位页已移除；
      第四栏=对应内容内联展示（不再用弹窗）。敏感内容先验证登录密码再展示——
-     内核无独立验密接口，复用 BackupCard 的 revealMnemonic 验密逻辑（二维码备份验密后丢弃助记词结果） -->
+     二维码备份走 backupPayloadQr（内核验密并产出剔除头像的紧凑载荷），
+     助记词备份走 revealMnemonic 验密 -->
 <template>
   <!-- 第三栏：备份方式 -->
   <div class="mine-list">
@@ -64,10 +65,23 @@
 
       <!-- 已验证：二维码备份 -->
       <div v-else-if="activeWay === 'qr'" class="backup-show">
-        <div class="backup-qr">
-          <img v-if="qrImageUrl" :src="qrImageUrl" alt="备份二维码" class="backup-qr-img" />
+        <div class="backup-qr" :style="{ width: qrWidth + 12 + 'px', height: qrWidth + 12 + 'px' }">
+          <img
+            v-if="qrImageUrl"
+            :src="qrImageUrl"
+            alt="备份二维码"
+            class="backup-qr-img"
+            :style="{ width: qrWidth + 'px', height: qrWidth + 'px' }"
+          />
           <span v-else>二维码生成中...</span>
         </div>
+        <el-alert
+          v-if="qrDense"
+          title="二维码密度较高：扫码时请保证光线充足、摄像头对焦清晰。"
+          type="warning"
+          :closable="false"
+          show-icon
+        />
         <p class="hint">
           这是同一身份的加密备份，恢复时需输入登录密码。可保存到相册或发送给自己——内容已加密，但请勿与密码存放在一起。
         </p>
@@ -141,6 +155,9 @@ export default defineComponent({
     const password = ref('');
     const busy = ref(false);
     const qrImageUrl = ref('');
+    // QR 渲染宽度随载荷长度自适应（密度过高手机难以识别）；qrDense = 高密度提示
+    const qrWidth = ref(280);
+    const qrDense = ref(false);
     const revealedMnemonic = ref('');
 
     const currentWay = computed(() => WAYS.find((way) => way.key === activeWay.value) ?? WAYS[0]);
@@ -161,6 +178,8 @@ export default defineComponent({
       unlocked.value = false;
       password.value = '';
       qrImageUrl.value = '';
+      qrWidth.value = 280;
+      qrDense.value = false;
       revealedMnemonic.value = '';
     };
 
@@ -177,7 +196,7 @@ export default defineComponent({
       activeWay.value = null;
     };
 
-    /** 验密并展示敏感内容（复用 BackupCard 的 revealMnemonic 验密：密码错误时内核报错） */
+    /** 验密并展示敏感内容（二维码走 backupPayloadQr 自带验密；助记词走 revealMnemonic 验密） */
     const verifyAndReveal = async () => {
       if (!password.value) {
         ElMessage.warning('请输入登录密码');
@@ -185,12 +204,19 @@ export default defineComponent({
       }
       busy.value = true;
       try {
-        const { mnemonic } = await window.electronAPI.rootIdentity.revealMnemonic(password.value);
         if (activeWay.value === 'qr') {
-          // 二维码备份仅需验密，助记词结果丢弃不展示
-          const { payload } = await window.electronAPI.rootIdentity.backupPayload();
-          qrImageUrl.value = await QRCode.toDataURL(payload, { errorCorrectionLevel: 'M', margin: 1, width: 280 });
+          // 二维码备份载荷已剔除头像等大字段（适配 QR 容量），密码错误时内核报错
+          const { payload } = await window.electronAPI.rootIdentity.backupPayloadQr(password.value);
+          // 渲染宽度按载荷长度自适应：越长越密，需更大尺寸保证可扫
+          qrWidth.value = payload.length < 800 ? 280 : payload.length < 1600 ? 400 : 520;
+          qrDense.value = payload.length >= 1600;
+          qrImageUrl.value = await QRCode.toDataURL(payload, {
+            errorCorrectionLevel: 'M',
+            margin: 1,
+            width: qrWidth.value
+          });
         } else {
+          const { mnemonic } = await window.electronAPI.rootIdentity.revealMnemonic(password.value);
           revealedMnemonic.value = mnemonic;
         }
         unlocked.value = true;
@@ -232,6 +258,8 @@ export default defineComponent({
       password,
       busy,
       qrImageUrl,
+      qrWidth,
+      qrDense,
       revealedWords,
       selectWay,
       closeDetail,
@@ -284,8 +312,6 @@ export default defineComponent({
 
 .backup-qr {
   display: flex;
-  width: 292px;
-  height: 292px;
   align-items: center;
   justify-content: center;
   border: 1px solid var(--spark-border-light);
@@ -294,8 +320,6 @@ export default defineComponent({
 }
 
 .backup-qr-img {
-  width: 280px;
-  height: 280px;
   image-rendering: pixelated;
 }
 

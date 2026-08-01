@@ -148,6 +148,25 @@ fn recover_backup_roundtrip() {
 }
 
 #[test]
+fn backup_payload_qr_roundtrip() {
+    let (_dir1, mut kernel_a) = temp_kernel();
+    let init = init_inner(&mut kernel_a, PASSWORD, "alice", None).unwrap();
+
+    // 密码错误 → Invalid password（与 reveal_mnemonic 同口径）
+    assert_eq!(
+        backup_payload_qr_inner(&kernel_a, "wrong-password").unwrap_err(),
+        "Invalid password"
+    );
+    // 紧凑载荷 <1KB（无头像），且可由 recover_backup 恢复
+    let qr = backup_payload_qr_inner(&kernel_a, PASSWORD).unwrap();
+    assert!(qr.payload.len() < 1024, "紧凑载荷 <1KB（实测 {}B）", qr.payload.len());
+
+    let (_dir2, mut kernel_b) = temp_kernel();
+    let recovered = recover_backup_inner(&mut kernel_b, &qr.payload, PASSWORD).unwrap();
+    assert_eq!(recovered.root_id, init.root_id);
+}
+
+#[test]
 fn password_policy_enforced() {
     let (_dir, mut kernel) = temp_kernel();
     assert_eq!(

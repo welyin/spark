@@ -363,6 +363,8 @@ export function createTauriApi(): ElectronAPI {
         }),
       revealMnemonic: (password) => call('root-reveal-mnemonic', password),
       backupPayload: () => call('root-backup-payload'),
+      // 二维码备份载荷（验密；剔除头像等大字段的紧凑 JSON，适配 QR 容量上限）
+      backupPayloadQr: (password) => call('root-backup-payload-qr', password),
       checkMnemonic: (input) => call('root-mnemonic-check', input),
       recoverMnemonic: (mnemonic, newPassword, nickname, avatar) =>
         call('root-recover-mnemonic', mnemonic, newPassword, nickname, avatar ?? null),

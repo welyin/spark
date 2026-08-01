@@ -404,6 +404,42 @@ pub fn decrypt_payload(file: &IdentityFile, password: &str) -> Result<IdentityPa
     Ok(serde_json::from_slice(&plaintext)?)
 }
 
+/// 组装二维码备份的紧凑身份文件：payload 与文件外层均剔除 avatar 及其他
+/// 可选大字段（gender/region/signature），仅保留身份恢复必需的
+/// mnemonic/path/version/wordlist/nickname/createdAt，同口令重新加密
+/// （新 salt/iv）。二维码容量有限（约 3KB），完整文件备份见 `backup_payload`。
+pub fn seal_compact_backup(
+    file: &IdentityFile,
+    payload: &IdentityPayload,
+    password: &str,
+) -> Result<IdentityFile> {
+    let compact = IdentityPayload {
+        mnemonic: payload.mnemonic.clone(),
+        path: payload.path.clone(),
+        version: payload.version,
+        wordlist: payload.wordlist.clone(),
+        nickname: payload.nickname.clone(),
+        avatar: None,
+        gender: None,
+        region: None,
+        signature: None,
+        created_at: payload.created_at,
+    };
+    seal_v2(
+        &compact,
+        password,
+        file.public_key_hex.clone(),
+        file.root_id.clone(),
+        file.nickname.clone(),
+        None,
+        None,
+        None,
+        None,
+        file.created_at,
+        now_ms(),
+    )
+}
+
 /// v2 加密并组装身份文件（随机 salt/iv）。
 #[allow(clippy::too_many_arguments)]
 fn seal_v2(

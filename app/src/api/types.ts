@@ -688,6 +688,8 @@ export type ElectronAPI = {
     }>;
     revealMnemonic: (password: string) => Promise<{ mnemonic: string }>;
     backupPayload: () => Promise<{ payload: string }>;
+    /** 二维码备份载荷（验密；剔除头像等大字段的紧凑 JSON，适配 QR 容量上限） */
+    backupPayloadQr: (password: string) => Promise<{ payload: string }>;
     checkMnemonic: (input: string) => Promise<{ words: string[]; invalidIndexes: number[] }>;
     recoverMnemonic: (mnemonic: string, newPassword: string, nickname: string, avatar?: string | null) => Promise<{ rootId: string }>;
     recoverBackup: (payload: string, password: string) => Promise<{ rootId: string }>;

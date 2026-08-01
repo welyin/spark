@@ -176,6 +176,71 @@ fn identity_backup_and_mnemonic_recovery() {
 }
 
 // ---------------------------------------------------------------------------
+// 二维码备份载荷：剔除头像的紧凑 IdentityFile，QR 容量内可扫码恢复
+// ---------------------------------------------------------------------------
+
+#[test]
+fn qr_backup_payload_compact_and_recoverable() {
+    // 30KB 头像（data URL）：完整文件备份载荷远超 QR 约 3KB 上限
+    let dir_a = tempfile::tempdir().unwrap();
+    let mut kernel_a = fresh_kernel(dir_a.path());
+    let avatar = format!("data:image/png;base64,{}", "A".repeat(30 * 1024));
+    let init = kernel_a
+        .init_identity(PASSWORD, "小明", Some(&avatar))
+        .unwrap();
+    let (root_id, mnemonic) = (init.root_id, init.mnemonic);
+
+    let full = kernel_a.backup_payload().unwrap();
+    assert!(full.len() > 3 * 1024, "完整载荷含头像，远超 QR 上限");
+    eprintln!("[qr-backup] 完整载荷 {}B", full.len());
+    // 错误密码 → Invalid password
+    let err = kernel_a.backup_payload_qr("wrong-password").unwrap_err();
+    assert!(matches!(err, KernelError::InvalidPassword));
+
+    // 紧凑载荷：<2KB、文件外层与密文均不含 avatar
+    let qr = kernel_a.backup_payload_qr(PASSWORD).unwrap();
+    assert!(qr.len() < 2 * 1024, "紧凑载荷 <2KB（实测 {}B）", qr.len());
+    eprintln!("[qr-backup] 紧凑载荷（30KB 头像身份）{}B", qr.len());
+    let qr_json: Value = serde_json::from_str(&qr).unwrap();
+    assert_eq!(qr_json["rootId"], root_id);
+    assert!(qr_json.get("avatar").is_none(), "文件外层无 avatar");
+    assert!(!qr.contains("data:image"), "载荷不含头像 data URL");
+    assert!(qr_json["salt"].is_string() && qr_json["authTag"].is_string());
+
+    // 同口令重新加密：两次导出 salt/iv 不同
+    let qr2 = kernel_a.backup_payload_qr(PASSWORD).unwrap();
+    let qr2_json: Value = serde_json::from_str(&qr2).unwrap();
+    assert_ne!(qr_json["salt"], qr2_json["salt"], "每次导出随机 salt");
+    assert_ne!(qr_json["iv"], qr2_json["iv"], "每次导出随机 iv");
+
+    // 设备 B：紧凑载荷经 recover_backup 恢复（与完整载荷同一入口）
+    let dir_b = tempfile::tempdir().unwrap();
+    let mut kernel_b = fresh_kernel(dir_b.path());
+    let err = kernel_b.recover_backup(&qr, "wrong-password").unwrap_err();
+    assert_eq!(err.to_string(), "密码不正确");
+    assert_eq!(kernel_b.recover_backup(&qr, PASSWORD).unwrap(), root_id);
+    // mnemonic/path 完整恢复（rootId 一致即派生路径一致）、昵称保留、头像为 None
+    assert_eq!(kernel_b.reveal_mnemonic(PASSWORD).unwrap(), mnemonic);
+    let public = kernel_b.current_identity().unwrap().unwrap();
+    assert_eq!(public.nickname.as_deref(), Some("小明"));
+    assert_eq!(public.avatar, None);
+    kernel_a.shutdown().unwrap();
+    kernel_b.shutdown().unwrap();
+}
+
+#[test]
+fn qr_backup_payload_without_avatar_under_1kb() {
+    // 无头像身份：紧凑载荷 <1KB（QR 编码密度低，常规尺寸即可扫出）
+    let dir = tempfile::tempdir().unwrap();
+    let mut kernel = fresh_kernel(dir.path());
+    init_identity(&mut kernel);
+    let qr = kernel.backup_payload_qr(PASSWORD).unwrap();
+    assert!(qr.len() < 1024, "无头像紧凑载荷 <1KB（实测 {}B）", qr.len());
+    eprintln!("[qr-backup] 紧凑载荷（无头像身份）{}B", qr.len());
+    kernel.shutdown().unwrap();
+}
+
+// ---------------------------------------------------------------------------
 // 阶段③c 新增门面：签名/域派生/助记词校验、会话版资料更新
 // ---------------------------------------------------------------------------
 
