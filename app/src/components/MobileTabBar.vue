@@ -44,11 +44,13 @@ export default defineComponent({
     contactsBadge: { type: Number, default: 0 }
   },
   emits: ['select'],
-  setup() {
-    // 图标映射留在组件内：ui-layout 保持纯逻辑（tab 定义）便于单测
+  setup(_, { emit }) {
+    // 图标映射留在组件内：ui-layout 保持纯逻辑（tab 定义）便于单测；
+    // emit 必须从 setup 上下文解构返回，模板里才能用 emit('select', id)
+    // （裸 setup() 时模板中的 emit 是 undefined，点击静默无效）
     const icons = { messages: ChatDotRound, contacts: Notebook, apps: Grid, mine: User };
     const tabs = MOBILE_TABS.map((tab) => ({ ...tab, icon: icons[tab.id] }));
-    return { tabs };
+    return { tabs, emit };
   }
 });
 </script>
