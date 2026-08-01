@@ -4,165 +4,210 @@
      个人空间=朋友（mock），组织空间=成员（真实 listMine + 本地附加资料 mock） -->
 <template>
   <section class="contacts-page">
-    <!-- 左栏：搜索 + 功能区 + 分组列表（右栏切换时保持不变）；移动端（波次 2）仅栈深 1（列表页）显示 -->
-    <div v-if="!isMobileLayout || mobileFrame.page === 'root'" class="contacts-list">
-      <header class="contacts-toolbar">
-        <el-input
-          v-model="keyword"
-          class="contacts-search"
-          placeholder="搜索联系人"
-          clearable
-          :prefix-icon="SearchIcon"
-        />
-        <!-- §3：个人空间「添加朋友」；组织空间仅管理员显示「添加成员」（复用组织邀请流程） -->
-        <el-button v-if="isPersonal" type="primary" @click="addFriendVisible = true">添加朋友</el-button>
-        <el-button v-else-if="isOrgAdmin" type="primary" @click="inviteVisible = true">添加成员</el-button>
-      </header>
+    <!-- 移动端（波次 2/3）：整页 + 导航栈，栈帧切换经 MobilePageTransition 滑动转场（微信式）——
+         栈1 列表（搜索 + 功能区 + 分组）；栈2 组内成员/新的朋友/标签；栈2-3 联系人资料卡 -->
+    <MobilePageTransition v-if="isMobileLayout" :tab="MOBILE_TAB">
+      <!-- 栈1：搜索 + 功能区 + 分组列表 -->
+      <div v-if="mobileFrame.page === 'root'" class="contacts-list">
+        <header class="contacts-toolbar">
+          <el-input
+            v-model="keyword"
+            class="contacts-search"
+            placeholder="搜索联系人"
+            clearable
+            :prefix-icon="SearchIcon"
+          />
+          <!-- §3：个人空间「添加朋友」；组织空间仅管理员显示「添加成员」（复用组织邀请流程） -->
+          <el-button v-if="isPersonal" type="primary" @click="addFriendVisible = true">添加朋友</el-button>
+          <el-button v-else-if="isOrgAdmin" type="primary" @click="inviteVisible = true">添加成员</el-button>
+        </header>
 
-      <!-- 搜索态：扁平结果列表；非搜索态：统一列表（功能区 + 分组，共享选中态与滚动） -->
-      <ContactList
-        v-if="searching"
-        :items="filteredContacts"
-        :active-root-id="rightView === 'contact' ? selectedRootId : ''"
-        :keyword="keyword"
-        :empty-text="isPersonal ? '无匹配的朋友' : '无匹配的成员'"
-        @select="onSelectContact"
-      />
-      <GroupPanel
-        v-else
-        :mode="isPersonal ? 'personal' : 'org'"
+        <!-- 搜索态：扁平结果列表；非搜索态：统一列表（功能区 + 分组，共享选中态与滚动） -->
+        <ContactList
+          v-if="searching"
+          :items="filteredContacts"
+          :active-root-id="rightView === 'contact' ? selectedRootId : ''"
+          :keyword="keyword"
+          :empty-text="isPersonal ? '无匹配的朋友' : '无匹配的成员'"
+          @select="onSelectContact"
+        />
+        <GroupPanel
+          v-else
+          :mode="isPersonal ? 'personal' : 'org'"
+          :space-key="spaceKey"
+          :groups="spaceData.groups"
+          :group-tree="spaceData.groupTree"
+          :counts="groupCounts"
+          :pending-count="pendingCount"
+          :admin-count="adminCount"
+          :active-id="rightView === 'contact' ? activeGroupId : rightView"
+          :can-edit-structure="isPersonal || isOrgAdmin"
+          @select="onSelectRowNav"
+        />
+      </div>
+
+      <!-- 栈2：组内成员列表整页层 -->
+      <div v-else-if="mobileFrame.page === 'group'" class="mobile-stack-layer">
+        <MobileBackBar :title="activeGroupName" @back="onMobileBack" />
+        <div class="mobile-stack-body">
+          <ContactList
+            :items="groupMembers"
+            :active-root-id="selectedRootId"
+            group-by-letter
+            empty-text="该分组暂无联系人"
+            @select="onSelectContact"
+          />
+        </div>
+      </div>
+
+      <!-- 联系人资料卡整页层（搜索直达为栈2，组内点开为栈3） -->
+      <div v-else-if="mobileFrame.page === 'contact'" class="mobile-stack-layer">
+        <MobileBackBar :title="selectedContact ? selectedContact.displayName : '联系人资料'" @back="onMobileBack" />
+        <div class="mobile-stack-body contacts-detail">
+          <ContactPanel
+            v-if="selectedContact && selectedProfile"
+            :key="selectedContact.rootId"
+            :contact="selectedContact"
+            :space-type="spaceType"
+            :is-admin="isOrgAdmin"
+            :profile="selectedProfile"
+            :all-tags="spaceData.tags"
+            :group-options="groupOptions"
+            :on-create-tag="onCreateTagReturn"
+            @save-profile="onSaveProfile"
+            @set-blocked="onSetBlocked"
+            @delete="onDeleteContactNav"
+            @send-message="onSendMessage"
+            @add-as-friend="onAddAsFriend"
+          />
+          <el-empty v-else class="contacts-detail-empty" :image-size="110" description="联系人不存在或已删除" />
+        </div>
+      </div>
+
+      <!-- 新的朋友 / 标签整页层（面板内部双栏纵排，见 contacts.css 波次 2 媒体查询） -->
+      <div v-else-if="mobileFrame.page === 'new-friends'" class="mobile-stack-layer">
+        <MobileBackBar :title="spaceType === 'org' ? '新的成员' : '新的朋友'" @back="onMobileBack" />
+        <div class="mobile-stack-body contacts-mobile-panel">
+          <NewFriendsPanel
+            :requests="spaceData.requests"
+            :outgoing="spaceData.outgoing"
+            :space-type="spaceType"
+            :space-key="spaceKey"
+            @resolve="onResolveRequest"
+            @retry="onRetryOutgoing"
+            @reply="onReplyOutgoing"
+            @ask="onAskRequest"
+          />
+        </div>
+      </div>
+      <div v-else-if="mobileFrame.page === 'tags'" class="mobile-stack-layer">
+        <MobileBackBar title="标签" @back="onMobileBack" />
+        <div class="mobile-stack-body contacts-mobile-panel">
+          <TagManager
+            :tags="spaceData.tags"
+            :space-key="spaceKey"
+            :contacts="contacts"
+            @view-member="onViewMemberNav"
+          />
+        </div>
+      </div>
+    </MobilePageTransition>
+
+    <!-- 桌面端（≥769px 渲染逻辑不变）：左栏 + 右栏多栏布局 -->
+    <template v-else>
+      <!-- 左栏：搜索 + 功能区 + 分组列表（右栏切换时保持不变） -->
+      <div class="contacts-list">
+        <header class="contacts-toolbar">
+          <el-input
+            v-model="keyword"
+            class="contacts-search"
+            placeholder="搜索联系人"
+            clearable
+            :prefix-icon="SearchIcon"
+          />
+          <!-- §3：个人空间「添加朋友」；组织空间仅管理员显示「添加成员」（复用组织邀请流程） -->
+          <el-button v-if="isPersonal" type="primary" @click="addFriendVisible = true">添加朋友</el-button>
+          <el-button v-else-if="isOrgAdmin" type="primary" @click="inviteVisible = true">添加成员</el-button>
+        </header>
+
+        <!-- 搜索态：扁平结果列表；非搜索态：统一列表（功能区 + 分组，共享选中态与滚动） -->
+        <ContactList
+          v-if="searching"
+          :items="filteredContacts"
+          :active-root-id="rightView === 'contact' ? selectedRootId : ''"
+          :keyword="keyword"
+          :empty-text="isPersonal ? '无匹配的朋友' : '无匹配的成员'"
+          @select="onSelectContact"
+        />
+        <GroupPanel
+          v-else
+          :mode="isPersonal ? 'personal' : 'org'"
+          :space-key="spaceKey"
+          :groups="spaceData.groups"
+          :group-tree="spaceData.groupTree"
+          :counts="groupCounts"
+          :pending-count="pendingCount"
+          :admin-count="adminCount"
+          :active-id="rightView === 'contact' ? activeGroupId : rightView"
+          :can-edit-structure="isPersonal || isOrgAdmin"
+          @select="onSelectRowNav"
+        />
+      </div>
+
+      <!-- 桌面端右栏：新的朋友：第三栏申请列表 + 第四栏申请人资料卡（四栏结构，与个人设置模块同构） -->
+      <NewFriendsPanel
+        v-if="rightView === 'new-friends'"
+        :requests="spaceData.requests"
+        :outgoing="spaceData.outgoing"
+        :space-type="spaceType"
         :space-key="spaceKey"
-        :groups="spaceData.groups"
-        :group-tree="spaceData.groupTree"
-        :counts="groupCounts"
-        :pending-count="pendingCount"
-        :admin-count="adminCount"
-        :active-id="rightView === 'contact' ? activeGroupId : rightView"
-        :can-edit-structure="isPersonal || isOrgAdmin"
-        @select="onSelectRowNav"
+        @resolve="onResolveRequest"
+        @retry="onRetryOutgoing"
+        @reply="onReplyOutgoing"
+        @ask="onAskRequest"
       />
-    </div>
 
-    <!-- 移动端（波次 2）整页层：栈2 组内成员列表 -->
-    <div v-if="isMobileLayout && mobileFrame.page === 'group'" class="mobile-stack-layer">
-      <MobileBackBar :title="activeGroupName" @back="onMobileBack" />
-      <div class="mobile-stack-body">
-        <ContactList
-          :items="groupMembers"
-          :active-root-id="selectedRootId"
-          group-by-letter
-          empty-text="该分组暂无联系人"
-          @select="onSelectContact"
-        />
-      </div>
-    </div>
+      <!-- 标签：第三栏标签列表 + 第四栏成员管理（四栏结构，同新的朋友） -->
+      <TagManager
+        v-else-if="rightView === 'tags'"
+        :tags="spaceData.tags"
+        :space-key="spaceKey"
+        :contacts="contacts"
+        @view-member="onViewMemberNav"
+      />
 
-    <!-- 移动端整页层：联系人资料卡（搜索直达为栈2，组内点开为栈3） -->
-    <div v-else-if="isMobileLayout && mobileFrame.page === 'contact'" class="mobile-stack-layer">
-      <MobileBackBar :title="selectedContact ? selectedContact.displayName : '联系人资料'" @back="onMobileBack" />
-      <div class="mobile-stack-body contacts-detail">
-        <ContactPanel
-          v-if="selectedContact && selectedProfile"
-          :key="selectedContact.rootId"
-          :contact="selectedContact"
-          :space-type="spaceType"
-          :is-admin="isOrgAdmin"
-          :profile="selectedProfile"
-          :all-tags="spaceData.tags"
-          :group-options="groupOptions"
-          :on-create-tag="onCreateTagReturn"
-          @save-profile="onSaveProfile"
-          @set-blocked="onSetBlocked"
-          @delete="onDeleteContactNav"
-          @send-message="onSendMessage"
-          @add-as-friend="onAddAsFriend"
-        />
-        <el-empty v-else class="contacts-detail-empty" :image-size="110" description="联系人不存在或已删除" />
-      </div>
-    </div>
-
-    <!-- 移动端整页层：新的朋友 / 标签（面板内部双栏纵排，见 contacts.css 波次 2 媒体查询） -->
-    <div v-else-if="isMobileLayout && mobileFrame.page === 'new-friends'" class="mobile-stack-layer">
-      <MobileBackBar :title="spaceType === 'org' ? '新的成员' : '新的朋友'" @back="onMobileBack" />
-      <div class="mobile-stack-body contacts-mobile-panel">
-        <NewFriendsPanel
-          :requests="spaceData.requests"
-          :outgoing="spaceData.outgoing"
-          :space-type="spaceType"
-          :space-key="spaceKey"
-          @resolve="onResolveRequest"
-          @retry="onRetryOutgoing"
-          @reply="onReplyOutgoing"
-          @ask="onAskRequest"
-        />
-      </div>
-    </div>
-    <div v-else-if="isMobileLayout && mobileFrame.page === 'tags'" class="mobile-stack-layer">
-      <MobileBackBar title="标签" @back="onMobileBack" />
-      <div class="mobile-stack-body contacts-mobile-panel">
-        <TagManager
-          :tags="spaceData.tags"
-          :space-key="spaceKey"
-          :contacts="contacts"
-          @view-member="onViewMemberNav"
-        />
-      </div>
-    </div>
-
-    <!-- 桌面端右栏（≥769px 渲染逻辑不变，仅条件加 isMobileLayout 分流）：
-         新的朋友：第三栏申请列表 + 第四栏申请人资料卡（四栏结构，与个人设置模块同构） -->
-    <NewFriendsPanel
-      v-if="!isMobileLayout && rightView === 'new-friends'"
-      :requests="spaceData.requests"
-      :outgoing="spaceData.outgoing"
-      :space-type="spaceType"
-      :space-key="spaceKey"
-      @resolve="onResolveRequest"
-      @retry="onRetryOutgoing"
-      @reply="onReplyOutgoing"
-      @ask="onAskRequest"
-    />
-
-    <!-- 标签：第三栏标签列表 + 第四栏成员管理（四栏结构，同新的朋友） -->
-    <TagManager
-      v-else-if="!isMobileLayout && rightView === 'tags'"
-      :tags="spaceData.tags"
-      :space-key="spaceKey"
-      :contacts="contacts"
-      @view-member="onViewMemberNav"
-    />
-
-    <!-- 联系人（默认，§5）：第三栏组内联系人 + 第四栏资料卡 -->
-    <template v-else-if="!isMobileLayout">
-      <div class="contacts-request-list">
-        <h2 class="contacts-request-title">{{ activeGroupName }}</h2>
-        <ContactList
-          :items="groupMembers"
-          :active-root-id="selectedRootId"
-          group-by-letter
-          empty-text="该分组暂无联系人"
-          @select="onSelectContact"
-        />
-      </div>
-      <div class="contacts-detail">
-        <ContactPanel
-          v-if="selectedContact && selectedProfile"
-          :key="selectedContact.rootId"
-          :contact="selectedContact"
-          :space-type="spaceType"
-          :is-admin="isOrgAdmin"
-          :profile="selectedProfile"
-          :all-tags="spaceData.tags"
-          :group-options="groupOptions"
-          :on-create-tag="onCreateTagReturn"
-          @save-profile="onSaveProfile"
-          @set-blocked="onSetBlocked"
-          @delete="onDeleteContactNav"
-          @send-message="onSendMessage"
-          @add-as-friend="onAddAsFriend"
-        />
-        <el-empty v-else class="contacts-detail-empty" :image-size="110" description="选择联系人查看资料" />
-      </div>
+      <!-- 联系人（默认，§5）：第三栏组内联系人 + 第四栏资料卡 -->
+      <template v-else>
+        <div class="contacts-request-list">
+          <h2 class="contacts-request-title">{{ activeGroupName }}</h2>
+          <ContactList
+            :items="groupMembers"
+            :active-root-id="selectedRootId"
+            group-by-letter
+            empty-text="该分组暂无联系人"
+            @select="onSelectContact"
+          />
+        </div>
+        <div class="contacts-detail">
+          <ContactPanel
+            v-if="selectedContact && selectedProfile"
+            :key="selectedContact.rootId"
+            :contact="selectedContact"
+            :space-type="spaceType"
+            :is-admin="isOrgAdmin"
+            :profile="selectedProfile"
+            :all-tags="spaceData.tags"
+            :group-options="groupOptions"
+            :on-create-tag="onCreateTagReturn"
+            @save-profile="onSaveProfile"
+            @set-blocked="onSetBlocked"
+            @delete="onDeleteContactNav"
+            @send-message="onSendMessage"
+            @add-as-friend="onAddAsFriend"
+          />
+          <el-empty v-else class="contacts-detail-empty" :image-size="110" description="选择联系人查看资料" />
+        </div>
+      </template>
     </template>
 
     <!-- 标签成员详情抽屉：复用联系人资料卡（与第四栏同一份 ContactPanel）；
@@ -220,6 +265,7 @@ import AddFriendDialog from '../components/contacts/AddFriendDialog.vue';
 import NewFriendsPanel from '../components/contacts/NewFriendsPanel.vue';
 import InviteMemberDialog from '../components/org/InviteMemberDialog.vue';
 import MobileBackBar from '../components/MobileBackBar.vue';
+import MobilePageTransition from '../components/MobilePageTransition.vue';
 import type { ContactItem, RightView } from '../components/contacts/types';
 
 /** 本页在导航栈中的 tab 键（与 App.vue activeTab 一致） */
@@ -236,6 +282,7 @@ export default defineComponent({
     NewFriendsPanel,
     InviteMemberDialog,
     MobileBackBar,
+    MobilePageTransition,
     Close
   },
   setup() {
@@ -460,6 +507,7 @@ export default defineComponent({
       onCreateTagReturn,
       isMobileLayout,
       mobileFrame,
+      MOBILE_TAB,
       onSelectRowNav,
       onSelectContact,
       onMobileBack

@@ -12,6 +12,8 @@ pub struct PeerNodeInfo {
     pub addresses: Vec<String>,
 }
 
+use libp2p::multiaddr::Protocol;
+
 /// 提取目标 peerId：优先显式 `peer_id`，回退从地址 `/p2p/<peerId>` 尾段解析。
 pub fn extract_peer_id(node_info: &PeerNodeInfo) -> Option<String> {
     if let Some(direct) = node_info.peer_id.as_deref().map(str::trim)
@@ -40,6 +42,9 @@ pub fn build_dial_targets(node_info: &PeerNodeInfo) -> crate::p2p::Result<Vec<St
         .iter()
         .map(|item| item.trim())
         .filter(|item| !item.is_empty())
+        // 通配地址（0.0.0.0/::）不可路由，对端拿到也回拨不通，候选中剔除；
+        // loopback（127.0.0.1/::1）保留供同机互联。
+        .filter(|item| !is_unroutable(item))
         .map(ToString::to_string)
         .collect();
     if addresses.is_empty() {
@@ -59,4 +64,17 @@ pub fn build_dial_targets(node_info: &PeerNodeInfo) -> crate::p2p::Result<Vec<St
         }
     }
     Ok(targets)
+}
+
+/// 地址是否不可路由：首段 IP 为通配（0.0.0.0/::）即不可回拨。
+/// 解析失败的地址不算不可路由——原样保留，由后续拨号环节报错。
+fn is_unroutable(address: &str) -> bool {
+    let Ok(addr) = address.parse::<libp2p::Multiaddr>() else {
+        return false;
+    };
+    match addr.iter().next() {
+        Some(Protocol::Ip4(ip)) => ip.is_unspecified(),
+        Some(Protocol::Ip6(ip)) => ip.is_unspecified(),
+        _ => false,
+    }
 }

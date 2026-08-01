@@ -21,54 +21,105 @@
     </div>
 
     <template v-else>
-      <!-- 第二栏：用户信息 + 功能菜单；移动端（波次 2）为栈1 整页，点开模块整页切换 -->
-      <div v-if="!isMobileLayout || mobileFrame.page === 'root'" class="mine-menu">
-        <header class="mine-menu-header">
-          <UserAvatar
-            :root-id="headerSource.seed"
-            :nickname="headerSource.name"
-            :avatar="headerSource.image"
-            :size="44"
+      <!-- 移动端（波次 2/3）：整页 + 导航栈——栈1 功能菜单，栈2 模块页（返回栏 + 模块），
+           栈帧切换经 MobilePageTransition 滑动转场（微信式） -->
+      <MobilePageTransition v-if="isMobileLayout" :tab="MOBILE_TAB">
+        <!-- 栈1：用户信息 + 功能菜单整页 -->
+        <div v-if="mobileFrame.page === 'root'" class="mine-menu">
+          <header class="mine-menu-header">
+            <UserAvatar
+              :root-id="headerSource.seed"
+              :nickname="headerSource.name"
+              :avatar="headerSource.image"
+              :size="44"
+            />
+            <div class="mine-menu-user">
+              <b>{{ headerSource.name }}</b>
+              <span>{{ headerSubtitle }}</span>
+            </div>
+          </header>
+
+          <nav class="mine-menu-list">
+            <button
+              v-for="item in menuItems"
+              :key="item.key"
+              type="button"
+              class="mine-menu-item"
+              :class="{ active: activeMenu === item.key }"
+              @click="onSelectMenu(item.key)"
+            >
+              <el-icon class="mine-menu-icon" :size="17"><component :is="item.icon" /></el-icon>
+              <span class="mine-menu-label">{{ item.label }}</span>
+            </button>
+          </nav>
+        </div>
+
+        <!-- 栈2：模块页（返回栏 + 当前菜单对应模块，各模块自带列表栏与详情栏，纵排见 mine.css 波次 2 媒体查询） -->
+        <template v-else-if="mobileFrame.page === 'module'">
+          <MobileBackBar :title="activeMenuLabel" @back="onMobileBack" />
+          <ProfileModule
+            v-if="activeMenu === 'profile'"
+            :root-id="rootStatus.rootId ?? ''"
+            :nickname="rootStatus.nickname ?? ''"
+            :avatar="rootStatus.avatar ?? ''"
+            @profile-updated="onProfileUpdated"
           />
-          <div class="mine-menu-user">
-            <b>{{ headerSource.name }}</b>
-            <span>{{ headerSubtitle }}</span>
-          </div>
-        </header>
+          <MyCardModule v-else-if="activeMenu === 'card'" />
+          <BackupModule v-else-if="activeMenu === 'backup'" :root-id="rootStatus.rootId" />
+          <!-- 组织身份（仅组织空间出现在菜单中） -->
+          <OrgIdentityModule v-else-if="activeMenu === 'org'" />
+          <!-- 朋友权限（个人：仅聊天+黑名单）/ 成员权限（组织：仅黑名单） -->
+          <PermissionModule v-else-if="activeMenu === 'permission'" :mode="currentSpace.type === 'org' ? 'org' : 'personal'" />
+        </template>
+      </MobilePageTransition>
 
-        <nav class="mine-menu-list">
-          <button
-            v-for="item in menuItems"
-            :key="item.key"
-            type="button"
-            class="mine-menu-item"
-            :class="{ active: activeMenu === item.key }"
-            @click="onSelectMenu(item.key)"
-          >
-            <el-icon class="mine-menu-icon" :size="17"><component :is="item.icon" /></el-icon>
-            <span class="mine-menu-label">{{ item.label }}</span>
-          </button>
-        </nav>
-      </div>
+      <!-- 桌面端（≥769px 渲染逻辑不变）：第二栏功能菜单 + 第三、四栏模块 -->
+      <template v-else>
+        <!-- 第二栏：用户信息 + 功能菜单 -->
+        <div class="mine-menu">
+          <header class="mine-menu-header">
+            <UserAvatar
+              :root-id="headerSource.seed"
+              :nickname="headerSource.name"
+              :avatar="headerSource.image"
+              :size="44"
+            />
+            <div class="mine-menu-user">
+              <b>{{ headerSource.name }}</b>
+              <span>{{ headerSubtitle }}</span>
+            </div>
+          </header>
 
-      <!-- 移动端：栈2 模块页顶部返回栏（桌面端不渲染） -->
-      <MobileBackBar v-if="isMobileLayout && mobileFrame.page === 'module'" :title="activeMenuLabel" @back="onMobileBack" />
+          <nav class="mine-menu-list">
+            <button
+              v-for="item in menuItems"
+              :key="item.key"
+              type="button"
+              class="mine-menu-item"
+              :class="{ active: activeMenu === item.key }"
+              @click="onSelectMenu(item.key)"
+            >
+              <el-icon class="mine-menu-icon" :size="17"><component :is="item.icon" /></el-icon>
+              <span class="mine-menu-label">{{ item.label }}</span>
+            </button>
+          </nav>
+        </div>
 
-      <!-- 第三、四栏：当前菜单对应模块（默认「我的资料」），各模块自带列表栏与详情栏；
-           移动端仅栈2（模块页）渲染，栏位纵排见 mine.css 波次 2 媒体查询 -->
-      <ProfileModule
-        v-if="showModules && activeMenu === 'profile'"
-        :root-id="rootStatus.rootId ?? ''"
-        :nickname="rootStatus.nickname ?? ''"
-        :avatar="rootStatus.avatar ?? ''"
-        @profile-updated="onProfileUpdated"
-      />
-      <MyCardModule v-else-if="showModules && activeMenu === 'card'" />
-      <BackupModule v-else-if="showModules && activeMenu === 'backup'" :root-id="rootStatus.rootId" />
-      <!-- 组织身份（仅组织空间出现在菜单中） -->
-      <OrgIdentityModule v-else-if="showModules && activeMenu === 'org'" />
-      <!-- 朋友权限（个人：仅聊天+黑名单）/ 成员权限（组织：仅黑名单） -->
-      <PermissionModule v-else-if="showModules && activeMenu === 'permission'" :mode="currentSpace.type === 'org' ? 'org' : 'personal'" />
+        <!-- 第三、四栏：当前菜单对应模块（默认「我的资料」），各模块自带列表栏与详情栏 -->
+        <ProfileModule
+          v-if="activeMenu === 'profile'"
+          :root-id="rootStatus.rootId ?? ''"
+          :nickname="rootStatus.nickname ?? ''"
+          :avatar="rootStatus.avatar ?? ''"
+          @profile-updated="onProfileUpdated"
+        />
+        <MyCardModule v-else-if="activeMenu === 'card'" />
+        <BackupModule v-else-if="activeMenu === 'backup'" :root-id="rootStatus.rootId" />
+        <!-- 组织身份（仅组织空间出现在菜单中） -->
+        <OrgIdentityModule v-else-if="activeMenu === 'org'" />
+        <!-- 朋友权限（个人：仅聊天+黑名单）/ 成员权限（组织：仅黑名单） -->
+        <PermissionModule v-else-if="activeMenu === 'permission'" :mode="currentSpace.type === 'org' ? 'org' : 'personal'" />
+      </template>
     </template>
   </section>
 </template>
@@ -85,6 +136,7 @@ import type { RootStatusDto as RootStatus } from '../api';
 import { orgIdentityAvatarSource, personalAvatarSource } from '../stores/avatar-sources';
 import UserAvatar from '../components/UserAvatar.vue';
 import MobileBackBar from '../components/MobileBackBar.vue';
+import MobilePageTransition from '../components/MobilePageTransition.vue';
 import ProfileModule from '../components/mine/ProfileModule.vue';
 import MyCardModule from '../components/mine/MyCardModule.vue';
 import BackupModule from '../components/mine/BackupModule.vue';
@@ -102,6 +154,7 @@ export default defineComponent({
   components: {
     UserAvatar,
     MobileBackBar,
+    MobilePageTransition,
     ProfileModule,
     MyCardModule,
     BackupModule,
@@ -150,8 +203,6 @@ export default defineComponent({
     // 移动端导航栈（波次 2）：栈1 功能菜单 → 栈2 模块页；桌面端以下逻辑均不触发
     // ------------------------------------------------------------------
     const mobileFrame = computed(() => currentPage(MOBILE_TAB));
-    /** 模块区渲染条件：桌面常驻；移动端仅栈2（模块页） */
-    const showModules = computed(() => !isMobileLayout.value || mobileFrame.value.page === 'module');
 
     /** 菜单选中：桌面切右栏模块；移动端压入模块页栈帧（整页） */
     const onSelectMenu = (key: MenuKey) => {
@@ -228,7 +279,7 @@ export default defineComponent({
       onProfileUpdated,
       isMobileLayout,
       mobileFrame,
-      showModules,
+      MOBILE_TAB,
       activeMenuLabel,
       onSelectMenu,
       onMobileBack

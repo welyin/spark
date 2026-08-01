@@ -1,9 +1,10 @@
 /**
  * mobile-nav 导航栈（移动端适配波次 2）纯逻辑测试：
- * push/pop/reset 行为、canBack/currentPage 口径、各 tab 栈相互独立、同帧去重。
+ * push/pop/reset 行为、canBack/currentPage 口径、各 tab 栈相互独立、同帧去重；
+ * 波次 3：lastNavAction 最近栈动作记录（转场方向依据）的分类与空操作不记录。
  */
 import { describe, expect, it } from 'vitest';
-import { canBack, currentPage, popPage, pushPage, removeFrames, resetStack } from './mobile-nav';
+import { canBack, currentPage, lastNavAction, popPage, pushPage, removeFrames, resetStack } from './mobile-nav';
 
 describe('mobile-nav 移动端导航栈', () => {
   it('初始为栈深 1 的 root 帧：不可返回，currentPage 即 root', () => {
@@ -74,5 +75,36 @@ describe('mobile-nav 移动端导航栈', () => {
     // 无匹配帧为空操作；root 帧即使匹配也不移除
     removeFrames('t-rm', () => true);
     expect(currentPage('t-rm')).toEqual({ page: 'root' });
+  });
+
+  it('lastNavAction：push/pop/reset 分类记录（含触发 tab），消费后不清空', () => {
+    pushPage('t-act', 'chat', { id: 'c1' });
+    expect(lastNavAction.value).toEqual({ type: 'push', tab: 't-act' });
+    // 动作消费后不清空：读取不改变记录
+    expect(lastNavAction.value).toEqual({ type: 'push', tab: 't-act' });
+
+    popPage('t-act');
+    expect(lastNavAction.value).toEqual({ type: 'pop', tab: 't-act' });
+
+    resetStack('t-act');
+    expect(lastNavAction.value).toEqual({ type: 'reset', tab: 't-act' });
+  });
+
+  it('lastNavAction：removeFrames 命中归类为 reset；空操作（同帧去重 push / 栈深 1 pop / 无匹配 removeFrames）不记录', () => {
+    pushPage('t-act2', 'chat', { id: 'c1' });
+    pushPage('t-act2', 'chat', { id: 'c2' });
+    removeFrames('t-act2', (frame) => frame.params?.id === 'c2');
+    expect(lastNavAction.value).toEqual({ type: 'reset', tab: 't-act2' });
+
+    // 同帧去重 push（此时栈顶为 c1）：不改变栈，不覆盖动作记录
+    pushPage('t-act2', 'chat', { id: 'c1' });
+    expect(lastNavAction.value).toEqual({ type: 'reset', tab: 't-act2' });
+
+    // 栈深 1 的 pop / 无匹配的 removeFrames：空操作，不覆盖动作记录
+    resetStack('t-act3');
+    expect(lastNavAction.value).toEqual({ type: 'reset', tab: 't-act3' });
+    popPage('t-act3');
+    removeFrames('t-act3', (frame) => frame.page === 'chat');
+    expect(lastNavAction.value).toEqual({ type: 'reset', tab: 't-act3' });
   });
 });

@@ -50,6 +50,8 @@ libp2p = { version = "0.56.0", features = [
 tokio = { version = "1.47", features = ["macros", "rt-multi-thread", "sync", "time"] }
 # request_response::Codec 以 async_trait 声明，实现侧需要同名宏。
 async-trait = "0.1.89"
+# 本机网卡枚举：通配 listen 地址（0.0.0.0/::）展开为可拨号的具体地址。
+if-addrs = "0.15"
 
 [dev-dependencies]
 tempfile = "3"

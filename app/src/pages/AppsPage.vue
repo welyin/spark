@@ -9,36 +9,90 @@
       show-icon
     />
 
-    <!-- 列表/市场：移动端（波次 2）详情整页打开时隐藏（同屏只显示一层） -->
-    <AppListPanel
-      v-if="view === 'list' && (!isMobileLayout || !detailVisible)"
-      :installed-items="installedItems"
-      :recent-items="recentItems"
-      :is-enabled="isEnabled"
-      :is-suspended="isSuspended"
-      :groups="groups"
-      :is-org-space="isOrgSpace"
-      :is-admin="isCurrentUserAdmin"
-      :busy-by-plugin="busyByPlugin"
-      @open="openApp"
-      @detail="(item) => openDetail(item)"
-      @toggle="toggleEnabled"
-      @uninstall="uninstallApp"
-      @add-app="view = 'market'"
-    />
+    <!-- 列表/市场：桌面端常驻；移动端（波次 2/3）包进导航栈转场层——
+         列表/市场为栈1，详情整页为栈2，栈帧切换经 MobilePageTransition 滑动转场（微信式） -->
+    <MobilePageTransition v-if="isMobileLayout" :tab="MOBILE_TAB">
+      <AppListPanel
+        v-if="view === 'list' && !detailVisible"
+        :installed-items="installedItems"
+        :recent-items="recentItems"
+        :is-enabled="isEnabled"
+        :is-suspended="isSuspended"
+        :groups="groups"
+        :is-org-space="isOrgSpace"
+        :is-admin="isCurrentUserAdmin"
+        :busy-by-plugin="busyByPlugin"
+        @open="openApp"
+        @detail="(item) => openDetail(item)"
+        @toggle="toggleEnabled"
+        @uninstall="uninstallApp"
+        @add-app="view = 'market'"
+      />
 
-    <AppMarketPanel
-      v-else-if="view === 'market' && (!isMobileLayout || !detailVisible)"
-      :items="visibleItems"
-      @back="view = 'list'"
-      @detail="(item) => openDetail(item)"
-      @install="installApp"
-      @install-repo="installRepoPlugin"
-      @sideloaded="refreshSafe"
-    />
+      <AppMarketPanel
+        v-else-if="view === 'market' && !detailVisible"
+        :items="visibleItems"
+        @back="view = 'list'"
+        @detail="(item) => openDetail(item)"
+        @install="installApp"
+        @install-repo="installRepoPlugin"
+        @sideloaded="refreshSafe"
+      />
+
+      <!-- 应用详情：栈2 整页（与桌面抽屉同一份 AppDetailPanel），
+           底部 tab bar 常驻；插件页（栈3）走 App.vue 插件 tab 整页（自带 ‹ 返回） -->
+      <div v-else-if="detailVisible && selectedItem" class="mobile-stack-layer">
+        <MobileBackBar :title="selectedItem.name" @back="onMobileBack" />
+        <div class="mobile-stack-body app-drawer-body">
+          <AppDetailPanel
+            :item="selectedItem"
+            :enabled="isEnabled(selectedItem)"
+            :is-org-space="isOrgSpace"
+            :is-admin="isCurrentUserAdmin"
+            :busy="busyByPlugin[selectedItem.id] ?? ''"
+            @back="onMobileBack"
+            @open="openApp"
+            @install="installApp"
+            @upgrade="upgradeApp"
+            @toggle="toggleEnabled"
+            @uninstall="uninstallApp"
+            @request-enable="requestEnable"
+          />
+        </div>
+      </div>
+    </MobilePageTransition>
+
+    <template v-else>
+      <AppListPanel
+        v-if="view === 'list'"
+        :installed-items="installedItems"
+        :recent-items="recentItems"
+        :is-enabled="isEnabled"
+        :is-suspended="isSuspended"
+        :groups="groups"
+        :is-org-space="isOrgSpace"
+        :is-admin="isCurrentUserAdmin"
+        :busy-by-plugin="busyByPlugin"
+        @open="openApp"
+        @detail="(item) => openDetail(item)"
+        @toggle="toggleEnabled"
+        @uninstall="uninstallApp"
+        @add-app="view = 'market'"
+      />
+
+      <AppMarketPanel
+        v-else-if="view === 'market'"
+        :items="visibleItems"
+        @back="view = 'list'"
+        @detail="(item) => openDetail(item)"
+        @install="installApp"
+        @install-repo="installRepoPlugin"
+        @sideloaded="refreshSafe"
+      />
+    </template>
 
     <!-- 应用详情：全 app 统一抽屉（无头部小标题，右上角自定义关闭），不再整页切换；
-         详情面板内的「返回」按钮同样映射为关闭抽屉；移动端（波次 2）不渲染抽屉，见下方整页层 -->
+         详情面板内的「返回」按钮同样映射为关闭抽屉；移动端（波次 2）不渲染抽屉，见上方整页层 -->
     <el-drawer v-if="!isMobileLayout" v-model="detailVisible" :with-header="false" size="520" class="app-drawer">
       <button type="button" class="app-drawer-close" title="关闭" @click="detailVisible = false">
         <el-icon :size="16"><Close /></el-icon>
@@ -61,28 +115,6 @@
         />
       </div>
     </el-drawer>
-
-    <!-- 移动端（波次 2）：应用详情为栈2 整页（与桌面抽屉同一份 AppDetailPanel），
-         底部 tab bar 常驻；插件页（栈3）走 App.vue 插件 tab 整页（自带 ‹ 返回） -->
-    <div v-if="isMobileLayout && detailVisible && selectedItem" class="mobile-stack-layer">
-      <MobileBackBar :title="selectedItem.name" @back="onMobileBack" />
-      <div class="mobile-stack-body app-drawer-body">
-        <AppDetailPanel
-          :item="selectedItem"
-          :enabled="isEnabled(selectedItem)"
-          :is-org-space="isOrgSpace"
-          :is-admin="isCurrentUserAdmin"
-          :busy="busyByPlugin[selectedItem.id] ?? ''"
-          @back="onMobileBack"
-          @open="openApp"
-          @install="installApp"
-          @upgrade="upgradeApp"
-          @toggle="toggleEnabled"
-          @uninstall="uninstallApp"
-          @request-enable="requestEnable"
-        />
-      </div>
-    </div>
   </section>
 </template>
 
@@ -102,6 +134,7 @@ import { notifyPluginInstalled, notifyPluginUpgraded } from '../app-messages';
 import { isMobileLayout } from '../stores/ui-layout';
 import { currentPage, popPage, pushPage, resetStack } from '../stores/mobile-nav';
 import MobileBackBar from '../components/MobileBackBar.vue';
+import MobilePageTransition from '../components/MobilePageTransition.vue';
 import AppListPanel from '../components/apps/AppListPanel.vue';
 import AppMarketPanel from '../components/apps/AppMarketPanel.vue';
 import AppDetailPanel from '../components/apps/AppDetailPanel.vue';
@@ -131,7 +164,7 @@ const MOBILE_TAB = 'apps';
 
 export default defineComponent({
   name: 'AppsPage',
-  components: { AppListPanel, AppMarketPanel, AppDetailPanel, MobileBackBar, Close },
+  components: { AppListPanel, AppMarketPanel, AppDetailPanel, MobileBackBar, MobilePageTransition, Close },
   emits: ['open-plugin-tab'],
   setup(_, { emit }) {
     const items = ref<PluginMarketItemDto[]>([]);
@@ -570,6 +603,7 @@ export default defineComponent({
       requestEnable,
       refreshSafe,
       isMobileLayout,
+      MOBILE_TAB,
       onMobileBack
     };
   }

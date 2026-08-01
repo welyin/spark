@@ -392,4 +392,102 @@
     min-height: 0;
     overflow-y: auto;
   }
+
+  /* ---- 移动端适配（波次 3）：页面切换转场（参考微信） ----
+     栈内 push/pop 用 MobilePageTransition 的 .mobile-stack-stage 层叠滑动；
+     tab 切换用 App.vue 主区域的短淡入淡出。桌面端（≥769px）不渲染对应结构，不受本块影响 */
+
+  /* 页面 section 作为转场期间绝对定位旧层的包含块 */
+  .messages-page,
+  .contacts-page,
+  .apps-page,
+  .mine-page {
+    position: relative;
+  }
+
+  /* 栈帧层：占满页面一层；自身可滚动兜底（应用列表等不定高内容），整页层（自带滚动）不产生滚动条 */
+  .mobile-stack-stage {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    background: var(--spark-bg-card);
+  }
+
+  /* 列向 flex 下允许子层收缩，内部滚动区生效 */
+  .mobile-stack-stage > * {
+    min-height: 0;
+  }
+
+  /* 微信式减速曲线：220-280ms 取 260ms */
+  .mobile-nav-push-enter-active,
+  .mobile-nav-push-leave-active,
+  .mobile-nav-pop-enter-active,
+  .mobile-nav-pop-leave-active {
+    transition: transform 260ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    will-change: transform;
+  }
+
+  /* 转场期间旧层脱离文档流叠放（相对页面 section 铺满） */
+  .mobile-nav-push-leave-active,
+  .mobile-nav-pop-leave-active {
+    position: absolute;
+    inset: 0;
+  }
+
+  /* push：新层自右滑入（带左侧投影分界），旧层静态轻微左移 */
+  .mobile-nav-push-enter-from {
+    transform: translateX(100%);
+  }
+
+  .mobile-nav-push-enter-active {
+    position: relative;
+    z-index: 2;
+    box-shadow: -12px 0 24px rgba(0, 0, 0, 0.12);
+  }
+
+  .mobile-nav-push-leave-to {
+    transform: translateX(-30%);
+  }
+
+  /* pop/reset：当前层向右滑出（带投影），显露的下一层自左侧轻微归位 */
+  .mobile-nav-pop-leave-active {
+    z-index: 2;
+    box-shadow: -12px 0 24px rgba(0, 0, 0, 0.12);
+  }
+
+  .mobile-nav-pop-leave-to {
+    transform: translateX(100%);
+  }
+
+  .mobile-nav-pop-enter-from {
+    transform: translateX(-30%);
+  }
+
+  /* tab 切换：主区域短淡入淡出（底部 tab bar 自身不动） */
+  .main {
+    position: relative;
+  }
+
+  .mobile-tab-page {
+    height: 100%;
+  }
+
+  .mobile-tab-fade-enter-active,
+  .mobile-tab-fade-leave-active {
+    transition: opacity 150ms ease-out;
+  }
+
+  .mobile-tab-fade-enter-from,
+  .mobile-tab-fade-leave-to {
+    opacity: 0;
+  }
+
+  /* 淡出旧页脱离文档流叠在新页之上，避免双页撑高 .main */
+  .mobile-tab-fade-leave-active {
+    position: absolute;
+    inset: 0;
+  }
 }

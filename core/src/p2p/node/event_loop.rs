@@ -5,8 +5,10 @@
 //! 分文件 impl 块）。结构与字段对本模块（`node`）可见，供分文件 impl 访问。
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::net::IpAddr;
 use std::time::Duration;
 
+use libp2p::multiaddr::Protocol;
 use libp2p::swarm::Swarm;
 use libp2p::swarm::dial_opts::DialOpts;
 use libp2p::{Multiaddr, PeerId, gossipsub, request_response};
@@ -192,9 +194,92 @@ pub(super) struct EventLoop<S: StorageBackend> {
     pub(super) topic_cache: HashMap<String, gossipsub::IdentTopic>,
 }
 
+/// 一块网卡的可拨号信息（自 `if_addrs::Interface` 抽取，便于单测构造）。
+#[derive(Clone, Copy, Debug)]
+pub(super) struct NetInterface {
+    pub(super) ip: IpAddr,
+    pub(super) is_loopback: bool,
+    pub(super) is_up: bool,
+}
+
+/// 读取本机网卡清单；失败（如平台不支持）返回空，此时通配 listener 无法展开。
+fn local_interfaces() -> Vec<NetInterface> {
+    if_addrs::get_if_addrs()
+        .unwrap_or_default()
+        .iter()
+        .map(|iface| NetInterface {
+            ip: iface.ip(),
+            is_loopback: iface.is_loopback(),
+            is_up: iface.is_oper_up(),
+        })
+        .collect()
+}
+
+/// 通配 listener（0.0.0.0/::）展开为「每块非 loopback 且运行中的网卡一个
+/// 具体地址」（同协议族同端口，如 `/ip4/192.168.1.2/tcp/4001`）；具体
+/// listener 原样保留。返回顺序：具体地址在前、展开地址在后；整体去重。
+pub(super) fn expand_wildcard_listeners(
+    listeners: &[Multiaddr],
+    interfaces: &[NetInterface],
+) -> Vec<Multiaddr> {
+    let mut concrete = Vec::new();
+    let mut expanded = Vec::new();
+    let mut seen = HashSet::new();
+    for listener in listeners {
+        match wildcard_ip(listener) {
+            Some(wildcard) => {
+                for iface in interfaces {
+                    // loopback 与未运行网卡不参与展开；仅同协议族替换
+                    // （v4 通配配 v4 网卡，v6 同理）。
+                    if iface.is_loopback
+                        || !iface.is_up
+                        || iface.ip.is_ipv4() != wildcard.is_ipv4()
+                    {
+                        continue;
+                    }
+                    let addr = replace_ip(listener, iface.ip);
+                    if seen.insert(addr.clone()) {
+                        expanded.push(addr);
+                    }
+                }
+            }
+            None => {
+                if seen.insert(listener.clone()) {
+                    concrete.push(listener.clone());
+                }
+            }
+        }
+    }
+    concrete.extend(expanded);
+    concrete
+}
+
+/// 通配 listener 的首段 IP（0.0.0.0/::）；非通配返回 None。
+fn wildcard_ip(addr: &Multiaddr) -> Option<IpAddr> {
+    match addr.iter().next() {
+        Some(Protocol::Ip4(ip)) if ip.is_unspecified() => Some(ip.into()),
+        Some(Protocol::Ip6(ip)) if ip.is_unspecified() => Some(ip.into()),
+        _ => None,
+    }
+}
+
+/// 替换 multiaddr 首段 IP，其余段（端口/协议）原样保留。
+fn replace_ip(addr: &Multiaddr, ip: IpAddr) -> Multiaddr {
+    let mut out = Multiaddr::empty();
+    for (index, protocol) in addr.iter().enumerate() {
+        out.push(match index {
+            0 => match ip {
+                IpAddr::V4(v4) => Protocol::Ip4(v4),
+                IpAddr::V6(v6) => Protocol::Ip6(v6),
+            },
+            _ => protocol,
+        });
+    }
+    out
+}
+
 impl<S: StorageBackend> EventLoop<S> {
-    pub(super) fn now(&self) -> i64 {
-        (self.now_fn)()
+    pub(super) fn now(&self) -> i64 {        (self.now_fn)()
     }
 
     pub(super) fn emit(&self, event: P2pEvent) {
@@ -210,10 +295,14 @@ impl<S: StorageBackend> EventLoop<S> {
     }
 
     pub(super) fn listen_addr_strings(&self) -> Vec<String> {
-        self.swarm
-            .listeners()
-            .chain(self.swarm.external_addresses())
-            .map(ToString::to_string)
+        let listeners: Vec<Multiaddr> = self.swarm.listeners().cloned().collect();
+        // 通配 listener（0.0.0.0/::）对扫码名片不可拨，展开为本机可用网卡
+        // 的具体地址；external_addresses 原样追加。
+        let interfaces = local_interfaces();
+        expand_wildcard_listeners(&listeners, &interfaces)
+            .into_iter()
+            .chain(self.swarm.external_addresses().cloned())
+            .map(|addr| addr.to_string())
             .collect()
     }
 
@@ -423,5 +512,111 @@ impl<S: StorageBackend> EventLoop<S> {
         let now = self.now();
         let mut store = PeerActivityStore::new(&mut self.storage);
         let _ = store.remember_node_info(info, obs, error, now);
+    }
+}
+
+
+#[cfg(test)]
+mod wildcard_tests {
+    //! 通配 listener 展开单测（纯函数，不依赖真实网卡）。
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    use super::*;
+
+    fn iface(ip: IpAddr, is_loopback: bool, is_up: bool) -> NetInterface {
+        NetInterface {
+            ip,
+            is_loopback,
+            is_up,
+        }
+    }
+
+    fn addr(text: &str) -> Multiaddr {
+        text.parse().expect("valid multiaddr")
+    }
+
+    fn strings(addrs: Vec<Multiaddr>) -> Vec<String> {
+        addrs.iter().map(ToString::to_string).collect()
+    }
+
+    #[test]
+    fn wildcard_expands_to_each_usable_interface() {
+        let listeners = vec![addr("/ip4/0.0.0.0/tcp/4001")];
+        let interfaces = vec![
+            iface(IpAddr::V4(Ipv4Addr::new(192, 168, 31, 134)), false, true),
+            iface(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 8)), false, true),
+        ];
+        assert_eq!(
+            strings(expand_wildcard_listeners(&listeners, &interfaces)),
+            vec![
+                "/ip4/192.168.31.134/tcp/4001".to_string(),
+                "/ip4/10.0.0.8/tcp/4001".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn concrete_listeners_kept_first_and_not_reexpanded() {
+        let listeners = vec![
+            addr("/ip4/1.2.3.4/tcp/4001"),
+            addr("/ip4/0.0.0.0/tcp/4001"),
+        ];
+        let interfaces = vec![iface(
+            IpAddr::V4(Ipv4Addr::new(192, 168, 31, 134)),
+            false,
+            true,
+        )];
+        assert_eq!(
+            strings(expand_wildcard_listeners(&listeners, &interfaces)),
+            vec![
+                "/ip4/1.2.3.4/tcp/4001".to_string(),
+                "/ip4/192.168.31.134/tcp/4001".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn loopback_and_down_interfaces_not_used() {
+        let listeners = vec![addr("/ip4/0.0.0.0/tcp/4001")];
+        let interfaces = vec![
+            iface(IpAddr::V4(Ipv4Addr::LOCALHOST), true, true),
+            iface(IpAddr::V4(Ipv4Addr::new(192, 168, 31, 134)), false, false),
+        ];
+        assert!(expand_wildcard_listeners(&listeners, &interfaces).is_empty());
+    }
+
+    #[test]
+    fn ipv6_wildcard_only_expands_to_ipv6_interfaces() {
+        let listeners = vec![addr("/ip6/::/tcp/4001")];
+        let interfaces = vec![
+            iface(IpAddr::V4(Ipv4Addr::new(192, 168, 31, 134)), false, true),
+            iface(IpAddr::V6(Ipv6Addr::LOCALHOST), true, true),
+            iface(
+                IpAddr::V6("2408:8207:1::1".parse().unwrap()),
+                false,
+                true,
+            ),
+        ];
+        assert_eq!(
+            strings(expand_wildcard_listeners(&listeners, &interfaces)),
+            vec!["/ip6/2408:8207:1::1/tcp/4001".to_string()]
+        );
+    }
+
+    #[test]
+    fn duplicate_expansions_deduped() {
+        let listeners = vec![
+            addr("/ip4/0.0.0.0/tcp/4001"),
+            addr("/ip4/0.0.0.0/tcp/4001"),
+        ];
+        let interfaces = vec![iface(
+            IpAddr::V4(Ipv4Addr::new(192, 168, 31, 134)),
+            false,
+            true,
+        )];
+        assert_eq!(
+            strings(expand_wildcard_listeners(&listeners, &interfaces)),
+            vec!["/ip4/192.168.31.134/tcp/4001".to_string()]
+        );
     }
 }

@@ -6,8 +6,11 @@
      登录门控由 RootGate 在应用入口统一处理，本页不再重复 -->
 <template>
   <section class="mine-page settings-page">
-    <!-- 第二栏：设置菜单；移动端（波次 2）为栈1 整页，点开分组整页切换 -->
-    <div v-if="!isMobileLayout || mobileFrame.page === 'root'" class="mine-menu">
+    <!-- 移动端（波次 2/3）：整页 + 导航栈——栈1 设置菜单，栈2 分组页（个人设置/组织设置/系统设置），
+         栈3 个人设置模块页；栈帧切换经 MobilePageTransition 滑动转场（微信式） -->
+    <MobilePageTransition v-if="isMobileLayout" :tab="MOBILE_TAB">
+      <!-- 栈1：设置菜单整页 -->
+      <div v-if="mobileFrame.page === 'root'" class="mine-menu">
         <header class="mine-menu-header">
           <UserAvatar
             v-if="isPersonal"
@@ -37,14 +40,96 @@
         </nav>
       </div>
 
-      <!-- 移动端：栈深 >1 时顶部返回栏（桌面端不渲染） -->
-      <MobileBackBar v-if="isMobileLayout && mobileCanBack" :title="mobileTitle" @back="onMobileBack" />
+      <!-- 栈2/栈3：顶部返回栏 + 分组页/模块页 -->
+      <template v-else>
+        <MobileBackBar v-if="mobileCanBack" :title="mobileTitle" @back="onMobileBack" />
 
-      <!-- 个人设置（个人/组织空间均有）：第三栏模块菜单 + 第四栏模块列表；个人空间另有系统设置。
-           移动端：第三栏=栈2（分组页），第四栏模块=栈3（模块页） -->
+        <!-- 个人设置（个人/组织空间均有）：栈2=模块菜单分组页；个人空间另有系统设置 -->
+        <template v-if="isPersonal || activeMenu === 'mine'">
+          <!-- 栈2：个人设置的模块菜单 -->
+          <div v-if="activeMenu === 'mine' && mobileFrame.page === 'section'" class="mine-list">
+            <h2 class="mine-list-title">个人设置</h2>
+            <div class="mine-list-items">
+              <button
+                v-for="item in personalModules"
+                :key="item.key"
+                type="button"
+                class="mine-list-item"
+                :class="{ active: activeModule === item.key }"
+                @click="onSelectModule(item.key)"
+              >
+                <el-icon class="mine-list-item-icon" :size="17"><component :is="item.icon" /></el-icon>
+                <b class="settings-module-label">{{ item.label }}</b>
+              </button>
+            </div>
+          </div>
+          <SystemSettingsPanel v-else-if="activeMenu === 'system' && mobileFrame.page === 'section'" />
+
+          <!-- 栈3：选中模块的列表栏（模块编辑页以抽屉打开，不占第五栏） -->
+          <template v-if="activeMenu === 'mine' && mobileFrame.page === 'module'">
+            <ProfileModule
+              v-if="activeModule === 'profile'"
+              detail-mode="drawer"
+              :root-id="rootStatus.rootId ?? ''"
+              :nickname="rootStatus.nickname ?? ''"
+              :avatar="rootStatus.avatar ?? ''"
+              @profile-updated="onProfileUpdated"
+            />
+            <MyCardModule v-else-if="activeModule === 'card'" detail-mode="drawer" />
+            <PermissionModule v-else-if="activeModule === 'permission'" detail-mode="drawer" mode="personal" />
+            <BackupModule v-else-if="activeModule === 'backup'" detail-mode="drawer" :root-id="rootStatus.rootId" />
+            <!-- 未选模块时的占位 -->
+            <div v-else class="mine-detail settings-module-empty">
+              <el-empty description="选择左侧模块查看" />
+            </div>
+          </template>
+        </template>
+
+        <!-- 组织空间：组织设置（当前空间组织的信息/成员/网关/公开/发现）/ 系统设置 -->
+        <template v-else>
+          <OrgSettingsPanel v-if="activeMenu === 'space' && mobileFrame.page === 'section'" />
+          <SystemSettingsPanel v-else-if="activeMenu === 'system' && mobileFrame.page === 'section'" />
+        </template>
+      </template>
+    </MobilePageTransition>
+
+    <!-- 桌面端（≥769px 渲染逻辑不变）：第二栏菜单 + 第三栏 + 第四栏 -->
+    <template v-else>
+      <!-- 第二栏：设置菜单 -->
+      <div class="mine-menu">
+        <header class="mine-menu-header">
+          <UserAvatar
+            v-if="isPersonal"
+            :root-id="headerAvatar.seed"
+            :nickname="headerAvatar.name"
+            :avatar="headerAvatar.image"
+            :size="44"
+          />
+          <OrgAvatar v-else :org-id="currentSpaceOrgId" :name="currentOrgName" :size="44" />
+          <div class="mine-menu-user">
+            <b>设置</b>
+            <span>{{ isPersonal ? `${headerAvatar.name}的个人空间` : currentOrgName }}</span>
+          </div>
+        </header>
+        <nav class="mine-menu-list">
+          <button
+            v-for="item in menuItems"
+            :key="item.key"
+            type="button"
+            class="mine-menu-item"
+            :class="{ active: activeMenu === item.key }"
+            @click="onSelectMenu(item.key)"
+          >
+            <el-icon class="mine-menu-icon" :size="17"><component :is="item.icon" /></el-icon>
+            <span class="mine-menu-label">{{ item.label }}</span>
+          </button>
+        </nav>
+      </div>
+
+      <!-- 个人设置（个人/组织空间均有）：第三栏模块菜单 + 第四栏模块列表；个人空间另有系统设置 -->
       <template v-if="isPersonal || activeMenu === 'mine'">
         <!-- 第三栏：个人设置的模块菜单 -->
-        <div v-if="activeMenu === 'mine' && (!isMobileLayout || mobileFrame.page === 'section')" class="mine-list">
+        <div v-if="activeMenu === 'mine'" class="mine-list">
           <h2 class="mine-list-title">个人设置</h2>
           <div class="mine-list-items">
             <button
@@ -60,10 +145,10 @@
             </button>
           </div>
         </div>
-        <SystemSettingsPanel v-else-if="activeMenu === 'system' && (!isMobileLayout || mobileFrame.page === 'section')" />
+        <SystemSettingsPanel v-else-if="activeMenu === 'system'" />
 
         <!-- 第四栏：选中模块的列表栏（模块编辑页以抽屉打开，不占第五栏） -->
-        <template v-if="activeMenu === 'mine' && (!isMobileLayout || mobileFrame.page === 'module')">
+        <template v-if="activeMenu === 'mine'">
           <ProfileModule
             v-if="activeModule === 'profile'"
             detail-mode="drawer"
@@ -84,9 +169,10 @@
 
       <!-- 组织空间：组织设置（当前空间组织的信息/成员/网关/公开/发现）/ 系统设置 -->
       <template v-else>
-        <OrgSettingsPanel v-if="activeMenu === 'space' && (!isMobileLayout || mobileFrame.page === 'section')" />
-        <SystemSettingsPanel v-else-if="activeMenu === 'system' && (!isMobileLayout || mobileFrame.page === 'section')" />
+        <OrgSettingsPanel v-if="activeMenu === 'space'" />
+        <SystemSettingsPanel v-else-if="activeMenu === 'system'" />
       </template>
+    </template>
   </section>
 </template>
 
@@ -103,6 +189,7 @@ import { personalAvatarSource } from '../stores/avatar-sources';
 import UserAvatar from '../components/UserAvatar.vue';
 import OrgAvatar from '../components/OrgAvatar.vue';
 import MobileBackBar from '../components/MobileBackBar.vue';
+import MobilePageTransition from '../components/MobilePageTransition.vue';
 import ProfileModule from '../components/mine/ProfileModule.vue';
 import MyCardModule from '../components/mine/MyCardModule.vue';
 import BackupModule from '../components/mine/BackupModule.vue';
@@ -124,6 +211,7 @@ export default defineComponent({
     UserAvatar,
     OrgAvatar,
     MobileBackBar,
+    MobilePageTransition,
     ProfileModule,
     MyCardModule,
     BackupModule,
@@ -257,6 +345,7 @@ export default defineComponent({
       onProfileUpdated,
       isMobileLayout,
       mobileFrame,
+      MOBILE_TAB,
       mobileCanBack,
       mobileTitle,
       onSelectMenu,

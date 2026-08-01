@@ -3,32 +3,54 @@
      返回用聊天头已有的 ‹ 按钮（pop）；桌面端渲染逻辑不变 -->
 <template>
   <section class="messages-page">
-    <!-- 移动端仅栈深 1（未选中会话）时渲染列表；桌面端常驻 -->
-    <ConversationList
-      v-if="!isMobileLayout || !activeId"
-      :space-key="spaceKey"
-      :space-type="spaceType"
-      :active-id="activeId"
-      @select="onSelectConversation"
-      @removed="onRemoved"
-    />
-    <ChatView
-      v-if="activeId"
-      :key="`${spaceKey}:${activeId}`"
-      :space-key="spaceKey"
-      :conversation-id="activeId"
-      @back="onChatBack"
-      @removed="onRemoved"
-    />
-    <!-- 空态占位仅桌面端：移动端栈深 1 时整页为会话列表 -->
-    <div v-else-if="!isMobileLayout" class="chat-placeholder">
-      <el-empty :image-size="110" description="选择一个会话开始聊天">
-        <div class="chat-placeholder-actions">
-          <el-button type="primary" @click="goBrowseContacts">发起新会话</el-button>
-          <el-button @click="goAddContact">{{ spaceType === 'org' ? '添加成员' : '添加朋友' }}</el-button>
-        </div>
-      </el-empty>
-    </div>
+    <!-- 移动端（波次 2/3）：整页 + 导航栈——栈1 会话列表，点开会话 push 聊天页（栈2）整页，
+         栈帧切换经 MobilePageTransition 滑动转场（微信式） -->
+    <MobilePageTransition v-if="isMobileLayout" :tab="MOBILE_TAB">
+      <ConversationList
+        v-if="!activeId"
+        :space-key="spaceKey"
+        :space-type="spaceType"
+        :active-id="activeId"
+        @select="onSelectConversation"
+        @removed="onRemoved"
+      />
+      <ChatView
+        v-else
+        :key="`${spaceKey}:${activeId}`"
+        :space-key="spaceKey"
+        :conversation-id="activeId"
+        @back="onChatBack"
+        @removed="onRemoved"
+      />
+    </MobilePageTransition>
+
+    <!-- 桌面端（≥769px）：列表常驻 + 聊天区/占位，渲染逻辑与波次 1 前完全一致 -->
+    <template v-else>
+      <ConversationList
+        :space-key="spaceKey"
+        :space-type="spaceType"
+        :active-id="activeId"
+        @select="onSelectConversation"
+        @removed="onRemoved"
+      />
+      <ChatView
+        v-if="activeId"
+        :key="`${spaceKey}:${activeId}`"
+        :space-key="spaceKey"
+        :conversation-id="activeId"
+        @back="onChatBack"
+        @removed="onRemoved"
+      />
+      <!-- 空态占位仅桌面端：移动端栈深 1 时整页为会话列表 -->
+      <div v-else class="chat-placeholder">
+        <el-empty :image-size="110" description="选择一个会话开始聊天">
+          <div class="chat-placeholder-actions">
+            <el-button type="primary" @click="goBrowseContacts">发起新会话</el-button>
+            <el-button @click="goAddContact">{{ spaceType === 'org' ? '添加成员' : '添加朋友' }}</el-button>
+          </div>
+        </el-empty>
+      </div>
+    </template>
   </section>
 </template>
 
@@ -36,6 +58,7 @@
 import { computed, defineComponent, onMounted, ref, watch } from 'vue';
 import ConversationList from '../components/messages/ConversationList.vue';
 import ChatView from '../components/messages/ChatView.vue';
+import MobilePageTransition from '../components/MobilePageTransition.vue';
 import { currentSpace, currentSpaceType } from '../stores/current-space';
 import { consumePendingChat, pendingChat } from '../stores/pending-chat';
 import { isMobileLayout } from '../stores/ui-layout';
@@ -48,7 +71,7 @@ const MOBILE_TAB = 'messages';
 
 export default defineComponent({
   name: 'MessagesPage',
-  components: { ConversationList, ChatView },
+  components: { ConversationList, ChatView, MobilePageTransition },
   setup() {
     const spaceKey = computed(() => spaceKeyOf(currentSpace.value));
     const spaceType = computed(() => currentSpaceType.value);
@@ -124,7 +147,7 @@ export default defineComponent({
     const goBrowseContacts = () => openContacts(CONTACT_INTENT_BROWSE);
     const goAddContact = () => openContacts(CONTACT_INTENT_ADD);
 
-    return { spaceKey, spaceType, activeId, isMobileLayout, onSelectConversation, onChatBack, onRemoved, goBrowseContacts, goAddContact };
+    return { MOBILE_TAB, spaceKey, spaceType, activeId, isMobileLayout, onSelectConversation, onChatBack, onRemoved, goBrowseContacts, goAddContact };
   }
 });
 </script>

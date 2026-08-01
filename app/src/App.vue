@@ -90,41 +90,86 @@
       </nav>
 
       <main class="main">
-        <MessagesPage v-if="activeTab === 'messages'" />
-        <ContactsPage v-else-if="activeTab === 'contacts'" />
-        <AppsPage v-else-if="activeTab === 'apps'" @open-plugin-tab="openPluginTab" />
-        <TestPage v-else-if="activeTab === 'test'" />
-        <SettingsPage
-          v-else-if="activeTab === 'settings'"
-          @profile-updated="loadCurrentUser"
-        />
-        <!-- 「我的资料」隐藏入口：点击 rail 顶部头像进入，不在 rail 展示 -->
-        <MinePage v-else-if="activeTab === 'mine'" @profile-updated="loadCurrentUser" />
+        <!-- 移动端（波次 3）：tab 切换主区域短淡入淡出（150ms），底部 tab bar 自身不动；
+             栈内 push/pop 转场在各页面内部（MobilePageTransition） -->
+        <Transition v-if="isMobileLayout" name="mobile-tab-fade">
+          <div :key="activeTab" class="mobile-tab-page">
+            <MessagesPage v-if="activeTab === 'messages'" />
+            <ContactsPage v-else-if="activeTab === 'contacts'" />
+            <AppsPage v-else-if="activeTab === 'apps'" @open-plugin-tab="openPluginTab" />
+            <TestPage v-else-if="activeTab === 'test'" />
+            <SettingsPage
+              v-else-if="activeTab === 'settings'"
+              @profile-updated="loadCurrentUser"
+            />
+            <!-- 「我的资料」隐藏入口：点击 rail 顶部头像进入，不在 rail 展示 -->
+            <MinePage v-else-if="activeTab === 'mine'" @profile-updated="loadCurrentUser" />
 
-        <el-card v-else-if="activePluginTab" shadow="never" class="plugin-tab-card">
-          <template #header>
-            <div class="plugin-tab-header-bar">
-              <div class="plugin-tab-header-left">
-                <el-button text type="primary" @click="goBackFromPlugin">&lt; 返回</el-button>
-              </div>
-              <div class="plugin-tab-header-center">
-                <h1>{{ activePluginTab.title }}</h1>
-                <p>{{ activePluginTab.pluginDomain }} / {{ activePluginTab.pluginView }}</p>
-              </div>
-              <div class="plugin-tab-header-right" />
-            </div>
-          </template>
-          <!-- iframe 沙箱运行时（插件加载唯一路径，阶段 A 第三波起）：
-               独立 origin iframe + postMessage 桥 + 权限中间件 + 心跳熔断；
-               space 切换经 :key 重建实例 -->
-          <PluginIframeHost
-            :key="`${activePluginTab.id}|${pluginSpace.id}`"
-            :plugin-id="activePluginTab.pluginDomain.slice('plugin:'.length)"
-            :view-id="activePluginTab.pluginView"
-            :space="pluginSpace"
-            @close="closePluginTab"
+            <el-card v-else-if="activePluginTab" shadow="never" class="plugin-tab-card">
+              <template #header>
+                <div class="plugin-tab-header-bar">
+                  <div class="plugin-tab-header-left">
+                    <el-button text type="primary" @click="goBackFromPlugin">&lt; 返回</el-button>
+                  </div>
+                  <div class="plugin-tab-header-center">
+                    <h1>{{ activePluginTab.title }}</h1>
+                    <p>{{ activePluginTab.pluginDomain }} / {{ activePluginTab.pluginView }}</p>
+                  </div>
+                  <div class="plugin-tab-header-right" />
+                </div>
+              </template>
+              <!-- iframe 沙箱运行时（插件加载唯一路径，阶段 A 第三波起）：
+                   独立 origin iframe + postMessage 桥 + 权限中间件 + 心跳熔断；
+                   space 切换经 :key 重建实例 -->
+              <PluginIframeHost
+                :key="`${activePluginTab.id}|${pluginSpace.id}`"
+                :plugin-id="activePluginTab.pluginDomain.slice('plugin:'.length)"
+                :view-id="activePluginTab.pluginView"
+                :space="pluginSpace"
+                @close="closePluginTab"
+              />
+            </el-card>
+          </div>
+        </Transition>
+
+        <!-- 桌面端（≥769px）：渲染逻辑不变，无任何切换动画 -->
+        <template v-else>
+          <MessagesPage v-if="activeTab === 'messages'" />
+          <ContactsPage v-else-if="activeTab === 'contacts'" />
+          <AppsPage v-else-if="activeTab === 'apps'" @open-plugin-tab="openPluginTab" />
+          <TestPage v-else-if="activeTab === 'test'" />
+          <SettingsPage
+            v-else-if="activeTab === 'settings'"
+            @profile-updated="loadCurrentUser"
           />
-        </el-card>
+          <!-- 「我的资料」隐藏入口：点击 rail 顶部头像进入，不在 rail 展示 -->
+          <MinePage v-else-if="activeTab === 'mine'" @profile-updated="loadCurrentUser" />
+
+          <el-card v-else-if="activePluginTab" shadow="never" class="plugin-tab-card">
+            <template #header>
+              <div class="plugin-tab-header-bar">
+                <div class="plugin-tab-header-left">
+                  <el-button text type="primary" @click="goBackFromPlugin">&lt; 返回</el-button>
+                </div>
+                <div class="plugin-tab-header-center">
+                  <h1>{{ activePluginTab.title }}</h1>
+                  <p>{{ activePluginTab.pluginDomain }} / {{ activePluginTab.pluginView }}</p>
+                </div>
+                <div class="plugin-tab-header-right" />
+              </div>
+            </template>
+            <!-- iframe 沙箱运行时（插件加载唯一路径，阶段 A 第三波起）：
+                 独立 origin iframe + postMessage 桥 + 权限中间件 + 心跳熔断；
+                 space 切换经 :key 重建实例 -->
+            <PluginIframeHost
+              :key="`${activePluginTab.id}|${pluginSpace.id}`"
+              :plugin-id="activePluginTab.pluginDomain.slice('plugin:'.length)"
+              :view-id="activePluginTab.pluginView"
+              :space="pluginSpace"
+              @close="closePluginTab"
+            />
+          </el-card>
+        </template>
       </main>
     </div>
 

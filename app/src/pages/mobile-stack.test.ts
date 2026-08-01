@@ -39,6 +39,12 @@ const click = async (el: HTMLElement, selector: string) => {
   await nextTick();
 };
 
+/** 等栈帧滑动转场（260ms，app-shell.css 波次 3）结束：转场期间新旧两层同在 DOM（旧层为退场层） */
+const settleTransition = async () => {
+  await new Promise((resolve) => setTimeout(resolve, 340));
+  await nextTick();
+};
+
 describe('移动端整页 + 导航栈（波次 2）', () => {
   beforeEach(() => {
     isMobileLayout.value = true;
@@ -65,14 +71,16 @@ describe('移动端整页 + 导航栈（波次 2）', () => {
     expect(el.querySelector('.chat-view')).toBeFalsy();
     expect(canBack('messages')).toBe(false);
 
-    // 点开会话 → 栈2：仅聊天页整页，列表不渲染
+    // 点开会话 → 栈2：仅聊天页整页，列表不渲染（等滑动转场结束、退场层移除后断言）
     await click(el, '.conv-item');
+    await settleTransition();
     expect(el.querySelector('.chat-view')).toBeTruthy();
     expect(el.querySelector('.conv-list')).toBeFalsy();
     expect(canBack('messages')).toBe(true);
 
     // 聊天头 ‹ 返回 → 回栈1 列表
     await click(el, '.chat-back');
+    await settleTransition();
     expect(el.querySelector('.conv-list')).toBeTruthy();
     expect(el.querySelector('.chat-view')).toBeFalsy();
     expect(canBack('messages')).toBe(false);
@@ -86,12 +94,13 @@ describe('移动端整页 + 导航栈（波次 2）', () => {
 
     // 点开会话 → 栈2 聊天页整页
     await click(el, '.conv-item');
+    await settleTransition();
     expect(el.querySelector('.chat-view')).toBeTruthy();
     expect(canBack('messages')).toBe(true);
 
     // 模拟 App.vue 重按当前 tab：resetStack 回栈底，聊天帧不得被补栈逻辑压回
     resetStack('messages');
-    await nextTick();
+    await settleTransition();
     expect(el.querySelector('.conv-list')).toBeTruthy();
     expect(el.querySelector('.chat-view')).toBeFalsy();
     expect(canBack('messages')).toBe(false);
@@ -104,11 +113,12 @@ describe('移动端整页 + 导航栈（波次 2）', () => {
 
     // 列表 → 标签整页（栈2）：种子首个标签「邻居」下有成员
     pushPage('contacts', 'tags');
-    await nextTick();
+    await settleTransition();
     expect(el.querySelector('.tag-member-row')).toBeTruthy();
 
     // 点成员 → 栈3 资料卡整页；全文档只此一层 ContactPanel（移动端不再开抽屉叠加第二层）
     await click(el, '.tag-member-row');
+    await settleTransition();
     expect(el.querySelector('.mobile-stack-layer .contact-panel')).toBeTruthy();
     expect(document.body.querySelectorAll('.contact-panel')).toHaveLength(1);
     unmount();
@@ -123,8 +133,9 @@ describe('移动端整页 + 导航栈（波次 2）', () => {
     expect(el.querySelector('.mine-list')).toBeFalsy();
     expect(el.querySelector('.mobile-back-bar')).toBeFalsy();
 
-    // 点开「我的资料」→ 栈2：返回栏 + 模块整页，菜单不渲染
+    // 点开「我的资料」→ 栈2：返回栏 + 模块整页，菜单不渲染（等滑动转场结束、退场层移除后断言）
     await click(el, '.mine-menu-item');
+    await settleTransition();
     expect(el.querySelector('.mobile-back-bar')).toBeTruthy();
     expect(el.querySelector('.mobile-back-title')?.textContent).toBe('我的资料');
     expect(el.querySelector('.mine-menu')).toBeFalsy();
@@ -132,6 +143,7 @@ describe('移动端整页 + 导航栈（波次 2）', () => {
 
     // 返回栏 ‹ 返回 → 回栈1 菜单
     await click(el, '.mobile-back-btn');
+    await settleTransition();
     expect(el.querySelector('.mine-menu')).toBeTruthy();
     expect(el.querySelector('.mobile-back-bar')).toBeFalsy();
     expect(el.querySelector('.mine-list')).toBeFalsy();
