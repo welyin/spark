@@ -31,9 +31,10 @@ time = { version = "0.3", features = ["formatting"] }
 sha2 = "0.11"
 base64 = "0.22"
 hex = "0.4"
-# 插件市场：https 清单/包下载（本地 dist-market 与 file:// 优先；
-# native-tls 走系统信任库，避免引入 rustls C 依赖链，对齐旧 Node https 语义）。
-reqwest = { version = "0.13", default-features = false, features = ["blocking", "native-tls"] }
+# 插件市场：https 清单/包下载（本地 dist-market 与 file:// 优先）。
+# TLS 用 rustls + 系统根证书：native-tls 在 Android 交叉编译需要平台 OpenSSL
+# 开发包（openssl-sys 构建失败），rustls 为纯 Rust 实现跨平台零系统依赖。
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls"] }
 
 [dev-dependencies]
 tempfile = "3"
