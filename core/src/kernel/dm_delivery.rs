@@ -47,7 +47,29 @@ impl Kernel {
         };
         self.runtime.handle().spawn(async move {
             for (peer, envelope) in deliveries {
-                let _ = node.dm_direct(&peer, envelope).await;
+                // 自设备投递（自消息/自回执/资料同步）原为完全静默——失败与成功
+                // 都无法区分，移动端排障需要最小可观测性（格式对齐 org-sync 日志）
+                let kind = envelope
+                    .get("kind")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown")
+                    .to_string();
+                match node.dm_direct(&peer, envelope).await {
+                    Ok(Some(_)) => {}
+                    Ok(None) => eprintln!(
+                        "[deliver-to-devices] failed kind={} peerId={:?} addrs={}",
+                        kind,
+                        peer.peer_id,
+                        peer.addresses.len()
+                    ),
+                    Err(error) => eprintln!(
+                        "[deliver-to-devices] error kind={} peerId={:?} addrs={} error={}",
+                        kind,
+                        peer.peer_id,
+                        peer.addresses.len(),
+                        error
+                    ),
+                }
             }
         });
     }
@@ -169,6 +191,17 @@ impl Kernel {
         let Ok(peers) = self.self_device_peers(my_root_id) else {
             return;
         };
+        if peers.is_empty() {
+            eprintln!("[deliver-to-devices] no paired devices rootId={} kind={}", my_root_id, kind);
+        }
+        for peer in &peers {
+            if peer.addresses.is_empty() {
+                eprintln!(
+                    "[deliver-to-devices] device has no addresses rootId={} kind={} peerId={:?}",
+                    my_root_id, kind, peer.peer_id
+                );
+            }
+        }
         let deliveries: Vec<(PeerNodeInfo, Value)> = peers
             .into_iter()
             .filter_map(|peer| {
