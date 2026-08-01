@@ -273,7 +273,9 @@ impl P2pNode {
         };
         let mut swarm = build_swarm(&keypair, &behaviour_options).await?;
 
-        let addrs = build_listen_addrs(port, ipv6, config.enable_tcp, config.enable_ws);
+        // Android 无 ws 传输层（见 build_swarm 门控注释），监听地址同步禁用 ws
+        let enable_ws = config.enable_ws && !cfg!(target_os = "android");
+        let addrs = build_listen_addrs(port, ipv6, config.enable_tcp, enable_ws);
         let mut listen_failed = false;
         for addr in &addrs {
             let ma: Multiaddr = addr
@@ -287,7 +289,7 @@ impl P2pNode {
         if listen_failed && ipv6 {
             // 双栈绑定失败回退 IPv4 单栈（探测与绑定间的竞态兜底）
             swarm = build_swarm(&keypair, &behaviour_options).await?;
-            for addr in build_listen_addrs(port, false, config.enable_tcp, config.enable_ws) {
+            for addr in build_listen_addrs(port, false, config.enable_tcp, enable_ws) {
                 let ma: Multiaddr = addr
                     .parse()
                     .map_err(|e| P2pError::Swarm(format!("invalid listen addr {addr}: {e}")))?;
@@ -417,17 +419,28 @@ async fn build_swarm(
     options: &BehaviourOptions,
 ) -> Result<Swarm<SparkBehaviour>> {
     let options = options.clone();
-    let swarm = libp2p::SwarmBuilder::with_existing_identity(keypair.clone())
+    let builder = libp2p::SwarmBuilder::with_existing_identity(keypair.clone())
         .with_tokio()
         .with_tcp(
             libp2p::tcp::Config::default(),
             libp2p::noise::Config::new,
             libp2p::yamux::Config::default,
         )
-        .map_err(|e| P2pError::Swarm(format!("tcp security: {e}")))?
+        .map_err(|e| P2pError::Swarm(format!("tcp security: {e}")))?;
+
+    // websocket 传输层仅桌面端启用：libp2p 默认 DNS 解析器（hickory）依赖
+    // /etc/resolv.conf，Android 上不存在该文件，with_websocket 初始化即失败
+    // （swarm error: websocket: Dns）导致整个 swarm 起不来。原生节点间走 TCP，
+    // WS 只有浏览器节点/WS 中继才需要，移动端暂不需要。
+    #[cfg(target_os = "android")]
+    let builder = builder;
+    #[cfg(not(target_os = "android"))]
+    let builder = builder
         .with_websocket(libp2p::noise::Config::new, libp2p::yamux::Config::default)
         .await
-        .map_err(|e| P2pError::Swarm(format!("websocket: {e}")))?
+        .map_err(|e| P2pError::Swarm(format!("websocket: {e}")))?;
+
+    let swarm = builder
         .with_relay_client(libp2p::noise::Config::new, libp2p::yamux::Config::default)
         .map_err(|e| P2pError::Swarm(format!("relay client: {e}")))?
         .with_behaviour(|key, relay_client| {
