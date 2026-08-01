@@ -374,4 +374,22 @@
   .topbar {
     padding: env(safe-area-inset-top) 8px 0;
   }
+
+  /* ---- 移动端适配（波次 2）：整页 + 导航栈的共享层样式 ----
+     栈深 >1 的层（详情页等）为「返回栏 + 内容」纵向整页，占满父级高度，内容区自行滚动 */
+  .mobile-stack-layer {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background: var(--spark-bg-card);
+  }
+
+  .mobile-stack-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+  }
 }

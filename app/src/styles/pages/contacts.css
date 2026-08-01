@@ -512,3 +512,31 @@
 .tag-member-clickable {
   cursor: pointer;
 }
+
+/* ---- 移动端适配（波次 2，与 stores/ui-layout.ts 同一断点）：整页 + 导航栈 ----
+   栈1 左栏（搜索 + 分组列表）占满整页；组内成员/资料卡整页层复用 .mobile-stack-layer（app-shell.css）。
+   桌面端（≥769px）不受本块影响 */
+@media (max-width: 768px) {
+  /* 栈1：左栏占满整页宽度 */
+  .contacts-page .contacts-list {
+    width: 100%;
+    flex: 1;
+    border-right: 0;
+  }
+
+  /* 新的朋友 / 标签整页层：面板内部「列表 + 详情」双栏纵排为单栏上下（低改造成本），
+     整页统一由 .mobile-stack-body 滚动 */
+  .contacts-mobile-panel .contacts-request-list {
+    flex: none;
+    min-width: 0;
+    border-right: 0;
+    overflow: visible;
+  }
+
+  .contacts-mobile-panel .contacts-detail {
+    flex: none;
+    min-width: 0;
+    overflow: visible;
+    border-top: 2px solid var(--spark-border);
+  }
+}

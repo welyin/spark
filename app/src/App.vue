@@ -159,6 +159,7 @@ import TopNavbar from './components/TopNavbar.vue';
 import UserAvatarMenu from './components/UserAvatarMenu.vue';
 import MobileTabBar from './components/MobileTabBar.vue';
 import { isMobileLayout } from './stores/ui-layout';
+import { resetStack } from './stores/mobile-nav';
 import { useUpdaterReadyPrompt } from './components/updater/use-updater';
 import MessagesPage from './pages/MessagesPage.vue';
 import ContactsPage from './pages/ContactsPage.vue';
@@ -263,6 +264,10 @@ export default defineComponent({
     };
 
     const handleMenuSelect = (index: string) => {
+      // 移动端（波次 2）：重按当前 tab 回到该 tab 导航栈底（列表页）；切 tab 时各栈独立保持
+      if (isMobileLayout.value && index === activeTab.value) {
+        resetStack(index);
+      }
       activeTab.value = index;
     };
 

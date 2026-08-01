@@ -6,8 +6,8 @@
      登录门控由 RootGate 在应用入口统一处理，本页不再重复 -->
 <template>
   <section class="mine-page settings-page">
-    <!-- 第二栏：设置菜单 -->
-    <div class="mine-menu">
+    <!-- 第二栏：设置菜单；移动端（波次 2）为栈1 整页，点开分组整页切换 -->
+    <div v-if="!isMobileLayout || mobileFrame.page === 'root'" class="mine-menu">
         <header class="mine-menu-header">
           <UserAvatar
             v-if="isPersonal"
@@ -29,7 +29,7 @@
             type="button"
             class="mine-menu-item"
             :class="{ active: activeMenu === item.key }"
-            @click="activeMenu = item.key"
+            @click="onSelectMenu(item.key)"
           >
             <el-icon class="mine-menu-icon" :size="17"><component :is="item.icon" /></el-icon>
             <span class="mine-menu-label">{{ item.label }}</span>
@@ -37,10 +37,14 @@
         </nav>
       </div>
 
-      <!-- 个人设置（个人/组织空间均有）：第三栏模块菜单 + 第四栏模块列表；个人空间另有系统设置 -->
+      <!-- 移动端：栈深 >1 时顶部返回栏（桌面端不渲染） -->
+      <MobileBackBar v-if="isMobileLayout && mobileCanBack" :title="mobileTitle" @back="onMobileBack" />
+
+      <!-- 个人设置（个人/组织空间均有）：第三栏模块菜单 + 第四栏模块列表；个人空间另有系统设置。
+           移动端：第三栏=栈2（分组页），第四栏模块=栈3（模块页） -->
       <template v-if="isPersonal || activeMenu === 'mine'">
         <!-- 第三栏：个人设置的模块菜单 -->
-        <div v-if="activeMenu === 'mine'" class="mine-list">
+        <div v-if="activeMenu === 'mine' && (!isMobileLayout || mobileFrame.page === 'section')" class="mine-list">
           <h2 class="mine-list-title">个人设置</h2>
           <div class="mine-list-items">
             <button
@@ -49,17 +53,17 @@
               type="button"
               class="mine-list-item"
               :class="{ active: activeModule === item.key }"
-              @click="activeModule = item.key"
+              @click="onSelectModule(item.key)"
             >
               <el-icon class="mine-list-item-icon" :size="17"><component :is="item.icon" /></el-icon>
               <b class="settings-module-label">{{ item.label }}</b>
             </button>
           </div>
         </div>
-        <SystemSettingsPanel v-else-if="activeMenu === 'system'" />
+        <SystemSettingsPanel v-else-if="activeMenu === 'system' && (!isMobileLayout || mobileFrame.page === 'section')" />
 
         <!-- 第四栏：选中模块的列表栏（模块编辑页以抽屉打开，不占第五栏） -->
-        <template v-if="activeMenu === 'mine'">
+        <template v-if="activeMenu === 'mine' && (!isMobileLayout || mobileFrame.page === 'module')">
           <ProfileModule
             v-if="activeModule === 'profile'"
             detail-mode="drawer"
@@ -80,8 +84,8 @@
 
       <!-- 组织空间：组织设置（当前空间组织的信息/成员/网关/公开/发现）/ 系统设置 -->
       <template v-else>
-        <OrgSettingsPanel v-if="activeMenu === 'space'" />
-        <SystemSettingsPanel v-else-if="activeMenu === 'system'" />
+        <OrgSettingsPanel v-if="activeMenu === 'space' && (!isMobileLayout || mobileFrame.page === 'section')" />
+        <SystemSettingsPanel v-else-if="activeMenu === 'system' && (!isMobileLayout || mobileFrame.page === 'section')" />
       </template>
   </section>
 </template>
@@ -91,10 +95,13 @@ import { computed, defineComponent, onMounted, ref, watch, type Component } from
 import { Key, Lock, OfficeBuilding, Postcard, Setting, User } from '@element-plus/icons-vue';
 import { currentSpace, currentSpaceOrgId } from '../stores/current-space';
 import { nameOf, refreshOrganizations } from '../stores/org-membership';
+import { isMobileLayout } from '../stores/ui-layout';
+import { canBack, currentPage, popPage, pushPage, resetStack } from '../stores/mobile-nav';
 import type { RootStatusDto as RootStatus } from '../api';
 import { personalAvatarSource } from '../stores/avatar-sources';
 import UserAvatar from '../components/UserAvatar.vue';
 import OrgAvatar from '../components/OrgAvatar.vue';
+import MobileBackBar from '../components/MobileBackBar.vue';
 import ProfileModule from '../components/mine/ProfileModule.vue';
 import MyCardModule from '../components/mine/MyCardModule.vue';
 import BackupModule from '../components/mine/BackupModule.vue';
@@ -107,11 +114,15 @@ type MenuKey = 'mine' | 'space' | 'system';
 /** 个人设置下的四个模块（第三栏菜单，点击后右侧展开；网络状态/设备管理已并入系统设置） */
 type PersonalModuleKey = 'profile' | 'card' | 'permission' | 'backup';
 
+/** 本页在导航栈中的 tab 键（设置不在底部 tab，经顶栏「⋯」进入，键与 App.vue activeTab 一致） */
+const MOBILE_TAB = 'settings';
+
 export default defineComponent({
   name: 'SettingsPage',
   components: {
     UserAvatar,
     OrgAvatar,
+    MobileBackBar,
     ProfileModule,
     MyCardModule,
     BackupModule,
@@ -152,11 +163,64 @@ export default defineComponent({
       { key: 'backup', label: '账号备份', icon: Lock }
     ];
 
-    // 空间切换：菜单项集合变化，重置选中到各空间默认项，并清掉模块选中
+    // 空间切换：菜单项集合变化，重置选中到各空间默认项，并清掉模块选中；移动端同步回栈底
     watch(isPersonal, (personal) => {
       activeMenu.value = personal ? 'mine' : 'space';
       activeModule.value = null;
+      resetStack(MOBILE_TAB);
     });
+
+    // ------------------------------------------------------------------
+    // 移动端导航栈（波次 2）：栈1 设置首页 → 栈2 分组页（个人设置/组织设置/系统设置）
+    // → 栈3 个人设置模块页；桌面端以下逻辑均不触发
+    // ------------------------------------------------------------------
+    const mobileFrame = computed(() => currentPage(MOBILE_TAB));
+    const mobileCanBack = computed(() => canBack(MOBILE_TAB));
+
+    /** 菜单选中：桌面切右栏分组；移动端压入分组页栈帧（栈2 整页） */
+    const onSelectMenu = (key: MenuKey) => {
+      activeMenu.value = key;
+      if (isMobileLayout.value) {
+        pushPage(MOBILE_TAB, 'section', { key });
+      }
+    };
+
+    /** 个人设置模块选中：桌面切第四栏；移动端压入模块页栈帧（栈3 整页） */
+    const onSelectModule = (key: PersonalModuleKey) => {
+      activeModule.value = key;
+      if (isMobileLayout.value) {
+        pushPage(MOBILE_TAB, 'module', { key });
+      }
+    };
+
+    /** 返回栏：弹出栈顶回上一栏 */
+    const onMobileBack = () => popPage(MOBILE_TAB);
+
+    /** 返回栏标题：栈3 为模块名，栈2 为分组名 */
+    const mobileTitle = computed(() => {
+      const frame = mobileFrame.value;
+      if (frame.page === 'module') {
+        return personalModules.find((item) => item.key === frame.params?.key)?.label ?? '个人设置';
+      }
+      return menuItems.value.find((item) => item.key === frame.params?.key)?.label ?? '设置';
+    });
+
+    // 栈顶帧变化（重进按栈恢复 / 返回 pop / 复位）时同步选中分组与模块
+    watch(
+      [mobileFrame, isMobileLayout],
+      ([frame, mobile]) => {
+        if (!mobile) {
+          return;
+        }
+        if (frame.page === 'section' && menuItems.value.some((item) => item.key === frame.params?.key)) {
+          activeMenu.value = frame.params?.key as MenuKey;
+        } else if (frame.page === 'module' && personalModules.some((item) => item.key === frame.params?.key)) {
+          activeMenu.value = 'mine';
+          activeModule.value = frame.params?.key as PersonalModuleKey;
+        }
+      },
+      { immediate: true }
+    );
 
     const onProfileUpdated = (result: { nickname: string | null; avatar: string | null }) => {
       rootStatus.value = { ...rootStatus.value, nickname: result.nickname, avatar: result.avatar };
@@ -187,7 +251,14 @@ export default defineComponent({
       currentSpaceOrgId,
       headerAvatar,
       rootStatus,
-      onProfileUpdated
+      onProfileUpdated,
+      isMobileLayout,
+      mobileFrame,
+      mobileCanBack,
+      mobileTitle,
+      onSelectMenu,
+      onSelectModule,
+      onMobileBack
     };
   }
 });

@@ -21,8 +21,8 @@
     </div>
 
     <template v-else>
-      <!-- 第二栏：用户信息 + 功能菜单 -->
-      <div class="mine-menu">
+      <!-- 第二栏：用户信息 + 功能菜单；移动端（波次 2）为栈1 整页，点开模块整页切换 -->
+      <div v-if="!isMobileLayout || mobileFrame.page === 'root'" class="mine-menu">
         <header class="mine-menu-header">
           <UserAvatar
             :root-id="headerSource.seed"
@@ -43,7 +43,7 @@
             type="button"
             class="mine-menu-item"
             :class="{ active: activeMenu === item.key }"
-            @click="activeMenu = item.key"
+            @click="onSelectMenu(item.key)"
           >
             <el-icon class="mine-menu-icon" :size="17"><component :is="item.icon" /></el-icon>
             <span class="mine-menu-label">{{ item.label }}</span>
@@ -51,20 +51,24 @@
         </nav>
       </div>
 
-      <!-- 第三、四栏：当前菜单对应模块（默认「我的资料」），各模块自带列表栏与详情栏 -->
+      <!-- 移动端：栈2 模块页顶部返回栏（桌面端不渲染） -->
+      <MobileBackBar v-if="isMobileLayout && mobileFrame.page === 'module'" :title="activeMenuLabel" @back="onMobileBack" />
+
+      <!-- 第三、四栏：当前菜单对应模块（默认「我的资料」），各模块自带列表栏与详情栏；
+           移动端仅栈2（模块页）渲染，栏位纵排见 mine.css 波次 2 媒体查询 -->
       <ProfileModule
-        v-if="activeMenu === 'profile'"
+        v-if="showModules && activeMenu === 'profile'"
         :root-id="rootStatus.rootId ?? ''"
         :nickname="rootStatus.nickname ?? ''"
         :avatar="rootStatus.avatar ?? ''"
         @profile-updated="onProfileUpdated"
       />
-      <MyCardModule v-else-if="activeMenu === 'card'" />
-      <BackupModule v-else-if="activeMenu === 'backup'" :root-id="rootStatus.rootId" />
+      <MyCardModule v-else-if="showModules && activeMenu === 'card'" />
+      <BackupModule v-else-if="showModules && activeMenu === 'backup'" :root-id="rootStatus.rootId" />
       <!-- 组织身份（仅组织空间出现在菜单中） -->
-      <OrgIdentityModule v-else-if="activeMenu === 'org'" />
+      <OrgIdentityModule v-else-if="showModules && activeMenu === 'org'" />
       <!-- 朋友权限（个人：仅聊天+黑名单）/ 成员权限（组织：仅黑名单） -->
-      <PermissionModule v-else-if="activeMenu === 'permission'" :mode="currentSpace.type === 'org' ? 'org' : 'personal'" />
+      <PermissionModule v-else-if="showModules && activeMenu === 'permission'" :mode="currentSpace.type === 'org' ? 'org' : 'personal'" />
     </template>
   </section>
 </template>
@@ -75,9 +79,12 @@ import { ElMessage } from 'element-plus';
 import { Key, Lock, OfficeBuilding, Postcard, User } from '@element-plus/icons-vue';
 import { currentSpace, currentSpaceOrgId } from '../stores/current-space';
 import { getOrgIdentity } from '../stores/org-identity';
+import { isMobileLayout } from '../stores/ui-layout';
+import { currentPage, popPage, pushPage, resetStack } from '../stores/mobile-nav';
 import type { RootStatusDto as RootStatus } from '../api';
 import { orgIdentityAvatarSource, personalAvatarSource } from '../stores/avatar-sources';
 import UserAvatar from '../components/UserAvatar.vue';
+import MobileBackBar from '../components/MobileBackBar.vue';
 import ProfileModule from '../components/mine/ProfileModule.vue';
 import MyCardModule from '../components/mine/MyCardModule.vue';
 import BackupModule from '../components/mine/BackupModule.vue';
@@ -87,10 +94,14 @@ import RootAuthCenter from './auth/RootAuthCenter.vue';
 
 type MenuKey = 'profile' | 'card' | 'backup' | 'org' | 'permission';
 
+/** 本页在导航栈中的 tab 键（与 App.vue activeTab 一致） */
+const MOBILE_TAB = 'mine';
+
 export default defineComponent({
   name: 'MinePage',
   components: {
     UserAvatar,
+    MobileBackBar,
     ProfileModule,
     MyCardModule,
     BackupModule,
@@ -121,7 +132,8 @@ export default defineComponent({
       ];
     });
 
-    // 空间切换时同步选中项：进组织空间锁定到「组织身份」，回个人空间恢复默认面板
+    // 空间切换时同步选中项：进组织空间锁定到「组织身份」，回个人空间恢复默认面板；
+    // 移动端同步回栈底（菜单项集合随空间变化）
     watch(
       () => currentSpace.value,
       (space) => {
@@ -130,7 +142,46 @@ export default defineComponent({
         } else if (activeMenu.value === 'org') {
           activeMenu.value = 'profile';
         }
+        resetStack(MOBILE_TAB);
       }
+    );
+
+    // ------------------------------------------------------------------
+    // 移动端导航栈（波次 2）：栈1 功能菜单 → 栈2 模块页；桌面端以下逻辑均不触发
+    // ------------------------------------------------------------------
+    const mobileFrame = computed(() => currentPage(MOBILE_TAB));
+    /** 模块区渲染条件：桌面常驻；移动端仅栈2（模块页） */
+    const showModules = computed(() => !isMobileLayout.value || mobileFrame.value.page === 'module');
+
+    /** 菜单选中：桌面切右栏模块；移动端压入模块页栈帧（整页） */
+    const onSelectMenu = (key: MenuKey) => {
+      activeMenu.value = key;
+      if (isMobileLayout.value) {
+        pushPage(MOBILE_TAB, 'module', { key });
+      }
+    };
+
+    /** 返回栏：弹出栈顶回功能菜单（栈1） */
+    const onMobileBack = () => popPage(MOBILE_TAB);
+
+    /** 返回栏标题：当前模块名 */
+    const activeMenuLabel = computed(
+      () => menuItems.value.find((item) => item.key === activeMenu.value)?.label ?? '我的'
+    );
+
+    // 栈顶帧变化（重进 tab 按栈恢复 / 重按 tab 复位）时同步选中模块
+    watch(
+      [mobileFrame, isMobileLayout],
+      ([frame, mobile]) => {
+        if (!mobile) {
+          return;
+        }
+        const key = frame.params?.key as MenuKey | undefined;
+        if (frame.page === 'module' && menuItems.value.some((item) => item.key === key)) {
+          activeMenu.value = key as MenuKey;
+        }
+      },
+      { immediate: true }
     );
 
     // 头部身份：组织空间且未开「使用个人身份」时显示组织身份（+「组织身份」副标题），
@@ -174,7 +225,13 @@ export default defineComponent({
       headerSource,
       headerSubtitle,
       syncAuthState,
-      onProfileUpdated
+      onProfileUpdated,
+      isMobileLayout,
+      mobileFrame,
+      showModules,
+      activeMenuLabel,
+      onSelectMenu,
+      onMobileBack
     };
   }
 });

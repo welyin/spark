@@ -683,3 +683,14 @@
   font-size: 12px;
   color: var(--spark-text-3);
 }
+
+/* ---- 移动端适配（波次 2，与 stores/ui-layout.ts 同一断点）：整页 + 导航栈 ----
+   栈1 会话列表占满整页宽度；栈2 聊天页整页（返回用聊天头已有 ‹ 按钮，输入区随 flex 自然落在底部 tab bar 之上）。
+   桌面端（≥769px）不受本块影响 */
+@media (max-width: 768px) {
+  .messages-page .conv-list {
+    width: 100%;
+    flex: 1;
+    border-right: 0;
+  }
+}

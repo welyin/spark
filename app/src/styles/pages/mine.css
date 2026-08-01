@@ -265,3 +265,33 @@
   font-weight: 400;
   color: var(--spark-text-3);
 }
+
+/* ---- 移动端适配（波次 2，与 stores/ui-layout.ts 同一断点）：整页 + 导航栈 ----
+   我的页 / 设置页共用本文件栏位类：栏式布局改为纵向整页——栈1 功能菜单整页；
+   栈2 模块页（返回栏 + 模块的列表栏/详情栏）纵向排列，沿桌面 4:6 比例分高、各自滚动。
+   桌面端（≥769px）不受本块影响 */
+@media (max-width: 768px) {
+  .mine-page {
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* 栈1：功能菜单整页 */
+  .mine-page .mine-menu {
+    width: 100%;
+    flex: 1;
+    min-height: 0;
+    border-right: 0;
+  }
+
+  /* 栈2：模块列表栏 + 详情栏纵向排列（flex 比例沿用桌面 4:6，方向变为纵向） */
+  .mine-page .mine-list,
+  .mine-page .mine-detail {
+    min-width: 0;
+    border-right: 0;
+  }
+
+  .mine-page .mine-detail {
+    border-top: 2px solid var(--spark-border);
+  }
+}

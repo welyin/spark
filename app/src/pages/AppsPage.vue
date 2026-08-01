@@ -1,5 +1,5 @@
 <template>
-  <section class="apps-page">
+  <section class="apps-page" :class="{ 'apps-page-mobile-detail': isMobileLayout && detailVisible }">
     <el-alert
       v-if="loadError"
       class="apps-load-error"
@@ -9,8 +9,9 @@
       show-icon
     />
 
+    <!-- 列表/市场：移动端（波次 2）详情整页打开时隐藏（同屏只显示一层） -->
     <AppListPanel
-      v-if="view === 'list'"
+      v-if="view === 'list' && (!isMobileLayout || !detailVisible)"
       :installed-items="installedItems"
       :recent-items="recentItems"
       :is-enabled="isEnabled"
@@ -27,7 +28,7 @@
     />
 
     <AppMarketPanel
-      v-else-if="view === 'market'"
+      v-else-if="view === 'market' && (!isMobileLayout || !detailVisible)"
       :items="visibleItems"
       @back="view = 'list'"
       @detail="(item) => openDetail(item)"
@@ -37,8 +38,8 @@
     />
 
     <!-- 应用详情：全 app 统一抽屉（无头部小标题，右上角自定义关闭），不再整页切换；
-         详情面板内的「返回」按钮同样映射为关闭抽屉 -->
-    <el-drawer v-model="detailVisible" :with-header="false" size="520" class="app-drawer">
+         详情面板内的「返回」按钮同样映射为关闭抽屉；移动端（波次 2）不渲染抽屉，见下方整页层 -->
+    <el-drawer v-if="!isMobileLayout" v-model="detailVisible" :with-header="false" size="520" class="app-drawer">
       <button type="button" class="app-drawer-close" title="关闭" @click="detailVisible = false">
         <el-icon :size="16"><Close /></el-icon>
       </button>
@@ -60,6 +61,28 @@
         />
       </div>
     </el-drawer>
+
+    <!-- 移动端（波次 2）：应用详情为栈2 整页（与桌面抽屉同一份 AppDetailPanel），
+         底部 tab bar 常驻；插件页（栈3）走 App.vue 插件 tab 整页（自带 ‹ 返回） -->
+    <div v-if="isMobileLayout && detailVisible && selectedItem" class="mobile-stack-layer">
+      <MobileBackBar :title="selectedItem.name" @back="onMobileBack" />
+      <div class="mobile-stack-body app-drawer-body">
+        <AppDetailPanel
+          :item="selectedItem"
+          :enabled="isEnabled(selectedItem)"
+          :is-org-space="isOrgSpace"
+          :is-admin="isCurrentUserAdmin"
+          :busy="busyByPlugin[selectedItem.id] ?? ''"
+          @back="onMobileBack"
+          @open="openApp"
+          @install="installApp"
+          @upgrade="upgradeApp"
+          @toggle="toggleEnabled"
+          @uninstall="uninstallApp"
+          @request-enable="requestEnable"
+        />
+      </div>
+    </div>
   </section>
 </template>
 
@@ -76,6 +99,9 @@ import { isMockApp, listMockApps, setMockAppEnabled, setMockAppInstalled } from 
 import { mockMode } from '../mock/mode';
 import { spaceKeyOf } from '../mock/space-key';
 import { notifyPluginInstalled, notifyPluginUpgraded } from '../app-messages';
+import { isMobileLayout } from '../stores/ui-layout';
+import { currentPage, popPage, pushPage, resetStack } from '../stores/mobile-nav';
+import MobileBackBar from '../components/MobileBackBar.vue';
 import AppListPanel from '../components/apps/AppListPanel.vue';
 import AppMarketPanel from '../components/apps/AppMarketPanel.vue';
 import AppDetailPanel from '../components/apps/AppDetailPanel.vue';
@@ -100,9 +126,12 @@ export type OpenPluginTabPayload = {
 type ViewName = 'list' | 'market';
 type BusyAction = '' | 'install' | 'upgrade' | 'toggle' | 'uninstall';
 
+/** 本页在导航栈中的 tab 键（与 App.vue activeTab 一致） */
+const MOBILE_TAB = 'apps';
+
 export default defineComponent({
   name: 'AppsPage',
-  components: { AppListPanel, AppMarketPanel, AppDetailPanel, Close },
+  components: { AppListPanel, AppMarketPanel, AppDetailPanel, MobileBackBar, Close },
   emits: ['open-plugin-tab'],
   setup(_, { emit }) {
     const items = ref<PluginMarketItemDto[]>([]);
@@ -211,6 +240,34 @@ export default defineComponent({
     const openDetail = (item: PluginMarketItemDto) => {
       selectedId.value = item.id;
       detailVisible.value = true;
+      // 移动端（波次 2）：详情为栈2 整页，压入导航栈
+      if (isMobileLayout.value) {
+        pushPage(MOBILE_TAB, 'detail', { id: item.id });
+      }
+    };
+
+    // 移动端：栈顶帧变化（重进 tab 按栈恢复 / 返回 pop / 重按 tab 复位）时同步详情显隐
+    const mobileFrame = computed(() => currentPage(MOBILE_TAB));
+    watch(
+      [mobileFrame, isMobileLayout],
+      ([frame, mobile]) => {
+        if (!mobile) {
+          return;
+        }
+        if (frame.page === 'detail') {
+          selectedId.value = frame.params?.id ?? null;
+          detailVisible.value = true;
+        } else {
+          detailVisible.value = false;
+        }
+      },
+      { immediate: true }
+    );
+
+    /** 移动端返回栏 / 详情面板内返回：弹栈并收起详情整页 */
+    const onMobileBack = () => {
+      popPage(MOBILE_TAB);
+      detailVisible.value = false;
     };
 
     // 消费「打开应用详情」请求（全局搜索跳转）：市场条目加载完成后找到该应用进入详情
@@ -467,10 +524,11 @@ export default defineComponent({
       ElMessage.info('消息功能开发中，暂时无法联系管理员');
     };
 
-    // 切换空间时回到列表主视图并刷新管理员角色
+    // 切换空间时回到列表主视图并刷新管理员角色；移动端同步回栈底（应用按空间隔离）
     watch(spaceKey, () => {
       view.value = 'list';
       selectedId.value = null;
+      resetStack(MOBILE_TAB);
       void refreshAdminRole();
     });
 
@@ -510,7 +568,9 @@ export default defineComponent({
       uninstallApp,
       toggleEnabled,
       requestEnable,
-      refreshSafe
+      refreshSafe,
+      isMobileLayout,
+      onMobileBack
     };
   }
 });

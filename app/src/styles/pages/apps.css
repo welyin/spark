@@ -364,3 +364,14 @@
   padding: 16px 4px;
   border-top: 1px solid var(--spark-border-light);
 }
+
+/* ---- 移动端适配（波次 2，与 stores/ui-layout.ts 同一断点）：整页 + 导航栈 ----
+   应用详情（栈2）为整页层（.mobile-stack-layer，app-shell.css）；桌面端为抽屉，不受本块影响 */
+@media (max-width: 768px) {
+  /* 详情整页打开时：页面停止滚动、去边距，详情层占满（返回栏贴顶） */
+  .apps-page-mobile-detail {
+    overflow: hidden;
+    padding: 0;
+    gap: 0;
+  }
+}
