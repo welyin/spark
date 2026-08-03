@@ -3,23 +3,22 @@
 //! `plugin-market-uninstall`
 //!（语义对齐 TS desktop/src/main/ipc/plugin-market.ts，全部仅系统域使用）。
 //!
-//! 与 TS 的差异：旧 IPC 以 `requireSystemDomain(event)` 限制调用方为系统域；
-//! Tauri 壳当前只有单一主窗口（系统域），插件以 iframe tab 跑在同窗口内，
-//! 域隔离待独立插件窗口排期时一并落地（见 commands/plugin.rs 注记）。
-//!
-//! 风险登记（域隔离未落地前的暴露面）：Tauri 命令无调用方域校验
-//! （requireSystemDomain 等价物缺失），插件 iframe 与系统域同源可 invoke 本文件
-//! 全部命令——其中 `plugin-market-uninstall` 为纯破坏性操作（删包文件 + 移除
-//! 状态记录），install/upgrade 同样暴露。前端仅有 UI 层入口隐藏/角色守卫，
-//! 不构成安全边界；跟踪见 code/app/TODO.md「应用与市场」。
+//! 域校验（旧 TS `requireSystemDomain(event)` 的 Tauri 等价物，见
+//! [`crate::domain_guard`]）：全部命令入口先校验调用方 webview 当前 URL 属
+//! 系统域白名单，插件源（`plugin://` / `http(s)://plugin.localhost`）一律拒绝。
+//! 边界如实说明：当前插件 iframe 是 opaque origin 沙箱（无 `allow-same-origin`、
+//! 无 `__TAURI_INTERNALS__`），本就无法直接 invoke；本守卫为**独立插件窗口**
+//! （`plugin-open-view` 排期）提前落地 URL 层拦截——插件窗口 url() 为
+//! `plugin://`，与系统域同进程也可 invoke，届时本守卫即真正生效的边界。
 //!
 //! 业务逻辑全在 `crate::market::PluginMarketService`（单测直调），此处只做
-//! 锁与参数透传。更新探测/安装下载是阻塞网络 IO（市场源不可达时可能卡住数
-//! 十秒），全部命令为 async + spawn_blocking，不占命令调用线程；MarketState
-//! 为 Arc<Mutex<...>>（lib.rs），克隆句柄移入阻塞任务。
+//! 域守卫 + 锁与参数透传。更新探测/安装下载是阻塞网络 IO（市场源不可达时可
+//! 能卡住数十秒），全部命令为 async + spawn_blocking，不占命令调用线程；
+//! MarketState 为 Arc<Mutex<...>>（lib.rs），克隆句柄移入阻塞任务。
 
 use std::sync::Arc;
 
+use crate::domain_guard;
 use crate::market::repo::SparkPluginDeclaration;
 use crate::market::types::{InstalledPluginState, PluginMarketItem, PluginUpdateProbe};
 use crate::market::PluginMarketService;
@@ -44,41 +43,51 @@ where
 
 #[tauri::command]
 pub async fn plugin_market_list(
+    webview: tauri::Webview,
     state: tauri::State<'_, MarketState>,
 ) -> Result<Vec<PluginMarketItem>, String> {
+    domain_guard::require_system_domain(&webview)?;
     run_market(state, |svc| Ok(svc.list_market())).await
 }
 
 #[tauri::command]
 pub async fn plugin_market_check_updates(
+    webview: tauri::Webview,
     state: tauri::State<'_, MarketState>,
     plugin_id: Option<String>,
 ) -> Result<Vec<PluginUpdateProbe>, String> {
+    domain_guard::require_system_domain(&webview)?;
     run_market(state, move |svc| svc.check_for_updates(plugin_id.as_deref())).await
 }
 
 #[tauri::command]
 pub async fn plugin_market_install(
+    webview: tauri::Webview,
     state: tauri::State<'_, MarketState>,
     plugin_id: String,
 ) -> Result<InstalledPluginState, String> {
+    domain_guard::require_system_domain(&webview)?;
     run_market(state, move |svc| svc.install(&plugin_id)).await
 }
 
 #[tauri::command]
 pub async fn plugin_market_upgrade(
+    webview: tauri::Webview,
     state: tauri::State<'_, MarketState>,
     plugin_id: String,
 ) -> Result<InstalledPluginState, String> {
+    domain_guard::require_system_domain(&webview)?;
     run_market(state, move |svc| svc.upgrade(&plugin_id)).await
 }
 
 #[tauri::command]
 pub async fn plugin_market_set_enabled(
+    webview: tauri::Webview,
     state: tauri::State<'_, MarketState>,
     plugin_id: String,
     enabled: bool,
 ) -> Result<InstalledPluginState, String> {
+    domain_guard::require_system_domain(&webview)?;
     run_market(state, move |svc| svc.set_enabled(&plugin_id, enabled)).await
 }
 
@@ -86,9 +95,11 @@ pub async fn plugin_market_set_enabled(
 /// dev-source / 目录外 packagePath 仅移除记录（详见 market/uninstall.rs）。
 #[tauri::command]
 pub async fn plugin_market_uninstall(
+    webview: tauri::Webview,
     state: tauri::State<'_, MarketState>,
     plugin_id: String,
 ) -> Result<(), String> {
+    domain_guard::require_system_domain(&webview)?;
     run_market(state, move |svc| svc.uninstall(&plugin_id)).await
 }
 
@@ -96,9 +107,11 @@ pub async fn plugin_market_uninstall(
 /// 供前端「按仓库地址安装」确认前展示名称/图标/简介/权限。
 #[tauri::command]
 pub async fn plugin_market_resolve_repo(
+    webview: tauri::Webview,
     state: tauri::State<'_, MarketState>,
     id: String,
 ) -> Result<SparkPluginDeclaration, String> {
+    domain_guard::require_system_domain(&webview)?;
     run_market(state, move |svc| svc.resolve_repo_plugin(&id)).await
 }
 
@@ -106,9 +119,11 @@ pub async fn plugin_market_resolve_repo(
 /// 双源交叉 → 复用现有 sha256 校验下载链路。
 #[tauri::command]
 pub async fn plugin_market_install_from_repo(
+    webview: tauri::Webview,
     state: tauri::State<'_, MarketState>,
     id: String,
 ) -> Result<InstalledPluginState, String> {
+    domain_guard::require_system_domain(&webview)?;
     run_market(state, move |svc| svc.install_from_repo(&id)).await
 }
 
@@ -122,9 +137,11 @@ use crate::market::sideload::SideloadPreview;
 /// 侧载预览：解析 .spkg 容器 + 计算整包 sha256/size，供确认对话框展示核对。
 #[tauri::command]
 pub async fn plugin_market_inspect_local(
+    webview: tauri::Webview,
     state: tauri::State<'_, MarketState>,
     path: String,
 ) -> Result<SideloadPreview, String> {
+    domain_guard::require_system_domain(&webview)?;
     run_market(state, move |svc| svc.inspect_local_package(&path)).await
 }
 
@@ -133,11 +150,13 @@ pub async fn plugin_market_inspect_local(
 /// `confirm_overwrite`：覆盖既有更高信任安装时前端经确认对话框取得同意后传 true。
 #[tauri::command]
 pub async fn plugin_market_import_local(
+    webview: tauri::Webview,
     state: tauri::State<'_, MarketState>,
     path: String,
     expected_sha256: String,
     confirm_overwrite: bool,
 ) -> Result<InstalledPluginState, String> {
+    domain_guard::require_system_domain(&webview)?;
     run_market(state, move |svc| {
         svc.import_local_package(&path, &expected_sha256, confirm_overwrite)
     })
@@ -160,9 +179,11 @@ use crate::KernelState;
 /// 入本地索引。需身份已解锁且 P2P 已启动。
 #[tauri::command]
 pub async fn plugin_market_announce_publish(
+    webview: tauri::Webview,
     state: tauri::State<'_, KernelState>,
     input: PluginAnnounceInput,
 ) -> Result<PluginAnnounceIndexEntry, String> {
+    domain_guard::require_system_domain(&webview)?;
     let kernel = Arc::clone(state.inner());
     tauri::async_runtime::spawn_blocking(move || {
         let guard = kernel
@@ -177,17 +198,21 @@ pub async fn plugin_market_announce_publish(
 /// 本地广播索引列表（含 verified 状态；市场视图只展示 verified 条目，波次 2b）。
 #[tauri::command]
 pub fn plugin_market_announce_list(
+    webview: tauri::Webview,
     state: tauri::State<'_, KernelState>,
 ) -> Result<Vec<PluginAnnounceIndexEntry>, String> {
+    domain_guard::require_system_domain(&webview)?;
     lock_kernel(&state)?.list_plugin_announces().map_err(err)
 }
 
 /// 单条索引查询（verified 状态查询；id 为规范化线形）。
 #[tauri::command]
 pub fn plugin_market_announce_get(
+    webview: tauri::Webview,
     state: tauri::State<'_, KernelState>,
     id: String,
 ) -> Result<Option<PluginAnnounceIndexEntry>, String> {
+    domain_guard::require_system_domain(&webview)?;
     lock_kernel(&state)?.get_plugin_announce(&id).map_err(err)
 }
 
