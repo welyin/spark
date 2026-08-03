@@ -388,7 +388,9 @@ export default defineComponent({
     // .drop-row 行元素经模板函数 ref 收集（id -> 元素），替代 this.$el.querySelectorAll；
     // 渲染顺序即 DOM 顺序：个人=groups，组织=flatRows
     const dropRowEls = new Map<string, HTMLElement>();
-    const setDropRowRef = (el: Element | null, id: string) => {
+    // 模板函数 ref 的回调参数类型为 Element | ComponentPublicInstance | null；
+    // 显式放宽入参（Vue 模板编译类型），运行期仍以 HTMLElement 收窄为准
+    const setDropRowRef = (el: unknown, id: string) => {
       if (el instanceof HTMLElement) {
         dropRowEls.set(id, el);
       } else {

@@ -21,7 +21,7 @@
           <LoginPage
             v-if="authMode === 'login'"
             :busy="authBusy"
-            :root-id="rootStatus.rootId"
+            :root-id="rootStatus.rootId ?? ''"
             :nickname="rootStatus.nickname ?? ''"
             :avatar="rootStatus.avatar ?? ''"
             @login="handleLogin"

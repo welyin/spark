@@ -51,7 +51,7 @@ export default defineComponent({
     /** 卡片视图 id（应用消息 card.viewId，清单声明的 message-card 视图） */
     viewId: { type: String, required: true },
     /** 卡片视图数据（应用消息 card.data 透传） */
-    cardData: { type: null as unknown as PropType<unknown>, default: undefined },
+    cardData: { type: Object as PropType<unknown>, required: false },
     /** 应用消息 id：cardId 派生材料（归属校验凭据） */
     messageId: { type: String, required: true },
     space: { type: Object as PropType<PluginSpaceContext>, required: true },

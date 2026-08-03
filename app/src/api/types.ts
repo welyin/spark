@@ -711,12 +711,30 @@ export type ElectronAPI = {
     /** 设置 HTTP 代理（host:port，空串关闭）；已建立的连接需重启应用后生效 */
     setProxy: (proxy: string) => Promise<void>;
   };
+
   dataManagement: {
     usage: () => Promise<DataUsageReportDto>;
     cleanupNow: () => Promise<{ ranAt: number; tombstones: number; peerRecords: number; orgSyncStates: number }>;
     exportData: () => Promise<{ cancelled: true } | { cancelled: false; path: string; entries: number; bytes: number }>;
-    purgePreview: (orgId: string, beforeTs: number) => Promise<unknown>;
-    purgeExecute: (orgId: string, beforeTs: number, confirmExported: boolean) => Promise<unknown>;
+    purgePreview: (orgId: string, beforeTs: number) => Promise<PurgePreviewDto>;
+    purgeExecute: (orgId: string, beforeTs: number, confirmExported: boolean) => Promise<PurgeResultDto>;
   };
   getDomain: () => Promise<{ domain: string | null }>;
+};
+
+export type PurgePreviewDto = {
+  orgId: string;
+  domain: string;
+  beforeTs: number;
+  preview: { collections: string[]; affectedDocs: number; affectedBytes: number };
+  replica: OrgSyncOverviewDto | null;
+  isCurrentUserAdmin: boolean;
+};
+
+export type PurgeResultDto = {
+  domain: string;
+  beforeTs: number;
+  collections: string[];
+  removedDocs: number;
+  freedBytes: number;
 };

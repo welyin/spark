@@ -23,7 +23,7 @@
         <template v-else-if="!rootStatus.unlocked">
           <LoginPage
             v-if="authMode === 'login'"
-            :root-id="rootStatus.rootId"
+            :root-id="rootStatus.rootId ?? ''"
             :nickname="rootStatus.nickname ?? ''"
             :avatar="rootStatus.avatar ?? ''"
             @login="handleLogin"
