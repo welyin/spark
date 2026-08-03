@@ -109,6 +109,10 @@ export default defineConfig({
     ]
   },
   server: {
+    // 移动端（Android/iOS）真机调试：tauri CLI 检测到设备后把 devUrl host 替换为
+    // 局域网 IP（如 192.168.31.99），并把该地址写入 TAURI_DEV_HOST——dev server 须
+    // 监听该地址（0.0.0.0）才能被真机访问；桌面端保持默认 localhost 绑定。
+    host: process.env.TAURI_DEV_HOST ?? false,
     port: 1420,
     strictPort: true,
     // 插件目录在工程根之外（code/plugins，dev 中间件直接从这里出插件源）；
