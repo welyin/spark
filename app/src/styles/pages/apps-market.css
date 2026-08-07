@@ -206,12 +206,7 @@
 }
 
 
-/* 仓库锚定安装入口与预览（plugin-dist；样式复用市场卡片语言） */
-.market-repo-entry {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 8px;
-}
+/* 仓库锚定安装/侧载预览对话框（plugin-dist；入口在应用页 AppInstallTools，样式复用市场卡片语言） */
 .repo-install-dialog {
   display: flex;
   flex-direction: column;
@@ -331,4 +326,77 @@
   font-size: 12px;
   font-family: monospace;
   word-break: break-all;
+}
+
+/* ---------- 「开发者」标签页（我发布过的应用 + 发布新应用入口） ---------- */
+
+.market-developer-toolbar {
+  display: flex;
+  justify-content: center;
+  padding: 0 var(--spark-padding-page) 12px;
+}
+
+.market-developer-grid {
+  padding: 0 var(--spark-padding-page) 16px;
+}
+
+/* 发布核查状态标签后的更新时间 */
+.market-developer-updated {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--spark-text-3);
+}
+
+/* ---- 移动端适配：市场整页化（返回/标题由 MobileBackBar 承担）+ 条目网格化（手机桌面风） ---- */
+@media (max-width: 768px) {
+  /* 面板内大标题与返回按钮不再渲染（顶部返回栏同款能力） */
+  .apps-market-header {
+    display: none;
+  }
+
+  /* 整页层内 .apps-page 已无左右 padding，负边距取消（避免横向溢出） */
+  .apps-market {
+    margin: 0;
+    /* 底部让出系统手势条 */
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  /* 条目网格化：上图标下名称，4 列；简介/标签/安装按钮收进详情 */
+  .market-grid {
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px 8px;
+  }
+
+  .market-card {
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 2px;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    text-align: center;
+  }
+
+  .market-card:hover {
+    border-color: transparent;
+    box-shadow: none;
+    transform: none;
+  }
+
+  .market-card-info {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .market-card-info h3 {
+    font-size: 12px;
+  }
+
+  .market-card-info p,
+  .market-card-tags,
+  .market-card-action {
+    display: none;
+  }
 }

@@ -1,17 +1,18 @@
 <template>
   <div class="apps-market">
-    <!-- 固定头部（滚动不随动）：大标题居中（返回按钮左浮）+ 收录/探索分区 + 收录搜索与分类页签 -->
+    <!-- 固定头部（滚动不随动）：大标题居中（返回按钮左浮）+ 收录/探索/开发者分区 + 收录搜索与分类页签 -->
     <div class="market-head">
       <header class="apps-market-header">
         <el-button text :icon="ArrowLeft" class="market-back" @click="emit('back')">返回</el-button>
         <h1 class="apps-title market-title">应用市场</h1>
       </header>
 
-      <!-- 默认视图 = 收录层（官方收录 + 组织白名单）；探索页 = 已验证全网广播
-           （plugin_system.md「市场展示与排序」，阶段 C 波次 2b） -->
+      <!-- 默认视图 = 收录层（官方收录 + 组织白名单）；探索页 = 已验证全网广播；
+           开发者页 = 我发布过的应用 + 发布新应用入口（plugin-dist §8，阶段 C 波次 4） -->
       <el-radio-group v-model="marketTab" class="market-view-switch">
         <el-radio-button value="collection">收录</el-radio-button>
         <el-radio-button value="explore">探索</el-radio-button>
+        <el-radio-button value="developer">开发者</el-radio-button>
       </el-radio-group>
 
       <template v-if="marketTab === 'collection'">
@@ -23,56 +24,14 @@
           :prefix-icon="Search"
         />
 
-        <!-- 仓库锚定安装入口（plugin-dist）：输入仓库地址 → 解析声明文件 → 确认安装 -->
-        <div class="market-repo-entry">
-          <el-button size="small" @click="openRepoDialog">按仓库地址安装</el-button>
-          <!-- 网络差降级：手动导入 .spkg 侧载（显示包哈希供核对） -->
-          <el-button size="small" @click="openSideload">导入 .spkg 文件</el-button>
-          <!-- 广播索引发布入口（plugin-dist §8，开发者模式）：解析声明 → 算 PoW → 广播 -->
-          <el-button size="small" @click="openAnnounceDialog">发布声明（开发者）</el-button>
-        </div>
-
         <el-tabs v-model="activeCategory" class="market-tabs">
           <el-tab-pane v-for="category in categoryTabs" :key="category" :label="category" :name="category" />
         </el-tabs>
       </template>
     </div>
 
-    <el-dialog v-model="repoDialogVisible" title="按仓库地址安装" width="480">
-      <div class="repo-install-dialog">
-        <el-input
-          v-model="repoIdInput"
-          placeholder="如 github.com/owner/repo（支持 gitlab.com / gitee.com）"
-          clearable
-          @keyup.enter="resolveRepo"
-        >
-          <template #append>
-            <el-button :loading="repoResolving" @click="resolveRepo">解析</el-button>
-          </template>
-        </el-input>
-        <el-alert v-if="repoError" :title="repoError" type="error" :closable="false" show-icon />
-        <div v-if="repoPreview" class="repo-preview">
-          <div class="repo-preview-head">
-            <img v-if="repoPreview.icon" :src="repoPreview.icon" class="repo-preview-icon" alt="" />
-            <span v-else class="repo-preview-icon repo-preview-icon-fallback">{{ repoPreview.name.slice(0, 1) }}</span>
-            <div>
-              <h3>{{ repoPreview.name }} <el-tag size="small" effect="plain">v{{ repoPreview.version }}</el-tag></h3>
-              <p class="repo-preview-id">{{ repoPreview.id }}</p>
-            </div>
-          </div>
-          <p class="repo-preview-summary">{{ repoPreview.summary }}</p>
-          <p v-if="repoPreview.permissions.length > 0" class="repo-preview-permissions">
-            声明权限：{{ repoPreview.permissions.join('、') }}
-          </p>
-        </div>
-      </div>
-      <template #footer>
-        <el-button @click="repoDialogVisible = false">取消</el-button>
-        <el-button type="primary" :disabled="!repoPreview" @click="confirmRepoInstall">确认安装</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- 发布声明对话框（plugin-dist §8，开发者模式）：解析声明文件 → 确认 → 算 PoW 广播 -->
+    <!-- 发布声明对话框（plugin-dist §8，开发者标签页「发布新应用」入口）：
+         解析声明 → 算 PoW → 广播 -->
     <el-dialog v-model="announceDialogVisible" title="发布插件声明（开发者）" width="480">
       <div class="repo-install-dialog">
         <el-input
@@ -113,41 +72,48 @@
       </template>
     </el-dialog>
 
-    <!-- .spkg 侧载导入（网络差降级）：文件选择 → 预览（名称/版本/权限/包哈希供核对）→ 复核导入 -->
-    <el-dialog v-model="sideloadVisible" title="导入 .spkg 插件包" width="480">
-      <div v-if="sideloadPreview" class="repo-install-dialog">
-        <div class="repo-preview-head">
-          <span class="repo-preview-icon repo-preview-icon-fallback">{{ sideloadPreview.name.slice(0, 1) }}</span>
-          <div>
-            <h3>{{ sideloadPreview.name }} <el-tag size="small" effect="plain">v{{ sideloadPreview.version }}</el-tag></h3>
-            <p class="repo-preview-id">{{ sideloadPreview.pluginId }}</p>
-          </div>
-        </div>
-        <p v-if="sideloadPreview.permissions.length > 0" class="repo-preview-permissions">
-          声明权限：{{ sideloadPreview.permissions.join('、') }}
-        </p>
-        <!-- 支持空间（spaces-and-plugins §4）：未声明按 ['org'] 口径展示 -->
-        <p class="repo-preview-permissions">支持空间：{{ sideloadSpacesText }}</p>
-        <p class="repo-preview-permissions">文件：{{ sideloadPreview.fileName }}（{{ sideloadSizeText }}）</p>
-        <!-- 侧载绕过签名信任链与仓库锚定，哈希核对责任在用户（trust = "sideloaded"） -->
-        <el-alert type="warning" :closable="false" show-icon>
-          <template #title>导入前请与发布者公布的哈希核对</template>
-          <p class="sideload-hash">sha256：{{ sideloadPreview.sha256 }}</p>
-        </el-alert>
-        <el-alert v-if="sideloadError" :title="sideloadError" type="error" :closable="false" show-icon />
-      </div>
-      <template #footer>
-        <el-button @click="sideloadVisible = false">取消</el-button>
-        <el-button type="primary" :loading="sideloadImporting" @click="confirmSideload">核对无误，导入安装</el-button>
-      </template>
-    </el-dialog>
-
     <!-- 探索页：已验证全网广播（随机排序 + 换一批 + 搜索直达） -->
     <AppExplorePanel
       v-if="marketTab === 'explore'"
       :installed-ids="installedIds"
       @install-repo="(declaration) => emit('install-repo', declaration)"
     />
+
+    <!-- 开发者页：我发布过的应用（本地索引 publisher==我的 rootId）+ 顶部「发布新应用」入口 -->
+    <template v-else-if="marketTab === 'developer'">
+      <div class="market-developer-toolbar">
+        <el-button type="primary" size="small" @click="openAnnounceDialog">发布新应用</el-button>
+      </div>
+      <el-empty
+        v-if="myAnnounces.length === 0"
+        description="还没有发布过应用，点击上方「发布新应用」广播你的第一个插件声明"
+      />
+      <div v-else class="market-grid market-developer-grid">
+        <div v-for="entry in myAnnounces" :key="entry.announce.id" class="market-card">
+          <img
+            v-if="announceDisplayIcon(entry)"
+            :src="announceDisplayIcon(entry)"
+            class="market-card-icon explore-card-icon"
+            alt=""
+          />
+          <span v-else class="market-card-icon" :style="{ background: developerIconBackground(entry) }">
+            {{ announceDisplayName(entry).slice(0, 1) }}
+          </span>
+          <div class="market-card-info">
+            <h3>
+              {{ announceDisplayName(entry) }}
+              <span class="explore-card-version">v{{ announceDisplayVersion(entry) }}</span>
+            </h3>
+            <p>{{ announceDisplaySummary(entry) }}</p>
+            <div class="market-card-tags">
+              <el-tag size="small" effect="plain">{{ announceCategoryLabel(entry.announce.category) }}</el-tag>
+              <!-- 核查状态（plugin-dist §8.7 懒惰核查）：自己发布的未过核查条目也如实展示 -->
+              <el-tag size="small" :type="verifiedTagType(entry.verified)">{{ verifiedLabel(entry.verified) }}</el-tag>
+            </div>
+          </div>
+        </div>
+      </div>
+    </template>
 
     <template v-else>
       <el-empty v-if="filteredItems.length === 0" description="没有匹配的应用" />
@@ -238,13 +204,26 @@
 </template>
 
 <script lang="ts">
-import { computed, defineComponent, ref, type PropType } from 'vue';
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { computed, defineComponent, ref, watch, type PropType } from 'vue';
 import { ArrowLeft, Search } from '@element-plus/icons-vue';
-import type { PluginMarketItemDto, RepoPluginDeclarationDto, SideloadPreviewDto } from '../../api/types';
-import { pickSpkgFile } from '../../api';
+import type {
+  PluginAnnounceIndexEntryDto,
+  PluginMarketItemDto,
+  RepoPluginDeclarationDto
+} from '../../api/types';
 import { isMockApp } from '../../mock/apps';
+import { currentUser } from '../../stores/current-user';
+import { hashGradient } from '../../utils/palette';
 import { MARKET_CATEGORIES, appIconBackground, marketCategoryOf, marketItemMatches } from './apps-store';
+import {
+  announceCategoryLabel,
+  announceDisplayIcon,
+  announceDisplayName,
+  announceDisplaySummary,
+  announceDisplayVersion,
+  filterMyAnnounces,
+  sortAnnouncesByUpdated
+} from './apps-explore';
 import AppExplorePanel from './AppExplorePanel.vue';
 
 export default defineComponent({
@@ -253,10 +232,11 @@ export default defineComponent({
   props: {
     items: { type: Array as PropType<PluginMarketItemDto[]>, required: true }
   },
-  emits: ['back', 'detail', 'install', 'install-repo', 'sideloaded'],
+  emits: ['back', 'detail', 'install', 'install-repo'],
   setup(props, { emit }) {
-    // 市场分区（plugin_system.md「市场展示与排序」）：默认收录层，探索页为已验证全网广播
-    const marketTab = ref<'collection' | 'explore'>('collection');
+    // 市场分区（plugin_system.md「市场展示与排序」）：默认收录层，探索页为已验证全网广播，
+    // 开发者页为我发布过的应用（阶段 C 波次 4）
+    const marketTab = ref<'collection' | 'explore' | 'developer'>('collection');
     const keyword = ref('');
     const activeCategory = ref<string>('全部');
 
@@ -268,47 +248,7 @@ export default defineComponent({
       props.items.filter((item) => item.installed).map((item) => item.id)
     );
 
-    // 仓库锚定安装（plugin-dist）：解析 spark-plugin.json 预览，确认后由父组件安装
-    const repoDialogVisible = ref(false);
-    const repoIdInput = ref('');
-    const repoResolving = ref(false);
-    const repoError = ref('');
-    const repoPreview = ref<RepoPluginDeclarationDto | null>(null);
-
-    const openRepoDialog = () => {
-      repoIdInput.value = '';
-      repoError.value = '';
-      repoPreview.value = null;
-      repoDialogVisible.value = true;
-    };
-
-    const resolveRepo = async () => {
-      const id = repoIdInput.value.trim();
-      if (!id) {
-        return;
-      }
-      repoResolving.value = true;
-      repoError.value = '';
-      repoPreview.value = null;
-      try {
-        repoPreview.value = await window.electronAPI.pluginMarket.resolveRepo(id);
-      } catch (error) {
-        repoError.value = `解析失败：${error}`;
-      } finally {
-        repoResolving.value = false;
-      }
-    };
-
-    const confirmRepoInstall = () => {
-      if (!repoPreview.value) {
-        return;
-      }
-      const declaration = repoPreview.value;
-      repoDialogVisible.value = false;
-      emit('install-repo', declaration);
-    };
-
-    // 发布声明（plugin-dist §8，开发者模式）：解析 spark-plugin.json 预填 →
+    // 发布声明（plugin-dist §8，开发者标签页「发布新应用」入口）：解析 spark-plugin.json 预填 →
     // 内核签名 + 算 PoW（秒级）→ 广播；声明内容以仓库声明文件为准（id 一致性已由
     // resolveRepo 校验），信任锚不变
     const announceDialogVisible = ref(false);
@@ -376,6 +316,8 @@ export default defineComponent({
           releaseUrl: announceReleaseUrl(declaration)
         });
         announceDone.value = true;
+        // 广播成功后刷新「我发布过的应用」清单（新条目以核查中状态入账）
+        void loadMyAnnounces();
       } catch (error) {
         announceError.value = `广播失败：${error}`;
       } finally {
@@ -383,85 +325,36 @@ export default defineComponent({
       }
     };
 
-    // .spkg 侧载导入（网络差降级）：文件选择 → inspect 预览（包哈希供核对）→ import 复核落状态
-    const sideloadVisible = ref(false);
-    const sideloadPath = ref('');
-    const sideloadPreview = ref<SideloadPreviewDto | null>(null);
-    const sideloadError = ref('');
-    const sideloadImporting = ref(false);
+    // ---- 开发者标签页：我发布过的应用（本地索引 publisher==我的 rootId，经 announceList 过滤） ----
+    const myAnnounces = ref<PluginAnnounceIndexEntryDto[]>([]);
 
-    const openSideload = async () => {
+    const loadMyAnnounces = async () => {
       try {
-        const path = await pickSpkgFile();
-        if (!path) {
-          return; // 用户取消选择
-        }
-        sideloadPath.value = path;
-        sideloadError.value = '';
-        sideloadPreview.value = await window.electronAPI.pluginMarket.inspectLocal(path);
-        sideloadVisible.value = true;
-      } catch (error) {
-        ElMessage.error(`读取插件包失败：${error}`);
+        const entries = await window.electronAPI.pluginMarket.announceList();
+        // 展示序：updatedAt 降序稳定序（与探索页搜索直达同口径）
+        myAnnounces.value = sortAnnouncesByUpdated(
+          filterMyAnnounces(entries ?? [], currentUser.rootId ?? '')
+        );
+      } catch {
+        // 索引读取失败保留当前清单，不阻断浏览
       }
     };
 
-    const sideloadSizeText = computed(() => {
-      const size = sideloadPreview.value?.size ?? 0;
-      return size >= 1024 * 1024 ? `${(size / 1024 / 1024).toFixed(1)} MB` : `${Math.ceil(size / 1024)} KB`;
+    // 切到开发者标签页时拉取一次（离开再回来会重拉，保持与本地索引同步）
+    watch(marketTab, (tab) => {
+      if (tab === 'developer') {
+        void loadMyAnnounces();
+      }
     });
 
-    /** 侧载预览支持空间展示（spaces-and-plugins §4）：未声明按 ['org'] 口径 */
-    const sideloadSpacesText = computed(() => {
-      const spaces = sideloadPreview.value?.supportedSpaces;
-      const effective = spaces && spaces.length > 0 ? spaces : ['org'];
-      const labels = effective.map((space) => (space === 'personal' ? '个人空间' : '组织空间'));
-      return labels.length === 2 ? '个人与组织空间' : `仅${labels[0]}`;
-    });
+    /** 核查状态展示（plugin-dist §8.7）：verified/pending/failed → 标签文案与类型 */
+    const verifiedLabel = (verified: PluginAnnounceIndexEntryDto['verified']): string =>
+      verified === 'verified' ? '已验证' : verified === 'pending' ? '核查中' : '未通过';
+    const verifiedTagType = (verified: PluginAnnounceIndexEntryDto['verified']): 'success' | 'info' | 'danger' =>
+      verified === 'verified' ? 'success' : verified === 'pending' ? 'info' : 'danger';
 
-    const confirmSideload = async () => {
-      const preview = sideloadPreview.value;
-      if (!preview) {
-        return;
-      }
-      sideloadImporting.value = true;
-      sideloadError.value = '';
-      try {
-        await window.electronAPI.pluginMarket.importLocal(sideloadPath.value, preview.sha256);
-        sideloadVisible.value = false;
-        ElMessage.success(`「${preview.name}」导入成功，启用后即可使用`);
-        emit('sideloaded');
-      } catch (error) {
-        // 信任降级覆盖守卫（I2）：后端结构化前缀 → 确认框标注「将覆盖现有 xx 安装」，
-        // 用户同意后带 confirmOverwrite = true 重试
-        const message = `${error}`;
-        if (message.startsWith('Sideload overwrite requires confirmation')) {
-          const trust = /trust=([a-z-]+)/.exec(message)?.[1] ?? '';
-          const trustLabel = trust === 'signed' ? '签名信任链' : trust === 'repo-anchored' ? '仓库锚定' : trust;
-          try {
-            await ElMessageBox.confirm(
-              `将覆盖现有 ${trustLabel} 安装，信任层级降级为侧载导入（仅哈希核对）。确认继续？`,
-              '覆盖已有安装',
-              { confirmButtonText: '覆盖导入', cancelButtonText: '取消', type: 'warning' }
-            );
-          } catch {
-            sideloadImporting.value = false;
-            return; // 用户取消覆盖
-          }
-          try {
-            await window.electronAPI.pluginMarket.importLocal(sideloadPath.value, preview.sha256, true);
-            sideloadVisible.value = false;
-            ElMessage.success(`「${preview.name}」导入成功，启用后即可使用`);
-            emit('sideloaded');
-          } catch (retryError) {
-            sideloadError.value = `导入失败：${retryError}`;
-          }
-        } else {
-          sideloadError.value = `导入失败：${message}`;
-        }
-      } finally {
-        sideloadImporting.value = false;
-      }
-    };
+    const developerIconBackground = (entry: PluginAnnounceIndexEntryDto) =>
+      hashGradient(entry.announce.id || entry.announce.name);
 
     const categoryTabs = ['全部', ...MARKET_CATEGORIES] as const;
 
@@ -504,14 +397,6 @@ export default defineComponent({
       marketCategoryOf,
       appIconBackground,
       isMockApp,
-      repoDialogVisible,
-      repoIdInput,
-      repoResolving,
-      repoError,
-      repoPreview,
-      openRepoDialog,
-      resolveRepo,
-      confirmRepoInstall,
       announceDialogVisible,
       announceIdInput,
       announceResolving,
@@ -522,14 +407,15 @@ export default defineComponent({
       openAnnounceDialog,
       resolveAnnounce,
       confirmAnnounce,
-      sideloadVisible,
-      sideloadPreview,
-      sideloadError,
-      sideloadImporting,
-      sideloadSizeText,
-      sideloadSpacesText,
-      openSideload,
-      confirmSideload,
+      myAnnounces,
+      verifiedLabel,
+      verifiedTagType,
+      developerIconBackground,
+      announceCategoryLabel,
+      announceDisplayIcon,
+      announceDisplayName,
+      announceDisplaySummary,
+      announceDisplayVersion,
       ArrowLeft,
       Search,
       emit

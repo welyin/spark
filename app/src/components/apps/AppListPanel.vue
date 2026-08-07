@@ -10,6 +10,11 @@
         :prefix-icon="Search"
       />
       <el-button type="primary" :icon="Plus" @click="onAddGroup">添加分类</el-button>
+      <!-- 安装入口（从应用市场迁入）：按仓库地址安装 / 导入 .spkg 文件 -->
+      <AppInstallTools
+        @install-repo="(declaration) => emit('install-repo', declaration)"
+        @sideloaded="emit('sideloaded')"
+      />
     </header>
 
     <el-empty v-if="installedItems.length === 0" description="还没有安装应用，去市场看看吧">
@@ -160,11 +165,12 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { ArrowRight, Delete, Edit, Plus, Search } from '@element-plus/icons-vue';
 import type { PluginMarketItemDto } from '../../api/types';
 import { appIconBackground, type useAppGroups } from './apps-store';
+import AppInstallTools from './AppInstallTools.vue';
 
 export default defineComponent({
   name: 'AppListPanel',
   // Options API：模板中以标签形式使用的图标组件必须注册（仅 setup return 会静默不渲染）
-  components: { ArrowRight, Plus, Edit, Delete },
+  components: { ArrowRight, Plus, Edit, Delete, AppInstallTools },
   props: {
     /** 已安装应用（含已禁用，禁用卡片置灰展示，ui-apps-market §2.5） */
     installedItems: { type: Array as PropType<PluginMarketItemDto[]>, required: true },
@@ -179,7 +185,7 @@ export default defineComponent({
     /** 各插件进行中的操作（'' | install | upgrade | toggle | uninstall），卸载按钮 busy 态用 */
     busyByPlugin: { type: Object as PropType<Record<string, string>>, default: () => ({}) }
   },
-  emits: ['open', 'detail', 'toggle', 'uninstall', 'add-app'],
+  emits: ['open', 'detail', 'toggle', 'uninstall', 'add-app', 'install-repo', 'sideloaded'],
   setup(props, { emit }) {
     const keyword = ref('');
     const collapsed = ref<Record<string, boolean>>({});

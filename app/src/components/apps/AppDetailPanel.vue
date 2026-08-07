@@ -1,33 +1,57 @@
 <template>
   <div class="app-detail">
-    <header class="app-detail-header">
+    <!-- 桌面端抽屉内返回（映射为关闭抽屉）；移动端由整页顶部 MobileBackBar 承担，不重复渲染 -->
+    <header v-if="!isMobileLayout" class="app-detail-header">
       <el-button text :icon="ArrowLeft" @click="emit('back')">返回</el-button>
     </header>
 
     <section class="app-detail-hero">
-      <span class="app-detail-icon" :style="{ background: appIconBackground(item) }">{{ item.name.slice(0, 1) }}</span>
-      <div class="app-detail-hero-info">
-        <h1>
-          {{ item.name }}
-          <el-tag v-if="item.updateAvailable" size="small" type="danger">可更新</el-tag>
-          <el-tag v-if="item.installed && !enabled" size="small" type="warning">已禁用</el-tag>
-        </h1>
-        <p class="app-detail-meta">开发者 / 域名：{{ item.domain }}</p>
-        <p class="app-detail-meta">
-          版本：{{ item.installedVersion ?? item.version }}
-          <template v-if="item.latestVersion && item.latestVersion !== item.installedVersion">
-            （最新 {{ item.latestVersion }}）
-          </template>
-        </p>
-        <p v-if="item.package.updateManifestUrl" class="app-detail-meta">
-          更新清单：{{ item.package.updateManifestUrl }}
-        </p>
+      <div class="app-detail-hero-main">
+        <span class="app-detail-icon" :style="{ background: appIconBackground(item) }">{{ item.name.slice(0, 1) }}</span>
+        <div class="app-detail-hero-info">
+          <h1>
+            {{ item.name }}
+            <el-tag v-if="item.updateAvailable" size="small" type="danger">可更新</el-tag>
+            <el-tag v-if="item.installed && !enabled" size="small" type="warning">已禁用</el-tag>
+          </h1>
+          <!-- 开发者与域名拆成两个独立属性行：仓库锚定插件 id 为仓库地址（host/owner/repo），
+               开发者取 owner 段；其余（域名签名插件）开发者即域名持有者 -->
+          <p class="app-detail-meta">开发者：{{ developerText }}</p>
+          <p class="app-detail-meta">域名：{{ item.domain }}</p>
+          <p class="app-detail-meta">
+            版本：{{ item.installedVersion ?? item.version }}
+            <template v-if="item.latestVersion && item.latestVersion !== item.installedVersion">
+              （最新 {{ item.latestVersion }}）
+            </template>
+          </p>
+        </div>
+      </div>
+
+      <!-- 移动端：操作按钮收进「图标+名称」卡片内（图标名称在上、按钮组在下） -->
+      <div v-if="isMobileLayout" class="app-detail-hero-actions">
+        <AppDetailActions
+          :item="item"
+          :enabled="enabled"
+          :is-org-space="isOrgSpace"
+          :is-admin="isAdmin"
+          :busy="busy"
+          @open="emit('open', item)"
+          @install="emit('install', item)"
+          @upgrade="emit('upgrade', item)"
+          @toggle="emit('toggle', item)"
+          @uninstall="emit('uninstall', item)"
+          @request-enable="emit('request-enable', item)"
+        />
       </div>
     </section>
 
     <section class="app-detail-section">
       <h2>应用简介</h2>
       <p>{{ item.description || '暂无简介' }}</p>
+      <!-- 更新清单并入简介卡片展示（原 hero 属性行） -->
+      <p v-if="item.package.updateManifestUrl" class="app-detail-meta">
+        更新清单：{{ item.package.updateManifestUrl }}
+      </p>
     </section>
 
     <section class="app-detail-section">
@@ -52,86 +76,36 @@
       <p class="app-detail-muted">源码仓库与签名指纹信息暂未提供</p>
     </section>
 
-    <section class="app-detail-actions">
-      <!-- 组织空间：启用/禁用（设计 §4.2）+ 管理员卸载；非管理员不暴露安装/更新/卸载 -->
-      <template v-if="isOrgSpace">
-        <el-button v-if="enabled" type="primary" @click="emit('open', item)">打开</el-button>
-        <el-button
-          v-if="!enabled"
-          type="primary"
-          :loading="busy === 'toggle'"
-          @click="isAdmin ? emit('toggle', item) : emit('request-enable', item)"
-        >
-          启用
-        </el-button>
-        <el-button
-          v-else-if="isAdmin"
-          :loading="busy === 'toggle'"
-          @click="emit('toggle', item)"
-        >
-          禁用
-        </el-button>
-        <el-button
-          v-if="isAdmin && item.updateAvailable"
-          type="warning"
-          :loading="busy === 'upgrade'"
-          @click="emit('upgrade', item)"
-        >
-          更新
-        </el-button>
-        <!-- 卸载仅移除插件程序，插件数据保留在本机（确认框在 AppsPage）；
-             组织空间仅管理员可见，与个人空间分支同口径 -->
-        <el-button
-          v-if="isAdmin && item.installed"
-          type="danger"
-          :loading="busy === 'uninstall'"
-          @click="emit('uninstall', item)"
-        >
-          卸载
-        </el-button>
-      </template>
-
-      <!-- 个人空间：安装 / 启用 / 禁用 / 打开 / 更新（设计 §4.1/§4.3/§4.4） -->
-      <template v-else>
-        <el-button
-          v-if="!item.installed"
-          type="primary"
-          :loading="busy === 'install'"
-          @click="emit('install', item)"
-        >
-          安装
-        </el-button>
-        <template v-else>
-          <el-button v-if="enabled" type="primary" @click="emit('open', item)">打开</el-button>
-          <el-button :loading="busy === 'toggle'" @click="emit('toggle', item)">
-            {{ enabled ? '禁用' : '启用' }}
-          </el-button>
-          <el-button
-            v-if="item.updateAvailable"
-            type="warning"
-            :loading="busy === 'upgrade'"
-            @click="emit('upgrade', item)"
-          >
-            更新
-          </el-button>
-          <!-- 卸载仅移除插件程序，插件数据保留在本机（确认框在 AppsPage） -->
-          <el-button type="danger" :loading="busy === 'uninstall'" @click="emit('uninstall', item)">
-            卸载
-          </el-button>
-        </template>
-      </template>
+    <!-- 桌面端：操作按钮区在详情页底部（移动端已收进 hero 卡片，此处不渲染） -->
+    <section v-if="!isMobileLayout" class="app-detail-actions">
+      <AppDetailActions
+        :item="item"
+        :enabled="enabled"
+        :is-org-space="isOrgSpace"
+        :is-admin="isAdmin"
+        :busy="busy"
+        @open="emit('open', item)"
+        @install="emit('install', item)"
+        @upgrade="emit('upgrade', item)"
+        @toggle="emit('toggle', item)"
+        @uninstall="emit('uninstall', item)"
+        @request-enable="emit('request-enable', item)"
+      />
     </section>
   </div>
 </template>
 
 <script lang="ts">
-import { defineComponent, type PropType } from 'vue';
+import { computed, defineComponent, type PropType } from 'vue';
 import { ArrowLeft } from '@element-plus/icons-vue';
 import type { PluginMarketItemDto } from '../../api/types';
+import { isMobileLayout } from '../../stores/ui-layout';
 import { permissionLabel, appIconBackground } from './apps-store';
+import AppDetailActions from './AppDetailActions.vue';
 
 export default defineComponent({
   name: 'AppDetailPanel',
+  components: { AppDetailActions },
   props: {
     item: { type: Object as PropType<PluginMarketItemDto>, required: true },
     enabled: { type: Boolean, required: true },
@@ -141,8 +115,14 @@ export default defineComponent({
   },
   emits: ['back', 'open', 'install', 'upgrade', 'toggle', 'uninstall', 'request-enable'],
   setup(props, { emit }) {
+    /** 开发者展示：仓库锚定插件（id 形如 host/owner/repo）取仓库 owner 段；
+     *  其余插件开发者即域名持有者（市场数据暂无独立开发者字段，设计 §3.4） */
+    const developerText = computed(() => {
+      const segments = props.item.id.split('/');
+      return segments.length >= 3 ? segments[1] : props.item.domain;
+    });
     // 模板中以 emit('xxx') 形式触发事件，必须把 emit 暴露出去（同 AppListPanel/AppMarketPanel）
-    return { ArrowLeft, permissionLabel, appIconBackground, emit };
+    return { ArrowLeft, permissionLabel, appIconBackground, developerText, isMobileLayout, emit };
   }
 });
 </script>

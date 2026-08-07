@@ -52,14 +52,14 @@
           <!-- 「添加朋友」仅个人空间；「添加成员」仅组织空间且当前用户是管理员
                （与通讯录页内「添加成员」按钮的 isOrgAdmin 门控同口径，非管理员不显示） -->
           <button v-if="isPersonal" type="button" class="mobile-add-sheet-item" @click="pickAddFriend">
-            <el-icon :size="18" :style="{ color: '#ff7d00' }"><User /></el-icon>
+            <el-icon :size="18"><User /></el-icon>
             <div class="mobile-add-sheet-item-text">
               <b>添加朋友</b>
               <span>通过身份 ID 添加新的朋友</span>
             </div>
           </button>
           <button v-else-if="isOrgAdmin" type="button" class="mobile-add-sheet-item" @click="pickAddMember">
-            <el-icon :size="18" :style="{ color: '#3296fa' }"><Avatar /></el-icon>
+            <el-icon :size="18"><Avatar /></el-icon>
             <div class="mobile-add-sheet-item-text">
               <b>添加成员</b>
               <span>生成邀请码，邀请加入当前组织</span>
@@ -242,14 +242,15 @@ export default defineComponent({
   z-index: 2010;
 }
 
-/* 下拉卡片：顶栏（44px + 状态栏安全区）之下、右对齐顶栏右缘（顶栏右 padding 8px） */
+/* 下拉卡片：顶栏（44px + 状态栏安全区）之下、右对齐顶栏右缘（顶栏右 padding 8px）。
+   底色用介于白与灰之间的中灰（不随主题切换），黑/白两主题下都与卡片白底、主题色拉开区分 */
 .mobile-add-sheet {
   position: absolute;
   top: calc(var(--spark-topbar-height) + env(safe-area-inset-top, 0px) + 4px);
   right: 8px;
   width: 250px;
-  background: var(--spark-bg-card);
-  border: 1px solid var(--spark-border-light);
+  background: #8f959e;
+  border: 1px solid #8f959e;
   border-radius: var(--spark-radius-l);
   box-shadow: var(--spark-shadow-pop);
   padding: 6px;
@@ -258,7 +259,7 @@ export default defineComponent({
 }
 
 /* 小三角：指向加号按钮中心（顶栏右 padding 8px + 按钮半宽 18px = 距视口右缘 26px，
-   再减卡片右偏 8px 与三角半宽 6px → 距卡片右缘 12px） */
+   再减卡片右偏 8px 与三角半宽 6px → 距卡片右缘 12px）；与卡片同灰色 */
 .mobile-add-sheet::before {
   content: '';
   position: absolute;
@@ -266,9 +267,9 @@ export default defineComponent({
   right: 12px;
   width: 12px;
   height: 12px;
-  background: var(--spark-bg-card);
-  border-top: 1px solid var(--spark-border-light);
-  border-left: 1px solid var(--spark-border-light);
+  background: #8f959e;
+  border-top: 1px solid #8f959e;
+  border-left: 1px solid #8f959e;
   border-top-left-radius: 3px;
   transform: rotate(45deg);
 }
@@ -285,11 +286,16 @@ export default defineComponent({
   padding: 12px 10px;
   border-radius: var(--spark-radius-m);
   text-align: left;
-  color: var(--spark-text-1);
+  /* 灰底上文字/图标统一白色（深浅两主题恒可读） */
+  color: #fff;
 }
 
 .mobile-add-sheet-item:hover {
-  background: var(--spark-bg-hover);
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.mobile-add-sheet-item .el-icon {
+  color: #fff;
 }
 
 .mobile-add-sheet-item-text {
@@ -305,7 +311,7 @@ export default defineComponent({
 
 .mobile-add-sheet-item-text span {
   font-size: 13px;
-  color: var(--spark-text-3);
+  color: rgba(255, 255, 255, 0.75);
 }
 
 /* 下拉展开过渡：遮罩淡入淡出，卡片从右上角（加号处）缩放+下沉展开 */

@@ -12,6 +12,7 @@ import {
   announceDisplayVersion,
   announceMatches,
   filterVerifiedAnnounces,
+  filterMyAnnounces,
   safeAnnounceIcon,
   shuffleAnnounces,
   sortAnnouncesByUpdated
@@ -60,6 +61,22 @@ describe('filterVerifiedAnnounces', () => {
       entry('d', 'verified')
     ];
     expect(filterVerifiedAnnounces(entries).map((e) => e.announce.id)).toEqual(['a', 'd']);
+  });
+});
+
+describe('filterMyAnnounces（开发者标签页：publisher == 我的 rootId）', () => {
+  it('只保留我发布的条目，不限 verified 态', () => {
+    const entries = [
+      entry('a', 'verified', { publisher: 'me' }),
+      entry('b', 'pending', { publisher: 'me' }),
+      entry('c', 'verified', { publisher: 'other' }),
+      entry('d', 'failed', { publisher: 'me' })
+    ];
+    expect(filterMyAnnounces(entries, 'me').map((e) => e.announce.id)).toEqual(['a', 'b', 'd']);
+  });
+
+  it('rootId 为空（未加载）时返回空清单', () => {
+    expect(filterMyAnnounces([entry('a', 'verified', { publisher: 'me' })], '')).toEqual([]);
   });
 });
 

@@ -14,6 +14,21 @@ export function filterVerifiedAnnounces(
   return entries.filter((entry) => entry.verified === 'verified');
 }
 
+/**
+ * 市场「开发者」标签页（plugin-dist §8）：本地索引中由我发布的广播条目
+ * （publisher == 我的 rootId）。不做 verified 过滤——自己发布但尚未过核查的
+ * 条目也要可见（带核查状态标签展示）；rootId 为空（未加载）时返回空清单。
+ */
+export function filterMyAnnounces(
+  entries: PluginAnnounceIndexEntryDto[],
+  rootId: string
+): PluginAnnounceIndexEntryDto[] {
+  if (!rootId) {
+    return [];
+  }
+  return entries.filter((entry) => entry.announce.publisher === rootId);
+}
+
 /** Fisher-Yates 洗牌（返回新数组，不改入参；rng 可注入便于测试）。 */
 export function shuffleAnnounces<T>(items: T[], rng: () => number = Math.random): T[] {
   const out = [...items];

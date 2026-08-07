@@ -306,8 +306,9 @@ export default defineComponent({
 
 .mobile-drawer {
   position: absolute;
-  /* 避开系统状态栏与手势导航条：抽屉面板只在安全区内显示（Android 真机适配） */
-  top: env(safe-area-inset-top, 0px);
+  /* 顶到屏幕顶（占用系统状态栏区域，顶部多出一块同色空白）；
+     内部元素视觉位置由 .mobile-drawer-user 的 padding-top 叠加 safe-area 保持 */
+  top: 0;
   left: 0;
   bottom: env(safe-area-inset-bottom, 0px);
   width: min(300px, 82vw);
@@ -317,12 +318,13 @@ export default defineComponent({
   box-shadow: 4px 0 16px rgba(0, 0, 0, 0.12);
 }
 
-/* 上部：当前用户 */
+/* 上部：当前用户（padding-top 叠加状态栏安全区：抽屉面板 top:0 占用状态栏后，
+   用户行视觉位置与原先避开状态栏时一致，上方留出一块空白区） */
 .mobile-drawer-user {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 20px 16px 14px;
+  padding: calc(20px + env(safe-area-inset-top, 0px)) 16px 14px;
   border-bottom: 1px solid var(--spark-border-light);
 }
 

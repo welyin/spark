@@ -275,6 +275,12 @@
   box-shadow: var(--spark-shadow-card);
 }
 
+/* 桌面端：hero 主体包装对布局透明（图标+信息仍按 hero 的 flex 行排布）；
+   移动端在媒体块内改为列布局（图标名称在上、操作按钮组在下） */
+.app-detail-hero-main {
+  display: contents;
+}
+
 .app-detail-icon {
   display: flex;
   align-items: center;
@@ -332,6 +338,11 @@
   line-height: 1.6;
 }
 
+/* 简介卡片内的「更新清单」等附加属性行：与简介正文拉开间距 */
+.app-detail-section .app-detail-meta {
+  margin-top: 8px;
+}
+
 .app-detail-permissions {
   margin: 0;
   padding: 0;
@@ -366,12 +377,118 @@
 }
 
 /* ---- 移动端适配（波次 2，与 stores/ui-layout.ts 同一断点）：整页 + 导航栈 ----
-   应用详情（栈2）为整页层（.mobile-stack-layer，app-shell.css）；桌面端为抽屉，不受本块影响 */
+   应用详情/应用市场（栈2）为整页层（.mobile-stack-layer，app-shell.css）；桌面端为抽屉/页内视图，不受本块影响 */
 @media (max-width: 768px) {
-  /* 详情整页打开时：页面停止滚动、去边距，详情层占满（返回栏贴顶） */
-  .apps-page-mobile-detail {
+  /* 页面白底铺满：.apps-page 自身无底色时，底部 padding 条会露出 .main 的灰色页面底 */
+  .apps-page {
+    background: var(--spark-bg-card);
+  }
+
+  /* 市场/详情整页打开时：页面停止滚动、去边距，整页层占满（返回栏贴顶） */
+  .apps-page-mobile-stack {
     overflow: hidden;
     padding: 0;
     gap: 0;
+  }
+
+  /* 详情整页内容底部让出系统手势条（原 20px 间距保留，叠加 safe-area） */
+  .apps-page .app-drawer-body {
+    padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+  }
+
+  /* ---- 已安装列表网格化（手机桌面风：上图标下名称，4 列；操作收进详情页） ---- */
+  .app-cards {
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px 8px;
+  }
+
+  .app-card {
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 2px;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .app-card:hover {
+    border-color: transparent;
+    box-shadow: none;
+    transform: none;
+  }
+
+  .app-card[draggable='true'] {
+    cursor: pointer;
+  }
+
+  .app-card-body {
+    flex: none;
+    width: 100%;
+    text-align: center;
+  }
+
+  .app-card-head {
+    justify-content: center;
+  }
+
+  .app-card-name {
+    font-size: 12px;
+  }
+
+  /* 网格态只留图标+名称：简介/操作按钮/状态标签进详情页展示 */
+  .app-card-desc,
+  .app-card-actions,
+  .app-card-head .el-tag {
+    display: none;
+  }
+
+  /* 「添加应用」虚线入口收缩为一个网格单元 */
+  .app-add-card {
+    min-height: 64px;
+    gap: 4px;
+    font-size: 12px;
+  }
+
+  /* 落点占位块跟随网格单元尺寸 */
+  .app-card-drop-placeholder {
+    min-height: 64px;
+  }
+
+  /* 详情页头部返回按钮：移动端由 MobileBackBar 承担，不重复展示 */
+  .app-detail-header {
+    display: none;
+  }
+
+  /* 头部按钮增多（安装工具迁入）：窄屏允许换行 */
+  .apps-list-header {
+    flex-wrap: wrap;
+  }
+
+  .app-detail {
+    max-width: none;
+  }
+
+  /* 操作按钮收进「图标+名称」卡片内：图标名称在上、按钮组在下横排 */
+  .app-detail-hero {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .app-detail-hero-main {
+    display: flex;
+    gap: 18px;
+    align-items: center;
+  }
+
+  .app-detail-hero-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  /* 移动端按钮已在 hero 卡片内，页底操作区不重复渲染（模板层 v-else 双保险） */
+  .app-detail-actions {
+    display: none;
   }
 }

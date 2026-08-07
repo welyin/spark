@@ -79,7 +79,7 @@
         <el-alert v-else-if="resolveError" type="warning" :closable="false" show-icon>
           <template #title>仓库暂不可达，无法校正声明信息</template>
           <p class="explore-fallback-text">
-            可自行访问仓库地址下载 .spkg 包，回到市场页用「导入 .spkg 文件」侧载安装（导入前请核对包哈希）。
+            可自行访问仓库地址下载 .spkg 包，回到应用页用「导入 .spkg 文件」侧载安装（导入前请核对包哈希）。
           </p>
           <p class="explore-fallback-text explore-fallback-id">{{ detailEntry.announce.id }}</p>
         </el-alert>
@@ -173,7 +173,7 @@ export default defineComponent({
     const emptyText = computed(() =>
       searching.value
         ? '没有匹配的已验证插件'
-        : '正在监听网络广播，还没有已验证的插件声明；开发者可通过「发布声明（开发者）」入口发布自己的插件'
+        : '正在监听网络广播，还没有已验证的插件声明；开发者可在「开发者」标签页发布自己的插件'
     );
 
     /** 重新拉索引 + 洗牌（「换一批」与挂载共用；新条目在此刻才进入展示序） */

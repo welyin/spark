@@ -1,5 +1,5 @@
 <template>
-  <section class="apps-page" :class="{ 'apps-page-mobile-detail': isMobileLayout && detailVisible }">
+  <section class="apps-page" :class="{ 'apps-page-mobile-stack': isMobileLayout && (detailVisible || view === 'market') }">
     <el-alert
       v-if="loadError"
       class="apps-load-error"
@@ -10,38 +10,12 @@
     />
 
     <!-- 列表/市场：桌面端常驻；移动端（波次 2/3）包进导航栈转场层——
-         列表/市场为栈1，详情整页为栈2，栈帧切换经 MobilePageTransition 滑动转场（微信式） -->
+         列表为栈1，市场/详情为整页栈帧（MobileBackBar 返回栏），栈帧切换经 MobilePageTransition 滑动转场（微信式） -->
     <MobilePageTransition v-if="isMobileLayout" :tab="MOBILE_TAB">
-      <AppListPanel
-        v-if="view === 'list' && !detailVisible"
-        :installed-items="installedItems"
-        :recent-items="recentItems"
-        :is-enabled="isEnabled"
-        :is-suspended="isSuspended"
-        :groups="groups"
-        :is-org-space="isOrgSpace"
-        :is-admin="isCurrentUserAdmin"
-        :busy-by-plugin="busyByPlugin"
-        @open="openApp"
-        @detail="(item) => openDetail(item)"
-        @toggle="toggleEnabled"
-        @uninstall="uninstallApp"
-        @add-app="view = 'market'"
-      />
-
-      <AppMarketPanel
-        v-else-if="view === 'market' && !detailVisible"
-        :items="visibleItems"
-        @back="view = 'list'"
-        @detail="(item) => openDetail(item)"
-        @install="installApp"
-        @install-repo="installRepoPlugin"
-        @sideloaded="refreshSafe"
-      />
-
-      <!-- 应用详情：栈2 整页（与桌面抽屉同一份 AppDetailPanel），
-           底部 tab bar 常驻；插件页（栈3）走 App.vue 插件 tab 整页（自带 ‹ 返回） -->
-      <div v-else-if="detailVisible && selectedItem" class="mobile-stack-layer">
+      <!-- 应用详情：栈顶整页（与桌面抽屉同一份 AppDetailPanel），底部 tab bar 常驻；
+           详情可从列表或市场进入，故优先于市场分支判断；
+           插件页（栈3）走 App.vue 插件 tab 整页（自带 ‹ 返回） -->
+      <div v-if="detailVisible && selectedItem" class="mobile-stack-layer">
         <MobileBackBar :title="selectedItem.name" @back="onMobileBack" />
         <div class="mobile-stack-body app-drawer-body">
           <AppDetailPanel
@@ -60,6 +34,39 @@
           />
         </div>
       </div>
+
+      <!-- 应用市场：栈2 整页（返回栏 + 滚动内容），返回回应用列表（波次 4 整页化） -->
+      <div v-else-if="view === 'market'" class="mobile-stack-layer">
+        <MobileBackBar title="应用市场" @back="onMobileBack" />
+        <div class="mobile-stack-body">
+          <AppMarketPanel
+            :items="visibleItems"
+            @back="onMobileBack"
+            @detail="(item) => openDetail(item)"
+            @install="installApp"
+            @install-repo="installRepoPlugin"
+          />
+        </div>
+      </div>
+
+      <AppListPanel
+        v-else
+        :installed-items="installedItems"
+        :recent-items="recentItems"
+        :is-enabled="isEnabled"
+        :is-suspended="isSuspended"
+        :groups="groups"
+        :is-org-space="isOrgSpace"
+        :is-admin="isCurrentUserAdmin"
+        :busy-by-plugin="busyByPlugin"
+        @open="openApp"
+        @detail="(item) => openDetail(item)"
+        @toggle="toggleEnabled"
+        @uninstall="uninstallApp"
+        @add-app="openMarket"
+        @install-repo="installRepoPlugin"
+        @sideloaded="refreshSafe"
+      />
     </MobilePageTransition>
 
     <template v-else>
@@ -77,7 +84,9 @@
         @detail="(item) => openDetail(item)"
         @toggle="toggleEnabled"
         @uninstall="uninstallApp"
-        @add-app="view = 'market'"
+        @add-app="openMarket"
+        @install-repo="installRepoPlugin"
+        @sideloaded="refreshSafe"
       />
 
       <AppMarketPanel
@@ -87,7 +96,6 @@
         @detail="(item) => openDetail(item)"
         @install="installApp"
         @install-repo="installRepoPlugin"
-        @sideloaded="refreshSafe"
       />
     </template>
 
@@ -273,13 +281,21 @@ export default defineComponent({
     const openDetail = (item: PluginMarketItemDto) => {
       selectedId.value = item.id;
       detailVisible.value = true;
-      // 移动端（波次 2）：详情为栈2 整页，压入导航栈
+      // 移动端（波次 2）：详情为整页栈帧，压入导航栈
       if (isMobileLayout.value) {
         pushPage(MOBILE_TAB, 'detail', { id: item.id });
       }
     };
 
-    // 移动端：栈顶帧变化（重进 tab 按栈恢复 / 返回 pop / 重按 tab 复位）时同步详情显隐
+    /** 进入应用市场：移动端压入导航栈（整页 + 返回栏，波次 4 整页化）；桌面端页内视图切换 */
+    const openMarket = () => {
+      view.value = 'market';
+      if (isMobileLayout.value) {
+        pushPage(MOBILE_TAB, 'market');
+      }
+    };
+
+    // 移动端：栈顶帧变化（重进 tab 按栈恢复 / 返回 pop / 重按 tab 复位）时同步市场/详情显隐
     const mobileFrame = computed(() => currentPage(MOBILE_TAB));
     watch(
       [mobileFrame, isMobileLayout],
@@ -292,12 +308,14 @@ export default defineComponent({
           detailVisible.value = true;
         } else {
           detailVisible.value = false;
+          // 市场整页帧与列表栈底帧同步到视图态（桌面端 view 由按钮直改，不受栈影响）
+          view.value = frame.page === 'market' ? 'market' : 'list';
         }
       },
       { immediate: true }
     );
 
-    /** 移动端返回栏 / 详情面板内返回：弹栈并收起详情整页 */
+    /** 移动端返回栏 / 详情面板内返回：弹栈并收起详情整页（市场/列表态由栈帧 watch 同步） */
     const onMobileBack = () => {
       popPage(MOBILE_TAB);
       detailVisible.value = false;
@@ -604,6 +622,7 @@ export default defineComponent({
       refreshSafe,
       isMobileLayout,
       MOBILE_TAB,
+      openMarket,
       onMobileBack
     };
   }
