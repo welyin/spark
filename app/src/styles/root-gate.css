@@ -118,9 +118,17 @@
     overflow: hidden;
   }
 
+  /* 滚动可能在 document 层发生（键盘顶起后 body 可滚）：busy 期间锁死全局滚动，
+     蒙版上禁掉触摸滚动穿透（:has 在目标 WebView 均支持） */
+  body:has(.gate-wrap.gate-busy) {
+    overflow: hidden;
+  }
+
   /* el-loading 蒙版为指令动态插入的子节点，无 scoped 属性，须 :deep 命中 */
   .gate-wrap.gate-busy:deep(.el-loading-mask) {
     position: fixed;
     inset: 0;
+    touch-action: none;
+    overscroll-behavior: none;
   }
 }

@@ -183,6 +183,25 @@ pub(crate) fn mnemonic_check_inner(input: &str) -> MnemonicCheckInfo {
 // Tauri 命令（同步 command → Tauri 自动放到线程池，满足内核线程模型）
 // ------------------------------------------------------------------
 
+/// 内核命令的阻塞执行器：scrypt 等 CPU 密集操作（unlock/init/recover 的 KDF）
+/// 同步跑会把命令线程占死、移动端 UI 动画卡顿——改 async + spawn_blocking
+/// 挪到阻塞线程池（模式同 market.rs 的 run_market）。
+async fn run_kernel<T, F>(state: tauri::State<'_, KernelState>, f: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(&mut spark_core::kernel::Kernel) -> Result<T, String> + Send + 'static,
+{
+    let kernel = std::sync::Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut guard = kernel
+            .lock()
+            .map_err(|_| "kernel state lock poisoned".to_string())?;
+        f(&mut guard)
+    })
+    .await
+    .map_err(|e| format!("kernel task join failed: {e}"))?
+}
+
 #[tauri::command]
 pub fn root_status(state: tauri::State<'_, KernelState>) -> Result<IdentityStatus, String> {
     status_inner(&*lock_kernel(&state)?)
@@ -196,22 +215,28 @@ pub fn root_list_identities(
 }
 
 #[tauri::command]
-pub fn root_init(
+pub async fn root_init(
     state: tauri::State<'_, KernelState>,
     password: String,
     nickname: String,
     avatar: Option<String>,
 ) -> Result<InitResultDto, String> {
-    init_inner(&mut *lock_kernel(&state)?, &password, &nickname, avatar.as_deref())
+    run_kernel(state, move |kernel| {
+        init_inner(kernel, &password, &nickname, avatar.as_deref())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn root_unlock(
+pub async fn root_unlock(
     state: tauri::State<'_, KernelState>,
     password: String,
     root_id: Option<String>,
 ) -> Result<RootIdResultDto, String> {
-    unlock_inner(&mut *lock_kernel(&state)?, &password, root_id.as_deref())
+    run_kernel(state, move |kernel| {
+        unlock_inner(kernel, &password, root_id.as_deref())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -229,29 +254,29 @@ pub fn root_set_active(
 }
 
 #[tauri::command]
-pub fn root_recover_mnemonic(
+pub async fn root_recover_mnemonic(
     state: tauri::State<'_, KernelState>,
     mnemonic: String,
     new_password: String,
     nickname: String,
     avatar: Option<String>,
 ) -> Result<RootIdResultDto, String> {
-    recover_mnemonic_inner(
-        &mut *lock_kernel(&state)?,
-        &mnemonic,
-        &new_password,
-        &nickname,
-        avatar.as_deref(),
-    )
+    run_kernel(state, move |kernel| {
+        recover_mnemonic_inner(kernel, &mnemonic, &new_password, &nickname, avatar.as_deref())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn root_recover_backup(
+pub async fn root_recover_backup(
     state: tauri::State<'_, KernelState>,
     payload: String,
     password: String,
 ) -> Result<RootIdResultDto, String> {
-    recover_backup_inner(&mut *lock_kernel(&state)?, &payload, &password)
+    run_kernel(state, move |kernel| {
+        recover_backup_inner(kernel, &payload, &password)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -263,19 +288,19 @@ pub fn root_backup_payload(
 
 /// 二维码备份载荷（验密；剔除 avatar 等大字段的紧凑 IdentityFile JSON）。
 #[tauri::command]
-pub fn root_backup_payload_qr(
+pub async fn root_backup_payload_qr(
     state: tauri::State<'_, KernelState>,
     password: String,
 ) -> Result<PayloadResultDto, String> {
-    backup_payload_qr_inner(&*lock_kernel(&state)?, &password)
+    run_kernel(state, move |kernel| backup_payload_qr_inner(kernel, &password)).await
 }
 
 #[tauri::command]
-pub fn root_reveal_mnemonic(
+pub async fn root_reveal_mnemonic(
     state: tauri::State<'_, KernelState>,
     password: String,
 ) -> Result<MnemonicResultDto, String> {
-    reveal_mnemonic_inner(&*lock_kernel(&state)?, &password)
+    run_kernel(state, move |kernel| reveal_mnemonic_inner(kernel, &password)).await
 }
 
 #[tauri::command]
