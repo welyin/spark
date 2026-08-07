@@ -48,8 +48,20 @@ pub fn system_get_proxy(app: tauri::AppHandle) -> Result<Option<String>, String>
 /// 不再执行默认退出；`plugin:app|exit` 又不在 core:app 的 ACL 命令清单内（前端
 /// 无法调用）。因此退出路径必须走应用自定义命令（自定义命令不受插件 ACL 限制）。
 /// 桌面端不会触发该路径（无系统返回键事件），命令保留同理静默可用。
+///
+/// Android 退出方式：app.exit(0) 走 std::process::exit → __cxa_finalize 退出钩子
+/// → WebViewFunctorManager 析构时 Adreno GL 上下文已销毁，FORTIFY 报
+/// pthread_mutex_lock on destroyed mutex 直接 abort（退出动画已播完但系统按崩溃
+/// 弹窗）。Android 应用的正常死法是 Process.killProcess（不跑退出钩子），
+/// 故用 SIGKILL 自杀绕过整段析构（数据已在内核 sled 持久化，无损失）。
 #[tauri::command]
 pub fn system_exit_app(app: tauri::AppHandle) {
+    #[cfg(target_os = "android")]
+    {
+        let _ = app; // Android 路径不使用 AppHandle
+        unsafe { libc::raise(libc::SIGKILL) };
+    }
+    #[cfg(not(target_os = "android"))]
     app.exit(0);
 }
 

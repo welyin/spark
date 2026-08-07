@@ -39,6 +39,10 @@ tauri-plugin-updater = "2"
 # 更新清单发布日期（tauri-plugin-updater 的 OffsetDateTime）RFC3339 格式化。
 time = { version = "0.3", features = ["formatting"] }
 
+[target.'cfg(target_os = "android")'.dependencies]
+# Android 退出路径：SIGKILL 自杀绕过 WebView/GL 析构崩溃（见 commands/system.rs system_exit_app）
+libc = "0.2"
+
 [dev-dependencies]
 tempfile = "3"
 # 市场服务测试：构造签名密钥对（内核同款 crate，仅测试用）。
