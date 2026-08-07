@@ -116,6 +116,23 @@
   flex: 1;
 }
 
+/* 账号操作区（Android 前端改造）：设置页底部，原顶栏「⋯」菜单下放；退出登录置底 */
+.mine-menu-account {
+  display: flex;
+  flex-direction: column;
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--spark-border-light);
+}
+
+.mine-menu-danger {
+  color: var(--spark-danger) !important;
+}
+
+.mine-menu-danger .mine-menu-icon {
+  color: var(--spark-danger) !important;
+}
+
 /* 第三栏：模块列表/概览。三/四栏按 4:6 弹性分配剩余宽度、各自最小 280px（不小于第二栏），
    保证窗口宽度不变时栏宽恒定；贴边无卡片框，由各模块组件渲染 */
 .mine-list {
@@ -289,6 +306,14 @@
   .mine-page .mine-detail {
     min-width: 0;
     border-right: 0;
+  }
+
+  /* 移动端 module 整页（Android 前端改造）：详情已走抽屉（detail-mode=drawer），
+     字段列表占满整页；仅当它是 stage 内唯一主栏（无同屏 .mine-detail 兄弟）时生效，
+     设置页 section 帧（子菜单+内容同屏）不受影响 */
+  .mine-page .mobile-stack-stage .mine-list:not(:has(~ .mine-detail)) {
+    flex: 1 1 auto;
+    width: 100%;
   }
 
   .mine-page .mine-detail {

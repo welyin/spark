@@ -2,8 +2,9 @@
      网络状态、设备管理复用个人设置的模块（自带列表栏，编辑走抽屉）；
      账号与安全已移除（资料修改在「我的资料」、账号备份在「账号备份」模块），隐私组已删除（朋友权限模块覆盖） -->
 <template>
-  <!-- 第三栏：子菜单 -->
-  <div class="mine-list">
+  <div class="system-settings-panel">
+  <!-- 第三栏：子菜单（移动端选中 section 时隐藏，内容整页覆盖） -->
+  <div class="mine-list panel-submenu" v-if="activeSection === null || !isMobileLayout">
     <h2 class="mine-list-title">系统设置</h2>
     <div class="mine-list-items">
       <button
@@ -18,6 +19,11 @@
         <b class="settings-section-label">{{ item.label }}</b>
       </button>
     </div>
+  </div>
+
+  <!-- 移动端内容整页返回栏（Android 前端改造）：选中 section 时显示，返回回子菜单 -->
+  <div v-if="isMobileLayout && activeSection !== null" class="settings-mobile-bar">
+    <MobileBackBar :title="activeSectionLabel" @back="activeSection = null" />
   </div>
 
   <!-- 网络状态 / 设备管理：模块直接渲染（列表栏即第四栏，编辑页走抽屉） -->
@@ -36,8 +42,8 @@
     :p2p-info="p2pInfo"
   />
 
-  <!-- 其余子项：第四栏内容 -->
-  <div v-else class="mine-detail">
+  <!-- 其余子项：第四栏内容（移动端未选 section 时不渲染——否则空白覆盖层会挡住子菜单） -->
+  <div v-else-if="activeSection !== null || !isMobileLayout" class="mine-detail">
     <!-- 存储：本地用量 + 清理 + 导出（dataManagement 真实接口） -->
     <el-card v-if="activeSection === 'storage'" shadow="never" class="panel-card">
       <template #header>
@@ -138,14 +144,18 @@
       </div>
     </el-card>
   </div>
+  </div>
 </template>
 
 <script lang="ts">
-import { computed, defineComponent, onMounted, ref, type Component } from 'vue';
+import { computed, defineComponent, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue';
 import { Bell, Coin, Connection, InfoFilled, Monitor, SetUp } from '@element-plus/icons-vue';
 import type { DataUsageReportDto, P2pInfoDto as P2PInfo } from '../../api';
 import { formatBytes } from '../../utils/format';
 import { themeMode } from '../../stores/theme';
+import { isMobileLayout } from '../../stores/ui-layout';
+import { isOverlayCloseTarget, popOverlay, pushOverlay } from '../../stores/overlay-stack';
+import MobileBackBar from '../MobileBackBar.vue';
 import NetworkModule from '../mine/NetworkModule.vue';
 import DevicesModule from '../mine/DevicesModule.vue';
 import MockSettingGroup, { type MockSettingItem } from './MockSettingGroup.vue';
@@ -191,10 +201,45 @@ export default defineComponent({
   components: {
     NetworkModule,
     DevicesModule,
-    MockSettingGroup
+    MockSettingGroup,
+    MobileBackBar
   },
-  setup() {
-    const activeSection = ref<SectionKey>('general');
+  props: {
+    /** 初始定位的子菜单（深链入口，如移动端网络状态点跳「网络状态」）；仅在挂载时生效一次 */
+    initialSection: { type: String as () => SectionKey, default: undefined }
+  },
+  emits: ['section-toggle'],
+  setup(props, { emit }) {
+    // 移动端（Android 前端改造）：子菜单整页 <-> 内容整页覆盖层；桌面端保持「子菜单+内容」分栏
+    const activeSection = ref<SectionKey | null>(props.initialSection ?? (isMobileLayout.value ? null : 'general'));
+    // 覆盖层登记（token 制）：移动端选中 section（内容整页）时入栈，返回子菜单/卸载时出栈；
+    // 系统回退键仅关栈顶（本面板内容页上还可能叠着模块详情整页，须逐层回退）
+    let overlayToken: symbol | null = null;
+    const releaseOverlay = () => {
+      popOverlay(overlayToken);
+      overlayToken = null;
+    };
+    watch(
+      () => activeSection.value !== null && isMobileLayout.value,
+      (opened) => {
+        // 告知宿主页隐藏页级返回栏（面板自带返回栏接管），避免双栏叠层、内容偏下
+        emit('section-toggle', opened);
+        if (opened && !overlayToken) {
+          overlayToken = pushOverlay();
+        } else if (!opened) {
+          releaseOverlay();
+        }
+      },
+      { immediate: true }
+    );
+    onBeforeUnmount(releaseOverlay);
+    const onCloseOverlay = (event: Event) => {
+      if (isOverlayCloseTarget(event, overlayToken) && activeSection.value !== null && isMobileLayout.value) {
+        activeSection.value = null;
+      }
+    };
+    onMounted(() => window.addEventListener('spark:close-overlay', onCloseOverlay));
+    onBeforeUnmount(() => window.removeEventListener('spark:close-overlay', onCloseOverlay));
     const rootStatus = ref<RootStatus>({ initialized: false, unlocked: false, rootId: null, nickname: null, avatar: null });
     const p2pInfo = ref<P2PInfo>({
       initialized: false,
@@ -219,6 +264,11 @@ export default defineComponent({
       { key: 'storage', label: '存储管理', icon: Coin },
       { key: 'about', label: '关于', icon: InfoFilled }
     ];
+
+    /** 当前选中子菜单的标题（移动端整页返回栏标题） */
+    const activeSectionLabel = computed(
+      () => sections.find((sec) => sec.key === activeSection.value)?.label ?? ''
+    );
 
     const usageRows = computed(() =>
       USAGE_CLASS_LABELS.map((item) => ({
@@ -355,6 +405,8 @@ export default defineComponent({
 
     return {
       activeSection,
+      activeSectionLabel,
+      isMobileLayout,
       sections,
       rootStatus,
       p2pInfo,
@@ -426,5 +478,57 @@ export default defineComponent({
 .about-update-message {
   font-size: 12px;
   color: var(--spark-text-2, #909399);
+}
+
+/* ---- 移动端（≤768px，Android 前端改造）：子菜单整页 + 内容整页覆盖 ----
+   选中 section 时内容区 absolute 覆盖整页（顶部让出返回栏高度），不上下分屏 */
+@media (max-width: 768px) {
+  .system-settings-panel {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+  }
+
+  /* 子菜单（直接子级 mine-list）整页占满 */
+  .system-settings-panel > .mine-list.panel-submenu {
+    flex: 1;
+    height: 100%;
+  }
+
+  /* 内容区：NetworkModule/DevicesModule 内部 mine-list 或 .mine-detail，absolute 整页覆盖；
+     top 让出返回栏高度（48px + 状态栏安全区），避免首行内容被返回栏遮挡；
+     :not(.panel-submenu) 排除面板自身子菜单（其与内容区互斥渲染，但需防 CSS 命中） */
+  .system-settings-panel > :deep(.mine-list):not(.panel-submenu),
+  .system-settings-panel > .mine-detail {
+    position: absolute;
+    top: calc(48px + env(safe-area-inset-top, 0px));
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 2;
+    background: var(--spark-bg-card);
+    overflow-y: auto;
+    animation: settings-overlay-in 260ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  }
+
+  /* 返回栏：浮在面板顶部（与内容同向滑入，视觉等同整页推入） */
+  .settings-mobile-bar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 3;
+    animation: settings-overlay-in 260ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  }
+}
+
+@keyframes settings-overlay-in {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
 }
 </style>

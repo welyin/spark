@@ -37,7 +37,9 @@ export default defineComponent({
   display: grid;
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
-  height: 48px;
+  /* 二级页整页顶部：避开 Android/iOS 状态栏（safe-area-inset-top 桌面端恒为 0） */
+  height: calc(48px + env(safe-area-inset-top, 0px));
+  padding-top: env(safe-area-inset-top, 0px);
   background: var(--spark-bg-card);
   border-bottom: 1px solid var(--spark-border-light);
 }

@@ -28,19 +28,33 @@
       </el-popover>
     </div>
 
-    <el-input
-      ref="inputRef"
-      :model-value="modelValue"
-      type="textarea"
-      :autosize="{ minRows: 3, maxRows: 8 }"
-      resize="none"
-      :placeholder="disabled ? disabledHint : '输入消息，Enter 发送，Shift+Enter 换行'"
-      :disabled="disabled"
-      @update:model-value="(v: string) => $emit('update:modelValue', v)"
-      @keydown.enter.exact.prevent="onSend"
-    />
+    <!-- 输入行：移动端=输入框+发送按钮横排（微信式）；桌面端=输入框（发送按钮在底部独立行） -->
+    <div class="msg-input-row">
+      <el-input
+        ref="inputRef"
+        :model-value="modelValue"
+        :type="isMobileLayout ? 'text' : 'textarea'"
+        :autosize="isMobileLayout ? undefined : { minRows: 3, maxRows: 8 }"
+        resize="none"
+        :placeholder="disabled ? disabledHint : isMobileLayout ? '输入消息' : '输入消息，Enter 发送，Shift+Enter 换行'"
+        :disabled="disabled"
+        @update:model-value="(v: string) => $emit('update:modelValue', v)"
+        @keydown.enter.exact.prevent="onSend"
+      />
 
-    <div class="msg-send-row">
+      <!-- 移动端：输入框右侧发送按钮（微信式）；桌面端保留底部发送行 -->
+      <el-button
+        v-if="isMobileLayout"
+        type="primary"
+        class="msg-mobile-send"
+        :disabled="disabled || !modelValue.trim()"
+        @click="onSend"
+      >
+        发送
+      </el-button>
+    </div>
+
+    <div v-if="!isMobileLayout" class="msg-send-row">
       <el-button type="primary" :disabled="disabled || !modelValue.trim()" @click="onSend">发送</el-button>
     </div>
   </footer>
@@ -50,6 +64,7 @@
 import { defineComponent, ref, type PropType } from 'vue';
 import { ElMessage } from 'element-plus';
 import { ChatDotRound, Close, Folder, Microphone, Picture } from '@element-plus/icons-vue';
+import { isMobileLayout } from '../../stores/ui-layout';
 import type { QuoteRef } from '../../mock/messages';
 
 const EMOJIS = [
@@ -86,7 +101,7 @@ export default defineComponent({
       ElMessage.info('该功能将在后续版本提供');
     }
 
-    return { inputRef, onSend, insertEmoji, placeholder, EMOJIS, Microphone, Picture, Folder, ChatDotRound, Close };
+    return { inputRef, onSend, insertEmoji, placeholder, EMOJIS, isMobileLayout, Microphone, Picture, Folder, ChatDotRound, Close };
   }
 });
 </script>

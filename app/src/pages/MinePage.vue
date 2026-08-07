@@ -54,22 +54,23 @@
           </nav>
         </div>
 
-        <!-- 栈2：模块页（返回栏 + 当前菜单对应模块，各模块自带列表栏与详情栏，纵排见 mine.css 波次 2 媒体查询） -->
+        <!-- 栈2：模块页（返回栏 + 当前菜单对应模块；移动端详情走抽屉，微信式点字段看详情） -->
         <template v-else-if="mobileFrame.page === 'module'">
           <MobileBackBar :title="activeMenuLabel" @back="onMobileBack" />
           <ProfileModule
             v-if="activeMenu === 'profile'"
+            detail-mode="drawer"
             :root-id="rootStatus.rootId ?? ''"
             :nickname="rootStatus.nickname ?? ''"
             :avatar="rootStatus.avatar ?? ''"
             @profile-updated="onProfileUpdated"
           />
-          <MyCardModule v-else-if="activeMenu === 'card'" />
-          <BackupModule v-else-if="activeMenu === 'backup'" :root-id="rootStatus.rootId" />
+          <MyCardModule v-else-if="activeMenu === 'card'" detail-mode="drawer" />
+          <BackupModule v-else-if="activeMenu === 'backup'" detail-mode="drawer" :root-id="rootStatus.rootId" />
           <!-- 组织身份（仅组织空间出现在菜单中） -->
-          <OrgIdentityModule v-else-if="activeMenu === 'org'" />
+          <OrgIdentityModule v-else-if="activeMenu === 'org'" detail-mode="drawer" />
           <!-- 朋友权限（个人：仅聊天+黑名单）/ 成员权限（组织：仅黑名单） -->
-          <PermissionModule v-else-if="activeMenu === 'permission'" :mode="currentSpace.type === 'org' ? 'org' : 'personal'" />
+          <PermissionModule v-else-if="activeMenu === 'permission'" detail-mode="drawer" :mode="currentSpace.type === 'org' ? 'org' : 'personal'" />
         </template>
       </MobilePageTransition>
 

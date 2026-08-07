@@ -1,11 +1,25 @@
-<!-- mine 模块详情容器：column 模式渲染原第四栏 .mine-detail div；drawer 模式渲染 el-drawer。
-     各模块的详情/编辑内容作为 slot 传入，同一份内容两种容器复用（设置页「个人设置」用抽屉，
-     MinePage 个人设置页保持第四栏）。
-     抽屉样式全 app 统一（app-shell.css .app-drawer）：无默认头部小标题、内容卡片去边框，
-     卡片标题即抽屉标题（顶在左上角），关闭按钮为右上角自定义 X -->
+<!-- mine 模块详情容器：column 模式渲染原第四栏 .mine-detail div；drawer 模式渲染详情容器。
+     各模块的详情/编辑内容作为 slot 传入，同一份内容多种容器复用。
+     移动端（≤768px，Android 前端改造）：drawer 模式渲染为「顶部返回栏 + 内容」的整页，
+     自右滑入 / 向右滑出（与导航栈 push/pop 呼应）；注册到覆盖层栈，系统回退键优先关闭本层。
+     桌面端保持 el-drawer 侧拉抽屉。 -->
 <template>
+  <!-- 移动端：整页详情（返回栏 + 内容），微信式；仅选中字段（open）时显示 -->
+  <Transition name="overlay-slide">
+    <div
+      v-if="drawer && isMobileLayout && open"
+      class="mine-detail-page"
+    >
+      <MobileBackBar :title="title" @back="emit('close')" />
+      <div class="mine-detail mine-detail-page-body">
+        <slot />
+      </div>
+    </div>
+  </Transition>
+
+  <!-- 桌面端：侧拉抽屉（右上角 X 关闭） -->
   <el-drawer
-    v-if="drawer"
+    v-if="drawer && !isMobileLayout"
     :model-value="open"
     :with-header="false"
     size="420px"
@@ -20,34 +34,104 @@
       <slot />
     </div>
   </el-drawer>
-  <div v-else class="mine-detail">
+
+  <!-- column 模式：第四栏 -->
+  <div v-if="!drawer" class="mine-detail">
     <slot />
   </div>
 </template>
 
 <script lang="ts">
-import { defineComponent } from 'vue';
+import { defineComponent, onBeforeUnmount, onMounted, watch } from 'vue';
 import { Close } from '@element-plus/icons-vue';
+import MobileBackBar from '../MobileBackBar.vue';
+import { isMobileLayout } from '../../stores/ui-layout';
+import { isOverlayCloseTarget, popOverlay, pushOverlay } from '../../stores/overlay-stack';
 
 export default defineComponent({
   name: 'MineDetailContainer',
-  components: { Close },
+  components: { Close, MobileBackBar },
   props: {
-    /** true=抽屉模式（设置页）；false=第四栏模式（个人设置页） */
+    /** true=抽屉模式（移动端=整页，桌面端=抽屉）；false=第四栏模式 */
     drawer: { type: Boolean, default: false },
-    /** 抽屉是否打开（通常绑定「是否有选中项」） */
+    /** 抽屉/详情是否打开（通常绑定「是否有选中项」） */
     open: { type: Boolean, default: false },
-    /** 保留 prop（各模块仍传入）：抽屉已不再显示头部标题，卡片标题即标题 */
+    /** 详情标题（移动端整页的返回栏标题） */
     title: { type: String, default: '' }
   },
   emits: ['close'],
-  setup(_, { emit }) {
+  setup(props, { emit }) {
     const onUpdate = (value: boolean) => {
       if (!value) {
         emit('close');
       }
     };
-    return { onUpdate, emit };
+
+    // 覆盖层栈登记（token 制）：移动端整页详情打开时入栈持有 token，关闭/卸载时凭 token 出栈；
+    // 系统回退键经 overlay-stack 仅关闭栈顶覆盖层（叠层时逐层回退，不会"跳两层"）
+    const isMobileOverlay = () => props.drawer && isMobileLayout.value;
+    let overlayToken: symbol | null = null;
+    const releaseOverlay = () => {
+      popOverlay(overlayToken);
+      overlayToken = null;
+    };
+    watch(
+      () => props.open && isMobileOverlay(),
+      (opened) => {
+        if (opened && !overlayToken) {
+          overlayToken = pushOverlay();
+        } else if (!opened) {
+          releaseOverlay();
+        }
+      },
+      { immediate: true }
+    );
+    onBeforeUnmount(releaseOverlay);
+
+    // 系统回退键请求关闭覆盖层：仅当本层是栈顶时响应
+    const onCloseOverlay = (event: Event) => {
+      if (isOverlayCloseTarget(event, overlayToken) && props.open && isMobileOverlay()) {
+        emit('close');
+      }
+    };
+    onMounted(() => window.addEventListener('spark:close-overlay', onCloseOverlay));
+    onBeforeUnmount(() => window.removeEventListener('spark:close-overlay', onCloseOverlay));
+
+    return { onUpdate, emit, isMobileLayout };
   }
 });
 </script>
+
+<style scoped>
+/* 移动端整页详情：返回栏 + 内容占满；进出均有水平滑动动画（微信式 push/pop 呼应） */
+.mine-detail-page {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  background: var(--spark-bg-card);
+  box-shadow: -12px 0 24px rgba(0, 0, 0, 0.12);
+}
+
+.mine-detail-page-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* 进出动画（与导航栈同款减速曲线与方向：进=右滑入，出=向右滑出） */
+.overlay-slide-enter-active,
+.overlay-slide-leave-active {
+  transition: transform 260ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  will-change: transform;
+}
+
+.overlay-slide-enter-from {
+  transform: translateX(100%);
+}
+
+.overlay-slide-leave-to {
+  transform: translateX(100%);
+}
+</style>

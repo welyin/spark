@@ -3,8 +3,14 @@
      布局与 SystemSettingsPanel 同构：第三栏子菜单 + 第四栏内容。
      子项：组织信息（字段逐行展示）/ 网关设置 / 找回组织 / 数据治理 / 公开设置 / 发现公开组织 -->
 <template>
-  <!-- 第三栏：子菜单 -->
-  <div class="mine-list">
+  <div class="org-settings-panel">
+  <!-- 移动端内容整页返回栏（Android 前端改造）：选中 section 时显示，返回回子菜单 -->
+  <div v-if="isMobileLayout && activeSection !== null" class="settings-mobile-bar">
+    <MobileBackBar :title="activeSectionLabel" @back="activeSection = null" />
+  </div>
+
+  <!-- 第三栏：子菜单（移动端选中 section 时隐藏，内容整页覆盖） -->
+  <div class="mine-list panel-submenu" v-if="activeSection === null || !isMobileLayout">
     <h2 class="mine-list-title">组织设置</h2>
     <div class="mine-list-items">
       <button
@@ -21,8 +27,8 @@
     </div>
   </div>
 
-  <!-- 第四栏：当前子项内容 -->
-  <div class="mine-detail">
+  <!-- 第四栏：当前子项内容（移动端未选 section 时不渲染——否则空白覆盖层会挡住子菜单） -->
+  <div class="mine-detail" v-if="activeSection !== null || !isMobileLayout">
     <el-empty v-if="loading" description="正在加载组织信息..." />
     <el-empty v-else-if="!organization" description="当前空间组织信息加载失败，请切换空间后重试。" />
 
@@ -152,12 +158,16 @@
       <DiscoverOrgsPanel v-else />
     </template>
   </div>
+  </div>
 </template>
 
 <script lang="ts">
-import { computed, defineComponent, onMounted, ref, watch, type Component } from 'vue';
+import { computed, defineComponent, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Brush, Connection, OfficeBuilding, Refresh, Search, Share } from '@element-plus/icons-vue';
+import { isMobileLayout } from '../../stores/ui-layout';
+import { isOverlayCloseTarget, popOverlay, pushOverlay } from '../../stores/overlay-stack';
+import MobileBackBar from '../MobileBackBar.vue';
 import { currentSpaceOrgId } from '../../stores/current-space';
 import { findOrg, refreshOrganizations } from '../../stores/org-membership';
 import { getOrgAvatar, setOrgAvatar } from '../../stores/org-avatars';
@@ -184,8 +194,38 @@ export default defineComponent({
     OrgAvatar,
     AvatarPicker
   },
-  setup() {
-    const activeSection = ref<SectionKey>('info');
+  emits: ['section-toggle'],
+  setup(_, { emit }) {
+    // 移动端（Android 前端改造）：子菜单整页 <-> 内容整页覆盖层；桌面端保持分栏
+    const activeSection = ref<SectionKey | null>(isMobileLayout.value ? null : 'info');
+    // 覆盖层登记（token 制）：移动端选中 section 时入栈，返回子菜单/卸载时出栈；
+    // 系统回退键仅关栈顶（叠层时逐层回退，不会"跳两层"）
+    let overlayToken: symbol | null = null;
+    const releaseOverlay = () => {
+      popOverlay(overlayToken);
+      overlayToken = null;
+    };
+    watch(
+      () => activeSection.value !== null && isMobileLayout.value,
+      (opened) => {
+        // 告知宿主页隐藏页级返回栏（面板自带返回栏接管），避免双栏叠层、内容偏下
+        emit('section-toggle', opened);
+        if (opened && !overlayToken) {
+          overlayToken = pushOverlay();
+        } else if (!opened) {
+          releaseOverlay();
+        }
+      },
+      { immediate: true }
+    );
+    onBeforeUnmount(releaseOverlay);
+    const onCloseOverlay = (event: Event) => {
+      if (isOverlayCloseTarget(event, overlayToken) && activeSection.value !== null && isMobileLayout.value) {
+        activeSection.value = null;
+      }
+    };
+    onMounted(() => window.addEventListener('spark:close-overlay', onCloseOverlay));
+    onBeforeUnmount(() => window.removeEventListener('spark:close-overlay', onCloseOverlay));
     const organization = ref<OrganizationView | null>(null);
     const overview = ref<OrgSyncOverview | null>(null);
     const loading = ref(false);
@@ -215,6 +255,11 @@ export default defineComponent({
       { key: 'public', label: '公开设置', icon: Share },
       { key: 'discover', label: '发现公开组织', icon: Search }
     ];
+
+    /** 当前选中子菜单的标题（移动端整页返回栏标题） */
+    const activeSectionLabel = computed(
+      () => sections.find((sec) => sec.key === activeSection.value)?.label ?? ''
+    );
 
     const currentOverview = computed(() => overview.value);
 
@@ -444,6 +489,8 @@ export default defineComponent({
 
     return {
       activeSection,
+      activeSectionLabel,
+      isMobileLayout,
       sections,
       organization,
       currentOverview,
@@ -558,5 +605,54 @@ export default defineComponent({
   margin-top: 16px;
   display: flex;
   gap: 8px;
+}
+
+/* ---- 移动端（≤768px，Android 前端改造）：子菜单整页 + 内容整页覆盖 ---- */
+@media (max-width: 768px) {
+  .org-settings-panel {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+  }
+
+  /* 子菜单（直接子级 mine-list）整页占满 */
+  .org-settings-panel > .mine-list.panel-submenu {
+    flex: 1;
+    height: 100%;
+  }
+
+  /* 内容区（mine-detail）整页覆盖；top 让出返回栏高度（48px + 状态栏安全区），
+     避免首行内容被返回栏遮挡 */
+  .org-settings-panel > .mine-detail {
+    position: absolute;
+    top: calc(48px + env(safe-area-inset-top, 0px));
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 2;
+    background: var(--spark-bg-card);
+    overflow-y: auto;
+    animation: settings-overlay-in 260ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  }
+
+  /* 返回栏：浮在面板顶部（与内容同向滑入，视觉等同整页推入） */
+  .settings-mobile-bar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 3;
+    animation: settings-overlay-in 260ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  }
+}
+
+@keyframes settings-overlay-in {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
 }
 </style>

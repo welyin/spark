@@ -7,6 +7,13 @@ import android.util.Log
 import androidx.activity.enableEdgeToEdge
 
 class MainActivity : TauriActivity() {
+  // 禁用 WryActivity 自带的返回键处理（canGoBack→goBack 的 WebView 历史回退）：
+  // 返回键统一交由 AppPlugin 回调 → JS onBackButtonPress 事件 → 前端导航栈处理
+  // （本应用为 SPA 无 WebView 历史，且双回调并存时后注册的 WryActivity 回调会优先
+  // 消费返回键，绕过前端导航栈）。JS 未加载/未注册监听时 AppPlugin 仍有原生兜底
+  // （canGoBack→goBack，否则 finish），行为不受影响。
+  override val handleBackNavigation: Boolean = false
+
   private var multicastLock: WifiManager.MulticastLock? = null
 
   override fun onCreate(savedInstanceState: Bundle?) {

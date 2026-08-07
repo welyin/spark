@@ -56,7 +56,7 @@
 </template>
 
 <script lang="ts">
-import { defineComponent, nextTick, onMounted, ref } from 'vue';
+import { defineComponent, nextTick, onMounted, onUnmounted, ref } from 'vue';
 import App from './App.vue';
 import sparkLogo from './assets/spark-logo.png';
 import type { RootStatusDto as RootStatus } from './api';
@@ -148,12 +148,40 @@ export default defineComponent({
       }
     };
 
+    // 软键盘适配（Android 前端改造）：键盘弹出时 WebView 可视区收缩（visualViewport 高度变小），
+    // 键盘收起时恢复。100dvh 布局已跟随高度自动收缩；此兜底处理滚动位置残留与 dvh 不支持情况：
+    // 键盘收起（viewport 高度回到接近窗口高度）时，强制回滚到顶部，避免界面停留在键盘弹出时的位置。
+    // 注意：移动端登录页禁止页面级滚动（.root-gate overflow:hidden），真正的滚动容器是
+    // .gate-wrap（overflow-y:auto）——复位对象必须是它，window/documentElement 滚动不生效。
+    let lastViewportHeight = 0;
+    const onViewportResize = () => {
+      if (!window.visualViewport) {
+        return;
+      }
+      const vh = window.visualViewport.height;
+      // 从"键盘弹出（矮）"回到"正常（高）"：界面复位回顶部
+      if (lastViewportHeight > 0 && vh > lastViewportHeight + 40) {
+        window.scrollTo(0, 0);
+        document.documentElement.scrollTop = 0;
+        document.querySelector('.gate-wrap')?.scrollTo({ top: 0 });
+      }
+      lastViewportHeight = vh;
+    };
+
     onMounted(async () => {
       if (isPluginWindow.value) {
         showApp.value = true;
         return;
       }
       await refreshStatus();
+      // 监听可视区高度变化（键盘弹出/收起）；旧 WebView 无 visualViewport 时靠 resize 兜底
+      window.visualViewport?.addEventListener('resize', onViewportResize);
+      window.addEventListener('resize', onViewportResize);
+    });
+
+    onUnmounted(() => {
+      window.visualViewport?.removeEventListener('resize', onViewportResize);
+      window.removeEventListener('resize', onViewportResize);
     });
 
     return {

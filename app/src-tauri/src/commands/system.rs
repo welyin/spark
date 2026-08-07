@@ -42,6 +42,17 @@ pub fn system_get_proxy(app: tauri::AppHandle) -> Result<Option<String>, String>
     Ok(crate::proxy::load_proxy(&data_dir))
 }
 
+/// 退出应用（Android 前端改造：系统返回键在一级页时由前端调用）。
+///
+/// 背景：Android 原生层（AppPlugin）一旦存在 JS 返回键监听，按返回键只发事件、
+/// 不再执行默认退出；`plugin:app|exit` 又不在 core:app 的 ACL 命令清单内（前端
+/// 无法调用）。因此退出路径必须走应用自定义命令（自定义命令不受插件 ACL 限制）。
+/// 桌面端不会触发该路径（无系统返回键事件），命令保留同理静默可用。
+#[tauri::command]
+pub fn system_exit_app(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
 /// 设置代理：空串=关闭；否则须为 host:port（校验见 proxy::validate_proxy）。
 /// 保存后立即更新环境变量——后续新建的 reqwest 客户端生效；市场 OnceLock
 /// 客户端与 updater 客户端等已建立连接不追溯，需重启应用（前端已提示）。

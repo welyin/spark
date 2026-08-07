@@ -1,5 +1,17 @@
 <template>
-  <el-popover placement="bottom-end" :width="330" trigger="hover">
+  <!-- 移动端（variant="dot"）：仅渲染状态点，点击直达系统设置→网络状态（Android 顶部导航改造） -->
+  <button
+    v-if="variant === 'dot'"
+    type="button"
+    class="net-status-dot-btn"
+    :class="`is-${statusKind}`"
+    :title="statusLabel"
+    @click="emit('open-network-status')"
+  >
+    <span class="net-status-dot" :class="`is-${statusKind}`" />
+  </button>
+
+  <el-popover v-else placement="bottom-end" :width="330" trigger="hover">
     <template #reference>
       <button class="net-status-tag" :class="`is-${statusKind}`" :title="statusLabel">
         <span class="net-status-dot" :class="`is-${statusKind}`" />
@@ -75,7 +87,12 @@ const POLL_INTERVAL_MS = 30_000;
 
 export default defineComponent({
   name: 'NetworkStatusBar',
-  setup() {
+  props: {
+    /** 展示形态：'full'=桌面端状态胶囊（含弹层详情）；'dot'=移动端仅状态点（点击跳系统设置网络状态） */
+    variant: { type: String, default: 'full' }
+  },
+  emits: ['open-network-status'],
+  setup(props, { emit }) {
     const overview = ref<OrgSyncOverviewDto | null>(null);
     // 全局 P2P 状态共享自 network-status store（统一轮询，避免与消息页等各自调接口）
     const { p2pInfoSnapshot: p2pInfo, connectedPeerCount } = useNetworkStatus();
@@ -248,7 +265,8 @@ export default defineComponent({
       statusDescription,
       lastSyncedText,
       dhtModeText,
-      recoveryText
+      recoveryText,
+      emit
     };
   }
 });
@@ -300,6 +318,25 @@ export default defineComponent({
   height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
+}
+
+/* 移动端纯点按钮（variant="dot"）：无胶囊背景，仅点 + 最小热区，颜色跟随状态 */
+.net-status-dot-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.net-status-dot-btn:hover {
+  opacity: 0.85;
 }
 
 /* 常驻数量（已连接节点数/已同步成员数）：比状态文字弱一级 */

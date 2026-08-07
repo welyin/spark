@@ -178,7 +178,8 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 12px;
+  /* 移动端聊天页为整页（栈2）：避开系统状态栏（桌面端 env() 恒为 0） */
+  padding: calc(8px + env(safe-area-inset-top, 0px)) 12px 8px;
   background: var(--spark-bg-card);
   border-bottom: 2px solid var(--spark-border);
 }
@@ -692,5 +693,49 @@
     width: 100%;
     flex: 1;
     border-right: 0;
+  }
+
+  /* 移动端聊天页为整页：输入区底部避开手势导航条（桌面端 env() 恒为 0） */
+  .messages-page .msg-input-area {
+    padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+  }
+
+  /* ---- 移动端消息输入栏（微信式，Android 前端改造）----
+     输入行=输入框 + 右侧发送按钮横排；工具按钮行紧凑布局 */
+  .messages-page .msg-input-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .messages-page .msg-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    padding: 0 2px 6px;
+  }
+
+  .messages-page .msg-input-area .el-textarea__inner,
+  .messages-page .msg-input-area .el-input__wrapper {
+    border-radius: var(--spark-radius-l);
+  }
+
+  /* 输入行：输入框 + 发送按钮横排（微信底部输入条） */
+  .messages-page .msg-mobile-send {
+    margin-left: 0;
+    height: 36px;
+    flex-shrink: 0;
+    border-radius: var(--spark-radius-m);
+  }
+
+  /* 移动端单行输入：与发送按钮同高对齐 */
+  .messages-page .msg-input-area .el-input {
+    flex: 1;
+    min-width: 0;
+  }
+
+  /* 单行输入高度收紧（桌面 textarea 3 行高，移动端 1 行） */
+  .messages-page .msg-input-area .el-input__wrapper {
+    min-height: 36px;
   }
 }

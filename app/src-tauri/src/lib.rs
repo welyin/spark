@@ -285,6 +285,8 @@ pub fn run() {
             // HTTP 代理设置（updater/市场链路 GitHub 直连失败的规避，见 proxy.rs）
             commands::system::system_get_proxy,
             commands::system::system_set_proxy,
+            // 退出应用（Android 系统返回键在一级页时由前端调用；plugin:app|exit 不在 ACL 内不可用）
+            commands::system::system_exit_app,
             // 主程序自动更新（GitHub Releases 清单；检查/下载/安装重启）。仅桌面启用。
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             commands::updater::updater_status,

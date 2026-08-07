@@ -2,9 +2,13 @@
      菜单：节点面板（本地节点数据与组织同步）/ 更新调试（GitHub Releases 更新链路） -->
 <template>
   <section class="mine-page test-page">
+    <!-- 移动端（Android 前端改造）：测试页为非主 tab（无顶部导航/底部导航），
+         顶部统一「‹ 返回 | 测试」标题栏，返回键回来源页（设置）；桌面端不渲染 -->
+    <MobileBackBar v-if="isMobileLayout" title="测试" @back="$emit('back-root')" />
+
     <!-- 第二栏：调试菜单 -->
     <div class="mine-menu">
-      <header class="mine-menu-header">
+      <header class="mine-menu-header" v-if="!isMobileLayout">
         <div class="mine-menu-user">
           <b>测试</b>
           <span>开发调试面板</span>
@@ -113,6 +117,8 @@
 import { defineComponent, onMounted, ref, type Component } from 'vue';
 import { ElMessageBox } from 'element-plus';
 import { Connection, Download } from '@element-plus/icons-vue';
+import MobileBackBar from '../components/MobileBackBar.vue';
+import { isMobileLayout } from '../stores/ui-layout';
 import type { UpdaterStatusDto } from '../api';
 
 type SavedNodeRecord = {
@@ -139,6 +145,8 @@ const MENU_ITEMS: Array<{ key: MenuKey; label: string; icon: Component }> = [
 
 export default defineComponent({
   name: 'TestPage',
+  components: { MobileBackBar },
+  emits: ['back-root'],
   setup() {
     const activeMenu = ref<MenuKey>('nodes');
     const nodeRecords = ref<SavedNodeRecord[]>([]);
@@ -311,6 +319,7 @@ export default defineComponent({
 
     return {
       activeMenu,
+      isMobileLayout,
       menuItems: MENU_ITEMS,
       nodeRecords,
       loadingNodes,

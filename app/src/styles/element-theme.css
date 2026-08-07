@@ -20,3 +20,16 @@
 .el-message-box {
   --el-messagebox-border-radius: var(--spark-radius-xl);
 }
+
+/* 移动端对话框/消息框：不超出屏幕边界（Android 前端改造；桌面端固定宽度不受影响） */
+@media (max-width: 768px) {
+  .el-dialog {
+    width: calc(100vw - 32px) !important;
+    max-width: calc(100vw - 32px) !important;
+    margin: 10vh auto !important;
+  }
+
+  .el-message-box {
+    max-width: calc(100vw - 48px);
+  }
+}

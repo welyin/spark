@@ -370,9 +370,40 @@
    口径：断点以下由 App.vue 改渲染 MobileTabBar 底部导航（rail 不渲染），
    这里只做壳层紧凑化；断点以上（≥769px）桌面 rail + 顶栏布局像素级不变。 */
 @media (max-width: 768px) {
-  /* 顶栏紧凑：收窄左右 padding（上 padding 保留 safe-area-inset-top） */
+  /* 移动端 shell 用动态视口高度（100dvh）：Android 软键盘弹出时容器跟随可视区收缩，
+     输入框保持可见；键盘收起时自然恢复，避免 100vh 固定高度下的滚动残留（Android 前端改造） */
+  .shell {
+    height: 100dvh;
+  }
+
+  /* 顶栏紧凑：收窄左右 padding（上 padding 保留 safe-area-inset-top）；
+     高度随内容过渡（200ms），隐藏时整体收起，二级页不残留空条（Android 前端改造） */
   .topbar {
     padding: env(safe-area-inset-top, 0px) 8px 0;
+    overflow: hidden;
+    transition: height 200ms ease, padding 200ms ease;
+  }
+
+  /* 移动端顶部导航隐藏（非四个主 tab 栈底）：顶栏高度收起为 0，页面内容上移占满 */
+  .topbar.topbar-collapsed {
+    height: 0;
+    padding: 0;
+    border-bottom-width: 0;
+  }
+
+  /* ---- 移动端顶部导航（Android 前端改造）：切二级页时整体滑走 ----
+     桌面端 TopNavbar 不渲染；MobileTopBar 仅在四个主 tab 栈深=1 时显示，
+     显示/隐藏用上下滑动过渡（200ms，与 tab 淡入淡出同档） */
+  .mobile-topbar-slide-enter-active,
+  .mobile-topbar-slide-leave-active {
+    transition: transform 200ms ease, opacity 200ms ease;
+    will-change: transform, opacity;
+  }
+
+  .mobile-topbar-slide-enter-from,
+  .mobile-topbar-slide-leave-to {
+    transform: translateY(-100%);
+    opacity: 0;
   }
 
   /* ---- 移动端适配（波次 2）：整页 + 导航栈的共享层样式 ----
@@ -384,6 +415,8 @@
     display: flex;
     flex-direction: column;
     height: 100%;
+    /* 相对定位：面板内容整页覆盖层（absolute）以此为基准（Android 前端改造） */
+    position: relative;
     background: var(--spark-bg-card);
   }
 
@@ -397,12 +430,15 @@
      栈内 push/pop 用 MobilePageTransition 的 .mobile-stack-stage 层叠滑动；
      tab 切换用 App.vue 主区域的短淡入淡出。桌面端（≥769px）不渲染对应结构，不受本块影响 */
 
-  /* 页面 section 作为转场期间绝对定位旧层的包含块 */
+  /* 页面 section 作为转场期间绝对定位层的包含块：
+     固定高度（100%）确保转场两层 absolute inset:0 的基准一致，
+     否则父容器高度随内容变化导致切换时垂直跳动（Android 前端改造） */
   .messages-page,
   .contacts-page,
   .apps-page,
   .mine-page {
     position: relative;
+    height: 100%;
   }
 
   /* 栈帧层：占满页面一层；自身可滚动兜底（应用列表等不定高内容），整页层（自带滚动）不产生滚动条 */
@@ -421,38 +457,43 @@
     min-height: 0;
   }
 
-  /* 微信式减速曲线：220-280ms 取 260ms */
+  /* 微信式减速曲线：220-280ms 取 260ms；
+     push-leave（旧层）不设 transition——push 时旧页面完全静止，只有新层从右滑入（Android 前端改造） */
   .mobile-nav-push-enter-active,
-  .mobile-nav-push-leave-active,
   .mobile-nav-pop-enter-active,
   .mobile-nav-pop-leave-active {
     transition: transform 260ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
     will-change: transform;
   }
 
-  /* 转场期间旧层脱离文档流叠放（相对页面 section 铺满） */
+  /* 转场期间新旧两层都脱离文档流叠放（相对固定高度的页面 section）：
+     两层 inset:0 基准一致，切换时纯水平滑动，无垂直跳动（Android 前端改造） */
+  .mobile-nav-push-enter-active,
   .mobile-nav-push-leave-active,
+  .mobile-nav-pop-enter-active,
   .mobile-nav-pop-leave-active {
     position: absolute;
     inset: 0;
+    background: var(--spark-bg-card);
   }
 
-  /* push：新层自右滑入（带左侧投影分界），旧层静态轻微左移 */
+  /* push：新层自右滑入（带左侧投影分界），旧层保持原位完全静止 */
   .mobile-nav-push-enter-from {
     transform: translateX(100%);
   }
 
   .mobile-nav-push-enter-active {
-    position: relative;
     z-index: 2;
     box-shadow: -12px 0 24px rgba(0, 0, 0, 0.12);
   }
 
+  /* push 旧层：无任何动画（无 transition、无位移） */
+  .mobile-nav-push-leave-active,
   .mobile-nav-push-leave-to {
-    transform: translateX(-30%);
+    transform: none;
   }
 
-  /* pop/reset：当前层向右滑出（带投影），显露的下一层自左侧轻微归位 */
+  /* pop/reset：当前层向右滑出（带投影），显露的下一层保持原位完全静止（与 push 旧层静止呼应） */
   .mobile-nav-pop-leave-active {
     z-index: 2;
     box-shadow: -12px 0 24px rgba(0, 0, 0, 0.12);
@@ -463,7 +504,7 @@
   }
 
   .mobile-nav-pop-enter-from {
-    transform: translateX(-30%);
+    transform: none;
   }
 
   /* tab 切换：主区域短淡入淡出（底部 tab bar 自身不动） */
@@ -489,5 +530,68 @@
   .mobile-tab-fade-leave-active {
     position: absolute;
     inset: 0;
+  }
+
+  /* ---- 移动端底部 tab 导航滑出/滑入（Android 前端改造）----
+     进入二级页时底栏向下推走，返回一级页时自底部滑回；
+     leave 期间脱离文档流（absolute 贴底），高度立即释放给页面，避免布局跳动 */
+  .mobile-tabbar-slide-enter-active,
+  .mobile-tabbar-slide-leave-active {
+    transition: transform 200ms ease;
+    will-change: transform;
+  }
+
+  .mobile-tabbar-slide-enter-from,
+  .mobile-tabbar-slide-leave-to {
+    transform: translateY(100%);
+  }
+
+  .mobile-tabbar-slide-leave-active {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 5;
+  }
+
+  /* ---- 移动端全屏抽屉安全区（Android 前端改造）----
+     ContactsPage 标签成员详情等 size="100%" 抽屉：内容容器避开系统状态栏，
+     关闭按钮同步下移；桌面端（440/520px 侧拉抽屉）不受影响 */
+  /* 移动端抽屉占满屏宽（桌面固定 420/440px 在窄屏不适用，Android 前端改造） */
+  .app-drawer.el-drawer {
+    width: 100% !important;
+  }
+
+  .app-drawer .el-drawer__body {
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  .app-drawer .app-drawer-body {
+    padding-top: calc(20px + env(safe-area-inset-top, 0px));
+  }
+
+  /* mine 模块抽屉内容铺满（app-drawer-fill）：顶部让出状态栏 */
+  .app-drawer .app-drawer-fill {
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+
+  .app-drawer .app-drawer-close {
+    top: calc(10px + env(safe-area-inset-top, 0px));
+  }
+
+  /* 插件 tab 整页（移动端顶部导航不渲染）：卡片头部避开系统状态栏 */
+  .plugin-tab-card .el-card__header {
+    padding-top: calc(var(--el-card-padding, 18px) + env(safe-area-inset-top, 0px));
+  }
+}
+
+/* 设置面板内容整页滑入（SystemSettingsPanel/OrgSettingsPanel 移动端覆盖层共用，Android 前端改造） */
+@keyframes settings-overlay-in {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
   }
 }

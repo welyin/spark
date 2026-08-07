@@ -9,22 +9,9 @@
     <!-- 移动端（波次 2/3）：整页 + 导航栈——栈1 设置菜单，栈2 分组页（个人设置/组织设置/系统设置），
          栈3 个人设置模块页；栈帧切换经 MobilePageTransition 滑动转场（微信式） -->
     <MobilePageTransition v-if="isMobileLayout" :tab="MOBILE_TAB">
-      <!-- 栈1：设置菜单整页 -->
+      <!-- 栈1：设置菜单整页（Android 前端改造：顶部统一标题栏+返回按钮样式，无头像昵称栏） -->
       <div v-if="mobileFrame.page === 'root'" class="mine-menu">
-        <header class="mine-menu-header">
-          <UserAvatar
-            v-if="isPersonal"
-            :root-id="headerAvatar.seed"
-            :nickname="headerAvatar.name"
-            :avatar="headerAvatar.image"
-            :size="44"
-          />
-          <OrgAvatar v-else :org-id="currentSpaceOrgId" :name="currentOrgName" :size="44" />
-          <div class="mine-menu-user">
-            <b>设置</b>
-            <span>{{ isPersonal ? `${headerAvatar.name}的个人空间` : currentOrgName }}</span>
-          </div>
-        </header>
+        <MobileBackBar title="设置" @back="$emit('back-root')" />
         <nav class="mine-menu-list">
           <button
             v-for="item in menuItems"
@@ -38,11 +25,27 @@
             <span class="mine-menu-label">{{ item.label }}</span>
           </button>
         </nav>
+
+        <!-- 账号操作（Android 前端改造）：原顶栏「⋯」菜单下放，退出登录位于设置最底层 -->
+        <div class="mine-menu-account">
+          <button type="button" class="mine-menu-item" @click="goTest">
+            <el-icon class="mine-menu-icon" :size="17"><Cpu /></el-icon>
+            <span class="mine-menu-label">测试</span>
+          </button>
+          <button type="button" class="mine-menu-item" @click="switchAccount">
+            <el-icon class="mine-menu-icon" :size="17"><SwitchButton /></el-icon>
+            <span class="mine-menu-label">切换账号</span>
+          </button>
+          <button type="button" class="mine-menu-item mine-menu-danger" @click="logout">
+            <el-icon class="mine-menu-icon" :size="17"><CircleCloseFilled /></el-icon>
+            <span class="mine-menu-label">退出登录</span>
+          </button>
+        </div>
       </div>
 
-      <!-- 栈2/栈3：顶部返回栏 + 分组页/模块页 -->
+      <!-- 栈2/栈3：顶部返回栏 + 分组页/模块页（面板自带返回栏接管时隐藏页级栏，防双栏叠层） -->
       <template v-else>
-        <MobileBackBar v-if="mobileCanBack" :title="mobileTitle" @back="onMobileBack" />
+        <MobileBackBar v-if="mobileCanBack && !panelSectionOpen" :title="mobileTitle" @back="onMobileBack" />
 
         <!-- 个人设置（个人/组织空间均有）：栈2=模块菜单分组页；个人空间另有系统设置 -->
         <template v-if="isPersonal || activeMenu === 'mine'">
@@ -63,7 +66,11 @@
               </button>
             </div>
           </div>
-          <SystemSettingsPanel v-else-if="activeMenu === 'system' && mobileFrame.page === 'section'" />
+          <SystemSettingsPanel
+            v-else-if="activeMenu === 'system' && mobileFrame.page === 'section'"
+            :initial-section="systemInitialSection ?? undefined"
+            @section-toggle="panelSectionOpen = $event"
+          />
 
           <!-- 栈3：选中模块的列表栏（模块编辑页以抽屉打开，不占第五栏） -->
           <template v-if="activeMenu === 'mine' && mobileFrame.page === 'module'">
@@ -87,8 +94,15 @@
 
         <!-- 组织空间：组织设置（当前空间组织的信息/成员/网关/公开/发现）/ 系统设置 -->
         <template v-else>
-          <OrgSettingsPanel v-if="activeMenu === 'space' && mobileFrame.page === 'section'" />
-          <SystemSettingsPanel v-else-if="activeMenu === 'system' && mobileFrame.page === 'section'" />
+          <OrgSettingsPanel
+            v-if="activeMenu === 'space' && mobileFrame.page === 'section'"
+            @section-toggle="panelSectionOpen = $event"
+          />
+          <SystemSettingsPanel
+            v-else-if="activeMenu === 'system' && mobileFrame.page === 'section'"
+            :initial-section="systemInitialSection ?? undefined"
+            @section-toggle="panelSectionOpen = $event"
+          />
         </template>
       </template>
     </MobilePageTransition>
@@ -178,12 +192,24 @@
 
 <script lang="ts">
 import { computed, defineComponent, onMounted, ref, watch, type Component } from 'vue';
-import { Key, Lock, OfficeBuilding, Postcard, Setting, User } from '@element-plus/icons-vue';
+import { ElMessage } from 'element-plus';
+import {
+  CircleCloseFilled,
+  Cpu,
+  Key,
+  Lock,
+  OfficeBuilding,
+  Postcard,
+  Setting,
+  SwitchButton,
+  User
+} from '@element-plus/icons-vue';
 import { currentSpace, currentSpaceOrgId } from '../stores/current-space';
 import { spaceKeyOf } from '../mock/space-key';
 import { nameOf, refreshOrganizations } from '../stores/org-membership';
 import { isMobileLayout } from '../stores/ui-layout';
 import { canBack, currentPage, popPage, pushPage, resetStack } from '../stores/mobile-nav';
+import { consumePendingSystemSection, type SystemSectionKey } from '../stores/pending-system-section';
 import type { RootStatusDto as RootStatus } from '../api';
 import { personalAvatarSource } from '../stores/avatar-sources';
 import UserAvatar from '../components/UserAvatar.vue';
@@ -217,13 +243,21 @@ export default defineComponent({
     BackupModule,
     PermissionModule,
     OrgSettingsPanel,
-    SystemSettingsPanel
+    SystemSettingsPanel,
+    Cpu,
+    SwitchButton,
+    CircleCloseFilled
   },
-  emits: ['profile-updated'],
+  emits: ['profile-updated', 'open-tab', 'back-root'],
   setup(_, { emit }) {
     const activeMenu = ref<MenuKey>(currentSpace.value.type === 'org' ? 'space' : 'mine');
     const activeModule = ref<PersonalModuleKey | null>(null);
     const rootStatus = ref<RootStatus>({ initialized: false, unlocked: false, rootId: null, nickname: null, avatar: null });
+    // 系统设置深链初始 section（移动端网络状态点直达 netStatus；消费后保持，仅首次挂载生效）
+    const systemInitialSection = ref<SystemSectionKey | null>(null);
+    // 面板内容整页打开（系统/组织设置选中 section）时隐藏页级返回栏——面板自带返回栏接管，
+    // 否则双栏叠层、内容偏下（Android 前端改造）
+    const panelSectionOpen = ref(false);
 
     const isPersonal = computed(() => currentSpace.value.type === 'personal');
     // 空间 key（'personal' / 'org:<orgId>'）：组织 A→B 切换时 isPersonal 不变，watch 须以 spaceKey 为口径
@@ -319,6 +353,27 @@ export default defineComponent({
       emit('profile-updated');
     };
 
+    // ---- 账号操作（Android 前端改造）：原顶栏「⋯」菜单下放设置页最底层 ----
+
+    /** 锁身份并整窗重载回登录/选择账号页（与 App.vue lockAndReload 同语义） */
+    const lockAndReload = async (successText: string) => {
+      try {
+        await window.electronAPI.rootIdentity.lock();
+        ElMessage.success(successText);
+        window.location.reload();
+      } catch (error) {
+        ElMessage.error(`操作失败：${error}`);
+      }
+    };
+
+    const goTest = () => {
+      // 切到测试 tab（App.vue 处理 tab 渲染）；桌面端测试入口仍在 rail 底部
+      emit('open-tab', 'test');
+    };
+
+    const switchAccount = () => lockAndReload('已退出当前账号');
+    const logout = () => lockAndReload('已退出登录');
+
     onMounted(async () => {
       try {
         rootStatus.value = await window.electronAPI.rootIdentity.status();
@@ -330,6 +385,13 @@ export default defineComponent({
       } catch {
         // 名称读取失败时标题回退「组织空间」
       }
+      // 移动端网络状态点深链：消费请求 → 选中系统设置并压入分组页栈帧 → 子面板定位指定 section
+      const pendingSection = consumePendingSystemSection();
+      if (pendingSection && isMobileLayout.value) {
+        systemInitialSection.value = pendingSection;
+        activeMenu.value = 'system';
+        pushPage(MOBILE_TAB, 'section', { key: 'system' });
+      }
     });
 
     return {
@@ -339,6 +401,11 @@ export default defineComponent({
       menuItems,
       isPersonal,
       currentOrgName,
+      systemInitialSection,
+      panelSectionOpen,
+      goTest,
+      switchAccount,
+      logout,
       currentSpaceOrgId,
       headerAvatar,
       rootStatus,

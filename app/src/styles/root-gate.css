@@ -12,7 +12,6 @@
   justify-content: center;
   padding: 40px 16px;
 }
-
 .brand {
   text-align: center;
   margin-bottom: 24px;
@@ -61,4 +60,54 @@
 
 .gate-message {
   margin-top: 14px;
+}
+
+/* ---- 移动端（≤768px）：软键盘适配 ----
+   100vh 在 Android 键盘弹出时不随可视区收缩，内容被压缩超高产生页面级滚动，
+   输入法收起后滚动位置残留导致界面不恢复。改用 100dvh（动态视口高度，跟随键盘
+   自动收缩）+ 禁止页面级滚动（内容超高时面板内部滚动），键盘收起即自然复位。
+   垂直居中用 margin:auto（不用 justify-content:center）：空间充足时内容居中，
+   键盘弹出内容超高时 auto margin 收缩为 0，可正常滚动到顶部不被裁切。 */
+@media (max-width: 768px) {
+  .root-gate {
+    /* dvh 跟随软键盘收缩；不支持的旧 WebView 忽略 dvh 声明、回退到前一条 vh
+       （回退声明必须写在前——后写的同名属性会覆盖先写的） */
+    height: 100vh;
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .gate-wrap {
+    height: 100vh;
+    height: 100dvh;
+    min-height: 0;
+    /* 移除 justify-content:center：居中完全交由 margin:auto（键盘弹出时可滚动不裁切） */
+    justify-content: flex-start;
+    overflow-y: auto;
+    /* 隐藏滚动条：正常态内容不超高无滚动，键盘弹出需滚动时也不露条（Android 前端改造） */
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    padding: 32px 16px;
+  }
+
+  .gate-wrap::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+
+  /* 安全垂直居中：上方剩余空间由品牌区吸收，下方由面板吸收 */
+  .gate-wrap .brand {
+    margin: auto 0 16px;
+  }
+
+  .gate-panel {
+    margin-bottom: auto;
+  }
+
+  .gate-panel {
+    width: 100%;
+    max-width: 400px;
+  }
 }

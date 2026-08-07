@@ -1,12 +1,24 @@
 <template>
   <div class="shell">
-    <!-- 顶部导航栏（最外层，横跨全宽）：左侧=空间切换+网络状态，右侧=「⋯」更多（切换账号/退出登录） -->
-    <header class="topbar">
+    <!-- 顶部导航（最外层，横跨全宽）：
+         桌面端=TopNavbar（左侧空间切换+中间搜索+右侧网络状态+「⋯」菜单）；
+         移动端=MobileTopBar，仅四个主 tab 且栈深=1（一级列表页）时显示，
+         切到二级页/其它 tab 时整体滑走（Android 前端改造） -->
+    <header class="topbar" :class="{ 'topbar-collapsed': isMobileLayout && !mobileTopBarVisible }">
       <TopNavbar
+        v-if="!isMobileLayout"
         @switch-account="handleSwitchAccount"
         @logout="handleLogout"
         @open-tab="handleMenuSelect"
       />
+      <Transition v-else name="mobile-topbar-slide">
+        <MobileTopBar
+          v-if="mobileTopBarVisible"
+          :title="mobileTopBarTitle"
+          @open-drawer="mobileDrawerVisible = true"
+          @open-network-status="openNetworkStatus"
+        />
+      </Transition>
     </header>
 
     <div class="shell-body">
@@ -97,10 +109,12 @@
             <MessagesPage v-if="activeTab === 'messages'" />
             <ContactsPage v-else-if="activeTab === 'contacts'" />
             <AppsPage v-else-if="activeTab === 'apps'" @open-plugin-tab="openPluginTab" />
-            <TestPage v-else-if="activeTab === 'test'" />
+            <TestPage v-else-if="activeTab === 'test'" @back-root="backFromSecondaryTab('test')" />
             <SettingsPage
               v-else-if="activeTab === 'settings'"
               @profile-updated="loadCurrentUser"
+              @open-tab="handleMenuSelect"
+              @back-root="backFromSecondaryTab('settings')"
             />
             <!-- 「我的资料」隐藏入口：点击 rail 顶部头像进入，不在 rail 展示 -->
             <MinePage v-else-if="activeTab === 'mine'" @profile-updated="loadCurrentUser" />
@@ -137,10 +151,12 @@
           <MessagesPage v-if="activeTab === 'messages'" />
           <ContactsPage v-else-if="activeTab === 'contacts'" />
           <AppsPage v-else-if="activeTab === 'apps'" @open-plugin-tab="openPluginTab" />
-          <TestPage v-else-if="activeTab === 'test'" />
+          <TestPage v-else-if="activeTab === 'test'" @back-root="backFromSecondaryTab('test')" />
           <SettingsPage
             v-else-if="activeTab === 'settings'"
             @profile-updated="loadCurrentUser"
+            @open-tab="handleMenuSelect"
+            @back-root="backFromSecondaryTab('settings')"
           />
           <!-- 「我的资料」隐藏入口：点击 rail 顶部头像进入，不在 rail 展示 -->
           <MinePage v-else-if="activeTab === 'mine'" @profile-updated="loadCurrentUser" />
@@ -173,13 +189,24 @@
       </main>
     </div>
 
-    <!-- 移动端底部 tab 导航：窄屏（≤768px）替代左侧 rail，与 rail 共用 activeTab 状态源 -->
-    <MobileTabBar
+    <!-- 移动端底部 tab 导航：窄屏（≤768px）替代左侧 rail，与 rail 共用 activeTab 状态源；
+         仅四个主 tab 且栈深=1（一级页）时显示——进入二级页时向下推走、返回时自底部滑回
+         （Android 前端改造；滑动过渡样式见 app-shell.css mobile-tabbar-slide） -->
+    <Transition name="mobile-tabbar-slide">
+      <MobileTabBar
+        v-if="mobileTabBarVisible"
+        :active-tab="activeTab"
+        :messages-badge="messagesBadge"
+        :contacts-badge="contactsBadge"
+        @select="handleMenuSelect"
+      />
+    </Transition>
+
+    <!-- 移动端左滑侧边栏（Android 前端改造）：空间切换 + 加入/创建 + 设置；「⋯」菜单已下放此处与设置页 -->
+    <MobileSpaceDrawer
       v-if="isMobileLayout"
-      :active-tab="activeTab"
-      :messages-badge="messagesBadge"
-      :contacts-badge="contactsBadge"
-      @select="handleMenuSelect"
+      v-model="mobileDrawerVisible"
+      @open-settings="handleMenuSelect('settings')"
     />
   </div>
 </template>
@@ -187,6 +214,7 @@
 <script lang="ts">
 import { computed, defineComponent, onMounted, onUnmounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
+import { onBackButtonPress } from '@tauri-apps/api/app';
 import { ChatDotRound, Cpu, Grid, Notebook, Setting } from '@element-plus/icons-vue';
 import type { PluginSpaceContext } from '../../packages/plugin-sdk/src';
 import PluginIframeHost from './components/plugin/PluginIframeHost.vue';
@@ -203,8 +231,13 @@ import { requestOpenAppDetail } from './stores/pending-app';
 import TopNavbar from './components/TopNavbar.vue';
 import UserAvatarMenu from './components/UserAvatarMenu.vue';
 import MobileTabBar from './components/MobileTabBar.vue';
-import { isMobileLayout } from './stores/ui-layout';
-import { resetStack } from './stores/mobile-nav';
+import MobileTopBar from './components/MobileTopBar.vue';
+import MobileSpaceDrawer from './components/MobileSpaceDrawer.vue';
+import { isMobileLayout, MOBILE_TABS } from './stores/ui-layout';
+import { invoke } from '@tauri-apps/api/core';
+import { currentPage, popPage, resetStack } from './stores/mobile-nav';
+import { hasOverlay, requestCloseOverlay } from './stores/overlay-stack';
+import { requestOpenSystemSection } from './stores/pending-system-section';
 import { useUpdaterReadyPrompt } from './components/updater/use-updater';
 import MessagesPage from './pages/MessagesPage.vue';
 import ContactsPage from './pages/ContactsPage.vue';
@@ -237,6 +270,8 @@ export default defineComponent({
     TopNavbar,
     UserAvatarMenu,
     MobileTabBar,
+    MobileTopBar,
+    MobileSpaceDrawer,
     PluginIframeHost,
     ChatDotRound,
     Notebook,
@@ -246,6 +281,8 @@ export default defineComponent({
   },
   setup() {
     const activeTab = ref<string>('messages');
+    // 移动端左滑侧边栏可见性（Android 前端改造）
+    const mobileDrawerVisible = ref(false);
     const pluginTabs = ref<PluginTab[]>([]);
     // rail 宽窄状态（持久化）：false=64px 窄栏（图标+小字），true=155px 宽栏（左图标右文字）
     const railExpanded = ref(localStorage.getItem('spark:rail-expanded') === '1');
@@ -263,6 +300,39 @@ export default defineComponent({
       { id: 'contacts', label: '通讯录', icon: Notebook },
       { id: 'apps', label: '应用', icon: Grid }
     ];
+
+    /** 移动端顶部导航仅四个主 tab（底部 tab 对应的一级页）显示；进入二级页（栈深>1）时整体隐藏 */
+    const MAIN_TAB_IDS: string[] = MOBILE_TABS.map((tab) => tab.id);
+
+    /** 一级页判定：移动端 + 四个主 tab + 栈底帧（page==='root'）。顶栏与底部 tab 共用此条件，
+        进入二级页（聊天/详情/模块）时两者一并隐藏（Android 前端改造） */
+    const isPrimaryPage = computed(() => {
+      if (!isMobileLayout.value) {
+        return false;
+      }
+      if (!MAIN_TAB_IDS.includes(activeTab.value)) {
+        return false;
+      }
+      return currentPage(activeTab.value).page === 'root';
+    });
+
+    /** 移动端顶部导航可见性：仅一级页显示 */
+    const mobileTopBarVisible = isPrimaryPage;
+
+    /** 移动端底部 tab 导航可见性：仅一级页显示（二级页随首页一并推走） */
+    const mobileTabBarVisible = isPrimaryPage;
+
+    /** 顶部导航中间页名（消息/通讯录/应用/我的） */
+    const mobileTopBarTitle = computed(() => {
+      return MOBILE_TABS.find((tab) => tab.id === activeTab.value)?.label ?? '';
+    });
+
+    /** 网络状态点点击：切到设置页并直达「系统设置→网络状态」（Android 顶部导航改造）。
+        走 handleMenuSelect：统一记录来源 tab 并把设置栈重置到栈底（深链再压入分组页帧） */
+    const openNetworkStatus = () => {
+      requestOpenSystemSection('netStatus');
+      handleMenuSelect('settings');
+    };
 
     /** 通讯录入口角标：当前空间「新的朋友/成员」未读条目数 */
     const contactsBadge = computed(() => requestBadgeCount(spaceKeyOf(currentSpace.value)));
@@ -308,12 +378,31 @@ export default defineComponent({
       }
     };
 
+    // 非主 tab（设置/测试等无底部导航的页面）的来源记录（Android 前端改造）：
+    // 根页返回（UI 返回按钮与系统返回键）据此回到来源页；无记录时缺省回消息页
+    const secondaryTabReturnTo: Record<string, string> = {};
+
     const handleMenuSelect = (index: string) => {
-      // 移动端（波次 2）：重按当前 tab 回到该 tab 导航栈底（列表页）；切 tab 时各栈独立保持
-      if (isMobileLayout.value && index === activeTab.value) {
+      // 移动端（波次 2/Android 改造）：切 tab 一律回到该 tab 导航栈底（列表页）——
+      // 底部导航切换应展示该页的首页内容，而非离开时停留的二级页
+      if (isMobileLayout.value) {
         resetStack(index);
+        // 进入非主 tab 前记录来源（供该页根页返回使用）
+        if (!MAIN_TAB_IDS.includes(index) && !index.startsWith('plugin|') && index !== activeTab.value) {
+          secondaryTabReturnTo[index] = activeTab.value;
+        }
       }
       activeTab.value = index;
+    };
+
+    /** 非主 tab 根页返回：回到来源 tab（设置/测试等页面共用；缺省回消息页） */
+    const backFromSecondaryTab = (tabId?: string) => {
+      const tab = tabId ?? activeTab.value;
+      const target = secondaryTabReturnTo[tab] ?? 'messages';
+      activeTab.value = target;
+      if (isMobileLayout.value) {
+        resetStack(target);
+      }
     };
 
     const openPluginTab = (payload: OpenPluginTabPayload) => {
@@ -408,6 +497,42 @@ export default defineComponent({
     // 主程序更新：后台自动检查+下载就绪后弹重启确认（取消后可去 设置→关于 手动安装）
     useUpdaterReadyPrompt();
 
+    // Android 系统返回键（Android 前端改造）。原生层语义（tauri AppPlugin）：
+    // 存在 JS 监听时按返回键只发事件、不执行任何默认动作——handler 返回值无意义，
+    // 「退出应用」必须由前端显式调用 system_exit_app（plugin:app|exit 不在 ACL 命令清单内，
+    // 前端不可调用）；MainActivity 已禁用 WryActivity 的 WebView 历史回退
+    // （handleBackNavigation=false），返回键完全由本 handler 按前端导航栈语义处理。
+    onBackButtonPress(() => {
+      if (!isMobileLayout.value) {
+        return;
+      }
+      // 1) 覆盖层优先：详情整页覆盖层（我的资料字段详情 / 设置面板内容页）打开时，
+      //    先关栈顶覆盖层（逐层回退），而非直接 pop 底层导航栈帧（修复"跳两层"）
+      if (hasOverlay()) {
+        requestCloseOverlay();
+        return;
+      }
+      // 2) 当前 tab 栈深>1（二级页）：pop 回上一页（不再直接退出应用）
+      const tab = activeTab.value;
+      if (currentPage(tab).page !== 'root') {
+        popPage(tab);
+        return;
+      }
+      // 3) 非主 tab 根页（设置/测试/插件）：与页面返回按钮一致——回来源页而非退出应用
+      if (!MAIN_TAB_IDS.includes(tab)) {
+        if (tab.startsWith('plugin|')) {
+          goBackFromPlugin();
+        } else {
+          backFromSecondaryTab(tab);
+        }
+        return;
+      }
+      // 4) 一级页（主 tab 栈底）：退出应用（原生默认动作已被 JS 监听拦截，须显式退出）
+      invoke('system_exit_app').catch(() => {});
+    }).catch(() => {
+      // 桌面端 app 插件无 register_listener 命令，注册静默失败（桌面本无系统返回键事件）
+    });
+
     onMounted(() => window.addEventListener('spark:open-chat', onOpenChatEvent));
     onMounted(() => window.addEventListener('spark:open-contact', onOpenContactEvent));
     onMounted(() => window.addEventListener('spark:open-app', onOpenAppEvent));
@@ -434,11 +559,17 @@ export default defineComponent({
       pluginSpace,
       closePluginTab,
       handleMenuSelect,
+      backFromSecondaryTab,
       openPluginTab,
       goBackFromPlugin,
       loadCurrentUser,
       handleSwitchAccount,
-      handleLogout
+      handleLogout,
+      mobileDrawerVisible,
+      mobileTopBarVisible,
+      mobileTabBarVisible,
+      mobileTopBarTitle,
+      openNetworkStatus
     };
   }
 });
