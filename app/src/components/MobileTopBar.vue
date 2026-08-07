@@ -1,7 +1,7 @@
 <!-- 移动端顶部导航（Android 前端改造）：
      左侧=菜单图标（打开左滑侧边栏 MobileSpaceDrawer）；中间=当前页名（消息/通讯录/应用/我的）+
      页名右侧紧贴网络状态点（点击直达系统设置→网络状态）；
-     右侧=搜索（全屏搜索层，复用 GlobalSearch）+ 圆圈加号（底部上滑菜单，微信式：
+     右侧=搜索（全屏搜索层，复用 GlobalSearch）+ 圆圈加号（下拉菜单，微信式：
      个人空间「添加朋友」/ 组织空间「添加成员」（仅组织管理员），经 App.vue 接到通讯录现有添加流程）。
      仅在四个主 tab 且栈深=1（currentPage(tab).page==='root'）时由 App.vue 渲染，
      进入二级页（聊天/详情等）时顶部导航整体不渲染（App.vue）。 -->
@@ -43,7 +43,8 @@
     </div>
   </Teleport>
 
-  <!-- 加号底部上滑菜单（参考微信）：按空间区分入口；点击遮罩/取消收起 -->
+  <!-- 加号下拉菜单（微信式：从右上角加号按钮向下展开的卡片，小三角指向加号）：
+       按空间区分入口；点击遮罩/外部收起（下拉卡片无「取消」按钮） -->
   <Teleport to="body">
     <Transition name="mobile-add-sheet">
       <div v-if="addSheetVisible" class="mobile-add-sheet-root" @click="addSheetVisible = false">
@@ -64,7 +65,6 @@
               <span>生成邀请码，邀请加入当前组织</span>
             </div>
           </button>
-          <button type="button" class="mobile-add-sheet-cancel" @click="addSheetVisible = false">取消</button>
         </div>
       </div>
     </Transition>
@@ -98,7 +98,7 @@ export default defineComponent({
       searchRef.value?.focusInput?.();
     };
 
-    // 加号上滑菜单：菜单项按当前空间区分（个人=添加朋友；组织=添加成员）
+    // 加号下拉菜单：菜单项按当前空间区分（个人=添加朋友；组织=添加成员）
     const addSheetVisible = ref(false);
     const isPersonal = computed(() => currentSpace.value.type === 'personal');
     // 「添加成员」仅组织管理员可见（org-membership 缓存口径，同 use-contacts-data 的 isOrgAdmin；
@@ -234,26 +234,43 @@ export default defineComponent({
   cursor: pointer;
 }
 
-/* ---- 加号底部上滑菜单（与侧边栏「加入/创建」上滑菜单同款结构） ---- */
+/* ---- 加号下拉菜单（第三批打磨，微信式）：从右上角加号按钮向下展开的卡片，小三角指向加号 ---- */
+/* 遮罩透明：仅承接「点外部收起」，不压暗背景 */
 .mobile-add-sheet-root {
   position: fixed;
   inset: 0;
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.35);
   z-index: 2010;
 }
 
+/* 下拉卡片：顶栏（44px + 状态栏安全区）之下、右对齐顶栏右缘（顶栏右 padding 8px） */
 .mobile-add-sheet {
-  width: 100%;
-  max-width: 480px;
+  position: absolute;
+  top: calc(var(--spark-topbar-height) + env(safe-area-inset-top, 0px) + 4px);
+  right: 8px;
+  width: 250px;
   background: var(--spark-bg-card);
-  border-radius: 16px 16px 0 0;
-  padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+  border: 1px solid var(--spark-border-light);
+  border-radius: var(--spark-radius-l);
+  box-shadow: var(--spark-shadow-pop);
+  padding: 6px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+}
+
+/* 小三角：指向加号按钮中心（顶栏右 padding 8px + 按钮半宽 18px = 距视口右缘 26px，
+   再减卡片右偏 8px 与三角半宽 6px → 距卡片右缘 12px） */
+.mobile-add-sheet::before {
+  content: '';
+  position: absolute;
+  top: -5px;
+  right: 12px;
+  width: 12px;
+  height: 12px;
+  background: var(--spark-bg-card);
+  border-top: 1px solid var(--spark-border-light);
+  border-left: 1px solid var(--spark-border-light);
+  border-top-left-radius: 3px;
+  transform: rotate(45deg);
 }
 
 .mobile-add-sheet-item {
@@ -291,28 +308,18 @@ export default defineComponent({
   color: var(--spark-text-3);
 }
 
-.mobile-add-sheet-cancel {
-  width: 100%;
-  border: 0;
-  background: transparent;
-  cursor: pointer;
-  font-family: inherit;
-  font-size: 16px;
-  color: var(--spark-text-2);
-  padding: 12px 10px;
-  border-radius: var(--spark-radius-m);
-  border-top: 1px solid var(--spark-border-light);
-}
-
-/* 上滑菜单过渡（与 MobileSpaceDrawer 的 mobile-sheet 同款曲线） */
+/* 下拉展开过渡：遮罩淡入淡出，卡片从右上角（加号处）缩放+下沉展开 */
 .mobile-add-sheet-enter-active,
 .mobile-add-sheet-leave-active {
-  transition: opacity 200ms ease;
+  transition: opacity 180ms ease;
 }
 
 .mobile-add-sheet-enter-active .mobile-add-sheet,
 .mobile-add-sheet-leave-active .mobile-add-sheet {
-  transition: transform 220ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  transition:
+    transform 200ms cubic-bezier(0.25, 0.46, 0.45, 0.94),
+    opacity 200ms ease;
+  transform-origin: top right;
 }
 
 .mobile-add-sheet-enter-from,
@@ -322,6 +329,6 @@ export default defineComponent({
 
 .mobile-add-sheet-enter-from .mobile-add-sheet,
 .mobile-add-sheet-leave-to .mobile-add-sheet {
-  transform: translateY(100%);
+  transform: scale(0.9) translateY(-6px);
 }
 </style>

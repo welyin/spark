@@ -748,4 +748,10 @@
   .messages-page .conv-preview {
     font-size: 13px;
   }
+
+  /* 会话项左右内边距对齐通讯录列表基准（.request-item：0 16px），
+     消除「消息列表比通讯录更靠左」的偏差（第三批打磨） */
+  .messages-page .conv-item {
+    padding: 0 16px;
+  }
 }

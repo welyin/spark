@@ -2,7 +2,7 @@
   <section class="root-gate">
     <App v-if="isPluginWindow || showApp" />
 
-    <div v-else class="gate-wrap" v-loading="authBusy" element-loading-text="正在登录...">
+    <div v-else class="gate-wrap" :class="{ 'gate-busy': authBusy }" v-loading="authBusy" element-loading-text="正在登录...">
       <header class="brand">
         <img class="brand-logo" :src="sparkLogo" alt="星火" />
         <h1 class="brand-name">星火</h1>

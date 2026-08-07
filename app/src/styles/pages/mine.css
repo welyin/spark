@@ -360,4 +360,16 @@
   .mine-page .mine-list-item.active .mine-list-item-text b {
     font-weight: 400;
   }
+
+  /* ---- 内部重复标题收敛（第三批打磨）：移动端二级/三级页顶部已有返回栏同名标题，
+     页内标题（.mine-list-title、详情栏 el-card 卡片头）隐藏，桌面端保留。
+     字段详情整页（.mine-detail-page-body，返回栏标题为字段名、卡片头是编辑区结构的一部分）
+     用 :not() 排除，避免误伤详情编辑页 ---- */
+  .mine-page .mine-list-title {
+    display: none;
+  }
+
+  .mine-page .mine-detail:not(.mine-detail-page-body) .el-card__header {
+    display: none;
+  }
 }

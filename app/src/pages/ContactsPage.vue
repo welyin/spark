@@ -18,9 +18,7 @@
             clearable
             :prefix-icon="SearchIcon"
           />
-          <!-- §3：个人空间「添加朋友」；组织空间仅管理员显示「添加成员」（复用组织邀请流程） -->
-          <el-button v-if="isPersonal" type="primary" @click="addFriendVisible = true">添加朋友</el-button>
-          <el-button v-else-if="isOrgAdmin" type="primary" @click="inviteVisible = true">添加成员</el-button>
+          <!-- 移动端不渲染「添加朋友/添加成员」按钮：入口已由顶栏加号菜单覆盖（桌面端保留，见桌面分支） -->
         </header>
 
         <!-- 搜索态：扁平结果列表；非搜索态：统一列表（功能区 + 分组，共享选中态与滚动） -->

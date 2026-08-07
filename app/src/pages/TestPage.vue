@@ -1,13 +1,14 @@
 <!-- 测试页（开发调试）：二栏菜单 + 内容区结构（与个人设置/设置页同一布局语言，复用 mine.css 栏位类）。
-     菜单：节点面板（本地节点数据与组织同步）/ 更新调试（GitHub Releases 更新链路） -->
+     菜单：节点面板（本地节点数据与组织同步）/ 更新调试（GitHub Releases 更新链路）。
+     移动端（第三批打磨）：整页 + 导航栈（与设置页同构）——栈1 调试菜单整页，栈2 面板整页覆盖 -->
 <template>
   <section class="mine-page test-page">
-    <!-- 移动端（Android 前端改造）：测试页为非主 tab（无顶部导航/底部导航），
-         顶部统一「‹ 返回 | 测试」标题栏，返回键回来源页（设置）；桌面端不渲染 -->
-    <MobileBackBar v-if="isMobileLayout" title="测试" @back="$emit('back-root')" />
+    <!-- 移动端：顶部统一返回栏——栈1 标题「测试」（返回回来源页：设置），栈2 标题=面板名（返回回菜单）；
+         桌面端不渲染 -->
+    <MobileBackBar v-if="isMobileLayout" :title="mobileTitle" @back="onMobileBack" />
 
-    <!-- 第二栏：调试菜单 -->
-    <div class="mine-menu">
+    <!-- 第二栏：调试菜单（移动端选中面板后隐藏，面板整页覆盖） -->
+    <div v-if="!isMobileLayout || mobileFrame.page === 'root'" class="mine-menu">
       <header class="mine-menu-header" v-if="!isMobileLayout">
         <div class="mine-menu-user">
           <b>测试</b>
@@ -21,7 +22,7 @@
           type="button"
           class="mine-menu-item"
           :class="{ active: activeMenu === item.key }"
-          @click="activeMenu = item.key"
+          @click="onSelectMenu(item.key)"
         >
           <el-icon class="mine-menu-icon" :size="17"><component :is="item.icon" /></el-icon>
           <span class="mine-menu-label">{{ item.label }}</span>
@@ -29,8 +30,10 @@
       </nav>
     </div>
 
-    <!-- 第三、四栏：当前面板内容 -->
-    <div class="mine-detail test-detail">
+    <!-- 第三、四栏：当前面板内容（移动端=面板整页覆盖层，进出自右滑入/向右滑出，
+         与系统/组织设置内容覆盖层同款；未选面板时不渲染，否则空白层会盖住菜单） -->
+    <Transition name="settings-overlay-slide">
+    <div v-if="!isMobileLayout || mobileFrame.page !== 'root'" class="mine-detail test-detail">
       <el-card v-if="activeMenu === 'nodes'" class="node-panel">
         <div class="panel-title">
           <div>
@@ -110,15 +113,17 @@
         </div>
       </el-card>
     </div>
+    </Transition>
   </section>
 </template>
 
 <script lang="ts">
-import { defineComponent, onMounted, ref, type Component } from 'vue';
+import { computed, defineComponent, onMounted, ref, watch, type Component } from 'vue';
 import { ElMessageBox } from 'element-plus';
 import { Connection, Download } from '@element-plus/icons-vue';
 import MobileBackBar from '../components/MobileBackBar.vue';
 import { isMobileLayout } from '../stores/ui-layout';
+import { currentPage, popPage, pushPage } from '../stores/mobile-nav';
 import type { UpdaterStatusDto } from '../api';
 
 type SavedNodeRecord = {
@@ -147,7 +152,7 @@ export default defineComponent({
   name: 'TestPage',
   components: { MobileBackBar },
   emits: ['back-root'],
-  setup() {
+  setup(_, { emit }) {
     const activeMenu = ref<MenuKey>('nodes');
     const nodeRecords = ref<SavedNodeRecord[]>([]);
     const loadingNodes = ref(false);
@@ -160,6 +165,54 @@ export default defineComponent({
     const checkingUpdate = ref(false);
     const stagingUpdate = ref(false);
     const applyingUpdate = ref(false);
+
+    // ------------------------------------------------------------------
+    // 移动端导航栈（第三批打磨，与设置页同构）：栈1 调试菜单 → 栈2 面板整页；
+    // 桌面端以下逻辑均不触发（isMobileLayout 恒 false）
+    // ------------------------------------------------------------------
+    /** 本页在导航栈中的 tab 键（测试为非主 tab，键与 App.vue activeTab 一致） */
+    const MOBILE_TAB = 'test';
+    const mobileFrame = computed(() => currentPage(MOBILE_TAB));
+
+    /** 菜单选中：桌面切内容区；移动端压入面板栈帧（整页覆盖） */
+    const onSelectMenu = (key: MenuKey) => {
+      activeMenu.value = key;
+      if (isMobileLayout.value) {
+        pushPage(MOBILE_TAB, 'panel', { key });
+      }
+    };
+
+    /** 返回栏：栈1 回来源页（设置）；栈2 弹出栈顶回菜单 */
+    const onMobileBack = () => {
+      if (mobileFrame.value.page === 'root') {
+        emit('back-root');
+        return;
+      }
+      popPage(MOBILE_TAB);
+    };
+
+    /** 返回栏标题：栈1=「测试」，栈2=当前面板名 */
+    const mobileTitle = computed(() => {
+      if (mobileFrame.value.page === 'root') {
+        return '测试';
+      }
+      return MENU_ITEMS.find((item) => item.key === activeMenu.value)?.label ?? '测试';
+    });
+
+    // 栈顶帧变化（重进按栈恢复 / 返回 pop）时同步选中面板
+    watch(
+      [mobileFrame, isMobileLayout],
+      ([frame, mobile]) => {
+        if (!mobile) {
+          return;
+        }
+        const key = frame.params?.key as MenuKey | undefined;
+        if (frame.page === 'panel' && MENU_ITEMS.some((item) => item.key === key)) {
+          activeMenu.value = key as MenuKey;
+        }
+      },
+      { immediate: true }
+    );
 
     const parseNodeRecord = (key: string, value: string): SavedNodeRecord | null => {
       try {
@@ -320,6 +373,10 @@ export default defineComponent({
     return {
       activeMenu,
       isMobileLayout,
+      mobileFrame,
+      mobileTitle,
+      onSelectMenu,
+      onMobileBack,
       menuItems: MENU_ITEMS,
       nodeRecords,
       loadingNodes,
