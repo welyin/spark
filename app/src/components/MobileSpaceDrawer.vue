@@ -70,7 +70,9 @@
               <span class="mobile-drawer-item-label">加入/创建组织</span>
             </button>
 
-            <button type="button" class="mobile-drawer-item" @click="goSettings">
+            <!-- 「设置」与上方「加入/创建」同为底部操作条目，统一用 mobile-drawer-action 弱色
+                 （原为默认 text-1，比相邻条目偏白/偏亮，看着不一致） -->
+            <button type="button" class="mobile-drawer-item mobile-drawer-action" @click="goSettings">
               <el-icon :size="17" :style="{ color: '#64748b' }"><Setting /></el-icon>
               <span class="mobile-drawer-item-label">设置</span>
             </button>

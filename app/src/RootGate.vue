@@ -111,6 +111,12 @@ export default defineComponent({
 
     const handleLogin = async (password: string) => {
       authBusy.value = true;
+      // 主动收起键盘并复位滚动：键盘收起过程中 WebView 可能分多帧还原滚动位置，
+      // 若不先复位，gate-wrap 停留在被键盘顶起的位置，loading 蒙版（absolute 于滚动容器内）
+      // 随内容被卷走，看起来像"卡住"；延迟再兜底一次末帧还原
+      (document.activeElement as HTMLElement | null)?.blur?.();
+      resetGateScroll();
+      setTimeout(resetGateScroll, 300);
       // 先让 Vue 渲染并绘制出蒙版，再开始解锁（避免事件回合内的同步工作挤掉蒙版绘制）
       await nextTick();
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -150,22 +156,38 @@ export default defineComponent({
 
     // 软键盘适配（Android 前端改造）：键盘弹出时 WebView 可视区收缩（visualViewport 高度变小），
     // 键盘收起时恢复。100dvh 布局已跟随高度自动收缩；此兜底处理滚动位置残留与 dvh 不支持情况：
-    // 键盘收起（viewport 高度回到接近窗口高度）时，强制回滚到顶部，避免界面停留在键盘弹出时的位置。
+    // 键盘收起时强制回滚到顶部，避免界面停留在键盘弹出时的位置。
     // 注意：移动端登录页禁止页面级滚动（.root-gate overflow:hidden），真正的滚动容器是
     // .gate-wrap（overflow-y:auto）——复位对象必须是它，window/documentElement 滚动不生效。
-    let lastViewportHeight = 0;
+    // 收起判定与"历史最高可视高度"比较（≈无键盘高度）：部分 WebView 键盘收起动画分多帧派发
+    // resize、每帧增量不足 40px，与上一帧比较会永远不触发复位。
+    let maxViewportHeight = 0;
+    let keyboardOpen = false;
+    const resetGateScroll = () => {
+      window.scrollTo(0, 0);
+      document.documentElement.scrollTop = 0;
+      document.querySelector('.gate-wrap')?.scrollTo({ top: 0 });
+    };
     const onViewportResize = () => {
       if (!window.visualViewport) {
         return;
       }
       const vh = window.visualViewport.height;
-      // 从"键盘弹出（矮）"回到"正常（高）"：界面复位回顶部
-      if (lastViewportHeight > 0 && vh > lastViewportHeight + 40) {
-        window.scrollTo(0, 0);
-        document.documentElement.scrollTop = 0;
-        document.querySelector('.gate-wrap')?.scrollTo({ top: 0 });
+      if (vh > maxViewportHeight) {
+        maxViewportHeight = vh;
       }
-      lastViewportHeight = vh;
+      // 较历史最高值矮 120px 以上视为键盘弹出（移动键盘通常 ≥200px）
+      if (maxViewportHeight - vh > 120) {
+        keyboardOpen = true;
+        return;
+      }
+      // 从"键盘弹出（矮）"回到"接近最高值"：界面复位回顶部；
+      // 部分 WebView 在收起动画末帧才还原滚动位置，延迟再兜底一次
+      if (keyboardOpen) {
+        keyboardOpen = false;
+        resetGateScroll();
+        setTimeout(resetGateScroll, 150);
+      }
     };
 
     onMounted(async () => {

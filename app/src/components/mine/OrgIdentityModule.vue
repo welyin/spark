@@ -16,7 +16,11 @@
         :class="{ active: activeField === field.key }"
         @click="activeField = field.key"
       >
-        <el-icon class="mine-list-item-icon" :size="17"><component :is="field.icon" /></el-icon>
+        <el-icon
+          class="mine-list-item-icon"
+          :size="17"
+          :style="isMobileLayout ? { color: field.color } : undefined"
+        ><component :is="field.icon" /></el-icon>
         <b class="org-field-label">{{ field.label }}</b>
         <UserAvatar
           v-if="field.key === 'avatar'"
@@ -142,6 +146,7 @@ import { currentSpaceOrgId } from '../../stores/current-space';
 import { getOrgIdentity, setOrgIdentity } from '../../stores/org-identity';
 import { orgIdentityAvatarSource } from '../../stores/avatar-sources';
 import { getProfileExtra, setProfileExtra, type ProfileExtra } from '../../stores/profile-extra';
+import { isMobileLayout } from '../../stores/ui-layout';
 import UserAvatar from '../UserAvatar.vue';
 import AvatarPicker from '../AvatarPicker.vue';
 import MineDetailContainer from './MineDetailContainer.vue';
@@ -189,17 +194,19 @@ export default defineComponent({
     const extra = computed(() => getProfileExtra(avatarSeed.value));
 
     // ---------------- 第三栏字段列表 ----------------
-    const fields = computed<Array<{ key: FieldKey; label: string; value: string; icon: Component }>>(() => [
-      { key: 'avatar', label: '头像', value: '', icon: Avatar },
-      { key: 'nickname', label: '昵称', value: displayNickname.value, icon: User },
-      { key: 'gender', label: '性别', value: extra.value.gender || '未设置', icon: UserFilled },
-      { key: 'region', label: '地区', value: extra.value.region || '未设置', icon: Location },
-      { key: 'signature', label: '签名', value: extra.value.signature || '未设置', icon: EditPen },
+    // color 为移动端菜单图标色（微信式每项一色，与 MinePage 一级菜单同规则、同色系色板，桌面端不使用）
+    const fields = computed<Array<{ key: FieldKey; label: string; value: string; icon: Component; color: string }>>(() => [
+      { key: 'avatar', label: '头像', value: '', icon: Avatar, color: '#00b8a9' },
+      { key: 'nickname', label: '昵称', value: displayNickname.value, icon: User, color: '#3296fa' },
+      { key: 'gender', label: '性别', value: extra.value.gender || '未设置', icon: UserFilled, color: '#7b61ff' },
+      { key: 'region', label: '地区', value: extra.value.region || '未设置', icon: Location, color: '#ff7d00' },
+      { key: 'signature', label: '签名', value: extra.value.signature || '未设置', icon: EditPen, color: '#34c19b' },
       {
         key: 'personal',
         label: '使用个人身份',
         value: identity.value.usePersonalIdentity ? '已开启' : '已关闭',
-        icon: Switch
+        icon: Switch,
+        color: '#f7b500'
       }
     ]);
 
@@ -253,6 +260,7 @@ export default defineComponent({
       activeField,
       activeFieldLabel,
       fields,
+      isMobileLayout,
       identity,
       displayNickname,
       avatarSeed,
@@ -277,6 +285,17 @@ export default defineComponent({
 
 .mine-list-item.active .org-field-label {
   font-weight: 600;
+}
+
+/* 移动端：菜单主文字统一 16px；点行即开详情（无选中态），active 不再加粗 */
+@media (max-width: 768px) {
+  .org-field-label {
+    font-size: 16px;
+  }
+
+  .mine-list-item.active .org-field-label {
+    font-weight: 400;
+  }
 }
 
 /* 头像字段值：与文本值一样靠右对齐 */

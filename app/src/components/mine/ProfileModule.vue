@@ -15,7 +15,11 @@
         :class="{ active: activeField === field.key }"
         @click="activeField = field.key"
       >
-        <el-icon class="mine-list-item-icon" :size="17"><component :is="field.icon" /></el-icon>
+        <el-icon
+          class="mine-list-item-icon"
+          :size="17"
+          :style="isMobileLayout ? { color: field.color } : undefined"
+        ><component :is="field.icon" /></el-icon>
         <b class="profile-field-label">{{ field.label }}</b>
         <UserAvatar
           v-if="field.key === 'avatar'"
@@ -142,6 +146,7 @@ import { errorMessage } from '../../utils/ipc';
 import { fileToAvatarDataUrl } from '../../utils/avatar';
 import { shortenMiddle } from '../../utils/format';
 import { getProfileExtra, setProfileExtra, type ProfileExtra } from '../../stores/profile-extra';
+import { isMobileLayout } from '../../stores/ui-layout';
 import UserAvatar from '../UserAvatar.vue';
 import TermLabel from '../common/TermLabel.vue';
 import NodeIdentityInfo, { type NodeIdentityRow } from '../common/NodeIdentityInfo.vue';
@@ -184,13 +189,14 @@ export default defineComponent({
     });
 
     // ---------------- 第三栏字段列表 ----------------
-    const fields = computed<Array<{ key: FieldKey; label: string; value: string; icon: Component }>>(() => [
-      { key: 'avatar', label: '头像', value: '', icon: Avatar },
-      { key: 'nickname', label: '昵称', value: props.nickname || '未设置', icon: User },
-      { key: 'gender', label: '性别', value: extra.value.gender || '未设置', icon: UserFilled },
-      { key: 'region', label: '地区', value: extra.value.region || '未设置', icon: Location },
-      { key: 'signature', label: '签名', value: extra.value.signature || '未设置', icon: EditPen },
-      { key: 'identity', label: '身份 ID', value: props.rootId ? shortenMiddle(props.rootId, 8, 4) : '未创建', icon: Key }
+    // color 为移动端菜单图标色（微信式每项一色，与 MinePage 一级菜单同规则、同色系色板，桌面端不使用）
+    const fields = computed<Array<{ key: FieldKey; label: string; value: string; icon: Component; color: string }>>(() => [
+      { key: 'avatar', label: '头像', value: '', icon: Avatar, color: '#00b8a9' },
+      { key: 'nickname', label: '昵称', value: props.nickname || '未设置', icon: User, color: '#3296fa' },
+      { key: 'gender', label: '性别', value: extra.value.gender || '未设置', icon: UserFilled, color: '#7b61ff' },
+      { key: 'region', label: '地区', value: extra.value.region || '未设置', icon: Location, color: '#ff7d00' },
+      { key: 'signature', label: '签名', value: extra.value.signature || '未设置', icon: EditPen, color: '#34c19b' },
+      { key: 'identity', label: '身份 ID', value: props.rootId ? shortenMiddle(props.rootId, 8, 4) : '未创建', icon: Key, color: '#64748b' }
     ]);
 
     // ---------------- 字段编辑草稿（昵称 + mock 扩展字段共用一个保存链路） ----------------
@@ -299,6 +305,7 @@ export default defineComponent({
       activeField,
       activeFieldLabel,
       fields,
+      isMobileLayout,
       saving,
       draft,
       dirty,
@@ -325,6 +332,17 @@ export default defineComponent({
 
 .mine-list-item.active .profile-field-label {
   font-weight: 600;
+}
+
+/* 移动端：菜单主文字统一 16px；点行即开详情（无选中态），active 不再加粗 */
+@media (max-width: 768px) {
+  .profile-field-label {
+    font-size: 16px;
+  }
+
+  .mine-list-item.active .profile-field-label {
+    font-weight: 400;
+  }
 }
 
 /* 头像字段值：与文本值一样靠右对齐 */

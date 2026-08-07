@@ -254,6 +254,7 @@ import { currentSpace, currentSpaceOrgId, currentSpaceType } from '../stores/cur
 import { contactsOf, spaceKeyOf } from '../mock/contacts';
 import { isMobileLayout } from '../stores/ui-layout';
 import { currentPage, popPage, pushPage, resetStack } from '../stores/mobile-nav';
+import { pendingAddContact, consumePendingAddContact } from '../stores/pending-add-contact';
 import { useContactsData } from '../components/contacts/use-contacts-data';
 import { useContactGroups } from '../components/contacts/use-contact-groups';
 import { useContactPanel } from '../components/contacts/use-contact-panel';
@@ -321,6 +322,24 @@ export default defineComponent({
       resetStack(MOBILE_TAB);
       void refreshOrganizations();
     });
+
+    // 顶栏「+」菜单的添加朋友/添加成员请求（pending-add-contact）：切到本 tab 挂载时（immediate）
+    // 或停留本页时消费，打开对应添加对话框（复用现有添加朋友/成员邀请流程）
+    watch(
+      pendingAddContact,
+      (kind) => {
+        if (!kind) {
+          return;
+        }
+        consumePendingAddContact();
+        if (kind === 'friend') {
+          addFriendVisible.value = true;
+        } else if (isOrg.value) {
+          inviteVisible.value = true;
+        }
+      },
+      { immediate: true }
+    );
 
     // 分组：第二栏分组列表 -> 第三栏组内成员（个人扁平 / 组织树）
     const {

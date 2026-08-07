@@ -5,6 +5,7 @@
 <template>
   <div class="global-search">
     <el-input
+      ref="inputRef"
       v-model="keyword"
       class="global-search-input"
       size="small"
@@ -97,10 +98,15 @@ const matches = (keyword: string, ...fields: string[]) =>
 export default defineComponent({
   name: 'GlobalSearch',
   components: { UserAvatar, OrgAvatar },
-  setup() {
+  // select：选中任一搜索结果后触发（移动端全屏搜索层借此关闭自身；桌面端无监听，行为不变）
+  emits: ['select'],
+  setup(_, { emit }) {
     const keyword = ref('');
     const open = ref(false);
     const appItems = ref<PluginMarketItemDto[]>([]);
+    /** 输入框引用：移动端全屏搜索层打开时主动聚焦（弹键盘） */
+    const inputRef = ref<{ focus: () => void } | null>(null);
+    const focusInput = () => inputRef.value?.focus();
 
     onMounted(async () => {
       try {
@@ -267,6 +273,7 @@ export default defineComponent({
     const select = (item: SearchItem) => {
       close();
       keyword.value = '';
+      emit('select');
       if (item.kind === 'contact') {
         ensureSpace(item.space);
         window.dispatchEvent(new CustomEvent('spark:open-contact', { detail: { rootId: item.rootId } }));
@@ -288,7 +295,7 @@ export default defineComponent({
       }
     };
 
-    return { SearchIcon: Search, keyword, open, groups, close, select, pickFirst };
+    return { SearchIcon: Search, keyword, open, groups, close, select, pickFirst, inputRef, focusInput };
   }
 });
 </script>

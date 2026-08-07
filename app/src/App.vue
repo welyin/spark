@@ -16,6 +16,8 @@
         :title="mobileTopBarTitle"
         @open-drawer="mobileDrawerVisible = true"
         @open-network-status="openNetworkStatus"
+        @add-friend="onMobileAddContact('friend')"
+        @add-member="onMobileAddContact('member')"
       />
     </header>
 
@@ -223,6 +225,7 @@ import {
 import { refreshCurrentUser } from './stores/current-user';
 import { requestOpenChat } from './stores/pending-chat';
 import { requestOpenContact } from './stores/pending-contact';
+import { requestAddContact, type AddContactKind } from './stores/pending-add-contact';
 import { requestOpenAppDetail } from './stores/pending-app';
 import TopNavbar from './components/TopNavbar.vue';
 import UserAvatarMenu from './components/UserAvatarMenu.vue';
@@ -328,6 +331,13 @@ export default defineComponent({
     const openNetworkStatus = () => {
       requestOpenSystemSection('netStatus');
       handleMenuSelect('settings');
+    };
+
+    /** 移动端顶栏「+」菜单：先写添加请求（pending-add-contact，同 pending-chat 模式），
+        再切到通讯录 tab——ContactsPage 挂载/监听后消费并打开对应添加对话框 */
+    const onMobileAddContact = (kind: AddContactKind) => {
+      requestAddContact(kind);
+      handleMenuSelect('contacts');
     };
 
     /** 通讯录入口角标：当前空间「新的朋友/成员」未读条目数 */
@@ -565,7 +575,8 @@ export default defineComponent({
       mobileTopBarVisible,
       mobileTabBarVisible,
       mobileTopBarTitle,
-      openNetworkStatus
+      openNetworkStatus,
+      onMobileAddContact
     };
   }
 });

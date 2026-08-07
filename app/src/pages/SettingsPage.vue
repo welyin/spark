@@ -43,9 +43,10 @@
         </div>
       </div>
 
-      <!-- 栈2/栈3：顶部返回栏 + 分组页/模块页（面板自带返回栏接管时隐藏页级栏，防双栏叠层） -->
+      <!-- 栈2/栈3：顶部返回栏 + 分组页/模块页（面板 section 打开时其覆盖层以页面为基准整页盖住本栏，
+           无需再隐藏——隐藏/复现会导致面板 reflow、离场动画起始位置偏下） -->
       <template v-else>
-        <MobileBackBar v-if="mobileCanBack && !panelSectionOpen" :title="mobileTitle" @back="onMobileBack" />
+        <MobileBackBar v-if="mobileCanBack" :title="mobileTitle" @back="onMobileBack" />
 
         <!-- 个人设置（个人/组织空间均有）：栈2=模块菜单分组页；个人空间另有系统设置 -->
         <template v-if="isPersonal || activeMenu === 'mine'">
@@ -69,7 +70,6 @@
           <SystemSettingsPanel
             v-else-if="activeMenu === 'system' && mobileFrame.page === 'section'"
             :initial-section="systemInitialSection ?? undefined"
-            @section-toggle="panelSectionOpen = $event"
           />
 
           <!-- 栈3：选中模块的列表栏（模块编辑页以抽屉打开，不占第五栏） -->
@@ -96,12 +96,10 @@
         <template v-else>
           <OrgSettingsPanel
             v-if="activeMenu === 'space' && mobileFrame.page === 'section'"
-            @section-toggle="panelSectionOpen = $event"
           />
           <SystemSettingsPanel
             v-else-if="activeMenu === 'system' && mobileFrame.page === 'section'"
             :initial-section="systemInitialSection ?? undefined"
-            @section-toggle="panelSectionOpen = $event"
           />
         </template>
       </template>
@@ -255,9 +253,6 @@ export default defineComponent({
     const rootStatus = ref<RootStatus>({ initialized: false, unlocked: false, rootId: null, nickname: null, avatar: null });
     // 系统设置深链初始 section（移动端网络状态点直达 netStatus；消费后保持，仅首次挂载生效）
     const systemInitialSection = ref<SystemSectionKey | null>(null);
-    // 面板内容整页打开（系统/组织设置选中 section）时隐藏页级返回栏——面板自带返回栏接管，
-    // 否则双栏叠层、内容偏下（Android 前端改造）
-    const panelSectionOpen = ref(false);
 
     const isPersonal = computed(() => currentSpace.value.type === 'personal');
     // 空间 key（'personal' / 'org:<orgId>'）：组织 A→B 切换时 isPersonal 不变，watch 须以 spaceKey 为口径
@@ -403,7 +398,6 @@ export default defineComponent({
       isPersonal,
       currentOrgName,
       systemInitialSection,
-      panelSectionOpen,
       goTest,
       switchAccount,
       logout,

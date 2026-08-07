@@ -16,7 +16,11 @@
         :class="{ active: activeWay === way.key }"
         @click="selectWay(way.key)"
       >
-        <el-icon class="mine-list-item-icon" :size="17"><component :is="way.icon" /></el-icon>
+        <el-icon
+          class="mine-list-item-icon"
+          :size="17"
+          :style="isMobileLayout ? { color: way.color } : undefined"
+        ><component :is="way.icon" /></el-icon>
         <span class="mine-list-item-text">
           <b>{{ way.label }}</b>
           <span>{{ way.desc }}</span>
@@ -115,25 +119,29 @@ import { ElMessage } from 'element-plus';
 import { Lock, Postcard } from '@element-plus/icons-vue';
 import QRCode from 'qrcode';
 import { isIdentityBackupMarked, markIdentityBackupDone } from '../../utils/backup-state';
+import { isMobileLayout } from '../../stores/ui-layout';
 import { errorMessage } from '../../utils/ipc';
 import MineDetailContainer from './MineDetailContainer.vue';
 
 type BackupWayKey = 'qr' | 'mnemonic';
 
-const WAYS: Array<{ key: BackupWayKey; label: string; desc: string; gateHint: string; icon: Component }> = [
+// color 为移动端菜单图标色（微信式每项一色，与 MinePage 一级菜单同规则、同色系色板，桌面端不使用）
+const WAYS: Array<{ key: BackupWayKey; label: string; desc: string; gateHint: string; icon: Component; color: string }> = [
   {
     key: 'qr',
     label: '二维码备份',
     desc: '加密二维码，便捷恢复',
     gateHint: '输入登录密码以显示备份二维码。二维码内容已加密，恢复时需配合登录密码。',
-    icon: Postcard
+    icon: Postcard,
+    color: '#34c19b'
   },
   {
     key: 'mnemonic',
     label: '助记词备份',
     desc: '离线抄写，最高权限',
     gateHint: '输入登录密码以查看助记词。助记词是账号最高权限，请确认周围无人窥屏。',
-    icon: Lock
+    icon: Lock,
+    color: '#7b61ff'
   }
 ];
 
@@ -261,6 +269,7 @@ export default defineComponent({
       qrWidth,
       qrDense,
       revealedWords,
+      isMobileLayout,
       selectWay,
       closeDetail,
       verifyAndReveal,

@@ -474,8 +474,13 @@
     transform: none;
   }
 
-  /* pop/reset：当前层向右滑出（带投影），显露的下一层保持原位完全静止（与 push 旧层静止呼应） */
+  /* pop/reset：当前层向右滑出（带投影），显露的下一层保持原位完全静止（与 push 旧层静止呼应）。
+     离场层用 fixed（相对视口）而非 absolute（相对页面）：pop 瞬间顶栏/底部 tab 复现会让 .main
+     下移，absolute 层随页面包含块下沉、起始位置比原位置偏下；fixed 层保持原视口矩形，
+     滑出途中逐步揭示已就位的下层页面与顶栏/底栏，全程无跳动（Android 前端改造） */
   .mobile-nav-pop-leave-active {
+    position: fixed;
+    inset: 0;
     z-index: 2;
     box-shadow: -12px 0 24px rgba(0, 0, 0, 0.12);
   }

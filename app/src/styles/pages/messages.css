@@ -738,4 +738,14 @@
   .messages-page .msg-input-area .el-input__wrapper {
     min-height: 36px;
   }
+
+  /* 会话列表字号与其它页面菜单统一（第二批打磨）：主文字（会话名）16px、副文字（预览/时间）13px */
+  .messages-page .conv-name {
+    font-size: 16px;
+  }
+
+  .messages-page .conv-time,
+  .messages-page .conv-preview {
+    font-size: 13px;
+  }
 }

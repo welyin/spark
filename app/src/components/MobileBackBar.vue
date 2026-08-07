@@ -62,7 +62,8 @@ export default defineComponent({
 
 .mobile-back-title {
   margin: 0;
-  font-size: 15px;
+  /* 与一级页顶栏页名（MobileTopBar 16px/600）统一 */
+  font-size: 16px;
   font-weight: 600;
   color: var(--spark-text-1);
   max-width: 50vw;

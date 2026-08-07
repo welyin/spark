@@ -34,7 +34,7 @@
       :class="{ active: activeId === 'admins' }"
       @click="$emit('select', 'admins')"
     >
-      <span class="row-icon"><el-icon :size="17"><Star /></el-icon></span>
+      <span class="row-icon row-icon-admin"><el-icon :size="17"><Star /></el-icon></span>
       <span class="request-item-main"><b>管理员</b></span>
       <span class="group-count">{{ adminCount }}</span>
     </div>
@@ -58,7 +58,7 @@
       :class="{ active: activeId === 'ungrouped' }"
       @click="$emit('select', 'ungrouped')"
     >
-      <span class="row-icon"><el-icon :size="17"><User /></el-icon></span>
+      <span class="row-icon row-icon-ungrouped"><el-icon :size="17"><User /></el-icon></span>
       <span class="request-item-main"><b>未分组</b></span>
       <span class="group-count">{{ counts.ungrouped || 0 }}</span>
     </div>

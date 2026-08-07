@@ -204,8 +204,7 @@ export default defineComponent({
     OrgAvatar,
     AvatarPicker
   },
-  emits: ['section-toggle'],
-  setup(_, { emit }) {
+  setup() {
     // 移动端（Android 前端改造）：子菜单整页 <-> 内容整页覆盖层；桌面端保持分栏
     const activeSection = ref<SectionKey | null>(isMobileLayout.value ? null : 'info');
     // 覆盖层登记（token 制）：移动端选中 section 时入栈，返回子菜单/卸载时出栈；
@@ -218,8 +217,8 @@ export default defineComponent({
     watch(
       () => activeSection.value !== null && isMobileLayout.value,
       (opened) => {
-        // 告知宿主页隐藏页级返回栏（面板自带返回栏接管），避免双栏叠层、内容偏下
-        emit('section-toggle', opened);
+        // 页级返回栏不再随 section 开关隐藏（覆盖层以页面为定位基准整页盖住它），
+        // 此处只维护覆盖层登记
         if (opened && !overlayToken) {
           overlayToken = pushOverlay();
         } else if (!opened) {
@@ -621,7 +620,9 @@ export default defineComponent({
 /* ---- 移动端（≤768px，Android 前端改造）：子菜单整页 + 内容整页覆盖 ---- */
 @media (max-width: 768px) {
   .org-settings-panel {
-    position: relative;
+    /* 移动端面板自身不作定位包含块（保持 static）：内容覆盖层/返回栏的 absolute 一路向上
+       解析到页面 section（.mine-page，position:relative）。返回关闭 section 时页级返回栏复现、
+       面板随 flex 下移，若覆盖层以面板为基准，离场层起始位置会偏下一个返回栏高度（Android 前端改造） */
     flex: 1;
     min-height: 0;
     width: 100%;
@@ -633,7 +634,8 @@ export default defineComponent({
     height: 100%;
   }
 
-  /* 内容区（mine-detail）整页覆盖；top 让出返回栏高度（48px + 状态栏安全区），
+  /* 内容区（mine-detail）整页覆盖；定位基准为页面 section（面板保持 static，见上），
+     top 让出返回栏高度（48px + 状态栏安全区），
      避免首行内容被返回栏遮挡；进出动画由 Transition（settings-overlay-slide）承担 */
   .org-settings-panel > .mine-detail {
     position: absolute;

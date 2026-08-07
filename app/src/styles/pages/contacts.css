@@ -540,3 +540,57 @@
     border-top: 2px solid var(--spark-border);
   }
 }
+
+/* ---- 移动端适配（第二批打磨）：菜单去选中态 / 微信式图标色块 / 列表字号统一 ----
+   桌面端（≥769px）不受本块影响 */
+@media (max-width: 768px) {
+  /* 移动端点行即切整页（不是选中），功能行/分组行/联系人行/标签行的 active 高亮一律不生效
+     （第一批已处理我的/设置页菜单，这里补齐通讯录残留的选中态） */
+  .contacts-page .request-item.active {
+    background: transparent;
+  }
+
+  .contacts-page .request-item.active .request-item-main b {
+    font-weight: 400;
+  }
+
+  /* 功能/分组行图标改微信式「彩色圆角方块 + 白色图标」（桌面端保持圆形浅底彩图标）；
+     色板与菜单同系：新朋友/新成员=橙，标签=蓝，管理员=黄，未分组=灰蓝，分组=绿 */
+  .contacts-page .row-icon {
+    border-radius: 10px;
+    background: #34c19b;
+    color: #fff;
+  }
+
+  .contacts-page .row-icon-new {
+    background: #ff7d00;
+    color: #fff;
+  }
+
+  /* 标签行：第二栏「标签」入口（.row-icon-tag）与标签管理列表（.contacts-request-list 内） */
+  .contacts-page .row-icon-tag,
+  .contacts-page .contacts-request-list .row-icon {
+    background: #3296fa;
+    color: #fff;
+  }
+
+  .contacts-page .row-icon-admin {
+    background: #f7b500;
+    color: #fff;
+  }
+
+  .contacts-page .row-icon-ungrouped {
+    background: #64748b;
+    color: #fff;
+  }
+
+  /* 列表字号与我的/设置页菜单统一：主文字 16px、副文字 13px */
+  .contacts-page .request-item-main b {
+    font-size: 16px;
+  }
+
+  .contacts-page .request-item-main span,
+  .contacts-page .group-count {
+    font-size: 13px;
+  }
+}

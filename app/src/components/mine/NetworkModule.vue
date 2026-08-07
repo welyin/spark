@@ -15,7 +15,11 @@
         :class="{ active: activeCategory === cat.key }"
         @click="activeCategory = cat.key"
       >
-        <el-icon class="mine-list-item-icon" :size="17"><component :is="cat.icon" /></el-icon>
+        <el-icon
+          class="mine-list-item-icon"
+          :size="17"
+          :style="isMobileLayout ? { color: cat.color } : undefined"
+        ><component :is="cat.icon" /></el-icon>
         <span class="mine-list-item-text">
           <b>{{ cat.label }}</b>
           <span>{{ cat.summary }}</span>
@@ -127,6 +131,7 @@ import { computed, defineComponent, onMounted, ref, type Component, type PropTyp
 import { ElMessage } from 'element-plus';
 import { Connection, Key, Link, Refresh, Share } from '@element-plus/icons-vue';
 import { errorMessage } from '../../utils/ipc';
+import { isMobileLayout } from '../../stores/ui-layout';
 import NodeIdentityInfo, { type NodeIdentityRow } from '../common/NodeIdentityInfo.vue';
 import ProxySettings from '../settings/ProxySettings.vue';
 import type { P2pInfoDto as P2PInfo } from '../../api';
@@ -178,21 +183,23 @@ export default defineComponent({
     const connected = computed(() => props.p2pInfo.started && props.p2pInfo.connectedPeers.length > 0);
     const syncHealthy = computed(() => props.p2pInfo.sparkSyncSubscribers.length > 0);
 
-    const categories = computed<Array<{ key: CategoryKey; label: string; summary: string; icon: Component }>>(() => {
-      const list: Array<{ key: CategoryKey; label: string; summary: string; icon: Component }> = [
-        { key: 'identity', label: '节点信息', summary: props.rootId ? '已登录' : '未登录', icon: Key },
+    // color 为移动端菜单图标色（微信式每项一色，与 MinePage 一级菜单同规则、同色系色板，桌面端不使用）
+    const categories = computed<Array<{ key: CategoryKey; label: string; summary: string; icon: Component; color: string }>>(() => {
+      const list: Array<{ key: CategoryKey; label: string; summary: string; icon: Component; color: string }> = [
+        { key: 'identity', label: '节点信息', summary: props.rootId ? '已登录' : '未登录', icon: Key, color: '#64748b' },
         {
           key: 'connection',
           label: '连接状态',
           summary: connected.value ? `已连接 · 节点 ${props.p2pInfo.connectedPeers.length} 个` : '未连接',
-          icon: Connection
+          icon: Connection,
+          color: '#3296fa'
         },
-        { key: 'dht', label: 'DHT 网络', summary: dhtMode.value === 'off' ? '完全私有' : '开放', icon: Share },
-        { key: 'sync', label: '同步状态', summary: syncHealthy.value ? '同步状态良好' : '等待同步', icon: Refresh }
+        { key: 'dht', label: 'DHT 网络', summary: dhtMode.value === 'off' ? '完全私有' : '开放', icon: Share, color: '#00b8a9' },
+        { key: 'sync', label: '同步状态', summary: syncHealthy.value ? '同步状态良好' : '等待同步', icon: Refresh, color: '#34c19b' }
       ];
       // HTTP 代理设置（仅系统设置页传入 show-proxy 时出现）
       if (props.showProxy) {
-        list.push({ key: 'proxy', label: '网络代理', summary: '更新与市场下载加速', icon: Link });
+        list.push({ key: 'proxy', label: '网络代理', summary: '更新与市场下载加速', icon: Link, color: '#ff7d00' });
       }
       return list;
     });
@@ -314,6 +321,7 @@ export default defineComponent({
       dhtModeSaving,
       dhtModeMessage,
       onDhtModeChange,
+      isMobileLayout,
       emit
     };
   }

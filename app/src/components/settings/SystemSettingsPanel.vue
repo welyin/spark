@@ -218,8 +218,7 @@ export default defineComponent({
     /** 初始定位的子菜单（深链入口，如移动端网络状态点跳「网络状态」）；仅在挂载时生效一次 */
     initialSection: { type: String as () => SectionKey, default: undefined }
   },
-  emits: ['section-toggle'],
-  setup(props, { emit }) {
+  setup(props) {
     // 移动端（Android 前端改造）：子菜单整页 <-> 内容整页覆盖层；桌面端保持「子菜单+内容」分栏
     const activeSection = ref<SectionKey | null>(props.initialSection ?? (isMobileLayout.value ? null : 'general'));
     // 覆盖层登记（token 制）：移动端选中 section（内容整页）时入栈，返回子菜单/卸载时出栈；
@@ -232,8 +231,8 @@ export default defineComponent({
     watch(
       () => activeSection.value !== null && isMobileLayout.value,
       (opened) => {
-        // 告知宿主页隐藏页级返回栏（面板自带返回栏接管），避免双栏叠层、内容偏下
-        emit('section-toggle', opened);
+        // 页级返回栏不再随 section 开关隐藏（覆盖层以页面为定位基准整页盖住它），
+        // 此处只维护覆盖层登记
         if (opened && !overlayToken) {
           overlayToken = pushOverlay();
         } else if (!opened) {
@@ -495,7 +494,9 @@ export default defineComponent({
    选中 section 时内容区 absolute 覆盖整页（顶部让出返回栏高度），不上下分屏 */
 @media (max-width: 768px) {
   .system-settings-panel {
-    position: relative;
+    /* 移动端面板自身不作定位包含块（保持 static）：内容覆盖层/返回栏的 absolute 一路向上
+       解析到页面 section（.mine-page，position:relative）。返回关闭 section 时页级返回栏复现、
+       面板随 flex 下移，若覆盖层以面板为基准，离场层起始位置会偏下一个返回栏高度（Android 前端改造） */
     flex: 1;
     min-height: 0;
     width: 100%;
@@ -508,7 +509,8 @@ export default defineComponent({
   }
 
   /* 内容区：NetworkModule/DevicesModule 内部 mine-list 或 .mine-detail，absolute 整页覆盖；
-     top 让出返回栏高度（48px + 状态栏安全区），避免首行内容被返回栏遮挡；
+     定位基准为页面 section（面板保持 static，见上），top 让出返回栏高度（48px + 状态栏安全区），
+     避免首行内容被返回栏遮挡；
      :not(.panel-submenu) 排除面板自身子菜单（其与内容区互斥渲染，但需防 CSS 命中）；
      进出动画由 Transition（settings-overlay-slide）承担 */
   .system-settings-panel > :deep(.mine-list):not(.panel-submenu),
