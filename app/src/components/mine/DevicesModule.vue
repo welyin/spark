@@ -14,7 +14,7 @@
         @click="activeItem = 'device'"
       >
         <!-- 移动端菜单图标补色（微信式每项一色，同 MinePage 一级菜单色板；桌面端不生效） -->
-        <el-icon class="mine-list-item-icon" :size="17" :style="isMobileLayout ? { color: '#3296fa' } : undefined"><Monitor /></el-icon>
+        <el-icon class="mine-list-item-icon" :size="17" :style="{ color: '#3296fa' }"><Monitor /></el-icon>
         <span class="mine-list-item-text">
           <b>本机设备</b>
           <span>{{ deviceSummary }}</span>
@@ -49,7 +49,6 @@
 import { computed, defineComponent, ref, type PropType } from 'vue';
 import { Monitor } from '@element-plus/icons-vue';
 import NodeIdentityInfo, { type NodeIdentityRow } from '../common/NodeIdentityInfo.vue';
-import { isMobileLayout } from '../../stores/ui-layout';
 import type { P2pInfoDto as P2PInfo } from '../../api';
 import MineDetailContainer from './MineDetailContainer.vue';
 
@@ -79,8 +78,7 @@ export default defineComponent({
     return {
       activeItem,
       deviceSummary,
-      deviceRows,
-      isMobileLayout
+      deviceRows
     };
   }
 });

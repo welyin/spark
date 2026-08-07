@@ -19,7 +19,7 @@
         <el-icon
           class="mine-list-item-icon"
           :size="17"
-          :style="isMobileLayout ? { color: field.color } : undefined"
+          :style="{ color: field.color }"
         ><component :is="field.icon" /></el-icon>
         <b class="org-field-label">{{ field.label }}</b>
         <UserAvatar
@@ -146,7 +146,6 @@ import { currentSpaceOrgId } from '../../stores/current-space';
 import { getOrgIdentity, setOrgIdentity } from '../../stores/org-identity';
 import { orgIdentityAvatarSource } from '../../stores/avatar-sources';
 import { getProfileExtra, setProfileExtra, type ProfileExtra } from '../../stores/profile-extra';
-import { isMobileLayout } from '../../stores/ui-layout';
 import UserAvatar from '../UserAvatar.vue';
 import AvatarPicker from '../AvatarPicker.vue';
 import MineDetailContainer from './MineDetailContainer.vue';
@@ -194,7 +193,7 @@ export default defineComponent({
     const extra = computed(() => getProfileExtra(avatarSeed.value));
 
     // ---------------- 第三栏字段列表 ----------------
-    // color 为移动端菜单图标色（微信式每项一色，与 MinePage 一级菜单同规则、同色系色板，桌面端不使用）
+    // color 为菜单图标色（微信式每项一色，与 MinePage 一级菜单同规则、同色系色板，移动端与桌面端统一上色）
     const fields = computed<Array<{ key: FieldKey; label: string; value: string; icon: Component; color: string }>>(() => [
       { key: 'avatar', label: '头像', value: '', icon: Avatar, color: '#00b8a9' },
       { key: 'nickname', label: '昵称', value: displayNickname.value, icon: User, color: '#3296fa' },
@@ -260,7 +259,6 @@ export default defineComponent({
       activeField,
       activeFieldLabel,
       fields,
-      isMobileLayout,
       identity,
       displayNickname,
       avatarSeed,

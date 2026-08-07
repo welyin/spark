@@ -107,16 +107,22 @@ describe('移动端整页 + 导航栈（波次 2）', () => {
     unmount();
   });
 
-  it('通讯录页：标签页点成员只开栈页（单层资料卡，不叠加抽屉）', async () => {
+  it('通讯录页：标签列表 → 成员管理整页 → 点成员开资料卡（导航栈逐层，不叠加抽屉）', async () => {
     const { el, errors, unmount } = await mountPage(ContactsPage);
     expect(errors.map(String)).toEqual([]);
 
-    // 列表 → 标签整页（栈2）：种子首个标签「邻居」下有成员
+    // 列表 → 标签列表整页（栈2；面板拆层 view="list"，本层只有标签行，无成员行）
     pushPage('contacts', 'tags');
+    await settleTransition();
+    expect(el.querySelector('.contacts-mobile-panel .request-item')).toBeTruthy();
+    expect(el.querySelector('.tag-member-row')).toBeFalsy();
+
+    // 点首个标签行 → 栈3 标签成员管理整页（种子首个标签「邻居」下有成员）
+    await click(el, '.contacts-mobile-panel .request-item');
     await settleTransition();
     expect(el.querySelector('.tag-member-row')).toBeTruthy();
 
-    // 点成员 → 栈3 资料卡整页；全文档只此一层 ContactPanel（移动端不再开抽屉叠加第二层）
+    // 点成员 → 栈4 资料卡整页；全文档只此一层 ContactPanel（移动端不再开抽屉叠加第二层）
     await click(el, '.tag-member-row');
     await settleTransition();
     expect(el.querySelector('.mobile-stack-layer .contact-panel')).toBeTruthy();

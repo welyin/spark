@@ -320,10 +320,23 @@
     border-top: 2px solid var(--spark-border);
   }
 
-  /* 移动端菜单字号按微信调大：主文字 16px，副文案/右侧缩略值 13px（桌面端不变） */
+  /* ---- 菜单项规格统一（基准=通讯录 .request-item）：58px 行高、0 16px 内边距、12px 间距、
+     17px 图标、主文字 16px text-1、副文字/右侧缩略值 13px text-3。
+     我的/设置页菜单（.mine-menu-item）与系统/组织设置子菜单（.mine-list-item）的行高/内边距/间距
+     在桌面基础样式中已同参（见本文件顶部），本块统一字号；
+     侧边栏抽屉条目（.mobile-drawer-item，Teleport 挂 body，不在 .mine-page 内）在此一并收敛，
+     其 scoped 样式不再重复定义行参数，避免逐组件散落 ---- */
   .mine-page .mine-menu-item,
-  .mine-page .mine-list-item {
+  .mine-page .mine-list-item,
+  .mobile-drawer-item {
     font-size: 16px;
+  }
+
+  /* 抽屉条目行参数对齐 request-item（58px 行高 / 0 16px 内边距 / 12px 间距） */
+  .mobile-drawer-item {
+    height: 58px;
+    gap: 12px;
+    padding: 0 16px;
   }
 
   .mine-page .mine-list-item-text span,

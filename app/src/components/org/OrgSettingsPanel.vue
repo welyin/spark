@@ -27,7 +27,7 @@
         <el-icon
           class="mine-list-item-icon"
           :size="17"
-          :style="isMobileLayout ? { color: item.color } : undefined"
+          :style="{ color: item.color }"
         ><component :is="item.icon" /></el-icon>
         <b class="settings-section-label">{{ item.label }}</b>
       </button>
@@ -256,7 +256,7 @@ export default defineComponent({
     // 找回组织面板引用：切换组织时重置其内部状态
     const recoverPanelRef = ref<{ reset: () => void } | null>(null);
 
-    // color 为移动端菜单图标色（微信式每项一色，取色与 utils/palette 品牌色板同源，桌面端不使用）
+    // color 为菜单图标色（微信式每项一色，取色与 utils/palette 品牌色板同源，移动端与桌面端统一上色）
     const sections: Array<{ key: SectionKey; label: string; icon: Component; color: string }> = [
       { key: 'info', label: '组织信息', icon: OfficeBuilding, color: '#00b8a9' },
       { key: 'gateway', label: '网关设置', icon: Connection, color: '#3296fa' },
@@ -532,6 +532,12 @@ export default defineComponent({
 </script>
 
 <style scoped>
+/* 桌面端：包裹层不生成盒子（display: contents），子菜单与内容栏直接作为宿主 .mine-page
+   四栏 flex 容器的栏位项，恢复移动改造前的多根节点结构；移动端媒体块内覆盖回 display: block */
+.org-settings-panel {
+  display: contents;
+}
+
 /* 子菜单项标签：常规字重，选中行加粗（同 SystemSettingsPanel） */
 .settings-section-label {
   font-size: 14px;
@@ -620,6 +626,8 @@ export default defineComponent({
 /* ---- 移动端（≤768px，Android 前端改造）：子菜单整页 + 内容整页覆盖 ---- */
 @media (max-width: 768px) {
   .org-settings-panel {
+    /* 移动端恢复包裹层盒子（覆盖桌面端 display: contents），作为页面纵向 flex 的内容区 */
+    display: block;
     /* 移动端面板自身不作定位包含块（保持 static）：内容覆盖层/返回栏的 absolute 一路向上
        解析到页面 section（.mine-page，position:relative）。返回关闭 section 时页级返回栏复现、
        面板随 flex 下移，若覆盖层以面板为基准，离场层起始位置会偏下一个返回栏高度（Android 前端改造） */

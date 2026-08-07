@@ -44,9 +44,12 @@
 .contacts-search { flex: 1; min-width: 0; }
 
 /* ---- 第二栏统一列表（§2.2）：功能行 + 分组行共用 .request-item/.row-icon 结构 ---- */
-/* 功能行图标配色：品牌色/语义色的浅底 + 同色图标，不用彩色实底方块 */
-.row-icon-new { background: var(--spark-primary-light); color: var(--spark-primary); }
-.row-icon-tag { background: var(--spark-success-bg); color: var(--spark-success); }
+/* 功能行图标：微信式「彩色圆角方块 + 白色图标」（全端统一；色板与菜单同系：
+   新朋友/新成员=橙，标签=蓝，管理员=黄，未分组=灰蓝；分组=绿见下方 .row-icon 基础样式） */
+.row-icon-new { background: #ff7d00; color: #fff; }
+.row-icon-tag { background: #3296fa; color: #fff; }
+.row-icon-admin { background: #f7b500; color: #fff; }
+.row-icon-ungrouped { background: #64748b; color: #fff; }
 .row-badge {
   margin-right: 4px;
 }
@@ -462,7 +465,8 @@
 }
 
 /* ---- 标签（§8）：第三栏标签列表行 + 第四栏成员管理 ---- */
-/* 列表行图标块（与申请行头像位同尺寸）：标签行、分组行共用 */
+/* 列表行图标块（与申请行头像位同尺寸）：标签行、分组行共用；
+   全端统一微信式「彩色圆角方块（10px 圆角）+ 白色图标」，默认分组绿 */
 .row-icon {
   display: flex;
   align-items: center;
@@ -470,9 +474,15 @@
   width: 40px;
   height: 40px;
   flex-shrink: 0;
-  border-radius: 50%;
-  background: var(--spark-primary-light);
-  color: var(--spark-primary);
+  border-radius: 10px;
+  background: #34c19b;
+  color: #fff;
+}
+
+/* 标签管理列表内的标签行：与第二栏「标签」入口同为蓝色方块 */
+.contacts-request-list .row-icon {
+  background: #3296fa;
+  color: #fff;
 }
 
 /* 第四栏：标签名 + 操作 */
@@ -524,24 +534,19 @@
     border-right: 0;
   }
 
-  /* 新的朋友 / 标签整页层：面板内部「列表 + 详情」双栏纵排为单栏上下（低改造成本），
-     整页统一由 .mobile-stack-body 滚动 */
-  .contacts-mobile-panel .contacts-request-list {
+  /* 新的朋友 / 标签整页层（Android 前端改造）：面板拆层——列表页、详情页各自一帧整页，
+     经导航栈压入/弹出（进入自右滑入、返回向右滑出），不再双栏上下分屏；
+     栏位类在整页层内放开弹性与自滚动（整页统一由 .mobile-stack-body 滚动） */
+  .contacts-mobile-panel .contacts-request-list,
+  .contacts-mobile-panel .contacts-detail {
     flex: none;
     min-width: 0;
     border-right: 0;
     overflow: visible;
   }
-
-  .contacts-mobile-panel .contacts-detail {
-    flex: none;
-    min-width: 0;
-    overflow: visible;
-    border-top: 2px solid var(--spark-border);
-  }
 }
 
-/* ---- 移动端适配（第二批打磨）：菜单去选中态 / 微信式图标色块 / 列表字号统一 ----
+/* ---- 移动端适配（第二批打磨）：菜单去选中态 / 列表字号统一 ----
    桌面端（≥769px）不受本块影响 */
 @media (max-width: 768px) {
   /* 移动端点行即切整页（不是选中），功能行/分组行/联系人行/标签行的 active 高亮一律不生效
@@ -552,36 +557,6 @@
 
   .contacts-page .request-item.active .request-item-main b {
     font-weight: 400;
-  }
-
-  /* 功能/分组行图标改微信式「彩色圆角方块 + 白色图标」（桌面端保持圆形浅底彩图标）；
-     色板与菜单同系：新朋友/新成员=橙，标签=蓝，管理员=黄，未分组=灰蓝，分组=绿 */
-  .contacts-page .row-icon {
-    border-radius: 10px;
-    background: #34c19b;
-    color: #fff;
-  }
-
-  .contacts-page .row-icon-new {
-    background: #ff7d00;
-    color: #fff;
-  }
-
-  /* 标签行：第二栏「标签」入口（.row-icon-tag）与标签管理列表（.contacts-request-list 内） */
-  .contacts-page .row-icon-tag,
-  .contacts-page .contacts-request-list .row-icon {
-    background: #3296fa;
-    color: #fff;
-  }
-
-  .contacts-page .row-icon-admin {
-    background: #f7b500;
-    color: #fff;
-  }
-
-  .contacts-page .row-icon-ungrouped {
-    background: #64748b;
-    color: #fff;
   }
 
   /* 列表字号与我的/设置页菜单统一：主文字 16px、副文字 13px */

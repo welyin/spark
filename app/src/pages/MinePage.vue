@@ -156,7 +156,7 @@ export default defineComponent({
     // 组织空间下头像入口只承载「组织身份」及其编辑，默认即选中
     const activeMenu = ref<MenuKey>(currentSpace.value.type === 'org' ? 'org' : 'profile');
 
-    // color 为移动端菜单图标色（微信式每项一色，取色与 utils/palette 品牌色板同源，桌面端不使用）
+    // color 为菜单图标色（微信式每项一色，取色与 utils/palette 品牌色板同源，移动端与桌面端统一上色）
     const menuItems = computed<Array<{ key: MenuKey; label: string; icon: Component; color: string }>>(() => {
       // 组织空间：不显示个人设置菜单，仅保留组织身份与成员权限
       if (currentSpace.value.type === 'org') {

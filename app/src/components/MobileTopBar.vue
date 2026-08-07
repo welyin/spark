@@ -2,13 +2,18 @@
      左侧=菜单图标（打开左滑侧边栏 MobileSpaceDrawer）；中间=当前页名（消息/通讯录/应用/我的）+
      页名右侧紧贴网络状态点（点击直达系统设置→网络状态）；
      右侧=搜索（全屏搜索层，复用 GlobalSearch）+ 圆圈加号（底部上滑菜单，微信式：
-     个人空间「添加朋友」/ 组织空间「添加成员」，经 App.vue 接到通讯录现有添加流程）。
+     个人空间「添加朋友」/ 组织空间「添加成员」（仅组织管理员），经 App.vue 接到通讯录现有添加流程）。
      仅在四个主 tab 且栈深=1（currentPage(tab).page==='root'）时由 App.vue 渲染，
      进入二级页（聊天/详情等）时顶部导航整体不渲染（App.vue）。 -->
 <template>
   <header class="mobile-top-bar">
     <button type="button" class="mobile-top-bar-btn" title="切换空间" @click="emit('open-drawer')">
-      <el-icon :size="20"><Menu /></el-icon>
+      <!-- 抽屉图标：内联 SVG 自绘「上长下短」两根横线（企业微信风格，1.6px 粗、圆角线帽；
+           两端各留 1px 避免圆角线帽被视口裁切），不用 element-plus 菜单图标 -->
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+        <path d="M1 5.9h18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+        <path d="M1 14.1h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+      </svg>
     </button>
 
     <!-- 中间：页名 + 网络状态点（点紧贴文字右侧，随文字长度自适应） -->
@@ -43,7 +48,8 @@
     <Transition name="mobile-add-sheet">
       <div v-if="addSheetVisible" class="mobile-add-sheet-root" @click="addSheetVisible = false">
         <div class="mobile-add-sheet" @click.stop>
-          <!-- 「添加朋友」仅个人空间；「添加成员」仅组织空间（接通讯录现有添加朋友/成员邀请流程） -->
+          <!-- 「添加朋友」仅个人空间；「添加成员」仅组织空间且当前用户是管理员
+               （与通讯录页内「添加成员」按钮的 isOrgAdmin 门控同口径，非管理员不显示） -->
           <button v-if="isPersonal" type="button" class="mobile-add-sheet-item" @click="pickAddFriend">
             <el-icon :size="18" :style="{ color: '#ff7d00' }"><User /></el-icon>
             <div class="mobile-add-sheet-item-text">
@@ -51,7 +57,7 @@
               <span>通过身份 ID 添加新的朋友</span>
             </div>
           </button>
-          <button v-else type="button" class="mobile-add-sheet-item" @click="pickAddMember">
+          <button v-else-if="isOrgAdmin" type="button" class="mobile-add-sheet-item" @click="pickAddMember">
             <el-icon :size="18" :style="{ color: '#3296fa' }"><Avatar /></el-icon>
             <div class="mobile-add-sheet-item-text">
               <b>添加成员</b>
@@ -67,14 +73,15 @@
 
 <script lang="ts">
 import { computed, defineComponent, nextTick, ref } from 'vue';
-import { Avatar, CirclePlus, Menu, Search, User } from '@element-plus/icons-vue';
-import { currentSpace } from '../stores/current-space';
+import { Avatar, CirclePlus, Search, User } from '@element-plus/icons-vue';
+import { currentSpace, currentSpaceOrgId } from '../stores/current-space';
+import { isAdmin } from '../stores/org-membership';
 import NetworkStatusBar from './NetworkStatusBar.vue';
 import GlobalSearch from './GlobalSearch.vue';
 
 export default defineComponent({
   name: 'MobileTopBar',
-  components: { Menu, Search, CirclePlus, User, Avatar, NetworkStatusBar, GlobalSearch },
+  components: { Search, CirclePlus, User, Avatar, NetworkStatusBar, GlobalSearch },
   props: {
     /** 当前页名（消息/通讯录/应用/我的） */
     title: { type: String, required: true }
@@ -94,6 +101,9 @@ export default defineComponent({
     // 加号上滑菜单：菜单项按当前空间区分（个人=添加朋友；组织=添加成员）
     const addSheetVisible = ref(false);
     const isPersonal = computed(() => currentSpace.value.type === 'personal');
+    // 「添加成员」仅组织管理员可见（org-membership 缓存口径，同 use-contacts-data 的 isOrgAdmin；
+    // 缓存由 App.vue 启动校验与各页 refresh 填充，未加载时按非管理员处理）
+    const isOrgAdmin = computed(() => isAdmin(currentSpaceOrgId.value));
     const pickAddFriend = () => {
       addSheetVisible.value = false;
       emit('add-friend');
@@ -110,6 +120,7 @@ export default defineComponent({
       openSearch,
       addSheetVisible,
       isPersonal,
+      isOrgAdmin,
       pickAddFriend,
       pickAddMember
     };
@@ -204,9 +215,11 @@ export default defineComponent({
   width: auto;
 }
 
-/* 结果区铺满搜索层剩余高度（桌面下拉 420px 上限在移动端全屏层放开） */
+/* 结果区铺满搜索层剩余高度（桌面下拉 420px 上限在移动端全屏层放开）；
+   min-width:0 覆盖 GlobalSearch 下拉的 320px 兜底宽度，避免窄屏（<320px+边距）溢出 */
 .mobile-search-bar :deep(.global-search-dropdown) {
   max-height: calc(100dvh - 64px - env(safe-area-inset-top, 0px));
+  min-width: 0;
 }
 
 .mobile-search-cancel {

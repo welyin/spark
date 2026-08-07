@@ -19,7 +19,7 @@
         <el-icon
           class="mine-list-item-icon"
           :size="17"
-          :style="isMobileLayout ? { color: way.color } : undefined"
+          :style="{ color: way.color }"
         ><component :is="way.icon" /></el-icon>
         <span class="mine-list-item-text">
           <b>{{ way.label }}</b>
@@ -119,13 +119,12 @@ import { ElMessage } from 'element-plus';
 import { Lock, Postcard } from '@element-plus/icons-vue';
 import QRCode from 'qrcode';
 import { isIdentityBackupMarked, markIdentityBackupDone } from '../../utils/backup-state';
-import { isMobileLayout } from '../../stores/ui-layout';
 import { errorMessage } from '../../utils/ipc';
 import MineDetailContainer from './MineDetailContainer.vue';
 
 type BackupWayKey = 'qr' | 'mnemonic';
 
-// color 为移动端菜单图标色（微信式每项一色，与 MinePage 一级菜单同规则、同色系色板，桌面端不使用）
+// color 为菜单图标色（微信式每项一色，与 MinePage 一级菜单同规则、同色系色板，移动端与桌面端统一上色）
 const WAYS: Array<{ key: BackupWayKey; label: string; desc: string; gateHint: string; icon: Component; color: string }> = [
   {
     key: 'qr',
@@ -269,7 +268,6 @@ export default defineComponent({
       qrWidth,
       qrDense,
       revealedWords,
-      isMobileLayout,
       selectWay,
       closeDetail,
       verifyAndReveal,

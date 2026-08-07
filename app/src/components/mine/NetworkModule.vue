@@ -18,7 +18,7 @@
         <el-icon
           class="mine-list-item-icon"
           :size="17"
-          :style="isMobileLayout ? { color: cat.color } : undefined"
+          :style="{ color: cat.color }"
         ><component :is="cat.icon" /></el-icon>
         <span class="mine-list-item-text">
           <b>{{ cat.label }}</b>
@@ -131,7 +131,6 @@ import { computed, defineComponent, onMounted, ref, type Component, type PropTyp
 import { ElMessage } from 'element-plus';
 import { Connection, Key, Link, Refresh, Share } from '@element-plus/icons-vue';
 import { errorMessage } from '../../utils/ipc';
-import { isMobileLayout } from '../../stores/ui-layout';
 import NodeIdentityInfo, { type NodeIdentityRow } from '../common/NodeIdentityInfo.vue';
 import ProxySettings from '../settings/ProxySettings.vue';
 import type { P2pInfoDto as P2PInfo } from '../../api';
@@ -183,7 +182,7 @@ export default defineComponent({
     const connected = computed(() => props.p2pInfo.started && props.p2pInfo.connectedPeers.length > 0);
     const syncHealthy = computed(() => props.p2pInfo.sparkSyncSubscribers.length > 0);
 
-    // color 为移动端菜单图标色（微信式每项一色，与 MinePage 一级菜单同规则、同色系色板，桌面端不使用）
+    // color 为菜单图标色（微信式每项一色，与 MinePage 一级菜单同规则、同色系色板，移动端与桌面端统一上色）
     const categories = computed<Array<{ key: CategoryKey; label: string; summary: string; icon: Component; color: string }>>(() => {
       const list: Array<{ key: CategoryKey; label: string; summary: string; icon: Component; color: string }> = [
         { key: 'identity', label: '节点信息', summary: props.rootId ? '已登录' : '未登录', icon: Key, color: '#64748b' },
@@ -321,7 +320,6 @@ export default defineComponent({
       dhtModeSaving,
       dhtModeMessage,
       onDhtModeChange,
-      isMobileLayout,
       emit
     };
   }

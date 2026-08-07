@@ -168,6 +168,13 @@ export default defineComponent({
       document.documentElement.scrollTop = 0;
       document.querySelector('.gate-wrap')?.scrollTo({ top: 0 });
     };
+    // 横竖屏切换（Android 未锁竖屏，见 AndroidManifest configChanges）：基准高度随朝向变化，
+    // 沿用旧基准会把切换后的正常高度差误判为键盘弹出/收起；切换时重置基准与键盘态，
+    // 由随后的 resize 在新朝向下重新积累基准
+    const onOrientationChange = () => {
+      maxViewportHeight = 0;
+      keyboardOpen = false;
+    };
     const onViewportResize = () => {
       if (!window.visualViewport) {
         return;
@@ -196,14 +203,22 @@ export default defineComponent({
         return;
       }
       await refreshStatus();
+      // 播种基准高度：挂载时即取当前可视高度为历史最高值，避免首个键盘周期
+      //（弹出前未积累基准）丢失收起时的复位判定
+      maxViewportHeight = window.visualViewport?.height ?? window.innerHeight;
       // 监听可视区高度变化（键盘弹出/收起）；旧 WebView 无 visualViewport 时靠 resize 兜底
       window.visualViewport?.addEventListener('resize', onViewportResize);
       window.addEventListener('resize', onViewportResize);
+      // 横竖屏切换重置基准（screen.orientation 为主，orientationchange 兜底旧 WebView）
+      window.screen.orientation?.addEventListener('change', onOrientationChange);
+      window.addEventListener('orientationchange', onOrientationChange);
     });
 
     onUnmounted(() => {
       window.visualViewport?.removeEventListener('resize', onViewportResize);
       window.removeEventListener('resize', onViewportResize);
+      window.screen.orientation?.removeEventListener('change', onOrientationChange);
+      window.removeEventListener('orientationchange', onOrientationChange);
     });
 
     return {

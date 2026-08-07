@@ -5,7 +5,8 @@
 <template>
   <section class="contacts-page">
     <!-- 移动端（波次 2/3）：整页 + 导航栈，栈帧切换经 MobilePageTransition 滑动转场（微信式）——
-         栈1 列表（搜索 + 功能区 + 分组）；栈2 组内成员/新的朋友/标签；栈2-3 联系人资料卡 -->
+         栈1 列表（搜索 + 功能区 + 分组）；栈2 组内成员/新的朋友列表/标签列表；
+         栈3 申请详情/标签成员管理/联系人资料卡（搜索直达资料卡为栈2） -->
     <MobilePageTransition v-if="isMobileLayout" :tab="MOBILE_TAB">
       <!-- 栈1：搜索 + 功能区 + 分组列表 -->
       <div v-if="mobileFrame.page === 'root'" class="contacts-list">
@@ -84,11 +85,47 @@
         </div>
       </div>
 
-      <!-- 新的朋友 / 标签整页层（面板内部双栏纵排，见 contacts.css 波次 2 媒体查询） -->
+      <!-- 新的朋友 / 标签列表整页层（Android 前端改造：面板拆层，本层只渲染列表 view="list"）；
+           点行进详情再压一层（request-detail / tag-detail 栈帧，进入自右滑入、返回向右滑出） -->
       <div v-else-if="mobileFrame.page === 'new-friends'" class="mobile-stack-layer">
         <MobileBackBar :title="spaceType === 'org' ? '新的成员' : '新的朋友'" @back="onMobileBack" />
         <div class="mobile-stack-body contacts-mobile-panel">
           <NewFriendsPanel
+            view="list"
+            :requests="spaceData.requests"
+            :outgoing="spaceData.outgoing"
+            :space-type="spaceType"
+            :space-key="spaceKey"
+            @resolve="onResolveRequest"
+            @retry="onRetryOutgoing"
+            @reply="onReplyOutgoing"
+            @ask="onAskRequest"
+            @open-detail="onOpenRequestDetail"
+          />
+        </div>
+      </div>
+      <div v-else-if="mobileFrame.page === 'tags'" class="mobile-stack-layer">
+        <MobileBackBar title="标签" @back="onMobileBack" />
+        <div class="mobile-stack-body contacts-mobile-panel">
+          <TagManager
+            view="list"
+            :tags="spaceData.tags"
+            :space-key="spaceKey"
+            :contacts="contacts"
+            @view-member="onViewMemberNav"
+            @open-tag="onOpenTagDetail"
+          />
+        </div>
+      </div>
+
+      <!-- 申请详情整页层（栈3：新的朋友列表点行压入）；标签成员管理整页层（栈3：标签列表点行压入，
+           成员行再点由 onViewMemberNav 压入联系人资料卡帧） -->
+      <div v-else-if="mobileFrame.page === 'request-detail'" class="mobile-stack-layer">
+        <MobileBackBar :title="requestDetailTitle" @back="onMobileBack" />
+        <div class="mobile-stack-body contacts-mobile-panel">
+          <NewFriendsPanel
+            view="detail"
+            :initial-key="mobileFrame.params?.key ?? ''"
             :requests="spaceData.requests"
             :outgoing="spaceData.outgoing"
             :space-type="spaceType"
@@ -100,10 +137,12 @@
           />
         </div>
       </div>
-      <div v-else-if="mobileFrame.page === 'tags'" class="mobile-stack-layer">
-        <MobileBackBar title="标签" @back="onMobileBack" />
+      <div v-else-if="mobileFrame.page === 'tag-detail'" class="mobile-stack-layer">
+        <MobileBackBar :title="tagDetailTitle" @back="onMobileBack" />
         <div class="mobile-stack-body contacts-mobile-panel">
           <TagManager
+            view="detail"
+            :initial-tag-id="mobileFrame.params?.tagId ?? ''"
             :tags="spaceData.tags"
             :space-key="spaceKey"
             :contacts="contacts"
@@ -250,6 +289,7 @@
 <script lang="ts">
 import { computed, defineComponent, ref, watch } from 'vue';
 import { Close, Search } from '@element-plus/icons-vue';
+import { ElMessage } from 'element-plus';
 import { currentSpace, currentSpaceOrgId, currentSpaceType } from '../stores/current-space';
 import { contactsOf, spaceKeyOf } from '../mock/contacts';
 import { isMobileLayout } from '../stores/ui-layout';
@@ -324,19 +364,28 @@ export default defineComponent({
     });
 
     // 顶栏「+」菜单的添加朋友/添加成员请求（pending-add-contact）：切到本 tab 挂载时（immediate）
-    // 或停留本页时消费，打开对应添加对话框（复用现有添加朋友/成员邀请流程）
+    // 或停留本页时消费，打开对应添加对话框（复用现有添加朋友/成员邀请流程）。
+    // 先判定再消费：仅判定通过才取出请求，避免条件不满足时静默吞掉；
+    // 非管理员是终态失败——消费并 toast 提示（顶栏菜单已按管理员门控，此处为防绕过兜底）
     watch(
       pendingAddContact,
       (kind) => {
         if (!kind) {
           return;
         }
-        consumePendingAddContact();
         if (kind === 'friend') {
+          consumePendingAddContact();
           addFriendVisible.value = true;
-        } else if (isOrg.value) {
-          inviteVisible.value = true;
+          return;
         }
+        if (isOrg.value && isOrgAdmin.value) {
+          consumePendingAddContact();
+          inviteVisible.value = true;
+        } else if (isOrg.value) {
+          consumePendingAddContact();
+          ElMessage.warning('仅组织管理员可添加成员');
+        }
+        // member 请求但当前非组织空间：保留请求（顶栏按空间出菜单，正常不会走到此分支）
       },
       { immediate: true }
     );
@@ -428,6 +477,39 @@ export default defineComponent({
       pushPage(MOBILE_TAB, 'contact', { rootId });
     };
 
+    /** 新的朋友列表点行（移动端）：压入申请详情栈帧（栈3 整页）；桌面端不触发（双栏同屏） */
+    const onOpenRequestDetail = (dir: string, id: string) => {
+      if (isMobileLayout.value) {
+        pushPage(MOBILE_TAB, 'request-detail', { key: `${dir}:${id}` });
+      }
+    };
+
+    /** 标签列表点行（移动端）：压入标签成员管理栈帧（栈3 整页）；桌面端不触发 */
+    const onOpenTagDetail = (tagId: string) => {
+      if (isMobileLayout.value) {
+        pushPage(MOBILE_TAB, 'tag-detail', { tagId });
+      }
+    };
+
+    /** 申请详情页返回栏标题：申请人昵称（申请快照），找不到时回退通用文案 */
+    const requestDetailTitle = computed(() => {
+      if (mobileFrame.value.page !== 'request-detail') {
+        return '申请详情';
+      }
+      const [dir, id] = (mobileFrame.value.params?.key ?? '').split(':');
+      const list = dir === 'out' ? spaceData.value.outgoing : spaceData.value.requests;
+      return list.find((request) => request.id === id)?.nickname ?? '申请详情';
+    });
+
+    /** 标签成员管理页返回栏标题：标签名 */
+    const tagDetailTitle = computed(() => {
+      if (mobileFrame.value.page !== 'tag-detail') {
+        return '标签';
+      }
+      const tagId = mobileFrame.value.params?.tagId ?? '';
+      return spaceData.value.tags.find((tag) => tag.id === tagId)?.name ?? '标签';
+    });
+
     /** 删除联系人收尾：删除成功（selectedRootId 已被清空；取消/失败保持原值）后，
         移动端若栈顶是被删联系人的资料卡帧则弹出，避免返回残留空页 */
     const onDeleteContactNav = async () => {
@@ -463,6 +545,13 @@ export default defineComponent({
           activeGroupId.value = frame.params?.groupId ?? 'ungrouped';
         } else if (frame.page === 'new-friends' || frame.page === 'tags') {
           rightView.value = frame.page;
+          selectedRootId.value = '';
+        } else if (frame.page === 'request-detail') {
+          // 申请详情帧隶属于「新的朋友」视图（重进 tab 按栈恢复时保持桌面态一致）
+          rightView.value = 'new-friends';
+          selectedRootId.value = '';
+        } else if (frame.page === 'tag-detail') {
+          rightView.value = 'tags';
           selectedRootId.value = '';
         } else {
           rightView.value = 'contact';
@@ -529,7 +618,11 @@ export default defineComponent({
       MOBILE_TAB,
       onSelectRowNav,
       onSelectContact,
-      onMobileBack
+      onMobileBack,
+      onOpenRequestDetail,
+      onOpenTagDetail,
+      requestDetailTitle,
+      tagDetailTitle
     };
   }
 });

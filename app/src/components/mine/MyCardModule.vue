@@ -15,7 +15,7 @@
         @click="activeWay = 'qr'"
       >
         <!-- 移动端菜单图标补色（微信式每项一色，同 MinePage 一级菜单色板；桌面端不生效） -->
-        <el-icon class="mine-list-item-icon" :size="17" :style="isMobileLayout ? { color: '#34c19b' } : undefined"><Postcard /></el-icon>
+        <el-icon class="mine-list-item-icon" :size="17" :style="{ color: '#34c19b' }"><Postcard /></el-icon>
         <span class="mine-list-item-text">
           <b>二维码名片</b>
           <span>扫一扫加朋友</span>
@@ -28,7 +28,7 @@
         :class="{ active: activeWay === 'id' }"
         @click="activeWay = 'id'"
       >
-        <el-icon class="mine-list-item-icon" :size="17" :style="isMobileLayout ? { color: '#3296fa' } : undefined"><Key /></el-icon>
+        <el-icon class="mine-list-item-icon" :size="17" :style="{ color: '#3296fa' }"><Key /></el-icon>
         <span class="mine-list-item-text">
           <b>名片内容</b>
           <span>与二维码相同的信息，一键复制</span>
@@ -91,7 +91,6 @@ import { ElMessage } from 'element-plus';
 import { Key, Postcard } from '@element-plus/icons-vue';
 import QRCode from 'qrcode';
 import TermLabel from '../common/TermLabel.vue';
-import { isMobileLayout } from '../../stores/ui-layout';
 import NodeIdentityInfo, { type NodeIdentityRow } from '../common/NodeIdentityInfo.vue';
 import MineDetailContainer from './MineDetailContainer.vue';
 
@@ -197,7 +196,6 @@ export default defineComponent({
       activeWay,
       activeWayLabel,
       identityRows,
-      isMobileLayout,
       copyAll,
       saveQrImage
     };

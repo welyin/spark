@@ -132,7 +132,7 @@
             :class="{ active: activeMenu === item.key }"
             @click="onSelectMenu(item.key)"
           >
-            <el-icon class="mine-menu-icon" :size="17"><component :is="item.icon" /></el-icon>
+            <el-icon class="mine-menu-icon" :size="17" :style="{ color: item.color }"><component :is="item.icon" /></el-icon>
             <span class="mine-menu-label">{{ item.label }}</span>
           </button>
         </nav>
@@ -152,7 +152,7 @@
               :class="{ active: activeModule === item.key }"
               @click="onSelectModule(item.key)"
             >
-              <el-icon class="mine-list-item-icon" :size="17"><component :is="item.icon" /></el-icon>
+              <el-icon class="mine-list-item-icon" :size="17" :style="{ color: item.color }"><component :is="item.icon" /></el-icon>
               <b class="settings-module-label">{{ item.label }}</b>
             </button>
           </div>
@@ -261,7 +261,7 @@ export default defineComponent({
     // 页头个人头像：统一取数（stores/avatar-sources），与 rail/空间切换器同源
     const headerAvatar = computed(() => personalAvatarSource());
 
-    // color 为移动端菜单图标色（微信式每项一色，取色与 utils/palette 品牌色板同源，桌面端不使用）
+    // color 为菜单图标色（微信式每项一色，取色与 utils/palette 品牌色板同源，移动端与桌面端统一上色）
     const menuItems = computed<Array<{ key: MenuKey; label: string; icon: Component; color: string }>>(() => {
       if (isPersonal.value) {
         return [
@@ -276,7 +276,7 @@ export default defineComponent({
       ];
     });
 
-    // 个人设置的四个模块：第二栏「个人设置」下第三栏的菜单项（color 同上，仅移动端图标使用）
+    // 个人设置的四个模块：第二栏「个人设置」下第三栏的菜单项（color 同上，全端图标统一上色）
     const personalModules: Array<{ key: PersonalModuleKey; label: string; icon: Component; color: string }> = [
       { key: 'profile', label: '我的资料', icon: User, color: '#3296fa' },
       { key: 'card', label: '我的名片', icon: Postcard, color: '#34c19b' },

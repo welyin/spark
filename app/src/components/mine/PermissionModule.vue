@@ -15,7 +15,7 @@
         @click="view = 'chatOnly'"
       >
         <!-- 移动端菜单图标补色（微信式每项一色，同 MinePage 一级菜单色板；桌面端不生效） -->
-        <el-icon class="mine-list-item-icon" :size="17" :style="isMobileLayout ? { color: '#ff7d00' } : undefined"><ChatLineRound /></el-icon>
+        <el-icon class="mine-list-item-icon" :size="17" :style="{ color: '#ff7d00' }"><ChatLineRound /></el-icon>
         <span class="mine-list-item-text">
           <b>仅聊天</b>
           <span>{{ chatOnlyPeople.length }} 人 · 对方只能看到你的头像和昵称</span>
@@ -27,7 +27,7 @@
         :class="{ active: view === 'blocked' }"
         @click="view = 'blocked'"
       >
-        <el-icon class="mine-list-item-icon" :size="17" :style="isMobileLayout ? { color: '#64748b' } : undefined"><Remove /></el-icon>
+        <el-icon class="mine-list-item-icon" :size="17" :style="{ color: '#64748b' }"><Remove /></el-icon>
         <span class="mine-list-item-text">
           <b>通讯黑名单</b>
           <span>{{ blockedPeople.length }} 人 · 对方无法向你发消息</span>
@@ -82,7 +82,6 @@ import {
 } from '../../stores/avatar-sources';
 import { contactsOf, profileOf, setBlocked, spaceKeyOf, updateProfile } from '../../mock/contacts';
 import UserAvatar from '../UserAvatar.vue';
-import { isMobileLayout } from '../../stores/ui-layout';
 import MineDetailContainer from './MineDetailContainer.vue';
 
 type Person = {
@@ -195,7 +194,6 @@ export default defineComponent({
       blockedPeople,
       currentPeople,
       addablePeople,
-      isMobileLayout,
       add,
       remove
     };

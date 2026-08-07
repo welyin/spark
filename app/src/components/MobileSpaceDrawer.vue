@@ -40,7 +40,7 @@
                   :root-id="personalSource.seed"
                   :nickname="personalSource.name"
                   :avatar="personalSource.image"
-                  :size="30"
+                  :size="40"
                 />
               </span>
               <span class="mobile-drawer-item-label">个人空间</span>
@@ -56,7 +56,7 @@
               @click="selectOrg(org.orgId)"
             >
               <span class="mobile-drawer-item-avatar" :class="{ 'has-dot': orgNotification(org.orgId) }">
-                <OrgAvatar :org-id="org.orgId" :name="org.name" :size="30" />
+                <OrgAvatar :org-id="org.orgId" :name="org.name" :size="40" />
               </span>
               <span class="mobile-drawer-item-label">{{ org.name }}</span>
               <el-icon v-if="!isPersonal && currentOrgId === org.orgId" class="mobile-drawer-item-check"><Check /></el-icon>
@@ -368,16 +368,13 @@ export default defineComponent({
 .mobile-drawer-item {
   display: flex;
   align-items: center;
-  gap: 10px;
   width: 100%;
   border: 0;
   background: transparent;
   cursor: pointer;
   font-family: inherit;
-  /* 移动端菜单主文字按微信调大 */
-  font-size: 16px;
-  color: var(--spark-text-1);
-  padding: 9px 10px;
+  /* 行参数（58px 行高 / 0 16px 内边距 / 12px 间距 / 16px 主文字）统一在
+     mine.css 移动端媒体块按通讯录 request-item 基准收敛，此处不再重复定义 */
   border-radius: var(--spark-radius-m);
   text-align: left;
 }

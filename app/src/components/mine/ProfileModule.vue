@@ -18,7 +18,7 @@
         <el-icon
           class="mine-list-item-icon"
           :size="17"
-          :style="isMobileLayout ? { color: field.color } : undefined"
+          :style="{ color: field.color }"
         ><component :is="field.icon" /></el-icon>
         <b class="profile-field-label">{{ field.label }}</b>
         <UserAvatar
@@ -146,7 +146,6 @@ import { errorMessage } from '../../utils/ipc';
 import { fileToAvatarDataUrl } from '../../utils/avatar';
 import { shortenMiddle } from '../../utils/format';
 import { getProfileExtra, setProfileExtra, type ProfileExtra } from '../../stores/profile-extra';
-import { isMobileLayout } from '../../stores/ui-layout';
 import UserAvatar from '../UserAvatar.vue';
 import TermLabel from '../common/TermLabel.vue';
 import NodeIdentityInfo, { type NodeIdentityRow } from '../common/NodeIdentityInfo.vue';
@@ -189,7 +188,7 @@ export default defineComponent({
     });
 
     // ---------------- 第三栏字段列表 ----------------
-    // color 为移动端菜单图标色（微信式每项一色，与 MinePage 一级菜单同规则、同色系色板，桌面端不使用）
+    // color 为菜单图标色（微信式每项一色，与 MinePage 一级菜单同规则、同色系色板，移动端与桌面端统一上色）
     const fields = computed<Array<{ key: FieldKey; label: string; value: string; icon: Component; color: string }>>(() => [
       { key: 'avatar', label: '头像', value: '', icon: Avatar, color: '#00b8a9' },
       { key: 'nickname', label: '昵称', value: props.nickname || '未设置', icon: User, color: '#3296fa' },
@@ -305,7 +304,6 @@ export default defineComponent({
       activeField,
       activeFieldLabel,
       fields,
-      isMobileLayout,
       saving,
       draft,
       dirty,

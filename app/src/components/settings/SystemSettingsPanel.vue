@@ -18,7 +18,7 @@
         <el-icon
           class="mine-list-item-icon"
           :size="17"
-          :style="isMobileLayout ? { color: item.color } : undefined"
+          :style="{ color: item.color }"
         ><component :is="item.icon" /></el-icon>
         <b class="settings-section-label">{{ item.label }}</b>
       </button>
@@ -34,22 +34,27 @@
   </Transition>
 
   <!-- 网络状态 / 设备管理：模块直接渲染（列表栏即第四栏，编辑页走抽屉）；
+       Transition 子树要求单根元素——NetworkModule/DevicesModule 是双根 fragment
+       （.mine-list + MineDetailContainer），直接作为 Transition 子节点动画会静默失效，
+       故各包一层单根包裹 div（桌面端 display:contents 不生成盒子，多栏布局不变）；
        Transition 包裹使移动端内容整页覆盖层进出自右滑入、返回向右滑出（桌面端无对应样式，无动画） -->
   <Transition name="settings-overlay-slide">
-  <NetworkModule
-    v-if="activeSection === 'netStatus'"
-    detail-mode="drawer"
-    :root-id="rootStatus.rootId ?? ''"
-    :p2p-info="p2pInfo"
-    show-proxy
-    @refresh="refreshNodeInfo"
-  />
-  <DevicesModule
-    v-else-if="activeSection === 'devices'"
-    detail-mode="drawer"
-    :root-id="rootStatus.rootId ?? ''"
-    :p2p-info="p2pInfo"
-  />
+  <div v-if="activeSection === 'netStatus'" class="settings-module-overlay">
+    <NetworkModule
+      detail-mode="drawer"
+      :root-id="rootStatus.rootId ?? ''"
+      :p2p-info="p2pInfo"
+      show-proxy
+      @refresh="refreshNodeInfo"
+    />
+  </div>
+  <div v-else-if="activeSection === 'devices'" class="settings-module-overlay">
+    <DevicesModule
+      detail-mode="drawer"
+      :root-id="rootStatus.rootId ?? ''"
+      :p2p-info="p2pInfo"
+    />
+  </div>
 
   <!-- 其余子项：第四栏内容（移动端未选 section 时不渲染——否则空白覆盖层会挡住子菜单） -->
   <div v-else-if="activeSection !== null || !isMobileLayout" class="mine-detail">
@@ -265,7 +270,7 @@ export default defineComponent({
     const generalStates = ref<Record<string, boolean>>({});
 
     // 顺序按用户习惯：通用偏好在前，设备/网络/存储等系统项居中，关于垫底；
-    // color 为移动端菜单图标色（微信式每项一色，取色与 utils/palette 品牌色板同源，桌面端不使用）
+    // color 为菜单图标色（微信式每项一色，取色与 utils/palette 品牌色板同源，移动端与桌面端统一上色）
     const sections: Array<{ key: SectionKey; label: string; icon: Component; color: string }> = [
       { key: 'general', label: '通用设置', icon: SetUp, color: '#64748b' },
       { key: 'notify', label: '消息通知', icon: Bell, color: '#eb2f96' },
@@ -447,6 +452,18 @@ export default defineComponent({
 </script>
 
 <style scoped>
+/* 桌面端：包裹层不生成盒子（display: contents），子菜单与内容栏直接作为宿主 .mine-page
+   四栏 flex 容器的栏位项，恢复移动改造前的多根节点结构；移动端媒体块内覆盖回 display: block */
+.system-settings-panel {
+  display: contents;
+}
+
+/* 网络/设备模块包裹层（Transition 单根要求）：桌面端不生成盒子，模块内 mine-list 与
+   详情容器穿透为宿主 .mine-page 四栏 flex 的栏位项，布局与包裹前一致 */
+.settings-module-overlay {
+  display: contents;
+}
+
 /* 子菜单项标签：常规字重，选中行加粗（同 ProfileModule 字段列表） */
 .settings-section-label {
   font-size: 14px;
@@ -494,6 +511,8 @@ export default defineComponent({
    选中 section 时内容区 absolute 覆盖整页（顶部让出返回栏高度），不上下分屏 */
 @media (max-width: 768px) {
   .system-settings-panel {
+    /* 移动端恢复包裹层盒子（覆盖桌面端 display: contents），作为页面纵向 flex 的内容区 */
+    display: block;
     /* 移动端面板自身不作定位包含块（保持 static）：内容覆盖层/返回栏的 absolute 一路向上
        解析到页面 section（.mine-page，position:relative）。返回关闭 section 时页级返回栏复现、
        面板随 flex 下移，若覆盖层以面板为基准，离场层起始位置会偏下一个返回栏高度（Android 前端改造） */
@@ -508,12 +527,11 @@ export default defineComponent({
     height: 100%;
   }
 
-  /* 内容区：NetworkModule/DevicesModule 内部 mine-list 或 .mine-detail，absolute 整页覆盖；
+  /* 内容区：模块包裹层（NetworkModule/DevicesModule）或 .mine-detail，absolute 整页覆盖；
      定位基准为页面 section（面板保持 static，见上），top 让出返回栏高度（48px + 状态栏安全区），
      避免首行内容被返回栏遮挡；
-     :not(.panel-submenu) 排除面板自身子菜单（其与内容区互斥渲染，但需防 CSS 命中）；
      进出动画由 Transition（settings-overlay-slide）承担 */
-  .system-settings-panel > :deep(.mine-list):not(.panel-submenu),
+  .system-settings-panel > .settings-module-overlay,
   .system-settings-panel > .mine-detail {
     position: absolute;
     top: calc(48px + env(safe-area-inset-top, 0px));
@@ -523,6 +541,23 @@ export default defineComponent({
     z-index: 2;
     background: var(--spark-bg-card);
     overflow-y: auto;
+  }
+
+  /* 包裹层内模块列表铺满覆盖层（列向 flex，与 .mobile-stack-stage 同形） */
+  .settings-module-overlay {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .settings-module-overlay > :deep(.mine-list) {
+    flex: 1;
+    min-height: 0;
+  }
+
+  /* 模块内整页详情（MineDetailContainer 移动端抽屉页）原以页面 section 为基准 inset:0 覆盖整页；
+     包裹层成为其定位基准后向上抵消返回栏让位，保持原覆盖范围（含页顶返回栏区域，避免双返回栏） */
+  .settings-module-overlay :deep(.mine-detail-page) {
+    top: calc(-48px - env(safe-area-inset-top, 0px));
   }
 
   /* 返回栏：浮在面板顶部（与内容同向滑动，视觉等同整页推入/推出） */

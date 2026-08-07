@@ -1,6 +1,8 @@
 <template>
-  <!-- 第三栏：标签列表 -->
-  <div class="contacts-request-list">
+  <!-- 第三栏：标签列表；detail 视图（移动端成员管理整页帧）不渲染。
+       view 属性（Android 前端改造）：both=桌面双栏（默认）；list/detail=移动端拆层整页——
+       列表页点标签行由 ContactsPage 压入成员管理页栈帧（经 open-tag 事件上报） -->
+  <div v-if="view !== 'detail'" class="contacts-request-list">
     <div class="contacts-request-title">
       <span>标签</span>
       <button class="request-head-btn" title="新建标签" @click="createTagRow">
@@ -13,7 +15,7 @@
       :key="tag.id"
       class="request-item"
       :class="{ active: activeId === tag.id }"
-      @click="activeId = tag.id"
+      @click="selectTag(tag.id)"
     >
       <span class="row-icon">
         <el-icon :size="17"><CollectionTag /></el-icon>
@@ -25,8 +27,8 @@
     </button>
   </div>
 
-  <!-- 第四栏：标签成员管理 -->
-  <div class="contacts-detail">
+  <!-- 第四栏：标签成员管理；list 视图（移动端标签列表整页帧）不渲染 -->
+  <div v-if="view !== 'list'" class="contacts-detail">
     <div v-if="activeTag" class="request-profile">
       <div class="tag-detail-header">
         <h2 class="tag-detail-name">{{ activeTag.name }}</h2>
@@ -79,12 +81,22 @@ export default defineComponent({
   props: {
     contacts: { type: Array as PropType<ContactItem[]>, required: true },
     tags: { type: Array as PropType<ContactTag[]>, required: true },
-    spaceKey: { type: String, required: true }
+    spaceKey: { type: String, required: true },
+    /** 渲染视图：both=桌面双栏（默认）；list/detail=移动端拆层整页（导航栈各一帧） */
+    view: { type: String as PropType<'both' | 'list' | 'detail'>, default: 'both' },
+    /** detail 视图初始定位的标签 id（来自 ContactsPage 栈帧参数） */
+    initialTagId: { type: String, default: '' }
   },
-  emits: ['view-member'],
-  setup(props) {
-    const activeId = ref('');
+  emits: ['view-member', 'open-tag'],
+  setup(props, { emit }) {
+    const activeId = ref(props.initialTagId);
     const picked = ref<string[]>([]);
+
+    /** 选中标签：移动端列表整页点行上报 open-tag（由 ContactsPage 压入成员管理栈帧；桌面端忽略） */
+    const selectTag = (id: string) => {
+      activeId.value = id;
+      emit('open-tag', id);
+    };
 
     const activeTag = computed(() => props.tags.find((t) => t.id === activeId.value) || null);
     // 成员关系存于各联系人本地资料的 tagIds（设计 §8）
@@ -178,6 +190,7 @@ export default defineComponent({
       members,
       addableContacts,
       memberCountOf,
+      selectTag,
       addMembers,
       removeMember,
       createTagRow,

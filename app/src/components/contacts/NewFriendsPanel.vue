@@ -2,10 +2,12 @@
      第三栏=收到的申请与我发出的混排列表（按时间倒序，行首箭头区分收/发，右上角可筛选）；
      点击行在第四栏展示详情。收到的申请：接受前选择「向其开放的权限」（§6，仅个人空间），
      接受/忽略前可「询问」对方（来回互复，§4），已接受（个人空间）直接内嵌联系人资料卡（可编辑备注等）；我发出的：展示对方反应（等待确认/已回复询问/已拒绝/已接受/
-     连接失败可重试），组织邀请可复制邀请码。与个人设置模块同构，以 fragment 渲染两栏 -->
+     连接失败可重试），组织邀请可复制邀请码。与个人设置模块同构，以 fragment 渲染两栏。
+     view 属性（Android 前端改造）：both=桌面双栏（默认）；list=仅申请列表、detail=仅申请详情——
+     移动端拆成导航栈两层整页（列表页点行由 ContactsPage 压入详情页栈帧，经 open-detail 事件上报） -->
 <template>
-  <!-- 第三栏：申请列表（收发混排，按时间倒序） -->
-  <div class="contacts-request-list">
+  <!-- 第三栏：申请列表（收发混排，按时间倒序）；detail 视图（移动端详情整页帧）不渲染 -->
+  <div v-if="view !== 'detail'" class="contacts-request-list">
     <div class="request-list-header">
       <h2 class="contacts-request-title">{{ spaceType === 'org' ? '新的成员' : '新的朋友' }}</h2>
       <el-dropdown trigger="click" @command="onFilterCommand">
@@ -59,8 +61,8 @@
   </div>
 
   <!-- 第四栏：已接受（个人空间）直接展示联系人资料卡（可编辑备注等）；
-       其余为选中申请详情 -->
-  <div class="contacts-detail">
+       其余为选中申请详情；list 视图（移动端列表整页帧）不渲染 -->
+  <div v-if="view !== 'list'" class="contacts-detail">
     <ContactPanel
       v-if="acceptedContact && acceptedProfile"
       :key="acceptedContact.rootId"
@@ -198,11 +200,15 @@ export default defineComponent({
     outgoing: { type: Array as PropType<FriendRequest[]>, required: true },
     spaceType: { type: String as PropType<'personal' | 'org'>, required: true },
     /** 所属空间 key（查看详情时清除未读） */
-    spaceKey: { type: String, required: true }
+    spaceKey: { type: String, required: true },
+    /** 渲染视图：both=桌面双栏（默认）；list/detail=移动端拆层整页（导航栈各一帧） */
+    view: { type: String as PropType<'both' | 'list' | 'detail'>, default: 'both' },
+    /** detail 视图初始定位的申请（行 key：`in:<id>` / `out:<id>`，来自 ContactsPage 栈帧参数） */
+    initialKey: { type: String, default: '' }
   },
-  emits: ['resolve', 'retry', 'reply', 'ask'],
+  emits: ['resolve', 'retry', 'reply', 'ask', 'open-detail'],
   setup(props, { emit }) {
-    const activeKey = ref('');
+    const activeKey = ref(props.initialKey);
     const filter = ref<Filter>('all');
     const replyText = ref('');
     /** 收到的申请：询问输入框（点开「询问」展开，发送后保留展开看 thread 更新） */
@@ -243,10 +249,15 @@ export default defineComponent({
       }
     };
 
-    // 默认选中第一条；列表变化（处理完一条、切换筛选等）时保持选中有效
+    // 默认选中第一条；列表变化（处理完一条、切换筛选等）时保持选中有效。
+    // 仅桌面双栏（both）自动选中并清未读：移动端 list 整页不自动打开详情（进入详情才清未读），
+    // detail 整页定位栈帧参数指定的申请，条目消失（如已处理）时不跳转到其他申请
     watch(
       () => entries.value.map((entry) => rowKey(entry.dir, entry.request.id)).join(','),
       () => {
+        if (props.view !== 'both') {
+          return;
+        }
         if (!entries.value.some((entry) => rowKey(entry.dir, entry.request.id) === activeKey.value)) {
           const first = entries.value[0];
           activeKey.value = first ? rowKey(first.dir, first.request.id) : '';
@@ -263,6 +274,8 @@ export default defineComponent({
       askText.value = '';
       askEditorVisible.value = false;
       markRead(entries.value.find((entry) => rowKey(entry.dir, entry.request.id) === activeKey.value) ?? null);
+      // 移动端列表整页：点行上报由 ContactsPage 压入申请详情栈帧（桌面端忽略本事件）
+      emit('open-detail', dir, id);
     };
 
     // ---- 已接受（个人空间）：详情栏直接内嵌联系人资料卡（可编辑备注等），
