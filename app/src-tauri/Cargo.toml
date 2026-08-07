@@ -39,8 +39,10 @@ tauri-plugin-updater = "2"
 # 更新清单发布日期（tauri-plugin-updater 的 OffsetDateTime）RFC3339 格式化。
 time = { version = "0.3", features = ["formatting"] }
 
+# Android：moveTaskToBack 退后台保活（P2P 不断线）所需的 JNI 通道
+# （MainActivity.onCreate 经 nativeSetActivity 注册实例，见 android_activity.rs）
 [target.'cfg(target_os = "android")'.dependencies]
-# Android 退出路径：SIGKILL 自杀绕过 WebView/GL 析构崩溃（见 commands/system.rs system_exit_app）
+jni = "0.21"
 libc = "0.2"
 
 [dev-dependencies]

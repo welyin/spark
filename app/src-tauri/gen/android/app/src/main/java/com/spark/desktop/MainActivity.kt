@@ -16,9 +16,17 @@ class MainActivity : TauriActivity() {
 
   private var multicastLock: WifiManager.MulticastLock? = null
 
+  companion object {
+    // 向 Rust 注册主 Activity 实例（系统返回键在一级页时 moveTaskToBack 退后台保活，
+    // 见 src-tauri/src/android_activity.rs；P2P 应用进程死了就掉线）
+    @JvmStatic
+    private external fun nativeSetActivity(activity: MainActivity)
+  }
+
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
+    nativeSetActivity(this)
     // Android 默认不向应用投递组播包：mdns 局域网发现（P2P 节点互见/自设备配对）
     // 必须持 MulticastLock 才能正常收发组播，且 manifest 需 CHANGE_WIFI_MULTICAST_STATE。
     // 锁随 Activity 存活（onDestroy 释放；进程死亡系统亦会回收），桌面端无此概念。

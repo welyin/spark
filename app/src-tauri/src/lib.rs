@@ -9,6 +9,8 @@
 //! 全局事件发到 WebView。
 
 // pub 以便 tests/ 下的集成测试（unit_app）按公开 API 直调；私有项保持原可见性。
+#[cfg(target_os = "android")]
+mod android_activity;
 pub mod commands;
 pub mod domain_guard;
 pub mod market;

@@ -49,17 +49,19 @@ pub fn system_get_proxy(app: tauri::AppHandle) -> Result<Option<String>, String>
 /// 无法调用）。因此退出路径必须走应用自定义命令（自定义命令不受插件 ACL 限制）。
 /// 桌面端不会触发该路径（无系统返回键事件），命令保留同理静默可用。
 ///
-/// Android 退出方式：app.exit(0) 走 std::process::exit → __cxa_finalize 退出钩子
-/// → WebViewFunctorManager 析构时 Adreno GL 上下文已销毁，FORTIFY 报
-/// pthread_mutex_lock on destroyed mutex 直接 abort（退出动画已播完但系统按崩溃
-/// 弹窗）。Android 应用的正常死法是 Process.killProcess（不跑退出钩子），
-/// 故用 SIGKILL 自杀绕过整段析构（数据已在内核 sled 持久化，无损失）。
+/// Android 语义为「退到后台保活」而非杀进程：我们是 P2P 应用，进程死了就掉线，
+/// 对标微信按 Home 键的行为。经 tao ndk_glue 拿主 Activity 调 moveTaskToBack(true)。
+/// 不用 app.exit(0)：它走 std::process::exit → __cxa_finalize → WebView GL 析构
+/// 时 Adreno 锁已销毁的互斥锁，FORTIFY abort（已实测崩溃弹窗）。
 #[tauri::command]
 pub fn system_exit_app(app: tauri::AppHandle) {
     #[cfg(target_os = "android")]
     {
-        let _ = app; // Android 路径不使用 AppHandle
-        unsafe { libc::raise(libc::SIGKILL) };
+        let _ = app; // Android 路径经 JNI，不使用 AppHandle
+        if !crate::android_activity::move_task_to_back() {
+            eprintln!("[system] moveTaskToBack unavailable, killing process");
+            unsafe { libc::raise(libc::SIGKILL) };
+        }
     }
     #[cfg(not(target_os = "android"))]
     app.exit(0);
