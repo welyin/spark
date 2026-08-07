@@ -24,21 +24,8 @@
       <!-- 移动端（波次 2/3）：整页 + 导航栈——栈1 功能菜单，栈2 模块页（返回栏 + 模块），
            栈帧切换经 MobilePageTransition 滑动转场（微信式） -->
       <MobilePageTransition v-if="isMobileLayout" :tab="MOBILE_TAB">
-        <!-- 栈1：用户信息 + 功能菜单整页 -->
+        <!-- 栈1：功能菜单整页（移动端无头像昵称卡片，菜单顶格开始） -->
         <div v-if="mobileFrame.page === 'root'" class="mine-menu">
-          <header class="mine-menu-header">
-            <UserAvatar
-              :root-id="headerSource.seed"
-              :nickname="headerSource.name"
-              :avatar="headerSource.image"
-              :size="44"
-            />
-            <div class="mine-menu-user">
-              <b>{{ headerSource.name }}</b>
-              <span>{{ headerSubtitle }}</span>
-            </div>
-          </header>
-
           <nav class="mine-menu-list">
             <button
               v-for="item in menuItems"
@@ -48,7 +35,7 @@
               :class="{ active: activeMenu === item.key }"
               @click="onSelectMenu(item.key)"
             >
-              <el-icon class="mine-menu-icon" :size="17"><component :is="item.icon" /></el-icon>
+              <el-icon class="mine-menu-icon" :size="17" :style="{ color: item.color }"><component :is="item.icon" /></el-icon>
               <span class="mine-menu-label">{{ item.label }}</span>
             </button>
           </nav>
@@ -169,20 +156,21 @@ export default defineComponent({
     // 组织空间下头像入口只承载「组织身份」及其编辑，默认即选中
     const activeMenu = ref<MenuKey>(currentSpace.value.type === 'org' ? 'org' : 'profile');
 
-    const menuItems = computed<Array<{ key: MenuKey; label: string; icon: Component }>>(() => {
+    // color 为移动端菜单图标色（微信式每项一色，取色与 utils/palette 品牌色板同源，桌面端不使用）
+    const menuItems = computed<Array<{ key: MenuKey; label: string; icon: Component; color: string }>>(() => {
       // 组织空间：不显示个人设置菜单，仅保留组织身份与成员权限
       if (currentSpace.value.type === 'org') {
         return [
-          { key: 'org', label: '组织身份', icon: OfficeBuilding },
-          { key: 'permission', label: '成员权限', icon: Key }
+          { key: 'org', label: '组织身份', icon: OfficeBuilding, color: '#00b8a9' },
+          { key: 'permission', label: '成员权限', icon: Key, color: '#ff7d00' }
         ];
       }
       // 网络状态/设备管理在系统设置中，此处不再重复
       return [
-        { key: 'profile', label: '我的资料', icon: User },
-        { key: 'card', label: '我的名片', icon: Postcard },
-        { key: 'permission', label: '朋友权限', icon: Key },
-        { key: 'backup', label: '账号备份', icon: Lock }
+        { key: 'profile', label: '我的资料', icon: User, color: '#3296fa' },
+        { key: 'card', label: '我的名片', icon: Postcard, color: '#34c19b' },
+        { key: 'permission', label: '朋友权限', icon: Key, color: '#ff7d00' },
+        { key: 'backup', label: '账号备份', icon: Lock, color: '#7b61ff' }
       ];
     });
 

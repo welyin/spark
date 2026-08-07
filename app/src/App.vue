@@ -3,7 +3,7 @@
     <!-- 顶部导航（最外层，横跨全宽）：
          桌面端=TopNavbar（左侧空间切换+中间搜索+右侧网络状态+「⋯」菜单）；
          移动端=MobileTopBar，仅四个主 tab 且栈深=1（一级列表页）时显示，
-         切到二级页/其它 tab 时整体滑走（Android 前端改造） -->
+         切到二级页/其它 tab 时直接不渲染（无位移动画，Android 前端改造） -->
     <header class="topbar" :class="{ 'topbar-collapsed': isMobileLayout && !mobileTopBarVisible }">
       <TopNavbar
         v-if="!isMobileLayout"
@@ -11,14 +11,12 @@
         @logout="handleLogout"
         @open-tab="handleMenuSelect"
       />
-      <Transition v-else name="mobile-topbar-slide">
-        <MobileTopBar
-          v-if="mobileTopBarVisible"
-          :title="mobileTopBarTitle"
-          @open-drawer="mobileDrawerVisible = true"
-          @open-network-status="openNetworkStatus"
-        />
-      </Transition>
+      <MobileTopBar
+        v-else-if="mobileTopBarVisible"
+        :title="mobileTopBarTitle"
+        @open-drawer="mobileDrawerVisible = true"
+        @open-network-status="openNetworkStatus"
+      />
     </header>
 
     <div class="shell-body">
@@ -190,17 +188,15 @@
     </div>
 
     <!-- 移动端底部 tab 导航：窄屏（≤768px）替代左侧 rail，与 rail 共用 activeTab 状态源；
-         仅四个主 tab 且栈深=1（一级页）时显示——进入二级页时向下推走、返回时自底部滑回
-         （Android 前端改造；滑动过渡样式见 app-shell.css mobile-tabbar-slide） -->
-    <Transition name="mobile-tabbar-slide">
-      <MobileTabBar
-        v-if="mobileTabBarVisible"
-        :active-tab="activeTab"
-        :messages-badge="messagesBadge"
-        :contacts-badge="contactsBadge"
-        @select="handleMenuSelect"
-      />
-    </Transition>
+         仅四个主 tab 且栈深=1（一级页）时显示——进入二级页时直接不渲染、返回时直接出现
+         （Android 前端改造，无位移动画） -->
+    <MobileTabBar
+      v-if="mobileTabBarVisible"
+      :active-tab="activeTab"
+      :messages-badge="messagesBadge"
+      :contacts-badge="contactsBadge"
+      @select="handleMenuSelect"
+    />
 
     <!-- 移动端左滑侧边栏（Android 前端改造）：空间切换 + 加入/创建 + 设置；「⋯」菜单已下放此处与设置页 -->
     <MobileSpaceDrawer

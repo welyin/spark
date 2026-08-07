@@ -319,4 +319,32 @@
   .mine-page .mine-detail {
     border-top: 2px solid var(--spark-border);
   }
+
+  /* 移动端菜单字号按微信调大：主文字 16px，副文案/右侧缩略值 13px（桌面端不变） */
+  .mine-page .mine-menu-item,
+  .mine-page .mine-list-item {
+    font-size: 16px;
+  }
+
+  .mine-page .mine-list-item-text span,
+  .mine-page .mine-list-item-value {
+    font-size: 13px;
+  }
+
+  /* 移动端菜单是页面切换不是选中：选中态高亮一律不生效（active 样式保留给桌面端） */
+  .mine-page .mine-menu-item.active,
+  .mine-page .mine-list-item.active {
+    background: transparent;
+    color: var(--spark-text-1);
+    font-weight: 400;
+  }
+
+  .mine-page .mine-menu-item.active .mine-menu-icon,
+  .mine-page .mine-list-item.active .mine-list-item-icon {
+    color: var(--spark-text-3);
+  }
+
+  .mine-page .mine-list-item.active .mine-list-item-text b {
+    font-weight: 400;
+  }
 }

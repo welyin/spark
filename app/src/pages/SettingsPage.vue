@@ -21,7 +21,7 @@
             :class="{ active: activeMenu === item.key }"
             @click="onSelectMenu(item.key)"
           >
-            <el-icon class="mine-menu-icon" :size="17"><component :is="item.icon" /></el-icon>
+            <el-icon class="mine-menu-icon" :size="17" :style="{ color: item.color }"><component :is="item.icon" /></el-icon>
             <span class="mine-menu-label">{{ item.label }}</span>
           </button>
         </nav>
@@ -29,11 +29,11 @@
         <!-- 账号操作（Android 前端改造）：原顶栏「⋯」菜单下放，退出登录位于设置最底层 -->
         <div class="mine-menu-account">
           <button type="button" class="mine-menu-item" @click="goTest">
-            <el-icon class="mine-menu-icon" :size="17"><Cpu /></el-icon>
+            <el-icon class="mine-menu-icon" :size="17" :style="{ color: '#94a3b8' }"><Cpu /></el-icon>
             <span class="mine-menu-label">测试</span>
           </button>
           <button type="button" class="mine-menu-item" @click="switchAccount">
-            <el-icon class="mine-menu-icon" :size="17"><SwitchButton /></el-icon>
+            <el-icon class="mine-menu-icon" :size="17" :style="{ color: '#f7b500' }"><SwitchButton /></el-icon>
             <span class="mine-menu-label">切换账号</span>
           </button>
           <button type="button" class="mine-menu-item mine-menu-danger" @click="logout">
@@ -61,7 +61,7 @@
                 :class="{ active: activeModule === item.key }"
                 @click="onSelectModule(item.key)"
               >
-                <el-icon class="mine-list-item-icon" :size="17"><component :is="item.icon" /></el-icon>
+                <el-icon class="mine-list-item-icon" :size="17" :style="{ color: item.color }"><component :is="item.icon" /></el-icon>
                 <b class="settings-module-label">{{ item.label }}</b>
               </button>
             </div>
@@ -266,26 +266,27 @@ export default defineComponent({
     // 页头个人头像：统一取数（stores/avatar-sources），与 rail/空间切换器同源
     const headerAvatar = computed(() => personalAvatarSource());
 
-    const menuItems = computed<Array<{ key: MenuKey; label: string; icon: Component }>>(() => {
+    // color 为移动端菜单图标色（微信式每项一色，取色与 utils/palette 品牌色板同源，桌面端不使用）
+    const menuItems = computed<Array<{ key: MenuKey; label: string; icon: Component; color: string }>>(() => {
       if (isPersonal.value) {
         return [
-          { key: 'mine', label: '个人设置', icon: User },
-          { key: 'system', label: '系统设置', icon: Setting }
+          { key: 'mine', label: '个人设置', icon: User, color: '#3296fa' },
+          { key: 'system', label: '系统设置', icon: Setting, color: '#64748b' }
         ];
       }
       return [
-        { key: 'space', label: '组织设置', icon: OfficeBuilding },
-        { key: 'mine', label: '个人设置', icon: User },
-        { key: 'system', label: '系统设置', icon: Setting }
+        { key: 'space', label: '组织设置', icon: OfficeBuilding, color: '#00b8a9' },
+        { key: 'mine', label: '个人设置', icon: User, color: '#3296fa' },
+        { key: 'system', label: '系统设置', icon: Setting, color: '#64748b' }
       ];
     });
 
-    // 个人设置的四个模块：第二栏「个人设置」下第三栏的菜单项
-    const personalModules: Array<{ key: PersonalModuleKey; label: string; icon: Component }> = [
-      { key: 'profile', label: '我的资料', icon: User },
-      { key: 'card', label: '我的名片', icon: Postcard },
-      { key: 'permission', label: '朋友权限', icon: Key },
-      { key: 'backup', label: '账号备份', icon: Lock }
+    // 个人设置的四个模块：第二栏「个人设置」下第三栏的菜单项（color 同上，仅移动端图标使用）
+    const personalModules: Array<{ key: PersonalModuleKey; label: string; icon: Component; color: string }> = [
+      { key: 'profile', label: '我的资料', icon: User, color: '#3296fa' },
+      { key: 'card', label: '我的名片', icon: Postcard, color: '#34c19b' },
+      { key: 'permission', label: '朋友权限', icon: Key, color: '#ff7d00' },
+      { key: 'backup', label: '账号备份', icon: Lock, color: '#7b61ff' }
     ];
 
     // 空间切换（个人↔组织及组织 A→B）：菜单项集合变化，重置选中到各空间默认项，并清掉模块选中；移动端同步回栈底

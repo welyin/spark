@@ -66,12 +66,12 @@
           <!-- 底部：加入/创建组织（设置上方，企业微信式） -->
           <div class="mobile-drawer-footer">
             <button type="button" class="mobile-drawer-item mobile-drawer-action" @click="openJoinCreateSheet">
-              <el-icon :size="17"><Plus /></el-icon>
+              <el-icon :size="17" :style="{ color: '#34c19b' }"><Plus /></el-icon>
               <span class="mobile-drawer-item-label">加入/创建组织</span>
             </button>
 
             <button type="button" class="mobile-drawer-item" @click="goSettings">
-              <el-icon :size="17"><Setting /></el-icon>
+              <el-icon :size="17" :style="{ color: '#64748b' }"><Setting /></el-icon>
               <span class="mobile-drawer-item-label">设置</span>
             </button>
           </div>
@@ -82,14 +82,14 @@
           <div v-if="joinCreateSheetVisible" class="mobile-sheet-root" @click="joinCreateSheetVisible = false">
             <div class="mobile-sheet" @click.stop>
               <button type="button" class="mobile-sheet-item" @click="openCreateDialog">
-                <el-icon :size="18"><OfficeBuilding /></el-icon>
+                <el-icon :size="18" :style="{ color: '#00b8a9' }"><OfficeBuilding /></el-icon>
                 <div class="mobile-sheet-item-text">
                   <b>创建组织</b>
                   <span>创建一个新的组织空间</span>
                 </div>
               </button>
               <button type="button" class="mobile-sheet-item" @click="openJoinDialog">
-                <el-icon :size="18"><Connection /></el-icon>
+                <el-icon :size="18" :style="{ color: '#3296fa' }"><Connection /></el-icon>
                 <div class="mobile-sheet-item-text">
                   <b>加入组织</b>
                   <span>通过邀请码加入已有组织</span>
@@ -341,7 +341,7 @@ export default defineComponent({
 }
 
 .mobile-drawer-user-info span {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--spark-text-3);
 }
 
@@ -372,7 +372,8 @@ export default defineComponent({
   background: transparent;
   cursor: pointer;
   font-family: inherit;
-  font-size: 14px;
+  /* 移动端菜单主文字按微信调大 */
+  font-size: 16px;
   color: var(--spark-text-1);
   padding: 9px 10px;
   border-radius: var(--spark-radius-m);
@@ -475,12 +476,12 @@ export default defineComponent({
 }
 
 .mobile-sheet-item-text b {
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 500;
 }
 
 .mobile-sheet-item-text span {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--spark-text-3);
 }
 
@@ -490,7 +491,7 @@ export default defineComponent({
   background: transparent;
   cursor: pointer;
   font-family: inherit;
-  font-size: 14px;
+  font-size: 16px;
   color: var(--spark-text-2);
   padding: 12px 10px;
   border-radius: var(--spark-radius-m);

@@ -4,10 +4,13 @@
      子项：组织信息（字段逐行展示）/ 网关设置 / 找回组织 / 数据治理 / 公开设置 / 发现公开组织 -->
 <template>
   <div class="org-settings-panel">
-  <!-- 移动端内容整页返回栏（Android 前端改造）：选中 section 时显示，返回回子菜单 -->
+  <!-- 移动端内容整页返回栏（Android 前端改造）：选中 section 时显示，返回回子菜单；
+       Transition 进出自右滑入/向右滑出（与导航栈 push/pop 同向） -->
+  <Transition name="settings-overlay-slide">
   <div v-if="isMobileLayout && activeSection !== null" class="settings-mobile-bar">
     <MobileBackBar :title="activeSectionLabel" @back="activeSection = null" />
   </div>
+  </Transition>
 
   <!-- 第三栏：子菜单（移动端选中 section 时隐藏，内容整页覆盖） -->
   <div class="mine-list panel-submenu" v-if="activeSection === null || !isMobileLayout">
@@ -21,13 +24,19 @@
         :class="{ active: activeSection === item.key }"
         @click="activeSection = item.key"
       >
-        <el-icon class="mine-list-item-icon" :size="17"><component :is="item.icon" /></el-icon>
+        <el-icon
+          class="mine-list-item-icon"
+          :size="17"
+          :style="isMobileLayout ? { color: item.color } : undefined"
+        ><component :is="item.icon" /></el-icon>
         <b class="settings-section-label">{{ item.label }}</b>
       </button>
     </div>
   </div>
 
-  <!-- 第四栏：当前子项内容（移动端未选 section 时不渲染——否则空白覆盖层会挡住子菜单） -->
+  <!-- 第四栏：当前子项内容（移动端未选 section 时不渲染——否则空白覆盖层会挡住子菜单）；
+       Transition 包裹使移动端内容整页覆盖层进出自右滑入、返回向右滑出（桌面端无对应样式，无动画） -->
+  <Transition name="settings-overlay-slide">
   <div class="mine-detail" v-if="activeSection !== null || !isMobileLayout">
     <el-empty v-if="loading" description="正在加载组织信息..." />
     <el-empty v-else-if="!organization" description="当前空间组织信息加载失败，请切换空间后重试。" />
@@ -158,6 +167,7 @@
       <DiscoverOrgsPanel v-else />
     </template>
   </div>
+  </Transition>
   </div>
 </template>
 
@@ -247,13 +257,14 @@ export default defineComponent({
     // 找回组织面板引用：切换组织时重置其内部状态
     const recoverPanelRef = ref<{ reset: () => void } | null>(null);
 
-    const sections: Array<{ key: SectionKey; label: string; icon: Component }> = [
-      { key: 'info', label: '组织信息', icon: OfficeBuilding },
-      { key: 'gateway', label: '网关设置', icon: Connection },
-      { key: 'recover', label: '找回组织', icon: Refresh },
-      { key: 'purge', label: '数据治理', icon: Brush },
-      { key: 'public', label: '公开设置', icon: Share },
-      { key: 'discover', label: '发现公开组织', icon: Search }
+    // color 为移动端菜单图标色（微信式每项一色，取色与 utils/palette 品牌色板同源，桌面端不使用）
+    const sections: Array<{ key: SectionKey; label: string; icon: Component; color: string }> = [
+      { key: 'info', label: '组织信息', icon: OfficeBuilding, color: '#00b8a9' },
+      { key: 'gateway', label: '网关设置', icon: Connection, color: '#3296fa' },
+      { key: 'recover', label: '找回组织', icon: Refresh, color: '#34c19b' },
+      { key: 'purge', label: '数据治理', icon: Brush, color: '#7b61ff' },
+      { key: 'public', label: '公开设置', icon: Share, color: '#ff7d00' },
+      { key: 'discover', label: '发现公开组织', icon: Search, color: '#eb2f96' }
     ];
 
     /** 当前选中子菜单的标题（移动端整页返回栏标题） */
@@ -623,7 +634,7 @@ export default defineComponent({
   }
 
   /* 内容区（mine-detail）整页覆盖；top 让出返回栏高度（48px + 状态栏安全区），
-     避免首行内容被返回栏遮挡 */
+     避免首行内容被返回栏遮挡；进出动画由 Transition（settings-overlay-slide）承担 */
   .org-settings-panel > .mine-detail {
     position: absolute;
     top: calc(48px + env(safe-area-inset-top, 0px));
@@ -633,26 +644,36 @@ export default defineComponent({
     z-index: 2;
     background: var(--spark-bg-card);
     overflow-y: auto;
-    animation: settings-overlay-in 260ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
   }
 
-  /* 返回栏：浮在面板顶部（与内容同向滑入，视觉等同整页推入） */
+  /* 返回栏：浮在面板顶部（与内容同向滑动，视觉等同整页推入/推出） */
   .settings-mobile-bar {
     position: absolute;
     top: 0;
     left: 0;
     right: 0;
     z-index: 3;
-    animation: settings-overlay-in 260ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
   }
-}
 
-@keyframes settings-overlay-in {
-  from {
+  /* 覆盖层进出动画（与导航栈 push/pop 同款曲线与方向：进=自右滑入，出=向右滑出） */
+  .settings-overlay-slide-enter-active,
+  .settings-overlay-slide-leave-active {
+    transition: transform 260ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    will-change: transform;
+  }
+
+  .settings-overlay-slide-enter-from,
+  .settings-overlay-slide-leave-to {
     transform: translateX(100%);
   }
-  to {
-    transform: translateX(0);
+
+  /* 移动端子菜单字号按微信调大：主文字 16px；移动端菜单是页面切换不是选中，选中态不生效 */
+  .settings-section-label {
+    font-size: 16px;
+  }
+
+  .mine-list-item.active .settings-section-label {
+    font-weight: 400;
   }
 }
 </style>

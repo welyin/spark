@@ -15,18 +15,27 @@
         :class="{ active: activeSection === item.key }"
         @click="activeSection = item.key"
       >
-        <el-icon class="mine-list-item-icon" :size="17"><component :is="item.icon" /></el-icon>
+        <el-icon
+          class="mine-list-item-icon"
+          :size="17"
+          :style="isMobileLayout ? { color: item.color } : undefined"
+        ><component :is="item.icon" /></el-icon>
         <b class="settings-section-label">{{ item.label }}</b>
       </button>
     </div>
   </div>
 
-  <!-- 移动端内容整页返回栏（Android 前端改造）：选中 section 时显示，返回回子菜单 -->
+  <!-- 移动端内容整页返回栏（Android 前端改造）：选中 section 时显示，返回回子菜单；
+       Transition 进出自右滑入/向右滑出（与导航栈 push/pop 同向） -->
+  <Transition name="settings-overlay-slide">
   <div v-if="isMobileLayout && activeSection !== null" class="settings-mobile-bar">
     <MobileBackBar :title="activeSectionLabel" @back="activeSection = null" />
   </div>
+  </Transition>
 
-  <!-- 网络状态 / 设备管理：模块直接渲染（列表栏即第四栏，编辑页走抽屉） -->
+  <!-- 网络状态 / 设备管理：模块直接渲染（列表栏即第四栏，编辑页走抽屉）；
+       Transition 包裹使移动端内容整页覆盖层进出自右滑入、返回向右滑出（桌面端无对应样式，无动画） -->
+  <Transition name="settings-overlay-slide">
   <NetworkModule
     v-if="activeSection === 'netStatus'"
     detail-mode="drawer"
@@ -144,6 +153,7 @@
       </div>
     </el-card>
   </div>
+  </Transition>
   </div>
 </template>
 
@@ -255,14 +265,15 @@ export default defineComponent({
     const dataActionRunning = ref(false);
     const generalStates = ref<Record<string, boolean>>({});
 
-    // 顺序按用户习惯：通用偏好在前，设备/网络/存储等系统项居中，关于垫底
-    const sections: Array<{ key: SectionKey; label: string; icon: Component }> = [
-      { key: 'general', label: '通用设置', icon: SetUp },
-      { key: 'notify', label: '消息通知', icon: Bell },
-      { key: 'netStatus', label: '网络状态', icon: Connection },
-      { key: 'devices', label: '设备管理', icon: Monitor },
-      { key: 'storage', label: '存储管理', icon: Coin },
-      { key: 'about', label: '关于', icon: InfoFilled }
+    // 顺序按用户习惯：通用偏好在前，设备/网络/存储等系统项居中，关于垫底；
+    // color 为移动端菜单图标色（微信式每项一色，取色与 utils/palette 品牌色板同源，桌面端不使用）
+    const sections: Array<{ key: SectionKey; label: string; icon: Component; color: string }> = [
+      { key: 'general', label: '通用设置', icon: SetUp, color: '#64748b' },
+      { key: 'notify', label: '消息通知', icon: Bell, color: '#eb2f96' },
+      { key: 'netStatus', label: '网络状态', icon: Connection, color: '#00b8a9' },
+      { key: 'devices', label: '设备管理', icon: Monitor, color: '#3296fa' },
+      { key: 'storage', label: '存储管理', icon: Coin, color: '#f7b500' },
+      { key: 'about', label: '关于', icon: InfoFilled, color: '#94a3b8' }
     ];
 
     /** 当前选中子菜单的标题（移动端整页返回栏标题） */
@@ -498,7 +509,8 @@ export default defineComponent({
 
   /* 内容区：NetworkModule/DevicesModule 内部 mine-list 或 .mine-detail，absolute 整页覆盖；
      top 让出返回栏高度（48px + 状态栏安全区），避免首行内容被返回栏遮挡；
-     :not(.panel-submenu) 排除面板自身子菜单（其与内容区互斥渲染，但需防 CSS 命中） */
+     :not(.panel-submenu) 排除面板自身子菜单（其与内容区互斥渲染，但需防 CSS 命中）；
+     进出动画由 Transition（settings-overlay-slide）承担 */
   .system-settings-panel > :deep(.mine-list):not(.panel-submenu),
   .system-settings-panel > .mine-detail {
     position: absolute;
@@ -509,26 +521,36 @@ export default defineComponent({
     z-index: 2;
     background: var(--spark-bg-card);
     overflow-y: auto;
-    animation: settings-overlay-in 260ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
   }
 
-  /* 返回栏：浮在面板顶部（与内容同向滑入，视觉等同整页推入） */
+  /* 返回栏：浮在面板顶部（与内容同向滑动，视觉等同整页推入/推出） */
   .settings-mobile-bar {
     position: absolute;
     top: 0;
     left: 0;
     right: 0;
     z-index: 3;
-    animation: settings-overlay-in 260ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
   }
-}
 
-@keyframes settings-overlay-in {
-  from {
+  /* 覆盖层进出动画（与导航栈 push/pop 同款曲线与方向：进=自右滑入，出=向右滑出） */
+  .settings-overlay-slide-enter-active,
+  .settings-overlay-slide-leave-active {
+    transition: transform 260ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    will-change: transform;
+  }
+
+  .settings-overlay-slide-enter-from,
+  .settings-overlay-slide-leave-to {
     transform: translateX(100%);
   }
-  to {
-    transform: translateX(0);
+
+  /* 移动端子菜单字号按微信调大：主文字 16px；移动端菜单是页面切换不是选中，选中态不生效 */
+  .settings-section-label {
+    font-size: 16px;
+  }
+
+  .mine-list-item.active .settings-section-label {
+    font-weight: 400;
   }
 }
 </style>

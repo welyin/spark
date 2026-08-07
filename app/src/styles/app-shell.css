@@ -377,33 +377,14 @@
   }
 
   /* 顶栏紧凑：收窄左右 padding（上 padding 保留 safe-area-inset-top）；
-     高度随内容过渡（200ms），隐藏时整体收起，二级页不残留空条（Android 前端改造） */
+     隐藏时整栏直接不渲染（无位移动画），二级页不残留空条（Android 前端改造） */
   .topbar {
     padding: env(safe-area-inset-top, 0px) 8px 0;
-    overflow: hidden;
-    transition: height 200ms ease, padding 200ms ease;
   }
 
-  /* 移动端顶部导航隐藏（非四个主 tab 栈底）：顶栏高度收起为 0，页面内容上移占满 */
+  /* 移动端顶部导航隐藏（非四个主 tab 栈底）：顶栏立即消失，页面内容直接占满，不做收起动画 */
   .topbar.topbar-collapsed {
-    height: 0;
-    padding: 0;
-    border-bottom-width: 0;
-  }
-
-  /* ---- 移动端顶部导航（Android 前端改造）：切二级页时整体滑走 ----
-     桌面端 TopNavbar 不渲染；MobileTopBar 仅在四个主 tab 栈深=1 时显示，
-     显示/隐藏用上下滑动过渡（200ms，与 tab 淡入淡出同档） */
-  .mobile-topbar-slide-enter-active,
-  .mobile-topbar-slide-leave-active {
-    transition: transform 200ms ease, opacity 200ms ease;
-    will-change: transform, opacity;
-  }
-
-  .mobile-topbar-slide-enter-from,
-  .mobile-topbar-slide-leave-to {
-    transform: translateY(-100%);
-    opacity: 0;
+    display: none;
   }
 
   /* ---- 移动端适配（波次 2）：整页 + 导航栈的共享层样式 ----
@@ -532,27 +513,8 @@
     inset: 0;
   }
 
-  /* ---- 移动端底部 tab 导航滑出/滑入（Android 前端改造）----
-     进入二级页时底栏向下推走，返回一级页时自底部滑回；
-     leave 期间脱离文档流（absolute 贴底），高度立即释放给页面，避免布局跳动 */
-  .mobile-tabbar-slide-enter-active,
-  .mobile-tabbar-slide-leave-active {
-    transition: transform 200ms ease;
-    will-change: transform;
-  }
-
-  .mobile-tabbar-slide-enter-from,
-  .mobile-tabbar-slide-leave-to {
-    transform: translateY(100%);
-  }
-
-  .mobile-tabbar-slide-leave-active {
-    position: absolute;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 5;
-  }
+  /* ---- 移动端底部 tab 导航（Android 前端改造）----
+     进入二级页时底栏直接不渲染、返回一级页时直接出现，不做上下位移动画 */
 
   /* ---- 移动端全屏抽屉安全区（Android 前端改造）----
      ContactsPage 标签成员详情等 size="100%" 抽屉：内容容器避开系统状态栏，
@@ -583,15 +545,5 @@
   /* 插件 tab 整页（移动端顶部导航不渲染）：卡片头部避开系统状态栏 */
   .plugin-tab-card .el-card__header {
     padding-top: calc(var(--el-card-padding, 18px) + env(safe-area-inset-top, 0px));
-  }
-}
-
-/* 设置面板内容整页滑入（SystemSettingsPanel/OrgSettingsPanel 移动端覆盖层共用，Android 前端改造） */
-@keyframes settings-overlay-in {
-  from {
-    transform: translateX(100%);
-  }
-  to {
-    transform: translateX(0);
   }
 }
