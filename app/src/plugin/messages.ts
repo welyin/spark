@@ -5,21 +5,21 @@
  * - 桥 dispatcher（插件经 sdk.messages 写入/读取，pluginId/space 由桥注入）；
  * - 壳层系统通知（内置 system 应用会话 `app:system`，如插件安装/升级成功）。
  *
- * Tauri 环境走内核命令（唯一真源），写后就地 ingest 进 mock/messages 缓存，
- * 保证打开的会话与会话列表实时刷新；非 Tauri（纯浏览器/单测）由 mock/messages
+ * Tauri 环境走内核命令（唯一真源），写后就地 ingest 进 stores/messages 缓存，
+ * 保证打开的会话与会话列表实时刷新；非 Tauri（纯浏览器/单测）由 stores/messages
  * 内存态镜像内核语义（summary 校验 + 限流，错误串前缀一致），链路可演示。
  */
-import { isTauri, type AppMessageCardDto, type AppMessageDto, type ElectronAPI } from './api';
+import { isTauri, type AppMessageCardDto, type AppMessageDto, type ElectronAPI } from '../api';
 import {
   getAppMessages,
   ingestAppMessage,
   markRead as markConversationRead,
   mergeAppMessages,
   sendAppMessageLocal
-} from './mock/messages';
-import { SYSTEM_APP_PLUGIN_ID } from './stores/app-conversations';
+} from '../stores/messages';
+import { SYSTEM_APP_PLUGIN_ID } from '../stores/app-conversations';
 
-/** 内核消息接口：仅 Tauri 环境可用（与 mock/messages 同口径守卫） */
+/** 内核消息接口：仅 Tauri 环境可用（与 stores/messages 同口径守卫） */
 function messagesApi(): ElectronAPI['messages'] | undefined {
   if (!isTauri()) return undefined;
   return (window as unknown as { electronAPI?: ElectronAPI }).electronAPI?.messages;
@@ -93,7 +93,7 @@ export function notifyPluginInstalled(spaceKey: string, pluginName: string): voi
     summary: `应用「${pluginName}」安装成功，启用后即可使用`,
     kind: 'plugin-installed',
     pluginName
-  }).catch((error) => console.warn('[app-messages] 插件安装系统通知写入失败', error));
+  }).catch((error) => console.warn('[plugin/messages] 插件安装系统通知写入失败', error));
 }
 
 /** 插件升级成功系统通知（fire-and-forget，同安装口径） */
@@ -102,5 +102,5 @@ export function notifyPluginUpgraded(spaceKey: string, pluginName: string): void
     summary: `应用「${pluginName}」已更新到最新版本`,
     kind: 'plugin-upgraded',
     pluginName
-  }).catch((error) => console.warn('[app-messages] 插件升级系统通知写入失败', error));
+  }).catch((error) => console.warn('[plugin/messages] 插件升级系统通知写入失败', error));
 }

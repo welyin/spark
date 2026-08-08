@@ -14,8 +14,8 @@
  * CSP 'self' 不匹配任何 URL，必须显式列插件源来源（见 buildPluginHostSrcdoc）。
  */
 
-import { isTauri } from './api';
-import type { PluginManifest, PluginViewBootstrap } from '../../packages/plugin-sdk/src';
+import { isTauri } from '../api';
+import type { PluginManifest, PluginViewBootstrap } from '../../../packages/plugin-sdk/src';
 
 /** 插件 id 白名单（与内核 §20 规格一致）：小写字母/数字/连字符，首字符非连字符，最长 64 */
 const PLUGIN_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;

@@ -93,6 +93,7 @@ fn friend_record(root_id: &str, blocked: bool) -> FriendRecord {
         photos: Vec::new(),
         permission: "open".to_string(),
         blocked,
+        updated_at: NOW,
     }
 }
 
@@ -947,11 +948,11 @@ fn inbound_friend_request_from_self_auto_accept() {
         "nickname": "设备B",
         "message": "",
         "source": "扫码",
-        "nodeInfo": { "peerId": "peer-dev-b", "addresses": ["/ip4/1.2.3.4/tcp/9001"] },
+        "nodeInfo": { "peerId": "12D3KooWDevBTestNode11111111111111111111111111111", "addresses": ["/ip4/1.2.3.4/tcp/9001"] },
     });
     let envelope =
         dm_envelope::build_envelope("friend-request", &my_root, &my_root, NOW, body, &key);
-    let result = handle_inbound_dm(&mut s, &my_root, "我昵称", envelope, "peer-dev-b", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "我昵称", envelope, "12D3KooWDevBTestNode11111111111111111111111111111", &HashSet::new(), NOW).unwrap();
     assert_eq!(result.response, json!({ "ok": true, "nickname": "我昵称" }));
 
     // 自动接受：直接建设备 FriendRecord，不产生「新的朋友」申请
@@ -959,7 +960,7 @@ fn inbound_friend_request_from_self_auto_accept() {
         .unwrap()
         .expect("设备记录已建");
     assert_eq!(device.nickname, "设备B");
-    assert_eq!(device.peer.as_ref().unwrap().peer_id, "peer-dev-b");
+    assert_eq!(device.peer.as_ref().unwrap().peer_id, "12D3KooWDevBTestNode11111111111111111111111111111");
     let overview = ContactService::overview(&s, PERSONAL).unwrap();
     assert!(overview.requests.is_empty(), "设备配对不产生申请记录");
 
@@ -967,7 +968,7 @@ fn inbound_friend_request_from_self_auto_accept() {
     let auto = result.auto_accept.expect("带 auto_accept 标志");
     assert_eq!(auto.request_id, "req-dev-1");
     assert_eq!(auto.to_root_id, my_root, "设备配对回发 to=自己");
-    assert_eq!(auto.target.peer_id.as_deref(), Some("peer-dev-b"));
+    assert_eq!(auto.target.peer_id.as_deref(), Some("12D3KooWDevBTestNode11111111111111111111111111111"));
     assert_eq!(auto.target.addresses, vec!["/ip4/1.2.3.4/tcp/9001".to_string()]);
 }
 
@@ -1732,6 +1733,175 @@ fn inbound_profile_sync_empty_nickname_and_invalid_avatar_ignored() {
     };
     assert_eq!(data["nickname"], json!("改名"));
     assert_eq!(data["avatar"], json!(VALID_AVATAR));
+}
+
+// ---------------------------------------------------------------------------
+// 入站编排：自设备同步（profile-sync 全量快照 / device-sync 设备清单）
+// ---------------------------------------------------------------------------
+
+/// 自设备 FriendRecord（rootId==自己，peer 为对端设备寻址）。
+fn self_device_record(my_root: &str, peer_id: &str) -> FriendRecord {
+    let mut f = friend_record(my_root, false);
+    f.peer = Some(spark_core::message::PeerRef {
+        peer_id: peer_id.to_string(),
+        addresses: vec!["/ip4/127.0.0.1/tcp/4001".to_string()],
+    });
+    f
+}
+
+#[test]
+fn inbound_profile_sync_self_full_snapshot_carried_to_host() {
+    let mut s = MemoryStorage::new();
+    let (my_key, my_root) = peer_root(42);
+    ContactService::upsert_friend(&mut s, &self_device_record(&my_root, "12D3KooWDevBTestNode11111111111111111111111111111")).unwrap();
+
+    // 自设备全量快照（带 updatedAt）：self_profile 上抛 host（身份文件应用）
+    let body = json!({
+        "nickname": "新本机昵称",
+        "avatar": VALID_AVATAR,
+        "gender": "男",
+        "region": null,
+        "signature": "签名",
+        "updatedAt": 123456789,
+    });
+    let envelope = profile_sync_envelope(&my_key, &my_root, &my_root, body.clone());
+    let result =
+        handle_inbound_dm(&mut s, &my_root, "", envelope, "12D3KooWDevBTestNode11111111111111111111111111111", &HashSet::new(), NOW)
+            .unwrap();
+    assert_eq!(result.response, json!({ "ok": true }));
+    assert_eq!(
+        result.self_profile.as_ref().map(|b| b["updatedAt"].clone()),
+        Some(json!(123456789)),
+        "全量快照应上抛 host 侧应用身份文件"
+    );
+    // 自 FriendRecord 同步刷新（昵称/头像）
+    let friend = ContactService::get_friend(&s, &my_root).unwrap().unwrap();
+    assert_eq!(friend.nickname, "新本机昵称");
+    assert_eq!(friend.avatar.as_deref(), Some(VALID_AVATAR));
+}
+
+#[test]
+fn inbound_profile_sync_self_legacy_format_not_applied() {
+    let mut s = MemoryStorage::new();
+    let (my_key, my_root) = peer_root(42);
+    ContactService::upsert_friend(&mut s, &self_device_record(&my_root, "12D3KooWDevBTestNode11111111111111111111111111111")).unwrap();
+
+    // 旧格式（无 updatedAt，建连互推路径）：不上抛身份文件应用，仅更新朋友记录
+    let envelope = profile_sync_envelope(
+        &my_key,
+        &my_root,
+        &my_root,
+        json!({ "nickname": "旧格式昵称" }),
+    );
+    let result =
+        handle_inbound_dm(&mut s, &my_root, "", envelope, "12D3KooWDevBTestNode11111111111111111111111111111", &HashSet::new(), NOW)
+            .unwrap();
+    assert_eq!(result.response, json!({ "ok": true }));
+    assert!(
+        result.self_profile.is_none(),
+        "旧格式快照不应上抛（防回灌身份文件）"
+    );
+    let friend = ContactService::get_friend(&s, &my_root).unwrap().unwrap();
+    assert_eq!(friend.nickname, "旧格式昵称");
+}
+
+#[test]
+fn inbound_profile_sync_self_without_friend_record_still_carried() {
+    let mut s = MemoryStorage::new();
+    let (my_key, my_root) = peer_root(42);
+    // 自 FriendRecord 尚不存在（新设备恢复后未触发过 overview）：快照不丢失
+    let envelope = profile_sync_envelope(
+        &my_key,
+        &my_root,
+        &my_root,
+        json!({ "nickname": "恢复同步", "updatedAt": 100 }),
+    );
+    let result =
+        handle_inbound_dm(&mut s, &my_root, "", envelope, "12D3KooWDevBTestNode11111111111111111111111111111", &HashSet::new(), NOW)
+            .unwrap();
+    assert_eq!(result.response, json!({ "ok": true }));
+    assert!(result.self_profile.is_some(), "朋友记录缺失时快照仍应上抛");
+}
+
+fn device_sync_envelope(key: &SigningKey, my_root: &str, body: Value) -> Value {
+    dm_envelope::build_envelope("device-sync", my_root, my_root, NOW, body, key)
+}
+
+fn device_body(peer_id: &str, name: &str, updated_at: i64) -> Value {
+    json!({
+        "peerId": peer_id,
+        "deviceName": name,
+        "os": "Android",
+        "arch": "aarch64",
+        "macs": ["aa:bb:cc:dd:ee:ff"],
+        "updatedAt": updated_at,
+        "lastSeenAt": updated_at,
+    })
+}
+
+#[test]
+fn inbound_device_sync_upserts_and_requests_reply() {
+    let mut s = MemoryStorage::new();
+    let (my_key, my_root) = peer_root(42);
+    ContactService::upsert_friend(&mut s, &self_device_record(&my_root, "12D3KooWDevBTestNode11111111111111111111111111111")).unwrap();
+
+    let envelope = device_sync_envelope(&my_key, &my_root, device_body("12D3KooWDevBTestNode11111111111111111111111111111", "手机B", 100));
+    let result =
+        handle_inbound_dm(&mut s, &my_root, "", envelope, "12D3KooWDevBTestNode11111111111111111111111111111", &HashSet::new(), NOW)
+            .unwrap();
+    assert_eq!(result.response, json!({ "ok": true }));
+    // 落库 + DeviceUpdated 事件
+    let P2pEvent::DeviceUpdated(data) = &result.events[0] else {
+        panic!("应发出 DeviceUpdated 事件");
+    };
+    assert_eq!(data["deviceName"], json!("手机B"));
+    let stored = spark_core::device::DeviceService::get(&s, "12D3KooWDevBTestNode11111111111111111111111111111").unwrap().unwrap();
+    assert_eq!(stored.os, "Android");
+    // 握手回发目标 = 自设备 FriendRecord 的寻址
+    let reply = result.device_sync_reply.expect("应请求回发本机设备记录");
+    assert_eq!(reply.peer_id.as_deref(), Some("12D3KooWDevBTestNode11111111111111111111111111111"));
+    assert_eq!(reply.addresses, vec!["/ip4/127.0.0.1/tcp/4001".to_string()]);
+}
+
+#[test]
+fn inbound_device_sync_stale_does_not_overwrite() {
+    let mut s = MemoryStorage::new();
+    let (my_key, my_root) = peer_root(42);
+    ContactService::upsert_friend(&mut s, &self_device_record(&my_root, "12D3KooWDevBTestNode11111111111111111111111111111")).unwrap();
+
+    // 先入一条新的
+    let envelope = device_sync_envelope(&my_key, &my_root, device_body("12D3KooWDevBTestNode11111111111111111111111111111", "新名", 200));
+    handle_inbound_dm(&mut s, &my_root, "", envelope, "12D3KooWDevBTestNode11111111111111111111111111111", &HashSet::new(), NOW).unwrap();
+
+    // 更旧的 updatedAt：内容不覆盖、无事件、last_seen 推进
+    let envelope = device_sync_envelope(&my_key, &my_root, device_body("12D3KooWDevBTestNode11111111111111111111111111111", "旧名", 100));
+    let result =
+        handle_inbound_dm(&mut s, &my_root, "", envelope, "12D3KooWDevBTestNode11111111111111111111111111111", &HashSet::new(), NOW + 1)
+            .unwrap();
+    assert!(result.events.is_empty(), "旧快照不应产生内容变更事件");
+    let stored = spark_core::device::DeviceService::get(&s, "12D3KooWDevBTestNode11111111111111111111111111111").unwrap().unwrap();
+    assert_eq!(stored.device_name, "新名", "旧快照不覆盖新内容");
+    assert_eq!(stored.last_seen_at, NOW + 1, "last_seen 推进为接收时间");
+}
+
+#[test]
+fn inbound_device_sync_from_other_root_rejected() {
+    let mut s = MemoryStorage::new();
+    let my_root = "aa".repeat(32);
+    let (key, from) = peer_root(7);
+    // from != 自己：device-sync 只受理自设备（防冒充设备清单注入）
+    let envelope = dm_envelope::build_envelope(
+        "device-sync",
+        &from,
+        &my_root,
+        NOW,
+        device_body("peer-x", "冒充", 100),
+        &key,
+    );
+    let result =
+        handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-x", &HashSet::new(), NOW).unwrap();
+    assert_eq!(result.response, json!({ "ok": false, "reason": "not-self-device" }));
+    assert!(spark_core::device::DeviceService::get(&s, "peer-x").unwrap().is_none());
 }
 
 #[test]

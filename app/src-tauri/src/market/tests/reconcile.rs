@@ -33,10 +33,14 @@ fn reconcile_marks_verified_bundle_installed() {
     assert!(persisted.installed.contains_key("spark-example"));
 
     let items = service.list_market();
-    assert_eq!(items.len(), 1);
-    assert!(items[0].installed);
-    assert_eq!(items[0].installed_version.as_deref(), Some("0.1.0"));
-    assert_eq!(items[0].last_check_reason, "bundled");
+    // 按插件 id 定位（目录含 ai-chat 等多条目，不做位置/数量假设）
+    let example = items
+        .iter()
+        .find(|item| item.catalog.id == "spark-example")
+        .expect("spark-example market item");
+    assert!(example.installed);
+    assert_eq!(example.installed_version.as_deref(), Some("0.1.0"));
+    assert_eq!(example.last_check_reason, "bundled");
 }
 
 #[test]

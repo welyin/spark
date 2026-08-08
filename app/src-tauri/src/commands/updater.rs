@@ -13,7 +13,7 @@
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
 /// 更新器共享状态（`app.manage` 单例，与 MarketState 同口径的 Arc 包装）。

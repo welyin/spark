@@ -13,8 +13,8 @@ vi.mock('element-plus', async (importOriginal) => {
 });
 
 import { ElMessageBox } from 'element-plus';
-import { createPluginBridgeDispatcher, type PluginBridgeIdentity } from '../../plugin-bridge-dispatcher';
-import { getAppMessages, getConversation } from '../../mock/messages';
+import { createPluginBridgeDispatcher, type PluginBridgeIdentity } from '../../plugin/bridge-dispatcher';
+import { getAppMessages, getConversation } from '../../stores/messages';
 import type { AppMessageDto } from '../../api/types';
 
 /** 后端桩：任意层级任意方法返回 Promise<null>（test-setup 同款代理；

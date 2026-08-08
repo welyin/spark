@@ -5,7 +5,7 @@
 // - 非 Tauri 环境 buildLinkPreview 直接给诚实占位。
 // spaces 是模块级单例：每个用例用唯一空间 key 驱动，避免相互污染。
 import { describe, expect, it, vi } from 'vitest';
-import { buildLinkPreview, getMessages, onChatReceived, sendText } from '../../mock/messages';
+import { buildLinkPreview, getMessages, onChatReceived, sendText } from '../../stores/messages';
 
 /** 播种一个 direct 会话（借对端消息事件建会话，免 stub ensureDirect） */
 function seedConversation(spaceKey: string, peerId: string): string {

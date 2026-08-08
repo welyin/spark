@@ -131,7 +131,7 @@ fn org_share_request_dispatch() {
     let (kind, _) = parse_org_share_request(&list).unwrap().unwrap();
     assert_eq!(kind, OrgShareRequestKind::OrgPullList);
 
-    let org = build_pull_org_request(&"aa".repeat(32), None, "org_0123456789abcdef");
+    let org = build_pull_org_request(&"aa".repeat(32), None, "org_0123456789abcdef", None);
     let (kind, payload) = parse_org_share_request(&org).unwrap().unwrap();
     assert_eq!(kind, OrgShareRequestKind::OrgPullOrg);
     assert_eq!(payload["orgId"], "org_0123456789abcdef");

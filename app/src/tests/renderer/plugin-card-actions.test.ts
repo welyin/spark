@@ -1,5 +1,5 @@
 /**
- * 卡片按钮回调路由（plugin-card-actions）单测：
+ * 卡片按钮回调路由（plugin/card-actions）单测：
  * - 归属登记/卸载：cardId 必须是壳层签发且当前在架的；
  * - 主视图实例缺失返回 false（action 丢弃，设计允许）；
  * - 同插件同空间换实例：unregister 的 === host 守卫不误删新实例；
@@ -14,7 +14,7 @@ import {
   routeCardAction,
   unregisterCard,
   unregisterMainViewInstance
-} from '../../plugin-card-actions';
+} from '../../plugin/card-actions';
 
 /** BridgeHost 桩：路由链路只用到 pushAction */
 function makeHost(): BridgeHost & { pushAction: ReturnType<typeof vi.fn> } {

@@ -65,6 +65,8 @@ import LoginPage from './pages/auth/LoginPage.vue';
 import RecoverPage from './pages/auth/RecoverPage.vue';
 import SwitchUserPage from './pages/auth/SwitchUserPage.vue';
 import { errorMessage } from './utils/ipc';
+import { resetContactsCache } from './mock/contacts/store';
+import { resetMessagesCache } from './stores/messages';
 
 type AuthMode = 'login' | 'switch' | 'register' | 'recover';
 
@@ -135,6 +137,9 @@ export default defineComponent({
     const handleSwitchSelect = async (rootId: string) => {
       try {
         await window.electronAPI.rootIdentity.setActive(rootId);
+        // 身份切换：清空窗口会话级缓存，避免旧账号数据带进新会话
+        resetContactsCache();
+        resetMessagesCache();
         authMode.value = 'login';
         message.value = '';
         await refreshStatus();
@@ -146,6 +151,10 @@ export default defineComponent({
     const handleLogout = async () => {
       try {
         await window.electronAPI.rootIdentity.lock();
+        // 登出不刷新页面：清空窗口会话级缓存，下次登录重新从内核水合
+        // （否则 contactsOf/ensureSpace 的首次水合守卫不再触发，显示旧内存数据）
+        resetContactsCache();
+        resetMessagesCache();
         showApp.value = false;
         authMode.value = 'login';
         await refreshStatus();

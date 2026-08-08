@@ -34,7 +34,9 @@ use crate::storage::SledStorage;
 use crate::sync::apply::{ApplyRemoteOptions, apply_remote_update};
 use crate::sync::meta::RemoteMeta;
 
-use super::dm_envelope::{self, KIND_FRIEND_ACCEPT, KIND_PROFILE_SYNC};
+use super::dm_envelope::{
+    self, KIND_CONTACT_SYNC, KIND_CONV_SYNC, KIND_FRIEND_ACCEPT, KIND_PROFILE_SYNC,
+};
 use super::inbound_dm::AutoAccept;
 
 /// 集合配置注册表：`(domain, collection) → CollectionConfig`。
@@ -112,6 +114,11 @@ pub(crate) struct KernelHost {
     pub(crate) node_shared: Arc<Mutex<Option<Arc<P2pNode>>>>,
     /// 解锁期签名私钥共享格（auto_accept 回发信封签名用；lock 时清除）。
     pub(crate) signing_key_shared: Arc<Mutex<Option<ed25519_dalek::SigningKey>>>,
+    /// 解锁期会话口令共享格（自设备 profile-sync 全量快照应用身份文件时
+    /// 重封加密 payload 用；lock 时清除）。
+    pub(crate) password_shared: Arc<Mutex<Option<String>>>,
+    /// 数据目录（身份文件读写路径推导用，与 kernel `config.data_dir` 同源）。
+    pub(crate) data_dir: std::path::PathBuf,
     /// 存储读写互斥（与 kernel 变更类门面方法同一把；`handle_dm` 的入站
     /// 落库在锁内执行，避免与 Tauri 命令线程的 read-modify-write 交错）。
     pub(crate) io_lock: Arc<Mutex<()>>,
@@ -140,6 +147,8 @@ impl KernelHost {
             event_tx: self.event_tx.clone(),
             node_shared: Arc::clone(&self.node_shared),
             signing_key_shared: Arc::clone(&self.signing_key_shared),
+            password_shared: Arc::clone(&self.password_shared),
+            data_dir: self.data_dir.clone(),
             io_lock: Arc::clone(&self.io_lock),
         }
     }
@@ -155,6 +164,8 @@ pub(crate) struct KernelDmHandler {
     event_tx: tokio::sync::broadcast::Sender<crate::p2p::P2pEvent>,
     node_shared: Arc<Mutex<Option<Arc<P2pNode>>>>,
     signing_key_shared: Arc<Mutex<Option<ed25519_dalek::SigningKey>>>,
+    password_shared: Arc<Mutex<Option<String>>>,
+    data_dir: std::path::PathBuf,
     io_lock: Arc<Mutex<()>>,
 }
 
@@ -218,6 +229,273 @@ impl KernelDmHandler {
             let _ = node.dm_direct(&auto_accept.target, envelope).await;
         });
     }
+
+    /// 自设备 profile-sync 全量快照应用：以会话口令重封身份文件，完成
+    /// 「我的资料」跨设备同步（wiki/design/sync-and-evidence.md「个人空间
+    /// 同步口径」：个人资料在个人设备间全量同步；identity.md §5「恢复后
+    /// 头像经 profile-sync 找回」）。
+    ///
+    /// LWW 三向裁决（向量时钟为后续专项）：
+    /// - 对端较新（`updatedAt` 严格大于本地）：应用快照，刷新共享槽并通知
+    ///   前端（SelfProfileSynced）——防离线设备上线后以旧快照回灌；
+    /// - 本机较新（严格小于）：返回 true，调用方据此向对端回发本机全量
+    ///   快照（握手式交换——对端较旧/残缺时补齐，如 QR 恢复的新设备
+    ///   updatedAt=0，其残缺快照不会覆盖本机资料，本机回发使其收敛）；
+    /// - 相等：收敛态，不动（也不回发，无 ping-pong）。
+    ///
+    /// 身份已锁（无口令）/文件缺失/校验失败时静默跳过（返回 false），
+    /// 不影响朋友记录已完成的更新。
+    fn apply_self_profile(&self, root_id: &str, body: &Value) -> bool {
+        let password = self
+            .password_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let Some(password) = password else {
+            return false;
+        };
+        let Some(updated_at) = body.get("updatedAt").and_then(Value::as_i64) else {
+            return false;
+        };
+        let path = self
+            .data_dir
+            .join("identities")
+            .join(format!("{root_id}.json"));
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            return false;
+        };
+        let Ok(mut file) = crate::identity::IdentityFile::from_json(&raw) else {
+            return false;
+        };
+        if updated_at < file.updated_at as i64 {
+            // 本机资料较新：提示调用方回发本机快照补齐对端
+            return true;
+        }
+        if updated_at == file.updated_at as i64 {
+            return false;
+        }
+        // 线形三态 → update_profile 参数三态：字符串=设置，显式 null=清除，缺省=不变
+        let nickname = body.get("nickname").and_then(Value::as_str);
+        let tri_state = |key: &str| -> Option<Option<&str>> {
+            match body.get(key) {
+                Some(Value::Null) => Some(None),
+                Some(Value::String(s)) => Some(Some(s.as_str())),
+                _ => None,
+            }
+        };
+        let avatar = tri_state("avatar");
+        // gender/region/signature 的内核清除语义是 Some("")（空串=清除）
+        let extra = |key: &str| -> Option<&str> {
+            match body.get(key) {
+                Some(Value::Null) => Some(""),
+                Some(Value::String(s)) => Some(s.as_str()),
+                _ => None,
+            }
+        };
+        if crate::identity::update_profile(
+            &mut file,
+            &password,
+            nickname,
+            avatar,
+            extra("gender"),
+            extra("region"),
+            extra("signature"),
+        )
+        .is_err()
+        {
+            return false;
+        }
+        let Ok(text) = serde_json::to_string_pretty(&file) else {
+            return false;
+        };
+        if std::fs::write(&path, text).is_err() {
+            return false;
+        }
+        // 共享格刷新（dm 应答/出站口径）+ 前端通知
+        *self.nickname_shared.lock().unwrap_or_else(|e| e.into_inner()) =
+            file.nickname.clone().unwrap_or_default();
+        *self.avatar_shared.lock().unwrap_or_else(|e| e.into_inner()) =
+            file.avatar.clone().unwrap_or_default();
+        let mut data = serde_json::json!({
+            "nickname": file.nickname.clone().unwrap_or_default(),
+        });
+        if let Some(a) = &file.avatar {
+            data["avatar"] = Value::from(a.clone());
+        }
+        let _ = self.event_tx.send(crate::p2p::P2pEvent::SelfProfileSynced(data));
+        false
+    }
+
+    /// profile-sync 握手回发：读身份文件的全量资料快照装配 profile-sync 信封
+    /// 单点回投（本机资料较对端新时由 `apply_self_profile` 裁决触发；spawn
+    /// 模式同 `spawn_device_sync_reply`，失败静默）。
+    fn spawn_profile_sync_reply(&self, my_root_id: &str, target: PeerNodeInfo) {
+        let node = self
+            .node_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let signing_key = self
+            .signing_key_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let (Some(node), Some(signing_key)) = (node, signing_key) else {
+            return;
+        };
+        let path = self
+            .data_dir
+            .join("identities")
+            .join(format!("{my_root_id}.json"));
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            return;
+        };
+        let Ok(file) = crate::identity::IdentityFile::from_json(&raw) else {
+            return;
+        };
+        // 昵称为空时回退 rootId 前 8 位（与出站口径一致）
+        let nickname = file.nickname.clone().unwrap_or_default();
+        let nickname = if nickname.trim().is_empty() {
+            my_root_id.chars().take(8).collect::<String>()
+        } else {
+            nickname
+        };
+        let body = serde_json::json!({
+            "nickname": nickname,
+            "avatar": file.avatar,
+            "gender": file.gender,
+            "region": file.region,
+            "signature": file.signature,
+            "updatedAt": file.updated_at,
+        });
+        let to = my_root_id.to_string();
+        tokio::spawn(async move {
+            let envelope = dm_envelope::build_envelope(
+                KIND_PROFILE_SYNC,
+                &to,
+                &to,
+                system_now_ms(),
+                body,
+                &signing_key,
+            );
+            let _ = node.dm_direct(&target, envelope).await;
+        });
+    }
+
+    /// contact-sync 配对回发：自动接受自设备配对的 friend-request 后，把
+    /// 本机通讯录全量快照（朋友/申请/标签/分组/拉黑）回投给请求方设备——
+    /// QR 恢复的新设备立即拿到通讯录，不必等断→连跳变或本地下一次变更
+    /// （spawn 模式同 `spawn_auto_accept`，失败静默；对端 LWW 幂等合入）。
+    fn spawn_contact_sync_reply(&self, my_root_id: &str, target: PeerNodeInfo) {
+        let node = self
+            .node_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let signing_key = self
+            .signing_key_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let (Some(node), Some(signing_key)) = (node, signing_key) else {
+            return;
+        };
+        let Ok(body) = crate::contact::build_contact_sync_snapshot(&self.storage, my_root_id)
+        else {
+            return;
+        };
+        let to = my_root_id.to_string();
+        tokio::spawn(async move {
+            let envelope = dm_envelope::build_envelope(
+                KIND_CONTACT_SYNC,
+                &to,
+                &to,
+                system_now_ms(),
+                body,
+                &signing_key,
+            );
+            let _ = node.dm_direct(&target, envelope).await;
+        });
+    }
+
+    /// conv-sync 配对回发：自动接受自设备配对的 friend-request 后，把
+    /// 本机会话元数据快照（direct 会话外壳 + 置顶/免打扰/草稿）回投给
+    /// 请求方设备——新设备立即拿到会话列表，不必等断→连跳变或本地下一次
+    /// 变更（spawn 模式同 `spawn_contact_sync_reply`，失败静默）。
+    fn spawn_conv_sync_reply(&self, my_root_id: &str, target: PeerNodeInfo) {
+        let node = self
+            .node_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let signing_key = self
+            .signing_key_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let (Some(node), Some(signing_key)) = (node, signing_key) else {
+            return;
+        };
+        let Ok(body) = crate::message::build_conv_sync_snapshot(&self.storage) else {
+            return;
+        };
+        let to = my_root_id.to_string();
+        tokio::spawn(async move {
+            let envelope = dm_envelope::build_envelope(
+                KIND_CONV_SYNC,
+                &to,
+                &to,
+                system_now_ms(),
+                body,
+                &signing_key,
+            );
+            let _ = node.dm_direct(&target, envelope).await;
+        });
+    }
+
+    /// device-sync 握手回发：取本机设备记录（sled 设备清单的本机条目）装配
+    /// device-sync 信封尽力回投——对端上线推送其记录时本机回推，双方设备
+    /// 清单双向齐全（spawn 模式同 `spawn_auto_accept`，失败静默）。
+    fn spawn_device_sync_reply(&self, my_root_id: &str, target: PeerNodeInfo) {
+        let node = self
+            .node_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let signing_key = self
+            .signing_key_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let (Some(node), Some(signing_key)) = (node, signing_key) else {
+            return;
+        };
+        let storage = self.storage.clone();
+        let to = my_root_id.to_string();
+        tokio::spawn(async move {
+            let Ok(info) = node.local_node_info().await else {
+                return;
+            };
+            let Some(peer_id) = info.peer_id else {
+                return;
+            };
+            let Ok(Some(record)) = crate::device::DeviceService::get(&storage, &peer_id) else {
+                return;
+            };
+            let Ok(body) = serde_json::to_value(&record) else {
+                return;
+            };
+            let envelope = dm_envelope::build_envelope(
+                super::dm_envelope::KIND_DEVICE_SYNC,
+                &to,
+                &to,
+                system_now_ms(),
+                body,
+                &signing_key,
+            );
+            let _ = node.dm_direct(&target, envelope).await;
+        });
+    }
 }
 
 impl DmHandler for KernelDmHandler {
@@ -268,7 +546,35 @@ impl DmHandler for KernelDmHandler {
             let _ = self.event_tx.send(event);
         }
         if let Some(auto_accept) = result.auto_accept {
+            // 配对回发通讯录 + 会话元数据快照：新设备（QR 恢复）立即拿到
+            // 联系人和会话外壳/置顶/免打扰/草稿
+            self.spawn_contact_sync_reply(&root_id, auto_accept.target.clone());
+            self.spawn_conv_sync_reply(&root_id, auto_accept.target.clone());
             self.spawn_auto_accept(&root_id, &nickname, auto_accept);
+        }
+        // 自设备 profile-sync 回发分两种：
+        // 1. 配对握手（handle_self_friend_request，unconditional=true）：
+        //    无条件回发——P2P 启动时的一次性广播可能早于自记录 peer 填入，
+        //    配对是首次可靠的回发时机；
+        // 2. LWW 裁决（handle_profile_sync，unconditional=false）：
+        //    仅本机较新时回发（对端快照较旧/残缺时补齐，收敛后相等不再
+        //    互发，无 ping-pong）。
+        if let Some(reply) = result.profile_sync_reply {
+            if reply.unconditional {
+                self.spawn_profile_sync_reply(&root_id, reply.target);
+            } else if let Some(self_profile) = result.self_profile {
+                let local_is_newer = self.apply_self_profile(&root_id, &self_profile);
+                if local_is_newer {
+                    self.spawn_profile_sync_reply(&root_id, reply.target);
+                }
+            }
+        } else if let Some(self_profile) = result.self_profile {
+            // 无回发指令但有快照：仅做 LWW 应用（对端较新时更新本机身份文件）
+            self.apply_self_profile(&root_id, &self_profile);
+        }
+        // 自设备 device-sync 握手：回发本机设备记录
+        if let Some(target) = result.device_sync_reply {
+            self.spawn_device_sync_reply(&root_id, target);
         }
         Ok(result.response)
     }
@@ -417,14 +723,27 @@ impl P2pHost for KernelHost {
     }
 
     /// org-pull-org 响应（org-pull-sync.ts:200-241）。纯逻辑层
-    /// `handle_pull_org_request` 保持只读。
+    /// `handle_pull_org_request` 保持只读。传入本机身份用于自设备
+    /// claim 验明（放开 peer-mismatch，见 org/pull.rs）。
     fn handle_org_pull_org(
         &mut self,
         payload: Value,
         remote_peer_id: Option<String>,
     ) -> std::result::Result<Value, String> {
-        let response = handle_pull_org_request(&self.storage, &payload, remote_peer_id.as_deref())
-            .map_err(|e| e.to_string())?;
+        let current = self
+            .current_root_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let now = system_now_ms();
+        let response = handle_pull_org_request(
+            &self.storage,
+            &payload,
+            remote_peer_id.as_deref(),
+            current.as_deref(),
+            now,
+        )
+        .map_err(|e| e.to_string())?;
         Ok(response)
     }
 

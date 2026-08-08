@@ -1,5 +1,5 @@
 /**
- * plugin-source 宿主 srcdoc 生成测试。
+ * plugin/source 宿主 srcdoc 生成测试。
  * 重点回归：CSP 来源必须是插件源 origin（不含 id 路径段）——CSP 路径匹配规则下，
  * 不带尾斜杠的路径只精确匹配自身，会把 `/<id>/views/main.js` 误挡（真机踩过的坑）。
  */
@@ -9,7 +9,7 @@ vi.mock('../../api', () => ({
   isTauri: () => true
 }));
 
-import { buildPluginHostSrcdoc, pluginSourceBaseUrl } from '../../plugin-source';
+import { buildPluginHostSrcdoc, pluginSourceBaseUrl } from '../../plugin/source';
 
 describe('buildPluginHostSrcdoc', () => {
   it('CSP 来源为插件源 origin，不带插件 id 路径段', () => {

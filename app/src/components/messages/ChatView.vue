@@ -65,11 +65,17 @@
       <el-icon class="local-only-bar-close" :size="14" @click="localOnlyHintDismissed = true"><Close /></el-icon>
     </div>
 
+    <!-- 已删除联系人提示条 -->
+    <div v-if="contactDeleted" class="contact-deleted-bar">
+      <el-icon :size="14"><WarningFilled /></el-icon>
+      <span>对方已从你的通讯录中删除，仅可查看历史消息</span>
+    </div>
+
     <MessageInput
       v-model="inputText"
       :quote="quote"
-      :disabled="conversation.kind !== 'direct'"
-      :disabled-hint="conversation.kind === 'app' ? '应用会话不支持回复' : '系统通知会话不支持回复'"
+      :disabled="conversation.kind !== 'direct' || contactDeleted"
+      :disabled-hint="contactDeleted ? '对方已删除，无法发送消息' : conversation.kind === 'app' ? '应用会话不支持回复' : '系统通知会话不支持回复'"
       @send="onSend"
       @cancel-quote="quote = null"
     />
@@ -112,6 +118,7 @@ import ContactCardDrawer from '../contacts/ContactCardDrawer.vue';
 import OrgInviteDrawer from '../org/OrgInviteDrawer.vue';
 import { useNetworkStatus } from '../../stores/network-status';
 import { personDisplayName } from '../../stores/avatar-sources';
+import { friendOf } from '../../mock/contacts';
 import type { AppMessageDto } from '../../api/types';
 import {
   closeConversation,
@@ -130,7 +137,7 @@ import {
   type ChatMessage,
   type QuoteRef,
   type SpaceKey
-} from '../../mock/messages';
+} from '../../stores/messages';
 
 type RenderItem =
   | { kind: 'time'; ts: number; key: string }
@@ -160,6 +167,16 @@ export default defineComponent({
 
     const conversation = computed(() => getConversation(props.spaceKey, props.conversationId));
     const messages = computed(() => getMessages(props.spaceKey, props.conversationId));
+
+    // 联系人是否已被删除：direct 会话且 peerId 已不在通讯录（friendOf 返回 undefined）。
+    // 已删除联系人的会话只用于查看历史消息，禁止再发送
+    const contactDeleted = computed(() => {
+      const conv = conversation.value;
+      if (!conv || conv.kind !== 'direct') return false;
+      const peerId = conv.peerId;
+      if (!peerId) return false;
+      return friendOf(props.spaceKey, peerId) === undefined;
+    });
 
     // 应用会话：消息走 appMessages 缓存（appList 水合），渲染分支在模板
     const isAppConversation = computed(() => conversation.value?.kind === 'app');
@@ -343,6 +360,7 @@ export default defineComponent({
     return {
       conversation,
       renderItems,
+      contactDeleted,
       isAppConversation,
       appRenderItems,
       pluginSpaceContext,

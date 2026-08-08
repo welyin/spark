@@ -31,8 +31,9 @@ fn wire_shapes_match_preload_declarations() {
     }
     assert!(item.get("catalog").is_none(), "catalog 应拍平而非嵌套");
     assert_eq!(item["lastCheckReason"], "not-checked");
-    // supportedSpaces：Some 出现（spark-example 目录声明 ["org"]）
-    assert_eq!(item["supportedSpaces"], serde_json::json!(["org"]));
+    // supportedSpaces：Some 出现（spark-example 目录声明 ["org","personal"]，
+    // personal 为后台回声 Bot 会话空间）
+    assert_eq!(item["supportedSpaces"], serde_json::json!(["org", "personal"]));
     assert!(item["package"]["updateManifestUrl"]
         .as_str()
         .unwrap()

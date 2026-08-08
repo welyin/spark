@@ -16,7 +16,7 @@ import {
   unreadCountOf,
   type ChatMessage,
   type Conversation
-} from './messages';
+} from '../stores/messages';
 import { toggleAppConversationBlocked } from '../stores/app-conversations';
 import type { AppMessageDto } from '../api/types';
 

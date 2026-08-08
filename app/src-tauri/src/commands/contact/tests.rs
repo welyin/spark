@@ -38,6 +38,7 @@ fn seed_friend(kernel: &mut Kernel, root_id: &str) {
         photos: Vec::new(),
         permission: "open".to_string(),
         blocked: false,
+        updated_at: 1,
     };
     let mut storage = kernel.__test_storage().unwrap();
     ContactService::upsert_friend(&mut storage, &friend).unwrap();

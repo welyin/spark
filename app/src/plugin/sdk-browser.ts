@@ -1,5 +1,7 @@
 /**
- * 渲染端插件 SDK 后端（Tauri 版，移植自旧工程 desktop/src/renderer/plugin-sdk-browser.ts）。
+ * 渲染端插件 SDK 后端（Tauri 版，移植自旧工程 desktop/src/renderer/plugin-sdk-browser.ts，
+ * 现位于 src/plugin/sdk-browser.ts）。
+ * 注：旧工程文件名含 plugin- 前缀，本目录已去除该前缀。
  *
  * 与旧版的差异仅在宿主来源：旧版经 Electron preload 暴露 window.electronAPI，
  * 本版由适配层（src/api/index.ts，installHostApi）在 Tauri 环境下安装同形实现。
@@ -7,15 +9,15 @@
  *
  * 插件 iframe 沙箱化（阶段 A 第三波）后，旧 tab 同进程初始化（initializePluginSDK，
  * 按窗口/URL query 解析域并写全局注入点）已随壳层旧注册路径一并退役；本模块只保留
- * createPluginBackend——桥 dispatcher（plugin-bridge-dispatcher.ts）以桥绑定的身份域
+ * createPluginBackend——桥 dispatcher（./bridge-dispatcher.ts）以桥绑定的身份域
  * 构造后端，域一律显式下传给 plugin.* 命令。
  *
  * 类型（PluginSDK 等）的唯一来源是 @spark/plugin-sdk（code/packages/plugin-sdk，
  * 经相对路径引用），本模块 re-export 以保持既有 import 路径兼容。
  */
 
-import type { ElectronAPI } from './api';
-import type { PluginSDK } from '../../packages/plugin-sdk/src';
+import type { ElectronAPI } from '../api';
+import type { PluginSDK } from '../../../packages/plugin-sdk/src';
 
 // 类型门面：SDK 类型的唯一来源是 @spark/plugin-sdk，此处统一 re-export
 export type {
@@ -29,7 +31,7 @@ export type {
   PluginCollectionSchema,
   PluginDeclaredCollectionSchema,
   PluginSDK
-} from '../../packages/plugin-sdk/src';
+} from '../../../packages/plugin-sdk/src';
 
 // ------------------------------------------------------------------
 // 后端构造（桥 dispatcher 使用）
@@ -85,7 +87,15 @@ export function createPluginBackend(domain: string): PluginSDK {
         electronAPI.plugin.identitySign(payload, pluginDomain),
       verify: (payload: string, signature: string, publicKey: string) =>
         electronAPI.plugin.identityVerify(payload, signature, publicKey)
-    }
+    },
+    sys: electronAPI.sys
+      ? {
+          exec: (program: string, args: string[], workdir?: string) =>
+            electronAPI.sys.exec(program, args, workdir),
+          fetch: (url: string, options?: Record<string, unknown>) =>
+            electronAPI.sys.fetch(url, options as { method?: string; headers?: Record<string, string>; body?: string } | undefined)
+        }
+      : undefined
   };
 }
 

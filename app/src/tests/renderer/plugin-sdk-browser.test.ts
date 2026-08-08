@@ -31,7 +31,7 @@ describe('createPluginBackend', () => {
       pulled: 1
     });
 
-    const { createPluginBackend } = await import('../../plugin-sdk-browser');
+    const { createPluginBackend } = await import('../../plugin/sdk-browser');
     const sdk = createPluginBackend('plugin:spark-example');
 
     const result = await sdk.runtime.syncOrganizationData('org_1');
@@ -44,7 +44,7 @@ describe('createPluginBackend', () => {
     mockElectronApi.plugin.identitySign.mockResolvedValueOnce({ domain: 'plugin:spark-example', signature: 'sig' });
     mockElectronApi.plugin.identityVerify.mockResolvedValueOnce({ valid: true });
 
-    const { createPluginBackend } = await import('../../plugin-sdk-browser');
+    const { createPluginBackend } = await import('../../plugin/sdk-browser');
     const sdk = createPluginBackend('plugin:spark-example');
 
     await sdk.identity.sign('payload-1');
@@ -63,7 +63,7 @@ describe('createPluginBackend', () => {
       enableEvidence: true
     });
 
-    const { createPluginBackend } = await import('../../plugin-sdk-browser');
+    const { createPluginBackend } = await import('../../plugin/sdk-browser');
     const sdk = createPluginBackend('plugin:spark-example');
 
     const declared = await sdk.docs.defineCollection('votes', { syncStrategy: 'append-only' });
@@ -79,7 +79,7 @@ describe('createPluginBackend', () => {
   it('throws when host API is unavailable', async () => {
     // @ts-expect-error 模拟无宿主环境
     delete window.electronAPI;
-    const { createPluginBackend } = await import('../../plugin-sdk-browser');
+    const { createPluginBackend } = await import('../../plugin/sdk-browser');
     expect(() => createPluginBackend('plugin:spark-example')).toThrow(/electronAPI is not available/);
   });
 });

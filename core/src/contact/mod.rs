@@ -24,8 +24,9 @@
 //!   邀请记录；邀请人本机数据，不随组织快照同步）
 //!
 //! 时间一律以 `now_ms` 参数注入，保证纯函数可测。[`FriendRequestRecord`] 带
-//! `updatedAt`（新建 = createdAt，后续变更由写路径刷新）；其余记录尚无
-//! updatedAt 字段，其变更方法保留 `now_ms` 形参（生成 id / 预留审计）。
+//! `updatedAt`（新建 = createdAt，后续变更由写路径刷新）；[`FriendRecord`]
+//! 带 `updatedAt`（本机变更刷新，自设备 contact-sync LWW 依据）；标签/分组/
+//! 拉黑集合以 `ct:sync-meta` 整域版本号裁决（见 service/sync.rs）。
 
 mod service;
 
@@ -34,6 +35,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 pub use service::ContactService;
+pub(crate) use service::sync::{apply_contact_sync_snapshot, build_contact_sync_snapshot};
 
 /// 朋友记录键前缀（`ct:friend:{rootId}`）。
 pub(crate) const FRIEND_PREFIX: &str = "ct:friend:";
@@ -115,6 +117,11 @@ pub struct FriendRecord {
     pub permission: String,
     #[serde(default)]
     pub blocked: bool,
+    /// 本地资料变更时间（自设备 contact-sync 的 LWW 裁决依据；本机每次
+    /// 变更时刷新为当前时间。0 = 存量未标记记录——任何带 updatedAt 的
+    /// 快照条目都严格更新、必然覆盖）。
+    #[serde(default)]
+    pub updated_at: i64,
 }
 
 /// 好友申请状态（设计 §4：pending → accepted / ignored）。

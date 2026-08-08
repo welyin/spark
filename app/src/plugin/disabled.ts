@@ -3,13 +3,13 @@
  *
  * 持久化在 localStorage `spark:plugin-disabled`（实例键 → {reason, disabledAt}）：
  * 前端暂存口径，待内核插件实例状态接口落地后迁移（见 app/TODO.md）。
- * 实例级计数驻留内存（plugin-watchdog.ts），手动重新启用时一并清零。
+ * 实例级计数驻留内存（./watchdog.ts），手动重新启用时一并清零。
  *
  * localStorage 读写一律 try/catch（隐私模式访问即抛，对齐 stores/theme.ts 口径）。
  */
 
-import type { PluginSpaceContext } from '../../packages/plugin-sdk/src';
-import { clearWatchdogCounters } from './plugin-watchdog';
+import type { PluginSpaceContext } from '../../../packages/plugin-sdk/src';
+import { clearWatchdogCounters } from './watchdog';
 
 const STORAGE_KEY = 'spark:plugin-disabled';
 

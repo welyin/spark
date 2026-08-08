@@ -116,7 +116,7 @@ import {
   formatConvTime,
   type Conversation,
   type SpaceKey
-} from '../../mock/messages';
+} from '../../stores/messages';
 
 export default defineComponent({
   name: 'ConversationList',

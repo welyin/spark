@@ -138,6 +138,11 @@ pub struct ConversationRecord {
     pub draft: String,
     /// 最后一条消息时间。
     pub updated_at: i64,
+    /// 元数据（置顶/免打扰/草稿）最近一次本机变更时间（自设备 conv-sync
+    /// 的 LWW 裁决依据；与 `updated_at` 分离——后者随消息到达高频刷新，
+    /// 不能用作元数据版本。0 = 存量未标记记录）。
+    #[serde(default)]
+    pub meta_updated_at: i64,
 }
 
 impl Default for ConversationKind {

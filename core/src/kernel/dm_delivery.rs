@@ -10,7 +10,9 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use super::dm_envelope::{self, KIND_CHAT, KIND_PROFILE_SYNC};
+use super::dm_envelope::{
+    self, KIND_CHAT, KIND_CONTACT_SYNC, KIND_CONV_SYNC, KIND_DEVICE_SYNC, KIND_PROFILE_SYNC,
+};
 use super::{Kernel, KernelError, Result};
 
 /// 退避重试节奏（[`Kernel::spawn_deliveries_with_retry`]）：首次失败后 +2s、+5s。
@@ -23,6 +25,7 @@ use crate::message::{ConversationRecord, MessageRecord, MessageService};
 use crate::org::OrganizationService;
 use crate::p2p::{P2pEvent, PeerNodeInfo};
 use crate::p2p::node::system_now_ms;
+use crate::plugin::PluginHostShared;
 
 impl Kernel {
     /// 以当前已解锁身份构造并签名 dm 信封。
@@ -185,32 +188,7 @@ impl Kernel {
     /// 路径；单设备失败静默——离线设备恢复后的历史同步依赖后续个人空间
     /// 同步机制）。投递 spawn 到 kernel runtime，不阻塞命令线程。
     pub(crate) fn deliver_to_devices(&self, my_root_id: &str, kind: &str, body: Value) {
-        if self.p2p.is_none() {
-            return;
-        }
-        let Ok(peers) = self.self_device_peers(my_root_id) else {
-            return;
-        };
-        if peers.is_empty() {
-            eprintln!("[deliver-to-devices] no paired devices rootId={} kind={}", my_root_id, kind);
-        }
-        for peer in &peers {
-            if peer.addresses.is_empty() {
-                eprintln!(
-                    "[deliver-to-devices] device has no addresses rootId={} kind={} peerId={:?}",
-                    my_root_id, kind, peer.peer_id
-                );
-            }
-        }
-        let deliveries: Vec<(PeerNodeInfo, Value)> = peers
-            .into_iter()
-            .filter_map(|peer| {
-                self.build_dm_envelope(kind, my_root_id, body.clone())
-                    .ok()
-                    .map(|envelope| (peer, envelope))
-            })
-            .collect();
-        self.spawn_deliveries(deliveries);
+        self.plugin_host.deliver_to_devices(my_root_id, kind, body);
     }
 
     /// 解析会话对端的 p2p 寻址信息：会话自带 peer 与回退来源（个人空间朋友
@@ -286,13 +264,32 @@ impl Kernel {
     }
 
     /// 资料变更后向所有有寻址信息的朋友（含同身份已配对设备）逐个尽力投递
-    /// profile-sync dm（`{"nickname", "avatar"?}`；单点失败静默，不阻塞资料
-    /// 更新本身；p2p 未运行/无投递目标时为空操作）。
-    pub(crate) fn broadcast_profile_sync(&self, nickname: &str, avatar: Option<&str>) {
+    /// profile-sync dm（单点失败静默，不阻塞资料更新本身；p2p 未运行/无投递
+    /// 目标时为空操作）。
+    ///
+    /// body 为**全量资料快照**：`nickname` 恒在；`avatar`/`gender`/`region`/
+    /// `signature` 以显式 null 表达「当前未设置」（清除语义随同步传播，修复
+    /// 旧版只在 Some 时携带导致「清除头像不同步」的缺口）；`updatedAt` 为身份
+    /// 文件资料更新时间，自设备接收侧据此做新覆盖旧裁决（防离线设备上线后
+    /// 以旧资料回灌）。
+    /// 朋友资料互推：向所有普通朋友（排除自记录）广播 profile-sync。
+    /// 普通好友收到后更新朋友记录（昵称/头像等展示字段）。
+    pub(crate) fn broadcast_profile_to_friends(
+        &self,
+        nickname: &str,
+        avatar: Option<&str>,
+        gender: Option<&str>,
+        region: Option<&str>,
+        signature: Option<&str>,
+        updated_at: u64,
+    ) {
         if self.p2p.is_none() {
             return;
         }
         let Ok(storage) = self.require_storage() else {
+            return;
+        };
+        let Ok(Some(my_root_id)) = self.current_root_id() else {
             return;
         };
         let friends = ContactService::overview(storage, "personal")
@@ -300,12 +297,17 @@ impl Kernel {
             .unwrap_or_default();
         let deliveries: Vec<(PeerNodeInfo, Value)> = friends
             .into_iter()
+            .filter(|friend| friend.root_id != my_root_id) // 排除自记录
             .filter_map(|friend| {
                 let peer = friend.peer?;
-                let mut body = serde_json::json!({ "nickname": nickname });
-                if let Some(avatar) = avatar {
-                    body["avatar"] = Value::from(avatar);
-                }
+                let body = serde_json::json!({
+                    "nickname": nickname,
+                    "avatar": avatar,
+                    "gender": gender,
+                    "region": region,
+                    "signature": signature,
+                    "updatedAt": updated_at,
+                });
                 let envelope = self
                     .build_dm_envelope(KIND_PROFILE_SYNC, &friend.root_id, body)
                     .ok()?;
@@ -319,6 +321,293 @@ impl Kernel {
         self.spawn_deliveries(deliveries);
     }
 
+    /// 自设备资料同步：只向配对设备（自 FriendRecord.peer）发 profile-sync。
+    /// 完整资料（含性别/地区/签名）属隐私数据，仅自设备间同步，绝不发给朋友。
+    pub(crate) fn broadcast_profile_to_self_device(
+        &self,
+        nickname: &str,
+        avatar: Option<&str>,
+        gender: Option<&str>,
+        region: Option<&str>,
+        signature: Option<&str>,
+        updated_at: u64,
+    ) {
+        if self.p2p.is_none() {
+            return;
+        }
+        let Ok(Some(root_id)) = self.current_root_id() else {
+            return;
+        };
+        let Ok(storage) = self.require_storage() else {
+            return;
+        };
+        let Ok(Some(friend)) = ContactService::get_friend(storage, &root_id) else {
+            return;
+        };
+        let Some(peer) = friend.peer else {
+            return;
+        };
+        let body = serde_json::json!({
+            "nickname": nickname,
+            "avatar": avatar,
+            "gender": gender,
+            "region": region,
+            "signature": signature,
+            "updatedAt": updated_at,
+        });
+        let Ok(envelope) = self.build_dm_envelope(KIND_PROFILE_SYNC, &root_id, body) else {
+            return;
+        };
+        let target = PeerNodeInfo {
+            peer_id: (!peer.peer_id.is_empty()).then_some(peer.peer_id),
+            addresses: peer.addresses,
+        };
+        self.spawn_deliveries(vec![(target, envelope)]);
+    }
+
+    /// 通讯录快照广播：本机联系人数据变更后向自设备（自 FriendRecord 的
+    /// peer 寻址）投递 contact-sync 全量快照。合入侧按 LWW 幂等裁决，重复
+    /// 投递/旧快照回灌无害。p2p 未启动/未配对/未解锁时为空操作。
+    pub(crate) fn broadcast_contact_sync(&self) {
+        if self.p2p.is_none() {
+            return;
+        }
+        let Ok(Some(root_id)) = self.current_root_id() else {
+            return;
+        };
+        let Ok(storage) = self.require_storage() else {
+            return;
+        };
+        let Ok(body) = crate::contact::build_contact_sync_snapshot(storage, &root_id) else {
+            return;
+        };
+        let Ok(envelope) = self.build_dm_envelope(KIND_CONTACT_SYNC, &root_id, body) else {
+            return;
+        };
+        // 仅投自设备：rootId==自己 且带 peer 寻址的朋友记录（配对设备）
+        let deliveries: Vec<(PeerNodeInfo, Value)> = ContactService::get_friend(storage, &root_id)
+            .ok()
+            .flatten()
+            .and_then(|friend| friend.peer)
+            .map(|peer| {
+                let target = PeerNodeInfo {
+                    peer_id: (!peer.peer_id.is_empty()).then_some(peer.peer_id),
+                    addresses: peer.addresses,
+                };
+                vec![(target, envelope)]
+            })
+            .unwrap_or_default();
+        self.spawn_deliveries(deliveries);
+    }
+
+    /// 会话元数据快照广播：置顶/免打扰/草稿变更后向自设备投递 conv-sync
+    /// 快照（LWW 幂等；p2p 未启动/未配对时为空操作）。
+    pub(crate) fn broadcast_conv_sync(&self) {
+        if self.p2p.is_none() {
+            return;
+        }
+        let Ok(Some(root_id)) = self.current_root_id() else {
+            return;
+        };
+        let Ok(storage) = self.require_storage() else {
+            return;
+        };
+        let Ok(body) = crate::message::build_conv_sync_snapshot(storage) else {
+            return;
+        };
+        let Ok(envelope) = self.build_dm_envelope(KIND_CONV_SYNC, &root_id, body) else {
+            return;
+        };
+        let deliveries: Vec<(PeerNodeInfo, Value)> = ContactService::get_friend(storage, &root_id)
+            .ok()
+            .flatten()
+            .and_then(|friend| friend.peer)
+            .map(|peer| {
+                let target = PeerNodeInfo {
+                    peer_id: (!peer.peer_id.is_empty()).then_some(peer.peer_id),
+                    addresses: peer.addresses,
+                };
+                vec![(target, envelope)]
+            })
+            .unwrap_or_default();
+        self.spawn_deliveries(deliveries);
+    }
+
+    /// 启动补推：读身份文件的全量资料快照，同时向朋友和自设备广播
+    /// （p2p start 后调用一次）。朋友收到更新展示字段；自设备收到做 LWW
+    /// 裁决补齐离线期间错过的资料变更。身份文件缺失/未解锁时为空操作。
+    pub(crate) fn broadcast_self_profile_snapshot(&self) {
+        let root_id = match self.current_root_id() {
+            Ok(Some(id)) => id,
+            _ => return,
+        };
+        let Ok(Some(file)) = self.read_identity_file(&root_id) else {
+            return;
+        };
+        let nickname = self.my_nickname(&root_id);
+        // 朋友互推（不含自记录）
+        self.broadcast_profile_to_friends(
+            &nickname,
+            file.avatar.as_deref(),
+            file.gender.as_deref(),
+            file.region.as_deref(),
+            file.signature.as_deref(),
+            file.updated_at,
+        );
+        // 自设备同步（完整资料，隐私字段仅自设备间）
+        self.broadcast_profile_to_self_device(
+            &nickname,
+            file.avatar.as_deref(),
+            file.gender.as_deref(),
+            file.region.as_deref(),
+            file.signature.as_deref(),
+            file.updated_at,
+        );
+    }
+
+    /// 向全部已配对自设备尽力投递本机设备记录（device-sync；body 为完整
+    /// [`crate::device::DeviceRecord`] 线形）。投递时机：p2p 启动后补推、
+    /// 收到对端 device-sync 时回发（握手式交换）。无配对设备/未解锁/未启动
+    /// p2p 时为空操作。
+    pub(crate) fn broadcast_device_sync(&self, record: &crate::device::DeviceRecord) {
+        if self.p2p.is_none() {
+            return;
+        }
+        let root_id = match self.current_root_id() {
+            Ok(Some(id)) => id,
+            _ => return,
+        };
+        let Ok(peers) = self.self_device_peers(&root_id) else {
+            return;
+        };
+        let Ok(body) = serde_json::to_value(record) else {
+            return;
+        };
+        let deliveries: Vec<(PeerNodeInfo, Value)> = peers
+            .into_iter()
+            .filter_map(|peer| {
+                self.build_dm_envelope(KIND_DEVICE_SYNC, &root_id, body.clone())
+                    .ok()
+                    .map(|envelope| (peer, envelope))
+            })
+            .collect();
+        self.spawn_deliveries(deliveries);
+    }
+
+}
+
+/// 投递能力的共享句柄实现：`Kernel::deliver_to_devices` 门面与插件后台运行
+/// 时的 bot 回复路径（`bot_reply_shared`）共用。与门面各成员方法语义一致，
+/// 仅句柄来源从 `&Kernel` 换成共享格（p2p 节点/签名私钥/存储镜像/runtime
+/// handle）——各格与门面字段同源同生命周期（start 回填、stop/lock 清空）。
+impl PluginHostShared {
+    /// 见 [`Kernel::deliver_to_devices`]（语义一致）。
+    pub(crate) fn deliver_to_devices(&self, my_root_id: &str, kind: &str, body: Value) {
+        if self
+            .p2p_node
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_none()
+        {
+            return;
+        }
+        let Ok(peers) = self.self_device_peers(my_root_id) else {
+            return;
+        };
+        if peers.is_empty() {
+            eprintln!("[deliver-to-devices] no paired devices rootId={} kind={}", my_root_id, kind);
+        }
+        for peer in &peers {
+            if peer.addresses.is_empty() {
+                eprintln!(
+                    "[deliver-to-devices] device has no addresses rootId={} kind={} peerId={:?}",
+                    my_root_id, kind, peer.peer_id
+                );
+            }
+        }
+        let deliveries: Vec<(PeerNodeInfo, Value)> = peers
+            .into_iter()
+            .filter_map(|peer| {
+                self.build_dm_envelope(kind, my_root_id, body.clone())
+                    .ok()
+                    .map(|envelope| (peer, envelope))
+            })
+            .collect();
+        self.spawn_deliveries(deliveries);
+    }
+
+    /// 见 [`Kernel::spawn_deliveries`]（语义一致）。
+    pub(crate) fn spawn_deliveries(&self, deliveries: Vec<(PeerNodeInfo, Value)>) {
+        let Some(node) = self
+            .p2p_node
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        else {
+            return;
+        };
+        self.runtime.spawn(async move {
+            for (peer, envelope) in deliveries {
+                // 自设备投递（自消息/自回执/资料同步）原为完全静默——失败与成功
+                // 都无法区分，移动端排障需要最小可观测性（格式对齐 org-sync 日志）
+                let kind = envelope
+                    .get("kind")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown")
+                    .to_string();
+                match node.dm_direct(&peer, envelope).await {
+                    Ok(Some(_)) => {}
+                    Ok(None) => eprintln!(
+                        "[deliver-to-devices] failed kind={} peerId={:?} addrs={}",
+                        kind,
+                        peer.peer_id,
+                        peer.addresses.len()
+                    ),
+                    Err(error) => eprintln!(
+                        "[deliver-to-devices] error kind={} peerId={:?} addrs={} error={}",
+                        kind,
+                        peer.peer_id,
+                        peer.addresses.len(),
+                        error
+                    ),
+                }
+            }
+        });
+    }
+
+    /// 见 [`Kernel::self_device_peers`]（存储来源换为宿主镜像格）。
+    fn self_device_peers(&self, my_root_id: &str) -> Result<Vec<PeerNodeInfo>> {
+        let storage = self.require_storage()?;
+        let friends = ContactService::overview(&storage, "personal")?.friends;
+        Ok(friends
+            .into_iter()
+            .filter(|f| f.root_id == my_root_id)
+            .filter_map(|f| f.peer)
+            .map(|p| PeerNodeInfo {
+                peer_id: (!p.peer_id.is_empty()).then_some(p.peer_id),
+                addresses: p.addresses,
+            })
+            .collect())
+    }
+
+    /// 见 [`Kernel::build_dm_envelope`]（签名私钥来源换为解锁期共享格；
+    /// 自设备投递场景 from==to==my_root_id）。
+    fn build_dm_envelope(&self, kind: &str, my_root_id: &str, body: Value) -> Result<Value> {
+        let signing_key = self
+            .signing_key
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .ok_or(KernelError::Locked)?;
+        Ok(dm_envelope::build_envelope(
+            kind,
+            my_root_id,
+            my_root_id,
+            system_now_ms(),
+            body,
+            &signing_key,
+        ))
+    }
 }
 
 /// `spawn_deliveries_with_retry` 的重试判定（语义见该函数文档）。

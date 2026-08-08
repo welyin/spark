@@ -6,25 +6,34 @@
 
 use super::{Kernel, Result};
 use crate::contact::{ContactGroup, ContactService, ContactTag, OrgGroupNode};
+use crate::p2p::node::system_now_ms;
 
 impl Kernel {
-    /// 新建标签。
+    /// 新建标签。个人空间变更后向自设备广播 contact-sync 快照。
     pub fn contact_tag_create(&mut self, space: &str, id: &str, name: &str) -> Result<ContactTag> {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        Ok(ContactService::create_tag_with_id(
+        let tag = ContactService::create_tag_with_id(
             self.require_storage_mut()?,
             space,
             id,
             name,
-        )?)
+            system_now_ms(),
+        )?;
+        if space == "personal" {
+            self.broadcast_contact_sync();
+        }
+        Ok(tag)
     }
 
     /// 重命名标签。
     pub fn contact_tag_rename(&mut self, space: &str, id: &str, name: &str) -> Result<()> {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        ContactService::rename_tag(self.require_storage_mut()?, space, id, name)?;
+        ContactService::rename_tag(self.require_storage_mut()?, space, id, name, system_now_ms())?;
+        if space == "personal" {
+            self.broadcast_contact_sync();
+        }
         Ok(())
     }
 
@@ -32,7 +41,10 @@ impl Kernel {
     pub fn contact_tag_delete(&mut self, space: &str, id: &str) -> Result<()> {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        ContactService::delete_tag(self.require_storage_mut()?, space, id)?;
+        ContactService::delete_tag(self.require_storage_mut()?, space, id, system_now_ms())?;
+        if space == "personal" {
+            self.broadcast_contact_sync();
+        }
         Ok(())
     }
 
@@ -40,18 +52,22 @@ impl Kernel {
     pub fn contact_group_create(&mut self, id: &str, name: &str) -> Result<ContactGroup> {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        Ok(ContactService::create_group_with_id(
+        let group = ContactService::create_group_with_id(
             self.require_storage_mut()?,
             id,
             name,
-        )?)
+            system_now_ms(),
+        )?;
+        self.broadcast_contact_sync();
+        Ok(group)
     }
 
     /// 重命名分组。
     pub fn contact_group_rename(&mut self, id: &str, name: &str) -> Result<()> {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        ContactService::rename_group(self.require_storage_mut()?, id, name)?;
+        ContactService::rename_group(self.require_storage_mut()?, id, name, system_now_ms())?;
+        self.broadcast_contact_sync();
         Ok(())
     }
 
@@ -59,7 +75,8 @@ impl Kernel {
     pub fn contact_group_delete(&mut self, id: &str) -> Result<()> {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        ContactService::delete_group(self.require_storage_mut()?, id)?;
+        ContactService::delete_group(self.require_storage_mut()?, id, system_now_ms())?;
+        self.broadcast_contact_sync();
         Ok(())
     }
 
@@ -67,7 +84,8 @@ impl Kernel {
     pub fn contact_group_move(&mut self, id: &str, to_index: usize) -> Result<()> {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        ContactService::move_group(self.require_storage_mut()?, id, to_index)?;
+        ContactService::move_group(self.require_storage_mut()?, id, to_index, system_now_ms())?;
+        self.broadcast_contact_sync();
         Ok(())
     }
 

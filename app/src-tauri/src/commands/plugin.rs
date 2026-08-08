@@ -14,7 +14,7 @@ use spark_core::kernel::{DomainSignatureInfo, Kernel};
 use spark_core::org::OrganizationRole;
 
 use super::{err, lock_kernel};
-use crate::KernelState;
+use crate::{KernelState, MarketState};
 
 /// sync-now 手动同步的单 peer 拨号超时：全局默认 10s 面向后台保活/反熵；
 /// 手动刷新是用户可感路径，不可达成员 5s 快速失败，避免整批串行拨号拖住 UI。
@@ -206,6 +206,24 @@ pub async fn plugin_org_sync_now(
     })
     .await
     .map_err(|e| format!("kernel task join failed: {e}"))?
+}
+
+/// `plugin-background-sync`：插件后台运行时对账（幂等）。前端在登录/
+/// 身份切换进入主界面时调用——身份切换会停全部插件后台（插件数据不跨
+/// 身份，见 kernel `align_storage`），靠本次对账按当前身份重新拉起；
+/// 应用启动与启用/禁用/卸载的对账由壳层钩子直接触发，不经本命令。
+#[tauri::command]
+pub fn plugin_background_sync(
+    webview: tauri::Webview,
+    app: tauri::AppHandle,
+    kernel_state: tauri::State<'_, KernelState>,
+    market_state: tauri::State<'_, MarketState>,
+) -> Result<(), String> {
+    crate::domain_guard::require_system_domain(&webview)?;
+    let data_dir = crate::resolve_data_dir(&app)
+        .map_err(|e| format!("data dir unavailable: {e}"))?;
+    crate::plugin_runtime::sync_from_market(&data_dir, kernel_state.inner(), market_state.inner());
+    Ok(())
 }
 
 // ------------------------------------------------------------------

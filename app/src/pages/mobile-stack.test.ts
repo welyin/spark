@@ -8,7 +8,7 @@ import { createApp, nextTick, type Component } from 'vue';
 import ElementPlus from 'element-plus';
 import { isMobileLayout } from '../stores/ui-layout';
 import { canBack, pushPage, resetStack } from '../stores/mobile-nav';
-import { ensureDirectConversation } from '../mock/messages';
+import { ensureDirectConversation } from '../stores/messages';
 import MessagesPage from './MessagesPage.vue';
 import ContactsPage from './ContactsPage.vue';
 import MinePage from './MinePage.vue';

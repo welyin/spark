@@ -5,14 +5,18 @@ use super::*;
 #[test]
 fn check_updates_version_compare_and_failure_reasons() {
     // 已装 0.1.0，远端同版 → up-to-date
+    // 断言按插件 id 定位（目录含 ai-chat 等多条目，不做位置假设）
     let fixture = Fixture::new();
     write_release(&fixture, &ReleaseOpts::default());
     let mut service = fixture.service();
     service.initialize().unwrap(); // reconcile 已安装 0.1.0
     let probes = service.check_for_updates(None).unwrap();
-    assert_eq!(probes.len(), 1);
-    assert!(!probes[0].update_available);
-    assert_eq!(probes[0].reason, "up-to-date");
+    let probe = probes
+        .iter()
+        .find(|p| p.plugin_id == "spark-example")
+        .expect("spark-example probe");
+    assert!(!probe.update_available);
+    assert_eq!(probe.reason, "up-to-date");
 
     // 未知插件 → Plugin not found
     assert_eq!(
@@ -25,11 +29,20 @@ fn check_updates_version_compare_and_failure_reasons() {
     let mut service = fixture.service();
     service.initialize().unwrap();
     let probes = service.check_for_updates(None).unwrap();
-    assert!(!probes[0].update_available);
-    assert!(probes[0].latest_version.is_none());
-    assert!(probes[0].reason.starts_with("check-failed:"));
+    let probe = probes
+        .iter()
+        .find(|p| p.plugin_id == "spark-example")
+        .expect("spark-example probe");
+    assert!(!probe.update_available);
+    assert!(probe.latest_version.is_none());
+    assert!(probe.reason.starts_with("check-failed:"));
     // 失败原因进入列表展示
-    assert!(service.list_market()[0].last_check_reason.starts_with("check-failed:"));
+    let example = service
+        .list_market()
+        .into_iter()
+        .find(|item| item.catalog.id == "spark-example")
+        .expect("spark-example market item");
+    assert!(example.last_check_reason.starts_with("check-failed:"));
 }
 
 #[test]

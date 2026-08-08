@@ -46,8 +46,29 @@ describe('列表行图标渲染（图标组件必须注册，不能仅 setup ret
     expect(icons.length).toBe(2);
   });
 
-  it('DevicesModule：设备行图标渲染出 SVG', () => {
+  it('DevicesModule：设备行图标渲染出 SVG', async () => {
+    // 设备清单来自内核 devices.list（多设备同步改造后不再渲染 p2pInfo 占位行），
+    // 测试环境 stub 一条本机设备记录
+    (window as unknown as { electronAPI: unknown }).electronAPI = {
+      devices: {
+        list: async () => [
+          {
+            peerId: 'peer-stub',
+            deviceName: '测试机',
+            os: 'Android',
+            arch: 'aarch64',
+            macs: [],
+            updatedAt: 1,
+            lastSeenAt: 1,
+            isSelf: true,
+            online: true
+          }
+        ]
+      }
+    };
     const host = mount(DevicesModule, { rootId: '', p2pInfo: P2P_STUB });
+    // onMounted 的 load() 是异步的：等宏任务让清单落位
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(host.querySelector('.mine-list-item-icon svg')).not.toBeNull();
   });
 });

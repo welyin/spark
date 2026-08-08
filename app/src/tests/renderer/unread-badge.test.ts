@@ -5,7 +5,7 @@
 // spaces/totalUnread 是模块级单例：每个用例用唯一空间 key 驱动，避免相互污染。
 import { describe, expect, it, vi } from 'vitest';
 import { nextTick } from 'vue';
-import { markRead, onChatReceived, totalUnread } from '../../mock/messages';
+import { markRead, onChatReceived, totalUnread } from '../../stores/messages';
 
 function pushUnread(spaceKey: string, peerId: string, unread: number, muted = false): string {
   const convId = `dm:${peerId}`;

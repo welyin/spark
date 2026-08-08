@@ -478,6 +478,23 @@
   flex-shrink: 0;
 }
 
+/* 已删除联系人提示条：与 local-only-bar 同风格 */
+.messages-page .contact-deleted-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--spark-border-light);
+  background: var(--spark-warning-bg);
+  color: var(--spark-text-2);
+  font-size: 12px;
+}
+
+.messages-page .contact-deleted-bar .el-icon {
+  color: var(--spark-warning);
+  flex-shrink: 0;
+}
+
 .messages-page .local-only-bar-text {
   flex: 1;
   min-width: 0;

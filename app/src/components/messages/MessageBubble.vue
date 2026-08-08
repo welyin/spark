@@ -89,7 +89,7 @@ import { Document, Link, Microphone, Picture } from '@element-plus/icons-vue';
 import UserAvatar from '../UserAvatar.vue';
 import { formatBytes } from '../../utils/format';
 import { personalAvatarSource, personAvatarSource, personDisplayName } from '../../stores/avatar-sources';
-import type { ChatMessage, SpaceKey } from '../../mock/messages';
+import type { ChatMessage, SpaceKey } from '../../stores/messages';
 
 /** 组织邀请链接协议（内核系统会话卡片消息：url = spark-org-invite://{inviteId}） */
 const ORG_INVITE_SCHEME = 'spark-org-invite://';

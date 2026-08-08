@@ -199,6 +199,25 @@ pub(crate) fn app_delete_conversation_inner(
 }
 
 // ------------------------------------------------------------------
+// Bot 消息（插件 bot 回复）
+// ------------------------------------------------------------------
+
+/// 插件向 bot 会话插入一条 bot 回复消息（senderId = bot_root_id）。
+pub(crate) fn bot_reply_inner(
+    kernel: &mut Kernel,
+    space: &str,
+    conv_id: &str,
+    bot_root_id: &str,
+    bot_name: &str,
+    message_id: &str,
+    text: &str,
+) -> Result<ChatMessageView, String> {
+    kernel
+        .message_bot_reply(space, conv_id, bot_root_id, bot_name, message_id, text)
+        .map_err(err)
+}
+
+// ------------------------------------------------------------------
 // Tauri 命令
 // ------------------------------------------------------------------
 
@@ -407,6 +426,29 @@ pub fn message_app_delete_conversation(
     plugin_id: String,
 ) -> Result<SuccessResult, String> {
     app_delete_conversation_inner(&mut *lock_kernel(&state)?, &space_key, &plugin_id)
+}
+
+/// Bot 回复：插件调用，向 bot 会话插入一条 bot 回复消息。
+/// `bot_root_id` 为消息的 senderId（如 `bot:ai-chat:codebuddy-bot`）。
+#[tauri::command]
+pub fn message_bot_reply(
+    state: tauri::State<'_, KernelState>,
+    space_key: String,
+    conv_id: String,
+    bot_root_id: String,
+    bot_name: String,
+    message_id: String,
+    text: String,
+) -> Result<ChatMessageView, String> {
+    bot_reply_inner(
+        &mut *lock_kernel(&state)?,
+        &space_key,
+        &conv_id,
+        &bot_root_id,
+        &bot_name,
+        &message_id,
+        &text,
+    )
 }
 
 // ------------------------------------------------------------------

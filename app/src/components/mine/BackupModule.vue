@@ -69,7 +69,7 @@
 
       <!-- 已验证：二维码备份 -->
       <div v-else-if="activeWay === 'qr'" class="backup-show">
-        <div class="backup-qr" :style="{ width: qrWidth + 12 + 'px', height: qrWidth + 12 + 'px' }">
+        <div class="backup-qr" :style="{ width: qrWidth + 24 + 'px', height: qrWidth + 24 + 'px' }">
           <img
             v-if="qrImageUrl"
             :src="qrImageUrl"
@@ -214,14 +214,19 @@ export default defineComponent({
         if (activeWay.value === 'qr') {
           // 二维码备份载荷已剔除头像等大字段（适配 QR 容量），密码错误时内核报错
           const { payload } = await window.electronAPI.rootIdentity.backupPayloadQr(password.value);
-          // 渲染宽度按载荷长度自适应：越长越密，需更大尺寸保证可扫
-          qrWidth.value = payload.length < 800 ? 280 : payload.length < 1600 ? 400 : 520;
+          // 渲染宽度按载荷长度自适应（抽屉 420px，扣除卡片内边距后约 360px 可用）
+          qrWidth.value = payload.length < 800 ? 240 : payload.length < 1600 ? 320 : 360;
           qrDense.value = payload.length >= 1600;
+          // margin=4: QR 标准安静区；2x 渲染: 高 DPI 屏幕模块边缘锐利
           qrImageUrl.value = await QRCode.toDataURL(payload, {
             errorCorrectionLevel: 'M',
-            margin: 1,
-            width: qrWidth.value
+            margin: 4,
+            width: qrWidth.value * 2,
+            scale: 1
           });
+          if (!qrImageUrl.value || !qrImageUrl.value.startsWith('data:image/png;base64,')) {
+            throw new Error('二维码生成结果异常');
+          }
         } else {
           const { mnemonic } = await window.electronAPI.rootIdentity.revealMnemonic(password.value);
           revealedMnemonic.value = mnemonic;
@@ -321,8 +326,8 @@ export default defineComponent({
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--spark-border-light);
-  border-radius: var(--spark-radius-l);
+  border-radius: 0;
+  background: #fff;
   color: var(--spark-text-3);
 }
 

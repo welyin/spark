@@ -7,6 +7,7 @@
  */
 import { computed, type ComputedRef } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { queryBackgroundPlugin } from '../../plugin/bot-presence';
 import {
   contactsOf,
   createTag as mockCreateTag,
@@ -47,6 +48,29 @@ export function useContactActions(ctx: ContactActionsContext) {
     const contact = ctx.contact.value;
     if (!contact || contact.isSelf) {
       return;
+    }
+    // 插件注册的 bot 联系人（rootId 以 bot:{pluginId}:{botId} 开头）：插件是其
+    // 生命周期权威源。删除前向插件求证该 bot 是否仍存在：
+    // - 插件答复「存在」→ 拦截，引导去插件侧删除（避免插件仍在轮询但联系人已消失）
+    // - 插件答复「不存在」/ 无答复（插件未在线、无处理器、超时）→ 孤儿，放行删除
+    if (contact.rootId.startsWith('bot:')) {
+      const pluginId = contact.rootId.split(':')[1] || '';
+      const reply = (await queryBackgroundPlugin(pluginId, 'bot:query', { contactId: contact.rootId })) as
+        | { exists?: boolean }
+        | null;
+      if (reply?.exists) {
+        try {
+          await ElMessageBox.confirm(
+            `「${contact.displayName}」是由插件「${pluginId}」创建的机器人联系人。请前往该插件中删除对应的 Bot，删除后联系人会自动移除。`,
+            '无法在此删除',
+            { type: 'info', confirmButtonText: '知道了', cancelButtonText: '取消', showCancelButton: false }
+          );
+        } catch {
+          /* 用户关闭对话框 */
+        }
+        return;
+      }
+      // 插件无答复或答复「已不存在」：孤儿联系人，落入下方常规删除流程
     }
     // TODO(mock): 删除朋友为本地 mock；§5.5「删除同时自动拉黑（可选）」的选项待真实模型落地
     try {

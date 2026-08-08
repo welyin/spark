@@ -83,7 +83,22 @@ impl OrgSyncContext {
         };
         let claim_value = claim.as_ref().and_then(|c| serde_json::to_value(c).ok());
 
-        let list_request = build_pull_list_request(&root_id, local_peer_id.as_deref(), claim_value);
+        // 自设备目标判定（对端 peerId == 自 FriendRecord.peer.peerId）：
+        // 影响 removed 分支语义——自设备空存储不触发本地删除，转反推补齐
+        let is_self_target = extract_peer_id(node_info)
+            .map(|pid| {
+                let mut storage = self.storage.clone();
+                crate::contact::ContactService::get_friend(&mut storage, &root_id)
+                    .ok()
+                    .flatten()
+                    .and_then(|f| f.peer)
+                    .map(|p| p.peer_id == pid)
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+
+        let list_request =
+            build_pull_list_request(&root_id, local_peer_id.as_deref(), claim_value.clone());
         let list_response = self
             .node
             .org_pull_request(node_info, &list_request)
@@ -122,6 +137,8 @@ impl OrgSyncContext {
                             &root_id,
                             local_peer_id.as_deref(),
                             &org_id,
+                            claim_value.as_ref(),
+                            is_self_target,
                             &mut stats,
                         )
                         .await
@@ -150,6 +167,8 @@ impl OrgSyncContext {
                         &root_id,
                         local_peer_id.as_deref(),
                         &org_id,
+                        claim_value.as_ref(),
+                        is_self_target,
                         &mut stats,
                     )
                     .await;
@@ -160,6 +179,8 @@ impl OrgSyncContext {
                         &root_id,
                         local_peer_id.as_deref(),
                         &org_id,
+                        claim_value.as_ref(),
+                        is_self_target,
                         &mut stats,
                     )
                     .await;
@@ -196,15 +217,21 @@ impl OrgSyncContext {
 
     /// org-pull-org 拉取并应用（merged 落库 + pluginDocs + sync-state 记账）。
     /// 返回分支供调用方决定后续动作（Unavailable 时反推）。
+    ///
+    /// `is_self_target`：对端是同一身份的自设备时置 true——此时对端"没有该
+    /// 组织"只说明它还没同步到（如 QR 恢复的新设备），绝不能按 §9.4 删除
+    /// 本地记录；按 Unavailable 返回让调用方反推，主动把组织推给自设备。
     async fn pull_org_apply(
         &self,
         node_info: &PeerNodeInfo,
         root_id: &str,
         local_peer_id: Option<&str>,
         org_id: &str,
+        claim: Option<&Value>,
+        is_self_target: bool,
         stats: &mut OrgReconcileStats,
     ) -> PullBranch {
-        let request = build_pull_org_request(root_id, local_peer_id, org_id);
+        let request = build_pull_org_request(root_id, local_peer_id, org_id, claim.cloned());
         let response = self
             .node
             .org_pull_request(node_info, &request)
@@ -213,6 +240,10 @@ impl OrgSyncContext {
             .flatten();
         match classify_pull_org_response(response.as_ref()) {
             PullOrgOutcome::Removed => {
+                if is_self_target {
+                    // 自设备空存储不代表成员资格变化：不删除，转反推补齐
+                    return PullBranch::Unavailable;
+                }
                 // org.md §9.4：removed 与"非成员"不可区分，据此删除本地记录
                 let mut storage = self.storage.clone();
                 match crate::storage::StorageBackend::delete(

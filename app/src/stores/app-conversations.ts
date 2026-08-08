@@ -13,7 +13,7 @@
 import { ref } from 'vue';
 import { isTauri, type ElectronAPI, type PluginMarketItemDto } from '../api';
 
-/** 内置系统应用会话 pluginId（系统通知写入入口，app-messages.ts） */
+/** 内置系统应用会话 pluginId（系统通知写入入口，plugin/messages.ts） */
 export const SYSTEM_APP_PLUGIN_ID = 'system';
 /** 内置系统应用会话显示名 */
 export const SYSTEM_APP_NAME = '系统通知';

@@ -6,8 +6,8 @@
 use serde_json::{Value, json};
 
 use super::{
-    AutoAccept, InboundContext, InboundDmResult, Result, done, fail_response, is_blocked,
-    merge_friend_record, ok_response,
+    AutoAccept, InboundContext, InboundDmResult, ProfileSyncReply, Result, done, fail_response,
+    is_blocked, merge_friend_record, ok_response,
 };
 use crate::contact::{
     ContactService, FriendRecord, FriendRequestRecord, FriendRequestStatus, RequestThreadMessage,
@@ -69,6 +69,7 @@ fn handle_self_friend_request<S: StorageBackend>(
         photos: Vec::new(),
         permission: "open".to_string(),
         blocked: false,
+        updated_at: ctx.now_ms,
     });
     if !nickname.is_empty() {
         friend.nickname = nickname.to_string();
@@ -76,6 +77,7 @@ fn handle_self_friend_request<S: StorageBackend>(
     if peer.is_some() {
         friend.peer = peer.clone();
     }
+    friend.updated_at = ctx.now_ms;
     ContactService::upsert_friend(storage, &friend)?;
     // 回发目标取请求方本次捎带的 nodeInfo（无则无法回发，host 跳过）
     let auto_accept = peer.map(|p| AutoAccept {
@@ -87,10 +89,19 @@ fn handle_self_friend_request<S: StorageBackend>(
         // 设备配对：from==to==我（同身份设备间信封，验签侧 to==自己 自然通过）
         to_root_id: ctx.my_root_id.to_string(),
     });
+    // 配对完成的同时回发本机资料快照——P2P 启动时的一次性广播可能早于
+    // 自记录 peer 填入（peer=None 被过滤），配对握手是首次可靠的回发时机。
+    let profile_sync_reply = auto_accept.as_ref().map(|a| ProfileSyncReply {
+        target: a.target.clone(),
+        unconditional: true,
+    });
     Ok(InboundDmResult {
         response: json!({ "ok": true, "nickname": ctx.my_nickname }),
         events: Vec::new(),
         auto_accept,
+        self_profile: None,
+        device_sync_reply: None,
+        profile_sync_reply,
     })
 }
 
@@ -160,6 +171,9 @@ pub(super) fn handle_friend_request<S: StorageBackend>(
             response: json!({ "ok": true, "nickname": ctx.my_nickname }),
             events: Vec::new(),
             auto_accept,
+            self_profile: None,
+            device_sync_reply: None,
+            profile_sync_reply: None,
         });
     }
 
@@ -275,7 +289,24 @@ pub(super) fn handle_friend_accept<S: StorageBackend>(
         "request": request_json,
         "friend": friend_json,
     }));
-    done(ok_response(), vec![event])
+    // 自设备配对确认（from==自己）：立即向对端回发本机设备记录——配对完成
+    // 即交换设备清单，无需等下次启动补推（对端收到后回发其记录，双向齐全）
+    let device_sync_reply = if from == ctx.my_root_id {
+        friend.peer.as_ref().map(|p| PeerNodeInfo {
+            peer_id: (!p.peer_id.is_empty()).then_some(p.peer_id.clone()),
+            addresses: p.addresses.clone(),
+        })
+    } else {
+        None
+    };
+    Ok(InboundDmResult {
+        response: ok_response(),
+        events: vec![event],
+        auto_accept: None,
+        self_profile: None,
+        device_sync_reply,
+        profile_sync_reply: None,
+    })
 }
 
 /// friend-reply：好友申请的来回回复（接收方询问 / 申请方回答同 kind，

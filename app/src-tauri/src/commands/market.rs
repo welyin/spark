@@ -83,12 +83,19 @@ pub async fn plugin_market_upgrade(
 #[tauri::command]
 pub async fn plugin_market_set_enabled(
     webview: tauri::Webview,
+    app: tauri::AppHandle,
     state: tauri::State<'_, MarketState>,
+    kernel_state: tauri::State<'_, KernelState>,
     plugin_id: String,
     enabled: bool,
 ) -> Result<InstalledPluginState, String> {
     domain_guard::require_system_domain(&webview)?;
-    run_market(state, move |svc| svc.set_enabled(&plugin_id, enabled)).await
+    let result = run_market(state.clone(), move |svc| svc.set_enabled(&plugin_id, enabled)).await;
+    // 启用/禁用后即时对账插件后台运行时（对账失败不阻塞已生效的状态变更）
+    if result.is_ok() {
+        sync_backgrounds(&app, &state, &kernel_state);
+    }
+    result
 }
 
 /// 卸载：移除状态记录 + 删除 app_data 插件目录内的包文件；
@@ -96,11 +103,35 @@ pub async fn plugin_market_set_enabled(
 #[tauri::command]
 pub async fn plugin_market_uninstall(
     webview: tauri::Webview,
+    app: tauri::AppHandle,
     state: tauri::State<'_, MarketState>,
+    kernel_state: tauri::State<'_, KernelState>,
     plugin_id: String,
 ) -> Result<(), String> {
     domain_guard::require_system_domain(&webview)?;
-    run_market(state, move |svc| svc.uninstall(&plugin_id)).await
+    let result = run_market(state.clone(), move |svc| svc.uninstall(&plugin_id)).await;
+    // 卸载后即时停止其后台运行时（对账失败不阻塞已生效的卸载）
+    if result.is_ok() {
+        sync_backgrounds(&app, &state, &kernel_state);
+    }
+    result
+}
+
+/// 启用/禁用/卸载后的插件后台运行时对账（`plugin_runtime::sync_from_market`
+/// 的命令层包装：数据目录解析失败时记日志跳过，状态变更本身已生效）。
+fn sync_backgrounds(
+    app: &tauri::AppHandle,
+    market_state: &MarketState,
+    kernel_state: &KernelState,
+) {
+    match crate::resolve_data_dir(app) {
+        Ok(data_dir) => crate::plugin_runtime::sync_from_market(
+            &data_dir,
+            kernel_state,
+            market_state,
+        ),
+        Err(error) => eprintln!("[plugin-runtime] data dir unavailable, skip sync: {error}"),
+    }
 }
 
 /// 仓库锚定安装前置解析（plugin-dist §4.1）：拉取并校验 spark-plugin.json，

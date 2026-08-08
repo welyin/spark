@@ -5,7 +5,7 @@
  * 访问触发该空间水合）。
  */
 import { requestBadgeCount } from '../mock/contacts';
-import { hasUnreadMessages } from '../mock/messages';
+import { hasUnreadMessages } from './messages';
 
 /** 该空间是否有未读提醒：未读消息（免打扰不计）或「新的朋友/成员」未读条目 */
 export function hasSpaceNotification(spaceKey: string): boolean {

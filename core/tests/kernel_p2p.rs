@@ -29,15 +29,26 @@ fn p2p_start_stop_and_events() {
     assert!(!peer_id.is_empty());
     assert!(kernel.p2p_running());
 
-    // Started 事件（单独 runtime 接收；kernel 方法本身同步）
+    // Started 事件（单独 runtime 接收；kernel 方法本身同步）。
+    // 注意：p2p start 后本机设备采集落库会先 emit DeviceUpdated（设备清单），
+    // 故循环 recv 跳过其他事件直到 Started。
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .unwrap();
     let started = rt
-        .block_on(async { tokio::time::timeout(Duration::from_secs(15), events.recv()).await })
-        .expect("Started event within 15s")
-        .expect("event channel open");
+        .block_on(async {
+            tokio::time::timeout(Duration::from_secs(15), async {
+                loop {
+                    let event = events.recv().await.expect("event channel open");
+                    if matches!(event, P2pEvent::Started { .. }) {
+                        break event;
+                    }
+                }
+            })
+            .await
+        })
+        .expect("Started event within 15s");
     match started {
         P2pEvent::Started {
             peer_id: started_peer,

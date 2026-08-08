@@ -34,6 +34,7 @@ fn friend(root_id: &str, nickname: &str) -> FriendRecord {
         photos: Vec::new(),
         permission: "open".to_string(),
         blocked: false,
+        updated_at: NOW,
     }
 }
 
@@ -219,11 +220,11 @@ fn blocked_survives_remove_friend_and_overview_overlays() {
 #[test]
 fn tag_create_rename_delete_strips_references() {
     let mut s = MemoryStorage::new();
-    let tag1 = ContactService::create_tag_with_id(&mut s, PERSONAL, "tag-1", "邻居").unwrap();
-    let tag2 = ContactService::create_tag_with_id(&mut s, PERSONAL, "tag-2", "同事").unwrap();
+    let tag1 = ContactService::create_tag_with_id(&mut s, PERSONAL, "tag-1", "邻居", NOW).unwrap();
+    let tag2 = ContactService::create_tag_with_id(&mut s, PERSONAL, "tag-2", "同事", NOW).unwrap();
 
-    ContactService::rename_tag(&mut s, PERSONAL, &tag1.id, "好邻居").unwrap();
-    ContactService::rename_tag(&mut s, PERSONAL, "tag-x", "无效").unwrap(); // 不存在忽略
+    ContactService::rename_tag(&mut s, PERSONAL, &tag1.id, "好邻居", NOW).unwrap();
+    ContactService::rename_tag(&mut s, PERSONAL, "tag-x", "无效", NOW).unwrap(); // 不存在忽略
 
     // 朋友引用两个标签
     let mut f = friend(&rid('a'), "阿强");
@@ -231,7 +232,7 @@ fn tag_create_rename_delete_strips_references() {
     ContactService::upsert_friend(&mut s, &f).unwrap();
 
     // 删除 tag1：从数组与朋友 tagIds 中摘除
-    ContactService::delete_tag(&mut s, PERSONAL, &tag1.id).unwrap();
+    ContactService::delete_tag(&mut s, PERSONAL, &tag1.id, NOW).unwrap();
     let view = ContactService::overview(&s, PERSONAL).unwrap();
     assert_eq!(
         view.tags,
@@ -249,7 +250,7 @@ fn tag_create_rename_delete_strips_references() {
 #[test]
 fn org_tag_delete_strips_member_extras() {
     let mut s = MemoryStorage::new();
-    let tag = ContactService::create_tag_with_id(&mut s, ORG, "tag-core", "核心成员").unwrap();
+    let tag = ContactService::create_tag_with_id(&mut s, ORG, "tag-core", "核心成员", NOW).unwrap();
     ContactService::update_profile(
         &mut s,
         ORG,
@@ -262,7 +263,7 @@ fn org_tag_delete_strips_member_extras() {
     )
     .unwrap();
 
-    ContactService::delete_tag(&mut s, ORG, &tag.id).unwrap();
+    ContactService::delete_tag(&mut s, ORG, &tag.id, NOW).unwrap();
     let view = ContactService::overview(&s, ORG).unwrap();
     assert!(view.tags.is_empty());
     assert!(view.member_extras.get(&rid('m')).unwrap().tag_ids.is_empty());
@@ -275,12 +276,12 @@ fn org_tag_delete_strips_member_extras() {
 #[test]
 fn personal_group_crud_reorder_and_reset() {
     let mut s = MemoryStorage::new();
-    let g1 = ContactService::create_group_with_id(&mut s, "group-1", "家人").unwrap();
-    let g2 = ContactService::create_group_with_id(&mut s, "group-2", "同学").unwrap();
-    let g3 = ContactService::create_group_with_id(&mut s, "group-3", "同事").unwrap();
+    let g1 = ContactService::create_group_with_id(&mut s, "group-1", "家人", NOW).unwrap();
+    let g2 = ContactService::create_group_with_id(&mut s, "group-2", "同学", NOW).unwrap();
+    let g3 = ContactService::create_group_with_id(&mut s, "group-3", "同事", NOW).unwrap();
 
-    ContactService::rename_group(&mut s, &g2.id, "老同学").unwrap();
-    ContactService::rename_group(&mut s, "group-x", "无效").unwrap(); // 不存在忽略
+    ContactService::rename_group(&mut s, &g2.id, "老同学", NOW).unwrap();
+    ContactService::rename_group(&mut s, "group-x", "无效", NOW).unwrap(); // 不存在忽略
 
     // 组内成员
     let mut f = friend(&rid('a'), "阿强");
@@ -298,15 +299,15 @@ fn personal_group_crud_reorder_and_reset() {
 
     // 重排（对齐 TS splice 语义：toIndex 以原序为准，源在目标位之前时摘除后
     // 目标前移一位）：[g1, g2, g3] → 把 g1 移到下标 2（原 g3 之前）→ [g2, g1, g3]
-    ContactService::move_group(&mut s, &g1.id, 2).unwrap();
+    ContactService::move_group(&mut s, &g1.id, 2, NOW).unwrap();
     let view = ContactService::overview(&s, PERSONAL).unwrap();
     assert_eq!(
         view.groups.iter().map(|g| g.id.as_str()).collect::<Vec<_>>(),
         vec![g2.id.as_str(), g1.id.as_str(), g3.id.as_str()]
     );
     // toIndex == len 表示移到末尾：越界夹紧到 len；不存在忽略
-    ContactService::move_group(&mut s, &g2.id, 99).unwrap();
-    ContactService::move_group(&mut s, "group-x", 0).unwrap();
+    ContactService::move_group(&mut s, &g2.id, 99, NOW).unwrap();
+    ContactService::move_group(&mut s, "group-x", 0, NOW).unwrap();
     let view = ContactService::overview(&s, PERSONAL).unwrap();
     assert_eq!(
         view.groups.iter().map(|g| g.id.as_str()).collect::<Vec<_>>(),
@@ -314,7 +315,7 @@ fn personal_group_crud_reorder_and_reset() {
     );
 
     // 删除分组：组内 friend.groupId 复位为 ""
-    ContactService::delete_group(&mut s, &g3.id).unwrap();
+    ContactService::delete_group(&mut s, &g3.id, NOW).unwrap();
     let view = ContactService::overview(&s, PERSONAL).unwrap();
     assert_eq!(view.groups.len(), 2);
     assert_eq!(ContactService::get_friend(&s, &rid('a')).unwrap().unwrap().group_id, "");
@@ -326,7 +327,7 @@ fn personal_group_move_matches_frontend_splice() {
     // from < target 时落点为 target-1，否则 target
     let mut s = MemoryStorage::new();
     for (id, name) in [("a", "甲"), ("b", "乙"), ("c", "丙"), ("d", "丁")] {
-        ContactService::create_group_with_id(&mut s, id, name).unwrap();
+        ContactService::create_group_with_id(&mut s, id, name, NOW).unwrap();
     }
     let order = |s: &MemoryStorage| {
         ContactService::overview(s, PERSONAL)
@@ -338,19 +339,19 @@ fn personal_group_move_matches_frontend_splice() {
     };
 
     // 后移：a → 下标 2（原 c 之前）：[b, a, c, d]
-    ContactService::move_group(&mut s, "a", 2).unwrap();
+    ContactService::move_group(&mut s, "a", 2, NOW).unwrap();
     assert_eq!(order(&s), vec!["b", "a", "c", "d"]);
     // 前移：d → 下标 0：[d, b, a, c]
-    ContactService::move_group(&mut s, "d", 0).unwrap();
+    ContactService::move_group(&mut s, "d", 0, NOW).unwrap();
     assert_eq!(order(&s), vec!["d", "b", "a", "c"]);
     // toIndex == len 移到末尾：b → 4：[d, a, c, b]
-    ContactService::move_group(&mut s, "b", 4).unwrap();
+    ContactService::move_group(&mut s, "b", 4, NOW).unwrap();
     assert_eq!(order(&s), vec!["d", "a", "c", "b"]);
     // 越界夹紧到 len：d → 99：[a, c, b, d]
-    ContactService::move_group(&mut s, "d", 99).unwrap();
+    ContactService::move_group(&mut s, "d", 99, NOW).unwrap();
     assert_eq!(order(&s), vec!["a", "c", "b", "d"]);
     // 原位移动（from == target）：c → 1：摘除后落点不变 [a, c, b, d]
-    ContactService::move_group(&mut s, "c", 1).unwrap();
+    ContactService::move_group(&mut s, "c", 1, NOW).unwrap();
     assert_eq!(order(&s), vec!["a", "c", "b", "d"]);
 }
 
@@ -377,8 +378,8 @@ fn overview_shapes_per_space() {
     ContactService::put_incoming_request(&mut s, &incoming("req-1", &rid('r'))).unwrap();
     ContactService::create_outgoing_request(&mut s, &rid('b'), "博哥", "", "扫码", None, NOW)
         .unwrap();
-    ContactService::create_tag_with_id(&mut s, PERSONAL, "tag-1", "邻居").unwrap();
-    ContactService::create_group_with_id(&mut s, "group-1", "家人").unwrap();
+    ContactService::create_tag_with_id(&mut s, PERSONAL, "tag-1", "邻居", NOW).unwrap();
+    ContactService::create_group_with_id(&mut s, "group-1", "家人", NOW).unwrap();
 
     let view = ContactService::overview(&s, PERSONAL).unwrap();
     assert_eq!(view.friends.len(), 1);
@@ -390,7 +391,7 @@ fn overview_shapes_per_space() {
     assert!(view.member_extras.is_empty());
 
     // 组织空间：friends/requests/outgoing/groups 恒空（个人数据不串入）
-    let tag = ContactService::create_tag_with_id(&mut s, ORG, "tag-core", "核心成员").unwrap();
+    let tag = ContactService::create_tag_with_id(&mut s, ORG, "tag-core", "核心成员", NOW).unwrap();
     let hq = ContactService::create_org_group_with_id(&mut s, ORG, "", "og-hq", "总部")
         .unwrap()
         .unwrap();

@@ -147,6 +147,12 @@ pub(crate) struct OrgSyncContext {
     /// 组织地址记录发布状态：orgAddress → 最近一次发布时间（ms）。
     /// 跨 tick 持久（kernel 持有，worker 与门面注入共用一份）。
     pub(crate) org_address_publish: Arc<Mutex<HashMap<String, i64>>>,
+    /// 应用数据目录（自设备重连后读身份文件装配 profile-sync 快照用）。
+    pub(crate) data_dir: std::path::PathBuf,
+    /// 自设备链路状态：上一 tick 观察到的已连接配对设备 peerId（None=未连接）。
+    /// 断→连跳变时触发 device-sync + profile-sync 快照重发，补齐对端离线
+    /// 期间错过的变更（一次性启动广播无重试，靠此状态机收敛）。
+    pub(crate) self_device_link: Arc<Mutex<Option<String>>>,
 }
 
 /// org-sync worker 主循环：推送/保活串行消费（kernel `start_p2p` 装配，
@@ -229,10 +235,65 @@ fn generate_sync_id() -> String {
 /// `collectOrganizationPeerCandidates`（peer-activity-store.ts:210-259）：
 /// 当前用户为成员的组织中，其他成员的 nodeInfo 按 peerId 合并（地址去重
 /// 并集），无 peerId 的按地址串键去重。损坏记录跳过（TS catch 静默）。
-fn collect_org_peer_candidates(storage: &SledStorage, current_root_id: &str) -> Vec<PeerNodeInfo> {
+///
+/// 多设备同步修复：候选额外纳入**同身份已配对自设备**（个人空间
+/// rootId==自己 且带 peer 寻址的朋友记录）——自设备间经 org-pull 反熵
+/// 对账（pull-list 捎带自签 claim → 逐组织快照合并），新设备由此从在线
+/// 自设备拉回「我的组织」全量记录；`local_peer_id`（本机）排除在外。
+fn collect_org_peer_candidates(
+    storage: &SledStorage,
+    current_root_id: &str,
+    local_peer_id: Option<&str>,
+) -> Vec<PeerNodeInfo> {
     let records = OrganizationService::read_all_organizations(storage).unwrap_or_default();
     let mut by_peer: HashMap<String, PeerNodeInfo> = HashMap::new();
     let mut by_address: HashMap<String, PeerNodeInfo> = HashMap::new();
+    // 自设备候选：双来源合并（去重）——
+    // 1) FriendRecord.peer（配对握手回填，组织候选主通道）
+    // 2) DeviceRecord（设备管理记录，QR 恢复后即有，不依赖 friend-request
+    //    投递成功——org-pull 等自设备同步在 friend-request 丢失时仍可工作）
+    let friend_self_peers = crate::contact::ContactService::overview(storage, "personal")
+        .map(|view| view.friends)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|f| f.root_id == current_root_id)
+        .filter_map(|f| f.peer)
+        .map(|p| PeerNodeInfo {
+            peer_id: (!p.peer_id.is_empty()).then_some(p.peer_id),
+            addresses: p.addresses,
+        });
+    // DeviceRecord 只提供 peerId（无监听地址）；已连接时 dm_direct 短路
+    // 直发，未连接时靠 keepalive tick 的补拨建立连接后再投递。
+    let device_self_peers = crate::device::DeviceService::list(storage)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|r| r.peer_id != local_peer_id.unwrap_or(""))
+        .map(|r| PeerNodeInfo {
+            peer_id: Some(r.peer_id),
+            addresses: Vec::new(),
+        });
+    let self_peers = friend_self_peers.chain(device_self_peers);
+    for candidate in self_peers {
+        if candidate.peer_id.as_deref() == local_peer_id {
+            continue;
+        }
+        if let Some(peer_id) = extract_peer_id(&candidate) {
+            let entry = by_peer.entry(peer_id.clone()).or_insert_with(|| PeerNodeInfo {
+                peer_id: Some(peer_id),
+                addresses: Vec::new(),
+            });
+            for addr in &candidate.addresses {
+                if !entry.addresses.contains(addr) {
+                    entry.addresses.push(addr.clone());
+                }
+            }
+            continue;
+        }
+        let key = candidate.addresses.join("|");
+        if !key.is_empty() {
+            by_address.entry(key).or_insert(candidate);
+        }
+    }
     for record in records {
         if !record.members.iter().any(|m| m.root_id == current_root_id) {
             continue;

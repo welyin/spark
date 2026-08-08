@@ -65,7 +65,7 @@ import { defineComponent, ref, type PropType } from 'vue';
 import { ElMessage } from 'element-plus';
 import { ChatDotRound, Close, Folder, Microphone, Picture } from '@element-plus/icons-vue';
 import { isMobileLayout } from '../../stores/ui-layout';
-import type { QuoteRef } from '../../mock/messages';
+import type { QuoteRef } from '../../stores/messages';
 
 const EMOJIS = [
   '😀', '😄', '😂', '🤣', '😊', '😍', '🤔', '😅',
@@ -75,6 +75,9 @@ const EMOJIS = [
 
 export default defineComponent({
   name: 'MessageInput',
+  // 图标组件显式注册：el-icon 插槽内的 <Close/> 需经 components 解析，
+  // 仅 setup return 在 dev 模板编译下偶发无法解析（Failed to resolve component 告警）
+  components: { Close },
   props: {
     modelValue: { type: String, default: '' },
     quote: { type: Object as PropType<QuoteRef | null>, default: null },

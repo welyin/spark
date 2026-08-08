@@ -146,6 +146,18 @@ fn event_json(event: &P2pEvent) -> Option<Value> {
         P2pEvent::FriendProfileUpdated(data) => {
             json!({"event": "friend-profile-updated", "data": data})
         }
+        P2pEvent::SelfProfileSynced(data) => {
+            json!({"event": "self-profile-synced", "data": data})
+        }
+        P2pEvent::DeviceUpdated(data) => {
+            json!({"event": "device-updated", "data": data})
+        }
+        P2pEvent::ContactsSynced(data) => {
+            json!({"event": "contacts-synced", "data": data})
+        }
+        P2pEvent::ConversationsSynced(data) => {
+            json!({"event": "conversations-synced", "data": data})
+        }
         P2pEvent::OrgInviteReceived(data) => {
             json!({"event": "org-invite-received", "data": data})
         }

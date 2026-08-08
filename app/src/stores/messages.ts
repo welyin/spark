@@ -20,7 +20,7 @@
  */
 import { computed, reactive, watch } from 'vue';
 import { isTauri, listenP2pEvents, type AppMessageCardDto, type AppMessageDto, type ElectronAPI } from '../api';
-import { isAppConversationBlocked, SYSTEM_APP_PLUGIN_ID } from '../stores/app-conversations';
+import { isAppConversationBlocked, SYSTEM_APP_PLUGIN_ID } from './app-conversations';
 
 /** 空间 key：个人空间为 'personal'，组织空间为 'org:<orgId>' */
 export type SpaceKey = string;
@@ -152,8 +152,8 @@ function systemApi(): SystemApi | undefined {
   return (window as unknown as { electronAPI?: ElectronAPI }).electronAPI?.system;
 }
 
-/** 空间 key 约定（与 mock/contacts 同一份）：唯一定义在 ./space-key，此处 re-export 保持调用方路径不变 */
-export { spaceKeyOf } from './space-key';
+/** 空间 key 约定：重新导出自 space-key 工具模块 */
+export { spaceKeyOf } from '../mock/space-key';
 
 function ensureSpace(key: SpaceKey): SpaceData {
   if (!spaces[key]) {
@@ -162,6 +162,21 @@ function ensureSpace(key: SpaceKey): SpaceData {
     hydrateConversations(key);
   }
   return spaces[key];
+}
+
+/**
+ * 登录态切换时清空消息缓存（RootGate 登出/切换账号时调用）。
+ * spaces/hydratedMessages 为窗口会话级单例，登出不刷新页面时旧账号的
+ * 会话与消息会带进新登录会话——清空后重新从内核水合。
+ */
+export function resetMessagesCache(): void {
+  for (const key of Object.keys(spaces)) {
+    delete spaces[key];
+  }
+  for (const key of Object.keys(activeConversation)) {
+    delete activeConversation[key];
+  }
+  hydratedMessages.clear();
 }
 
 /** 首次进入空间时拉取会话列表水合缓存；按 id merge，保留水合期间本地新建的会话 */
@@ -233,6 +248,7 @@ function subscribeP2pEvents(): void {
   void listenP2pEvents((event) => {
     if (event.kind === 'ChatReceived') onChatReceived(event.data);
     else if (event.kind === 'ChatStatus') onChatStatus(event.data);
+    else if (event.kind === 'ConversationsSynced') hydrateConversations('personal');
     else if (event.kind === 'PeerConnected' || event.kind === 'PeerDisconnected') scheduleOnlineRefresh();
   }).catch(() => {});
 }
@@ -294,6 +310,20 @@ export function onChatReceived(data: { spaceKey: string; conversation: Conversat
       .catch(() => {});
   } else {
     conv.unreadCount = data.conversation.unreadCount;
+  }
+
+  // 插件联系人消息中继（P2P 方向）：其他设备用户发给 bot 的消息经自设备回同步
+  // 到达本机时，中继给本机插件处理。判定：bot 会话 且 消息发送者不是 bot 本身
+  // （bot 回复不再中继，避免循环）。本机 sendText 发出的消息由 sendText 处中继，
+  // 不会经 P2P 回环到本机（deliver_to_devices 只发其他设备），故此处无重复。
+  if (conv.peerId?.startsWith('bot:') && data.message.senderId !== conv.peerId) {
+    relayMessageToContact({
+      spaceKey: key,
+      convId: conv.id,
+      contactId: conv.peerId,
+      messageId: data.message.id,
+      text: data.message.content,
+    });
   }
 }
 
@@ -362,7 +392,7 @@ export function lastAppSummary(key: SpaceKey, convId: string): string {
 }
 
 /**
- * 应用消息就地入账（§20）：桥 dispatcher/系统通知经壳层服务（app-messages.ts）
+ * 应用消息就地入账（§20）：桥 dispatcher/系统通知经壳层服务（plugin/messages.ts）
  * 写入内核后调用，保证打开的会话与会话列表实时刷新，不必等下次水合。
  * 未读语义与 onChatReceived 同口径：活跃会话清零并回读，否则本地 +1
  * （内核侧已权威计数，下次水合自动对齐）。
@@ -591,6 +621,8 @@ export function sendText(key: SpaceKey, convId: string, text: string, quote?: Qu
   (space.messages[convId] ??= []).push(message);
   conv.updatedAt = message.createdAt;
   conv.draft = '';
+  // 插件联系人会话：消息持久化走后端（内核跳过 P2P 投递），同时中继给插件监听器
+  const isPluginContact = conv.peerId?.startsWith('bot:');
   void messagesApi()
     ?.sendText(key, convId, message.id, text, quote)
     .then((dto) => {
@@ -605,6 +637,31 @@ export function sendText(key: SpaceKey, convId: string, text: string, quote?: Qu
       }
     })
     .catch(() => setStatus(space, convId, message.id, 'failed'));
+  // 插件联系人消息中继：转发给已注册的监听器（异步，不阻塞发送流程）
+  if (isPluginContact && conv.peerId) {
+    const delivered = relayMessageToContact({
+      spaceKey: key,
+      convId,
+      contactId: conv.peerId,
+      messageId: message.id,
+      text,
+    });
+    console.log(`[messages] 中继 bot 消息 contactId=${conv.peerId} delivered=${delivered} text=${text.slice(0, 30)}`);
+    // 无消费者接管（插件未加载/被熔断停用/视图已卸载）：插入一条系统提示，
+    // 否则消息发出后毫无反馈，用户无从感知对方"不在线"
+    if (!delivered) {
+      const notice: ChatMessage = {
+        id: `m${Date.now()}-${++seq}`,
+        senderId: 'system',
+        senderName: '系统',
+        type: 'system',
+        content: '对方暂未上线，消息将在其上线后处理',
+        createdAt: Date.now(),
+        recalled: false,
+      };
+      (space.messages[convId] ??= []).push(notice);
+    }
+  }
   return message;
 }
 
@@ -741,3 +798,51 @@ watch(
   },
   { immediate: true }
 );
+
+// ═══════════════════════════════════════════════════════════════
+// 插件联系人消息中继
+// 当用户向插件注册的联系人发送消息时，内核跳过 P2P 投递并标记 delivered；
+// sendText 通过 relayMessageToContact 将消息中继给桥接层的长轮询监听器
+// （plugin/bridge-dispatcher.ts 的 messages.waitForMessage）。
+// ═══════════════════════════════════════════════════════════════
+
+export interface MessageRelayEvent {
+  spaceKey: string;
+  convId: string;
+  contactId: string;
+  messageId: string;
+  text: string;
+}
+
+type MessageRelayListener = (event: MessageRelayEvent) => void;
+const relayWatchers = new Map<string, MessageRelayListener[]>();
+
+/** 注册消息监听器（按联系人 contactId 精确匹配）。返回取消订阅函数。 */
+export function onMessageForContact(contactId: string, listener: MessageRelayListener): () => void {
+  const list = relayWatchers.get(contactId) ?? [];
+  list.push(listener);
+  relayWatchers.set(contactId, list);
+  return () => {
+    const idx = list.indexOf(listener);
+    if (idx >= 0) list.splice(idx, 1);
+    if (list.length === 0) relayWatchers.delete(contactId);
+  };
+}
+
+/**
+ * 将消息中继给所有监听该联系人的 watcher（由 sendText 调用）。
+ * 返回是否有消费者接管了这条消息——无消费者时调用方可给用户兜底反馈
+ * （如"对方当前不在线"），避免消息石沉大海。
+ */
+export function relayMessageToContact(event: MessageRelayEvent): boolean {
+  const list = relayWatchers.get(event.contactId);
+  if (!list || list.length === 0) return false;
+  for (const listener of list) {
+    try {
+      listener(event);
+    } catch {
+      /* 静默吞掉单个 listener 的异常 */
+    }
+  }
+  return true;
+}

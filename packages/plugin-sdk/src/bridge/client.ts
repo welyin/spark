@@ -19,7 +19,9 @@ import type {
   PluginDeclaredCollectionSchema,
   PluginDocQueryOptions,
   PluginEventHandler,
-  PluginSDK
+  PluginSDK,
+  SysExecResult,
+  SysFetchResult
 } from '../index';
 import {
   BRIDGE_PROTOCOL_VERSION,
@@ -29,6 +31,9 @@ import {
 
 /** 消息端点的最小接口（Window 的子集，便于测试注入伪造端点） */
 export type WindowMessageEndpoint = Pick<Window, 'addEventListener' | 'removeEventListener' | 'postMessage'>;
+
+/** sys.exec / sys.fetch 等长时外呼的桥超时（CLI 生成回复、网络请求可能数十秒） */
+const SYS_CALL_TIMEOUT_MS = 120_000;
 
 export type ConnectPluginBridgeOptions = {
   pluginId: string;
@@ -89,6 +94,8 @@ export function connectPluginBridge(options: ConnectPluginBridgeOptions): Promis
   const eventHandlers = new Map<string, Set<PluginEventHandler>>();
   /** 卡片按钮回调（onCardAction 注册；宿主 action 下发时分发） */
   const cardActionHandlers = new Set<(action: PluginCardActionPayload) => void>();
+  /** 宿主反向调用处理器（onHostCall 注册；host-call 到来时按 event 分发） */
+  const hostCallHandlers = new Map<string, (payload: unknown) => unknown | Promise<unknown>>();
 
   const nextId = (prefix: string): string => `${prefix}-${Date.now().toString(36)}-${++counter}`;
 
@@ -163,10 +170,10 @@ export function connectPluginBridge(options: ConnectPluginBridgeOptions): Promis
       post(message);
     });
 
-  const call = (module: string, method: string, args: unknown[]): Promise<unknown> =>
+  const call = (module: string, method: string, args: unknown[], timeoutOverrideMs?: number): Promise<unknown> =>
     request(
       { v: BRIDGE_PROTOCOL_VERSION, type: 'call', id: nextId('call'), module, method, args },
-      callTimeoutMs
+      timeoutOverrideMs ?? callTimeoutMs
     );
 
   const settleResult = (message: BridgeResultMessage): void => {
@@ -212,8 +219,11 @@ export function connectPluginBridge(options: ConnectPluginBridgeOptions): Promis
     }, handshakeTimeoutMs);
 
     const onMessage = (event: MessageEvent): void => {
-      // 只接受来自宿主窗口的消息（伪造 source 的一律丢弃）
-      if (event.source !== (hostWindow as unknown)) {
+      // 只接受来自宿主窗口的消息（伪造 source 的一律丢弃）。
+      // WebView2 下 event.source 可能是 proxy wrapper，与 window.parent 引用不严格相等。
+      // 自身是沙箱 iframe（self.origin === 'null'）时彻底跳过 source 引用比较：
+      // opaque origin 已提供隔离，且桥 protocol 层的 hello→ready 握手足以防止伪造。
+      if (self.origin !== 'null' && event.source !== (hostWindow as unknown)) {
         return;
       }
       const message = parseBridgeMessage(event.data);
@@ -248,6 +258,35 @@ export function connectPluginBridge(options: ConnectPluginBridgeOptions): Promis
         settleResult(message);
       } else if (message.type === 'event') {
         dispatchEvent(message.event, message.payload);
+      } else if (message.type === 'host-call') {
+        // 宿主→插件反向调用：查处理器，执行后回 host-result。
+        // 无处理器时回 ok:false，让宿主 request 收到明确拒绝而非干等超时
+        const handler = hostCallHandlers.get(message.event);
+        if (!handler) {
+          post({
+            v: BRIDGE_PROTOCOL_VERSION,
+            type: 'host-result',
+            id: message.id,
+            ok: false,
+            error: { code: 'no-handler', message: `no host-call handler for "${message.event}"` }
+          });
+          return;
+        }
+        Promise.resolve()
+          .then(() => handler(message.payload))
+          .then((data) => {
+            post({ v: BRIDGE_PROTOCOL_VERSION, type: 'host-result', id: message.id, ok: true, data });
+          })
+          .catch((error) => {
+            post({
+              v: BRIDGE_PROTOCOL_VERSION,
+              type: 'host-result',
+              id: message.id,
+              ok: false,
+              error: { code: 'handler-error', message: error instanceof Error ? error.message : String(error) }
+            });
+          });
+        return;
       } else if (message.type === 'action') {
         // 卡片按钮回调（宿主校验归属后下发）：分发给 onCardAction 注册的回调
         const payload: PluginCardActionPayload = { cardId: message.cardId, actionId: message.actionId, data: message.data };
@@ -332,6 +371,19 @@ export function connectPluginBridge(options: ConnectPluginBridgeOptions): Promis
             throw new Error('messages.requestCardHeight is only available in message-card views');
           }
           post({ v: BRIDGE_PROTOCOL_VERSION, type: 'event', event: 'card-resize', payload: { height } });
+        },
+        // 插件联系人方法（统一在 messages 命名空间下）
+        registerAsContact: (contactId, displayName) =>
+          call('messages', 'registerAsContact', [contactId, displayName]).then(() => ({ success: true })),
+        unregisterAsContact: (contactId) =>
+          call('messages', 'unregisterAsContact', [contactId]).then(() => ({ success: true })),
+        sendResponse: (convId, contactId, displayName, messageId, text) =>
+          call('messages', 'sendResponse', [convId, contactId, displayName, messageId, text]),
+        waitForMessage: (contactId, timeoutMs) => {
+          const waitMs = timeoutMs ?? 30000;
+          // 长轮询：桥请求超时必须大于等待时长（+5s 缓冲），否则宿主侧已消费的
+          // 消息会因插件侧先行超时丢弃 pending 而永久丢失
+          return call('messages', 'waitForMessage', [contactId, waitMs], waitMs + 5000) as Promise<import('../index').ContactMessageEvent | null>;
         }
       },
       events: {
@@ -362,7 +414,18 @@ export function connectPluginBridge(options: ConnectPluginBridgeOptions): Promis
             eventHandlers.delete(event);
           }
         }
-      }
+      },
+      onHostCall: (event: string, handler: (payload: unknown) => unknown | Promise<unknown>) => {
+        hostCallHandlers.set(event, handler);
+      },
+      sys: {
+        // sys.exec/fetch 是长时外呼（CLI 生成回复、网络请求可能数十秒），
+        // 不能用普通 call 的 10s 默认超时——AI CLI 实测单次生成 4s+，长回复更久
+        exec: (program, args, workdir) =>
+          call('sys', 'exec', [program, args, workdir], SYS_CALL_TIMEOUT_MS) as Promise<SysExecResult>,
+        fetch: (url, options) =>
+          call('sys', 'fetch', options === undefined ? [url] : [url, options], SYS_CALL_TIMEOUT_MS) as Promise<SysFetchResult>
+      },
     });
 
     listenWindow.addEventListener('message', onMessage as EventListener);

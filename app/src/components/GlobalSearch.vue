@@ -58,7 +58,7 @@ import {
   personDisplayName
 } from '../stores/avatar-sources';
 import { contactsOf } from '../mock/contacts';
-import { listConversations, spaceKeyOf } from '../mock/messages';
+import { listConversations, spaceKeyOf } from '../stores/messages';
 import { appConversationName } from '../stores/app-conversations';
 import { listMockApps } from '../mock/apps';
 import { mockMode } from '../mock/mode';

@@ -15,8 +15,10 @@ use serde_json::{Value, json};
 mod friend;
 
 use super::dm_envelope::{
-    KIND_CHAT, KIND_FRIEND_ACCEPT, KIND_FRIEND_REPLY, KIND_FRIEND_REQUEST, KIND_ORG_INVITE,
-    KIND_ORG_INVITE_REPLY, KIND_PROFILE_SYNC, KIND_READ, KIND_RECALL, verify_envelope,
+    KIND_CHAT, KIND_CONTACT_SYNC, KIND_CONV_SYNC, KIND_DEVICE_SYNC, KIND_FRIEND_ACCEPT,
+    KIND_FRIEND_REPLY, KIND_FRIEND_REQUEST,
+    KIND_ORG_INVITE, KIND_ORG_INVITE_REPLY, KIND_PROFILE_SYNC, KIND_READ, KIND_RECALL,
+    verify_envelope,
 };
 use super::message_ops::{conversation_view, direct_conversation_id, message_view, sanitize_link_preview};
 use crate::contact::{ContactError, ContactService, FriendRecord, FriendRequestStatus};
@@ -68,6 +70,19 @@ pub struct AutoAccept {
     pub to_root_id: String,
 }
 
+/// profile-sync 回发指令：目标 + 是否无条件回发（true=配对握手；false=LWW 裁决）。
+#[derive(Clone)]
+pub struct ProfileSyncReply {
+    pub target: PeerNodeInfo,
+    pub unconditional: bool,
+}
+
+impl From<ProfileSyncReply> for PeerNodeInfo {
+    fn from(reply: ProfileSyncReply) -> Self {
+        reply.target
+    }
+}
+
 /// 入站 dm 处理结果：直连应答帧 + 待广播的壳层事件。
 pub struct InboundDmResult {
     /// 直连应答（序列化为响应帧回传发送方）。
@@ -76,6 +91,20 @@ pub struct InboundDmResult {
     pub events: Vec<P2pEvent>,
     /// 设备配对自动接受后待回发的 friend-accept（host 装配发送）。
     pub auto_accept: Option<AutoAccept>,
+    /// 自设备 profile-sync 全量快照（from==自己 且带 updatedAt）：host 侧据此
+    /// 更新本机身份文件（需会话口令重封，入站纯逻辑层不触碰身份文件）。
+    pub self_profile: Option<Value>,
+    /// 收到自设备 device-sync 后待回发本机设备记录的目标（握手式交换；
+    /// host 装配本机 DeviceRecord 回发）。
+    pub device_sync_reply: Option<PeerNodeInfo>,
+    /// 自设备 profile-sync 回发指令（连接层对端目标）。
+    /// - `handle_self_friend_request`（配对握手）：`unconditional=true`，
+    ///   host 无条件回发——P2P 启动时的一次性广播可能早于自记录 peer 填入，
+    ///   配对是首次可靠的回发时机；
+    /// - `handle_profile_sync`（收到自设备快照）：`unconditional=false`，
+    ///   host 按 LWW 裁决——本机身份文件 updatedAt 严格大于对端快照才回发
+    ///   （对端较旧/残缺时补齐；收敛后相等不再互发，无 ping-pong）。
+    pub profile_sync_reply: Option<ProfileSyncReply>,
 }
 
 /// 入站上下文：本机身份/昵称、连接层对端、在线 peer 快照与时间（各
@@ -103,6 +132,9 @@ fn done(response: Value, events: Vec<P2pEvent>) -> Result<InboundDmResult> {
         response,
         events,
         auto_accept: None,
+        self_profile: None,
+        device_sync_reply: None,
+        profile_sync_reply: None,
     })
 }
 
@@ -174,6 +206,7 @@ fn merge_friend_record<S: StorageBackend>(
         photos: Vec::new(),
         permission: "open".to_string(),
         blocked: false,
+        updated_at: now_ms,
     });
     if !nickname.is_empty() {
         friend.nickname = nickname.to_string();
@@ -184,6 +217,9 @@ fn merge_friend_record<S: StorageBackend>(
     if peer.is_some() {
         friend.peer = peer;
     }
+    // 接受产生的朋友记录是本机状态变更：刷新 LWW 时间（随 contact-sync
+    // 传播到其他自设备）
+    friend.updated_at = now_ms;
     ContactService::upsert_friend(storage, &friend)?;
     Ok(friend)
 }
@@ -225,7 +261,10 @@ pub fn handle_inbound_dm<S: StorageBackend>(
         KIND_FRIEND_REPLY => {
             friend::handle_friend_reply(storage, &ctx, &envelope.from, &envelope.body)
         }
-        KIND_PROFILE_SYNC => handle_profile_sync(storage, &envelope.from, &envelope.body),
+        KIND_PROFILE_SYNC => handle_profile_sync(storage, &ctx, &envelope.from, &envelope.body),
+        KIND_DEVICE_SYNC => handle_device_sync(storage, &ctx, &envelope.from, &envelope.body),
+        KIND_CONTACT_SYNC => handle_contact_sync(storage, &ctx, &envelope.from, &envelope.body),
+        KIND_CONV_SYNC => handle_conv_sync(storage, &ctx, &envelope.from, &envelope.body),
         KIND_ORG_INVITE => handle_org_invite(storage, &ctx, &envelope.from, &envelope.body),
         KIND_ORG_INVITE_REPLY => {
             handle_org_invite_reply(storage, &ctx, &envelope.from, &envelope.body)
@@ -298,6 +337,7 @@ fn ensure_inbound_conversation<S: StorageBackend>(
         muted: false,
         draft: String::new(),
         updated_at: ctx.now_ms,
+        meta_updated_at: 0,
     };
     MessageService::upsert_conversation(storage, space, &record)?;
     Ok(record)
@@ -342,8 +382,6 @@ fn handle_chat<S: StorageBackend>(
     };
     // 入站消息不携带发送状态（状态仅为本机发送侧概念）
     message.status = None;
-    // senderId 绑定信封 from（忽略对端自报值）
-    message.sender_id = from.to_string();
     // link 为对端自报字段：入库前与出站同口径收敛（限长截断、空 url 整条丢弃）
     message.link = message.link.and_then(sanitize_link_preview);
     // 自消息（另一台设备同步）不产生未读，落库即置本地已读标记
@@ -391,8 +429,51 @@ fn handle_chat<S: StorageBackend>(
         })));
     }
 
+    // 自消息回同步（from==我，多设备 echo）：消息属于我发出的目标会话（真人或
+    // bot），落库到 body.convId 指定的会话而非 `dm:{from}`（后者会错误塞进自己
+    // 的会话）。对端发来的消息（from!=我）无 convId，仍按 from 推导会话。
+    let is_self_echo = from == ctx.my_root_id;
+    let echo_conv_id = if is_self_echo {
+        body.get("convId").and_then(Value::as_str)
+    } else {
+        None
+    };
     let title = resolve_conv_title(storage, from, &message.sender_name)?;
-    let conv = ensure_inbound_conversation(storage, ctx, space, from, &title)?;
+    let conv = if let Some(target_conv_id) = echo_conv_id {
+        // 回同步：按目标会话 id 落库（会话由 conv-sync 同步或发送端 ensure 已建）
+        match MessageService::get_conversation(storage, space, target_conv_id)? {
+            Some(c) => c,
+            None => {
+                // 会话尚未同步到本机：按 convId 反推 peer（dm:{peer}）建壳落库
+                let peer_root = target_conv_id.strip_prefix("dm:").unwrap_or(target_conv_id);
+                let record = ConversationRecord {
+                    id: target_conv_id.to_string(),
+                    kind: ConversationKind::Direct,
+                    title: resolve_conv_title(storage, peer_root, &message.sender_name)?,
+                    peer_root_id: peer_root.to_string(),
+                    peer: None,
+                    unread_count: 0,
+                    pinned_at: 0,
+                    muted: false,
+                    draft: String::new(),
+                    updated_at: ctx.now_ms,
+                    meta_updated_at: 0,
+                };
+                MessageService::upsert_conversation(storage, space, &record)?;
+                record
+            }
+        }
+    } else {
+        ensure_inbound_conversation(storage, ctx, space, from, &title)?
+    };
+    // senderId 归属：常规对端消息绑定信封 from（防伪造渲染成「我」）；
+    // 自消息回同步（from==我）按目标会话区分——真人会话绑定 from（我自己发的），
+    // bot 会话信任 body 里的 sender_id（bot 是发送者，如 bot 回复回同步到其他设备）。
+    // bot 判定取会话 peer_root_id（权威，落库时已确定），不信任对端自报。
+    let is_bot_conv = conv.peer_root_id.starts_with("bot:");
+    if !is_self_echo || !is_bot_conv {
+        message.sender_id = from.to_string();
+    }
     // 按消息 id 去重：重放/重试幂等返回 ok，不重复落库/未读/事件
     if MessageService::get_message(storage, space, &conv.id, &message.id)?.is_some() {
         return done(ok_response(), events);
@@ -507,13 +588,55 @@ fn handle_recall<S: StorageBackend>(
 /// 已有朋友（陌生人忽略，按幂等 ok 应答，不暴露关系状态）；nickname 非空才
 /// 覆盖、avatar 经 [`crate::identity::validate_avatar`] 校验通过才覆盖；
 /// 有实际变更才落库并 emit `FriendProfileUpdated`（重复推送幂等无副作用）。
+/// profile-sync：朋友资料互推 + 自设备全量资料同步。
+///
+/// - 朋友（from != 自己）：只取 nickname/avatar 有效值更新朋友记录（原语义，
+///   清空不传播给朋友侧展示）。
+/// - 自设备（from == 自己）：除刷新自 FriendRecord 外，body 带 `updatedAt`
+///   的全量快照（nickname/avatar/gender/region/signature）经
+///   [`InboundDmResult::self_profile`] 上抛——host 侧以会话口令重封身份文件，
+///   完成「我的资料」跨设备同步（旧格式无 updatedAt 的快照不应用身份文件，
+///   避免建连互推的旧格式信封回灌）。updatedAt 新覆盖旧裁决在 host 侧按
+///   身份文件 updatedAt 执行。
 fn handle_profile_sync<S: StorageBackend>(
     storage: &mut S,
+    ctx: &InboundContext<'_>,
     from: &str,
     body: &Value,
 ) -> Result<InboundDmResult> {
+    let is_self = from == ctx.my_root_id;
+    // 自设备快照上抛独立于朋友记录存在与否（新设备恢复后可能尚未创建自
+    // FriendRecord，资料同步不应丢失）
+    let is_self_snapshot =
+        is_self && body.get("updatedAt").and_then(Value::as_i64).is_some();
+    let self_profile = if is_self_snapshot {
+        Some(body.clone())
+    } else {
+        None
+    };
+    // 握手回发候选目标：连接层对端（刚向我投递快照的设备，可达性已由本帧
+    // 证实）。host 按 LWW 裁决——本机资料严格更新才回发全量快照，使较旧/
+    // 残缺端（如 QR 恢复的新设备）收敛；相等则不互发，无 ping-pong。
+    let profile_sync_reply = if is_self_snapshot {
+        Some(ProfileSyncReply {
+            target: PeerNodeInfo {
+                peer_id: Some(ctx.remote_peer_id.to_string()),
+                addresses: Vec::new(),
+            },
+            unconditional: false,
+        })
+    } else {
+        None
+    };
     let Some(mut friend) = ContactService::get_friend(storage, from)? else {
-        return done(ok_response(), Vec::new());
+        return Ok(InboundDmResult {
+            response: ok_response(),
+            events: Vec::new(),
+            auto_accept: None,
+            self_profile,
+            device_sync_reply: None,
+            profile_sync_reply,
+        });
     };
     let nickname = body
         .get("nickname")
@@ -534,18 +657,137 @@ fn handle_profile_sync<S: StorageBackend>(
         friend.avatar = Some(a.to_string());
         changed = true;
     }
-    if !changed {
-        return done(ok_response(), Vec::new());
+    let mut events = Vec::new();
+    if changed {
+        ContactService::upsert_friend(storage, &friend)?;
+        let mut data = json!({
+            "rootId": friend.root_id,
+            "nickname": friend.nickname,
+        });
+        if let Some(a) = &friend.avatar {
+            data["avatar"] = json!(a);
+        }
+        events.push(P2pEvent::FriendProfileUpdated(data));
     }
-    ContactService::upsert_friend(storage, &friend)?;
-    let mut data = json!({
-        "rootId": friend.root_id,
-        "nickname": friend.nickname,
-    });
-    if let Some(a) = &friend.avatar {
-        data["avatar"] = json!(a);
+    Ok(InboundDmResult {
+        response: ok_response(),
+        events,
+        auto_accept: None,
+        self_profile,
+        device_sync_reply: None,
+        profile_sync_reply,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// device-sync（自设备设备清单同步）
+// ---------------------------------------------------------------------------
+
+/// device-sync：自设备间交换设备记录（from==自己 rootId 才受理；验签已在
+/// 入口完成，from 真实）。落库按 updatedAt 新覆盖旧裁决（device 模块），
+/// 内容变化时广播 DeviceUpdated 事件；并给出回发目标（握手式交换——对端
+/// 上线推送时本机回推，双方设备清单即双向齐全）。
+fn handle_device_sync<S: StorageBackend>(
+    storage: &mut S,
+    ctx: &InboundContext<'_>,
+    from: &str,
+    body: &Value,
+) -> Result<InboundDmResult> {
+    if from != ctx.my_root_id {
+        return done(fail_response("not-self-device"), Vec::new());
     }
-    done(ok_response(), vec![P2pEvent::FriendProfileUpdated(data)])
+    let Ok(record) = serde_json::from_value::<crate::device::DeviceRecord>(body.clone()) else {
+        return done(fail_response("invalid-body"), Vec::new());
+    };
+    if record.peer_id.trim().is_empty() || !crate::device::is_usable_peer_id(&record.peer_id) {
+        return done(fail_response("invalid-body"), Vec::new());
+    }
+    let (applied, changed) = crate::device::DeviceService::apply_remote(storage, record, ctx.now_ms)?;
+    let mut events = Vec::new();
+    if changed {
+        events.push(P2pEvent::DeviceUpdated(
+            serde_json::to_value(&applied).unwrap_or_else(|_| json!({})),
+        ));
+    }
+    // 回发目标：自设备 FriendRecord 的寻址信息（优先匹配连接层对端 peerId）
+    let reply = ContactService::get_friend(storage, from)?
+        .and_then(|f| f.peer)
+        .map(|p| PeerNodeInfo {
+            peer_id: (!p.peer_id.is_empty()).then_some(p.peer_id),
+            addresses: p.addresses,
+        });
+    Ok(InboundDmResult {
+        response: ok_response(),
+        events,
+        auto_accept: None,
+        self_profile: None,
+        device_sync_reply: reply,
+        profile_sync_reply: None,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// contact-sync（自设备通讯录快照同步）
+// ---------------------------------------------------------------------------
+
+/// contact-sync：自设备（from==自己）发来的通讯录全量快照，LWW 合入
+/// （contact/service/sync.rs）。有实际写入时发 ContactsSynced 事件通知
+/// 前端整页刷新；合入不触发再广播（快照时间戳即事实来源，防互灌循环）。
+fn handle_contact_sync<S: StorageBackend>(
+    storage: &mut S,
+    ctx: &InboundContext<'_>,
+    from: &str,
+    body: &Value,
+) -> Result<InboundDmResult> {
+    if from != ctx.my_root_id {
+        return done(fail_response("not-self-device"), Vec::new());
+    }
+    let applied = crate::contact::apply_contact_sync_snapshot(storage, ctx.my_root_id, body)?;
+    let events = if applied > 0 {
+        vec![P2pEvent::ContactsSynced(json!({ "applied": applied }))]
+    } else {
+        Vec::new()
+    };
+    Ok(InboundDmResult {
+        response: ok_response(),
+        events,
+        auto_accept: None,
+        self_profile: None,
+        device_sync_reply: None,
+        profile_sync_reply: None,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// conv-sync（自设备会话元数据同步）
+// ---------------------------------------------------------------------------
+
+/// conv-sync：自设备（from==自己）发来的会话元数据快照，按 peerRootId 匹配
+/// LWW 合入（message/sync.rs；消息本体/未读数不同步）。有实际变更时发
+/// ConversationsSynced 事件通知前端刷新会话列表。
+fn handle_conv_sync<S: StorageBackend>(
+    storage: &mut S,
+    ctx: &InboundContext<'_>,
+    from: &str,
+    body: &Value,
+) -> Result<InboundDmResult> {
+    if from != ctx.my_root_id {
+        return done(fail_response("not-self-device"), Vec::new());
+    }
+    let applied = crate::message::apply_conv_sync_snapshot(storage, body, ctx.now_ms)?;
+    let events = if applied > 0 {
+        vec![P2pEvent::ConversationsSynced(json!({ "applied": applied }))]
+    } else {
+        Vec::new()
+    };
+    Ok(InboundDmResult {
+        response: ok_response(),
+        events,
+        auto_accept: None,
+        self_profile: None,
+        device_sync_reply: None,
+        profile_sync_reply: None,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -574,6 +816,7 @@ fn ensure_system_conversation<S: StorageBackend>(
         muted: false,
         draft: String::new(),
         updated_at: now_ms,
+        meta_updated_at: 0,
     };
     MessageService::upsert_conversation(storage, "personal", &record)?;
     Ok(record)

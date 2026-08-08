@@ -161,6 +161,7 @@ impl AppMessageService {
             muted: false,
             draft: String::new(),
             updated_at: now_ms,
+            meta_updated_at: 0,
         };
         super::service::MessageService::upsert_conversation(storage, space, &record)?;
         Ok(record)

@@ -41,11 +41,11 @@ fn auth_status_rules() {
     let (mut storage, admin, record) = setup();
     // 非成员
     assert_eq!(
-        member_auth_status(&record, &"ab".repeat(32), None),
+        member_auth_status(&record, &"ab".repeat(32), None, false),
         Err("not-member")
     );
     // 成员无 peerId → 放行
-    assert_eq!(member_auth_status(&record, &admin, None), Ok(()));
+    assert_eq!(member_auth_status(&record, &admin, None, false), Ok(()));
     // 成员带 peerId：一致放行，不一致/缺失拒绝
     let member = root_id_of(MNEMONIC2);
     OrganizationService::add_member(
@@ -64,20 +64,29 @@ fn auth_status_rules() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        member_auth_status(&record, &member, Some("peer-xxx1")),
+        member_auth_status(&record, &member, Some("peer-xxx1"), false),
         Ok(())
     );
     assert_eq!(
-        member_auth_status(&record, &member, Some(" peer-xxx1 ")),
+        member_auth_status(&record, &member, Some(" peer-xxx1 "), false),
         Ok(())
     );
     assert_eq!(
-        member_auth_status(&record, &member, Some("peer-yyy2")),
+        member_auth_status(&record, &member, Some("peer-yyy2"), false),
         Err("peer-mismatch")
     );
     assert_eq!(
-        member_auth_status(&record, &member, None),
+        member_auth_status(&record, &member, None, false),
         Err("peer-mismatch")
+    );
+    // 已验明自设备：跳过 peer-mismatch（成员资格仍校验）
+    assert_eq!(
+        member_auth_status(&record, &member, Some("peer-yyy2"), true),
+        Ok(())
+    );
+    assert_eq!(
+        member_auth_status(&record, &"ab".repeat(32), Some("peer-yyy2"), true),
+        Err("not-member")
     );
 }
 
@@ -223,9 +232,14 @@ fn pull_org_response_shapes() {
         .unwrap();
 
     // missing requester
-    let response =
-        handle_pull_org_request(&storage, &serde_json::json!({"orgId": record.org_id}), None)
-            .unwrap();
+    let response = handle_pull_org_request(
+        &storage,
+        &serde_json::json!({"orgId": record.org_id}),
+        None,
+        None,
+        NOW,
+    )
+    .unwrap();
     assert_eq!(response["ok"], false);
     assert_eq!(response["reason"], "missing-requester-root");
     assert_eq!(response["orgId"], record.org_id);
@@ -235,6 +249,8 @@ fn pull_org_response_shapes() {
         &storage,
         &serde_json::json!({"requesterRootId": member}),
         None,
+        None,
+        NOW,
     )
     .unwrap();
     assert_eq!(response["ok"], false);
@@ -245,6 +261,8 @@ fn pull_org_response_shapes() {
         &storage,
         &serde_json::json!({"requesterRootId": member, "orgId": "org_nope"}),
         None,
+        None,
+        NOW,
     )
     .unwrap();
     assert_eq!(response["ok"], true);
@@ -256,6 +274,8 @@ fn pull_org_response_shapes() {
         &storage,
         &serde_json::json!({"requesterRootId": "ff".repeat(32), "orgId": record.org_id}),
         None,
+        None,
+        NOW,
     )
     .unwrap();
     assert_eq!(response["status"], "removed");
@@ -266,6 +286,8 @@ fn pull_org_response_shapes() {
         &storage,
         &serde_json::json!({"requesterRootId": member, "orgId": record.org_id}),
         None,
+        None,
+        NOW,
     )
     .unwrap();
     assert_eq!(response["ok"], true);

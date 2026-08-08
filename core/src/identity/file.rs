@@ -408,6 +408,12 @@ pub fn decrypt_payload(file: &IdentityFile, password: &str) -> Result<IdentityPa
 /// 可选大字段（gender/region/signature），仅保留身份恢复必需的
 /// mnemonic/path/version/wordlist/nickname/createdAt，同口令重新加密
 /// （新 salt/iv）。二维码容量有限（约 3KB），完整文件备份见 `backup_payload`。
+///
+/// `updatedAt` 置 0：紧凑备份的资料字段是残缺的（avatar 等被剔除），不能
+/// 携带源文件的资料时间戳——否则恢复端会以「残缺的最新资料」在 profile-sync
+/// LWW 裁决中挤掉对端的完整资料（严格大于才应用，同时间戳不应用，残缺快照
+/// 永远赢）。置 0 表示「资料状态未知」，恢复端收到的任何全量快照都严格更新、
+/// 必然被应用（identity.md §5「恢复后头像经 profile-sync 找回」）。
 pub fn seal_compact_backup(
     file: &IdentityFile,
     payload: &IdentityPayload,
@@ -436,7 +442,7 @@ pub fn seal_compact_backup(
         None,
         None,
         file.created_at,
-        now_ms(),
+        0,
     )
 }
 

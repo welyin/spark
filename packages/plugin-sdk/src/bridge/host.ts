@@ -22,6 +22,16 @@ import type { WindowMessageEndpoint } from './client';
 /** call 分发处理器：(模块, 方法, 参数) => 结果（壳层后续接到 invoke 适配层） */
 export type BridgeHostHandler = (module: string, method: string, args: unknown[]) => Promise<unknown>;
 
+/**
+ * handler 供应方式：
+ * - 直接传 BridgeHostHandler：同步可用；
+ * - 传 () => Promise<BridgeHostHandler>：延迟解析（壳层的 dispatcher 需先经
+ *   Tauri invoke 读授权清单，若同步等待会推迟 createBridgeHost 的 message 监听
+ *   注册，导致插件 hello 发出时无人接收而握手超时）。懒解析保证监听立即注册，
+ *   handler 在首个 call 到来时才解析（此刻握手已完成，hello 已被正确接收）。
+ */
+export type BridgeHostHandlerSource = BridgeHostHandler | (() => Promise<BridgeHostHandler>);
+
 export type CreateBridgeHostOptions = {
   /** 插件 iframe（仅需 contentWindow，结构类型便于测试注入） */
   iframe: Pick<HTMLIFrameElement, 'contentWindow'>;
@@ -33,7 +43,7 @@ export type CreateBridgeHostOptions = {
   sdkVersion?: string;
   /** 握手 ready 下发的插件运行上下文 */
   ctx: PluginContext;
-  handler: BridgeHostHandler;
+  handler: BridgeHostHandlerSource;
   /** 握手超时（默认 10s；超时按一次加载异常计，设计文档「熔断与治理」） */
   handshakeTimeoutMs?: number;
   /** postMessage targetOrigin（默认取 expectedOrigin；沙箱 opaque origin 时必须显式传 '*'） */
@@ -61,6 +71,12 @@ export type BridgeHost = {
   pushAction: (cardId: string, actionId: string, data?: unknown) => void;
   /** 心跳：发 ping 并等待 pong，超时 reject（默认 5s）；destroy 后立即 reject */
   ping: (timeoutMs?: number) => Promise<void>;
+  /**
+   * 宿主→插件反向调用：发 host-call 并等插件 host-result 应答。
+   * 插件侧经 onHostCall(event, handler) 注册处理器；无处理器/超时/插件异常均 reject。
+   * 用于宿主主动向插件查询（如删除联系人前询问「该 bot 是否还存在」）。
+   */
+  request: (event: string, payload?: unknown, timeoutMs?: number) => Promise<unknown>;
   /** 关闭桥：移除监听、清理定时器与待决请求；握手未 settle 时 ready 以 destroyed 拒绝 */
   destroy: () => void;
 };
@@ -74,9 +90,30 @@ export function createBridgeHost(options: CreateBridgeHostOptions): BridgeHost {
   let handshakeSettled = false;
   let destroyed = false;
   let counter = 0;
+  /** handler 懒解析缓存（首次 call 时解析，并发复用同一 Promise） */
+  let resolvedHandler: BridgeHostHandler | undefined;
+  let handlerPromise: Promise<BridgeHostHandler> | undefined;
+  const resolveHandler = (): Promise<BridgeHostHandler> => {
+    if (resolvedHandler) {
+      return Promise.resolve(resolvedHandler);
+    }
+    if (!handlerPromise) {
+      const source = options.handler;
+      handlerPromise = (typeof source === 'function' && source.length === 0
+        ? (source as () => Promise<BridgeHostHandler>)()
+        : Promise.resolve(source as BridgeHostHandler)
+      ).then((h) => {
+        resolvedHandler = h;
+        return h;
+      });
+    }
+    return handlerPromise;
+  };
   /** 插件已订阅的事件集合 */
   const subscriptions = new Set<string>();
   const pendingPings = new Map<string, { resolve: () => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  /** 宿主→插件反向调用的待决表（id → resolve/reject/timer） */
+  const pendingRequests = new Map<string, { resolve: (data: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   /** destroy 时移除握手监听/定时器（在 ready promise 执行器内赋值） */
   let readyCleanup: () => void = () => {};
   /** destroy 时 reject 未 settle 的握手（在 ready promise 执行器内赋值，执行器同步运行故必先于任何 destroy 调用） */
@@ -112,8 +149,14 @@ export function createBridgeHost(options: CreateBridgeHostOptions): BridgeHost {
       if (destroyed) {
         return;
       }
-      // 严格校验：origin 与 source 必须同时指向本桥绑定的 iframe
-      if (event.origin !== options.expectedOrigin || event.source !== (remote as unknown)) {
+      // 校验 origin：必须匹配本桥绑定的 iframe
+      if (event.origin !== options.expectedOrigin) {
+        return;
+      }
+      // source 校验：WebView2 下 sandbox iframe 的 event.source 可能是 proxy，
+      // 与 contentWindow 引用不是同一个 JS 对象，严格 !== 会误判。
+      // opaque origin ('null') 已提供充分隔离 → 此时不做 source 引用比较。
+      if (event.origin !== 'null' && event.source !== (remote as unknown)) {
         return;
       }
       const message = parseBridgeMessage(event.data);
@@ -170,8 +213,8 @@ export function createBridgeHost(options: CreateBridgeHostOptions): BridgeHost {
             });
             return;
           }
-          Promise.resolve()
-            .then(() => options.handler(message.module, message.method, message.args))
+          resolveHandler()
+            .then((handler) => handler(message.module, message.method, message.args))
             .then(
               (data) => post({ v: BRIDGE_PROTOCOL_VERSION, type: 'result', id: message.id, ok: true, data }),
               (error: unknown) =>
@@ -202,6 +245,20 @@ export function createBridgeHost(options: CreateBridgeHostOptions): BridgeHost {
             pendingPings.delete(message.id);
             clearTimeout(pending.timer);
             pending.resolve();
+          }
+          return;
+        }
+        case 'host-result': {
+          // 插件对宿主反向调用的应答（无握手门控——request 仅在握手后由壳层发起）
+          const pending = pendingRequests.get(message.id);
+          if (pending) {
+            pendingRequests.delete(message.id);
+            clearTimeout(pending.timer);
+            if (message.ok) {
+              pending.resolve(message.data);
+            } else {
+              pending.reject(new Error(message.error?.message ?? 'host-call failed'));
+            }
           }
           return;
         }
@@ -271,6 +328,20 @@ export function createBridgeHost(options: CreateBridgeHostOptions): BridgeHost {
         post({ v: BRIDGE_PROTOCOL_VERSION, type: 'ping', id });
       });
     },
+    request(event, payload, timeoutMs = 5_000) {
+      if (destroyed) {
+        return Promise.reject(new Error('Plugin bridge destroyed'));
+      }
+      const id = `host-call-${Date.now().toString(36)}-${++counter}`;
+      return new Promise<unknown>((resolveReq, rejectReq) => {
+        const timer = setTimeout(() => {
+          pendingRequests.delete(id);
+          rejectReq(new Error(`Plugin bridge host-call "${event}" timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+        pendingRequests.set(id, { resolve: resolveReq, reject: rejectReq, timer });
+        post({ v: BRIDGE_PROTOCOL_VERSION, type: 'host-call', id, event, payload });
+      });
+    },
     destroy() {
       if (destroyed) {
         return;
@@ -283,6 +354,11 @@ export function createBridgeHost(options: CreateBridgeHostOptions): BridgeHost {
         clearTimeout(pending.timer);
         pending.reject(new Error('Plugin bridge destroyed'));
         pendingPings.delete(id);
+      }
+      for (const [id, pending] of pendingRequests) {
+        clearTimeout(pending.timer);
+        pending.reject(new Error('Plugin bridge destroyed'));
+        pendingRequests.delete(id);
       }
       subscriptions.clear();
     }

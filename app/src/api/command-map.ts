@@ -124,11 +124,18 @@ export const COMMAND_MAP: Record<string, string> = {
   'plugin-market-announce-publish': 'plugin_market_announce_publish',
   'plugin-market-announce-list': 'plugin_market_announce_list',
   'plugin-market-announce-get': 'plugin_market_announce_get',
+  // 插件后台运行时（内核 QuickJS 沙箱对账）
+  'plugin-background-sync': 'plugin_background_sync',
+  // 设备管理（多设备清单：本机采集 + 自设备 device-sync 同步）
+  'devices-list': 'devices_list',
   // 系统桥接（未读角标 → dock/任务栏徽标）
   'system-set-badge': 'system_set_badge',
   // HTTP 代理设置（updater/市场链路 GitHub 直连失败的规避，见 src-tauri proxy.rs）
   'system-get-proxy': 'system_get_proxy',
   'system-set-proxy': 'system_set_proxy',
+  // sys 代理（插件通过内核代理执行外部命令 / HTTP 请求）
+  'sys-exec': 'sys_exec',
+  'sys-fetch': 'sys_fetch',
   // 主程序自动更新（tauri-plugin-updater + GitHub Releases 清单）
   'updater-status': 'updater_status',
   'updater-check': 'updater_check',
@@ -227,5 +234,7 @@ export const ARG_NAMES: Record<string, string[]> = {
   'plugin-market-announce-publish': ['input'],
   'plugin-market-announce-get': ['id'],
   'system-set-badge': ['count'],
-  'system-set-proxy': ['proxy']
+  'system-set-proxy': ['proxy'],
+  'sys-exec': ['program', 'args', 'workdir'],
+  'sys-fetch': ['url', 'options']
 };

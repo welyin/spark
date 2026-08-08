@@ -9,7 +9,7 @@ import { describe, it, expect } from 'vitest';
 import { createApp, nextTick, type Component } from 'vue';
 import ElementPlus from 'element-plus';
 import App from '../App.vue';
-import { ensureDirectConversation } from '../mock/messages';
+import { ensureDirectConversation } from '../stores/messages';
 import ContactsPage from './ContactsPage.vue';
 import AppsPage from './AppsPage.vue';
 import SettingsPage from './SettingsPage.vue';

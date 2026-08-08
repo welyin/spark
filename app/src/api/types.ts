@@ -66,6 +66,10 @@ export type P2pEventDto =
   | { kind: 'FriendRequestSent'; data: { request: FriendRequestDto } }
   | { kind: 'FriendRequestAccepted'; data: { request: FriendRequestDto; friend: FriendDto } }
   | { kind: 'FriendProfileUpdated'; data: { rootId: string; nickname: string; avatar?: string } }
+  | { kind: 'SelfProfileSynced'; data: { nickname: string; avatar?: string } }
+  | { kind: 'ContactsSynced'; data: { applied: number } }
+  | { kind: 'ConversationsSynced'; data: { applied: number } }
+  | { kind: 'DeviceUpdated'; data: DeviceDto }
   | { kind: 'OrgInviteReceived'; data: OrgInviteRecordDto }
   | { kind: 'OrgInviteUpdated'; data: OrgInviteRecordDto }
   | { kind: 'Warning'; data: string }
@@ -108,6 +112,9 @@ export type RootStatusDto = Awaited<ReturnType<ElectronAPI['rootIdentity']['stat
 
 /** P2P 节点信息（p2p.info 返回，派生自 ElectronAPI；stores/network-status 与各组件共用）。 */
 export type P2pInfoDto = Awaited<ReturnType<ElectronAPI['p2p']['info']>>;
+
+/** 设备清单项（devices.list 返回，派生自 ElectronAPI；设备管理页数据源）。 */
+export type DeviceDto = Awaited<ReturnType<ElectronAPI['devices']['list']>>[number];
 
 export type DataUsageReportDto = {
   scannedAt: number;
@@ -577,6 +584,11 @@ export type ElectronAPI = {
     /** 单条广播索引查询（verified 状态） */
     announceGet: (id: string) => Promise<PluginAnnounceIndexEntryDto | null>;
   };
+  pluginRuntime: {
+    /** 插件后台运行时对账（幂等）：登录/身份切换进入主界面时调用，
+     *  按当前身份拉起已启用插件的 QuickJS 后台线程 */
+    syncBackgrounds: () => Promise<void>;
+  };
   organization: {
     listMine: () => Promise<OrgView[]>;
     create: (input: { name: string; description?: string; avatar?: string; basePluginDomain?: string }) => Promise<OrgView>;
@@ -702,6 +714,17 @@ export type ElectronAPI = {
     applyRestart: () => Promise<void>;
     /** 后台自动检查完成且更新已下载就绪（验签通过）：订阅重启确认弹窗（返回退订函数） */
     onReady: (cb: (info: UpdaterReadyInfo) => void) => Promise<() => void>;
+  };
+  devices: {
+    /** 设备清单：本机置顶（isSelf），其余按最近在线证据降序 */
+    list: () => Promise<Array<{
+      peerId: string; deviceName: string; os: string; arch: string; macs: string[];
+      updatedAt: number; lastSeenAt: number; isSelf: boolean; online: boolean;
+    }>>;
+  };
+  sys: {
+    exec: (program: string, args: string[], workdir?: string) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
+    fetch: (url: string, options?: { method?: string; headers?: Record<string, string>; body?: string }) => Promise<{ status: number; headers: Record<string, string>; body: string }>;
   };
   system: {
     /** 未读角标 → 系统徽标（dock/任务栏）；平台不支持时命令侧静默，始终 resolve */

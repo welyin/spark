@@ -10,14 +10,14 @@ import {
   clearWatchdogCounters,
   createPluginWatchdog,
   getWatchdogCounters
-} from '../../plugin-watchdog';
+} from '../../plugin/watchdog';
 import {
   disablePluginInstance,
   enablePluginInstance,
   getDisabledPluginInstance,
   isPluginInstanceDisabled,
   pluginInstanceKey
-} from '../../plugin-disabled';
+} from '../../plugin/disabled';
 
 const KEY = 'spark-example@org:org_1';
 

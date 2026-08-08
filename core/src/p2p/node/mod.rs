@@ -202,6 +202,18 @@ pub enum P2pEvent {
     /// 朋友资料更新通知（profile-sync 入站落库后发出；data 为
     /// `{"rootId", "nickname", "avatar"?}`，前端按 rootId 更新朋友资料）。
     FriendProfileUpdated(serde_json::Value),
+    /// 本机资料被自设备同步更新（自设备 profile-sync 全量快照应用身份文件
+    /// 后发出；data 为 `{"nickname", "avatar"?}`，前端刷新当前用户展示）。
+    SelfProfileSynced(serde_json::Value),
+    /// 设备清单记录更新（device-sync 入站落库或本机采集刷新后发出；data 为
+    /// `DeviceRecord` JSON，前端设备管理页按 peerId upsert）。
+    DeviceUpdated(serde_json::Value),
+    /// 通讯录被自设备快照更新（contact-sync 入站合入后发出；data 为
+    /// `{"applied": n}`，前端整页刷新个人空间通讯录）。
+    ContactsSynced(serde_json::Value),
+    /// 会话元数据被自设备快照更新（conv-sync 入站合入后发出；data 为
+    /// `{"applied": n}`，前端刷新个人空间会话列表）。
+    ConversationsSynced(serde_json::Value),
     /// 组织邀请投递通知（入站 org-invite 落库后发出；data 为落库后的
     /// `OrgInviteRecord` JSON，前端按 id upsert）。
     OrgInviteReceived(serde_json::Value),

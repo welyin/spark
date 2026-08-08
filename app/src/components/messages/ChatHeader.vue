@@ -21,8 +21,13 @@
             <span v-if="conversation.muted" class="chat-sub-extra">消息免打扰</span>
           </template>
           <template v-else>
-            <!-- 真实状态优先：仅本地时统一「仅本地·不可达」，否则用 mock 的 online 字段 -->
-            <span class="chat-presence-tag" :class="presenceClass">
+            <!-- 已删除联系人：优先显示「已删除」，覆盖在/离线状态 -->
+            <span v-if="contactDeleted" class="chat-presence-tag is-offline">
+              <el-icon :size="12"><RemoveFilled /></el-icon>
+              此人已删除
+            </span>
+            <!-- 真实状态优先：仅本地时统一「仅本地·不可达」，否则用 online 字段 -->
+            <span v-else class="chat-presence-tag" :class="presenceClass">
               <el-icon :size="12"><component :is="presenceIcon" /></el-icon>
               {{ presenceText }}
             </span>
@@ -86,6 +91,8 @@ import {
 } from '@element-plus/icons-vue';
 import UserAvatar from '../UserAvatar.vue';
 import { isLocalOnly } from '../../stores/network-status';
+import { isBotContactOnline } from '../../plugin/bot-presence';
+import { friendOf } from '../../mock/contacts';
 import { personAvatarSource, personDisplayName } from '../../stores/avatar-sources';
 import { appConversationName, isAppConversationBlocked, toggleAppConversationBlocked } from '../../stores/app-conversations';
 import {
@@ -95,7 +102,7 @@ import {
   togglePin,
   type Conversation,
   type SpaceKey
-} from '../../mock/messages';
+} from '../../stores/messages';
 
 export default defineComponent({
   name: 'ChatHeader',
@@ -113,17 +120,32 @@ export default defineComponent({
         emit('show-profile');
       }
     }
-    // 连接状态：仅本地（真实 P2P 状态）优先于 mock online 字段；免打扰后缀拆为独立弱提示
+    // 联系人是否已被删除：direct 会话且 peerId 已不在通讯录。已删除仅可查看历史
+    const contactDeleted = computed(() => {
+      const conv = props.conversation;
+      if (conv.kind !== 'direct' || !conv.peerId) return false;
+      return friendOf(props.spaceKey, conv.peerId) === undefined;
+    });
+    // 有效在线：bot 会话（peerId 以 bot: 开头）无 P2P peer，online 恒 false，
+    // 其"在线"= 插件后台监听存活（bot-presence 注册表）；真人会话用 P2P online 字段
+    const effectiveOnline = computed(() => {
+      const peerId = props.conversation.peerId;
+      if (peerId?.startsWith('bot:')) {
+        return isBotContactOnline(peerId);
+      }
+      return props.conversation.online;
+    });
+    // 连接状态：仅本地（真实 P2P 状态）优先于 online 字段；免打扰后缀拆为独立弱提示
     const presenceClass = computed(() => {
       if (isLocalOnly.value) return 'is-local';
-      return props.conversation.online ? 'is-online' : 'is-offline';
+      return effectiveOnline.value ? 'is-online' : 'is-offline';
     });
     const presenceIcon = computed(() => {
       if (isLocalOnly.value) return WarningFilled;
-      return props.conversation.online ? CircleCheckFilled : RemoveFilled;
+      return effectiveOnline.value ? CircleCheckFilled : RemoveFilled;
     });
     const presenceText = computed(() =>
-      isLocalOnly.value ? '仅本地·不可达' : props.conversation.online ? '在线' : '离线'
+      isLocalOnly.value ? '仅本地·不可达' : effectiveOnline.value ? '在线' : '离线'
     );
 
     // direct 会话的 peerId 即对方 rootId：统一头像入口（朋友记录优先），无则走自动头像
@@ -196,6 +218,7 @@ export default defineComponent({
       onCallPlaceholder,
       profileClickable,
       onProfileClick,
+      contactDeleted,
       presenceClass,
       presenceIcon,
       presenceText,

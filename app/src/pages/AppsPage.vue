@@ -132,13 +132,13 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { Close } from '@element-plus/icons-vue';
 import type { PluginMarketItemDto, RepoPluginDeclarationDto } from '../api/types';
 import { currentSpace } from '../stores/current-space';
-import { enablePluginInstance, isPluginInstanceDisabled, pluginInstanceKey } from '../plugin-disabled';
+import { enablePluginInstance, isPluginInstanceDisabled, pluginInstanceKey } from '../plugin/disabled';
 import { isAdmin, refreshOrganizations } from '../stores/org-membership';
 import { consumePendingAppDetail, pendingAppDetail } from '../stores/pending-app';
 import { isMockApp, listMockApps, setMockAppEnabled, setMockAppInstalled } from '../mock/apps';
 import { mockMode } from '../mock/mode';
 import { spaceKeyOf } from '../mock/space-key';
-import { notifyPluginInstalled, notifyPluginUpgraded } from '../app-messages';
+import { notifyPluginInstalled, notifyPluginUpgraded } from '../plugin/messages';
 import { isMobileLayout } from '../stores/ui-layout';
 import { currentPage, popPage, pushPage, resetStack } from '../stores/mobile-nav';
 import MobileBackBar from '../components/MobileBackBar.vue';
@@ -226,7 +226,7 @@ export default defineComponent({
     const isEnabled = (item: PluginMarketItemDto): boolean =>
       isOrgSpace.value ? orgEnabled.isOrgEnabled(item.id) : item.enabled;
 
-    /** 熔断实例键：卡片置灰与打开拦截同一口径（plugin-disabled.ts） */
+    /** 熔断实例键：卡片置灰与打开拦截同一口径（plugin/disabled.ts） */
     const instanceKeyOf = (item: PluginMarketItemDto) =>
       pluginInstanceKey(item.id, {
         type: currentSpace.value.type,

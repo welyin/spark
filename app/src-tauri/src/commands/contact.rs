@@ -215,6 +215,23 @@ pub(crate) fn org_group_move_inner(
 }
 
 // ------------------------------------------------------------------
+// Bot 联系人
+// ------------------------------------------------------------------
+
+/// 创建/更新 bot 虚拟联系人：注册为好友记录使其出现在通讯录列表中。
+/// `bot_root_id` 约定为 `bot:<pluginId>:<botId>`。
+pub(crate) fn ensure_bot_inner(
+    kernel: &mut Kernel,
+    bot_root_id: &str,
+    display_name: &str,
+) -> Result<SuccessResult, String> {
+    kernel
+        .contact_ensure_bot(bot_root_id, display_name)
+        .map_err(err)?;
+    Ok(SuccessResult::ok())
+}
+
+// ------------------------------------------------------------------
 // Tauri 命令
 // ------------------------------------------------------------------
 
@@ -447,6 +464,17 @@ pub fn contact_org_group_move(
         to_index,
         new_parent_id.as_deref(),
     )
+}
+
+/// 创建/更新 bot 虚拟联系人（rootId 约定为 `bot:<pluginId>:<botId>`）。
+/// 使其出现在通讯录列表中；已存在时只刷新 nickname。
+#[tauri::command]
+pub fn contact_ensure_bot(
+    state: tauri::State<'_, KernelState>,
+    bot_root_id: String,
+    display_name: String,
+) -> Result<SuccessResult, String> {
+    ensure_bot_inner(&mut *lock_kernel(&state)?, &bot_root_id, &display_name)
 }
 
 // ------------------------------------------------------------------

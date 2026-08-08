@@ -84,6 +84,7 @@ impl Kernel {
         let _ = self.stop_p2p();
         self.unlocked = None;
         *self.signing_key_shared.lock().unwrap() = None;
+        *self.password_shared.lock().unwrap() = None;
         *self.nickname_shared.lock().unwrap() = String::new();
         *self.avatar_shared.lock().unwrap() = String::new();
         if let Ok(active) = self.read_active_root_id() {
@@ -150,6 +151,9 @@ impl Kernel {
     /// （payload 内与文件外层）及其他可选大字段后同口令重新加密（新 salt/iv），
     /// 产出紧凑 IdentityFile JSON（QR 码容量约 3KB，完整文件备份载荷实测
     /// 远超上限无法扫码恢复）。完整文件备份见 `backup_payload`。
+    ///
+    /// P2P 已运行时额外附加本机节点名片（peerId + 监听地址），恢复端扫码
+    /// 恢复身份后可据此自动完成设备配对，无需手动互相添加地址。
     pub fn backup_payload_qr(&self, password: &str) -> Result<String> {
         let target = self.current_root_id()?.ok_or(KernelError::NotInitialized)?;
         let Some(file) = self.read_identity_file(&target)? else {
@@ -158,13 +162,63 @@ impl Kernel {
         let payload =
             identity::file::decrypt_payload(&file, password).map_err(map_identity_decrypt_error)?;
         let compact = identity::file::seal_compact_backup(&file, &payload, password)?;
-        Ok(compact.to_json()?)
+        let compact_value: serde_json::Value =
+            serde_json::to_value(&compact).map_err(|e| KernelError::Internal(e.to_string()))?;
+        // 附加本机 P2P 节点信息，便于恢复端扫码后自动完成设备配对
+        if let Some(p2p_info) = self.p2p_status().ok().flatten() {
+            if let Some(ref peer_id) = p2p_info.peer_id {
+                if !p2p_info.addresses.is_empty() {
+                    return Ok(serde_json::json!({
+                        "v": 1,
+                        "i": compact_value,
+                        "p": peer_id,
+                        "a": p2p_info.addresses,
+                    })
+                    .to_string());
+                }
+            }
+        }
+        Ok(serde_json::to_string(&compact_value)
+            .map_err(|e| KernelError::Internal(e.to_string()))?)
     }
 
     /// `recoverFromBackup`：备份码恢复。载荷即身份密文记录，解密口令为原登录密码；
     /// 结构无效与密码错误分别报错；写入前 sanitize 外部资料字段。
+    ///
+    /// 支持 v1 封装格式（`{"v":1,"i":"<IdentityFile JSON>","p":"<peerId>","a":[...]}`），
+    /// 自动提取生成端 P2P 名片并完成设备配对。
     pub fn recover_backup(&mut self, payload_json: &str, password: &str) -> Result<String> {
-        let file = IdentityFile::from_json(payload_json)
+        // 解包：v1 格式为 `{"v":1,"i":{<IdentityFile>},"p":"...","a":[...]}`，
+        // "i" 是 JSON 对象（v1.1）或 JSON 字符串（v1.0 兼容）。
+        let (file_json, qr_peer): (String, Option<(String, Vec<String>)>) = {
+            match serde_json::from_str::<serde_json::Value>(payload_json) {
+                Ok(w) if w.get("v").and_then(|v| v.as_u64()) == Some(1) => {
+                    let inner = match w.get("i") {
+                        Some(serde_json::Value::Object(_)) => {
+                            serde_json::to_string(w.get("i").unwrap())
+                                .unwrap_or_else(|_| payload_json.to_string())
+                        }
+                        Some(serde_json::Value::String(s)) => s.clone(),
+                        _ => payload_json.to_string(),
+                    };
+                    let pid = w.get("p").and_then(|v| v.as_str()).map(String::from);
+                    let addrs: Option<Vec<String>> = w
+                        .get("a")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|a| a.as_str().map(String::from))
+                                .collect()
+                        })
+                        .filter(|v: &Vec<String>| !v.is_empty());
+                    let peer = pid.zip(addrs);
+                    (inner, peer)
+                }
+                Ok(_) | Err(_) => (payload_json.to_string(), None),
+            }
+        };
+
+        let file = IdentityFile::from_json(&file_json)
             .map_err(|_| KernelError::Internal("备份数据无效或已损坏".to_string()))?;
         let (payload, identity) =
             identity::unlock_identity(&file, password).map_err(|e| match e {
@@ -201,6 +255,77 @@ impl Kernel {
         let root_id = file.root_id.clone();
         self.set_unlocked(identity, seed, password);
         self.ensure_p2p_after_login();
+        // 若载荷含生成端节点信息，落单向设备记录并尝试 friend-request
+        if let Some((gen_peer_id, gen_addresses)) = qr_peer {
+            self.recover_backup_pair_peer(&root_id, &gen_peer_id, &gen_addresses);
+        }
         Ok(root_id)
+    }
+
+    /// QR 恢复后配对：落一条单向设备配对记录（覆盖网保活能找到生成端），
+    /// 并尝试发 friend-request 完成双向配对——生成端在线则自动接受。
+    fn recover_backup_pair_peer(
+        &mut self,
+        my_root_id: &str,
+        gen_peer_id: &str,
+        gen_addresses: &[String],
+    ) {
+        use crate::contact::{ContactService, FriendRecord};
+        use crate::message::PeerRef;
+        use crate::p2p::node::system_now_ms;
+        use super::super::SendFriendRequestInput;
+
+        let now = system_now_ms();
+        let nickname = self.my_nickname(my_root_id);
+
+        // 1. 查询已有设备记录（不存在则后续新建）。
+        let existing = self
+            .require_storage()
+            .ok()
+            .and_then(|s| ContactService::get_friend(s, my_root_id).ok())
+            .flatten();
+
+        // 2. 落单向设备配对记录，已有条目时更新地址。
+        if let Ok(storage) = self.require_storage_mut() {
+            let base = existing.unwrap_or_else(|| FriendRecord {
+                root_id: my_root_id.to_string(),
+                nickname,
+                avatar: None,
+                signature: String::new(),
+                gender: None,
+                added_at: now,
+                peer: None,
+                remark: String::new(),
+                phones: Vec::new(),
+                tag_ids: Vec::new(),
+                group_id: String::new(),
+                memo: "QR recovery paired device".to_string(),
+                photos: Vec::new(),
+                permission: "open".to_string(),
+                blocked: false,
+                updated_at: now,
+            });
+            let mut friend = base;
+            friend.peer = Some(PeerRef {
+                peer_id: gen_peer_id.to_string(),
+                addresses: gen_addresses.to_vec(),
+            });
+            let _ = ContactService::upsert_friend(storage, &friend);
+        }
+
+        // 3. 发起 friend-request（含本机节点信息，对端自动接受完成双向配对）。
+        let _ = self.contact_send_request(SendFriendRequestInput {
+            id: format!(
+                "qr-recover-{}-{}",
+                now,
+                &my_root_id[..my_root_id.len().min(8)]
+            ),
+            root_id: my_root_id.to_string(),
+            raw: String::new(),
+            peer_id: Some(gen_peer_id.to_string()),
+            addresses: Some(gen_addresses.to_vec()),
+            source: String::new(),
+            message: String::new(),
+        });
     }
 }

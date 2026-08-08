@@ -15,6 +15,8 @@ use serde::{Deserialize, Serialize};
 
 use super::dm_envelope::{KIND_CHAT, KIND_READ, KIND_RECALL};
 use super::{Kernel, KernelError, Result};
+use crate::p2p::P2pEvent;
+use crate::plugin::{PluginError, PluginHostShared};
 use crate::contact::ContactService;
 use crate::message::types::ConversationKind;
 use crate::message::{
@@ -212,6 +214,84 @@ pub(crate) fn message_view(record: &MessageRecord, my_root_id: Option<&str>) -> 
     }
 }
 
+/// Bot 回复共享实现：[`Kernel::message_bot_reply`] 门面与插件后台运行时的
+/// `message.reply` 能力共用——落库 → ChatReceived 事件 → 回同步自设备。
+///
+/// 与门面版的语义差异仅一处：回同步需要当前身份（rootId 自签信封），共享
+/// 实现从共享格读取、缺失时跳过回同步（尽力而为，与 `deliver_to_devices`
+/// 「未启动 p2p 静默」口径一致）；门面调用点必然已解锁，行为不变。
+pub(crate) fn bot_reply_shared(
+    host: &PluginHostShared,
+    space: &str,
+    conv_id: &str,
+    bot_root_id: &str,
+    bot_name: &str,
+    message_id: &str,
+    text: &str,
+) -> crate::plugin::Result<ChatMessageView> {
+    let _io = host.io_lock.lock().unwrap_or_else(|e| e.into_inner());
+    if text.len() > MAX_TEXT_BYTES {
+        return Err(PluginError::InvalidInput(format!(
+            "消息正文超过长度上限（{MAX_TEXT_BYTES} 字节）"
+        )));
+    }
+    let mut storage = host.require_storage()?;
+    let conv = MessageService::get_conversation(&storage, space, conv_id)?
+        .ok_or(crate::message::MessageError::ConversationNotFound)?;
+    let now = system_now_ms();
+    let record = MessageRecord {
+        id: message_id.to_string(),
+        sender_id: bot_root_id.to_string(),
+        sender_name: bot_name.to_string(),
+        msg_type: MessageType::Text,
+        content: text.to_string(),
+        file_size: None,
+        duration: None,
+        link: None,
+        quote: None,
+        created_at: now,
+        status: Some("delivered".to_string()),
+        recalled: false,
+        read: false,
+    };
+    MessageService::append_message(&mut storage, space, conv_id, &record)?;
+    // 本机前端实时刷新：发 ChatReceived 事件（与真人入站消息同口径），
+    // 否则 bot 回复要等重新水合才出现在聊天窗口（表现为"不实时"）。
+    // bot 会话 online 恒 false（无 peer），online_peers 传空集。
+    let conv_view = conversation_view(&conv, &std::collections::HashSet::new(), None, None);
+    let msg_view = message_view(&record, Some("__bot_sender__"));
+    if let (Ok(conversation), Ok(message)) = (
+        serde_json::to_value(&conv_view),
+        serde_json::to_value(&msg_view),
+    ) {
+        let _ = host.event_tx.send(P2pEvent::ChatReceived(serde_json::json!({
+            "spaceKey": space,
+            "conversation": conversation,
+            "message": message
+        })));
+    }
+    // Bot 回复回同步到自设备：其他设备按 convId 落库（sender 保留为 bot，
+    // 接收端按 bot 会话信任 body sender_id）。信封 from=宿主主人 rootId。
+    if let Some(my_root_id) = host
+        .my_root_id
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+    {
+        host.deliver_to_devices(
+            &my_root_id,
+            KIND_CHAT,
+            serde_json::json!({
+                "spaceKey": space,
+                "convId": conv_id,
+                "message": msg_view
+            }),
+        );
+    }
+    // Bot 消息不做 `my_root_id` 的 `'me'` 映射——bot 是独立发送者
+    Ok(msg_view)
+}
+
 impl Kernel {
     // ------------------------------------------------------------------
     // 共享内部辅助（contact_ops 复用投递/信封）
@@ -330,6 +410,7 @@ impl Kernel {
                     muted: false,
                     draft: String::new(),
                     updated_at: now,
+                    meta_updated_at: 0,
                 };
                 MessageService::upsert_conversation(self.require_storage_mut()?, space, &record)?;
                 record
@@ -408,6 +489,9 @@ impl Kernel {
             });
             self.deliver_to_devices(&my_root_id, KIND_CHAT, body);
             "delivered"
+        } else if conv.peer_root_id.starts_with("bot:") {
+            // Bot 会话：无 P2P 对端，消息由本机插件处理，直接标记 delivered
+            "delivered"
         } else {
             match self.prepare_chat_delivery(space, &conv, &record)? {
                 Some((peer, envelope)) => {
@@ -427,10 +511,47 @@ impl Kernel {
                 status,
             )?;
         }
+        // 自设备回同步（多设备 echo）：除「给自己发消息」外的所有会话（真人 + bot），
+        // 发送后回同步到本账号其他自设备——其他设备按 body.convId 落库、标记 sender=
+        // 我、不计未读。bot 会话靠这条让宿主设备的插件经 ChatReceived 收到并处理；
+        // 真人会话靠这条让其他设备看到我发出的消息。self 分支已内含回同步，不重复。
+        if conv.peer_root_id != my_root_id {
+            let mut echo = message_view(&record, Some(&my_root_id));
+            echo.status = Some(status.to_string());
+            self.deliver_to_devices(
+                &my_root_id,
+                KIND_CHAT,
+                serde_json::json!({
+                    "spaceKey": space,
+                    "convId": conv_id,
+                    "message": echo
+                }),
+            );
+        }
+        // 本机发往 bot 会话的消息显式 dispatch 给归属插件的后台运行时：本路径不发
+        // ChatReceived 广播（前端以返回值刷新），路由任务收不到；多设备 echo 路径
+        // 由 plugin router 订阅广播覆盖（kernel/plugin_ops.rs）。事件载荷与
+        // ChatReceived 同构，会话取 append 后的最新快照。
+        if conv.peer_root_id.starts_with("bot:") {
+            if let Some(latest) =
+                MessageService::get_conversation(self.require_storage()?, space, conv_id)?
+            {
+                self.plugin_registry.dispatch_chat(&serde_json::json!({
+                    "spaceKey": space,
+                    "conversation": serde_json::to_value(conversation_view(
+                        &latest,
+                        &HashSet::new(),
+                        Some(&my_root_id),
+                        None,
+                    ))?,
+                    "message": serde_json::to_value(message_view(&record, Some(&my_root_id)))?,
+                }));
+            }
+        }
         let mut view = message_view(&record, Some(&my_root_id));
         view.status = Some(status.to_string());
         Ok(view)
-    }
+        }
 
     /// 重发失败/卡住的消息（`failed` 或 `sending` 可重发——后者是崩溃卡在
     /// 发送中的恢复路径；重跑投递，终态由投递任务回写并 emit `ChatStatus`）。
@@ -503,6 +624,30 @@ impl Kernel {
         Ok(view)
     }
 
+    /// Bot 回复：由插件在收到 bot 消息后调用，向 bot 会话插入一条 bot 回复消息。
+    /// `bot_root_id` 为 bot 的 rootId（如 `bot:ai-chat:codebuddy-bot`），
+    /// 也是消息的 sender_id（对端视角）；`bot_name` 为发送者显示名。
+    /// 消息落库后立即返回视图（无 P2P 投递）。
+    pub fn message_bot_reply(
+        &mut self,
+        space: &str,
+        conv_id: &str,
+        bot_root_id: &str,
+        bot_name: &str,
+        message_id: &str,
+        text: &str,
+    ) -> Result<ChatMessageView> {
+        Ok(bot_reply_shared(
+            &self.plugin_host,
+            space,
+            conv_id,
+            bot_root_id,
+            bot_name,
+            message_id,
+            text,
+        )?)
+    }
+
     /// 撤回消息（发送后 2 分钟内且只能撤回自己发的消息；service 判定窗口）。
     /// 撤回成功且原状态为 `delivered`/`read` 时向对端发 recall 信封（尽力而为）。
     pub fn message_recall(&mut self, space: &str, conv_id: &str, message_id: &str) -> Result<bool> {
@@ -566,11 +711,20 @@ impl Kernel {
         Ok(())
     }
 
-    /// 写入会话草稿。
+    /// 写入会话草稿。个人空间变更后向自设备广播 conv-sync 快照。
     pub fn message_set_draft(&mut self, space: &str, conv_id: &str, draft: &str) -> Result<()> {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        MessageService::set_draft(self.require_storage_mut()?, space, conv_id, draft)?;
+        MessageService::set_draft(
+            self.require_storage_mut()?,
+            space,
+            conv_id,
+            draft,
+            system_now_ms(),
+        )?;
+        if space == "personal" {
+            self.broadcast_conv_sync();
+        }
         Ok(())
     }
 
@@ -579,6 +733,9 @@ impl Kernel {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
         MessageService::toggle_pin(self.require_storage_mut()?, space, conv_id, system_now_ms())?;
+        if space == "personal" {
+            self.broadcast_conv_sync();
+        }
         Ok(())
     }
 
@@ -586,7 +743,10 @@ impl Kernel {
     pub fn message_toggle_mute(&mut self, space: &str, conv_id: &str) -> Result<()> {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        MessageService::toggle_mute(self.require_storage_mut()?, space, conv_id)?;
+        MessageService::toggle_mute(self.require_storage_mut()?, space, conv_id, system_now_ms())?;
+        if space == "personal" {
+            self.broadcast_conv_sync();
+        }
         Ok(())
     }
 

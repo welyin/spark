@@ -12,10 +12,12 @@
 
 pub mod app;
 pub mod service;
+pub(crate) mod sync;
 pub mod types;
 
 pub use app::{APP_MESSAGE_STATUS_LOCAL, AppMessageRateLimiter, AppMessageService};
 pub use service::MessageService;
+pub(crate) use sync::{apply_conv_sync_snapshot, build_conv_sync_snapshot};
 pub use types::{
     APP_CONV_PREFIX, APP_MSG_RATE_LIMIT, APP_MSG_RATE_WINDOW_MS, APP_SUMMARY_MAX_CHARS,
     AppMessageCard, AppMessageRecord, ConversationKind, ConversationRecord, LinkPreview,

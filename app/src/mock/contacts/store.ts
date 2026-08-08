@@ -126,12 +126,12 @@ function mergeRequestsById(server: FriendRequest[], local: FriendRequest[]): Fri
   return [...server, ...local.filter((request) => !ids.has(request.id))];
 }
 
-function hydrate(spaceKey: string, space: SpaceContacts): void {
+function hydrate(spaceKey: string, space: SpaceContacts): Promise<void> {
   const api = contactsApi();
   if (!api) {
-    return;
+    return Promise.resolve();
   }
-  api
+  return api
     .overview(spaceKey)
     .then((dto: SpaceContactsDto) => {
       hydrating.add(spaceKey);
@@ -314,6 +314,12 @@ export function handleContactsP2pEvent(event: P2pEventDto): void {
     }
     return;
   }
+  // 自设备通讯录快照合入（contact-sync）：整页重新水合个人空间
+  // （快照为记录/整域混合 LWW，逐条映射到缓存不如整体重拉可靠）
+  if (event.kind === 'ContactsSynced') {
+    void refreshContacts('personal');
+    return;
+  }
   // 管理员收到对方回执：按 record.orgId 解析组织空间，upsert 我发出的邀请
   // （存在更新 status/updatedAt，不存在插入），对标 FriendRequestAccepted 写法；
   // 状态变化置未读（入口角标提示）。OrgInviteReceived 为被邀请人侧入站通知，
@@ -346,6 +352,32 @@ export function demoContacts(): boolean {
     // localStorage 不可用时跟随环境变量
   }
   return mockMode();
+}
+
+/**
+ * 强制重新水合某空间通讯录。
+ * 用于内核侧在 P2P 事件之外新增了联系人记录的场景——例如插件经
+ * contact_ensure_bot 注册 bot 联系人（纯本地写入，不产生任何 P2P 事件），
+ * 首次水合后的内存缓存不会自动感知，需主动触发刷新。
+ */
+export function refreshContacts(spaceKey: string): Promise<void> {
+  if (!isTauri() || demoContacts()) {
+    return Promise.resolve();
+  }
+  return hydrate(spaceKey, contactsOf(spaceKey));
+}
+
+/**
+ * 登录态切换时清空通讯录缓存（RootGate 登出/切换账号时调用）。
+ * 模块级 spaces 为窗口会话级单例，contactsOf 仅在首次访问时水合；登出
+ * 不刷新页面的场景下旧账号的内存数据会带进新登录会话——清空后下次
+ * contactsOf 重新从内核水合。watchedSpaces 保留：既有 watcher 监听的是
+ * spaces[spaceKey] 取值器，空间对象重建后依然生效。
+ */
+export function resetContactsCache(): void {
+  for (const key of Object.keys(spaces)) {
+    delete spaces[key];
+  }
 }
 
 /** 取（并按需建空 + 水合）某空间的通讯录数据；同一空间 key 恒得同一响应式对象 */

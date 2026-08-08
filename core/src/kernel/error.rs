@@ -46,6 +46,10 @@ pub enum KernelError {
     #[error(transparent)]
     Message(#[from] crate::message::MessageError),
 
+    /// 插件后台运行时模块错误。
+    #[error(transparent)]
+    Plugin(#[from] crate::plugin::PluginError),
+
     /// 文件 IO 错误。
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),

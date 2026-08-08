@@ -109,12 +109,13 @@ impl ContactService {
         patch: ProfilePatch,
         now_ms: i64,
     ) -> Result<()> {
-        touch(now_ms);
         match parse_space(space)? {
             Space::Personal => {
                 let mut friend =
                     Self::get_friend(storage, root_id)?.ok_or(ContactError::ContactNotFound)?;
                 apply_patch_to_friend(&mut friend, &patch);
+                // 本机资料变更时间：自设备 contact-sync 的 LWW 依据
+                friend.updated_at = now_ms;
                 Self::upsert_friend(storage, &friend)
             }
             Space::Org(org_id) => {
@@ -139,7 +140,6 @@ impl ContactService {
         blocked: bool,
         now_ms: i64,
     ) -> Result<()> {
-        touch(now_ms);
         match parse_space(space)? {
             Space::Personal => {
                 let key = format!("{BLOCKED_PREFIX}{root_id}");
@@ -149,11 +149,16 @@ impl ContactService {
                     storage.delete(&key)?;
                 }
                 // 展示镜像：friend 记录存在时同步 blocked 字段（overview
-                // 以集合为准 overlay，此处仅为记录内字段一致）
+                // 以集合为准 overlay，此处仅为记录内字段一致）；同时刷新
+                // updatedAt 使镜像变更随 contact-sync 传播
                 if let Some(mut friend) = Self::get_friend(storage, root_id)? {
                     friend.blocked = blocked;
+                    friend.updated_at = now_ms;
                     Self::upsert_friend(storage, &friend)?;
                 }
+                // 拉黑集合整域版本（contact-sync LWW 依据；取消拉黑=删除
+                // 条目，随整域替换传播）
+                super::sync::bump_version(storage, super::sync::SyncDomain::Blocked, now_ms)?;
                 Ok(())
             }
             Space::Org(org_id) => {

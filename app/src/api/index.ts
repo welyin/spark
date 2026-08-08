@@ -21,7 +21,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { ARG_NAMES, COMMAND_MAP } from './command-map';
-import type { ElectronAPI, P2pEventDto, PluginCatalogItem, UpdaterReadyInfo } from './types';
+import type { ElectronAPI, P2pEventDto, PluginCatalogItem, PluginSpaceType, UpdaterReadyInfo } from './types';
 
 // 类型门面：既有引用一律走 './api'，此处统一 re-export
 export * from './types';
@@ -93,7 +93,7 @@ function todo(channel: string): (...args: any[]) => Promise<never> {
 
 /**
  * 插件域解析（命令层遗留回退）：
- * iframe 沙箱化后插件 SDK 调用一律经桥 dispatcher 显式带域（plugin-bridge-dispatcher.ts），
+ * iframe 沙箱化后插件 SDK 调用一律经桥 dispatcher 显式带域（plugin/bridge-dispatcher.ts），
  * 此 URL query 回退仅保留给历史 tab 同进程语境，正常路径下解析不到 → null。
  * 独立插件窗口由宿主绑定域 + 强制权限校验待插件运行时排期。
  */
@@ -130,6 +130,7 @@ function requireDomain(pluginDomain: string | undefined): string {
  * 仍在此保留。
  */
 import sparkExampleManifest from '../../../plugins/spark-example/manifest.json';
+import aiChatManifest from '../../../plugins/ai-chat/manifest.json';
 
 const PLUGIN_CATALOG: PluginCatalogItem[] = [
   {
@@ -139,7 +140,9 @@ const PLUGIN_CATALOG: PluginCatalogItem[] = [
     description: '插件体系参考实现：管理员发帖（域签名防抵赖）发应用会话卡片通知，成员评论/回复。',
     category: 'foundation' as const,
     version: sparkExampleManifest.version,
-    views: sparkExampleManifest.views.map((view) => view.id),
+    views: sparkExampleManifest.views.map((view: { id: string }) => view.id),
+    // manifest.json 导入类型为 string[]，目录类型收窄为 PluginSpaceType[]
+    supportedSpaces: sparkExampleManifest.supportedSpaces as PluginSpaceType[],
     permissions: ['storage:read', 'storage:write', 'org:read', 'org:sync', 'message:app', 'identity:sign'],
     package: {
       updateManifestUrl: sparkExampleManifest.package.updateManifestUrl,
@@ -147,6 +150,24 @@ const PLUGIN_CATALOG: PluginCatalogItem[] = [
         'https://github.com/welyin/spark/releases/latest/download/spark-plugin-spark-example-manifest.sig',
       packageName: sparkExampleManifest.package.packageName,
       installCommand: `spark-plugin install ${sparkExampleManifest.package.packageName}`
+    }
+  },
+  {
+    id: aiChatManifest.id,
+    domain: aiChatManifest.domain,
+    name: aiChatManifest.name,
+    description: '通用 AI 聊天插件——创建多个 Bot 实例，各自配置不同 AI 后端（CodeBuddy CLI、OpenAI 兼容 API、Ollama 等），在应用会话中与 AI 对话',
+    category: 'foundation' as const,
+    version: aiChatManifest.version,
+    views: aiChatManifest.views.map((view: { id: string }) => view.id),
+    supportedSpaces: aiChatManifest.supportedSpaces as PluginSpaceType[],
+    permissions: ['docs:read', 'docs:write', 'message:app', 'system:exec', 'network:fetch'],
+    package: {
+      updateManifestUrl: aiChatManifest.package.updateManifestUrl,
+      signatureUrl:
+        'https://github.com/welyin/spark/releases/latest/download/spark-plugin-ai-chat-manifest.sig',
+      packageName: aiChatManifest.package.packageName,
+      installCommand: `spark-plugin install ${aiChatManifest.package.packageName}`
     }
   }
 ];
@@ -244,6 +265,11 @@ export function createTauriApi(): ElectronAPI {
       announcePublish: (input) => call('plugin-market-announce-publish', input),
       announceList: () => call('plugin-market-announce-list'),
       announceGet: (id: string) => call('plugin-market-announce-get', id)
+    },
+    pluginRuntime: {
+      // 插件后台运行时对账（内核 QuickJS 沙箱，plugin_system.md「后台运行时」）：
+      // 登录/身份切换进入主界面时调用——身份切换会停全部插件后台，靠它按当前身份拉起
+      syncBackgrounds: () => call('plugin-background-sync')
     },
     organization: {
       listMine: () => call('org-list-mine'),
@@ -381,6 +407,10 @@ export function createTauriApi(): ElectronAPI {
       onReady: (cb) =>
         listen<UpdaterReadyInfo>('updater://ready', (event) => cb(event.payload)),
     },
+    devices: {
+      // 设备清单（多设备同步）：本机采集 + 自设备 device-sync 同步的全量记录
+      list: () => call('devices-list')
+    },
     system: {
       // 未读角标 → 系统徽标（F4）：macOS dock 角标 / Linux 任务栏计数，
       // 平台不支持时命令侧静默降级（见 src-tauri commands/system.rs）
@@ -390,6 +420,16 @@ export function createTauriApi(): ElectronAPI {
       // 连接（市场 OnceLock 客户端、updater 客户端）需重启应用才生效
       getProxy: () => call('system-get-proxy'),
       setProxy: (proxy) => call('system-set-proxy', proxy)
+    },
+    sys: {
+      exec: (program, args, workdir) =>
+        call<{ stdout: string; stderr: string; exitCode: number }>('sys-exec', program, args, workdir),
+      fetch: (url, options) =>
+        call<{ status: number; headers: Record<string, string>; body: string }>(
+          'sys-fetch',
+          url,
+          options ?? undefined
+        )
     },
     dataManagement: {
       usage: () => call('data-usage'),

@@ -5,11 +5,12 @@
   "version": "0.1.3",
   "entryView": "default",
   "description": "Spark 插件体系参考实现：组织微博（管理员发帖、成员评论），演示存储/签名/应用消息/消息卡片等核心能力。",
-  "supportedSpaces": ["org"],
+  "supportedSpaces": ["org", "personal"],
   "views": [
     { "id": "default", "type": "app", "title": "微博" },
     { "id": "post-card", "type": "message-card", "title": "帖子卡片" }
   ],
+  "background": "views/background.js",
   "permissions": ["storage:read", "storage:write", "org:read", "org:sync", "message:app", "identity:sign"],
   "sdkVersion": "1",
   "package": {

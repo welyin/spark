@@ -14,6 +14,7 @@ mod android_activity;
 pub mod commands;
 pub mod domain_guard;
 pub mod market;
+pub mod plugin_runtime;
 pub mod plugin_src;
 mod announce_verify;
 // HTTP 代理配置（spark-proxy.json 持久化 + 环境变量注入），见 proxy.rs 模块注释
@@ -65,7 +66,7 @@ fn spawn_p2p_event_forwarder(app: tauri::AppHandle, mut rx: tokio::sync::broadca
 /// 未设置时走平台默认 app_data_dir。setup 与 plugin:// 协议回调共用，
 /// 保证内核数据、市场状态与插件源服务读同一目录。
 /// 泛型 M 使 setup（&App）与命令层（&AppHandle，如 system_get_proxy）共用。
-fn resolve_data_dir<R: tauri::Runtime, M: tauri::Manager<R>>(app: &M) -> Result<PathBuf, std::io::Error> {
+pub(crate) fn resolve_data_dir<R: tauri::Runtime, M: tauri::Manager<R>>(app: &M) -> Result<PathBuf, std::io::Error> {
     match std::env::var("SPARK_DATA_DIR") {
         Ok(dir) if !dir.trim().is_empty() => {
             let dir = PathBuf::from(dir);
@@ -145,6 +146,13 @@ pub fn run() {
             // 懒惰核查队列（plugin-dist §8.8）：新声明后台 resolve_repo_plugin 核查，
             // verified 终态回写内核索引；worker 需在 KernelState/MarketState 就位后启动
             announce_verify::spawn_announce_verify_worker(app.handle().clone(), announce_events);
+            // 插件后台运行时启动对账：已启用且 manifest 声明 background 入口的
+            // 插件由内核拉起 QuickJS 常驻线程（plugin_system.md「后台运行时」）
+            plugin_runtime::sync_from_market(
+                &data_dir,
+                app.state::<KernelState>().inner(),
+                app.state::<MarketState>().inner(),
+            );
             // 主程序自动更新：启动后延迟自动 检查+下载，就绪发 updater://ready
             // 事件由前端弹窗引导重启（见 commands/updater.rs）。仅桌面启用。
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -220,6 +228,8 @@ pub fn run() {
             commands::contact::contact_org_group_rename,
             commands::contact::contact_org_group_delete,
             commands::contact::contact_org_group_move,
+            // Bot 联系人（插件 bot 虚拟联系人）
+            commands::contact::contact_ensure_bot,
             // 消息
             commands::message::message_list_conversations,
             commands::message::message_list_messages,
@@ -239,6 +249,8 @@ pub fn run() {
             commands::message::message_app_list,
             commands::message::message_app_mark_read,
             commands::message::message_app_delete_conversation,
+            // Bot 消息（插件 bot 回复插话）
+            commands::message::message_bot_reply,
             // 数据治理
             commands::data::data_usage,
             commands::data::data_cleanup_now,
@@ -265,6 +277,7 @@ pub fn run() {
             commands::plugin::plugin_identity_sign,
             commands::plugin::plugin_identity_verify,
             commands::plugin::plugin_org_sync_now,
+            commands::plugin::plugin_background_sync,
             // 插件市场（目录/检查更新/安装/升级/启停/卸载）
             commands::market::plugin_market_list,
             commands::market::plugin_market_check_updates,
@@ -289,6 +302,11 @@ pub fn run() {
             commands::system::system_set_proxy,
             // 退出应用（Android 系统返回键在一级页时由前端调用；plugin:app|exit 不在 ACL 内不可用）
             commands::system::system_exit_app,
+            // sys 代理：插件通过内核代理执行外部命令 / HTTP 请求
+            commands::sys::sys_exec,
+            commands::sys::sys_fetch,
+            // 设备管理（多设备清单：本机采集 + 自设备 device-sync 同步）
+            commands::device::devices_list,
             // 主程序自动更新（GitHub Releases 清单；检查/下载/安装重启）。仅桌面启用。
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             commands::updater::updater_status,

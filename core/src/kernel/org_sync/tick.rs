@@ -8,12 +8,14 @@ use super::{
     DIAL_BUDGET_PER_TICK, ORG_ADDRESS_REPUBLISH_INTERVAL_MS, OrgSyncContext,
     PULL_CANDIDATES_PER_TICK, REPLICA_PUSH_PER_ORG, collect_org_peer_candidates,
 };
+use crate::contact::ContactService;
 use crate::org::gateway::{OrgMemberHint, org_members_dht_key};
 use crate::org::sync_state::{OrgSyncState, org_sync_state_key};
 use crate::org::{OrganizationService, compute_org_sync_overview, resolve_local_versions};
 use crate::p2p::constants::OVERLAY_TOPIC;
 use crate::p2p::envelope::build_org_body;
 use crate::p2p::keepalive::plan_organization_dials;
+use crate::p2p::node::LocalP2PNodeInfo;
 use crate::p2p::peer_activity::PeerActivityStore;
 use crate::p2p::peer_targets::PeerNodeInfo;
 use crate::storage::StorageBackend;
@@ -37,17 +39,24 @@ impl OrgSyncContext {
         self.refresh_org_address_publishing(&root_id).await;
 
         let now = self.now();
-        let candidates = collect_org_peer_candidates(&self.storage, &root_id);
+        // 本机节点信息一次取用：候选收集（排除本机 peerId）与连接快照共用
+        let local_info = self.node.local_node_info().await.ok();
+        // 0.6) 自设备保活：配对设备未连接时补拨（独立于组织候选，无组织
+        //      成员时也要维持自设备链路——自会话/资料/设备清单同步全依赖它）
+        self.maintain_self_device_link(&root_id, local_info.as_ref())
+            .await;
+        let candidates = collect_org_peer_candidates(
+            &self.storage,
+            &root_id,
+            local_info.as_ref().and_then(|i| i.peer_id.as_deref()),
+        );
         if candidates.is_empty() {
             // 无任何已知成员地址：全员不可达更重形态，仍尝试定向恢复
             self.maybe_run_org_recovery(true, &root_id).await;
             return;
         }
 
-        let connected: HashSet<String> = self
-            .node
-            .local_node_info()
-            .await
+        let connected: HashSet<String> = local_info
             .map(|info| info.connected_peers.into_iter().collect())
             .unwrap_or_default();
         let sorted = {
@@ -84,6 +93,177 @@ impl OrgSyncContext {
         // 4) 失联 recovery
         self.maybe_run_org_recovery(connected_candidates.is_empty(), &root_id)
             .await;
+    }
+
+    /// 自设备保活：配对设备（自 FriendRecord.peer）未连接时补拨，每 tick 一次；
+    /// 断→连跳变时向对端重发 device-sync + profile-sync 快照。
+    ///
+    /// 登录后的一次性广播在对端离线时静默失败后不再重试；挂 keepalive tick
+    /// 周期补拨，使两端错峰上线也能自动会合。仅打通连接不够——两端启动时的
+    /// 快照广播早已互相错过，重连成功时必须重发快照才能收敛（对端收
+    /// device-sync 恒回发、profile-sync 按 LWW 裁决回发，双向齐全）。
+    async fn maintain_self_device_link(&self, root_id: &str, local_info: Option<&LocalP2PNodeInfo>) {
+        let mut storage = self.storage.clone();
+        // 双来源解析配对设备：FriendRecord.peer 优先（带地址），DeviceRecord
+        // 兜底（仅 peerId，已连接时 dm_direct 短路；未连接时无地址无法补拨，
+        // 但候选收集里的 FriendRecord 来源仍可提供地址）
+        let (peer_id, addresses) = {
+            let from_friend = ContactService::get_friend(&mut storage, root_id)
+                .ok()
+                .flatten()
+                .and_then(|f| f.peer)
+                .filter(|p| !p.peer_id.is_empty());
+            match from_friend {
+                Some(p) => (p.peer_id, p.addresses),
+                None => {
+                    let my_peer = local_info.and_then(|i| i.peer_id.as_deref());
+                    let device = crate::device::DeviceService::list(&storage)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .find(|r| Some(r.peer_id.as_str()) != my_peer);
+                    match device {
+                        Some(d) => (d.peer_id, Vec::new()),
+                        None => return,
+                    }
+                }
+            }
+        };
+        if peer_id.is_empty() {
+            return;
+        }
+        let connected = local_info
+            .map(|info| info.connected_peers.iter().any(|p| p == &peer_id))
+            .unwrap_or(false);
+
+        // 状态机决策在独立作用域内完成（MutexGuard 不可跨 await）
+        enum Action {
+            StayConnected,
+            Resync,
+            Dial,
+        }
+        let action = {
+            let mut last = self.self_device_link.lock().unwrap_or_else(|e| e.into_inner());
+            if connected {
+                if last.as_deref() == Some(peer_id.as_str()) {
+                    Action::StayConnected
+                } else {
+                    // 断→连跳变（含启动后首次观察到连接）
+                    *last = Some(peer_id.clone());
+                    Action::Resync
+                }
+            } else {
+                *last = None;
+                Action::Dial
+            }
+        };
+        match action {
+            Action::StayConnected => {}
+            // 重发快照补齐错过的变更。幂等（LWW 裁决），启动一次性广播可能
+            // 造成的少量重复投递可接受。
+            Action::Resync => self.send_self_snapshots(root_id, &peer_id).await,
+            Action::Dial => {
+                let target = PeerNodeInfo {
+                    peer_id: Some(peer_id),
+                    addresses,
+                };
+                // 短超时：后台保活不可长阻塞组织保活串行队列
+                let _ = self
+                    .node
+                    .connect_peer_with_timeout(&target, std::time::Duration::from_secs(5))
+                    .await;
+            }
+        }
+    }
+
+    /// 向已会合的自设备重发本机 device-sync + profile-sync + contact-sync
+    /// 快照（断→连跳变触发；装配口径同 `Kernel::broadcast_device_sync` /
+    /// `host.rs::spawn_profile_sync_reply` / `Kernel::broadcast_contact_sync`，
+    /// 失败静默）。
+    async fn send_self_snapshots(&self, root_id: &str, peer_id: &str) {
+        let signing_key = self.signing_key.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let Some(signing_key) = signing_key else {
+            return;
+        };
+        let my_peer_id = self.node.peer_id().to_string();
+        let target = PeerNodeInfo {
+            peer_id: Some(peer_id.to_string()),
+            addresses: Vec::new(), // 已连接：dm_direct 短路直发
+        };
+        let now = self.now();
+        // 1) device-sync：本机设备记录（读取既有记录，不 upsert——避免每 tick
+        //    刷新 updatedAt 推高 LWW 水位）
+        if let Ok(Some(record)) =
+            crate::device::DeviceService::get(&self.storage, &my_peer_id)
+        {
+            if let Ok(body) = serde_json::to_value(&record) {
+                let envelope = crate::kernel::dm_envelope::build_envelope(
+                    crate::kernel::dm_envelope::KIND_DEVICE_SYNC,
+                    root_id,
+                    root_id,
+                    now,
+                    body,
+                    &signing_key,
+                );
+                let _ = self.node.dm_direct(&target, envelope).await;
+            }
+        }
+        // 2) profile-sync：身份文件全量资料快照（昵称为空回退 rootId 前 8 位）
+        let path = self
+            .data_dir
+            .join("identities")
+            .join(format!("{root_id}.json"));
+        if let Ok(raw) = std::fs::read_to_string(&path) {
+            if let Ok(file) = crate::identity::IdentityFile::from_json(&raw) {
+                let nickname = file.nickname.clone().unwrap_or_default();
+                let nickname = if nickname.trim().is_empty() {
+                    root_id.chars().take(8).collect::<String>()
+                } else {
+                    nickname
+                };
+                let body = serde_json::json!({
+                    "nickname": nickname,
+                    "avatar": file.avatar,
+                    "gender": file.gender,
+                    "region": file.region,
+                    "signature": file.signature,
+                    "updatedAt": file.updated_at,
+                });
+                let envelope = crate::kernel::dm_envelope::build_envelope(
+                    crate::kernel::dm_envelope::KIND_PROFILE_SYNC,
+                    root_id,
+                    root_id,
+                    now,
+                    body,
+                    &signing_key,
+                );
+                let _ = self.node.dm_direct(&target, envelope).await;
+            }
+        }
+        // 3) contact-sync：通讯录全量快照（朋友/申请/标签/分组/拉黑；
+        //    LWW 幂等，对端按时间戳裁决，重复投递无害）
+        if let Ok(body) = crate::contact::build_contact_sync_snapshot(&self.storage, root_id) {
+            let envelope = crate::kernel::dm_envelope::build_envelope(
+                crate::kernel::dm_envelope::KIND_CONTACT_SYNC,
+                root_id,
+                root_id,
+                now,
+                body,
+                &signing_key,
+            );
+            let _ = self.node.dm_direct(&target, envelope).await;
+        }
+        // 4) conv-sync：会话元数据快照（direct 会话外壳 + 置顶/免打扰/草稿）
+        if let Ok(body) = crate::message::build_conv_sync_snapshot(&self.storage) {
+            let envelope = crate::kernel::dm_envelope::build_envelope(
+                crate::kernel::dm_envelope::KIND_CONV_SYNC,
+                root_id,
+                root_id,
+                now,
+                body,
+                &signing_key,
+            );
+            let _ = self.node.dm_direct(&target, envelope).await;
+        }
     }
 
     /// 管理员补副本（p2p-node.ts:520-573 `replenishOrganizationReplicas`）：

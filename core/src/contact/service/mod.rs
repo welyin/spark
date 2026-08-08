@@ -8,6 +8,7 @@ mod friend;
 mod group;
 mod org_group;
 mod request;
+pub(crate) mod sync;
 mod tag;
 
 use serde::Serialize;
@@ -82,10 +83,9 @@ fn scan_json<S: StorageBackend, T: DeserializeOwned>(
         .collect()
 }
 
-/// 朋友/资料记录尚无 updatedAt 字段（FriendRequestRecord 已带，由 request
-/// 模块写路径维护）：这些变更方法的 `now_ms` 预留（未来审计），用本函数
-/// 显式消费以避免未使用告警。
-fn touch(_now_ms: i64) {}
+/// 朋友/资料记录的变更时间由 `FriendRecord::updated_at` 与整域版本号
+/// （sync 模块）承载：各变更方法以 `now_ms` 入参刷新，供自设备
+/// contact-sync 的 LWW 裁决。
 
 /// 空间对应的标签数组键。
 fn tags_key(space: &str) -> Result<String> {

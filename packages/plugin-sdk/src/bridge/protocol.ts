@@ -146,13 +146,36 @@ export type BridgeActionMessage = {
   data?: unknown;
 };
 
+// ---- 宿主→插件反向调用（宿主主动向插件查询/请求，等答复） ----
+
+/** 宿主→插件：反向调用请求（如删除联系人前询问插件「该 bot 是否还存在」） */
+export type BridgeHostCallMessage = {
+  v: typeof BRIDGE_PROTOCOL_VERSION;
+  type: 'host-call';
+  id: string;
+  /** 请求事件名（插件侧按名注册处理器，如 'bot:query'） */
+  event: string;
+  payload?: unknown;
+};
+
+/** 插件→宿主：反向调用应答 */
+export type BridgeHostResultMessage = {
+  v: typeof BRIDGE_PROTOCOL_VERSION;
+  type: 'host-result';
+  id: string;
+  ok: boolean;
+  data?: unknown;
+  error?: BridgeCallError;
+};
+
 export type PluginToHostMessage =
   | BridgeHelloMessage
   | BridgeCallMessage
   | BridgeSubscribeMessage
   | BridgeUnsubscribeMessage
   | BridgePongMessage
-  | BridgeActionMessage;
+  | BridgeActionMessage
+  | BridgeHostResultMessage;
 
 export type HostToPluginMessage =
   | BridgeReadyMessage
@@ -160,7 +183,8 @@ export type HostToPluginMessage =
   | BridgeResultMessage
   | BridgeEventMessage
   | BridgePingMessage
-  | BridgeActionMessage;
+  | BridgeActionMessage
+  | BridgeHostCallMessage;
 
 export type BridgeMessage = PluginToHostMessage | HostToPluginMessage;
 
@@ -233,6 +257,18 @@ export function parseBridgeMessage(data: unknown): BridgeMessage | null {
       return isString(data.cardId) && isString(data.actionId)
         ? (data as unknown as BridgeActionMessage)
         : null;
+    case 'host-call':
+      return isString(data.id) && isString(data.event)
+        ? (data as unknown as BridgeHostCallMessage)
+        : null;
+    case 'host-result':
+      if (!isString(data.id) || typeof data.ok !== 'boolean') {
+        return null;
+      }
+      if (data.error !== undefined && !isCallError(data.error)) {
+        return null;
+      }
+      return data as unknown as BridgeHostResultMessage;
     default:
       return null;
   }

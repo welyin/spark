@@ -5,9 +5,9 @@
  *   恢复后自动解除标记）；宿主组件据此给「关闭/重新加载」覆盖层；
  * - 崩溃环自动停用：实例 60s 窗口内 ready 前错误 ≥3（握手超时/加载异常按一次计），
  *   或无响应累计 ≥3 次 → onAutoDisable，宿主组件自动停用当前 space 实例
- *   （持久化见 plugin-disabled.ts）；
+ *   （持久化见 ./disabled.ts）；
  * - 计数按实例键驻留内存累计：iframe 重新挂载不清零（崩溃环语义）；
- *   手动重新启用时清零（plugin-disabled.ts enablePluginInstance）。
+ *   手动重新启用时清零（./disabled.ts enablePluginInstance）。
  *
  * 纯逻辑模块（不依赖 vue / element-plus），vitest + fake timers 直测。
  */

@@ -241,22 +241,22 @@ fn unread_pin_mute_draft() {
     MessageService::toggle_pin(&mut s, "personal", &conv.id, NOW + 10).unwrap();
     assert_eq!(get!().pinned_at, 0);
 
-    MessageService::toggle_mute(&mut s, "personal", &conv.id).unwrap();
+    MessageService::toggle_mute(&mut s, "personal", &conv.id, NOW + 11).unwrap();
     assert!(get!().muted);
-    MessageService::toggle_mute(&mut s, "personal", &conv.id).unwrap();
+    MessageService::toggle_mute(&mut s, "personal", &conv.id, NOW + 12).unwrap();
     assert!(!get!().muted);
 
-    MessageService::set_draft(&mut s, "personal", &conv.id, "下周的材料").unwrap();
+    MessageService::set_draft(&mut s, "personal", &conv.id, "下周的材料", NOW + 13).unwrap();
     assert_eq!(get!().draft, "下周的材料");
-    MessageService::set_draft(&mut s, "personal", &conv.id, "").unwrap();
+    MessageService::set_draft(&mut s, "personal", &conv.id, "", NOW + 14).unwrap();
     assert_eq!(get!().draft, "");
 
     // 缺失会话的各变更静默不动
     MessageService::increment_unread(&mut s, "personal", "no-such").unwrap();
     MessageService::mark_read(&mut s, "personal", "no-such").unwrap();
     MessageService::toggle_pin(&mut s, "personal", "no-such", NOW).unwrap();
-    MessageService::toggle_mute(&mut s, "personal", "no-such").unwrap();
-    MessageService::set_draft(&mut s, "personal", "no-such", "x").unwrap();
+    MessageService::toggle_mute(&mut s, "personal", "no-such", NOW).unwrap();
+    MessageService::set_draft(&mut s, "personal", "no-such", "x", NOW).unwrap();
 }
 
 // ---------- 清空 / 删除 ----------

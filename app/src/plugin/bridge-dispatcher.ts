@@ -2,8 +2,8 @@
  * 桥调用 dispatcher + 权限中间件（设计文档「权限模型」运行时强制）。
  *
  * createBridgeHost 的 handler 工厂：把桥 call（module/method/args）分发到
- * plugin-sdk-browser.ts 的后端实现（createPluginBackend，域一律显式下传；
- * messages 域走 app-messages 壳层服务，pluginId/space 由桥按绑定身份注入），
+ * ./sdk-browser.ts 的后端实现（createPluginBackend，域一律显式下传；
+ * messages 域走 ./messages 壳层服务，pluginId/space 由桥按绑定身份注入），
  * 每次调用前做三重过滤：
  *
  * 1) grantedPermissions：读市场安装状态（pluginMarket.list 聚合的
@@ -24,14 +24,17 @@
  * 不信插件自报（hello 自报仅做一致性核对，见 bridge/host.ts）。
  */
 
+import { invoke } from '@tauri-apps/api/core';
 import { ElMessageBox } from 'element-plus';
-import type { PluginSpaceContext } from '../../packages/plugin-sdk/src';
-import type { BridgeHostHandler } from '../../packages/plugin-sdk/src/bridge/host';
-import { createPluginBackend } from './plugin-sdk-browser';
-import { listAppMessages, markAppMessagesRead, sendAppMessage } from './app-messages';
-import type { AppMessageCardDto } from './api/types';
+import type { PluginSpaceContext } from '../../../packages/plugin-sdk/src';
+import type { BridgeHostHandler } from '../../../packages/plugin-sdk/src/bridge/host';
+import { createPluginBackend } from './sdk-browser';
+import { listAppMessages, markAppMessagesRead, sendAppMessage } from './messages';
+import type { AppMessageCardDto } from '../api/types';
+import { onMessageForContact, type MessageRelayEvent } from '../stores/messages';
+import { refreshContacts, ensurePluginContactTag } from '../mock/contacts';
 
-type PluginViewType = 'app' | 'message-card';
+type PluginViewType = 'app' | 'message-card' | 'background';
 
 /** 调用 → 所需权限；不在表内 = 免权限基础调用（验签纯函数、运行时状态读取等） */
 const CALL_PERMISSIONS: Record<string, string> = {
@@ -47,12 +50,36 @@ const CALL_PERMISSIONS: Record<string, string> = {
   // 应用会话读写（高级权限 + 内核限流 10 条/60s，§20.5）
   'messages.sendAppMessage': 'message:app',
   'messages.listAppMessages': 'message:app',
-  'messages.markRead': 'message:app'
+  'messages.markRead': 'message:app',
+  // sys 代理（内核外呼）：高危操作，每个方法独立授权
+  'sys.exec': 'system:exec',
+  'sys.fetch': 'network:fetch',
+  // 插件联系人消息方法（统一在 messages 命名空间下）
+  'messages.registerAsContact': 'message:app',
+  'messages.unregisterAsContact': 'message:app',
+  'messages.sendResponse': 'message:app',
+  'messages.waitForMessage': 'message:app'
 };
+
+/**
+ * 联系人归属校验：插件只能操作自己注册的联系人。
+ * contactId 约定格式 `bot:{pluginId}:{botId}`，pluginId 段必须与桥绑定身份一致，
+ * 防止插件注册/注销/读写他人（其他插件或真人）的联系人。校验失败抛错（同步抛，
+ * 在 dispatcher 的 try/catch 内被转为拒绝）。
+ */
+function assertOwnsContact(contactId: string, pluginId: string): void {
+  const ownerPluginId = contactId.startsWith('bot:') ? contactId.split(':')[1] : undefined;
+  if (ownerPluginId !== pluginId) {
+    throw new Error(`Access denied: contact ${contactId} is not owned by plugin ${pluginId}`);
+  }
+}
 
 /** view type 裁剪表：null = 全量（仅 grantedPermissions 过滤）；未列出的 view type 整域拒绝 */
 const VIEW_ALLOWED_CALLS: Record<PluginViewType, ReadonlySet<string> | null> = {
   app: null,
+  // 后台常驻视图：全量能力（同 app 主视图）——承载消息监听等常驻任务，
+  // 无 UI 但与主视图同为插件的可信执行环境
+  background: null,
   // 消息卡片：docs 只读 + 验签/存证读取（无网络、无签名，设计文档「UI 集成点」）；
   // 不含 messages.*——卡片视图无应用会话写权限，卡片回调只经 action 上行（triggerCardAction）
   'message-card': new Set(['docs.get', 'docs.query', 'identity.verify', 'evidence.headHash', 'evidence.verify'])
@@ -136,7 +163,7 @@ export async function createPluginBridgeDispatcher(identity: PluginBridgeIdentit
     : identity.pluginId;
   const boundSpaceKey = identity.space.type === 'org' ? `org:${identity.space.id}` : 'personal';
 
-  const modules: Record<string, Record<string, (...args: never[]) => Promise<unknown>>> = {
+  const modules: Record<string, Record<string, (...args: any[]) => Promise<unknown>>> = {
     docs: {
       get: backend.docs.get,
       defineCollection: backend.docs.defineCollection,
@@ -162,13 +189,73 @@ export async function createPluginBridgeDispatcher(identity: PluginBridgeIdentit
       syncOrganizationData: backend.runtime.syncOrganizationData,
       listMineOrganizations: backend.runtime.listMineOrganizations
     },
-    // 应用会话（服务号模型 §20）：SDK 调用不带 pluginId/space，此处按绑定身份注入
+    // 统一消息模块：服务号（应用会话 §20）+ 插件联系人
     messages: {
       sendAppMessage: (payload: Record<string, unknown>, card?: AppMessageCardDto) =>
         sendAppMessage(boundSpaceKey, boundPluginId, payload, card),
       listAppMessages: () => listAppMessages(boundSpaceKey, boundPluginId),
-      markRead: () => markAppMessagesRead(boundSpaceKey, boundPluginId)
-    }
+      markRead: () => markAppMessagesRead(boundSpaceKey, boundPluginId),
+      registerAsContact: (contactId: string, displayName: string) => {
+        assertOwnsContact(contactId, identity.pluginId);
+        return invoke('contact_ensure_bot', {
+          botRootId: contactId,
+          displayName
+        }).then(async (result) => {
+          // ensure_bot 是内核本地写入，不产生 P2P 事件——通讯录缓存
+          // 首次水合后不会自动感知，主动刷新让新 bot 立即出现在列表
+          await refreshContacts(boundSpaceKey);
+          // 统一打上"以插件显示名命名"的标签，标识联系人来源于哪个插件
+          ensurePluginContactTag(boundSpaceKey, identity.pluginName || identity.pluginId, contactId);
+          return result;
+        });
+      },
+      unregisterAsContact: (contactId: string) => {
+        assertOwnsContact(contactId, identity.pluginId);
+        // 插件删除 bot 时注销联系人：内核删好友记录 + 刷新缓存让列表立即移除
+        return invoke('contact_remove_friend', { rootId: contactId, block: false })
+          .then(async (result) => {
+            await refreshContacts(boundSpaceKey);
+            return result;
+          });
+      },
+      sendResponse: (convId: string, contactId: string, displayName: string, messageId: string, text: string) => {
+        assertOwnsContact(contactId, identity.pluginId);
+        return invoke('message_bot_reply', {
+          spaceKey: boundSpaceKey,
+          convId,
+          botRootId: contactId,
+          botName: displayName,
+          messageId,
+          text
+        });
+      },
+      waitForMessage: (contactId: string, timeoutMs?: number) => {
+        assertOwnsContact(contactId, identity.pluginId);
+        console.log(`[bridge] waitForMessage 注册监听 contactId=${contactId}`);
+        return new Promise<MessageRelayEvent | null>((resolve) => {
+          const waitMs = timeoutMs ?? 30000;
+          const timer = setTimeout(() => {
+            unsub();
+            resolve(null);
+          }, waitMs);
+          const unsub = onMessageForContact(contactId, (event) => {
+            console.log(`[bridge] waitForMessage 收到消息 contactId=${contactId} text=${event.text?.slice(0, 30)}`);
+            clearTimeout(timer);
+            unsub();
+            resolve(event);
+          });
+        });
+      }
+    },
+    // sys 代理（内核外呼）：仅代理不加工；插件享有完整权限，内核命令侧负责业务安全
+    sys: {
+      exec: (program: string, execArgs: string[], workdir?: string) => {
+        console.log(`[bridge] sys.exec 收到 program=${program} args=${JSON.stringify(execArgs)} workdir=${workdir ?? '(继承)'}`);
+        return backend.sys!.exec(program, Array.isArray(execArgs) ? execArgs : [], workdir) as Promise<unknown>;
+      },
+      fetch: (url: string, options?: Record<string, unknown>) =>
+        backend.sys!.fetch(url, options) as Promise<unknown>
+    },
   };
 
   return async (module, method, args) => {

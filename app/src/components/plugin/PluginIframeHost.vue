@@ -2,7 +2,7 @@
   <div class="plugin-iframe-host">
     <!-- 沙箱 iframe：allow-scripts，不给 allow-same-origin（opaque origin，
          localStorage/IndexedDB 与壳层天然隔离；桥握手 expectedOrigin 因此恒为 'null'）。
-         宿主 HTML 由 srcdoc 内联生成（plugin-source.ts），bundle/css 经插件源加载 -->
+         宿主 HTML 由 srcdoc 内联生成（plugin/source.ts），bundle/css 经插件源加载 -->
     <iframe
       v-if="status !== 'disabled'"
       :key="reloadToken"
@@ -57,17 +57,17 @@ import { computed, defineComponent, nextTick, onMounted, onUnmounted, ref, type 
 import { Loading } from '@element-plus/icons-vue';
 import type { PluginContext, PluginSpaceContext } from '../../../../packages/plugin-sdk/src';
 import { createBridgeHost, type BridgeHost } from '../../../../packages/plugin-sdk/src/bridge/host';
-import { buildPluginHostSrcdoc, fetchPluginManifest } from '../../plugin-source';
-import { createPluginBridgeDispatcher } from '../../plugin-bridge-dispatcher';
-import { createPluginWatchdog, type PluginWatchdog } from '../../plugin-watchdog';
-import { pluginSpaceKey, registerMainViewInstance, unregisterMainViewInstance } from '../../plugin-card-actions';
+import { buildPluginHostSrcdoc, fetchPluginManifest } from '../../plugin/source';
+import { createPluginBridgeDispatcher } from '../../plugin/bridge-dispatcher';
+import { createPluginWatchdog, type PluginWatchdog } from '../../plugin/watchdog';
+import { pluginSpaceKey, registerMainViewInstance, unregisterMainViewInstance } from '../../plugin/card-actions';
 import {
   disablePluginInstance,
   enablePluginInstance,
   getDisabledPluginInstance,
   isPluginInstanceDisabled,
   pluginInstanceKey
-} from '../../plugin-disabled';
+} from '../../plugin/disabled';
 import { themeMode } from '../../stores/theme';
 
 type HostStatus = 'loading' | 'ready' | 'failed' | 'disabled';
@@ -174,19 +174,6 @@ export default defineComponent({
       });
 
       try {
-        const handler = await createPluginBridgeDispatcher({
-          pluginId: props.pluginId,
-          viewId: props.viewId,
-          domain,
-          space: props.space,
-          pluginName: manifest?.name,
-          supportedSpaces: manifest?.supportedSpaces,
-          viewType: 'app'
-        });
-        if (isStale(gen)) {
-          return;
-        }
-
         const ctx: PluginContext = {
           pluginId: props.pluginId,
           viewId: props.viewId,
@@ -196,6 +183,10 @@ export default defineComponent({
           mount: { viewType: 'app' }
         };
 
+        // 关键时序：createBridgeHost 必须同步执行——它内部注册 message 监听接收
+        // 插件 hello。若先 await createPluginBridgeDispatcher（内含 Tauri invoke
+        // 读授权清单），监听注册被推迟，hello 发出时无人接收 → 握手超时。
+        // 故 handler 传懒解析函数，首个 call 到来时（握手已完成）才解析 dispatcher。
         host = createBridgeHost({
           iframe,
           pluginId: props.pluginId,
@@ -207,7 +198,16 @@ export default defineComponent({
           targetOrigin: '*',
           sdkVersion: manifest?.sdkVersion ?? '1',
           ctx,
-          handler,
+          handler: () =>
+            createPluginBridgeDispatcher({
+              pluginId: props.pluginId,
+              viewId: props.viewId,
+              domain,
+              space: props.space,
+              pluginName: manifest?.name,
+              supportedSpaces: manifest?.supportedSpaces,
+              viewType: 'app'
+            }),
           onEvent: (event) => {
             if (event === 'runtime-error') {
               runtimeErrorCount.value += 1;
@@ -220,7 +220,7 @@ export default defineComponent({
           return;
         }
         status.value = 'ready';
-        // 登记主视图实例：message-card 的按钮回调经 plugin-card-actions 按空间路由到本实例
+        // 登记主视图实例：message-card 的按钮回调经 plugin/card-actions 按空间路由到本实例
         registerMainViewInstance(props.pluginId, pluginSpaceKey(props.space), host);
         watchdog?.startHeartbeat();
       } catch {

@@ -183,7 +183,19 @@ impl PluginMarketService {
             if self.state.uninstalled.contains(&item.id) {
                 continue;
             }
-            if self.state.installed.contains_key(&item.id) {
+            if let Some(installed) = self.state.installed.get_mut(&item.id) {
+                // dev 源码插件（无签名、清单本地可变）：授权清单跟随当前目录
+                // 声明重新解析——开发期向 manifest 新增权限后重启即生效，
+                // 避免 backfill 只补空清单导致旧快照永久滞留（如 ai-chat 缺
+                // system:exec）。签名/显式安装包不在此列：其授权以安装时
+                // 用户同意的清单为准，变更须走重新安装/升级流程。
+                if installed.sha256 == "bundled-dev-source" {
+                    let resolved = resolve_granted_permissions(&item.permissions);
+                    if installed.granted_permissions != resolved {
+                        installed.granted_permissions = resolved;
+                        changed = true;
+                    }
+                }
                 continue;
             }
 

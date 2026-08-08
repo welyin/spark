@@ -29,7 +29,7 @@ export type {
 } from './types';
 export { emptyProfile, spaceKeyOf } from './types';
 
-export { demoContacts, contactsOf, applyOrgOutgoingInvite } from './store';
+export { demoContacts, contactsOf, refreshContacts, applyOrgOutgoingInvite } from './store';
 
 export {
   profileOf,
@@ -45,7 +45,7 @@ export {
 
 export { sendFriendRequest, retryOutgoing, replyOutgoing, askIncoming } from './requests';
 
-export { createTag, renameTag, deleteTag } from './tags';
+export { createTag, renameTag, deleteTag, ensurePluginContactTag } from './tags';
 
 export {
   setContactGroup,

@@ -52,7 +52,24 @@ impl Kernel {
         *self.nickname_shared.lock().unwrap() = file.nickname.clone().unwrap_or_default();
         *self.avatar_shared.lock().unwrap() = file.avatar.clone().unwrap_or_default();
         let nickname = self.my_nickname(&root_id);
-        self.broadcast_profile_sync(&nickname, file.avatar.as_deref());
+        // 朋友互推（不含自记录）：展示字段
+        self.broadcast_profile_to_friends(
+            &nickname,
+            file.avatar.as_deref(),
+            file.gender.as_deref(),
+            file.region.as_deref(),
+            file.signature.as_deref(),
+            file.updated_at,
+        );
+        // 自设备同步：完整资料（含隐私字段），仅配对设备间
+        self.broadcast_profile_to_self_device(
+            &nickname,
+            file.avatar.as_deref(),
+            file.gender.as_deref(),
+            file.region.as_deref(),
+            file.signature.as_deref(),
+            file.updated_at,
+        );
         Ok(ProfileInfo {
             nickname: file.nickname.clone(),
             avatar: file.avatar.clone(),
@@ -86,9 +103,26 @@ impl Kernel {
         self.write_identity_file(&file)?;
         *self.nickname_shared.lock().unwrap() = file.nickname.clone().unwrap_or_default();
         *self.avatar_shared.lock().unwrap() = file.avatar.clone().unwrap_or_default();
-        // 资料变更后向所有朋友尽力推送 profile-sync（失败静默，不阻塞更新）
+        // 资料变更后分两个通道尽力推送（失败静默，不阻塞更新）：
+        // - 朋友互推（不含自记录）：展示字段；
+        // - 自设备同步：完整资料（含隐私字段），仅配对设备间。
         let nickname = self.my_nickname(&root_id);
-        self.broadcast_profile_sync(&nickname, file.avatar.as_deref());
+        self.broadcast_profile_to_friends(
+            &nickname,
+            file.avatar.as_deref(),
+            file.gender.as_deref(),
+            file.region.as_deref(),
+            file.signature.as_deref(),
+            file.updated_at,
+        );
+        self.broadcast_profile_to_self_device(
+            &nickname,
+            file.avatar.as_deref(),
+            file.gender.as_deref(),
+            file.region.as_deref(),
+            file.signature.as_deref(),
+            file.updated_at,
+        );
         Ok(ProfileInfo {
             nickname: file.nickname.clone(),
             avatar: file.avatar.clone(),

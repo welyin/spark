@@ -28,6 +28,7 @@
 mod contact_group_ops;
 mod contact_ops;
 mod contact_request_ops;
+mod device_ops;
 mod dm_delivery;
 mod doc_ops;
 pub mod dm_envelope;
@@ -41,6 +42,7 @@ mod org_overview;
 mod org_sync;
 mod p2p_ops;
 mod plugin_announce_ops;
+mod plugin_ops;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -49,6 +51,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
 
 pub use contact_ops::SendFriendRequestInput;
+pub use device_ops::DeviceView;
 pub use doc_ops::{EvidenceChainStatus, PurgePreviewInfo};
 pub use error::{KernelError, Result};
 pub use identity::{
@@ -60,12 +63,15 @@ pub use message_ops::{
     AppMessageView, ChatMessageView, ConversationView, app_conversation_id,
     direct_conversation_id, sanitize_link_preview,
 };
+pub(crate) use contact_ops::ensure_bot_shared;
+pub(crate) use message_ops::bot_reply_shared;
 pub use org_sync::{OrgReconcileStats, PeerOrgSyncResult};
 pub use p2p_ops::NodeCardImport;
 
 use crate::data_mgmt::DataManagementService;
 use crate::p2p::keepalive::RecoveryTrigger;
 use crate::p2p::{P2pConfig, P2pEvent, P2pNode};
+use crate::plugin::{PluginHostShared, PluginRuntimeRegistry};
 use crate::storage::SledStorage;
 
 use host::{CollectionConfigs, SharedOrgShareAckTracker};
@@ -138,12 +144,18 @@ pub struct Kernel {
     pub(crate) p2p_node_shared: Arc<Mutex<Option<Arc<P2pNode>>>>,
     /// 解锁期签名私钥（org-sync worker 自签 nodeInfoClaim 用；lock 时清除）。
     pub(crate) signing_key_shared: Arc<Mutex<Option<ed25519_dalek::SigningKey>>>,
+    /// 解锁期会话口令（host 侧应用自设备 profile-sync 全量快照时重封身份
+    /// 文件用——与 unlocked 会话同源，lock 时清除）。
+    pub(crate) password_shared: Arc<Mutex<Option<String>>>,
     /// org-share-ack 等待器注册表（host 与 worker 共享）。
     pub(crate) org_acks: SharedOrgShareAckTracker,
     /// org-recovery 触发器（跨 tick 状态：连续失联计数 + 全局冷却）。
     pub(crate) recovery_trigger: Arc<Mutex<RecoveryTrigger>>,
     /// 组织地址记录发布状态（orgAddress → 最近发布时间；org.md §16）。
     pub(crate) org_address_publish: Arc<Mutex<HashMap<String, i64>>>,
+    /// 自设备链路状态（org-sync worker 与门面共享；上一 tick 观察到的已
+    /// 连接配对设备 peerId，断→连跳变触发快照重发）。
+    pub(crate) self_device_link: Arc<Mutex<Option<String>>>,
     /// doc_* 调用登记的集合配置（远端应用的索引维护依据，见 host.rs）。
     pub(crate) collection_configs: CollectionConfigs,
     /// 存储读写互斥：p2p 事件循环（host `handle_dm`）与 Tauri 命令线程的
@@ -152,6 +164,15 @@ pub struct Kernel {
     pub(crate) io_lock: Arc<Mutex<()>>,
     /// 应用消息限流器（内存态，p2p-messages.md §20.5；进程重启清零）。
     pub(crate) app_msg_limiter: crate::message::AppMessageRateLimiter,
+    /// 插件后台运行时注册表（bot 会话消息路由的查找源）。
+    pub(crate) plugin_registry: PluginRuntimeRegistry,
+    /// 插件运行时的宿主能力共享句柄（存储镜像随 open_storage/shutdown 更新）。
+    pub(crate) plugin_host: PluginHostShared,
+    /// 插件事件路由任务（init 启动、shutdown abort；bot 会话 ChatReceived →
+    /// 归属插件，覆盖多设备回同步 echo 路径）。
+    pub(crate) plugin_router: Option<tokio::task::JoinHandle<()>>,
+    /// 插件线程 JoinHandle 保管处（`plugin_stop_background` 回收线程）。
+    pub(crate) plugin_joins: HashMap<String, std::thread::JoinHandle<()>>,
 }
 
 impl Kernel {
@@ -163,6 +184,20 @@ impl Kernel {
             .enable_all()
             .build()?;
         let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
+        // 插件宿主能力与门面共享的句柄格：先落成局部变量再分发克隆
+        let current_root_id_shared = Arc::new(Mutex::new(None));
+        let p2p_node_shared = Arc::new(Mutex::new(None));
+        let signing_key_shared = Arc::new(Mutex::new(None));
+        let io_lock = Arc::new(Mutex::new(()));
+        let plugin_host = PluginHostShared {
+            storage: Arc::new(Mutex::new(None)),
+            io_lock: Arc::clone(&io_lock),
+            event_tx: event_tx.clone(),
+            my_root_id: Arc::clone(&current_root_id_shared),
+            p2p_node: Arc::clone(&p2p_node_shared),
+            signing_key: Arc::clone(&signing_key_shared),
+            runtime: runtime.handle().clone(),
+        };
         let mut kernel = Kernel {
             config,
             runtime,
@@ -177,18 +212,25 @@ impl Kernel {
             org_sync_worker: None,
             org_sync_tx: None,
             event_tx,
-            current_root_id_shared: Arc::new(Mutex::new(None)),
+            current_root_id_shared,
             nickname_shared: Arc::new(Mutex::new(String::new())),
             avatar_shared: Arc::new(Mutex::new(String::new())),
-            p2p_node_shared: Arc::new(Mutex::new(None)),
-            signing_key_shared: Arc::new(Mutex::new(None)),
+            p2p_node_shared,
+            signing_key_shared,
+            password_shared: Arc::new(Mutex::new(None)),
             org_acks: Arc::new(Mutex::new(Default::default())),
             recovery_trigger: Arc::new(Mutex::new(RecoveryTrigger::new())),
             org_address_publish: Arc::new(Mutex::new(HashMap::new())),
+            self_device_link: Arc::new(Mutex::new(None)),
             collection_configs: Arc::new(Mutex::new(HashMap::new())),
-            io_lock: Arc::new(Mutex::new(())),
+            io_lock,
             app_msg_limiter: crate::message::AppMessageRateLimiter::default(),
+            plugin_registry: PluginRuntimeRegistry::default(),
+            plugin_host,
+            plugin_router: None,
+            plugin_joins: HashMap::new(),
         };
+        kernel.spawn_plugin_router();
         kernel.migrate_legacy_identity_if_needed()?;
         if let Some(root_id) = kernel.read_active_root_id()? {
             kernel.open_storage(&root_id)?;
@@ -200,6 +242,11 @@ impl Kernel {
     /// 关闭内核：停 P2P、停数据治理、flush 并释放存储（sled 文件锁随之释放）。
     /// 幂等；调用后门面进入惰性状态（storage 为 None，不可再业务调用）。
     pub fn shutdown(&mut self) -> Result<()> {
+        // 先停插件（插件线程仍可能经宿主能力读写存储），再停路由任务与 P2P
+        self.plugin_stop_all_background();
+        if let Some(router) = self.plugin_router.take() {
+            router.abort();
+        }
         self.stop_p2p()?;
         if let Some(dm) = &mut self.data_mgmt {
             dm.stop();
@@ -208,6 +255,7 @@ impl Kernel {
             storage.flush()?;
             // 句柄随 take 丢弃：p2p 已停，此为最后引用，sled 锁立即释放
         }
+        *self.plugin_host.storage.lock().unwrap_or_else(|e| e.into_inner()) = None;
         self.storage_root_id = None;
         self.data_mgmt = None;
         Ok(())
@@ -237,6 +285,9 @@ impl Kernel {
         let mut dm = DataManagementService::new(Some(dir.to_string_lossy().into_owned()));
         dm.start();
         self.storage = Some(storage);
+        // 插件宿主能力的存储镜像同步指向新库（sled 克隆共享底层句柄）
+        *self.plugin_host.storage.lock().unwrap_or_else(|e| e.into_inner()) =
+            self.storage.clone();
         self.storage_root_id = Some(root_id.to_string());
         self.data_mgmt = Some(dm);
         Ok(())
@@ -247,6 +298,8 @@ impl Kernel {
         if self.storage_root_id.as_deref() == Some(root_id) {
             return Ok(());
         }
+        // 插件数据（bot 联系人/会话）不跨身份：换库前停全部插件后台
+        self.plugin_stop_all_background();
         self.stop_p2p()?;
         if let Some(dm) = &mut self.data_mgmt {
             dm.stop();
@@ -270,6 +323,13 @@ impl Kernel {
     #[doc(hidden)]
     pub fn __test_storage(&self) -> Option<SledStorage> {
         self.storage.clone()
+    }
+
+    /// 测试专用：事件广播发送端（模拟 p2p host 的入站事件外发，驱动插件
+    /// 路由等广播消费者）。
+    #[doc(hidden)]
+    pub fn __test_event_tx(&self) -> broadcast::Sender<P2pEvent> {
+        self.event_tx.clone()
     }
 }
 

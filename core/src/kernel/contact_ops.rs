@@ -14,12 +14,55 @@ use serde::Deserialize;
 use super::dm_envelope::{KIND_FRIEND_ACCEPT, KIND_FRIEND_REQUEST};
 use super::{Kernel, KernelError, Result};
 use crate::contact::{
-    ContactService, FriendRecord, FriendRequestRecord, FriendRequestStatus, PeerRef, ProfilePatch,
-    SpaceContactsView,
+    ContactService, FriendRecord, FriendRequestRecord, FriendRequestStatus, PeerRef,
+    ProfilePatch, SpaceContactsView,
 };
 use crate::org::OrganizationService;
 use crate::p2p::{P2pEvent, PeerNodeInfo};
 use crate::p2p::node::system_now_ms;
+use crate::plugin::{PluginHostShared, Result as PluginResult};
+
+/// Bot 联系人注册的共享实现：[`Kernel::contact_ensure_bot`] 门面与插件后台
+/// 运行时的 `contact.ensureBot` 能力共用——已存在仅刷新 nickname（不覆盖
+/// 备注/分组等用户自定义字段）。
+pub(crate) fn ensure_bot_shared(
+    host: &PluginHostShared,
+    bot_root_id: &str,
+    display_name: &str,
+) -> PluginResult<()> {
+    let _io = host.io_lock.lock().unwrap_or_else(|e| e.into_inner());
+    let mut storage = host.require_storage()?;
+    let now = system_now_ms();
+    let existing = ContactService::get_friend(&storage, bot_root_id)?;
+    let friend = if let Some(existing) = existing {
+        let mut f = existing;
+        if !display_name.is_empty() {
+            f.nickname = display_name.to_string();
+        }
+        f
+    } else {
+        FriendRecord {
+            root_id: bot_root_id.to_string(),
+            nickname: display_name.to_string(),
+            avatar: None,
+            signature: String::new(),
+            gender: None,
+            added_at: now,
+            peer: None,
+            remark: String::new(),
+            phones: Vec::new(),
+            tag_ids: Vec::new(),
+            group_id: String::new(),
+            memo: String::new(),
+            photos: Vec::new(),
+            permission: "open".to_string(),
+            blocked: false,
+            updated_at: now,
+        }
+    };
+    ContactService::upsert_friend(&mut storage, &friend)?;
+    Ok(())
+}
 
 /// `contact_send_request` 的入参（serde camelCase；`id` 由前端生成）。
 #[derive(Clone, Debug, Deserialize)]
@@ -96,6 +139,7 @@ impl Kernel {
                     photos: Vec::new(),
                     permission: "open".to_string(),
                     blocked: false,
+                    updated_at: system_now_ms(),
                 };
                 ContactService::upsert_friend(self.require_storage_mut()?, &friend)?;
             }
@@ -119,6 +163,9 @@ impl Kernel {
             patch,
             system_now_ms(),
         )?;
+        if space == "personal" {
+            self.broadcast_contact_sync();
+        }
         Ok(())
     }
 
@@ -136,6 +183,9 @@ impl Kernel {
             blocked,
             system_now_ms(),
         )?;
+        if space == "personal" {
+            self.broadcast_contact_sync();
+        }
         Ok(())
     }
 
@@ -172,6 +222,9 @@ impl Kernel {
             group_id,
             system_now_ms(),
         )?;
+        if space == "personal" {
+            self.broadcast_contact_sync();
+        }
         Ok(())
     }
 
@@ -217,6 +270,7 @@ impl Kernel {
             request.updated_at = now;
             ContactService::put_outgoing_request(self.require_storage_mut()?, &request)?;
             self.deliver_friend_request(&request, &my_root_id)?;
+            self.broadcast_contact_sync();
             return Ok(request);
         }
         // 自己放行：允许重复配对以刷新设备地址（overview 注入的「自己」条目
@@ -243,6 +297,7 @@ impl Kernel {
         };
         ContactService::put_outgoing_request(self.require_storage_mut()?, &request)?;
         self.deliver_friend_request(&request, &my_root_id)?;
+        self.broadcast_contact_sync();
         Ok(request)
     }
 
@@ -393,6 +448,7 @@ impl Kernel {
         if accept {
             self.accept_request_side_effects(&request, permission, &my_root_id, now)?;
         }
+        self.broadcast_contact_sync();
         Ok(request)
     }
 
@@ -424,6 +480,7 @@ impl Kernel {
             photos: Vec::new(),
             permission: permission.unwrap_or("open").to_string(),
             blocked: false,
+            updated_at: now,
         });
         if !request.nickname.is_empty() {
             friend.nickname = request.nickname.clone();
@@ -434,6 +491,7 @@ impl Kernel {
         if request.peer.is_some() {
             friend.peer = request.peer.clone();
         }
+        friend.updated_at = now;
         ContactService::upsert_friend(self.require_storage_mut()?, &friend)?;
         if let Some(peer) = &request.peer {
             // 入站申请记录 id 为复合形式 `{from}:{原 requestId}`（防跨发送者撞 id，
@@ -496,5 +554,12 @@ impl Kernel {
         Err(KernelError::Internal(
             "无法确定对方节点地址，请使用扫码名片添加".to_string(),
         ))
+    }
+
+    /// 创建/更新 Bot 联系人：将 bot 虚拟联系人注册为好友记录，使其出现在
+    /// 通讯录列表中。若已存在则保留已有资料（不覆盖备注、分组等用户自定义
+    /// 字段），只刷新 nickname。
+    pub fn contact_ensure_bot(&mut self, bot_root_id: &str, display_name: &str) -> Result<()> {
+        Ok(ensure_bot_shared(&self.plugin_host, bot_root_id, display_name)?)
     }
 }

@@ -35,6 +35,17 @@ pub const KIND_FRIEND_REQUEST: &str = "friend-request";
 pub const KIND_FRIEND_ACCEPT: &str = "friend-accept";
 /// 信封 kind：资料同步（朋友建连后/资料变更后互推 nickname/avatar）。
 pub(crate) const KIND_PROFILE_SYNC: &str = "profile-sync";
+/// 信封 kind：设备信息同步（自设备间交换设备清单记录，from==to==自己 rootId；
+/// body 为完整 DeviceRecord 线形）。
+pub(crate) const KIND_DEVICE_SYNC: &str = "device-sync";
+/// 信封 kind：通讯录快照同步（自设备间全量快照 LWW 收敛，from==to==自己
+/// rootId；body 为 contact/service/sync.rs 的快照线形：friends/requestsIn/
+/// requestsOut 记录级 LWW + tags/groups/blocked 整域版本 LWW）。
+pub(crate) const KIND_CONTACT_SYNC: &str = "contact-sync";
+/// 信封 kind：会话元数据同步（自设备间，from==to==自己 rootId；body 为
+/// message/sync.rs 的快照线形：direct 会话外壳 + 置顶/免打扰/草稿按
+/// metaUpdatedAt 记录级 LWW；消息本体与未读数不同步）。
+pub(crate) const KIND_CONV_SYNC: &str = "conv-sync";
 /// 信封 kind：组织邀请（body 携带 inviteCode 与自报展示字段）。
 pub const KIND_ORG_INVITE: &str = "org-invite";
 /// 信封 kind：组织邀请回执（被邀请人接受/拒绝）。

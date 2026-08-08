@@ -150,36 +150,45 @@ export type PluginCardActionPayload = {
 };
 
 /**
- * 消息模块：应用会话读写与卡片交互回调（高级权限 `message:app`，内核限流 10 条/60s）。
- * 插件侧不传 pluginId/space——由桥按已认证身份注入，插件只能读写自己的应用会话；
- * 桥协议层面不提供人际会话接口（隐私红线）。
+ * 消息模块：统一的消息收发入口，支持两种交互模式：
+ *
+ * - 服务号（应用会话）：sendAppMessage / listAppMessages / markRead / 卡片回调
+ *   → 消息以结构化卡片形式出现在"应用"分组中，适合通知/播报场景；
+ *
+ * - 插件联系人：registerAsContact / sendResponse / waitForMessage
+ *   → 插件注册为 Spark 通讯录联系人，出现在"单聊"分组中，
+ *     用户可像与真人一样自由打字对话；插件通过长轮询接收用户消息并回复。
+ *
+ * 两种模式共享 `message:app` 权限（高级权限，内核限流 10 条/60s）。
+ * pluginId/space 由桥按已认证身份注入，插件侧不传。
  * 仅 iframe 桥模式可用，故在 PluginSDK 上为可选字段（同 events）。
  */
 export interface PluginMessagesAPI {
+  // ── 服务号（应用会话） ──
+
   /** 写入应用消息：payload 必须含非空字符串 summary（trim 后 ≤200 字符，超限拒绝） */
   sendAppMessage: (payload: Record<string, unknown>, card?: PluginAppMessageCard) => Promise<PluginAppMessage>;
   /** 本插件在当前空间的应用消息（时间升序） */
   listAppMessages: () => Promise<PluginAppMessage[]>;
   /** 清零本插件应用会话未读（语义与人际会话一致） */
   markRead: () => Promise<{ success: boolean }>;
-  /**
-   * 注册卡片按钮回调（主视图）：壳层从 message-card iframe 收到 action 并校验
-   * 卡片归属本插件后推送过来；返回注销函数
-   */
+  /** 注册卡片按钮回调（主视图），返回注销函数 */
   onCardAction: (handler: (action: PluginCardActionPayload) => void) => () => void;
-  /**
-   * 触发卡片按钮回调（仅 message-card 视图）：action 上行给壳层，
-   * 经归属校验后路由给本插件主视图实例的 onCardAction；cardId 取桥握手 ctx 注入值
-   *
-   * @throws 非 message-card 视图（ctx.mount 无 cardId）
-   */
+  /** 触发卡片按钮回调（仅 message-card 视图） */
   triggerCardAction: (actionId: string, data?: unknown) => void;
-  /**
-   * 申请卡片高度（仅 message-card 视图）：壳层封顶 400px
-   *
-   * @throws 非 message-card 视图（ctx.mount 无 cardId）
-   */
+  /** 申请卡片高度（仅 message-card 视图，壳层封顶 400px） */
   requestCardHeight: (height: number) => void;
+
+  // ── 插件联系人（注册为通讯录联系人，直接收发消息） ──
+
+  /** 将插件注册为 Spark 通讯录联系人（contactId 为全限定标识，由插件自行构造） */
+  registerAsContact: (contactId: string, displayName: string) => Promise<{ success: boolean }>;
+  /** 注销插件联系人（删除对应通讯录好友记录；插件删除 bot 时调用） */
+  unregisterAsContact: (contactId: string) => Promise<{ success: boolean }>;
+  /** 向联系人会话插入一条回复消息（senderId = contactId，内核直接落库不经 P2P） */
+  sendResponse: (convId: string, contactId: string, displayName: string, messageId: string, text: string) => Promise<unknown>;
+  /** 长轮询等待用户发给该联系人的消息。返回 null 表示超时 */
+  waitForMessage: (contactId: string, timeoutMs?: number) => Promise<ContactMessageEvent | null>;
 }
 
 // ------------------------------------------------------------------
@@ -199,6 +208,50 @@ export interface PluginEventsAPI {
   unsubscribe: (event: string, handler?: PluginEventHandler) => Promise<void>;
 }
 
+// ── sys 模块：内核代理执行命令 / HTTP 请求 ──
+
+/** sys.exec 返回 */
+export type SysExecResult = {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+};
+
+/** sys.fetch 选项 */
+export type SysFetchOptions = {
+  method?: string;
+  headers?: Record<string, string>;
+  body?: string;
+};
+
+/** sys.fetch 返回 */
+export type SysFetchResult = {
+  status: number;
+  headers: Record<string, string>;
+  body: string;
+};
+
+/** 系统代理 API：插件通过内核代理执行外部命令 / 发起 HTTP 请求，绕过浏览器沙箱限制 */
+export interface PluginSysAPI {
+  /**
+   * 执行外部命令。workdir：可选工作目录——CLI 工具（如 codebuddy 读当前目录
+   * 上下文）对 cwd 敏感，缺省继承宿主进程 cwd（不可控），应由插件显式指定。
+   */
+  exec: (program: string, args: string[], workdir?: string) => Promise<SysExecResult>;
+  fetch: (url: string, options?: SysFetchOptions) => Promise<SysFetchResult>;
+}
+
+// ── 插件联系人消息事件（长轮询结果，messages.waitForMessage） ──
+
+/** 用户发给插件联系人的消息事件（插件注册为联系人后，从主聊天窗口接收用户消息） */
+export type ContactMessageEvent = {
+  spaceKey: string;
+  convId: string;
+  contactId: string;
+  messageId: string;
+  text: string;
+};
+
 export interface PluginSDK {
   /** 当前插件的域身份：tab 模式下由 URL query `pluginDomain` 解析（对齐旧 tab 语义） */
   domain: string;
@@ -209,8 +262,17 @@ export interface PluginSDK {
   identity: PluginIdentityAPI;
   /** 事件模块：仅 iframe 桥模式可用（tab 模式未注入） */
   events?: PluginEventsAPI;
-  /** 消息模块（应用会话）：仅 iframe 桥模式可用（tab 模式未注入） */
+  /** 消息模块（服务号 + Bot 联系人）：仅 iframe 桥模式可用（tab 模式未注入） */
   messages?: PluginMessagesAPI;
+  /** 系统代理模块（sys.exec / sys.fetch）：仅 iframe 桥模式可用 */
+  sys?: PluginSysAPI;
+  /**
+   * 注册宿主反向调用处理器：宿主经 host.request(event, payload) 主动查询插件时，
+   * 由本处注册的 handler 应答（返回值即答复，可返回 Promise）。
+   * 用于宿主需向插件求证的场景——如删除 bot 联系人前询问「该 bot 是否还存在」。
+   * 仅 iframe 桥模式可用。
+   */
+  onHostCall?: (event: string, handler: (payload: unknown) => unknown | Promise<unknown>) => void;
 }
 
 // ------------------------------------------------------------------
@@ -226,8 +288,8 @@ export type PluginSpaceContext = {
 
 /** 视图挂载信息（壳层分配；挂载区域矩形随宿主组件波次补充） */
 export type PluginMountInfo = {
-  /** 视图类型，对齐 manifest.views[].type */
-  viewType: 'app' | 'message-card';
+  /** 视图类型，对齐 manifest.views[].type；background 为隐藏常驻后台视图（无 UI，随插件启用启动） */
+  viewType: 'app' | 'message-card' | 'background';
   /** 卡片 id（仅 message-card 视图）：壳层分配，动作回调与归属校验的凭据 */
   cardId?: string;
   /** 卡片视图数据（仅 message-card 视图）：应用消息 card.data 透传 */
@@ -238,7 +300,7 @@ export type PluginMountInfo = {
  *  插件握手前唯一能拿到 viewId/卡片上下文的途径（hello 的 viewId 必须与桥绑定一致） */
 export type PluginViewBootstrap = {
   viewId: string;
-  viewType: 'app' | 'message-card';
+  viewType: 'app' | 'message-card' | 'background';
   cardId?: string;
   cardData?: unknown;
 };
@@ -262,7 +324,8 @@ export type PluginContext = {
 /** 插件视图声明（manifest.views 元素） */
 export type PluginViewDeclaration = {
   id: string;
-  type: 'app' | 'message-card';
+  /** background：隐藏常驻后台视图，无 UI，随插件启用即启动（用于常驻任务如消息监听） */
+  type: 'app' | 'message-card' | 'background';
   title?: string;
 };
 
@@ -279,6 +342,10 @@ export type PluginManifest = {
   /** 插件可运行的空间类型 */
   supportedSpaces: Array<'personal' | 'org'>;
   views: PluginViewDeclaration[];
+  /** 后台入口（可选）：包内 JS 文件相对路径（如 "background.js"），内容跑在
+   *  内核 QuickJS 沙箱（无 DOM），随插件启用由内核拉起常驻线程；
+   *  承载 bot 消息监听等无界面逻辑（plugin_system.md「后台运行时」） */
+  background?: string;
   /** 权限声明（如 storage:read / storage:write / org:read / org:sync） */
   permissions: string[];
   /** 依赖的 SDK 契约版本 */

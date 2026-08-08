@@ -206,6 +206,15 @@
       v-model="mobileDrawerVisible"
       @open-settings="handleMenuSelect('settings')"
     />
+
+    <!-- 后台常驻插件视图（隐藏 iframe，承载 bot 消息监听等常驻任务） -->
+    <PluginBackgroundHost
+      v-for="bg in backgroundPlugins"
+      :key="bg.pluginId"
+      :plugin-id="bg.pluginId"
+      :view-id="bg.viewId"
+      :space="pluginSpace"
+    />
   </div>
 </template>
 
@@ -216,7 +225,9 @@ import { onBackButtonPress } from '@tauri-apps/api/app';
 import { ChatDotRound, Cpu, Grid, Notebook, Setting } from '@element-plus/icons-vue';
 import type { PluginSpaceContext } from '../../packages/plugin-sdk/src';
 import PluginIframeHost from './components/plugin/PluginIframeHost.vue';
-import { unreadCountOf } from './mock/messages';
+import PluginBackgroundHost from './components/plugin/PluginBackgroundHost.vue';
+import { fetchPluginManifest } from './plugin/source';
+import { unreadCountOf } from './stores/messages';
 import { requestBadgeCount, spaceKeyOf } from './mock/contacts';
 import {
   currentSpace,
@@ -234,6 +245,7 @@ import MobileTopBar from './components/MobileTopBar.vue';
 import MobileSpaceDrawer from './components/MobileSpaceDrawer.vue';
 import { isMobileLayout, MOBILE_TABS } from './stores/ui-layout';
 import { invoke } from '@tauri-apps/api/core';
+import { listenP2pEvents } from './api';
 import { currentPage, popPage, resetStack } from './stores/mobile-nav';
 import { hasOverlay, requestCloseOverlay } from './stores/overlay-stack';
 import { requestOpenSystemSection } from './stores/pending-system-section';
@@ -264,6 +276,7 @@ export default defineComponent({
     ContactsPage,
     AppsPage,
     TestPage,
+    PluginBackgroundHost,
     SettingsPage,
     MinePage,
     TopNavbar,
@@ -355,6 +368,30 @@ export default defineComponent({
       type: currentSpace.value.type,
       id: currentSpace.value.type === 'org' ? currentSpace.value.orgId : 'personal'
     }));
+
+    /** 后台常驻视图列表：声明了 type:'background' 视图的已启用插件，应用启动即挂载，
+        隐藏 iframe 常驻运行（承载 bot 消息监听等常驻任务，不依赖可见视图） */
+    const backgroundPlugins = ref<Array<{ pluginId: string; viewId: string }>>([]);
+    const loadBackgroundPlugins = async (): Promise<void> => {
+      try {
+        const items = await window.electronAPI?.pluginMarket.list();
+        if (!items) return;
+        const result: Array<{ pluginId: string; viewId: string }> = [];
+        for (const item of items) {
+          if (!item.installed || !item.enabled) continue;
+          try {
+            const manifest = await fetchPluginManifest(item.id);
+            const bgView = manifest?.views?.find((v) => v.type === 'background');
+            if (bgView) result.push({ pluginId: item.id, viewId: bgView.id });
+          } catch {
+            /* 单插件清单不可读则跳过，不阻塞其余 */
+          }
+        }
+        backgroundPlugins.value = result;
+      } catch {
+        /* 插件市场不可用（非 Tauri 环境等）：无后台宿主 */
+      }
+    };
 
     /** 关闭当前插件 tab（熔断覆盖层「关闭」；移除 tab 并回来源页） */
     const closePluginTab = () => {
@@ -494,10 +531,25 @@ export default defineComponent({
       activeTab.value = 'mine';
     };
 
+    // p2p 事件退订器收集（SelfProfileSynced 等；卸载时统一退订）
+    const unlistenP2p: Array<() => void> = [];
+
     onMounted(() => {
       void loadCurrentUser();
       // 懒校验启动恢复的组织空间：组织已不存在时回退个人空间
       void validateCurrentSpace();
+      // 挂载后台常驻插件视图（bot 消息监听等），不依赖可见视图
+      void loadBackgroundPlugins();
+      // 插件后台运行时对账（内核 QuickJS 沙箱）：身份切换会停全部插件后台，
+      // 进入主界面按当前身份重新拉起（幂等；旧 background iframe 视图下线后
+      // 此调用成为唯一入口）
+      window.electronAPI?.pluginRuntime?.syncBackgrounds().catch(() => {});
+      // 自设备资料同步（多设备）：本机资料被其他设备的全量快照更新后刷新展示
+      void listenP2pEvents((event) => {
+        if (event.kind === 'SelfProfileSynced') {
+          void loadCurrentUser();
+        }
+      }).then((un) => unlistenP2p.push(un)).catch(() => {});
     });
 
     // 主程序更新：后台自动检查+下载就绪后弹重启确认（取消后可去 设置→关于 手动安装）
@@ -550,6 +602,7 @@ export default defineComponent({
       window.removeEventListener('spark:open-app', onOpenAppEvent);
       window.removeEventListener('spark:open-mine', onOpenMineEvent);
       window.removeEventListener('spark:close-plugin', onClosePluginEvent);
+      unlistenP2p.forEach((un) => un());
     });
 
     return {
@@ -563,6 +616,7 @@ export default defineComponent({
       contactsBadge,
       activePluginTab,
       pluginSpace,
+      backgroundPlugins,
       closePluginTab,
       handleMenuSelect,
       backFromSecondaryTab,

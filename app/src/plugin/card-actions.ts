@@ -12,8 +12,8 @@
  *
  * 主视图实例未运行（插件 tab 未打开）时 action 直接丢弃（设计允许，见 TODO.md）。
  */
-import type { PluginSpaceContext } from '../../packages/plugin-sdk/src';
-import type { BridgeHost } from '../../packages/plugin-sdk/src/bridge/host';
+import type { PluginSpaceContext } from '../../../packages/plugin-sdk/src';
+import type { BridgeHost } from '../../../packages/plugin-sdk/src/bridge/host';
 
 /** 卡片归属（按 pluginId + spaceKey 精确匹配） */
 type CardOwner = { pluginId: string; spaceKey: string };

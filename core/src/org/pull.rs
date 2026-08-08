@@ -15,7 +15,7 @@ use serde_json::{Map, Value};
 use crate::storage::StorageBackend;
 
 use super::Result;
-use super::claim::NodeInfoClaim;
+use super::claim::{NodeInfoClaim, verify_node_info_claim};
 use super::plugin_docs::collect_syncable_plugin_docs;
 use super::service::OrganizationService;
 use super::snapshot::normalize_incoming_snapshot;
@@ -24,11 +24,17 @@ use super::types::{OrganizationRecord, OrganizationSyncVersions};
 /// `memberAuthStatus`（org-pull-sync.ts:98-116）：按 rootId 找成员；
 /// 成员 nodeInfo 带 peerId 时要求请求方 peerId 一致（防冒领）。
 ///
+/// `authenticated_self`：请求方已通过 [`is_authenticated_self_request`]
+/// 验明为「本机同一身份的另一台设备」时置 true——成员资格仍校验，但跳过
+/// peer-mismatch（成员记录只有单 nodeInfo 槽，无法同时表达同 rootId 的
+/// 多台设备；不自检会让后 claim 的设备独占拉取权，其余自设备永远被过滤）。
+///
 /// 返回 `Err(reason)`：`"not-member"` / `"peer-mismatch"`。
 pub fn member_auth_status(
     record: &OrganizationRecord,
     requester_root_id: &str,
     requester_peer_id: Option<&str>,
+    authenticated_self: bool,
 ) -> std::result::Result<(), &'static str> {
     let Some(member) = record
         .members
@@ -37,6 +43,9 @@ pub fn member_auth_status(
     else {
         return Err("not-member");
     };
+    if authenticated_self {
+        return Ok(());
+    }
     let expected = member
         .node_info
         .as_ref()
@@ -51,6 +60,48 @@ pub fn member_auth_status(
         return Err("peer-mismatch");
     }
     Ok(())
+}
+
+/// 自设备已认证判定：请求捎带的 nodeInfoClaim 验签通过、claim.rootId ==
+/// requesterRootId == 本机当前身份（即请求来自同一身份的另一台设备），
+/// 且连接层 peerId 与声明 peerId 一致（两端都有值时，防代填）。
+///
+/// claim 的 Ed25519 签名证明请求方持有该 rootId 的根私钥——与 dm 信封
+/// 验签同级信任；身份所有者本就有权拉取自己作为成员的组织数据，故
+/// 验明后放开 peer-mismatch 是安全的（成员资格仍单独校验）。
+fn is_authenticated_self_request(
+    payload: &Value,
+    requester_root_id: &str,
+    current_root_id: Option<&str>,
+    remote_peer_id: Option<&str>,
+    now_ms: i64,
+) -> bool {
+    let Some(current) = current_root_id else {
+        return false;
+    };
+    if requester_root_id != current {
+        return false;
+    }
+    let Some(claim_value) = payload.get("nodeInfoClaim").filter(|v| !v.is_null()) else {
+        return false;
+    };
+    let Ok(claim) = serde_json::from_value::<NodeInfoClaim>(claim_value.clone()) else {
+        return false;
+    };
+    if !verify_node_info_claim(&claim, now_ms).is_ok() {
+        return false;
+    }
+    if claim.root_id.trim().to_lowercase() != requester_root_id {
+        return false;
+    }
+    if let (Some(remote), Some(claimed)) =
+        (remote_peer_id, claim.node_info.peer_id.as_deref())
+    {
+        if claimed != remote {
+            return false;
+        }
+    }
+    true
 }
 
 /// 请求方 peerId 解析（org-pull-sync.ts:158-160）：声明值优先，连接层兜底。
@@ -134,9 +185,22 @@ pub fn handle_pull_list_request<S: StorageBackend>(
         }
     }
 
+    // 自设备请求验明（claim 验签 + rootId 同源 + peer 绑定）：放开
+    // peer-mismatch 过滤，使任一台自设备都能拉到自己作为成员的组织
+    let authenticated_self = is_authenticated_self_request(
+        payload,
+        requester_root_id,
+        current_root_id,
+        remote_peer_id,
+        now_ms,
+    );
+
     let visible: Vec<Value> = organizations
         .iter()
-        .filter(|record| member_auth_status(record, requester_root_id, requester_peer_id).is_ok())
+        .filter(|record| {
+            member_auth_status(record, requester_root_id, requester_peer_id, authenticated_self)
+                .is_ok()
+        })
         .map(|record| {
             let mut item = Map::new();
             item.insert("orgId".to_string(), Value::from(record.org_id.clone()));
@@ -171,6 +235,8 @@ pub fn handle_pull_org_request<S: StorageBackend>(
     storage: &S,
     payload: &Value,
     remote_peer_id: Option<&str>,
+    current_root_id: Option<&str>,
+    now_ms: i64,
 ) -> Result<Value> {
     let requester_root_id = payload
         .get("requesterRootId")
@@ -211,7 +277,19 @@ pub fn handle_pull_org_request<S: StorageBackend>(
         }));
     };
 
-    if let Err(reason) = member_auth_status(&record, requester_root_id, requester_peer_id) {
+    let authenticated_self = is_authenticated_self_request(
+        payload,
+        requester_root_id,
+        current_root_id,
+        remote_peer_id,
+        now_ms,
+    );
+    if let Err(reason) = member_auth_status(
+        &record,
+        requester_root_id,
+        requester_peer_id,
+        authenticated_self,
+    ) {
         return Ok(serde_json::json!({
             "ok": true,
             "type": "org-pull-org-response",

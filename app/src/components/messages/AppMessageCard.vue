@@ -2,7 +2,7 @@
      与 PluginIframeHost 的差异：无五态覆盖层/心跳熔断——加载失败直接 emit('fallback')
      由上层降级为原生摘要；高度由插件经桥申请（requestCardHeight），壳层封顶 400px；
      能力面按 view 裁剪（dispatcher viewType='message-card'：无网络、无签名、无 messages 写）。
-     卡片按钮回调经桥 action 上行 → plugin-card-actions 归属校验 → 主视图实例 onCardAction。 -->
+     卡片按钮回调经桥 action 上行 → plugin/card-actions 归属校验 → 主视图实例 onCardAction。 -->
 <template>
   <div class="app-message-card" :style="{ height: `${height}px` }">
     <iframe
@@ -25,9 +25,9 @@ import { computed, defineComponent, nextTick, onMounted, onUnmounted, ref, type 
 import { Loading } from '@element-plus/icons-vue';
 import type { PluginContext, PluginSpaceContext } from '../../../../packages/plugin-sdk/src';
 import { createBridgeHost, type BridgeHost } from '../../../../packages/plugin-sdk/src/bridge/host';
-import { buildPluginHostSrcdoc, fetchPluginManifest } from '../../plugin-source';
-import { createPluginBridgeDispatcher } from '../../plugin-bridge-dispatcher';
-import { pluginSpaceKey, registerCard, routeCardAction, unregisterCard } from '../../plugin-card-actions';
+import { buildPluginHostSrcdoc, fetchPluginManifest } from '../../plugin/source';
+import { createPluginBridgeDispatcher } from '../../plugin/bridge-dispatcher';
+import { pluginSpaceKey, registerCard, routeCardAction, unregisterCard } from '../../plugin/card-actions';
 import { themeMode } from '../../stores/theme';
 
 /** 高度上下限（壳层封顶 400px，设计文档「UI 集成点」） */
@@ -112,18 +112,6 @@ export default defineComponent({
       }
       const domain = `plugin:${props.pluginId}`;
       try {
-        const handler = await createPluginBridgeDispatcher({
-          pluginId: props.pluginId,
-          viewId: props.viewId,
-          domain,
-          space: props.space,
-          pluginName: props.pluginName || manifest?.name,
-          supportedSpaces: manifest?.supportedSpaces,
-          viewType: 'message-card'
-        });
-        if (gen !== generation) {
-          return;
-        }
         const ctx: PluginContext = {
           pluginId: props.pluginId,
           viewId: props.viewId,
@@ -132,6 +120,8 @@ export default defineComponent({
           theme: resolveTheme(),
           mount: { viewType: 'message-card', cardId, cardData: props.cardData }
         };
+        // 与 PluginIframeHost 同口径：createBridgeHost 同步注册 message 监听，
+        // handler 懒解析（避免 dispatcher 的 Tauri invoke 推迟监听注册导致握手超时）
         host = createBridgeHost({
           iframe,
           pluginId: props.pluginId,
@@ -141,7 +131,16 @@ export default defineComponent({
           targetOrigin: '*',
           sdkVersion: manifest?.sdkVersion ?? '1',
           ctx,
-          handler,
+          handler: () =>
+            createPluginBridgeDispatcher({
+              pluginId: props.pluginId,
+              viewId: props.viewId,
+              domain,
+              space: props.space,
+              pluginName: props.pluginName || manifest?.name,
+              supportedSpaces: manifest?.supportedSpaces,
+              viewType: 'message-card'
+            }),
           onEvent: (event, payload) => {
             // 高度申请：壳层封顶 400px（payload 非法一律忽略）
             if (event !== 'card-resize') {
@@ -153,7 +152,7 @@ export default defineComponent({
             }
           },
           onAction: (_claimedCardId, actionId, data) => {
-            // 归属校验在 plugin-card-actions（以桥绑定的 pluginId/cardId 为准，
+            // 归属校验在 plugin/card-actions（以桥绑定的 pluginId/cardId 为准，
             // 插件自报的 cardId 一律忽略）；主实例未运行时 action 丢弃（设计允许）
             routeCardAction(props.pluginId, spaceKey, cardId, actionId, data);
           }

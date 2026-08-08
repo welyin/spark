@@ -33,6 +33,7 @@ fn friend_record(root_id: &str) -> FriendRecord {
         photos: Vec::new(),
         permission: "open".to_string(),
         blocked: false,
+        updated_at: NOW,
     }
 }
 

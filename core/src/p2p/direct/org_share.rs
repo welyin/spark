@@ -94,11 +94,13 @@ pub fn build_pull_list_request(
     serde_json::to_string(&Value::Object(map)).expect("pull-list request is always serializable")
 }
 
-/// 构造 org-pull-org 请求帧。
+/// 构造 org-pull-org 请求帧。`node_info_claim` 随帧捎带（自设备验明用：
+/// 响应方对验签通过的同 rootId 请求放开 peer-mismatch）。
 pub fn build_pull_org_request(
     requester_root_id: &str,
     requester_peer_id: Option<&str>,
     org_id: &str,
+    node_info_claim: Option<Value>,
 ) -> String {
     let mut payload = Map::new();
     payload.insert(
@@ -110,6 +112,9 @@ pub fn build_pull_org_request(
             "requesterPeerId".to_string(),
             Value::String(peer_id.to_string()),
         );
+    }
+    if let Some(claim) = node_info_claim {
+        payload.insert("nodeInfoClaim".to_string(), claim);
     }
     payload.insert("orgId".to_string(), Value::String(org_id.to_string()));
     let mut map = Map::new();

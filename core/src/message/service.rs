@@ -78,6 +78,7 @@ impl MessageService {
             muted: false,
             draft: String::new(),
             updated_at: now_ms,
+            meta_updated_at: 0,
         };
         Self::upsert_conversation(storage, space, &record)?;
         Ok(record)
@@ -138,19 +139,23 @@ impl MessageService {
         })
     }
 
-    /// 写入草稿（会话不存在时不动）。
+    /// 写入草稿（会话不存在时不动）。刷新 `meta_updated_at`（conv-sync
+    /// LWW 依据）。
     pub fn set_draft<S: StorageBackend>(
         storage: &mut S,
         space: &str,
         conv_id: &str,
         draft: &str,
+        now_ms: i64,
     ) -> Result<()> {
         Self::mutate_conversation(storage, space, conv_id, |conv| {
             conv.draft = draft.to_string();
+            conv.meta_updated_at = now_ms;
         })
     }
 
     /// 切换置顶：`pinnedAt` 在 0 与 `now_ms` 之间切换（会话不存在时不动）。
+    /// 刷新 `meta_updated_at`（conv-sync LWW 依据）。
     pub fn toggle_pin<S: StorageBackend>(
         storage: &mut S,
         space: &str,
@@ -159,16 +164,22 @@ impl MessageService {
     ) -> Result<()> {
         Self::mutate_conversation(storage, space, conv_id, |conv| {
             conv.pinned_at = if conv.pinned_at > 0 { 0 } else { now_ms };
+            conv.meta_updated_at = now_ms;
         })
     }
 
-    /// 切换免打扰（会话不存在时不动）。
+    /// 切换免打扰（会话不存在时不动）。刷新 `meta_updated_at`（conv-sync
+    /// LWW 依据）。
     pub fn toggle_mute<S: StorageBackend>(
         storage: &mut S,
         space: &str,
         conv_id: &str,
+        now_ms: i64,
     ) -> Result<()> {
-        Self::mutate_conversation(storage, space, conv_id, |conv| conv.muted = !conv.muted)
+        Self::mutate_conversation(storage, space, conv_id, |conv| {
+            conv.muted = !conv.muted;
+            conv.meta_updated_at = now_ms;
+        })
     }
 
     /// 清空聊天记录：仅删本地消息，保留会话入口并把未读清零（ui-messages.md §5.1）。

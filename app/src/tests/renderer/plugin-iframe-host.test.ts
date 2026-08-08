@@ -1,6 +1,6 @@
 /**
  * PluginIframeHost 组件级测试（桥/源/dispatcher 均 mock，watchdog 与
- * plugin-disabled 用真实模块——纯逻辑、localStorage 持久化，jsdom 直测）：
+ * plugin/disabled 用真实模块——纯逻辑、localStorage 持久化，jsdom 直测）：
  * - init 竞态：快速连续 reload 只留一个活 host（旧代全部销毁）；
  * - 已停用实例首帧不渲染 iframe；
  * - 重新启用清零停用标记与熔断计数后重新加载。
@@ -14,8 +14,8 @@ import {
   disablePluginInstance,
   isPluginInstanceDisabled,
   pluginInstanceKey
-} from '../../plugin-disabled';
-import { getWatchdogCounters } from '../../plugin-watchdog';
+} from '../../plugin/disabled';
+import { getWatchdogCounters } from '../../plugin/watchdog';
 
 type FakeHost = {
   ready: Promise<unknown>;
@@ -49,12 +49,12 @@ vi.mock('../../../../packages/plugin-sdk/src/bridge/host', () => ({
   })
 }));
 
-vi.mock('../../plugin-source', () => ({
+vi.mock('../../plugin/source', () => ({
   buildPluginHostSrcdoc: vi.fn(() => '<!doctype html><html><body></body></html>'),
   fetchPluginManifest: vi.fn(async () => null)
 }));
 
-vi.mock('../../plugin-bridge-dispatcher', () => ({
+vi.mock('../../plugin/bridge-dispatcher', () => ({
   createPluginBridgeDispatcher: vi.fn(async () => async () => null)
 }));
 

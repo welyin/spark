@@ -52,6 +52,9 @@ tokio = { version = "1.47", features = ["macros", "rt-multi-thread", "sync", "ti
 async-trait = "0.1.89"
 # 本机网卡枚举：通配 listen 地址（0.0.0.0/::）展开为可拨号的具体地址。
 if-addrs = "0.15"
+# 插件后台运行时的 JS 引擎（plugin-runtime 设计）：QuickJS 纯 C 嵌入，
+# 二进制增量约 1~2MB；引擎级内存上限/中断 handler 支撑插件熔断。
+rquickjs = { version = "0.12.2", features = ["loader"] }
 
 [dev-dependencies]
 tempfile = "3"

@@ -197,11 +197,21 @@ fn qr_backup_payload_compact_and_recoverable() {
     let err = kernel_a.backup_payload_qr("wrong-password").unwrap_err();
     assert!(matches!(err, KernelError::InvalidPassword));
 
-    // 紧凑载荷：<2KB、文件外层与密文均不含 avatar
+    // 紧凑载荷：<2KB、文件外层与密文均不含 avatar。
+    // P2P 运行时载荷为 v1 包装格式 `{"v":1,"i":{IdentityFile},"p","a"}`，
+    // 否则为纯 IdentityFile JSON——解包后断言身份文件本体。
+    let unwrap_qr = |raw: &str| -> Value {
+        let v: Value = serde_json::from_str(raw).unwrap();
+        if v.get("v").and_then(Value::as_u64) == Some(1) {
+            v.get("i").cloned().unwrap_or(Value::Null)
+        } else {
+            v
+        }
+    };
     let qr = kernel_a.backup_payload_qr(PASSWORD).unwrap();
     assert!(qr.len() < 2 * 1024, "紧凑载荷 <2KB（实测 {}B）", qr.len());
     eprintln!("[qr-backup] 紧凑载荷（30KB 头像身份）{}B", qr.len());
-    let qr_json: Value = serde_json::from_str(&qr).unwrap();
+    let qr_json = unwrap_qr(&qr);
     assert_eq!(qr_json["rootId"], root_id);
     assert!(qr_json.get("avatar").is_none(), "文件外层无 avatar");
     assert!(!qr.contains("data:image"), "载荷不含头像 data URL");
@@ -209,7 +219,7 @@ fn qr_backup_payload_compact_and_recoverable() {
 
     // 同口令重新加密：两次导出 salt/iv 不同
     let qr2 = kernel_a.backup_payload_qr(PASSWORD).unwrap();
-    let qr2_json: Value = serde_json::from_str(&qr2).unwrap();
+    let qr2_json = unwrap_qr(&qr2);
     assert_ne!(qr_json["salt"], qr2_json["salt"], "每次导出随机 salt");
     assert_ne!(qr_json["iv"], qr2_json["iv"], "每次导出随机 iv");
 

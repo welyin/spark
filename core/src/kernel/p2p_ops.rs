@@ -125,6 +125,8 @@ impl Kernel {
             avatar_shared: Arc::clone(&self.avatar_shared),
             node_shared: Arc::clone(&self.p2p_node_shared),
             signing_key_shared: Arc::clone(&self.signing_key_shared),
+            password_shared: Arc::clone(&self.password_shared),
+            data_dir: self.config.data_dir.clone(),
             io_lock: Arc::clone(&self.io_lock),
         });
         let mut node =
@@ -148,6 +150,8 @@ impl Kernel {
             event_tx: self.event_tx.clone(),
             recovery_trigger: Arc::clone(&self.recovery_trigger),
             org_address_publish: Arc::clone(&self.org_address_publish),
+            data_dir: self.config.data_dir.clone(),
+            self_device_link: Arc::clone(&self.self_device_link),
         };
         let worker = org_sync::spawn_worker(self.runtime.handle(), ctx, org_sync_rx);
 
@@ -169,6 +173,22 @@ impl Kernel {
         self.p2p_pump = Some(pump);
         self.org_sync_worker = Some(worker);
         self.org_sync_tx = Some(org_sync_tx);
+
+        // 设备管理（多设备同步）：本机设备信息采集落库（设备清单的本机条目），
+        // 随后向全部已配对自设备补推 device-sync + 全量 profile-sync——对端离线
+        // 错过的变更借此补齐（对端收 device-sync 会回发其记录，双向齐全）。
+        let now = system_now_ms();
+        if let Ok(mut storage) = self.require_storage().map(|s| s.clone()) {
+            if let Ok(record) = crate::device::DeviceService::upsert_self(&mut storage, &peer_id, now)
+            {
+                if let Ok(data) = serde_json::to_value(&record) {
+                    let _ = self.event_tx.send(P2pEvent::DeviceUpdated(data));
+                }
+                self.broadcast_device_sync(&record);
+            }
+        }
+        self.broadcast_self_profile_snapshot();
+
         Ok(peer_id)
     }
 
@@ -208,6 +228,8 @@ impl Kernel {
             event_tx: self.event_tx.clone(),
             recovery_trigger: Arc::clone(&self.recovery_trigger),
             org_address_publish: Arc::clone(&self.org_address_publish),
+            data_dir: self.config.data_dir.clone(),
+            self_device_link: Arc::clone(&self.self_device_link),
         })
     }
 

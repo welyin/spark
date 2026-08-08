@@ -63,7 +63,7 @@ import { currentSpace, currentSpaceType } from '../stores/current-space';
 import { consumePendingChat, pendingChat } from '../stores/pending-chat';
 import { isMobileLayout } from '../stores/ui-layout';
 import { currentPage, popPage, pushPage, removeFrames, resetStack } from '../stores/mobile-nav';
-import { ensureDirectConversation, spaceKeyOf } from '../mock/messages';
+import { ensureDirectConversation, spaceKeyOf } from '../stores/messages';
 import { CONTACT_INTENT_ADD, CONTACT_INTENT_BROWSE, openContacts } from '../components/contacts/open-intents';
 
 /** 本页在导航栈中的 tab 键（与 App.vue activeTab 一致） */

@@ -6,6 +6,7 @@
 
 pub mod contact;
 pub mod data;
+pub mod device;
 pub mod docs;
 pub mod dto;
 pub mod evidence;
@@ -17,6 +18,7 @@ pub mod org;
 pub mod p2p;
 pub mod plugin;
 pub mod system;
+pub mod sys;
 // tauri-plugin-updater 仅桌面可用；门控用内建 target_os（与 Cargo.toml 的
 // target 依赖表一致），tauri 自定义 cfg(desktop) 对依赖解析器不可见
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
