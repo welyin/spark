@@ -30,7 +30,7 @@ use crate::p2p::peer_activity::{NodeObservation, PeerActivityStore};
 use crate::p2p::peer_targets::PeerNodeInfo;
 use crate::p2p::P2pNode;
 use crate::schema::CollectionSchemaDeclaration;
-use crate::storage::SledStorage;
+use crate::storage::{StorageBackend, SledStorage};
 use crate::sync::apply::{ApplyRemoteOptions, apply_remote_update};
 use crate::sync::meta::RemoteMeta;
 
@@ -122,6 +122,10 @@ pub(crate) struct KernelHost {
     /// 存储读写互斥（与 kernel 变更类门面方法同一把；`handle_dm` 的入站
     /// 落库在锁内执行，避免与 Tauri 命令线程的 read-modify-write 交错）。
     pub(crate) io_lock: Arc<Mutex<()>>,
+    /// 已证明支持 pdsync 的自设备 peerId 集合（收尾能力探测，§7.1；按连接层
+    /// peerId 键控=按设备粒度，与 kernel 共享，host `handle_dm` 写入、
+    /// org-sync 保活读取）。
+    pub(crate) pdsync_capable_self_devices: Arc<Mutex<std::collections::HashSet<String>>>,
 }
 
 impl KernelHost {
@@ -150,6 +154,7 @@ impl KernelHost {
             password_shared: Arc::clone(&self.password_shared),
             data_dir: self.data_dir.clone(),
             io_lock: Arc::clone(&self.io_lock),
+            pdsync_capable_self_devices: Arc::clone(&self.pdsync_capable_self_devices),
         }
     }
 }
@@ -167,9 +172,60 @@ pub(crate) struct KernelDmHandler {
     password_shared: Arc<Mutex<Option<String>>>,
     data_dir: std::path::PathBuf,
     io_lock: Arc<Mutex<()>>,
+    /// 已证明支持 pdsync 的自设备 peerId 集合（收尾能力探测，§7.1，按设备粒度）。
+    pdsync_capable_self_devices: Arc<Mutex<std::collections::HashSet<String>>>,
 }
 
 impl KernelDmHandler {
+    /// 收尾（§7.1）：标记某自设备（连接层 peerId）已证明支持 pdsync。保活据此
+    /// 停止向其回退发旧快照。幂等（集合内重复无影响）。
+    fn kernel_pdsync_capable_mark(&self, peer_id: &str) {
+        self.pdsync_capable_self_devices
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(peer_id.to_string());
+    }
+
+    /// 本地写入节点 id：p2p 运行中为 peerId；否则回退持久化 p2p 身份派生的
+    /// 稳定 id（见 [`super::doc_ops::persisted_sync_node_id`]，避免多台离线
+    /// 设备共用 `local-node` 被向量比较判为同源）。
+    fn sync_node_id(&self) -> String {
+        self.node_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|node| node.peer_id().to_string())
+            .unwrap_or_else(|| super::doc_ops::persisted_sync_node_id(&self.storage))
+    }
+
+    /// 收尾（§7.1）能力标记判定：仅当 pdsync-* 信封**验签通过**且
+    /// `from == 本机 rootId`（验签已把 from 绑定根公钥，确为自设备）时，
+    /// 返回应标记的连接层 peerId。
+    ///
+    /// 两处防误标：
+    /// - 验签前不可按 payload kind 字符串标记——伪造信封会欺骗能力探测；
+    /// - 按连接层 peerId（每设备唯一）而非 rootId 键控——同身份所有设备共
+    ///   享 rootId，按 rootId 标记会让一台新设备停掉所有自设备的旧快照
+    ///   回退（旧版本设备从此收不到数据，§7.1 回退被破坏）。
+    fn pdsync_capability_mark(
+        payload: &Value,
+        my_root_id: &str,
+        remote_peer_id: &str,
+    ) -> Option<String> {
+        let kind = payload.get("kind").and_then(Value::as_str)?;
+        if !matches!(
+            kind,
+            super::dm_envelope::KIND_PDSYNC_HELLO
+                | super::dm_envelope::KIND_PDSYNC_NEED
+                | super::dm_envelope::KIND_PDSYNC_DATA
+        ) {
+            return None;
+        }
+        let verified =
+            dm_envelope::verify_envelope(payload, my_root_id, system_now_ms()).ok()?;
+        (verified.from == my_root_id).then(|| remote_peer_id.to_string())
+    }
+
     /// 自动接受/重确认的回发：取本机节点信息装配 friend-accept 信封
     /// （设备配对 from==to==我；重确认 to=请求方 rootId），经节点命令通道
     /// 尽力投递。
@@ -308,7 +364,7 @@ impl KernelDmHandler {
         let Ok(text) = serde_json::to_string_pretty(&file) else {
             return false;
         };
-        if std::fs::write(&path, text).is_err() {
+        if super::identity::write_identity_file_atomic(&path, &text).is_err() {
             return false;
         }
         // 共享格刷新（dm 应答/出站口径）+ 前端通知
@@ -324,6 +380,81 @@ impl KernelDmHandler {
         }
         let _ = self.event_tx.send(crate::p2p::P2pEvent::SelfProfileSynced(data));
         false
+    }
+
+    /// pdsync 合入 `profile:self` 后回写身份文件（P2）。
+    ///
+    /// sled 镜像已由 `handle_pdsync_data` LWW 落地；这里把 sled 的最新资料
+    /// 同步回身份文件（保证两处一致）。仅解锁态（有口令）可重封身份文件；
+    /// 锁定态跳过——下次 unlock 时以 sled 覆盖（见 login）。写失败静默。
+    fn apply_profile_from_sled(&self, root_id: &str) {
+        let Some(password) = self
+            .password_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        else {
+            return;
+        };
+        // 读 sled profile:self
+        let Some(raw) = self
+            .storage
+            .get(super::identity::PROFILE_SELF_KEY)
+            .ok()
+            .flatten()
+        else {
+            return;
+        };
+        let Ok(profile) = serde_json::from_str::<super::identity::SyncableProfile>(&raw) else {
+            return;
+        };
+        let info = profile.to_profile_info();
+        let path = self
+            .data_dir
+            .join("identities")
+            .join(format!("{root_id}.json"));
+        let Ok(raw_file) = std::fs::read_to_string(&path) else {
+            return;
+        };
+        let Ok(mut file) = crate::identity::IdentityFile::from_json(&raw_file) else {
+            return;
+        };
+        // 以 sled 为源（pdsync 已 LWW 裁决，sled profile:self 是本次合入胜者），
+        // 回写身份文件资料字段。
+        if crate::identity::update_profile(
+            &mut file,
+            &password,
+            info.nickname.as_deref(),
+            match info.avatar.as_deref() {
+                Some(a) if !a.is_empty() => Some(Some(a)),
+                _ => Some(None),
+            },
+            Some(info.gender.as_deref().unwrap_or("")),
+            Some(info.region.as_deref().unwrap_or("")),
+            Some(info.signature.as_deref().unwrap_or("")),
+        )
+        .is_err()
+        {
+            return;
+        }
+        let Ok(text) = serde_json::to_string_pretty(&file) else {
+            return;
+        };
+        if super::identity::write_identity_file_atomic(&path, &text).is_err() {
+            return;
+        }
+        *self.nickname_shared.lock().unwrap_or_else(|e| e.into_inner()) =
+            file.nickname.clone().unwrap_or_default();
+        *self.avatar_shared.lock().unwrap_or_else(|e| e.into_inner()) =
+            file.avatar.clone().unwrap_or_default();
+        // 前端通知（与 apply_self_profile 同口径）：我的资料已被自设备同步更新
+        let mut data = serde_json::json!({
+            "nickname": file.nickname.clone().unwrap_or_default(),
+        });
+        if let Some(a) = &file.avatar {
+            data["avatar"] = Value::from(a.clone());
+        }
+        let _ = self.event_tx.send(crate::p2p::P2pEvent::SelfProfileSynced(data));
     }
 
     /// profile-sync 握手回发：读身份文件的全量资料快照装配 profile-sync 信封
@@ -496,6 +627,60 @@ impl KernelDmHandler {
             let _ = node.dm_direct(&target, envelope).await;
         });
     }
+
+    /// pdsync 出站投递：把纯逻辑层构建好的 hello/need/data body 装配成完整
+    /// pdsync-* 信封，逐个 `dm_direct` 回投连接层对端（spawn 模式同
+    /// `spawn_device_sync_reply`，失败静默）。
+    fn spawn_pdsync_reply(
+        &self,
+        my_root_id: &str,
+        target: PeerNodeInfo,
+        outputs: Vec<super::inbound_dm::PdsyncOut>,
+    ) {
+        let node = self
+            .node_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let signing_key = self
+            .signing_key_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let (Some(node), Some(signing_key)) = (node, signing_key) else {
+            return;
+        };
+        let to = my_root_id.to_string();
+        tokio::spawn(async move {
+            for output in outputs {
+                let kind = match &output {
+                    super::inbound_dm::PdsyncOut::Push { .. } => {
+                        super::dm_envelope::KIND_PDSYNC_DATA
+                    }
+                    super::inbound_dm::PdsyncOut::Need { .. } => {
+                        super::dm_envelope::KIND_PDSYNC_NEED
+                    }
+                    super::inbound_dm::PdsyncOut::Data { .. } => {
+                        super::dm_envelope::KIND_PDSYNC_DATA
+                    }
+                };
+                let body = match &output {
+                    super::inbound_dm::PdsyncOut::Push { body }
+                    | super::inbound_dm::PdsyncOut::Need { body }
+                    | super::inbound_dm::PdsyncOut::Data { body } => body.clone(),
+                };
+                let envelope = dm_envelope::build_envelope(
+                    kind,
+                    &to,
+                    &to,
+                    system_now_ms(),
+                    body,
+                    &signing_key,
+                );
+                let _ = node.dm_direct(&target, envelope).await;
+            }
+        });
+    }
 }
 
 impl DmHandler for KernelDmHandler {
@@ -527,9 +712,17 @@ impl DmHandler for KernelDmHandler {
             }
         };
         let mut storage = self.storage.clone();
+        // 收尾（§7.1）能力标记：验签通过且 from==本机 rootId 的 pdsync-* 信封
+        // 才证明对端（该连接层 peerId 对应的设备）支持 pdsync——保活据此停止
+        // 向该设备回退发旧快照。判定内部做完整验签，先于入站合入执行不影响
+        // 正确性（验签不过不标记）。
+        if let Some(peer) = Self::pdsync_capability_mark(&payload, &root_id, remote_peer_id) {
+            self.kernel_pdsync_capable_mark(&peer);
+        }
         // 入站落库整体在 io_lock 内执行（与 Tauri 命令线程的变更互斥）
         let result = {
             let _io = self.io_lock.lock().unwrap_or_else(|e| e.into_inner());
+            let node_id = self.sync_node_id();
             super::inbound_dm::handle_inbound_dm(
                 &mut storage,
                 &root_id,
@@ -538,6 +731,7 @@ impl DmHandler for KernelDmHandler {
                 remote_peer_id,
                 online_peers,
                 system_now_ms(),
+                &node_id,
             )
             .map_err(|e| e.to_string())?
         };
@@ -572,9 +766,21 @@ impl DmHandler for KernelDmHandler {
             // 无回发指令但有快照：仅做 LWW 应用（对端较新时更新本机身份文件）
             self.apply_self_profile(&root_id, &self_profile);
         }
+        // pdsync 合入 profile:self：回写身份文件（仅解锁态）
+        if result.profile_applied {
+            self.apply_profile_from_sled(&root_id);
+        }
         // 自设备 device-sync 握手：回发本机设备记录
         if let Some(target) = result.device_sync_reply {
             self.spawn_device_sync_reply(&root_id, target);
+        }
+        // pdsync 出站：把纯逻辑层构建好的 body 装配成完整信封回投连接层对端
+        if !result.pdsync_out.is_empty() {
+            let target = PeerNodeInfo {
+                peer_id: Some(remote_peer_id.to_string()),
+                addresses: Vec::new(),
+            };
+            self.spawn_pdsync_reply(&root_id, target, result.pdsync_out);
         }
         Ok(result.response)
     }
@@ -756,8 +962,21 @@ impl P2pHost for KernelHost {
         else {
             return Vec::new();
         };
-        OrganizationService::get_recovery_view(&mut self.storage, &root_id, system_now_ms())
-            .unwrap_or_default()
+        // nodeId：p2p 运行中为 peerId，否则持久化身份派生（同 dm 入站口径）
+        let node_id = self
+            .node_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|node| node.peer_id().to_string())
+            .unwrap_or_else(|| super::doc_ops::persisted_sync_node_id(&self.storage));
+        OrganizationService::get_recovery_view(
+            &mut self.storage,
+            &root_id,
+            system_now_ms(),
+            &node_id,
+        )
+        .unwrap_or_default()
     }
 
     /// org-share-ack 唤醒：按 syncId 匹配推送编排注册的等待器（含竞态缓存）。
@@ -901,5 +1120,88 @@ impl P2pHost for KernelHost {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ed25519_dalek::SigningKey;
+    use sha2::{Digest, Sha256};
+
+    /// rootId = sha256hex(签名公钥)（与 dm_envelope 验签口径一致）。
+    fn identity(seed: u8) -> (SigningKey, String) {
+        let key = SigningKey::from_bytes(&[seed; 32]);
+        let root_id = hex::encode(Sha256::digest(key.verifying_key().to_bytes()));
+        (key, root_id)
+    }
+
+    /// 能力标记（§7.1）：只有验签通过且 from==本机 rootId 的 pdsync-* 信封
+    /// 才标记，且按连接层 peerId 键控（每设备独立）。
+    #[test]
+    fn pdsync_capability_mark_requires_verified_self_envelope() {
+        let (key, root) = identity(1);
+        let now = system_now_ms();
+        let body = serde_json::json!({ "categories": {} });
+
+        // 合法自设备 pdsync-hello：标记连接层 peerId
+        let hello = dm_envelope::build_envelope(
+            dm_envelope::KIND_PDSYNC_HELLO,
+            &root,
+            &root,
+            now,
+            body.clone(),
+            &key,
+        );
+        assert_eq!(
+            KernelDmHandler::pdsync_capability_mark(&hello, &root, "peer-a"),
+            Some("peer-a".to_string())
+        );
+
+        // 伪造信封：from 填本机 rootId 但用他人密钥签名（pubKey 哈希 != from）
+        // → 验签失败，不标记
+        let (other_key, other_root) = identity(2);
+        let forged = dm_envelope::build_envelope(
+            dm_envelope::KIND_PDSYNC_DATA,
+            &root,
+            &root,
+            now,
+            body.clone(),
+            &other_key,
+        );
+        assert_eq!(
+            KernelDmHandler::pdsync_capability_mark(&forged, &root, "peer-a"),
+            None,
+            "验签失败的信封不得标记能力"
+        );
+
+        // 合法签名但 from != 本机 rootId（非自设备）：不标记
+        let foreign = dm_envelope::build_envelope(
+            dm_envelope::KIND_PDSYNC_DATA,
+            &other_root,
+            &root,
+            now,
+            body.clone(),
+            &other_key,
+        );
+        assert_eq!(
+            KernelDmHandler::pdsync_capability_mark(&foreign, &root, "peer-a"),
+            None,
+            "from 非本机 rootId 不得标记能力"
+        );
+
+        // 自设备但非 pdsync kind：不标记
+        let profile = dm_envelope::build_envelope(
+            KIND_PROFILE_SYNC,
+            &root,
+            &root,
+            now,
+            body,
+            &key,
+        );
+        assert_eq!(
+            KernelDmHandler::pdsync_capability_mark(&profile, &root, "peer-a"),
+            None
+        );
     }
 }

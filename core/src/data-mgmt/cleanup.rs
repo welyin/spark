@@ -3,7 +3,8 @@
 //! 只清"可重建 / 已终结"的状态，业务文档一律不动。三类对象，共用判定式
 //! `now - <时间字段> > <保留期>`（**严格 `>`**，恰好满 90 天不删）：
 //!
-//! 1. lww 删除标记 tombstone（`meta:*` 值含 `tombstone:true` 且 `ts` 超期）——
+//! 1. lww 删除标记 tombstone（`meta:*` 与 pdsync 个人域 `pmeta:*` 值含
+//!    `tombstone:true` 且 `ts` 超期）——
 //!    收敛依赖存活副本持有的 tombstone：若全网副本都 GC 了同一 tombstone，离线超期
 //!    节点重推旧 doc 会因本地 meta 缺失（LWW 判 remote 胜）使文档网络级复活。
 //!    90 天保留期即"最大离线窗口"的取舍（cleanup.ts:14-19 注释）；
@@ -79,18 +80,24 @@ fn delete_batch<S: StorageBackend>(storage: &mut S, keys: Vec<String>) -> Result
 }
 
 /// `cleanupTombstones`（cleanup.ts:49-62）：清理过期 tombstone，返回删除数量。
+///
+/// 扩展扫描 pdsync 的 `pmeta:` 前缀（personal-data-sync.md §10：个人域
+/// 墓碑沿用组织域 90 天口径，同一保留期与判定式，计数并入 `tombstones`）。
 fn cleanup_tombstones<S: StorageBackend>(storage: &mut S, now_ms: i64) -> Result<u64> {
-    let rows = scan_rows(storage, "meta:")?;
-    let expired: Vec<String> = rows
-        .into_iter()
-        .filter(|(_, value)| {
-            let Some(value) = value else { return false };
-            value.get("tombstone") == Some(&Value::Bool(true))
-                && as_number(value.get("ts"))
-                    .is_some_and(|ts| now_ms as f64 - ts > TOMBSTONE_RETENTION_MS as f64)
-        })
-        .map(|(key, _)| key)
-        .collect();
+    let mut expired: Vec<String> = Vec::new();
+    for prefix in ["meta:", crate::sync::personal::PMETA_PREFIX] {
+        let rows = scan_rows(storage, prefix)?;
+        expired.extend(
+            rows.into_iter()
+                .filter(|(_, value)| {
+                    let Some(value) = value else { return false };
+                    value.get("tombstone") == Some(&Value::Bool(true))
+                        && as_number(value.get("ts"))
+                            .is_some_and(|ts| now_ms as f64 - ts > TOMBSTONE_RETENTION_MS as f64)
+                })
+                .map(|(key, _)| key),
+        );
+    }
     let count = expired.len() as u64;
     delete_batch(storage, expired)?;
     Ok(count)
@@ -215,6 +222,41 @@ mod tests {
         for kept in ["exact", "fresh", "live", "false", "strts", "nots", "broken"] {
             assert!(
                 s.get(&format!("meta:d:c:{kept}")).unwrap().is_some(),
+                "{kept} should be kept"
+            );
+        }
+    }
+
+    /// pdsync 个人域墓碑（`pmeta:` 前缀）与 `meta:` 同口径清理
+    /// （personal-data-sync.md §10）。
+    #[test]
+    fn pmeta_tombstone_cleanup_boundaries() {
+        let mut s = MemoryStorage::new();
+        // 超期 pmeta 墓碑 → 删
+        s.put(
+            "pmeta:ct:friend:expired",
+            &tombstone_json(NOW - TOMBSTONE_RETENTION_MS - 1),
+        )
+        .unwrap();
+        // 恰好满保留期（严格 > 不删）→ 留
+        s.put(
+            "pmeta:ct:friend:exact",
+            &tombstone_json(NOW - TOMBSTONE_RETENTION_MS),
+        )
+        .unwrap();
+        // 新鲜墓碑 → 留
+        s.put("pmeta:ct:friend:fresh", &tombstone_json(NOW)).unwrap();
+        // 非墓碑 pmeta → 留
+        s.put("pmeta:ct:friend:live", "{\"vv\":{\"n1\":1},\"ts\":1}")
+            .unwrap();
+        // 损坏 JSON → 留（坑 #3）
+        s.put("pmeta:ct:friend:broken", "not json").unwrap();
+
+        assert_eq!(cleanup_tombstones(&mut s, NOW).unwrap(), 1);
+        assert!(s.get("pmeta:ct:friend:expired").unwrap().is_none());
+        for kept in ["exact", "fresh", "live", "broken"] {
+            assert!(
+                s.get(&format!("pmeta:ct:friend:{kept}")).unwrap().is_some(),
                 "{kept} should be kept"
             );
         }

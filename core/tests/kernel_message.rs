@@ -32,6 +32,8 @@ use common::*;
 
 const PERSONAL: &str = "personal";
 const NOW: i64 = 1_720_000_000_000;
+/// pdsync 版本向量节点 id：对齐 src 内联测试惯例（无 p2p 节点时用 local-node）。
+const NODE: &str = "local-node";
 
 fn peer_root(seed: u8) -> (SigningKey, String) {
     let key = SigningKey::from_bytes(&[seed; 32]);
@@ -251,7 +253,7 @@ fn inbound_chat_persists_and_emits() {
         &key,
     );
 
-    let result = handle_inbound_dm(&mut s, &my_root, "我昵称", envelope, "peer-xyz", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "我昵称", envelope, "peer-xyz", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": true }));
     assert_eq!(result.events.len(), 1);
     let P2pEvent::ChatReceived(data) = &result.events[0] else {
@@ -295,7 +297,7 @@ fn inbound_chat_title_prefers_friend_remark() {
         chat_body(PERSONAL, &from, "m1", "hi"),
         &key,
     );
-    handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-xyz", &HashSet::new(), NOW).unwrap();
+    handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-xyz", &HashSet::new(), NOW, NODE).unwrap();
     let conv = MessageService::get_conversation(&s, PERSONAL, &direct_conversation_id(&from))
         .unwrap()
         .unwrap();
@@ -323,7 +325,7 @@ fn inbound_read_marks_my_messages_read() {
         json!({ "spaceKey": PERSONAL }),
         &key,
     );
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-xyz", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-xyz", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": true }));
     let P2pEvent::ChatStatus(data) = &result.events[0] else {
         panic!("应发出 ChatStatus 事件");
@@ -349,7 +351,7 @@ fn inbound_read_without_conversation_emits_nothing() {
         json!({ "spaceKey": PERSONAL }),
         &key,
     );
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-xyz", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-xyz", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": true }), "应答仍 ok");
     assert!(result.events.is_empty(), "无实际改动不发 peerRead 事件");
 }
@@ -373,7 +375,7 @@ fn inbound_recall_marks_recalled() {
         json!({ "spaceKey": PERSONAL, "messageId": "m1" }),
         &key,
     );
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-xyz", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-xyz", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": true }));
     let P2pEvent::ChatStatus(data) = &result.events[0] else {
         panic!("应发出 ChatStatus 事件");
@@ -401,7 +403,7 @@ fn inbound_friend_request_idempotent() {
         "nodeInfo": { "peerId": "peer-a", "addresses": ["/ip4/1.2.3.4/tcp/9000"] },
     });
     let envelope = dm_envelope::build_envelope("friend-request", &from, &my_root, NOW, body, &key);
-    let result = handle_inbound_dm(&mut s, &my_root, "我昵称", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "我昵称", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": true, "nickname": "我昵称" }));
     // 入站申请 id 为复合形式 {from}:{原 requestId}（防跨发送者撞 id）
     let composite_id = format!("{from}:req-1");
@@ -424,7 +426,7 @@ fn inbound_friend_request_idempotent() {
     });
     let envelope2 =
         dm_envelope::build_envelope("friend-request", &from, &my_root, NOW + 1, body2, &key);
-    handle_inbound_dm(&mut s, &my_root, "我昵称", envelope2, "peer-a", &HashSet::new(), NOW).unwrap();
+    handle_inbound_dm(&mut s, &my_root, "我昵称", envelope2, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     let overview = ContactService::overview(&s, PERSONAL).unwrap();
     assert_eq!(overview.requests.len(), 1, "同 rootId pending 申请幂等更新");
     assert_eq!(overview.requests[0].id, composite_id, "保留原申请 id");
@@ -452,7 +454,7 @@ fn inbound_friend_accept_builds_friend() {
         "nodeInfo": { "peerId": "peer-a", "addresses": [] },
     });
     let envelope = dm_envelope::build_envelope("friend-accept", &from, &my_root, NOW, body, &key);
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": true }));
     let P2pEvent::FriendRequestAccepted(data) = &result.events[0] else {
         panic!("应发出 FriendRequestAccepted 事件");
@@ -482,7 +484,7 @@ fn inbound_friend_accept_composite_id_compat() {
         "nickname": "对方昵称",
     });
     let envelope = dm_envelope::build_envelope("friend-accept", &from, &my_root, NOW, body, &key);
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": true }));
     let stored = ContactService::get_outgoing_request(&s, &outgoing.id).unwrap().unwrap();
     assert_eq!(stored.status, spark_core::contact::FriendRequestStatus::Accepted);
@@ -502,7 +504,7 @@ fn inbound_friend_accept_forgery_rejected() {
     let mut s = MemoryStorage::new();
     let envelope =
         dm_envelope::build_envelope("friend-accept", &from, &my_root, NOW, accept_body("req-x"), &key);
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": false, "reason": "invalid-body" }));
     assert!(result.events.is_empty());
     assert!(ContactService::get_friend(&s, &from).unwrap().is_none());
@@ -520,7 +522,7 @@ fn inbound_friend_accept_forgery_rejected() {
         accept_body(&outgoing.id),
         &key,
     );
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": false, "reason": "invalid-body" }));
     assert!(result.events.is_empty());
     // 第三方申请未被标记 accepted，攻击者未成为朋友
@@ -542,7 +544,7 @@ fn inbound_friend_accept_forgery_rejected() {
         accept_body(&outgoing.id),
         &key,
     );
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": false, "reason": "invalid-body" }));
     assert!(result.events.is_empty());
     assert!(ContactService::get_friend(&s, &from).unwrap().is_none());
@@ -574,7 +576,7 @@ fn inbound_friend_reply_outbox_pending_to_replied() {
 
     // 对方（接收方）来询问：pending → replied，thread 追加（trim 后落库），FriendRequestSent 事件
     let envelope = reply_envelope(&key, &from, &my_root, &outgoing.id, " 请问你是哪位？ ");
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": true }));
     let P2pEvent::FriendRequestSent(data) = &result.events[0] else {
         panic!("应发出 FriendRequestSent 事件");
@@ -590,7 +592,7 @@ fn inbound_friend_reply_outbox_pending_to_replied() {
 
     // replied 状态下对方继续回复仍受理（thread 续接、仍 replied）
     let envelope2 = reply_envelope(&key, &from, &my_root, &outgoing.id, "再想想？");
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope2, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope2, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": true }));
     let stored = ContactService::get_outgoing_request(&s, &outgoing.id).unwrap().unwrap();
     assert_eq!(stored.status, FriendRequestStatus::Replied);
@@ -624,7 +626,7 @@ fn inbound_friend_reply_inbox_composite_id() {
     .unwrap();
 
     let envelope = reply_envelope(&key, &from, &my_root, "req-1", "我是张三");
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": true }));
     let P2pEvent::FriendRequestReceived(data) = &result.events[0] else {
         panic!("应发出 FriendRequestReceived 事件");
@@ -645,7 +647,7 @@ fn inbound_friend_reply_rejected_paths() {
     // 未知 requestId → invalid-body（outbox/inbox 皆不命中）
     let mut s = MemoryStorage::new();
     let envelope = reply_envelope(&key, &from, &my_root, "req-x", "hi");
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": false, "reason": "invalid-body" }));
     assert!(result.events.is_empty());
 
@@ -654,7 +656,7 @@ fn inbound_friend_reply_rejected_paths() {
     let outgoing =
         ContactService::create_outgoing_request(&mut s, &from, "", "hi", "扫码", None, NOW).unwrap();
     let envelope = reply_envelope(&key, &from, &my_root, &outgoing.id, "   ");
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": false, "reason": "invalid-body" }));
     assert!(result.events.is_empty());
 
@@ -664,7 +666,7 @@ fn inbound_friend_reply_rejected_paths() {
     let outgoing =
         ContactService::create_outgoing_request(&mut s, &third, "", "hi", "扫码", None, NOW).unwrap();
     let envelope = reply_envelope(&key, &from, &my_root, &outgoing.id, "hi");
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": false, "reason": "invalid-body" }));
     assert!(result.events.is_empty());
     let stored = ContactService::get_outgoing_request(&s, &outgoing.id).unwrap().unwrap();
@@ -677,7 +679,7 @@ fn inbound_friend_reply_rejected_paths() {
         ContactService::create_outgoing_request(&mut s, &from, "", "hi", "扫码", None, NOW).unwrap();
     ContactService::mark_outgoing_accepted(&mut s, &outgoing.id, NOW).unwrap();
     let envelope = reply_envelope(&key, &from, &my_root, &outgoing.id, "hi");
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": false, "reason": "invalid-body" }));
     assert!(result.events.is_empty());
 }
@@ -689,10 +691,10 @@ fn inbound_friend_reply_rejected_when_blocked() {
     let (key, from) = peer_root(7);
     let outgoing =
         ContactService::create_outgoing_request(&mut s, &from, "", "hi", "扫码", None, NOW).unwrap();
-    ContactService::set_blocked(&mut s, PERSONAL, &from, true, NOW).unwrap();
+    ContactService::set_blocked(&mut s, PERSONAL, &from, true, NOW, NODE).unwrap();
 
     let envelope = reply_envelope(&key, &from, &my_root, &outgoing.id, "hi");
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": false, "reason": "blocked" }));
     assert!(result.events.is_empty());
     let stored = ContactService::get_outgoing_request(&s, &outgoing.id).unwrap().unwrap();
@@ -716,7 +718,7 @@ fn inbound_friend_accept_allowed_when_replied() {
 
     let body = json!({ "requestId": outgoing.id, "nickname": "对方昵称" });
     let envelope = dm_envelope::build_envelope("friend-accept", &from, &my_root, NOW, body, &key);
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": true }));
     let P2pEvent::FriendRequestAccepted(data) = &result.events[0] else {
         panic!("应发出 FriendRequestAccepted 事件");
@@ -738,7 +740,7 @@ fn inbound_blocked_rejects_chat_and_request() {
     let my_root = "aa".repeat(32);
     let (key, from) = peer_root(7);
     // 拉黑集合独立于朋友记录：陌生人（无 friend 记录）拉黑即生效
-    ContactService::set_blocked(&mut s, PERSONAL, &from, true, NOW).unwrap();
+    ContactService::set_blocked(&mut s, PERSONAL, &from, true, NOW, NODE).unwrap();
 
     let chat = dm_envelope::build_envelope(
         "chat",
@@ -748,7 +750,7 @@ fn inbound_blocked_rejects_chat_and_request() {
         chat_body(PERSONAL, &from, "m1", "hi"),
         &key,
     );
-    let result = handle_inbound_dm(&mut s, &my_root, "", chat, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", chat, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": false, "reason": "blocked" }));
     assert!(result.events.is_empty());
     assert!(
@@ -766,7 +768,7 @@ fn inbound_blocked_rejects_chat_and_request() {
         json!({ "requestId": "req-1", "nickname": "x" }),
         &key,
     );
-    let result = handle_inbound_dm(&mut s, &my_root, "", req, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", req, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": false, "reason": "blocked" }));
 }
 
@@ -786,7 +788,7 @@ fn inbound_invalid_envelope_rejected() {
         &key,
     );
     envelope["body"]["spaceKey"] = json!("tampered");
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": false, "reason": "bad-signature" }));
 
     // 非发给我
@@ -798,7 +800,7 @@ fn inbound_invalid_envelope_rejected() {
         chat_body(PERSONAL, &from, "m1", "hi"),
         &key,
     );
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": false, "reason": "not-for-me" }));
 
     // pubKey 与 from 不绑定
@@ -812,12 +814,12 @@ fn inbound_invalid_envelope_rejected() {
         &other_key,
     );
     envelope["from"] = json!(from);
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": false, "reason": "bad-pubkey" }));
 
     // 未知 kind
     let envelope = dm_envelope::build_envelope("weird", &from, &my_root, NOW, json!({}), &key);
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": false, "reason": "unknown-kind" }));
 }
 
@@ -836,7 +838,7 @@ fn inbound_org_chat_member_check() {
         chat_body("org:org_0123456789abcdef", &from, "m1", "hi"),
         &key,
     );
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": false, "reason": "not-member" }));
 
     // 建组织并把 from 加为成员：放行
@@ -862,7 +864,7 @@ fn inbound_org_chat_member_check() {
         chat_body(&space, &from, "m1", "hi"),
         &key,
     );
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": true }));
     let messages =
         MessageService::get_messages(&s, &space, &direct_conversation_id(&from)).unwrap();
@@ -917,7 +919,7 @@ fn inbound_chat_from_self_no_unread() {
         chat_body(PERSONAL, &my_root, "m1", "来自另一台设备"),
         &key,
     );
-    let result = handle_inbound_dm(&mut s, &my_root, "我昵称", envelope, "peer-b", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "我昵称", envelope, "peer-b", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": true }));
     assert_eq!(result.events.len(), 1, "事件照发（前端按 senderId 渲染）");
     let P2pEvent::ChatReceived(data) = &result.events[0] else {
@@ -952,7 +954,7 @@ fn inbound_friend_request_from_self_auto_accept() {
     });
     let envelope =
         dm_envelope::build_envelope("friend-request", &my_root, &my_root, NOW, body, &key);
-    let result = handle_inbound_dm(&mut s, &my_root, "我昵称", envelope, "12D3KooWDevBTestNode11111111111111111111111111111", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "我昵称", envelope, "12D3KooWDevBTestNode11111111111111111111111111111", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": true, "nickname": "我昵称" }));
 
     // 自动接受：直接建设备 FriendRecord，不产生「新的朋友」申请
@@ -986,7 +988,7 @@ fn inbound_friend_request_from_friend_reaccepts() {
         "nodeInfo": { "peerId": "peer-a", "addresses": ["/ip4/1.2.3.4/tcp/9000"] },
     });
     let envelope = dm_envelope::build_envelope("friend-request", &from, &my_root, NOW, body, &key);
-    let result = handle_inbound_dm(&mut s, &my_root, "我昵称", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "我昵称", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": true, "nickname": "我昵称" }));
 
     let overview = ContactService::overview(&s, PERSONAL).unwrap();
@@ -1012,7 +1014,7 @@ fn inbound_chat_implicitly_accepts_pending_outgoing() {
 
     let body = chat_body(PERSONAL, &from, "msg-1", "在吗");
     let envelope = dm_envelope::build_envelope("chat", &from, &my_root, NOW, body, &key);
-    let result = handle_inbound_dm(&mut s, &my_root, "我", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "我", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": true }));
     assert_eq!(result.events.len(), 2, "FriendRequestAccepted + ChatReceived");
     let P2pEvent::FriendRequestAccepted(data) = &result.events[0] else {
@@ -1047,7 +1049,7 @@ fn inbound_forged_self_envelope_rejected() {
         &other_key,
     );
     envelope["from"] = json!(my_root);
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-x", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-x", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": false, "reason": "bad-pubkey" }));
     assert!(result.auto_accept.is_none());
     assert!(
@@ -1147,7 +1149,7 @@ fn inbound_recall_cannot_recall_my_message() {
         json!({ "spaceKey": PERSONAL, "messageId": "m1" }),
         &key,
     );
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-xyz", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-xyz", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": true }), "幂等应答 ok");
     assert!(result.events.is_empty(), "归属不匹配不发事件");
     assert!(
@@ -1165,7 +1167,7 @@ fn inbound_chat_binds_sender_id_to_envelope_from() {
     let mut body = chat_body(PERSONAL, &from, "m1", "hi");
     body["message"]["senderId"] = json!(my_root);
     let envelope = dm_envelope::build_envelope("chat", &from, &my_root, NOW, body, &key);
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-xyz", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-xyz", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": true }));
     let messages =
         MessageService::get_messages(&s, PERSONAL, &direct_conversation_id(&from)).unwrap();
@@ -1186,11 +1188,11 @@ fn inbound_chat_dedupes_by_message_id() {
         chat_body(PERSONAL, &from, "m1", "hello"),
         &key,
     );
-    let first = handle_inbound_dm(&mut s, &my_root, "", envelope.clone(), "peer-xyz", &HashSet::new(), NOW).unwrap();
+    let first = handle_inbound_dm(&mut s, &my_root, "", envelope.clone(), "peer-xyz", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(first.events.len(), 1);
 
     // 同 id 重放：幂等 ok，不重复 append/未读/事件
-    let second = handle_inbound_dm(&mut s, &my_root, "", envelope.clone(), "peer-xyz", &HashSet::new(), NOW).unwrap();
+    let second = handle_inbound_dm(&mut s, &my_root, "", envelope.clone(), "peer-xyz", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(second.response, json!({ "ok": true }));
     assert!(second.events.is_empty());
     let messages = MessageService::get_messages(&s, PERSONAL, &conv_id).unwrap();
@@ -1200,7 +1202,7 @@ fn inbound_chat_dedupes_by_message_id() {
 
     // 重放不撤销已撤回状态（recall 后重放原消息仍 recalled）
     MessageService::force_recall(&mut s, PERSONAL, &conv_id, "m1", &from).unwrap();
-    let third = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-xyz", &HashSet::new(), NOW).unwrap();
+    let third = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-xyz", &HashSet::new(), NOW, NODE).unwrap();
     assert!(third.events.is_empty());
     let messages = MessageService::get_messages(&s, PERSONAL, &conv_id).unwrap();
     assert!(messages[0].recalled, "重放不撤销 recalled");
@@ -1214,7 +1216,7 @@ fn inbound_chat_rejects_far_future_message() {
     let mut body = chat_body(PERSONAL, &from, "m1", "hi");
     body["message"]["createdAt"] = json!(NOW + 11 * 60_000);
     let envelope = dm_envelope::build_envelope("chat", &from, &my_root, NOW, body, &key);
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-xyz", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-xyz", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": false, "reason": "invalid-message" }));
     assert!(result.events.is_empty());
     assert!(
@@ -1239,7 +1241,7 @@ fn inbound_stale_envelope_rejected() {
         chat_body(PERSONAL, &from, "m1", "hi"),
         &key,
     );
-    let result = handle_inbound_dm(&mut s, &my_root, "", old, "peer-xyz", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", old, "peer-xyz", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": false, "reason": "stale" }));
     assert!(result.events.is_empty());
     // 过新（ts 比 now 晚 11 分钟）
@@ -1251,7 +1253,7 @@ fn inbound_stale_envelope_rejected() {
         chat_body(PERSONAL, &from, "m1", "hi"),
         &key,
     );
-    let result = handle_inbound_dm(&mut s, &my_root, "", future, "peer-xyz", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", future, "peer-xyz", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": false, "reason": "stale" }));
 }
 
@@ -1277,7 +1279,7 @@ fn inbound_space_key_injection_rejected() {
             chat_body(space, &from, "m1", "hi"),
             &key,
         );
-        let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-xyz", &HashSet::new(), NOW).unwrap();
+        let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-xyz", &HashSet::new(), NOW, NODE).unwrap();
         assert_eq!(
             result.response,
             json!({ "ok": false, "reason": "invalid-body" }),
@@ -1294,7 +1296,7 @@ fn inbound_space_key_injection_rejected() {
         chat_body("org:org_0123456789abcdef", &from, "m1", "hi"),
         &key,
     );
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-xyz", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-xyz", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": false, "reason": "not-member" }));
 }
 
@@ -1321,7 +1323,7 @@ fn inbound_friend_accept_merges_existing_friend() {
         "nodeInfo": { "peerId": "peer-a", "addresses": ["/ip4/1.2.3.4/tcp/9000"] },
     });
     let envelope = dm_envelope::build_envelope("friend-accept", &from, &my_root, NOW, body, &key);
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": true }));
 
     let friend = ContactService::get_friend(&s, &from).unwrap().unwrap();
@@ -1402,7 +1404,7 @@ fn inbound_read_recall_require_org_membership() {
         json!({ "spaceKey": space }),
         &key,
     );
-    let result = handle_inbound_dm(&mut s, &my_root, "", read_env, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", read_env, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": false, "reason": "not-member" }));
     let recall_env = dm_envelope::build_envelope(
         "recall",
@@ -1412,7 +1414,7 @@ fn inbound_read_recall_require_org_membership() {
         json!({ "spaceKey": space, "messageId": "m1" }),
         &key,
     );
-    let result = handle_inbound_dm(&mut s, &my_root, "", recall_env, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", recall_env, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": false, "reason": "not-member" }));
 
     // 成员：放行（无会话/消息时幂等 ok，不发事件）
@@ -1425,7 +1427,7 @@ fn inbound_read_recall_require_org_membership() {
         json!({ "spaceKey": space }),
         &key,
     );
-    let result = handle_inbound_dm(&mut s, &my_root, "", read_env, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", read_env, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": true }));
     let recall_env = dm_envelope::build_envelope(
         "recall",
@@ -1435,7 +1437,7 @@ fn inbound_read_recall_require_org_membership() {
         json!({ "spaceKey": space, "messageId": "m1" }),
         &key,
     );
-    let result = handle_inbound_dm(&mut s, &my_root, "", recall_env, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", recall_env, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": true }));
 }
 
@@ -1449,11 +1451,11 @@ fn inbound_friend_accept_rejected_when_blocked() {
     )
     .unwrap();
     // 申请存在且 pending，但 from 已被拉黑（拉黑集合独立于朋友记录）
-    ContactService::set_blocked(&mut s, PERSONAL, &from, true, NOW).unwrap();
+    ContactService::set_blocked(&mut s, PERSONAL, &from, true, NOW, NODE).unwrap();
 
     let body = json!({ "requestId": outgoing.id, "nickname": "对方昵称" });
     let envelope = dm_envelope::build_envelope("friend-accept", &from, &my_root, NOW, body, &key);
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": false, "reason": "blocked" }));
     assert!(result.events.is_empty());
     assert!(
@@ -1489,7 +1491,7 @@ fn inbound_chat_backfills_missing_conv_peer() {
         chat_body(PERSONAL, &from, "m1", "hi"),
         &key,
     );
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-xyz", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-xyz", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": true }));
     let conv = MessageService::get_conversation(&s, PERSONAL, &conv_id).unwrap().unwrap();
     assert_eq!(
@@ -1510,7 +1512,7 @@ fn inbound_chat_rejects_non_positive_created_at() {
         let mut body = chat_body(PERSONAL, &from, &format!("m{bad}"), "hi");
         body["message"]["createdAt"] = json!(bad);
         let envelope = dm_envelope::build_envelope("chat", &from, &my_root, NOW, body, &key);
-        let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-xyz", &HashSet::new(), NOW).unwrap();
+        let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-xyz", &HashSet::new(), NOW, NODE).unwrap();
         assert_eq!(
             result.response,
             json!({ "ok": false, "reason": "invalid-message" }),
@@ -1541,7 +1543,7 @@ fn inbound_chat_rejects_oversize_text() {
         chat_body(PERSONAL, &from, "m-big", &big),
         &key,
     );
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-xyz", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-xyz", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": false, "reason": "invalid-message" }));
     assert!(result.events.is_empty());
 
@@ -1555,7 +1557,7 @@ fn inbound_chat_rejects_oversize_text() {
         chat_body(PERSONAL, &from, "m-exact", &exact),
         &key,
     );
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-xyz", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-xyz", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": true }));
     let messages =
         MessageService::get_messages(&s, PERSONAL, &direct_conversation_id(&from)).unwrap();
@@ -1608,7 +1610,7 @@ fn inbound_chat_event_online_flag_follows_online_peers() {
     );
     // 连接层对端 peerId 在在线集合内：事件会话 online = true
     let online: HashSet<String> = ["peer-xyz".to_string()].into_iter().collect();
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-xyz", &online, NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-xyz", &online, NOW, NODE).unwrap();
     let P2pEvent::ChatReceived(data) = &result.events[0] else {
         panic!("应发出 ChatReceived 事件");
     };
@@ -1625,7 +1627,7 @@ fn inbound_chat_event_online_flag_follows_online_peers() {
         &key2,
     );
     let result =
-        handle_inbound_dm(&mut s, &my_root, "", envelope2, "peer-offline", &online, NOW).unwrap();
+        handle_inbound_dm(&mut s, &my_root, "", envelope2, "peer-offline", &online, NOW, NODE).unwrap();
     let P2pEvent::ChatReceived(data) = &result.events[0] else {
         panic!("应发出 ChatReceived 事件");
     };
@@ -1655,7 +1657,7 @@ fn inbound_profile_sync_updates_friend_and_emits_event() {
         &my_root,
         json!({ "nickname": "新昵称", "avatar": VALID_AVATAR }),
     );
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": true }));
     let P2pEvent::FriendProfileUpdated(data) = &result.events[0] else {
         panic!("应发出 FriendProfileUpdated 事件");
@@ -1675,7 +1677,7 @@ fn inbound_profile_sync_updates_friend_and_emits_event() {
         &my_root,
         json!({ "nickname": "新昵称", "avatar": VALID_AVATAR }),
     );
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": true }));
     assert!(result.events.is_empty(), "重复推送幂等无副作用");
 }
@@ -1692,7 +1694,7 @@ fn inbound_profile_sync_from_stranger_ignored() {
         &my_root,
         json!({ "nickname": "陌生人", "avatar": VALID_AVATAR }),
     );
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": true }));
     assert!(result.events.is_empty());
     assert!(ContactService::get_friend(&s, &from).unwrap().is_none());
@@ -1714,7 +1716,7 @@ fn inbound_profile_sync_empty_nickname_and_invalid_avatar_ignored() {
         &my_root,
         json!({ "nickname": "", "avatar": "https://evil.example/x.png" }),
     );
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": true }));
     assert!(result.events.is_empty(), "无实际变更不发事件");
     let friend = ContactService::get_friend(&s, &from).unwrap().unwrap();
@@ -1727,7 +1729,7 @@ fn inbound_profile_sync_empty_nickname_and_invalid_avatar_ignored() {
 
     // 省略 avatar 字段：只更新昵称，头像保留
     let envelope = profile_sync_envelope(&key, &from, &my_root, json!({ "nickname": "改名" }));
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     let P2pEvent::FriendProfileUpdated(data) = &result.events[0] else {
         panic!("昵称变更应发出 FriendProfileUpdated 事件");
     };
@@ -1766,7 +1768,7 @@ fn inbound_profile_sync_self_full_snapshot_carried_to_host() {
     });
     let envelope = profile_sync_envelope(&my_key, &my_root, &my_root, body.clone());
     let result =
-        handle_inbound_dm(&mut s, &my_root, "", envelope, "12D3KooWDevBTestNode11111111111111111111111111111", &HashSet::new(), NOW)
+        handle_inbound_dm(&mut s, &my_root, "", envelope, "12D3KooWDevBTestNode11111111111111111111111111111", &HashSet::new(), NOW, NODE)
             .unwrap();
     assert_eq!(result.response, json!({ "ok": true }));
     assert_eq!(
@@ -1794,7 +1796,7 @@ fn inbound_profile_sync_self_legacy_format_not_applied() {
         json!({ "nickname": "旧格式昵称" }),
     );
     let result =
-        handle_inbound_dm(&mut s, &my_root, "", envelope, "12D3KooWDevBTestNode11111111111111111111111111111", &HashSet::new(), NOW)
+        handle_inbound_dm(&mut s, &my_root, "", envelope, "12D3KooWDevBTestNode11111111111111111111111111111", &HashSet::new(), NOW, NODE)
             .unwrap();
     assert_eq!(result.response, json!({ "ok": true }));
     assert!(
@@ -1817,7 +1819,7 @@ fn inbound_profile_sync_self_without_friend_record_still_carried() {
         json!({ "nickname": "恢复同步", "updatedAt": 100 }),
     );
     let result =
-        handle_inbound_dm(&mut s, &my_root, "", envelope, "12D3KooWDevBTestNode11111111111111111111111111111", &HashSet::new(), NOW)
+        handle_inbound_dm(&mut s, &my_root, "", envelope, "12D3KooWDevBTestNode11111111111111111111111111111", &HashSet::new(), NOW, NODE)
             .unwrap();
     assert_eq!(result.response, json!({ "ok": true }));
     assert!(result.self_profile.is_some(), "朋友记录缺失时快照仍应上抛");
@@ -1847,7 +1849,7 @@ fn inbound_device_sync_upserts_and_requests_reply() {
 
     let envelope = device_sync_envelope(&my_key, &my_root, device_body("12D3KooWDevBTestNode11111111111111111111111111111", "手机B", 100));
     let result =
-        handle_inbound_dm(&mut s, &my_root, "", envelope, "12D3KooWDevBTestNode11111111111111111111111111111", &HashSet::new(), NOW)
+        handle_inbound_dm(&mut s, &my_root, "", envelope, "12D3KooWDevBTestNode11111111111111111111111111111", &HashSet::new(), NOW, NODE)
             .unwrap();
     assert_eq!(result.response, json!({ "ok": true }));
     // 落库 + DeviceUpdated 事件
@@ -1871,12 +1873,12 @@ fn inbound_device_sync_stale_does_not_overwrite() {
 
     // 先入一条新的
     let envelope = device_sync_envelope(&my_key, &my_root, device_body("12D3KooWDevBTestNode11111111111111111111111111111", "新名", 200));
-    handle_inbound_dm(&mut s, &my_root, "", envelope, "12D3KooWDevBTestNode11111111111111111111111111111", &HashSet::new(), NOW).unwrap();
+    handle_inbound_dm(&mut s, &my_root, "", envelope, "12D3KooWDevBTestNode11111111111111111111111111111", &HashSet::new(), NOW, NODE).unwrap();
 
     // 更旧的 updatedAt：内容不覆盖、无事件、last_seen 推进
     let envelope = device_sync_envelope(&my_key, &my_root, device_body("12D3KooWDevBTestNode11111111111111111111111111111", "旧名", 100));
     let result =
-        handle_inbound_dm(&mut s, &my_root, "", envelope, "12D3KooWDevBTestNode11111111111111111111111111111", &HashSet::new(), NOW + 1)
+        handle_inbound_dm(&mut s, &my_root, "", envelope, "12D3KooWDevBTestNode11111111111111111111111111111", &HashSet::new(), NOW + 1, NODE)
             .unwrap();
     assert!(result.events.is_empty(), "旧快照不应产生内容变更事件");
     let stored = spark_core::device::DeviceService::get(&s, "12D3KooWDevBTestNode11111111111111111111111111111").unwrap().unwrap();
@@ -1899,7 +1901,7 @@ fn inbound_device_sync_from_other_root_rejected() {
         &key,
     );
     let result =
-        handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-x", &HashSet::new(), NOW).unwrap();
+        handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-x", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": false, "reason": "not-self-device" }));
     assert!(spark_core::device::DeviceService::get(&s, "peer-x").unwrap().is_none());
 }
@@ -1933,7 +1935,7 @@ fn inbound_chat_backfilled_conv_peer_takes_precedence_for_online_flag() {
     );
     // 连接层对端 peer-xyz 不在在线集合：回填后 conv.peer=peer-xyz 优先，
     // 朋友记录的 peer-friend 不回退 → online=false
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-xyz", &online, NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-xyz", &online, NOW, NODE).unwrap();
     let P2pEvent::ChatReceived(data) = &result.events[0] else {
         panic!("应发出 ChatReceived 事件");
     };
@@ -1957,7 +1959,7 @@ fn inbound_friend_request_carries_valid_avatar_only() {
         json!({ "requestId": "req-1", "nickname": "申请人", "avatar": VALID_AVATAR }),
         &key,
     );
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response["ok"], json!(true));
     let requests = ContactService::overview(&s, PERSONAL).unwrap().requests;
     assert_eq!(requests.len(), 1);
@@ -1977,7 +1979,7 @@ fn inbound_friend_request_carries_valid_avatar_only() {
         json!({ "requestId": "req-2", "nickname": "申请人2", "avatar": "https://evil.example/x.png" }),
         &key2,
     );
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response["ok"], json!(true));
     let requests = ContactService::overview(&s, PERSONAL).unwrap().requests;
     let r2 = requests.iter().find(|r| r.root_id == from2).unwrap();
@@ -2025,7 +2027,7 @@ fn inbound_org_invite_persists_record_and_system_card() {
     let (key, from) = peer_root(7);
     let envelope =
         dm_envelope::build_envelope("org-invite", &from, &my_root, NOW, org_invite_body("inv-1"), &key);
-    let result = handle_inbound_dm(&mut s, &my_root, "我", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "我", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": true }));
 
     // 入站邀请记录落库（pending、带 inviteCode 供重启后 accept）
@@ -2085,7 +2087,7 @@ fn inbound_org_invite_idempotent_upsert() {
     let (key, from) = peer_root(7);
     let envelope =
         dm_envelope::build_envelope("org-invite", &from, &my_root, NOW, org_invite_body("inv-1"), &key);
-    handle_inbound_dm(&mut s, &my_root, "我", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    handle_inbound_dm(&mut s, &my_root, "我", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
 
     // 同 inviteId 重投（展示字段变化）：记录原地更新、消息按 id 去重、未读不重复
     let mut body2 = org_invite_body("inv-1");
@@ -2094,7 +2096,7 @@ fn inbound_org_invite_idempotent_upsert() {
     let envelope2 =
         dm_envelope::build_envelope("org-invite", &from, &my_root, NOW + 1, body2, &key);
     let result2 =
-        handle_inbound_dm(&mut s, &my_root, "我", envelope2, "peer-a", &HashSet::new(), NOW).unwrap();
+        handle_inbound_dm(&mut s, &my_root, "我", envelope2, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result2.response, json!({ "ok": true }));
     assert_eq!(result2.events.len(), 1, "消息去重后只发 OrgInviteReceived");
 
@@ -2121,7 +2123,7 @@ fn inbound_org_invite_idempotent_upsert() {
     .unwrap();
     let envelope3 =
         dm_envelope::build_envelope("org-invite", &from, &my_root, NOW + 3, org_invite_body("inv-1"), &key);
-    handle_inbound_dm(&mut s, &my_root, "我", envelope3, "peer-a", &HashSet::new(), NOW).unwrap();
+    handle_inbound_dm(&mut s, &my_root, "我", envelope3, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     let record = OrganizationService::get_incoming_invite(&s, ORG_ID, &from).unwrap().unwrap();
     assert_eq!(record.status, OrgInviteStatus::Accepted, "终态不重置");
 }
@@ -2136,7 +2138,7 @@ fn inbound_org_invite_validation_rejects() {
     let mut body = org_invite_body("inv-1");
     body["inviteCode"] = json!("");
     let envelope = dm_envelope::build_envelope("org-invite", &from, &my_root, NOW, body, &key);
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": false, "reason": "invalid-body" }));
     assert!(OrganizationService::get_incoming_invite(&s, ORG_ID, &from).unwrap().is_none());
     assert!(MessageService::get_conversation(&s, PERSONAL, "sys:notice").unwrap().is_none());
@@ -2145,16 +2147,16 @@ fn inbound_org_invite_validation_rejects() {
     let mut s = MemoryStorage::new();
     let envelope =
         dm_envelope::build_envelope("org-invite", &from, &from, NOW, org_invite_body("inv-1"), &key);
-    let result = handle_inbound_dm(&mut s, &from, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &from, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": false, "reason": "invalid-body" }));
     assert!(result.events.is_empty());
 
     // (c) 被拉黑 → blocked
     let mut s = MemoryStorage::new();
-    ContactService::set_blocked(&mut s, PERSONAL, &from, true, NOW).unwrap();
+    ContactService::set_blocked(&mut s, PERSONAL, &from, true, NOW, NODE).unwrap();
     let envelope =
         dm_envelope::build_envelope("org-invite", &from, &my_root, NOW, org_invite_body("inv-1"), &key);
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": false, "reason": "blocked" }));
     assert!(result.events.is_empty());
 }
@@ -2169,7 +2171,7 @@ fn inbound_org_invite_reply_marks_outgoing_status() {
     OrganizationService::put_invite_record(&mut s, &outgoing_invite("inv-1", ORG_ID, &from)).unwrap();
     let body = json!({ "inviteId": "inv-1", "orgId": ORG_ID, "accept": true, "nickname": "新成员" });
     let envelope = dm_envelope::build_envelope("org-invite-reply", &from, &my_root, NOW, body, &key);
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": true }));
     let P2pEvent::OrgInviteUpdated(data) = &result.events[0] else {
         panic!("应发出 OrgInviteUpdated 事件");
@@ -2185,7 +2187,7 @@ fn inbound_org_invite_reply_marks_outgoing_status() {
     OrganizationService::put_invite_record(&mut s, &outgoing_invite("inv-2", ORG_ID, &from)).unwrap();
     let body = json!({ "inviteId": "inv-2", "orgId": ORG_ID, "accept": false, "nickname": "" });
     let envelope = dm_envelope::build_envelope("org-invite-reply", &from, &my_root, NOW, body, &key);
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": true }));
     let stored = OrganizationService::get_outgoing_invite(&s, ORG_ID, &from).unwrap().unwrap();
     assert_eq!(stored.status, OrgInviteStatus::Declined);
@@ -2201,7 +2203,7 @@ fn inbound_org_invite_reply_security_rejects() {
     // (a) 无出站记录 → invalid-body，不发事件
     let mut s = MemoryStorage::new();
     let envelope = dm_envelope::build_envelope("org-invite-reply", &from, &my_root, NOW, body(ORG_ID), &key);
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": false, "reason": "invalid-body" }));
     assert!(result.events.is_empty());
 
@@ -2213,7 +2215,7 @@ fn inbound_org_invite_reply_security_rejects() {
     )
     .unwrap();
     let envelope = dm_envelope::build_envelope("org-invite-reply", &from, &my_root, NOW, body(ORG_ID), &key);
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": false, "reason": "invalid-body" }));
     let stored = OrganizationService::get_outgoing_invite(&s, "org_eeeeffff00001111", &from)
         .unwrap()
@@ -2233,7 +2235,7 @@ fn inbound_org_invite_reply_security_rejects() {
     )
     .unwrap();
     let envelope = dm_envelope::build_envelope("org-invite-reply", &from, &my_root, NOW, body(ORG_ID), &key);
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": false, "reason": "invalid-body" }));
     let stored = OrganizationService::get_outgoing_invite(&s, ORG_ID, &from).unwrap().unwrap();
     assert_eq!(stored.status, OrgInviteStatus::Declined, "重放不改终态");
@@ -2241,9 +2243,9 @@ fn inbound_org_invite_reply_security_rejects() {
     // (d) 被拉黑 → blocked（出站记录保持 pending）
     let mut s = MemoryStorage::new();
     OrganizationService::put_invite_record(&mut s, &outgoing_invite("inv-1", ORG_ID, &from)).unwrap();
-    ContactService::set_blocked(&mut s, PERSONAL, &from, true, NOW).unwrap();
+    ContactService::set_blocked(&mut s, PERSONAL, &from, true, NOW, NODE).unwrap();
     let envelope = dm_envelope::build_envelope("org-invite-reply", &from, &my_root, NOW, body(ORG_ID), &key);
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW).unwrap();
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE).unwrap();
     assert_eq!(result.response, json!({ "ok": false, "reason": "blocked" }));
     let stored = OrganizationService::get_outgoing_invite(&s, ORG_ID, &from).unwrap().unwrap();
     assert_eq!(stored.status, OrgInviteStatus::Pending);

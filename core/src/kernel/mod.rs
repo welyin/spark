@@ -67,6 +67,7 @@ pub(crate) use contact_ops::ensure_bot_shared;
 pub(crate) use message_ops::bot_reply_shared;
 pub use org_sync::{OrgReconcileStats, PeerOrgSyncResult};
 pub use p2p_ops::NodeCardImport;
+pub use plugin_ops::PluginHostQuery;
 
 use crate::data_mgmt::DataManagementService;
 use crate::p2p::keepalive::RecoveryTrigger;
@@ -156,6 +157,12 @@ pub struct Kernel {
     /// 自设备链路状态（org-sync worker 与门面共享；上一 tick 观察到的已
     /// 连接配对设备 peerId，断→连跳变触发快照重发）。
     pub(crate) self_device_link: Arc<Mutex<Option<String>>>,
+    /// 已证明支持 pdsync 的自设备 peerId 集合（收尾灰度：收到对端回发的
+    /// pdsync-need/data 且验签通过即按连接层 peerId 标记——按设备粒度，
+    /// 一台新设备不会停掉其他自设备的旧快照回退；send_self_snapshots 据此
+    /// 决定是否回退发旧快照，见 §7.1）。host `handle_dm` 写入、org-sync
+    /// 保活读取。
+    pub(crate) pdsync_capable_self_devices: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
     /// doc_* 调用登记的集合配置（远端应用的索引维护依据，见 host.rs）。
     pub(crate) collection_configs: CollectionConfigs,
     /// 存储读写互斥：p2p 事件循环（host `handle_dm`）与 Tauri 命令线程的
@@ -225,6 +232,9 @@ impl Kernel {
             recovery_trigger: Arc::new(Mutex::new(RecoveryTrigger::new())),
             org_address_publish: Arc::new(Mutex::new(HashMap::new())),
             self_device_link: Arc::new(Mutex::new(None)),
+            pdsync_capable_self_devices: Arc::new(std::sync::Mutex::new(
+                std::collections::HashSet::new(),
+            )),
             collection_configs,
             io_lock,
             app_msg_limiter: crate::message::AppMessageRateLimiter::default(),

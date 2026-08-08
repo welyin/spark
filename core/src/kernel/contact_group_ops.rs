@@ -13,12 +13,15 @@ impl Kernel {
     pub fn contact_tag_create(&mut self, space: &str, id: &str, name: &str) -> Result<ContactTag> {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
+        let now = system_now_ms();
+        let node_id = self.sync_node_id();
         let tag = ContactService::create_tag_with_id(
             self.require_storage_mut()?,
             space,
             id,
             name,
-            system_now_ms(),
+            now,
+            &node_id,
         )?;
         if space == "personal" {
             self.broadcast_contact_sync();
@@ -30,7 +33,9 @@ impl Kernel {
     pub fn contact_tag_rename(&mut self, space: &str, id: &str, name: &str) -> Result<()> {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        ContactService::rename_tag(self.require_storage_mut()?, space, id, name, system_now_ms())?;
+        let now = system_now_ms();
+        let node_id = self.sync_node_id();
+        ContactService::rename_tag(self.require_storage_mut()?, space, id, name, now, &node_id)?;
         if space == "personal" {
             self.broadcast_contact_sync();
         }
@@ -41,7 +46,9 @@ impl Kernel {
     pub fn contact_tag_delete(&mut self, space: &str, id: &str) -> Result<()> {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        ContactService::delete_tag(self.require_storage_mut()?, space, id, system_now_ms())?;
+        let now = system_now_ms();
+        let node_id = self.sync_node_id();
+        ContactService::delete_tag(self.require_storage_mut()?, space, id, now, &node_id)?;
         if space == "personal" {
             self.broadcast_contact_sync();
         }
@@ -52,11 +59,14 @@ impl Kernel {
     pub fn contact_group_create(&mut self, id: &str, name: &str) -> Result<ContactGroup> {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
+        let now = system_now_ms();
+        let node_id = self.sync_node_id();
         let group = ContactService::create_group_with_id(
             self.require_storage_mut()?,
             id,
             name,
-            system_now_ms(),
+            now,
+            &node_id,
         )?;
         self.broadcast_contact_sync();
         Ok(group)
@@ -66,7 +76,9 @@ impl Kernel {
     pub fn contact_group_rename(&mut self, id: &str, name: &str) -> Result<()> {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        ContactService::rename_group(self.require_storage_mut()?, id, name, system_now_ms())?;
+        let now = system_now_ms();
+        let node_id = self.sync_node_id();
+        ContactService::rename_group(self.require_storage_mut()?, id, name, now, &node_id)?;
         self.broadcast_contact_sync();
         Ok(())
     }
@@ -75,7 +87,9 @@ impl Kernel {
     pub fn contact_group_delete(&mut self, id: &str) -> Result<()> {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        ContactService::delete_group(self.require_storage_mut()?, id, system_now_ms())?;
+        let now = system_now_ms();
+        let node_id = self.sync_node_id();
+        ContactService::delete_group(self.require_storage_mut()?, id, now, &node_id)?;
         self.broadcast_contact_sync();
         Ok(())
     }
@@ -84,7 +98,9 @@ impl Kernel {
     pub fn contact_group_move(&mut self, id: &str, to_index: usize) -> Result<()> {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        ContactService::move_group(self.require_storage_mut()?, id, to_index, system_now_ms())?;
+        let now = system_now_ms();
+        let node_id = self.sync_node_id();
+        ContactService::move_group(self.require_storage_mut()?, id, to_index, now, &node_id)?;
         self.broadcast_contact_sync();
         Ok(())
     }
@@ -99,12 +115,16 @@ impl Kernel {
     ) -> Result<Option<OrgGroupNode>> {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
+        let now = system_now_ms();
+        let node_id = self.sync_node_id();
         Ok(ContactService::create_org_group_with_id(
             self.require_storage_mut()?,
             space,
             parent_id,
             id,
             name,
+            now,
+            &node_id,
         )?)
     }
 
@@ -112,7 +132,16 @@ impl Kernel {
     pub fn contact_org_group_rename(&mut self, space: &str, id: &str, name: &str) -> Result<()> {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        ContactService::rename_org_group(self.require_storage_mut()?, space, id, name)?;
+        let now = system_now_ms();
+        let node_id = self.sync_node_id();
+        ContactService::rename_org_group(
+            self.require_storage_mut()?,
+            space,
+            id,
+            name,
+            now,
+            &node_id,
+        )?;
         Ok(())
     }
 
@@ -120,7 +149,9 @@ impl Kernel {
     pub fn contact_org_group_delete(&mut self, space: &str, id: &str) -> Result<()> {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        ContactService::delete_org_group(self.require_storage_mut()?, space, id)?;
+        let now = system_now_ms();
+        let node_id = self.sync_node_id();
+        ContactService::delete_org_group(self.require_storage_mut()?, space, id, now, &node_id)?;
         Ok(())
     }
 
@@ -136,9 +167,18 @@ impl Kernel {
     ) -> Result<()> {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
+        let now = system_now_ms();
+        let node_id = self.sync_node_id();
         match new_parent_id {
             None => {
-                ContactService::move_org_group_sibling(self.require_storage_mut()?, space, id, to_index)?;
+                ContactService::move_org_group_sibling(
+                    self.require_storage_mut()?,
+                    space,
+                    id,
+                    to_index,
+                    now,
+                    &node_id,
+                )?;
             }
             Some(parent_id) => {
                 ContactService::move_org_group(
@@ -147,6 +187,8 @@ impl Kernel {
                     id,
                     parent_id,
                     to_index,
+                    now,
+                    &node_id,
                 )?;
             }
         }

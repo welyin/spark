@@ -87,8 +87,12 @@ fn doc_write_meta_evidence_and_restart() {
     );
     let meta_raw = &entries["meta:chat:messages:id1"];
     let meta: Value = serde_json::from_str(meta_raw).unwrap();
-    assert_eq!(meta["vv"]["local-node"], 2, "本节点两次写入计数");
-    assert_eq!(meta["nodeId"], "local-node");
+    let node_id = meta["nodeId"].as_str().unwrap();
+    assert_eq!(meta["vv"][node_id], 2, "本节点两次写入计数");
+    assert_ne!(
+        node_id, "local-node",
+        "已初始化身份：nodeId 应派生自持久化 p2p 身份（pdsync 节点唯一性）"
+    );
     assert!(meta_raw.starts_with(r#"{"vv":"#), "meta 键序 vv 在前");
     assert!(
         entries.keys().any(|k| k.starts_with("doc:evidence:proof:")),

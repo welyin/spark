@@ -365,6 +365,39 @@ impl Kernel {
         self.spawn_deliveries(vec![(target, envelope)]);
     }
 
+    /// 把资料镜像写入 sled `profile:self`（pdsync P2）。
+    ///
+    /// 身份文件仍是权威存储；这里把资料另存为 sled 明文记录，bump pmeta，
+    /// 使个人资料可经 pdsync 自设备同步，也作锁定态读源。写失败静默（资料
+    /// 更新成功不因镜像失败回滚）。node_id 取本机同步节点。
+    pub(crate) fn sync_profile_to_sled(
+        &mut self,
+        nickname: Option<&str>,
+        avatar: Option<&str>,
+        gender: Option<&str>,
+        region: Option<&str>,
+        signature: Option<&str>,
+    ) {
+        let Ok(Some(_root_id)) = self.current_root_id() else {
+            return;
+        };
+        let now = crate::p2p::node::system_now_ms();
+        let node_id = self.sync_node_id();
+        let profile = super::identity::SyncableProfile::from_options(
+            nickname,
+            avatar,
+            gender,
+            region,
+            signature,
+        );
+        let key = super::identity::PROFILE_SELF_KEY;
+        let json = serde_json::to_string(&profile).unwrap_or_default();
+        let Ok(storage) = self.require_storage_mut() else {
+            return;
+        };
+        let _ = crate::sync::put_personal(storage, &node_id, key, &json, now);
+    }
+
     /// 通讯录快照广播：本机联系人数据变更后向自设备（自 FriendRecord 的
     /// peer 寻址）投递 contact-sync 全量快照。合入侧按 LWW 幂等裁决，重复
     /// 投递/旧快照回灌无害。p2p 未启动/未配对/未解锁时为空操作。

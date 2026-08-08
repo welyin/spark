@@ -1,7 +1,7 @@
 //! 自设备通讯录快照同步（contact-sync 信封的构建与合入纯逻辑）。
 //!
-//! 同步范围（个人空间）：朋友记录、收到/发出的好友申请、标签数组、
-//! 分组数组、拉黑集合。聊天记录不在本模块（见 dm 消息链路）。
+//! 同步范围（个人空间）：朋友记录、收到/发出的好友申请、标签、分组、
+//! 拉黑集合。聊天记录不在本模块（见 dm 消息链路）。
 //!
 //! 裁决口径（LWW）：
 //! - 朋友：记录级 `updatedAt`（本机每次变更刷新；存量记录为 0，任何带
@@ -16,16 +16,22 @@
 //!
 //! 删除传播：朋友删除与申请删除不传播（朋友无墓碑；申请本就只流转不
 //! 删除）。标签/分组/拉黑的删除随整域替换自然传播。
+//!
+//! P1 升级：标签/分组已从数组存储拆为独立记录（`ct:tag:{id}` /
+//! `ct:group:{id}`），快照构建/合入已适配；旧 `ct:tags` / `ct:groups`
+//! 数组键在迁移后不再存在。contact-sync 信封格式不变（仍为数组 + 整域
+//! 版本号），待 P3 pdsync 上线后逐步废弃。
 
 use serde_json::{Map, Value};
 
 use crate::storage::{ScanOptions, StorageBackend};
+use crate::sync::{delete_personal, put_personal};
 
 use super::super::{
-    BLOCKED_PREFIX, ContactTag, FRIEND_PREFIX, FriendRecord, FriendRequestRecord, GROUPS_KEY,
-    REQ_IN_PREFIX, REQ_OUT_PREFIX, Result, TAGS_KEY,
+    BLOCKED_PREFIX, ContactTag, FRIEND_PREFIX, FriendRecord, FriendRequestRecord, GROUP_PREFIX,
+    REQ_IN_PREFIX, REQ_OUT_PREFIX, Result, TAG_PREFIX, sync_err_to_contact,
 };
-use super::{ContactService, read_json, read_vec, scan_json, write_json};
+use super::{ContactService, read_json, scan_json, write_json};
 
 /// 整域版本号存储键（`{"tags":ts,"groups":ts,"blocked":ts}`）。
 pub(crate) const CONTACT_SYNC_META_KEY: &str = "ct:sync-meta";
@@ -104,8 +110,17 @@ pub(crate) fn build_contact_sync_snapshot<S: StorageBackend>(
             .into_iter()
             .map(|(_, record)| record)
             .collect();
-    let tags: Vec<ContactTag> = read_vec(storage, TAGS_KEY)?;
-    let groups: Vec<super::super::ContactGroup> = read_vec(storage, GROUPS_KEY)?;
+    let mut tags: Vec<ContactTag> = scan_json::<S, ContactTag>(storage, TAG_PREFIX)?
+        .into_iter()
+        .map(|(_, tag)| tag)
+        .collect();
+    tags.sort_by_key(|t| t.order);
+    let mut groups: Vec<super::super::ContactGroup> =
+        scan_json::<S, super::super::ContactGroup>(storage, GROUP_PREFIX)?
+            .into_iter()
+            .map(|(_, g)| g)
+            .collect();
+    groups.sort_by_key(|g| g.order);
     let blocked = blocked_list(storage)?;
     let (tags_v, groups_v, blocked_v) = read_versions(storage)?;
     Ok(serde_json::json!({
@@ -123,11 +138,14 @@ pub(crate) fn build_contact_sync_snapshot<S: StorageBackend>(
 /// 通知前端刷新）。仅处理个人空间数据。
 ///
 /// 合入是「裸写」：不刷新本地版本/updatedAt（快照里的时间戳即事实来源），
-/// 也不会再触发对外广播——防两端互灌循环。
+/// 也不会再触发对外广播——防两端互灌循环。合入的朋友记录同时 bump pmeta
+/// （P1：让旧通道合入的数据对 pdsync 可见），node_id 为本机节点。
 pub(crate) fn apply_contact_sync_snapshot<S: StorageBackend>(
     storage: &mut S,
     my_root_id: &str,
     body: &Value,
+    node_id: &str,
+    now_ms: i64,
 ) -> Result<usize> {
     let mut applied = 0usize;
 
@@ -148,7 +166,7 @@ pub(crate) fn apply_contact_sync_snapshot<S: StorageBackend>(
             if dominated {
                 continue;
             }
-            ContactService::upsert_friend(storage, &incoming)?;
+            ContactService::upsert_friend_pdsync(storage, &incoming, now_ms, node_id)?;
             applied += 1;
         }
     }
@@ -173,7 +191,15 @@ pub(crate) fn apply_contact_sync_snapshot<S: StorageBackend>(
                 if dominated {
                     continue;
                 }
-                write_json(storage, &key, &incoming)?;
+                // 合入同时 bump pmeta（与朋友路径同口径：旧通道数据对 pdsync 可见）
+                put_personal(
+                    storage,
+                    node_id,
+                    &key,
+                    &serde_json::to_string(&incoming)?,
+                    now_ms,
+                )
+                .map_err(sync_err_to_contact)?;
                 applied += 1;
             }
         }
@@ -196,7 +222,27 @@ pub(crate) fn apply_contact_sync_snapshot<S: StorageBackend>(
                 .iter()
                 .filter_map(|v| serde_json::from_value(v.clone()).ok())
                 .collect();
-            write_json(storage, TAGS_KEY, &tags)?;
+
+            // 1) 删除当前设备上但远端不存在的标签（整域替换；tombstone pmeta，
+            //    不留非 tombstone 的陈旧 pmeta 污染类目 folded vv）
+            let remote_ids: std::collections::BTreeSet<&str> =
+                tags.iter().map(|t| t.id.as_str()).collect();
+            for (key, _) in storage.scan(&ScanOptions::prefix(TAG_PREFIX))? {
+                let id = &key[TAG_PREFIX.len()..];
+                if !remote_ids.contains(id) {
+                    delete_personal(storage, node_id, &key, now_ms)
+                        .map_err(sync_err_to_contact)?;
+                }
+            }
+            // 2) 写入远端标签（独立记录，order 由远端数组位置隐式给出；写 pmeta）
+            for (i, tag) in tags.iter().enumerate() {
+                let mut tag = tag.clone();
+                // 远端快照中的标签可能没有 order 字段（旧设备），补上
+                tag.order = i as i32;
+                let key = format!("{TAG_PREFIX}{}", tag.id);
+                put_personal(storage, node_id, &key, &serde_json::to_string(&tag)?, now_ms)
+                    .map_err(sync_err_to_contact)?;
+            }
             tags_v = remote_tags_v;
             applied += 1;
         }
@@ -207,7 +253,25 @@ pub(crate) fn apply_contact_sync_snapshot<S: StorageBackend>(
                 .iter()
                 .filter_map(|v| serde_json::from_value(v.clone()).ok())
                 .collect();
-            write_json(storage, GROUPS_KEY, &groups)?;
+
+            // 删除远端不存在的分组（tombstone pmeta，同标签）
+            let remote_ids: std::collections::BTreeSet<&str> =
+                groups.iter().map(|g| g.id.as_str()).collect();
+            for (key, _) in storage.scan(&ScanOptions::prefix(GROUP_PREFIX))? {
+                let id = &key[GROUP_PREFIX.len()..];
+                if !remote_ids.contains(id) {
+                    delete_personal(storage, node_id, &key, now_ms)
+                        .map_err(sync_err_to_contact)?;
+                }
+            }
+            // 写入远端分组（写 pmeta）
+            for (i, group) in groups.iter().enumerate() {
+                let mut group = group.clone();
+                group.order = i as i32;
+                let key = format!("{GROUP_PREFIX}{}", group.id);
+                put_personal(storage, node_id, &key, &serde_json::to_string(&group)?, now_ms)
+                    .map_err(sync_err_to_contact)?;
+            }
             groups_v = remote_groups_v;
             applied += 1;
         }
@@ -221,10 +285,12 @@ pub(crate) fn apply_contact_sync_snapshot<S: StorageBackend>(
             let local_set: std::collections::BTreeSet<String> =
                 blocked_list(storage)?.into_iter().collect();
             for root_id in local_set.difference(&remote_set) {
-                storage.delete(&format!("{BLOCKED_PREFIX}{root_id}"))?;
+                delete_personal(storage, node_id, &format!("{BLOCKED_PREFIX}{root_id}"), now_ms)
+                    .map_err(sync_err_to_contact)?;
             }
             for root_id in remote_set.difference(&local_set) {
-                storage.put(&format!("{BLOCKED_PREFIX}{root_id}"), "1")?;
+                put_personal(storage, node_id, &format!("{BLOCKED_PREFIX}{root_id}"), "\"1\"", now_ms)
+                    .map_err(sync_err_to_contact)?;
             }
             blocked_v = remote_blocked_v;
             applied += 1;
@@ -266,6 +332,10 @@ mod tests {
 
     const NOW: i64 = 1_720_000_000_000;
     const MY_ROOT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    /// 设备 A 的 pdsync 节点 id（真实双设备：各设备用各自 peerId）。
+    const NODE_A: &str = "node-a";
+    /// 设备 B 的 pdsync 节点 id。
+    const NODE_B: &str = "node-b";
 
     fn friend(root_id: &str, nickname: &str, updated_at: i64) -> FriendRecord {
         FriendRecord {
@@ -305,12 +375,14 @@ mod tests {
         }
     }
 
-    /// 端到端：A 机构建快照 → B 机合入 → 数据齐全且版本对齐。
+    /// 端到端：A 机（node-a）构建快照 → B 机（node-b）合入 → 数据齐全；
+    /// 再反向 B→A → 双方一致。这是真实"同账号两台设备"的双向同步。
     #[test]
     fn roundtrip_build_then_apply() {
         let mut a = MemoryStorage::new();
         let mut b = MemoryStorage::new();
 
+        // A 机用 node-a 写入全部数据
         ContactService::upsert_friend(&mut a, &friend(&"bb".repeat(32), "好友甲", NOW)).unwrap();
         ContactService::upsert_friend(&mut a, &friend(MY_ROOT, "自己", NOW)).unwrap(); // 自记录
         ContactService::put_incoming_request(
@@ -323,12 +395,13 @@ mod tests {
             &request("out-1", &"dd".repeat(32), FriendRequestStatus::Pending, NOW),
         )
         .unwrap();
-        ContactService::create_tag_with_id(&mut a, "personal", "t1", "邻居", NOW).unwrap();
-        ContactService::create_group_with_id(&mut a, "g1", "家人", NOW).unwrap();
-        ContactService::set_blocked(&mut a, "personal", &"ee".repeat(32), true, NOW).unwrap();
+        ContactService::create_tag_with_id(&mut a, "personal", "t1", "邻居", NOW, NODE_A).unwrap();
+        ContactService::create_group_with_id(&mut a, "g1", "家人", NOW, NODE_A).unwrap();
+        ContactService::set_blocked(&mut a, "personal", &"ee".repeat(32), true, NOW, NODE_A).unwrap();
 
+        // A → B
         let body = build_contact_sync_snapshot(&a, MY_ROOT).unwrap();
-        let applied = apply_contact_sync_snapshot(&mut b, MY_ROOT, &body).unwrap();
+        let applied = apply_contact_sync_snapshot(&mut b, MY_ROOT, &body, NODE_B, NOW).unwrap();
         assert!(applied > 0);
 
         // 朋友同步（自记录除外）
@@ -347,8 +420,13 @@ mod tests {
         assert!(ContactService::is_blocked(&b, &"ee".repeat(32)).unwrap());
 
         // 幂等：重放同快照无新写入
-        let again = apply_contact_sync_snapshot(&mut b, MY_ROOT, &body).unwrap();
+        let again = apply_contact_sync_snapshot(&mut b, MY_ROOT, &body, NODE_B, NOW).unwrap();
         assert_eq!(again, 0, "同快照重放幂等");
+
+        // 反向 B → A：B 上没有比 A 更新的数据，空转（无新写入）
+        let body_b = build_contact_sync_snapshot(&b, MY_ROOT).unwrap();
+        let applied_b = apply_contact_sync_snapshot(&mut a, MY_ROOT, &body_b, NODE_A, NOW).unwrap();
+        assert_eq!(applied_b, 0, "反向无更新");
     }
 
     /// 朋友 LWW：旧快照不覆盖新记录；新快照覆盖旧记录。
@@ -363,7 +441,7 @@ mod tests {
 
         // A（旧）→ B（新）：不覆盖
         let body = build_contact_sync_snapshot(&a, MY_ROOT).unwrap();
-        let applied = apply_contact_sync_snapshot(&mut b, MY_ROOT, &body).unwrap();
+        let applied = apply_contact_sync_snapshot(&mut b, MY_ROOT, &body, NODE_B, NOW).unwrap();
         assert_eq!(applied, 0);
         assert_eq!(
             ContactService::get_friend(&b, &root).unwrap().unwrap().nickname,
@@ -372,7 +450,7 @@ mod tests {
 
         // B（新）→ A（旧）：覆盖
         let body = build_contact_sync_snapshot(&b, MY_ROOT).unwrap();
-        let applied = apply_contact_sync_snapshot(&mut a, MY_ROOT, &body).unwrap();
+        let applied = apply_contact_sync_snapshot(&mut a, MY_ROOT, &body, NODE_A, NOW).unwrap();
         assert_eq!(applied, 1);
         assert_eq!(
             ContactService::get_friend(&a, &root).unwrap().unwrap().nickname,
@@ -398,10 +476,10 @@ mod tests {
 
         // 旧（pending）→ 新（accepted）：不动
         let body = build_contact_sync_snapshot(&a, MY_ROOT).unwrap();
-        assert_eq!(apply_contact_sync_snapshot(&mut b, MY_ROOT, &body).unwrap(), 0);
+        assert_eq!(apply_contact_sync_snapshot(&mut b, MY_ROOT, &body, NODE_B, NOW).unwrap(), 0);
         // 新 → 旧：覆盖
         let body = build_contact_sync_snapshot(&b, MY_ROOT).unwrap();
-        assert_eq!(apply_contact_sync_snapshot(&mut a, MY_ROOT, &body).unwrap(), 1);
+        assert_eq!(apply_contact_sync_snapshot(&mut a, MY_ROOT, &body, NODE_A, NOW).unwrap(), 1);
         assert_eq!(
             ContactService::get_outgoing_request(&a, "r1").unwrap().unwrap().status,
             FriendRequestStatus::Accepted
@@ -413,16 +491,16 @@ mod tests {
     fn groups_deletion_propagates() {
         let mut a = MemoryStorage::new();
         let mut b = MemoryStorage::new();
-        // 双方起初都有 g1+g2
+        // 双方起初都有 g1+g2（各用各的 nodeId）
         for s in [&mut a, &mut b] {
-            ContactService::create_group_with_id(s, "g1", "家人", NOW).unwrap();
-            ContactService::create_group_with_id(s, "g2", "同学", NOW + 1).unwrap();
+            ContactService::create_group_with_id(s, "g1", "家人", NOW, NODE_A).unwrap();
+            ContactService::create_group_with_id(s, "g2", "同学", NOW + 1, NODE_A).unwrap();
         }
         // A 删除 g2（版本前进）
-        ContactService::delete_group(&mut a, "g2", NOW + 2000).unwrap();
+        ContactService::delete_group(&mut a, "g2", NOW + 2000, NODE_A).unwrap();
 
         let body = build_contact_sync_snapshot(&a, MY_ROOT).unwrap();
-        let applied = apply_contact_sync_snapshot(&mut b, MY_ROOT, &body).unwrap();
+        let applied = apply_contact_sync_snapshot(&mut b, MY_ROOT, &body, NODE_B, NOW).unwrap();
         assert!(applied > 0);
         let view = ContactService::overview(&b, "personal").unwrap();
         assert_eq!(view.groups.len(), 1, "删除随整域替换传播");
@@ -440,7 +518,7 @@ mod tests {
         let mut a = MemoryStorage::new();
         ContactService::upsert_friend(&mut a, &friend(&root, "新", 1)).unwrap();
         let body = build_contact_sync_snapshot(&a, MY_ROOT).unwrap();
-        assert_eq!(apply_contact_sync_snapshot(&mut b, MY_ROOT, &body).unwrap(), 1);
+        assert_eq!(apply_contact_sync_snapshot(&mut b, MY_ROOT, &body, "local-node", NOW).unwrap(), 1);
         assert_eq!(
             ContactService::get_friend(&b, &root).unwrap().unwrap().nickname,
             "新"
@@ -454,13 +532,13 @@ mod tests {
         let mut b = MemoryStorage::new();
         let target = "ee".repeat(32);
         for (s, ts) in [(&mut a, NOW), (&mut b, NOW)] {
-            ContactService::set_blocked(s, "personal", &target, true, ts).unwrap();
+            ContactService::set_blocked(s, "personal", &target, true, ts, NODE_A).unwrap();
         }
         // A 取消拉黑（版本前进）
-        ContactService::set_blocked(&mut a, "personal", &target, false, NOW + 3000).unwrap();
+        ContactService::set_blocked(&mut a, "personal", &target, false, NOW + 3000, NODE_A).unwrap();
 
         let body = build_contact_sync_snapshot(&a, MY_ROOT).unwrap();
-        let applied = apply_contact_sync_snapshot(&mut b, MY_ROOT, &body).unwrap();
+        let applied = apply_contact_sync_snapshot(&mut b, MY_ROOT, &body, NODE_B, NOW).unwrap();
         assert!(applied > 0);
         assert!(
             !ContactService::is_blocked(&b, &target).unwrap(),
@@ -474,13 +552,13 @@ mod tests {
         let mut a = MemoryStorage::new();
         let mut b = MemoryStorage::new();
         for s in [&mut a, &mut b] {
-            ContactService::create_group_with_id(s, "g1", "甲", NOW).unwrap();
-            ContactService::create_group_with_id(s, "g2", "乙", NOW + 1).unwrap();
+            ContactService::create_group_with_id(s, "g1", "甲", NOW, NODE_A).unwrap();
+            ContactService::create_group_with_id(s, "g2", "乙", NOW + 1, NODE_A).unwrap();
         }
-        ContactService::move_group(&mut a, "g2", 0, NOW + 5000).unwrap();
+        ContactService::move_group(&mut a, "g2", 0, NOW + 5000, NODE_A).unwrap();
 
         let body = build_contact_sync_snapshot(&a, MY_ROOT).unwrap();
-        apply_contact_sync_snapshot(&mut b, MY_ROOT, &body).unwrap();
+        apply_contact_sync_snapshot(&mut b, MY_ROOT, &body, NODE_B, NOW).unwrap();
         let view = ContactService::overview(&b, "personal").unwrap();
         let order: Vec<&str> = view.groups.iter().map(|g| g.id.as_str()).collect();
         assert_eq!(order, vec!["g2", "g1"], "重排结果随快照传播");

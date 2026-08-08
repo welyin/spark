@@ -129,6 +129,34 @@ impl OrganizationService {
         Ok(())
     }
 
+    /// pdsync 感知的组织记录写入（P5）：`put_personal` 落 `org:meta:{orgId}`
+    /// + bump pmeta，使组织记录可经自设备 pdsync 同步。
+    pub fn save_record_pdsync<S: StorageBackend>(
+        storage: &mut S,
+        record: &OrganizationRecord,
+        now_ms: i64,
+        node_id: &str,
+    ) -> Result<()> {
+        let key = organization_key(&record.org_id);
+        let json = serde_json::to_string(record)?;
+        crate::sync::put_personal(storage, node_id, &key, &json, now_ms).map_err(pdsync_err)?;
+        Ok(())
+    }
+
+    /// pdsync 感知的组织记录删除（P5）：`delete_personal` 写 tombstone pmeta，
+    /// 删除经自设备 pdsync 传播（裸 `storage.delete` 会留下非 tombstone 的
+    /// 陈旧 pmeta，且对端永远收不到删除）。
+    pub fn delete_record_pdsync<S: StorageBackend>(
+        storage: &mut S,
+        org_id: &str,
+        now_ms: i64,
+        node_id: &str,
+    ) -> Result<()> {
+        crate::sync::delete_personal(storage, node_id, &organization_key(org_id), now_ms)
+            .map_err(pdsync_err)?;
+        Ok(())
+    }
+
     fn require_organization<S: StorageBackend>(
         storage: &S,
         org_id: &str,
@@ -157,6 +185,15 @@ impl OrganizationService {
             last_synced_at: previous_last_synced_at,
         });
     }
+}
+
+/// pdsync 写入错误 → OrgError（OrgError 无 Sync 变体，沿用 save_record_pdsync
+/// 既有包装口径：经 io 错误桥接为 Json 变体）。
+fn pdsync_err(e: crate::sync::SyncError) -> OrgError {
+    OrgError::Json(serde_json::Error::io(std::io::Error::new(
+        std::io::ErrorKind::Other,
+        e.to_string(),
+    )))
 }
 
 /// 事务 payload 的 `nodeInfo` 键：未提供时整个键缺省（对齐 TS

@@ -153,6 +153,9 @@ pub(crate) struct OrgSyncContext {
     /// 断→连跳变时触发 device-sync + profile-sync 快照重发，补齐对端离线
     /// 期间错过的变更（一次性启动广播无重试，靠此状态机收敛）。
     pub(crate) self_device_link: Arc<Mutex<Option<String>>>,
+    /// 已证明支持 pdsync 的自设备 peerId 集合（host 验签通过后按连接层
+    /// peerId 写入——按设备粒度；保活读取决定是否回退发旧快照，见 §7.1）。
+    pub(crate) pdsync_capable_self_devices: Arc<Mutex<std::collections::HashSet<String>>>,
 }
 
 /// org-sync worker 主循环：推送/保活串行消费（kernel `start_p2p` 装配，

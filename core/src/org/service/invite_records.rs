@@ -30,6 +30,32 @@ impl OrganizationService {
         Ok(())
     }
 
+    /// pdsync 感知的邀请记录写入（P5）：`put_personal` 落 `org:inv:*` + bump
+    /// pmeta，使邀请记录可经自设备 pdsync 同步。
+    pub fn put_invite_record_pdsync<S: StorageBackend>(
+        storage: &mut S,
+        record: &OrgInviteRecord,
+        now_ms: i64,
+        node_id: &str,
+    ) -> Result<()> {
+        let mut record = record.clone();
+        if record.updated_at == 0 {
+            record.updated_at = record.created_at;
+        }
+        let key = match record.direction {
+            OrgInviteDirection::Outgoing => org_invite_out_key(&record.org_id, &record.peer_root_id),
+            OrgInviteDirection::Incoming => org_invite_in_key(&record.org_id, &record.peer_root_id),
+        };
+        let json = serde_json::to_string(&record)?;
+        crate::sync::put_personal(storage, node_id, &key, &json, now_ms).map_err(|e| {
+            OrgError::Json(serde_json::Error::io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                e.to_string(),
+            )))
+        })?;
+        Ok(())
+    }
+
     /// 读取出站邀请记录（我邀 `peer_root_id` 加入 `org_id`）；不存在返回 `Ok(None)`。
     pub fn get_outgoing_invite<S: StorageBackend>(
         storage: &S,
@@ -126,6 +152,38 @@ impl OrganizationService {
         record.status = status;
         record.updated_at = now_ms;
         storage.put(&key, &serde_json::to_string(&record)?)?;
+        Ok(Some(record))
+    }
+
+    /// pdsync 感知的状态流转（P5）：落 `org:inv:*` + bump pmeta。
+    pub fn mark_invite_status_pdsync<S: StorageBackend>(
+        storage: &mut S,
+        direction: OrgInviteDirection,
+        org_id: &str,
+        peer_root_id: &str,
+        status: OrgInviteStatus,
+        now_ms: i64,
+        node_id: &str,
+    ) -> Result<Option<OrgInviteRecord>> {
+        let key = match direction {
+            OrgInviteDirection::Outgoing => org_invite_out_key(org_id, peer_root_id),
+            OrgInviteDirection::Incoming => org_invite_in_key(org_id, peer_root_id),
+        };
+        let Some(mut record) = Self::read_invite(storage, &key)? else {
+            return Ok(None);
+        };
+        if record.status != OrgInviteStatus::Pending {
+            return Ok(None);
+        }
+        record.status = status;
+        record.updated_at = now_ms;
+        let json = serde_json::to_string(&record)?;
+        crate::sync::put_personal(storage, node_id, &key, &json, now_ms).map_err(|e| {
+            OrgError::Json(serde_json::Error::io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                e.to_string(),
+            )))
+        })?;
         Ok(Some(record))
     }
 

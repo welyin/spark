@@ -239,6 +239,7 @@ pub(crate) fn bot_reply_shared(
     let conv = MessageService::get_conversation(&storage, space, conv_id)?
         .ok_or(crate::message::MessageError::ConversationNotFound)?;
     let now = system_now_ms();
+    let node_id = host.sync_node_id();
     let record = MessageRecord {
         id: message_id.to_string(),
         sender_id: bot_root_id.to_string(),
@@ -254,7 +255,7 @@ pub(crate) fn bot_reply_shared(
         recalled: false,
         read: false,
     };
-    MessageService::append_message(&mut storage, space, conv_id, &record)?;
+    MessageService::append_message_pdsync(&mut storage, space, conv_id, &record, now, Some(&node_id))?;
     // 本机前端实时刷新：发 ChatReceived 事件（与真人入站消息同口径），
     // 否则 bot 回复要等重新水合才出现在聊天窗口（表现为"不实时"）。
     // bot 会话 online 恒 false（无 peer），online_peers 传空集。
@@ -392,6 +393,7 @@ impl Kernel {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
         let now = system_now_ms();
+        let node_id = self.sync_node_id();
         let conv = match MessageService::find_direct_conversation(
             self.require_storage()?,
             space,
@@ -412,7 +414,13 @@ impl Kernel {
                     updated_at: now,
                     meta_updated_at: 0,
                 };
-                MessageService::upsert_conversation(self.require_storage_mut()?, space, &record)?;
+                MessageService::upsert_conversation_pdsync(
+                    self.require_storage_mut()?,
+                    space,
+                    &record,
+                    now,
+                    Some(&node_id),
+                )?;
                 record
             }
         };
@@ -460,6 +468,7 @@ impl Kernel {
         }
         let my_root_id = self.require_unlocked_root_id()?;
         let now = system_now_ms();
+        let node_id = self.sync_node_id();
         let conv = MessageService::get_conversation(self.require_storage()?, space, conv_id)?
             .ok_or(crate::message::MessageError::ConversationNotFound)?;
         let record = MessageRecord {
@@ -477,7 +486,14 @@ impl Kernel {
             recalled: false,
             read: false,
         };
-        MessageService::append_message(self.require_storage_mut()?, space, conv_id, &record)?;
+        MessageService::append_message_pdsync(
+            self.require_storage_mut()?,
+            space,
+            conv_id,
+            &record,
+            now,
+            Some(&node_id),
+        )?;
         let status = if conv.peer_root_id == my_root_id {
             // 给自己发消息 = 同步到同身份的所有节点：本机副本天然送达
             // （delivered），随后向已配对设备逐个尽力投递 chat 信封
@@ -715,12 +731,15 @@ impl Kernel {
     pub fn message_set_draft(&mut self, space: &str, conv_id: &str, draft: &str) -> Result<()> {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        MessageService::set_draft(
+        let now = system_now_ms();
+        let node_id = self.sync_node_id();
+        MessageService::set_draft_pdsync(
             self.require_storage_mut()?,
             space,
             conv_id,
             draft,
-            system_now_ms(),
+            now,
+            &node_id,
         )?;
         if space == "personal" {
             self.broadcast_conv_sync();
@@ -732,7 +751,15 @@ impl Kernel {
     pub fn message_toggle_pin(&mut self, space: &str, conv_id: &str) -> Result<()> {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        MessageService::toggle_pin(self.require_storage_mut()?, space, conv_id, system_now_ms())?;
+        let now = system_now_ms();
+        let node_id = self.sync_node_id();
+        MessageService::toggle_pin_pdsync(
+            self.require_storage_mut()?,
+            space,
+            conv_id,
+            now,
+            &node_id,
+        )?;
         if space == "personal" {
             self.broadcast_conv_sync();
         }
@@ -743,7 +770,15 @@ impl Kernel {
     pub fn message_toggle_mute(&mut self, space: &str, conv_id: &str) -> Result<()> {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        MessageService::toggle_mute(self.require_storage_mut()?, space, conv_id, system_now_ms())?;
+        let now = system_now_ms();
+        let node_id = self.sync_node_id();
+        MessageService::toggle_mute_pdsync(
+            self.require_storage_mut()?,
+            space,
+            conv_id,
+            now,
+            &node_id,
+        )?;
         if space == "personal" {
             self.broadcast_conv_sync();
         }
@@ -758,11 +793,19 @@ impl Kernel {
         Ok(())
     }
 
-    /// 删除会话（会话与消息一并删除）。
+    /// 删除会话（会话与消息一并删除；个人空间写 tombstone pmeta，删除随
+    /// 自设备 pdsync 传播）。
     pub fn message_delete_conversation(&mut self, space: &str, conv_id: &str) -> Result<()> {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        MessageService::delete_conversation(self.require_storage_mut()?, space, conv_id)?;
+        let node_id = self.sync_node_id();
+        MessageService::delete_conversation_pdsync(
+            self.require_storage_mut()?,
+            space,
+            conv_id,
+            system_now_ms(),
+            Some(&node_id),
+        )?;
         Ok(())
     }
 
@@ -803,6 +846,17 @@ impl Kernel {
         }
         AppMessageService::ensure_app_conversation(self.require_storage_mut()?, space, plugin_id, now)?;
         AppMessageService::append_app_message(self.require_storage_mut()?, space, &record)?;
+        // 应用会话壳纳入 pdsync（仅个人空间生效）：msg:app 消息本体走窗口
+        // 同步，会话壳走 msg:conv 类目——bump conv pmeta（ts 保持
+        // meta_updated_at，与人消息 append 路径同一助手）
+        let node_id = self.sync_node_id();
+        MessageService::bump_conv_pmeta_for_message(
+            self.require_storage_mut()?,
+            space,
+            &app_conversation_id(plugin_id),
+            now,
+            &node_id,
+        )?;
         Ok(app_message_view(&record))
     }
 

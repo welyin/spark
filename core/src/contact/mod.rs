@@ -16,12 +16,16 @@
 //! - `ct:friend:{rootId}` → [`FriendRecord`]（个人空间）
 //! - `ct:req:in:{fromRootId}:{id}` / `ct:req:out:{id}` → [`FriendRequestRecord`]
 //!   （个人空间；入站申请 id 带发送者命名空间防跨发送者撞 id）
-//! - `ct:tags` → `Vec<ContactTag>`；`ct:groups` → `Vec<ContactGroup>`（数组序即显示序）
+//! - `ct:tag:{tagId}` → [`ContactTag`]；`ct:group:{tagId}` → [`ContactGroup`]
+//!   （独立记录，`order` 字段显式维护排序——不再依赖数组下标；见 §5.3）
 //! - `ct:blocked:{rootId}` → `"1"`（个人空间拉黑集合，独立于朋友记录）
 //! - `ct:org:{orgId}:extra:{rootId}` → [`ContactProfileRecord`]（组织成员附加资料）
 //! - `ct:org:{orgId}:tags` → 标签数组；`ct:org:{orgId}:tree` → `Vec<OrgGroupNode>`
 //! - `ct:org:{orgId}:req:out:{id}` → [`FriendRequestRecord`]（组织空间我发出的
 //!   邀请记录；邀请人本机数据，不随组织快照同步）
+//!
+//! 旧键 `ct:tags` / `ct:groups`（数组）在首次迁移后删除，迁移由
+//! [`migrate_tags_to_items`] / [`migrate_groups_to_items`] 幂等执行。
 //!
 //! 时间一律以 `now_ms` 参数注入，保证纯函数可测。[`FriendRequestRecord`] 带
 //! `updatedAt`（新建 = createdAt，后续变更由写路径刷新）；[`FriendRecord`]
@@ -45,10 +49,15 @@ pub(crate) const REQ_IN_PREFIX: &str = "ct:req:in:";
 /// 发出的好友申请键前缀（`ct:req:out:{id}`）。
 pub(crate) const REQ_OUT_PREFIX: &str = "ct:req:out:";
 
-/// 个人空间标签数组键。
+/// 个人空间标签数组键（旧格式，迁移后删除）。
 pub(crate) const TAGS_KEY: &str = "ct:tags";
-/// 个人空间扁平分组数组键。
+/// 个人空间扁平分组数组键（旧格式，迁移后删除）。
 pub(crate) const GROUPS_KEY: &str = "ct:groups";
+
+/// 个人空间标签独立记录键前缀（`ct:tag:{tagId}`，新格式）。
+pub(crate) const TAG_PREFIX: &str = "ct:tag:";
+/// 个人空间扁平分组独立记录键前缀（`ct:group:{tagId}`，新格式）。
+pub(crate) const GROUP_PREFIX: &str = "ct:group:";
 
 /// 个人空间拉黑集合键前缀（`ct:blocked:{rootId}`；独立于朋友记录——
 /// 陌生人可拉黑，删除朋友不清拉黑）。
@@ -229,17 +238,27 @@ impl Default for ContactProfileRecord {
 }
 
 /// 通讯录标签（设计 §8）。
+///
+/// `order` 显式维护排序位置，不再依赖数组下标（pdsync §5.3）。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContactTag {
     pub id: String,
     pub name: String,
+    /// 排序位置（0‑based）。
+    #[serde(default)]
+    pub order: i32,
 }
 
-/// 个人空间扁平分组（数组顺序即显示顺序；「未分组」为虚拟组不入列）。
+/// 个人空间扁平分组（「未分组」为虚拟组不入列）。
+///
+/// `order` 显式维护排序位置，不再依赖数组下标（pdsync §5.3）。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContactGroup {
     pub id: String,
     pub name: String,
+    /// 排序位置（0‑based）。
+    #[serde(default)]
+    pub order: i32,
 }
 
 /// 组织空间分组树节点（children 数组顺序即同级排序）。
@@ -313,3 +332,14 @@ pub enum ContactError {
 
 /// 通讯录模块 Result 别名。
 pub type Result<T> = std::result::Result<T, ContactError>;
+
+pub(crate) fn sync_err_to_contact(e: crate::sync::SyncError) -> ContactError {
+    match e {
+        crate::sync::SyncError::Storage(e) => ContactError::Storage(e),
+        crate::sync::SyncError::Json(e) => ContactError::Json(e),
+        other => ContactError::Json(serde_json::Error::io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            other.to_string(),
+        ))),
+    }
+}

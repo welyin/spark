@@ -41,11 +41,13 @@ impl Kernel {
     /// 创建组织（需要已解锁身份）：创建者为唯一初始 admin。
     pub fn create_org(&mut self, input: CreateOrganizationInput) -> Result<OrganizationView> {
         let root_id = self.require_unlocked_root_id()?;
-        let record = OrganizationService::create_organization(
+        let node_id = self.sync_node_id();
+        let record = OrganizationService::create_organization_pdsync(
             self.require_storage_mut()?,
             &input,
             &root_id,
             system_now_ms(),
+            &node_id,
         )?;
         Ok(OrganizationService::to_view(&record, &root_id))
     }
@@ -105,13 +107,15 @@ impl Kernel {
         node_info: Option<&OrganizationNodeInfo>,
     ) -> Result<OrganizationView> {
         let root_id = self.require_unlocked_root_id()?;
-        let record = OrganizationService::add_member(
+        let node_id = self.sync_node_id();
+        let record = OrganizationService::add_member_pdsync(
             self.require_storage_mut()?,
             org_id,
             member_root_id,
             node_info,
             &root_id,
             system_now_ms(),
+            &node_id,
         )?;
         if let Some(tx) = &self.org_sync_tx {
             let _ = tx.send(OrgSyncRequest::PushOrg {
@@ -131,12 +135,14 @@ impl Kernel {
         member_root_id: &str,
     ) -> Result<OrganizationView> {
         let root_id = self.require_unlocked_root_id()?;
-        let record = OrganizationService::remove_member(
+        let node_id = self.sync_node_id();
+        let record = OrganizationService::remove_member_pdsync(
             self.require_storage_mut()?,
             org_id,
             member_root_id,
             &root_id,
             system_now_ms(),
+            &node_id,
         )?;
         Ok(OrganizationService::to_view(&record, &root_id))
     }
@@ -152,12 +158,14 @@ impl Kernel {
         gateways: &[String],
     ) -> Result<OrganizationView> {
         let root_id = self.require_unlocked_root_id()?;
-        let record = OrganizationService::set_org_gateways(
+        let node_id = self.sync_node_id();
+        let record = OrganizationService::set_org_gateways_pdsync(
             self.require_storage_mut()?,
             org_id,
             gateways,
             &root_id,
             system_now_ms(),
+            &node_id,
         )?;
         if let Some(tx) = &self.org_sync_tx {
             let _ = tx.send(OrgSyncRequest::PushOrg {
@@ -178,7 +186,8 @@ impl Kernel {
         avatar: Option<&str>,
     ) -> Result<OrganizationView> {
         let root_id = self.require_unlocked_root_id()?;
-        let record = OrganizationService::update_org_info(
+        let node_id = self.sync_node_id();
+        let record = OrganizationService::update_org_info_pdsync(
             self.require_storage_mut()?,
             org_id,
             name,
@@ -186,6 +195,7 @@ impl Kernel {
             avatar,
             &root_id,
             system_now_ms(),
+            &node_id,
         )?;
         if let Some(tx) = &self.org_sync_tx {
             let _ = tx.send(OrgSyncRequest::PushOrg {
@@ -204,12 +214,14 @@ impl Kernel {
         patch: &OrgIdentityPatch,
     ) -> Result<OrganizationView> {
         let root_id = self.require_unlocked_root_id()?;
-        let record = OrganizationService::update_my_identity(
+        let node_id = self.sync_node_id();
+        let record = OrganizationService::update_my_identity_pdsync(
             self.require_storage_mut()?,
             org_id,
             patch,
             &root_id,
             system_now_ms(),
+            &node_id,
         )?;
         if let Some(tx) = &self.org_sync_tx {
             let _ = tx.send(OrgSyncRequest::PushOrg {
@@ -232,13 +244,15 @@ impl Kernel {
         display_name: Option<&str>,
     ) -> Result<OrganizationView> {
         let root_id = self.require_unlocked_root_id()?;
-        let record = OrganizationService::set_org_public(
+        let node_id = self.sync_node_id();
+        let record = OrganizationService::set_org_public_pdsync(
             self.require_storage_mut()?,
             org_id,
             public,
             display_name,
             &root_id,
             system_now_ms(),
+            &node_id,
         )?;
         if let Some(tx) = &self.org_sync_tx {
             let _ = tx.send(OrgSyncRequest::PushOrg {
@@ -253,11 +267,13 @@ impl Kernel {
     /// 删除经 org-pull 的 `removed` 状态传播）。
     pub fn org_delete(&mut self, org_id: &str) -> Result<()> {
         let root_id = self.require_unlocked_root_id()?;
-        OrganizationService::delete_organization(
+        let node_id = self.sync_node_id();
+        OrganizationService::delete_organization_pdsync(
             self.require_storage_mut()?,
             org_id,
             &root_id,
             system_now_ms(),
+            &node_id,
         )?;
         Ok(())
     }
@@ -489,7 +505,14 @@ impl Kernel {
                 updated_at: now,
             },
         };
-        OrganizationService::put_invite_record(self.require_storage_mut()?, &record)?;
+        // P5：邀请记录写 pmeta，供自设备 pdsync 同步
+        let node_id = self.sync_node_id();
+        OrganizationService::put_invite_record_pdsync(
+            self.require_storage_mut()?,
+            &record,
+            now,
+            &node_id,
+        )?;
 
         // 信封 body：inviteCode 供接受方走 accept_invite 编排；组织/邀请人
         // 展示字段为自报，仅展示用（信任模型见 inbound_dm 模块头注释）
@@ -590,15 +613,17 @@ impl Kernel {
             OrgInviteStatus::Declined
         };
         let now = system_now_ms();
+        let node_id = self.sync_node_id();
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        let updated = OrganizationService::mark_invite_status(
+        let updated = OrganizationService::mark_invite_status_pdsync(
             self.require_storage_mut()?,
             OrgInviteDirection::Incoming,
             &record.org_id,
             &record.peer_root_id,
             status,
             now,
+            &node_id,
         )?;
         let Some(updated) = updated else {
             // 并发下已被置终态（重复回应）：返回当前记录，不再回发

@@ -56,9 +56,15 @@ impl Kernel {
             text: text.to_string(),
             ts: now,
         };
-        let record =
-            ContactService::append_outgoing_thread(self.require_storage_mut()?, request_id, msg, now)?
-                .expect("outgoing request just fetched");
+        let node_id = self.sync_node_id();
+        let record = ContactService::append_outgoing_thread_pdsync(
+            self.require_storage_mut()?,
+            request_id,
+            msg,
+            now,
+            &node_id,
+        )?
+        .expect("outgoing request just fetched");
         self.deliver_friend_reply(&record, &record.id, text);
         Ok(record)
     }
@@ -99,9 +105,15 @@ impl Kernel {
             text: text.to_string(),
             ts: now,
         };
-        let record =
-            ContactService::append_incoming_thread(self.require_storage_mut()?, request_id, msg, now)?
-                .expect("incoming request just fetched");
+        let node_id = self.sync_node_id();
+        let record = ContactService::append_incoming_thread_pdsync(
+            self.require_storage_mut()?,
+            request_id,
+            msg,
+            now,
+            &node_id,
+        )?
+        .expect("incoming request just fetched");
         // 入站申请 id 为复合形式 `{from}:{原 requestId}`；信封必须带原 id——
         // 对方 outbox 按原始 id 落库（同 accept_request_side_effects 的回发处理）
         let original_request_id = record

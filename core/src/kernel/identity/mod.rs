@@ -79,6 +79,10 @@ pub struct InitIdentityResult {
     pub mnemonic: String,
 }
 
+/// pdsync 个人资料 sled 键（`profile:self`，P2）。单条记录存
+/// [`SyncableProfile`]，见 §3.1.1 / §5.5。
+pub const PROFILE_SELF_KEY: &str = "profile:self";
+
 /// 当前已解锁身份的公开信息。
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct PublicIdentity {
@@ -116,6 +120,52 @@ pub struct ProfileInfo {
     pub region: Option<String>,
     /// 个性签名（扩展字段）。
     pub signature: Option<String>,
+}
+
+/// pdsync 个人资料（`profile:self`，sled 明文镜像，P2）。
+///
+/// 与身份文件资料字段同形，但用非 Option 的空串表达"未设置"，便于 sled 落盘
+/// 与向量版本比较（Option 嵌套在版本裁决里易产生等价歧义）。身份文件仍是权威
+/// 存储（换机/解锁源）；sled 镜像仅供 pdsync 在设备间同步，也作锁定态读源。
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncableProfile {
+    pub nickname: String,
+    pub avatar: String,
+    pub gender: String,
+    pub region: String,
+    pub signature: String,
+}
+
+impl SyncableProfile {
+    /// 从身份文件资料字段构造（`None` → 空串）。
+    pub fn from_options(
+        nickname: Option<&str>,
+        avatar: Option<&str>,
+        gender: Option<&str>,
+        region: Option<&str>,
+        signature: Option<&str>,
+    ) -> Self {
+        Self {
+            nickname: nickname.unwrap_or("").to_string(),
+            avatar: avatar.unwrap_or("").to_string(),
+            gender: gender.unwrap_or("").to_string(),
+            region: region.unwrap_or("").to_string(),
+            signature: signature.unwrap_or("").to_string(),
+        }
+    }
+
+    /// 转回 ProfileInfo（空串 → `None`）。
+    pub fn to_profile_info(&self) -> ProfileInfo {
+        let empty = |s: &str| if s.is_empty() { None } else { Some(s.to_string()) };
+        ProfileInfo {
+            nickname: empty(&self.nickname),
+            avatar: empty(&self.avatar),
+            gender: empty(&self.gender),
+            region: empty(&self.region),
+            signature: empty(&self.signature),
+        }
+    }
 }
 
 /// `sign` 的返回（TS `RootSignature`）。
@@ -209,6 +259,22 @@ fn map_identity_decrypt_error(e: identity::IdentityError) -> KernelError {
         identity::IdentityError::DecryptionFailed => KernelError::InvalidPassword,
         other => KernelError::Identity(other),
     }
+}
+
+/// 原子写身份文件：同目录临时文件 + rename（防写中途崩溃/掉电留下半截
+/// JSON；rename 同卷原子替换）。调用方负责序列化。
+pub(crate) fn write_identity_file_atomic(
+    path: &std::path::Path,
+    text: &str,
+) -> std::io::Result<()> {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp = path.with_extension(format!("{}-{}.tmp", std::process::id(), nanos));
+    std::fs::write(&tmp, text)?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
 }
 
 impl Kernel {

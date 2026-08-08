@@ -7,6 +7,7 @@ use super::{
 use crate::identity::{self, IdentityFile};
 use crate::kernel::Kernel;
 use crate::kernel::error::{KernelError, Result};
+use crate::storage::StorageBackend;
 
 impl Kernel {
     /// 登录链路收尾：配置含 p2p 时尽力启动（"登录即在线"，对齐 TS
@@ -72,10 +73,114 @@ impl Kernel {
         let seed = identity::parse_mnemonic(&payload.mnemonic)?.seed;
         self.write_active_root_id(&file.root_id)?;
         self.align_storage(&file.root_id)?;
+        // P2 反向回写（§5.5）：锁定期间 pdsync 可能已把更新的资料合入 sled
+        // `profile:self` 镜像——sled 较身份文件新时以 sled 覆盖身份文件资料
+        // （口令重封）。须在 set_unlocked 前完成，保证共享格读到最新资料。
+        self.apply_sled_profile_to_identity(&mut file, password);
         let root_id = file.root_id.clone();
         self.set_unlocked(identity, seed, password);
         self.ensure_p2p_after_login();
+        // P2：存量资料迁移——sled `profile:self` 为空但身份文件有资料时，首次
+        // unlock 一次性写入 sled（幂等）。此后以 sled 为 pdsync 读源。
+        // 置于 p2p 兜底启动之后：nodeId 取真实 peerId（或持久化身份派生值），
+        // 避免迁移写入的 pmeta 恒为 {local-node:1} 导致跨设备不收敛。
+        self.migrate_profile_to_sled(&file);
+        // 存量迁移：旧版整域单 key 的联系人标签/分组拆分为独立记录（幂等；
+        // 读路径已用新前缀，不迁移则老用户升级后标签/分组不可见）
+        self.migrate_contact_items_to_records();
         Ok(root_id)
+    }
+
+    /// P2 反向回写（§5.5）：锁定态下 pdsync 合入只更新 sled `profile:self`
+    /// 镜像；unlock 时若 sled 资料较身份文件新（pmeta ts > 文件 updatedAt），
+    /// 以 sled 覆盖身份文件资料字段（口令重封，原子落盘）。sled 缺失/不更
+    /// 新/任一步失败均静默跳过（身份文件保持原样，后续 pdsync 再收敛）。
+    fn apply_sled_profile_to_identity(&self, file: &mut IdentityFile, password: &str) {
+        let Ok(storage) = self.require_storage() else {
+            return;
+        };
+        let Some(raw) = storage.get(super::PROFILE_SELF_KEY).ok().flatten() else {
+            return;
+        };
+        let Ok(profile) = serde_json::from_str::<super::SyncableProfile>(&raw) else {
+            return;
+        };
+        // sled 侧资料时间取 pmeta ts（pdsync LWW 裁决水印）；无 pmeta 视为不新
+        let sled_ts = crate::sync::personal::get_personal_meta(storage, super::PROFILE_SELF_KEY)
+            .ok()
+            .flatten()
+            .map(|meta| meta.ts)
+            .unwrap_or(0);
+        if sled_ts <= file.updated_at as i64 {
+            return;
+        }
+        let info = profile.to_profile_info();
+        if identity::update_profile(
+            file,
+            password,
+            info.nickname.as_deref(),
+            match info.avatar.as_deref() {
+                Some(a) if !a.is_empty() => Some(Some(a)),
+                _ => Some(None),
+            },
+            Some(info.gender.as_deref().unwrap_or("")),
+            Some(info.region.as_deref().unwrap_or("")),
+            Some(info.signature.as_deref().unwrap_or("")),
+        )
+        .is_err()
+        {
+            return;
+        }
+        let Ok(text) = serde_json::to_string_pretty(file) else {
+            return;
+        };
+        let path = self.identity_file_path(&file.root_id);
+        let _ = super::write_identity_file_atomic(&path, &text);
+    }
+
+    /// 存量迁移：旧版整域单 key 的联系人标签/分组（`ct:tags`/`ct:groups`）
+    /// 拆分为独立记录（`ct:tag:{id}`/`ct:group:{id}`，随 pdsync 同步）。幂等；
+    /// 失败仅记录日志，不阻塞登录。
+    fn migrate_contact_items_to_records(&mut self) {
+        let node_id = self.sync_node_id();
+        let now = crate::p2p::node::system_now_ms();
+        let Ok(storage) = self.require_storage_mut() else {
+            return;
+        };
+        if let Err(e) =
+            crate::contact::ContactService::migrate_tags_to_items(storage, &node_id, now)
+        {
+            eprintln!("[kernel] migrate ct:tags to items failed: {e}");
+        }
+        if let Err(e) =
+            crate::contact::ContactService::migrate_groups_to_items(storage, &node_id, now)
+        {
+            eprintln!("[kernel] migrate ct:groups to items failed: {e}");
+        }
+    }
+
+    /// P2 存量迁移：若 sled 尚无 `profile:self`，把身份文件资料写入 sled
+    /// （bump pmeta）。幂等——sled 已有则跳过（避免覆盖 pdsync 已同步到
+    /// sled 的更新版）。
+    fn migrate_profile_to_sled(&mut self, file: &crate::identity::IdentityFile) {
+        let key = super::PROFILE_SELF_KEY;
+        let profile = super::SyncableProfile::from_options(
+            file.nickname.as_deref(),
+            file.avatar.as_deref(),
+            file.gender.as_deref(),
+            file.region.as_deref(),
+            file.signature.as_deref(),
+        );
+        let now = crate::p2p::node::system_now_ms();
+        let node_id = self.sync_node_id();
+        let json = serde_json::to_string(&profile).unwrap_or_default();
+        let Ok(storage) = self.require_storage_mut() else {
+            return;
+        };
+        if storage.get(key).ok().flatten().is_some() {
+            return; // sled 已有，跳过
+        }
+        let _ = crate::sync::put_personal(storage, &node_id, key, &json, now);
     }
 
     /// `lock`：锁定当前身份（活动指针不变）；会话私钥同步清除，P2P 一并停止
@@ -286,6 +391,7 @@ impl Kernel {
             .flatten();
 
         // 2. 落单向设备配对记录，已有条目时更新地址。
+        let node_id = self.sync_node_id();
         if let Ok(storage) = self.require_storage_mut() {
             let base = existing.unwrap_or_else(|| FriendRecord {
                 root_id: my_root_id.to_string(),
@@ -310,7 +416,7 @@ impl Kernel {
                 peer_id: gen_peer_id.to_string(),
                 addresses: gen_addresses.to_vec(),
             });
-            let _ = ContactService::upsert_friend(storage, &friend);
+            let _ = ContactService::upsert_friend_pdsync(storage, &friend, now, &node_id);
         }
 
         // 3. 发起 friend-request（含本机节点信息，对端自动接受完成双向配对）。

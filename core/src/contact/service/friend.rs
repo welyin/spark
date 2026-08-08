@@ -4,12 +4,14 @@
 use std::collections::BTreeMap;
 
 use crate::storage::StorageBackend;
+use crate::sync::personal::put_personal;
 
 use super::*;
 use crate::contact::{
-    BLOCKED_PREFIX, ContactProfileRecord, FRIEND_PREFIX, FriendRecord, FriendRequestRecord,
-    GROUPS_KEY, ProfilePatch, REQ_IN_PREFIX, REQ_OUT_PREFIX, SpaceContactsView,
-    org_extra_prefix, org_tree_key,
+    BLOCKED_PREFIX, ContactProfileRecord, ContactTag, ContactGroup,
+    FRIEND_PREFIX, FriendRecord, FriendRequestRecord,
+    GROUP_PREFIX, ProfilePatch, REQ_IN_PREFIX, REQ_OUT_PREFIX, SpaceContactsView,
+    TAG_PREFIX, org_extra_prefix, org_tree_key, sync_err_to_contact,
 };
 
 impl ContactService {
@@ -46,8 +48,24 @@ impl ContactService {
                         .into_iter()
                         .map(|(_, record)| record)
                         .collect(),
-                    tags: read_vec(storage, TAGS_KEY)?,
-                    groups: read_vec(storage, GROUPS_KEY)?,
+                    tags: {
+                        let mut tags: Vec<ContactTag> =
+                            scan_json::<S, ContactTag>(storage, TAG_PREFIX)?
+                                .into_iter()
+                                .map(|(_, t)| t)
+                                .collect();
+                        tags.sort_by_key(|t| t.order);
+                        tags
+                    },
+                    groups: {
+                        let mut groups: Vec<ContactGroup> =
+                            scan_json::<S, ContactGroup>(storage, GROUP_PREFIX)?
+                                .into_iter()
+                                .map(|(_, g)| g)
+                                .collect();
+                        groups.sort_by_key(|g| g.order);
+                        groups
+                    },
                     ..Default::default()
                 })
             }
@@ -108,6 +126,7 @@ impl ContactService {
         root_id: &str,
         patch: ProfilePatch,
         now_ms: i64,
+        node_id: &str,
     ) -> Result<()> {
         match parse_space(space)? {
             Space::Personal => {
@@ -116,14 +135,50 @@ impl ContactService {
                 apply_patch_to_friend(&mut friend, &patch);
                 // 本机资料变更时间：自设备 contact-sync 的 LWW 依据
                 friend.updated_at = now_ms;
-                Self::upsert_friend(storage, &friend)
+                Self::upsert_friend_pdsync(storage, &friend, now_ms, node_id)
             }
             Space::Org(org_id) => {
                 let key = format!("{}{}", org_extra_prefix(org_id), root_id);
                 let mut profile: ContactProfileRecord =
                     read_json(storage, &key)?.unwrap_or_default();
                 apply_patch_to_profile(&mut profile, &patch);
-                write_json(storage, &key, &profile)
+                // P5：组织成员附加资料走 pmeta，供自设备 pdsync
+                put_personal(storage, node_id, &key, &serde_json::to_string(&profile)?, now_ms)
+                    .map_err(sync_err_to_contact)?;
+                Ok(())
+            }
+        }
+    }
+
+    /// 设置联系人所属分组（`""` = 未分组）。
+    ///
+    /// 个人空间：改 friend 记录的 `group_id` 并经 pdsync 落盘（P1）。
+    /// 组织空间：改成员附加资料的 `group_id`（组织数据，暂不走 pdsync）。
+    pub fn set_contact_group<S: StorageBackend>(
+        storage: &mut S,
+        space: &str,
+        root_id: &str,
+        group_id: &str,
+        now_ms: i64,
+        node_id: &str,
+    ) -> Result<()> {
+        match parse_space(space)? {
+            Space::Personal => {
+                let mut friend =
+                    Self::get_friend(storage, root_id)?.ok_or(ContactError::ContactNotFound)?;
+                friend.group_id = group_id.to_string();
+                friend.updated_at = now_ms;
+                Self::upsert_friend_pdsync(storage, &friend, now_ms, node_id)
+            }
+            Space::Org(org_id) => {
+                let key = format!("{}{}", org_extra_prefix(org_id), root_id);
+                let mut profile: ContactProfileRecord =
+                    read_json(storage, &key)?.unwrap_or_default();
+                profile.group_id = group_id.to_string();
+                // P5：组织成员附加资料走 pmeta
+                put_personal(storage, node_id, &key, &serde_json::to_string(&profile)?, now_ms)
+                    .map_err(sync_err_to_contact)?;
+                Ok(())
             }
         }
     }
@@ -139,22 +194,18 @@ impl ContactService {
         root_id: &str,
         blocked: bool,
         now_ms: i64,
+        node_id: &str,
     ) -> Result<()> {
         match parse_space(space)? {
             Space::Personal => {
-                let key = format!("{BLOCKED_PREFIX}{root_id}");
-                if blocked {
-                    storage.put(&key, "1")?;
-                } else {
-                    storage.delete(&key)?;
-                }
+                Self::set_blocked_pdsync(storage, root_id, blocked, now_ms, node_id)?;
                 // 展示镜像：friend 记录存在时同步 blocked 字段（overview
                 // 以集合为准 overlay，此处仅为记录内字段一致）；同时刷新
                 // updatedAt 使镜像变更随 contact-sync 传播
                 if let Some(mut friend) = Self::get_friend(storage, root_id)? {
                     friend.blocked = blocked;
                     friend.updated_at = now_ms;
-                    Self::upsert_friend(storage, &friend)?;
+                    Self::upsert_friend_pdsync(storage, &friend, now_ms, node_id)?;
                 }
                 // 拉黑集合整域版本（contact-sync LWW 依据；取消拉黑=删除
                 // 条目，随整域替换传播）
@@ -166,7 +217,10 @@ impl ContactService {
                 let mut profile: ContactProfileRecord =
                     read_json(storage, &key)?.unwrap_or_default();
                 profile.blocked = blocked;
-                write_json(storage, &key, &profile)
+                // P5：组织成员附加资料走 pmeta
+                put_personal(storage, node_id, &key, &serde_json::to_string(&profile)?, now_ms)
+                    .map_err(sync_err_to_contact)?;
+                Ok(())
             }
         }
     }

@@ -15,10 +15,12 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use crate::storage::{ScanOptions, StorageBackend};
+use crate::sync::{delete_personal, put_personal};
+
+use super::sync_err_to_contact;
 
 use super::{
-    ContactError, ContactProfileRecord, ContactTag, FriendRecord, ProfilePatch, Result, TAGS_KEY,
-    org_tags_key,
+    ContactError, ContactProfileRecord, FriendRecord, ProfilePatch, Result, org_tags_key,
 };
 
 /// 通讯录服务（无状态；全部方法以存储与参数为输入）。
@@ -87,14 +89,6 @@ fn scan_json<S: StorageBackend, T: DeserializeOwned>(
 /// （sync 模块）承载：各变更方法以 `now_ms` 入参刷新，供自设备
 /// contact-sync 的 LWW 裁决。
 
-/// 空间对应的标签数组键。
-fn tags_key(space: &str) -> Result<String> {
-    Ok(match parse_space(space)? {
-        Space::Personal => TAGS_KEY.to_string(),
-        Space::Org(org_id) => org_tags_key(org_id),
-    })
-}
-
 fn apply_patch_to_friend(friend: &mut FriendRecord, patch: &ProfilePatch) {
     if let Some(value) = &patch.remark {
         friend.remark = value.clone();
@@ -140,5 +134,52 @@ fn apply_patch_to_profile(profile: &mut ContactProfileRecord, patch: &ProfilePat
     }
     if let Some(value) = &patch.permission {
         profile.permission = value.clone();
+    }
+}
+
+// ── pdsync 感知的写入包装 ──────────────────────────────────────────
+
+impl ContactService {
+    /// 写入朋友记录并 bump pmeta（pdsync P1）。
+    pub fn upsert_friend_pdsync<S: StorageBackend>(
+        storage: &mut S,
+        friend: &FriendRecord,
+        now_ms: i64,
+        node_id: &str,
+    ) -> Result<()> {
+        let key = format!("{}{}", super::FRIEND_PREFIX, friend.root_id);
+        let json = serde_json::to_string(friend)?;
+        put_personal(storage, node_id, &key, &json, now_ms)
+            .map_err(sync_err_to_contact)?;
+        Ok(())
+    }
+
+    /// 删除朋友记录并写 tombstone pmeta（pdsync P1）。
+    pub fn remove_friend_pdsync<S: StorageBackend>(
+        storage: &mut S,
+        root_id: &str,
+        now_ms: i64,
+        node_id: &str,
+    ) -> Result<()> {
+        let key = format!("{}{}", super::FRIEND_PREFIX, root_id);
+        delete_personal(storage, node_id, &key, now_ms).map_err(sync_err_to_contact)?;
+        Ok(())
+    }
+
+    /// 写入拉黑标记并 bump pmeta（pdsync P1）。
+    pub fn set_blocked_pdsync<S: StorageBackend>(
+        storage: &mut S,
+        root_id: &str,
+        blocked: bool,
+        now_ms: i64,
+        node_id: &str,
+    ) -> Result<()> {
+        let key = format!("{}{}", super::BLOCKED_PREFIX, root_id);
+        if blocked {
+            put_personal(storage, node_id, &key, "\"1\"", now_ms).map_err(sync_err_to_contact)?;
+        } else {
+            delete_personal(storage, node_id, &key, now_ms).map_err(sync_err_to_contact)?;
+        }
+        Ok(())
     }
 }

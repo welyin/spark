@@ -33,6 +33,7 @@ pub(crate) fn ensure_bot_shared(
     let _io = host.io_lock.lock().unwrap_or_else(|e| e.into_inner());
     let mut storage = host.require_storage()?;
     let now = system_now_ms();
+    let node_id = host.sync_node_id();
     let existing = ContactService::get_friend(&storage, bot_root_id)?;
     let friend = if let Some(existing) = existing {
         let mut f = existing;
@@ -60,7 +61,7 @@ pub(crate) fn ensure_bot_shared(
             updated_at: now,
         }
     };
-    ContactService::upsert_friend(&mut storage, &friend)?;
+    ContactService::upsert_friend_pdsync(&mut storage, &friend, now, &node_id)?;
     Ok(())
 }
 
@@ -115,11 +116,19 @@ impl Kernel {
             return Ok(());
         };
         let nickname = self.my_nickname(&root_id);
+        let now = system_now_ms();
+        let node_id = self.sync_node_id();
         match ContactService::get_friend(self.require_storage()?, &root_id)? {
             Some(mut friend) => {
                 if friend.nickname != nickname {
                     friend.nickname = nickname;
-                    ContactService::upsert_friend(self.require_storage_mut()?, &friend)?;
+                    friend.updated_at = now;
+                    ContactService::upsert_friend_pdsync(
+                        self.require_storage_mut()?,
+                        &friend,
+                        now,
+                        &node_id,
+                    )?;
                 }
             }
             None => {
@@ -129,7 +138,7 @@ impl Kernel {
                     avatar: None,
                     signature: String::new(),
                     gender: None,
-                    added_at: system_now_ms(),
+                    added_at: now,
                     peer: None,
                     remark: String::new(),
                     phones: Vec::new(),
@@ -139,9 +148,14 @@ impl Kernel {
                     photos: Vec::new(),
                     permission: "open".to_string(),
                     blocked: false,
-                    updated_at: system_now_ms(),
+                    updated_at: now,
                 };
-                ContactService::upsert_friend(self.require_storage_mut()?, &friend)?;
+                ContactService::upsert_friend_pdsync(
+                    self.require_storage_mut()?,
+                    &friend,
+                    now,
+                    &node_id,
+                )?;
             }
         }
         Ok(())
@@ -156,12 +170,15 @@ impl Kernel {
     ) -> Result<()> {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
+        let now = system_now_ms();
+        let node_id = self.sync_node_id();
         ContactService::update_profile(
             self.require_storage_mut()?,
             space,
             root_id,
             patch,
-            system_now_ms(),
+            now,
+            &node_id,
         )?;
         if space == "personal" {
             self.broadcast_contact_sync();
@@ -176,12 +193,14 @@ impl Kernel {
         if self.current_root_id()?.as_deref() == Some(root_id) {
             return Err(KernelError::Internal("不能拉黑自己".to_string()));
         }
+        let node_id = self.sync_node_id();
         ContactService::set_blocked(
             self.require_storage_mut()?,
             space,
             root_id,
             blocked,
             system_now_ms(),
+            &node_id,
         )?;
         if space == "personal" {
             self.broadcast_contact_sync();
@@ -198,7 +217,13 @@ impl Kernel {
         if self.current_root_id()?.as_deref() == Some(root_id) {
             return Err(KernelError::Internal("不能删除自己".to_string()));
         }
-        ContactService::remove_friend(self.require_storage_mut()?, root_id)?;
+        let node_id = self.sync_node_id();
+        ContactService::remove_friend_pdsync(
+            self.require_storage_mut()?,
+            root_id,
+            system_now_ms(),
+            &node_id,
+        )?;
         if block {
             ContactService::set_blocked(
                 self.require_storage_mut()?,
@@ -206,6 +231,7 @@ impl Kernel {
                 root_id,
                 true,
                 system_now_ms(),
+                &node_id,
             )?;
         }
         Ok(())
@@ -215,12 +241,15 @@ impl Kernel {
     pub fn contact_set_group(&mut self, space: &str, root_id: &str, group_id: &str) -> Result<()> {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
+        let now = system_now_ms();
+        let node_id = self.sync_node_id();
         ContactService::set_contact_group(
             self.require_storage_mut()?,
             space,
             root_id,
             group_id,
-            system_now_ms(),
+            now,
+            &node_id,
         )?;
         if space == "personal" {
             self.broadcast_contact_sync();
@@ -253,6 +282,7 @@ impl Kernel {
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
         let my_root_id = self.require_unlocked_root_id()?;
         let now = system_now_ms();
+        let node_id = self.sync_node_id();
         // 重试路径：同 id 记录已存在（前端重试）
         if let Some(existing) =
             ContactService::get_outgoing_request(self.require_storage()?, &input.id)?
@@ -268,7 +298,12 @@ impl Kernel {
             let mut request = existing;
             request.status = FriendRequestStatus::Pending;
             request.updated_at = now;
-            ContactService::put_outgoing_request(self.require_storage_mut()?, &request)?;
+            ContactService::put_outgoing_request_pdsync(
+                self.require_storage_mut()?,
+                &request,
+                now,
+                &node_id,
+            )?;
             self.deliver_friend_request(&request, &my_root_id)?;
             self.broadcast_contact_sync();
             return Ok(request);
@@ -295,7 +330,12 @@ impl Kernel {
             thread: Vec::new(),
             invite_code: None,
         };
-        ContactService::put_outgoing_request(self.require_storage_mut()?, &request)?;
+        ContactService::put_outgoing_request_pdsync(
+            self.require_storage_mut()?,
+            &request,
+            now,
+            &node_id,
+        )?;
         self.deliver_friend_request(&request, &my_root_id)?;
         self.broadcast_contact_sync();
         Ok(request)
@@ -337,7 +377,13 @@ impl Kernel {
             let mut record = request.clone();
             record.status = FriendRequestStatus::Failed;
             record.updated_at = system_now_ms();
-            ContactService::put_outgoing_request(self.require_storage_mut()?, &record)?;
+            let node_id = self.sync_node_id();
+            ContactService::put_outgoing_request_pdsync(
+                self.require_storage_mut()?,
+                &record,
+                record.updated_at,
+                &node_id,
+            )?;
             let _ = self.event_tx.send(P2pEvent::FriendRequestSent(
                 serde_json::json!({ "request": record }),
             ));
@@ -368,6 +414,7 @@ impl Kernel {
         };
         let event_tx = self.event_tx.clone();
         let io_lock = std::sync::Arc::clone(&self.io_lock);
+        let node_id = self.sync_node_id();
         self.runtime.handle().spawn(async move {
             let resp = node.dm_direct(&peer, envelope).await.ok().flatten();
             let delivered_ok = resp
@@ -410,7 +457,12 @@ impl Kernel {
                         current.updated_at = system_now_ms();
                     }
                 }
-                let _ = ContactService::put_outgoing_request(&mut storage, &current);
+                let _ = ContactService::put_outgoing_request_pdsync(
+                    &mut storage,
+                    &current,
+                    current.updated_at,
+                    &node_id,
+                );
                 current
             };
             let _ = event_tx.send(P2pEvent::FriendRequestSent(
@@ -432,11 +484,13 @@ impl Kernel {
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
         let my_root_id = self.require_unlocked_root_id()?;
         let now = system_now_ms();
-        let resolved = ContactService::resolve_incoming_request(
+        let node_id = self.sync_node_id();
+        let resolved = ContactService::resolve_incoming_request_pdsync(
             self.require_storage_mut()?,
             request_id,
             accept,
             now,
+            &node_id,
         )?;
         if !resolved {
             return Err(KernelError::Internal(
@@ -492,7 +546,8 @@ impl Kernel {
             friend.peer = request.peer.clone();
         }
         friend.updated_at = now;
-        ContactService::upsert_friend(self.require_storage_mut()?, &friend)?;
+        let node_id = self.sync_node_id();
+        ContactService::upsert_friend_pdsync(self.require_storage_mut()?, &friend, now, &node_id)?;
         if let Some(peer) = &request.peer {
             // 入站申请记录 id 为复合形式 `{from}:{原 requestId}`（防跨发送者撞 id，
             // 见 inbound_dm handle_friend_request）；回发必须带原 requestId——对方

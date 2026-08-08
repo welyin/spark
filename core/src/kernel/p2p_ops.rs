@@ -128,6 +128,7 @@ impl Kernel {
             password_shared: Arc::clone(&self.password_shared),
             data_dir: self.config.data_dir.clone(),
             io_lock: Arc::clone(&self.io_lock),
+            pdsync_capable_self_devices: Arc::clone(&self.pdsync_capable_self_devices),
         });
         let mut node =
             self.runtime
@@ -152,6 +153,7 @@ impl Kernel {
             org_address_publish: Arc::clone(&self.org_address_publish),
             data_dir: self.config.data_dir.clone(),
             self_device_link: Arc::clone(&self.self_device_link),
+            pdsync_capable_self_devices: Arc::clone(&self.pdsync_capable_self_devices),
         };
         let worker = org_sync::spawn_worker(self.runtime.handle(), ctx, org_sync_rx);
 
@@ -179,7 +181,9 @@ impl Kernel {
         // 错过的变更借此补齐（对端收 device-sync 会回发其记录，双向齐全）。
         let now = system_now_ms();
         if let Ok(mut storage) = self.require_storage().map(|s| s.clone()) {
-            if let Ok(record) = crate::device::DeviceService::upsert_self(&mut storage, &peer_id, now)
+            let node_id = self.sync_node_id();
+            if let Ok(record) =
+                crate::device::DeviceService::upsert_self(&mut storage, &peer_id, now, &node_id)
             {
                 if let Ok(data) = serde_json::to_value(&record) {
                     let _ = self.event_tx.send(P2pEvent::DeviceUpdated(data));
@@ -230,6 +234,7 @@ impl Kernel {
             org_address_publish: Arc::clone(&self.org_address_publish),
             data_dir: self.config.data_dir.clone(),
             self_device_link: Arc::clone(&self.self_device_link),
+            pdsync_capable_self_devices: Arc::clone(&self.pdsync_capable_self_devices),
         })
     }
 

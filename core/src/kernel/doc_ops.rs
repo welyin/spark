@@ -27,6 +27,28 @@ use crate::p2p::{P2pEvent, build_delete_body, build_update_body};
 use crate::schema::{
     CollectionSchemaDeclaration, CollectionSchemaRecord, declare_collection_schema,
 };
+use crate::storage::StorageBackend;
+
+/// p2p 未运行时的稳定 nodeId 回退：从持久化的 p2p 节点身份
+/// （`p2p:identity:privateKey`，protobuf 编码 Ed25519 密钥对的 base64）派生
+/// peerId——同设备重启稳定、跨设备唯一。固定串 `local-node` 会让多台离线
+/// 设备的写入被版本向量判为同源（并发写静默丢更新）。仅在持久化身份缺失/
+/// 损坏（如全新设备从未启动过 p2p）时回退 `local-node`。
+pub(crate) fn persisted_sync_node_id(storage: &dyn StorageBackend) -> String {
+    use base64::Engine as _;
+    storage
+        .get(crate::p2p::constants::P2P_IDENTITY_PRIVATE_KEY)
+        .ok()
+        .flatten()
+        .and_then(|encoded| {
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(encoded.trim())
+                .ok()?;
+            let keypair = libp2p::identity::Keypair::from_protobuf_encoding(&bytes).ok()?;
+            Some(libp2p::identity::PeerId::from_public_key(&keypair.public()).to_base58())
+        })
+        .unwrap_or_else(|| "local-node".to_string())
+}
 
 /// `data-purge-preview` 的返回（ipc/data.ts:73-86 的形状）。
 #[derive(Clone, Debug)]
@@ -72,11 +94,15 @@ impl Kernel {
         DocumentCollection::new(domain, collection, config.clone())
     }
 
-    /// 本地写入节点 id：p2p 运行中为 peerId，否则 `local-node`（对齐 TS）。
-    fn sync_node_id(&self) -> String {
-        self.p2p
+    /// 本地写入节点 id：p2p 运行中为 peerId；否则回退持久化 p2p 身份派生的
+    /// 稳定 id（见 [`persisted_sync_node_id`]）。
+    pub(crate) fn sync_node_id(&self) -> String {
+        if let Some(node) = &self.p2p {
+            return node.peer_id().to_string();
+        }
+        self.storage
             .as_ref()
-            .map(|node| node.peer_id().to_string())
+            .map(|storage| persisted_sync_node_id(storage))
             .unwrap_or_else(|| "local-node".to_string())
     }
 
@@ -337,5 +363,56 @@ impl Kernel {
     /// 按 seq 取存证条目（不存在返回 `Ok(None)`）。
     pub fn evidence_entry(&self, seq: u64) -> Result<Option<EvidenceEntry>> {
         Ok(get_evidence_entry(self.require_storage()?, seq)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::MemoryStorage;
+    use base64::Engine as _;
+
+    fn store_p2p_identity(storage: &mut MemoryStorage, keypair: &libp2p::identity::Keypair) {
+        let raw = keypair.to_protobuf_encoding().unwrap();
+        storage
+            .put(
+                crate::p2p::constants::P2P_IDENTITY_PRIVATE_KEY,
+                &base64::engine::general_purpose::STANDARD.encode(raw),
+            )
+            .unwrap();
+    }
+
+    /// p2p 未运行时 nodeId 回退：有持久化 p2p 身份 → 派生 peerId（稳定、
+    /// 非 `local-node`）；无身份 → `local-node`。
+    #[test]
+    fn persisted_sync_node_id_derives_from_stored_identity() {
+        let mut s = MemoryStorage::new();
+        assert_eq!(
+            persisted_sync_node_id(&s),
+            "local-node",
+            "无持久化身份时回退 local-node"
+        );
+
+        let keypair = libp2p::identity::Keypair::generate_ed25519();
+        let expected =
+            libp2p::identity::PeerId::from_public_key(&keypair.public()).to_base58();
+        store_p2p_identity(&mut s, &keypair);
+
+        let id = persisted_sync_node_id(&s);
+        assert_eq!(id, expected, "应派生持久化身份的 peerId");
+        assert_ne!(id, "local-node");
+        // 稳定：重复读取一致
+        assert_eq!(persisted_sync_node_id(&s), id);
+    }
+
+    /// 两台"设备"各有持久化身份 → nodeId 互不相同（版本向量唯一性，
+    /// 避免离线并发写被判为同源而丢更新）。
+    #[test]
+    fn persisted_sync_node_id_distinct_across_devices() {
+        let mut a = MemoryStorage::new();
+        let mut b = MemoryStorage::new();
+        store_p2p_identity(&mut a, &libp2p::identity::Keypair::generate_ed25519());
+        store_p2p_identity(&mut b, &libp2p::identity::Keypair::generate_ed25519());
+        assert_ne!(persisted_sync_node_id(&a), persisted_sync_node_id(&b));
     }
 }

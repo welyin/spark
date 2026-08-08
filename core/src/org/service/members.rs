@@ -88,6 +88,49 @@ impl OrganizationService {
         current_root_id: &str,
         now_ms: i64,
     ) -> Result<OrganizationRecord> {
+        Self::add_member_impl(
+            storage,
+            org_id,
+            member_root_id,
+            node_info,
+            current_root_id,
+            now_ms,
+            None,
+        )
+    }
+
+    /// pdsync 感知的 [`Self::add_member`]：组织记录落库走
+    /// [`Self::save_record_pdsync`]（`org:meta` 写 pmeta，可经自设备 pdsync 同步）。
+    pub fn add_member_pdsync<S: StorageBackend>(
+        storage: &mut S,
+        org_id: &str,
+        member_root_id: &str,
+        node_info: Option<&OrganizationNodeInfo>,
+        current_root_id: &str,
+        now_ms: i64,
+        node_id: &str,
+    ) -> Result<OrganizationRecord> {
+        Self::add_member_impl(
+            storage,
+            org_id,
+            member_root_id,
+            node_info,
+            current_root_id,
+            now_ms,
+            Some(node_id),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn add_member_impl<S: StorageBackend>(
+        storage: &mut S,
+        org_id: &str,
+        member_root_id: &str,
+        node_info: Option<&OrganizationNodeInfo>,
+        current_root_id: &str,
+        now_ms: i64,
+        node_id: Option<&str>,
+    ) -> Result<OrganizationRecord> {
         let mut record = Self::require_organization(storage, org_id)?;
         Self::require_admin(&record, current_root_id)?;
 
@@ -151,7 +194,10 @@ impl OrganizationService {
             previous_last_synced_at,
             transaction.created_at,
         );
-        Self::save_record(storage, &record)?;
+        match node_id {
+            Some(node_id) => Self::save_record_pdsync(storage, &record, now_ms, node_id)?,
+            None => Self::save_record(storage, &record)?,
+        }
         Ok(record)
     }
 
@@ -169,6 +215,30 @@ impl OrganizationService {
         patch: &OrgIdentityPatch,
         current_root_id: &str,
         now_ms: i64,
+    ) -> Result<OrganizationRecord> {
+        Self::update_my_identity_impl(storage, org_id, patch, current_root_id, now_ms, None)
+    }
+
+    /// pdsync 感知的 [`Self::update_my_identity`]：组织记录落库走
+    /// [`Self::save_record_pdsync`]（`org:meta` 写 pmeta，可经自设备 pdsync 同步）。
+    pub fn update_my_identity_pdsync<S: StorageBackend>(
+        storage: &mut S,
+        org_id: &str,
+        patch: &OrgIdentityPatch,
+        current_root_id: &str,
+        now_ms: i64,
+        node_id: &str,
+    ) -> Result<OrganizationRecord> {
+        Self::update_my_identity_impl(storage, org_id, patch, current_root_id, now_ms, Some(node_id))
+    }
+
+    fn update_my_identity_impl<S: StorageBackend>(
+        storage: &mut S,
+        org_id: &str,
+        patch: &OrgIdentityPatch,
+        current_root_id: &str,
+        now_ms: i64,
+        node_id: Option<&str>,
     ) -> Result<OrganizationRecord> {
         let mut record = Self::require_organization(storage, org_id)?;
         let Some(index) = record
@@ -250,7 +320,10 @@ impl OrganizationService {
             previous_last_synced_at,
             transaction.created_at,
         );
-        Self::save_record(storage, &record)?;
+        match node_id {
+            Some(node_id) => Self::save_record_pdsync(storage, &record, now_ms, node_id)?,
+            None => Self::save_record(storage, &record)?,
+        }
         Ok(record)
     }
 
@@ -261,6 +334,37 @@ impl OrganizationService {
         member_root_id: &str,
         current_root_id: &str,
         now_ms: i64,
+    ) -> Result<OrganizationRecord> {
+        Self::remove_member_impl(storage, org_id, member_root_id, current_root_id, now_ms, None)
+    }
+
+    /// pdsync 感知的 [`Self::remove_member`]：组织记录落库走
+    /// [`Self::save_record_pdsync`]（`org:meta` 写 pmeta，可经自设备 pdsync 同步）。
+    pub fn remove_member_pdsync<S: StorageBackend>(
+        storage: &mut S,
+        org_id: &str,
+        member_root_id: &str,
+        current_root_id: &str,
+        now_ms: i64,
+        node_id: &str,
+    ) -> Result<OrganizationRecord> {
+        Self::remove_member_impl(
+            storage,
+            org_id,
+            member_root_id,
+            current_root_id,
+            now_ms,
+            Some(node_id),
+        )
+    }
+
+    fn remove_member_impl<S: StorageBackend>(
+        storage: &mut S,
+        org_id: &str,
+        member_root_id: &str,
+        current_root_id: &str,
+        now_ms: i64,
+        node_id: Option<&str>,
     ) -> Result<OrganizationRecord> {
         let mut record = Self::require_organization(storage, org_id)?;
         Self::require_admin(&record, current_root_id)?;
@@ -303,7 +407,10 @@ impl OrganizationService {
             previous_last_synced_at,
             transaction.created_at,
         );
-        Self::save_record(storage, &record)?;
+        match node_id {
+            Some(node_id) => Self::save_record_pdsync(storage, &record, now_ms, node_id)?,
+            None => Self::save_record(storage, &record)?,
+        }
         Ok(record)
     }
 
@@ -335,10 +442,13 @@ impl OrganizationService {
     ///
     /// 存量组织缺 recoverySecret 时由 **admin 惰性补齐**（随机 64 hex，bump
     /// updatedAt 后落库，经反熵扩散；非成员角色本轮跳过等待 gossip）。
+    /// 落库走 [`Self::save_record_pdsync`]（`org:meta` 写 pmeta，补齐结果可经
+    /// 自设备 pdsync 同步）。
     pub fn get_recovery_view<S: StorageBackend>(
         storage: &mut S,
         current_root_id: &str,
         now_ms: i64,
+        node_id: &str,
     ) -> Result<Vec<RecoveryViewItem>> {
         let records = Self::read_all_organizations(storage)?;
         let mut view = Vec::new();
@@ -366,7 +476,7 @@ impl OrganizationService {
                     sections: pick_sync_sections_by_priority(),
                     last_synced_at: previous.as_ref().map(|s| s.last_synced_at).unwrap_or(0),
                 });
-                Self::save_record(storage, &record)?;
+                Self::save_record_pdsync(storage, &record, now_ms, node_id)?;
             }
             view.push(RecoveryViewItem {
                 org_id: record.org_id.clone(),

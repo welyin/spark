@@ -51,6 +51,14 @@ impl Kernel {
         self.write_identity_file(&file)?;
         *self.nickname_shared.lock().unwrap() = file.nickname.clone().unwrap_or_default();
         *self.avatar_shared.lock().unwrap() = file.avatar.clone().unwrap_or_default();
+        // pdsync P2：镜像到 sled `profile:self`（bump pmeta，供自设备同步）
+        self.sync_profile_to_sled(
+            file.nickname.as_deref(),
+            file.avatar.as_deref(),
+            file.gender.as_deref(),
+            file.region.as_deref(),
+            file.signature.as_deref(),
+        );
         let nickname = self.my_nickname(&root_id);
         // 朋友互推（不含自记录）：展示字段
         self.broadcast_profile_to_friends(
@@ -103,6 +111,14 @@ impl Kernel {
         self.write_identity_file(&file)?;
         *self.nickname_shared.lock().unwrap() = file.nickname.clone().unwrap_or_default();
         *self.avatar_shared.lock().unwrap() = file.avatar.clone().unwrap_or_default();
+        // pdsync P2：镜像到 sled `profile:self`（bump pmeta，供自设备同步）
+        self.sync_profile_to_sled(
+            file.nickname.as_deref(),
+            file.avatar.as_deref(),
+            file.gender.as_deref(),
+            file.region.as_deref(),
+            file.signature.as_deref(),
+        );
         // 资料变更后分两个通道尽力推送（失败静默，不阻塞更新）：
         // - 朋友互推（不含自记录）：展示字段；
         // - 自设备同步：完整资料（含隐私字段），仅配对设备间。

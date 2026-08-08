@@ -45,11 +45,14 @@ pub(crate) fn build_conv_sync_snapshot<S: StorageBackend>(storage: &S) -> Result
 /// - 本地无该 peer 的 direct 会话 → 建外壳（unread=0，消息字段取本机
 ///   接收时间；标题取快照值，展示层仍按朋友备注/昵称重解析）；
 /// - 本地已有 → 仅当快照 `metaUpdatedAt` 严格更新才应用置顶/免打扰/草稿；
-/// - 裸写不再触发对外广播（防互灌循环）。
+/// - 合入不触发对外广播（防互灌循环）；
+/// - 落库经 `upsert_conversation_pdsync`（写 pmeta，P2 conv 迁入后该记录
+///   可经 pdsync 反熵继续向其他自设备收敛）。
 pub(crate) fn apply_conv_sync_snapshot<S: StorageBackend>(
     storage: &mut S,
     body: &Value,
     now_ms: i64,
+    node_id: &str,
 ) -> Result<usize> {
     let mut applied = 0usize;
     let Some(items) = body.get("conversations").and_then(Value::as_array) else {
@@ -102,7 +105,13 @@ pub(crate) fn apply_conv_sync_snapshot<S: StorageBackend>(
                     updated_at: now_ms,
                     meta_updated_at,
                 };
-                MessageService::upsert_conversation(storage, "personal", &record)?;
+                MessageService::upsert_conversation_pdsync(
+                    storage,
+                    "personal",
+                    &record,
+                    now_ms,
+                    Some(node_id),
+                )?;
                 applied += 1;
             }
             Some(mut conv) => {
@@ -117,7 +126,13 @@ pub(crate) fn apply_conv_sync_snapshot<S: StorageBackend>(
                 if conv.peer.is_none() && peer.is_some() {
                     conv.peer = peer;
                 }
-                MessageService::upsert_conversation(storage, "personal", &conv)?;
+                MessageService::upsert_conversation_pdsync(
+                    storage,
+                    "personal",
+                    &conv,
+                    now_ms,
+                    Some(node_id),
+                )?;
                 applied += 1;
             }
         }
@@ -131,6 +146,8 @@ mod tests {
     use crate::storage::MemoryStorage;
 
     const NOW: i64 = 1_720_000_000_000;
+    const NODE_A: &str = "node-a";
+    const NODE_B: &str = "node-b";
 
     fn rid(ch: char) -> String {
         ch.to_string().repeat(64)
@@ -157,7 +174,7 @@ mod tests {
         MessageService::increment_unread(&mut a, "personal", &conv.id).unwrap();
 
         let body = build_conv_sync_snapshot(&a).unwrap();
-        let applied = apply_conv_sync_snapshot(&mut b, &body, NOW + 300).unwrap();
+        let applied = apply_conv_sync_snapshot(&mut b, &body, NOW + 300, NODE_B).unwrap();
         assert_eq!(applied, 1);
 
         let synced =
@@ -170,7 +187,7 @@ mod tests {
 
         // 幂等：重放无新变更
         let body = build_conv_sync_snapshot(&a).unwrap();
-        assert_eq!(apply_conv_sync_snapshot(&mut b, &body, NOW + 400).unwrap(), 0);
+        assert_eq!(apply_conv_sync_snapshot(&mut b, &body, NOW + 400, NODE_B).unwrap(), 0);
     }
 
     /// LWW：本机元数据更新时不被旧快照覆盖；本机更旧时被新快照覆盖。
@@ -207,7 +224,7 @@ mod tests {
 
         // A（旧，muted=true）→ B（新，muted=false）：不覆盖
         let body = build_conv_sync_snapshot(&a).unwrap();
-        assert_eq!(apply_conv_sync_snapshot(&mut b, &body, NOW + 500).unwrap(), 0);
+        assert_eq!(apply_conv_sync_snapshot(&mut b, &body, NOW + 500, NODE_B).unwrap(), 0);
         let after = MessageService::find_direct_conversation(&b, "personal", &rid('c'))
             .unwrap()
             .unwrap();
@@ -215,7 +232,7 @@ mod tests {
 
         // B（新）→ A（旧）：覆盖
         let body = build_conv_sync_snapshot(&b).unwrap();
-        assert_eq!(apply_conv_sync_snapshot(&mut a, &body, NOW + 600).unwrap(), 1);
+        assert_eq!(apply_conv_sync_snapshot(&mut a, &body, NOW + 600, NODE_A).unwrap(), 1);
         let after = MessageService::find_direct_conversation(&a, "personal", &rid('c'))
             .unwrap()
             .unwrap();
@@ -234,7 +251,7 @@ mod tests {
         )
         .unwrap();
         let body = build_conv_sync_snapshot(&a).unwrap();
-        assert_eq!(apply_conv_sync_snapshot(&mut b, &body, NOW + 100).unwrap(), 0);
+        assert_eq!(apply_conv_sync_snapshot(&mut b, &body, NOW + 100, NODE_B).unwrap(), 0);
         assert!(
             MessageService::list_conversations(&b, "personal").unwrap().is_empty(),
             "非 direct 会话不同步"

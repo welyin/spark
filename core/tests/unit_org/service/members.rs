@@ -10,6 +10,42 @@ use spark_core::org::types::{
     OrganizationMember, OrganizationNodeInfo, OrganizationRecord, OrganizationRole,
 };
 
+/// pdsync 变体：成员变更落库写 org:meta pmeta（vv 递增）。
+#[test]
+fn add_member_pdsync_writes_pmeta() {
+    use spark_core::sync::get_personal_meta;
+
+    let mut storage = MemoryStorage::new();
+    let (admin, record) = setup_org(&mut storage);
+    let member_id = root_id_of(MNEMONIC2);
+    // setup_org 走裸 save_record（无 pmeta）；首次 pdsync 写入从 1 起计
+    OrganizationService::add_member_pdsync(
+        &mut storage,
+        &record.org_id,
+        &member_id,
+        None,
+        &admin,
+        NOW + 1,
+        "node-a",
+    )
+    .unwrap();
+    let key = format!("org:meta:{}", record.org_id);
+    let meta = get_personal_meta(&storage, &key).unwrap().unwrap();
+    assert_eq!(meta.vv.get("node-a"), Some(&1));
+
+    OrganizationService::remove_member_pdsync(
+        &mut storage,
+        &record.org_id,
+        &member_id,
+        &admin,
+        NOW + 2,
+        "node-a",
+    )
+    .unwrap();
+    let meta = get_personal_meta(&storage, &key).unwrap().unwrap();
+    assert_eq!(meta.vv.get("node-a"), Some(&2));
+}
+
 #[test]
 fn add_member_new_and_repeat_update() {
     let mut storage = MemoryStorage::new();

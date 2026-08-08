@@ -53,13 +53,14 @@ impl Kernel {
             None => Vec::new(),
         };
         let now = crate::p2p::node::system_now_ms();
+        let node_id = self.sync_node_id();
         {
             let storage = self.require_storage_mut()?;
             // 本机记录兜底：p2p 已启动但清单无本机条目时采集落库
             if let Some(peer_id) = &local_peer_id {
                 if crate::device::DeviceService::get(storage, peer_id)?.is_none() {
                     let record =
-                        crate::device::DeviceService::upsert_self(storage, peer_id, now)?;
+                        crate::device::DeviceService::upsert_self(storage, peer_id, now, &node_id)?;
                     if let Ok(data) = serde_json::to_value(&record) {
                         let _ = self.event_tx.send(crate::p2p::P2pEvent::DeviceUpdated(data));
                     }

@@ -53,7 +53,9 @@ impl OrgSyncContext {
         }
         let view = {
             let mut storage = self.storage.clone();
-            OrganizationService::get_recovery_view(&mut storage, root_id, now).unwrap_or_default()
+            let node_id = self.node.peer_id().to_string();
+            OrganizationService::get_recovery_view(&mut storage, root_id, now, &node_id)
+                .unwrap_or_default()
         };
         let neighbors: Vec<String> = self
             .node

@@ -305,3 +305,62 @@ fn mark_outgoing_accepted_allows_replied() {
     assert_eq!(stored.thread.len(), 1, "thread 保留");
 }
 
+
+// ------------------------------------------------------------------
+// pdsync 变体（ct:req 类写 pmeta）
+// ------------------------------------------------------------------
+
+#[test]
+fn request_pdsync_variants_write_pmeta() {
+    use spark_core::sync::get_personal_meta;
+
+    let mut s = MemoryStorage::new();
+
+    // 出站落库：写记录 + bump pmeta
+    let mut out = incoming("out-1", &rid('a'));
+    ContactService::put_outgoing_request_pdsync(&mut s, &out, NOW, NODE).unwrap();
+    let meta = get_personal_meta(&s, "ct:req:out:out-1").unwrap().unwrap();
+    assert_eq!(meta.vv.get(NODE), Some(&1));
+    // updated_at 兜底同裸版（0 → created_at）
+    out.id = "out-legacy".to_string();
+    out.updated_at = 0;
+    ContactService::put_outgoing_request_pdsync(&mut s, &out, NOW, NODE).unwrap();
+    let stored = ContactService::get_outgoing_request(&s, "out-legacy").unwrap().unwrap();
+    assert_eq!(stored.updated_at, stored.created_at);
+
+    // 入站落库 + 处理：pmeta 随每次写入递增
+    ContactService::put_incoming_request_pdsync(&mut s, &incoming("req-1", &rid('r')), NOW, NODE)
+        .unwrap();
+    let meta = get_personal_meta(&s, "ct:req:in:req-1").unwrap().unwrap();
+    assert_eq!(meta.vv.get(NODE), Some(&1));
+    assert!(ContactService::resolve_incoming_request_pdsync(&mut s, "req-1", true, NOW + 10, NODE).unwrap());
+    let meta = get_personal_meta(&s, "ct:req:in:req-1").unwrap().unwrap();
+    assert_eq!(meta.vv.get(NODE), Some(&2));
+    assert_eq!(
+        ContactService::get_incoming_request(&s, "req-1").unwrap().unwrap().status,
+        FriendRequestStatus::Accepted
+    );
+
+    // 出站接受 + 线程追加：pmeta 同步 bump
+    assert!(ContactService::mark_outgoing_accepted_pdsync(&mut s, "out-1", NOW + 20, NODE).unwrap());
+    let meta = get_personal_meta(&s, "ct:req:out:out-1").unwrap().unwrap();
+    assert_eq!(meta.vv.get(NODE), Some(&2));
+    let msg = RequestThreadMessage {
+        from: ThreadFrom::Peer,
+        text: "hi".to_string(),
+        ts: NOW + 30,
+    };
+    ContactService::append_outgoing_thread_pdsync(&mut s, "out-1", msg.clone(), NOW + 30, NODE)
+        .unwrap()
+        .expect("记录存在");
+    let meta = get_personal_meta(&s, "ct:req:out:out-1").unwrap().unwrap();
+    assert_eq!(meta.vv.get(NODE), Some(&3));
+
+    ContactService::put_incoming_request_pdsync(&mut s, &incoming("req-2", &rid('s')), NOW, NODE)
+        .unwrap();
+    ContactService::append_incoming_thread_pdsync(&mut s, "req-2", msg, NOW + 40, NODE)
+        .unwrap()
+        .expect("记录存在");
+    let meta = get_personal_meta(&s, "ct:req:in:req-2").unwrap().unwrap();
+    assert_eq!(meta.vv.get(NODE), Some(&2));
+}

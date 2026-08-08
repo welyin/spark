@@ -156,10 +156,17 @@ pub fn collect_local_device_info() -> LocalDeviceInfo {
 pub struct DeviceService;
 
 impl DeviceService {
-    /// 写入/更新设备记录（按 peerId 覆盖；调用方负责 updated_at 冲突裁决）。
-    pub fn upsert<S: StorageBackend>(storage: &mut S, record: &DeviceRecord) -> crate::contact::Result<()> {
+    /// pdsync 感知的写入：落记录 + bump pmeta（P1 设备清单迁入）。
+    pub fn upsert_pdsync<S: StorageBackend>(
+        storage: &mut S,
+        record: &DeviceRecord,
+        now_ms: i64,
+        node_id: &str,
+    ) -> crate::contact::Result<()> {
+        let key = format!("{DEVICE_PREFIX}{}", record.peer_id);
         let text = serde_json::to_string(record)?;
-        storage.put(&format!("{DEVICE_PREFIX}{}", record.peer_id), &text)?;
+        crate::sync::put_personal(storage, node_id, &key, &text, now_ms)
+            .map_err(crate::contact::sync_err_to_contact)?;
         Ok(())
     }
 
@@ -190,6 +197,7 @@ impl DeviceService {
         storage: &mut S,
         peer_id: &str,
         now_ms: i64,
+        node_id: &str,
     ) -> crate::contact::Result<DeviceRecord> {
         let info = collect_local_device_info();
         // 已存在且系统信息未变：只刷 last_seen/updated（保持单调）
@@ -202,7 +210,7 @@ impl DeviceService {
             updated_at: now_ms,
             last_seen_at: now_ms,
         };
-        Self::upsert(storage, &record)?;
+        Self::upsert_pdsync(storage, &record, now_ms, node_id)?;
         Ok(record)
     }
 
@@ -212,6 +220,7 @@ impl DeviceService {
         storage: &mut S,
         mut record: DeviceRecord,
         now_ms: i64,
+        node_id: &str,
     ) -> crate::contact::Result<(DeviceRecord, bool)> {
         let existing = Self::get(storage, &record.peer_id)?;
         let changed = existing
@@ -227,13 +236,13 @@ impl DeviceService {
             // 内容不更新，但 last_seen 推进（设备在线证据）
             if let Some(mut e) = existing {
                 e.last_seen_at = now_ms;
-                Self::upsert(storage, &e)?;
+                Self::upsert_pdsync(storage, &e, now_ms, node_id)?;
                 return Ok((e, false));
             }
         }
         record.updated_at = base_updated;
         record.last_seen_at = now_ms;
-        Self::upsert(storage, &record)?;
+        Self::upsert_pdsync(storage, &record, now_ms, node_id)?;
         Ok((record, true))
     }
 }
@@ -279,7 +288,7 @@ mod tests {
             updated_at: 100,
             last_seen_at: 100,
         };
-        let (applied, changed) = DeviceService::apply_remote(&mut storage, older.clone(), 100).unwrap();
+        let (applied, changed) = DeviceService::apply_remote(&mut storage, older.clone(), 100, "local-node").unwrap();
         assert!(changed);
         assert_eq!(applied.device_name, "旧名字");
 
@@ -289,7 +298,7 @@ mod tests {
             updated_at: 50,
             ..older.clone()
         };
-        let (applied, changed) = DeviceService::apply_remote(&mut storage, stale, 200).unwrap();
+        let (applied, changed) = DeviceService::apply_remote(&mut storage, stale, 200, "local-node").unwrap();
         assert!(!changed);
         assert_eq!(applied.device_name, "旧名字");
         assert_eq!(applied.last_seen_at, 200);
@@ -300,7 +309,7 @@ mod tests {
             updated_at: 300,
             ..older
         };
-        let (applied, changed) = DeviceService::apply_remote(&mut storage, newer, 300).unwrap();
+        let (applied, changed) = DeviceService::apply_remote(&mut storage, newer, 300, "local-node").unwrap();
         assert!(changed);
         assert_eq!(applied.device_name, "新名字");
     }

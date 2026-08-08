@@ -1,9 +1,12 @@
 //! 组织空间：分组树（children 数组顺序即同级排序）。
 
 use crate::storage::StorageBackend;
+use crate::sync::personal::put_personal;
 
 use super::*;
-use crate::contact::{ContactProfileRecord, OrgGroupNode, org_extra_prefix, org_tree_key};
+use crate::contact::{
+    ContactProfileRecord, OrgGroupNode, org_extra_prefix, org_tree_key, sync_err_to_contact,
+};
 
 impl ContactService {
     /// 新建组织分组（id 由调用方给定；kernel 门面以客户端生成的 id 落库，
@@ -15,6 +18,8 @@ impl ContactService {
         parent_id: &str,
         id: &str,
         name: &str,
+        now_ms: i64,
+        node_id: &str,
     ) -> Result<Option<OrgGroupNode>> {
         let org_id = require_org_space(space)?;
         let key = org_tree_key(org_id);
@@ -36,7 +41,9 @@ impl ContactService {
                 .expect("siblings located by parent_id");
             parent.children.push(node.clone());
         }
-        write_json(storage, &key, &tree)?;
+        // P5：组织分组树整域单记录同步（写 pmeta，供自设备 pdsync）
+        put_personal(storage, node_id, &key, &serde_json::to_string(&tree)?, now_ms)
+            .map_err(sync_err_to_contact)?;
         Ok(Some(node))
     }
 
@@ -46,6 +53,8 @@ impl ContactService {
         space: &str,
         id: &str,
         name: &str,
+        now_ms: i64,
+        node_id: &str,
     ) -> Result<()> {
         let org_id = require_org_space(space)?;
         let key = org_tree_key(org_id);
@@ -58,12 +67,20 @@ impl ContactService {
             .find(|item| item.id == id)
             .expect("siblings located by id");
         node.name = name.to_string();
-        write_json(storage, &key, &tree)
+        put_personal(storage, node_id, &key, &serde_json::to_string(&tree)?, now_ms)
+            .map_err(sync_err_to_contact)?;
+        Ok(())
     }
 
     /// 删除组织分组：子节点提升到被删节点所在层；子树所有 id 涉及的成员附加
     /// 资料 `group_id` 复位为 `""`（对齐 TS `deleteOrgGroup`）。
-    pub fn delete_org_group<S: StorageBackend>(storage: &mut S, space: &str, id: &str) -> Result<()> {
+    pub fn delete_org_group<S: StorageBackend>(
+        storage: &mut S,
+        space: &str,
+        id: &str,
+        now_ms: i64,
+        node_id: &str,
+    ) -> Result<()> {
         let org_id = require_org_space(space)?;
         let key = org_tree_key(org_id);
         let mut tree: Vec<OrgGroupNode> = read_vec(storage, &key)?;
@@ -79,12 +96,20 @@ impl ContactService {
         for (offset, child) in node.children.into_iter().enumerate() {
             siblings.insert(index + offset, child);
         }
-        write_json(storage, &key, &tree)?;
+        put_personal(storage, node_id, &key, &serde_json::to_string(&tree)?, now_ms)
+            .map_err(sync_err_to_contact)?;
         let prefix = org_extra_prefix(org_id);
         for (key, mut profile) in scan_json::<S, ContactProfileRecord>(storage, &prefix)? {
             if removed_ids.iter().any(|removed| removed == &profile.group_id) {
                 profile.group_id = String::new();
-                write_json(storage, &key, &profile)?;
+                put_personal(
+                    storage,
+                    node_id,
+                    &key,
+                    &serde_json::to_string(&profile)?,
+                    now_ms,
+                )
+                .map_err(sync_err_to_contact)?;
             }
         }
         Ok(())
@@ -97,6 +122,8 @@ impl ContactService {
         space: &str,
         id: &str,
         to_index: usize,
+        now_ms: i64,
+        node_id: &str,
     ) -> Result<()> {
         let org_id = require_org_space(space)?;
         let key = org_tree_key(org_id);
@@ -115,7 +142,9 @@ impl ContactService {
         let moved = siblings.remove(from);
         let insert_at = if from < target { target - 1 } else { target };
         siblings.insert(insert_at, moved);
-        write_json(storage, &key, &tree)
+        put_personal(storage, node_id, &key, &serde_json::to_string(&tree)?, now_ms)
+            .map_err(sync_err_to_contact)?;
+        Ok(())
     }
 
     /// 跨级拖拽移动（仅管理员）：把节点移动到新父级（`""` = 根层）下的指定
@@ -135,6 +164,8 @@ impl ContactService {
         id: &str,
         new_parent_id: &str,
         to_index: usize,
+        now_ms: i64,
+        node_id: &str,
     ) -> Result<()> {
         let org_id = require_org_space(space)?;
         let key = org_tree_key(org_id);
@@ -182,7 +213,9 @@ impl ContactService {
         };
         let clamped = index.min(target.len());
         target.insert(clamped, node);
-        write_json(storage, &key, &tree)
+        put_personal(storage, node_id, &key, &serde_json::to_string(&tree)?, now_ms)
+            .map_err(sync_err_to_contact)?;
+        Ok(())
     }
 }
 

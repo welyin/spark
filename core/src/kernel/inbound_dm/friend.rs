@@ -78,7 +78,7 @@ fn handle_self_friend_request<S: StorageBackend>(
         friend.peer = peer.clone();
     }
     friend.updated_at = ctx.now_ms;
-    ContactService::upsert_friend(storage, &friend)?;
+    ContactService::upsert_friend_pdsync(storage, &friend, ctx.now_ms, ctx.node_id)?;
     // 回发目标取请求方本次捎带的 nodeInfo（无则无法回发，host 跳过）
     let auto_accept = peer.map(|p| AutoAccept {
         target: PeerNodeInfo {
@@ -102,6 +102,8 @@ fn handle_self_friend_request<S: StorageBackend>(
         self_profile: None,
         device_sync_reply: None,
         profile_sync_reply,
+        pdsync_out: Vec::new(),
+        profile_applied: false,
     })
 }
 
@@ -157,7 +159,8 @@ pub(super) fn handle_friend_request<S: StorageBackend>(
     if let Some(mut friend) = ContactService::get_friend(storage, from)? {
         if let Some(avatar) = &avatar {
             friend.avatar = Some(avatar.clone());
-            ContactService::upsert_friend(storage, &friend)?;
+            friend.updated_at = ctx.now_ms;
+            ContactService::upsert_friend_pdsync(storage, &friend, ctx.now_ms, ctx.node_id)?;
         }
         let auto_accept = peer.map(|p| AutoAccept {
             target: PeerNodeInfo {
@@ -174,6 +177,8 @@ pub(super) fn handle_friend_request<S: StorageBackend>(
             self_profile: None,
             device_sync_reply: None,
             profile_sync_reply: None,
+            pdsync_out: Vec::new(),
+            profile_applied: false,
         });
     }
 
@@ -219,7 +224,7 @@ pub(super) fn handle_friend_request<S: StorageBackend>(
             invite_code: None,
         },
     };
-    ContactService::put_incoming_request(storage, &record)?;
+    ContactService::put_incoming_request_pdsync(storage, &record, ctx.now_ms, ctx.node_id)?;
     let event = P2pEvent::FriendRequestReceived(json!({
         "request": serde_json::to_value(&record)?,
     }));
@@ -278,11 +283,19 @@ pub(super) fn handle_friend_accept<S: StorageBackend>(
         return done(fail_response("invalid-body"), Vec::new());
     }
 
-    ContactService::mark_outgoing_accepted(storage, request_id, ctx.now_ms)?;
+    ContactService::mark_outgoing_accepted_pdsync(storage, request_id, ctx.now_ms, ctx.node_id)?;
     let request = ContactService::get_outgoing_request(storage, request_id)?;
     // 合并式 upsert：已有记录保留本地资料（备注/标签/分组/照片/addedAt），
     // 仅刷新非空 nickname、Some 的 avatar 与 Some 的 peer；不存在才新建
-    let friend = merge_friend_record(storage, from, &nickname, avatar.as_deref(), peer, ctx.now_ms)?;
+    let friend = merge_friend_record(
+        storage,
+        from,
+        &nickname,
+        avatar.as_deref(),
+        peer,
+        ctx.now_ms,
+        ctx.node_id,
+    )?;
     let request_json = request.map(serde_json::to_value).transpose()?;
     let friend_json = serde_json::to_value(&friend)?;
     let event = P2pEvent::FriendRequestAccepted(json!({
@@ -306,6 +319,8 @@ pub(super) fn handle_friend_accept<S: StorageBackend>(
         self_profile: None,
         device_sync_reply,
         profile_sync_reply: None,
+        pdsync_out: Vec::new(),
+        profile_applied: false,
     })
 }
 
@@ -371,7 +386,7 @@ pub(super) fn handle_friend_reply<S: StorageBackend>(
             {
                 return done(ok_response(), Vec::new());
             }
-            let record = ContactService::append_outgoing_thread(storage, request_id, msg.clone(), ctx.now_ms)?
+            let record = ContactService::append_outgoing_thread_pdsync(storage, request_id, msg.clone(), ctx.now_ms, ctx.node_id)?
                 .expect("outgoing request just fetched");
             let event = P2pEvent::FriendRequestSent(json!({
                 "request": serde_json::to_value(&record)?,
@@ -394,7 +409,7 @@ pub(super) fn handle_friend_reply<S: StorageBackend>(
         {
             return done(ok_response(), Vec::new());
         }
-        let record = ContactService::append_incoming_thread(storage, &inbox_id, msg, ctx.now_ms)?
+        let record = ContactService::append_incoming_thread_pdsync(storage, &inbox_id, msg, ctx.now_ms, ctx.node_id)?
             .expect("incoming request just fetched");
         let event = P2pEvent::FriendRequestReceived(json!({
             "request": serde_json::to_value(&record)?,

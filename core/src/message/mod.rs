@@ -54,6 +54,10 @@ pub enum MessageError {
     #[error(transparent)]
     Storage(#[from] crate::storage::StorageError),
 
+    /// pdsync 个人域同步模块错误（conv 迁入）。
+    #[error(transparent)]
+    Sync(#[from] crate::sync::SyncError),
+
     /// JSON 序列化/反序列化错误。
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),

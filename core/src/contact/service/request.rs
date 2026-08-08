@@ -1,11 +1,12 @@
 //! 好友申请（个人空间）：收到的 `ct:req:in:` 与发出的 `ct:req:out:`。
 
 use crate::storage::{ScanOptions, StorageBackend};
+use crate::sync::personal::put_personal;
 
 use super::*;
 use crate::contact::{
     FriendRequestRecord, FriendRequestStatus, PeerRef, REQ_IN_PREFIX, REQ_OUT_PREFIX,
-    RequestThreadMessage, ThreadFrom, org_req_out_prefix,
+    RequestThreadMessage, ThreadFrom, org_req_out_prefix, sync_err_to_contact,
 };
 
 /// 单个申请回复线程的最大消息条数（超出丢弃最旧的）：thread 是跨消息累积的
@@ -31,6 +32,19 @@ impl ContactService {
         write_json(storage, &format!("{REQ_IN_PREFIX}{}", request.id), request)
     }
 
+    /// pdsync 感知的落库收到的好友申请：落记录 + bump pmeta（ct:req 类）。
+    pub fn put_incoming_request_pdsync<S: StorageBackend>(
+        storage: &mut S,
+        request: &FriendRequestRecord,
+        now_ms: i64,
+        node_id: &str,
+    ) -> Result<()> {
+        let key = format!("{REQ_IN_PREFIX}{}", request.id);
+        put_personal(storage, node_id, &key, &serde_json::to_string(request)?, now_ms)
+            .map_err(sync_err_to_contact)?;
+        Ok(())
+    }
+
     /// 落库一条发出的好友申请（`ct:req:out:{id}`；id 由调用方给定，kernel
     /// 门面以客户端生成的 id 落库，信封 `requestId` 与之对应）。
     ///
@@ -45,6 +59,24 @@ impl ContactService {
             request.updated_at = request.created_at;
         }
         write_json(storage, &format!("{REQ_OUT_PREFIX}{}", request.id), &request)
+    }
+
+    /// pdsync 感知的落库发出的好友申请（`updated_at` 兜底同
+    /// [`Self::put_outgoing_request`]）：落记录 + bump pmeta（ct:req 类）。
+    pub fn put_outgoing_request_pdsync<S: StorageBackend>(
+        storage: &mut S,
+        request: &FriendRequestRecord,
+        now_ms: i64,
+        node_id: &str,
+    ) -> Result<()> {
+        let mut request = request.clone();
+        if request.updated_at == 0 {
+            request.updated_at = request.created_at;
+        }
+        let key = format!("{REQ_OUT_PREFIX}{}", request.id);
+        put_personal(storage, node_id, &key, &serde_json::to_string(&request)?, now_ms)
+            .map_err(sync_err_to_contact)?;
+        Ok(())
     }
 
     /// 读取收到的好友申请；不存在返回 `Ok(None)`。
@@ -73,6 +105,27 @@ impl ContactService {
         accept: bool,
         now_ms: i64,
     ) -> Result<bool> {
+        Self::resolve_incoming_request_impl(storage, id, accept, now_ms, None)
+    }
+
+    /// pdsync 感知的 [`Self::resolve_incoming_request`]（写 pmeta）。
+    pub fn resolve_incoming_request_pdsync<S: StorageBackend>(
+        storage: &mut S,
+        id: &str,
+        accept: bool,
+        now_ms: i64,
+        node_id: &str,
+    ) -> Result<bool> {
+        Self::resolve_incoming_request_impl(storage, id, accept, now_ms, Some(node_id))
+    }
+
+    fn resolve_incoming_request_impl<S: StorageBackend>(
+        storage: &mut S,
+        id: &str,
+        accept: bool,
+        now_ms: i64,
+        node_id: Option<&str>,
+    ) -> Result<bool> {
         let Some(mut request) = Self::get_incoming_request(storage, id)? else {
             return Ok(false);
         };
@@ -85,7 +138,12 @@ impl ContactService {
             FriendRequestStatus::Ignored
         };
         request.updated_at = now_ms;
-        Self::put_incoming_request(storage, &request)?;
+        match node_id {
+            Some(node_id) => {
+                Self::put_incoming_request_pdsync(storage, &request, now_ms, node_id)?
+            }
+            None => Self::put_incoming_request(storage, &request)?,
+        }
         Ok(true)
     }
 
@@ -148,6 +206,25 @@ impl ContactService {
         id: &str,
         now_ms: i64,
     ) -> Result<bool> {
+        Self::mark_outgoing_accepted_impl(storage, id, now_ms, None)
+    }
+
+    /// pdsync 感知的 [`Self::mark_outgoing_accepted`]（写 pmeta）。
+    pub fn mark_outgoing_accepted_pdsync<S: StorageBackend>(
+        storage: &mut S,
+        id: &str,
+        now_ms: i64,
+        node_id: &str,
+    ) -> Result<bool> {
+        Self::mark_outgoing_accepted_impl(storage, id, now_ms, Some(node_id))
+    }
+
+    fn mark_outgoing_accepted_impl<S: StorageBackend>(
+        storage: &mut S,
+        id: &str,
+        now_ms: i64,
+        node_id: Option<&str>,
+    ) -> Result<bool> {
         let key = format!("{REQ_OUT_PREFIX}{id}");
         let Some(mut request): Option<FriendRequestRecord> = read_json(storage, &key)? else {
             return Ok(false);
@@ -160,7 +237,13 @@ impl ContactService {
         }
         request.status = FriendRequestStatus::Accepted;
         request.updated_at = now_ms;
-        write_json(storage, &key, &request)?;
+        match node_id {
+            Some(node_id) => {
+                put_personal(storage, node_id, &key, &serde_json::to_string(&request)?, now_ms)
+                    .map_err(sync_err_to_contact)?;
+            }
+            None => write_json(storage, &key, &request)?,
+        }
         Ok(true)
     }
 
@@ -173,6 +256,27 @@ impl ContactService {
         msg: RequestThreadMessage,
         now_ms: i64,
     ) -> Result<Option<FriendRequestRecord>> {
+        Self::append_outgoing_thread_impl(storage, id, msg, now_ms, None)
+    }
+
+    /// pdsync 感知的 [`Self::append_outgoing_thread`]（写 pmeta）。
+    pub fn append_outgoing_thread_pdsync<S: StorageBackend>(
+        storage: &mut S,
+        id: &str,
+        msg: RequestThreadMessage,
+        now_ms: i64,
+        node_id: &str,
+    ) -> Result<Option<FriendRequestRecord>> {
+        Self::append_outgoing_thread_impl(storage, id, msg, now_ms, Some(node_id))
+    }
+
+    fn append_outgoing_thread_impl<S: StorageBackend>(
+        storage: &mut S,
+        id: &str,
+        msg: RequestThreadMessage,
+        now_ms: i64,
+        node_id: Option<&str>,
+    ) -> Result<Option<FriendRequestRecord>> {
         let key = format!("{REQ_OUT_PREFIX}{id}");
         let Some(mut request): Option<FriendRequestRecord> = read_json(storage, &key)? else {
             return Ok(None);
@@ -184,7 +288,13 @@ impl ContactService {
         request.thread.push(msg);
         truncate_thread(&mut request.thread);
         request.updated_at = now_ms;
-        write_json(storage, &key, &request)?;
+        match node_id {
+            Some(node_id) => {
+                put_personal(storage, node_id, &key, &serde_json::to_string(&request)?, now_ms)
+                    .map_err(sync_err_to_contact)?;
+            }
+            None => write_json(storage, &key, &request)?,
+        }
         Ok(Some(request))
     }
 
@@ -197,6 +307,27 @@ impl ContactService {
         msg: RequestThreadMessage,
         now_ms: i64,
     ) -> Result<Option<FriendRequestRecord>> {
+        Self::append_incoming_thread_impl(storage, id, msg, now_ms, None)
+    }
+
+    /// pdsync 感知的 [`Self::append_incoming_thread`]（写 pmeta）。
+    pub fn append_incoming_thread_pdsync<S: StorageBackend>(
+        storage: &mut S,
+        id: &str,
+        msg: RequestThreadMessage,
+        now_ms: i64,
+        node_id: &str,
+    ) -> Result<Option<FriendRequestRecord>> {
+        Self::append_incoming_thread_impl(storage, id, msg, now_ms, Some(node_id))
+    }
+
+    fn append_incoming_thread_impl<S: StorageBackend>(
+        storage: &mut S,
+        id: &str,
+        msg: RequestThreadMessage,
+        now_ms: i64,
+        node_id: Option<&str>,
+    ) -> Result<Option<FriendRequestRecord>> {
         let key = format!("{REQ_IN_PREFIX}{id}");
         let Some(mut request): Option<FriendRequestRecord> = read_json(storage, &key)? else {
             return Ok(None);
@@ -204,7 +335,13 @@ impl ContactService {
         request.thread.push(msg);
         truncate_thread(&mut request.thread);
         request.updated_at = now_ms;
-        write_json(storage, &key, &request)?;
+        match node_id {
+            Some(node_id) => {
+                put_personal(storage, node_id, &key, &serde_json::to_string(&request)?, now_ms)
+                    .map_err(sync_err_to_contact)?;
+            }
+            None => write_json(storage, &key, &request)?,
+        }
         Ok(Some(request))
     }
 

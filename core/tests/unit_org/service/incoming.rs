@@ -134,7 +134,7 @@ fn recovery_view_admin_lazy_backfill() {
         .unwrap();
 
     // 有 recoverySecret → 直接返回，只有含地址成员的 nodeInfo
-    let view = OrganizationService::get_recovery_view(&mut storage, &admin, NOW).unwrap();
+    let view = OrganizationService::get_recovery_view(&mut storage, &admin, NOW, "node-a").unwrap();
     assert_eq!(view.len(), 1);
     assert_eq!(view[0].org_id, record.org_id);
     assert_eq!(view[0].recovery_secret.len(), 64);
@@ -159,10 +159,10 @@ fn recovery_view_admin_lazy_backfill() {
     OrganizationService::save_record(&mut storage, &bare).unwrap();
 
     // 非 admin 成员本轮跳过
-    let view = OrganizationService::get_recovery_view(&mut storage, &member_id, NOW + 10).unwrap();
+    let view = OrganizationService::get_recovery_view(&mut storage, &member_id, NOW + 10, "node-a").unwrap();
     assert!(view.is_empty());
     // admin 补齐：生成盐、bump updatedAt、保留 transactionsVersion 与 lastSyncedAt
-    let view = OrganizationService::get_recovery_view(&mut storage, &admin, NOW + 20).unwrap();
+    let view = OrganizationService::get_recovery_view(&mut storage, &admin, NOW + 20, "node-a").unwrap();
     assert_eq!(view.len(), 1);
     assert_eq!(view[0].recovery_secret.len(), 64);
     let patched = OrganizationService::get_record(&storage, &record.org_id)
@@ -177,7 +177,7 @@ fn recovery_view_admin_lazy_backfill() {
     );
     assert_eq!(sync.last_synced_at, 777, "保留原 lastSyncedAt");
     // 成员侧随后也能看到
-    let view = OrganizationService::get_recovery_view(&mut storage, &member_id, NOW + 30).unwrap();
+    let view = OrganizationService::get_recovery_view(&mut storage, &member_id, NOW + 30, "node-a").unwrap();
     assert_eq!(view.len(), 1);
 }
 

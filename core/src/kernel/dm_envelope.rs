@@ -53,6 +53,16 @@ pub const KIND_ORG_INVITE_REPLY: &str = "org-invite-reply";
 /// 信封 kind：好友申请回复（接收方询问 / 申请方回答同 kind，接收侧按本端
 /// 记录匹配方向）。
 pub const KIND_FRIEND_REPLY: &str = "friend-reply";
+/// 信封 kind：pdsync 摘要交换（自设备间，from==to==自己 rootId；body 携带
+/// `categories` 折叠 vv + `msgWindow` + `attachmentPolicy`，见 pdsync §5.1）。
+pub const KIND_PDSYNC_HELLO: &str = "pdsync-hello";
+/// 信封 kind：pdsync diff 请求（自设备间；body 携带 `category` + `knownVv`，
+/// 请求方本地落后时发出，对端据此补增量，见 pdsync §5.2）。
+pub const KIND_PDSYNC_NEED: &str = "pdsync-need";
+/// 信封 kind：pdsync 数据传输（自设备间；body 携带 `category` + 逐条
+/// `{key,value,meta}` + 批次号，接收方逐条 `apply_personal_remote`，见
+/// pdsync §5.3）。
+pub const KIND_PDSYNC_DATA: &str = "pdsync-data";
 
 /// 签名载荷：固定键序 body/from/kind/to/ts 的紧凑 JSON 串。
 pub fn build_signing_payload(kind: &str, from: &str, to: &str, ts: i64, body: &Value) -> String {

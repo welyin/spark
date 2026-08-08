@@ -171,3 +171,35 @@ fn delete_organization_flow() {
     let txs = spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 1).unwrap();
     assert_eq!(txs[0].type_, OrganizationTransactionType::Delete);
 }
+
+#[test]
+fn create_delete_pdsync_write_pmeta_and_tombstone() {
+    use spark_core::sync::{get_personal_meta, is_tombstone};
+
+    let mut storage = MemoryStorage::new();
+    let (admin, record) = {
+        let admin = root_id_of(MNEMONIC);
+        let record = OrganizationService::create_organization_pdsync(
+            &mut storage,
+            &input(),
+            &admin,
+            NOW,
+            "node-a",
+        )
+        .unwrap();
+        (admin, record)
+    };
+    // 创建：org:meta 记录落库 + pmeta（vv 含 node-a:1，非 tombstone）
+    let key = format!("org:meta:{}", record.org_id);
+    let meta = get_personal_meta(&storage, &key).unwrap().unwrap();
+    assert_eq!(meta.vv.get("node-a"), Some(&1));
+    assert!(!is_tombstone(&meta));
+
+    // 删除：记录消失，pmeta 留 tombstone（删除可经 pdsync 传播）
+    OrganizationService::delete_organization_pdsync(&mut storage, &record.org_id, &admin, NOW + 1, "node-a")
+        .unwrap();
+    assert!(OrganizationService::get_record(&storage, &record.org_id).unwrap().is_none());
+    let meta = get_personal_meta(&storage, &key).unwrap().unwrap();
+    assert!(is_tombstone(&meta));
+    assert_eq!(meta.vv.get("node-a"), Some(&2));
+}

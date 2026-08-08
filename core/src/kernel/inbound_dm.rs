@@ -16,9 +16,9 @@ mod friend;
 
 use super::dm_envelope::{
     KIND_CHAT, KIND_CONTACT_SYNC, KIND_CONV_SYNC, KIND_DEVICE_SYNC, KIND_FRIEND_ACCEPT,
-    KIND_FRIEND_REPLY, KIND_FRIEND_REQUEST,
-    KIND_ORG_INVITE, KIND_ORG_INVITE_REPLY, KIND_PROFILE_SYNC, KIND_READ, KIND_RECALL,
-    verify_envelope,
+    KIND_FRIEND_REPLY, KIND_FRIEND_REQUEST, KIND_ORG_INVITE, KIND_ORG_INVITE_REPLY,
+    KIND_PDSYNC_DATA, KIND_PDSYNC_HELLO, KIND_PDSYNC_NEED, KIND_PROFILE_SYNC, KIND_READ,
+    KIND_RECALL, verify_envelope,
 };
 use super::message_ops::{conversation_view, direct_conversation_id, message_view, sanitize_link_preview};
 use crate::contact::{ContactError, ContactService, FriendRecord, FriendRequestStatus};
@@ -45,6 +45,9 @@ pub enum InboundDmError {
     /// 组织模块错误。
     #[error(transparent)]
     Org(#[from] OrgError),
+    /// pdsync 个人域同步模块错误。
+    #[error(transparent)]
+    Sync(#[from] crate::sync::SyncError),
     /// JSON 序列化/反序列化错误。
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
@@ -105,6 +108,35 @@ pub struct InboundDmResult {
     ///   host 按 LWW 裁决——本机身份文件 updatedAt 严格大于对端快照才回发
     ///   （对端较旧/残缺时补齐；收敛后相等不再互发，无 ping-pong）。
     pub profile_sync_reply: Option<ProfileSyncReply>,
+    /// pdsync 出站指令（连接层对端）：收到 pdsync-hello 的 diff 回发、或
+    /// pdsync-need 的增量数据回发。body 已在纯逻辑层构建（io_lock 内），
+    /// host 只负责包信封 + dm_direct。
+    pub pdsync_out: Vec<PdsyncOut>,
+    /// 本次 pdsync-data 是否合入了 `profile:self`（远端胜出）。host 据此
+    /// 回写身份文件资料（仅解锁态），保证 sled 镜像与身份文件一致。
+    pub profile_applied: bool,
+}
+
+/// pdsync 出站信封（body 已构建，host 装配完整信封并经 p2p 节点投递）。
+#[derive(Clone, Debug)]
+pub enum PdsyncOut {
+    /// `pdsync-hello` 的 diff 回发：对端某个 category 落后于本机 → 主动推
+    /// `pdsync-data`（即发即忘，对齐 §5.2"对端落后 → 主动推"）。
+    Push { body: Value },
+    /// `pdsync-hello` 的 diff 回发：本机落后于对端 → 发 `pdsync-need`
+    /// （携带本机 knownVv，请求对端补增量）。
+    Need { body: Value },
+    /// `pdsync-need` 的增量回发：`pdsync-data` 数据（单批）。
+    Data { body: Value },
+}
+
+impl PdsyncOut {
+    /// 出站 body（host 装配信封 / 集成测试透传用，免对变体逐个 match）。
+    pub fn body(&self) -> &Value {
+        match self {
+            Self::Push { body } | Self::Need { body } | Self::Data { body } => body,
+        }
+    }
 }
 
 /// 入站上下文：本机身份/昵称、连接层对端、在线 peer 快照与时间（各
@@ -116,6 +148,8 @@ struct InboundContext<'a> {
     /// 当前在线的 libp2p peerId 集合（事件循环快照；ChatReceived 事件的
     /// 会话视图 online 标志按它计算）。
     online_peers: &'a HashSet<String>,
+    /// 本机节点 id（p2p 运行中为 peerId，否则 `local-node`；个人域 pmeta 用）。
+    node_id: &'a str,
     now_ms: i64,
 }
 
@@ -135,6 +169,8 @@ fn done(response: Value, events: Vec<P2pEvent>) -> Result<InboundDmResult> {
         self_profile: None,
         device_sync_reply: None,
         profile_sync_reply: None,
+        pdsync_out: Vec::new(),
+        profile_applied: false,
     })
 }
 
@@ -189,6 +225,7 @@ fn merge_friend_record<S: StorageBackend>(
     avatar: Option<&str>,
     peer: Option<PeerRef>,
     now_ms: i64,
+    node_id: &str,
 ) -> Result<FriendRecord> {
     let mut friend = ContactService::get_friend(storage, root_id)?.unwrap_or(FriendRecord {
         root_id: root_id.to_string(),
@@ -220,7 +257,7 @@ fn merge_friend_record<S: StorageBackend>(
     // 接受产生的朋友记录是本机状态变更：刷新 LWW 时间（随 contact-sync
     // 传播到其他自设备）
     friend.updated_at = now_ms;
-    ContactService::upsert_friend(storage, &friend)?;
+    ContactService::upsert_friend_pdsync(storage, &friend, now_ms, node_id)?;
     Ok(friend)
 }
 
@@ -236,6 +273,7 @@ pub fn handle_inbound_dm<S: StorageBackend>(
     remote_peer_id: &str,
     online_peers: &HashSet<String>,
     now_ms: i64,
+    node_id: &str,
 ) -> Result<InboundDmResult> {
     let envelope = match verify_envelope(&payload, my_root_id, now_ms) {
         Ok(v) => v,
@@ -246,6 +284,7 @@ pub fn handle_inbound_dm<S: StorageBackend>(
         my_nickname,
         remote_peer_id,
         online_peers,
+        node_id,
         now_ms,
     };
     match envelope.kind.as_str() {
@@ -265,6 +304,9 @@ pub fn handle_inbound_dm<S: StorageBackend>(
         KIND_DEVICE_SYNC => handle_device_sync(storage, &ctx, &envelope.from, &envelope.body),
         KIND_CONTACT_SYNC => handle_contact_sync(storage, &ctx, &envelope.from, &envelope.body),
         KIND_CONV_SYNC => handle_conv_sync(storage, &ctx, &envelope.from, &envelope.body),
+        KIND_PDSYNC_HELLO => handle_pdsync_hello(storage, &ctx, &envelope.from, &envelope.body),
+        KIND_PDSYNC_NEED => handle_pdsync_need(storage, &ctx, &envelope.from, &envelope.body),
+        KIND_PDSYNC_DATA => handle_pdsync_data(storage, &ctx, &envelope.from, &envelope.body),
         KIND_ORG_INVITE => handle_org_invite(storage, &ctx, &envelope.from, &envelope.body),
         KIND_ORG_INVITE_REPLY => {
             handle_org_invite_reply(storage, &ctx, &envelope.from, &envelope.body)
@@ -410,7 +452,7 @@ fn handle_chat<S: StorageBackend>(
         && let Some(request) = ContactService::find_outgoing_by_root(storage, from)?
         && request.status == FriendRequestStatus::Pending
     {
-        ContactService::mark_outgoing_accepted(storage, &request.id, ctx.now_ms)?;
+        ContactService::mark_outgoing_accepted_pdsync(storage, &request.id, ctx.now_ms, ctx.node_id)?;
         let request = ContactService::get_outgoing_request(storage, &request.id)?;
         let friend = merge_friend_record(
             storage,
@@ -422,6 +464,7 @@ fn handle_chat<S: StorageBackend>(
                 addresses: Vec::new(),
             }),
             ctx.now_ms,
+            ctx.node_id,
         )?;
         events.push(P2pEvent::FriendRequestAccepted(json!({
             "request": request.map(serde_json::to_value).transpose()?,
@@ -478,7 +521,16 @@ fn handle_chat<S: StorageBackend>(
     if MessageService::get_message(storage, space, &conv.id, &message.id)?.is_some() {
         return done(ok_response(), events);
     }
-    MessageService::append_message(storage, space, &conv.id, &message)?;
+    // pdsync 变体：个人空间会话壳随消息 bump pmeta——「只收不发」的会话由此
+    // 进入 pdsync 折叠/增量（裸 append 不产生 pmeta，其他设备拿不到会话入口）
+    MessageService::append_message_pdsync(
+        storage,
+        space,
+        &conv.id,
+        &message,
+        ctx.now_ms,
+        Some(ctx.node_id),
+    )?;
     // 自己的消息（另一台设备同步）不产生未读
     if from != ctx.my_root_id {
         MessageService::increment_unread(storage, space, &conv.id)?;
@@ -636,6 +688,8 @@ fn handle_profile_sync<S: StorageBackend>(
             self_profile,
             device_sync_reply: None,
             profile_sync_reply,
+            pdsync_out: Vec::new(),
+            profile_applied: false,
         });
     };
     let nickname = body
@@ -659,7 +713,7 @@ fn handle_profile_sync<S: StorageBackend>(
     }
     let mut events = Vec::new();
     if changed {
-        ContactService::upsert_friend(storage, &friend)?;
+        ContactService::upsert_friend_pdsync(storage, &friend, ctx.now_ms, ctx.node_id)?;
         let mut data = json!({
             "rootId": friend.root_id,
             "nickname": friend.nickname,
@@ -676,6 +730,8 @@ fn handle_profile_sync<S: StorageBackend>(
         self_profile,
         device_sync_reply: None,
         profile_sync_reply,
+        pdsync_out: Vec::new(),
+        profile_applied: false,
     })
 }
 
@@ -702,7 +758,8 @@ fn handle_device_sync<S: StorageBackend>(
     if record.peer_id.trim().is_empty() || !crate::device::is_usable_peer_id(&record.peer_id) {
         return done(fail_response("invalid-body"), Vec::new());
     }
-    let (applied, changed) = crate::device::DeviceService::apply_remote(storage, record, ctx.now_ms)?;
+    let (applied, changed) =
+        crate::device::DeviceService::apply_remote(storage, record, ctx.now_ms, ctx.node_id)?;
     let mut events = Vec::new();
     if changed {
         events.push(P2pEvent::DeviceUpdated(
@@ -723,6 +780,8 @@ fn handle_device_sync<S: StorageBackend>(
         self_profile: None,
         device_sync_reply: reply,
         profile_sync_reply: None,
+        pdsync_out: Vec::new(),
+        profile_applied: false,
     })
 }
 
@@ -742,7 +801,8 @@ fn handle_contact_sync<S: StorageBackend>(
     if from != ctx.my_root_id {
         return done(fail_response("not-self-device"), Vec::new());
     }
-    let applied = crate::contact::apply_contact_sync_snapshot(storage, ctx.my_root_id, body)?;
+    let applied =
+        crate::contact::apply_contact_sync_snapshot(storage, ctx.my_root_id, body, ctx.node_id, ctx.now_ms)?;
     let events = if applied > 0 {
         vec![P2pEvent::ContactsSynced(json!({ "applied": applied }))]
     } else {
@@ -755,6 +815,8 @@ fn handle_contact_sync<S: StorageBackend>(
         self_profile: None,
         device_sync_reply: None,
         profile_sync_reply: None,
+        pdsync_out: Vec::new(),
+        profile_applied: false,
     })
 }
 
@@ -774,7 +836,7 @@ fn handle_conv_sync<S: StorageBackend>(
     if from != ctx.my_root_id {
         return done(fail_response("not-self-device"), Vec::new());
     }
-    let applied = crate::message::apply_conv_sync_snapshot(storage, body, ctx.now_ms)?;
+    let applied = crate::message::apply_conv_sync_snapshot(storage, body, ctx.now_ms, ctx.node_id)?;
     let events = if applied > 0 {
         vec![P2pEvent::ConversationsSynced(json!({ "applied": applied }))]
     } else {
@@ -787,7 +849,417 @@ fn handle_conv_sync<S: StorageBackend>(
         self_profile: None,
         device_sync_reply: None,
         profile_sync_reply: None,
+        pdsync_out: Vec::new(),
+        profile_applied: false,
     })
+}
+
+// ---------------------------------------------------------------------------
+// pdsync（个人域三信封反熵同步）
+// ---------------------------------------------------------------------------
+
+/// pdsync-hello：收到自设备（from==自己）的摘要。逐 category 与本地折叠 vv
+/// 比对：
+/// - 本机落后 → 发 `pdsync-need`（请求对端补增量）；
+/// - 本机领先 → 主动推 `pdsync-data`（对端缺本机新数据）；
+/// - 相等 → 不动（无 ping-pong）。
+///
+/// hello 不落库，只作为 diff 触发。回发信封由 host 装配投递（body 已在此
+/// 构建，io_lock 内读取本地 vv，防与变更竞态）。
+fn handle_pdsync_hello<S: StorageBackend>(
+    storage: &mut S,
+    ctx: &InboundContext<'_>,
+    from: &str,
+    body: &Value,
+) -> Result<InboundDmResult> {
+    if from != ctx.my_root_id {
+        return done(fail_response("not-self-device"), Vec::new());
+    }
+    let remote_cats = crate::sync::pdsync::parse_hello_categories(body);
+    let mut out = Vec::new();
+    for category in crate::sync::pdsync::CATEGORIES {
+        // 扫描失败不降级为空 vv（空 vv 会把本机误判为纯落后/纯领先，引发
+        // 不必要的全量拉取/推送）：跳过该 category，本轮 diff 不含它
+        let Ok(local_vv) = crate::sync::pdsync::collect_category_vv(storage, category)
+        else {
+            continue;
+        };
+        // 对端未声明该 category：视为空 vv（对端可能不支持该 category，等价
+        // 于其落后——本机领先即主动推；本机为空则不动）
+        let remote_vv = remote_cats.get(category.name).cloned().unwrap_or_default();
+        match crate::sync::pdsync::diff_category(&local_vv, &remote_vv) {
+            crate::sync::pdsync::DiffOutcome::LocalBehind { local_vv } => {
+                // 本机落后：请求对端补增量
+                let need_body = crate::sync::pdsync::build_need(category.name, &local_vv);
+                out.push(PdsyncOut::Need { body: need_body });
+            }
+            crate::sync::pdsync::DiffOutcome::LocalAhead => {
+                push_category_data(storage, &mut out, category, &remote_vv);
+            }
+            crate::sync::pdsync::DiffOutcome::Concurrent => {
+                // 双向交换：既请求对端缺的，也主动推本机缺的（data 逐条向量
+                // 幂等去重，双发收敛）
+                let need_body = crate::sync::pdsync::build_need(category.name, &local_vv);
+                out.push(PdsyncOut::Need { body: need_body });
+                push_category_data(storage, &mut out, category, &remote_vv);
+            }
+            crate::sync::pdsync::DiffOutcome::Equal => {}
+        }
+    }
+    // P4 消息窗口：消息不走折叠（§6.2），收到 hello 即按对端声明的 msgWindow
+    // 主动推本机窗口内消息（append-only 幂等，重复推送无害）。对端窗口 = 发送
+    // 方裁剪上限。
+    {
+        let remote_window = crate::sync::pdsync::MessageWindow::from_hello(body);
+        if let Ok(window_records) =
+            crate::sync::pdsync::collect_message_window(storage, &remote_window)
+        {
+            // 按 key 前缀分流打批：接收侧白名单按 key 前缀校验记录与声明
+            // category 一致（msg:app: → "msg:app"），混批会被整批拒收并连坐
+            // 同批的合法 msg:item 记录
+            let (app_records, item_records): (Vec<_>, Vec<_>) = window_records
+                .into_iter()
+                .partition(|r| r.key.starts_with("msg:app:"));
+            for (category, records) in
+                [("msg:item", item_records), ("msg:app", app_records)]
+            {
+                let batches = crate::sync::pdsync::split_batches(records, PDSYNC_BATCH_BYTES);
+                let total = batches.len();
+                for (i, batch) in batches.into_iter().enumerate() {
+                    let body =
+                        crate::sync::pdsync::build_data_batch(category, &batch, i, total);
+                    out.push(PdsyncOut::Data { body });
+                }
+            }
+        }
+    }
+    Ok(InboundDmResult {
+        response: ok_response(),
+        events: Vec::new(),
+        auto_accept: None,
+        self_profile: None,
+        device_sync_reply: None,
+        profile_sync_reply: None,
+        pdsync_out: out,
+        profile_applied: false,
+    })
+}
+
+/// pdsync-need：收到自设备的 diff 请求（category + knownVv）。采集该
+/// category 中相对 knownVv 的增量，分批发回 `pdsync-data`。
+fn handle_pdsync_need<S: StorageBackend>(
+    storage: &mut S,
+    ctx: &InboundContext<'_>,
+    from: &str,
+    body: &Value,
+) -> Result<InboundDmResult> {
+    if from != ctx.my_root_id {
+        return done(fail_response("not-self-device"), Vec::new());
+    }
+    let Some((category_name, known_vv)) = crate::sync::pdsync::parse_need(body) else {
+        return done(fail_response("invalid-body"), Vec::new());
+    };
+    let Some(category) = crate::sync::pdsync::category_by_name(&category_name) else {
+        return done(fail_response("unknown-category"), Vec::new());
+    };
+    let Ok(records) = crate::sync::pdsync::collect_incremental(storage, category, &known_vv)
+    else {
+        return done(fail_response("collection-failed"), Vec::new());
+    };
+    let batches = crate::sync::pdsync::split_batches(records, PDSYNC_BATCH_BYTES);
+    let total = batches.len();
+    let mut out = Vec::with_capacity(total);
+    for (i, batch) in batches.into_iter().enumerate() {
+        let body = crate::sync::pdsync::build_data_batch(&category_name, &batch, i, total);
+        out.push(PdsyncOut::Data { body });
+    }
+    Ok(InboundDmResult {
+        response: ok_response(),
+        events: Vec::new(),
+        auto_accept: None,
+        self_profile: None,
+        device_sync_reply: None,
+        profile_sync_reply: None,
+        pdsync_out: out,
+        profile_applied: false,
+    })
+}
+
+/// pdsync-data：收到自设备的增量数据，逐条 `apply_personal_remote`（幂等，
+/// 重复推送被向量去重）。
+///
+/// 入站白名单（§8.4 红线）：逐条校验记录 key 属于注册 category
+/// （`category_for_key`；`msg:item`/`msg:app` 走窗口协议按前缀另行匹配）
+/// 且与信封声明的 category 一致——`p2p:*`/`meta:*`/`pmeta:*` 等 §3.2 排除
+/// 前缀不在注册表内，任一记录不合法即整批拒收，防被攻陷/故障的配对设备
+/// 覆写任意 sled 键（含 `p2p:identity:privateKey`）。
+fn handle_pdsync_data<S: StorageBackend>(
+    storage: &mut S,
+    ctx: &InboundContext<'_>,
+    from: &str,
+    body: &Value,
+) -> Result<InboundDmResult> {
+    if from != ctx.my_root_id {
+        return done(fail_response("not-self-device"), Vec::new());
+    }
+    let Some((category_name, records)) = crate::sync::pdsync::parse_data(body) else {
+        return done(fail_response("invalid-body"), Vec::new());
+    };
+    // key 白名单 + 声明 category 一致性（发送方按 category 分批，合法批次
+    // 不会混杂）
+    for record in &records {
+        let expected = if record.key.starts_with("msg:item:") {
+            Some("msg:item")
+        } else if record.key.starts_with("msg:app:") {
+            Some("msg:app")
+        } else {
+            crate::sync::pdsync::category_for_key(&record.key).map(|c| c.name)
+        };
+        if expected != Some(category_name.as_str()) {
+            return done(fail_response("category-mismatch"), Vec::new());
+        }
+    }
+    let mut events = Vec::new();
+    let mut profile_applied = false;
+    let mut contacts_applied = 0usize;
+    let mut convs_applied = 0usize;
+    // 消息合入按会话聚合最新一条，循环结束后逐会话发 ChatReceived（窗口
+    // 回填成批到达，逐条发会冲垮广播通道）
+    let mut latest_msg_by_conv: std::collections::BTreeMap<String, MessageRecord> =
+        std::collections::BTreeMap::new();
+    for record in records {
+        // 逐条 LWW 合入（pmeta 裁决；幂等）。value 是 JSON 值，落盘时转回
+        // 字符串。
+        let value_str = serde_json::to_string(&record.value)?;
+
+        // `msg:conv`：远端胜出时用 merge_conv_meta 合并，保留本地消息驱动
+        // 字段（unread/updated_at），只取同步字段（置顶/免打扰/草稿）。
+        // convId 取 `msg:conv:personal:` 后的完整余段（direct 会话 id 是
+        // `dm:{rootId}`，自身含冒号）。
+        if let Some(cid) = record.key.strip_prefix("msg:conv:personal:") {
+            // 先读本地快照与本地 pmeta 再裁决；合并值与 pmeta 同一 batch 提交
+            // ——apply_personal_remote 先落「远端原值+meta」再补写合并值的两步
+            // 写会在崩溃窗口留下「meta 已推进、本体是未合并远端值」
+            let local_before = MessageService::get_conversation(storage, "personal", cid)?;
+            let local_meta = crate::sync::get_personal_meta(storage, &record.key)?;
+            if pdsync_remote_wins(local_meta.as_ref(), &record.meta) {
+                let meta_raw = serde_json::to_string(&record.meta)?;
+                let meta_key = crate::sync::personal_meta_key(&record.key);
+                if crate::sync::is_tombstone(&record.meta) {
+                    // 会话删除传播：删本体 + 落墓碑 pmeta（单 batch）
+                    storage
+                        .batch(vec![
+                            crate::storage::BatchOperation::delete(record.key.clone()),
+                            crate::storage::BatchOperation::put(meta_key, meta_raw),
+                        ])
+                        .map_err(crate::sync::SyncError::from)?;
+                    convs_applied += 1;
+                } else if let Ok(remote) =
+                    serde_json::from_value::<crate::message::ConversationRecord>(
+                        record.value.clone(),
+                    )
+                {
+                    let merged = match local_before {
+                        // 远端胜出：同步字段合并进本地副本，保留本地未读/更新时间
+                        Some(mut local) => {
+                            crate::message::MessageService::merge_conv_meta(&mut local, &remote);
+                            local
+                        }
+                        // 全新会话：未读/updated_at 是本机语义（§3.2），清零不继承
+                        None => crate::message::ConversationRecord {
+                            unread_count: 0,
+                            updated_at: 0,
+                            ..remote
+                        },
+                    };
+                    storage
+                        .batch(vec![
+                            crate::storage::BatchOperation::put(
+                                record.key.clone(),
+                                serde_json::to_string(&merged)?,
+                            ),
+                            crate::storage::BatchOperation::put(meta_key, meta_raw),
+                        ])
+                        .map_err(crate::sync::SyncError::from)?;
+                    convs_applied += 1;
+                }
+                // 远端值解析失败：不推进 pmeta（本地保持落后，下轮同步重试）
+            }
+            continue;
+        }
+
+        // `profile:self`：写 sled 后标记 profile_applied（host 负责回写身份
+        // 文件，见 `handle_profile_sync` 同款处理）。
+        if record.key == crate::kernel::identity::PROFILE_SELF_KEY {
+            let result = crate::sync::apply_personal_remote(
+                storage,
+                &record.key,
+                &value_str,
+                &record.meta,
+            )?;
+            if result.did_apply() {
+                profile_applied = true;
+            }
+            continue;
+        }
+
+        // 消息（`msg:item` / `msg:app`）：走窗口 append-only 落盘 + byid 索引，
+        // **不写 pmeta、不走 LWW**（§6.2）。msgId 天然幂等，撤回以 recalled
+        // 覆盖传播。
+        if record.key.starts_with("msg:item:") || record.key.starts_with("msg:app:") {
+            // 事件聚合：应用前解析 convId 与消息本体（解析失败仅丢事件，
+            // 不影响落库）
+            if let Ok(msg) = serde_json::from_value::<MessageRecord>(record.value.clone())
+                && let Some(conv_id) = pdsync_message_conv_id(&record.key)
+            {
+                latest_msg_by_conv
+                    .entry(conv_id)
+                    .and_modify(|cur| {
+                        if msg.created_at > cur.created_at {
+                            *cur = msg.clone();
+                        }
+                    })
+                    .or_insert(msg);
+            }
+            crate::sync::apply_message_record(storage, &record.key, &value_str)?;
+            continue;
+        }
+
+        // 通用：普通个人域记录（联系人/设备/组织）
+        let result =
+            crate::sync::apply_personal_remote(storage, &record.key, &value_str, &record.meta)?;
+        if result.did_apply() {
+            if record.key.starts_with("device:") {
+                // 设备清单：逐条 DeviceUpdated（data 即 DeviceRecord JSON）。
+                // tombstone（设备删除传播）无本体、value 为 null——事件类型契约
+                // 是 DeviceDto，null 载荷违约，跳过（删除随下次清单加载显现；
+                // 前端监听仅触发整表刷新，不消费 payload）。
+                if !crate::sync::is_tombstone(&record.meta) {
+                    events.push(P2pEvent::DeviceUpdated(record.value.clone()));
+                }
+            } else if record.key.starts_with("ct:") {
+                contacts_applied += 1;
+            }
+            // org:meta / org:inv 无对应壳层事件（无旧自设备快照通道），不发
+        }
+    }
+    // 合并结果通知前端刷新（事件口径对齐旧快照通道）：
+    // - 联系人四域/组织空间联系人 → ContactsSynced（整页刷新）；
+    // - 会话元数据 → ConversationsSynced（刷新会话列表）；
+    // - 消息 → 逐会话一条 ChatReceived（最新一条 + 当前会话快照；前端按 id
+    //   去重、信任快照未读——窗口合入不动 unread_count，快照即现状）。
+    if contacts_applied > 0 {
+        events.push(P2pEvent::ContactsSynced(json!({ "applied": contacts_applied })));
+    }
+    if convs_applied > 0 {
+        events.push(P2pEvent::ConversationsSynced(json!({ "applied": convs_applied })));
+    }
+    for (conv_id, message) in latest_msg_by_conv {
+        // 会话壳尚未同步到本机时跳过事件（conv 元数据到达后列表自会刷新，
+        // 打开会话时消息从库内水合）
+        let Ok(Some(conv)) = MessageService::get_conversation(storage, "personal", &conv_id)
+        else {
+            continue;
+        };
+        // online 判定与 handle_chat 同口径：conv.peer 缺失时回退朋友记录
+        // （仅展示用：记录损坏不拖累整批合入，静默降级为无回退）
+        let fallback_peer = ContactService::get_friend(storage, &conv.peer_root_id)
+            .ok()
+            .flatten()
+            .and_then(|f| f.peer)
+            .map(|p| p.peer_id);
+        events.push(P2pEvent::ChatReceived(json!({
+            "spaceKey": "personal",
+            "conversation": serde_json::to_value(conversation_view(&conv, ctx.online_peers, Some(ctx.my_root_id), fallback_peer.as_deref()))?,
+            "message": serde_json::to_value(message_view(&message, Some(ctx.my_root_id)))?,
+        })));
+    }
+    Ok(InboundDmResult {
+        response: ok_response(),
+        events,
+        auto_accept: None,
+        self_profile: None,
+        device_sync_reply: None,
+        profile_sync_reply: None,
+        pdsync_out: Vec::new(),
+        // host 用 profile_applied 决定是否回写身份文件资料
+        profile_applied,
+    })
+}
+
+/// 从 pdsync 消息键解析 convId（仅用于事件聚合；解析失败丢事件不落库受影响）。
+/// 键格式 `msg:{item|app}:personal:{convId}:{createdAt:013}:{msgId}`——从右侧
+/// 剥掉 msgId 与 13 位零填充时间戳两段，余下即 convId（convId 自身可含 `:`，
+/// 如 `app:{pluginId}`；msgId 含 `:` 时校验失败返回 None，仅丢事件）。
+///
+/// 应用消息键 `msg:app:personal:{pluginId}:...` 的 convId 需补回
+/// `app:` 前缀（与落库侧 `sync::pdsync::message_conv_id` 口径一致），
+/// 否则 `get_conversation` 查不到会话，ChatReceived 被静默丢弃。
+fn pdsync_message_conv_id(key: &str) -> Option<String> {
+    if let Some(rest) = key.strip_prefix("msg:app:personal:") {
+        // pluginId 字符集不含 `:`（is_valid_plugin_id），剥两段后余下即 pluginId
+        let (before_msg_id, _msg_id) = rest.rsplit_once(':')?;
+        let (plugin_id, ts) = before_msg_id.rsplit_once(':')?;
+        if ts.len() == 13 && ts.bytes().all(|b| b.is_ascii_digit()) && !plugin_id.is_empty() {
+            return Some(format!("{}{plugin_id}", crate::message::APP_CONV_PREFIX));
+        }
+        return None;
+    }
+    let rest = key.strip_prefix("msg:item:personal:")?;
+    let (before_msg_id, _msg_id) = rest.rsplit_once(':')?;
+    let (conv_id, ts) = before_msg_id.rsplit_once(':')?;
+    if ts.len() == 13 && ts.bytes().all(|b| b.is_ascii_digit()) {
+        Some(conv_id.to_string())
+    } else {
+        None
+    }
+}
+
+/// conv 合入的远端胜出裁决：镜像 `sync::personal::resolve_personal` 的语义
+/// （vv 比较 → Concurrent 时 ts LWW → ts 相等按 nodeId 字典序兜底）。
+/// personal.rs 的裁决函数为私有，而 conv 分支需要「先裁决、合并值与 pmeta
+/// 同一 batch 落盘」，故在此保持同口径实现。
+fn pdsync_remote_wins(
+    local: Option<&crate::sync::meta::DocMeta>,
+    remote: &crate::sync::meta::DocMeta,
+) -> bool {
+    let Some(local) = local else {
+        return true;
+    };
+    match crate::sync::meta::compare_version_vectors(Some(&local.vv), Some(&remote.vv)) {
+        crate::sync::meta::CompareResult::Equal | crate::sync::meta::CompareResult::Local => false,
+        crate::sync::meta::CompareResult::Remote => true,
+        crate::sync::meta::CompareResult::Concurrent => {
+            if remote.ts != local.ts {
+                return remote.ts > local.ts;
+            }
+            let remote_nid = remote.node_id.as_deref().unwrap_or("");
+            let local_nid = local.node_id.as_deref().unwrap_or("");
+            remote_nid > local_nid
+        }
+    }
+}
+
+/// pdsync-data 单批字节上限（沿用 dm 信封体积约束的保守值）。
+const PDSYNC_BATCH_BYTES: usize = 256 * 1024;
+
+/// 采集 category 相对对端折叠 vv（`remote_vv`）的增量，分批发入 `out`。
+fn push_category_data<S: StorageBackend>(
+    storage: &mut S,
+    out: &mut Vec<PdsyncOut>,
+    category: &crate::sync::pdsync::Category,
+    remote_vv: &crate::sync::meta::VersionVector,
+) {
+    let Ok(records) = crate::sync::pdsync::collect_incremental(storage, category, remote_vv)
+    else {
+        return;
+    };
+    let batches = crate::sync::pdsync::split_batches(records, PDSYNC_BATCH_BYTES);
+    let total = batches.len();
+    for (i, batch) in batches.into_iter().enumerate() {
+        let body = crate::sync::pdsync::build_data_batch(category.name, &batch, i, total);
+        out.push(PdsyncOut::Data { body });
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -890,7 +1362,8 @@ fn handle_org_invite<S: StorageBackend>(
             updated_at: ctx.now_ms,
         },
     };
-    OrganizationService::put_invite_record(storage, &record)?;
+    // P5：邀请记录写 pmeta，供自设备 pdsync 同步
+    OrganizationService::put_invite_record_pdsync(storage, &record, ctx.now_ms, ctx.node_id)?;
 
     let conv = ensure_system_conversation(storage, ctx.now_ms)?;
     let mut events = Vec::new();
@@ -913,7 +1386,15 @@ fn handle_org_invite<S: StorageBackend>(
             created_at: ctx.now_ms,
             ..Default::default()
         };
-        MessageService::append_message(storage, "personal", &conv.id, &message)?;
+        // pdsync 变体：系统会话壳 bump pmeta（随自设备同步传播会话入口）
+        MessageService::append_message_pdsync(
+            storage,
+            "personal",
+            &conv.id,
+            &message,
+            ctx.now_ms,
+            Some(ctx.node_id),
+        )?;
         MessageService::increment_unread(storage, "personal", &conv.id)?;
         // 事件里的会话取 append/unread 之后的最新快照（与 handle_chat 同口径）
         let conv = MessageService::get_conversation(storage, "personal", &conv.id)?
@@ -971,18 +1452,19 @@ fn handle_org_invite_reply<S: StorageBackend>(
     } else {
         OrgInviteStatus::Declined
     };
-    let mut record = OrganizationService::mark_invite_status(
+    let mut record = OrganizationService::mark_invite_status_pdsync(
         storage,
         OrgInviteDirection::Outgoing,
         org_id,
         from,
         status,
         ctx.now_ms,
+        ctx.node_id,
     )?
     .expect("record checked pending above");
     if !nickname.is_empty() && record.peer_nickname != nickname {
         record.peer_nickname = nickname.to_string();
-        OrganizationService::put_invite_record(storage, &record)?;
+        OrganizationService::put_invite_record_pdsync(storage, &record, ctx.now_ms, ctx.node_id)?;
     }
     done(
         ok_response(),

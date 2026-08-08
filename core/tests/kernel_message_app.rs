@@ -254,6 +254,29 @@ fn app_send_list_mark_read_delete_flow() {
     kernel.shutdown().unwrap();
 }
 
+/// appSend（个人空间）：应用会话壳 bump conv pmeta（走 msg:conv 类目进
+/// pdsync），ts 保持 meta_updated_at（未编辑元数据 → 0），不被消息时间推高。
+#[test]
+fn app_send_bumps_conv_pmeta() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut kernel = fresh_kernel(dir.path());
+    init_identity(&mut kernel);
+    kernel.stop_p2p().unwrap();
+
+    kernel
+        .message_app_send(PERSONAL, "spark-example", payload("欢迎"), None)
+        .unwrap();
+    let storage = kernel.__test_storage().unwrap();
+    let conv_key =
+        spark_core::message::conversation_key(PERSONAL, &app_conversation_id("spark-example"));
+    let pmeta = spark_core::sync::get_personal_meta(&storage, &conv_key)
+        .unwrap()
+        .expect("app 会话壳应有 conv pmeta");
+    assert_eq!(pmeta.vv.values().sum::<i64>(), 1, "vv 递增一次");
+    assert_eq!(pmeta.ts, 0, "ts 保持 meta_updated_at=0，不被消息时间推高");
+    kernel.shutdown().unwrap();
+}
+
 #[test]
 fn app_send_rate_limited_and_counted() {
     let dir = tempfile::tempdir().unwrap();

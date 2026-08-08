@@ -97,6 +97,54 @@ impl MessageService {
         Ok(())
     }
 
+    /// 合并远端会话元数据（pdsync-data 的 `msg:conv` 合入）。
+    ///
+    /// 仅取同步字段（置顶/免打扰/草稿 + 会话身份字段 id/kind/title/peer），
+    /// **保留本地消息驱动字段**（unread_count / updated_at / last 消息字段）——
+    /// 那些由消息收发高频刷新，不应被远端元数据快照覆盖。
+    ///
+    /// 返回合并后的记录（不落盘，调用方自行写）。
+    pub fn merge_conv_meta(
+        local: &mut ConversationRecord,
+        remote: &ConversationRecord,
+    ) {
+        // 身份字段：远端为准（同会话 id 同 peer）
+        local.kind = remote.kind;
+        local.title = remote.title.clone();
+        local.peer = remote.peer.clone();
+        // 同步的元数据字段
+        local.pinned_at = remote.pinned_at;
+        local.muted = remote.muted;
+        local.draft = remote.draft.clone();
+        local.meta_updated_at = remote.meta_updated_at;
+        // 保留 local 的 unread_count / updated_at
+    }
+
+    /// pdsync 感知的会话写入：落记录 + bump pmeta（P2 conv 迁入）。
+    ///
+    /// 仅个人空间会话可同步（组织/应用会话不走 pdsync）；键含 `space`，
+    /// 由调用方确保只对 `space=="personal"` 传入 node_id（对组织/应用空间
+    /// 传 `None` 则退化为普通写入，不写 pmeta）。
+    pub fn upsert_conversation_pdsync<S: StorageBackend>(
+        storage: &mut S,
+        space: &str,
+        record: &ConversationRecord,
+        now_ms: i64,
+        node_id: Option<&str>,
+    ) -> Result<()> {
+        let key = conversation_key(space, &record.id);
+        if space == "personal" {
+            if let Some(node_id) = node_id {
+                let json = serde_json::to_string(record)?;
+                crate::sync::put_personal(storage, node_id, &key, &json, now_ms)
+                    .map_err(|e| MessageError::Sync(e))?;
+                return Ok(());
+            }
+        }
+        storage.put(&key, &serde_json::to_string(record)?)?;
+        Ok(())
+    }
+
     /// 清零未读（`markRead`；会话不存在时不动），同时把会话内对端发来的
     /// 消息批量置本地已读（`read` 标记）——`delete_message` 据此精确判断
     /// 「删的是否未读消息」，只对真正未读的消息做未读 -1。
@@ -154,6 +202,21 @@ impl MessageService {
         })
     }
 
+    /// pdsync 感知的写入草稿（写 pmeta）。
+    pub fn set_draft_pdsync<S: StorageBackend>(
+        storage: &mut S,
+        space: &str,
+        conv_id: &str,
+        draft: &str,
+        now_ms: i64,
+        node_id: &str,
+    ) -> Result<()> {
+        Self::mutate_conversation_pdsync(storage, space, conv_id, now_ms, node_id, |conv| {
+            conv.draft = draft.to_string();
+            conv.meta_updated_at = now_ms;
+        })
+    }
+
     /// 切换置顶：`pinnedAt` 在 0 与 `now_ms` 之间切换（会话不存在时不动）。
     /// 刷新 `meta_updated_at`（conv-sync LWW 依据）。
     pub fn toggle_pin<S: StorageBackend>(
@@ -168,6 +231,20 @@ impl MessageService {
         })
     }
 
+    /// pdsync 感知的切换置顶（写 pmeta）。
+    pub fn toggle_pin_pdsync<S: StorageBackend>(
+        storage: &mut S,
+        space: &str,
+        conv_id: &str,
+        now_ms: i64,
+        node_id: &str,
+    ) -> Result<()> {
+        Self::mutate_conversation_pdsync(storage, space, conv_id, now_ms, node_id, |conv| {
+            conv.pinned_at = if conv.pinned_at > 0 { 0 } else { now_ms };
+            conv.meta_updated_at = now_ms;
+        })
+    }
+
     /// 切换免打扰（会话不存在时不动）。刷新 `meta_updated_at`（conv-sync
     /// LWW 依据）。
     pub fn toggle_mute<S: StorageBackend>(
@@ -177,6 +254,20 @@ impl MessageService {
         now_ms: i64,
     ) -> Result<()> {
         Self::mutate_conversation(storage, space, conv_id, |conv| {
+            conv.muted = !conv.muted;
+            conv.meta_updated_at = now_ms;
+        })
+    }
+
+    /// pdsync 感知的切换免打扰（写 pmeta）。
+    pub fn toggle_mute_pdsync<S: StorageBackend>(
+        storage: &mut S,
+        space: &str,
+        conv_id: &str,
+        now_ms: i64,
+        node_id: &str,
+    ) -> Result<()> {
+        Self::mutate_conversation_pdsync(storage, space, conv_id, now_ms, node_id, |conv| {
             conv.muted = !conv.muted;
             conv.meta_updated_at = now_ms;
         })
@@ -200,6 +291,32 @@ impl MessageService {
     ) -> Result<()> {
         Self::delete_all_messages(storage, space, conv_id)?;
         storage.delete(&conversation_key(space, conv_id))?;
+        Ok(())
+    }
+
+    /// pdsync 感知的删除会话：个人空间会话删除写 tombstone pmeta（删除可经
+    /// 自设备 pdsync 传播；裸 delete 会留下非 tombstone 的陈旧 pmeta 污染
+    /// 该类目 folded vv）。组织/应用空间或 node_id 缺失时退化为裸删除。
+    pub fn delete_conversation_pdsync<S: StorageBackend>(
+        storage: &mut S,
+        space: &str,
+        conv_id: &str,
+        now_ms: i64,
+        node_id: Option<&str>,
+    ) -> Result<()> {
+        Self::delete_all_messages(storage, space, conv_id)?;
+        let key = conversation_key(space, conv_id);
+        if space == "personal"
+            && let Some(node_id) = node_id
+        {
+            // 只有记录存在时才 tombstone（避免空删产生垃圾 pmeta，同 delete_tag）
+            if storage.get(&key)?.is_some() {
+                crate::sync::delete_personal(storage, node_id, &key, now_ms)
+                    .map_err(MessageError::Sync)?;
+            }
+            return Ok(());
+        }
+        storage.delete(&key)?;
         Ok(())
     }
 
@@ -243,6 +360,50 @@ impl MessageService {
                 })?,
             ),
         ])?;
+        Ok(())
+    }
+
+    /// pdsync 感知的追加消息：消息/索引/会话壳写入同 [`Self::append_message`]，
+    /// 个人空间会话壳额外 bump pmeta——只收发消息的会话由此进入 pdsync
+    /// （无 pmeta 则对 folded vv 与增量推送不可见）。组织/应用空间或
+    /// node_id 缺失时退化为普通追加。
+    pub fn append_message_pdsync<S: StorageBackend>(
+        storage: &mut S,
+        space: &str,
+        conv_id: &str,
+        message: &MessageRecord,
+        now_ms: i64,
+        node_id: Option<&str>,
+    ) -> Result<()> {
+        Self::append_message(storage, space, conv_id, message)?;
+        if let Some(node_id) = node_id {
+            Self::bump_conv_pmeta_for_message(storage, space, conv_id, now_ms, node_id)?;
+        }
+        Ok(())
+    }
+
+    /// 消息追加路径的 conv pmeta bump（仅个人空间，其余空间直接返回）：
+    /// vv 递增让"只收发消息"的会话壳进入 pdsync folded vv 与增量推送；
+    /// **ts 保持会话的元数据时间 `meta_updated_at`**——LWW 裁决依据的是
+    /// 元数据（pin/mute/draft）编辑时间，消息流把 pmeta.ts 刷成当前时间会
+    /// 让纯收发消息的设备在并发裁决中仅凭 ts 胜出，吃掉对端真实的元数据
+    /// 编辑。人消息（msg:item）与应用消息（msg:app）的 append 路径共用。
+    pub fn bump_conv_pmeta_for_message<S: StorageBackend>(
+        storage: &mut S,
+        space: &str,
+        conv_id: &str,
+        now_ms: i64,
+        node_id: &str,
+    ) -> Result<()> {
+        if space != "personal" {
+            return Ok(());
+        }
+        // 会话刚由调用方的 append 写入，必然存在；读不到时以当前时间兜底
+        let ts = Self::get_conversation(storage, space, conv_id)?
+            .map(|conv| conv.meta_updated_at)
+            .unwrap_or(now_ms);
+        crate::sync::bump_personal_meta(storage, node_id, &conversation_key(space, conv_id), ts)
+            .map_err(MessageError::Sync)?;
         Ok(())
     }
 
@@ -449,6 +610,22 @@ impl MessageService {
         Self::upsert_conversation(storage, space, &conv)
     }
 
+    /// 读-改-写单个会话（pdsync 感知：写 pmeta）；不存在时不动。
+    pub fn mutate_conversation_pdsync<S: StorageBackend>(
+        storage: &mut S,
+        space: &str,
+        conv_id: &str,
+        now_ms: i64,
+        node_id: &str,
+        f: impl FnOnce(&mut ConversationRecord),
+    ) -> Result<()> {
+        let Some(mut conv) = Self::get_conversation(storage, space, conv_id)? else {
+            return Ok(());
+        };
+        f(&mut conv);
+        Self::upsert_conversation_pdsync(storage, space, &conv, now_ms, Some(node_id))
+    }
+
     /// 删除会话全部消息键及其 `msg:byid:` 索引项。
     fn delete_all_messages<S: StorageBackend>(
         storage: &mut S,
@@ -471,5 +648,259 @@ impl MessageService {
         }
         storage.batch(keys.into_iter().map(BatchOperation::delete).collect())?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::MemoryStorage;
+    use crate::message::types::{ConversationKind, ConversationRecord};
+
+    fn conv(id: &str, peer: &str) -> ConversationRecord {
+        ConversationRecord {
+            id: id.to_string(),
+            kind: ConversationKind::Direct,
+            title: peer.to_string(),
+            peer_root_id: peer.to_string(),
+            peer: None,
+            unread_count: 0,
+            pinned_at: 0,
+            muted: false,
+            draft: String::new(),
+            updated_at: 0,
+            meta_updated_at: 0,
+        }
+    }
+
+    /// merge_conv_meta：远端同步字段覆盖本地，但本地消息驱动字段保留。
+    #[test]
+    fn merge_conv_meta_takes_sync_fields_keeps_local_driven() {
+        let mut local = conv("c1", "peer1");
+        local.unread_count = 5; // 本地消息驱动字段
+        local.updated_at = 1000; // 本地消息驱动字段
+        local.muted = false;
+        local.pinned_at = 0;
+        local.draft = String::new();
+
+        let mut remote = conv("c1", "peer1");
+        remote.muted = true; // 远端同步字段
+        remote.pinned_at = 2000;
+        remote.draft = "草稿".to_string();
+        remote.meta_updated_at = 3000;
+        // 远端消息驱动字段（应被忽略，保留本地）
+        remote.unread_count = 0;
+        remote.updated_at = 500;
+
+        MessageService::merge_conv_meta(&mut local, &remote);
+
+        assert_eq!(local.muted, true);
+        assert_eq!(local.pinned_at, 2000);
+        assert_eq!(local.draft, "草稿");
+        assert_eq!(local.meta_updated_at, 3000);
+        // 本地消息驱动字段保留
+        assert_eq!(local.unread_count, 5);
+        assert_eq!(local.updated_at, 1000);
+    }
+
+    /// pdsync 会话写入（个人空间）：写记录 + bump pmeta。
+    #[test]
+    fn upsert_conversation_pdsync_writes_pmeta_for_personal() {
+        let mut storage = MemoryStorage::new();
+        let record = conv("c1", "peer1");
+        MessageService::upsert_conversation_pdsync(
+            &mut storage,
+            "personal",
+            &record,
+            1000,
+            Some("node-a"),
+        )
+        .unwrap();
+
+        let key = conversation_key("personal", "c1");
+        assert!(storage.get(&key).unwrap().is_some());
+        // pmeta 存在且 vv 含 node-a:1
+        let pmeta = crate::sync::get_personal_meta(&storage, &key).unwrap().unwrap();
+        assert_eq!(pmeta.vv.get("node-a"), Some(&1));
+    }
+
+    /// pdsync 会话写入（组织空间）：不写 pmeta（仅组织/应用会话不走 pdsync）。
+    #[test]
+    fn upsert_conversation_pdsync_skips_meta_for_org() {
+        let mut storage = MemoryStorage::new();
+        let record = conv("c1", "peer1");
+        MessageService::upsert_conversation_pdsync(
+            &mut storage,
+            "org:abc",
+            &record,
+            1000,
+            Some("node-a"),
+        )
+        .unwrap();
+
+        let key = conversation_key("org:abc", "c1");
+        assert!(storage.get(&key).unwrap().is_some());
+        assert!(crate::sync::get_personal_meta(&storage, &key).unwrap().is_none());
+    }
+
+    fn text_msg(id: &str, created_at: i64) -> MessageRecord {
+        MessageRecord {
+            id: id.to_string(),
+            sender_id: "peer1".to_string(),
+            sender_name: "对方".to_string(),
+            msg_type: crate::message::MessageType::Text,
+            content: "hi".to_string(),
+            file_size: None,
+            duration: None,
+            link: None,
+            quote: None,
+            created_at,
+            status: None,
+            recalled: false,
+            read: false,
+        }
+    }
+
+    /// pdsync 追加消息（个人空间）：只收发消息的会话壳也 bump pmeta。
+    #[test]
+    fn append_message_pdsync_bumps_conv_pmeta() {
+        let mut storage = MemoryStorage::new();
+        // 存量会话壳：裸写，无 pmeta
+        MessageService::upsert_conversation(&mut storage, "personal", &conv("c1", "peer1")).unwrap();
+        let key = conversation_key("personal", "c1");
+        assert!(crate::sync::get_personal_meta(&storage, &key).unwrap().is_none());
+
+        MessageService::append_message_pdsync(
+            &mut storage,
+            "personal",
+            "c1",
+            &text_msg("m1", 1000),
+            1000,
+            Some("node-a"),
+        )
+        .unwrap();
+        let pmeta = crate::sync::get_personal_meta(&storage, &key).unwrap().unwrap();
+        assert_eq!(pmeta.vv.get("node-a"), Some(&1));
+        // 会话 updated_at 仍按消息时间推进
+        let c = MessageService::get_conversation(&storage, "personal", "c1").unwrap().unwrap();
+        assert_eq!(c.updated_at, 1000);
+
+        // 组织空间：不 bump（组织会话不走 pdsync）
+        MessageService::upsert_conversation(&mut storage, "org:abc", &conv("c2", "peer1")).unwrap();
+        MessageService::append_message_pdsync(
+            &mut storage,
+            "org:abc",
+            "c2",
+            &text_msg("m2", 1000),
+            1000,
+            Some("node-a"),
+        )
+        .unwrap();
+        let key = conversation_key("org:abc", "c2");
+        assert!(crate::sync::get_personal_meta(&storage, &key).unwrap().is_none());
+    }
+
+    /// 消息 append 的 conv pmeta bump 不推高 ts：ts 保持会话的
+    /// `meta_updated_at`（LWW 依据元数据编辑时间，消息流不得扭曲
+    /// pin/mute/draft 的并发裁决），vv 照常递增。
+    #[test]
+    fn append_message_pdsync_bump_preserves_meta_ts() {
+        let mut storage = MemoryStorage::new();
+        // 会话在 t=100 被 pin：meta_updated_at=100，pmeta.ts=100
+        let mut c = conv("c1", "peer1");
+        c.pinned_at = 100;
+        c.meta_updated_at = 100;
+        MessageService::upsert_conversation_pdsync(
+            &mut storage,
+            "personal",
+            &c,
+            100,
+            Some("node-a"),
+        )
+        .unwrap();
+        let key = conversation_key("personal", "c1");
+        let before = crate::sync::get_personal_meta(&storage, &key).unwrap().unwrap();
+        assert_eq!(before.ts, 100);
+
+        // t=5000 仅追加消息：vv 递增，pmeta.ts 仍为 100
+        MessageService::append_message_pdsync(
+            &mut storage,
+            "personal",
+            "c1",
+            &text_msg("m1", 5000),
+            5000,
+            Some("node-a"),
+        )
+        .unwrap();
+        let after = crate::sync::get_personal_meta(&storage, &key).unwrap().unwrap();
+        assert_eq!(after.vv.get("node-a"), Some(&2), "vv 照常递增");
+        assert_eq!(after.ts, 100, "消息 append 不得推高 conv pmeta.ts");
+
+        // 存量会话壳（meta_updated_at=0，裸写无 pmeta）：append bump 后 ts=0
+        MessageService::upsert_conversation(&mut storage, "personal", &conv("c2", "peer1")).unwrap();
+        MessageService::append_message_pdsync(
+            &mut storage,
+            "personal",
+            "c2",
+            &text_msg("m2", 9000),
+            9000,
+            Some("node-a"),
+        )
+        .unwrap();
+        let key2 = conversation_key("personal", "c2");
+        let pmeta2 = crate::sync::get_personal_meta(&storage, &key2).unwrap().unwrap();
+        assert_eq!(pmeta2.vv.get("node-a"), Some(&1));
+        assert_eq!(pmeta2.ts, 0, "无元数据编辑的会话 ts 保持 meta_updated_at=0");
+    }
+
+    /// pdsync 删除会话（个人空间）：记录删除 + tombstone pmeta。
+    #[test]
+    fn delete_conversation_pdsync_leaves_tombstone() {
+        let mut storage = MemoryStorage::new();
+        let record = conv("c1", "peer1");
+        MessageService::upsert_conversation_pdsync(
+            &mut storage,
+            "personal",
+            &record,
+            1000,
+            Some("node-a"),
+        )
+        .unwrap();
+        MessageService::append_message(
+            &mut storage,
+            "personal",
+            "c1",
+            &text_msg("m1", 1000),
+        )
+        .unwrap();
+
+        MessageService::delete_conversation_pdsync(
+            &mut storage,
+            "personal",
+            "c1",
+            2000,
+            Some("node-a"),
+        )
+        .unwrap();
+        let key = conversation_key("personal", "c1");
+        // 记录与消息均删除
+        assert!(storage.get(&key).unwrap().is_none());
+        assert!(MessageService::get_messages(&storage, "personal", "c1").unwrap().is_empty());
+        // tombstone pmeta 保留（删除可传播），vv 递增
+        let pmeta = crate::sync::get_personal_meta(&storage, &key).unwrap().unwrap();
+        assert!(crate::sync::is_tombstone(&pmeta));
+        assert_eq!(pmeta.vv.get("node-a"), Some(&2));
+
+        // 空删（记录不存在）：不产生垃圾 tombstone
+        MessageService::delete_conversation_pdsync(
+            &mut storage,
+            "personal",
+            "ghost",
+            3000,
+            Some("node-a"),
+        )
+        .unwrap();
+        let key = conversation_key("personal", "ghost");
+        assert!(crate::sync::get_personal_meta(&storage, &key).unwrap().is_none());
     }
 }

@@ -175,10 +175,14 @@ impl OrgSyncContext {
         }
     }
 
-    /// 向已会合的自设备重发本机 device-sync + profile-sync + contact-sync
-    /// 快照（断→连跳变触发；装配口径同 `Kernel::broadcast_device_sync` /
-    /// `host.rs::spawn_profile_sync_reply` / `Kernel::broadcast_contact_sync`，
-    /// 失败静默）。
+    /// 向已会合的自设备重发本机数据（断→连跳变触发；失败静默）。
+    ///
+    /// 收尾（§7.1）：能力探测驱动。始终发 `pdsync-hello`；仅当对端设备
+    /// （连接层 peerId）尚未证明支持 pdsync（从未回 need/data）时，才回退
+    /// 补发旧 device/profile/contact/conv 快照。已证明支持的设备只走 pdsync
+    /// 反熵，不再双发旧快照。入站旧 kind 处理保留（跨版本兼容，见 §7.1）。
+    /// 能力集合按 peerId 键控：同身份多台设备共享 rootId，按 rootId 判定会
+    /// 让一台新设备停掉所有自设备的旧快照回退。
     async fn send_self_snapshots(&self, root_id: &str, peer_id: &str) {
         let signing_key = self.signing_key.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let Some(signing_key) = signing_key else {
@@ -190,14 +194,90 @@ impl OrgSyncContext {
             addresses: Vec::new(), // 已连接：dm_direct 短路直发
         };
         let now = self.now();
-        // 1) device-sync：本机设备记录（读取既有记录，不 upsert——避免每 tick
-        //    刷新 updatedAt 推高 LWW 水位）
-        if let Ok(Some(record)) =
-            crate::device::DeviceService::get(&self.storage, &my_peer_id)
-        {
-            if let Ok(body) = serde_json::to_value(&record) {
+        // 对端设备是否已证明支持 pdsync（host `handle_dm` 验签通过后按其
+        // 连接层 peerId 置位）
+        let pdsync_capable = self
+            .pdsync_capable_self_devices
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(peer_id);
+        // 0) pdsync-hello：摘要交换。对端支持则回 need/data 触发收敛；不
+        //    支持则静默（由下方旧快照回退兜底）。
+        if let Ok(hello) = crate::sync::pdsync::build_hello(
+            &self.storage,
+            2_592_000_000,
+            500,
+            "eager",
+        ) {
+            let envelope = crate::kernel::dm_envelope::build_envelope(
+                crate::kernel::dm_envelope::KIND_PDSYNC_HELLO,
+                root_id,
+                root_id,
+                now,
+                hello,
+                &signing_key,
+            );
+            let _ = self.node.dm_direct(&target, envelope).await;
+        }
+        // 收尾（§7.1）：对端未证明支持 pdsync 时才回退补发旧快照；已支持
+        // 的设备只走 pdsync 反熵（不再双发旧通道，避免冗余）。
+        if !pdsync_capable {
+            // 1) device-sync：本机设备记录（读取既有记录，不 upsert——避免每
+            //    tick 刷新 updatedAt 推高 LWW 水位）
+            if let Ok(Some(record)) =
+                crate::device::DeviceService::get(&self.storage, &my_peer_id)
+            {
+                if let Ok(body) = serde_json::to_value(&record) {
+                    let envelope = crate::kernel::dm_envelope::build_envelope(
+                        crate::kernel::dm_envelope::KIND_DEVICE_SYNC,
+                        root_id,
+                        root_id,
+                        now,
+                        body,
+                        &signing_key,
+                    );
+                    let _ = self.node.dm_direct(&target, envelope).await;
+                }
+            }
+            // 2) profile-sync：身份文件全量资料快照（昵称为空回退 rootId 前 8 位）
+            let path = self
+                .data_dir
+                .join("identities")
+                .join(format!("{root_id}.json"));
+            if let Ok(raw) = std::fs::read_to_string(&path) {
+                if let Ok(file) = crate::identity::IdentityFile::from_json(&raw) {
+                    let nickname = file.nickname.clone().unwrap_or_default();
+                    let nickname = if nickname.trim().is_empty() {
+                        root_id.chars().take(8).collect::<String>()
+                    } else {
+                        nickname
+                    };
+                    let body = serde_json::json!({
+                        "nickname": nickname,
+                        "avatar": file.avatar,
+                        "gender": file.gender,
+                        "region": file.region,
+                        "signature": file.signature,
+                        "updatedAt": file.updated_at,
+                    });
+                    let envelope = crate::kernel::dm_envelope::build_envelope(
+                        crate::kernel::dm_envelope::KIND_PROFILE_SYNC,
+                        root_id,
+                        root_id,
+                        now,
+                        body,
+                        &signing_key,
+                    );
+                    let _ = self.node.dm_direct(&target, envelope).await;
+                }
+            }
+            // 3) contact-sync：通讯录全量快照（朋友/申请/标签/分组/拉黑；
+            //    LWW 幂等，对端按时间戳裁决，重复投递无害）
+            if let Ok(body) =
+                crate::contact::build_contact_sync_snapshot(&self.storage, root_id)
+            {
                 let envelope = crate::kernel::dm_envelope::build_envelope(
-                    crate::kernel::dm_envelope::KIND_DEVICE_SYNC,
+                    crate::kernel::dm_envelope::KIND_CONTACT_SYNC,
                     root_id,
                     root_id,
                     now,
@@ -206,30 +286,10 @@ impl OrgSyncContext {
                 );
                 let _ = self.node.dm_direct(&target, envelope).await;
             }
-        }
-        // 2) profile-sync：身份文件全量资料快照（昵称为空回退 rootId 前 8 位）
-        let path = self
-            .data_dir
-            .join("identities")
-            .join(format!("{root_id}.json"));
-        if let Ok(raw) = std::fs::read_to_string(&path) {
-            if let Ok(file) = crate::identity::IdentityFile::from_json(&raw) {
-                let nickname = file.nickname.clone().unwrap_or_default();
-                let nickname = if nickname.trim().is_empty() {
-                    root_id.chars().take(8).collect::<String>()
-                } else {
-                    nickname
-                };
-                let body = serde_json::json!({
-                    "nickname": nickname,
-                    "avatar": file.avatar,
-                    "gender": file.gender,
-                    "region": file.region,
-                    "signature": file.signature,
-                    "updatedAt": file.updated_at,
-                });
+            // 4) conv-sync：会话元数据快照（direct 会话外壳 + 置顶/免打扰/草稿）
+            if let Ok(body) = crate::message::build_conv_sync_snapshot(&self.storage) {
                 let envelope = crate::kernel::dm_envelope::build_envelope(
-                    crate::kernel::dm_envelope::KIND_PROFILE_SYNC,
+                    crate::kernel::dm_envelope::KIND_CONV_SYNC,
                     root_id,
                     root_id,
                     now,
@@ -238,31 +298,6 @@ impl OrgSyncContext {
                 );
                 let _ = self.node.dm_direct(&target, envelope).await;
             }
-        }
-        // 3) contact-sync：通讯录全量快照（朋友/申请/标签/分组/拉黑；
-        //    LWW 幂等，对端按时间戳裁决，重复投递无害）
-        if let Ok(body) = crate::contact::build_contact_sync_snapshot(&self.storage, root_id) {
-            let envelope = crate::kernel::dm_envelope::build_envelope(
-                crate::kernel::dm_envelope::KIND_CONTACT_SYNC,
-                root_id,
-                root_id,
-                now,
-                body,
-                &signing_key,
-            );
-            let _ = self.node.dm_direct(&target, envelope).await;
-        }
-        // 4) conv-sync：会话元数据快照（direct 会话外壳 + 置顶/免打扰/草稿）
-        if let Ok(body) = crate::message::build_conv_sync_snapshot(&self.storage) {
-            let envelope = crate::kernel::dm_envelope::build_envelope(
-                crate::kernel::dm_envelope::KIND_CONV_SYNC,
-                root_id,
-                root_id,
-                now,
-                body,
-                &signing_key,
-            );
-            let _ = self.node.dm_direct(&target, envelope).await;
         }
     }
 

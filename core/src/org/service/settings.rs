@@ -35,6 +35,53 @@ impl OrganizationService {
         current_root_id: &str,
         now_ms: i64,
     ) -> Result<OrganizationRecord> {
+        Self::update_org_info_impl(
+            storage,
+            org_id,
+            name,
+            description,
+            avatar,
+            current_root_id,
+            now_ms,
+            None,
+        )
+    }
+
+    /// pdsync 感知的 [`Self::update_org_info`]：组织记录落库走
+    /// [`Self::save_record_pdsync`]（`org:meta` 写 pmeta，可经自设备 pdsync 同步）。
+    pub fn update_org_info_pdsync<S: StorageBackend>(
+        storage: &mut S,
+        org_id: &str,
+        name: Option<&str>,
+        description: Option<&str>,
+        avatar: Option<&str>,
+        current_root_id: &str,
+        now_ms: i64,
+        node_id: &str,
+    ) -> Result<OrganizationRecord> {
+        Self::update_org_info_impl(
+            storage,
+            org_id,
+            name,
+            description,
+            avatar,
+            current_root_id,
+            now_ms,
+            Some(node_id),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn update_org_info_impl<S: StorageBackend>(
+        storage: &mut S,
+        org_id: &str,
+        name: Option<&str>,
+        description: Option<&str>,
+        avatar: Option<&str>,
+        current_root_id: &str,
+        now_ms: i64,
+        node_id: Option<&str>,
+    ) -> Result<OrganizationRecord> {
         let mut record = Self::require_organization(storage, org_id)?;
         Self::require_admin(&record, current_root_id)?;
 
@@ -108,7 +155,10 @@ impl OrganizationService {
             previous_last_synced_at,
             transaction.created_at,
         );
-        Self::save_record(storage, &record)?;
+        match node_id {
+            Some(node_id) => Self::save_record_pdsync(storage, &record, now_ms, node_id)?,
+            None => Self::save_record(storage, &record)?,
+        }
         Ok(record)
     }
 
@@ -123,6 +173,37 @@ impl OrganizationService {
         gateways: &[String],
         current_root_id: &str,
         now_ms: i64,
+    ) -> Result<OrganizationRecord> {
+        Self::set_org_gateways_impl(storage, org_id, gateways, current_root_id, now_ms, None)
+    }
+
+    /// pdsync 感知的 [`Self::set_org_gateways`]：组织记录落库走
+    /// [`Self::save_record_pdsync`]（`org:meta` 写 pmeta，可经自设备 pdsync 同步）。
+    pub fn set_org_gateways_pdsync<S: StorageBackend>(
+        storage: &mut S,
+        org_id: &str,
+        gateways: &[String],
+        current_root_id: &str,
+        now_ms: i64,
+        node_id: &str,
+    ) -> Result<OrganizationRecord> {
+        Self::set_org_gateways_impl(
+            storage,
+            org_id,
+            gateways,
+            current_root_id,
+            now_ms,
+            Some(node_id),
+        )
+    }
+
+    fn set_org_gateways_impl<S: StorageBackend>(
+        storage: &mut S,
+        org_id: &str,
+        gateways: &[String],
+        current_root_id: &str,
+        now_ms: i64,
+        node_id: Option<&str>,
     ) -> Result<OrganizationRecord> {
         let mut record = Self::require_organization(storage, org_id)?;
         Self::require_admin(&record, current_root_id)?;
@@ -168,7 +249,10 @@ impl OrganizationService {
             previous_last_synced_at,
             transaction.created_at,
         );
-        Self::save_record(storage, &record)?;
+        match node_id {
+            Some(node_id) => Self::save_record_pdsync(storage, &record, now_ms, node_id)?,
+            None => Self::save_record(storage, &record)?,
+        }
         Ok(record)
     }
 
@@ -188,6 +272,41 @@ impl OrganizationService {
         display_name: Option<&str>,
         current_root_id: &str,
         now_ms: i64,
+    ) -> Result<OrganizationRecord> {
+        Self::set_org_public_impl(storage, org_id, public, display_name, current_root_id, now_ms, None)
+    }
+
+    /// pdsync 感知的 [`Self::set_org_public`]：组织记录落库走
+    /// [`Self::save_record_pdsync`]（`org:meta` 写 pmeta，可经自设备 pdsync 同步）。
+    pub fn set_org_public_pdsync<S: StorageBackend>(
+        storage: &mut S,
+        org_id: &str,
+        public: bool,
+        display_name: Option<&str>,
+        current_root_id: &str,
+        now_ms: i64,
+        node_id: &str,
+    ) -> Result<OrganizationRecord> {
+        Self::set_org_public_impl(
+            storage,
+            org_id,
+            public,
+            display_name,
+            current_root_id,
+            now_ms,
+            Some(node_id),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn set_org_public_impl<S: StorageBackend>(
+        storage: &mut S,
+        org_id: &str,
+        public: bool,
+        display_name: Option<&str>,
+        current_root_id: &str,
+        now_ms: i64,
+        node_id: Option<&str>,
     ) -> Result<OrganizationRecord> {
         let mut record = Self::require_organization(storage, org_id)?;
         Self::require_admin(&record, current_root_id)?;
@@ -259,7 +378,10 @@ impl OrganizationService {
             previous_last_synced_at,
             transaction.created_at,
         );
-        Self::save_record(storage, &record)?;
+        match node_id {
+            Some(node_id) => Self::save_record_pdsync(storage, &record, now_ms, node_id)?,
+            None => Self::save_record(storage, &record)?,
+        }
         Ok(record)
     }
 }

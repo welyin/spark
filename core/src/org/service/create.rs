@@ -29,6 +29,28 @@ impl OrganizationService {
         current_root_id: &str,
         now_ms: i64,
     ) -> Result<OrganizationRecord> {
+        Self::create_organization_impl(storage, input, current_root_id, now_ms, None)
+    }
+
+    /// pdsync 感知的 [`Self::create_organization`]：组织记录落库走
+    /// [`Self::save_record_pdsync`]（`org:meta` 写 pmeta，可经自设备 pdsync 同步）。
+    pub fn create_organization_pdsync<S: StorageBackend>(
+        storage: &mut S,
+        input: &CreateOrganizationInput,
+        current_root_id: &str,
+        now_ms: i64,
+        node_id: &str,
+    ) -> Result<OrganizationRecord> {
+        Self::create_organization_impl(storage, input, current_root_id, now_ms, Some(node_id))
+    }
+
+    fn create_organization_impl<S: StorageBackend>(
+        storage: &mut S,
+        input: &CreateOrganizationInput,
+        current_root_id: &str,
+        now_ms: i64,
+        node_id: Option<&str>,
+    ) -> Result<OrganizationRecord> {
         let name = normalize_text(&input.name, "Organization name")?;
         let description = input
             .description
@@ -130,7 +152,10 @@ impl OrganizationService {
             sections: pick_sync_sections_by_priority(),
             last_synced_at: 0,
         });
-        Self::save_record(storage, &record)?;
+        match node_id {
+            Some(node_id) => Self::save_record_pdsync(storage, &record, now_ms, node_id)?,
+            None => Self::save_record(storage, &record)?,
+        }
         Ok(record)
     }
 
@@ -140,6 +165,28 @@ impl OrganizationService {
         org_id: &str,
         current_root_id: &str,
         now_ms: i64,
+    ) -> Result<()> {
+        Self::delete_organization_impl(storage, org_id, current_root_id, now_ms, None)
+    }
+
+    /// pdsync 感知的 [`Self::delete_organization`]：删除走
+    /// [`Self::delete_record_pdsync`]（tombstone pmeta，删除可经自设备 pdsync 传播）。
+    pub fn delete_organization_pdsync<S: StorageBackend>(
+        storage: &mut S,
+        org_id: &str,
+        current_root_id: &str,
+        now_ms: i64,
+        node_id: &str,
+    ) -> Result<()> {
+        Self::delete_organization_impl(storage, org_id, current_root_id, now_ms, Some(node_id))
+    }
+
+    fn delete_organization_impl<S: StorageBackend>(
+        storage: &mut S,
+        org_id: &str,
+        current_root_id: &str,
+        now_ms: i64,
+        node_id: Option<&str>,
     ) -> Result<()> {
         let record = Self::require_organization(storage, org_id)?;
         Self::require_admin(&record, current_root_id)?;
@@ -160,7 +207,10 @@ impl OrganizationService {
                 ),
             },
         )?;
-        storage.delete(&organization_key(org_id))?;
+        match node_id {
+            Some(node_id) => Self::delete_record_pdsync(storage, org_id, now_ms, node_id)?,
+            None => storage.delete(&organization_key(org_id))?,
+        }
         Ok(())
     }
 }
