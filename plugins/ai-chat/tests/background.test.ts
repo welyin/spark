@@ -169,7 +169,7 @@ describe('ai-chat background script', () => {
 
     expect(host.fake.sys.exec).toHaveBeenCalledWith(
       'C:/tools/codebuddy.exe',
-      ['--print', '帮我看看这段代码'],
+      ['--print', '--', '帮我看看这段代码'],
       undefined
     );
     expect(host.calls.replies).toHaveLength(1);
@@ -199,7 +199,7 @@ describe('ai-chat background script', () => {
     host.emit(messagePayload('cb', 'hi'));
     await flush();
 
-    expect(host.fake.sys.exec).toHaveBeenCalledWith('codebuddy', ['--print', 'hi'], 'D:/proj');
+    expect(host.fake.sys.exec).toHaveBeenCalledWith('codebuddy', ['--print', '--', 'hi'], 'D:/proj');
   });
 
   it('openai 后端：消息 → /chat/completions（带鉴权与 system prompt）→ 回复', async () => {

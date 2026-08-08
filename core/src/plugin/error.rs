@@ -21,6 +21,10 @@ pub enum PluginError {
     #[error("invalid plugin host call: {0}")]
     InvalidCall(String),
 
+    /// capability 所需权限未授予（文案前缀对齐桥 dispatcher 的 Access denied）。
+    #[error("Access denied: {0}")]
+    PermissionDenied(String),
+
     /// 业务输入非法（用户可见文案与对应 kernel 门面分支逐字一致）。
     #[error("{0}")]
     InvalidInput(String),

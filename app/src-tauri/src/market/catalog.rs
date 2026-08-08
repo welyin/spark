@@ -102,8 +102,8 @@ pub fn list_plugin_catalog() -> Vec<PluginCatalogItem> {
             version: "0.1.0".to_string(),
             views: vec!["chat".to_string()],
             permissions: vec![
-                "docs:read".to_string(),
-                "docs:write".to_string(),
+                "storage:read".to_string(),
+                "storage:write".to_string(),
                 "message:app".to_string(),
                 "system:exec".to_string(),
                 "network:fetch".to_string(),

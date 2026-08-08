@@ -73,7 +73,7 @@
 </template>
 
 <script lang="ts">
-import { computed, defineComponent, ref, watch, type PropType } from 'vue';
+import { computed, defineComponent, onUnmounted, ref, watch, type PropType } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   ArrowLeft,
@@ -127,28 +127,41 @@ export default defineComponent({
       return friendOf(props.spaceKey, conv.peerId) === undefined;
     });
     // bot 会话（peerId 以 bot: 开头）无 P2P peer，online 恒 false，其"在线"=
-    // 插件后台运行时存活（内核 QuickJS 沙箱，权威来源）；会话切换时查询一次。
+    // 插件后台运行时存活（内核 QuickJS 沙箱，权威来源）；内核暂无存活变更事件，
+    // 会话打开期间轻量轮询（后台中途崩溃/重启时指示能跟上），卸载时清除。
     // 真人会话用 P2P online 字段
     const botOnline = ref(false);
     let botOnlineQuerySeq = 0;
+    let botOnlineTimer: ReturnType<typeof setInterval> | undefined;
+    function refreshBotOnline(peerId: string) {
+      const pluginId = peerId.split(':')[1] || '';
+      const seq = ++botOnlineQuerySeq;
+      window.electronAPI?.pluginRuntime
+        ?.isBackgroundRunning(pluginId)
+        .then((running) => {
+          if (seq === botOnlineQuerySeq) botOnline.value = Boolean(running);
+        })
+        .catch(() => {});
+    }
     watch(
       () => props.conversation.peerId,
       (peerId) => {
+        if (botOnlineTimer !== undefined) {
+          clearInterval(botOnlineTimer);
+          botOnlineTimer = undefined;
+        }
         if (!peerId?.startsWith('bot:')) {
           botOnline.value = false;
           return;
         }
-        const pluginId = peerId.split(':')[1] || '';
-        const seq = ++botOnlineQuerySeq;
-        window.electronAPI?.pluginRuntime
-          ?.isBackgroundRunning(pluginId)
-          .then((running) => {
-            if (seq === botOnlineQuerySeq) botOnline.value = Boolean(running);
-          })
-          .catch(() => {});
+        refreshBotOnline(peerId);
+        botOnlineTimer = setInterval(() => refreshBotOnline(peerId), 20000);
       },
       { immediate: true }
     );
+    onUnmounted(() => {
+      if (botOnlineTimer !== undefined) clearInterval(botOnlineTimer);
+    });
     const effectiveOnline = computed(() => {
       const peerId = props.conversation.peerId;
       if (peerId?.startsWith('bot:')) {

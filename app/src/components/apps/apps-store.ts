@@ -17,9 +17,9 @@ export function appIconBackground(item: PluginMarketItemDto): string {
 /** 应用列表默认分组（ui-apps-market §2.2，暂定分类）。 */
 export const LIST_GROUPS = ['常用', '办公', '社交', '工具', '其他'] as const;
 
-/** 应用市场分类（ui-apps-market §3.3，不含「全部」）。 */
-export type MarketCategory = '基础' | '办公' | '社交' | '工具' | 'AI 助手' | '游戏' | '其他';
-export const MARKET_CATEGORIES: MarketCategory[] = ['基础', '办公', '社交', '工具', 'AI 助手', '游戏', '其他'];
+/** 应用市场分类（ui-apps-market §3.3，不含「全部」；与 category 枚举的映射见 marketCategoryOf）。 */
+export type MarketCategory = '基础' | '社交' | '工具' | 'AI 助手' | '游戏' | '其他';
+export const MARKET_CATEGORIES: MarketCategory[] = ['基础', '社交', '工具', 'AI 助手', '游戏', '其他'];
 
 /** 权限标识的中文展示名（沿用旧版插件市场页）。 */
 export const PERMISSION_LABELS: Record<string, string> = {

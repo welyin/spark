@@ -161,7 +161,7 @@ const PLUGIN_CATALOG: PluginCatalogItem[] = [
     version: aiChatManifest.version,
     views: aiChatManifest.views.map((view: { id: string }) => view.id),
     supportedSpaces: aiChatManifest.supportedSpaces as PluginSpaceType[],
-    permissions: ['docs:read', 'docs:write', 'message:app', 'system:exec', 'network:fetch'],
+    permissions: ['storage:read', 'storage:write', 'message:app', 'system:exec', 'network:fetch'],
     requires: {
       capabilities: ['system:exec'],
       platforms: ['desktop'],

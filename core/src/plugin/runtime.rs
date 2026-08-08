@@ -82,6 +82,7 @@ pub(crate) fn spawn_plugin_runtime(
     script: &str,
     host: PluginHostShared,
     registry: super::registry::PluginRuntimeRegistry,
+    permissions: Vec<String>,
 ) -> Result<(PluginRuntimeHandle, std::thread::JoinHandle<()>)> {
     let (event_tx, event_rx) = channel::<PluginEvent>();
     let stop = Arc::new(AtomicBool::new(false));
@@ -96,6 +97,7 @@ pub(crate) fn spawn_plugin_runtime(
     let rtx = super::host_env::PluginRuntimeContext {
         plugin_id: plugin_id_owned.clone(),
         event_tx: handle.event_tx.clone(),
+        permissions,
     };
     let join = std::thread::Builder::new()
         .name(format!("plugin-{plugin_id}"))
@@ -147,14 +149,15 @@ fn run_plugin(
         match rx.recv_timeout(EVENT_POLL_INTERVAL) {
             Ok(PluginEvent::Dispatch { kind, payload }) => {
                 let payload_json = payload.to_string();
-                let outcome = context.with(|ctx| {
-                    deadline.store(now_epoch_ms() + JS_CALLBACK_DEADLINE_MS, Ordering::Relaxed);
-                    let result = dispatch_js(&ctx, &kind, &payload_json);
-                    deadline.store(NO_DEADLINE, Ordering::Relaxed);
-                    result
-                });
-                // JS 回调异常（含超时中断）：崩溃即退出，不拖着错误状态继续跑
+                // 时限覆盖回调与随后的 microtask 排空：await 续体（Promise
+                // 回调）里的死循环同样被熔断，不得逃逸时限
+                deadline.store(now_epoch_ms() + JS_CALLBACK_DEADLINE_MS, Ordering::Relaxed);
+                let outcome = context.with(|ctx| dispatch_js(&ctx, &kind, &payload_json));
+                let drained = drain_pending_jobs(&runtime);
+                deadline.store(NO_DEADLINE, Ordering::Relaxed);
+                // JS 回调/续体异常（含超时中断）：崩溃即退出，不拖着错误状态继续跑
                 outcome?;
+                drained?;
             }
             Ok(PluginEvent::Query {
                 query_id,
@@ -162,26 +165,18 @@ fn run_plugin(
                 payload,
             }) => {
                 let payload_json = payload.to_string();
-                let outcome = context.with(|ctx| {
-                    deadline.store(now_epoch_ms() + JS_CALLBACK_DEADLINE_MS, Ordering::Relaxed);
-                    let result = query_js(&ctx, query_id, &kind, &payload_json);
-                    deadline.store(NO_DEADLINE, Ordering::Relaxed);
-                    result
-                });
+                deadline.store(now_epoch_ms() + JS_CALLBACK_DEADLINE_MS, Ordering::Relaxed);
+                let outcome = context.with(|ctx| query_js(&ctx, query_id, &kind, &payload_json));
+                let drained = drain_pending_jobs(&runtime);
+                deadline.store(NO_DEADLINE, Ordering::Relaxed);
                 outcome?;
+                drained?;
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
         }
         if stop.load(Ordering::Relaxed) {
             break;
-        }
-        // drain microtask 队列（Promise 回调；host 调用当前全同步，本循环
-        // 为后续异步能力预留）
-        while runtime.is_job_pending() {
-            if runtime.execute_pending_job().is_err() {
-                break;
-            }
         }
     }
     Ok(())
@@ -263,6 +258,18 @@ fn now_epoch_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// 排空 microtask 队列（Promise 回调）。调用方须保持中断时限武装到本函数
+/// 返回，使续体（await 之后的代码）里的死循环同样被熔断；任务出错（含
+/// 超时中断）即报错返回。
+fn drain_pending_jobs(runtime: &Runtime) -> Result<()> {
+    while runtime.is_job_pending() {
+        runtime
+            .execute_pending_job()
+            .map_err(|e| PluginError::Script(format!("microtask job failed: {e}")))?;
+    }
+    Ok(())
 }
 
 /// JS 侧运行时门面（插件后台 API 面；`__spark_host_call` 由 Rust 侧注入，
@@ -393,7 +400,15 @@ const PRELUDE: &str = r#"
 
     globalThis.__spark_query = function (queryId, kind, payloadJson) {
         var fn = queryHandlers[kind];
-        Promise.resolve(typeof fn === 'function' ? fn(JSON.parse(payloadJson)) : null).then(
+        var result;
+        try {
+            // 同步调用必须包 try/catch：处理器同步抛错（含 payload JSON
+            // 解析失败）要转成拒绝应答回流，不能冒出 __spark_query 终结线程
+            result = typeof fn === 'function' ? fn(JSON.parse(payloadJson)) : null;
+        } catch (error) {
+            result = Promise.reject(error);
+        }
+        Promise.resolve(result).then(
             function (value) {
                 call('query.respond', { queryId: queryId, result: value === undefined ? null : value });
             },
@@ -455,6 +470,7 @@ mod tests {
             script,
             bare_host(),
             PluginRuntimeRegistry::default(),
+            Vec::new(),
         )
         .unwrap();
         handle
@@ -471,12 +487,43 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn infinite_loop_in_continuation_interrupted_by_deadline() {
+        // Promise 续体在 microtask 排空阶段执行（事件分发之后）：其中的
+        // 死循环同样受 5s 时限熔断，线程随之退出
+        let script = r#"
+spark.onMessage(function () {
+    Promise.resolve().then(function () { while (true) {} });
+});
+"#;
+        let (handle, join) = spawn_plugin_runtime(
+            "loop-then-test",
+            script,
+            bare_host(),
+            PluginRuntimeRegistry::default(),
+            Vec::new(),
+        )
+        .unwrap();
+        handle
+            .dispatch(PluginEvent::Dispatch {
+                kind: "message".to_string(),
+                payload: serde_json::json!({
+                    "spaceKey": "personal",
+                    "conversation": { "id": "dm:x", "peerId": "bot:loop-then-test:x" },
+                    "message": { "senderId": "me" }
+                }),
+            })
+            .unwrap();
+        wait_until(|| join.is_finished(), "续体死循环线程被超时中断退出");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn script_syntax_error_exits_thread() {
         let (handle, join) = spawn_plugin_runtime(
             "bad-script",
             "this is not js",
             bare_host(),
             PluginRuntimeRegistry::default(),
+            Vec::new(),
         )
         .unwrap();
         wait_until(|| join.is_finished(), "语法错误脚本线程退出");
@@ -498,6 +545,7 @@ mod tests {
             "",
             bare_host(),
             PluginRuntimeRegistry::default(),
+            Vec::new(),
         )
         .unwrap();
         assert!(!join.is_finished());

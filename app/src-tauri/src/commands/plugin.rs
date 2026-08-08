@@ -241,7 +241,8 @@ pub fn plugin_background_running(
 /// `plugin-host-query`：宿主 → 插件后台运行时反向查询（如删除联系人前的
 /// 「bot 还在吗」询问）。插件未运行/超时（2s）返回 None——调用方按「查询
 /// 无结果」的保守语义处理（删除询问场景即放行）。
-/// spawn_blocking：内核侧同步阻塞等应答，不占命令调用线程。
+/// spawn_blocking：内核侧同步阻塞等应答，不占命令调用线程；锁内仅克隆查询
+/// 句柄（Arc 共享）即释锁，2s 等待不占内核全局锁，其他命令不被卡住。
 #[tauri::command]
 pub async fn plugin_host_query(
     webview: tauri::Webview,
@@ -253,10 +254,11 @@ pub async fn plugin_host_query(
     crate::domain_guard::require_system_domain(&webview)?;
     let kernel = Arc::clone(state.inner());
     tauri::async_runtime::spawn_blocking(move || {
-        let guard = kernel
+        let query = kernel
             .lock()
-            .map_err(|_| "kernel state lock poisoned".to_string())?;
-        Ok(guard.plugin_host_query(&plugin_id, &kind, payload))
+            .map_err(|_| "kernel state lock poisoned".to_string())?
+            .plugin_host_query_handle();
+        Ok(query.query(&plugin_id, &kind, payload))
     })
     .await
     .map_err(|e| format!("kernel task join failed: {e}"))?

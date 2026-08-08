@@ -56,8 +56,7 @@ const CALL_PERMISSIONS: Record<string, string> = {
   // 插件联系人消息方法（统一在 messages 命名空间下）
   'messages.registerAsContact': 'message:app',
   'messages.unregisterAsContact': 'message:app',
-  'messages.sendResponse': 'message:app',
-  'messages.waitForMessage': 'message:app'
+  'messages.sendResponse': 'message:app'
 };
 
 /**

@@ -171,7 +171,7 @@
             />
           </label>
           <p class="form-hint">
-            执行 <code>codebuddy --print "..."</code>，stdout 即为回复。工作目录是 CLI 读取代码/文档上下文的根路径，留空则继承宿主进程目录（不可控，不建议）。
+            执行 <code>codebuddy --print -- "..."</code>（<code>--</code> 终止选项解析，消息以 <code>-</code> 开头也不会被当成 CLI 标志），stdout 即为回复。工作目录是 CLI 读取代码/文档上下文的根路径，留空则继承宿主进程目录（不可控，不建议）。
           </p>
 
           <!-- 环境检测与一键安装 -->

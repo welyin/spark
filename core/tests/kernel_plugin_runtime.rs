@@ -25,6 +25,21 @@ spark.onMessage(function (payload) {
 });
 "#;
 
+/// 测试插件的授权清单（对齐市场 grantedPermissions 形态：基础权限恒在列 +
+/// 声明的高级权限；capability 分发按此清单逐调用强制）。
+fn test_permissions() -> Vec<String> {
+    [
+        "storage:read",
+        "storage:write",
+        "message:app",
+        "system:exec",
+        "network:fetch",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
+}
+
 fn kernel_with_identity() -> (tempfile::TempDir, Kernel, String) {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut kernel = fresh_kernel(dir.path());
@@ -67,7 +82,7 @@ fn bot_replies(kernel: &Kernel, conv_id: &str) -> Vec<String> {
 fn bot_message_reaches_runtime_and_reply_persisted() {
     let (_dir, mut kernel, _root) = kernel_with_identity();
     let conv_id = setup_bot_conv(&mut kernel);
-    kernel.plugin_start_background("echo-plugin", ECHO_SCRIPT).unwrap();
+    kernel.plugin_start_background("echo-plugin", ECHO_SCRIPT, &test_permissions()).unwrap();
 
     send_text(&mut kernel, &conv_id, "hello");
 
@@ -88,7 +103,7 @@ fn chat_received_broadcast_routed_to_runtime() {
     // 同款）→ 路由任务 → 插件。这里直接经测试口发广播模拟。
     let (_dir, mut kernel, _root) = kernel_with_identity();
     let conv_id = setup_bot_conv(&mut kernel);
-    kernel.plugin_start_background("echo-plugin", ECHO_SCRIPT).unwrap();
+    kernel.plugin_start_background("echo-plugin", ECHO_SCRIPT, &test_permissions()).unwrap();
 
     let conversations = kernel.message_list_conversations(PERSONAL).unwrap();
     let conv = conversations.iter().find(|c| c.id == conv_id).unwrap();
@@ -113,9 +128,9 @@ fn stop_halts_processing_and_restart_allowed() {
     let (_dir, mut kernel, _root) = kernel_with_identity();
     let conv_id = setup_bot_conv(&mut kernel);
 
-    kernel.plugin_start_background("echo-plugin", ECHO_SCRIPT).unwrap();
+    kernel.plugin_start_background("echo-plugin", ECHO_SCRIPT, &test_permissions()).unwrap();
     // 重复启动被拒
-    let duplicated = kernel.plugin_start_background("echo-plugin", ECHO_SCRIPT);
+    let duplicated = kernel.plugin_start_background("echo-plugin", ECHO_SCRIPT, &test_permissions());
     assert!(duplicated.is_err(), "重复启动应报 AlreadyRunning");
 
     kernel.plugin_stop_background("echo-plugin").unwrap();
@@ -126,7 +141,7 @@ fn stop_halts_processing_and_restart_allowed() {
     assert!(bot_replies(&kernel, &conv_id).is_empty(), "停机后不得处理消息");
 
     // 停机后可重新启动并恢复处理
-    kernel.plugin_start_background("echo-plugin", ECHO_SCRIPT).unwrap();
+    kernel.plugin_start_background("echo-plugin", ECHO_SCRIPT, &test_permissions()).unwrap();
     send_text(&mut kernel, &conv_id, "after-restart");
     wait_until(
         || bot_replies(&kernel, &conv_id) == vec!["echo: after-restart".to_string()],
@@ -144,7 +159,7 @@ fn plugin_registers_own_bot_via_capability() {
 spark.ensureBot('helper', '自助 Bot');
 spark.onMessage(function (payload) { spark.reply(payload, 'pong'); });
 "#;
-    kernel.plugin_start_background("echo-plugin", script).unwrap();
+    kernel.plugin_start_background("echo-plugin", script, &test_permissions()).unwrap();
 
     wait_until(
         || {
@@ -181,7 +196,7 @@ if (result.items.length !== 1) throw new Error('docs.query mismatch');
 spark.ensureBot('docs-bot', 'Docs Bot');
 spark.onMessage(function () {});
 "#;
-    kernel.plugin_start_background("echo-plugin", script).unwrap();
+    kernel.plugin_start_background("echo-plugin", script, &test_permissions()).unwrap();
     // 脚本加载即执行 docs 写入（JS 线程异步，轮询等待）
     wait_until(
         || {
@@ -197,27 +212,36 @@ spark.onMessage(function () {});
 
 #[test]
 fn docs_domain_whitelist() {
-    // 域约束：缺省/自身域/空间域放行；其他插件域、组织域拒绝
+    // 域约束：缺省/自身域/plugin: 根域可读写；空间根域仅限白名单遗留集合
+    // 的只读（写一律拒，防伪造共享空间数据）；其他插件域、组织域拒绝
     let (_dir, mut kernel, _root) = kernel_with_identity();
     let script = r#"
-function tryQuery(domain) {
-    try { spark.docs.query('c', {}, null, domain); return 'ok'; }
+function tryQuery(domain, collection) {
+    try { spark.docs.query(collection || 'c', {}, null, domain); return 'ok'; }
+    catch (e) { return 'err'; }
+}
+function tryPut(domain, collection) {
+    try { spark.docs.put(collection || 'c', 'x', { v: 1 }, null, domain); return 'ok'; }
     catch (e) { return 'err'; }
 }
 var report = [
-    tryQuery(null),                    // 缺省 → 插件自身域
-    tryQuery('echo-plugin'),           // 自身域
-    tryQuery('plugin:echo-plugin'),    // plugin: 根域（UI 桥历史数据面）
-    tryQuery('space:personal'),        // 空间域（更早历史遗留）
-    tryQuery('space:org'),
-    tryQuery('other-plugin'),          // 他插件域 → 拒
-    tryQuery('plugin:other-plugin'),   // 他插件根域 → 拒
-    tryQuery('org:some-org')           // 组织域 → 拒
+    tryQuery(null),                          // 缺省 → 插件自身域
+    tryQuery('echo-plugin'),                 // 自身域
+    tryQuery('plugin:echo-plugin'),          // plugin: 根域（UI 桥历史数据面）
+    tryQuery('space:personal', 'ai_chat_bots'), // 空间域遗留集合 → 只读放行
+    tryQuery('space:org', 'ai_chat_bots'),
+    tryQuery('space:personal'),              // 空间域非白名单集合 → 拒
+    tryPut('space:personal', 'ai_chat_bots'),   // 空间域写（白名单集合也拒）
+    tryPut('space:org'),                     // 空间域写 → 拒
+    tryPut(null),                            // 自身域写 → 放行
+    tryQuery('other-plugin'),                // 他插件域 → 拒
+    tryQuery('plugin:other-plugin'),         // 他插件根域 → 拒
+    tryQuery('org:some-org')                 // 组织域 → 拒
 ].join(',');
 spark.ensureBot('d-bot', 'D Bot');
 spark.onMessage(function (payload) { spark.reply(payload, report); });
 "#;
-    kernel.plugin_start_background("echo-plugin", script).unwrap();
+    kernel.plugin_start_background("echo-plugin", script, &test_permissions()).unwrap();
     let conv_id = setup_bot_conv_named(&mut kernel, "bot:echo-plugin:d-bot", "D Bot");
     send_text(&mut kernel, &conv_id, "go");
     wait_until(
@@ -228,11 +252,91 @@ spark.onMessage(function (payload) { spark.reply(payload, report); });
                 .iter()
                 .any(|m| {
                     m.sender_id == "bot:echo-plugin:d-bot"
-                        && m.content == "ok,ok,ok,ok,ok,err,err,err"
+                        && m.content == "ok,ok,ok,ok,ok,err,err,err,ok,err,err,err"
                 })
         },
         5_000,
         "域白名单判定回传",
+    );
+}
+
+#[test]
+fn capability_permission_enforced_and_denial_rejects_promise() {
+    // 权限强制：未声明 system:exec 的插件调 sys.exec → Promise 拒绝
+    // （错误经 startAsync 回流），插件线程存活；免权限调用（log）不受影响
+    let (_dir, mut kernel, _root) = kernel_with_identity();
+    let script = r#"
+spark.ensureBot('perm-bot', 'Perm Bot');
+spark.onMessage(function (payload) {
+    spark.sys.exec('definitely-not-a-real-program', []).then(function () {
+        spark.reply(payload, 'unexpected-ok');
+    }, function (err) {
+        spark.reply(payload, 'denied: ' + err.message);
+    });
+});
+"#;
+    // 仅授予 message:app：sys.exec（system:exec）应被拒
+    let permissions = vec!["message:app".to_string()];
+    kernel
+        .plugin_start_background("echo-plugin", script, &permissions)
+        .unwrap();
+    let conv_id = setup_bot_conv_named(&mut kernel, "bot:echo-plugin:perm-bot", "Perm Bot");
+    send_text(&mut kernel, &conv_id, "go");
+    wait_until(
+        || {
+            kernel
+                .message_list_messages(PERSONAL, &conv_id)
+                .unwrap()
+                .iter()
+                .any(|m| {
+                    m.sender_id == "bot:echo-plugin:perm-bot"
+                        && m.content.contains("denied:")
+                        && m.content.contains("system:exec")
+                })
+        },
+        5_000,
+        "未授权 sys.exec 的 Promise 拒绝回流",
+    );
+    // 拒绝是错误回流而非线程崩溃：运行时仍存活
+    assert!(kernel.plugin_background_running("echo-plugin"));
+}
+
+#[test]
+fn docs_capability_requires_storage_permission() {
+    // docs 写能力未授权（缺 storage:write）：同步抛错被脚本 catch 后回复；
+    // 授权后（重启带全量清单）同一调用放行
+    let (_dir, mut kernel, _root) = kernel_with_identity();
+    let script = r#"
+spark.ensureBot('docs-bot', 'Docs Bot');
+spark.onMessage(function (payload) {
+    try {
+        spark.docs.put('notes', 'n1', { title: 'x' }, null);
+        spark.reply(payload, 'put-ok');
+    } catch (e) {
+        spark.reply(payload, 'put-denied');
+    }
+});
+"#;
+    let permissions = vec!["message:app".to_string(), "storage:read".to_string()];
+    kernel
+        .plugin_start_background("echo-plugin", script, &permissions)
+        .unwrap();
+    let conv_id = setup_bot_conv_named(&mut kernel, "bot:echo-plugin:docs-bot", "Docs Bot");
+    send_text(&mut kernel, &conv_id, "go");
+    wait_until(
+        || {
+            kernel
+                .message_list_messages(PERSONAL, &conv_id)
+                .unwrap()
+                .iter()
+                .any(|m| m.sender_id == "bot:echo-plugin:docs-bot" && m.content == "put-denied")
+        },
+        5_000,
+        "未授权 docs.put 被拒",
+    );
+    assert!(
+        kernel.doc_get("echo-plugin", "notes", "n1").unwrap().is_none(),
+        "被拒的写入不得落库"
     );
 }
 
@@ -245,7 +349,7 @@ spark.onQuery('bot:query', function (payload) {
     return { exists: payload.contactId === 'bot:echo-plugin:helper' };
 });
 "#;
-    kernel.plugin_start_background("echo-plugin", script).unwrap();
+    kernel.plugin_start_background("echo-plugin", script, &test_permissions()).unwrap();
 
     // JS 线程异步加载脚本，先等对 handler 注册完成（首次查询可能赶在加载前）
     wait_until(
@@ -270,6 +374,85 @@ spark.onQuery('bot:query', function (payload) {
 }
 
 #[test]
+fn host_query_sync_throw_returns_error_and_thread_survives() {
+    // 查询处理器同步抛错：必须转为错误应答回流（`{error: ...}`），插件
+    // 线程存活并继续处理后续查询/消息
+    let (_dir, mut kernel, _root) = kernel_with_identity();
+    let script = r#"
+spark.onQuery('bot:query', function (payload) {
+    if (payload.boom) throw new Error('sync-boom');
+    return { ok: true };
+});
+"#;
+    kernel.plugin_start_background("echo-plugin", script, &test_permissions()).unwrap();
+
+    // JS 线程异步加载脚本，先等对 handler 注册完成（首次查询可能赶在加载前）
+    wait_until(
+        || {
+            kernel
+                .plugin_host_query("echo-plugin", "bot:query", serde_json::json!({}))
+                .is_some_and(|reply| reply["ok"] == true)
+        },
+        5_000,
+        "查询处理器注册就绪",
+    );
+    let reply = kernel
+        .plugin_host_query("echo-plugin", "bot:query", serde_json::json!({ "boom": true }))
+        .expect("同步抛错应回流错误应答，而非超时无应答");
+    assert!(
+        reply["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("sync-boom")),
+        "错误应答应含抛出信息: {reply}"
+    );
+    // 线程存活：后续查询照常应答
+    let after = kernel
+        .plugin_host_query("echo-plugin", "bot:query", serde_json::json!({}))
+        .expect("插件线程应存活并继续应答");
+    assert_eq!(after["ok"], true);
+    assert!(kernel.plugin_background_running("echo-plugin"));
+}
+
+#[test]
+fn host_query_wait_does_not_hold_kernel_state() {
+    // Issue 4 回归：宿主查询等待应答（上界 2s）期间不得持有 Mutex<Kernel>。
+    // 壳层用法：锁内仅克隆查询句柄（Arc 共享），释锁后等待——等待期间其他
+    // 内核操作必须能拿到锁。
+    let (_dir, mut kernel, _root) = kernel_with_identity();
+    // onQuery 返回永不兑现的 Promise：查询投递成功但等满 2s 超时
+    let script = r#"
+spark.onQuery('bot:query', function () { return new Promise(function () {}); });
+"#;
+    kernel.plugin_start_background("echo-plugin", script, &test_permissions()).unwrap();
+    let kernel = std::sync::Arc::new(std::sync::Mutex::new(kernel));
+
+    let waiter_kernel = kernel.clone();
+    let waiter = std::thread::spawn(move || {
+        let query = waiter_kernel.lock().unwrap().plugin_host_query_handle();
+        // 句柄已脱离内核锁；查询无应答，等满 2s 超时
+        query.query("echo-plugin", "bot:query", serde_json::json!({}))
+    });
+
+    // 给查询线程留出克隆句柄/投递并进入等待的时间；随后主线程拿锁做内核
+    // 操作。若等待期间仍持锁（旧行为），此处将阻塞至查询超时结束（≈2s）。
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let started = std::time::Instant::now();
+    assert!(
+        kernel.lock().unwrap().plugin_background_running("echo-plugin"),
+        "等待中的宿主查询不得挡住其他内核操作"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(1),
+        "内核锁被宿主查询等待占住: {:?}",
+        started.elapsed()
+    );
+    assert!(
+        waiter.join().unwrap().is_none(),
+        "无应答的查询应超时返回 None"
+    );
+}
+
+#[test]
 fn sys_exec_async_roundtrip() {
     // sys.exec 异步能力：启动即返，结果经事件队列回流兑现 Promise。
     // 用平台必有的 shell 回显命令（跨平台分支选择）
@@ -289,7 +472,7 @@ spark.onMessage(function (payload) {{
 "#,
         args_json = serde_json::to_string(&args).unwrap()
     );
-    kernel.plugin_start_background("echo-plugin", &script).unwrap();
+    kernel.plugin_start_background("echo-plugin", &script, &test_permissions()).unwrap();
     let conv_id = setup_bot_conv_named(&mut kernel, "bot:echo-plugin:exec-bot", "Exec Bot");
     send_text(&mut kernel, &conv_id, "go");
     wait_until(
@@ -323,7 +506,7 @@ spark.onMessage(function (payload) {{
 }});
 "#
     );
-    kernel.plugin_start_background("echo-plugin", &script).unwrap();
+    kernel.plugin_start_background("echo-plugin", &script, &test_permissions()).unwrap();
 
     send_text(&mut kernel, &conv_id, "hi");
     std::thread::sleep(std::time::Duration::from_millis(500));

@@ -180,7 +180,8 @@ async function callCodebuddy(
   const workdir = (config.workdir as string) || undefined;
   const startTime = Date.now();
   try {
-    const result = await spark.sys.exec(cliPath, ['--print', text], workdir);
+    // `--` 终止 CLI 选项解析：用户消息以 `-` 开头不会被误判为标志位
+    const result = await spark.sys.exec(cliPath, ['--print', '--', text], workdir);
     const durationMs = Date.now() - startTime;
     const combined = [result.stdout, result.stderr].filter(Boolean).join('\n');
     if (/authentication required|please use \/login/i.test(combined)) {

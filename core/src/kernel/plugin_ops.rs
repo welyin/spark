@@ -13,7 +13,9 @@
 use tokio::sync::broadcast;
 
 use crate::p2p::P2pEvent;
-use crate::plugin::{PluginError, is_valid_plugin_id, spawn_plugin_runtime};
+use crate::plugin::{
+    PluginError, PluginHostShared, PluginRuntimeRegistry, is_valid_plugin_id, spawn_plugin_runtime,
+};
 
 use super::{Kernel, Result};
 
@@ -21,9 +23,17 @@ impl Kernel {
     /// 启动插件的后台运行时（专用线程 + QuickJS 沙箱）。
     ///
     /// `script` 为插件后台入口的完整 JS 源码（manifest 加载与 .spkg 读取
-    /// 在后续阶段接入；当前由调用方给全量源码）。同一插件重复启动报
+    /// 由壳层负责，内核只认「插件 id + 源码 + 授权清单」）。
+    /// `permissions` 为安装时授权的权限清单（市场状态 grantedPermissions
+    /// 快照：基础权限恒在列，高级权限须 manifest 声明并授权）；capability
+    /// 分发逐调用强制（host_env），未授权以错误回流 JS。同一插件重复启动报
     /// [`PluginError::AlreadyRunning`]。
-    pub fn plugin_start_background(&mut self, plugin_id: &str, script: &str) -> Result<()> {
+    pub fn plugin_start_background(
+        &mut self,
+        plugin_id: &str,
+        script: &str,
+        permissions: &[String],
+    ) -> Result<()> {
         if !is_valid_plugin_id(plugin_id) {
             return Err(PluginError::InvalidId(plugin_id.to_string()).into());
         }
@@ -35,6 +45,7 @@ impl Kernel {
             script,
             self.plugin_host.clone(),
             self.plugin_registry.clone(),
+            permissions.to_vec(),
         )?;
         self.plugin_registry.register(plugin_id, handle);
         self.plugin_joins.insert(plugin_id.to_string(), join);
@@ -71,7 +82,70 @@ impl Kernel {
     /// 同步阻塞等待应答（上限 2s；调用方须在命令线程或 spawn_blocking 内）。
     /// 插件未运行、投递失败、超时未应答均返回 `None`——调用方按「查询无
     /// 结果」的保守语义处理（删除询问场景即「bot 不存在，放行删除」）。
+    ///
+    /// 壳层持 `Mutex<Kernel>` 调用时应改走 [`Self::plugin_host_query_handle`]：
+    /// 锁内仅克隆句柄，释锁后再等待——避免 2s 超时占住内核全局锁。
     pub fn plugin_host_query(
+        &self,
+        plugin_id: &str,
+        kind: &str,
+        payload: serde_json::Value,
+    ) -> Option<serde_json::Value> {
+        self.plugin_host_query_handle().query(plugin_id, kind, payload)
+    }
+
+    /// 克隆宿主查询句柄（`PluginHostShared` 与注册表均为 Arc 共享格，克隆
+    /// 廉价且脱离内核锁独立可用）。
+    pub fn plugin_host_query_handle(&self) -> PluginHostQuery {
+        PluginHostQuery {
+            plugin_host: self.plugin_host.clone(),
+            plugin_registry: self.plugin_registry.clone(),
+        }
+    }
+
+    /// 停止全部插件后台运行时（身份切换/关停前调用）。
+    pub(crate) fn plugin_stop_all_background(&mut self) {
+        for plugin_id in self.plugin_registry.running_ids() {
+            let _ = self.plugin_stop_background(&plugin_id);
+        }
+    }
+
+    /// 启动事件路由任务：订阅内核事件广播，把 bot 会话的 ChatReceived
+    /// 转发给归属插件（覆盖多设备回同步 echo 路径）。init 时启动，
+    /// shutdown 时 abort。
+    pub(crate) fn spawn_plugin_router(&mut self) {
+        let registry = self.plugin_registry.clone();
+        let mut rx = self.event_tx.subscribe();
+        self.plugin_router = Some(self.runtime.spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(P2pEvent::ChatReceived(payload)) => registry.dispatch_chat(&payload),
+                    Ok(_) => {}
+                    // 慢消费丢旧事件：路由场景可容忍（插件漏处理的副作用
+                    // 仅是当条 bot 消息未响应），继续即可
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        }));
+    }
+}
+
+/// 宿主 → 插件反向查询句柄（kernel 共享格的 Arc 克隆，见
+/// [`Kernel::plugin_host_query_handle`]）。
+///
+/// 持有者可脱离 `Mutex<Kernel>` 执行 [`Self::query`] 的阻塞等待——壳层命令
+/// 在锁内克隆本句柄后立即释锁，2s 等待不再占住内核全局锁。
+#[derive(Clone)]
+pub struct PluginHostQuery {
+    plugin_host: PluginHostShared,
+    plugin_registry: PluginRuntimeRegistry,
+}
+
+impl PluginHostQuery {
+    /// 投递查询并同步阻塞等待应答（上限 2s；调用方须在命令线程或
+    /// spawn_blocking 内）。插件未运行、投递失败、超时未应答均返回 `None`。
+    pub fn query(
         &self,
         plugin_id: &str,
         kind: &str,
@@ -109,32 +183,5 @@ impl Kernel {
                 .remove(&query_id);
         }
         result
-    }
-
-    /// 停止全部插件后台运行时（身份切换/关停前调用）。
-    pub(crate) fn plugin_stop_all_background(&mut self) {
-        for plugin_id in self.plugin_registry.running_ids() {
-            let _ = self.plugin_stop_background(&plugin_id);
-        }
-    }
-
-    /// 启动事件路由任务：订阅内核事件广播，把 bot 会话的 ChatReceived
-    /// 转发给归属插件（覆盖多设备回同步 echo 路径）。init 时启动，
-    /// shutdown 时 abort。
-    pub(crate) fn spawn_plugin_router(&mut self) {
-        let registry = self.plugin_registry.clone();
-        let mut rx = self.event_tx.subscribe();
-        self.plugin_router = Some(self.runtime.spawn(async move {
-            loop {
-                match rx.recv().await {
-                    Ok(P2pEvent::ChatReceived(payload)) => registry.dispatch_chat(&payload),
-                    Ok(_) => {}
-                    // 慢消费丢旧事件：路由场景可容忍（插件漏处理的副作用
-                    // 仅是当条 bot 消息未响应），继续即可
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(broadcast::error::RecvError::Closed) => break,
-                }
-            }
-        }));
     }
 }

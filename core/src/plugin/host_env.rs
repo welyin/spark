@@ -66,6 +66,10 @@ pub(crate) struct PluginHostShared {
 pub(crate) struct PluginRuntimeContext {
     pub(crate) plugin_id: String,
     pub(crate) event_tx: std::sync::mpsc::Sender<PluginEvent>,
+    /// 安装时授权的权限清单（市场状态 grantedPermissions 快照：基础权限
+    /// 恒在列，高级权限须 manifest 声明并授权——与桥 dispatcher 的数据源
+    /// 同格；capability 分发按 [`capability_permission`] 逐调用强制）。
+    pub(crate) permissions: Vec<String>,
 }
 
 impl PluginHostShared {
@@ -101,6 +105,16 @@ impl PluginHostShared {
     ) -> Result<Value> {
         let plugin_id = rtx.plugin_id.as_str();
         let payload: Value = serde_json::from_str(payload_json)?;
+        // 权限强制（对齐桥 dispatcher 的 CALL_PERMISSIONS 中间件）：未授权
+        // 以错误回流 JS——同步能力由 prelude 抛异常、sys.* 经 startAsync
+        // 转为 Promise 拒绝；不 panic、不终止插件线程
+        if let Some(required) = capability_permission(capability) {
+            if !rtx.permissions.iter().any(|p| p == required) {
+                return Err(PluginError::PermissionDenied(format!(
+                    "permission \"{required}\" is not granted for plugin {plugin_id}"
+                )));
+            }
+        }
         match capability {
             "log" => {
                 let message = payload.get("message").and_then(Value::as_str).unwrap_or("");
@@ -179,6 +193,21 @@ impl PluginHostShared {
     }
 }
 
+/// capability → 所需权限（逐字对齐壳层桥 dispatcher 的 CALL_PERMISSIONS
+/// 映射；内核侧 capability 名对应桥的 callKey：contact.ensureBot /
+/// message.reply 对应桥的 messages.registerAsContact / sendResponse）。
+/// 不在表内 = 免权限基础调用（log、query.respond）。
+fn capability_permission(capability: &str) -> Option<&'static str> {
+    match capability {
+        "docs.get" | "docs.query" => Some("storage:read"),
+        "docs.put" | "docs.delete" | "docs.defineCollection" => Some("storage:write"),
+        "contact.ensureBot" | "message.reply" => Some("message:app"),
+        "sys.exec.start" => Some("system:exec"),
+        "sys.fetch.start" => Some("network:fetch"),
+        _ => None,
+    }
+}
+
 /// 取载荷必填字符串字段（缺失/非字符串为非法调用）。
 fn required_str<'a>(payload: &'a Value, field: &str) -> Result<&'a str> {
     payload
@@ -192,17 +221,45 @@ fn required_str<'a>(payload: &'a Value, field: &str) -> Result<&'a str> {
 // resolve_doc_domain）。语义对齐 kernel doc_* 门面
 // ------------------------------------------------------------------
 
+/// docs 能力的访问别：空间根域按只读收窄（见 resolve_doc_domain）。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DocAccess {
+    Read,
+    Write,
+}
+
+/// 空间根域（`space:personal` / `space:org`）放开只读的遗留集合白名单：
+/// 旧 UI 桥的历史缺陷把 bot 文档沉在空间根域（ai-chat botDataSpaces 的
+/// 兜底读只涉及这些集合），仅放行读；空间根域的写一律拒绝——共享空间
+/// 数据面不属任一插件，放开写即可伪造他方配置（如 ai_chat_bots 的
+/// cliPath 指向恶意二进制）。
+const SPACE_DOMAIN_READABLE_COLLECTIONS: [&str; 1] = ["ai_chat_bots"];
+
 /// 解析 docs 能力的目标域：缺省（null/空）为插件自身域；显式指定的域必须
 /// 属于本插件的数据面——自身域、`plugin:{pluginId}` 根域（UI 桥历史数据面，
-/// 存量 bot 文档沉在那里）、空间根域（`space:personal` / `space:org`）。
-/// 其余域（其他插件 id / 组织域等）拒绝——插件不可读写他方数据。
-fn resolve_doc_domain<'a>(plugin_id: &'a str, payload: &'a Value) -> Result<&'a str> {
+/// 存量 bot 文档沉在那里）可读写；空间根域（`space:personal` / `space:org`）
+/// 仅限 [`SPACE_DOMAIN_READABLE_COLLECTIONS`] 遗留集合的只读。其余域
+/// （其他插件 id / 组织域等）拒绝——插件不可读写他方数据。
+fn resolve_doc_domain<'a>(
+    plugin_id: &'a str,
+    payload: &'a Value,
+    access: DocAccess,
+) -> Result<&'a str> {
     let plugin_root = format!("plugin:{plugin_id}");
     match payload.get("domain").and_then(Value::as_str) {
         None | Some("") => Ok(plugin_id),
         Some(domain) if domain == plugin_id => Ok(plugin_id),
         Some(domain) if domain == plugin_root => Ok(domain),
-        Some(domain) if domain == "space:personal" || domain == "space:org" => Ok(domain),
+        Some(domain) if domain == "space:personal" || domain == "space:org" => {
+            let collection = payload.get("collection").and_then(Value::as_str).unwrap_or("");
+            if access == DocAccess::Read && SPACE_DOMAIN_READABLE_COLLECTIONS.contains(&collection) {
+                Ok(domain)
+            } else {
+                Err(PluginError::InvalidCall(format!(
+                    "domain not allowed for plugin {plugin_id}: {domain}"
+                )))
+            }
+        }
         Some(domain) => Err(PluginError::InvalidCall(format!(
             "domain not allowed for plugin {plugin_id}: {domain}"
         ))),
@@ -241,7 +298,7 @@ impl PluginHostShared {
     }
 
     /// 本地写入节点 id：p2p 运行中为 peerId，否则 `local-node`（对齐内核门面）。
-    fn sync_node_id(&self) -> String {
+    pub(crate) fn sync_node_id(&self) -> String {
         self.p2p_node
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -277,7 +334,7 @@ impl PluginHostShared {
     }
 
     fn doc_get(&self, plugin_id: &str, payload: &Value) -> Result<Value> {
-        let domain = resolve_doc_domain(plugin_id, payload)?;
+        let domain = resolve_doc_domain(plugin_id, payload, DocAccess::Read)?;
         let collection = required_str(payload, "collection")?;
         let id = required_str(payload, "id")?;
         let storage = self.require_storage()?;
@@ -290,7 +347,7 @@ impl PluginHostShared {
     }
 
     fn doc_put(&self, plugin_id: &str, payload: &Value) -> Result<Value> {
-        let domain = resolve_doc_domain(plugin_id, payload)?;
+        let domain = resolve_doc_domain(plugin_id, payload, DocAccess::Write)?;
         let collection = required_str(payload, "collection")?;
         let id = required_str(payload, "id")?;
         let doc = payload.get("doc").cloned().unwrap_or(Value::Null);
@@ -315,7 +372,7 @@ impl PluginHostShared {
     }
 
     fn doc_delete(&self, plugin_id: &str, payload: &Value) -> Result<Value> {
-        let domain = resolve_doc_domain(plugin_id, payload)?;
+        let domain = resolve_doc_domain(plugin_id, payload, DocAccess::Write)?;
         let collection = required_str(payload, "collection")?;
         let id = required_str(payload, "id")?;
         let config = Self::parse_config(payload.get("config").unwrap_or(&Value::Null))?;
@@ -341,7 +398,7 @@ impl PluginHostShared {
     }
 
     fn doc_query(&self, plugin_id: &str, payload: &Value) -> Result<Value> {
-        let domain = resolve_doc_domain(plugin_id, payload)?;
+        let domain = resolve_doc_domain(plugin_id, payload, DocAccess::Read)?;
         let collection = required_str(payload, "collection")?;
         let config = Self::parse_config(payload.get("config").unwrap_or(&Value::Null))?;
         self.remember_collection_config(domain, collection, &config);

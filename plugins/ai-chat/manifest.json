@@ -11,7 +11,7 @@
     { "id": "chat", "type": "app", "title": "AI 聊天" }
   ],
   "background": "views/background.js",
-  "permissions": ["docs:read", "docs:write", "message:app", "system:exec", "network:fetch"],
+  "permissions": ["storage:read", "storage:write", "message:app", "system:exec", "network:fetch"],
   "requires": {
     "capabilities": ["system:exec"],
     "platforms": ["desktop"]

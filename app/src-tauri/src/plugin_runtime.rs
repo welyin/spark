@@ -2,7 +2,9 @@
 //! 生命周期对账（应用启动 / 启用禁用 / 卸载 / 登录后前端触发同步）。
 //!
 //! 边界（plugin_system.md「后台运行时」）：包形态与市场状态知识留在壳层，
-//! 内核只认「插件 id + JS 源码」。脚本读取复用 `plugin_src` 的 fail-closed
+//! 内核只认「插件 id + JS 源码 + 已授权权限清单」（市场状态
+//! grantedPermissions 快照随启动传入，capability 权限由内核分发层强制）。
+//! 脚本读取复用 `plugin_src` 的 fail-closed
 //! 解析管线（已安装包只信市场状态记录的 packagePath + 整包 sha256 复核，
 //! 内置开发插件 dist 兜底），不引入第二份包读取逻辑。
 //!
@@ -46,13 +48,18 @@ fn load_background_script(data_dir: &Path, plugin_id: &str) -> Result<Option<Str
 
 /// 后台运行时对账：缺的启动、多余的停止（幂等，各生命周期钩子统一走这里）。
 ///
-/// `installed` 为（插件 id, 是否启用）清单，取自市场状态（含 dev-source
-/// 对账登记的记录）。
-pub fn sync_background_runtimes(data_dir: &Path, kernel: &mut Kernel, installed: &[(String, bool)]) {
+/// `installed` 为（插件 id, 是否启用, 已授权权限清单）清单，取自市场状态
+/// （含 dev-source 对账登记的记录）；权限清单随启动快照传入内核，
+/// capability 分发逐调用强制（未授权拒绝，与桥 dispatcher 同口径）。
+pub fn sync_background_runtimes(
+    data_dir: &Path,
+    kernel: &mut Kernel,
+    installed: &[(String, bool, Vec<String>)],
+) {
     let desired: Vec<&str> = installed
         .iter()
-        .filter(|(_, enabled)| *enabled)
-        .map(|(id, _)| id.as_str())
+        .filter(|(_, enabled, _)| *enabled)
+        .map(|(id, _, _)| id.as_str())
         .collect();
     // 停用/卸载的插件后台即时停止
     for plugin_id in kernel.plugin_background_running_ids() {
@@ -60,17 +67,19 @@ pub fn sync_background_runtimes(data_dir: &Path, kernel: &mut Kernel, installed:
             let _ = kernel.plugin_stop_background(&plugin_id);
         }
     }
-    for plugin_id in desired {
-        if kernel.plugin_background_running(plugin_id) {
+    for (plugin_id, enabled, permissions) in installed {
+        if !enabled || kernel.plugin_background_running(plugin_id) {
             continue;
         }
         match load_background_script(data_dir, plugin_id) {
-            Ok(Some(script)) => match kernel.plugin_start_background(plugin_id, &script) {
-                Ok(()) => eprintln!("[plugin-runtime] started plugin={plugin_id}"),
-                Err(error) => {
-                    eprintln!("[plugin-runtime] start failed plugin={plugin_id} error={error}")
+            Ok(Some(script)) => {
+                match kernel.plugin_start_background(plugin_id, &script, permissions) {
+                    Ok(()) => eprintln!("[plugin-runtime] started plugin={plugin_id}"),
+                    Err(error) => {
+                        eprintln!("[plugin-runtime] start failed plugin={plugin_id} error={error}")
+                    }
                 }
-            },
+            }
             Ok(None) => {}
             Err(error) => {
                 eprintln!("[plugin-runtime] load failed plugin={plugin_id} error={error}")
@@ -83,12 +92,18 @@ pub fn sync_background_runtimes(data_dir: &Path, kernel: &mut Kernel, installed:
 /// 锁序：先市场锁取清单（即放），后内核锁执行——两锁不嵌套，与
 /// `io_lock` 无交集（对账只在命令线程持 `Mutex<Kernel>`）。
 pub fn sync_from_market(data_dir: &Path, kernel_state: &KernelState, market_state: &MarketState) {
-    let installed: Vec<(String, bool)> = match market_state.lock() {
+    let installed: Vec<(String, bool, Vec<String>)> = match market_state.lock() {
         Ok(market) => market
             .state
             .installed
             .values()
-            .map(|entry| (entry.plugin_id.clone(), entry.enabled))
+            .map(|entry| {
+                (
+                    entry.plugin_id.clone(),
+                    entry.enabled,
+                    entry.granted_permissions.clone(),
+                )
+            })
             .collect(),
         Err(_) => {
             eprintln!("[plugin-runtime] market state lock poisoned, skip sync");
@@ -229,15 +244,15 @@ mod tests {
         let mut kernel = temp_kernel(&data_dir);
 
         // 启用 → 对账启动后台线程
-        sync_background_runtimes(&data_dir, &mut kernel, &[("bg-demo".to_string(), true)]);
+        sync_background_runtimes(&data_dir, &mut kernel, &[("bg-demo".to_string(), true, Vec::new())]);
         assert!(kernel.plugin_background_running("bg-demo"));
 
         // 幂等：再对账不重复启动（AlreadyRunning 路径走不到）
-        sync_background_runtimes(&data_dir, &mut kernel, &[("bg-demo".to_string(), true)]);
+        sync_background_runtimes(&data_dir, &mut kernel, &[("bg-demo".to_string(), true, Vec::new())]);
         assert!(kernel.plugin_background_running("bg-demo"));
 
         // 禁用 → 对账即停
-        sync_background_runtimes(&data_dir, &mut kernel, &[("bg-demo".to_string(), false)]);
+        sync_background_runtimes(&data_dir, &mut kernel, &[("bg-demo".to_string(), false, Vec::new())]);
         assert!(!kernel.plugin_background_running("bg-demo"));
     }
 
@@ -264,7 +279,7 @@ mod tests {
         write_spkg(&spkg, &[("manifest.json", br#"{"id":"bg-demo"}"#)]);
         write_market_state(&data_dir, "bg-demo", &spkg, true);
         let mut kernel = temp_kernel(&data_dir);
-        sync_background_runtimes(&data_dir, &mut kernel, &[("bg-demo".to_string(), true)]);
+        sync_background_runtimes(&data_dir, &mut kernel, &[("bg-demo".to_string(), true, Vec::new())]);
         assert!(!kernel.plugin_background_running("bg-demo"));
     }
 }

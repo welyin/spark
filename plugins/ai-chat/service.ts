@@ -97,7 +97,7 @@ export function registerBuiltinProviders(): void {
       const startTime = Date.now();
       try {
         console.log(`[ai-chat][provider] sys.exec 调用 cliPath=${cliPath} workdir=${workdir ?? '(继承)'}`);
-        const result = await sdk.sys.exec(cliPath, ['--print', lastMsg?.content ?? ''], workdir);
+        const result = await sdk.sys.exec(cliPath, ['--print', '--', lastMsg?.content ?? ''], workdir);
         console.log(`[ai-chat][provider] sys.exec 返回 exitCode=${result.exitCode} stdout=${result.stdout?.slice(0, 50) ?? ''}`);
         const durationMs = Date.now() - startTime;
         const combined = [result.stdout, result.stderr].filter(Boolean).join('\n');
