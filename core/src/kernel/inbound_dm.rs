@@ -885,12 +885,16 @@ fn handle_pdsync_hello<S: StorageBackend>(
     if from != ctx.my_root_id {
         return done(fail_response("not-self-device"), Vec::new());
     }
+    // 自 FriendRecord（`ct:friend:{myRootId}`）的 peer 是设备相对值，不可
+    // 互灌：折叠/增量对称排除（双设备同账号排除键相同，folded vv 保持一致）
+    let self_key = crate::sync::pdsync::self_friend_key(ctx.my_root_id);
+    let exclude = Some(self_key.as_str());
     let remote_cats = crate::sync::pdsync::parse_hello_categories(body);
     let mut out = Vec::new();
     for category in crate::sync::pdsync::CATEGORIES {
         // 扫描失败不降级为空 vv（空 vv 会把本机误判为纯落后/纯领先，引发
         // 不必要的全量拉取/推送）：跳过该 category，本轮 diff 不含它
-        let Ok(local_vv) = crate::sync::pdsync::collect_category_vv(storage, category)
+        let Ok(local_vv) = crate::sync::pdsync::collect_category_vv(storage, category, exclude)
         else {
             continue;
         };
@@ -904,14 +908,14 @@ fn handle_pdsync_hello<S: StorageBackend>(
                 out.push(PdsyncOut::Need { body: need_body });
             }
             crate::sync::pdsync::DiffOutcome::LocalAhead => {
-                push_category_data(storage, &mut out, category, &remote_vv);
+                push_category_data(storage, &mut out, category, &remote_vv, exclude);
             }
             crate::sync::pdsync::DiffOutcome::Concurrent => {
                 // 双向交换：既请求对端缺的，也主动推本机缺的（data 逐条向量
                 // 幂等去重，双发收敛）
                 let need_body = crate::sync::pdsync::build_need(category.name, &local_vv);
                 out.push(PdsyncOut::Need { body: need_body });
-                push_category_data(storage, &mut out, category, &remote_vv);
+                push_category_data(storage, &mut out, category, &remote_vv, exclude);
             }
             crate::sync::pdsync::DiffOutcome::Equal => {}
         }
@@ -972,7 +976,10 @@ fn handle_pdsync_need<S: StorageBackend>(
     let Some(category) = crate::sync::pdsync::category_by_name(&category_name) else {
         return done(fail_response("unknown-category"), Vec::new());
     };
-    let Ok(records) = crate::sync::pdsync::collect_incremental(storage, category, &known_vv)
+    // 自记录排除（与 hello 侧同键）：增量采集不推自 FriendRecord（含墓碑）
+    let self_key = crate::sync::pdsync::self_friend_key(ctx.my_root_id);
+    let Ok(records) =
+        crate::sync::pdsync::collect_incremental(storage, category, &known_vv, Some(&self_key))
     else {
         return done(fail_response("collection-failed"), Vec::new());
     };
@@ -1033,11 +1040,18 @@ fn handle_pdsync_data<S: StorageBackend>(
     let mut profile_applied = false;
     let mut contacts_applied = 0usize;
     let mut convs_applied = 0usize;
+    // 自 FriendRecord 落库排除（与采集/折叠侧同键）：旧版本对端可能仍推送
+    // 该键——其 peer 是设备相对值，落库会毒化本机自记录；墓碑同样丢弃
+    // （对端删它的自记录不得删掉本机的）
+    let self_key = crate::sync::pdsync::self_friend_key(ctx.my_root_id);
     // 消息合入按会话聚合最新一条，循环结束后逐会话发 ChatReceived（窗口
     // 回填成批到达，逐条发会冲垮广播通道）
     let mut latest_msg_by_conv: std::collections::BTreeMap<String, MessageRecord> =
         std::collections::BTreeMap::new();
     for record in records {
+        if record.key == self_key {
+            continue;
+        }
         // 逐条 LWW 合入（pmeta 裁决；幂等）。value 是 JSON 值，落盘时转回
         // 字符串。
         let value_str = serde_json::to_string(&record.value)?;
@@ -1072,7 +1086,15 @@ fn handle_pdsync_data<S: StorageBackend>(
                     let merged = match local_before {
                         // 远端胜出：同步字段合并进本地副本，保留本地未读/更新时间
                         Some(mut local) => {
+                            // 自聊会话（peer_root == 本机 rootId）的 peer 是设备
+                            // 相对寻址（各指向对方设备），与自 FriendRecord 同性质
+                            // ——保留本地值，不随远端快照覆盖
+                            let self_conv_peer = (local.peer_root_id == ctx.my_root_id)
+                                .then(|| local.peer.clone());
                             crate::message::MessageService::merge_conv_meta(&mut local, &remote);
+                            if let Some(peer) = self_conv_peer {
+                                local.peer = peer;
+                            }
                             local
                         }
                         // 全新会话：未读/updated_at 是本机语义（§3.2），清零不继承
@@ -1254,13 +1276,16 @@ fn pdsync_remote_wins(
 const PDSYNC_BATCH_BYTES: usize = 256 * 1024;
 
 /// 采集 category 相对对端折叠 vv（`remote_vv`）的增量，分批发入 `out`。
+/// `exclude_key`：对称排除键（自 FriendRecord，见 handle_pdsync_hello）。
 fn push_category_data<S: StorageBackend>(
     storage: &mut S,
     out: &mut Vec<PdsyncOut>,
     category: &crate::sync::pdsync::Category,
     remote_vv: &crate::sync::meta::VersionVector,
+    exclude_key: Option<&str>,
 ) {
-    let Ok(records) = crate::sync::pdsync::collect_incremental(storage, category, remote_vv)
+    let Ok(records) =
+        crate::sync::pdsync::collect_incremental(storage, category, remote_vv, exclude_key)
     else {
         return;
     };

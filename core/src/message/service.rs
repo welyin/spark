@@ -103,6 +103,9 @@ impl MessageService {
     /// **保留本地消息驱动字段**（unread_count / updated_at / last 消息字段）——
     /// 那些由消息收发高频刷新，不应被远端元数据快照覆盖。
     ///
+    /// 例外：自聊会话（peer_root == 本机 rootId）的 `peer` 是设备相对寻址，
+    /// 由调用侧（inbound_dm 的 pdsync-data conv 合入分支）在合并后恢复本地值。
+    ///
     /// 返回合并后的记录（不落盘，调用方自行写）。
     pub fn merge_conv_meta(
         local: &mut ConversationRecord,

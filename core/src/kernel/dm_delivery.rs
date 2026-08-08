@@ -173,15 +173,16 @@ impl Kernel {
     /// 列表返回以为多设备留口）。
     pub(crate) fn self_device_peers(&self, my_root_id: &str) -> Result<Vec<PeerNodeInfo>> {
         let friends = ContactService::overview(self.require_storage()?, "personal")?.friends;
-        Ok(friends
-            .into_iter()
-            .filter(|f| f.root_id == my_root_id)
-            .filter_map(|f| f.peer)
-            .map(|p| PeerNodeInfo {
-                peer_id: (!p.peer_id.is_empty()).then_some(p.peer_id),
-                addresses: p.addresses,
-            })
-            .collect())
+        let local_peer_id = self
+            .p2p_status()
+            .ok()
+            .flatten()
+            .and_then(|info| info.peer_id);
+        Ok(self_device_peer_infos(
+            friends,
+            my_root_id,
+            local_peer_id.as_deref(),
+        ))
     }
 
     /// 向所有已配对设备尽力投递 dm 信封（自消息/自回执的「同步到其他节点」
@@ -612,15 +613,17 @@ impl PluginHostShared {
     fn self_device_peers(&self, my_root_id: &str) -> Result<Vec<PeerNodeInfo>> {
         let storage = self.require_storage()?;
         let friends = ContactService::overview(&storage, "personal")?.friends;
-        Ok(friends
-            .into_iter()
-            .filter(|f| f.root_id == my_root_id)
-            .filter_map(|f| f.peer)
-            .map(|p| PeerNodeInfo {
-                peer_id: (!p.peer_id.is_empty()).then_some(p.peer_id),
-                addresses: p.addresses,
-            })
-            .collect())
+        let local_peer_id = self
+            .p2p_node
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|node| node.peer_id().to_string());
+        Ok(self_device_peer_infos(
+            friends,
+            my_root_id,
+            local_peer_id.as_deref(),
+        ))
     }
 
     /// 见 [`Kernel::build_dm_envelope`]（签名私钥来源换为解锁期共享格；
@@ -659,5 +662,79 @@ fn delivery_needs_retry(
             }
         }
         Ok(None) | Err(_) => true,
+    }
+}
+
+/// 自设备 peer 列表提取：rootId==我 且 peer 非空的 FriendRecord（配对设备）。
+///
+/// 防御性过滤 `peer_id == 本机 peerId` 的自指记录——自 FriendRecord 的 peer
+/// 是设备相对值，历史 pdsync 互灌可能把它污染成指向本机；不自指过滤会让
+/// 自消息投递拨自己（DialError::LocalPeerId）。`local_peer_id` 为 None
+/// （p2p 未运行）时无从判定，不过滤。
+fn self_device_peer_infos(
+    friends: Vec<crate::contact::FriendRecord>,
+    my_root_id: &str,
+    local_peer_id: Option<&str>,
+) -> Vec<PeerNodeInfo> {
+    friends
+        .into_iter()
+        .filter(|f| f.root_id == my_root_id)
+        .filter_map(|f| f.peer)
+        .filter(|p| local_peer_id != Some(p.peer_id.as_str()))
+        .map(|p| PeerNodeInfo {
+            peer_id: (!p.peer_id.is_empty()).then_some(p.peer_id),
+            addresses: p.addresses,
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn friend(root_id: &str, peer_id: &str) -> crate::contact::FriendRecord {
+        crate::contact::FriendRecord {
+            root_id: root_id.to_string(),
+            nickname: String::new(),
+            avatar: None,
+            signature: String::new(),
+            gender: None,
+            added_at: 0,
+            peer: Some(crate::message::PeerRef {
+                peer_id: peer_id.to_string(),
+                addresses: Vec::new(),
+            }),
+            remark: String::new(),
+            phones: Vec::new(),
+            tag_ids: Vec::new(),
+            group_id: String::new(),
+            memo: String::new(),
+            photos: Vec::new(),
+            permission: "open".to_string(),
+            blocked: false,
+            updated_at: 0,
+        }
+    }
+
+    /// 自指过滤：自记录 peer 被污染指向本机时不作为自设备投递目标；
+    /// 正常指向对端设备的记录保留；他人 rootId 本就不入列。
+    #[test]
+    fn self_device_peer_infos_filters_self_pointing_record() {
+        let friends = vec![
+            friend("root-self", "peer-local"),
+            friend("root-other", "peer-other"),
+        ];
+        // 本机 peerId = peer-local：自指记录被过滤
+        let peers = self_device_peer_infos(friends.clone(), "root-self", Some("peer-local"));
+        assert!(peers.is_empty(), "自指记录不得作为投递目标");
+        // 记录指向对端设备：保留
+        let friends = vec![friend("root-self", "peer-device-b")];
+        let peers = self_device_peer_infos(friends, "root-self", Some("peer-local"));
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].peer_id.as_deref(), Some("peer-device-b"));
+        // p2p 未运行（本机 peerId 未知）：无从判定，不过滤
+        let friends = vec![friend("root-self", "peer-local")];
+        let peers = self_device_peer_infos(friends, "root-self", None);
+        assert_eq!(peers.len(), 1, "本机 peerId 未知时不误杀");
     }
 }

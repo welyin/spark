@@ -72,15 +72,31 @@ pub fn category_by_name(name: &str) -> Option<&'static Category> {
     CATEGORIES.iter().find(|c| c.name == name)
 }
 
+/// 自 FriendRecord 的存储键（`ct:friend:{rootId}`）。
+///
+/// 双设备同账号 → 同 rootId → 同键，但记录体的 `peer` 字段是设备相对值
+/// （各存对方设备的寻址），互灌会让一端设备的自记录指向自己（自投/自拨
+/// 失败）。pdsync 的折叠 vv、增量采集（含墓碑）与落库对该键对称排除——
+/// 排除键两侧相同，折叠 vv 保持一致、无伪 diff；本机删自记录的墓碑也不
+/// 推给对端（对端的自记录是它的设备相对数据）。对齐旧 contact-sync 通道
+/// 的不变式（见 contact/service/sync.rs 模块注释）。
+pub fn self_friend_key(root_id: &str) -> String {
+    format!("{}{root_id}", crate::contact::FRIEND_PREFIX)
+}
+
 // ── hello 摘要折叠 ─────────────────────────────────────────────────
 
 /// 收集某 category 的合并折叠 vv：扫描该 category 全部 key 前缀下所有
 /// `pmeta:{key}`，逐条 `merge_version_vectors` 取 max。
 ///
+/// `exclude_key`：对称排除的记录键（如 [`self_friend_key`] 的自记录——
+/// 设备相对数据不参与折叠；双设备同账号排除键相同，两侧折叠仍一致）。
+///
 /// O(记录数) 扫描；个人域自设备记录量级小，可接受。
 pub fn collect_category_vv<S: StorageBackend>(
     storage: &S,
     category: &Category,
+    exclude_key: Option<&str>,
 ) -> crate::sync::SyncResult<VersionVector> {
     let mut folded = VersionVector::new();
     for prefix in category.prefixes {
@@ -96,6 +112,11 @@ pub fn collect_category_vv<S: StorageBackend>(
             if !category.prefixes.iter().any(|p| record_key.starts_with(p)) {
                 continue;
             }
+            // 排除键（自记录）：设备相对数据不参与折叠/增量（含墓碑——
+            // 本机删自记录不应删掉对端的）
+            if exclude_key == Some(record_key) {
+                continue;
+            }
             if let Ok(meta) = serde_json::from_str::<DocMeta>(&raw) {
                 folded = merge_version_vectors(Some(&folded), Some(&meta.vv));
             }
@@ -107,10 +128,11 @@ pub fn collect_category_vv<S: StorageBackend>(
 /// 构建全部 category 的折叠 vv 摘要（hello 的 `categories` 字段）。
 pub fn collect_all_categories<S: StorageBackend>(
     storage: &S,
+    exclude_key: Option<&str>,
 ) -> crate::sync::SyncResult<Map<String, Value>> {
     let mut map = Map::new();
     for category in CATEGORIES {
-        let vv = collect_category_vv(storage, category)?;
+        let vv = collect_category_vv(storage, category, exclude_key)?;
         map.insert(
             category.name.to_string(),
             serde_json::to_value(&vv).unwrap_or(Value::Object(Map::new())),
@@ -173,14 +195,22 @@ pub struct PdsyncRecord {
 ///
 /// 墓碑（`tombstone: true`）以 `{key, value: null, meta}` 纳入推送——本体已删，
 /// 墓碑只存在于 pmeta 扫描里；接收方据 `meta.tombstone` 执行删除（§5.3/§10）。
+///
+/// `exclude_key`：对称排除的记录键（[`self_friend_key`] 的自记录）——本体与
+/// 墓碑两段扫描都跳过（本机删自记录不应删掉对端的）。
 pub fn collect_incremental<S: StorageBackend>(
     storage: &S,
     category: &Category,
     known_vv: &VersionVector,
+    exclude_key: Option<&str>,
 ) -> crate::sync::SyncResult<Vec<PdsyncRecord>> {
     let mut records = Vec::new();
     for prefix in category.prefixes {
         for (key, raw_value) in storage.scan(&ScanOptions::prefix(*prefix))? {
+            // 排除键（自记录）：设备相对数据不推给对端
+            if exclude_key == Some(key.as_str()) {
+                continue;
+            }
             let meta = match get_personal_meta(storage, &key)? {
                 Some(m) => m,
                 None => continue,
@@ -221,6 +251,11 @@ pub fn collect_incremental<S: StorageBackend>(
             if !category.prefixes.iter().any(|p| record_key.starts_with(p)) {
                 continue;
             }
+            // 排除键（自记录）：设备相对数据不参与折叠/增量（含墓碑——
+            // 本机删自记录不应删掉对端的）
+            if exclude_key == Some(record_key) {
+                continue;
+            }
             let Ok(meta) = serde_json::from_str::<DocMeta>(&raw_meta) else {
                 continue;
             };
@@ -243,14 +278,17 @@ pub fn collect_incremental<S: StorageBackend>(
 // ── 信封 body 构造 ─────────────────────────────────────────────────
 
 /// 构造 `pdsync-hello` body：`{categories, msgWindow, attachmentPolicy}`。
+///
+/// `exclude_key`：折叠摘要对称排除的记录键（[`self_friend_key`] 的自记录）。
 pub fn build_hello<S: StorageBackend>(
     storage: &S,
     msg_window_max_age_ms: i64,
     msg_window_max_per_conv: usize,
     attachment_policy: &str,
+    exclude_key: Option<&str>,
 ) -> crate::sync::SyncResult<Value> {
     Ok(json!({
-        "categories": collect_all_categories(storage)?,
+        "categories": collect_all_categories(storage, exclude_key)?,
         "msgWindow": {
             "maxAgeMs": msg_window_max_age_ms,
             "maxPerConv": msg_window_max_per_conv,
@@ -564,7 +602,7 @@ mod tests {
         let meta_b = put_personal(&mut s, NODE_B, &format!("{FRIEND_PREFIX}b"), "3", 2000).unwrap();
         assert_eq!(meta_b.vv.get(NODE_B), Some(&1));
 
-        let folded = collect_category_vv(&s, category_friend()).unwrap();
+        let folded = collect_category_vv(&s, category_friend(), None).unwrap();
         // a: A:1；b: A:1+B:1 → 折叠 A:1, B:1
         assert_eq!(folded.get(NODE_A), Some(&1));
         assert_eq!(folded.get(NODE_B), Some(&1));
@@ -606,19 +644,19 @@ mod tests {
         // knownVv = {A:1, B:1}（对端已齐全）→ 无增量
         let known_full: VersionVector =
             [(NODE_A.to_string(), 1), (NODE_B.to_string(), 1)].into_iter().collect();
-        let inc = collect_incremental(&s, category_friend(), &known_full).unwrap();
+        let inc = collect_incremental(&s, category_friend(), &known_full, None).unwrap();
         assert!(inc.is_empty());
 
         // knownVv = {A:1}（对端缺 B 对 b 的更新）→ 只推 b（B:2 所在）
         let known_a: VersionVector = [(NODE_A.to_string(), 1)].into_iter().collect();
-        let inc = collect_incremental(&s, category_friend(), &known_a).unwrap();
+        let inc = collect_incremental(&s, category_friend(), &known_a, None).unwrap();
         assert_eq!(inc.len(), 1);
         assert_eq!(inc[0].key, format!("{FRIEND_PREFIX}b"));
         // b 的 meta vv 含 B 分量（相对 known_a 是 Remote）
         assert_eq!(inc[0].meta.vv.get(NODE_B), Some(&1));
 
         // knownVv 空 → 全部增量（两条都要）
-        let inc = collect_incremental(&s, category_friend(), &VersionVector::new()).unwrap();
+        let inc = collect_incremental(&s, category_friend(), &VersionVector::new(), None).unwrap();
         assert_eq!(inc.len(), 2);
     }
 
@@ -649,7 +687,7 @@ mod tests {
         let mut s = MemoryStorage::new();
         put_personal(&mut s, NODE_A, &format!("{FRIEND_PREFIX}a"), "1", 1000).unwrap();
 
-        let hello = build_hello(&s, 2_592_000_000, 500, "eager").unwrap();
+        let hello = build_hello(&s, 2_592_000_000, 500, "eager", None).unwrap();
         let cats = parse_hello_categories(&hello);
         let friend_vv = cats.get("ct:friend").unwrap();
         assert_eq!(friend_vv.get(NODE_A), Some(&1));
@@ -665,7 +703,7 @@ mod tests {
         put_personal(&mut s, NODE_A, &format!("{FRIEND_PREFIX}a"), r#""v""#, 1000)
             .unwrap();
         let known: VersionVector = VersionVector::new();
-        let inc = collect_incremental(&s, category_friend(), &known).unwrap();
+        let inc = collect_incremental(&s, category_friend(), &known, None).unwrap();
 
         let need = build_need("ct:friend", &known);
         let (cat, parsed_vv) = parse_need(&need).unwrap();
@@ -687,7 +725,7 @@ mod tests {
             let val = format!("\"user-{i}-{}\"", "x".repeat(100));
             put_personal(&mut s, NODE_A, &key, &val, 1000).unwrap();
         }
-        let inc = collect_incremental(&s, category_friend(), &VersionVector::new()).unwrap();
+        let inc = collect_incremental(&s, category_friend(), &VersionVector::new(), None).unwrap();
         let batches = split_batches(inc, 300);
         assert!(batches.len() > 1, "应切分为多批，实际 {}", batches.len());
         // 所有记录都覆盖到
@@ -703,16 +741,20 @@ mod tests {
     /// 2. B 比对 → B 落后于 A 的类别发 need 回 A；
     /// 3. A 收到 need → 回 data；
     /// 4. B 应用 data → 双方一致。
+    ///
+    /// `exclude`：对称排除键（[`self_friend_key`] 自记录排除的端到端验证用，
+    /// 其余测试传 `None`）。
     fn exchange(
         sender: &MemoryStorage,
         receiver: &mut MemoryStorage,
         hello: &Value,
+        exclude: Option<&str>,
     ) -> Vec<Value> {
         // receiver 处理 hello：产生 need/data 出站 body
         let remote_cats = parse_hello_categories(hello);
         let mut out = Vec::new();
         for category in CATEGORIES {
-            let local_vv = collect_category_vv(receiver, category).unwrap_or_default();
+            let local_vv = collect_category_vv(receiver, category, exclude).unwrap_or_default();
             let remote_vv = remote_cats.get(category.name).cloned().unwrap_or_default();
             match diff_category(&local_vv, &remote_vv) {
                 DiffOutcome::LocalBehind { local_vv } => {
@@ -720,7 +762,7 @@ mod tests {
                 }
                 DiffOutcome::LocalAhead => {
                     if let Ok(records) =
-                        collect_incremental(receiver, category, &remote_vv)
+                        collect_incremental(receiver, category, &remote_vv, exclude)
                     {
                         let batches = split_batches(records, 4096);
                         let total = batches.len();
@@ -732,7 +774,7 @@ mod tests {
                 DiffOutcome::Concurrent => {
                     // 双向：推本机缺的 + 请求对端缺的
                     if let Ok(records) =
-                        collect_incremental(receiver, category, &remote_vv)
+                        collect_incremental(receiver, category, &remote_vv, exclude)
                     {
                         let batches = split_batches(records, 4096);
                         let total = batches.len();
@@ -750,7 +792,7 @@ mod tests {
         for body in out {
             if let Some((cat_name, known_vv)) = parse_need(&body) {
                 let cat = category_by_name(&cat_name).unwrap();
-                let records = collect_incremental(sender, cat, &known_vv).unwrap();
+                let records = collect_incremental(sender, cat, &known_vv, exclude).unwrap();
                 let batches = split_batches(records, 4096);
                 let total = batches.len();
                 for (i, b) in batches.into_iter().enumerate() {
@@ -787,8 +829,8 @@ mod tests {
         .unwrap();
 
         // A → B：A 领先（B 缺 A 的 3 条），B 发 need，A 回 data，B 应用
-        let hello_a = build_hello(&a, 2_592_000_000, 500, "eager").unwrap();
-        let responses = exchange(&a, &mut b, &hello_a);
+        let hello_a = build_hello(&a, 2_592_000_000, 500, "eager", None).unwrap();
+        let responses = exchange(&a, &mut b, &hello_a, None);
         for data in &responses {
             let (_, records) = parse_data(data).unwrap();
             for r in records {
@@ -796,12 +838,12 @@ mod tests {
             }
         }
         // B 现在应有 a0,a1,a2（来自 A）+ b0（自己）
-        assert_eq!(collect_category_vv(&b, category_friend()).unwrap().get(NODE_A), Some(&1));
-        assert_eq!(collect_category_vv(&b, category_friend()).unwrap().get(NODE_B), Some(&1));
+        assert_eq!(collect_category_vv(&b, category_friend(), None).unwrap().get(NODE_A), Some(&1));
+        assert_eq!(collect_category_vv(&b, category_friend(), None).unwrap().get(NODE_B), Some(&1));
 
         // 反向 B → A：A 缺 b0，B 领先，A 发 need，B 回 data，A 应用
-        let hello_b = build_hello(&b, 2_592_000_000, 500, "eager").unwrap();
-        let responses_b = exchange(&b, &mut a, &hello_b);
+        let hello_b = build_hello(&b, 2_592_000_000, 500, "eager", None).unwrap();
+        let responses_b = exchange(&b, &mut a, &hello_b, None);
         for data in &responses_b {
             let (_, records) = parse_data(data).unwrap();
             for r in records {
@@ -809,14 +851,14 @@ mod tests {
             }
         }
         // A 也有 b0 了
-        assert_eq!(collect_category_vv(&a, category_friend()).unwrap().get(NODE_B), Some(&1));
+        assert_eq!(collect_category_vv(&a, category_friend(), None).unwrap().get(NODE_B), Some(&1));
 
         // 收敛后再互发 hello → 均 Equal，无新响应
-        let hello_a2 = build_hello(&a, 2_592_000_000, 500, "eager").unwrap();
-        let responses_a2 = exchange(&a, &mut b, &hello_a2);
+        let hello_a2 = build_hello(&a, 2_592_000_000, 500, "eager", None).unwrap();
+        let responses_a2 = exchange(&a, &mut b, &hello_a2, None);
         assert!(responses_a2.is_empty(), "收敛后不应有 need/data");
-        let hello_b2 = build_hello(&b, 2_592_000_000, 500, "eager").unwrap();
-        let responses_b2 = exchange(&b, &mut a, &hello_b2);
+        let hello_b2 = build_hello(&b, 2_592_000_000, 500, "eager", None).unwrap();
+        let responses_b2 = exchange(&b, &mut a, &hello_b2, None);
         assert!(responses_b2.is_empty(), "收敛后不应有 need/data");
     }
 
@@ -866,8 +908,8 @@ mod tests {
 
         // A → B 交换：B 落后于 A 的 profile（A 先写），并发于 conv（各自改不同
         // 字段）。双向交换后双方各取所需。
-        let hello_a = build_hello(&a, 2_592_000_000, 500, "eager").unwrap();
-        let responses = exchange(&a, &mut b, &hello_a);
+        let hello_a = build_hello(&a, 2_592_000_000, 500, "eager", None).unwrap();
+        let responses = exchange(&a, &mut b, &hello_a, None);
         for data in responses {
             let (_, records) = parse_data(&data).unwrap();
             for r in records {
@@ -875,8 +917,8 @@ mod tests {
             }
         }
         // B → A 反向
-        let hello_b = build_hello(&b, 2_592_000_000, 500, "eager").unwrap();
-        let responses_b = exchange(&b, &mut a, &hello_b);
+        let hello_b = build_hello(&b, 2_592_000_000, 500, "eager", None).unwrap();
+        let responses_b = exchange(&b, &mut a, &hello_b, None);
         for data in responses_b {
             let (_, records) = parse_data(&data).unwrap();
             for r in records {
@@ -889,11 +931,11 @@ mod tests {
         // 胜者，vv 只含胜者分量（B）。这是 LWW 的确定性收敛，非数据丢失。
         for s in [&a, &b] {
             // profile：B 胜（B 昵称 "乙"）
-            let prof_vv = collect_category_vv(s, category_named("profile:self")).unwrap();
+            let prof_vv = collect_category_vv(s, category_named("profile:self"), None).unwrap();
             assert_eq!(prof_vv.get(NODE_A), None, "A 的 profile 编辑被 LWW 丢弃");
             assert_eq!(prof_vv.get(NODE_B), Some(&1));
             // conv：B 胜（B 草稿，ts 更大）
-            let conv_vv = collect_category_vv(s, category_named("msg:conv")).unwrap();
+            let conv_vv = collect_category_vv(s, category_named("msg:conv"), None).unwrap();
             assert_eq!(conv_vv.get(NODE_A), None, "A 的 conv 编辑被 LWW 丢弃");
             assert_eq!(conv_vv.get(NODE_B), Some(&1));
         }
@@ -901,8 +943,8 @@ mod tests {
         let profile_raw = get_personal_meta(&a, profile_key).unwrap().unwrap();
         assert_eq!(profile_raw.vv.get(NODE_B), Some(&1));
         // 收敛后再互发 hello → 无新响应
-        let hello_a2 = build_hello(&a, 2_592_000_000, 500, "eager").unwrap();
-        assert!(exchange(&a, &mut b, &hello_a2).is_empty(), "profile/conv 收敛后无增量");
+        let hello_a2 = build_hello(&a, 2_592_000_000, 500, "eager", None).unwrap();
+        assert!(exchange(&a, &mut b, &hello_a2, None).is_empty(), "profile/conv 收敛后无增量");
     }
 
     // ── P4 消息窗口 ─────────────────────────────────────────────────
@@ -1123,7 +1165,7 @@ mod tests {
         put_personal(&mut s, NODE_A, &bad, r#""will-corrupt""#, 1000).unwrap();
         // 直接写坏本体（pmeta 仍完好）
         s.put(&bad, "not-json{{{").unwrap();
-        let inc = collect_incremental(&s, category_friend(), &VersionVector::new()).unwrap();
+        let inc = collect_incremental(&s, category_friend(), &VersionVector::new(), None).unwrap();
         assert_eq!(inc.len(), 1, "损坏记录应跳过");
         assert_eq!(inc[0].key, good);
     }
@@ -1139,7 +1181,7 @@ mod tests {
         put_personal(&mut s, NODE_A, &dead, r#""2""#, 1000).unwrap();
         delete_personal(&mut s, NODE_A, &dead, 2000).unwrap();
 
-        let inc = collect_incremental(&s, category_friend(), &VersionVector::new()).unwrap();
+        let inc = collect_incremental(&s, category_friend(), &VersionVector::new(), None).unwrap();
         assert_eq!(inc.len(), 2);
         let tomb = inc.iter().find(|r| r.key == dead).expect("墓碑应在增量中");
         assert_eq!(tomb.value, Value::Null);
@@ -1149,7 +1191,7 @@ mod tests {
 
         // knownVv 已覆盖墓碑（A:2）→ 无增量
         let known: VersionVector = [(NODE_A.to_string(), 2)].into_iter().collect();
-        let inc2 = collect_incremental(&s, category_friend(), &known).unwrap();
+        let inc2 = collect_incremental(&s, category_friend(), &known, None).unwrap();
         assert!(inc2.is_empty(), "已知墓碑不应重推");
     }
 
@@ -1163,8 +1205,8 @@ mod tests {
         put_personal(&mut a, NODE_A, &key, r#""v1""#, 1000).unwrap();
 
         // 第一轮：A → B，B 获得记录
-        let hello_a = build_hello(&a, 2_592_000_000, 500, "eager").unwrap();
-        for data in exchange(&a, &mut b, &hello_a) {
+        let hello_a = build_hello(&a, 2_592_000_000, 500, "eager", None).unwrap();
+        for data in exchange(&a, &mut b, &hello_a, None) {
             let (_, records) = parse_data(&data).unwrap();
             for r in records {
                 let _ =
@@ -1177,8 +1219,8 @@ mod tests {
         delete_personal(&mut a, NODE_A, &key, 2000).unwrap();
 
         // 第二轮：墓碑随增量推给 B → B 删本体 + 落墓碑 pmeta
-        let hello_a2 = build_hello(&a, 2_592_000_000, 500, "eager").unwrap();
-        let responses = exchange(&a, &mut b, &hello_a2);
+        let hello_a2 = build_hello(&a, 2_592_000_000, 500, "eager", None).unwrap();
+        let responses = exchange(&a, &mut b, &hello_a2, None);
         assert!(!responses.is_empty(), "B 落后应触发 need→data");
         for data in responses {
             let (_, records) = parse_data(&data).unwrap();
@@ -1193,10 +1235,10 @@ mod tests {
         assert_eq!(pmeta.vv.get(NODE_A), Some(&2));
 
         // 收敛：双方折叠 vv 一致，再交换无增量
-        let hello_b = build_hello(&b, 2_592_000_000, 500, "eager").unwrap();
-        assert!(exchange(&b, &mut a, &hello_b).is_empty(), "墓碑收敛后无增量");
-        let hello_a3 = build_hello(&a, 2_592_000_000, 500, "eager").unwrap();
-        assert!(exchange(&a, &mut b, &hello_a3).is_empty(), "墓碑收敛后无增量");
+        let hello_b = build_hello(&b, 2_592_000_000, 500, "eager", None).unwrap();
+        assert!(exchange(&b, &mut a, &hello_b, None).is_empty(), "墓碑收敛后无增量");
+        let hello_a3 = build_hello(&a, 2_592_000_000, 500, "eager", None).unwrap();
+        assert!(exchange(&a, &mut b, &hello_a3, None).is_empty(), "墓碑收敛后无增量");
     }
 
     #[test]
@@ -1296,8 +1338,8 @@ mod tests {
         .unwrap();
 
         // A → B 交换
-        let hello_a = build_hello(&a, 2_592_000_000, 500, "eager").unwrap();
-        let responses = exchange(&a, &mut b, &hello_a);
+        let hello_a = build_hello(&a, 2_592_000_000, 500, "eager", None).unwrap();
+        let responses = exchange(&a, &mut b, &hello_a, None);
         for data in responses {
             let (_, records) = parse_data(&data).unwrap();
             for r in records {
@@ -1305,8 +1347,8 @@ mod tests {
             }
         }
         // B → A 反向
-        let hello_b = build_hello(&b, 2_592_000_000, 500, "eager").unwrap();
-        let responses_b = exchange(&b, &mut a, &hello_b);
+        let hello_b = build_hello(&b, 2_592_000_000, 500, "eager", None).unwrap();
+        let responses_b = exchange(&b, &mut a, &hello_b, None);
         for data in responses_b {
             let (_, records) = parse_data(&data).unwrap();
             for r in records {
@@ -1322,11 +1364,11 @@ mod tests {
 
         // org:meta / ct:org / org:inv 三 category 折叠收敛
         for s in [&a, &b] {
-            let org_meta_vv = collect_category_vv(s, category_named("org:meta")).unwrap();
+            let org_meta_vv = collect_category_vv(s, category_named("org:meta"), None).unwrap();
             assert_eq!(org_meta_vv.get(NODE_B), Some(&1), "org:meta LWW B 胜");
-            let ct_org_vv = collect_category_vv(s, category_named("ct:org")).unwrap();
+            let ct_org_vv = collect_category_vv(s, category_named("ct:org"), None).unwrap();
             assert_eq!(ct_org_vv.get(NODE_A), Some(&1), "ct:org 含 A 分量");
-            let org_inv_vv = collect_category_vv(s, category_named("org:inv")).unwrap();
+            let org_inv_vv = collect_category_vv(s, category_named("org:inv"), None).unwrap();
             assert_eq!(org_inv_vv.get(NODE_A), Some(&1), "org:inv 含 A 分量");
         }
     }
@@ -1351,8 +1393,8 @@ mod tests {
         .unwrap();
 
         // A → B
-        let hello_a = build_hello(&a, 2_592_000_000, 500, "eager").unwrap();
-        let responses = exchange(&a, &mut b, &hello_a);
+        let hello_a = build_hello(&a, 2_592_000_000, 500, "eager", None).unwrap();
+        let responses = exchange(&a, &mut b, &hello_a, None);
         for data in responses {
             let (_, records) = parse_data(&data).unwrap();
             for r in records {
@@ -1363,8 +1405,110 @@ mod tests {
         assert!(b.get(tags_key).unwrap().is_some(), "B 缺组织标签");
         assert!(b.get(tree_key).unwrap().is_some(), "B 缺组织分组树");
         // 收敛后无增量
-        let hello_a2 = build_hello(&a, 2_592_000_000, 500, "eager").unwrap();
-        assert!(exchange(&a, &mut b, &hello_a2).is_empty(), "ct:org 收敛后无增量");
+        let hello_a2 = build_hello(&a, 2_592_000_000, 500, "eager", None).unwrap();
+        assert!(exchange(&a, &mut b, &hello_a2, None).is_empty(), "ct:org 收敛后无增量");
+    }
+
+    // ── 自 FriendRecord 排除（`ct:friend:{rootId}`，设备相对 peer 不可互灌）──
+
+    /// 双设备同账号各自持有自记录（同键、peer 各指向对方设备）：带排除键的
+    /// hello→need→data 交换后，两端自记录保持各自原值（不被互灌/LWW 收敛），
+    /// 普通朋友记录照常同步，收敛后折叠 vv 无伪 diff。
+    ///
+    /// 回归：无排除时两设备自记录并发互推，LWW 收敛成一份 → 一端 peer
+    /// 指向自己（自聊投递拨本机失败）。
+    #[test]
+    fn self_friend_record_excluded_from_sync() {
+        let mut a = MemoryStorage::new();
+        let mut b = MemoryStorage::new();
+        let self_key = self_friend_key("root-self");
+        let friend_key = format!("{FRIEND_PREFIX}other");
+        // A：先写普通朋友（A:1）再写自记录（A:2）——排除后折叠应为 {A:1}，
+        // 与不排除的 {A:2} 可区分
+        put_personal(&mut a, NODE_A, &friend_key, r#""friend""#, 1000).unwrap();
+        put_personal(
+            &mut a,
+            NODE_A,
+            &self_key,
+            r#"{"rootId":"root-self","peer":{"peerId":"peer-a","addresses":[]}}"#,
+            1000,
+        )
+        .unwrap();
+        // B：只有自记录（B:1，ts 更大——无排除时 LWW 会毒化 A）
+        put_personal(
+            &mut b,
+            NODE_B,
+            &self_key,
+            r#"{"rootId":"root-self","peer":{"peerId":"peer-b","addresses":[]}}"#,
+            2000,
+        )
+        .unwrap();
+
+        // 折叠：排除键使自记录分量不进摘要
+        let folded_a = collect_category_vv(&a, category_friend(), Some(&self_key)).unwrap();
+        assert_eq!(folded_a.get(NODE_A), Some(&1), "排除后只折普通朋友记录");
+        assert_eq!(folded_a.get(NODE_B), None);
+        let folded_b = collect_category_vv(&b, category_friend(), Some(&self_key)).unwrap();
+        assert!(folded_b.get(NODE_B).is_none(), "B 排除自记录后 ct:friend 为空");
+        // 对照：不排除时自记录进折叠（B 侧 {B:1}）→ 与 A 并发互推
+        let folded_b_raw = collect_category_vv(&b, category_friend(), None).unwrap();
+        assert_eq!(folded_b_raw.get(NODE_B), Some(&1));
+
+        // A → B、B → A 各一轮 hello→need→data（两侧同一排除键）
+        let hello_a = build_hello(&a, 2_592_000_000, 500, "eager", Some(&self_key)).unwrap();
+        for data in exchange(&a, &mut b, &hello_a, Some(&self_key)) {
+            let (_, records) = parse_data(&data).unwrap();
+            for r in records {
+                let _ = apply_personal_remote(&mut b, &r.key, &r.value.to_string(), &r.meta).unwrap();
+            }
+        }
+        let hello_b = build_hello(&b, 2_592_000_000, 500, "eager", Some(&self_key)).unwrap();
+        for data in exchange(&b, &mut a, &hello_b, Some(&self_key)) {
+            let (_, records) = parse_data(&data).unwrap();
+            for r in records {
+                let _ = apply_personal_remote(&mut a, &r.key, &r.value.to_string(), &r.meta).unwrap();
+            }
+        }
+
+        // 两端自记录保持各自原值（peer 各指向对方设备，未被互灌）
+        let a_self = a.get(&self_key).unwrap().expect("A 自记录仍在");
+        assert!(a_self.contains("peer-a"), "A 自记录 peer 保持指向 A 设备: {a_self}");
+        let b_self = b.get(&self_key).unwrap().expect("B 自记录仍在");
+        assert!(b_self.contains("peer-b"), "B 自记录 peer 保持指向 B 设备: {b_self}");
+        // 普通朋友记录照常同步到 B
+        assert!(b.get(&friend_key).unwrap().is_some(), "普通朋友记录应同步");
+
+        // 收敛：折叠 vv 一致，再交换无 need/data（无伪 diff）
+        let hello_a2 = build_hello(&a, 2_592_000_000, 500, "eager", Some(&self_key)).unwrap();
+        assert!(exchange(&a, &mut b, &hello_a2, Some(&self_key)).is_empty(), "A→B 收敛无增量");
+        let hello_b2 = build_hello(&b, 2_592_000_000, 500, "eager", Some(&self_key)).unwrap();
+        assert!(exchange(&b, &mut a, &hello_b2, Some(&self_key)).is_empty(), "B→A 收敛无增量");
+    }
+
+    /// 自记录墓碑排除：本机删自记录产生的墓碑不进增量、不进折叠——
+    /// 不得把对端的自记录（它的设备相对数据）删掉。
+    #[test]
+    fn self_friend_tombstone_excluded_from_incremental() {
+        let mut a = MemoryStorage::new();
+        let self_key = self_friend_key("root-self");
+        put_personal(&mut a, NODE_A, &self_key, r#""v""#, 1000).unwrap();
+        delete_personal(&mut a, NODE_A, &self_key, 2000).unwrap();
+
+        let inc = collect_incremental(
+            &a,
+            category_friend(),
+            &VersionVector::new(),
+            Some(&self_key),
+        )
+        .unwrap();
+        assert!(inc.is_empty(), "自记录墓碑不参与增量推送");
+        let folded = collect_category_vv(&a, category_friend(), Some(&self_key)).unwrap();
+        assert!(folded.get(NODE_A).is_none(), "自记录墓碑不进折叠");
+        // 对照：不排除时墓碑确实会在增量里（防测试本身失效）
+        let inc_raw =
+            collect_incremental(&a, category_friend(), &VersionVector::new(), None).unwrap();
+        assert_eq!(inc_raw.len(), 1);
+        assert_eq!(inc_raw[0].meta.tombstone, Some(true));
     }
 
     fn category_named(name: &str) -> &'static Category {

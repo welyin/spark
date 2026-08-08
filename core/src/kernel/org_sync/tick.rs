@@ -131,6 +131,11 @@ impl OrgSyncContext {
         if peer_id.is_empty() {
             return;
         }
+        // 防御：自记录 peer 被污染指向本机（历史 pdsync 互灌残留）时不自拨——
+        // 拨自己触发 DialError::LocalPeerId，resync 快照亦无意义
+        if local_info.and_then(|i| i.peer_id.as_deref()) == Some(peer_id.as_str()) {
+            return;
+        }
         let connected = local_info
             .map(|info| info.connected_peers.iter().any(|p| p == &peer_id))
             .unwrap_or(false);
@@ -202,12 +207,15 @@ impl OrgSyncContext {
             .unwrap_or_else(|e| e.into_inner())
             .contains(peer_id);
         // 0) pdsync-hello：摘要交换。对端支持则回 need/data 触发收敛；不
-        //    支持则静默（由下方旧快照回退兜底）。
+        //    支持则静默（由下方旧快照回退兜底）。自 FriendRecord 键对称排除
+        //    （peer 为设备相对值，不可互灌——双设备同账号排除键相同，folded
+        //    vv 保持一致）。
         if let Ok(hello) = crate::sync::pdsync::build_hello(
             &self.storage,
             2_592_000_000,
             500,
             "eager",
+            Some(&crate::sync::pdsync::self_friend_key(root_id)),
         ) {
             let envelope = crate::kernel::dm_envelope::build_envelope(
                 crate::kernel::dm_envelope::KIND_PDSYNC_HELLO,
