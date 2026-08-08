@@ -10,7 +10,7 @@ use libp2p::swarm::dial_opts::DialOpts;
 use libp2p::{Multiaddr, PeerId};
 use tokio::sync::oneshot;
 
-use crate::p2p::constants::{DHT_REPUBLISH_TICKS, NODE_ANNOUNCE_INTERVAL_MS};
+use crate::p2p::constants::NODE_ANNOUNCE_INTERVAL_MS;
 use crate::p2p::direct;
 use crate::p2p::keepalive;
 use crate::p2p::overlay_store::OverlayPeerStore;
@@ -86,7 +86,8 @@ impl<S: StorageBackend> EventLoop<S> {
 
         // 4) DHT 节点存在记录周期重发（挂 tick 计数：首个 tick 发一次，此后按间隔）
         self.dht_tick_counter += 1;
-        if self.dht_tick_counter == 1 || self.dht_tick_counter % DHT_REPUBLISH_TICKS == 0 {
+        let republish_interval = self.dht_republish_ticks;
+        if self.dht_tick_counter == 1 || self.dht_tick_counter % republish_interval == 0 {
             self.publish_node_presence_record();
             // 5) 网关职责记录（组织私有 DHT）周期重发（§15 同节奏）
             let provided: Vec<(Vec<u8>, Vec<u8>)> = self
@@ -102,6 +103,33 @@ impl<S: StorageBackend> EventLoop<S> {
                 }
             }
         }
+
+        // 6) 网络变化 debounce 到期检查（peer-rediscovery §4.1.3）：地址确实变化
+        //    才执行重发布 + 重建 relay 预约 + 预热重拨。
+        if let Some(deadline) = self.pending_network_change
+            && now >= deadline
+        {
+            self.pending_network_change = None;
+            let base = self.pending_network_change_base.take();
+            let current = self.listen_addr_strings();
+            let changed = base.as_deref().is_some_and(|b| b != current.as_slice());
+            if changed {
+                // ③④⑤ 重发布 announce + DHT
+                let _ = self.publish_announce();
+                self.publish_node_presence_record();
+                // ⑥ 重建 relay 预约（旧预约随旧连接失效）
+                self.ensure_relay_reservations();
+                // 主路径（§4.1.2 ④）：主动重拨优先类目 peer（自设备/好友）——
+                // 缓存地址在切网后仍有较大概率有效，无需等被动 DHT 兜底。
+                self.redial_priority_peers();
+            }
+        }
+
+        // 7) relay 预约不足时补充（peer-rediscovery §4.6.2）
+        self.ensure_relay_reservations();
+
+        // 8) 优先类目竞速退避到期检查（peer-rediscovery §4.8）
+        self.poll_rediscovery_retries();
 
         stats
     }

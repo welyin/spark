@@ -192,6 +192,19 @@ impl<S: StorageBackend> EventLoop<S> {
     }
 
     pub(super) fn resolve_dht_get(&mut self, query_id: kad::QueryId, result: kad::GetRecordResult) {
+        // 竞速查询：优先类目 peer 的 DHT 竞速命中/未命中走 rediscovery 分支
+        if let Some(peer) = self.rediscovery_dht_queries.remove(&query_id) {
+            match &result {
+                Ok(kad::GetRecordOk::FoundRecord(peer_record)) => {
+                    self.on_rediscovery_dht_hit(peer, &peer_record.record.value, Some(query_id));
+                }
+                _ => {
+                    self.on_rediscovery_dht_miss(peer, Some(query_id));
+                }
+            }
+            // 竞速查询不属于普通 pending_dht_get，直接返回
+            return;
+        }
         match result {
             Ok(kad::GetRecordOk::FoundRecord(peer_record)) => {
                 if let Some(tx) = self.pending_dht_get.remove(&query_id) {
@@ -232,7 +245,9 @@ impl<S: StorageBackend> EventLoop<S> {
     /// 节点存在记录的 DHT 周期重发：内容直接复用 node-announce 签名报文，
     /// key = sha256("spark:node:" + peerId)（announce.rs `node_presence_record_key`）。
     pub(super) fn publish_node_presence_record(&mut self) {
-        let Some(addresses) = prepare_publish_addresses(&self.listen_addr_strings()) else {
+        // 发布侧排序：IPv6 直连在前、电路中继在后（peer-rediscovery §4.6.3）
+        let sorted = crate::p2p::peer_targets::sort_addresses(self.listen_addr_strings());
+        let Some(addresses) = prepare_publish_addresses(&sorted) else {
             return;
         };
         let self_id = self.self_peer_id().to_base58();

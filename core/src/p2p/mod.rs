@@ -22,6 +22,7 @@ pub mod overlay_store;
 pub mod peer_activity;
 pub mod peer_targets;
 pub mod plugin_announce;
+pub mod priority_peers;
 
 pub use announce::{
     AnnounceReject, NodeAnnounce, NodeAnnounceValidator, announce_to_json,
@@ -41,7 +42,7 @@ pub use overlay_store::{OverlayPeerRecord, OverlayPeerSource, OverlayPeerStore};
 pub use peer_activity::{
     NO_RECORD_PRIORITY, NodeObservation, PeerActivityRecord, PeerActivityStore, compute_priority,
 };
-pub use peer_targets::{PeerNodeInfo, build_dial_targets, extract_peer_id};
+pub use peer_targets::{PeerNodeInfo, build_dial_targets, extract_peer_id, sort_addresses};
 pub use plugin_announce::{
     AnnouncePow, AnnounceUpsert, AnnounceVerified, PLUGIN_ANNOUNCE_TYPE, PluginAnnounce,
     PluginAnnounceIndexEntry, PluginAnnounceInput, PluginAnnounceReject, PluginAnnounceStore,

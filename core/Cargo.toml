@@ -54,7 +54,12 @@ async-trait = "0.1.89"
 if-addrs = "0.15"
 # 插件后台运行时的 JS 引擎（plugin-runtime 设计）：QuickJS 纯 C 嵌入，
 # 二进制增量约 1~2MB；引擎级内存上限/中断 handler 支撑插件熔断。
-rquickjs = { version = "0.12.2", features = ["loader"] }
+#
+# bindgen：QuickJS 对 Android 等目标不提供预生成绑定。启用 bindgen 后
+# rquickjs-sys 的 build.rs 在「宿主 target == 构建 target」时会复用捆绑绑定
+# （x86_64-pc-windows-msvc 等均自带），无需 libclang；仅在交叉编译（Android
+# target != host）时才真正跑 bindgen，需设置 LIBCLANG_PATH 指向 libclang.dll。
+rquickjs = { version = "0.12.2", features = ["loader", "bindgen"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 
 [target.'cfg(unix)'.dependencies]

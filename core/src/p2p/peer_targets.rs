@@ -53,6 +53,8 @@ pub fn build_dial_targets(node_info: &PeerNodeInfo) -> crate::p2p::Result<Vec<St
         ));
     }
 
+    // IPv6 直连 → IPv4 直连 → 电路中继 排序（peer-rediscovery §4.6.3）
+    let addresses = sort_addresses(addresses);
     let target_peer_id = extract_peer_id(node_info);
     let mut targets = Vec::with_capacity(addresses.len() * 2);
     for address in addresses {
@@ -76,5 +78,54 @@ fn is_unroutable(address: &str) -> bool {
         Some(Protocol::Ip4(ip)) => ip.is_unspecified(),
         Some(Protocol::Ip6(ip)) => ip.is_unspecified(),
         _ => false,
+    }
+}
+
+/// 拨号地址排序：IPv6 直连 > IPv4 直连 > 电路中继（peer-rediscovery §4.6.3）。
+///
+/// 国内移动网络 IPv6 是移动端之间唯一直连可能（IPv4 双 CGNAT 入站不可达），
+/// 且 IPv6 打洞无需猜端口；因此拨号时 IPv6 直连排最前，电路中继垫底。
+/// Happy Eyeballs 式并发拨号由 libp2p 自带的并发因子承担，本函数只决定
+/// 尝试顺序。
+pub fn sort_addresses(addrs: Vec<String>) -> Vec<String> {
+    fn rank(a: &str) -> u8 {
+        let Ok(ma) = a.parse::<libp2p::Multiaddr>() else {
+            return 1;
+        };
+        if ma.iter().any(|p| matches!(p, Protocol::P2pCircuit)) {
+            2 // 电路中继兜底
+        } else if ma.iter().any(|p| matches!(p, Protocol::Ip6(_))) {
+            0 // IPv6 直连优先
+        } else {
+            1 // IPv4 直连次之
+        }
+    }
+    let mut addrs = addrs;
+    addrs.sort_by_key(|a| rank(a));
+    addrs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn address_sort_ipv6_first() {
+        let v4 = "/ip4/192.168.1.5/tcp/15002".to_string();
+        let v6 = "/ip6/2408:8207:1::1/tcp/15002".to_string();
+        // 电路中继：含 /p2p-circuit 段（不含 peerId，纯中继形态）
+        let circuit = "/ip4/1.2.3.4/tcp/15002/p2p-circuit".to_string();
+        // IPv6 直连 > IPv4 直连 > 电路中继
+        let sorted = sort_addresses(vec![circuit.clone(), v4.clone(), v6.clone()]);
+        assert_eq!(sorted, vec![v6, v4, circuit]);
+    }
+
+    #[test]
+    fn sort_addresses_preserves_relative_order_within_rank() {
+        let a1 = "/ip4/1.1.1.1/tcp/15002".to_string();
+        let a2 = "/ip4/2.2.2.2/tcp/15002".to_string();
+        // 同为 IPv4，保持原顺序
+        let sorted = sort_addresses(vec![a1.clone(), a2.clone()]);
+        assert_eq!(sorted, vec![a1, a2]);
     }
 }

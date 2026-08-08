@@ -418,6 +418,8 @@ async fn main() {
         dht_mode: spark_core::p2p::DhtMode::Server,
         plugin_announce_pow_bits: None,
         plugin_announce_relay_tenure_ms: None,
+        dht_republish_ticks: None,
+        enable_relay_server: true,
         now_fn: Arc::new(spark_core::p2p::node::system_now_ms),
     };
 

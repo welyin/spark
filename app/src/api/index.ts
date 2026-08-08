@@ -210,7 +210,9 @@ export function createTauriApi(): ElectronAPI {
       setDhtMode: (mode) => call('p2p-set-dht-mode', mode),
       // 节点名片（org.md §17）：手动恢复连接的线下引导串；orgId 缺省=不附恢复 token
       makeNodeCard: (orgId?: string) => call('p2p-make-node-card', orgId ?? undefined),
-      importNodeCard: (card: string) => call('p2p-import-node-card', card)
+      importNodeCard: (card: string) => call('p2p-import-node-card', card),
+      // 网络接口变化通知（WiFi↔蜂窝切换）：内核 debounce 后重发布地址 + 重建 relay 预约
+      networkChanged: () => call('p2p-network-changed')
     },
     plugin: {
       // TODO: 插件独立窗口属于插件运行时，本期不在壳范围（插件走 tab 模式）

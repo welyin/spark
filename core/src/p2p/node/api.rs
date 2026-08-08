@@ -89,6 +89,10 @@ pub(super) enum Command {
         peer_id: String,
         tx: oneshot::Sender<Result<bool>>,
     },
+    /// 壳层检测到网络变化（WiFi↔蜂窝切换等）通知内核（peer-rediscovery §4.1.3）。
+    /// 无结果回传——内核异步处理：启动 3–5s debounce，到期后若监听地址确已
+    /// 变化则重发布 announce + DHT 记录、重建 relay 预约、主动重拨优先类目 peer。
+    NetworkChanged,
     Tick {
         tx: oneshot::Sender<KeepaliveStats>,
     },
@@ -334,5 +338,11 @@ impl P2pNode {
             .await
             .map_err(|_| P2pError::Protocol("tick timeout".to_string()))?
             .map_err(|_| P2pError::NotStarted)
+    }
+
+    /// 通知内核网络接口变化（壳层在检测到 WiFi↔蜂窝切换等事件后调用）。
+    /// 无结果回传——内核异步 debounce 后重发布地址并重建 relay 预约。
+    pub async fn network_changed(&self) -> Result<()> {
+        self.send_cmd(Command::NetworkChanged)
     }
 }

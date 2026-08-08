@@ -248,6 +248,14 @@ pub fn p2p_import_node_card(
     import_node_card_inner(&mut *lock_kernel(&state)?, &card)
 }
 
+/// 通知内核网络接口变化（WiFi↔蜂窝切换等）。壳层在监听网络事件后调用；
+/// P2P 未启动时静默成功。peer-rediscovery §4.1.3。
+#[tauri::command]
+pub fn p2p_network_changed(state: tauri::State<'_, KernelState>) -> Result<(), String> {
+    let kernel = lock_kernel(&state)?;
+    kernel.p2p_network_changed().map_err(err)
+}
+
 // ------------------------------------------------------------------
 // 单元测试（不启动真实网络：只验证未启动语义与停止幂等）
 // ------------------------------------------------------------------

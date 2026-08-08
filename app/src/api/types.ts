@@ -543,6 +543,8 @@ export type ElectronAPI = {
     setDhtMode: (mode: 'off' | 'client' | 'server') => Promise<{ dhtMode: 'off' | 'client' | 'server' }>;
     makeNodeCard: (orgId?: string) => Promise<{ card: string }>;
     importNodeCard: (card: string) => Promise<{ peerId: string; hasRecoveryToken: boolean; connectError: string | null }>;
+    /** 网络接口变化通知（WiFi↔蜂窝切换）：内核异步 debounce 后重发布地址，无结果回传 */
+    networkChanged: () => Promise<void>;
   };
   plugin: {
     openView: (pluginDomain: string, pluginView?: string) => Promise<{ success: boolean; windowId: number }>;

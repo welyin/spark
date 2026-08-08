@@ -22,6 +22,8 @@ mod dm;
 mod event_loop;
 mod gossip;
 mod org_direct;
+mod rediscovery;
+mod relay_manager;
 mod rr_protocols;
 mod swarm_events;
 #[cfg(test)]
@@ -93,6 +95,12 @@ pub struct P2pConfig {
     pub plugin_announce_pow_bits: Option<u32>,
     /// plugin-announce relay 资历阈值覆盖（§8.6；None = 72h，测试调 0/调大）。
     pub plugin_announce_relay_tenure_ms: Option<i64>,
+    /// DHT 周期重发间隔覆盖（tick 计数；None = 默认 240 ≈ 4h，移动端传 120 ≈ 2h，
+    /// peer-rediscovery §4.2）。
+    pub dht_republish_ticks: Option<u64>,
+    /// 是否启用 relay server（接受他人预约）。桌面默认 true；移动端强制 false
+    /// （节省流量与电量，移动端只作 relay client，peer-rediscovery §7.2）。
+    pub enable_relay_server: bool,
     /// 时间源注入。
     pub now_fn: NowFn,
 }
@@ -112,6 +120,8 @@ impl Default for P2pConfig {
             dht_mode: DhtMode::default(),
             plugin_announce_pow_bits: None,
             plugin_announce_relay_tenure_ms: None,
+            dht_republish_ticks: None,
+            enable_relay_server: true,
             now_fn: Arc::new(system_now_ms),
         }
     }
@@ -281,6 +291,7 @@ impl P2pNode {
         let behaviour_options = BehaviourOptions {
             enable_mdns: config.enable_mdns,
             enable_upnp: config.enable_upnp,
+            enable_relay_server: config.enable_relay_server,
             dht_mode: config.dht_mode,
         };
         let mut swarm = build_swarm(&keypair, &behaviour_options).await?;
@@ -353,6 +364,17 @@ impl P2pNode {
             pending_dht_providers: HashMap::new(),
             provided_records: HashMap::new(),
             dht_tick_counter: 0,
+            dht_republish_ticks: config
+                .dht_republish_ticks
+                .unwrap_or(crate::p2p::constants::DHT_REPUBLISH_TICKS),
+            pending_network_change: None,
+            pending_network_change_base: None,
+            rediscovery_states: HashMap::new(),
+            rediscovery_dht_queries: HashMap::new(),
+            rediscovery_failures: HashMap::new(),
+            pending_rediscovery_confirm: HashMap::new(),
+            relay_reservations: Vec::new(),
+            relay_reservations_inflight: std::collections::HashSet::new(),
             dm_completion_tx,
             dm_completion_rx,
             pending_dm_inbound: HashMap::new(),

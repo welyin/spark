@@ -45,8 +45,10 @@ impl<S: StorageBackend> EventLoop<S> {
                 }
             }
             SwarmEvent::ExternalAddrConfirmed { .. } => {
-                // 地址变化（UPnP 映射、relay 预约）→ 立即补发通告
+                // 地址变化（UPnP 映射、relay 预约）→ 立即补发通告 + DHT 记录
+                //（peer-rediscovery §4.2：外部地址确认同时触发 DHT 重发）
                 let _ = self.publish_announce();
+                self.publish_node_presence_record();
             }
             SwarmEvent::ConnectionEstablished {
                 peer_id,
@@ -151,6 +153,8 @@ impl<S: StorageBackend> EventLoop<S> {
                     });
                     self.host.on_peer_connected(&peer_id.to_base58());
                 }
+                // 竞速场景：连接建立后完成三层确认（peer-rediscovery §4.3）
+                self.complete_rediscovery_confirm(peer_id);
                 // 版本探测（in-flight 去重）
                 self.begin_version_probe(peer_id);
             }
@@ -168,6 +172,12 @@ impl<S: StorageBackend> EventLoop<S> {
                     self.emit(P2pEvent::PeerDisconnected {
                         peer_id: peer_id.to_base58(),
                     });
+                    // relay 连接断开 → 移除对应预约并尝试补充（peer-rediscovery §4.6.2）
+                    self.on_relay_connection_lost(peer_id);
+                    // 优先类目 peer（自设备/好友）断开 → 立即并行竞速（peer-rediscovery §4.3）
+                    if self.host.is_priority_peer(&peer_id.to_base58()) {
+                        self.start_rediscovery(peer_id);
+                    }
                 }
             }
             SwarmEvent::OutgoingConnectionError { peer_id, connection_id, error, .. } => {
@@ -246,6 +256,20 @@ impl<S: StorageBackend> EventLoop<S> {
                     let mut store = OverlayPeerStore::new(&mut self.storage);
                     let _ = store.mark_dial_result(&peer.to_base58(), false);
                 }
+                // 竞速拨号失败（peer-rediscovery §4.3/N2）：DHT 命中后拨号待确认
+                // 阶段全部失败时计一次失败进退避并清理暂存——否则状态永卡
+                // Racing、暂存 announce 泄漏（函数内部按 Racing+stash 归属，
+                // 普通拨号失败不受影响）
+                if let Some(peer) = peer_id {
+                    self.on_rediscovery_dial_failed(peer);
+                }
+            }
+            SwarmEvent::ListenerClosed { addresses, .. } => {
+                // 电路监听关闭 = relay 预约失败/过期/被拒（libp2p-relay 0.21
+                // client 无 ReservationReqFailed 事件，N3）：清理预约与
+                // in-flight 标记，重选由周期 tick 自然进行（普通 TCP 监听
+                // 地址关闭不含 /p2p-circuit 段，函数内部忽略）
+                self.on_circuit_listener_closed(&addresses);
             }
             SwarmEvent::Behaviour(behaviour_event) => self.handle_behaviour_event(behaviour_event),
             _ => {}
@@ -496,6 +520,22 @@ impl<S: StorageBackend> EventLoop<S> {
                 ..
             }) => {
                 self.resolve_org_failure(request_id, true);
+            }
+            SparkBehaviourEvent::RelayClient(libp2p::relay::client::Event::ReservationReqAccepted {
+                relay_peer_id,
+                ..
+            }) => {
+                // 预约成功：记录电路地址，触发 announce + DHT 重发（peer-rediscovery §4.6）。
+                // 只认 ReservationReqAccepted——OutboundCircuitEstablished 是"我们经 relay
+                // 拨出"，与预约无关，不能据此登记自己对外可达的电路地址。
+                self.on_reservation_accepted(relay_peer_id);
+            }
+            SparkBehaviourEvent::RelayClient(
+                libp2p::relay::client::Event::OutboundCircuitEstablished { .. }
+                | libp2p::relay::client::Event::InboundCircuitEstablished { .. },
+            ) => {
+                // 电路建立（出站经 relay 拨出 / 入站对端经我们预约连入）均不改变对外
+                // 可达的电路地址集合；对外发布只以 ReservationReqAccepted 为准（§4.6）。
             }
             _ => {}
         }

@@ -77,6 +77,15 @@ async fn test_loop() -> EventLoop<MemoryStorage> {
         pending_dht_providers: HashMap::new(),
         provided_records: HashMap::new(),
         dht_tick_counter: 0,
+        dht_republish_ticks: crate::p2p::constants::DHT_REPUBLISH_TICKS,
+        pending_network_change: None,
+        pending_network_change_base: None,
+        rediscovery_states: HashMap::new(),
+        rediscovery_dht_queries: HashMap::new(),
+        rediscovery_failures: HashMap::new(),
+        pending_rediscovery_confirm: HashMap::new(),
+        relay_reservations: Vec::new(),
+        relay_reservations_inflight: std::collections::HashSet::new(),
         dm_completion_tx,
         dm_completion_rx,
         pending_dm_inbound: HashMap::new(),
@@ -290,4 +299,155 @@ async fn stale_org_attempts_pruned_on_begin() {
         el.pending_org_attempts.is_empty(),
         "已放弃的滞留 attempt 被回收"
     );
+}
+
+/// 回归测试（peer-rediscovery §4.8 严重缺陷）：退避到期后必须能重新竞速，
+/// 而不是被 `start_rediscovery` 的入口守卫拒绝卡死在 Backoff。
+#[tokio::test]
+async fn rediscovery_backoff_can_retry_after_deadline() {
+    use super::rediscovery::RediscoveryState;
+    let mut el = test_loop().await;
+    let peer = PeerId::random();
+    // 已到期的 Backoff（now() 恒为 0，next_retry_at=0 即已到期）
+    el.rediscovery_states.insert(
+        peer,
+        RediscoveryState::Backoff { next_retry_at: 0 },
+    );
+    el.poll_rediscovery_retries();
+    let state = el.rediscovery_states.get(&peer).expect("state present");
+    assert!(
+        matches!(state, RediscoveryState::Racing { .. }),
+        "退避到期后应重新进入竞速，实际: {state:?}"
+    );
+}
+
+/// 连续失败达到上限 → Offline（§4.8 5 次封顶），且再次退避到期不复活。
+/// 走真实路径循环 miss → Backoff 到期 poll 重试 → Racing → miss——连调
+/// miss 不经过 poll 的测法不代表真实路径（失败计数须跨重试轮次保留）。
+#[tokio::test]
+async fn rediscovery_exhaustion_reaches_offline() {
+    use super::rediscovery::RediscoveryState;
+    let mut el = test_loop().await;
+    let peer = PeerId::random();
+    for round in 1..5u32 {
+        el.on_rediscovery_dht_miss(peer, None);
+        let state = el.rediscovery_states.get(&peer).expect("state present");
+        assert!(
+            matches!(state, RediscoveryState::Backoff { .. }),
+            "第 {round} 次失败后应为 Backoff，实际: {state:?}"
+        );
+        assert_eq!(
+            el.rediscovery_failures.get(&peer).copied(),
+            Some(round),
+            "第 {round} 次失败后连续失败计数应为 {round}"
+        );
+        // 模拟退避到期（now() 恒为 0，把 next_retry_at 拨回 0）后重新竞速
+        if let Some(s) = el.rediscovery_states.get_mut(&peer) {
+            *s = RediscoveryState::Backoff { next_retry_at: 0 };
+        }
+        el.poll_rediscovery_retries();
+        let state = el.rediscovery_states.get(&peer).expect("state present");
+        assert!(
+            matches!(state, RediscoveryState::Racing { .. }),
+            "第 {round} 轮退避到期后应重新竞速，实际: {state:?}"
+        );
+    }
+    // 第 5 次失败 → Offline，连续失败计数随之清除
+    el.on_rediscovery_dht_miss(peer, None);
+    assert!(
+        matches!(
+            el.rediscovery_states.get(&peer),
+            Some(RediscoveryState::Offline)
+        ),
+        "5 次失败后应为 Offline，实际: {:?}",
+        el.rediscovery_states.get(&peer)
+    );
+    assert!(
+        el.rediscovery_failures.get(&peer).is_none(),
+        "Offline 后失败计数应清除"
+    );
+    // Offline 状态下再 miss 不复活
+    el.on_rediscovery_dht_miss(peer, None);
+    assert!(matches!(
+        el.rediscovery_states.get(&peer),
+        Some(RediscoveryState::Offline)
+    ));
+}
+
+/// 竞速拨号失败归属（N2）：仅「DHT 命中后拨号待确认」阶段（Racing + 暂存）
+/// 计失败进退避并清暂存；无状态 peer 与并行 A 阶段（Racing 但无暂存，
+/// DHT 查询仍在途）不受影响。
+#[tokio::test]
+async fn rediscovery_dial_failure_attribution() {
+    use super::rediscovery::RediscoveryState;
+    let mut el = test_loop().await;
+    let peer = PeerId::random();
+    // 无状态 peer（普通拨号失败）：不产生任何竞速状态
+    el.on_rediscovery_dial_failed(peer);
+    assert!(el.rediscovery_states.get(&peer).is_none());
+    // 并行 A 阶段（Racing、无暂存）：不影响，等 DHT 查询结果收尾
+    el.rediscovery_states.insert(
+        peer,
+        RediscoveryState::Racing {
+            started_at: 0,
+            dht_query_id: None,
+        },
+    );
+    el.on_rediscovery_dial_failed(peer);
+    assert!(matches!(
+        el.rediscovery_states.get(&peer),
+        Some(RediscoveryState::Racing { .. })
+    ));
+    // 拨号待确认阶段（Racing + 暂存）：计一次失败进 Backoff、清暂存
+    el.pending_rediscovery_confirm.insert(
+        peer,
+        crate::p2p::announce::NodeAnnounce {
+            msg_type: "spark-node-announce".to_string(),
+            version: 1,
+            peer_id: peer.to_base58(),
+            addresses: vec![],
+            timestamp: 0,
+            signature: String::new(),
+        },
+    );
+    el.on_rediscovery_dial_failed(peer);
+    assert!(
+        el.pending_rediscovery_confirm.get(&peer).is_none(),
+        "暂存的 announce 应被清理"
+    );
+    assert!(
+        matches!(
+            el.rediscovery_states.get(&peer),
+            Some(RediscoveryState::Backoff { .. })
+        ) && el.rediscovery_failures.get(&peer).copied() == Some(1),
+        "竞速拨号失败应计一次失败进退避，实际: {:?} / failures={:?}",
+        el.rediscovery_states.get(&peer),
+        el.rediscovery_failures.get(&peer)
+    );
+}
+
+/// 电路监听关闭（N3）：清理该 relay 的预约与 in-flight 标记使其可被重选；
+/// 非电路地址（普通 TCP 监听）关闭不影响预约状态。
+#[tokio::test]
+async fn circuit_listener_closed_clears_reservation_state() {
+    use super::relay_manager::RelayReservation;
+    let mut el = test_loop().await;
+    let relay = PeerId::random();
+    let mut circuit = Multiaddr::empty();
+    circuit.push(libp2p::multiaddr::Protocol::P2p(relay.into()));
+    circuit.push(libp2p::multiaddr::Protocol::P2pCircuit);
+    el.relay_reservations_inflight.insert(relay);
+    el.relay_reservations.push(RelayReservation {
+        relay_peer: relay,
+        circuit_addr: circuit.clone(),
+        created_at: 0,
+    });
+    // 非电路地址：不影响
+    el.on_circuit_listener_closed(&["/ip4/127.0.0.1/tcp/15002".parse().unwrap()]);
+    assert!(el.relay_reservations_inflight.contains(&relay));
+    assert_eq!(el.relay_reservations.len(), 1);
+    // 电路地址：预约与 in-flight 都清理
+    el.on_circuit_listener_closed(&[circuit]);
+    assert!(el.relay_reservations_inflight.is_empty());
+    assert!(el.relay_reservations.is_empty());
 }

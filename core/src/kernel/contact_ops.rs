@@ -202,6 +202,24 @@ impl Kernel {
             system_now_ms(),
             &node_id,
         )?;
+        // 拉黑 → 移出优先类目集合（§4.4 明确含拉黑；恢复信任才可重新加入）
+        if blocked {
+            let pid = self
+                .require_storage()
+                .ok()
+                .and_then(|s| ContactService::get_friend(s, root_id).ok().flatten())
+                .and_then(|f| f.peer)
+                .map(|p| p.peer_id)
+                .filter(|id| !id.trim().is_empty());
+            if let Some(pid) = pid {
+                let mut priority = crate::p2p::priority_peers::PriorityPeerStore::new(
+                    self.require_storage_mut()?,
+                );
+                if let Err(e) = priority.remove(&pid) {
+                    eprintln!("[contact] block priority peer remove failed: {e}");
+                }
+            }
+        }
         if space == "personal" {
             self.broadcast_contact_sync();
         }
@@ -217,6 +235,14 @@ impl Kernel {
         if self.current_root_id()?.as_deref() == Some(root_id) {
             return Err(KernelError::Internal("不能删除自己".to_string()));
         }
+        // 删除前取出该好友的 libp2p peerId，用于移出优先类目集合
+        let peer_id = self
+            .require_storage()
+            .ok()
+            .and_then(|s| ContactService::get_friend(s, root_id).ok().flatten())
+            .and_then(|f| f.peer)
+            .map(|p| p.peer_id)
+            .filter(|id| !id.trim().is_empty());
         let node_id = self.sync_node_id();
         ContactService::remove_friend_pdsync(
             self.require_storage_mut()?,
@@ -224,6 +250,15 @@ impl Kernel {
             system_now_ms(),
             &node_id,
         )?;
+        // 移出优先类目集合（peer-rediscovery §4.4）
+        if let Some(pid) = peer_id {
+            let mut priority = crate::p2p::priority_peers::PriorityPeerStore::new(
+                self.require_storage_mut()?,
+            );
+            if let Err(e) = priority.remove(&pid) {
+                eprintln!("[contact] priority peer remove failed: {e}");
+            }
+        }
         if block {
             ContactService::set_blocked(
                 self.require_storage_mut()?,
@@ -548,6 +583,17 @@ impl Kernel {
         friend.updated_at = now;
         let node_id = self.sync_node_id();
         ContactService::upsert_friend_pdsync(self.require_storage_mut()?, &friend, now, &node_id)?;
+        // 好友接受方也入优先集合（发起方在 handle_friend_accept 已入，接受方必须对称，
+        // 否则竞速单向失效——§4.4 优先类目对双方都生效）
+        if let Some(p) = request.peer.as_ref()
+            && !p.peer_id.trim().is_empty()
+        {
+            let mut priority =
+                crate::p2p::priority_peers::PriorityPeerStore::new(self.require_storage_mut()?);
+            if let Err(e) = priority.add(&p.peer_id) {
+                eprintln!("[contact] accept priority peer add failed: {e}");
+            }
+        }
         if let Some(peer) = &request.peer {
             // 入站申请记录 id 为复合形式 `{from}:{原 requestId}`（防跨发送者撞 id，
             // 见 inbound_dm handle_friend_request）；回发必须带原 requestId——对方

@@ -116,6 +116,13 @@ pub trait P2pHost: Send {
     /// `{peerId, addresses}` 条目，业务层按未验证口径入邻居池（`verified=false`）；
     /// 组织校验仍走 pull/claim 链路，信任边界不变。
     fn on_org_member_hints(&mut self, _hints: &[OrgMemberHint]) {}
+
+    /// 判断 peer 是否属于优先类目（自设备 / 好友）。返回 true 时该 peer 断开
+    /// 后走并行竞速恢复（peer-rediscovery §4.3）；否则维持组织成员串行兜底。
+    /// 事件循环线程内调用，实现须保持轻量（KV 读写级）。
+    fn is_priority_peer(&mut self, _peer_id: &str) -> bool {
+        false
+    }
 }
 
 /// 可在事件循环线程外执行的 dm 入站处理器（实现须 `Send + Sync`，

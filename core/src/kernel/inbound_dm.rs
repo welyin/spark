@@ -258,6 +258,16 @@ fn merge_friend_record<S: StorageBackend>(
     // 传播到其他自设备）
     friend.updated_at = now_ms;
     ContactService::upsert_friend_pdsync(storage, &friend, now_ms, node_id)?;
+    // pdsync/好友接受等所有好友合并路径统一回填优先集合（§4.4；已拉黑不加入）
+    if !friend.blocked
+        && let Some(p) = friend.peer.as_ref()
+        && !p.peer_id.trim().is_empty()
+    {
+        let mut priority = crate::p2p::priority_peers::PriorityPeerStore::new(storage);
+        if let Err(e) = priority.add(&p.peer_id) {
+            eprintln!("[dm] merge friend priority peer add failed: {e}");
+        }
+    }
     Ok(friend)
 }
 

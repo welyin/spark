@@ -136,6 +136,9 @@ impl Kernel {
                 .block_on(P2pNode::start(config, storage.clone(), host))?;
         let peer_id = node.peer_id().to_string();
         self.p2p_start_error = None;
+        // 存量好友回填优先集合：pdsync/历史导入的好友在启动时统一补入，
+        // 保证断开后竞速识别立即可用（§4.4；已拉黑或无线索的不入）
+        self.backfill_priority_peers()?;
         let mut events = node.take_events();
         let node = Arc::new(node);
         *self.p2p_node_shared.lock().unwrap() = Some(Arc::clone(&node));
@@ -269,6 +272,54 @@ impl Kernel {
             }
         }
         Ok(())
+    }
+
+    /// 存量好友回填优先类目集合（§4.4）：遍历个人空间好友表，把未拉黑且
+    /// 有 peerId 的好友加入集合；自设备由 handle_self_friend_request 单独维护。
+    fn backfill_priority_peers(&mut self) -> Result<()> {
+        let prefix = crate::contact::FRIEND_PREFIX;
+        let rows = self
+            .require_storage()?
+            .scan(&ScanOptions::prefix(prefix))?;
+        for (key, _) in rows {
+            let Some(root_id) = key.strip_prefix(prefix) else {
+                continue;
+            };
+            if root_id.is_empty() {
+                continue;
+            }
+            let friend =
+                crate::contact::ContactService::get_friend(self.require_storage()?, root_id)?;
+            let Some(friend) = friend else {
+                continue;
+            };
+            let no_peer = match friend.peer.as_ref() {
+                Some(p) => p.peer_id.trim().is_empty(),
+                None => true,
+            };
+            if friend.blocked || no_peer {
+                continue;
+            }
+            let peer_id = friend.peer.as_ref().unwrap().peer_id.clone();
+            let mut priority =
+                crate::p2p::priority_peers::PriorityPeerStore::new(self.require_storage_mut()?);
+            if let Err(e) = priority.add(&peer_id) {
+                eprintln!("[p2p] backfill priority peer add failed: {e}");
+            }
+        }
+        Ok(())
+    }
+
+    /// 通知内核网络接口变化（WiFi↔蜂窝切换等；peer-rediscovery §4.1.3）。
+    /// 壳层在检测到连接变更后调用；P2P 未启动时静默忽略。
+    pub fn p2p_network_changed(&self) -> Result<()> {
+        match &self.p2p {
+            None => Ok(()),
+            Some(node) => {
+                self.runtime.handle().block_on(node.network_changed())?;
+                Ok(())
+            }
+        }
     }
 
     /// P2P 状态快照（未启动返回 `Ok(None)`）。

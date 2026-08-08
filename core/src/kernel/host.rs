@@ -1121,6 +1121,18 @@ impl P2pHost for KernelHost {
             }
         }
     }
+
+    /// peer 是否属于优先类目（自设备 / 好友）——peer-rediscovery §4.4。
+    /// 查 sled 中的 `PriorityPeerStore`；集合仅存本地，不上网。
+    fn is_priority_peer(&mut self, peer_id: &str) -> bool {
+        let mut store = crate::p2p::priority_peers::PriorityPeerStore::new(&mut self.storage);
+        store
+            .is_priority(peer_id)
+            .unwrap_or_else(|_| {
+                eprintln!("[kernel] priority peer lookup failed for {peer_id}");
+                false
+            })
+    }
 }
 
 #[cfg(test)]

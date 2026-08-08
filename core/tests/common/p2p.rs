@@ -212,6 +212,8 @@ pub fn test_config(now_ms: i64) -> P2pConfig {
         dht_mode: spark_core::p2p::DhtMode::Server,
         plugin_announce_pow_bits: None,
         plugin_announce_relay_tenure_ms: None,
+        dht_republish_ticks: None,
+        enable_relay_server: false,
         now_fn: Arc::new(move || now_ms),
     }
 }

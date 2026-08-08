@@ -234,7 +234,7 @@ pub struct SparkBehaviour {
     pub mdns: Toggle<mdns::tokio::Behaviour>,
     pub identify: identify::Behaviour,
     pub ping: ping::Behaviour,
-    pub relay_server: relay::Behaviour,
+    pub relay_server: Toggle<relay::Behaviour>,
     pub relay_client: relay::client::Behaviour,
     pub autonat: autonat::Behaviour,
     pub upnp: Toggle<upnp::tokio::Behaviour>,
@@ -252,6 +252,9 @@ pub struct SparkBehaviour {
 pub struct BehaviourOptions {
     pub enable_mdns: bool,
     pub enable_upnp: bool,
+    /// 是否挂载 relay server（接受他人预约）。桌面默认 true；移动端 false
+    /// （peer-rediscovery §7.2：移动端只作 relay client）。
+    pub enable_relay_server: bool,
     pub dht_mode: DhtMode,
 }
 
@@ -260,6 +263,7 @@ impl Default for BehaviourOptions {
         Self {
             enable_mdns: true,
             enable_upnp: true,
+            enable_relay_server: true,
             dht_mode: DhtMode::default(),
         }
     }
@@ -307,13 +311,19 @@ pub fn build_behaviour(
         keypair.public(),
     ));
 
-    let relay_config = relay::Config {
-        max_reservations: RELAY_MAX_RESERVATIONS,
-        reservation_duration: Duration::from_secs(RELAY_DEFAULT_DURATION_LIMIT_SECS),
-        max_circuit_bytes: RELAY_DEFAULT_DATA_LIMIT_BYTES,
-        ..Default::default()
+    // relay server 按 enable_relay_server 条件挂载：桌面默认开启（接受他人预约），
+    // 移动端关闭（只作 relay client，peer-rediscovery §7.2）。
+    let relay_server = if options.enable_relay_server {
+        let relay_config = relay::Config {
+            max_reservations: RELAY_MAX_RESERVATIONS,
+            reservation_duration: Duration::from_secs(RELAY_DEFAULT_DURATION_LIMIT_SECS),
+            max_circuit_bytes: RELAY_DEFAULT_DATA_LIMIT_BYTES,
+            ..Default::default()
+        };
+        Toggle::from(Some(relay::Behaviour::new(local_peer_id, relay_config)))
+    } else {
+        Toggle::from(None)
     };
-    let relay_server = relay::Behaviour::new(local_peer_id, relay_config);
 
     let upnp_behaviour = if options.enable_upnp {
         Toggle::from(Some(upnp::tokio::Behaviour::default()))

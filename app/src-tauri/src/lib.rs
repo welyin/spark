@@ -124,6 +124,14 @@ pub fn run() {
                 // 以 config.p2p 存在为开关（ensure_p2p_after_login，"登录即在线"）
                 p2p: Some(spark_core::p2p::P2pConfig {
                     app_version,
+                    // 移动端（Android/iOS）：只作 relay client（节省流量与电量）、
+                    // DHT 周期重发缩短到 2h（蜂窝地址池回收更频繁，peer-rediscovery §4.2/§7.2）
+                    #[cfg(any(target_os = "android", target_os = "ios"))]
+                    enable_relay_server: false,
+                    #[cfg(any(target_os = "android", target_os = "ios"))]
+                    dht_republish_ticks: Some(
+                        spark_core::p2p::constants::DHT_MOBILE_REPUBLISH_TICKS,
+                    ),
                     ..Default::default()
                 }),
             })
@@ -273,6 +281,7 @@ pub fn run() {
             commands::p2p::p2p_set_dht_mode,
             commands::p2p::p2p_make_node_card,
             commands::p2p::p2p_import_node_card,
+            commands::p2p::p2p_network_changed,
             // 插件运行时（tab 模式语义，见 commands/plugin.rs 注记）
             commands::plugin::plugin_identity_sign,
             commands::plugin::plugin_identity_verify,

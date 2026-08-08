@@ -23,7 +23,8 @@ use tokio::sync::oneshot;
 
 use crate::p2p::Result;
 use crate::p2p::direct;
-use crate::p2p::peer_targets::{PeerNodeInfo, build_dial_targets, extract_peer_id};
+use crate::p2p::overlay_store::OverlayPeerStore;
+use crate::p2p::peer_targets::{PeerNodeInfo, build_dial_targets, extract_peer_id, sort_addresses};
 use crate::storage::StorageBackend;
 
 use super::P2pEvent;
@@ -66,6 +67,10 @@ impl<S: StorageBackend> EventLoop<S> {
             self.pending_org_attempts.push(attempt);
             return;
         }
+        // 拨号目标合并邻居池最新地址（peer-rediscovery §6 WP3.9）：竞速写入
+        // OverlayPeerStore 的新地址 DM 拨号也能看到——静态 FriendRecord.peer
+        // 兜底去重，邻居池地址在前（已按 IPv6 优先排序）。
+        let node_info = self.merge_neighbor_addresses(node_info);
         let targets = match build_dial_targets(&node_info) {
             Ok(t) => VecDeque::from(t),
             Err(e) => {
@@ -195,5 +200,42 @@ impl<S: StorageBackend> EventLoop<S> {
             .behaviour_mut()
             .dm_rr
             .send_response(channel, response);
+    }
+
+    /// 合并邻居池最新地址到拨号目标（peer-rediscovery §6 WP3.9）：
+    /// 邻居池地址在前（已 IPv6 优先排序）、静态 FriendRecord.peer 地址兜底去重。
+    pub(super) fn merge_neighbor_addresses(&mut self, mut node_info: PeerNodeInfo) -> PeerNodeInfo {
+        let Some(peer_id) = extract_peer_id(&node_info) else {
+            return node_info;
+        };
+        let Ok(peer) = peer_id.parse::<PeerId>() else {
+            return node_info;
+        };
+        let neighbor_addrs: Vec<String> = {
+            let mut store = OverlayPeerStore::new(&mut self.storage);
+            store
+                .get(&peer.to_base58())
+                .ok()
+                .flatten()
+                .map(|r| r.addresses)
+                .unwrap_or_default()
+        };
+        if neighbor_addrs.is_empty() {
+            return node_info;
+        }
+        // 去重合并：邻居池在前，静态地址补后
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut merged: Vec<String> = Vec::new();
+        for addr in neighbor_addrs
+            .iter()
+            .chain(node_info.addresses.iter())
+        {
+            let addr = addr.trim().to_string();
+            if !addr.is_empty() && seen.insert(addr.clone()) {
+                merged.push(addr);
+            }
+        }
+        node_info.addresses = sort_addresses(merged);
+        node_info
     }
 }

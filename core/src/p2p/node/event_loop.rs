@@ -11,7 +11,7 @@ use std::time::Duration;
 use libp2p::multiaddr::Protocol;
 use libp2p::swarm::Swarm;
 use libp2p::swarm::dial_opts::DialOpts;
-use libp2p::{Multiaddr, PeerId, gossipsub, request_response};
+use libp2p::{Multiaddr, PeerId, gossipsub, kad, request_response};
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
 
@@ -177,6 +177,28 @@ pub(super) struct EventLoop<S: StorageBackend> {
     pub(super) provided_records: HashMap<Vec<u8>, Vec<u8>>,
     /// keepalive tick 计数（DHT 节点存在记录按间隔重发）。
     pub(super) dht_tick_counter: u64,
+    /// DHT 周期重发间隔（tick 计数；桌面默认 240≈4h，移动端 120≈2h）。
+    pub(super) dht_republish_ticks: u64,
+    /// 网络变化 debounce 计时器（peer-rediscovery §4.1.3）：壳层通知后启动，
+    /// 到期检查监听地址是否变化，变化才执行重发布。
+    pub(super) pending_network_change: Option<i64>,
+    /// debounce 到期后上一次的监听地址快照（对比用）。
+    pub(super) pending_network_change_base: Option<Vec<String>>,
+    /// 优先类目 peer 的重新发现状态机（peer-rediscovery §4.3/§4.8）。
+    pub(super) rediscovery_states: HashMap<PeerId, super::rediscovery::RediscoveryState>,
+    /// 竞速 DHT 查询：QueryId → 目标 peer（区分于普通 pending_dht_get 查询）。
+    pub(super) rediscovery_dht_queries: HashMap<kad::QueryId, PeerId>,
+    /// 竞速连续失败计数（peer-rediscovery §4.8）：独立于状态机存放，
+    /// 跨 Backoff→Racing 重试轮次保留——否则每轮重置为 1，Offline 永不可达。
+    /// 确认成功/重新连上/转 Offline 时清除。
+    pub(super) rediscovery_failures: HashMap<PeerId, u32>,
+    /// 竞速场景：DHT 命中但 peer 未连接时暂存的 announce，待 ConnectionEstablished 后确认。
+    pub(super) pending_rediscovery_confirm: HashMap<PeerId, crate::p2p::announce::NodeAnnounce>,
+    /// 活跃 relay 预约（peer-rediscovery §4.6）：电路地址追加进 announce 列表。
+    pub(super) relay_reservations: Vec<super::relay_manager::RelayReservation>,
+    /// relay 预约请求 in-flight：已发起尚未收到 ReservationReqAccepted/失败
+    /// 的 relay peer，用于避免重复请求（peer-rediscovery §4.6.2）。
+    pub(super) relay_reservations_inflight: std::collections::HashSet<PeerId>,
     /// dm 入站异步处理完成通道：任务经 tx 送回结果，事件循环收到后
     /// 按任务 id 找回 ResponseChannel 并 send_response。
     pub(super) dm_completion_tx: mpsc::UnboundedSender<DmCompletion>,
@@ -278,6 +300,22 @@ fn replace_ip(addr: &Multiaddr, ip: IpAddr) -> Multiaddr {
     out
 }
 
+/// 地址首段是否为 IPv6 link-local（`fe80::/10`，即首段 0xfe80..=0xfebf）。
+/// 链路本地地址仅在网段内有效，发布到 gossip/DHT 对端不可拨，应剔除
+/// （peer-rediscovery §6 WP1 地址过滤）。
+fn is_ipv6_link_local(address: &str) -> bool {
+    let Ok(addr) = address.parse::<Multiaddr>() else {
+        return false;
+    };
+    match addr.iter().next() {
+        Some(Protocol::Ip6(ip)) => {
+            let seg = ip.segments();
+            seg[0] >= 0xfe80 && seg[0] <= 0xfebf
+        }
+        _ => false,
+    }
+}
+
 impl<S: StorageBackend> EventLoop<S> {
     pub(super) fn now(&self) -> i64 {        (self.now_fn)()
     }
@@ -294,16 +332,85 @@ impl<S: StorageBackend> EventLoop<S> {
         self.swarm.connected_peers().copied().collect()
     }
 
+    /// 主路径主动重拨（§4.1.2 ④）：切网后遍历优先类目 peer，对未连接的
+    /// 用邻居池缓存地址发起重拨（缓存地址切网后仍大概率有效，无需等 DHT
+    /// 兜底；无缓存地址则触发一次竞速以走 DHT 查询）。
+    pub(super) fn redial_priority_peers(&mut self) {
+        let now = self.now();
+        let priority_peers: Vec<String> = {
+            let mut store =
+                crate::p2p::priority_peers::PriorityPeerStore::new(&mut self.storage);
+            store.list().unwrap_or_default()
+        };
+        for pid in priority_peers {
+            let Ok(peer) = pid.parse::<PeerId>() else {
+                continue;
+            };
+            if self.swarm.is_connected(&peer) {
+                continue;
+            }
+            // 已处于竞速/退避中的，让状态机继续推进，不重复触发
+            if let Some(state) = self.rediscovery_states.get(&peer)
+                && !matches!(
+                    state,
+                    super::rediscovery::RediscoveryState::Idle
+                        | super::rediscovery::RediscoveryState::Offline
+                )
+            {
+                continue;
+            }
+            // 有缓存地址 → 直接重拨；否则交给 start_rediscovery 走 DHT 竞速
+            let cached_addrs: Vec<Multiaddr> = {
+                let mut store =
+                    crate::p2p::overlay_store::OverlayPeerStore::new(&mut self.storage);
+                store
+                    .get(&peer.to_base58())
+                    .ok()
+                    .flatten()
+                    .map(|r| r.addresses)
+                    .unwrap_or_default()
+                    .iter()
+                    .filter_map(|a| a.parse().ok())
+                    .collect()
+            };
+            if !cached_addrs.is_empty() {
+                let opts = libp2p::swarm::dial_opts::DialOpts::peer_id(peer)
+                    .addresses(cached_addrs)
+                    .build();
+                let _ = self.swarm.dial(opts);
+                // 标记竞速中，等待连接结果（成功则收敛，失败由 ConnectionClosed 兜底）
+                self.rediscovery_states.insert(
+                    peer,
+                    super::rediscovery::RediscoveryState::Racing {
+                        started_at: now,
+                        dht_query_id: None,
+                    },
+                );
+            } else {
+                // 无缓存：直接触发竞速（本地拨号无地址 + DHT 查询并行）
+                self.start_rediscovery(peer);
+            }
+        }
+    }
+
     pub(super) fn listen_addr_strings(&self) -> Vec<String> {
         let listeners: Vec<Multiaddr> = self.swarm.listeners().cloned().collect();
         // 通配 listener（0.0.0.0/::）对扫码名片不可拨，展开为本机可用网卡
         // 的具体地址；external_addresses 原样追加。
         let interfaces = local_interfaces();
-        expand_wildcard_listeners(&listeners, &interfaces)
+        let mut addrs: Vec<String> = expand_wildcard_listeners(&listeners, &interfaces)
             .into_iter()
             .chain(self.swarm.external_addresses().cloned())
             .map(|addr| addr.to_string())
-            .collect()
+            .collect();
+        // 追加 relay 电路地址（格式：/p2p/<relayPeer>/p2p-circuit，peer-rediscovery §4.6）
+        for reservation in &self.relay_reservations {
+            addrs.push(reservation.circuit_addr.to_string());
+        }
+        // 过滤 IPv6 link-local（fe80::/10 仅链路本地有效，发布出去对端不可拨）；
+        // 私有 IPv4 保留（同 LAN 场景有用）。
+        addrs.retain(|a| !is_ipv6_link_local(a));
+        addrs
     }
 
     pub(super) async fn run(mut self, keepalive_interval: Option<Duration>) {
@@ -393,6 +500,13 @@ impl<S: StorageBackend> EventLoop<S> {
             Command::DhtProvide { key, value, tx } => self.begin_dht_provide(key, value, tx),
             Command::DhtGetProviders { key, tx } => self.begin_dht_get_providers(key, tx),
             Command::ChallengePeer { peer_id, tx } => self.begin_challenge(&peer_id, tx),
+            Command::NetworkChanged => {
+                // 启动 debounce：记录当前地址作为对比基线，到期后检查是否变化
+                if self.pending_network_change.is_none() {
+                    self.pending_network_change = Some(self.now() + crate::p2p::constants::NETWORK_CHANGE_DEBOUNCE_MS);
+                    self.pending_network_change_base = Some(self.listen_addr_strings());
+                }
+            }
             Command::Tick { tx } => {
                 let _ = tx.send(self.run_keepalive_tick());
             }

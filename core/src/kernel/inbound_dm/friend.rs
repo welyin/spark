@@ -79,6 +79,15 @@ fn handle_self_friend_request<S: StorageBackend>(
     }
     friend.updated_at = ctx.now_ms;
     ContactService::upsert_friend_pdsync(storage, &friend, ctx.now_ms, ctx.node_id)?;
+    // 自设备配对完成 → 加入优先类目集合（peer-rediscovery §4.4）
+    if let Some(p) = peer.as_ref()
+        && !p.peer_id.trim().is_empty()
+    {
+        let mut priority = crate::p2p::priority_peers::PriorityPeerStore::new(storage);
+        if let Err(e) = priority.add(&p.peer_id) {
+            eprintln!("[friend] self device priority peer add failed: {e}");
+        }
+    }
     // 回发目标取请求方本次捎带的 nodeInfo（无则无法回发，host 跳过）
     let auto_accept = peer.map(|p| AutoAccept {
         target: PeerNodeInfo {
@@ -296,6 +305,15 @@ pub(super) fn handle_friend_accept<S: StorageBackend>(
         ctx.now_ms,
         ctx.node_id,
     )?;
+    // 好友关系建立 → 加入优先类目集合（peer-rediscovery §4.4，键控 peerId）
+    if let Some(p) = friend.peer.as_ref()
+        && !p.peer_id.trim().is_empty()
+    {
+        let mut priority = crate::p2p::priority_peers::PriorityPeerStore::new(storage);
+        if let Err(e) = priority.add(&p.peer_id) {
+            eprintln!("[friend] priority peer add failed: {e}");
+        }
+    }
     let request_json = request.map(serde_json::to_value).transpose()?;
     let friend_json = serde_json::to_value(&friend)?;
     let event = P2pEvent::FriendRequestAccepted(json!({
