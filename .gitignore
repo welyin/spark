@@ -26,3 +26,12 @@ app/.dev-data/
 __pycache__/
 *.pyc
 .tmp-*
+
+# Dev 运行时日志
+app/*.log
+
+# 临时工具脚本
+app/decode-qr*.cjs
+
+# Rust cargo check 构建产物
+core/target-check/
