@@ -3,10 +3,12 @@
      与「导入 .spkg 文件」（网络差降级侧载，包哈希供核对）。按钮样式与列表页头部现有按钮一致 -->
 <template>
   <div class="app-install-tools">
-    <el-button @click="openRepoDialog">按仓库地址安装</el-button>
-    <el-button @click="openSideload">导入 .spkg 文件</el-button>
+    <template v-if="!hideButtons">
+      <el-button @click="openRepoDialog">按仓库地址安装</el-button>
+      <el-button @click="openSideload">导入 .spkg 文件</el-button>
+    </template>
 
-    <el-dialog v-model="repoDialogVisible" title="按仓库地址安装" width="480">
+    <el-dialog v-model="repoDialogVisible" append-to-body title="按仓库地址安装" width="480">
       <div class="repo-install-dialog">
         <el-input
           v-model="repoIdInput"
@@ -41,7 +43,7 @@
     </el-dialog>
 
     <!-- .spkg 侧载导入（网络差降级）：文件选择 → 预览（名称/版本/权限/包哈希供核对）→ 复核导入 -->
-    <el-dialog v-model="sideloadVisible" title="导入 .spkg 插件包" width="480">
+    <el-dialog v-model="sideloadVisible" append-to-body title="导入 .spkg 插件包" width="480">
       <div v-if="sideloadPreview" class="repo-install-dialog">
         <div class="repo-preview-head">
           <span class="repo-preview-icon repo-preview-icon-fallback">{{ sideloadPreview.name.slice(0, 1) }}</span>
@@ -79,6 +81,9 @@ import { pickSpkgFile } from '../../api';
 
 export default defineComponent({
   name: 'AppInstallTools',
+  props: {
+    hideButtons: { type: Boolean, default: false },
+  },
   emits: ['install-repo', 'sideloaded'],
   setup(_, { emit }) {
     // 仓库锚定安装（plugin-dist）：解析 spark-plugin.json 预览，确认后由父组件安装

@@ -61,8 +61,6 @@
         :busy-by-plugin="busyByPlugin"
         @open="openApp"
         @detail="(item) => openDetail(item)"
-        @toggle="toggleEnabled"
-        @uninstall="uninstallApp"
         @add-app="openMarket"
         @install-repo="installRepoPlugin"
         @sideloaded="refreshSafe"
@@ -82,8 +80,6 @@
         :busy-by-plugin="busyByPlugin"
         @open="openApp"
         @detail="(item) => openDetail(item)"
-        @toggle="toggleEnabled"
-        @uninstall="uninstallApp"
         @add-app="openMarket"
         @install-repo="installRepoPlugin"
         @sideloaded="refreshSafe"
@@ -102,9 +98,6 @@
     <!-- 应用详情：全 app 统一抽屉（无头部小标题，右上角自定义关闭），不再整页切换；
          详情面板内的「返回」按钮同样映射为关闭抽屉；移动端（波次 2）不渲染抽屉，见上方整页层 -->
     <el-drawer v-if="!isMobileLayout" v-model="detailVisible" :with-header="false" size="520" class="app-drawer">
-      <button type="button" class="app-drawer-close" title="关闭" @click="detailVisible = false">
-        <el-icon :size="16"><Close /></el-icon>
-      </button>
       <div class="app-drawer-body">
         <AppDetailPanel
           v-if="selectedItem"
@@ -129,7 +122,6 @@
 <script lang="ts">
 import { computed, defineComponent, onMounted, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Close } from '@element-plus/icons-vue';
 import type { PluginMarketItemDto, RepoPluginDeclarationDto } from '../api/types';
 import { currentSpace } from '../stores/current-space';
 import { enablePluginInstance, isPluginInstanceDisabled, pluginInstanceKey } from '../plugin/disabled';
@@ -172,7 +164,7 @@ const MOBILE_TAB = 'apps';
 
 export default defineComponent({
   name: 'AppsPage',
-  components: { AppListPanel, AppMarketPanel, AppDetailPanel, MobileBackBar, MobilePageTransition, Close },
+  components: { AppListPanel, AppMarketPanel, AppDetailPanel, MobileBackBar, MobilePageTransition },
   emits: ['open-plugin-tab'],
   setup(_, { emit }) {
     const items = ref<PluginMarketItemDto[]>([]);

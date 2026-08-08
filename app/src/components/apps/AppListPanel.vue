@@ -9,9 +9,38 @@
         clearable
         :prefix-icon="Search"
       />
-      <el-button type="primary" :icon="Plus" @click="onAddGroup">添加分类</el-button>
-      <!-- 安装入口（从应用市场迁入）：按仓库地址安装 / 导入 .spkg 文件 -->
+      <!-- + 安装应用 统一下拉菜单 -->
+      <el-dropdown trigger="click" class="app-install-dropdown" @command="handleInstallCommand">
+        <el-button type="primary" class="app-install-btn">
+          + 安装应用
+          <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+        </el-button>
+        <template #dropdown>
+          <el-dropdown-menu class="app-install-menu">
+            <el-dropdown-item command="market" class="app-install-menu__market">
+              <el-icon :size="18"><Shop /></el-icon>
+              <span class="app-install-menu__label">应用商店</span>
+              <span class="app-store-new-badge">NEW</span>
+            </el-dropdown-item>
+            <el-dropdown-item command="repo" divided>
+              <el-icon :size="16"><Download /></el-icon>
+              <span class="app-install-menu__label">从仓库安装</span>
+            </el-dropdown-item>
+            <el-dropdown-item command="sideload">
+              <el-icon :size="16"><Upload /></el-icon>
+              <span class="app-install-menu__label">导入 .spkg 文件</span>
+            </el-dropdown-item>
+            <el-dropdown-item command="group">
+              <el-icon :size="16"><FolderAdd /></el-icon>
+              <span class="app-install-menu__label">添加分类</span>
+            </el-dropdown-item>
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
+      <!-- 安装工具（隐藏按钮，通过 ref 调用其方法触发仓库/侧载安装对话框） -->
       <AppInstallTools
+        ref="installToolsRef"
+        :hide-buttons="true"
         @install-repo="(declaration) => emit('install-repo', declaration)"
         @sideloaded="emit('sideloaded')"
       />
@@ -22,14 +51,6 @@
     </el-empty>
 
     <template v-else>
-      <!-- 「添加应用」虚线入口卡片：恒在第一行，点击进入应用市场 -->
-      <div class="app-cards">
-        <button type="button" class="app-add-card" @click="onAddApp">
-          <el-icon :size="26"><Plus /></el-icon>
-          <span>添加应用</span>
-        </button>
-      </div>
-
       <!-- 「最近使用」为系统自动分组，不可编辑、不可作为拖放目标（ui-apps-market §2.3） -->
       <section v-if="visibleRecent.length > 0" class="app-group">
         <header class="app-group-header" @click="toggleCollapse('__recent__')">
@@ -48,7 +69,7 @@
             @dragend="onDragEnd"
           >
             <span class="app-card-icon" :style="{ background: appIconBackground(item) }">{{ item.name.slice(0, 1) }}</span>
-            <div class="app-card-body" @click="onCardClick(item)">
+            <div class="app-card-body" @click="onCardOpen(item)">
               <div class="app-card-head">
                 <span class="app-card-name">{{ item.name }}</span>
                 <el-tag v-if="isSuspended(item)" size="small" type="warning">已停用</el-tag>
@@ -59,22 +80,9 @@
               </div>
               <p class="app-card-desc">{{ item.description }}</p>
             </div>
-            <div class="app-card-actions">
-              <el-button v-if="isEnabled(item)" size="small" type="primary" @click="emit('open', item)">打开</el-button>
-              <el-button size="small" @click="emit('toggle', item)">{{ isEnabled(item) ? '禁用' : '启用' }}</el-button>
-              <!-- 卸载仅移除插件程序，插件数据保留在本机（确认框在 AppsPage）；
-                   组织空间仅管理员可见；卸载进行中禁用防重复点击 -->
-              <el-button
-                v-if="canUninstall"
-                size="small"
-                type="danger"
-                plain
-                :disabled="busyByPlugin[item.id] === 'uninstall'"
-                @click="emit('uninstall', item)"
-              >
-                卸载
-              </el-button>
-            </div>
+            <button type="button" class="app-card-more-btn" title="查看详情" @click="onCardDetail(item)">
+              <el-icon :size="18"><MoreFilled /></el-icon>
+            </button>
           </div>
         </div>
       </section>
@@ -117,7 +125,7 @@
               @dragend="onDragEnd"
             >
             <span class="app-card-icon" :style="{ background: appIconBackground(item) }">{{ item.name.slice(0, 1) }}</span>
-            <div class="app-card-body" @click="onCardClick(item)">
+            <div class="app-card-body" @click="onCardOpen(item)">
               <div class="app-card-head">
                 <span class="app-card-name">{{ item.name }}</span>
                 <el-tag v-if="isSuspended(item)" size="small" type="warning">已停用</el-tag>
@@ -128,22 +136,9 @@
               </div>
               <p class="app-card-desc">{{ item.description }}</p>
             </div>
-            <div class="app-card-actions">
-              <el-button v-if="isEnabled(item)" size="small" type="primary" @click="emit('open', item)">打开</el-button>
-              <el-button size="small" @click="emit('toggle', item)">{{ isEnabled(item) ? '禁用' : '启用' }}</el-button>
-              <!-- 卸载仅移除插件程序，插件数据保留在本机（确认框在 AppsPage）；
-                   组织空间仅管理员可见；卸载进行中禁用防重复点击 -->
-              <el-button
-                v-if="canUninstall"
-                size="small"
-                type="danger"
-                plain
-                :disabled="busyByPlugin[item.id] === 'uninstall'"
-                @click="emit('uninstall', item)"
-              >
-                卸载
-              </el-button>
-            </div>
+            <button type="button" class="app-card-more-btn" title="查看详情" @click="onCardDetail(item)">
+              <el-icon :size="18"><MoreFilled /></el-icon>
+            </button>
             </div>
           </template>
           <!-- 落点预测：插入位在末尾时占位块追加在最后 -->
@@ -162,7 +157,7 @@
 <script lang="ts">
 import { computed, defineComponent, ref, type PropType } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { ArrowRight, Delete, Edit, Plus, Search } from '@element-plus/icons-vue';
+import { ArrowDown, ArrowRight, Delete, Download, Edit, FolderAdd, MoreFilled, Search, Shop, Upload } from '@element-plus/icons-vue';
 import type { PluginMarketItemDto } from '../../api/types';
 import { appIconBackground, type useAppGroups } from './apps-store';
 import AppInstallTools from './AppInstallTools.vue';
@@ -170,7 +165,7 @@ import AppInstallTools from './AppInstallTools.vue';
 export default defineComponent({
   name: 'AppListPanel',
   // Options API：模板中以标签形式使用的图标组件必须注册（仅 setup return 会静默不渲染）
-  components: { ArrowRight, Plus, Edit, Delete, AppInstallTools },
+  components: { ArrowDown, ArrowRight, Delete, Download, Edit, FolderAdd, MoreFilled, Search, Shop, Upload, AppInstallTools },
   props: {
     /** 已安装应用（含已禁用，禁用卡片置灰展示，ui-apps-market §2.5） */
     installedItems: { type: Array as PropType<PluginMarketItemDto[]>, required: true },
@@ -185,7 +180,7 @@ export default defineComponent({
     /** 各插件进行中的操作（'' | install | upgrade | toggle | uninstall），卸载按钮 busy 态用 */
     busyByPlugin: { type: Object as PropType<Record<string, string>>, default: () => ({}) }
   },
-  emits: ['open', 'detail', 'toggle', 'uninstall', 'add-app', 'install-repo', 'sideloaded'],
+  emits: ['open', 'detail', 'add-app', 'install-repo', 'sideloaded'],
   setup(props, { emit }) {
     const keyword = ref('');
     const collapsed = ref<Record<string, boolean>>({});
@@ -224,16 +219,29 @@ export default defineComponent({
       collapsed.value = { ...collapsed.value, [name]: !isCollapsed(name) };
     };
 
-    /** 卸载入口可见性：组织空间仅管理员（与 AppDetailPanel/AppsPage 守卫同口径） */
-    const canUninstall = computed(() => !props.isOrgSpace || props.isAdmin);
+    /** 点卡片主体：直接打开应用 */
+    const onCardOpen = (item: PluginMarketItemDto) => {
+      emit('open', item);
+    };
 
-    /** 点卡片主体：启用中进入详情（打开走「打开」按钮）；已禁用进详情便于重新启用（§2.5） */
-    const onCardClick = (item: PluginMarketItemDto) => {
+    /** 点「...」更多按钮：进入应用详情 */
+    const onCardDetail = (item: PluginMarketItemDto) => {
       emit('detail', item);
     };
 
     /** 「添加应用」入口（空状态 / 虚线卡片共用）：切换到应用市场 */
     const onAddApp = () => emit('add-app');
+
+    /** AppInstallTools 组件引用，用于触发仓库/侧载安装对话框 */
+    const installToolsRef = ref<InstanceType<typeof AppInstallTools> | null>(null);
+
+    /** 「+ 安装应用」下拉菜单命令路由 */
+    const handleInstallCommand = (command: string) => {
+      if (command === 'market') emit('add-app');
+      else if (command === 'repo') installToolsRef.value?.openRepoDialog();
+      else if (command === 'sideload') installToolsRef.value?.openSideload();
+      else if (command === 'group') onAddGroup();
+    };
 
     // ---- 分类增删改 ----
 
@@ -365,9 +373,11 @@ export default defineComponent({
       dropTarget,
       isCollapsed,
       toggleCollapse,
-      canUninstall,
-      onCardClick,
+      onCardOpen,
+      onCardDetail,
       onAddApp,
+      installToolsRef,
+      handleInstallCommand,
       onAddGroup,
       onRenameGroup,
       onDeleteGroup,
@@ -378,7 +388,6 @@ export default defineComponent({
       isDropBefore,
       onDropSection,
       appIconBackground,
-      Plus,
       Search,
       emit
     };

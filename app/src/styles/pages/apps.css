@@ -220,53 +220,182 @@
   -webkit-box-orient: vertical;
 }
 
-.app-card-actions {
+/* ---- 卡片「...」更多按钮：打开详情 ---- */
+
+.app-card-more-btn {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--spark-radius-s);
+  background: transparent;
+  color: var(--spark-text-3);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.app-card-more-btn:hover {
+  background: var(--spark-bg-hover);
+  color: var(--spark-text-1);
+}
+
+/* ---- 安装按钮与下拉菜单 ---- */
+
+.app-install-dropdown {
   flex-shrink: 0;
 }
 
-.app-card-actions .el-button + .el-button {
-  margin-left: 0;
-}
-
-/* 「添加应用」虚线入口卡片：位于 .app-cards 网格内，与已安装卡片同尺寸 */
-.app-add-card {
-  display: flex;
-  flex-direction: column;
+.app-install-btn {
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  gap: 8px;
-  width: 100%;
-  min-height: 96px;
-  border: 1px dashed var(--spark-border);
-  border-radius: var(--spark-radius-l);
-  background: transparent;
-  color: var(--spark-text-3);
-  font-size: 14px;
-  cursor: pointer;
-  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  gap: 4px;
 }
 
-.app-add-card:hover {
-  color: var(--spark-primary);
-  border-color: var(--spark-primary);
-  background: var(--spark-primary-light);
+/* 安装应用下拉菜单样式 */
+.app-install-menu {
+  padding: 6px;
+}
+
+.app-install-menu .el-dropdown-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  font-size: 14px;
+  color: var(--spark-text-2);
+  border-radius: 8px;
+}
+
+.app-install-menu .el-dropdown-menu__item .el-icon {
+  color: var(--spark-text-3);
+}
+
+/* 应用商店 — 突出高亮 */
+.app-install-menu__market {
+  margin-bottom: 6px;
+  border-radius: 10px !important;
+  background: linear-gradient(135deg, #f0f6ff 0%, #e8f2ff 100%);
+  border: 1px solid #b3d8ff;
+  color: #409eff !important;
+}
+
+.app-install-menu__market:hover {
+  background: linear-gradient(135deg, #dceeff 0%, #d0e6ff 100%) !important;
+  border-color: #79bbff;
+}
+
+.app-install-menu__market .el-icon {
+  color: #409eff !important;
+}
+
+.app-install-menu__market .app-install-menu__label {
+  color: #409eff;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.app-install-menu__market .app-store-new-badge {
+  margin-left: auto;
+}
+
+.app-install-menu .el-dropdown-menu__item.is-disabled {
+  color: var(--spark-text-4);
+}
+
+/* 应用商店 NEW 徽标 */
+.app-store-new-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 5px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: #fff;
+  background: #f56c6c;
+  border-radius: 2px;
+  vertical-align: middle;
 }
 
 /* ---------- 应用详情（§3.4） ---------- */
 
+/* 抽屉 body 改为 flex 列，header/footer 才能顶到头 */
+.app-drawer .el-drawer__body {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+
+/* 仅桌面端抽屉内的包裹层才 flex 填满 */
+.app-drawer .app-drawer-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+/* flex 三栏结构：header / body(可滚动) / footer，填满抽屉 */
 .app-detail {
   display: flex;
   flex-direction: column;
-  gap: var(--spark-gap-page);
-  max-width: 640px;
+  flex: 1;
+  min-height: 0;
 }
 
+/* 顶部返回栏：贴顶，不参与滚动；右侧放关闭按钮 */
+.app-detail-header {
+  flex-shrink: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 24px;
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--spark-border-light);
+}
+
+/* header 内关闭按钮：与"返回"在同一行 */
+.app-detail-header-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--spark-radius-s);
+  background: transparent;
+  color: var(--spark-text-2);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.app-detail-header-close:hover {
+  background: var(--spark-bg-hover);
+  color: var(--spark-text-1);
+}
+
+/* 中间可滚动内容区 */
+.app-detail-body {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spark-gap-page);
+  padding: 0 24px 20px;
+}
+
+/* 顶部信息卡片 */
 .app-detail-hero {
   display: flex;
-  gap: 18px;
+  gap: 20px;
   align-items: center;
   padding: 24px;
   border: 1px solid var(--spark-border-light);
@@ -275,105 +404,349 @@
   box-shadow: var(--spark-shadow-card);
 }
 
-/* 桌面端：hero 主体包装对布局透明（图标+信息仍按 hero 的 flex 行排布）；
-   移动端在媒体块内改为列布局（图标名称在上、操作按钮组在下） */
-.app-detail-hero-main {
-  display: contents;
-}
-
 .app-detail-icon {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 72px;
-  height: 72px;
+  width: 80px;
+  height: 80px;
   border-radius: var(--spark-radius-xl);
-  background: var(--spark-primary-light);
   color: #fff;
-  font-size: 30px;
+  font-size: 34px;
   font-weight: 600;
   flex-shrink: 0;
-  box-shadow: var(--spark-shadow-hover);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
 }
 
 .app-detail-hero-info {
+  flex: 1;
   min-width: 0;
 }
 
 .app-detail-hero-info h1 {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 0 6px;
-  font-size: 18px;
+  margin: 0 0 8px;
+  font-size: 22px;
+  font-weight: 600;
   color: var(--spark-text-1);
 }
 
-.app-detail-meta {
-  margin: 2px 0;
+.app-detail-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.status-dot--on {
+  background: var(--spark-success);
+  box-shadow: 0 0 0 3px rgba(103, 194, 58, 0.2);
+}
+
+.status-dot--off {
+  background: #c0c4cc;
+}
+
+.status-text {
+  color: var(--spark-text-2);
+}
+
+.app-detail-meta-list {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
   font-size: 12px;
+}
+
+.app-detail-meta-row {
+  display: contents;
+}
+
+.app-detail-meta-label {
+  color: var(--spark-text-3);
+  white-space: nowrap;
+}
+
+.app-detail-meta-value {
   color: var(--spark-text-2);
   word-break: break-all;
 }
 
+/* 详情分区卡片 */
 .app-detail-section {
-  padding: 16px 20px;
+  padding: 18px 20px;
   border: 1px solid var(--spark-border-light);
   border-radius: var(--spark-radius-l);
   background: var(--spark-bg-card);
   box-shadow: var(--spark-shadow-card);
 }
 
-.app-detail-section h2 {
-  margin: 0 0 10px;
-  font-size: 14px;
+.app-detail-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.app-detail-section-title h2 {
+  margin: 0;
+  font-size: 15px;
   font-weight: 600;
   color: var(--spark-text-1);
 }
 
-.app-detail-section p {
+.app-detail-section-subtitle {
+  font-size: 12px;
+  color: var(--spark-text-3);
+}
+
+.app-detail-desc {
   margin: 0;
   font-size: 13px;
   color: var(--spark-text-2);
-  line-height: 1.6;
+  line-height: 1.7;
 }
 
-/* 简介卡片内的「更新清单」等附加属性行：与简介正文拉开间距 */
-.app-detail-section .app-detail-meta {
-  margin-top: 8px;
+.app-detail-update-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--spark-primary);
+  text-decoration: none;
+  transition: opacity 0.15s ease;
 }
 
+.app-detail-update-link:hover {
+  opacity: 0.8;
+}
+
+.app-detail-update-link .el-icon {
+  margin-top: 1px;
+}
+
+/* 所需权限 */
 .app-detail-permissions {
   margin: 0;
   padding: 0;
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 10px;
+}
+
+.app-detail-permissions li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   font-size: 13px;
   color: var(--spark-text-2);
 }
 
 .permission-check {
   color: var(--spark-success);
-  margin-right: 4px;
+  flex-shrink: 0;
+}
+
+.permission-name {
+  flex: 1;
+  min-width: 0;
 }
 
 .permission-code {
-  margin-left: 6px;
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Consolas, 'Liberation Mono', Menlo, monospace;
   font-size: 11px;
   color: var(--spark-text-3);
+  flex-shrink: 0;
 }
 
 .app-detail-muted {
-  color: var(--spark-text-3) !important;
+  margin: 0;
+  font-size: 13px;
+  color: var(--spark-text-3);
 }
 
-.app-detail-actions {
+/* 签名与来源 */
+.verified-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: var(--spark-radius-s);
+}
+
+/* 已签名：绿色徽章 */
+.verified-badge--ok {
+  color: var(--spark-success);
+  background: rgba(103, 194, 58, 0.1);
+}
+
+/* 未签名：红色警告徽章 */
+.verified-badge--warn {
+  color: #f56c6c;
+  background: rgba(245, 108, 108, 0.1);
+}
+
+.app-detail-source-list {
   display: flex;
-  gap: 10px;
-  padding: 16px 4px;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.app-source-row {
+  display: grid;
+  grid-template-columns: 72px 1fr 28px;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.app-source-label {
+  color: var(--spark-text-3);
+  white-space: nowrap;
+}
+
+.app-source-value {
+  color: var(--spark-text-2);
+  word-break: break-all;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-source-copy {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--spark-radius-s);
+  background: transparent;
+  color: var(--spark-text-3);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.app-source-copy:hover {
+  background: var(--spark-bg-hover);
+  color: var(--spark-primary);
+}
+
+.app-detail-source-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 14px 0 0;
+  font-size: 12px;
+  color: var(--spark-success);
+}
+
+/* 未签名：警示文案 */
+.app-detail-source-note--warn {
+  color: #f56c6c;
+}
+
+/* 底部操作区：贴底，不参与滚动 */
+.app-detail-actions {
+  flex-shrink: 0;
+  z-index: 10;
+  padding: 12px 24px 20px;
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   border-top: 1px solid var(--spark-border-light);
+  box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.06);
+}
+
+.app-detail-action-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 44px;
+  padding: 0 20px;
+  border: 1px solid transparent;
+  border-radius: var(--spark-radius-m);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
+  white-space: nowrap;
+}
+
+.action-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.action-btn--primary {
+  flex: 1;
+  background: var(--spark-primary);
+  color: #fff;
+  border-color: var(--spark-primary);
+}
+
+.action-btn--primary:hover:not(:disabled) {
+  background: var(--spark-primary-hover, #66b1ff);
+  border-color: var(--spark-primary-hover, #66b1ff);
+}
+
+.action-btn--secondary {
+  background: var(--spark-bg-card);
+  color: var(--spark-text-2);
+  border-color: var(--spark-border);
+}
+
+.action-btn--secondary:hover:not(:disabled) {
+  background: var(--spark-bg-hover);
+  border-color: var(--spark-border);
+  color: var(--spark-text-1);
+}
+
+.action-btn--warning {
+  background: #e6a23c;
+  color: #fff;
+  border-color: #e6a23c;
+}
+
+.action-btn--warning:hover:not(:disabled) {
+  background: #eebb6e;
+  border-color: #eebb6e;
+}
+
+.action-btn--danger {
+  background: transparent;
+  color: #f56c6c;
+  border-color: #f56c6c;
+}
+
+.action-btn--danger:hover:not(:disabled) {
+  background: #fef0f0;
+  color: #f56c6c;
+}
+
+.action-btn--full {
+  width: 100%;
 }
 
 /* ---- 移动端适配（波次 2，与 stores/ui-layout.ts 同一断点）：整页 + 导航栈 ----
@@ -436,18 +809,11 @@
     font-size: 12px;
   }
 
-  /* 网格态只留图标+名称：简介/操作按钮/状态标签进详情页展示 */
+  /* 网格态只留图标+名称：简介/更多按钮/状态标签进详情页展示 */
   .app-card-desc,
-  .app-card-actions,
+  .app-card-more-btn,
   .app-card-head .el-tag {
     display: none;
-  }
-
-  /* 「添加应用」虚线入口收缩为一个网格单元 */
-  .app-add-card {
-    min-height: 64px;
-    gap: 4px;
-    font-size: 12px;
   }
 
   /* 落点占位块跟随网格单元尺寸 */
@@ -467,28 +833,59 @@
 
   .app-detail {
     max-width: none;
+    flex: none;
+    padding-bottom: calc(76px + env(safe-area-inset-bottom, 0px));
   }
 
-  /* 操作按钮收进「图标+名称」卡片内：图标名称在上、按钮组在下横排 */
+  /* 移动端 body 无需 flex-scroll：全页高度由内容撑开，滚动由页面层承担 */
+  .app-detail-body {
+    flex: none;
+    overflow-y: visible;
+  }
+
+  /* 移动端 hero 保持图标在左、信息在右，与桌面一致 */
   .app-detail-hero {
-    flex-direction: column;
-    align-items: stretch;
+    gap: 16px;
+    padding: 18px;
   }
 
-  .app-detail-hero-main {
-    display: flex;
-    gap: 18px;
-    align-items: center;
+  .app-detail-icon {
+    width: 64px;
+    height: 64px;
+    font-size: 28px;
   }
 
-  .app-detail-hero-actions {
-    display: flex;
-    flex-wrap: wrap;
+  .app-detail-hero-info h1 {
+    font-size: 18px;
+  }
+
+  /* 底部操作栏固定在屏幕底部 */
+  .app-detail-actions {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    margin: 0;
+    z-index: 10;
+    padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+    background: #fff;
+    border-top: 1px solid var(--spark-border-light);
+    box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.06);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  .app-detail-action-bar {
     gap: 8px;
   }
 
-  /* 移动端按钮已在 hero 卡片内，页底操作区不重复渲染（模板层 v-else 双保险） */
-  .app-detail-actions {
-    display: none;
+  .action-btn {
+    height: 48px;
+    padding: 0 14px;
+    font-size: 14px;
+  }
+
+  .action-btn--primary {
+    flex: 1;
   }
 }
