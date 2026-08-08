@@ -57,6 +57,10 @@ if-addrs = "0.15"
 rquickjs = { version = "0.12.2", features = ["loader"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 
+[target.'cfg(unix)'.dependencies]
+# sys.exec 超时进程树强杀：负 pid 向子进程组发 SIGKILL（见 sys.rs kill_process_tree）。
+libc = "0.2"
+
 [dev-dependencies]
 tempfile = "3"
 tokio = { version = "1.47", features = ["full"] }

@@ -28,6 +28,10 @@ const EXEC_MAX_OUTPUT: usize = 1024 * 1024;
 /// HTTP 响应体大小上限（60s 超时挡不住慢速无限流，必须按字节数截停）。
 const FETCH_MAX_BODY: usize = 10 * 1024 * 1024;
 
+/// 正常退出后等待读者线程收尾的宽限：覆盖「子进程已退出、孙进程仍握管道
+/// 写端」场景——超宽限即放弃等待（读者 detach，随管道关闭自行结束）。
+const READER_DRAIN_GRACE: Duration = Duration::from_secs(2);
+
 /// 外部命令执行结果。序列化为 camelCase 与前端约定一致（exitCode）——
 /// 漏掉此属性曾导致前端读取恒为 undefined，探测全部误判失败。
 #[derive(Serialize, Clone)]
@@ -136,7 +140,7 @@ fn program_in_path(name: &str) -> bool {
 /// workdir：可选工作目录。缺省时子进程继承宿主进程 cwd（不可控），CLI 工具
 /// 对 cwd 敏感，应由调用方显式指定。
 ///
-/// 超时 EXEC_TIMEOUT 后强杀子进程并返回错误；stdout/stderr 各截断至
+/// 超时 EXEC_TIMEOUT 后强杀整棵进程树并返回错误；stdout/stderr 各截断至
 /// EXEC_MAX_OUTPUT（超出部分丢弃，不报错）。
 pub fn exec_blocking(
     program: &str,
@@ -179,6 +183,14 @@ fn exec_with_limits(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
+    // Unix：子进程设为进程组组长，超时可向整组发 SIGKILL（孙进程继承
+    // 管道写端的场景，只杀直接子进程读者线程永远等不到 EOF）
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+
     // GUI 进程补全 PATH（合并用户 PATH），让子进程能找到终端可见的命令
     #[cfg(target_os = "windows")]
     cmd.env("PATH", merged_path_env());
@@ -198,15 +210,19 @@ fn exec_with_limits(
     // 单线程依次读会在对端写满管道时死锁。
     let mut child_stdout = child.stdout.take().expect("stdout 已 piped");
     let mut child_stderr = child.stderr.take().expect("stderr 已 piped");
+    // 读者经 channel 回传缓冲：正常退出路径按 READER_DRAIN_GRACE 限时
+    // 等待——孙进程握着管道写端等不到 EOF 时不永久阻塞（见下方分支）
+    let (stdout_tx, stdout_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    let (stderr_tx, stderr_rx) = std::sync::mpsc::channel::<Vec<u8>>();
     let stdout_reader = std::thread::spawn(move || {
         let mut sink = CappedSink { buf: Vec::new(), cap: max_output };
         let _ = std::io::copy(&mut child_stdout, &mut sink);
-        sink.buf
+        let _ = stdout_tx.send(sink.buf);
     });
     let stderr_reader = std::thread::spawn(move || {
         let mut sink = CappedSink { buf: Vec::new(), cap: max_output };
         let _ = std::io::copy(&mut child_stderr, &mut sink);
-        sink.buf
+        let _ = stderr_tx.send(sink.buf);
     });
 
     let deadline = std::time::Instant::now() + timeout;
@@ -215,8 +231,9 @@ fn exec_with_limits(
             Ok(Some(status)) => break status,
             Ok(None) => {
                 if std::time::Instant::now() >= deadline {
-                    // 超时强杀：kill 后管道随子进程关闭，读取线程自然收尾
-                    let _ = child.kill();
+                    // 超时强杀整棵进程树：孙进程随树/组终止，管道写端全部
+                    // 关闭，读取线程收 EOF 自然收尾
+                    kill_process_tree(&mut child);
                     let _ = child.wait();
                     let _ = stdout_reader.join();
                     let _ = stderr_reader.join();
@@ -226,18 +243,61 @@ fn exec_with_limits(
                 }
                 std::thread::sleep(Duration::from_millis(20));
             }
-            Err(e) => return Err(format!("等待命令 {program} 退出失败: {e}")),
+            Err(e) => {
+                kill_process_tree(&mut child);
+                let _ = child.wait();
+                return Err(format!("等待命令 {program} 退出失败: {e}"));
+            }
         }
     };
 
-    let stdout = stdout_reader.join().unwrap_or_default();
-    let stderr = stderr_reader.join().unwrap_or_default();
+    // 子进程正常退出但孙进程仍握管道写端时，读者等不到 EOF：限时等待，
+    // 超宽限放弃 join——读者线程随管道最终关闭自行结束（detach），不阻塞返回
+    let stdout = stdout_rx.recv_timeout(READER_DRAIN_GRACE).unwrap_or_default();
+    let stderr = stderr_rx.recv_timeout(READER_DRAIN_GRACE).unwrap_or_default();
+    drop(stdout_reader);
+    drop(stderr_reader);
 
     Ok(SysExecResult {
         stdout: String::from_utf8_lossy(&stdout).into_owned(),
         stderr: String::from_utf8_lossy(&stderr).into_owned(),
         exit_code: status.code().unwrap_or(-1),
     })
+}
+
+/// 强杀子进程及其整棵进程树。孙进程可能继承 stdout/stderr 管道写端，
+/// 只杀直接子进程（`Child::kill`）读者线程会永远等不到 EOF。
+#[cfg(windows)]
+fn kill_process_tree(child: &mut std::process::Child) {
+    // taskkill /T /F 杀整棵进程树，零额外依赖；失败回退直接杀子进程
+    let pid = child.id().to_string();
+    let ok = Command::new("taskkill")
+        .args(["/PID", &pid, "/T", "/F"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !ok {
+        let _ = child.kill();
+    }
+}
+
+/// Unix 变体：子进程 spawn 时已设为进程组组长（`process_group(0)`），
+/// 负 pid 向整组发 SIGKILL，孙进程随组终止。
+#[cfg(unix)]
+fn kill_process_tree(child: &mut std::process::Child) {
+    unsafe {
+        libc::kill(-(child.id() as i32), libc::SIGKILL);
+    }
+    // 兜底：子进程若已退出/未入组，确保直接子进程被回收
+    let _ = child.kill();
+}
+
+#[cfg(not(any(windows, unix)))]
+fn kill_process_tree(child: &mut std::process::Child) {
+    let _ = child.kill();
 }
 
 /// 发起 HTTP 请求（async，透传 reqwest；代理由环境变量自行感知）。
@@ -389,6 +449,44 @@ mod tests {
         );
     }
 
+    /// 以子进程形态重入：派生一个继承本进程 stdout 的挂起孙进程后自己
+    /// 挂起。孙进程握住通向宿主的管道写端——只杀直接子进程时宿主读者
+    /// 线程永远等不到 EOF。
+    #[test]
+    #[ignore]
+    fn spawn_hanging_grandchild_helper() {
+        let _grandchild = std::process::Command::new(self_exe())
+            .args(run_helper("hang_forever_helper"))
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        loop {
+            std::thread::sleep(Duration::from_secs(3600));
+        }
+    }
+
+    #[test]
+    fn exec_timeout_kills_whole_process_tree() {
+        let start = Instant::now();
+        let err = exec_with_limits(
+            &self_exe(),
+            &run_helper("spawn_hanging_grandchild_helper"),
+            None,
+            Duration::from_millis(500),
+            1024,
+        )
+        .err()
+        .expect("挂起的进程树应报超时错误");
+        assert!(err.contains("超时"), "应报超时错误，实际: {err}");
+        // 孙进程持管道写端：若只杀直接子进程，reader join 将永久阻塞
+        assert!(
+            start.elapsed() < Duration::from_secs(30),
+            "进程树强杀耗时异常: {:?}",
+            start.elapsed()
+        );
+    }
+
     #[test]
     fn exec_output_is_capped() {
         let cap = 16 * 1024;
@@ -403,6 +501,46 @@ mod tests {
         // 截断而非报错：子进程正常退出（管道持续排空，未阻塞）
         assert_eq!(r.exit_code, 0);
         assert_eq!(r.stdout.len(), cap, "stdout 应截断至上限");
+    }
+
+    /// 以子进程形态重入：派生一个持管道 10s 的孙进程后立即正常退出
+    /// （孙进程寿命 > READER_DRAIN_GRACE，覆盖正常退出路径的 EOF 等待）。
+    #[test]
+    #[ignore]
+    fn spawn_grandchild_then_exit_helper() {
+        let _grandchild = std::process::Command::new(self_exe())
+            .args(run_helper("hold_pipe_briefly_helper"))
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+    }
+
+    /// 以孙进程形态重入：持管道 10s 后退出（有限寿命，不留残余进程）。
+    #[test]
+    #[ignore]
+    fn hold_pipe_briefly_helper() {
+        std::thread::sleep(Duration::from_secs(10));
+    }
+
+    #[test]
+    fn exec_normal_exit_with_pipe_holding_grandchild_does_not_hang() {
+        let start = Instant::now();
+        let r = exec_with_limits(
+            &self_exe(),
+            &run_helper("spawn_grandchild_then_exit_helper"),
+            None,
+            Duration::from_secs(30),
+            1024,
+        )
+        .expect("子进程正常退出应返回结果");
+        assert_eq!(r.exit_code, 0);
+        // 宽限 2s 后放弃等待读者，而非等孙进程 10s 退出
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "正常退出路径被孙进程拖住: {:?}",
+            start.elapsed()
+        );
     }
 
     /// 起一个一次性微型 HTTP 服务：写入给定响应头与 body 后关闭连接。
