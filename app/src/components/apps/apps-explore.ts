@@ -90,11 +90,13 @@ export function announceDisplayIcon(entry: PluginAnnounceIndexEntryDto): string 
 
 /** 广播声明分类的展示名（目录粗分类映射，未知值原样展示）。 */
 export function announceCategoryLabel(category: string): string {
-  if (category === 'foundation') {
-    return '基础';
-  }
-  if (category === 'business') {
-    return '应用';
-  }
-  return category || '其他';
+  if (!category) return '其他';
+  const map: Record<string, string> = {
+    foundation: '基础',
+    'ai-assistant': 'AI 助手',
+    social: '社交',
+    tool: '工具',
+    game: '游戏',
+  };
+  return map[category] ?? category;
 }

@@ -7,7 +7,6 @@
  */
 import { computed, type ComputedRef } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { queryBackgroundPlugin } from '../../plugin/bot-presence';
 import {
   contactsOf,
   createTag as mockCreateTag,
@@ -55,9 +54,10 @@ export function useContactActions(ctx: ContactActionsContext) {
     // - 插件答复「不存在」/ 无答复（插件未在线、无处理器、超时）→ 孤儿，放行删除
     if (contact.rootId.startsWith('bot:')) {
       const pluginId = contact.rootId.split(':')[1] || '';
-      const reply = (await queryBackgroundPlugin(pluginId, 'bot:query', { contactId: contact.rootId })) as
-        | { exists?: boolean }
-        | null;
+      // 询问对象 = 内核里的插件后台运行时（QuickJS 沙箱，常驻不依赖 UI）
+      const reply = (await window.electronAPI?.pluginRuntime?.hostQuery(pluginId, 'bot:query', {
+        contactId: contact.rootId
+      })) as { exists?: boolean } | null;
       if (reply?.exists) {
         try {
           await ElMessageBox.confirm(

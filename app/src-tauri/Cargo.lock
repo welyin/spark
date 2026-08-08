@@ -5547,6 +5547,7 @@ dependencies = [
  "libp2p",
  "pbkdf2",
  "rand 0.10.2",
+ "reqwest",
  "rquickjs",
  "scrypt",
  "serde",

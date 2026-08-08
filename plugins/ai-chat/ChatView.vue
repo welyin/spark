@@ -344,7 +344,6 @@ import {
   listChatMessages,
   processChat,
   registerBotContactOnly,
-  deactivateBotContact,
   generateId,
   botRootId,
   scanBackendEnv,
@@ -743,8 +742,8 @@ async function handleDeleteBot(): Promise<void> {
   // 简单确认（正式版可替换为更友好的确认 UI）
   if (!confirm(`确定删除 Bot "${botForm.name}" 吗？对话历史将被保留在本地，但不会再关联到该 Bot。`)) return;
 
-  // 停止主聊天消息监听器
-  deactivateBotContact(botId);
+  // 后台运行时无需显式停用：bot 配置每条消息现读，docs 删除后新消息自然
+  // 被忽略（内核路由到插件 → getBot 返回 null → 不回复）
 
   // 注销联系人：删除通讯录中对应的 bot 好友记录（插件为 bot 生命周期权威源，
   // 删除时同步清理其联系人投影）
@@ -865,6 +864,19 @@ watch(activeBotId, () => {
 });
 </script>
 
+<!-- 全局（非 scoped）：锁定文档根容器高度，确保 flex 百分比级联生效 -->
+<style>
+html, body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+#app {
+  height: 100%;
+}
+</style>
+
 <style scoped>
 /* ================================================================
    ai-chat 插件 · 聊天 UI 样式
@@ -935,6 +947,7 @@ watch(activeBotId, () => {
 .sidebar {
   width: 240px;
   min-width: 240px;
+  min-height: 0;
   background: #ffffff;
   border-right: 1px solid #e2e8f0;
   display: flex;
@@ -948,6 +961,7 @@ watch(activeBotId, () => {
   justify-content: space-between;
   padding: 16px;
   border-bottom: 1px solid #e2e8f0;
+  flex-shrink: 0;
 }
 
 .sidebar-title {
@@ -980,7 +994,9 @@ watch(activeBotId, () => {
 /* Bot 列表 */
 .bot-list {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 4px 0;
 }
 
@@ -1094,6 +1110,7 @@ watch(activeBotId, () => {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
 }
 
 .chat-area--empty {
@@ -1124,6 +1141,7 @@ watch(activeBotId, () => {
   min-height: 48px;
   display: flex;
   align-items: center;
+  flex-shrink: 0;
 }
 
 .chat-header-info strong {
@@ -1140,7 +1158,9 @@ watch(activeBotId, () => {
 /* 消息列表 */
 .message-list {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 16px 20px;
   display: flex;
   flex-direction: column;
@@ -1348,6 +1368,7 @@ watch(activeBotId, () => {
   background: #fff;
   border-top: 1px solid #e2e8f0;
   align-items: flex-end;
+  flex-shrink: 0;
 }
 
 .chat-input {

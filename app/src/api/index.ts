@@ -157,11 +157,15 @@ const PLUGIN_CATALOG: PluginCatalogItem[] = [
     domain: aiChatManifest.domain,
     name: aiChatManifest.name,
     description: '通用 AI 聊天插件——创建多个 Bot 实例，各自配置不同 AI 后端（CodeBuddy CLI、OpenAI 兼容 API、Ollama 等），在应用会话中与 AI 对话',
-    category: 'foundation' as const,
+    category: 'ai-assistant' as const,
     version: aiChatManifest.version,
     views: aiChatManifest.views.map((view: { id: string }) => view.id),
     supportedSpaces: aiChatManifest.supportedSpaces as PluginSpaceType[],
     permissions: ['docs:read', 'docs:write', 'message:app', 'system:exec', 'network:fetch'],
+    requires: {
+      capabilities: ['system:exec'],
+      platforms: ['desktop'],
+    },
     package: {
       updateManifestUrl: aiChatManifest.package.updateManifestUrl,
       signatureUrl:
@@ -269,7 +273,14 @@ export function createTauriApi(): ElectronAPI {
     pluginRuntime: {
       // 插件后台运行时对账（内核 QuickJS 沙箱，plugin_system.md「后台运行时」）：
       // 登录/身份切换进入主界面时调用——身份切换会停全部插件后台，靠它按当前身份拉起
-      syncBackgrounds: () => call('plugin-background-sync')
+      syncBackgrounds: () => call('plugin-background-sync'),
+      // 宿主 → 插件后台反向查询（如删除联系人前的「bot 还在吗」询问）；
+      // 插件未运行/超时返回 null，调用方按保守语义处理
+      hostQuery: (pluginId: string, kind: string, payload: unknown) =>
+        call('plugin-host-query', { pluginId, kind, payload }),
+      // 插件后台运行时的存活查询（bot 在线状态的权威来源）
+      isBackgroundRunning: (pluginId: string) =>
+        call('plugin-background-running', { pluginId })
     },
     organization: {
       listMine: () => call('org-list-mine'),

@@ -31,7 +31,6 @@ import type { BridgeHostHandler } from '../../../packages/plugin-sdk/src/bridge/
 import { createPluginBackend } from './sdk-browser';
 import { listAppMessages, markAppMessagesRead, sendAppMessage } from './messages';
 import type { AppMessageCardDto } from '../api/types';
-import { onMessageForContact, type MessageRelayEvent } from '../stores/messages';
 import { refreshContacts, ensurePluginContactTag } from '../mock/contacts';
 
 type PluginViewType = 'app' | 'message-card' | 'background';
@@ -77,8 +76,8 @@ function assertOwnsContact(contactId: string, pluginId: string): void {
 /** view type 裁剪表：null = 全量（仅 grantedPermissions 过滤）；未列出的 view type 整域拒绝 */
 const VIEW_ALLOWED_CALLS: Record<PluginViewType, ReadonlySet<string> | null> = {
   app: null,
-  // 后台常驻视图：全量能力（同 app 主视图）——承载消息监听等常驻任务，
-  // 无 UI 但与主视图同为插件的可信执行环境
+  // background 视图已下线（插件常驻逻辑迁往内核 QuickJS 后台运行时，
+  // 见 plugin_system.md「后台运行时」）；类型保留仅为兼容历史清单的解析
   background: null,
   // 消息卡片：docs 只读 + 验签/存证读取（无网络、无签名，设计文档「UI 集成点」）；
   // 不含 messages.*——卡片视图无应用会话写权限，卡片回调只经 action 上行（triggerCardAction）
@@ -228,24 +227,10 @@ export async function createPluginBridgeDispatcher(identity: PluginBridgeIdentit
           messageId,
           text
         });
-      },
-      waitForMessage: (contactId: string, timeoutMs?: number) => {
-        assertOwnsContact(contactId, identity.pluginId);
-        console.log(`[bridge] waitForMessage 注册监听 contactId=${contactId}`);
-        return new Promise<MessageRelayEvent | null>((resolve) => {
-          const waitMs = timeoutMs ?? 30000;
-          const timer = setTimeout(() => {
-            unsub();
-            resolve(null);
-          }, waitMs);
-          const unsub = onMessageForContact(contactId, (event) => {
-            console.log(`[bridge] waitForMessage 收到消息 contactId=${contactId} text=${event.text?.slice(0, 30)}`);
-            clearTimeout(timer);
-            unsub();
-            resolve(event);
-          });
-        });
       }
+      // waitForMessage（长轮询监听 bot 消息）已随后台运行时迁移下线：
+      // bot 消息由内核直接推送到插件的 QuickJS 后台线程（spark.onMessage），
+      // iframe 视图不再有消费 bot 消息的场景
     },
     // sys 代理（内核外呼）：仅代理不加工；插件享有完整权限，内核命令侧负责业务安全
     sys: {

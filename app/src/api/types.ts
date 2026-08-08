@@ -88,17 +88,29 @@ export type DomainSignature = {
 };
 
 /** 插件目录项（静态目录 PLUGIN_CATALOG 的 DTO，api/index.ts）。 */
+/** 插件运行时前提（与 SDK PluginRequires 对齐） */
+export type PluginRequires = {
+  /** 需要的系统能力子集（permissions 的超集校验） */
+  capabilities?: string[];
+  /** 明确限定平台（缺省 = 全平台） */
+  platforms?: Array<'desktop' | 'mobile'>;
+  /** 移动端只读豁免：声明后移动端可安装但禁用写能力 */
+  mobileReadonly?: boolean;
+};
+
 export type PluginCatalogItem = {
   id: string;
   domain: string;
   name: string;
   description: string;
-  category: 'foundation' | 'business';
+  category: 'ai-assistant' | 'social' | 'tool' | 'game' | 'foundation';
   version: string;
   views: string[];
   permissions?: string[];
   /** 插件支持的空间类型；缺省按 ['org'] 处理（spaces-and-plugins §4） */
   supportedSpaces?: PluginSpaceType[];
+  /** 运行时前提（平台/能力约束；缺省 = 全平台可装） */
+  requires?: PluginRequires;
   package?: {
     updateManifestUrl: string;
     signatureUrl: string;
@@ -134,12 +146,14 @@ export type PluginMarketItemDto = {
   domain: string;
   name: string;
   description: string;
-  category: 'foundation' | 'business';
+  category: 'ai-assistant' | 'social' | 'tool' | 'game' | 'foundation';
   version: string;
   views: string[];
   permissions: PluginPermission[];
   /** 插件支持的空间类型；缺省按 ['org'] 处理（spaces-and-plugins §4） */
   supportedSpaces?: PluginSpaceType[];
+  /** 运行时前提（平台/能力约束；缺省 = 全平台可装） */
+  requires?: PluginRequires;
   package: {
     updateManifestUrl: string;
     signatureUrl: string;
@@ -588,6 +602,10 @@ export type ElectronAPI = {
     /** 插件后台运行时对账（幂等）：登录/身份切换进入主界面时调用，
      *  按当前身份拉起已启用插件的 QuickJS 后台线程 */
     syncBackgrounds: () => Promise<void>;
+    /** 宿主 → 插件后台反向查询；插件未运行/超时（2s）返回 null */
+    hostQuery: (pluginId: string, kind: string, payload: unknown) => Promise<unknown>;
+    /** 插件后台运行时是否存活（bot 在线状态的权威来源） */
+    isBackgroundRunning: (pluginId: string) => Promise<boolean>;
   };
   organization: {
     listMine: () => Promise<OrgView[]>;

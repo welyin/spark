@@ -122,10 +122,13 @@ describe('sortAnnouncesByUpdated', () => {
 });
 
 describe('announceCategoryLabel', () => {
-  it('粗分类映射，未知值原样', () => {
+  it('语义化分类映射，未知值原样', () => {
     expect(announceCategoryLabel('foundation')).toBe('基础');
-    expect(announceCategoryLabel('business')).toBe('应用');
-    expect(announceCategoryLabel('social')).toBe('social');
+    expect(announceCategoryLabel('ai-assistant')).toBe('AI 助手');
+    expect(announceCategoryLabel('social')).toBe('社交');
+    expect(announceCategoryLabel('tool')).toBe('工具');
+    expect(announceCategoryLabel('game')).toBe('游戏');
+    expect(announceCategoryLabel('unknown')).toBe('unknown');
     expect(announceCategoryLabel('')).toBe('其他');
   });
 });

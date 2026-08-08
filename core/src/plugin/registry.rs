@@ -58,9 +58,38 @@ impl PluginRuntimeRegistry {
         let Some(handle) = inner.get(plugin_id) else {
             return;
         };
-        if handle.dispatch(PluginEvent::Chat(payload.clone())).is_err() {
+        let event = PluginEvent::Dispatch {
+            kind: "message".to_string(),
+            payload: payload.clone(),
+        };
+        if handle.dispatch(event).is_err() {
             inner.remove(plugin_id);
         }
+    }
+
+    /// 向插件投递宿主查询（`plugin_host_query` 的投递半侧；应答经
+    /// `query.respond` 回流在途表）。插件未运行/通道已断返回 false。
+    pub(crate) fn dispatch_query(
+        &self,
+        plugin_id: &str,
+        query_id: u64,
+        kind: &str,
+        payload: Value,
+    ) -> bool {
+        let mut inner = self.lock();
+        let Some(handle) = inner.get(plugin_id) else {
+            return false;
+        };
+        let event = PluginEvent::Query {
+            query_id,
+            kind: kind.to_string(),
+            payload,
+        };
+        if handle.dispatch(event).is_err() {
+            inner.remove(plugin_id);
+            return false;
+        }
+        true
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, PluginRuntimeHandle>> {

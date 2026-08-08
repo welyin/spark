@@ -4,13 +4,18 @@
   "name": "AI 聊天",
   "version": "0.1.0",
   "description": "通用 AI 聊天插件——创建多个 Bot 实例，各自配置不同 AI 后端（CodeBuddy CLI、OpenAI 兼容 API、Ollama 等），在应用会话中与 AI 对话",
+  "category": "ai-assistant",
   "entryView": "chat",
   "supportedSpaces": ["personal", "org"],
   "views": [
-    { "id": "chat", "type": "app", "title": "AI 聊天" },
-    { "id": "background", "type": "background", "title": "后台消息监听" }
+    { "id": "chat", "type": "app", "title": "AI 聊天" }
   ],
+  "background": "views/background.js",
   "permissions": ["docs:read", "docs:write", "message:app", "system:exec", "network:fetch"],
+  "requires": {
+    "capabilities": ["system:exec"],
+    "platforms": ["desktop"]
+  },
   "sdkVersion": "1",
   "package": {
     "updateManifestUrl": "https://github.com/welyin/spark/releases/latest/download/spark-plugin-ai-chat-manifest.json",

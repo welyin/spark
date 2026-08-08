@@ -155,9 +155,11 @@ export type PluginCardActionPayload = {
  * - 服务号（应用会话）：sendAppMessage / listAppMessages / markRead / 卡片回调
  *   → 消息以结构化卡片形式出现在"应用"分组中，适合通知/播报场景；
  *
- * - 插件联系人：registerAsContact / sendResponse / waitForMessage
+ * - 插件联系人：registerAsContact / unregisterAsContact / sendResponse
  *   → 插件注册为 Spark 通讯录联系人，出现在"单聊"分组中，
- *     用户可像与真人一样自由打字对话；插件通过长轮询接收用户消息并回复。
+ *     用户可像与真人一样自由打字对话。bot 消息的接收在内核 QuickJS 后台
+ *     运行时（manifest background 入口，spark.onMessage 推送模型）；
+ *     iframe 侧只保留注册/回复能力。
  *
  * 两种模式共享 `message:app` 权限（高级权限，内核限流 10 条/60s）。
  * pluginId/space 由桥按已认证身份注入，插件侧不传。
@@ -187,8 +189,8 @@ export interface PluginMessagesAPI {
   unregisterAsContact: (contactId: string) => Promise<{ success: boolean }>;
   /** 向联系人会话插入一条回复消息（senderId = contactId，内核直接落库不经 P2P） */
   sendResponse: (convId: string, contactId: string, displayName: string, messageId: string, text: string) => Promise<unknown>;
-  /** 长轮询等待用户发给该联系人的消息。返回 null 表示超时 */
-  waitForMessage: (contactId: string, timeoutMs?: number) => Promise<ContactMessageEvent | null>;
+  // waitForMessage（长轮询收 bot 消息）已下线：iframe 侧不再消费 bot 消息，
+  // 由内核后台运行时按 bot 归属直接推送（plugin_system.md「后台运行时」）
 }
 
 // ------------------------------------------------------------------
@@ -240,17 +242,6 @@ export interface PluginSysAPI {
   exec: (program: string, args: string[], workdir?: string) => Promise<SysExecResult>;
   fetch: (url: string, options?: SysFetchOptions) => Promise<SysFetchResult>;
 }
-
-// ── 插件联系人消息事件（长轮询结果，messages.waitForMessage） ──
-
-/** 用户发给插件联系人的消息事件（插件注册为联系人后，从主聊天窗口接收用户消息） */
-export type ContactMessageEvent = {
-  spaceKey: string;
-  convId: string;
-  contactId: string;
-  messageId: string;
-  text: string;
-};
 
 export interface PluginSDK {
   /** 当前插件的域身份：tab 模式下由 URL query `pluginDomain` 解析（对齐旧 tab 语义） */
@@ -329,6 +320,19 @@ export type PluginViewDeclaration = {
   title?: string;
 };
 
+/** 插件展示分类（市场筛选用，枚举便于扩展） */
+export type PluginCategory = 'ai-assistant' | 'social' | 'tool' | 'game' | 'foundation';
+
+/** 插件运行时前提（壳层在安装/启用时校验，不满足则拒绝或降级） */
+export type PluginRequires = {
+  /** 需要的系统能力子集（permissions 的超集校验；如 system:exec / network:fetch） */
+  capabilities?: string[];
+  /** 明确限定平台（缺省 = 全平台） */
+  platforms?: Array<'desktop' | 'mobile'>;
+  /** 移动端只读豁免：声明后移动端可安装但禁用写能力（默认 false） */
+  mobileReadonly?: boolean;
+};
+
 /** 插件声明式清单（与插件目录 manifest.json 一一对应） */
 export type PluginManifest = {
   id: string;
@@ -337,6 +341,8 @@ export type PluginManifest = {
   name: string;
   version: string;
   description: string;
+  /** 展示分类（市场筛选用） */
+  category: PluginCategory;
   /** 默认入口视图 id，必须存在于 views 中 */
   entryView: string;
   /** 插件可运行的空间类型 */
@@ -348,6 +354,8 @@ export type PluginManifest = {
   background?: string;
   /** 权限声明（如 storage:read / storage:write / org:read / org:sync） */
   permissions: string[];
+  /** 运行时前提（壳层安装/启用校验） */
+  requires?: PluginRequires;
   /** 依赖的 SDK 契约版本 */
   sdkVersion: string;
   package?: {

@@ -37,6 +37,14 @@ pub enum PluginError {
     #[error(transparent)]
     Message(#[from] crate::message::MessageError),
 
+    /// 集合模块错误（插件 docs 能力）。
+    #[error(transparent)]
+    Collection(#[from] crate::collection::CollectionError),
+
+    /// 集合 schema 模块错误（插件 docs.defineCollection 能力）。
+    #[error(transparent)]
+    Schema(#[from] crate::schema::SchemaError),
+
     /// 通讯录模块错误。
     #[error(transparent)]
     Contact(#[from] crate::contact::ContactError),

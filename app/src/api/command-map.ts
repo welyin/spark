@@ -124,8 +124,10 @@ export const COMMAND_MAP: Record<string, string> = {
   'plugin-market-announce-publish': 'plugin_market_announce_publish',
   'plugin-market-announce-list': 'plugin_market_announce_list',
   'plugin-market-announce-get': 'plugin_market_announce_get',
-  // 插件后台运行时（内核 QuickJS 沙箱对账）
+  // 插件后台运行时（内核 QuickJS 沙箱对账 + 存活查询 + 宿主反向查询）
   'plugin-background-sync': 'plugin_background_sync',
+  'plugin-background-running': 'plugin_background_running',
+  'plugin-host-query': 'plugin_host_query',
   // 设备管理（多设备清单：本机采集 + 自设备 device-sync 同步）
   'devices-list': 'devices_list',
   // 系统桥接（未读角标 → dock/任务栏徽标）
@@ -158,6 +160,8 @@ export const ARG_NAMES: Record<string, string[]> = {
   'root-sign': ['payload'],
   'root-derive-domain': ['domain'],
   'root-mnemonic-check': ['input'],
+  'plugin-host-query': ['pluginId', 'kind', 'payload'],
+  'plugin-background-running': ['pluginId'],
   'org-create': ['input'],
   'org-invite-create': ['orgId'],
   'org-invite-accept': ['code'],

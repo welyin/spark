@@ -73,7 +73,7 @@
 </template>
 
 <script lang="ts">
-import { computed, defineComponent, type PropType } from 'vue';
+import { computed, defineComponent, ref, watch, type PropType } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   ArrowLeft,
@@ -91,7 +91,6 @@ import {
 } from '@element-plus/icons-vue';
 import UserAvatar from '../UserAvatar.vue';
 import { isLocalOnly } from '../../stores/network-status';
-import { isBotContactOnline } from '../../plugin/bot-presence';
 import { friendOf } from '../../mock/contacts';
 import { personAvatarSource, personDisplayName } from '../../stores/avatar-sources';
 import { appConversationName, isAppConversationBlocked, toggleAppConversationBlocked } from '../../stores/app-conversations';
@@ -106,7 +105,8 @@ import {
 
 export default defineComponent({
   name: 'ChatHeader',
-  components: { UserAvatar },
+  // 模板字面使用的组件需注册（:icon/:is 绑定的图标走导入值，无需注册）
+  components: { UserAvatar, RemoveFilled },
   props: {
     spaceKey: { type: String as () => SpaceKey, required: true },
     conversation: { type: Object as PropType<Conversation>, required: true }
@@ -126,12 +126,33 @@ export default defineComponent({
       if (conv.kind !== 'direct' || !conv.peerId) return false;
       return friendOf(props.spaceKey, conv.peerId) === undefined;
     });
-    // 有效在线：bot 会话（peerId 以 bot: 开头）无 P2P peer，online 恒 false，
-    // 其"在线"= 插件后台监听存活（bot-presence 注册表）；真人会话用 P2P online 字段
+    // bot 会话（peerId 以 bot: 开头）无 P2P peer，online 恒 false，其"在线"=
+    // 插件后台运行时存活（内核 QuickJS 沙箱，权威来源）；会话切换时查询一次。
+    // 真人会话用 P2P online 字段
+    const botOnline = ref(false);
+    let botOnlineQuerySeq = 0;
+    watch(
+      () => props.conversation.peerId,
+      (peerId) => {
+        if (!peerId?.startsWith('bot:')) {
+          botOnline.value = false;
+          return;
+        }
+        const pluginId = peerId.split(':')[1] || '';
+        const seq = ++botOnlineQuerySeq;
+        window.electronAPI?.pluginRuntime
+          ?.isBackgroundRunning(pluginId)
+          .then((running) => {
+            if (seq === botOnlineQuerySeq) botOnline.value = Boolean(running);
+          })
+          .catch(() => {});
+      },
+      { immediate: true }
+    );
     const effectiveOnline = computed(() => {
       const peerId = props.conversation.peerId;
       if (peerId?.startsWith('bot:')) {
-        return isBotContactOnline(peerId);
+        return botOnline.value;
       }
       return props.conversation.online;
     });

@@ -35,6 +35,8 @@ export default {
     lib: {
       entry: {
         main: here('./index.ts'),
+        // 后台入口（内核 QuickJS 沙箱）：零依赖纯脚本，宿主直接 eval
+        background: here('./background.ts')
       },
       formats: ['es']
     },

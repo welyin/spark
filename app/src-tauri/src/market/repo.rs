@@ -738,6 +738,8 @@ pub(crate) fn synthesize_catalog_entry(
         supported_spaces: declaration
             .and_then(|d| d.supported_spaces)
             .or_else(|| installed.supported_spaces.clone()),
+        // 运行时前提：仓库声明/侧载 manifest 暂无 requires 字段，恒无约束
+        requires: None,
         package: super::catalog::PluginCatalogPackage {
             update_manifest_url: String::new(),
             signature_url: String::new(),

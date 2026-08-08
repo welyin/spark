@@ -18,8 +18,8 @@ export function appIconBackground(item: PluginMarketItemDto): string {
 export const LIST_GROUPS = ['常用', '办公', '社交', '工具', '其他'] as const;
 
 /** 应用市场分类（ui-apps-market §3.3，不含「全部」）。 */
-export type MarketCategory = '基础' | '办公' | '社交' | '工具' | '其他';
-export const MARKET_CATEGORIES: MarketCategory[] = ['基础', '办公', '社交', '工具', '其他'];
+export type MarketCategory = '基础' | '办公' | '社交' | '工具' | 'AI 助手' | '游戏' | '其他';
+export const MARKET_CATEGORIES: MarketCategory[] = ['基础', '办公', '社交', '工具', 'AI 助手', '游戏', '其他'];
 
 /** 权限标识的中文展示名（沿用旧版插件市场页）。 */
 export const PERMISSION_LABELS: Record<string, string> = {
@@ -37,24 +37,22 @@ export function permissionLabel(permission: string): string {
   return PERMISSION_LABELS[permission] ?? permission;
 }
 
-// TODO(mock): 市场条目只有 foundation/business 粗分类，细分分类（§3.3）由前端按名称/简介关键字映射，待市场数据带分类字段后移除
-const CATEGORY_KEYWORDS: Array<[MarketCategory, string[]]> = [
-  ['办公', ['日历', '任务', '看板', '文件', '文档', '审批', '考勤', '投票']],
-  ['社交', ['微博', '私信', '朋友圈', '聊天', '动态', '社区', '论坛']],
-  ['工具', ['工具', '导出', '诊断', '备份', '统计', '扫码']]
-];
-
 export function marketCategoryOf(item: PluginMarketItemDto): MarketCategory {
-  if (item.category === 'foundation') {
-    return '基础';
+  // 语义化分类直接映射（市场数据带 category 枚举后不再需要关键字匹配）
+  switch (item.category) {
+    case 'foundation':
+      return '基础';
+    case 'ai-assistant':
+      return 'AI 助手';
+    case 'social':
+      return '社交';
+    case 'tool':
+      return '工具';
+    case 'game':
+      return '游戏';
+    default:
+      return '其他';
   }
-  const text = `${item.name} ${item.description}`;
-  for (const [category, keywords] of CATEGORY_KEYWORDS) {
-    if (keywords.some((word) => text.includes(word))) {
-      return category;
-    }
-  }
-  return '其他';
 }
 
 /** 市场搜索：按名称、简介、开发者（域名）过滤（ui-apps-market §3.2）。 */

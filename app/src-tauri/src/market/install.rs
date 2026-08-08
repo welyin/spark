@@ -32,6 +32,27 @@ pub(crate) fn sanitize_asset_file_name(file_name: &str) -> Result<&str, String> 
 }
 
 impl PluginMarketService {
+    /// 平台兼容性校验：目录声明的 requires.platforms 与当前平台不匹配时拒绝安装。
+    /// 当前恒为 desktop（Tauri 桌面端）；移动端壳层接入时改为动态判定。
+    fn check_platform_compatibility(item: &PluginCatalogItem) -> Result<(), String> {
+        let Some(requires) = &item.requires else {
+            return Ok(());
+        };
+        if requires.platforms.is_empty() {
+            return Ok(());
+        }
+        let current_platform = "desktop"; // Tauri 桌面端；移动端接入时改动态
+        if !requires.platforms.iter().any(|p| p == current_platform) {
+            return Err(format!(
+                "Plugin {} is not available on {} (requires: {})",
+                item.id,
+                current_platform,
+                requires.platforms.join(", ")
+            ));
+        }
+        Ok(())
+    }
+
     /// TS `loadVerifiedManifest`：取清单+签名 → 验签 → 解析 → id/domain 匹配。
     pub(crate) fn load_verified_manifest(&self, item: &PluginCatalogItem) -> Result<PluginReleaseManifest, String> {
         let (manifest_url, signature_url) = self.resolve_manifest_endpoints(item);
@@ -121,6 +142,7 @@ impl PluginMarketService {
     /// TS `install`：验签 → 下载/复制 → 校验 → 落状态（enabled = true）。
     pub fn install(&mut self, plugin_id: &str) -> Result<InstalledPluginState, String> {
         let item = find_catalog_item(plugin_id)?;
+        Self::check_platform_compatibility(&item)?;
         let manifest = self.load_verified_manifest(&item)?;
         let asset = manifest
             .package_asset()

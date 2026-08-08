@@ -65,11 +65,12 @@ pub fn sync_background_runtimes(data_dir: &Path, kernel: &mut Kernel, installed:
             continue;
         }
         match load_background_script(data_dir, plugin_id) {
-            Ok(Some(script)) => {
-                if let Err(error) = kernel.plugin_start_background(plugin_id, &script) {
-                    eprintln!("[plugin-runtime] start failed plugin={plugin_id} error={error}");
+            Ok(Some(script)) => match kernel.plugin_start_background(plugin_id, &script) {
+                Ok(()) => eprintln!("[plugin-runtime] started plugin={plugin_id}"),
+                Err(error) => {
+                    eprintln!("[plugin-runtime] start failed plugin={plugin_id} error={error}")
                 }
-            }
+            },
             Ok(None) => {}
             Err(error) => {
                 eprintln!("[plugin-runtime] load failed plugin={plugin_id} error={error}")
@@ -238,6 +239,22 @@ mod tests {
         // 禁用 → 对账即停
         sync_background_runtimes(&data_dir, &mut kernel, &[("bg-demo".to_string(), false)]);
         assert!(!kernel.plugin_background_running("bg-demo"));
+    }
+
+    #[test]
+    fn builtin_dist_background_entry_resolves() {
+        // 内置开发插件链路：ai-chat dist 声明了 background 入口时应能从
+        // CARGO_MANIFEST_DIR/../../plugins 兜底解析到脚本（无市场记录时
+        // resolve_plugin_resource 回落内置 dist）。dist 为构建输出，缺失跳过
+        // ——与 plugin-src 测试同口径。
+        let data_dir = temp_data_dir("builtin-dist");
+        match load_background_script(&data_dir, "ai-chat") {
+            Ok(Some(script)) => {
+                assert!(script.contains("onMessage"), "后台脚本应含消息监听注册");
+            }
+            Ok(None) => eprintln!("skip: ai-chat dist not built"),
+            Err(error) => panic!("ai-chat 声明了入口但解析失败：{error}"),
+        }
     }
 
     #[test]

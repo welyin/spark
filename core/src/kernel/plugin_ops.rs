@@ -66,6 +66,51 @@ impl Kernel {
         self.plugin_registry.running_ids()
     }
 
+    /// 宿主 → 插件反向查询（如前端删除联系人前的「bot 还在吗」询问）。
+    ///
+    /// 同步阻塞等待应答（上限 2s；调用方须在命令线程或 spawn_blocking 内）。
+    /// 插件未运行、投递失败、超时未应答均返回 `None`——调用方按「查询无
+    /// 结果」的保守语义处理（删除询问场景即「bot 不存在，放行删除」）。
+    pub fn plugin_host_query(
+        &self,
+        plugin_id: &str,
+        kind: &str,
+        payload: serde_json::Value,
+    ) -> Option<serde_json::Value> {
+        use std::sync::mpsc::channel;
+        use std::time::Duration;
+
+        static QUERY_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let query_id = QUERY_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let (tx, rx) = channel();
+        self.plugin_host
+            .pending_queries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(query_id, tx);
+        if !self
+            .plugin_registry
+            .dispatch_query(plugin_id, query_id, kind, payload)
+        {
+            self.plugin_host
+                .pending_queries
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&query_id);
+            return None;
+        }
+        let result = rx.recv_timeout(Duration::from_secs(2)).ok();
+        if result.is_none() {
+            // 超时：清理在途记录（JS 侧迟到的应答发现无记录会静默丢弃）
+            self.plugin_host
+                .pending_queries
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&query_id);
+        }
+        result
+    }
+
     /// 停止全部插件后台运行时（身份切换/关停前调用）。
     pub(crate) fn plugin_stop_all_background(&mut self) {
         for plugin_id in self.plugin_registry.running_ids() {

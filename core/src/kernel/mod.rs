@@ -189,6 +189,7 @@ impl Kernel {
         let p2p_node_shared = Arc::new(Mutex::new(None));
         let signing_key_shared = Arc::new(Mutex::new(None));
         let io_lock = Arc::new(Mutex::new(()));
+        let collection_configs = Arc::new(Mutex::new(HashMap::new()));
         let plugin_host = PluginHostShared {
             storage: Arc::new(Mutex::new(None)),
             io_lock: Arc::clone(&io_lock),
@@ -196,6 +197,8 @@ impl Kernel {
             my_root_id: Arc::clone(&current_root_id_shared),
             p2p_node: Arc::clone(&p2p_node_shared),
             signing_key: Arc::clone(&signing_key_shared),
+            collection_configs: Arc::clone(&collection_configs),
+            pending_queries: Arc::new(Mutex::new(HashMap::new())),
             runtime: runtime.handle().clone(),
         };
         let mut kernel = Kernel {
@@ -222,7 +225,7 @@ impl Kernel {
             recovery_trigger: Arc::new(Mutex::new(RecoveryTrigger::new())),
             org_address_publish: Arc::new(Mutex::new(HashMap::new())),
             self_device_link: Arc::new(Mutex::new(None)),
-            collection_configs: Arc::new(Mutex::new(HashMap::new())),
+            collection_configs,
             io_lock,
             app_msg_limiter: crate::message::AppMessageRateLimiter::default(),
             plugin_registry: PluginRuntimeRegistry::default(),

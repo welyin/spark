@@ -226,6 +226,42 @@ pub fn plugin_background_sync(
     Ok(())
 }
 
+/// `plugin-background-running`：插件后台运行时下线/存活查询（bot 在线状态
+/// 的权威来源；会话头部等展示层用）。
+#[tauri::command]
+pub fn plugin_background_running(
+    webview: tauri::Webview,
+    state: tauri::State<'_, KernelState>,
+    plugin_id: String,
+) -> Result<bool, String> {
+    crate::domain_guard::require_system_domain(&webview)?;
+    Ok(lock_kernel(&state)?.plugin_background_running(&plugin_id))
+}
+
+/// `plugin-host-query`：宿主 → 插件后台运行时反向查询（如删除联系人前的
+/// 「bot 还在吗」询问）。插件未运行/超时（2s）返回 None——调用方按「查询
+/// 无结果」的保守语义处理（删除询问场景即放行）。
+/// spawn_blocking：内核侧同步阻塞等应答，不占命令调用线程。
+#[tauri::command]
+pub async fn plugin_host_query(
+    webview: tauri::Webview,
+    state: tauri::State<'_, KernelState>,
+    plugin_id: String,
+    kind: String,
+    payload: serde_json::Value,
+) -> Result<Option<serde_json::Value>, String> {
+    crate::domain_guard::require_system_domain(&webview)?;
+    let kernel = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        let guard = kernel
+            .lock()
+            .map_err(|_| "kernel state lock poisoned".to_string())?;
+        Ok(guard.plugin_host_query(&plugin_id, &kind, payload))
+    })
+    .await
+    .map_err(|e| format!("kernel task join failed: {e}"))?
+}
+
 // ------------------------------------------------------------------
 // 单元测试：直调 *_inner，不依赖 WebView
 // ------------------------------------------------------------------

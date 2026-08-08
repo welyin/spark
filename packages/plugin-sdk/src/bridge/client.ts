@@ -378,13 +378,7 @@ export function connectPluginBridge(options: ConnectPluginBridgeOptions): Promis
         unregisterAsContact: (contactId) =>
           call('messages', 'unregisterAsContact', [contactId]).then(() => ({ success: true })),
         sendResponse: (convId, contactId, displayName, messageId, text) =>
-          call('messages', 'sendResponse', [convId, contactId, displayName, messageId, text]),
-        waitForMessage: (contactId, timeoutMs) => {
-          const waitMs = timeoutMs ?? 30000;
-          // 长轮询：桥请求超时必须大于等待时长（+5s 缓冲），否则宿主侧已消费的
-          // 消息会因插件侧先行超时丢弃 pending 而永久丢失
-          return call('messages', 'waitForMessage', [contactId, waitMs], waitMs + 5000) as Promise<import('../index').ContactMessageEvent | null>;
-        }
+          call('messages', 'sendResponse', [convId, contactId, displayName, messageId, text])
       },
       events: {
         subscribe: async (event, handler) => {

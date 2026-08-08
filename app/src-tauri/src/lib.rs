@@ -278,6 +278,8 @@ pub fn run() {
             commands::plugin::plugin_identity_verify,
             commands::plugin::plugin_org_sync_now,
             commands::plugin::plugin_background_sync,
+            commands::plugin::plugin_background_running,
+            commands::plugin::plugin_host_query,
             // 插件市场（目录/检查更新/安装/升级/启停/卸载）
             commands::market::plugin_market_list,
             commands::market::plugin_market_check_updates,

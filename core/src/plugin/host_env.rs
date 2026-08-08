@@ -9,18 +9,26 @@
 //! 锁序与 kernel 门面一致：先 `io_lock`（长持，落库互斥），镜像锁只在
 //! 读取句柄瞬间持有，二者不构成环。
 
+use std::collections::HashMap;
+use std::sync::mpsc::Sender as StdSender;
 use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 use tokio::sync::broadcast;
 
+use crate::collection::{
+    CollectionConfig, DocumentCollection, FilterOp, QueryFilter, QueryOptions,
+};
 use crate::contact::ContactService;
 use crate::message::{MessageError, MessageService, generate_message_id};
+use crate::p2p::constants::SYNC_TOPIC;
 use crate::p2p::node::system_now_ms;
-use crate::p2p::{P2pEvent, P2pNode};
+use crate::p2p::{P2pEvent, P2pNode, build_delete_body, build_update_body};
+use crate::schema::{CollectionSchemaDeclaration, SyncStrategy, declare_collection_schema};
 use crate::storage::SledStorage;
 
 use super::error::{PluginError, Result};
+use super::runtime::PluginEvent;
 
 /// 插件运行时的宿主共享句柄（全部由 kernel 门面的共享格克隆而来）。
 ///
@@ -42,8 +50,22 @@ pub(crate) struct PluginHostShared {
     /// 解锁期签名私钥共享格（= kernel `signing_key_shared`，自设备回同步
     /// 信封自签用）。
     pub(crate) signing_key: Arc<Mutex<Option<ed25519_dalek::SigningKey>>>,
+    /// 集合配置缓存（= kernel `collection_configs`；docs.put/delete/query 时
+    /// 写入兜底声明，已持久化的集合声明优先）。
+    pub(crate) collection_configs: Arc<Mutex<HashMap<(String, String), CollectionConfig>>>,
+    /// 宿主查询在途表（query_id → 应答通道；`plugin_host_query` 插入，
+    /// JS 侧 `query.respond` 回流取出）。
+    pub(crate) pending_queries: Arc<Mutex<HashMap<u64, StdSender<Value>>>>,
     /// kernel tokio runtime 句柄（投递任务 spawn 目标）。
     pub(crate) runtime: tokio::runtime::Handle,
+}
+
+/// 单插件运行时上下文（每次启动绑定；与跨插件共享的 [`PluginHostShared`]
+/// 相对——事件回流通道是每插件一条）。
+#[derive(Clone)]
+pub(crate) struct PluginRuntimeContext {
+    pub(crate) plugin_id: String,
+    pub(crate) event_tx: std::sync::mpsc::Sender<PluginEvent>,
 }
 
 impl PluginHostShared {
@@ -59,14 +81,25 @@ impl PluginHostShared {
     /// host 调用入口（JS `__spark_host_call` 的 Rust 侧）：分发 capability，
     /// 结果/错误统一序列化为 JSON 字符串返回 JS（错误形如 `{"error": "..."}`，
     /// 由 JS prelude 转为异常抛出）。
-    pub(crate) fn call(&self, plugin_id: &str, capability: &str, payload_json: &str) -> String {
-        match self.dispatch(plugin_id, capability, payload_json) {
+    pub(crate) fn call(
+        &self,
+        rtx: &PluginRuntimeContext,
+        capability: &str,
+        payload_json: &str,
+    ) -> String {
+        match self.dispatch(rtx, capability, payload_json) {
             Ok(value) => value.to_string(),
             Err(error) => serde_json::json!({ "error": error.to_string() }).to_string(),
         }
     }
 
-    fn dispatch(&self, plugin_id: &str, capability: &str, payload_json: &str) -> Result<Value> {
+    fn dispatch(
+        &self,
+        rtx: &PluginRuntimeContext,
+        capability: &str,
+        payload_json: &str,
+    ) -> Result<Value> {
+        let plugin_id = rtx.plugin_id.as_str();
         let payload: Value = serde_json::from_str(payload_json)?;
         match capability {
             "log" => {
@@ -76,6 +109,18 @@ impl PluginHostShared {
             }
             "contact.ensureBot" => self.ensure_bot(plugin_id, &payload),
             "message.reply" => self.reply(plugin_id, &payload),
+            // 文档能力：域恒为插件 id（插件不可读写他域数据）；同步 sled 操作
+            "docs.get" => self.doc_get(plugin_id, &payload),
+            "docs.put" => self.doc_put(plugin_id, &payload),
+            "docs.delete" => self.doc_delete(plugin_id, &payload),
+            "docs.query" => self.doc_query(plugin_id, &payload),
+            "docs.defineCollection" => self.doc_define_collection(plugin_id, &payload),
+            // 系统能力：长时操作异步化——启动即返，结果经事件队列回流
+            // （JS Promise 由 prelude 配对 callId）
+            "sys.exec.start" => self.sys_exec_start(rtx, &payload),
+            "sys.fetch.start" => self.sys_fetch_start(rtx, &payload),
+            // 宿主查询应答回流（plugin_host_query 的另一半）
+            "query.respond" => self.query_respond(&payload),
             other => Err(PluginError::InvalidCall(format!(
                 "unknown capability: {other}"
             ))),
@@ -140,4 +185,376 @@ fn required_str<'a>(payload: &'a Value, field: &str) -> Result<&'a str> {
         .get(field)
         .and_then(Value::as_str)
         .ok_or_else(|| PluginError::InvalidCall(format!("missing string field: {field}")))
+}
+
+// ------------------------------------------------------------------
+// 文档能力（docs.*）：域缺省为插件 id；显式域经合法性约束（见
+// resolve_doc_domain）。语义对齐 kernel doc_* 门面
+// ------------------------------------------------------------------
+
+/// 解析 docs 能力的目标域：缺省（null/空）为插件自身域；显式指定的域必须
+/// 属于本插件的数据面——自身域、`plugin:{pluginId}` 根域（UI 桥历史数据面，
+/// 存量 bot 文档沉在那里）、空间根域（`space:personal` / `space:org`）。
+/// 其余域（其他插件 id / 组织域等）拒绝——插件不可读写他方数据。
+fn resolve_doc_domain<'a>(plugin_id: &'a str, payload: &'a Value) -> Result<&'a str> {
+    let plugin_root = format!("plugin:{plugin_id}");
+    match payload.get("domain").and_then(Value::as_str) {
+        None | Some("") => Ok(plugin_id),
+        Some(domain) if domain == plugin_id => Ok(plugin_id),
+        Some(domain) if domain == plugin_root => Ok(domain),
+        Some(domain) if domain == "space:personal" || domain == "space:org" => Ok(domain),
+        Some(domain) => Err(PluginError::InvalidCall(format!(
+            "domain not allowed for plugin {plugin_id}: {domain}"
+        ))),
+    }
+}
+
+impl PluginHostShared {
+    /// 集合配置载荷（camelCase，对齐壳层 CollectionConfigDto）。
+    fn parse_config(payload: &Value) -> Result<CollectionConfig> {
+        let sync_strategy = match payload.get("syncStrategy").and_then(Value::as_str) {
+            None => None,
+            Some("append-only") => Some(SyncStrategy::AppendOnly),
+            Some("lww") => Some(SyncStrategy::Lww),
+            Some(other) => {
+                return Err(PluginError::InvalidCall(format!(
+                    "syncStrategy must be 'append-only' or 'lww', got {other:?}"
+                )));
+            }
+        };
+        let indexed_fields = payload
+            .get("indexedFields")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(CollectionConfig {
+            indexed_fields,
+            enable_evidence: payload.get("enableEvidence").and_then(Value::as_bool),
+            sync_strategy,
+            governance: payload.get("governance").and_then(Value::as_bool),
+        })
+    }
+
+    /// 本地写入节点 id：p2p 运行中为 peerId，否则 `local-node`（对齐内核门面）。
+    fn sync_node_id(&self) -> String {
+        self.p2p_node
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|node| node.peer_id().to_string())
+            .unwrap_or_else(|| "local-node".to_string())
+    }
+
+    /// 集合配置缓存写入（对齐 `Kernel::make_collection`）。
+    fn remember_collection_config(&self, domain: &str, collection: &str, config: &CollectionConfig) {
+        self.collection_configs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert((domain.to_string(), collection.to_string()), config.clone());
+    }
+
+    /// 广播同步消息：p2p 未启动直接跳过；失败降级为事件流告警。与门面
+    /// `broadcast_sync_body` 的语义差异仅投递方式——插件线程不 block_on
+    /// （与内核线程模型口径一致），改为 spawn fire-and-forget。
+    fn spawn_broadcast_sync_body(&self, body: serde_json::Map<String, Value>) {
+        let node = self
+            .p2p_node
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let Some(node) = node else { return };
+        let event_tx = self.event_tx.clone();
+        self.runtime.spawn(async move {
+            if let Err(error) = node.broadcast(SYNC_TOPIC, body).await {
+                let _ = event_tx.send(P2pEvent::Warning(format!("sync broadcast failed: {error}")));
+            }
+        });
+    }
+
+    fn doc_get(&self, plugin_id: &str, payload: &Value) -> Result<Value> {
+        let domain = resolve_doc_domain(plugin_id, payload)?;
+        let collection = required_str(payload, "collection")?;
+        let id = required_str(payload, "id")?;
+        let storage = self.require_storage()?;
+        let coll = DocumentCollection::new(domain, collection, CollectionConfig::default());
+        let doc = coll.get(&storage, id)?;
+        Ok(match doc {
+            Some(value) => value,
+            None => Value::Null,
+        })
+    }
+
+    fn doc_put(&self, plugin_id: &str, payload: &Value) -> Result<Value> {
+        let domain = resolve_doc_domain(plugin_id, payload)?;
+        let collection = required_str(payload, "collection")?;
+        let id = required_str(payload, "id")?;
+        let doc = payload.get("doc").cloned().unwrap_or(Value::Null);
+        let config = Self::parse_config(payload.get("config").unwrap_or(&Value::Null))?;
+        self.remember_collection_config(domain, collection, &config);
+        let coll = DocumentCollection::new(domain, collection, config);
+        let node_id = self.sync_node_id();
+        let _io = self.io_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let mut storage = self.require_storage()?;
+        let write = coll.put(&mut storage, id, &doc, &node_id, system_now_ms())?;
+        let body = build_update_body(
+            domain,
+            collection,
+            id,
+            doc,
+            serde_json::to_value(&write.meta)?,
+            Some(serde_json::to_value(&write.schema)?),
+        );
+        drop(_io);
+        self.spawn_broadcast_sync_body(body);
+        Ok(Value::Null)
+    }
+
+    fn doc_delete(&self, plugin_id: &str, payload: &Value) -> Result<Value> {
+        let domain = resolve_doc_domain(plugin_id, payload)?;
+        let collection = required_str(payload, "collection")?;
+        let id = required_str(payload, "id")?;
+        let config = Self::parse_config(payload.get("config").unwrap_or(&Value::Null))?;
+        self.remember_collection_config(domain, collection, &config);
+        let coll = DocumentCollection::new(domain, collection, config);
+        let node_id = self.sync_node_id();
+        let _io = self.io_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let mut storage = self.require_storage()?;
+        // 与门面一致：删除不存在文档为空操作
+        let Some(write) = coll.delete(&mut storage, id, &node_id, system_now_ms())? else {
+            return Ok(Value::Null);
+        };
+        let body = build_delete_body(
+            domain,
+            collection,
+            id,
+            serde_json::to_value(&write.meta)?,
+            Some(serde_json::to_value(&write.schema)?),
+        );
+        drop(_io);
+        self.spawn_broadcast_sync_body(body);
+        Ok(Value::Null)
+    }
+
+    fn doc_query(&self, plugin_id: &str, payload: &Value) -> Result<Value> {
+        let domain = resolve_doc_domain(plugin_id, payload)?;
+        let collection = required_str(payload, "collection")?;
+        let config = Self::parse_config(payload.get("config").unwrap_or(&Value::Null))?;
+        self.remember_collection_config(domain, collection, &config);
+        let options = Self::parse_query_options(payload.get("options").unwrap_or(&Value::Null))?;
+        let coll = DocumentCollection::new(domain, collection, config);
+        let storage = self.require_storage()?;
+        let result = coll.query(&storage, &options)?;
+        // 对齐前端 QueryResult 形状：{items:[{id,data}], nextCursor?}
+        let mut value = serde_json::json!({
+            "items": result.items.iter().map(|item| serde_json::json!({
+                "id": item.id, "data": item.data
+            })).collect::<Vec<_>>(),
+        });
+        if let Some(cursor) = result.next_cursor {
+            value["nextCursor"] = Value::String(cursor);
+        }
+        Ok(value)
+    }
+
+    fn doc_define_collection(&self, plugin_id: &str, payload: &Value) -> Result<Value> {
+        let collection = required_str(payload, "collection")?;
+        let declaration: CollectionSchemaDeclaration = serde_json::from_value(
+            payload.get("schema").cloned().unwrap_or(Value::Null),
+        )?;
+        let _io = self.io_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let mut storage = self.require_storage()?;
+        declare_collection_schema(
+            &mut storage,
+            plugin_id,
+            collection,
+            &declaration,
+            system_now_ms(),
+        )?;
+        Ok(Value::Null)
+    }
+
+    /// 查询参数载荷（camelCase，对齐壳层 QueryOptionsDto）。
+    fn parse_query_options(payload: &Value) -> Result<QueryOptions> {
+        let parse_op = |op: Option<&str>| -> Result<FilterOp> {
+            match op.unwrap_or("eq") {
+                "eq" => Ok(FilterOp::Eq),
+                "startsWith" => Ok(FilterOp::StartsWith),
+                "gt" => Ok(FilterOp::Gt),
+                "lt" => Ok(FilterOp::Lt),
+                "gte" => Ok(FilterOp::Gte),
+                "lte" => Ok(FilterOp::Lte),
+                other => Err(PluginError::InvalidCall(format!(
+                    "filter op must be one of eq/startsWith/gt/lt/gte/lte, got {other:?}"
+                ))),
+            }
+        };
+        let filter = payload
+            .get("filter")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .map(|item| {
+                        Ok(QueryFilter {
+                            field: required_str(item, "field")?.to_string(),
+                            value: item.get("value").cloned().unwrap_or(Value::Null),
+                            op: parse_op(item.get("op").and_then(Value::as_str))?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
+        Ok(QueryOptions {
+            index_name: payload
+                .get("indexName")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            index_value: payload.get("indexValue").cloned(),
+            index_prefix: payload
+                .get("indexPrefix")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            start_after_id: payload
+                .get("startAfterId")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            limit: payload
+                .get("limit")
+                .and_then(Value::as_u64)
+                .map(|n| n as usize),
+            reverse: payload
+                .get("reverse")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            filter,
+        })
+    }
+}
+
+// ------------------------------------------------------------------
+// 系统能力（sys.*）：启动即返，结果经事件队列异步回流
+// ------------------------------------------------------------------
+
+impl PluginHostShared {
+    /// `sys.exec.start`：spawn 到内核 runtime（内部 spawn_blocking），完成
+    /// 后向本插件事件队列回 `sys-exec-result`。
+    fn sys_exec_start(&self, rtx: &PluginRuntimeContext, payload: &Value) -> Result<Value> {
+        let call_id = required_call_id(payload)?;
+        let program = required_str(payload, "program")?.to_string();
+        let args: Vec<String> = payload
+            .get("args")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let workdir = payload
+            .get("workdir")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let event_tx = rtx.event_tx.clone();
+        self.runtime.spawn(async move {
+            let result =
+                tokio::task::spawn_blocking(move || crate::sys::exec_blocking(&program, &args, workdir.as_deref()))
+                    .await;
+            let payload = match result {
+                Ok(Ok(r)) => serde_json::json!({
+                    "callId": call_id,
+                    "exitCode": r.exit_code,
+                    "stdout": r.stdout,
+                    "stderr": r.stderr,
+                }),
+                Ok(Err(error)) => serde_json::json!({ "callId": call_id, "error": error }),
+                Err(error) => serde_json::json!({
+                    "callId": call_id,
+                    "error": format!("exec task join failed: {error}")
+                }),
+            };
+            // 插件线程可能已退出：丢弃结果即可（Promise 随线程销毁失去意义）
+            let _ = event_tx.send(PluginEvent::Dispatch {
+                kind: "sys-exec-result".to_string(),
+                payload,
+            });
+        });
+        Ok(serde_json::json!({ "started": true }))
+    }
+
+    /// `sys.fetch.start`：同 exec 的异步回流模式，结果事件 `sys-fetch-result`。
+    fn sys_fetch_start(&self, rtx: &PluginRuntimeContext, payload: &Value) -> Result<Value> {
+        let call_id = required_call_id(payload)?;
+        let url = required_str(payload, "url")?.to_string();
+        let method = payload
+            .get("method")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let headers: Option<HashMap<String, String>> = payload
+            .get("headers")
+            .and_then(Value::as_object)
+            .map(|map| {
+                map.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                    .collect()
+            });
+        let body = payload
+            .get("body")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let event_tx = rtx.event_tx.clone();
+        self.runtime.spawn(async move {
+            let payload = match crate::sys::fetch(&url, method.as_deref(), headers.as_ref(), body.as_deref()).await {
+                Ok(r) => serde_json::json!({
+                    "callId": call_id,
+                    "status": r.status,
+                    "headers": r.headers,
+                    "body": r.body,
+                }),
+                Err(error) => serde_json::json!({ "callId": call_id, "error": error }),
+            };
+            let _ = event_tx.send(PluginEvent::Dispatch {
+                kind: "sys-fetch-result".to_string(),
+                payload,
+            });
+        });
+        Ok(serde_json::json!({ "started": true }))
+    }
+}
+
+// ------------------------------------------------------------------
+// 宿主查询应答回流
+// ------------------------------------------------------------------
+
+impl PluginHostShared {
+    /// `query.respond`：JS 侧查询处理完成，结果送回等待中的
+    /// `plugin_host_query` 调用方（在途表无记录说明已超时，静默丢弃）。
+    fn query_respond(&self, payload: &Value) -> Result<Value> {
+        let query_id = required_call_id(payload)?;
+        let result = payload.get("result").cloned().unwrap_or(Value::Null);
+        let sender = self
+            .pending_queries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&query_id);
+        if let Some(sender) = sender {
+            let _ = sender.send(result);
+        }
+        Ok(Value::Null)
+    }
+}
+
+/// 取载荷必填 callId/queryId（u64）。
+fn required_call_id(payload: &Value) -> Result<u64> {
+    payload
+        .get("callId")
+        .or_else(|| payload.get("queryId"))
+        .and_then(Value::as_u64)
+        .ok_or_else(|| PluginError::InvalidCall("missing u64 field: callId".to_string()))
 }
