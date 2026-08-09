@@ -219,17 +219,18 @@ export default defineComponent({
     };
 
     const onP2pEvent = (event: P2pEventDto) => {
+      // 组织快照被接受落库（名称/logo 等可能已变）：立即刷新组织列表缓存，
+      // 不等下一轮 30s 轮询。放在节流判定**之前**——该事件语义重要且低频，
+      // 被 2s 节流吞掉会导致组织列表更新延迟一个轮询周期。
+      if (event.kind === 'OrgShareAccepted') {
+        void refreshOrganizations().catch(() => {});
+      }
       const now = Date.now();
       if (now - lastEventRefreshAt < EVENT_REFRESH_MIN_INTERVAL_MS) {
         return;
       }
       lastEventRefreshAt = now;
       void refreshOverview();
-      // 组织快照被接受落库（名称/logo 等可能已变）：立即刷新组织列表缓存，
-      // 不等下一轮 30s 轮询
-      if (event.kind === 'OrgShareAccepted') {
-        void refreshOrganizations().catch(() => {});
-      }
     };
 
     // 切换组织后旧 overview 立即作废，避免弹层出现「新组织名 + 旧 overview」错配（最长持续一个轮询周期）

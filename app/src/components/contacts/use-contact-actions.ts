@@ -54,23 +54,28 @@ export function useContactActions(ctx: ContactActionsContext) {
     // - 插件答复「不存在」/ 无答复（插件未在线、无处理器、超时）→ 孤儿，放行删除
     if (contact.rootId.startsWith('bot:')) {
       const pluginId = contact.rootId.split(':')[1] || '';
-      // 询问对象 = 内核里的插件后台运行时（QuickJS 沙箱，常驻不依赖 UI）
-      const reply = (await window.electronAPI?.pluginRuntime?.hostQuery(pluginId, 'bot:query', {
-        contactId: contact.rootId
-      })) as { exists?: boolean } | null;
-      if (reply?.exists) {
-        try {
-          await ElMessageBox.confirm(
-            `「${contact.displayName}」是由插件「${pluginId}」创建的机器人联系人。请前往该插件中删除对应的 Bot，删除后联系人会自动移除。`,
-            '无法在此删除',
-            { type: 'info', confirmButtonText: '知道了', cancelButtonText: '取消', showCancelButton: false }
-          );
-        } catch {
-          /* 用户关闭对话框 */
+      // 防御：rootId 脏数据导致 pluginId 非合法字符串时，跳过插件求证直接走常规删除
+      if (typeof pluginId !== 'string' || !pluginId) {
+        console.warn('[删除bot联系人] rootId 格式异常，按孤儿联系人处理:', contact.rootId);
+      } else {
+        // 询问对象 = 内核里的插件后台运行时（QuickJS 沙箱，常驻不依赖 UI）
+        const reply = (await window.electronAPI?.pluginRuntime?.hostQuery(pluginId, 'bot:query', {
+          contactId: contact.rootId
+        })) as { exists?: boolean } | null;
+        if (reply?.exists) {
+          try {
+            await ElMessageBox.confirm(
+              `「${contact.displayName}」是由插件「${pluginId}」创建的机器人联系人。请前往该插件中删除对应的 Bot，删除后联系人会自动移除。`,
+              '无法在此删除',
+              { type: 'info', confirmButtonText: '知道了', cancelButtonText: '取消', showCancelButton: false }
+            );
+          } catch {
+            /* 用户关闭对话框 */
+          }
+          return;
         }
-        return;
+        // 插件无答复或答复「已不存在」：孤儿联系人，落入下方常规删除流程
       }
-      // 插件无答复或答复「已不存在」：孤儿联系人，落入下方常规删除流程
     }
     // TODO(mock): 删除朋友为本地 mock；§5.5「删除同时自动拉黑（可选）」的选项待真实模型落地
     try {

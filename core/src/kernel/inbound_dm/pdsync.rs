@@ -188,6 +188,8 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
     let mut profile_applied = false;
     let mut contacts_applied = 0usize;
     let mut convs_applied = 0usize;
+    let mut org_meta_applied = 0usize;
+    let mut org_contacts_applied = 0usize;
     // 自 FriendRecord 落库排除（与采集/折叠侧同键）：旧版本对端可能仍推送
     // 该键——其 peer 是设备相对值，落库会毒化本机自记录；墓碑同样丢弃
     // （对端删它的自记录不得删掉本机的）
@@ -329,8 +331,18 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
         }
 
         // 通用：普通个人域记录（联系人/设备/组织）
+        if record.key.starts_with("ct:") {
+            log::info!(
+                "[CT_SYNC] apply ct record | key={} tombstone={} applied_check",
+                record.key,
+                crate::sync::is_tombstone(&record.meta),
+            );
+        }
         let result =
             crate::sync::apply_personal_remote(storage, &record.key, &value_str, &record.meta)?;
+        if record.key.starts_with("ct:") {
+            log::info!("[CT_SYNC] ct applied={} | key={}", result.did_apply(), record.key);
+        }
         if result.did_apply() {
             if record.key.starts_with("device:") {
                 // 设备清单：逐条 DeviceUpdated（data 即 DeviceRecord JSON）。
@@ -340,10 +352,17 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
                 if !crate::sync::is_tombstone(&record.meta) {
                     events.push(P2pEvent::DeviceUpdated(record.value.clone()));
                 }
+            } else if record.key.starts_with("ct:org:") {
+                // 组织空间联系人（成员 extra / 标签 / 分组树 / req:out）：归 OrgSynced
+                org_contacts_applied += 1;
             } else if record.key.starts_with("ct:") {
+                // 个人空间联系人四域：归 ContactsSynced
                 contacts_applied += 1;
+            } else if record.key.starts_with("org:meta:") {
+                // 组织记录（name/logo/members/我的 org 成员资料）：归 OrgSynced
+                org_meta_applied += 1;
             }
-            // org:meta / org:inv 无对应壳层事件（无旧自设备快照通道），不发
+            // org:inv 无对应壳层事件（无旧自设备快照通道），不发
         }
     }
     // 合并结果通知前端刷新（事件口径对齐旧快照通道）：
@@ -353,6 +372,12 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
     //   去重、信任快照未读——窗口合入不动 unread_count，快照即现状）。
     if contacts_applied > 0 {
         events.push(P2pEvent::ContactsSynced(json!({ "applied": contacts_applied })));
+    }
+    if org_meta_applied > 0 || org_contacts_applied > 0 {
+        events.push(P2pEvent::OrgSynced(json!({
+            "orgMeta": org_meta_applied,
+            "orgContacts": org_contacts_applied,
+        })));
     }
     if convs_applied > 0 {
         events.push(P2pEvent::ConversationsSynced(json!({ "applied": convs_applied })));

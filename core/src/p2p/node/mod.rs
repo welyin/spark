@@ -221,6 +221,11 @@ pub enum P2pEvent {
     /// 通讯录被自设备快照更新（contact-sync 入站合入后发出；data 为
     /// `{"applied": n}`，前端整页刷新个人空间通讯录）。
     ContactsSynced(serde_json::Value),
+    /// 组织域数据被自设备 pdsync 更新（`org:meta:*` 组织记录 / `ct:org:*`
+    /// 组织空间成员附加资料·标签·分组树等合入后发出；data 为
+    /// `{"orgMeta": n, "orgContacts": n}`，前端刷新组织列表与组织空间通讯录、
+    /// 组织身份扩展字段）。与 `ContactsSynced`（个人空间）分立：作用域不同。
+    OrgSynced(serde_json::Value),
     /// 会话元数据被自设备快照更新（conv-sync 入站合入后发出；data 为
     /// `{"applied": n}`，前端刷新个人空间会话列表）。
     ConversationsSynced(serde_json::Value),

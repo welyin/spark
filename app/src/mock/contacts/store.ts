@@ -320,6 +320,19 @@ export function handleContactsP2pEvent(event: P2pEventDto): void {
     void refreshContacts('personal');
     return;
   }
+  // 组织域数据经自设备 pdsync 合入：orgContacts（成员 extra/标签/分组树）→
+  // 重新水合所有已建组织空间通讯录。事件不带具体 orgId（跨组织聚合），
+  // 逐一刷新已缓存的 org 空间最稳（未缓存的空间下次访问时自会水合）。
+  if (event.kind === 'OrgSynced') {
+    if (event.data.orgContacts > 0) {
+      for (const key of Object.keys(spaces)) {
+        if (key.startsWith('org:')) {
+          void refreshContacts(key);
+        }
+      }
+    }
+    return;
+  }
   // 管理员收到对方回执：按 record.orgId 解析组织空间，upsert 我发出的邀请
   // （存在更新 status/updatedAt，不存在插入），对标 FriendRequestAccepted 写法；
   // 状态变化置未读（入口角标提示）。OrgInviteReceived 为被邀请人侧入站通知，

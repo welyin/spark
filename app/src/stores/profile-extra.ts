@@ -136,12 +136,18 @@ export function getProfileExtra(rootId: string): ProfileExtra {
   return profileExtras.value[rootId] ?? { ...DEFAULT_EXTRA };
 }
 
-/** 自设备资料同步后强制重新水合（SelfProfileSynced 事件调用）：
+/** 自设备资料同步后强制重新水合（SelfProfileSynced / OrgSynced 事件调用）：
  *  清除水合标记并立即从内核拉取最新扩展字段（性别/地区/签名）进缓存。
- *  无本地在写（dirtyKeys 空）时水合正常应用；有在写时 hydrateFromKernel 内部
- *  仍会按 dirtyKeys 跳过覆盖，语义安全。 */
+ *  无本地在写时水合正常应用；有在写时仍被在写保护跳过覆盖（个人空间按
+ *  dirtyKeys、org 作用域按 orgWriteVersions 版本号），语义安全。
+ *  支持个人空间 rootId 与 org 作用域键（`rootId@orgId`）。 */
 export function refreshProfileExtraFromKernel(rootId: string): void {
-  if (!rootId || isOrgScoped(rootId)) {
+  if (!rootId) {
+    return;
+  }
+  if (isOrgScoped(rootId)) {
+    hydratedKeys.delete(rootId);
+    void hydrateOrgKeyFromKernel(rootId);
     return;
   }
   hydratedKeys.delete(rootId);
