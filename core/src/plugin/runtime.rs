@@ -370,6 +370,35 @@ const PRELUDE: &str = r#"
                 call('docs.defineCollection', { collection: collection, schema: schema });
             }
         },
+        // P6 声明式数据 API：策略随声明走，读写零同步参数（personal scope；
+        // 写库即同步，版本化/墓碑/删除日志/驻留裁剪由内核完成）
+        data: {
+            declareCollection: function (decl) {
+                return call('data.declareCollection', decl);
+            },
+            save: function (name, key, value, version) {
+                call('data.save', { name: name, key: key, value: value, version: version || null });
+            },
+            del: function (name, key, version) {
+                call('data.delete', { name: name, key: key, version: version || null });
+            },
+            get: function (name, key, version) {
+                return call('data.get', { name: name, key: key, version: version || null });
+            },
+            query: function (name, options, version) {
+                options = options || {};
+                return call('data.query', {
+                    name: name,
+                    prefix: options.prefix || null,
+                    limit: options.limit || null,
+                    cursor: options.cursor || null,
+                    version: version || null
+                });
+            },
+            dropVersion: function (name, version) {
+                call('data.dropVersion', { name: name, version: String(version) });
+            }
+        },
         sys: {
             exec: function (program, args, workdir) {
                 return startAsync('sys.exec.start', {

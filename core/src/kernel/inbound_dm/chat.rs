@@ -128,9 +128,8 @@ pub(super) fn handle_chat<S: StorageBackend>(
     message.status = None;
     // link 为对端自报字段：入库前与出站同口径收敛（限长截断、空 url 整条丢弃）
     message.link = message.link.and_then(sanitize_link_preview);
-    // 自消息从另一台设备到达时视为未读——发端已在本地置已读，收端
-    // 尚未被用户看到，由前端 markRead 在用户进入会话时标记已读
-    // （每台设备独立追踪 unread_count）。
+    // read 初值：解析默认未读；自消息（含回同步）在 sender 绑定后按
+    // 「有效发送者」口径置已读（见下）
     message.read = false;
     // 消息存储键以 13 位零填充 createdAt 排序，负值带符号位填充后字典序与
     // 数值序相反、且排在所有正值之前——负/零 created_at 一律拒收
@@ -220,6 +219,10 @@ pub(super) fn handle_chat<S: StorageBackend>(
     if !is_self_echo || !is_bot_conv {
         message.sender_id = from.to_string();
     }
+    // 未读口径按「有效发送者」判定：我发的消息（含另一台设备回同步）落库即
+    // 已读、不产生未读；bot 会话回同步的有效发送者是 bot，正常计未读
+    let from_me = message.sender_id == ctx.my_root_id;
+    message.read = from_me;
     // 按消息 id 去重：重放/重试幂等返回 ok，不重复落库/未读/事件
     if MessageService::get_message(storage, space, &conv.id, &message.id)?.is_some() {
         return done(ok_response(), events);
@@ -234,9 +237,10 @@ pub(super) fn handle_chat<S: StorageBackend>(
         ctx.now_ms,
         Some(ctx.node_id),
     )?;
-    // 自己的消息（另一台设备同步）也产生未读——每台设备独立追踪
-    // unread_count，收端设备尚未见该消息前应计入未读
-    MessageService::increment_unread(storage, space, &conv.id)?;
+    // 自己的消息（另一台设备同步）不产生未读（有效发送者口径，见上）
+    if !from_me {
+        MessageService::increment_unread(storage, space, &conv.id)?;
+    }
     // 事件里的会话取 append/unread 之后的最新快照（避免事件携带过期的
     // unreadCount/updatedAt）
     let conv = MessageService::get_conversation(storage, space, &conv.id)?

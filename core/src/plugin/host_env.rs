@@ -25,7 +25,6 @@ use crate::p2p::constants::SYNC_TOPIC;
 use crate::p2p::node::system_now_ms;
 use crate::p2p::{P2pEvent, P2pNode, build_delete_body, build_update_body};
 use crate::schema::{CollectionSchemaDeclaration, SyncStrategy, declare_collection_schema};
-use crate::storage::SledStorage;
 
 use super::error::{PluginError, Result};
 use super::runtime::PluginEvent;
@@ -38,7 +37,10 @@ use super::runtime::PluginEvent;
 #[derive(Clone)]
 pub(crate) struct PluginHostShared {
     /// 当前身份的存储镜像（`open_storage` 回填、`shutdown` 清空）。
-    pub(crate) storage: Arc<Mutex<Option<SledStorage>>>,
+    /// P6 起指向**版本化句柄**（写库即同步）：插件数据（`pdoc:`/`pdecl:`）
+    /// 经中间件自动完成 pdsync 记账；存量 `doc:`/`idx:`/`meta:` 等键不在
+    /// 受管前缀内，原样透传（行为不变）。
+    pub(crate) storage: Arc<Mutex<Option<crate::kernel::KernelStorage>>>,
     /// 存储读写互斥锁（与 kernel 门面同一把）。
     pub(crate) io_lock: Arc<Mutex<()>>,
     /// 内核事件广播（bot 回复落库后发 ChatReceived，与真人消息同口径）。
@@ -73,8 +75,9 @@ pub(crate) struct PluginRuntimeContext {
 }
 
 impl PluginHostShared {
-    /// 读当前存储镜像（ sled 克隆，共享底层库；未打开返回 StorageNotReady）。
-    pub(crate) fn require_storage(&self) -> Result<SledStorage> {
+    /// 读当前存储镜像（版本化句柄克隆，共享底层库与 node_id 格；未打开返回
+    /// StorageNotReady）。
+    pub(crate) fn require_storage(&self) -> Result<crate::kernel::KernelStorage> {
         self.storage
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -129,6 +132,13 @@ impl PluginHostShared {
             "docs.delete" => self.doc_delete(plugin_id, &payload),
             "docs.query" => self.doc_query(plugin_id, &payload),
             "docs.defineCollection" => self.doc_define_collection(plugin_id, &payload),
+            // P6 声明式数据 API（personal scope）：声明一次 + 读写零同步参数
+            "data.declareCollection" => self.data_declare_collection(plugin_id, &payload),
+            "data.save" => self.data_save(plugin_id, &payload),
+            "data.delete" => self.data_delete(plugin_id, &payload),
+            "data.get" => self.data_get(plugin_id, &payload),
+            "data.query" => self.data_query(plugin_id, &payload),
+            "data.dropVersion" => self.data_drop_version(plugin_id, &payload),
             // 系统能力：长时操作异步化——启动即返，结果经事件队列回流
             // （JS Promise 由 prelude 配对 callId）
             "sys.exec.start" => self.sys_exec_start(rtx, &payload),
@@ -201,6 +211,10 @@ fn capability_permission(capability: &str) -> Option<&'static str> {
     match capability {
         "docs.get" | "docs.query" => Some("storage:read"),
         "docs.put" | "docs.delete" | "docs.defineCollection" => Some("storage:write"),
+        "data.get" | "data.query" => Some("storage:read"),
+        "data.save" | "data.delete" | "data.declareCollection" | "data.dropVersion" => {
+            Some("storage:write")
+        }
         "contact.ensureBot" | "message.reply" => Some("message:app"),
         "sys.exec.start" => Some("system:exec"),
         "sys.fetch.start" => Some("network:fetch"),
@@ -432,6 +446,156 @@ impl PluginHostShared {
             &declaration,
             system_now_ms(),
         )?;
+        Ok(Value::Null)
+    }
+
+    // ------------------------------------------------------------------
+    // P6 声明式数据 API（data.*）：personal scope。策略随声明走，读写零
+    // 同步参数；存储镜像是版本化句柄，写库即同步（pdsync 记账全自动）。
+    // ------------------------------------------------------------------
+
+    /// 解析声明轴载荷（缺省轴取模块缺省值）。
+    fn parse_declare_input(payload: &Value) -> Result<crate::plugindata::DeclareInput> {
+        use crate::plugindata::{DeclareInput, Devices, MergeRule, Scope};
+        let name = required_str(payload, "name")?.to_string();
+        let version = payload
+            .get("version")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let parse_axis = |field: &str| -> Option<&str> {
+            payload.get(field).and_then(Value::as_str)
+        };
+        let scope = match parse_axis("scope") {
+            None => None,
+            Some("sync") => Some(Scope::Sync),
+            Some("local") => Some(Scope::Local),
+            Some(other) => {
+                return Err(PluginError::InvalidCall(format!(
+                    "scope must be 'sync' or 'local', got {other:?}"
+                )));
+            }
+        };
+        let devices = match parse_axis("devices") {
+            None => None,
+            Some("all") => Some(Devices::All),
+            Some("pc-backup") => Some(Devices::PcBackup),
+            Some("pc-only") => Some(Devices::PcOnly),
+            Some("mobile-only") => Some(Devices::MobileOnly),
+            Some(other) => {
+                return Err(PluginError::InvalidCall(format!(
+                    "devices must be one of all/pc-backup/pc-only/mobile-only, got {other:?}"
+                )));
+            }
+        };
+        let merge = match parse_axis("merge") {
+            None => None,
+            Some("lww-record") => Some(MergeRule::LwwRecord),
+            Some("append-only") => Some(MergeRule::AppendOnly),
+            Some("whole") => Some(MergeRule::Whole),
+            Some(other) => {
+                return Err(PluginError::InvalidCall(format!(
+                    "merge must be one of lww-record/append-only/whole, got {other:?}"
+                )));
+            }
+        };
+        Ok(DeclareInput {
+            name,
+            version,
+            scope,
+            devices,
+            merge,
+        })
+    }
+
+    /// 解析 data.* 载荷的目标声明（name + 可选 version → 最新代际）。
+    fn resolve_data_declaration(
+        &self,
+        plugin_id: &str,
+        payload: &Value,
+    ) -> Result<(crate::plugindata::CollectionDeclaration, crate::kernel::KernelStorage)> {
+        let name = required_str(payload, "name")?;
+        // 插件只能触达自己前缀的集合（与声明校验同口径）
+        if !name.starts_with(&format!("{plugin_id}:")) {
+            return Err(PluginError::InvalidCall(format!(
+                "collection {name:?} does not belong to plugin {plugin_id}"
+            )));
+        }
+        let version = payload.get("version").and_then(Value::as_str);
+        let storage = self.require_storage()?;
+        let decl = crate::plugindata::resolve(&storage, name, version)
+            .map_err(|e| PluginError::InvalidCall(e.to_string()))?;
+        Ok((decl, storage))
+    }
+
+    fn data_declare_collection(&self, plugin_id: &str, payload: &Value) -> Result<Value> {
+        let input = Self::parse_declare_input(payload)?;
+        let _io = self.io_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let mut storage = self.require_storage()?;
+        let decl = crate::plugindata::declare(&mut storage, plugin_id, input, system_now_ms())
+            .map_err(|e| PluginError::InvalidCall(e.to_string()))?;
+        serde_json::to_value(&decl).map_err(Into::into)
+    }
+
+    fn data_save(&self, plugin_id: &str, payload: &Value) -> Result<Value> {
+        let key = required_str(payload, "key")?;
+        let value = payload.get("value").cloned().unwrap_or(Value::Null);
+        let (decl, mut storage) = self.resolve_data_declaration(plugin_id, payload)?;
+        let _io = self.io_lock.lock().unwrap_or_else(|e| e.into_inner());
+        crate::plugindata::save(&mut storage, &decl, key, &value.to_string())
+            .map_err(|e| PluginError::InvalidCall(e.to_string()))?;
+        Ok(Value::Null)
+    }
+
+    fn data_delete(&self, plugin_id: &str, payload: &Value) -> Result<Value> {
+        let key = required_str(payload, "key")?;
+        let (decl, mut storage) = self.resolve_data_declaration(plugin_id, payload)?;
+        let _io = self.io_lock.lock().unwrap_or_else(|e| e.into_inner());
+        crate::plugindata::del(&mut storage, &decl, key)
+            .map_err(|e| PluginError::InvalidCall(e.to_string()))?;
+        Ok(Value::Null)
+    }
+
+    fn data_get(&self, plugin_id: &str, payload: &Value) -> Result<Value> {
+        let key = required_str(payload, "key")?;
+        let (decl, storage) = self.resolve_data_declaration(plugin_id, payload)?;
+        let raw = crate::plugindata::get(&storage, &decl, key)
+            .map_err(|e| PluginError::InvalidCall(e.to_string()))?;
+        Ok(match raw {
+            Some(text) => serde_json::from_str(&text).unwrap_or(Value::String(text)),
+            None => Value::Null,
+        })
+    }
+
+    fn data_query(&self, plugin_id: &str, payload: &Value) -> Result<Value> {
+        let (decl, storage) = self.resolve_data_declaration(plugin_id, payload)?;
+        let prefix = payload.get("prefix").and_then(Value::as_str);
+        let limit = payload
+            .get("limit")
+            .and_then(Value::as_u64)
+            .map(|n| n as usize);
+        let cursor = payload.get("cursor").and_then(Value::as_str);
+        let page = crate::plugindata::query(&storage, &decl, prefix, limit, cursor)
+            .map_err(|e| PluginError::InvalidCall(e.to_string()))?;
+        let mut value = serde_json::json!({
+            "items": page.items.iter().map(|(key, raw)| {
+                serde_json::json!({
+                    "key": key,
+                    "value": serde_json::from_str::<Value>(raw).unwrap_or(Value::String(raw.clone())),
+                })
+            }).collect::<Vec<_>>(),
+        });
+        if let Some(next) = page.next_cursor {
+            value["nextCursor"] = Value::String(next);
+        }
+        Ok(value)
+    }
+
+    fn data_drop_version(&self, plugin_id: &str, payload: &Value) -> Result<Value> {
+        required_str(payload, "version")?; // drop 必须显式指定代际（不容许误清最新）
+        let (decl, mut storage) = self.resolve_data_declaration(plugin_id, payload)?;
+        let _io = self.io_lock.lock().unwrap_or_else(|e| e.into_inner());
+        crate::plugindata::drop_version(&mut storage, &decl)
+            .map_err(|e| PluginError::InvalidCall(e.to_string()))?;
         Ok(Value::Null)
     }
 

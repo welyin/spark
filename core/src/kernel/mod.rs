@@ -342,10 +342,10 @@ impl Kernel {
         );
         let storage = KernelStorage::new(raw, std::sync::Arc::clone(&cell));
         self.sync_node_cell = Some(cell);
-        // 插件宿主能力的存储镜像指向原始句柄（插件数据走 org 域/doc:*，
-        // 非受管前缀；P6 声明式 API 落地时改指版本化句柄）
+        // 插件宿主能力的存储镜像指向版本化句柄（P6 写库即同步：pdoc:/pdecl:
+        // 受管记账；存量 doc:/idx:/meta: 等非受管前缀原样透传，行为不变）
         *self.plugin_host.storage.lock().unwrap_or_else(|e| e.into_inner()) =
-            Some(storage.raw().clone());
+            Some(storage.clone());
         self.storage = Some(storage);
         self.storage_root_id = Some(root_id.to_string());
         self.data_mgmt = Some(dm);

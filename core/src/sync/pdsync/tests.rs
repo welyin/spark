@@ -1017,6 +1017,133 @@
         assert_eq!(inc_raw[0].meta.tombstone, Some(true));
     }
 
+    // ── P6 插件声明式数据（pdecl/pdoc category）─────────────────────────
+
+    /// P6 写库即同步：插件经声明式 API 写入（版本化句柄自动记账）→
+    /// 声明记录（pdecl）与数据（pdoc）随同一套 hello/need/data 收敛到对端，
+    /// 插件侧零同步代码。
+    #[test]
+    fn p6_declared_collection_syncs_end_to_end() {
+        use crate::plugindata::{DeclareInput, declare, save};
+        use crate::sync::versioned::{VersionedStorage, shared_node_id};
+
+        let mut a = VersionedStorage::new(MemoryStorage::new(), shared_node_id(NODE_A));
+        let mut b = MemoryStorage::new();
+
+        // 插件声明 + 写两条数据（声明先行：pdecl 与 pdoc 都进折叠）
+        let decl = declare(
+            &mut a,
+            "ai-chat",
+            DeclareInput {
+                name: "ai-chat:conversations".to_string(),
+                ..Default::default()
+            },
+            1000,
+        )
+        .unwrap();
+        save(&mut a, &decl, "c1", r#"{"title":"一"}"#).unwrap();
+        save(&mut a, &decl, "c2", r#"{"title":"二"}"#).unwrap();
+        let data_key = decl.data_key("c1");
+
+        // hello 折叠摘要包含 pdecl/pdoc 两 category
+        let hello_a = build_hello(a.raw(), 2_592_000_000, 500, "eager", None, None).unwrap();
+        let cats = parse_hello_categories(&hello_a);
+        assert!(cats.iter().any(|(name, _)| name == "pdecl"), "hello 含 pdecl");
+        assert!(cats.iter().any(|(name, _)| name == "pdoc"), "hello 含 pdoc");
+        // deviceClass 随 hello 声明（驻留裁剪依据）
+        assert!(hello_a["deviceClass"].is_string());
+
+        // A → B 交换
+        for data in exchange_simple(a.raw(), &mut b, &hello_a, None) {
+            let (_, records) = parse_data(&data).unwrap();
+            for r in records {
+                let _ = apply_personal_remote(&mut b, &r.key, &r.value.to_string(), &r.meta).unwrap();
+            }
+        }
+
+        // B 获得声明与数据
+        let decl_b = crate::plugindata::resolve(&b, "ai-chat:conversations", None)
+            .expect("B 端声明已同步");
+        assert_eq!(decl_b.version, "1");
+        assert!(b.get(&data_key).unwrap().is_some(), "B 缺插件数据");
+        // local scope 集合不离开 A（ldoc 不在任何 category）
+        let local_decl = declare(
+            &mut a,
+            "ai-chat",
+            DeclareInput {
+                name: "ai-chat:drafts".to_string(),
+                scope: Some(crate::plugindata::Scope::Local),
+                ..Default::default()
+            },
+            2000,
+        )
+        .unwrap();
+        save(&mut a, &local_decl, "d1", "\"secret\"").unwrap();
+        let hello_a2 = build_hello(a.raw(), 2_592_000_000, 500, "eager", None, None).unwrap();
+        for data in exchange_simple(a.raw(), &mut b, &hello_a2, None) {
+            let (_, records) = parse_data(&data).unwrap();
+            for r in &records {
+                assert!(!r.key.starts_with("ldoc:"), "local 集合数据不得进入同步流量");
+            }
+        }
+        assert!(b.get(&local_decl.data_key("d1")).unwrap().is_none());
+
+        // 收敛无增量
+        let hello_a3 = build_hello(a.raw(), 2_592_000_000, 500, "eager", None, None).unwrap();
+        assert!(
+            exchange_simple(a.raw(), &mut b, &hello_a3, None).is_empty(),
+            "收敛后无增量"
+        );
+    }
+
+    /// P6 驻留裁剪：pc-only 集合的记录不推给 mobile 设备类对端；
+    /// all 集合照常；未知设备类（旧对端）不过滤。
+    #[test]
+    fn p6_residency_trim_by_remote_device_class() {
+        use crate::plugindata::{DeclareInput, Devices, declare, save};
+        use crate::sync::versioned::{VersionedStorage, shared_node_id};
+
+        let mut a = VersionedStorage::new(MemoryStorage::new(), shared_node_id(NODE_A));
+        let all_decl = declare(
+            &mut a,
+            "ai-chat",
+            DeclareInput {
+                name: "ai-chat:conversations".to_string(),
+                ..Default::default()
+            },
+            1000,
+        )
+        .unwrap();
+        let pc_decl = declare(
+            &mut a,
+            "ai-chat",
+            DeclareInput {
+                name: "ai-chat:secrets".to_string(),
+                devices: Some(Devices::PcOnly),
+                ..Default::default()
+            },
+            1000,
+        )
+        .unwrap();
+        save(&mut a, &all_decl, "c1", "\"all\"").unwrap();
+        save(&mut a, &pc_decl, "s1", "\"pc-only\"").unwrap();
+
+        let category = category_named("pdoc");
+        let records = collect_incremental(a.raw(), category, &VersionVector::new(), None, 0).unwrap();
+        assert_eq!(records.len(), 2);
+
+        // 对端是手机：pc-only 记录被裁剪
+        let to_mobile = trim_records_by_residency(a.raw(), records.clone(), Some("mobile"));
+        assert_eq!(to_mobile.len(), 1);
+        assert!(to_mobile[0].key.contains("conversations"));
+        // 对端是 PC：全量
+        let to_pc = trim_records_by_residency(a.raw(), records.clone(), Some("pc"));
+        assert_eq!(to_pc.len(), 2);
+        // 未知设备类（旧对端）：不过滤
+        let to_legacy = trim_records_by_residency(a.raw(), records, None);
+        assert_eq!(to_legacy.len(), 2);
+    }
+
     fn category_named(name: &str) -> &'static Category {
         CATEGORIES.iter().find(|c| c.name == name).unwrap()
     }

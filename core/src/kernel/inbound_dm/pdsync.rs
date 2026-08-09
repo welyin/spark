@@ -45,6 +45,15 @@ pub(super) fn handle_pdsync_hello<S: StorageBackend>(
     // 对端回执：它已收讫本机删除日志到 dlogAck——推进其确认水位并尝试 GC
     let dlog_ack = crate::sync::dlog::parse_dlog_ack(body);
     ack_remote_journal(storage, ctx, dlog_ack);
+    // 对端设备类（P6 驻留裁剪依据）：持久化到 `pdsync:devclass:{peer}`，
+    // need 响应侧复用（need body 不携带设备类）
+    let remote_class = crate::sync::pdsync::parse_device_class(body);
+    if let Some(class) = &remote_class {
+        let _ = storage.put(
+            &crate::sync::pdsync::remote_device_class_key(ctx.remote_peer_id),
+            class,
+        );
+    }
     let remote_cats = crate::sync::pdsync::parse_hello_categories(body);
     log::info!(
         "[CT_SYNC] handle_hello ENTER | from={} remote_cats={:?}",
@@ -87,7 +96,15 @@ pub(super) fn handle_pdsync_hello<S: StorageBackend>(
                 out.push(PdsyncOut::Need { body: need_body });
             }
             crate::sync::pdsync::DiffOutcome::LocalAhead => {
-                push_category_data(storage, &mut out, category, &remote_vv, exclude, dlog_ack);
+                push_category_data(
+                    storage,
+                    &mut out,
+                    category,
+                    &remote_vv,
+                    exclude,
+                    dlog_ack,
+                    remote_class.as_deref(),
+                );
             }
             crate::sync::pdsync::DiffOutcome::Concurrent => {
                 // 双向交换：既请求对端缺的，也主动推本机缺的（data 逐条向量
@@ -95,7 +112,15 @@ pub(super) fn handle_pdsync_hello<S: StorageBackend>(
                 let need_body =
                     crate::sync::pdsync::build_need(category.name, &local_vv, my_seen);
                 out.push(PdsyncOut::Need { body: need_body });
-                push_category_data(storage, &mut out, category, &remote_vv, exclude, dlog_ack);
+                push_category_data(
+                    storage,
+                    &mut out,
+                    category,
+                    &remote_vv,
+                    exclude,
+                    dlog_ack,
+                    remote_class.as_deref(),
+                );
             }
             crate::sync::pdsync::DiffOutcome::Equal => {
                 // 折叠 vv Equal 不代表对端收齐墓碑（折叠丢失 key 维度，
@@ -109,6 +134,11 @@ pub(super) fn handle_pdsync_hello<S: StorageBackend>(
                 ) else {
                     continue;
                 };
+                let tombs = crate::sync::pdsync::trim_records_by_residency(
+                    storage,
+                    tombs,
+                    remote_class.as_deref(),
+                );
                 if !tombs.is_empty() {
                     let batches =
                         crate::sync::pdsync::split_batches(tombs, PDSYNC_BATCH_BYTES);
@@ -192,6 +222,16 @@ pub(super) fn handle_pdsync_need<S: StorageBackend>(
     ) else {
         return done(fail_response("collection-failed"), Vec::new());
     };
+    // P6 驻留裁剪：按请求方最近一次 hello 声明的设备类过滤 pdoc 记录
+    let remote_class = storage
+        .get(&crate::sync::pdsync::remote_device_class_key(ctx.remote_peer_id))
+        .ok()
+        .flatten();
+    let records = crate::sync::pdsync::trim_records_by_residency(
+        storage,
+        records,
+        remote_class.as_deref(),
+    );
     if category_name == "ct:friend" {
         let tombs: Vec<_> = records
             .iter()
@@ -615,6 +655,7 @@ fn push_category_data<S: StorageBackend>(
     remote_vv: &crate::sync::meta::VersionVector,
     exclude_key: Option<&str>,
     dlog_ack: u64,
+    remote_class: Option<&str>,
 ) {
     let Ok(records) = crate::sync::pdsync::collect_incremental(
         storage,
@@ -625,6 +666,7 @@ fn push_category_data<S: StorageBackend>(
     ) else {
         return;
     };
+    let records = crate::sync::pdsync::trim_records_by_residency(storage, records, remote_class);
     if category.name == "ct:friend" {
         let tombs: Vec<_> = records
             .iter()

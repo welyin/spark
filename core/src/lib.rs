@@ -13,6 +13,7 @@ pub mod message;
 pub mod org;
 pub mod p2p;
 pub mod plugin;
+pub mod plugindata;
 pub mod schema;
 pub mod storage;
 pub mod sync;

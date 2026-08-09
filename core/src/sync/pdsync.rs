@@ -58,6 +58,11 @@ pub const CATEGORIES: &[Category] = &[
     Category { name: "org:meta", prefixes: &["org:meta:"] },
     Category { name: "ct:org", prefixes: &["ct:org:"] },
     Category { name: "org:inv", prefixes: &["org:inv:in:", "org:inv:out:"] },
+    // P6 插件声明式 API（personal scope）：声明记录先行（对端合入数据前必已
+    // 知策略），数据记录随统一反熵。`ldoc:`（local scope）有意不在表内——
+    // 永不离开本机。
+    Category { name: "pdecl", prefixes: &["pdecl:"] },
+    Category { name: "pdoc", prefixes: &["pdoc:"] },
 ];
 
 /// 按前缀从注册表解析 category（不存在 → `None`，如组织/消息前缀）。
@@ -304,7 +309,8 @@ pub fn collect_tombstones_after<S: StorageBackend>(
 
 // ── 信封 body 构造 ─────────────────────────────────────────────────
 
-/// 构造 `pdsync-hello` body：`{categories, msgWindow, attachmentPolicy}`。
+/// 构造 `pdsync-hello` body：`{categories, msgWindow, attachmentPolicy,
+/// deviceClass}`。
 ///
 /// `exclude_key`：折叠摘要对称排除的记录键（[`self_friend_key`] 的自记录）。
 pub fn build_hello<S: StorageBackend>(
@@ -322,11 +328,68 @@ pub fn build_hello<S: StorageBackend>(
             "maxPerConv": msg_window_max_per_conv,
         },
         "attachmentPolicy": attachment_policy,
+        // P6 驻留裁剪依据：本机设备类（pc/mobile），对端据此裁剪 pdoc 推送
+        "deviceClass": local_device_class(),
     });
     if let Some(at) = last_msg_sync_at {
         hello["lastMsgSyncAt"] = json!(at);
     }
     Ok(hello)
+}
+
+/// 本机设备类（P6 `devices` 轴的判定口径）：Android/iOS = mobile，其余 = pc。
+pub fn local_device_class() -> &'static str {
+    match std::env::consts::OS {
+        "android" | "ios" => "mobile",
+        _ => "pc",
+    }
+}
+
+/// 从 hello body 解析对端设备类（缺省/非法 → None，裁剪按不过滤兜底）。
+pub fn parse_device_class(body: &Value) -> Option<String> {
+    match body.get("deviceClass").and_then(Value::as_str) {
+        Some("pc") => Some("pc".to_string()),
+        Some("mobile") => Some("mobile".to_string()),
+        _ => None,
+    }
+}
+
+/// 对端设备类的持久化键（hello 收讫时记录，need 响应侧裁剪用——need body
+/// 不携带设备类，以最近一次 hello 为准）。
+pub fn remote_device_class_key(peer_id: &str) -> String {
+    format!("pdsync:devclass:{peer_id}")
+}
+
+/// P6 驻留裁剪（发送侧）：按集合声明的 `devices` 轴过滤 `pdoc:` 记录——
+/// `pc-only` 不推给手机、`mobile-only` 不推给 PC。声明缺失（本地数据不可能
+/// 先于声明存在，属损坏态）时**跳过不推**（宁可少推不泄露驻留边界）。
+/// 非 pdoc 记录原样保留；`remote_class` 未知（旧对端）不过滤。
+pub fn trim_records_by_residency<S: StorageBackend>(
+    storage: &S,
+    records: Vec<PdsyncRecord>,
+    remote_class: Option<&str>,
+) -> Vec<PdsyncRecord> {
+    let Some(class) = remote_class else {
+        return records;
+    };
+    records
+        .into_iter()
+        .filter(|r| {
+            if !r.key.starts_with("pdoc:") {
+                return true;
+            }
+            let Some(decl_key) = crate::plugindata::decl_key_for_data_key(&r.key) else {
+                return false;
+            };
+            let Ok(Some(raw)) = storage.get(&decl_key) else {
+                return false;
+            };
+            match serde_json::from_str::<crate::plugindata::CollectionDeclaration>(&raw) {
+                Ok(decl) => decl.allows_device(class),
+                Err(_) => false,
+            }
+        })
+        .collect()
 }
 
 /// 解析 hello 的 categories 摘要 → category 名 → 折叠 vv。
