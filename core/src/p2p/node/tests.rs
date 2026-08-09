@@ -26,6 +26,7 @@ use crate::p2p::constants::{PLUGIN_ANNOUNCE_MIN_POW_BITS, PLUGIN_ANNOUNCE_RELAY_
 use crate::p2p::direct::MinIntervalRateLimiter;
 use crate::p2p::envelope::EnvelopeSigner;
 use crate::p2p::host::NoopHost;
+use crate::p2p::overlay_store::OverlayPeerStore;
 use crate::p2p::peer_targets::PeerNodeInfo;
 use crate::p2p::plugin_announce::PluginAnnounceValidator;
 use crate::storage::MemoryStorage;
@@ -40,6 +41,7 @@ async fn test_loop() -> EventLoop<MemoryStorage> {
     let (_cmd_tx, cmd_rx) = mpsc::unbounded_channel::<Command>();
     let (event_tx, _event_rx) = mpsc::unbounded_channel();
     let (dm_completion_tx, dm_completion_rx) = mpsc::unbounded_channel();
+    let (dial_timeout_tx, dial_timeout_rx) = mpsc::unbounded_channel();
     EventLoop {
         swarm,
         storage: MemoryStorage::new(),
@@ -88,6 +90,8 @@ async fn test_loop() -> EventLoop<MemoryStorage> {
         relay_reservations_inflight: std::collections::HashSet::new(),
         dm_completion_tx,
         dm_completion_rx,
+        dial_timeout_tx,
+        dial_timeout_rx,
         pending_dm_inbound: HashMap::new(),
         next_dm_task_id: 0,
         plugin_announce_validator: PluginAnnounceValidator::new(PLUGIN_ANNOUNCE_MIN_POW_BITS),
@@ -450,4 +454,105 @@ async fn circuit_listener_closed_clears_reservation_state() {
     el.on_circuit_listener_closed(&[circuit]);
     assert!(el.relay_reservations_inflight.is_empty());
     assert!(el.relay_reservations.is_empty());
+}
+
+/// 单目标应用层拨号超时（与 OutgoingConnectionError 同路径）：黑洞目标
+/// 到期被放弃、推进下一目标；旧拨号迟到的失败/超时消息因 conn id 已
+/// 轮换不再匹配，不得二次推进。
+#[tokio::test]
+async fn dial_timeout_advances_past_blackhole_target() {
+    let mut el = test_loop().await;
+    let peer = PeerId::random();
+    let addr = "/ip4/10.255.255.1/tcp/4001"; // 黑洞目标（无 RST，OS 超时数十秒）
+    let addr2 = "/ip4/127.0.0.1/tcp/4002";
+    let (a, _rx) = dm_attempt(&[addr, addr2], peer);
+    push_dialed(&mut el, a);
+    let conn1 = el.pending_org_attempts[0].dial_conn_id.expect("dial issued");
+
+    // 应用层超时到期：推进下一目标
+    el.fail_org_dial(conn1);
+    assert_eq!(el.pending_org_attempts.len(), 1);
+    assert_eq!(
+        el.pending_org_attempts[0].current_target.as_deref(),
+        Some(addr2),
+        "超时后应推进到下一目标"
+    );
+    assert!(el.pending_org_attempts[0].dial_issued);
+
+    // 旧拨号迟到的超时/失败事件：不得再次推进（否则误耗尽）
+    el.fail_org_dial(conn1);
+    assert_eq!(el.pending_org_attempts.len(), 1);
+    assert_eq!(
+        el.pending_org_attempts[0].current_target.as_deref(),
+        Some(addr2),
+        "迟到的旧 conn id 事件不得再次推进"
+    );
+}
+
+/// 拨号超时的定时器接线：实际拨号后 spawn 的定时任务在
+/// DIRECT_DIAL_TARGET_TIMEOUT_MS（4s，真实等待）后把本次 ConnectionId
+/// 送回事件循环。
+#[tokio::test]
+async fn dial_timeout_timer_fires_for_issued_dial() {
+    let mut el = test_loop().await;
+    let peer = PeerId::random();
+    let (a, _rx) = dm_attempt(&["/ip4/127.0.0.1/tcp/4001"], peer);
+    push_dialed(&mut el, a);
+    let conn = el.pending_org_attempts[0].dial_conn_id.expect("dial issued");
+    let fired = tokio::time::timeout(
+        Duration::from_millis(crate::p2p::constants::DIRECT_DIAL_TARGET_TIMEOUT_MS + 5_000),
+        el.dial_timeout_rx.recv(),
+    )
+    .await
+    .expect("超时消息应在单目标拨号超时后送达")
+    .expect("channel open");
+    assert_eq!(fired, conn, "送回的是本次拨号的 ConnectionId");
+}
+
+/// 入站（listener）连接的远端地址是对端 NAT 源 IP:临时端口（回拨必败），
+/// 不得进邻居池拨号候选（否则 merge_neighbor_addresses 让它占据 DM 拨号
+/// 队首烧光外层预算）；出站（dialer）方向地址经验证可达，照常入池。
+#[tokio::test]
+async fn inbound_remote_addr_not_recorded_as_dial_candidate() {
+    let mut el = test_loop().await;
+    let inbound_peer = PeerId::random();
+    let inbound_addr = "/ip4/203.0.113.9/tcp/54321"; // NAT 源地址（临时端口）
+    el.handle_swarm_event(SwarmEvent::ConnectionEstablished {
+        peer_id: inbound_peer,
+        connection_id: ConnectionId::new_unchecked(901),
+        endpoint: ConnectedPoint::Listener {
+            local_addr: "/ip4/127.0.0.1/tcp/15002".parse().expect("valid addr"),
+            send_back_addr: inbound_addr.parse().expect("valid addr"),
+        },
+        num_established: NonZeroU32::new(1).expect("non-zero"),
+        concurrent_dial_errors: None,
+        established_in: Duration::from_millis(1),
+    });
+    {
+        let mut store = OverlayPeerStore::new(&mut el.storage);
+        let addrs = store
+            .get(&inbound_peer.to_base58())
+            .expect("read ok")
+            .map(|r| r.addresses)
+            .unwrap_or_default();
+        assert!(
+            !addrs.iter().any(|a| a == inbound_addr),
+            "入站源地址不得入池，实际: {addrs:?}"
+        );
+    }
+
+    // 对照：出站方向的远端地址经成功拨号验证可达，入池
+    let outbound_peer = PeerId::random();
+    let outbound_addr = "/ip4/203.0.113.10/tcp/15002";
+    el.handle_swarm_event(conn_established(outbound_peer, outbound_addr));
+    let mut store = OverlayPeerStore::new(&mut el.storage);
+    let addrs = store
+        .get(&outbound_peer.to_base58())
+        .expect("read ok")
+        .map(|r| r.addresses)
+        .unwrap_or_default();
+    assert!(
+        addrs.iter().any(|a| a == outbound_addr),
+        "出站地址应入池，实际: {addrs:?}"
+    );
 }

@@ -1881,6 +1881,10 @@ fn inbound_device_sync_stale_does_not_overwrite() {
         handle_inbound_dm(&mut s, &my_root, "", envelope, "12D3KooWDevBTestNode11111111111111111111111111111", &HashSet::new(), NOW + 1, NODE)
             .unwrap();
     assert!(result.events.is_empty(), "旧快照不应产生内容变更事件");
+    assert!(
+        result.device_sync_reply.is_none(),
+        "无新信息时不回发（防双向 ping-pong 风暴）"
+    );
     let stored = spark_core::device::DeviceService::get(&s, "12D3KooWDevBTestNode11111111111111111111111111111").unwrap().unwrap();
     assert_eq!(stored.device_name, "新名", "旧快照不覆盖新内容");
     assert_eq!(stored.last_seen_at, NOW + 1, "last_seen 推进为接收时间");

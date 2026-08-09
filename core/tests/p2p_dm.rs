@@ -352,3 +352,48 @@ async fn dm_and_org_share_concurrent_no_crosstalk() {
     a.stop().await;
     b.stop().await;
 }
+
+/// 自设备同步类 kind 豁免应答侧限流：pdsync 反熵是背靠背多信封往返，
+/// 连发 3 条 pdsync-* 全部送达（豁免前第 2 条起被 rate-limited 静默
+/// 丢弃，多 category diff 残缺丢失）；非豁免 kind 的限流行为由
+/// `dm_direct_rate_limited` 覆盖。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dm_direct_pdsync_kinds_exempt_from_rate_limit() {
+    let now = 1_720_000_000_000i64;
+    let root = "aa".repeat(32); // 自设备同步：from == to == 本机 rootId
+    let (mut a, _state_a, _s_a) = start_node(now, Some(&root)).await;
+    let (mut b, state_b, _s_b) = start_node(now, Some(&root)).await;
+    let addrs_b = started_addresses(&mut b).await;
+    let _ = started_addresses(&mut a).await;
+
+    connect(&a, b.peer_id(), &dialable(&addrs_b)).await;
+    wait_for(&mut b, Duration::from_secs(10), |e| {
+        matches!(e, P2pEvent::PeerConnected { .. })
+    })
+    .await;
+
+    let target = || PeerNodeInfo {
+        peer_id: Some(b.peer_id().to_string()),
+        addresses: Vec::new(), // 已连接短路：信封间隔远小于 1s 限流窗口
+    };
+    for kind in ["pdsync-hello", "pdsync-need", "pdsync-data"] {
+        let envelope = dm_envelope(kind, &root, &root, now, json!({}));
+        let response = a
+            .dm_direct(&target(), envelope)
+            .await
+            .expect("dm_direct ok");
+        assert_eq!(
+            response,
+            Some(json!({"ok": true})),
+            "{kind} 应豁免限流不被 rate-limited"
+        );
+    }
+    assert_eq!(
+        state_b.lock().unwrap().dms.len(),
+        3,
+        "3 条 pdsync 信封全部进入宿主"
+    );
+
+    a.stop().await;
+    b.stop().await;
+}

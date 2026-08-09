@@ -224,7 +224,8 @@ import {
   currentSpace,
   validateCurrentSpace
 } from './stores/current-space';
-import { refreshCurrentUser } from './stores/current-user';
+import { refreshCurrentUser, currentUser } from './stores/current-user';
+import { refreshProfileExtraFromKernel } from './stores/profile-extra';
 import { requestOpenChat } from './stores/pending-chat';
 import { requestOpenContact } from './stores/pending-contact';
 import { requestAddContact, type AddContactKind } from './stores/pending-add-contact';
@@ -510,7 +511,13 @@ export default defineComponent({
       // 自设备资料同步（多设备）：本机资料被其他设备的全量快照更新后刷新展示
       void listenP2pEvents((event) => {
         if (event.kind === 'SelfProfileSynced') {
-          void loadCurrentUser();
+          void loadCurrentUser().then(() => {
+            // 同步扩展字段（性别/地区/签名）：loadCurrentUser 只刷新昵称/头像单例，
+            // 扩展字段缓存在 profile-extra，需强制重新水合拉取内核最新值
+            if (currentUser.rootId) {
+              refreshProfileExtraFromKernel(currentUser.rootId);
+            }
+          });
         }
       }).then((un) => unlistenP2p.push(un)).catch(() => {});
     });

@@ -135,6 +135,12 @@ pub const CONNECT_TIMEOUT_SECS: u64 = 10;
 /// dm 应答侧限流：同一请求方两次服务的最小间隔（1s）。
 pub const DM_MIN_INTERVAL_MS: i64 = 1_000;
 
+/// org/dm 直连单目标拨号的应用层超时（4s）：黑洞地址（如对端 NAT 入站
+/// 源地址）无 RST 时会挂到 OS TCP 超时（移动端可达数十秒），一个黑洞
+/// 目标就烧光外层 15s 总预算；到期按拨号失败处理、推进下一目标
+/// （与 OutgoingConnectionError 同路径，按 ConnectionId 归属）。
+pub const DIRECT_DIAL_TARGET_TIMEOUT_MS: u64 = 4_000;
+
 /// Kad（Kademlia DHT）协议名。
 pub const KAD_PROTOCOL_NAME: &str = "/spark/kad/1.0.0";
 

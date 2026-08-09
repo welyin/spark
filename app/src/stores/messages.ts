@@ -246,7 +246,16 @@ function subscribeP2pEvents(): void {
   if (eventsSubscribed || !isTauri()) return;
   eventsSubscribed = true;
   void listenP2pEvents((event) => {
-    if (event.kind === 'ChatReceived') onChatReceived(event.data);
+    console.log('[subscribeP2pEvents] received event kind=', event.kind);
+    if (event.kind === 'ChatReceived') {
+      console.log(
+        '[subscribeP2pEvents] ChatReceived dispatched | msgId=',
+        (event.data as any)?.message?.id,
+        'convId=',
+        (event.data as any)?.conversation?.id,
+      );
+      onChatReceived(event.data);
+    }
     else if (event.kind === 'ChatStatus') onChatStatus(event.data);
     else if (event.kind === 'ConversationsSynced') hydrateConversations('personal');
     else if (event.kind === 'PeerConnected' || event.kind === 'PeerDisconnected') scheduleOnlineRefresh();
@@ -284,10 +293,10 @@ function scheduleOnlineRefresh(): void {
 }
 
 /**
- * 对端新消息：定位/创建会话，按 id 去重入列，维护未读与 updatedAt。
+ * 对端/自设备新消息：定位/创建会话，按 id 去重入列，维护未读与 updatedAt。
  * data.conversation 是内核回写本条消息之后的权威快照（unreadCount/updatedAt 已含
- * 本条；自设备同步来的 senderId='me' 消息内核不计未读），前端始终信任快照、不再
- * 本地 +1；仅活跃会话保持清零 + markRead。
+ * 本条；每台设备独立追踪 unread_count，自设备同步来的消息也会计入未读），前端
+ * 始终信任快照、不再本地 +1；仅活跃会话保持清零 + markRead。
  */
 export function onChatReceived(data: { spaceKey: string; conversation: Conversation; message: ChatMessage }): void {
   const key = data.spaceKey;
@@ -299,8 +308,18 @@ export function onChatReceived(data: { spaceKey: string; conversation: Conversat
     conv = { ...data.conversation };
     space.conversations.push(conv);
   }
-  const list = (space.messages[conv.id] ??= []);
-  if (!list.some((m) => m.id === data.message.id)) list.push({ ...data.message });
+  // 显式替换数组引用而非 push 变异：Tauri IPC 事件回调在 Vue 组件事件循环
+  // 之外触发，push 变异的 Proxy 拦截可能不会可靠触发渲染（与 sendText 的
+  // 用户事件上下文不同）。创建新数组引用确保 Vue computed 无条件检测到变更。
+  const list = space.messages[conv.id] ?? [];
+  if (!list.some((m) => m.id === data.message.id)) {
+    space.messages[conv.id] = [...list, { ...data.message }];
+  }
+  // 🔍 DEBUG: trace message routing
+  console.log('[onChatReceived] convId=', conv.id, 'activeConv=', activeConversation[key], 'match=', activeConversation[key] === conv.id);
+  console.log('[onChatReceived] message.id=', data.message.id, 'type=', data.message.type);
+  console.log('[onChatReceived] messages[conv.id].length=', (space.messages[conv.id] ?? []).length);
+  // 🔍 END DEBUG
   conv.updatedAt = data.conversation.updatedAt;
   conv.online = data.conversation.online;
   if (activeConversation[key] === conv.id) {
@@ -607,6 +626,7 @@ export function sendText(key: SpaceKey, convId: string, text: string, quote?: Qu
   const url = /https?:\/\/[^\s]+/.exec(text)?.[0];
   if (url) message.link = buildLinkPreview(url);
   (space.messages[convId] ??= []).push(message);
+  console.log('[sendText] convId=', convId, 'messages[convId].length=', (space.messages[convId] ?? []).length);
   conv.updatedAt = message.createdAt;
   conv.draft = '';
   // bot 会话：内核跳过 P2P 投递并在落库处直接分发给插件后台运行时处理，

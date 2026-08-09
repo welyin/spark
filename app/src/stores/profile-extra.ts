@@ -136,6 +136,18 @@ export function getProfileExtra(rootId: string): ProfileExtra {
   return profileExtras.value[rootId] ?? { ...DEFAULT_EXTRA };
 }
 
+/** 自设备资料同步后强制重新水合（SelfProfileSynced 事件调用）：
+ *  清除水合标记并立即从内核拉取最新扩展字段（性别/地区/签名）进缓存。
+ *  无本地在写（dirtyKeys 空）时水合正常应用；有在写时 hydrateFromKernel 内部
+ *  仍会按 dirtyKeys 跳过覆盖，语义安全。 */
+export function refreshProfileExtraFromKernel(rootId: string): void {
+  if (!rootId || isOrgScoped(rootId)) {
+    return;
+  }
+  hydratedKeys.delete(rootId);
+  void hydrateFromKernel(rootId);
+}
+
 export function setProfileExtra(rootId: string, patch: Partial<ProfileExtra>): void {
   if (!rootId) {
     return;
@@ -216,5 +228,13 @@ export function setProfileExtra(rootId: string, patch: Partial<ProfileExtra>): v
     return;
   }
   dirtyKeys.add(rootId);
-  void window.electronAPI.rootIdentity.updateProfile(kernelPatch).catch(rollback);
+  void window.electronAPI.rootIdentity.updateProfile(kernelPatch)
+    .then(() => {
+      // 写成功：内核已是权威真值。清除脏标记——否则它永久驻留，远端 profile-sync
+      // 进来的新值会被 hydrateFromKernel 的 dirtyKeys 检查挡死（PC 停留旧值）。
+      // 不主动水合：缓存里已是刚写入的新值，主动水合可能读到未收敛的旧值造成闪烁；
+      // 远端同步经 profile-updated/SelfProfileSynced 事件自然触发水合即可。
+      dirtyKeys.delete(rootId);
+    })
+    .catch(rollback);
 }

@@ -28,7 +28,23 @@ export * from './types';
 
 /** 订阅内核 P2P 事件流；返回取消订阅函数。 */
 export function listenP2pEvents(handler: (event: P2pEventDto) => void): Promise<UnlistenFn> {
-  return listen<P2pEventDto>('p2p-event', (event) => handler(event.payload));
+  return listen<P2pEventDto>('p2p-event', (event) => {
+    const payload = event.payload;
+    if (payload.kind === 'ChatReceived') {
+      const data = (payload as any).data;
+      console.log(
+        '[API listenP2pEvents] ChatReceived arrives in JS | msgId=',
+        data?.message?.id,
+        'convId=',
+        data?.conversation?.id,
+        'spaceKey=',
+        data?.spaceKey,
+        'timestamp=',
+        Date.now()
+      );
+    }
+    handler(payload);
+  });
 }
 
 /** 广播索引核查事件（announce_verify.rs 推渲染端的独立别名事件，载荷与 P2pEvent 相同）。 */

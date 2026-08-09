@@ -4,11 +4,14 @@
 //! 请求发出与失败重试挂钩在 `swarm_events` 的连接事件分支。
 
 use std::collections::VecDeque;
+use std::time::Duration;
 
+use libp2p::swarm::ConnectionId;
 use libp2p::swarm::dial_opts::DialOpts;
 use libp2p::{Multiaddr, PeerId, request_response};
 use serde_json::Value;
 
+use crate::p2p::constants::DIRECT_DIAL_TARGET_TIMEOUT_MS;
 use crate::p2p::direct;
 use crate::p2p::peer_targets::{PeerNodeInfo, build_dial_targets, extract_peer_id};
 use crate::storage::StorageBackend;
@@ -168,10 +171,64 @@ impl<S: StorageBackend> EventLoop<S> {
                         attempt.current_target = Some(target);
                         attempt.dial_issued = true;
                         attempt.dial_conn_id = Some(conn_id);
+                        // 单目标应用层超时：黑洞地址（无 RST）会挂到 OS TCP
+                        // 超时（移动端数十秒），一个黑洞目标烧光外层 15s 总
+                        // 预算；到期经通道按 OutgoingConnectionError 同口径
+                        // 推进下一目标。拨号提前成败时迟到的超时消息无
+                        // attempt 匹配（dial_conn_id 已轮换），自然忽略。
+                        let timeout_tx = self.dial_timeout_tx.clone();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(Duration::from_millis(
+                                DIRECT_DIAL_TARGET_TIMEOUT_MS,
+                            ))
+                            .await;
+                            let _ = timeout_tx.send(conn_id);
+                        });
                         return;
                     }
                 }
                 Err(_) => continue,
+            }
+        }
+    }
+
+    /// 拨号失败/单目标超时按 [`ConnectionId`] 精确归属推进 attempt：
+    /// OutgoingConnectionError 与应用层拨号超时（dial_timeout 通道）共用
+    /// 本路径。按 ConnectionId 而非 peer/地址匹配——`unknown_peer_id` 拨号
+    /// 失败时事件 peer_id=None，模糊匹配会让一个 attempt 的失败级联推进
+    /// 同 peer 的所有 attempt（含未拨号的等待者）至目标耗尽。命中则试
+    /// 下一目标；耗尽时唤醒同地址等待者并回传终态。
+    pub(super) fn fail_org_dial(&mut self, connection_id: ConnectionId) {
+        let mut j = 0;
+        while j < self.pending_org_attempts.len() {
+            let should_retry = {
+                let a = &self.pending_org_attempts[j];
+                a.in_flight.is_none()
+                    && a.current_target.is_some()
+                    && a.dial_issued
+                    && a.dial_conn_id == Some(connection_id)
+            };
+            if should_retry {
+                let mut a = self.pending_org_attempts.remove(j);
+                let failed_base = a
+                    .current_target
+                    .as_deref()
+                    .map(base_addr)
+                    .map(str::to_string);
+                a.current_target = None;
+                self.dial_next_org_target(&mut a);
+                if a.current_target.is_some() || a.in_flight.is_some() {
+                    self.pending_org_attempts.push(a);
+                } else {
+                    // 拨号方耗尽：同地址的去重等待者所等的事件已不会
+                    // 发生，唤醒其自行走目标流程
+                    if let Some(base) = failed_base {
+                        self.wake_addr_waiters(&base);
+                    }
+                    a.finish_exhausted();
+                }
+            } else {
+                j += 1;
             }
         }
     }

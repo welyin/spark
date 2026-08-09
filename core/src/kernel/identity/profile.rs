@@ -49,6 +49,12 @@ impl Kernel {
         identity::update_profile(&mut file, password, nickname, avatar, gender, region, signature)
             .map_err(map_identity_decrypt_error)?;
         self.write_identity_file(&file)?;
+        log::info!(
+            "[PROFILE_CHAIN] local update saved | file.updated_at={} nickname={:?} signature={:?}",
+            file.updated_at,
+            file.nickname,
+            file.signature,
+        );
         *self.nickname_shared.lock().unwrap() = file.nickname.clone().unwrap_or_default();
         *self.avatar_shared.lock().unwrap() = file.avatar.clone().unwrap_or_default();
         // pdsync P2：镜像到 sled `profile:self`（bump pmeta，供自设备同步）
@@ -59,8 +65,12 @@ impl Kernel {
             file.region.as_deref(),
             file.signature.as_deref(),
         );
-        let nickname = self.my_nickname(&root_id);
-        // 朋友互推（不含自记录）：展示字段
+        // 资料变更后分两个通道尽力推送（失败静默，不阻塞更新）：
+        // - 朋友互推（不含自记录）：展示字段；
+        // - 自设备同步：完整资料（含隐私字段），仅配对设备间。
+        // note: 直接从已读取的 file.nickname 取值，避免 my_nickname()
+        // 冗余的磁盘 IO（重读身份文件），在移动端尤为关键。
+        let nickname = file.nickname.clone().unwrap_or_default();
         self.broadcast_profile_to_friends(
             &nickname,
             file.avatar.as_deref(),
@@ -88,8 +98,10 @@ impl Kernel {
     }
 
     /// `updateProfile` 的会话版（对齐 TS root-id.ts 现行语义：免密码——主进程持有
-    /// 解锁会话直接重封资料）。内核按 spec §5 需重封加密 payload，口令取自 unlock
-    /// 时缓存的会话态；`lock` 后调用报 `Locked`。
+    /// 解锁会话直接重封资料）。优先复用 unlock 时缓存的 v2 scrypt 派生密钥重封
+    /// （沿用文件既有 salt、仅换随机 IV，全程 0 次 scrypt——移动端单次 scrypt
+    /// 0.3~1.2s，口令版会跑 2 次）；会话无缓存密钥（v1 遗留备份恢复）时退回
+    /// 口令重封。`lock` 后调用报 `Locked`。
     ///
     /// 参数语义同 [`Kernel::update_profile`]。
     pub fn update_profile_session(
@@ -100,14 +112,30 @@ impl Kernel {
         region: Option<&str>,
         signature: Option<&str>,
     ) -> Result<ProfileInfo> {
-        let (root_id, password) = {
+        let (root_id, password, session_key) = {
             let unlocked = self.unlocked.as_ref().ok_or(KernelError::Locked)?;
-            (unlocked.root_id(), unlocked.password.clone())
+            (
+                unlocked.root_id(),
+                unlocked.password.clone(),
+                unlocked.session_key,
+            )
         };
         let Some(mut file) = self.read_identity_file(&root_id)? else {
             return Err(KernelError::NotInitialized);
         };
-        identity::update_profile(&mut file, &password, nickname, avatar, gender, region, signature)?;
+        let _ = &password;
+        let _ = &session_key;
+        // 资料已改为明文头存储，更新不触碰加密 payload——密码/会话密钥均不参与，
+        // 直接做明文补丁（移动端不再为此跑 scrypt）。
+        identity::update_profile_with_key(
+            &mut file,
+            &[0u8; identity::crypto::KEY_LEN],
+            nickname,
+            avatar,
+            gender,
+            region,
+            signature,
+        )?;
         self.write_identity_file(&file)?;
         *self.nickname_shared.lock().unwrap() = file.nickname.clone().unwrap_or_default();
         *self.avatar_shared.lock().unwrap() = file.avatar.clone().unwrap_or_default();
@@ -122,7 +150,9 @@ impl Kernel {
         // 资料变更后分两个通道尽力推送（失败静默，不阻塞更新）：
         // - 朋友互推（不含自记录）：展示字段；
         // - 自设备同步：完整资料（含隐私字段），仅配对设备间。
-        let nickname = self.my_nickname(&root_id);
+        // note: 直接从已读取的 file.nickname 取值，避免 my_nickname()
+        // 冗余的磁盘 IO（重读身份文件），在移动端尤为关键。
+        let nickname = file.nickname.clone().unwrap_or_default();
         self.broadcast_profile_to_friends(
             &nickname,
             file.avatar.as_deref(),

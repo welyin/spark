@@ -499,8 +499,11 @@ impl Kernel {
             // （delivered），随后向已配对设备逐个尽力投递 chat 信封
             // （跳过 conv.peer 常规解析；单设备失败不影响状态——离线设备
             // 恢复后的历史同步依赖后续个人空间同步机制）。
+            // note: body 必须包含 convId，用于回同步侧 is_self_echo 分支
+            // 按目标会话落库而非兜底走到 ensure_inbound_conversation 推导
             let body = serde_json::json!({
                 "spaceKey": space,
+                "convId": conv_id,
                 "message": serde_json::to_value(&record)?,
             });
             self.deliver_to_devices(&my_root_id, KIND_CHAT, body);

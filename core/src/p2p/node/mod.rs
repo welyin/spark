@@ -327,6 +327,7 @@ impl P2pNode {
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (dm_completion_tx, dm_completion_rx) = mpsc::unbounded_channel();
+        let (dial_timeout_tx, dial_timeout_rx) = mpsc::unbounded_channel();
         let event_loop = EventLoop {
             swarm,
             storage,
@@ -377,6 +378,8 @@ impl P2pNode {
             relay_reservations_inflight: std::collections::HashSet::new(),
             dm_completion_tx,
             dm_completion_rx,
+            dial_timeout_tx,
+            dial_timeout_rx,
             pending_dm_inbound: HashMap::new(),
             next_dm_task_id: 0,
             plugin_announce_validator: PluginAnnounceValidator::new(

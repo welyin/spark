@@ -107,6 +107,21 @@ describe('个人空间键（rootId）走内核', () => {
     await flush();
     expect(store.getProfileExtra(ROOT_ID).region).toBe('北京');
   });
+
+  it('写成功后清除脏标记，远端 profile-sync 的新值可经事件水合进缓存', async () => {
+    // 回归：旧实现写成功后脏标记永久驻留，远端同步的值被 dirtyKeys 挡死
+    // （PC 保存后永远显示本地旧值，看不到手机同步进来的新值）。
+    const store = await importStore();
+    store.setProfileExtra(ROOT_ID, { region: '北京' });
+    await flush(); // updateProfile resolve → 清脏标记（不主动水合，避免读到未收敛旧值）
+    expect(store.getProfileExtra(ROOT_ID).region).toBe('北京'); // 本地新值不被覆盖
+    // 远端同步进来：内核 status 变为新值，SelfProfileSynced 事件触发强制水合
+    statusValue = { rootId: ROOT_ID, gender: '女', region: '深圳', signature: '远端同步' };
+    store.refreshProfileExtraFromKernel(ROOT_ID);
+    await flush();
+    expect(store.getProfileExtra(ROOT_ID).region).toBe('深圳');
+    expect(store.getProfileExtra(ROOT_ID).signature).toBe('远端同步');
+  });
 });
 
 describe('org 作用域键（rootId@orgId）走内核（F2b）', () => {

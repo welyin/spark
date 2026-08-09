@@ -639,12 +639,12 @@ fn pdsync_self_friend_record_not_cross_fed() {
     .unwrap();
 
     // A → B：hello（排除自记录键）→ B 的 need/data 过链路
-    let hello_a = build_hello(&a, 2_592_000_000, 500, "eager", Some(&self_key)).unwrap();
+    let hello_a = build_hello(&a, 2_592_000_000, 500, "eager", Some(&self_key), None).unwrap();
     let r = deliver_pdsync(&mut b, &key, &my_root, dm_envelope::KIND_PDSYNC_HELLO, hello_a, "node-b");
     let bodies: Vec<_> = r.pdsync_out.iter().map(|o| o.body().clone()).collect();
     route_pdsync_out(bodies, &mut b, "node-b", &mut a, "node-a", &key, &my_root);
     // B → A：反向
-    let hello_b = build_hello(&b, 2_592_000_000, 500, "eager", Some(&self_key)).unwrap();
+    let hello_b = build_hello(&b, 2_592_000_000, 500, "eager", Some(&self_key), None).unwrap();
     let r = deliver_pdsync(&mut a, &key, &my_root, dm_envelope::KIND_PDSYNC_HELLO, hello_b, "node-a");
     let bodies: Vec<_> = r.pdsync_out.iter().map(|o| o.body().clone()).collect();
     route_pdsync_out(bodies, &mut a, "node-a", &mut b, "node-b", &key, &my_root);
@@ -673,7 +673,7 @@ fn pdsync_self_friend_record_not_cross_fed() {
     assert_eq!(fp.peer.map(|p| p.peer_id).as_deref(), Some("peer-x"));
 
     // 收敛：再互发 hello → ct:friend 无 need/data（folded vv 无伪 diff）
-    let hello_a2 = build_hello(&a, 2_592_000_000, 500, "eager", Some(&self_key)).unwrap();
+    let hello_a2 = build_hello(&a, 2_592_000_000, 500, "eager", Some(&self_key), None).unwrap();
     let r = deliver_pdsync(&mut b, &key, &my_root, dm_envelope::KIND_PDSYNC_HELLO, hello_a2, "node-b");
     assert!(
         r.pdsync_out
@@ -682,7 +682,7 @@ fn pdsync_self_friend_record_not_cross_fed() {
                 != Some("ct:friend")),
         "收敛后 ct:friend 不应再有 diff 输出"
     );
-    let hello_b2 = build_hello(&b, 2_592_000_000, 500, "eager", Some(&self_key)).unwrap();
+    let hello_b2 = build_hello(&b, 2_592_000_000, 500, "eager", Some(&self_key), None).unwrap();
     let r = deliver_pdsync(&mut a, &key, &my_root, dm_envelope::KIND_PDSYNC_HELLO, hello_b2, "node-a");
     assert!(
         r.pdsync_out

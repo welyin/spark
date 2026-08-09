@@ -157,6 +157,9 @@ impl Kernel {
             data_dir: self.config.data_dir.clone(),
             self_device_link: Arc::clone(&self.self_device_link),
             pdsync_capable_self_devices: Arc::clone(&self.pdsync_capable_self_devices),
+            // 稳态 hello 触发状态仅 keepalive tick 消费：worker 上下文（start_p2p
+            // 装配，随 p2p 会话存活）持有即够；门面即席上下文新建空状态即可
+            self_hello_state: Arc::new(std::sync::Mutex::new(org_sync::SelfHelloState::default())),
         };
         let worker = org_sync::spawn_worker(self.runtime.handle(), ctx, org_sync_rx);
 
@@ -238,6 +241,9 @@ impl Kernel {
             data_dir: self.config.data_dir.clone(),
             self_device_link: Arc::clone(&self.self_device_link),
             pdsync_capable_self_devices: Arc::clone(&self.pdsync_capable_self_devices),
+            // 稳态 hello 触发状态仅 keepalive tick 消费：worker 上下文（start_p2p
+            // 装配，随 p2p 会话存活）持有即够；门面即席上下文新建空状态即可
+            self_hello_state: Arc::new(std::sync::Mutex::new(org_sync::SelfHelloState::default())),
         })
     }
 

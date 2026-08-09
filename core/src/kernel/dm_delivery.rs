@@ -21,11 +21,12 @@ pub(crate) const DM_RETRY_DELAYS: [std::time::Duration; 2] = [
     std::time::Duration::from_secs(5),
 ];
 use crate::contact::ContactService;
-use crate::message::{ConversationRecord, MessageRecord, MessageService};
+use crate::message::{ConversationRecord, MessageRecord, MessageService, PeerRef};
 use crate::org::OrganizationService;
 use crate::p2p::{P2pEvent, PeerNodeInfo};
 use crate::p2p::node::system_now_ms;
 use crate::plugin::PluginHostShared;
+use crate::storage::StorageBackend;
 
 impl Kernel {
     /// 以当前已解锁身份构造并签名 dm 信封。
@@ -172,17 +173,51 @@ impl Kernel {
     /// （同身份的其他设备；存储模型每 rootId 一条记录，当前至多一台，按
     /// 列表返回以为多设备留口）。
     pub(crate) fn self_device_peers(&self, my_root_id: &str) -> Result<Vec<PeerNodeInfo>> {
-        let friends = ContactService::overview(self.require_storage()?, "personal")?.friends;
         let local_peer_id = self
             .p2p_status()
             .ok()
             .flatten()
             .and_then(|info| info.peer_id);
-        Ok(self_device_peer_infos(
+        // 自愈：自记录被历史 pdsync 互灌污染指向本机时，先按设备清单改写回
+        // 对端设备再走常规提取——修复成功投递目标即恢复（自愈写 bump pmeta
+        // 属正常演进，该键对称排除于折叠/增量，不传播）
+        if let Some(local) = local_peer_id.as_deref()
+            && let Ok(storage) = self.require_storage()
+        {
+            heal_self_pointing_friend_record(
+                &mut storage.clone(),
+                my_root_id,
+                local,
+                local,
+                system_now_ms(),
+            );
+        }
+        let storage = self.require_storage()?;
+        let friends = ContactService::overview(storage, "personal")?.friends;
+        let peers = self_device_peer_infos(
             friends,
             my_root_id,
             local_peer_id.as_deref(),
-        ))
+        );
+        // 回退：FriendRecord 内 peer 缺失（配对后尚未落库 / pdsync 互灌擦除）
+        // 时直接从 DeviceService::list 取配对设备 peerId 兜底，避免自消息投递
+        // 因 self_device_peer_infos 返回空而静默丢弃。
+        if !peers.is_empty() {
+            return Ok(peers);
+        }
+        if let Some(local) = local_peer_id.as_deref() {
+            if let Ok(devices) = crate::device::DeviceService::list(storage) {
+                return Ok(devices
+                    .into_iter()
+                    .filter(|r| !r.peer_id.trim().is_empty() && r.peer_id != local)
+                    .map(|r| PeerNodeInfo {
+                        peer_id: Some(r.peer_id),
+                        addresses: Vec::new(),
+                    })
+                    .collect());
+            }
+        }
+        Ok(Vec::new())
     }
 
     /// 向所有已配对设备尽力投递 dm 信封（自消息/自回执的「同步到其他节点」
@@ -342,12 +377,6 @@ impl Kernel {
         let Ok(storage) = self.require_storage() else {
             return;
         };
-        let Ok(Some(friend)) = ContactService::get_friend(storage, &root_id) else {
-            return;
-        };
-        let Some(peer) = friend.peer else {
-            return;
-        };
         let body = serde_json::json!({
             "nickname": nickname,
             "avatar": avatar,
@@ -356,14 +385,38 @@ impl Kernel {
             "signature": signature,
             "updatedAt": updated_at,
         });
-        let Ok(envelope) = self.build_dm_envelope(KIND_PROFILE_SYNC, &root_id, body) else {
-            return;
-        };
-        let target = PeerNodeInfo {
-            peer_id: (!peer.peer_id.is_empty()).then_some(peer.peer_id),
-            addresses: peer.addresses,
-        };
-        self.spawn_deliveries(vec![(target, envelope)]);
+        // 优先用自 FriendRecord 的 peer 单播（已配对设备最快路径）；
+        // 若无 peer（历史记录不含寻址信息），回退 self_device_peers
+        // 逐设备广播（含自愈 self-pointing），避免静默投递失败。
+        let deliveries: Vec<(PeerNodeInfo, Value)> =
+            match ContactService::get_friend(storage, &root_id) {
+                Ok(Some(friend)) if friend.peer.is_some() => {
+                    let peer = friend.peer.unwrap();
+                    let target = PeerNodeInfo {
+                        peer_id: (!peer.peer_id.is_empty()).then_some(peer.peer_id),
+                        addresses: peer.addresses,
+                    };
+                    match self.build_dm_envelope(KIND_PROFILE_SYNC, &root_id, body) {
+                        Ok(envelope) => vec![(target, envelope)],
+                        Err(_) => Vec::new(),
+                    }
+                }
+                _ => {
+                    // peer 缺失/不存在：用 self_device_peers（含自愈）兜底
+                    let peers = self
+                        .self_device_peers(&root_id)
+                        .unwrap_or_default();
+                    peers
+                        .into_iter()
+                        .filter_map(|peer| {
+                            self.build_dm_envelope(KIND_PROFILE_SYNC, &root_id, body.clone())
+                                .ok()
+                                .map(|envelope| (peer, envelope))
+                        })
+                        .collect()
+                }
+            };
+        self.spawn_deliveries(deliveries);
     }
 
     /// 把资料镜像写入 sled `profile:self`（pdsync P2）。
@@ -396,7 +449,19 @@ impl Kernel {
         let Ok(storage) = self.require_storage_mut() else {
             return;
         };
-        let _ = crate::sync::put_personal(storage, &node_id, key, &json, now);
+        let old_ts = crate::sync::personal::get_personal_meta(storage, key)
+            .ok()
+            .flatten()
+            .map(|m| m.ts);
+        let meta = crate::sync::put_personal(storage, &node_id, key, &json, now);
+        if let Ok(m) = meta {
+            log::info!(
+                "[PROFILE_CHAIN] sled mirror written | pmeta.ts old={:?} new={} vv={:?}",
+                old_ts,
+                m.ts,
+                m.vv,
+            );
+        }
     }
 
     /// 通讯录快照广播：本机联系人数据变更后向自设备（自 FriendRecord 的
@@ -415,22 +480,32 @@ impl Kernel {
         let Ok(body) = crate::contact::build_contact_sync_snapshot(storage, &root_id) else {
             return;
         };
-        let Ok(envelope) = self.build_dm_envelope(KIND_CONTACT_SYNC, &root_id, body) else {
-            return;
-        };
-        // 仅投自设备：rootId==自己 且带 peer 寻址的朋友记录（配对设备）
-        let deliveries: Vec<(PeerNodeInfo, Value)> = ContactService::get_friend(storage, &root_id)
-            .ok()
-            .flatten()
-            .and_then(|friend| friend.peer)
-            .map(|peer| {
-                let target = PeerNodeInfo {
-                    peer_id: (!peer.peer_id.is_empty()).then_some(peer.peer_id),
-                    addresses: peer.addresses,
-                };
-                vec![(target, envelope)]
-            })
-            .unwrap_or_default();
+        // 优先用自 FriendRecord 的 peer 单播；peer 缺失时回退 self_device_peers
+        let deliveries: Vec<(PeerNodeInfo, Value)> =
+            match ContactService::get_friend(storage, &root_id) {
+                Ok(Some(friend)) if friend.peer.is_some() => {
+                    let peer = friend.peer.unwrap();
+                    let target = PeerNodeInfo {
+                        peer_id: (!peer.peer_id.is_empty()).then_some(peer.peer_id),
+                        addresses: peer.addresses,
+                    };
+                    match self.build_dm_envelope(KIND_CONTACT_SYNC, &root_id, body) {
+                        Ok(envelope) => vec![(target, envelope)],
+                        Err(_) => Vec::new(),
+                    }
+                }
+                _ => {
+                    let Ok(envelope) = self.build_dm_envelope(KIND_CONTACT_SYNC, &root_id, body)
+                    else {
+                        return;
+                    };
+                    self.self_device_peers(&root_id)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|peer| (peer, envelope.clone()))
+                        .collect()
+                }
+            };
         self.spawn_deliveries(deliveries);
     }
 
@@ -449,21 +524,32 @@ impl Kernel {
         let Ok(body) = crate::message::build_conv_sync_snapshot(storage) else {
             return;
         };
-        let Ok(envelope) = self.build_dm_envelope(KIND_CONV_SYNC, &root_id, body) else {
-            return;
-        };
-        let deliveries: Vec<(PeerNodeInfo, Value)> = ContactService::get_friend(storage, &root_id)
-            .ok()
-            .flatten()
-            .and_then(|friend| friend.peer)
-            .map(|peer| {
-                let target = PeerNodeInfo {
-                    peer_id: (!peer.peer_id.is_empty()).then_some(peer.peer_id),
-                    addresses: peer.addresses,
-                };
-                vec![(target, envelope)]
-            })
-            .unwrap_or_default();
+        // 优先用自 FriendRecord 的 peer 单播；peer 缺失时回退 self_device_peers
+        let deliveries: Vec<(PeerNodeInfo, Value)> =
+            match ContactService::get_friend(storage, &root_id) {
+                Ok(Some(friend)) if friend.peer.is_some() => {
+                    let peer = friend.peer.unwrap();
+                    let target = PeerNodeInfo {
+                        peer_id: (!peer.peer_id.is_empty()).then_some(peer.peer_id),
+                        addresses: peer.addresses,
+                    };
+                    match self.build_dm_envelope(KIND_CONV_SYNC, &root_id, body) {
+                        Ok(envelope) => vec![(target, envelope)],
+                        Err(_) => Vec::new(),
+                    }
+                }
+                _ => {
+                    let Ok(envelope) = self.build_dm_envelope(KIND_CONV_SYNC, &root_id, body)
+                    else {
+                        return;
+                    };
+                    self.self_device_peers(&root_id)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|peer| (peer, envelope.clone()))
+                        .collect()
+                }
+            };
         self.spawn_deliveries(deliveries);
     }
 
@@ -612,18 +698,46 @@ impl PluginHostShared {
     /// 见 [`Kernel::self_device_peers`]（存储来源换为宿主镜像格）。
     fn self_device_peers(&self, my_root_id: &str) -> Result<Vec<PeerNodeInfo>> {
         let storage = self.require_storage()?;
-        let friends = ContactService::overview(&storage, "personal")?.friends;
         let local_peer_id = self
             .p2p_node
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .as_ref()
             .map(|node| node.peer_id().to_string());
-        Ok(self_device_peer_infos(
+        // 自愈：同 Kernel::self_device_peers（自指污染记录先按设备清单改写）
+        if let Some(local) = local_peer_id.as_deref() {
+            heal_self_pointing_friend_record(
+                &mut storage.clone(),
+                my_root_id,
+                local,
+                local,
+                system_now_ms(),
+            );
+        }
+        let friends = ContactService::overview(&storage, "personal")?.friends;
+        let peers = self_device_peer_infos(
             friends,
             my_root_id,
             local_peer_id.as_deref(),
-        ))
+        );
+        // 回退：FriendRecord 内 peer 缺失时，直接从 DeviceService::list 取
+        // 配对设备 peerId 兜底（对齐 Kernel::self_device_peers 回退语义）
+        if !peers.is_empty() {
+            return Ok(peers);
+        }
+        if let Some(local) = local_peer_id.as_deref() {
+            if let Ok(devices) = crate::device::DeviceService::list(&storage) {
+                return Ok(devices
+                    .into_iter()
+                    .filter(|r| !r.peer_id.trim().is_empty() && r.peer_id != local)
+                    .map(|r| PeerNodeInfo {
+                        peer_id: Some(r.peer_id),
+                        addresses: Vec::new(),
+                    })
+                    .collect());
+            }
+        }
+        Ok(Vec::new())
     }
 
     /// 见 [`Kernel::build_dm_envelope`]（签名私钥来源换为解锁期共享格；
@@ -688,6 +802,59 @@ fn self_device_peer_infos(
         .collect()
 }
 
+/// 自记录污染自愈：自 FriendRecord 的 peer 被历史 pdsync 互灌污染指向本机
+/// （`peer_id == local_peer_id`）时，从设备清单取另一台配对设备的 peerId 重写
+/// 该记录（走 [`ContactService::upsert_friend_pdsync`]，保持 pdsync 口径——
+/// 自愈写 bump pmeta 属正常演进；该键对称排除于折叠/增量，重写不会传播）。
+///
+/// 同时覆盖自 FriendRecord 的 peer 为 `None` 的场景（设备配对后 peer 尚未落库），
+/// 从 `DeviceService::list` 取另一台设备填入——避免 deliver_to_devices 因 peer
+/// 缺失而静默丢弃投递。
+///
+/// 正确 peer 值来源：`DeviceService` 的配对设备记录（`list` 按 last_seen 降序，
+/// 取最近在线的非本机设备）。旧 addresses 属于被污染的值（指向本机监听地址），
+/// 一并清除——已连接时 dm_direct 按 peerId 短路直发，未连接由保活候选的
+/// DeviceRecord 来源兜底补拨。
+///
+/// 返回修复后的投递目标；记录非自指 / 无对端设备记录 / 存储失败时返回
+/// `None`（调用方保持 6aca43f 的过滤现状，防御不变）。幂等：修复后记录
+/// 不再自指，重复调用为空操作。
+pub(crate) fn heal_self_pointing_friend_record<S: StorageBackend>(
+    storage: &mut S,
+    my_root_id: &str,
+    local_peer_id: &str,
+    node_id: &str,
+    now_ms: i64,
+) -> Option<PeerNodeInfo> {
+    let friend = ContactService::get_friend(storage, my_root_id).ok()??;
+    // 已有正确 peer 且非自指：无需自愈
+    if let Some(ref peer) = friend.peer {
+        if peer.peer_id != local_peer_id {
+            return None;
+        }
+    }
+    // peer 自指或 peer 缺失 → 需要自愈
+    let other = crate::device::DeviceService::list(storage)
+        .ok()?
+        .into_iter()
+        .find(|r| !r.peer_id.trim().is_empty() && r.peer_id != local_peer_id)?;
+    let mut friend = friend;
+    friend.peer = Some(PeerRef {
+        peer_id: other.peer_id.clone(),
+        addresses: Vec::new(),
+    });
+    friend.updated_at = now_ms;
+    ContactService::upsert_friend_pdsync(storage, &friend, now_ms, node_id).ok()?;
+    eprintln!(
+        "[deliver-to-devices] self-heal self-pointing friend record: rootId={} peer {} -> {}",
+        my_root_id, local_peer_id, other.peer_id
+    );
+    Some(PeerNodeInfo {
+        peer_id: Some(other.peer_id),
+        addresses: Vec::new(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -736,5 +903,104 @@ mod tests {
         let friends = vec![friend("root-self", "peer-local")];
         let peers = self_device_peer_infos(friends, "root-self", None);
         assert_eq!(peers.len(), 1, "本机 peerId 未知时不误杀");
+    }
+
+    fn device_record(peer_id: &str) -> crate::device::DeviceRecord {
+        crate::device::DeviceRecord {
+            peer_id: peer_id.to_string(),
+            device_name: "对端设备".to_string(),
+            os: "Android".to_string(),
+            arch: "aarch64".to_string(),
+            macs: Vec::new(),
+            updated_at: 100,
+            last_seen_at: 100,
+        }
+    }
+
+    /// 自愈：自指污染记录 + 设备清单有对端记录 → 记录改写指向对端并返回
+    /// 修复后的投递目标；幂等（二次调用空操作）。
+    #[test]
+    fn heal_self_pointing_record_rewrites_to_other_device() {
+        let mut storage = crate::storage::MemoryStorage::new();
+        let mut f = friend("root-self", "peer-local");
+        f.peer.as_mut().unwrap().addresses = vec!["/ip4/1.2.3.4/tcp/1".to_string()];
+        ContactService::upsert_friend_pdsync(&mut storage, &f, 100, "peer-local").unwrap();
+        crate::device::DeviceService::upsert_pdsync(
+            &mut storage,
+            &device_record("peer-local"),
+            100,
+            "peer-local",
+        )
+        .unwrap();
+        crate::device::DeviceService::upsert_pdsync(
+            &mut storage,
+            &device_record("peer-device-b"),
+            100,
+            "peer-local",
+        )
+        .unwrap();
+
+        let healed =
+            heal_self_pointing_friend_record(&mut storage, "root-self", "peer-local", "peer-local", 200)
+                .expect("有对端设备记录应自愈成功");
+        assert_eq!(healed.peer_id.as_deref(), Some("peer-device-b"));
+        // 落库验证：peer 指向对端，旧（指向本机的）地址清除
+        let stored = ContactService::get_friend(&storage, "root-self")
+            .unwrap()
+            .unwrap();
+        let peer = stored.peer.clone().unwrap();
+        assert_eq!(peer.peer_id, "peer-device-b");
+        assert!(peer.addresses.is_empty());
+        assert_eq!(stored.updated_at, 200);
+        // 修复后投递目标恢复（自指过滤不再拦）
+        let peers = self_device_peer_infos(vec![stored], "root-self", Some("peer-local"));
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].peer_id.as_deref(), Some("peer-device-b"));
+        // 幂等：不再自指，二次调用空操作
+        assert!(
+            heal_self_pointing_friend_record(&mut storage, "root-self", "peer-local", "peer-local", 300)
+                .is_none()
+        );
+    }
+
+    /// 自愈放弃路径：设备清单无对端记录 → None 且记录保持原样（过滤现状不变）；
+    /// 非自指记录不误判。
+    #[test]
+    fn heal_self_pointing_record_bails_without_other_device() {
+        let mut storage = crate::storage::MemoryStorage::new();
+        // 无设备记录：保持原样
+        let f = friend("root-self", "peer-local");
+        ContactService::upsert_friend_pdsync(&mut storage, &f, 100, "peer-local").unwrap();
+        assert!(
+            heal_self_pointing_friend_record(&mut storage, "root-self", "peer-local", "peer-local", 200)
+                .is_none()
+        );
+        let stored = ContactService::get_friend(&storage, "root-self")
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.peer.unwrap().peer_id, "peer-local", "无对端记录不得改写");
+        // 仅本机设备记录：同样放弃
+        crate::device::DeviceService::upsert_pdsync(
+            &mut storage,
+            &device_record("peer-local"),
+            100,
+            "peer-local",
+        )
+        .unwrap();
+        assert!(
+            heal_self_pointing_friend_record(&mut storage, "root-self", "peer-local", "peer-local", 200)
+                .is_none()
+        );
+        // 非自指记录：不触碰
+        let f = friend("root-self", "peer-device-b");
+        ContactService::upsert_friend_pdsync(&mut storage, &f, 100, "peer-local").unwrap();
+        assert!(
+            heal_self_pointing_friend_record(&mut storage, "root-self", "peer-local", "peer-local", 200)
+                .is_none()
+        );
+        let stored = ContactService::get_friend(&storage, "root-self")
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.peer.unwrap().peer_id, "peer-device-b");
     }
 }

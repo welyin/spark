@@ -180,7 +180,8 @@ pub(crate) fn mnemonic_check_inner(input: &str) -> MnemonicCheckInfo {
 }
 
 // ------------------------------------------------------------------
-// Tauri 命令（同步 command → Tauri 自动放到线程池，满足内核线程模型）
+// Tauri 命令（CPU 密集/重 IO 的一律 async + run_kernel 挪阻塞线程池，
+// 避免占用主线程；轻量查询保持同步 command）
 // ------------------------------------------------------------------
 
 /// 内核命令的阻塞执行器：scrypt 等 CPU 密集操作（unlock/init/recover 的 KDF）
@@ -304,7 +305,7 @@ pub async fn root_reveal_mnemonic(
 }
 
 #[tauri::command]
-pub fn root_update_profile(
+pub async fn root_update_profile(
     state: tauri::State<'_, KernelState>,
     nickname: Option<String>,
     avatar: Option<String>,
@@ -312,14 +313,26 @@ pub fn root_update_profile(
     region: Option<String>,
     signature: Option<String>,
 ) -> Result<ProfileInfo, String> {
-    update_profile_inner(
-        &mut *lock_kernel(&state)?,
-        nickname.as_deref(),
-        avatar.as_deref(),
-        gender.as_deref(),
-        region.as_deref(),
-        signature.as_deref(),
-    )
+    println!(
+        "[CMD] root_update_profile ENTRY | nickname={:?} signature={:?}",
+        nickname, signature
+    );
+    let result = run_kernel(state, move |kernel| {
+        update_profile_inner(
+            kernel,
+            nickname.as_deref(),
+            avatar.as_deref(),
+            gender.as_deref(),
+            region.as_deref(),
+            signature.as_deref(),
+        )
+    })
+    .await;
+    match &result {
+        Ok(info) => println!("[CMD] root_update_profile OK | nickname={:?}", info.nickname),
+        Err(e) => println!("[CMD] root_update_profile ERR | {e}"),
+    }
+    result
 }
 
 #[tauri::command]

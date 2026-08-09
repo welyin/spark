@@ -1,4 +1,4 @@
-//! pdsync 个人域同步协议（P3）：三信封反熵。
+﻿//! pdsync 个人域同步协议（P3）：三信封反熵。
 //!
 //! 复用 org-pull 的反熵模式，信封走 dm 直连（`from == to == 自己 rootId`）。
 //! 三个 kind：
@@ -286,15 +286,20 @@ pub fn build_hello<S: StorageBackend>(
     msg_window_max_per_conv: usize,
     attachment_policy: &str,
     exclude_key: Option<&str>,
+    last_msg_sync_at: Option<i64>,
 ) -> crate::sync::SyncResult<Value> {
-    Ok(json!({
+    let mut hello = json!({
         "categories": collect_all_categories(storage, exclude_key)?,
         "msgWindow": {
             "maxAgeMs": msg_window_max_age_ms,
             "maxPerConv": msg_window_max_per_conv,
         },
         "attachmentPolicy": attachment_policy,
-    }))
+    });
+    if let Some(at) = last_msg_sync_at {
+        hello["lastMsgSyncAt"] = json!(at);
+    }
+    Ok(hello)
 }
 
 /// 解析 hello 的 categories 摘要 → category 名 → 折叠 vv。
@@ -375,15 +380,18 @@ pub struct MessageWindow {
     pub max_per_conv: usize,
     /// 窗口时间下界（毫秒，相对当前时间）。
     pub max_age_ms: i64,
+    /// 对端上次收到 pdsync-data 的时间：仅推送晚于此时间的新消息。
+    /// `None` 表示首轮同步，推完整窗口。
+    pub msg_sync_after: Option<i64>,
 }
 
 impl MessageWindow {
     /// 默认窗口（对齐文档 §6：500 条 / 30 天）。
     pub fn default_() -> Self {
-        Self { max_per_conv: 500, max_age_ms: 30 * 24 * 3600 * 1000 }
+        Self { max_per_conv: 500, max_age_ms: 30 * 24 * 3600 * 1000, msg_sync_after: None }
     }
 
-    /// 从 hello 的 `msgWindow` 解析；缺失或无效回退默认。
+    /// 从 hello 的 `msgWindow` + `lastMsgSyncAt` 解析；缺失或无效回退默认。
     pub fn from_hello(body: &Value) -> Self {
         let mut w = Self::default_();
         if let Some(mw) = body.get("msgWindow") {
@@ -396,12 +404,15 @@ impl MessageWindow {
                 w.max_age_ms = n.clamp(0, i64::MAX);
             }
         }
+        if let Some(at) = body.get("lastMsgSyncAt").and_then(Value::as_i64) {
+            w.msg_sync_after = (at >= 0).then_some(at);
+        }
         w
     }
 
     /// "全部"窗口：条数与时间都极大（设备声明收齐完整历史）。
     pub fn all() -> Self {
-        Self { max_per_conv: usize::MAX, max_age_ms: i64::MAX }
+        Self { max_per_conv: usize::MAX, max_age_ms: i64::MAX, msg_sync_after: None }
     }
 }
 
@@ -456,8 +467,10 @@ pub fn collect_message_window<S: StorageBackend>(
 ) -> crate::sync::SyncResult<Vec<PdsyncRecord>> {
     // max_age_ms 双保险钳制（from_hello 已钳，直接构造的窗口也安全）；
     // saturating_sub 防 now < max_age_ms 时下溢
-    let lower_bound = crate::p2p::node::system_now_ms()
+    let age_lower = crate::p2p::node::system_now_ms()
         .saturating_sub(window.max_age_ms.clamp(0, i64::MAX));
+    // msg_sync_after：对端声明上次同步时间，取 max 得到有效下界
+    let lower_bound = std::cmp::max(age_lower, window.msg_sync_after.unwrap_or(0));
     let mut out = Vec::new();
     for (conv_key, _) in storage.scan(&ScanOptions::prefix("msg:conv:personal:"))? {
         let Some(conv_id) = conv_key.strip_prefix("msg:conv:personal:") else {
@@ -544,6 +557,35 @@ pub fn apply_message_record<S: StorageBackend>(
         crate::storage::BatchOperation::put(key, raw),
         crate::storage::BatchOperation::put(&idx, key),
     ])?;
+    Ok(())
+}
+
+// ── lastMsgSyncAt 读写 ──────────────────────────────────────────────
+
+/// pdsync 上次收到对端数据的时间戳（毫秒）。
+const LAST_MSG_SYNC_KEY_PREFIX: &str = "pdsync:last_msg_at:";
+
+fn last_msg_sync_key(root_id: &str) -> String {
+    format!("{LAST_MSG_SYNC_KEY_PREFIX}{root_id}")
+}
+
+/// 读取对端 device 上次收到本机 pdsync-data 的时间。
+/// 无记录返回 `None`（首轮同步推完整窗口）。
+pub fn get_last_msg_sync_at<S: StorageBackend>(storage: &S, root_id: &str) -> Option<i64> {
+    storage
+        .get(&last_msg_sync_key(root_id))
+        .ok()
+        .flatten()
+        .and_then(|v| v.trim().parse::<i64>().ok())
+}
+
+/// 记录本机本次收到对端 device pdsync-data 的时间。
+pub fn set_last_msg_sync_at<S: StorageBackend>(
+    storage: &mut S,
+    root_id: &str,
+    at_ms: i64,
+) -> crate::sync::SyncResult<()> {
+    storage.put(&last_msg_sync_key(root_id), &at_ms.to_string())?;
     Ok(())
 }
 
@@ -687,7 +729,7 @@ mod tests {
         let mut s = MemoryStorage::new();
         put_personal(&mut s, NODE_A, &format!("{FRIEND_PREFIX}a"), "1", 1000).unwrap();
 
-        let hello = build_hello(&s, 2_592_000_000, 500, "eager", None).unwrap();
+        let hello = build_hello(&s, 2_592_000_000, 500, "eager", None, None).unwrap();
         let cats = parse_hello_categories(&hello);
         let friend_vv = cats.get("ct:friend").unwrap();
         assert_eq!(friend_vv.get(NODE_A), Some(&1));
@@ -829,7 +871,7 @@ mod tests {
         .unwrap();
 
         // A → B：A 领先（B 缺 A 的 3 条），B 发 need，A 回 data，B 应用
-        let hello_a = build_hello(&a, 2_592_000_000, 500, "eager", None).unwrap();
+        let hello_a = build_hello(&a, 2_592_000_000, 500, "eager", None, None).unwrap();
         let responses = exchange(&a, &mut b, &hello_a, None);
         for data in &responses {
             let (_, records) = parse_data(data).unwrap();
@@ -842,7 +884,7 @@ mod tests {
         assert_eq!(collect_category_vv(&b, category_friend(), None).unwrap().get(NODE_B), Some(&1));
 
         // 反向 B → A：A 缺 b0，B 领先，A 发 need，B 回 data，A 应用
-        let hello_b = build_hello(&b, 2_592_000_000, 500, "eager", None).unwrap();
+        let hello_b = build_hello(&b, 2_592_000_000, 500, "eager", None, None).unwrap();
         let responses_b = exchange(&b, &mut a, &hello_b, None);
         for data in &responses_b {
             let (_, records) = parse_data(data).unwrap();
@@ -854,10 +896,10 @@ mod tests {
         assert_eq!(collect_category_vv(&a, category_friend(), None).unwrap().get(NODE_B), Some(&1));
 
         // 收敛后再互发 hello → 均 Equal，无新响应
-        let hello_a2 = build_hello(&a, 2_592_000_000, 500, "eager", None).unwrap();
+        let hello_a2 = build_hello(&a, 2_592_000_000, 500, "eager", None, None).unwrap();
         let responses_a2 = exchange(&a, &mut b, &hello_a2, None);
         assert!(responses_a2.is_empty(), "收敛后不应有 need/data");
-        let hello_b2 = build_hello(&b, 2_592_000_000, 500, "eager", None).unwrap();
+        let hello_b2 = build_hello(&b, 2_592_000_000, 500, "eager", None, None).unwrap();
         let responses_b2 = exchange(&b, &mut a, &hello_b2, None);
         assert!(responses_b2.is_empty(), "收敛后不应有 need/data");
     }
@@ -908,7 +950,7 @@ mod tests {
 
         // A → B 交换：B 落后于 A 的 profile（A 先写），并发于 conv（各自改不同
         // 字段）。双向交换后双方各取所需。
-        let hello_a = build_hello(&a, 2_592_000_000, 500, "eager", None).unwrap();
+        let hello_a = build_hello(&a, 2_592_000_000, 500, "eager", None, None).unwrap();
         let responses = exchange(&a, &mut b, &hello_a, None);
         for data in responses {
             let (_, records) = parse_data(&data).unwrap();
@@ -917,7 +959,7 @@ mod tests {
             }
         }
         // B → A 反向
-        let hello_b = build_hello(&b, 2_592_000_000, 500, "eager", None).unwrap();
+        let hello_b = build_hello(&b, 2_592_000_000, 500, "eager", None, None).unwrap();
         let responses_b = exchange(&b, &mut a, &hello_b, None);
         for data in responses_b {
             let (_, records) = parse_data(&data).unwrap();
@@ -943,7 +985,7 @@ mod tests {
         let profile_raw = get_personal_meta(&a, profile_key).unwrap().unwrap();
         assert_eq!(profile_raw.vv.get(NODE_B), Some(&1));
         // 收敛后再互发 hello → 无新响应
-        let hello_a2 = build_hello(&a, 2_592_000_000, 500, "eager", None).unwrap();
+        let hello_a2 = build_hello(&a, 2_592_000_000, 500, "eager", None, None).unwrap();
         assert!(exchange(&a, &mut b, &hello_a2, None).is_empty(), "profile/conv 收敛后无增量");
     }
 
@@ -984,7 +1026,7 @@ mod tests {
             s.put(&key, &val).unwrap();
         }
         // 窗口：每 conv 3 条，时间全收 → 取最新 3 条（m2,m3,m4）
-        let w = MessageWindow { max_per_conv: 3, max_age_ms: i64::MAX };
+        let w = MessageWindow { max_per_conv: 3, max_age_ms: i64::MAX, msg_sync_after: None };
         let recs = collect_message_window(&s, &w).unwrap();
         assert_eq!(recs.len(), 3);
         // 最新 3 条是 m2,m3,m4
@@ -1014,7 +1056,7 @@ mod tests {
             s.put(&key, &message_json(&format!("m{i}"), now + off, false))
                 .unwrap();
         }
-        let w = MessageWindow { max_per_conv: 100, max_age_ms: hour };
+        let w = MessageWindow { max_per_conv: 100, max_age_ms: hour, msg_sync_after: None };
         let recs = collect_message_window(&s, &w).unwrap();
         let ids: Vec<&str> = recs
             .iter()
@@ -1099,7 +1141,7 @@ mod tests {
         let key = crate::message::types::app_message_key("personal", "plug", now, "am1");
         a.put(&key, &app_message_json("am1", "plug", now)).unwrap();
 
-        let w = MessageWindow { max_per_conv: 100, max_age_ms: i64::MAX };
+        let w = MessageWindow { max_per_conv: 100, max_age_ms: i64::MAX, msg_sync_after: None };
         let recs = collect_message_window(&a, &w).unwrap();
         assert_eq!(recs.len(), 1, "msg:app 应随窗口采集");
         assert_eq!(recs[0].key, key);
@@ -1128,7 +1170,7 @@ mod tests {
         let ak = crate::message::types::app_message_key("personal", "plug", now, "a1");
         s.put(&ak, &app_message_json("a1", "plug", now)).unwrap();
 
-        let w = MessageWindow { max_per_conv: 100, max_age_ms: i64::MAX };
+        let w = MessageWindow { max_per_conv: 100, max_age_ms: i64::MAX, msg_sync_after: None };
         let recs = collect_message_window(&s, &w).unwrap();
         let keys: Vec<&str> = recs.iter().map(|r| r.key.as_str()).collect();
         assert!(keys.contains(&ik.as_str()), "缺 msg:item 记录");
@@ -1205,7 +1247,7 @@ mod tests {
         put_personal(&mut a, NODE_A, &key, r#""v1""#, 1000).unwrap();
 
         // 第一轮：A → B，B 获得记录
-        let hello_a = build_hello(&a, 2_592_000_000, 500, "eager", None).unwrap();
+        let hello_a = build_hello(&a, 2_592_000_000, 500, "eager", None, None).unwrap();
         for data in exchange(&a, &mut b, &hello_a, None) {
             let (_, records) = parse_data(&data).unwrap();
             for r in records {
@@ -1219,7 +1261,7 @@ mod tests {
         delete_personal(&mut a, NODE_A, &key, 2000).unwrap();
 
         // 第二轮：墓碑随增量推给 B → B 删本体 + 落墓碑 pmeta
-        let hello_a2 = build_hello(&a, 2_592_000_000, 500, "eager", None).unwrap();
+        let hello_a2 = build_hello(&a, 2_592_000_000, 500, "eager", None, None).unwrap();
         let responses = exchange(&a, &mut b, &hello_a2, None);
         assert!(!responses.is_empty(), "B 落后应触发 need→data");
         for data in responses {
@@ -1235,9 +1277,9 @@ mod tests {
         assert_eq!(pmeta.vv.get(NODE_A), Some(&2));
 
         // 收敛：双方折叠 vv 一致，再交换无增量
-        let hello_b = build_hello(&b, 2_592_000_000, 500, "eager", None).unwrap();
+        let hello_b = build_hello(&b, 2_592_000_000, 500, "eager", None, None).unwrap();
         assert!(exchange(&b, &mut a, &hello_b, None).is_empty(), "墓碑收敛后无增量");
-        let hello_a3 = build_hello(&a, 2_592_000_000, 500, "eager", None).unwrap();
+        let hello_a3 = build_hello(&a, 2_592_000_000, 500, "eager", None, None).unwrap();
         assert!(exchange(&a, &mut b, &hello_a3, None).is_empty(), "墓碑收敛后无增量");
     }
 
@@ -1265,7 +1307,7 @@ mod tests {
         b.put(&bk, &message_json("b0", now, false)).unwrap();
 
         // A → B：按 B 的窗口采集 A 的消息，apply 到 B
-        let window = MessageWindow { max_per_conv: 100, max_age_ms: i64::MAX };
+        let window = MessageWindow { max_per_conv: 100, max_age_ms: i64::MAX, msg_sync_after: None };
         let a_recs = collect_message_window(&a, &window).unwrap();
         for r in &a_recs {
             apply_message_record(&mut b, &r.key, &r.value.to_string()).unwrap();
@@ -1338,7 +1380,7 @@ mod tests {
         .unwrap();
 
         // A → B 交换
-        let hello_a = build_hello(&a, 2_592_000_000, 500, "eager", None).unwrap();
+        let hello_a = build_hello(&a, 2_592_000_000, 500, "eager", None, None).unwrap();
         let responses = exchange(&a, &mut b, &hello_a, None);
         for data in responses {
             let (_, records) = parse_data(&data).unwrap();
@@ -1347,7 +1389,7 @@ mod tests {
             }
         }
         // B → A 反向
-        let hello_b = build_hello(&b, 2_592_000_000, 500, "eager", None).unwrap();
+        let hello_b = build_hello(&b, 2_592_000_000, 500, "eager", None, None).unwrap();
         let responses_b = exchange(&b, &mut a, &hello_b, None);
         for data in responses_b {
             let (_, records) = parse_data(&data).unwrap();
@@ -1393,7 +1435,7 @@ mod tests {
         .unwrap();
 
         // A → B
-        let hello_a = build_hello(&a, 2_592_000_000, 500, "eager", None).unwrap();
+        let hello_a = build_hello(&a, 2_592_000_000, 500, "eager", None, None).unwrap();
         let responses = exchange(&a, &mut b, &hello_a, None);
         for data in responses {
             let (_, records) = parse_data(&data).unwrap();
@@ -1405,7 +1447,7 @@ mod tests {
         assert!(b.get(tags_key).unwrap().is_some(), "B 缺组织标签");
         assert!(b.get(tree_key).unwrap().is_some(), "B 缺组织分组树");
         // 收敛后无增量
-        let hello_a2 = build_hello(&a, 2_592_000_000, 500, "eager", None).unwrap();
+        let hello_a2 = build_hello(&a, 2_592_000_000, 500, "eager", None, None).unwrap();
         assert!(exchange(&a, &mut b, &hello_a2, None).is_empty(), "ct:org 收敛后无增量");
     }
 
@@ -1455,14 +1497,14 @@ mod tests {
         assert_eq!(folded_b_raw.get(NODE_B), Some(&1));
 
         // A → B、B → A 各一轮 hello→need→data（两侧同一排除键）
-        let hello_a = build_hello(&a, 2_592_000_000, 500, "eager", Some(&self_key)).unwrap();
+        let hello_a = build_hello(&a, 2_592_000_000, 500, "eager", Some(&self_key), None).unwrap();
         for data in exchange(&a, &mut b, &hello_a, Some(&self_key)) {
             let (_, records) = parse_data(&data).unwrap();
             for r in records {
                 let _ = apply_personal_remote(&mut b, &r.key, &r.value.to_string(), &r.meta).unwrap();
             }
         }
-        let hello_b = build_hello(&b, 2_592_000_000, 500, "eager", Some(&self_key)).unwrap();
+        let hello_b = build_hello(&b, 2_592_000_000, 500, "eager", Some(&self_key), None).unwrap();
         for data in exchange(&b, &mut a, &hello_b, Some(&self_key)) {
             let (_, records) = parse_data(&data).unwrap();
             for r in records {
@@ -1479,9 +1521,9 @@ mod tests {
         assert!(b.get(&friend_key).unwrap().is_some(), "普通朋友记录应同步");
 
         // 收敛：折叠 vv 一致，再交换无 need/data（无伪 diff）
-        let hello_a2 = build_hello(&a, 2_592_000_000, 500, "eager", Some(&self_key)).unwrap();
+        let hello_a2 = build_hello(&a, 2_592_000_000, 500, "eager", Some(&self_key), None).unwrap();
         assert!(exchange(&a, &mut b, &hello_a2, Some(&self_key)).is_empty(), "A→B 收敛无增量");
-        let hello_b2 = build_hello(&b, 2_592_000_000, 500, "eager", Some(&self_key)).unwrap();
+        let hello_b2 = build_hello(&b, 2_592_000_000, 500, "eager", Some(&self_key), None).unwrap();
         assert!(exchange(&b, &mut a, &hello_b2, Some(&self_key)).is_empty(), "B→A 收敛无增量");
     }
 

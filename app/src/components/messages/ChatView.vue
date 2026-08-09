@@ -165,7 +165,11 @@ export default defineComponent({
     const { isLocalOnly } = useNetworkStatus();
     const localOnlyHintDismissed = ref(false);
 
-    const conversation = computed(() => getConversation(props.spaceKey, props.conversationId));
+    const conversation = computed(() => {
+      const c = getConversation(props.spaceKey, props.conversationId);
+      console.log('[ChatView computed] conversation:', c?.id, 'hasConversation=', !!c);
+      return c;
+    });
     const messages = computed(() => getMessages(props.spaceKey, props.conversationId));
 
     // 联系人是否已被删除：direct 会话且 peerId 已不在通讯录（friendOf 返回 undefined）。
@@ -255,7 +259,8 @@ export default defineComponent({
     // 新消息到达：若会话正打开则保持已读，并滚动到底部（应用会话同理）
     watch(
       () => [messages.value.length, appMessages.value.length],
-      () => {
+      ([len]) => {
+        console.log('[ChatView watcher] messages.length changed to', len, 'convId=', props.conversationId);
         markRead(props.spaceKey, props.conversationId);
         scrollToBottom();
       }

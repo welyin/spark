@@ -35,13 +35,14 @@ impl Kernel {
     ) -> Result<InitIdentityResult> {
         check_password(password)?;
         let mnemonic = identity::generate_mnemonic()?;
-        let (file, identity) = identity::recover_identity(&mnemonic, password, nickname, avatar)?;
+        let (file, identity, key) =
+            identity::recover_identity_and_key(&mnemonic, password, nickname, avatar)?;
         let seed = identity::parse_mnemonic(&mnemonic)?.seed;
         self.write_identity_file(&file)?;
         self.write_active_root_id(&file.root_id)?;
         self.align_storage(&file.root_id)?;
         let root_id = file.root_id.clone();
-        self.set_unlocked(identity, seed, password);
+        self.set_unlocked(identity, seed, password, Some(key));
         self.ensure_p2p_after_login();
         Ok(InitIdentityResult { root_id, mnemonic })
     }
@@ -63,8 +64,8 @@ impl Kernel {
                 identity::migrate_v1_to_v2(&file, password).map_err(map_identity_decrypt_error)?;
             self.write_identity_file(&file)?;
         }
-        let (payload, identity) =
-            identity::unlock_identity(&file, password).map_err(map_identity_decrypt_error)?;
+        let (payload, identity, session_key) =
+            identity::unlock_identity_and_key(&file, password).map_err(map_identity_decrypt_error)?;
         if identity.id() != file.root_id {
             return Err(KernelError::Internal(
                 "Root identity verification failed".to_string(),
@@ -75,10 +76,11 @@ impl Kernel {
         self.align_storage(&file.root_id)?;
         // P2 反向回写（§5.5）：锁定期间 pdsync 可能已把更新的资料合入 sled
         // `profile:self` 镜像——sled 较身份文件新时以 sled 覆盖身份文件资料
-        // （口令重封）。须在 set_unlocked 前完成，保证共享格读到最新资料。
-        self.apply_sled_profile_to_identity(&mut file, password);
+        // （会话密钥重封，沿用既有 salt，会话密钥保持有效）。须在 set_unlocked
+        // 前完成，保证共享格读到最新资料。
+        self.apply_sled_profile_to_identity(&mut file, password, session_key.as_ref());
         let root_id = file.root_id.clone();
-        self.set_unlocked(identity, seed, password);
+        self.set_unlocked(identity, seed, password, session_key);
         self.ensure_p2p_after_login();
         // P2：存量资料迁移——sled `profile:self` 为空但身份文件有资料时，首次
         // unlock 一次性写入 sled（幂等）。此后以 sled 为 pdsync 读源。
@@ -93,9 +95,16 @@ impl Kernel {
 
     /// P2 反向回写（§5.5）：锁定态下 pdsync 合入只更新 sled `profile:self`
     /// 镜像；unlock 时若 sled 资料较身份文件新（pmeta ts > 文件 updatedAt），
-    /// 以 sled 覆盖身份文件资料字段（口令重封，原子落盘）。sled 缺失/不更
-    /// 新/任一步失败均静默跳过（身份文件保持原样，后续 pdsync 再收敛）。
-    fn apply_sled_profile_to_identity(&self, file: &mut IdentityFile, password: &str) {
+    /// 以 sled 覆盖身份文件资料字段（优先以会话密钥重封——沿用既有 salt、免
+    /// 重跑 scrypt，且保持缓存密钥有效；v1 遗留无密钥时退回口令重封，原子
+    /// 落盘）。sled 缺失/不更新/任一步失败均静默跳过（身份文件保持原样，
+    /// 后续 pdsync 再收敛）。
+    fn apply_sled_profile_to_identity(
+        &self,
+        file: &mut IdentityFile,
+        password: &str,
+        session_key: Option<&[u8; identity::crypto::KEY_LEN]>,
+    ) {
         let Ok(storage) = self.require_storage() else {
             return;
         };
@@ -115,20 +124,34 @@ impl Kernel {
             return;
         }
         let info = profile.to_profile_info();
-        if identity::update_profile(
-            file,
-            password,
-            info.nickname.as_deref(),
-            match info.avatar.as_deref() {
-                Some(a) if !a.is_empty() => Some(Some(a)),
-                _ => Some(None),
-            },
-            Some(info.gender.as_deref().unwrap_or("")),
-            Some(info.region.as_deref().unwrap_or("")),
-            Some(info.signature.as_deref().unwrap_or("")),
-        )
-        .is_err()
-        {
+        let avatar = match info.avatar.as_deref() {
+            Some(a) if !a.is_empty() => Some(Some(a)),
+            _ => Some(None),
+        };
+        let gender = Some(info.gender.as_deref().unwrap_or(""));
+        let region = Some(info.region.as_deref().unwrap_or(""));
+        let signature = Some(info.signature.as_deref().unwrap_or(""));
+        let applied = match session_key {
+            Some(key) => identity::update_profile_with_key(
+                file,
+                key,
+                info.nickname.as_deref(),
+                avatar,
+                gender,
+                region,
+                signature,
+            ),
+            None => identity::update_profile(
+                file,
+                password,
+                info.nickname.as_deref(),
+                avatar,
+                gender,
+                region,
+                signature,
+            ),
+        };
+        if applied.is_err() {
             return;
         }
         let Ok(text) = serde_json::to_string_pretty(file) else {
@@ -218,8 +241,8 @@ impl Kernel {
     ) -> Result<String> {
         check_password(new_password)?;
         let normalized = normalize_mnemonic_input(mnemonic_input);
-        let (file, identity) =
-            identity::recover_identity(&normalized, new_password, nickname, avatar).map_err(
+        let (file, identity, key) =
+            identity::recover_identity_and_key(&normalized, new_password, nickname, avatar).map_err(
                 |e| match e {
                     identity::IdentityError::InvalidMnemonic(_) => KernelError::Internal(
                         "助记词校验失败：请检查是否有错别字、漏字或顺序错误".to_string(),
@@ -237,7 +260,7 @@ impl Kernel {
         self.write_active_root_id(&file.root_id)?;
         self.align_storage(&file.root_id)?;
         let root_id = file.root_id.clone();
-        self.set_unlocked(identity, seed, new_password);
+        self.set_unlocked(identity, seed, new_password, Some(key));
         self.ensure_p2p_after_login();
         Ok(root_id)
     }
@@ -325,8 +348,8 @@ impl Kernel {
 
         let file = IdentityFile::from_json(&file_json)
             .map_err(|_| KernelError::Internal("备份数据无效或已损坏".to_string()))?;
-        let (payload, identity) =
-            identity::unlock_identity(&file, password).map_err(|e| match e {
+        let (payload, identity, session_key) =
+            identity::unlock_identity_and_key(&file, password).map_err(|e| match e {
                 identity::IdentityError::DecryptionFailed => {
                     KernelError::Internal("密码不正确".to_string())
                 }
@@ -358,7 +381,7 @@ impl Kernel {
         self.write_active_root_id(&file.root_id)?;
         self.align_storage(&file.root_id)?;
         let root_id = file.root_id.clone();
-        self.set_unlocked(identity, seed, password);
+        self.set_unlocked(identity, seed, password, session_key);
         self.ensure_p2p_after_login();
         // 若载荷含生成端节点信息，落单向设备记录并尝试 friend-request
         if let Some((gen_peer_id, gen_addresses)) = qr_peer {

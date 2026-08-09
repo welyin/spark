@@ -67,15 +67,27 @@ pub fn encrypt_v2(
     salt: &[u8],
     iv: &[u8],
 ) -> Result<(Vec<u8>, Vec<u8>)> {
+    let key = scrypt_v2_key(password, salt)?;
+    encrypt_v2_with_key(plaintext, &key, iv)
+}
+
+/// v2 加密（预派生密钥，免 KDF）：aes-256-gcm。返回 (密文, authTag)。
+///
+/// 会话缓存 scrypt 密钥复用（资料重封等热路径免重跑 KDF）。调用方须保证
+/// key 与文件头 salt 的绑定关系（key = scrypt(password, salt)）。
+pub fn encrypt_v2_with_key(
+    plaintext: &[u8],
+    key: &[u8; KEY_LEN],
+    iv: &[u8],
+) -> Result<(Vec<u8>, Vec<u8>)> {
     if iv.len() != GCM_IV_LEN {
         return Err(IdentityError::Crypto(format!(
             "v2 iv must be {GCM_IV_LEN} bytes, got {}",
             iv.len()
         )));
     }
-    let key = scrypt_v2_key(password, salt)?;
     let cipher =
-        Aes256Gcm::new_from_slice(&key).map_err(|e| IdentityError::Crypto(e.to_string()))?;
+        Aes256Gcm::new_from_slice(key).map_err(|e| IdentityError::Crypto(e.to_string()))?;
     let nonce = nonce_from_iv(iv)?;
     let sealed = cipher
         .encrypt(&nonce, plaintext)
@@ -92,6 +104,17 @@ pub fn decrypt_v2(
     salt: &[u8],
     iv: &[u8],
 ) -> Result<Vec<u8>> {
+    let key = scrypt_v2_key(password, salt)?;
+    decrypt_v2_with_key(data, auth_tag, &key, iv)
+}
+
+/// v2 解密（预派生密钥，免 KDF）：aes-256-gcm，authTag 单独传入。
+pub fn decrypt_v2_with_key(
+    data: &[u8],
+    auth_tag: &[u8],
+    key: &[u8; KEY_LEN],
+    iv: &[u8],
+) -> Result<Vec<u8>> {
     if iv.len() != GCM_IV_LEN {
         return Err(IdentityError::Crypto(format!(
             "v2 iv must be {GCM_IV_LEN} bytes, got {}",
@@ -104,9 +127,8 @@ pub fn decrypt_v2(
             auth_tag.len()
         )));
     }
-    let key = scrypt_v2_key(password, salt)?;
     let cipher =
-        Aes256Gcm::new_from_slice(&key).map_err(|e| IdentityError::Crypto(e.to_string()))?;
+        Aes256Gcm::new_from_slice(key).map_err(|e| IdentityError::Crypto(e.to_string()))?;
     let nonce = nonce_from_iv(iv)?;
     let mut sealed = Vec::with_capacity(data.len() + GCM_TAG_LEN);
     sealed.extend_from_slice(data);

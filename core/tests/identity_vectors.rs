@@ -206,7 +206,8 @@ fn v1_file_unlock_and_migrate_to_v2() {
     assert_eq!(payload2.mnemonic, payload.mnemonic);
     assert_eq!(payload2.path, payload.path);
     assert_eq!(identity2.public_key_hex(), identity.public_key_hex());
-    assert_eq!(payload2.nickname.as_deref(), Some("Vec User"));
+    // 资料已移出 payload：昵称只在明文头
+    assert_eq!(v2_file.nickname.as_deref(), Some("Vec User"));
 }
 
 #[test]
@@ -236,9 +237,9 @@ fn update_profile_flow() {
     );
     assert!(file.updated_at >= file.created_at);
 
-    // 解锁后 payload 同步
-    let (payload, unlocked) = unlock_identity(&file, "P@ssw0rd-test").unwrap();
-    assert_eq!(payload.nickname.as_deref(), Some("新昵称"));
+    // 解锁正常（payload 只含 mnemonic/path），昵称以明文头为准
+    let (_payload, unlocked) = unlock_identity(&file, "P@ssw0rd-test").unwrap();
+    assert_eq!(file.nickname.as_deref(), Some("新昵称"));
     assert_eq!(unlocked.public_key_hex(), identity.public_key_hex());
 
     // 清除头像（Some(None)），昵称不变（None）

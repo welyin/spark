@@ -52,6 +52,12 @@ fn default_payload_version() -> u32 {
 }
 
 /// 加密 payload（身份文件 `data` 字段解密后的明文）。
+///
+/// 只放真正需要保密的字段：助记词 + 派生路径（+ 词表/版本/创建时间）。
+/// 资料字段（昵称/头像/性别/地区/签名）**不进 payload**——它们本就明文存于
+/// `IdentityFile` 头部、无保密需求，且资料更新不再触碰加密（避免重封换 salt
+/// 导致会话缓存密钥失效的 decryption failed，见 kernel/identity/profile.rs）。
+/// 历史文件的 payload 曾带这些资料字段：反序列化忽略之，资料以明文头为准。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IdentityPayload {
     /// 助记词（空格分隔）。
@@ -65,21 +71,6 @@ pub struct IdentityPayload {
     /// 词表标识（`chinese_simplified` / `english`）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wordlist: Option<String>,
-    /// 昵称。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub nickname: Option<String>,
-    /// 头像 data URL。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub avatar: Option<String>,
-    /// 性别（扩展字段；缺省字段按 `None` 反序列化，旧文件向后兼容）。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub gender: Option<String>,
-    /// 地区（扩展字段）。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub region: Option<String>,
-    /// 个性签名（扩展字段）。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub signature: Option<String>,
     /// 创建时间（ms）。
     #[serde(rename = "createdAt", skip_serializing_if = "Option::is_none")]
     pub created_at: Option<u64>,
@@ -204,6 +195,18 @@ pub fn recover_identity(
     nickname: &str,
     avatar: Option<&str>,
 ) -> Result<(IdentityFile, Identity)> {
+    let (file, identity, _key) = recover_identity_and_key(mnemonic, password, nickname, avatar)?;
+    Ok((file, identity))
+}
+
+/// 同 [`recover_identity`]，额外回传 v2 封装所用的 scrypt 派生密钥
+/// （内核解锁会话缓存用：资料重封复用该密钥，免重跑 KDF）。
+pub fn recover_identity_and_key(
+    mnemonic: &str,
+    password: &str,
+    nickname: &str,
+    avatar: Option<&str>,
+) -> Result<(IdentityFile, Identity, [u8; crypto::KEY_LEN])> {
     let nickname = validate_nickname(nickname)?;
     if let Some(a) = avatar {
         validate_avatar(a)?;
@@ -216,14 +219,9 @@ pub fn recover_identity(
         path: identity.path.clone(),
         version: FILE_VERSION_V2,
         wordlist: Some(parsed.wordlist.as_str().to_string()),
-        nickname: Some(nickname.clone()),
-        avatar: avatar.map(str::to_string),
-        gender: None,
-        region: None,
-        signature: None,
         created_at: Some(now),
     };
-    let file = seal_v2(
+    let (file, key) = seal_v2_and_key(
         &payload,
         password,
         identity.public_key_hex(),
@@ -236,15 +234,25 @@ pub fn recover_identity(
         now,
         now,
     )?;
-    Ok((file, identity))
+    Ok((file, identity, key))
 }
 
 /// 解锁身份文件（v2 / v1 均可），返回 `(payload, 按 payload.path 派生的身份)`。
 pub fn unlock_identity(file: &IdentityFile, password: &str) -> Result<(IdentityPayload, Identity)> {
-    let payload = decrypt_payload(file, password)?;
+    let (payload, identity, _key) = unlock_identity_and_key(file, password)?;
+    Ok((payload, identity))
+}
+
+/// 同 [`unlock_identity`]，额外回传 v2 scrypt 派生密钥（v1 文件为 `None`）：
+/// 供内核解锁会话缓存，后续资料重封复用该密钥，免重跑 KDF。
+pub fn unlock_identity_and_key(
+    file: &IdentityFile,
+    password: &str,
+) -> Result<(IdentityPayload, Identity, Option<[u8; crypto::KEY_LEN]>)> {
+    let (payload, key) = decrypt_payload_and_key(file, password)?;
     let parsed = parse_mnemonic(&payload.mnemonic)?;
     let identity = derive_identity_at_path(&parsed.seed, &payload.path)?;
-    Ok((payload, identity))
+    Ok((payload, identity, key))
 }
 
 /// v1 文件迁移到 v2：解密 → sanitize 资料 → v2 重新加密。
@@ -256,9 +264,10 @@ pub fn migrate_v1_to_v2(file: &IdentityFile, password: &str) -> Result<IdentityF
         return Err(IdentityError::UnsupportedVersion(file.version));
     }
     let payload = decrypt_payload(file, password)?;
+    // 资料以 v1 文件明文头为准（payload 已无资料字段），sanitize 后写回明文头。
     let (nickname, avatar) = sanitize_profile(
-        file.nickname.as_deref().or(payload.nickname.as_deref()),
-        file.avatar.as_deref().or(payload.avatar.as_deref()),
+        file.nickname.as_deref(),
+        file.avatar.as_deref(),
     );
     let now = now_ms();
     let new_payload = IdentityPayload {
@@ -268,12 +277,6 @@ pub fn migrate_v1_to_v2(file: &IdentityFile, password: &str) -> Result<IdentityF
         wordlist: payload
             .wordlist
             .or_else(|| Some(Wordlist::English.as_str().to_string())),
-        nickname: nickname.clone(),
-        avatar: avatar.clone(),
-        // v1 时代无扩展字段，解密结果中必然为 None，原样保留
-        gender: payload.gender,
-        region: payload.region,
-        signature: payload.signature,
         created_at: Some(file.created_at),
     };
     seal_v2(
@@ -283,16 +286,19 @@ pub fn migrate_v1_to_v2(file: &IdentityFile, password: &str) -> Result<IdentityF
         file.root_id.clone(),
         nickname,
         avatar,
-        new_payload.gender.clone(),
-        new_payload.region.clone(),
-        new_payload.signature.clone(),
+        file.gender.clone(),
+        file.region.clone(),
+        file.signature.clone(),
         file.created_at,
         now,
     )
 }
 
-/// 更新资料（昵称/头像 + 扩展字段性别/地区/签名）：payload 重新加密，文件层
-/// 字段同步，updatedAt 刷新。
+/// 更新资料（昵称/头像 + 扩展字段性别/地区/签名）：**纯明文头更新**，不触碰
+/// 加密 payload（资料字段已移出 payload，无保密需求）。仅校验 + 刷新明文头与
+/// `updatedAt`；不解密、不重封、不换 salt——因此不会使会话缓存密钥失效。
+///
+/// `password` 参数仅为保持调用方签名而保留（当前不使用）；资料更新无需密码。
 ///
 /// - `nickname`：`Some(n)` 修改；`None` 不变。
 /// - `avatar`：`Some(Some(a))` 设置；`Some(None)` 清除；`None` 不变。
@@ -307,16 +313,57 @@ pub fn update_profile(
     region: Option<&str>,
     signature: Option<&str>,
 ) -> Result<()> {
-    if file.version != FILE_VERSION_V2 {
-        return Err(IdentityError::UnsupportedVersion(file.version));
-    }
-    let mut payload = decrypt_payload(file, password)?;
+    let _ = password; // 资料明文存储，无需密码
+    patch_profile_fields(file, nickname, avatar, gender, region, signature)
+}
 
+/// 同 [`update_profile`]。历史版本中此函数回传重封的新密钥供会话缓存刷新；
+/// 资料改为明文存储后不再重封、密钥不变，返回固定零密钥仅为保持调用方签名
+/// （调用方对返回值的赋值是无害的幂等操作，会话密钥语义以 unlock 时为准）。
+#[allow(clippy::too_many_arguments)]
+pub fn update_profile_and_key(
+    file: &mut IdentityFile,
+    password: &str,
+    nickname: Option<&str>,
+    avatar: Option<Option<&str>>,
+    gender: Option<&str>,
+    region: Option<&str>,
+    signature: Option<&str>,
+) -> Result<[u8; crypto::KEY_LEN]> {
+    update_profile(file, password, nickname, avatar, gender, region, signature)?;
+    Ok([0u8; crypto::KEY_LEN])
+}
+
+/// 历史会话缓存密钥版。资料明文存储后与 [`update_profile`] 等价（key 不再用于
+/// 资料重封）。保留仅为兼容 `update_profile_session` 的调用签名。
+pub fn update_profile_with_key(
+    file: &mut IdentityFile,
+    key: &[u8; crypto::KEY_LEN],
+    nickname: Option<&str>,
+    avatar: Option<Option<&str>>,
+    gender: Option<&str>,
+    region: Option<&str>,
+    signature: Option<&str>,
+) -> Result<()> {
+    let _ = key; // 资料明文存储，无需密钥
+    patch_profile_fields(file, nickname, avatar, gender, region, signature)
+}
+
+/// 资料明文头补丁（`update_profile*` 系列共用）：校验后写 `IdentityFile` 明文头，
+/// 刷新 `updatedAt`。不动加密 payload / salt / iv / data。
+fn patch_profile_fields(
+    file: &mut IdentityFile,
+    nickname: Option<&str>,
+    avatar: Option<Option<&str>>,
+    gender: Option<&str>,
+    region: Option<&str>,
+    signature: Option<&str>,
+) -> Result<()> {
     if let Some(n) = nickname {
-        payload.nickname = Some(validate_nickname(n)?);
+        file.nickname = Some(validate_nickname(n)?);
     }
     if let Some(a) = avatar {
-        payload.avatar = match a {
+        file.avatar = match a {
             Some(a) => {
                 validate_avatar(a)?;
                 Some(a.to_string())
@@ -324,25 +371,11 @@ pub fn update_profile(
             None => None,
         };
     }
-    payload.gender = patch_extra_field(payload.gender, gender, "gender", GENDER_MAX_CHARS)?;
-    payload.region = patch_extra_field(payload.region, region, "region", REGION_MAX_CHARS)?;
-    payload.signature =
-        patch_extra_field(payload.signature, signature, "signature", SIGNATURE_MAX_CHARS)?;
-
-    let updated = seal_v2(
-        &payload,
-        password,
-        file.public_key_hex.clone(),
-        file.root_id.clone(),
-        payload.nickname.clone(),
-        payload.avatar.clone(),
-        payload.gender.clone(),
-        payload.region.clone(),
-        payload.signature.clone(),
-        file.created_at,
-        now_ms(),
-    )?;
-    *file = updated;
+    file.gender = patch_extra_field(file.gender.take(), gender, "gender", GENDER_MAX_CHARS)?;
+    file.region = patch_extra_field(file.region.take(), region, "region", REGION_MAX_CHARS)?;
+    file.signature =
+        patch_extra_field(file.signature.take(), signature, "signature", SIGNATURE_MAX_CHARS)?;
+    file.updated_at = now_ms();
     Ok(())
 }
 
@@ -373,10 +406,19 @@ pub fn patch_extra_field(
 
 /// 解密身份文件 payload（按 version 分派 v2/v1）。
 pub fn decrypt_payload(file: &IdentityFile, password: &str) -> Result<IdentityPayload> {
+    Ok(decrypt_payload_and_key(file, password)?.0)
+}
+
+/// 解密 payload 并回传 v2 scrypt 派生密钥（v1 为 `None`）：供内核解锁会话
+/// 缓存，后续资料重封复用该密钥，免重跑 KDF。
+pub fn decrypt_payload_and_key(
+    file: &IdentityFile,
+    password: &str,
+) -> Result<(IdentityPayload, Option<[u8; crypto::KEY_LEN]>)> {
     let salt = hex::decode(&file.salt)?;
     let iv = hex::decode(&file.iv)?;
     let data = hex::decode(&file.data)?;
-    let plaintext = match file.version {
+    match file.version {
         FILE_VERSION_V2 => {
             if file.kdf != KDF_SCRYPT {
                 return Err(IdentityError::MalformedFile(format!(
@@ -388,7 +430,9 @@ pub fn decrypt_payload(file: &IdentityFile, password: &str) -> Result<IdentityPa
                 hex::decode(file.auth_tag.as_deref().ok_or_else(|| {
                     IdentityError::MalformedFile("v2 file missing authTag".into())
                 })?)?;
-            crypto::decrypt_v2(&data, &auth_tag, password, &salt, &iv)?
+            let key = crypto::scrypt_v2_key(password, &salt)?;
+            let plaintext = crypto::decrypt_v2_with_key(&data, &auth_tag, &key, &iv)?;
+            Ok((serde_json::from_slice(&plaintext)?, Some(key)))
         }
         FILE_VERSION_V1 => {
             if file.kdf != KDF_PBKDF2 {
@@ -397,10 +441,36 @@ pub fn decrypt_payload(file: &IdentityFile, password: &str) -> Result<IdentityPa
                     file.kdf
                 )));
             }
-            crypto::decrypt_v1(&data, password, &salt, &iv)?
+            let plaintext = crypto::decrypt_v1(&data, password, &salt, &iv)?;
+            Ok((serde_json::from_slice(&plaintext)?, None))
         }
-        other => return Err(IdentityError::UnsupportedVersion(other)),
-    };
+        other => Err(IdentityError::UnsupportedVersion(other)),
+    }
+}
+
+/// 以会话缓存的 v2 派生密钥解密 payload（免 KDF；salt 不参与解密，仅密钥
+/// 派生时需要）。仅 v2 文件。
+pub fn decrypt_payload_with_key(
+    file: &IdentityFile,
+    key: &[u8; crypto::KEY_LEN],
+) -> Result<IdentityPayload> {
+    if file.version != FILE_VERSION_V2 {
+        return Err(IdentityError::UnsupportedVersion(file.version));
+    }
+    if file.kdf != KDF_SCRYPT {
+        return Err(IdentityError::MalformedFile(format!(
+            "v2 file with kdf `{}`",
+            file.kdf
+        )));
+    }
+    let iv = hex::decode(&file.iv)?;
+    let data = hex::decode(&file.data)?;
+    let auth_tag = hex::decode(
+        file.auth_tag
+            .as_deref()
+            .ok_or_else(|| IdentityError::MalformedFile("v2 file missing authTag".into()))?,
+    )?;
+    let plaintext = crypto::decrypt_v2_with_key(&data, &auth_tag, key, &iv)?;
     Ok(serde_json::from_slice(&plaintext)?)
 }
 
@@ -424,11 +494,6 @@ pub fn seal_compact_backup(
         path: payload.path.clone(),
         version: payload.version,
         wordlist: payload.wordlist.clone(),
-        nickname: payload.nickname.clone(),
-        avatar: None,
-        gender: None,
-        region: None,
-        signature: None,
         created_at: payload.created_at,
     };
     seal_v2(
@@ -461,13 +526,80 @@ fn seal_v2(
     created_at: u64,
     updated_at: u64,
 ) -> Result<IdentityFile> {
+    let (file, _key) = seal_v2_and_key(
+        payload,
+        password,
+        public_key_hex,
+        root_id,
+        nickname,
+        avatar,
+        gender,
+        region,
+        signature,
+        created_at,
+        updated_at,
+    )?;
+    Ok(file)
+}
+
+/// v2 加密并组装身份文件（随机 salt/iv），回传 scrypt 派生密钥。
+#[allow(clippy::too_many_arguments)]
+fn seal_v2_and_key(
+    payload: &IdentityPayload,
+    password: &str,
+    public_key_hex: String,
+    root_id: String,
+    nickname: Option<String>,
+    avatar: Option<String>,
+    gender: Option<String>,
+    region: Option<String>,
+    signature: Option<String>,
+    created_at: u64,
+    updated_at: u64,
+) -> Result<(IdentityFile, [u8; crypto::KEY_LEN])> {
     let mut salt = [0u8; 16];
+    rand::rng().fill_bytes(&mut salt);
+    let key = crypto::scrypt_v2_key(password, &salt)?;
+    let file = seal_v2_with_key(
+        payload,
+        &key,
+        salt,
+        public_key_hex,
+        root_id,
+        nickname,
+        avatar,
+        gender,
+        region,
+        signature,
+        created_at,
+        updated_at,
+    )?;
+    Ok((file, key))
+}
+
+/// v2 加密并组装身份文件（预派生密钥 + 指定 salt，随机 iv，免 KDF）。
+///
+/// salt 必须与派生 key 时所用的一致——密钥 = scrypt(password, salt)，文件头
+/// salt 与密钥派生绑定；换了 salt 而密码不变会导致解锁时派生出不同密钥。
+#[allow(clippy::too_many_arguments)]
+fn seal_v2_with_key(
+    payload: &IdentityPayload,
+    key: &[u8; crypto::KEY_LEN],
+    salt: [u8; 16],
+    public_key_hex: String,
+    root_id: String,
+    nickname: Option<String>,
+    avatar: Option<String>,
+    gender: Option<String>,
+    region: Option<String>,
+    signature: Option<String>,
+    created_at: u64,
+    updated_at: u64,
+) -> Result<IdentityFile> {
     let mut iv = [0u8; crypto::GCM_IV_LEN];
-    let mut rng = rand::rng();
-    rng.fill_bytes(&mut salt);
-    rng.fill_bytes(&mut iv);
+    rand::rng().fill_bytes(&mut iv);
     let plaintext = serde_json::to_vec(payload)?;
-    let (data, auth_tag) = crypto::encrypt_v2(&plaintext, password, &salt, &iv)?;
+    let (data, auth_tag) = crypto::encrypt_v2_with_key(&plaintext, key, &iv)?;
     Ok(IdentityFile {
         version: FILE_VERSION_V2,
         kdf: KDF_SCRYPT.to_string(),

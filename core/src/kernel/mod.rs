@@ -96,14 +96,20 @@ pub struct KernelConfig {
 ///
 /// 会话解密态（对齐 TS `UnlockedRootIdentity` 持有的 `seed`）：
 /// - `seed`：BIP39 种子，域身份派生（`derive_domain_identity`）的唯一来源；
-/// - `password`：会话口令，免密码资料更新（`update_profile_session`）重封
-///   加密 payload 的 KDF 输入。
+/// - `password`：会话口令，密码门控路径（reveal_mnemonic 等）的 KDF 输入；
+/// - `session_key`：unlock/init/recover 时 scrypt 派生的 32 字节封装密钥
+///   （v2 文件为 `Some`，v1 遗留备份恢复为 `None`）。免密码资料更新
+///   （`update_profile_session`）复用该密钥重封 payload，全程 0 次 scrypt
+///   （移动端单次 scrypt 0.3~1.2s）；重封沿用文件既有 salt（密钥与 salt
+///   绑定：key = scrypt(password, salt)），仅换随机 IV。
 ///
-/// 两者随 `lock` 清除。
+/// 三者随 `lock` 清除（`unlocked` 整体置 `None` 后由 GC 释放；内核无
+/// zeroize 依赖，与既有 `password` 明文凭据同生命周期口径）。
 pub(crate) struct UnlockedIdentity {
     pub(crate) identity: crate::identity::Identity,
     pub(crate) seed: [u8; 64],
     pub(crate) password: String,
+    pub(crate) session_key: Option<[u8; crate::identity::crypto::KEY_LEN]>,
 }
 
 impl UnlockedIdentity {

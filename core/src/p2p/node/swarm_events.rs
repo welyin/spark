@@ -61,13 +61,23 @@ impl<S: StorageBackend> EventLoop<S> {
                     let mut store = PeerActivityStore::new(&mut self.storage);
                     let _ = store.mark_connected(&peer_id.to_base58(), now);
                 }
-                // 连接沉淀进覆盖网邻居池
+                // 连接沉淀进覆盖网邻居池：仅出站（dialer）方向的远端地址入池——
+                // 它经我们成功拨号验证可达；入站（listener）方向的 remote 地址
+                // 是对端 NAT 源 IP:临时端口，回拨必败，入池会占据 DM 拨号队首
+                // 烧光外层预算（merge_neighbor_addresses 邻居池地址在前）。
+                // 入站方向以空地址列表 remember：保留 peer 存在性与 lastSeen
+                // 记账，不污染拨号候选。
                 let remote_addr = endpoint.get_remote_address().to_string();
                 {
+                    let dialable_addrs: &[String] = if endpoint.is_dialer() {
+                        std::slice::from_ref(&remote_addr)
+                    } else {
+                        &[]
+                    };
                     let mut store = OverlayPeerStore::new(&mut self.storage);
                     let _ = store.remember(
                         &peer_id.to_base58(),
-                        std::slice::from_ref(&remote_addr),
+                        dialable_addrs,
                         OverlayPeerSource::Connect,
                         false,
                         now,
@@ -217,38 +227,7 @@ impl<S: StorageBackend> EventLoop<S> {
                 // 候选 1 用 unknown_peer_id 拨原始地址，失败事件 peer_id=None，
                 // 若按 peer/地址模糊匹配，一个 attempt 的失败会误推进同 peer
                 // 的所有 attempt（含未拨号的等待者），级联耗尽目标
-                let mut j = 0;
-                while j < self.pending_org_attempts.len() {
-                    let should_retry = {
-                        let a = &self.pending_org_attempts[j];
-                        a.in_flight.is_none()
-                            && a.current_target.is_some()
-                            && a.dial_issued
-                            && a.dial_conn_id == Some(connection_id)
-                    };
-                    if should_retry {
-                        let mut a = self.pending_org_attempts.remove(j);
-                        let failed_base = a
-                            .current_target
-                            .as_deref()
-                            .map(super::org_direct::base_addr)
-                            .map(str::to_string);
-                        a.current_target = None;
-                        self.dial_next_org_target(&mut a);
-                        if a.current_target.is_some() || a.in_flight.is_some() {
-                            self.pending_org_attempts.push(a);
-                        } else {
-                            // 拨号方耗尽：同地址的去重等待者所等的事件已不会
-                            // 发生，唤醒其自行走目标流程
-                            if let Some(base) = failed_base {
-                                self.wake_addr_waiters(&base);
-                            }
-                            a.finish_exhausted();
-                        }
-                    } else {
-                        j += 1;
-                    }
-                }
+                self.fail_org_dial(connection_id);
                 // 覆盖网补拨失败记账
                 if let Some(peer) = peer_id
                     && self.pending_overlay_dials.remove(&peer).is_some()
@@ -505,6 +484,13 @@ impl<S: StorageBackend> EventLoop<S> {
                 request_response::Message::Request {
                     request, channel, ..
                 } => {
+                    // 诊断日志：最低层捕获所有 request-response 请求
+                    let preview = if request.len() <= 200 { &request[..] } else { &request[..200] };
+                    log::info!(
+                        "[P2P_SWARM_MSG] DmRr Request from_peer={} preview={}",
+                        &peer.to_base58()[..std::cmp::min(16, peer.to_base58().len())],
+                        preview
+                    );
                     self.handle_dm_inbound(peer, request, channel);
                 }
                 request_response::Message::Response {

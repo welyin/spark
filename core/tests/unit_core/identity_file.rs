@@ -60,15 +60,17 @@ fn legacy_json_without_extra_fields_parses() {
     assert_eq!(file.region, None);
     assert_eq!(file.signature, None);
 
-    // 旧 payload 明文同样无扩展字段，须可反序列化且为 None
-    let old_payload = r#"{"mnemonic":"m","derivationPath":"p","version":2,"nickname":"旧用户"}"#;
+    // 历史 payload 曾携带资料字段（nickname/avatar/gender/region/signature）；
+    // 重构后 payload 仅保留 mnemonic/path/wordlist/version/createdAt，旧文件里的
+    // 资料键反序列化时被忽略（serde 默认忽略未知字段），不报错、不影响解锁。
+    let old_payload = r#"{"mnemonic":"m","derivationPath":"p","version":2,"nickname":"旧用户","signature":"旧签名"}"#;
     let payload: IdentityPayload = serde_json::from_str(old_payload).unwrap();
-    assert_eq!(payload.gender, None);
-    assert_eq!(payload.region, None);
-    assert_eq!(payload.signature, None);
+    assert_eq!(payload.mnemonic, "m");
+    assert_eq!(payload.path, "p");
 
-    // None 字段不序列化（写回旧格式不引入新键）
+    // 新 payload 序列化不再包含任何资料字段
     let json = serde_json::to_string(&payload).unwrap();
+    assert!(!json.contains("nickname"));
     assert!(!json.contains("gender"));
     assert!(!json.contains("region"));
     assert!(!json.contains("signature"));

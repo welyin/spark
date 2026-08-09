@@ -1,8 +1,10 @@
 //! Spark 桌面壳（Tauri 2.x）：内嵌 spark-core 内核，向前端暴露命令层。
 //!
 //! 线程模型：内核全部 API 为同步且禁止在 tokio 线程内调用
-//! （内部以 `Handle::block_on` 驱动 P2P）。Tauri 的**同步** command 自动在
-//! 独立线程池执行，因此命令层一律使用同步 command + `State<Mutex<Kernel>>`。
+//! （内部以 `Handle::block_on` 驱动 P2P）。Tauri 的**同步** command 在
+//! 主线程执行——CPU 密集/重 IO 命令（scrypt KDF、网络下载等）必须改
+//! async + `spawn_blocking` 挪到阻塞线程池（见 commands/identity.rs 的
+//! `run_kernel`），轻量查询保持同步 command + `State<Mutex<Kernel>>`。
 //!
 //! P2P 事件：`Kernel::subscribe_p2p_events` 的 broadcast Receiver 由 setup 中
 //! 的转发任务消费，P2pEvent 结构化序列化（`{kind, data}`）后以 `p2p-event`
@@ -13,6 +15,8 @@
 mod android_activity;
 pub mod commands;
 pub mod domain_guard;
+// 全局 log 门面注册（Android logcat / 桌面 stderr），见 logging.rs
+mod logging;
 pub mod market;
 pub mod plugin_runtime;
 pub mod plugin_src;
@@ -51,6 +55,22 @@ fn spawn_p2p_event_forwarder(app: tauri::AppHandle, mut rx: tokio::sync::broadca
         loop {
             match rx.recv().await {
                 Ok(event) => {
+                    let event_kind = match &event {
+                        P2pEvent::ChatReceived(_) => "ChatReceived",
+                        P2pEvent::Warning(_) => "Warning",
+                        P2pEvent::KeepaliveTick(_) => "KeepaliveTick",
+                        P2pEvent::PeerExchangeCompleted { .. } => "PeerExchangeCompleted",
+                        _ => "Other",
+                    };
+                    println!("[FORWARDER] event kind={}", event_kind);
+                    if let P2pEvent::ChatReceived(ref data) = event {
+                        println!(
+                            "[FORWARDER] ChatReceived emit -> webview | msgId={} convId={} spaceKey={}",
+                            data.get("message").and_then(|m| m.get("id")).and_then(|v| v.as_str()).unwrap_or("?"),
+                            data.get("conversation").and_then(|c| c.get("id")).and_then(|v| v.as_str()).unwrap_or("?"),
+                            data.get("spaceKey").and_then(|v| v.as_str()).unwrap_or("?")
+                        );
+                    }
                     let _ = app.emit("p2p-event", p2p_event_payload(&event));
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
@@ -83,6 +103,8 @@ pub(crate) fn resolve_data_dir<R: tauri::Runtime, M: tauri::Manager<R>>(app: &M)
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 最早注册 logger：后续内核/依赖链的 log 记录全程可见（Android logcat）。
+    logging::init();
     let builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init());
     // 主程序自动更新：GitHub Releases latest.json 清单 + minisign 验签
     // （端点与公钥在 tauri.conf.json plugins.updater）。tauri-plugin-updater

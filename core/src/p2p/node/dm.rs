@@ -6,8 +6,9 @@
 //! kernel 层完成。
 //!
 //! 应答侧防护：同一对端按 [`crate::p2p::constants::DM_MIN_INTERVAL_MS`] 最小
-//! 间隔限流（命中回 `rate-limited`；控制类 kind——read/recall/friend-accept——
-//! 豁免，避免「发消息+已读回执」连发时第二条被误限流）；宿主错误对外一律回
+//! 间隔限流（命中回 `rate-limited`；控制类 kind——read/recall/friend-accept——与
+//! 自设备同步类 kind——pdsync-*/contact-sync/conv-sync/profile-sync/device-sync——
+//! 豁免，避免「发消息+已读回执」与 pdsync 反熵多信封连发时后续信封被误限流）；宿主错误对外一律回
 //! `internal-error`（内部细节只记本地 Warning 事件，不外泄）。
 //!
 //! 宿主提供 [`crate::p2p::host::DmHandler`] 时，信封校验/落库等重 IO 在
@@ -115,6 +116,11 @@ impl<S: StorageBackend> EventLoop<S> {
     ) {
         let now = self.now();
         let Some(payload) = direct::parse_dm_request(&request) else {
+            if request.len() < 500 {
+                log::info!("[P2P_DM_INBOUND] raw request is not valid JSON object: {}", request);
+            } else {
+                log::info!("[P2P_DM_INBOUND] raw request is not valid JSON object (len={})", request.len());
+            }
             let response = direct::build_dm_error_response("invalid-request");
             let _ = self
                 .swarm
@@ -123,9 +129,15 @@ impl<S: StorageBackend> EventLoop<S> {
                 .send_response(channel, response);
             return;
         };
-        // 控制类 kind（read/recall/friend-accept）豁免限流：它们由「发消息」
-        // 动作派生连发，与 chat 共享同一 1s 桶会被误限流并标 failed
+        // 控制类 kind（read/recall/friend-accept）与自设备同步类 kind
+        // （pdsync-*/contact-sync 等）豁免限流：前者由「发消息」动作派生连发，
+        // 后者是反熵多信封往返，共享同一 1s 桶会被确定性误限流
         let kind = payload.get("kind").and_then(Value::as_str);
+        log::info!(
+            "[P2P_DM_INBOUND] parsed kind={} from_peer={}",
+            kind.unwrap_or("?"),
+            &peer.to_base58()[..std::cmp::min(16, peer.to_base58().len())]
+        );
         if !direct::dm_kind_is_rate_limit_exempt(kind)
             && self.dm_limiter.is_rate_limited(&peer.to_base58(), now)
         {
@@ -204,6 +216,9 @@ impl<S: StorageBackend> EventLoop<S> {
 
     /// 合并邻居池最新地址到拨号目标（peer-rediscovery §6 WP3.9）：
     /// 邻居池地址在前（已 IPv6 优先排序）、静态 FriendRecord.peer 地址兜底去重。
+    /// 邻居池只收可回拨地址：入站连接的 NAT 源地址在入池时即被剔除
+    /// （swarm_events ConnectionEstablished 仅 dialer 方向记地址），不会
+    /// 以黑洞目标占据队首。
     pub(super) fn merge_neighbor_addresses(&mut self, mut node_info: PeerNodeInfo) -> PeerNodeInfo {
         let Some(peer_id) = extract_peer_id(&node_info) else {
             return node_info;

@@ -67,6 +67,54 @@ const RECOVERY_DIAL_BUDGET: usize = 4;
 /// 即 DHT 记录 TTL 8h 之半）。
 const ORG_ADDRESS_REPUBLISH_INTERVAL_MS: i64 = 4 * 60 * 60 * 1000;
 
+/// 自设备稳态周期 hello 兜底间隔：StayConnected 期间即使无任何变更也按此
+/// 周期发一次 pdsync-hello，作为投递静默失败（断→连跳变的 Resync hello 丢
+/// 失等）的收敛兜底。变更触发的增量 hello 见 [`SelfHelloState::observe`]。
+const SELF_DEVICE_HELLO_INTERVAL_MS: i64 = 10 * 60 * 1000;
+
+/// 自设备稳态 hello 触发状态（org-sync tick `maintain_self_device_link` 的
+/// StayConnected 分支用；跨 tick 持久，断→连跳变的 Resync 会重置重建基线）。
+///
+/// 判定来源是**本机个人域写入 digest**（各类目全部记录 pmeta 的本机 nodeId
+/// 分量逐记录求和，见 tick.rs `local_personal_write_digest`）：本机写入恒
+/// bump 被写记录的本机分量使 digest 严格递增，远端合入（`apply_personal_remote`
+/// 家族）落远端 pmeta、不推高本机分量——digest 只对「本机产生的写入」
+/// 敏感，远端合入不触发，无回声循环。
+#[derive(Default)]
+pub(crate) struct SelfHelloState {
+    /// 上次观察到的本机写入 digest（None = 尚未建基线）。
+    digest: Option<i64>,
+    /// 上次发送稳态 hello（或建基线）的时间（ms）。
+    last_sent_ms: i64,
+}
+
+impl SelfHelloState {
+    /// 观察当前 digest 并判定是否应发稳态 hello（命中即推进状态）：
+    /// - 首次观察：只建基线不发（进入 StayConnected 前的 Resync 已发 hello，
+    ///   且 p2p 重启后的首个 tick 不应因基线缺失误发）；
+    /// - digest 变化（本机个人域写入）：发——变更即触发，≤1 tick 传播；
+    /// - digest 未变但到达 [`SELF_DEVICE_HELLO_INTERVAL_MS`]：发（周期兜底）。
+    fn observe(&mut self, digest: i64, now_ms: i64) -> bool {
+        match self.digest {
+            None => {
+                self.digest = Some(digest);
+                self.last_sent_ms = now_ms;
+                false
+            }
+            Some(prev) if prev != digest => {
+                self.digest = Some(digest);
+                self.last_sent_ms = now_ms;
+                true
+            }
+            Some(_) if now_ms - self.last_sent_ms >= SELF_DEVICE_HELLO_INTERVAL_MS => {
+                self.last_sent_ms = now_ms;
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
 /// org-sync worker 的请求队列项。
 #[derive(Clone, Debug)]
 pub(crate) enum OrgSyncRequest {
@@ -156,6 +204,9 @@ pub(crate) struct OrgSyncContext {
     /// 已证明支持 pdsync 的自设备 peerId 集合（host 验签通过后按连接层
     /// peerId 写入——按设备粒度；保活读取决定是否回退发旧快照，见 §7.1）。
     pub(crate) pdsync_capable_self_devices: Arc<Mutex<std::collections::HashSet<String>>>,
+    /// 自设备稳态 hello 触发状态（变更 digest 基线 + 周期兜底计时；仅
+    /// keepalive tick 的 StayConnected/Resync 分支读写）。
+    pub(crate) self_hello_state: Arc<Mutex<SelfHelloState>>,
 }
 
 /// org-sync worker 主循环：推送/保活串行消费（kernel `start_p2p` 装配，

@@ -391,13 +391,15 @@ impl Kernel {
 
     /// 写入解锁状态并同步 p2p 宿主可见的当前身份指针。
     ///
-    /// 会话同时缓存 BIP39 种子（域派生用）与口令（资料重封用）；`lock` 时随
+    /// 会话同时缓存 BIP39 种子（域派生用）、口令（密码门控路径用）与 v2
+    /// 封装密钥（免 scrypt 资料重封用，v1 遗留文件为 `None`）；`lock` 时随
     /// `unlocked` 整体清除。签名私钥同步给 org-sync worker（自签 claim 用）。
     pub(crate) fn set_unlocked(
         &mut self,
         identity: identity::Identity,
         seed: [u8; 64],
         password: &str,
+        session_key: Option<[u8; identity::crypto::KEY_LEN]>,
     ) {
         *self.current_root_id_shared.lock().unwrap() = Some(identity.id());
         *self.signing_key_shared.lock().unwrap() = Some(identity.signing_key.clone());
@@ -418,6 +420,7 @@ impl Kernel {
             identity,
             seed,
             password: password.to_string(),
+            session_key,
         });
     }
 

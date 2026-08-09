@@ -297,7 +297,9 @@ spark.onMessage((payload) => {
   if (!botId) return;
   const bot = getBot(botId);
   if (!bot) {
-    console.warn(`[ai-chat][bg] 收到未知 bot 的消息 botId=${botId}（联系人孤儿），忽略`);
+    console.warn(
+      `[ai-chat][bg] 收到未知 bot 的消息（孤儿），忽略 | botId=${botId} sender=${payload.message.senderName} content="${payload.message.content}"`,
+    );
     return;
   }
   // 异步处理不阻塞事件循环：CLI/HTTP 调用期间后续消息仍可入队处理

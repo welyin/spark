@@ -20,6 +20,9 @@ tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
+# 全局日志门面（已在依赖树：libp2p 传递依赖）。Android 经 logging.rs 写 logcat，
+# 桌面写 stderr；内核依赖链的 log 记录由此可观测。
+log = "0.4"
 # broadcast::Receiver<P2pEvent> 的类型命名（事件转发任务）。
 tokio = { version = "1", features = ["sync", "time"] }
 # 插件市场：包 sha256 校验 / PEM 与签名 base64 / hex 摘要。

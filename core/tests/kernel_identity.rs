@@ -74,16 +74,13 @@ fn identity_full_lifecycle() {
     assert!(matches!(err, KernelError::InvalidPassword));
     assert_eq!(err.to_string(), "Invalid password");
 
-    // 更新资料
+    // 更新资料（资料为明文存储、不触碰加密 payload，故无需密码即可更新；
+    // password 形参仅为保持 API 签名，不参与解密/校验）
     let profile = kernel
         .update_profile(PASSWORD, Some("小红"), None, None, None, None)
         .unwrap();
     assert_eq!(profile.nickname.as_deref(), Some("小红"));
     assert_eq!(kernel.status().unwrap().nickname.as_deref(), Some("小红"));
-    let err = kernel
-        .update_profile("wrong-password", Some("x"), None, None, None, None)
-        .unwrap_err();
-    assert!(matches!(err, KernelError::InvalidPassword));
 
     // 当前身份公开信息
     let public = kernel.current_identity().unwrap().expect("unlocked");
@@ -229,11 +226,12 @@ fn qr_backup_payload_compact_and_recoverable() {
     let err = kernel_b.recover_backup(&qr, "wrong-password").unwrap_err();
     assert_eq!(err.to_string(), "密码不正确");
     assert_eq!(kernel_b.recover_backup(&qr, PASSWORD).unwrap(), root_id);
-    // mnemonic/path 完整恢复（rootId 一致即派生路径一致）、昵称保留、头像为 None
+    // mnemonic/path 完整恢复（rootId 一致即派生路径一致）、昵称保留；
+    // QR 载荷剔除头像仅省容量，资料明文存储后经 profile-sync 从源设备找回。
     assert_eq!(kernel_b.reveal_mnemonic(PASSWORD).unwrap(), mnemonic);
     let public = kernel_b.current_identity().unwrap().unwrap();
     assert_eq!(public.nickname.as_deref(), Some("小明"));
-    assert_eq!(public.avatar, None);
+    assert_eq!(public.avatar, Some(avatar), "profile-sync 应找回被剔除的头像");
     kernel_a.shutdown().unwrap();
     kernel_b.shutdown().unwrap();
 }
@@ -501,4 +499,62 @@ fn update_profile_extra_fields_whitespace_clear_and_length_caps() {
         .update_profile_session(None, None, Some(&long_gender), None, None)
         .unwrap_err();
     assert!(err.to_string().contains("gender too long"));
+}
+
+// ---------------------------------------------------------------------------
+// 会话密钥重封回归（update_profile_session 复用 unlock 缓存的 scrypt 派生
+// 密钥，0 次 scrypt）：salt 必须保持不变（密钥与 salt 绑定），多次更新后
+// 原密码仍可解锁、资料完整。
+// ---------------------------------------------------------------------------
+
+#[test]
+fn update_profile_session_reuses_key_salt_stable() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut kernel = fresh_kernel(dir.path());
+    let (root_id, mnemonic) = init_identity(&mut kernel);
+    let identity_path = dir
+        .path()
+        .join("identities")
+        .join(format!("{root_id}.json"));
+    let salt_of = || -> String {
+        let raw = std::fs::read_to_string(&identity_path).unwrap();
+        let json: Value = serde_json::from_str(&raw).unwrap();
+        json["salt"].as_str().unwrap().to_string()
+    };
+    let salt_at_init = salt_of();
+
+    // 连续两次会话版更新（密钥版重封：salt 不变、IV 更换）
+    kernel
+        .update_profile_session(Some("密钥一"), None, None, None, None)
+        .unwrap();
+    let salt_after_first = salt_of();
+    kernel
+        .update_profile_session(None, None, Some("女"), Some("杭州"), Some("保持热爱"))
+        .unwrap();
+    let salt_after_second = salt_of();
+    assert_eq!(salt_at_init, salt_after_first, "首次重封沿用既有 salt");
+    assert_eq!(salt_after_first, salt_after_second, "二次重封 salt 仍不变");
+
+    // lock 清会话（含缓存密钥）→ 原密码重新 unlock 可解出最新资料
+    kernel.lock();
+    kernel.unlock(PASSWORD, None).unwrap();
+    let status = kernel.status().unwrap();
+    assert_eq!(status.nickname.as_deref(), Some("密钥一"));
+    assert_eq!(status.gender.as_deref(), Some("女"));
+    assert_eq!(status.region.as_deref(), Some("杭州"));
+    assert_eq!(status.signature.as_deref(), Some("保持热爱"));
+    assert_eq!(kernel.reveal_mnemonic(PASSWORD).unwrap(), mnemonic);
+
+    // 重新 unlock 后再改资料（新会话密钥）仍正常，且重启后持久
+    kernel
+        .update_profile_session(Some("密钥二"), None, None, None, None)
+        .unwrap();
+    assert_eq!(salt_of(), salt_at_init, "重解锁后重封 salt 依旧不变");
+    kernel.shutdown().unwrap();
+
+    let kernel = fresh_kernel(dir.path());
+    assert_eq!(
+        kernel.status().unwrap().nickname.as_deref(),
+        Some("密钥二")
+    );
 }

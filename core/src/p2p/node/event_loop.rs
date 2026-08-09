@@ -203,6 +203,12 @@ pub(super) struct EventLoop<S: StorageBackend> {
     /// 按任务 id 找回 ResponseChannel 并 send_response。
     pub(super) dm_completion_tx: mpsc::UnboundedSender<DmCompletion>,
     pub(super) dm_completion_rx: mpsc::UnboundedReceiver<DmCompletion>,
+    /// org/dm 直连单目标拨号的应用层超时通道：每次实际拨号 spawn 一个
+    /// 定时任务送回本次的 [`libp2p::swarm::ConnectionId`]，事件循环收到后
+    /// 按 OutgoingConnectionError 同口径推进 attempt（黑洞地址不再烧光
+    /// 外层总预算）；迟到的超时消息无 attempt 匹配即忽略。
+    pub(super) dial_timeout_tx: mpsc::UnboundedSender<libp2p::swarm::ConnectionId>,
+    pub(super) dial_timeout_rx: mpsc::UnboundedReceiver<libp2p::swarm::ConnectionId>,
     /// dm 入站进行中：任务 id → ResponseChannel。
     pub(super) pending_dm_inbound: HashMap<u64, request_response::ResponseChannel<String>>,
     pub(super) next_dm_task_id: u64,
@@ -429,6 +435,9 @@ impl<S: StorageBackend> EventLoop<S> {
                 }
                 Some(completion) = self.dm_completion_rx.recv() => {
                     self.finish_dm_inbound(completion);
+                }
+                Some(conn_id) = self.dial_timeout_rx.recv() => {
+                    self.fail_org_dial(conn_id);
                 }
                 _ = async {
                     match keepalive.as_mut() {

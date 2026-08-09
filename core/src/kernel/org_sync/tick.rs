@@ -6,7 +6,7 @@ use std::collections::HashSet;
 
 use super::{
     DIAL_BUDGET_PER_TICK, ORG_ADDRESS_REPUBLISH_INTERVAL_MS, OrgSyncContext,
-    PULL_CANDIDATES_PER_TICK, REPLICA_PUSH_PER_ORG, collect_org_peer_candidates,
+    PULL_CANDIDATES_PER_TICK, REPLICA_PUSH_PER_ORG, SelfHelloState, collect_org_peer_candidates,
 };
 use crate::contact::ContactService;
 use crate::org::gateway::{OrgMemberHint, org_members_dht_key};
@@ -18,7 +18,7 @@ use crate::p2p::keepalive::plan_organization_dials;
 use crate::p2p::node::LocalP2PNodeInfo;
 use crate::p2p::peer_activity::PeerActivityStore;
 use crate::p2p::peer_targets::PeerNodeInfo;
-use crate::storage::StorageBackend;
+use crate::storage::{ScanOptions, StorageBackend};
 
 impl OrgSyncContext {
     // ------------------------------------------------------------------
@@ -107,7 +107,7 @@ impl OrgSyncContext {
         // 双来源解析配对设备：FriendRecord.peer 优先（带地址），DeviceRecord
         // 兜底（仅 peerId，已连接时 dm_direct 短路；未连接时无地址无法补拨，
         // 但候选收集里的 FriendRecord 来源仍可提供地址）
-        let (peer_id, addresses) = {
+        let (mut peer_id, mut addresses) = {
             let from_friend = ContactService::get_friend(&mut storage, root_id)
                 .ok()
                 .flatten()
@@ -131,10 +131,26 @@ impl OrgSyncContext {
         if peer_id.is_empty() {
             return;
         }
-        // 防御：自记录 peer 被污染指向本机（历史 pdsync 互灌残留）时不自拨——
-        // 拨自己触发 DialError::LocalPeerId，resync 快照亦无意义
-        if local_info.and_then(|i| i.peer_id.as_deref()) == Some(peer_id.as_str()) {
-            return;
+        // 自指拦截：自记录 peer 被污染指向本机（历史 pdsync 互灌残留）时先
+        // 尝试自愈——按设备清单把记录改写回对端设备（成功则继续走保活/投递，
+        // 该键对称排除于 pdsync 折叠/增量，自愈写不传播）；找不到对端设备
+        // 记录时保持拦截——不自拨：DialError::LocalPeerId，resync 亦无意义
+        if let Some(local) = local_info.and_then(|i| i.peer_id.as_deref())
+            && local == peer_id.as_str()
+        {
+            let Some(healed) = crate::kernel::dm_delivery::heal_self_pointing_friend_record(
+                &mut storage,
+                root_id,
+                local,
+                local,
+                self.now(),
+            ) else {
+                return;
+            };
+            if let Some(healed_peer) = healed.peer_id {
+                peer_id = healed_peer;
+                addresses = healed.addresses;
+            }
         }
         let connected = local_info
             .map(|info| info.connected_peers.iter().any(|p| p == &peer_id))
@@ -162,10 +178,21 @@ impl OrgSyncContext {
             }
         };
         match action {
-            Action::StayConnected => {}
+            // 稳态：本机个人域写入 digest 变化（变更即触发）或到达周期兜底
+            // 间隔时发 pdsync-hello——pdsync 此前只有断→连跳变才发 hello，
+            // 稳态无增量同步机制（对端收 hello 按 diff 回 need/data 收敛）
+            Action::StayConnected => self.maybe_send_steady_hello(root_id, &peer_id).await,
             // 重发快照补齐错过的变更。幂等（LWW 裁决），启动一次性广播可能
             // 造成的少量重复投递可接受。
-            Action::Resync => self.send_self_snapshots(root_id, &peer_id).await,
+            Action::Resync => {
+                // 本次 Resync 已发 hello：重置稳态触发状态，下个 StayConnected
+                // tick 以当前 digest 重建基线（避免连接跳变前的累积变更误触发）
+                *self
+                    .self_hello_state
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = SelfHelloState::default();
+                self.send_self_snapshots(root_id, &peer_id).await;
+            }
             Action::Dial => {
                 let target = PeerNodeInfo {
                     peer_id: Some(peer_id),
@@ -178,6 +205,59 @@ impl OrgSyncContext {
                     .await;
             }
         }
+    }
+
+    /// 稳态（StayConnected）自设备 hello 触发：对本机各类目 folded vv 算
+    /// 本机写入 digest，经 [`SelfHelloState::observe`] 判定——digest 变化
+    /// （本机个人域写入，≤1 tick 传播）或到达周期兜底间隔时发 pdsync-hello。
+    /// 远端合入不动本机 vv 分量，digest 不变，天然不触发（防回声）。
+    async fn maybe_send_steady_hello(&self, root_id: &str, peer_id: &str) {
+        let local_node_id = self.node.peer_id().to_string();
+        let exclude = crate::sync::pdsync::self_friend_key(root_id);
+        let digest = local_personal_write_digest(&self.storage, &local_node_id, Some(&exclude));
+        let now = self.now();
+        let send = self
+            .self_hello_state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .observe(digest, now);
+        if send {
+            self.send_pdsync_hello(root_id, peer_id, now).await;
+        }
+    }
+
+    /// 向已连接的自设备发 `pdsync-hello` 摘要（断→连跳变的 Resync 与稳态
+    /// 增量/周期触发共用；失败静默）。自 FriendRecord 键对称排除（peer 为
+    /// 设备相对值，不可互灌——双设备同账号排除键相同，folded vv 保持一致）。
+    async fn send_pdsync_hello(&self, root_id: &str, peer_id: &str, now: i64) {
+        let signing_key = self.signing_key.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let Some(signing_key) = signing_key else {
+            return;
+        };
+        let last_sync = crate::sync::pdsync::get_last_msg_sync_at(&self.storage, root_id);
+        let Ok(hello) = crate::sync::pdsync::build_hello(
+            &self.storage,
+            2_592_000_000,
+            500,
+            "eager",
+            Some(&crate::sync::pdsync::self_friend_key(root_id)),
+            last_sync,
+        ) else {
+            return;
+        };
+        let target = PeerNodeInfo {
+            peer_id: Some(peer_id.to_string()),
+            addresses: Vec::new(), // 已连接：dm_direct 短路直发
+        };
+        let envelope = crate::kernel::dm_envelope::build_envelope(
+            crate::kernel::dm_envelope::KIND_PDSYNC_HELLO,
+            root_id,
+            root_id,
+            now,
+            hello,
+            &signing_key,
+        );
+        let _ = self.node.dm_direct(&target, envelope).await;
     }
 
     /// 向已会合的自设备重发本机数据（断→连跳变触发；失败静默）。
@@ -206,27 +286,9 @@ impl OrgSyncContext {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .contains(peer_id);
-        // 0) pdsync-hello：摘要交换。对端支持则回 need/data 触发收敛；不
-        //    支持则静默（由下方旧快照回退兜底）。自 FriendRecord 键对称排除
-        //    （peer 为设备相对值，不可互灌——双设备同账号排除键相同，folded
-        //    vv 保持一致）。
-        if let Ok(hello) = crate::sync::pdsync::build_hello(
-            &self.storage,
-            2_592_000_000,
-            500,
-            "eager",
-            Some(&crate::sync::pdsync::self_friend_key(root_id)),
-        ) {
-            let envelope = crate::kernel::dm_envelope::build_envelope(
-                crate::kernel::dm_envelope::KIND_PDSYNC_HELLO,
-                root_id,
-                root_id,
-                now,
-                hello,
-                &signing_key,
-            );
-            let _ = self.node.dm_direct(&target, envelope).await;
-        }
+        // 0) pdsync-hello：摘要交换（与稳态触发共用同一发送路径）。对端支持
+        //    则回 need/data 触发收敛；不支持则静默（由下方旧快照回退兜底）。
+        self.send_pdsync_hello(root_id, peer_id, now).await;
         // 收尾（§7.1）：对端未证明支持 pdsync 时才回退补发旧快照；已支持
         // 的设备只走 pdsync 反熵（不再双发旧通道，避免冗余）。
         if !pdsync_capable {
@@ -521,5 +583,121 @@ impl OrgSyncContext {
                 }
             }
         }
+    }
+}
+
+/// 本机个人域写入 digest：各类目全部记录 pmeta 中本机 nodeId 分量**逐记录
+/// 求和**。
+///
+/// 不能用 `collect_category_vv` 的折叠值——折叠按分量取 max，同类目多条
+/// 记录的本机分量互相遮蔽（写一条新记录时 folded 本机分量不变，变更漏检）。
+/// 逐记录求和后，本机写入（`put_personal` / `bump_personal_meta` /
+/// `delete_personal` 家族）恒使被写记录的本机分量 +1，总和严格递增——任何
+/// 本机个人域写入都被察觉。远端合入（`apply_personal_remote` 家族）落的是
+/// 远端 pmeta：本机分量只有本机写入能推高，远端携带的本机分量不会高于本机
+/// 已有值（并发 LWW 远端胜出的极端情形可能替换为更旧值，至多带来一次多余
+/// hello——对端 diff 为 Equal 即静默收敛，无回声循环）。
+/// 单类目扫描失败按 0 计（下次 tick 重判）。
+fn local_personal_write_digest<S: StorageBackend>(
+    storage: &S,
+    local_node_id: &str,
+    exclude_key: Option<&str>,
+) -> i64 {
+    let mut sum = 0i64;
+    for category in crate::sync::pdsync::CATEGORIES {
+        for prefix in category.prefixes {
+            let meta_prefix = crate::sync::personal::personal_meta_key(prefix);
+            let Ok(rows) = storage.scan(&ScanOptions::prefix(&meta_prefix)) else {
+                continue;
+            };
+            for (meta_key, raw) in rows {
+                // 与 collect_category_vv 同口径：剥离 pmeta 前缀后必须仍命中
+                // category 前缀；排除键（自记录）不参与
+                let Some(record_key) =
+                    meta_key.strip_prefix(crate::sync::personal::PMETA_PREFIX)
+                else {
+                    continue;
+                };
+                if !category.prefixes.iter().any(|p| record_key.starts_with(p)) {
+                    continue;
+                }
+                if exclude_key == Some(record_key) {
+                    continue;
+                }
+                if let Ok(meta) = serde_json::from_str::<crate::sync::meta::DocMeta>(&raw) {
+                    sum = sum.wrapping_add(meta.vv.get(local_node_id).copied().unwrap_or(0));
+                }
+            }
+        }
+    }
+    sum
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::MemoryStorage;
+    use crate::sync::meta::DocMeta;
+    use crate::sync::personal::{apply_personal_remote, put_personal};
+
+    fn remote_meta(node: &str, counter: i64, ts: i64) -> DocMeta {
+        DocMeta {
+            vv: [(node.to_string(), counter)].into_iter().collect(),
+            ts,
+            node_id: Some(node.to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// 变更即触发 + 防回声：本机写入（put_personal 家族）使 digest 递增；
+    /// 远端合入（apply_personal_remote）只写远端 vv 分量，digest 不变——
+    /// 远端合入的写入不会触发稳态 hello，无回声循环。
+    #[test]
+    fn digest_tracks_local_writes_only() {
+        let mut s = MemoryStorage::new();
+        let d0 = local_personal_write_digest(&s, "node-a", None);
+        assert_eq!(d0, 0);
+
+        // 本机写入 → digest 变化
+        put_personal(&mut s, "node-a", "ct:friend:x", "\"v1\"", 1000).unwrap();
+        let d1 = local_personal_write_digest(&s, "node-a", None);
+        assert!(d1 > d0, "本机写入必须反映到 digest");
+
+        // 远端合入（新 key，直接采纳）→ digest 不变
+        apply_personal_remote(&mut s, "ct:friend:y", "\"v2\"", &remote_meta("node-b", 1, 2000))
+            .unwrap();
+        assert_eq!(local_personal_write_digest(&s, "node-a", None), d1, "远端合入不得触发");
+
+        // 远端合入覆盖本机已有 key（远端 vv 领先）→ digest 仍不变
+        let mut meta = remote_meta("node-b", 2, 3000);
+        meta.vv.insert("node-a".to_string(), 1);
+        apply_personal_remote(&mut s, "ct:friend:x", "\"v3\"", &meta).unwrap();
+        assert_eq!(local_personal_write_digest(&s, "node-a", None), d1, "远端胜出覆盖也不计入本机分量");
+
+        // 本机再写（含折叠排除键语义：自记录排除后不参与 digest）→ digest 递增
+        put_personal(&mut s, "node-a", "ct:friend:z", "\"v4\"", 4000).unwrap();
+        let d2 = local_personal_write_digest(&s, "node-a", None);
+        assert!(d2 > d1);
+        let excluded = local_personal_write_digest(&s, "node-a", Some("ct:friend:z"));
+        assert_eq!(excluded, d1, "排除键的记录不参与 digest");
+    }
+
+    /// 稳态 hello 判定：首次观察只建基线（不发）；本机写入 digest 变化即
+    /// 触发；未变未到点不发；到达周期兜底间隔发；发送后重新计时。
+    #[test]
+    fn steady_hello_observe_decisions() {
+        let mut st = SelfHelloState::default();
+        assert!(!st.observe(7, 1_000), "首次观察只建基线，不发");
+        assert!(!st.observe(7, 2_000), "digest 未变且未到点，不发");
+        assert!(st.observe(8, 3_000), "本机写入 digest 变化，变更即触发");
+        assert!(!st.observe(8, 4_000), "发送后未再变，不发");
+        assert!(
+            st.observe(8, 4_000 + super::super::SELF_DEVICE_HELLO_INTERVAL_MS),
+            "到达周期兜底间隔，发"
+        );
+        assert!(
+            !st.observe(8, 4_000 + super::super::SELF_DEVICE_HELLO_INTERVAL_MS + 1),
+            "发送后重新计时，不连发"
+        );
     }
 }
