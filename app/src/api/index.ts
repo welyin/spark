@@ -30,8 +30,9 @@ export * from './types';
 export function listenP2pEvents(handler: (event: P2pEventDto) => void): Promise<UnlistenFn> {
   return listen<P2pEventDto>('p2p-event', (event) => {
     const payload = event.payload;
+    // P2pEventDto 为判别联合：按 kind 收窄后 data 字段类型确定，不用 as any 跨边界
     if (payload.kind === 'ChatReceived') {
-      const data = (payload as any).data;
+      const data = payload.data;
       console.log(
         '[API listenP2pEvents] ChatReceived arrives in JS | msgId=',
         data?.message?.id,
@@ -295,10 +296,10 @@ export function createTauriApi(): ElectronAPI {
       // 宿主 → 插件后台反向查询（如删除联系人前的「bot 还在吗」询问）；
       // 插件未运行/超时返回 null，调用方按保守语义处理
       hostQuery: (pluginId: string, kind: string, payload: unknown) =>
-        call('plugin-host-query', { pluginId, kind, payload }),
+        call('plugin-host-query', pluginId, kind, payload),
       // 插件后台运行时的存活查询（bot 在线状态的权威来源）
       isBackgroundRunning: (pluginId: string) =>
-        call('plugin-background-running', { pluginId })
+        call('plugin-background-running', pluginId)
     },
     organization: {
       listMine: () => call('org-list-mine'),
@@ -448,7 +449,9 @@ export function createTauriApi(): ElectronAPI {
       // "host:port"，未设置为 null；setProxy 传空串关闭。保存后已建立的
       // 连接（市场 OnceLock 客户端、updater 客户端）需重启应用才生效
       getProxy: () => call('system-get-proxy'),
-      setProxy: (proxy) => call('system-set-proxy', proxy)
+      setProxy: (proxy) => call('system-set-proxy', proxy),
+      // 移动端返回键在一级页（栈底）时退出应用；桌面无系统返回键，不会触达
+      exitApp: () => call('system-exit-app')
     },
     sys: {
       exec: (program, args, workdir) =>

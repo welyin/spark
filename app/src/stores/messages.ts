@@ -248,11 +248,12 @@ function subscribeP2pEvents(): void {
   void listenP2pEvents((event) => {
     console.log('[subscribeP2pEvents] received event kind=', event.kind);
     if (event.kind === 'ChatReceived') {
+      // 判别联合按 kind 收窄后 data 形状确定（api/types.ts P2pEventDto）
       console.log(
         '[subscribeP2pEvents] ChatReceived dispatched | msgId=',
-        (event.data as any)?.message?.id,
+        event.data?.message?.id,
         'convId=',
-        (event.data as any)?.conversation?.id,
+        event.data?.conversation?.id,
       );
       onChatReceived(event.data);
     }

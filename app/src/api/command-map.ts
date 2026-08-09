@@ -136,6 +136,8 @@ export const COMMAND_MAP: Record<string, string> = {
   // HTTP 代理设置（updater/市场链路 GitHub 直连失败的规避，见 src-tauri proxy.rs）
   'system-get-proxy': 'system_get_proxy',
   'system-set-proxy': 'system_set_proxy',
+  // 移动端返回键栈底退出应用（App.vue 一级页返回处理）
+  'system-exit-app': 'system_exit_app',
   // sys 代理（插件通过内核代理执行外部命令 / HTTP 请求）
   'sys-exec': 'sys_exec',
   'sys-fetch': 'sys_fetch',

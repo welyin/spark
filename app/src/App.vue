@@ -226,6 +226,7 @@ import {
 } from './stores/current-space';
 import { refreshCurrentUser, currentUser } from './stores/current-user';
 import { refreshProfileExtraFromKernel } from './stores/profile-extra';
+import { refreshOrganizations } from './stores/org-membership';
 import { requestOpenChat } from './stores/pending-chat';
 import { requestOpenContact } from './stores/pending-contact';
 import { requestAddContact, type AddContactKind } from './stores/pending-add-contact';
@@ -236,7 +237,6 @@ import MobileTabBar from './components/MobileTabBar.vue';
 import MobileTopBar from './components/MobileTopBar.vue';
 import MobileSpaceDrawer from './components/MobileSpaceDrawer.vue';
 import { isMobileLayout, MOBILE_TABS } from './stores/ui-layout';
-import { invoke } from '@tauri-apps/api/core';
 import { listenP2pEvents } from './api';
 import { currentPage, popPage, resetStack } from './stores/mobile-nav';
 import { hasOverlay, requestCloseOverlay } from './stores/overlay-stack';
@@ -518,6 +518,17 @@ export default defineComponent({
               refreshProfileExtraFromKernel(currentUser.rootId);
             }
           });
+          return;
+        }
+        // 组织域数据经自设备 pdsync 合入（org:meta 组织记录 + ct:org 成员附加资料）：
+        // 刷新组织列表缓存（name/logo/成员），并对当前 org 空间的我的身份扩展字段
+        // 强制重新水合（org 作用域键 rootId@orgId）。
+        if (event.kind === 'OrgSynced') {
+          void refreshOrganizations().catch(() => {}).then(() => {
+            if (currentUser.rootId && currentSpace.value.type === 'org') {
+              refreshProfileExtraFromKernel(`${currentUser.rootId}@${currentSpace.value.orgId}`);
+            }
+          });
         }
       }).then((un) => unlistenP2p.push(un)).catch(() => {});
     });
@@ -555,8 +566,9 @@ export default defineComponent({
         }
         return;
       }
-      // 4) 一级页（主 tab 栈底）：退出应用（原生默认动作已被 JS 监听拦截，须显式退出）
-      invoke('system_exit_app').catch(() => {});
+      // 4) 一级页（主 tab 栈底）：退出应用（原生默认动作已被 JS 监听拦截，须显式退出；
+      //    走 system 域收敛点，组件不直接 invoke）
+      window.electronAPI?.system.exitApp().catch(() => {});
     }).catch(() => {
       // 桌面端 app 插件无 register_listener 命令，注册静默失败（桌面本无系统返回键事件）
     });

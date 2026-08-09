@@ -68,6 +68,7 @@ export type P2pEventDto =
   | { kind: 'FriendProfileUpdated'; data: { rootId: string; nickname: string; avatar?: string } }
   | { kind: 'SelfProfileSynced'; data: { nickname: string; avatar?: string } }
   | { kind: 'ContactsSynced'; data: { applied: number } }
+  | { kind: 'OrgSynced'; data: { orgMeta: number; orgContacts: number } }
   | { kind: 'ConversationsSynced'; data: { applied: number } }
   | { kind: 'DeviceUpdated'; data: DeviceDto }
   | { kind: 'OrgInviteReceived'; data: OrgInviteRecordDto }
@@ -753,6 +754,8 @@ export type ElectronAPI = {
     getProxy: () => Promise<string | null>;
     /** 设置 HTTP 代理（host:port，空串关闭）；已建立的连接需重启应用后生效 */
     setProxy: (proxy: string) => Promise<void>;
+    /** 移动端返回键在一级页（栈底）时显式退出应用（原生默认动作已被 JS 监听拦截） */
+    exitApp: () => Promise<void>;
   };
 
   dataManagement: {
