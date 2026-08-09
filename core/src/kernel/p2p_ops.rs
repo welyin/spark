@@ -101,6 +101,9 @@ impl Kernel {
             return Ok(node.peer_id().to_string());
         }
         let storage = self.require_storage()?.clone();
+        // 原始句柄：p2p 节点（邻居表/身份持久化）与 host（入站合入路径）
+        // 专用——合入写的是对端版本的数据，不得经中间件二次 bump
+        let raw = storage.raw().clone();
         let mut config = self.config.p2p.clone().unwrap_or_else(|| P2pConfig {
             app_version: self.config.app_version.clone(),
             ..Default::default()
@@ -115,7 +118,7 @@ impl Kernel {
         }
         let (org_sync_tx, org_sync_rx) = tokio::sync::mpsc::unbounded_channel();
         let host = Box::new(KernelHost {
-            storage: storage.clone(),
+            storage: raw.clone(),
             current_root_id: Arc::clone(&self.current_root_id_shared),
             collection_configs: Arc::clone(&self.collection_configs),
             org_acks: Arc::clone(&self.org_acks),
@@ -133,8 +136,12 @@ impl Kernel {
         let mut node =
             self.runtime
                 .handle()
-                .block_on(P2pNode::start(config, storage.clone(), host))?;
+                .block_on(P2pNode::start(config, raw.clone(), host))?;
         let peer_id = node.peer_id().to_string();
+        // 版本化中间件的 node_id 切换为运行态 peerId（stop 时回退持久化 id）
+        if let Some(cell) = &self.sync_node_cell {
+            *cell.lock().unwrap_or_else(|e| e.into_inner()) = peer_id.clone();
+        }
         self.p2p_start_error = None;
         // 存量好友回填优先集合：pdsync/历史导入的好友在启动时统一补入，
         // 保证断开后竞速识别立即可用（§4.4；已拉黑或无线索的不入）
@@ -156,21 +163,67 @@ impl Kernel {
             org_address_publish: Arc::clone(&self.org_address_publish),
             data_dir: self.config.data_dir.clone(),
             self_device_link: Arc::clone(&self.self_device_link),
+            // 自设备连接状态必须全 kernel 共享——worker 持有的若不复位，
+            // 自设备断连后"即时 hello"等触发路径仍向旧连接发（静默失败，
+            // 要等下轮 keepalive 才收敛）
+            self_device_links: Arc::clone(&self.self_device_links),
             pdsync_capable_self_devices: Arc::clone(&self.pdsync_capable_self_devices),
             // 稳态 hello 触发状态仅 keepalive tick 消费：worker 上下文（start_p2p
             // 装配，随 p2p 会话存活）持有即够；门面即席上下文新建空状态即可
             self_hello_state: Arc::new(std::sync::Mutex::new(org_sync::SelfHelloState::default())),
+            self_hello_immediate: Arc::new(std::sync::Mutex::new(
+                org_sync::ImmediateHelloState::default(),
+            )),
         };
         let worker = org_sync::spawn_worker(self.runtime.handle(), ctx, org_sync_rx);
 
+        // 变更信号观察：版本化中间件的受管本地写入（put/delete）→ 防抖后
+        // 向已连接自设备即时补发 pdsync-hello。替代分散在各业务操作里的
+        // 手动 notify 调用点——任何本地写入（含未来新增功能）自动获得
+        // 秒级同步触发。远端合入走 raw 句柄不触发信号（防回声）。
+        let watch = {
+            let watch_storage = self.require_storage()?.clone();
+            let watch_tx = org_sync_tx.clone();
+            self.runtime.handle().spawn(async move {
+                let mut last = watch_storage.last_local_write_ms();
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+                    let cur = watch_storage.last_local_write_ms();
+                    if cur > last {
+                        last = cur;
+                        let _ = watch_tx.send(OrgSyncRequest::SelfHelloNow);
+                    }
+                }
+            })
+        };
+        self.sync_watch = Some(watch);
+
         // 事件泵：node 事件流 → kernel 广播通道（壳层订阅）；
-        // KeepaliveTick 拦截为组织保活触发（覆盖网维护已在事件循环内完成）
+        // KeepaliveTick 拦截为组织保活触发（覆盖网维护已在事件循环内完成）；
+        // Connected/Disconnected 维护自设备连接集（即时 hello 消费——断连
+        // 不剔除会让触发路径向旧连接静默发丢，要等下轮 keepalive 才收敛）
         let tx = self.event_tx.clone();
         let org_tx = org_sync_tx.clone();
+        let links = Arc::clone(&self.self_device_links);
+        let my_peer = peer_id.clone();
         let pump = self.runtime.handle().spawn(async move {
             while let Some(event) = events.recv().await {
-                if matches!(event, P2pEvent::KeepaliveTick(_)) {
-                    let _ = org_tx.send(OrgSyncRequest::KeepaliveTick);
+                match &event {
+                    P2pEvent::KeepaliveTick(_) => {
+                        let _ = org_tx.send(OrgSyncRequest::KeepaliveTick);
+                    }
+                    P2pEvent::PeerConnected { peer_id } => {
+                        if peer_id != &my_peer {
+                            links.lock().unwrap_or_else(|e| e.into_inner()).insert(peer_id.clone());
+                        }
+                    }
+                    P2pEvent::PeerDisconnected { peer_id } => {
+                        links
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .remove(peer_id.as_str());
+                    }
+                    _ => {}
                 }
                 // 无订阅者时忽略发送失败
                 let _ = tx.send(event);
@@ -188,9 +241,13 @@ impl Kernel {
         let now = system_now_ms();
         if let Ok(mut storage) = self.require_storage().map(|s| s.clone()) {
             let node_id = self.sync_node_id();
-            if let Ok(record) =
-                crate::device::DeviceService::upsert_self(&mut storage, &peer_id, now, &node_id)
-            {
+            if let Ok(record) = crate::device::DeviceService::upsert_self(
+                &mut storage,
+                &peer_id,
+                now,
+                &node_id,
+                &self.config.app_version,
+            ) {
                 if let Ok(data) = serde_json::to_value(&record) {
                     let _ = self.event_tx.send(P2pEvent::DeviceUpdated(data));
                 }
@@ -206,6 +263,9 @@ impl Kernel {
     pub fn stop_p2p(&mut self) -> Result<()> {
         self.org_sync_tx = None;
         *self.p2p_node_shared.lock().unwrap() = None;
+        if let Some(watch) = self.sync_watch.take() {
+            watch.abort();
+        }
         if let Some(worker) = self.org_sync_worker.take() {
             worker.abort();
         }
@@ -214,6 +274,11 @@ impl Kernel {
         }
         if let Some(node) = self.p2p.take() {
             self.runtime.handle().block_on(node.stop());
+        }
+        // node_id 回退持久化派生 id（离线写入仍可稳定归因）
+        if let (Some(cell), Some(storage)) = (&self.sync_node_cell, &self.storage) {
+            *cell.lock().unwrap_or_else(|e| e.into_inner()) =
+                super::doc_ops::persisted_sync_node_id(storage.raw());
         }
         self.p2p_started_at = None;
         self.p2p_start_error = None;
@@ -240,10 +305,14 @@ impl Kernel {
             org_address_publish: Arc::clone(&self.org_address_publish),
             data_dir: self.config.data_dir.clone(),
             self_device_link: Arc::clone(&self.self_device_link),
+            self_device_links: Arc::clone(&self.self_device_links),
             pdsync_capable_self_devices: Arc::clone(&self.pdsync_capable_self_devices),
             // 稳态 hello 触发状态仅 keepalive tick 消费：worker 上下文（start_p2p
             // 装配，随 p2p 会话存活）持有即够；门面即席上下文新建空状态即可
             self_hello_state: Arc::new(std::sync::Mutex::new(org_sync::SelfHelloState::default())),
+            self_hello_immediate: Arc::new(std::sync::Mutex::new(
+                org_sync::ImmediateHelloState::default(),
+            )),
         })
     }
 

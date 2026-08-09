@@ -48,12 +48,13 @@
             v-if="activeMenu === 'profile'"
             detail-mode="drawer"
             :root-id="rootStatus.rootId ?? ''"
-            :nickname="rootStatus.nickname ?? ''"
-            :avatar="rootStatus.avatar ?? ''"
+            :nickname="currentUser.nickname"
+            :avatar="currentUser.avatar"
             @profile-updated="onProfileUpdated"
           />
           <MyCardModule v-else-if="activeMenu === 'card'" detail-mode="drawer" />
           <BackupModule v-else-if="activeMenu === 'backup'" detail-mode="drawer" :root-id="rootStatus.rootId" />
+          <DevicesModule v-else-if="activeMenu === 'devices'" detail-mode="drawer" :root-id="rootStatus.rootId ?? ''" />
           <!-- 组织身份（仅组织空间出现在菜单中） -->
           <OrgIdentityModule v-else-if="activeMenu === 'org'" detail-mode="drawer" />
           <!-- 朋友权限（个人：仅聊天+黑名单）/ 成员权限（组织：仅黑名单） -->
@@ -87,7 +88,7 @@
               :class="{ active: activeMenu === item.key }"
               @click="onSelectMenu(item.key)"
             >
-              <el-icon class="mine-menu-icon" :size="17"><component :is="item.icon" /></el-icon>
+              <el-icon class="mine-menu-icon" :size="17" :style="{ color: item.color }"><component :is="item.icon" /></el-icon>
               <span class="mine-menu-label">{{ item.label }}</span>
             </button>
           </nav>
@@ -97,12 +98,13 @@
         <ProfileModule
           v-if="activeMenu === 'profile'"
           :root-id="rootStatus.rootId ?? ''"
-          :nickname="rootStatus.nickname ?? ''"
-          :avatar="rootStatus.avatar ?? ''"
+          :nickname="currentUser.nickname"
+          :avatar="currentUser.avatar"
           @profile-updated="onProfileUpdated"
         />
         <MyCardModule v-else-if="activeMenu === 'card'" />
         <BackupModule v-else-if="activeMenu === 'backup'" :root-id="rootStatus.rootId" />
+        <DevicesModule v-else-if="activeMenu === 'devices'" :root-id="rootStatus.rootId ?? ''" />
         <!-- 组织身份（仅组织空间出现在菜单中） -->
         <OrgIdentityModule v-else-if="activeMenu === 'org'" />
         <!-- 朋友权限（个人：仅聊天+黑名单）/ 成员权限（组织：仅黑名单） -->
@@ -115,8 +117,9 @@
 <script lang="ts">
 import { computed, defineComponent, onMounted, ref, watch, type Component } from 'vue';
 import { ElMessage } from 'element-plus';
-import { Key, Lock, OfficeBuilding, Postcard, User } from '@element-plus/icons-vue';
+import { Key, Lock, Monitor, OfficeBuilding, Postcard, User } from '@element-plus/icons-vue';
 import { currentSpace, currentSpaceOrgId } from '../stores/current-space';
+import { currentUser } from '../stores/current-user';
 import { getOrgIdentity } from '../stores/org-identity';
 import { isMobileLayout } from '../stores/ui-layout';
 import { currentPage, popPage, pushPage, resetStack } from '../stores/mobile-nav';
@@ -128,11 +131,12 @@ import MobilePageTransition from '../components/MobilePageTransition.vue';
 import ProfileModule from '../components/mine/ProfileModule.vue';
 import MyCardModule from '../components/mine/MyCardModule.vue';
 import BackupModule from '../components/mine/BackupModule.vue';
+import DevicesModule from '../components/mine/DevicesModule.vue';
 import OrgIdentityModule from '../components/mine/OrgIdentityModule.vue';
 import PermissionModule from '../components/mine/PermissionModule.vue';
 import RootAuthCenter from './auth/RootAuthCenter.vue';
 
-type MenuKey = 'profile' | 'card' | 'backup' | 'org' | 'permission';
+type MenuKey = 'profile' | 'card' | 'backup' | 'devices' | 'org' | 'permission';
 
 /** 本页在导航栈中的 tab 键（与 App.vue activeTab 一致） */
 const MOBILE_TAB = 'mine';
@@ -146,9 +150,11 @@ export default defineComponent({
     ProfileModule,
     MyCardModule,
     BackupModule,
+    DevicesModule,
     OrgIdentityModule,
     PermissionModule,
-    RootAuthCenter
+    RootAuthCenter,
+    Monitor
   },
   emits: ['profile-updated'],
   setup(_, { emit }) {
@@ -165,12 +171,13 @@ export default defineComponent({
           { key: 'permission', label: '成员权限', icon: Key, color: '#ff7d00' }
         ];
       }
-      // 网络状态/设备管理在系统设置中，此处不再重复
+      // 网络状态仍在系统设置；设备管理在本页（个人空间）与设置页「个人设置」分组均提供入口
       return [
         { key: 'profile', label: '我的资料', icon: User, color: '#3296fa' },
         { key: 'card', label: '我的名片', icon: Postcard, color: '#34c19b' },
         { key: 'permission', label: '朋友权限', icon: Key, color: '#ff7d00' },
-        { key: 'backup', label: '账号备份', icon: Lock, color: '#7b61ff' }
+        { key: 'backup', label: '账号备份', icon: Lock, color: '#7b61ff' },
+        { key: 'devices', label: '设备管理', icon: Monitor, color: '#3296fa' }
       ];
     });
 
@@ -259,6 +266,9 @@ export default defineComponent({
 
     return {
       rootStatus,
+      // 昵称/头像展示统一取 currentUser 单例（SelfProfileSynced 事件会刷新它；
+      // 本地 rootStatus 只在挂载/本页保存时更新，跨设备同步到的昵称进不来）
+      currentUser,
       activeMenu,
       menuItems,
       currentSpace,

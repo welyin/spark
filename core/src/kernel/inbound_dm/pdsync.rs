@@ -31,13 +31,26 @@ pub(super) fn handle_pdsync_hello<S: StorageBackend>(
     body: &Value,
 ) -> Result<InboundDmResult> {
     if from != ctx.my_root_id {
+        log::info!(
+            "[CT_SYNC] handle_hello REJECT not-self-device | from={} my_root_id={}",
+            from,
+            ctx.my_root_id
+        );
         return done(fail_response("not-self-device"), Vec::new());
     }
     // 自 FriendRecord（`ct:friend:{myRootId}`）的 peer 是设备相对值，不可
     // 互灌：折叠/增量对称排除（双设备同账号排除键相同，folded vv 保持一致）
     let self_key = crate::sync::pdsync::self_friend_key(ctx.my_root_id);
     let exclude = Some(self_key.as_str());
+    // 对端回执：它已收讫本机删除日志到 dlogAck——推进其确认水位并尝试 GC
+    let dlog_ack = crate::sync::dlog::parse_dlog_ack(body);
+    ack_remote_journal(storage, ctx, dlog_ack);
     let remote_cats = crate::sync::pdsync::parse_hello_categories(body);
+    log::info!(
+        "[CT_SYNC] handle_hello ENTER | from={} remote_cats={:?}",
+        from,
+        remote_cats.keys().collect::<Vec<_>>()
+    );
     let mut out = Vec::new();
     for category in crate::sync::pdsync::CATEGORIES {
         // 扫描失败不降级为空 vv（空 vv 会把本机误判为纯落后/纯领先，引发
@@ -49,23 +62,64 @@ pub(super) fn handle_pdsync_hello<S: StorageBackend>(
         // 对端未声明该 category：视为空 vv（对端可能不支持该 category，等价
         // 于其落后——本机领先即主动推；本机为空则不动）
         let remote_vv = remote_cats.get(category.name).cloned().unwrap_or_default();
-        match crate::sync::pdsync::diff_category(&local_vv, &remote_vv) {
+        let diff = crate::sync::pdsync::diff_category(&local_vv, &remote_vv);
+        if category.name == "ct:friend" {
+            let outcome = match &diff {
+                crate::sync::pdsync::DiffOutcome::LocalBehind { .. } => "LocalBehind",
+                crate::sync::pdsync::DiffOutcome::LocalAhead => "LocalAhead",
+                crate::sync::pdsync::DiffOutcome::Concurrent => "Concurrent",
+                crate::sync::pdsync::DiffOutcome::Equal => "Equal",
+            };
+            log::info!(
+                "[CT_SYNC] handle_hello ct:friend diff | outcome={} local_vv={:?} remote_vv={:?}",
+                outcome,
+                local_vv,
+                remote_vv,
+            );
+        }
+        // 我对对端删除日志的已收序号（need 中回执，对方据此推墓碑增量）
+        let my_seen = crate::sync::dlog::get_seen(storage, ctx.remote_peer_id).unwrap_or(0);
+        match diff {
             crate::sync::pdsync::DiffOutcome::LocalBehind { local_vv } => {
                 // 本机落后：请求对端补增量
-                let need_body = crate::sync::pdsync::build_need(category.name, &local_vv);
+                let need_body =
+                    crate::sync::pdsync::build_need(category.name, &local_vv, my_seen);
                 out.push(PdsyncOut::Need { body: need_body });
             }
             crate::sync::pdsync::DiffOutcome::LocalAhead => {
-                push_category_data(storage, &mut out, category, &remote_vv, exclude);
+                push_category_data(storage, &mut out, category, &remote_vv, exclude, dlog_ack);
             }
             crate::sync::pdsync::DiffOutcome::Concurrent => {
                 // 双向交换：既请求对端缺的，也主动推本机缺的（data 逐条向量
                 // 幂等去重，双发收敛）
-                let need_body = crate::sync::pdsync::build_need(category.name, &local_vv);
+                let need_body =
+                    crate::sync::pdsync::build_need(category.name, &local_vv, my_seen);
                 out.push(PdsyncOut::Need { body: need_body });
-                push_category_data(storage, &mut out, category, &remote_vv, exclude);
+                push_category_data(storage, &mut out, category, &remote_vv, exclude, dlog_ack);
             }
-            crate::sync::pdsync::DiffOutcome::Equal => {}
+            crate::sync::pdsync::DiffOutcome::Equal => {
+                // 折叠 vv Equal 不代表对端收齐墓碑（折叠丢失 key 维度，
+                // Equal 可能由同 nodeId 其他记录的分量撑起）——墓碑按日志
+                // ACK 游标独立补推（无未确认条目时为空操作）
+                let Ok(tombs) = crate::sync::pdsync::collect_tombstones_after(
+                    storage,
+                    category,
+                    exclude,
+                    dlog_ack,
+                ) else {
+                    continue;
+                };
+                if !tombs.is_empty() {
+                    let batches =
+                        crate::sync::pdsync::split_batches(tombs, PDSYNC_BATCH_BYTES);
+                    let total = batches.len();
+                    for (i, batch) in batches.into_iter().enumerate() {
+                        let body =
+                            crate::sync::pdsync::build_data_batch(category.name, &batch, i, total);
+                        out.push(PdsyncOut::Data { body });
+                    }
+                }
+            }
         }
     }
     // P4 消息窗口：消息不走折叠（§6.2），收到 hello 即按对端声明的 msgWindow
@@ -118,19 +172,39 @@ pub(super) fn handle_pdsync_need<S: StorageBackend>(
     if from != ctx.my_root_id {
         return done(fail_response("not-self-device"), Vec::new());
     }
-    let Some((category_name, known_vv)) = crate::sync::pdsync::parse_need(body) else {
+    let Some((category_name, known_vv, dlog_ack)) = crate::sync::pdsync::parse_need(body)
+    else {
         return done(fail_response("invalid-body"), Vec::new());
     };
     let Some(category) = crate::sync::pdsync::category_by_name(&category_name) else {
         return done(fail_response("unknown-category"), Vec::new());
     };
+    // need 同样携带对端回执：推进其确认水位并尝试 GC
+    ack_remote_journal(storage, ctx, dlog_ack);
     // 自记录排除（与 hello 侧同键）：增量采集不推自 FriendRecord（含墓碑）
     let self_key = crate::sync::pdsync::self_friend_key(ctx.my_root_id);
-    let Ok(records) =
-        crate::sync::pdsync::collect_incremental(storage, category, &known_vv, Some(&self_key))
-    else {
+    let Ok(records) = crate::sync::pdsync::collect_incremental(
+        storage,
+        category,
+        &known_vv,
+        Some(&self_key),
+        dlog_ack,
+    ) else {
         return done(fail_response("collection-failed"), Vec::new());
     };
+    if category_name == "ct:friend" {
+        let tombs: Vec<_> = records
+            .iter()
+            .filter(|r| crate::sync::is_tombstone(&r.meta))
+            .map(|r| format!("{}(vv={:?})", r.key, r.meta.vv))
+            .collect();
+        log::info!(
+            "[CT_SYNC] pdsync-need ct:friend | known_vv={:?} collected={} tombstones={:?}",
+            known_vv,
+            records.len(),
+            tombs,
+        );
+    }
     let batches = crate::sync::pdsync::split_batches(records, PDSYNC_BATCH_BYTES);
     let total = batches.len();
     let mut out = Vec::with_capacity(total);
@@ -198,7 +272,12 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
     // 回填成批到达，逐条发会冲垮广播通道）
     let mut latest_msg_by_conv: std::collections::BTreeMap<String, MessageRecord> =
         std::collections::BTreeMap::new();
+    // 对端删除日志回执依据：本批携带的最大 dseq（循环结束后推进 seen）
+    let mut max_dseq: Option<u64> = None;
     for record in records {
+        if let Some(dseq) = record.dseq {
+            max_dseq = Some(max_dseq.map_or(dseq, |m: u64| m.max(dseq)));
+        }
         if record.key == self_key {
             continue;
         }
@@ -220,13 +299,15 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
                 let meta_raw = serde_json::to_string(&record.meta)?;
                 let meta_key = crate::sync::personal_meta_key(&record.key);
                 if crate::sync::is_tombstone(&record.meta) {
-                    // 会话删除传播：删本体 + 落墓碑 pmeta（单 batch）
-                    storage
-                        .batch(vec![
-                            crate::storage::BatchOperation::delete(record.key.clone()),
-                            crate::storage::BatchOperation::put(meta_key, meta_raw),
-                        ])
-                        .map_err(crate::sync::SyncError::from)?;
+                    // 会话删除传播：删本体 + 落墓碑 pmeta + 补登删除日志
+                    // （接力传播给其他自设备；单 batch）
+                    let (_seq, dlog_ops) = crate::sync::dlog::append_ops(storage, &record.key)?;
+                    let mut ops = vec![
+                        crate::storage::BatchOperation::delete(record.key.clone()),
+                        crate::storage::BatchOperation::put(meta_key, meta_raw),
+                    ];
+                    ops.extend(dlog_ops);
+                    storage.batch(ops).map_err(crate::sync::SyncError::from)?;
                     convs_applied += 1;
                 } else if let Ok(remote) =
                     serde_json::from_value::<crate::message::ConversationRecord>(
@@ -403,6 +484,32 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
         })));
     }
 
+    // 删除日志回执：推进我对对端日志的已收序号，并立即回发一个 need
+    // 携带 dlogAck——回执若等对端下轮 hello/need 再搭车（最坏到周期
+    // 兜底 hello），发送方的 ACK 重发会误判丢帧；立即回执让水位秒级
+    // 推进（GC 与重发抑制的依据）。knownVv 用本地折叠 vv，兼作一轮
+    // 常规反熵（通常空增量）。
+    let mut out: Vec<PdsyncOut> = Vec::new();
+    if let Some(dseq) = max_dseq {
+        crate::sync::dlog::set_seen(storage, ctx.remote_peer_id, dseq)?;
+        if let Some(category) = crate::sync::pdsync::category_by_name(&category_name) {
+            let self_key = crate::sync::pdsync::self_friend_key(ctx.my_root_id);
+            let local_vv =
+                crate::sync::pdsync::collect_category_vv(storage, category, Some(&self_key))
+                    .unwrap_or_default();
+            let seen = crate::sync::dlog::get_seen(storage, ctx.remote_peer_id).unwrap_or(0);
+            log::info!(
+                "[CT_SYNC] dlog ack | peer={} category={} dlogAck={}",
+                ctx.remote_peer_id,
+                category_name,
+                seen
+            );
+            out.push(PdsyncOut::Need {
+                body: crate::sync::pdsync::build_need(&category_name, &local_vv, seen),
+            });
+        }
+    }
+
     // 记录最后收到对端 data 的时间，以供下次 Hello 携带 lastMsgSyncAt，
     // 避免每轮 Hello 全量推已同步的消息窗口。
     crate::sync::pdsync::set_last_msg_sync_at(storage, ctx.my_root_id, ctx.now_ms)?;
@@ -414,7 +521,7 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
         self_profile: None,
         device_sync_reply: None,
         profile_sync_reply: None,
-        pdsync_out: Vec::new(),
+        pdsync_out: out,
         // host 用 profile_applied 决定是否回写身份文件资料
         profile_applied,
     })
@@ -478,18 +585,59 @@ const PDSYNC_BATCH_BYTES: usize = 256 * 1024;
 
 /// 采集 category 相对对端折叠 vv（`remote_vv`）的增量，分批发入 `out`。
 /// `exclude_key`：对称排除键（自 FriendRecord，见 handle_pdsync_hello）。
+/// 对端回执处理：推进其对本机删除日志的确认水位，并按"全员确认"严格规则
+/// GC（等待集合 = 设备清单中除本机外的全部设备；水位取 min）。
+fn ack_remote_journal<S: StorageBackend>(storage: &mut S, ctx: &InboundContext<'_>, ack: u64) {
+    if ack == 0 {
+        return; // 无回执（旧版本对端/首轮）：水位不动，GC 阈值必为 0
+    }
+    if crate::sync::dlog::set_watermark(storage, ctx.remote_peer_id, ack).is_err() {
+        return;
+    }
+    let Ok(devices) = crate::device::DeviceService::list(storage) else {
+        return;
+    };
+    let ids: Vec<String> = devices.into_iter().map(|d| d.peer_id).collect();
+    let Ok(threshold) = crate::sync::dlog::gc_threshold(storage, &ids, ctx.node_id) else {
+        return;
+    };
+    if let Ok(removed) = crate::sync::dlog::gc(storage, threshold)
+        && removed > 0
+    {
+        log::info!("[CT_SYNC] dlog gc | removed={} threshold={}", removed, threshold);
+    }
+}
+
 fn push_category_data<S: StorageBackend>(
     storage: &mut S,
     out: &mut Vec<PdsyncOut>,
     category: &crate::sync::pdsync::Category,
     remote_vv: &crate::sync::meta::VersionVector,
     exclude_key: Option<&str>,
+    dlog_ack: u64,
 ) {
-    let Ok(records) =
-        crate::sync::pdsync::collect_incremental(storage, category, remote_vv, exclude_key)
-    else {
+    let Ok(records) = crate::sync::pdsync::collect_incremental(
+        storage,
+        category,
+        remote_vv,
+        exclude_key,
+        dlog_ack,
+    ) else {
         return;
     };
+    if category.name == "ct:friend" {
+        let tombs: Vec<_> = records
+            .iter()
+            .filter(|r| crate::sync::is_tombstone(&r.meta))
+            .map(|r| format!("{}(vv={:?})", r.key, r.meta.vv))
+            .collect();
+        log::info!(
+            "[CT_SYNC] push_category_data ct:friend | remote_vv={:?} collected={} tombstones={:?}",
+            remote_vv,
+            records.len(),
+            tombs,
+        );
+    }
     let batches = crate::sync::pdsync::split_batches(records, PDSYNC_BATCH_BYTES);
     let total = batches.len();
     for (i, batch) in batches.into_iter().enumerate() {

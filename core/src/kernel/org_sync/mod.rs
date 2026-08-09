@@ -40,7 +40,7 @@ use crate::p2p::keepalive::RecoveryTrigger;
 use crate::p2p::node::system_now_ms;
 use crate::p2p::peer_targets::{PeerNodeInfo, extract_peer_id};
 use crate::p2p::{P2pEvent, P2pNode};
-use crate::storage::{SledStorage, StorageBackend};
+use crate::storage::StorageBackend;
 
 use super::host::{CollectionConfigs, SharedOrgShareAckTracker};
 
@@ -115,6 +115,19 @@ impl SelfHelloState {
     }
 }
 
+/// 即时 hello 的最短间隔（防抖窗口）：窗口内的再次删除触发记一次尾随
+/// 补发，覆盖批量删除的尾巴。
+const SELF_HELLO_IMMEDIATE_MIN_INTERVAL_MS: i64 = 1_000;
+
+/// 即时 hello 防抖状态（仅 org-sync worker 的 `SelfHelloNow` 分支读写）。
+#[derive(Default)]
+pub(crate) struct ImmediateHelloState {
+    /// 上次即时 hello 发送时间（ms）。
+    last_sent_ms: i64,
+    /// 防抖窗口内是否已登记尾随补发任务。
+    trailing_pending: bool,
+}
+
 /// org-sync worker 的请求队列项。
 #[derive(Clone, Debug)]
 pub(crate) enum OrgSyncRequest {
@@ -128,6 +141,10 @@ pub(crate) enum OrgSyncRequest {
     },
     /// keepalive tick 的组织层保活（候选拨号/反熵/补副本/recovery）。
     KeepaliveTick,
+    /// 本机个人域删除（tombstone 写入）后的即时 hello 触发：不等
+    /// keepalive tick（最坏 ~60s），立即向已连接自设备补发 pdsync-hello，
+    /// 对端回 need 即拉走墓碑（删除传播秒级）。
+    SelfHelloNow,
 }
 
 /// org-pull 对账计数（org-pull-sync.ts:458-467；`synced === pulled` 如实保留）。
@@ -184,7 +201,7 @@ impl From<OrgReconcileStats> for PeerOrgSyncResult {
 /// 组织同步编排上下文（worker 与门面方法共享的句柄包；全部 Clone 廉价）。
 #[derive(Clone)]
 pub(crate) struct OrgSyncContext {
-    pub(crate) storage: SledStorage,
+    pub(crate) storage: crate::kernel::KernelStorage,
     pub(crate) node: Arc<P2pNode>,
     pub(crate) current_root_id: Arc<Mutex<Option<String>>>,
     pub(crate) signing_key: Arc<Mutex<Option<SigningKey>>>,
@@ -197,16 +214,23 @@ pub(crate) struct OrgSyncContext {
     pub(crate) org_address_publish: Arc<Mutex<HashMap<String, i64>>>,
     /// 应用数据目录（自设备重连后读身份文件装配 profile-sync 快照用）。
     pub(crate) data_dir: std::path::PathBuf,
-    /// 自设备链路状态：上一 tick 观察到的已连接配对设备 peerId（None=未连接）。
+    /// 自设备链路状态（单一槽位，维持稳态 hello 状态机的既有语义）：
+    /// 上一 tick 观察到的已连接配对设备 peerId（None=未连接）。
     /// 断→连跳变时触发 device-sync + profile-sync 快照重发，补齐对端离线
     /// 期间错过的变更（一次性启动广播无重试，靠此状态机收敛）。
     pub(crate) self_device_link: Arc<Mutex<Option<String>>>,
+    /// 自设备已连接 peerId 集合（多设备视图，全 kernel 共享——事件泵在
+    /// Disconnected 时复位）。"即时 hello"等触发路径遍历此集合逐台发送；
+    /// 单一槽位无法表达多设备，且不复位的槽位会在断连后静默发丢。
+    pub(crate) self_device_links: Arc<Mutex<std::collections::HashSet<String>>>,
     /// 已证明支持 pdsync 的自设备 peerId 集合（host 验签通过后按连接层
     /// peerId 写入——按设备粒度；保活读取决定是否回退发旧快照，见 §7.1）。
     pub(crate) pdsync_capable_self_devices: Arc<Mutex<std::collections::HashSet<String>>>,
     /// 自设备稳态 hello 触发状态（变更 digest 基线 + 周期兜底计时；仅
     /// keepalive tick 的 StayConnected/Resync 分支读写）。
     pub(crate) self_hello_state: Arc<Mutex<SelfHelloState>>,
+    /// 即时 hello 防抖状态（仅 worker 的 SelfHelloNow 分支读写）。
+    pub(crate) self_hello_immediate: Arc<Mutex<ImmediateHelloState>>,
 }
 
 /// org-sync worker 主循环：推送/保活串行消费（kernel `start_p2p` 装配，
@@ -224,6 +248,7 @@ pub(crate) fn spawn_worker(
                     actor_root_id,
                 } => ctx.push_org_to_known_members(&org_id, &actor_root_id).await,
                 OrgSyncRequest::KeepaliveTick => ctx.maintain_org_tick().await,
+                OrgSyncRequest::SelfHelloNow => ctx.self_hello_now(),
             }
         }
     })
@@ -295,7 +320,7 @@ fn generate_sync_id() -> String {
 /// 对账（pull-list 捎带自签 claim → 逐组织快照合并），新设备由此从在线
 /// 自设备拉回「我的组织」全量记录；`local_peer_id`（本机）排除在外。
 fn collect_org_peer_candidates(
-    storage: &SledStorage,
+    storage: &crate::kernel::KernelStorage,
     current_root_id: &str,
     local_peer_id: Option<&str>,
 ) -> Vec<PeerNodeInfo> {
@@ -391,7 +416,7 @@ fn collect_org_peer_candidates(
 
 /// 本地相关组织（org-pull-sync.ts:133-147）：当前用户为成员的组织。
 fn list_local_related_orgs(
-    storage: &SledStorage,
+    storage: &crate::kernel::KernelStorage,
     current_root_id: &str,
 ) -> crate::org::Result<HashMap<String, OrganizationRecord>> {
     let records = OrganizationService::read_all_organizations(storage)?;

@@ -30,14 +30,15 @@ impl OrganizationService {
         Ok(())
     }
 
-    /// pdsync 感知的邀请记录写入（P5）：`put_personal` 落 `org:inv:*` + bump
-    /// pmeta，使邀请记录可经自设备 pdsync 同步。
+    /// pdsync 感知的邀请记录写入（P5）：落 `org:inv:*`；版本记账由中间件
+    /// 自动完成（调用方传版本化句柄）。
     pub fn put_invite_record_pdsync<S: StorageBackend>(
         storage: &mut S,
         record: &OrgInviteRecord,
         now_ms: i64,
         node_id: &str,
     ) -> Result<()> {
+        let _ = (now_ms, node_id); // 记账已下沉中间件，参数保留以稳定签名
         let mut record = record.clone();
         if record.updated_at == 0 {
             record.updated_at = record.created_at;
@@ -47,12 +48,7 @@ impl OrganizationService {
             OrgInviteDirection::Incoming => org_invite_in_key(&record.org_id, &record.peer_root_id),
         };
         let json = serde_json::to_string(&record)?;
-        crate::sync::put_personal(storage, node_id, &key, &json, now_ms).map_err(|e| {
-            OrgError::Json(serde_json::Error::io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                e.to_string(),
-            )))
-        })?;
+        storage.put(&key, &json)?;
         Ok(())
     }
 
@@ -178,12 +174,9 @@ impl OrganizationService {
         record.status = status;
         record.updated_at = now_ms;
         let json = serde_json::to_string(&record)?;
-        crate::sync::put_personal(storage, node_id, &key, &json, now_ms).map_err(|e| {
-            OrgError::Json(serde_json::Error::io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                e.to_string(),
-            )))
-        })?;
+        // 版本记账由中间件自动完成
+        let _ = node_id;
+        storage.put(&key, &json)?;
         Ok(Some(record))
     }
 

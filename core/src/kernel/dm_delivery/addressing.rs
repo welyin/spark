@@ -232,10 +232,13 @@ mod tests {
     fn device_record(peer_id: &str) -> crate::device::DeviceRecord {
         crate::device::DeviceRecord {
             peer_id: peer_id.to_string(),
+            device_uid: None,
             device_name: "对端设备".to_string(),
             os: "Android".to_string(),
+            os_version: "14".to_string(),
             arch: "aarch64".to_string(),
             macs: Vec::new(),
+            app_version: String::new(),
             updated_at: 100,
             last_seen_at: 100,
         }

@@ -14,7 +14,7 @@ impl Kernel {
     pub fn message_delete(&mut self, space: &str, conv_id: &str, message_id: &str) -> Result<()> {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        MessageService::delete_message(self.require_storage_mut()?, space, conv_id, message_id)?;
+        MessageService::delete_message(self.require_storage_raw_mut()?, space, conv_id, message_id)?;
         Ok(())
     }
 
@@ -23,7 +23,7 @@ impl Kernel {
     pub fn message_mark_read(&mut self, space: &str, conv_id: &str) -> Result<()> {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        MessageService::mark_read(self.require_storage_mut()?, space, conv_id)?;
+        MessageService::mark_read(self.require_storage_raw_mut()?, space, conv_id)?;
         if let Some(conv) = MessageService::get_conversation(self.require_storage()?, space, conv_id)?
             && conv.kind == ConversationKind::Direct
         {
@@ -44,6 +44,7 @@ impl Kernel {
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
         let now = system_now_ms();
         let node_id = self.sync_node_id();
+        // 元数据写经版本化句柄：自动记账 + 触发变更信号（即时 hello）
         MessageService::set_draft_pdsync(
             self.require_storage_mut()?,
             space,
@@ -100,7 +101,7 @@ impl Kernel {
     pub fn message_clear(&mut self, space: &str, conv_id: &str) -> Result<()> {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        MessageService::clear_messages(self.require_storage_mut()?, space, conv_id)?;
+        MessageService::clear_messages(self.require_storage_raw_mut()?, space, conv_id)?;
         Ok(())
     }
 
@@ -110,6 +111,8 @@ impl Kernel {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
         let node_id = self.sync_node_id();
+        // 版本化句柄：conv 键受管 → 墓碑 + 删除日志 + 变更信号自动完成
+        // （消息键 msg:item 不受管，裸删透传）
         MessageService::delete_conversation_pdsync(
             self.require_storage_mut()?,
             space,

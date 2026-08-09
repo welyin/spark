@@ -118,11 +118,21 @@ impl UnlockedIdentity {
     }
 }
 
+/// kernel 存储类型：版本化中间件（写侧同步记账下沉，§11.5）包装 sled。
+///
+/// 经 `require_storage*` 拿到的写句柄对受管前缀自动完成 vv bump/pmeta/
+/// 墓碑/删除日志；远端合入与消息驱动的 conv 更新经
+/// [`Kernel::require_storage_raw_mut`] 绕过（不触发本地记账）。
+pub(crate) type KernelStorage = crate::sync::versioned::VersionedStorage<SledStorage>;
+
 /// kernel 门面：壳层持有的单例。
 pub struct Kernel {
     pub(crate) config: KernelConfig,
     pub(crate) runtime: tokio::runtime::Runtime,
-    pub(crate) storage: Option<SledStorage>,
+    pub(crate) storage: Option<KernelStorage>,
+    /// 版本化中间件的 node_id 共享格（p2p 启动填 peerId、停止回退持久化
+    /// 派生 id；open_storage 时建立）。
+    pub(crate) sync_node_cell: Option<crate::sync::versioned::SharedNodeId>,
     /// 当前存储目录所属身份。
     pub(crate) storage_root_id: Option<String>,
     pub(crate) unlocked: Option<UnlockedIdentity>,
@@ -136,6 +146,9 @@ pub struct Kernel {
     pub(crate) p2p_pump: Option<tokio::task::JoinHandle<()>>,
     /// org-sync worker（推送/保活串行队列），随 p2p 起停。
     pub(crate) org_sync_worker: Option<tokio::task::JoinHandle<()>>,
+    /// 变更信号观察任务（版本化中间件的本地写入信号 → 即时 hello 触发），
+    /// 随 p2p 起停。
+    pub(crate) sync_watch: Option<tokio::task::JoinHandle<()>>,
     /// org-sync 请求队列的发送端（p2p 运行期存在；host 与门面触发推送用）。
     pub(crate) org_sync_tx: Option<tokio::sync::mpsc::UnboundedSender<OrgSyncRequest>>,
     pub(crate) event_tx: broadcast::Sender<P2pEvent>,
@@ -163,6 +176,10 @@ pub struct Kernel {
     /// 自设备链路状态（org-sync worker 与门面共享；上一 tick 观察到的已
     /// 连接配对设备 peerId，断→连跳变触发快照重发）。
     pub(crate) self_device_link: Arc<Mutex<Option<String>>>,
+    /// 自设备已连接 peerId 集合（多设备视图；事件泵 Connected/Disconnected
+    /// 维护 + org-sync tick 兜底）。"即时 hello"等触发路径遍历此集合逐台
+    /// 发送——不复位的连接状态会让触发路径向已断设备静默发丢。
+    pub(crate) self_device_links: Arc<Mutex<std::collections::HashSet<String>>>,
     /// 已证明支持 pdsync 的自设备 peerId 集合（收尾灰度：收到对端回发的
     /// pdsync-need/data 且验签通过即按连接层 peerId 标记——按设备粒度，
     /// 一台新设备不会停掉其他自设备的旧快照回退；send_self_snapshots 据此
@@ -218,6 +235,7 @@ impl Kernel {
             config,
             runtime,
             storage: None,
+            sync_node_cell: None,
             storage_root_id: None,
             unlocked: None,
             data_mgmt: None,
@@ -226,6 +244,7 @@ impl Kernel {
             p2p_start_error: None,
             p2p_pump: None,
             org_sync_worker: None,
+            sync_watch: None,
             org_sync_tx: None,
             event_tx,
             current_root_id_shared,
@@ -238,6 +257,7 @@ impl Kernel {
             recovery_trigger: Arc::new(Mutex::new(RecoveryTrigger::new())),
             org_address_publish: Arc::new(Mutex::new(HashMap::new())),
             self_device_link: Arc::new(Mutex::new(None)),
+            self_device_links: Arc::new(Mutex::new(std::collections::HashSet::new())),
             pdsync_capable_self_devices: Arc::new(std::sync::Mutex::new(
                 std::collections::HashSet::new(),
             )),
@@ -271,7 +291,7 @@ impl Kernel {
             dm.stop();
         }
         if let Some(storage) = self.storage.take() {
-            storage.flush()?;
+            storage.raw().flush()?;
             // 句柄随 take 丢弃：p2p 已停，此为最后引用，sled 锁立即释放
         }
         *self.plugin_host.storage.lock().unwrap_or_else(|e| e.into_inner()) = None;
@@ -300,13 +320,33 @@ impl Kernel {
     /// 打开指定身份的存储并启动数据治理服务（调用方负责先停 P2P）。
     fn open_storage(&mut self, root_id: &str) -> Result<()> {
         let dir = self.config.data_dir.join(Self::sled_dir_name(root_id));
-        let storage = SledStorage::open(&dir)?;
+        let mut raw = SledStorage::open(&dir)?;
         let mut dm = DataManagementService::new(Some(dir.to_string_lossy().into_owned()));
         dm.start();
-        self.storage = Some(storage);
-        // 插件宿主能力的存储镜像同步指向新库（sled 克隆共享底层句柄）
+        // 删除日志升级迁移：journal 引入前的既有墓碑 pmeta 一次性补登，
+        // 否则这些历史删除无法按新机制传播（幂等，标记键门控；在原始句柄
+        // 上执行——迁移本身不参与版本记账）
+        match crate::sync::dlog::backfill_from_tombstones(&mut raw) {
+            Ok(n) if n > 0 => {
+                log::info!("[CT_SYNC] dlog backfill | migrated tombstones={n}");
+            }
+            Err(e) => {
+                log::warn!("[CT_SYNC] dlog backfill failed: {e}");
+            }
+            _ => {}
+        }
+        // 版本化中间件：node_id 初始取持久化派生 id（p2p 启动后更新为
+        // peerId——见 start_p2p/stop_p2p）
+        let cell = crate::sync::versioned::shared_node_id(
+            crate::kernel::doc_ops::persisted_sync_node_id(&raw),
+        );
+        let storage = KernelStorage::new(raw, std::sync::Arc::clone(&cell));
+        self.sync_node_cell = Some(cell);
+        // 插件宿主能力的存储镜像指向原始句柄（插件数据走 org 域/doc:*，
+        // 非受管前缀；P6 声明式 API 落地时改指版本化句柄）
         *self.plugin_host.storage.lock().unwrap_or_else(|e| e.into_inner()) =
-            self.storage.clone();
+            Some(storage.raw().clone());
+        self.storage = Some(storage);
         self.storage_root_id = Some(root_id.to_string());
         self.data_mgmt = Some(dm);
         Ok(())
@@ -324,24 +364,37 @@ impl Kernel {
             dm.stop();
         }
         if let Some(storage) = &self.storage {
-            storage.flush()?;
+            storage.raw().flush()?;
         }
         self.open_storage(root_id)
     }
 
-    pub(crate) fn require_storage(&self) -> Result<&SledStorage> {
+    pub(crate) fn require_storage(&self) -> Result<&KernelStorage> {
         self.storage.as_ref().ok_or(KernelError::StorageNotReady)
     }
 
-    pub(crate) fn require_storage_mut(&mut self) -> Result<&mut SledStorage> {
+    pub(crate) fn require_storage_mut(&mut self) -> Result<&mut KernelStorage> {
         self.storage.as_mut().ok_or(KernelError::StorageNotReady)
+    }
+
+    /// 原始可变（未版本化）存储句柄——两条专用路径：
+    /// 1. 远端合入（pdsync/contact-sync/profile-sync apply）：写的是对端
+    ///    版本的数据，经中间件会被错误二次 bump（回声污染 vv）；
+    /// 2. 消息驱动的 conv 记录更新（追加/已读/未读计数）：高频消息流
+    ///    不得推高 pmeta（`bump_personal_meta` 自定义 ts 语义的同族）。
+    pub(crate) fn require_storage_raw_mut(&mut self) -> Result<&mut SledStorage> {
+        Ok(self
+            .storage
+            .as_mut()
+            .ok_or(KernelError::StorageNotReady)?
+            .raw_mut())
     }
 
     /// 测试专用：克隆共享存储句柄（sled 内部为 Arc，克隆不重复占用锁）。
     /// 仅供壳层测试断言底层 KV，正常代码路径请走公开 API。
     #[doc(hidden)]
     pub fn __test_storage(&self) -> Option<SledStorage> {
-        self.storage.clone()
+        self.storage.as_ref().map(|s| s.raw().clone())
     }
 
     /// 测试专用：事件广播发送端（模拟 p2p host 的入站事件外发，驱动插件

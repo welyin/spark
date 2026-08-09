@@ -226,6 +226,7 @@ import {
 } from './stores/current-space';
 import { refreshCurrentUser, currentUser } from './stores/current-user';
 import { refreshProfileExtraFromKernel } from './stores/profile-extra';
+import { refreshOrgIdentity } from './stores/org-identity';
 import { refreshOrganizations } from './stores/org-membership';
 import { requestOpenChat } from './stores/pending-chat';
 import { requestOpenContact } from './stores/pending-contact';
@@ -502,7 +503,10 @@ export default defineComponent({
     const unlistenP2p: Array<() => void> = [];
 
     onMounted(() => {
-      void loadCurrentUser();
+      void loadCurrentUser().then(() => {
+        // 初次水合组织身份（内核成员字段覆盖 localStorage 种子缓存）
+        refreshOrgIdentity();
+      });
       // 懒校验启动恢复的组织空间：组织已不存在时回退个人空间
       void validateCurrentSpace();
       // 插件后台运行时对账（内核 QuickJS 沙箱）：身份切换会停全部插件后台，
@@ -525,6 +529,8 @@ export default defineComponent({
         // 强制重新水合（org 作用域键 rootId@orgId）。
         if (event.kind === 'OrgSynced') {
           void refreshOrganizations().catch(() => {}).then(() => {
+            // 成员身份字段（组织内昵称/头像/开关）经内核同步：重水合本地缓存
+            refreshOrgIdentity();
             if (currentUser.rootId && currentSpace.value.type === 'org') {
               refreshProfileExtraFromKernel(`${currentUser.rootId}@${currentSpace.value.orgId}`);
             }

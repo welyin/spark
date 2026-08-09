@@ -32,8 +32,9 @@ impl MessageService {
         Ok(None)
     }
 
-    /// 按消息 id 读取记录（入站去重/归属判定用）。
-    pub(crate) fn get_message<S: StorageBackend>(
+    /// 按消息 id 读取记录（入站去重/归属判定用；集成测试按 id 定点断言
+    /// 也用本入口——优先 byid 索引直取，O(1)）。
+    pub fn get_message<S: StorageBackend>(
         storage: &S,
         space: &str,
         conv_id: &str,

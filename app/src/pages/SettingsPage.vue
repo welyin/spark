@@ -1,7 +1,7 @@
 <!-- 设置页：rail | 第二栏菜单 | 第三栏 | 第四栏（复用 mine.css 栏位类）。
      个人空间第二栏=个人设置 / 系统设置；组织空间第二栏=组织设置 / 个人设置 / 系统设置。
      「个人设置」下第三栏为四个模块（我的资料/我的名片/朋友权限/账号备份），点击模块在第四栏展开其列表，
-     列表项的编辑页以抽屉打开（不占第五栏）；网络状态/设备管理在系统设置中；
+     列表项的编辑页以抽屉打开（不占第五栏）；网络状态在系统设置中，设备管理在个人设置；
      组织设置=当前空间组织的信息/成员/网关/公开/发现（ui-space-navbar §6）。
      登录门控由 RootGate 在应用入口统一处理，本页不再重复 -->
 <template>
@@ -78,13 +78,14 @@
               v-if="activeModule === 'profile'"
               detail-mode="drawer"
               :root-id="rootStatus.rootId ?? ''"
-              :nickname="rootStatus.nickname ?? ''"
-              :avatar="rootStatus.avatar ?? ''"
+              :nickname="currentUser.nickname"
+              :avatar="currentUser.avatar"
               @profile-updated="onProfileUpdated"
             />
             <MyCardModule v-else-if="activeModule === 'card'" detail-mode="drawer" />
             <PermissionModule v-else-if="activeModule === 'permission'" detail-mode="drawer" mode="personal" />
             <BackupModule v-else-if="activeModule === 'backup'" detail-mode="drawer" :root-id="rootStatus.rootId" />
+            <DevicesModule v-else-if="activeModule === 'devices'" detail-mode="drawer" :root-id="rootStatus.rootId ?? ''" />
             <!-- 未选模块时的占位 -->
             <div v-else class="mine-detail settings-module-empty">
               <el-empty description="选择左侧模块查看" />
@@ -165,13 +166,14 @@
             v-if="activeModule === 'profile'"
             detail-mode="drawer"
             :root-id="rootStatus.rootId ?? ''"
-            :nickname="rootStatus.nickname ?? ''"
-            :avatar="rootStatus.avatar ?? ''"
+            :nickname="currentUser.nickname"
+            :avatar="currentUser.avatar"
             @profile-updated="onProfileUpdated"
           />
           <MyCardModule v-else-if="activeModule === 'card'" detail-mode="drawer" />
           <PermissionModule v-else-if="activeModule === 'permission'" detail-mode="drawer" mode="personal" />
           <BackupModule v-else-if="activeModule === 'backup'" detail-mode="drawer" :root-id="rootStatus.rootId" />
+          <DevicesModule v-else-if="activeModule === 'devices'" detail-mode="drawer" :root-id="rootStatus.rootId ?? ''" />
           <!-- 未选模块时的占位 -->
           <div v-else class="mine-detail settings-module-empty">
             <el-empty description="选择左侧模块查看" />
@@ -196,6 +198,7 @@ import {
   Cpu,
   Key,
   Lock,
+  Monitor,
   OfficeBuilding,
   Postcard,
   Setting,
@@ -209,6 +212,7 @@ import { isMobileLayout } from '../stores/ui-layout';
 import { canBack, currentPage, popPage, pushPage, resetStack } from '../stores/mobile-nav';
 import { consumePendingSystemSection, type SystemSectionKey } from '../stores/pending-system-section';
 import type { RootStatusDto as RootStatus } from '../api';
+import { currentUser } from '../stores/current-user';
 import { personalAvatarSource } from '../stores/avatar-sources';
 import UserAvatar from '../components/UserAvatar.vue';
 import OrgAvatar from '../components/OrgAvatar.vue';
@@ -217,14 +221,15 @@ import MobilePageTransition from '../components/MobilePageTransition.vue';
 import ProfileModule from '../components/mine/ProfileModule.vue';
 import MyCardModule from '../components/mine/MyCardModule.vue';
 import BackupModule from '../components/mine/BackupModule.vue';
+import DevicesModule from '../components/mine/DevicesModule.vue';
 import PermissionModule from '../components/mine/PermissionModule.vue';
 import OrgSettingsPanel from '../components/org/OrgSettingsPanel.vue';
 import SystemSettingsPanel from '../components/settings/SystemSettingsPanel.vue';
 
 type MenuKey = 'mine' | 'space' | 'system';
 
-/** 个人设置下的四个模块（第三栏菜单，点击后右侧展开；网络状态/设备管理已并入系统设置） */
-type PersonalModuleKey = 'profile' | 'card' | 'permission' | 'backup';
+/** 个人设置下的模块（第三栏菜单，点击后右侧展开；设备管理由系统设置迁入，网络状态仍在系统设置） */
+type PersonalModuleKey = 'profile' | 'card' | 'permission' | 'backup' | 'devices';
 
 /** 本页在导航栈中的 tab 键（设置不在底部 tab，经顶栏「⋯」进入，键与 App.vue activeTab 一致） */
 const MOBILE_TAB = 'settings';
@@ -239,12 +244,14 @@ export default defineComponent({
     ProfileModule,
     MyCardModule,
     BackupModule,
+    DevicesModule,
     PermissionModule,
     OrgSettingsPanel,
     SystemSettingsPanel,
     Cpu,
     SwitchButton,
-    CircleCloseFilled
+    CircleCloseFilled,
+    Monitor
   },
   emits: ['profile-updated', 'open-tab', 'back-root'],
   setup(_, { emit }) {
@@ -276,12 +283,14 @@ export default defineComponent({
       ];
     });
 
-    // 个人设置的四个模块：第二栏「个人设置」下第三栏的菜单项（color 同上，全端图标统一上色）
+    // 个人设置的模块：第二栏「个人设置」下第三栏的菜单项（color 同上，全端图标统一上色；
+    // 设备管理由系统设置迁入）
     const personalModules: Array<{ key: PersonalModuleKey; label: string; icon: Component; color: string }> = [
       { key: 'profile', label: '我的资料', icon: User, color: '#3296fa' },
       { key: 'card', label: '我的名片', icon: Postcard, color: '#34c19b' },
       { key: 'permission', label: '朋友权限', icon: Key, color: '#ff7d00' },
-      { key: 'backup', label: '账号备份', icon: Lock, color: '#7b61ff' }
+      { key: 'backup', label: '账号备份', icon: Lock, color: '#7b61ff' },
+      { key: 'devices', label: '设备管理', icon: Monitor, color: '#3296fa' }
     ];
 
     // 空间切换（个人↔组织及组织 A→B）：菜单项集合变化，重置选中到各空间默认项，并清掉模块选中；移动端同步回栈底
@@ -402,6 +411,9 @@ export default defineComponent({
       switchAccount,
       logout,
       currentSpaceOrgId,
+      // 昵称/头像展示统一取 currentUser 单例（SelfProfileSynced 事件会刷新它；
+      // 本地 rootStatus 只在挂载/本页保存时更新，跨设备同步到的昵称进不来）
+      currentUser,
       headerAvatar,
       rootStatus,
       onProfileUpdated,

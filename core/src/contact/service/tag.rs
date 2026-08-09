@@ -1,7 +1,7 @@
 //! 标签服务：个人空间标签存为独立记录 `ct:tag:{tagId}`（组织空间仍为数组）。
 
 use crate::storage::StorageBackend;
-use crate::sync::{delete_personal, put_personal};
+use crate::sync::put_personal;
 
 use super::super::{ContactTag, Result, TAG_PREFIX, TAGS_KEY, org_tags_key, FRIEND_PREFIX, sync_err_to_contact};
 use super::{ContactService, parse_space, read_json, read_vec, scan_json, Space};
@@ -99,11 +99,11 @@ impl ContactService {
         match parse_space(space)? {
             Space::Personal => {
                 let key = format!("{TAG_PREFIX}{tag_id}");
-                // tombstone pmeta + 删除记录本体
+                // tombstone pmeta + 删除记录本体（记账由版本化中间件在 delete
+                // 时自动完成）。
                 // 只有记录存在时才 tombstone（避免空删产生垃圾 pmeta）。
                 if storage.get(&key)?.is_some() {
-                    delete_personal(storage, node_id, &key, now_ms)
-                        .map_err(sync_err_to_contact)?;
+                    storage.delete(&key)?;
                     super::sync::bump_version(storage, super::sync::SyncDomain::Tags, now_ms)?;
                 }
                 // 摘除所有朋友记录中的该标签引用（走 pmeta + 刷新 updatedAt，
@@ -115,14 +115,8 @@ impl ContactService {
                     friend.tag_ids.retain(|id| id != tag_id);
                     if friend.tag_ids.len() != before {
                         friend.updated_at = now_ms;
-                        put_personal(
-                            storage,
-                            node_id,
-                            &friend_key,
-                            &serde_json::to_string(&friend)?,
-                            now_ms,
-                        )
-                        .map_err(sync_err_to_contact)?;
+                        // 版本记账由中间件自动完成
+                        storage.put(&friend_key, &serde_json::to_string(&friend)?)?;
                     }
                 }
                 Ok(())
@@ -131,8 +125,9 @@ impl ContactService {
                 let key = org_tags_key(org_id);
                 let mut tags: Vec<ContactTag> = read_vec(storage, &key)?;
                 tags.retain(|tag| tag.id != tag_id);
-                put_personal(storage, node_id, &key, &serde_json::to_string(&tags)?, now_ms)
-                    .map_err(sync_err_to_contact)?;
+                // 版本记账由中间件自动完成
+                let _ = node_id;
+                storage.put(&key, &serde_json::to_string(&tags)?)?;
                 // 摘除组织空间引用（成员附加资料走 pmeta，P5）
                 let extra_prefix = super::super::org_extra_prefix(org_id);
                 for (profile_key, mut profile) in
@@ -141,14 +136,8 @@ impl ContactService {
                     let before = profile.tag_ids.len();
                     profile.tag_ids.retain(|id| id != tag_id);
                     if profile.tag_ids.len() != before {
-                        put_personal(
-                            storage,
-                            node_id,
-                            &profile_key,
-                            &serde_json::to_string(&profile)?,
-                            now_ms,
-                        )
-                        .map_err(sync_err_to_contact)?;
+                        // 版本记账由中间件自动完成
+                        storage.put(&profile_key, &serde_json::to_string(&profile)?)?;
                     }
                 }
                 Ok(())

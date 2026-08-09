@@ -1,7 +1,7 @@
 //! 分组服务：个人空间扁平分组存为独立记录 `ct:group:{groupId}`。
 
 use crate::storage::StorageBackend;
-use crate::sync::{delete_personal, put_personal};
+use crate::sync::put_personal;
 
 use super::super::{ContactGroup, FRIEND_PREFIX, GROUP_PREFIX, GROUPS_KEY, Result, sync_err_to_contact};
 use super::{ContactService, read_json, scan_json};
@@ -60,11 +60,11 @@ impl ContactService {
         now_ms: i64,
         node_id: &str,
     ) -> Result<()> {
+        let _ = node_id; // 记账已下沉中间件，参数保留以稳定签名
         let key = format!("{GROUP_PREFIX}{group_id}");
-        // tombstone
+        // tombstone（记账由版本化中间件在 delete 时自动完成）
         if storage.get(&key)?.is_some() {
-            delete_personal(storage, node_id, &key, now_ms)
-                .map_err(sync_err_to_contact)?;
+            storage.delete(&key)?;
             super::sync::bump_version(storage, super::sync::SyncDomain::Groups, now_ms)?;
         }
         // 复位组内朋友（走 pmeta + 刷新 updatedAt，双通道传播，同 delete_tag）
@@ -74,14 +74,8 @@ impl ContactService {
             if friend.group_id == group_id {
                 friend.group_id = String::new();
                 friend.updated_at = now_ms;
-                put_personal(
-                    storage,
-                    node_id,
-                    &friend_key,
-                    &serde_json::to_string(&friend)?,
-                    now_ms,
-                )
-                .map_err(sync_err_to_contact)?;
+                // 版本记账由中间件自动完成
+                storage.put(&friend_key, &serde_json::to_string(&friend)?)?;
             }
         }
         Ok(())

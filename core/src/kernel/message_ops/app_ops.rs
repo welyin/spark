@@ -40,14 +40,14 @@ impl Kernel {
         if plugin_id != "system" && !self.app_msg_limiter.check(space, plugin_id, now) {
             return Err(MessageError::RateLimited.into());
         }
-        AppMessageService::ensure_app_conversation(self.require_storage_mut()?, space, plugin_id, now)?;
-        AppMessageService::append_app_message(self.require_storage_mut()?, space, &record)?;
+        AppMessageService::ensure_app_conversation(self.require_storage_raw_mut()?, space, plugin_id, now)?;
+        AppMessageService::append_app_message(self.require_storage_raw_mut()?, space, &record)?;
         // 应用会话壳纳入 pdsync（仅个人空间生效）：msg:app 消息本体走窗口
         // 同步，会话壳走 msg:conv 类目——bump conv pmeta（ts 保持
         // meta_updated_at，与人消息 append 路径同一助手）
         let node_id = self.sync_node_id();
         MessageService::bump_conv_pmeta_for_message(
-            self.require_storage_mut()?,
+            self.require_storage_raw_mut()?,
             space,
             &app_conversation_id(plugin_id),
             now,
@@ -66,7 +66,7 @@ impl Kernel {
     pub fn message_app_mark_read(&mut self, space: &str, plugin_id: &str) -> Result<()> {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        AppMessageService::mark_app_read(self.require_storage_mut()?, space, plugin_id)?;
+        AppMessageService::mark_app_read(self.require_storage_raw_mut()?, space, plugin_id)?;
         Ok(())
     }
 
@@ -74,7 +74,7 @@ impl Kernel {
     pub fn message_app_delete_conversation(&mut self, space: &str, plugin_id: &str) -> Result<()> {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        AppMessageService::delete_app_conversation(self.require_storage_mut()?, space, plugin_id)?;
+        AppMessageService::delete_app_conversation(self.require_storage_raw_mut()?, space, plugin_id)?;
         Ok(())
     }
 

@@ -6,7 +6,8 @@ use std::collections::HashSet;
 
 use super::{
     DIAL_BUDGET_PER_TICK, ORG_ADDRESS_REPUBLISH_INTERVAL_MS, OrgSyncContext,
-    PULL_CANDIDATES_PER_TICK, REPLICA_PUSH_PER_ORG, SelfHelloState, collect_org_peer_candidates,
+    PULL_CANDIDATES_PER_TICK, REPLICA_PUSH_PER_ORG, SELF_HELLO_IMMEDIATE_MIN_INTERVAL_MS,
+    SelfHelloState, collect_org_peer_candidates,
 };
 use crate::contact::ContactService;
 use crate::org::gateway::{OrgMemberHint, org_members_dht_key};
@@ -21,6 +22,75 @@ use crate::p2p::peer_targets::PeerNodeInfo;
 use crate::storage::{ScanOptions, StorageBackend};
 
 impl OrgSyncContext {
+    /// 本机个人域删除（tombstone 写入）后的即时 hello：不等 keepalive
+    /// tick（最坏 ~60s），直接向当前已连接的自设备补发 pdsync-hello，
+    /// 对端回 need 即拉走墓碑——删除传播从"分钟级"降到"秒级"。
+    ///
+    /// 防抖：最短间隔 1s；窗口内的再次触发登记一次尾随补发（覆盖批量
+    /// 删除的尾巴）。未连接时不发——重连 Resync 会兜底。
+    pub(crate) fn self_hello_now(&self) {
+        enum Act {
+            Send(String, Vec<String>),
+            Schedule(i64),
+            Skip,
+        }
+        let now = self.now();
+        let act = {
+            let mut st = self
+                .self_hello_immediate
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if now - st.last_sent_ms >= SELF_HELLO_IMMEDIATE_MIN_INTERVAL_MS {
+                st.last_sent_ms = now;
+                st.trailing_pending = false;
+                // 多设备连接集（事件泵断连剔除 + tick 连接侧维护）：逐台发
+                let peers: Vec<String> = self
+                    .self_device_links
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .iter()
+                    .cloned()
+                    .collect();
+                match (self.root_id(), peers.is_empty()) {
+                    (Some(root_id), false) => Act::Send(root_id, peers),
+                    _ => Act::Skip,
+                }
+            } else if !st.trailing_pending {
+                st.trailing_pending = true;
+                Act::Schedule(st.last_sent_ms + SELF_HELLO_IMMEDIATE_MIN_INTERVAL_MS - now)
+            } else {
+                Act::Skip
+            }
+        };
+        match act {
+            Act::Send(root_id, peers) => {
+                log::info!(
+                    "[CT_SYNC] immediate hello after local delete | devices={:?}",
+                    peers
+                );
+                // 同步函数驱动 async 发送：spawn 到 runtime（丢弃 future
+                // 不会执行——必须 spawn）
+                let ctx = self.clone();
+                tokio::spawn(async move {
+                    for peer_id in peers {
+                        ctx.send_pdsync_hello(&root_id, &peer_id, now).await;
+                    }
+                });
+            }
+            Act::Schedule(delay_ms) => {
+                let ctx = self.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(
+                        delay_ms.max(0) as u64,
+                    ))
+                    .await;
+                    ctx.self_hello_now();
+                });
+            }
+            Act::Skip => {}
+        }
+    }
+
     // ------------------------------------------------------------------
     // keepalive 组织保活（p2p-node.ts:379-445 `maintainOrganizationNetwork`）
     // ------------------------------------------------------------------
@@ -177,6 +247,19 @@ impl OrgSyncContext {
                 Action::Dial
             }
         };
+        // 维护共享的多设备连接集（即时 hello 等触发路径消费；事件泵在
+        // Disconnected 时已剔除，这里是连接侧的补充/兜底）
+        {
+            let mut links = self
+                .self_device_links
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if connected {
+                links.insert(peer_id.clone());
+            } else {
+                links.remove(peer_id.as_str());
+            }
+        }
         match action {
             // 稳态：本机个人域写入 digest 变化（变更即触发）或到达周期兜底
             // 间隔时发 pdsync-hello——pdsync 此前只有断→连跳变才发 hello，
@@ -235,7 +318,7 @@ impl OrgSyncContext {
             return;
         };
         let last_sync = crate::sync::pdsync::get_last_msg_sync_at(&self.storage, root_id);
-        let Ok(hello) = crate::sync::pdsync::build_hello(
+        let Ok(mut hello) = crate::sync::pdsync::build_hello(
             &self.storage,
             2_592_000_000,
             500,
@@ -245,6 +328,10 @@ impl OrgSyncContext {
         ) else {
             return;
         };
+        // 删除日志回执：我已收讫对端日志的序号（对端据此停推/GC；
+        // 按目标设备取——同身份多设备各自维护日志，ack 不可混用）
+        let dlog_ack = crate::sync::dlog::get_seen(&self.storage, peer_id).unwrap_or(0);
+        hello["dlogAck"] = serde_json::json!(dlog_ack);
         let target = PeerNodeInfo {
             peer_id: Some(peer_id.to_string()),
             addresses: Vec::new(), // 已连接：dm_direct 短路直发

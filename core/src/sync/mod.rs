@@ -4,9 +4,11 @@
 //! `core/spec/vectors/sync-evidence.json`。
 
 pub mod apply;
+pub mod dlog;
 pub mod meta;
 pub mod pdsync;
 pub mod personal;
+pub mod versioned;
 
 pub use apply::{
     ApplyOutcome, ApplyRemoteOptions, CollectionAdapter, PurgeWatermark, apply_remote_update,
@@ -24,7 +26,8 @@ pub use pdsync::{
     CATEGORIES, Category, DiffOutcome, MessageWindow, PdsyncRecord, apply_message_record,
     build_data_batch, build_hello, build_need, category_by_name, category_for_key,
     collect_all_categories, collect_category_vv, collect_incremental, collect_message_window,
-    diff_category, parse_data, parse_hello_categories, parse_need, split_batches,
+    collect_tombstones_after, diff_category, parse_data, parse_hello_categories, parse_need,
+    split_batches,
 };
 
 /// sync 模块错误。

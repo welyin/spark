@@ -185,6 +185,9 @@ pub struct PdsyncRecord {
     pub key: String,
     pub value: Value,
     pub meta: DocMeta,
+    /// 删除日志序号（仅墓碑记录携带）：接收方据以推进 `dlog:seen:{peer}`
+    /// 并在下轮 hello/need 回执 `dlogAck`。普通记录为 None（线上不携带）。
+    pub dseq: Option<u64>,
 }
 
 /// 按 `knownVv` 采集 category 增量（need 的处理）：扫描该 category 全部
@@ -193,16 +196,18 @@ pub struct PdsyncRecord {
 ///
 /// 天然筛出"对端缺的"，不必逐条比较两侧记录集合。
 ///
-/// 墓碑（`tombstone: true`）以 `{key, value: null, meta}` 纳入推送——本体已删，
-/// 墓碑只存在于 pmeta 扫描里；接收方据 `meta.tombstone` 执行删除（§5.3/§10）。
+/// 墓碑（`tombstone: true`）以 `{key, value: null, meta, dseq}` 纳入推送——
+/// 由删除日志驱动（`dlog_ack` 为对端已确认序号，推送 seq > ack 的条目）；
+/// 接收方据 `meta.tombstone` 执行删除（§5.3/§10）并回执 dseq。
 ///
 /// `exclude_key`：对称排除的记录键（[`self_friend_key`] 的自记录）——本体与
-/// 墓碑两段扫描都跳过（本机删自记录不应删掉对端的）。
+/// 墓碑两条路径都跳过（本机删自记录不应删掉对端的）。
 pub fn collect_incremental<S: StorageBackend>(
     storage: &S,
     category: &Category,
     known_vv: &VersionVector,
     exclude_key: Option<&str>,
+    dlog_ack: u64,
 ) -> crate::sync::SyncResult<Vec<PdsyncRecord>> {
     let mut records = Vec::new();
     for prefix in category.prefixes {
@@ -216,7 +221,7 @@ pub fn collect_incremental<S: StorageBackend>(
                 None => continue,
             };
             // 墓碑无本体（本体已删），不会出现在这条 scan 里；防御性跳过，
-            // 墓碑增量由下方 pmeta 扫描覆盖
+            // 墓碑增量由下方删除日志驱动
             if crate::sync::personal::is_tombstone(&meta) {
                 continue;
             }
@@ -236,41 +241,63 @@ pub fn collect_incremental<S: StorageBackend>(
                             continue;
                         }
                     };
-                    records.push(PdsyncRecord { key, value, meta });
+                    records.push(PdsyncRecord { key, value, meta, dseq: None });
                 }
             }
         }
-        // 墓碑增量：本体已删的记录不在上面的记录 scan 里，扫 `pmeta:{prefix}`
-        // 把对端缺失的墓碑一并推出（value 恒 null，meta 携带 tombstone=true）
-        let meta_prefix = crate::sync::personal::personal_meta_key(*prefix);
-        for (meta_key, raw_meta) in storage.scan(&ScanOptions::prefix(&meta_prefix))? {
-            let Some(record_key) = meta_key.strip_prefix(crate::sync::personal::PMETA_PREFIX)
-            else {
-                continue;
-            };
-            if !category.prefixes.iter().any(|p| record_key.starts_with(p)) {
-                continue;
-            }
-            // 排除键（自记录）：设备相对数据不参与折叠/增量（含墓碑——
-            // 本机删自记录不应删掉对端的）
-            if exclude_key == Some(record_key) {
-                continue;
-            }
-            let Ok(meta) = serde_json::from_str::<DocMeta>(&raw_meta) else {
-                continue;
-            };
-            if !crate::sync::personal::is_tombstone(&meta) {
-                continue;
-            }
-            match compare_version_vectors(Some(&meta.vv), Some(known_vv)) {
-                CompareResult::Remote | CompareResult::Equal => continue,
-                _ => records.push(PdsyncRecord {
-                    key: record_key.to_string(),
-                    value: Value::Null,
-                    meta,
-                }),
-            }
+    }
+    // 墓碑增量：删除日志驱动（见 collect_tombstones_after）
+    records.extend(collect_tombstones_after(
+        storage,
+        category,
+        exclude_key,
+        dlog_ack,
+    )?);
+    Ok(records)
+}
+
+/// 采集未确认墓碑：删除日志中 `seq > dlog_ack`（对端 ACK 游标）且当前
+/// pmeta 确为墓碑的条目。
+///
+/// 不走折叠 vv 比大小（折叠丢失 key 维度，墓碑会被误判"已覆盖"）；未确认
+/// 的下轮重推（落库 vv 幂等）。仍校验 pmeta 当前确为墓碑——删除后又重建
+/// 的记录，其历史日志条目已失效，不得误推删除。
+///
+/// 独立于 vv diff 推送：折叠 vv Equal 不代表对端收齐墓碑（Equal 可能由
+/// 同 nodeId 其他记录的分量撑起），hello 处理在 Equal 分支也应调用本函数。
+pub fn collect_tombstones_after<S: StorageBackend>(
+    storage: &S,
+    category: &Category,
+    exclude_key: Option<&str>,
+    dlog_ack: u64,
+) -> crate::sync::SyncResult<Vec<PdsyncRecord>> {
+    let mut records = Vec::new();
+    for (seq, record_key) in crate::sync::dlog::entries_after(storage, dlog_ack)? {
+        if !category.prefixes.iter().any(|p| record_key.starts_with(p)) {
+            continue;
         }
+        // 排除键（自记录）：设备相对数据不推（本机删自记录不应删掉对端的）
+        if exclude_key == Some(record_key.as_str()) {
+            continue;
+        }
+        let Ok(Some(meta)) = get_personal_meta(storage, &record_key) else {
+            continue;
+        };
+        if !crate::sync::personal::is_tombstone(&meta) {
+            continue;
+        }
+        log::info!(
+            "[CT_SYNC] tombstone push | key={} dseq={} dlogAck={}",
+            record_key,
+            seq,
+            dlog_ack,
+        );
+        records.push(PdsyncRecord {
+            key: record_key,
+            value: Value::Null,
+            meta,
+            dseq: Some(seq),
+        });
     }
     Ok(records)
 }
@@ -315,19 +342,27 @@ pub fn parse_hello_categories(body: &Value) -> BTreeMap<String, VersionVector> {
     map
 }
 
-/// 构造 `pdsync-need` body：`{category, knownVv}`。
-pub fn build_need(category: &str, known_vv: &VersionVector) -> Value {
+/// 构造 `pdsync-need` body：`{category, knownVv, dlogAck}`。
+///
+/// `dlogAck`：我对发送方删除日志的已收序号（对方据此推送 seq > ack 的
+/// 墓碑条目）。
+pub fn build_need(category: &str, known_vv: &VersionVector, dlog_ack: u64) -> Value {
     json!({
         "category": category,
         "knownVv": known_vv,
+        "dlogAck": dlog_ack,
     })
 }
 
-/// 解析 need body → (category, knownVv)。
-pub fn parse_need(body: &Value) -> Option<(String, VersionVector)> {
+/// 解析 need body → (category, knownVv, dlogAck)（dlogAck 缺省 0）。
+pub fn parse_need(body: &Value) -> Option<(String, VersionVector, u64)> {
     let category = body.get("category")?.as_str()?;
     let known_vv = serde_json::from_value(body.get("knownVv")?.clone()).ok()?;
-    Some((category.to_string(), known_vv))
+    Some((
+        category.to_string(),
+        known_vv,
+        crate::sync::dlog::parse_dlog_ack(body),
+    ))
 }
 
 /// 构造单批 `pdsync-data` body：`{category, records, batchSeq, batchTotal}`。
@@ -342,11 +377,16 @@ pub fn build_data_batch(
     let items: Vec<Value> = records
         .iter()
         .map(|r| {
-            json!({
+            let mut item = json!({
                 "key": r.key,
                 "value": r.value,
                 "meta": serde_json::to_value(&r.meta).unwrap_or(Value::Null),
-            })
+            });
+            // 墓碑记录携带删除日志序号（接收方回执 dlogAck 的依据）
+            if let Some(dseq) = r.dseq {
+                item["dseq"] = json!(dseq);
+            }
+            item
         })
         .collect();
     json!({
@@ -366,7 +406,8 @@ pub fn parse_data(body: &Value) -> Option<(String, Vec<PdsyncRecord>)> {
         let key = item.get("key")?.as_str()?.to_string();
         let value = item.get("value").cloned().unwrap_or(Value::Null);
         let meta: DocMeta = serde_json::from_value(item.get("meta")?.clone()).ok()?;
-        records.push(PdsyncRecord { key, value, meta });
+        let dseq = item.get("dseq").and_then(Value::as_u64);
+        records.push(PdsyncRecord { key, value, meta, dseq });
     }
     Some((category.to_string(), records))
 }
@@ -505,7 +546,7 @@ pub fn collect_message_window<S: StorageBackend>(
             if created_at < lower_bound {
                 break;
             }
-            conv_records.push(PdsyncRecord { key, value, meta: DocMeta::default() });
+            conv_records.push(PdsyncRecord { key, value, meta: DocMeta::default(), dseq: None });
         }
         out.extend(conv_records.into_iter().rev());
     }

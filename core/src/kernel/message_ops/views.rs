@@ -154,7 +154,7 @@ impl Kernel {
                     meta_updated_at: 0,
                 };
                 MessageService::upsert_conversation_pdsync(
-                    self.require_storage_mut()?,
+                    self.require_storage_raw_mut()?,
                     space,
                     &record,
                     now,

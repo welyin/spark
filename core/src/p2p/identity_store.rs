@@ -15,10 +15,15 @@ use super::{P2pError, Result};
 
 /// 读取或创建 libp2p 私钥（同设备 PeerId 稳定）。
 pub fn get_or_create_libp2p_keypair(storage: &mut dyn StorageBackend) -> Result<Keypair> {
-    if let Some(encoded) = storage.get(P2P_IDENTITY_PRIVATE_KEY)?
+    let persisted = storage.get(P2P_IDENTITY_PRIVATE_KEY)?;
+    if let Some(ref encoded) = persisted
         && let Ok(bytes) = B64.decode(encoded.trim())
         && let Ok(keypair) = Keypair::from_protobuf_encoding(&bytes)
     {
+        log::info!(
+            "[P2P_IDENTITY] loaded persisted keypair | peerId={}",
+            libp2p::identity::PeerId::from_public_key(&keypair.public()).to_base58()
+        );
         return Ok(keypair);
     }
 
@@ -27,5 +32,10 @@ pub fn get_or_create_libp2p_keypair(storage: &mut dyn StorageBackend) -> Result<
         .to_protobuf_encoding()
         .map_err(|e| P2pError::Swarm(format!("keypair encode failed: {e}")))?;
     storage.put(P2P_IDENTITY_PRIVATE_KEY, &B64.encode(raw))?;
+    log::info!(
+        "[P2P_IDENTITY] generated NEW keypair (persisted={}) | peerId={}",
+        persisted.is_some(),
+        libp2p::identity::PeerId::from_public_key(&keypair.public()).to_base58()
+    );
     Ok(keypair)
 }

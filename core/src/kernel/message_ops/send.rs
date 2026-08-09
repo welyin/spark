@@ -139,7 +139,7 @@ impl Kernel {
             read: false,
         };
         MessageService::append_message_pdsync(
-            self.require_storage_mut()?,
+            self.require_storage_raw_mut()?,
             space,
             conv_id,
             &record,
@@ -175,7 +175,7 @@ impl Kernel {
         };
         if status != "sending" {
             MessageService::set_message_status(
-                self.require_storage_mut()?,
+                self.require_storage_raw_mut()?,
                 space,
                 conv_id,
                 message_id,
@@ -257,7 +257,7 @@ impl Kernel {
             ));
         }
         MessageService::set_message_status(
-            self.require_storage_mut()?,
+            self.require_storage_raw_mut()?,
             space,
             conv_id,
             message_id,
@@ -283,7 +283,7 @@ impl Kernel {
         };
         if status != "sending" {
             MessageService::set_message_status(
-                self.require_storage_mut()?,
+                self.require_storage_raw_mut()?,
                 space,
                 conv_id,
                 message_id,
@@ -338,7 +338,7 @@ impl Kernel {
         let original_status = message.and_then(|m| m.status);
         let now = system_now_ms();
         let recalled =
-            MessageService::recall_message(self.require_storage_mut()?, space, conv_id, message_id, now)?;
+            MessageService::recall_message(self.require_storage_raw_mut()?, space, conv_id, message_id, now)?;
         if recalled && matches!(original_status.as_deref(), Some("delivered" | "read")) {
             self.notify_peer(
                 space,

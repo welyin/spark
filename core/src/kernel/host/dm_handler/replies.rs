@@ -260,6 +260,12 @@ impl KernelDmHandler {
     /// pdsync 出站投递：把纯逻辑层构建好的 hello/need/data body 装配成完整
     /// pdsync-* 信封，逐个 `dm_direct` 回投连接层对端（spawn 模式同
     /// `spawn_device_sync_reply`，失败静默）。
+    ///
+    /// 墓碑 ACK 重发：本批携带 dseq（墓碑记录）时，发完后等对端回执
+    /// （其下轮 need/hello 的 dlogAck 推进本机水位），5s/15s 水位未覆盖
+    /// 则整批重发——data 帧可能落在对端进程重启/连接中断窗口丢失（无
+    /// 重发则退化到分钟级反熵）；落库侧 vv 幂等，重发无害。两轮后仍无
+    /// 回执则放弃，交反熵兜底。
     pub(super) fn spawn_pdsync_reply(
         &self,
         my_root_id: &str,
@@ -280,51 +286,94 @@ impl KernelDmHandler {
             return;
         };
         let to = my_root_id.to_string();
+        // 本批推送的墓碑最大 dseq（ACK 重发判定依据；无墓碑则不等回执）
+        let pushed_max_dseq: Option<u64> = outputs
+            .iter()
+            .filter_map(|out| match out {
+                crate::kernel::inbound_dm::PdsyncOut::Push { body }
+                | crate::kernel::inbound_dm::PdsyncOut::Data { body } => body_max_dseq(body),
+                crate::kernel::inbound_dm::PdsyncOut::Need { .. } => None,
+            })
+            .max();
+        let wm_peer_id = target.peer_id.clone();
+        let storage = self.storage.clone();
         tokio::spawn(async move {
-            for output in outputs {
-                let kind = match &output {
-                    crate::kernel::inbound_dm::PdsyncOut::Push { .. } => {
-                        crate::kernel::dm_envelope::KIND_PDSYNC_DATA
-                    }
-                    crate::kernel::inbound_dm::PdsyncOut::Need { .. } => {
-                        crate::kernel::dm_envelope::KIND_PDSYNC_NEED
-                    }
-                    crate::kernel::inbound_dm::PdsyncOut::Data { .. } => {
-                        crate::kernel::dm_envelope::KIND_PDSYNC_DATA
-                    }
-                };
-                let body = match &output {
-                    crate::kernel::inbound_dm::PdsyncOut::Push { body }
-                    | crate::kernel::inbound_dm::PdsyncOut::Need { body }
-                    | crate::kernel::inbound_dm::PdsyncOut::Data { body } => body.clone(),
-                };
-                let envelope = dm_envelope::build_envelope(
-                    kind,
-                    &to,
-                    &to,
-                    system_now_ms(),
-                    body,
-                    &signing_key,
-                );
-                // rate-limited 有限重试：pdsync-* 已入应答侧限流豁免名单，
-                // 但对端可能是未升级的旧版本（仍按 1s 窗口限流连发信封）——
-                // 隔 1.2s（略大于限流窗口）重试至多 2 次；其余失败维持静默
-                // （反熵是周期性的，本轮丢失下一轮补齐，不无限放大）。
-                let mut retries = 0;
-                loop {
-                    let response = node.dm_direct(&target, envelope.clone()).await;
-                    let rate_limited =
-                        matches!(&response, Ok(v) if dm_response_is_rate_limited(v));
-                    if !rate_limited || retries >= PDSYNC_RATE_LIMIT_MAX_RETRIES {
-                        break;
-                    }
-                    retries += 1;
-                    tokio::time::sleep(std::time::Duration::from_millis(
-                        PDSYNC_RATE_LIMIT_RETRY_DELAY_MS,
-                    ))
-                    .await;
+            send_pdsync_outputs(&node, &signing_key, &to, &target, &outputs).await;
+            let (Some(max_dseq), Some(peer_id)) = (pushed_max_dseq, wm_peer_id) else {
+                return;
+            };
+            for delay_ms in [5_000u64, 15_000] {
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                let watermark =
+                    crate::sync::dlog::get_watermark(&storage, &peer_id).unwrap_or(0);
+                if watermark >= max_dseq {
+                    break; // 回执已到（对端 need/hello 的 dlogAck 推进了水位）
                 }
+                log::info!(
+                    "[CT_SYNC] dlog retry | peer={} watermark={} pushed={}",
+                    peer_id,
+                    watermark,
+                    max_dseq
+                );
+                send_pdsync_outputs(&node, &signing_key, &to, &target, &outputs).await;
             }
         });
+    }
+}
+
+/// 出站 body 中墓碑记录的最大 dseq（无墓碑 → None）。
+fn body_max_dseq(body: &Value) -> Option<u64> {
+    body.get("records")?
+        .as_array()?
+        .iter()
+        .filter_map(|r| r.get("dseq").and_then(Value::as_u64))
+        .max()
+}
+
+/// 逐个装配并投递 pdsync 出站信封（rate-limited 有限重试；其余失败静默）。
+async fn send_pdsync_outputs(
+    node: &std::sync::Arc<crate::p2p::node::P2pNode>,
+    signing_key: &ed25519_dalek::SigningKey,
+    to: &str,
+    target: &PeerNodeInfo,
+    outputs: &[crate::kernel::inbound_dm::PdsyncOut],
+) {
+    for output in outputs {
+        let kind = match output {
+            crate::kernel::inbound_dm::PdsyncOut::Push { .. } => {
+                crate::kernel::dm_envelope::KIND_PDSYNC_DATA
+            }
+            crate::kernel::inbound_dm::PdsyncOut::Need { .. } => {
+                crate::kernel::dm_envelope::KIND_PDSYNC_NEED
+            }
+            crate::kernel::inbound_dm::PdsyncOut::Data { .. } => {
+                crate::kernel::dm_envelope::KIND_PDSYNC_DATA
+            }
+        };
+        let envelope = dm_envelope::build_envelope(
+            kind,
+            to,
+            to,
+            system_now_ms(),
+            output.body().clone(),
+            signing_key,
+        );
+        // rate-limited 有限重试：pdsync-* 已入应答侧限流豁免名单，
+        // 但对端可能是未升级的旧版本（仍按 1s 窗口限流连发信封）——
+        // 隔 1.2s（略大于限流窗口）重试至多 2 次；其余失败维持静默
+        // （反熵是周期性的，本轮丢失下一轮补齐，不无限放大）。
+        let mut retries = 0;
+        loop {
+            let response = node.dm_direct(target, envelope.clone()).await;
+            let rate_limited = matches!(&response, Ok(v) if dm_response_is_rate_limited(v));
+            if !rate_limited || retries >= PDSYNC_RATE_LIMIT_MAX_RETRIES {
+                break;
+            }
+            retries += 1;
+            tokio::time::sleep(std::time::Duration::from_millis(
+                PDSYNC_RATE_LIMIT_RETRY_DELAY_MS,
+            ))
+            .await;
+        }
     }
 }

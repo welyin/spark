@@ -250,6 +250,11 @@ impl Kernel {
             system_now_ms(),
             &node_id,
         )?;
+        log::info!(
+            "[CT_SYNC] remove_friend tombstone written | root_id={} node_id={}",
+            root_id,
+            node_id,
+        );
         // 移出优先类目集合（peer-rediscovery §4.4）
         if let Some(pid) = peer_id {
             let mut priority = crate::p2p::priority_peers::PriorityPeerStore::new(

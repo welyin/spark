@@ -14,11 +14,14 @@ use spark_core::org::types::{
 #[test]
 fn add_member_pdsync_writes_pmeta() {
     use spark_core::sync::get_personal_meta;
+    use spark_core::sync::versioned::{VersionedStorage, shared_node_id};
 
-    let mut storage = MemoryStorage::new();
-    let (admin, record) = setup_org(&mut storage);
+    let mut raw = MemoryStorage::new();
+    let (admin, record) = setup_org(&mut raw);
+    // 版本化句柄（生产口径）：setup_org 走裸 save_record（无 pmeta），
+    // 首次 pdsync 写入从 1 起计
+    let mut storage = VersionedStorage::new(raw, shared_node_id("node-a"));
     let member_id = root_id_of(MNEMONIC2);
-    // setup_org 走裸 save_record（无 pmeta）；首次 pdsync 写入从 1 起计
     OrganizationService::add_member_pdsync(
         &mut storage,
         &record.org_id,
@@ -30,7 +33,7 @@ fn add_member_pdsync_writes_pmeta() {
     )
     .unwrap();
     let key = format!("org:meta:{}", record.org_id);
-    let meta = get_personal_meta(&storage, &key).unwrap().unwrap();
+    let meta = get_personal_meta(storage.raw(), &key).unwrap().unwrap();
     assert_eq!(meta.vv.get("node-a"), Some(&1));
 
     OrganizationService::remove_member_pdsync(
@@ -42,7 +45,7 @@ fn add_member_pdsync_writes_pmeta() {
         "node-a",
     )
     .unwrap();
-    let meta = get_personal_meta(&storage, &key).unwrap().unwrap();
+    let meta = get_personal_meta(storage.raw(), &key).unwrap().unwrap();
     assert_eq!(meta.vv.get("node-a"), Some(&2));
 }
 

@@ -23,6 +23,10 @@ pub struct DeviceView {
     pub arch: String,
     /// 物理地址列表（平台限制采集不到时为空）。
     pub macs: Vec<String>,
+    /// 本机运行的应用版本（空串 = 旧记录/旧版本对端，前端展示「—」）。
+    pub app_version: String,
+    /// 操作系统版本号（采集失败为空串）。
+    pub os_version: String,
     /// 记录内容更新时间（ms）。
     pub updated_at: i64,
     /// 最近在线证据时间（ms；本机=最近采集，对端=最近收到其 device-sync）。
@@ -54,13 +58,21 @@ impl Kernel {
         };
         let now = crate::p2p::node::system_now_ms();
         let node_id = self.sync_node_id();
+        // app_version 先取出再借 storage：避免与 require_storage_mut 的互斥借用冲突
+        let app_version = self.config.app_version.clone();
         {
             let storage = self.require_storage_mut()?;
             // 本机记录兜底：p2p 已启动但清单无本机条目时采集落库
             if let Some(peer_id) = &local_peer_id {
                 if crate::device::DeviceService::get(storage, peer_id)?.is_none() {
                     let record =
-                        crate::device::DeviceService::upsert_self(storage, peer_id, now, &node_id)?;
+                        crate::device::DeviceService::upsert_self(
+                            storage,
+                            peer_id,
+                            now,
+                            &node_id,
+                            &app_version,
+                        )?;
                     if let Ok(data) = serde_json::to_value(&record) {
                         let _ = self.event_tx.send(crate::p2p::P2pEvent::DeviceUpdated(data));
                     }
@@ -89,8 +101,10 @@ impl Kernel {
             peer_id: r.peer_id,
             device_name: r.device_name,
             os: r.os,
+            os_version: r.os_version,
             arch: r.arch,
             macs: r.macs,
+            app_version: r.app_version,
             updated_at: r.updated_at,
             last_seen_at: r.last_seen_at,
             is_self,

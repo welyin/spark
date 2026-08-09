@@ -94,15 +94,16 @@ impl Kernel {
         DocumentCollection::new(domain, collection, config.clone())
     }
 
-    /// 本地写入节点 id：p2p 运行中为 peerId；否则回退持久化 p2p 身份派生的
-    /// 稳定 id（见 [`persisted_sync_node_id`]）。
+    /// 本地写入节点 id：以版本化中间件的共享格为准（p2p 启动时填 peerId、
+    /// 停止/未启动时为持久化派生 id——格由 open_storage/start_p2p/stop_p2p
+    /// 维护）；格缺失时按持久化身份现算（早期启动窗口）。
     pub(crate) fn sync_node_id(&self) -> String {
-        if let Some(node) = &self.p2p {
-            return node.peer_id().to_string();
+        if let Some(cell) = &self.sync_node_cell {
+            return cell.lock().unwrap_or_else(|e| e.into_inner()).clone();
         }
         self.storage
             .as_ref()
-            .map(|storage| persisted_sync_node_id(storage))
+            .map(|storage| persisted_sync_node_id(storage.raw()))
             .unwrap_or_else(|| "local-node".to_string())
     }
 

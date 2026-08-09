@@ -152,10 +152,15 @@ pub fn apply_personal_remote<S: StorageBackend>(
     if matches!(result, ApplyResult::Applied) {
         let meta_raw = serde_json::to_string(remote_meta)?;
         if is_tombstone(remote_meta) {
-            storage.batch(vec![
+            // 远端墓碑落地同时补登删除日志（接力传播：本机之后把它推给
+            // 其他自设备，与本地删除同一条投递队列）
+            let (_seq, dlog_ops) = crate::sync::dlog::append_ops(storage, record_key)?;
+            let mut ops = vec![
                 BatchOperation::delete(record_key),
                 BatchOperation::put(personal_meta_key(record_key), meta_raw),
-            ])?;
+            ];
+            ops.extend(dlog_ops);
+            storage.batch(ops)?;
         } else {
             storage.batch(vec![
                 BatchOperation::put(record_key, value),
@@ -169,7 +174,9 @@ pub fn apply_personal_remote<S: StorageBackend>(
 
 /// 删除个人域记录（写 tombstone pmeta，保留 pmeta 供后续同步传播删除）。
 ///
-/// 删除记录本体，pmeta 更新为 `{vv: bumped, ts, tombstone: true}`。
+/// 删除记录本体，pmeta 更新为 `{vv: bumped, ts, tombstone: true}`，并追加
+/// 删除日志条目（同一 batch）——墓碑的推送由日志按对端 ACK 游标驱动，
+/// 不再依赖折叠 vv 比大小（折叠丢失 key 维度，墓碑会被误判"已覆盖"）。
 pub fn delete_personal<S: StorageBackend>(
     storage: &mut S,
     node_id: &str,
@@ -182,10 +189,13 @@ pub fn delete_personal<S: StorageBackend>(
     meta.node_id = Some(node_id.to_string());
     meta.tombstone = Some(true);
 
-    storage.batch(vec![
+    let (_seq, dlog_ops) = crate::sync::dlog::append_ops(storage, record_key)?;
+    let mut ops = vec![
         BatchOperation::delete(record_key),
         BatchOperation::put(personal_meta_key(record_key), serde_json::to_string(&meta)?),
-    ])?;
+    ];
+    ops.extend(dlog_ops);
+    storage.batch(ops)?;
 
     Ok(meta)
 }

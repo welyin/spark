@@ -4,14 +4,13 @@
 use std::collections::BTreeMap;
 
 use crate::storage::StorageBackend;
-use crate::sync::personal::put_personal;
 
 use super::*;
 use crate::contact::{
     BLOCKED_PREFIX, ContactProfileRecord, ContactTag, ContactGroup,
     FRIEND_PREFIX, FriendRecord, FriendRequestRecord,
     GROUP_PREFIX, ProfilePatch, REQ_IN_PREFIX, REQ_OUT_PREFIX, SpaceContactsView,
-    TAG_PREFIX, org_extra_prefix, org_tree_key, sync_err_to_contact,
+    TAG_PREFIX, org_extra_prefix, org_tree_key,
 };
 
 impl ContactService {
@@ -142,9 +141,9 @@ impl ContactService {
                 let mut profile: ContactProfileRecord =
                     read_json(storage, &key)?.unwrap_or_default();
                 apply_patch_to_profile(&mut profile, &patch);
-                // P5：组织成员附加资料走 pmeta，供自设备 pdsync
-                put_personal(storage, node_id, &key, &serde_json::to_string(&profile)?, now_ms)
-                    .map_err(sync_err_to_contact)?;
+                // P5：组织成员附加资料经版本化中间件自动记账，供自设备 pdsync
+                let _ = (now_ms, node_id);
+                storage.put(&key, &serde_json::to_string(&profile)?)?;
                 Ok(())
             }
         }
@@ -175,9 +174,9 @@ impl ContactService {
                 let mut profile: ContactProfileRecord =
                     read_json(storage, &key)?.unwrap_or_default();
                 profile.group_id = group_id.to_string();
-                // P5：组织成员附加资料走 pmeta
-                put_personal(storage, node_id, &key, &serde_json::to_string(&profile)?, now_ms)
-                    .map_err(sync_err_to_contact)?;
+                // P5：组织成员附加资料经版本化中间件自动记账
+                let _ = (now_ms, node_id);
+                storage.put(&key, &serde_json::to_string(&profile)?)?;
                 Ok(())
             }
         }
@@ -217,9 +216,9 @@ impl ContactService {
                 let mut profile: ContactProfileRecord =
                     read_json(storage, &key)?.unwrap_or_default();
                 profile.blocked = blocked;
-                // P5：组织成员附加资料走 pmeta
-                put_personal(storage, node_id, &key, &serde_json::to_string(&profile)?, now_ms)
-                    .map_err(sync_err_to_contact)?;
+                // P5：组织成员附加资料经版本化中间件自动记账
+                let _ = (now_ms, node_id);
+                storage.put(&key, &serde_json::to_string(&profile)?)?;
                 Ok(())
             }
         }

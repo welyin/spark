@@ -115,6 +115,7 @@ fn pdsync_conv_merge_preserves_local_unread() {
         key: format!("msg:conv:personal:{conv_id}"),
         value: serde_json::to_value(&remote).unwrap(),
         meta: remote_meta("peer-node-b", 1, NOW),
+        dseq: None,
     };
 
     let result = deliver_pdsync_data(&mut s, &key, &my_root, "msg:conv", &[record]);
@@ -158,6 +159,7 @@ fn pdsync_new_conv_zeroes_message_driven_fields() {
         key: format!("msg:conv:personal:{conv_id}"),
         value: serde_json::to_value(&remote).unwrap(),
         meta: remote_meta("peer-node-b", 1, NOW),
+        dseq: None,
     };
 
     let result = deliver_pdsync_data(&mut s, &key, &my_root, "msg:conv", &[record]);
@@ -181,6 +183,7 @@ fn pdsync_data_rejects_keys_outside_category_registry() {
         key: "p2p:identity:privateKey".to_string(),
         value: json!("forged"),
         meta: remote_meta("peer-node-b", 1, NOW),
+        dseq: None,
     };
     let result = deliver_pdsync_data(&mut s, &key, &my_root, "p2p", &[evil]);
     assert_eq!(result.response["ok"], false, "非注册 category 的键整批拒收");
@@ -191,6 +194,7 @@ fn pdsync_data_rejects_keys_outside_category_registry() {
         key: "pmeta:ct:friend:a".to_string(),
         value: json!({}),
         meta: remote_meta("peer-node-b", 1, NOW),
+        dseq: None,
     };
     let result = deliver_pdsync_data(&mut s, &key, &my_root, "ct:friend", &[evil]);
     assert_eq!(result.response["ok"], false);
@@ -201,6 +205,7 @@ fn pdsync_data_rejects_keys_outside_category_registry() {
         key: "ct:friend:a".to_string(),
         value: json!({"rootId": "a"}),
         meta: remote_meta("peer-node-b", 1, NOW),
+        dseq: None,
     };
     let result = deliver_pdsync_data(&mut s, &key, &my_root, "device", &[mixed]);
     assert_eq!(result.response["ok"], false, "category 不一致拒收");
@@ -221,6 +226,7 @@ fn pdsync_data_emits_events_for_contacts_devices_messages() {
         key: format!("ct:friend:{peer_root}"),
         value: json!({"rootId": peer_root, "nickname": "朋友"}),
         meta: remote_meta("peer-node-b", 1, NOW),
+        dseq: None,
     };
     let result = deliver_pdsync_data(&mut s, &key, &my_root, "ct:friend", &[contact]);
     assert_eq!(result.response, json!({ "ok": true }));
@@ -237,6 +243,7 @@ fn pdsync_data_emits_events_for_contacts_devices_messages() {
         key: "device:peer-x".to_string(),
         value: json!({"peerId": "peer-x", "nickname": "另一台设备"}),
         meta: remote_meta("peer-node-b", 1, NOW),
+        dseq: None,
     };
     let result = deliver_pdsync_data(&mut s, &key, &my_root, "device", &[device]);
     assert!(
@@ -262,6 +269,7 @@ fn pdsync_data_emits_events_for_contacts_devices_messages() {
         key: msg_key.clone(),
         value: serde_json::to_value(&msg).unwrap(),
         meta: DocMeta::default(),
+        dseq: None,
     };
     let result = deliver_pdsync_data(&mut s, &key, &my_root, "msg:item", &[message]);
     assert_eq!(result.response, json!({ "ok": true }));
@@ -500,6 +508,7 @@ fn pdsync_conv_tombstone_deletes_record() {
             node_id: Some("peer-node-b".to_string()),
             tombstone: Some(true),
         },
+        dseq: None,
     };
     let result = deliver_pdsync_data(&mut s, &key, &my_root, "msg:conv", &[tomb]);
     assert_eq!(result.response, json!({ "ok": true }));
@@ -614,27 +623,32 @@ fn pdsync_self_friend_record_not_cross_fed() {
     let self_key = self_friend_key(&my_root);
 
     // A：自记录 peer→"peer-device-b"（B 的设备）+ 一条普通朋友记录
-    ContactService::upsert_friend_pdsync(
+    // （put_personal 显式记账：本测试用裸存储模拟两端库，生产等价物是
+    // 版本化中间件的自动记账）
+    spark_core::sync::put_personal(
         &mut a,
-        &friend_record_with_peer(&my_root, "peer-device-b"),
-        NOW,
         "node-a",
+        &self_friend_key(&my_root),
+        &serde_json::to_string(&friend_record_with_peer(&my_root, "peer-device-b")).unwrap(),
+        NOW,
     )
     .unwrap();
-    ContactService::upsert_friend_pdsync(
+    spark_core::sync::put_personal(
         &mut a,
-        &friend_record_with_peer(&peer_root, "peer-x"),
-        NOW,
         "node-a",
+        &format!("ct:friend:{peer_root}"),
+        &serde_json::to_string(&friend_record_with_peer(&peer_root, "peer-x")).unwrap(),
+        NOW,
     )
     .unwrap();
     // B：自记录 peer→"peer-device-a"（A 的设备；ts 更晚——无排除时并发
     // LWW 必然毒化 A 的自记录）
-    ContactService::upsert_friend_pdsync(
+    spark_core::sync::put_personal(
         &mut b,
-        &friend_record_with_peer(&my_root, "peer-device-a"),
-        NOW + 1000,
         "node-b",
+        &self_friend_key(&my_root),
+        &serde_json::to_string(&friend_record_with_peer(&my_root, "peer-device-a")).unwrap(),
+        NOW + 1000,
     )
     .unwrap();
 
@@ -699,11 +713,13 @@ fn pdsync_self_friend_record_not_cross_fed() {
 fn pdsync_data_drops_self_friend_record_and_tombstone() {
     let mut s = MemoryStorage::new();
     let (key, my_root) = self_identity(1);
-    ContactService::upsert_friend_pdsync(
+    // put_personal 显式记账（裸存储上的生产等价物 = 中间件自动记账）
+    spark_core::sync::put_personal(
         &mut s,
-        &friend_record_with_peer(&my_root, "peer-device-b"),
-        NOW,
         NODE,
+        &self_friend_key(&my_root),
+        &serde_json::to_string(&friend_record_with_peer(&my_root, "peer-device-b")).unwrap(),
+        NOW,
     )
     .unwrap();
 
@@ -713,6 +729,7 @@ fn pdsync_data_drops_self_friend_record_and_tombstone() {
         key: self_friend_key(&my_root),
         value: serde_json::to_value(friend_record_with_peer(&my_root, "peer-device-a")).unwrap(),
         meta: remote_meta("peer-node-b", 9, NOW + 60_000),
+        dseq: None,
     };
     let result = deliver_pdsync_data(&mut s, &key, &my_root, "ct:friend", &[poisoned]);
     assert_eq!(result.response, json!({ "ok": true }), "排除是丢弃而非拒批");
@@ -737,6 +754,7 @@ fn pdsync_data_drops_self_friend_record_and_tombstone() {
             node_id: Some("peer-node-b".to_string()),
             tombstone: Some(true),
         },
+        dseq: None,
     };
     let result = deliver_pdsync_data(&mut s, &key, &my_root, "ct:friend", &[tomb]);
     assert_eq!(result.response, json!({ "ok": true }));
@@ -772,6 +790,7 @@ fn pdsync_self_conv_merge_preserves_local_peer() {
         key: format!("msg:conv:personal:{conv_id}"),
         value: serde_json::to_value(&remote).unwrap(),
         meta: remote_meta("peer-node-b", 1, NOW),
+        dseq: None,
     };
     let result = deliver_pdsync_data(&mut s, &key, &my_root, "msg:conv", &[record]);
     assert_eq!(result.response, json!({ "ok": true }));

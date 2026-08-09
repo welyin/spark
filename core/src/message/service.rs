@@ -299,9 +299,9 @@ impl MessageService {
         Ok(())
     }
 
-    /// pdsync 感知的删除会话：个人空间会话删除写 tombstone pmeta（删除可经
-    /// 自设备 pdsync 传播；裸 delete 会留下非 tombstone 的陈旧 pmeta 污染
-    /// 该类目 folded vv）。组织/应用空间或 node_id 缺失时退化为裸删除。
+    /// pdsync 感知的删除会话：个人空间会话删除的墓碑/删除日志由版本化
+    /// 中间件在 `delete` 时自动完成（调用方传版本化句柄）。组织/应用空间
+    /// 会话不受管（中间件判定），自然退化为裸删除。
     pub fn delete_conversation_pdsync<S: StorageBackend>(
         storage: &mut S,
         space: &str,
@@ -309,19 +309,13 @@ impl MessageService {
         now_ms: i64,
         node_id: Option<&str>,
     ) -> Result<()> {
+        let _ = (now_ms, node_id); // 记账已下沉中间件，参数保留以稳定签名
         Self::delete_all_messages(storage, space, conv_id)?;
         let key = conversation_key(space, conv_id);
-        if space == "personal"
-            && let Some(node_id) = node_id
-        {
-            // 只有记录存在时才 tombstone（避免空删产生垃圾 pmeta，同 delete_tag）
-            if storage.get(&key)?.is_some() {
-                crate::sync::delete_personal(storage, node_id, &key, now_ms)
-                    .map_err(MessageError::Sync)?;
-            }
-            return Ok(());
+        // 只有记录存在时才删除（避免空删产生垃圾 pmeta，同 delete_tag）
+        if storage.get(&key)?.is_some() {
+            storage.delete(&key)?;
         }
-        storage.delete(&key)?;
         Ok(())
     }
 

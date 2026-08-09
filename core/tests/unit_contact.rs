@@ -257,25 +257,28 @@ fn tag_create_rename_delete_strips_references() {
 /// 不刷 updatedAt 时，引用变更在 pdsync 与旧 contact-sync 双通道都不传播）。
 #[test]
 fn tag_delete_strips_references_with_pmeta_and_updated_at() {
+    use spark_core::sync::versioned::{VersionedStorage, shared_node_id};
     use spark_core::sync::{get_personal_meta, is_tombstone};
 
-    let mut s = MemoryStorage::new();
+    // 版本化句柄（生产口径：记账由中间件完成）
+    let mut s = VersionedStorage::new(MemoryStorage::new(), shared_node_id(NODE));
     let tag = ContactService::create_tag_with_id(&mut s, PERSONAL, "tag-1", "邻居", NOW, NODE).unwrap();
-    // 朋友引用该标签（裸写存量：updated_at = NOW，无 pmeta）
+    // 朋友引用该标签（裸写存量：updated_at = NOW）
     let mut f = friend(&rid('a'), "阿强");
     f.tag_ids = vec![tag.id.clone()];
     ContactService::upsert_friend(&mut s, &f).unwrap();
 
     ContactService::delete_tag(&mut s, PERSONAL, &tag.id, NOW + 100, NODE).unwrap();
-    // 标签本体：tombstone pmeta
-    let tag_meta = get_personal_meta(&s, &format!("ct:tag:{}", tag.id)).unwrap().unwrap();
+    // 标签本体：tombstone pmeta（中间件在 delete 时自动写入）
+    let tag_meta = get_personal_meta(s.raw(), &format!("ct:tag:{}", tag.id)).unwrap().unwrap();
     assert!(is_tombstone(&tag_meta));
     // 引用摘除：friend 记录 bump pmeta + 刷新 updated_at
     let f = ContactService::get_friend(&s, &rid('a')).unwrap().unwrap();
     assert!(f.tag_ids.is_empty());
     assert_eq!(f.updated_at, NOW + 100);
-    let friend_meta = get_personal_meta(&s, &format!("ct:friend:{}", rid('a'))).unwrap().unwrap();
-    assert_eq!(friend_meta.vv.get(NODE), Some(&1));
+    let friend_meta = get_personal_meta(s.raw(), &format!("ct:friend:{}", rid('a'))).unwrap().unwrap();
+    // upsert（vv=1）+ 摘除引用（vv=2）：两次本地写各 bump 一次
+    assert_eq!(friend_meta.vv.get(NODE), Some(&2));
 }
 
 #[test]
@@ -356,24 +359,27 @@ fn personal_group_crud_reorder_and_reset() {
 /// 删除分组的组成员复位走 pmeta + 刷新 updatedAt（同 delete_tag 回归修复）。
 #[test]
 fn group_delete_resets_members_with_pmeta_and_updated_at() {
+    use spark_core::sync::versioned::{VersionedStorage, shared_node_id};
     use spark_core::sync::{get_personal_meta, is_tombstone};
 
-    let mut s = MemoryStorage::new();
+    // 版本化句柄（生产口径：记账由中间件完成）
+    let mut s = VersionedStorage::new(MemoryStorage::new(), shared_node_id(NODE));
     let g = ContactService::create_group_with_id(&mut s, "group-1", "家人", NOW, NODE).unwrap();
     let mut f = friend(&rid('a'), "阿强");
     f.group_id = g.id.clone();
     ContactService::upsert_friend(&mut s, &f).unwrap();
 
     ContactService::delete_group(&mut s, &g.id, NOW + 100, NODE).unwrap();
-    // 分组本体：tombstone pmeta
-    let group_meta = get_personal_meta(&s, &format!("ct:group:{}", g.id)).unwrap().unwrap();
+    // 分组本体：tombstone pmeta（中间件在 delete 时自动写入）
+    let group_meta = get_personal_meta(s.raw(), &format!("ct:group:{}", g.id)).unwrap().unwrap();
     assert!(is_tombstone(&group_meta));
     // 组内朋友复位：friend 记录 bump pmeta + 刷新 updated_at
     let f = ContactService::get_friend(&s, &rid('a')).unwrap().unwrap();
     assert_eq!(f.group_id, "");
     assert_eq!(f.updated_at, NOW + 100);
-    let friend_meta = get_personal_meta(&s, &format!("ct:friend:{}", rid('a'))).unwrap().unwrap();
-    assert_eq!(friend_meta.vv.get(NODE), Some(&1));
+    let friend_meta = get_personal_meta(s.raw(), &format!("ct:friend:{}", rid('a'))).unwrap().unwrap();
+    // upsert（vv=1）+ 复位（vv=2）
+    assert_eq!(friend_meta.vv.get(NODE), Some(&2));
 }
 
 #[test]

@@ -68,19 +68,19 @@
         // knownVv = {A:1, B:1}（对端已齐全）→ 无增量
         let known_full: VersionVector =
             [(NODE_A.to_string(), 1), (NODE_B.to_string(), 1)].into_iter().collect();
-        let inc = collect_incremental(&s, category_friend(), &known_full, None).unwrap();
+        let inc = collect_incremental(&s, category_friend(), &known_full, None, 0).unwrap();
         assert!(inc.is_empty());
 
         // knownVv = {A:1}（对端缺 B 对 b 的更新）→ 只推 b（B:2 所在）
         let known_a: VersionVector = [(NODE_A.to_string(), 1)].into_iter().collect();
-        let inc = collect_incremental(&s, category_friend(), &known_a, None).unwrap();
+        let inc = collect_incremental(&s, category_friend(), &known_a, None, 0).unwrap();
         assert_eq!(inc.len(), 1);
         assert_eq!(inc[0].key, format!("{FRIEND_PREFIX}b"));
         // b 的 meta vv 含 B 分量（相对 known_a 是 Remote）
         assert_eq!(inc[0].meta.vv.get(NODE_B), Some(&1));
 
         // knownVv 空 → 全部增量（两条都要）
-        let inc = collect_incremental(&s, category_friend(), &VersionVector::new(), None).unwrap();
+        let inc = collect_incremental(&s, category_friend(), &VersionVector::new(), None, 0).unwrap();
         assert_eq!(inc.len(), 2);
     }
 
@@ -97,6 +97,7 @@
             key: format!("{FRIEND_PREFIX}a"),
             value: json!("A1"),
             meta: meta.clone(),
+            dseq: None,
         };
         let r = apply_personal_remote(&mut b, &rec.key, &rec.value.to_string(), &rec.meta).unwrap();
         assert_eq!(r, crate::sync::personal::ApplyResult::Applied);
@@ -127,12 +128,13 @@
         put_personal(&mut s, NODE_A, &format!("{FRIEND_PREFIX}a"), r#""v""#, 1000)
             .unwrap();
         let known: VersionVector = VersionVector::new();
-        let inc = collect_incremental(&s, category_friend(), &known, None).unwrap();
+        let inc = collect_incremental(&s, category_friend(), &known, None, 0).unwrap();
 
-        let need = build_need("ct:friend", &known);
-        let (cat, parsed_vv) = parse_need(&need).unwrap();
+        let need = build_need("ct:friend", &known, 7);
+        let (cat, parsed_vv, ack) = parse_need(&need).unwrap();
         assert_eq!(cat, "ct:friend");
         assert!(parsed_vv.is_empty());
+        assert_eq!(ack, 7, "dlogAck 往返一致");
 
         let data = build_data_batch("ct:friend", &inc, 0, 1);
         let (cat2, records) = parse_data(&data).unwrap();
@@ -149,7 +151,7 @@
             let val = format!("\"user-{i}-{}\"", "x".repeat(100));
             put_personal(&mut s, NODE_A, &key, &val, 1000).unwrap();
         }
-        let inc = collect_incremental(&s, category_friend(), &VersionVector::new(), None).unwrap();
+        let inc = collect_incremental(&s, category_friend(), &VersionVector::new(), None, 0).unwrap();
         let batches = split_batches(inc, 300);
         assert!(batches.len() > 1, "应切分为多批，实际 {}", batches.len());
         // 所有记录都覆盖到
@@ -161,10 +163,14 @@
     /// 通过 hello→need→data 三信封收敛，最终双方记录一致。
     ///
     /// 模拟协议：
-    /// 1. A 发 hello（折叠 vv）给 B；
+    /// 1. A 发 hello（折叠 vv + dlogAck）给 B；
     /// 2. B 比对 → B 落后于 A 的类别发 need 回 A；
     /// 3. A 收到 need → 回 data；
     /// 4. B 应用 data → 双方一致。
+    ///
+    /// 删除日志 ACK 建模：`receiver_seen`/`sender_seen` 分别为两侧已收对端
+    /// 日志的最大 dseq——hello 的 dlogAck 由调用方注入（= sender_seen），
+    /// need 携带 receiver_seen；data 中墓碑条目的 dseq 回推更新两个计数器。
     ///
     /// `exclude`：对称排除键（[`self_friend_key`] 自记录排除的端到端验证用，
     /// 其余测试传 `None`）。
@@ -173,8 +179,11 @@
         receiver: &mut MemoryStorage,
         hello: &Value,
         exclude: Option<&str>,
+        receiver_seen: &mut u64,
+        sender_seen: &mut u64,
     ) -> Vec<Value> {
         // receiver 处理 hello：产生 need/data 出站 body
+        let hello_ack = crate::sync::dlog::parse_dlog_ack(hello);
         let remote_cats = parse_hello_categories(hello);
         let mut out = Vec::new();
         for category in CATEGORIES {
@@ -182,12 +191,16 @@
             let remote_vv = remote_cats.get(category.name).cloned().unwrap_or_default();
             match diff_category(&local_vv, &remote_vv) {
                 DiffOutcome::LocalBehind { local_vv } => {
-                    out.push(build_need(category.name, &local_vv));
+                    out.push(build_need(category.name, &local_vv, *receiver_seen));
                 }
                 DiffOutcome::LocalAhead => {
                     if let Ok(records) =
-                        collect_incremental(receiver, category, &remote_vv, exclude)
+                        collect_incremental(receiver, category, &remote_vv, exclude, hello_ack)
                     {
+                        *sender_seen = records
+                            .iter()
+                            .filter_map(|r| r.dseq)
+                            .fold(*sender_seen, u64::max);
                         let batches = split_batches(records, 4096);
                         let total = batches.len();
                         for (i, b) in batches.into_iter().enumerate() {
@@ -198,25 +211,49 @@
                 DiffOutcome::Concurrent => {
                     // 双向：推本机缺的 + 请求对端缺的
                     if let Ok(records) =
-                        collect_incremental(receiver, category, &remote_vv, exclude)
+                        collect_incremental(receiver, category, &remote_vv, exclude, hello_ack)
                     {
+                        *sender_seen = records
+                            .iter()
+                            .filter_map(|r| r.dseq)
+                            .fold(*sender_seen, u64::max);
                         let batches = split_batches(records, 4096);
                         let total = batches.len();
                         for (i, b) in batches.into_iter().enumerate() {
                             out.push(build_data_batch(category.name, &b, i, total));
                         }
                     }
-                    out.push(build_need(category.name, &local_vv));
+                    out.push(build_need(category.name, &local_vv, *receiver_seen));
                 }
-                DiffOutcome::Equal => {}
+                DiffOutcome::Equal => {
+                    // 折叠 vv Equal 不代表对端收齐墓碑：按 ACK 游标补推
+                    if let Ok(tombs) =
+                        collect_tombstones_after(receiver, category, exclude, hello_ack)
+                    {
+                        *sender_seen = tombs
+                            .iter()
+                            .filter_map(|r| r.dseq)
+                            .fold(*sender_seen, u64::max);
+                        let batches = split_batches(tombs, 4096);
+                        let total = batches.len();
+                        for (i, b) in batches.into_iter().enumerate() {
+                            out.push(build_data_batch(category.name, &b, i, total));
+                        }
+                    }
+                }
             }
         }
         // 处理 need：sender 侧采集并回 data（在真实链路由 sender 处理）
         let mut responses = Vec::new();
         for body in out {
-            if let Some((cat_name, known_vv)) = parse_need(&body) {
+            if let Some((cat_name, known_vv, need_ack)) = parse_need(&body) {
                 let cat = category_by_name(&cat_name).unwrap();
-                let records = collect_incremental(sender, cat, &known_vv, exclude).unwrap();
+                let records =
+                    collect_incremental(sender, cat, &known_vv, exclude, need_ack).unwrap();
+                *receiver_seen = records
+                    .iter()
+                    .filter_map(|r| r.dseq)
+                    .fold(*receiver_seen, u64::max);
                 let batches = split_batches(records, 4096);
                 let total = batches.len();
                 for (i, b) in batches.into_iter().enumerate() {
@@ -225,6 +262,17 @@
             }
         }
         responses
+    }
+
+    /// 无删除场景的简化包装：ACK 计数器用一次性 dummy（无墓碑即无 dseq，
+    /// 回执不影响行为）。
+    fn exchange_simple(
+        sender: &MemoryStorage,
+        receiver: &mut MemoryStorage,
+        hello: &Value,
+        exclude: Option<&str>,
+    ) -> Vec<Value> {
+        exchange(sender, receiver, hello, exclude, &mut 0, &mut 0)
     }
 
     #[test]
@@ -254,7 +302,7 @@
 
         // A → B：A 领先（B 缺 A 的 3 条），B 发 need，A 回 data，B 应用
         let hello_a = build_hello(&a, 2_592_000_000, 500, "eager", None, None).unwrap();
-        let responses = exchange(&a, &mut b, &hello_a, None);
+        let responses = exchange_simple(&a, &mut b, &hello_a, None);
         for data in &responses {
             let (_, records) = parse_data(data).unwrap();
             for r in records {
@@ -267,7 +315,7 @@
 
         // 反向 B → A：A 缺 b0，B 领先，A 发 need，B 回 data，A 应用
         let hello_b = build_hello(&b, 2_592_000_000, 500, "eager", None, None).unwrap();
-        let responses_b = exchange(&b, &mut a, &hello_b, None);
+        let responses_b = exchange_simple(&b, &mut a, &hello_b, None);
         for data in &responses_b {
             let (_, records) = parse_data(data).unwrap();
             for r in records {
@@ -279,10 +327,10 @@
 
         // 收敛后再互发 hello → 均 Equal，无新响应
         let hello_a2 = build_hello(&a, 2_592_000_000, 500, "eager", None, None).unwrap();
-        let responses_a2 = exchange(&a, &mut b, &hello_a2, None);
+        let responses_a2 = exchange_simple(&a, &mut b, &hello_a2, None);
         assert!(responses_a2.is_empty(), "收敛后不应有 need/data");
         let hello_b2 = build_hello(&b, 2_592_000_000, 500, "eager", None, None).unwrap();
-        let responses_b2 = exchange(&b, &mut a, &hello_b2, None);
+        let responses_b2 = exchange_simple(&b, &mut a, &hello_b2, None);
         assert!(responses_b2.is_empty(), "收敛后不应有 need/data");
     }
 
@@ -333,7 +381,7 @@
         // A → B 交换：B 落后于 A 的 profile（A 先写），并发于 conv（各自改不同
         // 字段）。双向交换后双方各取所需。
         let hello_a = build_hello(&a, 2_592_000_000, 500, "eager", None, None).unwrap();
-        let responses = exchange(&a, &mut b, &hello_a, None);
+        let responses = exchange_simple(&a, &mut b, &hello_a, None);
         for data in responses {
             let (_, records) = parse_data(&data).unwrap();
             for r in records {
@@ -342,7 +390,7 @@
         }
         // B → A 反向
         let hello_b = build_hello(&b, 2_592_000_000, 500, "eager", None, None).unwrap();
-        let responses_b = exchange(&b, &mut a, &hello_b, None);
+        let responses_b = exchange_simple(&b, &mut a, &hello_b, None);
         for data in responses_b {
             let (_, records) = parse_data(&data).unwrap();
             for r in records {
@@ -368,7 +416,7 @@
         assert_eq!(profile_raw.vv.get(NODE_B), Some(&1));
         // 收敛后再互发 hello → 无新响应
         let hello_a2 = build_hello(&a, 2_592_000_000, 500, "eager", None, None).unwrap();
-        assert!(exchange(&a, &mut b, &hello_a2, None).is_empty(), "profile/conv 收敛后无增量");
+        assert!(exchange_simple(&a, &mut b, &hello_a2, None).is_empty(), "profile/conv 收敛后无增量");
     }
 
     // ── P4 消息窗口 ─────────────────────────────────────────────────
@@ -589,13 +637,14 @@
         put_personal(&mut s, NODE_A, &bad, r#""will-corrupt""#, 1000).unwrap();
         // 直接写坏本体（pmeta 仍完好）
         s.put(&bad, "not-json{{{").unwrap();
-        let inc = collect_incremental(&s, category_friend(), &VersionVector::new(), None).unwrap();
+        let inc = collect_incremental(&s, category_friend(), &VersionVector::new(), None, 0).unwrap();
         assert_eq!(inc.len(), 1, "损坏记录应跳过");
         assert_eq!(inc[0].key, good);
     }
 
-    /// 墓碑推送：删除的记录以 `{key, value: null, meta(tombstone=true)}`
-    /// 进入增量；knownVv 已覆盖的墓碑不重推。
+    /// 墓碑推送：删除的记录以 `{key, value: null, meta(tombstone=true), dseq}`
+    /// 进入增量——由删除日志 ACK 游标驱动（不再看 knownVv：折叠 vv 丢失
+    /// key 维度，"knownVv 覆盖该 nodeId"推不出"对端知道这条 key 被删"）。
     #[test]
     fn collect_incremental_includes_tombstones() {
         let mut s = MemoryStorage::new();
@@ -605,32 +654,42 @@
         put_personal(&mut s, NODE_A, &dead, r#""2""#, 1000).unwrap();
         delete_personal(&mut s, NODE_A, &dead, 2000).unwrap();
 
-        let inc = collect_incremental(&s, category_friend(), &VersionVector::new(), None).unwrap();
+        let inc = collect_incremental(&s, category_friend(), &VersionVector::new(), None, 0).unwrap();
         assert_eq!(inc.len(), 2);
         let tomb = inc.iter().find(|r| r.key == dead).expect("墓碑应在增量中");
         assert_eq!(tomb.value, Value::Null);
         assert_eq!(tomb.meta.tombstone, Some(true));
+        assert_eq!(tomb.dseq, Some(1), "墓碑携带删除日志序号");
         let live_rec = inc.iter().find(|r| r.key == live).unwrap();
         assert_eq!(live_rec.value, json!("1"));
 
-        // knownVv 已覆盖墓碑（A:2）→ 无增量
+        // knownVv 已覆盖该 nodeId 全部写入（A:2）但 dlogAck=0：活记录被 vv
+        // 跳过，墓碑仍推（折叠 vv 不能证明对端知道这条删除——正是原 bug 场景）
         let known: VersionVector = [(NODE_A.to_string(), 2)].into_iter().collect();
-        let inc2 = collect_incremental(&s, category_friend(), &known, None).unwrap();
-        assert!(inc2.is_empty(), "已知墓碑不应重推");
+        let inc2 = collect_incremental(&s, category_friend(), &known, None, 0).unwrap();
+        assert_eq!(inc2.len(), 1, "knownVv 覆盖不等于知道删除，墓碑必须照推");
+        assert_eq!(inc2[0].key, dead);
+
+        // 对端回执 dlogAck=1（已收该日志条目）→ 不再重推
+        let inc3 = collect_incremental(&s, category_friend(), &known, None, 1).unwrap();
+        assert!(inc3.is_empty(), "已确认墓碑不重推");
     }
 
-    /// 端到端墓碑传播：A 删除 → hello/need/data 交换 → B 的记录被删 +
-    /// 墓碑 pmeta 落地，且收敛后无增量。
+    /// 端到端墓碑传播：A 删除 → hello/need/data 交换（删除日志 + ACK 回执）
+    /// → B 的记录被删 + 墓碑 pmeta 落地；双方回执齐全后收敛无增量。
     #[test]
     fn tombstone_delete_propagates_end_to_end() {
         let mut a = MemoryStorage::new();
         let mut b = MemoryStorage::new();
         let key = format!("{FRIEND_PREFIX}doomed");
         put_personal(&mut a, NODE_A, &key, r#""v1""#, 1000).unwrap();
+        let mut a_seen = 0u64; // A 已收 B 日志的最大 dseq
+        let mut b_seen = 0u64; // B 已收 A 日志的最大 dseq
 
         // 第一轮：A → B，B 获得记录
-        let hello_a = build_hello(&a, 2_592_000_000, 500, "eager", None, None).unwrap();
-        for data in exchange(&a, &mut b, &hello_a, None) {
+        let mut hello_a = build_hello(&a, 2_592_000_000, 500, "eager", None, None).unwrap();
+        hello_a["dlogAck"] = json!(a_seen);
+        for data in exchange(&a, &mut b, &hello_a, None, &mut b_seen, &mut a_seen) {
             let (_, records) = parse_data(&data).unwrap();
             for r in records {
                 let _ =
@@ -639,12 +698,14 @@
         }
         assert!(b.get(&key).unwrap().is_some(), "B 应先获得记录");
 
-        // A 删除记录（写墓碑）
+        // A 删除记录（写墓碑 + 删除日志 seq=1）
         delete_personal(&mut a, NODE_A, &key, 2000).unwrap();
 
-        // 第二轮：墓碑随增量推给 B → B 删本体 + 落墓碑 pmeta
-        let hello_a2 = build_hello(&a, 2_592_000_000, 500, "eager", None, None).unwrap();
-        let responses = exchange(&a, &mut b, &hello_a2, None);
+        // 第二轮：B 折叠 vv 落后 → need → A 按日志（ack=0）推墓碑 → B 删
+        // 本体 + 落墓碑 pmeta（B 同时补登接力日志）
+        let mut hello_a2 = build_hello(&a, 2_592_000_000, 500, "eager", None, None).unwrap();
+        hello_a2["dlogAck"] = json!(a_seen);
+        let responses = exchange(&a, &mut b, &hello_a2, None, &mut b_seen, &mut a_seen);
         assert!(!responses.is_empty(), "B 落后应触发 need→data");
         for data in responses {
             let (_, records) = parse_data(&data).unwrap();
@@ -657,12 +718,32 @@
         let pmeta = get_personal_meta(&b, &key).unwrap().unwrap();
         assert!(is_tombstone(&pmeta), "B 应持久化墓碑 pmeta");
         assert_eq!(pmeta.vv.get(NODE_A), Some(&2));
+        assert_eq!(b_seen, 1, "B 已收讫 A 的删除日志 seq=1");
 
-        // 收敛：双方折叠 vv 一致，再交换无增量
-        let hello_b = build_hello(&b, 2_592_000_000, 500, "eager", None, None).unwrap();
-        assert!(exchange(&b, &mut a, &hello_b, None).is_empty(), "墓碑收敛后无增量");
-        let hello_a3 = build_hello(&a, 2_592_000_000, 500, "eager", None, None).unwrap();
-        assert!(exchange(&a, &mut b, &hello_a3, None).is_empty(), "墓碑收敛后无增量");
+        // 第三轮：折叠 vv 已 Equal，但 B 的接力日志条目未获 A 回执——Equal
+        // 分支按 ACK 游标补推（A 应用为幂等 no-op），A 收讫 a_seen=1；B 对
+        // A 无 need（diff Equal），responses 为空
+        let mut hello_a3 = build_hello(&a, 2_592_000_000, 500, "eager", None, None).unwrap();
+        hello_a3["dlogAck"] = json!(a_seen);
+        assert!(
+            exchange(&a, &mut b, &hello_a3, None, &mut b_seen, &mut a_seen).is_empty(),
+            "Equal 无 need"
+        );
+        assert_eq!(a_seen, 1, "A 收讫 B 的接力日志条目");
+
+        // 第四轮：双方回执齐全（hello 各携带对端 seen）→ 不再互推墓碑，收敛
+        let mut hello_b = build_hello(&b, 2_592_000_000, 500, "eager", None, None).unwrap();
+        hello_b["dlogAck"] = json!(b_seen);
+        assert!(
+            exchange(&b, &mut a, &hello_b, None, &mut a_seen, &mut b_seen).is_empty(),
+            "墓碑收敛后无增量"
+        );
+        let mut hello_a4 = build_hello(&a, 2_592_000_000, 500, "eager", None, None).unwrap();
+        hello_a4["dlogAck"] = json!(a_seen);
+        assert!(
+            exchange(&a, &mut b, &hello_a4, None, &mut b_seen, &mut a_seen).is_empty(),
+            "墓碑收敛后无增量"
+        );
     }
 
     #[test]
@@ -763,7 +844,7 @@
 
         // A → B 交换
         let hello_a = build_hello(&a, 2_592_000_000, 500, "eager", None, None).unwrap();
-        let responses = exchange(&a, &mut b, &hello_a, None);
+        let responses = exchange_simple(&a, &mut b, &hello_a, None);
         for data in responses {
             let (_, records) = parse_data(&data).unwrap();
             for r in records {
@@ -772,7 +853,7 @@
         }
         // B → A 反向
         let hello_b = build_hello(&b, 2_592_000_000, 500, "eager", None, None).unwrap();
-        let responses_b = exchange(&b, &mut a, &hello_b, None);
+        let responses_b = exchange_simple(&b, &mut a, &hello_b, None);
         for data in responses_b {
             let (_, records) = parse_data(&data).unwrap();
             for r in records {
@@ -818,7 +899,7 @@
 
         // A → B
         let hello_a = build_hello(&a, 2_592_000_000, 500, "eager", None, None).unwrap();
-        let responses = exchange(&a, &mut b, &hello_a, None);
+        let responses = exchange_simple(&a, &mut b, &hello_a, None);
         for data in responses {
             let (_, records) = parse_data(&data).unwrap();
             for r in records {
@@ -830,7 +911,7 @@
         assert!(b.get(tree_key).unwrap().is_some(), "B 缺组织分组树");
         // 收敛后无增量
         let hello_a2 = build_hello(&a, 2_592_000_000, 500, "eager", None, None).unwrap();
-        assert!(exchange(&a, &mut b, &hello_a2, None).is_empty(), "ct:org 收敛后无增量");
+        assert!(exchange_simple(&a, &mut b, &hello_a2, None).is_empty(), "ct:org 收敛后无增量");
     }
 
     // ── 自 FriendRecord 排除（`ct:friend:{rootId}`，设备相对 peer 不可互灌）──
@@ -880,14 +961,14 @@
 
         // A → B、B → A 各一轮 hello→need→data（两侧同一排除键）
         let hello_a = build_hello(&a, 2_592_000_000, 500, "eager", Some(&self_key), None).unwrap();
-        for data in exchange(&a, &mut b, &hello_a, Some(&self_key)) {
+        for data in exchange_simple(&a, &mut b, &hello_a, Some(&self_key)) {
             let (_, records) = parse_data(&data).unwrap();
             for r in records {
                 let _ = apply_personal_remote(&mut b, &r.key, &r.value.to_string(), &r.meta).unwrap();
             }
         }
         let hello_b = build_hello(&b, 2_592_000_000, 500, "eager", Some(&self_key), None).unwrap();
-        for data in exchange(&b, &mut a, &hello_b, Some(&self_key)) {
+        for data in exchange_simple(&b, &mut a, &hello_b, Some(&self_key)) {
             let (_, records) = parse_data(&data).unwrap();
             for r in records {
                 let _ = apply_personal_remote(&mut a, &r.key, &r.value.to_string(), &r.meta).unwrap();
@@ -904,9 +985,9 @@
 
         // 收敛：折叠 vv 一致，再交换无 need/data（无伪 diff）
         let hello_a2 = build_hello(&a, 2_592_000_000, 500, "eager", Some(&self_key), None).unwrap();
-        assert!(exchange(&a, &mut b, &hello_a2, Some(&self_key)).is_empty(), "A→B 收敛无增量");
+        assert!(exchange_simple(&a, &mut b, &hello_a2, Some(&self_key)).is_empty(), "A→B 收敛无增量");
         let hello_b2 = build_hello(&b, 2_592_000_000, 500, "eager", Some(&self_key), None).unwrap();
-        assert!(exchange(&b, &mut a, &hello_b2, Some(&self_key)).is_empty(), "B→A 收敛无增量");
+        assert!(exchange_simple(&b, &mut a, &hello_b2, Some(&self_key)).is_empty(), "B→A 收敛无增量");
     }
 
     /// 自记录墓碑排除：本机删自记录产生的墓碑不进增量、不进折叠——
@@ -923,6 +1004,7 @@
             category_friend(),
             &VersionVector::new(),
             Some(&self_key),
+            0,
         )
         .unwrap();
         assert!(inc.is_empty(), "自记录墓碑不参与增量推送");
@@ -930,7 +1012,7 @@
         assert!(folded.get(NODE_A).is_none(), "自记录墓碑不进折叠");
         // 对照：不排除时墓碑确实会在增量里（防测试本身失效）
         let inc_raw =
-            collect_incremental(&a, category_friend(), &VersionVector::new(), None).unwrap();
+            collect_incremental(&a, category_friend(), &VersionVector::new(), None, 0).unwrap();
         assert_eq!(inc_raw.len(), 1);
         assert_eq!(inc_raw[0].meta.tombstone, Some(true));
     }

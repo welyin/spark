@@ -15,7 +15,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use crate::storage::{ScanOptions, StorageBackend};
-use crate::sync::{delete_personal, put_personal};
+use crate::sync::put_personal;
 
 use super::sync_err_to_contact;
 
@@ -149,20 +149,26 @@ impl ContactService {
     ) -> Result<()> {
         let key = format!("{}{}", super::FRIEND_PREFIX, friend.root_id);
         let json = serde_json::to_string(friend)?;
-        put_personal(storage, node_id, &key, &json, now_ms)
-            .map_err(sync_err_to_contact)?;
+        // 版本记账由中间件自动完成
+        let _ = (now_ms, node_id);
+        storage.put(&key, &json)?;
         Ok(())
     }
 
     /// 删除朋友记录并写 tombstone pmeta（pdsync P1）。
+    ///
+    /// 墓碑/删除日志由版本化中间件在 `delete` 时自动完成（§11.5 架构收敛）
+    /// ——本函数只表达业务语义"删除朋友记录"。调用方必须传版本化句柄
+    /// （kernel 门面默认即是）。
     pub fn remove_friend_pdsync<S: StorageBackend>(
         storage: &mut S,
         root_id: &str,
         now_ms: i64,
         node_id: &str,
     ) -> Result<()> {
+        let _ = (now_ms, node_id); // 记账已下沉中间件，参数保留以稳定签名
         let key = format!("{}{}", super::FRIEND_PREFIX, root_id);
-        delete_personal(storage, node_id, &key, now_ms).map_err(sync_err_to_contact)?;
+        storage.delete(&key)?;
         Ok(())
     }
 
@@ -178,7 +184,9 @@ impl ContactService {
         if blocked {
             put_personal(storage, node_id, &key, "\"1\"", now_ms).map_err(sync_err_to_contact)?;
         } else {
-            delete_personal(storage, node_id, &key, now_ms).map_err(sync_err_to_contact)?;
+            // 取消拉黑 = 删除：墓碑/日志由中间件自动完成
+            let _ = (now_ms, node_id);
+            storage.delete(&key)?;
         }
         Ok(())
     }
