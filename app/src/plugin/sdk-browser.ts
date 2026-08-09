@@ -82,6 +82,25 @@ export function createPluginBackend(domain: string): PluginSDK {
       query: (collection: string, options = {}) =>
         electronAPI.plugin.docQuery(collection, options, pluginDomain)
     },
+    // P6 声明式数据 API（写库即同步；插件侧零同步参数）
+    data: {
+      declareCollection: (declaration) =>
+        electronAPI.plugin.dataDeclareCollection(declaration, pluginDomain),
+      save: (name, key, value, version) =>
+        electronAPI.plugin.dataSave(name, key, value, version, pluginDomain),
+      delete: (name, key, version) =>
+        electronAPI.plugin.dataDelete(name, key, version, pluginDomain),
+      get: (name, key, version) =>
+        electronAPI.plugin.dataGet(name, key, version, pluginDomain),
+      query: (name, options = {}, version) =>
+        electronAPI.plugin.dataQuery(name, options, version, pluginDomain),
+      dropVersion: (name, version) =>
+        electronAPI.plugin.dataDropVersion(name, version, pluginDomain),
+      saveBlob: (dataBase64) =>
+        electronAPI.plugin.dataSaveBlob(dataBase64),
+      readBlob: (hash) =>
+        electronAPI.plugin.dataReadBlob(hash)
+    },
     identity: {
       sign: (payload: string) =>
         electronAPI.plugin.identitySign(payload, pluginDomain),

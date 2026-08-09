@@ -42,6 +42,15 @@ const CALL_PERMISSIONS: Record<string, string> = {
   'docs.defineCollection': 'storage:write',
   'docs.put': 'storage:write',
   'docs.delete': 'storage:write',
+  // P6 声明式数据 API（与内核 host_env.rs capability_permission 逐字对齐）
+  'data.get': 'storage:read',
+  'data.query': 'storage:read',
+  'data.readBlob': 'storage:read',
+  'data.declareCollection': 'storage:write',
+  'data.save': 'storage:write',
+  'data.delete': 'storage:write',
+  'data.dropVersion': 'storage:write',
+  'data.saveBlob': 'storage:write',
   'runtime.listMineOrganizations': 'org:read',
   'runtime.syncOrganizationData': 'org:sync',
   'p2p.broadcast': 'network:broadcast',
@@ -78,9 +87,9 @@ const VIEW_ALLOWED_CALLS: Record<PluginViewType, ReadonlySet<string> | null> = {
   // background 视图已下线（插件常驻逻辑迁往内核 QuickJS 后台运行时，
   // 见 plugin_system.md「后台运行时」）；类型保留仅为兼容历史清单的解析
   background: null,
-  // 消息卡片：docs 只读 + 验签/存证读取（无网络、无签名，设计文档「UI 集成点」）；
+  // 消息卡片：docs/data 只读 + 验签/存证读取（无网络、无签名，设计文档「UI 集成点」）；
   // 不含 messages.*——卡片视图无应用会话写权限，卡片回调只经 action 上行（triggerCardAction）
-  'message-card': new Set(['docs.get', 'docs.query', 'identity.verify', 'evidence.headHash', 'evidence.verify'])
+  'message-card': new Set(['docs.get', 'docs.query', 'data.get', 'data.query', 'data.readBlob', 'identity.verify', 'evidence.headHash', 'evidence.verify'])
 };
 
 /** org 域调用：需组织空间上下文，personal 空间下一律拒绝（无 org 实参可校验） */
@@ -168,6 +177,16 @@ export async function createPluginBridgeDispatcher(identity: PluginBridgeIdentit
       put: backend.docs.put,
       delete: backend.docs.delete,
       query: backend.docs.query
+    },
+    data: {
+      declareCollection: backend.data.declareCollection,
+      save: backend.data.save,
+      delete: backend.data.delete,
+      get: backend.data.get,
+      query: backend.data.query,
+      dropVersion: backend.data.dropVersion,
+      saveBlob: backend.data.saveBlob,
+      readBlob: backend.data.readBlob
     },
     identity: {
       sign: backend.identity.sign,

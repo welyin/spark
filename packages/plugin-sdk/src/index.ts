@@ -78,6 +78,44 @@ export interface PluginDocAPI {
   }>;
 }
 
+/** P6 集合声明（wiki design/plugin-data-api.md §2）：策略随声明走，读写零同步参数 */
+export interface PluginDataDeclaration {
+  /** 集合名 `{pluginId}:{collection}`，前缀必须与插件 id 一致 */
+  name: string;
+  /** 代际标签（字符串，建议 semver；框架按声明时间定新旧），缺省 "1" */
+  version?: string;
+  /** sync（缺省）/ local；同步到自设备间还是组织内由内核按运行空间处理 */
+  scope?: 'sync' | 'local';
+  /** 持有账号内部驻留到哪类设备，缺省 all */
+  devices?: 'all' | 'pc-backup' | 'pc-only' | 'mobile-only';
+  /** 合并规则，缺省 lww-record */
+  merge?: 'lww-record' | 'append-only' | 'whole';
+}
+
+/** P6 声明式数据 API（personal scope 已落地；org 轴随组织同步架构启用） */
+export interface PluginDataAPI {
+  /** 声明集合（幂等；代际内策略冲突报错）。返回声明记录 */
+  declareCollection: (declaration: PluginDataDeclaration) => Promise<Record<string, unknown>>;
+  /** 写记录（version 缺省 = 最新代际；写库即同步） */
+  save: (name: string, key: string, value: unknown, version?: string) => Promise<{ success: boolean }>;
+  /** 删记录（墓碑传播到复制组） */
+  delete: (name: string, key: string, version?: string) => Promise<{ success: boolean }>;
+  /** 读单条（未命中 → null） */
+  get: <T = unknown>(name: string, key: string, version?: string) => Promise<T | null>;
+  /** 前缀分页查询（limit 缺省 500 上限 2000；返回集合内相对键） */
+  query: <T = unknown>(
+    name: string,
+    options?: { prefix?: string; limit?: number; cursor?: string },
+    version?: string
+  ) => Promise<{ items: Array<{ key: string; value: T }>; nextCursor?: string }>;
+  /** 清理一个代际（声明 + 全部数据键墓碑化传播） */
+  dropVersion: (name: string, version: string) => Promise<{ success: boolean }>;
+  /** 内建 blob：base64 入、{hash,size} 出；记录内以 { $blob: hash, name, size, mime } 引用 */
+  saveBlob: (dataBase64: string) => Promise<{ hash: string; size: number }>;
+  /** 命中 → {status:'ready', data(base64)}；未命中 → {status:'pending'}（已登记拉取意图，稍后重读） */
+  readBlob: (hash: string) => Promise<{ status: 'ready'; data: string } | { status: 'pending' }>;
+}
+
 /** 域签名结果（与壳层 api/types.ts DomainSignature 同形，结构类型天然兼容） */
 export type DomainSignature = {
   domain: string;
@@ -250,6 +288,8 @@ export interface PluginSDK {
   p2p: PluginP2PAPI;
   runtime: PluginRuntimeAPI;
   docs: PluginDocAPI;
+  /** P6 声明式数据 API（写库即同步；iframe 桥与 QuickJS 后台运行时均可用） */
+  data: PluginDataAPI;
   identity: PluginIdentityAPI;
   /** 事件模块：仅 iframe 桥模式可用（tab 模式未注入） */
   events?: PluginEventsAPI;

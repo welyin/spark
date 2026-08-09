@@ -576,6 +576,29 @@ export type ElectronAPI = {
       },
       pluginDomain?: string
     ) => Promise<{ items: Array<{ id: string; data: T }>; nextCursor?: string }>;
+    // P6 声明式数据 API（wiki design/plugin-data-api.md）
+    dataDeclareCollection: (
+      declaration: {
+        name: string;
+        version?: string;
+        scope?: 'sync' | 'local';
+        devices?: 'all' | 'pc-backup' | 'pc-only' | 'mobile-only';
+        merge?: 'lww-record' | 'append-only' | 'whole';
+      },
+      pluginDomain?: string
+    ) => Promise<Record<string, unknown>>;
+    dataSave: (name: string, key: string, value: unknown, version?: string, pluginDomain?: string) => Promise<{ success: boolean }>;
+    dataDelete: (name: string, key: string, version?: string, pluginDomain?: string) => Promise<{ success: boolean }>;
+    dataGet: <T = unknown>(name: string, key: string, version?: string, pluginDomain?: string) => Promise<T | null>;
+    dataQuery: <T = unknown>(
+      name: string,
+      options?: { prefix?: string; limit?: number; cursor?: string },
+      version?: string,
+      pluginDomain?: string
+    ) => Promise<{ items: Array<{ key: string; value: T }>; nextCursor?: string }>;
+    dataDropVersion: (name: string, version: string, pluginDomain?: string) => Promise<{ success: boolean }>;
+    dataSaveBlob: (dataBase64: string) => Promise<{ hash: string; size: number }>;
+    dataReadBlob: (hash: string) => Promise<{ status: 'ready'; data: string } | { status: 'pending' }>;
   };
   pluginMarket: {
     list: () => Promise<PluginMarketItemDto[]>;

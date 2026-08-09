@@ -30,6 +30,7 @@ mod contact_ops;
 mod contact_request_ops;
 mod device_ops;
 mod dm_delivery;
+mod data_ops;
 mod doc_ops;
 pub mod dm_envelope;
 mod error;

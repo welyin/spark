@@ -63,6 +63,12 @@ pub const KIND_PDSYNC_NEED: &str = "pdsync-need";
 /// `{key,value,meta}` + 批次号，接收方逐条 `apply_personal_remote`，见
 /// pdsync §5.3）。
 pub const KIND_PDSYNC_DATA: &str = "pdsync-data";
+/// 信封 kind：P6 blob 按需拉取请求（自设备间；body `{hash, offset}`，
+/// 见 plugin-data-api §4）。
+pub const KIND_PDSYNC_ATTACHMENT_REQ: &str = "pdsync-attachment-req";
+/// 信封 kind：P6 blob 分块响应（body `{hash, offset, data, totalBytes}`；
+/// 块长 3 的倍数，接收侧 base64 直接追加拼接，收齐后 SHA-256 校验提升）。
+pub const KIND_PDSYNC_ATTACHMENT_RESP: &str = "pdsync-attachment-resp";
 
 /// 签名载荷：固定键序 body/from/kind/to/ts 的紧凑 JSON 串。
 pub fn build_signing_payload(kind: &str, from: &str, to: &str, ts: i64, body: &Value) -> String {

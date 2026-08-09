@@ -19,6 +19,7 @@ use std::collections::HashSet;
 
 use serde_json::{Value, json};
 
+mod attachment;
 mod chat;
 mod friend;
 mod org_invite;
@@ -28,7 +29,8 @@ mod sync;
 use super::dm_envelope::{
     KIND_CHAT, KIND_CONTACT_SYNC, KIND_CONV_SYNC, KIND_DEVICE_SYNC, KIND_FRIEND_ACCEPT,
     KIND_FRIEND_REPLY, KIND_FRIEND_REQUEST, KIND_ORG_INVITE, KIND_ORG_INVITE_REPLY,
-    KIND_PDSYNC_DATA, KIND_PDSYNC_HELLO, KIND_PDSYNC_NEED, KIND_PROFILE_SYNC, KIND_READ,
+    KIND_PDSYNC_ATTACHMENT_REQ, KIND_PDSYNC_ATTACHMENT_RESP, KIND_PDSYNC_DATA,
+    KIND_PDSYNC_HELLO, KIND_PDSYNC_NEED, KIND_PROFILE_SYNC, KIND_READ,
     KIND_RECALL, verify_envelope,
 };
 use crate::contact::{ContactError, ContactService, FriendRecord};
@@ -53,6 +55,9 @@ pub enum InboundDmError {
     /// pdsync 个人域同步模块错误。
     #[error(transparent)]
     Sync(#[from] crate::sync::SyncError),
+    /// P6 插件数据模块错误（blob 传输等）。
+    #[error(transparent)]
+    Plugindata(#[from] crate::plugindata::PlugindataError),
     /// JSON 序列化/反序列化错误。
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
@@ -133,13 +138,22 @@ pub enum PdsyncOut {
     Need { body: Value },
     /// `pdsync-need` 的增量回发：`pdsync-data` 数据（单批）。
     Data { body: Value },
+    /// P6 blob 拉取请求：`pdsync-attachment-req`（`{hash, offset}`）。
+    AttachReq { body: Value },
+    /// P6 blob 分块响应：`pdsync-attachment-resp`（`{hash, offset, data,
+    /// totalBytes}`）。
+    AttachResp { body: Value },
 }
 
 impl PdsyncOut {
     /// 出站 body（host 装配信封 / 集成测试透传用，免对变体逐个 match）。
     pub fn body(&self) -> &Value {
         match self {
-            Self::Push { body } | Self::Need { body } | Self::Data { body } => body,
+            Self::Push { body }
+            | Self::Need { body }
+            | Self::Data { body }
+            | Self::AttachReq { body }
+            | Self::AttachResp { body } => body,
         }
     }
 }
@@ -379,6 +393,12 @@ pub fn handle_inbound_dm<S: StorageBackend>(
         }
         KIND_PDSYNC_DATA => {
             pdsync::handle_pdsync_data(storage, &ctx, &envelope.from, &envelope.body)
+        }
+        KIND_PDSYNC_ATTACHMENT_REQ => {
+            attachment::handle_attachment_req(storage, &ctx, &envelope.from, &envelope.body)
+        }
+        KIND_PDSYNC_ATTACHMENT_RESP => {
+            attachment::handle_attachment_resp(storage, &ctx, &envelope.from, &envelope.body)
         }
         KIND_ORG_INVITE => {
             org_invite::handle_org_invite(storage, &ctx, &envelope.from, &envelope.body)

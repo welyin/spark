@@ -182,6 +182,10 @@ pub enum PlugindataError {
     #[error("collection \"{0}\" is append-only: overwrite and delete are rejected")]
     AppendOnlyViolation(String),
 
+    /// blob 存取错误。
+    #[error("blob error: {0}")]
+    Blob(String),
+
     /// 存储后端错误。
     #[error(transparent)]
     Storage(#[from] crate::storage::StorageError),
@@ -411,6 +415,8 @@ pub fn drop_version<S: StorageBackend>(storage: &mut S, decl: &CollectionDeclara
     storage.delete(&decl.decl_key())?;
     Ok(())
 }
+
+pub mod blob;
 
 #[cfg(test)]
 mod tests;

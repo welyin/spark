@@ -217,6 +217,15 @@ pub fn run() {
             commands::docs::doc_delete,
             commands::docs::doc_query,
             commands::docs::doc_declare_collection,
+            // P6 插件声明式数据
+            commands::plugin_data::data_declare_collection,
+            commands::plugin_data::data_save,
+            commands::plugin_data::data_delete,
+            commands::plugin_data::data_get,
+            commands::plugin_data::data_query,
+            commands::plugin_data::data_drop_version,
+            commands::plugin_data::data_save_blob,
+            commands::plugin_data::data_read_blob,
             // 组织
             commands::org::org_list_mine,
             commands::org::org_create,

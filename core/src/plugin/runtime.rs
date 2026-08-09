@@ -397,6 +397,15 @@ const PRELUDE: &str = r#"
             },
             dropVersion: function (name, version) {
                 call('data.dropVersion', { name: name, version: String(version) });
+            },
+            // 内建 blob：base64 入、{hash,size} 出；记录内以 {$blob:hash,...} 引用
+            saveBlob: function (base64Data) {
+                return call('data.saveBlob', { data: base64Data });
+            },
+            // 命中 → {status:'ready', data(base64)}；未命中 → {status:'pending'}
+            // （已置 want 标记，调和拉取后重读）
+            readBlob: function (hash) {
+                return call('data.readBlob', { hash: hash });
             }
         },
         sys: {

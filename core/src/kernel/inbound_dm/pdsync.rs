@@ -179,6 +179,9 @@ pub(super) fn handle_pdsync_hello<S: StorageBackend>(
             }
         }
     }
+    // P6 blob 调和：PC eager 扫 pdoc 引用、其余设备类取 want 标记（lazy），
+    // 缺失即向本 hello 发送方（在线自设备）发起拉取，逐 hash 节流
+    super::attachment::reconcile_blob_pulls(storage, ctx, &mut out)?;
     Ok(InboundDmResult {
         response: ok_response(),
         events: Vec::new(),
@@ -314,6 +317,9 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
         std::collections::BTreeMap::new();
     // 对端删除日志回执依据：本批携带的最大 dseq（循环结束后推进 seen）
     let mut max_dseq: Option<u64> = None;
+    // P6 blob 热切依据：本批新合入的 pdoc 记录中引用的 blob hash（循环结束后
+    // 对本机缺失者立即向发送方拉取——对端刚推完数据，在线是已证事实）
+    let mut applied_blob_refs: Vec<String> = Vec::new();
     for record in records {
         if let Some(dseq) = record.dseq {
             max_dseq = Some(max_dseq.map_or(dseq, |m: u64| m.max(dseq)));
@@ -464,6 +470,13 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
         if record.key.starts_with("ct:") {
             log::info!("[CT_SYNC] ct applied={} | key={}", result.did_apply(), record.key);
         }
+        // P6 blob 热切：新合入的 pdoc 记录收集引用（墓碑无本体，跳过）
+        if result.did_apply()
+            && record.key.starts_with("pdoc:")
+            && !crate::sync::is_tombstone(&record.meta)
+        {
+            applied_blob_refs.extend(crate::plugindata::blob::blob_refs_in(&record.value));
+        }
         if result.did_apply() {
             if record.key.starts_with("device:") {
                 // 设备清单：逐条 DeviceUpdated（data 即 DeviceRecord JSON）。
@@ -547,6 +560,20 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
             out.push(PdsyncOut::Need {
                 body: crate::sync::pdsync::build_need(&category_name, &local_vv, seen),
             });
+        }
+    }
+
+    // P6 blob 热切：新合入记录引用而本机缺失的 blob 立即向发送方拉取
+    // （PC eager；其余设备类靠 readBlob 的 want 标记 + hello 调和懒拉）
+    if crate::sync::pdsync::local_device_class() == "pc" {
+        for hash in applied_blob_refs {
+            if !crate::plugindata::blob::has_blob(storage, &hash)
+                && crate::plugindata::blob::throttle_request(storage, &hash, ctx.now_ms)?
+            {
+                out.push(PdsyncOut::AttachReq {
+                    body: serde_json::json!({ "hash": hash, "offset": 0 }),
+                });
+            }
         }
     }
 

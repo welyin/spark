@@ -9,6 +9,7 @@ pub mod data;
 pub mod device;
 pub mod docs;
 pub mod dto;
+pub mod plugin_data;
 pub mod evidence;
 pub mod identity;
 pub mod link_preview;

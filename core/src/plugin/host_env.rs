@@ -139,6 +139,9 @@ impl PluginHostShared {
             "data.get" => self.data_get(plugin_id, &payload),
             "data.query" => self.data_query(plugin_id, &payload),
             "data.dropVersion" => self.data_drop_version(plugin_id, &payload),
+            // 内建 blob：内容哈希寻址；拉取（eager/lazy 调和）由 pdsync 链路完成
+            "data.saveBlob" => self.data_save_blob(plugin_id, &payload),
+            "data.readBlob" => self.data_read_blob(plugin_id, &payload),
             // 系统能力：长时操作异步化——启动即返，结果经事件队列回流
             // （JS Promise 由 prelude 配对 callId）
             "sys.exec.start" => self.sys_exec_start(rtx, &payload),
@@ -211,10 +214,9 @@ fn capability_permission(capability: &str) -> Option<&'static str> {
     match capability {
         "docs.get" | "docs.query" => Some("storage:read"),
         "docs.put" | "docs.delete" | "docs.defineCollection" => Some("storage:write"),
-        "data.get" | "data.query" => Some("storage:read"),
-        "data.save" | "data.delete" | "data.declareCollection" | "data.dropVersion" => {
-            Some("storage:write")
-        }
+        "data.get" | "data.query" | "data.readBlob" => Some("storage:read"),
+        "data.save" | "data.delete" | "data.declareCollection" | "data.dropVersion"
+        | "data.saveBlob" => Some("storage:write"),
         "contact.ensureBot" | "message.reply" => Some("message:app"),
         "sys.exec.start" => Some("system:exec"),
         "sys.fetch.start" => Some("network:fetch"),
@@ -597,6 +599,38 @@ impl PluginHostShared {
         crate::plugindata::drop_version(&mut storage, &decl)
             .map_err(|e| PluginError::InvalidCall(e.to_string()))?;
         Ok(Value::Null)
+    }
+
+    /// blob 保存：base64 入、内容哈希出（引用对象由插件自行写入记录：
+    /// `{ "$blob": hash, name, size, mime }`）。
+    fn data_save_blob(&self, _plugin_id: &str, payload: &Value) -> Result<Value> {
+        let data_b64 = required_str(payload, "data")?;
+        use base64::Engine as _;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data_b64)
+            .map_err(|e| PluginError::InvalidCall(format!("invalid base64: {e}")))?;
+        let _io = self.io_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let mut storage = self.require_storage()?;
+        let info = crate::plugindata::blob::save_blob(&mut storage, &bytes)
+            .map_err(|e| PluginError::InvalidCall(e.to_string()))?;
+        serde_json::to_value(&info).map_err(Into::into)
+    }
+
+    /// blob 读取：命中 → `{status:"ready", data(base64)}`；未命中 → 置 want
+    /// 标记（lazy 拉取意图，pdsync hello 调和时向在线自设备拉取）并回
+    /// `{status:"pending"}`——调用方稍后重读（前端建议轮询/重试）。
+    fn data_read_blob(&self, _plugin_id: &str, payload: &Value) -> Result<Value> {
+        let hash = required_str(payload, "hash")?;
+        let _io = self.io_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let mut storage = self.require_storage()?;
+        if let Some(data) = crate::plugindata::blob::read_blob(&storage, hash)
+            .map_err(|e| PluginError::InvalidCall(e.to_string()))?
+        {
+            return Ok(serde_json::json!({ "status": "ready", "data": data }));
+        }
+        crate::plugindata::blob::mark_want(&mut storage, hash)
+            .map_err(|e| PluginError::InvalidCall(e.to_string()))?;
+        Ok(serde_json::json!({ "status": "pending" }))
     }
 
     /// 查询参数载荷（camelCase，对齐壳层 QueryOptionsDto）。

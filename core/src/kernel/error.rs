@@ -50,6 +50,10 @@ pub enum KernelError {
     #[error(transparent)]
     Plugin(#[from] crate::plugin::PluginError),
 
+    /// 插件声明式数据模块错误。
+    #[error(transparent)]
+    Plugindata(#[from] crate::plugindata::PlugindataError),
+
     /// 文件 IO 错误。
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),

@@ -264,7 +264,31 @@ export function createTauriApi(): ElectronAPI {
       docDelete: (collection, id, pluginDomain) =>
         invoke('doc_delete', { domain: requireDomain(pluginDomain), collection, id }),
       docQuery: (collection, options = {}, pluginDomain) =>
-        invoke('doc_query', { domain: requireDomain(pluginDomain), collection, options })
+        invoke('doc_query', { domain: requireDomain(pluginDomain), collection, options }),
+      // P6 声明式数据 API（declareCollection 一次 + 读写零同步参数）
+      dataDeclareCollection: (declaration, pluginDomain) =>
+        invoke('data_declare_collection', { domain: requireDomain(pluginDomain), declaration }),
+      dataSave: (name, key, value, version, pluginDomain) =>
+        invoke('data_save', { domain: requireDomain(pluginDomain), name, key, value, version: version ?? null }),
+      dataDelete: (name, key, version, pluginDomain) =>
+        invoke('data_delete', { domain: requireDomain(pluginDomain), name, key, version: version ?? null }),
+      dataGet: (name, key, version, pluginDomain) =>
+        invoke('data_get', { domain: requireDomain(pluginDomain), name, key, version: version ?? null }),
+      dataQuery: (name, options = {}, version, pluginDomain) =>
+        invoke('data_query', {
+          domain: requireDomain(pluginDomain),
+          name,
+          prefix: options.prefix ?? null,
+          limit: options.limit ?? null,
+          cursor: options.cursor ?? null,
+          version: version ?? null
+        }),
+      dataDropVersion: (name, version, pluginDomain) =>
+        invoke('data_drop_version', { domain: requireDomain(pluginDomain), name, version: String(version) }),
+      dataSaveBlob: (dataBase64) =>
+        invoke('data_save_blob', { dataBase64 }),
+      dataReadBlob: (hash) =>
+        invoke('data_read_blob', { hash })
     },
     pluginMarket: {
       // 市场服务在 src-tauri market 模块（验签/下载/落状态/对账）；

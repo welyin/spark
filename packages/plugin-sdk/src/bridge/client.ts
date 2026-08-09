@@ -341,6 +341,27 @@ export function connectPluginBridge(options: ConnectPluginBridgeOptions): Promis
             nextCursor?: string;
           }>
       },
+      data: {
+        declareCollection: (declaration) =>
+          call('data', 'declareCollection', [declaration]) as Promise<Record<string, unknown>>,
+        save: (name, key, value, version) =>
+          call('data', 'save', version === undefined ? [name, key, value] : [name, key, value, version]) as Promise<{ success: boolean }>,
+        delete: (name, key, version) =>
+          call('data', 'delete', version === undefined ? [name, key] : [name, key, version]) as Promise<{ success: boolean }>,
+        get: <T = unknown>(name: string, key: string, version?: string) =>
+          call('data', 'get', version === undefined ? [name, key] : [name, key, version]) as Promise<T | null>,
+        query: <T = unknown>(name: string, options: { prefix?: string; limit?: number; cursor?: string } = {}, version?: string) =>
+          call('data', 'query', version === undefined ? [name, options] : [name, options, version]) as Promise<{
+            items: Array<{ key: string; value: T }>;
+            nextCursor?: string;
+          }>,
+        dropVersion: (name, version) =>
+          call('data', 'dropVersion', [name, version]) as Promise<{ success: boolean }>,
+        saveBlob: (dataBase64: string) =>
+          call('data', 'saveBlob', [dataBase64]) as Promise<{ hash: string; size: number }>,
+        readBlob: (hash: string) =>
+          call('data', 'readBlob', [hash]) as Promise<{ status: 'ready'; data: string } | { status: 'pending' }>
+      },
       identity: {
         sign: (payload) =>
           call('identity', 'sign', [payload]) as ReturnType<PluginSDK['identity']['sign']>,
