@@ -68,7 +68,7 @@
             @dragstart="onDragStart($event, item.id)"
             @dragend="onDragEnd"
           >
-            <span class="app-card-icon" :style="{ background: appIconBackground(item) }">{{ item.name.slice(0, 1) }}</span>
+            <span class="app-card-icon" :style="{ background: appIconBackground(item) }" @click="onCardOpen(item)">{{ item.name.slice(0, 1) }}</span>
             <div class="app-card-body" @click="onCardOpen(item)">
               <div class="app-card-head">
                 <span class="app-card-name">{{ item.name }}</span>
@@ -124,7 +124,7 @@
               @dragover="onCardDragOver($event, section, index)"
               @dragend="onDragEnd"
             >
-            <span class="app-card-icon" :style="{ background: appIconBackground(item) }">{{ item.name.slice(0, 1) }}</span>
+            <span class="app-card-icon" :style="{ background: appIconBackground(item) }" @click="onCardOpen(item)">{{ item.name.slice(0, 1) }}</span>
             <div class="app-card-body" @click="onCardOpen(item)">
               <div class="app-card-head">
                 <span class="app-card-name">{{ item.name }}</span>

@@ -61,8 +61,8 @@ export default defineComponent({
   display: flex;
   background: var(--spark-rail-bg);
   border-top: 2px solid var(--spark-border-light);
-  /* 安全区：手势导航条占位（桌面端 env() 恒为 0） */
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+  /* 安全区：手势导航条占位（桌面端 env() 恒为 0；Android 由 Kotlin 注入 --spark-safe-bottom） */
+  padding-bottom: var(--spark-safe-bottom, env(safe-area-inset-bottom, 0px));
 }
 
 .mobile-tab-item {

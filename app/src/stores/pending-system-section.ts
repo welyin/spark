@@ -6,8 +6,8 @@
  */
 import { ref } from 'vue';
 
-/** 系统设置可定位的 section 键（与 SystemSettingsPanel.SectionKey 对齐） */
-export type SystemSectionKey = 'netStatus' | 'devices' | 'storage' | 'general' | 'notify' | 'about';
+/** 系统设置可定位的 section 键（与 SystemSettingsPanel.SectionKey 对齐；设备管理已迁至个人设置） */
+export type SystemSectionKey = 'netStatus' | 'storage' | 'general' | 'notify' | 'about';
 
 /** 待消费的打开系统设置指定模块请求；SettingsPage 消费后置空 */
 export const pendingSystemSection = ref<SystemSectionKey | null>(null);

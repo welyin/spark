@@ -4,7 +4,11 @@ import android.content.Context
 import android.net.wifi.WifiManager
 import android.os.Bundle
 import android.util.Log
+import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.webkit.WebViewCompat
 
 class MainActivity : TauriActivity() {
   // 禁用 WryActivity 自带的返回键处理（canGoBack→goBack 的 WebView 历史回退）：
@@ -21,6 +25,47 @@ class MainActivity : TauriActivity() {
     // 见 src-tauri/src/android_activity.rs；P2P 应用进程死了就掉线）
     @JvmStatic
     private external fun nativeSetActivity(activity: MainActivity)
+  }
+
+  /** Android 15+ 强制 edge-to-edge 后 WebView 铺满全屏，但 wry 不把系统栏 insets
+      转发为 CSS env(safe-area-inset-*)，前端拿不到导航栏/状态栏高度（真机实测 env() 为空）。
+      这里把真实 insets（转 CSS px）注入为 --spark-safe-top/--spark-safe-bottom 变量，
+      app-shell.css 等以 var(--spark-safe-*, env()) 兜底使用（Android 前端修复）。
+      注意：webview 创建时页面尚未加载，直接注入会随页面加载被清掉，因此：
+      1) 延时重注入（页面加载完成后生效）；2) addDocumentStartJavaScript 持久注入
+      （每次页面重新加载都在 document start 重放，vite 全量刷新/应用重载后不丢）。
+      不要给 WebView 挂 OnApplyWindowInsetsListener：会拦截窗口 insets 派发
+      （含键盘 IME），破坏 adjustResize + 100dvh 的键盘顶起登录页机制。 */
+  override fun onWebViewCreate(webView: WebView) {
+    super.onWebViewCreate(webView)
+    val density = resources.displayMetrics.density
+    var persistentRegistered = false
+    val buildScript = { top: Int, bottom: Int ->
+      "try{var r=document.documentElement;" +
+        "r.style.setProperty('--spark-safe-top','${top}px');" +
+        "r.style.setProperty('--spark-safe-bottom','${bottom}px');" +
+        "}catch(e){}"
+    }
+    val inject = Runnable {
+      try {
+        val bars = ViewCompat.getRootWindowInsets(webView)
+          ?.getInsets(WindowInsetsCompat.Type.systemBars())
+        val top = ((bars?.top ?: 0) / density).toInt()
+        val bottom = ((bars?.bottom ?: 0) / density).toInt()
+        Log.i("MainActivity", "inject safe-area top=$top bottom=$bottom")
+        webView.evaluateJavascript(buildScript(top, bottom), null)
+        if (!persistentRegistered) {
+          WebViewCompat.addDocumentStartJavaScript(
+            webView, buildScript(top, bottom), emptySet()
+          )
+          persistentRegistered = true
+        }
+      } catch (t: Throwable) {
+        Log.w("MainActivity", "inject safe-area failed", t)
+      }
+    }
+    webView.postDelayed(inject, 1000)
+    webView.postDelayed(inject, 2500)
   }
 
   override fun onCreate(savedInstanceState: Bundle?) {

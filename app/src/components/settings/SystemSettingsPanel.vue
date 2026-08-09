@@ -1,5 +1,5 @@
-<!-- 设置页「系统设置」：第三栏子菜单 + 第四栏内容（网络状态 / 设备管理 / 存储 / 通用 / 通知 / 关于）。
-     网络状态、设备管理复用个人设置的模块（自带列表栏，编辑走抽屉）；
+<!-- 设置页「系统设置」：第三栏子菜单 + 第四栏内容（网络状态 / 存储 / 通用 / 通知 / 关于）。
+     网络状态复用个人设置的模块（自带列表栏，编辑走抽屉）；设备管理已迁至个人设置；
      账号与安全已移除（资料修改在「我的资料」、账号备份在「账号备份」模块），隐私组已删除（朋友权限模块覆盖） -->
 <template>
   <div class="system-settings-panel">
@@ -33,10 +33,10 @@
   </div>
   </Transition>
 
-  <!-- 网络状态 / 设备管理：模块直接渲染（列表栏即第四栏，编辑页走抽屉）；
-       Transition 子树要求单根元素——NetworkModule/DevicesModule 是双根 fragment
+  <!-- 网络状态：模块直接渲染（列表栏即第四栏，编辑页走抽屉）；
+       Transition 子树要求单根元素——NetworkModule 是双根 fragment
        （.mine-list + MineDetailContainer），直接作为 Transition 子节点动画会静默失效，
-       故各包一层单根包裹 div（桌面端 display:contents 不生成盒子，多栏布局不变）；
+       故包一层单根包裹 div（桌面端 display:contents 不生成盒子，多栏布局不变）；
        Transition 包裹使移动端内容整页覆盖层进出自右滑入、返回向右滑出（桌面端无对应样式，无动画） -->
   <Transition name="settings-overlay-slide">
   <div v-if="activeSection === 'netStatus'" class="settings-module-overlay">
@@ -46,13 +46,6 @@
       :p2p-info="p2pInfo"
       show-proxy
       @refresh="refreshNodeInfo"
-    />
-  </div>
-  <div v-else-if="activeSection === 'devices'" class="settings-module-overlay">
-    <DevicesModule
-      detail-mode="drawer"
-      :root-id="rootStatus.rootId ?? ''"
-      :p2p-info="p2pInfo"
     />
   </div>
 
@@ -164,7 +157,7 @@
 
 <script lang="ts">
 import { computed, defineComponent, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue';
-import { Bell, Coin, Connection, InfoFilled, Monitor, SetUp } from '@element-plus/icons-vue';
+import { Bell, Coin, Connection, InfoFilled, SetUp } from '@element-plus/icons-vue';
 import type { DataUsageReportDto, P2pInfoDto as P2PInfo } from '../../api';
 import { formatBytes } from '../../utils/format';
 import { themeMode } from '../../stores/theme';
@@ -172,7 +165,6 @@ import { isMobileLayout } from '../../stores/ui-layout';
 import { isOverlayCloseTarget, popOverlay, pushOverlay } from '../../stores/overlay-stack';
 import MobileBackBar from '../MobileBackBar.vue';
 import NetworkModule from '../mine/NetworkModule.vue';
-import DevicesModule from '../mine/DevicesModule.vue';
 import MockSettingGroup, { type MockSettingItem } from './MockSettingGroup.vue';
 
 type RootStatus = {
@@ -183,7 +175,7 @@ type RootStatus = {
   avatar: string | null;
 };
 
-type SectionKey = 'netStatus' | 'devices' | 'storage' | 'general' | 'notify' | 'about';
+type SectionKey = 'netStatus' | 'storage' | 'general' | 'notify' | 'about';
 
 const USAGE_CLASS_LABELS: Array<{ key: keyof DataUsageReportDto['classes']; label: string }> = [
   { key: 'documents', label: '业务文档' },
@@ -215,7 +207,6 @@ export default defineComponent({
   name: 'SystemSettingsPanel',
   components: {
     NetworkModule,
-    DevicesModule,
     MockSettingGroup,
     MobileBackBar
   },
@@ -269,13 +260,12 @@ export default defineComponent({
     const dataActionRunning = ref(false);
     const generalStates = ref<Record<string, boolean>>({});
 
-    // 顺序按用户习惯：通用偏好在前，设备/网络/存储等系统项居中，关于垫底；
+    // 顺序按用户习惯：通用偏好在前，网络/存储等系统项居中，关于垫底；
     // color 为菜单图标色（微信式每项一色，取色与 utils/palette 品牌色板同源，移动端与桌面端统一上色）
     const sections: Array<{ key: SectionKey; label: string; icon: Component; color: string }> = [
       { key: 'general', label: '通用设置', icon: SetUp, color: '#64748b' },
       { key: 'notify', label: '消息通知', icon: Bell, color: '#eb2f96' },
       { key: 'netStatus', label: '网络状态', icon: Connection, color: '#00b8a9' },
-      { key: 'devices', label: '设备管理', icon: Monitor, color: '#3296fa' },
       { key: 'storage', label: '存储管理', icon: Coin, color: '#f7b500' },
       { key: 'about', label: '关于', icon: InfoFilled, color: '#94a3b8' }
     ];
@@ -458,7 +448,7 @@ export default defineComponent({
   display: contents;
 }
 
-/* 网络/设备模块包裹层（Transition 单根要求）：桌面端不生成盒子，模块内 mine-list 与
+/* 网络模块包裹层（Transition 单根要求）：桌面端不生成盒子，模块内 mine-list 与
    详情容器穿透为宿主 .mine-page 四栏 flex 的栏位项，布局与包裹前一致 */
 .settings-module-overlay {
   display: contents;
@@ -527,14 +517,14 @@ export default defineComponent({
     height: 100%;
   }
 
-  /* 内容区：模块包裹层（NetworkModule/DevicesModule）或 .mine-detail，absolute 整页覆盖；
+  /* 内容区：模块包裹层（NetworkModule）或 .mine-detail，absolute 整页覆盖；
      定位基准为页面 section（面板保持 static，见上），top 让出返回栏高度（48px + 状态栏安全区），
      避免首行内容被返回栏遮挡；
      进出动画由 Transition（settings-overlay-slide）承担 */
   .system-settings-panel > .settings-module-overlay,
   .system-settings-panel > .mine-detail {
     position: absolute;
-    top: calc(48px + env(safe-area-inset-top, 0px));
+    top: calc(48px + var(--spark-safe-top, env(safe-area-inset-top, 0px)));
     left: 0;
     right: 0;
     bottom: 0;
@@ -557,7 +547,7 @@ export default defineComponent({
   /* 模块内整页详情（MineDetailContainer 移动端抽屉页）原以页面 section 为基准 inset:0 覆盖整页；
      包裹层成为其定位基准后向上抵消返回栏让位，保持原覆盖范围（含页顶返回栏区域，避免双返回栏） */
   .settings-module-overlay :deep(.mine-detail-page) {
-    top: calc(-48px - env(safe-area-inset-top, 0px));
+    top: calc(-48px - var(--spark-safe-top, env(safe-area-inset-top, 0px)));
   }
 
   /* 返回栏：浮在面板顶部（与内容同向滑动，视觉等同整页推入/推出） */

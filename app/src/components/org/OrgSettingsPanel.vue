@@ -647,7 +647,7 @@ export default defineComponent({
      避免首行内容被返回栏遮挡；进出动画由 Transition（settings-overlay-slide）承担 */
   .org-settings-panel > .mine-detail {
     position: absolute;
-    top: calc(48px + env(safe-area-inset-top, 0px));
+    top: calc(48px + var(--spark-safe-top, env(safe-area-inset-top, 0px)));
     left: 0;
     right: 0;
     bottom: 0;

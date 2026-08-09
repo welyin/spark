@@ -26,7 +26,7 @@
   align-items: center;
   /* 安全区：下 padding 叠加 env(safe-area-inset-bottom)（桌面端恒为 0 无影响；
      窄屏下 rail 整体不渲染，底部安全区由 MobileTabBar 承担） */
-  padding: 12px 0 calc(12px + env(safe-area-inset-bottom, 0px));
+  padding: 12px 0 calc(12px + var(--spark-safe-bottom, env(safe-area-inset-bottom, 0px)));
   background: var(--spark-rail-bg);
   border-right: 2px solid var(--spark-border-light);
   transition: width 0.2s ease;
@@ -190,10 +190,10 @@
   width: 100%;
   /* 安全区：高度与上 padding 叠加 env(safe-area-inset-top)，内容避开系统状态栏；
      桌面端 env() 恒为 0，calc 结果与原值一致，布局像素级不变 */
-  height: calc(var(--spark-topbar-height) + env(safe-area-inset-top, 0px));
+  height: calc(var(--spark-topbar-height) + var(--spark-safe-top, env(safe-area-inset-top, 0px)));
   display: flex;
   align-items: center;
-  padding: env(safe-area-inset-top, 0px) 12px 0 16px;
+  padding: var(--spark-safe-top, env(safe-area-inset-top, 0px)) 12px 0 16px;
   background: var(--spark-topbar-bg);
   border-bottom: 2px solid var(--spark-border);
   -webkit-app-region: drag; /* 栏体可拖动窗口（内部按钮已禁用） */
@@ -379,7 +379,7 @@
   /* 顶栏紧凑：收窄左右 padding（上 padding 保留 safe-area-inset-top）；
      隐藏时整栏直接不渲染（无位移动画），二级页不残留空条（Android 前端改造） */
   .topbar {
-    padding: env(safe-area-inset-top, 0px) 8px 0;
+    padding: var(--spark-safe-top, env(safe-area-inset-top, 0px)) 8px 0;
   }
 
   /* 移动端顶部导航隐藏（非四个主 tab 栈底）：顶栏立即消失，页面内容直接占满，不做收起动画 */
@@ -405,6 +405,9 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
+    /* Android 15+ edge-to-edge：底部让出系统手势导航条，避免列表末行/内容被遮挡
+       （桌面端与低版本 env() 恒为 0，无影响；与聊天输入区/应用详情同口径） */
+    padding-bottom: calc(12px + var(--spark-safe-bottom, env(safe-area-inset-bottom, 0px)));
   }
 
   /* ---- 移动端适配（波次 3）：页面切换转场（参考微信） ----
@@ -530,25 +533,25 @@
   }
 
   .app-drawer .el-drawer__body {
-    padding-top: env(safe-area-inset-top, 0px);
-    padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-top: var(--spark-safe-top, env(safe-area-inset-top, 0px));
+    padding-bottom: var(--spark-safe-bottom, env(safe-area-inset-bottom, 0px));
   }
 
   .app-drawer .app-drawer-body {
-    padding-top: calc(20px + env(safe-area-inset-top, 0px));
+    padding-top: calc(20px + var(--spark-safe-top, env(safe-area-inset-top, 0px)));
   }
 
   /* mine 模块抽屉内容铺满（app-drawer-fill）：顶部让出状态栏 */
   .app-drawer .app-drawer-fill {
-    padding-top: env(safe-area-inset-top, 0px);
+    padding-top: var(--spark-safe-top, env(safe-area-inset-top, 0px));
   }
 
   .app-drawer .app-drawer-close {
-    top: calc(10px + env(safe-area-inset-top, 0px));
+    top: calc(10px + var(--spark-safe-top, env(safe-area-inset-top, 0px)));
   }
 
   /* 插件 tab 整页（移动端顶部导航不渲染）：卡片头部避开系统状态栏 */
   .plugin-tab-card .el-card__header {
-    padding-top: calc(var(--el-card-padding, 18px) + env(safe-area-inset-top, 0px));
+    padding-top: calc(var(--el-card-padding, 18px) + var(--spark-safe-top, env(safe-area-inset-top, 0px)));
   }
 }

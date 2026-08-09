@@ -358,7 +358,7 @@
   .apps-market {
     margin: 0;
     /* 底部让出系统手势条 */
-    padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-bottom: var(--spark-safe-bottom, env(safe-area-inset-bottom, 0px));
   }
 
   /* 条目网格化：上图标下名称，4 列；简介/标签/安装按钮收进详情 */

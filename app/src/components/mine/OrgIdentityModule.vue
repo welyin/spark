@@ -143,7 +143,7 @@ import { computed, defineComponent, reactive, ref, watch, type Component, type P
 import { ElMessage } from 'element-plus';
 import { Avatar, EditPen, Location, Switch, User, UserFilled } from '@element-plus/icons-vue';
 import { currentSpaceOrgId } from '../../stores/current-space';
-import { getOrgIdentity, setOrgIdentity } from '../../stores/org-identity';
+import { getOrgIdentity, updateOrgIdentity } from '../../stores/org-identity';
 import { orgIdentityAvatarSource } from '../../stores/avatar-sources';
 import { getProfileExtra, setProfileExtra, type ProfileExtra } from '../../stores/profile-extra';
 import UserAvatar from '../UserAvatar.vue';
@@ -239,7 +239,7 @@ export default defineComponent({
     );
 
     const save = () => {
-      setOrgIdentity(currentSpaceOrgId.value, {
+      updateOrgIdentity(currentSpaceOrgId.value, {
         nickname: draft.nickname.trim(),
         avatar: draftAvatar.value
       });
@@ -252,7 +252,7 @@ export default defineComponent({
     };
 
     const toggleUsePersonal = (value: string | number | boolean) => {
-      setOrgIdentity(currentSpaceOrgId.value, { usePersonalIdentity: value === true });
+      updateOrgIdentity(currentSpaceOrgId.value, { usePersonalIdentity: value === true });
     };
 
     return {

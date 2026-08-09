@@ -418,6 +418,11 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
+  /* pointer-events:none：子元素（b/span）带 overflow:hidden + ellipsis + nowrap，
+     会被 Blink 视为不可滚动的滚动容器，在 Chromium 触摸滚动里吞掉手势——
+     手指从联系人行开始上滑时列表滚不动（真机复现）。命中测试落到行 button 上，
+     触摸滚动正常且点击/拖拽不受影响（Android 前端修复） */
+  pointer-events: none;
 }
 .request-item-main b {
   font-size: 14px;

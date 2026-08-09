@@ -198,7 +198,7 @@ export default defineComponent({
   z-index: 2000;
   background: var(--spark-bg-card);
   /* 避开系统状态栏（safe-area-inset-top 桌面端恒为 0；本组件桌面端本就不渲染） */
-  padding-top: env(safe-area-inset-top, 0px);
+  padding-top: var(--spark-safe-top, env(safe-area-inset-top, 0px));
 }
 
 .mobile-search-bar {
@@ -218,7 +218,7 @@ export default defineComponent({
 /* 结果区铺满搜索层剩余高度（桌面下拉 420px 上限在移动端全屏层放开）；
    min-width:0 覆盖 GlobalSearch 下拉的 320px 兜底宽度，避免窄屏（<320px+边距）溢出 */
 .mobile-search-bar :deep(.global-search-dropdown) {
-  max-height: calc(100dvh - 64px - env(safe-area-inset-top, 0px));
+  max-height: calc(100dvh - 64px - var(--spark-safe-top, env(safe-area-inset-top, 0px)));
   min-width: 0;
 }
 
@@ -246,7 +246,7 @@ export default defineComponent({
    底色用介于白与灰之间的中灰（不随主题切换），黑/白两主题下都与卡片白底、主题色拉开区分 */
 .mobile-add-sheet {
   position: absolute;
-  top: calc(var(--spark-topbar-height) + env(safe-area-inset-top, 0px) + 4px);
+  top: calc(var(--spark-topbar-height) + var(--spark-safe-top, env(safe-area-inset-top, 0px)) + 4px);
   right: 8px;
   width: 250px;
   background: #8f959e;

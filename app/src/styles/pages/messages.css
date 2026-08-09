@@ -56,7 +56,8 @@
 .messages-page .conv-item.pinned.active { background: var(--spark-primary-light); }
 .messages-page .conv-avatar { position: relative; flex-shrink: 0; }
 
-/* 系统通知会话：Bell 图标头像（替代「系」字），与圆形头像保持一致 */
+/* 系统通知会话：Bell 图标头像（替代「系」字），与圆形头像保持一致——纯色底 + 白色图标
+   （#64748b 石板蓝灰：与设置/系统标识色同系，中性区别于联系人/应用头像色） */
 .messages-page .conv-sys-avatar {
   display: inline-flex;
   align-items: center;
@@ -64,8 +65,8 @@
   width: 40px;
   height: 40px;
   border-radius: 50%;
-  background: var(--spark-primary-light);
-  color: var(--spark-primary);
+  background: #64748b;
+  color: #fff;
 }
 
 /* 未读红点（§2.2）：右列与时间上下对齐，1-99 显示数字，超过 99 显示「…」，免打扰为灰点无数字 */
@@ -179,7 +180,7 @@
   align-items: center;
   gap: 10px;
   /* 移动端聊天页为整页（栈2）：避开系统状态栏（桌面端 env() 恒为 0） */
-  padding: calc(8px + env(safe-area-inset-top, 0px)) 12px 8px;
+  padding: calc(8px + var(--spark-safe-top, env(safe-area-inset-top, 0px))) 12px 8px;
   background: var(--spark-bg-card);
   border-bottom: 2px solid var(--spark-border);
 }
@@ -714,7 +715,7 @@
 
   /* 移动端聊天页为整页：输入区底部避开手势导航条（桌面端 env() 恒为 0） */
   .messages-page .msg-input-area {
-    padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: calc(10px + var(--spark-safe-bottom, env(safe-area-inset-bottom, 0px)));
   }
 
   /* ---- 移动端消息输入栏（微信式，Android 前端改造）----

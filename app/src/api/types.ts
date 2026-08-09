@@ -739,8 +739,8 @@ export type ElectronAPI = {
   devices: {
     /** 设备清单：本机置顶（isSelf），其余按最近在线证据降序 */
     list: () => Promise<Array<{
-      peerId: string; deviceName: string; os: string; arch: string; macs: string[];
-      updatedAt: number; lastSeenAt: number; isSelf: boolean; online: boolean;
+      peerId: string; deviceName: string; os: string; osVersion: string; arch: string; macs: string[];
+      appVersion: string; updatedAt: number; lastSeenAt: number; isSelf: boolean; online: boolean;
     }>>;
   };
   sys: {

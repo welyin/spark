@@ -310,7 +310,7 @@ export default defineComponent({
      内部元素视觉位置由 .mobile-drawer-user 的 padding-top 叠加 safe-area 保持 */
   top: 0;
   left: 0;
-  bottom: env(safe-area-inset-bottom, 0px);
+  bottom: var(--spark-safe-bottom, env(safe-area-inset-bottom, 0px));
   width: min(300px, 82vw);
   display: flex;
   flex-direction: column;
@@ -324,7 +324,7 @@ export default defineComponent({
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: calc(20px + env(safe-area-inset-top, 0px)) 16px 14px;
+  padding: calc(20px + var(--spark-safe-top, env(safe-area-inset-top, 0px))) 16px 14px;
   border-bottom: 1px solid var(--spark-border-light);
 }
 
@@ -445,7 +445,7 @@ export default defineComponent({
   max-width: 480px;
   background: var(--spark-bg-card);
   border-radius: 16px 16px 0 0;
-  padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+  padding: 10px 12px calc(10px + var(--spark-safe-bottom, env(safe-area-inset-bottom, 0px)));
   display: flex;
   flex-direction: column;
   gap: 8px;

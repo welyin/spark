@@ -24,6 +24,7 @@
         <el-tag :type="device.online ? 'success' : 'info'" size="small">
           {{ device.online ? '在线' : '离线' }}
         </el-tag>
+        <el-tag v-if="hasUpdate(device)" type="warning" size="small">可更新</el-tag>
       </button>
       <p v-if="!devices.length" class="devices-empty">暂无设备记录</p>
     </div>
@@ -55,7 +56,14 @@
         </div>
         <div class="device-row">
           <span class="device-row-label">操作系统</span>
-          <span class="device-row-value">{{ activeDevice.os }}（{{ activeDevice.arch }}）</span>
+          <span class="device-row-value">{{ osLine(activeDevice) }}</span>
+        </div>
+        <div class="device-row">
+          <span class="device-row-label">软件版本</span>
+          <span class="device-row-value">
+            {{ versionText(activeDevice) }}
+            <el-tag v-if="hasUpdate(activeDevice)" type="warning" size="small">可更新</el-tag>
+          </span>
         </div>
         <div v-if="activeDevice.macs.length" class="device-row">
           <span class="device-row-label">物理地址</span>
@@ -79,6 +87,7 @@
 import { computed, defineComponent, onBeforeUnmount, onMounted, ref, type PropType } from 'vue';
 import { Monitor } from '@element-plus/icons-vue';
 import { listenP2pEvents, type DeviceDto, type P2pInfoDto as P2PInfo } from '../../api';
+import { compareVersions } from '../../utils/version';
 import type { UnlistenFn } from '@tauri-apps/api/event';
 import MineDetailContainer from './MineDetailContainer.vue';
 
@@ -87,7 +96,8 @@ export default defineComponent({
   components: { MineDetailContainer, Monitor },
   props: {
     rootId: { type: String, default: '' },
-    p2pInfo: { type: Object as PropType<P2PInfo>, required: true },
+    // p2pInfo 当前仅作占位（设备在线状态来自内核设备清单），保留可选以免调用方强依赖
+    p2pInfo: { type: Object as PropType<P2PInfo>, default: null },
     /** 详情展示方式：column=第四栏（个人中心），drawer=抽屉（设置页） */
     detailMode: { type: String as PropType<'column' | 'drawer'>, default: 'column' }
   },
@@ -95,6 +105,8 @@ export default defineComponent({
     const devices = ref<DeviceDto[]>([]);
     // drawer 模式初始无选中（抽屉关闭，只显示第三栏列表）；column 模式默认选中本机设备
     const activePeerId = ref<string | null>(null);
+    // updater 最近一次检查到的可用版本（仅存在更新时非空），供「可更新」提示对比
+    const availableVersion = ref<string | null>(null);
 
     const load = async () => {
       try {
@@ -112,8 +124,19 @@ export default defineComponent({
     };
 
     let unlisten: UnlistenFn | undefined;
+    /** 拉取 updater 最近一次检查结果：availableVersion 仅在有更新时存在（commands/updater.rs） */
+    const loadUpdater = async () => {
+      try {
+        const status = await window.electronAPI?.updater?.status?.();
+        availableVersion.value = status?.lastCheck?.availableVersion ?? null;
+      } catch {
+        // 无更新源/检查失败：不显示「可更新」提示
+      }
+    };
+
     onMounted(async () => {
       await load();
+      await loadUpdater();
       // device-sync 落库 / 本机采集刷新 → 清单刷新（非 Tauri 环境订阅失败静默）
       try {
         unlisten = await listenP2pEvents((event) => {
@@ -134,6 +157,21 @@ export default defineComponent({
     const deviceSummary = (device: DeviceDto) =>
       device.isSelf ? `${device.deviceName} · ${device.os}` : `${device.os} · ${device.arch}`;
 
+    /** 操作系统行：有 OS 版本则并入（如 Windows（10.0.22631 · x86_64）） */
+    const osLine = (device: DeviceDto) =>
+      device.osVersion
+        ? `${device.os}（${device.osVersion} · ${device.arch}）`
+        : `${device.os}（${device.arch}）`;
+
+    /** 软件版本行：空值（旧记录/旧版本对端）展示「—」 */
+    const versionText = (device: DeviceDto) => (device.appVersion ? `v${device.appVersion}` : '—');
+
+    /** 该设备是否有可用更新：仅本地提示（不控制对端），与 updater 最近一次检查结果对比 */
+    const hasUpdate = (device: DeviceDto) =>
+      Boolean(device.appVersion) &&
+      availableVersion.value !== null &&
+      compareVersions(device.appVersion, availableVersion.value) < 0;
+
     /** peerId 长串截断展示（前 8…后 6） */
     const shortPeerId = (peerId: string) =>
       peerId.length > 20 ? `${peerId.slice(0, 8)}…${peerId.slice(-6)}` : peerId;
@@ -152,6 +190,9 @@ export default defineComponent({
       activePeerId,
       activeDevice,
       deviceSummary,
+      osLine,
+      versionText,
+      hasUpdate,
       shortPeerId,
       formatTime
     };
