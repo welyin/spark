@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
-use libp2p::identity::{Keypair, PublicKey};
+use libp2p::identity::Keypair;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -140,40 +140,10 @@ pub enum AnnounceReject {
 
 /// 从 peerId 字符串提取内嵌的 Ed25519 公钥。
 ///
-/// rust-libp2p 对 Ed25519 一律用 identity multihash（公钥短）：
-/// bytes = `0x00 <len> <protobuf 公钥>`。返回原始 32 字节公钥。
+/// 纯解析实现已下沉到 [`crate::identity::peer_id`]（不依赖 libp2p 栈，供
+/// org 等纯逻辑层共用）；此处保留薄封装维持 p2p 侧既有调用点。
 pub fn public_key_from_peer_id_str(peer_id: &str) -> Option<[u8; 32]> {
-    let peer_id: libp2p::PeerId = peer_id.parse().ok()?;
-    let bytes = peer_id.to_bytes();
-    // 解析 identity multihash：varint(code=0) + varint(len) + digest
-    let (code, rest) = read_unsigned_varint(&bytes)?;
-    if code != 0 {
-        return None;
-    }
-    let (len, rest) = read_unsigned_varint(rest)?;
-    if rest.len() != len as usize {
-        return None;
-    }
-    let public = PublicKey::try_decode_protobuf(rest).ok()?;
-    let raw = public.try_into_ed25519().ok()?.to_bytes();
-    Some(raw)
-}
-
-/// 最小 unsigned varint 解析（multihash 头）。
-fn read_unsigned_varint(bytes: &[u8]) -> Option<(u64, &[u8])> {
-    let mut result: u64 = 0;
-    let mut shift = 0u32;
-    for (i, b) in bytes.iter().enumerate() {
-        result |= u64::from(b & 0x7f) << shift;
-        if b & 0x80 == 0 {
-            return Some((result, &bytes[i + 1..]));
-        }
-        shift += 7;
-        if shift >= 64 {
-            return None;
-        }
-    }
-    None
+    crate::identity::peer_id::ed25519_public_key_from_peer_id(peer_id)
 }
 
 /// 节点存在记录的 DHT key：sha256("spark:node:" + peerId) 的 hex 字符串。

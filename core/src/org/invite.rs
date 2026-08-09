@@ -203,6 +203,10 @@ pub fn decode_org_invite_at(text: &str, now_ms: i64) -> Result<OrgInvitePayload,
 }
 
 /// `decodeOrgInvite` 的当前时间版本。
+///
+/// 生产便利封装：新鲜度判定所需的 `now_ms` 在本函数内取系统时间（规范
+/// §3.1「时间一律 now_ms 参数注入」的显式折中）；测试与需要确定性时间
+/// 的调用方请改用 [`decode_org_invite_at`] 注入版本。
 pub fn decode_org_invite(text: &str) -> Result<OrgInvitePayload, OrgInviteError> {
     decode_org_invite_at(text, now_ms())
 }

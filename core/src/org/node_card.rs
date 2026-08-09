@@ -14,18 +14,16 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD as B64, URL_SAFE_NO_PAD};
-use libp2p::identity::Keypair;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::p2p::announce::public_key_from_peer_id_str;
-use crate::p2p::constants::NODE_ANNOUNCE_MAX_AGE_MS;
+use crate::identity::peer_id::ed25519_public_key_from_peer_id;
 
 /// 名片 type 标签。
 pub const NODE_CARD_TYPE: &str = "spark-node-card";
 
 /// 名片新鲜窗口：±10 min（与 node-announce 同口径，org.md §17.3.2）。
-pub const NODE_CARD_MAX_AGE_MS: i64 = NODE_ANNOUNCE_MAX_AGE_MS;
+pub const NODE_CARD_MAX_AGE_MS: i64 = 10 * 60_000;
 
 /// 节点名片（org.md §17.1 线形）。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,8 +79,11 @@ pub fn build_node_card_payload(
 }
 
 /// 签名并构造完整名片。
+///
+/// 密钥类型仍为 `libp2p::identity::Keypair`（node-announce 同一密钥链，
+/// 调用方在 kernel/p2p 侧取钥），属类型层耦合而非对 p2p 网络栈的模块依赖。
 pub fn sign_node_card(
-    keypair: &Keypair,
+    keypair: &libp2p::identity::Keypair,
     peer_id: &str,
     addresses: &[String],
     timestamp_ms: i64,
@@ -110,7 +111,7 @@ pub fn encode_node_card(card: &NodeCard) -> String {
 
 /// 构造 + 签名 + 编码一步完成（kernel `make_node_card` 用）。
 pub fn make_node_card(
-    keypair: &Keypair,
+    keypair: &libp2p::identity::Keypair,
     peer_id: &str,
     addresses: &[String],
     timestamp_ms: i64,
@@ -185,7 +186,7 @@ pub fn verify_node_card(card: &NodeCard, now_ms: i64) -> Result<(), NodeCardReje
         }
     }
     let raw_public =
-        public_key_from_peer_id_str(&card.peer_id).ok_or(NodeCardReject::BadSignature)?;
+        ed25519_public_key_from_peer_id(&card.peer_id).ok_or(NodeCardReject::BadSignature)?;
     let sig_bytes = B64
         .decode(&card.signature)
         .map_err(|_| NodeCardReject::BadSignature)?;

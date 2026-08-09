@@ -8,6 +8,7 @@ pub mod derive;
 pub mod error;
 pub mod file;
 pub mod mnemonic;
+pub mod peer_id;
 pub mod slip10;
 
 pub use derive::{
