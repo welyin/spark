@@ -67,6 +67,26 @@ impl PluginRuntimeRegistry {
         }
     }
 
+    /// 把 P6 数据变更投递给归属插件的后台运行时（kind=`data-change`；
+    /// 无运行时静默丢弃——未运行的插件下次启动后经查询获得最新态，
+    /// 变更通知不是可靠队列）。payload 同 P2pEvent::PluginDataChanged。
+    pub(crate) fn dispatch_data_change(&self, payload: &Value) {
+        let Some(plugin_id) = payload.get("pluginId").and_then(Value::as_str) else {
+            return;
+        };
+        let mut inner = self.lock();
+        let Some(handle) = inner.get(plugin_id) else {
+            return;
+        };
+        let event = PluginEvent::Dispatch {
+            kind: "data-change".to_string(),
+            payload: payload.clone(),
+        };
+        if handle.dispatch(event).is_err() {
+            inner.remove(plugin_id);
+        }
+    }
+
     /// 向插件投递宿主查询（`plugin_host_query` 的投递半侧；应答经
     /// `query.respond` 回流在途表）。插件未运行/通道已断返回 false。
     pub(crate) fn dispatch_query(

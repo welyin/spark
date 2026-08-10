@@ -320,6 +320,10 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
     // P6 blob 热切依据：本批新合入的 pdoc 记录中引用的 blob hash（循环结束后
     // 对本机缺失者立即向发送方拉取——对端刚推完数据，在线是已证事实）
     let mut applied_blob_refs: Vec<String> = Vec::new();
+    // P6 变更通知依据：本批新合入的 pdoc/pdecl 键按集合名聚合（循环结束后
+    // 逐集合发 PluginDataChanged——本地写不触发，插件本地路径即时可见）
+    let mut applied_plugin_keys: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
     for record in records {
         if let Some(dseq) = record.dseq {
             max_dseq = Some(max_dseq.map_or(dseq, |m: u64| m.max(dseq)));
@@ -477,6 +481,27 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
         {
             applied_blob_refs.extend(crate::plugindata::blob::blob_refs_in(&record.value));
         }
+        // P6 变更通知：pdoc/pdecl 合入按集合名聚合（声明变更同样通知——
+        // 远端新代际声明到达时插件可能需要感知）
+        if result.did_apply()
+            && (record.key.starts_with("pdoc:") || record.key.starts_with("pdecl:"))
+        {
+            let stripped = record
+                .key
+                .strip_prefix("pdoc:")
+                .or_else(|| record.key.strip_prefix("pdecl:"));
+            if let Some(rest) = stripped
+                && let Some(at) = rest.rfind("@v")
+                && let Some(colon) = rest[..at].rfind(':')
+            {
+                let name = &rest[..at];
+                let plugin_id = &rest[..colon];
+                applied_plugin_keys
+                    .entry(format!("{plugin_id}::{name}"))
+                    .or_default()
+                    .push(record.key.clone());
+            }
+        }
         if result.did_apply() {
             if record.key.starts_with("device:") {
                 // 设备清单：逐条 DeviceUpdated（data 即 DeviceRecord JSON）。
@@ -575,6 +600,19 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
                 });
             }
         }
+    }
+
+    // P6 变更通知：逐集合发 PluginDataChanged（壳层转 iframe 桥订阅；内核
+    // 插件路由任务投递后台运行时 onChange）
+    for (compound, keys) in applied_plugin_keys {
+        let Some((plugin_id, name)) = compound.split_once("::") else {
+            continue;
+        };
+        events.push(P2pEvent::PluginDataChanged(serde_json::json!({
+            "pluginId": plugin_id,
+            "name": name,
+            "keys": keys,
+        })));
     }
 
     // 记录最后收到对端 data 的时间，以供下次 Hello 携带 lastMsgSyncAt，

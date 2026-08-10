@@ -161,6 +161,9 @@ fn event_json(event: &P2pEvent) -> Option<Value> {
         P2pEvent::OrgSynced(data) => {
             json!({"event": "org-synced", "data": data})
         }
+        P2pEvent::PluginDataChanged(data) => {
+            json!({"event": "plugin-data-changed", "data": data})
+        }
         P2pEvent::OrgInviteReceived(data) => {
             json!({"event": "org-invite-received", "data": data})
         }

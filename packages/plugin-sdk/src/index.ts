@@ -114,6 +114,13 @@ export interface PluginDataAPI {
   saveBlob: (dataBase64: string) => Promise<{ hash: string; size: number }>;
   /** 命中 → {status:'ready', data(base64)}；未命中 → {status:'pending'}（已登记拉取意图，稍后重读） */
   readBlob: (hash: string) => Promise<{ status: 'ready'; data: string } | { status: 'pending' }>;
+  /**
+   * 远端合入本插件集合（pdoc/pdecl）时回调（iframe 桥侧封装
+   * spark.events.subscribe('PluginDataChanged')，已按 pluginId 过滤；
+   * QuickJS 后台运行时的同名 API 走内核插件路由任务）。
+   * 本地写不触发（本地路径即时可见）。
+   */
+  onChange: (handler: (event: { pluginId: string; name: string; keys: string[] }) => void) => Promise<void>;
 }
 
 /** 域签名结果（与壳层 api/types.ts DomainSignature 同形，结构类型天然兼容） */

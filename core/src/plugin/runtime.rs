@@ -406,6 +406,11 @@ const PRELUDE: &str = r#"
             // （已置 want 标记，调和拉取后重读）
             readBlob: function (hash) {
                 return call('data.readBlob', { hash: hash });
+            },
+            // 远端合入本插件集合（pdoc/pdecl）时回调 {pluginId,name,keys}；
+            // 本地写不触发（本地路径即时可见）
+            onChange: function (fn) {
+                handlers['data-change'] = fn;
             }
         },
         sys: {

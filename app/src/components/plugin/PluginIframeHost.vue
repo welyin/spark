@@ -61,6 +61,7 @@ import { buildPluginHostSrcdoc, fetchPluginManifest } from '../../plugin/source'
 import { createPluginBridgeDispatcher } from '../../plugin/bridge-dispatcher';
 import { createPluginWatchdog, type PluginWatchdog } from '../../plugin/watchdog';
 import { pluginSpaceKey, registerMainViewInstance, unregisterMainViewInstance } from '../../plugin/card-actions';
+import { listenP2pEvents } from '../../api';
 import {
   disablePluginInstance,
   enablePluginInstance,
@@ -118,6 +119,8 @@ export default defineComponent({
     const destroyBridge = (): void => {
       watchdog?.dispose();
       watchdog = null;
+      unlistenDataChanged?.();
+      unlistenDataChanged = null;
       // 主视图实例登记清理（仅清自己：同插件新实例已接管时不误删）
       if (host) {
         unregisterMainViewInstance(props.pluginId, pluginSpaceKey(props.space), host);
@@ -128,6 +131,12 @@ export default defineComponent({
 
     /** 代际失效判定（过期时新建对象已由后到的 init/卸载经 destroyBridge 销毁） */
     const isStale = (gen: number): boolean => gen !== generation;
+
+    // P6 远端数据合入通知：本插件实例的 p2p-event 订阅（init 建、销毁退）。
+    // 事件名即 P2pEventDto kind（'PluginDataChanged'），与插件 SDK
+    // spark.events.subscribe 的事件名同口径——插件按 payload.pluginId 自己
+    // 过滤归属（payload 由内核侧按集合前缀聚合）。
+    let unlistenDataChanged: (() => void) | null = null;
 
     const init = async (): Promise<void> => {
       const gen = ++generation;
@@ -222,6 +231,27 @@ export default defineComponent({
         status.value = 'ready';
         // 登记主视图实例：message-card 的按钮回调经 plugin/card-actions 按空间路由到本实例
         registerMainViewInstance(props.pluginId, pluginSpaceKey(props.space), host);
+        // P6 数据变更转发：内核 PluginDataChanged → 桥 pushEvent（插件经
+        // spark.events.subscribe('PluginDataChanged', fn) 或 spark.data.onChange
+        // 接收；仅订阅时推送，host.pushEvent 内部按订阅集合过滤）
+        void listenP2pEvents((event) => {
+          if (event.kind !== 'PluginDataChanged') {
+            return;
+          }
+          const data = event.data as { pluginId?: string } | undefined;
+          if (data?.pluginId !== props.pluginId) {
+            return;
+          }
+          host?.pushEvent('PluginDataChanged', event.data);
+        })
+          .then((un) => {
+            if (isStale(gen)) {
+              un();
+              return;
+            }
+            unlistenDataChanged = un;
+          })
+          .catch(() => {});
         watchdog?.startHeartbeat();
       } catch {
         // 过期代的失败不计数不落地（新一代已接管，避免误记 ready 前错误）

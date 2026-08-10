@@ -69,6 +69,7 @@ export type P2pEventDto =
   | { kind: 'SelfProfileSynced'; data: { nickname: string; avatar?: string } }
   | { kind: 'ContactsSynced'; data: { applied: number } }
   | { kind: 'OrgSynced'; data: { orgMeta: number; orgContacts: number } }
+  | { kind: 'PluginDataChanged'; data: { pluginId: string; name: string; keys: string[] } }
   | { kind: 'ConversationsSynced'; data: { applied: number } }
   | { kind: 'DeviceUpdated'; data: DeviceDto }
   | { kind: 'OrgInviteReceived'; data: OrgInviteRecordDto }

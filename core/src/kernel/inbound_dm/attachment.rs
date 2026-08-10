@@ -133,5 +133,13 @@ pub(super) fn reconcile_blob_pulls<S: StorageBackend>(
             });
         }
     }
+    // 顺带 GC：PC（引用面扫描口径与 eager 拉取同频）回收宽限期届满的无引用
+    // 本体；记录墓碑永存，误收可由远端重拉恢复
+    if scan_records {
+        let collected = blob::gc_blobs(storage, ctx.now_ms)?;
+        if !collected.is_empty() {
+            log::info!("[BLOB] gc collected {}", collected.len());
+        }
+    }
     Ok(())
 }

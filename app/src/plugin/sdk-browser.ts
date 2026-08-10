@@ -99,7 +99,10 @@ export function createPluginBackend(domain: string): PluginSDK {
       saveBlob: (dataBase64) =>
         electronAPI.plugin.dataSaveBlob(dataBase64),
       readBlob: (hash) =>
-        electronAPI.plugin.dataReadBlob(hash)
+        electronAPI.plugin.dataReadBlob(hash),
+      // iframe 侧远端合入通知由 PluginIframeHost 经桥事件通道实现；
+      // 本后端（宿主内嵌 QuickJS 等直连接口）无该通路，以 no-op 满足契约
+      onChange: async () => {}
     },
     identity: {
       sign: (payload: string) =>

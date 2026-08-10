@@ -111,7 +111,8 @@ impl Kernel {
     }
 
     /// 启动事件路由任务：订阅内核事件广播，把 bot 会话的 ChatReceived
-    /// 转发给归属插件（覆盖多设备回同步 echo 路径）。init 时启动，
+    /// 转发给归属插件（覆盖多设备回同步 echo 路径），把 P6 数据变更
+    /// （PluginDataChanged）投递给归属插件的后台运行时。init 时启动，
     /// shutdown 时 abort。
     pub(crate) fn spawn_plugin_router(&mut self) {
         let registry = self.plugin_registry.clone();
@@ -120,6 +121,9 @@ impl Kernel {
             loop {
                 match rx.recv().await {
                     Ok(P2pEvent::ChatReceived(payload)) => registry.dispatch_chat(&payload),
+                    Ok(P2pEvent::PluginDataChanged(payload)) => {
+                        registry.dispatch_data_change(&payload)
+                    }
                     Ok(_) => {}
                     // 慢消费丢旧事件：路由场景可容忍（插件漏处理的副作用
                     // 仅是当条 bot 消息未响应），继续即可

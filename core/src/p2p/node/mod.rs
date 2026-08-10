@@ -226,6 +226,11 @@ pub enum P2pEvent {
     /// `{"orgMeta": n, "orgContacts": n}`，前端刷新组织列表与组织空间通讯录、
     /// 组织身份扩展字段）。与 `ContactsSynced`（个人空间）分立：作用域不同。
     OrgSynced(serde_json::Value),
+    /// 远端合入了插件声明式数据（P6）：`pdsync-data` 中 `pdoc:`/`pdecl:` 键
+    /// 新合入时按集合名聚合发出。本地写不触发（插件本地路径即时可见）。
+    /// data 为 `{"pluginId", "name", "keys"}`（keys = 完整存储键）；壳层转
+    /// iframe 桥订阅，内核插件路由任务投递后台运行时 onChange。
+    PluginDataChanged(serde_json::Value),
     /// 会话元数据被自设备快照更新（conv-sync 入站合入后发出；data 为
     /// `{"applied": n}`，前端刷新个人空间会话列表）。
     ConversationsSynced(serde_json::Value),

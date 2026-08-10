@@ -360,7 +360,24 @@ export function connectPluginBridge(options: ConnectPluginBridgeOptions): Promis
         saveBlob: (dataBase64: string) =>
           call('data', 'saveBlob', [dataBase64]) as Promise<{ hash: string; size: number }>,
         readBlob: (hash: string) =>
-          call('data', 'readBlob', [hash]) as Promise<{ status: 'ready'; data: string } | { status: 'pending' }>
+          call('data', 'readBlob', [hash]) as Promise<{ status: 'ready'; data: string } | { status: 'pending' }>,
+        // 远端合入通知：封装 events 订阅（同一连接内的本地注册表 + 桥订阅），
+        // 事件名与 P2pEventDto kind 同口径；payload 按归属插件过滤
+        onChange: async (handler) => {
+          const wrapped = (payload: unknown): void => {
+            const p = payload as { pluginId?: string; name?: string; keys?: string[] } | undefined;
+            if (p?.pluginId === ctx.pluginId) {
+              handler({ pluginId: p.pluginId, name: p.name ?? '', keys: p.keys ?? [] });
+            }
+          };
+          await request(
+            { v: BRIDGE_PROTOCOL_VERSION, type: 'subscribe', id: nextId('sub'), event: 'PluginDataChanged' },
+            callTimeoutMs
+          );
+          const handlers = eventHandlers.get('PluginDataChanged') ?? new Set<PluginEventHandler>();
+          handlers.add(wrapped);
+          eventHandlers.set('PluginDataChanged', handlers);
+        }
       },
       identity: {
         sign: (payload) =>

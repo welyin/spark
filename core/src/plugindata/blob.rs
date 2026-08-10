@@ -51,6 +51,76 @@ pub fn blob_want_key(hash: &str) -> String {
     format!("blob:want:{hash}")
 }
 
+/// 无引用首见标记键（GC 宽限期起点；值 = 首见时间戳 ms）。
+pub fn blob_unref_key(hash: &str) -> String {
+    format!("blob:unref:{hash}")
+}
+
+/// GC 宽限期：无引用持续 7 天才回收（对齐"远端记录删除后由同持有成员
+/// 重新拉取"的最坏时钟偏移与离线窗口；记录墓碑永存，重拉永远可恢复）。
+pub const BLOB_GC_GRACE_MS: i64 = 7 * 24 * 3600 * 1000;
+
+/// 无引用 blob 回收（宽限期两段式）：
+/// - 引用面 = 全部 `pdoc:` + `ldoc:` 记录值的 `$blob` 递归提取；
+/// - 本体在引用面内 → 清 unref 标记；
+/// - 本体不在引用面且无 unref 标记 → 置标记（首见）；
+/// - 无引用且标记龄期 ≥ [`BLOB_GC_GRACE_MS`] → 删除本体 + 标记；
+/// - 引用面外的 `blob:part:`（中断的装配）与 `blob:want:` 同步清理；
+/// - 墓碑记录（值为 null 的中间件写）不在引用面——删除传播后 blob 进入
+///   宽限期，而非即刻回收（远端可能仍有引用、重拉可恢复）。
+///
+/// 返回回收的本体 hash 列表（日志/测试用）。
+pub fn gc_blobs<S: StorageBackend>(storage: &mut S, now_ms: i64) -> Result<Vec<String>> {
+    // 1) 引用面
+    let mut referenced = std::collections::BTreeSet::new();
+    for prefix in ["pdoc:", "ldoc:"] {
+        for (_key, raw) in storage.scan(&ScanOptions::prefix(prefix))? {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) {
+                for hash in blob_refs_in(&value) {
+                    referenced.insert(hash);
+                }
+            }
+        }
+    }
+    // 2) 本体键：按引用与否分流
+    let mut collected = Vec::new();
+    for (key, _v) in storage.scan(&ScanOptions::prefix("blob:data:"))? {
+        let hash = key.trim_start_matches("blob:data:").to_string();
+        if referenced.contains(&hash) {
+            let _ = storage.delete(&blob_unref_key(&hash));
+            continue;
+        }
+        let unref_key = blob_unref_key(&hash);
+        match storage.get(&unref_key)? {
+            None => {
+                storage.put(&unref_key, &now_ms.to_string())?;
+            }
+            Some(raw) => {
+                let since = raw.parse::<i64>().unwrap_or(now_ms);
+                if now_ms - since >= BLOB_GC_GRACE_MS {
+                    storage.delete(&key)?;
+                    storage.delete(&unref_key)?;
+                    collected.push(hash);
+                }
+            }
+        }
+    }
+    // 3) 中断装配与孤儿 want：引用面外即清理（part 等不到下一块永无意义；
+    // want 无引用来源说明记录已被删）
+    for prefix in ["blob:part:", "blob:want:"] {
+        let stale: Vec<String> = storage
+            .scan(&ScanOptions::prefix(prefix))?
+            .into_iter()
+            .map(|(k, _)| k)
+            .filter(|k| !referenced.contains(k.trim_start_matches(prefix)))
+            .collect();
+        for key in stale {
+            storage.delete(&key)?;
+        }
+    }
+    Ok(collected)
+}
+
 /// save_blob 的结果。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BlobInfo {
@@ -337,5 +407,74 @@ mod tests {
         assert!(throttle_request(&mut s, "h", 1000).unwrap(), "首次放行");
         assert!(!throttle_request(&mut s, "h", 1000 + BLOB_REQ_THROTTLE_MS - 1).unwrap());
         assert!(throttle_request(&mut s, "h", 1000 + BLOB_REQ_THROTTLE_MS).unwrap());
+    }
+
+    #[test]
+    fn gc_grace_period_two_phase() {
+        let mut s = MemoryStorage::new();
+        // 两个本体：a 被 pdoc 记录引用，b 无引用
+        let a = save_blob(&mut s, b"referenced").unwrap();
+        let b = save_blob(&mut s, b"orphan").unwrap();
+        s.put(
+            "pdoc:ai-chat:c@v1:c1",
+            &serde_json::json!({ "f": { "$blob": a.hash } }).to_string(),
+        )
+        .unwrap();
+        // ldoc（local 集合）引用同样计入引用面
+        let c = save_blob(&mut s, b"local-ref").unwrap();
+        s.put(
+            "ldoc:ai-chat:d@v1:d1",
+            &serde_json::json!({ "f": { "$blob": c.hash } }).to_string(),
+        )
+        .unwrap();
+
+        // 第一轮 GC：b 置 unref 标记，不回收
+        let collected = gc_blobs(&mut s, 1_000_000).unwrap();
+        assert!(collected.is_empty());
+        assert!(has_blob(&s, &b.hash), "宽限期内保留");
+        assert!(s.get(&blob_unref_key(&b.hash)).unwrap().is_some());
+
+        // 宽限期未满：仍不回收
+        let collected = gc_blobs(&mut s, 1_000_000 + BLOB_GC_GRACE_MS - 1).unwrap();
+        assert!(collected.is_empty());
+
+        // 宽限期满：回收 b；a/c 引用在册不回收
+        let collected = gc_blobs(&mut s, 1_000_000 + BLOB_GC_GRACE_MS).unwrap();
+        assert_eq!(collected, vec![b.hash.clone()]);
+        assert!(!has_blob(&s, &b.hash));
+        assert!(has_blob(&s, &a.hash));
+        assert!(has_blob(&s, &c.hash));
+
+        // 重新被引用后 unref 标记清除（拉回来的本体不再被误回收）
+        let d = save_blob(&mut s, b"back").unwrap();
+        gc_blobs(&mut s, 2_000_000).unwrap(); // 置标记
+        s.put(
+            "pdoc:ai-chat:c@v1:c2",
+            &serde_json::json!({ "f": { "$blob": d.hash } }).to_string(),
+        )
+        .unwrap();
+        gc_blobs(&mut s, 2_000_000 + BLOB_GC_GRACE_MS).unwrap();
+        assert!(has_blob(&s, &d.hash), "重新引用后清除标记");
+        assert!(s.get(&blob_unref_key(&d.hash)).unwrap().is_none());
+    }
+
+    #[test]
+    fn gc_cleans_stale_parts_and_wants() {
+        let mut s = MemoryStorage::new();
+        s.put(&blob_part_key("interrupted"), "QUJD").unwrap();
+        mark_want(&mut s, "orphan-want").unwrap();
+        gc_blobs(&mut s, 1000).unwrap();
+        assert!(s.get(&blob_part_key("interrupted")).unwrap().is_none());
+        assert!(s.get(&blob_want_key("orphan-want")).unwrap().is_none());
+        // 有引用的 want 保留（正在等拉取）
+        let info = save_blob(&mut s, b"x").unwrap();
+        s.put(
+            "pdoc:ai-chat:c@v1:c1",
+            &serde_json::json!({ "f": { "$blob": info.hash } }).to_string(),
+        )
+        .unwrap();
+        mark_want(&mut s, &info.hash).unwrap();
+        gc_blobs(&mut s, 1000).unwrap();
+        assert!(s.get(&blob_want_key(&info.hash)).unwrap().is_some());
     }
 }
