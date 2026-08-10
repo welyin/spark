@@ -63,8 +63,13 @@ impl<S: StorageBackend> EventLoop<S> {
                 .collect()
         };
         if !cached_addrs.is_empty() {
+            // allocate_new_port：复用监听端口 [::]:15002 会与多 listener 冲突
+            // EADDRINUSE，用 OS 临时端口恢复 PC 主动拨号。止血：dcutr 未接入
+            // （§7.1 阶段 B），relay 不依赖源端口；待 dcutr 接入时重新评估端口
+            // 复用（wiki §4.6.3/§7.1）。
             let opts = libp2p::swarm::dial_opts::DialOpts::peer_id(peer)
                 .addresses(cached_addrs)
+                .allocate_new_port()
                 .build();
             let _ = self.swarm.dial(opts);
         }
@@ -157,8 +162,13 @@ impl<S: StorageBackend> EventLoop<S> {
                 .filter_map(|a| a.parse().ok())
                 .collect();
             if !addrs.is_empty() {
+                // allocate_new_port：复用监听端口 [::]:15002 会与多 listener 冲突
+                // EADDRINUSE，用 OS 临时端口恢复 PC 主动拨号。止血：dcutr 未接入
+                // （§7.1 阶段 B），relay 不依赖源端口；待 dcutr 接入时重新评估端口
+                // 复用（wiki §4.6.3/§7.1）。
                 let opts = libp2p::swarm::dial_opts::DialOpts::peer_id(peer)
                     .addresses(addrs)
+                    .allocate_new_port()
                     .build();
                 let _ = self.swarm.dial(opts);
                 self.pending_rediscovery_confirm.insert(peer, announce);

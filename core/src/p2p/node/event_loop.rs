@@ -380,8 +380,13 @@ impl<S: StorageBackend> EventLoop<S> {
                     .collect()
             };
             if !cached_addrs.is_empty() {
+                // allocate_new_port：拨号源端口用 OS 临时端口，避免复用监听端口
+                // [::]:15002 与多 listener 冲突 EADDRINUSE（PC 主动拨号瘫痪）。
+                // 止血：dcutr 未接入（§7.1 阶段 B），relay 不依赖源端口；
+                // 待 dcutr 接入时重新评估端口复用（wiki §4.6.3/§7.1）。
                 let opts = libp2p::swarm::dial_opts::DialOpts::peer_id(peer)
                     .addresses(cached_addrs)
+                    .allocate_new_port()
                     .build();
                 let _ = self.swarm.dial(opts);
                 // 标记竞速中，等待连接结果（成功则收敛，失败由 ConnectionClosed 兜底）
@@ -600,11 +605,17 @@ impl<S: StorageBackend> EventLoop<S> {
         while let Some(target) = pending.targets.pop_front() {
             match target.parse::<Multiaddr>() {
                 Ok(ma) => {
-                    let opts = if target.contains("/p2p/") {
-                        DialOpts::from(ma)
-                    } else {
-                        DialOpts::unknown_peer_id().address(ma).build()
-                    };
+                    // allocate_new_port：复用监听端口 [::]:15002 会与多 listener
+                    // 冲突 EADDRINUSE，用 OS 临时端口恢复 PC 主动拨号。
+                    // 止血：dcutr 未接入（§7.1 阶段 B），relay 不依赖源端口；
+                    // 待 dcutr 接入时重新评估端口复用（wiki §4.6.3/§7.1）。
+                    // 原 `DialOpts::from(ma)` 无法链式；其语义即
+                    // `unknown_peer_id().address(ma).build()`（含 /p2p 尾段原样
+                    // 拨号），此处显式等价构造并追加 allocate_new_port。
+                    let opts = DialOpts::unknown_peer_id()
+                        .address(ma)
+                        .allocate_new_port()
+                        .build();
                     let conn_id = opts.connection_id();
                     if self.swarm.dial(opts).is_ok() {
                         pending.current = Some(target);

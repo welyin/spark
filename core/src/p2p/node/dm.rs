@@ -25,7 +25,9 @@ use tokio::sync::oneshot;
 use crate::p2p::Result;
 use crate::p2p::direct;
 use crate::p2p::overlay_store::OverlayPeerStore;
-use crate::p2p::peer_targets::{PeerNodeInfo, build_dial_targets, extract_peer_id, sort_addresses};
+use crate::p2p::peer_targets::{
+    PeerNodeInfo, build_dial_targets, extract_peer_id, filter_dial_candidate, sort_addresses,
+};
 use crate::storage::StorageBackend;
 
 use super::P2pEvent;
@@ -238,15 +240,20 @@ impl<S: StorageBackend> EventLoop<S> {
         if neighbor_addrs.is_empty() {
             return node_info;
         }
-        // 去重合并：邻居池在前，静态地址补后
+        // 去重合并：邻居池在前，静态地址补后。
+        // 与 build_dial_targets 同一候选过滤（Android 剔除 /ws、通配剔除，
+        // 回环/私网保留仅降权），避免死地址混入队首被串行白试。
+        let is_android = cfg!(target_os = "android");
         let mut seen: HashSet<String> = HashSet::new();
         let mut merged: Vec<String> = Vec::new();
         for addr in neighbor_addrs
             .iter()
             .chain(node_info.addresses.iter())
         {
-            let addr = addr.trim().to_string();
-            if !addr.is_empty() && seen.insert(addr.clone()) {
+            let Some(addr) = filter_dial_candidate(addr, is_android) else {
+                continue;
+            };
+            if seen.insert(addr.clone()) {
                 merged.push(addr);
             }
         }

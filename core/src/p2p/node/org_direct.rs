@@ -158,11 +158,17 @@ impl<S: StorageBackend> EventLoop<S> {
             }
             match target.parse::<Multiaddr>() {
                 Ok(ma) => {
-                    let opts = if target.contains("/p2p/") {
-                        DialOpts::from(ma)
-                    } else {
-                        DialOpts::unknown_peer_id().address(ma).build()
-                    };
+                    // allocate_new_port：复用监听端口 [::]:15002 会与多 listener
+                    // 冲突 EADDRINUSE，用 OS 临时端口恢复 PC 主动拨号。
+                    // 止血：dcutr 未接入（§7.1 阶段 B），relay 不依赖源端口；
+                    // 待 dcutr 接入时重新评估端口复用（wiki §4.6.3/§7.1）。
+                    // 原 `DialOpts::from(ma)` 无法链式；其语义即
+                    // `unknown_peer_id().address(ma).build()`（含 /p2p 尾段原样
+                    // 拨号），此处显式等价构造并追加 allocate_new_port。
+                    let opts = DialOpts::unknown_peer_id()
+                        .address(ma)
+                        .allocate_new_port()
+                        .build();
                     // dial 前取出本次拨号的 ConnectionId：OutgoingConnectionError
                     // 按它精确归属（unknown_peer_id 拨号失败时事件 peer_id=None，
                     // 不能按 peer 匹配，否则无关失败会误推进本 attempt）

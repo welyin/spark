@@ -49,7 +49,14 @@ impl<S: StorageBackend> EventLoop<S> {
                 if addrs.is_empty() {
                     continue;
                 }
-                let opts = DialOpts::peer_id(peer).addresses(addrs).build();
+                // allocate_new_port：复用监听端口 [::]:15002 会与多 listener 冲突
+                // EADDRINUSE，用 OS 临时端口恢复 PC 主动拨号。止血：dcutr 未接入
+                // （§7.1 阶段 B），relay 不依赖源端口；待 dcutr 接入时重新评估端口
+                // 复用（wiki §4.6.3/§7.1）。
+                let opts = DialOpts::peer_id(peer)
+                    .addresses(addrs)
+                    .allocate_new_port()
+                    .build();
                 if self.swarm.dial(opts).is_ok() {
                     self.pending_overlay_dials.insert(peer, ());
                     stats.overlay_dialed += 1;
