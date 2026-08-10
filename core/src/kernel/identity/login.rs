@@ -435,10 +435,20 @@ impl Kernel {
                 updated_at: now,
             });
             let mut friend = base;
-            friend.peer = Some(PeerRef {
-                peer_id: gen_peer_id.to_string(),
-                addresses: gen_addresses.to_vec(),
-            });
+            // 写侧自指防护：自 FriendRecord 的 peer 是设备相对值（应指向生成端
+            // 设备）。生成端 peerId 若 == 本机节点 id（`sync_node_id()`，p2p
+            // 运行中即本机 peerId），即自指污染——拒绝落该 peer，保留原值/留空。
+            let peer_id = gen_peer_id.to_string();
+            if peer_id != node_id {
+                friend.peer = Some(PeerRef {
+                    peer_id,
+                    addresses: gen_addresses.to_vec(),
+                });
+            } else {
+                eprintln!(
+                    "[login] self-pointing peer rejected on QR recover | node_id={node_id} gen_peer_id={gen_peer_id}"
+                );
+            }
             let _ = ContactService::upsert_friend_pdsync(storage, &friend, now, &node_id);
         }
 

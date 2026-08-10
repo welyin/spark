@@ -234,6 +234,25 @@ pub fn valid_space_key(space: &str) -> bool {
 /// 顶部，拒收（invalid-message）。
 pub const MAX_FUTURE_SKEW_MS: i64 = 10 * 60_000;
 
+/// 写侧自指防护：即将写入朋友记录的 peer 若指向本机节点 id（`node_id`，
+/// p2p 运行中即本机 peerId），即为自指污染——朋友记录的 peer 应指向「对方
+/// 设备」，绝不可能是本机自身。打日志并拒绝写入（返回 None，调用侧跳过
+/// 赋值，保留原 peer 或留空）；正常的「peer 指向对方设备」不受影响。
+/// 覆盖所有写自 FriendRecord 的合并路径（friend-accept / self-friend-request /
+/// QR 恢复配对），防止对端 pdsync 互灌的污染形态再次落库。
+pub fn reject_self_pointing_peer(node_id: &str, peer: Option<PeerRef>) -> Option<PeerRef> {
+    match &peer {
+        Some(p) if !p.peer_id.is_empty() && p.peer_id == node_id => {
+            eprintln!(
+                "[dm] self-pointing peer rejected | node_id={} peer_id={}",
+                node_id, p.peer_id
+            );
+            None
+        }
+        _ => peer,
+    }
+}
+
 /// 合并式建/更新朋友：已有记录保留本地资料（备注/标签/分组/照片/addedAt），
 /// 仅刷新非空 nickname、Some 的 avatar 与 Some 的 peer；不存在才新建。返回
 /// 最终记录。（friend-accept 与 chat 隐含确认共用）
@@ -270,8 +289,8 @@ pub fn merge_friend_record<S: StorageBackend>(
     if let Some(avatar) = avatar {
         friend.avatar = Some(avatar.to_string());
     }
-    if peer.is_some() {
-        friend.peer = peer;
+    if let Some(safe_peer) = reject_self_pointing_peer(node_id, peer) {
+        friend.peer = Some(safe_peer);
     }
     // 接受产生的朋友记录是本机状态变更：刷新 LWW 时间（随 contact-sync
     // 传播到其他自设备）
@@ -407,5 +426,51 @@ pub fn handle_inbound_dm<S: StorageBackend>(
             org_invite::handle_org_invite_reply(storage, &ctx, &envelope.from, &envelope.body)
         }
         _ => done(fail_response("unknown-kind"), Vec::new()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::message::PeerRef;
+
+    /// 写侧自指防护三态：自指拒绝 / 正常放行 / 空 peer_id 放行（空 id 不判
+    /// 自指，避免把「尚未填充寻址信息」的占位记录误拦）。
+    #[test]
+    fn reject_self_pointing_peer_guards_self_but_allows_normal_and_empty() {
+        let node_id = "my-device";
+
+        // 自指（peer_id == node_id）→ 拒绝，返回 None
+        let self_peer = Some(PeerRef {
+            peer_id: node_id.to_string(),
+            addresses: vec!["addr".to_string()],
+        });
+        assert!(
+            reject_self_pointing_peer(node_id, self_peer).is_none(),
+            "自指 peer 必须被拒绝"
+        );
+
+        // 正常（peer 指向对端设备）→ 原样放行
+        let normal = Some(PeerRef {
+            peer_id: "peer-other-device".to_string(),
+            addresses: vec!["addr".to_string()],
+        });
+        assert_eq!(
+            reject_self_pointing_peer(node_id, normal.clone())
+                .map(|p| p.peer_id)
+                .as_deref(),
+            Some("peer-other-device"),
+            "peer 指向对方设备时放行"
+        );
+
+        // 空 peer_id → 放行（非自指判定条件，占位记录不误拦）
+        let empty = Some(PeerRef {
+            peer_id: String::new(),
+            addresses: Vec::new(),
+        });
+        assert!(
+            reject_self_pointing_peer(node_id, empty).is_some(),
+            "空 peer_id 放行"
+        );
     }
 }

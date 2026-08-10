@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use super::{
     AutoAccept, InboundContext, InboundDmResult, ProfileSyncReply, Result, done, fail_response,
-    is_blocked, merge_friend_record, ok_response,
+    is_blocked, merge_friend_record, ok_response, reject_self_pointing_peer,
 };
 use crate::contact::{
     ContactService, FriendRecord, FriendRequestRecord, FriendRequestStatus, RequestThreadMessage,
@@ -74,13 +74,18 @@ fn handle_self_friend_request<S: StorageBackend>(
     if !nickname.is_empty() {
         friend.nickname = nickname.to_string();
     }
-    if peer.is_some() {
-        friend.peer = peer.clone();
+    // 写侧自指防护统一入口：自指（peer == 本机 node）→ None，记录写入与
+    // auto_accept 回发/priority 集合都基于守卫后值——避免本机 peerId 持久化
+    // 进 `p2p:priority:`（redial 永久对本机空转且无清理路径）。
+    let safe_peer = reject_self_pointing_peer(ctx.node_id, peer);
+    if let Some(safe_peer) = safe_peer.clone() {
+        friend.peer = Some(safe_peer);
     }
     friend.updated_at = ctx.now_ms;
     ContactService::upsert_friend_pdsync(storage, &friend, ctx.now_ms, ctx.node_id)?;
-    // 自设备配对完成 → 加入优先类目集合（peer-rediscovery §4.4）
-    if let Some(p) = peer.as_ref()
+    // 自设备配对完成 → 加入优先类目集合（peer-rediscovery §4.4；用守卫后 peer，
+    // 自指时 friend.peer 为 None 不进集合）
+    if let Some(p) = friend.peer.as_ref()
         && !p.peer_id.trim().is_empty()
     {
         let mut priority = crate::p2p::priority_peers::PriorityPeerStore::new(storage);
@@ -88,8 +93,8 @@ fn handle_self_friend_request<S: StorageBackend>(
             eprintln!("[friend] self device priority peer add failed: {e}");
         }
     }
-    // 回发目标取请求方本次捎带的 nodeInfo（无则无法回发，host 跳过）
-    let auto_accept = peer.map(|p| AutoAccept {
+    // 回发目标取守卫后 peer（自指→None→不回发，语义 = 未携带 nodeInfo）
+    let auto_accept = safe_peer.map(|p| AutoAccept {
         target: PeerNodeInfo {
             peer_id: (!p.peer_id.is_empty()).then_some(p.peer_id),
             addresses: p.addresses,

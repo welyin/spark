@@ -328,7 +328,18 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
         if let Some(dseq) = record.dseq {
             max_dseq = Some(max_dseq.map_or(dseq, |m: u64| m.max(dseq)));
         }
+        // 自 FriendRecord 强制落库闸门（§3.2 对称排除不变式的唯一强制点）：
+        // 旧版本对端仍可能推送该键——其 peer 是设备相对值（指向「对方设备」），
+        // 落库会毒化本机自记录；墓碑同样丢弃（对端删它的自记录不得删本机的）。
+        // 拦截打日志是兼容排障的关键证据：旧版本互灌的污染形态靠这条轨迹定位。
         if record.key == self_key {
+            eprintln!(
+                "[PDSYNC_DATA] drop peer-pushed self FriendRecord | key={} remote_peer={} my_node={} tombstone={}",
+                record.key,
+                ctx.remote_peer_id,
+                ctx.node_id,
+                crate::sync::is_tombstone(&record.meta),
+            );
             continue;
         }
         // 逐条 LWW 合入（pmeta 裁决；幂等）。value 是 JSON 值，落盘时转回

@@ -764,6 +764,135 @@ fn pdsync_data_drops_self_friend_record_and_tombstone() {
     );
 }
 
+/// 方案 A 回归锚点：旧版本对端强制推送自 FriendRecord 键 `ct:friend:{rootId}`
+/// （含普通记录 + 墓碑两种）→ 入站闸门逐条丢弃，本机自记录保持原值、pmeta
+/// 不推进、墓碑不删本体。对端视角的自记录 peer 指向「本机设备」——恰是
+/// pdsync 互灌污染的自指形态（peer == 本机节点 id），本机不得落库。
+#[test]
+fn pdsync_inbound_gate_drops_self_friend_record_and_tombstone() {
+    let mut s = MemoryStorage::new();
+    let (key, my_root) = self_identity(1);
+    // put_personal 显式记账（裸存储上的生产等价物 = 中间件自动记账）
+    spark_core::sync::put_personal(
+        &mut s,
+        NODE,
+        &self_friend_key(&my_root),
+        &serde_json::to_string(&friend_record_with_peer(&my_root, "peer-device-b")).unwrap(),
+        NOW,
+    )
+    .unwrap();
+
+    // 对端视角的自记录：peer 指向「本机设备」（peer == NODE，自指污染形态），
+    // vv/ts 均更新——无闸门时必然覆盖本机、本机自记录自指
+    let poisoned = PdsyncRecord {
+        key: self_friend_key(&my_root),
+        value: serde_json::to_value(friend_record_with_peer(&my_root, NODE)).unwrap(),
+        meta: remote_meta("peer-node-b", 9, NOW + 60_000),
+        dseq: None,
+    };
+    let result = deliver_pdsync_data(&mut s, &key, &my_root, "ct:friend", &[poisoned]);
+    assert_eq!(result.response, json!({ "ok": true }), "排除是丢弃而非拒批");
+    let f = ContactService::get_friend(&s, &my_root).unwrap().unwrap();
+    assert_eq!(
+        f.peer.map(|p| p.peer_id).as_deref(),
+        Some("peer-device-b"),
+        "本机自记录 peer 不得被自指污染值覆盖（保持原值）"
+    );
+    let meta = get_personal_meta(&s, &self_friend_key(&my_root))
+        .unwrap()
+        .expect("pmeta 仍在");
+    assert_eq!(meta.vv.get(NODE), Some(&1), "pmeta 不推进（保持本机版本）");
+
+    // 对端删了它的自记录（墓碑）——不得删掉本机的自记录本体
+    let tomb = PdsyncRecord {
+        key: self_friend_key(&my_root),
+        value: json!(null),
+        meta: DocMeta {
+            vv: [("peer-node-b".to_string(), 10)].into_iter().collect(),
+            ts: NOW + 120_000,
+            node_id: Some("peer-node-b".to_string()),
+            tombstone: Some(true),
+        },
+        dseq: None,
+    };
+    let result = deliver_pdsync_data(&mut s, &key, &my_root, "ct:friend", &[tomb]);
+    assert_eq!(result.response, json!({ "ok": true }));
+    assert!(
+        ContactService::get_friend(&s, &my_root).unwrap().is_some(),
+        "自记录墓碑不得删本机本体"
+    );
+}
+
+/// 方案 C 集成回归：自设备 friend-request 携带自指 peer（peer == 本机 node）
+/// 触发的写自 FriendRecord 防污染——记录 peer 不被污染（保持原值）、priority
+/// 集合不含本机 peerId、auto_accept 目标非本机（自指→None→不回发）。与
+/// `reject_self_pointing_peer` 单测（inbound_dm.rs）一道钉住写侧防护。
+#[test]
+fn self_friend_request_with_self_pointing_peer_is_rejected() {
+    use spark_core::p2p::priority_peers::PriorityPeerStore;
+
+    let mut s = MemoryStorage::new();
+    let (key, my_root) = self_identity(1);
+    // 预置自记录：peer 指向对端设备（peer-device-b）
+    ContactService::upsert_friend_pdsync(
+        &mut s,
+        &friend_record_with_peer(&my_root, "peer-device-b"),
+        NOW,
+        NODE,
+    )
+    .unwrap();
+
+    // 自设备（from==我）的 friend-request：nodeInfo.peerId == 本机 node（NODE）
+    // ——自指污染形态，防护必须拒绝写入且不回发自指目标
+    let body = json!({
+        "requestId": "req-self",
+        "nickname": "我",
+        "nodeInfo": { "peerId": NODE, "addresses": [] },
+    });
+    let envelope = dm_envelope::build_envelope(
+        dm_envelope::KIND_FRIEND_REQUEST,
+        &my_root,
+        &my_root,
+        NOW,
+        body,
+        &key,
+    );
+    let result = handle_inbound_dm(
+        &mut s,
+        &my_root,
+        "我",
+        envelope,
+        "peer-self-other",
+        &HashSet::new(),
+        NOW,
+        NODE,
+    )
+    .unwrap();
+    assert_eq!(result.response["ok"], true, "自指请求仍正常应答 ok");
+
+    // 1) 自记录 peer 不被污染（保持原值，而非 NODE）
+    let f = ContactService::get_friend(&s, &my_root).unwrap().unwrap();
+    assert_eq!(
+        f.peer.map(|p| p.peer_id).as_deref(),
+        Some("peer-device-b"),
+        "自指 peer 不得覆盖自记录（保持原值）"
+    );
+
+    // 2) priority 集合不含本机 peerId（否则 redial 永久对本机空转且无清理）
+    let mut priority = PriorityPeerStore::new(&mut s);
+    let list = priority.list().unwrap();
+    assert!(
+        !list.iter().any(|id| id == NODE),
+        "priority 集合不得含本机 peerId，实际={list:?}"
+    );
+
+    // 3) auto_accept 目标非本机：自指→None→不回发
+    assert!(
+        result.auto_accept.is_none(),
+        "自指 peer 不得触发 auto_accept 回发（避免对自身发起配对）"
+    );
+}
+
 /// 自聊会话（peer_root == 本机 rootId）conv 合入：peer 是设备相对寻址
 /// （各指向对方设备），远端胜出合并后保留本地 peer，其余同步字段照常合入。
 #[test]
