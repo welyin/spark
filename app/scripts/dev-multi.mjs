@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-// 多实例开发启动器：npm run tauri dev [N]
-//   dev      → 单实例（现状不变，用默认 app_data_dir）
-//   dev 2|3  → 单机多开：共享一个 vite dev server（实例 1 启动，其余 --no-dev-server
-//              复用），每实例独立 SPARK_DATA_DIR=.dev-data/instance-<i>（sled 单目录
-//              独占，必须隔离）；Ctrl+C 一次全退（同进程组收到信号，包装器兜底强杀）
+// 多实例开发启动器：npm run tauri dev [N|android]
+//   dev          → 单实例桌面端（现状不变）
+//   dev 2|3      → 单机多开桌面端：共享 vite，实例 1 启动，其余复用
+//   dev android  → 桌面端 + Android 真机联调：共享 vite，手机连接局域网 dev server
 // 其余子命令（build 等）原样透传给 tauri CLI。
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -15,6 +15,7 @@ const DEV_URL = 'http://localhost:1420';
 const KILL_GRACE_MS = 10_000;
 
 const args = process.argv.slice(2).filter((a) => a !== '--');
+const isAndroidMode = args[0] === 'dev' && args.includes('android');
 const countIndex = args.findIndex((a) => /^\d+$/.test(a));
 const count = countIndex >= 0 ? Number(args[countIndex]) : 1;
 const passthrough = countIndex >= 0 ? args.filter((_, i) => i !== countIndex) : args;
@@ -65,21 +66,86 @@ function shutdown(signal) {
   }, 200);
 }
 
-async function waitForDevServer(timeoutMs = 180_000) {
+async function waitForDevServer(timeoutMs = 180_000, url = DEV_URL) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(DEV_URL, { signal: AbortSignal.timeout(3_000) });
+      const res = await fetch(url, { signal: AbortSignal.timeout(3_000) });
       if (res.ok) return;
     } catch {
       // dev server 尚未就绪
     }
     await new Promise((r) => setTimeout(r, 1_000));
   }
-  throw new Error(`等待 ${DEV_URL} 超时（实例 1 的 vite dev server 未就绪）`);
+  throw new Error(`等待 ${url} 超时（vite dev server 未就绪）`);
+}
+
+function getLocalIP() {
+  const nets = os.networkInterfaces();
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name] ?? []) {
+      if (net.family === 'IPv4' && !net.internal) return net.address;
+    }
+  }
+  return '127.0.0.1';
 }
 
 async function main() {
+  // Android 联调模式：桌面 + 手机共用一个 vite
+  if (isAndroidMode) {
+    process.on('SIGINT', () => shutdown('SIGINT'));
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+    const lanIP = getLocalIP();
+    console.log(`[dev-multi] Android 联调模式，局域网 IP: ${lanIP}`);
+
+    // 1. 先启动独立 vite（监听 0.0.0.0，两端共用）
+    run('npx', ['vite', '--port', '1420', '--strictPort'], {
+      TAURI_DEV_HOST: '0.0.0.0',
+    });
+    console.log('[dev-multi] vite dev server 启动中…');
+    await waitForDevServer(30_000, `http://${lanIP}:1420`);
+    console.log(`[dev-multi] vite 就绪 → http://${lanIP}:1420`);
+
+    // 2. 清空 beforeDevCommand 的配置文件（两端复用，不重复起 vite）
+    const noServerConfig = path.join(appDir, '.dev-data', 'tauri-no-dev-server.json');
+    fs.mkdirSync(path.dirname(noServerConfig), { recursive: true });
+    fs.writeFileSync(noServerConfig, JSON.stringify({ build: { beforeDevCommand: '' } }));
+
+    // 3. 启动 Android dev
+    const androidDataDir = path.join(appDir, '.dev-data', 'instance-android');
+    fs.mkdirSync(androidDataDir, { recursive: true });
+    run('npx', [
+      'tauri', 'android', 'dev',
+      '-c', '.dev-data/tauri-no-dev-server.json',
+      '--host', lanIP,
+    ], {
+      SPARK_DATA_DIR: androidDataDir,
+    });
+    console.log(`[dev-multi] Android 实例启动（SPARK_DATA_DIR=${androidDataDir}）`);
+
+    // 4. 启动桌面端
+    const desktopDataDir = path.join(appDir, '.dev-data', 'instance-desktop');
+    fs.mkdirSync(desktopDataDir, { recursive: true });
+    run('npx', [
+      'tauri', 'dev',
+      '-c', '.dev-data/tauri-no-dev-server.json',
+      '--no-watch',
+    ], {
+      SPARK_DATA_DIR: desktopDataDir,
+    });
+    console.log(`[dev-multi] 桌面实例启动（SPARK_DATA_DIR=${desktopDataDir}）`);
+
+    // 全部退出时整组退出
+    const watcher = setInterval(() => {
+      if (children.size === 0) {
+        clearInterval(watcher);
+        process.exit(1);
+      }
+    }, 500);
+    return;
+  }
+
   // 非 dev 或未给数量：原样透传（含 npm run tauri build 等）
   if (passthrough[0] !== 'dev' || count <= 1) {
     const child = run('npx', ['tauri', ...args]);
