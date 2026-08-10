@@ -122,11 +122,25 @@ impl Kernel {
         let conv_id = conv_id.to_string();
         let message_id = message_id.to_string();
         self.runtime.handle().spawn(async move {
+            // 投递前诊断（对齐 [deliver-to-devices] 风格）：chat 投递原完全静默，
+            // 成功/失败只回写 DB，移动端排障需要投递起点与终点可观测。
+            eprintln!(
+                "[chat-delivery] send messageId={} convId={} peerId={:?} addrs={}",
+                message_id,
+                conv_id,
+                peer.peer_id,
+                peer.addresses.len()
+            );
             let resp = node.dm_direct(&peer, envelope).await.ok().flatten();
-            let status: &str = match resp {
-                Some(resp) if resp.get("ok").and_then(Value::as_bool) == Some(true) => "delivered",
-                _ => "failed",
-            };
+            let resp_ok = resp
+                .as_ref()
+                .and_then(|r| r.get("ok").and_then(Value::as_bool))
+                .unwrap_or(false);
+            let status: &str = if resp_ok { "delivered" } else { "failed" };
+            eprintln!(
+                "[chat-delivery] result messageId={} status={} resp_ok={}",
+                message_id, status, resp_ok
+            );
             let wrote = {
                 let _io = io_lock.lock().unwrap_or_else(|e| e.into_inner());
                 MessageService::set_message_status_if_sending(

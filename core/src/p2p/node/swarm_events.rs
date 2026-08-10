@@ -23,7 +23,8 @@ use super::event_loop::{EventLoop, OrgAttemptKind};
 impl<S: StorageBackend> EventLoop<S> {
     pub(super) fn handle_swarm_event(&mut self, event: SwarmEvent<SparkBehaviourEvent>) {
         match event {
-            SwarmEvent::NewListenAddr { .. } => {
+            SwarmEvent::NewListenAddr { address, .. } => {
+                eprintln!("[p2p] NewListenAddr: {address}");
                 if !self.port_persisted {
                     let addrs = self.listen_addr_strings();
                     if let Some(port) = listen_port::parse_ws_listen_port(&addrs)
@@ -38,13 +39,20 @@ impl<S: StorageBackend> EventLoop<S> {
                 }
                 if !self.started_emitted {
                     self.started_emitted = true;
+                    // 打印编译时间戳：联调时确认跑的是否新代码（build.rs 注入）
+                    eprintln!(
+                        "[p2p] node build_time={} peer_id={}",
+                        env!("SPARK_BUILD_TIME"),
+                        self.self_peer_id().to_base58()
+                    );
                     self.emit(P2pEvent::Started {
                         peer_id: self.self_peer_id().to_base58(),
                         listen_addresses: self.listen_addr_strings(),
                     });
                 }
             }
-            SwarmEvent::ExternalAddrConfirmed { .. } => {
+            SwarmEvent::ExternalAddrConfirmed { address } => {
+                eprintln!("[p2p] ExternalAddrConfirmed: {address}");
                 // 地址变化（UPnP 映射、relay 预约）→ 立即补发通告 + DHT 记录
                 //（peer-rediscovery §4.2：外部地址确认同时触发 DHT 重发）
                 let _ = self.publish_announce();
@@ -56,6 +64,11 @@ impl<S: StorageBackend> EventLoop<S> {
                 num_established,
                 ..
             } => {
+                let direction = if endpoint.is_dialer() { "dialer" } else { "listener" };
+                eprintln!(
+                    "[p2p] ConnectionEstablished: peer={peer_id} remote_addr={} num_established={num_established} direction={direction}",
+                    endpoint.get_remote_address()
+                );
                 let now = self.now();
                 {
                     let mut store = PeerActivityStore::new(&mut self.storage);
@@ -170,9 +183,15 @@ impl<S: StorageBackend> EventLoop<S> {
             }
             SwarmEvent::ConnectionClosed {
                 peer_id,
+                endpoint,
                 num_established,
+                cause,
                 ..
             } => {
+                eprintln!(
+                    "[p2p] ConnectionClosed: peer={peer_id} remote_addr={} num_established={num_established} cause={cause:?}",
+                    endpoint.get_remote_address()
+                );
                 if num_established == 0 {
                     let now = self.now();
                     // 断连资历清零（§8.6：重接重新熬资历）
@@ -191,6 +210,10 @@ impl<S: StorageBackend> EventLoop<S> {
                 }
             }
             SwarmEvent::OutgoingConnectionError { peer_id, connection_id, error, .. } => {
+                let peer = peer_id.map(|p| p.to_base58()).unwrap_or_else(|| "(unknown)".to_string());
+                eprintln!(
+                    "[p2p] OutgoingConnectionError: peer={peer} conn_id={connection_id:?} error={error:?}"
+                );
                 // connect 命令：失败则试下一目标。按 ConnectionId 精确归属
                 // （同 org attempt 口径）——候选 1 的 unknown_peer_id 拨号失败
                 // 时 peer_id=None，按 peer 匹配会失配滞留：对端在线但首候选
@@ -243,7 +266,14 @@ impl<S: StorageBackend> EventLoop<S> {
                     self.on_rediscovery_dial_failed(peer);
                 }
             }
-            SwarmEvent::ListenerClosed { addresses, .. } => {
+            SwarmEvent::ListenerClosed {
+                listener_id,
+                addresses,
+                reason,
+            } => {
+                eprintln!(
+                    "[p2p] ListenerClosed: listener_id={listener_id:?} addresses={addresses:?} reason={reason:?}"
+                );
                 // 电路监听关闭 = relay 预约失败/过期/被拒（libp2p-relay 0.21
                 // client 无 ReservationReqFailed 事件，N3）：清理预约与
                 // in-flight 标记，重选由周期 tick 自然进行（普通 TCP 监听
@@ -251,6 +281,29 @@ impl<S: StorageBackend> EventLoop<S> {
                 self.on_circuit_listener_closed(&addresses);
             }
             SwarmEvent::Behaviour(behaviour_event) => self.handle_behaviour_event(behaviour_event),
+            SwarmEvent::IncomingConnection {
+                local_addr,
+                send_back_addr,
+                ..
+            } => {
+                eprintln!("[p2p] IncomingConnection: local_addr={local_addr} send_back_addr={send_back_addr}");
+            }
+            SwarmEvent::IncomingConnectionError {
+                local_addr,
+                send_back_addr,
+                error,
+                ..
+            } => {
+                eprintln!(
+                    "[p2p] IncomingConnectionError: local_addr={local_addr} send_back_addr={send_back_addr} error={error:?}"
+                );
+            }
+            SwarmEvent::ExpiredListenAddr { address, .. } => {
+                eprintln!("[p2p] ExpiredListenAddr: {address}");
+            }
+            SwarmEvent::ListenerError { listener_id, error } => {
+                eprintln!("[p2p] ListenerError: listener_id={listener_id:?} error={error:?}");
+            }
             _ => {}
         }
     }
@@ -356,6 +409,14 @@ impl<S: StorageBackend> EventLoop<S> {
                 kad::QueryResult::GetRecord(res) => self.resolve_dht_get(id, res),
                 kad::QueryResult::PutRecord(res) => self.resolve_dht_put(id, res),
                 kad::QueryResult::GetProviders(res) => self.resolve_dht_providers(id, res),
+                kad::QueryResult::GetClosestPeers(res) => match res {
+                    Ok(ok) => {
+                        eprintln!("[p2p] Kad GetClosestPeers: found {} peers", ok.peers.len());
+                    }
+                    Err(e) => {
+                        eprintln!("[p2p] Kad GetClosestPeers: error={e:?}");
+                    }
+                },
                 _ => {}
             },
             SparkBehaviourEvent::NodeChallengeRr(request_response::Event::Message {

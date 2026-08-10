@@ -97,6 +97,9 @@ impl Kernel {
     /// 同时装配：事件泵（node 事件 → kernel 广播通道，`KeepaliveTick` 拦截为
     /// 组织保活触发）与 org-sync worker（推送/保活串行队列，org_sync/）。
     pub fn start_p2p(&mut self) -> Result<String> {
+        // 首启时把 log crate 接到 stderr（内部 Once，幂等）；使 DM 投递等链路
+        // 的 log::info! 在无 logger 时不再被静默丢弃。
+        crate::log_bridge::init_logger();
         if let Some(node) = &self.p2p {
             return Ok(node.peer_id().to_string());
         }

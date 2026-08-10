@@ -9,6 +9,7 @@ pub mod data_mgmt;
 pub mod device;
 pub mod evidence;
 pub mod kernel;
+pub mod log_bridge;
 pub mod message;
 pub mod org;
 pub mod p2p;
