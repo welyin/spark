@@ -162,9 +162,12 @@ impl OrganizationService {
         Ok(record)
     }
 
-    /// `setOrgGateways`（org.md §14）：管理员指定 2–3 名本组织成员作为组织网关。
+    /// `setOrgGateways`（org.md §14 + O1 账号角色模型）：管理员显式指定组织
+    /// 网关（1–3 名成员）。
     ///
-    /// - 每个 rootId 规范化后查重；数量须为 2–3；必须是本组织成员
+    /// - 每个 rootId 规范化后查重；必须是本组织成员；**空列表 = 清除显式
+    ///   指定**，回落缺省（全体成员候选、活跃集自荐限流——见
+    ///   [`crate::org::roles`]）
     /// - 网关角色是记录字段而非成员 role；写入后经既有快照同步广播扩散
     ///   （推送由调用方以 [`Self::sync_recipients`] 执行，与 addMember 同模式）
     pub fn set_org_gateways<S: StorageBackend>(
@@ -215,7 +218,8 @@ impl OrganizationService {
                 normalized.push(root_id);
             }
         }
-        if !(2..=3).contains(&normalized.len())
+        // O1：空列表 = 清除显式指定（回落缺省全员候选）；显式指定限 1–3 名成员
+        if normalized.len() > 3
             || normalized.iter().any(|g| record.find_member(g).is_none())
         {
             return Err(OrgError::InvalidGateways);
@@ -239,6 +243,99 @@ impl OrganizationService {
                 summary: format!("更新组织网关（{} 个）", normalized.len()),
                 payload: Some(
                     [("gateways".to_string(), Value::from(normalized.clone()))]
+                        .into_iter()
+                        .collect(),
+                ),
+            },
+        )?;
+        Self::rebuild_sync_after_mutation(
+            &mut record,
+            previous_last_synced_at,
+            transaction.created_at,
+        );
+        match node_id {
+            Some(node_id) => Self::save_record_pdsync(storage, &record, now_ms, node_id)?,
+            None => Self::save_record(storage, &record)?,
+        }
+        Ok(record)
+    }
+
+    /// `setOrgDataAccounts`（O1 账号角色模型）：管理员显式指定数据账号
+    /// （≥1 名成员）；**空列表 = 清除显式指定**，回落缺省（全体管理员担责）。
+    /// 与 [`Self::set_org_gateways`] 同模式（记录字段 + 快照扩散 + 事务审计）。
+    pub fn set_org_data_accounts<S: StorageBackend>(
+        storage: &mut S,
+        org_id: &str,
+        data_accounts: &[String],
+        current_root_id: &str,
+        now_ms: i64,
+    ) -> Result<OrganizationRecord> {
+        Self::set_org_data_accounts_impl(storage, org_id, data_accounts, current_root_id, now_ms, None)
+    }
+
+    /// pdsync 感知的 [`Self::set_org_data_accounts`]。
+    pub fn set_org_data_accounts_pdsync<S: StorageBackend>(
+        storage: &mut S,
+        org_id: &str,
+        data_accounts: &[String],
+        current_root_id: &str,
+        now_ms: i64,
+        node_id: &str,
+    ) -> Result<OrganizationRecord> {
+        Self::set_org_data_accounts_impl(
+            storage,
+            org_id,
+            data_accounts,
+            current_root_id,
+            now_ms,
+            Some(node_id),
+        )
+    }
+
+    fn set_org_data_accounts_impl<S: StorageBackend>(
+        storage: &mut S,
+        org_id: &str,
+        data_accounts: &[String],
+        current_root_id: &str,
+        now_ms: i64,
+        node_id: Option<&str>,
+    ) -> Result<OrganizationRecord> {
+        let mut record = Self::require_organization(storage, org_id)?;
+        Self::require_admin(&record, current_root_id)?;
+
+        let mut normalized: Vec<String> = Vec::new();
+        for account in data_accounts {
+            let root_id = normalize_root_id(account).map_err(|_| OrgError::InvalidDataAccounts)?;
+            if !normalized.contains(&root_id) {
+                normalized.push(root_id);
+            }
+        }
+        if normalized.iter().any(|rid| record.find_member(rid).is_none()) {
+            return Err(OrgError::InvalidDataAccounts);
+        }
+        if record.data_accounts == normalized {
+            return Ok(record);
+        }
+
+        record.data_accounts = normalized.clone();
+        record.updated_at = now_ms;
+        let previous_last_synced_at = record.sync.as_ref().map(|s| s.last_synced_at).unwrap_or(0);
+        let transaction = append_organization_transaction(
+            storage,
+            OrganizationTransactionRecord {
+                tx_id: String::new(),
+                org_id: org_id.to_string(),
+                type_: OrganizationTransactionType::MemberUpdate,
+                created_at: now_ms,
+                actor_root_id: current_root_id.to_string(),
+                target_root_id: None,
+                summary: if normalized.is_empty() {
+                    "清除数据账号指定（回落缺省：全体管理员）".to_string()
+                } else {
+                    format!("指定数据账号（{} 个）", normalized.len())
+                },
+                payload: Some(
+                    [("dataAccounts".to_string(), Value::from(normalized.clone()))]
                         .into_iter()
                         .collect(),
                 ),

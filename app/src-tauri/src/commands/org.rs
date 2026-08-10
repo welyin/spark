@@ -99,6 +99,32 @@ pub(crate) fn set_gateways_inner(
     kernel.org_set_gateways(org_id, &gateways).map_err(err)
 }
 
+pub(crate) fn set_data_accounts_inner(
+    kernel: &mut Kernel,
+    org_id: &str,
+    data_accounts: Vec<String>,
+) -> Result<OrganizationView, String> {
+    kernel
+        .org_set_data_accounts(org_id, &data_accounts)
+        .map_err(err)
+}
+
+pub(crate) fn set_member_role_inner(
+    kernel: &mut Kernel,
+    org_id: &str,
+    member_root_id: &str,
+    role: &str,
+) -> Result<OrganizationView, String> {
+    let role = match role {
+        "admin" => spark_core::org::OrganizationRole::Admin,
+        "member" => spark_core::org::OrganizationRole::Member,
+        other => return Err(format!("invalid role {other:?}")),
+    };
+    kernel
+        .org_set_member_role(org_id, member_root_id, role)
+        .map_err(err)
+}
+
 pub(crate) fn set_public_inner(
     kernel: &mut Kernel,
     org_id: &str,
@@ -281,7 +307,8 @@ pub fn org_remove_member(
     remove_member_inner(&mut *lock_kernel(&state)?, &org_id, &member_root_id)
 }
 
-/// 指定组织网关（仅 admin；2–3 名本组织成员的 rootId，org.md §14）。
+/// 指定组织网关（仅 admin；O1 账号角色模型：1–3 名本组织成员的 rootId，
+/// 空列表 = 清除显式指定、回落缺省全员候选，org.md §14 + org-data-sync §2）。
 #[tauri::command]
 pub fn org_set_gateways(
     state: tauri::State<'_, KernelState>,
@@ -289,6 +316,29 @@ pub fn org_set_gateways(
     gateways: Vec<String>,
 ) -> Result<OrganizationView, String> {
     set_gateways_inner(&mut *lock_kernel(&state)?, &org_id, gateways)
+}
+
+/// 指定数据账号（仅 admin；O1：≥1 名成员，空列表 = 清除显式指定、回落
+/// 缺省全体管理员）。
+#[tauri::command]
+pub fn org_set_data_accounts(
+    state: tauri::State<'_, KernelState>,
+    org_id: String,
+    data_accounts: Vec<String>,
+) -> Result<OrganizationView, String> {
+    set_data_accounts_inner(&mut *lock_kernel(&state)?, &org_id, data_accounts)
+}
+
+/// 晋升/降级成员角色（仅 admin；O1：数据职责随角色自动进出；降级最后一个
+/// 管理员拒绝）。
+#[tauri::command]
+pub fn org_set_member_role(
+    state: tauri::State<'_, KernelState>,
+    org_id: String,
+    member_root_id: String,
+    role: String,
+) -> Result<OrganizationView, String> {
+    set_member_role_inner(&mut *lock_kernel(&state)?, &org_id, &member_root_id, &role)
 }
 
 /// 开关组织公开标志（仅 admin；org.md §16），可选更新地址记录展示名。

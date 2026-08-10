@@ -332,6 +332,8 @@ export function createTauriApi(): ElectronAPI {
       addMember: (orgId, input) => call('org-add-member', orgId, input),
       removeMember: (orgId, memberRootId) => call('org-remove-member', orgId, memberRootId),
       setGateways: (orgId, gateways) => call('org-set-gateways', orgId, gateways),
+      setDataAccounts: (orgId, dataAccounts) => call('org-set-data-accounts', orgId, dataAccounts),
+      setMemberRole: (orgId, memberRootId, role) => call('org-set-member-role', orgId, memberRootId, role),
       createInvite: (orgId) => call('org-invite-create', orgId),
       // 内核 accept_invite 已编排全段：解码邀请 → 连接邀请人 → claim 捎带 →
       // org-pull 拉取 → 成员确认（对齐 TS service.ts acceptOrgInvite）。

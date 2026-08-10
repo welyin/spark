@@ -61,6 +61,20 @@ pub struct OrgSyncOverview {
     pub dht_mode: DhtMode,
     /// 组织网络状态判定结果（[`decide_org_network_status`]；纯统计路径为 `LocalOnly` 占位）。
     pub status: OrgNetworkStatus,
+    /// O1 两级记账（账号角色模型）：逐数据账号的 PC 设备达标状态
+    /// （kernel 从角色解析 + 设备类填充；纯统计路径为空）。
+    pub data_accounts: Vec<DataAccountOverview>,
+}
+
+/// 逐数据账号概览（O1 两级记账的第二级：组织级 m/3 见 `synced_peers`）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DataAccountOverview {
+    /// 数据账号 rootId。
+    pub root_id: String,
+    /// 该账号的 PC 类设备是否持有副本（everSynced 且设备类为 pc）。
+    pub pc_synced: bool,
+    /// 设备类（pc/mobile；无设备记录兜底 pc）。
+    pub device_class: &'static str,
 }
 
 impl OrgSyncOverview {
@@ -73,6 +87,21 @@ impl OrgSyncOverview {
 /// 副本达标判定。
 pub fn replica_sufficient(synced_peers: u32) -> bool {
     synced_peers >= ORG_REPLICA_TARGET
+}
+
+/// O1 数据账号达标判定（wiki `org-data-sync.md` §4）：**全体数据账号 PC
+/// 设备副本合计 ≥ 3，且每个数据账号至少 1 台 PC 计入**。
+///
+/// - `pc_total`：数据账号中 PC 且 everSynced 的数量（成员表口径每账号一个
+///   nodeInfo 端点，故逐账号计数）；
+/// - `accounts`：逐账号 PC 达标状态；
+/// 两者都满足才达标。不达标只提醒，无自动处置（决定权在管理员）。
+pub fn data_accounts_sufficient(accounts: &[DataAccountOverview]) -> bool {
+    if accounts.is_empty() {
+        return false;
+    }
+    let pc_total = accounts.iter().filter(|a| a.pc_synced).count() as u32;
+    pc_total >= ORG_REPLICA_TARGET && accounts.iter().all(|a| a.pc_synced)
 }
 
 // ------------------------------------------------------------------
@@ -192,14 +221,16 @@ pub fn member_ever_synced(
 /// - `current_root_id`：本机当前用户（判定 isSelf；未登录为 `None`）
 /// - `current_versions`：当前组织版本（`record.sync.versions`，缺失时调用方
 ///   应以 `build_organization_sync_versions_default(record)` 兜底）
-/// - `state_lookup`：按 peerId 查 org-sync-state（成员无 peerId 时不查询）
+/// - `state_lookup`：**按账号查** org-sync-state（O1：`(rootId, legacy_peerId)`
+///   ——调用方实现账号键优先 + 旧 peerId 键迁移回填，见
+///   [`super::sync_state::read_org_sync_state_account`]）
 /// - rootId 为空串的成员跳过（对齐 TS 的 `if (!rootId) continue`）
 pub fn compute_org_sync_overview(
     org_id: &str,
     members: &[OrganizationMember],
     current_root_id: Option<&str>,
     current_versions: Option<&OrganizationSyncVersions>,
-    mut state_lookup: impl FnMut(&str) -> Option<OrgSyncState>,
+    mut state_lookup: impl FnMut(&str, Option<&str>) -> Option<OrgSyncState>,
     now_ms: i64,
 ) -> OrgSyncOverview {
     let mut overview_members = Vec::new();
@@ -217,7 +248,7 @@ pub fn compute_org_sync_overview(
             .filter(|p| !p.is_empty())
             .map(str::to_string);
         let is_self = current_root_id == Some(member.root_id.as_str());
-        let state = peer_id.as_deref().and_then(&mut state_lookup);
+        let state = state_lookup(&member.root_id, peer_id.as_deref());
         let ever_synced = member_ever_synced(is_self, state.as_ref(), current_versions, now_ms);
         if ever_synced {
             synced_peers += 1;
@@ -243,5 +274,7 @@ pub fn compute_org_sync_overview(
         last_connected_at: None,
         dht_mode: DhtMode::default(),
         status: OrgNetworkStatus::LocalOnly,
+        // O1 数据账号两级概览由 kernel.org_overview 填充（需角色解析 + 设备类）
+        data_accounts: Vec::new(),
     }
 }

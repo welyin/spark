@@ -30,6 +30,7 @@ pub mod plugin_docs;
 pub mod pull;
 pub mod recovery;
 pub mod replica;
+pub mod roles;
 pub mod service;
 pub mod snapshot;
 pub mod sync_state;
@@ -77,10 +78,10 @@ pub use recovery::{
     recovery_token,
 };
 pub use replica::{
-    MemberSyncOverview, ORG_NETWORK_LOST_DEBOUNCE_MS, ORG_REPLICA_FRESH_WINDOW_MS,
-    ORG_REPLICA_TARGET, OrgNetworkStatus, OrgNetworkStatusInput, OrgSyncOverview,
-    compute_org_sync_overview, covers_current, decide_org_network_status, member_ever_synced,
-    replica_sufficient,
+    DataAccountOverview, MemberSyncOverview, ORG_NETWORK_LOST_DEBOUNCE_MS,
+    ORG_REPLICA_FRESH_WINDOW_MS, ORG_REPLICA_TARGET, OrgNetworkStatus, OrgNetworkStatusInput,
+    OrgSyncOverview, compute_org_sync_overview, covers_current, data_accounts_sufficient,
+    decide_org_network_status, member_ever_synced, replica_sufficient,
 };
 pub use service::OrganizationService;
 pub use snapshot::{
@@ -155,9 +156,15 @@ pub enum OrgError {
     #[error("Organization must keep at least one admin")]
     MustKeepAdmin,
 
-    /// 组织网关列表非法（org.md §14：须为 2–3 名本组织成员的 rootId）。
-    #[error("Gateways must be 2 to 3 member rootIds of the organization")]
+    /// 组织网关列表非法（org.md §14 + O1：显式指定时须为 1–3 名本组织成员
+    /// 的 rootId；空列表 = 清除显式指定、回落缺省全员候选）。
+    #[error("Gateways must be 1 to 3 member rootIds of the organization")]
     InvalidGateways,
+
+    /// 数据账号列表非法（O1：显式指定时须为至少 1 名本组织成员的 rootId；
+    /// 空列表 = 清除显式指定、回落缺省全体管理员）。
+    #[error("DataAccounts must be member rootIds of the organization")]
+    InvalidDataAccounts,
 
     /// 成员身份字段 / 组织 logo 非法（校验口径复用 identity 资料校验）。
     #[error("{0}")]

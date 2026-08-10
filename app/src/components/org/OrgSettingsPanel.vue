@@ -117,6 +117,23 @@
           </span>
         </div>
 
+        <!-- O1 两级记账：逐数据账号 PC 达标状态（不达标仅提醒，无自动处置） -->
+        <div v-if="currentOverview && currentOverview.dataAccounts && currentOverview.dataAccounts.length" class="replica-row">
+          <span class="replica-hint">数据账号：</span>
+          <el-tag
+            v-for="account in currentOverview.dataAccounts"
+            :key="account.rootId"
+            :type="account.pcSynced ? 'success' : 'warning'"
+            size="small"
+            class="data-account-tag"
+          >
+            {{ shortRootId(account.rootId) }}{{ account.deviceClass === 'mobile' ? '（手机）' : '' }}
+          </el-tag>
+          <span v-if="!dataAccountsOk" class="replica-hint replica-hint-warn">
+            有数据账号缺少 PC 设备副本，请为其配置桌面端
+          </span>
+        </div>
+
         <div v-if="organization.isCurrentUserAdmin" class="org-actions">
           <el-button type="danger" plain :loading="deleting" @click="deleteOrganization">
             {{ deleting ? '删除中...' : '删除组织' }}
@@ -278,8 +295,8 @@ export default defineComponent({
         return false;
       }
       const memberIds = new Set(organization.value.members.map((member) => member.rootId));
+      // O1：空选择 = 清除显式指定（回落缺省全员候选），合法；显式指定限 1–3
       return (
-        gatewaySelection.value.length >= 2 &&
         gatewaySelection.value.length <= 3 &&
         gatewaySelection.value.every((rootId) => memberIds.has(rootId))
       );
@@ -352,6 +369,19 @@ export default defineComponent({
       return item.syncedPeers >= item.replicaTarget ? 'success' : 'warning';
     };
 
+    // O1 两级记账：全体数据账号 PC 副本合计 ≥3 且每账号 ≥1（org-data-sync §4）
+    const dataAccountsOk = computed(() => {
+      const accounts = currentOverview.value?.dataAccounts;
+      if (!accounts || accounts.length === 0) {
+        return true;
+      }
+      const pcTotal = accounts.filter((a) => a.pcSynced).length;
+      return pcTotal >= 3 && accounts.every((a) => a.pcSynced);
+    });
+
+    const shortRootId = (rootId: string) =>
+      rootId.length > 12 ? `${rootId.slice(0, 6)}…${rootId.slice(-4)}` : rootId;
+
     const startEditInfo = (field: 'logo' | 'name' | 'description') => {
       if (!organization.value?.isCurrentUserAdmin) {
         return;
@@ -412,7 +442,7 @@ export default defineComponent({
 
     const saveGateways = async () => {
       if (!organization.value || !gatewaySelectionValid.value) {
-        ElMessage.warning('请选择 2-3 名本组织成员作为网关');
+        ElMessage.warning('请选择最多 3 名本组织成员作为网关（清空 = 全员候选缺省）');
         return;
       }
       savingGateways.value = true;
@@ -519,6 +549,8 @@ export default defineComponent({
       reload,
       replicaLabel,
       replicaTagType,
+      dataAccountsOk,
+      shortRootId,
       startEditInfo,
       cancelEditInfo,
       saveInfo,
@@ -615,6 +647,14 @@ export default defineComponent({
 .replica-hint {
   color: var(--spark-text-2);
   font-size: 13px;
+}
+
+.replica-hint-warn {
+  color: var(--el-color-warning);
+}
+
+.data-account-tag {
+  margin-right: 4px;
 }
 
 .org-actions {

@@ -90,9 +90,20 @@ pub struct OrganizationRecord {
     /// 同步状态（本地新建后即存在）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sync: Option<OrganizationSyncState>,
-    /// 组织网关 rootId 列表（org.md §14，保留键：管理员指定 2–3 个，经快照同步）。
+    /// 组织网关 rootId 列表（org.md §14，保留键：管理员显式指定时生效，
+    /// 经快照同步；**空 = 未指定**，此时缺省全体成员候选、活跃集自荐限流——
+    /// 见 [`crate::org::roles`]，O1 账号角色模型）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gateways: Vec<String>,
+    /// 数据账号 rootId 列表（O1 账号角色模型，保留键：管理员显式指定时生效，
+    /// 经快照同步；**空 = 未指定**，此时缺省全体管理员担责——见
+    /// [`crate::org::roles::data_account_set`]）。
+    #[serde(
+        rename = "dataAccounts",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub data_accounts: Vec<String>,
     /// 自认证组织地址（org.md §15，保留键：创建时由组织根公钥派生，经快照同步）。
     #[serde(
         rename = "orgAddress",
@@ -205,7 +216,9 @@ impl OrganizationRecord {
         }
     }
 
-    /// 某 rootId 是否为组织网关（org.md §14）。
+    /// 某 rootId 是否在显式网关列表中（org.md §14）。
+    /// **注意**：O1 账号角色模型的活跃判定（含缺省推导）请用
+    /// [`crate::org::roles::is_gateway_active`]——本方法只看显式列表。
     pub fn is_gateway(&self, root_id: &str) -> bool {
         self.gateways.iter().any(|g| g == root_id)
     }

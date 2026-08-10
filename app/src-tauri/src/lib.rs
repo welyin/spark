@@ -237,6 +237,8 @@ pub fn run() {
             commands::org::org_add_member,
             commands::org::org_remove_member,
             commands::org::org_set_gateways,
+            commands::org::org_set_data_accounts,
+            commands::org::org_set_member_role,
             commands::org::org_set_public,
             commands::org::org_update_info,
             commands::org::org_update_my_identity,

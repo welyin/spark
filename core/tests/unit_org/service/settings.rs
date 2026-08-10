@@ -203,17 +203,7 @@ fn set_org_gateways_rules() {
         ),
         Err(OrgError::AdminRequired)
     ));
-    // 数量不足 2 / 超过 3
-    assert!(matches!(
-        OrganizationService::set_org_gateways(
-            &mut storage,
-            &record.org_id,
-            &[admin.clone()],
-            &admin,
-            NOW + 2,
-        ),
-        Err(OrgError::InvalidGateways)
-    ));
+    // 数量超过 3（O1：1–3 均合法；空列表 = 清除显式指定、回落缺省）
     assert!(matches!(
         OrganizationService::set_org_gateways(
             &mut storage,
@@ -224,6 +214,26 @@ fn set_org_gateways_rules() {
         ),
         Err(OrgError::InvalidGateways)
     ));
+    // O1：单个成员合法（显式收窄到 1 个网关）
+    let narrowed = OrganizationService::set_org_gateways(
+        &mut storage,
+        &record.org_id,
+        &[admin.clone()],
+        &admin,
+        NOW + 2,
+    )
+    .unwrap();
+    assert_eq!(narrowed.gateways, vec![admin.clone()]);
+    // O1：空列表清除显式指定（回落缺省全员候选）
+    let cleared = OrganizationService::set_org_gateways(
+        &mut storage,
+        &record.org_id,
+        &[],
+        &admin,
+        NOW + 3,
+    )
+    .unwrap();
+    assert!(cleared.gateways.is_empty());
     // 非成员 / 非法 rootId
     assert!(matches!(
         OrganizationService::set_org_gateways(
@@ -257,15 +267,15 @@ fn set_org_gateways_rules() {
         &record.org_id,
         &messy,
         &admin,
-        NOW + 3,
+        NOW + 4,
     )
     .unwrap();
     assert_eq!(updated.gateways, vec![admin.clone(), member_id.clone()]);
     assert!(updated.is_gateway(&admin));
-    assert_eq!(updated.updated_at, NOW + 3);
+    assert_eq!(updated.updated_at, NOW + 4);
     assert_eq!(
         updated.sync.as_ref().unwrap().versions.summary_version,
-        NOW + 3
+        NOW + 4
     );
     let txs = spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 1).unwrap();
     assert_eq!(txs[0].summary, "更新组织网关（2 个）");
@@ -283,7 +293,7 @@ fn set_org_gateways_rules() {
         NOW + 99,
     )
     .unwrap();
-    assert_eq!(same.updated_at, NOW + 3);
+    assert_eq!(same.updated_at, NOW + 4);
 }
 
 #[test]

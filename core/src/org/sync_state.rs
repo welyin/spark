@@ -34,9 +34,42 @@ pub const ORG_SYNC_STATE_PREFIX: &str = "p2p:org-sync-state:";
 /// org-sync-state 保留期：90 天（data-management/constants.ts:17）。
 pub const ORG_SYNC_STATE_MAX_AGE_MS: i64 = 90 * 24 * 60 * 60 * 1000;
 
-/// 存储键：`p2p:org-sync-state:<peerId>:<orgId>`。
+/// 存储键（节点口径，O1 前）：`p2p:org-sync-state:<peerId>:<orgId>`。
+/// 新写入一律走账号口径 [`org_sync_state_account_key`]；本函数保留给
+/// 旧键迁移读取（[`migrate_org_sync_state_to_account`]）。
 pub fn org_sync_state_key(peer_id: &str, org_id: &str) -> String {
     format!("{ORG_SYNC_STATE_PREFIX}{peer_id}:{org_id}")
+}
+
+/// 存储键（账号口径，O1）：`p2p:org-sync-state:acct:<rootId>:<orgId>`。
+/// 同一账号多设备（peerId 漂移）共享一份记账——"账号持有数据"与
+/// "哪台设备当时在线"解耦。
+pub fn org_sync_state_account_key(root_id: &str, org_id: &str) -> String {
+    format!("{ORG_SYNC_STATE_PREFIX}acct:{root_id}:{org_id}")
+}
+
+/// 账号口径读取（O1 迁移）：新键优先；缺失且提供了 legacy peerId 时读旧键
+/// 并回填新键（旧键保留，90 天过期清理自然回收）。
+pub fn read_org_sync_state_account<S: crate::storage::StorageBackend>(
+    storage: &mut S,
+    root_id: &str,
+    org_id: &str,
+    legacy_peer_id: Option<&str>,
+) -> Option<OrgSyncState> {
+    let key = org_sync_state_account_key(root_id, org_id);
+    if let Ok(Some(raw)) = storage.get(&key)
+        && let Some(state) = OrgSyncState::from_json(&raw)
+    {
+        return Some(state);
+    }
+    let peer_id = legacy_peer_id?;
+    let legacy = storage
+        .get(&org_sync_state_key(peer_id, org_id))
+        .ok()
+        .flatten()
+        .and_then(|raw| OrgSyncState::from_json(&raw))?;
+    let _ = storage.put(&key, &legacy.to_json());
+    Some(legacy)
 }
 
 /// org-sync-state 记录（规范形状）。

@@ -40,6 +40,7 @@ fn sample_record() -> OrganizationRecord {
         ],
         sync: None,
         gateways: Vec::new(),
+        data_accounts: Vec::new(),
         org_address: None,
         is_public: false,
         extra: Default::default(),

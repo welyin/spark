@@ -269,6 +269,18 @@ pub struct OrgSyncOverviewDto {
     pub dht_mode: String,
     /// 组织网络状态：good / unstable / lost / recovering / localOnly。
     pub status: String,
+    /// O1 两级记账：逐数据账号的 PC 设备达标状态（账号角色模型，
+    /// org-data-sync §4）。
+    pub data_accounts: Vec<DataAccountOverviewDto>,
+}
+
+/// 逐数据账号概览（O1 两级记账第二级）。
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DataAccountOverviewDto {
+    pub root_id: String,
+    pub pc_synced: bool,
+    pub device_class: String,
 }
 
 /// 单成员副本状态。
@@ -313,6 +325,15 @@ impl From<OrgSyncOverview> for OrgSyncOverviewDto {
             last_connected_at: overview.last_connected_at,
             dht_mode: overview.dht_mode.as_str().to_string(),
             status: overview.status.as_str().to_string(),
+            data_accounts: overview
+                .data_accounts
+                .into_iter()
+                .map(|a| DataAccountOverviewDto {
+                    root_id: a.root_id,
+                    pc_synced: a.pc_synced,
+                    device_class: a.device_class.to_string(),
+                })
+                .collect(),
         }
     }
 }

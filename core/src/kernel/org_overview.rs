@@ -4,7 +4,6 @@
 use std::collections::HashSet;
 
 use super::{Kernel, Result};
-use crate::org::sync_state::{OrgSyncState, org_sync_state_key};
 use crate::org::{
     OrgNetworkStatusInput, OrgSyncOverview, OrganizationService,
     build_organization_sync_versions_default, compute_org_sync_overview, decide_org_network_status,
@@ -12,7 +11,6 @@ use crate::org::{
 use crate::p2p::keepalive::RecoveryState;
 use crate::p2p::node::system_now_ms;
 use crate::p2p::peer_activity::PeerActivityStore;
-use crate::storage::StorageBackend;
 
 /// `Option<i64>` 取较大者（任一 `Some` 即保留）。
 fn max_opt(a: Option<i64>, b: Option<i64>) -> Option<i64> {
@@ -37,22 +35,56 @@ impl Kernel {
             .map(|sync| sync.versions)
             .or_else(|| Some(build_organization_sync_versions_default(&record)));
         let now = system_now_ms();
+        let mut state_storage = storage.clone();
         let mut overview = compute_org_sync_overview(
             org_id,
             &record.members,
             current_root_id.as_deref(),
             versions.as_ref(),
-            |peer_id| {
-                storage
-                    .get(&org_sync_state_key(peer_id, org_id))
-                    .ok()
-                    .flatten()
-                    .and_then(|raw| OrgSyncState::from_json(&raw))
+            |root_id_q, legacy_peer_id| {
+                crate::org::sync_state::read_org_sync_state_account(
+                    &mut state_storage,
+                    root_id_q,
+                    org_id,
+                    legacy_peer_id,
+                )
             },
             now,
         );
+        self.fill_data_accounts_overview(&mut overview, &record);
         self.fill_org_network_status(&mut overview, now);
         Ok(overview)
+    }
+
+    /// 填充 O1 两级记账的数据账号级概览（`dataAccounts`）：逐数据账号的
+    /// PC 设备达标状态。设备类经 [`crate::org::roles::member_device_class`]
+    /// 判定（无设备记录兜底 pc——宁可多算不漏算）。
+    fn fill_data_accounts_overview(
+        &self,
+        overview: &mut OrgSyncOverview,
+        record: &crate::org::OrganizationRecord,
+    ) {
+        let storage = self.require_storage().ok();
+        overview.data_accounts = crate::org::roles::data_account_set(record)
+            .into_iter()
+            .map(|root_id| {
+                let member_view = overview
+                    .members
+                    .iter()
+                    .find(|m| m.root_id == root_id);
+                let device_class = record
+                    .find_member(&root_id)
+                    .zip(storage)
+                    .map(|(member, s)| crate::org::roles::member_device_class(s, member))
+                    .unwrap_or("pc");
+                crate::org::DataAccountOverview {
+                    root_id,
+                    pc_synced: device_class == "pc"
+                        && member_view.is_some_and(|m| m.ever_synced),
+                    device_class,
+                }
+            })
+            .collect();
     }
 
     /// 填充副本概览的网络状态字段（org_overview 的扩展段）。

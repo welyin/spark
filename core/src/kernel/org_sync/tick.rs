@@ -11,7 +11,6 @@ use super::{
 };
 use crate::contact::ContactService;
 use crate::org::gateway::{OrgMemberHint, org_members_dht_key};
-use crate::org::sync_state::{OrgSyncState, org_sync_state_key};
 use crate::org::{OrganizationService, compute_org_sync_overview, resolve_local_versions};
 use crate::p2p::constants::OVERLAY_TOPIC;
 use crate::p2p::envelope::build_org_body;
@@ -478,18 +477,19 @@ impl OrgSyncContext {
                 .as_ref()
                 .map(|s| s.versions)
                 .or_else(|| Some(resolve_local_versions(&record)));
-            let storage = self.storage.clone();
+            let mut storage = self.storage.clone();
             let overview = compute_org_sync_overview(
                 &record.org_id,
                 &record.members,
                 Some(root_id),
                 versions.as_ref(),
-                |peer_id| {
-                    storage
-                        .get(&org_sync_state_key(peer_id, &record.org_id))
-                        .ok()
-                        .flatten()
-                        .and_then(|raw| OrgSyncState::from_json(&raw))
+                |root_id_q, legacy_peer_id| {
+                    crate::org::sync_state::read_org_sync_state_account(
+                        &mut storage,
+                        root_id_q,
+                        &record.org_id,
+                        legacy_peer_id,
+                    )
                 },
                 now,
             );
@@ -531,16 +531,18 @@ impl OrgSyncContext {
         }
     }
 
-    /// 网关职责检测（org.md §14 + p2p-messages.md §15）：本机 rootId 在某组织
-    /// `gateways` 列表中且持有 orgSecret → 在 `org_members_dht_key` 上
-    /// start_providing + 发布成员提示记录（只含 {peerId, addresses}）。
+    /// 网关职责检测（org.md §14 + O1 账号角色模型）：本机账号是**活跃网关**
+    /// （显式指定或缺省全员候选的确定性轮换活跃集，见
+    /// [`crate::org::roles::is_gateway_active`]）且持有 orgSecret → 在
+    /// `org_members_dht_key` 上 start_providing + 发布成员提示记录。
     /// 节点侧幂等去重，每 tick 调用一次即可；周期重发由节点挂 tick 计数完成。
     async fn refresh_gateway_providing(&self, root_id: &str) {
         let records =
             OrganizationService::read_all_organizations(&self.storage).unwrap_or_default();
+        let now = self.now();
         let keys: Vec<String> = records
             .iter()
-            .filter(|record| record.is_gateway(root_id) && record.find_member(root_id).is_some())
+            .filter(|record| crate::org::roles::is_gateway_active(record, root_id, now))
             .filter_map(|record| record.org_secret().map(org_members_dht_key))
             .collect();
         if keys.is_empty() {
@@ -593,7 +595,8 @@ impl OrgSyncContext {
                 continue;
             };
             let signing = oa::org_root_signing_key(&record);
-            let is_gateway = record.is_gateway(root_id);
+            // O1：活跃网关判定（显式指定或缺省活跃集自荐）
+            let is_gateway = crate::org::roles::is_gateway_active(&record, root_id, now);
             if signing.is_none() && !is_gateway {
                 continue;
             }

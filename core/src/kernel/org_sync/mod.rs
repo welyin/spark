@@ -34,7 +34,7 @@ use ed25519_dalek::SigningKey;
 use tokio::sync::broadcast;
 
 use crate::collection::DocumentCollection;
-use crate::org::sync_state::{OrgSyncState, org_sync_state_key};
+use crate::org::sync_state::OrgSyncState;
 use crate::org::{OrganizationRecord, OrganizationService};
 use crate::p2p::keepalive::RecoveryTrigger;
 use crate::p2p::node::system_now_ms;
@@ -278,18 +278,26 @@ impl OrgSyncContext {
         DocumentCollection::new(domain, collection, config)
     }
 
-    /// 读取 org-sync-state（缺失/损坏 → None）。
-    fn read_sync_state(&self, peer_id: &str, org_id: &str) -> Option<OrgSyncState> {
-        self.storage
-            .get(&org_sync_state_key(peer_id, org_id))
-            .ok()
-            .flatten()
-            .and_then(|raw| OrgSyncState::from_json(&raw))
+    /// 读取 org-sync-state（缺失/损坏 → None）。O1 账号口径：rootId 定键，
+    /// 旧 peerId 键自动迁移读取回填。
+    fn read_sync_state(&self, root_id: &str, org_id: &str, legacy_peer_id: Option<&str>) -> Option<OrgSyncState> {
+        let mut storage = self.storage.clone();
+        crate::org::sync_state::read_org_sync_state_account(
+            &mut storage,
+            root_id,
+            org_id,
+            legacy_peer_id,
+        )
     }
 
-    fn save_sync_state(&self, peer_id: &str, org_id: &str, state: OrgSyncState) {
+    /// 写入 org-sync-state（O1 账号口径：rootId 定键——同账号多设备/peerId
+    /// 漂移共享一份记账）。
+    fn save_sync_state(&self, root_id: &str, org_id: &str, state: OrgSyncState) {
         let mut storage = self.storage.clone();
-        if let Err(e) = storage.put(&org_sync_state_key(peer_id, org_id), &state.to_json()) {
+        if let Err(e) = storage.put(
+            &crate::org::sync_state::org_sync_state_account_key(root_id, org_id),
+            &state.to_json(),
+        ) {
             self.warn(format!("org sync state save failed: {e}"));
         }
     }

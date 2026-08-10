@@ -36,8 +36,8 @@ fn member(root: char, peer_id: Option<&str>) -> OrganizationMember {
     }
 }
 
-fn no_state() -> impl FnMut(&str) -> Option<OrgSyncState> {
-    |_| None
+fn no_state() -> impl FnMut(&str, Option<&str>) -> Option<OrgSyncState> {
+    |_, _| None
 }
 
 #[test]
@@ -65,7 +65,7 @@ fn recently_synced_within_30d_window() {
         &members,
         None,
         Some(&current),
-        |_| Some(state_at(NOW - ORG_REPLICA_FRESH_WINDOW_MS)),
+        |_, _| Some(state_at(NOW - ORG_REPLICA_FRESH_WINDOW_MS)),
         NOW,
     );
     assert!(overview.members[0].ever_synced, "30 天边界仍计入");
@@ -75,7 +75,7 @@ fn recently_synced_within_30d_window() {
         &members,
         None,
         Some(&current),
-        |_| Some(state_at(NOW - ORG_REPLICA_FRESH_WINDOW_MS - 1)),
+        |_, _| Some(state_at(NOW - ORG_REPLICA_FRESH_WINDOW_MS - 1)),
         NOW,
     );
     assert!(!overview.members[0].ever_synced);
@@ -97,7 +97,7 @@ fn covers_current_counts_stale_ttl_but_fresh_versions() {
         &members,
         None,
         Some(&current),
-        |_| Some(stale_ttl),
+        |_, _| Some(stale_ttl),
         NOW,
     );
     assert!(overview.members[0].ever_synced);
@@ -117,7 +117,7 @@ fn covers_current_counts_stale_ttl_but_fresh_versions() {
         &members,
         None,
         Some(&current),
-        |_| Some(lagging),
+        |_, _| Some(lagging),
         NOW,
     );
     assert!(!overview.members[0].ever_synced);
@@ -160,8 +160,10 @@ fn peer_id_is_trimmed_for_state_lookup() {
         &members,
         None,
         Some(&current),
-        |peer| {
-            assert_eq!(peer, "peer-b", "lookup 必须用 trim 后的 peerId");
+        |root, legacy_peer| {
+            // O1 账号口径：rootId 为主键，legacy peerId 是迁移回填的辅助键
+            assert_eq!(root, rid('b'), "lookup 主键是账号 rootId");
+            assert_eq!(legacy_peer, Some("peer-b"), "legacy 键必须用 trim 后的 peerId");
             Some(state)
         },
         NOW,
@@ -193,7 +195,7 @@ fn replica_sufficiency() {
         &members,
         Some(&rid('a')),
         Some(&current),
-        |_| Some(fresh),
+        |_, _| Some(fresh),
         NOW,
     );
     assert_eq!(overview.synced_peers, 3);

@@ -347,6 +347,12 @@ export type OrgSyncOverviewDto = {
   lastConnectedAt: number | null;
   dhtMode: 'off' | 'client' | 'server';
   status: OrgNetworkStatus;
+  /** O1 两级记账：逐数据账号的 PC 设备达标状态（org-data-sync §4）。 */
+  dataAccounts: Array<{
+    rootId: string;
+    pcSynced: boolean;
+    deviceClass: string;
+  }>;
 };
 
 // ------------------------------------------------------------------
@@ -641,6 +647,10 @@ export type ElectronAPI = {
     addMember: (orgId: string, input: { rootId: string; nodeInfo?: { peerId?: string; addresses: string[] } }) => Promise<OrgView>;
     removeMember: (orgId: string, memberRootId: string) => Promise<OrgView>;
     setGateways: (orgId: string, gateways: string[]) => Promise<OrgView>;
+    /** O1：指定数据账号（空数组 = 清除显式指定、回落缺省全体管理员） */
+    setDataAccounts: (orgId: string, dataAccounts: string[]) => Promise<OrgView>;
+    /** O1：晋升/降级成员角色（数据职责随角色自动进出） */
+    setMemberRole: (orgId: string, memberRootId: string, role: 'admin' | 'member') => Promise<OrgView>;
     createInvite: (orgId: string) => Promise<{ invite: string; orgId: string; orgName: string }>;
     acceptInvite: (code: string) => Promise<{ orgId: string; orgName: string; memberCount: number }>;
     getSyncOverview: (orgId: string) => Promise<OrgSyncOverviewDto | null>;

@@ -105,7 +105,10 @@ impl OrganizationService {
                 extra: Default::default(),
             }],
             sync: None,
+            // O1：创建时不显式指定角色——缺省推导生效（网关=全员候选、
+            // 数据=全体管理员即创建者）
             gateways: Vec::new(),
+            data_accounts: Vec::new(),
             org_address: None,
             is_public: false,
             extra: Default::default(),

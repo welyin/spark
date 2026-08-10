@@ -273,11 +273,12 @@ impl OrgSyncContext {
                 };
                 self.apply_plugin_docs(&plugin_docs, now);
                 stats.pulled += 1;
-                // 副本记账（org-pull-sync.ts:279-296 onSyncState）
-                if let Some(peer_id) = extract_peer_id(node_info) {
+                // 副本记账（org-pull-sync.ts:279-296 onSyncState；O1 账号口径：
+                // rootId 定键——同账号多设备共享一份记账）
+                {
                     let versions = resolve_local_versions(&merged);
                     self.save_sync_state(
-                        &peer_id,
+                        root_id,
                         org_id,
                         sync_state_after_pull_synced(versions, now),
                     );

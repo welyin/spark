@@ -14,14 +14,14 @@ use crate::contact::ContactService;
 use crate::org::service::{
     CreateOrganizationInput, CreatedOrgInvite, InviteAcceptance, OrgIdentityPatch,
 };
-use crate::org::sync_state::{org_sync_state_key, sync_state_after_pull_synced};
+use crate::org::sync_state::sync_state_after_pull_synced;
 use crate::org::{
     OrgInviteDirection, OrgInvitePayload, OrgInviteRecord, OrgInviteStatus, OrganizationNodeInfo,
     OrganizationService, OrganizationView, PluginDocSyncItem, apply_plugin_doc_sync_items,
     build_organization_sync_versions_default, decode_org_invite_at, sign_node_info_claim,
 };
 use crate::p2p::node::system_now_ms;
-use crate::p2p::{P2pError, PeerNodeInfo, extract_peer_id};
+use crate::p2p::{P2pError, PeerNodeInfo};
 use crate::storage::StorageBackend;
 
 impl Kernel {
@@ -163,6 +163,61 @@ impl Kernel {
             self.require_storage_mut()?,
             org_id,
             gateways,
+            &root_id,
+            system_now_ms(),
+            &node_id,
+        )?;
+        if let Some(tx) = &self.org_sync_tx {
+            let _ = tx.send(OrgSyncRequest::PushOrg {
+                org_id: record.org_id.clone(),
+                actor_root_id: root_id.clone(),
+            });
+        }
+        Ok(OrganizationService::to_view(&record, &root_id))
+    }
+
+    /// 指定数据账号（仅 admin；O1 账号角色模型：≥1 名成员，空列表 = 清除
+    /// 显式指定、回落缺省全体管理员）。落库后经 org-sync worker 推送快照
+    /// （与 setGateways 同模式，尽力而为）。
+    pub fn org_set_data_accounts(
+        &mut self,
+        org_id: &str,
+        data_accounts: &[String],
+    ) -> Result<OrganizationView> {
+        let root_id = self.require_unlocked_root_id()?;
+        let node_id = self.sync_node_id();
+        let record = OrganizationService::set_org_data_accounts_pdsync(
+            self.require_storage_mut()?,
+            org_id,
+            data_accounts,
+            &root_id,
+            system_now_ms(),
+            &node_id,
+        )?;
+        if let Some(tx) = &self.org_sync_tx {
+            let _ = tx.send(OrgSyncRequest::PushOrg {
+                org_id: record.org_id.clone(),
+                actor_root_id: root_id.clone(),
+            });
+        }
+        Ok(OrganizationService::to_view(&record, &root_id))
+    }
+
+    /// 晋升/降级成员角色（仅 admin；O1：数据职责随角色自动进出——缺省数据
+    /// 账号 = 全体管理员）。降级最后一个管理员拒绝（MustKeepAdmin）。
+    pub fn org_set_member_role(
+        &mut self,
+        org_id: &str,
+        member_root_id: &str,
+        role: crate::org::OrganizationRole,
+    ) -> Result<OrganizationView> {
+        let root_id = self.require_unlocked_root_id()?;
+        let node_id = self.sync_node_id();
+        let record = OrganizationService::set_member_role_pdsync(
+            self.require_storage_mut()?,
+            org_id,
+            member_root_id,
+            role,
             &root_id,
             system_now_ms(),
             &node_id,
@@ -402,8 +457,9 @@ impl Kernel {
                         now,
                     )?;
                 }
-                // 副本记账（org-pull-sync.ts `recordPullSyncState`）
-                if let Some(peer_id) = extract_peer_id(&inviter) {
+                // 副本记账（org-pull-sync.ts `recordPullSyncState`；O1 账号口径：
+                // 邀请人 rootId 定键）
+                {
                     let versions = merged
                         .sync
                         .as_ref()
@@ -411,7 +467,10 @@ impl Kernel {
                         .unwrap_or_else(|| build_organization_sync_versions_default(&merged));
                     let state = sync_state_after_pull_synced(versions, now);
                     self.require_storage_mut()?.put(
-                        &org_sync_state_key(&peer_id, &merged.org_id),
+                        &crate::org::sync_state::org_sync_state_account_key(
+                            &payload.inviter.root_id,
+                            &merged.org_id,
+                        ),
                         &state.to_json(),
                     )?;
                 }

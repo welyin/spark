@@ -157,15 +157,16 @@ fn set_gateways_flow() {
     .unwrap();
     assert_eq!(view.record.gateways, vec![self_root.clone(), member_root.clone()]);
 
-    // 数量不足 / 非成员 / 非 admin 组织不存在等错误透传
-    assert_eq!(
-        set_gateways_inner(&mut kernel, &org_id, vec![self_root.clone()]).unwrap_err(),
-        "Gateways must be 2 to 3 member rootIds of the organization"
-    );
+    // O1：单个成员合法（显式收窄）；超 3 / 非成员 / 非 admin 组织不存在等错误透传
+    let narrowed = set_gateways_inner(&mut kernel, &org_id, vec![self_root.clone()]).unwrap();
+    assert_eq!(narrowed.record.gateways, vec![self_root.clone()]);
+    // 清除显式指定（空列表 = 回落缺省全员候选）
+    let cleared = set_gateways_inner(&mut kernel, &org_id, vec![]).unwrap();
+    assert!(cleared.record.gateways.is_empty());
     assert_eq!(
         set_gateways_inner(&mut kernel, &org_id, vec![self_root.clone(), "cd".repeat(32)])
             .unwrap_err(),
-        "Gateways must be 2 to 3 member rootIds of the organization"
+        "Gateways must be 1 to 3 member rootIds of the organization"
     );
     assert_eq!(
         set_gateways_inner(&mut kernel, "org_nope", vec![self_root.clone(), member_root.clone()])

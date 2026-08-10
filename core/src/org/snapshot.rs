@@ -27,7 +27,7 @@ use super::{OrgError, Result};
 /// extra 保留键，会把本机持有的私钥抹掉；其"不进快照"由
 /// [`extract_metadata`] 显式剔除 + 推送侧 `strip_org_root_secret` + 合并侧
 /// [`merge_organization_sync_snapshot`] 插入处跳过 三处共同保证（§15）。
-pub const ORGANIZATION_SYNC_RESERVED_KEYS: [&str; 13] = [
+pub const ORGANIZATION_SYNC_RESERVED_KEYS: [&str; 14] = [
     "orgId",
     "name",
     "description",
@@ -41,6 +41,8 @@ pub const ORGANIZATION_SYNC_RESERVED_KEYS: [&str; 13] = [
     "gateways",
     "orgAddress",
     "isPublic",
+    // O1 账号角色模型：数据账号显式指定列表（与 gateways 同口径传播/回退）
+    "dataAccounts",
 ];
 
 /// 快照中的成员条目（固定字段 + 身份字段；构建快照时成员对象的动态键被丢弃）。
@@ -156,6 +158,14 @@ pub struct OrganizationSyncSummary {
     /// 显式字段随快照传播；缺省 = 发送方未设置，接收方保留本地值）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gateways: Option<Vec<String>>,
+    /// 数据账号 rootId 列表（O1 账号角色模型保留键：与 gateways 同口径
+    /// 传播/回退；空 = 未指定 → 缺省全体管理员担责）。
+    #[serde(
+        rename = "dataAccounts",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub data_accounts: Option<Vec<String>>,
     /// 自认证组织地址（org.md §15 保留键：与 gateways 同口径传播/回退）。
     #[serde(
         rename = "orgAddress",
@@ -266,6 +276,11 @@ pub fn build_organization_sync_snapshot(
                 None
             } else {
                 Some(record.gateways.clone())
+            },
+            data_accounts: if record.data_accounts.is_empty() {
+                None
+            } else {
+                Some(record.data_accounts.clone())
             },
             org_address: record.org_address.clone(),
             is_public: record.is_public.then_some(true),
@@ -421,6 +436,13 @@ pub fn merge_organization_sync_snapshot(
             .gateways
             .clone()
             .or_else(|| existing.map(|e| e.gateways.clone()))
+            .unwrap_or_default(),
+        // dataAccounts（保留键，O1）：同 gateways 回退口径
+        data_accounts: snapshot
+            .summary
+            .data_accounts
+            .clone()
+            .or_else(|| existing.map(|e| e.data_accounts.clone()))
             .unwrap_or_default(),
         // orgAddress / isPublic（保留键，org.md §15/§16）：同 gateways 回退口径
         org_address: snapshot

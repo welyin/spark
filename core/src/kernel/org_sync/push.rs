@@ -50,9 +50,10 @@ impl OrgSyncContext {
         let versions = resolve_local_versions(&record);
         let target_peer_id = extract_peer_id(node_info);
 
-        // 推送前跳过判定（正确语义版，sync_state.rs 的"有意修复"）
-        if let Some(peer_id) = &target_peer_id {
-            let state = self.read_sync_state(peer_id, org_id);
+        // 推送前跳过判定（正确语义版，sync_state.rs 的"有意修复"；O1 账号
+        // 口径：rootId 定键，旧 peerId 键迁移读取）
+        {
+            let state = self.read_sync_state(target_root_id, org_id, target_peer_id.as_deref());
             if should_skip_share_push(state.as_ref(), &versions) {
                 return Ok(());
             }
@@ -86,13 +87,11 @@ impl OrgSyncContext {
             .await
             .unwrap_or(false)
         {
-            if let Some(peer_id) = &target_peer_id {
-                self.save_sync_state(
-                    peer_id,
-                    org_id,
-                    sync_state_after_share_delivered(versions, self.now()),
-                );
-            }
+            self.save_sync_state(
+                target_root_id,
+                org_id,
+                sync_state_after_share_delivered(versions, self.now()),
+            );
             return Ok(());
         }
 
@@ -107,13 +106,11 @@ impl OrgSyncContext {
                 .await
                 .map_err(|e| e.to_string())?;
             if self.wait_ack(&sync_id, ACK_WAIT_MS).await {
-                if let Some(peer_id) = &target_peer_id {
-                    self.save_sync_state(
-                        peer_id,
-                        org_id,
-                        sync_state_after_share_acked(versions, self.now()),
-                    );
-                }
+                self.save_sync_state(
+                    target_root_id,
+                    org_id,
+                    sync_state_after_share_acked(versions, self.now()),
+                );
                 return Ok(());
             }
             let _ = attempt;

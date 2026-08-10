@@ -383,6 +383,10 @@ impl OrganizationService {
         }
 
         record.members.remove(index);
+        // O1：角色列表随成员移除自动剔除（显式指定引用已退出成员无意义；
+        // roles 解析层本就有非成员过滤，这里是落库层的主动清理）
+        record.gateways.retain(|g| *g != normalized_root_id);
+        record.data_accounts.retain(|rid| *rid != normalized_root_id);
         record.updated_at = now_ms;
         let previous_last_synced_at = record.sync.as_ref().map(|s| s.last_synced_at).unwrap_or(0);
         let transaction = append_organization_transaction(
@@ -399,6 +403,114 @@ impl OrganizationService {
                     [("removedRole".to_string(), Value::from(member.role.as_str()))]
                         .into_iter()
                         .collect(),
+                ),
+            },
+        )?;
+        Self::rebuild_sync_after_mutation(
+            &mut record,
+            previous_last_synced_at,
+            transaction.created_at,
+        );
+        match node_id {
+            Some(node_id) => Self::save_record_pdsync(storage, &record, now_ms, node_id)?,
+            None => Self::save_record(storage, &record)?,
+        }
+        Ok(record)
+    }
+
+    /// `setMemberRole`（O1 账号角色模型）：晋升/降级成员角色。
+    ///
+    /// - 仅管理员可执行；降级最后一个管理员拒绝（MustKeepAdmin，与移除同口径）
+    /// - 幂等：角色无变化直接返回（不 bump 版本、不追加事务）
+    /// - **数据职责随角色自动进出**：缺省数据账号 = 全体管理员（
+    ///   [`crate::org::roles::data_account_set`]），晋升即担责、降级即退出；
+    ///   显式 `data_accounts` 指定不受本操作影响（指定权在管理员，独立维护）
+    pub fn set_member_role<S: StorageBackend>(
+        storage: &mut S,
+        org_id: &str,
+        member_root_id: &str,
+        role: OrganizationRole,
+        current_root_id: &str,
+        now_ms: i64,
+    ) -> Result<OrganizationRecord> {
+        Self::set_member_role_impl(storage, org_id, member_root_id, role, current_root_id, now_ms, None)
+    }
+
+    /// pdsync 感知的 [`Self::set_member_role`]。
+    pub fn set_member_role_pdsync<S: StorageBackend>(
+        storage: &mut S,
+        org_id: &str,
+        member_root_id: &str,
+        role: OrganizationRole,
+        current_root_id: &str,
+        now_ms: i64,
+        node_id: &str,
+    ) -> Result<OrganizationRecord> {
+        Self::set_member_role_impl(
+            storage,
+            org_id,
+            member_root_id,
+            role,
+            current_root_id,
+            now_ms,
+            Some(node_id),
+        )
+    }
+
+    fn set_member_role_impl<S: StorageBackend>(
+        storage: &mut S,
+        org_id: &str,
+        member_root_id: &str,
+        role: OrganizationRole,
+        current_root_id: &str,
+        now_ms: i64,
+        node_id: Option<&str>,
+    ) -> Result<OrganizationRecord> {
+        let mut record = Self::require_organization(storage, org_id)?;
+        Self::require_admin(&record, current_root_id)?;
+
+        let normalized_root_id = normalize_root_id(member_root_id)?;
+        let Some(index) = record
+            .members
+            .iter()
+            .position(|m| m.root_id == normalized_root_id)
+        else {
+            return Err(OrgError::MemberNotFound);
+        };
+        let old_role = record.members[index].role;
+        if old_role == role {
+            return Ok(record);
+        }
+        if old_role == OrganizationRole::Admin
+            && role == OrganizationRole::Member
+            && record.admin_count() <= 1
+        {
+            return Err(OrgError::MustKeepAdmin);
+        }
+
+        record.members[index].role = role;
+        record.updated_at = now_ms;
+        let previous_last_synced_at = record.sync.as_ref().map(|s| s.last_synced_at).unwrap_or(0);
+        let transaction = append_organization_transaction(
+            storage,
+            OrganizationTransactionRecord {
+                tx_id: String::new(),
+                org_id: org_id.to_string(),
+                type_: OrganizationTransactionType::MemberUpdate,
+                created_at: now_ms,
+                actor_root_id: current_root_id.to_string(),
+                target_root_id: Some(normalized_root_id.clone()),
+                summary: match role {
+                    OrganizationRole::Admin => format!("晋升 {normalized_root_id} 为管理员"),
+                    OrganizationRole::Member => format!("降级 {normalized_root_id} 为成员"),
+                },
+                payload: Some(
+                    [
+                        ("fromRole".to_string(), Value::from(old_role.as_str())),
+                        ("toRole".to_string(), Value::from(role.as_str())),
+                    ]
+                    .into_iter()
+                    .collect(),
                 ),
             },
         )?;
