@@ -38,6 +38,9 @@ pub(crate) const KIND_PROFILE_SYNC: &str = "profile-sync";
 /// 信封 kind：设备信息同步（自设备间交换设备清单记录，from==to==自己 rootId；
 /// body 为完整 DeviceRecord 线形）。
 pub(crate) const KIND_DEVICE_SYNC: &str = "device-sync";
+/// 信封 kind：设备加入/变更通知（自设备间，from==to==自己 rootId；body 携带
+/// {kind:"device_joined", deviceId, deviceName, ts}）。
+pub(crate) const KIND_DEVICE_NOTICE: &str = "system/device-notice";
 /// 信封 kind：通讯录快照同步（自设备间全量快照 LWW 收敛，from==to==自己
 /// rootId；body 为 contact/service/sync.rs 的快照线形：friends/requestsIn/
 /// requestsOut 记录级 LWW + tags/groups/blocked 整域版本 LWW）。

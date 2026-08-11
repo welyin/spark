@@ -72,6 +72,9 @@ export type P2pEventDto =
   | { kind: 'PluginDataChanged'; data: { pluginId: string; name: string; keys: string[] } }
   | { kind: 'ConversationsSynced'; data: { applied: number } }
   | { kind: 'DeviceUpdated'; data: DeviceDto }
+  // M1 新设备通知（m1-m2-implementation-plan §3.3）：kind 恒 'device_joined'，
+  // deviceId 为新设备 peerId，ts 为通知发出时间（ms）
+  | { kind: 'DeviceNoticeReceived'; data: { kind: string; deviceId: string; deviceName: string; ts: number } }
   | { kind: 'OrgInviteReceived'; data: OrgInviteRecordDto }
   | { kind: 'OrgInviteUpdated'; data: OrgInviteRecordDto }
   | { kind: 'Warning'; data: string }
@@ -129,6 +132,28 @@ export type P2pInfoDto = Awaited<ReturnType<ElectronAPI['p2p']['info']>>;
 
 /** 设备清单项（devices.list 返回，派生自 ElectronAPI；设备管理页数据源）。 */
 export type DeviceDto = Awaited<ReturnType<ElectronAPI['devices']['list']>>[number];
+
+/** 设备撤销结果（M2 `root_revoke_device`；内核编排完成后恒 success: true，失败走 reject）。 */
+export type DeviceRevokeResult = { success: boolean };
+
+/**
+ * 安全日志条目（security:log:{ts}:{kind}:{deviceId} 前缀 KV；`security_log_list`
+ * 内部调试命令返回）。形状对齐壳层 dto.rs SecurityLogEntryDto（camelCase 序列化）；
+ * deviceName/actor 仅 initiated 事件记录（🟠4），其余事件缺省。
+ */
+export interface SecurityLogEntryDto {
+  key: string;
+  kind: string;
+  deviceId: string;
+  deviceName?: string;
+  actor?: string;
+  ts: number;
+}
+
+/** `security-log-list` 出参（决策点 3：本期仅收敛点，无 UI）。 */
+export interface SecurityLogListResult {
+  items: SecurityLogEntryDto[];
+}
 
 export type DataUsageReportDto = {
   scannedAt: number;
@@ -810,7 +835,13 @@ export type ElectronAPI = {
     list: () => Promise<Array<{
       peerId: string; deviceName: string; os: string; osVersion: string; arch: string; macs: string[];
       appVersion: string; updatedAt: number; lastSeenAt: number; isSelf: boolean; online: boolean;
+      /** M2 撤销时间（ms）；未撤销为 null/缺省（老版本记录无此字段） */
+      revokedAt?: number | null;
     }>>;
+    /** M2 撤销设备：授权集移除 + 连接层黑名单断连（m1-m2-implementation-plan §4.3） */
+    revoke: (deviceId: string) => Promise<DeviceRevokeResult>;
+    /** 安全日志（内部调试命令，决策点 3 本期不做 UI）；limit 可选透传 */
+    securityLogList: (limit?: number) => Promise<SecurityLogListResult>;
   };
   sys: {
     exec: (program: string, args: string[], workdir?: string) => Promise<{ stdout: string; stderr: string; exitCode: number }>;

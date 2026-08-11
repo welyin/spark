@@ -236,10 +236,18 @@ fn pdsync_data_emits_events_for_contacts_devices_messages() {
         "联系人合并应发 ContactsSynced"
     );
 
-    // 设备记录 → DeviceUpdated（data 即 DeviceRecord JSON）
+    // 设备记录 → DeviceUpdated（data 即 DeviceRecord JSON；须为合法形状）。
     let device = PdsyncRecord {
         key: "device:peer-x".to_string(),
-        value: json!({"peerId": "peer-x", "nickname": "另一台设备"}),
+        value: json!({
+            "peerId": "peer-x",
+            "deviceName": "另一台设备",
+            "os": "Android",
+            "arch": "aarch64",
+            "macs": [],
+            "updatedAt": NOW,
+            "lastSeenAt": NOW
+        }),
         meta: remote_meta("peer-node-b", 1, NOW),
         dseq: None,
     };

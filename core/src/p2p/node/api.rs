@@ -89,6 +89,11 @@ pub(super) enum Command {
         peer_id: String,
         tx: oneshot::Sender<Result<bool>>,
     },
+    /// 强制断开指定 peerId 的现有连接（M2 设备撤销后即时断连）。
+    DisconnectPeer {
+        peer_id: String,
+        tx: oneshot::Sender<Result<()>>,
+    },
     /// 壳层检测到网络变化（WiFi↔蜂窝切换等）通知内核（peer-rediscovery §4.1.3）。
     /// 无结果回传——内核异步处理：启动 3–5s debounce，到期后若监听地址确已
     /// 变化则重发布 announce + DHT 记录、重建 relay 预约、主动重拨优先类目 peer。
@@ -328,6 +333,17 @@ impl P2pNode {
             .await
             .map_err(|_| P2pError::Protocol("challenge timeout".to_string()))?
             .map_err(|_| P2pError::NotStarted)?
+    }
+
+    /// 强制断开指定 peerId 的现有连接（M2 设备撤销后即时断连）。
+    /// 未连接时返回 Ok(())，不报错。
+    pub async fn disconnect_peer(&self, peer_id: &str) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.send_cmd(Command::DisconnectPeer {
+            peer_id: peer_id.to_string(),
+            tx,
+        })?;
+        rx.await.map_err(|_| P2pError::NotStarted)?
     }
 
     /// 手动触发一次 keepalive tick（测试用；周期 tick 由循环内 interval 驱动）。

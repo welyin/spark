@@ -428,3 +428,47 @@ impl From<LocalP2PNodeInfo> for P2pInfoDto {
 pub(crate) fn avatar_patch<S: AsRef<str>>(avatar: Option<S>) -> Option<Option<S>> {
     avatar.map(|value| (!value.as_ref().is_empty()).then_some(value))
 }
+
+// ------------------------------------------------------------------
+// 设备管理 / 撤销
+// ------------------------------------------------------------------
+
+/// `root-revoke-device` 入参（TS `root_revoke_device`）。
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RootRevokeDeviceArgs {
+    pub device_id: String,
+}
+
+/// `root-revoke-device` 出参。
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceRevokeResult {
+    pub success: bool,
+}
+
+/// 安全日志条目（`security:log:{ts}:{kind}:{deviceId}`）。
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecurityLogEntryDto {
+    pub key: String,
+    pub kind: String,
+    pub device_id: String,
+    pub device_name: Option<String>,
+    pub actor: Option<String>,
+    pub ts: i64,
+}
+
+/// `security-log-list` 入参。
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SecurityLogListArgs {
+    pub limit: Option<usize>,
+}
+
+/// `security-log-list` 出参。
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecurityLogListResult {
+    pub items: Vec<SecurityLogEntryDto>,
+}

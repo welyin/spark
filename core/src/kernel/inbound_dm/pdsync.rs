@@ -12,6 +12,7 @@ use super::{
 };
 use crate::kernel::message_ops::{conversation_view, message_view};
 use crate::contact::ContactService;
+use crate::device::{DeviceRecord, DeviceService};
 use crate::message::{MessageRecord, MessageService};
 use crate::p2p::P2pEvent;
 use crate::storage::StorageBackend;
@@ -188,6 +189,7 @@ pub(super) fn handle_pdsync_hello<S: StorageBackend>(
         auto_accept: None,
         self_profile: None,
         device_sync_reply: None,
+        device_notice_broadcast: false,
         profile_sync_reply: None,
         pdsync_out: out,
         orgsync_out: Vec::new(),
@@ -263,6 +265,7 @@ pub(super) fn handle_pdsync_need<S: StorageBackend>(
         auto_accept: None,
         self_profile: None,
         device_sync_reply: None,
+        device_notice_broadcast: false,
         profile_sync_reply: None,
         pdsync_out: out,
         orgsync_out: Vec::new(),
@@ -347,8 +350,8 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
             continue;
         }
         // 逐条 LWW 合入（pmeta 裁决；幂等）。value 是 JSON 值，落盘时转回
-        // 字符串。
-        let value_str = serde_json::to_string(&record.value)?;
+        // 字符串；device: 分支可能因撤销粘性合并改写此值。
+        let mut value_str = serde_json::to_string(&record.value)?;
 
         // `msg:conv`：远端胜出时用 merge_conv_meta 合并，保留本地消息驱动
         // 字段（unread/updated_at），只取同步字段（置顶/免打扰/草稿）。
@@ -414,6 +417,34 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
                 // 远端值解析失败：不推进 pmeta（本地保持落后，下轮同步重试）
             }
             continue;
+        }
+
+        // `device:`：设备记录撤销粘性合并（§5.4）。pdsync 远端快照可能携带
+        // 无 revokedAt 的旧设备记录；若本地已撤销，强制保留本地 revoked_at
+        // 后再走通用 LWW，避免撤销被「洗白」。不可解析的 device: 值整键
+        // 跳过、不推进 pmeta（与 msg:conv 分支一样通过 continue 实现，并非
+        // 通用路径既有惯例），避免非法远程值覆盖本地记录。
+        if record.key.starts_with(crate::device::DEVICE_PREFIX)
+            && !crate::sync::is_tombstone(&record.meta)
+        {
+            let peer_id = record
+                .key
+                .strip_prefix(crate::device::DEVICE_PREFIX)
+                .unwrap_or(&record.key)
+                .to_string();
+            let Some(mut remote) =
+                serde_json::from_value::<DeviceRecord>(record.value.clone()).ok()
+            else {
+                continue;
+            };
+            if let Ok(Some(local)) = DeviceService::get(storage, &peer_id) {
+                if local.revoked_at.is_some() && remote.revoked_at.is_none() {
+                    remote.revoked_at = local.revoked_at;
+                    if let Ok(new_value) = serde_json::to_string(&remote) {
+                        value_str = new_value;
+                    }
+                }
+            }
         }
 
         // `profile:self`：写 sled 后标记 profile_applied（host 负责回写身份
@@ -640,6 +671,7 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
         auto_accept: None,
         self_profile: None,
         device_sync_reply: None,
+        device_notice_broadcast: false,
         profile_sync_reply: None,
         pdsync_out: out,
         orgsync_out: Vec::new(),

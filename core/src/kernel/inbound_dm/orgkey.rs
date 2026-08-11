@@ -183,6 +183,7 @@ pub fn handle_orgkey_deliver<S: StorageBackend>(
         auto_accept: None,
         self_profile: None,
         device_sync_reply: None,
+        device_notice_broadcast: false,
         profile_sync_reply: None,
         pdsync_out: Vec::new(),
         orgsync_out: Vec::new(),

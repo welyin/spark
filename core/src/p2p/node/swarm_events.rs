@@ -69,10 +69,17 @@ impl<S: StorageBackend> EventLoop<S> {
                     "[p2p] ConnectionEstablished: peer={peer_id} remote_addr={} num_established={num_established} direction={direction}",
                     endpoint.get_remote_address()
                 );
+                let peer_id_str = peer_id.to_base58();
+                // M2 四拦截点①：已撤销 peer 建连即断，不写覆盖网/不发事件。
+                if self.host.is_revoked_peer(&peer_id_str) {
+                    eprintln!("[p2p] ConnectionEstablished from revoked peer {peer_id}, closing");
+                    let _ = self.swarm.disconnect_peer_id(peer_id);
+                    return;
+                }
                 let now = self.now();
                 {
                     let mut store = PeerActivityStore::new(&mut self.storage);
-                    let _ = store.mark_connected(&peer_id.to_base58(), now);
+                    let _ = store.mark_connected(&peer_id_str, now);
                 }
                 // 连接沉淀进覆盖网邻居池：仅出站（dialer）方向的远端地址入池——
                 // 它经我们成功拨号验证可达；入站（listener）方向的 remote 地址

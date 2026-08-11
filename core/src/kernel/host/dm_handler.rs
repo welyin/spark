@@ -270,6 +270,10 @@ impl DmHandler for KernelDmHandler {
         if let Some(target) = result.device_sync_reply {
             self.spawn_device_sync_reply(&root_id, target);
         }
+        // 自设备加入通知广播（M1：friend-accept 自身份分支触发）
+        if result.device_notice_broadcast {
+            self.spawn_device_notice_broadcast(&root_id);
+        }
         // pdsync 出站：把纯逻辑层构建好的 body 装配成完整信封回投连接层对端
         if !result.pdsync_out.is_empty() {
             let target = PeerNodeInfo {
@@ -302,6 +306,23 @@ impl DmHandler for KernelDmHandler {
 }
 
 impl KernelDmHandler {
+    /// M1 补发窗口内：若自设备 peer 首次连接且窗口未过期，广播本机
+    /// device_joined 通知。幂等键 `p2p:device:noticeSent:{peerId}` 防止重复发送。
+    pub(crate) fn maybe_spawn_device_notice_broadcast(
+        &self,
+        my_root_id: &str,
+        peer_id: &str,
+    ) {
+        let now_ms = crate::p2p::node::system_now_ms();
+        if !replies::device_notice_window_open(&self.storage, now_ms) {
+            return;
+        }
+        if replies::device_notice_sent(&self.storage, peer_id) {
+            return;
+        }
+        self.spawn_device_notice_broadcast(my_root_id);
+    }
+
     /// O4 §20.6：orgkey-deliver 解包落库。用本机 `org-access:{orgId}` 域身份
     /// 私钥（seed 派生 X25519）+ sender（owner）组织身份公钥 X25519 解
     /// crypto_box，得 32B epoch 密钥后写 orgkey 表。seed 缺失（锁定态）或

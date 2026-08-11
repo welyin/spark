@@ -6,20 +6,20 @@
 
 ## 应用壳 / 顶部导航（ui-space-navbar）
 
-- `src/stores/org-identity.ts:9` | 组织身份（昵称/头像/「使用个人身份」开关）存 localStorage | 待 `OrganizationMember.nickname/avatar` 字段与更新接口（设计 §9.4）
+- ✅ 已落地：`src/stores/org-identity.ts` | 组织身份（昵称/头像/「使用个人身份」开关） | 已改内核权威版：localStorage 仅启动种子，`refreshOrgIdentity` 以内核 `organization.listMine` 成员字段覆盖、`updateOrgIdentity` 真实调 `updateMyIdentity`（内核 `OrganizationMember.nickname/avatar/usePersonalIdentity` 已落地）
 - `src/App.vue`（rail 测试入口） | 测试页正式发版隐藏 | 通过构建配置/环境变量隐藏测试入口且不打包其路由（设计 §6.4），当前始终可见
 - 插件 SDK `sdk.space` | 当前 space 经桥握手 ctx.space（PluginContext）注入插件 | `sdk.space` 属性属 SDK 侧工作（设计 §11.4），未做
-- `src/components/GlobalSearch.vue` | 顶栏全局搜索（纯前端模糊匹配，分组：联系人/会话/应用/组织） | 数据源复用 mock/contacts、mock/messages、mock/apps + 真实 `organization.listMine`/`pluginMarket.list`，随各 mock 替换自动切换真实数据
+- ✅ 已落地：`src/components/GlobalSearch.vue` | 顶栏全局搜索（纯前端模糊匹配，分组：联系人/会话/应用/组织） | 数据源已复用现有 store/接口：联系人走 `org-membership` + `contactsOf`、会话走 `listConversations`、应用走真实 `pluginMarket.list()` + mock 追加、组织走 `organizations`
 
 ## 我的（个人中心）
 
 - `src/components/mine/ProfileModule.vue:234` | 地区「定位」按钮仅演示交互 | Geolocation 只能拿到经纬度，缺少逆地理编码服务无法解析地级市；定位成功/失败后仍需手动选择或输入城市，待接入逆地理编码后自动填充
-- `src/components/mine/ProfileModule.vue:103` | 「安全设置」分组为占位说明（修改登录密码、登录设备管理） | 待内核安全相关接口落地
-- `src/components/mine/ProfileModule.vue:113` | 「隐私设置」分组为占位说明（发现设置、黑名单、朋友权限） | 待真实隐私模型落地；设置页「当前空间」有同名 mock 开关组
+- ✅ 已落地：`src/components/mine/ProfileModule.vue:103`（安全设置） | 已迁出为独立 `SecurityModule.vue` 真实落地——修改密码走真实 `rootIdentity.changePassword`、自动锁定走 `auto-lock`
+- ✅ 已落地：`src/components/mine/ProfileModule.vue:113`（隐私设置） | 已迁出为独立 `PermissionModule.vue` 真实落地——朋友权限/通讯黑名单，黑名单已在消息层生效；ProfileModule 两个占位页已移除
 
 ## 设置页（ui-space-navbar §6）
 
-- `src/components/settings/SystemSettingsPanel.vue:83` | 关于页版本号硬编码 0.1.0 | 待接入构建注入的真实版本/构建信息
+- ✅ 已落地（部分）：`src/components/settings/SystemSettingsPanel.vue:83` | 关于页版本号 | 已接真实 updater：`refreshUpdater` 从 `updater.status().currentVersion` 覆盖，接入检查更新/重启安装；保留 `0.2.1` 硬编码值仅作兜底默认
 - `src/components/settings/SystemSettingsPanel.vue:150` | 系统设置「通用」开关组不生效 | 待主题/语言/字体持久化方案
 - `src/components/settings/SystemSettingsPanel.vue:157` | 系统设置「通知」开关组不生效 | 同上
 - `src/components/settings/SystemSettingsPanel.vue:164` | 系统设置「隐私」开关组不生效 | 同上
@@ -33,7 +33,8 @@
 > ✅ 已落地：内核 `message` 模块（sled 持久化）+ `/spark/dm/1.0.0` 直连协议 + `messages.*` 命令域。`src/mock/messages.ts` 已改为「内核真实数据 + 内存响应式缓存」接入层。
 
 - `src/components/messages/ChatHeader.vue` | 语音/视频通话按钮占位 | 待真实音视频通话能力
-- 未做条目 | 语音/图片/文件发送（按钮占位）、消息转发/多选、聊天记录搜索与导出、离线提示、桌面通知气泡 | 均依赖后续消息/通知能力
+- 未做条目 | 语音/图片/文件发送（按钮占位）、消息转发/多选、聊天记录搜索与导出、桌面通知气泡 | 均依赖后续消息/通知能力
+- ✅ 已落地：离线提示 | `ChatView.vue` 真实 P2P 状态「仅本地」提示条（"对方离线，消息将在其上线后自动送达"，isLocalOnly）
 
 （以下已落地，仅保留记录）
 - 系统会话 | 已落地：内置 system 应用会话（`app:system`），壳层经 `src/app-messages.ts` 写入；当前仅「插件安装/升级成功」一条通知源
@@ -46,18 +47,18 @@
 - `src/stores/pending-chat.ts` | 跨页「打开会话」请求 | 已通且数据真实
 - 离线投递 | 对端不可达即 failed（可手动重发），无离线队列 | 待后续专项
 - 消息加密 | 传输层依赖 libp2p Noise，未做应用层 E2E | 待协议规格与专项
-- 应用会话-清空 | 内核只有 appDeleteConversation，无逐条清空 | 如产品需要补内核 clear 接口
+- ✅ 已落地：应用会话-清空 | 内核已补 `message_clear`（`conv_ops.rs`）+ 壳层 `message-clear` 命令（`api/index.ts`、`command-map.ts`、`commands/message.rs`）；前端 `stores/messages.ts clearMessages` 已接。注意：`ChatHeader.vue` 对 app 会话仍不展示清空项，该处注释"应用消息内核无清空接口"已过时，待同步
 
 ## 通讯录（ui-contacts）
 
 > ✅ 已落地：内核 `contact` 模块（朋友/申请/标签/分组树/成员附加资料 sled 持久化）+ `contacts.*` 命令域；好友申请双向确认走 `/spark/dm/1.0.0` 直连。`src/mock/contacts.ts` 已改为「内核真实数据 + 内存响应式缓存」接入层。
 
-- `src/mock/contacts/types.ts:95` | 内核组织成员已携带真实身份字段（OrganizationMember 的） | 待补充
+- ✅ 已落地（内核部分）：`src/mock/contacts/types.ts:95` | 内核 `OrganizationMember` 已携带真实身份字段（nickname/avatar/signature/gender/region/usePersonalIdentity，`core/src/org/types/member.rs`）+ `update_my_identity` 接口已落地；**前端通讯录消费仍未切换**（`memberIdentityOf` 仍从 `MEMBER_NAME_POOL` 固定池取假数据，待前端排期）
 - `src/components/contacts/ContactPanel.vue:33` | 照片为色块占位 | 未接入真实上传/存储
 - `src/components/contacts/ContactPanel.vue:134` | 插件子开关未做 | §6.2 按插件细分的权限开关待插件数据共享落地
 
 （以下已落地，仅保留记录）
-- 多设备配对 | 每 rootId 一条联系人记录，至多一台设备 | 多设备需设备清单模型（协议 §19.4）
+- ✅ 已落地：多设备配对 | 设备清单模型已实现（`core/src/device/mod.rs`：`DeviceRecord` 每台设备一条、deviceUid 墓碑替换、`apply_remote`，见协议 §19.4）——不再受"每 rootId 至多一台设备"限制
 - 名片二维码 | 已落地：编码真实节点名片（RootID + peerId/监听地址），节点未连接降级只含 RootID
 - `src/stores/pending-contact.ts` | 跨页「打开联系人资料」 | 已通且数据真实
 - `src/components/contacts/open-intents.ts` | 消息页空状态→通讯录跳转 | 复用 `spark:open-contact` 事件
@@ -78,10 +79,10 @@
 - 仓库锚定安装-升级 | 已落地安装/解析/预览 | 升级探测只认内置目录，仓库锚定安装永不出现「可更新」；待排期
 - `src/mock/apps.ts:11` | 伪造 6 个市场应用（论坛/投票/日历/任务看板/朋友圈/文件） | 真实市场仅 spark-example；仅 mock 模式与 `pluginMarket.list()` 合并展示；待市场数据充足后删除
 - `src/mock/apps.ts:125` | mock 应用安装/启用状态存 localStorage | 待真实市场接口替换
-- `src/components/apps/apps-store.ts:39` | 市场细分分类前端映射 | 仅有 foundation/business 粗分类；待市场数据带分类字段
+- ✅ 已落地：`src/components/apps/apps-store.ts:39` | 市场细分分类前端映射 | `marketCategoryOf` 已扩展为完整分类（foundation→基础 / ai-assistant→AI助手 / social→社交 / tool→工具 / game→游戏，default→其他）
 - `src/components/apps/apps-store.ts:95` | 应用分组归属 localStorage | 待内核分组模型替换
 - `src/components/apps/apps-store.ts:156` | 组织空间启用状态 localStorage | 待内核接口
-- `src/components/apps/AppDetailPanel.vue:51` | 源码仓库与签名指纹缺失 | 市场数据无对应字段
+- ✅ 已落地（部分）：`src/components/apps/AppDetailPanel.vue:51` | 源码仓库已从 id（host/owner/repo）推导并展示（`sourceRepoUrl`）；签名展示签名地址（`signatureUrl` 非空判定），非指纹值 | 签名指纹值字段仍缺
 - `src/pages/AppsPage.vue:274` | 联系管理员 toast 占位 | 待打开与管理员 1:1 聊天
 - `src/stores/pending-app.ts` | 跨页「打开应用详情」请求 | 已通，条目来自真实 pluginMarket.list + mock 合并
 

@@ -123,6 +123,12 @@ pub trait P2pHost: Send {
     fn is_priority_peer(&mut self, _peer_id: &str) -> bool {
         false
     }
+
+    /// 判断 peer 是否已被本机撤销（M2 设备撤销四拦截点）。返回 true 时连接层
+    /// 立即断开/拒绝入站/拒绝出站。默认 false 表示宿主未启用撤销检查。
+    fn is_revoked_peer(&mut self, _peer_id: &str) -> bool {
+        false
+    }
 }
 
 /// 可在事件循环线程外执行的 dm 入站处理器（实现须 `Send + Sync`，

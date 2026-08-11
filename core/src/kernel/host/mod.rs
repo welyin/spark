@@ -24,6 +24,7 @@ use serde_json::Value;
 use crate::collection::{CollectionConfig, DocumentCollection};
 use crate::contact::ContactService;
 use crate::data_mgmt::watermark::StoragePurgeWatermark;
+use crate::device::DeviceService;
 use crate::evidence::get_evidence_head_hash;
 use crate::org::gateway::OrgMemberHint;
 use crate::org::recovery::RecoveryViewItem;
@@ -470,8 +471,15 @@ impl P2pHost for KernelHost {
             peer_id: (!peer.peer_id.is_empty()).then_some(peer.peer_id),
             addresses: peer.addresses,
         };
-        let to = friend.root_id;
-        let from = my_root_id;
+        let to = friend.root_id.clone();
+        let from = my_root_id.clone();
+
+        // M1 加入通知补发：自设备建连且在 24h 窗口内、未发送过，则广播
+        if to == my_root_id {
+            self.dm_handler_impl()
+                .maybe_spawn_device_notice_broadcast(&my_root_id, peer_id);
+        }
+
         tokio::spawn(async move {
             let mut body = serde_json::json!({ "nickname": nickname });
             if let Some(avatar) = avatar {
@@ -532,6 +540,15 @@ impl P2pHost for KernelHost {
                 eprintln!("[kernel] priority peer lookup failed for {peer_id}");
                 false
             })
+    }
+
+    /// peer 是否已被本机撤销：查 `DeviceService` 看是否存在 peer_id 对应的
+    /// 设备记录且 `revoked_at` 不为空。轻量 KV 级调用。
+    fn is_revoked_peer(&mut self, peer_id: &str) -> bool {
+        DeviceService::get(&self.storage, peer_id)
+            .ok()
+            .flatten()
+            .is_some_and(|r| r.revoked_at.is_some())
     }
 }
 

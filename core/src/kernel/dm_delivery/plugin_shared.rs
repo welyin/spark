@@ -6,10 +6,11 @@
 
 use serde_json::Value;
 
-use super::addressing::{heal_self_pointing_friend_record, self_device_peer_infos};
+use super::addressing::{heal_self_pointing_friend_record, list_self_device_peer_infos};
 use super::super::{KernelError, Result};
 use super::super::dm_envelope;
 use crate::contact::ContactService;
+use crate::device::DeviceService;
 use crate::p2p::PeerNodeInfo;
 use crate::p2p::node::system_now_ms;
 use crate::plugin::PluginHostShared;
@@ -109,29 +110,13 @@ impl PluginHostShared {
             );
         }
         let friends = ContactService::overview(&storage, "personal")?.friends;
-        let peers = self_device_peer_infos(
+        let devices = DeviceService::list(&storage).unwrap_or_default();
+        Ok(list_self_device_peer_infos(
             friends,
+            devices,
             my_root_id,
             local_peer_id.as_deref(),
-        );
-        // 回退：FriendRecord 内 peer 缺失时，直接从 DeviceService::list 取
-        // 配对设备 peerId 兜底（对齐 Kernel::self_device_peers 回退语义）
-        if !peers.is_empty() {
-            return Ok(peers);
-        }
-        if let Some(local) = local_peer_id.as_deref() {
-            if let Ok(devices) = crate::device::DeviceService::list(&storage) {
-                return Ok(devices
-                    .into_iter()
-                    .filter(|r| !r.peer_id.trim().is_empty() && r.peer_id != local)
-                    .map(|r| PeerNodeInfo {
-                        peer_id: Some(r.peer_id),
-                        addresses: Vec::new(),
-                    })
-                    .collect());
-            }
-        }
-        Ok(Vec::new())
+        ))
     }
 
     /// 见 [`Kernel::build_dm_envelope`]（签名私钥来源换为解锁期共享格；

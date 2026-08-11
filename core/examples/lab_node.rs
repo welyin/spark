@@ -176,6 +176,9 @@ fn event_json(event: &P2pEvent) -> Option<Value> {
         P2pEvent::PluginAnnounceVerified { id, verified, error } => {
             json!({"event": "plugin-announce-verified", "id": id, "verified": verified, "error": error})
         }
+        P2pEvent::DeviceNoticeReceived(data) => {
+            json!({"event": "device-notice-received", "data": data})
+        }
         // ready 行单独打印；keepalive tick 在本例程禁用
         P2pEvent::Started { .. } | P2pEvent::KeepaliveTick(_) => return None,
     };

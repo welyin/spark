@@ -514,6 +514,18 @@ impl<S: StorageBackend> EventLoop<S> {
             Command::DhtProvide { key, value, tx } => self.begin_dht_provide(key, value, tx),
             Command::DhtGetProviders { key, tx } => self.begin_dht_get_providers(key, tx),
             Command::ChallengePeer { peer_id, tx } => self.begin_challenge(&peer_id, tx),
+            Command::DisconnectPeer { peer_id, tx } => {
+                let result = match peer_id.parse::<PeerId>() {
+                    Ok(p) => {
+                        if self.swarm.is_connected(&p) {
+                            let _ = self.swarm.disconnect_peer_id(p);
+                        }
+                        Ok(())
+                    }
+                    Err(e) => Err(P2pError::Dial(format!("invalid peer id: {e}"))),
+                };
+                let _ = tx.send(result);
+            }
             Command::NetworkChanged => {
                 // 启动 debounce：记录当前地址作为对比基线，到期后检查是否变化
                 if self.pending_network_change.is_none() {
@@ -557,6 +569,15 @@ impl<S: StorageBackend> EventLoop<S> {
     // ------------------------------------------------------------------
 
     pub(super) fn begin_connect(&mut self, node_info: PeerNodeInfo, tx: oneshot::Sender<Result<()>>) {
+        // 出站抑制：目标 peer 已被撤销时直接失败，不进入拨号。
+        if let Some(peer_id) = extract_peer_id(&node_info) {
+            if self.host.is_revoked_peer(&peer_id) {
+                let _ = tx.send(Err(P2pError::Dial(format!(
+                    "peer {peer_id} is revoked"
+                ))));
+                return;
+            }
+        }
         // 惰性回收调用方已放弃的滞留项（connect_peer 10s 超时后 rx 被
         // drop；拨号无响应时无事件触发清理，vec 只在新 connect 时有界）
         self.pending_connects.retain(|p| !p.tx.is_closed());

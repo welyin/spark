@@ -132,8 +132,10 @@ export const COMMAND_MAP: Record<string, string> = {
   'plugin-background-sync': 'plugin_background_sync',
   'plugin-background-running': 'plugin_background_running',
   'plugin-host-query': 'plugin_host_query',
-  // 设备管理（多设备清单：本机采集 + 自设备 device-sync 同步）
+  // 设备管理（多设备清单：本机采集 + 自设备 device-sync 同步；M2 撤销；安全日志调试）
   'devices-list': 'devices_list',
+  'root-revoke-device': 'root_revoke_device',
+  'security-log-list': 'security_log_list',
   // 系统桥接（未读角标 → dock/任务栏徽标）
   'system-set-badge': 'system_set_badge',
   // HTTP 代理设置（updater/市场链路 GitHub 直连失败的规避，见 src-tauri proxy.rs）
@@ -247,6 +249,9 @@ export const ARG_NAMES: Record<string, string[]> = {
   'plugin-market-import-local': ['path', 'expectedSha256', 'confirmOverwrite'],
   'plugin-market-announce-publish': ['input'],
   'plugin-market-announce-get': ['id'],
+  'root-revoke-device': ['deviceId'],
+  // limit 可选：未传时序列化缺省，壳层 SecurityLogListArgs 走 serde default
+  'security-log-list': ['limit'],
   'system-set-badge': ['count'],
   'system-set-proxy': ['proxy'],
   'sys-exec': ['program', 'args', 'workdir'],

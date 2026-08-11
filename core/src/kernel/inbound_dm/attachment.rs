@@ -24,6 +24,7 @@ fn with_out(out: Vec<PdsyncOut>) -> Result<InboundDmResult> {
         auto_accept: None,
         self_profile: None,
         device_sync_reply: None,
+        device_notice_broadcast: false,
         profile_sync_reply: None,
         pdsync_out: out,
         orgsync_out: Vec::new(),

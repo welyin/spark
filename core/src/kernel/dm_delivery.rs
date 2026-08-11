@@ -27,7 +27,10 @@ mod plugin_shared;
 mod profile_sync;
 mod spawn;
 
-pub(crate) use addressing::heal_self_pointing_friend_record;
+pub(crate) use addressing::{
+    heal_self_friend_to_healthy_device, heal_self_pointing_friend_record,
+    list_self_device_peer_infos,
+};
 
 /// 退避重试节奏（[`Kernel::spawn_deliveries_with_retry`]）：首次失败后 +2s、+5s。
 pub(crate) const DM_RETRY_DELAYS: [std::time::Duration; 2] = [

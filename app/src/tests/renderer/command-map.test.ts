@@ -76,4 +76,9 @@ describe('command-map 完备性', () => {
       ).toBe(argc);
     }
   });
+
+  it('security-log-list 命令映射存在且 ARG_NAMES 恰为 [limit]（M2 §6.12 limit 透传）', () => {
+    expect(COMMAND_MAP['security-log-list']).toBe('security_log_list');
+    expect(ARG_NAMES['security-log-list']).toEqual(['limit']);
+  });
 });

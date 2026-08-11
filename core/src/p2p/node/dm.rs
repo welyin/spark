@@ -42,6 +42,15 @@ impl<S: StorageBackend> EventLoop<S> {
         payload: Value,
         tx: oneshot::Sender<Result<Option<Value>>>,
     ) {
+        // 出站抑制：目标 peer 已被撤销时直接失败，不进入拨号/请求。
+        if let Some(peer_id) = extract_peer_id(&node_info) {
+            if self.host.is_revoked_peer(&peer_id) {
+                let _ = tx.send(Err(crate::p2p::P2pError::Dial(format!(
+                    "peer {peer_id} is revoked"
+                ))));
+                return;
+            }
+        }
         // 惰性回收调用方已放弃的滞留 attempt（同 begin_connect 口径）
         self.pending_org_attempts.retain(|a| !a.tx.is_closed());
         // 已连接短路在拨号目标构建之前：已连接的 peer 空地址也能直发
@@ -116,6 +125,16 @@ impl<S: StorageBackend> EventLoop<S> {
         request: String,
         channel: request_response::ResponseChannel<String>,
     ) {
+        let peer_id_str = peer.to_base58();
+        if self.host.is_revoked_peer(&peer_id_str) {
+            let response = direct::build_dm_error_response("revoked");
+            let _ = self
+                .swarm
+                .behaviour_mut()
+                .dm_rr
+                .send_response(channel, response);
+            return;
+        }
         let now = self.now();
         let Some(payload) = direct::parse_dm_request(&request) else {
             if request.len() < 500 {

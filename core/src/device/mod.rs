@@ -72,6 +72,10 @@ pub struct DeviceRecord {
     pub updated_at: i64,
     /// 最近一次收到该设备 device-sync 的时间（ms；本机记录恒等于 updated_at）。
     pub last_seen_at: i64,
+    /// 撤销时间戳（ms）。`None` 表示正常设备；被撤销后保留该字段以阻止
+    /// 同步/寻址再次将其「洗白」。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revoked_at: Option<i64>,
 }
 
 /// 本机设备信息采集结果（未落库前的瞬态）。
@@ -345,6 +349,21 @@ impl DeviceService {
         Ok(Some(serde_json::from_str(&raw)?))
     }
 
+    /// 按 deviceUid 查找设备记录（用于撤销通知命中）。
+    pub fn get_by_device_uid<S: StorageBackend>(
+        storage: &S,
+        device_uid: &str,
+    ) -> crate::contact::Result<Option<DeviceRecord>> {
+        for (_key, value) in storage.scan(&ScanOptions::prefix(DEVICE_PREFIX))? {
+            if let Ok(record) = serde_json::from_str::<DeviceRecord>(&value) {
+                if record.device_uid.as_deref() == Some(device_uid) {
+                    return Ok(Some(record));
+                }
+            }
+        }
+        Ok(None)
+    }
+
     /// 全部设备记录（含本机），按 last_seen_at 降序。
     pub fn list<S: StorageBackend>(storage: &S) -> crate::contact::Result<Vec<DeviceRecord>> {
         let mut out = Vec::new();
@@ -355,6 +374,49 @@ impl DeviceService {
         }
         out.sort_by_key(|r| std::cmp::Reverse(r.last_seen_at));
         Ok(out)
+    }
+
+    /// 追加本地安全日志（`security:log:{ts}:{kind}:{deviceId}`）。append-only，不进 pdsync。
+    pub fn append_security_log<S: StorageBackend>(
+        storage: &mut S,
+        kind: &str,
+        fields: serde_json::Value,
+        ts: i64,
+    ) -> crate::contact::Result<()> {
+        let device_id = fields
+            .get("deviceId")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let key = if device_id.is_empty() {
+            format!("security:log:{ts}:{kind}")
+        } else {
+            format!("security:log:{ts}:{kind}:{device_id}")
+        };
+        let mut value = fields;
+        value["kind"] = serde_json::json!(kind);
+        value["ts"] = serde_json::json!(ts);
+        let raw = value.to_string();
+        eprintln!("[security-log] {key} = {raw}");
+        storage.put(&key, &raw)?;
+        Ok(())
+    }
+
+    /// 将指定设备标记为撤销。幂等：已撤销返回既有的 revoked_at。
+    pub fn mark_revoked<S: StorageBackend>(
+        storage: &mut S,
+        device_uid: &str,
+        revoked_at: i64,
+        now_ms: i64,
+        node_id: &str,
+    ) -> crate::contact::Result<Option<DeviceRecord>> {
+        let Some(mut record) = Self::get_by_device_uid(storage, device_uid)? else {
+            return Ok(None);
+        };
+        if record.revoked_at.is_none() {
+            record.revoked_at = Some(revoked_at);
+            Self::upsert_pdsync(storage, &record, now_ms, node_id)?;
+        }
+        Ok(Some(record))
     }
 
     /// 登记/刷新本机设备记录：采集系统信息，按 peerId 落库（updated_at 恒刷
@@ -375,6 +437,9 @@ impl DeviceService {
         let info = collect_local_device_info();
         let device_uid = get_or_create_device_uid(storage)?;
         Self::tombstone_same_device_peers(storage, Some(&device_uid), peer_id, now_ms, node_id)?;
+        // 撤销粘性：本地已有本机记录时，保留 revoked_at，防止同步/重采集把
+        // 已撤销设备「洗白」。
+        let revoked_at = Self::get(storage, peer_id)?.and_then(|r| r.revoked_at);
         // 已存在且系统信息未变：只刷 last_seen/updated（保持单调）
         let record = DeviceRecord {
             peer_id: peer_id.to_string(),
@@ -387,6 +452,7 @@ impl DeviceService {
             app_version: app_version.to_string(),
             updated_at: now_ms,
             last_seen_at: now_ms,
+            revoked_at,
         };
         Self::upsert_pdsync(storage, &record, now_ms, node_id)?;
         Ok(record)
@@ -436,9 +502,16 @@ impl DeviceService {
             node_id,
         )?;
         let existing = Self::get(storage, &record.peer_id)?;
+        // 撤销粘性：本地已撤销则保留 revoked_at，不允许远端同步洗白。
+        if existing.as_ref().is_some_and(|e| e.revoked_at.is_some()) && record.revoked_at.is_none() {
+            record.revoked_at = existing.as_ref().and_then(|e| e.revoked_at);
+        }
         let changed = existing
             .as_ref()
-            .map(|e| record.updated_at > e.updated_at)
+            .map(|e| {
+                record.updated_at > e.updated_at
+                    || record.revoked_at != e.revoked_at
+            })
             .unwrap_or(true);
         let base_updated = if changed {
             record.updated_at
@@ -528,6 +601,7 @@ mod tests {
             app_version: String::new(),
             updated_at: 100,
             last_seen_at: 100,
+            revoked_at: None,
         };
         DeviceService::upsert_pdsync(&mut storage, &old, 100, "node-a").unwrap();
 
@@ -558,6 +632,7 @@ mod tests {
             app_version: String::new(),
             updated_at: 100,
             last_seen_at: 100,
+            revoked_at: None,
         };
         DeviceService::upsert_pdsync(&mut storage, &legacy, 100, "node-a").unwrap();
 
@@ -587,6 +662,7 @@ mod tests {
             app_version: String::new(),
             updated_at: 100,
             last_seen_at: 100,
+            revoked_at: None,
         };
         let (applied, changed) = DeviceService::apply_remote(&mut storage, older.clone(), 100, "local-node").unwrap();
         assert!(changed);
@@ -614,7 +690,7 @@ mod tests {
         assert_eq!(applied.device_name, "新名字");
     }
 
-    /// 旧版本记录 JSON（无 app_version/os_version 字段）可反序列化，缺省为空串。
+    /// 旧版本记录 JSON（无 app_version/os_version/revokedAt 字段）可反序列化，缺省为空串/None。
     #[test]
     fn legacy_record_json_without_new_fields_deserializes() {
         let legacy_json = r#"{"peerId":"peer-legacy","deviceName":"旧设备","os":"Android","arch":"aarch64","macs":[],"updatedAt":100,"lastSeenAt":100}"#;
@@ -622,6 +698,7 @@ mod tests {
         assert_eq!(record.app_version, "");
         assert_eq!(record.os_version, "");
         assert_eq!(record.device_name, "旧设备");
+        assert_eq!(record.revoked_at, None);
     }
 
     /// `cmd /c ver` 输出跨语言环境（Version/版本）都能提取主.次.构建。

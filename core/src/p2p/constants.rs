@@ -193,6 +193,13 @@ pub const REDISCOVERY_BACKOFF_MAX_MS: i64 = 10 * 60_000;
 /// 优先类目 peer 集合的 sled 存储键前缀。
 pub const P2P_PRIORITY_PEER_PREFIX: &str = "p2p:priority:peer:";
 
+/// 设备加入通知补发窗口截止时间存储键（M1：friend-accept 自身份分支触发）。
+pub const P2P_DEVICE_NOTICE_SELF_UNTIL: &str = "p2p:device:noticeSelfUntil";
+/// 设备加入通知已发送给某 peer 的幂等键前缀（后接 peerId）。
+pub const P2P_DEVICE_NOTICE_SENT_PREFIX: &str = "p2p:device:noticeSent:";
+/// 补发窗口时长：24 小时。
+pub const DEVICE_NOTICE_REPLAY_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
+
 /// peer-activity 清除阈值：连续失败次数。
 pub const PEER_ACTIVITY_FAILURE_PURGE_THRESHOLD: u32 = 10;
 

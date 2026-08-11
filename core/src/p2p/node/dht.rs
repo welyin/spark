@@ -331,6 +331,11 @@ impl<S: StorageBackend> EventLoop<S> {
         request: String,
         channel: request_response::ResponseChannel<String>,
     ) {
+        let peer_id = peer.to_base58();
+        // 已撤销 peer 的入站挑战静默忽略，不暴露自身在线/签名。
+        if self.host.is_revoked_peer(&peer_id) {
+            return;
+        }
         let now = self.now();
         // 形状非法/限流：静默不回包，请求方按超时收场（对齐 announce 静默丢弃口径）
         let Some(parsed) = challenge::parse_challenge_request(&request) else {
@@ -338,7 +343,7 @@ impl<S: StorageBackend> EventLoop<S> {
         };
         if self
             .challenge_limiter
-            .is_rate_limited(&peer.to_base58(), now)
+            .is_rate_limited(&peer_id, now)
         {
             return;
         }

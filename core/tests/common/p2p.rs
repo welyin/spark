@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 use spark_core::org::recovery::RecoveryViewItem;
-use spark_core::p2p::overlay_store::{OverlayPeerSource, OverlayPeerStore};
+use spark_core::p2p::overlay_store::{OverlayPeerRecord, OverlayPeerSource, OverlayPeerStore};
 use spark_core::p2p::peer_targets::PeerNodeInfo;
 use spark_core::p2p::{
     OrgShareAck, P2pConfig, P2pEvent, P2pHost, P2pNode, announce_to_json, sign_node_announce,
@@ -58,6 +58,9 @@ pub struct HostState {
     pub org_member_hints: Vec<spark_core::org::OrgMemberHint>,
     /// dm 直连接收记录（handle_dm 回调：(payload, remote_peer_id)）。
     pub dms: Vec<(Value, String)>,
+    /// 运行期可切换的「视为已撤销」peer：建连后再标记可触及 dm/challenge
+    /// 入站黑名单分支（ConnectionEstablished 守卫断开前的纵深防御）。
+    pub revoked_peer: Option<String>,
 }
 
 pub struct TestHost {
@@ -67,6 +70,8 @@ pub struct TestHost {
     accept_shares: bool,
     /// 邻居池/活跃度回填（on_org_member_hints 的宿主口径与 KernelHost 一致）。
     storage: SharedStorage,
+    /// 撤销 peer 集合：命中即被连接层黑名单拦截（测试连接层四拦截点）。
+    revoked_peers: std::collections::HashSet<String>,
 }
 
 impl TestHost {
@@ -78,6 +83,26 @@ impl TestHost {
                 state: state.clone(),
                 accept_shares: true,
                 storage,
+                revoked_peers: std::collections::HashSet::new(),
+            },
+            state,
+        )
+    }
+
+    /// 构造一个把指定 peer 视为已撤销的测试宿主（连接层黑名单拦截用）。
+    pub fn new_with_revoked(
+        root_id: Option<&str>,
+        storage: SharedStorage,
+        revoked: &[&str],
+    ) -> (Self, Arc<Mutex<HostState>>) {
+        let state = Arc::new(Mutex::new(HostState::default()));
+        (
+            Self {
+                root_id: root_id.map(ToString::to_string),
+                state: state.clone(),
+                accept_shares: true,
+                storage,
+                revoked_peers: revoked.iter().map(|s| s.to_string()).collect(),
             },
             state,
         )
@@ -87,6 +112,11 @@ impl TestHost {
 impl P2pHost for TestHost {
     fn current_root_id(&mut self) -> Option<String> {
         self.root_id.clone()
+    }
+
+    fn is_revoked_peer(&mut self, peer_id: &str) -> bool {
+        self.revoked_peers.contains(peer_id)
+            || self.state.lock().unwrap().revoked_peer.as_deref() == Some(peer_id)
     }
 
     fn apply_remote_update(
@@ -230,6 +260,20 @@ pub async fn start_node(
     (node, state, storage)
 }
 
+/// 启动一个把指定 peer 视为已撤销的节点（测试连接层黑名单拦截）。
+pub async fn start_node_with_revoked(
+    now_ms: i64,
+    root_id: Option<&str>,
+    revoked: &[&str],
+) -> (P2pNode, Arc<Mutex<HostState>>, SharedStorage) {
+    let storage = SharedStorage::new();
+    let (host, state) = TestHost::new_with_revoked(root_id, storage.clone(), revoked);
+    let node = P2pNode::start(test_config(now_ms), storage.clone(), Box::new(host))
+        .await
+        .expect("node starts");
+    (node, state, storage)
+}
+
 pub async fn wait_for(
     node: &mut P2pNode,
     timeout: Duration,
@@ -247,6 +291,36 @@ pub async fn wait_for(
             return event;
         }
     }
+}
+
+/// 带超时的事件等待：在 timeout 内命中 pred 返回 true，否则 false（不 panic）。
+pub async fn wait_for_timeout(
+    node: &mut P2pNode,
+    timeout: Duration,
+    mut pred: impl FnMut(&P2pEvent) -> bool,
+) -> bool {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return false;
+        }
+        match tokio::time::timeout(remaining, node.next_event()).await {
+            Ok(Some(event)) => {
+                if pred(&event) {
+                    return true;
+                }
+            }
+            _ => return false,
+        }
+    }
+}
+
+/// 从共享存储读取 overlay 邻居池（测试检查节点落库）。
+pub fn overlay_peers(storage: &SharedStorage) -> Vec<OverlayPeerRecord> {
+    let mut guard = storage.0.lock().unwrap();
+    let mut store = OverlayPeerStore::new(&mut *guard);
+    store.list_all().expect("list overlay")
 }
 
 pub async fn started_addresses(node: &mut P2pNode) -> Vec<String> {

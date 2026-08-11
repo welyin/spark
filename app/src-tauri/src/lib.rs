@@ -357,6 +357,8 @@ pub fn run() {
             commands::sys::sys_fetch_stream,
             // 设备管理（多设备清单：本机采集 + 自设备 device-sync 同步）
             commands::device::devices_list,
+            commands::device::root_revoke_device,
+            commands::device::security_log_list,
             // 主程序自动更新（GitHub Releases 清单；检查/下载/安装重启）。仅桌面启用。
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             commands::updater::updater_status,

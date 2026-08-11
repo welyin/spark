@@ -63,7 +63,11 @@
                 @click="onSelectModule(item.key)"
               >
                 <el-icon class="mine-list-item-icon" :size="17" :style="{ color: item.color }"><component :is="item.icon" /></el-icon>
-                <b class="settings-module-label">{{ item.label }}</b>
+                <!-- M1 新设备通知红点：设备管理项有待看通知时挂小红点（进设备管理页即清） -->
+                <el-badge v-if="item.key === 'devices' && pendingDeviceNotices.length" is-dot>
+                  <b class="settings-module-label">{{ item.label }}</b>
+                </el-badge>
+                <b v-else class="settings-module-label">{{ item.label }}</b>
               </button>
             </div>
           </div>
@@ -155,7 +159,11 @@
               @click="onSelectModule(item.key)"
             >
               <el-icon class="mine-list-item-icon" :size="17" :style="{ color: item.color }"><component :is="item.icon" /></el-icon>
-              <b class="settings-module-label">{{ item.label }}</b>
+              <!-- M1 新设备通知红点：设备管理项有待看通知时挂小红点（进设备管理页即清） -->
+              <el-badge v-if="item.key === 'devices' && pendingDeviceNotices.length" is-dot>
+                <b class="settings-module-label">{{ item.label }}</b>
+              </el-badge>
+              <b v-else class="settings-module-label">{{ item.label }}</b>
             </button>
           </div>
         </div>
@@ -212,6 +220,7 @@ import { nameOf, refreshOrganizations } from '../stores/org-membership';
 import { isMobileLayout } from '../stores/ui-layout';
 import { canBack, currentPage, popPage, pushPage, resetStack } from '../stores/mobile-nav';
 import { consumePendingSystemSection, type SystemSectionKey } from '../stores/pending-system-section';
+import { pendingDeviceNotices } from '../stores/device-notices';
 import type { RootStatusDto as RootStatus } from '../api';
 import { currentUser } from '../stores/current-user';
 import { personalAvatarSource } from '../stores/avatar-sources';
@@ -397,6 +406,7 @@ export default defineComponent({
       activeMenu,
       activeModule,
       personalModules,
+      pendingDeviceNotices,
       menuItems,
       isPersonal,
       currentOrgName,

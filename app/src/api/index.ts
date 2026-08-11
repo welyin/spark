@@ -474,7 +474,11 @@ export function createTauriApi(): ElectronAPI {
     },
     devices: {
       // 设备清单（多设备同步）：本机采集 + 自设备 device-sync 同步的全量记录
-      list: () => call('devices-list')
+      list: () => call('devices-list'),
+      // M2 撤销设备：授权集移除 + 断连黑名单（内核编排，DeviceUpdated 事件携带 revokedAt 刷新列表）
+      revoke: (deviceId) => call('root-revoke-device', deviceId),
+      // 安全日志（内部调试命令，决策点 3：本期仅收敛点不做 UI）；limit 可选透传
+      securityLogList: (limit?: number) => call('security-log-list', limit)
     },
     system: {
       // 未读角标 → 系统徽标（F4）：macOS dock 角标 / Linux 任务栏计数，

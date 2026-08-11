@@ -35,7 +35,11 @@
               @click="onSelectMenu(item.key)"
             >
               <el-icon class="mine-menu-icon" :size="17" :style="{ color: item.color }"><component :is="item.icon" /></el-icon>
-              <span class="mine-menu-label">{{ item.label }}</span>
+              <!-- M1 新设备通知红点：设备管理项有待看通知时挂小红点（进设备管理页即清） -->
+              <el-badge v-if="item.key === 'devices' && pendingDeviceNotices.length" is-dot>
+                <span class="mine-menu-label">{{ item.label }}</span>
+              </el-badge>
+              <span v-else class="mine-menu-label">{{ item.label }}</span>
             </button>
           </nav>
         </div>
@@ -88,7 +92,11 @@
               @click="onSelectMenu(item.key)"
             >
               <el-icon class="mine-menu-icon" :size="17" :style="{ color: item.color }"><component :is="item.icon" /></el-icon>
-              <span class="mine-menu-label">{{ item.label }}</span>
+              <!-- M1 新设备通知红点：设备管理项有待看通知时挂小红点（进设备管理页即清） -->
+              <el-badge v-if="item.key === 'devices' && pendingDeviceNotices.length" is-dot>
+                <span class="mine-menu-label">{{ item.label }}</span>
+              </el-badge>
+              <span v-else class="mine-menu-label">{{ item.label }}</span>
             </button>
           </nav>
         </div>
@@ -119,6 +127,7 @@ import { ElMessage } from 'element-plus';
 import { Key, Lock, Monitor, OfficeBuilding, Postcard, User } from '@element-plus/icons-vue';
 import { currentSpace, currentSpaceOrgId } from '../stores/current-space';
 import { currentUser } from '../stores/current-user';
+import { pendingDeviceNotices } from '../stores/device-notices';
 import { getOrgIdentity } from '../stores/org-identity';
 import { isMobileLayout } from '../stores/ui-layout';
 import { currentPage, popPage, pushPage, resetStack } from '../stores/mobile-nav';
@@ -264,6 +273,7 @@ export default defineComponent({
       currentUser,
       activeMenu,
       menuItems,
+      pendingDeviceNotices,
       currentSpace,
       headerSource,
       headerSubtitle,

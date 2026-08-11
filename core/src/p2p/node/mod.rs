@@ -218,6 +218,9 @@ pub enum P2pEvent {
     /// 设备清单记录更新（device-sync 入站落库或本机采集刷新后发出；data 为
     /// `DeviceRecord` JSON，前端设备管理页按 peerId upsert）。
     DeviceUpdated(serde_json::Value),
+    /// 自设备设备加入/变更通知入站生效（from==to==自己；data 为
+    /// `{"kind","deviceId","deviceName","ts"}`）。
+    DeviceNoticeReceived(serde_json::Value),
     /// 通讯录被自设备快照更新（contact-sync 入站合入后发出；data 为
     /// `{"applied": n}`，前端整页刷新个人空间通讯录）。
     ContactsSynced(serde_json::Value),

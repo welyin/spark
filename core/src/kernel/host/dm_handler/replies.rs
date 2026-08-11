@@ -10,10 +10,14 @@ use crate::p2p::node::system_now_ms;
 use crate::p2p::peer_targets::PeerNodeInfo;
 
 use super::KernelDmHandler;
+use crate::kernel::dm_delivery::list_self_device_peer_infos;
 use crate::kernel::dm_envelope::{
-    self, KIND_CONTACT_SYNC, KIND_CONV_SYNC, KIND_FRIEND_ACCEPT, KIND_PROFILE_SYNC,
+    self, KIND_CONTACT_SYNC, KIND_CONV_SYNC, KIND_DEVICE_NOTICE, KIND_FRIEND_ACCEPT,
+    KIND_PROFILE_SYNC,
 };
 use crate::kernel::inbound_dm::AutoAccept;
+use crate::p2p::constants::P2P_DEVICE_NOTICE_SENT_PREFIX;
+use crate::storage::StorageBackend;
 
 /// pdsync 发送侧 rate-limited 重试节奏：间隔 1.2s（略大于应答侧 1s 限流窗口
 /// [`crate::p2p::constants::DM_MIN_INTERVAL_MS`]），至多重试 2 次。
@@ -257,6 +261,76 @@ impl KernelDmHandler {
         });
     }
 
+    /// 设备加入通知广播（M1）：向全部已配对自设备广播本机 `device_joined`
+    /// 通知。body 形状：`{kind:"device_joined", deviceId, deviceName, ts}`。
+    /// 排除本机与已 `noticeSent` 者；成功后写幂等标记。
+    pub(super) fn spawn_device_notice_broadcast(&self, my_root_id: &str) {
+        let node = self
+            .node_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let signing_key = self
+            .signing_key_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let (Some(node), Some(signing_key)) = (node, signing_key) else {
+            return;
+        };
+        let mut storage = self.storage.clone();
+        let from = my_root_id.to_string();
+        let to = my_root_id.to_string();
+        tokio::spawn(async move {
+            let Ok(info) = node.local_node_info().await else {
+                return;
+            };
+            let Some(local_peer_id) = info.peer_id else {
+                return;
+            };
+            let device_name = crate::device::DeviceService::get(&storage, &local_peer_id)
+                .ok()
+                .flatten()
+                .map(|r| r.device_name)
+                .unwrap_or_else(|| crate::device::collect_local_device_info().device_name);
+            let body = serde_json::json!({
+                "kind": "device_joined",
+                "deviceId": local_peer_id.clone(),
+                "deviceName": device_name,
+                "ts": system_now_ms(),
+            });
+            let friends = crate::contact::ContactService::overview(&storage, "personal")
+                .ok()
+                .map(|v| v.friends)
+                .unwrap_or_default();
+            let devices = crate::device::DeviceService::list(&storage).unwrap_or_default();
+            let targets = list_self_device_peer_infos(friends, devices, &to, Some(&local_peer_id));
+            for target in targets {
+                let Some(target_peer_id) = target.peer_id.as_deref() else {
+                    continue;
+                };
+                if target_peer_id == local_peer_id {
+                    continue;
+                }
+                let sent_key = format!("{P2P_DEVICE_NOTICE_SENT_PREFIX}{target_peer_id}");
+                if storage.get(&sent_key).ok().flatten().is_some() {
+                    continue;
+                }
+                let envelope = dm_envelope::build_envelope(
+                    KIND_DEVICE_NOTICE,
+                    &from,
+                    &to,
+                    system_now_ms(),
+                    body.clone(),
+                    &signing_key,
+                );
+                if node.dm_direct(&target, envelope).await.is_ok() {
+                    let _ = storage.put(&sent_key, "1");
+                }
+            }
+        });
+    }
+
     /// pdsync 出站投递：把纯逻辑层构建好的 hello/need/data body 装配成完整
     /// pdsync-* 信封，逐个 `dm_direct` 回投连接层对端（spawn 模式同
     /// `spawn_device_sync_reply`，失败静默）。
@@ -497,6 +571,26 @@ async fn send_pdsync_outputs(
             .await;
         }
     }
+}
+
+/// 检查 device_joined 通知补发窗口是否仍然有效。
+pub(super) fn device_notice_window_open(storage: &crate::storage::SledStorage, now_ms: i64) -> bool {
+    use crate::p2p::constants::P2P_DEVICE_NOTICE_SELF_UNTIL;
+    storage
+        .get(P2P_DEVICE_NOTICE_SELF_UNTIL)
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<i64>().ok())
+        .is_some_and(|until| now_ms <= until)
+}
+
+/// 检查是否已向指定 peer 发送过 device_joined 通知（幂等键）。
+pub(super) fn device_notice_sent(storage: &crate::storage::SledStorage, peer_id: &str) -> bool {
+    storage
+        .get(&format!("{P2P_DEVICE_NOTICE_SENT_PREFIX}{peer_id}"))
+        .ok()
+        .flatten()
+        .is_some()
 }
 
 /// 逐个装配并投递 orgsync 出站信封（rate-limited 有限重试；其余失败静默）。

@@ -7,33 +7,91 @@ use serde_json::Value;
 
 use super::super::{Kernel, Result};
 use crate::contact::ContactService;
+use crate::device::{DeviceRecord, DeviceService};
 use crate::message::{ConversationRecord, PeerRef};
 use crate::org::OrganizationService;
 use crate::p2p::PeerNodeInfo;
 use crate::p2p::node::system_now_ms;
 use crate::storage::StorageBackend;
 
-/// 自设备 peer 列表提取：rootId==我 且 peer 非空的 FriendRecord（配对设备）。
+/// 纯函数：列出同身份（rootId == 本机）的对端设备节点信息，供
+/// `Kernel::self_device_peers` 与插件共享句柄使用。
 ///
-/// 防御性过滤 `peer_id == 本机 peerId` 的自指记录——自 FriendRecord 的 peer
-/// 是设备相对值，历史 pdsync 互灌可能把它污染成指向本机；不自指过滤会让
-/// 自消息投递拨自己（DialError::LocalPeerId）。`local_peer_id` 为 None
-/// （p2p 未运行）时无从判定，不过滤。
+/// 逻辑：
+/// 1. 优先取 self FriendRecord 的 `peer`（含地址）。
+/// 2. FriendRecord 无 peer 时，回退到 `devices` 中配对的健康设备。
+/// 3. 过滤本机 local peerId（避免 DialError::LocalPeerId）。
+/// 4. 过滤已撤销设备（`DeviceRecord.revoked_at.is_some()`）。
+/// 5. `local_peer_id` 为 None（p2p 未运行）时不做自指过滤。
+pub(crate) fn list_self_device_peer_infos(
+    friends: Vec<crate::contact::FriendRecord>,
+    devices: Vec<DeviceRecord>,
+    my_root_id: &str,
+    local_peer_id: Option<&str>,
+) -> Vec<PeerNodeInfo> {
+    let revoked: std::collections::HashSet<String> = devices
+        .iter()
+        .filter(|d| d.revoked_at.is_some())
+        .map(|d| d.peer_id.clone())
+        .collect();
+
+    let from_friend = friends
+        .iter()
+        .find(|f| f.root_id == my_root_id)
+        .and_then(|f| f.peer.as_ref())
+        .and_then(|p| {
+            if p.peer_id.trim().is_empty() {
+                return None;
+            }
+            if local_peer_id == Some(p.peer_id.as_str()) {
+                return None;
+            }
+            if revoked.contains(&p.peer_id) {
+                return None;
+            }
+            Some(PeerNodeInfo {
+                peer_id: Some(p.peer_id.clone()),
+                addresses: p.addresses.clone(),
+            })
+        });
+
+    if let Some(peer) = from_friend {
+        return vec![peer];
+    }
+
+    devices
+        .into_iter()
+        .filter_map(|d| {
+            let peer_id = d.peer_id;
+            if peer_id.trim().is_empty() {
+                return None;
+            }
+            if local_peer_id == Some(peer_id.as_str()) {
+                return None;
+            }
+            if d.revoked_at.is_some() {
+                return None;
+            }
+            if d.device_uid.is_none() {
+                return None;
+            }
+            Some(PeerNodeInfo {
+                peer_id: Some(peer_id),
+                addresses: Vec::new(),
+            })
+        })
+        .collect()
+}
+
+/// 兼容薄包装：仅从 FriendRecord 提取（不携带 devices 回退），供既有测试/旧
+/// 调用点使用。生产路径请走 [`list_self_device_peer_infos`]。
+#[allow(dead_code)]
 pub(crate) fn self_device_peer_infos(
     friends: Vec<crate::contact::FriendRecord>,
     my_root_id: &str,
     local_peer_id: Option<&str>,
 ) -> Vec<PeerNodeInfo> {
-    friends
-        .into_iter()
-        .filter(|f| f.root_id == my_root_id)
-        .filter_map(|f| f.peer)
-        .filter(|p| local_peer_id != Some(p.peer_id.as_str()))
-        .map(|p| PeerNodeInfo {
-            peer_id: (!p.peer_id.is_empty()).then_some(p.peer_id),
-            addresses: p.addresses,
-        })
-        .collect()
+    list_self_device_peer_infos(friends, Vec::new(), my_root_id, local_peer_id)
 }
 
 /// 自记录污染自愈：自 FriendRecord 的 peer 被历史 pdsync 互灌污染指向本机
@@ -69,7 +127,11 @@ pub(crate) fn heal_self_pointing_friend_record<S: StorageBackend>(
     let other = crate::device::DeviceService::list(storage)
         .ok()?
         .into_iter()
-        .find(|r| !r.peer_id.trim().is_empty() && r.peer_id != local_peer_id)?;
+        .find(|r| {
+            !r.peer_id.trim().is_empty()
+                && r.peer_id != local_peer_id
+                && r.revoked_at.is_none()
+        })?;
     let mut friend = friend;
     friend.peer = Some(PeerRef {
         peer_id: other.peer_id.clone(),
@@ -85,6 +147,47 @@ pub(crate) fn heal_self_pointing_friend_record<S: StorageBackend>(
         peer_id: Some(other.peer_id),
         addresses: Vec::new(),
     })
+}
+
+/// 将 self FriendRecord 的 peer 收敛到最新健康自设备：用于设备撤销后把
+/// 指向已撤销设备的 peer 切走，无健康设备时清空 peer。返回选用的目标。
+pub(crate) fn heal_self_friend_to_healthy_device<S: StorageBackend>(
+    storage: &mut S,
+    my_root_id: &str,
+    local_peer_id: &str,
+    node_id: &str,
+    now_ms: i64,
+) -> Option<PeerNodeInfo> {
+    let friend = ContactService::get_friend(storage, my_root_id).ok()?;
+    let devices = crate::device::DeviceService::list(storage).ok()?;
+    let healthy = list_self_device_peer_infos(
+        friend.clone().into_iter().collect(),
+        devices,
+        my_root_id,
+        Some(local_peer_id),
+    );
+    if let Some(peer) = healthy.first() {
+        let current_peer_id = friend.as_ref().and_then(|f| f.peer.as_ref()).map(|p| p.peer_id.as_str());
+        if current_peer_id != peer.peer_id.as_deref() {
+            let mut friend = friend?;
+            friend.peer = peer.peer_id.as_ref().map(|pid| PeerRef {
+                peer_id: pid.clone(),
+                addresses: peer.addresses.clone(),
+            });
+            friend.updated_at = now_ms;
+            ContactService::upsert_friend_pdsync(storage, &friend, now_ms, node_id).ok()?;
+            return Some(peer.clone());
+        }
+        return Some(peer.clone());
+    }
+    // 无健康设备：清空 peer
+    if friend.as_ref().is_some_and(|f| f.peer.is_some()) {
+        let mut friend = friend?;
+        friend.peer = None;
+        friend.updated_at = now_ms;
+        ContactService::upsert_friend_pdsync(storage, &friend, now_ms, node_id).ok()?;
+    }
+    None
 }
 
 impl Kernel {
@@ -122,30 +225,13 @@ impl Kernel {
         }
         let storage = self.require_storage()?;
         let friends = ContactService::overview(storage, "personal")?.friends;
-        let peers = self_device_peer_infos(
+        let devices = DeviceService::list(storage).unwrap_or_default();
+        Ok(list_self_device_peer_infos(
             friends,
+            devices,
             my_root_id,
             local_peer_id.as_deref(),
-        );
-        // 回退：FriendRecord 内 peer 缺失（配对后尚未落库 / pdsync 互灌擦除）
-        // 时直接从 DeviceService::list 取配对设备 peerId 兜底，避免自消息投递
-        // 因 self_device_peer_infos 返回空而静默丢弃。
-        if !peers.is_empty() {
-            return Ok(peers);
-        }
-        if let Some(local) = local_peer_id.as_deref() {
-            if let Ok(devices) = crate::device::DeviceService::list(storage) {
-                return Ok(devices
-                    .into_iter()
-                    .filter(|r| !r.peer_id.trim().is_empty() && r.peer_id != local)
-                    .map(|r| PeerNodeInfo {
-                        peer_id: Some(r.peer_id),
-                        addresses: Vec::new(),
-                    })
-                    .collect());
-            }
-        }
-        Ok(Vec::new())
+        ))
     }
 
     /// 解析会话对端的 p2p 寻址信息：会话自带 peer 与回退来源（个人空间朋友
@@ -216,6 +302,38 @@ mod tests {
     }
 
     #[test]
+    fn list_self_device_peer_infos_filters_revoked() {
+        // self FriendRecord 指向一台已撤销设备 → 排除；另一台健康设备入选。
+        let friends = vec![friend("root-self", "peer-revoked")];
+        let mut revoked = device_record("peer-revoked");
+        revoked.revoked_at = Some(100);
+        let devices = vec![revoked, device_record("peer-healthy")];
+        let peers = list_self_device_peer_infos(friends, devices, "root-self", Some("peer-local"));
+        assert_eq!(peers.len(), 1, "已撤销设备应被排除，仅剩健康设备");
+        assert_eq!(peers[0].peer_id.as_deref(), Some("peer-healthy"));
+
+        // 全部 revoked → 空列表（不回退到 revoked）。
+        let friends = vec![friend("root-self", "peer-revoked")];
+        let mut revoked = device_record("peer-revoked");
+        revoked.revoked_at = Some(100);
+        let peers = list_self_device_peer_infos(friends, vec![revoked], "root-self", Some("peer-local"));
+        assert!(peers.is_empty(), "全部已撤销则无可投递目标");
+    }
+
+    #[test]
+    fn list_self_device_peer_infos_excludes_local_peer() {
+        // 本机（local_peer_id）不出现在投递目标里（M1 sender 排除本机）。
+        let friends = vec![
+            friend("root-self", "peer-local"),
+            friend("root-self", "peer-other"),
+        ];
+        let devices = vec![device_record("peer-local"), device_record("peer-other")];
+        let peers = list_self_device_peer_infos(friends, devices, "root-self", Some("peer-local"));
+        assert_eq!(peers.len(), 1, "本机 peer 应从投递目标排除");
+        assert_eq!(peers[0].peer_id.as_deref(), Some("peer-other"));
+    }
+
+    #[test]
     fn self_device_peer_infos_filters_self_pointing_record() {
         let friends = vec![
             friend("root-self", "peer-local"),
@@ -235,7 +353,7 @@ mod tests {
     fn device_record(peer_id: &str) -> crate::device::DeviceRecord {
         crate::device::DeviceRecord {
             peer_id: peer_id.to_string(),
-            device_uid: None,
+            device_uid: Some(format!("uid-{peer_id}")),
             device_name: "对端设备".to_string(),
             os: "Android".to_string(),
             os_version: "14".to_string(),
@@ -244,6 +362,7 @@ mod tests {
             app_version: String::new(),
             updated_at: 100,
             last_seen_at: 100,
+            revoked_at: None,
         }
     }
 

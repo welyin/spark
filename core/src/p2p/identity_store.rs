@@ -13,6 +13,15 @@ use crate::storage::StorageBackend;
 use super::constants::P2P_IDENTITY_PRIVATE_KEY;
 use super::{P2pError, Result};
 
+/// 仅读取持久化 libp2p 私钥并返回对应 peerId（只读，无则返回 None）。
+/// 用于 p2p 尚未启动但需要本机 peerId 的场景，避免在查询路径产生写副作用。
+pub fn load_peer_id(storage: &dyn StorageBackend) -> Option<String> {
+    let encoded = storage.get(P2P_IDENTITY_PRIVATE_KEY).ok().flatten()?;
+    let bytes = B64.decode(encoded.trim()).ok()?;
+    let keypair = Keypair::from_protobuf_encoding(&bytes).ok()?;
+    Some(libp2p::identity::PeerId::from_public_key(&keypair.public()).to_base58())
+}
+
 /// 读取或创建 libp2p 私钥（同设备 PeerId 稳定）。
 pub fn get_or_create_libp2p_keypair(storage: &mut dyn StorageBackend) -> Result<Keypair> {
     let persisted = storage.get(P2P_IDENTITY_PRIVATE_KEY)?;

@@ -242,6 +242,7 @@ import { listenP2pEvents } from './api';
 import { currentPage, popPage, resetStack } from './stores/mobile-nav';
 import { hasOverlay, requestCloseOverlay } from './stores/overlay-stack';
 import { requestOpenSystemSection } from './stores/pending-system-section';
+import { handleDeviceNotice, hydrateDeviceNotices } from './stores/device-notices';
 import { useUpdaterReadyPrompt } from './components/updater/use-updater';
 import { lockAndReload } from './utils/identity-lock';
 import MessagesPage from './pages/MessagesPage.vue';
@@ -497,6 +498,8 @@ export default defineComponent({
       void loadCurrentUser().then(() => {
         // 初次水合组织身份（内核成员字段覆盖 localStorage 种子缓存）
         refreshOrgIdentity();
+        // M1 新设备通知：水合当前身份的待看通知（重启后红点恢复）
+        hydrateDeviceNotices(currentUser.rootId ?? '');
       });
       // 懒校验启动恢复的组织空间：组织已不存在时回退个人空间
       void validateCurrentSpace();
@@ -505,6 +508,18 @@ export default defineComponent({
       window.electronAPI?.pluginRuntime?.syncBackgrounds().catch(() => {});
       // 自设备资料同步（多设备）：本机资料被其他设备的全量快照更新后刷新展示
       void listenP2pEvents((event) => {
+        // M1 新设备加入通知（m1-m2-implementation-plan §3.4）：store 按 deviceId 幂等
+        // （重复事件仅更新 ts 不重复弹）；红旗引导文案已拍板保留（方案 §8 决策点 1）
+        if (event.kind === 'DeviceNoticeReceived') {
+          const isNewDevice = handleDeviceNotice(currentUser.rootId ?? '', event.data);
+          if (isNewDevice) {
+            ElMessage({
+              type: 'warning',
+              message: `新设备「${event.data.deviceName}」加入了你的账号，如非本人操作请立即在设备管理中撤销`
+            });
+          }
+          return;
+        }
         if (event.kind === 'SelfProfileSynced') {
           void loadCurrentUser().then(() => {
             // 同步扩展字段（性别/地区/签名）：loadCurrentUser 只刷新昵称/头像单例，

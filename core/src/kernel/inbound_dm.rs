@@ -22,6 +22,7 @@ use serde_json::{Value, json};
 mod attachment;
 mod chat;
 mod friend;
+mod notice;
 mod org_invite;
 mod orgkey;
 mod orgq;
@@ -30,12 +31,12 @@ mod pdsync;
 mod sync;
 
 use super::dm_envelope::{
-    KIND_CHAT, KIND_CONTACT_SYNC, KIND_CONV_SYNC, KIND_DEVICE_SYNC, KIND_FRIEND_ACCEPT,
-    KIND_FRIEND_REPLY, KIND_FRIEND_REQUEST, KIND_ORG_INVITE, KIND_ORG_INVITE_REPLY,
-    KIND_ORGKEY_DELIVER, KIND_ORGSYNC_DATA, KIND_ORGSYNC_HELLO, KIND_ORGSYNC_NEED,
-    KIND_ORGQ_REQ, KIND_ORGQ_RESP, KIND_PDSYNC_ATTACHMENT_REQ, KIND_PDSYNC_ATTACHMENT_RESP,
-    KIND_PDSYNC_DATA, KIND_PDSYNC_HELLO, KIND_PDSYNC_NEED, KIND_PROFILE_SYNC, KIND_READ,
-    KIND_RECALL, verify_envelope,
+    KIND_CHAT, KIND_CONTACT_SYNC, KIND_CONV_SYNC, KIND_DEVICE_NOTICE, KIND_DEVICE_SYNC,
+    KIND_FRIEND_ACCEPT, KIND_FRIEND_REPLY, KIND_FRIEND_REQUEST, KIND_ORG_INVITE,
+    KIND_ORG_INVITE_REPLY, KIND_ORGKEY_DELIVER, KIND_ORGSYNC_DATA, KIND_ORGSYNC_HELLO,
+    KIND_ORGSYNC_NEED, KIND_ORGQ_REQ, KIND_ORGQ_RESP, KIND_PDSYNC_ATTACHMENT_REQ,
+    KIND_PDSYNC_ATTACHMENT_RESP, KIND_PDSYNC_DATA, KIND_PDSYNC_HELLO, KIND_PDSYNC_NEED,
+    KIND_PROFILE_SYNC, KIND_READ, KIND_RECALL, verify_envelope,
 };
 
 /// O3 filtered 集合权限钩子（orgq-req 数据账号侧裁决契约，见 [`orgq`]）。
@@ -122,6 +123,8 @@ pub struct InboundDmResult {
     /// 收到自设备 device-sync 后待回发本机设备记录的目标（握手式交换；
     /// host 装配本机 DeviceRecord 回发）。
     pub device_sync_reply: Option<PeerNodeInfo>,
+    /// 是否触发设备加入通知广播（M1：friend-accept 自身份分支触发 24h 补发窗口）。
+    pub device_notice_broadcast: bool,
     /// 自设备 profile-sync 回发指令（连接层对端目标）。
     /// - `handle_self_friend_request`（配对握手）：`unconditional=true`，
     ///   host 无条件回发——P2P 启动时的一次性广播可能早于自记录 peer 填入，
@@ -264,6 +267,7 @@ pub fn done(response: Value, events: Vec<P2pEvent>) -> Result<InboundDmResult> {
         auto_accept: None,
         self_profile: None,
         device_sync_reply: None,
+        device_notice_broadcast: false,
         profile_sync_reply: None,
         pdsync_out: Vec::new(),
         orgsync_out: Vec::new(),
@@ -537,6 +541,9 @@ fn handle_inbound_dm_inner<S: StorageBackend>(
         }
         KIND_DEVICE_SYNC => {
             sync::handle_device_sync(storage, &ctx, &envelope.from, &envelope.body)
+        }
+        KIND_DEVICE_NOTICE => {
+            notice::handle_device_notice(&ctx, &envelope.from, &envelope.body)
         }
         KIND_CONTACT_SYNC => {
             sync::handle_contact_sync(storage, &ctx, &envelope.from, &envelope.body)

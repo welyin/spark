@@ -15,6 +15,7 @@ use crate::contact::{
 };
 use crate::message::{MAX_TEXT_BYTES, PeerRef};
 use crate::p2p::{P2pEvent, PeerNodeInfo};
+use crate::p2p::constants::{DEVICE_NOTICE_REPLAY_WINDOW_MS, P2P_DEVICE_NOTICE_SELF_UNTIL};
 use crate::storage::StorageBackend;
 
 /// 解析 body.nodeInfo（`{peerId, addresses}`）为 PeerRef。
@@ -115,6 +116,7 @@ fn handle_self_friend_request<S: StorageBackend>(
         auto_accept,
         self_profile: None,
         device_sync_reply: None,
+        device_notice_broadcast: false,
         profile_sync_reply,
         pdsync_out: Vec::new(),
         orgsync_out: Vec::new(),
@@ -192,6 +194,7 @@ pub(super) fn handle_friend_request<S: StorageBackend>(
             auto_accept,
             self_profile: None,
             device_sync_reply: None,
+            device_notice_broadcast: false,
             profile_sync_reply: None,
             pdsync_out: Vec::new(),
             orgsync_out: Vec::new(),
@@ -330,21 +333,29 @@ pub(super) fn handle_friend_accept<S: StorageBackend>(
         "friend": friend_json,
     }));
     // 自设备配对确认（from==自己）：立即向对端回发本机设备记录——配对完成
-    // 即交换设备清单，无需等下次启动补推（对端收到后回发其记录，双向齐全）
+    // 即交换设备清单，无需等下次启动补推（对端收到后回发其记录，双向齐全）。
+    // 同时打开 24h device_joined 通知补发窗口，并触发向全部已配对自设备的广播。
     let device_sync_reply = if from == ctx.my_root_id {
-        friend.peer.as_ref().map(|p| PeerNodeInfo {
+        let target = friend.peer.as_ref().map(|p| PeerNodeInfo {
             peer_id: (!p.peer_id.is_empty()).then_some(p.peer_id.clone()),
             addresses: p.addresses.clone(),
-        })
+        });
+        let until = ctx.now_ms + DEVICE_NOTICE_REPLAY_WINDOW_MS;
+        if let Err(e) = storage.put(P2P_DEVICE_NOTICE_SELF_UNTIL, &until.to_string()) {
+            eprintln!("[friend] set device-notice window failed: {e}");
+        }
+        target
     } else {
         None
     };
+    let device_notice_broadcast = from == ctx.my_root_id;
     Ok(InboundDmResult {
         response: ok_response(),
         events: vec![event],
         auto_accept: None,
         self_profile: None,
         device_sync_reply,
+        device_notice_broadcast,
         profile_sync_reply: None,
         pdsync_out: Vec::new(),
         orgsync_out: Vec::new(),
