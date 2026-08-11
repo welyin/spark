@@ -92,13 +92,24 @@ impl<S: StorageBackend> VersionedStorage<S> {
             .clone()
     }
 
-    /// key 是否受管（参与个人域同步记账）。
+    /// key 是否受管（参与同步记账）。
+    ///
+    /// 个人域受管前缀：pdsync category 覆盖的 key（ct:*/msg:conv:personal:* 等）。
+    /// org 域受管前缀：`orgd:{orgId}:`——orgsync 受管写，经 VersionedStorage
+    /// 写入即自动版本化/墓碑/删除日志（org 域 dlog）。
+    /// `org:coll:` 声明记录作为**保留 all-members 系统集合**纳管（B5）：声明
+    /// 先行进 orgsync 流量，全员同步（accounts 恒 AllMembers，无需查声明）。
     ///
     /// `msg:conv` 需细分（category 前缀 `msg:conv:` 过宽）：
     /// - 仅个人空间会话受管（`msg:conv:personal:*`）——组织会话走 org-pull；
     /// - 应用会话（`msg:conv:personal:app:*`）不受管——维持现状不参与
     ///   pdsync（其删除传播是另行记录的已知缺口）。
     fn managed(key: &str) -> bool {
+        // org 域受管：orgd:{orgId}: 数据 + org:coll: 声明（保留系统集合）+
+        // org:acl:{orgId}: 授权名单（O4，all-members 系统数据，进 orgsync 流量）
+        if key.starts_with("orgd:") || key.starts_with("org:coll:") || key.starts_with("org:acl:") {
+            return true;
+        }
         if let Some(rest) = key.strip_prefix("msg:conv:") {
             return rest.starts_with("personal:") && !rest.starts_with("personal:app:");
         }
@@ -107,6 +118,39 @@ impl<S: StorageBackend> VersionedStorage<S> {
 
     fn touch(&self, ts: i64) {
         self.last_local_write_ms.store(ts, Ordering::Relaxed);
+    }
+
+    /// key 是否为 org 域受管（orgd: 数据 / org:coll: 声明 / 内建 all-members
+    /// 集合的存量组织键）。
+    ///
+    /// O2b：存量组织键（org:meta/ct:org/org:inv）纳管为内建 all-members
+    /// 集合，其删除须落 **org 域 dlog**（作用域 = 所属内建集合），墓碑可
+    /// 经 orgsync 中继——不再只落个人域 dlog。
+    fn is_org_key(key: &str) -> bool {
+        key.starts_with("orgd:")
+            || key.starts_with("org:coll:")
+            || key.starts_with("org:acl:")
+            || crate::sync::orgsync::legacy_org_key_scope(key).is_some()
+    }
+
+    /// 解析 org 域 key 的作用域 (orgId, name, version)：
+    /// - `orgd:{orgId}:{name}@v{version}:{key}` → parse_org_data_key；
+    /// - `org:coll:{orgId}:{name}@v{version}` → 声明记录（保留系统集合）；
+    /// - 存量组织键 → 所属内建集合作用域（O2b）。
+    fn org_scope_of(key: &str) -> Option<(String, String, String)> {
+        if key.starts_with("orgd:") {
+            return crate::plugindata::parse_org_data_key(key);
+        }
+        if key.starts_with("org:coll:") || key.starts_with("org:acl:") {
+            // org:coll:{orgId}:{name}@v{version} / org:acl:{orgId}:{name}@v{version}
+            let rest = key.strip_prefix("org:coll:").unwrap_or(key).strip_prefix("org:acl:")?;
+            let (org_id, rest) = rest.split_once(':')?;
+            let at = rest.rfind("@v")?;
+            let name = &rest[..at];
+            let version = &rest[at + 2..];
+            return Some((org_id.to_string(), name.to_string(), version.to_string()));
+        }
+        crate::sync::orgsync::legacy_org_key_scope(key)
     }
 
     /// 本地写入的版本化 bump：vv[node]+1、ts=now、清墓碑。返回 (ts, meta)。
@@ -128,6 +172,14 @@ impl<S: StorageBackend> VersionedStorage<S> {
     }
 
     /// 本地删除的墓碑化：vv[node]+1、ts=now、tombstone=true + 删除日志条目。
+    ///
+    /// dlog 路由：
+    /// - `orgd:`/`org:coll:`（orgsync 专属）→ 只写 **org 域 dlog**
+    ///   （`dlog:org:{orgId}:{name}@v{version}`，A→B→C 接力传播）；
+    /// - 存量组织键（`org:meta`/`ct:org`/`org:inv`，O2b 内建集合）→ **同时写
+    ///   org 域 dlog 与个人域 dlog**——orgsync 成员间反熵走 org dlog，pdsync
+    ///   自设备同步照旧走个人 dlog（"键不搬家、pdsync 不动"）；墓碑两路中继；
+    /// - 其余个人域 key → 只写个人域 dlog。
     fn tombstone_local(
         &self,
         key: &str,
@@ -136,9 +188,25 @@ impl<S: StorageBackend> VersionedStorage<S> {
         let (ts, mut meta) = self.bump_local(key, pmeta_cache)?;
         meta.tombstone = Some(true);
         pmeta_cache.insert(key.to_string(), meta.clone());
-        let (_seq, dlog_ops) = crate::sync::dlog::append_ops(&self.inner, key)
+        let mut ops = Vec::new();
+        // orgsync 侧 dlog：orgd/org:coll（orgsync 专属）或存量组织键（内建集合）
+        if Self::is_org_key(key)
+            && let Some((org_id, name, version)) = Self::org_scope_of(key)
+        {
+            let (_seq, dlog_ops) = crate::sync::orgsync::org_dlog_append_ops(
+                &self.inner, &org_id, &name, &version, key,
+            )
             .map_err(|e| crate::storage::StorageError::Backend(e.to_string()))?;
-        Ok((ts, meta, dlog_ops))
+            ops.extend(dlog_ops);
+        }
+        // 个人域 dlog：非 orgsync 专属 key（orgd:/org:coll: 之外都写——含
+        // 存量组织键，保 pdsync 自设备同步不动）
+        if !key.starts_with("orgd:") && !key.starts_with("org:coll:") {
+            let (_seq, dlog_ops) = crate::sync::dlog::append_ops(&self.inner, key)
+                .map_err(|e| crate::storage::StorageError::Backend(e.to_string()))?;
+            ops.extend(dlog_ops);
+        }
+        Ok((ts, meta, ops))
     }
 }
 
@@ -294,6 +362,30 @@ mod tests {
         assert_eq!(s.get("local:pref").unwrap().as_deref(), Some("x"));
     }
 
+    /// O6：orgkey（personal 域，pdsync category `orgkey:`）经版本化句柄写入
+    /// 即自动 pmeta 记账——自设备经 pdsync 才真实扩散。若绕过版本化（raw），
+    /// orgkey 无 pmeta，自设备收不到密钥。
+    #[test]
+    fn orgkey_write_via_versioned_handle_versions_for_pdsync() {
+        let mut s = new_store();
+        let key = crate::sync::orgsync::orgkey_key("org_01", "fin:pay", "1", 1);
+        // 经版本化句柄写 orgkey → pmeta 记账（自设备 pdsync 扩散的载体）
+        s.put(&key, "c2VjcmV0").unwrap();
+        assert_eq!(s.get(&key).unwrap().as_deref(), Some("c2VjcmV0"));
+        let meta = get_personal_meta(s.raw(), &key).unwrap().unwrap();
+        assert_eq!(meta.vv.get("node-a"), Some(&1), "orgkey 写经版本化自动 pmeta");
+        // 对照：经 raw 写则无 pmeta（自设备不可同步——O6 修复前即如此）
+        let mut raw = s.raw().clone();
+        raw.put(&crate::sync::orgsync::orgkey_key("org_01", "fin:pay", "1", 2), "x")
+            .unwrap();
+        assert!(
+            get_personal_meta(s.raw(), &crate::sync::orgsync::orgkey_key("org_01", "fin:pay", "1", 2))
+                .unwrap()
+                .is_none(),
+            "raw 写不记账（对照）"
+        );
+    }
+
     #[test]
     fn node_id_switch_takes_effect() {
         let mut s = new_store();
@@ -304,5 +396,47 @@ mod tests {
         let meta = get_personal_meta(s.raw(), "ct:friend:x").unwrap().unwrap();
         assert_eq!(meta.vv.get("node-a"), Some(&1));
         assert_eq!(meta.vv.get("node-b"), Some(&1));
+    }
+
+    /// O2b 工作项 2：存量组织键（内建 all-members 集合）删除须落 **org 域
+    /// dlog**（作用域 = 所属内建集合，墓碑可经 orgsync 中继）——同时保留
+    /// 个人域 dlog（pdsync 自设备同步不动，"键不搬家"）。
+    #[test]
+    fn delete_legacy_org_key_writes_org_and_personal_dlog() {
+        let mut s = new_store();
+        let key = "ct:org:org_01:member-x";
+        s.put(key, "\"v1\"").unwrap();
+        s.delete(key).unwrap();
+        assert!(s.get(key).unwrap().is_none());
+        // 个人域 dlog（pdsync 自设备同步照旧）
+        assert_eq!(
+            crate::sync::dlog::entries_after(s.raw(), 0).unwrap(),
+            vec![(1, key.to_string())]
+        );
+        // org 域 dlog：作用域 (org_01, org:contacts, 1)
+        let org_entries =
+            crate::sync::orgsync::org_dlog_entries_after(s.raw(), "org_01", "org:contacts", "1", 0)
+                .unwrap();
+        assert_eq!(org_entries.len(), 1, "存量组织键删除落 org dlog");
+        assert_eq!(org_entries[0].1, key);
+    }
+
+    /// O2b：org:meta（org:structure 单记录 whole）删除同样落 org dlog。
+    #[test]
+    fn delete_org_meta_key_writes_org_dlog() {
+        let mut s = new_store();
+        let key = "org:meta:org_01";
+        s.put(key, "{\"name\":\"t\"}").unwrap();
+        s.delete(key).unwrap();
+        let org_entries =
+            crate::sync::orgsync::org_dlog_entries_after(s.raw(), "org_01", "org:structure", "1", 0)
+                .unwrap();
+        assert_eq!(org_entries.len(), 1);
+        assert_eq!(org_entries[0].1, key);
+        // 个人域 dlog 也保留（pdsync 自设备同步不动）
+        assert_eq!(
+            crate::sync::dlog::entries_after(s.raw(), 0).unwrap().len(),
+            1
+        );
     }
 }

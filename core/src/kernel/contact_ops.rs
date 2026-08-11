@@ -649,7 +649,10 @@ impl Kernel {
         let storage = self.require_storage()?;
         for record in OrganizationService::read_all_organizations(storage)? {
             if let Some(member) = record.find_member(&input.root_id)
-                && let Some(info) = &member.node_info
+                && let Some(set) = &member.node_info
+                && let Some(info) = set
+                    .iter()
+                    .find(|e| e.peer_id.is_some() || !e.addresses.is_empty())
             {
                 return Ok(PeerRef {
                     peer_id: info.peer_id.clone().unwrap_or_default(),

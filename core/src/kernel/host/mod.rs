@@ -122,6 +122,8 @@ pub(crate) struct KernelHost {
     /// 解锁期会话口令共享格（自设备 profile-sync 全量快照应用身份文件时
     /// 重封加密 payload 用；lock 时清除）。
     pub(crate) password_shared: Arc<Mutex<Option<String>>>,
+    /// 解锁期 BIP39 种子（O4 orgkey-deliver 入站解包 orgkey 用；lock 时清除）。
+    pub(crate) seed_shared: Arc<Mutex<Option<[u8; 64]>>>,
     /// 数据目录（身份文件读写路径推导用，与 kernel `config.data_dir` 同源）。
     pub(crate) data_dir: std::path::PathBuf,
     /// 存储读写互斥（与 kernel 变更类门面方法同一把；`handle_dm` 的入站
@@ -131,6 +133,12 @@ pub(crate) struct KernelHost {
     /// peerId 键控=按设备粒度，与 kernel 共享，host `handle_dm` 写入、
     /// org-sync 保活读取）。
     pub(crate) pdsync_capable_self_devices: Arc<Mutex<std::collections::HashSet<String>>>,
+    /// 已证明支持 orgsync 的成员设备 peerId 集合（O2b 能力探测，§20.8；
+    /// 与 kernel 共享，host `handle_dm` 写入、org-sync 推送读取）。
+    pub(crate) orgsync_capable_member_peers:
+        Arc<Mutex<std::collections::HashSet<String>>>,
+    /// 插件后台运行时宿主查询句柄（O3 filtered 权限钩子在 dm 入站执行）。
+    pub(crate) plugin_host_query: crate::kernel::PluginHostQuery,
 }
 
 impl KernelHost {
@@ -157,9 +165,12 @@ impl KernelHost {
             node_shared: Arc::clone(&self.node_shared),
             signing_key_shared: Arc::clone(&self.signing_key_shared),
             password_shared: Arc::clone(&self.password_shared),
+            seed_shared: Arc::clone(&self.seed_shared),
             data_dir: self.data_dir.clone(),
             io_lock: Arc::clone(&self.io_lock),
             pdsync_capable_self_devices: Arc::clone(&self.pdsync_capable_self_devices),
+            orgsync_capable_member_peers: Arc::clone(&self.orgsync_capable_member_peers),
+            plugin_host_query: self.plugin_host_query.clone(),
         }
     }
 }
@@ -320,12 +331,23 @@ impl P2pHost for KernelHost {
             .unwrap_or_else(|e| e.into_inner())
             .clone();
         let now = system_now_ms();
+        // F6：org-pull 请求方（收件人）设备是否 orgsync-capable——灰度停用旧
+        // 通道按收件人能力判定（旧端成员仍收 pluginDocs）。
+        let recipient_orgsync_capable = remote_peer_id
+            .as_deref()
+            .is_some_and(|pid| {
+                self.orgsync_capable_member_peers
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .contains(pid)
+            });
         let response = handle_pull_org_request(
             &self.storage,
             &payload,
             remote_peer_id.as_deref(),
             current.as_deref(),
             now,
+            recipient_orgsync_capable,
         )
         .map_err(|e| e.to_string())?;
         Ok(response)

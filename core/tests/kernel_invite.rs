@@ -273,6 +273,7 @@ fn org_share_push_delivers_between_kernels() {
         .unwrap();
     let org_id = view.record.org_id.clone();
     let b_node = spark_core::org::OrganizationNodeInfo {
+        device_uid: None,
         peer_id: Some(kernel_b.p2p_status().unwrap().unwrap().peer_id.unwrap()),
         addresses: dialable_addrs(&kernel_b),
     };
@@ -361,7 +362,7 @@ fn accept_invite_two_kernels_full() {
         .expect("B 是成员");
     let b_peer = kernel_b.p2p_status().unwrap().unwrap().peer_id.unwrap();
     assert_eq!(
-        b_member.node_info.as_ref().unwrap().peer_id.as_deref(),
+        b_member.node_info.as_ref().unwrap().iter().next().unwrap().peer_id.as_deref(),
         Some(b_peer.as_str()),
         "claim 回填 B 的 peerId"
     );
@@ -464,6 +465,7 @@ fn org_send_invite_resolves_peer_from_preregistered_member() {
             &org.record.org_id,
             &target,
             Some(&OrganizationNodeInfo {
+                device_uid: None,
                 peer_id: Some("peer-member-123".to_string()),
                 addresses: vec![],
             }),

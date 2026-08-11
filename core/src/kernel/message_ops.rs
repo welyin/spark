@@ -28,7 +28,10 @@ mod conv_ops;
 mod send;
 mod views;
 
-pub(crate) use send::bot_reply_shared;
+pub(crate) use send::{
+    bot_reply_shared, bot_reply_stream_chunk_shared, bot_reply_stream_end_shared,
+    bot_reply_stream_start_shared, require_owned_bot_conv,
+};
 pub(crate) use views::{app_message_view, conversation_view, message_view};
 
 /// direct 会话 id 前缀（`dm:{peerRootId}`）。

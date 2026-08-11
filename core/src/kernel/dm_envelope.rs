@@ -70,6 +70,34 @@ pub const KIND_PDSYNC_ATTACHMENT_REQ: &str = "pdsync-attachment-req";
 /// 块长 3 的倍数，接收侧 base64 直接追加拼接，收齐后 SHA-256 校验提升）。
 pub const KIND_PDSYNC_ATTACHMENT_RESP: &str = "pdsync-attachment-resp";
 
+// ── O2a orgsync 三信封 ────────────────────────────────────────────────
+
+/// 信封 kind：orgsync 摘要交换（复制组成员间；body 携带 orgId +
+/// collections 折叠 vv/dlogAck + roles + deviceClass，见 orgsync §20.3）。
+pub const KIND_ORGSYNC_HELLO: &str = "orgsync-hello";
+/// 信封 kind：orgsync diff 请求（复制组成员间；body 携带 orgId +
+/// collection + knownVv + dlogAck，见 orgsync §20.4）。
+pub const KIND_ORGSYNC_NEED: &str = "orgsync-need";
+/// 信封 kind：orgsync 数据传输（复制组成员间；body 携带 orgId +
+/// collection + 逐条 records + 批次号，见 orgsync §20.4）。
+pub const KIND_ORGSYNC_DATA: &str = "orgsync-data";
+
+// ── O3 orgq 按需查询 / 写入受理 ─────────────────────────────────────────
+
+/// 信封 kind：orgq 请求（成员 → 数据账号；按需查询 / 写入受理，见
+/// orgsync §20.5）。**不做全豁免**——成员级流量，沿用 dm 按 from 限流。
+pub const KIND_ORGQ_REQ: &str = "orgq-req";
+/// 信封 kind：orgq 响应（数据账号 → 成员；查询应答 / 写入回执，见
+/// orgsync §20.5）。沿用 dm 按 from 限流（数据账号侧应答非背靠背多信封）。
+pub const KIND_ORGQ_RESP: &str = "orgq-resp";
+
+// ── O4 orgkey-deliver 密钥定向投递 ─────────────────────────────────────
+
+/// 信封 kind：encrypted 集合密钥定向投递（名单 owner → reader，见
+/// orgsync §20.6）。dm 直连、验签 + crypto_box 解包后落 personal 域 orgkey 表；
+/// 密钥永不进 orgsync 组织流量。
+pub const KIND_ORGKEY_DELIVER: &str = "orgkey-deliver";
+
 /// 签名载荷：固定键序 body/from/kind/to/ts 的紧凑 JSON 串。
 pub fn build_signing_payload(kind: &str, from: &str, to: &str, ts: i64, body: &Value) -> String {
     let mut map = Map::new();

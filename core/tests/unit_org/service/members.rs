@@ -55,6 +55,7 @@ fn add_member_new_and_repeat_update() {
     let (admin, record) = setup_org(&mut storage);
     let member_id = root_id_of(MNEMONIC2);
     let node = OrganizationNodeInfo {
+        device_uid: None,
         peer_id: Some("12D3KooWMember".to_string()),
         addresses: vec!["/ip4/1.1.1.1/tcp/1".to_string()],
     };
@@ -89,7 +90,7 @@ fn add_member_new_and_repeat_update() {
     .unwrap();
     let m2 = updated2.find_member(&member_id).unwrap();
     assert_eq!(
-        m2.node_info.as_ref().unwrap().peer_id.as_deref(),
+        m2.node_info.as_ref().unwrap().iter().next().unwrap().peer_id.as_deref(),
         Some("12D3KooWMember")
     );
     assert_eq!(updated2.members.len(), 2);
@@ -219,6 +220,7 @@ fn sync_recipients_filters() {
     let (admin, record) = setup_org(&mut storage);
     let with_peer = root_id_of(MNEMONIC2);
     let node = OrganizationNodeInfo {
+        device_uid: None,
         peer_id: Some("12D3KooWMember".to_string()),
         addresses: vec![],
     };

@@ -19,6 +19,7 @@ mod create;
 mod invite_records;
 mod invites;
 mod members;
+mod members_access;
 mod settings;
 mod snapshot_apply;
 

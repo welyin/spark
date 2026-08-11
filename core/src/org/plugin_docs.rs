@@ -11,8 +11,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::plugindata::{Accounts, DeclareInput, Scope, Space, declare, org_data_prefix};
 use crate::schema::{CollectionSchemaDeclaration, get_collection_schema};
 use crate::storage::{ScanOptions, StorageBackend};
+use crate::sync::versioned::VersionedStorage;
 use crate::sync::{
     ApplyRemoteOptions, CollectionAdapter, RemoteMeta, apply_remote_update, get_meta,
 };
@@ -114,9 +116,14 @@ pub fn resolve_org_id(payload: &Value) -> String {
 /// - 键形不符 / JSON 损坏 / orgId 不匹配 / 标记同步禁用 → 跳过
 /// - meta 缺失或缺 vv/ts → 跳过（`get_meta` 解析失败同样跳过）
 /// - schema 从本地集合策略注册表读取（有则携带）
+///
+/// `recipient_orgsync_capable`：灰度停用按**收件人能力**判定（F6）——对端
+/// 设备已证明支持 orgsync（走 orgsync 反熵拿数据）时，旧快照插件文档收集
+/// 停用；对端是旧端（非 orgsync-capable）时不停用，旧端成员仍收 pluginDocs。
 pub fn collect_syncable_plugin_docs<S: StorageBackend>(
     storage: &S,
     org_id: &str,
+    recipient_orgsync_capable: bool,
 ) -> Result<Vec<PluginDocSyncItem>> {
     let target_org_id = org_id.trim();
     if target_org_id.is_empty() {
@@ -136,6 +143,25 @@ pub fn collect_syncable_plugin_docs<S: StorageBackend>(
             continue;
         }
         if is_sync_disabled(&payload) {
+            continue;
+        }
+        // 灰度停用（O2 工作项 5，F6 按收件人能力）：该插件集合已迁入新声明
+        // 通道（org:coll: 声明存在）且**收件人 orgsync-capable** 时，旧快照
+        // 插件文档收集停用——数据已走 orgsync 复制组；旧端成员仍收。
+        if recipient_orgsync_capable
+            && let Some(plugin_id) = domain.strip_prefix("plugin:")
+            && !plugin_id.is_empty()
+            && !collection.is_empty()
+            && storage
+                .get(&crate::plugindata::org_decl_key(
+                    target_org_id,
+                    &format!("{plugin_id}:{collection}"),
+                    "1",
+                ))
+                .ok()
+                .flatten()
+                .is_some()
+        {
             continue;
         }
         // meta 须有 vv 与 ts（plugin-org-sync.ts:93-96）；DocMeta 两者恒在，
@@ -165,6 +191,92 @@ pub fn collect_syncable_plugin_docs<S: StorageBackend>(
         });
     }
     Ok(results)
+}
+
+/// `doc:plugin:` 旧通道 → declareCollection 声明 + `orgd:` 键域（O2 工作项 5）。
+///
+/// 按 plugin-data-api §7 映射：
+/// - 每个 `doc:plugin:{plugin}:{collection}:{id}`（`payload.orgId == org_id`
+///   且未标记同步禁用）声明一个 **org scope** 集合 `{plugin}:{collection}@v1`
+///   （space=org；`accounts` 由调用方指定——缺省 data-accounts+filtered，需全员
+///   驻留时传 `Accounts::AllMembers`；其余全缺省：devices=all / merge=lww-record）；
+///   并把 payload 迁入 `orgd:{orgId}:{name}@v1:{id}` 数据键域（orgsync 受管，
+///   经 VersionedStorage 写入即自动版本化/删除日志）。
+/// - [`is_sync_disabled`]（`__sync === false` / mode ∈ {local, none, disabled}
+///   → scope:local）的文档**不迁移**（保持本地）。
+/// - **幂等**：集合已声明（策略兼容）与 `orgd:` 键已存在均跳过；重复调用无副作用。
+///
+/// 返回本次新迁入的 `orgd:` 记录条数。
+pub fn migrate_plugin_docs<S: StorageBackend>(
+    storage: &mut VersionedStorage<S>,
+    org_id: &str,
+    accounts: Accounts,
+    declared_by: &str,
+    now_ms: i64,
+) -> Result<usize> {
+    let target_org_id = org_id.trim();
+    if target_org_id.is_empty() {
+        return Ok(0);
+    }
+    let rows = storage.scan(&ScanOptions::prefix(PLUGIN_DOC_PREFIX))?;
+    let mut migrated = 0usize;
+    for (key, value) in rows {
+        let Some((domain, collection, id)) = parse_plugin_doc_key(&key) else {
+            continue;
+        };
+        let Ok(payload) = serde_json::from_str::<Value>(&value) else {
+            continue;
+        };
+        if resolve_org_id(&payload) != target_org_id {
+            continue;
+        }
+        // scope:local（同步禁用）不迁移——保持旧通道本地文档语义。
+        if is_sync_disabled(&payload) {
+            continue;
+        }
+        // 插件 id = `plugin:{tail}` 的 tail；集合名 = `{plugin}:{collection}`。
+        let Some(plugin_id) = domain.strip_prefix("plugin:") else {
+            continue;
+        };
+        if plugin_id.is_empty() || collection.is_empty() {
+            continue;
+        }
+        let name = format!("{plugin_id}:{collection}");
+        let version = "1";
+        // 声明 org scope 集合（幂等：策略兼容返回既有）。F7：遇非法名/策略
+        // 冲突逐条跳过 + warn，一颗耗子屎不堵后续迁移（不再整体中断）。
+        if let Err(e) = declare(
+            storage,
+            plugin_id,
+            DeclareInput {
+                name: name.clone(),
+                version: Some(version.to_string()),
+                scope: Some(Scope::Sync),
+                space: Some(Space::Org),
+                accounts: Some(accounts),
+                devices: None,
+                confidentiality: None,
+                merge: None,
+                declared_by: Some(declared_by.to_string()),
+            },
+            now_ms,
+            Some(target_org_id),
+        ) {
+            log::warn!(
+                "[plugin-docs] migrate skip doc {} (declare failed): {e}",
+                key
+            );
+            continue;
+        }
+        // 迁入 orgd: 数据键（幂等：已存在跳过）。值 = payload 原样 JSON。
+        let data_key = format!("{}{id}", org_data_prefix(target_org_id, &name, version));
+        if storage.get(&data_key)?.is_some() {
+            continue;
+        }
+        storage.put(&data_key, &value)?;
+        migrated += 1;
+    }
+    Ok(migrated)
 }
 
 /// 扫描定位组织的插件域：收集 `doc:plugin:` 键中 `payload.orgId == org_id`

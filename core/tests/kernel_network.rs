@@ -47,6 +47,7 @@ fn reconcile_and_keepalive_converge() {
     let org_id = view.record.org_id.clone();
     let b_peer = kernel_b.p2p_status().unwrap().unwrap().peer_id.unwrap();
     let b_node_broken = spark_core::org::OrganizationNodeInfo {
+        device_uid: None,
         peer_id: Some(b_peer.clone()),
         addresses: vec!["/ip4/127.0.0.1/tcp/1".to_string()],
     };
@@ -60,6 +61,7 @@ fn reconcile_and_keepalive_converge() {
 
     // B 显式反熵：pull-list（memberAuthStatus 凭 peerId 放行）→ B 无本地记录 → 拉取
     let a_node = spark_core::org::OrganizationNodeInfo {
+        device_uid: None,
         peer_id: kernel_a.p2p_status().unwrap().unwrap().peer_id,
         addresses: dialable_addrs(&kernel_a),
     };

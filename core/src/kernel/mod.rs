@@ -28,6 +28,9 @@
 mod contact_group_ops;
 mod contact_ops;
 mod contact_request_ops;
+mod data_access;
+mod data_orgq;
+mod data_orgq_read;
 mod device_ops;
 mod dm_delivery;
 mod data_ops;
@@ -59,14 +62,30 @@ pub use identity::{
     DerivedDomainIdentityInfo, DomainSignatureInfo, IdentityStatus, IdentitySummary,
     InitIdentityResult, MnemonicCheckInfo, ProfileInfo, PublicIdentity, RootSignatureInfo,
 };
-pub use inbound_dm::{AutoAccept, InboundDmError, InboundDmResult, handle_inbound_dm};
+pub use inbound_dm::{
+    AutoAccept, InboundDmError, InboundDmResult, OrgqPermHook, handle_inbound_dm,
+    handle_inbound_dm_with_orgq_hooks,
+};
 pub use message_ops::{
     AppMessageView, ChatMessageView, ConversationView, app_conversation_id,
     direct_conversation_id, sanitize_link_preview,
 };
 pub(crate) use contact_ops::ensure_bot_shared;
-pub(crate) use message_ops::bot_reply_shared;
+pub(crate) use message_ops::{
+    bot_reply_shared, bot_reply_stream_chunk_shared, bot_reply_stream_end_shared,
+    bot_reply_stream_start_shared, message_view, require_owned_bot_conv,
+};
 pub use org_sync::{OrgReconcileStats, PeerOrgSyncResult};
+
+/// 随机字节的十六进制串（`crypto.randomBytes(n)` 对齐，用于不可预测的
+/// 令牌片段，如 orgq requestId 的随机段）。`byte_len` 为随机字节数，
+/// 输出 hex 长度为其两倍。
+pub(crate) fn rand_hex(byte_len: usize) -> String {
+    use rand::Rng as _;
+    let mut bytes = vec![0u8; byte_len];
+    rand::rng().fill_bytes(&mut bytes);
+    hex::encode(bytes)
+}
 pub use p2p_ops::NodeCardImport;
 pub use plugin_ops::PluginHostQuery;
 
@@ -168,6 +187,9 @@ pub struct Kernel {
     /// 解锁期会话口令（host 侧应用自设备 profile-sync 全量快照时重封身份
     /// 文件用——与 unlocked 会话同源，lock 时清除）。
     pub(crate) password_shared: Arc<Mutex<Option<String>>>,
+    /// 解锁期 BIP39 种子（O4 orgkey-deliver 解包 orgkey 需组织域身份私钥派生；
+    /// host dm 入站 orgkey-unbox 用；lock 时清除）。
+    pub(crate) seed_shared: Arc<Mutex<Option<[u8; 64]>>>,
     /// org-share-ack 等待器注册表（host 与 worker 共享）。
     pub(crate) org_acks: SharedOrgShareAckTracker,
     /// org-recovery 触发器（跨 tick 状态：连续失联计数 + 全局冷却）。
@@ -187,6 +209,12 @@ pub struct Kernel {
     /// 决定是否回退发旧快照，见 §7.1）。host `handle_dm` 写入、org-sync
     /// 保活读取。
     pub(crate) pdsync_capable_self_devices: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    /// 已证明支持 orgsync 的成员设备 peerId 集合（O2b 能力探测，§20.8：
+    /// 收到验签通过的 orgsync-hello/need/data 即按连接层 peerId 标记——按
+    /// 设备粒度，与 pdsync 同款；org-share/org-pull 出站据此决定是否回退
+    /// 旧快照链路）。host `handle_dm` 写入、org-sync 推送读取。
+    pub(crate) orgsync_capable_member_peers:
+        Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
     /// doc_* 调用登记的集合配置（远端应用的索引维护依据，见 host.rs）。
     pub(crate) collection_configs: CollectionConfigs,
     /// 存储读写互斥：p2p 事件循环（host `handle_dm`）与 Tauri 命令线程的
@@ -219,6 +247,7 @@ impl Kernel {
         let current_root_id_shared = Arc::new(Mutex::new(None));
         let p2p_node_shared = Arc::new(Mutex::new(None));
         let signing_key_shared = Arc::new(Mutex::new(None));
+        let seed_shared = Arc::new(Mutex::new(None));
         let io_lock = Arc::new(Mutex::new(()));
         let collection_configs = Arc::new(Mutex::new(HashMap::new()));
         let plugin_host = PluginHostShared {
@@ -228,8 +257,10 @@ impl Kernel {
             my_root_id: Arc::clone(&current_root_id_shared),
             p2p_node: Arc::clone(&p2p_node_shared),
             signing_key: Arc::clone(&signing_key_shared),
+            seed_shared: seed_shared.clone(),
             collection_configs: Arc::clone(&collection_configs),
             pending_queries: Arc::new(Mutex::new(HashMap::new())),
+            filter_caps: Arc::new(Mutex::new(HashMap::new())),
             runtime: runtime.handle().clone(),
         };
         let mut kernel = Kernel {
@@ -254,12 +285,16 @@ impl Kernel {
             p2p_node_shared,
             signing_key_shared,
             password_shared: Arc::new(Mutex::new(None)),
+            seed_shared,
             org_acks: Arc::new(Mutex::new(Default::default())),
             recovery_trigger: Arc::new(Mutex::new(RecoveryTrigger::new())),
             org_address_publish: Arc::new(Mutex::new(HashMap::new())),
             self_device_link: Arc::new(Mutex::new(None)),
             self_device_links: Arc::new(Mutex::new(std::collections::HashSet::new())),
             pdsync_capable_self_devices: Arc::new(std::sync::Mutex::new(
+                std::collections::HashSet::new(),
+            )),
+            orgsync_capable_member_peers: Arc::new(std::sync::Mutex::new(
                 std::collections::HashSet::new(),
             )),
             collection_configs,

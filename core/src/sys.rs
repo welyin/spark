@@ -50,6 +50,16 @@ pub struct SysFetchResult {
     pub body: String,
 }
 
+/// HTTP 流式响应块：逐块透传响应体文本，最后一块 done=true。
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SysFetchChunk {
+    pub text: String,
+    pub done: bool,
+    pub status: u16,
+    pub headers: HashMap<String, String>,
+}
+
 /// GUI 进程（Tauri/WebView）的环境变量通常只继承系统 PATH，缺用户 PATH——
 /// 终端能跑 npm 但应用 spawn 报 program not found 即源于此。
 /// 合并 系统PATH + 用户PATH，让子进程拿到与终端一致的搜索路径。
@@ -265,6 +275,174 @@ fn exec_with_limits(
     })
 }
 
+/// 外部命令流式执行结果块：逐块透传 stdout 文本，最后一块 done=true。
+/// 与 [`SysFetchChunk`] 同构——插件侧统一「逐块 + 终态」流式语义。
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SysExecChunk {
+    pub text: String,
+    pub done: bool,
+    pub exit_code: Option<i32>,
+}
+
+/// 流式执行外部命令：stdout 按**完整行**逐块经 `on_chunk` 回调（NDJSON 流
+/// 工具如 codebuddy `--output-format stream-json` 的逐事件输出），进程退出
+/// 后发 done=true 终态块。stderr 仍一次性捕获（诊断用，不入流）。
+///
+/// 与 [`exec_blocking`] 的差异：stdout 不等进程退出才返回，而是读到一行
+/// 推一行——用于「边跑边上屏」的流式 AI CLI 场景。行缓冲以 `\n` 切分，
+/// 末行无换行符在 EOF 时补推。超时/截断/杀进程树与 exec_with_limits 同口径。
+pub fn exec_streaming_blocking<F>(
+    program: &str,
+    args: &[String],
+    workdir: Option<&str>,
+    on_chunk: F,
+) -> Result<SysExecResult, String>
+where
+    F: FnMut(SysExecChunk) + Send + 'static,
+{
+    exec_streaming_with_limits(program, args, workdir, EXEC_TIMEOUT, EXEC_MAX_OUTPUT, on_chunk)
+}
+
+fn exec_streaming_with_limits<F>(
+    program: &str,
+    args: &[String],
+    workdir: Option<&str>,
+    timeout: Duration,
+    max_output: usize,
+    mut on_chunk: F,
+) -> Result<SysExecResult, String>
+where
+    F: FnMut(SysExecChunk) + Send + 'static,
+{
+    #[cfg(target_os = "windows")]
+    let program = resolve_program(program);
+
+    let mut cmd = Command::new(&program);
+    cmd.args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+
+    #[cfg(target_os = "windows")]
+    cmd.env("PATH", merged_path_env());
+
+    if let Some(dir) = workdir {
+        if !dir.is_empty() {
+            cmd.current_dir(dir);
+        }
+    }
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("启动命令 {program} 失败: {e}"))?;
+
+    let mut child_stdout = child.stdout.take().expect("stdout 已 piped");
+    let mut child_stderr = child.stderr.take().expect("stderr 已 piped");
+
+    // stdout 行缓冲读取线程：每读满一行（遇 \n）经 channel 推一块；EOF 补推
+    // 末行残留。累计上限 max_output 截断（防 OOM），截断后仍排空管道防阻塞。
+    let (stdout_tx, stdout_rx) = std::sync::mpsc::channel::<Result<Vec<u8>, ()>>();
+    let stdout_reader = std::thread::spawn(move || {
+        use std::io::Read;
+        let mut line: Vec<u8> = Vec::new();
+        let mut total = 0usize;
+        let mut buf = [0u8; 4096];
+        loop {
+            match child_stdout.read(&mut buf) {
+                Ok(0) => {
+                    if !line.is_empty() {
+                        let _ = stdout_tx.send(Ok(line.clone()));
+                    }
+                    break;
+                }
+                Ok(n) => {
+                    for &b in &buf[..n] {
+                        total += 1;
+                        if b == b'\n' {
+                            let text = if total <= max_output { line.clone() } else { Vec::new() };
+                            let _ = stdout_tx.send(Ok(text));
+                            line.clear();
+                        } else {
+                            line.push(b);
+                        }
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        let _ = stdout_tx.send(Err(())); // EOF 信号
+    });
+
+    // stderr 一次性捕获（诊断用）
+    let (stderr_tx, stderr_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    let stderr_reader = std::thread::spawn(move || {
+        let mut sink = CappedSink { buf: Vec::new(), cap: max_output };
+        let _ = std::io::copy(&mut child_stderr, &mut sink);
+        let _ = stderr_tx.send(sink.buf);
+    });
+
+    // 主循环：收 stdout 行块并回调，直到进程退出且 EOF
+    let deadline = std::time::Instant::now() + timeout;
+    let mut stdout_eof = false;
+    let mut status_opt: Option<std::process::ExitStatus> = None;
+    loop {
+        // 收一块 stdout（带短超时以便周期性检查退出/超时）
+        match stdout_rx.recv_timeout(Duration::from_millis(20)) {
+            Ok(Ok(line)) => {
+                let text = String::from_utf8_lossy(&line).into_owned();
+                if !text.is_empty() {
+                    on_chunk(SysExecChunk { text, done: false, exit_code: None });
+                }
+            }
+            Ok(Err(())) => stdout_eof = true,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => stdout_eof = true,
+        }
+        if status_opt.is_none() {
+            match child.try_wait() {
+                Ok(Some(s)) => status_opt = Some(s),
+                Ok(None) => {
+                    if std::time::Instant::now() >= deadline {
+                        kill_process_tree(&mut child);
+                        let _ = child.wait();
+                        let _ = stdout_reader.join();
+                        let _ = stderr_reader.join();
+                        return Err(format!("命令 {program} 执行超过 {timeout:?} 超时，已强制终止"));
+                    }
+                }
+                Err(e) => {
+                    kill_process_tree(&mut child);
+                    let _ = child.wait();
+                    return Err(format!("等待命令 {program} 退出失败: {e}"));
+                }
+            }
+        }
+        if status_opt.is_some() && stdout_eof {
+            break;
+        }
+    }
+
+    let status = status_opt.expect("退出状态已在循环内取得");
+    let _ = stdout_reader.join();
+    let stderr = stderr_rx.recv_timeout(READER_DRAIN_GRACE).unwrap_or_default();
+    drop(stderr_reader);
+
+    let exit_code = status.code().unwrap_or(-1);
+    on_chunk(SysExecChunk { text: String::new(), done: true, exit_code: Some(exit_code) });
+
+    Ok(SysExecResult {
+        stdout: String::new(), // 流式模式全文经 on_chunk 推送，不回填
+        stderr: String::from_utf8_lossy(&stderr).into_owned(),
+        exit_code,
+    })
+}
+
 /// 强杀子进程及其整棵进程树。孙进程可能继承 stdout/stderr 管道写端，
 /// 只杀直接子进程（`Child::kill`）读者线程会永远等不到 EOF。
 #[cfg(windows)]
@@ -382,6 +560,154 @@ async fn fetch_bounded(
         headers: resp_headers,
         body,
     })
+}
+
+/// 发起 HTTP 流式请求（async）。每个响应体文本块到达时调用 `chunk_cb`，
+/// 最后一块 done=true 携带 status/headers 标记完成。
+pub async fn fetch_stream<F>(
+    url: &str,
+    method: Option<&str>,
+    headers: Option<&HashMap<String, String>>,
+    body: Option<&str>,
+    chunk_cb: F,
+) -> Result<(), String>
+where
+    F: Fn(SysFetchChunk) + Send + 'static,
+{
+    fetch_stream_bounded(url, method, headers, body, FETCH_MAX_BODY, chunk_cb).await
+}
+
+/// 流式读取的空闲超时（两次 chunk 到达之间的最大间隔）。区别于非流式 fetch 的
+/// 全程 FETCH_TIMEOUT——长流式（AI SSE 等）总时长可能远超 60s，全程超时会误伤；
+/// 空闲超时只惩罚「卡住不再出数据」的慢流，正常慢速但持续出数据的流不受限。
+/// 超限后不报错（由调用方按流结束语义处理），避免无限悬挂。
+const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// 从字节缓冲切出「完整 UTF-8 前缀」，返回其字符串并把已切部分移出缓冲。
+///
+/// 流式 chunk 可能在多字节字符中间截断（如中文 3 字节跨块），逐块
+/// `from_utf8_lossy` 会把未完成序列替换为 U+FFFD 乱码且持久化入档。此处按字节
+/// 缓冲，`std::str::from_utf8` 的 `valid_up_to()` 恰好返回「最后一个完整字符的
+/// 结束下标」——末尾不完整序列时截到其前，完整尾部留到下次与新块拼接后输出，
+/// 从而跨块不断字（评审 Z4）。
+fn drain_complete_utf8(buf: &mut Vec<u8>) -> String {
+    let valid = match std::str::from_utf8(buf) {
+        Ok(_) => buf.len(),
+        Err(e) => e.valid_up_to(),
+    };
+    let text = String::from_utf8_lossy(&buf[..valid]).into_owned();
+    buf.drain(..valid);
+    text
+}
+
+async fn fetch_stream_bounded<F>(
+    url: &str,
+    method: Option<&str>,
+    headers: Option<&HashMap<String, String>>,
+    body: Option<&str>,
+    max_body: usize,
+    chunk_cb: F,
+) -> Result<(), String>
+where
+    F: Fn(SysFetchChunk) + Send + 'static,
+{
+    // 流式路径不设 reqwest 全程 timeout（长流式总时长可能远超 60s）；
+    // 空闲超时在下方逐块读取处用 tokio::time::timeout 包裹实现。
+    let client = reqwest::Client::builder()
+        .build()
+        .map_err(|e| format!("构建 HTTP 客户端失败: {e}"))?;
+
+    let mut req = match method.unwrap_or("GET") {
+        "GET" => client.get(url),
+        "POST" => client.post(url),
+        "PUT" => client.put(url),
+        "DELETE" => client.delete(url),
+        "PATCH" => client.patch(url),
+        _ => client.get(url),
+    };
+
+    if let Some(headers) = headers {
+        for (k, v) in headers {
+            if let Ok(name) = reqwest::header::HeaderName::from_bytes(k.as_bytes()) {
+                req = req.header(name, v.as_str());
+            }
+        }
+    }
+
+    if let Some(body) = body {
+        req = req.body(body.to_string());
+    }
+
+    let mut response = req.send().await.map_err(|e| format!("HTTP 请求失败: {e}"))?;
+
+    let status = response.status().as_u16();
+    let resp_headers: HashMap<String, String> = response
+        .headers()
+        .iter()
+        .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
+        .collect();
+
+    // Content-Length 上限检查
+    if let Some(len) = response.content_length() {
+        if len > max_body as u64 {
+            return Err(format!(
+                "响应体声明长度 {len} 字节，超过上限 {max_body} 字节"
+            ));
+        }
+    }
+
+    let mut total = 0usize;
+    // 字节级缓冲：跨块拼完整 UTF-8 再切（Z4）
+    let mut pending = Vec::new();
+    loop {
+        // 空闲超时包裹单次 chunk 读取：持续出数据的慢流不受限，卡住则中断
+        let next = tokio::time::timeout(STREAM_IDLE_TIMEOUT, response.chunk())
+            .await
+            .map_err(|_| format!("响应流空闲超过 {STREAM_IDLE_TIMEOUT:?} 无数据，已中断"))?
+            .map_err(|e| format!("读取响应体失败: {e}"))?;
+        match next {
+            Some(chunk) => {
+                total += chunk.len();
+                if total > max_body {
+                    return Err(format!("响应体超过大小上限 {max_body} 字节，已中止读取"));
+                }
+                pending.extend_from_slice(&chunk);
+                let text = drain_complete_utf8(&mut pending);
+                if !text.is_empty() {
+                    // 中间块不携带 headers（协议瘦身，仅 done 块带，评审 F6）
+                    chunk_cb(SysFetchChunk {
+                        text,
+                        done: false,
+                        status,
+                        headers: HashMap::new(),
+                    });
+                }
+            }
+            None => {
+                // 连接关闭即 EOF：冲刷尾部残存字节（若仍有不完整 UTF-8，lossy 兜底）
+                let tail = drain_complete_utf8(&mut pending);
+                if !tail.is_empty() {
+                    chunk_cb(SysFetchChunk {
+                        text: tail,
+                        done: false,
+                        status,
+                        headers: HashMap::new(),
+                    });
+                }
+                break;
+            }
+        }
+    }
+
+    // 发送完成标记：携带 status 与完整 headers
+    chunk_cb(SysFetchChunk {
+        text: String::new(),
+        done: true,
+        status,
+        headers: resp_headers,
+    });
+
+    Ok(())
 }
 
 // ------------------------------------------------------------------
@@ -595,5 +921,144 @@ mod tests {
         let r = fetch_bounded(&url, None, None, None, 4096).await.unwrap();
         assert_eq!(r.status, 200);
         assert_eq!(r.body, "hello");
+    }
+
+    // ------------------------------------------------------------------
+    // fetch_stream：分块回调 / done 终止 / UTF-8 跨块不断字 / 字节截停
+    // ------------------------------------------------------------------
+
+    /// 流式分块 server：写入响应头后分多次写 body，每次间延迟 delay_ms，
+    /// 用于制造多个 chunk（chunk 边界由 TCP 段划分，非严格逐次）。
+    fn spawn_stream_server(chunks: Vec<Vec<u8>>, delay_ms: u64) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut req = [0u8; 1024];
+                let _ = stream.read(&mut req);
+                let _ = stream.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n",
+                );
+                for c in chunks {
+                    let _ = stream.write_all(&c);
+                    std::thread::sleep(Duration::from_millis(delay_ms));
+                }
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    /// 收集 fetch_stream 回调产生的全部块
+    async fn collect_stream(
+        url: &str,
+        max_body: usize,
+    ) -> Result<Vec<SysFetchChunk>, String> {
+        use std::sync::{Arc, Mutex};
+        let chunks = Arc::new(Mutex::new(Vec::new()));
+        {
+            let chunks = Arc::clone(&chunks);
+            fetch_stream_bounded(url, None, None, None, max_body, move |chunk| {
+                chunks.lock().unwrap().push(chunk)
+            })
+            .await?;
+        }
+        // 闭包内的 Arc 引用已随 fetch_stream 结束而 drop，此处应可唯一取出；
+        // Mutex 无并发持锁，PoisonError 也仅返回原锁内容
+        let inner = match Arc::try_unwrap(chunks) {
+            Ok(mutex) => mutex.into_inner().unwrap_or_else(|poison| poison.into_inner()),
+            Err(_) => unreachable!("collect_stream 内不应残留 Arc 引用"),
+        };
+        Ok(inner)
+    }
+
+    #[test]
+    fn drain_complete_utf8_keeps_cross_block_multibyte_char() {
+        // 中文「你」= E4 BD A0，3 字节。模拟分块截断在多字节字符中间：
+        // 首次只到第 1 字节，再次补 2 字节。跨块必须拼出完整字符，无 U+FFFD。
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&[0xE4]);
+        assert_eq!(drain_complete_utf8(&mut buf), "", "不完整头部不应输出");
+        assert_eq!(buf, vec![0xE4], "不完整头部应保留待拼接");
+        buf.extend_from_slice(&[0xBD, 0xA0]);
+        assert_eq!(drain_complete_utf8(&mut buf), "你", "跨块应拼出完整字符");
+        assert!(buf.is_empty(), "已切分后缓冲应清空");
+    }
+
+    #[test]
+    fn drain_complete_utf8_handles_ascii_and_tail() {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"hello ");
+        buf.extend_from_slice(&[0xE4, 0xBD]); // "你" 的前 2 字节
+        assert_eq!(drain_complete_utf8(&mut buf), "hello ", "ASCII 前缀应输出");
+        assert_eq!(buf, vec![0xE4, 0xBD], "不完整尾部应保留");
+        buf.extend_from_slice(&[0xA0]);
+        assert_eq!(drain_complete_utf8(&mut buf), "你");
+        assert!(buf.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn fetch_stream_delivers_chunks_and_done() {
+        let url = spawn_stream_server(
+            vec![b"Hello".to_vec(), b", Spark".to_vec()],
+            5,
+        );
+        let chunks = collect_stream(&url, 4096).await.expect("流式请求应成功");
+        assert!(
+            chunks.len() >= 3,
+            "应有至少两个中间块 + 一个 done 块，实际 {}",
+            chunks.len()
+        );
+        // 所有中间块 done=false，最后一块 done=true
+        for (i, c) in chunks.iter().enumerate() {
+            assert_eq!(c.done, i == chunks.len() - 1, "仅最后一块 done=true");
+        }
+        let body: String = chunks
+            .iter()
+            .filter(|c| !c.done)
+            .map(|c| c.text.as_str())
+            .collect();
+        assert_eq!(body, "Hello, Spark");
+        // 中间块不携带 headers（F6 协议瘦身），仅 done 块携带
+        for c in chunks.iter().take(chunks.len() - 1) {
+            assert!(c.headers.is_empty(), "中间块 headers 应为空");
+        }
+        assert!(!chunks.last().unwrap().headers.is_empty(), "done 块应携带 headers");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn fetch_stream_keeps_chinese_across_chunks() {
+        // 分块输出完整中文（多次 write 制造多 chunk），累计不应出现 U+FFFD
+        let url = spawn_stream_server(
+            vec![b"\xe4\xbd".to_vec(), b"\xa0\xe5\xa5".to_vec(), b"\xbd".to_vec()],
+            5,
+        );
+        let chunks = collect_stream(&url, 4096).await.expect("流式请求应成功");
+        let body: String = chunks
+            .iter()
+            .filter(|c| !c.done)
+            .map(|c| c.text.as_str())
+            .collect();
+        assert_eq!(body, "你好", "跨块中文不应出现乱码");
+        assert!(!body.contains('\u{FFFD}'), "不应出现 U+FFFD 乱码");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn fetch_stream_rejects_oversized_body() {
+        let url = spawn_stream_server(vec![vec![b'y'; 100 * 1024]], 2);
+        let err = collect_stream(&url, 4096)
+            .await
+            .err()
+            .expect("累计超限应报错");
+        assert!(err.contains("上限"), "应报超限错误，实际: {err}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn fetch_stream_content_length_rejects_oversized() {
+        let url = spawn_http_server(
+            "HTTP/1.1 200 OK\r\nContent-Length: 1048576\r\nConnection: close\r\n\r\n",
+            Vec::new(),
+        );
+        let err = collect_stream(&url, 4096).await.err().expect("声明超限应报错");
+        assert!(err.contains("上限"), "应报超限错误，实际: {err}");
     }
 }

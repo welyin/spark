@@ -126,6 +126,7 @@ fn org_member_management() {
 
     // 重复添加 = 更新 nodeInfo（成员数不变）
     let node = spark_core::org::OrganizationNodeInfo {
+        device_uid: None,
         peer_id: Some("12D3KooWMemberPeerX".to_string()),
         addresses: vec!["/ip4/1.2.3.4/tcp/15002".to_string()],
     };
@@ -139,7 +140,7 @@ fn org_member_management() {
         .find(|m| m.root_id == member_root)
         .unwrap();
     assert_eq!(
-        m.node_info.as_ref().unwrap().peer_id.as_deref(),
+        m.node_info.as_ref().unwrap().iter().next().unwrap().peer_id.as_deref(),
         Some("12D3KooWMemberPeerX")
     );
 

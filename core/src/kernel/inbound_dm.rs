@@ -23,16 +23,25 @@ mod attachment;
 mod chat;
 mod friend;
 mod org_invite;
+mod orgkey;
+mod orgq;
+mod orgsync;
 mod pdsync;
 mod sync;
 
 use super::dm_envelope::{
     KIND_CHAT, KIND_CONTACT_SYNC, KIND_CONV_SYNC, KIND_DEVICE_SYNC, KIND_FRIEND_ACCEPT,
     KIND_FRIEND_REPLY, KIND_FRIEND_REQUEST, KIND_ORG_INVITE, KIND_ORG_INVITE_REPLY,
-    KIND_PDSYNC_ATTACHMENT_REQ, KIND_PDSYNC_ATTACHMENT_RESP, KIND_PDSYNC_DATA,
-    KIND_PDSYNC_HELLO, KIND_PDSYNC_NEED, KIND_PROFILE_SYNC, KIND_READ,
+    KIND_ORGKEY_DELIVER, KIND_ORGSYNC_DATA, KIND_ORGSYNC_HELLO, KIND_ORGSYNC_NEED,
+    KIND_ORGQ_REQ, KIND_ORGQ_RESP, KIND_PDSYNC_ATTACHMENT_REQ, KIND_PDSYNC_ATTACHMENT_RESP,
+    KIND_PDSYNC_DATA, KIND_PDSYNC_HELLO, KIND_PDSYNC_NEED, KIND_PROFILE_SYNC, KIND_READ,
     KIND_RECALL, verify_envelope,
 };
+
+/// O3 filtered 集合权限钩子（orgq-req 数据账号侧裁决契约，见 [`orgq`]）。
+pub use orgq::OrgqPermHook;
+/// O4 orgkey-deliver 解包指令（reader 侧合法投递，host 用 seed 解包落库）。
+pub use orgkey::OrgkeyUnbox;
 use crate::contact::{ContactError, ContactService, FriendRecord};
 use crate::message::{MessageError, PeerRef};
 use crate::org::OrgError;
@@ -58,6 +67,9 @@ pub enum InboundDmError {
     /// P6 插件数据模块错误（blob 传输等）。
     #[error(transparent)]
     Plugindata(#[from] crate::plugindata::PlugindataError),
+    /// 存储后端错误（O3 orgq 成员侧缓存/在途记录读写）。
+    #[error(transparent)]
+    Storage(#[from] crate::storage::StorageError),
     /// JSON 序列化/反序列化错误。
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
@@ -122,9 +134,74 @@ pub struct InboundDmResult {
     /// pdsync-need 的增量数据回发。body 已在纯逻辑层构建（io_lock 内），
     /// host 只负责包信封 + dm_direct。
     pub pdsync_out: Vec<PdsyncOut>,
+    /// orgsync 出站指令（连接层对端）：收到 orgsync-hello 的 diff 回发、或
+    /// orgsync-need 的增量数据回发。body 已在纯逻辑层构建（io_lock 内），
+    /// host 只负责包信封 + dm_direct。kind 为 KIND_ORGSYNC_*、
+    /// from=本机 rootId、to=对端成员 rootId。
+    pub orgsync_out: Vec<OrgsyncOut>,
     /// 本次 pdsync-data 是否合入了 `profile:self`（远端胜出）。host 据此
     /// 回写身份文件资料（仅解锁态），保证 sled 镜像与身份文件一致。
     pub profile_applied: bool,
+    /// O4 orgkey-deliver 解包指令（reader 侧收到合法 orgkey-deliver）：host
+    /// 用本机组织身份私钥（seed）解 box 并落 orgkey 表——解包需 recipient
+    /// 私钥，纯逻辑层只做资格/验签判定后产出本指令。
+    pub orgkey_unbox: Option<orgkey::OrgkeyUnbox>,
+}
+
+/// orgsync/orgq 出站信封（body 已构建，host 装配完整信封并经 p2p 节点投递）。
+/// kind 为 KIND_ORGSYNC_* / KIND_ORGQ_*、from=本机 rootId、to=对端成员
+/// rootId（区别于 pdsync 的自设备 from==to==rootId 语义）。
+///
+/// **B1**：每个出站指令携带 `to_root_id`（目标成员 rootId）——orgsync 入站
+/// 的 `from` 即对端成员 rootId，透传为出站信封的 to，host 不再用本机 rootId
+/// 顶替（否则对端 verify_envelope 拒收 need/data 应答）。
+#[derive(Clone, Debug)]
+pub enum OrgsyncOut {
+    /// orgsync-need diff 请求。
+    Need {
+        /// 目标成员 rootId（信封 to）。
+        to_root_id: String,
+        body: Value,
+    },
+    /// orgsync-data 数据传输（单批）。
+    Data {
+        /// 目标成员 rootId（信封 to）。
+        to_root_id: String,
+        body: Value,
+    },
+    /// orgq-req 按需查询/写入请求（成员 → 数据账号）。
+    OrgqReq {
+        /// 目标数据账号 rootId（信封 to）。
+        to_root_id: String,
+        body: Value,
+    },
+    /// orgq-resp 查询应答/写入回执（数据账号 → 成员）。
+    OrgqResp {
+        /// 目标成员 rootId（信封 to）。
+        to_root_id: String,
+        body: Value,
+    },
+}
+
+impl OrgsyncOut {
+    pub fn body(&self) -> &Value {
+        match self {
+            Self::Need { body, .. }
+            | Self::Data { body, .. }
+            | Self::OrgqReq { body, .. }
+            | Self::OrgqResp { body, .. } => body,
+        }
+    }
+
+    /// 目标成员/数据账号 rootId（信封 to）。
+    pub fn to_root_id(&self) -> &str {
+        match self {
+            Self::Need { to_root_id, .. }
+            | Self::Data { to_root_id, .. }
+            | Self::OrgqReq { to_root_id, .. }
+            | Self::OrgqResp { to_root_id, .. } => to_root_id,
+        }
+    }
 }
 
 /// pdsync 出站信封（body 已构建，host 装配完整信封并经 p2p 节点投递）。
@@ -189,7 +266,9 @@ pub fn done(response: Value, events: Vec<P2pEvent>) -> Result<InboundDmResult> {
         device_sync_reply: None,
         profile_sync_reply: None,
         pdsync_out: Vec::new(),
+        orgsync_out: Vec::new(),
         profile_applied: false,
+        orgkey_unbox: None,
     })
 }
 
@@ -350,6 +429,14 @@ fn heal_self_friend_peer<S: StorageBackend>(storage: &mut S, ctx: &InboundContex
 /// （libp2p peerId，随会话 peer 落库供回发寻址）；`online_peers` 为当前
 /// 在线的 libp2p peerId 集合（事件循环快照，用于 ChatReceived 事件里
 /// 会话视图的 online 标志）。
+/// dm 入站处理：校验信封并按 kind 分发。`remote_peer_id` 为连接层对端
+/// （libp2p peerId，随会话 peer 落库供回发寻址）；`online_peers` 为当前
+/// 在线的 libp2p peerId 集合（事件循环快照，用于 ChatReceived 事件里
+/// 会话视图的 online 标志）。
+///
+/// filtered 集合的 orgq-req 以 fail-closed（无权限钩子）处理——宿主如需在
+/// 插件后台运行时执行 `canRead`/`canWrite` 钩子，走
+/// [`handle_inbound_dm_with_orgq_hooks`]。
 pub fn handle_inbound_dm<S: StorageBackend>(
     storage: &mut S,
     my_root_id: &str,
@@ -359,6 +446,57 @@ pub fn handle_inbound_dm<S: StorageBackend>(
     online_peers: &HashSet<String>,
     now_ms: i64,
     node_id: &str,
+) -> Result<InboundDmResult> {
+    handle_inbound_dm_inner(
+        storage,
+        my_root_id,
+        my_nickname,
+        payload,
+        remote_peer_id,
+        online_peers,
+        now_ms,
+        node_id,
+        None,
+    )
+}
+
+/// 同 [`handle_inbound_dm`]，但允许注入 filtered 集合的权限钩子（O3 工作项 2
+/// 的宿主接线点）：数据账号侧处理 orgq-req 时，`hook` 在插件后台运行时
+/// QuickJS 中执行 `canRead`/`canWrite`。`None` = fail-closed（插件未运行降级）。
+pub fn handle_inbound_dm_with_orgq_hooks<S: StorageBackend>(
+    storage: &mut S,
+    my_root_id: &str,
+    my_nickname: &str,
+    payload: Value,
+    remote_peer_id: &str,
+    online_peers: &HashSet<String>,
+    now_ms: i64,
+    node_id: &str,
+    hook: Option<&dyn orgq::OrgqPermHook>,
+) -> Result<InboundDmResult> {
+    handle_inbound_dm_inner(
+        storage,
+        my_root_id,
+        my_nickname,
+        payload,
+        remote_peer_id,
+        online_peers,
+        now_ms,
+        node_id,
+        hook,
+    )
+}
+
+fn handle_inbound_dm_inner<S: StorageBackend>(
+    storage: &mut S,
+    my_root_id: &str,
+    my_nickname: &str,
+    payload: Value,
+    remote_peer_id: &str,
+    online_peers: &HashSet<String>,
+    now_ms: i64,
+    node_id: &str,
+    orgq_hook: Option<&dyn orgq::OrgqPermHook>,
 ) -> Result<InboundDmResult> {
     let envelope = match verify_envelope(&payload, my_root_id, now_ms) {
         Ok(v) => v,
@@ -424,6 +562,24 @@ pub fn handle_inbound_dm<S: StorageBackend>(
         }
         KIND_ORG_INVITE_REPLY => {
             org_invite::handle_org_invite_reply(storage, &ctx, &envelope.from, &envelope.body)
+        }
+        KIND_ORGSYNC_HELLO => {
+            orgsync::handle_orgsync_hello(storage, &ctx, &envelope.from, &envelope.body)
+        }
+        KIND_ORGSYNC_NEED => {
+            orgsync::handle_orgsync_need(storage, &ctx, &envelope.from, &envelope.body)
+        }
+        KIND_ORGSYNC_DATA => {
+            orgsync::handle_orgsync_data(storage, &ctx, &envelope.from, &envelope.body)
+        }
+        KIND_ORGQ_REQ => {
+            orgq::handle_orgq_req(storage, &ctx, &envelope.from, &envelope.body, orgq_hook)
+        }
+        KIND_ORGQ_RESP => {
+            orgq::handle_orgq_resp(storage, &ctx, &envelope.from, &envelope.body)
+        }
+        KIND_ORGKEY_DELIVER => {
+            orgkey::handle_orgkey_deliver(storage, &ctx, &envelope.from, &envelope.body)
         }
         _ => done(fail_response("unknown-kind"), Vec::new()),
     }

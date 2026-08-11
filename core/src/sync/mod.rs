@@ -6,6 +6,7 @@
 pub mod apply;
 pub mod dlog;
 pub mod meta;
+pub mod orgsync;
 pub mod pdsync;
 pub mod personal;
 pub mod versioned;
@@ -21,6 +22,7 @@ pub use meta::{
 pub use personal::{
     ApplyResult, bump_personal_meta, delete_personal, get_personal_meta, is_tombstone,
     personal_meta_key, put_personal, set_personal_meta, PMETA_PREFIX, apply_personal_remote,
+    apply_personal_remote_no_dlog,
 };
 pub use pdsync::{
     CATEGORIES, Category, DiffOutcome, MessageWindow, PdsyncRecord, apply_message_record,

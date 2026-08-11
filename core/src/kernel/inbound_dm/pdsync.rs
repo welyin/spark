@@ -190,7 +190,9 @@ pub(super) fn handle_pdsync_hello<S: StorageBackend>(
         device_sync_reply: None,
         profile_sync_reply: None,
         pdsync_out: out,
+        orgsync_out: Vec::new(),
         profile_applied: false,
+        orgkey_unbox: None,
     })
 }
 
@@ -263,7 +265,9 @@ pub(super) fn handle_pdsync_need<S: StorageBackend>(
         device_sync_reply: None,
         profile_sync_reply: None,
         pdsync_out: out,
+        orgsync_out: Vec::new(),
         profile_applied: false,
+        orgkey_unbox: None,
     })
 }
 
@@ -638,8 +642,10 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
         device_sync_reply: None,
         profile_sync_reply: None,
         pdsync_out: out,
+        orgsync_out: Vec::new(),
         // host 用 profile_applied 决定是否回写身份文件资料
         profile_applied,
+        orgkey_unbox: None,
     })
 }
 

@@ -53,6 +53,7 @@ fn auth_status_rules() {
         &record.org_id,
         &member,
         Some(&OrganizationNodeInfo {
+            device_uid: None,
             peer_id: Some("peer-xxx1".to_string()),
             addresses: vec![],
         }),
@@ -149,6 +150,7 @@ fn pull_list_claim_applied_only_for_known_member() {
     let claim = sign_node_info_claim(
         &identity.signing_key,
         OrganizationNodeInfo {
+            device_uid: None,
             peer_id: Some("member-peer".to_string()),
             addresses: vec!["/ip4/1.2.3.4/tcp/1".to_string()],
         },
@@ -180,7 +182,7 @@ fn pull_list_claim_applied_only_for_known_member() {
         .unwrap();
     let m = updated.find_member(&member).unwrap();
     assert_eq!(
-        m.node_info.as_ref().unwrap().peer_id.as_deref(),
+        m.node_info.as_ref().unwrap().iter().next().unwrap().peer_id.as_deref(),
         Some("member-peer")
     );
     // 响应里的版本是回填后重读的版本（= NOW  bump 后的 updatedAt）
@@ -194,6 +196,7 @@ fn pull_list_claim_applied_only_for_known_member() {
     let stranger_claim = sign_node_info_claim(
         &identity.signing_key,
         OrganizationNodeInfo {
+            device_uid: None,
             peer_id: Some("stranger-peer".to_string()),
             addresses: vec!["/ip4/9.9.9.9/tcp/1".to_string()],
         },
@@ -238,6 +241,7 @@ fn pull_org_response_shapes() {
         None,
         None,
         NOW,
+        false,
     )
     .unwrap();
     assert_eq!(response["ok"], false);
@@ -251,6 +255,7 @@ fn pull_org_response_shapes() {
         None,
         None,
         NOW,
+        false,
     )
     .unwrap();
     assert_eq!(response["ok"], false);
@@ -263,6 +268,7 @@ fn pull_org_response_shapes() {
         None,
         None,
         NOW,
+        false,
     )
     .unwrap();
     assert_eq!(response["ok"], true);
@@ -276,6 +282,7 @@ fn pull_org_response_shapes() {
         None,
         None,
         NOW,
+        false,
     )
     .unwrap();
     assert_eq!(response["status"], "removed");
@@ -288,6 +295,7 @@ fn pull_org_response_shapes() {
         None,
         None,
         NOW,
+        false,
     )
     .unwrap();
     assert_eq!(response["ok"], true);

@@ -66,7 +66,7 @@ pub use org_address::{
 pub use plugin_docs::{
     PLUGIN_DOC_PREFIX, PluginDocSyncItem, apply_plugin_doc_sync_items,
     collect_org_plugin_domains, collect_syncable_plugin_docs, is_sync_disabled,
-    parse_plugin_doc_key, resolve_org_id,
+    migrate_plugin_docs, parse_plugin_doc_key, resolve_org_id,
 };
 pub use pull::{
     PullOrgOutcome, classify_pull_org_response, handle_pull_list_request, handle_pull_org_request,
@@ -101,11 +101,11 @@ pub use tx::{
     list_organization_transactions, organization_transaction_key,
 };
 pub use types::{
-    ORG_META_PREFIX, OrganizationMember, OrganizationNodeInfo, OrganizationRecord,
-    OrganizationRole, OrganizationSyncSection, OrganizationSyncState, OrganizationSyncVersions,
-    OrganizationView, generate_org_secret, generate_organization_id, generate_recovery_secret,
-    is_valid_root_id, normalize_node_info, normalize_optional_node_info, normalize_plugin_domain,
-    normalize_root_id, normalize_text, organization_key, sort_members,
+    ORG_META_PREFIX, OrganizationDeviceSet, OrganizationMember, OrganizationNodeInfo,
+    OrganizationRecord, OrganizationRole, OrganizationSyncSection, OrganizationSyncState,
+    OrganizationSyncVersions, OrganizationView, generate_org_secret, generate_organization_id,
+    generate_recovery_secret, is_valid_root_id, normalize_node_info, normalize_optional_node_info,
+    normalize_plugin_domain, normalize_root_id, normalize_text, organization_key, sort_members,
 };
 
 /// 组织模块统一错误。
@@ -185,6 +185,10 @@ pub enum OrgError {
     /// 快照/记录形状非法。
     #[error("malformed organization data: {0}")]
     Malformed(String),
+
+    /// 插件声明错误（内建集合注册失败，O2b）。
+    #[error(transparent)]
+    Plugindata(#[from] crate::plugindata::PlugindataError),
 
     /// 存储后端错误。
     #[error(transparent)]

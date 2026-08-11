@@ -82,6 +82,17 @@ pub enum KernelError {
     #[error("Password must be at least 8 characters")]
     PasswordTooShort,
 
+    /// orgq 写入被数据账号侧拒绝（denied：encrypted 非读者 / filtered 插件
+    /// 未运行降级；O3 写路径映射）。
+    #[error("Access denied")]
+    AccessDenied,
+
+    /// encrypted 集合密钥不可达（非 reader / 未收到该 epoch 密钥）——
+    /// AEAD 语义下无密钥即无读写权限。独立错误码（H3），不混入 Internal，
+    /// 便于上层识别为「权限/密钥缺失」而非内部故障。
+    #[error("Key unavailable: {0}")]
+    KeyUnavailable(String),
+
     /// 其他流程错误（消息文本与 TS 对应分支一致）。
     #[error("{0}")]
     Internal(String),

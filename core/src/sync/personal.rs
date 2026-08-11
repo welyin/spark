@@ -172,6 +172,37 @@ pub fn apply_personal_remote<S: StorageBackend>(
     Ok(result)
 }
 
+/// 远端合入（**不补登个人域 dlog**）：语义同 [`apply_personal_remote`]，但
+/// 墓碑落地时只删本体 + 落 pmeta，**不追加 pdsync 删除日志**。
+///
+/// 供 org 域使用：orgsync 入站墓碑经本函数落地后由调用方补登**org 域 dlog**
+/// （`dlog:org:{orgId}:{name}@v{version}`），避免把 org 记录混入个人域删除
+/// 日志（B4 架构裁决：远端墓碑接力进正确的删除日志作用域）。
+pub fn apply_personal_remote_no_dlog<S: StorageBackend>(
+    storage: &mut S,
+    record_key: &str,
+    value: &str,
+    remote_meta: &DocMeta,
+) -> SyncResult<ApplyResult> {
+    let local_meta = get_personal_meta(storage, record_key)?;
+    let result = resolve_personal(local_meta.as_ref(), remote_meta);
+    if matches!(result, ApplyResult::Applied) {
+        let meta_raw = serde_json::to_string(remote_meta)?;
+        if is_tombstone(remote_meta) {
+            storage.batch(vec![
+                BatchOperation::delete(record_key),
+                BatchOperation::put(personal_meta_key(record_key), meta_raw),
+            ])?;
+        } else {
+            storage.batch(vec![
+                BatchOperation::put(record_key, value),
+                BatchOperation::put(personal_meta_key(record_key), meta_raw),
+            ])?;
+        }
+    }
+    Ok(result)
+}
+
 /// 删除个人域记录（写 tombstone pmeta，保留 pmeta 供后续同步传播删除）。
 ///
 /// 删除记录本体，pmeta 更新为 `{vv: bumped, ts, tombstone: true}`，并追加

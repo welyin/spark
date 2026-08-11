@@ -164,11 +164,14 @@ impl Kernel {
                 .and_then(|f| f.peer)
                 .map(|p| to_node_info(&p))
         } else if let Some(org_id) = space.strip_prefix("org:") {
+            // 端点化：遍历成员端点集取首个端点作为 dm 寻址线索。
             OrganizationService::get_record(storage, org_id)?
                 .and_then(|r| r.find_member(&conv.peer_root_id).and_then(|m| m.node_info.clone()))
-                .map(|info| PeerNodeInfo {
-                    peer_id: info.peer_id,
-                    addresses: info.addresses,
+                .and_then(|set| {
+                    set.iter().next().map(|info| PeerNodeInfo {
+                        peer_id: info.peer_id.clone(),
+                        addresses: info.addresses.clone(),
+                    })
                 })
         } else {
             None

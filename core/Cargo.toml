@@ -27,6 +27,11 @@ sha2 = "0.11.0"
 # sled：纯 Rust 嵌入式 KV（维护模式，API 冻结可接受），kernel 门面的持久化后端。
 sled = "0.34.7"
 thiserror = "2.0.19"
+# O4 encrypted 集合：orgkey-deliver 的 NaCl crypto_box 需要 Ed25519→X25519
+# 转换（CompressedEdwardsY::decompress + to_montgomery）与 X25519 共享密钥
+# （MontgomeryPoint::mul_clamped，内部 clamp）。纯 Rust，已在 lockfile 中经
+# libp2p 传递引入；对称加密部分复用 aes-gcm（与值加密同族）。
+curve25519-dalek = "4.1"
 
 # p2p 模块网络栈（core/spec/p2p-messages.md §1）：
 # rust-libp2p 已弃 mplex，多路复用器用 yamux（TS 侧后续加 yamux 互通）。

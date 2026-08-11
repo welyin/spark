@@ -10,8 +10,10 @@ use super::{
 };
 use super::super::KernelError;
 use super::super::dm_envelope::{KIND_CHAT, KIND_RECALL};
+use crate::contact::ContactService;
 use crate::message::{
-    LinkPreview, MAX_TEXT_BYTES, MessageRecord, MessageService, MessageType, QuoteRef,
+    LinkPreview, MAX_TEXT_BYTES, MessageError, MessageRecord, MessageService, MessageType,
+    QuoteRef, generate_message_id,
 };
 use crate::p2p::P2pEvent;
 use crate::p2p::node::system_now_ms;
@@ -86,6 +88,155 @@ pub(crate) fn bot_reply_shared(
                 "message": msg_view
             }),
         );
+    }
+    Ok(msg_view)
+}
+
+/// 归属校验：目标会话必须是本插件的 bot 会话，返回 (bot_root_id, bot_name)。
+/// reply 与流式回复三能力共用（流式 chunk/end 按消息 id 定位，仍需先验归属）。
+pub(crate) fn require_owned_bot_conv(
+    host: &PluginHostShared,
+    plugin_id: &str,
+    space: &str,
+    conv_id: &str,
+) -> crate::plugin::Result<(String, String)> {
+    let storage = host.require_storage()?;
+    let conv = MessageService::get_conversation(&storage, space, conv_id)?
+        .ok_or(MessageError::ConversationNotFound)?;
+    let prefix = format!("bot:{plugin_id}:");
+    if !conv.peer_root_id.starts_with(&prefix) {
+        return Err(PluginError::ConversationNotOwned(conv_id.to_string()));
+    }
+    let bot_root_id = conv.peer_root_id.clone();
+    let bot_name = ContactService::get_friend(&storage, &bot_root_id)?
+        .map(|friend| friend.nickname)
+        .filter(|nickname| !nickname.is_empty())
+        .unwrap_or_else(|| bot_root_id.clone());
+    Ok((bot_root_id, bot_name))
+}
+
+/// 流式回复·开始：落一条 `status="streaming"` 的占位消息并广播，返回消息 id。
+/// 逐 chunk 由 [`bot_reply_stream_chunk_shared`] 追加，终态由
+/// [`bot_reply_stream_end_shared`] 收尾。占位消息与 bot_reply_shared 同构，
+/// 仅 status 不同（前端以 streaming 态渲染光标/逐字追加）。
+pub(crate) fn bot_reply_stream_start_shared(
+    host: &PluginHostShared,
+    space: &str,
+    conv_id: &str,
+    bot_root_id: &str,
+    bot_name: &str,
+) -> crate::plugin::Result<String> {
+    let message_id = generate_message_id(system_now_ms());
+    let _ = bot_reply_stream_upsert(host, space, conv_id, bot_root_id, bot_name, &message_id, "", "streaming")?;
+    Ok(message_id)
+}
+
+/// 流式回复·追加：把 chunk 文本追加到占位消息 content 并重发 ChatReceived
+/// （前端按消息 id 更新同一条，逐字上屏）。
+pub(crate) fn bot_reply_stream_chunk_shared(
+    host: &PluginHostShared,
+    space: &str,
+    conv_id: &str,
+    bot_root_id: &str,
+    bot_name: &str,
+    message_id: &str,
+    chunk_text: &str,
+) -> crate::plugin::Result<()> {
+    let _io = host.io_lock.lock().unwrap_or_else(|e| e.into_inner());
+    let storage = host.require_storage()?;
+    let existing = MessageService::get_message(&storage, space, conv_id, message_id)?
+        .ok_or(PluginError::InvalidCall(format!("stream message not found: {message_id}")))?;
+    let mut content = existing.content;
+    content.push_str(chunk_text);
+    if content.len() > MAX_TEXT_BYTES {
+        return Err(PluginError::InvalidInput(format!(
+            "流式消息累计超过长度上限（{MAX_TEXT_BYTES} 字节）"
+        )));
+    }
+    drop(storage);
+    drop(_io);
+    let _ = bot_reply_stream_upsert(host, space, conv_id, bot_root_id, bot_name, message_id, &content, "streaming")?;
+    Ok(())
+}
+
+/// 流式回复·终态：status 收尾（delivered / 有 error 时 failed），内容已定稿。
+pub(crate) fn bot_reply_stream_end_shared(
+    host: &PluginHostShared,
+    space: &str,
+    conv_id: &str,
+    bot_root_id: &str,
+    bot_name: &str,
+    message_id: &str,
+    error: Option<&str>,
+) -> crate::plugin::Result<()> {
+    let _io = host.io_lock.lock().unwrap_or_else(|e| e.into_inner());
+    let storage = host.require_storage()?;
+    let existing = MessageService::get_message(&storage, space, conv_id, message_id)?
+        .ok_or(PluginError::InvalidCall(format!("stream message not found: {message_id}")))?;
+    let content = if existing.content.is_empty() {
+        error.unwrap_or("（无响应）").to_string()
+    } else {
+        existing.content.clone()
+    };
+    let status = if error.is_some() { "failed" } else { "delivered" };
+    drop(storage);
+    drop(_io);
+    let _ = bot_reply_stream_upsert(host, space, conv_id, bot_root_id, bot_name, message_id, &content, status)?;
+    Ok(())
+}
+
+/// 流式回复的写库+广播共用：占位/追加/终态都是「按 id 覆盖同一条消息记录
+/// 再发 ChatReceived」。与 bot_reply_shared 的差异：不在此回同步自设备
+/// （流式中间态无需扩散；终态完成后由调用方按普通 reply 口径补一次回同步
+/// ——见 host_env 的 reply_stream_end）。
+#[allow(clippy::too_many_arguments)]
+fn bot_reply_stream_upsert(
+    host: &PluginHostShared,
+    space: &str,
+    conv_id: &str,
+    bot_root_id: &str,
+    bot_name: &str,
+    message_id: &str,
+    content: &str,
+    status: &str,
+) -> crate::plugin::Result<ChatMessageView> {
+    let _io = host.io_lock.lock().unwrap_or_else(|e| e.into_inner());
+    let mut storage = host.require_storage()?;
+    let now = system_now_ms();
+    // 覆盖写：取既有记录的 created_at（保持消息键不变——消息键含 created_at，
+    // 用新时间会写到不同键，产生重复消息），无则按当前时间（start 场景）
+    let created_at = MessageService::get_message(&storage, space, conv_id, message_id)?
+        .map(|m| m.created_at)
+        .unwrap_or(now);
+    let record = MessageRecord {
+        id: message_id.to_string(),
+        sender_id: bot_root_id.to_string(),
+        sender_name: bot_name.to_string(),
+        msg_type: MessageType::Text,
+        content: content.to_string(),
+        file_size: None,
+        duration: None,
+        link: None,
+        quote: None,
+        created_at,
+        status: Some(status.to_string()),
+        recalled: false,
+        read: false,
+    };
+    MessageService::append_message_pdsync(&mut storage, space, conv_id, &record, now, Some(&host.sync_node_id()))?;
+    let conv = MessageService::get_conversation(&storage, space, conv_id)?
+        .ok_or(MessageError::ConversationNotFound)?;
+    let conv_view = conversation_view(&conv, &HashSet::new(), None, None);
+    let msg_view = message_view(&record, Some("__bot_sender__"));
+    if let (Ok(conversation), Ok(message)) = (
+        serde_json::to_value(&conv_view),
+        serde_json::to_value(&msg_view),
+    ) {
+        let _ = host.event_tx.send(P2pEvent::ChatReceived(serde_json::json!({
+            "spaceKey": space,
+            "conversation": conversation,
+            "message": message
+        })));
     }
     Ok(msg_view)
 }

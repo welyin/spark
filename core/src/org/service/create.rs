@@ -102,6 +102,7 @@ impl OrganizationService {
                 gender: None,
                 region: None,
                 use_personal_identity: None,
+                access_key: None,
                 extra: Default::default(),
             }],
             sync: None,
@@ -156,7 +157,18 @@ impl OrganizationService {
             last_synced_at: 0,
         });
         match node_id {
-            Some(node_id) => Self::save_record_pdsync(storage, &record, now_ms, node_id)?,
+            Some(node_id) => {
+                Self::save_record_pdsync(storage, &record, now_ms, node_id)?;
+                // O2b 工作项 1：注册内建 all-members 集合（org:structure/
+                // org:contacts/org:invites），声明记录随 orgsync 声明先行同步。
+                crate::plugindata::declare_builtin_org_collections(
+                    storage,
+                    &record.org_id,
+                    current_root_id,
+                    now_ms,
+                    node_id,
+                )?;
+            }
             None => Self::save_record(storage, &record)?,
         }
         Ok(record)

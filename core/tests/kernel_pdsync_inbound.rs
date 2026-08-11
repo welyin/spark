@@ -26,8 +26,6 @@ use spark_core::sync::meta::DocMeta;
 use spark_core::sync::pdsync::{PdsyncRecord, build_data_batch, build_hello, self_friend_key};
 use spark_core::sync::{get_personal_meta, is_tombstone};
 
-use common::*;
-
 const PERSONAL: &str = "personal";
 const NOW: i64 = 1_720_000_000_000;
 /// pdsync 版本向量节点 id：对齐 src 内联测试惯例（无 p2p 节点时用 local-node）。

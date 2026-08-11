@@ -63,6 +63,10 @@ pub const CATEGORIES: &[Category] = &[
     // 永不离开本机。
     Category { name: "pdecl", prefixes: &["pdecl:"] },
     Category { name: "pdoc", prefixes: &["pdoc:"] },
+    // O4 encrypted 集合：orgkey 表（personal 域，32B 集合对称密钥）经 pdsync
+    // 自设备扩散（同账号设备间），**永不进 orgsync 组织流量**（orgsync 数据
+    // 白名单只放行 orgd:/org:coll:/org:acl:/存量组织键，见 inbound_dm/orgsync）。
+    Category { name: "orgkey", prefixes: &["orgkey:"] },
 ];
 
 /// 按前缀从注册表解析 category（不存在 → `None`，如组织/消息前缀）。

@@ -23,6 +23,7 @@ use serde_json::Value;
 
 use super::error::{PluginError, Result};
 use super::host_env::PluginHostShared;
+use super::runtime_data_hooks::PRELUDE;
 
 /// 单次 JS 回调执行时限（超时由 interrupt handler 强制中断，防死循环）。
 const JS_CALLBACK_DEADLINE_MS: u64 = 5_000;
@@ -272,196 +273,8 @@ fn drain_pending_jobs(runtime: &Runtime) -> Result<()> {
     Ok(())
 }
 
-/// JS 侧运行时门面（插件后台 API 面；`__spark_host_call` 由 Rust 侧注入，
-/// 返回 JSON 字符串，错误以 `{"error": ...}` 表达并在 `call()` 转为异常）。
-///
-/// 结构：
-/// - `handlers`：事件回调（`message` 会话消息；异步能力结果 kind 内置消化）；
-/// - `queryHandlers`：宿主查询回调（`spark.onQuery(kind, fn)`，应答经
-///   `query.respond` 回流，支持异步处理器——Promise 由引擎 job 队列排空）；
-/// - `pending`：异步能力（sys.exec/fetch）的 callId → Promise 解析器配对表，
-///   结果经 `*-result` 事件回流时兑现。
-const PRELUDE: &str = r#"
-(function () {
-    var handlers = {};
-    var queryHandlers = {};
-    var pending = {};
-    var nextCallId = 1;
-
-    function call(capability, payload) {
-        var result = JSON.parse(__spark_host_call(capability, JSON.stringify(payload)));
-        if (result && result.error) throw new Error(result.error);
-        return result;
-    }
-
-    // 异步能力统一发起：登记 pending → 启动 host 任务（立即返回）→
-    // 结果事件回流时兑现 Promise
-    function startAsync(capability, payload) {
-        return new Promise(function (resolve, reject) {
-            var callId = nextCallId++;
-            pending[callId] = { resolve: resolve, reject: reject };
-            try {
-                call(capability, Object.assign({ callId: callId }, payload));
-            } catch (error) {
-                delete pending[callId];
-                reject(error);
-            }
-        });
-    }
-
-    function settleAsync(payload) {
-        var slot = pending[payload.callId];
-        if (!slot) return;
-        delete pending[payload.callId];
-        if (payload.error) slot.reject(new Error(payload.error));
-        else slot.resolve(payload);
-    }
-
-    function makeConsole(level) {
-        return function () {
-            var parts = [];
-            for (var i = 0; i < arguments.length; i++) {
-                var v = arguments[i];
-                parts.push(typeof v === 'string' ? v : JSON.stringify(v));
-            }
-            __spark_host_call('log', JSON.stringify({ message: level + ' ' + parts.join(' ') }));
-        };
-    }
-    globalThis.console = {
-        log: makeConsole(''),
-        info: makeConsole(''),
-        warn: makeConsole('[warn]'),
-        error: makeConsole('[error]')
-    };
-
-    globalThis.spark = {
-        onMessage: function (fn) { handlers.message = fn; },
-        onQuery: function (kind, fn) { queryHandlers[kind] = fn; },
-        get pluginId() { return __spark_plugin_id; },
-        log: function (msg) {
-            __spark_host_call('log', JSON.stringify({ message: String(msg) }));
-        },
-        ensureBot: function (botId, displayName) {
-            return call('contact.ensureBot', { botId: botId, displayName: displayName }).botRootId;
-        },
-        reply: function (payload, text) {
-            return call('message.reply', {
-                spaceKey: payload.spaceKey,
-                convId: payload.conversation && payload.conversation.id,
-                text: String(text)
-            });
-        },
-        docs: {
-            // domain 可选：缺省为插件自身域；跨域仅限显式指定（见 host_env
-            // resolve_doc_domain 的合法性约束）
-            get: function (collection, id, domain) {
-                return call('docs.get', { collection: collection, id: id, domain: domain || null });
-            },
-            put: function (collection, id, doc, config, domain) {
-                call('docs.put', { collection: collection, id: id, doc: doc, config: config || null, domain: domain || null });
-            },
-            delete: function (collection, id, config, domain) {
-                call('docs.delete', { collection: collection, id: id, config: config || null, domain: domain || null });
-            },
-            query: function (collection, options, config, domain) {
-                return call('docs.query', { collection: collection, options: options || null, config: config || null, domain: domain || null });
-            },
-            defineCollection: function (collection, schema) {
-                call('docs.defineCollection', { collection: collection, schema: schema });
-            }
-        },
-        // P6 声明式数据 API：策略随声明走，读写零同步参数（personal scope；
-        // 写库即同步，版本化/墓碑/删除日志/驻留裁剪由内核完成）
-        data: {
-            declareCollection: function (decl) {
-                return call('data.declareCollection', decl);
-            },
-            save: function (name, key, value, version) {
-                call('data.save', { name: name, key: key, value: value, version: version || null });
-            },
-            del: function (name, key, version) {
-                call('data.delete', { name: name, key: key, version: version || null });
-            },
-            get: function (name, key, version) {
-                return call('data.get', { name: name, key: key, version: version || null });
-            },
-            query: function (name, options, version) {
-                options = options || {};
-                return call('data.query', {
-                    name: name,
-                    prefix: options.prefix || null,
-                    limit: options.limit || null,
-                    cursor: options.cursor || null,
-                    version: version || null
-                });
-            },
-            dropVersion: function (name, version) {
-                call('data.dropVersion', { name: name, version: String(version) });
-            },
-            // 内建 blob：base64 入、{hash,size} 出；记录内以 {$blob:hash,...} 引用
-            saveBlob: function (base64Data) {
-                return call('data.saveBlob', { data: base64Data });
-            },
-            // 命中 → {status:'ready', data(base64)}；未命中 → {status:'pending'}
-            // （已置 want 标记，调和拉取后重读）
-            readBlob: function (hash) {
-                return call('data.readBlob', { hash: hash });
-            },
-            // 远端合入本插件集合（pdoc/pdecl）时回调 {pluginId,name,keys}；
-            // 本地写不触发（本地路径即时可见）
-            onChange: function (fn) {
-                handlers['data-change'] = fn;
-            }
-        },
-        sys: {
-            exec: function (program, args, workdir) {
-                return startAsync('sys.exec.start', {
-                    program: program, args: args || [], workdir: workdir || null
-                });
-            },
-            fetch: function (url, options) {
-                options = options || {};
-                return startAsync('sys.fetch.start', {
-                    url: url,
-                    method: options.method || 'GET',
-                    headers: options.headers || null,
-                    body: options.body || null
-                });
-            }
-        }
-    };
-
-    globalThis.__spark_dispatch = function (kind, payloadJson) {
-        var payload = JSON.parse(payloadJson);
-        if (kind === 'sys-exec-result' || kind === 'sys-fetch-result') {
-            settleAsync(payload);
-            return;
-        }
-        var fn = handlers[kind];
-        if (typeof fn === 'function') fn(payload);
-    };
-
-    globalThis.__spark_query = function (queryId, kind, payloadJson) {
-        var fn = queryHandlers[kind];
-        var result;
-        try {
-            // 同步调用必须包 try/catch：处理器同步抛错（含 payload JSON
-            // 解析失败）要转成拒绝应答回流，不能冒出 __spark_query 终结线程
-            result = typeof fn === 'function' ? fn(JSON.parse(payloadJson)) : null;
-        } catch (error) {
-            result = Promise.reject(error);
-        }
-        Promise.resolve(result).then(
-            function (value) {
-                call('query.respond', { queryId: queryId, result: value === undefined ? null : value });
-            },
-            function (error) {
-                call('query.respond', { queryId: queryId, result: { error: String(error) } });
-            }
-        );
-    };
-})();
-"#;
+// JS prelude 已移至 `runtime_data_hooks.rs`（Z5 650 行硬线拆分），本文件经
+// `use super::runtime_data_hooks::PRELUDE;` 引用（见文件头 use）。
 
 #[cfg(test)]
 mod tests {
@@ -481,8 +294,10 @@ mod tests {
             my_root_id: Arc::new(Mutex::new(None)),
             p2p_node: Arc::new(Mutex::new(None)),
             signing_key: Arc::new(Mutex::new(None)),
+            seed_shared: Arc::new(Mutex::new(None)),
             collection_configs: Arc::new(Mutex::new(Default::default())),
             pending_queries: Arc::new(Mutex::new(Default::default())),
+            filter_caps: Arc::new(Mutex::new(Default::default())),
             runtime: tokio::runtime::Handle::current(),
         }
     }
@@ -502,6 +317,64 @@ mod tests {
             std::thread::sleep(Duration::from_millis(100));
         }
         panic!("timeout waiting for: {what}");
+    }
+
+    /// O3 filtered 权限钩子：prelude `spark.data.onReadFilter`/`onWriteFilter` 注册
+    /// 到 filter_caps 能力注册表，并可经 PluginEvent::Query 同步执行 canRead/canWrite
+    /// 裁决（host 侧 orgq-req 接线面）。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn data_filter_hook_registers_and_serves() {
+        let script = r#"
+spark.data.onReadFilter("data-filter-test:ledger", function (member, key) { return key !== "secret"; });
+spark.data.onWriteFilter("data-filter-test:ledger", function (member, key, value) { return value.allow === true; });
+"#;
+        let host = bare_host();
+        let registry = PluginRuntimeRegistry::default();
+        let (handle, join) = spawn_plugin_runtime(
+            "data-filter-test",
+            script,
+            host.clone(),
+            registry.clone(),
+            Vec::new(),
+        )
+        .unwrap();
+        registry.register("data-filter-test", handle);
+        wait_until(
+            || host.has_filter("data-filter-test:ledger", "read")
+                && host.has_filter("data-filter-test:ledger", "write"),
+            "onReadFilter/onWriteFilter 注册到 filter_caps",
+        );
+        // 插件未注册该集合的过滤器 → has_filter false（fail-closed 判定来源）
+        assert!(!host.has_filter("data-filter-test:other", "read"));
+
+        // 经 PluginHostQuery 同步查询 canRead/canWrite（数据账号侧 orgq-req 裁决路径）
+        let query = crate::kernel::PluginHostQuery::new(host.clone(), registry.clone());
+        let allow = query
+            .query(
+                "data-filter-test",
+                "data.canRead",
+                serde_json::json!({ "collection": "data-filter-test:ledger", "member": "m1", "key": "k1" }),
+            )
+            .expect("canRead 应答存在");
+        assert_eq!(allow, serde_json::json!(true), "非 secret key 放行");
+        let deny = query
+            .query(
+                "data-filter-test",
+                "data.canRead",
+                serde_json::json!({ "collection": "data-filter-test:ledger", "member": "m1", "key": "secret" }),
+            )
+            .expect("canRead 应答存在");
+        assert_eq!(deny, serde_json::json!(false), "secret key 拒绝");
+        let w = query
+            .query(
+                "data-filter-test",
+                "data.canWrite",
+                serde_json::json!({ "collection": "data-filter-test:ledger", "member": "m1", "key": "k1", "value": { "allow": true } }),
+            )
+            .expect("canWrite 应答存在");
+        assert_eq!(w, serde_json::json!(true), "canWrite 放行");
+        // 钩子抛异常 → 应答 {error}，host 侧解析非布尔 → fail-closed 拒绝
+        let _ = join;
     }
 
     #[tokio::test(flavor = "multi_thread")]

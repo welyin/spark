@@ -132,9 +132,12 @@ impl Kernel {
             node_shared: Arc::clone(&self.p2p_node_shared),
             signing_key_shared: Arc::clone(&self.signing_key_shared),
             password_shared: Arc::clone(&self.password_shared),
+            seed_shared: Arc::clone(&self.seed_shared),
             data_dir: self.config.data_dir.clone(),
             io_lock: Arc::clone(&self.io_lock),
             pdsync_capable_self_devices: Arc::clone(&self.pdsync_capable_self_devices),
+            orgsync_capable_member_peers: Arc::clone(&self.orgsync_capable_member_peers),
+            plugin_host_query: self.plugin_host_query_handle(),
         });
         let mut node =
             self.runtime
@@ -171,12 +174,14 @@ impl Kernel {
             // 要等下轮 keepalive 才收敛）
             self_device_links: Arc::clone(&self.self_device_links),
             pdsync_capable_self_devices: Arc::clone(&self.pdsync_capable_self_devices),
+            orgsync_capable_member_peers: Arc::clone(&self.orgsync_capable_member_peers),
             // 稳态 hello 触发状态仅 keepalive tick 消费：worker 上下文（start_p2p
             // 装配，随 p2p 会话存活）持有即够；门面即席上下文新建空状态即可
             self_hello_state: Arc::new(std::sync::Mutex::new(org_sync::SelfHelloState::default())),
             self_hello_immediate: Arc::new(std::sync::Mutex::new(
                 org_sync::ImmediateHelloState::default(),
             )),
+            filter_caps: Arc::clone(&self.plugin_host.filter_caps),
         };
         let worker = org_sync::spawn_worker(self.runtime.handle(), ctx, org_sync_rx);
 
@@ -310,12 +315,14 @@ impl Kernel {
             self_device_link: Arc::clone(&self.self_device_link),
             self_device_links: Arc::clone(&self.self_device_links),
             pdsync_capable_self_devices: Arc::clone(&self.pdsync_capable_self_devices),
+            orgsync_capable_member_peers: Arc::clone(&self.orgsync_capable_member_peers),
             // 稳态 hello 触发状态仅 keepalive tick 消费：worker 上下文（start_p2p
             // 装配，随 p2p 会话存活）持有即够；门面即席上下文新建空状态即可
             self_hello_state: Arc::new(std::sync::Mutex::new(org_sync::SelfHelloState::default())),
             self_hello_immediate: Arc::new(std::sync::Mutex::new(
                 org_sync::ImmediateHelloState::default(),
             )),
+            filter_caps: Arc::clone(&self.plugin_host.filter_caps),
         })
     }
 

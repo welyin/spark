@@ -1039,6 +1039,7 @@
                 ..Default::default()
             },
             1000,
+            None,
         )
         .unwrap();
         save(&mut a, &decl, "c1", r#"{"title":"一"}"#).unwrap();
@@ -1076,6 +1077,7 @@
                 ..Default::default()
             },
             2000,
+            None,
         )
         .unwrap();
         save(&mut a, &local_decl, "d1", "\"secret\"").unwrap();
@@ -1112,6 +1114,7 @@
                 ..Default::default()
             },
             1000,
+            None,
         )
         .unwrap();
         let pc_decl = declare(
@@ -1123,6 +1126,7 @@
                 ..Default::default()
             },
             1000,
+            None,
         )
         .unwrap();
         save(&mut a, &all_decl, "c1", "\"all\"").unwrap();

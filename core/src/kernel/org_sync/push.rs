@@ -35,6 +35,21 @@ impl OrgSyncContext {
         let record = OrganizationService::get_record(&self.storage, org_id)
             .map_err(|e| e.to_string())?
             .ok_or_else(|| "Organization not found".to_string())?;
+        // O2b §20.8 能力探测出站（单出口）：对端该设备已证明支持 orgsync →
+        // 停用 org-share 快照推送（旧链路出站对该端停用），由 orgsync 反熵
+        // 承接；从未回应 orgsync 的旧端 → 回退旧快照链路（本函数继续）。
+        if let Some(peer_id) = extract_peer_id(node_info)
+            && self
+                .orgsync_capable_member_peers
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains(peer_id.as_str())
+        {
+            log::info!(
+                "[org] org-share push skipped (peer orgsync-capable): orgId={org_id}, targetRootId={target_root_id}"
+            );
+            return Ok(());
+        }
         // 推送线形：TS `organization.sync ? organization : buildOrganizationSyncSnapshot`
         // （原始记录优先；spec §13.3）
         // ⚠️ 原始记录路径须剥除 orgRootSecret（组织根私钥密文，org.md §15 不同步出
@@ -67,8 +82,11 @@ impl OrgSyncContext {
         self.wait_topic_subscriber(target_peer_id.as_deref(), SUBSCRIBER_WAIT_MS)
             .await;
 
-        let plugin_docs =
-            collect_syncable_plugin_docs(&self.storage, org_id).map_err(|e| e.to_string())?;
+        // F6：本函数开头已对 orgsync-capable 对端整体跳过（见上方能力探测），
+        // 走到这里是**旧端**（非 orgsync-capable）→ 不停用旧通道，旧端成员
+        // 仍收 pluginDocs（灰度停用只对 capable 收件人生效）。
+        let plugin_docs = collect_syncable_plugin_docs(&self.storage, org_id, false)
+            .map_err(|e| e.to_string())?;
         let payload = serde_json::json!({
             "targetRootId": target_root_id,
             "syncId": sync_id,
@@ -171,22 +189,25 @@ impl OrgSyncContext {
         };
         let recipients = OrganizationService::sync_recipients(&record, actor_root_id);
         for member in recipients {
-            let Some(info) = member.node_info.clone() else {
+            let Some(set) = member.node_info.clone() else {
                 continue;
             };
-            let peer = PeerNodeInfo {
-                peer_id: info.peer_id,
-                addresses: info.addresses,
-            };
-            if let Err(e) = self
-                .sync_org_to_member(&peer, &member.root_id, org_id)
-                .await
-            {
-                // 预录模型：成员离线不视为失败（service.ts:563-569 console.warn）
-                self.warn(format!(
-                    "[org] member sync deferred (peer unreachable): orgId={org_id}, targetRootId={}, error={e}",
-                    member.root_id
-                ));
+            // 端点化：遍历成员端点集，逐端点推送（多设备聚合）。
+            for info in set.iter() {
+                let peer = PeerNodeInfo {
+                    peer_id: info.peer_id.clone(),
+                    addresses: info.addresses.clone(),
+                };
+                if let Err(e) = self
+                    .sync_org_to_member(&peer, &member.root_id, org_id)
+                    .await
+                {
+                    // 预录模型：成员离线不视为失败（service.ts:563-569 console.warn）
+                    self.warn(format!(
+                        "[org] member sync deferred (peer unreachable): orgId={org_id}, targetRootId={}, error={e}",
+                        member.root_id
+                    ));
+                }
             }
         }
     }

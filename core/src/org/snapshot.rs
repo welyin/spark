@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::types::{
-    OrganizationMember, OrganizationNodeInfo, OrganizationRecord, OrganizationRole,
-    OrganizationSyncSection, OrganizationSyncState, OrganizationSyncVersions,
+    OrganizationAccessKey, OrganizationDeviceSet, OrganizationMember, OrganizationRecord,
+    OrganizationRole, OrganizationSyncSection, OrganizationSyncState, OrganizationSyncVersions,
 };
 use super::{OrgError, Result};
 
@@ -69,9 +69,10 @@ pub struct SnapshotMember {
     /// 录入人 rootId。
     #[serde(rename = "addedBy")]
     pub added_by: String,
-    /// 节点信息（`None` = 未携带，合并保留 existing——无清除语义，与身份字段不同）。
+    /// 节点信息（按 deviceUid 聚合的端点集；`None` = 未携带，合并保留
+    /// existing——无清除语义，与身份字段不同）。
     #[serde(rename = "nodeInfo", default, skip_serializing_if = "Option::is_none")]
-    pub node_info: Option<OrganizationNodeInfo>,
+    pub node_info: Option<OrganizationDeviceSet>,
     /// 组织内昵称（`""` = 已清除；键缺失 = 旧对端未携带）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nickname: Option<String>,
@@ -95,6 +96,15 @@ pub struct SnapshotMember {
         skip_serializing_if = "Option::is_none"
     )]
     pub use_personal_identity: Option<bool>,
+    /// 组织身份访问密钥（O4）：`org-access:{orgId}` 域身份公钥 + 根密钥绑定
+    /// 签名。None = 未携带（合并保留 existing——仅本人可改，其它成员快照
+    /// 不带该字段时必须保留已发布密钥）。
+    #[serde(
+        rename = "accessKey",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub access_key: Option<OrganizationAccessKey>,
 }
 
 impl From<&OrganizationMember> for SnapshotMember {
@@ -113,6 +123,8 @@ impl From<&OrganizationMember> for SnapshotMember {
             region: Some(member.region.clone().unwrap_or_default()),
             // Option 原样上线：Some(false) 也发（true→false 可传播）
             use_personal_identity: member.use_personal_identity,
+            // accessKey 原样上线（None 也省略键——缺省兼容，旧端可忽略）
+            access_key: member.access_key.clone(),
         }
     }
 }
@@ -376,6 +388,18 @@ pub fn merge_organization_sync_snapshot(
                 &incoming.use_personal_identity,
                 existing_ref.and_then(|m| m.use_personal_identity.as_ref()),
             ),
+            // O4 accessKey：仅本人可改（O2）。快照合入采取保守策略——**成员
+            // 已有 accessKey 时，incoming 携带不同的 accessKey 不采用**（保留
+            // 本地）。理由：accessKey 由成员本人自发布（`publish_access_key`，
+            // 根密钥绑定签名），peer 快照无法独立复核根绑定签名（纯逻辑层无
+            // 根公钥），故不信任 peer 对他人 accessKey 的改动——否则恶意成员
+            // 可把他人 accessKey 换成自己密钥，窃取其 orgkey-deliver 密钥。
+            // 成员自身经 `publish_access_key` 直接落库，不依赖本合并路径传播。
+            // 新成员（existing 无 accessKey）则采用 incoming。
+            access_key: match existing_ref.and_then(|m| m.access_key.as_ref()) {
+                Some(_) => existing_ref.and_then(|m| m.access_key.clone()),
+                None => incoming.access_key.clone(),
+            },
             extra: existing_member.map(|m| m.extra).unwrap_or_default(),
         };
         match index_by_root_id.get(&incoming.root_id) {

@@ -18,8 +18,8 @@ use super::super::tx::{
     OrganizationTransactionRecord, OrganizationTransactionType, append_organization_transaction,
 };
 use super::super::types::{
-    OrganizationMember, OrganizationNodeInfo, OrganizationRecord, OrganizationRole,
-    OrganizationSyncState, OrganizationView, generate_recovery_secret,
+    OrganizationDeviceSet, OrganizationMember, OrganizationNodeInfo, OrganizationRecord,
+    OrganizationRole, OrganizationSyncState, OrganizationView, generate_recovery_secret,
     normalize_optional_node_info, normalize_root_id, sort_members,
 };
 use super::super::{OrgError, Result};
@@ -136,6 +136,10 @@ impl OrganizationService {
 
         let normalized_root_id = normalize_root_id(member_root_id)?;
         let normalized_node_info = normalize_optional_node_info(node_info)?;
+        // 端点化：addMember 的入参是单端点，聚合成端点集（按 deviceUid 键）。
+        let normalized_set = normalized_node_info
+            .as_ref()
+            .map(|info| OrganizationDeviceSet::from_single(info.clone()));
         let previous_last_synced_at = record.sync.as_ref().map(|s| s.last_synced_at).unwrap_or(0);
 
         let existing = record
@@ -145,14 +149,22 @@ impl OrganizationService {
         let tx_type;
         let tx_summary;
         if existing {
-            // 重复添加 = 更新 nodeInfo；未提供 nodeInfo 时保留原值（service.ts:223-266）
+            // 重复添加 = 更新/合并端点；未提供 nodeInfo 时保留原值（service.ts:223-266）
             if let Some(member) = record
                 .members
                 .iter_mut()
                 .find(|m| m.root_id == normalized_root_id)
-                && normalized_node_info.is_some()
+                && let Some(incoming) = normalized_node_info.as_ref()
             {
-                member.node_info = normalized_node_info.clone();
+                // 按 deviceUid 聚合：同设备旧 peerId 墓碑化替换（成员表端点化）。
+                match member.node_info.as_mut() {
+                    Some(set) => {
+                        set.upsert(incoming);
+                    }
+                    None => {
+                        member.node_info = Some(OrganizationDeviceSet::from_single(incoming.clone()));
+                    }
+                }
             }
             tx_type = OrganizationTransactionType::MemberUpdate;
             tx_summary = format!("更新成员节点信息 {normalized_root_id}");
@@ -162,13 +174,14 @@ impl OrganizationService {
                 role: OrganizationRole::Member,
                 joined_at: now_ms,
                 added_by: current_root_id.to_string(),
-                node_info: normalized_node_info.clone(),
+                node_info: normalized_set,
                 nickname: None,
                 avatar: None,
                 signature: None,
                 gender: None,
                 region: None,
                 use_personal_identity: None,
+                access_key: None,
                 extra: Default::default(),
             });
             tx_type = OrganizationTransactionType::MemberAdd;
@@ -539,11 +552,14 @@ impl OrganizationService {
                 if member.root_id == actor_root_id {
                     return false;
                 }
-                member.node_info.as_ref().is_some_and(|info| {
-                    info.peer_id
-                        .as_deref()
-                        .is_some_and(|p| !p.trim().is_empty())
-                        || !info.addresses.is_empty()
+                // 端点化：任一端点有 peerId/address 即算可同步收件人。
+                member.node_info.as_ref().is_some_and(|set| {
+                    set.iter().any(|info| {
+                        info.peer_id
+                            .as_deref()
+                            .is_some_and(|p| !p.trim().is_empty())
+                            || !info.addresses.is_empty()
+                    })
                 })
             })
             .collect()
@@ -593,10 +609,12 @@ impl OrganizationService {
             view.push(RecoveryViewItem {
                 org_id: record.org_id.clone(),
                 recovery_secret: record.recovery_secret().unwrap_or_default().to_string(),
+                // 端点化：展平成员端点集，收集所有带地址的端点。
                 member_node_infos: record
                     .members
                     .iter()
                     .filter_map(|m| m.node_info.clone())
+                    .flat_map(|set| set.endpoints.into_iter())
                     .filter(|info| !info.addresses.is_empty())
                     .collect(),
             });

@@ -14,7 +14,7 @@ use super::super::snapshot::{merge_organization_sync_snapshot, normalize_incomin
 use super::super::tx::{
     OrganizationTransactionRecord, OrganizationTransactionType, append_organization_transaction,
 };
-use super::super::types::{OrganizationRecord, normalize_optional_node_info};
+use super::super::types::{OrganizationDeviceSet, OrganizationRecord, normalize_optional_node_info};
 use super::OrganizationService;
 
 impl OrganizationService {
@@ -57,22 +57,28 @@ impl OrganizationService {
             let Some(member) = record.find_member(&claim_root_id) else {
                 continue;
             };
-            let unchanged = member.node_info.as_ref().and_then(|n| n.peer_id.as_deref())
-                == claimed_node_info.peer_id.as_deref()
-                && member
-                    .node_info
-                    .as_ref()
-                    .map(|n| n.addresses.clone())
-                    .unwrap_or_default()
-                    == claimed_node_info.addresses;
-            if unchanged {
+            // 端点化：回填落库键从 peerId 维度改 deviceUid 维度——把声明端点
+            // 按 deviceUid 合并进成员端点集，同 deviceUid 新 peerId 墓碑化替换。
+            // 先克隆判断是否变更（upsert 需要可变借用；无变化不 bump 版本）。
+            let mut probe = member.node_info.clone().unwrap_or_default();
+            let changed = probe.upsert(&claimed_node_info);
+            if !changed {
                 continue;
             }
 
             let mut updated = record.clone();
             for m in &mut updated.members {
                 if m.root_id == claim_root_id {
-                    m.node_info = Some(claimed_node_info.clone());
+                    match m.node_info.as_mut() {
+                        Some(set) => {
+                            set.upsert(&claimed_node_info);
+                        }
+                        None => {
+                            m.node_info = Some(OrganizationDeviceSet::from_single(
+                                claimed_node_info.clone(),
+                            ));
+                        }
+                    }
                 }
             }
             updated.updated_at = now_ms;

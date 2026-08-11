@@ -22,8 +22,9 @@ mod record;
 mod view;
 
 pub use member::{
-    OrganizationMember, OrganizationNodeInfo, OrganizationRole, normalize_node_info,
-    normalize_optional_node_info, sort_members,
+    OrganizationAccessKey, OrganizationDeviceSet, OrganizationMember, OrganizationNodeInfo,
+    OrganizationRole, access_key_bind_payload, normalize_node_info, normalize_optional_node_info,
+    sort_members,
 };
 pub use normalize::{
     ORG_META_PREFIX, generate_org_secret, generate_organization_id, generate_recovery_secret,

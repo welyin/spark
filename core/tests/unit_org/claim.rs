@@ -20,6 +20,7 @@ fn sample_claim(with_peer: bool) -> NodeInfoClaim {
     sign_node_info_claim(
         &identity.signing_key,
         OrganizationNodeInfo {
+            device_uid: None,
             peer_id: with_peer.then(|| "12D3KooWSelfPeer".to_string()),
             addresses: vec!["/ip4/1.2.3.4/tcp/15002/ws".to_string()],
         },

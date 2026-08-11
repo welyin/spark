@@ -46,17 +46,24 @@ pub fn member_auth_status(
     if authenticated_self {
         return Ok(());
     }
-    let expected = member
-        .node_info
-        .as_ref()
-        .and_then(|n| n.peer_id.as_deref())
-        .map(str::trim)
-        .unwrap_or("");
-    if expected.is_empty() {
+    let Some(set) = &member.node_info else {
+        return Ok(());
+    };
+    // 端点化：成员的可用 peerId 集合（trim 滤空）。
+    let member_peers: Vec<&str> = set
+        .iter()
+        .filter_map(|e| e.peer_id.as_deref().map(str::trim))
+        .filter(|p| !p.is_empty())
+        .collect();
+    if member_peers.is_empty() {
         return Ok(());
     }
     let actual = requester_peer_id.map(str::trim).unwrap_or("");
-    if actual.is_empty() || actual != expected {
+    // 成员已有 peerId 但请求方未带 → 拒（对齐旧语义）。
+    if actual.is_empty() {
+        return Err("peer-mismatch");
+    }
+    if !member_peers.contains(&actual) {
         return Err("peer-mismatch");
     }
     Ok(())
@@ -237,6 +244,9 @@ pub fn handle_pull_org_request<S: StorageBackend>(
     remote_peer_id: Option<&str>,
     current_root_id: Option<&str>,
     now_ms: i64,
+    // F6：请求方（收件人）设备是否 orgsync-capable——灰度停用旧通道的判定
+    // 依据（旧端成员仍收 pluginDocs）。
+    recipient_orgsync_capable: bool,
 ) -> Result<Value> {
     let requester_root_id = payload
         .get("requesterRootId")
@@ -303,7 +313,7 @@ pub fn handle_pull_org_request<S: StorageBackend>(
     // （四字段版本塌缩为 updatedAt，spec §13.3）
     let record_value = serde_json::to_value(&record)?;
     let snapshot = normalize_incoming_snapshot(&record_value)?;
-    let plugin_docs = collect_syncable_plugin_docs(storage, org_id)?;
+    let plugin_docs = collect_syncable_plugin_docs(storage, org_id, recipient_orgsync_capable)?;
     Ok(serde_json::json!({
         "ok": true,
         "type": "org-pull-org-response",

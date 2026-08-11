@@ -113,25 +113,39 @@ pub fn has_explicit_data_accounts(record: &OrganizationRecord) -> bool {
 }
 
 /// 成员的设备类（K 记账的 PC 计入判定）：查 DeviceRecord。
+/// 端点化：成员端点集任一端点为 PC 类设备即记 pc（账号至少 1 台 PC 达标）；
 /// 无记录（离线成员、未同步设备数据）按 pc 计入——宁可多算不漏算
 /// （漏算会触发不必要的补副本推送）。
 pub fn member_device_class<S: crate::storage::StorageBackend>(
     storage: &S,
     member: &OrganizationMember,
 ) -> &'static str {
-    let class = member
-        .node_info
-        .as_ref()
-        .and_then(|n| n.peer_id.as_deref())
-        .and_then(|peer_id| {
-            crate::device::DeviceService::get(storage, peer_id).ok().flatten()
-        })
-        .map(|record| record.os);
-    // DeviceRecord.os 是友好名（"Android"/"iOS"/"Windows"…），按小写前缀判定
-    match class.as_deref().map(str::to_ascii_lowercase).as_deref() {
-        Some(os) if os.starts_with("android") || os.starts_with("ios") => "mobile",
-        _ => "pc",
+    let Some(set) = &member.node_info else {
+        return "pc";
+    };
+    // F1：跟踪是否有端点带 peerId 进入查表——端点集存在但全部端点仅地址
+    // （无 peerId）时无法查设备记录，视同"无记录"按 pc 计入（与无 nodeInfo
+    // 的兜底一致，宁可多算不漏算）。
+    let mut any_peer_lookup = false;
+    for endpoint in set.iter() {
+        let Some(peer_id) = endpoint.peer_id.as_deref() else {
+            continue;
+        };
+        any_peer_lookup = true;
+        let os = crate::device::DeviceService::get(storage, peer_id)
+            .ok()
+            .flatten()
+            .map(|record| record.os);
+        // DeviceRecord.os 是友好名（"Android"/"iOS"/"Windows"…），按小写前缀判定
+        match os.as_deref().map(str::to_ascii_lowercase).as_deref() {
+            Some(os) if os.starts_with("android") || os.starts_with("ios") => continue,
+            _ => return "pc",
+        }
     }
+    if !any_peer_lookup {
+        return "pc";
+    }
+    "mobile"
 }
 
 #[cfg(test)]

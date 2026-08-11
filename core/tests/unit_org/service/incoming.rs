@@ -14,6 +14,7 @@ fn claim_for(mnemonic: &str, peer_id: Option<&str>, now: i64) -> NodeInfoClaim {
     sign_node_info_claim(
         &identity.signing_key,
         OrganizationNodeInfo {
+            device_uid: None,
             peer_id: peer_id.map(str::to_string),
             addresses: vec!["/ip4/5.6.7.8/tcp/15002/ws".to_string()],
         },
@@ -52,7 +53,7 @@ fn apply_node_info_claim_full_rules() {
         .unwrap();
     let m = updated.find_member(&member_id).unwrap();
     assert_eq!(
-        m.node_info.as_ref().unwrap().peer_id.as_deref(),
+        m.node_info.as_ref().unwrap().iter().next().unwrap().peer_id.as_deref(),
         Some("12D3KooWMember")
     );
     assert_eq!(updated.updated_at, NOW + 2);

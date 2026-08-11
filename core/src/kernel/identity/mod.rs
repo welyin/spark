@@ -404,6 +404,7 @@ impl Kernel {
         *self.current_root_id_shared.lock().unwrap() = Some(identity.id());
         *self.signing_key_shared.lock().unwrap() = Some(identity.signing_key.clone());
         *self.password_shared.lock().unwrap() = Some(password.to_string());
+        *self.seed_shared.lock().unwrap() = Some(seed);
         // 昵称/头像共享格同步（dm 入站应答用；身份文件在调用点前已落盘）
         let profile = self
             .read_identity_file(&identity.id())

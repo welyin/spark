@@ -5,8 +5,8 @@ use serde_json::Value;
 use spark_core::org::snapshot::*;
 use spark_core::org::tx::{OrganizationTransactionRecord, OrganizationTransactionType};
 use spark_core::org::types::{
-    OrganizationMember, OrganizationNodeInfo, OrganizationRecord, OrganizationRole,
-    OrganizationSyncSection, OrganizationSyncState, OrganizationSyncVersions,
+    OrganizationDeviceSet, OrganizationMember, OrganizationNodeInfo, OrganizationRecord,
+    OrganizationRole, OrganizationSyncSection, OrganizationSyncState, OrganizationSyncVersions,
 };
 
 fn rid(ch: char) -> String {
@@ -235,10 +235,11 @@ fn merge_into_empty() {
 #[test]
 fn merge_member_nodeinfo_fallback_and_order() {
     let mut existing = sample_record();
-    existing.members[1].node_info = Some(OrganizationNodeInfo {
+    existing.members[1].node_info = Some(OrganizationDeviceSet::from_single(OrganizationNodeInfo {
+        device_uid: None,
         peer_id: Some("peer-b-123".to_string()),
         addresses: vec!["/ip4/9.9.9.9/tcp/1".to_string()],
-    });
+    }));
     existing.updated_at = 3000; // 本地 updatedAt 更大 → max 保留
 
     // incoming：b 不带 nodeInfo（应保留 existing），新成员 c，且 a 角色被覆盖
@@ -270,6 +271,9 @@ fn merge_member_nodeinfo_fallback_and_order() {
         merged.members[1]
             .node_info
             .as_ref()
+            .unwrap()
+            .iter()
+            .next()
             .unwrap()
             .peer_id
             .as_deref(),
@@ -570,4 +574,44 @@ fn legacy_record_and_snapshot_without_identity_fields() {
     assert_eq!(merged.avatar, ORG_AVATAR, "缺省 avatar 保留 existing");
     assert_eq!(merged.members[0].nickname.as_deref(), Some("旧昵称"));
     assert_eq!(merged.members[0].use_personal_identity, Some(true));
+}
+
+/// O2：accessKey 合入仅本人可改——成员已有 accessKey 时，peer 快照携带不同
+/// accessKey **不采用**（保留本地），防恶意成员把他人 accessKey 换成自己密钥
+/// 窃取其 orgkey-deliver。新成员（无既有 accessKey）则采用 incoming。
+#[test]
+fn snapshot_merge_does_not_let_peer_override_access_key() {
+    use spark_core::org::types::OrganizationAccessKey;
+    let mine = OrganizationAccessKey {
+        public_key: "my-own-pub".to_string(),
+        bind_sig: "self-sig".to_string(),
+    };
+    let attacker = OrganizationAccessKey {
+        public_key: "attacker-pub".to_string(),
+        bind_sig: "attacker-sig".to_string(),
+    };
+
+    // existing：成员 'a' 已有 accessKey = mine
+    let mut existing = sample_record();
+    existing.members[0].access_key = Some(mine.clone());
+
+    // incoming：恶意 peer 携带成员 'a' 的 accessKey = attacker（不同值）
+    let mut incoming = build_organization_sync_snapshot(&existing, &[]);
+    incoming.members[0].access_key = Some(attacker.clone());
+    let merged = merge_organization_sync_snapshot(Some(&existing), &incoming, 8000);
+    assert_eq!(
+        merged.members[0].access_key.as_ref(),
+        Some(&mine),
+        "peer 不能覆盖他人已发布 accessKey（保留本地本人密钥）"
+    );
+
+    // 新成员：existing 无该成员的 accessKey → 采用 incoming（其本人首次发布）
+    let mut existing2 = sample_record();
+    existing2.members[0].access_key = None;
+    let merged2 = merge_organization_sync_snapshot(Some(&existing2), &incoming, 8000);
+    assert_eq!(
+        merged2.members[0].access_key.as_ref(),
+        Some(&attacker),
+        "新成员首次发布 accessKey 应被采用"
+    );
 }

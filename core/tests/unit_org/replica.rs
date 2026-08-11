@@ -3,7 +3,8 @@
 use spark_core::org::replica::*;
 use spark_core::org::sync_state::OrgSyncState;
 use spark_core::org::types::{
-    OrganizationMember, OrganizationNodeInfo, OrganizationRole, OrganizationSyncVersions,
+    OrganizationDeviceSet, OrganizationMember, OrganizationNodeInfo, OrganizationRole,
+    OrganizationSyncVersions,
 };
 use spark_core::p2p::RecoveryState;
 
@@ -28,9 +29,12 @@ fn member(root: char, peer_id: Option<&str>) -> OrganizationMember {
         role: OrganizationRole::Member,
         joined_at: 1000,
         added_by: rid('z'),
-        node_info: peer_id.map(|p| OrganizationNodeInfo {
-            peer_id: Some(p.to_string()),
-            addresses: vec![],
+        node_info: peer_id.map(|p| {
+            OrganizationDeviceSet::from_single(OrganizationNodeInfo {
+                device_uid: None,
+                peer_id: Some(p.to_string()),
+                addresses: vec![],
+            })
         }),
         ..Default::default()
     }

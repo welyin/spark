@@ -109,6 +109,7 @@ fn recovery_view_match() {
         org_id: "org_0123456789abcdef".to_string(),
         recovery_secret: "ef".repeat(32),
         member_node_infos: vec![spark_core::org::types::OrganizationNodeInfo {
+            device_uid: None,
             peer_id: Some("peerA".to_string()),
             addresses: vec!["/ip4/1.2.3.4/tcp/15002/ws".to_string()],
         }],

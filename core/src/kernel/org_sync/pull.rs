@@ -29,9 +29,14 @@ impl OrgSyncContext {
     async fn self_node_info_claim(&self) -> Option<NodeInfoClaim> {
         let key = self.signing_key.lock().unwrap().clone()?;
         let info = self.node.local_node_info().await.ok()?;
+        // 端点化：声明携带本机 deviceUid，管理员侧按 deviceUid 聚合端点。
+        let mut storage = self.storage.clone();
+        let device_uid =
+            crate::device::get_or_create_device_uid(&mut storage).ok();
         Some(sign_node_info_claim(
             &key,
             OrganizationNodeInfo {
+                device_uid,
                 peer_id: info.peer_id,
                 addresses: info.addresses,
             },
@@ -271,6 +276,11 @@ impl OrgSyncContext {
                         return PullBranch::Applied;
                     }
                 };
+                // O3 成员移除擦除现场：合入后本机 rootId 已不在成员表（被移除）→
+                // 尽力擦除该组织的 orgq 缓存/离线队列/在线数据账号目录（缓存非副本、
+                // 移除后不再有资格持有；离线队列对已退出组织无意义）。见
+                // [`wipe_orgq_if_member_removed`]。
+                wipe_orgq_if_member_removed(&mut self.storage.clone(), &merged, root_id);
                 self.apply_plugin_docs(&plugin_docs, now);
                 stats.pulled += 1;
                 // 副本记账（org-pull-sync.ts:279-296 onSyncState；O1 账号口径：
@@ -310,5 +320,137 @@ impl OrgSyncContext {
         ) {
             self.warn(format!("apply plugin docs failed: {e}"));
         }
+    }
+}
+
+// ------------------------------------------------------------------
+// O3 工作项：成员移除擦除现场
+// ------------------------------------------------------------------
+
+/// 成员移除擦除现场（O3）：org 快照合入后若本机 rootId 已不在成员表
+/// （被管理员移除 / 组织解散），尽力擦除该组织的 orgq 成员侧状态——
+/// 缓存（`orgq:cache:`）、离线写入队列（`orgq:queue:`）与在线数据账号
+/// 目录（`orgq:da:online:`）。缓存非副本、移除后不再有资格持有；离线
+/// 队列对已退出组织无意义。返回是否触发了擦除（本机确被移除）。
+fn wipe_orgq_if_member_removed<S: crate::storage::StorageBackend>(
+    storage: &mut S,
+    merged: &OrganizationRecord,
+    my_root_id: &str,
+) -> bool {
+    if merged.find_member(my_root_id).is_some() {
+        return false;
+    }
+    // 本机仍持有该组织的 orgq 现场才需擦除；无现场则空操作（幂等）。
+    let removed = crate::sync::orgsync::orgq_wipe_org_local(storage, &merged.org_id);
+    if removed > 0 {
+        log::info!(
+            "[ORGSYNC] wiped orgq local state | org={} removed={} (member removed)",
+            merged.org_id,
+            removed
+        );
+    }
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::org::types::{OrganizationMember, OrganizationRole};
+    use crate::storage::{MemoryStorage, StorageBackend};
+    use crate::sync::orgsync::orgq_cache_key;
+
+    fn record_with_members(org_id: &str, roots: &[&str]) -> OrganizationRecord {
+        OrganizationRecord {
+            org_id: org_id.to_string(),
+            name: "t".to_string(),
+            description: String::new(),
+            avatar: String::new(),
+            base_plugin_domain: None,
+            created_at: 1000,
+            created_by: "creator".to_string(),
+            updated_at: 1000,
+            members: roots
+                .iter()
+                .map(|r| OrganizationMember {
+                    root_id: r.to_string(),
+                    role: OrganizationRole::Member,
+                    joined_at: 1000,
+                    added_by: "creator".to_string(),
+                    node_info: None,
+                    nickname: None,
+                    avatar: None,
+                    signature: None,
+                    gender: None,
+                    region: None,
+                    use_personal_identity: None,
+                    access_key: None,
+                    extra: Default::default(),
+                })
+                .collect(),
+            sync: None,
+            gateways: vec![],
+            data_accounts: vec![],
+            org_address: None,
+            is_public: false,
+            extra: Default::default(),
+        }
+    }
+
+    /// O3 成员移除擦除现场：本机 rootId 已不在合入后成员表 → 擦除该组织的
+    /// orgq 缓存/离线队列/在线目录；仍在成员表则不擦除（跨组织隔离）。
+    #[test]
+    fn wipe_orgq_if_member_removed_clears_local_state() {
+        let mut s = MemoryStorage::new();
+        let org_id = "org_0000000000000001";
+        // 本机 my 的 orgq 现场（缓存 + 离线队列 + 在线目录）
+        s.put(&orgq_cache_key(org_id, "finance:ledger@v1", "k1"), "\"v\"")
+            .unwrap();
+        s.put(&format!("orgq:queue:{org_id}:finance:ledger@v1:k1"), "{}")
+            .unwrap();
+        s.put(&format!("orgq:da:online:{org_id}:da-a"), "123").unwrap();
+
+        // 本机已被移除（成员表不含 my）→ 触发擦除
+        let removed_record = record_with_members(org_id, &["da-a"]);
+        assert!(wipe_orgq_if_member_removed(&mut s, &removed_record, "my"));
+        assert!(
+            s.get(&orgq_cache_key(org_id, "finance:ledger@v1", "k1"))
+                .unwrap()
+                .is_none(),
+            "移除后缓存擦除"
+        );
+        assert!(
+            s.get(&format!("orgq:queue:{org_id}:finance:ledger@v1:k1"))
+                .unwrap()
+                .is_none(),
+            "移除后离线队列擦除"
+        );
+        assert!(
+            s.get(&format!("orgq:da:online:{org_id}:da-a")).unwrap().is_none(),
+            "移除后在线目录擦除"
+        );
+
+        // 本机仍在成员表 → 不擦除
+        let still_member = record_with_members(org_id, &["my", "da-a"]);
+        s.put(&orgq_cache_key(org_id, "finance:ledger@v1", "k2"), "\"v\"")
+            .unwrap();
+        assert!(!wipe_orgq_if_member_removed(&mut s, &still_member, "my"));
+        assert!(
+            s.get(&orgq_cache_key(org_id, "finance:ledger@v1", "k2"))
+                .unwrap()
+                .is_some(),
+            "仍在成员表不擦除"
+        );
+
+        // 跨组织隔离：他组织的 orgq 现场不受影响
+        let other_id = "org_0000000000000002";
+        s.put(&orgq_cache_key(other_id, "finance:ledger@v1", "k9"), "\"v\"")
+            .unwrap();
+        let _ = wipe_orgq_if_member_removed(&mut s, &removed_record, "my");
+        assert!(
+            s.get(&orgq_cache_key(other_id, "finance:ledger@v1", "k9"))
+                .unwrap()
+                .is_some(),
+            "他组织 orgq 现场不受本组织移除影响"
+        );
     }
 }

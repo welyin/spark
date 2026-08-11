@@ -321,6 +321,109 @@ impl KernelDmHandler {
             }
         });
     }
+
+    /// orgsync 出站投递：把纯逻辑层构建好的 hello/need/data body 装配成完整
+    /// orgsync-* 信封（kind=KIND_ORGSYNC_*、from=本机 rootId、
+    /// to=对端成员 rootId，后者由每个 OrgsyncOut 携带——B1），逐个
+    /// `dm_direct` 回投（spawn 模式同 `spawn_pdsync_reply`，失败静默）。
+    ///
+    /// 墓碑 ACK 重发（F2）对齐 pdsync replies.rs:309-313：本批携带 dseq 时，
+    /// 5s/15s 水位未覆盖（对端已确认序号 ≥ 本批最大 dseq）则整批重发；
+    /// 水位已覆盖 → break 不再重发。水位键用 org 域 `dlog:org:{orgId}:{name}@v{version}:wm:{rootId}:{peerId}`
+    /// （B6 按 (rootId, peerId) 设备粒度）。
+    pub(super) fn spawn_orgsync_reply(
+        &self,
+        my_root_id: &str,
+        target: PeerNodeInfo,
+        outputs: Vec<crate::kernel::inbound_dm::OrgsyncOut>,
+    ) {
+        let node = self
+            .node_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let signing_key = self
+            .signing_key_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let (Some(node), Some(signing_key)) = (node, signing_key) else {
+            return;
+        };
+        // orgsync 出站：from=本机 rootId, to=各 output 携带的目标成员 rootId
+        let from = my_root_id.to_string();
+        // 本批所有 output 的目标成员 rootId（B1：入站 handler 从信封 from 透传，
+        // 全部指向同一对端成员）
+        let to_member_root_id = outputs
+            .first()
+            .map(|o| o.to_root_id().to_string())
+            .unwrap_or_else(|| my_root_id.to_string());
+        let pushed_max_dseq: Option<u64> = outputs
+            .iter()
+            .filter_map(|out| match out {
+                crate::kernel::inbound_dm::OrgsyncOut::Data { body, .. } => body_max_dseq(body),
+                crate::kernel::inbound_dm::OrgsyncOut::Need { .. }
+                | crate::kernel::inbound_dm::OrgsyncOut::OrgqReq { .. }
+                | crate::kernel::inbound_dm::OrgsyncOut::OrgqResp { .. } => None,
+            })
+            .max();
+        let wm_peer_id = target.peer_id.clone();
+        let storage = self.storage.clone();
+        // 对端成员 rootId（GC/水位查询的 root 键段）+ 本批 (org_id, name, version)
+        // 从 Data body 解析（需要重发判定）。
+        let ack_ctx = outputs
+            .iter()
+            .filter_map(|out| match out {
+                crate::kernel::inbound_dm::OrgsyncOut::Data { body, .. } => {
+                    body_org_scope(body).map(|s| (to_member_root_id.clone(), s))
+                }
+                _ => None,
+            })
+            .next();
+        let retry_first_ms = crate::sync::orgsync::ORGSYNC_DLOG_ACK_RETRY_FIRST_MS as u64;
+        let retry_second_ms = crate::sync::orgsync::ORGSYNC_DLOG_ACK_RETRY_SECOND_MS as u64;
+        let storage = storage;
+        tokio::spawn(async move {
+            send_orgsync_outputs(
+                &node,
+                &signing_key,
+                &from,
+                &target,
+                &outputs,
+            )
+            .await;
+            let (Some(max_dseq), Some(peer_id), Some((root_id, (org_id, name, version)))) =
+                (pushed_max_dseq, wm_peer_id, ack_ctx)
+            else {
+                return;
+            };
+            // F2：org 域 dlog 水位重发，5s/15s 水位未覆盖则重发、已覆盖则 break
+            for delay_ms in [retry_first_ms, retry_second_ms] {
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                let wm = crate::sync::orgsync::org_dlog_get_watermark(
+                    &storage, &org_id, &name, &version, &root_id, &peer_id,
+                )
+                .unwrap_or(0);
+                if wm >= max_dseq {
+                    break; // 回执已到（对端 need/hello 的 dlogAck 推进了水位）
+                }
+                log::info!(
+                    "[ORGSYNC] dlog retry | root={} watermark={} pushed={}",
+                    root_id,
+                    wm,
+                    max_dseq
+                );
+                send_orgsync_outputs(
+                    &node,
+                    &signing_key,
+                    &from,
+                    &target,
+                    &outputs,
+                )
+                .await;
+            }
+        });
+    }
 }
 
 /// 出站 body 中墓碑记录的最大 dseq（无墓碑 → None）。
@@ -330,6 +433,16 @@ fn body_max_dseq(body: &Value) -> Option<u64> {
         .iter()
         .filter_map(|r| r.get("dseq").and_then(Value::as_u64))
         .max()
+}
+
+/// 从 orgsync-data body 解析 (orgId, name, version)（org dlog 水位查询用）。
+fn body_org_scope(body: &Value) -> Option<(String, String, String)> {
+    let org_id = body.get("orgId")?.as_str()?.to_string();
+    let col_full = body.get("collection")?.as_str()?;
+    let at = col_full.rfind("@v")?;
+    let name = col_full[..at].to_string();
+    let version = col_full[at + 2..].to_string();
+    Some((org_id, name, version))
 }
 
 /// 逐个装配并投递 pdsync 出站信封（rate-limited 有限重试；其余失败静默）。
@@ -370,6 +483,58 @@ async fn send_pdsync_outputs(
         // 但对端可能是未升级的旧版本（仍按 1s 窗口限流连发信封）——
         // 隔 1.2s（略大于限流窗口）重试至多 2 次；其余失败维持静默
         // （反熵是周期性的，本轮丢失下一轮补齐，不无限放大）。
+        let mut retries = 0;
+        loop {
+            let response = node.dm_direct(target, envelope.clone()).await;
+            let rate_limited = matches!(&response, Ok(v) if dm_response_is_rate_limited(v));
+            if !rate_limited || retries >= PDSYNC_RATE_LIMIT_MAX_RETRIES {
+                break;
+            }
+            retries += 1;
+            tokio::time::sleep(std::time::Duration::from_millis(
+                PDSYNC_RATE_LIMIT_RETRY_DELAY_MS,
+            ))
+            .await;
+        }
+    }
+}
+
+/// 逐个装配并投递 orgsync 出站信封（rate-limited 有限重试；其余失败静默）。
+/// kind 为 KIND_ORGSYNC_*、from=本机 rootId、to=各 output 携带的目标成员
+/// rootId（B1）。
+async fn send_orgsync_outputs(
+    node: &std::sync::Arc<crate::p2p::node::P2pNode>,
+    signing_key: &ed25519_dalek::SigningKey,
+    from: &str,
+    target: &PeerNodeInfo,
+    outputs: &[crate::kernel::inbound_dm::OrgsyncOut],
+) {
+    for output in outputs {
+        let kind = match output {
+            crate::kernel::inbound_dm::OrgsyncOut::Need { .. } => {
+                crate::kernel::dm_envelope::KIND_ORGSYNC_NEED
+            }
+            crate::kernel::inbound_dm::OrgsyncOut::Data { .. } => {
+                crate::kernel::dm_envelope::KIND_ORGSYNC_DATA
+            }
+            crate::kernel::inbound_dm::OrgsyncOut::OrgqReq { .. } => {
+                crate::kernel::dm_envelope::KIND_ORGQ_REQ
+            }
+            crate::kernel::inbound_dm::OrgsyncOut::OrgqResp { .. } => {
+                crate::kernel::dm_envelope::KIND_ORGQ_RESP
+            }
+        };
+        // B1：每个 output 携带目标成员 rootId（信封 to），而非统一的入站 from
+        let to = output.to_root_id();
+        let envelope = dm_envelope::build_envelope(
+            kind,
+            from,
+            to,
+            system_now_ms(),
+            output.body().clone(),
+            signing_key,
+        );
+        // rate-limited 有限重试（与 pdsync 同口径）
         let mut retries = 0;
         loop {
             let response = node.dm_direct(target, envelope.clone()).await;

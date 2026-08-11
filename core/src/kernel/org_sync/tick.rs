@@ -159,6 +159,13 @@ impl OrgSyncContext {
         // 3) 管理员补副本
         self.replenish_replicas(&root_id).await;
 
+        // 3.5) orgsync-hello 触发：本机作为复制组成员，向已连接的复制组成员
+        //       发送 orgsync-hello 摘要（O2a §20.3）。
+        //       TODO: 完整接线——从 VersionedStorage 变更信号（last_local_write_ms）
+        //       驱动即时 hello + 1s 防抖；当前最小闭环：每 tick 遍历组织与集合，
+        //       向已连接复制组成员发送 hello。后续需接入 orgd 写变更 watcher。
+        self.maybe_send_orgsync_hello(&root_id, &connected).await;
+
         // 4) 失联 recovery
         self.maybe_run_org_recovery(connected_candidates.is_empty(), &root_id)
             .await;
@@ -504,21 +511,24 @@ impl OrgSyncContext {
                 if member.is_self || member.ever_synced {
                     continue;
                 }
-                let node_info = record
+                // 端点化：遍历成员端点集，取首个可寻址端点（peerId 或地址非空）。
+                let Some(set) = record
                     .find_member(&member.root_id)
                     .and_then(|m| m.node_info.clone())
-                    .filter(|info| {
-                        info.peer_id
-                            .as_deref()
-                            .is_some_and(|p| !p.trim().is_empty())
-                            || !info.addresses.is_empty()
-                    });
-                let Some(info) = node_info else {
+                else {
+                    continue;
+                };
+                let Some(info) = set.iter().find(|info| {
+                    info.peer_id
+                        .as_deref()
+                        .is_some_and(|p| !p.trim().is_empty())
+                        || !info.addresses.is_empty()
+                }) else {
                     continue;
                 };
                 let peer = PeerNodeInfo {
-                    peer_id: info.peer_id,
-                    addresses: info.addresses,
+                    peer_id: info.peer_id.clone(),
+                    addresses: info.addresses.clone(),
                 };
                 if self
                     .sync_org_to_member(&peer, &member.root_id, &record.org_id)

@@ -52,12 +52,20 @@ pub(crate) struct PluginHostShared {
     /// 解锁期签名私钥共享格（= kernel `signing_key_shared`，自设备回同步
     /// 信封自签用）。
     pub(crate) signing_key: Arc<Mutex<Option<ed25519_dalek::SigningKey>>>,
+    /// 解锁期 BIP39 种子（O4 grantAccess/revokeAccess 组织域身份派生用，=
+    /// kernel `seed_shared`；lock 时清除）。
+    pub(crate) seed_shared: Arc<Mutex<Option<[u8; 64]>>>,
     /// 集合配置缓存（= kernel `collection_configs`；docs.put/delete/query 时
     /// 写入兜底声明，已持久化的集合声明优先）。
     pub(crate) collection_configs: Arc<Mutex<HashMap<(String, String), CollectionConfig>>>,
     /// 宿主查询在途表（query_id → 应答通道；`plugin_host_query` 插入，
     /// JS 侧 `query.respond` 回流取出）。
     pub(crate) pending_queries: Arc<Mutex<HashMap<u64, StdSender<Value>>>>,
+    /// filtered 集合权限钩子注册表（O3 工作项 2）：collection 名（`name@v` 之前的
+    /// name）→ 注册的过滤种类（"read"/"write"/"read-write"）。由插件 prelude
+    /// 调 `data.onReadFilter`/`data.onWriteFilter` 时更新——数据账号侧 orgq-req
+    /// 的 host 钩子据此判定该集合能否服务（插件未运行即无条目 → fail-closed）。
+    pub(crate) filter_caps: Arc<Mutex<HashMap<String, String>>>,
     /// kernel tokio runtime 句柄（投递任务 spawn 目标）。
     pub(crate) runtime: tokio::runtime::Handle,
 }
@@ -75,6 +83,16 @@ pub(crate) struct PluginRuntimeContext {
 }
 
 impl PluginHostShared {
+    /// 该集合是否注册了指定种类的过滤钩子（数据账号侧 orgq-req 服务判定）。
+    /// 插件未运行即无条目 → false（fail-closed）。`kind` ∈ {"read","write"}。
+    pub(crate) fn has_filter(&self, collection: &str, kind: &str) -> bool {
+        self.filter_caps
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(collection)
+            .is_some_and(|caps| caps.contains(kind))
+    }
+
     /// 读当前存储镜像（版本化句柄克隆，共享底层库与 node_id 格；未打开返回
     /// StorageNotReady）。
     pub(crate) fn require_storage(&self) -> Result<crate::kernel::KernelStorage> {
@@ -108,6 +126,9 @@ impl PluginHostShared {
     ) -> Result<Value> {
         let plugin_id = rtx.plugin_id.as_str();
         let payload: Value = serde_json::from_str(payload_json)?;
+        if capability.starts_with("message.replyStream") || capability == "sys.fetchStream.start" {
+            eprintln!("[stream-dbg] host call {capability} plugin={plugin_id}");
+        }
         // 权限强制（对齐桥 dispatcher 的 CALL_PERMISSIONS 中间件）：未授权
         // 以错误回流 JS——同步能力由 prelude 抛异常、sys.* 经 startAsync
         // 转为 Promise 拒绝；不 panic、不终止插件线程
@@ -134,18 +155,36 @@ impl PluginHostShared {
             "docs.defineCollection" => self.doc_define_collection(plugin_id, &payload),
             // P6 声明式数据 API（personal scope）：声明一次 + 读写零同步参数
             "data.declareCollection" => self.data_declare_collection(plugin_id, &payload),
+            // O3 filtered 权限钩子注册（prelude onReadFilter/onWriteFilter 调）：
+            // 记录该集合注册的过滤种类到 filter_caps——数据账号侧 orgq-req 据此
+            // 判定能否服务（插件未运行 = 无条目 = fail-closed 只存不服务）。
+            "data.onReadFilter" => self.data_on_read_filter(plugin_id, &payload),
+            "data.onWriteFilter" => self.data_on_write_filter(plugin_id, &payload),
             "data.save" => self.data_save(plugin_id, &payload),
             "data.delete" => self.data_delete(plugin_id, &payload),
             "data.get" => self.data_get(plugin_id, &payload),
             "data.query" => self.data_query(plugin_id, &payload),
             "data.dropVersion" => self.data_drop_version(plugin_id, &payload),
+            // O4 插件 API 访问控制（encrypted 授权名单，§5.2）：owner 维护名单，
+            // 内核按 owner 验签（无额外权限项）。data_access 方法在
+            // host_env_access 模块。
+            "data.grantAccess" => self.data_grant_access(plugin_id, &payload),
+            "data.revokeAccess" => self.data_revoke_access(plugin_id, &payload),
+            "data.listAccess" => self.data_list_access(plugin_id, &payload),
             // 内建 blob：内容哈希寻址；拉取（eager/lazy 调和）由 pdsync 链路完成
             "data.saveBlob" => self.data_save_blob(plugin_id, &payload),
             "data.readBlob" => self.data_read_blob(plugin_id, &payload),
             // 系统能力：长时操作异步化——启动即返，结果经事件队列回流
             // （JS Promise 由 prelude 配对 callId）
             "sys.exec.start" => self.sys_exec_start(rtx, &payload),
+            "sys.execStream.start" => self.sys_exec_stream_start(rtx, &payload),
             "sys.fetch.start" => self.sys_fetch_start(rtx, &payload),
+            "sys.fetchStream.start" => self.sys_fetch_stream_start(rtx, &payload),
+            // 流式回复（主聊天窗口 AI 逐字上屏）：start 落占位 → chunk 追加 →
+            // end 收尾；归属校验与 message.reply 同口径（本插件 bot 会话）。
+            "message.replyStreamStart" => self.reply_stream_start(plugin_id, &payload),
+            "message.replyStreamChunk" => self.reply_stream_chunk(plugin_id, &payload),
+            "message.replyStreamEnd" => self.reply_stream_end(plugin_id, &payload),
             // 宿主查询应答回流（plugin_host_query 的另一半）
             "query.respond" => self.query_respond(&payload),
             other => Err(PluginError::InvalidCall(format!(
@@ -204,6 +243,72 @@ impl PluginHostShared {
         )?;
         Ok(serde_json::to_value(view)?)
     }
+
+    /// `message.replyStreamStart`：流式回复开始——归属校验后落 streaming 占位
+    /// 消息并广播，返回消息 id 供 chunk/end 按 id 定位。
+    fn reply_stream_start(&self, plugin_id: &str, payload: &Value) -> Result<Value> {
+        let space = required_str(payload, "spaceKey")?;
+        let conv_id = required_str(payload, "convId")?;
+        eprintln!("[stream-dbg] replyStreamStart enter plugin={plugin_id} space={space} conv={conv_id}");
+        let (bot_root_id, bot_name) =
+            crate::kernel::require_owned_bot_conv(self, plugin_id, space, conv_id)?;
+        eprintln!("[stream-dbg] replyStreamStart owned bot={bot_root_id}");
+        let message_id = crate::kernel::bot_reply_stream_start_shared(
+            self, space, conv_id, &bot_root_id, &bot_name,
+        )?;
+        eprintln!("[stream-dbg] replyStreamStart done messageId={message_id}");
+        Ok(serde_json::json!({ "messageId": message_id }))
+    }
+
+    /// `message.replyStreamChunk`：追加一段流式文本（重发 ChatReceived 逐字上屏）。
+    fn reply_stream_chunk(&self, plugin_id: &str, payload: &Value) -> Result<Value> {
+        let space = required_str(payload, "spaceKey")?;
+        let conv_id = required_str(payload, "convId")?;
+        let message_id = required_str(payload, "messageId")?;
+        let text = required_str(payload, "text")?;
+        let (bot_root_id, bot_name) =
+            crate::kernel::require_owned_bot_conv(self, plugin_id, space, conv_id)?;
+        crate::kernel::bot_reply_stream_chunk_shared(
+            self, space, conv_id, &bot_root_id, &bot_name, message_id, text,
+        )?;
+        Ok(serde_json::json!({ "ok": true }))
+    }
+
+    /// `message.replyStreamEnd`：流式回复终态（delivered/failed），并按普通
+    /// reply 口径补一次自设备回同步（中间态不扩散，终态定稿后同步）。
+    fn reply_stream_end(&self, plugin_id: &str, payload: &Value) -> Result<Value> {
+        let space = required_str(payload, "spaceKey")?;
+        let conv_id = required_str(payload, "convId")?;
+        let message_id = required_str(payload, "messageId")?;
+        let error = payload.get("error").and_then(Value::as_str);
+        let (bot_root_id, bot_name) =
+            crate::kernel::require_owned_bot_conv(self, plugin_id, space, conv_id)?;
+        crate::kernel::bot_reply_stream_end_shared(
+            self, space, conv_id, &bot_root_id, &bot_name, message_id, error,
+        )?;
+        // 终态定稿后回同步自设备（与 bot_reply_shared 的 deliver_to_devices 同口径）
+        if let Some(my_root_id) = self
+            .my_root_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        {
+            let storage = self.require_storage()?;
+            if let Some(msg) = MessageService::get_message(&storage, space, conv_id, message_id)? {
+                let msg_view = crate::kernel::message_view(&msg, Some("__bot_sender__"));
+                self.deliver_to_devices(
+                    &my_root_id,
+                    crate::kernel::dm_envelope::KIND_CHAT,
+                    serde_json::json!({
+                        "spaceKey": space,
+                        "convId": conv_id,
+                        "message": msg_view
+                    }),
+                );
+            }
+        }
+        Ok(serde_json::json!({ "ok": true }))
+    }
 }
 
 /// capability → 所需权限（逐字对齐壳层桥 dispatcher 的 CALL_PERMISSIONS
@@ -217,10 +322,42 @@ fn capability_permission(capability: &str) -> Option<&'static str> {
         "data.get" | "data.query" | "data.readBlob" => Some("storage:read"),
         "data.save" | "data.delete" | "data.declareCollection" | "data.dropVersion"
         | "data.saveBlob" => Some("storage:write"),
+        // R2：encrypted 授权名单三方法归入 storage:write（grant/revoke 落 acl
+        // + 轮换密钥，list 只读但同属 encrypted 能力面——owner 侧管控）。
+        "data.grantAccess" | "data.revokeAccess" | "data.listAccess" => Some("storage:write"),
         "contact.ensureBot" | "message.reply" => Some("message:app"),
-        "sys.exec.start" => Some("system:exec"),
-        "sys.fetch.start" => Some("network:fetch"),
+        "sys.exec.start" | "sys.execStream.start" => Some("system:exec"),
+        "sys.fetch.start" | "sys.fetchStream.start" => Some("network:fetch"),
+        "message.replyStreamStart" | "message.replyStreamChunk" | "message.replyStreamEnd" => {
+            Some("message:app")
+        }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::capability_permission;
+
+    /// R2：encrypted 授权名单三方法已纳入权限映射（storage:write）——
+    /// 零权限插件（无 storage:write）调用 grantAccess 等将因
+    /// `capability_permission` 返回 Some 而由 dispatch 前置强制拒绝。
+    #[test]
+    fn access_api_requires_storage_write_permission() {
+        for cap in ["data.grantAccess", "data.revokeAccess", "data.listAccess"] {
+            assert_eq!(
+                capability_permission(cap),
+                Some("storage:write"),
+                "{cap} 应归入 storage:write 权限"
+            );
+        }
+        // 与桥 dispatcher 的 CALL_PERMISSIONS 逐字对齐（R2：两侧一致）
+        for cap in ["data.grantAccess", "data.revokeAccess", "data.listAccess"] {
+            // 零权限（空 permissions）→ 前置拒绝（此处仅验映射存在；dispatch
+            // 的权限过滤在 call() 前置，permissions 不含 storage:write 即拒）。
+            let required = capability_permission(cap).expect("映射存在");
+            assert_eq!(required, "storage:write");
+        }
     }
 }
 
@@ -456,59 +593,6 @@ impl PluginHostShared {
     // 同步参数；存储镜像是版本化句柄，写库即同步（pdsync 记账全自动）。
     // ------------------------------------------------------------------
 
-    /// 解析声明轴载荷（缺省轴取模块缺省值）。
-    fn parse_declare_input(payload: &Value) -> Result<crate::plugindata::DeclareInput> {
-        use crate::plugindata::{DeclareInput, Devices, MergeRule, Scope};
-        let name = required_str(payload, "name")?.to_string();
-        let version = payload
-            .get("version")
-            .and_then(Value::as_str)
-            .map(str::to_string);
-        let parse_axis = |field: &str| -> Option<&str> {
-            payload.get(field).and_then(Value::as_str)
-        };
-        let scope = match parse_axis("scope") {
-            None => None,
-            Some("sync") => Some(Scope::Sync),
-            Some("local") => Some(Scope::Local),
-            Some(other) => {
-                return Err(PluginError::InvalidCall(format!(
-                    "scope must be 'sync' or 'local', got {other:?}"
-                )));
-            }
-        };
-        let devices = match parse_axis("devices") {
-            None => None,
-            Some("all") => Some(Devices::All),
-            Some("pc-backup") => Some(Devices::PcBackup),
-            Some("pc-only") => Some(Devices::PcOnly),
-            Some("mobile-only") => Some(Devices::MobileOnly),
-            Some(other) => {
-                return Err(PluginError::InvalidCall(format!(
-                    "devices must be one of all/pc-backup/pc-only/mobile-only, got {other:?}"
-                )));
-            }
-        };
-        let merge = match parse_axis("merge") {
-            None => None,
-            Some("lww-record") => Some(MergeRule::LwwRecord),
-            Some("append-only") => Some(MergeRule::AppendOnly),
-            Some("whole") => Some(MergeRule::Whole),
-            Some(other) => {
-                return Err(PluginError::InvalidCall(format!(
-                    "merge must be one of lww-record/append-only/whole, got {other:?}"
-                )));
-            }
-        };
-        Ok(DeclareInput {
-            name,
-            version,
-            scope,
-            devices,
-            merge,
-        })
-    }
-
     /// 解析 data.* 载荷的目标声明（name + 可选 version → 最新代际）。
     fn resolve_data_declaration(
         &self,
@@ -524,25 +608,134 @@ impl PluginHostShared {
         }
         let version = payload.get("version").and_then(Value::as_str);
         let storage = self.require_storage()?;
-        let decl = crate::plugindata::resolve(&storage, name, version)
-            .map_err(|e| PluginError::InvalidCall(e.to_string()))?;
+        // B5：org 空间数据读写路由到 orgd: 键——payload 携带 orgId 时走
+        // org 声明域，否则走 personal 声明域。
+        let decl = match payload.get("orgId").and_then(Value::as_str) {
+            Some(org_id) => crate::plugindata::resolve_org(&storage, org_id, name, version)
+                .map_err(|e| PluginError::InvalidCall(e.to_string()))?,
+            None => crate::plugindata::resolve(&storage, name, version)
+                .map_err(|e| PluginError::InvalidCall(e.to_string()))?,
+        };
         Ok((decl, storage))
     }
 
     fn data_declare_collection(&self, plugin_id: &str, payload: &Value) -> Result<Value> {
-        let input = Self::parse_declare_input(payload)?;
+        let mut input = Self::parse_declare_input(payload)?;
+        // F10：declaredBy 防伪造——kernel 侧强制覆盖为调用方 rootId，不信任
+        // 插件自报（声明记录属审计面）。
+        let my_root = self
+            .my_root_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .unwrap_or_default();
+        input.declared_by = Some(my_root.clone());
+        // org space：payload 中可携带 orgId（由内核按插件运行空间传入）
+        let org_id = payload.get("orgId").and_then(Value::as_str);
+        // B5：org 空间声明须校验调用方确为该组织成员（orgId 来源可信）——
+        // 防止插件以任意 org_id 越权声明组织集合。校验失败以 InvalidCall 拒绝。
+        if input.space == Some(crate::plugindata::Space::Org) {
+            let Some(oid) = org_id else {
+                return Err(PluginError::InvalidCall(
+                    "org space declaration requires orgId".to_string(),
+                ));
+            };
+            let my_root = self
+                .my_root_id
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
+                .unwrap_or_default();
+            let storage = self.require_storage()?;
+            let is_member = crate::org::OrganizationService::get_record(&storage, oid)
+                .ok()
+                .flatten()
+                .is_some_and(|rec| rec.find_member(&my_root).is_some());
+            if !is_member {
+                return Err(PluginError::InvalidCall(format!(
+                    "caller {my_root} is not a member of org {oid}"
+                )));
+            }
+        }
         let _io = self.io_lock.lock().unwrap_or_else(|e| e.into_inner());
         let mut storage = self.require_storage()?;
-        let decl = crate::plugindata::declare(&mut storage, plugin_id, input, system_now_ms())
+        let decl = crate::plugindata::declare(&mut storage, plugin_id, input, system_now_ms(), org_id)
             .map_err(|e| PluginError::InvalidCall(e.to_string()))?;
         serde_json::to_value(&decl).map_err(Into::into)
+    }
+
+    /// O3 写路径是否应走 orgq 路由（F1）：本机**非数据账号**写 org data-accounts
+    /// 集合 → 不得直接落 `orgd:` 孤儿副本，须经 orgq 离线入队 / 在线经桥转发。
+    /// 插件线程不能 `block_on`，故 QuickJS 通路采用「离线入队」路径：数据账号
+    /// 上线后经统一同步链路冲刷（与 Kernel `data_org_write_route::Enqueued`
+    /// 同收敛点）。本机数据账号 / all-members 集合 → 本地落库。
+    fn orgq_route_write(&self, decl: &crate::plugindata::CollectionDeclaration) -> bool {
+        if decl.space != Some(crate::plugindata::Space::Org)
+            || decl.accounts != crate::plugindata::Accounts::DataAccounts
+        {
+            return false;
+        }
+        // 非驻留（非数据账号）→ 走 orgq；驻留 → 本地
+        !self.org_local_resident(decl).unwrap_or(false)
+    }
+
+    /// F1：org data-accounts 且本机非数据账号 → orgq 离线入队（不落 orgd 副本）。
+    /// 入队用相对 key，value 为 null 即删除（与 Kernel 侧 data_org_enqueue 同口径）。
+    fn orgq_enqueue_write(&self, decl: &crate::plugindata::CollectionDeclaration, key: &str, value: &Value) {
+        let Some(oid) = decl.org_id.as_deref() else {
+            return;
+        };
+        let col_full = format!("{}@v{}", decl.name, decl.version);
+        let relative = key
+            .strip_prefix(&crate::plugindata::org_data_prefix(oid, &decl.name, &decl.version))
+            .unwrap_or(key);
+        if let Ok(storage) = self.require_storage().map(|s| s.clone()) {
+            let _ = crate::sync::orgsync::orgq_queue_put(
+                &mut storage.clone(),
+                oid,
+                &col_full,
+                relative,
+                value,
+            );
+        }
     }
 
     fn data_save(&self, plugin_id: &str, payload: &Value) -> Result<Value> {
         let key = required_str(payload, "key")?;
         let value = payload.get("value").cloned().unwrap_or(Value::Null);
-        let (decl, mut storage) = self.resolve_data_declaration(plugin_id, payload)?;
+        let (decl, storage) = self.resolve_data_declaration(plugin_id, payload)?;
+        // O4 工作项 4：encrypted 集合透明加解密——save 以当前 epoch 密钥加密
+        // 后落 `orgd:` 密文（复制组流量只有密文）。在**路由前**加密：本地 /
+        // orgq 离线入队两条写路径统一携带密文。无当前 epoch 密钥（非 reader）
+        // → KeyUnavailable（AEAD 语义：密钥持有者集合 = 写权限集合）。
+        let mut value = value;
+        if decl.confidentiality == crate::plugindata::Confidentiality::Encrypted {
+            if let Some(oid) = decl.org_id.as_deref() {
+                let ct = crate::sync::orgsync::encrypt_orgd_value(
+                    &storage,
+                    oid,
+                    &decl.name,
+                    &decl.version,
+                    key,
+                    &value.to_string(),
+                )
+                .map_err(|e| match e {
+                    // H3：密钥不可达 → 独立错误码（非 InvalidCall）。
+                    crate::sync::orgsync::AccessDataError::KeyUnavailable(m) => {
+                        PluginError::KeyUnavailable(m)
+                    }
+                    other => PluginError::InvalidCall(format!("encrypt {key}: {other}")),
+                })?;
+                value = serde_json::from_str(&ct).unwrap_or(Value::String(ct));
+            }
+        }
+        // F1：org data-accounts 非数据账号 → 走 orgq 离线入队（不落孤儿副本）
+        if self.orgq_route_write(&decl) {
+            self.orgq_enqueue_write(&decl, key, &value);
+            return Ok(Value::Null);
+        }
         let _io = self.io_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let mut storage = storage;
         crate::plugindata::save(&mut storage, &decl, key, &value.to_string())
             .map_err(|e| PluginError::InvalidCall(e.to_string()))?;
         Ok(Value::Null)
@@ -550,8 +743,14 @@ impl PluginHostShared {
 
     fn data_delete(&self, plugin_id: &str, payload: &Value) -> Result<Value> {
         let key = required_str(payload, "key")?;
-        let (decl, mut storage) = self.resolve_data_declaration(plugin_id, payload)?;
+        let (decl, storage) = self.resolve_data_declaration(plugin_id, payload)?;
+        // F1：org data-accounts 非数据账号 → 删除走 orgq 离线入队（value:null 墓碑）
+        if self.orgq_route_write(&decl) {
+            self.orgq_enqueue_write(&decl, key, &Value::Null);
+            return Ok(Value::Null);
+        }
         let _io = self.io_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let mut storage = storage;
         crate::plugindata::del(&mut storage, &decl, key)
             .map_err(|e| PluginError::InvalidCall(e.to_string()))?;
         Ok(Value::Null)
@@ -560,10 +759,41 @@ impl PluginHostShared {
     fn data_get(&self, plugin_id: &str, payload: &Value) -> Result<Value> {
         let key = required_str(payload, "key")?;
         let (decl, storage) = self.resolve_data_declaration(plugin_id, payload)?;
+        // O3 读路径透明路由（QuickJS 通路）：org data-accounts 集合对本机
+        // 非数据账号 → 走成员侧缓存（数据账号离线回缓存；在线 orgq 由宿主
+        // 接线）。本机数据账号 / all-members 集合直接读本地。
+        if decl.space == Some(crate::plugindata::Space::Org)
+            && !self.org_local_resident(&decl)?
+        {
+            if let Some(v) = self.orgq_cached_get(&storage, &decl, key)? {
+                return Ok(v);
+            }
+            // 无缓存 → UnavailableOffline 语义（回 Null，UI 标注不可得）
+            return Ok(Value::Null);
+        }
         let raw = crate::plugindata::get(&storage, &decl, key)
             .map_err(|e| PluginError::InvalidCall(e.to_string()))?;
         Ok(match raw {
-            Some(text) => serde_json::from_str(&text).unwrap_or(Value::String(text)),
+            // O4 工作项 4：encrypted 集合本地读解密——`orgd:` 密文按记录 epoch
+            // 取密钥解密为插件明文。解密失败（非 reader/密钥未达）→ 回 Null。
+            Some(text) => {
+                if decl.confidentiality == crate::plugindata::Confidentiality::Encrypted {
+                    if let Some(oid) = decl.org_id.as_deref() {
+                        match crate::sync::orgsync::decrypt_orgd_value(
+                            &storage, oid, &decl.name, &decl.version, key, &text,
+                        ) {
+                            Ok(plain) => {
+                                serde_json::from_str(&plain).unwrap_or(Value::String(plain))
+                            }
+                            Err(_) => Value::Null,
+                        }
+                    } else {
+                        serde_json::from_str(&text).unwrap_or(Value::String(text))
+                    }
+                } else {
+                    serde_json::from_str(&text).unwrap_or(Value::String(text))
+                }
+            }
             None => Value::Null,
         })
     }
@@ -576,13 +806,35 @@ impl PluginHostShared {
             .and_then(Value::as_u64)
             .map(|n| n as usize);
         let cursor = payload.get("cursor").and_then(Value::as_str);
-        let page = crate::plugindata::query(&storage, &decl, prefix, limit, cursor)
-            .map_err(|e| PluginError::InvalidCall(e.to_string()))?;
+        // O3 读路径透明路由（QuickJS 通路）：同 data_get 的 org 缓存路由。
+        let page = if decl.space == Some(crate::plugindata::Space::Org)
+            && !self.org_local_resident(&decl)?
+        {
+            self.orgq_cached_query(&storage, &decl, prefix, limit, cursor)?
+        } else {
+            crate::plugindata::query(&storage, &decl, prefix, limit, cursor)
+                .map_err(|e| PluginError::InvalidCall(e.to_string()))?
+        };
+        let is_encrypted = decl.confidentiality == crate::plugindata::Confidentiality::Encrypted;
+        let oid = decl.org_id.as_deref().unwrap_or("");
         let mut value = serde_json::json!({
             "items": page.items.iter().map(|(key, raw)| {
+                // O4 工作项 4：encrypted 集合 query 解密——密文按记录 epoch 取
+                // 密钥解密为明文；失败（非 reader/密钥未达）→ null。
+                let val = if is_encrypted {
+                    match crate::sync::orgsync::decrypt_orgd_value(
+                        &storage, oid, &decl.name, &decl.version, key, raw,
+                    ) {
+                        Ok(plain) => serde_json::from_str::<Value>(&plain)
+                            .unwrap_or(Value::String(plain)),
+                        Err(_) => Value::Null,
+                    }
+                } else {
+                    serde_json::from_str::<Value>(raw).unwrap_or(Value::String(raw.clone()))
+                };
                 serde_json::json!({
                     "key": key,
-                    "value": serde_json::from_str::<Value>(raw).unwrap_or(Value::String(raw.clone())),
+                    "value": val,
                 })
             }).collect::<Vec<_>>(),
         });
@@ -743,7 +995,80 @@ impl PluginHostShared {
         Ok(serde_json::json!({ "started": true }))
     }
 
-    /// `sys.fetch.start`：同 exec 的异步回流模式，结果事件 `sys-fetch-result`。
+    /// `sys.execStream.start`：流式执行外部命令（codebuddy `--output-format
+    /// stream-json` 等 NDJSON 流工具）。stdout 按完整行逐块回 `sys-exec-chunk`
+    /// （callId 配对，prelude 分发到 onChunk），进程退出回 `sys-exec-result`
+    /// 终态兑现 Promise。与非流式 `sys.exec.start` 的区别：多次中间事件 + 一次终态。
+    fn sys_exec_stream_start(&self, rtx: &PluginRuntimeContext, payload: &Value) -> Result<Value> {
+        let call_id = required_call_id(payload)?;
+        let program = required_str(payload, "program")?.to_string();
+        eprintln!("[stream-dbg] execStream start program={program} args={:?}", payload.get("args"));
+        let args: Vec<String> = payload
+            .get("args")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let workdir = payload
+            .get("workdir")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let event_tx = rtx.event_tx.clone();
+        self.runtime.spawn(async move {
+            let chunk_tx = event_tx.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                crate::sys::exec_streaming_blocking(
+                    &program,
+                    &args,
+                    workdir.as_deref(),
+                    move |chunk| {
+                        eprintln!("[stream-dbg] execStream chunk done={} text_len={} exit={:?}", chunk.done, chunk.text.len(), chunk.exit_code);
+                        let _ = chunk_tx.send(PluginEvent::Dispatch {
+                            kind: "sys-exec-chunk".to_string(),
+                            payload: serde_json::json!({
+                                "callId": call_id,
+                                "chunk": {
+                                    "text": chunk.text,
+                                    "done": chunk.done,
+                                    "exitCode": chunk.exit_code,
+                                },
+                            }),
+                        });
+                    },
+                )
+            })
+            .await;
+            let payload = match result {
+                Ok(Ok(r)) => {
+                    eprintln!("[stream-dbg] execStream done exit={} stderr_len={}", r.exit_code, r.stderr.len());
+                    serde_json::json!({
+                        "callId": call_id,
+                        "exitCode": r.exit_code,
+                        "stdout": r.stdout,
+                        "stderr": r.stderr,
+                    })
+                }
+                Ok(Err(error)) => {
+                    eprintln!("[stream-dbg] execStream error={error}");
+                    serde_json::json!({ "callId": call_id, "error": error })
+                }
+                Err(error) => serde_json::json!({
+                    "callId": call_id,
+                    "error": format!("exec stream task join failed: {error}")
+                }),
+            };
+            let _ = event_tx.send(PluginEvent::Dispatch {
+                kind: "sys-exec-result".to_string(),
+                payload,
+            });
+        });
+        Ok(serde_json::json!({ "started": true }))
+    }
+
     fn sys_fetch_start(&self, rtx: &PluginRuntimeContext, payload: &Value) -> Result<Value> {
         let call_id = required_call_id(payload)?;
         let url = required_str(payload, "url")?.to_string();
@@ -776,6 +1101,69 @@ impl PluginHostShared {
             };
             let _ = event_tx.send(PluginEvent::Dispatch {
                 kind: "sys-fetch-result".to_string(),
+                payload,
+            });
+        });
+        Ok(serde_json::json!({ "started": true }))
+    }
+
+    /// `sys.fetchStream.start`：流式 HTTP。每收到一个响应体文本块向本插件
+    /// 事件队列回 `sys-stream-chunk`（callId 配对，prelude 分发到 onChunk），
+    /// 流结束回 `sys-stream-result`（done 块载荷，prelude 兑现 Promise）。
+    /// 与非流式 `sys.fetch.start` 的区别：多次中间事件 + 一次终态事件。
+    fn sys_fetch_stream_start(&self, rtx: &PluginRuntimeContext, payload: &Value) -> Result<Value> {
+        let call_id = required_call_id(payload)?;
+        let url = required_str(payload, "url")?.to_string();
+        let method = payload
+            .get("method")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let headers: Option<HashMap<String, String>> = payload
+            .get("headers")
+            .and_then(Value::as_object)
+            .map(|map| {
+                map.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                    .collect()
+            });
+        let body = payload
+            .get("body")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let event_tx = rtx.event_tx.clone();
+        self.runtime.spawn(async move {
+            let chunk_tx = event_tx.clone();
+            let result = crate::sys::fetch_stream(
+                &url,
+                method.as_deref(),
+                headers.as_ref(),
+                body.as_deref(),
+                move |chunk| {
+                    let done = chunk.done;
+                    let _ = chunk_tx.send(PluginEvent::Dispatch {
+                        kind: "sys-stream-chunk".to_string(),
+                        payload: serde_json::json!({
+                            "callId": call_id,
+                            "chunk": {
+                                "text": chunk.text,
+                                "done": chunk.done,
+                                "status": chunk.status,
+                                "headers": chunk.headers,
+                            },
+                        }),
+                    });
+                    // done 块经 chunk 通道到达后，终态结果由下方 sys-stream-result
+                    // 兑现 Promise（prelude 的 settleAsync 消费）
+                    let _ = done;
+                },
+            )
+            .await;
+            let payload = match result {
+                Ok(()) => serde_json::json!({ "callId": call_id, "done": true }),
+                Err(error) => serde_json::json!({ "callId": call_id, "error": error }),
+            };
+            let _ = event_tx.send(PluginEvent::Dispatch {
+                kind: "sys-stream-result".to_string(),
                 payload,
             });
         });

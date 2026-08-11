@@ -25,6 +25,10 @@ pub fn add_member(kernel: &mut Kernel, params: &Params) -> Result<Value, String>
     let org_id = params.need_str("orgId")?;
     let root_id = params.need_str("rootId")?;
     let node_info = params.opt_value("nodeInfo").map(|v| OrganizationNodeInfo {
+        device_uid: v
+            .get("deviceUid")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
         peer_id: v
             .get("peerId")
             .and_then(Value::as_str)

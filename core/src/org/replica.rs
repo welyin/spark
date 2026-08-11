@@ -225,6 +225,13 @@ pub fn member_ever_synced(
 ///   ——调用方实现账号键优先 + 旧 peerId 键迁移回填，见
 ///   [`super::sync_state::read_org_sync_state_account`]）
 /// - rootId 为空串的成员跳过（对齐 TS 的 `if (!rootId) continue`）
+///
+/// TODO（O2b 工作项 4，暂不落地）：数据面口径应切到 orgsync 平面——内建
+/// all-members 集合无 K（全员全量，每个成员都是副本），data-accounts 集合
+/// 按数据账号 PC 设备合计计 K=3。当前 `everSynced` 仍以 org-share/org-pull
+/// 的 sync-state 为准，orgsync 反熵不写该 state → 纯 orgsync 双端概览会
+/// 显示"未同步"。落地需 orgsync 活动反哺 sync-state 记账（数据面口径），
+/// 风险中等、依赖 orgsync 数据平面稳定，留待 O2 收尾一并处理。
 pub fn compute_org_sync_overview(
     org_id: &str,
     members: &[OrganizationMember],
@@ -240,10 +247,12 @@ pub fn compute_org_sync_overview(
         if member.root_id.is_empty() {
             continue;
         }
+        // 端点化：取成员端点集首个 peerId 作为代表（sync-state 已按 rootId
+        // 账号定键，peer_id 仅为旧键兜底 + overview 展示）。
         let peer_id = member
             .node_info
             .as_ref()
-            .and_then(|n| n.peer_id.as_deref())
+            .and_then(|set| set.iter().find_map(|e| e.peer_id.as_deref()))
             .map(str::trim)
             .filter(|p| !p.is_empty())
             .map(str::to_string);

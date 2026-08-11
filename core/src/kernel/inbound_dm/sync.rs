@@ -154,7 +154,9 @@ pub(super) fn handle_profile_sync<S: StorageBackend>(
             device_sync_reply: None,
             profile_sync_reply,
             pdsync_out: Vec::new(),
+            orgsync_out: Vec::new(),
             profile_applied: false,
+            orgkey_unbox: None,
         });
     };
     let nickname = body
@@ -196,7 +198,9 @@ pub(super) fn handle_profile_sync<S: StorageBackend>(
         device_sync_reply: None,
         profile_sync_reply,
         pdsync_out: Vec::new(),
+        orgsync_out: Vec::new(),
         profile_applied: false,
+        orgkey_unbox: None,
     })
 }
 
@@ -249,7 +253,9 @@ pub(super) fn handle_device_sync<S: StorageBackend>(
         device_sync_reply: reply,
         profile_sync_reply: None,
         pdsync_out: Vec::new(),
+        orgsync_out: Vec::new(),
         profile_applied: false,
+        orgkey_unbox: None,
     })
 }
 
@@ -280,7 +286,9 @@ pub(super) fn handle_contact_sync<S: StorageBackend>(
         device_sync_reply: None,
         profile_sync_reply: None,
         pdsync_out: Vec::new(),
+        orgsync_out: Vec::new(),
         profile_applied: false,
+        orgkey_unbox: None,
     })
 }
 
@@ -310,6 +318,8 @@ pub(super) fn handle_conv_sync<S: StorageBackend>(
         device_sync_reply: None,
         profile_sync_reply: None,
         pdsync_out: Vec::new(),
+        orgsync_out: Vec::new(),
         profile_applied: false,
+        orgkey_unbox: None,
     })
 }

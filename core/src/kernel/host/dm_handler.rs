@@ -39,10 +39,19 @@ pub(crate) struct KernelDmHandler {
     pub(crate) node_shared: Arc<Mutex<Option<Arc<P2pNode>>>>,
     pub(crate) signing_key_shared: Arc<Mutex<Option<ed25519_dalek::SigningKey>>>,
     pub(crate) password_shared: Arc<Mutex<Option<String>>>,
+    /// 解锁期 BIP39 种子（O4 orgkey-deliver 入站解包 orgkey 用：组织域身份
+    /// 私钥 seed 派生，见 [`crate::kernel::org_access_domain`]）。
+    pub(crate) seed_shared: Arc<Mutex<Option<[u8; 64]>>>,
     pub(crate) data_dir: std::path::PathBuf,
     pub(crate) io_lock: Arc<Mutex<()>>,
     /// 已证明支持 pdsync 的自设备 peerId 集合（收尾能力探测，§7.1，按设备粒度）。
     pub(crate) pdsync_capable_self_devices: Arc<Mutex<std::collections::HashSet<String>>>,
+    /// 已证明支持 orgsync 的成员设备 peerId 集合（O2b 能力探测，§20.8，按
+    /// 设备粒度；org-share/org-pull 出站读取决定是否回退旧快照链路）。
+    pub(crate) orgsync_capable_member_peers: Arc<Mutex<std::collections::HashSet<String>>>,
+    /// 插件后台运行时宿主查询句柄（O3 filtered 权限钩子在 dm 入站执行：
+    /// orgq-req 的 canRead/canWrite 经此投递到插件 QuickJS 后台运行时）。
+    pub(crate) plugin_host_query: crate::kernel::PluginHostQuery,
 }
 
 impl KernelDmHandler {
@@ -53,6 +62,45 @@ impl KernelDmHandler {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(peer_id.to_string());
+    }
+
+    /// 收尾（O2b §20.8）：标记某成员设备（连接层 peerId）已证明支持 orgsync。
+    /// 出站据此对该端停用 org-share 快照/org-pull 反熵、只走 orgsync。
+    /// 幂等（集合内重复无影响）。
+    fn kernel_orgsync_capable_mark(&self, peer_id: &str) {
+        self.orgsync_capable_member_peers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(peer_id.to_string());
+    }
+
+    /// O2b §20.8 能力探测判定：仅当 orgsync-* 信封**验签通过**（from ∈
+    /// 成员表由入站编排校验）时，返回应标记的连接层 peerId——收到对端
+    /// orgsync-hello/need/data 即证明该设备支持 orgsync。
+    ///
+    /// 验签防误标：伪造信封（未验签通过）不得欺骗能力探测；按连接层
+    /// peerId（每设备唯一）而非 rootId 键控——同 rootId 的每台设备各自
+    /// 证明，避免一台新设备停掉同账号其他设备的旧快照回退。
+    pub(crate) fn orgsync_capability_mark(
+        payload: &Value,
+        my_root_id: &str,
+        remote_peer_id: &str,
+    ) -> Option<String> {
+        let kind = payload.get("kind").and_then(Value::as_str)?;
+        if !matches!(
+            kind,
+            super::super::dm_envelope::KIND_ORGSYNC_HELLO
+                | super::super::dm_envelope::KIND_ORGSYNC_NEED
+                | super::super::dm_envelope::KIND_ORGSYNC_DATA
+        ) {
+            return None;
+        }
+        // 完整验签：`to == my_root_id` + 签名有效才证明对端是真实成员设备、
+        // 支持 orgsync（防伪造信封欺骗能力探测）。成员资格由入站编排校验，
+        // 此处只需确认信封合法——from 非本机（orgsync 来自其他成员）。
+        let _verified =
+            dm_envelope::verify_envelope(payload, my_root_id, system_now_ms()).ok()?;
+        Some(remote_peer_id.to_string())
     }
 
     /// 本地写入节点 id：p2p 运行中为 peerId；否则回退持久化 p2p 身份派生的
@@ -138,21 +186,50 @@ impl DmHandler for KernelDmHandler {
         if let Some(peer) = Self::pdsync_capability_mark(&payload, &root_id, remote_peer_id) {
             self.kernel_pdsync_capable_mark(&peer);
         }
+        // O2b §20.8 能力探测：收到验签通过的 orgsync-* 信封即证明对端（连接层
+        // peerId 设备）支持 orgsync——出站据此对该端停用 org-share/org-pull
+        // 旧链路、只走 orgsync。
+        if let Some(peer) = Self::orgsync_capability_mark(&payload, &root_id, remote_peer_id) {
+            self.kernel_orgsync_capable_mark(&peer);
+        }
         // 入站落库整体在 io_lock 内执行（与 Tauri 命令线程的变更互斥）
         let result = {
             let _io = self.io_lock.lock().unwrap_or_else(|e| e.into_inner());
             let node_id = self.sync_node_id();
-            super::super::inbound_dm::handle_inbound_dm(
-                &mut storage,
-                &root_id,
-                &nickname,
-                payload,
-                remote_peer_id,
-                online_peers,
-                system_now_ms(),
-                &node_id,
-            )
-            .map_err(|e| e.to_string())?
+            let is_orgq_req =
+                payload.get("kind").and_then(|v| v.as_str()) == Some(dm_envelope::KIND_ORGQ_REQ);
+            if is_orgq_req {
+                // O3 filtered 权限钩子接线：orgq-req 注入宿主钩子（数据账号侧
+                // 经插件 QuickJS 后台运行时执行 canRead/canWrite）。插件未运行
+                // 时 has_runtime=false → fail-closed 降级（只存不服务）。
+                let hook = super::super::plugin_ops::QuickJsOrgqHook::new(
+                    self.plugin_host_query.clone(),
+                );
+                super::super::inbound_dm::handle_inbound_dm_with_orgq_hooks(
+                    &mut storage,
+                    &root_id,
+                    &nickname,
+                    payload,
+                    remote_peer_id,
+                    online_peers,
+                    system_now_ms(),
+                    &node_id,
+                    Some(&hook),
+                )
+                .map_err(|e| e.to_string())?
+            } else {
+                super::super::inbound_dm::handle_inbound_dm(
+                    &mut storage,
+                    &root_id,
+                    &nickname,
+                    payload,
+                    remote_peer_id,
+                    online_peers,
+                    system_now_ms(),
+                    &node_id,
+                )
+                .map_err(|e| e.to_string())?
+            }
         };
         for event in result.events {
             // 无订阅者时忽略发送失败
@@ -201,6 +278,147 @@ impl DmHandler for KernelDmHandler {
             };
             self.spawn_pdsync_reply(&root_id, target, result.pdsync_out);
         }
+        // orgsync 出站：把纯逻辑层构建好的 body 装配成 orgsync-* 信封，
+        // from=本机 rootId、to=对端成员 rootId（区别于 pdsync 的自设备语义）
+        //
+        // B1：每个 OrgsyncOut 携带目标成员 rootId（入站 handler 从信封 from
+        // 透传），host 装配 to 时用它而非本机 rootId——否则 need/data 应答被
+        // 对端 verify_envelope 拒收。
+        if !result.orgsync_out.is_empty() {
+            let target = PeerNodeInfo {
+                peer_id: Some(remote_peer_id.to_string()),
+                addresses: Vec::new(),
+            };
+            self.spawn_orgsync_reply(&root_id, target, result.orgsync_out);
+        }
+        // O4 orgkey-deliver 解包落库：纯逻辑层已验签/验 owner/验幂等，这里用
+        // 本机组织域身份私钥（seed 派生）解 box 并写 personal 域 orgkey 表
+        // （§20.6；密钥经 pdsync 自设备扩散，永不进 orgsync 组织流量）。
+        if let Some(unbox) = result.orgkey_unbox {
+            self.apply_orgkey_unbox(&root_id, &unbox);
+        }
         Ok(result.response)
+    }
+}
+
+impl KernelDmHandler {
+    /// O4 §20.6：orgkey-deliver 解包落库。用本机 `org-access:{orgId}` 域身份
+    /// 私钥（seed 派生 X25519）+ sender（owner）组织身份公钥 X25519 解
+    /// crypto_box，得 32B epoch 密钥后写 orgkey 表。seed 缺失（锁定态）或
+    /// 解包失败 → 静默跳过（不落库；后续重新投递补投）。
+    fn apply_orgkey_unbox(&self, my_root_id: &str, unbox: &crate::kernel::inbound_dm::OrgkeyUnbox) {
+        let seed = self.seed_shared.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let Some(seed) = seed else {
+            log::info!("[ORGKEY] unbox skipped: no seed (locked) | col={}:{}", unbox.org_id, unbox.name);
+            return;
+        };
+        let domain = crate::kernel::Kernel::org_access_domain(&unbox.org_id);
+        let derived = crate::identity::derive_domain_identity(&seed, &domain);
+        let my_x25519_priv = crate::sync::orgsync::ed_sk_to_x25519(&derived.signing_key.to_bytes());
+        let col_full = format!("{}@v{}", unbox.name, unbox.version);
+        let Some(epoch_key) = crate::sync::orgsync::unbox_epoch_key(
+            &unbox.wrapped_key,
+            &unbox.nonce24,
+            &unbox.sender_x25519,
+            &my_x25519_priv,
+            &unbox.org_id,
+            &col_full,
+            &unbox.sender_root_id,
+            my_root_id,
+        ) else {
+            log::info!(
+                "[ORGKEY] unbox failed (bad key) | col={}:{} epoch={}",
+                unbox.org_id,
+                unbox.name,
+                unbox.epoch
+            );
+            return;
+        };
+        let mut storage = self.storage.clone();
+        crate::sync::orgsync::put_epoch_key(
+            &mut storage,
+            &unbox.org_id,
+            &unbox.name,
+            &unbox.version,
+            unbox.epoch,
+            &epoch_key,
+        );
+        log::info!(
+            "[ORGKEY] unboxed epoch={} | col={}:{}@v{}",
+            unbox.epoch,
+            unbox.org_id,
+            unbox.name,
+            unbox.version
+        );
+        let _ = my_root_id;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ed25519_dalek::SigningKey;
+    use serde_json::json;
+    use sha2::Digest;
+
+    /// 构造合法签名的 orgsync 信封：from = sha256hex(pubKey)（verify_envelope
+    /// 要求 from == sha256hex(pubKey)），to = my_root，ts = 当前时间（避免 stale）。
+    fn orgsync_env(kind: &str, to: &str, key: &SigningKey) -> Value {
+        let from = hex::encode(sha2::Sha256::digest(key.verifying_key().to_bytes()));
+        dm_envelope::build_envelope(
+            kind,
+            &from,
+            to,
+            crate::p2p::node::system_now_ms(),
+            json!({}),
+            key,
+        )
+    }
+
+    /// O2b §20.8：收到验签通过的 orgsync-hello/need/data → 标记该连接层
+    /// peerId 支持 orgsync；非 orgsync 信封 / 验签失败不标记。
+    #[test]
+    fn orgsync_capability_mark_on_verified_orgsync_envelopes() {
+        let key = SigningKey::from_bytes(&[1u8; 32]);
+        let from = hex::encode(sha2::Sha256::digest(key.verifying_key().to_bytes()));
+        let my_root = from.clone(); // 本机 rootId（to 须 == my_root）
+        let peer = "peer-device-x";
+        // orgsync-hello：标记
+        let e = orgsync_env(dm_envelope::KIND_ORGSYNC_HELLO, &my_root, &key);
+        assert_eq!(
+            KernelDmHandler::orgsync_capability_mark(&e, &my_root, peer),
+            Some(peer.to_string())
+        );
+        // orgsync-need / orgsync-data 同样标记
+        let e = orgsync_env(dm_envelope::KIND_ORGSYNC_NEED, &my_root, &key);
+        assert_eq!(
+            KernelDmHandler::orgsync_capability_mark(&e, &my_root, peer),
+            Some(peer.to_string())
+        );
+        let e = orgsync_env(dm_envelope::KIND_ORGSYNC_DATA, &my_root, &key);
+        assert_eq!(
+            KernelDmHandler::orgsync_capability_mark(&e, &my_root, peer),
+            Some(peer.to_string())
+        );
+        // 非 orgsync 信封不标记
+        let e = orgsync_env(dm_envelope::KIND_PDSYNC_HELLO, &my_root, &key);
+        assert_eq!(
+            KernelDmHandler::orgsync_capability_mark(&e, &my_root, peer),
+            None
+        );
+    }
+
+    /// O2b §20.8：验签失败（to 非本机）不得标记——防伪造信封欺骗能力探测。
+    #[test]
+    fn orgsync_capability_mark_rejects_unverified() {
+        let key = SigningKey::from_bytes(&[1u8; 32]);
+        let from = hex::encode(sha2::Sha256::digest(key.verifying_key().to_bytes()));
+        let my_root = from.clone(); // 本机 rootId
+        // 信封 to 指向"另一台设备"（非本机 rootId）→ 验签失败（not-for-me）→ 不标记
+        let e = orgsync_env(dm_envelope::KIND_ORGSYNC_HELLO, "some-other-member", &key);
+        assert_eq!(
+            KernelDmHandler::orgsync_capability_mark(&e, &my_root, "peer-x"),
+            None
+        );
     }
 }

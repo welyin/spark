@@ -360,11 +360,15 @@ impl Kernel {
                 "P2P 网络未启动，无法通过邀请码加入".to_string(),
             ));
         }
+        // 端点化：声明携带本机 deviceUid，管理员侧按 deviceUid 聚合成员端点、
+        // 判同设备 peerId 墓碑化。先取（可变借用存储），再借 p2p。
+        let self_device_uid =
+            crate::device::get_or_create_device_uid(self.require_storage_mut()?).ok();
         let node = self.p2p.as_ref().expect("p2p checked above");
         let local = self.runtime.handle().block_on(node.local_node_info())?;
 
         // 自签 nodeInfoClaim（bootstrap.ts `buildSelfNodeInfoClaim`）：随首次 pull
-        // 捎带，供管理员回填本机节点地址并经 gossip 扩散
+        // 捎带，供管理员回填本机节点地址并经 gossip 扩散。
         let claim = sign_node_info_claim(
             &self
                 .unlocked
@@ -373,6 +377,7 @@ impl Kernel {
                 .identity
                 .signing_key,
             OrganizationNodeInfo {
+                device_uid: self_device_uid,
                 peer_id: local.peer_id.clone(),
                 addresses: local.addresses.clone(),
             },
@@ -621,8 +626,10 @@ impl Kernel {
         }
         if let Some(record) = OrganizationService::get_record(self.require_storage()?, org_id)?
             && let Some(member) = record.find_member(target_root_id)
-            && let Some(info) = &member.node_info
-            && (info.peer_id.is_some() || !info.addresses.is_empty())
+            && let Some(set) = &member.node_info
+            && let Some(info) = set
+                .iter()
+                .find(|e| e.peer_id.is_some() || !e.addresses.is_empty())
         {
             return Ok(PeerNodeInfo {
                 peer_id: info.peer_id.clone(),

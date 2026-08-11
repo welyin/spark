@@ -29,6 +29,11 @@ pub enum PluginError {
     #[error("{0}")]
     InvalidInput(String),
 
+    /// encrypted 集合密钥不可达（非 reader / 未收到该 epoch 密钥）——
+    /// AEAD 语义下无密钥即无读写权限。独立错误码（H3），不混入 InvalidCall。
+    #[error("Key unavailable: {0}")]
+    KeyUnavailable(String),
+
     /// 会话不属于该插件（bot rootId 前缀不匹配）。
     #[error("plugin does not own conversation: {0}")]
     ConversationNotOwned(String),

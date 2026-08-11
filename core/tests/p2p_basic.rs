@@ -192,6 +192,7 @@ async fn org_recovery_hit() {
         org_id: "org_0123456789abcdef".to_string(),
         recovery_secret: "ef".repeat(32),
         member_node_infos: vec![OrganizationNodeInfo {
+            device_uid: None,
             peer_id: Some("12D3KooWMemberX".to_string()),
             addresses: vec!["/ip4/10.1.2.3/tcp/15002/ws".to_string()],
         }],
@@ -244,6 +245,7 @@ async fn org_recovery_forward_second_hop() {
         org_id: "org_0123456789abcdef".to_string(),
         recovery_secret: "ef".repeat(32),
         member_node_infos: vec![OrganizationNodeInfo {
+            device_uid: None,
             peer_id: Some("12D3KooWMemberY".to_string()),
             addresses: vec!["/ip4/10.4.5.6/tcp/15002/ws".to_string()],
         }],

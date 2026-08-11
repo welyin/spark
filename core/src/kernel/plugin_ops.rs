@@ -19,6 +19,115 @@ use crate::plugin::{
 
 use super::{Kernel, Result};
 
+/// O3 filtered 权限钩子的宿主实现：把 orgq-req 的 canRead/canWrite 裁决投递到
+/// 数据账号侧插件的后台运行时（QuickJS）执行（经 [`PluginHostQuery`] 的
+/// PluginEvent::Query 同步查询机制）。
+///
+/// 桥接语义（同步/异步）：
+/// - **同步等待**：orgq-req 处理是数据账号侧事件循环内的同步路径，钩子裁决须
+///   即时返回过滤/受理结果。本实现经 `PluginHostQuery::query` 投递 Query 事件
+///   到插件线程、阻塞等待 JS 应答（上限 2s），与 `plugin_host_query` 同机制；
+/// - **超时兜底（fail-closed）**：插件未运行 / 投递失败 / 2s 未应答 → `None`，
+///   一律按「拒绝」处理——防恶意插件死循环卡死查询通道；
+/// - **钩子抛异常 = 拒绝**：JS 侧异常经 `query.respond` 回 `{error}`，`query()`
+///   返回该值而非真布尔 → 解析失败按拒绝兜底。
+#[derive(Clone)]
+pub(crate) struct QuickJsOrgqHook {
+    query: PluginHostQuery,
+    /// F2：单请求钩子总预算截止（epoch ms）——一个 orgq-req 内多条记录逐条
+    /// 过 canRead/canWrite，累计执行须有界（超预算按 fail-closed 拒绝），
+    /// 防恶意/故障插件长期阻塞 io_lock。
+    budget_deadline: std::sync::Arc<std::sync::atomic::AtomicI64>,
+}
+
+impl QuickJsOrgqHook {
+    pub(crate) fn new(query: PluginHostQuery) -> Self {
+        let budget_deadline = std::sync::Arc::new(std::sync::atomic::AtomicI64::new(
+            crate::p2p::node::system_now_ms() + ORGQ_HOOK_BUDGET_MS,
+        ));
+        Self {
+            query,
+            budget_deadline,
+        }
+    }
+
+    /// 从集合全名 `name@v{version}` 解析宿主钩子注册键：插件集合名 = `@v` 之前、
+    /// 且为插件 id 前缀（如 `ai-chat:finance` → 注册键 `ai-chat:finance`，
+    /// plugin_id = `ai-chat`）。
+    fn collection_name(col_full: &str) -> &str {
+        match col_full.find("@v") {
+            Some(at) => &col_full[..at],
+            None => col_full,
+        }
+    }
+
+    fn plugin_id(col_full: &str) -> &str {
+        let name = Self::collection_name(col_full);
+        match name.find(':') {
+            Some(i) => &name[..i],
+            None => name,
+        }
+    }
+
+    /// 执行一次 JS 裁决查询并归一化为布尔；超时/异常/未运行 → false（拒绝）。
+    fn run_query(&self, plugin_id: &str, kind: &str, payload: serde_json::Value) -> bool {
+        // F2：单请求总预算——累计超预算 → fail-closed 拒绝（不执行钩子）。
+        use std::sync::atomic::Ordering;
+        if crate::p2p::node::system_now_ms() > self.budget_deadline.load(Ordering::Relaxed) {
+            log::warn!("[ORGQ] hook budget exceeded, fail-closed reject");
+            return false;
+        }
+        self.query.query(plugin_id, kind, payload).is_some_and(|v| {
+            // 应答应为布尔；错误 `{"error":...}` / 非布尔一律拒绝
+            v.as_bool().unwrap_or(false)
+        })
+    }
+}
+
+/// F2：单请求 orgq 钩子总预算（毫秒，10s 封顶）。一个 orgq-req 内逐条过
+/// canRead/canWrite 的累计执行时间不得超过此值，防恶意/故障插件长期阻塞
+/// io_lock（单钩子超时由插件引擎熔断）。
+const ORGQ_HOOK_BUDGET_MS: i64 = 10_000;
+
+impl super::inbound_dm::OrgqPermHook for QuickJsOrgqHook {
+    fn has_runtime(&self, col_full: &str, kind: &str) -> bool {
+        let plugin_id = Self::plugin_id(col_full);
+        let name = Self::collection_name(col_full);
+        let registered = self
+            .query
+            .plugin_host
+            .has_filter(name, kind);
+        // 插件后台运行中（注册表可达）且注册了该种类过滤器
+        registered && self.query.plugin_registry.is_running(plugin_id)
+    }
+
+    fn can_read(&self, member: &str, col_full: &str, key: &str) -> bool {
+        let plugin_id = Self::plugin_id(col_full);
+        let name = Self::collection_name(col_full);
+        self.run_query(
+            plugin_id,
+            "data.canRead",
+            serde_json::json!({ "collection": name, "member": member, "key": key }),
+        )
+    }
+
+    fn can_write(
+        &self,
+        member: &str,
+        col_full: &str,
+        key: &str,
+        value: &serde_json::Value,
+    ) -> bool {
+        let plugin_id = Self::plugin_id(col_full);
+        let name = Self::collection_name(col_full);
+        self.run_query(
+            plugin_id,
+            "data.canWrite",
+            serde_json::json!({ "collection": name, "member": member, "key": key, "value": value }),
+        )
+    }
+}
+
 impl Kernel {
     /// 启动插件的后台运行时（专用线程 + QuickJS 沙箱）。
     ///
@@ -60,11 +169,25 @@ impl Kernel {
             return Ok(());
         };
         handle.request_stop();
+        // F3：插件停止时按其前缀清理 filter_caps 注册表——消除「曾注册→升级后
+        // 未注册」的 fail-open 缝隙（has_runtime 对已停插件集合不再误报可服务）。
+        self.clear_filter_caps_for(plugin_id);
         drop(handle);
         if let Some(join) = self.plugin_joins.remove(plugin_id) {
             let _ = join.join();
         }
         Ok(())
+    }
+
+    /// F3：清理 filter_caps 中归属指定插件的集合条目（键形 `{plugin_id}:{rest}`）。
+    fn clear_filter_caps_for(&self, plugin_id: &str) {
+        let prefix = format!("{plugin_id}:");
+        let mut caps = self
+            .plugin_host
+            .filter_caps
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        caps.retain(|collection, _| !collection.starts_with(&prefix));
     }
 
     /// 插件后台运行时是否存活（bot 在线状态的权威来源）。
@@ -144,6 +267,21 @@ impl Kernel {
 pub struct PluginHostQuery {
     plugin_host: PluginHostShared,
     plugin_registry: PluginRuntimeRegistry,
+}
+
+impl PluginHostQuery {
+    /// 由宿主共享句柄 + 运行注册表构造（仅供插件运行时单元测试用——
+    /// host/dm_handler 实际经 Kernel::plugin_host_query_handle 构造）。
+    #[cfg(test)]
+    pub(crate) fn new(
+        plugin_host: PluginHostShared,
+        plugin_registry: PluginRuntimeRegistry,
+    ) -> Self {
+        Self {
+            plugin_host,
+            plugin_registry,
+        }
+    }
 }
 
 impl PluginHostQuery {

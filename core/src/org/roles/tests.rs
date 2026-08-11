@@ -3,7 +3,8 @@
 
 use super::*;
 use crate::org::types::{
-    OrganizationMember, OrganizationNodeInfo, OrganizationRecord, OrganizationRole,
+    OrganizationDeviceSet, OrganizationMember, OrganizationNodeInfo, OrganizationRecord,
+    OrganizationRole,
 };
 
 fn member(root_id: &str, role: OrganizationRole) -> OrganizationMember {
@@ -19,6 +20,7 @@ fn member(root_id: &str, role: OrganizationRole) -> OrganizationMember {
         gender: None,
         region: None,
         use_personal_identity: None,
+        access_key: None,
         extra: Default::default(),
     }
 }
@@ -149,12 +151,121 @@ fn member_device_class_lookup() {
     };
     DeviceService::upsert_pdsync(&mut storage, &device, 1000, "node-a").unwrap();
     let mut m = member(M1, OrganizationRole::Member);
-    m.node_info = Some(OrganizationNodeInfo {
+    m.node_info = Some(OrganizationDeviceSet::from_single(OrganizationNodeInfo {
+        device_uid: None,
         peer_id: Some("peer-mobile".to_string()),
         addresses: vec![],
-    });
+    }));
     assert_eq!(member_device_class(&storage, &m), "mobile");
     // 无 nodeInfo / 无设备记录 → 兜底 pc（宁可多算不漏算）
     let m2 = member(M2, OrganizationRole::Member);
     assert_eq!(member_device_class(&storage, &m2), "pc");
+}
+
+/// F1：端点集存在但全部端点仅地址（无 peerId，无法查设备记录）→ 兜底 pc，
+/// 与注释「无记录按 pc 计入」一致（不得落穿返回 mobile）。
+#[test]
+fn member_device_class_falls_back_pc_when_endpoints_have_no_peer_id() {
+    use crate::org::types::{OrganizationDeviceSet, OrganizationNodeInfo};
+    use crate::storage::MemoryStorage;
+    let storage = MemoryStorage::new();
+    // 端点集仅地址（peer_id 为 None）→ 无法查表 → pc
+    let mut m = member(M1, OrganizationRole::Member);
+    m.node_info = Some(OrganizationDeviceSet::from_single(OrganizationNodeInfo {
+        device_uid: None,
+        peer_id: None,
+        addresses: vec!["/ip4/127.0.0.1/tcp/9001".to_string()],
+    }));
+    assert_eq!(member_device_class(&storage, &m), "pc", "仅地址端点兜底 pc");
+    // 混合：一个仅地址端点 + 一个 mobile peerId 端点 → 进入查表 → mobile
+    m.node_info = Some(OrganizationDeviceSet {
+        endpoints: vec![
+            OrganizationNodeInfo {
+                device_uid: None,
+                peer_id: None,
+                addresses: vec!["/ip4/127.0.0.1/tcp/9001".to_string()],
+            },
+            OrganizationNodeInfo {
+                device_uid: None,
+                peer_id: Some("peer-mobile".to_string()),
+                addresses: vec![],
+            },
+        ],
+    });
+    let mut s2 = MemoryStorage::new();
+    let mobile = crate::device::DeviceRecord {
+        peer_id: "peer-mobile".to_string(),
+        device_uid: Some("uid-m".to_string()),
+        device_name: "手机".to_string(),
+        os: "iOS".to_string(),
+        arch: "arm64".to_string(),
+        macs: vec![],
+        app_version: "0.2.1".to_string(),
+        os_version: "17".to_string(),
+        updated_at: 1000,
+        last_seen_at: 1000,
+    };
+    crate::device::DeviceService::upsert_pdsync(&mut s2, &mobile, 1000, "node-a").unwrap();
+    assert_eq!(member_device_class(&s2, &m), "mobile", "任一可查端点 mobile → mobile");
+}
+
+/// 成员换设备（同 deviceUid 新 peerId）记账不漂：peerId 漂移后设备类判定不变，
+/// K 副本 PC 计入稳定（角色绑账号、设备类绑物理设备 UID，均与 peerId 无关）。
+#[test]
+fn device_class_stable_across_peer_id_drift_same_device_uid() {
+    use crate::device::{DeviceRecord, DeviceService};
+    use crate::storage::MemoryStorage;
+
+    let mut storage = MemoryStorage::new();
+    let device = DeviceRecord {
+        peer_id: "peer-old".to_string(),
+        device_uid: Some("uid-pc".to_string()),
+        device_name: "PC".to_string(),
+        os: "Windows".to_string(),
+        arch: "x86_64".to_string(),
+        macs: vec![],
+        app_version: "0.2.1".to_string(),
+        os_version: "10.0.22631".to_string(),
+        updated_at: 1000,
+        last_seen_at: 1000,
+    };
+    DeviceService::upsert_pdsync(&mut storage, &device, 1000, "node-a").unwrap();
+
+    // 旧设备（uid-pc, peer-old）：pc。
+    let mut m_old = member(M1, OrganizationRole::Member);
+    m_old.node_info = Some(OrganizationDeviceSet::from_single(OrganizationNodeInfo {
+        device_uid: Some("uid-pc".to_string()),
+        peer_id: Some("peer-old".to_string()),
+        addresses: vec![],
+    }));
+    assert_eq!(member_device_class(&storage, &m_old), "pc");
+
+    // 同 deviceUid 新 peerId（重装/漂移，DeviceRecord 也随 pdsync 换新）：
+    // 端点集墓碑化替换旧 peerId → 记账仍 pc。
+    let mut m_new = m_old.clone();
+    let set = m_new.node_info.as_mut().unwrap();
+    set.upsert(&OrganizationNodeInfo {
+        device_uid: Some("uid-pc".to_string()),
+        peer_id: Some("peer-new".to_string()),
+        addresses: vec![],
+    });
+    assert_eq!(set.len(), 1, "同 deviceUid 旧 peerId 已墓碑化替换");
+    let drifted = DeviceRecord {
+        peer_id: "peer-new".to_string(),
+        updated_at: 2000,
+        ..device
+    };
+    DeviceService::upsert_pdsync(&mut storage, &drifted, 2000, "node-a").unwrap();
+    assert_eq!(member_device_class(&storage, &m_new), "pc", "换设备后 PC 计入不漂");
+
+    // 角色绑账号（rootId），与设备/peerId 无关——换设备角色不漂。
+    m_new.role = OrganizationRole::Admin;
+    assert_eq!(m_new.role, OrganizationRole::Admin);
+    assert!(crate::org::roles::is_data_account(
+        &OrganizationRecord {
+            members: vec![m_new.clone()],
+            ..Default::default()
+        },
+        M1,
+    ));
 }

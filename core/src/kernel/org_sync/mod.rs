@@ -22,6 +22,7 @@
 //! 主循环与各链路共用的私有辅助；org-share 推送在 `push`，org-pull 反熵对账
 //! 在 `pull`，keepalive 周期任务在 `tick`，失联恢复在 `recovery`。
 
+mod orgsync_hello;
 mod pull;
 mod push;
 mod recovery;
@@ -226,11 +227,20 @@ pub(crate) struct OrgSyncContext {
     /// 已证明支持 pdsync 的自设备 peerId 集合（host 验签通过后按连接层
     /// peerId 写入——按设备粒度；保活读取决定是否回退发旧快照，见 §7.1）。
     pub(crate) pdsync_capable_self_devices: Arc<Mutex<std::collections::HashSet<String>>>,
+    /// 已证明支持 orgsync 的成员设备 peerId 集合（O2b §20.8；host 验签通过后
+    /// 按连接层 peerId 写入——按设备粒度；org-share/org-pull 出站读取决定是否
+    /// 回退旧快照链路）。
+    pub(crate) orgsync_capable_member_peers:
+        Arc<Mutex<std::collections::HashSet<String>>>,
     /// 自设备稳态 hello 触发状态（变更 digest 基线 + 周期兜底计时；仅
     /// keepalive tick 的 StayConnected/Resync 分支读写）。
     pub(crate) self_hello_state: Arc<Mutex<SelfHelloState>>,
     /// 即时 hello 防抖状态（仅 worker 的 SelfHelloNow 分支读写）。
     pub(crate) self_hello_immediate: Arc<Mutex<ImmediateHelloState>>,
+    /// O3 filtered 集合权限钩子注册表（= kernel `plugin_host.filter_caps`）。
+    /// orgsync-hello 出站读取判定「本机数据账号对 filtered 集合是否有插件
+    /// 运行时支撑」——无支撑的 filtered 集合在 hello 中降标（不宣告可服务）。
+    pub(crate) filter_caps: Arc<Mutex<std::collections::HashMap<String, String>>>,
 }
 
 /// org-sync worker 主循环：推送/保活串行消费（kernel `start_p2p` 装配，
@@ -389,30 +399,33 @@ fn collect_org_peer_candidates(
             if member.root_id == current_root_id {
                 continue;
             }
-            let Some(info) = &member.node_info else {
+            let Some(set) = &member.node_info else {
                 continue;
             };
-            let candidate = PeerNodeInfo {
-                peer_id: info.peer_id.clone(),
-                addresses: info.addresses.clone(),
-            };
-            if let Some(peer_id) = extract_peer_id(&candidate) {
-                let entry = by_peer
-                    .entry(peer_id.clone())
-                    .or_insert_with(|| PeerNodeInfo {
-                        peer_id: Some(peer_id),
-                        addresses: Vec::new(),
-                    });
-                for addr in &candidate.addresses {
-                    if !entry.addresses.contains(addr) {
-                        entry.addresses.push(addr.clone());
+            // 端点化：遍历成员端点集，逐端点作为拨号候选（多设备聚合）。
+            for info in set.iter() {
+                let candidate = PeerNodeInfo {
+                    peer_id: info.peer_id.clone(),
+                    addresses: info.addresses.clone(),
+                };
+                if let Some(peer_id) = extract_peer_id(&candidate) {
+                    let entry = by_peer
+                        .entry(peer_id.clone())
+                        .or_insert_with(|| PeerNodeInfo {
+                            peer_id: Some(peer_id),
+                            addresses: Vec::new(),
+                        });
+                    for addr in &candidate.addresses {
+                        if !entry.addresses.contains(addr) {
+                            entry.addresses.push(addr.clone());
+                        }
                     }
+                    continue;
                 }
-                continue;
-            }
-            let key = candidate.addresses.join("|");
-            if !key.is_empty() {
-                by_address.entry(key).or_insert(candidate);
+                let key = candidate.addresses.join("|");
+                if !key.is_empty() {
+                    by_address.entry(key).or_insert(candidate);
+                }
             }
         }
     }
@@ -446,11 +459,11 @@ fn resolve_push_target_root_id(
         .members
         .iter()
         .find(|m| {
-            m.node_info
-                .as_ref()
-                .and_then(|n| n.peer_id.as_deref())
-                .map(str::trim)
-                == Some(peer_id.as_str())
+            // 端点化：遍历成员端点集匹配 peerId。
+            m.node_info.as_ref().is_some_and(|set| {
+                set.iter()
+                    .any(|e| e.peer_id.as_deref().map(str::trim) == Some(peer_id.as_str()))
+            })
         })
         .map(|m| m.root_id.clone())
 }
