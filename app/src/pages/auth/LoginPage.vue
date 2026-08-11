@@ -18,7 +18,10 @@
       <el-button class="submit-btn" type="primary" native-type="button" :loading="busy" :disabled="busy" @click="submit">登录</el-button>
     </el-form>
     <div class="entry-link">
-      <el-button link type="primary" :disabled="busy" @click="emit('switch')">切换用户</el-button>
+      <el-button link type="primary" :disabled="busy" @click="emit('switch')">切换账号</el-button>
+    </div>
+    <div class="entry-link">
+      <el-button link type="info" :disabled="busy" @click="emit('recover')">忘记密码？</el-button>
     </div>
 
     <el-alert v-if="message" :title="message" type="info" :closable="false" show-icon class="block-gap" />
@@ -52,7 +55,7 @@ export default defineComponent({
       default: ''
     }
   },
-  emits: ['login', 'switch'],
+  emits: ['login', 'switch', 'recover'],
   setup(props, { emit }) {
     const password = ref('');
     const message = ref('');

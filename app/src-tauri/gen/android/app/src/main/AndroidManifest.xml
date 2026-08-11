@@ -5,6 +5,13 @@
          组播锁收发组播包，否则 mdns 广播静默无效（MainActivity 启动时持锁） -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 
+    <!-- 摄像头：添加账号页二维码扫码（getUserMedia 取流逐帧 jsQR 解码）。
+         RustWebChromeClient.onPermissionRequest 已实现 WebView 权限请求处理，
+         但 Android 6+ 的 dangerous 权限需 Manifest 先声明才能在运行时请求。 -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
 

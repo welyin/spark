@@ -308,10 +308,12 @@ impl Kernel {
     }
 
     /// 写入身份文件（两空格缩进，对齐 TS `JSON.stringify(payload, null, 2)`）。
+    /// 内部走 `write_identity_file_atomic`（同目录临时文件 + rename 原子替换，
+    /// 防写中途崩溃/掉电留下半截 JSON）。
     pub(crate) fn write_identity_file(&self, file: &IdentityFile) -> Result<()> {
         std::fs::create_dir_all(self.identities_dir())?;
         let text = serde_json::to_string_pretty(file)?;
-        std::fs::write(self.identity_file_path(&file.root_id), text)?;
+        write_identity_file_atomic(&self.identity_file_path(&file.root_id), &text)?;
         Ok(())
     }
 

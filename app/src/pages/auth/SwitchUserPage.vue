@@ -1,7 +1,7 @@
 <template>
   <section class="auth-panel">
-    <h2 class="auth-title">切换用户</h2>
-    <p class="hint">选择本设备上登录过的账号，或注册新用户。</p>
+    <h2 class="auth-title">切换账号</h2>
+    <p class="hint">选择本设备上登录过的账号，或添加/创建账号。</p>
 
     <div v-loading="loading" class="identity-list">
       <p v-if="!loading && identities.length === 0" class="identity-empty">本设备还没有任何账号</p>
@@ -23,8 +23,11 @@
     </div>
 
     <div class="btn-row">
-      <el-button class="btn-row-item" type="primary" @click="emit('register')">注册新用户</el-button>
-      <el-button class="btn-row-item" plain @click="emit('recover')">添加其它账号</el-button>
+      <el-button class="btn-row-item" type="primary" @click="emit('register')">创建新账号</el-button>
+      <el-button class="btn-row-item" plain @click="emit('add')">添加账号（扫码迁移）</el-button>
+    </div>
+    <div class="entry-link">
+      <el-button link type="primary" @click="emit('recover')">忘记密码，找回账号</el-button>
     </div>
     <div class="entry-link">
       <el-button link type="info" @click="emit('back')">返回登录</el-button>
@@ -49,7 +52,7 @@ export default defineComponent({
   components: {
     UserAvatar
   },
-  emits: ['select', 'register', 'recover', 'back'],
+  emits: ['select', 'register', 'add', 'recover', 'back'],
   setup(_, { emit }) {
     const identities = ref<IdentityItem[]>([]);
     const loading = ref(false);

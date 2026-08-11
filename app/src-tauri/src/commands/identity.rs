@@ -133,6 +133,19 @@ pub(crate) fn reveal_mnemonic_inner(
     Ok(MnemonicResultDto { mnemonic })
 }
 
+/// `root-change-password`：修改当前已解锁身份口令。内核先验旧口令、再以新口令
+/// 重封身份文件并同步更新解锁会话缓存口令。返回 `{ success: true }`。
+pub(crate) fn change_password_inner(
+    kernel: &mut Kernel,
+    old_password: &str,
+    new_password: &str,
+) -> Result<super::dto::SuccessResult, String> {
+    kernel
+        .change_password(old_password, new_password)
+        .map_err(err)?;
+    Ok(super::dto::SuccessResult::ok())
+}
+
 /// `root-update-profile`（TS 为免密码会话版）：内核以 unlock 会话缓存口令重封，
 /// 参数形状对齐 preload 的 `profile` 对象字段。
 /// avatar：`None` 不变；`Some("")` 清除（恢复自动头像）；`Some(非空)` 设置——
@@ -302,6 +315,20 @@ pub async fn root_reveal_mnemonic(
     password: String,
 ) -> Result<MnemonicResultDto, String> {
     run_kernel(state, move |kernel| reveal_mnemonic_inner(kernel, &password)).await
+}
+
+/// 修改密码：验旧口令 + 重封身份文件 + 刷新会话缓存口令。scrypt KDF 属 CPU
+/// 密集，async + run_kernel 挪阻塞线程池（模式同 `root_reveal_mnemonic`）。
+#[tauri::command]
+pub async fn root_change_password(
+    state: tauri::State<'_, KernelState>,
+    old_password: String,
+    new_password: String,
+) -> Result<super::dto::SuccessResult, String> {
+    run_kernel(state, move |kernel| {
+        change_password_inner(kernel, &old_password, &new_password)
+    })
+    .await
 }
 
 #[tauri::command]

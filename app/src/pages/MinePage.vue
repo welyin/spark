@@ -17,7 +17,6 @@
           </div>
         </div>
       </header>
-      <RootAuthCenter @update-auth-state="syncAuthState" />
     </div>
 
     <template v-else>
@@ -134,7 +133,6 @@ import BackupModule from '../components/mine/BackupModule.vue';
 import DevicesModule from '../components/mine/DevicesModule.vue';
 import OrgIdentityModule from '../components/mine/OrgIdentityModule.vue';
 import PermissionModule from '../components/mine/PermissionModule.vue';
-import RootAuthCenter from './auth/RootAuthCenter.vue';
 
 type MenuKey = 'profile' | 'card' | 'backup' | 'devices' | 'org' | 'permission';
 
@@ -153,7 +151,6 @@ export default defineComponent({
     DevicesModule,
     OrgIdentityModule,
     PermissionModule,
-    RootAuthCenter,
     Monitor
   },
   emits: ['profile-updated'],
@@ -246,10 +243,6 @@ export default defineComponent({
       rootStatus.value = await window.electronAPI.rootIdentity.status();
     };
 
-    const syncAuthState = (status: RootStatus) => {
-      rootStatus.value = status;
-    };
-
     const onProfileUpdated = (result: { nickname: string | null; avatar: string | null }) => {
       rootStatus.value = { ...rootStatus.value, nickname: result.nickname, avatar: result.avatar };
       // 通知外壳刷新 rail 头像与空间切换器的个人空间头像（与 SettingsPage 同口径）
@@ -274,7 +267,6 @@ export default defineComponent({
       currentSpace,
       headerSource,
       headerSubtitle,
-      syncAuthState,
       onProfileUpdated,
       isMobileLayout,
       mobileFrame,

@@ -69,15 +69,20 @@
 
       <!-- 已验证：二维码备份 -->
       <div v-else-if="activeWay === 'qr'" class="backup-show">
-        <div class="backup-qr" :style="{ width: qrWidth + 24 + 'px', height: qrWidth + 24 + 'px' }">
-          <img
-            v-if="qrImageUrl"
-            :src="qrImageUrl"
-            alt="备份二维码"
-            class="backup-qr-img"
-            :style="{ width: qrWidth + 'px', height: qrWidth + 'px' }"
-          />
-          <span v-else>二维码生成中...</span>
+        <!-- 备份码保持纯码（不嵌头像），加「机密·勿分享」水印与名片码拉开视觉差距；
+             水印置于二维码图像区外（码下方），避免侵入 finder pattern（压住角落定位块） -->
+        <div class="backup-qr-wrap">
+          <div class="backup-qr" :style="{ width: qrWidth + 24 + 'px', height: qrWidth + 24 + 'px' }">
+            <img
+              v-if="qrImageUrl"
+              :src="qrImageUrl"
+              alt="备份二维码"
+              class="backup-qr-img"
+              :style="{ width: qrWidth + 'px', height: qrWidth + 'px' }"
+            />
+            <span v-else>二维码生成中...</span>
+          </div>
+          <span v-if="qrImageUrl" class="backup-qr-secret">机密 · 勿分享</span>
         </div>
         <el-alert
           v-if="qrDense"
@@ -322,6 +327,13 @@ export default defineComponent({
   margin-left: 0;
 }
 
+.backup-qr-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
 .backup-qr {
   display: flex;
   align-items: center;
@@ -333,6 +345,19 @@ export default defineComponent({
 
 .backup-qr-img {
   image-rendering: pixelated;
+}
+
+/* 「机密·勿分享」水印：置于二维码图像区外（码下方），不侵入 finder pattern；
+   与名片码（中央嵌头像）形成强视觉区分，克制不喧宾夺主 */
+.backup-qr-secret {
+  padding: 3px 8px;
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: var(--spark-danger, #f56c6c);
+  border: 1px solid var(--spark-danger, #f56c6c);
+  border-radius: var(--spark-radius-s);
+  background: rgba(255, 255, 255, 0.85);
+  opacity: 0.75;
 }
 
 .mnemonic-grid {

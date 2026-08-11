@@ -452,6 +452,7 @@ export function createTauriApi(): ElectronAPI {
           signature: profile.signature ?? undefined
         }),
       revealMnemonic: (password) => call('root-reveal-mnemonic', password),
+      changePassword: (oldPassword, newPassword) => call('root-change-password', oldPassword, newPassword),
       backupPayload: () => call('root-backup-payload'),
       // 二维码备份载荷（验密；剔除头像等大字段的紧凑 JSON，适配 QR 容量上限）
       backupPayloadQr: (password) => call('root-backup-payload-qr', password),

@@ -511,6 +511,34 @@ pub fn seal_compact_backup(
     )
 }
 
+/// `changePassword`：以旧口令验证解密当前 payload 后，用新口令重新封装
+/// （新 salt/iv；明文头资料字段保留、createdAt 不变、updatedAt 刷新）。
+/// 返回新文件与新会话封装密钥（供内核更新解锁会话缓存，避免后续路径以
+/// 旧口令重封身份文件）。
+///
+/// 旧口令错误返回 [`IdentityError::DecryptionFailed`]（内核映射为
+/// `InvalidPassword`，与 reveal_mnemonic 同口径）。
+pub fn change_password(
+    file: &IdentityFile,
+    old_password: &str,
+    new_password: &str,
+) -> Result<(IdentityFile, [u8; crypto::KEY_LEN])> {
+    let payload = decrypt_payload(file, old_password)?;
+    seal_v2_and_key(
+        &payload,
+        new_password,
+        file.public_key_hex.clone(),
+        file.root_id.clone(),
+        file.nickname.clone(),
+        file.avatar.clone(),
+        file.gender.clone(),
+        file.region.clone(),
+        file.signature.clone(),
+        file.created_at,
+        now_ms(),
+    )
+}
+
 /// v2 加密并组装身份文件（随机 salt/iv）。
 #[allow(clippy::too_many_arguments)]
 fn seal_v2(

@@ -18,7 +18,7 @@
  * 一次解码成功（882 字符紧凑备份 JSON）。管线：面积平均缩放档
  * [0.5, 0.35, 0.25, 0.15, 0.1] × 阈值档 [无, 128, 150, 170]，首个成功即返回。
  *
- * 三个调用点共用：名片二维码（utils/card.ts）、账号恢复（pages/auth/RecoverPage.vue）、
+ * 三个调用点共用：名片二维码（utils/card.ts）、扫码迁移（pages/auth/AddAccountPage.vue）、
  * 连接名片（components/org/RecoverConnectionPanel.vue）。
  */
 import jsQR from 'jsqr';
@@ -145,6 +145,22 @@ function decodeQrAntiMoireFromImageData(imageData: QrImageData): string {
 /** 解码二维码文本：先快路径（干净图），失败后进抗摩尔纹路径（拍屏图）；全部失败返回 '' */
 export function decodeQrTextFromImageData(imageData: QrImageData): string {
   return decodeQrFastFromImageData(imageData) || decodeQrAntiMoireFromImageData(imageData);
+}
+
+/**
+ * 从 canvas 当前画面解码二维码文本（摄像头逐帧扫码用）。
+ * 摄像头实时帧是干净图，走快路径（jsQR + 缩放阶梯）即可，抗摩尔纹管线
+ * 仅针对翻拍屏幕的拍屏图（见文件头注），实时帧无需进——省掉整帧灰度/面积
+ * 平均的逐帧开销。取帧上下文用 willReadFrequently 命中 GPU 频繁读像素的
+ * 走位，避免逐帧 getImageData 拖慢取流。读取失败返回 ''（调用方按"未识别"处理）。
+ */
+export function decodeQrTextFromCanvas(canvas: HTMLCanvasElement): string {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) {
+    return '';
+  }
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  return decodeQrFastFromImageData({ data: imageData.data, width: canvas.width, height: canvas.height });
 }
 
 /** 读取图片文件并解码二维码文本（识别失败 / 图片读取失败均返回 ''） */

@@ -101,3 +101,101 @@ fn sign_with_domain_identity_roundtrip() {
         "Domain is required"
     );
 }
+
+const NEW_PASSWORD: &str = "new-password-321";
+
+#[test]
+fn change_password_updates_unlock_and_session_cache() {
+    let (_dir, mut kernel) = temp_kernel();
+    let init = kernel.init_identity(PASSWORD, "alice", None).unwrap();
+
+    // 未解锁态调用 → Locked
+    kernel.lock();
+    assert_eq!(
+        kernel.change_password(PASSWORD, NEW_PASSWORD).unwrap_err().to_string(),
+        "Root identity is locked"
+    );
+
+    // 解锁后：旧口令错误 → Invalid password（与 reveal_mnemonic 同口径）
+    kernel.unlock(PASSWORD, None).unwrap();
+    assert_eq!(
+        kernel
+            .change_password("wrong-password", NEW_PASSWORD)
+            .unwrap_err()
+            .to_string(),
+        "Invalid password"
+    );
+
+    // 改密成功
+    kernel.change_password(PASSWORD, NEW_PASSWORD).unwrap();
+    assert!(kernel.status().unwrap().unlocked);
+
+    // 旧口令 unlock 失败、新口令 unlock 成功（文件确已用新口令封存）
+    kernel.lock();
+    assert_eq!(
+        kernel.unlock(PASSWORD, None).unwrap_err().to_string(),
+        "Invalid password"
+    );
+    let root_id = kernel.unlock(NEW_PASSWORD, None).unwrap();
+    assert_eq!(root_id, init.root_id);
+
+    // 改密后 unlock 会话缓存已更新：免密码 update_profile_session 仍工作
+    // （依赖会话缓存口令/密钥重封，若未更新会以旧口令把文件封回去）
+    let profile = kernel
+        .update_profile_session(Some("alice-renamed"), None, None, None, None)
+        .unwrap();
+    assert_eq!(profile.nickname.as_deref(), Some("alice-renamed"));
+    // 资料更新后仍可解锁、改密前数据未损
+    kernel.lock();
+    assert_eq!(kernel.unlock(NEW_PASSWORD, None).unwrap(), init.root_id);
+}
+
+#[test]
+fn change_password_same_password_is_noop_roundtrip() {
+    let (_dir, mut kernel) = temp_kernel();
+    let init = kernel.init_identity(PASSWORD, "alice", None).unwrap();
+
+    // 新旧口令相同：合法操作（无意义但不应报错/损坏文件），改后仍可用原口令解锁
+    kernel.change_password(PASSWORD, PASSWORD).unwrap();
+    assert!(kernel.status().unwrap().unlocked);
+    kernel.lock();
+    let root_id = kernel.unlock(PASSWORD, None).unwrap();
+    assert_eq!(root_id, init.root_id);
+}
+
+#[test]
+fn change_password_empty_new_password_rejected() {
+    // change_password 走 check_password 强度校验（对齐 init/recover ≥8 位）：
+    // 空新口令被内核拒绝，封存口令不变，原口令仍可解锁。
+    let (_dir, mut kernel) = temp_kernel();
+    let init = kernel.init_identity(PASSWORD, "alice", None).unwrap();
+
+    assert_eq!(
+        kernel
+            .change_password(PASSWORD, "")
+            .unwrap_err()
+            .to_string(),
+        "Password must be at least 8 characters"
+    );
+    // 文件未被改密：旧口令仍可解锁
+    kernel.lock();
+    assert_eq!(kernel.unlock(PASSWORD, None).unwrap(), init.root_id);
+}
+
+#[test]
+fn change_password_short_new_password_rejected() {
+    // <8 位新口令同被 check_password 拒绝（对齐 init/recover 强度口径），
+    // 封存口令不变。
+    let (_dir, mut kernel) = temp_kernel();
+    let init = kernel.init_identity(PASSWORD, "alice", None).unwrap();
+
+    assert_eq!(
+        kernel
+            .change_password(PASSWORD, "short")
+            .unwrap_err()
+            .to_string(),
+        "Password must be at least 8 characters"
+    );
+    kernel.lock();
+    assert_eq!(kernel.unlock(PASSWORD, None).unwrap(), init.root_id);
+}

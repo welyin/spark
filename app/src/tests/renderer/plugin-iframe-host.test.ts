@@ -55,7 +55,9 @@ vi.mock('../../plugin/source', () => ({
 }));
 
 vi.mock('../../plugin/bridge-dispatcher', () => ({
-  createPluginBridgeDispatcher: vi.fn(async () => async () => null)
+  createPluginBridgeDispatcher: vi.fn(async () => async () => null),
+  // PluginIframeHost.init/destroyBridge 注入与清零事件泵：纯逻辑层不需真实转发，no-op 即可
+  setBridgeEventPump: vi.fn()
 }));
 
 const SPACE = { type: 'personal', id: 'personal' } as const;

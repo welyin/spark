@@ -2,11 +2,16 @@
 // 直接测阶梯函数 decodeQrTextFromImageData（文件选择链路不测）。
 // 失败样本来自实测记录（qrcode 库 ECC M / margin 1）：
 // 700B@340px / 900B@320px / 983B@320px 原图 jsQR 定位失败，阶梯缩小后可解码。
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { inflateSync } from 'node:zlib';
 import QRCode from 'qrcode';
 import jsQR from 'jsqr';
-import { decodeQrFastFromImageData, decodeQrTextFromImageData, type QrImageData } from '../../utils/qr-decode';
+import {
+  decodeQrFastFromImageData,
+  decodeQrTextFromCanvas,
+  decodeQrTextFromImageData,
+  type QrImageData
+} from '../../utils/qr-decode';
 
 /** 极简 PNG 解码器：仅支持 8bit RGB/RGBA、无隔行（qrcode 库 node 端输出即此格式） */
 function decodePng(dataUrl: string): QrImageData {
@@ -133,5 +138,53 @@ describe('decodeQrTextFromImageData（缩放阶梯）', () => {
     // 前提：快路径（最近邻阶梯）确实全部失败，否则样本失效
     expect(decodeQrFastFromImageData(image)).toBe('');
     expect(decodeQrTextFromImageData(image)).toBe(payload);
+  });
+});
+
+describe('decodeQrTextFromCanvas（摄像头逐帧扫码）', () => {
+  /** 构造假 canvas：getContext 返回 fake ctx，getImageData 吐指定像素 */
+  function makeCanvas(image: QrImageData): HTMLCanvasElement {
+    const fakeCtx = {
+      getImageData: (x: number, y: number, w: number, h: number) => ({
+        data: image.data,
+        width: w,
+        height: h
+      })
+    };
+    return {
+      width: image.width,
+      height: image.height,
+      getContext: (type: string, opts?: { willReadFrequently?: boolean }) => {
+        expect(type).toBe('2d');
+        // 摄像头逐帧用 willReadFrequently 命中频繁读像素走位
+        expect(opts?.willReadFrequently).toBe(true);
+        return fakeCtx as unknown as CanvasRenderingContext2D;
+      }
+    } as unknown as HTMLCanvasElement;
+  }
+
+  it('干净帧解码命中：canvas 像素经 jsQR 快路径返回内容', async () => {
+    const payload = 'A'.repeat(100);
+    const image = await makeQrImage(payload, 320);
+    expect(decodeQrTextFromCanvas(makeCanvas(image))).toBe(payload);
+  });
+
+  it('未命中（非二维码帧）返回空串', () => {
+    const size = 200;
+    const data = new Uint8ClampedArray(size * size * 4);
+    for (let i = 0; i < data.length; i++) {
+      data[i] = Math.floor(Math.random() * 256);
+    }
+    expect(decodeQrTextFromCanvas(makeCanvas({ data, width: size, height: size }))).toBe('');
+  });
+
+  it('getContext 返回 null（无 2D）返回空串，不抛错', () => {
+    const canvas = {
+      width: 100,
+      height: 100,
+      getContext: vi.fn(() => null)
+    } as unknown as HTMLCanvasElement;
+    expect(decodeQrTextFromCanvas(canvas)).toBe('');
+    expect(canvas.getContext).toHaveBeenCalledWith('2d', { willReadFrequently: true });
   });
 });

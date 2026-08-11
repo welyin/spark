@@ -1,119 +1,76 @@
 <template>
   <section class="auth-panel">
-    <h2 class="auth-title">恢复账号</h2>
-    <p class="hint">通过助记词或备份二维码恢复 RootID。</p>
+    <h2 class="auth-title">找回账号</h2>
+    <p class="hint">通过助记词恢复 RootID。</p>
 
-    <el-tabs v-model="activeTab" class="auth-tabs">
-      <el-tab-pane label="助记词恢复" name="mnemonic">
-        <el-steps :active="mnemonicStep" align-center finish-status="success" class="auth-steps">
-          <el-step title="验证助记词" />
-          <el-step title="设置资料与密码" />
-        </el-steps>
+    <el-steps :active="mnemonicStep" align-center finish-status="success" class="auth-steps">
+      <el-step title="验证助记词" />
+      <el-step title="设置资料与密码" />
+    </el-steps>
 
-        <template v-if="mnemonicStep === 0">
-          <el-form label-position="top">
-            <el-form-item label="助记词（24 个汉字或英文单词，汉字可空格分隔或连续书写）">
-              <el-input
-                v-model="mnemonicInput"
-                type="textarea"
-                :rows="3"
-                placeholder="输入注册时记录的 24 个助记词"
-                :disabled="busy"
-              />
-            </el-form-item>
-          </el-form>
-          <template v-if="checkWords.length > 0">
-            <div class="mnemonic-grid">
-              <span
-                v-for="(word, index) in checkWords"
-                :key="index"
-                class="mnemonic-word"
-                :class="{ invalid: invalidIndexes.includes(index) }"
-              >
-                <em>{{ index + 1 }}</em>
-                {{ word }}
-              </span>
-            </div>
-            <p class="hint">
-              已识别 {{ checkWords.length }} / 24 个词<template v-if="invalidIndexes.length > 0">，红色为词表外错字</template>
-            </p>
-          </template>
-          <el-button class="submit-btn" type="primary" :disabled="!mnemonicWordsValid" @click="mnemonicStep = 1">下一步</el-button>
-        </template>
+    <template v-if="mnemonicStep === 0">
+      <el-form label-position="top">
+        <el-form-item label="助记词（24 个汉字或英文单词，汉字可空格分隔或连续书写）">
+          <el-input
+            v-model="mnemonicInput"
+            type="textarea"
+            :rows="3"
+            placeholder="输入注册时记录的 24 个助记词"
+            :disabled="busy"
+          />
+        </el-form-item>
+      </el-form>
+      <template v-if="checkWords.length > 0">
+        <div class="mnemonic-grid">
+          <span
+            v-for="(word, index) in checkWords"
+            :key="index"
+            class="mnemonic-word"
+            :class="{ invalid: invalidIndexes.includes(index) }"
+          >
+            <em>{{ index + 1 }}</em>
+            {{ word }}
+          </span>
+        </div>
+        <p class="hint">
+          已识别 {{ checkWords.length }} / 24 个词<template v-if="invalidIndexes.length > 0">，红色为词表外错字</template>
+        </p>
+      </template>
+      <el-button class="submit-btn" type="primary" :disabled="!mnemonicWordsValid" @click="mnemonicStep = 1">下一步</el-button>
+    </template>
 
-        <template v-else>
-          <!-- 回车与点击统一走 submitMnemonic（形态与登录页一致）：@keydown.enter.prevent 显式触发，
-               按钮 native-type="button" + @click；@submit.prevent 纯兜底防刷新 -->
-          <el-form label-position="top" class="auth-form" @submit.prevent>
-            <el-form-item label="昵称">
-              <el-input v-model="nickname" placeholder="中英文均可，最长 24 个字符" maxlength="24" :disabled="busy" @keydown.enter.prevent="submitMnemonic" />
-            </el-form-item>
-            <el-form-item label="头像（可选）">
-              <AvatarPicker v-model="avatarDataUrl" :nickname="nickname" :disabled="busy" />
-            </el-form-item>
-            <el-form-item label="新登录密码">
-              <el-input v-model="newPassword" type="password" show-password placeholder="至少 8 位" :disabled="busy" @keydown.enter.prevent="submitMnemonic" />
-              <PasswordStrengthMeter :password="newPassword" />
-            </el-form-item>
-            <el-form-item label="确认新密码">
-              <el-input v-model="confirmPassword" type="password" show-password placeholder="重复输入新密码" :disabled="busy" @keydown.enter.prevent="submitMnemonic" />
-            </el-form-item>
-            <el-button class="submit-btn" type="primary" native-type="button" :loading="busy" :disabled="!mnemonicReady" @click="submitMnemonic">恢复账号</el-button>
-          </el-form>
-          <div class="entry-link">
-            <el-button link type="info" :disabled="busy" @click="mnemonicStep = 0">上一步</el-button>
-          </div>
-          <p class="hint">助记词是账号最高权限：恢复无需旧密码，恢复后原设备密码不再适用。</p>
-        </template>
-      </el-tab-pane>
+    <template v-else>
+      <!-- 回车与点击统一走 submitMnemonic（形态与登录页一致）：@keydown.enter.prevent 显式触发，
+           按钮 native-type="button" + @click；@submit.prevent 纯兜底防刷新 -->
+      <el-form label-position="top" class="auth-form" @submit.prevent>
+        <el-form-item label="昵称">
+          <el-input v-model="nickname" placeholder="中英文均可，最长 24 个字符" maxlength="24" :disabled="busy" @keydown.enter.prevent="submitMnemonic" />
+        </el-form-item>
+        <el-form-item label="头像（可选）">
+          <AvatarPicker v-model="avatarDataUrl" :nickname="nickname" :disabled="busy" />
+        </el-form-item>
+        <el-form-item label="新登录密码">
+          <el-input v-model="newPassword" type="password" show-password placeholder="至少 8 位" :disabled="busy" @keydown.enter.prevent="submitMnemonic" />
+          <PasswordStrengthMeter :password="newPassword" />
+        </el-form-item>
+        <el-form-item label="确认新密码">
+          <el-input v-model="confirmPassword" type="password" show-password placeholder="重复输入新密码" :disabled="busy" @keydown.enter.prevent="submitMnemonic" />
+        </el-form-item>
+        <el-button class="submit-btn" type="primary" native-type="button" :loading="busy" :disabled="!mnemonicReady" @click="submitMnemonic">恢复账号</el-button>
+      </el-form>
+      <div class="entry-link">
+        <el-button link type="info" :disabled="busy" @click="mnemonicStep = 0">上一步</el-button>
+      </div>
+      <p class="hint">助记词是账号最高权限：恢复无需旧密码，恢复后原设备密码不再适用。</p>
+    </template>
 
-      <el-tab-pane label="二维码恢复" name="qr">
-        <el-steps :active="qrStep" align-center finish-status="success" class="auth-steps">
-          <el-step title="选择二维码图片" />
-          <el-step title="输入原密码" />
-        </el-steps>
-
-        <template v-if="qrStep === 0">
-          <div class="qr-guide">
-            <el-icon :size="40" class="qr-guide-icon"><Grid /></el-icon>
-            <div class="qr-guide-text">
-              <p class="qr-guide-title">在哪里找到备份二维码？</p>
-              <p class="qr-guide-desc">在已登录设备上打开「我的 → 账号备份」，即可查看并保存备份二维码图片。二维码是加密备份，需配合原登录密码恢复。</p>
-            </div>
-          </div>
-          <el-button class="submit-btn qr-select-btn" type="primary" size="large" :disabled="busy" @click="triggerFileSelect">
-            选择二维码图片
-          </el-button>
-        </template>
-
-        <template v-else>
-          <p class="hint"><span class="ok-text">已识别备份二维码</span>，请输入备份时的原登录密码完成恢复。</p>
-          <!-- 回车与点击统一走 submitQr（形态与登录页一致）：@keydown.enter.prevent 显式触发，
-               按钮 native-type="button" + @click；@submit.prevent 纯兜底防刷新 -->
-          <el-form label-position="top" class="auth-form" @submit.prevent>
-            <el-form-item label="原登录密码">
-              <el-input v-model="qrPassword" type="password" show-password placeholder="输入备份时的登录密码" :disabled="busy" @keydown.enter.prevent="submitQr" />
-            </el-form-item>
-            <el-button
-              class="submit-btn"
-              type="primary"
-              native-type="button"
-              size="large"
-              :loading="busy"
-              :disabled="!qrPassword"
-              @click="submitQr"
-            >
-              恢复账号
-            </el-button>
-          </el-form>
-          <div class="entry-link">
-            <el-button link type="info" :disabled="busy" @click="qrStep = 0">上一步，重新选择图片</el-button>
-          </div>
-        </template>
-
-        <input ref="fileInput" type="file" accept="image/*" class="hidden-input" @change="onFileChange" />
-      </el-tab-pane>
-    </el-tabs>
+    <!-- 没有助记词的引导（PC 端）：去手机发起延迟恢复 / 死路说透（device-trust-and-biometric §2.2 PC 端口径） -->
+    <div v-if="!isMobileLayout" class="recover-deadend">
+      <p class="recover-deadend-title">没有助记词？</p>
+      <p class="recover-deadend-desc">
+        如果你还登录着一台手机，可以在手机上发起「延迟恢复」来重置密码。如果手机也丢了、又没有助记词，账号将无法恢复（去中心化没有服务器帮你找回），只能创建新账号。
+      </p>
+    </div>
 
     <div class="entry-link">
       <el-button link type="info" @click="emit('back')">{{ backLabel }}</el-button>
@@ -125,18 +82,16 @@
 
 <script lang="ts">
 import { computed, defineComponent, ref, watch } from 'vue';
-import { Grid } from '@element-plus/icons-vue';
 import AvatarPicker from '../../components/AvatarPicker.vue';
 import PasswordStrengthMeter from '../../components/common/PasswordStrengthMeter.vue';
 import { errorMessage } from '../../utils/ipc';
-import { decodeQrTextFromFile } from '../../utils/qr-decode';
+import { isMobileLayout } from '../../stores/ui-layout';
 
 export default defineComponent({
   name: 'RecoverPage',
   components: {
     AvatarPicker,
-    PasswordStrengthMeter,
-    Grid
+    PasswordStrengthMeter
   },
   props: {
     /** 返回按钮文案（由父级按返回目标传入，如"返回注册"/"返回用户列表"） */
@@ -147,7 +102,6 @@ export default defineComponent({
   },
   emits: ['recovered', 'back'],
   setup(_, { emit }) {
-    const activeTab = ref<'mnemonic' | 'qr'>('mnemonic');
     const busy = ref(false);
     const message = ref('');
 
@@ -211,60 +165,8 @@ export default defineComponent({
       }
     };
 
-    // ---------------- 二维码恢复 ----------------
-    const qrStep = ref(0);
-    const fileInput = ref<HTMLInputElement | null>(null);
-    const qrPayload = ref('');
-    const qrPassword = ref('');
-
-    const triggerFileSelect = () => {
-      fileInput.value?.click();
-    };
-
-    const onFileChange = async (event: Event) => {
-      const input = event.target as HTMLInputElement;
-      const file = input.files?.[0];
-      input.value = '';
-      if (!file) {
-        return;
-      }
-      message.value = '';
-      try {
-        const decoded = await decodeQrTextFromFile(file);
-        if (!decoded) {
-          message.value = '无法识别图片中的二维码，请确认图片清晰完整';
-          qrPayload.value = '';
-          qrStep.value = 0;
-          return;
-        }
-        qrPayload.value = decoded;
-        qrStep.value = 1;
-      } catch {
-        message.value = '图片读取失败，请换一张图片重试';
-        qrPayload.value = '';
-        qrStep.value = 0;
-      }
-    };
-
-    const submitQr = async () => {
-      // 回车提交不走按钮 disabled，需自查
-      if (busy.value || !qrPassword.value) {
-        return;
-      }
-      busy.value = true;
-      message.value = '';
-      try {
-        const result = await window.electronAPI.rootIdentity.recoverBackup(qrPayload.value, qrPassword.value);
-        emit('recovered', result.rootId);
-      } catch (error) {
-        message.value = `恢复失败：${errorMessage(error)}`;
-      } finally {
-        busy.value = false;
-      }
-    };
-
     return {
-      activeTab,
+      isMobileLayout,
       busy,
       message,
       mnemonicInput,
@@ -278,13 +180,6 @@ export default defineComponent({
       confirmPassword,
       mnemonicReady,
       submitMnemonic,
-      fileInput,
-      qrPayload,
-      qrPassword,
-      qrStep,
-      triggerFileSelect,
-      onFileChange,
-      submitQr,
       emit
     };
   }

@@ -13,7 +13,8 @@
         <p v-if="!statusLoaded" class="desc gate-loading">正在读取账号状态…</p>
 
         <template v-else-if="!rootStatus.initialized">
-          <RegisterPage v-if="authMode !== 'recover'" @registered="handleRegistered" @recover="authMode = 'recover'" />
+          <RegisterPage v-if="authMode === 'register'" @registered="handleRegistered" @add="authMode = 'add'" @recover="authMode = 'recover'" />
+          <AddAccountPage v-else-if="authMode === 'add'" ref="addAccountRef" @recovered="handleRecovered" @recover="authMode = 'recover'" @back="authMode = 'register'" />
           <RecoverPage v-else @recovered="handleRecovered" @back="authMode = 'register'" />
         </template>
 
@@ -26,11 +27,13 @@
             :avatar="rootStatus.avatar ?? ''"
             @login="handleLogin"
             @switch="authMode = 'switch'"
+            @recover="authMode = 'recover'"
           />
           <SwitchUserPage
             v-else-if="authMode === 'switch'"
             @select="handleSwitchSelect"
             @register="authMode = 'register'"
+            @add="authMode = 'add'"
             @recover="authMode = 'recover'"
             @back="authMode = 'login'"
           />
@@ -38,16 +41,19 @@
             v-else-if="authMode === 'register'"
             show-back
             @registered="handleRegistered"
+            @add="authMode = 'add'"
             @recover="authMode = 'recover'"
             @back="authMode = 'login'"
           />
+          <AddAccountPage
+            v-else-if="authMode === 'add'"
+            ref="addAccountRef"
+            @recovered="handleRecovered"
+            @recover="authMode = 'recover'"
+            @back="authMode = 'switch'"
+          />
           <RecoverPage v-else back-label="返回用户列表" @recovered="handleRecovered" @back="authMode = 'switch'" />
         </template>
-
-        <div v-else class="ready-actions">
-          <el-button type="primary" @click="showApp = true">进入主界面</el-button>
-          <el-button type="danger" plain @click="handleLogout">退出登录</el-button>
-        </div>
 
         <el-alert v-if="message" :title="message" type="info" :closable="false" show-icon class="gate-message" />
       </div>
@@ -57,6 +63,7 @@
 
 <script lang="ts">
 import { defineComponent, nextTick, onMounted, onUnmounted, ref } from 'vue';
+import { onBackButtonPress } from '@tauri-apps/api/app';
 import App from './App.vue';
 import sparkLogo from './assets/spark-logo.png';
 import type { RootStatusDto as RootStatus } from './api';
@@ -64,11 +71,13 @@ import RegisterPage from './pages/auth/RegisterPage.vue';
 import LoginPage from './pages/auth/LoginPage.vue';
 import RecoverPage from './pages/auth/RecoverPage.vue';
 import SwitchUserPage from './pages/auth/SwitchUserPage.vue';
+import AddAccountPage from './pages/auth/AddAccountPage.vue';
 import { errorMessage } from './utils/ipc';
+import { isAutoLockExpired, touchLastActiveAt } from './utils/auto-lock';
 import { resetContactsCache } from './mock/contacts/store';
 import { resetMessagesCache } from './stores/messages';
 
-type AuthMode = 'login' | 'switch' | 'register' | 'recover';
+type AuthMode = 'login' | 'switch' | 'register' | 'recover' | 'add';
 
 export default defineComponent({
   name: 'RootGate',
@@ -77,7 +86,8 @@ export default defineComponent({
     RegisterPage,
     LoginPage,
     RecoverPage,
-    SwitchUserPage
+    SwitchUserPage,
+    AddAccountPage
   },
   setup() {
     const search = new URLSearchParams(window.location.search);
@@ -89,11 +99,25 @@ export default defineComponent({
     const message = ref('');
     const authMode = ref<AuthMode>('register');
     const statusLoaded = ref(false);
+    // AddAccountPage 实例 ref（首装/已有账号分支共用，同时间只渲染一个）：
+    // 系统返回键需查询其摄像头状态、外部触发关闭（全屏覆盖层语义等同覆盖层，按返回先关摄像头）
+    const addAccountRef = ref<InstanceType<typeof AddAccountPage> | null>(null);
 
     const refreshStatus = async () => {
       rootStatus.value = await window.electronAPI.rootIdentity.status();
       statusLoaded.value = true;
       if (rootStatus.value.initialized && rootStatus.value.unlocked) {
+        // N 天未使用自动锁定（§5）：超时且当前会被视为已解锁 → 立即锁回登录页，
+        // 拒绝进入已解锁主界面（现状无生物识别自动解锁，本检查主要是语义占位，
+        // 但保证超时后不落已解锁态）
+        if (isAutoLockExpired()) {
+          await window.electronAPI.rootIdentity.lock();
+          rootStatus.value = { ...rootStatus.value, unlocked: false };
+          showApp.value = false;
+          authMode.value = 'login';
+          message.value = '已长时间未使用，请重新输入密码';
+          return;
+        }
         showApp.value = true;
       } else if (rootStatus.value.initialized && authMode.value === 'register') {
         // 已有账号但未登录时默认落在登录页（首装无账号时落在注册页）
@@ -103,11 +127,14 @@ export default defineComponent({
 
     const handleRegistered = async (rootId: string) => {
       message.value = `注册成功，RootID=${rootId}`;
+      // 新注册即活跃：记录活跃时间，避免自动锁定误判（§5）
+      touchLastActiveAt();
       await refreshStatus();
     };
 
     const handleRecovered = async (rootId: string) => {
       message.value = `账号已恢复，RootID=${rootId}`;
+      touchLastActiveAt();
       await refreshStatus();
     };
 
@@ -125,6 +152,8 @@ export default defineComponent({
       try {
         const result = await window.electronAPI.rootIdentity.unlock(password);
         message.value = `登录成功，RootID=${result.rootId}`;
+        // 登录成功即活跃：刷新自动锁定的最近活跃时间（§5）
+        touchLastActiveAt();
         showApp.value = true;
         void refreshStatus();
       } catch (error) {
@@ -145,21 +174,6 @@ export default defineComponent({
         await refreshStatus();
       } catch (error) {
         message.value = `切换失败：${errorMessage(error)}`;
-      }
-    };
-
-    const handleLogout = async () => {
-      try {
-        await window.electronAPI.rootIdentity.lock();
-        // 登出不刷新页面：清空窗口会话级缓存，下次登录重新从内核水合
-        // （否则 contactsOf/ensureSpace 的首次水合守卫不再触发，显示旧内存数据）
-        resetContactsCache();
-        resetMessagesCache();
-        showApp.value = false;
-        authMode.value = 'login';
-        await refreshStatus();
-      } catch (error) {
-        message.value = `退出失败：${errorMessage(error)}`;
       }
     };
 
@@ -206,6 +220,57 @@ export default defineComponent({
       }
     };
 
+    // 系统返回键辅助：查询/关闭 AddAccountPage 摄像头（全屏覆盖层语义）
+    const cameraShouldStop = (): boolean => {
+      const inst = addAccountRef.value;
+      if (!inst || authMode.value !== 'add') {
+        return false;
+      }
+      return inst.isCameraActive();
+    };
+    const stopCameraExternally = () => {
+      addAccountRef.value?.stopCamera();
+    };
+
+    // 系统返回键辅助：按 authMode 状态机回退到上一页（与各页面"返回"按钮语义一致）。
+    // 返回 true 表示已处理回退；false 表示落到分支根页（首装=register / 已有账号=login），
+    // 由调用方决定是否退出应用。
+    const backFromCurrentMode = (): boolean => {
+      const initialized = rootStatus.value.initialized;
+      // 首装场景（无账号）：register(根) ↔ add ↔ recover
+      if (!initialized) {
+        switch (authMode.value) {
+          case 'add':
+            authMode.value = 'register';
+            return true;
+          case 'recover':
+            authMode.value = 'register';
+            return true;
+          default:
+            return false; // register 是根页
+        }
+      }
+      // 已有账号未登录场景：login(根) ↔ switch ↔ register ↔ add ↔ recover
+      switch (authMode.value) {
+        case 'switch':
+          authMode.value = 'login';
+          return true;
+        case 'register':
+          authMode.value = 'login';
+          return true;
+        case 'add':
+          authMode.value = 'switch';
+          return true;
+        case 'recover':
+          // recover 在已有账号场景下入口可能来自 login/switch/register/add，回退到 switch
+          // （recover 的 @back 在已有账号场景统一指向 switch，见 RecoverPage 模板）
+          authMode.value = 'switch';
+          return true;
+        default:
+          return false; // login 是根页
+      }
+    };
+
     onMounted(async () => {
       if (isPluginWindow.value) {
         showApp.value = true;
@@ -221,6 +286,29 @@ export default defineComponent({
       // 横竖屏切换重置基准（screen.orientation 为主，orientationchange 兜底旧 WebView）
       window.screen.orientation?.addEventListener('change', onOrientationChange);
       window.addEventListener('orientationchange', onOrientationChange);
+
+      // Android 系统返回键（认证态）：未解锁时按 authMode 状态机回退到上一页，
+      // 落到分支根页（首装=register / 已有账号=login）再按退出应用。
+      // 已解锁态（showApp=true）时 App.vue 的 handler 已接管，此处 return 不做事——
+      // 避免与 App.vue handler 重复处理（onBackButtonPress 是事件监听，所有 handler 都触发）。
+      // 桌面端无此事件，注册静默失败。
+      onBackButtonPress(() => {
+        if (showApp.value) {
+          return;
+        }
+        if (cameraShouldStop()) {
+          stopCameraExternally();
+          return;
+        }
+        const prev = backFromCurrentMode();
+        if (prev) {
+          return;
+        }
+        // 落到分支根页：退出应用（与 App.vue 一级页语义一致，走 system 域收敛点）
+        window.electronAPI?.system.exitApp().catch(() => {});
+      }).catch(() => {
+        // 桌面端 app 插件无 register_listener，注册静默失败
+      });
     });
 
     onUnmounted(() => {
@@ -239,11 +327,11 @@ export default defineComponent({
       message,
       authMode,
       statusLoaded,
+      addAccountRef,
       handleRegistered,
       handleRecovered,
       handleLogin,
-      handleSwitchSelect,
-      handleLogout
+      handleSwitchSelect
     };
   }
 });

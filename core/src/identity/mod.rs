@@ -18,8 +18,9 @@ pub use derive::{
 pub use error::{IdentityError, Result};
 pub use file::{
     AVATAR_MAX_SERIALIZED_BYTES, AVATAR_PREFIX, GENDER_MAX_CHARS, IdentityFile, IdentityPayload,
-    NICKNAME_MAX_CHARS, REGION_MAX_CHARS, SIGNATURE_MAX_CHARS, create_identity, migrate_v1_to_v2,
-    patch_extra_field, recover_identity, recover_identity_and_key, sanitize_profile,
+    NICKNAME_MAX_CHARS, REGION_MAX_CHARS, SIGNATURE_MAX_CHARS, change_password, create_identity,
+    migrate_v1_to_v2, patch_extra_field, recover_identity, recover_identity_and_key,
+    sanitize_profile,
     unlock_identity, unlock_identity_and_key, update_profile, update_profile_and_key,
     update_profile_with_key, validate_avatar, validate_nickname,
 };

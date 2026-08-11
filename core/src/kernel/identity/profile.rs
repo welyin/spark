@@ -7,7 +7,7 @@ use ed25519_dalek::Signer as _;
 
 use super::{
     DerivedDomainIdentityInfo, DomainSignatureInfo, MnemonicCheckInfo, ProfileInfo, PublicIdentity,
-    RootSignatureInfo, map_identity_decrypt_error, split_mnemonic_input,
+    RootSignatureInfo, check_password, map_identity_decrypt_error, split_mnemonic_input,
 };
 use crate::identity;
 use crate::kernel::Kernel;
@@ -23,6 +23,39 @@ impl Kernel {
         let payload =
             identity::file::decrypt_payload(&file, password).map_err(map_identity_decrypt_error)?;
         Ok(payload.mnemonic)
+    }
+
+    /// `changePassword`：修改当前已解锁身份的登录口令。
+    ///
+    /// - 先以 `old_password` 验证能解开当前身份文件（错误对齐
+    ///   `reveal_mnemonic` 的 `InvalidPassword` 口径），再以 `new_password`
+    ///   重新封存身份文件（新 salt/iv）。
+    /// - **同步更新解锁会话缓存口令/密钥**（`set_unlocked`）：`update_profile_session`
+    ///   依赖会话缓存口令重封，改密后若不更新，后续资料更新会用旧口令把身份
+    ///   文件封回去，等于密码没改。host 侧 profile-sync 重封同样读会话口令。
+    /// - 需要解锁态（`Locked` 报错）。
+    pub fn change_password(&mut self, old_password: &str, new_password: &str) -> Result<()> {
+        let root_id = self.require_unlocked_root_id()?;
+        // 新口令强度校验：对齐 init/recover 的 ≥8 位口径，防止前端之外的纵深缺口
+        // （此前 change_password 直接复用 seal_v2 重封，<8 位/空新口令会被内核接受）。
+        check_password(new_password)?;
+        let Some(file) = self.read_identity_file(&root_id)? else {
+            return Err(KernelError::NotInitialized);
+        };
+        let (new_file, new_key) = identity::change_password(&file, old_password, new_password)
+            .map_err(map_identity_decrypt_error)?;
+        self.write_identity_file(&new_file)?;
+        // 沿用当前会话的 root 身份与 seed，仅刷新口令与会话封装密钥
+        if let Some(unlocked) = &self.unlocked {
+            self.set_unlocked(
+                unlocked.identity.clone(),
+                unlocked.seed,
+                new_password,
+                Some(new_key),
+            );
+        }
+        log::info!("[PROFILE_CHAIN] password changed | root_id={root_id}");
+        Ok(())
     }
 
     /// `updateProfile`：更新当前已解锁身份的资料（昵称/头像 + 扩展字段性别/地区/签名）。

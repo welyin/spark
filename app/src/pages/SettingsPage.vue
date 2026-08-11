@@ -85,6 +85,7 @@
             <MyCardModule v-else-if="activeModule === 'card'" detail-mode="drawer" />
             <PermissionModule v-else-if="activeModule === 'permission'" detail-mode="drawer" mode="personal" />
             <BackupModule v-else-if="activeModule === 'backup'" detail-mode="drawer" :root-id="rootStatus.rootId" />
+            <SecurityModule v-else-if="activeModule === 'security'" detail-mode="drawer" />
             <DevicesModule v-else-if="activeModule === 'devices'" detail-mode="drawer" :root-id="rootStatus.rootId ?? ''" />
             <!-- 未选模块时的占位 -->
             <div v-else class="mine-detail settings-module-empty">
@@ -173,6 +174,7 @@
           <MyCardModule v-else-if="activeModule === 'card'" detail-mode="drawer" />
           <PermissionModule v-else-if="activeModule === 'permission'" detail-mode="drawer" mode="personal" />
           <BackupModule v-else-if="activeModule === 'backup'" detail-mode="drawer" :root-id="rootStatus.rootId" />
+          <SecurityModule v-else-if="activeModule === 'security'" detail-mode="drawer" />
           <DevicesModule v-else-if="activeModule === 'devices'" detail-mode="drawer" :root-id="rootStatus.rootId ?? ''" />
           <!-- 未选模块时的占位 -->
           <div v-else class="mine-detail settings-module-empty">
@@ -192,7 +194,6 @@
 
 <script lang="ts">
 import { computed, defineComponent, onMounted, ref, watch, type Component } from 'vue';
-import { ElMessage } from 'element-plus';
 import {
   CircleCloseFilled,
   Cpu,
@@ -214,6 +215,7 @@ import { consumePendingSystemSection, type SystemSectionKey } from '../stores/pe
 import type { RootStatusDto as RootStatus } from '../api';
 import { currentUser } from '../stores/current-user';
 import { personalAvatarSource } from '../stores/avatar-sources';
+import { lockAndReload } from '../utils/identity-lock';
 import UserAvatar from '../components/UserAvatar.vue';
 import OrgAvatar from '../components/OrgAvatar.vue';
 import MobileBackBar from '../components/MobileBackBar.vue';
@@ -223,13 +225,14 @@ import MyCardModule from '../components/mine/MyCardModule.vue';
 import BackupModule from '../components/mine/BackupModule.vue';
 import DevicesModule from '../components/mine/DevicesModule.vue';
 import PermissionModule from '../components/mine/PermissionModule.vue';
+import SecurityModule from '../components/mine/SecurityModule.vue';
 import OrgSettingsPanel from '../components/org/OrgSettingsPanel.vue';
 import SystemSettingsPanel from '../components/settings/SystemSettingsPanel.vue';
 
 type MenuKey = 'mine' | 'space' | 'system';
 
 /** 个人设置下的模块（第三栏菜单，点击后右侧展开；设备管理由系统设置迁入，网络状态仍在系统设置） */
-type PersonalModuleKey = 'profile' | 'card' | 'permission' | 'backup' | 'devices';
+type PersonalModuleKey = 'profile' | 'card' | 'permission' | 'backup' | 'devices' | 'security';
 
 /** 本页在导航栈中的 tab 键（设置不在底部 tab，经顶栏「⋯」进入，键与 App.vue activeTab 一致） */
 const MOBILE_TAB = 'settings';
@@ -246,6 +249,7 @@ export default defineComponent({
     BackupModule,
     DevicesModule,
     PermissionModule,
+    SecurityModule,
     OrgSettingsPanel,
     SystemSettingsPanel,
     Cpu,
@@ -290,6 +294,7 @@ export default defineComponent({
       { key: 'card', label: '我的名片', icon: Postcard, color: '#34c19b' },
       { key: 'permission', label: '朋友权限', icon: Key, color: '#ff7d00' },
       { key: 'backup', label: '账号备份', icon: Lock, color: '#7b61ff' },
+      { key: 'security', label: '安全设置', icon: Key, color: '#f54a45' },
       { key: 'devices', label: '设备管理', icon: Monitor, color: '#3296fa' }
     ];
 
@@ -359,17 +364,6 @@ export default defineComponent({
     };
 
     // ---- 账号操作（Android 前端改造）：原顶栏「⋯」菜单下放设置页最底层 ----
-
-    /** 锁身份并整窗重载回登录/选择账号页（与 App.vue lockAndReload 同语义） */
-    const lockAndReload = async (successText: string) => {
-      try {
-        await window.electronAPI.rootIdentity.lock();
-        ElMessage.success(successText);
-        window.location.reload();
-      } catch (error) {
-        ElMessage.error(`操作失败：${error}`);
-      }
-    };
 
     const goTest = () => {
       // 切到测试 tab（App.vue 处理 tab 渲染）；桌面端测试入口仍在 rail 底部

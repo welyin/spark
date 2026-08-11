@@ -90,6 +90,7 @@ import { computed, defineComponent, onMounted, ref, type PropType } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Key, Postcard } from '@element-plus/icons-vue';
 import QRCode from 'qrcode';
+import { composeCardAvatar } from '../../utils/card-avatar';
 import TermLabel from '../common/TermLabel.vue';
 import NodeIdentityInfo, { type NodeIdentityRow } from '../common/NodeIdentityInfo.vue';
 import MineDetailContainer from './MineDetailContainer.vue';
@@ -107,6 +108,9 @@ export default defineComponent({
     const rootId = ref('');
     const peerId = ref('');
     const addresses = ref<string[]>([]);
+    // 中央头像：用户头像（dataURL），无头像回退自动头像（见 composeCardAvatar）
+    const avatar = ref('');
+    const nickname = ref('');
     const qrDataUrl = ref('');
     const qrThumbUrl = ref('');
     /** 节点已连接（有 peerId 与可拨号地址）时二维码编码完整节点名片 */
@@ -124,6 +128,8 @@ export default defineComponent({
       try {
         const status = await window.electronAPI.rootIdentity.status();
         rootId.value = status.rootId ?? '';
+        avatar.value = status.avatar ?? '';
+        nickname.value = status.nickname ?? '';
       } catch {
         rootId.value = '';
         ElMessage.error('读取身份信息失败');
@@ -151,8 +157,24 @@ export default defineComponent({
       } catch {
         nodeOnline.value = false;
       }
-      qrDataUrl.value = await QRCode.toDataURL(payload, { margin: 1, width: 280 });
-      qrThumbUrl.value = await QRCode.toDataURL(payload, { margin: 1, width: 72 });
+      // 名片码容错级别提升到 H（30%）：中央头像遮挡约 5–6% 面积（头像边长 22% ≈ 4.8% 面积），
+      // 默认 M（15%）虽够，但 H 更稳，避免低分辨率扫码时被头像遮挡边缘误判。
+      const rawQr = await QRCode.toDataURL(payload, { errorCorrectionLevel: 'H', margin: 1, width: 280 });
+      // 大图嵌头像（社交展示用，与朴素备份码拉开视觉差距）；合成失败回退纯码（仍可扫码）。
+      // 先落 rawQr 兜底，再尝试合成，成功才覆盖——避免合成 reject 后 qrDataUrl 恒空。
+      qrDataUrl.value = rawQr;
+      try {
+        qrDataUrl.value = await composeCardAvatar(rawQr, avatar.value, nickname.value, rootId.value);
+      } catch {
+        // 合成失败（环境不支持/图片解码失败）：保留纯码兜底
+      }
+      const rawThumb = await QRCode.toDataURL(payload, { errorCorrectionLevel: 'H', margin: 1, width: 72 });
+      qrThumbUrl.value = rawThumb;
+      try {
+        qrThumbUrl.value = await composeCardAvatar(rawThumb, avatar.value, nickname.value, rootId.value);
+      } catch {
+        // 缩略图合成失败：回退纯码
+      }
     };
 
     onMounted(load);

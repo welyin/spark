@@ -787,6 +787,8 @@ export type ElectronAPI = {
       gender: string | null; region: string | null; signature: string | null;
     }>;
     revealMnemonic: (password: string) => Promise<{ mnemonic: string }>;
+    /** 修改登录密码：必须验证当前密码（device-trust-and-biometric §2 高危操作验密码，不做免密通道） */
+    changePassword: (oldPassword: string, newPassword: string) => Promise<{ success: boolean }>;
     backupPayload: () => Promise<{ payload: string }>;
     /** 二维码备份载荷（验密；剔除头像等大字段的紧凑 JSON，适配 QR 容量上限） */
     backupPayloadQr: (password: string) => Promise<{ payload: string }>;

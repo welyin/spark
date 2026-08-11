@@ -243,6 +243,7 @@ import { currentPage, popPage, resetStack } from './stores/mobile-nav';
 import { hasOverlay, requestCloseOverlay } from './stores/overlay-stack';
 import { requestOpenSystemSection } from './stores/pending-system-section';
 import { useUpdaterReadyPrompt } from './components/updater/use-updater';
+import { lockAndReload } from './utils/identity-lock';
 import MessagesPage from './pages/MessagesPage.vue';
 import ContactsPage from './pages/ContactsPage.vue';
 import AppsPage, { type OpenPluginTabPayload } from './pages/AppsPage.vue';
@@ -450,17 +451,7 @@ export default defineComponent({
       activeTab.value = tab?.sourceTab ?? fallback;
     };
 
-    // 锁定身份后整窗重载回登录/选择账号页（RootGate 接管），与 RootGate.handleLogout 同一语义
-    const lockAndReload = async (successText: string) => {
-      try {
-        await window.electronAPI.rootIdentity.lock();
-        ElMessage.success(successText);
-        window.location.reload();
-      } catch (error) {
-        ElMessage.error(`操作失败：${error}`);
-      }
-    };
-
+    // 锁定身份后整窗重载回登录/选择账号页（RootGate 接管）；统一走 identity-lock 收敛点
     const handleLogout = () => lockAndReload('已退出登录');
     const handleSwitchAccount = () => lockAndReload('已退出当前账号');
 

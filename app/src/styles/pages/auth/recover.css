@@ -1,4 +1,4 @@
-/* 恢复账号面板 */
+/* 找回账号面板（原双 tab 恢复页，二维码迁移已挪去 AddAccountPage，本页仅助记词恢复） */
 
 .auth-title {
   margin: 0;
@@ -6,48 +6,9 @@
   color: var(--spark-text-1);
 }
 
-.auth-tabs {
-  margin-top: 10px;
-}
-
 /* 分步引导指示 */
 .auth-steps {
   margin: 8px 0 16px;
-}
-
-/* 二维码恢复第一步：说明卡片 */
-.qr-guide {
-  display: flex;
-  gap: 12px;
-  padding: 14px;
-  margin-bottom: 16px;
-  border: 1px solid var(--spark-border-light);
-  border-radius: var(--spark-radius-l);
-  background: var(--spark-primary-light);
-}
-
-.qr-guide-icon {
-  flex-shrink: 0;
-  color: var(--spark-primary);
-}
-
-.qr-guide-title {
-  margin: 0 0 4px;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--spark-text-1);
-}
-
-.qr-guide-desc {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--spark-text-2);
-}
-
-.qr-select-btn {
-  height: 44px;
-  font-size: 15px;
 }
 
 /* 头像选择器占位加深对比（注册/恢复页共用 AvatarPicker，此处仅加深本页观感） */
@@ -94,12 +55,27 @@
   background: var(--spark-danger-bg);
 }
 
-.ok-text {
-  color: var(--spark-success);
+/* PC 端「没有助记词」引导：去手机发起延迟恢复 / 死路说透 */
+.recover-deadend {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--spark-warning);
+  border-radius: var(--spark-radius-l);
+  background: var(--spark-warning-bg);
 }
 
-.hidden-input {
-  display: none;
+.recover-deadend-title {
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--spark-warning);
+}
+
+.recover-deadend-desc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--spark-text-2);
 }
 
 .entry-link {

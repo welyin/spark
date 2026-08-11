@@ -1,0 +1,147 @@
+/* 添加账号面板（device-trust-and-biometric §6 添加页：扫码迁移别处还活着的账号） */
+
+.auth-title {
+  margin: 0;
+  font-size: 18px;
+  color: var(--spark-text-1);
+}
+
+.auth-form {
+  margin-top: 12px;
+}
+
+.submit-btn {
+  width: 100%;
+}
+
+/* 来源指引卡片：旧设备上在哪里找到备份二维码 */
+.qr-source {
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid var(--spark-border-light);
+  border-radius: var(--spark-radius-l);
+  background: var(--spark-primary-light);
+}
+
+.qr-source-title {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--spark-text-1);
+}
+
+.qr-source-desc {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--spark-text-2);
+}
+
+/* 名片码区分提示：别扫成名片二维码 */
+.qr-card-tip {
+  margin-top: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--spark-warning);
+  border-radius: var(--spark-radius-l);
+  background: var(--spark-warning-bg);
+}
+
+.qr-card-title {
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--spark-warning);
+}
+
+.qr-card-desc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--spark-text-2);
+}
+
+.qr-select-btn {
+  width: 100%;
+  height: 44px;
+  margin-top: 16px;
+  font-size: 15px;
+}
+
+.qr-camera-btn {
+  width: 100%;
+  height: 44px;
+  margin-top: 16px;
+  font-size: 15px;
+}
+
+/* 摄像头全屏取景：fixed 覆盖整个 WebView，黑色背景，video object-fit:cover 铺满。
+   扫码场景天然需要全屏视野——主流 IM（微信/支付宝）扫码均为全屏取景。
+   识别成功由 loopDecodeFrame 自动 stopCamera 关闭。 */
+.camera-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: #000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.camera-fullscreen .camera-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  /* 镜像前置摄像头自拍习惯（后置不镜像）——简化处理：统一不镜像，
+     object-fit:cover 已保证铺满；如需镜像可加 transform: scaleX(-1) */
+}
+
+/* 取景框：中央方形扫描区，引导用户把二维码对准这里 */
+.camera-frame {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 60vmin;
+  height: 60vmin;
+  max-width: 280px;
+  max-height: 280px;
+  transform: translate(-50%, -50%);
+  border: 2px solid rgba(255, 255, 255, 0.8);
+  border-radius: 12px;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
+
+.camera-hint {
+  position: absolute;
+  top: calc(50% + 32vmin);
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 0 16px;
+  font-size: 14px;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.qr-camera-close {
+  position: absolute;
+  top: calc(100vh - 56px - env(safe-area-inset-bottom, 0px));
+  left: 50%;
+  transform: translateX(-50%);
+  width: auto;
+  min-width: 120px;
+}
+
+.ok-text {
+  color: var(--spark-success);
+}
+
+.hidden-input {
+  display: none;
+}
+
+.entry-link {
+  margin-top: 10px;
+  text-align: center;
+}

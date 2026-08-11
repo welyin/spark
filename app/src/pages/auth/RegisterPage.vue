@@ -24,14 +24,15 @@
         <el-button class="submit-btn" type="primary" native-type="button" :loading="busy" :disabled="busy" @click="submit">创建账号</el-button>
       </el-form>
       <div class="entry-link">
-        <el-button link type="primary" @click="emit('recover')">已有助记词或备份二维码？恢复账号</el-button>
+        <el-button link type="primary" @click="emit('add')">从其它设备迁移</el-button>
+        <el-button link type="info" @click="emit('recover')">忘记密码，找回账号</el-button>
         <el-button v-if="showBack" link type="info" @click="emit('back')">返回登录</el-button>
       </div>
     </template>
 
     <template v-else>
       <el-alert
-        title="请离线抄写并妥善保存这 24 个汉字（顺序重要）。它是账号的最终兜底：不要截图、拍照或通过网络发送。"
+        title="请离线抄写并妥善保存这 24 个汉字（顺序重要）。这是桌面版忘记密码时找回账号的唯一方式，请一定抄写并妥善保存：不要截图、拍照或通过网络发送。"
         type="warning"
         :closable="false"
         show-icon
@@ -83,7 +84,7 @@ export default defineComponent({
       default: false
     }
   },
-  emits: ['registered', 'recover', 'back'],
+  emits: ['registered', 'add', 'recover', 'back'],
   setup(_, { emit }) {
     const step = ref<'password' | 'mnemonic'>('password');
     const nickname = ref('');

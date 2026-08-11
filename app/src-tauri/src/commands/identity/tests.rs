@@ -257,3 +257,63 @@ fn update_profile_extra_fields_patch_semantics() {
     assert_eq!(status.region.as_deref(), Some("杭州"));
     assert_eq!(status.signature.as_deref(), Some("保持热爱"));
 }
+
+#[test]
+fn change_password_updates_unlock_and_session() {
+    let (_dir, mut kernel) = temp_kernel();
+    let init = init_inner(&mut kernel, PASSWORD, "alice", None).unwrap();
+    const NEW_PW: &str = "new-password-321";
+
+    // 未解锁态调用 → Root identity is locked
+    lock_inner(&mut kernel);
+    assert_eq!(
+        change_password_inner(&mut kernel, PASSWORD, NEW_PW).unwrap_err(),
+        "Root identity is locked"
+    );
+
+    // 解锁后旧口令错误 → Invalid password（与 reveal_mnemonic 同口径）
+    unlock_inner(&mut kernel, PASSWORD, None).unwrap();
+    assert_eq!(
+        change_password_inner(&mut kernel, "wrong-password", NEW_PW).unwrap_err(),
+        "Invalid password"
+    );
+
+    // 改密成功返回 { success: true }
+    assert!(change_password_inner(&mut kernel, PASSWORD, NEW_PW).unwrap().success);
+
+    // 旧口令 unlock 失败、新口令 unlock 成功
+    lock_inner(&mut kernel);
+    assert_eq!(
+        unlock_inner(&mut kernel, PASSWORD, None).unwrap_err(),
+        "Invalid password"
+    );
+    assert_eq!(unlock_inner(&mut kernel, NEW_PW, None).unwrap().root_id, init.root_id);
+
+    // 改密后会话缓存口令已更新：免密码 update_profile_session 仍工作
+    let profile =
+        update_profile_inner(&mut kernel, Some("alice-renamed"), None, None, None, None).unwrap();
+    assert_eq!(profile.nickname.as_deref(), Some("alice-renamed"));
+    // 资料更新后仍可用新口令解锁
+    lock_inner(&mut kernel);
+    assert_eq!(unlock_inner(&mut kernel, NEW_PW, None).unwrap().root_id, init.root_id);
+}
+
+#[test]
+fn change_password_short_and_empty_new_password_rejected() {
+    // 内核 change_password 走 check_password 强度校验（对齐 init/recover ≥8 位）：
+    // 短/空新口令被拒绝（Error invoking 包装的错误文案为 Password must be at least 8 characters）。
+    let (_dir, mut kernel) = temp_kernel();
+    init_inner(&mut kernel, PASSWORD, "alice", None).unwrap();
+
+    assert_eq!(
+        change_password_inner(&mut kernel, PASSWORD, "short").unwrap_err(),
+        "Password must be at least 8 characters"
+    );
+    assert_eq!(
+        change_password_inner(&mut kernel, PASSWORD, "").unwrap_err(),
+        "Password must be at least 8 characters"
+    );
+    // 文件未被改密：原口令仍可解锁
+    lock_inner(&mut kernel);
+    assert_eq!(unlock_inner(&mut kernel, PASSWORD, None).unwrap().root_id.is_empty(), false);
+}
