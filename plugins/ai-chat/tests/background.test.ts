@@ -23,6 +23,9 @@ function createFakeHost() {
   const calls = {
     ensureBot: [] as Array<{ botId: string; displayName: string }>,
     replies: [] as Array<{ payload: FakePayload; text: string }>,
+    streamStarts: [] as FakePayload[],
+    streamChunks: [] as Array<{ messageId: string; text: string }>,
+    streamEnds: [] as Array<{ messageId: string; error?: string }>,
     logs: [] as string[],
   };
   let messageHandler: ((payload: FakePayload) => void) | undefined;
@@ -47,6 +50,24 @@ function createFakeHost() {
     reply: (payload: FakePayload, text: string) => {
       calls.replies.push({ payload, text });
     },
+    // 流式回复：fake 默认把 start/chunk/end 折叠为一条 reply（测试断言沿用
+    // calls.replies 口径）；逐 chunk 行为由下方流式专项用例覆盖
+    replyStreamStart: (payload: FakePayload) => {
+      calls.streamStarts.push(payload);
+      return `stream-${calls.streamStarts.length}`;
+    },
+    replyStreamChunk: (_payload: FakePayload, messageId: string, text: string) => {
+      calls.streamChunks.push({ messageId, text });
+    },
+    replyStreamEnd: (payload: FakePayload, messageId: string, error?: string) => {
+      calls.streamEnds.push({ messageId, error });
+      // 折叠为一条 reply（与 UI 侧"流式完成=一条完整回复"口径一致）
+      const content = calls.streamChunks
+        .filter((c) => c.messageId === messageId)
+        .map((c) => c.text)
+        .join('');
+      calls.replies.push({ payload, text: error ?? content });
+    },
     log: (msg: string) => {
       calls.logs.push(msg);
     },
@@ -67,6 +88,48 @@ function createFakeHost() {
         headers: {},
         body: JSON.stringify({ choices: [{ message: { content: 'OPENAI-OK' } }] }),
       })),
+      // 流式：fake 推一段 SSE 数据（与真实 openai SSE 线形同构）后 done——
+      // 验证 background 的 SSE 解析+逐 chunk 回复链路；断流/降级由专项用例注入
+      fetchStream: vi.fn(
+        async (
+          _url: string,
+          _options?: unknown,
+          onChunk?: (chunk: { text: string; done: boolean; status: number; headers: Record<string, string> }) => void,
+        ) => {
+          onChunk?.({
+            text: 'data: {"choices":[{"delta":{"content":"OPENAI-OK"}}]}\n\ndata: [DONE]\n\n',
+            done: false,
+            status: 200,
+            headers: {},
+          });
+          onChunk?.({ text: '', done: true, status: 200, headers: {} });
+          return { text: '', done: true, status: 200, headers: {} };
+        },
+      ),
+      // codebuddy 流式：推真实 NDJSON 结构——assistant 事件（message.content[]
+      // 的 type:"text" 块含增量）+ result 终态，后 done exitCode=0。
+      // 验证 NDJSON 解析+逐 chunk 回复链路；未登录/异常用例在专项处覆盖此桩
+      execStream: vi.fn(
+        async (
+          _program: string,
+          _args?: string[],
+          _workdir?: string,
+          onChunk?: (chunk: { text: string; done: boolean; exitCode: number | null }) => void,
+        ) => {
+          onChunk?.({
+            text: '{"type":"assistant","message":{"content":[{"type":"text","text":"REPLY-OK"}]}}',
+            done: false,
+            exitCode: null,
+          });
+          onChunk?.({
+            text: '{"type":"result","result":"REPLY-OK"}',
+            done: false,
+            exitCode: null,
+          });
+          onChunk?.({ text: '', done: true, exitCode: 0 });
+          return { exitCode: 0, stdout: '', stderr: '' };
+        },
+      ),
     },
   };
 
@@ -160,46 +223,63 @@ describe('ai-chat background script', () => {
     expect(host.calls.ensureBot.map((c) => c.botId)).toEqual(['a', 'b']);
   });
 
-  it('codebuddy 后端：消息 → CLI（--print）→ 回复', async () => {
+  it('codebuddy 后端：消息 → CLI（stream-json 流式）→ 回复', async () => {
     host.seedBot('cb', codebuddyDoc('C:/tools/codebuddy.exe'));
     await loadBackground(host);
 
     host.emit(messagePayload('cb', '帮我看看这段代码'));
     await flush();
 
-    expect(host.fake.sys.exec).toHaveBeenCalledWith(
+    expect(host.fake.sys.execStream).toHaveBeenCalledWith(
       'C:/tools/codebuddy.exe',
-      ['--print', '--', '帮我看看这段代码'],
-      undefined
+      // 会话续接：convId=dm:bot:ai-chat:cb → 首次 --session-id 建立（含流式参数）
+      ['--print', '--output-format', 'stream-json', '--include-partial-messages',
+        '--session-id', 'aichat-dm-bot-ai-chat-cb', '--', '帮我看看这段代码'],
+      undefined,
+      expect.any(Function)
     );
+    expect(host.calls.streamStarts).toHaveLength(1);
     expect(host.calls.replies).toHaveLength(1);
     expect(host.calls.replies[0].text).toBe('REPLY-OK');
     expect(host.calls.replies[0].payload.conversation.id).toBe('dm:bot:ai-chat:cb');
   });
 
-  it('codebuddy 未登录：输出含 Authentication required 时回复登录指引', async () => {
+  it('codebuddy 未登录：stderr 含 Authentication required 时回复登录指引', async () => {
     host.seedBot('cb', codebuddyDoc());
-    host.fake.sys.exec.mockResolvedValueOnce({
-      exitCode: 1,
-      stdout: '',
-      stderr: 'Error: Authentication required, please use /login',
+    // 流式路径：未登录时 stderr 经 execStream 终态返回（exitCode=1 + stderr）。
+    // 流式终态失败时 background 以 error 收尾 replyStreamEnd（fake 折叠为一条
+    // reply，text=error），断言登录指引文本经 error 通道透出
+    host.fake.sys.execStream.mockImplementationOnce(async (_p: string, _a?: string[], _w?: string, onChunk?: (c: { text: string; done: boolean; exitCode: number | null }) => void) => {
+      onChunk?.({ text: '', done: true, exitCode: 1 });
+      return { exitCode: 1, stdout: '', stderr: 'Error: Authentication required, please use /login' };
     });
     await loadBackground(host);
 
     host.emit(messagePayload('cb', 'hi'));
     await flush();
 
-    expect(host.calls.replies[0].text).toContain('尚未登录');
+    const lastReply = host.calls.replies[host.calls.replies.length - 1].text;
+    expect(lastReply).toContain('尚未登录');
   });
 
-  it('codebuddy 工作目录透传：配置 workdir 时作为第三参传给 sys.exec', async () => {
+  it('codebuddy 工作目录透传：配置 workdir 时作为第三参传给 sys.execStream（流式）', async () => {
     host.seedBot('cb', { ...codebuddyDoc(), backendConfig: { cliPath: 'codebuddy', workdir: 'D:/proj' } });
     await loadBackground(host);
 
     host.emit(messagePayload('cb', 'hi'));
     await flush();
 
-    expect(host.fake.sys.exec).toHaveBeenCalledWith('codebuddy', ['--print', '--', 'hi'], 'D:/proj');
+    // 流式路径：codebuddy 走 execStream（stream-json），workdir 透传第三参；
+    // 首次调用带 --session-id（会话续接建立）
+    expect(host.fake.sys.execStream).toHaveBeenCalledWith(
+      'codebuddy',
+      ['--print', '--output-format', 'stream-json', '--include-partial-messages',
+        '--session-id', 'aichat-dm-bot-ai-chat-cb', '--', 'hi'],
+      'D:/proj',
+      expect.any(Function)
+    );
+    expect(host.calls.streamStarts).toHaveLength(1);
+    expect(host.calls.replies[0].text).toBe('REPLY-OK');
   });
 
   it('openai 后端：消息 → /chat/completions（带鉴权与 system prompt）→ 回复', async () => {
@@ -215,17 +295,22 @@ describe('ai-chat background script', () => {
     host.emit(messagePayload('oa', '你好'));
     await flush();
 
-    expect(host.fake.sys.fetch).toHaveBeenCalledWith(
+    // 流式路径：openai 走 fetchStream（非 fetch），body 带 stream:true
+    expect(host.fake.sys.fetchStream).toHaveBeenCalledWith(
       'https://api.example.com/v1/chat/completions',
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({ Authorization: 'Bearer sk-test' }),
-      })
+      }),
+      expect.any(Function)
     );
-    const body = JSON.parse(host.fake.sys.fetch.mock.calls[0][1]!.body!);
+    const body = JSON.parse((host.fake.sys.fetchStream.mock.calls[0][1] as { body: string }).body);
     expect(body.model).toBe('gpt-4o-mini');
+    expect(body.stream).toBe(true);
     expect(body.messages[0]).toEqual({ role: 'system', content: '你是测试助手' });
     expect(body.messages[1]).toEqual({ role: 'user', content: '你好' });
+    // 流式回复折叠：SSE 解析出 OPENAI-OK 经逐 chunk 累积，end 折叠为一条 reply
+    expect(host.calls.streamStarts).toHaveLength(1);
     expect(host.calls.replies[0].text).toBe('OPENAI-OK');
   });
 
@@ -251,13 +336,14 @@ describe('ai-chat background script', () => {
 
   it('后端调用异常：回复错误提示而不是静默吞掉', async () => {
     host.seedBot('cb', codebuddyDoc());
-    host.fake.sys.exec.mockRejectedValueOnce(new Error('启动命令失败'));
+    // 流式路径：execStream 启动即抛错（CLI 不存在等）→ catch 兜底回复错误提示
+    host.fake.sys.execStream.mockRejectedValueOnce(new Error('启动命令失败'));
     await loadBackground(host);
 
     host.emit(messagePayload('cb', 'hi'));
     await flush();
 
-    expect(host.calls.replies).toHaveLength(1);
-    expect(host.calls.replies[0].text).toContain('调用 CodeBuddy CLI 失败');
+    const lastReply = host.calls.replies[host.calls.replies.length - 1].text;
+    expect(lastReply).toContain('调用 CodeBuddy CLI 失败');
   });
 });

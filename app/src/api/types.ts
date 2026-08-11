@@ -272,6 +272,13 @@ export type PluginAnnounceIndexEntryDto = {
   corrected?: CorrectedAnnounceFieldsDto;
 };
 
+/** 组织成员设备端点（按 deviceUid 聚合的端点集之一；deviceUid 缺省 = 旧声明）。 */
+export type OrgNodeInfo = {
+  deviceUid?: string;
+  peerId?: string;
+  addresses: string[];
+};
+
 export type OrgView = {
   orgId: string;
   name: string;
@@ -287,7 +294,8 @@ export type OrgView = {
     role: 'admin' | 'member';
     joinedAt: number;
     addedBy: string;
-    nodeInfo?: { peerId?: string; addresses: string[] };
+    // 端点化：单设备退化为 `{deviceUid?, peerId?, addresses}` 对象，多设备为数组
+    nodeInfo?: OrgNodeInfo | OrgNodeInfo[];
     // 组织身份字段（F2a）：仅本人可改，未设置时键不出现
     nickname?: string;
     avatar?: string;
@@ -458,7 +466,9 @@ export interface SpaceContactsDto {
 }
 
 export type MessageTypeDto = 'text' | 'image' | 'file' | 'link' | 'voice' | 'system';
-export type MessageStatusDto = 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
+// 'streaming'：AI 流式回复中间态（内核 bot_reply_stream_* 落 status='streaming'，
+// 终态 delivered/failed）；serde 直传字符串，DTO 与内核 MessageRecord.status 对齐
+export type MessageStatusDto = 'sending' | 'sent' | 'delivered' | 'read' | 'failed' | 'streaming';
 
 /** 链接预览卡片。 */
 export interface LinkPreviewDto {
@@ -591,21 +601,44 @@ export type ElectronAPI = {
         scope?: 'sync' | 'local';
         devices?: 'all' | 'pc-backup' | 'pc-only' | 'mobile-only';
         merge?: 'lww-record' | 'append-only' | 'whole';
+        // F8：org space 声明携带 orgId（桥按插件实例绑定注入，防插件自报任意组织）
+        orgId?: string;
       },
       pluginDomain?: string
     ) => Promise<Record<string, unknown>>;
-    dataSave: (name: string, key: string, value: unknown, version?: string, pluginDomain?: string) => Promise<{ success: boolean }>;
-    dataDelete: (name: string, key: string, version?: string, pluginDomain?: string) => Promise<{ success: boolean }>;
-    dataGet: <T = unknown>(name: string, key: string, version?: string, pluginDomain?: string) => Promise<T | null>;
+    // O3 读/写 org 上下文：orgId 由内核按插件实例所属空间解析（插件 API 零同步参数），
+    // iframe 桥按 identity.space.id 注入；personal space 传 null。
+    dataSave: (name: string, key: string, value: unknown, version?: string, orgId?: string, pluginDomain?: string) => Promise<{ success: boolean }>;
+    dataDelete: (name: string, key: string, version?: string, orgId?: string, pluginDomain?: string) => Promise<{ success: boolean }>;
+    dataGet: <T = unknown>(name: string, key: string, version?: string, orgId?: string, pluginDomain?: string) => Promise<T | null>;
     dataQuery: <T = unknown>(
       name: string,
       options?: { prefix?: string; limit?: number; cursor?: string },
       version?: string,
+      orgId?: string,
       pluginDomain?: string
     ) => Promise<{ items: Array<{ key: string; value: T }>; nextCursor?: string }>;
     dataDropVersion: (name: string, version: string, pluginDomain?: string) => Promise<{ success: boolean }>;
     dataSaveBlob: (dataBase64: string) => Promise<{ hash: string; size: number }>;
     dataReadBlob: (hash: string) => Promise<{ status: 'ready'; data: string } | { status: 'pending' }>;
+    /** O4 encrypted 授权名单（owner 侧）：orgId 由桥绑定注入 */
+    dataGrantAccess: (
+      orgId: string,
+      name: string,
+      version: string,
+      members: string[]
+    ) => Promise<{ owners: string[]; readers: string[]; epoch: number }>;
+    dataRevokeAccess: (
+      orgId: string,
+      name: string,
+      version: string,
+      members: string[]
+    ) => Promise<{ owners: string[]; readers: string[]; epoch: number }>;
+    dataListAccess: (
+      orgId: string,
+      name: string,
+      version: string
+    ) => Promise<{ owners: string[]; readers: string[]; epoch: number }>;
   };
   pluginMarket: {
     list: () => Promise<PluginMarketItemDto[]>;
@@ -644,7 +677,7 @@ export type ElectronAPI = {
     listMine: () => Promise<OrgView[]>;
     create: (input: { name: string; description?: string; avatar?: string; basePluginDomain?: string }) => Promise<OrgView>;
     delete: (orgId: string) => Promise<{ success: boolean }>;
-    addMember: (orgId: string, input: { rootId: string; nodeInfo?: { peerId?: string; addresses: string[] } }) => Promise<OrgView>;
+    addMember: (orgId: string, input: { rootId: string; nodeInfo?: OrgNodeInfo }) => Promise<OrgView>;
     removeMember: (orgId: string, memberRootId: string) => Promise<OrgView>;
     setGateways: (orgId: string, gateways: string[]) => Promise<OrgView>;
     /** O1：指定数据账号（空数组 = 清除显式指定、回落缺省全体管理员） */
@@ -780,6 +813,9 @@ export type ElectronAPI = {
   sys: {
     exec: (program: string, args: string[], workdir?: string) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
     fetch: (url: string, options?: { method?: string; headers?: Record<string, string>; body?: string }) => Promise<{ status: number; headers: Record<string, string>; body: string }>;
+    fetchStream: (url: string, options?: { method?: string; headers?: Record<string, string>; body?: string }) => Promise<{ streamId: string }>;
+    /** 目录选择对话框（纯前端 tauri-plugin-dialog）；用户取消返回 null */
+    pickFolder: (title?: string) => Promise<string | null>;
   };
   system: {
     /** 未读角标 → 系统徽标（dock/任务栏）；平台不支持时命令侧静默，始终 resolve */

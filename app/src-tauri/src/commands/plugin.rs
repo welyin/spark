@@ -130,30 +130,41 @@ pub(crate) fn org_sync_now_inner(
     let mut pulled = 0u32;
 
     for member in candidates {
-        let Some(node_info) = member.node_info.clone() else {
+        let Some(set) = member.node_info.clone() else {
             continue;
         };
-        let has_peer = node_info
-            .peer_id
-            .as_deref()
-            .is_some_and(|peer_id| !peer_id.trim().is_empty());
-        let has_address = !node_info.addresses.is_empty();
-        if !has_peer && !has_address {
-            continue;
-        }
-
-        attempted += 1;
-        match kernel.sync_peer_organizations_with_dial_timeout(&node_info, SYNC_NOW_DIAL_TIMEOUT) {
-            Ok(result) => {
-                if result.pull_synced > 0 {
-                    pulled += 1;
-                }
+        // 端点化：遍历成员端点集，逐可寻址端点触发同步。
+        for endpoint in set.iter() {
+            let has_peer = endpoint
+                .peer_id
+                .as_deref()
+                .is_some_and(|peer_id| !peer_id.trim().is_empty());
+            let has_address = !endpoint.addresses.is_empty();
+            if !has_peer && !has_address {
+                continue;
             }
-            Err(error) => {
-                eprintln!(
-                    "[plugin-org-sync-now] pull failed orgId={} memberRootId={} error={}",
-                    org_id, member.root_id, error
-                );
+            let node_info = spark_core::org::OrganizationNodeInfo {
+                device_uid: endpoint.device_uid.clone(),
+                peer_id: endpoint.peer_id.clone(),
+                addresses: endpoint.addresses.clone(),
+            };
+
+            attempted += 1;
+            match kernel.sync_peer_organizations_with_dial_timeout(
+                &node_info,
+                SYNC_NOW_DIAL_TIMEOUT,
+            ) {
+                Ok(result) => {
+                    if result.pull_synced > 0 {
+                        pulled += 1;
+                    }
+                }
+                Err(error) => {
+                    eprintln!(
+                        "[plugin-org-sync-now] pull failed orgId={} memberRootId={} error={}",
+                        org_id, member.root_id, error
+                    );
+                }
             }
         }
     }
@@ -417,6 +428,7 @@ mod tests {
 
         // 两个 node_info 指向不可达地址（127.0.0.1:9 discard 端口，连接即拒）的成员
         let node_info = spark_core::org::OrganizationNodeInfo {
+            device_uid: None,
             peer_id: None,
             addresses: vec!["/ip4/127.0.0.1/tcp/9".to_string()],
         };

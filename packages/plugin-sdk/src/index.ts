@@ -55,10 +55,10 @@ export interface PluginRuntimeAPI {
       role: 'admin' | 'member';
       joinedAt: number;
       addedBy: string;
-      nodeInfo?: {
-        peerId?: string;
-        addresses: string[];
-      };
+      // 端点化：单设备退化为 `{deviceUid?, peerId?, addresses}` 对象，多设备为数组
+      nodeInfo?:
+        | { deviceUid?: string; peerId?: string; addresses: string[] }
+        | Array<{ deviceUid?: string; peerId?: string; addresses: string[] }>;
     }>;
   }>>;
 }
@@ -121,6 +121,12 @@ export interface PluginDataAPI {
    * 本地写不触发（本地路径即时可见）。
    */
   onChange: (handler: (event: { pluginId: string; name: string; keys: string[] }) => void) => Promise<void>;
+  /** O4 encrypted 授权名单：把成员加入 readers（owner 侧，内核按 acl owner 验签）。返回更新后 acl */
+  grantAccess: (name: string, members: string[], version?: string) => Promise<{ owners: string[]; readers: string[]; epoch: number }>;
+  /** O4 encrypted 授权名单：把成员移出 readers（epoch+1 轮换密钥）。返回更新后 acl */
+  revokeAccess: (name: string, members: string[], version?: string) => Promise<{ owners: string[]; readers: string[]; epoch: number }>;
+  /** O4 encrypted 授权名单：读取当前名单 */
+  listAccess: (name: string, version?: string) => Promise<{ owners: string[]; readers: string[]; epoch: number }>;
 }
 
 /** 域签名结果（与壳层 api/types.ts DomainSignature 同形，结构类型天然兼容） */
@@ -278,6 +284,25 @@ export type SysFetchResult = {
   body: string;
 };
 
+/** sys.fetchStream 流式响应块 */
+export type SysFetchChunk = {
+  text: string;
+  done: boolean;
+  status: number;
+  headers: Record<string, string>;
+};
+
+/** sys.fetchStream 返回的流控制句柄 */
+export interface FetchStreamHandle {
+  streamId: string;
+  /** 完成的 Promise（done=true 时 resolve，异常时 reject） */
+  done: Promise<SysFetchChunk>;
+  /** 注册块回调（每次数据到达时调用） */
+  onChunk: (handler: (chunk: SysFetchChunk) => void) => void;
+  /** 取消流（取消订阅，后继块不再触发） */
+  cancel: () => void;
+}
+
 /** 系统代理 API：插件通过内核代理执行外部命令 / 发起 HTTP 请求，绕过浏览器沙箱限制 */
 export interface PluginSysAPI {
   /**
@@ -286,6 +311,13 @@ export interface PluginSysAPI {
    */
   exec: (program: string, args: string[], workdir?: string) => Promise<SysExecResult>;
   fetch: (url: string, options?: SysFetchOptions) => Promise<SysFetchResult>;
+  /** 发起 HTTP 流式请求。每个文本块到达时通过 onChunk 回调推送，done 的 Promise 在流结束时 resolve。 */
+  fetchStream: (url: string, options?: SysFetchOptions) => Promise<FetchStreamHandle>;
+  /**
+   * 打开操作系统目录选择对话框，返回所选目录的绝对路径；用户取消返回 null。
+   * 用于让用户图形化选目录（如 CLI 工作目录），替代手动输入路径。
+   */
+  pickFolder: (title?: string) => Promise<string | null>;
 }
 
 export interface PluginSDK {

@@ -204,6 +204,7 @@ pub struct OrgNodeInfoDto {
 impl From<OrgNodeInfoDto> for spark_core::org::OrganizationNodeInfo {
     fn from(dto: OrgNodeInfoDto) -> Self {
         Self {
+            device_uid: None,
             peer_id: dto.peer_id,
             addresses: dto.addresses,
         }

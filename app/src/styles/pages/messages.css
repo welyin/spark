@@ -329,6 +329,20 @@
 
 .messages-page .msg-text { white-space: pre-wrap; }
 
+/* Bot 消息：无气泡，纯文本块（ChatGPT/Claude 风格——无背景/无边框/无阴影/无三角尾巴） */
+.messages-page .bot-msg-content {
+  padding: 4px 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--spark-text-1);
+  word-break: break-word;
+  user-select: text;
+}
+
+.messages-page .bot-msg-content .msg-text {
+  display: block;
+}
+
 /* 引用块 */
 .messages-page .msg-quote {
   margin-bottom: 6px;
@@ -450,6 +464,23 @@
 
 .messages-page .msg-status.st-read { color: var(--spark-success); }
 .messages-page .msg-status.st-failed { color: var(--spark-danger); }
+
+/* 流式回复光标（AI 逐字上屏；bot 消息 status='streaming' 时 MessageBubble 渲染）。
+   全局类不挂 .messages-page 前缀：MessageBubble 可能在 scoped/shadow 边界内，
+   父容器类选择器不可靠匹配，改全局类保证命中。颜色随气泡文字（bot 白底深色/
+   自己深色底浅色都能看清——用 currentColor 跟随上下文文字色最稳）。 */
+.streaming-cursor {
+  display: inline-block;
+  margin-left: 1px;
+  color: currentColor;
+  font-weight: 600;
+  animation: spark-stream-blink 0.9s steps(1) infinite;
+}
+
+@keyframes spark-stream-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
 
 .messages-page .msg-retry {
   border: none;

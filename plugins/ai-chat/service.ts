@@ -64,6 +64,76 @@ export function listAvailableBackendTypes(): BackendType[] {
 }
 
 // ------------------------------------------------------------------
+// 流式响应解析（SSE / JSON-line）
+// 纯逻辑、无副作用，可独立单测（评审 F4）。
+// ------------------------------------------------------------------
+
+/**
+ * SSE 块回调适配：将原始 HTTP chunk 逐行解析，调用 onToken 推送到 UI。
+ * 内部按行缓冲：最后一行可能不完整（跨块断行），留到下次与新 chunk 拼接；
+ * `data: [DONE]` 为流结束哨兵，跳过不产出 token。
+ */
+export function createSSEParser(onToken: (token: string, accumulated: string) => void) {
+  let buffer = '';
+  let accumulated = '';
+
+  return (chunkText: string) => {
+    buffer += chunkText;
+    const lines = buffer.split('\n');
+    // 最后一行可能不完整，留着下次拼
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || !trimmed.startsWith('data:')) continue;
+
+      const data = trimmed.slice(5).trim();
+      if (data === '[DONE]') continue;
+
+      try {
+        const parsed = JSON.parse(data);
+        const token = parsed.choices?.[0]?.delta?.content;
+        if (token) {
+          accumulated += token;
+          onToken(token, accumulated);
+        }
+      } catch {
+        // 跳过无法解析的 JSON 行（残缺 JSON 跨块时留待拼接）
+      }
+    }
+  };
+}
+
+/**
+ * Ollama JSON-line 回调适配：每行是一个完整的 JSON 对象。
+ * 同样按行缓冲处理跨块断行。
+ */
+export function createOllamaStreamParser(onToken: (token: string, accumulated: string) => void) {
+  let buffer = '';
+  let accumulated = '';
+
+  return (chunkText: string) => {
+    buffer += chunkText;
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const parsed = JSON.parse(line);
+        const token = parsed.message?.content;
+        if (token) {
+          accumulated += token;
+          onToken(token, accumulated);
+        }
+      } catch {
+        // 跳过无法解析的 JSON 行（残缺 JSON 跨块时留待拼接）
+      }
+    }
+  };
+}
+
+// ------------------------------------------------------------------
 // 内置后端提供者注册
 // ------------------------------------------------------------------
 
@@ -93,11 +163,15 @@ export function registerBuiltinProviders(): void {
       // 工作目录：CLI 读取代码/文档上下文的根。用户显式配置；留空则 CLI 继承宿主
       // 进程 cwd（不可控），故强烈建议配置
       const workdir = (ctx.config.workdir as string) || undefined;
+      const model = (ctx.config.model as string) || undefined;
+      const args = model
+        ? ['--model', model, '--print', '--', lastMsg?.content ?? '']
+        : ['--print', '--', lastMsg?.content ?? ''];
       console.log(`[ai-chat][provider] ctx.config=${JSON.stringify(ctx.config)}`);
       const startTime = Date.now();
       try {
-        console.log(`[ai-chat][provider] sys.exec 调用 cliPath=${cliPath} workdir=${workdir ?? '(继承)'}`);
-        const result = await sdk.sys.exec(cliPath, ['--print', '--', lastMsg?.content ?? ''], workdir);
+        console.log(`[ai-chat][provider] sys.exec 调用 cliPath=${cliPath} workdir=${workdir ?? '(继承)'} model=${model ?? '(默认)'}`);
+        const result = await sdk.sys.exec(cliPath, args, workdir);
         console.log(`[ai-chat][provider] sys.exec 返回 exitCode=${result.exitCode} stdout=${result.stdout?.slice(0, 50) ?? ''}`);
         const durationMs = Date.now() - startTime;
         const combined = [result.stdout, result.stderr].filter(Boolean).join('\n');
@@ -114,6 +188,35 @@ export function registerBuiltinProviders(): void {
         return { text: `调用 CodeBuddy CLI 失败：${err instanceof Error ? err.message : String(err)}`, durationMs };
       }
     },
+    /**
+     * 拉取 codebuddy 支持的模型列表：跑 `codebuddy --help`，解析 `--model` 行的
+     * 枚举（格式：`可选: hy3, glm-5.2, ...` 或 `choices: ...`）。codebuddy 无
+     * 独立 list-models 命令，--help 的枚举是唯一权威来源；解析失败回退空数组
+     * （前端 datalist 留空，用户仍可手填）。
+     */
+    listModels: async (config: Record<string, unknown>): Promise<string[]> => {
+      const sdk = getPluginSDK();
+      if (!sdk?.sys) return [];
+      const cliPath = (config.cliPath as string) || 'codebuddy';
+      try {
+        const result = await sdk.sys.exec(cliPath, ['--help']);
+        const out = [result.stdout, result.stderr].filter(Boolean).join('\n');
+        // --model 行尾的枚举括号。实际输出为英文：
+        //   "--model <model>  ... Currently supported: (hy3, glm-5.2, ...)"
+        // 兼容中英文措辞（supported/可选/choices/选择）与全角/半角右括号。
+        // 注意排除 --text-to-image-model 等含 "model" 的其它行——锁定 --model 开头。
+        const line = out.split('\n').find((l) => /^\s*-m,\s*--model|^\s*--model\s/.test(l));
+        if (!line) return [];
+        const m = line.match(/(?:supported|可选|choices|选择)[:：]?\s*\(([^)）\n]+)\)/i);
+        if (!m) return [];
+        return m[1]
+          .split(/[,，]/)
+          .map((s) => s.trim())
+          .filter(Boolean);
+      } catch {
+        return [];
+      }
+    },
   });
 
   // OpenAI 兼容 API 后端
@@ -127,6 +230,42 @@ export function registerBuiltinProviders(): void {
       const model = (ctx.config.model as string) || 'gpt-4o';
       const messages = ctx.messages.map((m) => ({ role: m.role, content: m.content }));
       const startTime = Date.now();
+
+      // 流式模式：使用 fetchStream + SSE 解析
+      if (ctx.onToken) {
+        try {
+          const stream = await sdk.sys.fetchStream(`${baseUrl}/chat/completions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+            body: JSON.stringify({ model, messages, stream: true }),
+          });
+
+          const push = createSSEParser(ctx.onToken);
+
+          await new Promise<void>((resolve, reject) => {
+            stream.onChunk((chunk) => {
+              if (chunk.done) {
+                if (chunk.status !== 200) {
+                  reject(new Error(`HTTP ${chunk.status}`));
+                } else {
+                  resolve();
+                }
+              } else {
+                push(chunk.text);
+              }
+            });
+            stream.done.catch(reject);
+          });
+
+          const durationMs = Date.now() - startTime;
+          return { text: '', durationMs }; // 全文通过 onToken 推送
+        } catch (err) {
+          const durationMs = Date.now() - startTime;
+          return { text: `调用 OpenAI 兼容 API 失败：${err instanceof Error ? err.message : String(err)}`, durationMs };
+        }
+      }
+
+      // 非流式回退：原有的 fetch 逻辑
       try {
         const result = await sdk.sys.fetch(`${baseUrl}/chat/completions`, {
           method: 'POST',
@@ -141,6 +280,24 @@ export function registerBuiltinProviders(): void {
         return { text: `调用 OpenAI 兼容 API 失败：${err instanceof Error ? err.message : String(err)}`, durationMs };
       }
     },
+    listModels: async (config: Record<string, unknown>): Promise<string[]> => {
+      const sdk = getPluginSDK();
+      if (!sdk?.sys) return [];
+      const baseUrl = config.baseUrl as string;
+      const apiKey = config.apiKey as string;
+      try {
+        const result = await sdk.sys.fetch(`${baseUrl}/models`, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${apiKey}` },
+        });
+        const data = JSON.parse(result.body);
+        const models: string[] = (data.data ?? []).map((m: { id: string }) => m.id);
+        models.sort();
+        return models;
+      } catch {
+        return [];
+      }
+    },
   });
 
   // Ollama 本地模型后端
@@ -153,6 +310,41 @@ export function registerBuiltinProviders(): void {
       const model = (ctx.config.model as string) || 'qwen2.5:7b';
       const messages = ctx.messages.map((m) => ({ role: m.role, content: m.content }));
       const startTime = Date.now();
+
+      // 流式模式：使用 fetchStream + JSON-line 解析
+      if (ctx.onToken) {
+        try {
+          const stream = await sdk.sys.fetchStream(`${endpoint}/api/chat`, {
+            method: 'POST',
+            body: JSON.stringify({ model, messages, stream: true }),
+          });
+
+          const push = createOllamaStreamParser(ctx.onToken);
+
+          await new Promise<void>((resolve, reject) => {
+            stream.onChunk((chunk) => {
+              if (chunk.done) {
+                if (chunk.status !== 200) {
+                  reject(new Error(`HTTP ${chunk.status}`));
+                } else {
+                  resolve();
+                }
+              } else {
+                push(chunk.text);
+              }
+            });
+            stream.done.catch(reject);
+          });
+
+          const durationMs = Date.now() - startTime;
+          return { text: '', durationMs }; // 全文通过 onToken 推送
+        } catch (err) {
+          const durationMs = Date.now() - startTime;
+          return { text: `调用 Ollama 失败：${err instanceof Error ? err.message : String(err)}`, durationMs };
+        }
+      }
+
+      // 非流式回退：原有的 fetch 逻辑
       try {
         const result = await sdk.sys.fetch(`${endpoint}/api/chat`, {
           method: 'POST',
@@ -164,6 +356,23 @@ export function registerBuiltinProviders(): void {
       } catch (err) {
         const durationMs = Date.now() - startTime;
         return { text: `调用 Ollama 失败：${err instanceof Error ? err.message : String(err)}`, durationMs };
+      }
+    },
+    listModels: async (config: Record<string, unknown>): Promise<string[]> => {
+      const sdk = getPluginSDK();
+      if (!sdk?.sys) return [];
+      const endpoint = config.endpoint as string;
+      try {
+        const result = await sdk.sys.fetch(`${endpoint}/api/tags`, {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' },
+        });
+        const data = JSON.parse(result.body);
+        const models: string[] = (data.models ?? []).map((m: { name: string }) => m.name);
+        models.sort();
+        return models;
+      } catch {
+        return [];
       }
     },
   });
@@ -486,7 +695,10 @@ export async function saveChatMessage(
   msg: ChatMessageRecord,
 ): Promise<void> {
   await ensureChatHistoryCollection(docsApi);
-  await docsApi.put(CHAT_HISTORY_COLLECTION, msg.id, msg as unknown as Record<string, unknown>);
+  // streaming 是运行时 UI 标记，不落盘（见 model.ts ChatMessageRecord.streaming 注释，
+  // 规范 §2.3：运行时字段入档会污染存储；剥离后再写入）
+  const { streaming: _streaming, ...persisted } = msg;
+  await docsApi.put(CHAT_HISTORY_COLLECTION, persisted.id, persisted as unknown as Record<string, unknown>);
 }
 
 // ------------------------------------------------------------------
@@ -500,6 +712,7 @@ export async function saveChatMessage(
 async function callBackend(
   bot: BotInstance,
   messages: ChatMessageRecord[],
+  onToken?: (token: string, accumulated: string) => void,
 ): Promise<BackendCallResult> {
   const provider = backendProviders.get(bot.backendType);
   if (!provider) {
@@ -513,9 +726,102 @@ async function callBackend(
   const ctx: BackendCallContext = {
     config: bot.backendConfig,
     messages,
+    onToken,
   };
 
-  return provider.call(ctx);
+  const result = await provider.call(ctx);
+
+  // 非流式回退：openai/ollama 未启用 onToken 时全文一次推送；
+  // codebuddy CLI 后端不支持流式，也走这个分支
+  if (onToken && result.text && !result.error) {
+    onToken(result.text, result.text);
+  }
+
+  return result;
+}
+
+/** 流式首 token 超时（ms）：超时未收到任何 token 视为流式链路断裂，降级非流式。 */
+const STREAM_FIRST_TOKEN_TIMEOUT_MS = 8000;
+
+/**
+ * 流式节流间隔（ms）：把高频上游 token（fetchStream 逐块事件常达几十次/秒）
+ * 合并为低频推送，避免每 token 触发一次 UI 渲染导致卡顿/成段弹字。
+ * 渲染周期拉长到 ~80ms（≈12fps）配合逐字追加实现"主流一字一字"的平滑观感。
+ */
+const STREAM_THROTTLE_MS = 80;
+
+/**
+ * 流式节流推送器：上游 onToken 高频到达时累积缓冲区，按 STREAM_THROTTLE_MS
+ * 周期把累计全量推给下游（UI 追加渲染）。流结束 flush 兜底保证尾部不丢。
+ * 返回 { push, flush }：push 接上游 (token, accumulated)，flush 在流尾调用。
+ */
+function createTokenThrottler(pushDown: (token: string, accumulated: string) => void): {
+  push: (token: string, accumulated: string) => void;
+  flush: () => void;
+} {
+  let latestAccumulated = '';
+  let latestToken = '';
+  let dirty = false;
+  let timer: ReturnType<typeof setInterval> | null = null;
+
+  const pump = () => {
+    if (dirty) {
+      dirty = false;
+      pushDown(latestToken, latestAccumulated);
+    }
+  };
+
+  return {
+    push(token, accumulated) {
+      latestToken = token;
+      latestAccumulated = accumulated;
+      dirty = true;
+      if (!timer) {
+        timer = setInterval(pump, STREAM_THROTTLE_MS);
+      }
+    },
+    flush() {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+      pump(); // 尾部残留最后推一次
+    },
+  };
+}
+
+/**
+ * 流式调用守护：包一层 onToken，监听首个 token 是否到达。
+ * 流式链路（fetchStream → 桥事件 → onChunk → 解析器）任何一环断裂都会表现
+ * 为「onToken 永远不被调用、content 永远空、流结束时全文丢失」——这里加
+ * 首 token 超时守护：超时视为断链，调用方据此降级非流式重试，保证至少出内容。
+ */
+async function callBackendStreaming(
+  bot: BotInstance,
+  messages: ChatMessageRecord[],
+  onToken: (token: string, accumulated: string) => void,
+): Promise<BackendCallResult> {
+  let firstTokenAt = 0;
+  const guardedOnToken = (token: string, accumulated: string) => {
+    if (!firstTokenAt) firstTokenAt = Date.now();
+    onToken(token, accumulated);
+  };
+
+  // 首 token 超时竞速：fetchStream 在 AI SSE 场景首 token 通常 <2s；
+  // 超时说明链路断（事件没送达/解析失败/权限拦截），不应无限等待
+  const timeout = new Promise<BackendCallResult>((resolve) => {
+    setTimeout(() => {
+      if (!firstTokenAt) {
+        resolve({
+          text: '',
+          durationMs: STREAM_FIRST_TOKEN_TIMEOUT_MS,
+          error: '__stream_timeout__', // 哨兵：调用方识别后降级非流式
+        });
+      }
+    }, STREAM_FIRST_TOKEN_TIMEOUT_MS);
+  });
+
+  return Promise.race([callBackend(bot, messages, guardedOnToken), timeout]);
 }
 
 // ------------------------------------------------------------------
@@ -543,6 +849,8 @@ export async function processChat(
   docsApi: PluginDocAPI,
   bot: BotInstance,
   userContent: string,
+  /** 可选的 AI 回复占位消息：调用方可先创建并上屏，processChat 将原地更新它 */
+  placeholder?: ChatMessageRecord,
 ): Promise<ProcessChatResult> {
   // 1. 保存用户消息
   const now = Date.now();
@@ -555,10 +863,24 @@ export async function processChat(
   };
   await saveChatMessage(docsApi, userMsg);
 
-  // 2. 加载历史 + 构建上下文消息列表
+  // 2. 创建/复用 AI 回复占位消息（placeholder 由调用方预先上屏，streaming 时原地更新）
+  const assistantMsg: ChatMessageRecord = placeholder ?? {
+    id: generateId('msg'),
+    botInstanceId: bot.id,
+    role: 'assistant',
+    content: '',
+    createdAt: now,
+  };
+  if (placeholder) {
+    assistantMsg.streaming = true;
+    assistantMsg.content = '';
+  } else {
+    assistantMsg.streaming = true;
+  }
+
+  // 3. 加载历史 + 构建上下文消息列表
   const history = await listChatMessages(docsApi, bot.id);
 
-  // 按时间排序并过滤出相关消息
   const contextMessages: ChatMessageRecord[] = [];
   if (bot.systemPrompt) {
     contextMessages.push({
@@ -570,7 +892,6 @@ export async function processChat(
     });
   }
   for (const msg of history) {
-    // 当前用户消息已在上方保存，跳过（避免重复）
     if (msg.id === userMsg.id) {
       continue;
     }
@@ -580,31 +901,54 @@ export async function processChat(
   }
   contextMessages.push(userMsg);
 
-  // 3. 调用后端
+  // 4. 调用后端（流式模式：通过 onToken 逐字推送到 assistantMsg.content；
+  //    首 token 超时守护——流式链路断裂时降级非流式重试，保证至少出内容）
   const startTime = Date.now();
-  const result = await callBackend(bot, contextMessages);
-  const durationMs = result.durationMs > 0 ? result.durationMs : Date.now() - startTime;
+  let fullText = '';
+  let error: string | undefined;
 
-  // 4. 构建 + 保存 AI 回复
-  const assistantMsg: ChatMessageRecord = {
-    id: generateId('msg'),
-    botInstanceId: bot.id,
-    role: 'assistant',
-    content: result.text || result.error || '（无响应）',
-    createdAt: Date.now(),
-    durationMs,
-    error: result.error,
-  };
+  // 节流推送：上游 token 高频（几十次/秒）合并为 ~80ms 周期推送，
+  // 配合逐字追加实现平滑"一字一字"观感（避免每 token 一次 UI 渲染卡顿）
+  const throttler = createTokenThrottler((_token, accumulated) => {
+    fullText = accumulated;
+    assistantMsg.content = accumulated;
+  });
+
+  try {
+    let result = await callBackendStreaming(bot, contextMessages, throttler.push);
+    // 首 token 超时（流式断链）→ 降级非流式重试一次（不传 onToken，强制
+    // openai/ollama 走非流式 fetch 全文分支；codebuddy 本就走 CLI）
+    if (result.error === '__stream_timeout__') {
+      console.warn('[ai-chat][stream] 首 token 超时，流式链路疑似断裂，降级非流式重试');
+      result = await callBackend(bot, contextMessages);
+      // 非流式全文一次性上屏
+      if (result.text && !result.error) {
+        fullText = result.text;
+        assistantMsg.content = result.text;
+      }
+    }
+    const durationMs = result.durationMs > 0 ? result.durationMs : Date.now() - startTime;
+    error = result.error === '__stream_timeout__' ? '流式请求超时' : result.error;
+    assistantMsg.durationMs = durationMs;
+  } catch (err) {
+    const durationMs = Date.now() - startTime;
+    error = err instanceof Error ? err.message : String(err);
+    assistantMsg.durationMs = durationMs;
+  } finally {
+    throttler.flush(); // 流尾残留推送兜底（节流缓冲不丢尾部 token）
+  }
+
+  // 5. 完成：关闭 streaming 标记，输出最终文本，持久化
+  assistantMsg.streaming = false;
+  assistantMsg.content = fullText || error || '（无响应）';
+  assistantMsg.error = error;
+
   await saveChatMessage(docsApi, assistantMsg);
-
-  // 5. 不再发送服务号应用消息：bot 已是联系人，回复只应出现在联系人会话里，
-  // sendAppMessage 是服务号模型的误用，会制造 app:ai-chat 噪音会话。
-  // （插件内聊天与联系人会话的数据合并是独立重构，另行处理）
 
   return {
     userMessage: userMsg,
     assistantMessage: assistantMsg,
-    error: result.error,
+    error,
   };
 }
 

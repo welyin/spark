@@ -268,27 +268,35 @@ export function createTauriApi(): ElectronAPI {
       // P6 声明式数据 API（declareCollection 一次 + 读写零同步参数）
       dataDeclareCollection: (declaration, pluginDomain) =>
         invoke('data_declare_collection', { domain: requireDomain(pluginDomain), declaration }),
-      dataSave: (name, key, value, version, pluginDomain) =>
-        invoke('data_save', { domain: requireDomain(pluginDomain), name, key, value, version: version ?? null }),
-      dataDelete: (name, key, version, pluginDomain) =>
-        invoke('data_delete', { domain: requireDomain(pluginDomain), name, key, version: version ?? null }),
-      dataGet: (name, key, version, pluginDomain) =>
-        invoke('data_get', { domain: requireDomain(pluginDomain), name, key, version: version ?? null }),
-      dataQuery: (name, options = {}, version, pluginDomain) =>
+      dataSave: (name, key, value, version, orgId, pluginDomain) =>
+        invoke('data_save', { domain: requireDomain(pluginDomain), name, key, value, version: version ?? null, orgId: orgId ?? null }),
+      dataDelete: (name, key, version, orgId, pluginDomain) =>
+        invoke('data_delete', { domain: requireDomain(pluginDomain), name, key, version: version ?? null, orgId: orgId ?? null }),
+      dataGet: (name, key, version, orgId, pluginDomain) =>
+        invoke('data_get', { domain: requireDomain(pluginDomain), name, key, version: version ?? null, orgId: orgId ?? null }),
+      dataQuery: (name, options = {}, version, orgId, pluginDomain) =>
         invoke('data_query', {
           domain: requireDomain(pluginDomain),
           name,
           prefix: options.prefix ?? null,
           limit: options.limit ?? null,
           cursor: options.cursor ?? null,
-          version: version ?? null
+          version: version ?? null,
+          orgId: orgId ?? null
         }),
       dataDropVersion: (name, version, pluginDomain) =>
         invoke('data_drop_version', { domain: requireDomain(pluginDomain), name, version: String(version) }),
       dataSaveBlob: (dataBase64) =>
         invoke('data_save_blob', { dataBase64 }),
       dataReadBlob: (hash) =>
-        invoke('data_read_blob', { hash })
+        invoke('data_read_blob', { hash }),
+      // O4 encrypted 授权名单（owner 侧）
+      dataGrantAccess: (orgId, name, version, members) =>
+        invoke('data_grant_access', { orgId, name, version, members }),
+      dataRevokeAccess: (orgId, name, version, members) =>
+        invoke('data_revoke_access', { orgId, name, version, members }),
+      dataListAccess: (orgId, name, version) =>
+        invoke('data_list_access', { orgId, name, version })
     },
     pluginMarket: {
       // 市场服务在 src-tauri market 模块（验签/下载/落状态/对账）；
@@ -487,7 +495,20 @@ export function createTauriApi(): ElectronAPI {
           'sys-fetch',
           url,
           options ?? undefined
-        )
+        ),
+      fetchStream: (url, options) =>
+        call<{ streamId: string }>('sys-fetch-stream', url, options ?? undefined),
+      // 目录选择对话框：纯前端（tauri-plugin-dialog），不经内核命令；
+      // 用户取消返回 null。供插件 sys.pickFolder（如 CLI 工作目录图形化选择）。
+      pickFolder: async (title?: string) => {
+        const dir = await openDialog({
+          title: title ?? '选择目录',
+          directory: true,
+          multiple: false
+        });
+        // openDialog 在 directory 模式返回 string | null（multiple:false）
+        return typeof dir === 'string' ? dir : null;
+      }
     },
     dataManagement: {
       usage: () => call('data-usage'),

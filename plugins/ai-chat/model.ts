@@ -31,6 +31,8 @@ export type BackendCallContext = {
   config: Record<string, unknown>;
   /** 完整的消息历史（包含当前用户消息），用于多轮对话上下文 */
   messages: ChatMessageRecord[];
+  /** 流式回调（可选）：每收到一个文本片段时调用 (片段, 累积全文) */
+  onToken?: (token: string, accumulated: string) => void;
 };
 
 /** 后端调用结果 */
@@ -78,6 +80,8 @@ export type BackendProvider = {
   call: (ctx: BackendCallContext) => Promise<BackendCallResult>;
   /** 本地环境依赖声明（仅命令行类后端提供，用于环境检测与一键安装） */
   env?: BackendEnvironment;
+  /** 获取可用模型列表（openai/ollama 提供；codebuddy 不提供，前端回退为自由文本） */
+  listModels?: (config: Record<string, unknown>) => Promise<string[]>;
 };
 
 // ------------------------------------------------------------------
@@ -128,6 +132,8 @@ export type ChatMessageRecord = {
   durationMs?: number;
   /** 错误信息（仅 assistant 消息且调用失败时存在） */
   error?: string;
+  /** 运行时标记：是否仍在流式生成中（仅 UI 使用；落盘前由 saveChatMessage 剥离，不持久化，见规范 §2.3） */
+  streaming?: boolean;
 };
 
 // ------------------------------------------------------------------

@@ -1,9 +1,9 @@
 <template>
-  <!-- 初始化加载态：UI 已挂载，等待桥握手完成 -->
+  <!-- 初始化加载态：UI 已挂载（先于桥握手），等待连接宿主与数据加载完成 -->
   <div v-if="initState === 'loading'" class="ai-chat-root init-state">
     <div class="init-placeholder">
       <div class="init-spinner"></div>
-      <p class="init-text">正在连接宿主环境…</p>
+      <p class="init-text">{{ initHint }}</p>
     </div>
   </div>
 
@@ -70,29 +70,43 @@
       <div class="message-list" ref="messageListRef">
         <div v-if="loadingMessages" class="messages-loading">加载中…</div>
         <template v-for="msg in messages" :key="msg.id">
-          <div
-            class="message-row"
-            :class="msg.role === 'user' ? 'message-row--user' : 'message-row--bot'"
-          >
-            <div class="message-bubble" :class="`message-bubble--${msg.role}`">
-              <div v-if="msg.role === 'assistant'" class="message-html" v-html="renderMarkdown(msg.content)"></div>
-              <div v-else class="message-text">{{ msg.content }}</div>
+          <!-- 用户消息：保持气泡样式 -->
+          <div v-if="msg.role === 'user'" class="message-row message-row--user">
+            <div class="message-bubble message-bubble--user">
+              <div class="message-text">{{ msg.content }}</div>
               <div v-if="msg.error" class="message-error">{{ msg.error }}</div>
               <div class="message-meta">
                 <span>{{ formatTime(msg.createdAt) }}</span>
-                <span v-if="msg.durationMs"> · {{ (msg.durationMs / 1000).toFixed(1) }}s</span>
+              </div>
+            </div>
+          </div>
+          <!-- AI 消息：无气泡，纯文本块（ChatGPT/Claude 风格） -->
+          <div v-else class="message-row message-row--bot">
+            <div class="bot-message-block">
+              <div class="bot-msg-avatar">
+                <img v-if="activeBot?.avatarUrl" :src="activeBot.avatarUrl" :alt="activeBot?.name" />
+                <span v-else class="bot-msg-avatar-default">{{ activeBot?.name?.charAt(0) }}</span>
+              </div>
+              <div class="bot-msg-body">
+                <div class="bot-msg-name">{{ activeBot?.name }}</div>
+                <!-- 流式输出中：纯文本 + 闪烁光标 -->
+                <div v-if="msg.streaming" class="bot-msg-text streaming">
+                  {{ msg.content }}<span class="streaming-cursor">█</span>
+                </div>
+                <!-- 完成：Markdown 渲染 -->
+                <div v-else class="bot-msg-content">
+                  <div class="message-html" v-html="renderMarkdown(msg.content)"></div>
+                  <div v-if="msg.error" class="message-error">{{ msg.error }}</div>
+                  <div class="message-meta">
+                    <span>{{ formatTime(msg.createdAt) }}</span>
+                    <span v-if="msg.durationMs"> · {{ (msg.durationMs / 1000).toFixed(1) }}s</span>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
         </template>
-        <!-- 思考中状态 -->
-        <div v-if="thinking" class="message-row message-row--bot">
-          <div class="message-bubble message-bubble--assistant thinking-bubble">
-            <div class="thinking-dots"><span></span><span></span><span></span></div>
-            <span class="thinking-label">{{ backendLabel(activeBot?.backendType) }} 处理中… {{ thinkingElapsed }}s</span>
-          </div>
-        </div>
-        <div v-if="messages.length === 0 && !loadingMessages && !thinking" class="messages-empty">
+        <div v-if="messages.length === 0 && !loadingMessages" class="messages-empty">
           向 {{ activeBot?.name ?? 'Bot' }} 发送第一条消息吧
         </div>
       </div>
@@ -164,14 +178,42 @@
           </label>
           <label class="form-field">
             <span class="form-label">工作目录</span>
-            <input
-              class="form-input"
-              v-model="botForm.config.codebuddy.workdir"
-              placeholder="D:\path\to\project（CLI 的上下文根）"
-            />
+            <div class="model-select-row">
+              <input
+                class="form-input"
+                v-model="botForm.config.codebuddy.workdir"
+                placeholder="点右侧 📁 选择目录（或手动输入路径）"
+              />
+              <button
+                class="btn-model-refresh"
+                title="打开系统目录选择对话框"
+                :disabled="workdirPicking"
+                @click="pickWorkdir"
+              >{{ workdirPicking ? '…' : '📁' }}</button>
+            </div>
+          </label>
+          <label class="form-field">
+            <span class="form-label">模型</span>
+            <div class="model-select-row">
+              <input
+                class="form-input"
+                v-model="botForm.config.codebuddy.model"
+                placeholder="默认（CLI 内置默认模型）"
+                list="codebuddy-model-list"
+              />
+              <datalist id="codebuddy-model-list">
+                <option v-for="m in codebuddyModels" :key="m" :value="m" />
+              </datalist>
+              <button
+                class="btn-model-refresh"
+                title="获取 CodeBuddy 支持的模型列表（解析 codebuddy --help）"
+                :disabled="modelsLoading.codebuddy"
+                @click="fetchCodebuddyModels"
+              >{{ modelsLoading.codebuddy ? '…' : '↻' }}</button>
+            </div>
           </label>
           <p class="form-hint">
-            执行 <code>codebuddy --print -- "..."</code>（<code>--</code> 终止选项解析，消息以 <code>-</code> 开头也不会被当成 CLI 标志），stdout 即为回复。工作目录是 CLI 读取代码/文档上下文的根路径，留空则继承宿主进程目录（不可控，不建议）。
+            执行 <code>codebuddy --print -- "..."</code>（<code>--</code> 终止选项解析，消息以 <code>-</code> 开头也不会被当成 CLI 标志），stdout 即为回复。模型从 <code>codebuddy --help</code> 的 <code>--model</code> 枚举解析（点 ↻ 刷新），留空用 CLI 内置默认模型，也可手填。工作目录是 CLI 读取代码/文档上下文的根路径，留空则继承宿主进程目录（不可控，不建议）。
           </p>
 
           <!-- 环境检测与一键安装 -->
@@ -273,11 +315,26 @@
           </label>
           <label class="form-field">
             <span class="form-label">模型</span>
-            <input
-              class="form-input"
-              v-model="botForm.config.openai.model"
-              placeholder="gpt-4o"
-            />
+            <div class="model-select-row">
+              <input
+                class="form-input"
+                v-model="botForm.config.openai.model"
+                placeholder="gpt-4o"
+                list="openai-model-list"
+              />
+              <datalist id="openai-model-list">
+                <option v-for="m in openaiModels" :key="m" :value="m" />
+              </datalist>
+              <button
+                class="btn-model-refresh"
+                title="获取可用模型列表"
+                :disabled="modelsLoading.openai"
+                @click="fetchOpenaiModels"
+              >{{ modelsLoading.openai ? '…' : '↻' }}</button>
+            </div>
+            <p class="form-hint">
+              可从下拉列表选择，也可自由输入。点击 ↻ 从 API 拉取可用模型。
+            </p>
           </label>
         </template>
 
@@ -293,11 +350,26 @@
           </label>
           <label class="form-field">
             <span class="form-label">模型</span>
-            <input
-              class="form-input"
-              v-model="botForm.config.ollama.model"
-              placeholder="qwen2.5:7b"
-            />
+            <div class="model-select-row">
+              <input
+                class="form-input"
+                v-model="botForm.config.ollama.model"
+                placeholder="qwen2.5:7b"
+                list="ollama-model-list"
+              />
+              <datalist id="ollama-model-list">
+                <option v-for="m in ollamaModels" :key="m" :value="m" />
+              </datalist>
+              <button
+                class="btn-model-refresh"
+                title="获取可用模型列表"
+                :disabled="modelsLoading.ollama"
+                @click="fetchOllamaModels"
+              >{{ modelsLoading.ollama ? '…' : '↻' }}</button>
+            </div>
+            <p class="form-hint">
+              可从下拉列表选择，也可自由输入。点击 ↻ 从 Ollama 拉取已安装模型。
+            </p>
           </label>
         </template>
 
@@ -349,6 +421,7 @@ import {
   scanBackendEnv,
   verifyManualCommand,
   installBackendEnv,
+  getBackendProvider,
   type EnvCandidate,
 } from './service';
 import type { BackendType, BotInstance, ChatMessageRecord } from './model';
@@ -366,6 +439,8 @@ const bots = ref<BotInstance[]>([]);
 const initState = ref<'loading' | 'ready' | 'failed'>('loading');
 /** 握手失败原因（展示给用户） */
 const initError = ref('');
+/** 加载阶段提示（loading 页文案：连接宿主→加载数据 分阶段提示） */
+const initHint = ref('正在连接宿主环境…');
 const activeBotId = ref<string | null>(null);
 const activeBot = ref<BotInstance | null>(null);
 const messages = ref<ChatMessageRecord[]>([]);
@@ -373,25 +448,86 @@ const inputText = ref('');
 const thinking = ref(false);
 const loadingMessages = ref(false);
 
-/** 后端调用开始时间（ms），用于思考中气泡显示已过时长 */
-const thinkingStartAt = ref(0);
-/** 思考中已过秒数（响应式，每秒 +1） */
-const thinkingElapsed = ref(0);
-let thinkingTimer: ReturnType<typeof setInterval> | undefined;
+/** OpenAI / Ollama / CodeBuddy 可用模型列表（datalist 候选） */
+const openaiModels = ref<string[]>([]);
+const ollamaModels = ref<string[]>([]);
+const codebuddyModels = ref<string[]>([]);
+const modelsLoading = ref<Record<string, boolean>>({ openai: false, ollama: false, codebuddy: false });
 
-function startThinkingProgress(): void {
-  thinkingStartAt.value = Date.now();
-  thinkingElapsed.value = 0;
-  stopThinkingProgress();
-  thinkingTimer = setInterval(() => {
-    thinkingElapsed.value = Math.floor((Date.now() - thinkingStartAt.value) / 1000);
-  }, 1000);
+/** 获取 OpenAI 兼容 API 的可用模型列表（GET /models） */
+async function fetchOpenaiModels(): Promise<void> {
+  const provider = getBackendProvider('openai');
+  if (!provider?.listModels) return;
+  const cfg: Record<string, unknown> = {};
+  if (botForm.config.openai.baseUrl) cfg.baseUrl = botForm.config.openai.baseUrl;
+  if (botForm.config.openai.apiKey) cfg.apiKey = botForm.config.openai.apiKey;
+  if (!cfg.baseUrl) {
+    openaiModels.value = [];
+    return;
+  }
+  modelsLoading.value.openai = true;
+  try {
+    openaiModels.value = await provider.listModels(cfg);
+  } catch {
+    openaiModels.value = [];
+  } finally {
+    modelsLoading.value.openai = false;
+  }
 }
 
-function stopThinkingProgress(): void {
-  if (thinkingTimer !== undefined) {
-    clearInterval(thinkingTimer);
-    thinkingTimer = undefined;
+/** 获取 Ollama 的可用模型列表（GET /api/tags） */
+async function fetchOllamaModels(): Promise<void> {
+  const provider = getBackendProvider('ollama');
+  if (!provider?.listModels) return;
+  const cfg: Record<string, unknown> = {};
+  if (botForm.config.ollama.endpoint) cfg.endpoint = botForm.config.ollama.endpoint;
+  if (!cfg.endpoint) {
+    ollamaModels.value = [];
+    return;
+  }
+  modelsLoading.value.ollama = true;
+  try {
+    ollamaModels.value = await provider.listModels(cfg);
+  } catch {
+    ollamaModels.value = [];
+  } finally {
+    modelsLoading.value.ollama = false;
+  }
+}
+
+/** 工作目录选择进行中（防重复点击） */
+const workdirPicking = ref(false);
+
+/**
+ * 打开系统目录选择对话框选工作目录（sys.pickFolder）。图形化选择替代手动输入，
+ * 选中即回填表单；取消/失败（对话框不可用）时静默——输入框仍可手动编辑。
+ */
+async function pickWorkdir(): Promise<void> {
+  if (!sdk?.sys?.pickFolder || workdirPicking.value) return;
+  workdirPicking.value = true;
+  try {
+    const dir = await sdk.sys.pickFolder('选择 CodeBuddy 工作目录');
+    if (dir) botForm.config.codebuddy.workdir = dir;
+  } catch {
+    // 对话框不可用（如非桥上下文）：静默，用户可手动输入
+  } finally {
+    workdirPicking.value = false;
+  }
+}
+
+/** 获取 CodeBuddy CLI 支持的模型列表（解析 `codebuddy --help` 的 --model 枚举） */
+async function fetchCodebuddyModels(): Promise<void> {
+  const provider = getBackendProvider('codebuddy');
+  if (!provider?.listModels) return;
+  const cfg: Record<string, unknown> = {};
+  if (botForm.config.codebuddy.cliPath) cfg.cliPath = botForm.config.codebuddy.cliPath;
+  modelsLoading.value.codebuddy = true;
+  try {
+    codebuddyModels.value = await provider.listModels(cfg);
+  } catch {
+    codebuddyModels.value = [];
+  } finally {
+    modelsLoading.value.codebuddy = false;
   }
 }
 
@@ -420,7 +556,7 @@ type BotFormState = {
   backendType: BackendType;
   systemPrompt: string;
   config: {
-    codebuddy: { cliPath: string; workdir: string };
+    codebuddy: { cliPath: string; workdir: string; model: string };
     openai: { baseUrl: string; apiKey: string; model: string };
     ollama: { endpoint: string; model: string };
   };
@@ -434,7 +570,7 @@ const defaultBotForm = (): BotFormState => ({
   backendType: 'codebuddy',
   systemPrompt: '',
   config: {
-    codebuddy: { cliPath: '', workdir: '' },
+    codebuddy: { cliPath: '', workdir: '', model: '' },
     openai: { baseUrl: '', apiKey: '', model: '' },
     ollama: { endpoint: 'http://localhost:11434', model: '' },
   },
@@ -535,6 +671,8 @@ async function handleInstallEnv(): Promise<void> {
 watch(() => botForm.backendType, () => {
   if (botForm.visible) {
     void checkBackendEnv();
+    // codebuddy 后端选中时自动拉一次模型列表（datalist 候选，用户免手动点 ↻）
+    if (botForm.backendType === 'codebuddy') void fetchCodebuddyModels();
   }
 });
 
@@ -542,6 +680,8 @@ watch(() => botForm.backendType, () => {
 watch(() => botForm.visible, (visible) => {
   if (visible) {
     void checkBackendEnv();
+    // 打开时若已是 codebuddy 后端也拉一次（编辑既有 bot 的场景）
+    if (botForm.backendType === 'codebuddy') void fetchCodebuddyModels();
   } else {
     envCheck.state = 'idle';
   }
@@ -561,9 +701,8 @@ onMounted(async () => {
 
   try {
     // SDK 就绪是渲染的前提（后续 loadBots 依赖 sdk.docs），必须等待。
-    // UI 已挂载，用户看到的是加载态而非白屏。
+    // UI 已挂载（先于握手），用户看到的是加载态而非白屏。
     sdk = await ensurePluginSDK();
-    initState.value = 'ready';
   } catch (err) {
     initState.value = 'failed';
     initError.value = err instanceof Error ? err.message : String(err);
@@ -572,8 +711,14 @@ onMounted(async () => {
     window.removeEventListener('ai-chat:sdk-failed', onSdkFailed);
   }
 
+  // 数据加载阶段提示（连接已就绪，正在拉 bot 列表）
+  initHint.value = '正在加载数据…';
+
   // 先拉 bot 列表让界面尽快渲染（侧边栏/聊天窗口有了骨架就不算"白屏"）
   await loadBots();
+
+  // 数据就绪，切正常态
+  initState.value = 'ready';
 
   // 默认选中第一个 Bot（用户立即可见聊天界面）
   if (bots.value.length > 0 && !activeBotId.value) {
@@ -634,6 +779,7 @@ function openBotForm(existing?: BotInstance): void {
     const cfg = existing.backendConfig as Record<string, unknown>;
     botForm.config.codebuddy.cliPath = (cfg.cliPath as string) ?? '';
     botForm.config.codebuddy.workdir = (cfg.workdir as string) ?? '';
+    botForm.config.codebuddy.model = (cfg.model as string) ?? '';
     botForm.config.openai.baseUrl = (cfg.baseUrl as string) ?? '';
     botForm.config.openai.apiKey = (cfg.apiKey as string) ?? '';
     botForm.config.openai.model = (cfg.model as string) ?? '';
@@ -669,6 +815,7 @@ function buildBackendConfig(): Record<string, unknown> {
         type: 'codebuddy',
         cliPath: botForm.config.codebuddy.cliPath || undefined,
         workdir: botForm.config.codebuddy.workdir || undefined,
+        model: botForm.config.codebuddy.model || undefined,
       };
     case 'openai':
       return {
@@ -779,50 +926,54 @@ async function handleSend(event?: KeyboardEvent): Promise<void> {
   const text = inputText.value.trim();
   const validation = validateMessage(text);
   if (!validation.ok) {
-    // 简单的错误提示（正式版可用 Toast）
     alert(validation.reason);
     return;
   }
 
   thinking.value = true;
-  startThinkingProgress();
   inputText.value = '';
 
-  // 乐观上屏：用户消息立即显示，不等 CLI 回复（否则发送后界面像卡死）
+  // 乐观上屏：用户消息
   messages.value.push({
     id: `optimistic-${Date.now()}`,
     botInstanceId: activeBot.value.id,
     role: 'user',
     content: text,
     createdAt: Date.now(),
-    status: 'sent',
   });
+
+  // 创建 AI 回复占位符（streaming=true，content 由 processChat 逐字更新）。
+  // 用 reactive() 包裹占位对象再入 messages：onToken 逐字改 content 时能触发
+  // Vue 响应式渲染；否则直接改原始对象绕过 reactive 代理，流式期间 UI 不更新
+  // （评审 Z3）。
+  const assistantMsg: ChatMessageRecord = reactive({
+    id: generateId('msg'),
+    botInstanceId: activeBot.value.id,
+    role: 'assistant',
+    content: '',
+    createdAt: Date.now(),
+    streaming: true,
+  });
+  messages.value.push(assistantMsg);
   nextTick(scrollToBottom);
 
   try {
-    await processChat(
-      sdk.docs,
-      activeBot.value,
-      text,
-    );
-
-    // 刷新消息列表（拉取真实持久化的 user+assistant 消息，替换乐观占位）
-    await loadChatHistory();
+    const result = await processChat(sdk.docs, activeBot.value, text, assistantMsg);
+    // 替换乐观用户消息为已持久化的真实消息
+    const userIdx = messages.value.findIndex(m => m.id.startsWith('optimistic-'));
+    if (userIdx >= 0) {
+      messages.value[userIdx] = result.userMessage;
+    }
+    // assistantMsg 已在 messages 中（同一引用），streaming 已由 processChat 关闭
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
-    messages.value.push({
-      id: `err-${Date.now()}`,
-      botInstanceId: activeBot.value!.id,
-      role: 'assistant',
-      content: `调用失败: ${errMsg}`,
-      createdAt: Date.now(),
-      error: errMsg,
-    });
-    nextTick(scrollToBottom);
+    assistantMsg.content = errMsg;
+    assistantMsg.streaming = false;
+    assistantMsg.error = errMsg;
   } finally {
     thinking.value = false;
-    stopThinkingProgress();
     nextTick(() => {
+      scrollToBottom();
       inputRef.value?.focus();
     });
   }
@@ -1205,10 +1356,8 @@ html, body {
 }
 
 .message-bubble--assistant {
-  background: #fff;
-  color: #1e293b;
-  border: 1px solid #e2e8f0;
-  border-bottom-left-radius: 4px;
+  /* 不再使用：AI 消息已改为无气泡布局（.bot-message-block），保留选择器避免旧样式残留 */
+  display: none;
 }
 
 .message-text {
@@ -1232,6 +1381,75 @@ html, body {
 
 .message-bubble--user .message-meta {
   color: rgba(255, 255, 255, 0.7);
+}
+
+/* AI 消息无气泡布局（ChatGPT/Claude 风格：头像 + 名称 + 文本块） */
+.bot-message-block {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.bot-msg-avatar {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #dbeafe;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bot-msg-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.bot-msg-avatar-default {
+  font-size: 13px;
+  font-weight: 600;
+  color: #3b82f6;
+}
+
+.bot-msg-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.bot-msg-name {
+  font-size: 11px;
+  font-weight: 600;
+  color: #64748b;
+  margin-bottom: 2px;
+}
+
+.bot-msg-text {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: #1e293b;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 流式光标闪烁动画 */
+.streaming-cursor {
+  animation: cursorBlink 0.8s infinite;
+  color: #3b82f6;
+  font-weight: bold;
+}
+
+@keyframes cursorBlink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+
+.bot-msg-content .message-html {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: #1e293b;
 }
 
 /* Markdown 渲染内容 */
@@ -1310,44 +1528,9 @@ html, body {
   font-weight: 600;
 }
 
-/* 思考中动画 */
-.thinking-bubble {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
+/* 思考中状态已由流式占位（.bot-msg-text.streaming）替代 */
+/* 保留 dotPulse keyframes（若有）以备他用 */
 
-.thinking-label {
-  font-size: 12px;
-  opacity: 0.6;
-  white-space: nowrap;
-}
-
-.thinking-dots {
-  display: flex;
-  gap: 4px;
-  padding: 4px 0;
-}
-
-.thinking-dots span {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #94a3b8;
-  animation: dotPulse 1.4s infinite ease-in-out both;
-}
-
-.thinking-dots span:nth-child(1) {
-  animation-delay: -0.32s;
-}
-
-.thinking-dots span:nth-child(2) {
-  animation-delay: -0.16s;
-}
-
-.thinking-dots span:nth-child(3) {
-  animation-delay: 0s;
-}
 
 @keyframes dotPulse {
   0%, 80%, 100% {
@@ -1483,6 +1666,45 @@ select.form-input {
   margin: -8px 0 14px 0;
   font-size: 11px;
   color: #94a3b8;
+}
+
+/* 模型选择器：输入框 + 刷新按钮 */
+.model-select-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.model-select-row .form-input {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+.btn-model-refresh {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+  color: #64748b;
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.btn-model-refresh:hover:not(:disabled) {
+  border-color: #3b82f6;
+  color: #3b82f6;
+}
+
+.btn-model-refresh:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .form-hint code {

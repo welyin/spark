@@ -413,6 +413,62 @@ describe('bridge 心跳与事件', () => {
   });
 });
 
+describe('bridge sys.fetchStream 流式封装（评审 Z1/F3）', () => {
+  it('fetchStream 经 call 取 streamId 后订阅流事件：onChunk 收块、done resolve', async () => {
+    // 记录宿主 handler 收到的 sys.fetchStream 调用（注意：createHarness 的默认
+    // handler 是 vi.fn，但覆盖 handler 后 bridge 用覆盖值，故此处独立记录）
+    const sysCalls: Array<unknown[]> = [];
+    // 覆盖 handler 必须带参数（length>0），否则 createBridgeHost 误判为懒解析工厂
+    const fetchStreamHandler = async (module: string, method: string, args: unknown[]) => {
+      sysCalls.push([module, method, args]);
+      return { streamId: 'abc123' };
+    };
+    const harness = createHarness({ handler: fetchStreamHandler });
+    const { sdk } = await connect(harness);
+    const handle = await sdk.sys!.fetchStream('https://host/x');
+    expect(handle.streamId).toBe('abc123');
+    expect(sysCalls).toEqual([['sys', 'fetchStream', ['https://host/x']]]);
+
+    const received: string[] = [];
+    handle.onChunk((chunk) => {
+      if (!chunk.done) received.push(chunk.text);
+    });
+    // 宿主 push 流块（订阅确认前到达的块经 host 缓冲回放，故不丢）
+    harness.bridge.pushEvent('sys-stream:abc123', { text: 'Hel', done: false, status: 200, headers: {} });
+    harness.bridge.pushEvent('sys-stream:abc123', { text: 'lo', done: false, status: 200, headers: {} });
+    const donePromise = handle.done;
+    harness.bridge.pushEvent('sys-stream:abc123', { text: '', done: true, status: 200, headers: {} });
+    const done = await donePromise;
+    expect(done.status).toBe(200);
+    await waitFor(() => received.join('') === 'Hello');
+    harness.bridge.destroy();
+  });
+
+  it('status:0 哨兵块令 done 以错误拒绝', async () => {
+    const harness = createHarness({
+      handler: async (module: string, method: string) => ({ streamId: 'err1' })
+    });
+    const { sdk } = await connect(harness);
+    const handle = await sdk.sys!.fetchStream('https://host/x');
+    const rejection = expect(handle.done).rejects.toThrow('连不上');
+    harness.bridge.pushEvent('sys-stream:err1', { text: '连不上', done: true, status: 0, headers: {} });
+    await rejection;
+    harness.bridge.destroy();
+  });
+
+  it('cancel 后 done 以取消语义 reject（F3）', async () => {
+    const harness = createHarness({
+      handler: async (module: string, method: string) => ({ streamId: 'x1' })
+    });
+    const { sdk } = await connect(harness);
+    const handle = await sdk.sys!.fetchStream('https://host/x');
+    const rejection = expect(handle.done).rejects.toThrow(/cancelled/);
+    handle.cancel();
+    await rejection;
+    harness.bridge.destroy();
+  });
+});
+
 describe('bridge messages 域（应用会话 §20）', () => {
   it('sendAppMessage 序列化为 messages.sendAppMessage（payload/card 透传，不含 pluginId/space）', async () => {
     const harness = createHarness();

@@ -41,6 +41,7 @@
             v-else
             :message="item.msg"
             :is-mine="item.msg.senderId === 'me'"
+            :is-bot="item.msg.senderId.startsWith('bot:')"
             :show-avatar="item.showAvatar"
             :space-key="spaceKey"
             @menu="openMsgMenu"

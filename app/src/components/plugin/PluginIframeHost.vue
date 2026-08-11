@@ -58,7 +58,7 @@ import { Loading } from '@element-plus/icons-vue';
 import type { PluginContext, PluginSpaceContext } from '../../../../packages/plugin-sdk/src';
 import { createBridgeHost, type BridgeHost } from '../../../../packages/plugin-sdk/src/bridge/host';
 import { buildPluginHostSrcdoc, fetchPluginManifest } from '../../plugin/source';
-import { createPluginBridgeDispatcher } from '../../plugin/bridge-dispatcher';
+import { createPluginBridgeDispatcher, setBridgeEventPump, type BridgeEventPump } from '../../plugin/bridge-dispatcher';
 import { createPluginWatchdog, type PluginWatchdog } from '../../plugin/watchdog';
 import { pluginSpaceKey, registerMainViewInstance, unregisterMainViewInstance } from '../../plugin/card-actions';
 import { listenP2pEvents } from '../../api';
@@ -127,6 +127,7 @@ export default defineComponent({
       }
       host?.destroy();
       host = null;
+      setBridgeEventPump(null);
     };
 
     /** 代际失效判定（过期时新建对象已由后到的 init/卸载经 destroyBridge 销毁） */
@@ -223,6 +224,8 @@ export default defineComponent({
             }
           }
         });
+        // 注入事件泵：sys.fetchStream 产生的 Tauri 事件经此泵转发为桥 event
+        setBridgeEventPump({ pushEvent: (event, payload) => host!.pushEvent(event, payload) });
 
         await host.ready;
         if (isStale(gen)) {

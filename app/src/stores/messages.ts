@@ -27,7 +27,9 @@ export type SpaceKey = string;
 
 export type MessageType = 'text' | 'image' | 'file' | 'link' | 'voice' | 'system';
 /** 消息状态（设计 §3.3）：发送中/已发送/已送达/已读/发送失败 */
-export type MessageStatus = 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
+// 'streaming'：AI 流式回复的中间态（内核 bot_reply_stream_* 落 status='streaming'，
+// 终态 delivered/failed）；其余与内核 MessageRecord.status 对齐
+export type MessageStatus = 'sending' | 'sent' | 'delivered' | 'read' | 'failed' | 'streaming';
 
 /** 链接预览卡片（设计 §6），元数据由发送方本地抓取随消息携带 */
 export interface LinkPreview {
@@ -293,6 +295,78 @@ function scheduleOnlineRefresh(): void {
   }, 300);
 }
 
+// ------------------------------------------------------------------
+// 流式打字机渲染器：streaming 消息的同 id 覆盖不直接落全量 content，
+// 而是把目标全文按字符逐帧推进显示——后端（codebuddy/ollama）给的常是
+// 整段快照，逐字吐出实现"一字一字"上屏、便于等待与阅读。
+// 每条流式消息一个渲染器实例（按 convId+messageId 索引），终态/新覆盖时
+// 推进目标；render 回调把当前已显示前缀写回 store（显式替换数组引用）。
+// ------------------------------------------------------------------
+
+/** 每帧吐出的字符数：~50ms 一帧 × 3 字 ≈ 60 字/秒，接近自然阅读速度 */
+const TYPEWRITER_CHARS_PER_TICK = 3;
+const TYPEWRITER_TICK_MS = 50;
+
+interface TypewriterState {
+  /** 目标全文（后端最新快照/终态全文） */
+  target: string;
+  /** 当前已显示的前缀长度 */
+  shown: number;
+  timer: ReturnType<typeof setInterval> | null;
+}
+
+const typewriters = new Map<string, TypewriterState>();
+
+function typewriterKey(convId: string, messageId: string): string {
+  return `${convId}${messageId}`;
+}
+
+/**
+ * 推进/创建某条流式消息的打字机：target 更新为最新全文，按帧逐字追加显示。
+ * render(displayed) 由调用方提供，把当前应显示的前缀写回 store。
+ */
+function typewriterTarget(
+  convId: string,
+  messageId: string,
+  target: string,
+  render: (displayed: string) => void,
+): void {
+  const key = typewriterKey(convId, messageId);
+  let state = typewriters.get(key);
+  if (!state) {
+    state = { target, shown: 0, timer: null };
+    typewriters.set(key, state);
+  } else if (target.length < state.shown) {
+    // 目标变短（理论上不该发生——快照只增）：重置到新目标
+    state.shown = 0;
+  }
+  state.target = target;
+
+  if (state.timer) return; // 已在推进，target 更新即可（下一帧自动接续）
+  state.timer = setInterval(() => {
+    const s = typewriters.get(key);
+    if (!s) return;
+    if (s.shown >= s.target.length) {
+      // 已显示完全部目标：暂停等下一波 target（不清 timer 槽——target 可能再更新）
+      return;
+    }
+    s.shown = Math.min(s.shown + TYPEWRITER_CHARS_PER_TICK, s.target.length);
+    render(s.target.slice(0, s.shown));
+  }, TYPEWRITER_TICK_MS);
+}
+
+/**
+ * 终态 flush：立刻显示目标全文并销毁渲染器（delivered/failed 时调用，
+ * 防流式尾部字符在终态后又被吐出覆盖最终 content）。
+ */
+function typewriterFlush(convId: string, messageId: string): void {
+  const key = typewriterKey(convId, messageId);
+  const state = typewriters.get(key);
+  if (!state) return;
+  if (state.timer) clearInterval(state.timer);
+  typewriters.delete(key);
+}
+
 /**
  * 对端/自设备新消息：定位/创建会话，按 id 去重入列，维护未读与 updatedAt。
  * data.conversation 是内核回写本条消息之后的权威快照（unreadCount/updatedAt 已含
@@ -313,8 +387,30 @@ export function onChatReceived(data: { spaceKey: string; conversation: Conversat
   // 之外触发，push 变异的 Proxy 拦截可能不会可靠触发渲染（与 sendText 的
   // 用户事件上下文不同）。创建新数组引用确保 Vue computed 无条件检测到变更。
   const list = space.messages[conv.id] ?? [];
-  if (!list.some((m) => m.id === data.message.id)) {
-    space.messages[conv.id] = [...list, { ...data.message }];
+  const existingIdx = list.findIndex((m) => m.id === data.message.id);
+  const incoming = data.message;
+
+  // 流式打字机：streaming 中间态的同 id 覆盖不直接落全量 content，而是把目标
+  // 全文交给逐字渲染器按字符推进——后端（codebuddy/ollama 快照）给的常是整段，
+  // 逐字吐出实现"一字一字"上屏、便于阅读。终态（非 streaming）或首次插入直接落。
+  if (incoming.status === 'streaming' && existingIdx >= 0) {
+    typewriterTarget(conv.id, incoming.id, incoming.content ?? '', (displayed) => {
+      const cur = space.messages[conv.id] ?? [];
+      const idx = cur.findIndex((m) => m.id === incoming.id);
+      if (idx < 0) return;
+      const next = [...cur];
+      next[idx] = { ...cur[idx], content: displayed, status: 'streaming' };
+      space.messages[conv.id] = next;
+    });
+  } else if (existingIdx >= 0) {
+    // 同 id 覆盖（终态 delivered/failed，或非流式同 id 更新）：flush 打字机残留
+    // 再落最终 content——防流式尾部字符在终态后又被吐出覆盖
+    typewriterFlush(conv.id, incoming.id);
+    const next = [...list];
+    next[existingIdx] = { ...incoming };
+    space.messages[conv.id] = next;
+  } else {
+    space.messages[conv.id] = [...list, { ...incoming }];
   }
   // 🔍 DEBUG: trace message routing
   console.log('[onChatReceived] convId=', conv.id, 'activeConv=', activeConversation[key], 'match=', activeConversation[key] === conv.id);

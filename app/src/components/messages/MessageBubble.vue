@@ -15,7 +15,29 @@
       />
     </div>
     <div class="msg-body">
-      <div class="msg-bubble" :class="`is-${message.type}`" @contextmenu.prevent="onMenu">
+      <!-- Bot 消息：无气泡，纯文本块（ChatGPT/Claude 风格）。
+           流式回复的逐字渲染走这条（AI bot），光标挂这里——普通气泡分支的光标
+           覆盖不到 bot 消息 -->
+      <div v-if="isBot" class="bot-msg-content" @contextmenu.prevent="onMenu">
+        <span class="msg-text">{{ message.content }}<span v-if="message.status === 'streaming'" class="streaming-cursor">▌</span></span>
+        <a
+          v-if="message.link"
+          class="link-card"
+          :href="message.link.url"
+          target="_blank"
+          rel="noreferrer"
+          @click.stop="onLinkClick"
+        >
+          <div class="link-card-head">
+            <el-icon :size="16" class="link-card-icon"><Link /></el-icon>
+            <span class="link-card-title">{{ message.link.title }}</span>
+          </div>
+          <p class="link-card-desc">{{ message.link.description }}</p>
+          <p class="link-card-source">来自：{{ message.link.siteName }} / {{ message.link.domain }}</p>
+        </a>
+      </div>
+      <!-- 普通人际消息：带气泡容器 -->
+      <div v-else class="msg-bubble" :class="`is-${message.type}`" @contextmenu.prevent="onMenu">
         <div v-if="message.quote" class="msg-quote">
           <span class="msg-quote-name">{{ message.quote.senderName }}：</span>
           <span>{{ message.quote.preview }}</span>
@@ -47,7 +69,7 @@
         </template>
 
         <template v-else>
-          <span class="msg-text">{{ message.content }}</span>
+          <span class="msg-text">{{ message.content }}<span v-if="message.status === 'streaming'" class="streaming-cursor">▌</span></span>
         </template>
 
         <!-- 链接预览卡片（设计 §6）：标题 + 图标 + 描述 + 来源；
@@ -100,6 +122,7 @@ export default defineComponent({
   props: {
     message: { type: Object as PropType<ChatMessage>, required: true },
     isMine: { type: Boolean, default: false },
+    isBot: { type: Boolean, default: false },
     /** 同一分钟内连续消息合并头像（§3.2） */
     showAvatar: { type: Boolean, default: true },
     /** 所在空间：对方消息按 senderId(rootId) 查好友同步头像用 */

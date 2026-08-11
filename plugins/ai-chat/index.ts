@@ -22,6 +22,12 @@ export async function bootstrapChat(): Promise<void> {
     throw new Error('plugin host container #app not found');
   }
 
+  // 先挂载 ChatView（initState='loading' 的加载页立即渲染，握手期间用户看到
+  // "正在连接宿主环境…"而非白屏），桥握手在后台进行——成功后注入 SDK 触发
+  // ensurePluginSDK 轮询命中，视图切正常态；失败则派 sdk-failed 事件切失败态。
+  const app = createApp(ChatView);
+  app.mount(container);
+
   try {
     const { sdk } = await connectPluginBridge({
       pluginId: manifestJson.id,
@@ -33,18 +39,12 @@ export async function bootstrapChat(): Promise<void> {
     registerBuiltinProviders();
   } catch (error) {
     console.error('[ai-chat] Bootstrap failed:', error);
-    const app = createApp(ChatView);
-    app.mount(container);
     window.dispatchEvent(
       new CustomEvent('ai-chat:sdk-failed', {
         detail: error instanceof Error ? error.message : String(error),
       })
     );
-    return;
   }
-
-  const app = createApp(ChatView);
-  app.mount(container);
 }
 
 // 顶层自执行：插件入口即启动

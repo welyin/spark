@@ -11,6 +11,7 @@
  */
 
 import type {
+  FetchStreamHandle,
   PluginAppMessage,
   PluginAppMessageCard,
   PluginCardActionPayload,
@@ -19,9 +20,11 @@ import type {
   PluginDeclaredCollectionSchema,
   PluginDocQueryOptions,
   PluginEventHandler,
+  PluginEventsAPI,
   PluginSDK,
   SysExecResult,
-  SysFetchResult
+  SysFetchResult,
+  SysFetchChunk
 } from '../index';
 import {
   BRIDGE_PROTOCOL_VERSION,
@@ -300,7 +303,52 @@ export function connectPluginBridge(options: ConnectPluginBridgeOptions): Promis
       }
     };
 
-    const createBridgeSdk = (ctx: PluginContext): PluginSDK => ({
+    const createBridgeSdk = (ctx: PluginContext): PluginSDK => {
+    // 事件模块：提取为闭包内常量，供 events.* 方法与 sys.fetchStream 复用
+    // （fetchStream 用 subscribe/unsubscribe 实现流订阅语义，见下方 sys.fetchStream）
+    const events: PluginEventsAPI = {
+      subscribe: async (event, handler) => {
+        // 先注册本地 handler 再发订阅请求：host 在订阅确认前缓冲的块（见
+        // bridge/host.ts pendingEvents）会在收到 subscribe 时回放，此时本地
+        // handler 已就绪，流式链路的 done/onChunk 不会因订阅往返丢失（评审 Z5）。
+        // 若 host 拒绝/超时，移除 handler 并抛错。
+        const handlers = eventHandlers.get(event) ?? new Set<PluginEventHandler>();
+        handlers.add(handler);
+        eventHandlers.set(event, handlers);
+        try {
+          await request(
+            { v: BRIDGE_PROTOCOL_VERSION, type: 'subscribe', id: nextId('sub'), event },
+            callTimeoutMs
+          );
+        } catch (error) {
+          handlers.delete(handler);
+          if (handlers.size === 0) {
+            eventHandlers.delete(event);
+          }
+          throw error;
+        }
+      },
+      unsubscribe: async (event, handler) => {
+        await request(
+          { v: BRIDGE_PROTOCOL_VERSION, type: 'unsubscribe', id: nextId('unsub'), event },
+          callTimeoutMs
+        );
+        const handlers = eventHandlers.get(event);
+        if (!handlers) {
+          return;
+        }
+        if (handler) {
+          handlers.delete(handler);
+        } else {
+          handlers.clear();
+        }
+        if (handlers.size === 0) {
+          eventHandlers.delete(event);
+        }
+      }
+    };
+
+    return {
       domain: ctx.domain,
       evidence: {
         headHash: () => call('evidence', 'headHash', []) as Promise<{ hash: string | null }>,
@@ -361,6 +409,13 @@ export function connectPluginBridge(options: ConnectPluginBridgeOptions): Promis
           call('data', 'saveBlob', [dataBase64]) as Promise<{ hash: string; size: number }>,
         readBlob: (hash: string) =>
           call('data', 'readBlob', [hash]) as Promise<{ status: 'ready'; data: string } | { status: 'pending' }>,
+        // O4 encrypted 授权名单（owner 侧；orgId 由桥绑定注入，插件不感知）
+        grantAccess: (name, members, version) =>
+          call('data', 'grantAccess', [name, members, version ?? '1']) as Promise<{ owners: string[]; readers: string[]; epoch: number }>,
+        revokeAccess: (name, members, version) =>
+          call('data', 'revokeAccess', [name, members, version ?? '1']) as Promise<{ owners: string[]; readers: string[]; epoch: number }>,
+        listAccess: (name, version) =>
+          call('data', 'listAccess', [name, version ?? '1']) as Promise<{ owners: string[]; readers: string[]; epoch: number }>,
         // 远端合入通知：封装 events 订阅（同一连接内的本地注册表 + 桥订阅），
         // 事件名与 P2pEventDto kind 同口径；payload 按归属插件过滤
         onChange: async (handler) => {
@@ -418,35 +473,7 @@ export function connectPluginBridge(options: ConnectPluginBridgeOptions): Promis
         sendResponse: (convId, contactId, displayName, messageId, text) =>
           call('messages', 'sendResponse', [convId, contactId, displayName, messageId, text])
       },
-      events: {
-        subscribe: async (event, handler) => {
-          await request(
-            { v: BRIDGE_PROTOCOL_VERSION, type: 'subscribe', id: nextId('sub'), event },
-            callTimeoutMs
-          );
-          const handlers = eventHandlers.get(event) ?? new Set<PluginEventHandler>();
-          handlers.add(handler);
-          eventHandlers.set(event, handlers);
-        },
-        unsubscribe: async (event, handler) => {
-          await request(
-            { v: BRIDGE_PROTOCOL_VERSION, type: 'unsubscribe', id: nextId('unsub'), event },
-            callTimeoutMs
-          );
-          const handlers = eventHandlers.get(event);
-          if (!handlers) {
-            return;
-          }
-          if (handler) {
-            handlers.delete(handler);
-          } else {
-            handlers.clear();
-          }
-          if (handlers.size === 0) {
-            eventHandlers.delete(event);
-          }
-        }
-      },
+      events,
       onHostCall: (event: string, handler: (payload: unknown) => unknown | Promise<unknown>) => {
         hostCallHandlers.set(event, handler);
       },
@@ -456,9 +483,58 @@ export function connectPluginBridge(options: ConnectPluginBridgeOptions): Promis
         exec: (program, args, workdir) =>
           call('sys', 'exec', [program, args, workdir], SYS_CALL_TIMEOUT_MS) as Promise<SysExecResult>,
         fetch: (url, options) =>
-          call('sys', 'fetch', options === undefined ? [url] : [url, options], SYS_CALL_TIMEOUT_MS) as Promise<SysFetchResult>
-      },
-    });
+          call('sys', 'fetch', options === undefined ? [url] : [url, options], SYS_CALL_TIMEOUT_MS) as Promise<SysFetchResult>,
+        /** 目录选择对话框：非长时外呼，走普通 call 默认超时 */
+        pickFolder: (title) =>
+          call('sys', 'pickFolder', title === undefined ? [] : [title]) as Promise<string | null>,
+        fetchStream: (url, options) =>
+          call('sys', 'fetchStream', options === undefined ? [url] : [url, options], SYS_CALL_TIMEOUT_MS)
+            .then(async (result) => {
+              // 流式契约：done 的 Promise 与 onChunk/cancel 都基于 events.subscribe
+              // 订阅桥事件 `sys-stream:{streamId}` 实现。宿主侧在插件订阅确认前
+              // 到达的块会经 host 缓冲回放（见 bridge/host.ts），故订阅稍晚不丢 done 块。
+              const { streamId } = result as { streamId: string };
+              const event = `sys-stream:${streamId}`;
+              let doneReject: ((reason: Error) => void) | null = null;
+              let settled = false;
+              const done = new Promise<SysFetchChunk>((resolve, reject) => {
+                doneReject = reject;
+                events
+                  .subscribe(event, (chunk) => {
+                    const c = chunk as SysFetchChunk;
+                    if (!c.done) {
+                      return;
+                    }
+                    settled = true;
+                    void events.unsubscribe(event);
+                    if (c.status === 0) {
+                      // status:0 哨兵 = 内核侧请求失败（错误文案在 text 中）
+                      reject(new Error(c.text));
+                    } else {
+                      resolve(c);
+                    }
+                  })
+                  .catch(reject);
+              });
+              return {
+                streamId,
+                done,
+                onChunk(handler) {
+                  void events.subscribe(event, handler as PluginEventHandler);
+                },
+                cancel() {
+                  // 取消：退订桥事件；若 done 尚未 settle，以取消语义拒绝之
+                  // （调用方 await done 得以结束，不悬挂）
+                  void events.unsubscribe(event);
+                  if (!settled) {
+                    doneReject?.(new Error('fetchStream cancelled'));
+                  }
+                }
+              };
+            }) as Promise<FetchStreamHandle>
+      }
+    };
+    };
 
     listenWindow.addEventListener('message', onMessage as EventListener);
     post({

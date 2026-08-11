@@ -17,7 +17,7 @@
  */
 
 import type { ElectronAPI } from '../api';
-import type { PluginSDK } from '../../../packages/plugin-sdk/src';
+import type { FetchStreamHandle, PluginSDK, SysFetchChunk } from '../../../packages/plugin-sdk/src';
 
 // 类型门面：SDK 类型的唯一来源是 @spark/plugin-sdk，此处统一 re-export
 export type {
@@ -51,13 +51,16 @@ declare global {
  *
  * @throws 如果宿主 API 不可用
  */
-export function createPluginBackend(domain: string): PluginSDK {
+export function createPluginBackend(domain: string, orgId?: string): PluginSDK {
   // 沙箱化后后端只在壳层主窗口构造，无跨 frame 回退的合法场景
   const electronAPI: ElectronAPI | undefined = window.electronAPI;
   if (!electronAPI) {
     throw new Error('electronAPI is not available in the renderer context');
   }
   const pluginDomain = domain;
+  // O3 org 上下文：插件运行在 org space 时注入 orgId（personal space 为
+  // undefined），data.* 读写命令据此路由到 org 集合；内核按实例空间解析。
+  const boundOrgId = orgId ?? undefined;
 
   return {
     domain,
@@ -84,22 +87,43 @@ export function createPluginBackend(domain: string): PluginSDK {
     },
     // P6 声明式数据 API（写库即同步；插件侧零同步参数）
     data: {
-      declareCollection: (declaration) =>
-        electronAPI.plugin.dataDeclareCollection(declaration, pluginDomain),
+      declareCollection: (declaration) => {
+        // F8：桥 declareCollection orgId 绑定——插件实例绑定的 orgId（boundOrgId）
+        // 是权威来源；自报 orgId 须与绑定一致（不一致拒绝，防插件向用户所属
+        // 任意组织声明）。org space（boundOrgId 有值）注入绑定值供内核校验。
+        const selfOrgId = (declaration as { orgId?: string } | undefined)?.orgId;
+        if (selfOrgId !== undefined && selfOrgId !== boundOrgId) {
+          throw new Error(
+            `declareCollection orgId mismatch: plugin self-declared ${selfOrgId}, bound ${boundOrgId}`
+          );
+        }
+        // 命令侧声明类型含可选 orgId；org space 注入绑定值（personal 不注入）。
+        return electronAPI.plugin.dataDeclareCollection(
+          boundOrgId !== undefined ? { ...declaration, orgId: boundOrgId } : declaration,
+          pluginDomain
+        );
+      },
       save: (name, key, value, version) =>
-        electronAPI.plugin.dataSave(name, key, value, version, pluginDomain),
+        electronAPI.plugin.dataSave(name, key, value, version, boundOrgId, pluginDomain),
       delete: (name, key, version) =>
-        electronAPI.plugin.dataDelete(name, key, version, pluginDomain),
+        electronAPI.plugin.dataDelete(name, key, version, boundOrgId, pluginDomain),
       get: (name, key, version) =>
-        electronAPI.plugin.dataGet(name, key, version, pluginDomain),
+        electronAPI.plugin.dataGet(name, key, version, boundOrgId, pluginDomain),
       query: (name, options = {}, version) =>
-        electronAPI.plugin.dataQuery(name, options, version, pluginDomain),
+        electronAPI.plugin.dataQuery(name, options, version, boundOrgId, pluginDomain),
       dropVersion: (name, version) =>
         electronAPI.plugin.dataDropVersion(name, version, pluginDomain),
       saveBlob: (dataBase64) =>
         electronAPI.plugin.dataSaveBlob(dataBase64),
       readBlob: (hash) =>
         electronAPI.plugin.dataReadBlob(hash),
+      // O4 encrypted 授权名单（owner 侧）：orgId 由桥绑定注入（boundOrgId）
+      grantAccess: (name, members, version) =>
+        electronAPI.plugin.dataGrantAccess(boundOrgId ?? '', name, version ?? '1', members),
+      revokeAccess: (name, members, version) =>
+        electronAPI.plugin.dataRevokeAccess(boundOrgId ?? '', name, version ?? '1', members),
+      listAccess: (name, version) =>
+        electronAPI.plugin.dataListAccess(boundOrgId ?? '', name, version ?? '1'),
       // iframe 侧远端合入通知由 PluginIframeHost 经桥事件通道实现；
       // 本后端（宿主内嵌 QuickJS 等直连接口）无该通路，以 no-op 满足契约
       onChange: async () => {}
@@ -115,7 +139,56 @@ export function createPluginBackend(domain: string): PluginSDK {
           exec: (program: string, args: string[], workdir?: string) =>
             electronAPI.sys.exec(program, args, workdir),
           fetch: (url: string, options?: Record<string, unknown>) =>
-            electronAPI.sys.fetch(url, options as { method?: string; headers?: Record<string, string>; body?: string } | undefined)
+            electronAPI.sys.fetch(url, options as { method?: string; headers?: Record<string, string>; body?: string } | undefined),
+          // 目录选择对话框（纯前端 tauri-plugin-dialog，宿主 api.sys.pickFolder）
+          pickFolder: (title?: string) => electronAPI.sys.pickFolder(title),
+          // 内嵌后端（非 iframe 桥，无桥 events 通道）的 fetchStream：直接
+          // 用 Tauri listen 订阅 `sys-stream:{streamId}` 事件实现完整 handle
+          // （done/onChunk/cancel），不再返回只含 streamId 的残次对象。
+          // dispatcher 场景另自 listen 转发为桥 event，此处 handle 供非桥
+          // 调用方直接消费，两者各自订阅互不干扰。
+          fetchStream: async (url, options): Promise<FetchStreamHandle> => {
+            const { streamId } = await electronAPI.sys.fetchStream(
+              url,
+              options as { method?: string; headers?: Record<string, string>; body?: string } | undefined
+            );
+            const event = `sys-stream:${streamId}`;
+            const { listen } = await import('@tauri-apps/api/event');
+            const handlers = new Set<(chunk: SysFetchChunk) => void>();
+            let unlisten: (() => void) | null = null;
+            const done = new Promise<SysFetchChunk>((resolve, reject) => {
+              void listen<SysFetchChunk>(event, (e) => {
+                const c = e.payload;
+                if (c.done) {
+                  unlisten?.();
+                  if (c.status === 0) {
+                    // status:0 哨兵 = 内核侧请求失败（错误文案在 text 中）
+                    reject(new Error(c.text));
+                  } else {
+                    resolve(c);
+                  }
+                } else {
+                  for (const handler of [...handlers]) {
+                    handler(c);
+                  }
+                }
+              })
+                .then((u) => {
+                  unlisten = u;
+                })
+                .catch(reject);
+            });
+            return {
+              streamId,
+              done,
+              onChunk(handler) {
+                handlers.add(handler);
+              },
+              cancel() {
+                unlisten?.();
+              }
+            };
+          }
         }
       : undefined
   };

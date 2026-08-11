@@ -25,6 +25,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { ElMessageBox } from 'element-plus';
 import type { PluginSpaceContext } from '../../../packages/plugin-sdk/src';
 import type { BridgeHostHandler } from '../../../packages/plugin-sdk/src/bridge/host';
@@ -32,6 +33,18 @@ import { createPluginBackend } from './sdk-browser';
 import { listAppMessages, markAppMessagesRead, sendAppMessage } from './messages';
 import type { AppMessageCardDto } from '../api/types';
 import { refreshContacts, ensurePluginContactTag } from '../mock/contacts';
+
+/** 桥事件泵：由外部（PluginIframeHost）注入，用于将 Tauri 事件转发为桥 event。 */
+export interface BridgeEventPump {
+  pushEvent: (event: string, payload?: unknown) => void;
+}
+
+let _eventPump: BridgeEventPump | null = null;
+
+/** 注入事件泵（仅 PluginIframeHost 调用一次）。 */
+export function setBridgeEventPump(pump: BridgeEventPump | null) {
+  _eventPump = pump;
+}
 
 type PluginViewType = 'app' | 'message-card' | 'background';
 
@@ -51,6 +64,10 @@ const CALL_PERMISSIONS: Record<string, string> = {
   'data.delete': 'storage:write',
   'data.dropVersion': 'storage:write',
   'data.saveBlob': 'storage:write',
+  // R2：encrypted 授权名单三方法归入 storage:write（owner 侧管控名单）
+  'data.grantAccess': 'storage:write',
+  'data.revokeAccess': 'storage:write',
+  'data.listAccess': 'storage:write',
   'runtime.listMineOrganizations': 'org:read',
   'runtime.syncOrganizationData': 'org:sync',
   'p2p.broadcast': 'network:broadcast',
@@ -62,6 +79,8 @@ const CALL_PERMISSIONS: Record<string, string> = {
   // sys 代理（内核外呼）：高危操作，每个方法独立授权
   'sys.exec': 'system:exec',
   'sys.fetch': 'network:fetch',
+  'sys.fetchStream': 'network:fetch',
+  'sys.pickFolder': 'system:exec',
   // 插件联系人消息方法（统一在 messages 命名空间下）
   'messages.registerAsContact': 'message:app',
   'messages.unregisterAsContact': 'message:app',
@@ -160,7 +179,11 @@ export async function createPluginBridgeDispatcher(identity: PluginBridgeIdentit
     // 最小授权：仅免权限基础调用放行
   }
 
-  const backend = createPluginBackend(identity.domain);
+  // O3 org 上下文：data.* 读写经 createPluginBackend 注入 orgId（org space
+  // 取 identity.space.id；personal space 为 undefined）——插件 SDK 签名不变，
+  // orgId 由内核按插件实例所属空间解析，桥按绑定身份下发。
+  const boundOrgId = identity.space.type === 'org' ? identity.space.id : undefined;
+  const backend = createPluginBackend(identity.domain, boundOrgId);
 
   // messages 域：pluginId/space 由桥按绑定身份注入（插件自报一律忽略）。
   // pluginId 剥离域前缀（'plugin:spark-example' → 'spark-example'，§20.1 存储键口径；
@@ -186,7 +209,11 @@ export async function createPluginBridgeDispatcher(identity: PluginBridgeIdentit
       query: backend.data.query,
       dropVersion: backend.data.dropVersion,
       saveBlob: backend.data.saveBlob,
-      readBlob: backend.data.readBlob
+      readBlob: backend.data.readBlob,
+      // O4 encrypted 授权名单（owner 侧；内核按 acl owner 验签，无额外权限项）
+      grantAccess: backend.data.grantAccess,
+      revokeAccess: backend.data.revokeAccess,
+      listAccess: backend.data.listAccess
     },
     identity: {
       sign: backend.identity.sign,
@@ -257,7 +284,27 @@ export async function createPluginBridgeDispatcher(identity: PluginBridgeIdentit
         return backend.sys!.exec(program, Array.isArray(execArgs) ? execArgs : [], workdir) as Promise<unknown>;
       },
       fetch: (url: string, options?: Record<string, unknown>) =>
-        backend.sys!.fetch(url, options) as Promise<unknown>
+        backend.sys!.fetch(url, options) as Promise<unknown>,
+      pickFolder: (title?: string) =>
+        backend.sys!.pickFolder!(title) as Promise<unknown>,
+      fetchStream: async (url: string, options?: Record<string, unknown>) => {
+        // 1. 发起流式请求，取得 streamId
+        const { streamId } = await backend.sys!.fetchStream!(url, options) as { streamId: string };
+        const eventName = `sys-stream:${streamId}`;
+
+        // 2. 监听 Tauri 事件，逐块转发为桥 event
+        const unlisten: UnlistenFn = await listen(eventName, (event) => {
+          const chunk = event.payload as { text: string; done: boolean; status: number; headers: Record<string, string> };
+          if (_eventPump) {
+            _eventPump.pushEvent(eventName, chunk);
+          }
+          if (chunk.done) {
+            unlisten();
+          }
+        });
+
+        return { streamId };
+      }
     },
   };
 

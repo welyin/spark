@@ -226,6 +226,10 @@ pub fn run() {
             commands::plugin_data::data_drop_version,
             commands::plugin_data::data_save_blob,
             commands::plugin_data::data_read_blob,
+            // O4 encrypted 授权名单（owner 侧）
+            commands::plugin_data::data_grant_access,
+            commands::plugin_data::data_revoke_access,
+            commands::plugin_data::data_list_access,
             // 组织
             commands::org::org_list_mine,
             commands::org::org_create,
@@ -349,6 +353,7 @@ pub fn run() {
             // sys 代理：插件通过内核代理执行外部命令 / HTTP 请求
             commands::sys::sys_exec,
             commands::sys::sys_fetch,
+            commands::sys::sys_fetch_stream,
             // 设备管理（多设备清单：本机采集 + 自设备 device-sync 同步）
             commands::device::devices_list,
             // 主程序自动更新（GitHub Releases 清单；检查/下载/安装重启）。仅桌面启用。

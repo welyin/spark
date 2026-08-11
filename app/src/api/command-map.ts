@@ -143,6 +143,7 @@ export const COMMAND_MAP: Record<string, string> = {
   // sys 代理（插件通过内核代理执行外部命令 / HTTP 请求）
   'sys-exec': 'sys_exec',
   'sys-fetch': 'sys_fetch',
+  'sys-fetch-stream': 'sys_fetch_stream',
   // 主程序自动更新（tauri-plugin-updater + GitHub Releases 清单）
   'updater-status': 'updater_status',
   'updater-check': 'updater_check',
@@ -247,5 +248,6 @@ export const ARG_NAMES: Record<string, string[]> = {
   'system-set-badge': ['count'],
   'system-set-proxy': ['proxy'],
   'sys-exec': ['program', 'args', 'workdir'],
-  'sys-fetch': ['url', 'options']
+  'sys-fetch': ['url', 'options'],
+  'sys-fetch-stream': ['url', 'options']
 };

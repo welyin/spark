@@ -111,6 +111,37 @@ export function createBridgeHost(options: CreateBridgeHostOptions): BridgeHost {
   };
   /** 插件已订阅的事件集合 */
   const subscriptions = new Set<string>();
+  /**
+   * 事件缓冲：插件订阅确认前到达的块先暂存，订阅时回放。
+   * 解决流式时序竞态——内核 spawn 后立即 emit，插件端 subscribe 需经 postMessage
+   * 往返确认，期间到达的块（尤其 done 终态块）若直接丢弃，调用方 await 将永不
+   * settle（如 sys.fetchStream 的 done）。缓冲保证订阅稍晚不丢任何块。
+   * 上限防插件永不订阅时无限积累（流式块可能很多，只保留最新）。
+   */
+  const pendingEvents = new Map<string, unknown[]>();
+  const PENDING_EVENT_CAP = 500;
+
+  const bufferEvent = (event: string, payload: unknown): void => {
+    const list = pendingEvents.get(event) ?? [];
+    if (list.length >= PENDING_EVENT_CAP) {
+      // 已达上限：丢弃最老的，保住最新（含 done 终态块）
+      list.shift();
+    }
+    list.push(payload);
+    pendingEvents.set(event, list);
+  };
+
+  const flushPendingEvents = (event: string): void => {
+    const list = pendingEvents.get(event);
+    if (!list || list.length === 0) {
+      pendingEvents.delete(event);
+      return;
+    }
+    pendingEvents.delete(event);
+    for (const payload of list) {
+      post({ v: BRIDGE_PROTOCOL_VERSION, type: 'event', event, payload });
+    }
+  };
   const pendingPings = new Map<string, { resolve: () => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   /** 宿主→插件反向调用的待决表（id → resolve/reject/timer） */
   const pendingRequests = new Map<string, { resolve: (data: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
@@ -232,11 +263,15 @@ export function createBridgeHost(options: CreateBridgeHostOptions): BridgeHost {
           return;
         }
         case 'subscribe':
+          // 先回放订阅确认前缓冲的块（含 done 终态），再标记订阅：
+          // 回放与后续 pushEvent 都在同步块内完成，期间无事件插入，无重复/丢失窗口
+          flushPendingEvents(message.event);
           subscriptions.add(message.event);
           post({ v: BRIDGE_PROTOCOL_VERSION, type: 'result', id: message.id, ok: true });
           return;
         case 'unsubscribe':
           subscriptions.delete(message.event);
+          pendingEvents.delete(message.event);
           post({ v: BRIDGE_PROTOCOL_VERSION, type: 'result', id: message.id, ok: true });
           return;
         case 'pong': {
@@ -306,6 +341,8 @@ export function createBridgeHost(options: CreateBridgeHostOptions): BridgeHost {
     ready,
     pushEvent(event, payload) {
       if (!subscriptions.has(event)) {
+        // 订阅确认前到达的块：缓冲待 subscribe 时回放（见 pendingEvents 注释）
+        bufferEvent(event, payload);
         return;
       }
       post({ v: BRIDGE_PROTOCOL_VERSION, type: 'event', event, payload });
@@ -361,6 +398,7 @@ export function createBridgeHost(options: CreateBridgeHostOptions): BridgeHost {
         pendingRequests.delete(id);
       }
       subscriptions.clear();
+      pendingEvents.clear();
     }
   };
 }
