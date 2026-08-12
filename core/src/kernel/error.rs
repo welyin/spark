@@ -124,6 +124,10 @@ pub enum KernelError {
     UnsupportedOp,
     #[error("Invalid input")]
     InvalidInput,
+    /// 调用级限流（social-feed §9.2 `RateLimited`；每 (space, pluginId) 60s 内
+    /// 10 次 feed.deliver）。对齐前端抛出的文案 `RateLimited`。
+    #[error("RateLimited")]
+    RateLimited,
 
     /// 其他流程错误（消息文本与 TS 对应分支一致）。
     #[error("{0}")]

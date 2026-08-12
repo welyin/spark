@@ -7,25 +7,48 @@
 //! 集合运算保持 TS Set 的插入序语义（基础权限在前，高级权限按声明序追加）。
 
 /// 全部合法权限（TS `PLUGIN_PERMISSIONS`）。
-pub const PLUGIN_PERMISSIONS: [&str; 10] = [
+pub const PLUGIN_PERMISSIONS: [&str; 13] = [
     "storage:read",
     "storage:write",
     "org:read",
     "org:sync",
     "network:broadcast",
     "proof:verify",
+    "identity:verify",
     "identity:sign",
     "message:app",
     // 扩展权限：sys 代理（内核外呼），每个方法独立授权
     "system:exec",
     "network:fetch",
+    // 社交投递层（social-feed §9.3/§9.4）：通讯录只读 + 社交定向投递，
+    // 均为高级权限 + 使用时询问/内核限流；对齐桥 dispatcher 的 CALL_PERMISSIONS。
+    "contact:read",
+    "feed:deliver",
 ];
 
 /// 基础权限：默认授予所有插件，无需声明（TS `BASIC_PERMISSIONS`）。
-pub const BASIC_PERMISSIONS: [&str; 4] = ["storage:read", "storage:write", "org:read", "proof:verify"];
+/// `identity:verify` 为纯验签（无敏感数据），默认授予免使用时询问——对齐
+/// iframe 桥 dispatcher 把 `identity.verify` 作为免权限基础调用放行的口径。
+pub const BASIC_PERMISSIONS: [&str; 5] = [
+    "storage:read",
+    "storage:write",
+    "org:read",
+    "proof:verify",
+    "identity:verify",
+];
 
 /// 高级权限：必须声明并经安装时授权（TS `ADVANCED_PERMISSIONS`）。
-pub const ADVANCED_PERMISSIONS: [&str; 6] = ["org:sync", "network:broadcast", "identity:sign", "message:app", "system:exec", "network:fetch"];
+pub const ADVANCED_PERMISSIONS: [&str; 8] = [
+    "org:sync",
+    "network:broadcast",
+    "identity:sign",
+    "message:app",
+    "system:exec",
+    "network:fetch",
+    // 社交投递层：通讯录只读（§9.4，使用时询问）+ 社交定向投递（§9.3，内核限流）
+    "contact:read",
+    "feed:deliver",
+];
 
 pub fn is_plugin_permission(value: &str) -> bool {
     PLUGIN_PERMISSIONS.contains(&value)

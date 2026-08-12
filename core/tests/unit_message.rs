@@ -33,7 +33,7 @@ fn setup(storage: &mut MemoryStorage) -> spark_core::message::ConversationRecord
         Some(PeerRef {
             peer_id: "12D3KooW".to_string(),
             addresses: vec!["/ip4/1.2.3.4/tcp/4001".to_string()],
-        }),
+        ..Default::default()}),
         NOW,
     )
     .unwrap()

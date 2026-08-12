@@ -6,7 +6,8 @@
 //! 事件回传（内核语义，见 core contact_ops.rs）。
 
 use spark_core::contact::{
-    ContactGroup, ContactTag, FriendRequestRecord, OrgGroupNode, ProfilePatch, SpaceContactsView,
+    ContactGroup, ContactTag, FriendRequestRecord, FriendSummary, OrgGroupNode, ProfilePatch,
+    SpaceContactsView,
 };
 use spark_core::kernel::{Kernel, SendFriendRequestInput};
 
@@ -229,6 +230,25 @@ pub(crate) fn ensure_bot_inner(
         .contact_ensure_bot(bot_root_id, display_name)
         .map_err(err)?;
     Ok(SuccessResult::ok())
+}
+
+// ------------------------------------------------------------------
+// 只读门面（社交投递层 social-feed §9.4 `contact:read` 最小只读面）
+// ------------------------------------------------------------------
+
+/// 列出所有朋友的只读摘要（供插件 SDK `contacts.listFriends` 消费）。
+pub(crate) fn list_friends_inner(kernel: &Kernel) -> Result<Vec<FriendSummary>, String> {
+    kernel.contact_list_friends().map_err(err)
+}
+
+/// 列出所有分组（供插件 SDK `contacts.listGroups` 消费）。
+pub(crate) fn list_groups_inner(kernel: &Kernel) -> Result<Vec<ContactGroup>, String> {
+    kernel.contact_list_groups().map_err(err)
+}
+
+/// 列出所有标签（供插件 SDK `contacts.listTags` 消费）。
+pub(crate) fn list_tags_inner(kernel: &Kernel) -> Result<Vec<ContactTag>, String> {
+    kernel.contact_list_tags().map_err(err)
 }
 
 // ------------------------------------------------------------------
@@ -475,6 +495,31 @@ pub fn contact_ensure_bot(
     display_name: String,
 ) -> Result<SuccessResult, String> {
     ensure_bot_inner(&mut *lock_kernel(&state)?, &bot_root_id, &display_name)
+}
+
+/// 列出所有朋友的只读摘要（社交投递层 `contact:read`；供插件 SDK
+/// `contacts.listFriends` 消费，字段裁剪见 `FriendSummary`）。
+#[tauri::command]
+pub fn contact_list_friends(
+    state: tauri::State<'_, KernelState>,
+) -> Result<Vec<FriendSummary>, String> {
+    list_friends_inner(&*lock_kernel(&state)?)
+}
+
+/// 列出所有分组（按 order 升序；社交投递层 `contact:read`）。
+#[tauri::command]
+pub fn contact_list_groups(
+    state: tauri::State<'_, KernelState>,
+) -> Result<Vec<ContactGroup>, String> {
+    list_groups_inner(&*lock_kernel(&state)?)
+}
+
+/// 列出所有标签（按 order 升序；社交投递层 `contact:read`）。
+#[tauri::command]
+pub fn contact_list_tags(
+    state: tauri::State<'_, KernelState>,
+) -> Result<Vec<ContactTag>, String> {
+    list_tags_inner(&*lock_kernel(&state)?)
 }
 
 // ------------------------------------------------------------------

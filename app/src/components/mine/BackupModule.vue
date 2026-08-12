@@ -222,11 +222,11 @@ export default defineComponent({
           // 渲染宽度按载荷长度自适应（抽屉 420px，扣除卡片内边距后约 360px 可用）
           qrWidth.value = payload.length < 800 ? 240 : payload.length < 1600 ? 320 : 360;
           qrDense.value = payload.length >= 1600;
-          // margin=4: QR 标准安静区；2x 渲染: 高 DPI 屏幕模块边缘锐利
+          // margin=4: QR 标准安静区；4x 渲染: 高 DPI 屏幕模块边缘锐利（低密度码手机对焦也能逐模块分辨）
           qrImageUrl.value = await QRCode.toDataURL(payload, {
             errorCorrectionLevel: 'M',
             margin: 4,
-            width: qrWidth.value * 2,
+            width: qrWidth.value * 4,
             scale: 1
           });
           if (!qrImageUrl.value || !qrImageUrl.value.startsWith('data:image/png;base64,')) {

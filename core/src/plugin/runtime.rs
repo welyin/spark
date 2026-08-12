@@ -298,6 +298,8 @@ mod tests {
             collection_configs: Arc::new(Mutex::new(Default::default())),
             pending_queries: Arc::new(Mutex::new(Default::default())),
             filter_caps: Arc::new(Mutex::new(Default::default())),
+            feed_limiter: Arc::new(Mutex::new(Default::default())),
+            app_msg_limiter: Arc::new(Mutex::new(Default::default())),
             runtime: tokio::runtime::Handle::current(),
         }
     }

@@ -39,6 +39,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 pub use service::ContactService;
+pub use service::{DmChannel, DmRecipientFilter, DmRecipientSkipReason, SkippedRecipient};
 pub(crate) use service::sync::{apply_contact_sync_snapshot, build_contact_sync_snapshot};
 
 /// 朋友记录键前缀（`ct:friend:{rootId}`）。
@@ -90,8 +91,14 @@ pub(crate) fn org_tree_key(org_id: &str) -> String {
 pub use crate::message::PeerRef;
 
 /// 个人空间朋友记录（平铺：身份字段 + 本地资料字段，设计 §5）。
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+///
+/// 多设备寻址（social-feed S4）：`peers` 为「该 rootId 下已知的可寻址设备
+/// peer」列表——握手（friend-request/accept nodeInfo）写入首台，自设备场景
+/// （rootId==自己）与 `DeviceService` 聚合对齐多设备；好友（非自己）通常
+/// 只有握手那一台。旧版本存储的单 `peer` 字段在反序列化时自动升级为单元素
+/// 列表（[`FriendRecordRaw`]，幂等）。
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", from = "FriendRecordRaw")]
 pub struct FriendRecord {
     pub root_id: String,
     #[serde(default)]
@@ -105,8 +112,9 @@ pub struct FriendRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gender: Option<String>,
     pub added_at: i64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub peer: Option<PeerRef>,
+    /// 已知可寻址设备 peer 列表（多设备寻址；空 = 尚未配对/未携带寻址信息）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub peers: Vec<PeerRef>,
     /// 备注名（优先展示，仅自己可见）。
     #[serde(default)]
     pub remark: String,
@@ -131,6 +139,96 @@ pub struct FriendRecord {
     /// 快照条目都严格更新、必然覆盖）。
     #[serde(default)]
     pub updated_at: i64,
+}
+
+/// [`FriendRecord`] 的反序列化中间形态：同时接受旧存储的单 `peer` 字段
+/// 与新 `peers` 列表，`From` 迁移为单 `peers` 字段（旧数据自动升级为单元素
+/// 列表，幂等）。仅用于反序列化（`#[serde(from = "...")]`），不对外暴露。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FriendRecordRaw {
+    root_id: String,
+    #[serde(default)]
+    nickname: String,
+    #[serde(default)]
+    avatar: Option<String>,
+    #[serde(default)]
+    signature: String,
+    #[serde(default)]
+    gender: Option<String>,
+    added_at: i64,
+    /// 旧版本单 peer（升级为单元素 `peers`；新数据无此字段）。
+    #[serde(default)]
+    peer: Option<PeerRef>,
+    /// 新版本设备 peer 列表。
+    #[serde(default)]
+    peers: Vec<PeerRef>,
+    #[serde(default)]
+    remark: String,
+    #[serde(default)]
+    phones: Vec<String>,
+    #[serde(default)]
+    tag_ids: Vec<String>,
+    #[serde(default)]
+    group_id: String,
+    #[serde(default)]
+    memo: String,
+    #[serde(default)]
+    photos: Vec<String>,
+    #[serde(default = "default_permission")]
+    permission: String,
+    #[serde(default)]
+    blocked: bool,
+    #[serde(default)]
+    updated_at: i64,
+}
+
+impl From<FriendRecordRaw> for FriendRecord {
+    fn from(raw: FriendRecordRaw) -> Self {
+        let FriendRecordRaw {
+            root_id,
+            nickname,
+            avatar,
+            signature,
+            gender,
+            added_at,
+            peer,
+            peers,
+            remark,
+            phones,
+            tag_ids,
+            group_id,
+            memo,
+            photos,
+            permission,
+            blocked,
+            updated_at,
+        } = raw;
+        // 向后兼容：新字段 `peers` 为空时，旧 `peer` 单值升级为单元素列表。
+        let peers = if peers.is_empty() {
+            peer.into_iter().collect()
+        } else {
+            peers
+        };
+        FriendRecord {
+            root_id,
+            nickname,
+            avatar,
+            signature,
+            gender,
+            added_at,
+            peers,
+            remark,
+            phones,
+            tag_ids,
+            group_id,
+            memo,
+            photos,
+            permission,
+            blocked,
+            updated_at,
+        }
+    }
 }
 
 /// 好友申请状态（设计 §4：pending → accepted / ignored）。
@@ -261,6 +359,32 @@ pub struct ContactGroup {
     pub order: i32,
 }
 
+/// 朋友只读摘要（社交投递层 social-feed §9.4 `contact:read` 最小只读面）。
+///
+/// 字段裁剪清单（相对 [`FriendRecord`]）：
+/// - **保留**：`rootId`/`nickname`/`avatar`（插件「谁可以看」选择器展示用）、
+///   `groupId`/`tagIds`（按分组/标签筛选收件人）、`permission`（插件可据此
+///   尊重「仅聊天」语义，内核侧出站过滤 S5 仍以 FriendRecord 为准）。
+/// - **剔除**：`signature`/`gender`/`phones`/`memo`/`photos`（个人敏感资料，
+///   插件无需读取）；`peers`（底层网络/设备寻址数据，不向插件暴露）；
+///   `remark`/`addedAt`/`blocked`/`updated_at`（本地管理元数据，非可见性
+///   所需）。缺省字段使用 `#[serde(skip_serializing_if = "Option::is_none")]`
+///   与 `FriendRecord.avatar` 一致（无头像省略键）。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FriendSummary {
+    pub root_id: String,
+    pub nickname: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<String>,
+    #[serde(default)]
+    pub group_id: String,
+    #[serde(default)]
+    pub tag_ids: Vec<String>,
+    #[serde(default = "default_permission")]
+    pub permission: String,
+}
+
 /// 组织空间分组树节点（children 数组顺序即同级排序）。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OrgGroupNode {
@@ -341,5 +465,56 @@ pub(crate) fn sync_err_to_contact(e: crate::sync::SyncError) -> ContactError {
             std::io::ErrorKind::Other,
             other.to_string(),
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 多设备寻址（social-feed S4）向后兼容：旧存储的单 `peer` 字段在反序列化
+    /// 时自动升级为单元素 `peers` 列表。
+    #[test]
+    fn legacy_single_peer_field_migrates_to_peers_list() {
+        // 旧线形：`peer: { peerId, addresses }`，无 `peers` 字段。
+        let legacy = r#"{"rootId":"root-a","nickname":"阿强","addedAt":100,"peer":{"peerId":"12D3KooWabc","addresses":["/ip4/1.2.3.4/tcp/4001"]},"updatedAt":100}"#;
+        let record: FriendRecord = serde_json::from_str(legacy).unwrap();
+        assert_eq!(record.peers.len(), 1, "旧单 peer 升级为单元素列表");
+        assert_eq!(record.peers[0].peer_id, "12D3KooWabc");
+        assert_eq!(record.peers[0].addresses, vec!["/ip4/1.2.3.4/tcp/4001"]);
+    }
+
+    /// 新线形：`peers` 列表正常往返；序列化只写 `peers`，不再输出旧 `peer`。
+    #[test]
+    fn peers_list_roundtrip_and_serialize_shape() {
+        let record = FriendRecord {
+            root_id: "root-a".to_string(),
+            peers: vec![
+                PeerRef { peer_id: "peer-1".to_string(), addresses: vec![], ..Default::default()},
+                PeerRef { peer_id: "peer-2".to_string(), addresses: vec!["/ip4/5.6.7.8/tcp/4001".to_string()], ..Default::default()},
+            ],
+            added_at: 100,
+            updated_at: 200,
+            ..Default::default()
+        };
+        let json = serde_json::to_value(&record).unwrap();
+        // 序列化形状：有 `peers`、无旧 `peer` 字段。
+        assert!(json.get("peers").is_some());
+        assert!(json.get("peer").is_none(), "新线形不再写旧 peer 字段");
+        assert_eq!(json["peers"].as_array().unwrap().len(), 2);
+
+        let back: FriendRecord = serde_json::from_value(json).unwrap();
+        assert_eq!(back, record);
+    }
+
+    /// 幂等：升级后的记录再次反序列化仍是列表，不重复、不退化。
+    #[test]
+    fn migration_is_idempotent() {
+        let legacy = r#"{"rootId":"root-a","addedAt":100,"peer":{"peerId":"12D3KooWabc","addresses":[]},"updatedAt":100}"#;
+        let once: FriendRecord = serde_json::from_str(legacy).unwrap();
+        let json = serde_json::to_value(&once).unwrap();
+        let twice: FriendRecord = serde_json::from_value(json).unwrap();
+        assert_eq!(once.peers, twice.peers);
+        assert_eq!(twice.peers.len(), 1);
     }
 }

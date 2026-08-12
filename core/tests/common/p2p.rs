@@ -219,6 +219,8 @@ impl P2pHost for TestHost {
                 OverlayPeerSource::Exchange,
                 false,
                 now,
+                None,
+                &std::collections::HashSet::new(),
             );
         }
     }

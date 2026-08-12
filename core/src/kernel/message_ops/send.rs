@@ -10,14 +10,17 @@ use super::{
 };
 use super::super::KernelError;
 use super::super::dm_envelope::{KIND_CHAT, KIND_RECALL};
-use crate::contact::ContactService;
+use crate::contact::{
+    ContactService, DmChannel, DmRecipientSkipReason,
+};
 use crate::message::{
-    LinkPreview, MAX_TEXT_BYTES, MessageError, MessageRecord, MessageService, MessageType,
-    QuoteRef, generate_message_id,
+    ConversationKind, LinkPreview, MAX_TEXT_BYTES, MessageError, MessageRecord, MessageService,
+    MessageType, QuoteRef, generate_message_id,
 };
 use crate::p2p::P2pEvent;
 use crate::p2p::node::system_now_ms;
 use crate::plugin::{PluginError, PluginHostShared};
+use crate::storage::StorageBackend;
 
 /// Bot 回复共享实现：[`Kernel::message_bot_reply`] 门面与插件后台运行时的
 /// `message.reply` 能力共用——落库 → ChatReceived 事件 → 回同步自设备。
@@ -315,6 +318,23 @@ impl Kernel {
             // Bot 会话：无 P2P 对端，消息由本机插件处理，直接标记 delivered
             "delivered"
         } else {
+            // S5 出站拉黑（social-feed §5）：仅个人空间 direct 人际会话检查
+            // （自消息/bot/应用会话与组织空间不经此分支——拉黑是个人空间语义）。
+            // 命中拉黑**不投递**，消息落库 failed，错误文案「你已拉黑对方」透传
+            // 到壳层供 UI 提示。
+            let blocked = space == "personal"
+                && conv.kind == ConversationKind::Direct
+                && Self::chat_recipient_blocked(self.require_storage()?, &conv.peer_root_id);
+            if blocked {
+                MessageService::set_message_status(
+                    self.require_storage_raw_mut()?,
+                    space,
+                    conv_id,
+                    message_id,
+                    "failed",
+                )?;
+                return Err(KernelError::Internal("你已拉黑对方，无法发送消息".to_string()));
+            }
             match self.prepare_chat_delivery(space, &conv, &record)? {
                 Some((peer, envelope)) => {
                     self.spawn_chat_delivery(space, conv_id, message_id, peer, envelope);
@@ -424,6 +444,21 @@ impl Kernel {
             self.deliver_to_devices(&my_root_id, KIND_CHAT, body);
             "delivered"
         } else {
+            // S5 出站拉黑：重发到已拉黑对端同样不投递（个人空间语义，组织会话
+            // 跳过），置 failed + 透传文案
+            let blocked = space == "personal"
+                && conv.kind == ConversationKind::Direct
+                && Self::chat_recipient_blocked(self.require_storage()?, &conv.peer_root_id);
+            if blocked {
+                MessageService::set_message_status(
+                    self.require_storage_raw_mut()?,
+                    space,
+                    conv_id,
+                    message_id,
+                    "failed",
+                )?;
+                return Err(KernelError::Internal("你已拉黑对方，无法发送消息".to_string()));
+            }
             match self.prepare_chat_delivery(space, &conv, &record)? {
                 Some((peer, envelope)) => {
                     self.spawn_chat_delivery(space, conv_id, message_id, peer, envelope);
@@ -499,5 +534,21 @@ impl Kernel {
             );
         }
         Ok(recalled)
+    }
+
+    /// S5 出站拉黑判定（social-feed §5）：目标 peerRootId 是否在本机拉黑集合
+    /// 命中。走 `ContactService::filter_dm_recipients` 的 chat 通道（只查拉黑，
+    /// 不查仅聊天/非朋友）——命中拉黑即 `Blocked`。存储读取失败按未拉黑处理
+    /// （不阻塞发送，错误由下游投递路径暴露）。
+    fn chat_recipient_blocked<S: StorageBackend>(storage: &S, peer_root_id: &str) -> bool {
+        let recipients = vec![peer_root_id.to_string()];
+        ContactService::filter_dm_recipients(storage, &recipients, DmChannel::Chat)
+            .map(|filter| {
+                filter
+                    .skipped
+                    .iter()
+                    .any(|s| s.reason == DmRecipientSkipReason::Blocked)
+            })
+            .unwrap_or(false)
     }
 }

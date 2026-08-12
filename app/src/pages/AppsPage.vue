@@ -577,15 +577,17 @@ export default defineComponent({
 
     onMounted(async () => {
       void refreshAdminRole();
+      // 先展示应用列表：list() 是本地目录+安装态聚合，快；不等待网络更新探测。
       await refreshSafe();
       openPendingAppDetail();
-      // 本地定期检测更新（设计 §4.4）：进入应用页时检测一次，发现新版本显示「可更新」角标
-      try {
-        await window.electronAPI.pluginMarket.checkUpdates();
-        await refresh();
-      } catch {
-        // 更新检测失败不阻断页面使用
-      }
+      // 本地定期检测更新（设计 §4.4）：进入应用页时检测一次，发现新版本显示「可更新」角标。
+      // checkUpdates 会对每个插件串行拉取 GitHub 远端 manifest+签名验签（connect 5s/总超时
+      // 30s/个），网络差时可能很慢——改为后台异步执行，不阻塞首屏展示；完成后 refresh()
+      // 让列表反映「可更新」角标。失败静默（同原语义，不阻断页面使用）。
+      window.electronAPI.pluginMarket
+        .checkUpdates()
+        .then(() => refreshSafe())
+        .catch(() => {});
     });
 
     return {

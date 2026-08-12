@@ -40,11 +40,14 @@ pub const OVERLAY_POOL_MAX: usize = 200;
 /// 单个 peer 最多保留的地址条数。
 pub const MAX_ADDRESSES_PER_PEER: usize = 20;
 
-/// 活跃覆盖网连接目标数。
-pub const OVERLAY_DIAL_TARGET: usize = 4;
-
 /// 每个 keepalive tick 允许的最大覆盖网拨号次数。
 pub const OVERLAY_TICK_DIAL_BUDGET: usize = 2;
+
+/// 覆盖网补拨候选的新鲜度窗口（24h）：补拨只用于 DHT 自举（0 连接孤岛），
+/// 候选必须近期见过才可拨。IPv6 前缀变更 / DHCP 复用后的尸体地址半衰期短，
+/// 越新越好；但窗口过严会让刚启动的孤岛无新鲜邻居可拨、DHT 永远自举不了。
+/// 24h 在「尽量新」与「孤岛至少能捞到可拨地址」之间取平衡（connection-policy M7）。
+pub const OVERLAY_DIAL_CANDIDATE_MAX_AGE_MS: i64 = 24 * 60 * 60 * 1000;
 
 /// peer-exchange 单次的最大条目数。
 pub const PEER_EXCHANGE_MAX: usize = 16;
@@ -82,15 +85,10 @@ pub const MAX_ANNOUNCE_ADDRESS_LENGTH: usize = 512;
 /// 恢复查询最大转发跳数。
 pub const RECOVERY_TTL: u32 = 2;
 
-/// 恢复查询冷却（全局单值，10 min）。
-pub const RECOVERY_COOLDOWN_MS: i64 = 10 * 60_000;
-
-/// 触发恢复查询前，组织侧"全员失联"需持续的 tick 数。
-pub const RECOVERY_TRIGGER_CONSECUTIVE_TICKS: u32 = 3;
-
-/// 「恢复中」状态的限时显示窗口（与冷却同周期：每轮恢复查询会刷新
-/// `last_query_at`；超过一个周期未再发起查询，视为自动恢复无果转 failed）。
-pub const RECOVERY_SEARCH_DISPLAY_MS: i64 = RECOVERY_COOLDOWN_MS;
+/// 「恢复中」状态的限时显示窗口：每轮恢复查询会刷新 `last_query_at`；
+/// 超过一个窗口未再发起查询，视为自动恢复无果转 failed（connection-policy M6
+/// 后恢复查询仅事件点触发，此处沿用 10 min 展示窗口）。
+pub const RECOVERY_SEARCH_DISPLAY_MS: i64 = 10 * 60_000;
 
 /// 单次恢复查询请求的成员条目上限。
 pub const RECOVERY_QUERY_WANT: usize = 8;
@@ -140,6 +138,12 @@ pub const DM_MIN_INTERVAL_MS: i64 = 1_000;
 /// 目标就烧光外层 15s 总预算；到期按拨号失败处理、推进下一目标
 /// （与 OutgoingConnectionError 同路径，按 ConnectionId 归属）。
 pub const DIRECT_DIAL_TARGET_TIMEOUT_MS: u64 = 4_000;
+
+/// 拨号分批并发批大小（M9）：每批同时拨 [`DIAL_BATCH_SIZE`] 个目标（按
+/// 记分卡/静态优先级填批），批内任一连通即收手（取消本批其余），全批
+/// 失败再开下一批。取 4 兼顾并发收益与对端连接突发压力（既有
+/// redial_priority_peers 也是"一批地址一次拨号并发竞速"）。
+pub const DIAL_BATCH_SIZE: usize = 4;
 
 /// Kad（Kademlia DHT）协议名。
 pub const KAD_PROTOCOL_NAME: &str = "/spark/kad/1.0.0";

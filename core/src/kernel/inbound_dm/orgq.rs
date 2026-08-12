@@ -373,6 +373,7 @@ pub(super) fn handle_orgq_req<S: StorageBackend>(
         orgsync_out: out,
         profile_applied: false,
         orgkey_unbox: None,
+        feed_blob_out: None,
     })
 }
 
@@ -541,5 +542,6 @@ pub(super) fn handle_orgq_resp<S: StorageBackend>(
         orgsync_out: Vec::new(),
         profile_applied: false,
         orgkey_unbox: None,
+        feed_blob_out: None,
     })
 }

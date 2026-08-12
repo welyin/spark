@@ -498,6 +498,45 @@ impl KernelDmHandler {
             }
         });
     }
+
+    /// 回发 feed-blob 出站信封（feed-blob-req/resp，跨联系人分块传输通道）。
+    /// 单条输出（`InboundDmResult::feed_blob_out`），from=本机 rootId、
+    /// to=连接层对端 rootId（feed 原作者/拉取方）。spawn 到 runtime 投递，
+    /// 失败静默（分块传输由请求方下轮调和重试兜底）。
+    pub(super) fn spawn_feed_blob_reply(
+        &self,
+        my_root_id: &str,
+        target: PeerNodeInfo,
+        output: crate::kernel::inbound_dm::FeedBlobOut,
+    ) {
+        let node = self
+            .node_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let signing_key = self
+            .signing_key_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let (Some(node), Some(signing_key)) = (node, signing_key) else {
+            return;
+        };
+        let from = my_root_id.to_string();
+        // feed-blob 信封 to = 连接层对端 rootId（feed 原作者或拉取方）
+        let to = target.peer_id.clone().unwrap_or_else(|| from.clone());
+        let envelope = dm_envelope::build_envelope(
+            output.kind(),
+            &from,
+            &to,
+            system_now_ms(),
+            output.body().clone(),
+            &signing_key,
+        );
+        tokio::spawn(async move {
+            let _ = node.dm_direct(&target, envelope).await;
+        });
+    }
 }
 
 /// 出站 body 中墓碑记录的最大 dseq（无墓碑 → None）。

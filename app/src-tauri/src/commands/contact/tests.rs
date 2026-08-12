@@ -29,7 +29,7 @@ fn seed_friend(kernel: &mut Kernel, root_id: &str) {
         signature: String::new(),
         gender: None,
         added_at: 1,
-        peer: None,
+        peers: Vec::new(),
         remark: String::new(),
         phones: Vec::new(),
         tag_ids: Vec::new(),
@@ -297,7 +297,7 @@ fn reply_request_state_gate_and_thread() {
             peer: Some(PeerRef {
                 peer_id: "peer-1".to_string(),
                 addresses: vec![],
-            }),
+            ..Default::default()}),
             thread: Vec::new(),
             invite_code: None,
             avatar: None,
@@ -357,7 +357,7 @@ fn ask_request_state_gate_and_thread() {
             peer: Some(PeerRef {
                 peer_id: "peer-1".to_string(),
                 addresses: vec![],
-            }),
+            ..Default::default()}),
             thread: Vec::new(),
             invite_code: None,
             avatar: None,
@@ -459,4 +459,88 @@ fn remove_friend_with_block() {
         ContactService::is_blocked(&storage, &bob).unwrap(),
         "删除同时拉黑后拉黑集合应含 bob"
     );
+}
+
+// ------------------------------------------------------------------
+// 只读门面（社交投递层 contact:read；直调 *_inner，用当前 peers 形状）
+// ------------------------------------------------------------------
+
+/// 写入一个朋友记录（只读门面测试辅助；用当前 `peers: Vec<PeerRef>` 形状）。
+fn seed_read_friend(kernel: &mut Kernel, root_id: &str, permission: &str) {
+    use spark_core::contact::PeerRef;
+    let friend = FriendRecord {
+        root_id: root_id.to_string(),
+        nickname: "Bob".to_string(),
+        avatar: None,
+        signature: "敏感签名".to_string(),
+        gender: Some("male".to_string()),
+        added_at: 1,
+        peers: vec![PeerRef {
+            peer_id: "peer-1".to_string(),
+            addresses: vec![],
+        ..Default::default()}],
+        remark: String::new(),
+        phones: vec!["13800000000".to_string()],
+        tag_ids: vec!["tag_a".to_string()],
+        group_id: "grp_001".to_string(),
+        memo: String::new(),
+        photos: vec![],
+        permission: permission.to_string(),
+        blocked: false,
+        updated_at: 1,
+    };
+    let mut storage = kernel.__test_storage().unwrap();
+    ContactService::upsert_friend(&mut storage, &friend).unwrap();
+}
+
+/// 只读门面：返回裁剪后的摘要（敏感字段不暴露，permission/分组/标签透出）。
+#[test]
+fn read_only_list_friends_trimmed_summary() {
+    let (_dir, mut kernel) = unlocked_kernel();
+    let bob = "bb".repeat(32);
+    seed_read_friend(&mut kernel, &bob, "chatOnly");
+
+    let friends = list_friends_inner(&kernel).unwrap();
+    let summary = friends
+        .iter()
+        .find(|f| f.root_id == bob)
+        .expect("bob 在只读摘要中");
+    assert_eq!(summary.nickname, "Bob");
+    assert_eq!(summary.group_id, "grp_001");
+    assert_eq!(summary.tag_ids, vec!["tag_a".to_string()]);
+    assert_eq!(summary.permission, "chatOnly");
+
+    // 敏感字段裁剪：签名/性别/电话/peers 不出现在摘要中
+    let json = serde_json::to_value(summary).unwrap();
+    for sensitive in ["signature", "gender", "phones", "peers", "remark", "memo", "blocked"] {
+        assert!(json.get(sensitive).is_none(), "敏感字段 {sensitive} 不应暴露");
+    }
+}
+
+/// 只读门面：空集合返回空数组（不报错）。
+#[test]
+fn read_only_list_empty_when_no_data() {
+    let (_dir, kernel) = unlocked_kernel();
+    // overview 会注入「自己」条目，但只读门面不注入——空库应返回空 friends
+    assert!(list_friends_inner(&kernel).unwrap().is_empty());
+    assert!(list_groups_inner(&kernel).unwrap().is_empty());
+    assert!(list_tags_inner(&kernel).unwrap().is_empty());
+}
+
+/// 只读门面：listGroups / listTags 按 order 升序透传分组与标签。
+#[test]
+fn read_only_list_groups_and_tags() {
+    let (_dir, mut kernel) = unlocked_kernel();
+    group_create_inner(&mut kernel, "grp_001", "同事").unwrap();
+    tag_create_inner(&mut kernel, PERSONAL, "tag_001", "家人").unwrap();
+
+    let groups = list_groups_inner(&kernel).unwrap();
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].id, "grp_001");
+    assert_eq!(groups[0].name, "同事");
+
+    let tags = list_tags_inner(&kernel).unwrap();
+    assert_eq!(tags.len(), 1);
+    assert_eq!(tags[0].id, "tag_001");
+    assert_eq!(tags[0].name, "家人");
 }

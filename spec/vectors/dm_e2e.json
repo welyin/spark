@@ -1,0 +1,16 @@
+[
+  {
+    "description": "HKDF-SHA256 会话密钥派生 golden（dm_e2e §19.1.1，方向无关）：shared 为 X25519 DH 结果（模拟值 0x42×32），info 绑 'spark-dm-e2e-v1:{min}:{max}'——from/to 按字典序排序小在前，A→B 与 B→A 派生同一份会话密钥。salt 取全零 32B（RFC 5869 默认无 salt），输出 32B AES-256 会话密钥。本向量 rootA<rootB 字典序，排序后仍 rootA:rootB，锁定基准输出。",
+    "sharedHex": "4242424242424242424242424242424242424242424242424242424242424242",
+    "info": "spark-dm-e2e-v1:rootA:rootB",
+    "derivedKeyHex": "a63bd4f7c15ae2b2c0c4f278dbebc8ccf0e22c95697f85164c1961d51071be1d",
+    "directionHint": "A->B 与 B->A 均映射到该 info（排序小在前）"
+  },
+  {
+    "description": "方向无关的排序必要性锁定：发送方 rootZ、接收方 rootA（rootZ 字典序大），排序后 info 仍为 'spark-dm-e2e-v1:rootA:rootZ'（小者 rootA 在前）——若实现误用 from:to 原始序（rootZ:rootA）将得到不同派生值，本向量锁定排序行为。",
+    "sharedHex": "4242424242424242424242424242424242424242424242424242424242424242",
+    "info": "spark-dm-e2e-v1:rootA:rootZ",
+    "derivedKeyHex": "5de419cef01cc471e003b00857121c58bf590e302f00f15dba4cdad3b726886a",
+    "directionHint": "Z->A（发送方字典序大），info 排序后小者在前"
+  }
+]

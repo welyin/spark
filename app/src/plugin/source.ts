@@ -56,7 +56,7 @@ export function pluginSourceBaseUrl(pluginId: string): string {
 
 /** 源服务统一 CSP 口径（与 plugin_src.rs PLUGIN_CSP 一致）；script-src 由变量拼接 */
 const sourceCsp = (scriptSrc: string): string =>
-  `default-src 'self'; script-src ${scriptSrc}; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:`;
+  `default-src 'self'; script-src ${scriptSrc}; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:`;
 
 /**
  * 生成宿主 iframe 的 srcdoc：`<div id="app"></div>` + module bundle + 样式
@@ -83,7 +83,7 @@ export function buildPluginHostSrcdoc(pluginId: string, mount?: PluginViewBootst
   // 主视图不传 mount 则 CSP 维持原口径）
   const scriptSrc = mount ? `${origin} 'unsafe-inline'` : origin;
   const csp = isTauri()
-    ? `default-src 'none'; script-src ${scriptSrc}; style-src ${origin} 'unsafe-inline'; connect-src ${origin}; img-src ${origin} data:; font-src ${origin}`
+    ? `default-src 'none'; script-src ${scriptSrc}; style-src ${origin} 'unsafe-inline'; connect-src ${origin}; img-src ${origin} data: blob:; font-src ${origin}`
     : sourceCsp(mount ? `'self' 'unsafe-inline'` : `'self'`);
   const mountScript = mount
     ? `<script>window.__sparkPluginView = ${JSON.stringify(mount).replace(/</g, '\\u003c')};</script>`

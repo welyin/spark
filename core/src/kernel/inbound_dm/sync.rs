@@ -158,6 +158,7 @@ pub(super) fn handle_profile_sync<S: StorageBackend>(
             orgsync_out: Vec::new(),
             profile_applied: false,
             orgkey_unbox: None,
+            feed_blob_out: None,
         });
     };
     let nickname = body
@@ -203,6 +204,7 @@ pub(super) fn handle_profile_sync<S: StorageBackend>(
         orgsync_out: Vec::new(),
         profile_applied: false,
         orgkey_unbox: None,
+        feed_blob_out: None,
     })
 }
 
@@ -251,10 +253,16 @@ pub(super) fn handle_device_sync<S: StorageBackend>(
     // 收敛后不再互发）。
     let reply = if changed {
         ContactService::get_friend(storage, from)?
-            .and_then(|f| f.peer)
-            .map(|p| PeerNodeInfo {
-                peer_id: (!p.peer_id.is_empty()).then_some(p.peer_id),
-                addresses: p.addresses,
+            .and_then(|f| {
+                // 多设备寻址：优先匹配连接层对端 peerId（本帧来源权威），否则取首个
+                f.peers
+                    .iter()
+                    .find(|p| p.peer_id == ctx.remote_peer_id)
+                    .or_else(|| f.peers.first())
+                    .map(|p| PeerNodeInfo {
+                        peer_id: (!p.peer_id.is_empty()).then_some(p.peer_id.clone()),
+                        addresses: p.addresses.clone(),
+                    })
             })
     } else {
         None
@@ -271,6 +279,7 @@ pub(super) fn handle_device_sync<S: StorageBackend>(
         orgsync_out: Vec::new(),
         profile_applied: false,
         orgkey_unbox: None,
+        feed_blob_out: None,
     })
 }
 
@@ -305,6 +314,7 @@ pub(super) fn handle_contact_sync<S: StorageBackend>(
         orgsync_out: Vec::new(),
         profile_applied: false,
         orgkey_unbox: None,
+        feed_blob_out: None,
     })
 }
 
@@ -338,5 +348,6 @@ pub(super) fn handle_conv_sync<S: StorageBackend>(
         orgsync_out: Vec::new(),
         profile_applied: false,
         orgkey_unbox: None,
+        feed_blob_out: None,
     })
 }

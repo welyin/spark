@@ -418,13 +418,14 @@ impl P2pHost for KernelHost {
             .map(|view| view.friends)
             .unwrap_or_default()
             .into_iter()
-            .find(|f| f.peer.as_ref().is_some_and(|p| p.peer_id == peer_id));
+            .find(|f| f.peers.iter().any(|p| p.peer_id == peer_id));
         let Some(friend) = friend else {
             return;
         };
-        let Some(peer) = friend.peer else {
+        let Some(peer) = friend.peers.iter().find(|p| p.peer_id == peer_id) else {
             return;
         };
+        let peer = peer.clone();
         let Some(my_root_id) = self
             .current_root_id
             .lock()
@@ -471,7 +472,7 @@ impl P2pHost for KernelHost {
             peer_id: (!peer.peer_id.is_empty()).then_some(peer.peer_id),
             addresses: peer.addresses,
         };
-        let to = friend.root_id.clone();
+        let to = friend.root_id;
         let from = my_root_id.clone();
 
         // M1 加入通知补发：自设备建连且在 24h 窗口内、未发送过，则广播
@@ -479,7 +480,28 @@ impl P2pHost for KernelHost {
             self.dm_handler_impl()
                 .maybe_spawn_device_notice_broadcast(&my_root_id, peer_id);
         }
-
+        // 离线补投（social-feed §6.3）：连接建立时按 rootId flush `dm:pending:`
+        // 队列，重发密文信封；应答成功/终态拒绝出队并回写 chat 消息终态。
+        // 事件循环线程不 block_on——与 profile-sync 同模式 spawn 到 runtime。
+        // 用克隆避免与下方 profile-sync spawn 竞争 move 所有权。
+        let flush_storage = self.storage.clone();
+        let flush_node = Arc::clone(&node);
+        let flush_event_tx = self.event_tx.clone();
+        let flush_io_lock = Arc::clone(&self.io_lock);
+        let flush_to = to.clone();
+        let flush_target = target.clone();
+        tokio::spawn(async move {
+            let mut storage = flush_storage;
+            crate::kernel::dm_delivery::flush_pending_for_recipient(
+                &mut storage,
+                flush_node,
+                flush_event_tx,
+                flush_io_lock,
+                &flush_to,
+                flush_target,
+            )
+            .await;
+        });
         tokio::spawn(async move {
             let mut body = serde_json::json!({ "nickname": nickname });
             if let Some(avatar) = avatar {
@@ -517,6 +539,8 @@ impl P2pHost for KernelHost {
                     OverlayPeerSource::Exchange,
                     false,
                     now,
+                    None,
+                    &std::collections::HashSet::new(),
                 ) {
                     eprintln!("[kernel] org member hint overlay store failed: {e}");
                 }

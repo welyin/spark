@@ -51,19 +51,33 @@ declare global {
  *
  * @throws 如果宿主 API 不可用
  */
-export function createPluginBackend(domain: string, orgId?: string): PluginSDK {
+export function createPluginBackend(
+  domain: string,
+  orgId?: string,
+  onClose?: () => void
+): PluginSDK {
   // 沙箱化后后端只在壳层主窗口构造，无跨 frame 回退的合法场景
   const electronAPI: ElectronAPI | undefined = window.electronAPI;
   if (!electronAPI) {
     throw new Error('electronAPI is not available in the renderer context');
   }
   const pluginDomain = domain;
+  // 插件 id（剥离域前缀 `plugin:`）：社交投递 feed 的 topic 前缀校验/归属用
+  const boundPluginId = domain.startsWith('plugin:')
+    ? domain.slice('plugin:'.length)
+    : domain;
   // O3 org 上下文：插件运行在 org space 时注入 orgId（personal space 为
   // undefined），data.* 读写命令据此路由到 org 集合；内核按实例空间解析。
   const boundOrgId = orgId ?? undefined;
 
   return {
     domain,
+    // sdk.close()：请求壳层关闭当前插件视图。内嵌后端（非 iframe 桥）把关闭
+    // 动作委托给构造方传入的 onClose 回调（桥 dispatcher 传 identity.onClose，
+    // 与桥 `app.close` 命令同口径；无人传入时 no-op 满足契约）。
+    close: async () => {
+      onClose?.();
+    },
     evidence: electronAPI.evidence,
     p2p: electronAPI.p2p,
     runtime: {
@@ -133,6 +147,31 @@ export function createPluginBackend(domain: string, orgId?: string): PluginSDK {
         electronAPI.plugin.identitySign(payload, pluginDomain),
       verify: (payload: string, signature: string, publicKey: string) =>
         electronAPI.plugin.identityVerify(payload, signature, publicKey)
+    },
+    // 通讯录只读门面（social-feed §9.4 contact:read；权限由桥 dispatcher 强制）
+    contacts: {
+      listFriends: () => electronAPI.contacts.listFriends(),
+      listGroups: () => electronAPI.contacts.listGroups(),
+      listTags: () => electronAPI.contacts.listTags()
+    },
+    // 社交投递（social-feed §9.1 sdk.feed；deliver 权限由桥 dispatcher 强制，
+    // onReceive/pull 接收侧免权限）。pluginId 由本后端按域注入（不信插件自报）。
+    feed: {
+      deliver: (input) =>
+        electronAPI.feed.deliver(
+          boundPluginId,
+          input.topic,
+          input.payload,
+          input.recipients,
+          input.replyTo,
+          input.feedId
+        ),
+      pull: (input) =>
+        electronAPI.feed.pull(boundPluginId, input.topic, input.cursor, input.limit),
+      // 在线推送 onReceive 经桥事件通道（PluginIframeHost → bridge event）实现；
+      // 本后端（宿主内嵌 QuickJS 等直连接口）无该通路，以 no-op 满足契约
+      // （同 data.onChange 口径）
+      onReceive: async () => {}
     },
     sys: electronAPI.sys
       ? {

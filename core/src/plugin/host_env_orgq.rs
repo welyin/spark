@@ -342,6 +342,8 @@ mod tests {
             collection_configs: std::sync::Arc::new(std::sync::Mutex::new(Default::default())),
             pending_queries: std::sync::Arc::new(std::sync::Mutex::new(Default::default())),
             filter_caps: std::sync::Arc::new(std::sync::Mutex::new(Default::default())),
+            feed_limiter: std::sync::Arc::new(std::sync::Mutex::new(Default::default())),
+            app_msg_limiter: std::sync::Arc::new(std::sync::Mutex::new(Default::default())),
             runtime: tokio::runtime::Handle::current(),
         }
     }

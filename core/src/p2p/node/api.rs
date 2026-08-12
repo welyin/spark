@@ -95,9 +95,16 @@ pub(super) enum Command {
         tx: oneshot::Sender<Result<()>>,
     },
     /// 壳层检测到网络变化（WiFi↔蜂窝切换等）通知内核（peer-rediscovery §4.1.3）。
-    /// 无结果回传——内核异步处理：启动 3–5s debounce，到期后若监听地址确已
-    /// 变化则重发布 announce + DHT 记录、重建 relay 预约、主动重拨优先类目 peer。
+    /// 无结果回传——武装一次性防抖定时器，到点回发 NetworkChangeFired 统一
+    /// 判定与执行（M9：不再借 keepalive tick 当到期检查器，tick 内零拨号是
+    /// 结构保证）。
     NetworkChanged,
+    /// 防抖定时器到点回发：对比基线与当前网络快照，确实变化才执行重发布 +
+    /// relay 预约重建 + 优先 peer 重拨 + 孤岛自举。
+    NetworkChangeFired {
+        /// 武装时的网络快照基线
+        base: Vec<String>,
+    },
     Tick {
         tx: oneshot::Sender<KeepaliveStats>,
     },

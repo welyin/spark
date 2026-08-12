@@ -62,7 +62,7 @@ fn ensure_inbound_conversation<S: StorageBackend>(
             existing.peer = Some(PeerRef {
                 peer_id: ctx.remote_peer_id.to_string(),
                 addresses: Vec::new(),
-            });
+            ..Default::default()});
             MessageService::upsert_conversation(storage, space, &existing)?;
         }
         return Ok(existing);
@@ -75,7 +75,7 @@ fn ensure_inbound_conversation<S: StorageBackend>(
         peer: Some(PeerRef {
             peer_id: ctx.remote_peer_id.to_string(),
             addresses: Vec::new(),
-        }),
+        ..Default::default()}),
         unread_count: 0,
         pinned_at: 0,
         muted: false,
@@ -164,7 +164,7 @@ pub(super) fn handle_chat<S: StorageBackend>(
             Some(PeerRef {
                 peer_id: ctx.remote_peer_id.to_string(),
                 addresses: Vec::new(),
-            }),
+            ..Default::default()}),
             ctx.now_ms,
             ctx.node_id,
         )?;
@@ -248,7 +248,7 @@ pub(super) fn handle_chat<S: StorageBackend>(
 
     // online 判定与会话列表口径一致：conv.peer 缺失时回退朋友记录的 peerId
     let fallback_peer = ContactService::get_friend(storage, from)?
-        .and_then(|f| f.peer)
+        .and_then(|f| f.peers.into_iter().find(|p| !p.peer_id.is_empty()))
         .map(|p| p.peer_id);
     println!(
         "[KERNEL] handle_chat -> ChatReceived | msgId={} convId={} space={}",

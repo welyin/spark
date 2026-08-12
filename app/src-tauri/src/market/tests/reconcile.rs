@@ -20,6 +20,7 @@ fn reconcile_marks_verified_bundle_installed() {
             "storage:write",
             "org:read",
             "proof:verify",
+            "identity:verify",
             "org:sync",
             "message:app",
             "identity:sign"
@@ -144,6 +145,7 @@ fn backfill_fills_missing_granted_permissions() {
             "storage:write",
             "org:read",
             "proof:verify",
+            "identity:verify",
             "org:sync",
             "message:app",
             "identity:sign"

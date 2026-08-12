@@ -28,6 +28,9 @@ use spark_core::p2p::P2pEvent;
 use spark_core::p2p::node::system_now_ms;
 use spark_core::storage::MemoryStorage;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as B64;
+
 use common::*;
 
 const PERSONAL: &str = "personal";
@@ -86,7 +89,7 @@ fn friend_record(root_id: &str, blocked: bool) -> FriendRecord {
         signature: String::new(),
         gender: None,
         added_at: NOW,
-        peer: None,
+        peers: Vec::new(),
         remark: String::new(),
         phones: Vec::new(),
         tag_ids: Vec::new(),
@@ -150,6 +153,135 @@ fn send_text_without_p2p_fails_and_persists() {
     let storage = kernel.__test_storage().unwrap();
     let stored = MessageService::get_messages(&storage, PERSONAL, &conv.id).unwrap();
     assert_eq!(stored[0].status.as_deref(), Some("failed"));
+}
+
+#[test]
+fn send_to_blocked_recipient_fails_and_does_not_deliver() {
+    // S5 出站拉黑：已拉黑对端发送**不投递**，消息落库 failed + 透传「你已拉黑
+    // 对方」；重发同口径。豁免：个人空间未拉黑好友照常走投递（返回 sending 态，
+    // 不被误拦）。
+    let dir = tempfile::tempdir().unwrap();
+    let mut kernel = fresh_kernel(dir.path());
+    init_identity(&mut kernel);
+    kernel.stop_p2p().unwrap();
+    let (_, peer) = peer_root(7);
+    let conv = kernel.message_ensure_direct(PERSONAL, &peer, "对方").unwrap();
+
+    // 拉黑后发送：落库 failed，命令返回「你已拉黑对方」
+    let mut storage = kernel.__test_storage().unwrap();
+    ContactService::set_blocked(&mut storage, PERSONAL, &peer, true, NOW, NODE).unwrap();
+    drop(storage);
+    let err = kernel
+        .message_send_text(PERSONAL, &conv.id, "msg-blocked", "你好", None, None)
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "你已拉黑对方，无法发送消息",
+        "拉黑文案透传到壳层供 UI 提示"
+    );
+    let messages = kernel.message_list_messages(PERSONAL, &conv.id).unwrap();
+    assert_eq!(messages.len(), 1, "被拉黑消息仍落库（前端可见失败状态）");
+    assert_eq!(
+        messages[0].status.as_deref(),
+        Some("failed"),
+        "被拉黑消息如实置 failed"
+    );
+
+    // 重发到已拉黑对端：同样不投递、置 failed、透传文案
+    let err = kernel
+        .message_resend(PERSONAL, &conv.id, "msg-blocked")
+        .unwrap_err();
+    assert_eq!(err.to_string(), "你已拉黑对方，无法发送消息");
+    let messages = kernel.message_list_messages(PERSONAL, &conv.id).unwrap();
+    assert_eq!(messages[0].status.as_deref(), Some("failed"), "重发后仍 failed");
+
+    // 豁免：个人空间未拉黑好友照常投递（命令返回 sending，不被拉黑误拦）
+    let (_, peer_ok) = peer_root(8);
+    let conv_ok = kernel.message_ensure_direct(PERSONAL, &peer_ok, "好友").unwrap();
+    let view = kernel
+        .message_send_text(PERSONAL, &conv_ok.id, "msg-ok", "hi", None, None)
+        .unwrap();
+    assert_eq!(
+        view.status.as_deref(),
+        Some("failed"),
+        "未拉黑好友无 p2p 落库 failed（不走到拉黑分支）"
+    );
+
+    // 豁免：组织空间 direct 人际会话不被拉黑拦截（拉黑是个人空间语义，组织
+    // 会话跳过）
+    let org = OrganizationService::create_organization(
+        &mut kernel.__test_storage().unwrap(),
+        &CreateOrganizationInput {
+            name: "测试组织".to_string(),
+            description: None,
+            base_plugin_domain: None,
+            avatar: None,
+        },
+        &kernel.current_root_id().unwrap().unwrap(),
+        NOW,
+    )
+    .unwrap();
+    let org_space = format!("org:{}", org.org_id);
+    // 在组织空间内注入一个 direct 会话（对端为该好友，已被拉黑）
+    let mut storage = kernel.__test_storage().unwrap();
+    let org_conv = make_conversation(&direct_conversation_id(&peer), &peer);
+    MessageService::upsert_conversation(&mut storage, &org_space, &org_conv).unwrap();
+    drop(storage);
+    let view = kernel
+        .message_send_text(&org_space, &org_conv.id, "msg-org", "组织消息", None, None)
+        .unwrap();
+    assert_eq!(
+        view.status.as_deref(),
+        Some("failed"),
+        "组织空间 direct 会话跳过拉黑检查（无 p2p 落库 failed）"
+    );
+}
+
+/// B1：存量好友（无对端 root 公钥记录）首发 chat——E2E 加密失败（NoSessionKey）
+/// → 消息置 failed + 用户可懂文案「加密会话尚未建立，请稍后重发」，不卡 sending。
+/// 等首次互连（profile-sync 交换）后重发。
+#[test]
+fn send_to_friend_without_peer_root_pub_marks_failed_with_friendly_copy() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut kernel = fresh_kernel(dir.path());
+    init_identity(&mut kernel);
+    // p2p 运行中（fresh_kernel 默认启动，不 stop_p2p）→ 走到 E2E 加密分支
+    let (_, peer) = peer_root(9);
+    let conv = kernel.message_ensure_direct(PERSONAL, &peer, "对方").unwrap();
+    // 建朋友 + 可寻址 peer（resolve_conv_peer 返回 Some，走到 E2E 分支）
+    let mut storage = kernel.__test_storage().unwrap();
+    ContactService::upsert_friend(
+        &mut storage,
+        &FriendRecord {
+            root_id: peer.clone(),
+            permission: "open".to_string(),
+            peers: vec![spark_core::contact::PeerRef {
+                peer_id: "peer-1".to_string(),
+                addresses: vec![],
+            ..Default::default()}],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    drop(storage);
+
+    let err = kernel
+        .message_send_text(PERSONAL, &conv.id, "msg-e2e", "你好", None, None)
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "加密会话尚未建立，请稍后重发",
+        "无对端 root 公钥 E2E 加密失败 → 用户可懂文案"
+    );
+    // 消息如实落 failed（不卡 sending）
+    let messages = kernel.message_list_messages(PERSONAL, &conv.id).unwrap();
+    assert_eq!(messages.len(), 1, "失败消息仍落库");
+    assert_eq!(messages[0].id, "msg-e2e");
+    assert_eq!(
+        messages[0].status.as_deref(),
+        Some("failed"),
+        "E2E 加密失败消息置 failed，而非滞留 sending"
+    );
 }
 
 #[test]
@@ -464,7 +596,7 @@ fn inbound_friend_accept_builds_friend() {
 
     let friend = ContactService::get_friend(&s, &from).unwrap().expect("朋友已建");
     assert_eq!(friend.nickname, "对方昵称");
-    assert_eq!(friend.peer.as_ref().unwrap().peer_id, "peer-a");
+    assert_eq!(friend.peers[0].peer_id, "peer-a");
 }
 
 #[test]
@@ -962,7 +1094,7 @@ fn inbound_friend_request_from_self_auto_accept() {
         .unwrap()
         .expect("设备记录已建");
     assert_eq!(device.nickname, "设备B");
-    assert_eq!(device.peer.as_ref().unwrap().peer_id, "12D3KooWDevBTestNode11111111111111111111111111111");
+    assert_eq!(device.peers[0].peer_id, "12D3KooWDevBTestNode11111111111111111111111111111");
     let overview = ContactService::overview(&s, PERSONAL).unwrap();
     assert!(overview.requests.is_empty(), "设备配对不产生申请记录");
 
@@ -1070,25 +1202,30 @@ fn send_falls_back_to_friend_addresses_when_conv_peer_empty() {
     let dir = tempfile::tempdir().unwrap();
     let mut kernel = fresh_kernel(dir.path());
     init_identity(&mut kernel);
-    let (_, peer) = peer_root(7);
+    let (peer_key, peer) = peer_root(7);
     let conv = kernel.message_ensure_direct(PERSONAL, &peer, "对方").unwrap();
     // 模拟入站建的会话：peer 只有 peerId 无地址
     let mut storage = kernel.__test_storage().unwrap();
+    // E2E 出站（个人空间 direct 人际会话）需对端 root 公钥在密钥表
+    // `peerRootPub`（入站验签时积累；此处直接记录朋友 root 公钥模拟已交换）
+    let peer_pub_b64 = B64.encode(peer_key.verifying_key().to_bytes());
+    spark_core::dm_e2e::record_inbound_peer_root_pub(&mut storage, &peer, &peer_pub_b64, NODE, NOW)
+        .unwrap();
     let mut stored = MessageService::get_conversation(&storage, PERSONAL, &conv.id)
         .unwrap()
         .unwrap();
     stored.peer = Some(spark_core::message::PeerRef {
         peer_id: "peer-x".to_string(),
         addresses: vec![],
-    });
+    ..Default::default()});
     MessageService::upsert_conversation(&mut storage, PERSONAL, &stored).unwrap();
 
     // 朋友记录带地址：回退命中 → 投递 spawn，命令立即返回 sending
     let mut f = friend_record(&peer, false);
-    f.peer = Some(spark_core::message::PeerRef {
+    f.peers = vec![spark_core::message::PeerRef {
         peer_id: "peer-y".to_string(),
         addresses: vec!["/ip4/127.0.0.1/tcp/19999".to_string()],
-    });
+    ..Default::default()}];
     ContactService::upsert_friend(&mut storage, &f).unwrap();
     let view = kernel
         .message_send_text(PERSONAL, &conv.id, "msg-f2", "hi", None, None)
@@ -1102,7 +1239,7 @@ fn send_falls_back_to_friend_addresses_when_conv_peer_empty() {
     // 会话 peer 与朋友记录都无地址：同步判 failed
     stored.peer = None;
     MessageService::upsert_conversation(&mut storage, PERSONAL, &stored).unwrap();
-    f.peer = None;
+    f.peers = Vec::new();
     ContactService::upsert_friend(&mut storage, &f).unwrap();
     let view = kernel
         .message_send_text(PERSONAL, &conv.id, "msg-f1", "hi", None, None)
@@ -1328,7 +1465,7 @@ fn inbound_friend_accept_merges_existing_friend() {
 
     let friend = ContactService::get_friend(&s, &from).unwrap().unwrap();
     assert_eq!(friend.nickname, "新昵称", "非空 nickname 刷新");
-    assert_eq!(friend.peer.as_ref().unwrap().peer_id, "peer-a", "Some peer 刷新");
+    assert_eq!(friend.peers[0].peer_id, "peer-a", "Some peer 刷新");
     assert_eq!(friend.remark, "旧备注", "本地资料保留");
     assert_eq!(friend.tag_ids, vec!["tag-1".to_string()], "标签保留");
     assert_eq!(friend.group_id, "group-1", "分组保留");
@@ -1744,10 +1881,10 @@ fn inbound_profile_sync_empty_nickname_and_invalid_avatar_ignored() {
 /// 自设备 FriendRecord（rootId==自己，peer 为对端设备寻址）。
 fn self_device_record(my_root: &str, peer_id: &str) -> FriendRecord {
     let mut f = friend_record(my_root, false);
-    f.peer = Some(spark_core::message::PeerRef {
+    f.peers = vec![spark_core::message::PeerRef {
         peer_id: peer_id.to_string(),
         addresses: vec!["/ip4/127.0.0.1/tcp/4001".to_string()],
-    });
+    ..Default::default()}];
     f
 }
 
@@ -1920,10 +2057,10 @@ fn inbound_chat_backfilled_conv_peer_takes_precedence_for_online_flag() {
     let my_root = "aa".repeat(32);
     let (key, from) = peer_root(7);
     let mut friend = friend_record(&from, false);
-    friend.peer = Some(spark_core::message::PeerRef {
+    friend.peers = vec![spark_core::message::PeerRef {
         peer_id: "peer-friend".to_string(),
         addresses: Vec::new(),
-    });
+    ..Default::default()}];
     ContactService::upsert_friend(&mut s, &friend).unwrap();
     // 预建无 peer 的 direct 会话（模拟 message_ensure_direct 先建）
     MessageService::upsert_conversation(&mut s, PERSONAL, &make_conversation(&direct_conversation_id(&from), &from)).unwrap();

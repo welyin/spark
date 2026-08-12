@@ -206,6 +206,7 @@ pub(super) fn handle_pdsync_hello<S: StorageBackend>(
         orgsync_out: Vec::new(),
         profile_applied: false,
         orgkey_unbox: None,
+        feed_blob_out: None,
     })
 }
 
@@ -288,6 +289,7 @@ pub(super) fn handle_pdsync_need<S: StorageBackend>(
         orgsync_out: Vec::new(),
         profile_applied: false,
         orgkey_unbox: None,
+        feed_blob_out: None,
     })
 }
 
@@ -698,7 +700,7 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
         let fallback_peer = ContactService::get_friend(storage, &conv.peer_root_id)
             .ok()
             .flatten()
-            .and_then(|f| f.peer)
+            .and_then(|f| f.peers.into_iter().find(|p| !p.peer_id.is_empty()))
             .map(|p| p.peer_id);
         events.push(P2pEvent::ChatReceived(json!({
             "spaceKey": "personal",
@@ -822,6 +824,7 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
         // host 用 profile_applied 决定是否回写身份文件资料
         profile_applied,
         orgkey_unbox: None,
+        feed_blob_out: None,
     })
 }
 

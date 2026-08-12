@@ -345,7 +345,7 @@ mod tests {
             signature: String::new(),
             gender: None,
             added_at: NOW,
-            peer: None,
+            peers: Vec::new(),
             remark: String::new(),
             phones: Vec::new(),
             tag_ids: Vec::new(),

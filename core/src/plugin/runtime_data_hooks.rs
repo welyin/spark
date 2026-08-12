@@ -28,6 +28,10 @@ pub(crate) const PRELUDE: &str = r#"
     var writeFilters = {};
     // sys.fetchStream 逐块回调表：callId → onChunk（发起时登记，done 时清除）
     var streamChunks = {};
+    // spark.feed.onReceive 订阅：topic 前缀 + 处理器（一插件一订阅；收到的
+    // feed-received 事件按 topic.startsWith 前缀过滤派发，架构 §8）
+    var feedReceiveTopic = null;
+    var feedReceiveHandler = null;
 
     function call(capability, payload) {
         var result = JSON.parse(__spark_host_call(capability, JSON.stringify(payload)));
@@ -252,6 +256,68 @@ pub(crate) const PRELUDE: &str = r#"
                 if (typeof onChunk === 'function') streamChunks[callId] = onChunk;
                 return promise;
             }
+        },
+        // 社交定向投递（social-feed §9.1 spark.feed，与 iframe 侧 sdk.feed 同构）。
+        // deliver 权限（feed:deliver）+ 出站 topic 前缀校验 + 调用级限流在内核
+        // capability 层强制；onReceive/pull 接收侧免权限。onReceive 经事件派发
+        // （FeedReceived → kind='feed-received'）按订阅 topic 前缀过滤（架构 §8）。
+        feed: {
+            deliver: function (input) {
+                input = input || {};
+                return call('feed.deliver', {
+                    topic: input.topic,
+                    payload: input.payload,
+                    recipients: input.recipients || [],
+                    replyTo: input.replyTo || null,
+                    feedId: input.feedId || null
+                });
+            },
+            pull: function (input) {
+                input = input || {};
+                return call('feed.pull', {
+                    topic: input.topic,
+                    cursor: input.cursor || null,
+                    limit: input.limit || null
+                });
+            },
+            onReceive: function (topic, handler) {
+                feedReceiveTopic = topic;
+                feedReceiveHandler = typeof handler === 'function' ? handler : null;
+            }
+        },
+        // 身份能力：verify 纯验签（基础权限 identity:verify，免使用时询问）；
+        // sign 域身份签名（高级权限 identity:sign，使用时询问）。域缺省 = 插件
+        // 根域 `plugin:{pluginId}`（与 iframe 侧 sdk.identity.sign 同构；后台
+        // 无绑定视图域，故取插件根域）。
+        identity: {
+            verify: function (input) {
+                input = input || {};
+                var result = call('identity.verify', {
+                    payload: input.payload,
+                    sig: input.sig,
+                    pubKey: input.pubKey
+                });
+                return !!result.valid;
+            },
+            sign: function (payload, domain) {
+                var result = call('identity.sign', {
+                    payload: String(payload),
+                    domain: domain || null
+                });
+                return result;
+            }
+        },
+        // 应用会话写（互动通知，p2p-messages.md §20）：summary 纯文本摘要必填，
+        // card 可选（{viewId, data}）。会话 `app:{pluginId}` 由运行时绑定派生，
+        // 不信 JS 自报。权限 message:app（高级 + 内核限流 10 条/60s）。
+        messages: {
+            sendAppMessage: function (input) {
+                input = input || {};
+                call('messages.sendAppMessage', {
+                    summary: String(input.summary),
+                    card: input.card || null
+                });
+            }
         }
     };
 
@@ -278,6 +344,17 @@ pub(crate) const PRELUDE: &str = r#"
             var onChunk = streamChunks[payload.callId];
             if (typeof onChunk === 'function') onChunk(payload.chunk);
             if (payload.chunk && payload.chunk.done) delete streamChunks[payload.callId];
+            return;
+        }
+        // spark.feed.onReceive：按订阅 topic 前缀过滤后派发（架构 §8「topic 前缀
+        // 即插件归属」；一插件一订阅，未订阅则丢弃）
+        if (kind === 'feed-received') {
+            if (typeof feedReceiveHandler === 'function'
+                && typeof payload.topic === 'string'
+                && feedReceiveTopic !== null
+                && payload.topic.startsWith(feedReceiveTopic)) {
+                feedReceiveHandler(payload);
+            }
             return;
         }
         var fn = handlers[kind];

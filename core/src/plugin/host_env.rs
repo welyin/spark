@@ -66,6 +66,15 @@ pub(crate) struct PluginHostShared {
     /// 调 `data.onReadFilter`/`data.onWriteFilter` 时更新——数据账号侧 orgq-req
     /// 的 host 钩子据此判定该集合能否服务（插件未运行即无条目 → fail-closed）。
     pub(crate) filter_caps: Arc<Mutex<HashMap<String, String>>>,
+    /// feed.deliver 调用级限流器（内核单点，social-feed §9.3）：每 (space,
+    /// pluginId) 60s 内 10 次。Kernel 门面（iframe 桥经命令层）与 QuickJS 后台
+    /// capability 共享同一实例——桥侧不重复做限流。Arc<Mutex> 因本格经
+    /// `&self` 访问（与既有 filter_caps 同构）。
+    pub(crate) feed_limiter: Arc<Mutex<crate::kernel::FeedDeliverRateLimiter>>,
+    /// 应用消息限流器（内核单点，p2p-messages.md §20.5）：每 (space, pluginId)
+    /// 60s 内 10 条。`messages.sendAppMessage` 后台 capability 与 Kernel 门面
+    /// `message_app_send` 共享同一实例——桥侧不重复做限流。
+    pub(crate) app_msg_limiter: Arc<Mutex<crate::message::AppMessageRateLimiter>>,
     /// kernel tokio runtime 句柄（投递任务 spawn 目标）。
     pub(crate) runtime: tokio::runtime::Handle,
 }
@@ -187,6 +196,20 @@ impl PluginHostShared {
             "message.replyStreamEnd" => self.reply_stream_end(plugin_id, &payload),
             // 宿主查询应答回流（plugin_host_query 的另一半）
             "query.respond" => self.query_respond(&payload),
+            // 社交定向投递（social-feed §9.1 spark.feed）：deliver 权限在
+            // capability_permission 强制（feed:deliver）+ 出站 topic 前缀校验；
+            // pull 接收侧免权限。插件身份用运行时绑定 plugin_id，不信 JS 自报。
+            "feed.deliver" => self.feed_deliver(plugin_id, &payload),
+            "feed.pull" => self.feed_pull(plugin_id, &payload),
+            // 身份验签（纯函数，免状态）与域身份签名（identity:sign 高级权限
+            // 使用时询问——对齐桥 dispatcher 口径）。sign 域缺省 = 插件根域
+            // `plugin:{pluginId}`，不信 JS 自报（防越权签其它域）。
+            "identity.verify" => self.identity_verify(plugin_id, &payload),
+            "identity.sign" => self.identity_sign(plugin_id, &payload),
+            // 互动通知写应用会话（§20）：`app:{pluginId}` 会话由运行时绑定
+            // plugin_id 确定性派生，不信 JS 自报（归属不变量 §20.4）；限流在
+            // 共享的 app_msg_limiter 内强制（与 Kernel 门面同实例）。
+            "messages.sendAppMessage" => self.messages_send_app_message(plugin_id, &payload),
             other => Err(PluginError::InvalidCall(format!(
                 "unknown capability: {other}"
             ))),
@@ -331,13 +354,45 @@ fn capability_permission(capability: &str) -> Option<&'static str> {
         "message.replyStreamStart" | "message.replyStreamChunk" | "message.replyStreamEnd" => {
             Some("message:app")
         }
+        // 社交定向投递（social-feed §9.3）：deliver 需 feed:deliver（高级 + 内核
+        // 限流）；pull 接收侧免权限——不在本表即放行。
+        "feed.deliver" => Some("feed:deliver"),
+        // 身份验签（基础权限 identity:verify，免使用时询问——对齐桥 dispatcher
+        // 的 message-card 视图白名单口径）；域身份签名 identity:sign 高级 + 使用时
+        // 询问（对齐桥 CALL_PERMISSIONS）。
+        "identity.verify" => Some("identity:verify"),
+        "identity.sign" => Some("identity:sign"),
+        // 互动通知写应用会话（高级 + 内核限流，§20.5）。
+        "messages.sendAppMessage" => Some("message:app"),
         _ => None,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::capability_permission;
+    use std::sync::Arc;
+    use std::sync::Mutex;
+
+    use super::*;
+
+    /// 最小宿主面：无存储（权限前置拒绝在 dispatch 权限过滤即拦，不触存储）。
+    fn bare_host() -> PluginHostShared {
+        PluginHostShared {
+            storage: Arc::new(Mutex::new(None)),
+            io_lock: Arc::new(Mutex::new(())),
+            event_tx: tokio::sync::broadcast::channel(16).0,
+            my_root_id: Arc::new(Mutex::new(None)),
+            p2p_node: Arc::new(Mutex::new(None)),
+            signing_key: Arc::new(Mutex::new(None)),
+            seed_shared: Arc::new(Mutex::new(None)),
+            collection_configs: Arc::new(Mutex::new(Default::default())),
+            pending_queries: Arc::new(Mutex::new(Default::default())),
+            filter_caps: Arc::new(Mutex::new(Default::default())),
+            feed_limiter: Arc::new(Mutex::new(Default::default())),
+            app_msg_limiter: Arc::new(Mutex::new(Default::default())),
+            runtime: tokio::runtime::Handle::current(),
+        }
+    }
 
     /// R2：encrypted 授权名单三方法已纳入权限映射（storage:write）——
     /// 零权限插件（无 storage:write）调用 grantAccess 等将因
@@ -358,6 +413,58 @@ mod tests {
             let required = capability_permission(cap).expect("映射存在");
             assert_eq!(required, "storage:write");
         }
+    }
+
+    /// S9：feed.deliver 归入 feed:deliver 权限；feed.pull 接收侧免权限（不在
+    /// 表内放行）。与桥 dispatcher 的 CALL_PERMISSIONS 逐字对齐（social-feed §9.3）。
+    #[test]
+    fn feed_deliver_requires_feed_deliver_pull_exempt() {
+        assert_eq!(capability_permission("feed.deliver"), Some("feed:deliver"));
+        assert_eq!(
+            capability_permission("feed.pull"),
+            None,
+            "pull 接收侧免权限——不在表内即放行"
+        );
+    }
+
+    /// S9 补：identity.verify 归入基础权限 identity:verify；identity.sign 归入
+    /// 高级 identity:sign；messages.sendAppMessage 归入 message:app（高级 + 内核
+    /// 限流）。与桥 dispatcher 的 CALL_PERMISSIONS / 基础权限口径逐字对齐。
+    #[tokio::test]
+    async fn identity_and_app_message_permission_mapping() {
+        assert_eq!(
+            capability_permission("identity.verify"),
+            Some("identity:verify"),
+            "verify 归入基础权限 identity:verify（免使用时询问）"
+        );
+        assert_eq!(
+            capability_permission("identity.sign"),
+            Some("identity:sign"),
+            "sign 归入高级权限 identity:sign（使用时询问）"
+        );
+        assert_eq!(
+            capability_permission("messages.sendAppMessage"),
+            Some("message:app"),
+            "sendAppMessage 归入 message:app（高级 + 限流）"
+        );
+        // 零权限（空 permissions）→ 前置强制拒绝（dispatch 的权限过滤在 call()
+        // 前置；此处验映射存在且未授权即拒）。
+        let rtx = PluginRuntimeContext {
+            plugin_id: "test".to_string(),
+            event_tx: std::sync::mpsc::channel().0,
+            permissions: Vec::new(),
+        };
+        let host = bare_host();
+        let err = host.call(&rtx, "identity.sign", r#"{"payload":"p"}"#);
+        assert!(
+            err.contains("identity:sign") && err.contains("not granted"),
+            "未授权 identity:sign 应拒绝：{err}"
+        );
+        let err = host.call(&rtx, "messages.sendAppMessage", r#"{"summary":"x"}"#);
+        assert!(
+            err.contains("message:app") && err.contains("not granted"),
+            "未授权 message:app 应拒绝：{err}"
+        );
     }
 }
 
@@ -871,6 +978,11 @@ impl PluginHostShared {
     /// blob 读取：命中 → `{status:"ready", data(base64)}`；未命中 → 置 want
     /// 标记（lazy 拉取意图，pdsync hello 调和时向在线自设备拉取）并回
     /// `{status:"pending"}`——调用方稍后重读（前端建议轮询/重试）。
+    ///
+    /// **B3 feed-blob 请求方发起链路**：未命中时若该 hash 有 feed 来源登记
+    /// （`feed::blob_source` → fromRootId），向来源 rootId 发首块 `feed-blob-req`
+    /// （offset 0，经 `blob::throttle_request` 节流）；无来源登记维持现状
+    /// （pdsync 自设备拉取）。
     fn data_read_blob(&self, _plugin_id: &str, payload: &Value) -> Result<Value> {
         let hash = required_str(payload, "hash")?;
         let _io = self.io_lock.lock().unwrap_or_else(|e| e.into_inner());
@@ -880,9 +992,65 @@ impl PluginHostShared {
         {
             return Ok(serde_json::json!({ "status": "ready", "data": data }));
         }
+        // B3：查 feed 来源登记 → 有则出站首块 feed-blob-req（经节流）
+        let now = system_now_ms();
+        let from_source = crate::kernel::blob_source(&storage, hash, now)
+            .map_err(|e| PluginError::InvalidCall(e.to_string()))?;
+        if let Some(from_root_id) = from_source {
+            self.request_feed_blob(&mut storage, hash, &from_root_id);
+        }
         crate::plugindata::blob::mark_want(&mut storage, hash)
             .map_err(|e| PluginError::InvalidCall(e.to_string()))?;
         Ok(serde_json::json!({ "status": "pending" }))
+    }
+
+    /// B3：向 feed 来源 rootId 出站首块 `feed-blob-req`（offset 0，跨联系人
+    /// 分块传输通道）。经 `blob::throttle_request` 逐 hash 节流（服务方同口径），
+    /// 命中节流跳过；无寻址对端/未解锁等静默跳过（由 pdsync want 兜底）。
+    /// spawn 到内核 runtime 投递，失败静默（请求方由 `feed-blob-resp` 续拉/
+    /// 下轮调和重试）。
+    fn request_feed_blob(
+        &self,
+        storage: &mut crate::kernel::KernelStorage,
+        hash: &str,
+        from_root_id: &str,
+    ) {
+        use crate::kernel::dm_envelope::{KIND_FEED_BLOB_REQ, build_envelope};
+        // 逐 hash 节流（§19.6）：距上次请求不足 BLOB_REQ_THROTTLE_MS 跳过
+        let now = system_now_ms();
+        if !crate::plugindata::blob::throttle_request(storage, hash, now)
+            .unwrap_or(false)
+        {
+            return;
+        }
+        // 解析来源 rootId 的对端（friend 记录择优；无可寻址端点跳过）
+        let Some(peer) = crate::kernel::resolve_feed_recipient_peer_shared(storage, from_root_id)
+            .ok()
+            .flatten()
+        else {
+            return;
+        };
+        // 本机 rootId + 签名私钥
+        let (Some(my_root_id), Some(signing_key)) = (
+            self.my_root_id.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+            self.signing_key.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+        ) else {
+            return;
+        };
+        let Some(node) = self.p2p_node.lock().unwrap_or_else(|e| e.into_inner()).clone() else {
+            return;
+        };
+        let envelope = build_envelope(
+            KIND_FEED_BLOB_REQ,
+            &my_root_id,
+            from_root_id,
+            now,
+            serde_json::json!({ "hash": hash, "offset": 0 }),
+            &signing_key,
+        );
+        self.runtime.spawn(async move {
+            let _ = node.dm_direct(&peer, envelope).await;
+        });
     }
 
     /// 查询参数载荷（camelCase，对齐壳层 QueryOptionsDto）。
@@ -1190,6 +1358,169 @@ impl PluginHostShared {
             let _ = sender.send(result);
         }
         Ok(Value::Null)
+    }
+}
+
+// ------------------------------------------------------------------
+// 社交定向投递能力（spark.feed.*，social-feed §9.1；QuickJS 后台侧）
+// ------------------------------------------------------------------
+
+impl PluginHostShared {
+    /// `feed.deliver` 能力：社交定向投递。载荷 camelCase，与 iframe 侧
+    /// `sdk.feed.deliver` 同构。插件身份用运行时绑定 `plugin_id`（不信 JS
+    /// 自报）；出站 topic 前缀校验（== 插件 id，架构 §8）与内核限流（§9.3，
+    /// 与 Kernel 门面共享同一实例）在能力内完成。
+    fn feed_deliver(&self, plugin_id: &str, payload: &Value) -> Result<Value> {
+        let topic = required_str(payload, "topic")?;
+        // 出站 topic 前缀 == 插件 id（架构 §8「topic 前缀即插件归属」，与桥
+        // dispatcher 同口径）
+        let prefix = topic.split(':').next().unwrap_or(topic);
+        if prefix != plugin_id {
+            return Err(PluginError::InvalidCall(format!(
+                "InvalidTopic: topic prefix \"{prefix}\" does not match plugin \"{plugin_id}\""
+            )));
+        }
+        let feed_id = payload
+            .get("feedId")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(crate::kernel::generate_feed_id_for_plugin);
+        let input_payload = payload.get("payload").cloned().unwrap_or(Value::Null);
+        let recipients: Vec<String> = payload
+            .get("recipients")
+            .and_then(Value::as_array)
+            .map(|items| items.iter().filter_map(Value::as_str).map(String::from).collect())
+            .unwrap_or_default();
+        let reply_to = payload.get("replyTo").and_then(Value::as_str);
+        let result = crate::kernel::feed_deliver_shared(
+            self,
+            plugin_id,
+            topic,
+            &feed_id,
+            &input_payload,
+            &recipients,
+            reply_to,
+        )?;
+        serde_json::to_value(&result).map_err(Into::into)
+    }
+
+    /// `feed.pull` 能力：收件箱游标补读（接收侧免权限）。topic 前缀须 ==
+    /// 本插件 id（架构 §8 前缀即归属，防插件补读他人收件箱域），cursor/limit
+    /// 分页由内核 `feed_pull_shared` 完成。
+    fn feed_pull(&self, plugin_id: &str, payload: &Value) -> Result<Value> {
+        let topic = required_str(payload, "topic")?;
+        // 前缀 == 插件 id（与 deliver 同口径：收件箱键域按 pluginId 划分）
+        let prefix = topic.split(':').next().unwrap_or(topic);
+        if prefix != plugin_id {
+            return Err(PluginError::InvalidCall(format!(
+                "InvalidTopic: topic prefix \"{prefix}\" does not match plugin \"{plugin_id}\""
+            )));
+        }
+        let cursor = payload.get("cursor").and_then(Value::as_str);
+        let limit = payload
+            .get("limit")
+            .and_then(Value::as_u64)
+            .map(|n| n as usize)
+            .unwrap_or(20);
+        let result = crate::kernel::feed_pull_shared(self, topic, cursor, limit)?;
+        serde_json::to_value(&result).map_err(Into::into)
+    }
+}
+
+// ------------------------------------------------------------------
+// 身份能力（spark.identity.*）
+// ------------------------------------------------------------------
+
+impl PluginHostShared {
+    /// `identity.verify` 能力：ed25519 分离签名验签（纯函数，免内核状态）。
+    /// 载荷 `{payload, sig, pubKey}`（三者均字符串），验签口径与
+    /// `crate::identity::verify_ed25519_signature` 一致（payload 按 UTF-8 字节、
+    /// 签名 64B 与公钥 32B 为 base64；解码/长度失败一律 false，不报错）。返回
+    /// `{valid: bool}`——对齐 iframe 侧 `plugin-identity-verify` 的 VerifyResultDto。
+    fn identity_verify(&self, _plugin_id: &str, payload: &Value) -> Result<Value> {
+        let pl = required_str(payload, "payload")?;
+        let sig = required_str(payload, "sig")?;
+        let pub_key = required_str(payload, "pubKey")?;
+        let valid = crate::identity::verify_ed25519_signature(pl, sig, pub_key);
+        Ok(serde_json::json!({ "valid": valid }))
+    }
+
+    /// `identity.sign` 能力：以**域身份**私钥签名（`sign_with_domain_identity`
+    /// 口径，域密钥由根种子即时派生、不落盘）。域缺省 = 插件根域
+    /// `plugin:{pluginId}`（不信 JS 自报越权签其它域；对齐桥 dispatcher 按绑定
+    /// 身份注入域）。返回 `DomainSignatureInfo`（domain/domainId/publicKey/
+    /// signature/payloadHash，camelCase）。需解锁期种子（`seed_shared`），未解锁
+    /// 报 InvalidInput。
+    fn identity_sign(&self, plugin_id: &str, payload: &Value) -> Result<Value> {
+        let pl = required_str(payload, "payload")?;
+        // 域缺省 = 插件根域；显式指定的域必须 == 插件根域（防越权签他域）
+        let domain = payload
+            .get("domain")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let root_domain = format!("plugin:{plugin_id}");
+        let domain = if domain.is_empty() {
+            root_domain.as_str()
+        } else if domain == root_domain {
+            domain
+        } else {
+            return Err(PluginError::InvalidCall(format!(
+                "domain {domain:?} does not match plugin {plugin_id}"
+            )));
+        };
+        let seed = self
+            .seed_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .ok_or_else(|| PluginError::InvalidInput("identity locked".to_string()))?;
+        let result = crate::kernel::identity_sign_shared(&seed, domain, pl)?;
+        serde_json::to_value(&result).map_err(Into::into)
+    }
+}
+
+// ------------------------------------------------------------------
+// 消息能力（spark.messages.*）
+// ------------------------------------------------------------------
+
+impl PluginHostShared {
+    /// `messages.sendAppMessage` 能力：互动通知写应用会话（p2p-messages.md §20）。
+    /// 会话 `app:{pluginId}` 由运行时绑定 plugin_id 确定性派生，不信 JS 自报
+    /// （§20.4 归属不变量 2）。载荷 `{summary, card?}`：summary 为纯文本摘要
+    /// （必填，trim 后 ≤200 字符）；card 可选（{viewId, data}，内核只透传）。
+    /// 限流在共享 `app_msg_limiter` 内强制（与 Kernel 门面 `message_app_send`
+    /// 同实例，10 条/60s）。space 缺省 "personal"（插件后台无 org 会话写）。
+    fn messages_send_app_message(&self, plugin_id: &str, payload: &Value) -> Result<Value> {
+        let space = payload
+            .get("spaceKey")
+            .and_then(Value::as_str)
+            .unwrap_or("personal");
+        let summary = required_str(payload, "summary")?;
+        // 组装 payload：summary 为必填，其余插件自描述字段原样透传
+        let mut app_payload = payload.clone();
+        if let Value::Object(map) = &mut app_payload {
+            // spaceKey 是宿主注入的会话路由，不落入应用消息 payload
+            map.remove("spaceKey");
+            map.remove("card");
+        }
+        // card 可选：JS 侧 `card || null` 会显式传 null——null 视作无卡片
+        // （跳过反序列化，避免 `invalid type: null`）。
+        let card: Option<crate::message::AppMessageCard> = match payload.get("card") {
+            Some(Value::Null) | None => None,
+            Some(value) => Some(
+                serde_json::from_value(value.clone())
+                    .map_err(|e| PluginError::InvalidCall(format!("invalid card: {e}")))?,
+            ),
+        };
+        let view = crate::kernel::message_app_send_shared(
+            self,
+            space,
+            plugin_id,
+            summary,
+            app_payload,
+            card,
+        )?;
+        serde_json::to_value(&view).map_err(Into::into)
     }
 }
 

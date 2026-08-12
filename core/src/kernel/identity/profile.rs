@@ -398,3 +398,28 @@ impl Kernel {
         }))
     }
 }
+
+/// `identity.sign` 后台 capability 的共享实现（QuickJS 插件线程不持 `&mut
+/// Kernel`）：以域身份私钥做 ed25519 签名，与 [`Kernel::sign_with_domain_identity`]
+/// 同口径。域密钥由 BIP39 种子即时派生、仅存在于调用栈内（不持久化、不返回）。
+/// 种子来自宿主 `seed_shared` 共享格（解锁期填充，lock 时清除）。
+pub(crate) fn identity_sign_shared(
+    seed: &[u8; 64],
+    domain: &str,
+    payload: &str,
+) -> crate::plugin::Result<DomainSignatureInfo> {
+    if domain.trim().is_empty() {
+        return Err(crate::plugin::PluginError::InvalidInput(
+            "Domain is required".to_string(),
+        ));
+    }
+    let derived = crate::identity::derive_domain_identity(seed, domain);
+    let signature = derived.signing_key.sign(payload.as_bytes());
+    Ok(DomainSignatureInfo {
+        domain: domain.to_string(),
+        domain_id: derived.id(),
+        public_key: B64.encode(derived.public_key()),
+        signature: B64.encode(signature.to_bytes()),
+        payload_hash: crate::evidence::sha256_hex(payload),
+    })
+}

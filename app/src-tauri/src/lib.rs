@@ -60,6 +60,7 @@ fn spawn_p2p_event_forwarder(app: tauri::AppHandle, mut rx: tokio::sync::broadca
                 Ok(event) => {
                     let event_kind = match &event {
                         P2pEvent::ChatReceived(_) => "ChatReceived",
+                        P2pEvent::FeedReceived(_) => "FeedReceived",
                         P2pEvent::Warning(_) => "Warning",
                         P2pEvent::KeepaliveTick(_) => "KeepaliveTick",
                         P2pEvent::PeerExchangeCompleted { .. } => "PeerExchangeCompleted",
@@ -282,6 +283,13 @@ pub fn run() {
             commands::contact::contact_org_group_move,
             // Bot 联系人（插件 bot 虚拟联系人）
             commands::contact::contact_ensure_bot,
+            // 只读门面（社交投递层 contact:read，插件 SDK contacts 模块）
+            commands::contact::contact_list_friends,
+            commands::contact::contact_list_groups,
+            commands::contact::contact_list_tags,
+            // 社交定向投递（social-feed S7，sdk.feed 壳层薄壳）
+            commands::feed::plugin_feed_deliver,
+            commands::feed::plugin_feed_pull,
             // 消息
             commands::message::message_list_conversations,
             commands::message::message_list_messages,
@@ -321,6 +329,7 @@ pub fn run() {
             commands::p2p::p2p_clear_peer_records,
             commands::p2p::p2p_sync_peer_organizations,
             commands::p2p::p2p_list_peer_records,
+            commands::p2p::db_scan,
             commands::p2p::p2p_get_dht_mode,
             commands::p2p::p2p_set_dht_mode,
             commands::p2p::p2p_make_node_card,

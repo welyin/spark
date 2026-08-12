@@ -27,7 +27,7 @@ fn friend(root_id: &str, nickname: &str) -> FriendRecord {
         signature: String::new(),
         gender: None,
         added_at: NOW,
-        peer: None,
+        peers: Vec::new(),
         remark: String::new(),
         phones: Vec::new(),
         tag_ids: Vec::new(),
@@ -80,10 +80,10 @@ fn friend_crud_roundtrip() {
     let mut f = friend(&rid('a'), "阿强");
     f.signature = "越努力越幸运".to_string();
     f.gender = Some("male".to_string());
-    f.peer = Some(PeerRef {
+    f.peers = vec![PeerRef {
         peer_id: "peer-1".to_string(),
         addresses: vec!["/ip4/1.2.3.4/tcp/4001".to_string()],
-    });
+    ..Default::default()}];
     ContactService::upsert_friend(&mut s, &f).unwrap();
     assert_eq!(ContactService::get_friend(&s, &rid('a')).unwrap(), Some(f.clone()));
 

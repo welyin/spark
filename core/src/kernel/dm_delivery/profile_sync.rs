@@ -46,7 +46,10 @@ impl Kernel {
             .into_iter()
             .filter(|friend| friend.root_id != my_root_id) // 排除自记录
             .filter_map(|friend| {
-                let peer = friend.peer?;
+                let peers = friend.peers;
+                if peers.is_empty() {
+                    return None;
+                }
                 let body = serde_json::json!({
                     "nickname": nickname,
                     "avatar": avatar,
@@ -58,12 +61,21 @@ impl Kernel {
                 let envelope = self
                     .build_dm_envelope(KIND_PROFILE_SYNC, &friend.root_id, body)
                     .ok()?;
-                let target = PeerNodeInfo {
-                    peer_id: (!peer.peer_id.is_empty()).then_some(peer.peer_id),
-                    addresses: peer.addresses,
-                };
-                Some((target, envelope))
+                // 多设备寻址：向该好友的每台已知设备投递
+                Some(
+                    peers
+                        .into_iter()
+                        .map(|peer| {
+                            let target = PeerNodeInfo {
+                                peer_id: (!peer.peer_id.is_empty()).then_some(peer.peer_id),
+                                addresses: peer.addresses,
+                            };
+                            (target, envelope.clone())
+                        })
+                        .collect::<Vec<_>>(),
+                )
             })
+            .flatten()
             .collect();
         self.spawn_deliveries(deliveries);
     }
@@ -96,38 +108,38 @@ impl Kernel {
             "signature": signature,
             "updatedAt": updated_at,
         });
-        // 优先用自 FriendRecord 的 peer 单播（已配对设备最快路径）；
+        // 优先用自 FriendRecord 的 peers 多播（已配对设备最快路径）；
         // 若无 peer（历史记录不含寻址信息），回退 self_device_peers
         // 逐设备广播（含自愈 self-pointing），避免静默投递失败。
-        let deliveries: Vec<(PeerNodeInfo, Value)> =
-            match ContactService::get_friend(storage, &root_id) {
-                Ok(Some(friend)) if friend.peer.is_some() => {
-                    let peer = friend.peer.unwrap();
-                    let target = PeerNodeInfo {
-                        peer_id: (!peer.peer_id.is_empty()).then_some(peer.peer_id),
-                        addresses: peer.addresses,
-                    };
-                    match self.build_dm_envelope(KIND_PROFILE_SYNC, &root_id, body) {
-                        Ok(envelope) => vec![(target, envelope)],
-                        Err(_) => Vec::new(),
-                    }
-                }
-                _ => {
-                    // peer 缺失/不存在：用 self_device_peers（含自愈）兜底
-                    let peers = self
-                        .self_device_peers(&root_id)
-                        .unwrap_or_default();
-                    peers
-                        .into_iter()
-                        .filter_map(|peer| {
-                            self.build_dm_envelope(KIND_PROFILE_SYNC, &root_id, body.clone())
-                                .ok()
-                                .map(|envelope| (peer, envelope))
-                        })
-                        .collect()
-                }
-            };
-        self.spawn_deliveries(deliveries);
+        let envelope = match self.build_dm_envelope(KIND_PROFILE_SYNC, &root_id, body) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        let own_peers: Vec<PeerNodeInfo> = ContactService::get_friend(storage, &root_id)
+            .ok()
+            .flatten()
+            .map(|f| {
+                f.peers
+                    .into_iter()
+                    .map(|p| PeerNodeInfo {
+                        peer_id: (!p.peer_id.is_empty()).then_some(p.peer_id),
+                        addresses: p.addresses,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let targets = if !own_peers.is_empty() {
+            own_peers
+        } else {
+            // peer 缺失/不存在：用 self_device_peers（含自愈）兜底
+            self.self_device_peers(&root_id).unwrap_or_default()
+        };
+        self.spawn_deliveries(
+            targets
+                .into_iter()
+                .map(|peer| (peer, envelope.clone()))
+                .collect(),
+        );
     }
 
     /// 启动补推：读身份文件的全量资料快照，同时向朋友和自设备广播

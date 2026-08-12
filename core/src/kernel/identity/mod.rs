@@ -25,6 +25,8 @@ use super::error::{KernelError, Result};
 use super::{Kernel, UnlockedIdentity};
 use crate::identity::{self, IdentityFile};
 
+pub(crate) use profile::identity_sign_shared;
+
 /// `RootIdentityStatus`（root-id.ts:95-103）。
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub struct IdentityStatus {

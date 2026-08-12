@@ -36,7 +36,12 @@ impl<S: StorageBackend> EventLoop<S> {
     ) {
         // 惰性回收调用方已放弃的滞留 attempt（同 begin_connect 口径）
         self.pending_org_attempts.retain(|a| !a.tx.is_closed());
-        let targets = match build_dial_targets(&node_info) {
+        // M9：带地址记分卡排序 + 自过滤（不拨本机监听地址）
+        let addr_meta = extract_peer_id(&node_info)
+            .map(|pid| self.addr_meta_for(&pid))
+            .unwrap_or_default();
+        let self_addrs = self.self_listen_addr_set();
+        let targets = match build_dial_targets(&node_info, Some(&addr_meta), &self_addrs) {
             Ok(t) => VecDeque::from(t),
             Err(e) => {
                 match tx {
@@ -75,13 +80,13 @@ impl<S: StorageBackend> EventLoop<S> {
         let mut attempt = OrgAttempt {
             kind,
             targets,
-            current_target: None,
+            batch: Vec::new(),
             // 目标 peer 在构建时即记录（同 begin_dm_attempt 的并发恢复口径）
             current_peer: extract_peer_id(&node_info).and_then(|s| s.parse::<PeerId>().ok()),
             request_json,
             in_flight: None,
             dial_issued: false,
-            dial_conn_id: None,
+            waiting_base: None,
             tx,
         };
         // 已连接则直接在现有连接上发请求：重拨同一地址会因 TCP 端口复用的
@@ -101,7 +106,7 @@ impl<S: StorageBackend> EventLoop<S> {
             return;
         }
         self.dial_next_org_target(&mut attempt);
-        if attempt.current_target.is_some() || attempt.in_flight.is_some() {
+        if attempt.has_dial_activity() {
             self.pending_org_attempts.push(attempt);
         } else {
             attempt.finish_exhausted();
@@ -111,7 +116,6 @@ impl<S: StorageBackend> EventLoop<S> {
     pub(super) fn dial_next_org_target(&mut self, attempt: &mut OrgAttempt) {
         // 进入新一轮目标尝试：上一目标（如有）的拨号归属失效
         attempt.dial_issued = false;
-        attempt.dial_conn_id = None;
         // 同地址并发拨号恢复：并行尝试（如 org-share 推送与 dm 邀请同时
         // 拨同一 peer）已建好连接时，本 attempt 的拨号会同步报错/异步
         // DialFailure——此时直接复用已建连接发请求，而不是误走下一目标
@@ -134,26 +138,29 @@ impl<S: StorageBackend> EventLoop<S> {
             };
             attempt.in_flight = Some(request_id);
             attempt.current_peer = Some(peer);
-            attempt.current_target = None;
+            attempt.batch.clear();
+            attempt.waiting_base = None;
             return;
         }
-        while let Some(target) = attempt.targets.pop_front() {
+        attempt.dial_issued = true;
+        // 填满当前批次：至多 DIAL_BATCH_SIZE 个在途拨号；同地址去重/无效地址
+        // 不影响批次继续填充。
+        while attempt.batch.len() < crate::p2p::constants::DIAL_BATCH_SIZE {
+            let Some(target) = attempt.targets.pop_front() else {
+                break;
+            };
             // 同地址拨号去重：另一 attempt **正在实际拨**同一地址时不重复拨
-            // （并发同地址拨号在 loopback 上确定性 EADDRINUSE），仅登记
-            // current_target——ConnectionEstablished 按地址匹配时本 attempt
-            // 会随那路连接一起发请求；若那路失败，OutgoingConnectionError
-            // 的重试路径轮到本 attempt 时对方已拨完，不再冲突。必须认
-            // `dial_issued`：等待者同样持有 current_target，不区分会让
-            // 真实拨号方失败重试时被等待者误判「已在拨」，全员僵持
+            // （并发同地址拨号在 loopback 上确定性 EADDRINUSE），登记为等待者
+            // ——ConnectionEstablished 按地址匹配时随那路连接发请求；若那路
+            // 失败，OutgoingConnectionError 的重试路径唤醒本 attempt 自行拨号。
             let already_dialing = self.pending_org_attempts.iter().any(|a| {
                 a.dial_issued
                     && a.in_flight.is_none()
-                    && a.current_target.as_deref().is_some_and(|t| {
-                        base_addr(t) == base_addr(target.as_str())
-                    })
+                    && a.batch.iter().any(|d| base_addr(&d.addr) == base_addr(&target))
             });
             if already_dialing {
-                attempt.current_target = Some(target);
+                attempt.waiting_base = Some(base_addr(&target).to_string());
+                attempt.dial_issued = false;
                 return;
             }
             match target.parse::<Multiaddr>() {
@@ -162,9 +169,6 @@ impl<S: StorageBackend> EventLoop<S> {
                     // 冲突 EADDRINUSE，用 OS 临时端口恢复 PC 主动拨号。
                     // 止血：dcutr 未接入（§7.1 阶段 B），relay 不依赖源端口；
                     // 待 dcutr 接入时重新评估端口复用（wiki §4.6.3/§7.1）。
-                    // 原 `DialOpts::from(ma)` 无法链式；其语义即
-                    // `unknown_peer_id().address(ma).build()`（含 /p2p 尾段原样
-                    // 拨号），此处显式等价构造并追加 allocate_new_port。
                     let opts = DialOpts::unknown_peer_id()
                         .address(ma)
                         .allocate_new_port()
@@ -174,14 +178,15 @@ impl<S: StorageBackend> EventLoop<S> {
                     // 不能按 peer 匹配，否则无关失败会误推进本 attempt）
                     let conn_id = opts.connection_id();
                     if self.swarm.dial(opts).is_ok() {
-                        attempt.current_target = Some(target);
-                        attempt.dial_issued = true;
-                        attempt.dial_conn_id = Some(conn_id);
+                        attempt.batch.push(super::event_loop::InFlightDial {
+                            addr: target,
+                            conn_id,
+                        });
                         // 单目标应用层超时：黑洞地址（无 RST）会挂到 OS TCP
                         // 超时（移动端数十秒），一个黑洞目标烧光外层 15s 总
                         // 预算；到期经通道按 OutgoingConnectionError 同口径
                         // 推进下一目标。拨号提前成败时迟到的超时消息无
-                        // attempt 匹配（dial_conn_id 已轮换），自然忽略。
+                        // attempt 匹配（conn_id 已不在批次），自然忽略。
                         let timeout_tx = self.dial_timeout_tx.clone();
                         tokio::spawn(async move {
                             tokio::time::sleep(Duration::from_millis(
@@ -190,7 +195,6 @@ impl<S: StorageBackend> EventLoop<S> {
                             .await;
                             let _ = timeout_tx.send(conn_id);
                         });
-                        return;
                     }
                 }
                 Err(_) => continue,
@@ -210,29 +214,32 @@ impl<S: StorageBackend> EventLoop<S> {
             let should_retry = {
                 let a = &self.pending_org_attempts[j];
                 a.in_flight.is_none()
-                    && a.current_target.is_some()
                     && a.dial_issued
-                    && a.dial_conn_id == Some(connection_id)
+                    && a.batch.iter().any(|d| d.conn_id == connection_id)
             };
             if should_retry {
                 let mut a = self.pending_org_attempts.remove(j);
                 let failed_base = a
-                    .current_target
-                    .as_deref()
-                    .map(base_addr)
-                    .map(str::to_string);
-                a.current_target = None;
-                self.dial_next_org_target(&mut a);
-                if a.current_target.is_some() || a.in_flight.is_some() {
-                    self.pending_org_attempts.push(a);
-                } else {
-                    // 拨号方耗尽：同地址的去重等待者所等的事件已不会
-                    // 发生，唤醒其自行走目标流程
-                    if let Some(base) = failed_base {
-                        self.wake_addr_waiters(&base);
+                    .batch
+                    .iter()
+                    .find(|d| d.conn_id == connection_id)
+                    .map(|d| base_addr(&d.addr).to_string());
+                // 仅移除本次失败的在途目标；批内其余目标继续并发竞速
+                a.batch.retain(|d| d.conn_id != connection_id);
+                if a.batch.is_empty() {
+                    // 本批全败 → 开下一批（或成为同地址等待者 / 耗尽）
+                    self.dial_next_org_target(&mut a);
+                    if !a.has_dial_activity() {
+                        // 拨号方耗尽：同地址的去重等待者所等的事件已不会
+                        // 发生，唤醒其自行走目标流程
+                        if let Some(base) = failed_base {
+                            self.wake_addr_waiters(&base);
+                        }
+                        a.finish_exhausted();
+                        continue; // a 已 remove，不重复 push
                     }
-                    a.finish_exhausted();
                 }
+                self.pending_org_attempts.push(a);
             } else {
                 j += 1;
             }
@@ -249,17 +256,13 @@ impl<S: StorageBackend> EventLoop<S> {
         while i < self.pending_org_attempts.len() {
             let is_waiter = {
                 let a = &self.pending_org_attempts[i];
-                !a.dial_issued
-                    && a.in_flight.is_none()
-                    && a.current_target
-                        .as_deref()
-                        .is_some_and(|t| base_addr(t) == failed_base)
+                a.in_flight.is_none() && a.waiting_base.as_deref() == Some(failed_base)
             };
             if is_waiter {
                 let mut w = self.pending_org_attempts.remove(i);
-                w.current_target = None;
+                w.waiting_base = None;
                 self.dial_next_org_target(&mut w);
-                if w.current_target.is_some() || w.in_flight.is_some() {
+                if w.has_dial_activity() {
                     self.pending_org_attempts.push(w);
                 } else {
                     w.finish_exhausted();
@@ -382,10 +385,11 @@ impl<S: StorageBackend> EventLoop<S> {
                     }
                     return;
                 }
-                // 未送达/不可解析：下一个地址
-                attempt.current_target = None;
+                // 未送达/不可解析：开下一批地址
+                attempt.batch.clear();
+                attempt.waiting_base = None;
                 self.dial_next_org_target(&mut attempt);
-                if attempt.current_target.is_some() || attempt.in_flight.is_some() {
+                if attempt.has_dial_activity() {
                     self.pending_org_attempts.push(attempt);
                 } else {
                     attempt.finish_exhausted();
@@ -412,9 +416,10 @@ impl<S: StorageBackend> EventLoop<S> {
             if self.pending_org_attempts[i].in_flight == Some(request_id) && same_protocol {
                 let mut attempt = self.pending_org_attempts.remove(i);
                 attempt.in_flight = None;
-                attempt.current_target = None;
+                attempt.batch.clear();
+                attempt.waiting_base = None;
                 self.dial_next_org_target(&mut attempt);
-                if attempt.current_target.is_some() || attempt.in_flight.is_some() {
+                if attempt.has_dial_activity() {
                     self.pending_org_attempts.push(attempt);
                 } else {
                     attempt.finish_exhausted();

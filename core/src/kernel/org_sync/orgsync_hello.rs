@@ -86,12 +86,15 @@ impl OrgSyncContext {
                 let Some(set) = &member.node_info else {
                     continue;
                 };
-                // 端点化：只向已连接的对端设备发送（同成员多设备逐台发，
-                // dlogAck 按设备粒度）。
+                // 端点化：同成员多设备逐台发（dlogAck 按设备粒度）。
                 for node_info in set.iter() {
                     let Some(peer_id) = &node_info.peer_id else {
                         continue;
                     };
+                    // M8 裁决：tick 驱动的 hello 不再附带任何拨号（含网关懒拨号
+                    // + DHT 刷新）——hello 每 60s 触发，挂在上面的拨号等于换马甲
+                    // 的周期重试。未连接成员（含网关）一律跳过；网关连接只由真实
+                    // 事件建立：登录一次性 / 网络变更 / org 写入推送懒拨号。
                     if !connected.contains(peer_id.as_str()) {
                         continue;
                     }

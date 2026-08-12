@@ -29,15 +29,25 @@ use crate::storage::StorageBackend;
 use super::api::Command;
 use super::{LocalP2PNodeInfo, NowFn, P2pEvent};
 
-pub(super) struct PendingConnect {
-    pub(super) node_info: PeerNodeInfo,
-    pub(super) targets: VecDeque<String>,
-    pub(super) current: Option<String>,
-    /// 本次拨号的 [`ConnectionId`]（dial 前从 `DialOpts` 读取）——
+/// 一批并发拨号中的单个在途目标（M9 分批并发）。
+#[derive(Clone, Debug)]
+pub(super) struct InFlightDial {
+    /// 正在拨号的地址。
+    pub(super) addr: String,
+    /// 该次拨号的 [`ConnectionId`]（dial 前从 `DialOpts` 读取）——
     /// OutgoingConnectionError 按它精确归属：unknown_peer_id 拨号失败时
     /// 事件 peer_id=None，按 peer 匹配会让失败永久滞留（对端在线但首
     /// 候选撞 mdns/并发拨号竞争时，connect 等到超时、推送整体降级）
-    pub(super) dial_conn_id: Option<libp2p::swarm::ConnectionId>,
+    pub(super) conn_id: libp2p::swarm::ConnectionId,
+}
+
+pub(super) struct PendingConnect {
+    pub(super) node_info: PeerNodeInfo,
+    /// 尚未分配进批次的目标地址（按 §2 记分卡/静态优先级排好序）。
+    pub(super) targets: VecDeque<String>,
+    /// 当前批次中已发起、尚未收场的在途拨号（M9 分批并发：批内任一连通
+    /// 即收手，全批失败再开下一批）。
+    pub(super) in_flight: Vec<InFlightDial>,
     pub(super) tx: oneshot::Sender<Result<()>>,
     pub(super) last_error: Option<String>,
 }
@@ -85,20 +95,23 @@ impl OrgTx {
 
 pub(super) struct OrgAttempt {
     pub(super) kind: OrgAttemptKind,
+    /// 尚未分配进批次的目标地址（按 §2 记分卡/静态优先级排好序）。
     pub(super) targets: VecDeque<String>,
-    pub(super) current_target: Option<String>,
+    /// 当前批次在途拨号（M9 分批并发：批内任一连通即收手，全批失败再开
+    /// 下一批）。等待者（同地址去重）的 batch 为空、`waiting_base` 非空。
+    pub(super) batch: Vec<InFlightDial>,
     pub(super) current_peer: Option<PeerId>,
     pub(super) request_json: String,
+    /// 请求已发出（非空说明连接已建立、正在等应答，不再拨号）。
     pub(super) in_flight: Option<request_response::OutboundRequestId>,
-    /// current_target 的地址是否由本 attempt 实际发起拨号（去重等待者为
-    /// false）——dial_next_org_target 的同地址去重只认真实拨号方，
-    /// 否则拨号方失败重试时会被等待者误判「已在拨」而全员僵持
+    /// batch 是否由本 attempt 实际发起拨号（同地址去重等待者为 false）——
+    /// 去重只认真实拨号方，否则拨号方失败重试时会被等待者误判「已在拨」
+    /// 而全员僵持
     pub(super) dial_issued: bool,
-    /// 本次拨号的 [`ConnectionId`]（`DialOpts::connection_id()` 在 dial 前
-    /// 读取）——OutgoingConnectionError 按它精确归属到发起拨号的 attempt：
-    /// `unknown_peer_id` 拨号失败时事件 peer_id=None，按 peer 匹配会让
-    /// 无关失败级联推进所有 attempt 至目标耗尽
-    pub(super) dial_conn_id: Option<libp2p::swarm::ConnectionId>,
+    /// 等待者登记的等待地址（base 形式）——另一 attempt 正在拨该地址时，
+    /// 本 attempt 不重复拨，登记等待；该连接建立时随路发请求，该拨号失败
+    /// 时被唤醒自行走目标流程。
+    pub(super) waiting_base: Option<String>,
     pub(super) tx: OrgTx,
 }
 
@@ -120,6 +133,12 @@ impl OrgAttempt {
             }
         }
     }
+
+    /// 是否仍有拨号/等待活动：批次在途拨号、已发请求、或作为同地址等待者。
+    /// 三者皆空说明目标已耗尽，应回传终态。
+    pub(super) fn has_dial_activity(&self) -> bool {
+        !self.batch.is_empty() || self.in_flight.is_some() || self.waiting_base.is_some()
+    }
 }
 
 pub(super) struct EventLoop<S: StorageBackend> {
@@ -131,6 +150,8 @@ pub(super) struct EventLoop<S: StorageBackend> {
     pub(super) now_fn: NowFn,
     pub(super) app_version: String,
     pub(super) cmd_rx: mpsc::UnboundedReceiver<Command>,
+    /// 命令通道克隆（M9：防抖一次性定时器到点后回发 `NetworkChangeFired`）。
+    pub(super) cmd_tx: mpsc::UnboundedSender<Command>,
     pub(super) event_tx: mpsc::UnboundedSender<P2pEvent>,
     pub(super) announce_validator: NodeAnnounceValidator,
     pub(super) exchange_limiter: MinIntervalRateLimiter,
@@ -179,11 +200,14 @@ pub(super) struct EventLoop<S: StorageBackend> {
     pub(super) dht_tick_counter: u64,
     /// DHT 周期重发间隔（tick 计数；桌面默认 240≈4h，移动端 120≈2h）。
     pub(super) dht_republish_ticks: u64,
-    /// 网络变化 debounce 计时器（peer-rediscovery §4.1.3）：壳层通知后启动，
-    /// 到期检查监听地址是否变化，变化才执行重发布。
+    /// 网络变化防抖闹钟在跑标记（M9 一次性定时器版）：武装时置 Some，闹钟
+    /// 到点回发 `NetworkChangeFired` 时清 None——闹钟自己响、响完销毁，不借
+    /// tick 当到期检查器（tick 内零拨号是结构保证）。
     pub(super) pending_network_change: Option<i64>,
-    /// debounce 到期后上一次的监听地址快照（对比用）。
-    pub(super) pending_network_change_base: Option<Vec<String>>,
+    /// 上一 keepalive tick 的网络快照（M9 本地对比）：tick 内对比当前快照，
+    /// 变化即武装防抖一次性定时器（零网络开销、不依赖壳层）。首 tick 只记录
+    /// 基线不触发。
+    pub(super) last_network_snapshot: Option<Vec<String>>,
     /// 优先类目 peer 的重新发现状态机（peer-rediscovery §4.3/§4.8）。
     pub(super) rediscovery_states: HashMap<PeerId, super::rediscovery::RediscoveryState>,
     /// 竞速 DHT 查询：QueryId → 目标 peer（区分于普通 pending_dht_get 查询）。
@@ -404,6 +428,55 @@ impl<S: StorageBackend> EventLoop<S> {
         }
     }
 
+    /// 覆盖网孤岛自举（connection-policy M8，**纯事件驱动**）：仅在 0 连接时
+    /// 从邻居池按排序拨一轮（≤[`OVERLAY_TICK_DIAL_BUDGET`] 个），失败即沉默——
+    /// 不做任何周期重试，等下一个事件（启动/网络变更确认/学到新邻居）再拨。
+    ///
+    /// 唯一合法目的是 DHT 自举：0 连接时 DHT 查询发不出去，必须先拨通任意
+    /// Spark 节点；有 ≥1 连接 DHT 已能工作，直接跳过。候选排序由
+    /// [`OverlayPeerStore::sample_dial_candidates`] 完成（最近成功/见过优先，
+    /// 失败沉底）——去重靠「无周期触发」，不靠失败记忆。
+    pub(super) fn bootstrap_overlay_dial(&mut self) {
+        let connected = self.connected_peers();
+        if !connected.is_empty() {
+            return;
+        }
+        let now = self.now();
+        let self_id = self.self_peer_id().to_base58();
+        let mut exclude: HashSet<String> = HashSet::new();
+        exclude.insert(self_id);
+        let candidates = {
+            let mut store = crate::p2p::overlay_store::OverlayPeerStore::new(&mut self.storage);
+            store
+                .sample_dial_candidates(&exclude, now, crate::p2p::constants::OVERLAY_TICK_DIAL_BUDGET)
+                .unwrap_or_default()
+        };
+        for candidate in candidates {
+            let Ok(peer) = candidate.peer_id.parse::<PeerId>() else {
+                continue;
+            };
+            let addrs: Vec<Multiaddr> = candidate
+                .addresses
+                .iter()
+                .filter_map(|a| a.parse().ok())
+                .collect();
+            if addrs.is_empty() {
+                continue;
+            }
+            // allocate_new_port：复用监听端口 [::]:15002 会与多 listener 冲突
+            // EADDRINUSE，用 OS 临时端口恢复 PC 主动拨号。止血：dcutr 未接入
+            // （§7.1 阶段 B），relay 不依赖源端口；待 dcutr 接入时重新评估端口
+            // 复用（wiki §4.6.3/§7.1）。
+            let opts = libp2p::swarm::dial_opts::DialOpts::peer_id(peer)
+                .addresses(addrs)
+                .allocate_new_port()
+                .build();
+            if self.swarm.dial(opts).is_ok() {
+                self.pending_overlay_dials.insert(peer, ());
+            }
+        }
+    }
+
     pub(super) fn listen_addr_strings(&self) -> Vec<String> {
         let listeners: Vec<Multiaddr> = self.swarm.listeners().cloned().collect();
         // 通配 listener（0.0.0.0/::）对扫码名片不可拨，展开为本机可用网卡
@@ -424,9 +497,82 @@ impl<S: StorageBackend> EventLoop<S> {
         addrs
     }
 
+    /// 本机当前监听地址集合（M9 自过滤：不拨自己的监听地址，多实例同机开发的
+    /// ::1 / 本机 LAN IP 污染源）。
+    pub(super) fn self_listen_addr_set(&self) -> HashSet<String> {
+        self.listen_addr_strings().into_iter().collect()
+    }
+
+    /// 网络变化探测专用快照：只取**本机网卡展开的监听地址**（通配 listener
+    /// 按网卡展开，过滤 link-local），排序去重。
+    ///
+    /// 刻意排除 `listen_addr_strings()` 里的两类易变成分：identify 观察到的
+    /// external_addresses 与 relay 电路地址——它们是**连接的结果**（对端每次
+    /// 连上/断开都会变），不是网络面变化；混入会把快照对比变成每 tick 误报，
+    /// 防抖每轮武装、每轮触发 redial_priority_peers 全量重拨（真机实测）。
+    pub(super) fn network_snapshot(&self) -> Vec<String> {
+        let listeners: Vec<Multiaddr> = self.swarm.listeners().cloned().collect();
+        let interfaces = local_interfaces();
+        let mut addrs: Vec<String> = expand_wildcard_listeners(&listeners, &interfaces)
+            .into_iter()
+            .map(|addr| addr.to_string())
+            .filter(|a| !is_ipv6_link_local(a))
+            .collect();
+        // 排序去重：Vec 比较对顺序敏感，接口枚举顺序不稳定会造成假变化
+        addrs.sort();
+        addrs.dedup();
+        addrs
+    }
+
+    /// 武装网络变化防抖**一次性定时器**（M9）：基线快照随 `NetworkChangeFired`
+    /// 命令携带，tokio sleep 到点回发——闹钟自己响，响完即销毁，无循环无重试。
+    /// 已有闹钟在跑时不重复武装（抖动窗口内多个信号合并为一次）。
+    pub(super) fn arm_network_change_timer(&mut self) {
+        if self.pending_network_change.is_some() {
+            return;
+        }
+        self.pending_network_change = Some(self.now());
+        let base = self.network_snapshot();
+        let tx = self.cmd_tx.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(
+                crate::p2p::constants::NETWORK_CHANGE_DEBOUNCE_MS as u64,
+            ))
+            .await;
+            let _ = tx.send(Command::NetworkChangeFired { base });
+        });
+    }
+
+    /// M9 本地地址变化探测（keepalive tick 调用，网络变化重连 A+B 的 B 兜底）：
+    /// 对比 `network_snapshot()` 与上轮快照，变化则武装防抖一次性定时器。
+    /// 首 tick 只记录基线不触发。零网络开销、不依赖壳层。
+    pub(super) fn detect_local_network_change(&mut self) {
+        let current = self.network_snapshot();
+        if let Some(base) = &self.last_network_snapshot
+            && base != &current
+        {
+            self.arm_network_change_timer();
+        }
+        self.last_network_snapshot = Some(current);
+    }
+
+    /// 读取某 peer 的地址记分卡（M9，供拨号目标排序）。
+    pub(super) fn addr_meta_for(&mut self, peer_id: &str) -> HashMap<String, crate::p2p::overlay_store::AddrScore> {
+        let mut store = crate::p2p::overlay_store::OverlayPeerStore::new(&mut self.storage);
+        store
+            .get(peer_id)
+            .ok()
+            .flatten()
+            .map(|r| r.addr_meta)
+            .unwrap_or_default()
+    }
+
     pub(super) async fn run(mut self, keepalive_interval: Option<Duration>) {
         use libp2p::futures::StreamExt;
         self.seed_kad_routing();
+        // 启动即孤岛自举一轮（M8）：0 连接时 DHT 查询发不出去，先拨邻居池
+        // 队首候选；失败沉默，等网络变更/学到新邻居等下个事件再拨。
+        self.bootstrap_overlay_dial();
         let mut keepalive = keepalive_interval.map(tokio::time::interval);
         loop {
             tokio::select! {
@@ -459,7 +605,7 @@ impl<S: StorageBackend> EventLoop<S> {
     }
 
     /// 返回 true 表示收到 Shutdown。
-    fn handle_command(&mut self, cmd: Command) -> bool {
+    pub(super) fn handle_command(&mut self, cmd: Command) -> bool {
         match cmd {
             Command::Broadcast { topic, body, tx } => {
                 let _ = tx.send(self.publish_envelope(&topic, body));
@@ -527,10 +673,26 @@ impl<S: StorageBackend> EventLoop<S> {
                 let _ = tx.send(result);
             }
             Command::NetworkChanged => {
-                // 启动 debounce：记录当前地址作为对比基线，到期后检查是否变化
-                if self.pending_network_change.is_none() {
-                    self.pending_network_change = Some(self.now() + crate::p2p::constants::NETWORK_CHANGE_DEBOUNCE_MS);
-                    self.pending_network_change_base = Some(self.listen_addr_strings());
+                // 武装一次性防抖定时器：到点回发 NetworkChangeFired 统一处理
+                // （独立 tokio 定时，不借 keepalive tick 当到期检查器——tick
+                // 内零拨号是结构保证）
+                self.arm_network_change_timer();
+            }
+            Command::NetworkChangeFired { base } => {
+                self.pending_network_change = None;
+                let current = self.network_snapshot();
+                if base != current {
+                    // ③④⑤ 重发布 announce + DHT
+                    let _ = self.publish_announce();
+                    self.publish_node_presence_record();
+                    // ⑥ 重建 relay 预约（旧预约随旧连接失效）
+                    self.ensure_relay_reservations();
+                    // 主路径（§4.1.2 ④）：主动重拨优先类目 peer（自设备/好友）——
+                    // 缓存地址在切网后仍有较大概率有效，无需等被动 DHT 兜底。
+                    self.redial_priority_peers();
+                    // 覆盖网孤岛自举（M8 事件驱动）：切网后地址面刷新，若处于
+                    // 孤岛（0 连接）按排序补拨一轮，失败沉默到下个事件。
+                    self.bootstrap_overlay_dial();
                 }
             }
             Command::Tick { tx } => {
@@ -590,7 +752,12 @@ impl<S: StorageBackend> EventLoop<S> {
             let _ = tx.send(Ok(()));
             return;
         }
-        let targets = match build_dial_targets(&node_info) {
+        // M9：带地址记分卡排序 + 自过滤（不拨本机监听地址）
+        let addr_meta = extract_peer_id(&node_info)
+            .map(|pid| self.addr_meta_for(&pid))
+            .unwrap_or_default();
+        let self_addrs = self.self_listen_addr_set();
+        let targets = match build_dial_targets(&node_info, Some(&addr_meta), &self_addrs) {
             Ok(t) => VecDeque::from(t),
             Err(e) => {
                 let _ = tx.send(Err(e));
@@ -600,12 +767,17 @@ impl<S: StorageBackend> EventLoop<S> {
         let mut pending = PendingConnect {
             node_info,
             targets,
-            current: None,
-            dial_conn_id: None,
+            in_flight: Vec::new(),
             tx,
             last_error: None,
         };
-        if let Some(err) = self.dial_next_connect_target(&mut pending) {
+        self.fill_connect_batch(&mut pending);
+        if pending.in_flight.is_empty() {
+            // 首批即无可拨目标（全部无效地址/被拒）→ 立即失败
+            let err = pending
+                .last_error
+                .clone()
+                .unwrap_or_else(|| "no dial targets".to_string());
             let info = pending.node_info.clone();
             self.remember_node_observation(&info, NodeObservation::Failure, Some(&err));
             let _ = pending.tx.send(Err(P2pError::Dial(format!(
@@ -616,46 +788,71 @@ impl<S: StorageBackend> EventLoop<S> {
         self.pending_connects.push(pending);
     }
 
-    /// 尝试下一个拨号目标；全部耗尽时返回错误文本（由调用方回传终态）。
-    pub(super) fn dial_next_connect_target(
-        &mut self,
-        pending: &mut PendingConnect,
-    ) -> Option<String> {
-        // 新一轮目标尝试：上一目标（如有）的拨号归属失效
-        pending.dial_conn_id = None;
-        while let Some(target) = pending.targets.pop_front() {
+    /// 从剩余目标填满当前批次（至多 [`DIAL_BATCH_SIZE`] 个在途拨号）。
+    /// 每目标一拨（`DialOpts::unknown_peer_id().address(ma)`，含 /p2p 尾段原样
+    /// 拨号），记录各自的 [`ConnectionId`] 供失败按它精确归属。地址无效/被
+    /// 拒只记 last_error 继续填，不中止批次。
+    pub(super) fn fill_connect_batch(&mut self, pending: &mut PendingConnect) {
+        while pending.in_flight.len() < crate::p2p::constants::DIAL_BATCH_SIZE {
+            let Some(target) = pending.targets.pop_front() else {
+                break;
+            };
             match target.parse::<Multiaddr>() {
                 Ok(ma) => {
                     // allocate_new_port：复用监听端口 [::]:15002 会与多 listener
                     // 冲突 EADDRINUSE，用 OS 临时端口恢复 PC 主动拨号。
                     // 止血：dcutr 未接入（§7.1 阶段 B），relay 不依赖源端口；
                     // 待 dcutr 接入时重新评估端口复用（wiki §4.6.3/§7.1）。
-                    // 原 `DialOpts::from(ma)` 无法链式；其语义即
-                    // `unknown_peer_id().address(ma).build()`（含 /p2p 尾段原样
-                    // 拨号），此处显式等价构造并追加 allocate_new_port。
                     let opts = DialOpts::unknown_peer_id()
                         .address(ma)
                         .allocate_new_port()
                         .build();
                     let conn_id = opts.connection_id();
                     if self.swarm.dial(opts).is_ok() {
-                        pending.current = Some(target);
-                        pending.dial_conn_id = Some(conn_id);
-                        return None;
+                        pending.in_flight.push(InFlightDial {
+                            addr: target,
+                            conn_id,
+                        });
+                    } else {
+                        pending.last_error = Some(format!("dial rejected: {target}"));
                     }
-                    pending.last_error = Some(format!("dial rejected: {target}"));
                 }
                 Err(e) => {
                     pending.last_error = Some(format!("invalid addr {target}: {e}"));
                 }
             }
         }
-        Some(
-            pending
-                .last_error
-                .clone()
-                .unwrap_or_else(|| "no dial targets".to_string()),
-        )
+    }
+
+    /// connect 命令单目标拨号失败/超时归属：移除该 conn_id 对应的在途目标；
+    /// 本批全败（in_flight 空）时填下一批；再无目标 → 返回错误文本（终态）。
+    /// 返回 `Some(err)` 表示目标已耗尽，调用方回传终态。
+    pub(super) fn fail_connect_dial(
+        &mut self,
+        pending: &mut PendingConnect,
+        connection_id: libp2p::swarm::ConnectionId,
+        error: &str,
+    ) -> Option<String> {
+        pending.last_error = Some(error.to_string());
+        let before = pending.in_flight.len();
+        pending.in_flight.retain(|d| d.conn_id != connection_id);
+        if pending.in_flight.len() == before {
+            // 该 conn_id 已不在批次（如连接已建立被收手时清理）：非本轮失败
+            return None;
+        }
+        if pending.in_flight.is_empty() {
+            // 本批全败 → 开下一批
+            self.fill_connect_batch(pending);
+            if pending.in_flight.is_empty() {
+                return Some(
+                    pending
+                        .last_error
+                        .clone()
+                        .unwrap_or_else(|| "no dial targets".to_string()),
+                );
+            }
+        }
+        None
     }
 
     pub(super) fn remember_node_observation(

@@ -83,6 +83,11 @@ pub struct PeerRef {
     /// multiaddr 列表。
     #[serde(default)]
     pub addresses: Vec<String>,
+    /// 地址记分卡（M9，与 OverlayPeerRecord.addrMeta 同构）：可选附加字段，
+    /// 缺省零分自然迁入旧数据。FriendRecord 走 pdsync 同步——对端为旧版本时
+    /// 转发/覆盖会丢此字段（serde 忽略未知字段后重写），接受该降级零分重建。
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub addr_meta: std::collections::HashMap<String, crate::p2p::overlay_store::AddrScore>,
 }
 
 /// 链接预览卡片（ui-messages.md §6），元数据由发送方本地抓取随消息携带。

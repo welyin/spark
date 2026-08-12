@@ -37,7 +37,13 @@ impl Kernel {
             generate_message_id(now),
             now,
         )?;
-        if plugin_id != "system" && !self.app_msg_limiter.check(space, plugin_id, now) {
+        if plugin_id != "system"
+            && !self
+                .app_msg_limiter
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .check(space, plugin_id, now)
+        {
             return Err(MessageError::RateLimited.into());
         }
         AppMessageService::ensure_app_conversation(self.require_storage_raw_mut()?, space, plugin_id, now)?;
@@ -80,6 +86,57 @@ impl Kernel {
 
     /// 指定应用会话的限流累计拒绝数（熔断观测面；内存态，重启清零）。
     pub fn message_app_rate_rejected(&self, space: &str, plugin_id: &str) -> u64 {
-        self.app_msg_limiter.rejected_count(space, plugin_id)
+        self.app_msg_limiter
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .rejected_count(space, plugin_id)
     }
+}
+
+/// `messages.sendAppMessage` 后台 capability 的共享实现（QuickJS 插件线程不持
+/// `&mut Kernel`）：写应用消息（§20）。与 [`Kernel::message_app_send`] 语义一致
+/// ——校验链（summary 非空且 ≤200 字符）→ 限流（与 Kernel 门面共享同一
+/// `app_msg_limiter` 实例，10 条/60s）→ 惰性建会话 `app:{pluginId}` → 落库。
+/// 归属由键派生天然保证：plugin_id 来自运行时绑定，不信任 JS 自报（§20.4
+/// 不变量 2）。应用消息本地生成、本地消费，无 peer 投递/无 ChatReceived 事件。
+pub(crate) fn message_app_send_shared(
+    host: &crate::plugin::PluginHostShared,
+    space: &str,
+    plugin_id: &str,
+    summary: &str,
+    payload: serde_json::Value,
+    card: Option<AppMessageCard>,
+) -> crate::plugin::Result<AppMessageView> {
+    let _io = host.io_lock.lock().unwrap_or_else(|e| e.into_inner());
+    let now = system_now_ms();
+    let mut payload = payload;
+    // summary 冗余落盘（= trim 后的 payload.summary，§20.2）：能力层显式传入
+    // 的 summary 为权威源，覆盖 payload 内同名字段。
+    if let serde_json::Value::Object(map) = &mut payload {
+        map.insert("summary".to_string(), serde_json::json!(summary));
+    }
+    let record = AppMessageService::build_app_message(
+        plugin_id,
+        payload,
+        card,
+        generate_message_id(now),
+        now,
+    )
+    .map_err(|e| crate::plugin::PluginError::InvalidInput(e.to_string()))?;
+    // 限流：与 Kernel 门面共享同一实例（Arc<Mutex> 经 &self 访问）
+    {
+        let mut limiter = host
+            .app_msg_limiter
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if plugin_id != "system" && !limiter.check(space, plugin_id, now) {
+            return Err(crate::plugin::PluginError::RateLimited);
+        }
+    }
+    let mut storage = host.require_storage()?;
+    AppMessageService::ensure_app_conversation(&mut storage, space, plugin_id, now)
+        .map_err(|e| crate::plugin::PluginError::InvalidInput(e.to_string()))?;
+    AppMessageService::append_app_message(&mut storage, space, &record)
+        .map_err(|e| crate::plugin::PluginError::InvalidInput(e.to_string()))?;
+    Ok(app_message_view(&record))
 }

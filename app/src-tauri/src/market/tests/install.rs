@@ -56,6 +56,7 @@ fn install_normalizes_manifest_permissions() {
             "storage:write",
             "org:read",
             "proof:verify",
+            "identity:verify",
             "org:sync",
             "identity:sign"
         ]

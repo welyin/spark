@@ -318,21 +318,25 @@ impl Kernel {
             .ok()
             .and_then(|storage| pw::get_pwv(storage).ok().flatten())
             .and_then(|pwv| serde_json::to_value(&pwv).ok());
-        // 附加本机 P2P 节点信息，便于恢复端扫码后自动完成设备配对
+        // 附加本机 P2P 节点信息，便于恢复端扫码后自动完成设备配对。
+        // P2P 运行时一律产出 v1 封装（即使地址被裁剪为空也保留 peerId/pwv）：
+        // QR-F4 要求 pwv 注入与地址有无解耦——否则中继-only 设备（地址全被
+        // 裁剪掉）会退回纯紧凑 JSON、丢 pwv，恢复端无法继承 V、D′ 收敛断裂。
         if let Some(p2p_info) = self.p2p_status().ok().flatten() {
             if let Some(ref peer_id) = p2p_info.peer_id {
-                if !p2p_info.addresses.is_empty() {
-                    let mut obj = serde_json::json!({
-                        "v": 1,
-                        "i": compact_value,
-                        "p": peer_id,
-                        "a": p2p_info.addresses,
-                    });
-                    if let Some(pwv_value) = pwv_value {
-                        obj["pwv"] = pwv_value;
-                    }
-                    return Ok(obj.to_string());
+                let mut obj = serde_json::json!({
+                    "v": 1,
+                    "i": compact_value,
+                    "p": peer_id,
+                    // 二维码备份专用地址裁剪：收敛到最小可拨子集（见 trim_qr_addresses），
+                    // 控制 QR 版本与密度——完整监听地址含多条近百字符的中继电路地址，
+                    // 全量携带会把载荷推高、密度过大难以扫码。
+                    "a": Self::trim_qr_addresses(&p2p_info.addresses),
+                });
+                if let Some(pwv_value) = pwv_value {
+                    obj["pwv"] = pwv_value;
                 }
+                return Ok(obj.to_string());
             }
         }
         // 无 p2p 运行时（未建连）：恢复端无法自动配对、收敛本就不发生；且注入
@@ -340,6 +344,46 @@ impl Kernel {
         // （旧版兼容），不注入 pwv。
         Ok(serde_json::to_string(&compact_value)
             .map_err(|e| KernelError::Internal(e.to_string()))?)
+    }
+
+    /// 二维码备份载荷专用地址裁剪：把完整监听地址列表收敛成 QR 可承载的最小可拨子集。
+    ///
+    /// 完整 `LocalP2PNodeInfo::addresses`（`listen_addr_strings`）可能含：多条本机网卡
+    /// IPv4/IPv6、external 地址、以及中继电路地址（`/ip4/<relayIP>/tcp/<port>/p2p/
+    /// <52 字符 peerId>/p2p-circuit`，每条近百字符）。全量携带会显著拉高 QR 载荷体积
+    /// → QR 版本升高、模块密度过大，手机摄像头难以对焦识别。
+    ///
+    /// 备份二维码通常在恢复设备与被备份设备物理相邻时扫描（同局域网），一条直连
+    /// 局域网 IPv4 即可完成自动配对；中继地址既最长又最不可靠（依赖 relay 可达性）。
+    /// 裁剪规则：
+    /// - 剔除中继电路地址（含 `/p2p-circuit`）与通配/未解析地址（`/ip4/0.0.0.0`、`/ip6/::`）；
+    /// - 排序：IPv4 直连优先（局域网/公网可拨）、同档按长度取短（体积敏感）；
+    /// - 总量封顶 [`QR_MAX_ADDRS`]，超限取最短的若干条。
+    ///
+    /// 无直连地址时返回空列表——v1 封装仍带 `peerId`/`pwv`（QR-F4 不丢），恢复端
+    /// 经 announce/DHT 兜底仍可寻回生成端。
+    pub(crate) fn trim_qr_addresses(addresses: &[String]) -> Vec<String> {
+        const QR_MAX_ADDRS: usize = 3;
+        let mut kept: Vec<&str> = addresses
+            .iter()
+            .map(String::as_str)
+            .filter(|a| {
+                !a.contains("/p2p-circuit")
+                    && !a.contains("/ip4/0.0.0.0")
+                    && !a.contains("/ip6/::")
+                    && !a.contains("/ip6/::1")
+            })
+            .collect();
+        kept.sort_by(|a, b| {
+            let a_ipv4 = a.starts_with("/ip4/");
+            let b_ipv4 = b.starts_with("/ip4/");
+            // IPv4 直连在前；同档内短地址在前（短 = 更大概率是可拨内网/公网直连）
+            b_ipv4
+                .cmp(&a_ipv4)
+                .then_with(|| a.len().cmp(&b.len()))
+        });
+        kept.truncate(QR_MAX_ADDRS);
+        kept.into_iter().map(str::to_string).collect()
     }
 
     /// `recoverFromBackup`：备份码恢复。载荷即身份密文记录，解密口令为原登录密码；
@@ -499,7 +543,7 @@ impl Kernel {
                 signature: String::new(),
                 gender: None,
                 added_at: now,
-                peer: None,
+                peers: Vec::new(),
                 remark: String::new(),
                 phones: Vec::new(),
                 tag_ids: Vec::new(),
@@ -516,10 +560,13 @@ impl Kernel {
             // 运行中即本机 peerId），即自指污染——拒绝落该 peer，保留原值/留空。
             let peer_id = gen_peer_id.to_string();
             if peer_id != node_id {
-                friend.peer = Some(PeerRef {
-                    peer_id,
-                    addresses: gen_addresses.to_vec(),
-                });
+                // 多设备寻址：QR 恢复配对写入首台设备（已有同 peerId 不重复）
+                if !friend.peers.iter().any(|p| p.peer_id == peer_id) {
+                    friend.peers.push(PeerRef {
+                        peer_id,
+                        addresses: gen_addresses.to_vec(),
+                    ..Default::default()});
+                }
             } else {
                 eprintln!(
                     "[login] self-pointing peer rejected on QR recover | node_id={node_id} gen_peer_id={gen_peer_id}"
@@ -542,5 +589,54 @@ impl Kernel {
             source: String::new(),
             message: String::new(),
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Kernel;
+
+    fn full_addresses() -> Vec<String> {
+        [
+            // 中继电路地址——必须剔除（最长且不可靠，实测每条近百字符）
+            "/ip4/198.51.100.7/tcp/4001/p2p/12D3KooWAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/p2p-circuit"
+                .to_string(),
+            "/ip4/198.51.100.9/tcp/4001/p2p/12D3KooWBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB/p2p-circuit"
+                .to_string(),
+            // 通配/回环通配地址——不可拨，剔除
+            "/ip4/0.0.0.0/tcp/4567".to_string(),
+            "/ip6/::/tcp/4567".to_string(),
+            "/ip6/::1/tcp/4567".to_string(),
+            // 可直连地址
+            "/ip4/127.0.0.1/tcp/4567".to_string(),
+            "/ip4/192.168.1.23/tcp/4567".to_string(),
+            "/ip6/240e:390:c901:0::1/tcp/4567".to_string(),
+        ]
+        .to_vec()
+    }
+
+    #[test]
+    fn trim_qr_addresses_drops_relay_wildcard_and_caps() {
+        let trimmed = Kernel::trim_qr_addresses(&full_addresses());
+        assert!(
+            trimmed.iter().all(|a| !a.contains("/p2p-circuit")),
+            "不得保留中继电路地址：{trimmed:?}"
+        );
+        assert!(
+            trimmed
+                .iter()
+                .all(|a| !a.contains("0.0.0.0") && !a.contains("/ip6::")),
+            "不得保留通配地址：{trimmed:?}"
+        );
+        assert!(trimmed.len() <= 3, "封顶 3 条，实际 {}：{trimmed:?}", trimmed.len());
+        // IPv4 直连优先，且同档内短地址在前
+        assert!(trimmed[0].starts_with("/ip4/"), "IPv4 直连优先：{trimmed:?}");
+        // 空 / 全中继 / 全通配输入不 panic，返回空（v1 封装仍带 peerId/pwv）
+        assert!(Kernel::trim_qr_addresses(&[]).is_empty());
+        assert!(
+            Kernel::trim_qr_addresses(&full_addresses()[..2].to_vec()).is_empty(),
+            "仅中继地址裁剪为空"
+        );
+        assert!(Kernel::trim_qr_addresses(&["/ip4/0.0.0.0/tcp/1".to_string()].to_vec()).is_empty());
     }
 }

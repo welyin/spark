@@ -49,7 +49,7 @@ pub(crate) fn ensure_bot_shared(
             signature: String::new(),
             gender: None,
             added_at: now,
-            peer: None,
+            peers: Vec::new(),
             remark: String::new(),
             phones: Vec::new(),
             tag_ids: Vec::new(),
@@ -139,7 +139,7 @@ impl Kernel {
                     signature: String::new(),
                     gender: None,
                     added_at: now,
-                    peer: None,
+                    peers: Vec::new(),
                     remark: String::new(),
                     phones: Vec::new(),
                     tag_ids: Vec::new(),
@@ -204,17 +204,22 @@ impl Kernel {
         )?;
         // 拉黑 → 移出优先类目集合（§4.4 明确含拉黑；恢复信任才可重新加入）
         if blocked {
-            let pid = self
+            let peer_ids = self
                 .require_storage()
                 .ok()
                 .and_then(|s| ContactService::get_friend(s, root_id).ok().flatten())
-                .and_then(|f| f.peer)
-                .map(|p| p.peer_id)
-                .filter(|id| !id.trim().is_empty());
-            if let Some(pid) = pid {
-                let mut priority = crate::p2p::priority_peers::PriorityPeerStore::new(
-                    self.require_storage_mut()?,
-                );
+                .map(|f| {
+                    f.peers
+                        .into_iter()
+                        .map(|p| p.peer_id)
+                        .filter(|id| !id.trim().is_empty())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let mut priority = crate::p2p::priority_peers::PriorityPeerStore::new(
+                self.require_storage_mut()?,
+            );
+            for pid in peer_ids {
                 if let Err(e) = priority.remove(&pid) {
                     eprintln!("[contact] block priority peer remove failed: {e}");
                 }
@@ -235,14 +240,19 @@ impl Kernel {
         if self.current_root_id()?.as_deref() == Some(root_id) {
             return Err(KernelError::Internal("不能删除自己".to_string()));
         }
-        // 删除前取出该好友的 libp2p peerId，用于移出优先类目集合
-        let peer_id = self
+        // 删除前取出该好友的 libp2p peerId 列表，用于移出优先类目集合
+        let peer_ids = self
             .require_storage()
             .ok()
             .and_then(|s| ContactService::get_friend(s, root_id).ok().flatten())
-            .and_then(|f| f.peer)
-            .map(|p| p.peer_id)
-            .filter(|id| !id.trim().is_empty());
+            .map(|f| {
+                f.peers
+                    .into_iter()
+                    .map(|p| p.peer_id)
+                    .filter(|id| !id.trim().is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         let node_id = self.sync_node_id();
         ContactService::remove_friend_pdsync(
             self.require_storage_mut()?,
@@ -256,10 +266,10 @@ impl Kernel {
             node_id,
         );
         // 移出优先类目集合（peer-rediscovery §4.4）
-        if let Some(pid) = peer_id {
-            let mut priority = crate::p2p::priority_peers::PriorityPeerStore::new(
-                self.require_storage_mut()?,
-            );
+        let mut priority = crate::p2p::priority_peers::PriorityPeerStore::new(
+            self.require_storage_mut()?,
+        );
+        for pid in peer_ids {
             if let Err(e) = priority.remove(&pid) {
                 eprintln!("[contact] priority peer remove failed: {e}");
             }
@@ -565,7 +575,7 @@ impl Kernel {
             signature: String::new(),
             gender: None,
             added_at: now,
-            peer: None,
+            peers: Vec::new(),
             remark: String::new(),
             phones: Vec::new(),
             tag_ids: Vec::new(),
@@ -582,21 +592,24 @@ impl Kernel {
         if let Some(avatar) = &request.avatar {
             friend.avatar = Some(avatar.clone());
         }
-        if request.peer.is_some() {
-            friend.peer = request.peer.clone();
+        if let Some(peer) = request.peer.clone() {
+            // 多设备寻址：握手 nodeInfo 为首台设备；若已有其它设备则追加去重
+            if !friend.peers.iter().any(|p| p.peer_id == peer.peer_id) {
+                friend.peers.push(peer);
+            }
         }
         friend.updated_at = now;
         let node_id = self.sync_node_id();
         ContactService::upsert_friend_pdsync(self.require_storage_mut()?, &friend, now, &node_id)?;
         // 好友接受方也入优先集合（发起方在 handle_friend_accept 已入，接受方必须对称，
         // 否则竞速单向失效——§4.4 优先类目对双方都生效）
-        if let Some(p) = request.peer.as_ref()
-            && !p.peer_id.trim().is_empty()
-        {
-            let mut priority =
-                crate::p2p::priority_peers::PriorityPeerStore::new(self.require_storage_mut()?);
-            if let Err(e) = priority.add(&p.peer_id) {
-                eprintln!("[contact] accept priority peer add failed: {e}");
+        let mut priority =
+            crate::p2p::priority_peers::PriorityPeerStore::new(self.require_storage_mut()?);
+        for p in &friend.peers {
+            if !p.peer_id.trim().is_empty() {
+                if let Err(e) = priority.add(&p.peer_id) {
+                    eprintln!("[contact] accept priority peer add failed: {e}");
+                }
             }
         }
         if let Some(peer) = &request.peer {
@@ -638,13 +651,13 @@ impl Kernel {
             return Ok(PeerRef {
                 peer_id: input.peer_id.clone().unwrap_or_default(),
                 addresses: addresses.clone(),
-            });
+            ..Default::default()});
         }
         if let Ok(card) = crate::org::parse_and_verify_node_card(&input.raw, now) {
             return Ok(PeerRef {
                 peer_id: card.peer_id,
                 addresses: card.addresses,
-            });
+            ..Default::default()});
         }
         let storage = self.require_storage()?;
         for record in OrganizationService::read_all_organizations(storage)? {
@@ -657,7 +670,7 @@ impl Kernel {
                 return Ok(PeerRef {
                     peer_id: info.peer_id.clone().unwrap_or_default(),
                     addresses: info.addresses.clone(),
-                });
+                ..Default::default()});
             }
         }
         Err(KernelError::Internal(
@@ -670,5 +683,25 @@ impl Kernel {
     /// 字段），只刷新 nickname。
     pub fn contact_ensure_bot(&mut self, bot_root_id: &str, display_name: &str) -> Result<()> {
         Ok(ensure_bot_shared(&self.plugin_host, bot_root_id, display_name)?)
+    }
+
+    // ------------------------------------------------------------------
+    // 只读门面（社交投递层 social-feed §9.4 `contact:read` 最小只读面）
+    // ------------------------------------------------------------------
+
+    /// 列出所有朋友的只读摘要（供插件 SDK `contacts.listFriends` 消费）。
+    /// 纯查询不加 io_lock（对齐内核查询类方法惯例）；不注入「自己」条目。
+    pub fn contact_list_friends(&self) -> Result<Vec<crate::contact::FriendSummary>> {
+        Ok(ContactService::list_friends(self.require_storage()?)?)
+    }
+
+    /// 列出所有分组（按 order 升序；供插件 SDK `contacts.listGroups` 消费）。
+    pub fn contact_list_groups(&self) -> Result<Vec<crate::contact::ContactGroup>> {
+        Ok(ContactService::list_groups(self.require_storage()?)?)
+    }
+
+    /// 列出所有标签（按 order 升序；供插件 SDK `contacts.listTags` 消费）。
+    pub fn contact_list_tags(&self) -> Result<Vec<crate::contact::ContactTag>> {
+        Ok(ContactService::list_tags(self.require_storage()?)?)
     }
 }

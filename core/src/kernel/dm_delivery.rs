@@ -17,12 +17,13 @@ use serde_json::Value;
 
 use super::dm_envelope::{self, KIND_CHAT};
 use super::{Kernel, KernelError, Result};
-use crate::message::{ConversationRecord, MessageRecord};
+use crate::message::{ConversationRecord, MessageRecord, MessageService};
 use crate::p2p::PeerNodeInfo;
 use crate::p2p::node::system_now_ms;
 
 mod addressing;
 mod device_sync;
+mod flush;
 mod plugin_shared;
 mod profile_sync;
 mod spawn;
@@ -31,6 +32,7 @@ pub(crate) use addressing::{
     heal_self_friend_to_healthy_device, heal_self_pointing_friend_record,
     list_self_device_peer_infos,
 };
+pub(crate) use flush::{flush_pending_for_recipient, is_terminal_rejection};
 
 /// 退避重试节奏（[`Kernel::spawn_deliveries_with_retry`]）：首次失败后 +2s、+5s。
 pub(crate) const DM_RETRY_DELAYS: [std::time::Duration; 2] = [
@@ -61,8 +63,16 @@ impl Kernel {
 
     /// 解析对端并构造 chat 信封（发送的同步部分）；对端无地址或 p2p 未
     /// 运行返回 `Ok(None)`（调用方按 failed 处理）。
+    ///
+    /// **E2E 加密（S6 尾，2026-08-11 架构师裁决 root 密钥直接转换）**：个人
+    /// 空间 direct 人际会话（1:1，feed 同语义）出站启用 E2E——用「我方 root
+    /// 私钥 + 对端 root 公钥 X25519」派生临时会话密钥加密 body，携带 `ephPub`
+    /// 构造签名信封。对端 root 公钥来自密钥表 `peerRootPub`（入站验签时积累）；
+    /// 无记录视为内部错误（不静默降级明文）。组织空间 chat / 自消息 / bot
+    /// 会话保持现状不加密（组织空间经 org-sync 链、对端 root 公钥来源未在
+    /// 本期接线范围）。
     pub(crate) fn prepare_chat_delivery(
-        &self,
+        &mut self,
         space: &str,
         conv: &ConversationRecord,
         record: &MessageRecord,
@@ -77,8 +87,76 @@ impl Kernel {
             "spaceKey": space,
             "message": serde_json::to_value(record)?,
         });
-        let envelope = self.build_dm_envelope(KIND_CHAT, &conv.peer_root_id, body)?;
-        Ok(Some((peer, envelope)))
+        let unlocked = self.unlocked.as_ref().ok_or(KernelError::Locked)?;
+        // 先克隆出 E2E 加密所需的身份值（root 签名私钥 + rootId），避免后续
+        // `require_storage_raw_mut` 的可变借用与 `self.unlocked` 不可变借用冲突。
+        let my_signing_key = unlocked.identity.signing_key.clone();
+        let my_root_id = unlocked.root_id();
+        // 个人空间 direct 人际会话（非自消息）：E2E 加密出站
+        let e2e_chat = space == "personal"
+            && conv.kind == crate::message::ConversationKind::Direct
+            && conv.peer_root_id != my_root_id;
+        if e2e_chat {
+            let ts = system_now_ms();
+            let node_id = self.sync_node_id();
+            let encrypt_result = crate::dm_e2e::encrypt_outbound_body(
+                self.require_storage_raw_mut()?,
+                &my_signing_key,
+                &my_root_id,
+                &conv.peer_root_id,
+                KIND_CHAT,
+                ts,
+                &body,
+                &node_id,
+                ts,
+            );
+            // B1：E2E 加密失败（NoSessionKey 等，存量好友公钥尚未经入站验签积累）
+            // → 消息置 failed + 用户可懂文案，不卡 sending。失败不可靠首投重试
+            // （会话密钥未建立，重投无意义），等首次互连（profile-sync）交换公钥后
+            // 重发。
+            let (encrypted, eph_pub_b64) = match encrypt_result {
+                Ok(v) => v,
+                Err(e) => {
+                    let copy = "加密会话尚未建立，请稍后重发";
+                    // 调用方（message_send_text）已持 io_lock，此处直接落库
+                    let wrote = {
+                        MessageService::set_message_status_if_sending(
+                            self.require_storage_raw_mut()?,
+                            space,
+                            &conv.id,
+                            &record.id,
+                            "failed",
+                        )
+                        .unwrap_or(false)
+                    };
+                    if wrote {
+                        let _ = self.event_tx.send(crate::p2p::P2pEvent::ChatStatus(
+                            serde_json::json!({
+                                "spaceKey": space,
+                                "convId": conv.id,
+                                "messageId": record.id,
+                                "status": "failed",
+                            }),
+                        ));
+                    }
+                    log::warn!("[chat] E2E encrypt failed, msg set failed: {e}");
+                    return Err(KernelError::Internal(copy.to_string()));
+                }
+            };
+            let envelope = dm_envelope::build_envelope_with_eph(
+                KIND_CHAT,
+                &my_root_id,
+                &conv.peer_root_id,
+                ts,
+                encrypted,
+                Some(&eph_pub_b64),
+                &my_signing_key,
+            );
+            Ok(Some((peer, envelope)))
+        } else {
+            let envelope = self.build_dm_envelope(KIND_CHAT, &conv.peer_root_id, body)?;
+            Ok(Some((peer, envelope)))
+        }
     }
 
     /// 尽力向会话对端投递 read/recall 控制信封（失败静默；投递 spawn 到

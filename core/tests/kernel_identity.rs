@@ -223,6 +223,16 @@ fn qr_backup_payload_compact_and_recoverable() {
     assert!(qr.len() < 2 * 1024, "紧凑载荷 <2KB（实测 {}B）", qr.len());
     eprintln!("[qr-backup] 紧凑载荷（30KB 头像身份）{}B", qr.len());
     let qr_json = unwrap_qr(&qr);
+    // 地址裁剪：QR 载荷内嵌地址不得含中继电路（近百字符/条，拉高版本密度）、
+    // 且封顶 3 条——否则备份码高版本无法扫码（回归防护）。
+    let wrapper: Value = serde_json::from_str(&qr).unwrap();
+    if let Some(addrs) = wrapper.get("a").and_then(|v| v.as_array()) {
+        assert!(
+            addrs.iter().all(|a| !a.as_str().unwrap_or("").contains("/p2p-circuit")),
+            "备份二维码不得携带中继电路地址"
+        );
+        assert!(addrs.len() <= 3, "备份二维码内嵌地址封顶 3 条，实际 {}", addrs.len());
+    }
     assert_eq!(qr_json["rootId"], root_id);
     assert!(qr_json.get("avatar").is_none(), "文件外层无 avatar");
     assert!(!qr.contains("data:image"), "载荷不含头像 data URL");

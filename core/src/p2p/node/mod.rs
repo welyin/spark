@@ -244,6 +244,10 @@ pub enum P2pEvent {
     /// 组织邀请状态更新（入站 org-invite-reply 校验通过并落库后发出；
     /// data 为更新后的 `OrgInviteRecord` JSON，前端按 id upsert）。
     OrgInviteUpdated(serde_json::Value),
+    /// 社交定向投递入站（feed 信封验签/解密/落收件箱后发出，social-feed §8）。
+    /// data 为 `{"topic", "from", "feedId", "payload", "ts", "replyTo"?}`，
+    /// 前端/插件按 topic 前缀路由到对应插件实时刷新（pull 补读兜底）。
+    FeedReceived(serde_json::Value),
     /// 消息被丢弃（验签失败/强制签名缺失/形状非法）。
     MessageDropped {
         reason: String,
@@ -376,6 +380,7 @@ impl P2pNode {
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (event_tx, event_rx) = mpsc::unbounded_channel();
+        let cmd_tx_loop = cmd_tx.clone();
         let (dm_completion_tx, dm_completion_rx) = mpsc::unbounded_channel();
         let (dial_timeout_tx, dial_timeout_rx) = mpsc::unbounded_channel();
         let event_loop = EventLoop {
@@ -387,6 +392,7 @@ impl P2pNode {
             now_fn: config.now_fn.clone(),
             app_version: config.app_version.clone(),
             cmd_rx,
+            cmd_tx: cmd_tx_loop,
             event_tx,
             announce_validator: NodeAnnounceValidator::new(),
             exchange_limiter: MinIntervalRateLimiter::new(PEER_EXCHANGE_MIN_INTERVAL_MS),
@@ -419,7 +425,7 @@ impl P2pNode {
                 .dht_republish_ticks
                 .unwrap_or(crate::p2p::constants::DHT_REPUBLISH_TICKS),
             pending_network_change: None,
-            pending_network_change_base: None,
+            last_network_snapshot: None,
             rediscovery_states: HashMap::new(),
             rediscovery_dht_queries: HashMap::new(),
             rediscovery_failures: HashMap::new(),

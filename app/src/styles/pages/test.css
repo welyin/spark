@@ -60,6 +60,45 @@
   word-break: break-all;
 }
 
+.peer-directory {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.peer-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--el-fill-color-lighter);
+}
+
+.peer-row .peer-id {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.peer-row .peer-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.peer-row .peer-addr-count {
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
 .node-meta {
   display: flex;
   flex-wrap: wrap;

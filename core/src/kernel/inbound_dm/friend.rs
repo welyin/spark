@@ -38,7 +38,7 @@ fn parse_node_info(body: &Value) -> Option<PeerRef> {
     Some(PeerRef {
         peer_id: peer_id.to_string(),
         addresses,
-    })
+    ..Default::default()})
 }
 
 /// friend-request 的 from==我 分支（同身份另一台设备的配对请求）：自动
@@ -61,7 +61,7 @@ fn handle_self_friend_request<S: StorageBackend>(
         signature: String::new(),
         gender: None,
         added_at: ctx.now_ms,
-        peer: None,
+        peers: Vec::new(),
         remark: String::new(),
         phones: Vec::new(),
         tag_ids: Vec::new(),
@@ -80,18 +80,21 @@ fn handle_self_friend_request<S: StorageBackend>(
     // 进 `p2p:priority:`（redial 永久对本机空转且无清理路径）。
     let safe_peer = reject_self_pointing_peer(ctx.node_id, peer);
     if let Some(safe_peer) = safe_peer.clone() {
-        friend.peer = Some(safe_peer);
+        // 多设备寻址：配对握手写入首台设备（自设备场景后续经 DeviceRecord 聚合）
+        if !friend.peers.iter().any(|p| p.peer_id == safe_peer.peer_id) {
+            friend.peers.push(safe_peer);
+        }
     }
     friend.updated_at = ctx.now_ms;
     ContactService::upsert_friend_pdsync(storage, &friend, ctx.now_ms, ctx.node_id)?;
     // 自设备配对完成 → 加入优先类目集合（peer-rediscovery §4.4；用守卫后 peer，
-    // 自指时 friend.peer 为 None 不进集合）
-    if let Some(p) = friend.peer.as_ref()
-        && !p.peer_id.trim().is_empty()
-    {
-        let mut priority = crate::p2p::priority_peers::PriorityPeerStore::new(storage);
-        if let Err(e) = priority.add(&p.peer_id) {
-            eprintln!("[friend] self device priority peer add failed: {e}");
+    // 自指时 friend.peers 为空不进集合）
+    let mut priority = crate::p2p::priority_peers::PriorityPeerStore::new(storage);
+    for p in &friend.peers {
+        if !p.peer_id.trim().is_empty() {
+            if let Err(e) = priority.add(&p.peer_id) {
+                eprintln!("[friend] self device priority peer add failed: {e}");
+            }
         }
     }
     // 回发目标取守卫后 peer（自指→None→不回发，语义 = 未携带 nodeInfo）
@@ -122,6 +125,7 @@ fn handle_self_friend_request<S: StorageBackend>(
         orgsync_out: Vec::new(),
         profile_applied: false,
         orgkey_unbox: None,
+        feed_blob_out: None,
     })
 }
 
@@ -200,6 +204,7 @@ pub(super) fn handle_friend_request<S: StorageBackend>(
             orgsync_out: Vec::new(),
             profile_applied: false,
             orgkey_unbox: None,
+            feed_blob_out: None,
         });
     }
 
@@ -318,12 +323,12 @@ pub(super) fn handle_friend_accept<S: StorageBackend>(
         ctx.node_id,
     )?;
     // 好友关系建立 → 加入优先类目集合（peer-rediscovery §4.4，键控 peerId）
-    if let Some(p) = friend.peer.as_ref()
-        && !p.peer_id.trim().is_empty()
-    {
-        let mut priority = crate::p2p::priority_peers::PriorityPeerStore::new(storage);
-        if let Err(e) = priority.add(&p.peer_id) {
-            eprintln!("[friend] priority peer add failed: {e}");
+    let mut priority = crate::p2p::priority_peers::PriorityPeerStore::new(storage);
+    for p in &friend.peers {
+        if !p.peer_id.trim().is_empty() {
+            if let Err(e) = priority.add(&p.peer_id) {
+                eprintln!("[friend] priority peer add failed: {e}");
+            }
         }
     }
     let request_json = request.map(serde_json::to_value).transpose()?;
@@ -336,7 +341,8 @@ pub(super) fn handle_friend_accept<S: StorageBackend>(
     // 即交换设备清单，无需等下次启动补推（对端收到后回发其记录，双向齐全）。
     // 同时打开 24h device_joined 通知补发窗口，并触发向全部已配对自设备的广播。
     let device_sync_reply = if from == ctx.my_root_id {
-        let target = friend.peer.as_ref().map(|p| PeerNodeInfo {
+        // 自设备配对确认：回发目标取握手写入的 peer（首台）
+        let target = friend.peers.first().map(|p| PeerNodeInfo {
             peer_id: (!p.peer_id.is_empty()).then_some(p.peer_id.clone()),
             addresses: p.addresses.clone(),
         });
@@ -361,6 +367,7 @@ pub(super) fn handle_friend_accept<S: StorageBackend>(
         orgsync_out: Vec::new(),
         profile_applied: false,
         orgkey_unbox: None,
+        feed_blob_out: None,
     })
 }
 

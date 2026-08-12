@@ -112,7 +112,7 @@ fn install_from_repo_unsigned_cross_checked() {
     assert_eq!(installed.trust.as_deref(), Some("repo-anchored"));
     assert_eq!(
         installed.granted_permissions,
-        vec!["storage:read", "storage:write", "org:read", "proof:verify", "org:sync"]
+        vec!["storage:read", "storage:write", "org:read", "proof:verify", "identity:verify", "org:sync"]
     );
     // 包落盘：packages_root/<id 段>/packages/<fileName>
     assert!(fixture

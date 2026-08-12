@@ -1,0 +1,30 @@
+{
+  "id": "spark-moments",
+  "domain": "plugin:spark-moments",
+  "name": "朋友圈",
+  "version": "0.1.0",
+  "entryView": "default",
+  "description": "Spark 个人空间社交插件：与个人联系人分享文字与图片动态，互赞互评。对标微信朋友圈核心体验，数据去中心化（P2P 定向投递）。",
+  "category": "social",
+  "supportedSpaces": ["personal"],
+  "views": [
+    { "id": "default", "type": "app", "title": "朋友圈" },
+    { "id": "notify-card", "type": "message-card", "title": "互动通知卡片" }
+  ],
+  "background": "views/background.js",
+  "chrome": {
+    "hostTitleBar": false
+  },
+  "permissions": [
+    "identity:sign",
+    "identity:verify",
+    "contact:read",
+    "feed:deliver",
+    "message:app"
+  ],
+  "sdkVersion": "1",
+  "package": {
+    "updateManifestUrl": "https://github.com/welyin/spark/releases/latest/download/spark-plugin-spark-moments-manifest.json",
+    "packageName": "spark-plugin-spark-moments-0.1.0.spkg"
+  }
+}

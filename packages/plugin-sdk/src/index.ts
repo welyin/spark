@@ -40,7 +40,17 @@ export interface PluginP2PAPI {
 }
 
 export interface PluginRuntimeAPI {
-  currentRoot: () => Promise<{ unlocked: boolean; rootId: string | null }>;
+  currentRoot: () => Promise<{
+    unlocked: boolean;
+    rootId: string | null;
+    /** 当前身份昵称（未设置为 null；供插件初始化「我的资料」） */
+    nickname?: string | null;
+    /** 当前身份头像 data URL（无头像为 null） */
+    avatar?: string | null;
+    gender?: string | null;
+    region?: string | null;
+    signature?: string | null;
+  }>;
   syncOrganizationData: (orgId: string) => Promise<{ orgId: string; attempted: number; pulled: number }>;
   listMineOrganizations: () => Promise<Array<{
     orgId: string;
@@ -245,6 +255,105 @@ export interface PluginMessagesAPI {
 }
 
 // ------------------------------------------------------------------
+// 通讯录模块（社交投递层 social-feed §9.4 `contact:read` 最小只读面）
+// ------------------------------------------------------------------
+
+/** 朋友只读摘要（相对 FriendDto 裁剪：剔除签名/性别/电话/备忘/照片/设备寻址等）。 */
+export type PluginFriendSummary = {
+  rootId: string;
+  nickname: string;
+  /** 无头像时缺省键不出现 */
+  avatar?: string;
+  /** 所属分组 id；'' = 未分组 */
+  groupId: string;
+  tagIds: string[];
+  permission: 'open' | 'chatOnly';
+};
+
+/** 通讯录标签（个人空间扁平分组，数组顺序即显示顺序）。 */
+export type PluginContactTag = {
+  id: string;
+  name: string;
+};
+
+/** 个人空间分组（扁平一层，数组顺序即显示顺序）。 */
+export type PluginContactGroup = {
+  id: string;
+  name: string;
+};
+
+/**
+ * 通讯录只读模块：`contact:read` 权限（高级 + 使用时询问）。
+ * 仅 iframe 桥模式可用，故在 PluginSDK 上为可选字段（同 events/messages）。
+ * 返回字段均经内核只读门面裁剪，不暴露签名等敏感资料。
+ */
+export interface PluginContactsAPI {
+  /** 所有朋友的只读摘要（「谁可以看」选择器依赖） */
+  listFriends: () => Promise<PluginFriendSummary[]>;
+  /** 所有分组（按 order 升序） */
+  listGroups: () => Promise<PluginContactGroup[]>;
+  /** 所有标签（按 order 升序） */
+  listTags: () => Promise<PluginContactTag[]>;
+}
+
+// ------------------------------------------------------------------
+// 社交投递模块（social-feed §9，sdk.feed 域）
+// ------------------------------------------------------------------
+
+/** 单条 feed 消息（收件箱 pull / 在线推送 onReceive 共用形状，§9.1）。 */
+export type FeedMessage = {
+  feedId: string;
+  /** 发送方 rootId（信封 from） */
+  from: string;
+  /** topic（`{pluginId}:{sub}`，前缀即插件归属） */
+  topic: string;
+  /** 业务 payload（明文，解密后分发） */
+  payload: unknown;
+  /** 回执语义（指向原 feedId）；可省 */
+  replyTo?: string;
+  /** 信封时间戳（ms，发送方时间；I6 后落库/事件用信封 ts 而非接收方本地时间） */
+  ts: number;
+};
+
+/**
+ * 社交定向投递模块（social-feed §9.1）。`feed:deliver` 权限（高级 + 内核
+ * 限流）；接收侧（onReceive/pull）免权限。topic 前缀必须 == 本插件 id（出站
+ * 侧由桥 dispatcher / 壳层校验）。仅 iframe 桥模式可用，故在 PluginSDK 上为
+ * 可选字段（同 events/messages）。
+ */
+export interface PluginFeedAPI {
+  /**
+   * 定向投递（§9.1 deliver）：把 payload 投递给 rootId 名单。
+   * 返回 `{requested, accepted}`（被拉黑/仅聊天/非朋友静默跳过，不计 accepted）。
+   * 收件人须为本机朋友（否则静默跳过）。payload 紧凑序列化 ≤ 32 KiB。
+   */
+  deliver: (input: {
+    /** `{pluginId}:{sub}`，前缀须等于本插件 id */
+    topic: string;
+    payload: unknown;
+    /** rootId 名单，≤ 500 */
+    recipients: string[];
+    /** 回执语义：原数据 feedId */
+    replyTo?: string;
+    /** 可省，缺省壳层生成 */
+    feedId?: string;
+  }) => Promise<{ requested: number; accepted: number }>;
+
+  /** 订阅收件（§9.1 onReceive；在线推送，topic 前缀匹配；接收侧免权限） */
+  onReceive: (
+    topic: string,
+    handler: (msg: FeedMessage) => void
+  ) => Promise<void>;
+
+  /** 补读收件箱（§9.1 pull；启动/恢复路径，接收侧免权限） */
+  pull: (input: {
+    topic: string;
+    cursor?: string;
+    limit?: number;
+  }) => Promise<{ items: FeedMessage[]; nextCursor?: string }>;
+}
+
+// ------------------------------------------------------------------
 // 事件模块（随桥协议落地，见 bridge/client.ts）
 // ------------------------------------------------------------------
 
@@ -323,6 +432,8 @@ export interface PluginSysAPI {
 export interface PluginSDK {
   /** 当前插件的域身份：tab 模式下由 URL query `pluginDomain` 解析（对齐旧 tab 语义） */
   domain: string;
+  /** 请求壳层关闭当前插件视图（退出插件返回来源页）。仅 iframe 桥模式可用 */
+  close: () => Promise<void>;
   evidence: PluginEvidenceAPI;
   p2p: PluginP2PAPI;
   runtime: PluginRuntimeAPI;
@@ -334,6 +445,10 @@ export interface PluginSDK {
   events?: PluginEventsAPI;
   /** 消息模块（服务号 + Bot 联系人）：仅 iframe 桥模式可用（tab 模式未注入） */
   messages?: PluginMessagesAPI;
+  /** 通讯录只读模块（social-feed §9.4 contact:read）：仅 iframe 桥模式可用 */
+  contacts?: PluginContactsAPI;
+  /** 社交投递模块（social-feed §9.1 sdk.feed：deliver/onReceive/pull）：仅 iframe 桥模式可用 */
+  feed?: PluginFeedAPI;
   /** 系统代理模块（sys.exec / sys.fetch）：仅 iframe 桥模式可用 */
   sys?: PluginSysAPI;
   /**
@@ -437,6 +552,11 @@ export type PluginManifest = {
   requires?: PluginRequires;
   /** 依赖的 SDK 契约版本 */
   sdkVersion: string;
+  /** 宿主 chrome（壳层 UI 声明）。可选；缺省时壳层显示默认插件顶栏（返回+标题） */
+  chrome?: {
+    /** false：插件自接管顶栏，壳层隐藏默认顶栏主体、仅保留左上角悬浮返回图标 */
+    hostTitleBar?: boolean;
+  };
   package?: {
     updateManifestUrl: string;
     packageName: string;

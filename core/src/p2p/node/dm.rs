@@ -68,12 +68,12 @@ impl<S: StorageBackend> EventLoop<S> {
             let attempt = OrgAttempt {
                 kind: OrgAttemptKind::Dm,
                 targets: VecDeque::new(),
-                current_target: None,
+                batch: Vec::new(),
                 current_peer: Some(peer),
                 request_json,
                 in_flight: Some(request_id),
                 dial_issued: false,
-                dial_conn_id: None,
+                waiting_base: None,
                 tx: OrgTx::Dm(tx),
             };
             self.pending_org_attempts.push(attempt);
@@ -83,7 +83,12 @@ impl<S: StorageBackend> EventLoop<S> {
         // OverlayPeerStore 的新地址 DM 拨号也能看到——静态 FriendRecord.peer
         // 兜底去重，邻居池地址在前（已按 IPv6 优先排序）。
         let node_info = self.merge_neighbor_addresses(node_info);
-        let targets = match build_dial_targets(&node_info) {
+        // M9：带地址记分卡排序 + 自过滤（不拨本机监听地址）
+        let addr_meta = extract_peer_id(&node_info)
+            .map(|pid| self.addr_meta_for(&pid))
+            .unwrap_or_default();
+        let self_addrs = self.self_listen_addr_set();
+        let targets = match build_dial_targets(&node_info, Some(&addr_meta), &self_addrs) {
             Ok(t) => VecDeque::from(t),
             Err(e) => {
                 let _ = tx.send(Err(e));
@@ -93,18 +98,18 @@ impl<S: StorageBackend> EventLoop<S> {
         let mut attempt = OrgAttempt {
             kind: OrgAttemptKind::Dm,
             targets,
-            current_target: None,
+            batch: Vec::new(),
             // 目标 peer 在构建时即记录：并发拨号冲突（EADDRINUSE）后的
             // 「已建连接复用」恢复与错误匹配都依赖它
             current_peer: extract_peer_id(&node_info).and_then(|s| s.parse::<PeerId>().ok()),
             request_json: direct::build_dm_request(&payload),
             in_flight: None,
             dial_issued: false,
-            dial_conn_id: None,
+            waiting_base: None,
             tx: OrgTx::Dm(tx),
         };
         self.dial_next_org_target(&mut attempt);
-        if attempt.current_target.is_some() || attempt.in_flight.is_some() {
+        if attempt.has_dial_activity() {
             self.pending_org_attempts.push(attempt);
         } else {
             attempt.finish_exhausted();
@@ -138,9 +143,9 @@ impl<S: StorageBackend> EventLoop<S> {
         let now = self.now();
         let Some(payload) = direct::parse_dm_request(&request) else {
             if request.len() < 500 {
-                log::info!("[P2P_DM_INBOUND] raw request is not valid JSON object: {}", request);
+                log::warn!("[P2P_DM_INBOUND] raw request is not valid JSON object: {}", request);
             } else {
-                log::info!("[P2P_DM_INBOUND] raw request is not valid JSON object (len={})", request.len());
+                log::warn!("[P2P_DM_INBOUND] raw request is not valid JSON object (len={})", request.len());
             }
             let response = direct::build_dm_error_response("invalid-request");
             let _ = self
@@ -154,7 +159,7 @@ impl<S: StorageBackend> EventLoop<S> {
         // （pdsync-*/contact-sync 等）豁免限流：前者由「发消息」动作派生连发，
         // 后者是反熵多信封往返，共享同一 1s 桶会被确定性误限流
         let kind = payload.get("kind").and_then(Value::as_str);
-        log::info!(
+        log::debug!(
             "[P2P_DM_INBOUND] parsed kind={} from_peer={}",
             kind.unwrap_or("?"),
             &peer.to_base58()[..std::cmp::min(16, peer.to_base58().len())]

@@ -21,6 +21,8 @@ use serde_json::{Value, json};
 
 mod attachment;
 mod chat;
+mod feed;
+mod feed_blob;
 mod friend;
 mod notice;
 mod org_invite;
@@ -32,19 +34,25 @@ mod recovery;
 mod sync;
 
 use super::dm_envelope::{
-    KIND_CHAT, KIND_CONTACT_SYNC, KIND_CONV_SYNC, KIND_DEVICE_NOTICE, KIND_DEVICE_SYNC,
-    KIND_FRIEND_ACCEPT, KIND_FRIEND_REPLY, KIND_FRIEND_REQUEST, KIND_ORG_INVITE,
-    KIND_ORG_INVITE_REPLY, KIND_ORGKEY_DELIVER, KIND_ORGSYNC_DATA, KIND_ORGSYNC_HELLO,
-    KIND_ORGSYNC_NEED, KIND_ORGQ_REQ, KIND_ORGQ_RESP, KIND_PDSYNC_ATTACHMENT_REQ,
-    KIND_PDSYNC_ATTACHMENT_RESP, KIND_PDSYNC_DATA, KIND_PDSYNC_HELLO, KIND_PDSYNC_NEED,
-    KIND_PROFILE_SYNC, KIND_READ, KIND_RECALL, KIND_RECOVERY, verify_envelope,
+KIND_CHAT, KIND_CONTACT_SYNC, KIND_CONV_SYNC, KIND_DEVICE_NOTICE, KIND_DEVICE_SYNC,
+KIND_FEED, KIND_FEED_BLOB_REQ, KIND_FEED_BLOB_RESP, KIND_FRIEND_ACCEPT, KIND_FRIEND_REPLY,
+KIND_FRIEND_REQUEST, KIND_ORG_INVITE, KIND_ORG_INVITE_REPLY, KIND_ORGKEY_DELIVER,
+KIND_ORGSYNC_DATA, KIND_ORGSYNC_HELLO, KIND_ORGSYNC_NEED, KIND_ORGQ_REQ, KIND_ORGQ_RESP,
+KIND_PDSYNC_ATTACHMENT_REQ, KIND_PDSYNC_ATTACHMENT_RESP, KIND_PDSYNC_DATA, KIND_PDSYNC_HELLO,
+KIND_PDSYNC_NEED, KIND_PROFILE_SYNC, KIND_READ, KIND_RECALL, KIND_RECOVERY, verify_envelope,
 };
 
 /// O3 filtered 集合权限钩子（orgq-req 数据账号侧裁决契约，见 [`orgq`]）。
 pub use orgq::OrgqPermHook;
 /// O4 orgkey-deliver 解包指令（reader 侧合法投递，host 用 seed 解包落库）。
 pub use orgkey::OrgkeyUnbox;
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as B64;
 use crate::contact::{ContactError, ContactService, FriendRecord};
+use crate::dm_e2e::{
+    decrypt_body, decrypt_body_with_key, derive_session_key_from_eph_pub,
+    record_inbound_peer_root_pub,
+};
 use crate::message::{MessageError, PeerRef};
 use crate::org::OrgError;
 use crate::p2p::{P2pEvent, PeerNodeInfo};
@@ -162,6 +170,9 @@ pub struct InboundDmResult {
     /// 用本机组织身份私钥（seed）解 box 并落 orgkey 表——解包需 recipient
     /// 私钥，纯逻辑层只做资格/验签判定后产出本指令。
     pub orgkey_unbox: Option<orgkey::OrgkeyUnbox>,
+    /// feed-blob 出站指令（连接层对端）：跨联系人分块传输的响应/续拉。
+    /// body 已在纯逻辑层构建（io_lock 内），host 只负责包信封 + dm_direct。
+    pub feed_blob_out: Option<FeedBlobOut>,
 }
 
 /// orgsync/orgq 出站信封（body 已构建，host 装配完整信封并经 p2p 节点投递）。
@@ -251,6 +262,34 @@ impl PdsyncOut {
     }
 }
 
+/// feed-blob 出站信封（body 已构建，host 装配完整信封并经 p2p 节点投递；
+/// 跨联系人分块传输通道，响应/续拉都走 feed-blob-req/resp kind）。
+#[derive(Clone, Debug)]
+pub enum FeedBlobOut {
+    /// `feed-blob-req`：请求方续拉下一块（`{hash, offset}`）。
+    BlobReq { body: Value },
+    /// `feed-blob-resp`：服务方分块应答（`{hash, offset, data, totalBytes,
+    /// missing?}`）。
+    BlobResp { body: Value },
+}
+
+impl FeedBlobOut {
+    /// 出站 body（host 装配信封用）。
+    pub fn body(&self) -> &Value {
+        match self {
+            Self::BlobReq { body } | Self::BlobResp { body } => body,
+        }
+    }
+
+    /// 出站信封 kind。
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::BlobReq { .. } => KIND_FEED_BLOB_REQ,
+            Self::BlobResp { .. } => KIND_FEED_BLOB_RESP,
+        }
+    }
+}
+
 /// 入站上下文：本机身份/昵称、连接层对端、在线 peer 快照与时间（各
 /// handle_* 共享，避免逐项透传参数）。`pub`（模块内）供子模块共享。
 pub struct InboundContext<'a> {
@@ -289,6 +328,7 @@ pub fn done(response: Value, events: Vec<P2pEvent>) -> Result<InboundDmResult> {
         orgsync_out: Vec::new(),
         profile_applied: false,
         orgkey_unbox: None,
+        feed_blob_out: None,
     })
 }
 
@@ -371,7 +411,7 @@ pub fn merge_friend_record<S: StorageBackend>(
         signature: String::new(),
         gender: None,
         added_at: now_ms,
-        peer: None,
+        peers: Vec::new(),
         remark: String::new(),
         phones: Vec::new(),
         tag_ids: Vec::new(),
@@ -389,20 +429,24 @@ pub fn merge_friend_record<S: StorageBackend>(
         friend.avatar = Some(avatar.to_string());
     }
     if let Some(safe_peer) = reject_self_pointing_peer(node_id, peer) {
-        friend.peer = Some(safe_peer);
+        // 多设备寻址：合并写入首台设备（握手 nodeInfo）；已有同 peerId 不重复
+        if !friend.peers.iter().any(|p| p.peer_id == safe_peer.peer_id) {
+            friend.peers.push(safe_peer);
+        }
     }
     // 接受产生的朋友记录是本机状态变更：刷新 LWW 时间（随 contact-sync
     // 传播到其他自设备）
     friend.updated_at = now_ms;
     ContactService::upsert_friend_pdsync(storage, &friend, now_ms, node_id)?;
     // pdsync/好友接受等所有好友合并路径统一回填优先集合（§4.4；已拉黑不加入）
-    if !friend.blocked
-        && let Some(p) = friend.peer.as_ref()
-        && !p.peer_id.trim().is_empty()
-    {
+    if !friend.blocked {
         let mut priority = crate::p2p::priority_peers::PriorityPeerStore::new(storage);
-        if let Err(e) = priority.add(&p.peer_id) {
-            eprintln!("[dm] merge friend priority peer add failed: {e}");
+        for p in &friend.peers {
+            if !p.peer_id.trim().is_empty() {
+                if let Err(e) = priority.add(&p.peer_id) {
+                    eprintln!("[dm] merge friend priority peer add failed: {e}");
+                }
+            }
         }
     }
     Ok(friend)
@@ -425,18 +469,23 @@ fn heal_self_friend_peer<S: StorageBackend>(storage: &mut S, ctx: &InboundContex
     let Ok(Some(mut friend)) = ContactService::get_friend(storage, ctx.my_root_id) else {
         return;
     };
+    // 多设备寻址：仅当 peers 中存在自指污染项时才改写——过滤掉指向本机的
+    // 项，并补入连接层权威值（本帧可达性已证实）。无自指项不改写（多设备
+    // 合法指向第三台设备，来回抖动场景见注释）。
     let self_pointing = friend
-        .peer
-        .as_ref()
-        .is_some_and(|p| !p.peer_id.is_empty() && p.peer_id == ctx.node_id);
+        .peers
+        .iter()
+        .any(|p| !p.peer_id.is_empty() && p.peer_id == ctx.node_id);
     if !self_pointing {
         return;
     }
-    // 旧 addresses 属于本机监听地址（自指污染值），一并清除
-    friend.peer = Some(PeerRef {
-        peer_id: ctx.remote_peer_id.to_string(),
-        addresses: Vec::new(),
-    });
+    friend.peers.retain(|p| p.peer_id != ctx.node_id);
+    if !friend.peers.iter().any(|p| p.peer_id == ctx.remote_peer_id) {
+        friend.peers.push(PeerRef {
+            peer_id: ctx.remote_peer_id.to_string(),
+            addresses: Vec::new(),
+        ..Default::default()});
+    }
     friend.updated_at = ctx.now_ms;
     if let Err(e) =
         ContactService::upsert_friend_pdsync(storage, &friend, ctx.now_ms, ctx.node_id)
@@ -449,14 +498,15 @@ fn heal_self_friend_peer<S: StorageBackend>(storage: &mut S, ctx: &InboundContex
 /// （libp2p peerId，随会话 peer 落库供回发寻址）；`online_peers` 为当前
 /// 在线的 libp2p peerId 集合（事件循环快照，用于 ChatReceived 事件里
 /// 会话视图的 online 标志）。
-/// dm 入站处理：校验信封并按 kind 分发。`remote_peer_id` 为连接层对端
-/// （libp2p peerId，随会话 peer 落库供回发寻址）；`online_peers` 为当前
-/// 在线的 libp2p peerId 集合（事件循环快照，用于 ChatReceived 事件里
-/// 会话视图的 online 标志）。
 ///
 /// filtered 集合的 orgq-req 以 fail-closed（无权限钩子）处理——宿主如需在
 /// 插件后台运行时执行 `canRead`/`canWrite` 钩子，走
 /// [`handle_inbound_dm_with_orgq_hooks`]。
+///
+/// 本入口不带 E2E 域身份（`my_domain = None`）：带 `ephPub` 的加密信封回
+/// `internal-error`（无已解锁身份无法派生临时会话密钥），其余照常分发。
+/// 宿主解锁态请走 [`handle_inbound_dm_with_e2e`]（传入本机 dm-e2e 域身份
+/// 以支持入站 E2E 解密）。
 pub fn handle_inbound_dm<S: StorageBackend>(
     storage: &mut S,
     my_root_id: &str,
@@ -478,6 +528,7 @@ pub fn handle_inbound_dm<S: StorageBackend>(
         now_ms,
         node_id,
         kverify,
+        None,
         None,
     )
 }
@@ -507,8 +558,118 @@ pub fn handle_inbound_dm_with_orgq_hooks<S: StorageBackend>(
         now_ms,
         node_id,
         kverify,
+        None,
         hook,
     )
+}
+
+/// S6 入站 E2E 入口（宿主解锁态）：`my_signing_key` 为本机 **root** 签名私钥
+/// （2026-08-11 架构师裁决，root 密钥直接转换）——带 `ephPub` 的加密信封按
+/// 「我方 root 私钥 + 对端 ephPub」派生临时会话密钥解密；无 `ephPub` 走密钥
+/// 表回退（不需 root 私钥）。锁定态传 `None`（带 ephPub 的加密信封回
+/// `internal-error`）。验签通过后顺手把信封 `pubKey`（对端 root 公钥）记入
+/// 密钥表 `peerRootPub`（供本方后续出站 E2E 读取）。
+pub fn handle_inbound_dm_with_e2e<S: StorageBackend>(
+    storage: &mut S,
+    my_root_id: &str,
+    my_nickname: &str,
+    payload: Value,
+    remote_peer_id: &str,
+    online_peers: &HashSet<String>,
+    now_ms: i64,
+    node_id: &str,
+    kverify: Option<&[u8; 32]>,
+    my_signing_key: Option<&ed25519_dalek::SigningKey>,
+) -> Result<InboundDmResult> {
+    handle_inbound_dm_inner(
+        storage,
+        my_root_id,
+        my_nickname,
+        payload,
+        remote_peer_id,
+        online_peers,
+        now_ms,
+        node_id,
+        kverify,
+        my_signing_key,
+        None,
+    )
+}
+
+/// 入站 body 解密结果：明文 body 交各 handler，或直接拒绝（reason）。
+enum DecryptedBody {
+    Plain(Value),
+    Rejected(&'static str),
+}
+
+/// S6 E2E 入站统一解密（先验签后解密，p2p-dm §19.1.1）：
+///
+/// - body 无 `encrypted` 标记（非加密信封）→ 原样 `Plain`（兼容旧对端/同步类
+///   kind 的明文 body）；
+/// - body `encrypted: true` 且信封带 `ephPub` → 用「我方 root 私钥 + 对端
+///   ephPub」经 [`derive_session_key_from_eph_pub`] 派生临时会话密钥解密；
+/// - body `encrypted: true` 且无 `ephPub`（对端未升级 root 直接转换 DH）→ 走
+///   密钥表回退 [`decrypt_body`]（按 ts 选 current/历史密钥）。
+///
+/// `to` = 本机 rootId（`my_root_id`，信封 `to` 已验为指向本机）。解密失败
+/// （密文/密钥/AAD 不符）→ `Rejected("invalid-body")`；需 ephPub 派生但
+/// `my_signing_key` 为 `None`（锁定态无已解锁身份）→ `Rejected("internal-error")`。
+fn decrypt_inbound_body<S: StorageBackend>(
+    storage: &mut S,
+    envelope: &crate::kernel::dm_envelope::VerifiedDm,
+    my_root_id: &str,
+    my_signing_key: Option<&ed25519_dalek::SigningKey>,
+) -> Result<DecryptedBody> {
+    let body = &envelope.body;
+    let encrypted = body.get("encrypted").and_then(Value::as_bool).unwrap_or(false);
+    if !encrypted {
+        // 明文 body（同步类 kind / 兼容对端）：原样分发
+        return Ok(DecryptedBody::Plain(body.clone()));
+    }
+    let dec_result: std::result::Result<Value, crate::dm_e2e::DmE2eError> =
+        match &envelope.eph_pub {
+            // ephPub 路径：我方 root 私钥 + 对端 ephPub 派生临时会话密钥
+            Some(eph_b64) => {
+                let Some(my_signing_key) = my_signing_key else {
+                    // 锁定态无已解锁身份：无法派生 ephPub 会话密钥
+                    return Ok(DecryptedBody::Rejected("internal-error"));
+                };
+                let eph_raw: [u8; 32] =
+                    match B64.decode(eph_b64).ok().and_then(|v| v.try_into().ok()) {
+                        Some(e) => e,
+                        None => return Ok(DecryptedBody::Rejected("invalid-body")),
+                    };
+                match derive_session_key_from_eph_pub(
+                    my_signing_key,
+                    &eph_raw,
+                    &envelope.from,
+                    my_root_id,
+                ) {
+                    Ok(key) => decrypt_body_with_key(
+                        &key,
+                        &envelope.from,
+                        my_root_id,
+                        &envelope.kind,
+                        envelope.ts,
+                        body,
+                    ),
+                    Err(e) => Err(e),
+                }
+            }
+            // 无 ephPub：密钥表回退（root 直接转换 DH 会话密钥）
+            None => decrypt_body(
+                storage,
+                &envelope.from,
+                my_root_id,
+                &envelope.kind,
+                envelope.ts,
+                body,
+            ),
+        };
+    match dec_result {
+        Ok(plain) => Ok(DecryptedBody::Plain(plain)),
+        Err(_) => Ok(DecryptedBody::Rejected("invalid-body")),
+    }
 }
 
 fn handle_inbound_dm_inner<S: StorageBackend>(
@@ -521,12 +682,29 @@ fn handle_inbound_dm_inner<S: StorageBackend>(
     now_ms: i64,
     node_id: &str,
     kverify: Option<&[u8; 32]>,
+    my_signing_key: Option<&ed25519_dalek::SigningKey>,
     orgq_hook: Option<&dyn orgq::OrgqPermHook>,
 ) -> Result<InboundDmResult> {
     let envelope = match verify_envelope(&payload, my_root_id, now_ms) {
         Ok(v) => v,
         Err(reason) => return done(fail_response(&reason), Vec::new()),
     };
+    // 入站验签通过：把信封 `pubKey`（对端 root 公钥）记入密钥表 `peerRootPub`
+    // （2026-08-11 架构师裁决，供本方后续出站 E2E 读取对端 root 公钥做 X25519
+    // 转换）。仅当与已存值不同才写盘；记录不存在时创建占位记录。best-effort
+    // （记录失败不阻断分发——密钥积累不影响本次入站处理）。
+    //
+    // **自设备信封（from==to==本机）跳过**：pdsync 自同步（hello/data/need）
+    // 的 `pubKey` 是本机 root 公钥，记入 `dm:e2e:key:{self}` 属自污染——会话
+    // 密钥表是**对端** root 公钥的槽位，自记录会触发 pdsync `dm:e2e` category
+    // 窗口批次误报（S11 回归，见 kernel_pdsync_inbound 窗口收集）。
+    if envelope.from != my_root_id
+        && let Some(pub_key) = payload.get("pubKey").and_then(Value::as_str)
+    {
+        if let Err(e) = record_inbound_peer_root_pub(storage, &envelope.from, pub_key, node_id, now_ms) {
+            log::warn!("[dm] record peer root pub failed: {e}");
+        }
+    }
     let ctx = InboundContext {
         my_root_id,
         my_nickname,
@@ -540,29 +718,39 @@ fn handle_inbound_dm_inner<S: StorageBackend>(
     if envelope.from == my_root_id {
         heal_self_friend_peer(storage, &ctx);
     }
+    // S6 E2E 入站统一解密（先验签后解密）：body.encrypted 判定 → ephPub
+    // 路径（我方 root 私钥 + 对端 ephPub 派生临时会话密钥）或密钥表回退
+    // （无 ephPub，root 直接转换 DH 会话密钥）。解密失败回 `invalid-body`；
+    // 无已解锁身份且需 ephPub 派生 → `internal-error`。非加密信封原样分发。
+    let body = match decrypt_inbound_body(storage, &envelope, my_root_id, my_signing_key)? {
+        DecryptedBody::Plain(body) => body,
+        DecryptedBody::Rejected(reason) => {
+            return done(fail_response(reason), Vec::new())
+        }
+    };
     log::info!(
         "[INBOUND_DM] routing kind={} from={}",
         envelope.kind,
         &envelope.from[..std::cmp::min(16, envelope.from.len())]
     );
     match envelope.kind.as_str() {
-        KIND_CHAT => chat::handle_chat(storage, &ctx, &envelope.from, &envelope.body),
-        KIND_READ => sync::handle_read(storage, &ctx, &envelope.from, &envelope.body),
-        KIND_RECALL => sync::handle_recall(storage, &ctx, &envelope.from, &envelope.body),
+        KIND_CHAT => chat::handle_chat(storage, &ctx, &envelope.from, &body),
+        KIND_READ => sync::handle_read(storage, &ctx, &envelope.from, &body),
+        KIND_RECALL => sync::handle_recall(storage, &ctx, &envelope.from, &body),
         KIND_FRIEND_REQUEST => {
-            friend::handle_friend_request(storage, &ctx, &envelope.from, &envelope.body)
+            friend::handle_friend_request(storage, &ctx, &envelope.from, &body)
         }
         KIND_FRIEND_ACCEPT => {
-            friend::handle_friend_accept(storage, &ctx, &envelope.from, &envelope.body)
+            friend::handle_friend_accept(storage, &ctx, &envelope.from, &body)
         }
         KIND_FRIEND_REPLY => {
-            friend::handle_friend_reply(storage, &ctx, &envelope.from, &envelope.body)
+            friend::handle_friend_reply(storage, &ctx, &envelope.from, &body)
         }
         KIND_PROFILE_SYNC => {
-            sync::handle_profile_sync(storage, &ctx, &envelope.from, &envelope.body)
+            sync::handle_profile_sync(storage, &ctx, &envelope.from, &body)
         }
         KIND_DEVICE_SYNC => {
-            sync::handle_device_sync(storage, &ctx, &envelope.from, &envelope.body)
+            sync::handle_device_sync(storage, &ctx, &envelope.from, &body)
         }
         KIND_DEVICE_NOTICE => {
             notice::handle_device_notice(&ctx, &envelope.from, &envelope.body)
@@ -571,47 +759,54 @@ fn handle_inbound_dm_inner<S: StorageBackend>(
             recovery::handle_recovery(storage, &ctx, &envelope.from, envelope.ts, &envelope.body)
         }
         KIND_CONTACT_SYNC => {
-            sync::handle_contact_sync(storage, &ctx, &envelope.from, &envelope.body)
+            sync::handle_contact_sync(storage, &ctx, &envelope.from, &body)
         }
-        KIND_CONV_SYNC => sync::handle_conv_sync(storage, &ctx, &envelope.from, &envelope.body),
+        KIND_CONV_SYNC => sync::handle_conv_sync(storage, &ctx, &envelope.from, &body),
         KIND_PDSYNC_HELLO => {
-            pdsync::handle_pdsync_hello(storage, &ctx, &envelope.from, &envelope.body)
+            pdsync::handle_pdsync_hello(storage, &ctx, &envelope.from, &body)
         }
         KIND_PDSYNC_NEED => {
-            pdsync::handle_pdsync_need(storage, &ctx, &envelope.from, &envelope.body)
+            pdsync::handle_pdsync_need(storage, &ctx, &envelope.from, &body)
         }
         KIND_PDSYNC_DATA => {
-            pdsync::handle_pdsync_data(storage, &ctx, &envelope.from, &envelope.body)
+            pdsync::handle_pdsync_data(storage, &ctx, &envelope.from, &body)
         }
         KIND_PDSYNC_ATTACHMENT_REQ => {
-            attachment::handle_attachment_req(storage, &ctx, &envelope.from, &envelope.body)
+            attachment::handle_attachment_req(storage, &ctx, &envelope.from, &body)
         }
         KIND_PDSYNC_ATTACHMENT_RESP => {
-            attachment::handle_attachment_resp(storage, &ctx, &envelope.from, &envelope.body)
+            attachment::handle_attachment_resp(storage, &ctx, &envelope.from, &body)
         }
         KIND_ORG_INVITE => {
-            org_invite::handle_org_invite(storage, &ctx, &envelope.from, &envelope.body)
+            org_invite::handle_org_invite(storage, &ctx, &envelope.from, &body)
         }
         KIND_ORG_INVITE_REPLY => {
-            org_invite::handle_org_invite_reply(storage, &ctx, &envelope.from, &envelope.body)
+            org_invite::handle_org_invite_reply(storage, &ctx, &envelope.from, &body)
         }
         KIND_ORGSYNC_HELLO => {
-            orgsync::handle_orgsync_hello(storage, &ctx, &envelope.from, &envelope.body)
+            orgsync::handle_orgsync_hello(storage, &ctx, &envelope.from, &body)
         }
         KIND_ORGSYNC_NEED => {
-            orgsync::handle_orgsync_need(storage, &ctx, &envelope.from, &envelope.body)
+            orgsync::handle_orgsync_need(storage, &ctx, &envelope.from, &body)
         }
         KIND_ORGSYNC_DATA => {
-            orgsync::handle_orgsync_data(storage, &ctx, &envelope.from, &envelope.body)
+            orgsync::handle_orgsync_data(storage, &ctx, &envelope.from, &body)
         }
         KIND_ORGQ_REQ => {
-            orgq::handle_orgq_req(storage, &ctx, &envelope.from, &envelope.body, orgq_hook)
+            orgq::handle_orgq_req(storage, &ctx, &envelope.from, &body, orgq_hook)
         }
         KIND_ORGQ_RESP => {
-            orgq::handle_orgq_resp(storage, &ctx, &envelope.from, &envelope.body)
+            orgq::handle_orgq_resp(storage, &ctx, &envelope.from, &body)
         }
         KIND_ORGKEY_DELIVER => {
-            orgkey::handle_orgkey_deliver(storage, &ctx, &envelope.from, &envelope.body)
+            orgkey::handle_orgkey_deliver(storage, &ctx, &envelope.from, &body)
+        }
+        KIND_FEED => feed::handle_feed(storage, &ctx, &envelope.from, &body, envelope.ts),
+        KIND_FEED_BLOB_REQ => {
+            feed_blob::handle_feed_blob_req(storage, &ctx, &envelope.from, &body)
+        }
+        KIND_FEED_BLOB_RESP => {
+            feed_blob::handle_feed_blob_resp(storage, &ctx, &envelope.from, &body)
         }
         _ => done(fail_response("unknown-kind"), Vec::new()),
     }
@@ -632,7 +827,7 @@ mod tests {
         let self_peer = Some(PeerRef {
             peer_id: node_id.to_string(),
             addresses: vec!["addr".to_string()],
-        });
+        ..Default::default()});
         assert!(
             reject_self_pointing_peer(node_id, self_peer).is_none(),
             "自指 peer 必须被拒绝"
@@ -642,7 +837,7 @@ mod tests {
         let normal = Some(PeerRef {
             peer_id: "peer-other-device".to_string(),
             addresses: vec!["addr".to_string()],
-        });
+        ..Default::default()});
         assert_eq!(
             reject_self_pointing_peer(node_id, normal.clone())
                 .map(|p| p.peer_id)
@@ -655,7 +850,7 @@ mod tests {
         let empty = Some(PeerRef {
             peer_id: String::new(),
             addresses: Vec::new(),
-        });
+        ..Default::default()});
         assert!(
             reject_self_pointing_peer(node_id, empty).is_some(),
             "空 peer_id 放行"

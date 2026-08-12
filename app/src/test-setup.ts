@@ -21,7 +21,13 @@ api.rootIdentity = {
 };
 api.organization = { listMine: async () => [] };
 api.plugin = { listCatalog: async () => [] };
-api.pluginMarket = { list: async () => [] };
+api.pluginMarket = {
+  list: async () => [],
+  checkUpdates: async () => [],
+  install: async () => null,
+  upgrade: async () => null,
+  setEnabled: async () => null
+};
 api.p2p = {
   info: async () => ({
     initialized: true,

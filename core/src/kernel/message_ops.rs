@@ -32,6 +32,7 @@ pub(crate) use send::{
     bot_reply_shared, bot_reply_stream_chunk_shared, bot_reply_stream_end_shared,
     bot_reply_stream_start_shared, require_owned_bot_conv,
 };
+pub(crate) use app_ops::message_app_send_shared;
 pub(crate) use views::{app_message_view, conversation_view, message_view};
 
 /// direct 会话 id 前缀（`dm:{peerRootId}`）。
@@ -181,8 +182,11 @@ impl Kernel {
             .unwrap_or_default()
             .into_iter()
             .filter_map(|f| {
-                f.peer
-                    .and_then(|p| (!p.peer_id.is_empty()).then_some((f.root_id, p.peer_id)))
+                // 多设备寻址：取该朋友的第一个可用 peerId（online 判定线索）
+                f.peers
+                    .into_iter()
+                    .find(|p| !p.peer_id.is_empty())
+                    .map(|p| (f.root_id, p.peer_id))
             })
             .collect()
     }

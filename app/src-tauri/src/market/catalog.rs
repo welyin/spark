@@ -126,6 +126,35 @@ pub fn list_plugin_catalog() -> Vec<PluginCatalogItem> {
                 install_command: "spark-plugin install spark-plugin-ai-chat-0.1.0.spkg".to_string(),
             },
         },
+        PluginCatalogItem {
+            id: "spark-moments".to_string(),
+            domain: "plugin:spark-moments".to_string(),
+            name: "朋友圈".to_string(),
+            description: "个人动态圈：分享图文动态，点赞与评论，仅个人联系人可见。对标微信朋友圈核心体验，数据去中心化（P2P 定向投递）。"
+                .to_string(),
+            category: "social".to_string(),
+            version: "0.1.0".to_string(),
+            views: vec!["default".to_string(), "notify-card".to_string()],
+            permissions: vec![
+                "identity:sign".to_string(),
+                "identity:verify".to_string(),
+                "contact:read".to_string(),
+                "feed:deliver".to_string(),
+                "message:app".to_string(),
+            ],
+            supported_spaces: Some(vec!["personal".to_string()]),
+            requires: None,
+            package: PluginCatalogPackage {
+                update_manifest_url:
+                    "https://github.com/welyin/spark/releases/latest/download/spark-plugin-spark-moments-manifest.json"
+                        .to_string(),
+                signature_url:
+                    "https://github.com/welyin/spark/releases/latest/download/spark-plugin-spark-moments-manifest.sig"
+                        .to_string(),
+                package_name: "spark-plugin-spark-moments-0.1.0.spkg".to_string(),
+                install_command: "spark-plugin install spark-plugin-spark-moments-0.1.0.spkg".to_string(),
+            },
+        },
     ]
 }
 

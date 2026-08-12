@@ -14,7 +14,10 @@ use crate::org::{OrgAddressRecord, OrganizationService};
 use crate::p2p::constants::{P2P_DHT_MODE_KEY, P2P_PEER_RECORD_PREFIX};
 use crate::p2p::node::system_now_ms;
 use crate::p2p::peer_activity::PeerActivityStore;
-use crate::p2p::{DhtMode, LocalP2PNodeInfo, P2pConfig, P2pError, P2pEvent, P2pNode, PeerNodeInfo};
+use crate::p2p::{
+    DhtMode, LocalP2PNodeInfo, P2pConfig, P2pError, P2pEvent, P2pNode, PeerNodeInfo,
+    node_presence_record_key, verify_announce_text,
+};
 use crate::storage::{ScanOptions, StorageBackend};
 
 /// `import_node_card` 的结果（org.md §17.4）。
@@ -182,6 +185,7 @@ impl Kernel {
                 org_sync::ImmediateHelloState::default(),
             )),
             filter_caps: Arc::clone(&self.plugin_host.filter_caps),
+            replica_check: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         };
         let worker = org_sync::spawn_worker(self.runtime.handle(), ctx, org_sync_rx);
 
@@ -294,8 +298,104 @@ impl Kernel {
             }
         }
         self.broadcast_self_profile_snapshot();
+        // M2（connection-policy §3.2）：登录一次性拨号——读设备清单 → DHT 刷新
+        // → 拨一次（失败即沉默）。置于设备广播之后，设备清单本机条目已落库。
+        let _ = self.bootstrap_login_dials();
 
         Ok(peer_id)
+    }
+
+    /// M2（connection-policy §3.2）：登录/启动一次性拨号——读设备清单
+    /// （自设备 DeviceRecord + 联系人 FriendRecord.peers）→ 对每个 peerId 查
+    /// DHT `spark:node:{peerId}` 拿新鲜地址（验签）→ 未命中用清单旧地址兜底 →
+    /// 对每个 peer 按地址拨一次，失败即沉默（不进入任何周期重试队列）。
+    ///
+    /// 仅改登录/启动路径，不删周期拨号（删周期属 M3–M5）。已连接的 peer 由
+    /// `connect_peer` 短路跳过。p2p 未启动/未解锁/存储不可用时静默跳过。
+    ///
+    /// **异步化**：整段拨号在 tokio 后台任务异步执行，本方法立即返回。登录
+    /// 路径（`unlock` → `start_p2p`）不再因 DHT 查询/拨号的网络超时而被阻塞
+    /// （dht_get_record 15s、connect_peer 默认 10s）——UI 先进入主界面，拨号
+    /// 在后台进行（失败即沉默，语义与原先 block_on 完全一致）。
+    fn bootstrap_login_dials(&self) -> Result<()> {
+        let Some(node) = &self.p2p else {
+            return Ok(());
+        };
+        if self.current_root_id()?.is_none() {
+            return Ok(());
+        }
+        let storage = self.require_storage()?;
+        let local_peer_id = self.p2p_status().ok().flatten().and_then(|i| i.peer_id);
+
+        // 1. 收集目标 peerId → 兜底地址（去重：同 peerId 合并地址集）。
+        //    - 自设备 DeviceRecord（不含本机；DHT 是主源，无旧地址兜底）
+        //    - 联系人 FriendRecord.peers（好友 + 自记录；带清单旧地址作兜底）
+        let mut by_peer: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        for d in crate::device::DeviceService::list(storage)?.into_iter() {
+            if local_peer_id.as_deref() != Some(d.peer_id.as_str())
+                && !d.peer_id.trim().is_empty()
+            {
+                by_peer.entry(d.peer_id).or_default();
+            }
+        }
+        let friends = crate::contact::ContactService::overview(storage, "personal")?.friends;
+        for f in friends {
+            for p in f.peers {
+                if local_peer_id.as_deref() != Some(p.peer_id.as_str())
+                    && !p.peer_id.trim().is_empty()
+                {
+                    by_peer.entry(p.peer_id.clone()).or_default().extend(p.addresses);
+                }
+            }
+        }
+        if by_peer.is_empty() {
+            return Ok(());
+        }
+
+        let node = Arc::clone(node);
+        let handle = self.runtime.handle().clone();
+        // 2. 后台异步逐 peer 查 DHT 拿新鲜地址（验签）→ 未命中用清单旧地址
+        //    兜底 → 拨一次。整段在后台任务执行，不阻塞登录路径。
+        handle.spawn(async move {
+            for (peer_id, fallback) in by_peer {
+                let fresh = Kernel::query_node_presence_async(&node, &peer_id).await;
+                let addresses = if fresh.is_empty() { fallback } else { fresh };
+                if addresses.is_empty() {
+                    continue;
+                }
+                let info = PeerNodeInfo {
+                    peer_id: Some(peer_id),
+                    addresses,
+                };
+                // 失败即沉默：一次性尝试，不进入任何周期重试队列
+                let _ = node.connect_peer(&info).await;
+            }
+        });
+        Ok(())
+    }
+
+    /// 查询并验签 DHT 节点存在记录（`spark:node:{peerId}`，peer-rediscovery
+    /// §4.2），返回验签通过的新鲜地址列表；未命中/验签失败/记录 peerId 不匹配
+    /// 返回空（调用方用清单旧地址兜底）。
+    ///
+    /// 异步版本：直接 await `P2pNode::dht_get_record`（其内部自带超时），不再
+    /// `block_on`，供后台拨号任务调用。
+    async fn query_node_presence_async(node: &P2pNode, peer_id: &str) -> Vec<String> {
+        let key = node_presence_record_key(peer_id);
+        let Ok(Some(raw)) = node.dht_get_record(key.as_bytes()).await else {
+            return Vec::new();
+        };
+        let Ok(text) = String::from_utf8(raw) else {
+            return Vec::new();
+        };
+        let Some(announce) = verify_announce_text(&text) else {
+            return Vec::new();
+        };
+        if announce.peer_id != peer_id {
+            return Vec::new();
+        }
+        announce.addresses
     }
 
     /// 停止 P2P 节点（幂等）：org-sync worker / 事件泵一并停止。
@@ -354,6 +454,7 @@ impl Kernel {
                 org_sync::ImmediateHelloState::default(),
             )),
             filter_caps: Arc::clone(&self.plugin_host.filter_caps),
+            replica_check: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         })
     }
 
@@ -409,18 +510,22 @@ impl Kernel {
             let Some(friend) = friend else {
                 continue;
             };
-            let no_peer = match friend.peer.as_ref() {
-                Some(p) => p.peer_id.trim().is_empty(),
-                None => true,
-            };
-            if friend.blocked || no_peer {
+            if friend.blocked {
                 continue;
             }
-            let peer_id = friend.peer.as_ref().unwrap().peer_id.clone();
+            // 多设备寻址：该好友每台已知设备均入优先集合
+            let peer_ids: Vec<String> = friend
+                .peers
+                .into_iter()
+                .map(|p| p.peer_id)
+                .filter(|id| !id.trim().is_empty())
+                .collect();
             let mut priority =
                 crate::p2p::priority_peers::PriorityPeerStore::new(self.require_storage_mut()?);
-            if let Err(e) = priority.add(&peer_id) {
-                eprintln!("[p2p] backfill priority peer add failed: {e}");
+            for peer_id in peer_ids {
+                if let Err(e) = priority.add(&peer_id) {
+                    eprintln!("[p2p] backfill priority peer add failed: {e}");
+                }
             }
         }
         Ok(())
@@ -503,6 +608,8 @@ impl Kernel {
                 crate::p2p::OverlayPeerSource::Exchange,
                 false,
                 now,
+                None,
+                &std::collections::HashSet::new(),
             )?;
         }
         let mut connect_error = None;
@@ -562,5 +669,13 @@ impl Kernel {
     pub fn list_peer_records(&self) -> Result<Vec<(String, String)>> {
         let storage = self.require_storage()?;
         Ok(storage.scan(&ScanOptions::prefix(P2P_PEER_RECORD_PREFIX))?)
+    }
+
+    /// `db-scan`：按存储键前缀扫描，返回原始键值对（测试页 peer 目录用——
+    /// 聚合邻居池 `p2p:overlay:peer:`、联系人 `ct:friend:`、优先类目表
+    /// `p2p:priority:peer:` 等前缀）。只读操作，不暴露裸 KV 之外的任何能力。
+    pub fn scan_storage_prefix(&self, prefix: &str) -> Result<Vec<(String, String)>> {
+        let storage = self.require_storage()?;
+        Ok(storage.scan(&ScanOptions::prefix(prefix))?)
     }
 }

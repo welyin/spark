@@ -74,6 +74,15 @@ pub const CATEGORIES: &[Category] = &[
     // M3 口令校验器：V/ack 在自设备间扩散，明文豁免。
     Category { name: "pwv", prefixes: &["pwv:"] },
     Category { name: "pwack", prefixes: &["pwack:"] },
+    // S2 dm_e2e 会话密钥表（personal 域，AES-256-GCM 会话密钥）经 pdsync 自设备
+    // 扩散：同一 rootId 的多台设备共享同一份 1:1 会话密钥（离线密文在换钥后
+    // 仍可由同账号其它设备解密）。历史密钥随记录体同步，不单列键。
+    Category { name: "dm:e2e", prefixes: &["dm:e2e:key:"] },
+    // S3 dm_offline 离线投递队列（personal 域 `dm:pending:`，含 feed 复用）经
+    // pdsync 自设备扩散：同一 rootId 的多台设备互为补投备份——任一台在线设备
+    // 上线都 flush 补投。组织 pending（`org:dm:pending:`）不进此表，走 org-sync
+    // 网关同步（通道未就绪，见 dm_offline 模块注释）。
+    Category { name: "dm:pending", prefixes: &["dm:pending:"] },
 ];
 
 /// 按前缀从注册表解析 category（不存在 → `None`，如组织/消息前缀）。

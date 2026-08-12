@@ -7,6 +7,8 @@ pub mod contact;
 #[path = "data-mgmt/mod.rs"]
 pub mod data_mgmt;
 pub mod device;
+pub mod dm_e2e;
+pub mod dm_offline;
 pub mod epoch;
 pub mod evidence;
 pub mod kernel;

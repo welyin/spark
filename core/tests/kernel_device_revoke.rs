@@ -72,10 +72,11 @@ fn self_friend(root_id: &str, peer_id: &str, updated_at: i64) -> FriendRecord {
         signature: String::new(),
         gender: None,
         added_at: updated_at,
-        peer: Some(PeerRef {
+        peers: vec![PeerRef {
             peer_id: peer_id.to_string(),
             addresses: Vec::new(),
-        }),
+            ..Default::default()
+        }],
         remark: String::new(),
         phones: Vec::new(),
         tag_ids: Vec::new(),
@@ -394,10 +395,13 @@ fn revoke_device_normal_flow() {
     let self_friend = ContactService::get_friend(&k.__test_storage().unwrap(), &root_id)
         .unwrap()
         .expect("self friend 存在");
-    let peer_id = self_friend.peer.as_ref().map(|p| p.peer_id.clone());
-    assert_ne!(
-        peer_id.as_deref(),
-        Some(target_peer),
+    let peer_ids: Vec<String> = self_friend
+        .peers
+        .iter()
+        .map(|p| p.peer_id.clone())
+        .collect();
+    assert!(
+        !peer_ids.contains(&target_peer.to_string()),
         "self FriendRecord 不得再指向被撤销设备"
     );
 

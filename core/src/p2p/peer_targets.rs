@@ -69,10 +69,25 @@ pub(crate) fn filter_dial_candidate(address: &str, is_android: bool) -> Option<S
     Some(trimmed)
 }
 
-/// 构建拨号地址候选：原始地址保留；缺 `/p2p` 段且已知 peerId 时自动补全候选。
+/// 构建拨号地址候选（M9）：原始地址保留；缺 `/p2p` 段且已知 peerId 时自动补全
+/// 候选。
+///
+/// M9 改造：
+/// - **去重**：同一 (ip, port, transport) 只出一个目标（含原始地址与 `/p2p/<id>`
+///   补全形态互认，避免同一端点 ×2）；
+/// - **排序**：记分卡证据优先（success/valid），零分/同级按静态优先级
+///   （IPv6 公网 tcp > IPv6 公网 ws > IPv4 tcp > IPv4 ws > loopback/link-local）；
+/// - **不截断**：全部候选都参与（交由分批并发拨号）。
+///
+/// `addr_meta` 为该 peer 的地址记分卡（缺省零分）；`self_addrs` 为本机当前监听
+/// 地址集合（自过滤：不拨自己的监听地址）。
 ///
 /// 无可用地址时返回 `Err`（TS 抛 'Member node addresses are required for p2p connect'）。
-pub fn build_dial_targets(node_info: &PeerNodeInfo) -> crate::p2p::Result<Vec<String>> {
+pub fn build_dial_targets(
+    node_info: &PeerNodeInfo,
+    addr_meta: Option<&std::collections::HashMap<String, crate::p2p::overlay_store::AddrScore>>,
+    self_addrs: &std::collections::HashSet<String>,
+) -> crate::p2p::Result<Vec<String>> {
     // Android 未启用 ws 传输层，拨了也白等，剔除以避免串行死地址白试
     // （跨网建连时死地址排前会拖出 1-2 分钟延迟）。
     let is_android = cfg!(target_os = "android");
@@ -87,20 +102,85 @@ pub fn build_dial_targets(node_info: &PeerNodeInfo) -> crate::p2p::Result<Vec<St
         ));
     }
 
-    // 公网 IPv6 → 私网/回环 IPv6 → 公网 IPv4 → 私网 IPv4 → 回环 IPv4 →
-    // 电路中继 排序（peer-rediscovery §4.6.3 + 死地址降权）。
-    let addresses = sort_addresses(addresses);
+    // 去重：同一 (ip, port, transport) 只出一个目标。用剥掉尾 `/p2p/{peerId}`
+    // 段的 base 地址作去重键（原始地址与补全形态互认）。
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut unique: Vec<String> = Vec::new();
+    for addr in addresses {
+        let base = base_dial_addr(&addr);
+        if seen.insert(base) {
+            unique.push(addr);
+        }
+    }
+
+    // 排序：记分卡证据优先，零分/同级按静态优先级。同一地址的补全形态紧随
+    // 原始形态之后（构造时再展开）。
+    let empty_meta = std::collections::HashMap::new();
+    let meta = addr_meta.unwrap_or(&empty_meta);
+    let mut addresses = unique;
+    crate::p2p::overlay_store::sort_by_addr_rank(&mut addresses, meta);
+
     let target_peer_id = extract_peer_id(node_info);
     let mut targets = Vec::with_capacity(addresses.len() * 2);
     for address in addresses {
+        // 自过滤：本机监听地址不拨（多实例同机开发污染源）
+        if self_addrs.contains(&address) {
+            continue;
+        }
         targets.push(address.clone());
         if let Some(peer_id) = &target_peer_id
             && !address.contains("/p2p/")
         {
-            targets.push(format!("{}/p2p/{}", address.trim_end_matches('/'), peer_id));
+            let with_peer = format!("{}/p2p/{}", address.trim_end_matches('/'), peer_id);
+            targets.push(with_peer);
         }
     }
+    if targets.is_empty() {
+        return Err(crate::p2p::P2pError::Malformed(
+            "Member node addresses are required for p2p connect".to_string(),
+        ));
+    }
     Ok(targets)
+}
+
+/// 剥掉 multiaddr 尾部 `/p2p/{peerId}` 段，得到去重键（原始地址与带 peer 段
+/// 形态互认）。与 org_direct::base_addr 同义，集中到拨号目标构造处。
+fn base_dial_addr(addr: &str) -> String {
+    addr.split("/p2p/").next().unwrap_or(addr).to_string()
+}
+
+/// 静态优先级（M9）：IPv6 公网 tcp → IPv6 公网 ws → IPv4 tcp → IPv4 ws →
+/// loopback/link-local 垫底。与 [`sort_addresses`] 同族但按 tcp/ws 细分：
+/// 记分卡零分/同级时以此定序。数字越大越靠后（`rank` 越低越优先）。
+pub fn addr_static_rank(a: &str) -> u8 {
+    let Ok(ma) = a.parse::<libp2p::Multiaddr>() else {
+        return 10; // 解析失败垫底
+    };
+    if ma.iter().any(|p| matches!(p, Protocol::P2pCircuit)) {
+        return 10;
+    }
+    let is_ws = ma.iter().any(|p| matches!(p, Protocol::Ws(_) | Protocol::Wss(_)));
+    let ipv6 = ma.iter().any(|p| matches!(p, Protocol::Ip6(_)));
+    // 先判 ip 族，再判 tcp/ws；loopback/link-local 一律垫底（不管协议）
+    if let Some(p) = ma.iter().next() {
+        let is_loopback_or_linklocal = match p {
+            Protocol::Ip4(ip) => ip.is_loopback(),
+            Protocol::Ip6(ip) => ip.is_loopback() || {
+                let seg = ip.segments();
+                seg[0] >= 0xfe80 && seg[0] <= 0xfebf
+            },
+            _ => false,
+        };
+        if is_loopback_or_linklocal {
+            return 5;
+        }
+    }
+    match (ipv6, is_ws) {
+        (true, false) => 0, // IPv6 公网 tcp
+        (true, true) => 1,  // IPv6 公网 ws
+        (false, false) => 2, // IPv4 tcp
+        (false, true) => 3,  // IPv4 ws
+    }
 }
 
 /// 拨号地址排序：公网 IPv6 > 私网/回环 IPv6 > 公网 IPv4 > 私网 IPv4 >
@@ -242,5 +322,88 @@ mod tests {
     fn filter_drops_wildcard() {
         assert_eq!(filter_dial_candidate("/ip4/0.0.0.0/tcp/15002", true), None);
         assert_eq!(filter_dial_candidate("/ip6/::/tcp/15002", true), None);
+    }
+
+    #[test]
+    fn build_targets_dedups_raw_and_p2p_variant() {
+        use std::collections::{HashMap, HashSet};
+        let info = PeerNodeInfo {
+            peer_id: Some("12D3KooWExamplePeer".to_string()),
+            addresses: vec!["/ip4/1.2.3.4/tcp/15002".to_string()],
+        };
+        // 同一地址只出一个目标：raw + /p2p 变体互认去重
+        let targets =
+            build_dial_targets(&info, Some(&HashMap::new()), &HashSet::new()).unwrap();
+        assert_eq!(targets.len(), 2, "raw + /p2p 变体各一个");
+        assert_eq!(targets[0], "/ip4/1.2.3.4/tcp/15002");
+        assert_eq!(targets[1], "/ip4/1.2.3.4/tcp/15002/p2p/12D3KooWExamplePeer");
+    }
+
+    #[test]
+    fn build_targets_excludes_self_listen_addr() {
+        use std::collections::{HashMap, HashSet};
+        let info = PeerNodeInfo {
+            peer_id: Some("12D3KooWExamplePeer".to_string()),
+            addresses: vec![
+                "/ip4/192.168.1.5/tcp/15002".to_string(), // 本机监听地址
+                "/ip4/8.8.8.8/tcp/15002".to_string(),
+            ],
+        };
+        let self_addrs: HashSet<String> =
+            ["/ip4/192.168.1.5/tcp/15002".to_string()].into_iter().collect();
+        let targets = build_dial_targets(&info, Some(&HashMap::new()), &self_addrs).unwrap();
+        assert!(
+            !targets.iter().any(|t| t.contains("192.168.1.5")),
+            "本机监听地址被自过滤排除，实际 {targets:?}"
+        );
+        assert!(targets.iter().any(|t| t.contains("8.8.8.8")));
+    }
+
+    #[test]
+    fn static_rank_loopback_last() {
+        assert_eq!(addr_static_rank("/ip4/192.168.31.134/tcp/15002"), 2, "私网 IPv4 tcp");
+        assert_eq!(addr_static_rank("/ip4/127.0.0.1/tcp/15002"), 5, "loopback 垫底");
+        assert_eq!(addr_static_rank("/ip6/2408::1/tcp/15002"), 0, "IPv6 公网 tcp");
+        assert_eq!(addr_static_rank("/ip6/2408::1/tcp/15002/ws"), 1, "IPv6 公网 ws");
+        assert_eq!(addr_static_rank("/ip4/1.2.3.4/tcp/15002/ws"), 3, "IPv4 ws");
+    }
+
+    #[test]
+    fn build_targets_loopback_after_private() {
+        use std::collections::{HashMap, HashSet};
+        let info = PeerNodeInfo {
+            peer_id: Some("peerA".to_string()),
+            addresses: vec![
+                "/ip4/127.0.0.1/tcp/15002".to_string(),
+                "/ip4/192.168.31.134/tcp/15002".to_string(),
+            ],
+        };
+        let targets = build_dial_targets(&info, Some(&HashMap::new()), &HashSet::new()).unwrap();
+        assert_eq!(
+            targets[0],
+            "/ip4/192.168.31.134/tcp/15002",
+            "私网 IPv4 tcp 在 loopback 之前"
+        );
+    }
+
+    #[test]
+    fn build_targets_sorted_by_scorecard() {
+        use crate::p2p::overlay_store::AddrScore;
+        use std::collections::{HashMap, HashSet};
+        // 记分卡优先：高证据地址排最前（即便 IPv4 tcp 证据更强也优先于零分 IPv6）
+        let info = PeerNodeInfo {
+            peer_id: None,
+            addresses: vec![
+                "/ip6/2408:8207:1::1/tcp/15002".to_string(), // 零分但静态高
+                "/ip4/1.2.3.4/tcp/15002".to_string(),        // success 证据
+            ],
+        };
+        let mut meta = HashMap::new();
+        meta.insert(
+            "/ip4/1.2.3.4/tcp/15002".to_string(),
+            AddrScore { success_count: 3, last_success_at: 900, ..Default::default() },
+        );
+        let targets = build_dial_targets(&info, Some(&meta), &HashSet::new()).unwrap();
+        assert_eq!(targets[0], "/ip4/1.2.3.4/tcp/15002", "success 证据优先于零分 IPv6");
     }
 }

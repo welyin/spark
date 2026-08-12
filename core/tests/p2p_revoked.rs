@@ -143,7 +143,13 @@ async fn inbound_dm_from_revoked_returns_revoked_and_skips_host() {
     // 建连后把 A 标记为 revoked（运行期切换，触发 dm 入站黑名单分支）。
     state_b.lock().unwrap().revoked_peer = Some(a.peer_id().to_string());
 
-    // A → B 发 dm：B 应回 {"ok":false,"reason":"revoked"}，且宿主 handle_dm 未调用。
+    // A → B 发 dm：revoked peer 的 dm 一律不得进入宿主 handle_dm。
+    // 安全核心：数据不进宿主（`dms.is_empty()`）。响应则有两种合理结果——
+    // 1. `Some({ok:false,reason:"revoked"})`：dm 复用已建连接先于连接断开送达，
+    //    B 的 handle_dm_inbound 黑名单分支回 revoked；
+    // 2. `None`：M9 分批并发拨号会与 B 建立多个连接，B 在 ConnectionEstablished
+    //    检测到 A 已 revoked 后断开其全部连接（M2 安全红线），导致在途 dm 请求
+    //    被断开、收不到响应。两种都符合「revoked peer 不可达」的安全语义。
     let response = a
         .dm_direct(
             &PeerNodeInfo {
@@ -154,7 +160,10 @@ async fn inbound_dm_from_revoked_returns_revoked_and_skips_host() {
         )
         .await
         .expect("dm_direct returns");
-    assert_eq!(response, Some(json!({"ok": false, "reason": "revoked"})));
+    match response {
+        Some(v) => assert_eq!(v, json!({"ok": false, "reason": "revoked"})),
+        None => {} // 连接被 B 断开（M9 多连接 + M2 断开全部连接），合法
+    }
     let dms = state_b.lock().unwrap().dms.clone();
     assert!(
         dms.is_empty(),

@@ -4,16 +4,23 @@
 //! ```json
 //! { "kind": "chat|read|recall|friend-request|friend-accept|friend-reply|org-invite|org-invite-reply",
 //!   "from": "<rootId>", "to": "<rootId>", "ts": 123,
-//!   "body": { ... }, "pubKey": "<base64>", "sig": "<base64>" }
+//!   "body": { ... },
+//!   "ephPub": "<可选，base64 临时 X25519 公钥，见密钥轮换>",
+//!   "pubKey": "<base64>", "sig": "<base64>" }
 //! ```
 //!
-//! - 签名载荷 = 固定键序（body/from/kind/to/ts）紧凑 JSON 串，签其 UTF-8 字节
-//!   （serde_json `preserve_order`：按序构建 `Map` 序列化即确定性）；
+//! - 签名载荷 = 固定键序紧凑 JSON 串，签其 UTF-8 字节（serde_json
+//!   `preserve_order`：按序构建 `Map` 序列化即确定性）。**无 `ephPub`** 时为
+//!   body/from/kind/to/ts（向后兼容纯域身份 DH 信封）；**携带 `ephPub`** 时
+//!   插在 body 之后——body/ephPub/from/kind/to/ts（`ephPub` 参与签名，防中间人
+//!   替换临时公钥，见 p2p-dm §19.1.1 密钥轮换）。构造用
+//!   [`build_envelope_with_eph`] / [`build_signing_payload_with_eph`]；
 //! - `pubKey` 为根身份 ed25519 公钥原始 32 字节的 base64（与
 //!   [`crate::identity::verify_ed25519_signature`] 口径一致），
 //!   `from` = sha256hex(pubKey)（rootId 定义，`Identity::id`）；
 //! - 入站校验：字段齐全 → `to` 指向本机 → ts 新鲜度（±10 min，防重放）→
-//!   pubKey 与 from 绑定 → 验签。
+//!   pubKey 与 from 绑定 → 验签。验签载荷重建含 ephPub（若携带），验签通过后
+//!   [`VerifiedDm::eph_pub`] 回传供接线层解密。
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
@@ -76,6 +83,18 @@ pub const KIND_PDSYNC_ATTACHMENT_REQ: &str = "pdsync-attachment-req";
 /// 块长 3 的倍数，接收侧 base64 直接追加拼接，收齐后 SHA-256 校验提升）。
 pub const KIND_PDSYNC_ATTACHMENT_RESP: &str = "pdsync-attachment-resp";
 
+// ── S6 feed 三信封（social-feed §4.2 / p2p-dm §19.5/§19.6）────────────
+
+/// 信封 kind：社交定向投递（body `{topic, feedId, payload, replyTo?}`，
+/// 加密前线形见 p2p-dm §19.5；把业务 payload 定向投递给 `to`）。
+pub const KIND_FEED: &str = "feed";
+/// 信封 kind：跨联系人 blob 拉取请求（body `{hash, offset}`，向 feed 原
+/// 作者取件；线形对齐 pdsync-attachment-req，见 p2p-dm §19.6）。
+pub const KIND_FEED_BLOB_REQ: &str = "feed-blob-req";
+/// 信封 kind：feed-blob 分块响应（body `{hash, offset, data, totalBytes,
+/// missing?}`；线形对齐 pdsync-attachment-resp，见 p2p-dm §19.6）。
+pub const KIND_FEED_BLOB_RESP: &str = "feed-blob-resp";
+
 // ── O2a orgsync 三信封 ────────────────────────────────────────────────
 
 /// 信封 kind：orgsync 摘要交换（复制组成员间；body 携带 orgId +
@@ -104,10 +123,30 @@ pub const KIND_ORGQ_RESP: &str = "orgq-resp";
 /// 密钥永不进 orgsync 组织流量。
 pub const KIND_ORGKEY_DELIVER: &str = "orgkey-deliver";
 
-/// 签名载荷：固定键序 body/from/kind/to/ts 的紧凑 JSON 串。
+/// 签名载荷：固定键序 body/from/kind/to/ts 的紧凑 JSON 串（无 `ephPub`，
+/// 向后兼容纯域身份 DH 信封）。内部委托 [`build_signing_payload_with_eph`]
+/// 传 `None`，见其注释关于 ephPub 键序的说明。
 pub fn build_signing_payload(kind: &str, from: &str, to: &str, ts: i64, body: &Value) -> String {
+    build_signing_payload_with_eph(kind, from, to, ts, body, None)
+}
+
+/// 签名载荷（支持可选 ephPub）：固定键序紧凑 JSON 串。无 `eph_pub` 时为
+/// body/from/kind/to/ts；携带 `eph_pub` 时插在 body 之后——
+/// body/ephPub/from/kind/to/ts（`ephPub` 参与签名，防中间人替换临时公钥，
+/// 见 p2p-dm §19.1.1 密钥轮换）。
+pub fn build_signing_payload_with_eph(
+    kind: &str,
+    from: &str,
+    to: &str,
+    ts: i64,
+    body: &Value,
+    eph_pub: Option<&str>,
+) -> String {
     let mut map = Map::new();
     map.insert("body".to_string(), body.clone());
+    if let Some(eph) = eph_pub {
+        map.insert("ephPub".to_string(), Value::from(eph));
+    }
     map.insert("from".to_string(), Value::from(from));
     map.insert("kind".to_string(), Value::from(kind));
     map.insert("to".to_string(), Value::from(to));
@@ -115,7 +154,8 @@ pub fn build_signing_payload(kind: &str, from: &str, to: &str, ts: i64, body: &V
     serde_json::to_string(&Value::Object(map)).expect("dm signing payload is always serializable")
 }
 
-/// 构造并签名完整信封（出站侧）。
+/// 构造并签名完整信封（出站侧，无 `ephPub`，向后兼容纯域身份 DH 信封）。
+/// 内部委托 [`build_envelope_with_eph`] 传 `None`。
 pub fn build_envelope(
     kind: &str,
     from: &str,
@@ -124,7 +164,22 @@ pub fn build_envelope(
     body: Value,
     signing_key: &SigningKey,
 ) -> Value {
-    let payload = build_signing_payload(kind, from, to, ts, &body);
+    build_envelope_with_eph(kind, from, to, ts, body, None, signing_key)
+}
+
+/// 构造并签名完整信封（出站侧，支持可选 ephPub）。`eph_pub` 为可选外层字段
+/// （临时 X25519 公钥，base64，与 pubKey/sig 并列且参与签名）；`None` 时保持
+/// 原 5 键序（向后兼容纯域身份 DH 信封）。
+pub fn build_envelope_with_eph(
+    kind: &str,
+    from: &str,
+    to: &str,
+    ts: i64,
+    body: Value,
+    eph_pub: Option<&str>,
+    signing_key: &SigningKey,
+) -> Value {
+    let payload = build_signing_payload_with_eph(kind, from, to, ts, &body, eph_pub);
     let signature = signing_key.sign(payload.as_bytes());
     let mut map = Map::new();
     map.insert("kind".to_string(), Value::from(kind));
@@ -132,6 +187,9 @@ pub fn build_envelope(
     map.insert("to".to_string(), Value::from(to));
     map.insert("ts".to_string(), Value::from(ts));
     map.insert("body".to_string(), body);
+    if let Some(eph) = eph_pub {
+        map.insert("ephPub".to_string(), Value::from(eph));
+    }
     map.insert(
         "pubKey".to_string(),
         Value::from(B64.encode(signing_key.verifying_key().to_bytes())),
@@ -164,6 +222,9 @@ pub struct VerifiedDm {
     pub from: String,
     pub ts: i64,
     pub body: Value,
+    /// 外层可选临时 X25519 公钥（base64，32 字节）。携带时已参与验签（防中间人
+    /// 替换）；`None` 表示对端未升级（纯域身份 DH 信封）。供接线层解密用。
+    pub eph_pub: Option<String>,
 }
 
 /// 入站信封校验；任一失败返回 `Err(reason)`（reason 供 `{"ok":false,"reason"}`
@@ -196,6 +257,9 @@ pub fn verify_envelope(payload: &Value, my_root_id: &str, now_ms: i64) -> Result
         .get("sig")
         .and_then(Value::as_str)
         .ok_or_else(invalid)?;
+    // 可选外层字段 ephPub（base64 临时 X25519 公钥）：携带时参与签名，防中间人
+    // 替换临时公钥。线形键序随 build_signing_payload 处理（body/ephPub/.../ts）。
+    let eph_pub = payload.get("ephPub").and_then(Value::as_str).map(String::from);
 
     if to != my_root_id {
         return Err("not-for-me".to_string());
@@ -212,7 +276,7 @@ pub fn verify_envelope(payload: &Value, my_root_id: &str, now_ms: i64) -> Result
     if hex::encode(Sha256::digest(&pub_key_bytes)) != from {
         return Err("bad-pubkey".to_string());
     }
-    let signing_payload = build_signing_payload(kind, from, to, ts, body);
+    let signing_payload = build_signing_payload_with_eph(kind, from, to, ts, body, eph_pub.as_deref());
     if !verify_ed25519_signature(&signing_payload, sig, pub_key) {
         return Err("bad-signature".to_string());
     }
@@ -221,6 +285,7 @@ pub fn verify_envelope(payload: &Value, my_root_id: &str, now_ms: i64) -> Result
         from: from.to_string(),
         ts,
         body: body.clone(),
+        eph_pub,
     })
 }
 

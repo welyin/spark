@@ -4,6 +4,8 @@
 //! 按职责拆分子模块：friend（视图/朋友/本地资料）、request（好友申请）、
 //! tag（标签）、group（个人扁平分组）、org_group（组织分组树）。
 
+mod contact_read;
+mod filter;
 mod friend;
 mod group;
 mod org_group;
@@ -25,6 +27,8 @@ use super::{
 
 /// 通讯录服务（无状态；全部方法以存储与参数为输入）。
 pub struct ContactService;
+
+pub use filter::{DmChannel, DmRecipientFilter, DmRecipientSkipReason, SkippedRecipient};
 
 /// 解析后的空间：个人或某个组织。
 enum Space<'a> {

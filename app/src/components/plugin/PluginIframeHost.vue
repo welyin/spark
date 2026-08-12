@@ -89,7 +89,7 @@ export default defineComponent({
     viewId: { type: String, required: true },
     space: { type: Object as PropType<PluginSpaceContext>, required: true }
   },
-  emits: ['close'],
+  emits: ['close', 'manifest'],
   setup(props, { emit }) {
     const iframeEl = ref<HTMLIFrameElement | null>(null);
     // 已停用实例首帧即覆盖层（iframe 不渲染，插件代码不加载）
@@ -121,6 +121,8 @@ export default defineComponent({
       watchdog = null;
       unlistenDataChanged?.();
       unlistenDataChanged = null;
+      unlistenFeedReceived?.();
+      unlistenFeedReceived = null;
       // 主视图实例登记清理（仅清自己：同插件新实例已接管时不误删）
       if (host) {
         unregisterMainViewInstance(props.pluginId, pluginSpaceKey(props.space), host);
@@ -138,6 +140,9 @@ export default defineComponent({
     // spark.events.subscribe 的事件名同口径——插件按 payload.pluginId 自己
     // 过滤归属（payload 由内核侧按集合前缀聚合）。
     let unlistenDataChanged: (() => void) | null = null;
+    // 社交投递入站推送（social-feed §8）：内核 FeedReceived → 桥 FeedReceived
+    // 事件，按 topic 前缀（== pluginId）过滤后推给插件 sdk.feed.onReceive 订阅
+    let unlistenFeedReceived: (() => void) | null = null;
 
     const init = async (): Promise<void> => {
       const gen = ++generation;
@@ -167,6 +172,8 @@ export default defineComponent({
       if (isStale(gen)) {
         return;
       }
+      // 透传 manifest 给壳层（供顶栏按 chrome.hostTitleBar 决策隐藏/自接管）
+      emit('manifest', manifest ?? null);
       const domain = `plugin:${props.pluginId}`;
 
       watchdog = createPluginWatchdog({
@@ -216,7 +223,9 @@ export default defineComponent({
               space: props.space,
               pluginName: manifest?.name,
               supportedSpaces: manifest?.supportedSpaces,
-              viewType: 'app'
+              viewType: 'app',
+              // sdk.close()：插件请求关闭自身视图 → 通知壳层关闭当前插件 tab
+              onClose: () => emit('close')
             }),
           onEvent: (event) => {
             if (event === 'runtime-error') {
@@ -253,6 +262,29 @@ export default defineComponent({
               return;
             }
             unlistenDataChanged = un;
+          })
+          .catch(() => {});
+        // 社交投递入站推送（social-feed §8）：FeedReceived → 桥事件。topic 前缀
+        // == 本插件 id 才推送（topic 即插件归属，插件 sdk.feed.onReceive 内部
+        // 再按订阅 topic 前缀做第二道收敛）。插件经 bridge client 的
+        // events.subscribe('FeedReceived', fn) 接收（sdk.feed.onReceive 封装）。
+        void listenP2pEvents((event) => {
+          if (event.kind !== 'FeedReceived') {
+            return;
+          }
+          const data = event.data as { topic?: string } | undefined;
+          const prefix = typeof data?.topic === 'string' ? data.topic.split(':')[0] ?? '' : '';
+          if (prefix !== props.pluginId) {
+            return;
+          }
+          host?.pushEvent('FeedReceived', event.data);
+        })
+          .then((un) => {
+            if (isStale(gen)) {
+              un();
+              return;
+            }
+            unlistenFeedReceived = un;
           })
           .catch(() => {});
         watchdog?.startHeartbeat();

@@ -378,6 +378,8 @@ impl<S: StorageBackend> EventLoop<S> {
             });
             if ok {
                 let now = self.now();
+                let self_id = self.self_peer_id().to_base58();
+                let self_addrs = self.self_listen_addr_set();
                 let mut store = OverlayPeerStore::new(&mut self.storage);
                 let _ = store.remember(
                     &announce.peer_id,
@@ -385,7 +387,11 @@ impl<S: StorageBackend> EventLoop<S> {
                     OverlayPeerSource::Exchange,
                     false,
                     now,
+                    Some(&self_id),
+                    &self_addrs,
                 );
+                // M9 valid 证据：签名 DHT 节点记录 + challenge 通过
+                let _ = store.mark_addrs_valid(&announce.peer_id, &announce.addresses, now);
             }
         }
     }

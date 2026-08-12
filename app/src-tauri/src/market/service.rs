@@ -132,11 +132,19 @@ impl PluginMarketService {
         None
     }
 
-    /// 插件源码目录（root/<pluginId>/ 下含 manifest.ts 或 manifest.js）。
+    /// 插件源码目录（root/<pluginId>/ 下含 manifest.ts / manifest.js / manifest.json）。
+    ///
+    /// dev-source 对账清单形态修正（2026-08）：既有插件实际统一用 manifest.json
+    /// （spark-example / spark-moments 均无 manifest.ts/js），原先只认 ts/js 导致
+    /// 所有 json 清单插件都无法被标记为 bundled-dev-source（市场显示未安装、且
+    /// 无法开箱即用）。扩展认 json 后二者恢复 dev 源码直挂。
     fn resolve_bundled_source_plugin_dir(&self, plugin_id: &str) -> Option<PathBuf> {
         for root in &self.paths.local_source_roots {
             let dir = root.join(plugin_id);
-            if dir.join("manifest.ts").is_file() || dir.join("manifest.js").is_file() {
+            if dir.join("manifest.ts").is_file()
+                || dir.join("manifest.js").is_file()
+                || dir.join("manifest.json").is_file()
+            {
                 return Some(dir);
             }
         }
