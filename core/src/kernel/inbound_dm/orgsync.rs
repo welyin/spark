@@ -227,6 +227,7 @@ pub(super) fn handle_orgsync_hello<S: StorageBackend>(
         orgsync_out: out,
         profile_applied: false,
         orgkey_unbox: None,
+        feed_blob_out: None,
     })
 }
 
@@ -330,6 +331,7 @@ pub(super) fn handle_orgsync_need<S: StorageBackend>(
         orgsync_out: out,
         profile_applied: false,
         orgkey_unbox: None,
+        feed_blob_out: None,
     })
 }
 
@@ -525,6 +527,7 @@ pub(super) fn handle_orgsync_data<S: StorageBackend>(
         orgsync_out: out,
         profile_applied: false,
         orgkey_unbox: None,
+        feed_blob_out: None,
     })
 }
 

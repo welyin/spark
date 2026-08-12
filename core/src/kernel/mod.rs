@@ -37,6 +37,9 @@ mod data_ops;
 mod doc_ops;
 pub mod dm_envelope;
 mod error;
+mod feed;
+mod feed_ops;
+mod feed_shared;
 mod host;
 mod identity;
 mod inbound_dm;
@@ -62,9 +65,15 @@ pub use identity::{
     DerivedDomainIdentityInfo, DomainSignatureInfo, IdentityStatus, IdentitySummary,
     InitIdentityResult, MnemonicCheckInfo, ProfileInfo, PublicIdentity, RootSignatureInfo,
 };
+pub use feed_ops::{FeedDeliverResult, FeedPullResult};
+pub(crate) use feed::{FeedDeliverRateLimiter, blob_source, plugin_id_of_topic};
+pub(crate) use feed_shared::{
+    feed_deliver_shared, feed_pull_shared, generate_feed_id_for_plugin,
+    resolve_feed_recipient_peer_shared,
+};
 pub use inbound_dm::{
-    AutoAccept, InboundDmError, InboundDmResult, OrgqPermHook, handle_inbound_dm,
-    handle_inbound_dm_with_orgq_hooks,
+    AutoAccept, FeedBlobOut, InboundDmError, InboundDmResult, OrgqPermHook, handle_inbound_dm,
+    handle_inbound_dm_with_e2e, handle_inbound_dm_with_orgq_hooks,
 };
 pub use message_ops::{
     AppMessageView, ChatMessageView, ConversationView, app_conversation_id,
@@ -73,8 +82,10 @@ pub use message_ops::{
 pub(crate) use contact_ops::ensure_bot_shared;
 pub(crate) use message_ops::{
     bot_reply_shared, bot_reply_stream_chunk_shared, bot_reply_stream_end_shared,
-    bot_reply_stream_start_shared, message_view, require_owned_bot_conv,
+    bot_reply_stream_start_shared, message_app_send_shared, message_view,
+    require_owned_bot_conv,
 };
+pub(crate) use identity::identity_sign_shared;
 pub use org_sync::{OrgReconcileStats, PeerOrgSyncResult};
 
 /// 随机字节的十六进制串（`crypto.randomBytes(n)` 对齐，用于不可预测的
@@ -222,7 +233,9 @@ pub struct Kernel {
     /// （host 只拿 `io_lock`，不会死锁）；查询类方法可不加。
     pub(crate) io_lock: Arc<Mutex<()>>,
     /// 应用消息限流器（内存态，p2p-messages.md §20.5；进程重启清零）。
-    pub(crate) app_msg_limiter: crate::message::AppMessageRateLimiter,
+    /// `Arc<Mutex>` 与插件宿主能力共享同一实例（`plugin_host.app_msg_limiter`）
+    /// ——iframe 桥与 QuickJS 后台共用一份配额，桥侧不重复做限流。
+    pub(crate) app_msg_limiter: std::sync::Arc<std::sync::Mutex<crate::message::AppMessageRateLimiter>>,
     /// 插件后台运行时注册表（bot 会话消息路由的查找源）。
     pub(crate) plugin_registry: PluginRuntimeRegistry,
     /// 插件运行时的宿主能力共享句柄（存储镜像随 open_storage/shutdown 更新）。
@@ -250,6 +263,8 @@ impl Kernel {
         let seed_shared = Arc::new(Mutex::new(None));
         let io_lock = Arc::new(Mutex::new(()));
         let collection_configs = Arc::new(Mutex::new(HashMap::new()));
+        // 应用消息限流器：内核门面与插件宿主共享同一实例（`plugin_host.app_msg_limiter`）
+        let app_msg_limiter = Arc::new(Mutex::new(crate::message::AppMessageRateLimiter::default()));
         let plugin_host = PluginHostShared {
             storage: Arc::new(Mutex::new(None)),
             io_lock: Arc::clone(&io_lock),
@@ -261,6 +276,8 @@ impl Kernel {
             collection_configs: Arc::clone(&collection_configs),
             pending_queries: Arc::new(Mutex::new(HashMap::new())),
             filter_caps: Arc::new(Mutex::new(HashMap::new())),
+            feed_limiter: Arc::new(Mutex::new(crate::kernel::feed::FeedDeliverRateLimiter::default())),
+            app_msg_limiter: Arc::clone(&app_msg_limiter),
             runtime: runtime.handle().clone(),
         };
         let mut kernel = Kernel {
@@ -299,7 +316,7 @@ impl Kernel {
             )),
             collection_configs,
             io_lock,
-            app_msg_limiter: crate::message::AppMessageRateLimiter::default(),
+            app_msg_limiter,
             plugin_registry: PluginRuntimeRegistry::default(),
             plugin_host,
             plugin_router: None,

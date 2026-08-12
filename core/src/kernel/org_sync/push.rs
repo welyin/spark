@@ -1,6 +1,11 @@
 //! org-share 推送链路（org-share-sync.ts `syncOrganizationToMember` /
 //! service.ts `syncOrganizationToKnownMembers`）：stale 跳过 → 直连优先 →
 //! pubsub 五次重试等 ack → sync-state 记账。
+//!
+//! M6 收尾：管理员补副本（`replenishOrganizationReplicas`）由 keepalive tick 周期
+//! 触发改为**组织写入事件驱动**——`push_org_to_known_members` 主推送完成后挂一次
+//! `ensure_replicas_after_write`（纯决策在 `replica` 子模块，网络推送复用
+//! `sync_org_to_member`）。tick 自此零主动外联。
 
 use std::time::Duration;
 
@@ -8,6 +13,7 @@ use super::{
     ACK_WAIT_MS, OrgSyncContext, RETRY_INTERVALS_MS, SUBSCRIBER_POLL_MS, SUBSCRIBER_WAIT_MS,
     generate_sync_id,
 };
+use super::replica::{plan_replica_push_targets, replica_check_due};
 use crate::org::sync_state::{
     should_skip_share_push, sync_state_after_share_acked, sync_state_after_share_delivered,
 };
@@ -188,6 +194,7 @@ impl OrgSyncContext {
             }
         };
         let recipients = OrganizationService::sync_recipients(&record, actor_root_id);
+        let mut any_sync_ok = false;
         for member in recipients {
             let Some(set) = member.node_info.clone() else {
                 continue;
@@ -207,8 +214,66 @@ impl OrgSyncContext {
                         "[org] member sync deferred (peer unreachable): orgId={org_id}, targetRootId={}, error={e}",
                         member.root_id
                     ));
+                } else {
+                    any_sync_ok = true;
                 }
             }
+        }
+        // M6 懒连接链：本地记录端点**全不通**（无任一成员推送成功）→ 走 DHT 刷新
+        // 环节（组织私有 DHT 成员提示 + 恢复 token 查询刷新端点再拨一次，失败即
+        // 沉默）。仅在 org 写入推送路径（事件驱动）触发。
+        if !any_sync_ok {
+            self.refresh_org_endpoints_and_dial(actor_root_id).await;
+        }
+        // M6 事件驱动补副本：组织写入（主推送完成）后由管理员触发一次副本充足性
+        // 检查——不足 K 才向未同步成员推快照（复用 `sync_org_to_member`，内部本就
+        // 是发送时懒拨号）。替代被删除的 keepalive tick 周期补副本；带每 org 最小
+        // 检查间隔节流（见 [`Self::ensure_replicas_after_write`]）。
+        self.ensure_replicas_after_write(org_id, actor_root_id).await;
+    }
+
+    /// M6 事件驱动补副本（`replenishOrganizationReplicas` 收尾）：组织写入推送
+    /// 完成后的副本充足性检查。本机为管理员、副本不足 K 时向未同步成员推快照
+    /// （每组织最多 [`super::REPLICA_PUSH_PER_ORG`] 个），复用
+    /// [`Self::sync_org_to_member`]（内部本来就是发送时懒拨号，语义不变）。
+    ///
+    /// 节流（防风暴）：连续多次组织写入不应每次都全量扫描 + 推送（副本不足且
+    /// 目标离线时推送失败不写 sync-state，会持续判定不足）。每 org 记录最近检查
+    /// 时间，距上次 < [`super::REPLICA_CHECK_MIN_INTERVAL_MS`] 直接短路跳过；
+    /// 「副本已足」时同步-state 记账让下次检查近乎零成本判定 sufficient 返回
+    /// （读本地记录 + sync-state，无网络）。纯决策见 [`super::replica`]。
+    async fn ensure_replicas_after_write(&self, org_id: &str, actor_root_id: &str) {
+        let now = self.now();
+        // 节流：每 org 最小检查间隔内跳过（重复写入防风暴）
+        {
+            let mut last = self.replica_check.lock().unwrap_or_else(|e| e.into_inner());
+            let prev = last.get(org_id).copied().unwrap_or(0);
+            if !replica_check_due(prev, now) {
+                return;
+            }
+            last.insert(org_id.to_string(), now);
+        }
+        let record = match OrganizationService::get_record(&self.storage, org_id) {
+            Ok(Some(record)) => record,
+            Ok(None) => return,
+            Err(e) => {
+                self.warn(format!("replenish replicas: read org failed: {e}"));
+                return;
+            }
+        };
+        let targets = plan_replica_push_targets(
+            &record,
+            actor_root_id,
+            |root_id_q, legacy_peer_id| {
+                self.read_sync_state(root_id_q, &record.org_id, legacy_peer_id)
+            },
+            now,
+        );
+        for (peer, member_root_id) in targets {
+            // 复用 `sync_org_to_member`：内部本来就带发送时懒拨号，语义不变。
+            let _ = self
+                .sync_org_to_member(&peer, &member_root_id, &record.org_id)
+                .await;
         }
     }
 }

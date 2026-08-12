@@ -64,9 +64,11 @@ pub fn dm_kind_is_rate_limit_exempt(kind: Option<&str>) -> bool {
         Some(
             "read" | "recall" | "friend-accept"
                 | "pdsync-hello" | "pdsync-need" | "pdsync-data"
+                | "pdsync-attachment-req" | "pdsync-attachment-resp"
                 | "orgsync-hello" | "orgsync-need" | "orgsync-data"
                 | "orgkey-deliver"
                 | "contact-sync" | "conv-sync" | "profile-sync" | "device-sync"
+                | "feed-blob-req" | "feed-blob-resp"
         )
     )
 }
@@ -105,6 +107,8 @@ mod tests {
             "pdsync-hello",
             "pdsync-need",
             "pdsync-data",
+            "pdsync-attachment-req",
+            "pdsync-attachment-resp",
             "contact-sync",
             "conv-sync",
             "profile-sync",
@@ -112,5 +116,21 @@ mod tests {
         ] {
             assert!(dm_kind_is_rate_limit_exempt(Some(kind)), "{kind} 应豁免");
         }
+    }
+
+    /// S6 feed 三信封限流口径（p2p-dm §19.5/§19.6）：`feed` 计入按 peer 限流
+    /// （内容型），`feed-blob-req/resp` 豁免（跨联系人分块传输通道，多信封
+    /// 往返，避免被 1s 桶确定性误限流）。
+    #[test]
+    fn feed_kinds_rate_limit_semantics() {
+        assert!(!dm_kind_is_rate_limit_exempt(Some("feed")), "feed 计入限流");
+        assert!(
+            dm_kind_is_rate_limit_exempt(Some("feed-blob-req")),
+            "feed-blob-req 豁免"
+        );
+        assert!(
+            dm_kind_is_rate_limit_exempt(Some("feed-blob-resp")),
+            "feed-blob-resp 豁免"
+        );
     }
 }

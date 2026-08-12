@@ -20,12 +20,15 @@
 //!
 //! 代码组织：本文件为 [`OrgSyncContext`]（worker 与门面共享的句柄包）、worker
 //! 主循环与各链路共用的私有辅助；org-share 推送在 `push`，org-pull 反熵对账
-//! 在 `pull`，keepalive 周期任务在 `tick`，失联恢复在 `recovery`。
+//! 在 `pull`，keepalive 周期任务在 `tick`（M6 后零主动外联），事件驱动补副本纯决策
+//! 在 `replica`（由 `push` 写入路径触发），失联恢复在 `recovery`。
 
+mod dial;
 mod orgsync_hello;
 mod pull;
 mod push;
 mod recovery;
+mod replica;
 mod tick;
 
 use std::collections::HashMap;
@@ -53,8 +56,6 @@ const ACK_WAIT_MS: u64 = 1500;
 const SUBSCRIBER_WAIT_MS: u64 = 5000;
 /// 订阅者轮询间隔（org-share-session.ts 200ms）。
 const SUBSCRIBER_POLL_MS: u64 = 200;
-/// keepalive 每 tick 候选拨号上限（p2p-node.ts:404 `dialed >= 3`）。
-const DIAL_BUDGET_PER_TICK: usize = 3;
 /// keepalive 每 tick 反熵拉取的候选数（p2p-node.ts:417 `pulled >= 2`）。
 const PULL_CANDIDATES_PER_TICK: usize = 2;
 /// 补副本每组织最多推送成员数（p2p-node.ts:553 `pushedForOrg >= 2`）。
@@ -72,6 +73,11 @@ const ORG_ADDRESS_REPUBLISH_INTERVAL_MS: i64 = 4 * 60 * 60 * 1000;
 /// 周期发一次 pdsync-hello，作为投递静默失败（断→连跳变的 Resync hello 丢
 /// 失等）的收敛兜底。变更触发的增量 hello 见 [`SelfHelloState::observe`]。
 const SELF_DEVICE_HELLO_INTERVAL_MS: i64 = 10 * 60 * 1000;
+
+/// 补副本事件驱动后的最小检查间隔（每 org）：连续多次组织写入不应对同一
+/// 组织反复全量扫描 + 推送（副本不足且目标离线时推送失败不写 sync-state，
+/// 会持续判定不足）。写入触发时若距上次检查 < 该间隔则短路跳过。
+const REPLICA_CHECK_MIN_INTERVAL_MS: i64 = 5 * 60 * 1000;
 
 /// 自设备稳态 hello 触发状态（org-sync tick `maintain_self_device_link` 的
 /// StayConnected 分支用；跨 tick 持久，断→连跳变的 Resync 会重置重建基线）。
@@ -140,7 +146,8 @@ pub(crate) enum OrgSyncRequest {
         /// 操作者 rootId（addMember 为当前管理员，claim 落库后为本机当前用户）。
         actor_root_id: String,
     },
-    /// keepalive tick 的组织层保活（候选拨号/反熵/补副本/recovery）。
+    /// keepalive tick 的组织层保活（只读可达性发布 + 已连接集上的反熵/hello；
+    /// M6 后零主动外联，补副本已挪到 `push_org_to_known_members` 事件路径）。
     KeepaliveTick,
     /// 本机个人域删除（tombstone 写入）后的即时 hello 触发：不等
     /// keepalive tick（最坏 ~60s），立即向已连接自设备补发 pdsync-hello，
@@ -241,6 +248,9 @@ pub(crate) struct OrgSyncContext {
     /// orgsync-hello 出站读取判定「本机数据账号对 filtered 集合是否有插件
     /// 运行时支撑」——无支撑的 filtered 集合在 hello 中降标（不宣告可服务）。
     pub(crate) filter_caps: Arc<Mutex<std::collections::HashMap<String, String>>>,
+    /// 补副本事件驱动节流状态：orgId → 最近一次检查时间（ms）。组织写入推送
+    /// 路径（`ensure_replicas_after_write`）消费，跨写入短路径跳过重复扫描+推送。
+    pub(crate) replica_check: Arc<Mutex<HashMap<String, i64>>>,
 }
 
 /// org-sync worker 主循环：推送/保活串行消费（kernel `start_p2p` 装配，
@@ -354,13 +364,14 @@ fn collect_org_peer_candidates(
         .unwrap_or_default()
         .into_iter()
         .filter(|f| f.root_id == current_root_id)
-        .filter_map(|f| f.peer)
+        .flat_map(|f| f.peers)
         .map(|p| PeerNodeInfo {
             peer_id: (!p.peer_id.is_empty()).then_some(p.peer_id),
             addresses: p.addresses,
         });
-    // DeviceRecord 只提供 peerId（无监听地址）；已连接时 dm_direct 短路
-    // 直发，未连接时靠 keepalive tick 的补拨建立连接后再投递。
+    // DeviceRecord 只提供 peerId（无监听地址）；已连接时 dm_direct 短路直发，
+    // 未连接时靠懒拨号（写入触发 `self_hello_now` / M2 登录刷新）建立连接后投递
+    // （M6 后 tick 不再补拨）。
     let device_self_peers = crate::device::DeviceService::list(storage)
         .unwrap_or_default()
         .into_iter()

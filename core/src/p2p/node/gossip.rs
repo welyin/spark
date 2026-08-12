@@ -91,6 +91,7 @@ impl<S: StorageBackend> EventLoop<S> {
             .validate(text, &self_id, &known, now)
         {
             Ok(announce) => {
+                let self_addrs = self.self_listen_addr_set();
                 let mut store = OverlayPeerStore::new(&mut self.storage);
                 let _ = store.remember(
                     &announce.peer_id,
@@ -98,7 +99,11 @@ impl<S: StorageBackend> EventLoop<S> {
                     OverlayPeerSource::Announce,
                     true,
                     now,
+                    Some(&self_id),
+                    &self_addrs,
                 );
+                // M9 valid 证据：announce 验签通过说明这些地址「活着」
+                let _ = store.mark_addrs_valid(&announce.peer_id, &announce.addresses, now);
                 self.emit(P2pEvent::AnnounceAccepted {
                     peer_id: announce.peer_id,
                 });

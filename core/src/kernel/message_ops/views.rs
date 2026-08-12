@@ -202,7 +202,7 @@ mod tests {
             &conv(Some(PeerRef {
                 peer_id: "peer-conv".to_string(),
                 addresses: Vec::new(),
-            })),
+            ..Default::default()})),
             &set,
             None,
             None,
@@ -227,7 +227,7 @@ mod tests {
         let c = conv(Some(PeerRef {
             peer_id: "peer-conv".to_string(),
             addresses: Vec::new(),
-        }));
+        ..Default::default()}));
         assert!(!conversation_view(&c, &set, None, Some("peer-friend")).online);
     }
 

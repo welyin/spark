@@ -1,19 +1,21 @@
-//! keepalive tick 编排：覆盖网补拨、peer-exchange 轮选、node-announce 周期
-//! 发布、DHT 节点存在记录与网关职责记录周期重发。
+//! keepalive tick 编排：peer-exchange 轮选、node-announce 周期发布、
+//! DHT 节点存在记录与网关职责记录周期重发。
+//!
+//! tick 内**无任何拨号**（connection-policy M8）：覆盖网孤岛自举改事件驱动
+//! （节点启动 / 网络变更确认时由 [`EventLoop::bootstrap_overlay_dial`] 触发
+//! 一轮，失败沉默到下个事件），不再周期补拨。
 //!
 //! 周期 tick 由事件循环内 interval 驱动（`event_loop` 的 run），手动 tick 经
 //! `Command::Tick`；组织层保活由宿主在 `P2pEvent::KeepaliveTick` 后执行。
 
 use std::collections::HashSet;
 
-use libp2p::swarm::dial_opts::DialOpts;
-use libp2p::{Multiaddr, PeerId};
+use libp2p::PeerId;
 use tokio::sync::oneshot;
 
 use crate::p2p::constants::NODE_ANNOUNCE_INTERVAL_MS;
 use crate::p2p::direct;
 use crate::p2p::keepalive;
-use crate::p2p::overlay_store::OverlayPeerStore;
 use crate::storage::StorageBackend;
 
 use super::event_loop::EventLoop;
@@ -24,47 +26,15 @@ impl<S: StorageBackend> EventLoop<S> {
         let mut stats = KeepaliveStats::default();
         let now = self.now();
 
-        // 1) 覆盖网拨号：活跃连接不足时从邻居池补拨
-        let connected = self.connected_peers();
-        let budget = keepalive::overlay_dial_budget(connected.len());
-        if budget > 0 {
-            let self_id = self.self_peer_id().to_base58();
-            let mut exclude: HashSet<String> = connected.iter().map(ToString::to_string).collect();
-            exclude.insert(self_id);
-            let candidates = {
-                let mut store = OverlayPeerStore::new(&mut self.storage);
-                store
-                    .sample_dial_candidates(&exclude, budget)
-                    .unwrap_or_default()
-            };
-            for candidate in candidates {
-                let Ok(peer) = candidate.peer_id.parse::<PeerId>() else {
-                    continue;
-                };
-                let addrs: Vec<Multiaddr> = candidate
-                    .addresses
-                    .iter()
-                    .filter_map(|a| a.parse().ok())
-                    .collect();
-                if addrs.is_empty() {
-                    continue;
-                }
-                // allocate_new_port：复用监听端口 [::]:15002 会与多 listener 冲突
-                // EADDRINUSE，用 OS 临时端口恢复 PC 主动拨号。止血：dcutr 未接入
-                // （§7.1 阶段 B），relay 不依赖源端口；待 dcutr 接入时重新评估端口
-                // 复用（wiki §4.6.3/§7.1）。
-                let opts = DialOpts::peer_id(peer)
-                    .addresses(addrs)
-                    .allocate_new_port()
-                    .build();
-                if self.swarm.dial(opts).is_ok() {
-                    self.pending_overlay_dials.insert(peer, ());
-                    stats.overlay_dialed += 1;
-                }
-            }
-        }
+        // 0) 本地地址变化探测（M9，网络变化重连 A+B 的 B 兜底）：纯本地对比
+        // 监听地址与上轮快照，变化即武装防抖**一次性定时器**——到点回发
+        // `Command::NetworkChangeFired`，由事件循环执行重连动作。tick 内零拨号
+        // 是结构保证（函数体无任何拨号路径），不靠逻辑门控。首 tick 只记录
+        // 基线，不触发。
+        self.detect_local_network_change();
 
-        // 2) peer-exchange：游标轮选一个已连接邻居
+        // 1) peer-exchange：游标轮选一个已连接邻居
+        let connected = self.connected_peers();
         let connected_strs: HashSet<String> = connected.iter().map(ToString::to_string).collect();
         if let Some(target) = keepalive::pick_exchange_target(
             &connected_strs,
@@ -108,27 +78,6 @@ impl<S: StorageBackend> EventLoop<S> {
                         "dht republish provided failed: {e}"
                     )));
                 }
-            }
-        }
-
-        // 6) 网络变化 debounce 到期检查（peer-rediscovery §4.1.3）：地址确实变化
-        //    才执行重发布 + 重建 relay 预约 + 预热重拨。
-        if let Some(deadline) = self.pending_network_change
-            && now >= deadline
-        {
-            self.pending_network_change = None;
-            let base = self.pending_network_change_base.take();
-            let current = self.listen_addr_strings();
-            let changed = base.as_deref().is_some_and(|b| b != current.as_slice());
-            if changed {
-                // ③④⑤ 重发布 announce + DHT
-                let _ = self.publish_announce();
-                self.publish_node_presence_record();
-                // ⑥ 重建 relay 预约（旧预约随旧连接失效）
-                self.ensure_relay_reservations();
-                // 主路径（§4.1.2 ④）：主动重拨优先类目 peer（自设备/好友）——
-                // 缓存地址在切网后仍有较大概率有效，无需等被动 DHT 兜底。
-                self.redial_priority_peers();
             }
         }
 

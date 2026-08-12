@@ -1,35 +1,42 @@
 //! keepalive 组织保活周期任务（p2p-node.ts `maintainOrganizationNetwork`）：
-//! 网关 DHT 提供 → 组织地址发布 → 候选拨号 → 反熵拉取 → 补副本 → recovery
-//! 触发（覆盖网维护已在 p2p 事件循环内完成）。
+//! 网关 DHT 提供 → 组织地址发布 → 反熵拉取
+//! （覆盖网维护已在 p2p 事件循环内完成；覆盖网成员不周期拨号，connection-policy
+//! M5。M6：tick 内主动外联（网关拨号 / 失联恢复查询 / **管理员补副本**）全删，
+//! 彻底事件驱动——连接仅由懒拨号（发送时 / 登录时 / 网络恢复时）与被动接受
+//! 入站建立；补副本挪到组织写入事件点（push.rs `ensure_replicas_after_write`）。
 
 use std::collections::HashSet;
 
 use super::{
-    DIAL_BUDGET_PER_TICK, ORG_ADDRESS_REPUBLISH_INTERVAL_MS, OrgSyncContext,
-    PULL_CANDIDATES_PER_TICK, REPLICA_PUSH_PER_ORG, SELF_HELLO_IMMEDIATE_MIN_INTERVAL_MS,
-    SelfHelloState, collect_org_peer_candidates,
+    ORG_ADDRESS_REPUBLISH_INTERVAL_MS, OrgSyncContext, PULL_CANDIDATES_PER_TICK,
+    SELF_HELLO_IMMEDIATE_MIN_INTERVAL_MS, SelfHelloState, collect_org_peer_candidates,
 };
+use super::dial::connected_gateway_candidates;
 use crate::contact::ContactService;
 use crate::org::gateway::{OrgMemberHint, org_members_dht_key};
-use crate::org::{OrganizationService, compute_org_sync_overview, resolve_local_versions};
+use crate::org::OrganizationService;
 use crate::p2p::constants::OVERLAY_TOPIC;
 use crate::p2p::envelope::build_org_body;
-use crate::p2p::keepalive::plan_organization_dials;
 use crate::p2p::node::LocalP2PNodeInfo;
-use crate::p2p::peer_activity::PeerActivityStore;
 use crate::p2p::peer_targets::PeerNodeInfo;
 use crate::storage::{ScanOptions, StorageBackend};
 
 impl OrgSyncContext {
-    /// 本机个人域删除（tombstone 写入）后的即时 hello：不等 keepalive
-    /// tick（最坏 ~60s），直接向当前已连接的自设备补发 pdsync-hello，
-    /// 对端回 need 即拉走墓碑——删除传播从"分钟级"降到"秒级"。
+    /// 本机个人域写入（含删除墓碑）后的即时 hello：不等 keepalive tick
+    /// （最坏 ~60s），直接向当前已连接的自设备补发 pdsync-hello，对端回
+    /// need 即拉走墓碑——删除传播从"分钟级"降到"秒级"。
     ///
     /// 防抖：最短间隔 1s；窗口内的再次触发登记一次尾随补发（覆盖批量
-    /// 删除的尾巴）。未连接时不发——重连 Resync 会兜底。
+    /// 删除的尾巴）。
+    ///
+    /// M4 懒拨号接入：无已连接自设备时，**数据写入即拨一次**（resolve 自
+    /// 设备 peer → `connect_peer` → 拨通后补发 hello）——替代被删除的
+    /// keepalive tick 周期补拨。失败即沉默，下次写入再拨（connection-policy
+    /// §5.2 / §9）。拨号是网络操作，不触碰 io_lock（无需存储 RMW 串行）。
     pub(crate) fn self_hello_now(&self) {
         enum Act {
             Send(String, Vec<String>),
+            Dial(String, PeerNodeInfo),
             Schedule(i64),
             Skip,
         }
@@ -51,7 +58,15 @@ impl OrgSyncContext {
                     .cloned()
                     .collect();
                 match (self.root_id(), peers.is_empty()) {
+                    // 有已连接自设备 → 直发 hello
                     (Some(root_id), false) => Act::Send(root_id, peers),
+                    // 无已连接自设备 → 懒拨号一次（写入即重连时机）
+                    (Some(root_id), true) => {
+                        match self.resolve_self_device_peer() {
+                            Some(peer) => Act::Dial(root_id, peer),
+                            None => Act::Skip,
+                        }
+                    }
                     _ => Act::Skip,
                 }
             } else if !st.trailing_pending {
@@ -64,7 +79,7 @@ impl OrgSyncContext {
         match act {
             Act::Send(root_id, peers) => {
                 log::info!(
-                    "[CT_SYNC] immediate hello after local delete | devices={:?}",
+                    "[CT_SYNC] immediate hello after local write | devices={:?}",
                     peers
                 );
                 // 同步函数驱动 async 发送：spawn 到 runtime（丢弃 future
@@ -73,6 +88,21 @@ impl OrgSyncContext {
                 tokio::spawn(async move {
                     for peer_id in peers {
                         ctx.send_pdsync_hello(&root_id, &peer_id, now).await;
+                    }
+                });
+            }
+            Act::Dial(root_id, peer) => {
+                log::info!(
+                    "[CT_SYNC] lazy dial self device after local write | peer={:?}",
+                    peer.peer_id
+                );
+                let ctx = self.clone();
+                tokio::spawn(async move {
+                    // 拨通后补发 hello（connect_peer 返回即连接已建立，可直发）
+                    if ctx.node.connect_peer(&peer).await.is_ok()
+                        && let Some(pid) = peer.peer_id
+                    {
+                        ctx.send_pdsync_hello(&root_id, &pid, now).await;
                     }
                 });
             }
@@ -90,12 +120,47 @@ impl OrgSyncContext {
         }
     }
 
+    /// 解析自设备 peer（含地址，供懒拨号）。优先 FriendRecord.peer（配对
+    /// 握手回填，带地址），DeviceRecord 兜底（仅 peerId）。与
+    /// [`Self::maintain_self_device_link`] 头部同一解析口径；本机 peerId 排除。
+    fn resolve_self_device_peer(&self) -> Option<PeerNodeInfo> {
+        let mut storage = self.storage.clone();
+        let my_peer = self.node.peer_id().to_string();
+        // 自 FriendRecord（rootId==自己 且带寻址）优先
+        if let Some(p) = crate::contact::ContactService::get_friend(&mut storage, &self.root_id()?)
+            .ok()
+            .flatten()
+            .and_then(|f| f.peers.into_iter().find(|p| !p.peer_id.is_empty()))
+            && p.peer_id != my_peer
+        {
+            return Some(PeerNodeInfo {
+                peer_id: Some(p.peer_id),
+                addresses: p.addresses,
+            });
+        }
+        // DeviceRecord 兜底（仅 peerId，已连接时 dm_direct 短路）
+        crate::device::DeviceService::list(&storage)
+            .ok()?
+            .into_iter()
+            .find(|r| !r.peer_id.trim().is_empty() && r.peer_id != my_peer)
+            .map(|r| PeerNodeInfo {
+                peer_id: Some(r.peer_id),
+                addresses: Vec::new(),
+            })
+    }
+
     // ------------------------------------------------------------------
     // keepalive 组织保活（p2p-node.ts:379-445 `maintainOrganizationNetwork`）
     // ------------------------------------------------------------------
 
-    /// 单个 keepalive tick 的组织层保活：网关 DHT 提供 → 候选拨号 → 反熵拉取
-    /// → 补副本 → recovery 触发（覆盖网维护已在 p2p 事件循环内完成）。
+    /// 单个 keepalive tick 的组织层保活：网关 DHT 提供 → 组织地址发布 → 反熵
+    /// 拉取（覆盖网维护已在 p2p 事件循环内完成；覆盖网成员不周期拨号，
+    /// connection-policy M5）。M6 起 **tick 内不再有任何主动外联**（网关拨号 /
+    /// 失联恢复查询 / **管理员补副本**全删）——组织成员连接只由懒拨号（发送时 /
+    /// 登录时 / 网络恢复时）与被动接受入站建立；`connected_gateway_candidates`
+    /// 保留仅作反熵拉取源与失联判空依据（无已连接候选时拉取循环天然空转，正是
+    /// 「没连接就不拉取」）。补副本改由组织写入事件点触发（push.rs
+    /// `ensure_replicas_after_write`），tick 自此零主动外联。
     pub(crate) async fn maintain_org_tick(&self) {
         let Some(root_id) = self.root_id() else {
             return;
@@ -110,8 +175,9 @@ impl OrgSyncContext {
         let now = self.now();
         // 本机节点信息一次取用：候选收集（排除本机 peerId）与连接快照共用
         let local_info = self.node.local_node_info().await.ok();
-        // 0.6) 自设备保活：配对设备未连接时补拨（独立于组织候选，无组织
-        //      成员时也要维持自设备链路——自会话/资料/设备清单同步全依赖它）
+        // 0.6) 自设备链路状态机：断→连跳变 Resync、稳态 steady hello。不做周期
+        //      补拨（M4 懒拨号：写入触发 `self_hello_now` 才拨一次）——两端错峰
+        //      上线靠任一方写入触发懒拨号会合，或对端主动拨过来。
         self.maintain_self_device_link(&root_id, local_info.as_ref())
             .await;
         let candidates = collect_org_peer_candidates(
@@ -120,33 +186,26 @@ impl OrgSyncContext {
             local_info.as_ref().and_then(|i| i.peer_id.as_deref()),
         );
         if candidates.is_empty() {
-            // 无任何已知成员地址：全员不可达更重形态，仍尝试定向恢复
-            self.maybe_run_org_recovery(true, &root_id).await;
+            // 无任何已知成员地址：无候选可拉取/无成员可同步，直接返回（M6 后
+            // 不再触发恢复拨号——本地端点全不通即沉默，等下一次懒拨号事件）。
             return;
         }
 
         let connected: HashSet<String> = local_info
             .map(|info| info.connected_peers.into_iter().collect())
             .unwrap_or_default();
-        let sorted = {
-            let mut storage = self.storage.clone();
-            let mut store = PeerActivityStore::new(&mut storage);
-            store
-                .sort_candidates_by_priority(&candidates, now)
-                .unwrap_or_else(|_| candidates.clone())
+
+        // 已连接候选（供反熵拉取/失联判空）：已连接 ∩ 活跃网关并入判定集
+        // （I4）。M6 后 tick 不再拨号，`connected_candidates` 仅由已连接网关
+        // 构成——够用即停后静默，失联判空依赖它（无已连接候选时拉取循环
+        // 天然空转，不拉取）。
+        let connected_candidates = {
+            let orgs = crate::org::OrganizationService::read_all_organizations(&self.storage)
+                .unwrap_or_default();
+            connected_gateway_candidates(&orgs, &root_id, &connected, now)
         };
 
-        // 1) 候选拨号：每 tick 最多新拨 3 个（node.connect_peer 内部已记账
-        //    活跃度 success/failure）
-        let (to_dial, mut connected_candidates) =
-            plan_organization_dials(&sorted, &connected, DIAL_BUDGET_PER_TICK);
-        for candidate in to_dial {
-            if self.node.connect_peer(&candidate).await.is_ok() {
-                connected_candidates.push(candidate);
-            }
-        }
-
-        // 2) 反熵拉取：最多 2 个已连接候选（捎带自签 claim）
+        // 反熵拉取：最多 2 个已连接候选（捎带自签 claim）
         for candidate in connected_candidates.iter().take(PULL_CANDIDATES_PER_TICK) {
             if let Err(e) = self.reconcile_from_peer(candidate, true).await {
                 self.warn(format!(
@@ -156,8 +215,8 @@ impl OrgSyncContext {
             }
         }
 
-        // 3) 管理员补副本
-        self.replenish_replicas(&root_id).await;
+        // 3) 管理员补副本：M6 起不在 tick 内做（零主动外联）——改由组织写入
+        //    事件点触发（push.rs `ensure_replicas_after_write`），此处不再调用。
 
         // 3.5) orgsync-hello 触发：本机作为复制组成员，向已连接的复制组成员
         //       发送 orgsync-hello 摘要（O2a §20.3）。
@@ -165,32 +224,29 @@ impl OrgSyncContext {
         //       驱动即时 hello + 1s 防抖；当前最小闭环：每 tick 遍历组织与集合，
         //       向已连接复制组成员发送 hello。后续需接入 orgd 写变更 watcher。
         self.maybe_send_orgsync_hello(&root_id, &connected).await;
-
-        // 4) 失联 recovery
-        self.maybe_run_org_recovery(connected_candidates.is_empty(), &root_id)
-            .await;
     }
 
-    /// 自设备保活：配对设备（自 FriendRecord.peer）未连接时补拨，每 tick 一次；
-    /// 断→连跳变时向对端重发 device-sync + profile-sync 快照。
+    /// 自设备链路维护（connection-policy M4 懒拨号后）：**不再周期补拨**。
+    /// 断→连跳变时向对端重发 device-sync + profile-sync 快照；稳态由写入
+    /// digest 驱动增量 hello。
     ///
-    /// 登录后的一次性广播在对端离线时静默失败后不再重试；挂 keepalive tick
-    /// 周期补拨，使两端错峰上线也能自动会合。仅打通连接不够——两端启动时的
-    /// 快照广播早已互相错过，重连成功时必须重发快照才能收敛（对端收
-    /// device-sync 恒回发、profile-sync 按 LWW 裁决回发，双向齐全）。
+    /// 重连时机全部改为**数据写入触发**：本机个人域写入 → `self_hello_now`
+    /// 检查自设备连接，无则懒拨号一次（connect_peer）→ 拨通后补发 hello
+    /// （§5.2 / §2.3 改造点）。此处 tick 只维护链路状态机（断→连跳变
+    /// Resync、稳态 steady hello），不做周期拨号——两端错峰上线靠任一方
+    /// 写入数据触发懒拨号会合，或对端主动拨过来。
     async fn maintain_self_device_link(&self, root_id: &str, local_info: Option<&LocalP2PNodeInfo>) {
         let mut storage = self.storage.clone();
         // 双来源解析配对设备：FriendRecord.peer 优先（带地址），DeviceRecord
-        // 兜底（仅 peerId，已连接时 dm_direct 短路；未连接时无地址无法补拨，
-        // 但候选收集里的 FriendRecord 来源仍可提供地址）
-        let (mut peer_id, mut addresses) = {
+        // 兜底（仅 peerId）。懒拨号地址由写入触发路径 `resolve_self_device_peer`
+        // 另行解析（带地址）；此处只需 peerId 判定连接状态。
+        let mut peer_id = {
             let from_friend = ContactService::get_friend(&mut storage, root_id)
                 .ok()
                 .flatten()
-                .and_then(|f| f.peer)
-                .filter(|p| !p.peer_id.is_empty());
+                .and_then(|f| f.peers.into_iter().find(|p| !p.peer_id.is_empty()));
             match from_friend {
-                Some(p) => (p.peer_id, p.addresses),
+                Some(p) => p.peer_id,
                 None => {
                     let my_peer = local_info.and_then(|i| i.peer_id.as_deref());
                     let device = crate::device::DeviceService::list(&storage)
@@ -198,7 +254,7 @@ impl OrgSyncContext {
                         .into_iter()
                         .find(|r| Some(r.peer_id.as_str()) != my_peer);
                     match device {
-                        Some(d) => (d.peer_id, Vec::new()),
+                        Some(d) => d.peer_id,
                         None => return,
                     }
                 }
@@ -225,7 +281,6 @@ impl OrgSyncContext {
             };
             if let Some(healed_peer) = healed.peer_id {
                 peer_id = healed_peer;
-                addresses = healed.addresses;
             }
         }
         let connected = local_info
@@ -236,7 +291,10 @@ impl OrgSyncContext {
         enum Action {
             StayConnected,
             Resync,
-            Dial,
+            // 未连接：不再周期补拨（M4 懒拨号）。等数据写入触发
+            // `self_hello_now` 懒拨一次，或对端主动拨过来。此处仅维护
+            // 连接集状态，供写入触发路径判断是否需拨。
+            Idle,
         }
         let action = {
             let mut last = self.self_device_link.lock().unwrap_or_else(|e| e.into_inner());
@@ -250,7 +308,7 @@ impl OrgSyncContext {
                 }
             } else {
                 *last = None;
-                Action::Dial
+                Action::Idle
             }
         };
         // 维护共享的多设备连接集（即时 hello 等触发路径消费；事件泵在
@@ -282,17 +340,9 @@ impl OrgSyncContext {
                     .unwrap_or_else(|e| e.into_inner()) = SelfHelloState::default();
                 self.send_self_snapshots(root_id, &peer_id).await;
             }
-            Action::Dial => {
-                let target = PeerNodeInfo {
-                    peer_id: Some(peer_id),
-                    addresses,
-                };
-                // 短超时：后台保活不可长阻塞组织保活串行队列
-                let _ = self
-                    .node
-                    .connect_peer_with_timeout(&target, std::time::Duration::from_secs(5))
-                    .await;
-            }
+            // 未连接：M4 懒拨号——周期补拨已删除，写入触发（self_hello_now）
+            // 会懒拨一次；此处静默等待，不骚扰死设备。
+            Action::Idle => {}
         }
     }
 
@@ -460,83 +510,6 @@ impl OrgSyncContext {
                     &signing_key,
                 );
                 let _ = self.node.dm_direct(&target, envelope).await;
-            }
-        }
-    }
-
-    /// 管理员补副本（p2p-node.ts:520-573 `replenishOrganizationReplicas`）：
-    /// 副本不足 K 时向未同步成员推送快照（每组织最多 2 个）。
-    async fn replenish_replicas(&self, root_id: &str) {
-        let now = self.now();
-        let records = match OrganizationService::read_all_organizations(&self.storage) {
-            Ok(records) => records,
-            Err(e) => {
-                self.warn(format!("replenish replicas: read orgs failed: {e}"));
-                return;
-            }
-        };
-        for record in records {
-            if !record.is_admin(root_id) {
-                continue;
-            }
-            let versions = record
-                .sync
-                .as_ref()
-                .map(|s| s.versions)
-                .or_else(|| Some(resolve_local_versions(&record)));
-            let mut storage = self.storage.clone();
-            let overview = compute_org_sync_overview(
-                &record.org_id,
-                &record.members,
-                Some(root_id),
-                versions.as_ref(),
-                |root_id_q, legacy_peer_id| {
-                    crate::org::sync_state::read_org_sync_state_account(
-                        &mut storage,
-                        root_id_q,
-                        &record.org_id,
-                        legacy_peer_id,
-                    )
-                },
-                now,
-            );
-            if overview.is_replica_sufficient() {
-                continue;
-            }
-            let mut pushed_for_org = 0;
-            for member in &overview.members {
-                if pushed_for_org >= REPLICA_PUSH_PER_ORG {
-                    break;
-                }
-                if member.is_self || member.ever_synced {
-                    continue;
-                }
-                // 端点化：遍历成员端点集，取首个可寻址端点（peerId 或地址非空）。
-                let Some(set) = record
-                    .find_member(&member.root_id)
-                    .and_then(|m| m.node_info.clone())
-                else {
-                    continue;
-                };
-                let Some(info) = set.iter().find(|info| {
-                    info.peer_id
-                        .as_deref()
-                        .is_some_and(|p| !p.trim().is_empty())
-                        || !info.addresses.is_empty()
-                }) else {
-                    continue;
-                };
-                let peer = PeerNodeInfo {
-                    peer_id: info.peer_id.clone(),
-                    addresses: info.addresses.clone(),
-                };
-                if self
-                    .sync_org_to_member(&peer, &member.root_id, &record.org_id)
-                    .await
-                    .is_ok()
-                {
-                    pushed_for_org += 1;
-                }
             }
         }
     }

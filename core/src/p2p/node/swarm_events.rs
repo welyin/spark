@@ -4,7 +4,7 @@
 
 use std::collections::HashSet;
 
-use libp2p::swarm::SwarmEvent;
+use libp2p::swarm::{ConnectionId, SwarmEvent};
 use libp2p::{PeerId, gossipsub, identify, kad, mdns, request_response};
 use serde_json::Value;
 
@@ -23,8 +23,7 @@ use super::event_loop::{EventLoop, OrgAttemptKind};
 impl<S: StorageBackend> EventLoop<S> {
     pub(super) fn handle_swarm_event(&mut self, event: SwarmEvent<SparkBehaviourEvent>) {
         match event {
-            SwarmEvent::NewListenAddr { address, .. } => {
-                eprintln!("[p2p] NewListenAddr: {address}");
+            SwarmEvent::NewListenAddr { .. } => {
                 if !self.port_persisted {
                     let addrs = self.listen_addr_strings();
                     if let Some(port) = listen_port::parse_ws_listen_port(&addrs)
@@ -51,8 +50,7 @@ impl<S: StorageBackend> EventLoop<S> {
                     });
                 }
             }
-            SwarmEvent::ExternalAddrConfirmed { address } => {
-                eprintln!("[p2p] ExternalAddrConfirmed: {address}");
+            SwarmEvent::ExternalAddrConfirmed { .. } => {
                 // 地址变化（UPnP 映射、relay 预约）→ 立即补发通告 + DHT 记录
                 //（peer-rediscovery §4.2：外部地址确认同时触发 DHT 重发）
                 let _ = self.publish_announce();
@@ -64,11 +62,6 @@ impl<S: StorageBackend> EventLoop<S> {
                 num_established,
                 ..
             } => {
-                let direction = if endpoint.is_dialer() { "dialer" } else { "listener" };
-                eprintln!(
-                    "[p2p] ConnectionEstablished: peer={peer_id} remote_addr={} num_established={num_established} direction={direction}",
-                    endpoint.get_remote_address()
-                );
                 let now = self.now();
                 {
                     let mut store = PeerActivityStore::new(&mut self.storage);
@@ -81,6 +74,9 @@ impl<S: StorageBackend> EventLoop<S> {
                 // 入站方向以空地址列表 remember：保留 peer 存在性与 lastSeen
                 // 记账，不污染拨号候选。
                 let remote_addr = endpoint.get_remote_address().to_string();
+                // 自过滤上下文：在借用 storage 前取好（避免 mutable/immutable 冲突）
+                let self_id = self.self_peer_id().to_base58();
+                let self_addrs = self.self_listen_addr_set();
                 {
                     let dialable_addrs: &[String] = if endpoint.is_dialer() {
                         std::slice::from_ref(&remote_addr)
@@ -94,9 +90,17 @@ impl<S: StorageBackend> EventLoop<S> {
                         OverlayPeerSource::Connect,
                         false,
                         now,
+                        Some(&self_id),
+                        &self_addrs,
                     );
+                    // M9 success 证据：dialer 方向真实连上的 remote addr 记成功分
+                    //（listener 方向是 NAT 临时端口，沿用现口径只刷 last_seen）
+                    if endpoint.is_dialer() {
+                        let _ = store.mark_addr_success(&peer_id.to_base58(), &remote_addr, now);
+                    }
                 }
-                // 覆盖网补拨结果记账
+                // 覆盖网自举结果记账：成功标记 last_dial_result=success，
+                // 候选排序提到队首（M8 排序制，无失败名单/退避状态）。
                 if self.pending_overlay_dials.remove(&peer_id).is_some() {
                     let mut store = OverlayPeerStore::new(&mut self.storage);
                     let _ = store.mark_dial_result(&peer_id.to_base58(), true);
@@ -105,7 +109,8 @@ impl<S: StorageBackend> EventLoop<S> {
                 if let Some(kad) = self.swarm.behaviour_mut().kad.as_mut() {
                     kad.add_address(&peer_id, endpoint.get_remote_address().clone());
                 }
-                // connect 命令匹配
+                // connect 命令匹配（M9 分批并发）：连接成功即收手（清空本批
+                // 其余在途拨号），按 peerId 或批内任一地址匹配
                 let remote = remote_addr.clone();
                 let mut i = 0;
                 while i < self.pending_connects.len() {
@@ -114,14 +119,17 @@ impl<S: StorageBackend> EventLoop<S> {
                         let expected =
                             extract_peer_id(&p.node_info).and_then(|s| s.parse::<PeerId>().ok());
                         expected == Some(peer_id)
-                            || p.current.as_deref().is_some_and(|t| {
-                                remote == t
-                                    || remote.starts_with(&format!("{t}/"))
-                                    || t.starts_with(&remote)
+                            || p.in_flight.iter().any(|d| {
+                                remote == d.addr
+                                    || remote.starts_with(&format!("{}/", d.addr))
+                                    || d.addr.starts_with(&remote)
                             })
                     };
                     if matched {
-                        let done = self.pending_connects.remove(i);
+                        let mut done = self.pending_connects.remove(i);
+                        // 收手：取消本批其余在途拨号（清空 batch，其迟到失败
+                        // 因 conn_id 已不在批次而不影响本 attempt 的成功结果）
+                        done.in_flight.clear();
                         let info = done.node_info.clone();
                         self.remember_node_observation(&info, NodeObservation::Success, None);
                         let _ = done.tx.send(Ok(()));
@@ -136,10 +144,10 @@ impl<S: StorageBackend> EventLoop<S> {
                     let matched = {
                         let a = &self.pending_org_attempts[j];
                         a.in_flight.is_none()
-                            && (a.current_target.as_deref().is_some_and(|t| {
-                                remote == t
-                                    || remote.starts_with(&format!("{t}/"))
-                                    || t.starts_with(&remote)
+                            && (a.batch.iter().any(|d| {
+                                remote == d.addr
+                                    || remote.starts_with(&format!("{}/", d.addr))
+                                    || d.addr.starts_with(&remote)
                             }) || a.current_peer == Some(peer_id))
                     };
                     if matched {
@@ -159,9 +167,9 @@ impl<S: StorageBackend> EventLoop<S> {
                         };
                         attempt.in_flight = Some(request_id);
                         attempt.current_peer = Some(peer_id);
-                        // 不 break：同地址去重的等待 attempt 排在本条之后，也要
-                        // 随这路已建立连接发出请求（in_flight 非空检查已防
-                        // 双连接重复发）
+                        // 收手：连接已建立，清空本批其余在途拨号（避免迟到失败
+                        // 误推进；等待者随路发请求，batch 本就为空）
+                        attempt.batch.clear();
                         // 不 break：同地址去重的等待 attempt 排在本条之后，也要
                         // 随这路已建立连接发出请求（in_flight 非空检查已防
                         // 双连接重复发）
@@ -182,16 +190,8 @@ impl<S: StorageBackend> EventLoop<S> {
                 self.begin_version_probe(peer_id);
             }
             SwarmEvent::ConnectionClosed {
-                peer_id,
-                endpoint,
-                num_established,
-                cause,
-                ..
+                peer_id, num_established, ..
             } => {
-                eprintln!(
-                    "[p2p] ConnectionClosed: peer={peer_id} remote_addr={} num_established={num_established} cause={cause:?}",
-                    endpoint.get_remote_address()
-                );
                 if num_established == 0 {
                     let now = self.now();
                     // 断连资历清零（§8.6：重接重新熬资历）
@@ -203,10 +203,9 @@ impl<S: StorageBackend> EventLoop<S> {
                     });
                     // relay 连接断开 → 移除对应预约并尝试补充（peer-rediscovery §4.6.2）
                     self.on_relay_connection_lost(peer_id);
-                    // 优先类目 peer（自设备/好友）断开 → 立即并行竞速（peer-rediscovery §4.3）
-                    if self.host.is_priority_peer(&peer_id.to_base58()) {
-                        self.start_rediscovery(peer_id);
-                    }
+                    // M4 删断线自动竞速（connection-policy §5.3）：断线后不再
+                    // 立即 fast-redial/并行竞速——等下次发送时懒拨号或对端拨过来。
+                    // 本机网络恢复事件的重拨（redial_priority_peers）仍保留。
                 }
             }
             SwarmEvent::OutgoingConnectionError { peer_id, connection_id, error, .. } => {
@@ -214,6 +213,9 @@ impl<S: StorageBackend> EventLoop<S> {
                 eprintln!(
                     "[p2p] OutgoingConnectionError: peer={peer} conn_id={connection_id:?} error={error:?}"
                 );
+                // M9 确定性错误硬删：WrongPeerId（尤其 obtained=本机）或目标地址
+                // 命中本机监听地址 → 从目标 peer 记录删除此地址，防死地址累积
+                self.hard_delete_on_deterministic_failure(connection_id, &error);
                 // connect 命令：失败则试下一目标。按 ConnectionId 精确归属
                 // （同 org attempt 口径）——候选 1 的 unknown_peer_id 拨号失败
                 // 时 peer_id=None，按 peer 匹配会失配滞留：对端在线但首候选
@@ -222,13 +224,11 @@ impl<S: StorageBackend> EventLoop<S> {
                 while i < self.pending_connects.len() {
                     let matched = {
                         let p = &self.pending_connects[i];
-                        p.dial_conn_id == Some(connection_id)
+                        p.in_flight.iter().any(|d| d.conn_id == connection_id)
                     };
                     if matched {
                         let mut p = self.pending_connects.remove(i);
-                        p.last_error = Some(error.to_string());
-                        p.current = None;
-                        match self.dial_next_connect_target(&mut p) {
+                        match self.fail_connect_dial(&mut p, connection_id, &error.to_string()) {
                             None => self.pending_connects.push(p),
                             Some(err) => {
                                 let info = p.node_info.clone();
@@ -251,7 +251,9 @@ impl<S: StorageBackend> EventLoop<S> {
                 // 若按 peer/地址模糊匹配，一个 attempt 的失败会误推进同 peer
                 // 的所有 attempt（含未拨号的等待者），级联耗尽目标
                 self.fail_org_dial(connection_id);
-                // 覆盖网补拨失败记账
+                // 覆盖网自举失败：记账 last_dial_result=failure，候选排序自然
+                // 沉底（M8）——不记退避、不进名单；无周期触发即不会重拨，等
+                // 下个事件（网络变更/新邻居/发送懒拨号）再按排序拨一轮。
                 if let Some(peer) = peer_id
                     && self.pending_overlay_dials.remove(&peer).is_some()
                 {
@@ -281,30 +283,64 @@ impl<S: StorageBackend> EventLoop<S> {
                 self.on_circuit_listener_closed(&addresses);
             }
             SwarmEvent::Behaviour(behaviour_event) => self.handle_behaviour_event(behaviour_event),
-            SwarmEvent::IncomingConnection {
-                local_addr,
-                send_back_addr,
-                ..
-            } => {
-                eprintln!("[p2p] IncomingConnection: local_addr={local_addr} send_back_addr={send_back_addr}");
-            }
+            SwarmEvent::IncomingConnection { .. } => {}
             SwarmEvent::IncomingConnectionError {
-                local_addr,
-                send_back_addr,
-                error,
-                ..
+                local_addr, send_back_addr, error, ..
             } => {
                 eprintln!(
                     "[p2p] IncomingConnectionError: local_addr={local_addr} send_back_addr={send_back_addr} error={error:?}"
                 );
             }
-            SwarmEvent::ExpiredListenAddr { address, .. } => {
-                eprintln!("[p2p] ExpiredListenAddr: {address}");
-            }
+            SwarmEvent::ExpiredListenAddr { .. } => {}
             SwarmEvent::ListenerError { listener_id, error } => {
                 eprintln!("[p2p] ListenerError: listener_id={listener_id:?} error={error:?}");
             }
             _ => {}
+        }
+    }
+
+    /// M9 确定性错误硬删：`WrongPeerId`（尤其 obtained=本机）或拨号目标地址命中
+    /// 本机监听地址时，从目标 peer 的覆盖网记录删除该地址——这类错误是确定性
+    /// 死地址（对端 peerId 不匹配 / 多实例同机污染），删除后不再反复白拨。
+    fn hard_delete_on_deterministic_failure(
+        &mut self,
+        connection_id: ConnectionId,
+        error: &libp2p::swarm::DialError,
+    ) {
+        // 目标地址：WrongPeerId 的 endpoint 即拨号地址；其余错误无法定位地址
+        let (failing_addr, obtained_is_self) = match error {
+            libp2p::swarm::DialError::WrongPeerId { obtained, address } => {
+                (address.to_string(), Some(*obtained) == Some(self.self_peer_id()))
+            }
+            _ => return,
+        };
+        // 命中本机监听地址也是确定性死地址（自过滤漏网兜底）
+        let hits_self_addr = self.self_listen_addr_set().contains(&failing_addr);
+        if !obtained_is_self && !hits_self_addr {
+            return;
+        }
+        // 按 conn_id 定位目标 peer：connect 命令或 org/dm 直连 attempt
+        let target_peer = self
+            .pending_connects
+            .iter()
+            .find(|p| p.in_flight.iter().any(|d| d.conn_id == connection_id))
+            .and_then(|p| extract_peer_id(&p.node_info).and_then(|s| s.parse::<PeerId>().ok()))
+            .or_else(|| {
+                self.pending_org_attempts
+                    .iter()
+                    .find(|a| a.batch.iter().any(|d| d.conn_id == connection_id))
+                    .and_then(|a| a.current_peer)
+            });
+        let Some(peer) = target_peer else {
+            return;
+        };
+        // 拨号可能走 raw 或 /p2p/<id> 变体：两形态都删（base_addr 剥 /p2p 段）
+        let peer_str = peer.to_base58();
+        let mut store = OverlayPeerStore::new(&mut self.storage);
+        let _ = store.remove_addr(&peer_str, &failing_addr);
+        let base = super::org_direct::base_addr(&failing_addr);
+        if base != failing_addr.as_str() {
+            let _ = store.remove_addr(&peer_str, base);
         }
     }
 
@@ -380,6 +416,8 @@ impl<S: StorageBackend> EventLoop<S> {
             }
             SparkBehaviourEvent::Mdns(mdns::Event::Discovered(peers)) => {
                 let now = self.now();
+                let self_id = self.self_peer_id().to_base58();
+                let self_addrs = self.self_listen_addr_set();
                 let mut store = OverlayPeerStore::new(&mut self.storage);
                 for (peer_id, addr) in peers {
                     let _ = store.remember(
@@ -388,6 +426,8 @@ impl<S: StorageBackend> EventLoop<S> {
                         OverlayPeerSource::Mdns,
                         false,
                         now,
+                        Some(&self_id),
+                        &self_addrs,
                     );
                 }
             }
@@ -410,9 +450,7 @@ impl<S: StorageBackend> EventLoop<S> {
                 kad::QueryResult::PutRecord(res) => self.resolve_dht_put(id, res),
                 kad::QueryResult::GetProviders(res) => self.resolve_dht_providers(id, res),
                 kad::QueryResult::GetClosestPeers(res) => match res {
-                    Ok(ok) => {
-                        eprintln!("[p2p] Kad GetClosestPeers: found {} peers", ok.peers.len());
-                    }
+                    Ok(_) => {}
                     Err(e) => {
                         eprintln!("[p2p] Kad GetClosestPeers: error={e:?}");
                     }
@@ -545,9 +583,10 @@ impl<S: StorageBackend> EventLoop<S> {
                 request_response::Message::Request {
                     request, channel, ..
                 } => {
-                    // 诊断日志：最低层捕获所有 request-response 请求
+                    // 诊断日志（debug 级）：最低层捕获所有 request-response 请求，
+                    // 默认不输出避免污染日志；排查入站消息时可开 debug 观察
                     let preview = if request.len() <= 200 { &request[..] } else { &request[..200] };
-                    log::info!(
+                    log::debug!(
                         "[P2P_SWARM_MSG] DmRr Request from_peer={} preview={}",
                         &peer.to_base58()[..std::cmp::min(16, peer.to_base58().len())],
                         preview

@@ -247,6 +247,7 @@ impl Kernel {
                     Ok(P2pEvent::PluginDataChanged(payload)) => {
                         registry.dispatch_data_change(&payload)
                     }
+                    Ok(P2pEvent::FeedReceived(payload)) => registry.dispatch_feed(&payload),
                     Ok(_) => {}
                     // 慢消费丢旧事件：路由场景可容忍（插件漏处理的副作用
                     // 仅是当条 bot 消息未响应），继续即可

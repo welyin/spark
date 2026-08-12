@@ -188,6 +188,7 @@ pub fn handle_orgkey_deliver<S: StorageBackend>(
         orgsync_out: Vec::new(),
         profile_applied: false,
         orgkey_unbox: Some(unbox),
+        feed_blob_out: None,
     })
 }
 

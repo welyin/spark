@@ -424,7 +424,7 @@ impl Kernel {
                 signature: String::new(),
                 gender: None,
                 added_at: now,
-                peer: None,
+                peers: Vec::new(),
                 remark: String::new(),
                 phones: Vec::new(),
                 tag_ids: Vec::new(),
@@ -441,10 +441,13 @@ impl Kernel {
             // 运行中即本机 peerId），即自指污染——拒绝落该 peer，保留原值/留空。
             let peer_id = gen_peer_id.to_string();
             if peer_id != node_id {
-                friend.peer = Some(PeerRef {
-                    peer_id,
-                    addresses: gen_addresses.to_vec(),
-                });
+                // 多设备寻址：QR 恢复配对写入首台设备（已有同 peerId 不重复）
+                if !friend.peers.iter().any(|p| p.peer_id == peer_id) {
+                    friend.peers.push(PeerRef {
+                        peer_id,
+                        addresses: gen_addresses.to_vec(),
+                    ..Default::default()});
+                }
             } else {
                 eprintln!(
                     "[login] self-pointing peer rejected on QR recover | node_id={node_id} gen_peer_id={gen_peer_id}"

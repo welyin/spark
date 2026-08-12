@@ -173,6 +173,7 @@ impl<S: StorageBackend> EventLoop<S> {
         let now = self.now();
         let self_id = self.self_peer_id().to_base58();
         let responder_id = responder.to_base58();
+        let self_addrs = self.self_listen_addr_set();
         let mut merged = 0usize;
         {
             let mut store = OverlayPeerStore::new(&mut self.storage);
@@ -183,7 +184,17 @@ impl<S: StorageBackend> EventLoop<S> {
                 if let Some((pid, addrs)) =
                     direct::filter_incoming_sample(sample, &self_id, &responder_id)
                 {
-                    let _ = store.remember(&pid, &addrs, OverlayPeerSource::Exchange, false, now);
+                    let _ = store.remember(
+                        &pid,
+                        &addrs,
+                        OverlayPeerSource::Exchange,
+                        false,
+                        now,
+                        Some(&self_id),
+                        &self_addrs,
+                    );
+                    // M9 valid 证据：peer-exchange 采样是第三方线索，标记「活着」
+                    let _ = store.mark_addrs_valid(&pid, &addrs, now);
                     merged += 1;
                 }
             }

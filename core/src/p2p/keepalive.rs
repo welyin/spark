@@ -4,10 +4,7 @@
 
 use std::collections::HashSet;
 
-use super::constants::{
-    OVERLAY_DIAL_TARGET, OVERLAY_TICK_DIAL_BUDGET, RECOVERY_COOLDOWN_MS,
-    RECOVERY_SEARCH_DISPLAY_MS, RECOVERY_TRIGGER_CONSECUTIVE_TICKS,
-};
+use super::constants::RECOVERY_SEARCH_DISPLAY_MS;
 use super::peer_targets::PeerNodeInfo;
 
 /// 恢复模式对外状态（网络状态 UI 的数据源，org.md §12 扩展）。
@@ -47,37 +44,7 @@ impl RecoveryState {
     }
 }
 
-/// keepalive tick 的组织拨号计划：按打分排序的候选 → (待拨号, 已连接)。
-///
-/// 对齐 maintainOrganizationNetwork（p2p-node.ts:396-418）：
-/// 已连接候选直接归入 connected；未连接的每 tick 最多新拨 3 个（超出跳过，不失败记账）。
-pub fn plan_organization_dials(
-    sorted_candidates: &[PeerNodeInfo],
-    connected_peers: &HashSet<String>,
-    max_dials: usize,
-) -> (Vec<PeerNodeInfo>, Vec<PeerNodeInfo>) {
-    let mut to_dial = Vec::new();
-    let mut connected = Vec::new();
-    for candidate in sorted_candidates {
-        let peer_id = super::peer_targets::extract_peer_id(candidate);
-        if let Some(pid) = &peer_id
-            && connected_peers.contains(pid)
-        {
-            connected.push(candidate.clone());
-            continue;
-        }
-        if to_dial.len() < max_dials {
-            to_dial.push(candidate.clone());
-        }
-    }
-    (to_dial, connected)
-}
 
-/// 覆盖网拨号预算：活跃连接低于目标时补拨，每 tick 预算 2 次。
-pub fn overlay_dial_budget(connected_count: usize) -> usize {
-    let shortfall = OVERLAY_DIAL_TARGET.saturating_sub(connected_count);
-    shortfall.min(OVERLAY_TICK_DIAL_BUDGET)
-}
 
 /// peer-exchange 轮选：已连接邻居排序后按游标轮转。
 pub fn pick_exchange_target(
@@ -97,10 +64,11 @@ pub fn pick_exchange_target(
     Some(neighbors[(cursor as usize) % neighbors.len()].clone())
 }
 
-/// org-recovery 触发判定（p2p-node.ts:453-476）：
-/// "全员不可达"连续 3 个 tick，且距上轮查询 ≥ 10 min（**冷却为全局单值**）。
+/// org-recovery 触发状态（connection-policy M6 简化）：不再有「连续 3 tick +
+/// 冷却」的周期触发（tick 内主动外联已全删）。恢复查询改为**懒连接链的 DHT
+/// 刷新环节**——仅在事件点（登录/网络恢复/org 写入推送/orgsync-hello 懒拨号）
+/// 触发，每次按需查询、失败即沉默。本结构只记录最近一轮查询时间供 UI 展示。
 pub struct RecoveryTrigger {
-    dead_tick_count: u32,
     last_query_at: Option<i64>,
 }
 
@@ -112,37 +80,13 @@ impl Default for RecoveryTrigger {
 
 impl RecoveryTrigger {
     pub fn new() -> Self {
-        Self {
-            dead_tick_count: 0,
-            last_query_at: None,
-        }
+        Self { last_query_at: None }
     }
 
-    /// 每个 keepalive tick 调用：返回本轮是否应发起恢复查询。
-    /// 返回 true 时已记录本轮查询时间（调用方随后执行查询）。
-    pub fn on_tick(&mut self, org_unreachable: bool, now_ms: i64) -> bool {
-        if !org_unreachable {
-            self.dead_tick_count = 0;
-            return false;
-        }
-        self.dead_tick_count += 1;
-        if self.dead_tick_count < RECOVERY_TRIGGER_CONSECUTIVE_TICKS {
-            return false;
-        }
-        if let Some(last) = self.last_query_at
-            && now_ms - last < RECOVERY_COOLDOWN_MS
-        {
-            return false;
-        }
+    /// 记录一轮 DHT 刷新查询的发起时间（懒连接链 DHT 刷新环节实际发起查询时
+    /// 调用；供 UI 展示恢复状态）。
+    pub fn note_query(&mut self, now_ms: i64) {
         self.last_query_at = Some(now_ms);
-        true
-    }
-
-    /// 撤销本轮冷却记录：触发条件满足但实际未发起查询（无恢复视图/无邻居）
-    /// 时调用，对齐 TS `lastRecoveryQueryAt` 仅在真正查询时才更新的语义
-    /// （p2p-node.ts:479-483 的 view/neighbors 前置检查在赋值之前）。
-    pub fn reset_cooldown(&mut self) {
-        self.last_query_at = None;
     }
 
     /// 只读状态快照（网络状态 UI 用）：最近一轮恢复查询距今一个显示窗口

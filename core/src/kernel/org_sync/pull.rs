@@ -96,8 +96,7 @@ impl OrgSyncContext {
                 crate::contact::ContactService::get_friend(&mut storage, &root_id)
                     .ok()
                     .flatten()
-                    .and_then(|f| f.peer)
-                    .map(|p| p.peer_id == pid)
+                    .map(|f| f.peers.iter().any(|p| p.peer_id == pid))
                     .unwrap_or(false)
             })
             .unwrap_or(false);

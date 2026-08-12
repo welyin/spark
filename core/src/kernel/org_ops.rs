@@ -637,8 +637,10 @@ impl Kernel {
             });
         }
         if let Some(friend) = ContactService::get_friend(self.require_storage()?, target_root_id)?
-            && let Some(p) = friend.peer
-            && (!p.peer_id.is_empty() || !p.addresses.is_empty())
+            && let Some(p) = friend
+                .peers
+                .into_iter()
+                .find(|p| !p.peer_id.is_empty() || !p.addresses.is_empty())
         {
             return Ok(PeerNodeInfo {
                 peer_id: (!p.peer_id.is_empty()).then_some(p.peer_id),

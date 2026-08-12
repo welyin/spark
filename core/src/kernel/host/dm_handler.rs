@@ -193,6 +193,14 @@ impl DmHandler for KernelDmHandler {
             self.kernel_orgsync_capable_mark(&peer);
         }
         // 入站落库整体在 io_lock 内执行（与 Tauri 命令线程的变更互斥）
+        // S6 E2E（2026-08-11 架构师裁决：root 密钥直接转换）：取本机 **root**
+        // 签名私钥（解锁态填入；锁定态 None，无法解密带 ephPub 的加密信封，
+        // 回 internal-error）。不再用域身份派生。
+        let my_signing_key = self
+            .signing_key_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         let result = {
             let _io = self.io_lock.lock().unwrap_or_else(|e| e.into_inner());
             let node_id = self.sync_node_id();
@@ -218,7 +226,7 @@ impl DmHandler for KernelDmHandler {
                 )
                 .map_err(|e| e.to_string())?
             } else {
-                super::super::inbound_dm::handle_inbound_dm(
+                super::super::inbound_dm::handle_inbound_dm_with_e2e(
                     &mut storage,
                     &root_id,
                     &nickname,
@@ -227,6 +235,7 @@ impl DmHandler for KernelDmHandler {
                     online_peers,
                     system_now_ms(),
                     &node_id,
+                    my_signing_key.as_ref(),
                 )
                 .map_err(|e| e.to_string())?
             }
@@ -296,6 +305,15 @@ impl DmHandler for KernelDmHandler {
         // （§20.6；密钥经 pdsync 自设备扩散，永不进 orgsync 组织流量）。
         if let Some(unbox) = result.orgkey_unbox {
             self.apply_orgkey_unbox(&root_id, &unbox);
+        }
+        // feed-blob 出站：把纯逻辑层构建好的 body 装配成 feed-blob-req/resp
+        // 信封回投连接层对端（跨联系人分块传输通道）。
+        if let Some(feed_blob) = result.feed_blob_out {
+            let target = PeerNodeInfo {
+                peer_id: Some(remote_peer_id.to_string()),
+                addresses: Vec::new(),
+            };
+            self.spawn_feed_blob_reply(&root_id, target, feed_blob);
         }
         Ok(result.response)
     }
