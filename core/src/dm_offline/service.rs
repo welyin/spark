@@ -2,8 +2,8 @@
 //!
 //! 对齐 social-feed §6 与 p2p-dm §19.3（§8.4 网关层落地）。本模块只负责
 //! 存储语义（键构造 / CRUD / 容量 TTL），**不碰网络**——补投的拨号与投递由
-//! kernel 编排层（`on_peer_connected` flush 钩子 + 60s 周期 flush）调用本模块
-//! 的读取/删除后，用 p2p 层 `dm_direct` 实际重发。
+//! kernel 编排层（`on_peer_connected` flush 钩子，事件驱动；M6 已删 60s 周期
+//! flush 兜底）调用本模块的读取/删除后，用 p2p 层 `dm_direct` 实际重发。
 //!
 //! ## 空间与同步
 //!

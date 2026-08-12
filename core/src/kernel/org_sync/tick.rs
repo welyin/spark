@@ -120,8 +120,8 @@ impl OrgSyncContext {
         }
     }
 
-    /// 解析自设备 peer（含地址，供懒拨号）。优先 FriendRecord.peer（配对
-    /// 握手回填，带地址），DeviceRecord 兜底（仅 peerId）。与
+    /// 解析自设备 peer（含地址，供懒拨号）。优先 FriendRecord.peers（配对
+    /// 握手回填，带地址，多设备遍历择优），DeviceRecord 兜底（仅 peerId）。与
     /// [`Self::maintain_self_device_link`] 头部同一解析口径；本机 peerId 排除。
     fn resolve_self_device_peer(&self) -> Option<PeerNodeInfo> {
         let mut storage = self.storage.clone();
@@ -237,7 +237,7 @@ impl OrgSyncContext {
     /// 写入数据触发懒拨号会合，或对端主动拨过来。
     async fn maintain_self_device_link(&self, root_id: &str, local_info: Option<&LocalP2PNodeInfo>) {
         let mut storage = self.storage.clone();
-        // 双来源解析配对设备：FriendRecord.peer 优先（带地址），DeviceRecord
+        // 双来源解析配对设备：FriendRecord.peers 优先（带地址，多设备遍历），DeviceRecord
         // 兜底（仅 peerId）。懒拨号地址由写入触发路径 `resolve_self_device_peer`
         // 另行解析（带地址）；此处只需 peerId 判定连接状态。
         let mut peer_id = {

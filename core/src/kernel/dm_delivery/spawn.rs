@@ -104,8 +104,9 @@ impl Kernel {
     ///
     /// **离线补投（social-feed §6.4）**：投递失败（不可达/超时）时把密文信封
     /// 入 `dm:pending:` 离线队列（`dm_offline`），消息状态**保持 `sending`**
-    /// 不置 failed——补投由 `on_peer_connected` flush 钩子 / 60s 周期 flush
-    /// 重发，成功后置 `delivered`。`message_resend` 保留为手动兜底。
+    /// 不置 failed——补投由 `on_peer_connected` flush 钩子**事件驱动**重发
+    /// （M6 已删 60s 周期兜底，失败留队等下次连接），成功后置 `delivered`。
+    /// `message_resend` 保留为手动兜底。
     ///
     /// 回写是 compare-and-set（仅当当前状态仍为 `sending`）：重发会重新置
     /// `sending` 并 spawn 新任务，旧任务的迟到回写不得覆盖新任务已写入的

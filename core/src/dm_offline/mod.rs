@@ -14,8 +14,8 @@
 //! - 个人 pending 经 `put_personal` 入 pdsync（自设备互为补投备份）；组织
 //!   空间按个人同构落地（org-sync 网关通道未就绪，差距见报告）；
 //! - TTL 7 天、单 recipient 上限 100 条、全局上限 1000 条（超限淘汰最旧）；
-//! - 补投触发：`on_peer_connected` 按 peerId 反查 rootId flush + 60s 周期
-//!   flush 兜底（编排层）。
+//! - 补投触发：`on_peer_connected` 按 peerId 反查 rootId flush——纯事件驱动
+//!   （M6 已删 60s 周期 flush 兜底，失败留队等下次连接事件）。
 //!
 //! ## 纪律
 //!

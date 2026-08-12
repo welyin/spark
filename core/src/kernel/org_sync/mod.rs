@@ -356,7 +356,7 @@ fn collect_org_peer_candidates(
     let mut by_peer: HashMap<String, PeerNodeInfo> = HashMap::new();
     let mut by_address: HashMap<String, PeerNodeInfo> = HashMap::new();
     // 自设备候选：双来源合并（去重）——
-    // 1) FriendRecord.peer（配对握手回填，组织候选主通道）
+    // 1) FriendRecord.peers（配对握手回填，组织候选主通道，多设备遍历）
     // 2) DeviceRecord（设备管理记录，QR 恢复后即有，不依赖 friend-request
     //    投递成功——org-pull 等自设备同步在 friend-request 丢失时仍可工作）
     let friend_self_peers = crate::contact::ContactService::overview(storage, "personal")

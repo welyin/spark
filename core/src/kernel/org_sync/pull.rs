@@ -88,7 +88,7 @@ impl OrgSyncContext {
         };
         let claim_value = claim.as_ref().and_then(|c| serde_json::to_value(c).ok());
 
-        // 自设备目标判定（对端 peerId == 自 FriendRecord.peer.peerId）：
+        // 自设备目标判定（对端 peerId ∈ 自 FriendRecord.peers 任一 peerId）：
         // 影响 removed 分支语义——自设备空存储不触发本地删除，转反推补齐
         let is_self_target = extract_peer_id(node_info)
             .map(|pid| {
