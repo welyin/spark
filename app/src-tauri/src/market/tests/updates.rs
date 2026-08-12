@@ -1,48 +1,64 @@
 //! 更新探测与来源安全（http:// 拒读）用例。
+//!
+//! 解耦（plugin_decoupling.md §4.5）：`check_for_updates` 从已安装状态反查。
+//! 侧载插件（无仓库声明缓存）探测时清单 URL 为空 → check-failed（不中断）；
+//! 未安装插件单项查询报「未安装」。
+
+use base64::Engine;
 
 use super::*;
 
 #[test]
-fn check_updates_version_compare_and_failure_reasons() {
-    // 已装 0.1.0，远端同版 → up-to-date
-    // 断言按插件 id 定位（目录含 ai-chat 等多条目，不做位置假设）
-    let fixture = Fixture::new();
-    write_release(&fixture, &ReleaseOpts::default());
-    let mut service = fixture.service();
-    service.initialize().unwrap(); // reconcile 已安装 0.1.0
-    let probes = service.check_for_updates(None).unwrap();
-    let probe = probes
-        .iter()
-        .find(|p| p.plugin_id == "spark-example")
-        .expect("spark-example probe");
-    assert!(!probe.update_available);
-    assert_eq!(probe.reason, "up-to-date");
-
-    // 未知插件 → Plugin not found
-    assert_eq!(
-        service.check_for_updates(Some("nope")).unwrap_err(),
-        "Plugin not found: nope"
-    );
-
-    // 清单缺失 → check-failed（不中断、latestVersion 置空）
+fn check_updates_targets_installed_state_only() {
     let fixture = Fixture::new();
     let mut service = fixture.service();
     service.initialize().unwrap();
+
+    // 无任何已装插件：check(None) 返回空，check(Some(id)) 报未安装
+    assert!(service.check_for_updates(None).unwrap().is_empty());
+    assert_eq!(
+        service.check_for_updates(Some("nope")).unwrap_err(),
+        "Plugin is not installed: nope"
+    );
+
+    // 侧载播种一个已装插件
+    let spkg = fixture.release_root.join("seed/todo-local.spkg");
+    fs::create_dir_all(spkg.parent().unwrap()).unwrap();
+    let text = serde_json::json!({
+        "pluginId": "todo-local",
+        "domain": "plugin:todo-local",
+        "version": "1.0.0",
+        "files": [{
+            "path": "views/main.js",
+            "sha256": hex::encode(sha2::Sha256::digest(b"hello")),
+            "size": 5,
+            "contentBase64": base64::engine::general_purpose::STANDARD.encode(b"hello")
+        }]
+    })
+    .to_string();
+    fs::write(&spkg, &text).unwrap();
+    let preview = service.inspect_local_package(spkg.to_str().unwrap()).unwrap();
+    service
+        .import_local_package(spkg.to_str().unwrap(), &preview.sha256, false)
+        .unwrap();
+
+    // 侧载插件无仓库声明缓存 → 清单 URL 空，探测落 check-failed（latest 置空）
     let probes = service.check_for_updates(None).unwrap();
     let probe = probes
         .iter()
-        .find(|p| p.plugin_id == "spark-example")
-        .expect("spark-example probe");
+        .find(|p| p.plugin_id == "todo-local")
+        .expect("todo-local probe");
     assert!(!probe.update_available);
     assert!(probe.latest_version.is_none());
     assert!(probe.reason.starts_with("check-failed:"));
+
     // 失败原因进入列表展示
-    let example = service
+    let item = service
         .list_market()
         .into_iter()
-        .find(|item| item.catalog.id == "spark-example")
-        .expect("spark-example market item");
-    assert!(example.last_check_reason.starts_with("check-failed:"));
+        .find(|item| item.catalog.id == "todo-local")
+        .expect("todo-local market item");
+    assert!(item.last_check_reason.starts_with("check-failed:"));
 }
 
 #[test]

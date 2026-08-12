@@ -1,13 +1,14 @@
 //! 插件源服务：`plugin://` 自定义协议的资源解析（插件 iframe 沙箱化阶段 A 第二波）。
 //!
-//! URL 形如 `plugin://<pluginId>/<path>`，解析顺序先安装包后内置 dist：
+//! URL 形如 `plugin://<pluginId>/<path>`，只服务已安装包：
 //! - 已安装包：`<app_data_dir>/plugins/<id>/packages/*.spkg`（.spkg = JSON 容器
 //!   `{pluginId, domain, version, files:[{path, sha256, size, contentBase64}]}`，
 //!   见 code/plugins/scripts/build-example-package.mjs）。定位只信
 //!   plugin-market-state.json 记录的 packagePath（fail-closed：无记录、状态
 //!   文件存在但解析失败、`enabled = false`，一律拒服，不做目录扫描猜测）。
-//! - 内置开发插件 dist：`code/plugins/<id>/dist/<path>`（编译期
-//!   CARGO_MANIFEST_DIR 与运行时 cwd 双候选，对齐 market::MarketPaths::for_app）。
+//!
+//! 解耦（plugin_decoupling.md §4.2）：已移除内置开发插件 dist 分支
+//! （`code/plugins/<id>/dist`），生产壳层不再依赖源码树，未安装插件一律 404。
 //!
 //! 安全约束：
 //! - 路径穿越防护：rel path 逐段校验，拒绝 `..`、反斜杠与空段；
@@ -19,7 +20,8 @@
 //! 每实例挂载仅加载一次，可接受；如需缓存待内核侧统一考虑。
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 
 use base64::Engine as _;
 use serde::Deserialize;
@@ -124,52 +126,21 @@ fn locate_installed_spkg(data_dir: &Path, plugin_id: &str) -> Option<PathBuf> {
     Some(recorded)
 }
 
-/// 内置开发插件 dist 候选根（对齐 market::MarketPaths::for_app 的 source_roots 语义）。
-fn builtin_dist_roots() -> Vec<PathBuf> {
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let cwd = std::env::current_dir().unwrap_or_default();
-    vec![
-        manifest_dir.join("../../plugins"),
-        cwd.join("../plugins"),
-    ]
-}
-
 // ------------------------------------------------------------------
 // 资源解析
 // ------------------------------------------------------------------
 
-/// 解析插件资源：先安装包后内置 dist，返回（字节, MIME）。
+/// 解析插件资源：只服务已安装 `.spkg` 容器（解耦后移除内置 dist 分支，
+/// 未安装插件一律 404——杜绝「源码树旁运行即读到 dist」绕过市场校验）。
+/// 返回（字节, MIME）。
 pub fn resolve_plugin_resource(data_dir: &Path, plugin_id: &str, rel_path: &str) -> Option<(Vec<u8>, &'static str)> {
     let id_segments = sanitize_segments(plugin_id)?;
     let path_segments = sanitize_segments(rel_path)?;
     let rel_normalized = path_segments.join("/");
     let mime = mime_for_path(&rel_normalized);
 
-    // 1) 已安装包（.spkg 容器）
-    if let Some(spkg) = locate_installed_spkg(data_dir, &id_segments.join("/")) {
-        if let Some(bytes) = read_from_spkg(&spkg, &rel_normalized) {
-            return Some((bytes, mime));
-        }
-    }
-
-    // 2) 内置开发插件 dist
-    for root in builtin_dist_roots() {
-        let mut candidate = root;
-        for segment in &id_segments {
-            candidate = candidate.join(segment);
-        }
-        candidate = candidate.join("dist");
-        for segment in &path_segments {
-            candidate = candidate.join(segment);
-        }
-        if candidate.is_file() {
-            if let Ok(bytes) = fs::read(&candidate) {
-                return Some((bytes, mime));
-            }
-        }
-    }
-
-    None
+    let spkg = locate_installed_spkg(data_dir, &id_segments.join("/"))?;
+    read_from_spkg(&spkg, &rel_normalized).map(|bytes| (bytes, mime))
 }
 
 // ------------------------------------------------------------------
@@ -288,24 +259,6 @@ mod tests {
     }
 
     #[test]
-    fn builtin_dist_serves_example_bundle() {
-        // dist 为构建产物且被 gitignore：fresh clone 上缺席，此时跳过
-        // （构建：cd code/plugins && npm run build:example）。
-        // 编译期候选根恒指向 code/plugins（CARGO_MANIFEST_DIR 语义），
-        // spark-example dist 已构建时应能取到 bundle 与 manifest
-        let dist_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/spark-example/dist");
-        if !dist_root.join("views/main.js").is_file() {
-            eprintln!("skip: spark-example dist 未构建（cd code/plugins && npm run build:example）");
-            return;
-        }
-        let data_dir = Path::new("/nonexistent-spark-data-dir");
-        let bundle = resolve_plugin_resource(data_dir, "spark-example", "views/main.js");
-        assert!(bundle.is_some(), "spark-example dist/views/main.js 应可经内置 dist 解析");
-        let manifest = resolve_plugin_resource(data_dir, "spark-example", "manifest.json");
-        assert!(manifest.is_some());
-    }
-
-    #[test]
     fn traversal_rejected_end_to_end() {
         let data_dir = Path::new("/nonexistent-spark-data-dir");
         assert!(resolve_plugin_resource(data_dir, "spark-example", "../manifest.json").is_none());
@@ -380,6 +333,34 @@ mod tests {
         write_spkg(&spkg, &[("views/main.js", b"hello")]);
 
         assert!(resolve_plugin_resource(&data_dir, "demo-plugin", "views/main.js").is_none());
+    }
+
+    #[test]
+    fn stale_source_tree_dist_not_served() {
+        // 解耦关键断言（plugin_decoupling.md §4.2）：移除 builtin_dist_roots 后，
+        // 即使源码树旁残留 code/plugins/<id>/dist 产物，未安装插件也必须 404——
+        // 杜绝「生产壳层运行在源码树旁即读到 dist」绕过市场校验。
+        let data_dir = temp_data_dir("stale-dist");
+        // 模拟源码树旁残留 dist：<data_dir>/../plugins/demo-plugin/dist/views/main.js
+        let plugins_root = data_dir.parent().unwrap().join("plugins");
+        let dist_main = plugins_root.join("demo-plugin/dist/views/main.js");
+        fs::create_dir_all(dist_main.parent().unwrap()).unwrap();
+        fs::write(&dist_main, b"LEAKED").unwrap();
+        // dist 内还放了 manifest.json（旧内置 dist 分支同样会服务的资源）
+        let dist_manifest = plugins_root.join("demo-plugin/dist/manifest.json");
+        fs::write(&dist_manifest, b"{}").unwrap();
+
+        // 未安装插件：源码树 dist 即便存在也不服务（只认已安装 .spkg）
+        assert!(resolve_plugin_resource(&data_dir, "demo-plugin", "views/main.js").is_none());
+        assert!(resolve_plugin_resource(&data_dir, "demo-plugin", "manifest.json").is_none());
+        // 已安装 .spkg 仍正常服务，且其内容来自 .spkg 容器而非 dist
+        let spkg = data_dir.join("plugins/demo-plugin/packages/demo-plugin-1.0.0.spkg");
+        write_spkg(&spkg, &[("views/main.js", b"hello")]);
+        write_market_state(&data_dir, "demo-plugin", &spkg, true);
+        assert_eq!(
+            resolve_plugin_resource(&data_dir, "demo-plugin", "views/main.js"),
+            Some((b"hello".to_vec(), "text/javascript; charset=utf-8"))
+        );
     }
 
     #[test]

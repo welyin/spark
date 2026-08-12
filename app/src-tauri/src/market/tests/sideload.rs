@@ -123,22 +123,33 @@ fn import_rejects_hash_change_after_preview() {
 fn import_rejects_reserved_plugin_id() {
     let fixture = Fixture::new();
     let mut service = fixture.service();
-    // system 与内置目录 id（spark-example）不允许侧载顶替
-    for reserved in ["system", "spark-example"] {
-        let spkg = write_spkg(
-            &fixture,
-            &format!("{reserved}.spkg"),
-            &spkg_text(reserved, &[("views/main.js", b"x")]),
-        );
-        let preview = service.inspect_local_package(spkg.to_str().unwrap()).unwrap();
-        assert_eq!(
-            service
-                .import_local_package(spkg.to_str().unwrap(), &preview.sha256, false)
-                .unwrap_err(),
-            format!("Sideload import refused: reserved plugin id {reserved}")
-        );
-    }
+    // system 会话 id 不允许侧载顶替；内置目录 id（spark-example）解耦后不再保留，
+    // 可正常侧载（见下方正常路径断言）
+    let spkg = write_spkg(
+        &fixture,
+        "system.spkg",
+        &spkg_text("system", &[("views/main.js", b"x")]),
+    );
+    let preview = service.inspect_local_package(spkg.to_str().unwrap()).unwrap();
+    assert_eq!(
+        service
+            .import_local_package(spkg.to_str().unwrap(), &preview.sha256, false)
+            .unwrap_err(),
+        "Sideload import refused: reserved plugin id system"
+    );
     assert!(read_state_file(&fixture.state_file).installed.is_empty());
+
+    // 解耦后内置目录为空：spark-example 不再是保留 id，可正常侧载
+    let spkg = write_spkg(
+        &fixture,
+        "spark-example.spkg",
+        &spkg_text("spark-example", &[("views/main.js", b"x")]),
+    );
+    let preview = service.inspect_local_package(spkg.to_str().unwrap()).unwrap();
+    let state = service
+        .import_local_package(spkg.to_str().unwrap(), &preview.sha256, false)
+        .unwrap();
+    assert_eq!(state.plugin_id, "spark-example");
 }
 
 #[test]

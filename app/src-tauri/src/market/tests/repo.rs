@@ -47,7 +47,7 @@ fn repo_declaration_text(version: &str) -> String {
         "name": "待办清单",
         "icon": "",
         "summary": "仓库锚定测试插件",
-        "category": "business",
+        "category": "tool",
         "version": version,
         "releaseAssetPattern": "spark-plugin-todo-<version>.spkg",
         "permissions": ["org:sync"],
@@ -124,7 +124,8 @@ fn install_from_repo_unsigned_cross_checked() {
     let items = service.list_market();
     let entry = items.iter().find(|i| i.catalog.id == REPO_ID).unwrap();
     assert_eq!(entry.catalog.name, "待办清单");
-    assert_eq!(entry.catalog.category, "business");
+    // 合法声明 category 透传（"tool"），不再归一化为 "business"
+    assert_eq!(entry.catalog.category, "tool");
     assert_eq!(entry.catalog.domain, format!("plugin:{REPO_ID}"));
     assert!(entry.installed && entry.enabled);
 

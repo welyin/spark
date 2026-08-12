@@ -91,12 +91,82 @@ function pluginSourceMiddleware(): Plugin {
   };
 }
 
+type DevPluginInfo = { id: string; name: string; version: string; icon?: string };
+
+/**
+ * dev 插件自动发现（plugin_decoupling.md §5）：扫描 code/plugins 下各子目录的
+ * manifest.json，把每个子目录作为一个「开发插件」注入 dev 目录（id / name / version /
+ * 资源基地址指向 vite 中间件）。支持 `VITE_PLUGIN_DEV=ai-chat,spark-moments`
+ * 指定子集，未设置则自动扫描全部。
+ *
+ * 链路归属：纯 vite 侧（Node 端有 fs 可扫描插件目录），经 `define` 注入
+ * `__DEV_PLUGINS__`。**生产构建注入空数组** + 运行时 `import.meta.env.DEV` 门控
+ * （见 src/mock/dev-plugins.ts），确保 dev 逻辑与插件清单不打进生产 bundle（§9）。
+ */
+function devPluginDiscovery(): Plugin {
+  return {
+    name: 'spark-dev-plugin-discovery',
+    config: (_config, env) => {
+      // 双重确认：仅 dev serve（command=serve 且 mode != production）注入真实 dev 插件；
+      // 任何 build（含 `vite build --mode development` 等分阶段构建）一律注入空数组，
+      // 避免真实插件清单（id/name）残留进生产 bundle（安全评审 🟡）。
+      // 运行时另有 import.meta.env.DEV 门控（src/mock/dev-plugins.ts）兜底。
+      const isProductionBuild =
+        process.env.NODE_ENV === 'production' ||
+        env.mode === 'production' ||
+        env.command === 'build';
+      const devPlugins: DevPluginInfo[] = isProductionBuild ? [] : scanDevPlugins();
+      return {
+        define: {
+          __DEV_PLUGINS__: JSON.stringify(devPlugins)
+        }
+      };
+    }
+  };
+}
+
+/** 扫描 code/plugins 下各子目录的 manifest.json；VITE_PLUGIN_DEV 指定子集（未设置 = 全部）。 */
+function scanDevPlugins(): DevPluginInfo[] {
+  const pluginsRoot = fileURLToPath(new URL('../plugins', import.meta.url));
+  const subset = process.env.VITE_PLUGIN_DEV
+    ? process.env.VITE_PLUGIN_DEV.split(',').map((id) => id.trim()).filter(Boolean)
+    : null;
+  const plugins: DevPluginInfo[] = [];
+  for (const entry of fs.readdirSync(pluginsRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    if (subset && !subset.includes(entry.name)) {
+      continue;
+    }
+    const manifestPath = path.join(pluginsRoot, entry.name, 'manifest.json');
+    if (!fs.existsSync(manifestPath)) {
+      continue;
+    }
+    try {
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as {
+        id?: string;
+        name?: string;
+        version?: string;
+      };
+      plugins.push({
+        id: manifest.id ?? entry.name,
+        name: manifest.name ?? entry.name,
+        version: manifest.version ?? '0.0.0'
+      });
+    } catch {
+      // 单个坏 manifest 静默跳过，不阻断其他插件
+    }
+  }
+  return plugins;
+}
+
 // Tauri 2 前端约定（https://v2.tauri.app/start/frontend/vite/）：
 // - 固定 dev 端口 1420，与 src-tauri/tauri.conf.json 的 devUrl 对齐
 // - 禁止清屏以便看到 rust 侧输出
 // - 只暴露 VITE_/TAURI_ 前缀的环境变量
 export default defineConfig({
-  plugins: [vue(), pluginSourceMiddleware()],
+  plugins: [vue(), pluginSourceMiddleware(), devPluginDiscovery()],
   clearScreen: false,
   envPrefix: ['VITE_', 'TAURI_'],
   resolve: {

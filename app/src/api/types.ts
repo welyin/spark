@@ -128,7 +128,7 @@ export type DomainSignature = {
   payloadHash: string;
 };
 
-/** 插件目录项（静态目录 PLUGIN_CATALOG 的 DTO，api/index.ts）。 */
+/** 插件目录项（市场列表条目 catalog 部分的 DTO；仓库锚定合成条目来源）。 */
 /** 插件运行时前提（与 SDK PluginRequires 对齐） */
 export type PluginRequires = {
   /** 需要的系统能力子集（permissions 的超集校验） */
@@ -716,7 +716,6 @@ export type ElectronAPI = {
   };
   plugin: {
     openView: (pluginDomain: string, pluginView?: string) => Promise<{ success: boolean; windowId: number }>;
-    listCatalog: () => Promise<PluginCatalogItem[]>;
     currentRoot: () => Promise<{
       unlocked: boolean;
       rootId: string | null;
@@ -803,7 +802,6 @@ export type ElectronAPI = {
   pluginMarket: {
     list: () => Promise<PluginMarketItemDto[]>;
     checkUpdates: (pluginId?: string) => Promise<PluginUpdateProbeDto[]>;
-    install: (pluginId: string) => Promise<InstalledPluginStateDto>;
     upgrade: (pluginId: string) => Promise<InstalledPluginStateDto>;
     setEnabled: (pluginId: string, enabled: boolean) => Promise<InstalledPluginStateDto>;
     /** 卸载：移除状态记录并删除包文件；插件数据（文档/消息）保留在本机 */

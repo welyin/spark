@@ -21,7 +21,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { ARG_NAMES, COMMAND_MAP } from './command-map';
-import type { ElectronAPI, P2pEventDto, PluginCatalogItem, PluginSpaceType, UpdaterReadyInfo } from './types';
+import type { ElectronAPI, P2pEventDto, UpdaterReadyInfo } from './types';
 
 // 类型门面：既有引用一律走 './api'，此处统一 re-export
 export * from './types';
@@ -138,80 +138,10 @@ function requireDomain(pluginDomain: string | undefined): string {
 }
 
 /**
- * 插件目录静态清单（vendored 自 TS main/plugins/catalog.ts）。
- * 插件运行时（安装/验签/独立窗口）本期不在壳范围，目录本身是纯静态数据，
- * 经 plugin.listCatalog 下发给前端（组织与插件无绑定，不参与建组织）。
- * 重复字段（id/domain/name/version/views/package）派生自插件仓库内的
- * manifest.json（code/plugins/spark-example），消除双份维护；目录专属文案
- * （description）与市场侧字段（signatureUrl/installCommand/permissions 展示口径）
- * 仍在此保留。
+ * 插件目录已解耦（plugin_decoupling.md §4.4）：前端不再内置静态目录
+ * PLUGIN_CATALOG，也不再提供 plugin.listCatalog 桩——市场条目只来自
+ * pluginMarket.list（已安装 + 广播索引探索）。
  */
-import sparkExampleManifest from '../../../plugins/spark-example/manifest.json';
-import aiChatManifest from '../../../plugins/ai-chat/manifest.json';
-import momentsManifest from '../../../plugins/spark-moments/manifest.json';
-
-const PLUGIN_CATALOG: PluginCatalogItem[] = [
-  {
-    id: sparkExampleManifest.id,
-    domain: sparkExampleManifest.domain,
-    name: sparkExampleManifest.name,
-    description: '插件体系参考实现：管理员发帖（域签名防抵赖）发应用会话卡片通知，成员评论/回复。',
-    category: 'foundation' as const,
-    version: sparkExampleManifest.version,
-    views: sparkExampleManifest.views.map((view: { id: string }) => view.id),
-    // manifest.json 导入类型为 string[]，目录类型收窄为 PluginSpaceType[]
-    supportedSpaces: sparkExampleManifest.supportedSpaces as PluginSpaceType[],
-    permissions: ['storage:read', 'storage:write', 'org:read', 'org:sync', 'message:app', 'identity:sign'],
-    package: {
-      updateManifestUrl: sparkExampleManifest.package.updateManifestUrl,
-      signatureUrl:
-        'https://github.com/welyin/spark/releases/latest/download/spark-plugin-spark-example-manifest.sig',
-      packageName: sparkExampleManifest.package.packageName,
-      installCommand: `spark-plugin install ${sparkExampleManifest.package.packageName}`
-    }
-  },
-  {
-    id: aiChatManifest.id,
-    domain: aiChatManifest.domain,
-    name: aiChatManifest.name,
-    description: '通用 AI 聊天插件——创建多个 Bot 实例，各自配置不同 AI 后端（CodeBuddy CLI、OpenAI 兼容 API、Ollama 等），在应用会话中与 AI 对话',
-    category: 'ai-assistant' as const,
-    version: aiChatManifest.version,
-    views: aiChatManifest.views.map((view: { id: string }) => view.id),
-    supportedSpaces: aiChatManifest.supportedSpaces as PluginSpaceType[],
-    permissions: ['storage:read', 'storage:write', 'message:app', 'system:exec', 'network:fetch'],
-    requires: {
-      capabilities: ['system:exec'],
-      platforms: ['desktop'],
-    },
-    package: {
-      updateManifestUrl: aiChatManifest.package.updateManifestUrl,
-      signatureUrl:
-        'https://github.com/welyin/spark/releases/latest/download/spark-plugin-ai-chat-manifest.sig',
-      packageName: aiChatManifest.package.packageName,
-      installCommand: `spark-plugin install ${aiChatManifest.package.packageName}`
-    }
-  },
-  {
-    id: momentsManifest.id,
-    domain: momentsManifest.domain,
-    name: momentsManifest.name,
-    description:
-      '个人动态圈：分享图文动态，点赞与评论，仅个人联系人可见。对标微信朋友圈核心体验，数据去中心化（P2P 定向投递）。',
-    category: 'social' as const,
-    version: momentsManifest.version,
-    views: momentsManifest.views.map((view: { id: string }) => view.id),
-    supportedSpaces: momentsManifest.supportedSpaces as PluginSpaceType[],
-    permissions: momentsManifest.permissions,
-    package: {
-      updateManifestUrl: momentsManifest.package.updateManifestUrl,
-      signatureUrl:
-        'https://github.com/welyin/spark/releases/latest/download/spark-plugin-spark-moments-manifest.sig',
-      packageName: momentsManifest.package.packageName,
-      installCommand: `spark-plugin install ${momentsManifest.package.packageName}`
-    }
-  }
-];
 
 /** TS db.query 在测试页的唯一活用法：邻居活跃度记录前缀。 */
 const PEER_RECORD_PREFIX = 'p2p:peer:record:';
@@ -264,8 +194,6 @@ export function createTauriApi(): ElectronAPI {
     plugin: {
       // TODO: 插件独立窗口属于插件运行时，本期不在壳范围（插件走 tab 模式）
       openView: todo('plugin-open-view'),
-      // 静态目录（见 PLUGIN_CATALOG）：对齐 TS，每次调用返回深拷贝
-      listCatalog: async () => structuredClone(PLUGIN_CATALOG),
       currentRoot: async () => {
         // root-status 完整返回 IdentityStatus（含昵称/头像/扩展字段）；透传这些
         // 字段，供插件（如朋友圈）用「我的身份」头像/昵称初始化本地 profile。
@@ -351,7 +279,8 @@ export function createTauriApi(): ElectronAPI {
       // 形状对齐旧 preload，AppsPage 零改动
       list: () => call('plugin-market-list'),
       checkUpdates: (pluginId?: string) => call('plugin-market-check-updates', pluginId),
-      install: (pluginId: string) => call('plugin-market-install', pluginId),
+      // 目录驱动 install 已退役（plugin_decoupling.md §4）：安装统一走 installFromRepo，
+      // 市场列表项 id 即仓库规范化地址，可直接传 installFromRepo
       upgrade: (pluginId: string) => call('plugin-market-upgrade', pluginId),
       setEnabled: (pluginId: string, enabled: boolean) =>
         call('plugin-market-set-enabled', pluginId, enabled),

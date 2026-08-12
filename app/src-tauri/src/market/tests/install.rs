@@ -1,197 +1,182 @@
-//! 安装 / 升级 / 启停用例。
+//! 安装 / 启停用例。
+//!
+//! 解耦（plugin_decoupling.md §4）：目录驱动 `install()` 已退役——插件只能经
+//! 仓库锚定（install_from_repo）/ .spkg 侧载进入；`upgrade()` 复用仓库锚定安装。
+//! 此文件覆盖 upgrade 的前置校验（须已安装 / 仅仓库地址可升级）与仓库锚定升级链路，
+//! 以及仍基于已安装状态的启停能力（用侧载播种）。
 
+use std::collections::BTreeMap;
+
+use base64::Engine;
+
+use super::super::repo::RepoFetcher;
 use super::*;
 
-#[test]
-fn install_from_local_release_copies_package_and_persists() {
-    let fixture = Fixture::new();
-    write_release(&fixture, &ReleaseOpts::default());
-    // 不调 initialize：显式 install 路径（reconcile 已在其他用例覆盖，
-    // 若先 initialize，本地 bundle 会被对账直接标记安装）
-    let mut service = fixture.service();
-    assert!(!service.state.installed.contains_key("spark-example"));
+const REPO_ID: &str = "github.com/acme/todo";
+const DECL_URL: &str = "https://github.com/acme/todo/releases/latest/download/spark-plugin.json";
+const MANIFEST_URL: &str =
+    "https://github.com/acme/todo/releases/download/v0.2.0/spark-plugin-todo-manifest.json";
+const PACKAGE_URL: &str =
+    "https://github.com/acme/todo/releases/download/v0.2.0/spark-plugin-todo-0.2.0.spkg";
 
-    let installed = service.install("spark-example").unwrap();
-    assert_eq!(installed.version, "0.1.0");
-    assert!(installed.enabled);
-    // 包被复制到 packages_root/<id>/packages/（跨平台：按路径组件比较，不比较字符串分隔符）
-    let copied = fixture
-        .packages_root
-        .join("spark-example")
-        .join("packages")
-        .join("spark-plugin-spark-example-0.1.0.spkg");
-    assert_eq!(PathBuf::from(&installed.package_path), copied);
-    assert!(copied.is_file());
-    assert_eq!(service.update_probes["spark-example"].reason, "installed");
-
-    // 新实例从状态文件恢复（持久化语义）；reconcile 跳过已安装条目
-    let mut reloaded = fixture.service();
-    reloaded.initialize().unwrap();
-    assert!(reloaded.state.installed.contains_key("spark-example"));
-    assert!(reloaded.list_market()[0].installed);
+/// mock 抓取器（同 repo.rs 测试惯例）：缺键 = 404；包体与文本同源。
+struct MapFetcher {
+    map: BTreeMap<String, String>,
 }
 
-#[test]
-fn install_normalizes_manifest_permissions() {
-    let fixture = Fixture::new();
-    write_release(
-        &fixture,
-        &ReleaseOpts {
-            permissions: Some(vec![
-                "org:sync".to_string(),
-                "bogus".to_string(),
-                "identity:sign".to_string(),
-                "org:sync".to_string(),
-            ]),
-            ..Default::default()
-        },
-    );
-    let mut service = fixture.service();
-    service.initialize().unwrap();
-    let installed = service.install("spark-example").unwrap();
-    assert_eq!(
-        installed.granted_permissions,
-        vec![
-            "storage:read",
-            "storage:write",
-            "org:read",
-            "proof:verify",
-            "identity:verify",
-            "org:sync",
-            "identity:sign"
-        ]
-    );
-}
+impl RepoFetcher for MapFetcher {
+    fn fetch_text(&self, url: &str, _max_bytes: u64) -> Result<Option<String>, String> {
+        Ok(self.map.get(url).cloned())
+    }
 
-#[test]
-fn install_rejects_signature_id_domain_and_digest_problems() {
-    // 坏签名
-    let fixture = Fixture::new();
-    write_release(&fixture, &ReleaseOpts { bad_signature: true, ..Default::default() });
-    let mut service = fixture.service();
-    service.initialize().unwrap();
-    assert_eq!(
-        service.install("spark-example").unwrap_err(),
-        "Plugin manifest signature verification failed: spark-example"
-    );
-
-    // id 不匹配
-    let fixture = Fixture::new();
-    write_release(
-        &fixture,
-        &ReleaseOpts { plugin_id: "evil".to_string(), ..Default::default() },
-    );
-    let mut service = fixture.service();
-    service.initialize().unwrap();
-    assert_eq!(
-        service.install("spark-example").unwrap_err(),
-        "Plugin manifest id mismatch: expected spark-example, got evil"
-    );
-
-    // domain 不匹配
-    let fixture = Fixture::new();
-    write_release(
-        &fixture,
-        &ReleaseOpts { domain: "plugin:evil".to_string(), ..Default::default() },
-    );
-    let mut service = fixture.service();
-    service.initialize().unwrap();
-    assert_eq!(
-        service.install("spark-example").unwrap_err(),
-        "Plugin manifest domain mismatch: expected plugin:spark-example, got plugin:evil"
-    );
-
-    // sha256 不匹配
-    let fixture = Fixture::new();
-    write_release(&fixture, &ReleaseOpts { tamper_sha256: true, ..Default::default() });
-    let mut service = fixture.service();
-    service.initialize().unwrap();
-    assert_eq!(
-        service.install("spark-example").unwrap_err(),
-        "Plugin package sha256 mismatch for spark-example"
-    );
-    assert!(!service.state.installed.contains_key("spark-example"));
-
-    // size 不匹配
-    let fixture = Fixture::new();
-    write_release(&fixture, &ReleaseOpts { tamper_size: true, ..Default::default() });
-    let mut service = fixture.service();
-    service.initialize().unwrap();
-    assert_eq!(
-        service.install("spark-example").unwrap_err(),
-        "Plugin package size mismatch for spark-example"
-    );
-
-    // 未收录插件
-    let fixture = Fixture::new();
-    let mut service = fixture.service();
-    service.initialize().unwrap();
-    assert_eq!(
-        service.install("nope").unwrap_err(),
-        "Plugin not found: nope"
-    );
-}
-
-/// B1：清单资产 fileName 消毒——拒绝穿越/绝对路径/多段文件名，
-/// 防任意路径写盘与跨插件覆盖提权（安装入口即拒，不落任何状态）。
-#[test]
-fn install_rejects_unsafe_asset_file_name() {
-    for bad_name in ["../evil.spkg", "..\\evil.spkg", "C:\\evil.spkg", "a/b.spkg", "/abs.spkg"] {
-        let fixture = Fixture::new();
-        write_release(
-            &fixture,
-            &ReleaseOpts {
-                file_name: Some(bad_name.to_string()),
-                ..Default::default()
-            },
-        );
-        // 不调 initialize：避免对账路径先行消费清单，直测 install 入口
-        let mut service = fixture.service();
-        assert_eq!(
-            service.install("spark-example").unwrap_err(),
-            format!("Plugin asset file name invalid: {bad_name}")
-        );
-        assert!(!service.state.installed.contains_key("spark-example"));
+    fn fetch_bytes(&self, url: &str, _max_bytes: u64) -> Result<Option<Vec<u8>>, String> {
+        Ok(self.map.get(url).map(|t| t.clone().into_bytes()))
     }
 }
 
+fn repo_declaration_text() -> String {
+    serde_json::json!({
+        "id": REPO_ID,
+        "name": "待办清单",
+        "icon": "",
+        "summary": "仓库锚定测试插件",
+        "category": "business",
+        "version": "0.2.0",
+        "releaseAssetPattern": "spark-plugin-todo-<version>.spkg",
+        "permissions": [],
+        "mirrors": [],
+        "sdkVersion": "1.0.0"
+    })
+    .to_string()
+}
+
+fn repo_package_text() -> (String, String, u64) {
+    let payload = serde_json::json!({
+        "pluginId": REPO_ID,
+        "domain": format!("plugin:{REPO_ID}"),
+        "version": "0.2.0",
+        "files": [{"path": "manifest.json", "sha256": "00", "size": 1, "contentBase64": "AA=="}]
+    });
+    let text = format!("{}\n", serde_json::to_string_pretty(&payload).unwrap());
+    (
+        text.clone(),
+        hex::encode(sha2::Sha256::digest(text.as_bytes())),
+        text.len() as u64,
+    )
+}
+
+fn repo_manifest_text(digest: &str, size: u64) -> String {
+    serde_json::json!({
+        "pluginId": REPO_ID,
+        "domain": format!("plugin:{REPO_ID}"),
+        "version": "0.2.0",
+        "assets": [{"kind": "package", "fileName": "spark-plugin-todo-0.2.0.spkg", "url": PACKAGE_URL, "sha256": digest, "size": size}]
+    })
+    .to_string()
+}
+
+fn repo_fetcher() -> MapFetcher {
+    let (package_text, digest, size) = repo_package_text();
+    MapFetcher {
+        map: [
+            (DECL_URL.to_string(), repo_declaration_text()),
+            (MANIFEST_URL.to_string(), repo_manifest_text(&digest, size)),
+            (PACKAGE_URL.to_string(), package_text),
+        ]
+        .into_iter()
+        .collect(),
+    }
+}
+
+/// 侧载播种一个已安装插件（trust = sideloaded，短名 id）。
+fn seed_sideloaded(fixture: &Fixture, service: &mut PluginMarketService) {
+    let spkg = fixture.release_root.join("seed/todo-local.spkg");
+    fs::create_dir_all(spkg.parent().unwrap()).unwrap();
+    let text = serde_json::json!({
+        "pluginId": "todo-local",
+        "domain": "plugin:todo-local",
+        "version": "1.0.0",
+        "files": [{
+            "path": "views/main.js",
+            "sha256": hex::encode(sha2::Sha256::digest(b"hello")),
+            "size": 5,
+            "contentBase64": base64::engine::general_purpose::STANDARD.encode(b"hello")
+        }]
+    })
+    .to_string();
+    fs::write(&spkg, &text).unwrap();
+    let preview = service.inspect_local_package(spkg.to_str().unwrap()).unwrap();
+    service
+        .import_local_package(spkg.to_str().unwrap(), &preview.sha256, false)
+        .unwrap();
+}
+
 #[test]
-fn set_enabled_roundtrip_and_upgrade_flow() {
+fn upgrade_requires_installed_plugin() {
     let fixture = Fixture::new();
-    write_release(&fixture, &ReleaseOpts::default());
-    // 不调 initialize：先验证"未安装不能启停/升级"，再走显式 install
+    let mut service = fixture.service();
+    service.initialize().unwrap();
+    assert_eq!(
+        service.upgrade(REPO_ID).unwrap_err(),
+        format!("Plugin is not installed: {REPO_ID}")
+    );
+}
+
+#[test]
+fn upgrade_rejects_non_repo_anchored_plugin() {
+    // 侧载/短名插件（todo-local）无声明源，升级路径本就不存在 → 明确报错
+    let fixture = Fixture::new();
+    let mut service = fixture.service();
+    seed_sideloaded(&fixture, &mut service);
+    assert_eq!(
+        service.upgrade("todo-local").unwrap_err(),
+        "Only repo-anchored plugins can be upgraded: todo-local"
+    );
+    // 且不破坏已装状态
+    assert!(service.state.installed.contains_key("todo-local"));
+}
+
+#[test]
+fn upgrade_repo_plugin_reinstalls_and_marks_upgraded() {
+    let fixture = Fixture::new();
+    let mut service = fixture.service();
+    let fetcher = repo_fetcher();
+
+    // 先经仓库锚定安装
+    service.install_from_repo_with(&fetcher, REPO_ID).unwrap();
+    assert_eq!(
+        service.update_probes[REPO_ID].reason,
+        "installed",
+        "首次安装 probe reason = installed"
+    );
+
+    // upgrade 复用同一仓库锚定源重拉覆盖；probe reason 切为 upgraded
+    let upgraded = service.upgrade_with(&fetcher, REPO_ID).unwrap();
+    assert_eq!(upgraded.plugin_id, REPO_ID);
+    assert_eq!(upgraded.version, "0.2.0");
+    assert!(service.state.installed.contains_key(REPO_ID));
+    assert_eq!(
+        service.update_probes[REPO_ID].reason,
+        "upgraded",
+        "upgrade 后 probe reason = upgraded"
+    );
+}
+
+#[test]
+fn set_enabled_roundtrip_on_installed_plugin() {
+    let fixture = Fixture::new();
     let mut service = fixture.service();
 
-    // 未安装不能启停/升级
+    // 未安装不能启停
     assert_eq!(
-        service.set_enabled("spark-example", false).unwrap_err(),
-        "Plugin is not installed: spark-example"
-    );
-    assert_eq!(
-        service.upgrade("spark-example").unwrap_err(),
-        "Plugin is not installed: spark-example"
+        service.set_enabled("todo-local", false).unwrap_err(),
+        "Plugin is not installed: todo-local"
     );
 
-    service.install("spark-example").unwrap();
-    let disabled = service.set_enabled("spark-example", false).unwrap();
+    seed_sideloaded(&fixture, &mut service);
+    let disabled = service.set_enabled("todo-local", false).unwrap();
     assert!(!disabled.enabled);
     let mut reloaded = fixture.service();
     reloaded.initialize().unwrap();
-    assert!(!reloaded.state.installed["spark-example"].enabled);
-    assert!(!reloaded.list_market()[0].enabled);
-
-    // 发布 0.2.0 后升级
-    write_release(&fixture, &ReleaseOpts { version: "0.2.0".to_string(), ..Default::default() });
-    let probes = reloaded.check_for_updates(Some("spark-example")).unwrap();
-    assert!(probes[0].update_available);
-    assert_eq!(probes[0].reason, "new-version-available");
-    assert_eq!(probes[0].latest_version.as_deref(), Some("0.2.0"));
-
-    let upgraded = reloaded.upgrade("spark-example").unwrap();
-    assert_eq!(upgraded.version, "0.2.0");
-    assert_eq!(reloaded.update_probes["spark-example"].reason, "upgraded");
-    assert!(fixture
-        .packages_root
-        .join("spark-example/packages/spark-plugin-spark-example-0.2.0.spkg")
-        .is_file());
+    assert!(!reloaded.state.installed["todo-local"].enabled);
 }

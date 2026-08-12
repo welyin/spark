@@ -1,15 +1,18 @@
-//! 安装链路：验签取清单（Ed25519 detached，见 trust.rs）→ file:// 复制 /
-//! https 下载 .spkg → 校验 sha256/size → 落状态；含升级与启停。
+//! 安装链路：验签取清单（Ed25519 detached，见 trust.rs）→ 下载 .spkg →
+//! 校验 sha256/size → 落状态；含升级与启停。
+//!
+//! 解耦（plugin_decoupling.md §4）：目录驱动 `install()` 已随目录一起退役，统一收敛到
+//! 仓库锚定 `install_from_repo`（repo.rs）。本文件保留与安装/升级共用的工具
+//! （清单验签 / 包体校验落盘）与 `upgrade()`（复用 install_from_repo）。
 
 use std::fs;
 use std::path::PathBuf;
 
 use sha2::Digest as _;
 
-use super::catalog::{PluginCatalogItem, find_catalog_item};
-use super::sources::{
-    compute_file_sha256, download_file, fetch_text_smart, file_size, normalize_file_url, now_millis,
-};
+use super::catalog::PluginCatalogItem;
+use super::repo::{HttpRepoFetcher, RepoFetcher, RepoId};
+use super::sources::{fetch_text_smart, now_millis};
 use super::types::{InstalledPluginState, PluginAsset, PluginReleaseManifest, PluginUpdateProbe};
 use super::{PluginMarketService, trust};
 
@@ -32,28 +35,8 @@ pub(crate) fn sanitize_asset_file_name(file_name: &str) -> Result<&str, String> 
 }
 
 impl PluginMarketService {
-    /// 平台兼容性校验：目录声明的 requires.platforms 与当前平台不匹配时拒绝安装。
-    /// 当前恒为 desktop（Tauri 桌面端）；移动端壳层接入时改为动态判定。
-    fn check_platform_compatibility(item: &PluginCatalogItem) -> Result<(), String> {
-        let Some(requires) = &item.requires else {
-            return Ok(());
-        };
-        if requires.platforms.is_empty() {
-            return Ok(());
-        }
-        let current_platform = "desktop"; // Tauri 桌面端；移动端接入时改动态
-        if !requires.platforms.iter().any(|p| p == current_platform) {
-            return Err(format!(
-                "Plugin {} is not available on {} (requires: {})",
-                item.id,
-                current_platform,
-                requires.platforms.join(", ")
-            ));
-        }
-        Ok(())
-    }
-
     /// TS `loadVerifiedManifest`：取清单+签名 → 验签 → 解析 → id/domain 匹配。
+    /// 供更新探测（updates.rs probe_one）与目录安装共用；目录安装已退役，仍保留供探测。
     pub(crate) fn load_verified_manifest(&self, item: &PluginCatalogItem) -> Result<PluginReleaseManifest, String> {
         let (manifest_url, signature_url) = self.resolve_manifest_endpoints(item);
         let manifest_text = fetch_text_smart(&manifest_url)?;
@@ -83,38 +66,6 @@ impl PluginMarketService {
         Ok(manifest)
     }
 
-    /// TS `downloadAndVerifyAsset`：落 <packages_root>/<id>/packages/<fileName>，
-    /// file:// 复制、https 下载，随后校验 sha256 与 size（校验不过删除残留文件）。
-    pub(crate) fn download_and_verify_asset(
-        &self,
-        asset: &PluginAsset,
-        plugin_id: &str,
-    ) -> Result<(PathBuf, String, u64), String> {
-        let file_name = sanitize_asset_file_name(&asset.file_name)?;
-        let plugin_dir = self.paths.packages_root.join(plugin_id).join("packages");
-        fs::create_dir_all(&plugin_dir).map_err(|e| format!("{e}"))?;
-        let file_path = plugin_dir.join(file_name);
-
-        let url = normalize_file_url(&asset.url);
-        if let Some(source) = url.strip_prefix("file://") {
-            fs::copy(source, &file_path).map_err(|e| format!("{e}"))?;
-        } else {
-            download_file(&url, &file_path, asset.size)?;
-        }
-
-        let digest = compute_file_sha256(&file_path)?;
-        if digest != asset.sha256 {
-            let _ = fs::remove_file(&file_path);
-            return Err(format!("Plugin package sha256 mismatch for {plugin_id}"));
-        }
-        let actual_size = file_size(&file_path)?;
-        if actual_size != asset.size {
-            let _ = fs::remove_file(&file_path);
-            return Err(format!("Plugin package size mismatch for {plugin_id}"));
-        }
-        Ok((file_path, digest, actual_size))
-    }
-
     /// 由已下载字节落包（repo.rs 仓库锚定链路：包体经抓取层有界读入内存）：
     /// fileName 消毒 → sha256/size 校验（不过不写盘）→ 写盘。
     pub(crate) fn save_verified_package_bytes(
@@ -139,56 +90,28 @@ impl PluginMarketService {
         Ok((file_path, digest, size))
     }
 
-    /// TS `install`：验签 → 下载/复制 → 校验 → 落状态（enabled = true）。
-    pub fn install(&mut self, plugin_id: &str) -> Result<InstalledPluginState, String> {
-        let item = find_catalog_item(plugin_id)?;
-        Self::check_platform_compatibility(&item)?;
-        let manifest = self.load_verified_manifest(&item)?;
-        let asset = manifest
-            .package_asset()
-            .ok_or_else(|| format!("No package asset found for plugin {plugin_id}"))?;
-        // 借用检查：asset 属于 manifest，先克隆再进 &mut self 路径
-        let asset = asset.clone();
-
-        let (file_path, digest, size) = self.download_and_verify_asset(&asset, plugin_id)?;
-        let installed_state = InstalledPluginState {
-            plugin_id: plugin_id.to_string(),
-            version: manifest.version.clone(),
-            package_path: file_path.to_string_lossy().to_string(),
-            sha256: digest,
-            size,
-            installed_at: now_millis(),
-            enabled: true,
-            granted_permissions: Self::resolve_declared_permissions(&item, Some(&manifest)),
-            trust: None,
-            supported_spaces: item.supported_spaces.clone(),
-        };
-
-        self.state
-            .installed
-            .insert(plugin_id.to_string(), installed_state.clone());
-        // 显式安装成功 → 清除卸载墓碑（对账可正常登记该插件）
-        self.state.uninstalled.remove(plugin_id);
-        self.update_probes.insert(
-            plugin_id.to_string(),
-            PluginUpdateProbe {
-                plugin_id: plugin_id.to_string(),
-                checked_at: now_millis(),
-                latest_version: Some(manifest.version),
-                update_available: false,
-                reason: "installed".to_string(),
-            },
-        );
-        self.persist()?;
-        Ok(installed_state)
+    /// TS `upgrade`：须已安装；复用仓库锚定 `install_from_repo`（仓库规范化地址
+    /// 才可升级——侧载/短名插件无声明源，其升级路径本就不存在）。
+    ///
+    /// 解耦（plugin_decoupling.md §4）：目录驱动 install 已退役，整个更新通路
+    /// （check → upgrade）数据源统一为仓库锚定，闭环自洽。
+    pub fn upgrade(&mut self, plugin_id: &str) -> Result<InstalledPluginState, String> {
+        self.upgrade_with(&HttpRepoFetcher, plugin_id)
     }
 
-    /// TS `upgrade`：须已安装（不含 dev-source 兜底）；余同 install，探测 reason = upgraded。
-    pub fn upgrade(&mut self, plugin_id: &str) -> Result<InstalledPluginState, String> {
+    /// 供测试注入 fetcher 的 upgrade（镜像 install_from_repo / install_from_repo_with 惯例）。
+    pub(crate) fn upgrade_with(
+        &mut self,
+        fetcher: &dyn RepoFetcher,
+        plugin_id: &str,
+    ) -> Result<InstalledPluginState, String> {
         if !self.state.installed.contains_key(plugin_id) {
             return Err(format!("Plugin is not installed: {plugin_id}"));
         }
-        let upgraded = self.install(plugin_id)?;
+        if RepoId::parse(plugin_id).is_err() {
+            return Err(format!("Only repo-anchored plugins can be upgraded: {plugin_id}"));
+        }
+        let upgraded = self.install_from_repo_with(fetcher, plugin_id)?;
         self.update_probes.insert(
             plugin_id.to_string(),
             PluginUpdateProbe {

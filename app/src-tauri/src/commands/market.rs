@@ -1,6 +1,5 @@
 //! 插件市场命令：`plugin-market-list` / `plugin-market-check-updates` /
-//! `plugin-market-install` / `plugin-market-upgrade` / `plugin-market-set-enabled` /
-//! `plugin-market-uninstall`
+//! `plugin-market-upgrade` / `plugin-market-set-enabled` / `plugin-market-uninstall`
 //!（语义对齐 TS desktop/src/main/ipc/plugin-market.ts，全部仅系统域使用）。
 //!
 //! 域校验（旧 TS `requireSystemDomain(event)` 的 Tauri 等价物，见
@@ -58,16 +57,6 @@ pub async fn plugin_market_check_updates(
 ) -> Result<Vec<PluginUpdateProbe>, String> {
     domain_guard::require_system_domain(&webview)?;
     run_market(state, move |svc| svc.check_for_updates(plugin_id.as_deref())).await
-}
-
-#[tauri::command]
-pub async fn plugin_market_install(
-    webview: tauri::Webview,
-    state: tauri::State<'_, MarketState>,
-    plugin_id: String,
-) -> Result<InstalledPluginState, String> {
-    domain_guard::require_system_domain(&webview)?;
-    run_market(state, move |svc| svc.install(&plugin_id)).await
 }
 
 #[tauri::command]

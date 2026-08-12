@@ -1,16 +1,11 @@
 {
-  "comment": "id 暂用插件短名；随分发模型迁移后改为仓库地址（如 github.com/welyin/spark-plugins/spark-moments）",
-  "id": "spark-moments",
+  "id": "github.com/welyin/spark/plugins/spark-moments",
   "name": "朋友圈",
   "icon": "",
-  "summary": "Spark 个人空间社交插件：与个人联系人分享文字与图片动态，互赞互评。",
+  "summary": "Spark 个人空间社交插件：与个人联系人分享文字与图片动态，互赞互评。数据去中心化（P2P 定向投递）。",
   "category": "social",
   "version": "0.1.0",
-  "release": {
-    "assetNaming": "spark-plugin-spark-moments-<version>.spkg",
-    "updateManifestAsset": "spark-plugin-spark-moments-manifest.json",
-    "signatureAsset": "spark-plugin-spark-moments-manifest.sig"
-  },
+  "releaseAssetPattern": "spark-plugin-spark-moments-<version>.spkg",
   "permissions": [
     "identity:sign",
     "identity:verify",
@@ -18,5 +13,7 @@
     "feed:deliver",
     "message:app"
   ],
-  "mirrors": []
+  "mirrors": [],
+  "sdkVersion": "1",
+  "supportedSpaces": ["personal"]
 }

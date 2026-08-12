@@ -127,10 +127,9 @@ export const COMMAND_MAP: Record<string, string> = {
   'plugin-identity-sign': 'plugin_identity_sign',
   'plugin-identity-verify': 'plugin_identity_verify',
   'plugin-org-sync-now': 'plugin_org_sync_now',
-  // 插件市场
+  // 插件市场（目录驱动 install 已退役，统一走 install-from-repo）
   'plugin-market-list': 'plugin_market_list',
   'plugin-market-check-updates': 'plugin_market_check_updates',
-  'plugin-market-install': 'plugin_market_install',
   'plugin-market-upgrade': 'plugin_market_upgrade',
   'plugin-market-set-enabled': 'plugin_market_set_enabled',
   'plugin-market-uninstall': 'plugin_market_uninstall',
@@ -269,7 +268,6 @@ export const ARG_NAMES: Record<string, string[]> = {
   'plugin-identity-verify': ['payload', 'signature', 'publicKey'],
   'plugin-org-sync-now': ['orgId', 'pluginDomain'],
   'plugin-market-check-updates': ['pluginId'],
-  'plugin-market-install': ['pluginId'],
   'plugin-market-upgrade': ['pluginId'],
   'plugin-market-set-enabled': ['pluginId', 'enabled'],
   'plugin-market-uninstall': ['pluginId'],

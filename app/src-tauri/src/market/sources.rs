@@ -13,8 +13,6 @@ use std::path::Path;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use sha2::Digest;
-
 /// 目录链路清单/签名文本读取上限（4 MiB，远大于实际清单体量，仅防无界响应）。
 const TEXT_FETCH_MAX_BYTES: u64 = 4 * 1024 * 1024;
 
@@ -69,10 +67,6 @@ pub(crate) fn now_millis() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
-}
-
-pub(crate) fn to_file_url(path: &Path) -> String {
-    format!("file://{}", path.to_string_lossy())
 }
 
 /// TS `normalizeFileUrl`：file:// 原样；/ 开头补 file://；其余（https）原样。
@@ -172,34 +166,6 @@ pub(crate) fn fetch_bytes_http_optional(url: &str, max_bytes: u64) -> Result<Opt
     }
     ensure_https_final(url, &response)?;
     read_body_capped(response, url, max_bytes).map(Some)
-}
-
-/// TS `downloadFile`：https 下载到目标路径（status >= 400 报错；http:// 拒绝；
-/// max_bytes 取清单登记 size——Content-Length 超 size 即断，流式截断兜底）。
-pub(crate) fn download_file(url: &str, destination: &Path, max_bytes: u64) -> Result<(), String> {
-    if url.starts_with("http://") {
-        return Err("Insecure plugin package URL is not allowed".to_string());
-    }
-    if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("{e}"))?;
-    }
-    let response = http_client()
-        .get(url)
-        .send()
-        .map_err(|e| format!("Download failed: {url}: {e}"))?;
-    let status = response.status();
-    if status.as_u16() >= 400 {
-        return Err(format!("Download failed: {url}, status={status}"));
-    }
-    ensure_https_final(url, &response)?;
-    let body = read_body_capped(response, url, max_bytes)?;
-    fs::write(destination, body).map_err(|e| format!("{e}"))?;
-    Ok(())
-}
-
-pub(crate) fn compute_file_sha256(path: &Path) -> Result<String, String> {
-    let content = fs::read(path).map_err(|e| format!("{e}"))?;
-    Ok(hex::encode(sha2::Sha256::digest(content)))
 }
 
 pub(crate) fn file_size(path: &Path) -> Result<u64, String> {

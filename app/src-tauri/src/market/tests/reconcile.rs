@@ -1,119 +1,11 @@
-//! 启动对账与 grantedPermissions 回填用例。
+//! 启动回填用例。
+//!
+//! 解耦（plugin_decoupling.md §4.3）：启动不再对账内置 bundle / 源码目录
+//! （reconcile_bundled_installed_state 已删除）——已安装状态只由 .spkg 落盘文件 +
+//! plugin-market-state.json 决定。此文件保留「兼容旧版安装态」回填用例
+//! （grantedPermissions / supportedSpaces）与旧状态文件反序列化回归。
 
 use super::*;
-
-#[test]
-fn reconcile_marks_verified_bundle_installed() {
-    let fixture = Fixture::new();
-    write_release(&fixture, &ReleaseOpts::default());
-    let mut service = fixture.service();
-    service.initialize().unwrap();
-
-    let installed = service.state.installed.get("spark-example").unwrap();
-    assert_eq!(installed.version, "0.1.0");
-    assert!(installed.size > 0);
-    assert!(installed.enabled);
-    assert_eq!(
-        installed.granted_permissions,
-        vec![
-            "storage:read",
-            "storage:write",
-            "org:read",
-            "proof:verify",
-            "identity:verify",
-            "org:sync",
-            "message:app",
-            "identity:sign"
-        ]
-    );
-    assert!(installed.package_path.contains("dist-market"));
-    assert_eq!(service.update_probes["spark-example"].reason, "bundled");
-
-    // 状态已持久化
-    let persisted = read_state_file(&fixture.state_file);
-    assert!(persisted.installed.contains_key("spark-example"));
-
-    let items = service.list_market();
-    // 按插件 id 定位（目录含 ai-chat 等多条目，不做位置/数量假设）
-    let example = items
-        .iter()
-        .find(|item| item.catalog.id == "spark-example")
-        .expect("spark-example market item");
-    assert!(example.installed);
-    assert_eq!(example.installed_version.as_deref(), Some("0.1.0"));
-    assert_eq!(example.last_check_reason, "bundled");
-}
-
-#[test]
-fn reconcile_skips_bad_signature_and_digest() {
-    // 坏签名 → 不安装
-    let fixture = Fixture::new();
-    write_release(&fixture, &ReleaseOpts { bad_signature: true, ..Default::default() });
-    let mut service = fixture.service();
-    service.initialize().unwrap();
-    assert!(!service.state.installed.contains_key("spark-example"));
-    assert!(!service.list_market()[0].installed);
-
-    // sha256 对不上 → 不安装
-    let fixture = Fixture::new();
-    write_release(&fixture, &ReleaseOpts { tamper_sha256: true, ..Default::default() });
-    let mut service = fixture.service();
-    service.initialize().unwrap();
-    assert!(!service.state.installed.contains_key("spark-example"));
-}
-
-#[test]
-fn reconcile_marks_dev_source_and_bundle_wins() {
-    // 仅源码目录 → bundled-dev-source
-    let fixture = Fixture::new();
-    write_dev_source(&fixture);
-    let mut service = fixture.service();
-    service.initialize().unwrap();
-    let installed = service.state.installed.get("spark-example").unwrap();
-    assert_eq!(installed.sha256, "bundled-dev-source");
-    assert_eq!(installed.size, 0);
-    assert_eq!(service.update_probes["spark-example"].reason, "bundled-dev-source");
-
-    // bundle + 源码同时存在 → bundle 优先
-    let fixture = Fixture::new();
-    write_dev_source(&fixture);
-    write_release(&fixture, &ReleaseOpts::default());
-    let mut service = fixture.service();
-    service.initialize().unwrap();
-    let installed = service.state.installed.get("spark-example").unwrap();
-    assert_ne!(installed.sha256, "bundled-dev-source");
-    assert_eq!(service.update_probes["spark-example"].reason, "bundled");
-}
-
-#[test]
-fn reconcile_removes_stale_dev_source_records() {
-    // 化石记录：插件更名后 weibo-core 已不在目录，且其源码路径已失效
-    let fixture = Fixture::new();
-    let legacy = serde_json::json!({
-        "installed": {
-            "weibo-core": {
-                "pluginId": "weibo-core",
-                "version": "0.1.0",
-                "packagePath": "D:\\nonexistent\\weibo-core",
-                "sha256": "bundled-dev-source",
-                "size": 0,
-                "installedAt": 1,
-                "enabled": true,
-                "grantedPermissions": ["storage:read"]
-            }
-        }
-    });
-    fs::create_dir_all(fixture.state_file.parent().unwrap()).unwrap();
-    fs::write(&fixture.state_file, legacy.to_string()).unwrap();
-
-    let mut service = fixture.service();
-    service.initialize().unwrap();
-
-    assert!(!service.state.installed.contains_key("weibo-core"));
-    assert!(!service.update_probes.contains_key("weibo-core"));
-    let persisted = read_state_file(&fixture.state_file);
-    assert!(!persisted.installed.contains_key("weibo-core"));
-}
 
 #[test]
 fn backfill_fills_missing_granted_permissions() {
@@ -138,19 +30,8 @@ fn backfill_fills_missing_granted_permissions() {
     let mut service = fixture.service();
     service.initialize().unwrap();
     let installed = service.state.installed.get("spark-example").unwrap();
-    assert_eq!(
-        installed.granted_permissions,
-        vec![
-            "storage:read",
-            "storage:write",
-            "org:read",
-            "proof:verify",
-            "identity:verify",
-            "org:sync",
-            "message:app",
-            "identity:sign"
-        ]
-    );
+    // 解耦后无内置目录回填分支：统一按基础权限兜底
+    assert_eq!(installed.granted_permissions, super::permissions::basic_permissions());
     // 回填已落盘
     let persisted = read_state_file(&fixture.state_file);
     assert!(!persisted.installed["spark-example"].granted_permissions.is_empty());
@@ -182,4 +63,17 @@ fn legacy_state_without_supported_spaces_deserializes() {
     let persisted = read_state_file(&fixture.state_file);
     assert_eq!(persisted.installed["todo-local"].supported_spaces, None);
     assert_eq!(persisted.installed["todo-local"].trust.as_deref(), Some("sideloaded"));
+}
+
+#[test]
+fn initialize_preserves_only_persisted_installed_state() {
+    // 解耦后 initialize 不再扫描源码树/本地发布目录：无落盘状态时市场为空，
+    // 不凭空出现任何插件。
+    let fixture = Fixture::new();
+    write_release(&fixture, &ReleaseOpts::default());
+    write_dev_source(&fixture);
+    let mut service = fixture.service();
+    service.initialize().unwrap();
+    assert!(service.state.installed.is_empty());
+    assert!(service.list_market().is_empty());
 }

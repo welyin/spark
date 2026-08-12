@@ -54,8 +54,6 @@ impl Fixture {
             MarketPaths {
                 state_file: self.state_file.clone(),
                 packages_root: self.packages_root.clone(),
-                local_release_roots: vec![self.release_root.clone()],
-                local_source_roots: vec![self.source_root.clone()],
                 repo_cache_dir: self.repo_cache_dir.clone(),
             },
             vec![self.pem.clone()],
@@ -168,4 +166,21 @@ fn write_dev_source(fixture: &Fixture) {
     let dir = fixture.source_root.join("spark-example");
     fs::create_dir_all(&dir).unwrap();
     fs::write(dir.join("manifest.ts"), "export {};\n").unwrap();
+}
+
+#[test]
+fn catalog_is_empty_and_find_returns_not_found() {
+    // 解耦（plugin_decoupling.md §4.1）：生产壳层零内置插件知识。
+    // 目录必须恒空，`find_catalog_item` 恒报「未收录」——插件只能经
+    // 仓库锚定安装 / 广播索引探索 / .spkg 侧载进入。
+    assert!(super::catalog::list_plugin_catalog().is_empty());
+    assert_eq!(
+        super::catalog::find_catalog_item("spark-example").unwrap_err(),
+        "Plugin not found: spark-example"
+    );
+    // 目录空 → 任何已装插件都只能来自动态发现，内置目录不会凭空造条目
+    assert!(super::catalog::list_plugin_catalog()
+        .iter()
+        .find(|item| item.id == "ai-chat")
+        .is_none());
 }

@@ -121,8 +121,8 @@ pub fn run() {
     let app = builder
         // 插件源服务：plugin://localhost/<pluginId>/<path>（插件 iframe 沙箱化阶段 A；
         // Windows 上页面实际引用 http://plugin.localhost/...，由 wry 拦截后 revert，
-        // 见 plugin_src.rs 的 URL 形态说明）。已安装包（app_data_dir/plugins/<id>/
-        // packages/*.spkg）优先，内置开发插件 dist（code/plugins/<id>/dist/）兜底。
+        // 见 plugin_src.rs 的 URL 形态说明）。只服务已安装包（app_data_dir/plugins/
+        // <id>/packages/*.spkg），未安装一律 404（解耦后无内置开发插件 dist 兜底）。
         .register_uri_scheme_protocol("plugin", |ctx, request| {
             let data_dir = match std::env::var("SPARK_DATA_DIR") {
                 Ok(dir) if !dir.trim().is_empty() => PathBuf::from(dir),
@@ -342,10 +342,9 @@ pub fn run() {
             commands::plugin::plugin_background_sync,
             commands::plugin::plugin_background_running,
             commands::plugin::plugin_host_query,
-            // 插件市场（目录/检查更新/安装/升级/启停/卸载）
+            // 插件市场（检查更新/升级/启停/卸载；安装统一走仓库锚定 install_from_repo）
             commands::market::plugin_market_list,
             commands::market::plugin_market_check_updates,
-            commands::market::plugin_market_install,
             commands::market::plugin_market_upgrade,
             commands::market::plugin_market_set_enabled,
             commands::market::plugin_market_uninstall,

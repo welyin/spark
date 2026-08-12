@@ -49,15 +49,12 @@ pub struct MarketPaths {
     pub state_file: PathBuf,
     /// 已安装包落盘根目录：<app_data_dir>/plugins（包在 <root>/<id>/packages/）
     pub packages_root: PathBuf,
-    /// 本地发布目录候选根（各 root/<pluginId>/ 下找 update-manifest.json/.sig）
-    pub local_release_roots: Vec<PathBuf>,
-    /// 插件源码目录候选根（各 root/<pluginId>/ 下找 manifest.ts/js）
-    pub local_source_roots: Vec<PathBuf>,
     /// 仓库锚定声明文件缓存 sled 目录（repo.rs，键 plugin:repo:<id>）
     pub repo_cache_dir: PathBuf,
 }
 
 /// 词法归一化路径（折叠 `.`/`..`，TS path.normalize 同款；不做 symlink 解析）。
+/// 卸载链路（uninstall.rs）用于路径包含性比较，防 `.`/`..` 段导致比较失配。
 fn normalize_path(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for component in path.components() {
@@ -73,32 +70,14 @@ fn normalize_path(path: &Path) -> PathBuf {
 }
 
 impl MarketPaths {
-    /// 生产默认：状态/包目录在 app_data_dir 下；本地发布目录与源码目录按
-    /// 编译期 crate 位置（code/app/src-tauri）与运行时 cwd 双候选
-    /// （对齐 TS 的 appPath/cwd 候选语义；打包安装后这些目录不存在即自动走远端 URL）。
+    /// 生产默认：状态/包目录在 app_data_dir 下。
+    /// 解耦（plugin_decoupling.md §4.3）：不再扫描本地 dist-market 发布目录或
+    /// 源码目录——已安装状态只由 .spkg 落盘文件 + plugin-market-state.json 决定，
+    /// 更新探测统一走仓库锚定派生的远端清单 URL。
     pub fn for_app(app_data_dir: &Path) -> Self {
-        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let cwd = std::env::current_dir().unwrap_or_default();
-        let release_roots = [
-            manifest_dir.join("../dist-market/plugins"),
-            cwd.join("dist-market/plugins"),
-        ];
-        let source_roots = [manifest_dir.join("../../plugins"), cwd.join("../plugins")];
-        let dedupe = |dirs: &[PathBuf; 2]| {
-            let mut unique: Vec<PathBuf> = Vec::new();
-            for dir in dirs {
-                let normalized = normalize_path(dir);
-                if !unique.contains(&normalized) {
-                    unique.push(normalized);
-                }
-            }
-            unique
-        };
         Self {
             state_file: app_data_dir.join(PLUGIN_STATE_FILE),
             packages_root: app_data_dir.join("plugins"),
-            local_release_roots: dedupe(&release_roots),
-            local_source_roots: dedupe(&source_roots),
             repo_cache_dir: app_data_dir.join("plugin-repo-cache"),
         }
     }

@@ -18,7 +18,7 @@ import { getAppMessages, getConversation } from '../../stores/messages';
 import type { AppMessageDto } from '../../api/types';
 
 /** 后端桩：任意层级任意方法返回 Promise<null>（test-setup 同款代理；
- * test-setup 把 electronAPI.plugin 覆盖成 listCatalog 桩，这里按测试需要重装） */
+ * 这里按测试需要重装具体桩） */
 const makeNullApi = (): any =>
   new Proxy(function () {}, {
     get(target, key) {

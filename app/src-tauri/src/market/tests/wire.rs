@@ -1,12 +1,44 @@
 //! 命令出参线形用例：对齐旧 preload.ts 声明（拍平、camelCase、无嵌套包裹）。
 
+use base64::Engine;
+
 use super::*;
 
 /// 命令出参线形对齐旧 preload.ts：catalog 字段拍平、camelCase、无嵌套包裹。
 #[test]
 fn wire_shapes_match_preload_declarations() {
     let fixture = Fixture::new();
-    let service = fixture.service();
+    let mut service = fixture.service();
+    // 解耦后无内置目录：侧载播种一个已装插件以产出市场条目
+    let spkg = fixture.release_root.join("seed/todo-local.spkg");
+    fs::create_dir_all(spkg.parent().unwrap()).unwrap();
+    let manifest_json = br#"{"id":"todo-local","name":"LocalTodo","supportedSpaces":["personal","org"]}"#;
+    let text = serde_json::json!({
+        "pluginId": "todo-local",
+        "domain": "plugin:todo-local",
+        "version": "1.0.0",
+        "files": [
+            {
+                "path": "manifest.json",
+                "sha256": hex::encode(sha2::Sha256::digest(manifest_json)),
+                "size": manifest_json.len(),
+                "contentBase64": base64::engine::general_purpose::STANDARD.encode(manifest_json)
+            },
+            {
+                "path": "views/main.js",
+                "sha256": hex::encode(sha2::Sha256::digest(b"hello")),
+                "size": 5,
+                "contentBase64": base64::engine::general_purpose::STANDARD.encode(b"hello")
+            }
+        ]
+    })
+    .to_string();
+    fs::write(&spkg, &text).unwrap();
+    let preview = service.inspect_local_package(spkg.to_str().unwrap()).unwrap();
+    service
+        .import_local_package(spkg.to_str().unwrap(), &preview.sha256, false)
+        .unwrap();
+
     let value = serde_json::to_value(service.list_market()).unwrap();
     let item = &value[0];
     for key in [
@@ -30,14 +62,12 @@ fn wire_shapes_match_preload_declarations() {
         assert!(item.get(key).is_some(), "PluginMarketItem missing key {key}");
     }
     assert!(item.get("catalog").is_none(), "catalog 应拍平而非嵌套");
-    assert_eq!(item["lastCheckReason"], "not-checked");
-    // supportedSpaces：Some 出现（spark-example 目录声明 ["org","personal"]，
-    // personal 为后台回声 Bot 会话空间）
-    assert_eq!(item["supportedSpaces"], serde_json::json!(["org", "personal"]));
-    assert!(item["package"]["updateManifestUrl"]
-        .as_str()
-        .unwrap()
-        .starts_with("https://github.com/"));
+    // 侧载导入会写入 reason="installed" 的本地占位探测
+    assert_eq!(item["lastCheckReason"], "installed");
+    // 侧载插件无仓库声明缓存：supportedSpaces 回落安装时落库的解析值
+    assert_eq!(item["supportedSpaces"], serde_json::json!(["personal", "org"]));
+    // 无声明缓存 → 派生的清单 URL 为空（合成条目不携带远端清单地址）
+    assert_eq!(item["package"]["updateManifestUrl"], serde_json::json!(""));
 
     // InstalledPluginState / PluginUpdateProbe 键名
     let state = serde_json::to_value(InstalledPluginState {

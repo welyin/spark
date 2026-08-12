@@ -74,7 +74,6 @@ beforeEach(() => {
     system: { exitApp: vi.fn().mockResolvedValue(undefined) },
     rootIdentity: { status: vi.fn().mockResolvedValue({ initialized: true, unlocked: true, rootId: 'root-e2e', nickname: 'u', avatar: null }) },
     organization: { listMine: vi.fn().mockResolvedValue([]) },
-    plugin: { listCatalog: vi.fn().mockResolvedValue([]) },
     pluginMarket: { list: vi.fn().mockResolvedValue([]) },
     p2p: {
       info: vi.fn().mockResolvedValue({

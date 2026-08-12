@@ -43,15 +43,55 @@ function assertValidPluginId(pluginId: string): void {
 }
 
 /** 插件源基址（不含尾部斜杠）；repo id 含 `/`，经 encodeURIComponent 收成单段传输，
- *  源服务（plugin_src.rs / vite dev 中间件）解码还原；旧短名 id 编码后为恒等 */
-export function pluginSourceBaseUrl(pluginId: string): string {
+ *  源服务（plugin_src.rs / vite dev 中间件）解码还原；旧短名 id 编码后为恒等。
+ *  `dev` 可选覆盖（缺省取 `import.meta.env.DEV`），供测试强制走生产/开发分支。 */
+export function pluginSourceBaseUrl(pluginId: string, devOverride?: boolean): string {
   assertValidPluginId(pluginId);
   const encoded = encodeURIComponent(pluginId);
-  if (!isTauri()) {
-    return `${window.location.origin}/plugin/${encoded}`;
+  const isTauriRuntime = isTauri();
+  return resolvePluginBaseUrl(pluginId, {
+    encoded,
+    tauri: isTauriRuntime,
+    dev: devOverride ?? import.meta.env.DEV,
+    origin: typeof window !== 'undefined' ? window.location.origin : '',
+    userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : ''
+  });
+}
+
+/** 平台分支判定参数（独立成纯函数便于单测覆盖 Windows / Android / 其他 / dev）。 */
+export type PluginBaseUrlInput = {
+  /** 已编码的插件 id 单段（encodeURIComponent 结果） */
+  encoded: string;
+  /** 是否 Tauri 运行时 */
+  tauri: boolean;
+  /** dev 链路（vite 中间件优先） */
+  dev: boolean;
+  /** window.location.origin（dev 真机调试为局域网 IP） */
+  origin: string;
+  /** navigator.userAgent */
+  userAgent: string;
+};
+
+/**
+ * 平台精确分支（plugin_decoupling.md §5.4/5.5）：
+ * - 非 Tauri（纯浏览器 dev）：vite 中间件，与壳层同 origin；
+ * - Tauri + dev：优先 vite 中间件（`window.location.origin` 在真机调试时为局域网 IP，
+ *   与 devUrl host 替换一致），再 fallback 到生产；desktop dev 亦走中间件加载 dev 插件；
+ * - Tauri + 生产：Windows / Android 的 WebView 不拦截非标准 scheme，须走
+ *   `http://plugin.localhost`；macOS / iOS 走原生 `plugin://localhost`。
+ */
+export function resolvePluginBaseUrl(_pluginId: string, input: PluginBaseUrlInput): string {
+  const { encoded, tauri, dev, origin, userAgent } = input;
+  if (!tauri || dev) {
+    // 纯浏览器 dev 或 Tauri dev：走 vite 中间件（dev 下同 origin、无 OOPIF）
+    return `${origin}/plugin/${encoded}`;
   }
-  const isWindows = navigator.userAgent.includes('Windows');
-  return isWindows ? `http://plugin.localhost/${encoded}` : `plugin://localhost/${encoded}`;
+  const isWindows = userAgent.includes('Windows');
+  const isAndroid = userAgent.includes('Android');
+  // Windows 与 Android 的 WebView 均不拦截非标准 scheme，须走 http://plugin.localhost
+  return isWindows || isAndroid
+    ? `http://plugin.localhost/${encoded}`
+    : `plugin://localhost/${encoded}`;
 }
 
 /** 源服务统一 CSP 口径（与 plugin_src.rs PLUGIN_CSP 一致）；script-src 由变量拼接 */
@@ -70,9 +110,9 @@ const sourceCsp = (scriptSrc: string): string =>
  * 唯一能拿到 viewId/卡片上下文的途径（hello 的 viewId 必须与桥绑定一致，
  * 插件无法可靠自报时由注入兜底，见 bridge/client.ts）；JSON 转义 `<` 防 `</script>` 逃逸。
  */
-export function buildPluginHostSrcdoc(pluginId: string, mount?: PluginViewBootstrap): string {
+export function buildPluginHostSrcdoc(pluginId: string, mount?: PluginViewBootstrap, devOverride?: boolean): string {
   assertValidPluginId(pluginId);
-  const base = pluginSourceBaseUrl(pluginId);
+  const base = pluginSourceBaseUrl(pluginId, devOverride);
   // CSP 来源用插件源 origin（不含 id 路径段）：CSP 路径匹配规则下，
   // 不带尾斜杠的路径只精确匹配该路径本身，不匹配子文件（weibo-core/views/main.js 会被
   // script-src http://plugin.localhost/weibo-core 误挡）；origin 级来源才是正确粒度

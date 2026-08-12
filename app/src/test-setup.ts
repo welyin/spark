@@ -20,11 +20,14 @@ api.rootIdentity = {
   status: async () => ({ initialized: true, unlocked: true, rootId: 'root-test', nickname: '测试用户', avatar: null })
 };
 api.organization = { listMine: async () => [] };
-api.plugin = { listCatalog: async () => [] };
+api.plugin = {};
 api.pluginMarket = {
   list: async () => [],
   checkUpdates: async () => [],
-  install: async () => null,
+  resolveRepo: async () => null,
+  installFromRepo: async () => null,
+  inspectLocal: async () => null,
+  importLocal: async () => null,
   upgrade: async () => null,
   setEnabled: async () => null
 };

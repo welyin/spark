@@ -1,0 +1,182 @@
+name: Release Plugin
+
+# 官方插件发布流水线（朋友圈 spark-moments / AI 聊天 ai-chat）。
+# 路径适配 code/ monorepo 布局：打包脚本在 plugins/scripts/，
+# 产物落在 app/dist-market/plugins/<pluginId>/ 后重命名上传 Release。
+#
+# 触发方式：
+# - 推送版本 tag（git tag spark-moments-v0.2.0 && git push origin spark-moments-v0.2.0）：
+#   自动创建 Release、打包、签名、上传资产，全程无需网页操作；
+#   插件 id 从 tag 前缀解析（<pluginId>-v<version>），并与该插件 manifest.json 比对，
+#   不一致直接失败，防 tag/版本脱钩；
+# - 或 workflow_dispatch 手动指定 pluginId / tag / version（tag 需已存在 Release）。
+#
+# 仅支持官方插件：spark-moments / ai-chat。spark-example 保留为开发示例，不纳入。
+# 签名私钥取自仓库 secret SPARK_PLUGIN_SIGNING_PRIVATE_KEY（PEM 全文）。
+#
+# 发布前阻塞项（§8.3 遗留决策点）：市场内置公钥与本机签名私钥暂不对应，正式发版前须
+# 统一项目方签名密钥对并更新内置公钥，否则客户端验签失败。详见 plugin_system「市场信任链」。
+
+on:
+  push:
+    tags:
+      - "spark-moments-v*"
+      - "ai-chat-v*"
+  workflow_dispatch:
+    inputs:
+      pluginId:
+        description: "Plugin ID (spark-moments | ai-chat)"
+        required: true
+        type: choice
+        options:
+          - spark-moments
+          - ai-chat
+      tag:
+        description: "Release tag (example: spark-moments-v0.2.0)"
+        required: true
+        type: string
+      version:
+        description: "Plugin version in manifest (optional, default from tag)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-plugin-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Resolve release variables
+        id: vars
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            TAG="${{ github.ref_name }}"
+            # tag 形如 spark-moments-v0.2.0 / ai-chat-v0.2.0：插件 id = 去掉末段 -v<version>
+            PLUGIN_ID="${TAG%%-v*}"
+            VERSION="${TAG##*-v}"
+          else
+            TAG="${{ inputs.tag }}"
+            VERSION="${{ inputs.version }}"
+            PLUGIN_ID="${{ inputs.pluginId }}"
+            if [[ -z "$VERSION" ]]; then VERSION="${TAG##*-v}"; fi
+          fi
+
+          # 仅允许官方插件；spark-example 不纳入正式发布
+          if [[ "$PLUGIN_ID" != "spark-moments" && "$PLUGIN_ID" != "ai-chat" ]]; then
+            echo "::error::非法 pluginId '$PLUGIN_ID'——仅支持 spark-moments / ai-chat（spark-example 为开发示例，不发布）"
+            exit 1
+          fi
+          # 校验 tag 前缀必须等于插件 id，避免 tag 与 pluginId 脱钩
+          if [[ "${TAG%%-v*}" != "$PLUGIN_ID" ]]; then
+            echo "::error::tag '$TAG' 前缀与 pluginId '$PLUGIN_ID' 不一致（应形如 <pluginId>-v<version>）"
+            exit 1
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "plugin_id=$PLUGIN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Verify tag version matches plugin manifest and declaration
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          MANIFEST_VERSION=$(node -p "require('./plugins/${{ steps.vars.outputs.plugin_id }}/manifest.json').version")
+          if [[ "$MANIFEST_VERSION" != "${{ steps.vars.outputs.version }}" ]]; then
+            echo "::error::tag 版本 (${{ steps.vars.outputs.version }}) 与 manifest.json 版本 ($MANIFEST_VERSION) 不一致——先 bump 版本再发 tag"
+            exit 1
+          fi
+          # install_from_repo 校验 manifest.version == declaration.version：声明文件
+          # 版本必须与 tag/清单一致，否则客户端仓库锚定安装会因版本不匹配而拒绝
+          DECL_VERSION=$(node -p "require('./plugins/${{ steps.vars.outputs.plugin_id }}/spark-plugin.json').version")
+          if [[ "$DECL_VERSION" != "${{ steps.vars.outputs.version }}" ]]; then
+            echo "::error::tag 版本 (${{ steps.vars.outputs.version }}) 与 spark-plugin.json 版本 ($DECL_VERSION) 不一致——仓库锚定安装将因版本不匹配被拒"
+            exit 1
+          fi
+
+      - name: Verify release exists for manual runs
+        id: release_check
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          TAG="${{ steps.vars.outputs.tag }}"
+          NORMALIZED="${TAG##*-v}"
+          if gh api "repos/${{ github.repository }}/releases/tags/$TAG" --silent || \
+             gh api "repos/${{ github.repository }}/releases/tags/$NORMALIZED" --silent || \
+             gh api "repos/${{ github.repository }}/releases/tags/v$NORMALIZED" --silent; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Release tag '${{ steps.vars.outputs.tag }}' was not found. Skipping plugin manifest generation for this manual run."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install app dependencies (plugin build reuses the app toolchain)
+        run: npm ci --prefix app
+
+      - name: Build plugin dist (vite ESM bundle + manifest)
+        run: |
+          PLUGIN_ID="${{ steps.vars.outputs.plugin_id }}"
+          case "$PLUGIN_ID" in
+            spark-moments) npm run build:moments --prefix plugins ;;
+            ai-chat)       npm run build:ai-chat --prefix plugins ;;
+            *) echo "::error::unsupported pluginId $PLUGIN_ID"; exit 1 ;;
+          esac
+
+      - name: Build and sign plugin release artifacts
+        if: github.event_name != 'workflow_dispatch' || steps.release_check.outputs.skip == 'false'
+        env:
+          SPARK_PLUGIN_SIGNING_PRIVATE_KEY: ${{ secrets.SPARK_PLUGIN_SIGNING_PRIVATE_KEY }}
+        run: |
+          node plugins/scripts/build-plugin-package.mjs \
+            --pluginId "${{ steps.vars.outputs.plugin_id }}" \
+            --version "${{ steps.vars.outputs.version }}" \
+            --repository "${{ github.repository }}" \
+            --releaseTag "${{ steps.vars.outputs.tag }}" \
+            --outputDir "app/dist-market/plugins/${{ steps.vars.outputs.plugin_id }}"
+
+      - name: Prepare named release assets
+        if: github.event_name != 'workflow_dispatch' || steps.release_check.outputs.skip == 'false'
+        shell: bash
+        run: |
+          PLUGIN_ID="${{ steps.vars.outputs.plugin_id }}"
+          VERSION="${{ steps.vars.outputs.version }}"
+          SRC_DIR="app/dist-market/plugins/$PLUGIN_ID"
+
+          cp "$SRC_DIR/update-manifest.json" "$SRC_DIR/spark-plugin-$PLUGIN_ID-manifest.json"
+          cp "$SRC_DIR/update-manifest.sig" "$SRC_DIR/spark-plugin-$PLUGIN_ID-manifest.sig"
+          cp "$SRC_DIR/update-manifest.pub.pem" "$SRC_DIR/spark-plugin-$PLUGIN_ID-manifest.pub.pem"
+          cp "$SRC_DIR/plugin-checksums.txt" "$SRC_DIR/spark-plugin-$PLUGIN_ID-checksums.txt"
+          # 仓库声明文件 release 资产（monorepo 下 RepoId::declaration_asset_name =
+          # <末段>-spark-plugin.json，如 spark-moments-spark-plugin.json），
+          # 供客户端 fetch_repo_declaration 走 release 资产 latest 指针，双源交叉生效
+          cp "plugins/$PLUGIN_ID/spark-plugin.json" "$SRC_DIR/$PLUGIN_ID-spark-plugin.json"
+
+          test -f "$SRC_DIR/spark-plugin-$PLUGIN_ID-$VERSION.spkg"
+          test -f "$SRC_DIR/$PLUGIN_ID-spark-plugin.json"
+
+      - name: Upload plugin artifacts to release
+        if: github.event_name != 'workflow_dispatch' || steps.release_check.outputs.skip == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.vars.outputs.tag }}
+          name: 官方插件 ${{ steps.vars.outputs.plugin_id }} ${{ steps.vars.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            app/dist-market/plugins/${{ steps.vars.outputs.plugin_id }}/spark-plugin-${{ steps.vars.outputs.plugin_id }}-${{ steps.vars.outputs.version }}.spkg
+            app/dist-market/plugins/${{ steps.vars.outputs.plugin_id }}/spark-plugin-${{ steps.vars.outputs.plugin_id }}-manifest.json
+            app/dist-market/plugins/${{ steps.vars.outputs.plugin_id }}/spark-plugin-${{ steps.vars.outputs.plugin_id }}-manifest.sig
+            app/dist-market/plugins/${{ steps.vars.outputs.plugin_id }}/spark-plugin-${{ steps.vars.outputs.plugin_id }}-manifest.pub.pem
+            app/dist-market/plugins/${{ steps.vars.outputs.plugin_id }}/spark-plugin-${{ steps.vars.outputs.plugin_id }}-checksums.txt
+            app/dist-market/plugins/${{ steps.vars.outputs.plugin_id }}/${{ steps.vars.outputs.plugin_id }}-spark-plugin.json

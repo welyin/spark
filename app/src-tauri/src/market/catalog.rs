@@ -1,8 +1,9 @@
-//! 插件市场内置目录（vendored 自 TS desktop/src/main/plugins/catalog.ts，
-//! 与 code/plugins/spark-example/manifest.json 的 package 字段保持一致）。
+//! 插件市场内置目录（解耦后为空）。
 //!
-//! 本期为静态 vendored：远端目录服务未排期；新增插件 = 在此追加条目 +
-//! 打包脚本/发布 workflow 跟进（见 code/plugins/README.md）。
+//! 生产壳层零内置插件知识（plugin_decoupling.md §4.1）：插件只能经「仓库锚定
+//! 安装 / 广播索引探索 / .spkg 侧载」进入，目录完全动态发现。`list_plugin_catalog()`
+//! 恒返回空；`find_catalog_item()` 恒报「未收录」。类型仍保留：repo.rs 的
+//! `synthesize_catalog_entry` 与 updates.rs 合成条目仍需用 `PluginCatalogItem`。
 
 use serde::{Deserialize, Serialize};
 
@@ -57,111 +58,14 @@ pub struct PluginCatalogItem {
     pub package: PluginCatalogPackage,
 }
 
-/// 内置目录（TS `CATALOG`；listPluginCatalog 同款深拷贝语义 → 每次返回新 Vec）。
+/// 内置目录（解耦后恒空：生产壳层零内置插件知识）。
+/// 每次调用返回新 Vec（保持旧「深拷贝」语义，方便调用方持有）。
 pub fn list_plugin_catalog() -> Vec<PluginCatalogItem> {
-    vec![
-        PluginCatalogItem {
-            id: "spark-example".to_string(),
-            domain: "plugin:spark-example".to_string(),
-            name: "示例插件".to_string(),
-            description: "插件体系参考实现：管理员发帖（域签名防抵赖）发应用会话卡片通知，成员评论/回复。"
-                .to_string(),
-            category: "social".to_string(),
-            version: "0.1.3".to_string(),
-            views: vec!["default".to_string(), "post-card".to_string()],
-            permissions: vec![
-                "storage:read".to_string(),
-                "storage:write".to_string(),
-                "org:read".to_string(),
-                "org:sync".to_string(),
-                "message:app".to_string(),
-                "identity:sign".to_string(),
-            ],
-            // 与 code/plugins/spark-example/manifest.json 的 supportedSpaces 保持一致
-            // （personal：后台回声 Bot 会话在个人空间）
-            supported_spaces: Some(vec!["org".to_string(), "personal".to_string()]),
-            requires: None,
-            package: PluginCatalogPackage {
-                update_manifest_url:
-                    "https://github.com/welyin/spark/releases/latest/download/spark-plugin-spark-example-manifest.json"
-                        .to_string(),
-                signature_url:
-                    "https://github.com/welyin/spark/releases/latest/download/spark-plugin-spark-example-manifest.sig"
-                        .to_string(),
-                package_name: "spark-plugin-spark-example-0.1.3.spkg".to_string(),
-                install_command: "spark-plugin install spark-plugin-spark-example-0.1.3.spkg".to_string(),
-            },
-        },
-        PluginCatalogItem {
-            id: "ai-chat".to_string(),
-            domain: "plugin:ai-chat".to_string(),
-            name: "AI 聊天".to_string(),
-            description: "通用 AI 聊天插件——创建多个 Bot 实例，各自配置不同 AI 后端（CodeBuddy CLI、OpenAI 兼容 API、Ollama 等），在应用会话中与 AI 对话"
-                .to_string(),
-            category: "ai-assistant".to_string(),
-            version: "0.1.0".to_string(),
-            views: vec!["chat".to_string()],
-            permissions: vec![
-                "storage:read".to_string(),
-                "storage:write".to_string(),
-                "message:app".to_string(),
-                "system:exec".to_string(),
-                "network:fetch".to_string(),
-            ],
-            supported_spaces: Some(vec!["personal".to_string(), "org".to_string()]),
-            // 依赖本地 CLI（codebuddy），只能桌面端跑
-            requires: Some(PluginRequires {
-                capabilities: vec!["system:exec".to_string()],
-                platforms: vec!["desktop".to_string()],
-                mobile_readonly: false,
-            }),
-            package: PluginCatalogPackage {
-                update_manifest_url:
-                    "https://github.com/welyin/spark/releases/latest/download/spark-plugin-ai-chat-manifest.json"
-                        .to_string(),
-                signature_url:
-                    "https://github.com/welyin/spark/releases/latest/download/spark-plugin-ai-chat-manifest.sig"
-                        .to_string(),
-                package_name: "spark-plugin-ai-chat-0.1.0.spkg".to_string(),
-                install_command: "spark-plugin install spark-plugin-ai-chat-0.1.0.spkg".to_string(),
-            },
-        },
-        PluginCatalogItem {
-            id: "spark-moments".to_string(),
-            domain: "plugin:spark-moments".to_string(),
-            name: "朋友圈".to_string(),
-            description: "个人动态圈：分享图文动态，点赞与评论，仅个人联系人可见。对标微信朋友圈核心体验，数据去中心化（P2P 定向投递）。"
-                .to_string(),
-            category: "social".to_string(),
-            version: "0.1.0".to_string(),
-            views: vec!["default".to_string(), "notify-card".to_string()],
-            permissions: vec![
-                "identity:sign".to_string(),
-                "identity:verify".to_string(),
-                "contact:read".to_string(),
-                "feed:deliver".to_string(),
-                "message:app".to_string(),
-            ],
-            supported_spaces: Some(vec!["personal".to_string()]),
-            requires: None,
-            package: PluginCatalogPackage {
-                update_manifest_url:
-                    "https://github.com/welyin/spark/releases/latest/download/spark-plugin-spark-moments-manifest.json"
-                        .to_string(),
-                signature_url:
-                    "https://github.com/welyin/spark/releases/latest/download/spark-plugin-spark-moments-manifest.sig"
-                        .to_string(),
-                package_name: "spark-plugin-spark-moments-0.1.0.spkg".to_string(),
-                install_command: "spark-plugin install spark-plugin-spark-moments-0.1.0.spkg".to_string(),
-            },
-        },
-    ]
+    vec![]
 }
 
 /// 按 id 查目录条目（TS `findCatalogItem` 的错误文案对齐）。
+/// 解耦后目录恒空 → 恒报「未收录」。
 pub fn find_catalog_item(plugin_id: &str) -> Result<PluginCatalogItem, String> {
-    list_plugin_catalog()
-        .into_iter()
-        .find(|item| item.id == plugin_id)
-        .ok_or_else(|| format!("Plugin not found: {plugin_id}"))
+    Err(format!("Plugin not found: {plugin_id}"))
 }

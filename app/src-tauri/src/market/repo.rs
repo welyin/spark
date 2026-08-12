@@ -700,12 +700,25 @@ impl PluginMarketService {
     }
 }
 
-/// 已安装但不在内置目录中的条目（仓库锚定安装）合成市场目录条目（updates.rs 用）。
+/// 已安装插件合成市场目录条目（updates.rs 用）。
+/// 仓库锚定插件取声明文件缓存合成；包 URL 从声明派生（updates.rs 更新探测走
+/// 与仓库锚定一致的清单拉取），无声明缓存的插件（如侧载）包 URL 置空。
 pub(crate) fn synthesize_catalog_entry(
     service: &PluginMarketService,
     installed: &InstalledPluginState,
 ) -> super::catalog::PluginCatalogItem {
     let declaration = service.peek_cached_declaration(&installed.plugin_id);
+    let (update_manifest_url, signature_url) = declaration
+        .as_ref()
+        .and_then(|d| RepoId::parse(&installed.plugin_id).ok().map(|id| (d, id)))
+        .map(|(d, id)| {
+            let (tag, _pkg, manifest_asset, signature_asset) = derive_release_names(d, &id);
+            (
+                release_asset_origin_url(&id, &tag, &manifest_asset),
+                release_asset_origin_url(&id, &tag, &signature_asset),
+            )
+        })
+        .unwrap_or_default();
     super::catalog::PluginCatalogItem {
         id: installed.plugin_id.clone(),
         domain: format!("plugin:{}", installed.plugin_id),
@@ -717,13 +730,18 @@ pub(crate) fn synthesize_catalog_entry(
             .as_ref()
             .map(|d| d.summary.clone())
             .unwrap_or_default(),
+        // 透传声明 category（仅合法枚举；非法值归到默认 "tool"）。
+        // 合法枚举与 TS `PluginMarketItemDto.category` 对齐（types.ts）：
+        // 'ai-assistant' | 'social' | 'tool' | 'game' | 'foundation'。
+        // 不再归一化为 "business"（前端无该枚举值，会落到"其他"分类）。
         category: declaration
             .as_ref()
             .map(|d| match d.category.as_str() {
-                "foundation" => "foundation".to_string(),
-                _ => "business".to_string(),
+                "foundation" | "ai-assistant" | "social" | "game" => d.category.clone(),
+                // "tool" 与其余非法值一并落到合法默认
+                _ => "tool".to_string(),
             })
-            .unwrap_or_else(|| "business".to_string()),
+            .unwrap_or_else(|| "tool".to_string()),
         version: declaration
             .as_ref()
             .map(|d| d.version.clone())
@@ -741,8 +759,8 @@ pub(crate) fn synthesize_catalog_entry(
         // 运行时前提：仓库声明/侧载 manifest 暂无 requires 字段，恒无约束
         requires: None,
         package: super::catalog::PluginCatalogPackage {
-            update_manifest_url: String::new(),
-            signature_url: String::new(),
+            update_manifest_url,
+            signature_url,
             package_name: String::new(),
             install_command: String::new(),
         },

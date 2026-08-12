@@ -19,7 +19,6 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
-use super::catalog::list_plugin_catalog;
 use super::permissions::{normalize_declared_permissions, resolve_granted_permissions};
 use super::sources::{file_size, now_millis};
 use super::types::{InstalledPluginState, PluginUpdateProbe};
@@ -247,10 +246,10 @@ impl PluginMarketService {
         }
         let container = parse_container(&bytes)?;
 
-        // 保留 id 拒载（I2）：system 与内置目录 id 不允许侧载顶替
-        if container.plugin_id == "system"
-            || list_plugin_catalog().iter().any(|c| c.id == container.plugin_id)
-        {
+        // 保留 id 拒载（I2）：system 会话 id 不允许侧载顶替。
+        // 解耦后无内置目录拒载分支（目录已空，plugin_decoupling.md §4.4）；
+        // 侧载改为纯基于 .spkg 包内 manifest 自证 + 哈希核对。
+        if container.plugin_id == "system" {
             return Err(format!(
                 "Sideload import refused: reserved plugin id {}",
                 container.plugin_id

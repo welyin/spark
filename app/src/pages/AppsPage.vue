@@ -128,6 +128,7 @@ import { enablePluginInstance, isPluginInstanceDisabled, pluginInstanceKey } fro
 import { isAdmin, refreshOrganizations } from '../stores/org-membership';
 import { consumePendingAppDetail, pendingAppDetail } from '../stores/pending-app';
 import { isMockApp, listMockApps, setMockAppEnabled, setMockAppInstalled } from '../mock/apps';
+import { listDevPlugins } from '../mock/dev-plugins';
 import { mockMode } from '../mock/mode';
 import { spaceKeyOf } from '../mock/space-key';
 import { notifyPluginInstalled, notifyPluginUpgraded } from '../plugin/messages';
@@ -245,9 +246,11 @@ export default defineComponent({
       () => items.value.find((item) => item.id === selectedId.value) ?? null
     );
 
-    // 仅 mock 模式（npm run tauri:mock）把 mock 应用（src/mock/apps.ts）合并进真实市场结果
+    // mock 模式（npm run tauri:mock）把 mock 应用（src/mock/apps.ts）合并进真实市场结果；
+    // dev 链路（npm run dev / tauri:mock）把本地开发插件（src/mock/dev-plugins.ts，自动
+    // 扫描 code/plugins/*/manifest.json）合并进来，生产构建不进 bundle（§5）
     const mergeItems = () => {
-      items.value = mockMode() ? [...realItems.value, ...listMockApps()] : [...realItems.value];
+      items.value = [...realItems.value, ...(mockMode() ? listMockApps() : []), ...listDevPlugins()];
     };
 
     const refresh = async () => {
@@ -408,7 +411,9 @@ export default defineComponent({
         return;
       }
       try {
-        await window.electronAPI.pluginMarket.install(item.id);
+        // 目录驱动 install 已退役（plugin_decoupling.md §4）：市场项 id 即仓库规范化
+        // 地址，等价替换为 installFromRepo
+        await window.electronAPI.pluginMarket.installFromRepo(item.id);
         await refresh();
         ElMessage.success('应用安装成功，启用后即可使用');
         // 系统通知样板（app:system 内置应用会话，按当前空间隔离）
