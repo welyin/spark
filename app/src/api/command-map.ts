@@ -27,6 +27,11 @@ export const COMMAND_MAP: Record<string, string> = {
   'root-sign': 'root_sign',
   'root-derive-domain': 'root_derive_domain',
   'root-mnemonic-check': 'root_mnemonic_check',
+  // M4 生物识别
+  'biometric-check': 'biometric_status',
+  'biometric-unlock': 'biometric_unlock',
+  'biometric-store-password': 'biometric_store_password',
+  'biometric-delete': 'biometric_delete',
   // 文档（plugin.doc* 手写包装，不走通用表）
   // 组织
   'org-list-mine': 'org_list_mine',
@@ -136,6 +141,15 @@ export const COMMAND_MAP: Record<string, string> = {
   'devices-list': 'devices_list',
   'root-revoke-device': 'root_revoke_device',
   'security-log-list': 'security_log_list',
+  // M5 延迟恢复（多设备间密码重置/配对新设备的安全窗口协议）
+  'root-recovery-status': 'root_recovery_status',
+  'root-recovery-initiate': 'root_recovery_initiate',
+  'root-recovery-confirm': 'root_recovery_confirm',
+  'root-recovery-veto': 'root_recovery_veto',
+  // 乙+校验器（单一密码）
+  'root-password-verify-ticket': 'root_verify_password_ticket',
+  'root-password-unify': 'root_unify_password',
+  'root-password-unify-status': 'root_password_unify_status',
   // 系统桥接（未读角标 → dock/任务栏徽标）
   'system-set-badge': 'system_set_badge',
   // HTTP 代理设置（updater/市场链路 GitHub 直连失败的规避，见 src-tauri proxy.rs）
@@ -170,6 +184,11 @@ export const ARG_NAMES: Record<string, string[]> = {
   'root-sign': ['payload'],
   'root-derive-domain': ['domain'],
   'root-mnemonic-check': ['input'],
+  // M4 生物识别
+  'biometric-check': [],
+  'biometric-unlock': [],
+  'biometric-store-password': ['password'],
+  'biometric-delete': [],
   'plugin-host-query': ['pluginId', 'kind', 'payload'],
   'plugin-background-running': ['pluginId'],
   'org-create': ['input'],
@@ -252,6 +271,13 @@ export const ARG_NAMES: Record<string, string[]> = {
   'root-revoke-device': ['deviceId'],
   // limit 可选：未传时序列化缺省，壳层 SecurityLogListArgs 走 serde default
   'security-log-list': ['limit'],
+  'root-recovery-initiate': ['op', 'delayHours'],
+  'root-recovery-confirm': ['requestId', 'newPassword'],
+  'root-recovery-veto': ['requestId'],
+  // 乙+校验器（单一密码）
+  'root-password-verify-ticket': ['password'],
+  'root-password-unify': ['oldPassword', 'newPassword'],
+  'root-password-unify-status': [],
   'system-set-badge': ['count'],
   'system-set-proxy': ['proxy'],
   'sys-exec': ['program', 'args', 'workdir'],

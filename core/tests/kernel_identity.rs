@@ -5,8 +5,18 @@ mod common;
 
 use serde_json::Value;
 use spark_core::kernel::{Kernel, KernelError};
+use spark_core::pw;
+use spark_core::storage::StorageBackend;
 
 use common::*;
+
+/// QR 恢复收敛（真实双 kernel + P2P）共享宿主机 P2P 端口/身份 seed，串行跑避免
+/// 撞资源与 dm 按 from 1s 限流窗口。全局互斥锁对 QR 收敛用例排他。
+static QR_CONV_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn qr_conv_guard() -> std::sync::MutexGuard<'static, ()> {
+    QR_CONV_SERIAL.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 // ---------------------------------------------------------------------------
 // 身份全流程：init → 重启 → unlock → update_profile → list → 备份/助记词恢复
@@ -179,6 +189,7 @@ fn identity_backup_and_mnemonic_recovery() {
 #[test]
 fn qr_backup_payload_compact_and_recoverable() {
     // 30KB 头像（data URL）：完整文件备份载荷远超 QR 约 3KB 上限
+    let _conv_guard = qr_conv_guard();
     let dir_a = tempfile::tempdir().unwrap();
     let mut kernel_a = fresh_kernel(dir_a.path());
     let avatar = format!("data:image/png;base64,{}", "A".repeat(30 * 1024));
@@ -186,6 +197,9 @@ fn qr_backup_payload_compact_and_recoverable() {
         .init_identity(PASSWORD, "小明", Some(&avatar))
         .unwrap();
     let (root_id, mnemonic) = (init.root_id, init.mnemonic);
+    // A 先起 p2p，使 QR 载荷携带本机节点名片（peerId + 地址），恢复端 B 扫码后可
+    // 自动配对（backup_payload_qr 仅 p2p 运行时附加 `p`,`a`）。
+    kernel_a.start_p2p().unwrap();
 
     let full = kernel_a.backup_payload().unwrap();
     assert!(full.len() > 3 * 1024, "完整载荷含头像，远超 QR 上限");
@@ -226,12 +240,169 @@ fn qr_backup_payload_compact_and_recoverable() {
     let err = kernel_b.recover_backup(&qr, "wrong-password").unwrap_err();
     assert_eq!(err.to_string(), "密码不正确");
     assert_eq!(kernel_b.recover_backup(&qr, PASSWORD).unwrap(), root_id);
-    // mnemonic/path 完整恢复（rootId 一致即派生路径一致）、昵称保留；
-    // QR 载荷剔除头像仅省容量，资料明文存储后经 profile-sync 从源设备找回。
+    // mnemonic/path 完整恢复（rootId 一致即派生路径一致）、昵称保留。
     assert_eq!(kernel_b.reveal_mnemonic(PASSWORD).unwrap(), mnemonic);
     let public = kernel_b.current_identity().unwrap().unwrap();
     assert_eq!(public.nickname.as_deref(), Some("小明"));
-    assert_eq!(public.avatar, Some(avatar), "profile-sync 应找回被剔除的头像");
+
+    // QR-F4 #1：载荷携带 pwv 生效——B 恢复后 pwv:self == A 的 V（changedAt 一致），
+    // 不得是 B 自建的 changedAt=恢复时刻 的分叉 V。
+    {
+        let as_ = kernel_a.__test_storage().unwrap();
+        let a_pwv = pw::get_pwv(&as_).unwrap().expect("A 有 V");
+        let bs = kernel_b.__test_storage().unwrap();
+        let b_pwv = pw::get_pwv(&bs).unwrap().expect("B 恢复后应有 V（载荷携带）");
+        assert_eq!(
+            b_pwv.changed_at, a_pwv.changed_at,
+            "B 恢复后 pwv.changedAt 必须 == A 的 V（载荷携带生效），不得为 B 自建分叉 V（当前 B changedAt={} A changedAt={}）",
+            b_pwv.changed_at, a_pwv.changed_at
+        );
+        assert_eq!(
+            pw::get_applied_vts(&bs).unwrap(),
+            a_pwv.changed_at,
+            "B 恢复后 applied 水位 == A 的 V changedAt（继承而非自建分叉）"
+        );
+    }
+
+    // ── 反熵收敛（architect-m3 §13.7）：同口令恢复不再断言「单轮同步即有头像」，
+    //    而是泵 pdsync 轮次直到 B 解出 profile 记录拿回头像。链路分段断言：
+    //    A 收 B ack → 锚推进（MAC 校验唯一证据）→ A 授权补发 ikey 包裹 →
+    //    B 刷新密钥（本机密钥表+effective）→ 此前跳过的 profile 记录重发 → 解密合入。
+    kernel_b.start_p2p().unwrap();
+    let a_peer = kernel_a.p2p_status().unwrap().unwrap().peer_id.unwrap();
+    let b_peer = kernel_b.p2p_status().unwrap().unwrap().peer_id.unwrap();
+
+    // B 恢复后 on_unlock 自动自锚+自动 ack；B 连接 A（QR 载荷含生成端地址，B 已配对）。
+    wait_until(
+        || kernel_b.p2p_status().unwrap().unwrap().connected_peers.iter().any(|p| *p == a_peer),
+        20_000,
+        "B 连接 A（QR 恢复配对）",
+    );
+    // A 也确认连到 B（双向握手完成）。
+    wait_until(
+        || kernel_a.p2p_status().unwrap().unwrap().connected_peers.iter().any(|p| *p == b_peer),
+        20_000,
+        "A 连接 B",
+    );
+    // 分段断言 1：A 侧锚推进到 pwv.changed_at（B 的 ack 经 MAC 校验被锚定的唯一直接证据）。
+    let pwv_changed = {
+        let s = kernel_a.__test_storage().unwrap();
+        pw::get_pwv(&s).unwrap().unwrap().changed_at
+    };
+    wait_until(
+        || {
+            let s = kernel_a.__test_storage().unwrap();
+            pw::get_last_verified_vts(&s, &b_peer).unwrap() == pwv_changed
+        },
+        90_000,
+        "A 锚推进：lastVerifiedVTs(B) == pwv.changed_at（ack MAC 校验通过）",
+    );
+
+    // 分段断言 2：A 授权补发 → A 侧出现 B 的 ikey 包裹（epoch 与 effective 一致）。
+    wait_until(
+        || {
+            let s = kernel_a.__test_storage().unwrap();
+            let eff = spark_core::epoch::get_effective(&s).unwrap();
+            if eff == 0 {
+                return false;
+            }
+            s.get(&spark_core::epoch::ikey_key(eff, &a_peer, &b_peer))
+                .unwrap()
+                .is_some()
+        },
+        90_000,
+        "A 授权补发 ikey 包裹",
+    );
+
+    // 分段断言 3：B 本机密钥表落 `p2p:epoch:key:{N}` + effective 推进。
+    wait_until(
+        || {
+            let s = kernel_b.__test_storage().unwrap();
+            let eff = spark_core::epoch::get_effective(&s).unwrap();
+            eff > 0 && spark_core::epoch::get_local_key(&s, eff).unwrap().is_some()
+        },
+        90_000,
+        "B 密钥表落表 + effective 推进",
+    );
+
+    // 最终收敛断言：B 解开此前跳过的 profile 记录，头像找回（泵轮次上限覆盖反熵周期）。
+    wait_until(
+        || {
+            kernel_b
+                .current_identity()
+                .unwrap()
+                .unwrap()
+                .avatar
+                .as_deref()
+                == Some(avatar.as_str())
+        },
+        90_000,
+        "B 反熵收敛：头像找回",
+    );
+    let converged = kernel_b.current_identity().unwrap().unwrap();
+    assert_eq!(converged.avatar, Some(avatar), "最终收敛后头像找回");
+    kernel_a.shutdown().unwrap();
+    kernel_b.shutdown().unwrap();
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// QR-F4 #2：旧版无 pwv QR 恢复兼容路径（§13.8）。
+// 构造不含 pwv 的旧版 QR → B 恢复后 has_v=false → 懒发布兜底自建 V → 首次与 A
+// 同步时水位 LWW 裁决（A 的 V 为权威）→ 收敛（头像找回）。覆盖旧 QR 兼容。
+// 断言目标语义：B 恢复后可解锁，但敏感数据面由 D′ 门控暂缓；经 LWW 收敛后
+// profile 解密、头像找回。
+// ───────────────────────────────────────────────────────────────────────────
+#[test]
+fn qr_backup_legacy_without_pwv_converges_via_lww() {
+    let _conv_guard = qr_conv_guard();
+    let dir_a = tempfile::tempdir().unwrap();
+    let mut kernel_a = fresh_kernel(dir_a.path());
+    let avatar = format!("data:image/png;base64,{}", "A".repeat(30 * 1024));
+    let init = kernel_a.init_identity(PASSWORD, "小明", Some(&avatar)).unwrap();
+    let (root_id, _mnemonic) = (init.root_id, init.mnemonic);
+    kernel_a.start_p2p().unwrap();
+    let qr = kernel_a.backup_payload_qr(PASSWORD).unwrap();
+
+    // 剥掉 `pwv` 字段 → 旧版 QR（无口令校验器注入）。
+    let mut wrapper: Value = serde_json::from_str(&qr).unwrap();
+    wrapper.as_object_mut().unwrap().remove("pwv");
+    let legacy_qr = wrapper.to_string();
+
+    // B 用旧版 QR 恢复 → has_v=false（载荷未携带 V）→ 懒发布兜底自建 V。
+    let dir_b = tempfile::tempdir().unwrap();
+    let mut kernel_b = fresh_kernel(dir_b.path());
+    assert_eq!(kernel_b.recover_backup(&legacy_qr, PASSWORD).unwrap(), root_id);
+    kernel_b.start_p2p().unwrap();
+    let a_peer = kernel_a.p2p_status().unwrap().unwrap().peer_id.unwrap();
+    let b_peer = kernel_b.p2p_status().unwrap().unwrap().peer_id.unwrap();
+
+    wait_until(
+        || kernel_b.p2p_status().unwrap().unwrap().connected_peers.iter().any(|p| *p == a_peer),
+        20_000,
+        "旧版 QR：B 连接 A",
+    );
+    wait_until(
+        || kernel_a.p2p_status().unwrap().unwrap().connected_peers.iter().any(|p| *p == b_peer),
+        20_000,
+        "旧版 QR：A 连接 B",
+    );
+
+    // LWW 收敛：泵轮次直到 B 头像找回（A 的 V 为权威，覆盖 B 自建分叉 V）。
+    wait_until(
+        || {
+            kernel_b
+                .current_identity()
+                .unwrap()
+                .unwrap()
+                .avatar
+                .as_deref()
+                == Some(avatar.as_str())
+        },
+        30_000,
+        "旧版 QR：LWW 收敛后头像找回",
+    );
+    let converged = kernel_b.current_identity().unwrap().unwrap();
+    assert_eq!(converged.avatar, Some(avatar), "旧版无 pwv QR 经 LWW 收敛后头像找回");
     kernel_a.shutdown().unwrap();
     kernel_b.shutdown().unwrap();
 }
@@ -243,7 +414,11 @@ fn qr_backup_payload_without_avatar_under_1kb() {
     let mut kernel = fresh_kernel(dir.path());
     init_identity(&mut kernel);
     let qr = kernel.backup_payload_qr(PASSWORD).unwrap();
-    assert!(qr.len() < 1024, "无头像紧凑载荷 <1KB（实测 {}B）", qr.len());
+    assert!(
+        qr.len() < 2 * 1024,
+        "无头像紧凑载荷 <2KB（实测 {}B；QR-F1 注入 pwv 后超 1KB，architect-m3 预算 <3KB）",
+        qr.len()
+    );
     eprintln!("[qr-backup] 紧凑载荷（无头像身份）{}B", qr.len());
     kernel.shutdown().unwrap();
 }

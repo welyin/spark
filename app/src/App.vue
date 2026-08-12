@@ -243,6 +243,8 @@ import { currentPage, popPage, resetStack } from './stores/mobile-nav';
 import { hasOverlay, requestCloseOverlay } from './stores/overlay-stack';
 import { requestOpenSystemSection } from './stores/pending-system-section';
 import { handleDeviceNotice, hydrateDeviceNotices } from './stores/device-notices';
+import { handleRecoveryP2pEvent, hydrateRecovery } from './stores/recovery';
+import { handlePasswordUnifyEvent, hydratePasswordUnify } from './stores/password-unify';
 import { useUpdaterReadyPrompt } from './components/updater/use-updater';
 import { lockAndReload } from './utils/identity-lock';
 import MessagesPage from './pages/MessagesPage.vue';
@@ -500,6 +502,10 @@ export default defineComponent({
         refreshOrgIdentity();
         // M1 新设备通知：水合当前身份的待看通知（重启后红点恢复）
         hydrateDeviceNotices(currentUser.rootId ?? '');
+        // M5 延迟恢复：水合本机 pending + 持久化的 inbound
+        hydrateRecovery(currentUser.rootId ?? '');
+        // 乙+校验器：水合本机 pendingUnify 状态
+        hydratePasswordUnify(currentUser.rootId ?? '');
       });
       // 懒校验启动恢复的组织空间：组织已不存在时回退个人空间
       void validateCurrentSpace();
@@ -541,6 +547,21 @@ export default defineComponent({
               refreshProfileExtraFromKernel(`${currentUser.rootId}@${currentSpace.value.orgId}`);
             }
           });
+          return;
+        }
+        // M5 延迟恢复：他机发起/否决/提交时刷新本地状态
+        if (event.kind === 'RecoveryUpdated') {
+          handleRecoveryP2pEvent(currentUser.rootId ?? '', event.data);
+          return;
+        }
+        // 乙+校验器：密码改密/重置/统一完成/水位外事件
+        if (
+          event.kind === 'PasswordChangeObserved' ||
+          event.kind === 'PasswordUnificationDone' ||
+          event.kind === 'DeviceOutOfGrace'
+        ) {
+          handlePasswordUnifyEvent(currentUser.rootId ?? '', event);
+          return;
         }
       }).then((un) => unlistenP2p.push(un)).catch(() => {});
     });

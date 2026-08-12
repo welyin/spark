@@ -80,6 +80,18 @@ pub enum Confidentiality {
     Encrypted,
 }
 
+/// 敏感轴（M3，personal scope 专有）：决定是否用 epoch 包裹加密。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Sensitivity {
+    /// 普通（缺省）：明文同步。
+    #[default]
+    #[serde(rename = "normal")]
+    Normal,
+    /// 敏感：pdsync 推送前用当前 effective epoch 密钥加密。
+    #[serde(rename = "sensitive")]
+    Sensitive,
+}
+
 /// 合并规则（三档封顶，不开放自定义合并函数）。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MergeRule {
@@ -121,6 +133,9 @@ pub struct CollectionDeclaration {
     /// 保密轴（O2a，org scope 专有；personal scope 忽略）。
     #[serde(default)]
     pub confidentiality: Confidentiality,
+    /// 敏感轴（M3，personal scope 专有；org scope 忽略）。
+    #[serde(default)]
+    pub sensitivity: Sensitivity,
     /// 合并规则。
     #[serde(default)]
     pub merge: MergeRule,
@@ -206,6 +221,11 @@ impl CollectionDeclaration {
             Devices::PcOnly => device_class == "pc",
             Devices::MobileOnly => device_class == "mobile",
         }
+    }
+
+    /// 该集合是否敏感（M3 epoch 加密）。
+    pub fn is_sensitive(&self) -> bool {
+        self.sensitivity == Sensitivity::Sensitive
     }
 }
 
@@ -383,6 +403,8 @@ pub struct DeclareInput {
     pub devices: Option<Devices>,
     /// 保密轴（O2a，org scope 专有；缺省 filtered）。
     pub confidentiality: Option<Confidentiality>,
+    /// 敏感轴（M3，personal scope 专有；缺省 normal）。
+    pub sensitivity: Option<Sensitivity>,
     /// 合并规则（缺省 lww-record）。
     pub merge: Option<MergeRule>,
     /// 声明者 rootId（org scope 用）。
@@ -427,6 +449,7 @@ pub fn declare<S: StorageBackend>(
     let space = input.space.unwrap_or(Space::Personal);
     let accounts = input.accounts.unwrap_or_default();
     let confidentiality = input.confidentiality.unwrap_or_default();
+    let sensitivity = input.sensitivity.unwrap_or_default();
     let scope = input.scope.unwrap_or_default();
 
     // ── org 轴校验 ──
@@ -438,6 +461,12 @@ pub fn declare<S: StorageBackend>(
             {
                 return Err(PlugindataError::DeclarationConflict(
                     "encrypted requires accounts: data-accounts, not all-members".to_string(),
+                ));
+            }
+            // sensitivity 仅在 personal 空间可用
+            if sensitivity != Sensitivity::default() {
+                return Err(PlugindataError::DeclarationConflict(
+                    "sensitivity is only valid in personal space".to_string(),
                 ));
             }
             // scope:local 忽略 accounts/devices/confidentiality（不驻留他端，无意义）
@@ -476,6 +505,7 @@ pub fn declare<S: StorageBackend>(
         accounts,
         devices: input.devices.unwrap_or_default(),
         confidentiality,
+        sensitivity,
         merge: input.merge.unwrap_or_default(),
         declared_at: now_ms,
         declared_by: input.declared_by,
@@ -566,6 +596,7 @@ pub fn declare_builtin_org_collections<S: StorageBackend>(
             accounts: Accounts::AllMembers,
             devices: Devices::All,
             confidentiality: Confidentiality::Filtered,
+            sensitivity: Sensitivity::default(),
             merge: builtin.merge(),
             declared_at: now_ms,
             declared_by: Some(declared_by.to_string()),

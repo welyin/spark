@@ -237,8 +237,20 @@ impl Kernel {
                 let _ = tx.send(event);
             }
         });
-        self.p2p = Some(node);
+        self.p2p = Some(node.clone());
         self.p2p_started_at = Some(system_now_ms());
+
+        // M3：p2p 启动成功后若 epoch 状态完全缺失，做 init 轮换（幂等）。
+        if let Err(e) = crate::kernel::epoch_ops::maybe_init_epoch_state(self) {
+            log::error!("[start-p2p] epoch init failed: {e}");
+            let _ = crate::device::DeviceService::append_security_log(
+                self.require_storage_mut()?,
+                "rotation_failed",
+                serde_json::json!({"reason": "init", "error": format!("{e}")}),
+                system_now_ms(),
+            );
+        }
+
         self.p2p_pump = Some(pump);
         self.org_sync_worker = Some(worker);
         self.org_sync_tx = Some(org_sync_tx);
@@ -249,13 +261,32 @@ impl Kernel {
         let now = system_now_ms();
         if let Ok(mut storage) = self.require_storage().map(|s| s.clone()) {
             let node_id = self.sync_node_id();
+            let device_pub_key = Some(node.device_pub_key().to_string())
+                .filter(|s| !s.is_empty());
             if let Ok(record) = crate::device::DeviceService::upsert_self(
                 &mut storage,
                 &peer_id,
                 now,
                 &node_id,
                 &self.config.app_version,
+                device_pub_key,
             ) {
+                if let Ok(root_id) = self.require_unlocked_root_id() {
+                    let kverify = crate::kernel::pw_ops::derive_session_kverify(self)
+                        .ok()
+                        .flatten();
+                    let _ = crate::epoch::EpochService::maybe_grant_epoch_key(
+                        &mut storage,
+                        &root_id,
+                        &node_id,
+                        &node_id,
+                        now,
+                        &record.peer_id,
+                        record.device_pub_key.as_deref(),
+                        record.revoked_at,
+                        kverify.as_ref(),
+                    );
+                }
                 if let Ok(data) = serde_json::to_value(&record) {
                     let _ = self.event_tx.send(P2pEvent::DeviceUpdated(data));
                 }

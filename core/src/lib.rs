@@ -7,6 +7,7 @@ pub mod contact;
 #[path = "data-mgmt/mod.rs"]
 pub mod data_mgmt;
 pub mod device;
+pub mod epoch;
 pub mod evidence;
 pub mod kernel;
 pub mod log_bridge;
@@ -15,6 +16,8 @@ pub mod org;
 pub mod p2p;
 pub mod plugin;
 pub mod plugindata;
+pub mod pw;
+pub mod recovery;
 pub mod schema;
 pub mod storage;
 pub mod sync;

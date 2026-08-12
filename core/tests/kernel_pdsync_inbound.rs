@@ -21,10 +21,12 @@ use spark_core::message::{
     MessageType, app_conversation_id, app_message_key, message_id_index_key, message_key,
 };
 use spark_core::p2p::P2pEvent;
+use spark_core::pw::{self, build_ack, build_value, derive_kverify};
 use spark_core::storage::{MemoryStorage, StorageBackend};
 use spark_core::sync::meta::DocMeta;
 use spark_core::sync::pdsync::{PdsyncRecord, build_data_batch, build_hello, self_friend_key};
 use spark_core::sync::{get_personal_meta, is_tombstone};
+use spark_core::epoch::{put_effective, put_local_key};
 
 const PERSONAL: &str = "personal";
 const NOW: i64 = 1_720_000_000_000;
@@ -71,6 +73,19 @@ fn deliver_pdsync_data(
     category: &str,
     records: &[PdsyncRecord],
 ) -> spark_core::kernel::InboundDmResult {
+    deliver_pdsync_data_kv(storage, key, my_root, category, records, None)
+}
+
+/// 带解锁会话 kverify 注入的投递：M3 ack 批尾钩子（§13.4 钩子①）要求
+/// `ctx.kverify` 在场才逐条 `verify_and_anchor_ack`（锁定态 kverify=None）。
+fn deliver_pdsync_data_kv(
+    storage: &mut MemoryStorage,
+    key: &SigningKey,
+    my_root: &str,
+    category: &str,
+    records: &[PdsyncRecord],
+    kverify: Option<&[u8; 32]>,
+) -> spark_core::kernel::InboundDmResult {
     let body = build_data_batch(category, records, 0, 1);
     let envelope = dm_envelope::build_envelope(
         dm_envelope::KIND_PDSYNC_DATA,
@@ -80,7 +95,7 @@ fn deliver_pdsync_data(
         body,
         key,
     );
-    handle_inbound_dm(storage, my_root, "我", envelope, "peer-self-b", &HashSet::new(), NOW, NODE)
+    handle_inbound_dm(storage, my_root, "我", envelope, "peer-self-b", &HashSet::new(), NOW, NODE, kverify)
         .unwrap()
 }
 
@@ -385,8 +400,7 @@ fn pdsync_hello_window_exchange_delivers_item_and_app() {
         "peer-self-b",
         &HashSet::new(),
         now,
-        NODE,
-    )
+        NODE, None)
     .unwrap();
     assert!(
         !hello_result.pdsync_out.is_empty(),
@@ -420,8 +434,7 @@ fn pdsync_hello_window_exchange_delivers_item_and_app() {
             "peer-self-b",
             &HashSet::new(),
             now,
-            NODE,
-        )
+            NODE, None)
         .unwrap();
         assert_eq!(
             r.response,
@@ -482,8 +495,7 @@ fn pdsync_inbound_chat_bumps_conv_pmeta() {
         "peer-self-b",
         &HashSet::new(),
         now,
-        NODE,
-    )
+        NODE, None)
     .unwrap();
     assert_eq!(r.response, json!({ "ok": true }));
 
@@ -537,6 +549,141 @@ fn pdsync_conv_tombstone_deletes_record() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// M3 发送侧加密（team-lead 统一回归 c）：hello P4 分支推送消息窗口
+// msg:item/msg:app 记录时，若对端 hello 宣告 epoch>0 且本机有效，value 必须为
+// ikey 密文（`$enc:"ikey"`），不得明文外泄消息内容。
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pdsync_hello_window_push_encrypts_msg_records_when_remote_epoch_announced() {
+    let now = real_now_ms();
+    let mut sender = MemoryStorage::new();
+    let (key, my_root) = self_identity(1);
+    let (_, peer_root) = self_identity(7);
+    let conv_id = direct_conversation_id(&peer_root);
+
+    // 普通消息 + 应用消息（同基线用例）。
+    MessageService::upsert_conversation(&mut sender, PERSONAL, &conv_record(&conv_id, &peer_root))
+        .unwrap();
+    let item_msg = MessageRecord {
+        id: "enc1".to_string(),
+        sender_id: my_root.clone(),
+        sender_name: "我".to_string(),
+        msg_type: MessageType::Text,
+        content: "必须加密的窗口消息".to_string(),
+        created_at: now,
+        ..Default::default()
+    };
+    let item_key = message_key(PERSONAL, &conv_id, now, "enc1");
+    sender
+        .put(&item_key, &serde_json::to_string(&item_msg).unwrap())
+        .unwrap();
+
+    let app_conv_id = app_conversation_id("notes");
+    MessageService::upsert_conversation(
+        &mut sender,
+        PERSONAL,
+        &conv_record(&app_conv_id, &peer_root),
+    )
+    .unwrap();
+    let app_msg = AppMessageRecord {
+        id: "enca1".to_string(),
+        plugin_id: "notes".to_string(),
+        summary: "应用消息摘要须加密".to_string(),
+        payload: json!({ "summary": "应用消息摘要须加密" }),
+        card: None,
+        created_at: now,
+        status: "local".to_string(),
+        read: false,
+    };
+    let app_key = app_message_key(PERSONAL, "notes", now, "enca1");
+    sender
+        .put(&app_key, &serde_json::to_string(&app_msg).unwrap())
+        .unwrap();
+
+    // 发送侧 epoch1 生效：本机密钥表 + effective 键。
+    let epoch1_key: [u8; 32] = [0x47; 32];
+    put_local_key(&mut sender, 1, &epoch1_key).unwrap();
+    put_effective(&mut sender, 1).unwrap();
+    assert_eq!(spark_core::epoch::get_effective(&sender).unwrap(), 1, "前置 effective=1");
+
+    // 对端 hello 宣告 epoch=1（其已生效 epoch1）→ 发送侧按 min(1,1)=1 加密窗口记录。
+    let hello_body = json!({
+        "categories": {},
+        "msgWindow": { "maxAgeMs": 86_400_000i64, "maxPerConv": 500 },
+        "attachmentPolicy": "eager",
+        "epoch": 1,
+    });
+    let hello_env = dm_envelope::build_envelope(
+        dm_envelope::KIND_PDSYNC_HELLO,
+        &my_root,
+        &my_root,
+        now,
+        hello_body,
+        &key,
+    );
+    let hello_result = handle_inbound_dm(
+        &mut sender,
+        &my_root,
+        "我",
+        hello_env,
+        "peer-self-b",
+        &HashSet::new(),
+        now,
+        NODE, None)
+    .unwrap();
+    assert!(!hello_result.pdsync_out.is_empty(), "hello 应触发消息窗口 data 推送");
+
+    // 逐个 data 批次检查：msg:item / msg:app 记录 value 为 ikey 密文，且不含明文内容。
+    let mut saw_item_batch = false;
+    let mut saw_app_batch = false;
+    for out in &hello_result.pdsync_out {
+        let body = out.body().clone();
+        let category = match body.get("category").and_then(serde_json::Value::as_str) {
+            Some(c) => c,
+            None => continue, // 非 data 输出（如 need）跳过
+        };
+        if category != "msg:item" && category != "msg:app" {
+            continue;
+        }
+        let records = body
+            .get("records")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(!records.is_empty(), "批次 {category} 应有记录");
+        for rec in &records {
+            let value = rec.get("value").unwrap_or(&json!(null));
+            assert!(
+                spark_core::epoch::is_ikey_ciphertext(value),
+                "{category} 记录 value 应为 ikey 密文，实为 {value}"
+            );
+            assert_eq!(
+                value.get("epoch").and_then(serde_json::Value::as_u64),
+                Some(1),
+                "{category} 密文 epoch 应为 1"
+            );
+            // 明文内容不得泄露进密文信封外层。
+            let outer = serde_json::to_string(value).unwrap();
+            assert!(
+                !outer.contains("必须加密") && !outer.contains("应用消息摘要"),
+                "{category} 密文外层不得含明文内容"
+            );
+        }
+        if category == "msg:item" {
+            saw_item_batch = true;
+        }
+        if category == "msg:app" {
+            saw_app_batch = true;
+        }
+    }
+    assert!(
+        saw_item_batch && saw_app_batch,
+        "msg:item 与 msg:app 均应以密文推送"
+    );
+}
+
 // ── 自 FriendRecord 排除（`ct:friend:{rootId}`，设备相对 peer 不可互灌）──
 
 /// 带 peer 寻址的朋友记录（自记录：rootId == 本机、peer 指向对端设备）。
@@ -574,7 +721,7 @@ fn deliver_pdsync(
     node: &str,
 ) -> spark_core::kernel::InboundDmResult {
     let envelope = dm_envelope::build_envelope(kind, my_root, my_root, NOW, body, key);
-    handle_inbound_dm(storage, my_root, "我", envelope, "peer-self-other", &HashSet::new(), NOW, node)
+    handle_inbound_dm(storage, my_root, "我", envelope, "peer-self-other", &HashSet::new(), NOW, node, None)
         .unwrap()
 }
 
@@ -871,8 +1018,7 @@ fn self_friend_request_with_self_pointing_peer_is_rejected() {
         "peer-self-other",
         &HashSet::new(),
         NOW,
-        NODE,
-    )
+        NODE, None)
     .unwrap();
     assert_eq!(result.response["ok"], true, "自指请求仍正常应答 ok");
 
@@ -939,4 +1085,631 @@ fn pdsync_self_conv_merge_preserves_local_peer() {
         "自聊会话 peer 保留本地值（设备相对寻址不可互灌）"
     );
     assert_eq!(stored.pinned_at, 123, "其余同步字段正常合入");
+}
+
+// ---------------------------------------------------------------------------
+// R1 need 路径端到端加密（team-lead 统一回归 a）。
+//   Part 1：双设备 A/B（同 root，均 epoch1 持密钥）→ A 改数据 → B 发 need →
+//           A need 响应 value 为 ikey 密文（非明文）→ B 用本机 epoch1 密钥解开合入。
+//   Part 2：被撤销设备 C（无 epoch2 密钥）向不知情设备 D 发 need → D 响应值用
+//           epoch2 加密 → C 解不开 → 记录不落库（R1 攻击路径锁死）。
+// ---------------------------------------------------------------------------
+
+#[test]
+fn need_path_encryption_end_to_end_and_revoked_cannot_decrypt() {
+    let (key, my_root) = self_identity(1);
+
+    // ── Part 1：need 响应加密 + 接收方解密合入 ──────────────────────────
+    let mut a = MemoryStorage::new(); // A：有数据
+    let mut b = MemoryStorage::new(); // B：发起 need
+
+    // A/B 均 epoch1 生效 + 本机 epoch1 密钥。
+    let epoch1_key: [u8; 32] = [0x61; 32];
+    put_effective(&mut a, 1).unwrap();
+    put_local_key(&mut a, 1, &epoch1_key).unwrap();
+    put_effective(&mut b, 1).unwrap();
+    put_local_key(&mut b, 1, &epoch1_key).unwrap();
+
+    // A 写一条朋友数据（pdsync 记账，collect_incremental 可采集）。
+    let (_, friend_root) = self_identity(9);
+    spark_core::sync::put_personal(
+        &mut a,
+        "node-a",
+        &format!("ct:friend:{friend_root}"),
+        &serde_json::to_string(&friend_record_with_peer(&friend_root, "peer-x")).unwrap(),
+        NOW,
+    )
+    .unwrap();
+    // A 已知 B 的生效 epoch=1（B 此前 hello 宣告；need body 不携带 epoch）。
+    spark_core::sync::pdsync::set_remote_epoch(&mut a, "peer-self-other", 1).unwrap();
+
+    // B 发 need：对 ct:friend 一无所知（knownVv 空）→ A 全量响应。
+    let need_body = json!({ "category": "ct:friend", "knownVv": {}, "dlogAck": 0 });
+    let r = deliver_pdsync(&mut a, &key, &my_root, dm_envelope::KIND_PDSYNC_NEED, need_body, "node-b");
+    assert_eq!(r.response, json!({ "ok": true }));
+
+    // A 的响应批次：恰好一个 Data，记录 value 为 ikey 密文、外层不含明文。
+    let mut cipher_records: Vec<(String, serde_json::Value)> = Vec::new();
+    for out in &r.pdsync_out {
+        let body = out.body().clone();
+        assert_eq!(
+            body.get("category").and_then(serde_json::Value::as_str),
+            Some("ct:friend"),
+            "need 响应应为 ct:friend data"
+        );
+        for rec in body
+            .get("records")
+            .and_then(serde_json::Value::as_array)
+            .unwrap_or(&Vec::new())
+        {
+            let key_ = rec.get("key").and_then(serde_json::Value::as_str).unwrap().to_string();
+            let value = rec.get("value").cloned().unwrap_or(json!(null));
+            assert!(
+                spark_core::epoch::is_ikey_ciphertext(&value),
+                "need 响应 value 应为 ikey 密文，实为 {value}"
+            );
+            assert_eq!(
+                value.get("epoch").and_then(serde_json::Value::as_u64),
+                Some(1),
+                "need 响应密文 epoch=1"
+            );
+            assert!(
+                !serde_json::to_string(&value).unwrap().contains("nickname"),
+                "密文外层不得含明文"
+            );
+            cipher_records.push((key_, value));
+        }
+    }
+    assert_eq!(cipher_records.len(), 1, "A 应推回 1 条加密朋友记录");
+
+    // A 的 data 响应送达 B：B 有 epoch1 密钥 → 解开 → 合入。
+    let data_body = json!({
+        "category": "ct:friend",
+        "records": cipher_records
+            .iter()
+            .map(|(k, v)| json!({ "key": k, "value": v, "meta": remote_meta("node-a", 1, NOW) }))
+            .collect::<Vec<_>>(),
+        "batchSeq": 0,
+        "batchTotal": 1,
+    });
+    let r2 = deliver_pdsync(&mut b, &key, &my_root, dm_envelope::KIND_PDSYNC_DATA, data_body, "node-b");
+    assert_eq!(r2.response, json!({ "ok": true }), "B 应接受并合入 need 响应");
+    let stored = ContactService::get_friend(&b, &friend_root).unwrap().expect("B 解开后合入朋友");
+    assert_eq!(
+        stored.peer.map(|p| p.peer_id).as_deref(),
+        Some("peer-x"),
+        "B 解开 epoch1 密文后合入的朋友 peer 正确"
+    );
+
+    // ── Part 2：被撤销 C 向不知情 D 发 need → D 用 epoch2 加密 → C 解不开 ──
+    let mut c = MemoryStorage::new(); // C：被撤销，无 epoch2 密钥
+    let mut d = MemoryStorage::new(); // D：不知情，epoch2 生效
+
+    // D epoch2 生效 + 持 epoch2 密钥。
+    let epoch2_key: [u8; 32] = [0x62; 32];
+    put_effective(&mut d, 2).unwrap();
+    put_local_key(&mut d, 2, &epoch2_key).unwrap();
+    // C 无任何本机密钥、effective=0（被撤销后密钥被清）。
+    assert_eq!(spark_core::epoch::get_effective(&c).unwrap(), 0);
+
+    // D 写一条 epoch2 加密的新朋友数据。
+    let (_, friend_y) = self_identity(10);
+    spark_core::sync::put_personal(
+        &mut d,
+        "node-d",
+        &format!("ct:friend:{friend_y}"),
+        &serde_json::to_string(&friend_record_with_peer(&friend_y, "peer-y")).unwrap(),
+        NOW,
+    )
+    .unwrap();
+    // D 认为 C 的生效 epoch=2（C 撤销前宣告过 epoch2——R1 攻击：D 不知情）。
+    spark_core::sync::pdsync::set_remote_epoch(&mut d, "peer-self-other", 2).unwrap();
+
+    // C 向 D 发 need。
+    let need_c = json!({ "category": "ct:friend", "knownVv": {}, "dlogAck": 0 });
+    let rd = deliver_pdsync(&mut d, &key, &my_root, dm_envelope::KIND_PDSYNC_NEED, need_c, "node-d");
+    assert_eq!(rd.response, json!({ "ok": true }));
+
+    // D 的响应：epoch2 密文。
+    let mut d_ciphers: Vec<(String, serde_json::Value)> = Vec::new();
+    for out in &rd.pdsync_out {
+        for rec in out
+            .body()
+            .get("records")
+            .and_then(serde_json::Value::as_array)
+            .unwrap_or(&Vec::new())
+        {
+            let key_ = rec.get("key").and_then(serde_json::Value::as_str).unwrap().to_string();
+            let value = rec.get("value").cloned().unwrap_or(json!(null));
+            assert!(spark_core::epoch::is_ikey_ciphertext(&value), "D 响应应为 epoch2 密文");
+            assert_eq!(value.get("epoch").and_then(serde_json::Value::as_u64), Some(2));
+            d_ciphers.push((key_, value));
+        }
+    }
+    assert_eq!(d_ciphers.len(), 1, "D 应推回 1 条 epoch2 密文");
+
+    // D 的 data 送达 C：C 无 epoch2 密钥 → 解不开 → 记录不落库（R1 锁死）。
+    let data_c = json!({
+        "category": "ct:friend",
+        "records": d_ciphers
+            .iter()
+            .map(|(k, v)| json!({ "key": k, "value": v, "meta": remote_meta("node-d", 1, NOW) }))
+            .collect::<Vec<_>>(),
+        "batchSeq": 0,
+        "batchTotal": 1,
+    });
+    let rc = deliver_pdsync(&mut c, &key, &my_root, dm_envelope::KIND_PDSYNC_DATA, data_c, "node-c");
+    assert_eq!(rc.response, json!({ "ok": true }), "C 解不开也应 ok（不解不推进）");
+    assert!(
+        ContactService::get_friend(&c, &friend_y).unwrap().is_none(),
+        "C 无 epoch2 密钥不得合入新数据（R1 攻击路径锁死）"
+    );
+    assert!(
+        c.get(&format!("ct:friend:{friend_y}")).unwrap().is_none(),
+        "C 库中无此记录"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// R4 回归（team-lead 统一回归 ②）：epoch 生效下 Normal pdoc 明文照推。
+// 对端宣告 epoch>0、pdoc 声明为 Normal（无 sensitivity）→ 推送 value 为明文
+// （非 `$enc`）且记录包含在批次中（不得被 Skip 丢弃，否则插件数据停止同步）。
+// 该用例是 R4 修复（classify_pdoc Normal→Plain）的端到端验收。
+// ---------------------------------------------------------------------------
+
+#[test]
+fn epoch_active_normal_pdoc_pushed_as_plaintext_end_to_end() {
+    let now = real_now_ms();
+    let mut sender = MemoryStorage::new();
+    let (key, my_root) = self_identity(1);
+
+    // 插件集合声明：Normal（缺省 sensitivity，非 sensitive）。
+    sender
+        .put(
+            "pdecl:notes@v1",
+            &json!({
+                "name": "notes",
+                "version": "v1",
+                "collections": []
+            })
+            .to_string(),
+        )
+        .unwrap();
+    // 一条 Normal 插件数据记录（pdsync 记账，可采集）。
+    spark_core::sync::put_personal(
+        &mut sender,
+        NODE,
+        "pdoc:notes@v1:doc-1",
+        &json!({ "title": "普通笔记", "body": "明文内容" }).to_string(),
+        now,
+    )
+    .unwrap();
+
+    // 发送侧 epoch1 生效。
+    let epoch1_key: [u8; 32] = [0x73; 32];
+    put_local_key(&mut sender, 1, &epoch1_key).unwrap();
+    put_effective(&mut sender, 1).unwrap();
+    assert_eq!(spark_core::epoch::get_effective(&sender).unwrap(), 1, "前置 effective=1");
+
+    // 对端 hello 宣告 epoch=1 → P4 消息窗口/数据推。
+    let hello_body = json!({
+        "categories": {},
+        "msgWindow": { "maxAgeMs": 86_400_000i64, "maxPerConv": 500 },
+        "attachmentPolicy": "eager",
+        "epoch": 1,
+    });
+    let hello_env = dm_envelope::build_envelope(
+        dm_envelope::KIND_PDSYNC_HELLO,
+        &my_root,
+        &my_root,
+        now,
+        hello_body,
+        &key,
+    );
+    let hello_result = handle_inbound_dm(
+        &mut sender,
+        &my_root,
+        "我",
+        hello_env,
+        "peer-self-b",
+        &HashSet::new(),
+        now,
+        NODE, None)
+    .unwrap();
+    assert!(!hello_result.pdsync_out.is_empty(), "hello 应触发 pdoc 推送");
+
+    // 收集 pdoc 批次的记录：Normal pdoc → 明文照推（value 非 $enc），且含在批次内。
+    let mut saw_pdoc = false;
+    for out in &hello_result.pdsync_out {
+        let body = out.body().clone();
+        if body.get("category").and_then(serde_json::Value::as_str) != Some("pdoc") {
+            continue;
+        }
+        let records = body
+            .get("records")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        for rec in &records {
+            let rec_key = rec.get("key").and_then(serde_json::Value::as_str).unwrap_or("");
+            if rec_key != "pdoc:notes@v1:doc-1" {
+                continue;
+            }
+            saw_pdoc = true;
+            let value = rec.get("value").cloned().unwrap_or(json!(null));
+            assert!(
+                !spark_core::epoch::is_ikey_ciphertext(&value),
+                "Normal pdoc 应明文照推（非 $enc 密文），实为 {value}"
+            );
+            assert_eq!(
+                value.get("title").and_then(serde_json::Value::as_str),
+                Some("普通笔记"),
+                "Normal pdoc 明文 value 完整可读"
+            );
+        }
+    }
+    assert!(
+        saw_pdoc,
+        "Normal pdoc 记录必须被推送（明文），不得被 Skip 丢弃——R4 回归"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// R4 回归（team-lead 统一回归 ③ 边角一）：effective>0 但本机无该 epoch 密钥 →
+// Encrypt 类记录不得明文泄漏（Skip），Normal pdoc（Plain）仍明文照推。
+// 触发：有效 effective 但未 put_local_key，hello 宣告 epoch>0。
+// ---------------------------------------------------------------------------
+
+#[test]
+fn encrypt_record_skipped_when_effective_key_missing_but_plain_pushed() {
+    let now = real_now_ms();
+    let mut sender = MemoryStorage::new();
+    let (key, my_root) = self_identity(1);
+
+    // Normal pdoc 声明 + 数据。
+    sender
+        .put(
+            "pdecl:notes@v1",
+            &json!({ "name": "notes", "version": "v1", "collections": [] }).to_string(),
+        )
+        .unwrap();
+    spark_core::sync::put_personal(
+        &mut sender,
+        NODE,
+        "pdoc:notes@v1:doc-1",
+        &json!({ "title": "普通笔记" }).to_string(),
+        now,
+    )
+    .unwrap();
+    // Encrypt 类记录：msg:item。
+    let (_, peer_root) = self_identity(7);
+    let conv_id = direct_conversation_id(&peer_root);
+    MessageService::upsert_conversation(&mut sender, PERSONAL, &conv_record(&conv_id, &peer_root))
+        .unwrap();
+    let item_msg = MessageRecord {
+        id: "enc-missing-key".to_string(),
+        sender_id: my_root.clone(),
+        sender_name: "我".to_string(),
+        msg_type: MessageType::Text,
+        content: "密钥缺失不得明文外泄".to_string(),
+        created_at: now,
+        ..Default::default()
+    };
+    let item_key = message_key(PERSONAL, &conv_id, now, "enc-missing-key");
+    sender
+        .put(&item_key, &serde_json::to_string(&item_msg).unwrap())
+        .unwrap();
+
+    // effective=1 但未 put_local_key（密钥缺失）→ encrypt_records_for_push 的
+    // get_local_key None 分支：宁可整批不推也不明文泄漏（fail-closed 整批丢弃）。
+    put_effective(&mut sender, 1).unwrap();
+    assert_eq!(spark_core::epoch::get_effective(&sender).unwrap(), 1);
+
+    let hello_body = json!({
+        "categories": {},
+        "msgWindow": { "maxAgeMs": 86_400_000i64, "maxPerConv": 500 },
+        "attachmentPolicy": "eager",
+        "epoch": 1,
+    });
+    let hello_env = dm_envelope::build_envelope(
+        dm_envelope::KIND_PDSYNC_HELLO,
+        &my_root,
+        &my_root,
+        now,
+        hello_body,
+        &key,
+    );
+    let result = handle_inbound_dm(
+        &mut sender,
+        &my_root,
+        "我",
+        hello_env,
+        "peer-self-b",
+        &HashSet::new(),
+        now,
+        NODE, None)
+    .unwrap();
+
+    // 密钥缺失 → Encrypt 类记录不得明文外泄：msg:item 不出现在任何 data 批次。
+    for out in &result.pdsync_out {
+        let body = out.body().clone();
+        let records = body
+            .get("records")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        for rec in &records {
+            let rec_key = rec.get("key").and_then(serde_json::Value::as_str).unwrap_or("");
+            assert_ne!(
+                rec_key, item_key,
+                "Encrypt 类记录密钥缺失不得明文外泄（整批 fail-closed 丢弃），实为 {rec_key}"
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// R4 回归（team-lead 统一回归 ③ 边角二）：encrypt_records_for_push classify
+// Err → Skip。触发：pdecl 存在但 JSON 损坏 → classify_pdoc 返回 Err → 该 pdoc
+// 记录被跳过不推（宁可少推不泄露）。
+// ---------------------------------------------------------------------------
+
+#[test]
+fn malformed_pdecl_classify_error_skips_pdoc_record() {
+    let now = real_now_ms();
+    let mut sender = MemoryStorage::new();
+    let (key, my_root) = self_identity(1);
+
+    // 损坏的 pdecl（非法 JSON）→ classify_pdoc 解析 Err。
+    sender.put("pdecl:broken@v1", "{ not-valid-json }").unwrap();
+    spark_core::sync::put_personal(
+        &mut sender,
+        NODE,
+        "pdoc:broken@v1:doc-x",
+        &json!({ "title": "不应外泄" }).to_string(),
+        now,
+    )
+    .unwrap();
+
+    put_effective(&mut sender, 1).unwrap();
+    let epoch1_key: [u8; 32] = [0x74; 32];
+    put_local_key(&mut sender, 1, &epoch1_key).unwrap();
+
+    let hello_body = json!({
+        "categories": {},
+        "msgWindow": { "maxAgeMs": 86_400_000i64, "maxPerConv": 500 },
+        "attachmentPolicy": "eager",
+        "epoch": 1,
+    });
+    let hello_env = dm_envelope::build_envelope(
+        dm_envelope::KIND_PDSYNC_HELLO,
+        &my_root,
+        &my_root,
+        now,
+        hello_body,
+        &key,
+    );
+    let result = handle_inbound_dm(
+        &mut sender,
+        &my_root,
+        "我",
+        hello_env,
+        "peer-self-b",
+        &HashSet::new(),
+        now,
+        NODE, None)
+    .unwrap();
+
+    // 损坏声明的 pdoc 记录不得被明文推送（classify Err → Skip）。
+    for out in &result.pdsync_out {
+        let body = out.body().clone();
+        if body.get("category").and_then(serde_json::Value::as_str) != Some("pdoc") {
+            continue;
+        }
+        for rec in body
+            .get("records")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+        {
+            let rec_key = rec.get("key").and_then(serde_json::Value::as_str).unwrap_or("");
+            assert_ne!(
+                rec_key, "pdoc:broken@v1:doc-x",
+                "损坏声明的 pdoc 记录不得明文推送（classify Err → Skip）"
+            );
+        }
+    }
+}
+
+// ── M3 口令：pwv:self 入站分支 + pwack 批尾钩子（§13.5 乙侧 + §13.4 钩子①）──
+
+#[test]
+fn pwv_inbound_new_v_sets_stale_and_keeps_watermark() {
+    let mut s = MemoryStorage::new();
+    let (key, my_root) = self_identity(31);
+
+    let salt = [7u8; 16];
+    let nonce = [9u8; 12];
+    let v = build_value("new-secret", &salt, &nonce, 2000, "me").unwrap();
+    let record = PdsyncRecord {
+        key: pw::PWV_KEY.to_string(),
+        value: serde_json::to_value(&v).unwrap(),
+        meta: remote_meta(NODE, 1, NOW),
+        dseq: None,
+    };
+    deliver_pdsync_data(&mut s, &key, &my_root, "pwv", &[record]);
+
+    let stored = pw::get_pwv(&s).unwrap().expect("新 V 已合入");
+    assert_eq!(stored.changed_at, 2000);
+    assert!(
+        pw::get_stale(&s).unwrap(),
+        "接受新 V 但未验证 → 置 stale（等待 unlock 自证）"
+    );
+    assert_eq!(
+        pw::get_applied_vts(&s).unwrap(),
+        0,
+        "入站不得推进水位（留待 maybe_ack_on_unlock 验证后推进）"
+    );
+}
+
+#[test]
+fn pwv_inbound_replay_below_watermark_ignored() {
+    let mut s = MemoryStorage::new();
+    let (key, my_root) = self_identity(32);
+    pw::put_applied_vts(&mut s, 5000).unwrap();
+
+    let salt = [7u8; 16];
+    let nonce = [9u8; 12];
+    let v = build_value("old-secret", &salt, &nonce, 2000, "me").unwrap();
+    let record = PdsyncRecord {
+        key: pw::PWV_KEY.to_string(),
+        value: serde_json::to_value(&v).unwrap(),
+        meta: remote_meta(NODE, 1, NOW),
+        dseq: None,
+    };
+    deliver_pdsync_data(&mut s, &key, &my_root, "pwv", &[record]);
+
+    assert!(
+        pw::get_pwv(&s).unwrap().is_none(),
+        "changedAt <= 已应用水位 → 回放忽略，不得覆写"
+    );
+    assert!(!pw::get_stale(&s).unwrap(), "回放不置 stale");
+}
+
+#[test]
+fn pwv_inbound_future_ts_rejected() {
+    let mut s = MemoryStorage::new();
+    let (key, my_root) = self_identity(33);
+
+    // changedAt 超过 now + 时间窗：伪造 V 推死水位的 DoS 防护。
+    let future = (NOW as u64) + dm_envelope::ENVELOPE_TS_WINDOW_MS as u64 + 60_000;
+    let salt = [7u8; 16];
+    let nonce = [9u8; 12];
+    let v = build_value("future-secret", &salt, &nonce, future, "me").unwrap();
+    let record = PdsyncRecord {
+        key: pw::PWV_KEY.to_string(),
+        value: serde_json::to_value(&v).unwrap(),
+        meta: remote_meta(NODE, 1, NOW),
+        dseq: None,
+    };
+    deliver_pdsync_data(&mut s, &key, &my_root, "pwv", &[record]);
+
+    assert!(
+        pw::get_pwv(&s).unwrap().is_none(),
+        "未来时间戳的 V 拒收（不落库不推水位）"
+    );
+    assert_eq!(pw::get_applied_vts(&s).unwrap(), 0);
+}
+
+#[test]
+fn pwv_inbound_preserves_last_good() {
+    let mut s = MemoryStorage::new();
+    let (key, my_root) = self_identity(34);
+
+    // 本地已有已验证 V（changedAt=1000）+ 水位 1000。
+    let salt = [7u8; 16];
+    let nonce = [9u8; 12];
+    let old_v = build_value("old-secret", &salt, &nonce, 1000, "me").unwrap();
+    pw::put_pwv(&mut s, NODE, &old_v, NOW).unwrap();
+    pw::put_applied_vts(&mut s, 1000).unwrap();
+
+    // 入站新 V（changedAt=2000），remote meta vv 大于本地 → Applied。
+    let new_v = build_value("new-secret", &salt, &nonce, 2000, "me").unwrap();
+    let record = PdsyncRecord {
+        key: pw::PWV_KEY.to_string(),
+        value: serde_json::to_value(&new_v).unwrap(),
+        meta: remote_meta(NODE, 2, NOW),
+        dseq: None,
+    };
+    deliver_pdsync_data(&mut s, &key, &my_root, "pwv", &[record]);
+
+    let last_good = pw::get_last_good_v(&s).unwrap().expect("last-good 已保留");
+    assert_eq!(last_good.changed_at, 1000, "接受新 V 前保留已验证 V 副本");
+    let stored = pw::get_pwv(&s).unwrap().expect("新 V 已合入");
+    assert_eq!(stored.changed_at, 2000);
+    assert!(pw::get_stale(&s).unwrap(), "新 V 未验证 → stale");
+}
+
+#[test]
+fn pwack_inbound_unlocked_anchors_verified_vts() {
+    let mut s = MemoryStorage::new();
+    let (key, my_root) = self_identity(35);
+
+    let salt = [7u8; 16];
+    let kverify = derive_kverify("correct-horse", &salt).unwrap();
+    let peer = "peer-b";
+    let ack = build_ack(&kverify, peer, 2000);
+    let record = PdsyncRecord {
+        key: format!("{}{}", pw::PWACK_PREFIX, peer),
+        value: serde_json::to_value(&ack).unwrap(),
+        meta: remote_meta(NODE, 1, NOW),
+        dseq: None,
+    };
+    deliver_pdsync_data_kv(&mut s, &key, &my_root, "pwack", &[record], Some(&kverify));
+
+    assert_eq!(
+        pw::get_last_verified_vts(&s, peer).unwrap(),
+        2000,
+        "解锁态：批尾钩子① 逐条 verify_and_anchor_ack"
+    );
+}
+
+#[test]
+fn pwack_inbound_locked_persists_without_anchor() {
+    let mut s = MemoryStorage::new();
+    let (key, my_root) = self_identity(36);
+
+    let salt = [7u8; 16];
+    let kverify = derive_kverify("correct-horse", &salt).unwrap();
+    let peer = "peer-b";
+    let ack = build_ack(&kverify, peer, 2000);
+    let record = PdsyncRecord {
+        key: format!("{}{}", pw::PWACK_PREFIX, peer),
+        value: serde_json::to_value(&ack).unwrap(),
+        meta: remote_meta(NODE, 1, NOW),
+        dseq: None,
+    };
+    // 锁定态：kverify=None → ack 落库但批尾不锚定（解锁后由钩子②兜底）。
+    deliver_pdsync_data(&mut s, &key, &my_root, "pwack", &[record]);
+
+    assert!(
+        pw::get_pwack(&s, peer).unwrap().is_some(),
+        "锁定期间到达的 ack 落库持久"
+    );
+    assert_eq!(
+        pw::get_last_verified_vts(&s, peer).unwrap(),
+        0,
+        "未解锁不锚定"
+    );
+}
+
+#[test]
+fn pwack_inbound_bad_mac_not_anchored() {
+    let mut s = MemoryStorage::new();
+    let (key, my_root) = self_identity(37);
+
+    let salt = [7u8; 16];
+    let kverify = derive_kverify("correct-horse", &salt).unwrap();
+    let peer = "peer-b";
+    let mut ack = build_ack(&kverify, peer, 2000);
+    // 篡改 MAC：翻转 base64 首字符。
+    let flipped = (ack.mac.as_bytes()[0] ^ 0x01) as char;
+    ack.mac.replace_range(0..1, &flipped.to_string());
+    let record = PdsyncRecord {
+        key: format!("{}{}", pw::PWACK_PREFIX, peer),
+        value: serde_json::to_value(&ack).unwrap(),
+        meta: remote_meta(NODE, 1, NOW),
+        dseq: None,
+    };
+    deliver_pdsync_data_kv(&mut s, &key, &my_root, "pwack", &[record], Some(&kverify));
+
+    assert!(
+        pw::get_pwack(&s, peer).unwrap().is_some(),
+        "MAC 篡改的 ack 仍落库（正确性由锚定校验把关）"
+    );
+    assert_eq!(
+        pw::get_last_verified_vts(&s, peer).unwrap(),
+        0,
+        "MAC 校验失败 → 零状态写入，不推进锚"
+    );
 }

@@ -33,6 +33,7 @@ mod data_orgq;
 mod data_orgq_read;
 mod device_ops;
 mod dm_delivery;
+mod epoch_ops;
 mod data_ops;
 mod doc_ops;
 pub mod dm_envelope;
@@ -40,6 +41,7 @@ mod error;
 mod host;
 mod identity;
 mod inbound_dm;
+mod pw_ops;
 mod message_ops;
 mod org_ops;
 mod org_overview;
@@ -47,6 +49,7 @@ mod org_sync;
 mod p2p_ops;
 mod plugin_announce_ops;
 mod plugin_ops;
+mod recovery_ops;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -88,6 +91,9 @@ pub(crate) fn rand_hex(byte_len: usize) -> String {
 }
 pub use p2p_ops::NodeCardImport;
 pub use plugin_ops::PluginHostQuery;
+pub use recovery_ops::{
+    RecoveryConfirmArgs, RecoveryInitiateArgs, RecoveryStatusResult, RecoveryVetoArgs,
+};
 
 use crate::data_mgmt::DataManagementService;
 use crate::p2p::keepalive::RecoveryTrigger;
@@ -385,6 +391,21 @@ impl Kernel {
         self.storage = Some(storage);
         self.storage_root_id = Some(root_id.to_string());
         self.data_mgmt = Some(dm);
+        Ok(())
+    }
+
+    /// 确保本机持久化 p2p keypair 已就绪，并将 `sync_node_cell` 刷新为真实 peerId。
+    ///
+    /// 用于注册/恢复/配对路径在 `on_unlock_password_ops` 前修正设备标识（§13.9），
+    /// 避免 ack/包裹键因 local-node 回退而错位。
+    pub(crate) fn ensure_p2p_identity_ready(&mut self) -> Result<()> {
+        let storage = self.require_storage_mut()?;
+        let keypair = crate::p2p::identity_store::get_or_create_libp2p_keypair(storage.raw_mut())?;
+        let peer_id = libp2p::identity::PeerId::from_public_key(&keypair.public()).to_base58();
+        if let Some(cell) = &self.sync_node_cell {
+            *cell.lock().unwrap_or_else(|e| e.into_inner()) = peer_id.clone();
+        }
+        log::info!("[P2P_IDENTITY] ensure ready | peerId={peer_id}");
         Ok(())
     }
 

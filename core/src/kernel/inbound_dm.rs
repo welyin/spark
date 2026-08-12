@@ -28,6 +28,7 @@ mod orgkey;
 mod orgq;
 mod orgsync;
 mod pdsync;
+mod recovery;
 mod sync;
 
 use super::dm_envelope::{
@@ -36,7 +37,7 @@ use super::dm_envelope::{
     KIND_ORG_INVITE_REPLY, KIND_ORGKEY_DELIVER, KIND_ORGSYNC_DATA, KIND_ORGSYNC_HELLO,
     KIND_ORGSYNC_NEED, KIND_ORGQ_REQ, KIND_ORGQ_RESP, KIND_PDSYNC_ATTACHMENT_REQ,
     KIND_PDSYNC_ATTACHMENT_RESP, KIND_PDSYNC_DATA, KIND_PDSYNC_HELLO, KIND_PDSYNC_NEED,
-    KIND_PROFILE_SYNC, KIND_READ, KIND_RECALL, verify_envelope,
+    KIND_PROFILE_SYNC, KIND_READ, KIND_RECALL, KIND_RECOVERY, verify_envelope,
 };
 
 /// O3 filtered 集合权限钩子（orgq-req 数据账号侧裁决契约，见 [`orgq`]）。
@@ -71,9 +72,21 @@ pub enum InboundDmError {
     /// 存储后端错误（O3 orgq 成员侧缓存/在途记录读写）。
     #[error(transparent)]
     Storage(#[from] crate::storage::StorageError),
+    /// M5 延迟恢复模块错误（seen/veto/pending 落库）。
+    #[error(transparent)]
+    Recovery(#[from] crate::recovery::RecoveryError),
+    /// M3 口令校验器模块错误（pwv/pwack 入站应用与锚定）。
+    #[error("pw error: {0}")]
+    Pw(String),
     /// JSON 序列化/反序列化错误。
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
+}
+
+impl From<crate::pw::PwError> for InboundDmError {
+    fn from(e: crate::pw::PwError) -> Self {
+        Self::Pw(e.to_string())
+    }
 }
 
 /// 入站处理结果别名。
@@ -250,6 +263,9 @@ pub struct InboundContext<'a> {
     /// 本机节点 id（p2p 运行中为 peerId，否则 `local-node`；个人域 pmeta 用）。
     pub node_id: &'a str,
     pub now_ms: i64,
+    /// 当前会话派生的 `Kverify`（32B）；未解锁或无 V 时为 `None`。
+    /// 用于 D2 入站 pwack 锚定与 epoch 门控兜底，不落入存储。
+    pub kverify: Option<&'a [u8; 32]>,
 }
 
 pub fn ok_response() -> Value {
@@ -450,6 +466,7 @@ pub fn handle_inbound_dm<S: StorageBackend>(
     online_peers: &HashSet<String>,
     now_ms: i64,
     node_id: &str,
+    kverify: Option<&[u8; 32]>,
 ) -> Result<InboundDmResult> {
     handle_inbound_dm_inner(
         storage,
@@ -460,6 +477,7 @@ pub fn handle_inbound_dm<S: StorageBackend>(
         online_peers,
         now_ms,
         node_id,
+        kverify,
         None,
     )
 }
@@ -476,6 +494,7 @@ pub fn handle_inbound_dm_with_orgq_hooks<S: StorageBackend>(
     online_peers: &HashSet<String>,
     now_ms: i64,
     node_id: &str,
+    kverify: Option<&[u8; 32]>,
     hook: Option<&dyn orgq::OrgqPermHook>,
 ) -> Result<InboundDmResult> {
     handle_inbound_dm_inner(
@@ -487,6 +506,7 @@ pub fn handle_inbound_dm_with_orgq_hooks<S: StorageBackend>(
         online_peers,
         now_ms,
         node_id,
+        kverify,
         hook,
     )
 }
@@ -500,6 +520,7 @@ fn handle_inbound_dm_inner<S: StorageBackend>(
     online_peers: &HashSet<String>,
     now_ms: i64,
     node_id: &str,
+    kverify: Option<&[u8; 32]>,
     orgq_hook: Option<&dyn orgq::OrgqPermHook>,
 ) -> Result<InboundDmResult> {
     let envelope = match verify_envelope(&payload, my_root_id, now_ms) {
@@ -513,6 +534,7 @@ fn handle_inbound_dm_inner<S: StorageBackend>(
         online_peers,
         node_id,
         now_ms,
+        kverify,
     };
     // 自设备信封触发的自记录寻址自愈（best-effort，失败不影响分发）
     if envelope.from == my_root_id {
@@ -544,6 +566,9 @@ fn handle_inbound_dm_inner<S: StorageBackend>(
         }
         KIND_DEVICE_NOTICE => {
             notice::handle_device_notice(&ctx, &envelope.from, &envelope.body)
+        }
+        KIND_RECOVERY => {
+            recovery::handle_recovery(storage, &ctx, &envelope.from, envelope.ts, &envelope.body)
         }
         KIND_CONTACT_SYNC => {
             sync::handle_contact_sync(storage, &ctx, &envelope.from, &envelope.body)

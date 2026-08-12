@@ -10,7 +10,7 @@ use spark_core::kernel::{
 };
 
 use super::dto::avatar_patch;
-use super::{err, lock_kernel};
+use super::{err, lock_kernel, run_kernel};
 use crate::KernelState;
 
 /// `root-init` 返回（TS `{ rootId, mnemonic }`）。
@@ -196,25 +196,6 @@ pub(crate) fn mnemonic_check_inner(input: &str) -> MnemonicCheckInfo {
 // Tauri 命令（CPU 密集/重 IO 的一律 async + run_kernel 挪阻塞线程池，
 // 避免占用主线程；轻量查询保持同步 command）
 // ------------------------------------------------------------------
-
-/// 内核命令的阻塞执行器：scrypt 等 CPU 密集操作（unlock/init/recover 的 KDF）
-/// 同步跑会把命令线程占死、移动端 UI 动画卡顿——改 async + spawn_blocking
-/// 挪到阻塞线程池（模式同 market.rs 的 run_market）。
-async fn run_kernel<T, F>(state: tauri::State<'_, KernelState>, f: F) -> Result<T, String>
-where
-    T: Send + 'static,
-    F: FnOnce(&mut spark_core::kernel::Kernel) -> Result<T, String> + Send + 'static,
-{
-    let kernel = std::sync::Arc::clone(state.inner());
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut guard = kernel
-            .lock()
-            .map_err(|_| "kernel state lock poisoned".to_string())?;
-        f(&mut guard)
-    })
-    .await
-    .map_err(|e| format!("kernel task join failed: {e}"))?
-}
 
 #[tauri::command]
 pub fn root_status(state: tauri::State<'_, KernelState>) -> Result<IdentityStatus, String> {

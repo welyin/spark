@@ -55,6 +55,12 @@ pub(super) fn handle_pdsync_hello<S: StorageBackend>(
             class,
         );
     }
+    // M3：持久化对端 hello 宣告的生效 epoch，发送侧据此决定加密 epoch 上限。
+    // need 响应与消息窗口也复用该持久化值（need body 不携带 epoch）。
+    let remote_epoch = crate::sync::pdsync::parse_remote_epoch(body);
+    if let Some(epoch) = remote_epoch {
+        let _ = crate::sync::pdsync::set_remote_epoch(storage, ctx.remote_peer_id, epoch);
+    }
     let remote_cats = crate::sync::pdsync::parse_hello_categories(body);
     log::info!(
         "[CT_SYNC] handle_hello ENTER | from={} remote_cats={:?}",
@@ -105,6 +111,7 @@ pub(super) fn handle_pdsync_hello<S: StorageBackend>(
                     exclude,
                     dlog_ack,
                     remote_class.as_deref(),
+                    remote_epoch,
                 );
             }
             crate::sync::pdsync::DiffOutcome::Concurrent => {
@@ -121,6 +128,7 @@ pub(super) fn handle_pdsync_hello<S: StorageBackend>(
                     exclude,
                     dlog_ack,
                     remote_class.as_deref(),
+                    remote_epoch,
                 );
             }
             crate::sync::pdsync::DiffOutcome::Equal => {
@@ -172,7 +180,10 @@ pub(super) fn handle_pdsync_hello<S: StorageBackend>(
             {
                 let batches = crate::sync::pdsync::split_batches(records, PDSYNC_BATCH_BYTES);
                 let total = batches.len();
+                // M3 消息窗口同样用 min(本地 effective, 对端声明 effective) 加密。
                 for (i, batch) in batches.into_iter().enumerate() {
+                    let batch = encrypt_records_for_push(storage, &batch, remote_epoch)
+                        .unwrap_or_default();
                     let body =
                         crate::sync::pdsync::build_data_batch(category, &batch, i, total);
                     out.push(PdsyncOut::Data { body });
@@ -252,6 +263,12 @@ pub(super) fn handle_pdsync_need<S: StorageBackend>(
             tombs,
         );
     }
+    // M3 发送侧加密：need 响应同样走 encrypt_records_for_push。
+    // need body 不携带 remote epoch，用持久化存储的 pdsync:epoch:{peer} 值。
+    let remote_epoch = crate::sync::pdsync::get_remote_epoch(storage, ctx.remote_peer_id);
+    let records = encrypt_records_for_push(storage, &records, Some(remote_epoch))
+        .unwrap_or_default();
+
     let batches = crate::sync::pdsync::split_batches(records, PDSYNC_BATCH_BYTES);
     let total = batches.len();
     let mut out = Vec::with_capacity(total);
@@ -331,7 +348,19 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
     // 逐集合发 PluginDataChanged——本地写不触发，插件本地路径即时可见）
     let mut applied_plugin_keys: std::collections::BTreeMap<String, Vec<String>> =
         std::collections::BTreeMap::new();
+    // M3 口令 ack 批尾钩子依据：本批新合入的 `pwack:{peer}` 键（循环结束后
+    // 逐条 verify_and_anchor_ack——与 try_refresh_keys 同型，解锁态保证
+    // kverify 在场；锁定期间到达的 ack 落库持久，下次解锁后由门控兜底锚定）。
+    let mut applied_pwack_peers: Vec<String> = Vec::new();
     for record in records {
+        // M3 接收侧解密：被 epoch ikey 包裹的记录先解再入后续分支；
+        // 解不开 / 线形非法 → 不解不推进（不写值、不计 dseq、不计 max_dseq）。
+        let value = match try_unwrap_record_value(storage, &record) {
+            Some(v) => v,
+            None => continue,
+        };
+        let record = crate::sync::pdsync::PdsyncRecord { value, ..record };
+
         if let Some(dseq) = record.dseq {
             max_dseq = Some(max_dseq.map_or(dseq, |m: u64| m.max(dseq)));
         }
@@ -445,6 +474,69 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
                     }
                 }
             }
+            // M3 新设备补发钩子：该 device 记录落库后，若满足条件则本机为 writer
+            // 补写 ikey 包裹（幂等，已有包裹则不重发）。
+            let _ = crate::epoch::EpochService::maybe_grant_epoch_key(
+                storage,
+                &ctx.my_root_id,
+                ctx.node_id,
+                ctx.node_id,
+                ctx.now_ms,
+                &peer_id,
+                remote.device_pub_key.as_deref(),
+                remote.revoked_at,
+                ctx.kverify,
+            );
+        }
+
+        // `pwv:self`：口令校验器入站专用分支（规格 §13.5 乙侧 fail-closed）。
+        // - 解析失败 → continue，不推进 pmeta（M2 裁决 A 惯例）；
+        // - 水位单调：changedAt > appliedVTs 才接受，否则回放忽略；
+        // - 未来 ts 拒收：changedAt > now + ENVELOPE_TS_WINDOW_MS → 拒
+        //   （防伪造 V 推死水位致真 V 永被挡的不可自愈 DoS）；
+        // - last-good 保留：接受新 V 前把当前已验证 V 副本写本地 lastGoodV；
+        // - 应用 V + 置 stale（未验证）；水位留待 unlock 时
+        //   `maybe_ack_on_unlock` 验证通过后推进（V 的正确性在首次使用时自证）。
+        if record.key == crate::pw::PWV_KEY && !crate::sync::is_tombstone(&record.meta) {
+            let Ok(incoming) =
+                serde_json::from_value::<crate::pw::PasswordVerifier>(record.value.clone())
+            else {
+                continue;
+            };
+            let applied = crate::pw::get_applied_vts(storage)?;
+            if incoming.changed_at <= applied {
+                continue;
+            }
+            let upper_bound = (ctx.now_ms as u64).saturating_add(
+                crate::kernel::dm_envelope::ENVELOPE_TS_WINDOW_MS as u64,
+            );
+            if incoming.changed_at > upper_bound {
+                log::warn!(
+                    "[PDSYNC_DATA] pwv:self future ts rejected | changed_at={} now={}",
+                    incoming.changed_at,
+                    ctx.now_ms
+                );
+                continue;
+            }
+            if let Ok(Some(cur)) = crate::pw::get_pwv(storage) {
+                let _ = crate::pw::put_last_good_v(storage, &cur);
+            }
+            let result = crate::sync::apply_personal_remote(
+                storage,
+                &record.key,
+                &value_str,
+                &record.meta,
+            )?;
+            if result.did_apply() {
+                crate::pw::put_stale(storage, true)?;
+                crate::device::DeviceService::append_security_log(
+                    storage,
+                    "pw_verifier_mismatch",
+                    json!({ "expectedChangedAt": incoming.changed_at }),
+                    ctx.now_ms,
+                )?;
+            }
+            continue;
         }
 
         // `profile:self`：写 sled 后标记 profile_applied（host 负责回写身份
@@ -569,6 +661,13 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
             }
             // org:inv 无对应壳层事件（无旧自设备快照通道），不发
         }
+        // M3 口令 ack：新合入 `pwack:{peer}` 收集 peer（批尾钩子逐条锚定）
+        if result.did_apply()
+            && record.key.starts_with(crate::pw::PWACK_PREFIX)
+            && let Some(peer) = record.key.strip_prefix(crate::pw::PWACK_PREFIX)
+        {
+            applied_pwack_peers.push(peer.to_string());
+        }
     }
     // 合并结果通知前端刷新（事件口径对齐旧快照通道）：
     // - 联系人四域/组织空间联系人 → ContactsSynced（整页刷新）；
@@ -606,6 +705,51 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
             "conversation": serde_json::to_value(conversation_view(&conv, ctx.online_peers, Some(ctx.my_root_id), fallback_peer.as_deref()))?,
             "message": serde_json::to_value(message_view(&message, Some(ctx.my_root_id)))?,
         })));
+    }
+
+    // M3 密钥表刷新钩子：epoch:/ikey: 整批合入后，若 effective 仍落后于
+    // current，尝试解开本机为 recipient 的 ikey 包裹以激活最新密钥。
+    if category_name == "epoch" {
+        let _ = crate::epoch::EpochService::try_refresh_keys(
+            storage,
+            &ctx.my_root_id,
+            ctx.node_id,
+            ctx.now_ms,
+        );
+    }
+
+    // M3 口令 ack 批尾钩子（规格 §13.4 双钩子①）：本批合入 `pwack:{peer}`
+    // 后逐条 verify_and_anchor_ack（幂等；解锁态保证 kverify 在场）。锁定
+    // 期间到达的 ack 落库持久，下次解锁后由 epoch 门控兜底锚定（双钩子②，
+    // 无丢失）。
+    if let Some(kverify) = ctx.kverify
+        && !applied_pwack_peers.is_empty()
+    {
+        for peer in &applied_pwack_peers {
+            let anchored = crate::pw::verify_and_anchor_ack(storage, peer, kverify, ctx.now_ms)?;
+            log::info!(
+                "[PW_ACK] batch-tail anchor | peer={} anchored={}",
+                peer,
+                anchored
+            );
+            // 锚定后补发 ikey（修复：device 记录先到→maybe_grant_epoch_key 初次判定
+            // Gated 未发；ack 锚定后门控转为 Pass，须重新触发补发，否则 ikey 永缺）。
+            if anchored {
+                if let Ok(Some(dev)) = crate::device::DeviceService::get(storage, peer) {
+                    let _ = crate::epoch::EpochService::maybe_grant_epoch_key(
+                        storage,
+                        &ctx.my_root_id,
+                        ctx.node_id,
+                        ctx.node_id,
+                        ctx.now_ms,
+                        peer,
+                        dev.device_pub_key.as_deref(),
+                        dev.revoked_at,
+                        Some(kverify),
+                    );
+                }
+            }
+        }
     }
 
     // 删除日志回执：推进我对对端日志的已收序号，并立即回发一个 need
@@ -762,6 +906,66 @@ fn ack_remote_journal<S: StorageBackend>(storage: &mut S, ctx: &InboundContext<'
     }
 }
 
+/// M3 接收侧解密：被 epoch ikey 包裹的记录先解再入后续分支。
+/// 解不开 / 线形非法 → `None`，外层按「不解不推进」丢弃。
+fn try_unwrap_record_value<S: StorageBackend>(
+    storage: &S,
+    record: &crate::sync::pdsync::PdsyncRecord,
+) -> Option<Value> {
+    if !crate::epoch::is_ikey_ciphertext(&record.value) {
+        return Some(record.value.clone());
+    }
+    let epoch = record.value.get("epoch").and_then(Value::as_u64)?;
+    let epoch_key = crate::epoch::get_local_key(storage, epoch).ok().flatten()?;
+    let plaintext = crate::epoch::unwrap_value(&epoch_key, &record.key, &record.value)?;
+    serde_json::from_str(&plaintext).ok()
+}
+
+/// M3 发送侧加密：按 `min(local_effective, remote_epoch)` 对需加密记录
+/// 的 value 套 epoch 密文壳。墓碑/豁免记录原样保留。
+fn encrypt_records_for_push<S: StorageBackend>(
+    storage: &S,
+    records: &[crate::sync::pdsync::PdsyncRecord],
+    remote_epoch: Option<u64>,
+) -> crate::sync::SyncResult<Vec<crate::sync::pdsync::PdsyncRecord>> {
+    let local_effective = crate::epoch::get_effective(storage).unwrap_or(0);
+    let enc_epoch = local_effective.min(remote_epoch.unwrap_or(0));
+    if enc_epoch == 0 {
+        return Ok(records.to_vec());
+    }
+    let Some(epoch_key) = crate::epoch::get_local_key(storage, enc_epoch).ok().flatten() else {
+        // effective>0 但本地 epoch 密钥缺失：宁可整批不推，也不明文泄漏。
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::with_capacity(records.len());
+    for r in records {
+        // 墓碑不加密
+        if r.value.is_null() {
+            out.push(r.clone());
+            continue;
+        }
+        match crate::epoch::classify_for_push(storage, &r.key, enc_epoch) {
+            Ok(crate::epoch::EncryptDecision::Skip) => continue,
+            Ok(crate::epoch::EncryptDecision::Plain) => {
+                out.push(r.clone());
+                continue;
+            }
+            Ok(crate::epoch::EncryptDecision::Encrypt) => {}
+            Err(_) => continue,
+        }
+        let plaintext = serde_json::to_string(&r.value)?;
+        let Some(wrapped) = crate::epoch::wrap_value(&epoch_key, &r.key, enc_epoch, &plaintext)
+        else {
+            // 加密失败：宁可丢弃也不明文推
+            continue;
+        };
+        let mut r2 = r.clone();
+        r2.value = wrapped;
+        out.push(r2);
+    }
+    Ok(out)
+}
+
 fn push_category_data<S: StorageBackend>(
     storage: &mut S,
     out: &mut Vec<PdsyncOut>,
@@ -770,6 +974,7 @@ fn push_category_data<S: StorageBackend>(
     exclude_key: Option<&str>,
     dlog_ack: u64,
     remote_class: Option<&str>,
+    remote_epoch: Option<u64>,
 ) {
     let Ok(records) = crate::sync::pdsync::collect_incremental(
         storage,
@@ -781,6 +986,11 @@ fn push_category_data<S: StorageBackend>(
         return;
     };
     let records = crate::sync::pdsync::trim_records_by_residency(storage, records, remote_class);
+
+    // M3 发送侧加密：取 min(本机 effective, 对端宣告 effective)。
+    let records =
+        encrypt_records_for_push(storage, &records, remote_epoch).unwrap_or_default();
+
     if category.name == "ct:friend" {
         let tombs: Vec<_> = records
             .iter()

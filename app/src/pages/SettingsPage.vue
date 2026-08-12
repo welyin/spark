@@ -89,7 +89,7 @@
             <MyCardModule v-else-if="activeModule === 'card'" detail-mode="drawer" />
             <PermissionModule v-else-if="activeModule === 'permission'" detail-mode="drawer" mode="personal" />
             <BackupModule v-else-if="activeModule === 'backup'" detail-mode="drawer" :root-id="rootStatus.rootId" />
-            <SecurityModule v-else-if="activeModule === 'security'" detail-mode="drawer" />
+            <SecurityModule v-else-if="activeModule === 'security'" detail-mode="drawer" :root-id="rootStatus.rootId ?? ''" />
             <DevicesModule v-else-if="activeModule === 'devices'" detail-mode="drawer" :root-id="rootStatus.rootId ?? ''" />
             <!-- 未选模块时的占位 -->
             <div v-else class="mine-detail settings-module-empty">
@@ -212,6 +212,7 @@ import {
   Postcard,
   Setting,
   SwitchButton,
+  Unlock,
   User
 } from '@element-plus/icons-vue';
 import { currentSpace, currentSpaceOrgId } from '../stores/current-space';
@@ -301,9 +302,9 @@ export default defineComponent({
     const personalModules: Array<{ key: PersonalModuleKey; label: string; icon: Component; color: string }> = [
       { key: 'profile', label: '我的资料', icon: User, color: '#3296fa' },
       { key: 'card', label: '我的名片', icon: Postcard, color: '#34c19b' },
-      { key: 'permission', label: '朋友权限', icon: Key, color: '#ff7d00' },
-      { key: 'backup', label: '账号备份', icon: Lock, color: '#7b61ff' },
-      { key: 'security', label: '安全设置', icon: Key, color: '#f54a45' },
+      { key: 'permission', label: '朋友权限', icon: Lock, color: '#ff7d00' },
+      { key: 'security', label: '安全设置', icon: Unlock, color: '#7b61ff' },
+      { key: 'backup', label: '账号备份', icon: Key, color: '#7b61ff' },
       { key: 'devices', label: '设备管理', icon: Monitor, color: '#3296fa' }
     ];
 

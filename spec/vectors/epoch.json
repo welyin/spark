@@ -1,0 +1,50 @@
+{
+  "meta": {
+    "title": "M3 epoch 选择性密钥轮换 golden vectors（wiki/protocol/p2p/personal-data-sync.md）",
+    "generatedBy": "core/examples/gen_epoch_vectors.rs（cargo run -p spark-core --example gen_epoch_vectors）",
+    "deterministic": "所有随机值硬编码为常量；重复运行字节级一致"
+  },
+  "constants": {
+    "domainRule": "domainInfo = \"ikey-box\" 0x00 rootId 0x00 epoch(十进制ASCII) 0x00 writerPeer 0x00 recipientPeer",
+    "boxRule": "shared=X25519(writerPrivX, recipientPubX)；全零拒绝；boxKey=sha256(shared||domainInfo)；wrappedKey=AES-256-GCM(boxKey, nonce24[0..12], ikey)",
+    "valueRule": "ct=AES-256-GCM(ikey, nonce12, plaintext, aad=记录完整键UTF-8)；线形 {$enc:\"ikey\",epoch,nonce,ct}",
+    "edToX25519": "TweetNaCl 口径：pub=Edwards→Montgomery u；priv=clamp(sha512(seed)[0..32])"
+  },
+  "boxUnbox": {
+    "description": "ikey 设备 DH 包裹往返（规格 §5.1）",
+    "rootId": "5a0a03bd19f9be2a5d8be0c9599d3b0ab8ed3566ed2678f3caa6a46d741b46da",
+    "epoch": 2,
+    "writerSecretKeyHex": "1111111111111111111111111111111111111111111111111111111111111111",
+    "writerPublicKeyHex": "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
+    "writerPeer": "12D3KooWPqT2nMDSiXUSx5D7fasaxhxKigVhcqfkKqrLghCq9jxz",
+    "recipientSecretKeyHex": "2222222222222222222222222222222222222222222222222222222222222222",
+    "recipientPublicKeyHex": "a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0",
+    "recipientPeer": "12D3KooWLdJAwPtyQ5RFnr9wGXsQzpf3P2SeqFbYkqbfVehLu4Ns",
+    "ikeyHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "domainInfoHex": "696b65792d626f780035613061303362643139663962653261356438626530633935393964336230616238656433353636656432363738663363616136613436643734316234366461003200313244334b6f6f57507154326e4d44536958555378354437666173617868784b696756686371666b4b71724c67684371396a787a00313244334b6f6f574c644a4177507479513552466e723977475873517a70663350325365714662596b7162665665684c75344e73",
+    "nonce24Base64": "oKGio6SlpqeoqaqrrK2ur7CxsrO0tba3",
+    "wrappedKeyBase64": "r/WLUS3D7/y5HuvAsZ/eMknjcQCi36M2Bh0xdDIjYUT/gy3sosc3n7ApgX1hYone"
+  },
+  "valueWrap": {
+    "description": "密文值线形（规格 §3）；AAD=记录完整键",
+    "recordKey": "ct:friend:5a0a03bd19f9be2a5d8be0c9599d3b0ab8ed3566ed2678f3caa6a46d741b46da",
+    "epoch": 2,
+    "ikeyHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "plaintext": "{\"nickname\":\"Alice\",\"tags\":[\"family\"]}",
+    "nonceBase64": "wMHCw8TFxsfIycrL",
+    "ciphertext": {
+      "$enc": "ikey",
+      "epoch": 2,
+      "nonce": "wMHCw8TFxsfIycrL",
+      "ct": "e2pJDhQT+D/1vN+YEO2EPy8WwRMeln7dWeFxURUbHtvV+u6FL6av2gBQU1hgYpMz8XFyZCp7"
+    }
+  },
+  "epochState": {
+    "description": "epoch:state serde 线形（规格 §4，字段序/camelCase；reason 枚举 = init|revoke|password_change|password_reset|heal|unknown，未知值走 Unknown 兜底）",
+    "json": "{\"current\":2,\"rotatedAt\":1755000000000,\"rotatedBy\":\"12D3KooWPqT2nMDSiXUSx5D7fasaxhxKigVhcqfkKqrLghCq9jxz\",\"reason\":\"revoke\"}"
+  },
+  "epochStateUnknown": {
+    "description": "未知 reason 兜底样例：反序列化 'unknown_reason' 得到 RotationReason::Unknown",
+    "json": "{\"current\":2,\"rotatedAt\":1755000000000,\"rotatedBy\":\"12D3KooWPqT2nMDSiXUSx5D7fasaxhxKigVhcqfkKqrLghCq9jxz\",\"reason\":\"unknown_reason\"}"
+  }
+}

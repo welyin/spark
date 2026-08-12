@@ -1,0 +1,160 @@
+[
+  {
+    "id": "pwv_build_verify_roundtrip",
+    "desc": "build/verify 往返精确值；正确口令还原明文，错口令失败",
+    "input": {
+      "password": "spark-e1-golden-password",
+      "wrongPassword": "spark-e1-wrong-password",
+      "salt": "EBESExQVFhcYGRobHB0eHw==",
+      "nonce": "ICEiIyQlJicoKSor"
+    },
+    "expect": {
+      "kverify": "7vaQB6pBERdbVH8u2sEWcJrvYp++wS0Luule2yNEzPU=",
+      "ct": "WHr/GBcoqDXku/7/EoA25QG2FXnmA0skGrc=",
+      "plaintext": "spark-pwv1",
+      "verifyWithP2": true,
+      "verifyWithWrong": false
+    }
+  },
+  {
+    "id": "pwv_kack_and_ack_mac",
+    "desc": "Kack=sha256(Kverify||spark-pwack)；ack MAC=HMAC-SHA256(Kack, pwack|peer|vTs)",
+    "input": {
+      "kverify": "7vaQB6pBERdbVH8u2sEWcJrvYp++wS0Luule2yNEzPU=",
+      "peer": "12D3KooWPqT2nMDSiXUSx5D7fasaxhxKigVhcqfkKqrLghCq9jxz",
+      "vTs": 1760000000000
+    },
+    "expect": {
+      "kack": "ZitOMIzv5i+Uuq09eDJ11hD4JNHrHiWp00pXuxgzxhA=",
+      "mac": "mDknzTL/pdXGKzT52/W2k0rvG4BfdR6KZ+VZWMZ0oTo="
+    }
+  },
+  {
+    "id": "pwv_forged_rejected_last_good",
+    "desc": "伪造 V（错口令 ct）用真口令解不开 -> 拒用，last-good 保留",
+    "input": {
+      "goodKverify": "7vaQB6pBERdbVH8u2sEWcJrvYp++wS0Luule2yNEzPU=",
+      "forgedCt": "RG1UbO2xSzmYU5aLw2MvCdODJWP1+6cVcBY=",
+      "nonce": "ICEiIyQlJicoKSor"
+    },
+    "expect": {
+      "decryptOk": false
+    }
+  },
+  {
+    "id": "pwv_watermark_monotonic",
+    "desc": "回放防护：vTs <= appliedVTs 水位时拒应用，水位只增不减",
+    "input": {
+      "appliedVTs": 1760000000000,
+      "incomingVTs": 1759999999995
+    },
+    "expect": {
+      "apply": false,
+      "watermarkStays": 1760000000000
+    }
+  },
+  {
+    "id": "pwv_self_serde_bytes",
+    "desc": "pwv:self 线形字节级（字段序 v,kdf,salt,nonce,ct,changedAt,changedBy 固定）",
+    "input": {},
+    "expect": {
+      "json": "{\"v\":1,\"kdf\":\"scrypt\",\"salt\":\"EBESExQVFhcYGRobHB0eHw==\",\"nonce\":\"ICEiIyQlJicoKSor\",\"ct\":\"WHr/GBcoqDXku/7/EoA25QG2FXnmA0skGrc=\",\"changedAt\":1760000000000,\"changedBy\":\"12D3KooWPqT2nMDSiXUSx5D7fasaxhxKigVhcqfkKqrLghCq9jxz\"}"
+    }
+  },
+  {
+    "id": "pwack_wire_bytes",
+    "desc": "pwack:{peer} 值线形字节级（v,vTs,mac 固定序）",
+    "input": {},
+    "expect": {
+      "json": "{\"v\":1,\"vTs\":1760000000000,\"mac\":\"mDknzTL/pdXGKzT52/W2k0rvG4BfdR6KZ+VZWMZ0oTo=\"}"
+    }
+  },
+  {
+    "id": "pwv_missing_gate_pass",
+    "desc": "无 V 旧版语义：pwv:self 缺失 -> 门控恒过（不可回归项）",
+    "input": {
+      "pwvPresent": false,
+      "ackPresent": false
+    },
+    "expect": {
+      "gatePasses": true,
+      "nonRegressible": true
+    }
+  },
+  {
+    "id": "epoch_state_reason_password_reset",
+    "desc": "epoch:state.reason 扩 password_reset 样例（serde 线形）",
+    "input": {},
+    "expect": {
+      "json": "{\"current\":3,\"rotatedAt\":1760000000001,\"rotatedBy\":\"12D3KooWPqT2nMDSiXUSx5D7fasaxhxKigVhcqfkKqrLghCq9jxz\",\"reason\":\"password_reset\"}"
+    }
+  },
+  {
+    "id": "epoch_state_unknown_reason_fallback",
+    "desc": "未知 reason 容错：serde(other) Unknown 兜底，不得 fail-closed",
+    "input": {},
+    "expect": {
+      "json": "{\"current\":4,\"rotatedAt\":1760000000002,\"rotatedBy\":\"12D3KooWPqT2nMDSiXUSx5D7fasaxhxKigVhcqfkKqrLghCq9jxz\",\"reason\":\"some_future_reason\"}",
+      "parsesAsUnknown": true
+    }
+  },
+  {
+    "id": "pseudo_ack_not_anchored",
+    "desc": "伪 ack（错 Kack 派生的错误 MAC）verify_and_anchor_ack 不锚定，锚不变，门控不 Pass（D2 攻击链回归）",
+    "input": {
+      "kverify": "7vaQB6pBERdbVH8u2sEWcJrvYp++wS0Luule2yNEzPU=",
+      "forgedAckMac": "Tz0JdBTGGB+3Ex4NH4i64s+BUYeVjA6XAyLZpPfX65o=",
+      "ackVTs": 1760000000000,
+      "initialAnchor": 0,
+      "pwvChangedAt": 1760000000000
+    },
+    "expect": {
+      "macValid": false,
+      "anchored": false,
+      "anchorStays": 0,
+      "gatePasses": false
+    }
+  },
+  {
+    "id": "valid_ack_anchored_gate_pass",
+    "desc": "合法 ack（正确 MAC）锚定后锚=ack.vTs；should_gate 读锚 Pass（锚>=pwv.changedAt）",
+    "input": {
+      "kverify": "7vaQB6pBERdbVH8u2sEWcJrvYp++wS0Luule2yNEzPU=",
+      "validAckMac": "mDknzTL/pdXGKzT52/W2k0rvG4BfdR6KZ+VZWMZ0oTo=",
+      "ackVTs": 1760000000000,
+      "initialAnchor": 0,
+      "pwvChangedAt": 1760000000000
+    },
+    "expect": {
+      "macValid": true,
+      "anchored": true,
+      "anchorBecomes": 1760000000000,
+      "gatePasses": true
+    }
+  },
+  {
+    "id": "pwv_future_ts_rejected",
+    "desc": "未来 ts 拒收：changedAt > now+10min -> reject，水位不推进（防伪造 V 推死水位 DoS）",
+    "input": {
+      "appliedVTs": 1760000000000,
+      "incomingVTs": 1760172800000,
+      "now": 1760000060000
+    },
+    "expect": {
+      "futureRejected": true,
+      "watermarkStays": 1760000000000
+    }
+  },
+  {
+    "id": "pwv_replay_rejected",
+    "desc": "回放拒收：changedAt <= appliedVTs -> reject，水位不变",
+    "input": {
+      "appliedVTs": 1760000000000,
+      "incomingVTs": 1759999999995
+    },
+    "expect": {
+      "replayRejected": true,
+      "watermarkStays": 1760000000000
+    }
+  }
+]

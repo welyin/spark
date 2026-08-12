@@ -12,8 +12,21 @@ use super::{
 use crate::identity;
 use crate::kernel::Kernel;
 use crate::kernel::error::{KernelError, Result};
+use crate::p2p::node::system_now_ms;
 
 impl Kernel {
+    /// 校验当前会话口令是否与解锁态缓存一致。
+    ///
+    /// - 仅返回 `true/false`，不触发解密/副作用；未解锁时返回 `Locked` 错误。
+    /// - `biometric_store_password` 等壳层命令先调用此接口，验证通过后再把
+    ///   口令交给 Android Keystore 封装。
+    pub fn verify_session_password(&self, password: &str) -> Result<bool> {
+        match &self.unlocked {
+            Some(unlocked) => Ok(unlocked.password == password),
+            None => Err(KernelError::Locked),
+        }
+    }
+
     /// `revealMnemonic`：密码门控的助记词再次查看（解密当前身份文件）。
     pub fn reveal_mnemonic(&self, password: &str) -> Result<String> {
         let target = self.current_root_id()?.ok_or(KernelError::NotInitialized)?;
@@ -36,6 +49,9 @@ impl Kernel {
     /// - 需要解锁态（`Locked` 报错）。
     pub fn change_password(&mut self, old_password: &str, new_password: &str) -> Result<()> {
         let root_id = self.require_unlocked_root_id()?;
+        // M3：改密涉及 epoch 轮换，整体加 io_lock。
+        let __io = std::sync::Arc::clone(&self.io_lock);
+        let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
         // 新口令强度校验：对齐 init/recover 的 ≥8 位口径，防止前端之外的纵深缺口
         // （此前 change_password 直接复用 seal_v2 重封，<8 位/空新口令会被内核接受）。
         check_password(new_password)?;
@@ -54,7 +70,93 @@ impl Kernel {
                 Some(new_key),
             );
         }
+        // M3：改密触发 epoch 密钥轮换并发布新 V。
+        if let Err(e) = crate::kernel::epoch_ops::after_password_change(self) {
+            log::error!("[change-password] epoch rotation failed: {e}");
+            let _ = crate::device::DeviceService::append_security_log(
+                self.require_storage_mut()?,
+                "rotation_failed",
+                serde_json::json!({"reason": "password_change", "error": format!("{e}")}),
+                system_now_ms(),
+            );
+        } else if let Err(e) = crate::kernel::pw_ops::publish_pw_value(
+            self,
+            new_password,
+            crate::epoch::RotationReason::PasswordChange,
+        ) {
+            log::error!("[change-password] pwv publish failed: {e}");
+        }
         log::info!("[PROFILE_CHAIN] password changed | root_id={root_id}");
+        Ok(())
+    }
+
+    /// `resetPasswordSession`：M5 延迟恢复通道确认阶段使用，不验证旧密码，
+    /// 直接以当前会话密钥解密身份文件并重封为 `new_password`。
+    ///
+    /// 要求已解锁、新口令强度 ≥8，落盘后刷新内存会话。
+    pub fn reset_password_session(&mut self, new_password: &str) -> Result<()> {
+        let root_id = self.require_unlocked_root_id()?;
+        check_password(new_password)?;
+
+        let Some(file) = self.read_identity_file(&root_id)? else {
+            return Err(KernelError::NotInitialized);
+        };
+        let Some(unlocked) = &self.unlocked else {
+            return Err(KernelError::Locked);
+        };
+
+        let session_key: [u8; identity::crypto::KEY_LEN] = unlocked
+            .session_key
+            .ok_or(KernelError::Internal("no session key".to_string()))?;
+
+        let payload = identity::file::decrypt_payload_with_key(&file, &session_key)
+            .map_err(map_identity_decrypt_error)?;
+
+        let updated_at = crate::p2p::node::system_now_ms() as u64;
+        // 资料字段存于文件明文头（不进 payload），原样保留；创建时间以文件头为准。
+        let (new_file, new_key) = identity::file::seal_v2_and_key(
+            &payload,
+            new_password,
+            file.public_key_hex.clone(),
+            root_id.clone(),
+            file.nickname.clone(),
+            file.avatar.clone(),
+            file.gender.clone(),
+            file.region.clone(),
+            file.signature.clone(),
+            file.created_at,
+            updated_at,
+        )
+        .map_err(map_identity_decrypt_error)?;
+
+        self.write_identity_file(&new_file)?;
+
+        // 刷新会话：复用当前 identity/seed，仅替换口令与封装密钥。
+        self.set_unlocked(
+            unlocked.identity.clone(),
+            unlocked.seed,
+            new_password,
+            Some(new_key),
+        );
+
+        // M3：恢复改密触发 password_reset epoch 轮换并发布新 V。
+        if let Err(e) = crate::kernel::epoch_ops::after_password_reset(self) {
+            log::error!("[reset-password-session] epoch rotation failed: {e}");
+            let _ = crate::device::DeviceService::append_security_log(
+                self.require_storage_mut()?,
+                "rotation_failed",
+                serde_json::json!({"reason": "password_reset", "error": format!("{e}")}),
+                system_now_ms(),
+            );
+        } else if let Err(e) = crate::kernel::pw_ops::publish_pw_value(
+            self,
+            new_password,
+            crate::epoch::RotationReason::PasswordReset,
+        ) {
+            log::error!("[reset-password-session] pwv publish failed: {e}");
+        }
+
+        log::info!("[PROFILE_CHAIN] password reset via recovery session | root_id={root_id}");
         Ok(())
     }
 

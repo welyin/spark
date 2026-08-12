@@ -179,6 +179,52 @@ fn event_json(event: &P2pEvent) -> Option<Value> {
         P2pEvent::DeviceNoticeReceived(data) => {
             json!({"event": "device-notice-received", "data": data})
         }
+        P2pEvent::RecoveryUpdated {
+            request_id,
+            state,
+            op,
+            deadline,
+            from_device,
+        } => {
+            json!({
+                "event": "recovery-updated",
+                "requestId": request_id,
+                "state": state,
+                "op": op,
+                "deadline": deadline,
+                "fromDevice": from_device,
+            })
+        }
+        P2pEvent::PasswordChangeObserved {
+            rotated_at,
+            rotated_by,
+            rotated_by_device,
+            reason,
+        } => {
+            json!({
+                "event": "password-change-observed",
+                "rotatedAt": rotated_at,
+                "rotatedBy": rotated_by,
+                "rotatedByDevice": rotated_by_device,
+                "reason": reason,
+            })
+        }
+        P2pEvent::PasswordUnificationDone { rotated_at } => {
+            json!({
+                "event": "password-unification-done",
+                "rotatedAt": rotated_at,
+            })
+        }
+        P2pEvent::DeviceOutOfGrace {
+            password_changed_at,
+            grace_ms,
+        } => {
+            json!({
+                "event": "device-out-of-grace",
+                "passwordChangedAt": password_changed_at,
+                "graceMs": grace_ms,
+            })
+        }
         // ready 行单独打印；keepalive tick 在本例程禁用
         P2pEvent::Started { .. } | P2pEvent::KeepaliveTick(_) => return None,
     };

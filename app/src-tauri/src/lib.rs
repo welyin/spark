@@ -13,6 +13,9 @@
 // pub 以便 tests/ 下的集成测试（unit_app）按公开 API 直调；私有项保持原可见性。
 #[cfg(target_os = "android")]
 mod android_activity;
+// M4 生物识别解锁：BiometricKeystoreHelper 的 JNI 桥（见 commands/biometric.rs）
+#[cfg(target_os = "android")]
+mod biometric_android;
 pub mod commands;
 pub mod domain_guard;
 // 全局 log 门面注册（Android logcat / 桌面 stderr），见 logging.rs
@@ -60,6 +63,9 @@ fn spawn_p2p_event_forwarder(app: tauri::AppHandle, mut rx: tokio::sync::broadca
                         P2pEvent::Warning(_) => "Warning",
                         P2pEvent::KeepaliveTick(_) => "KeepaliveTick",
                         P2pEvent::PeerExchangeCompleted { .. } => "PeerExchangeCompleted",
+                        P2pEvent::PasswordChangeObserved { .. } => "PasswordChangeObserved",
+                        P2pEvent::PasswordUnificationDone { .. } => "PasswordUnificationDone",
+                        P2pEvent::DeviceOutOfGrace { .. } => "DeviceOutOfGrace",
                         _ => "Other",
                     };
                     println!("[FORWARDER] event kind={}", event_kind);
@@ -359,6 +365,20 @@ pub fn run() {
             commands::device::devices_list,
             commands::device::root_revoke_device,
             commands::device::security_log_list,
+            // M5 延迟恢复（多设备间密码重置/配对新设备的安全窗口协议）
+            commands::recovery::root_recovery_status,
+            commands::recovery::root_recovery_initiate,
+            commands::recovery::root_recovery_confirm,
+            commands::recovery::root_recovery_veto,
+            // M3 乙+校验器：口令统一（验票/重封/状态查询）
+            commands::pw::root_verify_password_ticket,
+            commands::pw::root_unify_password,
+            commands::pw::root_password_unify_status,
+            // 生物识别解锁（M4；桌面构建四命令恒 unsupported）
+            commands::biometric::biometric_status,
+            commands::biometric::biometric_store_password,
+            commands::biometric::biometric_unlock,
+            commands::biometric::biometric_delete,
             // 主程序自动更新（GitHub Releases 清单；检查/下载/安装重启）。仅桌面启用。
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             commands::updater::updater_status,

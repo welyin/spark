@@ -227,6 +227,18 @@ pub(super) fn handle_device_sync<S: StorageBackend>(
     }
     let (applied, changed) =
         crate::device::DeviceService::apply_remote(storage, record, ctx.now_ms, ctx.node_id)?;
+    // M3 新设备补发钩子：device-sync 落库后尝试给该设备补写 ikey 包裹。
+    let _ = crate::epoch::EpochService::maybe_grant_epoch_key(
+        storage,
+        &ctx.my_root_id,
+        ctx.node_id,
+        ctx.node_id,
+        ctx.now_ms,
+        &applied.peer_id,
+        applied.device_pub_key.as_deref(),
+        applied.revoked_at,
+        ctx.kverify,
+    );
     let mut events = Vec::new();
     if changed {
         events.push(P2pEvent::DeviceUpdated(

@@ -15,6 +15,7 @@
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
+use base64::Engine;
 use serde_json::Value;
 
 use crate::p2p::host::DmHandler;
@@ -27,6 +28,23 @@ use super::super::dm_envelope;
 
 mod profile_apply;
 mod replies;
+
+/// 从 `password_shared` 与当前 `pwv:self` 派生 `Kverify`（32B）。
+///
+/// - 未解锁（password 缺失）或无 V → `None`。
+/// - Kverify 仅在内存中返回，不落入存储。
+fn derive_kverify_from_password_shared(
+    storage: &SledStorage,
+    password_shared: &Arc<Mutex<Option<String>>>,
+) -> Option<[u8; 32]> {
+    let password = password_shared.lock().unwrap_or_else(|e| e.into_inner()).clone()?;
+    let pwv = crate::pw::get_pwv(storage).ok().flatten()?;
+    let salt_bytes = base64::engine::general_purpose::STANDARD
+        .decode(&pwv.salt)
+        .ok()?;
+    let salt: [u8; 16] = salt_bytes.try_into().ok()?;
+    crate::pw::derive_kverify(&password, &salt).ok()
+}
 
 /// kernel 的 dm 入站处理器：字段全部为 `Arc`/`SledStorage` 克隆，`Send + Sync`，
 /// 由事件循环 spawn 到阻塞线程池执行（验签/落库等重 IO 不占事件循环线程）。
@@ -196,6 +214,7 @@ impl DmHandler for KernelDmHandler {
         let result = {
             let _io = self.io_lock.lock().unwrap_or_else(|e| e.into_inner());
             let node_id = self.sync_node_id();
+            let kverify = derive_kverify_from_password_shared(&self.storage, &self.password_shared);
             let is_orgq_req =
                 payload.get("kind").and_then(|v| v.as_str()) == Some(dm_envelope::KIND_ORGQ_REQ);
             if is_orgq_req {
@@ -214,6 +233,7 @@ impl DmHandler for KernelDmHandler {
                     online_peers,
                     system_now_ms(),
                     &node_id,
+                    kverify.as_ref(),
                     Some(&hook),
                 )
                 .map_err(|e| e.to_string())?
@@ -227,6 +247,7 @@ impl DmHandler for KernelDmHandler {
                     online_peers,
                     system_now_ms(),
                     &node_id,
+                    kverify.as_ref(),
                 )
                 .map_err(|e| e.to_string())?
             }

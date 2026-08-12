@@ -34,6 +34,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+use base64::Engine;
 use libp2p::{Multiaddr, PeerId, Swarm};
 use tokio::sync::mpsc;
 
@@ -260,6 +261,34 @@ pub enum P2pEvent {
     },
     /// keepalive tick 完成（宿主应执行组织层保活）。
     KeepaliveTick(KeepaliveStats),
+    /// M5 延迟恢复请求状态更新（initiated / vetoed / committed）。`from_device`
+    /// 为发送方 peerId 标注（展示/日志用，如「设备 X 正在发起密码重置」）；
+    /// `deadline` 为**本机关心的截止时间**——发起方=pending.deadline，接收方
+    /// initiated=本地到达+否决窗（§4.4 时钟安全，不信对端单一时钟）。
+    RecoveryUpdated {
+        request_id: String,
+        state: String,
+        op: Option<String>,
+        deadline: Option<i64>,
+        from_device: String,
+    },
+    /// M3 乙+校验器：检测到口令变更标记（改密/重置），UI 触发器（仅提示，
+    /// 数据面权威是 `pwv:self`/epoch:state）。`reason ∈ password_change|password_reset`。
+    PasswordChangeObserved {
+        rotated_at: u64,
+        rotated_by: String,
+        rotated_by_device: String,
+        reason: String,
+    },
+    /// M3 乙+校验器：本机完成口令统一（unify 重封），其他设备撤提示。
+    PasswordUnificationDone {
+        rotated_at: u64,
+    },
+    /// M3 D′：本机已超出统一密码宽限期（本机判定，非广播）。
+    DeviceOutOfGrace {
+        password_changed_at: u64,
+        grace_ms: u64,
+    },
     /// 非致命告警。
     Warning(String),
     /// 节点已停止。
@@ -269,6 +298,8 @@ pub enum P2pEvent {
 /// P2P 节点句柄。
 pub struct P2pNode {
     peer_id: String,
+    /// Ed25519 公钥 base64（32B 原始字节），M3 epoch 包裹采集用。
+    device_pub_key: String,
     cmd_tx: mpsc::UnboundedSender<Command>,
     event_rx: mpsc::UnboundedReceiver<P2pEvent>,
     /// 事件循环任务句柄（Mutex 使 `stop` 仅需 `&self`，节点可放入 `Arc`
@@ -286,6 +317,12 @@ impl P2pNode {
         let keypair = get_or_create_libp2p_keypair(&mut storage)?;
         let peer_id = PeerId::from_public_key(&keypair.public());
         let peer_id_str = peer_id.to_base58();
+        let device_pub_key = keypair
+            .public()
+            .try_into_ed25519()
+            .ok()
+            .map(|pk| base64::engine::general_purpose::STANDARD.encode(pk.to_bytes()))
+            .unwrap_or_default();
 
         let persisted_port = storage
             .get(P2P_LISTEN_WS_PORT)?
@@ -413,6 +450,7 @@ impl P2pNode {
 
         Ok(Self {
             peer_id: peer_id_str,
+            device_pub_key,
             cmd_tx,
             event_rx,
             task: std::sync::Mutex::new(Some(task)),
@@ -422,6 +460,11 @@ impl P2pNode {
     /// 本机 PeerId 字符串。
     pub fn peer_id(&self) -> &str {
         &self.peer_id
+    }
+
+    /// 本机 Ed25519 公钥 base64（32B 原始字节）。
+    pub fn device_pub_key(&self) -> &str {
+        &self.device_pub_key
     }
 
     /// 拉取下一个事件。

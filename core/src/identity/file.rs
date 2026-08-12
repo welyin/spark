@@ -572,7 +572,7 @@ fn seal_v2(
 
 /// v2 加密并组装身份文件（随机 salt/iv），回传 scrypt 派生密钥。
 #[allow(clippy::too_many_arguments)]
-fn seal_v2_and_key(
+pub(crate) fn seal_v2_and_key(
     payload: &IdentityPayload,
     password: &str,
     public_key_hex: String,

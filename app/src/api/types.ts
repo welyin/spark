@@ -75,11 +75,46 @@ export type P2pEventDto =
   // M1 新设备通知（m1-m2-implementation-plan §3.3）：kind 恒 'device_joined'，
   // deviceId 为新设备 peerId，ts 为通知发出时间（ms）
   | { kind: 'DeviceNoticeReceived'; data: { kind: string; deviceId: string; deviceName: string; ts: number } }
+  // M5 延迟恢复：state 只发 initiated / vetoed / committed；ready 由 root_recovery_status.readyToConfirm 体现
+  | {
+      kind: 'RecoveryUpdated';
+      data: {
+        requestId: string;
+        fromDevice: string;
+        state: 'initiated' | 'vetoed' | 'committed';
+        op?: 'reset_password' | 'pair_new_device';
+        deadline?: number;
+      };
+    }
+  // 乙+校验器：密码被其他设备改密/重置，需要本机统一到新密码
+  | { kind: 'PasswordChangeObserved'; data: { rotatedAt: number; rotatedBy: string; rotatedByDevice: string; reason: 'password_change' | 'password_reset' } }
+  // 乙+校验器：所有设备都已完成统一，撤提示
+  | { kind: 'PasswordUnificationDone'; data: { rotatedAt: number } }
+  // D'：本机已超出统一密码的宽限期
+  | { kind: 'DeviceOutOfGrace'; data: { passwordChangedAt: number; graceMs: number } }
   | { kind: 'OrgInviteReceived'; data: OrgInviteRecordDto }
   | { kind: 'OrgInviteUpdated'; data: OrgInviteRecordDto }
   | { kind: 'Warning'; data: string }
   | { kind: 'Stopped' }
   | { kind: 'Lagged'; skipped: number };
+
+// 乙+校验器
+export interface PasswordVerifyTicketResultDto {
+  ok: boolean;
+  rotatedAt?: number;
+  rotatedByDevice?: string;
+}
+
+export interface PasswordUnifyStatusDto {
+  pending: boolean;
+  rotatedAt?: number;
+  rotatedByDevice?: string;
+  reason?: 'password_change' | 'password_reset';
+}
+
+export interface PasswordUnifyResultDto {
+  success: boolean;
+}
 
 export type PluginPermission = string;
 /** 插件可运行的空间类型（spaces-and-plugins §4）。 */
@@ -359,6 +394,34 @@ export type OrgNetworkStatus = 'good' | 'unstable' | 'lost' | 'recovering' | 'lo
 /** 恢复模式状态（core `RecoveryState::as_str`）。 */
 export type OrgRecoveryState = 'idle' | 'recovering' | 'failed';
 
+// ------------------------------------------------------------------
+// M5 延迟恢复 DTO（内核 recovery 模块 camelCase 序列化）
+// ------------------------------------------------------------------
+
+/** 恢复操作类型。 */
+export type RecoveryOpDto = 'reset_password' | 'pair_new_device';
+
+/** 恢复请求状态（只发 initiated / vetoed / committed）。 */
+export type RecoveryStateDto = 'initiated' | 'vetoed' | 'committed';
+
+/** 待确认/已结束的恢复请求记录。 */
+export interface RecoveryPendingDto {
+  requestId: string;
+  op: RecoveryOpDto;
+  /** 发起方：本机 pending 的确认截止时间；接收方 initiated：本地否决窗终点。 */
+  deadline: number;
+  initiatedAt: number;
+  vetoed: boolean;
+  state: RecoveryStateDto;
+}
+
+/** `root_recovery_status` 出参。 */
+export interface RecoveryStatusDto {
+  pending: RecoveryPendingDto | null;
+  /** 本机作为接收方且已到达可确认窗口（需结合 pending.state === 'initiated' 使用）。 */
+  readyToConfirm: boolean;
+}
+
 export type OrgSyncOverviewDto = {
   orgId: string;
   replicaTarget: number;
@@ -561,6 +624,23 @@ export interface AppMessageDto {
   status: 'local';
   read: boolean;
 }
+
+// ------------------------------------------------------------------
+// M4 生物识别
+// ------------------------------------------------------------------
+
+export interface BiometricStatusDto {
+  available: boolean;
+  enrolled: boolean;
+  hasSecret: boolean;
+}
+
+export interface BiometricUnlockResultDto {
+  rootId: string;
+  password: string;
+}
+
+// ------------------------------------------------------------------
 
 export type ElectronAPI = {
   db: {
@@ -821,6 +901,12 @@ export type ElectronAPI = {
     recoverMnemonic: (mnemonic: string, newPassword: string, nickname: string, avatar?: string | null) => Promise<{ rootId: string }>;
     recoverBackup: (payload: string, password: string) => Promise<{ rootId: string }>;
   };
+  biometric: {
+    check: () => Promise<BiometricStatusDto>;
+    unlock: () => Promise<BiometricUnlockResultDto>;
+    storePassword: (password: string) => Promise<{ success: boolean }>;
+    delete: () => Promise<{ success: boolean }>;
+  };
   /** 主程序自动更新（tauri-plugin-updater + GitHub Releases 清单；src-tauri commands/updater.rs） */
   updater: {
     status: () => Promise<UpdaterStatusDto>;
@@ -829,6 +915,18 @@ export type ElectronAPI = {
     applyRestart: () => Promise<void>;
     /** 后台自动检查完成且更新已下载就绪（验签通过）：订阅重启确认弹窗（返回退订函数） */
     onReady: (cb: (info: UpdaterReadyInfo) => void) => Promise<() => void>;
+  };
+  // M5 延迟恢复（多设备间密码重置/配对新设备的安全窗口协议）
+  recovery: {
+    status: () => Promise<RecoveryStatusDto>;
+    initiate: (op: RecoveryOpDto, delayHours?: number) => Promise<RecoveryPendingDto>;
+    confirm: (requestId: string, newPassword: string) => Promise<RecoveryPendingDto>;
+    veto: (requestId: string) => Promise<void>;
+  };
+  passwordUnify: {
+    verifyTicket: (password: string) => Promise<PasswordVerifyTicketResultDto>;
+    unifyPassword: (oldPassword: string, newPassword: string) => Promise<PasswordUnifyResultDto>;
+    status: () => Promise<PasswordUnifyStatusDto>;
   };
   devices: {
     /** 设备清单：本机置顶（isSelf），其余按最近在线证据降序 */

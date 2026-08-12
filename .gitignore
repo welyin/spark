@@ -35,3 +35,10 @@ app/decode-qr*.cjs
 
 # Rust cargo check 构建产物
 core/target-check/
+
+# vitest 调试输出 / diff 快照等临时文件
+app/vitest-out.txt
+app/vitest-result.json
+app/vitest-check.txt
+*.diff
+.codebuddy-*.diff

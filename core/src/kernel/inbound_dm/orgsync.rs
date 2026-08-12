@@ -779,6 +779,7 @@ mod tests {
             online_peers: online,
             node_id: "local-node",
             now_ms: 2000,
+            kverify: None,
         }
     }
 

@@ -149,6 +149,7 @@ fn member_device_class_lookup() {
         updated_at: 1000,
         last_seen_at: 1000,
         revoked_at: None,
+        device_pub_key: None,
     };
     DeviceService::upsert_pdsync(&mut storage, &device, 1000, "node-a").unwrap();
     let mut m = member(M1, OrganizationRole::Member);
@@ -206,6 +207,7 @@ fn member_device_class_falls_back_pc_when_endpoints_have_no_peer_id() {
         updated_at: 1000,
         last_seen_at: 1000,
         revoked_at: None,
+        device_pub_key: None,
     };
     crate::device::DeviceService::upsert_pdsync(&mut s2, &mobile, 1000, "node-a").unwrap();
     assert_eq!(member_device_class(&s2, &m), "mobile", "任一可查端点 mobile → mobile");
@@ -231,6 +233,7 @@ fn device_class_stable_across_peer_id_drift_same_device_uid() {
         updated_at: 1000,
         last_seen_at: 1000,
         revoked_at: None,
+        device_pub_key: None,
     };
     DeviceService::upsert_pdsync(&mut storage, &device, 1000, "node-a").unwrap();
 

@@ -48,6 +48,7 @@ pub(crate) fn data_declare_collection_inner(
         accounts: parse_enum_axis::<spark_core::plugindata::Accounts>(&declaration, "accounts")?,
         devices: parse_enum_axis::<spark_core::plugindata::Devices>(&declaration, "devices")?,
         confidentiality: parse_enum_axis::<spark_core::plugindata::Confidentiality>(&declaration, "confidentiality")?,
+        sensitivity: parse_enum_axis::<spark_core::plugindata::Sensitivity>(&declaration, "sensitivity")?,
         merge: parse_enum_axis::<spark_core::plugindata::MergeRule>(&declaration, "merge")?,
         declared_by: axis("declaredBy"),
     };

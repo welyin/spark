@@ -5,6 +5,9 @@
          组播锁收发组播包，否则 mdns 广播静默无效（MainActivity 启动时持锁） -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 
+    <!-- 生物识别解锁（M4）：释放 Keystore 内封装的登录口令（BiometricPrompt） -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+
     <!-- 摄像头：添加账号页二维码扫码（getUserMedia 取流逐帧 jsQR 解码）。
          RustWebChromeClient.onPermissionRequest 已实现 WebView 权限请求处理，
          但 Android 6+ 的 dangerous 权限需 Manifest 先声明才能在运行时请求。 -->

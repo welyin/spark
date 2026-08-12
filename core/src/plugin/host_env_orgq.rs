@@ -160,7 +160,7 @@ impl PluginHostShared {
     /// 从 `host_env.rs` 移入（Z5 650 行硬线：O3 新增 org 轴解析独立成文件）。
     pub(crate) fn parse_declare_input(payload: &Value) -> Result<crate::plugindata::DeclareInput> {
         use crate::plugindata::{
-            Accounts, Confidentiality, DeclareInput, Devices, MergeRule, Scope, Space,
+            Accounts, Confidentiality, DeclareInput, Devices, MergeRule, Scope, Sensitivity, Space,
         };
         let name = required_str(payload, "name")?.to_string();
         let version = payload
@@ -222,6 +222,16 @@ impl PluginHostShared {
                 )));
             }
         };
+        let sensitivity = match parse_axis("sensitivity") {
+            None => None,
+            Some("normal") => Some(Sensitivity::Normal),
+            Some("sensitive") => Some(Sensitivity::Sensitive),
+            Some(other) => {
+                return Err(super::error::PluginError::InvalidCall(format!(
+                    "sensitivity must be 'normal' or 'sensitive', got {other:?}"
+                )));
+            }
+        };
         let merge = match parse_axis("merge") {
             None => None,
             Some("lww-record") => Some(MergeRule::LwwRecord),
@@ -240,6 +250,7 @@ impl PluginHostShared {
             space,
             accounts,
             confidentiality,
+            sensitivity,
             devices,
             merge,
             declared_by: payload.get("declaredBy").and_then(Value::as_str).map(str::to_string),
@@ -310,6 +321,7 @@ mod tests {
             accounts: crate::plugindata::Accounts::DataAccounts,
             devices: crate::plugindata::Devices::All,
             confidentiality: crate::plugindata::Confidentiality::Filtered,
+            sensitivity: crate::plugindata::Sensitivity::default(),
             merge: crate::plugindata::MergeRule::LwwRecord,
             declared_at: 0,
             declared_by: None,

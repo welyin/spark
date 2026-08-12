@@ -41,6 +41,9 @@ pub(crate) const KIND_DEVICE_SYNC: &str = "device-sync";
 /// 信封 kind：设备加入/变更通知（自设备间，from==to==自己 rootId；body 携带
 /// {kind:"device_joined", deviceId, deviceName, ts}）。
 pub(crate) const KIND_DEVICE_NOTICE: &str = "system/device-notice";
+/// 信封 kind：M5 延迟恢复通道（自设备间，from==to==自己 rootId；body 分
+/// initiated / vetoed / committed 三态，见 recovery 模块与 p2p-dm.md §19）。
+pub(crate) const KIND_RECOVERY: &str = crate::recovery::RECOVERY_KIND;
 /// 信封 kind：通讯录快照同步（自设备间全量快照 LWW 收敛，from==to==自己
 /// rootId；body 为 contact/service/sync.rs 的快照线形：friends/requestsIn/
 /// requestsOut 记录级 LWW + tags/groups/blocked 整域版本 LWW）。

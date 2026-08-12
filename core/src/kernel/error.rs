@@ -62,6 +62,14 @@ pub enum KernelError {
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
 
+    /// Epoch 密钥轮换错误。
+    #[error("epoch error: {0}")]
+    Epoch(#[from] crate::epoch::EpochError),
+
+    /// 口令校验器错误。
+    #[error(transparent)]
+    Pw(#[from] crate::pw::PwError),
+
     /// 身份已锁定（需要解锁的操作）。
     #[error("Root identity is locked")]
     Locked,
@@ -78,6 +86,14 @@ pub enum KernelError {
     #[error("Invalid password")]
     InvalidPassword,
 
+    /// 候选口令与已发布 V 不匹配（`root_verify_password_ticket` / `root_unify_password`）。
+    #[error("Ticket mismatch")]
+    TicketMismatch,
+
+    /// 本地没有可用 V（`root_verify_password_ticket` / `root_unify_password`）。
+    #[error("Ticket unavailable")]
+    TicketUnavailable,
+
     /// 密码长度不足（TS `Password must be at least 8 characters`）。
     #[error("Password must be at least 8 characters")]
     PasswordTooShort,
@@ -92,6 +108,22 @@ pub enum KernelError {
     /// 便于上层识别为「权限/密钥缺失」而非内部故障。
     #[error("Key unavailable: {0}")]
     KeyUnavailable(String),
+
+    /// M5 延迟恢复通道专用错误（文案与前端映射一致）。
+    #[error("TooEarly")]
+    TooEarly,
+    #[error("RecoveryVetoed")]
+    RecoveryVetoed,
+    #[error("RecoveryPending")]
+    RecoveryPending,
+    #[error("RecoveryNotFound")]
+    RecoveryNotFound,
+    #[error("VetoWindowExpired")]
+    VetoWindowExpired,
+    #[error("UnsupportedOp")]
+    UnsupportedOp,
+    #[error("Invalid input")]
+    InvalidInput,
 
     /// 其他流程错误（消息文本与 TS 对应分支一致）。
     #[error("{0}")]

@@ -15,6 +15,7 @@ import { createApp, h, nextTick } from 'vue';
 import ElementPlus from 'element-plus';
 import RootGate from '../../RootGate.vue';
 import { setAutoLockDays, touchLastActiveAt, getLastActiveAt } from '../../utils/auto-lock';
+import { isMobileLayout } from '../../stores/ui-layout';
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -58,11 +59,17 @@ beforeEach(() => {
       status: () => Promise.resolve(statusValue),
       lock,
       unlock
+    },
+    biometric: {
+      check: vi.fn().mockResolvedValue({ available: false, enrolled: false, hasSecret: false }),
+      storePassword: vi.fn().mockResolvedValue(null)
     }
   };
 });
 
 afterEach(() => {
+  isMobileLayout.value = false;
+  delete (window as any).__TAURI_INTERNALS__;
   vi.restoreAllMocks();
 });
 
@@ -136,6 +143,60 @@ describe('RootGate 登录成功刷新最近活跃时间', () => {
 
     expect(unlock).toHaveBeenCalledWith('some-password');
     expect(getLastActiveAt()).not.toBeNull();
+    // 登录成功进入主界面
+    expect(host.querySelector('.app-stub')).toBeTruthy();
+    host.remove();
+  });
+});
+
+describe('RootGate 口令保鲜：指纹来源跳过重刷（两次指纹回归）', () => {
+  it('手动输密码登录（设置开）：storePassword 保鲜照常执行 1 次', async () => {
+    localStorage.setItem('spark.settings.biometricUnlock', 'true');
+    (window as any).__TAURI_INTERNALS__ = {}; // isTauri() 为真，biometricStorePassword 走 mock 分支
+    statusValue.unlocked = false;
+    const host = mount();
+    await flush();
+
+    const input = host.querySelector('input[type="password"]') as HTMLInputElement;
+    input.value = 'typed-pw';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await flush();
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    await flush();
+
+    expect(unlock).toHaveBeenCalledWith('typed-pw');
+    // 手动密码来源：无 bioSourced 标记，口令保鲜照常（覆盖改密后旧 blob 失配）
+    const storePassword = (window as any).electronAPI.biometric.storePassword;
+    expect(storePassword).toHaveBeenCalledTimes(1);
+    expect(storePassword).toHaveBeenCalledWith('typed-pw');
+    host.remove();
+  });
+
+  it('指纹解锁登录（设置开 + hasSecret）：只弹一次指纹，跳过 storePassword', async () => {
+    localStorage.setItem('spark.settings.biometricUnlock', 'true');
+    isMobileLayout.value = true;
+    (window as any).__TAURI_INTERNALS__ = {};
+    statusValue.unlocked = false;
+    (window as any).electronAPI.biometric.check = vi
+      .fn()
+      .mockResolvedValue({ available: true, enrolled: true, hasSecret: true });
+    (window as any).electronAPI.biometric.unlock = vi
+      .fn()
+      .mockResolvedValue({ rootId: 'root-x', password: 'bio-pw' });
+    const storePassword = (window as any).electronAPI.biometric.storePassword;
+
+    const host = mount();
+    // LoginPage onMounted → biometricCheck → runBiometricRitual → unlock → emit → handleLogin
+    // 是多层异步链，多轮 flush 走完
+    await flush();
+    await flush();
+    await flush();
+
+    // 指纹解锁已弹系统验证并拿到密码 → login('bio-pw', bioSourced=true)
+    expect((window as any).electronAPI.biometric.unlock).toHaveBeenCalledTimes(1);
+    expect(unlock).toHaveBeenCalledWith('bio-pw');
+    // 口令保鲜跳过：不再弹第二次系统指纹验证
+    expect(storePassword).not.toHaveBeenCalled();
     // 登录成功进入主界面
     expect(host.querySelector('.app-stub')).toBeTruthy();
     host.remove();

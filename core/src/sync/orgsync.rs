@@ -23,7 +23,7 @@
 //! - [`orgq_deliver`]（O3）：成员侧在线 orgq-req 投递的纯逻辑辅助——在途记录
 //!   读写 / TTL 清理 / 上限 / 写入回执存储 / 同步等待清除（三通路共享骨架）。
 
-mod access;
+pub(crate) mod access;
 mod access_data;
 mod builtin;
 mod collect;

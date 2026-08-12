@@ -15,7 +15,7 @@
         <template v-else-if="!rootStatus.initialized">
           <RegisterPage v-if="authMode === 'register'" @registered="handleRegistered" @add="authMode = 'add'" @recover="authMode = 'recover'" />
           <AddAccountPage v-else-if="authMode === 'add'" ref="addAccountRef" @recovered="handleRecovered" @recover="authMode = 'recover'" @back="authMode = 'register'" />
-          <RecoverPage v-else @recovered="handleRecovered" @back="authMode = 'register'" />
+          <RecoverPage v-else :root-id="rootStatus.rootId ?? ''" @recovered="handleRecovered" @back="authMode = 'register'" />
         </template>
 
         <template v-else-if="!rootStatus.unlocked">
@@ -52,10 +52,27 @@
             @recover="authMode = 'recover'"
             @back="authMode = 'switch'"
           />
-          <RecoverPage v-else back-label="返回用户列表" @recovered="handleRecovered" @back="authMode = 'switch'" />
+          <RecoverPage
+            v-else-if="authMode === 'recover'"
+            back-label="返回用户列表"
+            :root-id="rootStatus.rootId ?? ''"
+            @recovered="handleRecovered"
+            @back="authMode = 'switch'"
+          />
+          <PasswordUnifyPanel
+            v-else-if="authMode === 'unify'"
+            :root-id="rootStatus.rootId ?? ''"
+            @back="authMode = 'login'"
+            @done="handleUnifyDone"
+          />
         </template>
 
         <el-alert v-if="message" :title="message" type="info" :closable="false" show-icon class="gate-message" />
+        <!-- 乙+校验器：登录后若其他设备改了密码，常驻提示条引导统一新密码 -->
+        <div v-if="pendingUnifyRef" class="unify-banner">
+          <span>{{ pendingUnifyRef.reason === 'password_reset' ? '⚠️ 密码已被重置：' : '密码已在其他设备上修改：' }}请使用新密码统一登录凭据。</span>
+          <el-button link type="primary" @click="authMode = 'unify'">统一为新密码</el-button>
+        </div>
       </div>
     </div>
   </section>
@@ -72,12 +89,18 @@ import LoginPage from './pages/auth/LoginPage.vue';
 import RecoverPage from './pages/auth/RecoverPage.vue';
 import SwitchUserPage from './pages/auth/SwitchUserPage.vue';
 import AddAccountPage from './pages/auth/AddAccountPage.vue';
+import PasswordUnifyPanel from './pages/auth/PasswordUnifyPanel.vue';
 import { errorMessage } from './utils/ipc';
 import { isAutoLockExpired, touchLastActiveAt } from './utils/auto-lock';
+import { biometricStorePassword, biometricErrorMessage } from './utils/biometric';
+import { isBiometricUnlockEnabled } from './utils/biometric-setting';
+import { promptBiometricBind } from './utils/biometric-prompt';
+import { isMobileLayout } from './stores/ui-layout';
+import { hydratePasswordUnify, pendingUnifyRef, clearPasswordUnifyPending } from './stores/password-unify';
 import { resetContactsCache } from './mock/contacts/store';
 import { resetMessagesCache } from './stores/messages';
 
-type AuthMode = 'login' | 'switch' | 'register' | 'recover' | 'add';
+type AuthMode = 'login' | 'switch' | 'register' | 'recover' | 'add' | 'unify';
 
 export default defineComponent({
   name: 'RootGate',
@@ -87,7 +110,8 @@ export default defineComponent({
     LoginPage,
     RecoverPage,
     SwitchUserPage,
-    AddAccountPage
+    AddAccountPage,
+    PasswordUnifyPanel
   },
   setup() {
     const search = new URLSearchParams(window.location.search);
@@ -138,7 +162,7 @@ export default defineComponent({
       await refreshStatus();
     };
 
-    const handleLogin = async (password: string) => {
+    const handleLogin = async (password: string, bioSourced = false) => {
       authBusy.value = true;
       // 主动收起键盘并复位滚动：键盘收起过程中 WebView 可能分多帧还原滚动位置，
       // 若不先复位，gate-wrap 停留在被键盘顶起的位置，loading 蒙版（absolute 于滚动容器内）
@@ -154,6 +178,24 @@ export default defineComponent({
         message.value = `登录成功，RootID=${result.rootId}`;
         // 登录成功即活跃：刷新自动锁定的最近活跃时间（§5）
         touchLastActiveAt();
+        // M4 口令保鲜：设置项开启且是「手动输密码」登录时，用刚验证过的密码重刷生物识别凭据
+        // （覆盖改密后旧 blob 失配死路）。bioSourced（生物识别解锁）拿到的密码即 blob 自身，
+        // 已当场通过认证，重刷只会再多弹一次系统指纹验证 → 跳过。
+        if (isBiometricUnlockEnabled() && !bioSourced) {
+          try {
+            await biometricStorePassword(password);
+          } catch (err) {
+            console.warn('[RootGate] biometricStorePassword failed:', biometricErrorMessage(err));
+          }
+        }
+        // 移动端首次登录引导绑定生物识别（弹窗是非阻塞的，不等待它完成）
+        if (isMobileLayout.value && !isBiometricUnlockEnabled()) {
+          promptBiometricBind(password).catch((err) => {
+            console.warn('[RootGate] promptBiometricBind failed:', err);
+          });
+        }
+        // 乙+校验器：登录成功后水合 pendingUnify，常驻条将提示用户统一新密码
+        await hydratePasswordUnify(result.rootId);
         showApp.value = true;
         void refreshStatus();
       } catch (error) {
@@ -175,6 +217,12 @@ export default defineComponent({
       } catch (error) {
         message.value = `切换失败：${errorMessage(error)}`;
       }
+    };
+
+    const handleUnifyDone = () => {
+      authMode.value = 'login';
+      clearPasswordUnifyPending();
+      message.value = '密码统一完成，请用新密码登录';
     };
 
     // 软键盘适配（Android 前端改造）：键盘弹出时 WebView 可视区收缩（visualViewport 高度变小），
@@ -328,10 +376,12 @@ export default defineComponent({
       authMode,
       statusLoaded,
       addAccountRef,
+      pendingUnifyRef,
       handleRegistered,
       handleRecovered,
       handleLogin,
-      handleSwitchSelect
+      handleSwitchSelect,
+      handleUnifyDone
     };
   }
 });

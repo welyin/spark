@@ -218,8 +218,7 @@ fn deliver_orgsync(
         remote_peer_id,
         &HashSet::new(),
         NOW,
-        node_id,
-    )
+        node_id, None)
     .unwrap()
 }
 

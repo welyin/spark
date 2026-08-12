@@ -67,6 +67,13 @@ pub const CATEGORIES: &[Category] = &[
     // 自设备扩散（同账号设备间），**永不进 orgsync 组织流量**（orgsync 数据
     // 白名单只放行 orgd:/org:coll:/org:acl:/存量组织键，见 inbound_dm/orgsync）。
     Category { name: "orgkey", prefixes: &["orgkey:"] },
+    // M3 epoch 状态/包裹：epoch:state 与 ikey:* 记录均通过 pdsync 在自设备间扩散。
+    // ikey: 在前：category_for_key 取首个命中，两前缀互不包含，顺序无吞并风险；
+    // 保持历史顺序避免无关变更。
+    Category { name: "epoch", prefixes: &["ikey:", "epoch:"] },
+    // M3 口令校验器：V/ack 在自设备间扩散，明文豁免。
+    Category { name: "pwv", prefixes: &["pwv:"] },
+    Category { name: "pwack", prefixes: &["pwack:"] },
 ];
 
 /// 按前缀从注册表解析 category（不存在 → `None`，如组织/消息前缀）。
@@ -325,6 +332,7 @@ pub fn build_hello<S: StorageBackend>(
     exclude_key: Option<&str>,
     last_msg_sync_at: Option<i64>,
 ) -> crate::sync::SyncResult<Value> {
+    let effective_epoch = crate::epoch::get_effective(storage).unwrap_or(0);
     let mut hello = json!({
         "categories": collect_all_categories(storage, exclude_key)?,
         "msgWindow": {
@@ -334,6 +342,8 @@ pub fn build_hello<S: StorageBackend>(
         "attachmentPolicy": attachment_policy,
         // P6 驻留裁剪依据：本机设备类（pc/mobile），对端据此裁剪 pdoc 推送
         "deviceClass": local_device_class(),
+        // M3：宣告本机生效 epoch；对端据此决定加密 epoch 上限。
+        "epoch": effective_epoch,
     });
     if let Some(at) = last_msg_sync_at {
         hello["lastMsgSyncAt"] = json!(at);
@@ -362,6 +372,37 @@ pub fn parse_device_class(body: &Value) -> Option<String> {
 /// 不携带设备类，以最近一次 hello 为准）。
 pub fn remote_device_class_key(peer_id: &str) -> String {
     format!("pdsync:devclass:{peer_id}")
+}
+
+/// 对端 hello 宣告 epoch 的持久化键（发送侧据此选择加密 epoch 上限）。
+pub fn remote_epoch_key(peer_id: &str) -> String {
+    format!("pdsync:epoch:{peer_id}")
+}
+
+/// 解析 hello 的 `epoch` 字段；缺省/非法 → `None`（发送侧按 `min(effective,0)`
+/// 即不加密兜底）。
+pub fn parse_remote_epoch(body: &Value) -> Option<u64> {
+    body.get("epoch").and_then(Value::as_u64)
+}
+
+/// 持久化对端 hello 宣告的生效 epoch。
+pub fn set_remote_epoch<S: StorageBackend>(
+    storage: &mut S,
+    peer_id: &str,
+    epoch: u64,
+) -> crate::sync::SyncResult<()> {
+    storage.put(&remote_epoch_key(peer_id), &epoch.to_string())?;
+    Ok(())
+}
+
+/// 读取对端 hello 持久化的生效 epoch；缺失返回 0（发送侧按未初始化/不加密兜底）。
+pub fn get_remote_epoch<S: StorageBackend>(storage: &S, peer_id: &str) -> u64 {
+    storage
+        .get(&remote_epoch_key(peer_id))
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0)
 }
 
 /// P6 驻留裁剪（发送侧）：按集合声明的 `devices` 轴过滤 `pdoc:` 记录——

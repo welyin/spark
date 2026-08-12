@@ -59,6 +59,7 @@ fn device_record(peer_id: &str, uid: &str, updated_at: i64, revoked: Option<i64>
         updated_at,
         last_seen_at: updated_at,
         revoked_at: revoked,
+        device_pub_key: None,
     }
 }
 
@@ -160,7 +161,7 @@ fn handle_device_notice_validation_branches_and_no_side_effects() {
         "ts": NOW,
     });
     let envelope = notice_envelope(&key, &my_root, body);
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &empty, NOW, NODE)
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &empty, NOW, NODE, None)
         .expect("合法自设备通知应 Ok");
     assert_eq!(result.response, json!({ "ok": true }));
     assert_eq!(result.events.len(), 1, "恰好一次事件");
@@ -197,7 +198,7 @@ fn handle_device_notice_validation_branches_and_no_side_effects() {
         }),
         &other_key,
     );
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-b", &empty, NOW, NODE)
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-b", &empty, NOW, NODE, None)
         .expect("非自身份应静默 Ok");
     assert_eq!(result.response, json!({ "ok": false, "reason": "not-self" }));
     assert!(result.events.is_empty(), "from!=me 不得 emit 任何事件");
@@ -206,7 +207,7 @@ fn handle_device_notice_validation_branches_and_no_side_effects() {
     let envelope = notice_envelope(&key, &my_root, json!({
         "deviceId": "peer-x", "deviceName": "x", "ts": NOW,
     }));
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-b", &empty, NOW, NODE)
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-b", &empty, NOW, NODE, None)
         .expect("缺 kind 应静默 Ok");
     assert_eq!(result.response, json!({ "ok": false, "reason": "invalid-kind" }));
     assert!(result.events.is_empty(), "缺 kind 不得 emit 事件");
@@ -215,7 +216,7 @@ fn handle_device_notice_validation_branches_and_no_side_effects() {
     let envelope = notice_envelope(&key, &my_root, json!({
         "kind": "device_revoked", "deviceId": "peer-x", "ts": NOW,
     }));
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-b", &empty, NOW, NODE)
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-b", &empty, NOW, NODE, None)
         .expect("非 device_joined 应静默 Ok");
     assert_eq!(result.response, json!({ "ok": false, "reason": "invalid-kind" }));
     assert!(result.events.is_empty());
@@ -224,7 +225,7 @@ fn handle_device_notice_validation_branches_and_no_side_effects() {
     let envelope = notice_envelope(&key, &my_root, json!({
         "kind": "device_joined", "deviceName": "x", "ts": NOW,
     }));
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-b", &empty, NOW, NODE)
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-b", &empty, NOW, NODE, None)
         .expect("缺 deviceId 应静默 Ok");
     assert_eq!(result.response, json!({ "ok": false, "reason": "invalid-deviceId" }));
     assert!(result.events.is_empty());
@@ -232,7 +233,7 @@ fn handle_device_notice_validation_branches_and_no_side_effects() {
     let envelope = notice_envelope(&key, &my_root, json!({
         "kind": "device_joined", "deviceId": "   ", "deviceName": "x", "ts": NOW,
     }));
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-b", &empty, NOW, NODE)
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-b", &empty, NOW, NODE, None)
         .expect("空 deviceId 应静默 Ok");
     assert_eq!(result.response, json!({ "ok": false, "reason": "invalid-deviceId" }));
     assert!(result.events.is_empty());
@@ -256,13 +257,13 @@ fn handle_device_notice_validation_branches_and_no_side_effects() {
 fn upsert_self_preserves_revoked_at_stickiness() {
     let mut s = MemoryStorage::new();
     // 先写入本机记录并标记撤销（模拟被撤销设备）。
-    DeviceService::upsert_self(&mut s, "peer-self", 100, NODE, "1.0.0").unwrap();
+    DeviceService::upsert_self(&mut s, "peer-self", 100, NODE, "1.0.0", None).unwrap();
     let uid = DeviceService::get(&s, "peer-self").unwrap().unwrap().device_uid;
     DeviceService::mark_revoked(&mut s, uid.as_deref().unwrap(), 200, 200, NODE).unwrap();
 
     // 被撤销设备重启 → upsert_self 重写自己的记录（updated_at 刷新），
     // revokedAt 必须保留（粘性），否则自我洗白黑名单。
-    let rec = DeviceService::upsert_self(&mut s, "peer-self", 300, NODE, "1.0.0").unwrap();
+    let rec = DeviceService::upsert_self(&mut s, "peer-self", 300, NODE, "1.0.0", None).unwrap();
     assert_eq!(rec.revoked_at, Some(200), "upsert_self 必须保留 revokedAt");
     assert_eq!(rec.updated_at, 300, "updated_at 刷新为重启时间");
     // 其外发记录（upsert_pdsync 序列化）仍带标记。
@@ -491,14 +492,22 @@ fn security_log_two_entries_and_sorted_list() {
         kinds.iter().any(|k| k == "device_revoke_effective"),
         "应含 device_revoke_effective，实为 {kinds:?}"
     );
+    // M3：撤销触发 epoch 轮换，安全日志追加 epoch 相关条目。
+    assert!(
+        kinds.iter().any(|k| k == "epoch_rotated"),
+        "应含 epoch_rotated，实为 {kinds:?}"
+    );
+    // epoch_init/revoke/password_change 等冗余 kind 已删除，信息由 epoch_rotated.reason 承载。
 
-    // 每条字段完整：kind/deviceId/ts；initiated 额外含 deviceName/actor。
+    // 每条字段完整：kind/ts；device 类日志额外含 deviceId；initiated 额外含 deviceName/actor。
     for (_key, val) in &logs {
         let v: Value = serde_json::from_str(val).unwrap();
         assert!(v.get("kind").is_some(), "字段 kind 缺失");
-        assert!(v.get("deviceId").is_some(), "字段 deviceId 缺失");
         assert!(v.get("ts").is_some(), "字段 ts 缺失");
         let kind = v["kind"].as_str().unwrap_or("");
+        if kind.starts_with("device_") {
+            assert!(v.get("deviceId").is_some(), "device 类日志字段 deviceId 缺失");
+        }
         if kind == "device_revoke_initiated" {
             assert!(v.get("deviceName").is_some(), "initiated 字段 deviceName 缺失");
             assert_eq!(v["actor"].as_str(), Some("local"), "initiated actor 应为 local");
@@ -594,7 +603,7 @@ fn friend_accept_self_pairs_sets_notice_broadcast_and_opens_window() {
         "nodeInfo": { "peerId": "peer-self-1", "addresses": [] },
     });
     let envelope = dm_envelope::build_envelope("friend-accept", &my_root, &my_root, NOW, body, &key);
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-self-1", &empty, NOW, NODE)
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-self-1", &empty, NOW, NODE, None)
         .expect("自身份 friend-accept 应 Ok");
 
     // sender 触发：device_notice_broadcast 置位（host 侧据此 spawn 广播）。
@@ -672,7 +681,7 @@ fn pdsync_device_sticky_merge_preserves_local_revoked_at() {
     let peer_id = "peer-sticky";
 
     // 本地已撤销该设备（mark_revoked(uid, revoked_at, now_ms, node)）。
-    DeviceService::upsert_self(&mut s, peer_id, 100, NODE, "1.0.0").unwrap();
+    DeviceService::upsert_self(&mut s, peer_id, 100, NODE, "1.0.0", None).unwrap();
     let uid = DeviceService::get(&s, peer_id).unwrap().unwrap().device_uid;
     DeviceService::mark_revoked(&mut s, uid.as_deref().unwrap(), 200, 200, NODE).unwrap();
     assert_eq!(
@@ -703,7 +712,7 @@ fn pdsync_device_sticky_merge_preserves_local_revoked_at() {
         body,
         &key,
     );
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-self-b", &HashSet::new(), NOW, NODE)
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-self-b", &HashSet::new(), NOW, NODE, None)
         .expect("pdsync-data 应 Ok");
     assert_eq!(result.response, json!({ "ok": true }));
 
@@ -728,7 +737,7 @@ fn revoke_then_clean_pdsync_reflow_keeps_revoked_at() {
     let peer_id = "peer-reflow";
 
     // 先落一条干净目标记录，再「A 撤销 B」。
-    DeviceService::upsert_self(&mut s, peer_id, 100, NODE, "1.0.0").unwrap();
+    DeviceService::upsert_self(&mut s, peer_id, 100, NODE, "1.0.0", None).unwrap();
     let uid = DeviceService::get(&s, peer_id).unwrap().unwrap().device_uid;
     DeviceService::mark_revoked(&mut s, uid.as_deref().unwrap(), 500, 500, NODE).unwrap();
     assert_eq!(DeviceService::get(&s, peer_id).unwrap().unwrap().revoked_at, Some(500));
@@ -756,7 +765,7 @@ fn revoke_then_clean_pdsync_reflow_keeps_revoked_at() {
         body,
         &key,
     );
-    handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-self-b", &HashSet::new(), NOW, NODE)
+    handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-self-b", &HashSet::new(), NOW, NODE, None)
         .expect("pdsync 回流应 Ok");
 
     // A 的 revokedAt 仍在（is_revoked_peer 恒 true 的底层保证）。
@@ -779,7 +788,7 @@ fn pdsync_device_unparseable_remote_does_not_advance_pmeta_or_overwrite_local() 
     let device_key = format!("device:{peer_id}");
 
     // 本地 upsert_self + mark_revoked，建立基线记录与其 pmeta。
-    DeviceService::upsert_self(&mut s, peer_id, 100, NODE, "1.0.0").unwrap();
+    DeviceService::upsert_self(&mut s, peer_id, 100, NODE, "1.0.0", None).unwrap();
     let uid = DeviceService::get(&s, peer_id).unwrap().unwrap().device_uid;
     DeviceService::mark_revoked(&mut s, uid.as_deref().unwrap(), 200, 200, NODE).unwrap();
 
@@ -810,7 +819,7 @@ fn pdsync_device_unparseable_remote_does_not_advance_pmeta_or_overwrite_local() 
         body,
         &key,
     );
-    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-self-c", &HashSet::new(), NOW, NODE)
+    let result = handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-self-c", &HashSet::new(), NOW, NODE, None)
         .expect("pdsync-data 应 Ok");
     assert_eq!(result.response, json!({ "ok": true }));
 

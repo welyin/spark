@@ -25,6 +25,11 @@ class MainActivity : TauriActivity() {
     // 见 src-tauri/src/android_activity.rs；P2P 应用进程死了就掉线）
     @JvmStatic
     private external fun nativeSetActivity(activity: MainActivity)
+
+    // 向 Rust 注册生物识别保险柜实例（M4 生物识别解锁，
+    // 见 src-tauri/src/biometric_android.rs 与 BiometricKeystoreHelper.kt）
+    @JvmStatic
+    private external fun nativeSetBiometricHelper(helper: BiometricKeystoreHelper)
   }
 
   /** Android 15+ 强制 edge-to-edge 后 WebView 铺满全屏，但 wry 不把系统栏 insets
@@ -72,6 +77,8 @@ class MainActivity : TauriActivity() {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
     nativeSetActivity(this)
+    // M4 生物识别解锁：注册 Keystore 保险柜供 Rust 命令层经 JNI 调用
+    nativeSetBiometricHelper(BiometricKeystoreHelper(this))
     // Android 默认不向应用投递组播包：mdns 局域网发现（P2P 节点互见/自设备配对）
     // 必须持 MulticastLock 才能正常收发组播，且 manifest 需 CHANGE_WIFI_MULTICAST_STATE。
     // 锁随 Activity 存活（onDestroy 释放；进程死亡系统亦会回收），桌面端无此概念。

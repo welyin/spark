@@ -18,6 +18,20 @@
     }
 
     #[test]
+    fn category_for_key_epoch_state() {
+        // epoch:state 必须归属 pdsync 的 epoch category，否则不会进入 hello/need/data diff。
+        let cat = category_for_key("epoch:state").expect("epoch:state should be categorized");
+        assert_eq!(cat.name, "epoch");
+    }
+
+    #[test]
+    fn category_for_key_ikey_takes_epoch_category() {
+        // ikey: 也走 epoch category，且较长前缀 epoch: 不能误吞 ikey:。
+        let cat = category_for_key("ikey:3:alice:bob").expect("ikey should be categorized");
+        assert_eq!(cat.name, "epoch");
+    }
+
+    #[test]
     fn collect_folds_max_across_records() {
         let mut s = MemoryStorage::new();
         // A 写两条朋友，B 在其中一条上再改

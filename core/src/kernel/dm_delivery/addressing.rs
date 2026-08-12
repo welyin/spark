@@ -363,6 +363,7 @@ mod tests {
             updated_at: 100,
             last_seen_at: 100,
             revoked_at: None,
+            device_pub_key: None,
         }
     }
 

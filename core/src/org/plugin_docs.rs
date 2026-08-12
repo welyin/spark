@@ -256,6 +256,7 @@ pub fn migrate_plugin_docs<S: StorageBackend>(
                 accounts: Some(accounts),
                 devices: None,
                 confidentiality: None,
+                sensitivity: None,
                 merge: None,
                 declared_by: Some(declared_by.to_string()),
             },

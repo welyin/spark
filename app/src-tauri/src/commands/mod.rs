@@ -4,6 +4,7 @@
 //! 每个命令的 `*_inner` 核心函数直接接收 `&Kernel` / `&mut Kernel`，
 //! 不依赖 Tauri State，单元测试直调。
 
+pub mod biometric;
 pub mod contact;
 pub mod data;
 pub mod device;
@@ -18,6 +19,8 @@ pub mod message;
 pub mod org;
 pub mod p2p;
 pub mod plugin;
+pub mod pw;
+pub mod recovery;
 pub mod system;
 pub mod sys;
 // tauri-plugin-updater 仅桌面可用；门控用内建 target_os（与 Cargo.toml 的
@@ -44,4 +47,26 @@ pub(crate) fn lock_kernel<'a>(
 /// KernelError → 前端错误字符串（Display 文案与 TS 对齐）。
 pub(crate) fn err(e: spark_core::kernel::KernelError) -> String {
     e.to_string()
+}
+
+/// 内核命令的阻塞执行器：scrypt 等 CPU 密集操作（unlock/init/recover 的 KDF、
+/// E5 口令验票/重封）同步跑会把命令线程占死、移动端 UI 动画卡顿——改 async +
+/// spawn_blocking 挪到阻塞线程池（模式同 market.rs 的 run_market）。
+pub(crate) async fn run_kernel<T, F>(
+    state: tauri::State<'_, KernelState>,
+    f: F,
+) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(&mut spark_core::kernel::Kernel) -> Result<T, String> + Send + 'static,
+{
+    let kernel = std::sync::Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut guard = kernel
+            .lock()
+            .map_err(|_| "kernel state lock poisoned".to_string())?;
+        f(&mut guard)
+    })
+    .await
+    .map_err(|e| format!("kernel task join failed: {e}"))?
 }

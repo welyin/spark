@@ -15,6 +15,7 @@ import { ARG_NAMES, COMMAND_MAP } from '../../api/command-map';
 
 // vitest 以 app/ 为 cwd 运行；import.meta.url 经 transform 后不是可靠文件路径
 const INDEX_SRC = resolve(process.cwd(), 'src/api/index.ts');
+const LIB_RS = resolve(process.cwd(), 'src-tauri/src/lib.rs');
 
 /**
  * 从 index.ts 源码提取全部 call('channel', ...) 的 channel 与顶层位置实参数。
@@ -80,5 +81,18 @@ describe('command-map 完备性', () => {
   it('security-log-list 命令映射存在且 ARG_NAMES 恰为 [limit]（M2 §6.12 limit 透传）', () => {
     expect(COMMAND_MAP['security-log-list']).toBe('security_log_list');
     expect(ARG_NAMES['security-log-list']).toEqual(['limit']);
+  });
+
+  it('COMMAND_MAP 全部命令名在 src-tauri lib.rs 注册表真实存在（M4 biometric_check 错名回归）', () => {
+    // 'biometric-check' 曾错映到不存在的 biometric_check（真实命令是
+    // biometric_status）——invoke 报 unknown command，前端 catch 兜底成
+    // 「当前设备不支持」，映射存在性断言拦不住错名，必须对注册表反向核对。
+    const libSrc = readFileSync(LIB_RS, 'utf8');
+    for (const [channel, command] of Object.entries(COMMAND_MAP)) {
+      expect(
+        libSrc.includes(`::${command},`) || libSrc.includes(`::${command}\n`),
+        `${channel} 映射的 ${command} 未在 lib.rs generate_handler! 注册`
+      ).toBe(true);
+    }
   });
 });

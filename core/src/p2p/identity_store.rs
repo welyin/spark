@@ -22,6 +22,30 @@ pub fn load_peer_id(storage: &dyn StorageBackend) -> Option<String> {
     Some(libp2p::identity::PeerId::from_public_key(&keypair.public()).to_base58())
 }
 
+/// 从持久化 libp2p 私钥编码中读取 Ed25519 公钥（32B 原始字节 base64）。
+/// p2p 未启动、但需要 devicePubKey 的兜底采集路径使用。
+pub fn load_libp2p_pub_key(storage: &dyn StorageBackend) -> Option<String> {
+    let encoded = storage.get(P2P_IDENTITY_PRIVATE_KEY).ok().flatten()?;
+    let bytes = B64.decode(encoded.trim()).ok()?;
+    let keypair = Keypair::from_protobuf_encoding(&bytes).ok()?;
+    let ed25519 = keypair.try_into_ed25519().ok()?;
+    Some(B64.encode(ed25519.public().to_bytes()))
+}
+
+/// 从持久化 libp2p 私钥派生 X25519 私钥标量（M3 epoch 包裹用）。
+/// 不返回 Ed25519 seed，避免在业务层扩散原始签名密钥。
+pub fn load_x25519_private_key(storage: &dyn StorageBackend) -> Option<[u8; 32]> {
+    let encoded = storage.get(P2P_IDENTITY_PRIVATE_KEY).ok().flatten()?;
+    let bytes = B64.decode(encoded.trim()).ok()?;
+    let keypair = Keypair::from_protobuf_encoding(&bytes).ok()?;
+    let ed25519 = keypair.try_into_ed25519().ok()?;
+    // libp2p ed25519 Keypair::to_bytes 为 96B（扩展私钥 64B + 公钥 32B），
+    // 前 32B 即 Ed25519 seed，正是 ed_sk_to_x25519 所需输入。
+    let bytes = ed25519.to_bytes();
+    let seed = bytes[..32].try_into().ok()?;
+    Some(crate::sync::orgsync::ed_sk_to_x25519(&seed))
+}
+
 /// 读取或创建 libp2p 私钥（同设备 PeerId 稳定）。
 pub fn get_or_create_libp2p_keypair(storage: &mut dyn StorageBackend) -> Result<Keypair> {
     let persisted = storage.get(P2P_IDENTITY_PRIVATE_KEY)?;

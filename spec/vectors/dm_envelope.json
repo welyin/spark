@@ -33,5 +33,56 @@
     },
     "payload": "{\"body\":{\"kind\":\"device_joined\",\"deviceId\":\"peer-device-123\",\"deviceName\":\"Golden Device\",\"ts\":1720000000000},\"from\":\"fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889\",\"kind\":\"system/device-notice\",\"to\":\"fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889\",\"ts\":1720000000000}",
     "sigBase64": "MZbHZlqV2mNlPzPYLDZp//xpnD0BDe7zwqvf7Hkw0X1l2RrRl3AH713MkMVsECCRJgeqOeWjYQhGkbWRrxSoCA=="
+  },
+  {
+    "description": "system/recovery 信封：initiated 广播，from==to==rootId，body 携带 kind/op/requestId/deadline/fromDevice",
+    "secretKeyHex": "0707070707070707070707070707070707070707070707070707070707070707",
+    "pubKeyBase64": "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=",
+    "rootId": "fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889",
+    "kind": "system/recovery",
+    "to": "fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889",
+    "ts": 1720000000000,
+    "body": {
+      "kind": "initiated",
+      "op": "reset_password",
+      "requestId": "rc0123456789abcdef0123456789abcdef",
+      "deadline": 1720086400000,
+      "fromDevice": "peer-device-123"
+    },
+    "payload": "{\"body\":{\"kind\":\"initiated\",\"op\":\"reset_password\",\"requestId\":\"rc0123456789abcdef0123456789abcdef\",\"deadline\":1720086400000,\"fromDevice\":\"peer-device-123\"},\"from\":\"fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889\",\"kind\":\"system/recovery\",\"to\":\"fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889\",\"ts\":1720000000000}",
+    "sigBase64": "jcmBl1Tbt7yPBeKtLtRO0jOr5ZDJbEJga5ANKYuY15nMhu01c4Es21nvltxqmvWOgXoTjAfpZSII76kPrhGbBg=="
+  },
+  {
+    "description": "system/recovery 信封：vetoed 广播，from==to==rootId，body 携带 kind/requestId/fromDevice",
+    "secretKeyHex": "0707070707070707070707070707070707070707070707070707070707070707",
+    "pubKeyBase64": "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=",
+    "rootId": "fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889",
+    "kind": "system/recovery",
+    "to": "fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889",
+    "ts": 1720000000000,
+    "body": {
+      "kind": "vetoed",
+      "requestId": "rc0123456789abcdef0123456789abcdef",
+      "fromDevice": "peer-device-123"
+    },
+    "payload": "{\"body\":{\"kind\":\"vetoed\",\"requestId\":\"rc0123456789abcdef0123456789abcdef\",\"fromDevice\":\"peer-device-123\"},\"from\":\"fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889\",\"kind\":\"system/recovery\",\"to\":\"fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889\",\"ts\":1720000000000}",
+    "sigBase64": "O1yvOqzvbR/OFcQVWlmKmW5fD7lgL9K9zt1lMnDKqMdgZ60DPKAUE7a1bbUxAPYxHhKFg5NnCpYaMF8ZM6qXDw=="
+  },
+  {
+    "description": "system/recovery 信封：committed 广播，from==to==rootId，body 携带 kind/op/requestId/fromDevice",
+    "secretKeyHex": "0707070707070707070707070707070707070707070707070707070707070707",
+    "pubKeyBase64": "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=",
+    "rootId": "fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889",
+    "kind": "system/recovery",
+    "to": "fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889",
+    "ts": 1720000000000,
+    "body": {
+      "kind": "committed",
+      "op": "reset_password",
+      "requestId": "rc0123456789abcdef0123456789abcdef",
+      "fromDevice": "peer-device-123"
+    },
+    "payload": "{\"body\":{\"kind\":\"committed\",\"op\":\"reset_password\",\"requestId\":\"rc0123456789abcdef0123456789abcdef\",\"fromDevice\":\"peer-device-123\"},\"from\":\"fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889\",\"kind\":\"system/recovery\",\"to\":\"fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889\",\"ts\":1720000000000}",
+    "sigBase64": "xRhCMr6WIp28+nJKeEhenRvjbN4Fus1sLU1ctcDr3gu7MjRjk0MFiQJ7+duWTnMfw5u1GfTFQ3V4vXqSIv/FAw=="
   }
 ]

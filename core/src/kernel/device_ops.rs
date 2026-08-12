@@ -65,13 +65,17 @@ impl Kernel {
         };
         let now = crate::p2p::node::system_now_ms();
         let node_id = self.sync_node_id();
+        let root_id = self.require_unlocked_root_id().ok();
         // app_version 先取出再借 storage：避免与 require_storage_mut 的互斥借用冲突
         let app_version = self.config.app_version.clone();
+        // D2：在取 storage 可变借用前先派生会话 Kverify（需要读 self.unlocked + storage）。
+        let kverify = crate::kernel::pw_ops::derive_session_kverify(self).ok().flatten();
         {
             let storage = self.require_storage_mut()?;
             // 本机记录兜底：p2p 已启动但清单无本机条目时采集落库
             if let Some(peer_id) = &local_peer_id {
                 if crate::device::DeviceService::get(storage, peer_id)?.is_none() {
+                    let device_pub_key = crate::p2p::identity_store::load_libp2p_pub_key(storage);
                     let record =
                         crate::device::DeviceService::upsert_self(
                             storage,
@@ -79,7 +83,21 @@ impl Kernel {
                             now,
                             &node_id,
                             &app_version,
+                            device_pub_key,
                         )?;
+                    if let Some(ref root_id) = root_id {
+                        let _ = crate::epoch::EpochService::maybe_grant_epoch_key(
+                            storage,
+                            root_id,
+                            &node_id,
+                            &node_id,
+                            now,
+                            &record.peer_id,
+                            record.device_pub_key.as_deref(),
+                            record.revoked_at,
+                            kverify.as_ref(),
+                        );
+                    }
                     if let Ok(data) = serde_json::to_value(&record) {
                         let _ = self.event_tx.send(crate::p2p::P2pEvent::DeviceUpdated(data));
                     }
@@ -208,6 +226,17 @@ impl Kernel {
 
         // 向已配对自设备广播带 revokedAt 的设备快照（M2 §4.2-②）。
         self.broadcast_device_sync(&record);
+
+        // M3：撤销触发 epoch 密钥轮换。
+        if let Err(e) = crate::kernel::epoch_ops::after_revoke_snapshot(self, &record.peer_id) {
+            log::error!("[revoke-device] epoch rotation after revoke failed for peer={}: {}", record.peer_id, e);
+            let _ = DeviceService::append_security_log(
+                self.require_storage_mut()?,
+                "rotation_failed",
+                serde_json::json!({"reason": "revoke", "peer_id": record.peer_id, "error": format!("{e}")}),
+                now_ms,
+            );
+        }
 
         // 即时断连：交给 runtime spawn，避免阻塞 API 返回。
         if let Some(node) = self.p2p.clone() {

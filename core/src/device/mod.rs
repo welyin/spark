@@ -76,6 +76,10 @@ pub struct DeviceRecord {
     /// 同步/寻址再次将其「洗白」。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revoked_at: Option<i64>,
+    /// 设备 Ed25519 公钥（base64 编码的 32B 原始公钥；M3 epoch 包裹用）。
+    /// 旧版本记录/未采集到公钥的对端可为 `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_pub_key: Option<String>,
 }
 
 /// 本机设备信息采集结果（未落库前的瞬态）。
@@ -433,13 +437,21 @@ impl DeviceService {
         now_ms: i64,
         node_id: &str,
         app_version: &str,
+        device_pub_key: Option<String>,
     ) -> crate::contact::Result<DeviceRecord> {
         let info = collect_local_device_info();
         let device_uid = get_or_create_device_uid(storage)?;
         Self::tombstone_same_device_peers(storage, Some(&device_uid), peer_id, now_ms, node_id)?;
         // 撤销粘性：本地已有本机记录时，保留 revoked_at，防止同步/重采集把
         // 已撤销设备「洗白」。
-        let revoked_at = Self::get(storage, peer_id)?.and_then(|r| r.revoked_at);
+        let existing = Self::get(storage, peer_id)?;
+        let revoked_at = existing.as_ref().and_then(|r| r.revoked_at);
+        // 公钥粘性：已有值时不回退（兜底采集可能后补）。
+        let device_pub_key = device_pub_key.or_else(|| {
+            existing
+                .and_then(|r| r.device_pub_key)
+                .filter(|s| !s.is_empty())
+        });
         // 已存在且系统信息未变：只刷 last_seen/updated（保持单调）
         let record = DeviceRecord {
             peer_id: peer_id.to_string(),
@@ -453,6 +465,7 @@ impl DeviceService {
             updated_at: now_ms,
             last_seen_at: now_ms,
             revoked_at,
+            device_pub_key,
         };
         Self::upsert_pdsync(storage, &record, now_ms, node_id)?;
         Ok(record)
@@ -568,12 +581,14 @@ mod tests {
     fn upsert_self_replaces_stale_peer_id_same_device() {
         let mut storage = crate::storage::MemoryStorage::new();
         let first =
-            DeviceService::upsert_self(&mut storage, "peer-old", 100, "node-a", "0.2.1").unwrap();
+            DeviceService::upsert_self(&mut storage, "peer-old", 100, "node-a", "0.2.1", None)
+                .unwrap();
         let uid = first.device_uid.clone().expect("本机记录必带 deviceUid");
 
         // peerId 漂移（模拟 keypair 重新生成），同库再登记
         let second =
-            DeviceService::upsert_self(&mut storage, "peer-new", 200, "node-a", "0.2.1").unwrap();
+            DeviceService::upsert_self(&mut storage, "peer-new", 200, "node-a", "0.2.1", None)
+                .unwrap();
         assert_eq!(second.device_uid.as_deref(), Some(uid.as_str()), "同设备 UID 稳定");
 
         // 旧 peerId 记录本体已删 + 墓碑 pmeta 保留（供同步传播）
@@ -602,6 +617,7 @@ mod tests {
             updated_at: 100,
             last_seen_at: 100,
             revoked_at: None,
+            device_pub_key: None,
         };
         DeviceService::upsert_pdsync(&mut storage, &old, 100, "node-a").unwrap();
 
@@ -633,6 +649,7 @@ mod tests {
             updated_at: 100,
             last_seen_at: 100,
             revoked_at: None,
+            device_pub_key: None,
         };
         DeviceService::upsert_pdsync(&mut storage, &legacy, 100, "node-a").unwrap();
 
@@ -663,6 +680,7 @@ mod tests {
             updated_at: 100,
             last_seen_at: 100,
             revoked_at: None,
+            device_pub_key: None,
         };
         let (applied, changed) = DeviceService::apply_remote(&mut storage, older.clone(), 100, "local-node").unwrap();
         assert!(changed);

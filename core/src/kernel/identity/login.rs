@@ -7,6 +7,7 @@ use super::{
 use crate::identity::{self, IdentityFile};
 use crate::kernel::Kernel;
 use crate::kernel::error::{KernelError, Result};
+use crate::pw;
 use crate::storage::StorageBackend;
 
 impl Kernel {
@@ -41,8 +42,13 @@ impl Kernel {
         self.write_identity_file(&file)?;
         self.write_active_root_id(&file.root_id)?;
         self.align_storage(&file.root_id)?;
+        // §13.9：注册时即持久化设备身份，避免首次 unlock 前 ack 用 local-node。
+        self.ensure_p2p_identity_ready()?;
         let root_id = file.root_id.clone();
         self.set_unlocked(identity, seed, password, Some(key));
+        if let Err(e) = self.on_unlock_password_ops(password) {
+            log::error!("[init-identity] password ops failed: {e}");
+        }
         self.ensure_p2p_after_login();
         Ok(InitIdentityResult { root_id, mnemonic })
     }
@@ -80,7 +86,12 @@ impl Kernel {
         // 前完成，保证共享格读到最新资料。
         self.apply_sled_profile_to_identity(&mut file, password, session_key.as_ref());
         let root_id = file.root_id.clone();
+        // §13.9：unlock 入口同其他「首次解锁」路径，确保真实 peerId 已就绪。
+        self.ensure_p2p_identity_ready()?;
         self.set_unlocked(identity, seed, password, session_key);
+        if let Err(e) = self.on_unlock_password_ops(password) {
+            log::error!("[unlock] password ops failed: {e}");
+        }
         self.ensure_p2p_after_login();
         // P2：存量资料迁移——sled `profile:self` 为空但身份文件有资料时，首次
         // unlock 一次性写入 sled（幂等）。此后以 sled 为 pdsync 读源。
@@ -260,8 +271,13 @@ impl Kernel {
         self.write_identity_file(&file)?;
         self.write_active_root_id(&file.root_id)?;
         self.align_storage(&file.root_id)?;
+        // §13.9：助记词恢复与 QR 恢复同根，先确保设备身份就绪再 ack。
+        self.ensure_p2p_identity_ready()?;
         let root_id = file.root_id.clone();
         self.set_unlocked(identity, seed, new_password, Some(key));
+        if let Err(e) = self.on_unlock_password_ops(new_password) {
+            log::error!("[recover-mnemonic] password ops failed: {e}");
+        }
         self.ensure_p2p_after_login();
         Ok(root_id)
     }
@@ -293,20 +309,35 @@ impl Kernel {
         let compact = identity::file::seal_compact_backup(&file, &payload, password)?;
         let compact_value: serde_json::Value =
             serde_json::to_value(&compact).map_err(|e| KernelError::Internal(e.to_string()))?;
+        // QR-F1（§13.8）：把当前 `pwv:self`（若有）编入载荷顶层可选字段 `pwv`——
+        // 使恢复设备 B 继承 A 的 V（而非恢复时新建分叉 V），从而 B 首次 unlock
+        // 能验证并 ack A 的 V，完成 D′ 收敛。pwv 是明文豁免记录（无密钥），随
+        // 载荷携带安全；无 pwv（老账号）则省略字段，恢复端走懒发布兜底。
+        let pwv_value = self
+            .require_storage()
+            .ok()
+            .and_then(|storage| pw::get_pwv(storage).ok().flatten())
+            .and_then(|pwv| serde_json::to_value(&pwv).ok());
         // 附加本机 P2P 节点信息，便于恢复端扫码后自动完成设备配对
         if let Some(p2p_info) = self.p2p_status().ok().flatten() {
             if let Some(ref peer_id) = p2p_info.peer_id {
                 if !p2p_info.addresses.is_empty() {
-                    return Ok(serde_json::json!({
+                    let mut obj = serde_json::json!({
                         "v": 1,
                         "i": compact_value,
                         "p": peer_id,
                         "a": p2p_info.addresses,
-                    })
-                    .to_string());
+                    });
+                    if let Some(pwv_value) = pwv_value {
+                        obj["pwv"] = pwv_value;
+                    }
+                    return Ok(obj.to_string());
                 }
             }
         }
+        // 无 p2p 运行时（未建连）：恢复端无法自动配对、收敛本就不发生；且注入
+        // pwv 会让无头像紧凑载荷逼近 QR 预算上限。保持紧凑身份 JSON 顶层原样
+        // （旧版兼容），不注入 pwv。
         Ok(serde_json::to_string(&compact_value)
             .map_err(|e| KernelError::Internal(e.to_string()))?)
     }
@@ -317,9 +348,14 @@ impl Kernel {
     /// 支持 v1 封装格式（`{"v":1,"i":"<IdentityFile JSON>","p":"<peerId>","a":[...]}`），
     /// 自动提取生成端 P2P 名片并完成设备配对。
     pub fn recover_backup(&mut self, payload_json: &str, password: &str) -> Result<String> {
-        // 解包：v1 格式为 `{"v":1,"i":{<IdentityFile>},"p":"...","a":[...]}`，
-        // "i" 是 JSON 对象（v1.1）或 JSON 字符串（v1.0 兼容）。
-        let (file_json, qr_peer): (String, Option<(String, Vec<String>)>) = {
+        // 解包：v1 格式为 `{"v":1,"i":{<IdentityFile>},"p":"...","a":[...],"pwv":{...}}`，
+        // "i" 是 JSON 对象（v1.1）或 JSON 字符串（v1.0 兼容）；"pwv" 为 QR-F1 注入的
+        // 口令校验器（可选，旧版 QR 无此字段）。
+        let (file_json, qr_peer, injected_pwv): (
+            String,
+            Option<(String, Vec<String>)>,
+            Option<crate::pw::PasswordVerifier>,
+        ) = {
             match serde_json::from_str::<serde_json::Value>(payload_json) {
                 Ok(w) if w.get("v").and_then(|v| v.as_u64()) == Some(1) => {
                     let inner = match w.get("i") {
@@ -341,9 +377,32 @@ impl Kernel {
                         })
                         .filter(|v: &Vec<String>| !v.is_empty());
                     let peer = pid.zip(addrs);
-                    (inner, peer)
+                    // QR-F1 注入的 pwv：解析失败视为损坏载荷（fail-closed）。
+                    let injected = w
+                        .get("pwv")
+                        .cloned()
+                        .map(|v| {
+                            serde_json::from_value::<crate::pw::PasswordVerifier>(v).map_err(|e| {
+                                KernelError::Internal(format!("备份载荷 pwv 无效: {e}"))
+                            })
+                        })
+                        .transpose()?;
+                    (inner, peer, injected)
                 }
-                Ok(_) | Err(_) => (payload_json.to_string(), None),
+                // 非 v1 封装（纯 IdentityFile JSON）也兼容：无 pwv 字段则 None。
+                Ok(w) if w.get("pwv").is_some() => {
+                    let injected = w
+                        .get("pwv")
+                        .cloned()
+                        .map(|v| {
+                            serde_json::from_value::<crate::pw::PasswordVerifier>(v).map_err(|e| {
+                                KernelError::Internal(format!("备份载荷 pwv 无效: {e}"))
+                            })
+                        })
+                        .transpose()?;
+                    (payload_json.to_string(), None, injected)
+                }
+                Ok(_) | Err(_) => (payload_json.to_string(), None, None),
             }
         };
 
@@ -381,8 +440,24 @@ impl Kernel {
         self.write_identity_file(&file)?;
         self.write_active_root_id(&file.root_id)?;
         self.align_storage(&file.root_id)?;
+        // §13.9：确保设备身份就绪——否则 `sync_node_id` 回退 "local-node"，
+        // ack/自锚用错设备标识导致 A 侧无法按 B 真实 peerId 锚定（收敛链断）。
+        self.ensure_p2p_identity_ready()?;
+        // QR-F2（§13.8）：若载荷携带生成端 A 的 pwv，经守卫注入 `pwv:self`（不推进
+        // appliedVTs——保持 0，使 B 首次 unlock 验证口令后能 ack A 的 V）。随后
+        // `on_unlock_password_ops` 的 `maybe_ack_on_unlock` 会验证注入的 V 并自锚+ack，
+        // 完成 D′ 收敛。守卫由 `pw::inject_pwv` 承担（未来 ts 拒收+水位单调）。
+        if let Some(injected) = injected_pwv {
+            let node_id = self.sync_node_id();
+            let now_ms = crate::p2p::node::system_now_ms();
+            let storage = self.require_storage_mut()?;
+            pw::inject_pwv(storage.raw_mut(), &node_id, &injected, now_ms)?;
+        }
         let root_id = file.root_id.clone();
         self.set_unlocked(identity, seed, password, session_key);
+        if let Err(e) = self.on_unlock_password_ops(password) {
+            log::error!("[recover-backup] password ops failed: {e}");
+        }
         self.ensure_p2p_after_login();
         // 若载荷含生成端节点信息，落单向设备记录并尝试 friend-request
         if let Some((gen_peer_id, gen_addresses)) = qr_peer {

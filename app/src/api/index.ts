@@ -461,6 +461,19 @@ export function createTauriApi(): ElectronAPI {
         call('root-recover-mnemonic', mnemonic, newPassword, nickname, avatar ?? null),
       recoverBackup: (payload, password) => call('root-recover-backup', payload, password)
     },
+    biometric: {
+      // M4 生物识别：状态检查 / 解锁 / 存密 / 删密
+      check: () => call('biometric-check'),
+      unlock: () => call('biometric-unlock'),
+      storePassword: (password) => call('biometric-store-password', password),
+      delete: () => call('biometric-delete')
+    },
+    passwordUnify: {
+      // 乙+校验器：验票 / 重封 / 状态查询
+      verifyTicket: (password) => call('root-password-verify-ticket', password),
+      unifyPassword: (oldPassword, newPassword) => call('root-password-unify', oldPassword, newPassword),
+      status: () => call('root-password-unify-status')
+    },
     // 主程序自动更新（tauri-plugin-updater + GitHub Releases 清单；
     // commands/updater.rs）。onReady 订阅后台自动下载就绪事件，
     // 由 use-updater 弹重启确认框
@@ -471,6 +484,13 @@ export function createTauriApi(): ElectronAPI {
       applyRestart: () => call('updater-apply-restart'),
       onReady: (cb) =>
         listen<UpdaterReadyInfo>('updater://ready', (event) => cb(event.payload)),
+    },
+    recovery: {
+      // M5 延迟恢复：多设备间密码重置/配对新设备的安全窗口协议
+      status: () => call('root-recovery-status'),
+      initiate: (op, delayHours) => call('root-recovery-initiate', op, delayHours ?? undefined),
+      confirm: (requestId, newPassword) => call('root-recovery-confirm', requestId, newPassword),
+      veto: (requestId) => call('root-recovery-veto', requestId)
     },
     devices: {
       // 设备清单（多设备同步）：本机采集 + 自设备 device-sync 同步的全量记录

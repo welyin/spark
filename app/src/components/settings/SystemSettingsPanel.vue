@@ -9,6 +9,7 @@
     <div class="mine-list-items">
       <button
         v-for="item in sections"
+        v-show="item.show"
         :key="item.key"
         type="button"
         class="mine-list-item"
@@ -122,6 +123,14 @@
     </el-card>
     <MockSettingGroup v-else-if="activeSection === 'notify'" title="消息通知" :items="notifyItems" hint="消息声音、桌面通知与免打扰。" />
 
+    <!-- 生物识别解锁：移动端系统级能力，仅在移动端展示 -->
+    <el-card v-else-if="activeSection === 'biometric'" shadow="never" class="panel-card">
+      <template #header>
+        <h2>生物识别解锁</h2>
+      </template>
+      <SystemBiometricPanel :root-id="rootStatus.rootId ?? ''" @cancel="activeSection = null" />
+    </el-card>
+
     <!-- 关于 -->
     <el-card v-else shadow="never" class="panel-card">
       <template #header>
@@ -157,7 +166,7 @@
 
 <script lang="ts">
 import { computed, defineComponent, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue';
-import { Bell, Coin, Connection, InfoFilled, SetUp } from '@element-plus/icons-vue';
+import { Bell, Coin, Connection, InfoFilled, SetUp, Unlock } from '@element-plus/icons-vue';
 import type { DataUsageReportDto, P2pInfoDto as P2PInfo } from '../../api';
 import { formatBytes } from '../../utils/format';
 import { themeMode } from '../../stores/theme';
@@ -165,6 +174,7 @@ import { isMobileLayout } from '../../stores/ui-layout';
 import { isOverlayCloseTarget, popOverlay, pushOverlay } from '../../stores/overlay-stack';
 import MobileBackBar from '../MobileBackBar.vue';
 import NetworkModule from '../mine/NetworkModule.vue';
+import SystemBiometricPanel from './SystemBiometricPanel.vue';
 import MockSettingGroup, { type MockSettingItem } from './MockSettingGroup.vue';
 
 type RootStatus = {
@@ -175,7 +185,7 @@ type RootStatus = {
   avatar: string | null;
 };
 
-type SectionKey = 'netStatus' | 'storage' | 'general' | 'notify' | 'about';
+type SectionKey = 'netStatus' | 'storage' | 'general' | 'notify' | 'about' | 'biometric';
 
 const USAGE_CLASS_LABELS: Array<{ key: keyof DataUsageReportDto['classes']; label: string }> = [
   { key: 'documents', label: '业务文档' },
@@ -208,15 +218,16 @@ export default defineComponent({
   components: {
     NetworkModule,
     MockSettingGroup,
-    MobileBackBar
+    MobileBackBar,
+    SystemBiometricPanel
   },
   props: {
     /** 初始定位的子菜单（深链入口，如移动端网络状态点跳「网络状态」）；仅在挂载时生效一次 */
-    initialSection: { type: String as () => SectionKey, default: undefined }
+    initialSection: { type: String as () => SectionKey | undefined, default: undefined }
   },
   setup(props) {
     // 移动端（Android 前端改造）：子菜单整页 <-> 内容整页覆盖层；桌面端保持「子菜单+内容」分栏
-    const activeSection = ref<SectionKey | null>(props.initialSection ?? (isMobileLayout.value ? null : 'general'));
+    const activeSection = ref<SectionKey | null>(props.initialSection ?? (isMobileLayout.value ? null : 'biometric'));
     // 覆盖层登记（token 制）：移动端选中 section（内容整页）时入栈，返回子菜单/卸载时出栈；
     // 系统回退键仅关栈顶（本面板内容页上还可能叠着模块详情整页，须逐层回退）
     let overlayToken: symbol | null = null;
@@ -260,19 +271,20 @@ export default defineComponent({
     const dataActionRunning = ref(false);
     const generalStates = ref<Record<string, boolean>>({});
 
-    // 顺序按用户习惯：通用偏好在前，网络/存储等系统项居中，关于垫底；
+    // 顺序按用户习惯：通用偏好在前，生物识别（移动端系统级能力），网络/存储等系统项居中，关于垫底；
     // color 为菜单图标色（微信式每项一色，取色与 utils/palette 品牌色板同源，移动端与桌面端统一上色）
-    const sections: Array<{ key: SectionKey; label: string; icon: Component; color: string }> = [
-      { key: 'general', label: '通用设置', icon: SetUp, color: '#64748b' },
-      { key: 'notify', label: '消息通知', icon: Bell, color: '#eb2f96' },
-      { key: 'netStatus', label: '网络状态', icon: Connection, color: '#00b8a9' },
-      { key: 'storage', label: '存储管理', icon: Coin, color: '#f7b500' },
-      { key: 'about', label: '关于', icon: InfoFilled, color: '#94a3b8' }
-    ];
+    const sections = computed<Array<{ key: SectionKey; label: string; icon: Component; color: string; show: boolean }>>(() => [
+      { key: 'general', label: '通用设置', icon: SetUp, color: '#64748b', show: true },
+      { key: 'biometric', label: '生物识别解锁', icon: Unlock, color: '#7b61ff', show: isMobileLayout.value },
+      { key: 'notify', label: '消息通知', icon: Bell, color: '#eb2f96', show: true },
+      { key: 'netStatus', label: '网络状态', icon: Connection, color: '#00b8a9', show: true },
+      { key: 'storage', label: '存储管理', icon: Coin, color: '#f7b500', show: true },
+      { key: 'about', label: '关于', icon: InfoFilled, color: '#94a3b8', show: true }
+    ]);
 
     /** 当前选中子菜单的标题（移动端整页返回栏标题） */
     const activeSectionLabel = computed(
-      () => sections.find((sec) => sec.key === activeSection.value)?.label ?? ''
+      () => sections.value.find((sec) => sec.key === activeSection.value)?.label ?? ''
     );
 
     const usageRows = computed(() =>
