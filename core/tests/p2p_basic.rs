@@ -146,6 +146,8 @@ async fn peer_exchange_request_response() {
                 OverlayPeerSource::Announce,
                 true,
                 now,
+                None,
+                &std::collections::HashSet::new(),
             )
             .unwrap();
     }

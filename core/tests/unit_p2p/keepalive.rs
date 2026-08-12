@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use spark_core::p2p::constants::{RECOVERY_COOLDOWN_MS, RECOVERY_SEARCH_DISPLAY_MS};
+use spark_core::p2p::constants::RECOVERY_SEARCH_DISPLAY_MS;
 use spark_core::p2p::keepalive::*;
 use spark_core::p2p::peer_targets::PeerNodeInfo;
 
@@ -11,25 +11,6 @@ fn info(peer_id: &str) -> PeerNodeInfo {
         peer_id: Some(peer_id.to_string()),
         addresses: vec!["/ip4/1.2.3.4/tcp/1/ws".to_string()],
     }
-}
-
-#[test]
-fn overlay_budget() {
-    assert_eq!(overlay_dial_budget(0), 2);
-    assert_eq!(overlay_dial_budget(3), 1);
-    assert_eq!(overlay_dial_budget(4), 0);
-    assert_eq!(overlay_dial_budget(10), 0);
-}
-
-#[test]
-fn org_dial_plan_caps_at_max() {
-    let candidates = vec![info("a"), info("b"), info("c"), info("d"), info("e")];
-    let connected = HashSet::from(["a".to_string()]);
-    let (to_dial, conn) = plan_organization_dials(&candidates, &connected, 3);
-    assert_eq!(conn.len(), 1);
-    assert_eq!(to_dial.len(), 3);
-    let ids: Vec<String> = to_dial.iter().filter_map(|c| c.peer_id.clone()).collect();
-    assert_eq!(ids, vec!["b", "c", "d"]);
 }
 
 #[test]
@@ -55,35 +36,16 @@ fn exchange_target_rotates() {
 }
 
 #[test]
-fn recovery_trigger_cadence() {
-    let mut trigger = RecoveryTrigger::new();
-    // 连续 2 个 tick 不触发
-    assert!(!trigger.on_tick(true, 1000));
-    assert!(!trigger.on_tick(true, 2000));
-    // 第 3 个 tick 触发并记录查询时间
-    assert!(trigger.on_tick(true, 3000));
-    // 冷却期内不触发（即使连续 tick）
-    assert!(!trigger.on_tick(true, 4000));
-    // 可达时清零
-    assert!(!trigger.on_tick(false, 5000));
-    assert!(!trigger.on_tick(true, 6000));
-    // 冷却过后 + 连续 3 tick 再次触发
-    assert!(!trigger.on_tick(true, 7000));
-    assert!(!trigger.on_tick(true, 8000));
-    assert!(trigger.on_tick(true, 3000 + RECOVERY_COOLDOWN_MS + 1));
-}
-
-#[test]
 fn recovery_state_snapshot() {
+    // connection-policy M6 后恢复查询改为事件点触发的 DHT 刷新：不再有 tick
+    // cadence（on_tick 删除），只记录最近一轮查询时间供 UI 展示。
     let mut trigger = RecoveryTrigger::new();
     // 从未查询 → Idle
     assert_eq!(trigger.state(10_000), RecoveryState::Idle);
     assert_eq!(trigger.state(10_000).as_str(), "idle");
     assert_eq!(trigger.state(10_000).since(), None);
-    // 连续 3 tick 触发查询后，窗口内 → Recovering
-    assert!(!trigger.on_tick(true, 1_000));
-    assert!(!trigger.on_tick(true, 2_000));
-    assert!(trigger.on_tick(true, 3_000));
+    // 懒连接链 DHT 刷新发起查询后，窗口内 → Recovering
+    trigger.note_query(3_000);
     assert_eq!(
         trigger.state(3_000 + RECOVERY_SEARCH_DISPLAY_MS),
         RecoveryState::Recovering { since: 3_000 }

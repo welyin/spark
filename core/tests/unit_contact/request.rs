@@ -61,7 +61,7 @@ fn outgoing_request_lifecycle() {
         Some(PeerRef {
             peer_id: "peer-2".to_string(),
             addresses: vec![],
-        }),
+        ..Default::default()}),
         NOW,
     )
     .unwrap();

@@ -24,7 +24,7 @@ fn friend_record(root_id: &str) -> FriendRecord {
         signature: String::new(),
         gender: None,
         added_at: NOW,
-        peer: None,
+        peers: Vec::new(),
         remark: String::new(),
         phones: Vec::new(),
         tag_ids: Vec::new(),
@@ -184,7 +184,7 @@ fn resolve_request_accept_creates_friend() {
             peer: Some(PeerRef {
                 peer_id: "peer-1".to_string(),
                 addresses: vec!["/ip4/1.2.3.4/tcp/9000".to_string()],
-            }),
+            ..Default::default()}),
             thread: Vec::new(),
             invite_code: None,
         },
@@ -199,7 +199,7 @@ fn resolve_request_accept_creates_friend() {
         .unwrap()
         .expect("接受后建朋友");
     assert_eq!(friend.permission, "chatOnly", "permission 写入资料");
-    assert_eq!(friend.peer.as_ref().unwrap().peer_id, "peer-1", "peer 取请求记录");
+    assert_eq!(friend.peers[0].peer_id, "peer-1", "peer 取请求记录");
     assert_eq!(friend.nickname, "申请人");
 
     // 重复处理报错
@@ -398,7 +398,7 @@ fn send_request_retry_reuses_stored_record() {
             peer: Some(PeerRef {
                 peer_id: "peer-1".to_string(),
                 addresses: vec!["/ip4/1.2.3.4/tcp/9000".to_string()],
-            }),
+            ..Default::default()}),
             thread: Vec::new(),
             invite_code: None,
         },
@@ -476,7 +476,7 @@ fn overview_contains_self_and_refreshes_nickname() {
         .find(|f| f.root_id == root_id)
         .expect("friends 恒含自己");
     assert_eq!(me.nickname, "小明", "nickname 取当前身份昵称");
-    assert!(me.peer.is_none());
+    assert!(me.peers.is_empty());
     assert_eq!(me.permission, "open");
     let added_at = me.added_at;
 
@@ -566,7 +566,7 @@ fn resolve_request_accept_merges_existing_friend() {
             peer: Some(PeerRef {
                 peer_id: "peer-1".to_string(),
                 addresses: vec!["/ip4/1.2.3.4/tcp/9000".to_string()],
-            }),
+            ..Default::default()}),
             thread: Vec::new(),
             invite_code: None,
         },
@@ -578,7 +578,7 @@ fn resolve_request_accept_merges_existing_friend() {
         .unwrap();
     let friend = ContactService::get_friend(&storage, &peer_root).unwrap().unwrap();
     assert_eq!(friend.nickname, "新昵称", "非空 nickname 刷新");
-    assert_eq!(friend.peer.as_ref().unwrap().peer_id, "peer-1", "Some peer 刷新");
+    assert_eq!(friend.peers[0].peer_id, "peer-1", "Some peer 刷新");
     assert_eq!(friend.remark, "旧备注", "本地资料保留");
     assert_eq!(friend.tag_ids, vec!["tag-1".to_string()], "标签保留");
     assert_eq!(friend.permission, "chatOnly", "permission 不被重置");
@@ -680,7 +680,7 @@ fn ask_request_state_gate_and_thread() {
         Some(PeerRef {
             peer_id: "peer-1".to_string(),
             addresses: vec![],
-        })
+        ..Default::default()})
     };
 
     // 非 pending（已 accepted）不可询问

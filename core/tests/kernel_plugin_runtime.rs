@@ -14,6 +14,8 @@ use spark_core::kernel::Kernel;
 use spark_core::message::generate_message_id;
 use spark_core::p2p::P2pEvent;
 use spark_core::p2p::node::system_now_ms;
+use spark_core::plugindata::DeclareInput;
+use spark_core::storage::StorageBackend;
 
 const PERSONAL: &str = "personal";
 const ECHO_BOT: &str = "bot:echo-plugin:helper";
@@ -31,13 +33,56 @@ fn test_permissions() -> Vec<String> {
     [
         "storage:read",
         "storage:write",
+        "identity:verify",
+        "identity:sign",
         "message:app",
         "system:exec",
         "network:fetch",
+        "feed:deliver",
     ]
     .iter()
     .map(|s| s.to_string())
     .collect()
+}
+
+/// 以插件域声明一个 personal 集合（测试侧声明，供 JS `data.save` 与测试侧
+/// `data_get` 共用同一解析）。
+fn declare_plugin_collection(kernel: &mut Kernel, plugin_id: &str, name: &str) {
+    kernel
+        .data_declare_collection(
+            &format!("plugin:{plugin_id}"),
+            DeclareInput {
+                name: name.to_string(),
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+}
+
+/// 写入一个朋友（feed 通道放行：permission "open"，带可寻址 peer 供投递）+
+/// 对端 root 公钥（出站 E2E 读取，social-feed §4.1）。
+fn seed_feed_recipient(kernel: &mut Kernel, root_id: &str) {
+    use spark_core::contact::{ContactService, FriendRecord, PeerRef};
+    let friend = FriendRecord {
+        root_id: root_id.to_string(),
+        permission: "open".to_string(),
+        peers: vec![PeerRef {
+            peer_id: "peer-1".to_string(),
+            addresses: vec![],
+        ..Default::default()}],
+        ..Default::default()
+    };
+    let mut storage = kernel.__test_storage().unwrap();
+    ContactService::upsert_friend(&mut storage, &friend).unwrap();
+    // 出站 E2E 需对端 root 公钥（正常路径入站验签积累，测试直写）
+    use base64::Engine as _;
+    use ed25519_dalek::SigningKey;
+    use spark_core::dm_e2e::record_inbound_peer_root_pub;
+    use spark_core::p2p::node::system_now_ms;
+    let key = SigningKey::from_bytes(&[7; 32]);
+    let pub_b64 = base64::engine::general_purpose::STANDARD.encode(key.verifying_key().to_bytes());
+    record_inbound_peer_root_pub(&mut storage, root_id, &pub_b64, "local-node", system_now_ms()).unwrap();
 }
 
 fn kernel_with_identity() -> (tempfile::TempDir, Kernel, String) {
@@ -523,4 +568,404 @@ spark.onMessage(function (payload) {{
         5_000,
         "JS 异常后插件线程崩溃退出并注销",
     );
+}
+
+/// S9：spark.feed.deliver QuickJS 后台全链路——脚本调 deliver 走 capability →
+/// feed_deliver_shared → 投递（p2p 未启动 → 入 dm:pending 离线队列），返回
+/// 聚合计数；topic 前缀非本插件被拒（InvalidTopic）；第 11 次调用触发
+/// RateLimited 限流（§9.3，与 iframe 桥共享同一内核限流器）。
+#[test]
+fn feed_deliver_quickjs_full_chain_and_rate_limit() {
+    let (_dir, mut kernel, _root) = kernel_with_identity();
+    let bob = "bb".repeat(32);
+    seed_feed_recipient(&mut kernel, &bob);
+    let script = format!(
+        r#"
+spark.ensureBot('feed-bot', 'Feed Bot');
+var results = [];
+// 前 10 次合法（topic 前缀 == 本插件 id），第 11 次应触发 RateLimited
+for (var i = 0; i < 11; i++) {{
+    try {{
+        var r = spark.feed.deliver({{ topic: 'echo-plugin:posts', payload: {{ n: i }}, recipients: ['{bob}'] }});
+        results.push('ok:' + r.requested + ':' + r.accepted);
+    }} catch (e) {{
+        results.push('err:' + e.message);
+    }}
+}}
+// 前缀非本插件 id → InvalidTopic（能力层拒绝，同步抛错）
+try {{
+    spark.feed.deliver({{ topic: 'evil:posts', payload: {{}}, recipients: ['{bob}'] }});
+    results.push('prefix-ok');
+}} catch (e) {{
+    results.push('prefix-err:' + e.message);
+}}
+spark.onMessage(function (payload) {{ spark.reply(payload, results.join(',')); }});
+"#
+    );
+    kernel
+        .plugin_start_background("echo-plugin", &script, &test_permissions())
+        .unwrap();
+
+    let conv_id = setup_bot_conv_named(&mut kernel, "bot:echo-plugin:feed-bot", "Feed Bot");
+    send_text(&mut kernel, &conv_id, "go");
+    wait_until(
+        || {
+            kernel
+                .message_list_messages(PERSONAL, &conv_id)
+                .unwrap()
+                .iter()
+                .any(|m| m.sender_id == "bot:echo-plugin:feed-bot" && m.content.contains("err:RateLimited"))
+        },
+        5_000,
+        "feed.deliver 全链路结果回传（含限流/前缀校验）",
+    );
+    let msgs = kernel.message_list_messages(PERSONAL, &conv_id).unwrap();
+    let report = msgs
+        .iter()
+        .find(|m| m.sender_id == "bot:echo-plugin:feed-bot")
+        .map(|m| m.content.clone())
+        .unwrap();
+    // 前 10 次 ok（requested/accepted 按入参），第 11 次 err:RateLimited，
+    // 前缀非本插件 err:InvalidTopic
+    let parts: Vec<&str> = report.split(',').collect();
+    assert_eq!(parts.len(), 12, "10 次 deliver + 1 次超限 + 1 次前缀，报告：{report}");
+    for i in 0..10 {
+        assert_eq!(parts[i], "ok:1:1", "第 {i} 次 deliver 应放行并计数 requested=1 accepted=1");
+    }
+    assert!(
+        parts[10].contains("RateLimited"),
+        "第 11 次应 RateLimited：{}",
+        parts[10]
+    );
+    assert!(
+        parts[11].contains("InvalidTopic"),
+        "前缀非本插件应 InvalidTopic：{}",
+        parts[11]
+    );
+
+    // 投递全链路落地：p2p 未启动 → 出站 feed 失败入 dm:pending 离线队列（收件人
+    // bob）。E2E 加密下信封 body 为密文，`enqueue_feed_pending` 不能从 body 取
+    // feedId——修复后明文 feedId 由调用方显式传入，每条 deliver 各生成独立 feedId
+    // （QuickJS 缺省时 `generate_feed_id_for_plugin`），按 message_id 键区分不再
+    // 互相覆盖：前 10 次合法 deliver 各入 1 条，共精确 10 条（social-feed §6.4
+    // 离线队列以 message_id 为键）。
+    let storage = kernel.__test_storage().unwrap();
+    let pending_prefix = format!("dm:pending:{bob}:");
+    let pending: Vec<_> = storage
+        .scan(&spark_core::storage::ScanOptions::prefix(&pending_prefix))
+        .unwrap();
+    assert_eq!(
+        pending.len(),
+        10,
+        "10 次合法 deliver（每次独立 feedId）各入 1 条 pending，不得互相覆盖"
+    );
+}
+
+/// S9：spark.feed.pull 接收侧免权限——插件脚本补读收件箱（本地落库后 pull
+/// 返回 items）。
+#[test]
+fn feed_pull_quickjs_reads_inbox() {
+    let (_dir, mut kernel, _root) = kernel_with_identity();
+    // 预写一条收件箱记录（feed:inbox:{pluginId}:...）
+    let rec = serde_json::json!({
+        "from": "alice",
+        "topic": "echo-plugin:posts",
+        "feedId": "f1",
+        "payload": { "text": "hello" },
+        "ts": 1000,
+    });
+    {
+        let mut storage = kernel.__test_storage().unwrap();
+        storage
+            .put("feed:inbox:echo-plugin:0000000001000:f1", &rec.to_string())
+            .unwrap();
+    }
+    let script = r#"
+spark.ensureBot('pull-bot', 'Pull Bot');
+spark.onMessage(function (payload) {
+    var out = spark.feed.pull({ topic: 'echo-plugin:posts', limit: 10 });
+    var first = out.items && out.items.length ? out.items[0] : null;
+    spark.reply(payload, 'count=' + (out.items ? out.items.length : 0) + ' feedId=' + (first ? first.feedId : 'none'));
+});
+"#;
+    kernel
+        .plugin_start_background("echo-plugin", script, &test_permissions())
+        .unwrap();
+    let conv_id = setup_bot_conv_named(&mut kernel, "bot:echo-plugin:pull-bot", "Pull Bot");
+    send_text(&mut kernel, &conv_id, "go");
+    wait_until(
+        || {
+            kernel
+                .message_list_messages(PERSONAL, &conv_id)
+                .unwrap()
+                .iter()
+                .any(|m| m.sender_id == "bot:echo-plugin:pull-bot" && m.content == "count=1 feedId=f1")
+        },
+        5_000,
+        "spark.feed.pull 补读收件箱并回传",
+    );
+}
+
+/// B3：feed-blob 请求方发起链路——`data.readBlob` 未命中且该 hash 有 feed 来源
+/// 登记 → 进入 feed-blob-req 出站路径（p2p 未启动时 `blob:req:{hash}` 节流键
+/// 被置，证明请求路径被触发）；无来源登记 → 维持 pdsync want（节流键不置）。
+#[test]
+fn read_blob_miss_triggers_feed_blob_req_when_source_registered() {
+    use spark_core::contact::{ContactService, FriendRecord, PeerRef};
+    let (_dir, mut kernel, _root) = kernel_with_identity();
+    // 朋友 + 来源登记（feed:blob-src:{hash} → fromRootId，仿 feed 入站落库形态）
+    let source = "src".repeat(16);
+    {
+        let mut storage = kernel.__test_storage().unwrap();
+        ContactService::upsert_friend(
+            &mut storage,
+            &FriendRecord {
+                root_id: source.clone(),
+                permission: "open".to_string(),
+                peers: vec![PeerRef {
+                    peer_id: "peer-1".to_string(),
+                    addresses: vec![],
+                ..Default::default()}],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    }
+    // 有来源登记的 hash 与无来源登记的 hash
+    let hash_with_src = "a".repeat(64);
+    let hash_no_src = "b".repeat(64);
+    {
+        let mut storage = kernel.__test_storage().unwrap();
+        // feed:blob-src:{hash} → {from}:{since}（键线形见 feed/mod.rs 存储键）。
+        // since 用当前时间戳——过期判定按 now-since > TTL（30 天），用旧值会被判过期。
+        storage
+            .put(
+                &format!("feed:blob-src:{hash_with_src}"),
+                &format!("{source}:{}", spark_core::p2p::node::system_now_ms()),
+            )
+            .unwrap();
+    }
+    let script = format!(
+        r#"
+spark.ensureBot('blob-bot', 'Blob Bot');
+spark.onMessage(function (payload) {{
+    var withSrc = spark.data.readBlob('{hash_with_src}');
+    var noSrc = spark.data.readBlob('{hash_no_src}');
+    spark.reply(payload, 'withSrc=' + withSrc.status + ' noSrc=' + noSrc.status);
+}});
+"#
+    );
+    kernel
+        .plugin_start_background("echo-plugin", &script, &test_permissions())
+        .unwrap();
+    let conv_id = setup_bot_conv_named(&mut kernel, "bot:echo-plugin:blob-bot", "Blob Bot");
+    send_text(&mut kernel, &conv_id, "go");
+    wait_until(
+        || {
+            kernel
+                .message_list_messages(PERSONAL, &conv_id)
+                .unwrap()
+                .iter()
+                .any(|m| m.sender_id == "bot:echo-plugin:blob-bot" && m.content.starts_with("withSrc=pending"))
+        },
+        5_000,
+        "data.readBlob 未命中回 pending",
+    );
+
+    let storage = kernel.__test_storage().unwrap();
+    // 有来源登记：节流键被置（请求路径已进入；p2p 未启动仅跳过实际投递）
+    assert!(
+        storage.get(&spark_core::plugindata::blob::blob_req_key(&hash_with_src)).unwrap().is_some(),
+        "有来源登记 → 触发 feed-blob-req 路径（blob:req 节流键置位）"
+    );
+    // 无来源登记：节流键不置（维持 pdsync 自设备拉取现状）
+    assert!(
+        storage.get(&spark_core::plugindata::blob::blob_req_key(&hash_no_src)).unwrap().is_none(),
+        "无来源登记 → 不触发 feed-blob-req（维持 pdsync want）"
+    );
+    // 两者都置了 want 标记（未命中回 pending 的通用行为）
+    assert!(
+        storage.get(&spark_core::plugindata::blob::blob_want_key(&hash_no_src)).unwrap().is_some(),
+        "未命中置 want 标记"
+    );
+}
+
+/// spark.identity.verify / spark.identity.sign 全链路（QuickJS 后台）：
+/// - verify：JS 侧用种子派生域身份公钥验签（纯函数，返回布尔）；
+/// - sign：后台签 payload（域缺省 = plugin 根域），公钥可反向验签一致。
+#[test]
+fn background_identity_verify_and_sign_roundtrip() {
+    let (_dir, mut kernel, _root) = kernel_with_identity();
+    declare_plugin_collection(&mut kernel, "spark-moments", "spark-moments:posts");
+    let script = r#"
+var payload = 'spark-moments:post:abc123';
+// sign：以域身份签 payload，返回 {domain, domainId, publicKey, signature, payloadHash}
+var sig = spark.identity.sign(payload);
+spark.data.save('spark-moments:posts', 'sig-result', {
+    payload: payload,
+    domain: sig.domain,
+    domainId: sig.domainId,
+    publicKey: sig.publicKey,
+    signature: sig.signature,
+    payloadHash: sig.payloadHash,
+    valid: spark.identity.verify({ payload: payload, sig: sig.signature, pubKey: sig.publicKey }),
+    tampered: spark.identity.verify({ payload: payload + 'x', sig: sig.signature, pubKey: sig.publicKey })
+});
+"#;
+    kernel
+        .plugin_start_background("spark-moments", script, &test_permissions())
+        .unwrap();
+    // 等待脚本顶层执行落库（JS 线程异步；data.save 为同步 host 调用）
+    wait_until(
+        || {
+            kernel
+                .data_get("plugin:spark-moments", "spark-moments:posts", "sig-result", None, None)
+                .unwrap()
+                .is_some()
+        },
+        5_000,
+        "identity.sign/verify 结果落库",
+    );
+    let result = kernel
+        .data_get("plugin:spark-moments", "spark-moments:posts", "sig-result", None, None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(result["domain"], "plugin:spark-moments", "sign 域缺省 = 插件根域");
+    assert_eq!(result["valid"], serde_json::json!(true), "原始 payload 验签通过");
+    assert_eq!(
+        result["tampered"],
+        serde_json::json!(false),
+        "篡改 payload 验签失败"
+    );
+    // 域身份确定性：同一域重复 sign 得同一公钥（派生可复现）
+    let payload_hash_len = result["payloadHash"].as_str().unwrap().len();
+    assert_eq!(payload_hash_len, 64, "payloadHash 为 sha256 hex");
+    assert!(result["signature"].as_str().unwrap().len() > 0);
+}
+
+/// 未授权插件的 identity.sign 被拒（高级权限，capability 前置强制）。
+#[test]
+fn background_identity_sign_denied_without_permission() {
+    let (_dir, mut kernel, _root) = kernel_with_identity();
+    declare_plugin_collection(&mut kernel, "spark-moments", "spark-moments:posts");
+    let script = r#"
+try {
+    spark.identity.sign('payload');
+    spark.data.save('spark-moments:posts', 'deny-check', { ok: true });
+} catch (e) {
+    spark.data.save('spark-moments:posts', 'deny-check', { denied: true, msg: String(e) });
+}
+"#;
+    // 有 storage 写权限但无 identity:sign（高级）→ sign 被拒、结果可落库
+    let perms = vec!["storage:read".to_string(), "storage:write".to_string()];
+    kernel
+        .plugin_start_background("spark-moments", script, &perms)
+        .unwrap();
+    wait_until(
+        || {
+            kernel
+                .data_get("plugin:spark-moments", "spark-moments:posts", "deny-check", None, None)
+                .unwrap()
+                .is_some()
+        },
+        5_000,
+        "未授权 sign 拒绝分支落库",
+    );
+    let result = kernel
+        .data_get("plugin:spark-moments", "spark-moments:posts", "deny-check", None, None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(result["denied"], serde_json::json!(true), "未授权 sign 应被拒");
+    assert!(
+        result["msg"].as_str().unwrap().contains("identity:sign"),
+        "拒绝消息应含缺失权限：{}",
+        result["msg"]
+    );
+}
+
+/// spark.messages.sendAppMessage 全链路（QuickJS 后台）：
+/// - 写 `app:{pluginId}` 会话（运行时绑定 plugin_id，不信 JS 自报）；
+/// - summary 纯文本摘要 + 可选 card；落库可经内核 message_app_list 读取。
+#[test]
+fn background_send_app_message_persists() {
+    let (_dir, mut kernel, _root) = kernel_with_identity();
+    let script = r#"
+spark.onMessage(function (payload) {
+    for (var i = 0; i < 3; i++) {
+        spark.messages.sendAppMessage({
+            summary: '互动通知 #' + i,
+            card: { viewId: 'notify-card', data: { postId: 'p1', type: 'like' } }
+        });
+    }
+});
+"#;
+    kernel
+        .plugin_start_background("spark-moments", script, &test_permissions())
+        .unwrap();
+    let conv_id = setup_bot_conv_named(&mut kernel, "bot:spark-moments:nbot", "N Bot");
+    send_text(&mut kernel, &conv_id, "go");
+    // 3 条在 10 条限额内，均应成功写入 app 会话
+    wait_until(
+        || kernel.message_app_list(PERSONAL, "spark-moments").unwrap().len() == 3,
+        5_000,
+        "3 条互动通知全部写入 app 会话",
+    );
+    let msgs = kernel.message_app_list(PERSONAL, "spark-moments").unwrap();
+    assert_eq!(msgs.len(), 3);
+    assert_eq!(msgs[0].summary, "互动通知 #0");
+    assert_eq!(msgs[0].plugin_id, "spark-moments");
+    assert_eq!(
+        msgs[0].card.as_ref().map(|c| c.view_id.as_str()),
+        Some("notify-card"),
+        "card 透传"
+    );
+}
+
+/// spark.messages.sendAppMessage 限流：单次回调连发 12 条，第 11 条起被
+/// RateLimited 拒绝（10 条/60s，与 Kernel 门面共享同一 app_msg_limiter）。
+#[test]
+fn background_send_app_message_rate_limits() {
+    let (_dir, mut kernel, _root) = kernel_with_identity();
+    declare_plugin_collection(&mut kernel, "spark-moments", "spark-moments:posts");
+    let script = r#"
+spark.onMessage(function (payload) {
+    var rejected = null;
+    var sent = 0;
+    for (var i = 0; i < 12; i++) {
+        try {
+            spark.messages.sendAppMessage({ summary: 'burst #' + i });
+            sent++;
+        } catch (e) {
+            rejected = String(e);
+            break;
+        }
+    }
+    spark.data.save('spark-moments:posts', 'burst-result', { rejected: rejected, sent: sent });
+});
+"#;
+    kernel
+        .plugin_start_background("spark-moments", script, &test_permissions())
+        .unwrap();
+    let conv_id = setup_bot_conv_named(&mut kernel, "bot:spark-moments:rbot", "R Bot");
+    send_text(&mut kernel, &conv_id, "burst");
+    wait_until(
+        || {
+            kernel
+                .data_get("plugin:spark-moments", "spark-moments:posts", "burst-result", None, None)
+                .unwrap()
+                .is_some()
+        },
+        5_000,
+        "burst 限流分支落库",
+    );
+    let result = kernel
+        .data_get("plugin:spark-moments", "spark-moments:posts", "burst-result", None, None)
+        .unwrap()
+        .unwrap();
+    assert!(
+        result["rejected"].as_str().unwrap().contains("RateLimited"),
+        "超过 10 条/60s 应被限流拒绝：{}",
+        result["rejected"]
+    );
+    assert_eq!(result["sent"], serde_json::json!(10), "前 10 条成功、第 11 条被拒");
 }

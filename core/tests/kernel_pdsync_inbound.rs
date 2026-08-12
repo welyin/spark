@@ -540,10 +540,10 @@ fn friend_record_with_peer(root_id: &str, peer_id: &str) -> FriendRecord {
         signature: String::new(),
         gender: None,
         added_at: NOW,
-        peer: Some(PeerRef {
+        peers: vec![PeerRef {
             peer_id: peer_id.to_string(),
             addresses: Vec::new(),
-        }),
+        ..Default::default()}],
         remark: String::new(),
         phones: Vec::new(),
         tag_ids: Vec::new(),
@@ -666,7 +666,7 @@ fn pdsync_self_friend_record_not_cross_fed() {
         .unwrap()
         .expect("A 自记录仍在");
     assert_eq!(
-        fa.peer.map(|p| p.peer_id).as_deref(),
+        fa.peers.first().map(|p| p.peer_id.as_str()),
         Some("peer-device-b"),
         "A 自记录 peer 不得被 B 的版本覆盖"
     );
@@ -674,7 +674,7 @@ fn pdsync_self_friend_record_not_cross_fed() {
         .unwrap()
         .expect("B 自记录仍在");
     assert_eq!(
-        fb.peer.map(|p| p.peer_id).as_deref(),
+        fb.peers.first().map(|p| p.peer_id.as_str()),
         Some("peer-device-a"),
         "B 自记录 peer 不得被 A 的版本覆盖"
     );
@@ -682,7 +682,7 @@ fn pdsync_self_friend_record_not_cross_fed() {
     let fp = ContactService::get_friend(&b, &peer_root)
         .unwrap()
         .expect("普通朋友记录应同步到 B");
-    assert_eq!(fp.peer.map(|p| p.peer_id).as_deref(), Some("peer-x"));
+    assert_eq!(fp.peers.first().map(|p| p.peer_id.as_str()), Some("peer-x"));
 
     // 收敛：再互发 hello → ct:friend 无 need/data（folded vv 无伪 diff）
     let hello_a2 = build_hello(&a, 2_592_000_000, 500, "eager", Some(&self_key), None).unwrap();
@@ -733,7 +733,7 @@ fn pdsync_data_drops_self_friend_record_and_tombstone() {
     assert_eq!(result.response, json!({ "ok": true }), "排除是丢弃而非拒批");
     let f = ContactService::get_friend(&s, &my_root).unwrap().unwrap();
     assert_eq!(
-        f.peer.map(|p| p.peer_id).as_deref(),
+        f.peers.first().map(|p| p.peer_id.as_str()),
         Some("peer-device-b"),
         "本机自记录不被对端版本覆盖"
     );
@@ -792,7 +792,7 @@ fn pdsync_inbound_gate_drops_self_friend_record_and_tombstone() {
     assert_eq!(result.response, json!({ "ok": true }), "排除是丢弃而非拒批");
     let f = ContactService::get_friend(&s, &my_root).unwrap().unwrap();
     assert_eq!(
-        f.peer.map(|p| p.peer_id).as_deref(),
+        f.peers.first().map(|p| p.peer_id.as_str()),
         Some("peer-device-b"),
         "本机自记录 peer 不得被自指污染值覆盖（保持原值）"
     );
@@ -871,7 +871,7 @@ fn self_friend_request_with_self_pointing_peer_is_rejected() {
     // 1) 自记录 peer 不被污染（保持原值，而非 NODE）
     let f = ContactService::get_friend(&s, &my_root).unwrap().unwrap();
     assert_eq!(
-        f.peer.map(|p| p.peer_id).as_deref(),
+        f.peers.first().map(|p| p.peer_id.as_str()),
         Some("peer-device-b"),
         "自指 peer 不得覆盖自记录（保持原值）"
     );
@@ -903,7 +903,7 @@ fn pdsync_self_conv_merge_preserves_local_peer() {
     local.peer = Some(PeerRef {
         peer_id: "peer-device-b".to_string(),
         addresses: Vec::new(),
-    });
+    ..Default::default()});
     MessageService::upsert_conversation(&mut s, PERSONAL, &local).unwrap();
 
     // 对端设备快照：同一会话、peer 指向「本机设备」（对它而言的对端）
@@ -911,7 +911,7 @@ fn pdsync_self_conv_merge_preserves_local_peer() {
     remote.peer = Some(PeerRef {
         peer_id: "peer-device-a".to_string(),
         addresses: Vec::new(),
-    });
+    ..Default::default()});
     remote.pinned_at = 123;
     let record = PdsyncRecord {
         key: format!("msg:conv:personal:{conv_id}"),
