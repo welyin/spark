@@ -13,7 +13,7 @@ use crate::p2p::PeerNodeInfo;
 use crate::p2p::node::system_now_ms;
 use crate::storage::StorageBackend;
 
-/// 自设备 peer 列表提取：rootId==我 且 peer 非空的 FriendRecord（配对设备）。
+/// 自设备 peer 列表提取：rootId==我 且 `peers` 非空的 FriendRecord（配对设备）。
 ///
 /// 防御性过滤 `peer_id == 本机 peerId` 的自指记录——自 FriendRecord 的 peer
 /// 是设备相对值，历史 pdsync 互灌可能把它污染成指向本机；不自指过滤会让
@@ -27,7 +27,7 @@ pub(crate) fn self_device_peer_infos(
     friends
         .into_iter()
         .filter(|f| f.root_id == my_root_id)
-        .filter_map(|f| f.peer)
+        .flat_map(|f| f.peers)
         .filter(|p| local_peer_id != Some(p.peer_id.as_str()))
         .map(|p| PeerNodeInfo {
             peer_id: (!p.peer_id.is_empty()).then_some(p.peer_id),
@@ -61,20 +61,24 @@ pub(crate) fn heal_self_pointing_friend_record<S: StorageBackend>(
     now_ms: i64,
 ) -> Option<PeerNodeInfo> {
     let friend = ContactService::get_friend(storage, my_root_id).ok()??;
-    if let Some(ref peer) = friend.peer {
-        if peer.peer_id != local_peer_id {
-            return None;
-        }
+    // 只要有一个非自指的可用 peer 即无需自愈（多设备场景 peers 合法指向
+    // 多台设备，逐个过滤即可，不整体改写）。
+    if friend
+        .peers
+        .iter()
+        .any(|p| !p.peer_id.is_empty() && p.peer_id != local_peer_id)
+    {
+        return None;
     }
     let other = crate::device::DeviceService::list(storage)
         .ok()?
         .into_iter()
         .find(|r| !r.peer_id.trim().is_empty() && r.peer_id != local_peer_id)?;
     let mut friend = friend;
-    friend.peer = Some(PeerRef {
+    friend.peers = vec![PeerRef {
         peer_id: other.peer_id.clone(),
         addresses: Vec::new(),
-    });
+    ..Default::default()}];
     friend.updated_at = now_ms;
     ContactService::upsert_friend_pdsync(storage, &friend, now_ms, node_id).ok()?;
     eprintln!(
@@ -160,9 +164,16 @@ impl Kernel {
         let conv_peer = conv.peer.as_ref().map(to_node_info);
         let storage = self.require_storage()?;
         let fallback = if space == "personal" {
+            // 多设备寻址（S4）：遍历设备 peer 列表择优——带地址的优先，否则
+            // 取首个（peer_id 可作已连接短路）。对齐组织端点集取首端点的口径。
             ContactService::get_friend(storage, &conv.peer_root_id)?
-                .and_then(|f| f.peer)
-                .map(|p| to_node_info(&p))
+                .and_then(|f| {
+                    f.peers
+                        .iter()
+                        .find(|p| !p.addresses.is_empty())
+                        .or_else(|| f.peers.first())
+                        .map(to_node_info)
+                })
         } else if let Some(org_id) = space.strip_prefix("org:") {
             // 端点化：遍历成员端点集取首个端点作为 dm 寻址线索。
             OrganizationService::get_record(storage, org_id)?
@@ -199,10 +210,10 @@ mod tests {
             signature: String::new(),
             gender: None,
             added_at: 0,
-            peer: Some(crate::message::PeerRef {
+            peers: vec![crate::message::PeerRef {
                 peer_id: peer_id.to_string(),
                 addresses: Vec::new(),
-            }),
+            ..Default::default()}],
             remark: String::new(),
             phones: Vec::new(),
             tag_ids: Vec::new(),
@@ -251,7 +262,7 @@ mod tests {
     fn heal_self_pointing_record_rewrites_to_other_device() {
         let mut storage = crate::storage::MemoryStorage::new();
         let mut f = friend("root-self", "peer-local");
-        f.peer.as_mut().unwrap().addresses = vec!["/ip4/1.2.3.4/tcp/1".to_string()];
+        f.peers[0].addresses = vec!["/ip4/1.2.3.4/tcp/1".to_string()];
         ContactService::upsert_friend_pdsync(&mut storage, &f, 100, "peer-local").unwrap();
         crate::device::DeviceService::upsert_pdsync(
             &mut storage,
@@ -278,7 +289,7 @@ mod tests {
         .expect("有对端设备记录应自愈成功");
         assert_eq!(healed.peer_id.as_deref(), Some("peer-device-b"));
         let stored = ContactService::get_friend(&storage, "root-self").unwrap().unwrap();
-        let peer = stored.peer.clone().unwrap();
+        let peer = &stored.peers[0];
         assert_eq!(peer.peer_id, "peer-device-b");
         assert!(peer.addresses.is_empty());
         assert_eq!(stored.updated_at, 200);
@@ -307,7 +318,7 @@ mod tests {
                 .is_none()
         );
         let stored = ContactService::get_friend(&storage, "root-self").unwrap().unwrap();
-        assert_eq!(stored.peer.unwrap().peer_id, "peer-local", "无对端记录不得改写");
+        assert_eq!(stored.peers[0].peer_id, "peer-local", "无对端记录不得改写");
         crate::device::DeviceService::upsert_pdsync(
             &mut storage,
             &device_record("peer-local"),
@@ -326,6 +337,6 @@ mod tests {
                 .is_none()
         );
         let stored = ContactService::get_friend(&storage, "root-self").unwrap().unwrap();
-        assert_eq!(stored.peer.unwrap().peer_id, "peer-device-b");
+        assert_eq!(stored.peers[0].peer_id, "peer-device-b");
     }
 }

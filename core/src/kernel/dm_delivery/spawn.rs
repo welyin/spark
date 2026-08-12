@@ -10,6 +10,7 @@ use serde_json::Value;
 use super::super::Kernel;
 use crate::message::MessageService;
 use crate::p2p::{P2pEvent, PeerNodeInfo};
+use crate::storage::StorageBackend;
 
 /// `spawn_deliveries_with_retry` 的重试判定（语义见该函数文档）。
 pub(crate) fn delivery_needs_retry(
@@ -98,9 +99,13 @@ impl Kernel {
         });
     }
 
-    /// spawn chat 投递任务：完成后在任务内回写消息状态（delivered/failed）
-    /// 并 emit `ChatStatus` 事件；命令侧立即返回 `sending` 态视图，前端按
-    /// 事件更新。所需数据（存储克隆、event_tx、io_lock）先取好再 move。
+    /// spawn chat 投递任务：完成后在任务内回写消息状态（`delivered`）并 emit
+    /// `ChatStatus` 事件；命令侧立即返回 `sending` 态视图，前端按事件更新。
+    ///
+    /// **离线补投（social-feed §6.4）**：投递失败（不可达/超时）时把密文信封
+    /// 入 `dm:pending:` 离线队列（`dm_offline`），消息状态**保持 `sending`**
+    /// 不置 failed——补投由 `on_peer_connected` flush 钩子 / 60s 周期 flush
+    /// 重发，成功后置 `delivered`。`message_resend` 保留为手动兜底。
     ///
     /// 回写是 compare-and-set（仅当当前状态仍为 `sending`）：重发会重新置
     /// `sending` 并 spawn 新任务，旧任务的迟到回写不得覆盖新任务已写入的
@@ -118,6 +123,7 @@ impl Kernel {
         };
         let event_tx = self.event_tx.clone();
         let io_lock = Arc::clone(&self.io_lock);
+        let node_id = self.sync_node_id();
         let space = space.to_string();
         let conv_id = conv_id.to_string();
         let message_id = message_id.to_string();
@@ -131,16 +137,50 @@ impl Kernel {
                 peer.peer_id,
                 peer.addresses.len()
             );
-            let resp = node.dm_direct(&peer, envelope).await.ok().flatten();
+            let resp = node.dm_direct(&peer, envelope.clone()).await.ok().flatten();
             let resp_ok = resp
                 .as_ref()
                 .and_then(|r| r.get("ok").and_then(Value::as_bool))
                 .unwrap_or(false);
-            let status: &str = if resp_ok { "delivered" } else { "failed" };
             eprintln!(
-                "[chat-delivery] result messageId={} status={} resp_ok={}",
-                message_id, status, resp_ok
+                "[chat-delivery] result messageId={} resp_ok={}",
+                message_id, resp_ok
             );
+            if !resp_ok {
+                // 终态拒绝（对端在线但语义性拒绝：blocked/invalid-body 等）：
+                // 重试无意义，直接置 failed + ChatStatus，不入离线队列（I3）。
+                let reason = resp
+                    .as_ref()
+                    .and_then(|r| r.get("reason").and_then(Value::as_str));
+                if super::flush::is_terminal_rejection(reason) {
+                    let wrote = {
+                        let _io = io_lock.lock().unwrap_or_else(|e| e.into_inner());
+                        MessageService::set_message_status_if_sending(
+                            &mut storage,
+                            &space,
+                            &conv_id,
+                            &message_id,
+                            "failed",
+                        )
+                        .unwrap_or(false)
+                    };
+                    if wrote {
+                        let _ = event_tx.send(P2pEvent::ChatStatus(serde_json::json!({
+                            "spaceKey": space,
+                            "convId": conv_id,
+                            "messageId": message_id,
+                            "status": "failed",
+                        })));
+                    }
+                    return;
+                }
+                // 非终态（不可达/超时/rate-limited）：密文入离线队列自动补投，
+                // 状态保持 sending（不置 failed）。入队失败不阻断——消息仍留在
+                // sending，由 message_resend 手动兜底。
+                enqueue_pending(&mut storage, &space, &conv_id, &message_id, &envelope, &node_id);
+                return;
+            }
+            let status = "delivered";
             let wrote = {
                 let _io = io_lock.lock().unwrap_or_else(|e| e.into_inner());
                 MessageService::set_message_status_if_sending(
@@ -161,5 +201,50 @@ impl Kernel {
                 })));
             }
         });
+    }
+}
+
+/// chat 投递失败时把密文信封入 `dm:pending:` 离线队列（social-feed §6.4）。
+///
+/// 从信封解析 `to`（收件人 rootId）与 `kind`；`space` 为 `personal` 或
+/// `org:<orgId>` 决定用个人/组织 pending 键。入队走 `dm_offline::enqueue`，
+/// 个人空间经 `put_personal` 携带 pmeta（pdsync `dm:pending` category）自设备
+/// 扩散。任一步失败静默跳过（消息仍 sending，靠 `message_resend` 兜底）。
+fn enqueue_pending<S: StorageBackend>(
+    storage: &mut S,
+    space: &str,
+    conv_id: &str,
+    message_id: &str,
+    envelope: &Value,
+    node_id: &str,
+) {
+    use crate::dm_offline::{PendingRecord, PendingSpace, enqueue};
+    let Some(to) = envelope.get("to").and_then(Value::as_str) else {
+        return;
+    };
+    let kind = envelope
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or("chat")
+        .to_string();
+    let pending_space = if space == "personal" {
+        PendingSpace::Personal
+    } else if let Some(org_id) = space.strip_prefix("org:") {
+        PendingSpace::Org(org_id)
+    } else {
+        return; // 非法空间：不入队
+    };
+    let now = crate::p2p::node::system_now_ms();
+    let record = PendingRecord {
+        to: to.to_string(),
+        message_id: message_id.to_string(),
+        kind,
+        space_key: space.to_string(),
+        conv_id: Some(conv_id.to_string()),
+        envelope: envelope.clone(),
+        created_at: now,
+    };
+    if let Err(e) = enqueue(storage, pending_space, to, &record, node_id, now) {
+        eprintln!("[chat-delivery] offline enqueue failed: {e}");
     }
 }

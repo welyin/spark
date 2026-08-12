@@ -27,33 +27,36 @@ impl Kernel {
         let Ok(body) = crate::contact::build_contact_sync_snapshot(storage, &root_id) else {
             return;
         };
-        // 优先用自 FriendRecord 的 peer 单播；peer 缺失时回退 self_device_peers
-        let deliveries: Vec<(PeerNodeInfo, Value)> =
-            match ContactService::get_friend(storage, &root_id) {
-                Ok(Some(friend)) if friend.peer.is_some() => {
-                    let peer = friend.peer.unwrap();
-                    let target = PeerNodeInfo {
-                        peer_id: (!peer.peer_id.is_empty()).then_some(peer.peer_id),
-                        addresses: peer.addresses,
-                    };
-                    match self.build_dm_envelope(KIND_CONTACT_SYNC, &root_id, body) {
-                        Ok(envelope) => vec![(target, envelope)],
-                        Err(_) => Vec::new(),
-                    }
-                }
-                _ => {
-                    let Ok(envelope) = self.build_dm_envelope(KIND_CONTACT_SYNC, &root_id, body)
-                    else {
-                        return;
-                    };
-                    self.self_device_peers(&root_id)
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|peer| (peer, envelope.clone()))
-                        .collect()
-                }
-            };
-        self.spawn_deliveries(deliveries);
+        // 优先用自 FriendRecord 的 peers 多播（多设备寻址）；peers 缺失时回退
+        // self_device_peers（DeviceRecord 聚合兜底）。
+        let envelope = match self.build_dm_envelope(KIND_CONTACT_SYNC, &root_id, body) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        let own_peers: Vec<PeerNodeInfo> = ContactService::get_friend(storage, &root_id)
+            .ok()
+            .flatten()
+            .map(|f| {
+                f.peers
+                    .into_iter()
+                    .map(|p| PeerNodeInfo {
+                        peer_id: (!p.peer_id.is_empty()).then_some(p.peer_id),
+                        addresses: p.addresses,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let targets = if !own_peers.is_empty() {
+            own_peers
+        } else {
+            self.self_device_peers(&root_id).unwrap_or_default()
+        };
+        self.spawn_deliveries(
+            targets
+                .into_iter()
+                .map(|peer| (peer, envelope.clone()))
+                .collect(),
+        );
     }
 
     /// 会话元数据快照广播：置顶/免打扰/草稿变更后向自设备投递 conv-sync
@@ -71,33 +74,36 @@ impl Kernel {
         let Ok(body) = crate::message::build_conv_sync_snapshot(storage) else {
             return;
         };
-        // 优先用自 FriendRecord 的 peer 单播；peer 缺失时回退 self_device_peers
-        let deliveries: Vec<(PeerNodeInfo, Value)> =
-            match ContactService::get_friend(storage, &root_id) {
-                Ok(Some(friend)) if friend.peer.is_some() => {
-                    let peer = friend.peer.unwrap();
-                    let target = PeerNodeInfo {
-                        peer_id: (!peer.peer_id.is_empty()).then_some(peer.peer_id),
-                        addresses: peer.addresses,
-                    };
-                    match self.build_dm_envelope(KIND_CONV_SYNC, &root_id, body) {
-                        Ok(envelope) => vec![(target, envelope)],
-                        Err(_) => Vec::new(),
-                    }
-                }
-                _ => {
-                    let Ok(envelope) = self.build_dm_envelope(KIND_CONV_SYNC, &root_id, body)
-                    else {
-                        return;
-                    };
-                    self.self_device_peers(&root_id)
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|peer| (peer, envelope.clone()))
-                        .collect()
-                }
-            };
-        self.spawn_deliveries(deliveries);
+        // 优先用自 FriendRecord 的 peers 多播（多设备寻址）；peers 缺失时回退
+        // self_device_peers（DeviceRecord 聚合兜底）。
+        let envelope = match self.build_dm_envelope(KIND_CONV_SYNC, &root_id, body) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        let own_peers: Vec<PeerNodeInfo> = ContactService::get_friend(storage, &root_id)
+            .ok()
+            .flatten()
+            .map(|f| {
+                f.peers
+                    .into_iter()
+                    .map(|p| PeerNodeInfo {
+                        peer_id: (!p.peer_id.is_empty()).then_some(p.peer_id),
+                        addresses: p.addresses,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let targets = if !own_peers.is_empty() {
+            own_peers
+        } else {
+            self.self_device_peers(&root_id).unwrap_or_default()
+        };
+        self.spawn_deliveries(
+            targets
+                .into_iter()
+                .map(|peer| (peer, envelope.clone()))
+                .collect(),
+        );
     }
 
     /// 向全部已配对自设备尽力投递本机设备记录（device-sync；body 为完整
