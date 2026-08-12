@@ -67,6 +67,30 @@ impl PluginRuntimeRegistry {
         }
     }
 
+    /// 把社交定向投递（FeedReceived）投递给归属插件的后台运行时
+    /// （kind=`feed-received`；无运行时静默丢弃——插件重启后经 pull 补读，
+    /// 在线推送不是可靠队列，架构 §8）。payload 为 P2pEvent::FeedReceived
+    /// 的 data：`{topic, from, feedId, payload, ts, replyTo?}`。topic 前缀即
+    /// 插件归属（架构 §8），路由取 `plugin_id_of_topic`；prelude 内再按
+    /// spark.feed.onReceive 订阅的 topic 前缀做二次过滤。
+    pub(crate) fn dispatch_feed(&self, payload: &Value) {
+        let Some(topic) = payload.get("topic").and_then(Value::as_str) else {
+            return;
+        };
+        let plugin_id = crate::kernel::plugin_id_of_topic(topic);
+        let mut inner = self.lock();
+        let Some(handle) = inner.get(plugin_id) else {
+            return;
+        };
+        let event = PluginEvent::Dispatch {
+            kind: "feed-received".to_string(),
+            payload: payload.clone(),
+        };
+        if handle.dispatch(event).is_err() {
+            inner.remove(plugin_id);
+        }
+    }
+
     /// 把 P6 数据变更投递给归属插件的后台运行时（kind=`data-change`；
     /// 无运行时静默丢弃——未运行的插件下次启动后经查询获得最新态，
     /// 变更通知不是可靠队列）。payload 同 P2pEvent::PluginDataChanged。

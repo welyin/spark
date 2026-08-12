@@ -34,6 +34,11 @@ pub enum PluginError {
     #[error("Key unavailable: {0}")]
     KeyUnavailable(String),
 
+    /// 调用级限流（social-feed §9.2 `RateLimited`；每 (space, pluginId) 60s 内
+    /// 10 次 feed.deliver）。文案与内核门面 `KernelError::RateLimited` 逐字一致。
+    #[error("RateLimited")]
+    RateLimited,
+
     /// 会话不属于该插件（bot rootId 前缀不匹配）。
     #[error("plugin does not own conversation: {0}")]
     ConversationNotOwned(String),

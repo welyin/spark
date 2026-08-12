@@ -144,6 +144,12 @@ pub fn classify_key(key: &str) -> UsageClass {
     if key.starts_with("meta:") {
         return UsageClass::SyncMeta;
     }
+    // social-feed §13：DM/feed 消息同步状态归入 syncMeta（`feed:inbox`/`feed:blob-src`
+    // 收件箱与 blob 来源、`dm:pending:` 离线补投队列、`dm:e2e:key:` 会话密钥表——
+    // 均为个人空间消息域的同步/暂存状态）。
+    if key.starts_with("feed:") || key.starts_with("dm:") {
+        return UsageClass::SyncMeta;
+    }
     if key.starts_with("org:") {
         return UsageClass::Organization;
     }
@@ -261,6 +267,19 @@ mod tests {
             UsageClass::Indexes
         );
         assert_eq!(classify_key("meta:plugin:app:col:id"), UsageClass::SyncMeta);
+        // social-feed §13：feed / dm:pending / dm:e2e:key 归入 syncMeta
+        assert_eq!(classify_key("feed:inbox:moments:0001:f1"), UsageClass::SyncMeta);
+        assert_eq!(classify_key("feed:blob-src:hashA"), UsageClass::SyncMeta);
+        assert_eq!(
+            classify_key("dm:pending:rootX:msg1"),
+            UsageClass::SyncMeta,
+            "离线补投队列归 syncMeta"
+        );
+        assert_eq!(
+            classify_key("dm:e2e:key:peerRoot"),
+            UsageClass::SyncMeta,
+            "会话密钥表归 syncMeta"
+        );
         assert_eq!(classify_key("org:meta:org1"), UsageClass::Organization);
         assert_eq!(classify_key("org:tx:org1:1"), UsageClass::Organization);
         assert_eq!(classify_key("p2p:peer:record:p1"), UsageClass::P2p);
