@@ -148,6 +148,18 @@ jobs:
             --releaseTag "${{ steps.vars.outputs.tag }}" \
             --outputDir "app/dist-market/plugins/${{ steps.vars.outputs.plugin_id }}"
 
+      - name: Verify release signature against builtin trust key
+        if: github.event_name != 'workflow_dispatch' || steps.release_check.outputs.skip == 'false'
+        shell: bash
+        run: |
+          # 两道检查：产物公钥(由 secret 私钥派生) == 内置信任公钥；内置公钥 Ed25519 验签 manifest。
+          # 任一失败即 workflow 失败，防止「配错 SPARK_PLUGIN_SIGNING_PRIVATE_KEY 但 release 成功」，
+          # 产物在客户端验签必然失败的问题流入正式发布。
+          node plugins/scripts/verify-release-signature.mjs \
+            --manifest "app/dist-market/plugins/${{ steps.vars.outputs.plugin_id }}/update-manifest.json" \
+            --sig "app/dist-market/plugins/${{ steps.vars.outputs.plugin_id }}/update-manifest.sig" \
+            --pub "app/dist-market/plugins/${{ steps.vars.outputs.plugin_id }}/update-manifest.pub.pem"
+
       - name: Prepare named release assets
         if: github.event_name != 'workflow_dispatch' || steps.release_check.outputs.skip == 'false'
         shell: bash
