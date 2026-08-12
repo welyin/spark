@@ -49,6 +49,10 @@ export const COMMAND_MAP: Record<string, string> = {
   'org-search-known': 'org_search_known',
   // 通讯录
   'contact-overview': 'contact_overview',
+  // 只读门面（社交投递层 contact:read，插件 SDK contacts 模块；无参）
+  'contact-list-friends': 'contact_list_friends',
+  'contact-list-groups': 'contact_list_groups',
+  'contact-list-tags': 'contact_list_tags',
   'contact-update-profile': 'contact_update_profile',
   'contact-set-blocked': 'contact_set_blocked',
   'contact-remove-friend': 'contact_remove_friend',
@@ -68,6 +72,9 @@ export const COMMAND_MAP: Record<string, string> = {
   'contact-org-group-rename': 'contact_org_group_rename',
   'contact-org-group-delete': 'contact_org_group_delete',
   'contact-org-group-move': 'contact_org_group_move',
+  // 社交定向投递（social-feed S7，sdk.feed 域）
+  'feed-deliver': 'plugin_feed_deliver',
+  'feed-pull': 'plugin_feed_pull',
   // 消息
   'message-list-conversations': 'message_list_conversations',
   'message-list-messages': 'message_list_messages',
@@ -104,6 +111,7 @@ export const COMMAND_MAP: Record<string, string> = {
   'p2p-clear-peer-records': 'p2p_clear_peer_records',
   'p2p-sync-peer-organizations': 'p2p_sync_peer_organizations',
   'p2p-list-peer-records': 'p2p_list_peer_records',
+  'db-scan': 'db_scan',
   'p2p-get-dht-mode': 'p2p_get_dht_mode',
   'p2p-set-dht-mode': 'p2p_set_dht_mode',
   'p2p-make-node-card': 'p2p_make_node_card',
@@ -206,6 +214,8 @@ export const ARG_NAMES: Record<string, string[]> = {
   'contact-org-group-rename': ['spaceKey', 'id', 'name'],
   'contact-org-group-delete': ['spaceKey', 'id'],
   'contact-org-group-move': ['spaceKey', 'id', 'toIndex', 'newParentId'],
+  'feed-deliver': ['pluginId', 'topic', 'payload', 'recipients', 'replyTo', 'feedId'],
+  'feed-pull': ['pluginId', 'topic', 'cursor', 'limit'],
   'message-list-conversations': ['spaceKey'],
   'message-list-messages': ['spaceKey', 'convId'],
   'message-ensure-direct': ['spaceKey', 'peerId', 'title'],
@@ -227,6 +237,7 @@ export const ARG_NAMES: Record<string, string[]> = {
   'data-purge-preview': ['orgId', 'beforeTs'],
   'data-purge-execute': ['orgId', 'beforeTs', 'confirmExported'],
   'p2p-broadcast': ['topic', 'message'],
+  'db-scan': ['prefix'],
   'p2p-sync-peer-organizations': ['targetPeer'],
   'p2p-set-dht-mode': ['mode'],
   'p2p-make-node-card': ['orgId'],

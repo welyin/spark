@@ -44,8 +44,8 @@
 - 链接预览 | 发送方壳层本地抓取 OG/Twitter Card，接收方只展示；非 Tauri 退化为诚实占位
 - 标题未读数 | 已实现 `document.title (n) 星火 Spark`
 - `src/stores/pending-chat.ts` | 跨页「打开会话」请求 | 已通且数据真实
-- 离线投递 | 对端不可达即 failed（可手动重发），无离线队列 | 待后续专项
-- 消息加密 | 传输层依赖 libp2p Noise，未做应用层 E2E | 待协议规格与专项
+- 离线投递 | **已落地**：social-feed S3 `dm_offline` 统一密文暂存层（core/src/dm_offline/：`dm:pending:`/`org:dm:pending:` 键、TTL 7d、单 recipient 100/全局 1000、pdsync `dm:pending` category），S6 已接线补投（`feed_deliver` 投递失败密文入 `dm:pending:` 自动补投，chat 同口径统一复用；on_peer_connected flush / chat 失败入队已随 S6 接入，见 social-feed §6.4） | 已落地（chat 同口径）
+- 消息加密 | **已落地**：传输层依赖 libp2p Noise；应用层 E2E（core/src/dm_e2e/ X25519 协商 + AES-256-GCM + 密钥表 + 轮换 + pdsync 扩散）。S6 已接线**入站统一解密**（`handle_inbound_dm_with_e2e`：先验签后解密、ephPub 派生/密钥表回退）与出站加密原语；**密钥协商改 root 直接转换**（2026-08 架构师裁决：不用域身份派生），`chat 出站（个人 direct）与 feed 出站 E2E 生产路径启用**（同步类/feed-blob 保持明文），双端种子集成测试全绿 | 已落地（chat+feed 出站启用）
 - 应用会话-清空 | 内核只有 appDeleteConversation，无逐条清空 | 如产品需要补内核 clear 接口
 
 ## 通讯录（ui-contacts）
@@ -57,7 +57,7 @@
 - `src/components/contacts/ContactPanel.vue:134` | 插件子开关未做 | §6.2 按插件细分的权限开关待插件数据共享落地
 
 （以下已落地，仅保留记录）
-- 多设备配对 | 每 rootId 一条联系人记录，至多一台设备 | 多设备需设备清单模型（协议 §19.4）
+- 多设备配对 | social-feed S4 已交付：FriendRecord.peers 列表升级（旧数据自动升级单元素），握手写入首台 + DeviceRecord 聚合，resolve_conv_peer 遍历择优 | 已落地（设备清单模型）
 - 名片二维码 | 已落地：编码真实节点名片（RootID + peerId/监听地址），节点未连接降级只含 RootID
 - `src/stores/pending-contact.ts` | 跨页「打开联系人资料」 | 已通且数据真实
 - `src/components/contacts/open-intents.ts` | 消息页空状态→通讯录跳转 | 复用 `spark:open-contact` 事件

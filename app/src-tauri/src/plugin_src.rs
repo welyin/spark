@@ -29,7 +29,7 @@ use tauri::http::{header, Response, StatusCode};
 use crate::market::types::PersistedPluginState;
 
 /// 源服务统一 CSP（任务书口径；与宿主 iframe 外层施加的策略一致）
-pub const PLUGIN_CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:";
+pub const PLUGIN_CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:";
 
 // ------------------------------------------------------------------
 // 路径与 MIME（纯函数，单测覆盖）

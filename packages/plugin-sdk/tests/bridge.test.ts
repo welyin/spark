@@ -558,3 +558,75 @@ describe('bridge messages 域（应用会话 §20）', () => {
     harness.bridge.destroy();
   });
 });
+
+describe('bridge feed 域（社交投递层 §9 sdk.feed）', () => {
+  it('deliver 序列化为 feed.deliver（topic/payload/recipients/replyTo/feedId 透传）', async () => {
+    const harness = createHarness();
+    const { sdk } = await connect(harness);
+    const result = (await sdk.feed!.deliver({
+      topic: 'spark-example:posts',
+      payload: { text: 'hi' },
+      recipients: ['bob'],
+      replyTo: 'orig-1',
+      feedId: 'feed-1'
+    })) as Record<string, unknown>;
+
+    expect(harness.handler).toHaveBeenCalledTimes(1);
+    const [module, method, args] = harness.handler.mock.calls[0] as [string, string, unknown[]];
+    expect(module).toBe('feed');
+    expect(method).toBe('deliver');
+    expect(args[0]).toEqual({
+      topic: 'spark-example:posts',
+      payload: { text: 'hi' },
+      recipients: ['bob'],
+      replyTo: 'orig-1',
+      feedId: 'feed-1'
+    });
+    harness.bridge.destroy();
+  });
+
+  it('pull 序列化为 feed.pull（topic/cursor/limit 透传）', async () => {
+    const harness = createHarness();
+    const { sdk } = await connect(harness);
+    await sdk.feed!.pull({ topic: 'spark-example:posts', cursor: 'c1', limit: 50 });
+
+    const [module, method, args] = harness.handler.mock.calls[0] as [string, string, unknown[]];
+    expect(module).toBe('feed');
+    expect(method).toBe('pull');
+    expect(args[0]).toEqual({ topic: 'spark-example:posts', cursor: 'c1', limit: 50 });
+    harness.bridge.destroy();
+  });
+
+  it('onReceive 订阅 FeedReceived 事件并按 topic 前缀过滤派发', async () => {
+    const harness = createHarness();
+    const { sdk } = await connect(harness);
+    const received: unknown[] = [];
+    // 订阅 spark-example 前缀
+    await sdk.feed!.onReceive('spark-example:posts', (msg) => received.push(msg));
+
+    // 匹配前缀 → 派发
+    const matched = {
+      feedId: 'f1',
+      from: 'alice',
+      topic: 'spark-example:posts:new',
+      payload: { text: 'hi' },
+      replyTo: undefined,
+      ts: 1000
+    };
+    harness.bridge.pushEvent('FeedReceived', matched);
+    await waitFor(() => received.length === 1);
+    expect(received[0]).toEqual(matched);
+
+    // 前缀不匹配（其它插件）→ 不派发
+    harness.bridge.pushEvent('FeedReceived', {
+      feedId: 'f2',
+      from: 'bob',
+      topic: 'evil:posts',
+      payload: { text: 'no' },
+      ts: 2000
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(received).toHaveLength(1);
+    harness.bridge.destroy();
+  });
+});

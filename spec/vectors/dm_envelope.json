@@ -1,18 +1,107 @@
-{
-  "description": "dm 签名载荷 golden vector：固定测试密钥 → build_signing_payload 确定输出 + ed25519 签名（kernel/dm_envelope.rs）",
-  "secretKeyHex": "0707070707070707070707070707070707070707070707070707070707070707",
-  "pubKeyBase64": "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=",
-  "rootId": "fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889",
-  "kind": "chat",
-  "to": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-  "ts": 1720000000000,
-  "body": {
-    "spaceKey": "personal",
-    "message": {
-      "id": "m1720000000000-0",
-      "content": "hello golden"
-    }
+[
+  {
+    "description": "chat 信封：固定测试密钥 → build_signing_payload 确定输出 + ed25519 签名 + 信封构造/校验往返",
+    "secretKeyHex": "0707070707070707070707070707070707070707070707070707070707070707",
+    "pubKeyBase64": "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=",
+    "rootId": "fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889",
+    "kind": "chat",
+    "to": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "ts": 1720000000000,
+    "body": {
+      "spaceKey": "personal",
+      "message": {
+        "id": "m1720000000000-0",
+        "content": "hello golden"
+      }
+    },
+    "payload": "{\"body\":{\"spaceKey\":\"personal\",\"message\":{\"id\":\"m1720000000000-0\",\"content\":\"hello golden\"}},\"from\":\"fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889\",\"kind\":\"chat\",\"to\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"ts\":1720000000000}",
+    "sigBase64": "azgHVsIqiIClhJtMpWyr0LNWas3JWq90pMO5OvK6XmfZwseXOS4ESyieMrfL/pMW3K4MxaIQC21A/2Mnt+AUDg=="
   },
-  "payload": "{\"body\":{\"spaceKey\":\"personal\",\"message\":{\"id\":\"m1720000000000-0\",\"content\":\"hello golden\"}},\"from\":\"fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889\",\"kind\":\"chat\",\"to\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"ts\":1720000000000}",
-  "sigBase64": "azgHVsIqiIClhJtMpWyr0LNWas3JWq90pMO5OvK6XmfZwseXOS4ESyieMrfL/pMW3K4MxaIQC21A/2Mnt+AUDg=="
-}
+  {
+    "description": "E2E 加密信封：body 为密文对象 {encrypted,ciphertext,nonce}；签名对密文对象做（确定性），验签字节对齐。AES-256-GCM 密文/共享密钥由 dm_e2e 模块（S2）单测覆盖，本 vector 锁定线形 + 签名字节",
+    "secretKeyHex": "0707070707070707070707070707070707070707070707070707070707070707",
+    "pubKeyBase64": "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=",
+    "rootId": "fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889",
+    "kind": "chat",
+    "to": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "ts": 1720000000000,
+    "body": {
+      "encrypted": true,
+      "ciphertext": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+      "nonce": "h3RwYJcKpM4t2E7f"
+    },
+    "payload": "{\"body\":{\"encrypted\":true,\"ciphertext\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\",\"nonce\":\"h3RwYJcKpM4t2E7f\"},\"from\":\"fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889\",\"kind\":\"chat\",\"to\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"ts\":1720000000000}",
+    "sigBase64": "U4t1Iqdy7W3vByk1CFAA0HEY5VLNlrGteQi5rBXEBsxXbLoCRUwRFVG8I8geZ01wwl2kKb3Z8OcbSDN2wCJaBA=="
+  },
+  {
+    "description": "feed 信封：{topic,feedId,payload,replyTo} 社交定向投递；生产路径 feed body 经 E2E 加密（见 dm_envelope 第 2/6 条），本 vector 以明文 body 锁定 feed 线形 + 签名字节（build_signing_payload 的键序不依赖 body 明/密文）",
+    "secretKeyHex": "0707070707070707070707070707070707070707070707070707070707070707",
+    "pubKeyBase64": "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=",
+    "rootId": "fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889",
+    "kind": "feed",
+    "to": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "ts": 1720000000000,
+    "body": {
+      "topic": "spark-moments:post",
+      "feedId": "f1720000000000-0",
+      "payload": {
+        "text": "hello feed",
+        "blobs": [
+          "aabbcc"
+        ]
+      },
+      "replyTo": "f1720000000000-rc1"
+    },
+    "payload": "{\"body\":{\"topic\":\"spark-moments:post\",\"feedId\":\"f1720000000000-0\",\"payload\":{\"text\":\"hello feed\",\"blobs\":[\"aabbcc\"]},\"replyTo\":\"f1720000000000-rc1\"},\"from\":\"fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889\",\"kind\":\"feed\",\"to\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"ts\":1720000000000}",
+    "sigBase64": "WxWQ36fs3ZE3wnvS0uZqR/+C5DdHO+4pVh9X2irZU9z/KhY7KX+8J79qlWVZxtkJTp6jBiirLTqvnCHwJNdkCg=="
+  },
+  {
+    "description": "feed-blob-req 信封：{hash,offset} 跨联系人 blob 分块拉取请求（向 feed 原作者取件）",
+    "secretKeyHex": "0707070707070707070707070707070707070707070707070707070707070707",
+    "pubKeyBase64": "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=",
+    "rootId": "fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889",
+    "kind": "feed-blob-req",
+    "to": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "ts": 1720000000000,
+    "body": {
+      "hash": "aabbccddeeff00112233445566778899",
+      "offset": 0
+    },
+    "payload": "{\"body\":{\"hash\":\"aabbccddeeff00112233445566778899\",\"offset\":0},\"from\":\"fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889\",\"kind\":\"feed-blob-req\",\"to\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"ts\":1720000000000}",
+    "sigBase64": "9Rtf9aXt40hZ0sQmseS5AzZNAwpl11AKCQKpBNTEzn5Gb06PQL8KxiJLBsItpks0gI0iO82tCAZIlnFzlOpLBA=="
+  },
+  {
+    "description": "feed-blob-resp 信封：{hash,offset,data,totalBytes} 分块应答（线形对齐 pdsync-attachment-resp，缺本体回 missing）",
+    "secretKeyHex": "0707070707070707070707070707070707070707070707070707070707070707",
+    "pubKeyBase64": "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=",
+    "rootId": "fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889",
+    "kind": "feed-blob-resp",
+    "to": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "ts": 1720000000000,
+    "body": {
+      "hash": "aabbccddeeff00112233445566778899",
+      "offset": 0,
+      "data": "aGVsbG8=",
+      "totalBytes": 5
+    },
+    "payload": "{\"body\":{\"hash\":\"aabbccddeeff00112233445566778899\",\"offset\":0,\"data\":\"aGVsbG8=\",\"totalBytes\":5},\"from\":\"fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889\",\"kind\":\"feed-blob-resp\",\"to\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"ts\":1720000000000}",
+    "sigBase64": "STpmmJQaFAIpPTqGz1in3OfPOGD6TQtQlSOPWlJIE0bKH6GfroFFkH92bhF6pKPmqAWaM/ZCGZtDN+cB2D9VDg=="
+  },
+  {
+    "description": "E2E 加密 + 密钥轮换信封：携带临时 X25519 公钥 ephPub（外层可选字段，与 pubKey/sig 并列）。签名载荷键序 body/ephPub/from/kind/to/ts——ephPub 插在 body 之后、参与签名（防中间人替换临时公钥）。固定 ephPub=0xAA×32 锁定线形 + 签名字节；AES 密文/临时私钥派生由 dm_e2e 模块单测覆盖。",
+    "secretKeyHex": "0707070707070707070707070707070707070707070707070707070707070707",
+    "pubKeyBase64": "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=",
+    "rootId": "fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889",
+    "kind": "chat",
+    "to": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "ts": 1720000000000,
+    "ephPub": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqo=",
+    "body": {
+      "encrypted": true,
+      "ciphertext": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+      "nonce": "h3RwYJcKpM4t2E7f"
+    },
+    "payload": "{\"body\":{\"encrypted\":true,\"ciphertext\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\",\"nonce\":\"h3RwYJcKpM4t2E7f\"},\"ephPub\":\"qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqo=\",\"from\":\"fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889\",\"kind\":\"chat\",\"to\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"ts\":1720000000000}",
+    "sigBase64": "ZF1aycOx0YOMBJXE1O6IBNMjD7o6C9VkFJGRYFXobkPkBQgJShnwoq83RKWZWBn8/+l532oGuFlWE92sKOtfCA=="
+  }
+]

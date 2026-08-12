@@ -321,6 +321,20 @@
   min-height: 1px;
 }
 
+/* 插件自接管顶栏（chrome.hostTitleBar:false）：head 全部隐藏、iframe 全高，
+   返回按钮由插件自己在 iframe 内实现（sdk.close() 请求关闭） */
+.plugin-tab-card {
+  position: relative;
+}
+/* 沉浸式：head 隐藏后卡片顶满内容区，iframe 占掉原顶栏位置 */
+.plugin-tab-card--immersive {
+  height: 100%;
+  margin: 0;
+}
+.plugin-tab-card--immersive .el-card__body {
+  height: 100%;
+}
+
 /* ---- 全 app 抽屉统一：去默认头部小标题、内容卡片去边框（卡片标题即抽屉标题） ---- */
 .app-drawer .el-drawer__body {
   padding: 0;

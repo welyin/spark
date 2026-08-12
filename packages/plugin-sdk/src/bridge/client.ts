@@ -350,6 +350,7 @@ export function connectPluginBridge(options: ConnectPluginBridgeOptions): Promis
 
     return {
       domain: ctx.domain,
+      close: () => call('app', 'close', []) as Promise<void>,
       evidence: {
         headHash: () => call('evidence', 'headHash', []) as Promise<{ hash: string | null }>,
         verify: () => call('evidence', 'verify', []) as Promise<{ valid: boolean; height: number }>
@@ -362,7 +363,7 @@ export function connectPluginBridge(options: ConnectPluginBridgeOptions): Promis
       },
       runtime: {
         currentRoot: () =>
-          call('runtime', 'currentRoot', []) as Promise<{ unlocked: boolean; rootId: string | null }>,
+          call('runtime', 'currentRoot', []) as ReturnType<PluginSDK['runtime']['currentRoot']>,
         syncOrganizationData: (orgId) =>
           call('runtime', 'syncOrganizationData', [orgId]) as Promise<{
             orgId: string;
@@ -472,6 +473,35 @@ export function connectPluginBridge(options: ConnectPluginBridgeOptions): Promis
           call('messages', 'unregisterAsContact', [contactId]).then(() => ({ success: true })),
         sendResponse: (convId, contactId, displayName, messageId, text) =>
           call('messages', 'sendResponse', [convId, contactId, displayName, messageId, text])
+      },
+      // 通讯录只读模块（social-feed §9.4 contact:read；权限由桥 dispatcher 强制）
+      contacts: {
+        listFriends: () =>
+          call('contacts', 'listFriends', []) as Promise<import('../index').PluginFriendSummary[]>,
+        listGroups: () =>
+          call('contacts', 'listGroups', []) as Promise<import('../index').PluginContactGroup[]>,
+        listTags: () =>
+          call('contacts', 'listTags', []) as Promise<import('../index').PluginContactTag[]>
+      },
+      // 社交投递模块（social-feed §9.1 sdk.feed；deliver 需 feed:deliver 权限，
+      // onReceive/pull 接收侧免权限；topic 前缀出站由桥 dispatcher 校验）
+      feed: {
+        deliver: (input) =>
+          call('feed', 'deliver', [input]) as Promise<{ requested: number; accepted: number }>,
+        pull: (input) =>
+          call('feed', 'pull', [input]) as Promise<{ items: import('../index').FeedMessage[]; nextCursor?: string }>,
+        // 订阅收件（在线推送）：经既有 events.subscribe 通道订阅 FeedReceived，
+        // 按订阅的 topic 前缀过滤——只把匹配本插件 topic 前缀的 feed 派发给
+        // handler（桥 dispatcher 已按插件归属推送，此处前缀过滤做第二道收敛）
+        onReceive: async (topic, handler) => {
+          const wrapped = (payload: unknown): void => {
+            const msg = payload as import('../index').FeedMessage | undefined;
+            if (typeof msg?.topic === 'string' && msg.topic.startsWith(topic)) {
+              handler(msg);
+            }
+          };
+          await events.subscribe('FeedReceived', wrapped);
+        }
       },
       events,
       onHostCall: (event: string, handler: (payload: unknown) => unknown | Promise<unknown>) => {

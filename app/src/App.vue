@@ -119,8 +119,8 @@
             <!-- 「我的资料」隐藏入口：点击 rail 顶部头像进入，不在 rail 展示 -->
             <MinePage v-else-if="activeTab === 'mine'" @profile-updated="loadCurrentUser" />
 
-            <el-card v-else-if="activePluginTab" shadow="never" class="plugin-tab-card">
-              <template #header>
+            <el-card v-else-if="activePluginTab" shadow="never" class="plugin-tab-card" :class="{ 'plugin-tab-card--immersive': !pluginHostTitleBar }">
+              <template v-if="pluginHostTitleBar" #header>
                 <div class="plugin-tab-header-bar">
                   <div class="plugin-tab-header-left">
                     <el-button text type="primary" @click="goBackFromPlugin">&lt; 返回</el-button>
@@ -132,15 +132,15 @@
                   <div class="plugin-tab-header-right" />
                 </div>
               </template>
-              <!-- iframe 沙箱运行时（插件加载唯一路径，阶段 A 第三波起）：
-                   独立 origin iframe + postMessage 桥 + 权限中间件 + 心跳熔断；
-                   space 切换经 :key 重建实例 -->
+              <!-- 插件自接管顶栏（chrome.hostTitleBar:false）：head 隐藏、iframe 全高，
+                   返回按钮由插件自己在内部实现（sdk.close() 请求关闭） -->
               <PluginIframeHost
                 :key="`${activePluginTab.id}|${pluginSpace.id}`"
                 :plugin-id="activePluginTab.pluginDomain.slice('plugin:'.length)"
                 :view-id="activePluginTab.pluginView"
                 :space="pluginSpace"
                 @close="closePluginTab"
+                @manifest="onPluginManifest"
               />
             </el-card>
           </div>
@@ -161,8 +161,10 @@
           <!-- 「我的资料」隐藏入口：点击 rail 顶部头像进入，不在 rail 展示 -->
           <MinePage v-else-if="activeTab === 'mine'" @profile-updated="loadCurrentUser" />
 
-          <el-card v-else-if="activePluginTab" shadow="never" class="plugin-tab-card">
-            <template #header>
+          <el-card v-else-if="activePluginTab" shadow="never" class="plugin-tab-card" :class="{ 'plugin-tab-card--immersive': !pluginHostTitleBar }">
+            <!-- 插件自接管顶栏（chrome.hostTitleBar:false）：header 内容置空、el-card 不渲染 head，
+                 iframe 全高，仅左上角悬浮返回图标叠在 iframe 之上 -->
+            <template v-if="pluginHostTitleBar" #header>
               <div class="plugin-tab-header-bar">
                 <div class="plugin-tab-header-left">
                   <el-button text type="primary" @click="goBackFromPlugin">&lt; 返回</el-button>
@@ -183,6 +185,7 @@
               :view-id="activePluginTab.pluginView"
               :space="pluginSpace"
               @close="closePluginTab"
+              @manifest="onPluginManifest"
             />
           </el-card>
         </template>
@@ -215,7 +218,7 @@ import { computed, defineComponent, onMounted, onUnmounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { onBackButtonPress } from '@tauri-apps/api/app';
 import { ChatDotRound, Cpu, Grid, Notebook, Setting } from '@element-plus/icons-vue';
-import type { PluginSpaceContext } from '../../packages/plugin-sdk/src';
+import type { PluginManifest, PluginSpaceContext } from '../../packages/plugin-sdk/src';
 import PluginIframeHost from './components/plugin/PluginIframeHost.vue';
 import { fetchPluginManifest } from './plugin/source';
 import { unreadCountOf } from './stores/messages';
@@ -355,6 +358,16 @@ export default defineComponent({
       return pluginTabs.value.find((tab) => tab.id === activeTab.value) ?? null;
     });
 
+    /** 当前插件 manifest（PluginIframeHost 透传）：用于顶栏按 chrome.hostTitleBar 决策 */
+    const pluginManifest = ref<PluginManifest | null>(null);
+    const onPluginManifest = (manifest: PluginManifest | null) => {
+      pluginManifest.value = manifest;
+    };
+    /** 插件自接管顶栏（壳层隐藏默认顶栏主体、仅左上角保留悬浮返回图标） */
+    const pluginHostTitleBar = computed(
+      () => pluginManifest.value?.chrome?.hostTitleBar !== false
+    );
+
     /** 插件运行 space 上下文（透传 PluginIframeHost；个人空间 id 恒 'personal'） */
     const pluginSpace = computed<PluginSpaceContext>(() => ({
       type: currentSpace.value.type,
@@ -441,6 +454,8 @@ export default defineComponent({
           pluginContext
         });
       }
+      // 切插件前重置 manifest（新插件顶栏决策待 PluginIframeHost 重新上报）
+      pluginManifest.value = null;
       activeTab.value = tabId;
     };
 
@@ -584,12 +599,27 @@ export default defineComponent({
     onMounted(() => window.addEventListener('spark:open-app', onOpenAppEvent));
     onMounted(() => window.addEventListener('spark:open-mine', onOpenMineEvent));
     onMounted(() => window.addEventListener('spark:close-plugin', onClosePluginEvent));
+    // 网络变化重连（A 秒级感知）：window online/offline 事件 → 通知内核
+    // p2p-network-changed（command-map 已有映射，前端调用点缺失）。内核启动
+    // 3-5s debounce 后若监听地址确已变化则重发布地址 + 重建 relay + 重拨优先
+    // 类目 peer。online 与 offline 都上报——两者都是网络接口变化的可靠信号。
+    const onNetworkStateChange = () => {
+      window.electronAPI?.p2p.networkChanged().catch(() => {});
+    };
+    const onNetOnline = () => onNetworkStateChange();
+    const onNetOffline = () => onNetworkStateChange();
+    onMounted(() => {
+      window.addEventListener('online', onNetOnline);
+      window.addEventListener('offline', onNetOffline);
+    });
     onUnmounted(() => {
       window.removeEventListener('spark:open-chat', onOpenChatEvent);
       window.removeEventListener('spark:open-contact', onOpenContactEvent);
       window.removeEventListener('spark:open-app', onOpenAppEvent);
       window.removeEventListener('spark:open-mine', onOpenMineEvent);
       window.removeEventListener('spark:close-plugin', onClosePluginEvent);
+      window.removeEventListener('online', onNetOnline);
+      window.removeEventListener('offline', onNetOffline);
       unlistenP2p.forEach((un) => un());
     });
 
@@ -604,6 +634,9 @@ export default defineComponent({
       contactsBadge,
       activePluginTab,
       pluginSpace,
+      pluginManifest,
+      pluginHostTitleBar,
+      onPluginManifest,
       closePluginTab,
       handleMenuSelect,
       backFromSecondaryTab,

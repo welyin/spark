@@ -61,6 +61,7 @@ export type P2pEventDto =
   | { kind: 'MessageDropped'; data: { reason: string } }
   | { kind: 'KeepaliveTick'; data: { overlayDialed: number; exchanged: number; announced: boolean } }
   | { kind: 'ChatReceived'; data: { spaceKey: string; conversation: ConversationDto; message: ChatMessageDto } }
+  | { kind: 'FeedReceived'; data: FeedMessageDto }
   | { kind: 'ChatStatus'; data: { spaceKey: string; convId: string; messageId?: string; status?: MessageStatusDto; recalled?: boolean; peerRead?: boolean } }
   | { kind: 'FriendRequestReceived'; data: { request: FriendRequestDto } }
   | { kind: 'FriendRequestSent'; data: { request: FriendRequestDto } }
@@ -447,6 +448,22 @@ export interface ContactGroupDto {
   name: string;
 }
 
+/**
+ * 朋友只读摘要（社交投递层 social-feed §9.4 `contact:read` 最小只读面）。
+ * 相对 `FriendDto` 裁剪：剔除签名/性别/电话/备忘/照片/设备寻址等敏感字段，
+ * 仅暴露插件「谁可以看」选择器所需的展示与筛选字段。
+ */
+export interface FriendSummaryDto {
+  rootId: string;
+  nickname: string;
+  /** 无头像时缺省键不出现（对齐 FriendDto.avatar） */
+  avatar?: string;
+  /** 所属分组 id；'' = 未分组 */
+  groupId: string;
+  tagIds: string[];
+  permission: FriendPermissionDto;
+}
+
 /** 组织空间分组树节点（数组顺序即同级排序）。 */
 export interface OrgGroupNodeDto {
   id: string;
@@ -537,6 +554,35 @@ export interface AppMessageDto {
   read: boolean;
 }
 
+// ------------------------------------------------------------------
+// 社交定向投递（social-feed §9，sdk.feed 域：deliver/pull/onReceive）
+// ------------------------------------------------------------------
+
+/** 单条 feed 消息（收件箱 pull / 在线推送 onReceive 共用形状）。 */
+export interface FeedMessageDto {
+  feedId: string;
+  from: string;
+  topic: string;
+  /** 业务 payload（明文） */
+  payload: unknown;
+  /** 回执语义（指向原 feedId）；可省 */
+  replyTo?: string;
+  /** 信封时间戳（ms） */
+  ts: number;
+}
+
+/** `sdk.feed.deliver` 返回（聚合计数；被静默跳过的收件人不计入 accepted）。 */
+export type FeedDeliverResultDto = {
+  requested: number;
+  accepted: number;
+};
+
+/** `sdk.feed.pull` 返回（收件箱游标补读分页）。 */
+export type FeedPullResultDto = {
+  items: FeedMessageDto[];
+  nextCursor?: string;
+};
+
 export type ElectronAPI = {
   db: {
     query: (prefix: string) => Promise<Array<{ key: string; value: string }>>;
@@ -567,7 +613,17 @@ export type ElectronAPI = {
   plugin: {
     openView: (pluginDomain: string, pluginView?: string) => Promise<{ success: boolean; windowId: number }>;
     listCatalog: () => Promise<PluginCatalogItem[]>;
-    currentRoot: () => Promise<{ unlocked: boolean; rootId: string | null }>;
+    currentRoot: () => Promise<{
+      unlocked: boolean;
+      rootId: string | null;
+      /** 当前身份昵称（root-status IdentityStatus 透传；未设置为 null） */
+      nickname?: string | null;
+      /** 当前身份头像 data URL（root-status IdentityStatus 透传；无头像为 null） */
+      avatar?: string | null;
+      gender?: string | null;
+      region?: string | null;
+      signature?: string | null;
+    }>;
     identitySign: (payload: string, pluginDomain?: string) => Promise<DomainSignature>;
     identityVerify: (payload: string, signature: string, publicKey: string) => Promise<{ valid: boolean }>;
     syncOrganizationData: (orgId: string, pluginDomain?: string) => Promise<{ orgId: string; attempted: number; pulled: number }>;
@@ -723,6 +779,10 @@ export type ElectronAPI = {
   };
   contacts: {
     overview: (spaceKey: string) => Promise<SpaceContactsDto>;
+    // 只读门面（社交投递层 contact:read，插件 SDK contacts 模块）
+    listFriends: () => Promise<FriendSummaryDto[]>;
+    listGroups: () => Promise<ContactGroupDto[]>;
+    listTags: () => Promise<ContactTagDto[]>;
     updateProfile: (spaceKey: string, rootId: string, patch: Partial<ContactProfileDto>) => Promise<{ success: boolean }>;
     setBlocked: (spaceKey: string, rootId: string, blocked: boolean) => Promise<{ success: boolean }>;
     removeFriend: (rootId: string, block?: boolean) => Promise<{ success: boolean }>;
@@ -742,6 +802,24 @@ export type ElectronAPI = {
     orgGroupRename: (spaceKey: string, id: string, name: string) => Promise<{ success: boolean }>;
     orgGroupDelete: (spaceKey: string, id: string) => Promise<{ success: boolean }>;
     orgGroupMove: (spaceKey: string, id: string, toIndex: number, newParentId?: string) => Promise<{ success: boolean }>;
+  };
+  feed: {
+    /** 社交定向投递（social-feed §9.1 deliver）。pluginId 由桥绑定的插件身份注入（不信插件自报）；权限/限流在桥 dispatcher 强制 */
+    deliver: (
+      pluginId: string,
+      topic: string,
+      payload: unknown,
+      recipients: string[],
+      replyTo?: string,
+      feedId?: string
+    ) => Promise<FeedDeliverResultDto>;
+    /** 收件箱游标补读（§9.1 pull；接收侧免权限） */
+    pull: (
+      pluginId: string,
+      topic: string,
+      cursor?: string,
+      limit?: number
+    ) => Promise<FeedPullResultDto>;
   };
   messages: {
     listConversations: (spaceKey: string) => Promise<ConversationDto[]>;

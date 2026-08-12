@@ -1,0 +1,12 @@
+{
+  "name": "@spark/plugin-spark-moments",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "朋友圈插件（personal 空间社交）：文字+图片动态、点赞评论、可见性四选一、互动广播、应用会话通知。",
+  "scripts": {
+    "build": "node ../app/node_modules/vite/bin/vite.js build --config vite.config.ts",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.json || tsc --noEmit -p tsconfig.json",
+    "test": "node ../app/node_modules/vitest/vitest.mjs run --config ../app/vitest.config.ts tests"
+  }
+}

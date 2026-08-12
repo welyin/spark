@@ -55,7 +55,8 @@ vi.mock('../../plugin/source', () => ({
 }));
 
 vi.mock('../../plugin/bridge-dispatcher', () => ({
-  createPluginBridgeDispatcher: vi.fn(async () => async () => null)
+  createPluginBridgeDispatcher: vi.fn(async () => async () => null),
+  setBridgeEventPump: vi.fn()
 }));
 
 const SPACE = { type: 'personal', id: 'personal' } as const;

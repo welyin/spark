@@ -7,6 +7,7 @@
   "scripts": {
     "build:example": "node ../app/node_modules/vite/bin/vite.js build --config spark-example/vite.config.ts && node scripts/copy-example-dist.mjs",
     "build:ai-chat": "node ../app/node_modules/vite/bin/vite.js build --config ai-chat/vite.config.ts && node scripts/copy-ai-chat-dist.mjs",
+    "build:moments": "node ../app/node_modules/vite/bin/vite.js build --config spark-moments/vite.config.ts && node scripts/copy-moments-dist.mjs",
     "package:example": "node scripts/build-example-package.mjs"
   }
 }

@@ -1,0 +1,40 @@
+{
+  "compilerOptions": {
+    "target": "ES2021",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2021", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "noImplicitAny": false,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["vite/client"],
+    "baseUrl": ".",
+    "paths": {
+      "vue": ["../../app/node_modules/vue"],
+      "element-plus": ["../../app/node_modules/element-plus"]
+    }
+  },
+  "include": [
+    "model.ts",
+    "service.ts",
+    "index.ts",
+    "notify-card.ts",
+    "background.ts",
+    "composables/**/*.ts",
+    "components/**/*.vue",
+    "composer/**/*.vue",
+    "composer/**/*.ts",
+    "detail/**/*.vue",
+    "MomentsView.vue",
+    "MyPostsView.vue",
+    "TaPostsView.vue",
+    "NotifyCard.vue",
+    "tests/**/*.ts",
+    "../../packages/plugin-sdk/src/**/*.ts"
+  ]
+}

@@ -48,6 +48,10 @@ function mockGrantedPermissions(permissions: string[], pluginId = 'spark-example
 beforeEach(() => {
   vi.clearAllMocks();
   (window.electronAPI as any).plugin = makeNullApi();
+  // contacts 只读门面走 electronAPI.contacts（backend.contacts 透传）
+  (window.electronAPI as any).contacts = makeNullApi();
+  // 社交投递走 electronAPI.feed（backend.feed 透传）
+  (window.electronAPI as any).feed = makeNullApi();
   mockGrantedPermissions([]);
 });
 
@@ -247,5 +251,103 @@ describe('messages 域（应用会话 §20，pluginId/space 由桥注入）', ()
     await expect(handler('messages', 'sendAppMessage', [{ summary: 'x' }])).rejects.toThrow(/Access denied/);
     await expect(handler('messages', 'listAppMessages', [])).rejects.toThrow(/Access denied/);
     await expect(handler('messages', 'markRead', [])).rejects.toThrow(/Access denied/);
+  });
+});
+
+describe('contacts 域（社交投递层 §9.4 contact:read 只读门面）', () => {
+  it('contact:read 未授权：listFriends/listGroups/listTags 一律拒绝', async () => {
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    await expect(handler('contacts', 'listFriends', [])).rejects.toThrow(/Access denied/);
+    await expect(handler('contacts', 'listGroups', [])).rejects.toThrow(/Access denied/);
+    await expect(handler('contacts', 'listTags', [])).rejects.toThrow(/Access denied/);
+  });
+
+  it('contact:read 授权：三个只读方法放行，落到内核命令', async () => {
+    // makeNullApi 对任意方法返回 Promise<null>——授权后调用 resolve 为 null（放行即可）
+    mockGrantedPermissions(['contact:read']);
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    await expect(handler('contacts', 'listFriends', [])).resolves.toBeNull();
+    await expect(handler('contacts', 'listGroups', [])).resolves.toBeNull();
+    await expect(handler('contacts', 'listTags', [])).resolves.toBeNull();
+  });
+
+  it('message-card 视图：有 contact:read 授权也拒绝（卡片视图不暴露通讯录）', async () => {
+    mockGrantedPermissions(['contact:read']);
+    const handler = await createPluginBridgeDispatcher({ ...BASE_IDENTITY, viewType: 'message-card' });
+    await expect(handler('contacts', 'listFriends', [])).rejects.toThrow(/Access denied/);
+    await expect(handler('contacts', 'listGroups', [])).rejects.toThrow(/Access denied/);
+    await expect(handler('contacts', 'listTags', [])).rejects.toThrow(/Access denied/);
+  });
+
+  it('未知 contacts 方法拒绝（未知调用）', async () => {
+    mockGrantedPermissions(['contact:read']);
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    await expect(handler('contacts', 'addFriend', [])).rejects.toThrow(/Access denied/);
+  });
+});
+
+describe('feed 域（社交投递层 §9 sdk.feed：deliver 需 feed:deliver，onReceive/pull 免权限）', () => {
+  it('feed:deliver 未授权：feed.deliver 拒绝', async () => {
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    await expect(
+      handler('feed', 'deliver', [{ topic: 'spark-example:posts', payload: {}, recipients: [] }])
+    ).rejects.toThrow(/Access denied/);
+  });
+
+  it('feed:deliver 授权：deliver 放行，落到 electronAPI.feed', async () => {
+    mockGrantedPermissions(['feed:deliver']);
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    await expect(
+      handler('feed', 'deliver', [{ topic: 'spark-example:posts', payload: { t: 1 }, recipients: ['bob'] }])
+    ).resolves.toBeNull();
+  });
+
+  it('出站 topic 前缀校验：非本插件前缀拒绝（架构 §8）', async () => {
+    mockGrantedPermissions(['feed:deliver']);
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    // 前缀 != 调用方插件 id（spark-example）→ InvalidTopic
+    await expect(
+      handler('feed', 'deliver', [{ topic: 'evil:posts', payload: {}, recipients: [] }])
+    ).rejects.toThrow(/InvalidTopic.*does not match plugin/);
+    // 前缀 == 插件 id → 放行
+    await expect(
+      handler('feed', 'deliver', [{ topic: 'spark-example:posts', payload: {}, recipients: [] }])
+    ).resolves.toBeNull();
+  });
+
+  it('feed.pull 免权限（无 feed:deliver 也放行，接收侧免权限 §9.3）', async () => {
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    await expect(
+      handler('feed', 'pull', [{ topic: 'spark-example:posts', cursor: undefined, limit: 20 }])
+    ).resolves.toBeNull();
+  });
+
+  it('B2：pull 跨插件 topic 归属校验——读他人收件箱被拒', async () => {
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    // 前缀 != 本插件 id（spark-example）→ InvalidTopic（防 `pull({topic:"spark-moments:posts"})` 读他人收件箱）
+    await expect(
+      handler('feed', 'pull', [{ topic: 'spark-moments:posts' }])
+    ).rejects.toThrow(/InvalidTopic.*does not match plugin/);
+    // 前缀 == 本插件 id → 放行
+    await expect(
+      handler('feed', 'pull', [{ topic: 'spark-example:posts' }])
+    ).resolves.toBeNull();
+  });
+
+  it('message-card 视图无 feed 域（有 feed:deliver 也拒绝）', async () => {
+    mockGrantedPermissions(['feed:deliver']);
+    const handler = await createPluginBridgeDispatcher({ ...BASE_IDENTITY, viewType: 'message-card' });
+    await expect(
+      handler('feed', 'deliver', [{ topic: 'spark-example:posts', payload: {}, recipients: [] }])
+    ).rejects.toThrow(/Access denied/);
+    await expect(
+      handler('feed', 'pull', [{ topic: 'spark-example:posts' }])
+    ).rejects.toThrow(/Access denied/);
+  });
+
+  it('未知 feed 方法拒绝（未知调用）', async () => {
+    mockGrantedPermissions(['feed:deliver']);
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    await expect(handler('feed', 'onReceive', ['x'])).rejects.toThrow(/Access denied/);
   });
 });

@@ -134,6 +134,7 @@ fn event_json(event: &P2pEvent) -> Option<Value> {
         // dm 事件（kernel 层发出；例程不消费，原样透出 data）
         P2pEvent::ChatReceived(data) => json!({"event": "chat-received", "data": data}),
         P2pEvent::ChatStatus(data) => json!({"event": "chat-status", "data": data}),
+        P2pEvent::FeedReceived(data) => json!({"event": "feed-received", "data": data}),
         P2pEvent::FriendRequestReceived(data) => {
             json!({"event": "friend-request-received", "data": data})
         }
@@ -340,7 +341,15 @@ async fn handle_command(
             let mut guard = storage.0.lock().unwrap();
             let mut store = OverlayPeerStore::new(&mut *guard);
             store
-                .remember(peer, &addresses, OverlayPeerSource::Announce, verified, now)
+                .remember(
+                    peer,
+                    &addresses,
+                    OverlayPeerSource::Announce,
+                    verified,
+                    now,
+                    None,
+                    &std::collections::HashSet::new(),
+                )
                 .map(|()| json!({"seeded": true}))
                 .map_err(|e| e.to_string())
         }

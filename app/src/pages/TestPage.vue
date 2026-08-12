@@ -71,6 +71,40 @@
             <p class="address-text">{{ node.addresses.join(' , ') }}</p>
           </el-card>
         </div>
+
+        <!-- Peer 归属面板（排障）：联系人 peer + 邻居池 peer 统一列表，可按 peerId 搜索 -->
+        <el-divider />
+        <div class="panel-title">
+          <div>
+            <h2>Peer 归属</h2>
+            <p class="subtitle">列出所有联系人寻址 peer 与邻居池 peer，标注归属来源。</p>
+          </div>
+          <el-input
+            v-model="peerSearch"
+            placeholder="按 peerId 搜索（如 12D3KooW…）"
+            clearable
+            style="max-width: 360px"
+          />
+        </div>
+        <div v-if="loadingPeers" class="empty-state">正在加载 peer 目录...</div>
+        <div v-else-if="filteredPeerEntries.length === 0" class="empty-state">
+          {{ peerSearch ? '没有匹配的 peer。' : '暂无 peer 记录。' }}
+        </div>
+        <div v-else class="peer-directory">
+          <div v-for="entry in filteredPeerEntries" :key="entry.peerId" class="peer-row">
+            <code class="peer-id">{{ entry.peerId }}</code>
+            <span class="peer-tags">
+              <el-tag
+                v-for="source in entry.sources"
+                :key="source"
+                size="small"
+                :type="source === '邻居池' ? 'warning' : source.startsWith('联系人:') ? 'success' : 'info'"
+                effect="plain"
+              >{{ source }}</el-tag>
+            </span>
+            <span class="muted peer-addr-count">{{ entry.addressCount }} 地址</span>
+          </div>
+        </div>
       </el-card>
 
       <el-card v-else class="updater-panel">
@@ -142,6 +176,13 @@ type SavedNodeRecord = {
 };
 
 type MenuKey = 'nodes' | 'updater';
+
+/** Peer 归属条目（排障用）：一个 peerId 可有多重归属（联系人/自设备/邻居池） */
+type PeerDirectoryEntry = {
+  peerId: string;
+  sources: string[];
+  addressCount: number;
+};
 
 const MENU_ITEMS: Array<{ key: MenuKey; label: string; icon: Component }> = [
   { key: 'nodes', label: '节点面板', icon: Connection },
@@ -250,6 +291,81 @@ export default defineComponent({
       } finally {
         loadingNodes.value = false;
       }
+      await refreshPeerDirectory();
+    };
+
+    // ---- Peer 归属面板（排障） ----
+    const peerSearch = ref('');
+    const loadingPeers = ref(false);
+    const peerEntries = ref<PeerDirectoryEntry[]>([]);
+
+    const filteredPeerEntries = computed(() => {
+      const query = peerSearch.value.trim().toLowerCase();
+      if (!query) return peerEntries.value;
+      return peerEntries.value.filter((entry) => entry.peerId.toLowerCase().includes(query));
+    });
+
+    /** 汇总三类存储构建 peer 归属目录：邻居池 / 联系人 peers / 优先类目表 */
+    const refreshPeerDirectory = async () => {
+      loadingPeers.value = true;
+      const byPeer = new Map<string, PeerDirectoryEntry>();
+      const ensure = (peerId: string): PeerDirectoryEntry => {
+        let entry = byPeer.get(peerId);
+        if (!entry) {
+          entry = { peerId, sources: [], addressCount: 0 };
+          byPeer.set(peerId, entry);
+        }
+        return entry;
+      };
+      try {
+        // 1) 邻居池（p2p:overlay:peer:{peerId}，snake_case 字段）
+        const overlayRows = await window.electronAPI.db.query('p2p:overlay:peer:');
+        for (const row of overlayRows) {
+          const peerId = row.key.slice('p2p:overlay:peer:'.length);
+          if (!peerId) continue;
+          const entry = ensure(peerId);
+          entry.sources.push('邻居池');
+          try {
+            const record = JSON.parse(row.value) as { addresses?: string[] };
+            entry.addressCount = Math.max(entry.addressCount, record.addresses?.length ?? 0);
+          } catch {
+            /* 解析失败仅影响地址数展示 */
+          }
+        }
+        // 2) 联系人寻址 peer（ct:friend:{rootId}，camelCase：peers[].peerId）
+        const friendRows = await window.electronAPI.db.query('ct:friend:');
+        for (const row of friendRows) {
+          try {
+            const friend = JSON.parse(row.value) as {
+              rootId?: string;
+              remark?: string;
+              nickname?: string;
+              peers?: Array<{ peerId?: string; addresses?: string[] }>;
+            };
+            const label = friend.remark || friend.nickname || (friend.rootId ?? '').slice(0, 8);
+            for (const peer of friend.peers ?? []) {
+              if (!peer.peerId) continue;
+              const entry = ensure(peer.peerId);
+              entry.sources.push(`联系人:${label}`);
+              entry.addressCount = Math.max(entry.addressCount, peer.addresses?.length ?? 0);
+            }
+          } catch {
+            /* 跳过解析失败的记录 */
+          }
+        }
+        // 3) 优先类目表（p2p:priority:peer:{peerId}，值为 {"v":1}；自设备/好友
+        //    均由内核统一写入该集合，无法仅凭值区分类别 → 统一标注「优先类目」）
+        const priorityRows = await window.electronAPI.db.query('p2p:priority:peer:');
+        for (const row of priorityRows) {
+          const peerId = row.key.slice('p2p:priority:peer:'.length);
+          if (!peerId) continue;
+          ensure(peerId).sources.push('优先类目');
+        }
+      } catch {
+        /* 面板数据加载失败不阻断节点面板主功能 */
+      }
+      peerEntries.value = [...byPeer.values()].sort((a, b) => a.peerId.localeCompare(b.peerId));
+      loadingPeers.value = false;
     };
 
     const syncNode = async (node: SavedNodeRecord) => {
@@ -392,6 +508,11 @@ export default defineComponent({
       refreshNodes,
       clearNodes,
       syncNode,
+      peerSearch,
+      loadingPeers,
+      peerEntries,
+      filteredPeerEntries,
+      refreshPeerDirectory,
       refreshUpdaterStatus,
       checkUpdates,
       stageLatestUpdate,

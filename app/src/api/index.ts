@@ -148,6 +148,7 @@ function requireDomain(pluginDomain: string | undefined): string {
  */
 import sparkExampleManifest from '../../../plugins/spark-example/manifest.json';
 import aiChatManifest from '../../../plugins/ai-chat/manifest.json';
+import momentsManifest from '../../../plugins/spark-moments/manifest.json';
 
 const PLUGIN_CATALOG: PluginCatalogItem[] = [
   {
@@ -190,11 +191,33 @@ const PLUGIN_CATALOG: PluginCatalogItem[] = [
       packageName: aiChatManifest.package.packageName,
       installCommand: `spark-plugin install ${aiChatManifest.package.packageName}`
     }
+  },
+  {
+    id: momentsManifest.id,
+    domain: momentsManifest.domain,
+    name: momentsManifest.name,
+    description:
+      '个人动态圈：分享图文动态，点赞与评论，仅个人联系人可见。对标微信朋友圈核心体验，数据去中心化（P2P 定向投递）。',
+    category: 'social' as const,
+    version: momentsManifest.version,
+    views: momentsManifest.views.map((view: { id: string }) => view.id),
+    supportedSpaces: momentsManifest.supportedSpaces as PluginSpaceType[],
+    permissions: momentsManifest.permissions,
+    package: {
+      updateManifestUrl: momentsManifest.package.updateManifestUrl,
+      signatureUrl:
+        'https://github.com/welyin/spark/releases/latest/download/spark-plugin-spark-moments-manifest.sig',
+      packageName: momentsManifest.package.packageName,
+      installCommand: `spark-plugin install ${momentsManifest.package.packageName}`
+    }
   }
 ];
 
 /** TS db.query 在测试页的唯一活用法：邻居活跃度记录前缀。 */
 const PEER_RECORD_PREFIX = 'p2p:peer:record:';
+
+/** db.query 在测试页可扫描的前缀（节点面板 peer 目录用）：邻居池 / 联系人 / 优先类目表。 */
+const SCAN_PREFIXES = ['p2p:overlay:peer:', 'ct:friend:', 'p2p:priority:peer:'];
 
 // ------------------------------------------------------------------
 // 组装与安装
@@ -204,10 +227,17 @@ const PEER_RECORD_PREFIX = 'p2p:peer:record:';
 export function createTauriApi(): ElectronAPI {
   return {
     db: {
-      // TestPage 邻居列表的唯一活用法（p2p:peer:record: 前缀）映射到内核
-      // 专用命令，返回同样的 { key, value }[] 形状；其余前缀保持未实现报错
-      query: (prefix: string) =>
-        prefix === PEER_RECORD_PREFIX ? call('p2p-list-peer-records') : todo('db-query')()
+      // TestPage 节点面板用法：邻居活跃度记录走内核专用命令；节点面板 peer 目录
+      // 所需前缀（邻居池/联系人/优先类目表）走 db-scan，返回同样的 { key, value }[]
+      query: (prefix: string) => {
+        if (prefix === PEER_RECORD_PREFIX) {
+          return call('p2p-list-peer-records');
+        }
+        if (SCAN_PREFIXES.includes(prefix)) {
+          return call('db-scan', prefix);
+        }
+        return todo('db-query')();
+      }
     },
     evidence: {
       headHash: () => call('evidence-head-hash'),
@@ -237,8 +267,26 @@ export function createTauriApi(): ElectronAPI {
       // 静态目录（见 PLUGIN_CATALOG）：对齐 TS，每次调用返回深拷贝
       listCatalog: async () => structuredClone(PLUGIN_CATALOG),
       currentRoot: async () => {
-        const status = await call<{ unlocked: boolean; rootId: string | null }>('root-status');
-        return { unlocked: status.unlocked, rootId: status.rootId };
+        // root-status 完整返回 IdentityStatus（含昵称/头像/扩展字段）；透传这些
+        // 字段，供插件（如朋友圈）用「我的身份」头像/昵称初始化本地 profile。
+        const status = await call<{
+          unlocked: boolean;
+          rootId: string | null;
+          nickname?: string | null;
+          avatar?: string | null;
+          gender?: string | null;
+          region?: string | null;
+          signature?: string | null;
+        }>('root-status');
+        return {
+          unlocked: status.unlocked,
+          rootId: status.rootId,
+          nickname: status.nickname ?? null,
+          avatar: status.avatar ?? null,
+          gender: status.gender ?? null,
+          region: status.region ?? null,
+          signature: status.signature ?? null
+        };
       },
       // 以下三个命令本期沿用旧 tab 模式语义：插件在 system 域运行、高级权限
       // 不做强制校验，域一律显式传给命令（缺省回退 tab URL query，见
@@ -385,6 +433,10 @@ export function createTauriApi(): ElectronAPI {
     },
     contacts: {
       overview: (spaceKey) => call('contact-overview', spaceKey),
+      // 只读门面（社交投递层 contact:read，插件 SDK contacts 模块）
+      listFriends: () => call('contact-list-friends'),
+      listGroups: () => call('contact-list-groups'),
+      listTags: () => call('contact-list-tags'),
       updateProfile: (spaceKey, rootId, patch) => call('contact-update-profile', spaceKey, rootId, patch),
       setBlocked: (spaceKey, rootId, blocked) => call('contact-set-blocked', spaceKey, rootId, blocked),
       // block 缺省（undefined）= 只删不拉黑；true = §5.5 删除同时拉黑
@@ -407,6 +459,14 @@ export function createTauriApi(): ElectronAPI {
       orgGroupDelete: (spaceKey, id) => call('contact-org-group-delete', spaceKey, id),
       // newParentId 缺省（undefined）= 同级重排；'' = 移到根层（跨级移动）
       orgGroupMove: (spaceKey, id, toIndex, newParentId) => call('contact-org-group-move', spaceKey, id, toIndex, newParentId)
+    },
+    // 社交定向投递（social-feed §9，sdk.feed 域：deliver/pull）。pluginId 由
+    // 桥绑定的插件身份注入（不信插件自报）；权限/限流在桥 dispatcher 强制
+    feed: {
+      deliver: (pluginId, topic, payload, recipients, replyTo, feedId) =>
+        call('feed-deliver', pluginId, topic, payload, recipients, replyTo ?? undefined, feedId ?? undefined),
+      pull: (pluginId, topic, cursor, limit) =>
+        call('feed-pull', pluginId, topic, cursor ?? undefined, limit ?? undefined)
     },
     messages: {
       listConversations: (spaceKey) => call('message-list-conversations', spaceKey),

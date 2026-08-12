@@ -85,7 +85,7 @@ fn import_installs_and_marks_sideloaded_trust() {
     assert_eq!(state.trust.as_deref(), Some("sideloaded"));
     assert!(state.enabled);
     // granted = 基础 ∪ 声明∩高级（org:sync）
-    for permission in ["storage:read", "storage:write", "org:read", "proof:verify", "org:sync"] {
+    for permission in ["storage:read", "storage:write", "org:read", "proof:verify", "identity:verify", "org:sync"] {
         assert!(state.granted_permissions.contains(&permission.to_string()));
     }
     assert!(!state.granted_permissions.contains(&"bogus:perm".to_string()));

@@ -22,12 +22,12 @@ fn granted_is_basic_union_declared_advanced() {
     let granted = resolve_granted_permissions(&strings(&["org:sync"]));
     assert_eq!(
         granted,
-        strings(&["storage:read", "storage:write", "org:read", "proof:verify", "org:sync"])
+        strings(&["storage:read", "storage:write", "org:read", "proof:verify", "identity:verify", "org:sync"])
     );
     // 声明基础权限（本已恒授予）不重复、声明非法项不授予
     let granted = resolve_granted_permissions(&strings(&["storage:read", "bogus"]));
     assert_eq!(
         granted,
-        strings(&["storage:read", "storage:write", "org:read", "proof:verify"])
+        strings(&["storage:read", "storage:write", "org:read", "proof:verify", "identity:verify"])
     );
 }

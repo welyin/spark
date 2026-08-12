@@ -84,7 +84,14 @@ const CALL_PERMISSIONS: Record<string, string> = {
   // 插件联系人消息方法（统一在 messages 命名空间下）
   'messages.registerAsContact': 'message:app',
   'messages.unregisterAsContact': 'message:app',
-  'messages.sendResponse': 'message:app'
+  'messages.sendResponse': 'message:app',
+  // 通讯录只读门面（社交投递层 §9.4 contact:read；高级 + 使用时询问）
+  'contacts.listFriends': 'contact:read',
+  'contacts.listGroups': 'contact:read',
+  'contacts.listTags': 'contact:read',
+  // 社交定向投递（social-feed §9.3 feed:deliver 高级 + 内核限流；onReceive/pull
+  // 接收侧免权限——不在本表即放行）
+  'feed.deliver': 'feed:deliver'
 };
 
 /**
@@ -97,6 +104,20 @@ function assertOwnsContact(contactId: string, pluginId: string): void {
   const ownerPluginId = contactId.startsWith('bot:') ? contactId.split(':')[1] : undefined;
   if (ownerPluginId !== pluginId) {
     throw new Error(`Access denied: contact ${contactId} is not owned by plugin ${pluginId}`);
+  }
+}
+
+/**
+ * 社交投递 topic 前缀校验（架构 §8「topic 前缀即插件归属」，出站侧）：
+ * 出站 deliver 的 topic 前缀必须 == 调用方插件 id，防止插件向他人 topic 投递
+ * 或冒充其它插件归属。校验失败抛错（同步抛，dispatcher try/catch 内转拒绝）。
+ */
+function assertTopicOwned(topic: string, pluginId: string): void {
+  const prefix = topic.split(':')[0] ?? topic;
+  if (prefix !== pluginId) {
+    throw new Error(
+      `InvalidTopic: topic prefix "${prefix}" does not match plugin "${pluginId}"`
+    );
   }
 }
 
@@ -126,6 +147,8 @@ export type PluginBridgeIdentity = {
   supportedSpaces?: Array<'personal' | 'org'>;
   /** 视图类型（默认 app） */
   viewType?: PluginViewType;
+  /** 插件请求关闭自身视图（sdk.close()）时触发 */
+  onClose?: () => void;
 };
 
 /** 使用时询问的会话级决定记忆：key = `${pluginId}|${domain}`（pluginName 仅用于弹窗文案） */
@@ -194,6 +217,12 @@ export async function createPluginBridgeDispatcher(identity: PluginBridgeIdentit
   const boundSpaceKey = identity.space.type === 'org' ? `org:${identity.space.id}` : 'personal';
 
   const modules: Record<string, Record<string, (...args: any[]) => Promise<unknown>>> = {
+    // 应用级控制（免权限）：插件请求关闭自身视图
+    app: {
+      close: async () => {
+        identity.onClose?.();
+      }
+    },
     docs: {
       get: backend.docs.get,
       defineCollection: backend.docs.defineCollection,
@@ -276,6 +305,37 @@ export async function createPluginBridgeDispatcher(identity: PluginBridgeIdentit
       // waitForMessage（长轮询监听 bot 消息）已随后台运行时迁移下线：
       // bot 消息由内核直接推送到插件的 QuickJS 后台线程（spark.onMessage），
       // iframe 视图不再有消费 bot 消息的场景
+    },
+    // 通讯录只读门面（社交投递层 §9.4 contact:read；CALL_PERMISSIONS 强制；
+    // 经 backend.contacts 走 electronAPI.contacts，与 docs/data 域一致；
+    // backend.contacts 在 SDK 类型上为可选，但 createPluginBackend 恒注入，非空断言同 sys）
+    contacts: {
+      listFriends: () => backend.contacts!.listFriends(),
+      listGroups: () => backend.contacts!.listGroups(),
+      listTags: () => backend.contacts!.listTags()
+    },
+    // 社交定向投递（social-feed §9.1 sdk.feed）。deliver 经 CALL_PERMISSIONS
+    // 强制 feed:deliver + 出站 topic 前缀校验（架构 §8）；pull/onReceive 接收侧
+    // 免权限（onReceive 为事件订阅，不在此 call 表内，由 PluginIframeHost 经桥
+    // FeedReceived 事件推送）。pluginId 由桥绑定身份注入（不信插件自报）。
+    feed: {
+      deliver: (input: {
+        topic: string;
+        payload: unknown;
+        recipients: string[];
+        replyTo?: string;
+        feedId?: string;
+      }) => {
+        assertTopicOwned(input.topic, identity.pluginId);
+        return backend.feed!.deliver(input);
+      },
+      pull: (input: { topic: string; cursor?: string; limit?: number }) => {
+        // B2：pull 与 deliver 同构做 topic 前缀归属校验——防任一插件
+        // `sdk.feed.pull({topic:"spark-moments:posts"})` 读他人收件箱。
+        // 桥校验 + 壳层 feed_pull_inner 校验双保险（不信插件自报）。
+        assertTopicOwned(input.topic, identity.pluginId);
+        return backend.feed!.pull(input);
+      }
     },
     // sys 代理（内核外呼）：仅代理不加工；插件享有完整权限，内核命令侧负责业务安全
     sys: {

@@ -127,6 +127,16 @@ pub(crate) fn list_peer_records_inner(kernel: &Kernel) -> Result<Vec<PeerRecordR
         .collect())
 }
 
+/// `db-scan`：按前缀扫描存储的原始键值对（测试页 peer 目录用，聚合邻居池/
+/// 联系人/优先类目表；对齐 TS `db.query` 的 `{ key, value }` 形状）。
+pub(crate) fn scan_prefix_inner(kernel: &Kernel, prefix: &str) -> Result<Vec<PeerRecordRowDto>, String> {
+    let rows = kernel.scan_storage_prefix(prefix).map_err(err)?;
+    Ok(rows
+        .into_iter()
+        .map(|(key, value)| PeerRecordRowDto { key, value })
+        .collect())
+}
+
 /// `p2p-get-dht-mode`：读取 DHT 模式配置（缺省 server；需身份已解锁）。
 pub(crate) fn dht_mode_inner(kernel: &Kernel) -> Result<P2pDhtModeDto, String> {
     let mode = kernel.p2p_dht_mode().map_err(err)?;
@@ -217,6 +227,14 @@ pub fn p2p_list_peer_records(
     state: tauri::State<'_, KernelState>,
 ) -> Result<Vec<PeerRecordRowDto>, String> {
     list_peer_records_inner(&*lock_kernel(&state)?)
+}
+
+#[tauri::command]
+pub fn db_scan(
+    state: tauri::State<'_, KernelState>,
+    prefix: String,
+) -> Result<Vec<PeerRecordRowDto>, String> {
+    scan_prefix_inner(&*lock_kernel(&state)?, &prefix)
 }
 
 #[tauri::command]
