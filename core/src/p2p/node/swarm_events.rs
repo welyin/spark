@@ -222,9 +222,16 @@ impl<S: StorageBackend> EventLoop<S> {
             }
             SwarmEvent::OutgoingConnectionError { peer_id, connection_id, error, .. } => {
                 let peer = peer_id.map(|p| p.to_base58()).unwrap_or_else(|| "(unknown)".to_string());
-                eprintln!(
-                    "[p2p] OutgoingConnectionError: peer={peer} conn_id={connection_id:?} error={error:?}"
-                );
+                // 本机端口复用冲突（AddrInUse/10048）是 kad 行为层为维持 DHT 路由
+                // 表对未连接 peer 的自动拨号失败（PortUse::Reuse 复用监听端口），
+                // 业务拨号全部用 allocate_new_port（临时端口）不会触发。这类错误
+                // 属已知无害的本机资源冲突噪音，降级为 debug 级避免刷屏，不影响
+                // 任何连接管理（下方各归属处理仍照常执行）。
+                if !Self::is_port_reuse_failure(&error) {
+                    eprintln!(
+                        "[p2p] OutgoingConnectionError: peer={peer} conn_id={connection_id:?} error={error:?}"
+                    );
+                }
                 // M9 确定性错误硬删：WrongPeerId（尤其 obtained=本机）或目标地址
                 // 命中本机监听地址 → 从目标 peer 记录删除此地址，防死地址累积
                 self.hard_delete_on_deterministic_failure(connection_id, &error);
@@ -309,6 +316,24 @@ impl<S: StorageBackend> EventLoop<S> {
             }
             _ => {}
         }
+    }
+
+    /// 判断拨号失败是否为「本机端口复用冲突」（Windows `AddrInUse` / OS error
+    /// 10048，`WSAEADDRINUSE`）。这类错误来自 libp2p kad 行为层为维持 DHT 路由
+    /// 表 / 推进查询，对未连接 peer 的 ws 地址用默认 `PortUse::Reuse` 拨号——
+    /// 复用本机监听端口 `0.0.0.0:<ws_port>` 与 WS listener 冲突所致。业务拨号
+    /// 全部用 `allocate_new_port()`（OS 临时端口）不会触发，故凡出现端口复用
+    /// 冲突必然是 kad 行为层自动拨号，属已知无害噪音，降级打印避免刷屏。
+    fn is_port_reuse_failure(error: &libp2p::swarm::DialError) -> bool {
+        let libp2p::swarm::DialError::Transport(errors) = error else {
+            return false;
+        };
+        errors.iter().any(|(_, err)| {
+            let s = err.to_string();
+            // Windows raw_os_error=10048；英文系统文本含 "in use"。遍历 Display
+            // 而非精确类型匹配（错误经 libp2p 多层 transport 包装，嵌套较深）。
+            s.contains("10048") || s.contains("in use")
+        })
     }
 
     /// M9 确定性错误硬删：`WrongPeerId`（尤其 obtained=本机）或拨号目标地址命中
