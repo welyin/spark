@@ -34,6 +34,10 @@ pub const P2P_PEER_RECORD_PREFIX: &str = "p2p:peer:record:";
 /// 覆盖网邻居池记录前缀。
 pub const P2P_OVERLAY_PEER_PREFIX: &str = "p2p:overlay:peer:";
 
+/// WrongPeerId 地址黑名单前缀（wrong-peer-id-address-pollution S4）。
+/// 独立 prefix、不进 OverlayPeerRecord / pdsync / peer-exchange，纯本地收敛状态。
+pub const P2P_OVERLAY_BLACKLIST_PREFIX: &str = "p2p:overlay:blacklist:";
+
 /// 覆盖网邻居池容量上限。
 pub const OVERLAY_POOL_MAX: usize = 200;
 
@@ -66,6 +70,11 @@ pub const SYNC_TOPIC: &str = "spark-sync";
 
 /// node-announce 周期发送间隔（5 分钟）。
 pub const NODE_ANNOUNCE_INTERVAL_MS: i64 = 5 * 60_000;
+
+/// WrongPeerId 黑名单 TTL：一个 peer 广播周期 ×2 = 10 分钟。
+/// 覆盖「对端 5min 重广播」回灌，同时地址真实转移后 ≤10min 自动解封（自愈）。
+/// wrong-peer-id-address-pollution.md §2.8。
+pub const BLACKLIST_TTL_MS: i64 = NODE_ANNOUNCE_INTERVAL_MS * 2;
 
 /// 接收侧限流：同一 peerId 两次接受的最小间隔（60s）。
 pub const NODE_ANNOUNCE_ACCEPT_MIN_INTERVAL_MS: i64 = 60_000;

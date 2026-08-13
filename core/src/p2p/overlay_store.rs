@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::storage::{ScanOptions, StorageBackend};
 
 use super::Result;
+use super::addr_blacklist::AddrBlacklistStore;
 use super::constants::{
     MAX_ADDRESSES_PER_PEER, OVERLAY_DIAL_CANDIDATE_MAX_AGE_MS, OVERLAY_POOL_MAX,
     P2P_OVERLAY_PEER_PREFIX,
@@ -150,6 +151,12 @@ impl<'a> OverlayPeerStore<'a> {
             .chain(addresses.iter().map(|a| a.trim().to_string()))
         {
             if addr.is_empty() || self_addrs.contains(&addr) {
+                continue;
+            }
+            // WrongPeerId 黑名单（S5）：命中且在 TTL 内 → 跳过该地址，防「未升级
+            // 对端仍广播污染」remember 回灌（wrong-peer-id-address-pollution §2.9）。
+            // 集中到 remember 一处，覆盖所有 remember 调用点。
+            if AddrBlacklistStore::new(self.storage).is_blocked(&addr, now_ms)? {
                 continue;
             }
             if seen.insert(addr.clone()) {
@@ -494,6 +501,72 @@ mod tests {
         let rec = store.get("p1").unwrap().unwrap();
         assert!(rec.addresses.is_empty());
         assert!(rec.addr_meta.is_empty());
+    }
+
+    #[test]
+    fn remember_skips_blacklisted_addr() {
+        // S5：黑名单命中且在 TTL 内的地址 remember 跳过（防未升级对端回灌）
+        let mut storage = MemoryStorage::new();
+        // 先写黑名单（模拟 M9 删除污染地址时写入）
+        {
+            let mut bl = AddrBlacklistStore::new(&mut storage);
+            bl.block("/ip4/192.168.31.218/tcp/15002", 0, 10_000).unwrap();
+        }
+        let mut store = OverlayPeerStore::new(&mut storage);
+        store
+            .remember(
+                "p1",
+                &[
+                    "/ip4/192.168.31.218/tcp/15002".to_string(), // 黑名单 → 跳过
+                    "/ip4/8.8.8.8/tcp/15002".to_string(),        // 正常 → 保留
+                ],
+                OverlayPeerSource::Announce,
+                true,
+                5_000,
+                None,
+                &HashSet::new(),
+            )
+            .unwrap();
+        let rec = store.get("p1").unwrap().unwrap();
+        assert_eq!(rec.addresses, vec!["/ip4/8.8.8.8/tcp/15002".to_string()]);
+    }
+
+    #[test]
+    fn remember_reaccepts_after_blacklist_expiry() {
+        // TTL 过期后黑名单不再拦截，地址可重新 remember（防永久误伤）
+        let mut storage = MemoryStorage::new();
+        {
+            let mut bl = AddrBlacklistStore::new(&mut storage);
+            bl.block("/ip4/1.1.1.1/tcp/15002", 0, 10_000).unwrap();
+        }
+        let mut store = OverlayPeerStore::new(&mut storage);
+        // TTL 内：跳过
+        store
+            .remember(
+                "p1",
+                &["/ip4/1.1.1.1/tcp/15002".to_string()],
+                OverlayPeerSource::Announce,
+                true,
+                5_000,
+                None,
+                &HashSet::new(),
+            )
+            .unwrap();
+        assert!(store.get("p1").unwrap().unwrap().addresses.is_empty());
+        // 超过 TTL：重新接受
+        store
+            .remember(
+                "p1",
+                &["/ip4/1.1.1.1/tcp/15002".to_string()],
+                OverlayPeerSource::Announce,
+                true,
+                10_001,
+                None,
+                &HashSet::new(),
+            )
+            .unwrap();
+        let rec = store.get("p1").unwrap().unwrap();
+        assert_eq!(rec.addresses, vec!["/ip4/1.1.1.1/tcp/15002".to_string()]);
     }
 
     #[test]

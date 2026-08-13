@@ -109,6 +109,12 @@ impl<S: StorageBackend> EventLoop<S> {
                     //（listener 方向是 NAT 临时端口，沿用现口径只刷 last_seen）
                     if endpoint.is_dialer() {
                         let _ = store.mark_addr_success(&peer_id.to_base58(), &remote_addr, now);
+                        // S6 成功证据解锁：dialer 方向真实连上目标 peer，证明该地址
+                        // 有效（可能已从黑名单里的死地址真实转移到目标 peer）→ 立即
+                        // 移除黑名单条目，防误伤（wrong-peer-id-address-pollution §2.9）。
+                        let mut bl =
+                            crate::p2p::addr_blacklist::AddrBlacklistStore::new(&mut self.storage);
+                        let _ = bl.unblock(&remote_addr);
                     }
                 }
                 // 覆盖网自举结果记账：成功标记 last_dial_result=success，
@@ -341,26 +347,29 @@ impl<S: StorageBackend> EventLoop<S> {
         })
     }
 
-    /// M9 确定性错误硬删：`WrongPeerId`（尤其 obtained=本机）或拨号目标地址命中
-    /// 本机监听地址时，从目标 peer 的覆盖网记录删除该地址——这类错误是确定性
-    /// 死地址（对端 peerId 不匹配 / 多实例同机污染），删除后不再反复白拨。
+    /// M9 确定性错误硬删：`WrongPeerId` 一律从目标 peer 的覆盖网记录删除该地址，
+    /// 并写入黑名单防回灌（S3 + S6，wrong-peer-id-address-pollution §2.4/§2.7）。
+    ///
+    /// `WrongPeerId { obtained, address }` 是「拨号到 address 返回的 peerId 不对应
+    /// 目标 peer」的**确定性证据**——该地址对目标 peer 而言是死地址。obtained 无论
+    /// 是本机还是对端，删的动作一致：
+    /// - obtained=本机：地址指向本机监听地址（多实例同机污染 / identify 回环）。
+    /// - obtained=对端（非本机）：地址指向另一个真实 peer（不是拨号目标）——这正是
+    ///   同 LAN 多实例把彼此私有 IP 当 external 广播的污染场景。
+    ///
+    /// 删的是「目标 peer 记录里的一条地址」，不误伤其它 peer 记录（地址可能属于
+    /// 另一个 peer，其自己的记录不受影响）。
     fn hard_delete_on_deterministic_failure(
         &mut self,
         connection_id: ConnectionId,
         error: &libp2p::swarm::DialError,
     ) {
         // 目标地址：WrongPeerId 的 endpoint 即拨号地址；其余错误无法定位地址
-        let (failing_addr, obtained_is_self) = match error {
-            libp2p::swarm::DialError::WrongPeerId { obtained, address } => {
-                (address.to_string(), Some(*obtained) == Some(self.self_peer_id()))
-            }
+        let failing_addr = match error {
+            libp2p::swarm::DialError::WrongPeerId { address, .. } => address,
             _ => return,
         };
-        // 命中本机监听地址也是确定性死地址（自过滤漏网兜底）
-        let hits_self_addr = self.self_listen_addr_set().contains(&failing_addr);
-        if !obtained_is_self && !hits_self_addr {
-            return;
-        }
+        let failing_addr_str = failing_addr.to_string();
         // 按 conn_id 定位目标 peer：connect 命令或 org/dm 直连 attempt
         let target_peer = self
             .pending_connects
@@ -378,11 +387,29 @@ impl<S: StorageBackend> EventLoop<S> {
         };
         // 拨号可能走 raw 或 /p2p/<id> 变体：两形态都删（base_addr 剥 /p2p 段）
         let peer_str = peer.to_base58();
+        let now = self.now();
         let mut store = OverlayPeerStore::new(&mut self.storage);
-        let _ = store.remove_addr(&peer_str, &failing_addr);
-        let base = super::org_direct::base_addr(&failing_addr);
-        if base != failing_addr.as_str() {
+        let _ = store.remove_addr(&peer_str, &failing_addr_str);
+        let base = super::org_direct::base_addr(&failing_addr_str);
+        if base != failing_addr_str.as_str() {
             let _ = store.remove_addr(&peer_str, base);
+        }
+        // 写黑名单（S6）：防对端 5min 重广播的污染地址 remember 回灌，收敛闭环。
+        // 独立 prefix，不进 pdsync / peer-exchange，纯本地状态。
+        let mut bl = crate::p2p::addr_blacklist::AddrBlacklistStore::new(&mut self.storage);
+        let _ = bl.block(&base, now, crate::p2p::constants::BLACKLIST_TTL_MS);
+        // 同步清 kad 路由表（本次补洞）：M9 此前只删邻居池 + 写黑名单，但
+        // WrongPeerId 的拨号源实际来自 kad 路由表（identify/ConnectionEstablished/
+        // seed 经 kad.add_address 灌入）。不清 kad，则 kad 行为层仍会对污染地址
+        // 用 PortUse::Reuse 自动拨号 → WrongPeerId 永不收敛。两形态（raw / 带
+        // /p2p 段）都调 remove_address；kad 内部 with_p2p(peer) 后与 kbucket 匹配。
+        if let Some(kad) = self.swarm.behaviour_mut().kad.as_mut() {
+            let _ = kad.remove_address(&peer, failing_addr);
+            if base != failing_addr_str.as_str() {
+                if let Ok(base_ma) = base.parse::<libp2p::Multiaddr>() {
+                    let _ = kad.remove_address(&peer, &base_ma);
+                }
+            }
         }
     }
 

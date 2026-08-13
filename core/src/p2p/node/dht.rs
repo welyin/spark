@@ -251,8 +251,10 @@ impl<S: StorageBackend> EventLoop<S> {
     /// 节点存在记录的 DHT 周期重发：内容直接复用 node-announce 签名报文，
     /// key = sha256("spark:node:" + peerId)（announce.rs `node_presence_record_key`）。
     pub(super) fn publish_node_presence_record(&mut self) {
+        // S7 兜底：剔除黑名单命中的污染地址再发布（根治 S2 已止源头，此为防旧污染残留）
+        let strings = self.drop_blacklisted(self.listen_addr_strings());
         // 发布侧排序：IPv6 直连在前、电路中继在后（peer-rediscovery §4.6.3）
-        let sorted = crate::p2p::peer_targets::sort_addresses(self.listen_addr_strings());
+        let sorted = crate::p2p::peer_targets::sort_addresses(strings);
         let Some(addresses) = prepare_publish_addresses(&sorted) else {
             return;
         };

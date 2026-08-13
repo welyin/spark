@@ -12,7 +12,10 @@ pub struct PeerNodeInfo {
     pub addresses: Vec<String>,
 }
 
+use std::net::IpAddr;
+
 use libp2p::multiaddr::Protocol;
+use libp2p::Multiaddr;
 
 /// 提取目标 peerId：优先显式 `peer_id`，回退从地址 `/p2p/<peerId>` 尾段解析。
 pub fn extract_peer_id(node_info: &PeerNodeInfo) -> Option<String> {
@@ -67,6 +70,51 @@ pub(crate) fn filter_dial_candidate(address: &str, is_android: bool) -> Option<S
         return None;
     }
     Some(trimmed)
+}
+
+/// 判定一个 multiaddr 首段 IP 是否可作为**公网 external 地址**广播
+/// （wrong-peer-id-address-pollution S1 helper，与 `filter_kad_addr` 同族）。
+///
+/// 返回 `true` = 保留（可作 external 广播）、`false` = 剔除。
+///
+/// 背景：`swarm.external_addresses()` 来自 identify observe / AutoNAT 确认，定位是
+/// 「本机在公网上的可达地址」。私有 / 链路本地 / 回环 / 通配 / CGNAT 段跨 NAT 不可达，
+/// 且 LAN 可达由 `expand_wildcard_listeners` 展开的具体监听地址覆盖，作为 external
+/// 广播是错误且重复的（同 LAN 多实例会把彼此私有 IP 当 external → 广播 → 对端
+/// remember 污染 → WrongPeerId）。
+///
+/// 判定规则：
+/// - **IPv4**：剔 回环 / 私有（10/8、172.16/12、192.168/16）/ 链路本地（169.254/16）/
+///   通配（0.0.0.0）/ CGNAT（100.64/10，标准库 `is_private()` 不覆盖，手写）；其余保留。
+/// - **IPv6**：剔 回环（::1）/ 唯一本地（fc00::/7）/ 单播链路本地（fe80::/10）/
+///   通配（::）；其余保留。
+/// - **非 IP 首段**（dns、circuit 等）：无法按 IP 判定，保留不误伤（external 段
+///   理论上均为 IP 开头，此分支为防御性兜底）。
+pub(crate) fn is_public_external_addr(addr: &Multiaddr) -> bool {
+    let Some(ip) = addr.iter().next().and_then(|p| match p {
+        Protocol::Ip4(ip) => Some(IpAddr::V4(ip)),
+        Protocol::Ip6(ip) => Some(IpAddr::V6(ip)),
+        _ => None,
+    }) else {
+        return true; // 非 IP 首段无法判定，保留
+    };
+    match ip {
+        IpAddr::V4(v4) => {
+            if v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified() {
+                return false;
+            }
+            // CGNAT 100.64.0.0/10：标准库 is_private() 不覆盖。首字节 100、
+            // 第二字节高 2 位 01（0x40..=0x7f）。
+            let octets = v4.octets();
+            if octets[0] == 100 && (octets[1] & 0xC0) == 0x40 {
+                return false;
+            }
+            true
+        }
+        IpAddr::V6(v6) => {
+            !(v6.is_loopback() || v6.is_unique_local() || v6.is_unicast_link_local() || v6.is_unspecified())
+        }
+    }
 }
 
 /// kad 路由表地址过滤（kad-addr-filtering root fix，S1 helper）。
@@ -405,6 +453,43 @@ mod tests {
         // ws/wss 形态：桌面 kad 不拨 ws（即使非本机地址）
         assert!(!filter_kad_addr(&"/ip4/1.2.3.4/tcp/15002/ws".parse().unwrap(), &empty));
         assert!(!filter_kad_addr(&"/ip4/1.2.3.4/tcp/443/wss".parse().unwrap(), &empty));
+    }
+
+    #[test]
+    fn public_external_keeps_public_v4_and_v6() {
+        // 公网 IPv4 保留
+        assert!(is_public_external_addr(&"/ip4/203.0.113.9/tcp/15002".parse().unwrap()));
+        assert!(is_public_external_addr(&"/ip4/1.2.3.4/tcp/15002".parse().unwrap()));
+        // 公网 IPv6 保留（移动网络直连主要靠它）
+        assert!(is_public_external_addr(
+            &"/ip6/2408:8207:1::1/tcp/15002".parse().unwrap()
+        ));
+        // 非 IP 首段（如 DNS / circuit）不误伤保留
+        assert!(is_public_external_addr(
+            &"/dns/example.com/tcp/15002".parse().unwrap()
+        ));
+    }
+
+    #[test]
+    fn public_external_drops_private_loopback_linklocal_wildcard_cgnat() {
+        // 私网 IPv4（10/8、172.16/12、192.168/16）剔
+        assert!(!is_public_external_addr(&"/ip4/10.1.2.3/tcp/15002".parse().unwrap()));
+        assert!(!is_public_external_addr(&"/ip4/172.16.5.5/tcp/15002".parse().unwrap()));
+        assert!(!is_public_external_addr(&"/ip4/192.168.31.134/tcp/15002".parse().unwrap()));
+        // loopback 剔
+        assert!(!is_public_external_addr(&"/ip4/127.0.0.1/tcp/15002".parse().unwrap()));
+        assert!(!is_public_external_addr(&"/ip6/::1/tcp/15002".parse().unwrap()));
+        // 链路本地（169.254/16）剔
+        assert!(!is_public_external_addr(&"/ip4/169.254.1.1/tcp/15002".parse().unwrap()));
+        // 通配剔
+        assert!(!is_public_external_addr(&"/ip4/0.0.0.0/tcp/15002".parse().unwrap()));
+        assert!(!is_public_external_addr(&"/ip6/::/tcp/15002".parse().unwrap()));
+        // CGNAT 100.64/10 剔（标准库 is_private 不覆盖，手写判定）
+        assert!(!is_public_external_addr(&"/ip4/100.64.0.1/tcp/15002".parse().unwrap()));
+        assert!(!is_public_external_addr(&"/ip4/100.127.255.254/tcp/15002".parse().unwrap()));
+        // 唯一本地 / 链路本地 IPv6 剔
+        assert!(!is_public_external_addr(&"/ip6/fd00::1/tcp/15002".parse().unwrap()));
+        assert!(!is_public_external_addr(&"/ip6/fe80::1/tcp/15002".parse().unwrap()));
     }
 
     #[test]

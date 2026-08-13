@@ -22,7 +22,9 @@ use crate::p2p::direct::MinIntervalRateLimiter;
 use crate::p2p::envelope::EnvelopeSigner;
 use crate::p2p::host::P2pHost;
 use crate::p2p::peer_activity::{NodeObservation, PeerActivityStore};
-use crate::p2p::peer_targets::{PeerNodeInfo, build_dial_targets, extract_peer_id};
+use crate::p2p::peer_targets::{
+    PeerNodeInfo, build_dial_targets, extract_peer_id, is_public_external_addr,
+};
 use crate::p2p::{P2pError, Result};
 use crate::storage::StorageBackend;
 
@@ -473,13 +475,21 @@ impl<S: StorageBackend> EventLoop<S> {
     pub(super) fn listen_addr_strings(&self) -> Vec<String> {
         let listeners: Vec<Multiaddr> = self.swarm.listeners().cloned().collect();
         // 通配 listener（0.0.0.0/::）对扫码名片不可拨，展开为本机可用网卡
-        // 的具体地址；external_addresses 原样追加。
+        // 的具体地址；external_addresses 只保留公网可达段（S2，root fix）。
         let interfaces = local_interfaces();
         let mut addrs: Vec<String> = expand_wildcard_listeners(&listeners, &interfaces)
             .into_iter()
-            .chain(self.swarm.external_addresses().cloned())
             .map(|addr| addr.to_string())
             .collect();
+        // external 段只并入公网可达地址（S1 `is_public_external_addr`）：observe /
+        // AutoNAT 会把本机/其它实例的私有 LAN IP 误认成 external，广播出去对端
+        // remember 污染 → WrongPeerId。expand 出来的 LAN concrete 地址不动——同
+        // LAN 互达必需，且已由本机网卡展开覆盖，external 里带私网地址是重复且错误。
+        for ext in self.swarm.external_addresses() {
+            if is_public_external_addr(ext) {
+                addrs.push(ext.to_string());
+            }
+        }
         // 追加 relay 电路地址（格式：/p2p/<relayPeer>/p2p-circuit，peer-rediscovery §4.6）
         for reservation in &self.relay_reservations {
             addrs.push(reservation.circuit_addr.to_string());
@@ -494,6 +504,18 @@ impl<S: StorageBackend> EventLoop<S> {
     /// ::1 / 本机 LAN IP 污染源）。
     pub(super) fn self_listen_addr_set(&self) -> HashSet<String> {
         self.listen_addr_strings().into_iter().collect()
+    }
+
+    /// 发布侧兜底（S7）：剔除黑名单命中且在 TTL 内的地址，防止把自己学到的污染
+    /// 地址广播出去（wrong-peer-id-address-pollution §2.9）。根治（S2）已止源头，
+    /// 此过滤防旧污染地址在根治后短暂残留。返回剔除后的地址列表。
+    pub(super) fn drop_blacklisted(&mut self, addrs: Vec<String>) -> Vec<String> {
+        let now = self.now();
+        let mut bl = crate::p2p::addr_blacklist::AddrBlacklistStore::new(&mut self.storage);
+        addrs
+            .into_iter()
+            .filter(|a| !bl.is_blocked(a, now).unwrap_or(false))
+            .collect()
     }
 
     /// 网络变化探测专用快照：只取**本机网卡展开的监听地址**（通配 listener

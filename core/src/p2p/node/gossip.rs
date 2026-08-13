@@ -50,7 +50,9 @@ impl<S: StorageBackend> EventLoop<S> {
     // ------------------------------------------------------------------
 
     pub(super) fn publish_announce(&mut self) -> Result<bool> {
-        let Some(addresses) = prepare_publish_addresses(&self.listen_addr_strings()) else {
+        // S7 兜底：剔除黑名单命中的污染地址再发布（根治 S2 已止源头，此为防旧污染残留）
+        let strings = self.listen_addr_strings();
+        let Some(addresses) = prepare_publish_addresses(&self.drop_blacklisted(strings)) else {
             return Ok(false);
         };
         let count = addresses.len();

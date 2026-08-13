@@ -7,6 +7,7 @@
 //! [`host::P2pHost`] trait 注入（类似 sync 的 PurgeWatermark 模式），本模块不做
 //! 任何 db 直接业务操作。所有时间经 `now_fn` 注入（对齐 now_ms 模式）。
 
+pub mod addr_blacklist;
 pub mod announce;
 pub mod behaviour;
 pub mod challenge;
@@ -24,6 +25,7 @@ pub mod peer_targets;
 pub mod plugin_announce;
 pub mod priority_peers;
 
+pub use addr_blacklist::AddrBlacklistStore;
 pub use announce::{
     AnnounceReject, NodeAnnounce, NodeAnnounceValidator, announce_to_json,
     build_node_announce_payload, node_presence_record_key, prepare_publish_addresses,
