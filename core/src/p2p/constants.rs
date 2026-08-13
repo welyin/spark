@@ -190,10 +190,6 @@ pub const RELAY_RENEWAL_THRESHOLD_SECS: u64 = 30 * 60;
 pub const NETWORK_CHANGE_DEBOUNCE_MS: i64 = 5_000;
 /// 移动端 DHT 周期重发间隔（keepalive tick 计数：120 tick ≈ 2h）。
 pub const DHT_MOBILE_REPUBLISH_TICKS: u64 = 120;
-/// 优先类目 DHT 竞速连续失败上限（标记 offline）。
-pub const REDISCOVERY_MAX_FAILURES: u32 = 5;
-/// 优先类目 DHT 竞速退避上限（10 min）。
-pub const REDISCOVERY_BACKOFF_MAX_MS: i64 = 10 * 60_000;
 /// 优先类目 peer 集合的 sled 存储键前缀。
 pub const P2P_PRIORITY_PEER_PREFIX: &str = "p2p:priority:peer:";
 

@@ -212,10 +212,6 @@ pub(super) struct EventLoop<S: StorageBackend> {
     pub(super) rediscovery_states: HashMap<PeerId, super::rediscovery::RediscoveryState>,
     /// 竞速 DHT 查询：QueryId → 目标 peer（区分于普通 pending_dht_get 查询）。
     pub(super) rediscovery_dht_queries: HashMap<kad::QueryId, PeerId>,
-    /// 竞速连续失败计数（peer-rediscovery §4.8）：独立于状态机存放，
-    /// 跨 Backoff→Racing 重试轮次保留——否则每轮重置为 1，Offline 永不可达。
-    /// 确认成功/重新连上/转 Offline 时清除。
-    pub(super) rediscovery_failures: HashMap<PeerId, u32>,
     /// 竞速场景：DHT 命中但 peer 未连接时暂存的 announce，待 ConnectionEstablished 后确认。
     pub(super) pending_rediscovery_confirm: HashMap<PeerId, crate::p2p::announce::NodeAnnounce>,
     /// 活跃 relay 预约（peer-rediscovery §4.6）：电路地址追加进 announce 列表。
@@ -379,14 +375,11 @@ impl<S: StorageBackend> EventLoop<S> {
             if self.swarm.is_connected(&peer) {
                 continue;
             }
-            // 已处于竞速/退避中的，让状态机继续推进，不重复触发
-            if let Some(state) = self.rediscovery_states.get(&peer)
-                && !matches!(
-                    state,
-                    super::rediscovery::RediscoveryState::Idle
-                        | super::rediscovery::RediscoveryState::Offline
-                )
-            {
+            // 已有一轮竞速在途的，让状态机继续推进，不重复竞速
+            if matches!(
+                self.rediscovery_states.get(&peer),
+                Some(super::rediscovery::RediscoveryState::Racing { .. })
+            ) {
                 continue;
             }
             // 有缓存地址 → 直接重拨；否则交给 start_rediscovery 走 DHT 竞速

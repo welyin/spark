@@ -84,9 +84,6 @@ impl<S: StorageBackend> EventLoop<S> {
         // 7) relay 预约不足时补充（peer-rediscovery §4.6.2）
         self.ensure_relay_reservations();
 
-        // 8) 优先类目竞速退避到期检查（peer-rediscovery §4.8）
-        self.poll_rediscovery_retries();
-
         stats
     }
 }

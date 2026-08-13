@@ -428,7 +428,6 @@ impl P2pNode {
             last_network_snapshot: None,
             rediscovery_states: HashMap::new(),
             rediscovery_dht_queries: HashMap::new(),
-            rediscovery_failures: HashMap::new(),
             pending_rediscovery_confirm: HashMap::new(),
             relay_reservations: Vec::new(),
             relay_reservations_inflight: std::collections::HashSet::new(),

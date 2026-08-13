@@ -85,7 +85,6 @@ async fn test_loop() -> EventLoop<MemoryStorage> {
         last_network_snapshot: None,
         rediscovery_states: HashMap::new(),
         rediscovery_dht_queries: HashMap::new(),
-        rediscovery_failures: HashMap::new(),
         pending_rediscovery_confirm: HashMap::new(),
         relay_reservations: Vec::new(),
         relay_reservations_inflight: std::collections::HashSet::new(),
@@ -321,81 +320,8 @@ async fn stale_org_attempts_pruned_on_begin() {
     );
 }
 
-/// 回归测试（peer-rediscovery §4.8 严重缺陷）：退避到期后必须能重新竞速，
-/// 而不是被 `start_rediscovery` 的入口守卫拒绝卡死在 Backoff。
-#[tokio::test]
-async fn rediscovery_backoff_can_retry_after_deadline() {
-    use super::rediscovery::RediscoveryState;
-    let mut el = test_loop().await;
-    let peer = PeerId::random();
-    // 已到期的 Backoff（now() 恒为 0，next_retry_at=0 即已到期）
-    el.rediscovery_states.insert(
-        peer,
-        RediscoveryState::Backoff { next_retry_at: 0 },
-    );
-    el.poll_rediscovery_retries();
-    let state = el.rediscovery_states.get(&peer).expect("state present");
-    assert!(
-        matches!(state, RediscoveryState::Racing { .. }),
-        "退避到期后应重新进入竞速，实际: {state:?}"
-    );
-}
-
-/// 连续失败达到上限 → Offline（§4.8 5 次封顶），且再次退避到期不复活。
-/// 走真实路径循环 miss → Backoff 到期 poll 重试 → Racing → miss——连调
-/// miss 不经过 poll 的测法不代表真实路径（失败计数须跨重试轮次保留）。
-#[tokio::test]
-async fn rediscovery_exhaustion_reaches_offline() {
-    use super::rediscovery::RediscoveryState;
-    let mut el = test_loop().await;
-    let peer = PeerId::random();
-    for round in 1..5u32 {
-        el.on_rediscovery_dht_miss(peer, None);
-        let state = el.rediscovery_states.get(&peer).expect("state present");
-        assert!(
-            matches!(state, RediscoveryState::Backoff { .. }),
-            "第 {round} 次失败后应为 Backoff，实际: {state:?}"
-        );
-        assert_eq!(
-            el.rediscovery_failures.get(&peer).copied(),
-            Some(round),
-            "第 {round} 次失败后连续失败计数应为 {round}"
-        );
-        // 模拟退避到期（now() 恒为 0，把 next_retry_at 拨回 0）后重新竞速
-        if let Some(s) = el.rediscovery_states.get_mut(&peer) {
-            *s = RediscoveryState::Backoff { next_retry_at: 0 };
-        }
-        el.poll_rediscovery_retries();
-        let state = el.rediscovery_states.get(&peer).expect("state present");
-        assert!(
-            matches!(state, RediscoveryState::Racing { .. }),
-            "第 {round} 轮退避到期后应重新竞速，实际: {state:?}"
-        );
-    }
-    // 第 5 次失败 → Offline，连续失败计数随之清除
-    el.on_rediscovery_dht_miss(peer, None);
-    assert!(
-        matches!(
-            el.rediscovery_states.get(&peer),
-            Some(RediscoveryState::Offline)
-        ),
-        "5 次失败后应为 Offline，实际: {:?}",
-        el.rediscovery_states.get(&peer)
-    );
-    assert!(
-        el.rediscovery_failures.get(&peer).is_none(),
-        "Offline 后失败计数应清除"
-    );
-    // Offline 状态下再 miss 不复活
-    el.on_rediscovery_dht_miss(peer, None);
-    assert!(matches!(
-        el.rediscovery_states.get(&peer),
-        Some(RediscoveryState::Offline)
-    ));
-}
-
 /// 竞速拨号失败归属（N2）：仅「DHT 命中后拨号待确认」阶段（Racing + 暂存）
-/// 计失败进退避并清暂存；无状态 peer 与并行 A 阶段（Racing 但无暂存，
+/// 回 Idle 并清暂存（竞速收尾）；无状态 peer 与并行 A 阶段（Racing 但无暂存，
 /// DHT 查询仍在途）不受影响。
 #[tokio::test]
 async fn rediscovery_dial_failure_attribution() {
@@ -418,7 +344,7 @@ async fn rediscovery_dial_failure_attribution() {
         el.rediscovery_states.get(&peer),
         Some(RediscoveryState::Racing { .. })
     ));
-    // 拨号待确认阶段（Racing + 暂存）：计一次失败进 Backoff、清暂存
+    // 拨号待确认阶段（Racing + 暂存）：回 Idle、清暂存（竞速收尾）
     el.pending_rediscovery_confirm.insert(
         peer,
         crate::p2p::announce::NodeAnnounce {
@@ -438,12 +364,80 @@ async fn rediscovery_dial_failure_attribution() {
     assert!(
         matches!(
             el.rediscovery_states.get(&peer),
-            Some(RediscoveryState::Backoff { .. })
-        ) && el.rediscovery_failures.get(&peer).copied() == Some(1),
-        "竞速拨号失败应计一次失败进退避，实际: {:?} / failures={:?}",
-        el.rediscovery_states.get(&peer),
-        el.rediscovery_failures.get(&peer)
+            Some(RediscoveryState::Idle)
+        ),
+        "竞速拨号失败应回 Idle 静默，实际: {:?}",
+        el.rediscovery_states.get(&peer)
     );
+}
+
+/// 竞速失败收尾（§4.8 铁律）：DHT 未命中 / 确认失败 / 竞速拨号失败后，peer
+/// 从 Racing 回 Idle（而非卡死），且后续可再次 `start_rediscovery` 重新竞速。
+#[tokio::test]
+async fn rediscovery_failure_aborts_to_idle() {
+    use super::rediscovery::RediscoveryState;
+    let mut el = test_loop().await;
+    let peer = PeerId::random();
+    // 未触发前无状态；触发竞速后进入 Racing
+    el.start_rediscovery(peer);
+    assert!(
+        matches!(
+            el.rediscovery_states.get(&peer),
+            Some(RediscoveryState::Racing { .. })
+        ),
+        "start_rediscovery 后应进入 Racing，实际: {:?}",
+        el.rediscovery_states.get(&peer)
+    );
+    // 竞速在途时再次触发被守卫拒绝（不重复竞速）
+    el.start_rediscovery(peer);
+    assert_eq!(
+        el.rediscovery_states.get(&peer).map(|s| matches!(s, RediscoveryState::Racing { .. })),
+        Some(true),
+        "Racing 中重复触发应被守卫拒绝"
+    );
+    // ① DHT 未命中 → 回 Idle
+    el.on_rediscovery_dht_miss(peer, None);
+    assert!(
+        matches!(
+            el.rediscovery_states.get(&peer),
+            Some(RediscoveryState::Idle)
+        ),
+        "DHT 未命中后应回 Idle，实际: {:?}",
+        el.rediscovery_states.get(&peer)
+    );
+    // 回 Idle 后可再次触发竞速
+    el.start_rediscovery(peer);
+    assert!(matches!(
+        el.rediscovery_states.get(&peer),
+        Some(RediscoveryState::Racing { .. })
+    ));
+    // ② 确认失败（通过竞速拨号失败路径）→ 回 Idle、清暂存
+    el.pending_rediscovery_confirm.insert(
+        peer,
+        crate::p2p::announce::NodeAnnounce {
+            msg_type: "spark-node-announce".to_string(),
+            version: 1,
+            peer_id: peer.to_base58(),
+            addresses: vec![],
+            timestamp: 0,
+            signature: String::new(),
+        },
+    );
+    el.on_rediscovery_dial_failed(peer);
+    assert!(
+        el.pending_rediscovery_confirm.get(&peer).is_none(),
+        "竞速收尾应清暂存 announce"
+    );
+    assert!(matches!(
+        el.rediscovery_states.get(&peer),
+        Some(RediscoveryState::Idle)
+    ));
+    // ③ 回 Idle 后仍可再次触发竞速（不卡死）
+    el.start_rediscovery(peer);
+    assert!(matches!(
+        el.rediscovery_states.get(&peer),
+        Some(RediscoveryState::Racing { .. })
+    ));
 }
 
 /// 电路监听关闭（N3）：清理该 relay 的预约与 in-flight 标记使其可被重选；
