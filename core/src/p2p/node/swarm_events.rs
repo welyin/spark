@@ -14,7 +14,7 @@ use crate::p2p::constants::{OVERLAY_TOPIC, PLUGIN_ANNOUNCE_TOPIC, P2P_LISTEN_WS_
 use crate::p2p::listen_port;
 use crate::p2p::overlay_store::{OverlayPeerSource, OverlayPeerStore};
 use crate::p2p::peer_activity::{NodeObservation, PeerActivityStore};
-use crate::p2p::peer_targets::extract_peer_id;
+use crate::p2p::peer_targets::{extract_peer_id, filter_kad_addr};
 use crate::storage::StorageBackend;
 
 use super::P2pEvent;
@@ -117,9 +117,14 @@ impl<S: StorageBackend> EventLoop<S> {
                     let mut store = OverlayPeerStore::new(&mut self.storage);
                     let _ = store.mark_dial_result(&peer_id.to_base58(), true);
                 }
-                // 已连接对端地址灌进 kad 路由表（identify 交换前的兜底）
+                // 已连接对端地址灌进 kad 路由表（identify 交换前的兜底，S4）：
+                // remote_addr 是对端真实地址（干净），仍套 filter_kad_addr 兜底，
+                // 防极端情况下对端 remote 地址撞本机监听/ws 形态（同机多实例）。
                 if let Some(kad) = self.swarm.behaviour_mut().kad.as_mut() {
-                    kad.add_address(&peer_id, endpoint.get_remote_address().clone());
+                    let remote_ma = endpoint.get_remote_address();
+                    if filter_kad_addr(remote_ma, &self_addrs) {
+                        kad.add_address(&peer_id, remote_ma.clone());
+                    }
                 }
                 // connect 命令匹配（M9 分批并发）：连接成功即收手（清空本批
                 // 其余在途拨号），按 peerId 或批内任一地址匹配
@@ -473,10 +478,28 @@ impl<S: StorageBackend> EventLoop<S> {
                 let protocols: HashSet<String> =
                     info.protocols.iter().map(ToString::to_string).collect();
                 self.peer_protocols.insert(peer_id, protocols);
-                // 对端监听地址灌进 kad 路由表
+                // 对端监听地址灌进 kad 路由表（kad-addr-filtering root fix）：
+                // 剔除本机监听地址 / 通配 / ws 形态——libp2p-kad 对路由表内地址用
+                // PortUse::Reuse 自动拨号，本机地址/ws 地址会撞本机监听端口 →
+                // AddrInUse(10048) 刷屏。此路径是此前唯一零过滤入 kad 的入口。
+                let self_addrs = self.self_listen_addr_set();
                 if let Some(kad) = self.swarm.behaviour_mut().kad.as_mut() {
+                    let mut filtered = 0usize;
                     for addr in info.listen_addrs {
-                        kad.add_address(&peer_id, addr);
+                        if filter_kad_addr(&addr, &self_addrs) {
+                            kad.add_address(&peer_id, addr);
+                        } else {
+                            filtered += 1;
+                        }
+                    }
+                    // S5 诊断：跨机地址污染闭环观测（修复后应归零；>0 说明对端
+                    // 仍在上报本机/ws 死地址，被本端拦截）
+                    if filtered > 0 {
+                        eprintln!(
+                            "[p2p] identify kad filter: peer={} dropped={} (self/ws/wildcard)",
+                            peer_id.to_base58(),
+                            filtered
+                        );
                     }
                 }
             }

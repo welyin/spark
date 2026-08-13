@@ -15,6 +15,7 @@ use crate::p2p::announce::{
 use crate::p2p::challenge;
 use crate::p2p::constants::DHT_RECORD_TTL_SECS;
 use crate::p2p::overlay_store::{OverlayPeerSource, OverlayPeerStore};
+use crate::p2p::peer_targets::filter_kad_addr;
 use crate::p2p::{P2pError, Result};
 use crate::storage::StorageBackend;
 
@@ -31,6 +32,9 @@ impl<S: StorageBackend> EventLoop<S> {
             store.list_all().unwrap_or_default()
         };
         let self_id = self.self_peer_id();
+        // 启动回灌兜底（S3，防御纵深）：邻居池条目虽经 remember 自过滤，仍套
+        // filter_kad_addr 剔除本机/ws/通配死地址，防历史脏数据/ws 混入二次入 kad。
+        let self_addrs = self.self_listen_addr_set();
         let mut added = false;
         if let Some(kad) = self.swarm.behaviour_mut().kad.as_mut() {
             for record in records {
@@ -45,8 +49,10 @@ impl<S: StorageBackend> EventLoop<S> {
                     .iter()
                     .filter_map(|a| a.parse::<Multiaddr>().ok())
                 {
-                    kad.add_address(&peer, addr);
-                    added = true;
+                    if filter_kad_addr(&addr, &self_addrs) {
+                        kad.add_address(&peer, addr);
+                        added = true;
+                    }
                 }
             }
             if added {

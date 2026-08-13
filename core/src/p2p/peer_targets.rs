@@ -69,6 +69,56 @@ pub(crate) fn filter_dial_candidate(address: &str, is_android: bool) -> Option<S
     Some(trimmed)
 }
 
+/// kad 路由表地址过滤（kad-addr-filtering root fix，S1 helper）。
+///
+/// 返回 `true` 表示该地址**允许**灌进 kad 路由表；`false` 表示剔除。
+///
+/// 背景：libp2p-kad 行为层对路由表内「未连接 peer」用默认 `PortUse::Reuse`
+/// （复用监听端口）自动拨号。若本机监听地址 / ws 地址进入路由表，kad 会拨
+/// 本机监听端口 → 与自监听 socket 冲突 → `AddrInUse(10048)` 刷屏。identify
+/// 路径（swarm_events）此前零过滤 `kad.add_address`，是全仓库唯一漏网口。
+///
+/// 三层剔除：
+/// 1. **本机监听地址**（`self_addrs`，剥离 `/p2p` 段比对）：永远不可能作为
+///    对端可达地址（那是本机自己的 listener），剔除不误伤任何真实 peer；
+/// 2. **通配地址**（0.0.0.0/::，复用 [`filter_dial_candidate`] 语义）：不可路由；
+/// 3. **ws/wss 形态**：桌面端自监听 ws（ws 与 tcp 同端口），kad `PortUse::Reuse`
+///    拨任何 ws 地址都会撞自 ws listener → AddrInUse。故桌面 kad 一律不拨 ws。
+///    取舍：纯 ws-only 节点（纯浏览器）不被桌面 kad 路由；但浏览器/ws 中继
+///    通常也上报 TCP 地址，Spark 桌面间主链路为 TCP。
+///
+/// 仅影响「哪些地址进 kad 路由表」，不触协议线形/存储键/对外契约。
+pub(crate) fn filter_kad_addr(
+    addr: &libp2p::Multiaddr,
+    self_addrs: &std::collections::HashSet<String>,
+) -> bool {
+    // 1) 本机监听地址：剥离 /p2p 段精确比对（identify 上报形态多样）
+    let base = addr
+        .to_string()
+        .split("/p2p/")
+        .next()
+        .unwrap_or(&addr.to_string())
+        .to_string();
+    if self_addrs
+        .iter()
+        .any(|sa| sa.split("/p2p/").next().unwrap_or(sa) == base)
+    {
+        return false;
+    }
+    // 2) 通配地址不可路由
+    if filter_dial_candidate(&base, false).is_none() {
+        return false;
+    }
+    // 3) ws/wss 形态不灌 kad（桌面 kad 不拨 ws）
+    if addr
+        .iter()
+        .any(|p| matches!(p, Protocol::Ws(_) | Protocol::Wss(_)))
+    {
+        return false;
+    }
+    true
+}
+
 /// 构建拨号地址候选（M9）：原始地址保留；缺 `/p2p` 段且已知 peerId 时自动补全
 /// 候选。
 ///
@@ -322,6 +372,56 @@ mod tests {
     fn filter_drops_wildcard() {
         assert_eq!(filter_dial_candidate("/ip4/0.0.0.0/tcp/15002", true), None);
         assert_eq!(filter_dial_candidate("/ip6/::/tcp/15002", true), None);
+    }
+
+    #[test]
+    fn filter_kad_drops_self_listen_addr() {
+        use std::collections::HashSet;
+        // 本机监听地址（identify 被对端回灌本机地址）→ 剔除，防 kad 自拨
+        let self_addrs: HashSet<String> =
+            ["/ip4/127.0.0.1/tcp/15002", "/ip4/192.168.31.134/tcp/15002"]
+                .iter().map(|s| s.to_string()).collect();
+        assert!(!filter_kad_addr(
+            &"/ip4/127.0.0.1/tcp/15002".parse().unwrap(),
+            &self_addrs
+        ));
+        assert!(!filter_kad_addr(
+            &"/ip4/192.168.31.134/tcp/15002".parse().unwrap(),
+            &self_addrs
+        ));
+        // 本机 ws 监听形态同样剔除（桌面自监听 ws 必自撞）
+        assert!(!filter_kad_addr(
+            &"/ip6/::1/tcp/15002/ws".parse().unwrap(),
+            &self_addrs
+        ));
+    }
+
+    #[test]
+    fn filter_kad_drops_wildcard_and_ws() {
+        use std::collections::HashSet;
+        let empty: HashSet<String> = HashSet::new();
+        // 通配不可路由
+        assert!(!filter_kad_addr(&"/ip4/0.0.0.0/tcp/15002".parse().unwrap(), &empty));
+        // ws/wss 形态：桌面 kad 不拨 ws（即使非本机地址）
+        assert!(!filter_kad_addr(&"/ip4/1.2.3.4/tcp/15002/ws".parse().unwrap(), &empty));
+        assert!(!filter_kad_addr(&"/ip4/1.2.3.4/tcp/443/wss".parse().unwrap(), &empty));
+    }
+
+    #[test]
+    fn filter_kad_keeps_legit_peer_tcp_addr() {
+        use std::collections::HashSet;
+        let self_addrs: HashSet<String> =
+            ["/ip4/127.0.0.1/tcp/15002"].iter().map(|s| s.to_string()).collect();
+        // 合法对端 TCP 地址（非本机、非通配、非 ws）→ 保留
+        assert!(filter_kad_addr(
+            &"/ip4/203.0.113.9/tcp/15002".parse().unwrap(),
+            &self_addrs
+        ));
+        // 对端 loopback（同机场景，本机未监听该地址）→ 保留
+        assert!(filter_kad_addr(
+            &"/ip6/::1/tcp/15002".parse().unwrap(),
+            &HashSet::new()
+        ));
     }
 
     #[test]
