@@ -278,6 +278,14 @@ impl Kernel {
         if let Err(e) = self.on_unlock_password_ops(new_password) {
             log::error!("[recover-mnemonic] password ops failed: {e}");
         }
+        // 方案 Y 主从：助记词恢复与 QR 恢复同为「恢复加入方」——账号可能已在
+        // 其他设备上存在主导 epoch。打本地标记使 `maybe_init_epoch_state` 跳过
+        // init，被动等主导的 epoch:state + ikey（避免两端各自 init 生成不同密钥
+        // → 互解不开 → Concurrent 风暴）。主导不存在时由 RECOVERED_ESCAPE_MS
+        // 超时兜底自升（见 m3 设计 §5.11）。
+        if let Ok(storage) = self.require_storage_mut() {
+            let _ = storage.put(crate::epoch::RECOVERED_KEY, "1");
+        }
         self.ensure_p2p_after_login();
         Ok(root_id)
     }
@@ -292,21 +300,22 @@ impl Kernel {
         Ok(file.to_json()?)
     }
 
-    /// `getQrBackupPayload`：二维码备份载荷。验密取出 payload，剔除 avatar
-    /// （payload 内与文件外层）及其他可选大字段后同口令重新加密（新 salt/iv），
-    /// 产出紧凑 IdentityFile JSON（QR 码容量约 3KB，完整文件备份载荷实测
-    /// 远超上限无法扫码恢复）。完整文件备份见 `backup_payload`。
+    /// `getQrBackupPayload`：二维码备份载荷。验密取出 payload + 派生身份，剔除
+    /// avatar（payload 内与文件外层）及其他可选大字段后同口令重新加密（新
+    /// salt/iv），产出紧凑 [`identity::file::CompactBackupFile`]（base64、无
+    /// publicKeyHex，QR 码容量约 3KB，完整文件备份载荷实测远超上限无法扫码
+    /// 恢复）。完整文件备份见 `backup_payload`。
     ///
-    /// P2P 已运行时额外附加本机节点名片（peerId + 监听地址），恢复端扫码
-    /// 恢复身份后可据此自动完成设备配对，无需手动互相添加地址。
+    /// P2P 已运行时以 `{v:2,i,p,a,pwv?}` 封装并附加本机节点名片（peerId +
+    /// 监听地址），恢复端扫码恢复身份后可据此自动完成设备配对。
     pub fn backup_payload_qr(&self, password: &str) -> Result<String> {
         let target = self.current_root_id()?.ok_or(KernelError::NotInitialized)?;
         let Some(file) = self.read_identity_file(&target)? else {
             return Err(KernelError::NotInitialized);
         };
-        let payload =
-            identity::file::decrypt_payload(&file, password).map_err(map_identity_decrypt_error)?;
-        let compact = identity::file::seal_compact_backup(&file, &payload, password)?;
+        let (payload, identity) =
+            identity::unlock_identity(&file, password).map_err(map_identity_decrypt_error)?;
+        let compact = identity::file::seal_compact_backup(&file, &identity, &payload, password)?;
         let compact_value: serde_json::Value =
             serde_json::to_value(&compact).map_err(|e| KernelError::Internal(e.to_string()))?;
         // QR-F1（§13.8）：把当前 `pwv:self`（若有）编入载荷顶层可选字段 `pwv`——
@@ -319,13 +328,13 @@ impl Kernel {
             .and_then(|storage| pw::get_pwv(storage).ok().flatten())
             .and_then(|pwv| serde_json::to_value(&pwv).ok());
         // 附加本机 P2P 节点信息，便于恢复端扫码后自动完成设备配对。
-        // P2P 运行时一律产出 v1 封装（即使地址被裁剪为空也保留 peerId/pwv）：
+        // P2P 运行时一律产出 v2 封装（即使地址被裁剪为空也保留 peerId/pwv）：
         // QR-F4 要求 pwv 注入与地址有无解耦——否则中继-only 设备（地址全被
         // 裁剪掉）会退回纯紧凑 JSON、丢 pwv，恢复端无法继承 V、D′ 收敛断裂。
         if let Some(p2p_info) = self.p2p_status().ok().flatten() {
             if let Some(ref peer_id) = p2p_info.peer_id {
                 let mut obj = serde_json::json!({
-                    "v": 1,
+                    "v": 2,
                     "i": compact_value,
                     "p": peer_id,
                     // 二维码备份专用地址裁剪：收敛到最小可拨子集（见 trim_qr_addresses），
@@ -389,17 +398,50 @@ impl Kernel {
     /// `recoverFromBackup`：备份码恢复。载荷即身份密文记录，解密口令为原登录密码；
     /// 结构无效与密码错误分别报错；写入前 sanitize 外部资料字段。
     ///
-    /// 支持 v1 封装格式（`{"v":1,"i":"<IdentityFile JSON>","p":"<peerId>","a":[...]}`），
+    /// 支持 v1（`i` = 磁盘 IdentityFile JSON，hex + publicKeyHex）与 v2（`i` =
+    /// [`identity::file::CompactBackupFile`]，base64 + 无 publicKeyHex）两种封装格式，
+    /// 按顶层 `v` 分派；恢复端重建磁盘 IdentityFile 时以派生公钥补全 publicKeyHex。
     /// 自动提取生成端 P2P 名片并完成设备配对。
     pub fn recover_backup(&mut self, payload_json: &str, password: &str) -> Result<String> {
-        // 解包：v1 格式为 `{"v":1,"i":{<IdentityFile>},"p":"...","a":[...],"pwv":{...}}`，
-        // "i" 是 JSON 对象（v1.1）或 JSON 字符串（v1.0 兼容）；"pwv" 为 QR-F1 注入的
-        // 口令校验器（可选，旧版 QR 无此字段）。
-        let (file_json, qr_peer, injected_pwv): (
-            String,
+        // 解包：按顶层 `v` 分派，产出磁盘 `IdentityFile` + 可选 peer/pwv。
+        // - v1：`i` = 磁盘 IdentityFile JSON（hex + publicKeyHex），走 from_json；
+        // - v2：`i` = 紧凑 `CompactBackupFile`（base64，无 publicKeyHex），
+        //   decode 重建磁盘 IdentityFile（publicKeyHex 待解锁派生后补全）；
+        // - 无 `v`：纯 IdentityFile JSON（旧版遗留形态）也兼容。
+        // "i" 是 JSON 对象（v1.1）或 JSON 字符串（v1.0 兼容）；"pwv" 为 QR-F1
+        // 注入的口令校验器（可选，旧版 QR 无此字段）。
+        let (file, qr_peer, injected_pwv): (
+            IdentityFile,
             Option<(String, Vec<String>)>,
             Option<crate::pw::PasswordVerifier>,
         ) = {
+            let parse_err = |_e: &dyn std::fmt::Debug| {
+                KernelError::Internal("备份数据无效或已损坏".to_string())
+            };
+            let peer_and_pwv = |w: &serde_json::Value| -> Result<(Option<(String, Vec<String>)>, Option<crate::pw::PasswordVerifier>)> {
+                let pid = w.get("p").and_then(|v| v.as_str()).map(String::from);
+                let addrs: Option<Vec<String>> = w
+                    .get("a")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|a| a.as_str().map(String::from))
+                            .collect()
+                    })
+                    .filter(|v: &Vec<String>| !v.is_empty());
+                let peer = pid.zip(addrs);
+                // QR-F1 注入的 pwv：解析失败视为损坏载荷（fail-closed）。
+                let injected = w
+                    .get("pwv")
+                    .cloned()
+                    .map(|v| {
+                        serde_json::from_value::<crate::pw::PasswordVerifier>(v).map_err(|e| {
+                            KernelError::Internal(format!("备份载荷 pwv 无效: {e}"))
+                        })
+                    })
+                    .transpose()?;
+                Ok((peer, injected))
+            };
             match serde_json::from_str::<serde_json::Value>(payload_json) {
                 Ok(w) if w.get("v").and_then(|v| v.as_u64()) == Some(1) => {
                     let inner = match w.get("i") {
@@ -410,48 +452,41 @@ impl Kernel {
                         Some(serde_json::Value::String(s)) => s.clone(),
                         _ => payload_json.to_string(),
                     };
-                    let pid = w.get("p").and_then(|v| v.as_str()).map(String::from);
-                    let addrs: Option<Vec<String>> = w
-                        .get("a")
-                        .and_then(|v| v.as_array())
-                        .map(|arr| {
-                            arr.iter()
-                                .filter_map(|a| a.as_str().map(String::from))
-                                .collect()
-                        })
-                        .filter(|v: &Vec<String>| !v.is_empty());
-                    let peer = pid.zip(addrs);
-                    // QR-F1 注入的 pwv：解析失败视为损坏载荷（fail-closed）。
-                    let injected = w
-                        .get("pwv")
-                        .cloned()
-                        .map(|v| {
-                            serde_json::from_value::<crate::pw::PasswordVerifier>(v).map_err(|e| {
-                                KernelError::Internal(format!("备份载荷 pwv 无效: {e}"))
-                            })
-                        })
-                        .transpose()?;
-                    (inner, peer, injected)
+                    let file = IdentityFile::from_json(&inner).map_err(|e| parse_err(&e))?;
+                    let (peer, injected) = peer_and_pwv(&w)?;
+                    (file, peer, injected)
                 }
-                // 非 v1 封装（纯 IdentityFile JSON）也兼容：无 pwv 字段则 None。
+                // 新紧凑格式：i = CompactBackupFile（base64，无 publicKeyHex）。
+                Ok(w) if w.get("v").and_then(|v| v.as_u64()) == Some(2) => {
+                    let inner = match w.get("i") {
+                        Some(serde_json::Value::Object(_)) => {
+                            serde_json::to_string(w.get("i").unwrap())
+                                .unwrap_or_else(|_| payload_json.to_string())
+                        }
+                        Some(serde_json::Value::String(s)) => s.clone(),
+                        _ => payload_json.to_string(),
+                    };
+                    let compact: identity::file::CompactBackupFile =
+                        serde_json::from_str(&inner).map_err(|e| parse_err(&e))?;
+                    let file = identity::file::decode_compact_backup(&compact).map_err(|e| {
+                        KernelError::Internal(format!("备份数据无效或已损坏: {e}"))
+                    })?;
+                    let (peer, injected) = peer_and_pwv(&w)?;
+                    (file, peer, injected)
+                }
+                // 非 v1/v2 封装（纯 IdentityFile JSON）也兼容：无 pwv 字段则 None。
                 Ok(w) if w.get("pwv").is_some() => {
-                    let injected = w
-                        .get("pwv")
-                        .cloned()
-                        .map(|v| {
-                            serde_json::from_value::<crate::pw::PasswordVerifier>(v).map_err(|e| {
-                                KernelError::Internal(format!("备份载荷 pwv 无效: {e}"))
-                            })
-                        })
-                        .transpose()?;
-                    (payload_json.to_string(), None, injected)
+                    let file = IdentityFile::from_json(payload_json).map_err(|e| parse_err(&e))?;
+                    let (_, injected) = peer_and_pwv(&w)?;
+                    (file, None, injected)
                 }
-                Ok(_) | Err(_) => (payload_json.to_string(), None, None),
+                Ok(_) | Err(_) => {
+                    let file = IdentityFile::from_json(payload_json).map_err(|e| parse_err(&e))?;
+                    (file, None, None)
+                }
             }
         };
 
-        let file = IdentityFile::from_json(&file_json)
-            .map_err(|_| KernelError::Internal("备份数据无效或已损坏".to_string()))?;
         let (payload, identity, session_key) =
             identity::unlock_identity_and_key(&file, password).map_err(|e| match e {
                 identity::IdentityError::DecryptionFailed => {
@@ -467,6 +502,11 @@ impl Kernel {
                 "备份数据校验失败：rootId 不匹配".to_string(),
             ));
         }
+        // 用派生公钥补全磁盘必填 publicKeyHex（v2 紧凑码不带它；v1 幂等）。
+        let file = IdentityFile {
+            public_key_hex: identity.public_key_hex(),
+            ..file
+        };
         if self.read_identity_file(&file.root_id)?.is_some() {
             return Err(KernelError::Internal(
                 "该账号已在本设备上，请直接登录".to_string(),
@@ -502,12 +542,32 @@ impl Kernel {
         if let Err(e) = self.on_unlock_password_ops(password) {
             log::error!("[recover-backup] password ops failed: {e}");
         }
+        // 方案 Y 主从：本机是恢复加入方（扫描备份二维码加入），打本地标记。
+        // 后续 p2p 启动的 `maybe_init_epoch_state` 据此跳过 init，被动等主导设备
+        // 的 epoch:state + ikey（避免两端各自 init 生成不同密钥 → 互解不开 → 风暴）。
+        if let Ok(storage) = self.require_storage_mut() {
+            let _ = storage.put(crate::epoch::RECOVERED_KEY, "1");
+        }
         self.ensure_p2p_after_login();
         // 若载荷含生成端节点信息，落单向设备记录并尝试 friend-request
         if let Some((gen_peer_id, gen_addresses)) = qr_peer {
             self.recover_backup_pair_peer(&root_id, &gen_peer_id, &gen_addresses);
         }
         Ok(root_id)
+    }
+
+    /// 开发/自动化测试挂钩（仅 debug 构建）：等价 QR 恢复配对步骤——落单向
+    /// 设备记录并向目标 peer 发 friend-request（同账号自设备自动接受）。
+    /// 供 dev_harness / 双端联调脚本免扫码完成设备配对。
+    #[cfg(debug_assertions)]
+    pub fn dev_pair_peer(
+        &mut self,
+        peer_id: &str,
+        addresses: &[String],
+    ) -> Result<()> {
+        let root_id = self.require_unlocked_root_id()?;
+        self.recover_backup_pair_peer(&root_id, peer_id, addresses);
+        Ok(())
     }
 
     /// QR 恢复后配对：落一条单向设备配对记录（覆盖网保活能找到生成端），

@@ -29,21 +29,37 @@ use super::super::dm_envelope;
 mod profile_apply;
 mod replies;
 
-/// 从 `password_shared` 与当前 `pwv:self` 派生 `Kverify`（32B）。
+/// 从 `password_shared` 与当前 `pwv:self` 派生 `Kverify`（32B）——**按 salt
+/// 缓存**。
 ///
 /// - 未解锁（password 缺失）或无 V → `None`。
-/// - Kverify 仅在内存中返回，不落入存储。
+/// - Kverify 仅在内存中，不落入存储。
+///
+/// 缓存必要性：每个 dm 入站信封都会取 Kverify（批尾 ack 锚定 / epoch 门控
+/// 授予），而 `derive_kverify` 是 scrypt——真机实测逐信封重跑是**连接态
+/// CPU 100% 的直接根因**（~1 信封/4s × 单次数百 ms ≈ 满核）。口令变更必
+/// 伴随 pwv salt 轮换，键控 salt 天然含失效语义；password_shared 本就常驻
+/// 内存，缓存不引入新的暴露面。
 fn derive_kverify_from_password_shared(
     storage: &SledStorage,
     password_shared: &Arc<Mutex<Option<String>>>,
+    cache: &Arc<Mutex<Option<(String, [u8; 32])>>>,
 ) -> Option<[u8; 32]> {
     let password = password_shared.lock().unwrap_or_else(|e| e.into_inner()).clone()?;
     let pwv = crate::pw::get_pwv(storage).ok().flatten()?;
+    let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((cached_salt, k)) = cache.as_ref() {
+        if *cached_salt == pwv.salt {
+            return Some(*k);
+        }
+    }
     let salt_bytes = base64::engine::general_purpose::STANDARD
         .decode(&pwv.salt)
         .ok()?;
     let salt: [u8; 16] = salt_bytes.try_into().ok()?;
-    crate::pw::derive_kverify(&password, &salt).ok()
+    let k = crate::pw::derive_kverify(&password, &salt).ok()?;
+    *cache = Some((pwv.salt.clone(), k));
+    Some(k)
 }
 
 /// kernel 的 dm 入站处理器：字段全部为 `Arc`/`SledStorage` 克隆，`Send + Sync`，
@@ -70,9 +86,155 @@ pub(crate) struct KernelDmHandler {
     /// 插件后台运行时宿主查询句柄（O3 filtered 权限钩子在 dm 入站执行：
     /// orgq-req 的 canRead/canWrite 经此投递到插件 QuickJS 后台运行时）。
     pub(crate) plugin_host_query: crate::kernel::PluginHostQuery,
+    /// Kverify 派生缓存（按 pwv salt 键控；scrypt 单次数百 ms，逐信封重跑
+    /// 是连接态 CPU 100% 的实测根因——见 `derive_kverify_from_password_shared`）。
+    pub(crate) kverify_cache: Arc<Mutex<Option<(String, [u8; 32])>>>,
 }
 
 impl KernelDmHandler {
+    /// 每子批独立持有 io_lock 处理一段记录（UI 命令可在子批间获得锁）。
+    /// 初始同步突发（单信封上千条记录）若整批持锁，UI 全部冻结到批处理
+    /// 结束——拆批是治本的让步（真机 Android 实测场景；§X 不变量不受影响，
+    /// 仍全程裸存储）。阈值与子批大小取 40。
+    const INBOUND_CHUNK_SIZE: usize = 40;
+
+    /// 在独立 io_lock 持期内处理一个（子）信封：验签 + 合入 + 事件聚合。
+    fn process_one_inbound(
+        &self,
+        storage: &mut SledStorage,
+        root_id: &str,
+        nickname: &str,
+        payload: Value,
+        remote_peer_id: &str,
+        online_peers: &HashSet<String>,
+        node_id: &str,
+        kverify: Option<&[u8; 32]>,
+        my_signing_key: Option<&ed25519_dalek::SigningKey>,
+    ) -> std::result::Result<crate::kernel::inbound_dm::InboundDmResult, String> {
+        let _io = self.io_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let is_orgq_req =
+            payload.get("kind").and_then(|v| v.as_str()) == Some(dm_envelope::KIND_ORGQ_REQ);
+        if is_orgq_req {
+            // O3 filtered 权限钩子接线：orgq-req 注入宿主钩子（数据账号侧
+            // 经插件 QuickJS 后台运行时执行 canRead/canWrite）。插件未运行
+            // 时 has_runtime=false → fail-closed 降级（只存不服务）。
+            let hook = super::super::plugin_ops::QuickJsOrgqHook::new(
+                self.plugin_host_query.clone(),
+            );
+            super::super::inbound_dm::handle_inbound_dm_with_orgq_hooks(
+                storage,
+                root_id,
+                nickname,
+                payload,
+                remote_peer_id,
+                online_peers,
+                system_now_ms(),
+                node_id,
+                kverify,
+                Some(&hook),
+            )
+            .map_err(|e| e.to_string())
+        } else {
+            super::super::inbound_dm::handle_inbound_dm_with_e2e(
+                storage,
+                root_id,
+                nickname,
+                payload,
+                remote_peer_id,
+                online_peers,
+                system_now_ms(),
+                node_id,
+                kverify,
+                my_signing_key,
+            )
+            .map_err(|e| e.to_string())
+        }
+    }
+
+    /// 大宗 pdsync-data 拆子批处理：每子批独立持 io_lock，UI 可插队。
+    /// 非 pdsync-data 或记录量低于阈值 → 直接单次处理（原路径）。
+    fn maybe_chunked_process(
+        &self,
+        storage: &mut SledStorage,
+        root_id: &str,
+        nickname: &str,
+        payload: Value,
+        remote_peer_id: &str,
+        online_peers: &HashSet<String>,
+        node_id: &str,
+        kverify: Option<&[u8; 32]>,
+        my_signing_key: Option<&ed25519_dalek::SigningKey>,
+    ) -> std::result::Result<crate::kernel::inbound_dm::InboundDmResult, String> {
+        let is_pdsync_data =
+            payload.get("kind").and_then(|v| v.as_str()) == Some(dm_envelope::KIND_PDSYNC_DATA);
+        let record_count = payload
+            .get("body")
+            .and_then(|b| b.get("records"))
+            .and_then(|r| r.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0);
+        if !is_pdsync_data || record_count <= Self::INBOUND_CHUNK_SIZE {
+            return self.process_one_inbound(
+                storage, root_id, nickname, payload, remote_peer_id, online_peers, node_id,
+                kverify, my_signing_key,
+            );
+        }
+        // 拆批：records 数组按 INBOUND_CHUNK_SIZE 切片，其余字段原样
+        // （parse_data 只读 category/records；逐条记录的 dseq 各自携带）。
+        let body = payload.get("body").cloned().unwrap_or(Value::Null);
+        let records = body
+            .get("records")
+            .and_then(|r| r.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let mut merged: Option<crate::kernel::inbound_dm::InboundDmResult> = None;
+        for chunk in records.chunks(Self::INBOUND_CHUNK_SIZE) {
+            let mut chunk_payload = payload.clone();
+            if let Some(obj) = chunk_payload
+                .get_mut("body")
+                .and_then(|b| b.as_object_mut())
+            {
+                obj.insert("records".to_string(), Value::Array(chunk.to_vec()));
+            }
+            let r = self.process_one_inbound(
+                storage, root_id, nickname, chunk_payload, remote_peer_id, online_peers,
+                node_id, kverify, my_signing_key,
+            )?;
+            merged = Some(match merged {
+                None => r,
+                Some(mut acc) => {
+                    // 聚合：事件与出站指令拼接；布尔按或；Option 取后值
+                    acc.events.extend(r.events);
+                    acc.pdsync_out.extend(r.pdsync_out);
+                    acc.orgsync_out.extend(r.orgsync_out);
+                    acc.device_notice_broadcast |= r.device_notice_broadcast;
+                    acc.profile_applied |= r.profile_applied;
+                    if r.auto_accept.is_some() {
+                        acc.auto_accept = r.auto_accept;
+                    }
+                    if r.self_profile.is_some() {
+                        acc.self_profile = r.self_profile;
+                    }
+                    if r.device_sync_reply.is_some() {
+                        acc.device_sync_reply = r.device_sync_reply;
+                    }
+                    if r.profile_sync_reply.is_some() {
+                        acc.profile_sync_reply = r.profile_sync_reply;
+                    }
+                    if r.orgkey_unbox.is_some() {
+                        acc.orgkey_unbox = r.orgkey_unbox;
+                    }
+                    if r.feed_blob_out.is_some() {
+                        acc.feed_blob_out = r.feed_blob_out;
+                    }
+                    acc.response = r.response;
+                    acc
+                }
+            });
+        }
+        merged.ok_or_else(|| "empty pdsync batch".to_string())
+    }
+
     /// 收尾（§7.1）：标记某自设备（连接层 peerId）已证明支持 pdsync。保活据此
     /// 停止向其回退发旧快照。幂等（集合内重复无影响）。
     fn kernel_pdsync_capable_mark(&self, peer_id: &str) {
@@ -219,48 +381,25 @@ impl DmHandler for KernelDmHandler {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
-        let result = {
-            let _io = self.io_lock.lock().unwrap_or_else(|e| e.into_inner());
-            let node_id = self.sync_node_id();
-            let kverify = derive_kverify_from_password_shared(&self.storage, &self.password_shared);
-            let is_orgq_req =
-                payload.get("kind").and_then(|v| v.as_str()) == Some(dm_envelope::KIND_ORGQ_REQ);
-            if is_orgq_req {
-                // O3 filtered 权限钩子接线：orgq-req 注入宿主钩子（数据账号侧
-                // 经插件 QuickJS 后台运行时执行 canRead/canWrite）。插件未运行
-                // 时 has_runtime=false → fail-closed 降级（只存不服务）。
-                let hook = super::super::plugin_ops::QuickJsOrgqHook::new(
-                    self.plugin_host_query.clone(),
-                );
-                super::super::inbound_dm::handle_inbound_dm_with_orgq_hooks(
-                    &mut storage,
-                    &root_id,
-                    &nickname,
-                    payload,
-                    remote_peer_id,
-                    online_peers,
-                    system_now_ms(),
-                    &node_id,
-                    kverify.as_ref(),
-                    Some(&hook),
-                )
-                .map_err(|e| e.to_string())?
-            } else {
-                super::super::inbound_dm::handle_inbound_dm_with_e2e(
-                    &mut storage,
-                    &root_id,
-                    &nickname,
-                    payload,
-                    remote_peer_id,
-                    online_peers,
-                    system_now_ms(),
-                    &node_id,
-                    kverify.as_ref(),
-                    my_signing_key.as_ref(),
-                )
-                .map_err(|e| e.to_string())?
-            }
-        };
+        let node_id = self.sync_node_id();
+        let kverify = derive_kverify_from_password_shared(
+            &self.storage,
+            &self.password_shared,
+            &self.kverify_cache,
+        );
+        // 大宗 pdsync-data 拆子批逐段持锁（UI 可插队，消除初始同步突发
+        // 的界面冻结）；小信封保持原单锁路径。见 maybe_chunked_process。
+        let result = self.maybe_chunked_process(
+            &mut storage,
+            &root_id,
+            &nickname,
+            payload,
+            remote_peer_id,
+            online_peers,
+            &node_id,
+            kverify.as_ref(),
+            my_signing_key.as_ref(),
+        )?;
         for event in result.events {
             // 无订阅者时忽略发送失败
             let _ = self.event_tx.send(event);

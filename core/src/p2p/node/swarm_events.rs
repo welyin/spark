@@ -202,10 +202,11 @@ impl<S: StorageBackend> EventLoop<S> {
                 if num_established.get() == 1 {
                     // relay 资历制依据（plugin-dist §8.6）：记录接入时刻
                     self.peer_connected_since.insert(peer_id, now);
+                    // transport 层事件：首个连接建立（TCP）。不触发任何业务投递；
+                    // 业务投递统一由应用层确认（PeerAppReady）驱动（peer-app-ready §3.2）。
                     self.emit(P2pEvent::PeerConnected {
                         peer_id: peer_id.to_base58(),
                     });
-                    self.host.on_peer_connected(&peer_id.to_base58());
                 }
                 // 竞速场景：连接建立后完成三层确认（peer-rediscovery §4.3）
                 self.complete_rediscovery_confirm(peer_id);
@@ -243,9 +244,52 @@ impl<S: StorageBackend> EventLoop<S> {
                         "[p2p] OutgoingConnectionError: peer={peer} conn_id={connection_id:?} error={error:?}"
                     );
                 }
+                // 归属日志（单行）：kad 行为层自动重拨（PortUse::Reuse）的失败是
+                // 刷屏主体，保留归属与错误摘要把关来源，不再打全栈 backtrace。
+                // 归属判定：connect/dm 尝试（pending_connects）→ org 批量直连
+                // （pending_org_attempts）→ overlay 记账（pending_overlay_dials）
+                // → rediscovery 竞速 → 其余（kad 行为层/未追踪源）。
+                let attribution = {
+                    let cid = connection_id;
+                    let in_connects = self.pending_connects.iter().any(|p| {
+                        p.in_flight.iter().any(|d| d.conn_id == cid)
+                    });
+                    let in_org = self.pending_org_attempts.iter().any(|a| {
+                        a.batch.iter().any(|d| d.conn_id == cid)
+                    });
+                    let in_overlay = peer_id.map_or(false, |p| {
+                        self.pending_overlay_dials.contains_key(&p)
+                    });
+                    let in_redis = self.rediscovery_states.contains_key(
+                        &peer_id.unwrap_or(libp2p::PeerId::random()),
+                    );
+                    if in_connects {
+                        "connect/dm"
+                    } else if in_org {
+                        "org-batch"
+                    } else if in_overlay {
+                        "overlay"
+                    } else if in_redis {
+                        "rediscovery"
+                    } else {
+                        "UNTRACKED(kad/other)"
+                    }
+                };
+                eprintln!(
+                    "[p2p-dial] attribution={attribution} peer={peer} conn_id={connection_id:?} error={error:?}"
+                );
+                // V1 kad 死路由收敛：kad 行为层对路由表中未连接 peer 用
+                // PortUse::Reuse 自动拨号（路由表地址来自 seed 回灌/identify），
+                // 超时/Refused 失败后条目仍残留、被下次查询反复重拨。对
+                // UNTRACKED(kad/other) 归属的临时错误（Timeout/Refused）按
+                // (PeerId, 地址) 粒度从 kad 路由表删该失败地址；确定性错误
+                // （WrongPeerId）复用下方 hard_delete_on_deterministic_failure。
+                if attribution == "UNTRACKED(kad/other)" {
+                    self.prune_kad_failed_addresses(peer_id, &error);
+                }
                 // M9 确定性错误硬删：WrongPeerId（尤其 obtained=本机）或目标地址
                 // 命中本机监听地址 → 从目标 peer 记录删除此地址，防死地址累积
-                self.hard_delete_on_deterministic_failure(connection_id, &error);
+                self.hard_delete_on_deterministic_failure(connection_id, peer_id, &error);
                 // connect 命令：失败则试下一目标。按 ConnectionId 精确归属
                 // （同 org attempt 口径）——候选 1 的 unknown_peer_id 拨号失败
                 // 时 peer_id=None，按 peer 匹配会失配滞留：对端在线但首候选
@@ -290,9 +334,9 @@ impl<S: StorageBackend> EventLoop<S> {
                     let mut store = OverlayPeerStore::new(&mut self.storage);
                     let _ = store.mark_dial_result(&peer.to_base58(), false);
                 }
-                // 竞速拨号失败（peer-rediscovery §4.3/N2）：DHT 命中后拨号待确认
-                // 阶段全部失败时计一次失败进退避并清理暂存——否则状态永卡
-                // Racing、暂存 announce 泄漏（函数内部按 Racing+stash 归属，
+                // 竞速拨号失败（peer-rediscovery §4.3/N2/V5）：拨号待确认阶段失败
+                // 清暂存回 Idle、纯缓存拨号竞速失败直接收尾——否则状态永卡
+                // Racing（函数内部按 Racing+stash / Racing+无 DHT 在途归属，
                 // 普通拨号失败不受影响）
                 if let Some(peer) = peer_id {
                     self.on_rediscovery_dial_failed(peer);
@@ -359,9 +403,13 @@ impl<S: StorageBackend> EventLoop<S> {
     ///
     /// 删的是「目标 peer 记录里的一条地址」，不误伤其它 peer 记录（地址可能属于
     /// 另一个 peer，其自己的记录不受影响）。
+    ///
+    /// 目标 peer 定位：优先按 conn_id 精确归属 connect/org 尝试；kad 行为层自动
+    /// 拨号无 conn_id 归属（UNTRACKED），其 WrongPeerId 用事件携带的 peer_id 兜底。
     fn hard_delete_on_deterministic_failure(
         &mut self,
         connection_id: ConnectionId,
+        event_peer: Option<PeerId>,
         error: &libp2p::swarm::DialError,
     ) {
         // 目标地址：WrongPeerId 的 endpoint 即拨号地址；其余错误无法定位地址
@@ -381,7 +429,8 @@ impl<S: StorageBackend> EventLoop<S> {
                     .iter()
                     .find(|a| a.batch.iter().any(|d| d.conn_id == connection_id))
                     .and_then(|a| a.current_peer)
-            });
+            })
+            .or(event_peer);
         let Some(peer) = target_peer else {
             return;
         };
@@ -409,6 +458,50 @@ impl<S: StorageBackend> EventLoop<S> {
                 if let Ok(base_ma) = base.parse::<libp2p::Multiaddr>() {
                     let _ = kad.remove_address(&peer, &base_ma);
                 }
+            }
+        }
+    }
+
+    /// V1：kad 自动重拨的临时失败（Timeout/Refused）地址剔除——按 (PeerId, 地址)
+    /// 粒度从 kad 路由表删除失败地址，peer 的路由表其它地址保留（不误删）；确定
+    /// 性错误（WrongPeerId）不在此处理，走
+    /// [`Self::hard_delete_on_deterministic_failure`]。
+    fn prune_kad_failed_addresses(
+        &mut self,
+        peer: Option<PeerId>,
+        error: &libp2p::swarm::DialError,
+    ) {
+        use std::io::ErrorKind;
+        let libp2p::swarm::DialError::Transport(errors) = error else {
+            return;
+        };
+        let Some(peer) = peer else {
+            return;
+        };
+        // 仅临时错误剔除：对端瞬时不可达/超时不代表地址永久失效，从路由表删掉
+        // 即可终止 kad 对该死条目的反复自动重拨；其它错误（本地状态类）不动路由表
+        if !errors.iter().any(|(_, e)| {
+            matches!(
+                e,
+                libp2p::TransportError::Other(io_err)
+                    if matches!(io_err.kind(), ErrorKind::TimedOut | ErrorKind::ConnectionRefused)
+            )
+        }) {
+            return;
+        }
+        let Some(kad) = self.swarm.behaviour_mut().kad.as_mut() else {
+            return;
+        };
+        for (addr, _) in errors {
+            // raw 与剥 /p2p 段的 base 形态都删（同 WrongPeerId 剔除口径）；
+            // kad 内部 with_p2p(peer) 后与 kbucket 匹配
+            let _ = kad.remove_address(&peer, addr);
+            let addr_str = addr.to_string();
+            let base = super::org_direct::base_addr(&addr_str);
+            if base != addr_str
+                && let Ok(base_ma) = base.parse::<libp2p::Multiaddr>()
+            {
+                let _ = kad.remove_address(&peer, &base_ma);
             }
         }
     }

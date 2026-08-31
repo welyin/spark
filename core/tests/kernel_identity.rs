@@ -213,7 +213,7 @@ fn qr_backup_payload_compact_and_recoverable() {
     // 否则为纯 IdentityFile JSON——解包后断言身份文件本体。
     let unwrap_qr = |raw: &str| -> Value {
         let v: Value = serde_json::from_str(raw).unwrap();
-        if v.get("v").and_then(Value::as_u64) == Some(1) {
+        if v.get("v").and_then(Value::as_u64).is_some() {
             v.get("i").cloned().unwrap_or(Value::Null)
         } else {
             v

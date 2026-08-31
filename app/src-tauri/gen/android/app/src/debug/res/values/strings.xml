@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- debug 构建（开发版）应用名覆盖：与生产版「Spark」区分，便于手机上辨认 -->
+    <string name="app_name">"Spark Dev"</string>
+    <string name="main_activity_title">"Spark Dev"</string>
+</resources>

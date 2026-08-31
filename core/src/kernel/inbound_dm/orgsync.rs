@@ -1096,10 +1096,11 @@ mod tests {
             &serde_json::to_string(&meta("node-a", 1)).unwrap(),
         )
         .unwrap();
-        // 先落一条存量数据（vv=1）
+        // 先落一条存量数据：声明 pmeta（node-a:1）已把 node-a 序号种子到 1，
+        // 本次受管写拿到 per-node 序号 2 → vv={node-a:2}
         let key = "ct:org:org_0000000000000001:member-x";
         crate::sync::put_personal(&mut s, "node-a", key, "\"v1\"", 1000).unwrap();
-        // 远端墓碑（vv=2 领先）经 orgsync-data 到达
+        // 远端墓碑（vv=3 领先本地 2）经 orgsync-data 到达
         let body = crate::sync::orgsync::build_orgsync_data_batch(
             org_id,
             "org:contacts@v1",
@@ -1107,7 +1108,7 @@ mod tests {
                 key: key.to_string(),
                 value: serde_json::Value::Null,
                 meta: DocMeta {
-                    vv: [("node-a".to_string(), 2)].into_iter().collect(),
+                    vv: [("node-a".to_string(), 3)].into_iter().collect(),
                     ts: 2000,
                     node_id: Some("node-a".to_string()),
                     tombstone: Some(true),
@@ -1166,9 +1167,11 @@ mod tests {
         )
         .unwrap();
         let key = "ct:org:org_0000000000000001:member-y";
+        // 声明 pmeta（node-a:1）把 node-a 序号种子到 1，本地存量数据拿到序号 2
         crate::sync::put_personal(&mut s, "node-a", key, "\"v1\"", 1000).unwrap();
+        // 远端墓碑 vv=3 领先本地 2 → 首达合入（登个人 dlog），同 vv 重放不重复登
         let tomb_meta = DocMeta {
-            vv: [("node-a".to_string(), 2)].into_iter().collect(),
+            vv: [("node-a".to_string(), 3)].into_iter().collect(),
             ts: 2000,
             node_id: Some("node-a".to_string()),
             tombstone: Some(true),

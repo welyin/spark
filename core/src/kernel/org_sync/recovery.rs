@@ -12,7 +12,10 @@
 //! - 网络恢复事件（`redial_priority_peers` 既有路径）；
 //! - org 写入推送 / orgsync-hello 懒拨号时，本地端点全不通走本环节。
 
-use super::{OrgSyncContext, RECOVERY_DIAL_BUDGET, RECOVERY_ORGS_PER_ROUND};
+use super::{
+    OrgSyncContext, RECOVERY_DIAL_BUDGET, RECOVERY_ORGS_PER_ROUND,
+    RECOVERY_REFRESH_MIN_INTERVAL_MS,
+};
 use crate::org::gateway::{OrgMemberHint, org_members_dht_key};
 use crate::org::{OrganizationService, active_recovery_tokens};
 use crate::p2p::constants::RECOVERY_QUERY_WANT;
@@ -54,11 +57,27 @@ impl OrgSyncContext {
     /// token 查询刷新端点，命中候选拨号（受预算约束），失败即沉默。
     ///
     /// 不再有「连续 3 tick + 冷却」门控：本环节由事件点（登录/网络恢复/org 写入
-    /// 推送/orgsync-hello 懒拨号）触发，每次按需刷新，重复调用无碍（事件驱动非
-    /// 周期，不算骚扰）。仅在实际发起查询时记录 `recovery_trigger.last_query_at`
-    /// （供 UI 展示恢复状态）。
+    /// 推送/orgsync-hello 懒拨号）触发，按需刷新，失败即沉默。
+    ///
+    /// 出站节流（V3）：组织写入连败时每次写入都会走到本环节（N 个 DHT get +
+    /// ≤[`RECOVERY_DIAL_BUDGET`] 个 connect_peer），`recovery_limiter` 只限入站
+    /// 不应答、限不住这条出站链——同一 rootId 距上次刷新 <
+    /// [`RECOVERY_REFRESH_MIN_INTERVAL_MS`] 直接跳过本次刷新。仅在实际发起
+    /// 查询时记录 `recovery_trigger.last_query_at`（供 UI 展示恢复状态）。
     pub(super) async fn refresh_org_endpoints_and_dial(&self, root_id: &str) {
         let now = self.now();
+        // 节流：每 rootId 最小刷新间隔内跳过（重复写入防风暴，出站预算保护）
+        {
+            let mut last = self
+                .recovery_refresh
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let prev = last.get(root_id).copied().unwrap_or(0);
+            if prev != 0 && now - prev < RECOVERY_REFRESH_MIN_INTERVAL_MS {
+                return;
+            }
+            last.insert(root_id.to_string(), now);
+        }
         let view = {
             let mut storage = self.storage.clone();
             let node_id = self.node.peer_id().to_string();

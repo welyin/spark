@@ -42,7 +42,11 @@ impl<S: StorageBackend> EventLoop<S> {
             // 已有一轮竞速在途，不重复竞速（防重复 DHT 查询 + 重复拨号）
             return;
         }
-        // A) 本地缓存地址拨号：从邻居池读取该 peer 的地址
+        // A) 本地缓存地址拨号：从邻居池读取该 peer 的地址。套用与 connect_peer
+        // 主路径一致的过滤（Android 未编译 ws 传输层，ws/wss 地址必败拨号；
+        // 通配不可路由；本机监听地址自过滤），防死地址必败拨号
+        let is_android = cfg!(target_os = "android");
+        let self_addrs = self.self_listen_addr_set();
         let cached_addrs: Vec<libp2p::Multiaddr> = {
             let mut store = crate::p2p::overlay_store::OverlayPeerStore::new(&mut self.storage);
             store
@@ -52,6 +56,8 @@ impl<S: StorageBackend> EventLoop<S> {
                 .map(|r| r.addresses)
                 .unwrap_or_default()
                 .iter()
+                .filter_map(|a| crate::p2p::peer_targets::filter_dial_candidate(a, is_android))
+                .filter(|a| !self_addrs.contains(a))
                 .filter_map(|a| a.parse().ok())
                 .collect()
         };
@@ -198,17 +204,27 @@ impl<S: StorageBackend> EventLoop<S> {
         self.rediscovery_states.insert(peer, RediscoveryState::Idle);
     }
 
-    /// 竞速拨号失败归属（OutgoingConnectionError 按 peer 调用，N2）：仅当该
-    /// peer 处于「DHT 命中后拨号待确认」阶段（Racing 且 stash 指向它）才清理
-    /// 暂存的 announce 并回 Idle 静默——普通 connect/org 拨号失败、以及
-    /// start_rediscovery 并行 A 的缓存拨号失败（DHT 查询仍在途，stash 为空）
-    /// 都不受影响，避免误伤正常连接管理。
+    /// 竞速拨号失败归属（OutgoingConnectionError 按 peer 调用，N2 + V5 收尾）：
+    /// - 「DHT 命中后拨号待确认」阶段（Racing 且 stash 指向它）：清暂存的
+    ///   announce 并回 Idle 静默；
+    /// - 纯缓存拨号竞速（Racing、DHT 查询无在途、无 stash，如
+    ///   `redial_priority_peers` 的缓存重拨分支）：拨号失败即竞速收尾回
+    ///   Idle——否则两个清理条件都不满足，peer 永久卡 Racing、被
+    ///   `start_rediscovery` 的 Racing 去重守卫永久拒绝后续触发；
+    /// - DHT 查询仍在途（Racing 且有 dht_query_id）：不受影响，等 DHT 结果收尾。
+    ///
+    /// 普通 connect/org 拨号失败（无竞速状态）不受影响，避免误伤正常连接管理。
     pub(super) fn on_rediscovery_dial_failed(&mut self, peer: PeerId) {
-        let racing = matches!(
-            self.rediscovery_states.get(&peer),
-            Some(RediscoveryState::Racing { .. })
-        );
-        if racing && self.pending_rediscovery_confirm.remove(&peer).is_some() {
+        let dht_in_flight = match self.rediscovery_states.get(&peer) {
+            Some(RediscoveryState::Racing { dht_query_id, .. }) => dht_query_id.is_some(),
+            _ => return,
+        };
+        if self.pending_rediscovery_confirm.remove(&peer).is_some() {
+            self.abort_rediscovery_attempt(peer);
+            return;
+        }
+        if !dht_in_flight {
+            // 纯缓存拨号失败：无 DHT 查询在途可等，竞速到此收尾（V5）
             self.abort_rediscovery_attempt(peer);
         }
     }

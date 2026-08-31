@@ -329,7 +329,7 @@ fn revoked_device_cannot_decrypt_new_data_forwarded_by_ignorant_peer() {
     // 同一 rootId（三台设备共享根身份）。
     let (root_key, my_root) = root(7);
     let (a_key, _) = root(8);
-    let (_c_key, _) = root(9);
+    let (c_key, _) = root(9);
 
     // B 的存储（受害者视角）：seed 设备清单 + epoch1 密钥 + A→B 的 ikey1 包裹。
     let mut b_store = MemoryStorage::new();
@@ -450,8 +450,9 @@ fn revoked_device_cannot_decrypt_new_data_forwarded_by_ignorant_peer() {
         "解不开的记录 dseq 不计，删除日志水位不得推进"
     );
 
-    // 对照：B 若能拿到 epoch2 密钥（比如 C 善意补发其包裹），重投即可合入。
-    let c_x_priv = x25519_priv_from_sk(&c_sk);
+    // 对照①（方案 Y 源过滤，m3 §5.11.6）：非主导 writer（peer-c）的包裹不被
+    // 采信——防双主导 split-brain 互换密钥；B 仍停在 epoch1。
+    let c_x_priv = x25519_priv_from_sk(&c_key);
     let b_x_pub2 = x25519_pub(&b_sk).unwrap();
     let (wrap2, nonce2) = spark_core::epoch::box_ikey(
         &epoch2_key,
@@ -466,19 +467,43 @@ fn revoked_device_cannot_decrypt_new_data_forwarded_by_ignorant_peer() {
     let rec2 = spark_core::epoch::IkeyRecord { wrapped_key: wrap2, nonce: nonce2, ts: NOW };
     let ikey2_key = ikey_key(2, "peer-c", b_peer);
     b_store.put(&ikey2_key, &rec2.to_json().unwrap()).unwrap();
-    // try_refresh_keys 需 writer C 的设备记录解析其 devicePubKey。
+    // try_refresh_keys 需 writer 的设备记录解析其 devicePubKey。
     DeviceService::upsert_pdsync(
         &mut b_store,
-        &device_record(c_peer, "uid-c", Some(ed_pub(&c_sk)), None),
+        &device_record(c_peer, "uid-c", Some(ed_pub(&c_key)), None),
         NOW,
         NODE,
     )
     .unwrap();
-
-    // 触发密钥刷新（handle_pdsync_data 的 epoch category 尾段会做 try_refresh_keys）。
-    // 手动调用等价逻辑：刷新后 effective 推进到 2。
     spark_core::epoch::EpochService::try_refresh_keys(&mut b_store, &my_root, b_peer, NOW).unwrap();
-    assert_eq!(spark_core::epoch::get_effective(&b_store).unwrap(), 2, "补发密钥后 effective 推进");
+    assert_eq!(
+        spark_core::epoch::get_effective(&b_store).unwrap(),
+        1,
+        "方案 Y：非主导 writer 的包裹拒收（writer != rotated_by）"
+    );
+
+    // 对照②：主导（peer-a，即 epoch:state.rotated_by）补发包裹 → 采信，
+    // effective 推进到 2（C 的包裹仍在库中，被源过滤跳过，不影响）。
+    let (wrap2a, nonce2a) = spark_core::epoch::box_ikey(
+        &epoch2_key,
+        &b_x_pub2,
+        &a_x_priv,
+        &my_root,
+        2,
+        "peer-a",
+        b_peer,
+    )
+    .unwrap();
+    let rec2a = spark_core::epoch::IkeyRecord { wrapped_key: wrap2a, nonce: nonce2a, ts: NOW };
+    b_store
+        .put(&ikey_key(2, "peer-a", b_peer), &rec2a.to_json().unwrap())
+        .unwrap();
+    spark_core::epoch::EpochService::try_refresh_keys(&mut b_store, &my_root, b_peer, NOW).unwrap();
+    assert_eq!(
+        spark_core::epoch::get_effective(&b_store).unwrap(),
+        2,
+        "主导补发密钥后 effective 推进"
+    );
 
     // 重投同一条加密数据 → 现在能解开 → 合入。
     let r3 = deliver_pdsync_data(&mut b_store, &root_key, &my_root, "ct:friend", &[data_rec]);

@@ -2,6 +2,15 @@
   <section class="root-gate">
     <App v-if="isPluginWindow || showApp" />
 
+    <!-- 初始同步加载遮罩：登录/恢复/注册/切换进入主界面后，首个同步事件
+         到达即收起（数据落地信号）；无数据时 1.5s 提前收起；兜底超时必收起 -->
+    <div v-if="showApp && syncOverlay" class="sync-overlay" role="status" aria-live="polite">
+      <div class="sync-overlay-card">
+        <div class="sync-overlay-spinner" aria-hidden="true" />
+        <p class="sync-overlay-text">数据同步中，首次加载数据较多，请稍候…</p>
+      </div>
+    </div>
+
     <div v-else class="gate-wrap" :class="{ 'gate-busy': authBusy }" v-loading="authBusy" element-loading-text="正在登录...">
       <header class="brand">
         <img class="brand-logo" :src="sparkLogo" alt="星火" />
@@ -99,6 +108,8 @@ import { isMobileLayout } from './stores/ui-layout';
 import { hydratePasswordUnify, pendingUnifyRef, clearPasswordUnifyPending } from './stores/password-unify';
 import { resetContactsCache } from './mock/contacts/store';
 import { resetMessagesCache } from './stores/messages';
+import { listenP2pEvents } from './api';
+import type { UnlistenFn } from '@tauri-apps/api/event';
 
 type AuthMode = 'login' | 'switch' | 'register' | 'recover' | 'add' | 'unify';
 
@@ -127,6 +138,33 @@ export default defineComponent({
     // 系统返回键需查询其摄像头状态、外部触发关闭（全屏覆盖层语义等同覆盖层，按返回先关摄像头）
     const addAccountRef = ref<InstanceType<typeof AddAccountPage> | null>(null);
 
+    // 初始同步加载遮罩（移动端初始同步突发时 UI 会因 io_lock 串行而卡顿，
+    // 遮罩把「卡住」变成「加载中」）。登录/恢复/注册/切换进入主界面时显示，
+    // 首个同步事件（数据落地）到达即收起；1.5s 无事件说明无可同步数据，
+    // 提前收起；兜底超时（移动 10s / 桌面 6s）必收起。
+    const syncOverlay = ref(false);
+    let syncOverlayHideTimer: ReturnType<typeof setTimeout> | null = null;
+    let syncOverlayMaxTimer: ReturnType<typeof setTimeout> | null = null;
+    const hideSyncOverlay = () => {
+      syncOverlay.value = false;
+      if (syncOverlayHideTimer) clearTimeout(syncOverlayHideTimer);
+      if (syncOverlayMaxTimer) clearTimeout(syncOverlayMaxTimer);
+    };
+    const startSyncOverlay = () => {
+      hideSyncOverlay();
+      syncOverlay.value = true;
+      syncOverlayHideTimer = setTimeout(hideSyncOverlay, 1500);
+      syncOverlayMaxTimer = setTimeout(hideSyncOverlay, isMobileLayout.value ? 10000 : 6000);
+    };
+    // 同步事件到达 = 有数据在落地：重置「无事件提前收起」计时，到达即收遮罩。
+    // （数据流通常多批连发；首批到达即说明主数据已在路上，无需等全部收敛）
+    void listenP2pEvents((event) => {
+      if (!syncOverlay.value) return;
+      if (['ConversationsSynced', 'ContactsSynced', 'ChatReceived', 'OrgSynced', 'SelfProfileSynced'].includes(event.kind)) {
+        hideSyncOverlay();
+      }
+    }).then(() => {}).catch(() => {});
+
     const refreshStatus = async () => {
       rootStatus.value = await window.electronAPI.rootIdentity.status();
       statusLoaded.value = true;
@@ -153,12 +191,14 @@ export default defineComponent({
       message.value = `注册成功，RootID=${rootId}`;
       // 新注册即活跃：记录活跃时间，避免自动锁定误判（§5）
       touchLastActiveAt();
+      startSyncOverlay();
       await refreshStatus();
     };
 
     const handleRecovered = async (rootId: string) => {
       message.value = `账号已恢复，RootID=${rootId}`;
       touchLastActiveAt();
+      startSyncOverlay();
       await refreshStatus();
     };
 
@@ -197,6 +237,7 @@ export default defineComponent({
         // 乙+校验器：登录成功后水合 pendingUnify，常驻条将提示用户统一新密码
         await hydratePasswordUnify(result.rootId);
         showApp.value = true;
+        startSyncOverlay();
         void refreshStatus();
       } catch (error) {
         message.value = `登录失败：${errorMessage(error)}`;
@@ -213,6 +254,7 @@ export default defineComponent({
         resetMessagesCache();
         authMode.value = 'login';
         message.value = '';
+        startSyncOverlay();
         await refreshStatus();
       } catch (error) {
         message.value = `切换失败：${errorMessage(error)}`;

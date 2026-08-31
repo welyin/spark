@@ -282,14 +282,14 @@ fn device_lww_revoked_record_prevails() {
 
     // revoked 记录（updated_at=200，新）→ 覆盖正常记录。
     let revoked = device_record("peer-b", "uid-b", 200, Some(200));
-    let (applied, changed) = DeviceService::apply_remote(&mut s, revoked, 200, NODE).unwrap();
+    let (applied, changed) = DeviceService::apply_remote(&mut s, revoked, 200, "peer-b", NODE).unwrap();
     assert!(changed, "新 revoked 记录应判定为内容变更");
     assert_eq!(applied.revoked_at, Some(200));
     assert_eq!(DeviceService::get(&s, "peer-b").unwrap().unwrap().revoked_at, Some(200));
 
     // 更旧的正常记录（updated_at=150 < 200）到达 → 不覆盖标记。
     let older_normal = device_record("peer-b", "uid-b", 150, None);
-    let (applied, changed) = DeviceService::apply_remote(&mut s, older_normal, 201, NODE).unwrap();
+    let (applied, changed) = DeviceService::apply_remote(&mut s, older_normal, 201, "peer-b", NODE).unwrap();
     assert!(!changed, "更旧正常记录不得判定为内容变更");
     // apply_remote 不覆盖已撤销标记（本地 revoked 粘性：远端正常记录无法洗白）。
     assert_eq!(

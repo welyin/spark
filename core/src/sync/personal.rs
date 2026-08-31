@@ -9,9 +9,52 @@
 //! [`compare_version_vectors`] 原语，只是作用域不同（记录级 vv 而非
 //! collection 级 vv）。
 
-use crate::storage::{BatchOperation, StorageBackend};
+use crate::storage::{BatchOperation, ScanOptions, StorageBackend};
 use crate::sync::meta::{CompareResult, DocMeta, compare_version_vectors};
 use crate::sync::SyncResult;
+
+/// 节点写入序号键（`p2p:` 前缀不进 pdsync 流量）：vv 计数采用 **per-node
+/// 单调序号**（该节点个人域第 N 次写），而非 per-key 计数。per-key 计数下
+/// 同 category 第二条记录与第一条同值 {node:1}，折叠 max 后「对端已见第 1
+/// 次写」推不出「见了哪一条」——已有同值记录的 peer 判 Equal，
+/// `collect_incremental` 跳过，第二条记录**永久不可见**（同构于 §5.6 墓碑
+/// 缺陷：折叠丢失 key 维度）。per-node 序号让线性写历史下折叠摘要正确表达
+/// 「该节点已写到第 N 条」。
+fn vv_seq_key(node_id: &str) -> String {
+    format!("p2p:vvseq:{node_id}")
+}
+
+/// 序号持久化 op——调用方必须并入与记录写入**同一 batch**（原子）。
+pub fn vv_seq_batch_op(node_id: &str, seq: i64) -> BatchOperation {
+    BatchOperation::put(vv_seq_key(node_id), seq.to_string())
+}
+
+/// 读取节点当前写入序号。首读缺省时以「扫描全部 pmeta 取该节点分量存量
+/// 最大值」为种子（一次性）——升级前 per-key 计数存量与序号同源单调，
+/// 避免升级后新写序号从 1 起被存量记录「已覆盖」误判（存量记录值 ≤ 种子，
+/// 新写恒大于种子，折叠/增量语义平滑衔接）。
+pub fn current_vv_seq<S: StorageBackend>(storage: &S, node_id: &str) -> SyncResult<i64> {
+    if let Some(raw) = storage.get(&vv_seq_key(node_id))? {
+        if let Ok(v) = raw.parse::<i64>() {
+            return Ok(v);
+        }
+    }
+    let mut max_seq = 0i64;
+    for (_k, raw) in storage.scan(&ScanOptions {
+        prefix: PMETA_PREFIX.to_string(),
+        start: None,
+        end: None,
+        reverse: false,
+        limit: None,
+    })? {
+        if let Ok(meta) = serde_json::from_str::<DocMeta>(&raw)
+            && let Some(v) = meta.vv.get(node_id)
+        {
+            max_seq = max_seq.max(*v);
+        }
+    }
+    Ok(max_seq)
+}
 
 /// pmeta 键前缀。
 pub const PMETA_PREFIX: &str = "pmeta:";
@@ -82,6 +125,9 @@ pub fn set_personal_meta<S: StorageBackend>(
 /// `meta_updated_at`）——高频消息流不得推高 pmeta.ts，否则并发裁决时纯
 /// 收发消息的设备仅凭 ts 胜出，吃掉对端真实的元数据编辑。
 ///
+/// vv 分量取本机 **per-node 单调序号**（见 [`current_vv_seq`]），同 batch
+/// 落序号键。
+///
 /// 返回更新后的 [`DocMeta`]。
 pub fn bump_personal_meta<S: StorageBackend>(
     storage: &mut S,
@@ -90,11 +136,15 @@ pub fn bump_personal_meta<S: StorageBackend>(
     ts_ms: i64,
 ) -> SyncResult<DocMeta> {
     let mut meta = get_personal_meta(storage, record_key)?.unwrap_or_default();
-    *meta.vv.entry(node_id.to_string()).or_insert(0) += 1;
+    let seq = current_vv_seq(storage, node_id)? + 1;
+    meta.vv.insert(node_id.to_string(), seq);
     meta.ts = ts_ms;
     meta.node_id = Some(node_id.to_string());
     meta.tombstone = None;
-    set_personal_meta(storage, record_key, &meta)?;
+    storage.batch(vec![
+        BatchOperation::put(personal_meta_key(record_key), serde_json::to_string(&meta)?),
+        vv_seq_batch_op(node_id, seq),
+    ])?;
     Ok(meta)
 }
 
@@ -112,7 +162,8 @@ pub fn put_personal<S: StorageBackend>(
     now_ms: i64,
 ) -> SyncResult<DocMeta> {
     let mut meta = get_personal_meta(storage, record_key)?.unwrap_or_default();
-    *meta.vv.entry(node_id.to_string()).or_insert(0) += 1;
+    let seq = current_vv_seq(storage, node_id)? + 1;
+    meta.vv.insert(node_id.to_string(), seq);
     meta.ts = now_ms;
     meta.node_id = Some(node_id.to_string());
     meta.tombstone = None;
@@ -120,7 +171,99 @@ pub fn put_personal<S: StorageBackend>(
     storage.batch(vec![
         BatchOperation::put(record_key, value),
         BatchOperation::put(personal_meta_key(record_key), serde_json::to_string(&meta)?),
+        vv_seq_batch_op(node_id, seq),
     ])?;
+
+    Ok(meta)
+}
+
+// ── 快照合入（对端记账）──────────────────────────────────────────────
+
+/// 旧通道（contact-sync / conv-sync / device-sync）快照合入专用入口。
+///
+/// 语义等价于"对**远端**节点 bump 的 [`put_personal`]"：记录落库、pmeta 账记到
+/// `remote_node_id`（而非本机）。关键效果：
+///
+/// - 本机分量不被推进 → `local_personal_write_digest` 不变 → 不触发 steady hello →
+///   消除"合入 → 发 hello → 对端 diff → 回 data → 再合入"的双向回环风暴
+///   （见 wiki/architecture/sync/sync-storm-fix.md）。
+/// - 记录仍带 pmeta、对端分量折叠进 category vv → 数据对 pdsync 依旧可见（P1 意图保留）。
+///
+/// **防线**：签名显式要求 `remote_node_id != local_node_id`。若调用方误把本机
+/// nodeId 当记账对象（旧 bug 的根源），此处不静默接受——记录仍然落地（保持
+/// 可用），但**始终打 WARN 日志**暴露误用，便于观测风暴前兆。
+///
+/// 调用方（入站 handler）应传 `ctx.remote_peer_id`（对端设备 p2p peerId）为
+/// `remote_node_id`、`ctx.node_id`（本机设备 peerId）为 `local_node_id`。
+pub fn apply_snapshot_remote<S: StorageBackend>(
+    storage: &mut S,
+    remote_node_id: &str,
+    local_node_id: &str,
+    record_key: &str,
+    value: &str,
+    now_ms: i64,
+) -> SyncResult<DocMeta> {
+    if remote_node_id == local_node_id {
+        log::warn!(
+            "[SNAPSHOT-ACCOUNTING] 快照合入把记账对象误为本机 node_id={local_node_id}, \
+             key={record_key}; 本机分量将被推进、可能触发同步回环风暴。\
+             应传对端设备 peerId 记账（contact/conv/device-sync 入站合入）",
+        );
+    }
+
+    let mut meta = get_personal_meta(storage, record_key)?.unwrap_or_default();
+    let seq = current_vv_seq(storage, remote_node_id)? + 1;
+    meta.vv.insert(remote_node_id.to_string(), seq);
+    meta.ts = now_ms;
+    meta.node_id = Some(remote_node_id.to_string());
+    meta.tombstone = None;
+
+    storage.batch(vec![
+        BatchOperation::put(record_key, value),
+        BatchOperation::put(personal_meta_key(record_key), serde_json::to_string(&meta)?),
+        vv_seq_batch_op(remote_node_id, seq),
+    ])?;
+
+    Ok(meta)
+}
+
+/// [`apply_snapshot_remote`] 的删除（墓碑）变体：对**远端**节点记账地删除记录。
+///
+/// 语义等价于"对远端节点 bump 的 [`delete_personal`]"：本机分量不被推进（不触发
+/// steady hello → 不回环），记录以 tombstone pmeta 形式保留供后续传播。同时追加
+/// 删除日志（与 [`delete_personal`] 同口径，墓碑按对端 ACK 游标驱动传播）。
+///
+/// 防线同 [`apply_snapshot_remote`]：`remote_node_id != local_node_id`，误用本机
+/// 记账时记录仍落地（保持可用）但**始终打 WARN 日志**。
+pub fn delete_snapshot_remote<S: StorageBackend>(
+    storage: &mut S,
+    remote_node_id: &str,
+    local_node_id: &str,
+    record_key: &str,
+    now_ms: i64,
+) -> SyncResult<DocMeta> {
+    if remote_node_id == local_node_id {
+        log::warn!(
+            "[SNAPSHOT-ACCOUNTING] 快照合入把删除记账对象误为本机 node_id={local_node_id}, \
+             key={record_key}; 本机分量将被推进、可能触发同步回环风暴",
+        );
+    }
+
+    let mut meta = get_personal_meta(storage, record_key)?.unwrap_or_default();
+    let seq = current_vv_seq(storage, remote_node_id)? + 1;
+    meta.vv.insert(remote_node_id.to_string(), seq);
+    meta.ts = now_ms;
+    meta.node_id = Some(remote_node_id.to_string());
+    meta.tombstone = Some(true);
+
+    let (_seq, dlog_ops) = crate::sync::dlog::append_ops(storage, record_key)?;
+    let mut ops = vec![
+        BatchOperation::delete(record_key),
+        BatchOperation::put(personal_meta_key(record_key), serde_json::to_string(&meta)?),
+        vv_seq_batch_op(remote_node_id, seq),
+    ];
+    ops.extend(dlog_ops);
+    storage.batch(ops)?;
 
     Ok(meta)
 }
@@ -215,7 +358,8 @@ pub fn delete_personal<S: StorageBackend>(
     now_ms: i64,
 ) -> SyncResult<DocMeta> {
     let mut meta = get_personal_meta(storage, record_key)?.unwrap_or_default();
-    *meta.vv.entry(node_id.to_string()).or_insert(0) += 1;
+    let seq = current_vv_seq(storage, node_id)? + 1;
+    meta.vv.insert(node_id.to_string(), seq);
     meta.ts = now_ms;
     meta.node_id = Some(node_id.to_string());
     meta.tombstone = Some(true);
@@ -224,6 +368,7 @@ pub fn delete_personal<S: StorageBackend>(
     let mut ops = vec![
         BatchOperation::delete(record_key),
         BatchOperation::put(personal_meta_key(record_key), serde_json::to_string(&meta)?),
+        vv_seq_batch_op(node_id, seq),
     ];
     ops.extend(dlog_ops);
     storage.batch(ops)?;

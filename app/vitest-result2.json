@@ -1,0 +1,5432 @@
+{
+  "numTotalTestSuites": 168,
+  "numPassedTestSuites": 168,
+  "numFailedTestSuites": 0,
+  "numPendingTestSuites": 0,
+  "numTotalTests": 445,
+  "numPassedTests": 445,
+  "numFailedTests": 0,
+  "numPendingTests": 0,
+  "numTodoTests": 0,
+  "startTime": 1786574926165,
+  "success": true,
+  "testResults": [
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "ai-chat background script"
+          ],
+          "fullName": " ai-chat background script 启动时为全部 bot 注册联系人",
+          "status": "passed",
+          "title": "启动时为全部 bot 注册联系人",
+          "duration": 25,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "ai-chat background script"
+          ],
+          "fullName": " ai-chat background script 历史空间域兜底：bot 文档沉在 space:personal 域时仍能读写",
+          "status": "passed",
+          "title": "历史空间域兜底：bot 文档沉在 space:personal 域时仍能读写",
+          "duration": 26,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "ai-chat background script"
+          ],
+          "fullName": " ai-chat background script 自身域与历史域同时有数据：合并去重（自身域优先）",
+          "status": "passed",
+          "title": "自身域与历史域同时有数据：合并去重（自身域优先）",
+          "duration": 12,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "ai-chat background script"
+          ],
+          "fullName": " ai-chat background script codebuddy 后端：消息 → CLI（stream-json 流式）→ 回复",
+          "status": "passed",
+          "title": "codebuddy 后端：消息 → CLI（stream-json 流式）→ 回复",
+          "duration": 37,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "ai-chat background script"
+          ],
+          "fullName": " ai-chat background script codebuddy 未登录：stderr 含 Authentication required 时回复登录指引",
+          "status": "passed",
+          "title": "codebuddy 未登录：stderr 含 Authentication required 时回复登录指引",
+          "duration": 30,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "ai-chat background script"
+          ],
+          "fullName": " ai-chat background script codebuddy 工作目录透传：配置 workdir 时作为第三参传给 sys.execStream（流式）",
+          "status": "passed",
+          "title": "codebuddy 工作目录透传：配置 workdir 时作为第三参传给 sys.execStream（流式）",
+          "duration": 32,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "ai-chat background script"
+          ],
+          "fullName": " ai-chat background script openai 后端：消息 → /chat/completions（带鉴权与 system prompt）→ 回复",
+          "status": "passed",
+          "title": "openai 后端：消息 → /chat/completions（带鉴权与 system prompt）→ 回复",
+          "duration": 31,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "ai-chat background script"
+          ],
+          "fullName": " ai-chat background script 未知 bot 的消息：不调用后端也不回复（联系人孤儿）",
+          "status": "passed",
+          "title": "未知 bot 的消息：不调用后端也不回复（联系人孤儿）",
+          "duration": 31,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "ai-chat background script"
+          ],
+          "fullName": " ai-chat background script 宿主「bot 还在吗」查询：按 bot 列表应答 exists",
+          "status": "passed",
+          "title": "宿主「bot 还在吗」查询：按 bot 列表应答 exists",
+          "duration": 8,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "ai-chat background script"
+          ],
+          "fullName": " ai-chat background script 后端调用异常：回复错误提示而不是静默吞掉",
+          "status": "passed",
+          "title": "后端调用异常：回复错误提示而不是静默吞掉",
+          "duration": 39,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574930105,
+      "endTime": 1786574930376,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/plugins/ai-chat/tests/background.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "createSSEParser"
+          ],
+          "fullName": " createSSEParser 单块完整行：data 提取 delta.content 并累计",
+          "status": "passed",
+          "title": "单块完整行：data 提取 delta.content 并累计",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "createSSEParser"
+          ],
+          "fullName": " createSSEParser 跨块断行：最后一行不完整留待拼接",
+          "status": "passed",
+          "title": "跨块断行：最后一行不完整留待拼接",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "createSSEParser"
+          ],
+          "fullName": " createSSEParser [DONE] 哨兵不产出 token，且不打断后续（若有）",
+          "status": "passed",
+          "title": "[DONE] 哨兵不产出 token，且不打断后续（若有）",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "createSSEParser"
+          ],
+          "fullName": " createSSEParser 非 data 行 / 空行 / 非 JSON data 一律跳过",
+          "status": "passed",
+          "title": "非 data 行 / 空行 / 非 JSON data 一律跳过",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "createSSEParser"
+          ],
+          "fullName": " createSSEParser 残缺 JSON 跨块：拼完整后再解析，不产生 token 也不抛错",
+          "status": "passed",
+          "title": "残缺 JSON 跨块：拼完整后再解析，不产生 token 也不抛错",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "createOllamaStreamParser"
+          ],
+          "fullName": " createOllamaStreamParser 单块完整行：每行一个 JSON 对象",
+          "status": "passed",
+          "title": "单块完整行：每行一个 JSON 对象",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "createOllamaStreamParser"
+          ],
+          "fullName": " createOllamaStreamParser 跨块断行 + 残缺 JSON 拼接",
+          "status": "passed",
+          "title": "跨块断行 + 残缺 JSON 拼接",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "createOllamaStreamParser"
+          ],
+          "fullName": " createOllamaStreamParser 多字节中文跨块不截断不产生乱码",
+          "status": "passed",
+          "title": "多字节中文跨块不截断不产生乱码",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "createOllamaStreamParser"
+          ],
+          "fullName": " createOllamaStreamParser 空行跳过，残缺非法行不抛错",
+          "status": "passed",
+          "title": "空行跳过，残缺非法行不抛错",
+          "duration": 0,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574944236,
+      "endTime": 1786574944239,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/plugins/ai-chat/tests/stream-parser.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "spark-example model"
+          ],
+          "fullName": " spark-example model enforces publish permission to organization admins only",
+          "status": "passed",
+          "title": "enforces publish permission to organization admins only",
+          "duration": 2,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-example model"
+          ],
+          "fullName": " spark-example model enforces 260-char max text constraint",
+          "status": "passed",
+          "title": "enforces 260-char max text constraint",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-example model"
+          ],
+          "fullName": " spark-example model builds comment-reply structure in chronological order",
+          "status": "passed",
+          "title": "builds comment-reply structure in chronological order",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-example model"
+          ],
+          "fullName": " spark-example model hashes post content deterministically (stable sign payload material)",
+          "status": "passed",
+          "title": "hashes post content deterministically (stable sign payload material)",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-example model"
+          ],
+          "fullName": " spark-example model binds sign payload to org + post + author + content hash (anti replay, anti author-swap)",
+          "status": "passed",
+          "title": "binds sign payload to org + post + author + content hash (anti replay, anti author-swap)",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-example model"
+          ],
+          "fullName": " spark-example model builds self-contained app message summary (declarative fallback text)",
+          "status": "passed",
+          "title": "builds self-contained app message summary (declarative fallback text)",
+          "duration": 0,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574944265,
+      "endTime": 1786574944269,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/plugins/spark-example/tests/example.model.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "spark-example service"
+          ],
+          "fullName": " spark-example service declares collection sync strategies before writing (lww config, append-only content)",
+          "status": "passed",
+          "title": "declares collection sync strategies before writing (lww config, append-only content)",
+          "duration": 3,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-example service"
+          ],
+          "fullName": " spark-example service sets creator as super admin on first org config",
+          "status": "passed",
+          "title": "sets creator as super admin on first org config",
+          "duration": 2,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-example service"
+          ],
+          "fullName": " spark-example service creates comments and replies with parent relation",
+          "status": "passed",
+          "title": "creates comments and replies with parent relation",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-example service"
+          ],
+          "fullName": " spark-example service allows admin to create posts but rejects member publishing",
+          "status": "passed",
+          "title": "allows admin to create posts but rejects member publishing",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-example service"
+          ],
+          "fullName": " spark-example service queries by orgId to keep cross-device sync scope stable",
+          "status": "passed",
+          "title": "queries by orgId to keep cross-device sync scope stable",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-example service"
+          ],
+          "fullName": " spark-example service signs post content with domain identity and stores signature on the post",
+          "status": "passed",
+          "title": "signs post content with domain identity and stores signature on the post",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-example service"
+          ],
+          "fullName": " spark-example service degrades to unsigned post when identity:sign is rejected (permission denial must not block)",
+          "status": "passed",
+          "title": "degrades to unsigned post when identity:sign is rejected (permission denial must not block)",
+          "duration": 5,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-example service"
+          ],
+          "fullName": " spark-example service verifies signature via permission-free identity.verify (recomputed payload)",
+          "status": "passed",
+          "title": "verifies signature via permission-free identity.verify (recomputed payload)",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-example service"
+          ],
+          "fullName": " spark-example service rejects verification when stored payload no longer matches post content (tampered content)",
+          "status": "passed",
+          "title": "rejects verification when stored payload no longer matches post content (tampered content)",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-example service"
+          ],
+          "fullName": " spark-example service rejects verification when author field is swapped (payload binds authorRootId)",
+          "status": "passed",
+          "title": "rejects verification when author field is swapped (payload binds authorRootId)",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-example service"
+          ],
+          "fullName": " spark-example service sends app message with mandatory summary and post-card reference after posting",
+          "status": "passed",
+          "title": "sends app message with mandatory summary and post-card reference after posting",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-example service"
+          ],
+          "fullName": " spark-example service degrades to false when app message is denied or rate-limited (posting not blocked)",
+          "status": "passed",
+          "title": "degrades to false when app message is denied or rate-limited (posting not blocked)",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-example service"
+          ],
+          "fullName": " spark-example service returns false when messages module is absent (non-bridge context)",
+          "status": "passed",
+          "title": "returns false when messages module is absent (non-bridge context)",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-example service"
+          ],
+          "fullName": " spark-example service generates app messages locally for unseen timeline posts and dedups across loads",
+          "status": "passed",
+          "title": "generates app messages locally for unseen timeline posts and dedups across loads",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-example service"
+          ],
+          "fullName": " spark-example service stops local generation batch on send failure and retries unmarked posts later",
+          "status": "passed",
+          "title": "stops local generation batch on send failure and retries unmarked posts later",
+          "duration": 1,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574940928,
+      "endTime": 1786574940948,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/plugins/spark-example/tests/example.service.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments background script"
+          ],
+          "fullName": " spark-moments background script 收动态：验签通过 → 落 spark-moments:posts",
+          "status": "passed",
+          "title": "收动态：验签通过 → 落 spark-moments:posts",
+          "duration": 10,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments background script"
+          ],
+          "fullName": " spark-moments background script 收动态：验签失败 → 拒收不落库",
+          "status": "passed",
+          "title": "收动态：验签失败 → 拒收不落库",
+          "duration": 4,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments background script"
+          ],
+          "fullName": " spark-moments background script 收动态：缺 id/authorRootId → 拒收不落库",
+          "status": "passed",
+          "title": "收动态：缺 id/authorRootId → 拒收不落库",
+          "duration": 2,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments background script"
+          ],
+          "fullName": " spark-moments background script 互动第一跳：验签 → 落库 → 广播名单（除互动者）→ 写应用会话通知",
+          "status": "passed",
+          "title": "互动第一跳：验签 → 落库 → 广播名单（除互动者）→ 写应用会话通知",
+          "duration": 4,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments background script"
+          ],
+          "fullName": " spark-moments background script 互动第一跳：验签失败 → 拒收不落库不广播不通知",
+          "status": "passed",
+          "title": "互动第一跳：验签失败 → 拒收不落库不广播不通知",
+          "duration": 3,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments background script"
+          ],
+          "fullName": " spark-moments background script 互动广播（broadcast=true）：本地增删互动，不广播不通知",
+          "status": "passed",
+          "title": "互动广播（broadcast=true）：本地增删互动，不广播不通知",
+          "duration": 4,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments background script"
+          ],
+          "fullName": " spark-moments background script 删除通知（带签名）：验签通过 → 标记本地 deletedAt",
+          "status": "passed",
+          "title": "删除通知（带签名）：验签通过 → 标记本地 deletedAt",
+          "duration": 2,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments background script"
+          ],
+          "fullName": " spark-moments background script 删除通知（带签名）：验签失败 → 不标记",
+          "status": "passed",
+          "title": "删除通知（带签名）：验签失败 → 不标记",
+          "duration": 3,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments background script"
+          ],
+          "fullName": " spark-moments background script 删除通知（旧版无签名）：降级标记 deletedAt",
+          "status": "passed",
+          "title": "删除通知（旧版无签名）：降级标记 deletedAt",
+          "duration": 3,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574937489,
+      "endTime": 1786574937525,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/plugins/spark-moments/tests/background.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments model"
+          ],
+          "fullName": " spark-moments model enforces text length constraints",
+          "status": "passed",
+          "title": "enforces text length constraints",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments model"
+          ],
+          "fullName": " spark-moments model expands public to all contacts",
+          "status": "passed",
+          "title": "expands public to all contacts",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments model"
+          ],
+          "fullName": " spark-moments model private expands to empty (no delivery, local only)",
+          "status": "passed",
+          "title": "private expands to empty (no delivery, local only)",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments model"
+          ],
+          "fullName": " spark-moments model partial keeps only selected (deduped)",
+          "status": "passed",
+          "title": "partial keeps only selected (deduped)",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments model"
+          ],
+          "fullName": " spark-moments model exclude removes selected from all contacts",
+          "status": "passed",
+          "title": "exclude removes selected from all contacts",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments model"
+          ],
+          "fullName": " spark-moments model exclude with empty selection delivers to all (no-op exclusion)",
+          "status": "passed",
+          "title": "exclude with empty selection delivers to all (no-op exclusion)",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments model"
+          ],
+          "fullName": " spark-moments model broadcasts interaction to post recipients except the interaction author",
+          "status": "passed",
+          "title": "broadcasts interaction to post recipients except the interaction author",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments model"
+          ],
+          "fullName": " spark-moments model delete broadcast targets original recipients",
+          "status": "passed",
+          "title": "delete broadcast targets original recipients",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments model"
+          ],
+          "fullName": " spark-moments model binds post sign payload to id + author + content hash + image hashes",
+          "status": "passed",
+          "title": "binds post sign payload to id + author + content hash + image hashes",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments model"
+          ],
+          "fullName": " spark-moments model binds interaction sign payload to postId + type + rootId + text + action",
+          "status": "passed",
+          "title": "binds interaction sign payload to postId + type + rootId + text + action",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments model"
+          ],
+          "fullName": " spark-moments model builds composite interaction key",
+          "status": "passed",
+          "title": "builds composite interaction key",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments model"
+          ],
+          "fullName": " spark-moments model dedupes preserving order",
+          "status": "passed",
+          "title": "dedupes preserving order",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments model"
+          ],
+          "fullName": " spark-moments model sorts timeline newest first and filters deleted",
+          "status": "passed",
+          "title": "sorts timeline newest first and filters deleted",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments model"
+          ],
+          "fullName": " spark-moments model formats relative time",
+          "status": "passed",
+          "title": "formats relative time",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments model"
+          ],
+          "fullName": " spark-moments model hashes content deterministically",
+          "status": "passed",
+          "title": "hashes content deterministically",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments model · 追加层（id/校验/勾选项展开/payload 编解码）"
+          ],
+          "fullName": " spark-moments model · 追加层（id/校验/勾选项展开/payload 编解码） builds moment id with author prefix + ts + rand (unique & format)",
+          "status": "passed",
+          "title": "builds moment id with author prefix + ts + rand (unique & format)",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments model · 追加层（id/校验/勾选项展开/payload 编解码）"
+          ],
+          "fullName": " spark-moments model · 追加层（id/校验/勾选项展开/payload 编解码） validates image count (1–9) and per-image size",
+          "status": "passed",
+          "title": "validates image count (1–9) and per-image size",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments model · 追加层（id/校验/勾选项展开/payload 编解码）"
+          ],
+          "fullName": " spark-moments model · 追加层（id/校验/勾选项展开/payload 编解码） builds delete sign payload binding postId + authorRootId",
+          "status": "passed",
+          "title": "builds delete sign payload binding postId + authorRootId",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments model · 追加层（id/校验/勾选项展开/payload 编解码）"
+          ],
+          "fullName": " spark-moments model · 追加层（id/校验/勾选项展开/payload 编解码） expands contact + group + tag selections into deduped rootId set",
+          "status": "passed",
+          "title": "expands contact + group + tag selections into deduped rootId set",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments model · 追加层（id/校验/勾选项展开/payload 编解码）"
+          ],
+          "fullName": " spark-moments model · 追加层（id/校验/勾选项展开/payload 编解码） expands partial via four-tier decision after selection expansion",
+          "status": "passed",
+          "title": "expands partial via four-tier decision after selection expansion",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments model · 追加层（id/校验/勾选项展开/payload 编解码）"
+          ],
+          "fullName": " spark-moments model · 追加层（id/校验/勾选项展开/payload 编解码） exclude removes group/tag-expanded members from all contacts",
+          "status": "passed",
+          "title": "exclude removes group/tag-expanded members from all contacts",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments model · 追加层（id/校验/勾选项展开/payload 编解码）"
+          ],
+          "fullName": " spark-moments model · 追加层（id/校验/勾选项展开/payload 编解码） private selection yields empty delivery (local only)",
+          "status": "passed",
+          "title": "private selection yields empty delivery (local only)",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments model · 追加层（id/校验/勾选项展开/payload 编解码）"
+          ],
+          "fullName": " spark-moments model · 追加层（id/校验/勾选项展开/payload 编解码） round-trips post payload encode/decode",
+          "status": "passed",
+          "title": "round-trips post payload encode/decode",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments model · 追加层（id/校验/勾选项展开/payload 编解码）"
+          ],
+          "fullName": " spark-moments model · 追加层（id/校验/勾选项展开/payload 编解码） round-trips interaction payload encode/decode",
+          "status": "passed",
+          "title": "round-trips interaction payload encode/decode",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments model · 追加层（id/校验/勾选项展开/payload 编解码）"
+          ],
+          "fullName": " spark-moments model · 追加层（id/校验/勾选项展开/payload 编解码） round-trips delete payload encode/decode",
+          "status": "passed",
+          "title": "round-trips delete payload encode/decode",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments model · 追加层（id/校验/勾选项展开/payload 编解码）"
+          ],
+          "fullName": " spark-moments model · 追加层（id/校验/勾选项展开/payload 编解码） throws on malformed payload",
+          "status": "passed",
+          "title": "throws on malformed payload",
+          "duration": 0,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574943683,
+      "endTime": 1786574943688,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/plugins/spark-moments/tests/moments.model.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments service"
+          ],
+          "fullName": " spark-moments service declares collections before first write",
+          "status": "passed",
+          "title": "declares collections before first write",
+          "duration": 5,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments service"
+          ],
+          "fullName": " spark-moments service publishes public post delivering to all friends",
+          "status": "passed",
+          "title": "publishes public post delivering to all friends",
+          "duration": 3,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments service"
+          ],
+          "fullName": " spark-moments service publishes private post without any delivery (local only)",
+          "status": "passed",
+          "title": "publishes private post without any delivery (local only)",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments service"
+          ],
+          "fullName": " spark-moments service publishes partial post delivering only to selected contacts",
+          "status": "passed",
+          "title": "publishes partial post delivering only to selected contacts",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments service"
+          ],
+          "fullName": " spark-moments service publishes exclude post delivering to all except excluded",
+          "status": "passed",
+          "title": "publishes exclude post delivering to all except excluded",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments service"
+          ],
+          "fullName": " spark-moments service expands group and tag selections to member root ids",
+          "status": "passed",
+          "title": "expands group and tag selections to member root ids",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments service"
+          ],
+          "fullName": " spark-moments service receives a signed post and stores it",
+          "status": "passed",
+          "title": "receives a signed post and stores it",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments service"
+          ],
+          "fullName": " spark-moments service rejects unsigned post",
+          "status": "passed",
+          "title": "rejects unsigned post",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments service"
+          ],
+          "fullName": " spark-moments service rejects post whose stored payload no longer matches content (tampered)",
+          "status": "passed",
+          "title": "rejects post whose stored payload no longer matches content (tampered)",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments service"
+          ],
+          "fullName": " spark-moments service rejects post when signature verification fails",
+          "status": "passed",
+          "title": "rejects post when signature verification fails",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments service"
+          ],
+          "fullName": " spark-moments service author interacting with own post broadcasts to recipients except self",
+          "status": "passed",
+          "title": "author interacting with own post broadcasts to recipients except self",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments service"
+          ],
+          "fullName": " spark-moments service non-author interacting delivers to author only (first hop)",
+          "status": "passed",
+          "title": "non-author interacting delivers to author only (first hop)",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments service"
+          ],
+          "fullName": " spark-moments service author receiving interaction broadcasts to recipients except the interaction author",
+          "status": "passed",
+          "title": "author receiving interaction broadcasts to recipients except the interaction author",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments service"
+          ],
+          "fullName": " spark-moments service rejects interaction with invalid signature (no broadcast)",
+          "status": "passed",
+          "title": "rejects interaction with invalid signature (no broadcast)",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments service"
+          ],
+          "fullName": " spark-moments service author deletes post marking deletedAt and notifying original recipients",
+          "status": "passed",
+          "title": "author deletes post marking deletedAt and notifying original recipients",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments service"
+          ],
+          "fullName": " spark-moments service receiver marks post deleted on delete notification",
+          "status": "passed",
+          "title": "receiver marks post deleted on delete notification",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "spark-moments service"
+          ],
+          "fullName": " spark-moments service loads timeline sorted newest-first filtering deleted",
+          "status": "passed",
+          "title": "loads timeline sorted newest-first filtering deleted",
+          "duration": 1,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574938259,
+      "endTime": 1786574938277,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/plugins/spark-moments/tests/moments.service.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "bridge/protocol 消息编解码"
+          ],
+          "fullName": " bridge/protocol 消息编解码 合法消息经 JSON 往返后可解析",
+          "status": "passed",
+          "title": "合法消息经 JSON 往返后可解析",
+          "duration": 3,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "bridge/protocol 消息编解码"
+          ],
+          "fullName": " bridge/protocol 消息编解码 非法消息一律返回 null",
+          "status": "passed",
+          "title": "非法消息一律返回 null",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "bridge/protocol 消息编解码"
+          ],
+          "fullName": " bridge/protocol 消息编解码 SDK 契约版本协商：v1 下精确一致",
+          "status": "passed",
+          "title": "SDK 契约版本协商：v1 下精确一致",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "bridge 握手"
+          ],
+          "fullName": " bridge 握手 握手成功：connect 返回 sdk 与 ctx",
+          "status": "passed",
+          "title": "握手成功：connect 返回 sdk 与 ctx",
+          "duration": 17,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "bridge 握手"
+          ],
+          "fullName": " bridge 握手 SDK 版本不兼容：宿主回 error，connect 拒绝",
+          "status": "passed",
+          "title": "SDK 版本不兼容：宿主回 error，connect 拒绝",
+          "duration": 15,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "bridge 握手"
+          ],
+          "fullName": " bridge 握手 握手超时：宿主 ready 拒绝",
+          "status": "passed",
+          "title": "握手超时：宿主 ready 拒绝",
+          "duration": 62,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "bridge 握手"
+          ],
+          "fullName": " bridge 握手 伪造 origin 的消息被忽略",
+          "status": "passed",
+          "title": "伪造 origin 的消息被忽略",
+          "duration": 123,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "bridge 握手"
+          ],
+          "fullName": " bridge 握手 伪造 source 的消息被忽略",
+          "status": "passed",
+          "title": "伪造 source 的消息被忽略",
+          "duration": 125,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "bridge 握手"
+          ],
+          "fullName": " bridge 握手 hello 自报身份与桥绑定不一致：握手拒绝 identity-mismatch",
+          "status": "passed",
+          "title": "hello 自报身份与桥绑定不一致：握手拒绝 identity-mismatch",
+          "duration": 30,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "bridge 握手"
+          ],
+          "fullName": " bridge 握手 重复 hello 被忽略（握手已 settle，不二次应答）",
+          "status": "passed",
+          "title": "重复 hello 被忽略（握手已 settle，不二次应答）",
+          "duration": 94,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "bridge 握手"
+          ],
+          "fullName": " bridge 握手 握手未 settle 时 destroy 以 destroyed 拒绝 ready（幂等）",
+          "status": "passed",
+          "title": "握手未 settle 时 destroy 以 destroyed 拒绝 ready（幂等）",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "bridge 握手"
+          ],
+          "fullName": " bridge 握手 destroy 后 ping 立即拒绝（不再等超时）",
+          "status": "passed",
+          "title": "destroy 后 ping 立即拒绝（不再等超时）",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "bridge 握手前调用"
+          ],
+          "fullName": " bridge 握手前调用 握手完成前的 call 一律回 not-ready，不分发给 handler",
+          "status": "passed",
+          "title": "握手完成前的 call 一律回 not-ready，不分发给 handler",
+          "duration": 201,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "bridge call/result 往返"
+          ],
+          "fullName": " bridge call/result 往返 sdk 方法序列化为 call 并 Promise 化等待 result",
+          "status": "passed",
+          "title": "sdk 方法序列化为 call 并 Promise 化等待 result",
+          "duration": 79,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "bridge call/result 往返"
+          ],
+          "fullName": " bridge call/result 往返 handler 抛错：调用方收到带 code 的拒绝",
+          "status": "passed",
+          "title": "handler 抛错：调用方收到带 code 的拒绝",
+          "duration": 47,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "bridge call/result 往返"
+          ],
+          "fullName": " bridge call/result 往返 调用超时：result 未在超时内返回则拒绝",
+          "status": "passed",
+          "title": "调用超时：result 未在超时内返回则拒绝",
+          "duration": 78,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "bridge call/result 往返"
+          ],
+          "fullName": " bridge call/result 往返 伪造 source 的 result 不会解开待决调用",
+          "status": "passed",
+          "title": "伪造 source 的 result 不会解开待决调用",
+          "duration": 140,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "bridge 心跳与事件"
+          ],
+          "fullName": " bridge 心跳与事件 宿主 ping：插件侧自动应答 pong",
+          "status": "passed",
+          "title": "宿主 ping：插件侧自动应答 pong",
+          "duration": 46,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "bridge 心跳与事件"
+          ],
+          "fullName": " bridge 心跳与事件 插件未连接时 ping 超时",
+          "status": "passed",
+          "title": "插件未连接时 ping 超时",
+          "duration": 204,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "bridge 心跳与事件"
+          ],
+          "fullName": " bridge 心跳与事件 事件订阅：宿主 pushEvent 分发到插件回调",
+          "status": "passed",
+          "title": "事件订阅：宿主 pushEvent 分发到插件回调",
+          "duration": 62,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "bridge 心跳与事件"
+          ],
+          "fullName": " bridge 心跳与事件 未订阅的事件不下发",
+          "status": "passed",
+          "title": "未订阅的事件不下发",
+          "duration": 207,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "bridge sys.fetchStream 流式封装（评审 Z1/F3）"
+          ],
+          "fullName": " bridge sys.fetchStream 流式封装（评审 Z1/F3） fetchStream 经 call 取 streamId 后订阅流事件：onChunk 收块、done resolve",
+          "status": "passed",
+          "title": "fetchStream 经 call 取 streamId 后订阅流事件：onChunk 收块、done resolve",
+          "duration": 79,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "bridge sys.fetchStream 流式封装（评审 Z1/F3）"
+          ],
+          "fullName": " bridge sys.fetchStream 流式封装（评审 Z1/F3） status:0 哨兵块令 done 以错误拒绝",
+          "status": "passed",
+          "title": "status:0 哨兵块令 done 以错误拒绝",
+          "duration": 77,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "bridge sys.fetchStream 流式封装（评审 Z1/F3）"
+          ],
+          "fullName": " bridge sys.fetchStream 流式封装（评审 Z1/F3） cancel 后 done 以取消语义 reject（F3）",
+          "status": "passed",
+          "title": "cancel 后 done 以取消语义 reject（F3）",
+          "duration": 32,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "bridge messages 域（应用会话 §20）"
+          ],
+          "fullName": " bridge messages 域（应用会话 §20） sendAppMessage 序列化为 messages.sendAppMessage（payload/card 透传，不含 pluginId/space）",
+          "status": "passed",
+          "title": "sendAppMessage 序列化为 messages.sendAppMessage（payload/card 透传，不含 pluginId/space）",
+          "duration": 47,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "bridge messages 域（应用会话 §20）"
+          ],
+          "fullName": " bridge messages 域（应用会话 §20） listAppMessages/markRead 序列化（无参调用）",
+          "status": "passed",
+          "title": "listAppMessages/markRead 序列化（无参调用）",
+          "duration": 94,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "bridge messages 域（应用会话 §20）"
+          ],
+          "fullName": " bridge messages 域（应用会话 §20） onCardAction：宿主 pushAction 下发到主视图回调；注销后不再接收",
+          "status": "passed",
+          "title": "onCardAction：宿主 pushAction 下发到主视图回调；注销后不再接收",
+          "duration": 112,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "bridge messages 域（应用会话 §20）"
+          ],
+          "fullName": " bridge messages 域（应用会话 §20） triggerCardAction：message-card 视图 action 上行（cardId 取自握手 ctx）",
+          "status": "passed",
+          "title": "triggerCardAction：message-card 视图 action 上行（cardId 取自握手 ctx）",
+          "duration": 48,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "bridge messages 域（应用会话 §20）"
+          ],
+          "fullName": " bridge messages 域（应用会话 §20） triggerCardAction/requestCardHeight：非 message-card 视图（无 cardId）抛错",
+          "status": "passed",
+          "title": "triggerCardAction/requestCardHeight：非 message-card 视图（无 cardId）抛错",
+          "duration": 30,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "bridge messages 域（应用会话 §20）"
+          ],
+          "fullName": " bridge messages 域（应用会话 §20） requestCardHeight：message-card 视图经 event card-resize 上行",
+          "status": "passed",
+          "title": "requestCardHeight：message-card 视图经 event card-resize 上行",
+          "duration": 46,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "bridge feed 域（社交投递层 §9 sdk.feed）"
+          ],
+          "fullName": " bridge feed 域（社交投递层 §9 sdk.feed） deliver 序列化为 feed.deliver（topic/payload/recipients/replyTo/feedId 透传）",
+          "status": "passed",
+          "title": "deliver 序列化为 feed.deliver（topic/payload/recipients/replyTo/feedId 透传）",
+          "duration": 64,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "bridge feed 域（社交投递层 §9 sdk.feed）"
+          ],
+          "fullName": " bridge feed 域（社交投递层 §9 sdk.feed） pull 序列化为 feed.pull（topic/cursor/limit 透传）",
+          "status": "passed",
+          "title": "pull 序列化为 feed.pull（topic/cursor/limit 透传）",
+          "duration": 65,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "bridge feed 域（社交投递层 §9 sdk.feed）"
+          ],
+          "fullName": " bridge feed 域（社交投递层 §9 sdk.feed） onReceive 订阅 FeedReceived 事件并按 topic 前缀过滤派发",
+          "status": "passed",
+          "title": "onReceive 订阅 FeedReceived 事件并按 topic 前缀过滤派发",
+          "duration": 111,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574929905,
+      "endTime": 1786574932250,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/packages/plugin-sdk/tests/bridge.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "onChatReceived（信任内核会话快照）"
+          ],
+          "fullName": " onChatReceived（信任内核会话快照） 新建会话：快照 unreadCount 已含本条消息，不再本地 +1（修复未读翻倍）",
+          "status": "passed",
+          "title": "新建会话：快照 unreadCount 已含本条消息，不再本地 +1（修复未读翻倍）",
+          "duration": 4,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "onChatReceived（信任内核会话快照）"
+          ],
+          "fullName": " onChatReceived（信任内核会话快照） 已有会话：unreadCount 直接取快照回写值，而非本地累加",
+          "status": "passed",
+          "title": "已有会话：unreadCount 直接取快照回写值，而非本地累加",
+          "duration": 2,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "onChatReceived（信任内核会话快照）"
+          ],
+          "fullName": " onChatReceived（信任内核会话快照） 消息按 id 去重入列，未读仍以快照为准",
+          "status": "passed",
+          "title": "消息按 id 去重入列，未读仍以快照为准",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "onChatReceived（信任内核会话快照）"
+          ],
+          "fullName": " onChatReceived（信任内核会话快照） 活跃会话：清零未读，updatedAt 仍取快照",
+          "status": "passed",
+          "title": "活跃会话：清零未读，updatedAt 仍取快照",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "onChatReceived（信任内核会话快照）"
+          ],
+          "fullName": " onChatReceived（信任内核会话快照） 自设备同步来的消息（senderId='me'）：内核不计未读，快照为 0 即保持 0",
+          "status": "passed",
+          "title": "自设备同步来的消息（senderId='me'）：内核不计未读，快照为 0 即保持 0",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "onChatReceived（信任内核会话快照）"
+          ],
+          "fullName": " onChatReceived（信任内核会话快照） 已有会话：merge 快照里的 online（上下线随后续消息快照刷新）",
+          "status": "passed",
+          "title": "已有会话：merge 快照里的 online（上下线随后续消息快照刷新）",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "应用消息内存镜像（§20，非 Tauri 环境）"
+          ],
+          "fullName": " 应用消息内存镜像（§20，非 Tauri 环境） summary 校验先于落库：缺失/空白/超长一律拒绝（错误前缀与内核一致）",
+          "status": "passed",
+          "title": "summary 校验先于落库：缺失/空白/超长一律拒绝（错误前缀与内核一致）",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "应用消息内存镜像（§20，非 Tauri 环境）"
+          ],
+          "fullName": " 应用消息内存镜像（§20，非 Tauri 环境） 写入即建会话（惰性创建），summary 为 trim 后文本，未读 +1",
+          "status": "passed",
+          "title": "写入即建会话（惰性创建），summary 为 trim 后文本，未读 +1",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "应用消息内存镜像（§20，非 Tauri 环境）"
+          ],
+          "fullName": " 应用消息内存镜像（§20，非 Tauri 环境） 限流：同空间同插件 60s 窗口内第 11 条拒绝（rate-limited）",
+          "status": "passed",
+          "title": "限流：同空间同插件 60s 窗口内第 11 条拒绝（rate-limited）",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "应用消息内存镜像（§20，非 Tauri 环境）"
+          ],
+          "fullName": " 应用消息内存镜像（§20，非 Tauri 环境） markRead：应用会话清零未读并把会话内消息批量置 read",
+          "status": "passed",
+          "title": "markRead：应用会话清零未读并把会话内消息批量置 read",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "应用消息内存镜像（§20，非 Tauri 环境）"
+          ],
+          "fullName": " 应用消息内存镜像（§20，非 Tauri 环境） 活跃会话写入：未读保持清零（与 onChatReceived 同口径）",
+          "status": "passed",
+          "title": "活跃会话写入：未读保持清零（与 onChatReceived 同口径）",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "应用消息内存镜像（§20，非 Tauri 环境）"
+          ],
+          "fullName": " 应用消息内存镜像（§20，非 Tauri 环境） 被屏蔽的应用会话不参与未读聚合（取消屏蔽后恢复）",
+          "status": "passed",
+          "title": "被屏蔽的应用会话不参与未读聚合（取消屏蔽后恢复）",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "应用消息内存镜像补充（pluginId 校验 / system 豁免 / 屏蔽聚合 / merge 排序）"
+          ],
+          "fullName": " 应用消息内存镜像补充（pluginId 校验 / system 豁免 / 屏蔽聚合 / merge 排序） pluginId 校验：非法 id 一律拒绝（invalid-plugin-id，与内核错误前缀一致）",
+          "status": "passed",
+          "title": "pluginId 校验：非法 id 一律拒绝（invalid-plugin-id，与内核错误前缀一致）",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "应用消息内存镜像补充（pluginId 校验 / system 豁免 / 屏蔽聚合 / merge 排序）"
+          ],
+          "fullName": " 应用消息内存镜像补充（pluginId 校验 / system 豁免 / 屏蔽聚合 / merge 排序） 内置 system 会话豁免限流（与内核 message_app_send 同口径）",
+          "status": "passed",
+          "title": "内置 system 会话豁免限流（与内核 message_app_send 同口径）",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "应用消息内存镜像补充（pluginId 校验 / system 豁免 / 屏蔽聚合 / merge 排序）"
+          ],
+          "fullName": " 应用消息内存镜像补充（pluginId 校验 / system 豁免 / 屏蔽聚合 / merge 排序） totalUnread/hasUnreadMessages：被屏蔽会话不计入聚合（取消屏蔽恢复）",
+          "status": "passed",
+          "title": "totalUnread/hasUnreadMessages：被屏蔽会话不计入聚合（取消屏蔽恢复）",
+          "duration": 3,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "应用消息内存镜像补充（pluginId 校验 / system 豁免 / 屏蔽聚合 / merge 排序）"
+          ],
+          "fullName": " 应用消息内存镜像补充（pluginId 校验 / system 豁免 / 屏蔽聚合 / merge 排序） mergeAppMessages：按 id 合并后按 createdAt 升序归位（水合期间本地新增不串序）",
+          "status": "passed",
+          "title": "mergeAppMessages：按 id 合并后按 createdAt 升序归位（水合期间本地新增不串序）",
+          "duration": 1,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574940582,
+      "endTime": 1786574940600,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/mock/messages.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "移动端整页 + 导航栈（波次 2）"
+          ],
+          "fullName": " 移动端整页 + 导航栈（波次 2） 消息页：栈1 会话列表 → 点开会话整页（栈2）→ 聊天头 ‹ 返回列表",
+          "status": "passed",
+          "title": "消息页：栈1 会话列表 → 点开会话整页（栈2）→ 聊天头 ‹ 返回列表",
+          "duration": 914,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "移动端整页 + 导航栈（波次 2）"
+          ],
+          "fullName": " 移动端整页 + 导航栈（波次 2） 消息页：重按当前 tab 复位回栈底（reset 不被拖窗补栈逻辑撤销）",
+          "status": "passed",
+          "title": "消息页：重按当前 tab 复位回栈底（reset 不被拖窗补栈逻辑撤销）",
+          "duration": 878,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "移动端整页 + 导航栈（波次 2）"
+          ],
+          "fullName": " 移动端整页 + 导航栈（波次 2） 通讯录页：标签列表 → 成员管理整页 → 点成员开资料卡（导航栈逐层，不叠加抽屉）",
+          "status": "passed",
+          "title": "通讯录页：标签列表 → 成员管理整页 → 点成员开资料卡（导航栈逐层，不叠加抽屉）",
+          "duration": 1197,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "移动端整页 + 导航栈（波次 2）"
+          ],
+          "fullName": " 移动端整页 + 导航栈（波次 2） 我的页：栈1 功能菜单 → 点开模块整页（栈2 带返回栏）→ 返回栏回菜单",
+          "status": "passed",
+          "title": "我的页：栈1 功能菜单 → 点开模块整页（栈2 带返回栏）→ 返回栏回菜单",
+          "duration": 763,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574936045,
+      "endTime": 1786574939797,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/pages/mobile-stack.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "主页面挂载冒烟"
+          ],
+          "fullName": " 主页面挂载冒烟 App 外壳：rail 导航 + 顶栏 + 默认消息页",
+          "status": "passed",
+          "title": "App 外壳：rail 导航 + 顶栏 + 默认消息页",
+          "duration": 203,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "主页面挂载冒烟"
+          ],
+          "fullName": " 主页面挂载冒烟 消息页（桌面）：选中会话后 .conv-list 与聊天区同屏并存",
+          "status": "passed",
+          "title": "消息页（桌面）：选中会话后 .conv-list 与聊天区同屏并存",
+          "duration": 141,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "主页面挂载冒烟"
+          ],
+          "fullName": " 主页面挂载冒烟 通讯录页：左栏列表 + 右侧内容",
+          "status": "passed",
+          "title": "通讯录页：左栏列表 + 右侧内容",
+          "duration": 73,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "主页面挂载冒烟"
+          ],
+          "fullName": " 主页面挂载冒烟 应用页：默认应用列表视图",
+          "status": "passed",
+          "title": "应用页：默认应用列表视图",
+          "duration": 94,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "主页面挂载冒烟"
+          ],
+          "fullName": " 主页面挂载冒烟 设置页：第二栏菜单 + 第三栏模块菜单",
+          "status": "passed",
+          "title": "设置页：第二栏菜单 + 第三栏模块菜单",
+          "duration": 44,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "主页面挂载冒烟"
+          ],
+          "fullName": " 主页面挂载冒烟 我的页：第二栏菜单 + 默认我的资料模块",
+          "status": "passed",
+          "title": "我的页：第二栏菜单 + 默认我的资料模块",
+          "duration": 35,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "主页面挂载冒烟"
+          ],
+          "fullName": " 主页面挂载冒烟 测试页：正常渲染",
+          "status": "passed",
+          "title": "测试页：正常渲染",
+          "duration": 76,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574936433,
+      "endTime": 1786574937099,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/pages/page-mount.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "mobile-nav 移动端导航栈"
+          ],
+          "fullName": " mobile-nav 移动端导航栈 初始为栈深 1 的 root 帧：不可返回，currentPage 即 root",
+          "status": "passed",
+          "title": "初始为栈深 1 的 root 帧：不可返回，currentPage 即 root",
+          "duration": 2,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "mobile-nav 移动端导航栈"
+          ],
+          "fullName": " mobile-nav 移动端导航栈 push 压入详情帧后可返回，pop 回上一栏",
+          "status": "passed",
+          "title": "push 压入详情帧后可返回，pop 回上一栏",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "mobile-nav 移动端导航栈"
+          ],
+          "fullName": " mobile-nav 移动端导航栈 栈深 1 时 pop 为空操作（不会弹穿栈底）",
+          "status": "passed",
+          "title": "栈深 1 时 pop 为空操作（不会弹穿栈底）",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "mobile-nav 移动端导航栈"
+          ],
+          "fullName": " mobile-nav 移动端导航栈 与栈顶同页同参的 push 被去重（连点同一行不叠栈）",
+          "status": "passed",
+          "title": "与栈顶同页同参的 push 被去重（连点同一行不叠栈）",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "mobile-nav 移动端导航栈"
+          ],
+          "fullName": " mobile-nav 移动端导航栈 同页不同参的 push 正常叠栈",
+          "status": "passed",
+          "title": "同页不同参的 push 正常叠栈",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "mobile-nav 移动端导航栈"
+          ],
+          "fullName": " mobile-nav 移动端导航栈 reset 回到栈底；各 tab 栈相互独立",
+          "status": "passed",
+          "title": "reset 回到栈底；各 tab 栈相互独立",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "mobile-nav 移动端导航栈"
+          ],
+          "fullName": " mobile-nav 移动端导航栈 removeFrames 清掉所有匹配帧（含栈中间），栈底 root 恒保留",
+          "status": "passed",
+          "title": "removeFrames 清掉所有匹配帧（含栈中间），栈底 root 恒保留",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "mobile-nav 移动端导航栈"
+          ],
+          "fullName": " mobile-nav 移动端导航栈 lastNavAction：push/pop/reset 分类记录（含触发 tab），消费后不清空",
+          "status": "passed",
+          "title": "lastNavAction：push/pop/reset 分类记录（含触发 tab），消费后不清空",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "mobile-nav 移动端导航栈"
+          ],
+          "fullName": " mobile-nav 移动端导航栈 lastNavAction：removeFrames 命中归类为 reset；空操作（同帧去重 push / 栈深 1 pop / 无匹配 removeFrames）不记录",
+          "status": "passed",
+          "title": "lastNavAction：removeFrames 命中归类为 reset；空操作（同帧去重 push / 栈深 1 pop / 无匹配 removeFrames）不记录",
+          "duration": 0,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574943591,
+      "endTime": 1786574943595,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/stores/mobile-nav.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "ui-layout 移动端断点"
+          ],
+          "fullName": " ui-layout 移动端断点 底部 tab 固定为 消息/通讯录/应用/我的 四项（与 rail 主导航同源 + MinePage）",
+          "status": "passed",
+          "title": "底部 tab 固定为 消息/通讯录/应用/我的 四项（与 rail 主导航同源 + MinePage）",
+          "duration": 2,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "ui-layout 移动端断点"
+          ],
+          "fullName": " ui-layout 移动端断点 jsdom 环境（matchMedia 桩未命中窄屏）默认桌面布局",
+          "status": "passed",
+          "title": "jsdom 环境（matchMedia 桩未命中窄屏）默认桌面布局",
+          "duration": 0,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574944658,
+      "endTime": 1786574944660,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/stores/ui-layout.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "hashGradient"
+          ],
+          "fullName": " hashGradient 同一 seed 恒得同一配色（确定性）",
+          "status": "passed",
+          "title": "同一 seed 恒得同一配色（确定性）",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "hashGradient"
+          ],
+          "fullName": " hashGradient 输出为 135deg 双色渐变格式",
+          "status": "passed",
+          "title": "输出为 135deg 双色渐变格式",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "hashGradient"
+          ],
+          "fullName": " hashGradient 空 seed 兜底为 spark（与调用方约定一致）",
+          "status": "passed",
+          "title": "空 seed 兜底为 spark（与调用方约定一致）",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "hashGradient"
+          ],
+          "fullName": " hashGradient 不同 seed 取到不同配色（常见种子不撞车）",
+          "status": "passed",
+          "title": "不同 seed 取到不同配色（常见种子不撞车）",
+          "duration": 0,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574946434,
+      "endTime": 1786574946436,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/utils/palette.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "firstLetter"
+          ],
+          "fullName": " firstLetter 空串与纯空白归 #",
+          "status": "passed",
+          "title": "空串与纯空白归 #",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "firstLetter"
+          ],
+          "fullName": " firstLetter 英文字母取大写（大小写不敏感）",
+          "status": "passed",
+          "title": "英文字母取大写（大小写不敏感）",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "firstLetter"
+          ],
+          "fullName": " firstLetter 常见汉字按映射表归组",
+          "status": "passed",
+          "title": "常见汉字按映射表归组",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "firstLetter"
+          ],
+          "fullName": " firstLetter 数字/符号/表外生僻字归 #",
+          "status": "passed",
+          "title": "数字/符号/表外生僻字归 #",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "firstLetter"
+          ],
+          "fullName": " firstLetter 忽略前导空白后取首个字符",
+          "status": "passed",
+          "title": "忽略前导空白后取首个字符",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "compareLetters"
+          ],
+          "fullName": " compareLetters 字母按 A..Z 排序",
+          "status": "passed",
+          "title": "字母按 A..Z 排序",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "compareLetters"
+          ],
+          "fullName": " compareLetters # 恒排最后",
+          "status": "passed",
+          "title": "# 恒排最后",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "compareNames"
+          ],
+          "fullName": " compareNames 按拼音序比较汉字（阿 < 包 < 陈）",
+          "status": "passed",
+          "title": "按拼音序比较汉字（阿 < 包 < 陈）",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "compareNames"
+          ],
+          "fullName": " compareNames 同名返回 0，且可用于稳定排序",
+          "status": "passed",
+          "title": "同名返回 0，且可用于稳定排序",
+          "duration": 0,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574945498,
+      "endTime": 1786574945501,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/utils/pinyin.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "compareVersions"
+          ],
+          "fullName": " compareVersions 比较常规 x.y.z 版本",
+          "status": "passed",
+          "title": "比较常规 x.y.z 版本",
+          "duration": 2,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "compareVersions"
+          ],
+          "fullName": " compareVersions 容忍 v 前缀与预发布/构建段",
+          "status": "passed",
+          "title": "容忍 v 前缀与预发布/构建段",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "compareVersions"
+          ],
+          "fullName": " compareVersions 缺段按 0 补齐",
+          "status": "passed",
+          "title": "缺段按 0 补齐",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "compareVersions"
+          ],
+          "fullName": " compareVersions 无法解析时不判定（返回 0）",
+          "status": "passed",
+          "title": "无法解析时不判定（返回 0）",
+          "duration": 0,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574946310,
+      "endTime": 1786574946312,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/utils/version.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "filterVerifiedAnnounces"
+          ],
+          "fullName": " filterVerifiedAnnounces 只保留 verified 条目（pending/failed 不进探索视图）",
+          "status": "passed",
+          "title": "只保留 verified 条目（pending/failed 不进探索视图）",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "filterMyAnnounces（开发者标签页：publisher == 我的 rootId）"
+          ],
+          "fullName": " filterMyAnnounces（开发者标签页：publisher == 我的 rootId） 只保留我发布的条目，不限 verified 态",
+          "status": "passed",
+          "title": "只保留我发布的条目，不限 verified 态",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "filterMyAnnounces（开发者标签页：publisher == 我的 rootId）"
+          ],
+          "fullName": " filterMyAnnounces（开发者标签页：publisher == 我的 rootId） rootId 为空（未加载）时返回空清单",
+          "status": "passed",
+          "title": "rootId 为空（未加载）时返回空清单",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "shuffleAnnounces"
+          ],
+          "fullName": " shuffleAnnounces 洗牌保多重集合、不改入参",
+          "status": "passed",
+          "title": "洗牌保多重集合、不改入参",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "shuffleAnnounces"
+          ],
+          "fullName": " shuffleAnnounces 注入确定性 rng 时结果可复现",
+          "status": "passed",
+          "title": "注入确定性 rng 时结果可复现",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "announceMatches"
+          ],
+          "fullName": " announceMatches 空关键字恒匹配",
+          "status": "passed",
+          "title": "空关键字恒匹配",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "announceMatches"
+          ],
+          "fullName": " announceMatches 按名称 / 简介 / id 匹配，大小写不敏感",
+          "status": "passed",
+          "title": "按名称 / 简介 / id 匹配，大小写不敏感",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "sortAnnouncesByUpdated"
+          ],
+          "fullName": " sortAnnouncesByUpdated 按 updatedAt 降序（搜索稳定序），不改入参",
+          "status": "passed",
+          "title": "按 updatedAt 降序（搜索稳定序），不改入参",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "announceCategoryLabel"
+          ],
+          "fullName": " announceCategoryLabel 语义化分类映射，未知值原样",
+          "status": "passed",
+          "title": "语义化分类映射，未知值原样",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "展示字段（plugin-dist §8.8 corrected 优先）"
+          ],
+          "fullName": " 展示字段（plugin-dist §8.8 corrected 优先） corrected 在场时展示校正值，announce 自报值不展示",
+          "status": "passed",
+          "title": "corrected 在场时展示校正值，announce 自报值不展示",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "展示字段（plugin-dist §8.8 corrected 优先）"
+          ],
+          "fullName": " 展示字段（plugin-dist §8.8 corrected 优先） corrected 缺席时回落 announce 自报值（占位）",
+          "status": "passed",
+          "title": "corrected 缺席时回落 announce 自报值（占位）",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "展示字段（plugin-dist §8.8 corrected 优先）"
+          ],
+          "fullName": " 展示字段（plugin-dist §8.8 corrected 优先） 搜索匹配校正后的名称/简介",
+          "status": "passed",
+          "title": "搜索匹配校正后的名称/简介",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "safeAnnounceIcon（渲染白名单）"
+          ],
+          "fullName": " safeAnnounceIcon（渲染白名单） 仅放行 https 与 data:image/，其余一律空串",
+          "status": "passed",
+          "title": "仅放行 https 与 data:image/，其余一律空串",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "safeAnnounceIcon（渲染白名单）"
+          ],
+          "fullName": " safeAnnounceIcon（渲染白名单） announceDisplayIcon 对 corrected/announce 值统一过白名单",
+          "status": "passed",
+          "title": "announceDisplayIcon 对 corrected/announce 值统一过白名单",
+          "duration": 0,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574944253,
+      "endTime": 1786574944260,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/components/apps/apps-explore.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "isPluginVisibleInSpace"
+          ],
+          "fullName": " isPluginVisibleInSpace ['org']：仅组织空间可见",
+          "status": "passed",
+          "title": "['org']：仅组织空间可见",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "isPluginVisibleInSpace"
+          ],
+          "fullName": " isPluginVisibleInSpace ['personal']：仅个人空间可见",
+          "status": "passed",
+          "title": "['personal']：仅个人空间可见",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "isPluginVisibleInSpace"
+          ],
+          "fullName": " isPluginVisibleInSpace ['personal','org']：两种空间都可见",
+          "status": "passed",
+          "title": "['personal','org']：两种空间都可见",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "isPluginVisibleInSpace"
+          ],
+          "fullName": " isPluginVisibleInSpace 未声明（undefined）：按 ['org'] 处理（spaces-and-plugins §4）",
+          "status": "passed",
+          "title": "未声明（undefined）：按 ['org'] 处理（spaces-and-plugins §4）",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "isPluginVisibleInSpace"
+          ],
+          "fullName": " isPluginVisibleInSpace 空数组视同未声明：按 ['org'] 处理",
+          "status": "passed",
+          "title": "空数组视同未声明：按 ['org'] 处理",
+          "duration": 0,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574946389,
+      "endTime": 1786574946390,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/components/apps/space-visibility.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "splitProxy"
+          ],
+          "fullName": " splitProxy 未设置返回 null",
+          "status": "passed",
+          "title": "未设置返回 null",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "splitProxy"
+          ],
+          "fullName": " splitProxy IPv4 与域名拆分",
+          "status": "passed",
+          "title": "IPv4 与域名拆分",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "splitProxy"
+          ],
+          "fullName": " splitProxy [IPv6]:port 拆分保留方括号",
+          "status": "passed",
+          "title": "[IPv6]:port 拆分保留方括号",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "splitProxy"
+          ],
+          "fullName": " splitProxy 无法拆分返回 null",
+          "status": "passed",
+          "title": "无法拆分返回 null",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "joinProxy"
+          ],
+          "fullName": " joinProxy 拼接并容忍首尾空白",
+          "status": "passed",
+          "title": "拼接并容忍首尾空白",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "joinProxy"
+          ],
+          "fullName": " joinProxy 任一为空视为关闭（空串）",
+          "status": "passed",
+          "title": "任一为空视为关闭（空串）",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "isPortPlausible"
+          ],
+          "fullName": " isPortPlausible 接受 1-65535 纯数字",
+          "status": "passed",
+          "title": "接受 1-65535 纯数字",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "isPortPlausible"
+          ],
+          "fullName": " isPortPlausible 拒绝越界与非数字",
+          "status": "passed",
+          "title": "拒绝越界与非数字",
+          "duration": 0,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574946434,
+      "endTime": 1786574946437,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/components/settings/proxy-settings.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "FriendRequestReceived（按 id upsert）"
+          ],
+          "fullName": " FriendRequestReceived（按 id upsert） 新申请：入列并置未读，updatedAt 取 dto 值",
+          "status": "passed",
+          "title": "新申请：入列并置未读，updatedAt 取 dto 值",
+          "duration": 2,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "FriendRequestReceived（按 id upsert）"
+          ],
+          "fullName": " FriendRequestReceived（按 id upsert） 同 id 重复到达=对端重试的内容更新：替换字段不新增，置未读",
+          "status": "passed",
+          "title": "同 id 重复到达=对端重试的内容更新：替换字段不新增，置未读",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "FriendRequestSent（我发出申请的投递终态）"
+          ],
+          "fullName": " FriendRequestSent（我发出申请的投递终态） pending=已送达：按 id 更新既有 outbox 记录（回填 nickname），不新增",
+          "status": "passed",
+          "title": "pending=已送达：按 id 更新既有 outbox 记录（回填 nickname），不新增",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "FriendRequestSent（我发出申请的投递终态）"
+          ],
+          "fullName": " FriendRequestSent（我发出申请的投递终态） failed=投递失败：置未读提醒（可重试）",
+          "status": "passed",
+          "title": "failed=投递失败：置未读提醒（可重试）",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "FriendRequestSent（我发出申请的投递终态）"
+          ],
+          "fullName": " FriendRequestSent（我发出申请的投递终态） 本地无记录（如另一台设备发出）：按 id 落一条新记录",
+          "status": "passed",
+          "title": "本地无记录（如另一台设备发出）：按 id 落一条新记录",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "FriendProfileUpdated（对端资料同步）"
+          ],
+          "fullName": " FriendProfileUpdated（对端资料同步） 按 rootId 就地更新好友昵称与头像",
+          "status": "passed",
+          "title": "按 rootId 就地更新好友昵称与头像",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "FriendProfileUpdated（对端资料同步）"
+          ],
+          "fullName": " FriendProfileUpdated（对端资料同步） avatar 缺省时保留既有头像；未知 rootId 不产生副作用",
+          "status": "passed",
+          "title": "avatar 缺省时保留既有头像；未知 rootId 不产生副作用",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "OrgInviteUpdated（组织邀请回执）"
+          ],
+          "fullName": " OrgInviteUpdated（组织邀请回执） 本地无记录：按 org:{orgId} 空间落一条我发出的邀请并置未读",
+          "status": "passed",
+          "title": "本地无记录：按 org:{orgId} 空间落一条我发出的邀请并置未读",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "OrgInviteUpdated（组织邀请回执）"
+          ],
+          "fullName": " OrgInviteUpdated（组织邀请回执） 既有记录：按 id 更新 status/updatedAt，不新增",
+          "status": "passed",
+          "title": "既有记录：按 id 更新 status/updatedAt，不新增",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "OrgInviteUpdated（组织邀请回执）"
+          ],
+          "fullName": " OrgInviteUpdated（组织邀请回执） incoming 方向的记录不落入我发出的列表",
+          "status": "passed",
+          "title": "incoming 方向的记录不落入我发出的列表",
+          "duration": 1,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574942217,
+      "endTime": 1786574942222,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/mock/contacts/store.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "AddAccountPage 摄像头扫码"
+          ],
+          "fullName": " AddAccountPage 摄像头扫码 成功取流：video 挂载 srcObject → 解码命中 → 停流进入输入密码步",
+          "status": "passed",
+          "title": "成功取流：video 挂载 srcObject → 解码命中 → 停流进入输入密码步",
+          "duration": 74,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "AddAccountPage 摄像头扫码"
+          ],
+          "fullName": " AddAccountPage 摄像头扫码 手动点击「关闭摄像头」：停全部 track 并释放 video",
+          "status": "passed",
+          "title": "手动点击「关闭摄像头」：停全部 track 并释放 video",
+          "duration": 27,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "AddAccountPage 摄像头扫码"
+          ],
+          "fullName": " AddAccountPage 摄像头扫码 组件卸载（onBeforeUnmount）：停全部 track",
+          "status": "passed",
+          "title": "组件卸载（onBeforeUnmount）：停全部 track",
+          "duration": 6,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574938549,
+      "endTime": 1786574938658,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/add-account.render.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "App.vue DeviceNoticeReceived 新设备通知"
+          ],
+          "fullName": " App.vue DeviceNoticeReceived 新设备通知 新设备通知 → ElMessage warning，文案含设备名与撤销提示",
+          "status": "passed",
+          "title": "新设备通知 → ElMessage warning，文案含设备名与撤销提示",
+          "duration": 63,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "App.vue DeviceNoticeReceived 新设备通知"
+          ],
+          "fullName": " App.vue DeviceNoticeReceived 新设备通知 App 主界面已注册 p2p-event listener（事件桥就绪）",
+          "status": "passed",
+          "title": "App 主界面已注册 p2p-event listener（事件桥就绪）",
+          "duration": 29,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574936916,
+      "endTime": 1786574937008,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/app-device-notice.e2e.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "auto-lock（N 天未使用自动锁定）"
+          ],
+          "fullName": " auto-lock（N 天未使用自动锁定） 默认关闭（0 天）且无活跃记录",
+          "status": "passed",
+          "title": "默认关闭（0 天）且无活跃记录",
+          "duration": 5,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "auto-lock（N 天未使用自动锁定）"
+          ],
+          "fullName": " auto-lock（N 天未使用自动锁定） 设置天数后持久化可读回",
+          "status": "passed",
+          "title": "设置天数后持久化可读回",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "auto-lock（N 天未使用自动锁定）"
+          ],
+          "fullName": " auto-lock（N 天未使用自动锁定） 关闭时永不超时（即使活跃记录久远）",
+          "status": "passed",
+          "title": "关闭时永不超时（即使活跃记录久远）",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "auto-lock（N 天未使用自动锁定）"
+          ],
+          "fullName": " auto-lock（N 天未使用自动锁定） 开启后未超过 N 天不超时",
+          "status": "passed",
+          "title": "开启后未超过 N 天不超时",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "auto-lock（N 天未使用自动锁定）"
+          ],
+          "fullName": " auto-lock（N 天未使用自动锁定） 超过 N 天后超时",
+          "status": "passed",
+          "title": "超过 N 天后超时",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "auto-lock（N 天未使用自动锁定）"
+          ],
+          "fullName": " auto-lock（N 天未使用自动锁定） 边界：恰好满 N 天判定为超时",
+          "status": "passed",
+          "title": "边界：恰好满 N 天判定为超时",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "auto-lock（N 天未使用自动锁定）"
+          ],
+          "fullName": " auto-lock（N 天未使用自动锁定） 开启但无活跃记录（首次装新版）不超时",
+          "status": "passed",
+          "title": "开启但无活跃记录（首次装新版）不超时",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "auto-lock（N 天未使用自动锁定）"
+          ],
+          "fullName": " auto-lock（N 天未使用自动锁定） 活跃时间刷新后重置计时",
+          "status": "passed",
+          "title": "活跃时间刷新后重置计时",
+          "duration": 0,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574945778,
+      "endTime": 1786574945785,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/auto-lock.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "composeCardAvatar（名片码嵌头像合成）"
+          ],
+          "fullName": " composeCardAvatar（名片码嵌头像合成） 合成头像：占比 22%、衬底四向各扩 3px，几何居中对齐",
+          "status": "passed",
+          "title": "合成头像：占比 22%、衬底四向各扩 3px，几何居中对齐",
+          "duration": 7,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "composeCardAvatar（名片码嵌头像合成）"
+          ],
+          "fullName": " composeCardAvatar（名片码嵌头像合成） 无头像回退自动头像：昵称首字 + 哈希渐变衬底（英文首字大写）",
+          "status": "passed",
+          "title": "无头像回退自动头像：昵称首字 + 哈希渐变衬底（英文首字大写）",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "composeCardAvatar（名片码嵌头像合成）"
+          ],
+          "fullName": " composeCardAvatar（名片码嵌头像合成） 无头像回退：中文昵称取首字，空昵称回退「未」",
+          "status": "passed",
+          "title": "无头像回退：中文昵称取首字，空昵称回退「未」",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "composeCardAvatar（名片码嵌头像合成）"
+          ],
+          "fullName": " composeCardAvatar（名片码嵌头像合成） 环境不支持 2D 上下文 → reject 当前环境不支持图片合成",
+          "status": "passed",
+          "title": "环境不支持 2D 上下文 → reject 当前环境不支持图片合成",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "composeCardAvatar（名片码嵌头像合成）"
+          ],
+          "fullName": " composeCardAvatar（名片码嵌头像合成） 二维码图片加载失败 → reject 二维码图片加载失败",
+          "status": "passed",
+          "title": "二维码图片加载失败 → reject 二维码图片加载失败",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "composeCardAvatar（名片码嵌头像合成）"
+          ],
+          "fullName": " composeCardAvatar（名片码嵌头像合成） 头像图片加载失败 → reject 头像图片加载失败",
+          "status": "passed",
+          "title": "头像图片加载失败 → reject 头像图片加载失败",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "composeCardAvatar（名片码嵌头像合成）"
+          ],
+          "fullName": " composeCardAvatar（名片码嵌头像合成） H 级容错：seed 为空时自动头像退用默认渐变种子",
+          "status": "passed",
+          "title": "H 级容错：seed 为空时自动头像退用默认渐变种子",
+          "duration": 1,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574940596,
+      "endTime": 1786574940609,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/card-avatar.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "parseCard"
+          ],
+          "fullName": " parseCard 解析 spark-card JSON（含节点信息）",
+          "status": "passed",
+          "title": "解析 spark-card JSON（含节点信息）",
+          "duration": 2,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "parseCard"
+          ],
+          "fullName": " parseCard 解析不带节点信息的 spark-card JSON",
+          "status": "passed",
+          "title": "解析不带节点信息的 spark-card JSON",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "parseCard"
+          ],
+          "fullName": " parseCard 解析「RootID / PeerId / P2P Addresses」多行文本",
+          "status": "passed",
+          "title": "解析「RootID / PeerId / P2P Addresses」多行文本",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "parseCard"
+          ],
+          "fullName": " parseCard 多行文本中 PeerId 为「未获取」时视为无节点信息",
+          "status": "passed",
+          "title": "多行文本中 PeerId 为「未获取」时视为无节点信息",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "parseCard"
+          ],
+          "fullName": " parseCard 解析裸 64 位十六进制 RootID",
+          "status": "passed",
+          "title": "解析裸 64 位十六进制 RootID",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "parseCard"
+          ],
+          "fullName": " parseCard 空文本 / 无 RootID 返回 null",
+          "status": "passed",
+          "title": "空文本 / 无 RootID 返回 null",
+          "duration": 0,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574945772,
+      "endTime": 1786574945776,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/card.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "command-map 完备性"
+          ],
+          "fullName": " command-map 完备性 index.ts 中所有 call() 直连 channel 均已注册命令名，带参调用参数名等长",
+          "status": "passed",
+          "title": "index.ts 中所有 call() 直连 channel 均已注册命令名，带参调用参数名等长",
+          "duration": 7,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "command-map 完备性"
+          ],
+          "fullName": " command-map 完备性 security-log-list 命令映射存在且 ARG_NAMES 恰为 [limit]（M2 §6.12 limit 透传）",
+          "status": "passed",
+          "title": "security-log-list 命令映射存在且 ARG_NAMES 恰为 [limit]（M2 §6.12 limit 透传）",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "command-map 完备性"
+          ],
+          "fullName": " command-map 完备性 COMMAND_MAP 全部命令名在 src-tauri lib.rs 注册表真实存在（M4 biometric_check 错名回归）",
+          "status": "passed",
+          "title": "COMMAND_MAP 全部命令名在 src-tauri lib.rs 注册表真实存在（M4 biometric_check 错名回归）",
+          "duration": 2,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574930109,
+      "endTime": 1786574930119,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/command-map.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "个人空间扁平分组"
+          ],
+          "fullName": " 个人空间扁平分组 新建/重命名/重排/删除，删除后组内联系人回归未分组",
+          "status": "passed",
+          "title": "新建/重命名/重排/删除，删除后组内联系人回归未分组",
+          "duration": 4,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "组织空间分组树"
+          ],
+          "fullName": " 组织空间分组树 新建根/子节点、同级重排、删除时子节点上移且成员复位",
+          "status": "passed",
+          "title": "新建根/子节点、同级重排、删除时子节点上移且成员复位",
+          "duration": 3,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "组织空间分组树"
+          ],
+          "fullName": " 组织空间分组树 跨级移动（moveOrgGroup）：换父级/移回根层，禁止移入自己的子树",
+          "status": "passed",
+          "title": "跨级移动（moveOrgGroup）：换父级/移回根层，禁止移入自己的子树",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "组织空间分组树"
+          ],
+          "fullName": " 组织空间分组树 桥接上传原序裸值 toIndex（同层前移调整由内核统一做）",
+          "status": "passed",
+          "title": "桥接上传原序裸值 toIndex（同层前移调整由内核统一做）",
+          "duration": 2,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574943928,
+      "endTime": 1786574943938,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/contact-groups.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "好友申请回复桥接"
+          ],
+          "fullName": " 好友申请回复桥接 FriendRequestSent 携 replied 记录置 unread（对方新询问=未读新变化）",
+          "status": "passed",
+          "title": "FriendRequestSent 携 replied 记录置 unread（对方新询问=未读新变化）",
+          "duration": 2,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "好友申请回复桥接"
+          ],
+          "fullName": " 好友申请回复桥接 桥接投递回复：replyRequest 以 (requestId, trim 后 text) 调用，本地先收敛",
+          "status": "passed",
+          "title": "桥接投递回复：replyRequest 以 (requestId, trim 后 text) 调用，本地先收敛",
+          "duration": 20,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "好友申请回复桥接"
+          ],
+          "fullName": " 好友申请回复桥接 过期 FriendRequestSent 事件被丢弃（本地更新快照不被回退）",
+          "status": "passed",
+          "title": "过期 FriendRequestSent 事件被丢弃（本地更新快照不被回退）",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "好友申请回复桥接"
+          ],
+          "fullName": " 好友申请回复桥接 命令拒绝时回滚乐观更新（状态回 replied、thread 摘除）",
+          "status": "passed",
+          "title": "命令拒绝时回滚乐观更新（状态回 replied、thread 摘除）",
+          "duration": 13,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "好友申请回复桥接"
+          ],
+          "fullName": " 好友申请回复桥接 桥接投递询问：askRequest 以 (requestId, trim 后 text) 调用，本地先收敛",
+          "status": "passed",
+          "title": "桥接投递询问：askRequest 以 (requestId, trim 后 text) 调用，本地先收敛",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "好友申请回复桥接"
+          ],
+          "fullName": " 好友申请回复桥接 询问命令拒绝时回滚乐观更新（thread 摘除）",
+          "status": "passed",
+          "title": "询问命令拒绝时回滚乐观更新（thread 摘除）",
+          "duration": 15,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574938160,
+      "endTime": 1786574938211,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/contact-reply.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "handleDeviceNotice（M1 store 层）"
+          ],
+          "fullName": " handleDeviceNotice（M1 store 层） 新设备返回 true 并进待看列表（红点数据源）",
+          "status": "passed",
+          "title": "新设备返回 true 并进待看列表（红点数据源）",
+          "duration": 3,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "handleDeviceNotice（M1 store 层）"
+          ],
+          "fullName": " handleDeviceNotice（M1 store 层） 同 deviceId 重复通知不重复弹（返回 false），仅更新 ts",
+          "status": "passed",
+          "title": "同 deviceId 重复通知不重复弹（返回 false），仅更新 ts",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "handleDeviceNotice（M1 store 层）"
+          ],
+          "fullName": " handleDeviceNotice（M1 store 层） 本机 peerId 的加入通知直接忽略（返回 false）",
+          "status": "passed",
+          "title": "本机 peerId 的加入通知直接忽略（返回 false）",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "handleDeviceNotice（M1 store 层）"
+          ],
+          "fullName": " handleDeviceNotice（M1 store 层） 空 deviceId 的记录忽略",
+          "status": "passed",
+          "title": "空 deviceId 的记录忽略",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "handleDeviceNotice（M1 store 层）"
+          ],
+          "fullName": " handleDeviceNotice（M1 store 层） 多台新设备各自独立计入",
+          "status": "passed",
+          "title": "多台新设备各自独立计入",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "hydrate / persist / markSeen（M1 红点生命周期）"
+          ],
+          "fullName": " hydrate / persist / markSeen（M1 红点生命周期） 重启后可从 localStorage 水合（按身份隔离）",
+          "status": "passed",
+          "title": "重启后可从 localStorage 水合（按身份隔离）",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "hydrate / persist / markSeen（M1 红点生命周期）"
+          ],
+          "fullName": " hydrate / persist / markSeen（M1 红点生命周期） 不同 rootId 的身份隔离：互不串台",
+          "status": "passed",
+          "title": "不同 rootId 的身份隔离：互不串台",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "hydrate / persist / markSeen（M1 红点生命周期）"
+          ],
+          "fullName": " hydrate / persist / markSeen（M1 红点生命周期） markDeviceNoticesSeen 清空待看（进入设备页红点即清）",
+          "status": "passed",
+          "title": "markDeviceNoticesSeen 清空待看（进入设备页红点即清）",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "hydrate / persist / markSeen（M1 红点生命周期）"
+          ],
+          "fullName": " hydrate / persist / markSeen（M1 红点生命周期） 损坏的 localStorage 数据：坏条目被丢弃不拖垮",
+          "status": "passed",
+          "title": "损坏的 localStorage 数据：坏条目被丢弃不拖垮",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "hydrate / persist / markSeen（M1 红点生命周期）"
+          ],
+          "fullName": " hydrate / persist / markSeen（M1 红点生命周期） 水合合并语义（§6-7 竞态）：rootId 未就绪的窗口事件 ∪ 持久化列表去重落盘",
+          "status": "passed",
+          "title": "水合合并语义（§6-7 竞态）：rootId 未就绪的窗口事件 ∪ 持久化列表去重落盘",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "hydrate / persist / markSeen（M1 红点生命周期）"
+          ],
+          "fullName": " hydrate / persist / markSeen（M1 红点生命周期） 水合合并：同 deviceId 冲突取 ts 较新者",
+          "status": "passed",
+          "title": "水合合并：同 deviceId 冲突取 ts 较新者",
+          "duration": 0,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574940710,
+      "endTime": 1786574940719,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/device-notices.store.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "DevicesModule 设备列表渲染（M2）"
+          ],
+          "fullName": " DevicesModule 设备列表渲染（M2） 行容器为 div.mine-list-item（非 button）；撤销按钮仅非本机且未撤销行",
+          "status": "passed",
+          "title": "行容器为 div.mine-list-item（非 button）；撤销按钮仅非本机且未撤销行",
+          "duration": 74,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "DevicesModule 设备列表渲染（M2）"
+          ],
+          "fullName": " DevicesModule 设备列表渲染（M2） 已撤销行：.device-revoked 类 + 唯一「已撤销」info tag，无在线/可更新/新加入/撤销按钮",
+          "status": "passed",
+          "title": "已撤销行：.device-revoked 类 + 唯一「已撤销」info tag，无在线/可更新/新加入/撤销按钮",
+          "duration": 21,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "DevicesModule 设备列表渲染（M2）"
+          ],
+          "fullName": " DevicesModule 设备列表渲染（M2） 详情栏已撤销态：显示「已撤销」标签 + 「撤销时间」行",
+          "status": "passed",
+          "title": "详情栏已撤销态：显示「已撤销」标签 + 「撤销时间」行",
+          "duration": 55,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "DevicesModule 撤销确认与错误映射（M2）"
+          ],
+          "fullName": " DevicesModule 撤销确认与错误映射（M2） 点击撤销弹出 ElMessageBox 确认框：标题/正文/确认钮逐字",
+          "status": "passed",
+          "title": "点击撤销弹出 ElMessageBox 确认框：标题/正文/确认钮逐字",
+          "duration": 28,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "DevicesModule 撤销确认与错误映射（M2）"
+          ],
+          "fullName": " DevicesModule 撤销确认与错误映射（M2） 确认后调用 devices.revoke(peerId)",
+          "status": "passed",
+          "title": "确认后调用 devices.revoke(peerId)",
+          "duration": 31,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "DevicesModule 撤销确认与错误映射（M2）"
+          ],
+          "fullName": " DevicesModule 撤销确认与错误映射（M2） revoke reject 'Cannot revoke current device' → 错误映射：提示本机锁定",
+          "status": "passed",
+          "title": "revoke reject 'Cannot revoke current device' → 错误映射：提示本机锁定",
+          "duration": 62,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "DevicesModule 撤销确认与错误映射（M2）"
+          ],
+          "fullName": " DevicesModule 撤销确认与错误映射（M2） revoke reject 'Device not found' → 错误映射分支",
+          "status": "passed",
+          "title": "revoke reject 'Device not found' → 错误映射分支",
+          "duration": 29,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574934324,
+      "endTime": 1786574934624,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/devices-module.render.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "链接预览桥接（F5）"
+          ],
+          "fullName": " 链接预览桥接（F5） Tauri 下 dto.link 真实元数据替换本地占位",
+          "status": "passed",
+          "title": "Tauri 下 dto.link 真实元数据替换本地占位",
+          "duration": 6,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "链接预览桥接（F5）"
+          ],
+          "fullName": " 链接预览桥接（F5） Tauri 下 dto 无 link 时保留诚实占位",
+          "status": "passed",
+          "title": "Tauri 下 dto 无 link 时保留诚实占位",
+          "duration": 2,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "链接预览桥接（F5）"
+          ],
+          "fullName": " 链接预览桥接（F5） 非 Tauri 环境 buildLinkPreview 给诚实占位（白名单/未知域名/www 前缀）",
+          "status": "passed",
+          "title": "非 Tauri 环境 buildLinkPreview 给诚实占位（白名单/未知域名/www 前缀）",
+          "duration": 1,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574941910,
+      "endTime": 1786574941919,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/link-preview.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "列表行图标渲染（图标组件必须注册，不能仅 setup return）"
+          ],
+          "fullName": " 列表行图标渲染（图标组件必须注册，不能仅 setup return） GroupPanel：功能行与虚拟组行图标渲染出 SVG",
+          "status": "passed",
+          "title": "GroupPanel：功能行与虚拟组行图标渲染出 SVG",
+          "duration": 30,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "列表行图标渲染（图标组件必须注册，不能仅 setup return）"
+          ],
+          "fullName": " 列表行图标渲染（图标组件必须注册，不能仅 setup return） MyCardModule：名片方式行图标渲染出 SVG",
+          "status": "passed",
+          "title": "MyCardModule：名片方式行图标渲染出 SVG",
+          "duration": 28,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "列表行图标渲染（图标组件必须注册，不能仅 setup return）"
+          ],
+          "fullName": " 列表行图标渲染（图标组件必须注册，不能仅 setup return） DevicesModule：设备行图标渲染出 SVG",
+          "status": "passed",
+          "title": "DevicesModule：设备行图标渲染出 SVG",
+          "duration": 18,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574938461,
+      "endTime": 1786574938538,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/list-row-icons.render.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "LoginPage 生物识别自动解锁"
+          ],
+          "fullName": " LoginPage 生物识别自动解锁 设置开 + hasSecret：onMounted 自动 unlock → emit login",
+          "status": "passed",
+          "title": "设置开 + hasSecret：onMounted 自动 unlock → emit login",
+          "duration": 63,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "LoginPage 生物识别自动解锁"
+          ],
+          "fullName": " LoginPage 生物识别自动解锁 user-cancelled：不弹错，保留手动按钮且聚焦密码框",
+          "status": "passed",
+          "title": "user-cancelled：不弹错，保留手动按钮且聚焦密码框",
+          "duration": 27,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "LoginPage 生物识别自动解锁"
+          ],
+          "fullName": " LoginPage 生物识别自动解锁 key-invalidated：设置项自动关闭 + 提示",
+          "status": "passed",
+          "title": "key-invalidated：设置项自动关闭 + 提示",
+          "duration": 36,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "LoginPage 生物识别自动解锁"
+          ],
+          "fullName": " LoginPage 生物识别自动解锁 rootId 标签失配：按 no-secret 处理，关闭设置项 + 提示",
+          "status": "passed",
+          "title": "rootId 标签失配：按 no-secret 处理，关闭设置项 + 提示",
+          "duration": 18,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "LoginPage 生物识别自动解锁"
+          ],
+          "fullName": " LoginPage 生物识别自动解锁 设置未开：不触发生物识别，直接密码登录",
+          "status": "passed",
+          "title": "设置未开：不触发生物识别，直接密码登录",
+          "duration": 40,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574934200,
+      "endTime": 1786574934384,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/login-biometric.m45.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "登录页提交（回车与点击同路径）"
+          ],
+          "fullName": " 登录页提交（回车与点击同路径） 密码框 keydown.enter 触发 login 事件",
+          "status": "passed",
+          "title": "密码框 keydown.enter 触发 login 事件",
+          "duration": 63,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "登录页提交（回车与点击同路径）"
+          ],
+          "fullName": " 登录页提交（回车与点击同路径） 点击登录按钮触发 login 事件",
+          "status": "passed",
+          "title": "点击登录按钮触发 login 事件",
+          "duration": 14,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "登录页提交（回车与点击同路径）"
+          ],
+          "fullName": " 登录页提交（回车与点击同路径） 原生表单提交被拦截（不跳转、不重复触发）",
+          "status": "passed",
+          "title": "原生表单提交被拦截（不跳转、不重复触发）",
+          "duration": 15,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574939941,
+      "endTime": 1786574940034,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/login-enter.render.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "MobileSpaceDrawer 左滑侧边栏"
+          ],
+          "fullName": " MobileSpaceDrawer 左滑侧边栏 打开时渲染空间列表、加入/创建组织、设置入口",
+          "status": "passed",
+          "title": "打开时渲染空间列表、加入/创建组织、设置入口",
+          "duration": 41,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "MobileSpaceDrawer 左滑侧边栏"
+          ],
+          "fullName": " MobileSpaceDrawer 左滑侧边栏 关闭态不渲染抽屉内容",
+          "status": "passed",
+          "title": "关闭态不渲染抽屉内容",
+          "duration": 6,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "MobileSpaceDrawer 左滑侧边栏"
+          ],
+          "fullName": " MobileSpaceDrawer 左滑侧边栏 点击「加入/创建组织」弹出上滑菜单（创建/加入二选一）",
+          "status": "passed",
+          "title": "点击「加入/创建组织」弹出上滑菜单（创建/加入二选一）",
+          "duration": 14,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574941502,
+      "endTime": 1786574941563,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/mobile-space-drawer.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "MobileTabBar 点击切换"
+          ],
+          "fullName": " MobileTabBar 点击切换 点击四个 tab 均向外发出 select 事件并携带正确 id",
+          "status": "passed",
+          "title": "点击四个 tab 均向外发出 select 事件并携带正确 id",
+          "duration": 23,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574937921,
+      "endTime": 1786574937944,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/mobile-tab-bar.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "overlay-stack 覆盖层栈"
+          ],
+          "fullName": " overlay-stack 覆盖层栈 push/pop 成对维护计数，重复 pop 同一 token 安全",
+          "status": "passed",
+          "title": "push/pop 成对维护计数，重复 pop 同一 token 安全",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "overlay-stack 覆盖层栈"
+          ],
+          "fullName": " overlay-stack 覆盖层栈 requestCloseOverlay 仅派发栈顶 token（叠层逐层关闭）",
+          "status": "passed",
+          "title": "requestCloseOverlay 仅派发栈顶 token（叠层逐层关闭）",
+          "duration": 2,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "overlay-stack 覆盖层栈"
+          ],
+          "fullName": " overlay-stack 覆盖层栈 空栈时 requestCloseOverlay 不派发事件",
+          "status": "passed",
+          "title": "空栈时 requestCloseOverlay 不派发事件",
+          "duration": 1,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574945953,
+      "endTime": 1786574945957,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/overlay-stack.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "PasswordUnifyPanel 渲染"
+          ],
+          "fullName": " PasswordUnifyPanel 渲染 banner 显示设密设备",
+          "status": "passed",
+          "title": "banner 显示设密设备",
+          "duration": 61,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "PasswordUnifyPanel 渲染"
+          ],
+          "fullName": " PasswordUnifyPanel 渲染 默认 reason=password_change 不显示「密码已被重置」警告条",
+          "status": "passed",
+          "title": "默认 reason=password_change 不显示「密码已被重置」警告条",
+          "duration": 16,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "PasswordUnifyPanel 提交流（F4 验票不过不许重封）"
+          ],
+          "fullName": " PasswordUnifyPanel 提交流（F4 验票不过不许重封） 验票 ok → unifyPassword 调用 → success + emit done + biometric rebind",
+          "status": "passed",
+          "title": "验票 ok → unifyPassword 调用 → success + emit done + biometric rebind",
+          "duration": 52,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "PasswordUnifyPanel 提交流（F4 验票不过不许重封）"
+          ],
+          "fullName": " PasswordUnifyPanel 提交流（F4 验票不过不许重封） F4：验票失败 → 错误文案、unifyPassword 不得调用",
+          "status": "passed",
+          "title": "F4：验票失败 → 错误文案、unifyPassword 不得调用",
+          "duration": 46,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "PasswordUnifyPanel 提交流（F4 验票不过不许重封）"
+          ],
+          "fullName": " PasswordUnifyPanel 提交流（F4 验票不过不许重封） canSubmit：新密码过短 → 提交按钮禁用",
+          "status": "passed",
+          "title": "canSubmit：新密码过短 → 提交按钮禁用",
+          "duration": 25,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "PasswordUnifyPanel 提交流（F4 验票不过不许重封）"
+          ],
+          "fullName": " PasswordUnifyPanel 提交流（F4 验票不过不许重封） canSubmit：两次新密码不一致 → 提交禁用",
+          "status": "passed",
+          "title": "canSubmit：两次新密码不一致 → 提交禁用",
+          "duration": 24,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574934144,
+      "endTime": 1786574934368,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/password-unify-panel.m45.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "hydratePasswordUnify"
+          ],
+          "fullName": " hydratePasswordUnify status.pending=true → pendingUnify 水合（reason 缺省 password_change）",
+          "status": "passed",
+          "title": "status.pending=true → pendingUnify 水合（reason 缺省 password_change）",
+          "duration": 3,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "hydratePasswordUnify"
+          ],
+          "fullName": " hydratePasswordUnify status.pending=false → pendingUnify 清空",
+          "status": "passed",
+          "title": "status.pending=false → pendingUnify 清空",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "hydratePasswordUnify"
+          ],
+          "fullName": " hydratePasswordUnify api 缺失（非 Tauri）→ 静默返回，pending 清空",
+          "status": "passed",
+          "title": "api 缺失（非 Tauri）→ 静默返回，pending 清空",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "hydratePasswordUnify"
+          ],
+          "fullName": " hydratePasswordUnify status 抛错 → lastError 三态映射",
+          "status": "passed",
+          "title": "status 抛错 → lastError 三态映射",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "verifyPasswordTicket"
+          ],
+          "fullName": " verifyPasswordTicket ok → 返回 {ok:true, newPassword}",
+          "status": "passed",
+          "title": "ok → 返回 {ok:true, newPassword}",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "verifyPasswordTicket"
+          ],
+          "fullName": " verifyPasswordTicket ticket-mismatch → {ok:false} + 不一致文案",
+          "status": "passed",
+          "title": "ticket-mismatch → {ok:false} + 不一致文案",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "verifyPasswordTicket"
+          ],
+          "fullName": " verifyPasswordTicket api 缺失 → {ok:false} + 未接通文案",
+          "status": "passed",
+          "title": "api 缺失 → {ok:false} + 未接通文案",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "unifyPassword"
+          ],
+          "fullName": " unifyPassword 成功 → ack + 清 pending + ElMessage.success",
+          "status": "passed",
+          "title": "成功 → ack + 清 pending + ElMessage.success",
+          "duration": 2,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "unifyPassword"
+          ],
+          "fullName": " unifyPassword 失败 → lastError + ElMessage.error",
+          "status": "passed",
+          "title": "失败 → lastError + ElMessage.error",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "handlePasswordUnifyEvent 三事件"
+          ],
+          "fullName": " handlePasswordUnifyEvent 三事件 PasswordChangeObserved(password_change) → pending + warning（未 ack）",
+          "status": "passed",
+          "title": "PasswordChangeObserved(password_change) → pending + warning（未 ack）",
+          "duration": 11,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "handlePasswordUnifyEvent 三事件"
+          ],
+          "fullName": " handlePasswordUnifyEvent 三事件 PasswordChangeObserved(password_reset) → ElMessageBox.alert 安全警示",
+          "status": "passed",
+          "title": "PasswordChangeObserved(password_reset) → ElMessageBox.alert 安全警示",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "handlePasswordUnifyEvent 三事件"
+          ],
+          "fullName": " handlePasswordUnifyEvent 三事件 PasswordUnificationDone → ack + 清 pending + success",
+          "status": "passed",
+          "title": "PasswordUnificationDone → ack + 清 pending + success",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "handlePasswordUnifyEvent 三事件"
+          ],
+          "fullName": " handlePasswordUnifyEvent 三事件 DeviceOutOfGrace → outOfGrace 落库 + 一次性 alert",
+          "status": "passed",
+          "title": "DeviceOutOfGrace → outOfGrace 落库 + 一次性 alert",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "文案与映射"
+          ],
+          "fullName": " 文案与映射 getOutOfGraceText 按 graceMs 计算天数",
+          "status": "passed",
+          "title": "getOutOfGraceText 按 graceMs 计算天数",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "文案与映射"
+          ],
+          "fullName": " 文案与映射 ticketMismatchText 含对端设备与时间",
+          "status": "passed",
+          "title": "ticketMismatchText 含对端设备与时间",
+          "duration": 1,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574945795,
+      "endTime": 1786574945820,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/password-unify.m45.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "pending-add-contact 添加请求"
+          ],
+          "fullName": " pending-add-contact 添加请求 request 后可被 consume 消费一次",
+          "status": "passed",
+          "title": "request 后可被 consume 消费一次",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "pending-add-contact 添加请求"
+          ],
+          "fullName": " pending-add-contact 添加请求 无请求时 consume 返回 null",
+          "status": "passed",
+          "title": "无请求时 consume 返回 null",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "pending-add-contact 添加请求"
+          ],
+          "fullName": " pending-add-contact 添加请求 后写请求覆盖先写请求（取最近一次意图）",
+          "status": "passed",
+          "title": "后写请求覆盖先写请求（取最近一次意图）",
+          "duration": 0,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574946351,
+      "endTime": 1786574946353,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/pending-add-contact.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "pending-system-section 深链请求"
+          ],
+          "fullName": " pending-system-section 深链请求 request 后可被 consume 消费一次",
+          "status": "passed",
+          "title": "request 后可被 consume 消费一次",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "pending-system-section 深链请求"
+          ],
+          "fullName": " pending-system-section 深链请求 无请求时 consume 返回 null",
+          "status": "passed",
+          "title": "无请求时 consume 返回 null",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "pending-system-section 深链请求"
+          ],
+          "fullName": " pending-system-section 深链请求 后写请求覆盖先写请求（取最近一次意图）",
+          "status": "passed",
+          "title": "后写请求覆盖先写请求（取最近一次意图）",
+          "duration": 0,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574946506,
+      "endTime": 1786574946507,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/pending-system-section.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "三重过滤：grantedPermissions"
+          ],
+          "fullName": " 三重过滤：grantedPermissions 免权限基础调用在空授权下放行",
+          "status": "passed",
+          "title": "免权限基础调用在空授权下放行",
+          "duration": 2,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "三重过滤：grantedPermissions"
+          ],
+          "fullName": " 三重过滤：grantedPermissions 未授权调用抛 Access denied；授权后放行",
+          "status": "passed",
+          "title": "未授权调用抛 Access denied；授权后放行",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "三重过滤：grantedPermissions"
+          ],
+          "fullName": " 三重过滤：grantedPermissions 市场状态读取失败按空清单（最小授权）",
+          "status": "passed",
+          "title": "市场状态读取失败按空清单（最小授权）",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "三重过滤：grantedPermissions"
+          ],
+          "fullName": " 三重过滤：grantedPermissions 未知调用抛 Access denied",
+          "status": "passed",
+          "title": "未知调用抛 Access denied",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "三重过滤：view type 裁剪"
+          ],
+          "fullName": " 三重过滤：view type 裁剪 message-card 仅 docs 只读与验签类（有 storage:write 也拒绝写）",
+          "status": "passed",
+          "title": "message-card 仅 docs 只读与验签类（有 storage:write 也拒绝写）",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "三重过滤：view type 裁剪"
+          ],
+          "fullName": " 三重过滤：view type 裁剪 app 主视图全量（仅 grantedPermissions 过滤）",
+          "status": "passed",
+          "title": "app 主视图全量（仅 grantedPermissions 过滤）",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "三重过滤：当前 space"
+          ],
+          "fullName": " 三重过滤：当前 space manifest 不支持的 space 类型整域拒绝",
+          "status": "passed",
+          "title": "manifest 不支持的 space 类型整域拒绝",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "三重过滤：当前 space"
+          ],
+          "fullName": " 三重过滤：当前 space syncOrganizationData 的 org 实参必须与当前 space 一致",
+          "status": "passed",
+          "title": "syncOrganizationData 的 org 实参必须与当前 space 一致",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "三重过滤：当前 space"
+          ],
+          "fullName": " 三重过滤：当前 space personal 空间下 org 域调用一律拒绝（无 org 实参可校验）",
+          "status": "passed",
+          "title": "personal 空间下 org 域调用一律拒绝（无 org 实参可校验）",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "使用时询问：identity:sign"
+          ],
+          "fullName": " 使用时询问：identity:sign 首次调用弹确认，会话内按 插件名+域名 记忆决定",
+          "status": "passed",
+          "title": "首次调用弹确认，会话内按 插件名+域名 记忆决定",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "使用时询问：identity:sign"
+          ],
+          "fullName": " 使用时询问：identity:sign 用户拒绝签名抛 Access denied",
+          "status": "passed",
+          "title": "用户拒绝签名抛 Access denied",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "使用时询问：identity:sign"
+          ],
+          "fullName": " 使用时询问：identity:sign 并发首调复用同一确认（in-flight），只弹一次框",
+          "status": "passed",
+          "title": "并发首调复用同一确认（in-flight），只弹一次框",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "messages 域（应用会话 §20，pluginId/space 由桥注入）"
+          ],
+          "fullName": " messages 域（应用会话 §20，pluginId/space 由桥注入） message:app 未授权：sendAppMessage/listAppMessages/markRead 一律拒绝",
+          "status": "passed",
+          "title": "message:app 未授权：sendAppMessage/listAppMessages/markRead 一律拒绝",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "messages 域（应用会话 §20，pluginId/space 由桥注入）"
+          ],
+          "fullName": " messages 域（应用会话 §20，pluginId/space 由桥注入） pluginId/space 注入：写入落在绑定身份的应用会话，插件自报一律忽略",
+          "status": "passed",
+          "title": "pluginId/space 注入：写入落在绑定身份的应用会话，插件自报一律忽略",
+          "duration": 4,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "messages 域（应用会话 §20，pluginId/space 由桥注入）"
+          ],
+          "fullName": " messages 域（应用会话 §20，pluginId/space 由桥注入） personal 空间注入：space key 为 personal",
+          "status": "passed",
+          "title": "personal 空间注入：space key 为 personal",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "messages 域（应用会话 §20，pluginId/space 由桥注入）"
+          ],
+          "fullName": " messages 域（应用会话 §20，pluginId/space 由桥注入） message:app 授权通过：listAppMessages/markRead 走绑定身份的应用会话",
+          "status": "passed",
+          "title": "message:app 授权通过：listAppMessages/markRead 走绑定身份的应用会话",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "messages 域（应用会话 §20，pluginId/space 由桥注入）"
+          ],
+          "fullName": " messages 域（应用会话 §20，pluginId/space 由桥注入） message-card 视图：有 message:app 授权也拒绝应用会话读写（仅卡片回调经 action 上行）",
+          "status": "passed",
+          "title": "message-card 视图：有 message:app 授权也拒绝应用会话读写（仅卡片回调经 action 上行）",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "contacts 域（社交投递层 §9.4 contact:read 只读门面）"
+          ],
+          "fullName": " contacts 域（社交投递层 §9.4 contact:read 只读门面） contact:read 未授权：listFriends/listGroups/listTags 一律拒绝",
+          "status": "passed",
+          "title": "contact:read 未授权：listFriends/listGroups/listTags 一律拒绝",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "contacts 域（社交投递层 §9.4 contact:read 只读门面）"
+          ],
+          "fullName": " contacts 域（社交投递层 §9.4 contact:read 只读门面） contact:read 授权：三个只读方法放行，落到内核命令",
+          "status": "passed",
+          "title": "contact:read 授权：三个只读方法放行，落到内核命令",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "contacts 域（社交投递层 §9.4 contact:read 只读门面）"
+          ],
+          "fullName": " contacts 域（社交投递层 §9.4 contact:read 只读门面） message-card 视图：有 contact:read 授权也拒绝（卡片视图不暴露通讯录）",
+          "status": "passed",
+          "title": "message-card 视图：有 contact:read 授权也拒绝（卡片视图不暴露通讯录）",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "contacts 域（社交投递层 §9.4 contact:read 只读门面）"
+          ],
+          "fullName": " contacts 域（社交投递层 §9.4 contact:read 只读门面） 未知 contacts 方法拒绝（未知调用）",
+          "status": "passed",
+          "title": "未知 contacts 方法拒绝（未知调用）",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "feed 域（社交投递层 §9 sdk.feed：deliver 需 feed:deliver，onReceive/pull 免权限）"
+          ],
+          "fullName": " feed 域（社交投递层 §9 sdk.feed：deliver 需 feed:deliver，onReceive/pull 免权限） feed:deliver 未授权：feed.deliver 拒绝",
+          "status": "passed",
+          "title": "feed:deliver 未授权：feed.deliver 拒绝",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "feed 域（社交投递层 §9 sdk.feed：deliver 需 feed:deliver，onReceive/pull 免权限）"
+          ],
+          "fullName": " feed 域（社交投递层 §9 sdk.feed：deliver 需 feed:deliver，onReceive/pull 免权限） feed:deliver 授权：deliver 放行，落到 electronAPI.feed",
+          "status": "passed",
+          "title": "feed:deliver 授权：deliver 放行，落到 electronAPI.feed",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "feed 域（社交投递层 §9 sdk.feed：deliver 需 feed:deliver，onReceive/pull 免权限）"
+          ],
+          "fullName": " feed 域（社交投递层 §9 sdk.feed：deliver 需 feed:deliver，onReceive/pull 免权限） 出站 topic 前缀校验：非本插件前缀拒绝（架构 §8）",
+          "status": "passed",
+          "title": "出站 topic 前缀校验：非本插件前缀拒绝（架构 §8）",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "feed 域（社交投递层 §9 sdk.feed：deliver 需 feed:deliver，onReceive/pull 免权限）"
+          ],
+          "fullName": " feed 域（社交投递层 §9 sdk.feed：deliver 需 feed:deliver，onReceive/pull 免权限） feed.pull 免权限（无 feed:deliver 也放行，接收侧免权限 §9.3）",
+          "status": "passed",
+          "title": "feed.pull 免权限（无 feed:deliver 也放行，接收侧免权限 §9.3）",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "feed 域（社交投递层 §9 sdk.feed：deliver 需 feed:deliver，onReceive/pull 免权限）"
+          ],
+          "fullName": " feed 域（社交投递层 §9 sdk.feed：deliver 需 feed:deliver，onReceive/pull 免权限） B2：pull 跨插件 topic 归属校验——读他人收件箱被拒",
+          "status": "passed",
+          "title": "B2：pull 跨插件 topic 归属校验——读他人收件箱被拒",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "feed 域（社交投递层 §9 sdk.feed：deliver 需 feed:deliver，onReceive/pull 免权限）"
+          ],
+          "fullName": " feed 域（社交投递层 §9 sdk.feed：deliver 需 feed:deliver，onReceive/pull 免权限） message-card 视图无 feed 域（有 feed:deliver 也拒绝）",
+          "status": "passed",
+          "title": "message-card 视图无 feed 域（有 feed:deliver 也拒绝）",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "feed 域（社交投递层 §9 sdk.feed：deliver 需 feed:deliver，onReceive/pull 免权限）"
+          ],
+          "fullName": " feed 域（社交投递层 §9 sdk.feed：deliver 需 feed:deliver，onReceive/pull 免权限） 未知 feed 方法拒绝（未知调用）",
+          "status": "passed",
+          "title": "未知 feed 方法拒绝（未知调用）",
+          "duration": 0,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574942425,
+      "endTime": 1786574942443,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/plugin-bridge-dispatcher.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "pluginSpaceKey（与 mock SpaceKey/桥注入 boundSpaceKey 同口径）"
+          ],
+          "fullName": " pluginSpaceKey（与 mock SpaceKey/桥注入 boundSpaceKey 同口径） 个人空间 personal；组织空间 org:<orgId>",
+          "status": "passed",
+          "title": "个人空间 personal；组织空间 org:<orgId>",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "卡片归属登记"
+          ],
+          "fullName": " 卡片归属登记 登记后可路由送达；卸载后归属失效返回 false",
+          "status": "passed",
+          "title": "登记后可路由送达；卸载后归属失效返回 false",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "卡片归属登记"
+          ],
+          "fullName": " 卡片归属登记 归属不符（他插件/他空间冒用在架 cardId）返回 false",
+          "status": "passed",
+          "title": "归属不符（他插件/他空间冒用在架 cardId）返回 false",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "主视图实例路由"
+          ],
+          "fullName": " 主视图实例路由 主实例未运行：action 丢弃返回 false",
+          "status": "passed",
+          "title": "主实例未运行：action 丢弃返回 false",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "主视图实例路由"
+          ],
+          "fullName": " 主视图实例路由 同插件同空间换实例：后登记覆盖先登记，旧实例迟到的 unregister（=== host 守卫）不误删新实例",
+          "status": "passed",
+          "title": "同插件同空间换实例：后登记覆盖先登记，旧实例迟到的 unregister（=== host 守卫）不误删新实例",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "主视图实例路由"
+          ],
+          "fullName": " 主视图实例路由 空间精确匹配：同插件跨空间各自路由，同 messageId 的 cardId 跨空间不撞",
+          "status": "passed",
+          "title": "空间精确匹配：同插件跨空间各自路由，同 messageId 的 cardId 跨空间不撞",
+          "duration": 1,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574945121,
+      "endTime": 1786574945126,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/plugin-card-actions.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "PluginIframeHost"
+          ],
+          "fullName": " PluginIframeHost init 竞态：快速连续 reload 只留一个活 host（旧代全部销毁）",
+          "status": "passed",
+          "title": "init 竞态：快速连续 reload 只留一个活 host（旧代全部销毁）",
+          "duration": 82,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "PluginIframeHost"
+          ],
+          "fullName": " PluginIframeHost 已停用实例：首帧即覆盖层，不渲染 iframe（插件代码不加载）",
+          "status": "passed",
+          "title": "已停用实例：首帧即覆盖层，不渲染 iframe（插件代码不加载）",
+          "duration": 11,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "PluginIframeHost"
+          ],
+          "fullName": " PluginIframeHost 重新启用：清零停用标记与熔断计数后重新加载",
+          "status": "passed",
+          "title": "重新启用：清零停用标记与熔断计数后重新加载",
+          "duration": 35,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574936987,
+      "endTime": 1786574937115,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/plugin-iframe-host.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "createPluginBackend"
+          ],
+          "fullName": " createPluginBackend exposes runtime.syncOrganizationData and forwards the bound domain",
+          "status": "passed",
+          "title": "exposes runtime.syncOrganizationData and forwards the bound domain",
+          "duration": 6,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "createPluginBackend"
+          ],
+          "fullName": " createPluginBackend exposes identity.sign/verify；sign 带域、verify 免域",
+          "status": "passed",
+          "title": "exposes identity.sign/verify；sign 带域、verify 免域",
+          "duration": 3,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "createPluginBackend"
+          ],
+          "fullName": " createPluginBackend exposes docs.defineCollection and forwards schema with the bound domain",
+          "status": "passed",
+          "title": "exposes docs.defineCollection and forwards schema with the bound domain",
+          "duration": 3,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "createPluginBackend"
+          ],
+          "fullName": " createPluginBackend throws when host API is unavailable",
+          "status": "passed",
+          "title": "throws when host API is unavailable",
+          "duration": 3,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574940169,
+      "endTime": 1786574940185,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/plugin-sdk-browser.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "resolvePluginBaseUrl 平台分支"
+          ],
+          "fullName": " resolvePluginBaseUrl 平台分支 Windows + 生产：http://plugin.localhost",
+          "status": "passed",
+          "title": "Windows + 生产：http://plugin.localhost",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "resolvePluginBaseUrl 平台分支"
+          ],
+          "fullName": " resolvePluginBaseUrl 平台分支 Android + 生产：http://plugin.localhost（真机加载失败的既有 bug 修复）",
+          "status": "passed",
+          "title": "Android + 生产：http://plugin.localhost（真机加载失败的既有 bug 修复）",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "resolvePluginBaseUrl 平台分支"
+          ],
+          "fullName": " resolvePluginBaseUrl 平台分支 macOS / iOS + 生产：plugin://localhost",
+          "status": "passed",
+          "title": "macOS / iOS + 生产：plugin://localhost",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "resolvePluginBaseUrl 平台分支"
+          ],
+          "fullName": " resolvePluginBaseUrl 平台分支 dev（Tauri 真机/桌面）：优先 vite 中间件（局域网 IP），而非 http://plugin.localhost",
+          "status": "passed",
+          "title": "dev（Tauri 真机/桌面）：优先 vite 中间件（局域网 IP），而非 http://plugin.localhost",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "resolvePluginBaseUrl 平台分支"
+          ],
+          "fullName": " resolvePluginBaseUrl 平台分支 repo 形态 id：编码段收成单段，dev 中间件透传",
+          "status": "passed",
+          "title": "repo 形态 id：编码段收成单段，dev 中间件透传",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "buildPluginHostSrcdoc（生产 wire 形态）"
+          ],
+          "fullName": " buildPluginHostSrcdoc（生产 wire 形态） CSP 来源为插件源 origin，不带插件 id 路径段",
+          "status": "passed",
+          "title": "CSP 来源为插件源 origin，不带插件 id 路径段",
+          "duration": 2,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "buildPluginHostSrcdoc（生产 wire 形态）"
+          ],
+          "fullName": " buildPluginHostSrcdoc（生产 wire 形态） repo 形态 id：origin 提取不受编码段影响",
+          "status": "passed",
+          "title": "repo 形态 id：origin 提取不受编码段影响",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "buildPluginHostSrcdoc（生产 wire 形态）"
+          ],
+          "fullName": " buildPluginHostSrcdoc（生产 wire 形态） 注入 mount 引导信息时 script-src 追加 unsafe-inline",
+          "status": "passed",
+          "title": "注入 mount 引导信息时 script-src 追加 unsafe-inline",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "buildPluginHostSrcdoc（生产 wire 形态）"
+          ],
+          "fullName": " buildPluginHostSrcdoc（生产 wire 形态） 非法 id 直接拒绝生成",
+          "status": "passed",
+          "title": "非法 id 直接拒绝生成",
+          "duration": 1,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574945279,
+      "endTime": 1786574945284,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/plugin-source.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "心跳 watchdog"
+          ],
+          "fullName": " 心跳 watchdog 连续 3 次 ping 超时标记无响应，恢复后自动解除",
+          "status": "passed",
+          "title": "连续 3 次 ping 超时标记无响应，恢复后自动解除",
+          "duration": 5,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "心跳 watchdog"
+          ],
+          "fullName": " 心跳 watchdog 无响应累计 3 次触发自动停用（崩溃环）",
+          "status": "passed",
+          "title": "无响应累计 3 次触发自动停用（崩溃环）",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "心跳 watchdog"
+          ],
+          "fullName": " 心跳 watchdog 60s 窗口内 ready 前错误 ≥3 触发自动停用；窗口外不计",
+          "status": "passed",
+          "title": "60s 窗口内 ready 前错误 ≥3 触发自动停用；窗口外不计",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "心跳 watchdog"
+          ],
+          "fullName": " 心跳 watchdog 计数按实例键累计：dispose 重建不清零（崩溃环语义）",
+          "status": "passed",
+          "title": "计数按实例键累计：dispose 重建不清零（崩溃环语义）",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "停用状态持久化"
+          ],
+          "fullName": " 停用状态持久化 disable/enable 与 localStorage 往返；手动重新启用清零计数",
+          "status": "passed",
+          "title": "disable/enable 与 localStorage 往返；手动重新启用清零计数",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "停用状态持久化"
+          ],
+          "fullName": " 停用状态持久化 实例键按 插件+space 隔离",
+          "status": "passed",
+          "title": "实例键按 插件+space 隔离",
+          "duration": 0,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574941653,
+      "endTime": 1786574941662,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/plugin-watchdog.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "个人空间键（rootId）走内核"
+          ],
+          "fullName": " 个人空间键（rootId）走内核 首次读触发 status 水合，缓存异步回填",
+          "status": "passed",
+          "title": "首次读触发 status 水合，缓存异步回填",
+          "duration": 165,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "个人空间键（rootId）走内核"
+          ],
+          "fullName": " 个人空间键（rootId）走内核 status 的 rootId 与键不匹配时不写入缓存",
+          "status": "passed",
+          "title": "status 的 rootId 与键不匹配时不写入缓存",
+          "duration": 15,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "个人空间键（rootId）走内核"
+          ],
+          "fullName": " 个人空间键（rootId）走内核 写：更新缓存并调 updateProfile（空串透传=清除，缺省字段不传），不落 localStorage",
+          "status": "passed",
+          "title": "写：更新缓存并调 updateProfile（空串透传=清除，缺省字段不传），不落 localStorage",
+          "duration": 20,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "个人空间键（rootId）走内核"
+          ],
+          "fullName": " 个人空间键（rootId）走内核 本地写入后水合结果不得覆盖更新鲜的值",
+          "status": "passed",
+          "title": "本地写入后水合结果不得覆盖更新鲜的值",
+          "duration": 12,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "个人空间键（rootId）走内核"
+          ],
+          "fullName": " 个人空间键（rootId）走内核 写成功后清除脏标记，远端 profile-sync 的新值可经事件水合进缓存",
+          "status": "passed",
+          "title": "写成功后清除脏标记，远端 profile-sync 的新值可经事件水合进缓存",
+          "duration": 32,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "org 作用域键（rootId@orgId）走内核（F2b）"
+          ],
+          "fullName": " org 作用域键（rootId@orgId）走内核（F2b） 首次读触发 listMine 水合，成员身份字段异步回填",
+          "status": "passed",
+          "title": "首次读触发 listMine 水合，成员身份字段异步回填",
+          "duration": 14,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "org 作用域键（rootId@orgId）走内核（F2b）"
+          ],
+          "fullName": " org 作用域键（rootId@orgId）走内核（F2b） 写：更新缓存并调 updateMyIdentity（空串透传=清除，缺省字段不传），不落 localStorage",
+          "status": "passed",
+          "title": "写：更新缓存并调 updateMyIdentity（空串透传=清除，缺省字段不传），不落 localStorage",
+          "duration": 5,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "org 作用域键（rootId@orgId）走内核（F2b）"
+          ],
+          "fullName": " org 作用域键（rootId@orgId）走内核（F2b） 写失败回滚展示值并 console.warn",
+          "status": "passed",
+          "title": "写失败回滚展示值并 console.warn",
+          "duration": 10,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "org 作用域键（rootId@orgId）走内核（F2b）"
+          ],
+          "fullName": " org 作用域键（rootId@orgId）走内核（F2b） 旧 localStorage org 键数据被丢弃（开发期以内核水合为准）",
+          "status": "passed",
+          "title": "旧 localStorage org 键数据被丢弃（开发期以内核水合为准）",
+          "duration": 16,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "org 作用域键（rootId@orgId）走内核（F2b）"
+          ],
+          "fullName": " org 作用域键（rootId@orgId）走内核（F2b） 非 Tauri 环境：无 organization API 时读返回默认值、写保留本地值",
+          "status": "passed",
+          "title": "非 Tauri 环境：无 organization API 时读返回默认值、写保留本地值",
+          "duration": 5,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574930023,
+      "endTime": 1786574930318,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/profile-extra.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "decodeQrTextFromImageData（缩放阶梯）"
+          ],
+          "fullName": " decodeQrTextFromImageData（缩放阶梯） 100B 小载荷 1x 直接成功",
+          "status": "passed",
+          "title": "100B 小载荷 1x 直接成功",
+          "duration": 155,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "decodeQrTextFromImageData（缩放阶梯）"
+          ],
+          "fullName": " decodeQrTextFromImageData（缩放阶梯） undefined 载荷（${width}px）原图失败、经阶梯解码成功且内容一致",
+          "status": "passed",
+          "title": "undefined 载荷（${width}px）原图失败、经阶梯解码成功且内容一致",
+          "duration": 144,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "decodeQrTextFromImageData（缩放阶梯）"
+          ],
+          "fullName": " decodeQrTextFromImageData（缩放阶梯） undefined 载荷（${width}px）原图失败、经阶梯解码成功且内容一致",
+          "status": "passed",
+          "title": "undefined 载荷（${width}px）原图失败、经阶梯解码成功且内容一致",
+          "duration": 142,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "decodeQrTextFromImageData（缩放阶梯）"
+          ],
+          "fullName": " decodeQrTextFromImageData（缩放阶梯） undefined 载荷（${width}px）原图失败、经阶梯解码成功且内容一致",
+          "status": "passed",
+          "title": "undefined 载荷（${width}px）原图失败、经阶梯解码成功且内容一致",
+          "duration": 116,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "decodeQrTextFromImageData（缩放阶梯）"
+          ],
+          "fullName": " decodeQrTextFromImageData（缩放阶梯） 非二维码图片返回空串",
+          "status": "passed",
+          "title": "非二维码图片返回空串",
+          "duration": 209,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "decodeQrTextFromImageData（缩放阶梯）"
+          ],
+          "fullName": " decodeQrTextFromImageData（缩放阶梯） 拍屏摩尔纹图：快路径失败、抗摩尔纹路径（面积平均+阈值）解码成功且内容一致",
+          "status": "passed",
+          "title": "拍屏摩尔纹图：快路径失败、抗摩尔纹路径（面积平均+阈值）解码成功且内容一致",
+          "duration": 1765,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "decodeQrTextFromCanvas（摄像头逐帧扫码）"
+          ],
+          "fullName": " decodeQrTextFromCanvas（摄像头逐帧扫码） 干净帧解码命中：canvas 像素经 jsQR 快路径返回内容",
+          "status": "passed",
+          "title": "干净帧解码命中：canvas 像素经 jsQR 快路径返回内容",
+          "duration": 14,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "decodeQrTextFromCanvas（摄像头逐帧扫码）"
+          ],
+          "fullName": " decodeQrTextFromCanvas（摄像头逐帧扫码） 未命中（非二维码帧）返回空串",
+          "status": "passed",
+          "title": "未命中（非二维码帧）返回空串",
+          "duration": 81,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "decodeQrTextFromCanvas（摄像头逐帧扫码）"
+          ],
+          "fullName": " decodeQrTextFromCanvas（摄像头逐帧扫码） getContext 返回 null（无 2D）返回空串，不抛错",
+          "status": "passed",
+          "title": "getContext 返回 null（无 2D）返回空串，不抛错",
+          "duration": 2,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574930105,
+      "endTime": 1786574932734,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/qr-decode.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "RecoverPage 移动端 tab 三态"
+          ],
+          "fullName": " RecoverPage 移动端 tab 三态 移动端渲染两个 tab，默认落在助记词",
+          "status": "passed",
+          "title": "移动端渲染两个 tab，默认落在助记词",
+          "duration": 79,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "RecoverPage 移动端 tab 三态"
+          ],
+          "fullName": " RecoverPage 移动端 tab 三态 pendingRecovery=initiated：延迟恢复 tab 显示「公示中」+ 请求ID",
+          "status": "passed",
+          "title": "pendingRecovery=initiated：延迟恢复 tab 显示「公示中」+ 请求ID",
+          "duration": 43,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "RecoverPage 移动端 tab 三态"
+          ],
+          "fullName": " RecoverPage 移动端 tab 三态 pendingRecovery=vetoed：显示「已否决」",
+          "status": "passed",
+          "title": "pendingRecovery=vetoed：显示「已否决」",
+          "duration": 75,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "RecoverPage 移动端 tab 三态"
+          ],
+          "fullName": " RecoverPage 移动端 tab 三态 pendingRecovery 为空：显示「没有进行中」引导",
+          "status": "passed",
+          "title": "pendingRecovery 为空：显示「没有进行中」引导",
+          "duration": 61,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "RecoverPage PC 端无 tab 回归"
+          ],
+          "fullName": " RecoverPage PC 端无 tab 回归 PC 端（isMobileLayout=false）：不渲染 tab，渲染 recover-deadend 引导",
+          "status": "passed",
+          "title": "PC 端（isMobileLayout=false）：不渲染 tab，渲染 recover-deadend 引导",
+          "duration": 17,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574934052,
+      "endTime": 1786574934327,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/recover-page.m45.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "handleRecoveryP2pEvent"
+          ],
+          "fullName": " handleRecoveryP2pEvent initiated：inbound 落库 + 弹安全提醒，确认按钮触发 root_recovery_veto",
+          "status": "passed",
+          "title": "initiated：inbound 落库 + 弹安全提醒，确认按钮触发 root_recovery_veto",
+          "duration": 27,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "handleRecoveryP2pEvent"
+          ],
+          "fullName": " handleRecoveryP2pEvent vetoed：inbound 清空 + ElMessage.info",
+          "status": "passed",
+          "title": "vetoed：inbound 清空 + ElMessage.info",
+          "duration": 51,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "handleRecoveryP2pEvent"
+          ],
+          "fullName": " handleRecoveryP2pEvent committed：inbound 清空 + pending 卡片清除",
+          "status": "passed",
+          "title": "committed：inbound 清空 + pending 卡片清除",
+          "duration": 13,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "倒计时（fake timers）"
+          ],
+          "fullName": " 倒计时（fake timers） remainingMs 随时间归零，formatRemaining 文案变化",
+          "status": "passed",
+          "title": "remainingMs 随时间归零，formatRemaining 文案变化",
+          "duration": 3,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "状态引用"
+          ],
+          "fullName": " 状态引用 导出 pendingRecovery 引用（前端卡片读取）",
+          "status": "passed",
+          "title": "导出 pendingRecovery 引用（前端卡片读取）",
+          "duration": 0,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574936740,
+      "endTime": 1786574936835,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/recovery-store.m45.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "RootGate 自动锁定门控"
+          ],
+          "fullName": " RootGate 自动锁定门控 开启且超时：调 lock 落回登录页，不渲染主界面，提示重新输密码",
+          "status": "passed",
+          "title": "开启且超时：调 lock 落回登录页，不渲染主界面，提示重新输密码",
+          "duration": 75,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "RootGate 自动锁定门控"
+          ],
+          "fullName": " RootGate 自动锁定门控 开启未超时：进入主界面，不调 lock",
+          "status": "passed",
+          "title": "开启未超时：进入主界面，不调 lock",
+          "duration": 17,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "RootGate 自动锁定门控"
+          ],
+          "fullName": " RootGate 自动锁定门控 自动锁定关闭（默认）：已解锁直接进主界面，不调 lock",
+          "status": "passed",
+          "title": "自动锁定关闭（默认）：已解锁直接进主界面，不调 lock",
+          "duration": 3,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "RootGate 自动锁定门控"
+          ],
+          "fullName": " RootGate 自动锁定门控 已锁定态：直接落登录页，不触发 lock",
+          "status": "passed",
+          "title": "已锁定态：直接落登录页，不触发 lock",
+          "duration": 13,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "RootGate 登录成功刷新最近活跃时间"
+          ],
+          "fullName": " RootGate 登录成功刷新最近活跃时间 解锁成功后 touchLastActiveAt：lastActiveAt 落盘",
+          "status": "passed",
+          "title": "解锁成功后 touchLastActiveAt：lastActiveAt 落盘",
+          "duration": 70,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "RootGate 口令保鲜：指纹来源跳过重刷（两次指纹回归）"
+          ],
+          "fullName": " RootGate 口令保鲜：指纹来源跳过重刷（两次指纹回归） 手动输密码登录（设置开）：storePassword 保鲜照常执行 1 次",
+          "status": "passed",
+          "title": "手动输密码登录（设置开）：storePassword 保鲜照常执行 1 次",
+          "duration": 61,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "RootGate 口令保鲜：指纹来源跳过重刷（两次指纹回归）"
+          ],
+          "fullName": " RootGate 口令保鲜：指纹来源跳过重刷（两次指纹回归） 指纹解锁登录（设置开 + hasSecret）：只弹一次指纹，跳过 storePassword",
+          "status": "passed",
+          "title": "指纹解锁登录（设置开 + hasSecret）：只弹一次指纹，跳过 storePassword",
+          "duration": 50,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574934527,
+      "endTime": 1786574934817,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/root-gate-lock.render.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "SecurityBiometricPanel 开启/关闭流"
+          ],
+          "fullName": " SecurityBiometricPanel 开启/关闭流 开启：填密码点开启 → storePassword + setBiometricUnlockEnabled(true) + 开关出现",
+          "status": "passed",
+          "title": "开启：填密码点开启 → storePassword + setBiometricUnlockEnabled(true) + 开关出现",
+          "duration": 91,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "SecurityBiometricPanel 开启/关闭流"
+          ],
+          "fullName": " SecurityBiometricPanel 开启/关闭流 关闭：开启态拨开关 → delete + setBiometricUnlockEnabled(false)",
+          "status": "passed",
+          "title": "关闭：开启态拨开关 → delete + setBiometricUnlockEnabled(false)",
+          "duration": 57,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "SecurityBiometricPanel 开启/关闭流"
+          ],
+          "fullName": " SecurityBiometricPanel 开启/关闭流 首次开启（hasSecret=false）仍可用：canUseBiometric 不含 hasSecret，密码框/按钮可用",
+          "status": "passed",
+          "title": "首次开启（hasSecret=false）仍可用：canUseBiometric 不含 hasSecret，密码框/按钮可用",
+          "duration": 46,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574933596,
+      "endTime": 1786574933790,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/security-biometric-panel.m45.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "window.electronAPI.devices.securityLogList 冒烟"
+          ],
+          "fullName": " window.electronAPI.devices.securityLogList 冒烟 适配存在：securityLogList 为函数且透传 limit 参数",
+          "status": "passed",
+          "title": "适配存在：securityLogList 为函数且透传 limit 参数",
+          "duration": 2,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "window.electronAPI.devices.securityLogList 冒烟"
+          ],
+          "fullName": " window.electronAPI.devices.securityLogList 冒烟 DTO 形状：key/kind/deviceId/ts 必备，initiated 额外含 deviceName/actor=local",
+          "status": "passed",
+          "title": "DTO 形状：key/kind/deviceId/ts 必备，initiated 额外含 deviceName/actor=local",
+          "duration": 2,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "window.electronAPI.devices.securityLogList 冒烟"
+          ],
+          "fullName": " window.electronAPI.devices.securityLogList 冒烟 键形 security:log:{ts}:{kind}:{deviceId}（同毫秒防覆盖，§4.4 回填一致）",
+          "status": "passed",
+          "title": "键形 security:log:{ts}:{kind}:{deviceId}（同毫秒防覆盖，§4.4 回填一致）",
+          "duration": 0,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574945431,
+      "endTime": 1786574945435,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/security-log-list.smoke.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "SecurityModule 修改密码"
+          ],
+          "fullName": " SecurityModule 修改密码 表单就绪：canSubmit 允许提交，三处输入按 旧/新/确认 顺序渲染",
+          "status": "passed",
+          "title": "表单就绪：canSubmit 允许提交，三处输入按 旧/新/确认 顺序渲染",
+          "duration": 86,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "SecurityModule 修改密码"
+          ],
+          "fullName": " SecurityModule 修改密码 新密码两遍不一致：禁止提交 + 提示错误文案",
+          "status": "passed",
+          "title": "新密码两遍不一致：禁止提交 + 提示错误文案",
+          "duration": 35,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "SecurityModule 修改密码"
+          ],
+          "fullName": " SecurityModule 修改密码 新密码强度不足（<8 位）：禁止提交 + 提示",
+          "status": "passed",
+          "title": "新密码强度不足（<8 位）：禁止提交 + 提示",
+          "duration": 21,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "SecurityModule 修改密码"
+          ],
+          "fullName": " SecurityModule 修改密码 缺当前密码：提示且不调 changePassword",
+          "status": "passed",
+          "title": "缺当前密码：提示且不调 changePassword",
+          "duration": 20,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "SecurityModule 修改密码"
+          ],
+          "fullName": " SecurityModule 修改密码 改密成功：调 changePassword(old, new)，清空输入，成功提示",
+          "status": "passed",
+          "title": "改密成功：调 changePassword(old, new)，清空输入，成功提示",
+          "duration": 35,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "SecurityModule 修改密码"
+          ],
+          "fullName": " SecurityModule 修改密码 改密失败（InvalidPassword）：错误文案透传，不清空输入",
+          "status": "passed",
+          "title": "改密失败（InvalidPassword）：错误文案透传，不清空输入",
+          "duration": 21,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "SecurityModule N 天自动锁定"
+          ],
+          "fullName": " SecurityModule N 天自动锁定 选择档位保存到 localStorage 并提示",
+          "status": "passed",
+          "title": "选择档位保存到 localStorage 并提示",
+          "duration": 55,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "SecurityModule N 天自动锁定"
+          ],
+          "fullName": " SecurityModule N 天自动锁定 关闭档位保存为 0",
+          "status": "passed",
+          "title": "关闭档位保存为 0",
+          "duration": 37,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574934509,
+      "endTime": 1786574934820,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/security-module.render.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "未读角标系统桥接（F4）"
+          ],
+          "fullName": " 未读角标系统桥接（F4） Tauri 环境下 totalUnread 变化调用 system.setBadge(n)，清零后桥接 0",
+          "status": "passed",
+          "title": "Tauri 环境下 totalUnread 变化调用 system.setBadge(n)，清零后桥接 0",
+          "duration": 5,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "未读角标系统桥接（F4）"
+          ],
+          "fullName": " 未读角标系统桥接（F4） 免打扰会话不计入桥接未读数",
+          "status": "passed",
+          "title": "免打扰会话不计入桥接未读数",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "未读角标系统桥接（F4）"
+          ],
+          "fullName": " 未读角标系统桥接（F4） 非 Tauri 环境不触达 system.setBadge（仅更新标题）",
+          "status": "passed",
+          "title": "非 Tauri 环境不触达 system.setBadge（仅更新标题）",
+          "duration": 1,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574942313,
+      "endTime": 1786574942320,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/unread-badge.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "更新就绪弹窗（use-updater）"
+          ],
+          "fullName": " 更新就绪弹窗（use-updater） ready 事件弹确认框，确认后调 applyRestart",
+          "status": "passed",
+          "title": "ready 事件弹确认框，确认后调 applyRestart",
+          "duration": 13,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "更新就绪弹窗（use-updater）"
+          ],
+          "fullName": " 更新就绪弹窗（use-updater） 取消/关闭弹窗不调 applyRestart",
+          "status": "passed",
+          "title": "取消/关闭弹窗不调 applyRestart",
+          "duration": 14,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "更新就绪弹窗（use-updater）"
+          ],
+          "fullName": " 更新就绪弹窗（use-updater） applyRestart 失败（非取消）提示错误",
+          "status": "passed",
+          "title": "applyRestart 失败（非取消）提示错误",
+          "duration": 16,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "更新就绪弹窗（use-updater）"
+          ],
+          "fullName": " 更新就绪弹窗（use-updater） 无桥接时静默不订阅",
+          "status": "passed",
+          "title": "无桥接时静默不订阅",
+          "duration": 14,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "设置→关于·手动更新"
+          ],
+          "fullName": " 设置→关于·手动更新 status 回填版本与已就绪更新，出现「重启安装」按钮",
+          "status": "passed",
+          "title": "status 回填版本与已就绪更新，出现「重启安装」按钮",
+          "duration": 108,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "设置→关于·手动更新"
+          ],
+          "fullName": " 设置→关于·手动更新 检查更新：有更新自动下载并就绪，出现「重启安装」按钮",
+          "status": "passed",
+          "title": "检查更新：有更新自动下载并就绪，出现「重启安装」按钮",
+          "duration": 63,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "设置→关于·手动更新"
+          ],
+          "fullName": " 设置→关于·手动更新 检查更新：已是最新时不下载",
+          "status": "passed",
+          "title": "检查更新：已是最新时不下载",
+          "duration": 63,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "设置→关于·手动更新"
+          ],
+          "fullName": " 设置→关于·手动更新 未配置更新源时「检查更新」按钮禁用",
+          "status": "passed",
+          "title": "未配置更新源时「检查更新」按钮禁用",
+          "duration": 24,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574934658,
+      "endTime": 1786574934975,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/renderer/updater.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "",
+            "promptBiometricBind"
+          ],
+          "fullName": " promptBiometricBind 满足条件：确认后调用 storePassword(登录口令) 并开启设置项",
+          "status": "passed",
+          "title": "满足条件：确认后调用 storePassword(登录口令) 并开启设置项",
+          "duration": 27,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "promptBiometricBind"
+          ],
+          "fullName": " promptBiometricBind 已绑定 hasSecret：不弹窗",
+          "status": "passed",
+          "title": "已绑定 hasSecret：不弹窗",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "promptBiometricBind"
+          ],
+          "fullName": " promptBiometricBind 生物识别设置项已开启：不弹窗",
+          "status": "passed",
+          "title": "生物识别设置项已开启：不弹窗",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "promptBiometricBind"
+          ],
+          "fullName": " promptBiometricBind 已选不再提示：不弹窗",
+          "status": "passed",
+          "title": "已选不再提示：不弹窗",
+          "duration": 1,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "promptBiometricBind"
+          ],
+          "fullName": " promptBiometricBind PC 端：不弹窗",
+          "status": "passed",
+          "title": "PC 端：不弹窗",
+          "duration": 0,
+          "failureMessages": []
+        },
+        {
+          "ancestorTitles": [
+            "",
+            "promptBiometricBind"
+          ],
+          "fullName": " promptBiometricBind 用户取消系统认证：静默返回 false，设置项不变",
+          "status": "passed",
+          "title": "用户取消系统认证：静默返回 false，设置项不变",
+          "duration": 0,
+          "failureMessages": []
+        }
+      ],
+      "startTime": 1786574941794,
+      "endTime": 1786574941823,
+      "status": "passed",
+      "message": "",
+      "name": "D:/workspace/spark/code/app/src/tests/unit/utils/biometric-prompt.test.ts"
+    }
+  ]
+}

@@ -84,6 +84,7 @@ impl KernelDmHandler {
                 _ => None,
             }
         };
+        let file_updated_at_before = file.updated_at;
         if crate::identity::update_profile(
             &mut file,
             &password,
@@ -96,6 +97,16 @@ impl KernelDmHandler {
         .is_err()
         {
             return false;
+        }
+        // 时钟收敛：内容一致（patch 未推进 updatedAt）而对端时间戳较新时，
+        // 采纳对端时间戳。否则双方 updatedAt 永不相等，「较新方回发本机快照」
+        // 的握手语义会无限互发（真机连接态 100% CPU 根因之二；内容差异本身
+        // 一轮即可收敛，残余循环纯由时钟不等驱动）。
+        if file.updated_at == file_updated_at_before
+            && updated_at > 0
+            && (updated_at as u64) > file.updated_at
+        {
+            file.updated_at = updated_at as u64;
         }
         let Ok(text) = serde_json::to_string_pretty(&file) else {
             return false;
@@ -180,6 +191,16 @@ impl KernelDmHandler {
         .is_err()
         {
             return;
+        }
+        // 时钟收敛（同 apply_self_profile）：内容未变（patch 未推进 updatedAt）
+        // 而 sled 胜者时间戳较新时采纳之，防双方 updatedAt 永不相等导致的
+        // profile-sync 无限互发。
+        if file.updated_at == file_ts_before
+            && let Some(ts) = sled_ts
+            && ts > 0
+            && (ts as u64) > file.updated_at
+        {
+            file.updated_at = ts as u64;
         }
         log::info!(
             "[PROFILE_CHAIN] apply_profile_from_sled | file.updated_at {} -> {} | sled pmeta.ts={:?} | sig={:?}",

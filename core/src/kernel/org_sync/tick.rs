@@ -755,6 +755,40 @@ mod tests {
         assert_eq!(excluded, d1, "排除键的记录不参与 digest");
     }
 
+    /// 快照合入对端记账 → 本机 digest 不变（风暴抑制）：旧通道（contact-sync /
+    /// conv-sync / device-sync）合入时记账到对端设备（remote_peer_id）而非本机，
+    /// 本机分量不被推进 → steady hello 不触发 → 消除双向回环风暴。
+    /// 对照：若误用本机 node 记账（旧 bug），本机 digest 被推进 → 触发风暴。
+    #[test]
+    fn snapshot_remote_accounting_does_not_bump_local_digest() {
+        let mut s = MemoryStorage::new();
+        let d0 = local_personal_write_digest(&s, "node-a", None);
+        assert_eq!(d0, 0);
+
+        // 对端记账（remote_peer_id 记账）→ 本机 node-a digest 不变
+        put_personal(&mut s, "node-b", "ct:friend:x", "\"v1\"", 1000).unwrap();
+        put_personal(&mut s, "node-b", "ct:tag:t1", "\"v2\"", 1001).unwrap();
+        assert_eq!(
+            local_personal_write_digest(&s, "node-a", None),
+            d0,
+            "对端记账不得推进本机分量（防回声）"
+        );
+
+        // 数据仍可见：记录 pmeta 带对端分量，category vv 折叠含对端 → 对端补推收敛
+        let meta = crate::sync::personal::get_personal_meta(&s, "ct:friend:x")
+            .unwrap()
+            .expect("对端记账的合入仍应落 pmeta");
+        assert_eq!(meta.vv.get("node-b"), Some(&1), "账记到对端设备分量");
+        assert_eq!(meta.vv.get("node-a"), None, "本机分量不被推进");
+
+        // 对照（旧 bug 行为）：误用本机记账 → digest 被推进 → 风暴前兆
+        put_personal(&mut s, "node-a", "ct:friend:z", "\"v3\"", 1002).unwrap();
+        assert!(
+            local_personal_write_digest(&s, "node-a", None) > d0,
+            "误用本机记账会推进 digest（触发回环，须避免）"
+        );
+    }
+
     /// 稳态 hello 判定：首次观察只建基线（不发）；本机写入 digest 变化即
     /// 触发；未变未到点不发；到达周期兜底间隔发；发送后重新计时。
     #[test]

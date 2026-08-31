@@ -12,7 +12,8 @@ use spark_core::identity::crypto::{
 };
 use spark_core::identity::derive::{derive_domain_identity, derive_root_identity, domain_indices};
 use spark_core::identity::file::{
-    IdentityFile, migrate_v1_to_v2, unlock_identity, validate_nickname,
+    CompactBackupFile, IdentityFile, decode_compact_backup, migrate_v1_to_v2, unlock_identity,
+    validate_nickname,
 };
 use spark_core::identity::mnemonic::{Wordlist, parse_mnemonic};
 use spark_core::identity::slip10::format_derivation_path;
@@ -147,6 +148,173 @@ fn pbkdf2_v1_exact_and_roundtrip() {
     let k1 = pbkdf2_v1_key(password, &salt);
     let k2 = pbkdf2_v1_key(password, &salt);
     assert_eq!(k1, k2);
+}
+
+// =============================================================================
+// 备份码 v2 紧凑格式向量（identity.md §7 条目 6–8；qr-backup-payload-compression §8.1）
+//
+// CompactBackupFile / build_compact_backup / decode_compact_backup 已落地；以下
+// backup_code_v2_* 与 compact_backup_file_serialize_and_decode_framework 断言字节级
+// 关系，其中框架测试核验 serde 实际输出字段序 + 重建磁盘文件 + 派生公钥补全。
+// =============================================================================
+
+/// 备份码 v2 载荷：base64 字段与 scryptV2 基准线形字节级一致（确定性）。
+/// salt/iv/data/authTag/publicKey 的 base64 是同一份字节的不同编码，
+/// 必须与 identity.json 的 `scryptV2`（hex）及 `backupCodeV2`（base64）逐字节对应。
+#[test]
+fn backup_code_v2_base64_matches_scrypt_benchmark() {
+    let v = vectors();
+    let bc = &v["backupCodeV2"];
+    let sv = &v["scryptV2"];
+    let rv = &v["rootIdentityChinese"];
+
+    // base64 ↔ hex 同源往返（CompactBackupFile base64 ↔ IdentityFile hex）
+    let b64 = |b: &[u8]| base64_encode(b);
+    assert_eq!(b64(&hex::decode(sv["saltHex"].as_str().unwrap()).unwrap()), bc["saltBase64"]);
+    assert_eq!(b64(&hex::decode(sv["ivHex"].as_str().unwrap()).unwrap()), bc["ivBase64"]);
+    assert_eq!(b64(&hex::decode(sv["ciphertextHex"].as_str().unwrap()).unwrap()), bc["dataBase64"]);
+    assert_eq!(b64(&hex::decode(sv["authTagHex"].as_str().unwrap()).unwrap()), bc["authTagBase64"]);
+    // v2 码重建磁盘 IdentityFile 时补全的 publicKeyHex = 从助记词派生值（期望断言）
+    assert_eq!(b64(&hex::decode(rv["publicKeyHex"].as_str().unwrap()).unwrap()), bc["expectedDerivedPublicKeyBase64"]);
+    assert_eq!(rv["publicKeyHex"].as_str().unwrap(), bc["expectedDerivedPublicKeyHex"].as_str().unwrap());
+
+    // 反向：base64 → hex 回到磁盘 IdentityFile 的 hex 字段
+    let hx = |s: &str| base64_decode(s);
+    assert_eq!(hex::encode(hx(bc["saltBase64"].as_str().unwrap())), sv["saltHex"].as_str().unwrap());
+    assert_eq!(hex::encode(hx(bc["ivBase64"].as_str().unwrap())), sv["ivHex"].as_str().unwrap());
+    assert_eq!(hex::encode(hx(bc["dataBase64"].as_str().unwrap())), sv["ciphertextHex"].as_str().unwrap());
+    assert_eq!(hex::encode(hx(bc["authTagBase64"].as_str().unwrap())), sv["authTagHex"].as_str().unwrap());
+}
+
+/// 备份码 v2 载荷可解密出与 scryptV2 相同的明文 payload（字节级）。
+#[test]
+fn backup_code_v2_decrypts_to_same_payload() {
+    let v = vectors();
+    let bc = &v["backupCodeV2"];
+    let sv = &v["scryptV2"];
+
+    let salt = base64_decode(bc["saltBase64"].as_str().unwrap());
+    let iv = base64_decode(bc["ivBase64"].as_str().unwrap());
+    let data = base64_decode(bc["dataBase64"].as_str().unwrap());
+    let tag = base64_decode(bc["authTagBase64"].as_str().unwrap());
+    let password = bc["password"].as_str().unwrap();
+
+    let back = decrypt_v2(&data, &tag, password, &salt, &iv).unwrap();
+    // 与磁盘 v2 向量同源明文（备份码重建磁盘文件后解锁结果一致）
+    assert_eq!(back, sv["plaintextJson"].as_str().unwrap().as_bytes());
+    // 错误密码必须失败（fail-closed）
+    assert!(decrypt_v2(&data, &tag, "wrong", &salt, &iv).is_err());
+}
+
+/// 编码往返：`CompactBackupFile` base64 字段与 `IdentityFile` hex 字段同源字节往返一致。
+/// 即：同一份字节先 hex 落磁盘、后 base64 进备份码，二者解码后字节完全一致。
+#[test]
+fn backup_code_v2_hex_base64_same_source_roundtrip() {
+    let v = vectors();
+    let bc = &v["backupCodeV2"];
+
+    // 对 4 个加密封装字段逐一验证：hex→bytes→base64 与向量 base64 一致
+    for (hex_f, b64_f) in [
+        ("saltHex", "saltBase64"),
+        ("ivHex", "ivBase64"),
+        ("ciphertextHex", "dataBase64"),
+        ("authTagHex", "authTagBase64"),
+    ] {
+        let hex_s = bc[hex_f].as_str().unwrap();
+        let b64_s = bc[b64_f].as_str().unwrap();
+        let bytes = hex::decode(hex_s).unwrap();
+        assert_eq!(base64_encode(&bytes), b64_s, "{hex_f} → {b64_f}");
+        assert_eq!(hex::encode(base64_decode(b64_s)), hex_s, "{b64_f} → {hex_f}");
+    }
+}
+
+/// CompactBackupFile 序列化线形核验（已启用）。
+///
+/// 用 backupCodeV2 固定值组装 `CompactBackupFile`，断言：
+/// 1. `serde_json::to_value` 的字段序/字段集与设计 §4.2 逐字节一致；
+/// 2. `decode_compact_backup` 把 v2 码重建磁盘 `IdentityFile`，base64→hex 字段回填
+///    正确、补 version:2；
+/// 3. 解锁后派生公钥补全 `publicKeyHex` = `rootIdentityChinese.publicKeyHex`（权威来源）。
+#[test]
+fn compact_backup_file_serialize_and_decode_framework() {
+    let v = vectors();
+    let bc = &v["backupCodeV2"];
+
+    // 用 backupCodeV2 固定值组装 CompactBackupFile（与实现一致地 base64 化）。
+    let compact = CompactBackupFile {
+        v: bc["innerVersion"].as_u64().unwrap() as u32,
+        kdf: bc["kdf"].as_str().unwrap().to_string(),
+        salt: bc["saltBase64"].as_str().unwrap().to_string(),
+        iv: bc["ivBase64"].as_str().unwrap().to_string(),
+        data: bc["dataBase64"].as_str().unwrap().to_string(),
+        auth_tag: bc["authTagBase64"].as_str().unwrap().to_string(),
+        root_id: bc["rootId"].as_str().unwrap().to_string(),
+        nickname: Some(bc["nickname"].as_str().unwrap().to_string()),
+        created_at: bc["createdAt"].as_u64().unwrap(),
+        updated_at: bc["updatedAt"].as_u64().unwrap(),
+    };
+
+    // 1) serde 输出字段集/字段序与设计 §4.2 逐字节一致（字段序由 struct 声明顺序决定）。
+    let obj = serde_json::to_value(&compact).unwrap();
+    let order: Vec<&str> = obj
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(|k| k.as_str())
+        .collect();
+    let expected_order = [
+        "v", "kdf", "salt", "iv", "data", "authTag", "rootId", "nickname", "createdAt",
+        "updatedAt",
+    ];
+    assert_eq!(order, expected_order, "serde 字段序必须与 §4.2 一致");
+    // 字段集：不含 publicKeyHex / version / pk。
+    assert!(!obj.as_object().unwrap().contains_key("publicKeyHex"));
+    assert!(!obj.as_object().unwrap().contains_key("version"));
+    assert!(!obj.as_object().unwrap().contains_key("pk"));
+
+    // 2) decode_compact_backup：base64 回 hex + 补 version:2，加密字段与向量一致。
+    let file = decode_compact_backup(&compact).unwrap();
+    assert_eq!(file.version, 2);
+    assert_eq!(file.kdf, "scrypt");
+    assert_eq!(file.salt, bc["saltHex"].as_str().unwrap());
+    assert_eq!(file.iv, bc["ivHex"].as_str().unwrap());
+    assert_eq!(file.data, bc["ciphertextHex"].as_str().unwrap());
+    assert_eq!(
+        file.auth_tag.as_deref(),
+        Some(bc["authTagHex"].as_str().unwrap())
+    );
+    assert_eq!(file.root_id, bc["rootId"].as_str().unwrap());
+    assert_eq!(file.nickname.as_deref(), Some("Vec User"));
+    assert_eq!(file.created_at, bc["createdAt"].as_u64().unwrap());
+    assert_eq!(file.updated_at, bc["updatedAt"].as_u64().unwrap());
+
+    // 3) 恢复端解锁后以派生公钥补全 publicKeyHex（权威来源）== 期望派生值。
+    let mut file = file;
+    let (_, identity) = unlock_identity(&file, bc["password"].as_str().unwrap()).unwrap();
+    file.public_key_hex = identity.public_key_hex();
+    assert_eq!(
+        file.public_key_hex,
+        bc["expectedDerivedPublicKeyHex"].as_str().unwrap()
+    );
+    assert_eq!(
+        identity.id(),
+        bc["rootId"].as_str().unwrap(),
+        "派生 identity.id() 必须匹配 rootId 锚点"
+    );
+}
+
+/// base64 编码（STANDARD，与实现 crypto.rs 同款）。
+fn base64_encode(bytes: &[u8]) -> String {
+    use base64::engine::Engine;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+/// base64 解码（STANDARD）。
+fn base64_decode(s: &str) -> Vec<u8> {
+    use base64::engine::Engine;
+    base64::engine::general_purpose::STANDARD
+        .decode(s)
+        .expect("valid base64")
 }
 
 /// v1 身份文件（由向量固定值组装）→ unlock → 迁移 v2 → 再 unlock。

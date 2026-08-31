@@ -2,7 +2,8 @@
      PC 端入口——上传/粘贴对方名片（对应「个人设置 → 我的名片」：二维码名片图片或名片内容文本）；
      扫码入口仅移动端提供 -->
 <template>
-  <el-dialog v-model="visible" title="添加朋友" width="480px">
+  <!-- destroy-on-close：关闭对话框即销毁 CardInput → 卸载其 useQrCameraScan → 停摄像头 track（防关闭对话框后摄像头灯常亮） -->
+  <el-dialog v-model="visible" title="添加朋友" width="480px" destroy-on-close>
     <!-- TODO(mock): 添加方式为表单 UI + 写 mock store；真实流程为发送请求、对方确认后成为朋友（§4.1 双向确认） -->
     <!-- TODO(mock): 仅本地模式下请求无法送达对方，前端先行拦截（真实实现应由内核拒绝或排队） -->
     <el-alert

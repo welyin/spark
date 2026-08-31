@@ -456,6 +456,11 @@ fn org_coll_declaration_is_synced_as_system_collection() {
     let decl_key = crate::plugindata::org_decl_key("org_01", "finance:ledger", "1.0.0");
     // 声明记录 + pmeta（版本化）
     s.put(&decl_key, r#"{"name":"finance:ledger"}"#).unwrap();
+    // 一条普通数据：须先落数据、再落声明 pmeta——per-node 序号下声明 pmeta
+    // （node-a:5）会把 node-a 序号种子到 5，数据后写将拿到序号 6，反而高于
+    // 声明自身，增量过滤场景失焦。先写数据 → 数据 vv={node-a:1} 保持"旧"。
+    let prefix = org_data_prefix("org_01", "finance:ledger", "1.0.0");
+    put_personal(&mut s, "node-a", &format!("{prefix}k"), "\"v\"", 1000).unwrap();
     let decl_meta = DocMeta {
         vv: [("node-a".to_string(), 5)].into_iter().collect(),
         ts: 2000,
@@ -467,9 +472,6 @@ fn org_coll_declaration_is_synced_as_system_collection() {
         &serde_json::to_string(&decl_meta).unwrap(),
     )
     .unwrap();
-    // 一条普通数据
-    let prefix = org_data_prefix("org_01", "finance:ledger", "1.0.0");
-    put_personal(&mut s, "node-a", &format!("{prefix}k"), "\"v\"", 1000).unwrap();
 
     // 折叠 vv 包含声明 pmeta 分量
     let folded = collect_org_collection_vv(&s, "org_01", "finance:ledger", "1.0.0").unwrap();

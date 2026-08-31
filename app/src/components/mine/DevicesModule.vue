@@ -120,6 +120,9 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { Monitor } from '@element-plus/icons-vue';
 import { listenP2pEvents, type DeviceDto, type P2pInfoDto as P2PInfo } from '../../api';
 import { compareVersions } from '../../utils/version';
+import { currentSpace } from '../../stores/current-space';
+import { spaceKeyOf } from '../../mock/space-key';
+import { notifyDeviceRevoked } from '../../plugin/messages';
 import {
   markDeviceNoticesSeen,
   pendingDeviceNotices,
@@ -245,7 +248,8 @@ export default defineComponent({
       }
       try {
         await window.electronAPI.devices.revoke(device.peerId);
-        ElMessage.success(`已撤销「${device.deviceName}」`);
+        // 撤销成功不弹 tips：走消息页 app:system 系统消息落一条可追溯记录
+        notifyDeviceRevoked(spaceKeyOf(currentSpace.value), device.deviceName);
       } catch (error) {
         // 壳层命令返回 Result<T, String>：reject 值为内核错误文案串（KernelError Display 直出）
         const message = error instanceof Error ? error.message : String(error);

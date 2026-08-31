@@ -174,6 +174,15 @@ pub enum P2pEvent {
         peer_id: String,
         app_version: String,
     },
+    /// 应用层就绪：版本探测成功（对端响应 `/spark/version/1.0.0`），同一连接
+    /// 上 Spark 应用层协议可通信。作为 profile-sync / flush_pending /
+    /// device-notice 等业务投递的唯一触发信号（peer-app-ready-event §3.3）。
+    /// 与 `PeerConnected`（transport 层首个连接建立）语义区分。serde 线形为
+    /// `{kind:"peerAppReady", data:{peerId, appVersion}}`，旧壳层忽略未知 kind。
+    PeerAppReady {
+        peer_id: String,
+        app_version: String,
+    },
     /// node-announce 已发布。
     AnnouncePublished {
         addresses: usize,
@@ -425,6 +434,7 @@ impl P2pNode {
                 .dht_republish_ticks
                 .unwrap_or(crate::p2p::constants::DHT_REPUBLISH_TICKS),
             pending_network_change: None,
+            last_network_change_fired_at: None,
             last_network_snapshot: None,
             rediscovery_states: HashMap::new(),
             rediscovery_dht_queries: HashMap::new(),
@@ -546,7 +556,10 @@ async fn build_swarm(
                 .expect("behaviour construction is infallible for valid keypair")
         })
         .expect("behaviour constructor is infallible")
-        .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(60)))
+        // idle 连接 600s 超时（V2）：60s 会让 kad 路由表 peer 恒处于未连接态，
+        // kad 行为层随即对其用 PortUse::Reuse 自动重拨（刷屏首因），延长后大幅
+        // 减少这类无效自动拨号
+        .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(600)))
         .build();
     Ok(swarm)
 }

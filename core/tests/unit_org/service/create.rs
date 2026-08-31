@@ -203,5 +203,8 @@ fn create_delete_pdsync_write_pmeta_and_tombstone() {
     assert!(OrganizationService::get_record(storage.raw(), &record.org_id).unwrap().is_none());
     let meta = get_personal_meta(storage.raw(), &key).unwrap().unwrap();
     assert!(is_tombstone(&meta));
-    assert_eq!(meta.vv.get("node-a"), Some(&2));
+    // per-node 单调序号：org:meta 创建 seq 1 + 三个内建集合声明（structure/
+    // contacts/invites）各 2 次受管写（声明记录 put + put_personal，seq 2–7）
+    // + 删除 tombstone seq 8
+    assert_eq!(meta.vv.get("node-a"), Some(&8));
 }

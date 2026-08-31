@@ -33,7 +33,7 @@ fn orgsync_hello_need_data_converges_two_nodes() {
     declare_org_collection(&mut a, "node-a", ORG_ID, NAME, VERSION, Accounts::AllMembers, &a_root, NOW);
     declare_org_collection(&mut b, "node-b", ORG_ID, NAME, VERSION, Accounts::AllMembers, &b_root, NOW);
 
-    // A 写入一条 orgd 数据（node-a vv=1）
+    // A 写入一条 orgd 数据（per-node 序号：集合声明耗 seq 1，数据为 seq 2）
     let data_key = format!("{}k1", org_data_prefix(ORG_ID, NAME, VERSION));
     write_org_data(&mut a, "node-a", ORG_ID, NAME, VERSION, "k1", "\"v1\"", NOW);
 
@@ -97,11 +97,11 @@ fn orgsync_hello_need_data_converges_two_nodes() {
         "B 合入 A 的数据"
     );
 
-    // 两边 vv 收敛一致（node-a:1，node-b:0）
+    // 两边 vv 收敛一致（node-a:2 —— 声明 seq 1 + 数据 seq 2；node-b:0）
     let meta_a = get_personal_meta(&a, &data_key).unwrap().unwrap();
     let meta_b = get_personal_meta(&b, &data_key).unwrap().unwrap();
     assert_eq!(meta_a.vv, meta_b.vv, "两端 vv 一致");
-    assert_eq!(meta_a.vv.get("node-a"), Some(&1));
+    assert_eq!(meta_a.vv.get("node-a"), Some(&2));
 }
 
 // ── R3. acl 走 org:structure（all-members）全员可达 ─────────────────────

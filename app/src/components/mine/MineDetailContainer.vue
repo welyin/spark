@@ -22,7 +22,7 @@
     v-if="drawer && !isMobileLayout"
     :model-value="open"
     :with-header="false"
-    size="420px"
+    :size="drawerWidth"
     class="app-drawer"
     @update:model-value="onUpdate"
   >
@@ -57,7 +57,9 @@ export default defineComponent({
     /** 抽屉/详情是否打开（通常绑定「是否有选中项」） */
     open: { type: Boolean, default: false },
     /** 详情标题（移动端整页的返回栏标题） */
-    title: { type: String, default: '' }
+    title: { type: String, default: '' },
+    /** 桌面端抽屉宽度（默认 420px；需要更宽内容的模块可覆盖，如账号备份二维码） */
+    drawerWidth: { type: String, default: '420px' }
   },
   emits: ['close'],
   setup(props, { emit }) {
@@ -97,7 +99,7 @@ export default defineComponent({
     onMounted(() => window.addEventListener('spark:close-overlay', onCloseOverlay));
     onBeforeUnmount(() => window.removeEventListener('spark:close-overlay', onCloseOverlay));
 
-    return { onUpdate, emit, isMobileLayout };
+    return { onUpdate, emit, isMobileLayout, drawerWidth: props.drawerWidth };
   }
 });
 </script>

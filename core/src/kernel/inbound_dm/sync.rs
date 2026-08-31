@@ -227,8 +227,14 @@ pub(super) fn handle_device_sync<S: StorageBackend>(
     if record.peer_id.trim().is_empty() || !crate::device::is_usable_peer_id(&record.peer_id) {
         return done(fail_response("invalid-body"), Vec::new());
     }
-    let (applied, changed) =
-        crate::device::DeviceService::apply_remote(storage, record, ctx.now_ms, ctx.node_id)?;
+    // 记账 nodeId = 对端设备：同 handle_contact_sync 防回环口径。
+    let (applied, changed) = crate::device::DeviceService::apply_remote(
+        storage,
+        record,
+        ctx.now_ms,
+        ctx.remote_peer_id,
+        ctx.node_id,
+    )?;
     // M3 新设备补发钩子：device-sync 落库后尝试给该设备补写 ikey 包裹。
     let _ = crate::epoch::EpochService::maybe_grant_epoch_key(
         storage,
@@ -295,8 +301,17 @@ pub(super) fn handle_contact_sync<S: StorageBackend>(
     if from != ctx.my_root_id {
         return done(fail_response("not-self-device"), Vec::new());
     }
-    let applied =
-        crate::contact::apply_contact_sync_snapshot(storage, ctx.my_root_id, body, ctx.node_id, ctx.now_ms)?;
+    // 记账 nodeId = 对端设备（remote_peer_id）而非本机：本机分量不被推进 →
+    // local_personal_write_digest 不变 → 不触发 steady hello → 消除 contact-sync
+    // 合入与对端之间的回环风暴（见 wiki/architecture/sync/sync-storm-fix.md）。
+    let applied = crate::contact::apply_contact_sync_snapshot(
+        storage,
+        ctx.my_root_id,
+        body,
+        ctx.remote_peer_id,
+        ctx.node_id,
+        ctx.now_ms,
+    )?;
     let events = if applied > 0 {
         vec![P2pEvent::ContactsSynced(json!({ "applied": applied }))]
     } else {
@@ -330,7 +345,14 @@ pub(super) fn handle_conv_sync<S: StorageBackend>(
     if from != ctx.my_root_id {
         return done(fail_response("not-self-device"), Vec::new());
     }
-    let applied = crate::message::apply_conv_sync_snapshot(storage, body, ctx.now_ms, ctx.node_id)?;
+    // 记账 nodeId = 对端设备：同 handle_contact_sync 防回环口径。
+    let applied = crate::message::apply_conv_sync_snapshot(
+        storage,
+        body,
+        ctx.now_ms,
+        ctx.remote_peer_id,
+        ctx.node_id,
+    )?;
     let events = if applied > 0 {
         vec![P2pEvent::ConversationsSynced(json!({ "applied": applied }))]
     } else {

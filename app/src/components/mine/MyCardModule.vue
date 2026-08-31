@@ -91,6 +91,7 @@ import { ElMessage } from 'element-plus';
 import { Key, Postcard } from '@element-plus/icons-vue';
 import QRCode from 'qrcode';
 import { composeCardAvatar } from '../../utils/card-avatar';
+import { trimCardAddresses } from '../../utils/card';
 import TermLabel from '../common/TermLabel.vue';
 import NodeIdentityInfo, { type NodeIdentityRow } from '../common/NodeIdentityInfo.vue';
 import MineDetailContainer from './MineDetailContainer.vue';
@@ -143,16 +144,21 @@ export default defineComponent({
       try {
         const info = await window.electronAPI.p2p.info();
         peerId.value = info.peerId ?? '';
-        addresses.value = info.addresses;
         nodeOnline.value = info.started && !!info.peerId && info.addresses.length > 0;
         if (nodeOnline.value) {
+          // 统一使用裁剪后的地址（QR / 名片内容展示 / 复制三处一致）：
+          // 剔除中继电路/通配地址，IPv4 直连优先，封顶 3 条——收敛成最小可拨子集，
+          // 控制二维码版本与密度、减少名片内容信息量（见 trimCardAddresses）
+          addresses.value = trimCardAddresses(info.addresses);
           payload = JSON.stringify({
             type: 'spark-card',
             v: 1,
             rootId: rootId.value,
             peerId: info.peerId,
-            addresses: info.addresses
+            addresses: addresses.value
           });
+        } else {
+          addresses.value = [];
         }
       } catch {
         nodeOnline.value = false;
@@ -179,22 +185,25 @@ export default defineComponent({
 
     onMounted(load);
 
-    // 名片内容：加朋友所需的全部信息
+    // 名片内容：加朋友所需的全部信息（极简标记 R:/P:/A:，去标签更简洁、防错）
     const identityRows = computed<NodeIdentityRow[]>(() => [
-      { label: '身份 ID', term: 'rootId', value: rootId.value, copyable: true, emptyText: '未创建' },
-      { label: '节点 ID', term: 'peerId', value: peerId.value, emptyText: '节点未连接' },
-      { label: '节点地址', term: 'addresses', value: addresses.value, emptyText: '节点未连接' }
+      { label: 'R', term: 'rootId', value: rootId.value, copyable: true, emptyText: '未创建' },
+      { label: 'P', term: 'peerId', value: peerId.value, emptyText: '节点未连接' },
+      { label: 'A', term: 'addresses', value: addresses.value, emptyText: '节点未连接' }
     ]);
 
-    /** 一键复制：身份 ID + 节点 ID + 节点地址 */
+    /** 一键复制：极简标记格式（R:/P:/A:，地址共用一个 A: 标签 + 换行列表），与展示一致 */
     const copyAll = async () => {
-      const addressesText = addresses.value.length > 0 ? addresses.value.join('\n') : '未获取';
-      const text = [
-        `RootID: ${rootId.value || '未创建'}`,
-        `PeerId: ${peerId.value || '未获取'}`,
-        'P2P Addresses:',
-        addressesText
-      ].join('\n');
+      const lines: string[] = [];
+      lines.push(`R:${rootId.value || '未创建'}`);
+      lines.push(`P:${peerId.value || '未获取'}`);
+      if (addresses.value.length > 0) {
+        lines.push('A:');
+        lines.push(...addresses.value);
+      } else {
+        lines.push('A:未获取');
+      }
+      const text = lines.join('\n');
       try {
         await navigator.clipboard.writeText(text);
         ElMessage.success('名片内容已复制');

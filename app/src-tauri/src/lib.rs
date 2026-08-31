@@ -24,6 +24,9 @@ pub mod market;
 pub mod plugin_runtime;
 pub mod plugin_src;
 mod announce_verify;
+// 开发/自动化测试挂钩：debug 构建独有（dev_harness.rs 模块注释）
+#[cfg(debug_assertions)]
+mod dev_harness;
 // HTTP 代理配置（spark-proxy.json 持久化 + 环境变量注入），见 proxy.rs 模块注释
 mod proxy;
 
@@ -146,7 +149,7 @@ pub fn run() {
             // ALL_PROXY（见 proxy.rs），晚于任一客户端创建注入则不生效
             proxy::init_proxy_from_disk(&data_dir);
             let app_version = app.package_info().version.to_string();
-            let kernel = Kernel::init(KernelConfig {
+            let mut kernel = Kernel::init(KernelConfig {
                 data_dir: data_dir.clone(),
                 app_version: app_version.clone(),
                 // 必须给 p2p 配置：kernel 登录链路（unlock/init/recover）的自动启动
@@ -167,6 +170,10 @@ pub fn run() {
             .map_err(|e| std::io::Error::other(e.to_string()))?;
             let events = kernel.subscribe_p2p_events();
             let announce_events = kernel.subscribe_p2p_events();
+            // 开发/自动化测试挂钩（仅 debug 构建）：数据目录有 dev_instruction.json
+            // 则自动执行 init/unlock/recover_mnemonic，结果写 dev_result.json。
+            #[cfg(debug_assertions)]
+            dev_harness::run(&data_dir, &mut kernel);
             app.manage(Arc::new(Mutex::new(kernel)));
             spawn_p2p_event_forwarder(app.handle().clone(), events);
             // 插件市场：状态/包目录在 app_data_dir，本地 dist-market 与插件源码

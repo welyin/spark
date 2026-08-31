@@ -153,19 +153,27 @@ impl<S: StorageBackend> VersionedStorage<S> {
         crate::sync::orgsync::legacy_org_key_scope(key)
     }
 
-    /// 本地写入的版本化 bump：vv[node]+1、ts=now、清墓碑。返回 (ts, meta)。
-    fn bump_local(&self, key: &str, pmeta_cache: &mut HashMap<String, DocMeta>) -> Result<(i64, DocMeta)> {
+    /// 本地写入的版本化 bump：vv 本机分量取 **per-node 单调序号**
+    /// （`vv_seq` 分配器，batch 首条受管写前惰性初始化为存量序号），ts=now、
+    /// 清墓碑。返回 (ts, meta)。
+    fn bump_local(
+        &self,
+        key: &str,
+        node_id: &str,
+        pmeta_cache: &mut HashMap<String, DocMeta>,
+        vv_seq: &mut i64,
+    ) -> Result<(i64, DocMeta)> {
         let mut meta = match pmeta_cache.get(key) {
             Some(m) => m.clone(),
             None => get_personal_meta(&self.inner, key)
                 .map_err(|e| crate::storage::StorageError::Backend(e.to_string()))?
                 .unwrap_or_default(),
         };
-        let node_id = self.node_id();
-        *meta.vv.entry(node_id.clone()).or_insert(0) += 1;
+        *vv_seq += 1;
+        meta.vv.insert(node_id.to_string(), *vv_seq);
         let ts = now_ms();
         meta.ts = ts;
-        meta.node_id = Some(node_id);
+        meta.node_id = Some(node_id.to_string());
         meta.tombstone = None;
         pmeta_cache.insert(key.to_string(), meta.clone());
         Ok((ts, meta))
@@ -183,9 +191,11 @@ impl<S: StorageBackend> VersionedStorage<S> {
     fn tombstone_local(
         &self,
         key: &str,
+        node_id: &str,
         pmeta_cache: &mut HashMap<String, DocMeta>,
+        vv_seq: &mut i64,
     ) -> Result<(i64, DocMeta, Vec<BatchOperation>)> {
-        let (ts, mut meta) = self.bump_local(key, pmeta_cache)?;
+        let (ts, mut meta) = self.bump_local(key, node_id, pmeta_cache, vv_seq)?;
         meta.tombstone = Some(true);
         pmeta_cache.insert(key.to_string(), meta.clone());
         let mut ops = Vec::new();
@@ -227,10 +237,22 @@ impl<S: StorageBackend> StorageBackend for VersionedStorage<S> {
         let mut out = Vec::with_capacity(operations.len() * 2);
         let mut pmeta_cache: HashMap<String, DocMeta> = HashMap::new();
         let mut touched_ts: Option<i64> = None;
+        // per-node 单调序号分配器：首条受管写前惰性读取存量序号
+        // （sync::personal::current_vv_seq，含升级种子逻辑），batch 内逐条
+        // +1，batch 末尾随序号键持久化（与记录同一原子提交）。
+        let node_id = self.node_id();
+        let mut vv_seq: Option<i64> = None;
         for op in operations {
             match op {
                 BatchOperation::Put { key, value } if Self::managed(&key) => {
-                    let (ts, meta) = self.bump_local(&key, &mut pmeta_cache)?;
+                    if vv_seq.is_none() {
+                        vv_seq = Some(
+                            crate::sync::personal::current_vv_seq(&self.inner, &node_id)
+                                .map_err(|e| crate::storage::StorageError::Backend(e.to_string()))?,
+                        );
+                    }
+                    let (ts, meta) =
+                        self.bump_local(&key, &node_id, &mut pmeta_cache, vv_seq.as_mut().expect("vv_seq initialized"))?;
                     let meta_raw = serde_json::to_string(&meta)
                         .map_err(|e| crate::storage::StorageError::Backend(e.to_string()))?;
                     out.push(BatchOperation::put(personal_meta_key(&key), meta_raw));
@@ -238,7 +260,14 @@ impl<S: StorageBackend> StorageBackend for VersionedStorage<S> {
                     touched_ts = Some(ts);
                 }
                 BatchOperation::Delete { key } if Self::managed(&key) => {
-                    let (ts, meta, dlog_ops) = self.tombstone_local(&key, &mut pmeta_cache)?;
+                    if vv_seq.is_none() {
+                        vv_seq = Some(
+                            crate::sync::personal::current_vv_seq(&self.inner, &node_id)
+                                .map_err(|e| crate::storage::StorageError::Backend(e.to_string()))?,
+                        );
+                    }
+                    let (ts, meta, dlog_ops) =
+                        self.tombstone_local(&key, &node_id, &mut pmeta_cache, vv_seq.as_mut().expect("vv_seq initialized"))?;
                     let meta_raw = serde_json::to_string(&meta)
                         .map_err(|e| crate::storage::StorageError::Backend(e.to_string()))?;
                     out.push(BatchOperation::delete(key.clone()));
@@ -248,6 +277,11 @@ impl<S: StorageBackend> StorageBackend for VersionedStorage<S> {
                 }
                 other => out.push(other),
             }
+        }
+        if touched_ts.is_some()
+            && let Some(final_seq) = vv_seq
+        {
+            out.push(crate::sync::personal::vv_seq_batch_op(&node_id, final_seq));
         }
         self.inner.batch(out)?;
         if let Some(ts) = touched_ts {

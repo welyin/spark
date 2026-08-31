@@ -5,7 +5,7 @@ export type OrganizationView = OrgView;
 
 export type OrganizationMember = OrgView['members'][number];
 
-// PluginCatalogItem 已 DTO 化到 api/types.ts（plugin.listCatalog 的返回类型），此处 re-export 兼容
+// PluginCatalogItem 已 DTO 化到 api/types.ts（市场列表条目的 catalog 部分），此处 re-export 兼容
 export type { PluginCatalogItem } from '../../api/types';
 
 export type CreateForm = {

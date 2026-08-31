@@ -106,7 +106,17 @@ pub trait P2pHost: Send {
     /// 对端版本观察上报（`/spark/version/1.0.0`）。
     fn on_peer_version(&mut self, _version: &str, _peer_id: &str) {}
 
-    /// 新对端建连（首个连接确认；事件循环线程内调用，保持轻量、禁止阻塞）。
+    /// 应用层就绪（版本探测成功，对端是 Spark 节点且应用层协议可通信）。
+    ///
+    /// 与 [`P2pHost::on_peer_connected`]（transport 层 TCP 连接建立）语义区分：
+    /// `on_peer_app_ready` 是**业务投递的唯一触发信号**（profile-sync /
+    /// flush_pending / device-notice），在 `resolve_version_response` 解析版本
+    /// 成功后调用。事件循环线程内调用，保持轻量、禁止阻塞。
+    fn on_peer_app_ready(&mut self, _version: &str, _peer_id: &str) {}
+
+    /// 新对端建连（首个连接确认，transport 层语义；事件循环线程内调用，
+    /// 保持轻量、禁止阻塞）。不触发任何业务投递——投递统一由
+    /// [`P2pHost::on_peer_app_ready`] 驱动。
     fn on_peer_connected(&mut self, _peer_id: &str) {}
 
     /// org-share-ack 唤醒（按 payload.syncId 匹配发送方等待器）。

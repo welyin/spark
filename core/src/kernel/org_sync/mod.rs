@@ -79,6 +79,12 @@ const SELF_DEVICE_HELLO_INTERVAL_MS: i64 = 10 * 60 * 1000;
 /// 会持续判定不足）。写入触发时若距上次检查 < 该间隔则短路跳过。
 const REPLICA_CHECK_MIN_INTERVAL_MS: i64 = 5 * 60 * 1000;
 
+/// 懒连接链「DHT 刷新」环节的最小触发间隔（每 rootId）：组织写入连败时每次
+/// 写入都会走到本环节（N 个 DHT get + ≤[`RECOVERY_DIAL_BUDGET`] 个
+/// connect_peer），远超出站预算。距上次刷新 < 该间隔直接跳过本次刷新
+/// （事件驱动非周期，重复触发防风暴；参照 REPLICA_CHECK_MIN_INTERVAL_MS）。
+const RECOVERY_REFRESH_MIN_INTERVAL_MS: i64 = 60_000;
+
 /// 自设备稳态 hello 触发状态（org-sync tick `maintain_self_device_link` 的
 /// StayConnected 分支用；跨 tick 持久，断→连跳变的 Resync 会重置重建基线）。
 ///
@@ -251,6 +257,10 @@ pub(crate) struct OrgSyncContext {
     /// 补副本事件驱动节流状态：orgId → 最近一次检查时间（ms）。组织写入推送
     /// 路径（`ensure_replicas_after_write`）消费，跨写入短路径跳过重复扫描+推送。
     pub(crate) replica_check: Arc<Mutex<HashMap<String, i64>>>,
+    /// 「DHT 刷新」环节节流状态：rootId → 最近一次刷新时间（ms）。组织写入
+    /// 连败路径（`refresh_org_endpoints_and_dial`）消费，超限跳过重复
+    /// DHT 查询 + 拨号（出站防风暴）。
+    pub(crate) recovery_refresh: Arc<Mutex<HashMap<String, i64>>>,
 }
 
 /// org-sync worker 主循环：推送/保活串行消费（kernel `start_p2p` 装配，

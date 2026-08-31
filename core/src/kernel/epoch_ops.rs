@@ -65,7 +65,7 @@ pub fn rotate(
     let storage = kernel.require_storage_mut()?;
     let self_x25519_priv = require_x25519_self(storage.raw())?;
 
-    EpochService::rotate(
+    let state = EpochService::rotate(
         storage.raw_mut(),
         &root_id,
         &my_peer,
@@ -76,12 +76,22 @@ pub fn rotate(
         &devices,
         kverify.as_ref(),
     )
-    .map(Some)
-    .map_err(|e| KernelError::Internal(format!("epoch 轮换失败: {e}")))
+    .map_err(|e| KernelError::Internal(format!("epoch 轮换失败: {e}")))?;
+    // 轮换派发的 ikey 包裹走裸存储、不触发变更信号——挂 hello 补发旗标，
+    // 让已连接自设备下一轮反熵即拿到新密钥（watchdog 消费，见
+    // sync::pdsync::HELLO_REQUEST_KEY 注释）。
+    let _ = storage.raw_mut().put(crate::sync::pdsync::HELLO_REQUEST_KEY, "1");
+    Ok(Some(state))
 }
 
 /// 在 p2p 启动成功尾段调用：当 epoch:state 与 effective 均缺失时做
 /// reason:"init" 的幂等初始化轮换。
+///
+/// **方案 Y 主从（2026-08-14，见 m3 设计 §5.11）**：若本机是恢复加入方
+/// （`p2p:epoch:recovered` 标记存在，扫描备份二维码加入），则**跳过 init**，
+/// 被动等主导设备的 `epoch:state` + `ikey`（只有一把密钥，无并发冲突）。
+/// 兜底：双恢复加入方（都等、没人主导）时，等待超时（默认 30s）后清除标记
+/// 自升主导 init（竞态退化方案 X 的 LWW 收敛，见设计 §5.11）。
 pub fn maybe_init_epoch_state(kernel: &mut Kernel) -> Result<(), KernelError> {
     let _root_id = kernel.require_unlocked_root_id()?;
     let state_missing = {
@@ -98,6 +108,11 @@ pub fn maybe_init_epoch_state(kernel: &mut Kernel) -> Result<(), KernelError> {
         storage.get(crate::epoch::EFFECTIVE_KEY)?.is_none()
     };
     if state_missing && effective_missing {
+        // 方案 Y：恢复加入方跳过 init，等主导 ikey（带超时自升兜底）。
+        // 需要 &mut 存储（首次见恢复标记时写 recovered_at）。
+        if crate::epoch::should_skip_init_as_recovered(kernel.require_storage_mut()?)? {
+            return Ok(());
+        }
         rotate(kernel, RotationReason::Init)?;
     }
     Ok(())

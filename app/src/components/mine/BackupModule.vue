@@ -29,11 +29,13 @@
     </div>
   </div>
 
-  <!-- 详情：column 模式=第四栏；drawer 模式=抽屉（设置页「个人设置」） -->
+  <!-- 详情：column 模式=第四栏；drawer 模式=抽屉（设置页「个人设置」）。
+       抽屉加宽至 600px：二维码备份需完整、大尺寸显示（420px 时二维码过小难以扫码识别） -->
   <MineDetailContainer
     :drawer="detailMode === 'drawer'"
     :open="activeWay !== null"
     :title="currentWay.label"
+    drawer-width="600px"
     @close="closeDetail"
   >
     <el-card shadow="never" class="panel-card">
@@ -125,6 +127,7 @@ import { Lock, Postcard } from '@element-plus/icons-vue';
 import QRCode from 'qrcode';
 import { isIdentityBackupMarked, markIdentityBackupDone } from '../../utils/backup-state';
 import { errorMessage } from '../../utils/ipc';
+import { isMobileLayout } from '../../stores/ui-layout';
 import MineDetailContainer from './MineDetailContainer.vue';
 
 type BackupWayKey = 'qr' | 'mnemonic';
@@ -219,12 +222,23 @@ export default defineComponent({
         if (activeWay.value === 'qr') {
           // 二维码备份载荷已剔除头像等大字段（适配 QR 容量），密码错误时内核报错
           const { payload } = await window.electronAPI.rootIdentity.backupPayloadQr(password.value);
-          // 渲染宽度按载荷长度自适应（抽屉 420px，扣除卡片内边距后约 360px 可用）
-          qrWidth.value = payload.length < 800 ? 240 : payload.length < 1600 ? 320 : 360;
+          // 渲染宽度按载荷长度自适应 + 容器可用宽度。
+          //   - drawer + 桌面端：抽屉加宽至 600px，扣卡片内边距约 552px 可用 → 二维码放大到 400/480px；
+          //   - drawer + 移动端：整页详情占满屏幕（竖屏 ~375px，扣内边距约 327px）→ 限制 ~300px 防溢出；
+          //   - column 模式：个人中心第四栏可用宽度有限，保持原档位。
+          if (props.detailMode === 'drawer' && !isMobileLayout.value) {
+            qrWidth.value = payload.length < 800 ? 400 : 480;
+          } else if (props.detailMode === 'drawer') {
+            qrWidth.value = payload.length < 800 ? 300 : 320;
+          } else {
+            qrWidth.value = payload.length < 800 ? 240 : payload.length < 1600 ? 320 : 360;
+          }
           qrDense.value = payload.length >= 1600;
+          // 纠错等级 L(7%)：备份码是手机屏幕近距离扫码、无污损/遮挡场景，
+          // 15% 的 M 过于保守（模块数多约 19%，密度高）。L 足够，模块数减少、可扫性提升。
           // margin=4: QR 标准安静区；4x 渲染: 高 DPI 屏幕模块边缘锐利（低密度码手机对焦也能逐模块分辨）
           qrImageUrl.value = await QRCode.toDataURL(payload, {
-            errorCorrectionLevel: 'M',
+            errorCorrectionLevel: 'L',
             margin: 4,
             width: qrWidth.value * 4,
             scale: 1

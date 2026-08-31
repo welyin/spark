@@ -162,6 +162,9 @@ impl P2pNode {
         node_info: &PeerNodeInfo,
         timeout: Duration,
     ) -> Result<()> {
+        // 懒拨号来源跟踪（debug 级，默认不输出）：定位 connect/dm 循环拨号来源
+        // （org_sync push/tick/recovery / org_ops / 手动 sync 等），排查时开 debug。
+        log::debug!("[p2p-connect] to={:?}", node_info.peer_id);
         let (tx, rx) = oneshot::channel();
         self.send_cmd(Command::ConnectPeer {
             node_info: node_info.clone(),
@@ -250,6 +253,13 @@ impl P2pNode {
         node_info: &PeerNodeInfo,
         payload: Value,
     ) -> Result<Option<Value>> {
+        // 投递来源跟踪（debug 级，默认不输出）：定位是谁持续触发投递（稳态
+        // hello / 快照 / deliver-to-devices / 写入触发等），排查时开 debug。
+        log::debug!(
+            "[p2p-dm-direct] to={:?} payload_kind={}",
+            node_info.peer_id,
+            payload.get("kind").and_then(|v| v.as_str()).unwrap_or("?")
+        );
         let (tx, rx) = oneshot::channel();
         self.send_cmd(Command::DmDirect {
             node_info: node_info.clone(),

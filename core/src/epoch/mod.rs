@@ -66,6 +66,15 @@ pub const IKEY_PREFIX: &str = "ikey:";
 pub const LOCAL_KEY_PREFIX: &str = "p2p:epoch:key:";
 /// 本机生效 epoch 键：`p2p:epoch:effective` = 十进制数字（本地键，缺省 0=不加密）。
 pub const EFFECTIVE_KEY: &str = "p2p:epoch:effective";
+/// 恢复加入方标记键（本地键，不进同步流量）：`p2p:epoch:recovered` = "1"。
+/// 仅由 `recover_backup`（扫描备份二维码加入，口令+rootId 双因子）写入；存在时
+/// `maybe_init_epoch_state` 跳过 init（被动等主导设备 ikey）——方案 Y 主从核心。
+pub const RECOVERED_KEY: &str = "p2p:epoch:recovered";
+/// 恢复等待开始时间键（本地键）：`p2p:epoch:recovered_at` = 毫秒。用于双恢复
+/// 加入方超时自升主导兜底（默认 `RECOVERED_ESCAPE_MS` 后清除标记允许 init）。
+pub const RECOVERED_AT_KEY: &str = "p2p:epoch:recovered_at";
+/// 恢复加入方等待主导 epoch 的超时（ms）：超时后自升主导，避免双恢复加入方死锁。
+pub const RECOVERED_ESCAPE_MS: i64 = 30_000;
 /// 对端 hello 宣告 epoch 的本地持久化键前缀：`pdsync:epoch:{peer}` = 十进制数字。
 pub const REMOTE_EPOCH_PREFIX: &str = "pdsync:epoch:";
 /// 密文值判别字段与取值（`{$enc:"ikey",epoch,nonce,ct}`）。
@@ -459,6 +468,42 @@ pub fn put_effective<S: StorageBackend>(storage: &mut S, epoch: u64) -> Result<(
     Ok(())
 }
 
+// ── 方案 Y 主从：恢复加入方跳过 init ──────────────────────────────────
+
+/// 判断本机是否应跳过 epoch init（恢复加入方被动等主导 ikey）。
+///
+/// - `p2p:epoch:recovered` 标记不存在（主导/正常创建设备）→ false（照常 init）。
+/// - 标记存在（恢复加入方）→ 记录等待开始时间（首见写 `recovered_at`），
+///   若等待超 `RECOVERED_ESCAPE_MS` 则清除标记自升主导（返回 false，允许 init，
+///   双恢复加入方兜底，竞态退化方案 X LWW 收敛）；未超时 → true（跳过 init）。
+pub fn should_skip_init_as_recovered<S: StorageBackend>(storage: &mut S) -> Result<bool> {
+    if storage.get(RECOVERED_KEY)?.is_none() {
+        return Ok(false);
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let at = match storage.get(RECOVERED_AT_KEY)? {
+        Some(raw) => raw.parse::<i64>().unwrap_or(0),
+        None => {
+            // 首见恢复标记：记录等待开始时间。
+            storage.put(RECOVERED_AT_KEY, &now.to_string())?;
+            now
+        }
+    };
+    if now - at >= RECOVERED_ESCAPE_MS {
+        // 等待主导 epoch 超时（双恢复加入方等死锁）：自升主导，清除标记与等待时间。
+        storage.delete(RECOVERED_KEY)?;
+        storage.delete(RECOVERED_AT_KEY)?;
+        log::warn!(
+            "[epoch] 恢复加入方等待主导 epoch 超时({RECOVERED_ESCAPE_MS}ms)，自升主导 init"
+        );
+        return Ok(false);
+    }
+    Ok(true)
+}
+
 // ── 对端 hello epoch 读写（pdsync:epoch:{peer}）────────────────────────
 
 /// 读取对端在 hello 中宣告的 epoch；缺失 → `None`。
@@ -682,10 +727,21 @@ impl EpochService {
         Ok(true)
     }
 
-    /// 密钥表刷新钩子（方案 §5.6）：收到 `epoch:/ikey:` 一批并落库后，若
-    /// 本机 effective 仍落后于 state.current，则扫描 `ikey:{current}:*:{myPeer}`
-    /// 尝试逐个 unbox；任一成功即写本机密钥表 + 推进 effective + 记
-    /// `epoch_key_activated`。全部失败不报错，下轮同步重试。
+    /// 密钥表刷新钩子（方案 §5.6）：收到 `epoch:/ikey:` 一批并落库后，扫描
+    /// `ikey:{current}:*:{myPeer}` 尝试逐个 unbox；任一成功即写本机密钥表 +
+    /// 记 `epoch_key_activated`。
+    ///
+    /// **修复（2026-08-13 同步风暴根因）**：不再用 `effective >= current` 短路。
+    /// 此前每个设备 `rotate(Init)` 都 `put_effective` 推进到与 current 相同，导致
+    /// `effective >= current` 恒成立、永不 unbox 对端同 epoch ikey → 两端各持不同
+    /// 密钥 → `profile:self` Encrypt 互解不开（unwrap-value-failed）→ Concurrent
+    /// 风暴。现在即使 effective == current 也扫对端 ikey 并 unbox。
+    ///
+    /// **方案 Y（2026-08-14 主从，见 m3 设计 §5.11，取代方案 X）**：只有主导设备
+    /// （正常创建账号）init 生成 epoch 密钥，恢复加入方（`recover_backup` 标记
+    /// `p2p:epoch:recovered`）不 init、被动等主导的 ikey。故 `try_refresh_keys` 始终
+    /// 扫描并 unbox `writer == rotated_by` 的包裹（主从下单一 writer；过滤
+    /// writer==rotated_by 是兜底防"双恢复加入方超时自升主导"的互换）。
     pub fn try_refresh_keys<S: StorageBackend>(
         storage: &mut S,
         root_id: &str,
@@ -695,10 +751,7 @@ impl EpochService {
         let state = get_epoch_state(storage)?.ok_or_else(|| {
             EpochError::Other("epoch state missing while refreshing keys".to_string())
         })?;
-        let effective = get_effective(storage)?;
-        if effective >= state.current {
-            return Ok(());
-        }
+        let rotated_by = state.rotated_by.as_str();
         let self_x25519_priv = crate::p2p::identity_store::load_x25519_private_key(storage)
             .ok_or_else(|| {
                 EpochError::Other("cannot load x25519 private key for refresh".to_string())
@@ -714,6 +767,11 @@ impl EpochService {
                 continue;
             };
             if epoch != target {
+                continue;
+            }
+            // 方案 Y：只采用主导（rotated_by）的包裹，其他 writer（如并发自升的
+            // 第二主导）成孤儿忽略，防互换。
+            if writer != rotated_by {
                 continue;
             }
             let Ok(record) = serde_json::from_str::<IkeyRecord>(&v) else {
@@ -971,4 +1029,197 @@ pub fn should_encrypt<S: StorageBackend>(
         classify_for_push(storage, key, effective_epoch)?,
         EncryptDecision::Encrypt
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::p2p::constants::P2P_IDENTITY_PRIVATE_KEY;
+    use crate::storage::MemoryStorage;
+    use libp2p::identity::Keypair;
+
+    /// libp2p Ed25519 keypair（确定性 seed 的设备身份，模拟单台设备）。
+    fn device(seed: u8) -> Keypair {
+        Keypair::generate_ed25519()
+    }
+
+    /// device 的 X25519 私钥（epoch box/unbox 用；与 load_x25519_private_key 派生一致）。
+    fn x_priv(key: &Keypair) -> [u8; 32] {
+        let ed = key.clone().try_into_ed25519().unwrap();
+        let bytes = ed.to_bytes();
+        crate::sync::orgsync::ed_sk_to_x25519(&bytes[..32].try_into().unwrap())
+    }
+
+    /// device 的 X25519 公钥。
+    fn x_pub(key: &Keypair) -> [u8; 32] {
+        let ed = key.clone().try_into_ed25519().unwrap();
+        crate::sync::orgsync::ed_pk_to_x25519(&ed.public().to_bytes()).unwrap()
+    }
+
+    /// 把设备 libp2p keypair 写入存储（P2P_IDENTITY_PRIVATE_KEY），使
+    /// `load_x25519_private_key` 派生的私钥与 `x_priv(dev)` 一致。
+    fn persist_identity(storage: &mut MemoryStorage, dev: &Keypair) {
+        let raw = dev.to_protobuf_encoding().unwrap();
+        storage.put(P2P_IDENTITY_PRIVATE_KEY, &B64.encode(raw)).unwrap();
+    }
+
+    /// 根因验证（2026-08-13）：两设备各自 `maybe_init`/`rotate(Init)` 到相同
+    /// epoch 号，但各自 `generate_ikey()` 生成**不同**的 epoch 密钥 → 互相加密
+    /// 后对方解不开 → `unwrap-value-failed` → 数据被静默丢弃 → vv 永不收敛 →
+    /// Concurrent 风暴。
+    #[test]
+    fn divergent_epoch_key_breaks_cross_device_decrypt() {
+        let dev_a = device(1); // 设备 A（W）
+        let dev_b = device(2); // 设备 B（K）
+        let root_id = "root-xyz";
+        let epoch = 1u64;
+
+        // 两端各自独立轮换（每个设备首次启动都 rotate(Init) 到 epoch 1）→ 各自
+        // 生成自己的 epoch 密钥，且**不共享**（模拟 ikey 未送达 / 各自主导）。
+        let key_a = generate_ikey();
+        let key_b = generate_ikey();
+        assert_ne!(key_a, key_b, "两端各自主导的 epoch 密钥应不同（根因前提）");
+
+        // A 用 key_a 加密 profile:self，推给 B。
+        let wrapped = wrap_value(&key_a, "profile:self", epoch, r#"{"nickname":"W"}"#)
+            .expect("A wrap 应成功");
+        // B 用自己主导的 key_b 解密 → 失败（复现 unwrap-value-failed）。
+        assert!(
+            unwrap_value(&key_b, "profile:self", &wrapped).is_none(),
+            "两端各自主导不同 epoch 密钥时，对端解不开加密记录（unwrap-value-failed）"
+        );
+
+        // 对照：若 B 通过 ikey 正确拿到 A 的 key_a，则能解开（证明"密钥同步正确即收敛"）。
+        let via_box = unwrap_value(&key_a, "profile:self", &wrapped).expect("正确密钥可解密");
+        assert!(via_box.contains("W"));
+    }
+
+    /// 修复验证（2026-08-13，方案 X）：两端各自 `rotate(Init)` 到同 epoch（各生成
+    /// 不同密钥、effective 都推进到与 current 相同），随后互灌 ikey，且 `epoch:state`
+    /// 经 pdsync LWW 收敛到同一 rotated_by（假设 W 赢）。验证：
+    /// - 赢家 W（rotated_by==自己）保留自己密钥 keyW；
+    /// - 败者 K 只采用赢家 W 的包裹 → 收敛到 keyW；
+    /// - 两端密钥一致 → profile:self 解密成功（风暴消除）。
+    #[test]
+    fn divergent_init_converges_via_ikey_refresh() {
+        let dev_w = device(1); // 手机端 W
+        let dev_k = device(2); // 桌面端 K
+        let root_id = "root-conv";
+        let epoch = 1u64;
+
+        let mut s_w = MemoryStorage::new();
+        let mut s_k = MemoryStorage::new();
+        persist_identity(&mut s_w, &dev_w);
+        persist_identity(&mut s_k, &dev_k);
+        let w_pk = B64.encode(dev_w.clone().try_into_ed25519().unwrap().public().to_bytes());
+        let k_pk = B64.encode(dev_k.clone().try_into_ed25519().unwrap().public().to_bytes());
+        crate::device::DeviceService::upsert_self(&mut s_w, "peerW", 1000, "nodeW", "t", Some(w_pk.clone())).unwrap();
+        crate::device::DeviceService::upsert_self(&mut s_k, "peerK", 1000, "nodeK", "t", Some(k_pk.clone())).unwrap();
+        crate::device::DeviceService::upsert_self(&mut s_w, "peerK", 1000, "nodeK", "t", Some(k_pk.clone())).unwrap();
+        crate::device::DeviceService::upsert_self(&mut s_k, "peerW", 1000, "nodeW", "t", Some(w_pk.clone())).unwrap();
+
+        // 两端各 init 到 epoch 1：各自密钥不同，各自 effective=1。
+        let key_w = generate_ikey();
+        let key_k = generate_ikey();
+        assert_ne!(key_w, key_k, "两端各自主导的 epoch 密钥应不同");
+        put_local_key(&mut s_w, 1, &key_w).unwrap();
+        put_effective(&mut s_w, 1).unwrap();
+        put_local_key(&mut s_k, 1, &key_k).unwrap();
+        put_effective(&mut s_k, 1).unwrap();
+
+        // epoch:state 经 pdsync LWW 收敛到单一 rotated_by=peerW（W 是赢家）：
+        // 两端 state 一致地认为 rotated_by=peerW。
+        put_epoch_state(&mut s_w, "nodeW", &EpochState { current: 1, rotated_at: 2000, rotated_by: "peerW".into(), reason: RotationReason::Init }, 2000).unwrap();
+        put_epoch_state(&mut s_k, "nodeK", &EpochState { current: 1, rotated_at: 2000, rotated_by: "peerW".into(), reason: RotationReason::Init }, 2000).unwrap();
+
+        // 互灌 ikey：W 把 keyW box 给 K；K 把 keyK box 给 W。
+        let (wrapped_wk, nonce_wk) = box_ikey(&key_w, &x_pub(&dev_k), &x_priv(&dev_w), root_id, 1, "peerW", "peerK").unwrap();
+        let ikey_wk = IkeyRecord { wrapped_key: wrapped_wk, nonce: nonce_wk, ts: 1000 };
+        s_k.put(&ikey_key(1, "peerW", "peerK"), &serde_json::to_string(&ikey_wk).unwrap()).unwrap();
+        let (wrapped_kw, nonce_kw) = box_ikey(&key_k, &x_pub(&dev_w), &x_priv(&dev_k), root_id, 1, "peerK", "peerW").unwrap();
+        let ikey_kw = IkeyRecord { wrapped_key: wrapped_kw, nonce: nonce_kw, ts: 1000 };
+        s_w.put(&ikey_key(1, "peerK", "peerW"), &serde_json::to_string(&ikey_kw).unwrap()).unwrap();
+
+        // 方案 X：赢家 W 保留自己密钥（rotated_by==自己直接返回）；败者 K 采用赢家 W 的包裹。
+        EpochService::try_refresh_keys(&mut s_w, root_id, "peerW", 1001).unwrap();
+        EpochService::try_refresh_keys(&mut s_k, root_id, "peerK", 1001).unwrap();
+
+        // 两端应收敛到同一把 = keyW（赢家 W 的密钥）。
+        let final_w = get_local_key(&s_w, 1).unwrap().expect("W 应有 epoch 1 密钥");
+        let final_k = get_local_key(&s_k, 1).unwrap().expect("K 应有 epoch 1 密钥");
+        assert_eq!(final_w, key_w, "赢家 W 保留自己密钥");
+        assert_eq!(final_k, key_w, "败者 K 采用赢家 W 的密钥");
+        assert_eq!(final_w, final_k, "两端 epoch 密钥收敛一致");
+
+        // 收敛后互解成功（风暴消除）。
+        let wrapped = wrap_value(&final_w, "profile:self", 1, r#"{"nickname":"W"}"#).unwrap();
+        let plain = unwrap_value(&final_k, "profile:self", &wrapped).expect("收敛后对端可解密 profile:self");
+        assert!(plain.contains("W"));
+    }
+
+    /// 用 box_ikey/unbox_ikey 验证：只要 ikey 送达，B 能正确拿到 A 的 epoch 密钥。
+    #[test]
+    fn ikey_delivery_gives_same_epoch_key() {
+        let dev_a = device(1);
+        let dev_b = device(2);
+        let root_id = "root-abc";
+        let epoch = 1u64;
+
+        let key_a = generate_ikey();
+        let (wrapped, nonce) = box_ikey(
+            &key_a,
+            &x_pub(&dev_b),
+            &x_priv(&dev_a),
+            root_id,
+            epoch,
+            "peerA",
+            "peerB",
+        )
+        .expect("A box 给 B 应成功");
+
+        let received = unbox_ikey(
+            &wrapped,
+            &nonce,
+            &x_pub(&dev_a),
+            &x_priv(&dev_b),
+            root_id,
+            epoch,
+            "peerA",
+            "peerB",
+        )
+        .expect("B unbox A 的 ikey 应成功");
+
+        assert_eq!(received, key_a, "ikey 送达后 B 拿到与 A 一致的 epoch 密钥");
+    }
+
+    /// 方案 Y（2026-08-14）：恢复加入方跳过 init 语义。
+    /// - 无恢复标记（主导/正常创建）→ should_skip = false（照常 init）；
+    /// - 有恢复标记且未超时 → should_skip = true（跳过 init，等主导 ikey）；
+    /// - 有恢复标记且超时 → 清除标记自升主导，should_skip = false。
+    #[test]
+    fn recovered_skip_init_semantics() {
+        // 主导设备：无恢复标记 → 不跳过。
+        let mut s = MemoryStorage::new();
+        assert!(!should_skip_init_as_recovered(&mut s).unwrap(), "主导设备照常 init");
+
+        // 恢复加入方：有标记、未超时 → 跳过。
+        s.put(RECOVERED_KEY, "1").unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        s.put(RECOVERED_AT_KEY, &now.to_string()).unwrap();
+        assert!(should_skip_init_as_recovered(&mut s).unwrap(), "恢复加入方未超时跳过 init");
+
+        // 恢复加入方：等待超时（模拟已等 31s）→ 清除标记自升主导。
+        s.put(RECOVERED_AT_KEY, &(now - RECOVERED_ESCAPE_MS - 1000).to_string()).unwrap();
+        assert!(
+            !should_skip_init_as_recovered(&mut s).unwrap(),
+            "恢复加入方超时后自升主导 init"
+        );
+        assert!(
+            s.get(RECOVERED_KEY).unwrap().is_none(),
+            "超时自升后清除恢复标记"
+        );
+    }
 }

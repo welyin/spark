@@ -1,4 +1,4 @@
-﻿//! pdsync 单元测试（实现见 ../pdsync.rs；本文件由 pdsync.rs 以 #[cfg(test)] mod tests 挂载。
+//! pdsync 单元测试（实现见 ../pdsync.rs；本文件由 pdsync.rs 以 #[cfg(test)] mod tests 挂载。
 
     use super::*;
     use crate::storage::MemoryStorage;
@@ -41,8 +41,8 @@
         assert_eq!(meta_b.vv.get(NODE_B), Some(&1));
 
         let folded = collect_category_vv(&s, category_friend(), None).unwrap();
-        // a: A:1；b: A:1+B:1 → 折叠 A:1, B:1
-        assert_eq!(folded.get(NODE_A), Some(&1));
+        // per-node 序号：A 两条写依次为 A:1/A:2；b 上 B 再改为 B:1 → 折叠 A:2, B:1
+        assert_eq!(folded.get(NODE_A), Some(&2));
         assert_eq!(folded.get(NODE_B), Some(&1));
     }
 
@@ -79,13 +79,14 @@
         put_personal(&mut s, NODE_A, &format!("{FRIEND_PREFIX}b"), r#""B1""#, 1000).unwrap();
         put_personal(&mut s, NODE_B, &format!("{FRIEND_PREFIX}b"), r#""B2""#, 2000).unwrap();
 
-        // knownVv = {A:1, B:1}（对端已齐全）→ 无增量
+        // knownVv = {A:2, B:1}（对端已齐全：A 两条写 + B 对 b 的更新）→ 无增量
         let known_full: VersionVector =
-            [(NODE_A.to_string(), 1), (NODE_B.to_string(), 1)].into_iter().collect();
+            [(NODE_A.to_string(), 2), (NODE_B.to_string(), 1)].into_iter().collect();
         let inc = collect_incremental(&s, category_friend(), &known_full, None, 0).unwrap();
         assert!(inc.is_empty());
 
-        // knownVv = {A:1}（对端缺 B 对 b 的更新）→ 只推 b（B:2 所在）
+        // knownVv = {A:1}（对端只见 A 第 1 条，缺 A 对 b 的第 2 条写 + B 的更新）
+        // → 只推 b（vv {A:2, B:1} 两分量均领先）
         let known_a: VersionVector = [(NODE_A.to_string(), 1)].into_iter().collect();
         let inc = collect_incremental(&s, category_friend(), &known_a, None, 0).unwrap();
         assert_eq!(inc.len(), 1);
@@ -323,8 +324,8 @@
                 let _ = apply_personal_remote(&mut b, &r.key, &r.value.to_string(), &r.meta).unwrap();
             }
         }
-        // B 现在应有 a0,a1,a2（来自 A）+ b0（自己）
-        assert_eq!(collect_category_vv(&b, category_friend(), None).unwrap().get(NODE_A), Some(&1));
+        // B 现在应有 a0,a1,a2（来自 A，per-node 序号各为 A:1..A:3，折叠 A:3）+ b0（自己）
+        assert_eq!(collect_category_vv(&b, category_friend(), None).unwrap().get(NODE_A), Some(&3));
         assert_eq!(collect_category_vv(&b, category_friend(), None).unwrap().get(NODE_B), Some(&1));
 
         // 反向 B → A：A 缺 b0，B 领先，A 发 need，B 回 data，A 应用
@@ -420,10 +421,11 @@
             let prof_vv = collect_category_vv(s, category_named("profile:self"), None).unwrap();
             assert_eq!(prof_vv.get(NODE_A), None, "A 的 profile 编辑被 LWW 丢弃");
             assert_eq!(prof_vv.get(NODE_B), Some(&1));
-            // conv：B 胜（B 草稿，ts 更大）
+            // conv：B 胜（B 草稿，ts 更大）；conv 是 B 的第 2 次受管写
+            // （profile 已耗 B:1）→ per-node 序号 B:2
             let conv_vv = collect_category_vv(s, category_named("msg:conv"), None).unwrap();
             assert_eq!(conv_vv.get(NODE_A), None, "A 的 conv 编辑被 LWW 丢弃");
-            assert_eq!(conv_vv.get(NODE_B), Some(&1));
+            assert_eq!(conv_vv.get(NODE_B), Some(&2));
         }
         // 双方实际数据一致：profile 昵称 = 乙，conv 草稿 = "草稿"
         let profile_raw = get_personal_meta(&a, profile_key).unwrap().unwrap();
@@ -881,14 +883,16 @@
         // A 端获得 B 的组织记录（org:meta 单记录并发，B ts 大 → B 胜）
         assert!(a.get(org_meta_key).unwrap().is_some());
 
-        // org:meta / ct:org / org:inv 三 category 折叠收敛
+        // org:meta / ct:org / org:inv 三 category 折叠收敛。
+        // A 侧三次受管写依次为 org:meta(A:1) / ct:org 成员(A:2) / org:inv 邀请(A:3)，
+        // per-node 序号折叠后 ct:org=A:2、org:inv=A:3。
         for s in [&a, &b] {
             let org_meta_vv = collect_category_vv(s, category_named("org:meta"), None).unwrap();
             assert_eq!(org_meta_vv.get(NODE_B), Some(&1), "org:meta LWW B 胜");
             let ct_org_vv = collect_category_vv(s, category_named("ct:org"), None).unwrap();
-            assert_eq!(ct_org_vv.get(NODE_A), Some(&1), "ct:org 含 A 分量");
+            assert_eq!(ct_org_vv.get(NODE_A), Some(&2), "ct:org 含 A 分量");
             let org_inv_vv = collect_category_vv(s, category_named("org:inv"), None).unwrap();
-            assert_eq!(org_inv_vv.get(NODE_A), Some(&1), "org:inv 含 A 分量");
+            assert_eq!(org_inv_vv.get(NODE_A), Some(&3), "org:inv 含 A 分量");
         }
     }
 
@@ -1100,6 +1104,12 @@
             let (_, records) = parse_data(&data).unwrap();
             for r in &records {
                 assert!(!r.key.starts_with("ldoc:"), "local 集合数据不得进入同步流量");
+            }
+            // 与首轮同口径合入：local 集合的**声明记录**（pdecl:）仍在 pdecl
+            // category 内——per-node 序号下它消耗序号、使 A 的 pdecl 折叠领先
+            // 对端（旧 per-key 语义下被同值 vv 遮蔽），不合入则收敛断言永不成立。
+            for r in records {
+                let _ = apply_personal_remote(&mut b, &r.key, &r.value.to_string(), &r.meta).unwrap();
             }
         }
         assert!(b.get(&local_decl.data_key("d1")).unwrap().is_none());

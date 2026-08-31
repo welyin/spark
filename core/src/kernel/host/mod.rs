@@ -1,4 +1,4 @@
-﻿//! kernel 的 P2pHost 实现：把 p2p 事件循环的业务回调接到内核存储与身份状态上。
+//! kernel 的 P2pHost 实现：把 p2p 事件循环的业务回调接到内核存储与身份状态上。
 //!
 //! 已接线的回调：`current_root_id`、`evidence_head_hash`、`apply_remote_update`
 //! （sync 模块远端应用 + purge 水位线拦截）、`recovery_view`（org 模块恢复视图）、
@@ -140,6 +140,9 @@ pub(crate) struct KernelHost {
         Arc<Mutex<std::collections::HashSet<String>>>,
     /// 插件后台运行时宿主查询句柄（O3 filtered 权限钩子在 dm 入站执行）。
     pub(crate) plugin_host_query: crate::kernel::PluginHostQuery,
+    /// Kverify 派生缓存（与 KernelDmHandler 共享同一 Arc；见 dm_handler.rs
+    /// `derive_kverify_from_password_shared` 注释）。
+    pub(crate) kverify_cache: Arc<Mutex<Option<(String, [u8; 32])>>>,
 }
 
 impl KernelHost {
@@ -172,6 +175,7 @@ impl KernelHost {
             pdsync_capable_self_devices: Arc::clone(&self.pdsync_capable_self_devices),
             orgsync_capable_member_peers: Arc::clone(&self.orgsync_capable_member_peers),
             plugin_host_query: self.plugin_host_query.clone(),
+            kverify_cache: Arc::clone(&self.kverify_cache),
         }
     }
 }
@@ -408,12 +412,18 @@ impl P2pHost for KernelHost {
         Some(Arc::new(self.dm_handler_impl()))
     }
 
-    /// 朋友建连：按 peer_id 扫描 `ct:friend:` 记录找匹配的朋友，命中则向其
-    /// 尽力投递 profile-sync dm（`{"nickname", "avatar"?}`，寻址用朋友记录
-    /// 的 peer 信息）。事件循环线程内执行：只做 KV 扫描与共享格读取，信封
+    /// 朋友应用层就绪（版本探测成功）：按 peer_id 扫描 `ct:friend:` 记录找匹配
+    /// 的朋友，命中则向其尽力投递 profile-sync dm（`{"nickname", "avatar"?}`，
+    /// 寻址用朋友记录的 peer 信息），并补投 `dm:pending:` 离线队列、自设备建连
+    /// 时补发 M1 设备通知。事件循环线程内执行：只做 KV 扫描与共享格读取，信封
     /// 装配与投递 `tokio::spawn` 到 runtime（同 `spawn_auto_accept` 模式，
     /// 不能 block_on）；节点未回填/身份已锁/无匹配朋友时静默跳过。
-    fn on_peer_connected(&mut self, peer_id: &str) {
+    ///
+    /// 业务投递的唯一触发信号（peer-app-ready-event §3.3）：transport 层
+    /// `on_peer_connected` 不投业务，避免对 TCP 短暂连上/握手失败的地址反复拨号。
+    /// profile-sync 失败直接放弃（不重试、不入 pending、不记状态，LWW 幂等）；
+    /// `dm:pending:` 补投保留"入队等待下次连接"语义（与 profile-sync 不同策略）。
+    fn on_peer_app_ready(&mut self, _version: &str, peer_id: &str) {
         let friend = ContactService::overview(&self.storage, "personal")
             .map(|view| view.friends)
             .unwrap_or_default()
@@ -502,6 +512,9 @@ impl P2pHost for KernelHost {
             )
             .await;
         });
+        // profile-sync 尽力投递：应用层确认后投一次，失败直接放弃（不重试、
+        // 不入 pending、不记状态），LWW 幂等，靠下次资料变更广播/下次应用层
+        // 连接重新投递自然补上（peer-app-ready §3.4.1）。
         tokio::spawn(async move {
             let mut body = serde_json::json!({ "nickname": nickname });
             if let Some(avatar) = avatar {

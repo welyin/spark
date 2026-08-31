@@ -272,7 +272,11 @@ fn app_send_bumps_conv_pmeta() {
     let pmeta = spark_core::sync::get_personal_meta(&storage, &conv_key)
         .unwrap()
         .expect("app 会话壳应有 conv pmeta");
-    assert_eq!(pmeta.vv.values().sum::<i64>(), 1, "vv 递增一次");
+    // per-node 单调序号：conv bump 是本次 send 的受管写，vv 本机分量即全局
+    // 序号（send 前内核已有若干受管写，值 >1 属正常；单分量 + 与 ts 语义才是
+    // 本断言的覆盖意图）。
+    assert_eq!(pmeta.vv.len(), 1, "vv 只含本机一个分量");
+    assert!(pmeta.vv.values().all(|v| *v >= 1), "vv 为有效序号");
     assert_eq!(pmeta.ts, 0, "ts 保持 meta_updated_at=0，不被消息时间推高");
     kernel.shutdown().unwrap();
 }

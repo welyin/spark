@@ -13,6 +13,8 @@
 //! （从 TS 实现逐字节复刻）使用 `derivationPath`。此处以向量为准，序列化输出
 //! `derivationPath`，反序列化同时接受别名 `path`。
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as B64;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
@@ -39,6 +41,8 @@ pub const SIGNATURE_MAX_CHARS: usize = 128;
 pub const AVATAR_MAX_SERIALIZED_BYTES: usize = 200 * 1024;
 /// 头像 data URL 前缀。
 pub const AVATAR_PREFIX: &str = "data:image/";
+/// 备份码紧凑格式版本（与顶层 `v` 对齐，独立字段便于单测）。
+pub const COMPACT_BACKUP_VERSION: u32 = 2;
 
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -131,6 +135,43 @@ impl IdentityFile {
     pub fn to_json(&self) -> Result<String> {
         Ok(serde_json::to_string(self)?)
     }
+}
+
+/// 备份二维码紧凑载荷：独立于磁盘 [`IdentityFile`] 的专用结构体，自带独立
+/// Serialize/Deserialize，与磁盘格式完全解耦（互不继承、互不牵连）。
+///
+/// 相对磁盘格式的取舍（只存在于本结构体，不回写磁盘）：
+/// - `salt`/`iv`/`data`/`authTag` 由 hex 改为 base64（省 1/3 体积）；
+/// - 删除 `publicKeyHex`（64 字符 hex）与 `version`（内层版本由 `v` 承担）；
+/// - `rootId` 保留作防篡改校验锚点（恢复端用派生公钥重算后比对）；
+/// - 保留 `kdf`/`nickname`/`createdAt`/`updatedAt`（资料状态未知恒置 0）。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CompactBackupFile {
+    /// 内层格式版本（当前 2）。
+    pub v: u32,
+    /// KDF 标识（`scrypt`）。
+    pub kdf: String,
+    /// KDF salt（base64，16B）。
+    pub salt: String,
+    /// 加密 IV（base64，12B）。
+    pub iv: String,
+    /// 密文（base64）。
+    pub data: String,
+    /// GCM authTag（base64，16B）。
+    #[serde(rename = "authTag")]
+    pub auth_tag: String,
+    /// rootId = sha256hex(publicKey)，防篡改校验锚点。
+    #[serde(rename = "rootId")]
+    pub root_id: String,
+    /// 昵称（可选；恢复后直接有昵称，体验）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nickname: Option<String>,
+    /// 创建时间（ms；profile-sync LWW 时间戳锚点）。
+    #[serde(rename = "createdAt")]
+    pub created_at: u64,
+    /// 更新时间（ms；紧凑备份资料字段残缺，恒置 0 = 资料状态未知）。
+    #[serde(rename = "updatedAt")]
+    pub updated_at: u64,
 }
 
 /// 校验昵称：trim 后 1–24 字符。返回 trim 后的昵称。
@@ -359,6 +400,17 @@ fn patch_profile_fields(
     region: Option<&str>,
     signature: Option<&str>,
 ) -> Result<()> {
+    // 内容未变的补丁不得刷新 updatedAt：同步采纳路径（apply_self_profile /
+    // apply_profile_from_sled）会对内容相同的快照重复调用本函数，无条件
+    // 重盖 updatedAt=now 会让 profile-sync 快照 ts 逐跳递增，两端互发永不
+    // 收敛（真机实测 100% CPU 的根因）。仅实际变更时推进时间戳。
+    let before = (
+        file.nickname.clone(),
+        file.avatar.clone(),
+        file.gender.clone(),
+        file.region.clone(),
+        file.signature.clone(),
+    );
     if let Some(n) = nickname {
         file.nickname = Some(validate_nickname(n)?);
     }
@@ -375,7 +427,14 @@ fn patch_profile_fields(
     file.region = patch_extra_field(file.region.take(), region, "region", REGION_MAX_CHARS)?;
     file.signature =
         patch_extra_field(file.signature.take(), signature, "signature", SIGNATURE_MAX_CHARS)?;
-    file.updated_at = now_ms();
+    if file.nickname != before.0
+        || file.avatar != before.1
+        || file.gender != before.2
+        || file.region != before.3
+        || file.signature != before.4
+    {
+        file.updated_at = now_ms();
+    }
     Ok(())
 }
 
@@ -474,10 +533,11 @@ pub fn decrypt_payload_with_key(
     Ok(serde_json::from_slice(&plaintext)?)
 }
 
-/// 组装二维码备份的紧凑身份文件：payload 与文件外层均剔除 avatar 及其他
-/// 可选大字段（gender/region/signature），仅保留身份恢复必需的
+/// 组装二维码备份的紧凑载荷：payload 剔除 avatar 及其他可选大字段
+/// （gender/region/signature），仅保留身份恢复必需的
 /// mnemonic/path/version/wordlist/nickname/createdAt，同口令重新加密
-/// （新 salt/iv）。二维码容量有限（约 3KB），完整文件备份见 `backup_payload`。
+/// （新 salt/iv），产 [`CompactBackupFile`]（不再走磁盘 `seal_v2`）。
+/// 二维码容量有限（约 3KB），完整文件备份见 `backup_payload`。
 ///
 /// `updatedAt` 置 0：紧凑备份的资料字段是残缺的（avatar 等被剔除），不能
 /// 携带源文件的资料时间戳——否则恢复端会以「残缺的最新资料」在 profile-sync
@@ -486,9 +546,31 @@ pub fn decrypt_payload_with_key(
 /// 必然被应用（identity.md §5「恢复后头像经 profile-sync 找回」）。
 pub fn seal_compact_backup(
     file: &IdentityFile,
+    identity: &Identity,
     payload: &IdentityPayload,
     password: &str,
-) -> Result<IdentityFile> {
+) -> Result<CompactBackupFile> {
+    build_compact_backup(
+        identity,
+        payload,
+        password,
+        file.nickname.clone(),
+        file.created_at,
+    )
+}
+
+/// 构造紧凑备份载荷：从身份派生公钥/rootId，随机 salt 派生 scrypt 密钥、
+/// 随机 iv 加密 payload（`crypto::encrypt_v2_with_key`），字段 base64 化。
+///
+/// 与磁盘 `seal_v2` 系列完全解耦——不经过磁盘 `IdentityFile`，`publicKeyHex`
+/// 不落盘；恢复端从派生公钥重算补全。
+pub fn build_compact_backup(
+    identity: &Identity,
+    payload: &IdentityPayload,
+    password: &str,
+    nickname: Option<String>,
+    created_at: u64,
+) -> Result<CompactBackupFile> {
     let compact = IdentityPayload {
         mnemonic: payload.mnemonic.clone(),
         path: payload.path.clone(),
@@ -496,19 +578,88 @@ pub fn seal_compact_backup(
         wordlist: payload.wordlist.clone(),
         created_at: payload.created_at,
     };
-    seal_v2(
-        &compact,
-        password,
-        file.public_key_hex.clone(),
-        file.root_id.clone(),
-        file.nickname.clone(),
-        None,
-        None,
-        None,
-        None,
-        file.created_at,
-        0,
-    )
+    let mut salt = [0u8; 16];
+    rand::rng().fill_bytes(&mut salt);
+    let key = crypto::scrypt_v2_key(password, &salt)?;
+    let mut iv = [0u8; crypto::GCM_IV_LEN];
+    rand::rng().fill_bytes(&mut iv);
+    let plaintext = serde_json::to_vec(&compact)?;
+    let (data, auth_tag) = crypto::encrypt_v2_with_key(&plaintext, &key, &iv)?;
+    Ok(CompactBackupFile {
+        v: COMPACT_BACKUP_VERSION,
+        kdf: KDF_SCRYPT.to_string(),
+        salt: B64.encode(salt),
+        iv: B64.encode(iv),
+        data: B64.encode(data),
+        auth_tag: B64.encode(auth_tag),
+        root_id: identity.id(),
+        nickname,
+        created_at,
+        updated_at: 0,
+    })
+}
+
+/// 把紧凑备份载荷 → 磁盘 [`IdentityFile`]：base64 字段回 hex、补 `version:2`。
+///
+/// `publicKeyHex`（磁盘必填）从派生公钥重算——本函数不持有口令，故只回
+/// hex 化的 `pk` 派生值前的占位；恢复端解锁派生 identity 后须以
+/// `identity.public_key_hex()` 覆写（权威来源）。损坏输入 fail-closed：
+/// 版本/kdf 不符、base64 解码失败、salt/iv/authTag 长度不符（QR 扫码位翻转
+/// 会损坏这些字段）一律报错，统一归「备份数据无效或已损坏」，避免误报
+/// 「密码不正确」/Crypto。
+pub fn decode_compact_backup(c: &CompactBackupFile) -> Result<IdentityFile> {
+    if c.v != COMPACT_BACKUP_VERSION {
+        return Err(IdentityError::UnsupportedVersion(c.v));
+    }
+    if c.kdf != KDF_SCRYPT {
+        return Err(IdentityError::MalformedFile(format!(
+            "compact backup with kdf `{}`",
+            c.kdf
+        )));
+    }
+    let b64_err = |_| IdentityError::MalformedFile("compact backup base64 decode failed".into());
+    let salt = B64.decode(&c.salt).map_err(b64_err)?;
+    let iv = B64.decode(&c.iv).map_err(b64_err)?;
+    let data = B64.decode(&c.data).map_err(b64_err)?;
+    let auth_tag = B64.decode(&c.auth_tag).map_err(b64_err)?;
+    if salt.len() != 16 {
+        return Err(IdentityError::MalformedFile(format!(
+            "compact backup salt must be 16 bytes, got {}",
+            salt.len()
+        )));
+    }
+    if iv.len() != crypto::GCM_IV_LEN {
+        return Err(IdentityError::MalformedFile(format!(
+            "compact backup iv must be {} bytes, got {}",
+            crypto::GCM_IV_LEN,
+            iv.len()
+        )));
+    }
+    if auth_tag.len() != crypto::GCM_TAG_LEN {
+        return Err(IdentityError::MalformedFile(format!(
+            "compact backup authTag must be {} bytes, got {}",
+            crypto::GCM_TAG_LEN,
+            auth_tag.len()
+        )));
+    }
+    Ok(IdentityFile {
+        version: FILE_VERSION_V2,
+        kdf: KDF_SCRYPT.to_string(),
+        salt: hex::encode(salt),
+        iv: hex::encode(iv),
+        data: hex::encode(data),
+        auth_tag: Some(hex::encode(auth_tag)),
+        // 磁盘必填字段；恢复端解锁后以派生公钥覆写（权威来源）。
+        public_key_hex: String::new(),
+        root_id: c.root_id.clone(),
+        nickname: c.nickname.clone(),
+        avatar: None,
+        gender: None,
+        region: None,
+        signature: None,
+        created_at: c.created_at,
+        updated_at: c.updated_at,
+    })
 }
 
 /// `changePassword`：以旧口令验证解密当前 payload 后，用新口令重新封装
@@ -645,4 +796,143 @@ fn seal_v2_with_key(
         created_at,
         updated_at,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::identity::derive::derive_root_identity;
+
+    fn sample_identity() -> (Identity, IdentityPayload, String) {
+        let password = "correct-horse-99".to_string();
+        let mnemonic = generate_mnemonic().unwrap();
+        let parsed = parse_mnemonic(&mnemonic).unwrap();
+        let identity = derive_root_identity(&parsed.seed);
+        let payload = IdentityPayload {
+            mnemonic: parsed.mnemonic,
+            path: identity.path.clone(),
+            version: FILE_VERSION_V2,
+            wordlist: Some(parsed.wordlist.as_str().to_string()),
+            created_at: Some(123_456_789),
+        };
+        (identity, payload, password)
+    }
+
+    #[test]
+    fn compact_backup_base64_hex_roundtrip() {
+        let (identity, payload, password) = sample_identity();
+        let compact = build_compact_backup(
+            &identity,
+            &payload,
+            &password,
+            Some("小明".to_string()),
+            123_456_789,
+        )
+        .unwrap();
+
+        // 紧凑结构体字段：v/kdf/rootId/nickname/createdAt/updatedAt
+        assert_eq!(compact.v, COMPACT_BACKUP_VERSION);
+        assert_eq!(compact.kdf, KDF_SCRYPT);
+        assert_eq!(compact.root_id, identity.id());
+        assert_eq!(compact.nickname.as_deref(), Some("小明"));
+        assert_eq!(compact.created_at, 123_456_789);
+        assert_eq!(compact.updated_at, 0);
+
+        // 解码回磁盘 IdentityFile：base64 字段与 hex 字段同源字节一致
+        let file = decode_compact_backup(&compact).unwrap();
+        assert_eq!(file.version, FILE_VERSION_V2);
+        assert_eq!(file.kdf, KDF_SCRYPT);
+        assert_eq!(file.salt, hex::encode(B64.decode(&compact.salt).unwrap()));
+        assert_eq!(file.iv, hex::encode(B64.decode(&compact.iv).unwrap()));
+        assert_eq!(file.data, hex::encode(B64.decode(&compact.data).unwrap()));
+        assert_eq!(
+            file.auth_tag.as_deref(),
+            Some(hex::encode(B64.decode(&compact.auth_tag).unwrap()).as_str())
+        );
+        assert_eq!(file.root_id, identity.id());
+        assert_eq!(file.nickname.as_deref(), Some("小明"));
+        assert_eq!(file.created_at, 123_456_789);
+        assert_eq!(file.updated_at, 0);
+
+        // 恢复端以派生公钥补全磁盘必填 publicKeyHex（权威来源）
+        let mut file = file;
+        file.public_key_hex = identity.public_key_hex();
+        assert_eq!(file.public_key_hex, identity.public_key_hex());
+
+        // 解出 payload 与原一致，rootId 校验通过
+        let (decoded, decoded_identity) = unlock_identity(&file, &password).unwrap();
+        assert_eq!(decoded.mnemonic, payload.mnemonic);
+        assert_eq!(decoded.path, payload.path);
+        assert_eq!(decoded_identity.id(), identity.id());
+    }
+
+    #[test]
+    fn compact_backup_serialize_shape() {
+        let (identity, payload, password) = sample_identity();
+        let compact = build_compact_backup(&identity, &payload, &password, None, 1).unwrap();
+        let json = serde_json::to_value(&compact).unwrap();
+        let obj = json.as_object().unwrap();
+        // 顶层字段名与设计 §4.2 一致，不含 publicKeyHex/version/pk
+        assert!(obj.contains_key("v"));
+        assert!(obj.contains_key("kdf"));
+        assert!(obj.contains_key("salt"));
+        assert!(obj.contains_key("iv"));
+        assert!(obj.contains_key("data"));
+        assert!(obj.contains_key("authTag"));
+        assert!(obj.contains_key("rootId"));
+        assert!(obj.contains_key("createdAt"));
+        assert!(obj.contains_key("updatedAt"));
+        assert!(!obj.contains_key("publicKeyHex"), "不得含 publicKeyHex");
+        assert!(!obj.contains_key("version"), "内层版本由 v 承担");
+        assert!(!obj.contains_key("pk"), "pk 已砍掉");
+        assert!(!obj.contains_key("nickname"), "None 不序列化");
+    }
+
+    #[test]
+    fn decode_compact_backup_fails_closed() {
+        let (identity, payload, password) = sample_identity();
+        let compact = build_compact_backup(&identity, &payload, &password, None, 1).unwrap();
+
+        // 非法 base64 → 失败
+        let mut bad_salt = serde_json::to_value(&compact).unwrap();
+        bad_salt["salt"] = serde_json::Value::String("!!!not-base64!!!".into());
+        let parsed: CompactBackupFile = serde_json::from_value(bad_salt).unwrap();
+        assert!(decode_compact_backup(&parsed).is_err(), "非法 base64 必须 fail-closed");
+
+        // 版本不符 → 失败
+        let mut bad_v = serde_json::to_value(&compact).unwrap();
+        bad_v["v"] = serde_json::Value::from(1u32);
+        let parsed: CompactBackupFile = serde_json::from_value(bad_v).unwrap();
+        assert!(decode_compact_backup(&parsed).is_err(), "版本不符必须 fail-closed");
+
+        // kdf 不符 → 失败
+        let mut bad_kdf = serde_json::to_value(&compact).unwrap();
+        bad_kdf["kdf"] = serde_json::Value::String("pbkdf2".into());
+        let parsed: CompactBackupFile = serde_json::from_value(bad_kdf).unwrap();
+        assert!(decode_compact_backup(&parsed).is_err(), "kdf 不符必须 fail-closed");
+    }
+
+    #[test]
+    fn decode_compact_backup_rejects_wrong_field_lengths() {
+        // QR 扫码位翻转损坏 salt/iv/authTag 会改变其长度（base64 解码成功但字节数
+        // 不符）——必须统一 fail-closed 为 MalformedFile，避免在解密/派 KDF 阶段
+        // 误报「密码不正确」/Crypto。
+        let (identity, payload, password) = sample_identity();
+        let compact = build_compact_backup(&identity, &payload, &password, None, 1).unwrap();
+
+        let mut patch = |field: &str, b64: &str| -> CompactBackupFile {
+            let mut v = serde_json::to_value(&compact).unwrap();
+            v[field] = serde_json::Value::String(b64.to_string());
+            serde_json::from_value::<CompactBackupFile>(v).unwrap()
+        };
+        // 合法 base64 但字节数不符（15B / 11B / 15B 而非 16/12/16）。
+        let bad_salt = patch("salt", &B64.encode([0u8; 15]));
+        assert!(decode_compact_backup(&bad_salt).is_err(), "salt 长度不符必须 fail-closed");
+        let bad_iv = patch("iv", &B64.encode([0u8; 11]));
+        assert!(decode_compact_backup(&bad_iv).is_err(), "iv 长度不符必须 fail-closed");
+        let bad_tag = patch("authTag", &B64.encode([0u8; 15]));
+        assert!(decode_compact_backup(&bad_tag).is_err(), "authTag 长度不符必须 fail-closed");
+        // 正常长度仍通过
+        assert!(decode_compact_backup(&compact).is_ok(), "正常字段长度应通过");
+    }
 }

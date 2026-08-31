@@ -64,6 +64,14 @@ impl<S: StorageBackend> EventLoop<S> {
                 self.host.on_peer_version(&version, &peer.to_base58());
                 self.emit(P2pEvent::PeerVersion {
                     peer_id: peer.to_base58(),
+                    app_version: version.clone(),
+                });
+                // 应用层就绪（版本探测成功 = 对端是 Spark 节点且应用层可通信）：
+                // 触发业务投递钩子 + 事件（peer-app-ready §3.3）。
+                self.host
+                    .on_peer_app_ready(&version, &peer.to_base58());
+                self.emit(P2pEvent::PeerAppReady {
+                    peer_id: peer.to_base58(),
                     app_version: version,
                 });
             }

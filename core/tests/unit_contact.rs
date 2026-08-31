@@ -277,8 +277,9 @@ fn tag_delete_strips_references_with_pmeta_and_updated_at() {
     assert!(f.tag_ids.is_empty());
     assert_eq!(f.updated_at, NOW + 100);
     let friend_meta = get_personal_meta(s.raw(), &format!("ct:friend:{}", rid('a'))).unwrap().unwrap();
-    // upsert（vv=1）+ 摘除引用（vv=2）：两次本地写各 bump 一次
-    assert_eq!(friend_meta.vv.get(NODE), Some(&2));
+    // per-node 单调序号：建标签 seq 1 + upsert friend seq 2 + 标签 tombstone
+    // seq 3 + friend 摘除引用 seq 4 → friend 的 vv 分量为最后一次写序号 4
+    assert_eq!(friend_meta.vv.get(NODE), Some(&4));
 }
 
 #[test]
@@ -378,8 +379,9 @@ fn group_delete_resets_members_with_pmeta_and_updated_at() {
     assert_eq!(f.group_id, "");
     assert_eq!(f.updated_at, NOW + 100);
     let friend_meta = get_personal_meta(s.raw(), &format!("ct:friend:{}", rid('a'))).unwrap().unwrap();
-    // upsert（vv=1）+ 复位（vv=2）
-    assert_eq!(friend_meta.vv.get(NODE), Some(&2));
+    // per-node 单调序号：建组 seq 1 + upsert friend seq 2 + 组 tombstone
+    // seq 3 + friend 复位 seq 4 → friend 的 vv 分量为最后一次写序号 4
+    assert_eq!(friend_meta.vv.get(NODE), Some(&4));
 }
 
 #[test]

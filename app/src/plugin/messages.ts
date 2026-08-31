@@ -104,3 +104,31 @@ export function notifyPluginUpgraded(spaceKey: string, pluginName: string): void
     pluginName
   }).catch((error) => console.warn('[plugin/messages] 插件升级系统通知写入失败', error));
 }
+
+// ------------------------------------------------------------------
+// 设备操作系统通知（M1 新设备加入 / M2 设备撤销）
+// 与插件通知同走 app:system 内置会话：消息页可查看且有记录，不再弹 tips。
+// ------------------------------------------------------------------
+
+/**
+ * 新设备加入系统通知（M1）：新设备配对成功后本机收到 DeviceNoticeReceived，
+ * 在消息页 app:system 会话落一条可追溯通知（fire-and-forget，写入失败留 warn 线索）。
+ */
+export function notifyDeviceJoined(spaceKey: string, deviceName: string): void {
+  void sendAppMessage(spaceKey, SYSTEM_APP_PLUGIN_ID, {
+    summary: `新设备「${deviceName}」加入了你的账号，如非本人操作请立即在设备管理中撤销`,
+    kind: 'device-joined',
+    deviceName
+  }).catch((error) => console.warn('[plugin/messages] 新设备加入系统通知写入失败', error));
+}
+
+/**
+ * 设备撤销系统通知（M2）：设备被撤销后落一条可追溯通知（fire-and-forget，同加入口径）。
+ */
+export function notifyDeviceRevoked(spaceKey: string, deviceName: string): void {
+  void sendAppMessage(spaceKey, SYSTEM_APP_PLUGIN_ID, {
+    summary: `设备「${deviceName}」已从你的账号撤销，无法再连接同步`,
+    kind: 'device-revoked',
+    deviceName
+  }).catch((error) => console.warn('[plugin/messages] 设备撤销系统通知写入失败', error));
+}

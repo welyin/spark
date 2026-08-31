@@ -344,6 +344,29 @@ impl DeviceService {
         Ok(())
     }
 
+    /// 远端 device-sync 合入的写入：对**对端**记账（防回声）——语义同
+    /// `upsert_pdsync` 但记账到 `remote_node_id`，不推进本机分量。
+    fn upsert_remote<S: StorageBackend>(
+        storage: &mut S,
+        record: &DeviceRecord,
+        now_ms: i64,
+        remote_node_id: &str,
+        local_node_id: &str,
+    ) -> crate::contact::Result<()> {
+        let key = format!("{DEVICE_PREFIX}{}", record.peer_id);
+        let text = serde_json::to_string(record)?;
+        crate::sync::personal::apply_snapshot_remote(
+            storage,
+            remote_node_id,
+            local_node_id,
+            &key,
+            &text,
+            now_ms,
+        )
+        .map_err(crate::contact::sync_err_to_contact)?;
+        Ok(())
+    }
+
     /// 读取单台设备记录。
     pub fn get<S: StorageBackend>(storage: &S, peer_id: &str) -> crate::contact::Result<Option<DeviceRecord>> {
         let key = format!("{DEVICE_PREFIX}{peer_id}");
@@ -505,14 +528,15 @@ impl DeviceService {
         storage: &mut S,
         mut record: DeviceRecord,
         now_ms: i64,
-        node_id: &str,
+        remote_node_id: &str,
+        local_node_id: &str,
     ) -> crate::contact::Result<(DeviceRecord, bool)> {
         Self::tombstone_same_device_peers(
             storage,
             record.device_uid.as_deref(),
             &record.peer_id,
             now_ms,
-            node_id,
+            remote_node_id,
         )?;
         let existing = Self::get(storage, &record.peer_id)?;
         // 撤销粘性：本地已撤销则保留 revoked_at，不允许远端同步洗白。
@@ -532,16 +556,16 @@ impl DeviceService {
             existing.as_ref().map(|e| e.updated_at).unwrap_or(record.updated_at)
         };
         if !changed {
-            // 内容不更新，但 last_seen 推进（设备在线证据）
+            // 内容不更新，但 last_seen 推进（设备在线证据）；对端记账防回声
             if let Some(mut e) = existing {
                 e.last_seen_at = now_ms;
-                Self::upsert_pdsync(storage, &e, now_ms, node_id)?;
+                Self::upsert_remote(storage, &e, now_ms, remote_node_id, local_node_id)?;
                 return Ok((e, false));
             }
         }
         record.updated_at = base_updated;
         record.last_seen_at = now_ms;
-        Self::upsert_pdsync(storage, &record, now_ms, node_id)?;
+        Self::upsert_remote(storage, &record, now_ms, remote_node_id, local_node_id)?;
         Ok((record, true))
     }
 }
@@ -627,7 +651,7 @@ mod tests {
             ..old.clone()
         };
         let (_, changed) =
-            DeviceService::apply_remote(&mut storage, drifted, 300, "node-a").unwrap();
+            DeviceService::apply_remote(&mut storage, drifted, 300, "node-b", "node-a").unwrap();
         assert!(changed);
         assert!(DeviceService::get(&storage, "peer-old").unwrap().is_none());
         assert!(DeviceService::get(&storage, "peer-new").unwrap().is_some());
@@ -658,7 +682,7 @@ mod tests {
             device_uid: Some("uid-y".to_string()),
             ..legacy.clone()
         };
-        DeviceService::apply_remote(&mut storage, incoming, 200, "node-a").unwrap();
+        DeviceService::apply_remote(&mut storage, incoming, 200, "node-b", "node-a").unwrap();
         assert!(
             DeviceService::get(&storage, "peer-legacy").unwrap().is_some(),
             "无 deviceUid 的旧记录保留（手动清理）"
@@ -682,7 +706,8 @@ mod tests {
             revoked_at: None,
             device_pub_key: None,
         };
-        let (applied, changed) = DeviceService::apply_remote(&mut storage, older.clone(), 100, "local-node").unwrap();
+        let (applied, changed) =
+            DeviceService::apply_remote(&mut storage, older.clone(), 100, "remote-node", "local-node").unwrap();
         assert!(changed);
         assert_eq!(applied.device_name, "旧名字");
 
@@ -692,7 +717,8 @@ mod tests {
             updated_at: 50,
             ..older.clone()
         };
-        let (applied, changed) = DeviceService::apply_remote(&mut storage, stale, 200, "local-node").unwrap();
+        let (applied, changed) =
+            DeviceService::apply_remote(&mut storage, stale, 200, "remote-node", "local-node").unwrap();
         assert!(!changed);
         assert_eq!(applied.device_name, "旧名字");
         assert_eq!(applied.last_seen_at, 200);
@@ -703,7 +729,8 @@ mod tests {
             updated_at: 300,
             ..older
         };
-        let (applied, changed) = DeviceService::apply_remote(&mut storage, newer, 300, "local-node").unwrap();
+        let (applied, changed) =
+            DeviceService::apply_remote(&mut storage, newer, 300, "remote-node", "local-node").unwrap();
         assert!(changed);
         assert_eq!(applied.device_name, "新名字");
     }

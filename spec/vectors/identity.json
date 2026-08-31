@@ -104,5 +104,30 @@
     "ciphertextBase64": "gDisEJLzuDtO79fER35wxvpK92eDs99w31UGdJs1HM1wZ34x/sv16NGjZhgQqS85guQthlQ5fZf7cHNm9/EkyTwXxCGcn7Y1HFLBSaR03UyLj7CzcHH0r+YFjrDMENpidk6B6/LlR0iAYuUhgZox4t9SJ6UzmyXQ7Tw7cyoeyoshzHcgQH6tYzZIsvHZVyMLZ4vmjmJE76pCYWmzHzZMndISfhVs9YY/QZJeVHf+Pgbq6dfjuU+l2Tng8BgDgqhG7cTF5igbGU7yuhAybSFuiA==",
     "roundtrip": "ok",
     "realImplCrossCheck": "ok（真实 unlock() 解开复刻 encrypt 产出的 v1 密文身份文件）"
+  },
+  "backupCodeV2": {
+    "meta": "备份码 v2 紧凑格式向量（qr-backup-payload-compression §8.1）。字段集 {v,kdf,salt,iv,data,authTag,rootId,nickname?,createdAt,updatedAt}，base64 + 无 publicKeyHex、无 pk（架构已砍 pk）。已按实现 serde 输出核验定稿（含 serde 字段序，identity_vectors 的 compact_backup_file_serialize_and_decode_framework 断言）。publicKeyHex/publicKeyBase64 仅作「v2 码→重建磁盘 IdentityFile 的 publicKeyHex 补全」的期望派生值断言，非载荷字段。",
+    "envelopeVersion": 2,
+    "innerVersion": 2,
+    "mnemonic": "与 祝 产 鸡 永 烂 施 师 蓝 荷 有 邓 朗 防 管 李 原 芳 饿 万 措 走 腰 旅",
+    "wordlist": "chinese_simplified",
+    "derivationPath": "m/44'/607'/0'/0'/0'",
+    "password": "Vec0-Passw0rd!",
+    "kdf": "scrypt",
+    "saltBase64": "ABEiM0RVZneImaq7zN3u/w==",
+    "ivBase64": "AQIDBAUGBwgJCgsM",
+    "dataBase64": "7QSWjz3l+ua5FFHwKu/xMV65bHsAZ+w9DHusPnmBVnEwc8d5idCgduJxdc6ZuRpxOI7BLhhohj0s84TjWsV6Dnis3XVUHl5S1h4h96+mg09FJbwjHxOOvToL2QyiyqT0j7XPa+KtPVB+b61uO99AQ8pPObvDx/ydaY+5WJI53Yz2o+nxh7TaViFkj/PAQBsxuTD8kDA=",
+    "authTagBase64": "28z1wea1Iae6ssdrbWYuRg==",
+    "rootId": "c0eb52b9d522c8646fa7a075ce117bc6bd1b832de6a4b135e47f0b996ef6fb34",
+    "nickname": "Vec User",
+    "createdAt": 1700000000000,
+    "updatedAt": 0,
+    "expectedDerivedPublicKeyBase64": "rQxE5mkT6n6pBh9s+UC36hSNPJQXJizYoQcR2rQpKLA=",
+    "expectedDerivedPublicKeyHex": "ad0c44e66913ea7ea9061f6cf940b7ea148d3c9417262cd8a10711dab42928b0",
+    "ciphertextHex": "ed04968f3de5fae6b91451f02aeff1315eb96c7b0067ec3d0c7bac3e798156713073c77989d0a076e27175ce99b91a71388ec12e1868863d2cf384e35ac57a0e78acdd75541e5e52d61e21f7afa6834f4525bc231f138ebd3a0bd90ca2caa4f48fb5cf6be2ad3d507e6fad6e3bdf4043ca4f39bbc3c7fc9d698fb9589239dd8cf6a3e9f187b4da5621648ff3c0401b31b930fc9030",
+    "saltHex": "00112233445566778899aabbccddeeff",
+    "ivHex": "0102030405060708090a0b0c",
+    "authTagHex": "dbccf5c1e6b521a7bab2c76b6d662e46",
+    "sizeBudget": "<3KB（QR 物理上限），建议 <2KB"
   }
 }

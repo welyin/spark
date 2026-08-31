@@ -503,7 +503,9 @@ fn pdsync_inbound_chat_bumps_conv_pmeta() {
     let pmeta = get_personal_meta(&s, &conv_key)
         .unwrap()
         .expect("入站消息应 bump 会话壳 pmeta");
-    assert_eq!(pmeta.vv.get(NODE), Some(&1), "pmeta 计数器来自本机 node");
+    // per-node 序号：入站 chat 的 msg:item 落库本身走受管路径（耗序号 1），
+    // 会话壳 pmeta bump 是本节点第 2 次受管写 → vv={node:2}
+    assert_eq!(pmeta.vv.get(NODE), Some(&2), "pmeta 计数器来自本机 node");
 }
 
 /// N3 回归：conv tombstone 经 pdsync-data 传播——单 batch 删本体 + 落墓碑
@@ -1552,6 +1554,87 @@ fn pwv_inbound_new_v_sets_stale_and_keeps_watermark() {
     );
 }
 
+// ── 自动密码统一（方案 a，wiki/security/password-unify-auto-trigger）────────
+
+#[test]
+fn pwv_inbound_auto_unifies_when_session_password_matches_v() {
+    // 对端 V 合入（同口令、不同 salt——recover_mnemonic 场景）→ 会话 Kverify
+    // 可解新 V → 自愈：清 stale + 推进水位 + 自锚 ack + 幂等标记 + hello 旗标。
+    let mut s = MemoryStorage::new();
+    let (key, my_root) = self_identity(40);
+    let password = "pw-e2e-2026";
+    // 本机 V（applied 已推进，模拟 unlock 时已验证）。
+    let local_v = build_value(password, &[1u8; 16], &[2u8; 12], 2000, NODE).unwrap();
+    pw::put_pwv(&mut s, NODE, &local_v, NOW).unwrap();
+    pw::put_applied_vts(&mut s, 2000).unwrap();
+    // 对端 V：同口令、不同 salt、更新 changedAt（LWW 胜者为对端）。
+    let remote_v = build_value(password, &[3u8; 16], &[4u8; 12], 3000, "peer-b").unwrap();
+    let record = PdsyncRecord {
+        key: pw::PWV_KEY.to_string(),
+        value: serde_json::to_value(&remote_v).unwrap(),
+        meta: remote_meta("peer-b", 1, NOW),
+        dseq: None,
+    };
+    // Kverify 按当前（合入后对端）salt 派生——等价生产下一条信封的口径。
+    let salt2 = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        &remote_v.salt,
+    )
+    .unwrap();
+    let kverify = derive_kverify(password, &salt2.try_into().unwrap()).unwrap();
+    deliver_pdsync_data_kv(&mut s, &key, &my_root, "pwv", &[record], Some(&kverify));
+
+    assert!(!pw::get_stale(&s).unwrap(), "自愈后 stale 清除");
+    assert_eq!(pw::get_applied_vts(&s).unwrap(), 3000, "水位推进到胜者的 changedAt");
+    assert!(
+        pw::get_pwack(&s, NODE).unwrap().is_some(),
+        "自锚 ack 落库（D′ 门控闭合的前提）"
+    );
+    assert!(
+        s.get("p2p:pw-autounified:3000").unwrap().is_some(),
+        "按 changedAt 幂等标记落库"
+    );
+    assert!(
+        s.get(spark_core::sync::pdsync::HELLO_REQUEST_KEY)
+            .unwrap()
+            .is_some(),
+        "hello 补发旗标（把新 pwack 推给对端闭合门控链）"
+    );
+}
+
+#[test]
+fn pwv_inbound_no_auto_unify_when_password_mismatches_v() {
+    // 真改密竞态：对端 V 由新口令生成，本机会话仍是旧口令 → Kverify 解不开
+    // 新 V → 不自愈（stale 保留、无标记），等用户输入新口令后走 unlock 路径。
+    let mut s = MemoryStorage::new();
+    let (key, my_root) = self_identity(41);
+    let local_v = build_value("old-pw", &[1u8; 16], &[2u8; 12], 2000, NODE).unwrap();
+    pw::put_pwv(&mut s, NODE, &local_v, NOW).unwrap();
+    pw::put_applied_vts(&mut s, 2000).unwrap();
+    // 对端 V：新口令生成。
+    let remote_v = build_value("new-pw", &[3u8; 16], &[4u8; 12], 3000, "peer-b").unwrap();
+    let record = PdsyncRecord {
+        key: pw::PWV_KEY.to_string(),
+        value: serde_json::to_value(&remote_v).unwrap(),
+        meta: remote_meta("peer-b", 1, NOW),
+        dseq: None,
+    };
+    let salt2 = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        &remote_v.salt,
+    )
+    .unwrap();
+    let kverify = derive_kverify("old-pw", &salt2.try_into().unwrap()).unwrap();
+    deliver_pdsync_data_kv(&mut s, &key, &my_root, "pwv", &[record], Some(&kverify));
+
+    assert!(pw::get_stale(&s).unwrap(), "口令不符 → stale 保留");
+    assert_eq!(pw::get_applied_vts(&s).unwrap(), 2000, "水位不动");
+    assert!(
+        s.get("p2p:pw-autounified:3000").unwrap().is_none(),
+        "无幂等标记 = 未发生自愈"
+    );
+}
+
 #[test]
 fn pwv_inbound_replay_below_watermark_ignored() {
     let mut s = MemoryStorage::new();
@@ -1574,6 +1657,41 @@ fn pwv_inbound_replay_below_watermark_ignored() {
         "changedAt <= 已应用水位 → 回放忽略，不得覆写"
     );
     assert!(!pw::get_stale(&s).unwrap(), "回放不置 stale");
+}
+
+#[test]
+fn pwv_inbound_replay_merges_remote_vv_into_pmeta() {
+    // 回放忽略内容，但对端 vv 分量须「见讫记账」并入本键 pmeta——否则本键
+    // 折叠 vv 永不收敛，每轮 hello 都判 Concurrent/LocalBehind 双向重复互推。
+    let mut s = MemoryStorage::new();
+    let (key, my_root) = self_identity(34);
+
+    // 本机已有更新水位（changedAt=6000）的 pwv，pmeta = {NODE:1}。
+    let local_v = build_value("local-secret", &[8u8; 16], &[10u8; 12], 6000, "me").unwrap();
+    pw::put_pwv(&mut s, NODE, &local_v, NOW).unwrap();
+    pw::put_applied_vts(&mut s, 5000).unwrap();
+
+    // 对端推来旧 pwv（changedAt=2000 <= 水位 5000 → 回放丢弃），vv={peerB:4}。
+    let old_v = build_value("old-secret", &[7u8; 16], &[9u8; 12], 2000, "me").unwrap();
+    let record = PdsyncRecord {
+        key: pw::PWV_KEY.to_string(),
+        value: serde_json::to_value(&old_v).unwrap(),
+        meta: remote_meta("peerB", 4, NOW),
+        dseq: None,
+    };
+    deliver_pdsync_data(&mut s, &key, &my_root, "pwv", &[record]);
+
+    let stored = pw::get_pwv(&s).unwrap().expect("本机 pwv 保留");
+    assert_eq!(stored.changed_at, 6000, "回放不得覆写内容");
+    assert_eq!(pw::get_applied_vts(&s).unwrap(), 5000, "水位不变");
+    assert!(!pw::get_stale(&s).unwrap(), "回放不置 stale");
+    let meta = get_personal_meta(&s, pw::PWV_KEY).unwrap().expect("pmeta 存在");
+    assert_eq!(meta.vv.get(NODE).copied(), Some(1), "本机分量保留");
+    assert_eq!(
+        meta.vv.get("peerB").copied(),
+        Some(4),
+        "对端分量须见讫记账并入 pmeta（折叠 vv 收敛前提）"
+    );
 }
 
 #[test]

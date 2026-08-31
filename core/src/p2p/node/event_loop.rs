@@ -23,7 +23,8 @@ use crate::p2p::envelope::EnvelopeSigner;
 use crate::p2p::host::P2pHost;
 use crate::p2p::peer_activity::{NodeObservation, PeerActivityStore};
 use crate::p2p::peer_targets::{
-    PeerNodeInfo, build_dial_targets, extract_peer_id, is_public_external_addr,
+    PeerNodeInfo, build_dial_targets, extract_peer_id, filter_dial_candidate,
+    is_public_external_addr,
 };
 use crate::p2p::{P2pError, Result};
 use crate::storage::StorageBackend;
@@ -206,6 +207,10 @@ pub(super) struct EventLoop<S: StorageBackend> {
     /// 到点回发 `NetworkChangeFired` 时清 None——闹钟自己响、响完销毁，不借
     /// tick 当到期检查器（tick 内零拨号是结构保证）。
     pub(super) pending_network_change: Option<i64>,
+    /// 上次 `NetworkChangeFired` 实际执行重连动作的时间（ms）：网络变更触发的
+    /// 全局最小间隔（`NETWORK_CHANGE_MIN_INTERVAL_MS`）判定依据，online/offline
+    /// 抖动环境下防事实上的周期重拨。
+    pub(super) last_network_change_fired_at: Option<i64>,
     /// 上一 keepalive tick 的网络快照（M9 本地对比）：tick 内对比当前快照，
     /// 变化即武装防抖一次性定时器（零网络开销、不依赖壳层）。首 tick 只记录
     /// 基线不触发。
@@ -384,7 +389,11 @@ impl<S: StorageBackend> EventLoop<S> {
             ) {
                 continue;
             }
-            // 有缓存地址 → 直接重拨；否则交给 start_rediscovery 走 DHT 竞速
+            // 有缓存地址 → 直接重拨；否则交给 start_rediscovery 走 DHT 竞速。
+            // 拨号前套用与 connect_peer 主路径一致的过滤（Android 未编译 ws
+            // 传输层，ws 地址必败拨号；本机监听地址自过滤），防死地址必败拨号。
+            let is_android = cfg!(target_os = "android");
+            let self_addrs = self.self_listen_addr_set();
             let cached_addrs: Vec<Multiaddr> = {
                 let mut store =
                     crate::p2p::overlay_store::OverlayPeerStore::new(&mut self.storage);
@@ -395,6 +404,8 @@ impl<S: StorageBackend> EventLoop<S> {
                     .map(|r| r.addresses)
                     .unwrap_or_default()
                     .iter()
+                    .filter_map(|a| filter_dial_candidate(a, is_android))
+                    .filter(|a| !self_addrs.contains(a))
                     .filter_map(|a| a.parse().ok())
                     .collect()
             };
@@ -408,7 +419,8 @@ impl<S: StorageBackend> EventLoop<S> {
                     .allocate_new_port()
                     .build();
                 let _ = self.swarm.dial(opts);
-                // 标记竞速中，等待连接结果（成功则收敛，失败由 ConnectionClosed 兜底）
+                // 标记竞速中，等待连接结果（成功由 ConnectionEstablished 收敛；
+                // 拨号失败由 on_rediscovery_dial_failed 收尾回 Idle，V5）
                 self.rediscovery_states.insert(
                     peer,
                     super::rediscovery::RediscoveryState::Racing {
@@ -438,6 +450,10 @@ impl<S: StorageBackend> EventLoop<S> {
         }
         let now = self.now();
         let self_id = self.self_peer_id().to_base58();
+        // 候选地址套用与 connect_peer 主路径一致的过滤（Android ws 必败拨号 +
+        // 本机监听地址自过滤），再进入拨号
+        let is_android = cfg!(target_os = "android");
+        let self_addrs = self.self_listen_addr_set();
         let mut exclude: HashSet<String> = HashSet::new();
         exclude.insert(self_id);
         let candidates = {
@@ -453,6 +469,8 @@ impl<S: StorageBackend> EventLoop<S> {
             let addrs: Vec<Multiaddr> = candidate
                 .addresses
                 .iter()
+                .filter_map(|a| filter_dial_candidate(a, is_android))
+                .filter(|a| !self_addrs.contains(a))
                 .filter_map(|a| a.parse().ok())
                 .collect();
             if addrs.is_empty() {
@@ -502,8 +520,26 @@ impl<S: StorageBackend> EventLoop<S> {
 
     /// 本机当前监听地址集合（M9 自过滤：不拨自己的监听地址，多实例同机开发的
     /// ::1 / 本机 LAN IP 污染源）。
+    /// 本机监听地址集（自过滤用）：`listen_addr_strings` 的展开**刻意跳过
+    /// loopback**（广播给远端无意义），但对端若把 loopback 地址广播过来
+    /// （identify/旧版本），本机按它拨号会拨到自己（noise 身份不匹配断开，
+    /// 日志刷 "localhost 拒绝连接" 噪音）。故自过滤集额外并入通配 listener
+    /// 的 loopback 展开（127.0.0.1/::1）——只影响过滤，不影响对外广播。
     pub(super) fn self_listen_addr_set(&self) -> HashSet<String> {
-        self.listen_addr_strings().into_iter().collect()
+        let mut set: HashSet<String> = self.listen_addr_strings().into_iter().collect();
+        for listener in self.swarm.listeners() {
+            if let Some(wildcard) = wildcard_ip(listener) {
+                let loop_ip = if wildcard.is_ipv4() {
+                    "127.0.0.1".parse().ok()
+                } else {
+                    "::1".parse().ok()
+                };
+                if let Some(ip) = loop_ip {
+                    set.insert(replace_ip(listener, ip).to_string());
+                }
+            }
+        }
+        set
     }
 
     /// 发布侧兜底（S7）：剔除黑名单命中且在 TTL 内的地址，防止把自己学到的污染
@@ -696,7 +732,15 @@ impl<S: StorageBackend> EventLoop<S> {
             Command::NetworkChangeFired { base } => {
                 self.pending_network_change = None;
                 let current = self.network_snapshot();
-                if base != current {
+                // 全局最小触发间隔：online/offline 抖动环境下防抖闹钟会被反复
+                // 武装，无此间隔将事实变为周期重拨——距上次实际执行不足
+                // NETWORK_CHANGE_MIN_INTERVAL_MS 的本次直接跳过（闹钟标记已清，
+                // 后续真实事件可正常再武装）
+                let due = self.last_network_change_fired_at.map_or(true, |last| {
+                    self.now() - last >= crate::p2p::constants::NETWORK_CHANGE_MIN_INTERVAL_MS
+                });
+                if base != current && due {
+                    self.last_network_change_fired_at = Some(self.now());
                     // ③④⑤ 重发布 announce + DHT
                     let _ = self.publish_announce();
                     self.publish_node_presence_record();

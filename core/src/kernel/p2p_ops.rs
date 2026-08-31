@@ -141,11 +141,30 @@ impl Kernel {
             pdsync_capable_self_devices: Arc::clone(&self.pdsync_capable_self_devices),
             orgsync_capable_member_peers: Arc::clone(&self.orgsync_capable_member_peers),
             plugin_host_query: self.plugin_host_query_handle(),
+            kverify_cache: Arc::new(std::sync::Mutex::new(None)),
         });
-        let mut node =
+        let node_fut = P2pNode::start(config, raw.clone(), host);
+        // 启动超时护栏：MIUI 锁屏/后台网络受限等环境网络初始化可无限阻塞
+        //（block_on 挂死连带 unlock 永不返回，见 wiki/troubleshooting/
+        // android_debug.md「start_p2p 锁屏阻塞」）。超时即报错经
+        // p2p_start_error 上报、登录流程继续，后续登录/网络事件可重试。
+        // enter()：timeout 计时器需 reactor 上下文，Handle::block_on 本身
+        // 不提供（无 enter 直接 panic "no reactor running"）。
+        let start_outcome = {
+            let _guard = self.runtime.handle().enter();
             self.runtime
                 .handle()
-                .block_on(P2pNode::start(config, raw.clone(), host))?;
+                .block_on(tokio::time::timeout(std::time::Duration::from_secs(30), node_fut))
+        };
+        let mut node = match start_outcome {
+            Ok(res) => res?,
+            Err(_) => {
+                return Err(KernelError::Internal(
+                    "p2p 启动超时（30s，多见于网络受限环境）；已跳过，可由重新登录/网络恢复重试"
+                        .to_string(),
+                ));
+            }
+        };
         let peer_id = node.peer_id().to_string();
         // 版本化中间件的 node_id 切换为运行态 peerId（stop 时回退持久化 id）
         if let Some(cell) = &self.sync_node_cell {
@@ -186,6 +205,7 @@ impl Kernel {
             )),
             filter_caps: Arc::clone(&self.plugin_host.filter_caps),
             replica_check: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            recovery_refresh: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         };
         let worker = org_sync::spawn_worker(self.runtime.handle(), ctx, org_sync_rx);
 
@@ -194,15 +214,29 @@ impl Kernel {
         // 手动 notify 调用点——任何本地写入（含未来新增功能）自动获得
         // 秒级同步触发。远端合入走 raw 句柄不触发信号（防回声）。
         let watch = {
-            let watch_storage = self.require_storage()?.clone();
+            let mut watch_storage = self.require_storage()?.clone();
             let watch_tx = org_sync_tx.clone();
             self.runtime.handle().spawn(async move {
                 let mut last = watch_storage.last_local_write_ms();
                 loop {
                     tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+                    // 裸存储副作用写（epoch ikey 补发/轮换，HELLO_REQUEST_KEY）
+                    // 不 touch 变更信号——消费旗标同样触发即时 hello（见
+                    // sync::pdsync::HELLO_REQUEST_KEY 注释）。
+                    let hello_request = watch_storage
+                        .raw()
+                        .get(crate::sync::pdsync::HELLO_REQUEST_KEY)
+                        .ok()
+                        .flatten()
+                        .is_some();
+                    if hello_request {
+                        let _ = watch_storage
+                            .raw_mut()
+                            .delete(crate::sync::pdsync::HELLO_REQUEST_KEY);
+                    }
                     let cur = watch_storage.last_local_write_ms();
-                    if cur > last {
-                        last = cur;
+                    if cur > last || hello_request {
+                        last = cur.max(last);
                         let _ = watch_tx.send(OrgSyncRequest::SelfHelloNow);
                     }
                 }
@@ -455,6 +489,7 @@ impl Kernel {
             )),
             filter_caps: Arc::clone(&self.plugin_host.filter_caps),
             replica_check: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            recovery_refresh: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         })
     }
 

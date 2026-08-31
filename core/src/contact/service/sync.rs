@@ -25,7 +25,7 @@
 use serde_json::{Map, Value};
 
 use crate::storage::{ScanOptions, StorageBackend};
-use crate::sync::{delete_personal, put_personal};
+use crate::sync::personal::{apply_snapshot_remote, delete_snapshot_remote};
 
 use super::super::{
     BLOCKED_PREFIX, ContactTag, FRIEND_PREFIX, FriendRecord, FriendRequestRecord, GROUP_PREFIX,
@@ -144,7 +144,8 @@ pub(crate) fn apply_contact_sync_snapshot<S: StorageBackend>(
     storage: &mut S,
     my_root_id: &str,
     body: &Value,
-    node_id: &str,
+    remote_node_id: &str,
+    local_node_id: &str,
     now_ms: i64,
 ) -> Result<usize> {
     let mut applied = 0usize;
@@ -166,7 +167,18 @@ pub(crate) fn apply_contact_sync_snapshot<S: StorageBackend>(
             if dominated {
                 continue;
             }
-            ContactService::upsert_friend_pdsync(storage, &incoming, now_ms, node_id)?;
+            // 朋友合入同样对端记账：走统一快照合入入口（防回声），不依赖
+            // 版本化中间件（它会把受管 key 记成本机写入、推进本机分量）。
+            let key = format!("{FRIEND_PREFIX}{}", incoming.root_id);
+            apply_snapshot_remote(
+                storage,
+                remote_node_id,
+                local_node_id,
+                &key,
+                &serde_json::to_string(&incoming)?,
+                now_ms,
+            )
+            .map_err(sync_err_to_contact)?;
             applied += 1;
         }
     }
@@ -191,10 +203,12 @@ pub(crate) fn apply_contact_sync_snapshot<S: StorageBackend>(
                 if dominated {
                     continue;
                 }
-                // 合入同时 bump pmeta（与朋友路径同口径：旧通道数据对 pdsync 可见）
-                put_personal(
+                // 合入同时 bump pmeta（对端记账：旧通道数据对 pdsync 可见且不
+                // 推进本机分量——防回声，见 wiki/architecture/sync/sync-storm-fix.md）
+                apply_snapshot_remote(
                     storage,
-                    node_id,
+                    remote_node_id,
+                    local_node_id,
                     &key,
                     &serde_json::to_string(&incoming)?,
                     now_ms,
@@ -230,7 +244,7 @@ pub(crate) fn apply_contact_sync_snapshot<S: StorageBackend>(
             for (key, _) in storage.scan(&ScanOptions::prefix(TAG_PREFIX))? {
                 let id = &key[TAG_PREFIX.len()..];
                 if !remote_ids.contains(id) {
-                    delete_personal(storage, node_id, &key, now_ms)
+                    delete_snapshot_remote(storage, remote_node_id, local_node_id, &key, now_ms)
                         .map_err(sync_err_to_contact)?;
                 }
             }
@@ -240,8 +254,15 @@ pub(crate) fn apply_contact_sync_snapshot<S: StorageBackend>(
                 // 远端快照中的标签可能没有 order 字段（旧设备），补上
                 tag.order = i as i32;
                 let key = format!("{TAG_PREFIX}{}", tag.id);
-                put_personal(storage, node_id, &key, &serde_json::to_string(&tag)?, now_ms)
-                    .map_err(sync_err_to_contact)?;
+                apply_snapshot_remote(
+                    storage,
+                    remote_node_id,
+                    local_node_id,
+                    &key,
+                    &serde_json::to_string(&tag)?,
+                    now_ms,
+                )
+                .map_err(sync_err_to_contact)?;
             }
             tags_v = remote_tags_v;
             applied += 1;
@@ -260,7 +281,7 @@ pub(crate) fn apply_contact_sync_snapshot<S: StorageBackend>(
             for (key, _) in storage.scan(&ScanOptions::prefix(GROUP_PREFIX))? {
                 let id = &key[GROUP_PREFIX.len()..];
                 if !remote_ids.contains(id) {
-                    delete_personal(storage, node_id, &key, now_ms)
+                    delete_snapshot_remote(storage, remote_node_id, local_node_id, &key, now_ms)
                         .map_err(sync_err_to_contact)?;
                 }
             }
@@ -269,8 +290,15 @@ pub(crate) fn apply_contact_sync_snapshot<S: StorageBackend>(
                 let mut group = group.clone();
                 group.order = i as i32;
                 let key = format!("{GROUP_PREFIX}{}", group.id);
-                put_personal(storage, node_id, &key, &serde_json::to_string(&group)?, now_ms)
-                    .map_err(sync_err_to_contact)?;
+                apply_snapshot_remote(
+                    storage,
+                    remote_node_id,
+                    local_node_id,
+                    &key,
+                    &serde_json::to_string(&group)?,
+                    now_ms,
+                )
+                .map_err(sync_err_to_contact)?;
             }
             groups_v = remote_groups_v;
             applied += 1;
@@ -285,12 +313,25 @@ pub(crate) fn apply_contact_sync_snapshot<S: StorageBackend>(
             let local_set: std::collections::BTreeSet<String> =
                 blocked_list(storage)?.into_iter().collect();
             for root_id in local_set.difference(&remote_set) {
-                delete_personal(storage, node_id, &format!("{BLOCKED_PREFIX}{root_id}"), now_ms)
-                    .map_err(sync_err_to_contact)?;
+                delete_snapshot_remote(
+                    storage,
+                    remote_node_id,
+                    local_node_id,
+                    &format!("{BLOCKED_PREFIX}{root_id}"),
+                    now_ms,
+                )
+                .map_err(sync_err_to_contact)?;
             }
             for root_id in remote_set.difference(&local_set) {
-                put_personal(storage, node_id, &format!("{BLOCKED_PREFIX}{root_id}"), "\"1\"", now_ms)
-                    .map_err(sync_err_to_contact)?;
+                apply_snapshot_remote(
+                    storage,
+                    remote_node_id,
+                    local_node_id,
+                    &format!("{BLOCKED_PREFIX}{root_id}"),
+                    "\"1\"",
+                    now_ms,
+                )
+                .map_err(sync_err_to_contact)?;
             }
             blocked_v = remote_blocked_v;
             applied += 1;
@@ -401,7 +442,7 @@ mod tests {
 
         // A → B
         let body = build_contact_sync_snapshot(&a, MY_ROOT).unwrap();
-        let applied = apply_contact_sync_snapshot(&mut b, MY_ROOT, &body, NODE_B, NOW).unwrap();
+        let applied = apply_contact_sync_snapshot(&mut b, MY_ROOT, &body, NODE_A, NODE_B, NOW).unwrap();
         assert!(applied > 0);
 
         // 朋友同步（自记录除外）
@@ -420,12 +461,12 @@ mod tests {
         assert!(ContactService::is_blocked(&b, &"ee".repeat(32)).unwrap());
 
         // 幂等：重放同快照无新写入
-        let again = apply_contact_sync_snapshot(&mut b, MY_ROOT, &body, NODE_B, NOW).unwrap();
+        let again = apply_contact_sync_snapshot(&mut b, MY_ROOT, &body, NODE_A, NODE_B, NOW).unwrap();
         assert_eq!(again, 0, "同快照重放幂等");
 
         // 反向 B → A：B 上没有比 A 更新的数据，空转（无新写入）
         let body_b = build_contact_sync_snapshot(&b, MY_ROOT).unwrap();
-        let applied_b = apply_contact_sync_snapshot(&mut a, MY_ROOT, &body_b, NODE_A, NOW).unwrap();
+        let applied_b = apply_contact_sync_snapshot(&mut a, MY_ROOT, &body_b, NODE_B, NODE_A, NOW).unwrap();
         assert_eq!(applied_b, 0, "反向无更新");
     }
 
@@ -441,7 +482,7 @@ mod tests {
 
         // A（旧）→ B（新）：不覆盖
         let body = build_contact_sync_snapshot(&a, MY_ROOT).unwrap();
-        let applied = apply_contact_sync_snapshot(&mut b, MY_ROOT, &body, NODE_B, NOW).unwrap();
+        let applied = apply_contact_sync_snapshot(&mut b, MY_ROOT, &body, NODE_A, NODE_B, NOW).unwrap();
         assert_eq!(applied, 0);
         assert_eq!(
             ContactService::get_friend(&b, &root).unwrap().unwrap().nickname,
@@ -450,7 +491,7 @@ mod tests {
 
         // B（新）→ A（旧）：覆盖
         let body = build_contact_sync_snapshot(&b, MY_ROOT).unwrap();
-        let applied = apply_contact_sync_snapshot(&mut a, MY_ROOT, &body, NODE_A, NOW).unwrap();
+        let applied = apply_contact_sync_snapshot(&mut a, MY_ROOT, &body, NODE_B, NODE_A, NOW).unwrap();
         assert_eq!(applied, 1);
         assert_eq!(
             ContactService::get_friend(&a, &root).unwrap().unwrap().nickname,
@@ -476,10 +517,10 @@ mod tests {
 
         // 旧（pending）→ 新（accepted）：不动
         let body = build_contact_sync_snapshot(&a, MY_ROOT).unwrap();
-        assert_eq!(apply_contact_sync_snapshot(&mut b, MY_ROOT, &body, NODE_B, NOW).unwrap(), 0);
+        assert_eq!(apply_contact_sync_snapshot(&mut b, MY_ROOT, &body, NODE_A, NODE_B, NOW).unwrap(), 0);
         // 新 → 旧：覆盖
         let body = build_contact_sync_snapshot(&b, MY_ROOT).unwrap();
-        assert_eq!(apply_contact_sync_snapshot(&mut a, MY_ROOT, &body, NODE_A, NOW).unwrap(), 1);
+        assert_eq!(apply_contact_sync_snapshot(&mut a, MY_ROOT, &body, NODE_B, NODE_A, NOW).unwrap(), 1);
         assert_eq!(
             ContactService::get_outgoing_request(&a, "r1").unwrap().unwrap().status,
             FriendRequestStatus::Accepted
@@ -500,7 +541,7 @@ mod tests {
         ContactService::delete_group(&mut a, "g2", NOW + 2000, NODE_A).unwrap();
 
         let body = build_contact_sync_snapshot(&a, MY_ROOT).unwrap();
-        let applied = apply_contact_sync_snapshot(&mut b, MY_ROOT, &body, NODE_B, NOW).unwrap();
+        let applied = apply_contact_sync_snapshot(&mut b, MY_ROOT, &body, NODE_A, NODE_B, NOW).unwrap();
         assert!(applied > 0);
         let view = ContactService::overview(&b, "personal").unwrap();
         assert_eq!(view.groups.len(), 1, "删除随整域替换传播");
@@ -518,7 +559,10 @@ mod tests {
         let mut a = MemoryStorage::new();
         ContactService::upsert_friend(&mut a, &friend(&root, "新", 1)).unwrap();
         let body = build_contact_sync_snapshot(&a, MY_ROOT).unwrap();
-        assert_eq!(apply_contact_sync_snapshot(&mut b, MY_ROOT, &body, "local-node", NOW).unwrap(), 1);
+        assert_eq!(
+            apply_contact_sync_snapshot(&mut b, MY_ROOT, &body, NODE_A, NODE_B, NOW).unwrap(),
+            1
+        );
         assert_eq!(
             ContactService::get_friend(&b, &root).unwrap().unwrap().nickname,
             "新"
@@ -538,7 +582,7 @@ mod tests {
         ContactService::set_blocked(&mut a, "personal", &target, false, NOW + 3000, NODE_A).unwrap();
 
         let body = build_contact_sync_snapshot(&a, MY_ROOT).unwrap();
-        let applied = apply_contact_sync_snapshot(&mut b, MY_ROOT, &body, NODE_B, NOW).unwrap();
+        let applied = apply_contact_sync_snapshot(&mut b, MY_ROOT, &body, NODE_A, NODE_B, NOW).unwrap();
         assert!(applied > 0);
         assert!(
             !ContactService::is_blocked(&b, &target).unwrap(),
@@ -558,7 +602,7 @@ mod tests {
         ContactService::move_group(&mut a, "g2", 0, NOW + 5000, NODE_A).unwrap();
 
         let body = build_contact_sync_snapshot(&a, MY_ROOT).unwrap();
-        apply_contact_sync_snapshot(&mut b, MY_ROOT, &body, NODE_B, NOW).unwrap();
+        apply_contact_sync_snapshot(&mut b, MY_ROOT, &body, NODE_A, NODE_B, NOW).unwrap();
         let view = ContactService::overview(&b, "personal").unwrap();
         let order: Vec<&str> = view.groups.iter().map(|g| g.id.as_str()).collect();
         assert_eq!(order, vec!["g2", "g1"], "重排结果随快照传播");

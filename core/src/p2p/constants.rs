@@ -197,6 +197,9 @@ pub const RELAY_RENEWAL_THRESHOLD_SECS: u64 = 30 * 60;
 
 /// 网络切换 debounce（5s）。
 pub const NETWORK_CHANGE_DEBOUNCE_MS: i64 = 5_000;
+/// 网络变更触发的全局最小间隔（60s）：online/offline 抖动环境下防抖定时器会
+/// 被反复武装，无此间隔将事实变为周期重拨（redial_priority_peers 全量重拨）。
+pub const NETWORK_CHANGE_MIN_INTERVAL_MS: i64 = 60_000;
 /// 移动端 DHT 周期重发间隔（keepalive tick 计数：120 tick ≈ 2h）。
 pub const DHT_MOBILE_REPUBLISH_TICKS: u64 = 120;
 /// 优先类目 peer 集合的 sled 存储键前缀。

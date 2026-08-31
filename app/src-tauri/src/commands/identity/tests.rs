@@ -157,13 +157,95 @@ fn backup_payload_qr_roundtrip() {
         backup_payload_qr_inner(&kernel_a, "wrong-password").unwrap_err(),
         "Invalid password"
     );
-    // 紧凑载荷 <1KB（无头像），且可由 recover_backup 恢复
+    // v2 紧凑载荷瘦身（无头像、无 publicKeyHex、hex→base64）：本测试
+    // p2p=None，产出的是无 {v,i,p,a} 封装的裸紧凑 JSON，实测 ~554B。
+    // 阈值对齐设计 §9 S6（<1000B，无 pk）——仍给更长昵称与 pwv 注入留余量。
     let qr = backup_payload_qr_inner(&kernel_a, PASSWORD).unwrap();
-    assert!(qr.payload.len() < 1024, "紧凑载荷 <1KB（实测 {}B）", qr.payload.len());
+    assert!(
+        qr.payload.len() < 1000,
+        "v2 紧凑载荷应 <1000B（实测 {}B）",
+        qr.payload.len()
+    );
 
     let (_dir2, mut kernel_b) = temp_kernel();
     let recovered = recover_backup_inner(&mut kernel_b, &qr.payload, PASSWORD).unwrap();
     assert_eq!(recovered.root_id, init.root_id);
+}
+
+#[test]
+fn v2_code_rejected_by_v1_only_reader_fail_closed() {
+    // 模拟「只懂 v1 的恢复端」遇到 v2 码（设计 §6 兼容矩阵）：
+    // v1 端把整个 payload 当磁盘 IdentityFile 解析，v2 紧凑码缺必填的
+    // publicKeyHex → 反序列化失败 → 报「备份数据无效或已损坏」，
+    // 绝不静默错恢复（fail-closed）。
+    let (_dir1, mut kernel_a) = temp_kernel();
+    init_inner(&mut kernel_a, PASSWORD, "alice", None).unwrap();
+    let v2_qr = backup_payload_qr_inner(&kernel_a, PASSWORD).unwrap();
+
+    // v1 旧端解析路径 = IdentityFile::from_json(整个载荷)。v2 紧凑码必被拒。
+    let parse_result =
+        spark_core::identity::file::IdentityFile::from_json(&v2_qr.payload);
+    assert!(
+        parse_result.is_err(),
+        "v1-only 恢复端不得解析 v2 紧凑码（fail-closed，不得静默错恢复）"
+    );
+
+    // 旧端把 from_json 失败映射为「备份数据无效或已损坏」（recover_backup
+    // 的 parse_err），该文案已在 recover_backup_roundtrip 的损坏载荷断言里锁定。
+}
+
+#[test]
+fn v1_code_read_by_new_restore_is_byte_identical() {
+    // 旧（v1 码，hex + publicKeyHex）→ 新恢复端正常恢复，字节级一致（§6）。
+    let (_dir1, mut kernel_a) = temp_kernel();
+    let init = init_inner(&mut kernel_a, PASSWORD, "alice", None).unwrap();
+    let src = current_identity_inner(&kernel_a).unwrap().unwrap();
+
+    // v1 码两种形态：
+    // 1) 裸磁盘 IdentityFile JSON（backup_payload，顶层无 v 的旧版遗留形态）；
+    // 2) 顶层 {v:1, i: <IdentityFile JSON>} 封装。
+    let bare_v1 = backup_payload_inner(&kernel_a).unwrap().payload;
+    let wrapped_v1 = serde_json::json!({
+        "v": 1,
+        "i": serde_json::from_str::<serde_json::Value>(&bare_v1).unwrap(),
+    })
+    .to_string();
+
+    for v1_code in [bare_v1, wrapped_v1] {
+        let (_dir2, mut kernel_b) = temp_kernel();
+        let recovered = recover_backup_inner(&mut kernel_b, &v1_code, PASSWORD).unwrap();
+        assert_eq!(recovered.root_id, init.root_id, "v1 码恢复出同一 rootId");
+        let cur = current_identity_inner(&kernel_b).unwrap().unwrap();
+        assert_eq!(
+            cur.public_key_hex, src.public_key_hex,
+            "v1 码恢复的 publicKeyHex 与源字节级一致"
+        );
+    }
+}
+
+#[test]
+fn v2_code_rebuilds_public_key_hex_on_disk_identity() {
+    // v2 码不带 publicKeyHex；恢复端重建磁盘 IdentityFile 时以派生公钥补全
+    // （§4.3）。命令层契约确认：恢复后当前身份的 publicKeyHex 与源字节级一致。
+    let (_dir1, mut kernel_a) = temp_kernel();
+    let init = init_inner(&mut kernel_a, PASSWORD, "alice", None).unwrap();
+    let src = current_identity_inner(&kernel_a).unwrap().unwrap();
+    let v2_qr = backup_payload_qr_inner(&kernel_a, PASSWORD).unwrap();
+
+    let (_dir2, mut kernel_b) = temp_kernel();
+    let recovered = recover_backup_inner(&mut kernel_b, &v2_qr.payload, PASSWORD).unwrap();
+    assert_eq!(recovered.root_id, init.root_id);
+
+    let cur = current_identity_inner(&kernel_b).unwrap().unwrap();
+    assert_eq!(
+        cur.public_key_hex, src.public_key_hex,
+        "v2 码恢复后磁盘 IdentityFile 的 publicKeyHex 应为派生公钥（与源一致）"
+    );
+    assert_eq!(
+        cur.public_key_hex.len(),
+        src.public_key_hex.len(),
+        "publicKeyHex 为 64 字符 hex"
+    );
 }
 
 #[test]

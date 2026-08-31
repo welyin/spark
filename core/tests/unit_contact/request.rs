@@ -328,23 +328,25 @@ fn request_pdsync_variants_write_pmeta() {
     let stored = ContactService::get_outgoing_request(&s, "out-legacy").unwrap().unwrap();
     assert_eq!(stored.updated_at, stored.created_at);
 
-    // 入站落库 + 处理：pmeta 随每次写入递增
+    // 入站落库 + 处理：pmeta 随每次写入递增（vv 取 per-node 单调序号：
+    // 前面 out-1/out-legacy 两次出站写已占用 seq 1/2）
     ContactService::put_incoming_request_pdsync(&mut s, &incoming("req-1", &rid('r')), NOW, NODE)
         .unwrap();
     let meta = get_personal_meta(&s, "ct:req:in:req-1").unwrap().unwrap();
-    assert_eq!(meta.vv.get(NODE), Some(&1));
+    assert_eq!(meta.vv.get(NODE), Some(&3));
     assert!(ContactService::resolve_incoming_request_pdsync(&mut s, "req-1", true, NOW + 10, NODE).unwrap());
     let meta = get_personal_meta(&s, "ct:req:in:req-1").unwrap().unwrap();
-    assert_eq!(meta.vv.get(NODE), Some(&2));
+    assert_eq!(meta.vv.get(NODE), Some(&4));
     assert_eq!(
         ContactService::get_incoming_request(&s, "req-1").unwrap().unwrap().status,
         FriendRequestStatus::Accepted
     );
 
-    // 出站接受 + 线程追加：pmeta 同步 bump
+    // 出站接受 + 线程追加：pmeta 同步 bump（vv = per-node 序号：出站接受为
+    // 本节点第 5 次受管写，线程追加为第 6 次）
     assert!(ContactService::mark_outgoing_accepted_pdsync(&mut s, "out-1", NOW + 20, NODE).unwrap());
     let meta = get_personal_meta(&s, "ct:req:out:out-1").unwrap().unwrap();
-    assert_eq!(meta.vv.get(NODE), Some(&2));
+    assert_eq!(meta.vv.get(NODE), Some(&5));
     let msg = RequestThreadMessage {
         from: ThreadFrom::Peer,
         text: "hi".to_string(),
@@ -354,13 +356,14 @@ fn request_pdsync_variants_write_pmeta() {
         .unwrap()
         .expect("记录存在");
     let meta = get_personal_meta(&s, "ct:req:out:out-1").unwrap().unwrap();
-    assert_eq!(meta.vv.get(NODE), Some(&3));
+    assert_eq!(meta.vv.get(NODE), Some(&6));
 
+    // req-2 落库为第 7 次受管写，线程追加为第 8 次
     ContactService::put_incoming_request_pdsync(&mut s, &incoming("req-2", &rid('s')), NOW, NODE)
         .unwrap();
     ContactService::append_incoming_thread_pdsync(&mut s, "req-2", msg, NOW + 40, NODE)
         .unwrap()
         .expect("记录存在");
     let meta = get_personal_meta(&s, "ct:req:in:req-2").unwrap().unwrap();
-    assert_eq!(meta.vv.get(NODE), Some(&2));
+    assert_eq!(meta.vv.get(NODE), Some(&8));
 }

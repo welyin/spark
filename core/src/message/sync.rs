@@ -52,7 +52,8 @@ pub(crate) fn apply_conv_sync_snapshot<S: StorageBackend>(
     storage: &mut S,
     body: &Value,
     now_ms: i64,
-    node_id: &str,
+    remote_node_id: &str,
+    local_node_id: &str,
 ) -> Result<usize> {
     let mut applied = 0usize;
     let Some(items) = body.get("conversations").and_then(Value::as_array) else {
@@ -105,12 +106,14 @@ pub(crate) fn apply_conv_sync_snapshot<S: StorageBackend>(
                     updated_at: now_ms,
                     meta_updated_at,
                 };
-                MessageService::upsert_conversation_pdsync(
+                let json = serde_json::to_string(&record)?;
+                crate::sync::personal::apply_snapshot_remote(
                     storage,
-                    "personal",
-                    &record,
+                    remote_node_id,
+                    local_node_id,
+                    &crate::message::conversation_key("personal", &record.id),
+                    &json,
                     now_ms,
-                    Some(node_id),
                 )?;
                 applied += 1;
             }
@@ -126,12 +129,14 @@ pub(crate) fn apply_conv_sync_snapshot<S: StorageBackend>(
                 if conv.peer.is_none() && peer.is_some() {
                     conv.peer = peer;
                 }
-                MessageService::upsert_conversation_pdsync(
+                let json = serde_json::to_string(&conv)?;
+                crate::sync::personal::apply_snapshot_remote(
                     storage,
-                    "personal",
-                    &conv,
+                    remote_node_id,
+                    local_node_id,
+                    &crate::message::conversation_key("personal", &conv.id),
+                    &json,
                     now_ms,
-                    Some(node_id),
                 )?;
                 applied += 1;
             }
@@ -174,7 +179,7 @@ mod tests {
         MessageService::increment_unread(&mut a, "personal", &conv.id).unwrap();
 
         let body = build_conv_sync_snapshot(&a).unwrap();
-        let applied = apply_conv_sync_snapshot(&mut b, &body, NOW + 300, NODE_B).unwrap();
+        let applied = apply_conv_sync_snapshot(&mut b, &body, NOW + 300, NODE_A, NODE_B).unwrap();
         assert_eq!(applied, 1);
 
         let synced =
@@ -187,7 +192,10 @@ mod tests {
 
         // 幂等：重放无新变更
         let body = build_conv_sync_snapshot(&a).unwrap();
-        assert_eq!(apply_conv_sync_snapshot(&mut b, &body, NOW + 400, NODE_B).unwrap(), 0);
+        assert_eq!(
+            apply_conv_sync_snapshot(&mut b, &body, NOW + 400, NODE_A, NODE_B).unwrap(),
+            0
+        );
     }
 
     /// LWW：本机元数据更新时不被旧快照覆盖；本机更旧时被新快照覆盖。
@@ -224,7 +232,10 @@ mod tests {
 
         // A（旧，muted=true）→ B（新，muted=false）：不覆盖
         let body = build_conv_sync_snapshot(&a).unwrap();
-        assert_eq!(apply_conv_sync_snapshot(&mut b, &body, NOW + 500, NODE_B).unwrap(), 0);
+        assert_eq!(
+            apply_conv_sync_snapshot(&mut b, &body, NOW + 500, NODE_A, NODE_B).unwrap(),
+            0
+        );
         let after = MessageService::find_direct_conversation(&b, "personal", &rid('c'))
             .unwrap()
             .unwrap();
@@ -232,7 +243,10 @@ mod tests {
 
         // B（新）→ A（旧）：覆盖
         let body = build_conv_sync_snapshot(&b).unwrap();
-        assert_eq!(apply_conv_sync_snapshot(&mut a, &body, NOW + 600, NODE_A).unwrap(), 1);
+        assert_eq!(
+            apply_conv_sync_snapshot(&mut a, &body, NOW + 600, NODE_B, NODE_A).unwrap(),
+            1
+        );
         let after = MessageService::find_direct_conversation(&a, "personal", &rid('c'))
             .unwrap()
             .unwrap();
@@ -251,7 +265,10 @@ mod tests {
         )
         .unwrap();
         let body = build_conv_sync_snapshot(&a).unwrap();
-        assert_eq!(apply_conv_sync_snapshot(&mut b, &body, NOW + 100, NODE_B).unwrap(), 0);
+        assert_eq!(
+            apply_conv_sync_snapshot(&mut b, &body, NOW + 100, NODE_A, NODE_B).unwrap(),
+            0
+        );
         assert!(
             MessageService::list_conversations(&b, "personal").unwrap().is_empty(),
             "非 direct 会话不同步"

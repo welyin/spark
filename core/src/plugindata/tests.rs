@@ -124,14 +124,15 @@ fn sync_scope_keys_managed_local_scope_not() {
     );
     let sync_decl = declare_sync(&mut s, "ai-chat:conversations");
     save(&mut s, &sync_decl, "c1", r#"{"title":"一"}"#).unwrap();
-    // sync 集合：pdoc 键 + 自动 pmeta（写库即同步）
+    // sync 集合：pdoc 键 + 自动 pmeta（写库即同步）。
+    // 声明记录本身也走受管路径（消耗 per-node 序号 1），数据写入拿到序号 2。
     let data_key = sync_decl.data_key("c1");
     assert!(data_key.starts_with("pdoc:ai-chat:conversations@v1:"));
     assert!(s.get(&data_key).unwrap().is_some());
     let meta = crate::sync::personal::get_personal_meta(s.raw(), &data_key)
         .unwrap()
         .expect("sync 集合写入自动版本化");
-    assert_eq!(meta.vv.get("node-a"), Some(&1));
+    assert_eq!(meta.vv.get("node-a"), Some(&2));
 
     let local_decl = declare(
         &mut s,

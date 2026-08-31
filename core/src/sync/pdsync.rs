@@ -61,6 +61,9 @@ pub const CATEGORIES: &[Category] = &[
     // P6 插件声明式 API（personal scope）：声明记录先行（对端合入数据前必已
     // 知策略），数据记录随统一反熵。`ldoc:`（local scope）有意不在表内——
     // 永不离开本机。
+    // 注意：`pdecl:` 含 local scope 集合的声明——声明可见性经 2026-08-31
+    // 裁决为**有意设计**（同账号设备互可见装了哪些插件不是秘密，且
+    // 「声明先行」要求合入方先读到声明；wiki plugin-data-api §声明校验 3）。
     Category { name: "pdecl", prefixes: &["pdecl:"] },
     Category { name: "pdoc", prefixes: &["pdoc:"] },
     // O4 encrypted 集合：orgkey 表（personal 域，32B 集合对称密钥）经 pdsync
@@ -96,6 +99,14 @@ pub fn category_for_key(key: &str) -> Option<&'static Category> {
 pub fn category_by_name(name: &str) -> Option<&'static Category> {
     CATEGORIES.iter().find(|c| c.name == name)
 }
+
+/// 即时 hello 补发请求键（裸存储旗标，非同步数据）：入站副作用写（epoch
+/// ikey 补发 / 轮换派发）走裸存储、不 touch `last_local_write_ms`，变更观察
+/// 循环（p2p_ops watchdog）看不到它——授予方挂此旗标，watchdog 消费后补发
+/// `SelfHelloNow`，使对端下一轮反熵即拿到 ikey（否则要等本机下一次受管写
+/// 或周期 hello，qr/口令收敛拖到分钟级）。消费即删，重启残留至多多发一次
+/// hello，无害。
+pub const HELLO_REQUEST_KEY: &str = "pdsync:hello_request";
 
 /// 自 FriendRecord 的存储键（`ct:friend:{rootId}`）。
 ///
@@ -491,6 +502,15 @@ pub fn build_data_batch(
     batch_seq: usize,
     batch_total: usize,
 ) -> Value {
+    // [诊断] 发送侧打点：category + 每条 key + vv，定位"循环推 data"的源头与内容。
+    log::info!(
+        "[PDSYNC-DATA-OUT] cat={category} batch={batch_seq}/{batch_total} n={} keys={:?}",
+        records.len(),
+        records
+            .iter()
+            .map(|r| format!("{}(vv={:?})", r.key, r.meta.vv))
+            .collect::<Vec<_>>(),
+    );
     let items: Vec<Value> = records
         .iter()
         .map(|r| {

@@ -107,6 +107,12 @@ fn event_json(event: &P2pEvent) -> Option<Value> {
         } => {
             json!({"event": "peer-version", "peerId": peer_id, "appVersion": app_version})
         }
+        P2pEvent::PeerAppReady {
+            peer_id,
+            app_version,
+        } => {
+            json!({"event": "peer-app-ready", "peerId": peer_id, "appVersion": app_version})
+        }
         P2pEvent::AnnouncePublished { addresses } => {
             json!({"event": "announce-published", "addresses": addresses})
         }

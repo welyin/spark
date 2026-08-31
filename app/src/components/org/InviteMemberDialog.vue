@@ -1,6 +1,7 @@
 <!-- 职责：添加成员对话框（与添加朋友同一套名片输入；预录入成员 -> 定向 DM 邀请对方确认） -->
 <template>
-  <el-dialog v-model="dialogVisible" title="添加成员" width="480px" @closed="resetInviteDialog">
+  <!-- destroy-on-close：关闭对话框即销毁 CardInput → 卸载其 useQrCameraScan → 停摄像头 track（防关闭对话框后摄像头灯常亮） -->
+  <el-dialog v-model="dialogVisible" title="添加成员" width="480px" destroy-on-close @closed="resetInviteDialog">
     <!-- TODO(mock): 仅本地模式下邀请无法送达对方，前端先行拦截（真实实现应由内核/网关拒绝或排队） -->
     <el-alert
       v-if="isLocalOnly"

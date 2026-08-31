@@ -82,6 +82,7 @@ async fn test_loop() -> EventLoop<MemoryStorage> {
         dht_tick_counter: 0,
         dht_republish_ticks: crate::p2p::constants::DHT_REPUBLISH_TICKS,
         pending_network_change: None,
+        last_network_change_fired_at: None,
         last_network_snapshot: None,
         rediscovery_states: HashMap::new(),
         rediscovery_dht_queries: HashMap::new(),
@@ -320,9 +321,10 @@ async fn stale_org_attempts_pruned_on_begin() {
     );
 }
 
-/// 竞速拨号失败归属（N2）：仅「DHT 命中后拨号待确认」阶段（Racing + 暂存）
-/// 回 Idle 并清暂存（竞速收尾）；无状态 peer 与并行 A 阶段（Racing 但无暂存，
-/// DHT 查询仍在途）不受影响。
+/// 竞速拨号失败归属（N2 + V5）：「DHT 命中后拨号待确认」阶段（Racing + 暂存）
+/// 与纯缓存拨号竞速（Racing、无 DHT 在途、无暂存）失败都回 Idle 收尾（不卡
+/// Racing）；DHT 查询仍在途（Racing、有 dht_query_id、无暂存）不受影响，等
+/// DHT 查询结果收尾；无状态 peer 不受影响。
 #[tokio::test]
 async fn rediscovery_dial_failure_attribution() {
     use super::rediscovery::RediscoveryState;
@@ -331,7 +333,23 @@ async fn rediscovery_dial_failure_attribution() {
     // 无状态 peer（普通拨号失败）：不产生任何竞速状态
     el.on_rediscovery_dial_failed(peer);
     assert!(el.rediscovery_states.get(&peer).is_none());
-    // 并行 A 阶段（Racing、无暂存）：不影响，等 DHT 查询结果收尾
+    // 并行 A 阶段（Racing、DHT 查询在途、无暂存）：不受影响，等 DHT 查询结果收尾
+    el.start_rediscovery(peer);
+    assert!(
+        matches!(
+            el.rediscovery_states.get(&peer),
+            Some(RediscoveryState::Racing { dht_query_id: Some(_), .. })
+        ),
+        "start_rediscovery 后应处于 Racing（DHT 查询在途），实际: {:?}",
+        el.rediscovery_states.get(&peer)
+    );
+    el.on_rediscovery_dial_failed(peer);
+    assert!(matches!(
+        el.rediscovery_states.get(&peer),
+        Some(RediscoveryState::Racing { .. })
+    ));
+    // 纯缓存拨号竞速（Racing、无 DHT 在途、无暂存）：拨号失败即收尾回 Idle（V5），
+    // 否则 peer 永久卡 Racing、被 Racing 去重守卫永久拒绝后续触发
     el.rediscovery_states.insert(
         peer,
         RediscoveryState::Racing {
@@ -340,11 +358,22 @@ async fn rediscovery_dial_failure_attribution() {
         },
     );
     el.on_rediscovery_dial_failed(peer);
-    assert!(matches!(
-        el.rediscovery_states.get(&peer),
-        Some(RediscoveryState::Racing { .. })
-    ));
+    assert!(
+        matches!(
+            el.rediscovery_states.get(&peer),
+            Some(RediscoveryState::Idle)
+        ),
+        "纯缓存拨号失败后应回 Idle 收尾，实际: {:?}",
+        el.rediscovery_states.get(&peer)
+    );
     // 拨号待确认阶段（Racing + 暂存）：回 Idle、清暂存（竞速收尾）
+    el.rediscovery_states.insert(
+        peer,
+        RediscoveryState::Racing {
+            started_at: 0,
+            dht_query_id: None,
+        },
+    );
     el.pending_rediscovery_confirm.insert(
         peer,
         crate::p2p::announce::NodeAnnounce {

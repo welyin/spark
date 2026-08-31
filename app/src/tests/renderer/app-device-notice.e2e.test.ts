@@ -1,9 +1,9 @@
-// App.vue 主界面 M1 新设备通知端到端（DeviceNoticeReceived → ElMessage 警示）。
+// App.vue 主界面 M1 新设备通知端到端（DeviceNoticeReceived → app:system 系统消息）。
 //
 // 覆盖方案文档 §6.16（App.vue 分支）：
 // - 收到 { kind:'DeviceNoticeReceived', data:{ kind:'device_joined', deviceId,
-//   deviceName, ts } } → 走 handleDeviceNotice 判定为新设备 → ElMessage warning，
-//   文案含设备名与「如非本人操作请立即在设备管理中撤销」。
+//   deviceName, ts } } → 走 handleDeviceNotice 判定为新设备 → 不弹 ElMessage tips，
+//   而是写入消息页 app:system 系统消息（文案含设备名与「如非本人操作请立即在设备管理中撤销」）。
 //
 // 手段：mock @tauri-apps/api/event 的 listen 捕获 App.vue 注册的 handler，
 // 手动派发 DeviceNoticeReceived；App.vue 重依赖（页面/顶栏/插件宿主）打成占位。
@@ -58,10 +58,11 @@ vi.mock('../../stores/current-user', async (importOriginal) => {
 
 const captured = vi.hoisted(() => ({} as Record<string, (event: { payload: unknown }) => void>));
 
-import ElementPlus, { ElMessage } from 'element-plus';
+import ElementPlus from 'element-plus';
 import App from '../../App.vue';
 import { currentUser } from '../../stores/current-user';
 import { pendingDeviceNotices, markDeviceNoticesSeen } from '../../stores/device-notices';
+import { getAppMessages } from '../../stores/messages';
 
 beforeEach(() => {
   localStorage.clear();
@@ -114,8 +115,7 @@ function dispatchP2pEvent(payload: unknown): void {
 }
 
 describe('App.vue DeviceNoticeReceived 新设备通知', () => {
-  it('新设备通知 → ElMessage warning，文案含设备名与撤销提示', async () => {
-    (ElMessage as unknown as ReturnType<typeof vi.fn>).mockClear();
+  it('新设备通知 → 不弹 tips，写入 app:system 系统消息，文案含设备名与撤销提示', async () => {
     mountApp();
     await flush();
 
@@ -125,19 +125,18 @@ describe('App.vue DeviceNoticeReceived 新设备通知', () => {
     });
     await flush();
 
-    // 通知计入待看（红点数据源）。
+    // 通知计入待看（红点数据源，保留原逻辑）。
     expect(pendingDeviceNotices.value).toHaveLength(1);
     expect(pendingDeviceNotices.value[0].deviceId).toBe('peer-new-e2e');
     expect(pendingDeviceNotices.value[0].deviceName).toBe('新平板');
 
-    // ElMessage 对象式调用：type=warning，文案含设备名与撤销提示。
-    const call = (ElMessage as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
-      type: string;
-      message: string;
-    };
-    expect(call.type).toBe('warning');
-    expect(call.message).toContain('新平板');
-    expect(call.message).toContain('如非本人操作请立即在设备管理中撤销');
+    // 系统消息落到个人空间 app:system 会话（非 Tauri 走内存镜像），文案含设备名与撤销提示。
+    const sysMsgs = getAppMessages('personal', 'app:system');
+    expect(sysMsgs.length).toBeGreaterThan(0);
+    const last = sysMsgs[sysMsgs.length - 1];
+    expect(last.pluginId).toBe('system');
+    expect(last.summary).toContain('新平板');
+    expect(last.summary).toContain('如非本人操作请立即在设备管理中撤销');
   });
 
   it('App 主界面已注册 p2p-event listener（事件桥就绪）', async () => {

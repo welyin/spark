@@ -246,6 +246,7 @@ import { currentPage, popPage, resetStack } from './stores/mobile-nav';
 import { hasOverlay, requestCloseOverlay } from './stores/overlay-stack';
 import { requestOpenSystemSection } from './stores/pending-system-section';
 import { handleDeviceNotice, hydrateDeviceNotices } from './stores/device-notices';
+import { notifyDeviceJoined } from './plugin/messages';
 import { handleRecoveryP2pEvent, hydrateRecovery } from './stores/recovery';
 import { handlePasswordUnifyEvent, hydratePasswordUnify } from './stores/password-unify';
 import { useUpdaterReadyPrompt } from './components/updater/use-updater';
@@ -530,14 +531,13 @@ export default defineComponent({
       // 自设备资料同步（多设备）：本机资料被其他设备的全量快照更新后刷新展示
       void listenP2pEvents((event) => {
         // M1 新设备加入通知（m1-m2-implementation-plan §3.4）：store 按 deviceId 幂等
-        // （重复事件仅更新 ts 不重复弹）；红旗引导文案已拍板保留（方案 §8 决策点 1）
+        // （重复事件仅更新 ts 不重复写）；红旗引导文案已拍板保留（方案 §8 决策点 1）。
+        // 通知改走消息页 app:system 系统消息落一条可追溯记录（不弹 tips），
+        // 写入当前空间，消息入口角标随之 +1；红点数据源（stores/device-notices）保留。
         if (event.kind === 'DeviceNoticeReceived') {
           const isNewDevice = handleDeviceNotice(currentUser.rootId ?? '', event.data);
           if (isNewDevice) {
-            ElMessage({
-              type: 'warning',
-              message: `新设备「${event.data.deviceName}」加入了你的账号，如非本人操作请立即在设备管理中撤销`
-            });
+            notifyDeviceJoined(spaceKeyOf(currentSpace.value), event.data.deviceName);
           }
           return;
         }

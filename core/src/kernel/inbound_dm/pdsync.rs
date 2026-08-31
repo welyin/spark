@@ -17,6 +17,90 @@ use crate::message::{MessageRecord, MessageService};
 use crate::p2p::P2pEvent;
 use crate::storage::StorageBackend;
 
+/// §Y.6.2 收敛不动点告警：同一对端同一 category 的折叠 vv 连续 N 轮完全
+/// 不变仍判 Concurrent → 正常 LWW 收敛不超过 1-2 轮，持续不动点意味着
+/// data 合入在某侧未生效（如 epoch 密钥未收敛互解不开）。只打 WARN 不改行为。
+const NOCONV_WARN_ROUNDS: u32 = 5;
+
+fn storm_warn_if_stuck<S: StorageBackend>(
+    storage: &mut S,
+    peer: &str,
+    category: &str,
+    local_vv: &crate::sync::meta::VersionVector,
+    remote_vv: &crate::sync::meta::VersionVector,
+) {
+    let key = format!("pdsync:noconv:{peer}:{category}");
+    let fingerprint = format!("{:?}#{:?}", local_vv, remote_vv);
+    let mut rounds = 0u32;
+    if let Ok(Some(raw)) = storage.get(&key)
+        && let Some((stored_fp, stored_rounds)) = raw.split_once('#')
+        && stored_fp == fingerprint
+    {
+        rounds = stored_rounds.parse().unwrap_or(0);
+    }
+    rounds += 1;
+    if rounds == NOCONV_WARN_ROUNDS {
+        log::warn!(
+            "[PDSYNC] category 连续 {NOCONV_WARN_ROUNDS} 轮折叠 vv 不动仍 Concurrent \
+             | peer={peer} cat={category} local={local_vv:?} remote={remote_vv:?} \
+             —— 疑似 data 合入未生效（检查 epoch 密钥收敛 / 解密丢弃日志）"
+        );
+    }
+    let _ = storage.put(&key, &format!("{fingerprint}#{rounds}"));
+}
+
+/// 自动密码统一（方案 a）的存储面自愈：会话 Kverify 对当前 V 可解时，
+/// 自锚 ack + 推进水位 + 清 stale。按 `changedAt` 粒度幂等（标记键
+/// `p2p:pw-autounified:{changedAt}`）；挂 hello 补发旗标驱动 ikey 授予链
+/// 下一轮闭合。失败静默（逐信封自然重评估）。
+fn auto_pw_unify_if_verifiable<S: StorageBackend>(
+    storage: &mut S,
+    ctx: &InboundContext<'_>,
+    kverify: &[u8; 32],
+) {
+    let Ok(Some(pwv)) = crate::pw::get_pwv(storage) else {
+        return;
+    };
+    // 口令对当前 V 验证不过（真改密后旧口令场景）→ 不自愈。
+    if crate::pw::decrypt_with_kverify(kverify, &pwv).is_none() {
+        return;
+    }
+    let mark_key = format!("p2p:pw-autounified:{}", pwv.changed_at);
+    if storage.get(&mark_key).ok().flatten().is_some() {
+        return;
+    }
+    let now_ms = ctx.now_ms;
+    let node_id = ctx.node_id;
+    let mut ops = || -> Result<()> {
+        let ack = crate::pw::build_ack(kverify, node_id, pwv.changed_at);
+        crate::pw::put_pwack(storage, node_id, node_id, &ack, now_ms)?;
+        crate::pw::put_applied_vts(storage, pwv.changed_at)?;
+        crate::pw::put_last_verified_vts(storage, node_id, pwv.changed_at)?;
+        crate::pw::put_stale(storage, false)?;
+        storage.put(&mark_key, "1")?;
+        crate::device::DeviceService::append_security_log(
+            storage,
+            "pw_auto_unified",
+            json!({
+                "deviceId": node_id,
+                "vTs": pwv.changed_at,
+            }),
+            now_ms,
+        )?;
+        // 自锚 ack 是写入 → 挂旗标让 watchdog 即时 hello，把新 pwack 推给
+        // 对端完成 D′ 门控闭合（同 ikey 补发旗标机制）。
+        let _ = storage.put(crate::sync::pdsync::HELLO_REQUEST_KEY, "1");
+        Ok(())
+    };
+    if ops().is_err() {
+        return;
+    }
+    log::info!(
+        "[PW_UNIFY] auto unified | device={node_id} vTs={} | 门控链下轮闭合",
+        pwv.changed_at
+    );
+}
+
 /// pdsync-hello：收到自设备（from==自己）的摘要。逐 category 与本地折叠 vv
 /// 比对：
 /// - 本机落后 → 发 `pdsync-need`（请求对端补增量）；
@@ -79,7 +163,8 @@ pub(super) fn handle_pdsync_hello<S: StorageBackend>(
         // 于其落后——本机领先即主动推；本机为空则不动）
         let remote_vv = remote_cats.get(category.name).cloned().unwrap_or_default();
         let diff = crate::sync::pdsync::diff_category(&local_vv, &remote_vv);
-        if category.name == "ct:friend" {
+        // [诊断] 所有 category 打 diff 结果，定位"Equal 后仍推 data"的持续源。
+        {
             let outcome = match &diff {
                 crate::sync::pdsync::DiffOutcome::LocalBehind { .. } => "LocalBehind",
                 crate::sync::pdsync::DiffOutcome::LocalAhead => "LocalAhead",
@@ -87,7 +172,8 @@ pub(super) fn handle_pdsync_hello<S: StorageBackend>(
                 crate::sync::pdsync::DiffOutcome::Equal => "Equal",
             };
             log::info!(
-                "[CT_SYNC] handle_hello ct:friend diff | outcome={} local_vv={:?} remote_vv={:?}",
+                "[CT_SYNC] handle_hello {} diff | outcome={} local_vv={:?} remote_vv={:?}",
+                category.name,
                 outcome,
                 local_vv,
                 remote_vv,
@@ -112,11 +198,20 @@ pub(super) fn handle_pdsync_hello<S: StorageBackend>(
                     dlog_ack,
                     remote_class.as_deref(),
                     remote_epoch,
+                    ctx.remote_peer_id,
+                    ctx.now_ms,
                 );
             }
             crate::sync::pdsync::DiffOutcome::Concurrent => {
                 // 双向交换：既请求对端缺的，也主动推本机缺的（data 逐条向量
                 // 幂等去重，双发收敛）
+                storm_warn_if_stuck(
+                    storage,
+                    ctx.remote_peer_id,
+                    category.name,
+                    &local_vv,
+                    &remote_vv,
+                );
                 let need_body =
                     crate::sync::pdsync::build_need(category.name, &local_vv, my_seen);
                 out.push(PdsyncOut::Need { body: need_body });
@@ -129,6 +224,8 @@ pub(super) fn handle_pdsync_hello<S: StorageBackend>(
                     dlog_ack,
                     remote_class.as_deref(),
                     remote_epoch,
+                    ctx.remote_peer_id,
+                    ctx.now_ms,
                 );
             }
             crate::sync::pdsync::DiffOutcome::Equal => {
@@ -313,6 +410,11 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
     let Some((category_name, records)) = crate::sync::pdsync::parse_data(body) else {
         return done(fail_response("invalid-body"), Vec::new());
     };
+    // [诊断] 每批 pdsync-data 打点：category + 条数，定位"空/重复 data"循环。
+    log::info!(
+        "[PDSYNC-DATA-BATCH] cat={category_name} n={}",
+        records.len(),
+    );
     // key 白名单 + 声明 category 一致性（发送方按 category 分批，合法批次
     // 不会混杂）
     for record in &records {
@@ -477,8 +579,10 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
                 }
             }
             // M3 新设备补发钩子：该 device 记录落库后，若满足条件则本机为 writer
-            // 补写 ikey 包裹（幂等，已有包裹则不重发）。
-            let _ = crate::epoch::EpochService::maybe_grant_epoch_key(
+            // 补写 ikey 包裹（幂等，已有包裹则不重发）。补发是裸存储副作用写、
+            // 不触发变更信号——成功即挂 hello 补发旗标，watchdog 消费后即时
+            // hello，对端下一轮反熵拿到 ikey（否则等周期 hello，收敛拖到分钟级）。
+            if let Ok(true) = crate::epoch::EpochService::maybe_grant_epoch_key(
                 storage,
                 &ctx.my_root_id,
                 ctx.node_id,
@@ -488,7 +592,9 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
                 remote.device_pub_key.as_deref(),
                 remote.revoked_at,
                 ctx.kverify,
-            );
+            ) {
+                let _ = storage.put(crate::sync::pdsync::HELLO_REQUEST_KEY, "1");
+            }
         }
 
         // `pwv:self`：口令校验器入站专用分支（规格 §13.5 乙侧 fail-closed）。
@@ -507,6 +613,29 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
             };
             let applied = crate::pw::get_applied_vts(storage)?;
             if incoming.changed_at <= applied {
+                // 回放忽略内容（水位单调裁决），但把对端 vv 分量并入本键 pmeta
+                // （见讫记账）——否则本键折叠 vv 永不收敛，每轮 hello 都判
+                // Concurrent/LocalBehind 双向重复互推（风暴放大器）。内容水位
+                // 不变，仅记账已见版本，语义安全。
+                if let Ok(Some(mut local_meta)) =
+                    crate::sync::personal::get_personal_meta(storage, &record.key)
+                {
+                    let mut merged = false;
+                    for (node, v) in &record.meta.vv {
+                        let entry = local_meta.vv.entry(node.clone()).or_insert(0);
+                        if *v > *entry {
+                            *entry = *v;
+                            merged = true;
+                        }
+                    }
+                    if merged {
+                        let _ = crate::sync::personal::set_personal_meta(
+                            storage,
+                            &record.key,
+                            &local_meta,
+                        );
+                    }
+                }
                 continue;
             }
             let upper_bound = (ctx.now_ms as u64).saturating_add(
@@ -537,6 +666,17 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
                     json!({ "expectedChangedAt": incoming.changed_at }),
                     ctx.now_ms,
                 )?;
+                // 自动密码统一（方案 a，安全评审见 wiki/security/
+                // password-unify-auto-trigger）：会话 Kverify 对**新合入的 V**
+                // 可解 ⟹ 本会话口令即账号当前口令（V 由口令+salt 决定）——
+                // 立即自愈存储面（自锚 ack + 推进水位 + 清 stale），等价
+                // unify_password 的同口令路径（免身份文件重封，会话密钥仍
+                // 有效）。改密竞态天然安全：真改密后 V 翻转，旧口令的
+                // Kverify 解不开新 V → 不自愈。逐信封重评估，无退避状态机
+                // （密码学保证成功，无失败重试需求）。
+                if let Some(kverify) = ctx.kverify {
+                    auto_pw_unify_if_verifiable(storage, ctx, kverify);
+                }
             }
             continue;
         }
@@ -576,10 +716,6 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
             if let Ok(msg) = serde_json::from_value::<MessageRecord>(record.value.clone())
                 && let Some(conv_id) = pdsync_message_conv_id(&record.key)
             {
-                println!(
-                    "[PDSYNC_DATA] applying message | msgId={} convId={}",
-                    msg.id, conv_id
-                );
                 // 消息已存在 → 跳过事件聚合。pdsync Hello 交换每次全量推窗口，
                 // 已存在消息重复收会触发无意义的 ChatReceived（对已删除 bot
                 // 的会话尤甚——bot 配置已删但会话还在，每次 Hello 都路由到插件
@@ -738,7 +874,7 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
             // Gated 未发；ack 锚定后门控转为 Pass，须重新触发补发，否则 ikey 永缺）。
             if anchored {
                 if let Ok(Some(dev)) = crate::device::DeviceService::get(storage, peer) {
-                    let _ = crate::epoch::EpochService::maybe_grant_epoch_key(
+                    if let Ok(true) = crate::epoch::EpochService::maybe_grant_epoch_key(
                         storage,
                         &ctx.my_root_id,
                         ctx.node_id,
@@ -748,7 +884,9 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
                         dev.device_pub_key.as_deref(),
                         dev.revoked_at,
                         Some(kverify),
-                    );
+                    ) {
+                        let _ = storage.put(crate::sync::pdsync::HELLO_REQUEST_KEY, "1");
+                    }
                 }
             }
         }
@@ -919,9 +1057,32 @@ fn try_unwrap_record_value<S: StorageBackend>(
         return Some(record.value.clone());
     }
     let epoch = record.value.get("epoch").and_then(Value::as_u64)?;
-    let epoch_key = crate::epoch::get_local_key(storage, epoch).ok().flatten()?;
-    let plaintext = crate::epoch::unwrap_value(&epoch_key, &record.key, &record.value)?;
-    serde_json::from_str(&plaintext).ok()
+    let Some(epoch_key) = crate::epoch::get_local_key(storage, epoch).ok().flatten() else {
+        // [诊断] 解不开逐条打点（debug 级：风暴期逐条 warn 本身是 CPU 放大器；
+        // 类目级持续不收敛由 handle_pdsync_hello 的 §Y.6.2 不动点 WARN 兜底）。
+        log::debug!(
+            "[PDSYNC-UNWRAP] drop encrypted record key={} epoch={epoch} reason=no-local-key (get_local_key=None)",
+            record.key,
+        );
+        return None;
+    };
+    let Some(plaintext) = crate::epoch::unwrap_value(&epoch_key, &record.key, &record.value) else {
+        log::debug!(
+            "[PDSYNC-UNWRAP] drop encrypted record key={} epoch={epoch} reason=unwrap-value-failed",
+            record.key,
+        );
+        return None;
+    };
+    match serde_json::from_str(&plaintext) {
+        Ok(v) => Some(v),
+        Err(e) => {
+            log::debug!(
+                "[PDSYNC-UNWRAP] drop encrypted record key={} epoch={epoch} reason=parse-failed err={e}",
+                record.key,
+            );
+            None
+        }
+    }
 }
 
 /// M3 发送侧加密：按 `min(local_effective, remote_epoch)` 对需加密记录
@@ -969,6 +1130,17 @@ fn encrypt_records_for_push<S: StorageBackend>(
     Ok(out)
 }
 
+/// 重推抑制窗口（ms）：对端折叠未动且窗口内已推过 → 跳过本轮推送。
+/// 场景：对端合入受阻（解不开密文 / D′ 门控未过 / 密码未统一）时，
+/// hello 每轮都判 LocalAhead/Concurrent → 同一批记录无限重推，两端空转
+/// （真机实测 ~4s 一轮、CPU 40–70%）。窗口保证最坏重推延迟 = 窗口时长，
+/// 对端折叠一旦变化立即恢复推送。 tombstone 走 dlog ACK 通道不受此限。
+const PUSH_RETRY_MIN_INTERVAL_MS: i64 = 30_000;
+
+fn push_fingerprint_key(peer: &str, category: &str) -> String {
+    format!("pdsync:pushed:{peer}:{category}")
+}
+
 fn push_category_data<S: StorageBackend>(
     storage: &mut S,
     out: &mut Vec<PdsyncOut>,
@@ -978,7 +1150,23 @@ fn push_category_data<S: StorageBackend>(
     dlog_ack: u64,
     remote_class: Option<&str>,
     remote_epoch: Option<u64>,
+    peer: &str,
+    now_ms: i64,
 ) {
+    // 重推抑制：对端折叠指纹与上次推送时相同且未出窗口 → 跳过（见
+    // PUSH_RETRY_MIN_INTERVAL_MS 注释）。
+    let fp_key = push_fingerprint_key(peer, category.name);
+    let fp = format!("{remote_vv:?}");
+    if let Ok(Some(raw)) = storage.get(&fp_key) {
+        if let Some((stored, ts)) = raw.split_once('@') {
+            if stored == fp
+                && now_ms.saturating_sub(ts.parse::<i64>().unwrap_or(0))
+                    < PUSH_RETRY_MIN_INTERVAL_MS
+            {
+                return;
+            }
+        }
+    }
     let Ok(records) = crate::sync::pdsync::collect_incremental(
         storage,
         category,
@@ -1009,6 +1197,10 @@ fn push_category_data<S: StorageBackend>(
     }
     let batches = crate::sync::pdsync::split_batches(records, PDSYNC_BATCH_BYTES);
     let total = batches.len();
+    if total > 0 {
+        // 记录推送指纹（折叠 + 时间），供下轮重推抑制判定。
+        let _ = storage.put(&fp_key, &format!("{fp}@{now_ms}"));
+    }
     for (i, batch) in batches.into_iter().enumerate() {
         let body = crate::sync::pdsync::build_data_batch(category.name, &batch, i, total);
         out.push(PdsyncOut::Data { body });
