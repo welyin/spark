@@ -58,6 +58,9 @@ impl<S: StorageBackend> EventLoop<S> {
                 .iter()
                 .filter_map(|a| crate::p2p::peer_targets::filter_dial_candidate(a, is_android))
                 .filter(|a| !self_addrs.contains(a))
+                .map(|a| {
+                    crate::p2p::peer_targets::ensure_circuit_dst_peer(&a, &peer.to_base58())
+                })
                 .filter_map(|a| a.parse().ok())
                 .collect()
         };
@@ -158,6 +161,9 @@ impl<S: StorageBackend> EventLoop<S> {
             let addrs: Vec<libp2p::Multiaddr> = announce
                 .addresses
                 .iter()
+                .map(|a| {
+                    crate::p2p::peer_targets::ensure_circuit_dst_peer(a, &peer.to_base58())
+                })
                 .filter_map(|a| a.parse().ok())
                 .collect();
             if !addrs.is_empty() {

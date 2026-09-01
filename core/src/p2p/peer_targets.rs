@@ -72,6 +72,38 @@ pub(crate) fn filter_dial_candidate(address: &str, is_android: bool) -> Option<S
     Some(trimmed)
 }
 
+/// 电路地址拨号补全：`<relay-addr>/p2p/<relay>/p2p-circuit` 形态缺目的段时
+/// 追加 `/p2p/<dst>`——libp2p relay client 拨号要求地址携带目的 peer 段
+/// （否则 MissingDstPeerId，真机实测：DHT/announce 分发的电路地址在各拨号
+/// 路径被原样使用，永远拨不通）；已含目的段或非电路地址原样返回。
+pub(crate) fn ensure_circuit_dst_peer(address: &str, dst_peer: &str) -> String {
+    let trimmed = address.trim();
+    let Ok(ma) = trimmed.parse::<Multiaddr>() else {
+        return trimmed.to_string();
+    };
+    let mut has_circuit = false;
+    let mut last_is_p2p = false;
+    for p in ma.iter() {
+        match p {
+            Protocol::P2pCircuit => {
+                has_circuit = true;
+                last_is_p2p = false;
+            }
+            Protocol::P2p(_) => last_is_p2p = true,
+            _ => last_is_p2p = false,
+        }
+    }
+    if !has_circuit || last_is_p2p {
+        return trimmed.to_string();
+    }
+    let Ok(dst) = dst_peer.parse::<libp2p::PeerId>() else {
+        return trimmed.to_string();
+    };
+    let mut out = ma;
+    out.push(Protocol::P2p(dst.into()));
+    out.to_string()
+}
+
 /// 判定一个 multiaddr 首段 IP 是否可作为**公网 external 地址**广播
 /// （wrong-peer-id-address-pollution S1 helper，与 `filter_kad_addr` 同族）。
 ///
@@ -340,6 +372,40 @@ pub fn sort_addresses(addrs: Vec<String>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ensure_circuit_dst_peer_appends_missing_dst() {
+        let dst = "12D3KooWPDrpSKELPnUBhn29pY2K7mPYctLY5zHx2XcbcZBtLSsq";
+        // 缺目的段的电路地址：补上 /p2p/<dst>
+        assert_eq!(
+            ensure_circuit_dst_peer(
+                "/ip6/2408::1/tcp/15003/p2p/12D3KooWEKRbKxNV65Fsd7G68SPckn7GHQaXcvF3qvAQAYdxY1hj/p2p-circuit",
+                dst,
+            ),
+            format!(
+                "/ip6/2408::1/tcp/15003/p2p/12D3KooWEKRbKxNV65Fsd7G68SPckn7GHQaXcvF3qvAQAYdxY1hj/p2p-circuit/p2p/{dst}"
+            )
+        );
+        // 已含目的段：原样
+        let full = format!(
+            "/ip4/1.2.3.4/tcp/15003/p2p/12D3KooWEKRbKxNV65Fsd7G68SPckn7GHQaXcvF3qvAQAYdxY1hj/p2p-circuit/p2p/{dst}"
+        );
+        assert_eq!(ensure_circuit_dst_peer(&full, dst), full);
+        // 非电路地址：原样
+        let plain = "/ip4/1.2.3.4/tcp/15002";
+        assert_eq!(ensure_circuit_dst_peer(plain, dst), plain);
+        // 非电路但自带 /p2p 尾段：原样
+        let with_peer = format!("/ip4/1.2.3.4/tcp/15002/p2p/{dst}");
+        assert_eq!(ensure_circuit_dst_peer(&with_peer, dst), with_peer);
+        // dst 不可解析：原样（不panic）
+        assert_eq!(
+            ensure_circuit_dst_peer(
+                "/ip4/1.2.3.4/tcp/15003/p2p/12D3KooWEKRbKxNV65Fsd7G68SPckn7GHQaXcvF3qvAQAYdxY1hj/p2p-circuit",
+                "not-a-peer",
+            ),
+            "/ip4/1.2.3.4/tcp/15003/p2p/12D3KooWEKRbKxNV65Fsd7G68SPckn7GHQaXcvF3qvAQAYdxY1hj/p2p-circuit"
+        );
+    }
 
     #[test]
     fn address_sort_ipv6_first() {

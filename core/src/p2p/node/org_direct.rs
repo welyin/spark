@@ -163,6 +163,14 @@ impl<S: StorageBackend> EventLoop<S> {
                 attempt.dial_issued = false;
                 return;
             }
+            // 电路地址补目的段（MissingDstPeerId 根修，peer_targets helper）
+            let target = match attempt.current_peer {
+                Some(cp) => crate::p2p::peer_targets::ensure_circuit_dst_peer(
+                    &target,
+                    &cp.to_base58(),
+                ),
+                None => target,
+            };
             match target.parse::<Multiaddr>() {
                 Ok(ma) => {
                     // allocate_new_port：复用监听端口 [::]:15002 会与多 listener

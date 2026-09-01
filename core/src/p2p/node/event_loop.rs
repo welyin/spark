@@ -463,6 +463,12 @@ impl<S: StorageBackend> EventLoop<S> {
                     .iter()
                     .filter_map(|a| filter_dial_candidate(a, is_android))
                     .filter(|a| !self_addrs.contains(a))
+                    .map(|a| {
+                        crate::p2p::peer_targets::ensure_circuit_dst_peer(
+                            &a,
+                            &peer.to_base58(),
+                        )
+                    })
                     .filter_map(|a| a.parse().ok())
                     .collect()
             };
@@ -532,6 +538,9 @@ impl<S: StorageBackend> EventLoop<S> {
                 .iter()
                 .filter_map(|a| filter_dial_candidate(a, is_android))
                 .filter(|a| !self_addrs.contains(a))
+                .map(|a| {
+                    crate::p2p::peer_targets::ensure_circuit_dst_peer(&a, &peer.to_base58())
+                })
                 .filter_map(|a| a.parse().ok())
                 .collect();
             if addrs.is_empty() {
@@ -945,6 +954,14 @@ impl<S: StorageBackend> EventLoop<S> {
             let Some(target) = pending.targets.pop_front() else {
                 break;
             };
+            // 电路地址补目的段（MissingDstPeerId 根修，peer_targets helper）
+            let peer_b58 = pending
+                .node_info
+                .peer_id
+                .clone()
+                .or_else(|| crate::p2p::peer_targets::extract_peer_id(&pending.node_info))
+                .unwrap_or_default();
+            let target = crate::p2p::peer_targets::ensure_circuit_dst_peer(&target, &peer_b58);
             match target.parse::<Multiaddr>() {
                 Ok(ma) => {
                     // allocate_new_port：复用监听端口 [::]:15002 会与多 listener
