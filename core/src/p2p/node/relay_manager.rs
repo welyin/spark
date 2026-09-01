@@ -11,7 +11,7 @@
 //! 并重选候选（§6 WP1.4）。
 
 use libp2p::multiaddr::Protocol;
-use libp2p::{Multiaddr, PeerId};
+use libp2p::{Multiaddr, PeerId, autonat, kad};
 
 use crate::storage::StorageBackend;
 
@@ -30,37 +30,105 @@ pub struct RelayReservation {
     pub created_at: i64,
 }
 
+/// `spark:relay` 共享池记录载荷（relay-implementation §2 R2，org 网关成员
+/// 提示同型：`{peerId, addresses}` 紧凑 JSON）。
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayProviderHint {
+    /// relay 节点 libp2p peerId。
+    #[serde(rename = "peerId")]
+    pub peer_id: String,
+    /// relay 节点公网可达 multiaddr 列表。
+    #[serde(default)]
+    pub addresses: Vec<String>,
+    /// relay 稳定性标记（R1 动态 IP 降权：`Some("low")` = stability=low，
+    /// 消费方排序降权垫底；旧记录无此字段视为正常）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stability: Option<String>,
+}
+
+impl RelayProviderHint {
+    /// 序列化为 DHT 记录值（紧凑 JSON，与 OrgMemberHint 同口径）。
+    pub fn to_record_value(&self) -> Vec<u8> {
+        serde_json::to_string(self)
+            .unwrap_or_else(|_| "{}".to_string())
+            .into_bytes()
+    }
+
+    /// 从 DHT 记录值解析：形状不符返回 `None`（静默丢弃口径）。
+    /// 当前仅测试/R3 候选解析消费（get_providers 结果地址段的复核）。
+    #[allow(dead_code)]
+    pub fn from_record_value(value: &[u8]) -> Option<Self> {
+        let text = std::str::from_utf8(value).ok()?;
+        let hint: Self = serde_json::from_str(text).ok()?;
+        if hint.peer_id.trim().is_empty() {
+            return None;
+        }
+        Some(hint)
+    }
+}
+
 impl<S: StorageBackend> EventLoop<S> {
-    /// 选择 relay 候选：从邻居池挑选活跃度高且已连接的 peer，优先具备 relay
-    /// server 能力（identify 协议清单含 hop 协议）的。
-    ///
-    /// 简化实现：从已连接 peer 中筛选具备 relay hop 能力的；若无则回退到
-    /// 已连接 peer 全集（活跃度靠后由拨号结果纠偏）。
+    /// 选择 relay 候选（R3 排序纪律，relay-implementation §2；直连失败后的
+    /// relay 候选序）：
+    /// ① 自设备/本组织成员的公网 relay（已连接 + hop 能力 ∩ 宿主谓词
+    ///   `is_self_device_or_org_member`——设备清单/成员表由 kernel 宿主注入，
+    ///   p2p 层不直接依赖业务表）；
+    /// ② `spark:relay` 共享池候选（R2 `relay_pool_candidates` 落点）；
+    /// ③④ 既有兜底（保留原行为）：其他已连接 + hop，再已连接全集。
+    /// 跨层不混排；层内按 peer_activity last_seen 降序、`stability_low` 垫底；
+    /// 目标数沿用 [`RELAY_RESERVATION_TARGET`]（1 主 1 备）。
     pub(super) fn select_relay_candidates(&mut self) -> Vec<PeerId> {
-        let mut candidates = Vec::new();
-        // 已连接且 identify 报告了 /libp2p/circuit/relay/0.2.0/hop 协议的 peer
-        for peer in self.connected_peers() {
-            let is_hop = self
-                .peer_protocols
-                .get(&peer)
-                .is_some_and(|ps| ps.iter().any(|p| p.contains("/circuit/relay/") && p.ends_with("/hop")));
-            if is_hop {
-                candidates.push(peer);
+        let connected = self.connected_peers();
+        let is_hop = |p: &PeerId| {
+            self.peer_protocols.get(p).is_some_and(|ps| {
+                ps.iter()
+                    .any(|p| p.contains("/circuit/relay/") && p.ends_with("/hop"))
+            })
+        };
+        // last_seen 一次取齐（peer_activity；pool 候选可能未连接，一并查）
+        let mut last_seen_map: std::collections::HashMap<PeerId, i64> =
+            std::collections::HashMap::new();
+        {
+            let mut store =
+                crate::p2p::peer_activity::PeerActivityStore::new(&mut self.storage);
+            for p in connected.iter().chain(self.relay_pool_candidates.iter()) {
+                if let Ok(Some(rec)) = store.get(&p.to_base58()) {
+                    last_seen_map.insert(*p, rec.last_seen_at);
+                }
             }
         }
-        if candidates.is_empty() {
-            // 回退：已连接 peer 全集（relay 资历校验在协议层完成）
-            candidates = self.connected_peers().into_iter().collect();
-        }
+        let last_seen = |p: &PeerId| last_seen_map.get(p).copied().unwrap_or(0);
+        let is_low = |p: &PeerId| {
+            self.relay_pool_stability.get(p).copied().unwrap_or(false)
+        };
+
+        // ① 自设备/本组织成员 relay（已连接 + hop ∩ 宿主谓词）
+        let tier1: Vec<PeerId> = connected
+            .iter()
+            .filter(|p| is_hop(p) && self.host.is_self_device_or_org_member(&p.to_base58()))
+            .copied()
+            .collect();
+        // ② 共享池候选（可未连接——R2 查询结果侧已发起拨号，此处直接入选）
+        let tier2 = self.relay_pool_candidates.clone();
+        // ③ 其他已连接 + hop（非梯队①成员）
+        let tier3: Vec<PeerId> = connected
+            .iter()
+            .filter(|p| is_hop(p) && !tier1.contains(p))
+            .copied()
+            .collect();
+        // ④ 已连接全集其余（原「无 hop 回退全集」语义保留为末位兜底）
+        let tier4: Vec<PeerId> = connected.iter().filter(|p| !is_hop(p)).copied().collect();
+
+        let mut out = assemble_relay_tiers([tier1, tier2, tier3, tier4], &last_seen, &is_low);
         // 排除已 in-flight 或已预约的
-        candidates.retain(|p| {
+        out.retain(|p| {
             !self.relay_reservations_inflight.contains(p)
                 && !self.relay_reservations.iter().any(|r| r.relay_peer == *p)
         });
         // 限制到目标数
-        let target = crate::p2p::constants::RELAY_RESERVATION_TARGET;
-        candidates.truncate(target);
-        candidates
+        out.truncate(crate::p2p::constants::RELAY_RESERVATION_TARGET);
+        out
     }
 
     /// 尝试向指定 relay peer 建立预约：在 relay 地址上追加 /p2p-circuit 并监听。
@@ -187,6 +255,12 @@ impl<S: StorageBackend> EventLoop<S> {
             return;
         }
         let candidates = self.select_relay_candidates();
+        if candidates.is_empty() {
+            // R2（relay-implementation §2）：无已连接候选 → 查 spark:relay
+            // 共享池补充（节流 60s；结果经 resolve_dht_providers 分流拨号）
+            self.maybe_query_relay_pool();
+            return;
+        }
         for candidate in candidates {
             if self.relay_reservations.len() >= target {
                 break;
@@ -220,6 +294,186 @@ impl<S: StorageBackend> EventLoop<S> {
             }
         }
     }
+
+    // ------------------------------------------------------------------
+    // R1：AutoNAT 公网判定驱动 relay server 自动启停（relay-implementation §2）
+    // ------------------------------------------------------------------
+
+    /// AutoNAT `NatStatus` 变化（swarm_events 接线）：
+    /// - Public → 启用 relay server 角色（hop 可服务）并对 `spark:relay` 共享池
+    ///   provide（R2，含已挂载时的首次 Public 确认——刷新地址载荷）；
+    /// - Private → 摘牌：新连接不再接受预约（既有预约由各自连接 handler 服务
+    ///   到期），并撤下共享池 provide；
+    /// - Unknown → 不变更现状。
+    /// 显式 `enable_relay_server: false`（用户手动关/移动端）优先于自动判定，
+    /// 角色永不开；leaf 双保险（kad client 不服务 + begin_dht_provide 守卫）。
+    pub(super) fn on_autonat_status_changed(&mut self, status: autonat::NatStatus) {
+        // U1 状态页快照：无论角色配置如何都记录最新判定
+        self.nat_status = match &status {
+            autonat::NatStatus::Public(_) => super::NatStatusLabel::Public,
+            autonat::NatStatus::Private => super::NatStatusLabel::Private,
+            autonat::NatStatus::Unknown => super::NatStatusLabel::Unknown,
+        };
+        if !self.enable_relay_server {
+            return;
+        }
+        match status {
+            autonat::NatStatus::Public(_) => {
+                if self.swarm.behaviour().relay_server.as_ref().is_none() {
+                    let local = self.self_peer_id();
+                    self.swarm.behaviour_mut().relay_server =
+                        libp2p::swarm::behaviour::toggle::Toggle::from(Some(
+                            crate::p2p::behaviour::build_relay_server(local),
+                        ));
+                }
+                // R2：就绪（Public + 角色开启）即对共享池 provide/刷新
+                self.provide_relay_pool_record();
+            }
+            autonat::NatStatus::Private => {
+                if self.swarm.behaviour().relay_server.as_ref().is_some() {
+                    self.swarm.behaviour_mut().relay_server =
+                        libp2p::swarm::behaviour::toggle::Toggle::from(None);
+                }
+                // 撤下共享池 provide：停止 provider 声明 + 取消周期重发登记
+                if let Some(kad) = self.swarm.behaviour_mut().kad.as_mut() {
+                    kad.stop_providing(&kad::RecordKey::new(
+                        &crate::p2p::constants::SPARK_RELAY_KEY,
+                    ));
+                }
+                self.provided_records
+                    .remove(crate::p2p::constants::SPARK_RELAY_KEY.as_bytes());
+            }
+            autonat::NatStatus::Unknown => {}
+        }
+    }
+
+    /// R2 提供侧：对约定键 `spark:relay` 做 provide（复用 `begin_dht_provide`
+    /// 既有路径——start_providing + put_record + 登记 tick 周期重发）。载荷 =
+    /// 本机 peerId + listen_addr_strings 的**公网段**地址集；公网段为空
+    /// （无 external 确认地址）不发布——非公网地址对拨号方无用。
+    pub(super) fn provide_relay_pool_record(&mut self) {
+        let public_addrs: Vec<String> = self
+            .listen_addr_strings()
+            .into_iter()
+            .filter(|a| {
+                a.parse::<Multiaddr>()
+                    .map(|ma| crate::p2p::peer_targets::is_public_external_addr(&ma))
+                    .unwrap_or(false)
+            })
+            .collect();
+        if public_addrs.is_empty() {
+            return;
+        }
+        let hint = RelayProviderHint {
+            peer_id: self.self_peer_id().to_base58(),
+            addresses: public_addrs,
+            // R1 动态 IP 降权：本机 stability=low 时随载荷宣告，消费方（R3
+            // 排序）据此降权垫底
+            stability: self
+                .relay_stability_low
+                .then(|| "low".to_string()),
+        };
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        self.begin_dht_provide(
+            crate::p2p::constants::SPARK_RELAY_KEY.as_bytes().to_vec(),
+            hint.to_record_value(),
+            tx,
+        );
+    }
+
+    /// U1 状态快照（relay-implementation §3，只读 facade）：AutoNAT 判定、
+    /// relay 角色、活跃预约（到期/配额为近似值，见字段注释）、共享池候选数、
+    /// stability 标记。
+    pub(super) fn local_relay_status(&self) -> super::LocalRelayStatus {
+        let now = self.now();
+        let reservations = self
+            .relay_reservations
+            .iter()
+            .map(|r| super::RelayReservationInfo {
+                peer: r.relay_peer.to_base58(),
+                expires_in_ms: (r.created_at
+                    + (crate::p2p::constants::RELAY_DEFAULT_DURATION_LIMIT_SECS * 1000) as i64
+                    - now)
+                    .max(0),
+                limit_bytes: crate::p2p::constants::RELAY_DEFAULT_DATA_LIMIT_BYTES,
+                used_bytes: None,
+            })
+            .collect();
+        super::LocalRelayStatus {
+            autonat: self.nat_status.as_str().to_string(),
+            relay_role: if self.swarm.behaviour().relay_server.as_ref().is_some() {
+                "serving".to_string()
+            } else {
+                "off".to_string()
+            },
+            reservations,
+            pool_size: self.relay_pool_candidates.len(),
+            stability_low: self.relay_stability_low,
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // R2 客户端：spark:relay 共享池查询 → 候选源（relay-implementation §2）
+    // ------------------------------------------------------------------
+
+    /// 无已连接候选时对 `spark:relay` 做 get_providers（kad client 一次性查询
+    /// 兼容，leaf 同路径；节流 60s，懒连接纪律失败沉默）。
+    pub(super) fn maybe_query_relay_pool(&mut self) {
+        if self.swarm.behaviour().kad.as_ref().is_none() {
+            return;
+        }
+        // 已有查询在途不重复发起（主守卫，与时间节流互补）
+        if !self.relay_pool_queries.is_empty() {
+            return;
+        }
+        let now = self.now();
+        if self.last_relay_pool_query_at != 0
+            && now - self.last_relay_pool_query_at
+                < crate::p2p::constants::RELAY_POOL_QUERY_MIN_INTERVAL_MS
+        {
+            return;
+        }
+        self.last_relay_pool_query_at = now;
+        let query_id = self
+            .swarm
+            .behaviour_mut()
+            .kad
+            .as_mut()
+            .expect("kad checked above")
+            .get_providers(kad::RecordKey::new(
+                &crate::p2p::constants::SPARK_RELAY_KEY,
+            ));
+        self.relay_pool_queries.insert(query_id);
+    }
+
+    /// 共享池查询结果（resolve_dht_providers 分流）：providers 落为候选源
+    /// （R3 排序消费），并逐个拨号——kad 在 get_providers 过程中经
+    /// ADD_PROVIDER 已把 provider 地址灌进路由表，DialOpts 仅带 peerId 即可；
+    /// 连上后由 ensure_relay_reservations 走既有候选选择预约。
+    pub(super) fn on_relay_pool_providers(&mut self, result: kad::GetProvidersResult) {
+        let Ok(kad::GetProvidersOk::FoundProviders { providers, .. }) = result else {
+            return;
+        };
+        let self_id = self.self_peer_id();
+        for peer in providers {
+            if peer == self_id
+                || self.swarm.is_connected(&peer)
+                || self.relay_reservations_inflight.contains(&peer)
+                || self.relay_reservations.iter().any(|r| r.relay_peer == peer)
+            {
+                continue;
+            }
+            // 候选源登记（去重，上限 8 防膨胀；R3 将按纪律排序消费）
+            if !self.relay_pool_candidates.contains(&peer) {
+                self.relay_pool_candidates.push(peer);
+                self.relay_pool_candidates.truncate(8);
+            }
+            let opts = libp2p::swarm::dial_opts::DialOpts::peer_id(peer)
+                .allocate_new_port()
+                .build();
+            let _ = self.swarm.dial(opts);
+        }
+    }
 }
 
 /// 从电路监听地址（…/p2p/<relayPeer>/p2p-circuit）提取 relay peer。
@@ -235,4 +489,104 @@ fn circuit_addr_relay_peer(addr: &Multiaddr) -> Option<PeerId> {
         }
     }
     if has_circuit { relay } else { None }
+}
+
+/// R3 层内排序（relay-implementation §2）：last_seen 降序；`stability_low`
+/// 的节点层内降权垫底（低稳组内仍按 last_seen 降序）。稳定排序：同分时
+/// 保持调用方给的原始顺序。
+pub fn sort_relay_tier(
+    peers: &mut [PeerId],
+    last_seen: &dyn Fn(&PeerId) -> i64,
+    is_low_stability: &dyn Fn(&PeerId) -> bool,
+) {
+    peers.sort_by_key(|p| (is_low_stability(p), std::cmp::Reverse(last_seen(p))));
+}
+
+/// R3 梯队拼接（relay-implementation §2）：梯队顺序即入参顺序（① 自设备/
+/// 本组织成员 relay → ② spark:relay 共享池 → ③④ 既有兜底）；每层先按
+/// [`sort_relay_tier`] 排序，跨层不混排、跨层去重保序。
+pub fn assemble_relay_tiers(
+    tiers: [Vec<PeerId>; 4],
+    last_seen: &dyn Fn(&PeerId) -> i64,
+    is_low_stability: &dyn Fn(&PeerId) -> bool,
+) -> Vec<PeerId> {
+    let mut out: Vec<PeerId> = Vec::new();
+    for mut tier in tiers {
+        sort_relay_tier(&mut tier, last_seen, is_low_stability);
+        for p in tier {
+            if !out.contains(&p) {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn peers(n: u8) -> Vec<PeerId> {
+        (0..n).map(|_| PeerId::random()).collect()
+    }
+
+    /// R3 排序纪律（relay-implementation §2）：三梯队混合——① 成员 relay 最前；
+    /// ② 共享池层内 last_seen 降序、stability_low 垫底（即便 last_seen 最新）；
+    /// ③④ 兜底在后；跨层不混排、跨层去重。
+    #[test]
+    fn assemble_relay_tiers_orders_by_tier_last_seen_stability() {
+        let [m1] = peers(1).try_into().unwrap();
+        let [pool_hi, pool_lo, pool_low] = peers(3).try_into().unwrap();
+        let [h1] = peers(1).try_into().unwrap();
+        let [c1] = peers(1).try_into().unwrap();
+        let last_seen = |p: &PeerId| -> i64 {
+            if *p == pool_hi {
+                200
+            } else if *p == pool_lo {
+                100
+            } else if *p == pool_low {
+                999 // stability_low：last_seen 最新也垫底
+            } else if *p == m1 {
+                10
+            } else {
+                0
+            }
+        };
+        let is_low = |p: &PeerId| *p == pool_low;
+        // tier2 乱序输入 + 与 tier1 重复元素（去重验证）
+        let out = assemble_relay_tiers(
+            [
+                vec![m1],
+                vec![pool_low, pool_lo, pool_hi, m1],
+                vec![h1],
+                vec![c1, h1],
+            ],
+            &last_seen,
+            &is_low,
+        );
+        assert_eq!(
+            out,
+            vec![m1, pool_hi, pool_lo, pool_low, h1, c1],
+            "梯队序 + 层内 last_seen 降序 + low 垫底 + 跨层去重"
+        );
+    }
+
+    /// R3 层内排序：last_seen 降序；low 垫底且组内仍按 last_seen。
+    #[test]
+    fn sort_relay_tier_last_seen_desc_low_last() {
+        let [a, b, c] = peers(3).try_into().unwrap();
+        let last_seen = |p: &PeerId| -> i64 {
+            if *p == a {
+                300
+            } else if *p == b {
+                100
+            } else {
+                900
+            }
+        };
+        let is_low = |p: &PeerId| *p == c;
+        let mut tier = vec![b, c, a];
+        sort_relay_tier(&mut tier, &last_seen, &is_low);
+        assert_eq!(tier, vec![a, b, c]);
+    }
 }

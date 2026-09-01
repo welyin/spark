@@ -61,6 +61,10 @@ pub(super) enum Command {
     LocalNodeInfo {
         tx: oneshot::Sender<LocalP2PNodeInfo>,
     },
+    /// relay 状态快照（U1 状态页，relay-implementation §3；只读）。
+    RelayStatus {
+        tx: oneshot::Sender<super::LocalRelayStatus>,
+    },
     /// 向公共 DHT 发布记录（原始 key/value 字节）。
     DhtPutRecord {
         key: Vec<u8>,
@@ -276,6 +280,14 @@ impl P2pNode {
     pub async fn local_node_info(&self) -> Result<LocalP2PNodeInfo> {
         let (tx, rx) = oneshot::channel();
         self.send_cmd(Command::LocalNodeInfo { tx })?;
+        rx.await.map_err(|_| P2pError::NotStarted)
+    }
+
+    /// relay 状态快照（U1 状态页 / U2 托管向导自检，relay-implementation §3；
+    /// 只读）。
+    pub async fn relay_status(&self) -> Result<super::LocalRelayStatus> {
+        let (tx, rx) = oneshot::channel();
+        self.send_cmd(Command::RelayStatus { tx })?;
         rx.await.map_err(|_| P2pError::NotStarted)
     }
 

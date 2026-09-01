@@ -134,6 +134,13 @@ pub trait P2pHost: Send {
         false
     }
 
+    /// R3 relay 候选梯队①判定（relay-implementation §2）：peer 是否属自设备
+    /// （设备清单）或本组织成员（组织成员表端点）。p2p 层经本谓词注入判定，
+    /// 不直接依赖 kernel 业务表。事件循环线程内调用，保持轻量（KV/小扫描级）。
+    fn is_self_device_or_org_member(&mut self, _peer_id: &str) -> bool {
+        false
+    }
+
     /// 判断 peer 是否已被本机撤销（M2 设备撤销四拦截点）。返回 true 时连接层
     /// 立即断开/拒绝入站/拒绝出站。默认 false 表示宿主未启用撤销检查。
     fn is_revoked_peer(&mut self, _peer_id: &str) -> bool {

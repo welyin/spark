@@ -166,6 +166,23 @@ export type RootStatusDto = Awaited<ReturnType<ElectronAPI['rootIdentity']['stat
 /** P2P 节点信息（p2p.info 返回，派生自 ElectronAPI；stores/network-status 与各组件共用）。 */
 export type P2pInfoDto = Awaited<ReturnType<ElectronAPI['p2p']['info']>>;
 
+/** relay 预约条目（U1 状态页；到期/配额为近似值，usedBytes 恒 null——libp2p 不暴露用量）。 */
+export type RelayReservationDto = {
+  peer: string;
+  expiresInMs: number;
+  limitBytes: number;
+  usedBytes: number | null;
+};
+
+/** relay 状态快照（relay-implementation §3 U1/U2，只读）。 */
+export type RelayStatusDto = {
+  autonat: 'public' | 'private' | 'unknown';
+  relayRole: 'serving' | 'off';
+  reservations: RelayReservationDto[];
+  poolSize: number;
+  stabilityLow: boolean;
+};
+
 /** 设备清单项（devices.list 返回，派生自 ElectronAPI；设备管理页数据源）。 */
 export type DeviceDto = Awaited<ReturnType<ElectronAPI['devices']['list']>>[number];
 
@@ -713,6 +730,8 @@ export type ElectronAPI = {
     importNodeCard: (card: string) => Promise<{ peerId: string; hasRecoveryToken: boolean; connectError: string | null }>;
     /** 网络接口变化通知（WiFi↔蜂窝切换）：内核异步 debounce 后重发布地址，无结果回传 */
     networkChanged: () => Promise<void>;
+    /** relay 状态快照（U1 状态页 / U2 托管向导，relay-implementation §3；P2P 未启动为 null，只读） */
+    relayStatus: () => Promise<RelayStatusDto | null>;
   };
   plugin: {
     openView: (pluginDomain: string, pluginView?: string) => Promise<{ success: boolean; windowId: number }>;

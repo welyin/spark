@@ -648,6 +648,29 @@ impl P2pHost for KernelHost {
             .flatten()
             .is_some_and(|r| r.revoked_at.is_some())
     }
+
+    /// R3 relay 候选梯队①判定（relay-implementation §2）：peer 是否属自设备
+    /// （设备清单，已撤销不算）或本组织成员（组织成员表端点 peerId 命中）。
+    /// KV/小扫描级（组织数量与成员端点数有界）。
+    fn is_self_device_or_org_member(&mut self, peer_id: &str) -> bool {
+        if DeviceService::get(&self.storage, peer_id)
+            .ok()
+            .flatten()
+            .is_some_and(|r| r.revoked_at.is_none())
+        {
+            return true;
+        }
+        crate::org::OrganizationService::read_all_organizations(&self.storage)
+            .unwrap_or_default()
+            .iter()
+            .any(|record| {
+                record.members.iter().any(|m| {
+                    m.node_info.as_ref().is_some_and(|set| {
+                        set.iter().any(|info| info.peer_id.as_deref() == Some(peer_id))
+                    })
+                })
+            })
+    }
 }
 
 #[cfg(test)]

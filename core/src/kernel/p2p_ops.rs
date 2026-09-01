@@ -588,6 +588,17 @@ impl Kernel {
         }
     }
 
+    /// relay 状态快照（U1 状态页 / U2 托管向导自检，relay-implementation §3；
+    /// 未启动返回 `Ok(None)`，只读无写路径）。
+    pub fn relay_status(&self) -> Result<Option<crate::p2p::LocalRelayStatus>> {
+        match &self.p2p {
+            None => Ok(None),
+            Some(node) => Ok(Some(
+                self.runtime.handle().block_on(node.relay_status())?,
+            )),
+        }
+    }
+
     /// 生成节点名片串（org.md §17）：本机 libp2p 私钥签名的 base64url 名片，
     /// 供线下渠道（二维码/粘贴）分享，帮助失联成员手动找回本节点。
     ///

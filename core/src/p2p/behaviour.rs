@@ -227,6 +227,18 @@ impl DhtMode {
     }
 }
 
+/// relay server（hop）行为构造：初始挂载（build_behaviour）与 R1 AutoNAT
+/// Public 重新挂载共用同一配置。
+pub(crate) fn build_relay_server(local_peer_id: libp2p::PeerId) -> relay::Behaviour {
+    let relay_config = relay::Config {
+        max_reservations: RELAY_MAX_RESERVATIONS,
+        reservation_duration: Duration::from_secs(RELAY_DEFAULT_DURATION_LIMIT_SECS),
+        max_circuit_bytes: RELAY_DEFAULT_DATA_LIMIT_BYTES,
+        ..Default::default()
+    };
+    relay::Behaviour::new(local_peer_id, relay_config)
+}
+
 /// Spark 组合行为。
 #[derive(NetworkBehaviour)]
 pub struct SparkBehaviour {
@@ -323,15 +335,10 @@ pub fn build_behaviour(
     ));
 
     // relay server 按 enable_relay_server 条件挂载：桌面默认开启（接受他人预约），
-    // 移动端关闭（只作 relay client，peer-rediscovery §7.2）。
+    // 移动端关闭（只作 relay client，peer-rediscovery §7.2）。R1（relay-implementation
+    // §2）：初始挂载为现状兼容；AutoNAT Private 时由事件循环摘牌（Toggle 换 None）。
     let relay_server = if options.enable_relay_server {
-        let relay_config = relay::Config {
-            max_reservations: RELAY_MAX_RESERVATIONS,
-            reservation_duration: Duration::from_secs(RELAY_DEFAULT_DURATION_LIMIT_SECS),
-            max_circuit_bytes: RELAY_DEFAULT_DATA_LIMIT_BYTES,
-            ..Default::default()
-        };
-        Toggle::from(Some(relay::Behaviour::new(local_peer_id, relay_config)))
+        Toggle::from(Some(build_relay_server(local_peer_id)))
     } else {
         Toggle::from(None)
     };

@@ -123,6 +123,8 @@ export const COMMAND_MAP: Record<string, string> = {
   'p2p-make-node-card': 'p2p_make_node_card',
   'p2p-import-node-card': 'p2p_import_node_card',
   'p2p-network-changed': 'p2p_network_changed',
+  // relay 状态页/托管向导（relay-implementation §3 U1/U2；只读）
+  'relay-status': 'relay_status',
   // 插件运行时（tab 模式语义，见 api/index.ts 注记）
   'plugin-identity-sign': 'plugin_identity_sign',
   'plugin-identity-verify': 'plugin_identity_verify',

@@ -34,8 +34,16 @@ use crate::storage::MemoryStorage;
 /// 测试用 EventLoop（内存存储 + NoopHost；字段初始化与 node/mod.rs 的
 /// 生产构造一一对应）。
 async fn test_loop() -> EventLoop<MemoryStorage> {
+    test_loop_with(BehaviourOptions::default(), true).await
+}
+
+/// 带装配开关的测试 EventLoop（R1 显式关闭路径等需要变体时用）。
+async fn test_loop_with(
+    options: BehaviourOptions,
+    enable_relay_server: bool,
+) -> EventLoop<MemoryStorage> {
     let keypair = libp2p::identity::Keypair::generate_ed25519();
-    let swarm = build_swarm(&keypair, &BehaviourOptions::default())
+    let swarm = build_swarm(&keypair, &options)
         .await
         .expect("build swarm");
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<Command>();
@@ -90,6 +98,14 @@ async fn test_loop() -> EventLoop<MemoryStorage> {
         pending_rediscovery_confirm: HashMap::new(),
         relay_reservations: Vec::new(),
         relay_reservations_inflight: std::collections::HashSet::new(),
+        enable_relay_server,
+        relay_pool_queries: std::collections::HashSet::new(),
+        relay_pool_candidates: Vec::new(),
+        relay_pool_stability: std::collections::HashMap::new(),
+        last_relay_pool_query_at: 0,
+        network_change_log: Vec::new(),
+        relay_stability_low: false,
+        nat_status: super::NatStatusLabel::default(),
         dm_completion_tx,
         dm_completion_rx,
         dial_timeout_tx,
@@ -862,4 +878,272 @@ async fn leaf_guards_block_exchange_and_overlay_maintenance() {
     );
     // kad 播种关闭（守护返回即空操作，验证不 panic 不拨号）
     el.seed_kad_routing();
+}
+
+// ------------------------------------------------------------------
+// R1/R2（relay-implementation §2）：AutoNAT 驱动 relay 角色启停 + spark:relay 共享池
+// ------------------------------------------------------------------
+
+/// 构造 AutoNAT StatusChanged 行为事件。
+fn autonat_status_event(
+    old: libp2p::autonat::NatStatus,
+    new: libp2p::autonat::NatStatus,
+) -> SwarmEvent<SparkBehaviourEvent> {
+    SwarmEvent::Behaviour(SparkBehaviourEvent::Autonat(
+        libp2p::autonat::Event::StatusChanged { old, new },
+    ))
+}
+
+/// R1：AutoNAT 状态驱动 relay server 角色启停 + R2 就绪 provide / 摘牌撤下。
+/// 初始挂载为现状兼容（显式 true）；Private 摘牌、Public 重挂并登记共享池
+/// provide（tick 周期重发段复用 provided_records）。
+#[tokio::test]
+async fn autonat_status_drives_relay_server_role() {
+    use libp2p::autonat::NatStatus;
+    let mut el = test_loop().await;
+    assert!(
+        el.swarm.behaviour().relay_server.as_ref().is_some(),
+        "显式 true 初始挂载（现状兼容）"
+    );
+    // 公网 external 地址（R2 provide 载荷取公网段）
+    el.swarm.add_external_address("/ip4/203.0.113.1/tcp/4001".parse().unwrap());
+
+    // Public → 角色在 + spark:relay provide 登记
+    el.handle_swarm_event(autonat_status_event(
+        NatStatus::Unknown,
+        NatStatus::Public("/ip4/203.0.113.1/tcp/4001".parse().unwrap()),
+    ));
+    assert!(
+        el.swarm.behaviour().relay_server.as_ref().is_some(),
+        "Public 启用 relay 角色"
+    );
+    let value = el
+        .provided_records
+        .get(crate::p2p::constants::SPARK_RELAY_KEY.as_bytes())
+        .expect("Public 就绪即登记 spark:relay provide（周期重发并入 tick）");
+    let hint = super::relay_manager::RelayProviderHint::from_record_value(value)
+        .expect("provide 载荷可解析");
+    assert_eq!(hint.peer_id, el.self_peer_id().to_base58());
+    assert!(
+        hint.addresses.iter().any(|a| a.contains("203.0.113.1")),
+        "载荷含公网段地址，实际: {:?}",
+        hint.addresses
+    );
+
+    // Private → 摘牌 + 撤 provide（不接受新预约，既有预约由连接 handler 到期）
+    el.handle_swarm_event(autonat_status_event(
+        NatStatus::Public("/ip4/203.0.113.1/tcp/4001".parse().unwrap()),
+        NatStatus::Private,
+    ));
+    assert!(
+        el.swarm.behaviour().relay_server.as_ref().is_none(),
+        "Private 摘牌"
+    );
+    assert!(
+        !el.provided_records
+            .contains_key(crate::p2p::constants::SPARK_RELAY_KEY.as_bytes()),
+        "Private 撤下共享池 provide"
+    );
+}
+
+/// R1 优先级：显式 `enable_relay_server: false`（用户手动关/移动端）优先于
+/// AutoNAT 判定——Public 也不启用角色、不 provide。
+#[tokio::test]
+async fn autonat_explicit_off_wins_over_public() {
+    use libp2p::autonat::NatStatus;
+    let mut el = test_loop_with(
+        BehaviourOptions {
+            enable_relay_server: false,
+            ..Default::default()
+        },
+        false,
+    )
+    .await;
+    el.handle_swarm_event(autonat_status_event(
+        NatStatus::Unknown,
+        NatStatus::Public("/ip4/203.0.113.1/tcp/4001".parse().unwrap()),
+    ));
+    assert!(
+        el.swarm.behaviour().relay_server.as_ref().is_none(),
+        "显式关闭优先：Public 也不启用"
+    );
+    assert!(el.provided_records.is_empty(), "显式关闭不 provide");
+}
+
+/// R2 客户端：无已连接候选时 ensure 触发共享池查询（in-flight 去重）；
+/// 查询结果 providers 落候选源（R3 消费）。
+#[tokio::test]
+async fn relay_pool_query_registers_candidates() {
+    let mut el = test_loop().await;
+    assert!(el.relay_reservations.is_empty());
+    // 无已连接候选 → 触发 spark:relay 查询
+    el.ensure_relay_reservations();
+    assert_eq!(el.relay_pool_queries.len(), 1, "无候选应发起共享池查询");
+    el.ensure_relay_reservations();
+    assert_eq!(
+        el.relay_pool_queries.len(),
+        1,
+        "查询在途不重复发起（in-flight 守卫）"
+    );
+    // 模拟查询结果：provider 落候选源 + 触发拨号尝试
+    let provider = PeerId::random();
+    let qid = *el.relay_pool_queries.iter().next().expect("query in flight");
+    el.resolve_dht_providers(
+        qid,
+        Ok(libp2p::kad::GetProvidersOk::FoundProviders {
+            key: libp2p::kad::RecordKey::new(&crate::p2p::constants::SPARK_RELAY_KEY),
+            providers: [provider].into_iter().collect(),
+        }),
+    );
+    assert!(el.relay_pool_queries.is_empty(), "结果分流后清理在途");
+    assert_eq!(
+        el.relay_pool_candidates,
+        vec![provider],
+        "provider 落为候选源（R3 排序消费）"
+    );
+}
+
+/// R2 链路（双真实节点，loopback）：A（非 leaf）provide `spark:relay` →
+/// B（leaf，kad client）get_providers 发现 A 为候选。
+#[tokio::test]
+async fn relay_pool_provide_and_discover_two_nodes() {
+    use crate::p2p::host::NoopHost;
+    use crate::p2p::{P2pConfig, P2pNode};
+    let base = P2pConfig {
+        preferred_port: Some(0),
+        port_scan: false,
+        enable_mdns: false,
+        enable_upnp: false,
+        enable_ws: false,
+        enable_ipv6: false,
+        keepalive_interval: None,
+        ..Default::default()
+    };
+    let node_a = P2pNode::start(
+        P2pConfig {
+            enable_relay_server: true,
+            ..base.clone()
+        },
+        MemoryStorage::new(),
+        Box::new(NoopHost),
+    )
+    .await
+    .expect("start A");
+    // B 为 leaf：kad client（只查不发），R2 客户端形态
+    let node_b = P2pNode::start(
+        P2pConfig {
+            leaf_mode: true,
+            ..base.clone()
+        },
+        MemoryStorage::new(),
+        Box::new(NoopHost),
+    )
+    .await
+    .expect("start B");
+
+    // 监听地址经 NewListenAddr 事件异步生效：先等到 A 的地址可见
+    let mut info_a = node_a.local_node_info().await.expect("A local info");
+    for _ in 0..20 {
+        if !info_a.addresses.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        info_a = node_a.local_node_info().await.expect("A local info");
+    }
+    assert!(!info_a.addresses.is_empty(), "A 监听地址应可见");
+    node_b
+        .connect_peer(&PeerNodeInfo {
+            peer_id: info_a.peer_id.clone(),
+            addresses: info_a.addresses.clone(),
+        })
+        .await
+        .expect("B connect A");
+
+    // A 对约定键 provide（载荷 = peerId + 可达地址集，与 R1 就绪路径同型）
+    let value = super::relay_manager::RelayProviderHint {
+        peer_id: node_a.peer_id().to_string(),
+        addresses: info_a.addresses.clone(),
+        stability: None,
+    }
+    .to_record_value();
+    node_a
+        .dht_provide_record(crate::p2p::constants::SPARK_RELAY_KEY.as_bytes(), value)
+        .await
+        .expect("A provide spark:relay");
+
+    // B（leaf）查询共享池：provider 记录复制有传播窗口，轮询几秒
+    let mut providers: Vec<String> = Vec::new();
+    for _ in 0..20 {
+        providers = node_b
+            .dht_get_providers(crate::p2p::constants::SPARK_RELAY_KEY.as_bytes())
+            .await
+            .unwrap_or_default();
+        if !providers.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    assert!(
+        providers.iter().any(|p| p == node_a.peer_id()),
+        "B(leaf) 应发现 A 为 spark:relay 候选，实际: {providers:?}"
+    );
+    node_a.stop().await;
+    node_b.stop().await;
+}
+
+/// R3 梯队选择（relay-implementation §2）：leaf 与非 leaf 同纪律——无已连接
+/// 候选时共享池候选（梯队②）入选；已预约/in-flight 排除。
+#[tokio::test]
+async fn leaf_selects_relay_pool_candidates() {
+    let mut el = test_loop().await;
+    el.leaf_mode = true;
+    let provider = PeerId::random();
+    el.relay_pool_candidates.push(provider);
+    assert_eq!(
+        el.select_relay_candidates(),
+        vec![provider],
+        "leaf 下共享池候选应入选（排序纪律与节点形态无关）"
+    );
+    // 已预约的候选排除
+    el.relay_reservations_inflight.insert(provider);
+    assert!(
+        el.select_relay_candidates().is_empty(),
+        "in-flight 候选排除"
+    );
+}
+
+/// U1 状态快照（relay-implementation §3）：autonat/角色/共享池大小/预约如实
+/// 反映；到期与配额为近似值（字段注释口径）。
+#[tokio::test]
+async fn relay_status_snapshot_reflects_role_and_pool() {
+    use libp2p::autonat::NatStatus;
+    let mut el = test_loop().await;
+    el.relay_pool_candidates = vec![PeerId::random(), PeerId::random()];
+    // 未判定前：unknown + serving（显式 true 初始挂载）
+    let st = el.local_relay_status();
+    assert_eq!(st.autonat, "unknown");
+    assert_eq!(st.relay_role, "serving");
+    assert_eq!(st.pool_size, 2);
+    assert!(st.reservations.is_empty());
+    assert!(!st.stability_low);
+    // Private 判定后：角色摘牌 → off
+    el.handle_swarm_event(autonat_status_event(NatStatus::Unknown, NatStatus::Private));
+    let st = el.local_relay_status();
+    assert_eq!(st.autonat, "private");
+    assert_eq!(st.relay_role, "off", "Private 摘牌后角色 off");
+    // 预约条目：近似到期 = created_at + 2h（now=0 时钟下为正）
+    let relay = PeerId::random();
+    let mut circuit = Multiaddr::empty();
+    circuit.push(libp2p::multiaddr::Protocol::P2p(relay.into()));
+    circuit.push(libp2p::multiaddr::Protocol::P2pCircuit);
+    el.relay_reservations.push(super::relay_manager::RelayReservation {
+        relay_peer: relay,
+        circuit_addr: circuit,
+        created_at: 0,
+    });
+    let st = el.local_relay_status();
+    assert_eq!(st.reservations.len(), 1);
+    assert_eq!(st.reservations[0].peer, relay.to_base58());
+    assert!(st.reservations[0].expires_in_ms > 0, "近似到期剩余为正");
+    assert_eq!(st.reservations[0].used_bytes, None, "用量 libp2p 不暴露");
 }

@@ -189,7 +189,9 @@ export function createTauriApi(): ElectronAPI {
       makeNodeCard: (orgId?: string) => call('p2p-make-node-card', orgId ?? undefined),
       importNodeCard: (card: string) => call('p2p-import-node-card', card),
       // 网络接口变化通知（WiFi↔蜂窝切换）：内核 debounce 后重发布地址 + 重建 relay 预约
-      networkChanged: () => call('p2p-network-changed')
+      networkChanged: () => call('p2p-network-changed'),
+      // relay 状态快照（U1 状态页 / U2 托管向导，relay-implementation §3；只读）
+      relayStatus: () => call('relay-status')
     },
     plugin: {
       // TODO: 插件独立窗口属于插件运行时，本期不在壳范围（插件走 tab 模式）

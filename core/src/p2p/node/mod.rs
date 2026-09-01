@@ -143,6 +143,59 @@ pub struct LocalP2PNodeInfo {
     pub spark_sync_subscribers: Vec<String>,
 }
 
+/// AutoNAT 公网判定快照（U1 relay 状态页，relay-implementation §3）。
+/// 事件循环只在 `StatusChanged` 时更新；启动初值 Unknown。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NatStatusLabel {
+    Public,
+    Private,
+    #[default]
+    Unknown,
+}
+
+impl NatStatusLabel {
+    /// 线形字符串（public/private/unknown）。
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            NatStatusLabel::Public => "public",
+            NatStatusLabel::Private => "private",
+            NatStatusLabel::Unknown => "unknown",
+        }
+    }
+}
+
+/// relay 预约状态条目（U1 状态页；serde 线形 camelCase）。
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayReservationInfo {
+    /// relay 节点 peerId。
+    pub peer: String,
+    /// 到期剩余（ms；近似值：预约建立时刻 + 默认预约时长 2h——libp2p relay
+    /// client 不回传实际授予时长，且存活期间自动续期，该值仅作展示下界）。
+    pub expires_in_ms: i64,
+    /// 流量配额（字节，relay server 默认上限常量；客户端侧实际授予值不回传）。
+    pub limit_bytes: u64,
+    /// 已用流量（libp2p relay client 不暴露用量统计，恒 None——U1 展示「未统计」）。
+    pub used_bytes: Option<u64>,
+}
+
+/// 本机 relay 状态快照（U1 状态页 + U2 托管向导自检，relay-implementation §3；
+/// 只读 facade，无写路径）。
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalRelayStatus {
+    /// AutoNAT 公网判定（public/private/unknown）。
+    pub autonat: String,
+    /// relay server 角色（serving=服务中 / off=关闭）。
+    pub relay_role: String,
+    /// 当前活跃预约。
+    pub reservations: Vec<RelayReservationInfo>,
+    /// spark:relay 共享池候选数（R2 get_providers 落点）。
+    pub pool_size: usize,
+    /// R1 动态 IP 降权标记（true = stability low）。
+    pub stability_low: bool,
+}
+
 /// keepalive tick 统计（宿主组织层保活的触发信号）。
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -375,29 +428,22 @@ impl P2pNode {
         // Android 无 ws 传输层（见 build_swarm 门控注释），监听地址同步禁用 ws
         let enable_ws = config.enable_ws && !cfg!(target_os = "android");
         let addrs = build_listen_addrs(port, ipv6, config.enable_tcp, enable_ws);
-        let mut listen_failed = false;
+        // 逐地址尽力监听：任一地址绑定失败仅告警降级，**不整体回退**——此前
+        // 双栈集合任一失败即整体重建为 IPv4 单栈（Windows 上 IPv6 ws 绑定
+        // 失败 → PC 失去全部 tcp6 监听 → 蜂窝场景手机拨 PC 全局 IPv6 必败
+        // ConnectionRefused（真机实测：ping6 可达但端口无人监听）。只有全部失败才报错。
+        let mut bound = 0usize;
         for addr in &addrs {
             let ma: Multiaddr = addr
                 .parse()
                 .map_err(|e| P2pError::Swarm(format!("invalid listen addr {addr}: {e}")))?;
-            if swarm.listen_on(ma).is_err() {
-                listen_failed = true;
-                break;
+            match swarm.listen_on(ma) {
+                Ok(_) => bound += 1,
+                Err(e) => log::warn!("[p2p] listen failed on {addr}（尽力监听，跳过）: {e}"),
             }
         }
-        if listen_failed && ipv6 {
-            // 双栈绑定失败回退 IPv4 单栈（探测与绑定间的竞态兜底）
-            swarm = build_swarm(&keypair, &behaviour_options).await?;
-            for addr in build_listen_addrs(port, false, config.enable_tcp, enable_ws) {
-                let ma: Multiaddr = addr
-                    .parse()
-                    .map_err(|e| P2pError::Swarm(format!("invalid listen addr {addr}: {e}")))?;
-                swarm
-                    .listen_on(ma)
-                    .map_err(|e| P2pError::Swarm(format!("listen failed on {addr}: {e}")))?;
-            }
-        } else if listen_failed {
-            return Err(P2pError::Swarm("listen failed".to_string()));
+        if bound == 0 {
+            return Err(P2pError::Swarm("listen failed on all addresses".to_string()));
         }
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -455,6 +501,14 @@ impl P2pNode {
             pending_rediscovery_confirm: HashMap::new(),
             relay_reservations: Vec::new(),
             relay_reservations_inflight: std::collections::HashSet::new(),
+            enable_relay_server: config.enable_relay_server,
+            relay_pool_queries: std::collections::HashSet::new(),
+            relay_pool_candidates: Vec::new(),
+            relay_pool_stability: std::collections::HashMap::new(),
+            last_relay_pool_query_at: 0,
+            network_change_log: Vec::new(),
+            relay_stability_low: false,
+            nat_status: NatStatusLabel::default(),
             dm_completion_tx,
             dm_completion_rx,
             dial_timeout_tx,

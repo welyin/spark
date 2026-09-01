@@ -194,6 +194,16 @@ pub const RELAY_DEFAULT_DATA_LIMIT_BYTES: u64 = 256 * 1024 * 1024;
 pub const RELAY_RESERVATION_TARGET: usize = 2;
 /// relay 预约续期阈值（剩余不足 30 min 时续期）。
 pub const RELAY_RENEWAL_THRESHOLD_SECS: u64 = 30 * 60;
+/// relay 共享池约定键（relay-implementation §2 R2）：公网就绪节点 provide、
+/// 客户端（含 leaf）get_providers 发现候选。
+pub const SPARK_RELAY_KEY: &str = "spark:relay";
+/// relay 共享池查询节流（ms）：无已连接候选时每 60s 至多查一次。
+pub const RELAY_POOL_QUERY_MIN_INTERVAL_MS: i64 = 60_000;
+/// 动态 IP 降权窗口（ms，R1 粗略口径）：窗口内网络快照变化次数超阈值即
+/// 标记 relay stability=low。
+pub const RELAY_STABILITY_WINDOW_MS: i64 = 3_600_000;
+/// 动态 IP 降权变化次数阈值（R1 粗略口径）。
+pub const RELAY_STABILITY_LOW_CHANGES: usize = 3;
 
 /// 网络切换 debounce（5s）。
 pub const NETWORK_CHANGE_DEBOUNCE_MS: i64 = 5_000;

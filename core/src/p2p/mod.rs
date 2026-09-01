@@ -39,7 +39,10 @@ pub use envelope::{
 };
 pub use host::{DmHandler, OrgShareAck, P2pHost};
 pub use keepalive::RecoveryState;
-pub use node::{KeepaliveStats, LocalP2PNodeInfo, P2pConfig, P2pEvent, P2pNode};
+pub use node::{
+    KeepaliveStats, LocalP2PNodeInfo, LocalRelayStatus, NatStatusLabel, P2pConfig, P2pEvent,
+    P2pNode, RelayReservationInfo,
+};
 pub use overlay_store::{OverlayPeerRecord, OverlayPeerSource, OverlayPeerStore};
 pub use peer_activity::{
     NO_RECORD_PRIORITY, NodeObservation, PeerActivityRecord, PeerActivityStore, compute_priority,

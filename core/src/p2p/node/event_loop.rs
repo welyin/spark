@@ -228,6 +228,26 @@ pub(super) struct EventLoop<S: StorageBackend> {
     /// relay 预约请求 in-flight：已发起尚未收到 ReservationReqAccepted/失败
     /// 的 relay peer，用于避免重复请求（peer-rediscovery §4.6.2）。
     pub(super) relay_reservations_inflight: std::collections::HashSet<PeerId>,
+    /// 静态配置快照（R1，relay-implementation §2）：显式 false 优先于 AutoNAT
+    /// 自动判定（角色永不开）；true = AutoNAT Public 时自动服务。
+    pub(super) enable_relay_server: bool,
+    /// R2：spark:relay 共享池在途 get_providers 查询。
+    pub(super) relay_pool_queries: std::collections::HashSet<kad::QueryId>,
+    /// R2：共享池发现的 relay 候选（R3 排序消费；去重，上限 8）。
+    pub(super) relay_pool_candidates: Vec<PeerId>,
+    /// R3：候选 stability 标记（true = low，层内垫底）。当前填充点空缺——
+    /// get_providers 只回 PeerId，载荷 stability 需 get_record 补充（后续；
+    /// 谓词注入已就位，本机自身 provide 已随载荷宣告）。
+    pub(super) relay_pool_stability: std::collections::HashMap<PeerId, bool>,
+    /// R2：上次共享池查询时刻（ms，节流依据）。
+    pub(super) last_relay_pool_query_at: i64,
+    /// R1 动态 IP 降权（粗略口径）：网络快照变化日志（确认变化的时刻 ms，
+    /// 窗口 [`crate::p2p::constants::RELAY_STABILITY_WINDOW_MS`]）。
+    pub(super) network_change_log: Vec<i64>,
+    /// R1：relay stability 标记（true = low，动态 IP 降权，供 R3 排序消费）。
+    pub(super) relay_stability_low: bool,
+    /// AutoNAT 公网判定快照（U1 状态页；StatusChanged 时更新）。
+    pub(super) nat_status: super::NatStatusLabel,
     /// dm 入站异步处理完成通道：任务经 tx 送回结果，事件循环收到后
     /// 按任务 id 找回 ResponseChannel 并 send_response。
     pub(super) dm_completion_tx: mpsc::UnboundedSender<DmCompletion>,
@@ -751,6 +771,9 @@ impl<S: StorageBackend> EventLoop<S> {
             Command::LocalNodeInfo { tx } => {
                 let _ = tx.send(self.local_node_info());
             }
+            Command::RelayStatus { tx } => {
+                let _ = tx.send(self.local_relay_status());
+            }
             Command::DhtPutRecord { key, value, tx } => self.begin_dht_put(key, value, tx),
             Command::DhtGetRecord { key, tx } => self.begin_dht_get(key, tx),
             Command::DhtProvide { key, value, tx } => self.begin_dht_provide(key, value, tx),
@@ -786,6 +809,19 @@ impl<S: StorageBackend> EventLoop<S> {
                 });
                 if base != current && due {
                     self.last_network_change_fired_at = Some(self.now());
+                    // R1 动态 IP 降权（relay-implementation §2，粗略口径）：网络
+                    // 快照确认变化即记一笔；窗口内变化 ≥ 阈值标记 stability=low
+                    // （供 R3 排序降权；同前缀全局地址轮换快的公网节点据此降权）。
+                    // 粗略：以本地网卡快照变化频率代理「地址轮换快」，不区分
+                    // 前缀粒度——真机实测校准前先用保守阈值。
+                    {
+                        let now = self.now();
+                        self.network_change_log.push(now);
+                        self.network_change_log
+                            .retain(|t| now - t < crate::p2p::constants::RELAY_STABILITY_WINDOW_MS);
+                        self.relay_stability_low = self.network_change_log.len()
+                            >= crate::p2p::constants::RELAY_STABILITY_LOW_CHANGES;
+                    }
                     // ③④⑤ 重发布 announce + DHT
                     let _ = self.publish_announce();
                     self.publish_node_presence_record();

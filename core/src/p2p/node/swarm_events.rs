@@ -5,7 +5,7 @@
 use std::collections::HashSet;
 
 use libp2p::swarm::{ConnectionId, SwarmEvent};
-use libp2p::{PeerId, gossipsub, identify, kad, mdns, request_response};
+use libp2p::{PeerId, autonat, gossipsub, identify, kad, mdns, request_response};
 use serde_json::Value;
 
 use crate::p2p::P2pError;
@@ -575,6 +575,11 @@ impl<S: StorageBackend> EventLoop<S> {
                         &propagation_source,
                         gossipsub::MessageAcceptance::Accept,
                     );
+            }
+            SparkBehaviourEvent::Autonat(autonat::Event::StatusChanged { new, .. }) => {
+                // R1（relay-implementation §2）：AutoNAT 公网判定驱动 relay
+                // server 自动启停 + spark:relay 共享池 provide/撤下
+                self.on_autonat_status_changed(new);
             }
             SparkBehaviourEvent::Mdns(mdns::Event::Discovered(peers)) => {
                 let now = self.now();

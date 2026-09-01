@@ -100,6 +100,50 @@
       <el-alert v-if="dataMessage" :title="dataMessage" type="info" :closable="false" show-icon class="block-gap" />
     </el-card>
 
+    <!-- Relay 中继（U1 状态页 + U2 托管向导，relay-implementation §3；全只读） -->
+    <el-card v-else-if="activeSection === 'relay'" shadow="never" class="panel-card">
+      <template #header>
+        <h2>Relay 中继</h2>
+      </template>
+      <template v-if="relayStatus">
+        <h3 class="relay-block-title">本机状态</h3>
+        <el-descriptions :column="1" border class="block-gap">
+          <el-descriptions-item label="AutoNAT 判定">{{ autonatLabel }}</el-descriptions-item>
+          <el-descriptions-item label="relay 角色">{{ relayRoleLabel }}</el-descriptions-item>
+          <el-descriptions-item label="共享池可见 relay 数">{{ relayStatus.poolSize }}</el-descriptions-item>
+          <el-descriptions-item label="稳定性">{{ relayStatus.stabilityLow ? '低（动态 IP 降权）' : '正常' }}</el-descriptions-item>
+        </el-descriptions>
+        <template v-if="relayStatus.reservations.length">
+          <h3 class="relay-block-title">当前预约</h3>
+          <div v-for="r in relayStatus.reservations" :key="r.peer" class="relay-reservation">
+            <span class="relay-peer">{{ shortPeer(r.peer) }}</span>
+            <span>到期剩余 {{ formatExpires(r.expiresInMs) }}（近似）</span>
+            <span>配额 {{ formatBytes(r.limitBytes) }} · 已用 未统计</span>
+          </div>
+        </template>
+        <p v-else class="hint">当前无活跃预约。</p>
+
+        <h3 class="relay-block-title">托管节点向导（把这台设备变成公网节点）</h3>
+        <el-descriptions :column="1" border class="block-gap">
+          <el-descriptions-item label="AutoNAT">{{ autonatLabel }}</el-descriptions-item>
+          <el-descriptions-item label="UPnP 映射">{{ upnpLabel }}</el-descriptions-item>
+          <el-descriptions-item label="入站连通推断">{{ inboundLabel }}</el-descriptions-item>
+        </el-descriptions>
+        <el-alert
+          v-if="relayStatus.autonat === 'public'"
+          title="本机已可为他人提供中继"
+          type="success" :closable="false" show-icon class="block-gap"
+        />
+        <ul class="relay-tips block-gap">
+          <li v-for="(tip, i) in wizardTips" :key="i">{{ tip }}</li>
+        </ul>
+      </template>
+      <p v-else class="hint block-gap">P2P 未启动，relay 状态不可用。</p>
+      <div class="settings-actions">
+        <el-button :loading="relayLoading" @click="refreshRelayStatus">刷新状态</el-button>
+      </div>
+    </el-card>
+
     <!-- 通用：外观主题（真实生效，stores/theme）+ 其余偏好开关（mock） -->
     <el-card v-else-if="activeSection === 'general'" shadow="never" class="panel-card">
       <template #header>
@@ -129,6 +173,16 @@
         <h2>生物识别解锁</h2>
       </template>
       <SystemBiometricPanel :root-id="rootStatus.rootId ?? ''" @cancel="activeSection = null" />
+    </el-card>
+
+    <!-- 免责声明（常驻入口）：文案与首次启动弹窗同源（utils/disclaimer） -->
+    <el-card v-else-if="activeSection === 'disclaimer'" shadow="never" class="panel-card">
+      <template #header>
+        <h2>免责声明</h2>
+      </template>
+      <p v-for="(text, index) in disclaimerParagraphs" :key="index" class="disclaimer-paragraph">
+        {{ text }}
+      </p>
     </el-card>
 
     <!-- 关于 -->
@@ -166,9 +220,10 @@
 
 <script lang="ts">
 import { computed, defineComponent, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue';
-import { Bell, Coin, Connection, InfoFilled, SetUp, Unlock } from '@element-plus/icons-vue';
-import type { DataUsageReportDto, P2pInfoDto as P2PInfo } from '../../api';
+import { Bell, Coin, Connection, Document, InfoFilled, SetUp, Share, Unlock } from '@element-plus/icons-vue';
+import type { DataUsageReportDto, P2pInfoDto as P2PInfo, RelayStatusDto } from '../../api';
 import { formatBytes } from '../../utils/format';
+import { DISCLAIMER_PARAGRAPHS } from '../../utils/disclaimer';
 import { themeMode } from '../../stores/theme';
 import { isMobileLayout } from '../../stores/ui-layout';
 import { isOverlayCloseTarget, popOverlay, pushOverlay } from '../../stores/overlay-stack';
@@ -185,7 +240,7 @@ type RootStatus = {
   avatar: string | null;
 };
 
-type SectionKey = 'netStatus' | 'storage' | 'general' | 'notify' | 'about' | 'biometric';
+type SectionKey = 'netStatus' | 'relay' | 'storage' | 'general' | 'notify' | 'about' | 'biometric' | 'disclaimer';
 
 const USAGE_CLASS_LABELS: Array<{ key: keyof DataUsageReportDto['classes']; label: string }> = [
   { key: 'documents', label: '业务文档' },
@@ -270,6 +325,9 @@ export default defineComponent({
     const dataMessage = ref('');
     const dataActionRunning = ref(false);
     const generalStates = ref<Record<string, boolean>>({});
+    // U1/U2（relay-implementation §3）：relay 状态快照（只读；null = P2P 未启动）
+    const relayStatus = ref<RelayStatusDto | null>(null);
+    const relayLoading = ref(false);
 
     // 顺序按用户习惯：通用偏好在前，生物识别（移动端系统级能力），网络/存储等系统项居中，关于垫底；
     // color 为菜单图标色（微信式每项一色，取色与 utils/palette 品牌色板同源，移动端与桌面端统一上色）
@@ -278,7 +336,9 @@ export default defineComponent({
       { key: 'biometric', label: '生物识别解锁', icon: Unlock, color: '#7b61ff', show: isMobileLayout.value },
       { key: 'notify', label: '消息通知', icon: Bell, color: '#eb2f96', show: true },
       { key: 'netStatus', label: '网络状态', icon: Connection, color: '#00b8a9', show: true },
+      { key: 'relay', label: 'Relay 中继', icon: Share, color: '#722ed1', show: true },
       { key: 'storage', label: '存储管理', icon: Coin, color: '#f7b500', show: true },
+      { key: 'disclaimer', label: '免责声明', icon: Document, color: '#3296fa', show: true },
       { key: 'about', label: '关于', icon: InfoFilled, color: '#94a3b8', show: true }
     ]);
 
@@ -339,6 +399,64 @@ export default defineComponent({
         // 读取失败保留当前状态
       }
     };
+
+    // ------------------------------------------------------------------
+    // U1/U2（relay-implementation §3）：relay 状态页 + 托管节点向导（全只读）
+    // ------------------------------------------------------------------
+    const refreshRelayStatus = async () => {
+      relayLoading.value = true;
+      try {
+        relayStatus.value = await window.electronAPI.p2p.relayStatus();
+      } catch {
+        // 读取失败保留当前状态
+      } finally {
+        relayLoading.value = false;
+      }
+    };
+
+    const autonatLabel = computed(() => {
+      switch (relayStatus.value?.autonat) {
+        case 'public': return '公网可达（Public）';
+        case 'private': return 'NAT 后（Private）';
+        default: return '判定中（Unknown）';
+      }
+    });
+    const relayRoleLabel = computed(() =>
+      relayStatus.value?.relayRole === 'serving' ? '服务中（可为他人中继）' : '未服务'
+    );
+    /** 到期剩余展示（近似值，内核口径：建立 + 默认 2h，存活自动续期） */
+    const formatExpires = (ms: number) => (ms >= 60000 ? `约 ${Math.round(ms / 60000)} 分钟` : '不足 1 分钟');
+    const shortPeer = (peer: string) => (peer.length > 16 ? `${peer.slice(0, 12)}…${peer.slice(-4)}` : peer);
+
+    /** U2 自检三态（只读推导）：AutoNAT / UPnP（内核无状态上报，恒未知）/ 入站连通推断 */
+    const upnpLabel = '未知（内核暂无 UPnP 状态上报）';
+    const inboundLabel = computed(() => {
+      switch (relayStatus.value?.autonat) {
+        case 'public': return '入站可达（AutoNAT Public 判定）';
+        case 'private': return '入站疑似被拦（AutoNAT Private 判定）';
+        default: return '无法推断（等 AutoNAT 判定）';
+      }
+    });
+
+    /** U2 引导文案（按组合态静态文案；不写死流程、不接任何网络写操作） */
+    const wizardTips = computed<string[]>(() => {
+      switch (relayStatus.value?.autonat) {
+        case 'public':
+          return ['已达标：本机已可为他人提供中继（AutoNAT 公网判定通过，relay 角色自动开启）。'];
+        case 'private':
+          return [
+            '入站连接疑似被拦：若使用 IPv6，请在光猫/路由器关闭 IPv6 SPI 防火墙（或放行本机监听端口，默认 15002）；',
+            '检查系统防火墙，放行 Spark 监听端口（默认 15002）；',
+            '若是双层 NAT（光猫拨号 + 路由器再 NAT），建议把光猫改为桥接模式；',
+            '以上均不可行（如运营商 CGNAT），可向运营商申请公网 IP/前缀。'
+          ];
+        default:
+          return [
+            'AutoNAT 正在判定公网可达性，请稍后刷新；',
+            '若长期停留「判定中」：在路由器开启 UPnP，或把光猫改为桥接模式；蜂窝/CGNAT 网络下可向运营商申请公网前缀。'
+          ];
+      }
+    });
 
     // ------------------------------------------------------------------
     // 关于·手动更新（自动检查就绪弹窗被取消后的入口；命令语义见
@@ -417,6 +535,7 @@ export default defineComponent({
       }
       await refreshNodeInfo();
       await refreshDataUsage();
+      await refreshRelayStatus();
       await refreshUpdater();
     });
 
@@ -436,7 +555,18 @@ export default defineComponent({
       refreshDataUsage,
       runDataCleanup,
       exportData,
+      relayStatus,
+      relayLoading,
+      refreshRelayStatus,
+      autonatLabel,
+      relayRoleLabel,
+      formatExpires,
+      shortPeer,
+      upnpLabel,
+      inboundLabel,
+      wizardTips,
       themeMode,
+      disclaimerParagraphs: DISCLAIMER_PARAGRAPHS,
       generalStates,
       generalItems: GENERAL_ITEMS,
       notifyItems: NOTIFY_ITEMS,
@@ -496,12 +626,57 @@ export default defineComponent({
   border-top: 1px solid var(--spark-border-light);
 }
 
+/* 免责声明段落：行距放宽便于阅读 */
+.disclaimer-paragraph {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--spark-text-1, #303133);
+}
+
+.disclaimer-paragraph + .disclaimer-paragraph {
+  margin-top: 10px;
+}
+
 /* 关于·手动更新行：按钮组 + 状态文案（弱化的次要信息） */
 .about-update {
   display: flex;
   align-items: center;
   gap: 10px;
   margin-top: 14px;
+}
+
+/* Relay 中继（U1/U2）：分块标题 / 预约条目 / 向导文案 */
+.relay-block-title {
+  margin: 16px 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--spark-text-1, #303133);
+}
+
+.relay-reservation {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 6px 0;
+  font-size: 13px;
+  color: var(--spark-text-1, #303133);
+}
+
+.relay-reservation + .relay-reservation {
+  border-top: 1px solid var(--spark-border-light);
+}
+
+.relay-peer {
+  font-family: monospace;
+}
+
+.relay-tips {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--spark-text-1, #303133);
 }
 
 .about-update-message {

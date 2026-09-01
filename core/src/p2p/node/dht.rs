@@ -186,6 +186,11 @@ impl<S: StorageBackend> EventLoop<S> {
         query_id: kad::QueryId,
         result: kad::GetProvidersResult,
     ) {
+        // R2：spark:relay 共享池查询（relay-implementation §2）→ relay 候选源
+        if self.relay_pool_queries.remove(&query_id) {
+            self.on_relay_pool_providers(result);
+            return;
+        }
         let Some(tx) = self.pending_dht_providers.remove(&query_id) else {
             return;
         };

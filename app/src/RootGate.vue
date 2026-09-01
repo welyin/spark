@@ -76,6 +76,9 @@
           />
         </template>
 
+        <!-- 首次启动免责声明：同意后记录版本号（utils/disclaimer），文案变更后重新确认 -->
+        <DisclaimerDialog v-model="disclaimerVisible" first-run @accept="handleDisclaimerAccept" />
+
         <el-alert v-if="message" :title="message" type="info" :closable="false" show-icon class="gate-message" />
         <!-- 乙+校验器：登录后若其他设备改了密码，常驻提示条引导统一新密码 -->
         <div v-if="pendingUnifyRef" class="unify-banner">
@@ -99,6 +102,8 @@ import RecoverPage from './pages/auth/RecoverPage.vue';
 import SwitchUserPage from './pages/auth/SwitchUserPage.vue';
 import AddAccountPage from './pages/auth/AddAccountPage.vue';
 import PasswordUnifyPanel from './pages/auth/PasswordUnifyPanel.vue';
+import DisclaimerDialog from './components/DisclaimerDialog.vue';
+import { isDisclaimerAccepted, markDisclaimerAccepted } from './utils/disclaimer';
 import { errorMessage } from './utils/ipc';
 import { isAutoLockExpired, touchLastActiveAt } from './utils/auto-lock';
 import { biometricStorePassword, biometricErrorMessage } from './utils/biometric';
@@ -122,7 +127,8 @@ export default defineComponent({
     RecoverPage,
     SwitchUserPage,
     AddAccountPage,
-    PasswordUnifyPanel
+    PasswordUnifyPanel,
+    DisclaimerDialog
   },
   setup() {
     const search = new URLSearchParams(window.location.search);
@@ -134,6 +140,9 @@ export default defineComponent({
     const message = ref('');
     const authMode = ref<AuthMode>('register');
     const statusLoaded = ref(false);
+    // 首次启动免责声明（非插件窗口）：未同意过当前版本时强制展示，同意后才可操作认证页
+    const disclaimerVisible = ref(false);
+    const handleDisclaimerAccept = () => markDisclaimerAccepted();
     // AddAccountPage 实例 ref（首装/已有账号分支共用，同时间只渲染一个）：
     // 系统返回键需查询其摄像头状态、外部触发关闭（全屏覆盖层语义等同覆盖层，按返回先关摄像头）
     const addAccountRef = ref<InstanceType<typeof AddAccountPage> | null>(null);
@@ -366,6 +375,7 @@ export default defineComponent({
         showApp.value = true;
         return;
       }
+      disclaimerVisible.value = !isDisclaimerAccepted();
       await refreshStatus();
       // 播种基准高度：挂载时即取当前可视高度为历史最高值，避免首个键盘周期
       //（弹出前未积累基准）丢失收起时的复位判定
@@ -417,8 +427,11 @@ export default defineComponent({
       message,
       authMode,
       statusLoaded,
+      disclaimerVisible,
+      handleDisclaimerAccept,
       addAccountRef,
       pendingUnifyRef,
+      syncOverlay,
       handleRegistered,
       handleRecovered,
       handleLogin,

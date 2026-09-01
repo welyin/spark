@@ -338,6 +338,7 @@ pub fn run() {
             commands::p2p::p2p_start,
             commands::p2p::p2p_stop,
             commands::p2p::p2p_status,
+            commands::p2p::relay_status,
             commands::p2p::p2p_broadcast,
             commands::p2p::p2p_clear_peer_records,
             commands::p2p::p2p_sync_peer_organizations,

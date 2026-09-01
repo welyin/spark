@@ -83,6 +83,15 @@ pub(crate) fn status_inner(kernel: &Kernel) -> Result<P2pInfoDto, String> {
     }
 }
 
+/// `relay-status`：relay 状态快照（U1 状态页 / U2 托管向导自检，
+/// relay-implementation §3；P2P 未启动返回 None，前端按「未启动」展示）。
+/// 只读命令，无写路径。
+pub(crate) fn relay_status_inner(
+    kernel: &Kernel,
+) -> Result<Option<spark_core::p2p::LocalRelayStatus>, String> {
+    kernel.relay_status().map_err(err)
+}
+
 /// `p2p-broadcast`：message 必须为 JSON 对象（信封 body），原样进信封广播。
 pub(crate) fn broadcast_inner(
     kernel: &Kernel,
@@ -196,6 +205,14 @@ pub fn p2p_stop(state: tauri::State<'_, KernelState>) -> Result<P2pStopResultDto
 #[tauri::command]
 pub fn p2p_status(state: tauri::State<'_, KernelState>) -> Result<P2pInfoDto, String> {
     status_inner(&*lock_kernel(&state)?)
+}
+
+/// relay 状态快照（U1 状态页 / U2 托管向导，只读；未启动返回 null）。
+#[tauri::command]
+pub fn relay_status(
+    state: tauri::State<'_, KernelState>,
+) -> Result<Option<spark_core::p2p::LocalRelayStatus>, String> {
+    relay_status_inner(&*lock_kernel(&state)?)
 }
 
 #[tauri::command]
