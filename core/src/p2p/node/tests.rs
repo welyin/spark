@@ -1138,7 +1138,14 @@ async fn relay_reservation_request_builds_full_circuit_addr() {
         store
             .remember(
                 &relay.to_base58(),
-                &[format!("/ip4/203.0.113.7/tcp/4001/p2p/{relay}")],
+                &[
+                    // 电路地址形态：必须被跳过（否则拼出双电路段，真机实测
+                    // MultipleCircuitRelayProtocolsUnsupported）
+                    format!("/ip4/203.0.113.9/tcp/4001/p2p/{relay}/p2p-circuit"),
+                    // ws 形态：降权垫底（Android 无 ws 传输）
+                    format!("/ip4/203.0.113.8/tcp/4001/ws/p2p/{relay}"),
+                    format!("/ip4/203.0.113.7/tcp/4001/p2p/{relay}"),
+                ],
                 crate::p2p::overlay_store::OverlayPeerSource::Announce,
                 false,
                 0,

@@ -199,27 +199,44 @@ impl<S: StorageBackend> EventLoop<S> {
                 .map(|r| r.addresses)
                 .unwrap_or_default()
         };
-        // 优先 IPv4/IPv6 直连地址（去掉已含 /p2p-circuit 或 /p2p/<peer> 的）
+        // 基地址选取：IPv4/IPv6 直连地址，跳过已含 /p2p-circuit 的电路地址
+        // （真机实测：relay 的电路地址被误作基地址再拼 /p2p/<relay>/p2p-circuit
+        // 产生双电路段，对端拨号 MultipleCircuitRelayProtocolsUnsupported）；
+        // 有多个候选时偏好非 ws 形态（Android 无 ws 传输，ws 电路地址对手机
+        // 不可拨）。
         let mut best: Option<Multiaddr> = None;
+        let mut best_ws: Option<Multiaddr> = None;
         for raw in base_addrs {
             let Ok(ma) = raw.parse::<Multiaddr>() else {
                 continue;
             };
             let mut has_transport = false;
+            let mut is_circuit = false;
+            let mut is_ws = false;
             for p in ma.iter() {
                 match p {
                     Protocol::Ip4(ip) if !ip.is_unspecified() => has_transport = true,
                     Protocol::Ip6(ip) if !ip.is_unspecified() && !ip.is_loopback() => {
                         has_transport = true
                     }
+                    Protocol::P2pCircuit => is_circuit = true,
+                    Protocol::Ws(_) | Protocol::Wss(_) => is_ws = true,
                     _ => {}
                 }
             }
-            if has_transport {
-                best = Some(ma);
-                break;
+            if !has_transport || is_circuit {
+                continue;
             }
+            if is_ws {
+                if best_ws.is_none() {
+                    best_ws = Some(ma);
+                }
+                continue;
+            }
+            best = Some(ma);
+            break;
         }
+        let best = best.or(best_ws);
         if let Some(mut ma) = best {
             // 基地址可能自带 /p2p/<peer> 尾段（overlay 来源不一）：剥掉再拼，
             // 否则得到 .../p2p/<relay>/p2p/<relay>/p2p-circuit 双重尾段，
