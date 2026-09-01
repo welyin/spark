@@ -1175,3 +1175,31 @@
     fn category_named(name: &str) -> &'static Category {
         CATEGORIES.iter().find(|c| c.name == name).unwrap()
     }
+
+    /// 市场索引类目注册（plugin-dist §8 + mobile-leaf-mode）：`mkt:ann:` 归属
+    /// `mkt:ann` category（计数键 `mkt:ann-count` 连字符不匹配前缀，排除），
+    /// 且 collect_category_vv / collect_incremental 对该类目可见。
+    #[test]
+    fn mkt_ann_category_registered_and_visible() {
+        let cat = category_for_key("mkt:ann:com.example.a").expect("mkt:ann should be categorized");
+        assert_eq!(cat.name, "mkt:ann");
+        assert!(
+            category_for_key("mkt:ann-count").is_none(),
+            "计数键（连字符）不得归进同步类目"
+        );
+
+        let mut s = MemoryStorage::new();
+        put_personal(
+            &mut s,
+            NODE_A,
+            "mkt:ann:com.example.a",
+            r#"{"id":"com.example.a"}"#,
+            1000,
+        )
+        .unwrap();
+        let folded = collect_category_vv(&s, cat, None).unwrap();
+        assert_eq!(folded.get(NODE_A), Some(&1), "折叠 vv 覆盖 mkt:ann");
+        let inc = collect_incremental(&s, cat, &VersionVector::new(), None, 0).unwrap();
+        assert_eq!(inc.len(), 1, "增量收集覆盖 mkt:ann");
+        assert_eq!(inc[0].key, "mkt:ann:com.example.a");
+    }

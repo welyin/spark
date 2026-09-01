@@ -181,6 +181,11 @@ pub(super) fn handle_pdsync_hello<S: StorageBackend>(
         }
         // 我对对端删除日志的已收序号（need 中回执，对方据此推墓碑增量）
         let my_seen = crate::sync::dlog::get_seen(storage, ctx.remote_peer_id).unwrap_or(0);
+        // 灰度（plugin-dist §8 市场索引经 pdsync 分发）：mkt:ann 是新增类目，
+        // 老端接收白名单（category_for_key）不认识会整批拒收
+        // （category-mismatch）——仅该类目特判：对端 hello 未声明即不推。
+        // 既有类目行为不变（历史类目不设此门）。
+        let push_gated = category.name == "mkt:ann" && !remote_cats.contains_key("mkt:ann");
         match diff {
             crate::sync::pdsync::DiffOutcome::LocalBehind { local_vv } => {
                 // 本机落后：请求对端补增量
@@ -189,18 +194,20 @@ pub(super) fn handle_pdsync_hello<S: StorageBackend>(
                 out.push(PdsyncOut::Need { body: need_body });
             }
             crate::sync::pdsync::DiffOutcome::LocalAhead => {
-                push_category_data(
-                    storage,
-                    &mut out,
-                    category,
-                    &remote_vv,
-                    exclude,
-                    dlog_ack,
-                    remote_class.as_deref(),
-                    remote_epoch,
-                    ctx.remote_peer_id,
-                    ctx.now_ms,
-                );
+                if !push_gated {
+                    push_category_data(
+                        storage,
+                        &mut out,
+                        category,
+                        &remote_vv,
+                        exclude,
+                        dlog_ack,
+                        remote_class.as_deref(),
+                        remote_epoch,
+                        ctx.remote_peer_id,
+                        ctx.now_ms,
+                    );
+                }
             }
             crate::sync::pdsync::DiffOutcome::Concurrent => {
                 // 双向交换：既请求对端缺的，也主动推本机缺的（data 逐条向量
@@ -215,18 +222,20 @@ pub(super) fn handle_pdsync_hello<S: StorageBackend>(
                 let need_body =
                     crate::sync::pdsync::build_need(category.name, &local_vv, my_seen);
                 out.push(PdsyncOut::Need { body: need_body });
-                push_category_data(
-                    storage,
-                    &mut out,
-                    category,
-                    &remote_vv,
-                    exclude,
-                    dlog_ack,
-                    remote_class.as_deref(),
-                    remote_epoch,
-                    ctx.remote_peer_id,
-                    ctx.now_ms,
-                );
+                if !push_gated {
+                    push_category_data(
+                        storage,
+                        &mut out,
+                        category,
+                        &remote_vv,
+                        exclude,
+                        dlog_ack,
+                        remote_class.as_deref(),
+                        remote_epoch,
+                        ctx.remote_peer_id,
+                        ctx.now_ms,
+                    );
+                }
             }
             crate::sync::pdsync::DiffOutcome::Equal => {
                 // 折叠 vv Equal 不代表对端收齐墓碑（折叠丢失 key 维度，
@@ -1204,5 +1213,81 @@ fn push_category_data<S: StorageBackend>(
     for (i, batch) in batches.into_iter().enumerate() {
         let body = crate::sync::pdsync::build_data_batch(category.name, &batch, i, total);
         out.push(PdsyncOut::Data { body });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use serde_json::json;
+
+    use super::*;
+    use crate::kernel::inbound_dm::InboundContext;
+    use crate::storage::MemoryStorage;
+    use crate::sync::personal::put_personal;
+
+    fn ctx<'a>(root: &'a str, peer: &'a str, online: &'a HashSet<String>) -> InboundContext<'a> {
+        InboundContext {
+            my_root_id: root,
+            my_nickname: "me",
+            remote_peer_id: peer,
+            online_peers: online,
+            node_id: "node-local",
+            now_ms: 10_000,
+            kverify: None,
+        }
+    }
+
+    fn hello_body(with_mkt_ann: bool) -> Value {
+        let mut categories = json!({});
+        if with_mkt_ann {
+            categories["mkt:ann"] = json!({});
+        }
+        json!({ "categories": categories })
+    }
+
+    fn out_has_mkt_ann_data(result: &crate::kernel::inbound_dm::InboundDmResult) -> bool {
+        result.pdsync_out.iter().any(|out| match out {
+            PdsyncOut::Data { body } => {
+                body.get("category").and_then(Value::as_str) == Some("mkt:ann")
+            }
+            _ => false,
+        })
+    }
+
+    /// 灰度（plugin-dist §8 市场索引经 pdsync 分发）：对端 hello 未声明
+    /// `mkt:ann` → 本机领先也不推（防老端白名单整批拒收）；已声明 → 正常推。
+    #[test]
+    fn mkt_ann_push_gated_by_remote_declaration() {
+        let online = HashSet::new();
+        // 本机持有一条市场索引记录（受管写，本地 vv 领先）
+        let mut s = MemoryStorage::new();
+        put_personal(
+            &mut s,
+            "node-local",
+            "mkt:ann:com.example.a",
+            r#"{"id":"com.example.a"}"#,
+            1000,
+        )
+        .unwrap();
+
+        // ① 对端未声明 mkt:ann：不产生该类目推送
+        let result =
+            handle_pdsync_hello(&mut s, &ctx("root-x", "peer-y", &online), "root-x", &hello_body(false))
+                .unwrap();
+        assert!(
+            !out_has_mkt_ann_data(&result),
+            "对端未声明 mkt:ann 不得推送（灰度防整批拒收）"
+        );
+
+        // ② 对端已声明 mkt:ann：本机领先 → 推送该类目
+        let result =
+            handle_pdsync_hello(&mut s, &ctx("root-x", "peer-y", &online), "root-x", &hello_body(true))
+                .unwrap();
+        assert!(
+            out_has_mkt_ann_data(&result),
+            "对端已声明 mkt:ann 且本机领先应推送"
+        );
     }
 }

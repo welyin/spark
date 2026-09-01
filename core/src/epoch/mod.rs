@@ -947,8 +947,8 @@ pub enum EncryptDecision {
 ///
 /// 矩阵（方案 §5.3 / §13.3）：
 /// - effective == 0 → Plain（未初始化）。
-/// - `pdecl:` / `epoch:` / `ikey:` / `pwv:` / `pwack:` / `ldoc:` → Plain
-///   （基础设施/口令校验器/本地）。
+/// - `pdecl:` / `epoch:` / `ikey:` / `pwv:` / `pwack:` / `ldoc:` / `mkt:ann:` → Plain
+///   （基础设施/口令校验器/本地；市场公告为 plugin-dist §8 公开数据）。
 /// - `pdoc:` → 按对应 `pdecl:` 声明的 `sensitivity` 字段；声明缺失 → Skip。
 /// - 其余已注册个人域 category（ct:, device, profile:self, msg:conv,
 ///   org:meta, ct:org, org:inv, orgkey, msg:item, msg:app）→ Encrypt。
@@ -968,6 +968,10 @@ pub fn classify_for_push<S: StorageBackend>(
         || key.starts_with("pwv:")
         || key.starts_with("pwack:")
     {
+        return Ok(EncryptDecision::Plain);
+    }
+    // 市场索引公告（plugin-dist §8）：自含签名+PoW 的公开数据，明文豁免
+    if key.starts_with("mkt:ann:") {
         return Ok(EncryptDecision::Plain);
     }
     if key.starts_with("ldoc:") {

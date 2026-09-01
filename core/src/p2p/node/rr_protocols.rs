@@ -92,6 +92,11 @@ impl<S: StorageBackend> EventLoop<S> {
     // ------------------------------------------------------------------
 
     pub(super) fn begin_exchange(&mut self, peer_id: &str, tx: oneshot::Sender<Result<usize>>) {
+        // leaf 模式 §3：peer-exchange 请求关闭（邻居池对叶子无意义）
+        if self.leaf_mode {
+            let _ = tx.send(Ok(0));
+            return;
+        }
         let Ok(peer) = peer_id.parse::<PeerId>() else {
             let _ = tx.send(Err(P2pError::Malformed("invalid peer id".to_string())));
             return;
@@ -117,6 +122,15 @@ impl<S: StorageBackend> EventLoop<S> {
         let respond = |behaviour: &mut crate::p2p::behaviour::SparkBehaviour, text: String| {
             let _ = behaviour.exchange_rr.send_response(channel, text);
         };
+        // leaf 模式 §3：peer-exchange 应答关闭——按失败口径回包（线形不变，
+        // 不读邻居池，对端按空结果收敛）
+        if self.leaf_mode {
+            respond(
+                self.swarm.behaviour_mut(),
+                direct::build_exchange_response(false, &[], Some("leaf")),
+            );
+            return;
+        }
         let parsed: Option<Value> = serde_json::from_str(&request).ok();
         if parsed
             .as_ref()

@@ -50,6 +50,7 @@ async fn test_loop() -> EventLoop<MemoryStorage> {
         signer: EnvelopeSigner::generate(),
         now_fn: Arc::new(|| 0),
         app_version: "test".to_string(),
+        leaf_mode: false,
         cmd_rx,
         cmd_tx,
         event_tx,
@@ -773,4 +774,92 @@ async fn network_change_fired_noop_when_unchanged() {
     el.pending_network_change = Some(0);
     el.handle_command(Command::NetworkChangeFired { base: current });
     assert!(el.pending_network_change.is_none());
+}
+
+/// leaf 模式（mobile-leaf-mode §3）：tick 不再出现 exchanged/announced/DHT 重发
+/// 痕迹——exchange 轮选、node-announce、DHT 记录/provide 重发全跳过，dht 计数
+/// 不推进；relay 预约补充（ensure_relay_reservations）保留不断言（无 relay 候选
+/// 时天然空操作）。
+#[tokio::test]
+async fn leaf_tick_skips_exchange_announce_and_dht_republish() {
+    let mut el = test_loop().await;
+    el.leaf_mode = true;
+    let stats = el.run_keepalive_tick();
+    assert_eq!(stats.exchanged, 0, "leaf 下不得发起 peer-exchange");
+    assert!(!stats.announced, "leaf 下不得发布 node-announce");
+    assert!(
+        el.pending_exchange.is_empty(),
+        "leaf 下不得有在途 exchange 请求"
+    );
+    assert_eq!(
+        el.dht_tick_counter, 0,
+        "leaf 下 DHT 重发计数不推进（存在记录/provide 重发关闭）"
+    );
+    // 对照：非 leaf 首个 tick 计数推进到 1
+    let mut el2 = test_loop().await;
+    el2.run_keepalive_tick();
+    assert_eq!(el2.dht_tick_counter, 1);
+}
+
+/// leaf 模式（§3）：announce 发布空操作（返回 false、不刷新发布时间）；
+/// org provide（网关职责）直接拒绝且不登记 provided_records（内核按 dht off
+/// 同口径静默重试）。
+#[tokio::test]
+async fn leaf_publish_announce_noop_and_provide_rejected() {
+    let mut el = test_loop().await;
+    el.leaf_mode = true;
+    assert_eq!(
+        el.publish_announce().expect("publish_announce"),
+        false,
+        "leaf 下 announce 发布为空操作"
+    );
+    assert_eq!(el.last_announced_at, 0, "leaf 下不刷新发布时间");
+
+    let (tx, rx) = oneshot::channel();
+    el.begin_dht_provide(b"k".to_vec(), b"v".to_vec(), tx);
+    let result = rx.await.expect("propose channel open");
+    assert!(result.is_err(), "leaf 下 org provide 应被拒绝");
+    assert!(
+        el.provided_records.is_empty(),
+        "leaf 下不得登记 provide 重发"
+    );
+}
+
+/// leaf 模式守卫反面（M-C）：begin_exchange 直接 Ok(0) 不产生在途请求；
+/// bootstrap_overlay_dial 有候选也不拨；seed_kad_routing 空操作（不 panic）。
+/// 非 leaf 对照已由 `overlay_bootstrap_event_driven_not_tick`（事件点自举拨
+/// 一轮）覆盖。
+#[tokio::test]
+async fn leaf_guards_block_exchange_and_overlay_maintenance() {
+    use crate::p2p::overlay_store::OverlayPeerSource;
+    let mut el = test_loop().await;
+    el.leaf_mode = true;
+    // peer-exchange 请求关闭：Ok(0) 且无在途
+    let (tx, rx) = oneshot::channel();
+    el.begin_exchange(&PeerId::random().to_base58(), tx);
+    assert!(matches!(rx.await, Ok(Ok(0))), "leaf 下 exchange 返回 Ok(0)");
+    assert!(el.pending_exchange.is_empty(), "leaf 下无在途 exchange 请求");
+    // overlay 孤岛自举关闭：预置候选也不拨
+    let peer = PeerId::random();
+    {
+        let mut store = OverlayPeerStore::new(&mut el.storage);
+        store
+            .remember(
+                &peer.to_base58(),
+                &["/ip4/10.0.0.9/tcp/15002".to_string()],
+                OverlayPeerSource::Connect,
+                false,
+                0,
+                None,
+                &HashSet::new(),
+            )
+            .unwrap();
+    }
+    el.bootstrap_overlay_dial();
+    assert!(
+        el.pending_overlay_dials.is_empty(),
+        "leaf 下孤岛自举不得拨号"
+    );
+    // kad 播种关闭（守护返回即空操作，验证不 panic 不拨号）
+    el.seed_kad_routing();
 }

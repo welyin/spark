@@ -24,6 +24,10 @@ use super::event_loop::EventLoop;
 impl<S: StorageBackend> EventLoop<S> {
     /// 启动时把邻居池现有条目灌进 kad 路由表并 bootstrap（dht_mode = Off 时不挂 kad，跳过）。
     pub(super) fn seed_kad_routing(&mut self) {
+        // leaf 模式 §3：路由表托管/播种/bootstrap 关闭，kad 仅一次性查询客户端
+        if self.leaf_mode {
+            return;
+        }
         if self.swarm.behaviour().kad.as_ref().is_none() {
             return;
         }
@@ -67,6 +71,15 @@ impl<S: StorageBackend> EventLoop<S> {
         value: Vec<u8>,
         tx: oneshot::Sender<Result<()>>,
     ) {
+        // leaf 模式 §3：DHT put 是记录发布职责（内核组织地址记录发布
+        // refresh_org_address_publishing 经此），与 provide 同口径关闭；
+        // 内核调用方按 dht off 同口径静默重试
+        if self.leaf_mode {
+            let _ = tx.send(Err(P2pError::Protocol(
+                "dht put disabled in leaf mode".to_string(),
+            )));
+            return;
+        }
         let record = kad::Record {
             key: kad::RecordKey::new(&key),
             value,
@@ -108,6 +121,14 @@ impl<S: StorageBackend> EventLoop<S> {
         value: Vec<u8>,
         tx: oneshot::Sender<Result<()>>,
     ) {
+        // leaf 模式 §3：org provide 是服务他人的网关职责，叶子关闭；内核调用方
+        // 按 dht off 同口径静默重试（org_sync/tick.rs refresh_gateway_providing）
+        if self.leaf_mode {
+            let _ = tx.send(Err(P2pError::Protocol(
+                "dht provide disabled in leaf mode".to_string(),
+            )));
+            return;
+        }
         if self.provided_records.get(&key) == Some(&value) {
             let _ = tx.send(Ok(()));
             return;
@@ -251,6 +272,10 @@ impl<S: StorageBackend> EventLoop<S> {
     /// 节点存在记录的 DHT 周期重发：内容直接复用 node-announce 签名报文，
     /// key = sha256("spark:node:" + peerId)（announce.rs `node_presence_record_key`）。
     pub(super) fn publish_node_presence_record(&mut self) {
+        // leaf 模式 §3：节点存在记录是发布服务，叶子关闭（PC 照常发布，叶子只查）
+        if self.leaf_mode {
+            return;
+        }
         // S7 兜底：剔除黑名单命中的污染地址再发布（根治 S2 已止源头，此为防旧污染残留）
         let strings = self.drop_blacklisted(self.listen_addr_strings());
         // 发布侧排序：IPv6 直连在前、电路中继在后（peer-rediscovery §4.6.3）

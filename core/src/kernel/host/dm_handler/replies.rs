@@ -360,6 +360,7 @@ impl KernelDmHandler {
             return;
         };
         let to = my_root_id.to_string();
+        let node_id = self.sync_node_id();
         // 本批推送的墓碑最大 dseq（ACK 重发判定依据；无墓碑则不等回执）
         let pushed_max_dseq: Option<u64> = outputs
             .iter()
@@ -372,9 +373,13 @@ impl KernelDmHandler {
             })
             .max();
         let wm_peer_id = target.peer_id.clone();
-        let storage = self.storage.clone();
+        let mut storage = self.storage.clone();
         tokio::spawn(async move {
-            send_pdsync_outputs(&node, &signing_key, &to, &target, &outputs).await;
+            // L4（mobile-leaf-mode §6）：确认不可达的 pdsync-data 入
+            // `dm:pending:`（个人空间，to=自 rootId），连接恢复时经
+            // `on_peer_app_ready` flush 重发；对端 vv 幂等合入
+            let failed = send_pdsync_outputs(&node, &signing_key, &to, &target, &outputs).await;
+            enqueue_pdsync_failures(&mut storage, &to, &failed, &node_id);
             let (Some(max_dseq), Some(peer_id)) = (pushed_max_dseq, wm_peer_id) else {
                 return;
             };
@@ -391,7 +396,9 @@ impl KernelDmHandler {
                     watermark,
                     max_dseq
                 );
-                send_pdsync_outputs(&node, &signing_key, &to, &target, &outputs).await;
+                let failed =
+                    send_pdsync_outputs(&node, &signing_key, &to, &target, &outputs).await;
+                enqueue_pdsync_failures(&mut storage, &to, &failed, &node_id);
             }
         });
     }
@@ -456,9 +463,13 @@ impl KernelDmHandler {
             .next();
         let retry_first_ms = crate::sync::orgsync::ORGSYNC_DLOG_ACK_RETRY_FIRST_MS as u64;
         let retry_second_ms = crate::sync::orgsync::ORGSYNC_DLOG_ACK_RETRY_SECOND_MS as u64;
-        let storage = storage;
+        let node_id = self.sync_node_id();
+        let mut storage = storage;
         tokio::spawn(async move {
-            send_orgsync_outputs(
+            // L4（mobile-leaf-mode §6）：确认不可达的 orgsync-data 入
+            // `org:dm:pending:`（to=成员 rootId），成员设备 app-ready 时经
+            // `on_peer_app_ready` flush 重发；对端 dlog/vv 幂等合入
+            let failed = send_orgsync_outputs(
                 &node,
                 &signing_key,
                 &from,
@@ -466,6 +477,7 @@ impl KernelDmHandler {
                 &outputs,
             )
             .await;
+            enqueue_orgsync_failures(&mut storage, &failed, &node_id);
             let (Some(max_dseq), Some(peer_id), Some((root_id, (org_id, name, version)))) =
                 (pushed_max_dseq, wm_peer_id, ack_ctx)
             else {
@@ -487,7 +499,7 @@ impl KernelDmHandler {
                     wm,
                     max_dseq
                 );
-                send_orgsync_outputs(
+                let failed = send_orgsync_outputs(
                     &node,
                     &signing_key,
                     &from,
@@ -495,6 +507,7 @@ impl KernelDmHandler {
                     &outputs,
                 )
                 .await;
+                enqueue_orgsync_failures(&mut storage, &failed, &node_id);
             }
         });
     }
@@ -559,13 +572,19 @@ fn body_org_scope(body: &Value) -> Option<(String, String, String)> {
 }
 
 /// 逐个装配并投递 pdsync 出站信封（rate-limited 有限重试；其余失败静默）。
+///
+/// 返回**确认不可达**（`Ok(None)` 拨号失败/超时/传输错误，rate-limited 重试
+/// 耗尽不算——对端在线只是限流）的 `pdsync-data` 失败项 `(body, envelope)`，
+/// 供调用方入 `dm:pending:` 离线队列（mobile-leaf-mode §6 L4）；need/附件
+/// 类不收集（请求与分块由反熵/下轮调和重发，非集合数据本体）。
 async fn send_pdsync_outputs(
     node: &std::sync::Arc<crate::p2p::node::P2pNode>,
     signing_key: &ed25519_dalek::SigningKey,
     to: &str,
     target: &PeerNodeInfo,
     outputs: &[crate::kernel::inbound_dm::PdsyncOut],
-) {
+) -> Vec<(Value, Value)> {
+    let mut failed: Vec<(Value, Value)> = Vec::new();
     for output in outputs {
         let kind = match output {
             crate::kernel::inbound_dm::PdsyncOut::Push { .. } => {
@@ -597,19 +616,27 @@ async fn send_pdsync_outputs(
         // 隔 1.2s（略大于限流窗口）重试至多 2 次；其余失败维持静默
         // （反熵是周期性的，本轮丢失下一轮补齐，不无限放大）。
         let mut retries = 0;
-        loop {
+        let response = loop {
             let response = node.dm_direct(target, envelope.clone()).await;
             let rate_limited = matches!(&response, Ok(v) if dm_response_is_rate_limited(v));
             if !rate_limited || retries >= PDSYNC_RATE_LIMIT_MAX_RETRIES {
-                break;
+                break response;
             }
             retries += 1;
             tokio::time::sleep(std::time::Duration::from_millis(
                 PDSYNC_RATE_LIMIT_RETRY_DELAY_MS,
             ))
             .await;
+        };
+        // L4 离线暂存：确认不可达的集合数据（pdsync-data）收集返回，由调用方
+        // 入 pending；`Ok(Some(_))`（含限流重试耗尽，对端在线）不算失败。
+        if !matches!(&response, Ok(Some(_)))
+            && kind == crate::kernel::dm_envelope::KIND_PDSYNC_DATA
+        {
+            failed.push((output.body().clone(), envelope));
         }
     }
+    failed
 }
 
 /// 检查 device_joined 通知补发窗口是否仍然有效。
@@ -635,13 +662,18 @@ pub(super) fn device_notice_sent(storage: &crate::storage::SledStorage, peer_id:
 /// 逐个装配并投递 orgsync 出站信封（rate-limited 有限重试；其余失败静默）。
 /// kind 为 KIND_ORGSYNC_*、from=本机 rootId、to=各 output 携带的目标成员
 /// rootId（B1）。
+///
+/// 返回**确认不可达**的 `orgsync-data` 失败项 `(toRootId, body, envelope)`
+/// （判定同 [`send_pdsync_outputs`]），供调用方入 `org:dm:pending:` 离线
+/// 队列（mobile-leaf-mode §6 L4）；need/orgq 问答类不收集（重查即补）。
 async fn send_orgsync_outputs(
     node: &std::sync::Arc<crate::p2p::node::P2pNode>,
     signing_key: &ed25519_dalek::SigningKey,
     from: &str,
     target: &PeerNodeInfo,
     outputs: &[crate::kernel::inbound_dm::OrgsyncOut],
-) {
+) -> Vec<(String, Value, Value)> {
+    let mut failed: Vec<(String, Value, Value)> = Vec::new();
     for output in outputs {
         let kind = match output {
             crate::kernel::inbound_dm::OrgsyncOut::Need { .. } => {
@@ -669,17 +701,71 @@ async fn send_orgsync_outputs(
         );
         // rate-limited 有限重试（与 pdsync 同口径）
         let mut retries = 0;
-        loop {
+        let response = loop {
             let response = node.dm_direct(target, envelope.clone()).await;
             let rate_limited = matches!(&response, Ok(v) if dm_response_is_rate_limited(v));
             if !rate_limited || retries >= PDSYNC_RATE_LIMIT_MAX_RETRIES {
-                break;
+                break response;
             }
             retries += 1;
             tokio::time::sleep(std::time::Duration::from_millis(
                 PDSYNC_RATE_LIMIT_RETRY_DELAY_MS,
             ))
             .await;
+        };
+        // L4 离线暂存：确认不可达的集合数据（orgsync-data）收集返回，由调用方
+        // 入 pending；`Ok(Some(_))`（含限流重试耗尽，对端在线）不算失败。
+        if !matches!(&response, Ok(Some(_)))
+            && kind == crate::kernel::dm_envelope::KIND_ORGSYNC_DATA
+        {
+            failed.push((to.to_string(), output.body().clone(), envelope));
         }
+    }
+    failed
+}
+
+/// L4 入队帮助（mobile-leaf-mode §6）：pdsync 确认不可达的 data 失败项入
+/// 个人空间 `dm:pending:`（to=自 rootId；自设备场景 from==to，flush 由
+/// `on_peer_app_ready` 朋友自记录路径触发，天然兼容）。
+fn enqueue_pdsync_failures(
+    storage: &mut crate::storage::SledStorage,
+    to: &str,
+    failed: &[(Value, Value)],
+    node_id: &str,
+) {
+    for (body, envelope) in failed {
+        crate::kernel::dm_delivery::enqueue_sync_pending(
+            storage,
+            crate::dm_offline::PendingSpace::Personal,
+            to,
+            crate::kernel::dm_envelope::KIND_PDSYNC_DATA,
+            body,
+            envelope,
+            node_id,
+        );
+    }
+}
+
+/// L4 入队帮助（§6）：orgsync 确认不可达的 data 失败项入组织空间
+/// `org:dm:pending:`；orgId 从 data body 解析（`body_org_scope` 既有口径），
+/// 解析不出（形状异常）跳过——反熵兜底语义不变。
+fn enqueue_orgsync_failures(
+    storage: &mut crate::storage::SledStorage,
+    failed: &[(String, Value, Value)],
+    node_id: &str,
+) {
+    for (to, body, envelope) in failed {
+        let Some((org_id, _, _)) = body_org_scope(body) else {
+            continue;
+        };
+        crate::kernel::dm_delivery::enqueue_sync_pending(
+            storage,
+            crate::dm_offline::PendingSpace::Org(&org_id),
+            to,
+            crate::kernel::dm_envelope::KIND_ORGSYNC_DATA,
+            body,
+            envelope,
+            node_id,
+        );
     }
 }

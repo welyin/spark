@@ -152,6 +152,8 @@ pub(super) struct EventLoop<S: StorageBackend> {
     pub(super) signer: EnvelopeSigner,
     pub(super) now_fn: NowFn,
     pub(super) app_version: String,
+    /// 叶子模式（mobile-leaf-mode §3）：只消费不服务，各关闭点统一读此开关。
+    pub(super) leaf_mode: bool,
     pub(super) cmd_rx: mpsc::UnboundedReceiver<Command>,
     /// 命令通道克隆（M9：防抖一次性定时器到点后回发 `NetworkChangeFired`）。
     pub(super) cmd_tx: mpsc::UnboundedSender<Command>,
@@ -471,6 +473,10 @@ impl<S: StorageBackend> EventLoop<S> {
     /// [`OverlayPeerStore::sample_dial_candidates`] 完成（最近成功/见过优先，
     /// 失败沉底）——去重靠「无周期触发」，不靠失败记忆。
     pub(super) fn bootstrap_overlay_dial(&mut self) {
+        // leaf 模式 §3：overlay 邻居池维护/孤岛自举全关，连接目标来自设备记录与成员表
+        if self.leaf_mode {
+            return;
+        }
         let connected = self.connected_peers();
         if !connected.is_empty() {
             return;

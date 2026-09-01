@@ -50,6 +50,10 @@ impl<S: StorageBackend> EventLoop<S> {
     // ------------------------------------------------------------------
 
     pub(super) fn publish_announce(&mut self) -> Result<bool> {
+        // leaf 模式 §3：node-announce 是发布服务，叶子关闭（叶子上没有要广播的对象）
+        if self.leaf_mode {
+            return Ok(false);
+        }
         // S7 兜底：剔除黑名单命中的污染地址再发布（根治 S2 已止源头，此为防旧污染残留）
         let strings = self.listen_addr_strings();
         let Some(addresses) = prepare_publish_addresses(&self.drop_blacklisted(strings)) else {
@@ -120,6 +124,11 @@ impl<S: StorageBackend> EventLoop<S> {
 
     /// 发布声明：消息自含签名与 PoW（§8.2），不走信封（与 node-announce 同口径）。
     pub(super) fn publish_plugin_announce_raw(&mut self, json: &str) -> Result<()> {
+        // leaf 模式 §3：发布切断（订阅保留只消费市场索引，见 behaviour.rs
+        // 订阅门控注释——待产品确认项）
+        if self.leaf_mode {
+            return Ok(());
+        }
         self.publish_raw(PLUGIN_ANNOUNCE_TOPIC, json.as_bytes().to_vec())
     }
 
@@ -141,7 +150,12 @@ impl<S: StorageBackend> EventLoop<S> {
         {
             Ok(announce) => {
                 let outcome = {
-                    let mut store = PluginAnnounceStore::new(&mut self.storage);
+                    // 桥（mobile-leaf-mode）：gossip 接收路径是裸 sled 句柄，
+                    // 显式设置 nodeId 使 save 受管（带 pmeta）——公告经 pdsync
+                    // `mkt:ann` 类目同步给叶子（PC 桥角色，无需新增组件）
+                    let node_id = self.self_peer_id().to_base58();
+                    let mut store = PluginAnnounceStore::new(&mut self.storage)
+                        .with_node_id(&node_id);
                     store.upsert(&announce, now)
                 };
                 match outcome {

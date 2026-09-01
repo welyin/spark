@@ -249,3 +249,145 @@ fn enqueue_pending<S: StorageBackend>(
         eprintln!("[chat-delivery] offline enqueue failed: {e}");
     }
 }
+
+/// pdsync/orgsync 集合数据投递失败时入 `dm:pending:` 离线队列
+/// （mobile-leaf-mode §6 L4，chat 之外的第二个 enqueue 调用点）：单 PC
+/// 离线期间集合数据经暂存续命，连接恢复（`on_peer_app_ready` flush）时重发，
+/// 对端按 vv/dlog 幂等合入，与反熵重推并存无害。
+///
+/// `message_id` 取 kind+body 内容哈希（**稳定键**）：dlog ACK 重发与后续
+/// 反熵轮对同一批记录的重复失败入队同键覆盖、天然去重；`conv_id` 恒 None
+/// （非 chat，flush 无消息状态回写）。容量/TTL 沿用 `enqueue` 既有约束。
+/// 入队失败静默（反熵兜底语义不变）。
+pub(crate) fn enqueue_sync_pending<S: StorageBackend>(
+    storage: &mut S,
+    space: crate::dm_offline::PendingSpace,
+    to_root_id: &str,
+    kind: &str,
+    body: &Value,
+    envelope: &Value,
+    node_id: &str,
+) {
+    use crate::dm_offline::{PendingRecord, enqueue};
+    use sha2::Digest as _;
+    let digest = sha2::Sha256::digest(format!("{kind}|{body}").as_bytes());
+    let message_id = format!("sync-{}", hex::encode(&digest[..12]));
+    let space_key = match space {
+        crate::dm_offline::PendingSpace::Personal => "personal".to_string(),
+        crate::dm_offline::PendingSpace::Org(org_id) => format!("org:{org_id}"),
+    };
+    let now = crate::p2p::node::system_now_ms();
+    let record = PendingRecord {
+        to: to_root_id.to_string(),
+        message_id,
+        kind: kind.to_string(),
+        space_key,
+        conv_id: None,
+        envelope: envelope.clone(),
+        created_at: now,
+    };
+    if let Err(e) = enqueue(storage, space, to_root_id, &record, node_id, now) {
+        eprintln!("[sync-delivery] offline enqueue failed: {e}");
+    }
+}
+
+#[cfg(test)]
+mod sync_pending_tests {
+    //! L4（mobile-leaf-mode §6）：pdsync/orgsync 集合数据失败入队的键形状、
+    //! 内容、稳定键去重与 flush 出队（list → remove）存储层验证。
+    use serde_json::json;
+
+    use crate::dm_offline::{PendingSpace, list_for_recipient, remove};
+    use crate::storage::MemoryStorage;
+
+    use super::enqueue_sync_pending;
+
+    fn envelope(kind: &str, to: &str) -> serde_json::Value {
+        json!({"kind": kind, "from": to, "to": to, "ts": 1, "body": {"records": []}})
+    }
+
+    #[test]
+    fn pdsync_failure_enqueues_personal_pending() {
+        let mut s = MemoryStorage::new();
+        let body = json!({"records": [{"id": "doc1"}]});
+        let env = envelope("pdsync-data", "rootA");
+        enqueue_sync_pending(
+            &mut s,
+            PendingSpace::Personal,
+            "rootA",
+            "pdsync-data",
+            &body,
+            &env,
+            "node-a",
+        );
+        // 键形状：dm:pending:{自 rootId}:sync-<内容哈希>
+        let now = crate::p2p::node::system_now_ms();
+        let list = list_for_recipient(&s, PendingSpace::Personal, "rootA", now).unwrap();
+        assert_eq!(list.len(), 1, "入队一条");
+        let (key, record) = &list[0];
+        assert!(
+            key.starts_with("dm:pending:rootA:sync-"),
+            "个人空间稳定键，实际: {key}"
+        );
+        assert_eq!(record.kind, "pdsync-data");
+        assert_eq!(record.to, "rootA");
+        assert_eq!(record.space_key, "personal");
+        assert_eq!(record.conv_id, None, "非 chat 无会话回写");
+        assert_eq!(record.envelope, env, "完整信封入队供 flush 重发");
+
+        // 稳定键去重：同 kind+body 重复失败入队同键覆盖，不累积
+        enqueue_sync_pending(
+            &mut s,
+            PendingSpace::Personal,
+            "rootA",
+            "pdsync-data",
+            &body,
+            &env,
+            "node-a",
+        );
+        let list = list_for_recipient(&s, PendingSpace::Personal, "rootA", now).unwrap();
+        assert_eq!(list.len(), 1, "同内容重复入队同键覆盖");
+
+        // flush 出队（存储层：补投成功后 remove → 队列清空）
+        let (key, _) = &list[0];
+        remove(&mut s, key).unwrap();
+        assert!(
+            list_for_recipient(&s, PendingSpace::Personal, "rootA", now)
+                .unwrap()
+                .is_empty(),
+            "remove 后出队"
+        );
+    }
+
+    #[test]
+    fn orgsync_failure_enqueues_org_pending() {
+        let mut s = MemoryStorage::new();
+        let body = json!({"orgId": "org1", "collection": "docs@v1", "records": []});
+        let env = envelope("orgsync-data", "memberB");
+        enqueue_sync_pending(
+            &mut s,
+            PendingSpace::Org("org1"),
+            "memberB",
+            "orgsync-data",
+            &body,
+            &env,
+            "node-a",
+        );
+        let now = crate::p2p::node::system_now_ms();
+        let list = list_for_recipient(&s, PendingSpace::Org("org1"), "memberB", now).unwrap();
+        assert_eq!(list.len(), 1);
+        let (key, record) = &list[0];
+        assert!(
+            key.starts_with("org:dm:pending:org1:memberB:sync-"),
+            "组织空间稳定键，实际: {key}"
+        );
+        assert_eq!(record.kind, "orgsync-data");
+        assert_eq!(record.space_key, "org:org1");
+        // 组织空间不影响个人空间队列
+        assert!(
+            list_for_recipient(&s, PendingSpace::Personal, "memberB", now)
+                .unwrap()
+                .is_empty()
+        );
+    }
+}

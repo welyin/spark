@@ -486,6 +486,7 @@ async fn main() {
         // 由驱动脚本按需触发（announce/exchange 命令），保持输出确定性
         keepalive_interval: None,
         dht_mode: spark_core::p2p::DhtMode::Server,
+        leaf_mode: false,
         plugin_announce_pow_bits: None,
         plugin_announce_relay_tenure_ms: None,
         dht_republish_ticks: None,

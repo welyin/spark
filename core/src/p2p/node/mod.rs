@@ -102,6 +102,10 @@ pub struct P2pConfig {
     /// 是否启用 relay server（接受他人预约）。桌面默认 true；移动端强制 false
     /// （节省流量与电量，移动端只作 relay client，peer-rediscovery §7.2）。
     pub enable_relay_server: bool,
+    /// 叶子模式（mobile-leaf-mode §3）：只消费不服务——kad 仅一次性查询客户端，
+    /// gossipsub announce 发布 / peer-exchange / overlay 邻居池维护全关；
+    /// mDNS、relay client、监听、直连协议全部保留。桌面默认 false，移动端注入 true。
+    pub leaf_mode: bool,
     /// 时间源注入。
     pub now_fn: NowFn,
 }
@@ -123,6 +127,7 @@ impl Default for P2pConfig {
             plugin_announce_relay_tenure_ms: None,
             dht_republish_ticks: None,
             enable_relay_server: true,
+            leaf_mode: false,
             now_fn: Arc::new(system_now_ms),
         }
     }
@@ -313,6 +318,8 @@ pub struct P2pNode {
     peer_id: String,
     /// Ed25519 公钥 base64（32B 原始字节），M3 epoch 包裹采集用。
     device_pub_key: String,
+    /// 叶子模式快照（mobile-leaf-mode §3；内核组织单连接/寻址链按它分支）。
+    leaf_mode: bool,
     cmd_tx: mpsc::UnboundedSender<Command>,
     event_rx: mpsc::UnboundedReceiver<P2pEvent>,
     /// 事件循环任务句柄（Mutex 使 `stop` 仅需 `&self`，节点可放入 `Arc`
@@ -355,7 +362,13 @@ impl P2pNode {
             enable_mdns: config.enable_mdns,
             enable_upnp: config.enable_upnp,
             enable_relay_server: config.enable_relay_server,
-            dht_mode: config.dht_mode,
+            // leaf 模式 §3：kad 仅一次性查询客户端（只发查询、不应答、不入他人
+            // 路由表）；显式 Off（隐私开关）优先，不被 leaf 覆盖
+            dht_mode: match (config.leaf_mode, config.dht_mode) {
+                (true, DhtMode::Server) => DhtMode::Client,
+                (_, mode) => mode,
+            },
+            leaf_mode: config.leaf_mode,
         };
         let mut swarm = build_swarm(&keypair, &behaviour_options).await?;
 
@@ -400,6 +413,7 @@ impl P2pNode {
             signer: EnvelopeSigner::generate(),
             now_fn: config.now_fn.clone(),
             app_version: config.app_version.clone(),
+            leaf_mode: config.leaf_mode,
             cmd_rx,
             cmd_tx: cmd_tx_loop,
             event_tx,
@@ -466,6 +480,7 @@ impl P2pNode {
         Ok(Self {
             peer_id: peer_id_str,
             device_pub_key,
+            leaf_mode: config.leaf_mode,
             cmd_tx,
             event_rx,
             task: std::sync::Mutex::new(Some(task)),
@@ -475,6 +490,12 @@ impl P2pNode {
     /// 本机 PeerId 字符串。
     pub fn peer_id(&self) -> &str {
         &self.peer_id
+    }
+
+    /// 是否叶子模式（mobile-leaf-mode §3：只消费不服务；内核侧组织单连接
+    /// 目标排序与自设备寻址链按它分支）。
+    pub fn leaf_mode(&self) -> bool {
+        self.leaf_mode
     }
 
     /// 本机 Ed25519 公钥 base64（32B 原始字节）。

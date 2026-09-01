@@ -86,6 +86,11 @@ pub const CATEGORIES: &[Category] = &[
     // 上线都 flush 补投。组织 pending（`org:dm:pending:`）不进此表，走 org-sync
     // 网关同步（通道未就绪，见 dm_offline 模块注释）。
     Category { name: "dm:pending", prefixes: &["dm:pending:"] },
+    // 插件市场索引（plugin-dist §8；mobile-leaf-mode：公告分发从 gossipsub 订阅
+    // 改为经 pdsync 同步，leaf 不再订阅 PLUGIN_ANNOUNCE_TOPIC）。公告自含签名
+    // +PoW、为公开数据，推送明文豁免（epoch classify_for_push）。计数键
+    // `mkt:ann-count`（连字符）不匹配 `mkt:ann:` 前缀，天然排除出同步。
+    Category { name: "mkt:ann", prefixes: &["mkt:ann:"] },
 ];
 
 /// 按前缀从注册表解析 category（不存在 → `None`，如组织/消息前缀）。

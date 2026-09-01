@@ -256,6 +256,9 @@ pub struct BehaviourOptions {
     /// （peer-rediscovery §7.2：移动端只作 relay client）。
     pub enable_relay_server: bool,
     pub dht_mode: DhtMode,
+    /// 叶子模式（mobile-leaf-mode §3）：gossipsub 业务 mesh 订阅关闭（只消费
+    /// 不服务，不为他人中继）。
+    pub leaf_mode: bool,
 }
 
 impl Default for BehaviourOptions {
@@ -265,6 +268,7 @@ impl Default for BehaviourOptions {
             enable_upnp: true,
             enable_relay_server: true,
             dht_mode: DhtMode::default(),
+            leaf_mode: false,
         }
     }
 }
@@ -290,11 +294,18 @@ pub fn build_behaviour(
         gossipsub_config,
     )
     .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    gossipsub_behaviour.subscribe(&gossipsub::IdentTopic::new(super::constants::SYNC_TOPIC))?;
-    gossipsub_behaviour.subscribe(&gossipsub::IdentTopic::new(super::constants::OVERLAY_TOPIC))?;
-    // 插件市场广播索引（plugin-dist §8；启动即订阅，relay 校验链在 gossip 层）
-    gossipsub_behaviour
-        .subscribe(&gossipsub::IdentTopic::new(super::constants::PLUGIN_ANNOUNCE_TOPIC))?;
+    // leaf 模式 §3：gossipsub 订阅全砍（SYNC/OVERLAY/PLUGIN_ANNOUNCE）——leaf
+    // 不为他人中继（订阅一断 publish 自然空操作，与 gossip.rs 发布守卫双保险）。
+    // PLUGIN_ANNOUNCE 亦砍：市场索引改经 pdsync `mkt:ann` 类目同步分发
+    // （mobile-leaf-mode；plugin-dist §8 公告自含签名，PC 桥接收 gossip 后
+    // 受管落库同步给叶子），leaf 不订阅、发布守卫（gossip.rs）保留。
+    if !options.leaf_mode {
+        gossipsub_behaviour.subscribe(&gossipsub::IdentTopic::new(super::constants::SYNC_TOPIC))?;
+        gossipsub_behaviour.subscribe(&gossipsub::IdentTopic::new(super::constants::OVERLAY_TOPIC))?;
+        // 插件市场广播索引（plugin-dist §8；启动即订阅，relay 校验链在 gossip 层）
+        gossipsub_behaviour
+            .subscribe(&gossipsub::IdentTopic::new(super::constants::PLUGIN_ANNOUNCE_TOPIC))?;
+    }
 
     let mdns_behaviour = if options.enable_mdns {
         Toggle::from(Some(mdns::tokio::Behaviour::new(

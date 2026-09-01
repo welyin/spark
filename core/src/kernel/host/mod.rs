@@ -39,7 +39,7 @@ use crate::p2p::peer_activity::{NodeObservation, PeerActivityStore};
 use crate::p2p::peer_targets::PeerNodeInfo;
 use crate::p2p::P2pNode;
 use crate::schema::CollectionSchemaDeclaration;
-use crate::storage::SledStorage;
+use crate::storage::{SledStorage, StorageBackend};
 use crate::sync::apply::{ApplyRemoteOptions, apply_remote_update};
 use crate::sync::meta::RemoteMeta;
 
@@ -424,6 +424,66 @@ impl P2pHost for KernelHost {
     /// profile-sync 失败直接放弃（不重试、不入 pending、不记状态，LWW 幂等）；
     /// `dm:pending:` 补投保留"入队等待下次连接"语义（与 profile-sync 不同策略）。
     fn on_peer_app_ready(&mut self, _version: &str, peer_id: &str) {
+        // L4（mobile-leaf-mode §6）：orgsync 集合数据 pending 补投——按 peerId
+        // 反查组织成员表端点（成员不必是联系人，下方朋友路径的 early-return
+        // 不能拦这条），每个 (orgId, memberRootId) flush 组织空间
+        // `org:dm:pending:` 队列。peer 已 app-ready（已连接），dm_direct 短路
+        // 直发，寻址只需 peerId。
+        // 稳态零成本：`org:dm:pending:` 前缀为空（绝大多数时刻）直接跳过成员表
+        // 反查
+        let has_org_pending = self
+            .storage
+            .scan(&crate::storage::ScanOptions::prefix(
+                crate::dm_offline::ORG_PENDING_PREFIX,
+            ))
+            .map(|rows| !rows.is_empty())
+            .unwrap_or(false);
+        if has_org_pending {
+            let orgs = crate::org::OrganizationService::read_all_organizations(&self.storage)
+                .unwrap_or_default();
+            let mut org_targets: Vec<(String, String)> = Vec::new();
+            for record in &orgs {
+                for member in &record.members {
+                    let hit = member.node_info.as_ref().is_some_and(|set| {
+                        set.iter().any(|info| info.peer_id.as_deref() == Some(peer_id))
+                    });
+                    if hit {
+                        org_targets.push((record.org_id.clone(), member.root_id.clone()));
+                    }
+                }
+            }
+            if !org_targets.is_empty() {
+                if let Some(node) = self
+                    .node_shared
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone()
+                {
+                    for (org_id, to_root_id) in org_targets {
+                        let mut storage = self.storage.clone();
+                        let node = Arc::clone(&node);
+                        let event_tx = self.event_tx.clone();
+                        let io_lock = Arc::clone(&self.io_lock);
+                        let target = PeerNodeInfo {
+                            peer_id: Some(peer_id.to_string()),
+                            addresses: Vec::new(),
+                        };
+                        tokio::spawn(async move {
+                            crate::kernel::dm_delivery::flush_pending_for_recipient(
+                                &mut storage,
+                                node,
+                                event_tx,
+                                io_lock,
+                                crate::dm_offline::PendingSpace::Org(&org_id),
+                                &to_root_id,
+                                target,
+                            )
+                            .await;
+                        });
+                    }
+                }
+            }
+        }
         let friend = ContactService::overview(&self.storage, "personal")
             .map(|view| view.friends)
             .unwrap_or_default()
@@ -507,6 +567,7 @@ impl P2pHost for KernelHost {
                 flush_node,
                 flush_event_tx,
                 flush_io_lock,
+                crate::dm_offline::PendingSpace::Personal,
                 &flush_to,
                 flush_target,
             )

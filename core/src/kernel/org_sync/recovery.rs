@@ -78,6 +78,20 @@ impl OrgSyncContext {
             }
             last.insert(root_id.to_string(), now);
         }
+        // leaf 模式 §5：组织单连接——成员表本地副本即候选源（无需 DHT 成员提示 /
+        // 恢复 token 发现协议），按「网关活跃集 → 数据账号 → 最近在线成员」排序
+        // 取首个未连接候选拨一次：通了即用，失败沉默（下次发送/登录/网络恢复
+        // 事件再来）。非 leaf 行为不变（走下方 DHT 刷新环节）。
+        if self.node.leaf_mode() {
+            let candidates = self.leaf_org_link_candidates(root_id, now).await;
+            if let Some(first) = candidates.into_iter().next() {
+                // M-B：实际发起拨号时记录恢复查询时间（UI 恢复状态展示口径与
+                // 非 leaf 的 DHT 刷新一致）
+                self.recovery_trigger.lock().unwrap().note_query(now);
+                let _ = self.node.connect_peer(&first).await;
+            }
+            return;
+        }
         let view = {
             let mut storage = self.storage.clone();
             let node_id = self.node.peer_id().to_string();
@@ -135,5 +149,56 @@ impl OrgSyncContext {
             // 提示类候选，拨不通静默跳过
             let _ = self.node.connect_peer(&candidate).await;
         }
+    }
+
+    /// leaf 模式 §5 的组织单连接候选：遍历本机为成员的组织，按
+    /// [`super::dial::leaf_ordered_org_candidates`] 排序（网关活跃集 → 数据
+    /// 账号 → 最近在线成员）汇总，剔除已连接端点（建立一条后保持；`connect_peer`
+    /// 对已连接目标也会短路，此处剔除是为让「首个候选」指向真正需要拨的）。
+    async fn leaf_org_link_candidates(
+        &self,
+        root_id: &str,
+        now: i64,
+    ) -> Vec<PeerNodeInfo> {
+        let orgs = OrganizationService::read_all_organizations(&self.storage).unwrap_or_default();
+        let connected: std::collections::HashSet<String> = self
+            .node
+            .local_node_info()
+            .await
+            .map(|info| info.connected_peers.into_iter().collect())
+            .unwrap_or_default();
+        // leaf 模式 §5 单连接（H-C）：已有任一组织成员端点连接即保持，候选置空
+        // 不另拨——「建立一条后保持」的判定在此，不在拨号去重
+        if orgs
+            .iter()
+            .filter(|r| r.find_member(root_id).is_some())
+            .any(|r| super::dial::has_connected_org_member(r, root_id, &connected))
+        {
+            return Vec::new();
+        }
+        let mut storage = self.storage.clone();
+        let mut last_seen_of = |peer_id: &str| {
+            crate::p2p::peer_activity::PeerActivityStore::new(&mut storage)
+                .get(peer_id)
+                .ok()
+                .flatten()
+                .map(|r| r.last_seen_at)
+        };
+        let mut out = Vec::new();
+        for record in orgs.iter().filter(|r| r.find_member(root_id).is_some()) {
+            for candidate in
+                super::dial::leaf_ordered_org_candidates(record, root_id, now, &mut last_seen_of)
+            {
+                if candidate
+                    .peer_id
+                    .as_deref()
+                    .is_some_and(|p| connected.contains(p))
+                {
+                    continue;
+                }
+                out.push(candidate);
+            }
+        }
+        out
     }
 }

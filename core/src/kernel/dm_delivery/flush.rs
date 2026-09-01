@@ -3,8 +3,9 @@
 //! 编排层职责：读队列 → 拨号重发 → 按应答出队/留队 → chat 回写消息终态。
 //! 存储语义（键构造/容量/TTL）在 `dm_offline` 纯逻辑层，本模块只做编排。
 //!
-//! 补投触发：**PeerConnected 钩子**（`host` `on_peer_connected`）——连接建立时
-//! 按 peerId 反查 rootId，flush 该 recipient 的 pending 队列（`flush_pending_for_recipient`）。
+//! 补投触发：**PeerAppReady 钩子**（`host` `on_peer_app_ready`）——应用层就绪
+//! （版本探测成功）时按 peerId 反查 rootId（朋友表；L4 增补组织成员表端点），
+//! flush 该 recipient 的 pending 队列（`flush_pending_for_recipient`）。
 //! 原 60s 周期兜底（`flush_pending_personal_full`）已随 connection-policy M6
 //! 删 keepalive tick 内主动外联一并删除——补投不再后台周期兜底，纯事件驱动
 //! （连接事件触发；失败留队等下次连接）。
@@ -29,11 +30,29 @@ use crate::storage::StorageBackend;
 
 /// 补投应答的终态拒绝 reason：命中直接出队不再重试（语义性拒绝，重试无意义）。
 ///
+/// 集合（M-A）：chat 通用（`blocked`/`invalid-body`/`unknown-kind`）+
+/// orgsync 语义拒绝（`rejected`/`invalid-collection`/`key-out-of-collection`/
+/// `acl-scope-mismatch`）+ pdsync 语义拒绝（`not-self-device`/
+/// `category-mismatch`）——缺这些会把对端明确拒收的集合数据留队重投到 TTL。
+///
 /// `pub(crate)`：供 `spawn`（chat 首投）与 `feed_ops`（feed 首投）复用——对端
 /// 在线但回终态拒绝时，首投也应直接置 failed / 丢弃，而非入离线队列等无意义
 /// 重试（I3）。
 pub(crate) fn is_terminal_rejection(reason: Option<&str>) -> bool {
-    matches!(reason, Some("blocked" | "invalid-body" | "unknown-kind"))
+    matches!(
+        reason,
+        Some(
+            "blocked"
+                | "invalid-body"
+                | "unknown-kind"
+                | "rejected"
+                | "invalid-collection"
+                | "key-out-of-collection"
+                | "acl-scope-mismatch"
+                | "not-self-device"
+                | "category-mismatch"
+        )
+    )
 }
 
 /// 单条补投成功/终态拒绝后的 chat 回写（compare-and-set，对齐 spawn.rs 口径）：
@@ -70,18 +89,23 @@ fn write_back<S: StorageBackend>(
     }
 }
 
-/// 补投单个 recipient 的 pending 队列（个人空间；`peer` 为该 recipient 当前
-/// 可寻址的端点）。逐条重发，按应答出队/留队。供 `on_peer_connected` 钩子用。
+/// 补投单个 recipient 的 pending 队列（`peer` 为该 recipient 当前可寻址的
+/// 端点）。逐条重发，按应答出队/留队。供 `on_peer_app_ready` 钩子用。
+///
+/// `space`：Personal（chat/feed/pdsync，`on_peer_app_ready` 朋友路径）或
+/// Org(orgId)（orgsync 集合数据暂存，mobile-leaf-mode §6 L4——按 peerId
+/// 反查组织成员表端点触发，成员不必是联系人）。
 pub(crate) async fn flush_pending_for_recipient<S: StorageBackend>(
     storage: &mut S,
     node: Arc<P2pNode>,
     event_tx: broadcast::Sender<P2pEvent>,
     io_lock: Arc<Mutex<()>>,
+    space: PendingSpace<'_>,
     to_root_id: &str,
     peer: PeerNodeInfo,
 ) {
     let now = system_now_ms();
-    let records = match list_for_recipient(storage, PendingSpace::Personal, to_root_id, now) {
+    let records = match list_for_recipient(storage, space, to_root_id, now) {
         Ok(records) => records,
         Err(e) => {
             eprintln!("[dm-flush] list_for_recipient failed to={to_root_id}: {e}");
@@ -116,8 +140,18 @@ mod tests {
 
     #[test]
     fn terminal_rejection_classifies_semantic_reasons() {
-        // 终态拒绝：出队不再重投
-        for reason in ["blocked", "invalid-body", "unknown-kind"] {
+        // 终态拒绝：出队不再重投（chat 通用 + orgsync/pdsync 语义拒绝，M-A）
+        for reason in [
+            "blocked",
+            "invalid-body",
+            "unknown-kind",
+            "rejected",
+            "invalid-collection",
+            "key-out-of-collection",
+            "acl-scope-mismatch",
+            "not-self-device",
+            "category-mismatch",
+        ] {
             assert!(is_terminal_rejection(Some(reason)), "{reason} 应终态拒绝");
         }
         // 成功（非拒绝）

@@ -164,6 +164,12 @@ pub fn run() {
                     dht_republish_ticks: Some(
                         spark_core::p2p::constants::DHT_MOBILE_REPUBLISH_TICKS,
                     ),
+                    // 叶子模式（mobile-leaf-mode §3/§7）：移动端默认 true
+                    // （只消费不服务）；SPARK_LEAF=1/0 可显式覆盖（桌面/开发
+                    // 联调多实例测试叶子行为用）
+                    leaf_mode: std::env::var("SPARK_LEAF")
+                        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                        .unwrap_or(cfg!(any(target_os = "android", target_os = "ios"))),
                     ..Default::default()
                 }),
             })

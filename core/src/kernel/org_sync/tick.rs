@@ -98,6 +98,27 @@ impl OrgSyncContext {
                 );
                 let ctx = self.clone();
                 tokio::spawn(async move {
+                    // leaf 模式 §4 寻址序固化：清单缓存地址为空（DeviceRecord 仅
+                    // peerId）时补一次性 kad 存在记录查询（client 模式），与登录
+                    // M2 路径（p2p_ops::bootstrap_login_dials）同口径；未命中即
+                    // 空地址，connect_peer 失败沉默。非 leaf 行为不变（桌面有
+                    // overlay 邻居池/announce 沉淀兜底，不多发查询）。
+                    let peer = if ctx.node.leaf_mode()
+                        && peer.addresses.is_empty()
+                        && let Some(pid) = peer.peer_id.as_deref()
+                    {
+                        let fresh = query_node_presence_addrs(&ctx.node, pid).await;
+                        if fresh.is_empty() {
+                            peer
+                        } else {
+                            PeerNodeInfo {
+                                peer_id: Some(pid.to_string()),
+                                addresses: fresh,
+                            }
+                        }
+                    } else {
+                        peer
+                    };
                     // 拨通后补发 hello（connect_peer 返回即连接已建立，可直发）
                     if ctx.node.connect_peer(&peer).await.is_ok()
                         && let Some(pid) = peer.peer_id
@@ -704,6 +725,26 @@ fn local_personal_write_digest<S: StorageBackend>(
         }
     }
     sum
+}
+
+/// 一次性 kad 节点存在记录查询（leaf 模式 §4 寻址序的 DHT 腿；与
+/// `kernel/p2p_ops.rs::query_node_presence_async` 同口径）：验签通过且 peerId
+/// 匹配返回新鲜地址，未命中/验签失败返回空（调用方按原候选继续，失败沉默）。
+async fn query_node_presence_addrs(node: &crate::p2p::P2pNode, peer_id: &str) -> Vec<String> {
+    let key = crate::p2p::announce::node_presence_record_key(peer_id);
+    let Ok(Some(raw)) = node.dht_get_record(key.as_bytes()).await else {
+        return Vec::new();
+    };
+    let Ok(text) = String::from_utf8(raw) else {
+        return Vec::new();
+    };
+    let Some(announce) = crate::p2p::announce::verify_announce_text(&text) else {
+        return Vec::new();
+    };
+    if announce.peer_id != peer_id {
+        return Vec::new();
+    }
+    announce.addresses
 }
 
 #[cfg(test)]

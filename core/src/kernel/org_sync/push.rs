@@ -194,29 +194,45 @@ impl OrgSyncContext {
             }
         };
         let recipients = OrganizationService::sync_recipients(&record, actor_root_id);
-        let mut any_sync_ok = false;
-        for member in recipients {
-            let Some(set) = member.node_info.clone() else {
-                continue;
-            };
-            // 端点化：遍历成员端点集，逐端点推送（多设备聚合）。
-            for info in set.iter() {
-                let peer = PeerNodeInfo {
-                    peer_id: info.peer_id.clone(),
-                    addresses: info.addresses.clone(),
+        // 端点化：遍历成员端点集，逐端点推送（多设备聚合），展开为
+        // (端点, 成员 rootId) 目标列表
+        let mut targets: Vec<(PeerNodeInfo, String)> = Vec::new();
+        // leaf 模式 §5 单连接（H-D）：推送收件人收敛为单一目标——已有组织
+        // 连接取其端点，否则取排序首候选（网关活跃集 → 数据账号 → 最近在线
+        // 成员）；非 leaf 逐成员端点扇出逐字不变
+        if self.node.leaf_mode() {
+            if let Some(target) = self.leaf_single_push_target(&record, actor_root_id).await {
+                targets.push(target);
+            }
+        } else {
+            for member in recipients {
+                let Some(set) = member.node_info.clone() else {
+                    continue;
                 };
-                if let Err(e) = self
-                    .sync_org_to_member(&peer, &member.root_id, org_id)
-                    .await
-                {
-                    // 预录模型：成员离线不视为失败（service.ts:563-569 console.warn）
-                    self.warn(format!(
-                        "[org] member sync deferred (peer unreachable): orgId={org_id}, targetRootId={}, error={e}",
-                        member.root_id
+                for info in set.iter() {
+                    targets.push((
+                        PeerNodeInfo {
+                            peer_id: info.peer_id.clone(),
+                            addresses: info.addresses.clone(),
+                        },
+                        member.root_id.clone(),
                     ));
-                } else {
-                    any_sync_ok = true;
                 }
+            }
+        }
+        let mut any_sync_ok = false;
+        for (peer, member_root_id) in targets {
+            if let Err(e) = self
+                .sync_org_to_member(&peer, &member_root_id, org_id)
+                .await
+            {
+                // 预录模型：成员离线不视为失败（service.ts:563-569 console.warn）
+                self.warn(format!(
+                    "[org] member sync deferred (peer unreachable): orgId={org_id}, targetRootId={}, error={e}",
+                    member_root_id
+                ));
+            } else {
+                any_sync_ok = true;
             }
         }
         // M6 懒连接链：本地记录端点**全不通**（无任一成员推送成功）→ 走 DHT 刷新
@@ -230,6 +246,74 @@ impl OrgSyncContext {
         // 是发送时懒拨号）。替代被删除的 keepalive tick 周期补副本；带每 org 最小
         // 检查间隔节流（见 [`Self::ensure_replicas_after_write`]）。
         self.ensure_replicas_after_write(org_id, actor_root_id).await;
+    }
+
+    /// leaf 模式 §5（H-D）：组织写入推送的单一目标——① 当前组织连接（已连接
+    /// 成员端点即用）；② 否则 `leaf_ordered_org_candidates` 排序首候选（网关
+    /// 活跃集 → 数据账号 → 最近在线成员）。返回（端点, 成员 rootId）供
+    /// [`Self::sync_org_to_member`] 记账；无候选返回 None（推送目标为空，
+    /// 触发下方 `refresh_org_endpoints_and_dial` 恢复环节）。
+    async fn leaf_single_push_target(
+        &self,
+        record: &crate::org::types::OrganizationRecord,
+        actor_root_id: &str,
+    ) -> Option<(PeerNodeInfo, String)> {
+        let now = self.now();
+        let connected: std::collections::HashSet<String> = self
+            .node
+            .local_node_info()
+            .await
+            .map(|info| info.connected_peers.into_iter().collect())
+            .unwrap_or_default();
+        // ① 当前组织连接：已连接成员端点即用（单连接保持语义）
+        for member in &record.members {
+            if member.root_id == actor_root_id {
+                continue;
+            }
+            let Some(set) = &member.node_info else {
+                continue;
+            };
+            for info in set.iter() {
+                if info.peer_id.as_deref().is_some_and(|p| connected.contains(p)) {
+                    return Some((
+                        PeerNodeInfo {
+                            peer_id: info.peer_id.clone(),
+                            addresses: info.addresses.clone(),
+                        },
+                        member.root_id.clone(),
+                    ));
+                }
+            }
+        }
+        // ② 排序首候选，并回查其成员 rootId（记账键）
+        let mut storage = self.storage.clone();
+        let mut last_seen_of = |peer_id: &str| {
+            crate::p2p::peer_activity::PeerActivityStore::new(&mut storage)
+                .get(peer_id)
+                .ok()
+                .flatten()
+                .map(|r| r.last_seen_at)
+        };
+        let first = super::dial::leaf_ordered_org_candidates(
+            record,
+            actor_root_id,
+            now,
+            &mut last_seen_of,
+        )
+        .into_iter()
+        .next()?;
+        let root_id = record
+            .members
+            .iter()
+            .find(|m| {
+                m.root_id != actor_root_id
+                    && m.node_info.as_ref().is_some_and(|set| {
+                        set.iter().any(|info| info.peer_id == first.peer_id)
+                    })
+            })?
+            .root_id
+            .clone();
+        Some((first, root_id))
     }
 
     /// M6 事件驱动补副本（`replenishOrganizationReplicas` 收尾）：组织写入推送

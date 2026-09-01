@@ -533,13 +533,30 @@ pub enum AnnounceUpsert {
 }
 
 /// 本地索引存储（模式对齐 OverlayPeerStore：借 &mut storage，即用即弃）。
-pub struct PluginAnnounceStore<'a> {
-    storage: &'a mut dyn StorageBackend,
+pub struct PluginAnnounceStore<'a, S: StorageBackend> {
+    storage: &'a mut S,
+    /// pdsync 受管写归属 nodeId（桥：plugin-dist §8 市场索引经 pdsync `mkt:ann`
+    /// 类目分发到叶子，mobile-leaf-mode）：`Some` 时 `save` 改经
+    /// `put_personal`（带 pmeta，折叠/增量可见）；`None` 维持裸写。内核侧写
+    /// 路径经 VersionedStorage 中间件已自动纳管（`managed()` 按 category_for_key
+    /// 识别），无需设置；仅 p2p 事件循环的 gossip 接收路径（裸 sled 句柄）
+    /// 需要显式设置。
+    node_id: Option<String>,
 }
 
-impl<'a> PluginAnnounceStore<'a> {
-    pub fn new(storage: &'a mut dyn StorageBackend) -> Self {
-        Self { storage }
+impl<'a, S: StorageBackend> PluginAnnounceStore<'a, S> {
+    pub fn new(storage: &'a mut S) -> Self {
+        Self {
+            storage,
+            node_id: None,
+        }
+    }
+
+    /// 设置受管写归属 nodeId（gossip 接收路径：本机运行态 peerId，与内核
+    /// sync_node_id 同口径）。
+    pub fn with_node_id(mut self, node_id: &str) -> Self {
+        self.node_id = Some(node_id.to_string());
+        self
     }
 
     fn key(id: &str) -> String {
@@ -554,11 +571,26 @@ impl<'a> PluginAnnounceStore<'a> {
         Ok(serde_json::from_str(&raw).ok())
     }
 
-    fn save(&mut self, entry: &PluginAnnounceIndexEntry) -> super::Result<()> {
-        self.storage.put(
-            &Self::key(&entry.announce.id),
-            &serde_json::to_string(entry)?,
-        )?;
+    fn save(&mut self, entry: &PluginAnnounceIndexEntry, now_ms: i64) -> super::Result<()> {
+        let value = serde_json::to_string(entry)?;
+        match &self.node_id {
+            // 桥（plugin-dist §8 + mobile-leaf-mode）：受管写带 pmeta，公告经
+            // pdsync `mkt:ann` 类目同步到叶子。存量裸写记录无 pmeta，同步侧
+            // 视为缺失——由后续公告自然补齐（有意接受：公告 TTL 内持续到达）。
+            Some(node_id) => {
+                crate::sync::put_personal(
+                    &mut *self.storage,
+                    node_id,
+                    &Self::key(&entry.announce.id),
+                    &value,
+                    now_ms,
+                )
+                .map_err(|e| super::P2pError::Protocol(format!("pmeta write failed: {e}")))?;
+            }
+            None => {
+                self.storage.put(&Self::key(&entry.announce.id), &value)?;
+            }
+        }
         Ok(())
     }
 
@@ -575,7 +607,7 @@ impl<'a> PluginAnnounceStore<'a> {
             Some(e) if announce.timestamp == e.announce.timestamp => {
                 let mut entry = e.clone();
                 entry.updated_at = now_ms;
-                self.save(&entry)?;
+                self.save(&entry, now_ms)?;
                 AnnounceUpsert::Duplicate
             }
             Some(e) => {
@@ -588,7 +620,7 @@ impl<'a> PluginAnnounceStore<'a> {
                     verified_at: 0,
                     // 新声明到达：旧核查结论与校正字段一并作废
                     corrected: None,
-                })?;
+                }, now_ms)?;
                 AnnounceUpsert::Replaced
             }
             None => {
@@ -600,7 +632,7 @@ impl<'a> PluginAnnounceStore<'a> {
                     verify_error: String::new(),
                     verified_at: 0,
                     corrected: None,
-                })?;
+                }, now_ms)?;
                 AnnounceUpsert::Inserted
             }
         };
@@ -637,7 +669,7 @@ impl<'a> PluginAnnounceStore<'a> {
         } else {
             None
         };
-        self.save(&entry)?;
+        self.save(&entry, now_ms)?;
         Ok(true)
     }
 
@@ -700,5 +732,64 @@ impl<'a> PluginAnnounceStore<'a> {
         self.storage
             .put(PLUGIN_MARKET_INDEX_COUNT_KEY, &entries.len().to_string())?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::MemoryStorage;
+    use crate::sync::personal::get_personal_meta;
+
+    fn sample_announce(id: &str) -> PluginAnnounce {
+        PluginAnnounce {
+            msg_type: "spark-plugin-announce".to_string(),
+            id: id.to_string(),
+            name: "测试插件".to_string(),
+            icon: String::new(),
+            summary: "s".to_string(),
+            category: "tools".to_string(),
+            version: "1.0.0".to_string(),
+            release_url: String::new(),
+            timestamp: 1000,
+            ttl: 3_600_000,
+            publisher: "pub".to_string(),
+            pub_key: "pk".to_string(),
+            pow: AnnouncePow { bits: 0, nonce: 0 },
+            signature: "sig".to_string(),
+        }
+    }
+
+    /// 桥（mobile-leaf-mode，plugin-dist §8）：gossip 接收路径受管写——
+    /// 设 nodeId 的 upsert 落 `mkt:ann:<id>` 同时写 pmeta（vv 归属 nodeId，
+    /// 折叠/增量可见）；未设 nodeId 的裸写无 pmeta（内核侧经 VersionedStorage
+    /// 中间件自动纳管，不走本路径）。
+    #[test]
+    fn managed_upsert_writes_pmeta() {
+        let mut s = MemoryStorage::new();
+        {
+            let mut store = PluginAnnounceStore::new(&mut s).with_node_id("node-pc");
+            let outcome = store.upsert(&sample_announce("com.example.a"), 1000).unwrap();
+            assert_eq!(outcome, AnnounceUpsert::Inserted);
+        }
+        let meta = get_personal_meta(&s, "mkt:ann:com.example.a")
+            .unwrap()
+            .expect("受管写应带 pmeta");
+        assert_eq!(meta.vv.get("node-pc"), Some(&1));
+
+        // 对照：未设 nodeId 的裸写无 pmeta
+        let mut s2 = MemoryStorage::new();
+        {
+            let mut store = PluginAnnounceStore::new(&mut s2);
+            store
+                .upsert(&sample_announce("com.example.b"), 1000)
+                .unwrap();
+        }
+        assert!(
+            get_personal_meta(&s2, "mkt:ann:com.example.b")
+                .unwrap()
+                .is_none(),
+            "裸写不带 pmeta"
+        );
     }
 }
