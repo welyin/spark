@@ -102,10 +102,13 @@ async fn test_loop_with(
         relay_pool_queries: std::collections::HashSet::new(),
         relay_pool_candidates: Vec::new(),
         relay_pool_stability: std::collections::HashMap::new(),
+        relay_pool_record_queries: std::collections::HashSet::new(),
         last_relay_pool_query_at: 0,
         network_change_log: Vec::new(),
         relay_stability_low: false,
         nat_status: super::NatStatusLabel::default(),
+        upnp_mapping: None,
+        upnp_failed: false,
         dm_completion_tx,
         dm_completion_rx,
         dial_timeout_tx,
@@ -1112,6 +1115,52 @@ async fn leaf_selects_relay_pool_candidates() {
     );
 }
 
+/// relay 预约请求地址构造回归（真机实测根修）：
+/// - 电路监听地址必须携带 relay 完整传输地址（裸 /p2p/<relay>/p2p-circuit
+///   被 libp2p-relay 0.21 client 以 MissingRelayAddr 拒绝，listen_on Err，
+///   预约永远不成）；
+/// - overlay 基地址自带 /p2p/<peer> 尾段时须剥掉（否则双重 /p2p 尾段）；
+/// - 无可用传输地址时跳过（不发起必败的 listen_on）。
+#[tokio::test]
+async fn relay_reservation_request_builds_full_circuit_addr() {
+    let mut el = test_loop().await;
+    let relay = PeerId::random();
+    // 无 overlay 地址：跳过（不进 in-flight）
+    el.request_relay_reservation(relay);
+    assert!(
+        el.relay_reservations_inflight.is_empty(),
+        "无传输地址应跳过，不发起必败的 listen_on"
+    );
+
+    // overlay 播种 relay 地址（带 /p2p 尾段，模拟 DHT/announce 来源）
+    {
+        let mut store = OverlayPeerStore::new(&mut el.storage);
+        store
+            .remember(
+                &relay.to_base58(),
+                &[format!("/ip4/203.0.113.7/tcp/4001/p2p/{relay}")],
+                crate::p2p::overlay_store::OverlayPeerSource::Announce,
+                false,
+                0,
+                None,
+                &HashSet::new(),
+            )
+            .expect("remember relay addr");
+    }
+    el.request_relay_reservation(relay);
+    assert!(
+        el.relay_reservations_inflight.contains(&relay),
+        "listen_on 成功应进 in-flight（裸地址 MissingRelayAddr 回归）"
+    );
+    // 电路监听地址：完整传输段 + 单 /p2p 尾段（双重 /p2p 回归）
+    let expect = format!("/ip4/203.0.113.7/tcp/4001/p2p/{relay}/p2p-circuit");
+    assert_eq!(
+        el.build_circuit_address(relay).to_string(),
+        expect,
+        "基地址自带 /p2p 尾段时须剥掉再拼"
+    );
+}
+
 /// U1 状态快照（relay-implementation §3）：autonat/角色/共享池大小/预约如实
 /// 反映；到期与配额为近似值（字段注释口径）。
 #[tokio::test]
@@ -1146,4 +1195,74 @@ async fn relay_status_snapshot_reflects_role_and_pool() {
     assert_eq!(st.reservations[0].peer, relay.to_base58());
     assert!(st.reservations[0].expires_in_ms > 0, "近似到期剩余为正");
     assert_eq!(st.reservations[0].used_bytes, None, "用量 libp2p 不暴露");
+}
+
+/// U2 向导三态（relay-implementation §3）：UPnP 事件驱动 mapped/failed/unknown
+/// 状态翻转（NewExternalAddr → mapped；Expired/GatewayNotFound → failed）。
+#[tokio::test]
+async fn upnp_events_drive_three_state_status() {
+    let mut el = test_loop().await;
+    assert_eq!(el.local_relay_status().upnp, "unknown", "尚无事件为 unknown");
+    let mapped: Multiaddr = "/ip4/203.0.113.1/tcp/15002".parse().unwrap();
+    el.handle_swarm_event(SwarmEvent::Behaviour(SparkBehaviourEvent::Upnp(
+        libp2p::upnp::Event::NewExternalAddr(mapped.clone()),
+    )));
+    assert_eq!(el.local_relay_status().upnp, "mapped", "映射成功为 mapped");
+    el.handle_swarm_event(SwarmEvent::Behaviour(SparkBehaviourEvent::Upnp(
+        libp2p::upnp::Event::ExpiredExternalAddr(mapped),
+    )));
+    assert_eq!(el.local_relay_status().upnp, "failed", "映射过期为 failed");
+    // 网关探测失败（含双层 NAT 迹象的 NonRoutableGateway）同为 failed
+    let mut el2 = test_loop().await;
+    el2.handle_swarm_event(SwarmEvent::Behaviour(SparkBehaviourEvent::Upnp(
+        libp2p::upnp::Event::NonRoutableGateway,
+    )));
+    assert_eq!(el2.local_relay_status().upnp, "failed");
+}
+
+/// #2 stability 回填：providers 结果触发 get_record → 载荷 stability="low"
+/// 回填映射 → 该候选在 sort_relay_tier 中垫底；无 stability 字段保持无降权。
+#[tokio::test]
+async fn relay_pool_record_backfills_stability() {
+    use super::relay_manager::{RelayProviderHint, sort_relay_tier};
+    let mut el = test_loop().await;
+    let low_peer = PeerId::random();
+    let normal_peer = PeerId::random();
+    // 经 providers 结果触发回填查询（取走在途 qid）
+    el.on_relay_pool_providers(Ok(libp2p::kad::GetProvidersOk::FoundProviders {
+        key: libp2p::kad::RecordKey::new(&crate::p2p::constants::SPARK_RELAY_KEY),
+        providers: [low_peer, normal_peer].into_iter().collect(),
+    }));
+    assert_eq!(el.relay_pool_record_queries.len(), 1, "providers 后应发起回填查询");
+    let qid = *el.relay_pool_record_queries.iter().next().unwrap();
+    // 构造带 stability:"low" 的提供记录回填
+    let hint = RelayProviderHint {
+        peer_id: low_peer.to_base58(),
+        addresses: vec![],
+        stability: Some("low".to_string()),
+    };
+    el.resolve_dht_get(
+        qid,
+        Ok(libp2p::kad::GetRecordOk::FoundRecord(libp2p::kad::PeerRecord {
+            peer: None,
+            record: libp2p::kad::Record {
+                key: libp2p::kad::RecordKey::new(&crate::p2p::constants::SPARK_RELAY_KEY),
+                value: hint.to_record_value(),
+                publisher: None,
+                expires: None,
+            },
+        })),
+    );
+    assert_eq!(
+        el.relay_pool_stability.get(&low_peer),
+        Some(&true),
+        "低稳候选应回填映射"
+    );
+    assert!(!el.relay_pool_stability.contains_key(&normal_peer));
+    // 回填后排序：low 垫底（即便候选顺序原本在前）
+    let last_seen = |_: &PeerId| 0i64;
+    let is_low = |p: &PeerId| el.relay_pool_stability.get(p).copied().unwrap_or(false);
+    let mut tier = vec![low_peer, normal_peer];
+    sort_relay_tier(&mut tier, &last_seen, &is_low);
+    assert_eq!(tier, vec![normal_peer, low_peer], "low 候选垫底");
 }

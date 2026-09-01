@@ -194,6 +194,9 @@ pub struct LocalRelayStatus {
     pub pool_size: usize,
     /// R1 动态 IP 降权标记（true = stability low）。
     pub stability_low: bool,
+    /// UPnP 端口映射状态（U2 向导三态）：mapped=存在有效外部映射 /
+    /// failed=映射过期或网关探测失败 / unknown=尚无 UPnP 事件。
+    pub upnp: String,
 }
 
 /// keepalive tick 统计（宿主组织层保活的触发信号）。
@@ -505,10 +508,13 @@ impl P2pNode {
             relay_pool_queries: std::collections::HashSet::new(),
             relay_pool_candidates: Vec::new(),
             relay_pool_stability: std::collections::HashMap::new(),
+            relay_pool_record_queries: std::collections::HashSet::new(),
             last_relay_pool_query_at: 0,
             network_change_log: Vec::new(),
             relay_stability_low: false,
             nat_status: NatStatusLabel::default(),
+            upnp_mapping: None,
+            upnp_failed: false,
             dm_completion_tx,
             dm_completion_rx,
             dial_timeout_tx,

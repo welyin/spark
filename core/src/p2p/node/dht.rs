@@ -224,6 +224,11 @@ impl<S: StorageBackend> EventLoop<S> {
     }
 
     pub(super) fn resolve_dht_get(&mut self, query_id: kad::QueryId, result: kad::GetRecordResult) {
+        // #2：spark:relay 载荷回填查询（stability 闭环，relay_manager 消费）
+        if self.relay_pool_record_queries.remove(&query_id) {
+            self.on_relay_pool_record(result);
+            return;
+        }
         // 竞速查询：优先类目 peer 的 DHT 竞速命中/未命中走 rediscovery 分支
         if let Some(peer) = self.rediscovery_dht_queries.remove(&query_id) {
             match &result {

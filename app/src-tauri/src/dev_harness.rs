@@ -15,7 +15,9 @@
 //! 安全边界：debug_assertions 编译期裁剪 + 文件位于应用私有目录
 //! （仅 run-as/root 可写），不进任何对外协议。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde::Deserialize;
 use spark_core::kernel::Kernel;
@@ -38,6 +40,28 @@ const RESULT_FILE: &str = "dev_result.json";
 
 /// setup 尾段调用：有指令则执行并写回结果，无指令零成本返回。
 pub fn run(data_dir: &Path, kernel: &mut Kernel) {
+    consume_and_execute(data_dir, kernel);
+}
+
+/// 轮询模式：后台线程周期检查数据目录下的 dev_instruction.json，存在即
+/// 消费执行并写回 dev_result.json。用于免重启热查询连接级状态（如
+/// relay_status 的预约/共享池）——setup 消费只发生在启动瞬间，彼时
+/// p2p 连接尚未建立，查不到运行期状态。
+pub fn spawn_polling(data_dir: PathBuf, kernel: Arc<Mutex<Kernel>>) {
+    std::thread::Builder::new()
+        .name("dev-harness-poll".into())
+        .spawn(move || loop {
+            std::thread::sleep(Duration::from_secs(3));
+            if !data_dir.join(INSTRUCTION_FILE).exists() {
+                continue;
+            }
+            let mut guard = kernel.lock().unwrap_or_else(|e| e.into_inner());
+            consume_and_execute(&data_dir, &mut guard);
+        })
+        .expect("spawn dev-harness-poll thread");
+}
+
+fn consume_and_execute(data_dir: &Path, kernel: &mut Kernel) {
     let path = data_dir.join(INSTRUCTION_FILE);
     let Ok(raw) = std::fs::read_to_string(&path) else {
         return;
@@ -59,10 +83,16 @@ pub fn run(data_dir: &Path, kernel: &mut Kernel) {
 fn execute(kernel: &mut Kernel, ins: &DevInstruction) -> Result<String, String> {
     // pair_peer 需要解锁态，而重启后必为锁定态——同一指令携带 password 时
     // 先解锁再配对（单指令完成「解锁 + 配对」，免两轮重启）。
-    if ins.action == "pair_peer" {
+    // 需解锁态的动作（pair_peer/relay_status/dump 等）：携带 password 时先
+    // 解锁（重启后必为锁定态，单指令完成「解锁 + 动作」，幂等——已解锁时
+    // unlock 报错忽略）。
+    if ins.action != "init"
+        && ins.action != "recover_mnemonic"
+        && ins.action != "unlock"
+    {
         if let Some(password) = ins.password.as_deref() {
             if let Err(e) = kernel.unlock(password, None) {
-                eprintln!("[dev-harness] pair_peer 预解锁失败（继续尝试配对）: {e}");
+                eprintln!("[dev-harness] 预解锁失败（继续执行动作）: {e}");
             }
         }
     }
@@ -108,6 +138,18 @@ fn execute(kernel: &mut Kernel, ins: &DevInstruction) -> Result<String, String> 
             .to_string())
         }
         "pair_peer" => execute_pair_peer(kernel, ins),
+        "relay_status" => {
+            // 调试：导出本机 relay 状态（AutoNAT/角色/预约/共享池，U1 facade）。
+            match kernel.relay_status() {
+                Ok(status) => Ok(serde_json::json!({
+                    "ok": true,
+                    "action": "relay_status",
+                    "status": status,
+                })
+                .to_string()),
+                Err(e) => Err(e.to_string()),
+            }
+        }
         "dump" => {
             // 调试：按前缀扫 sled 键（值截断 160 字符），用于真机排障
             // （如 D′ 链 pwack 记录状态核查）。仅 debug 构建。

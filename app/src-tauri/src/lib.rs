@@ -178,9 +178,21 @@ pub fn run() {
             let announce_events = kernel.subscribe_p2p_events();
             // 开发/自动化测试挂钩（仅 debug 构建）：数据目录有 dev_instruction.json
             // 则自动执行 init/unlock/recover_mnemonic，结果写 dev_result.json。
+            // setup 消费后另起轮询线程：运行期投递的指令（relay_status 等
+            // 连接级状态热查询）免重启执行（dev_harness::spawn_polling 注释）。
             #[cfg(debug_assertions)]
-            dev_harness::run(&data_dir, &mut kernel);
-            app.manage(Arc::new(Mutex::new(kernel)));
+            let kernel = {
+                let kernel = Arc::new(Mutex::new(kernel));
+                {
+                    let mut guard = kernel.lock().unwrap_or_else(|e| e.into_inner());
+                    dev_harness::run(&data_dir, &mut guard);
+                }
+                dev_harness::spawn_polling(data_dir.clone(), Arc::clone(&kernel));
+                kernel
+            };
+            #[cfg(not(debug_assertions))]
+            let kernel = Arc::new(Mutex::new(kernel));
+            app.manage(kernel);
             spawn_p2p_event_forwarder(app.handle().clone(), events);
             // 插件市场：状态/包目录在 app_data_dir，本地 dist-market 与插件源码
             // 目录按编译期 crate 位置解析（见 market::MarketPaths::for_app）；

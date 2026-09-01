@@ -428,8 +428,14 @@ export default defineComponent({
     const formatExpires = (ms: number) => (ms >= 60000 ? `约 ${Math.round(ms / 60000)} 分钟` : '不足 1 分钟');
     const shortPeer = (peer: string) => (peer.length > 16 ? `${peer.slice(0, 12)}…${peer.slice(-4)}` : peer);
 
-    /** U2 自检三态（只读推导）：AutoNAT / UPnP（内核无状态上报，恒未知）/ 入站连通推断 */
-    const upnpLabel = '未知（内核暂无 UPnP 状态上报）';
+    /** U2 自检三态（只读推导）：AutoNAT / UPnP（内核 upnp 事件记账）/ 入站连通推断 */
+    const upnpLabel = computed(() => {
+      switch (relayStatus.value?.upnp) {
+        case 'mapped': return '已映射（成功）';
+        case 'failed': return '失败/不可用（映射过期或网关探测失败）';
+        default: return '未知（尚无 UPnP 事件）';
+      }
+    });
     const inboundLabel = computed(() => {
       switch (relayStatus.value?.autonat) {
         case 'public': return '入站可达（AutoNAT Public 判定）';
@@ -450,11 +456,25 @@ export default defineComponent({
             '若是双层 NAT（光猫拨号 + 路由器再 NAT），建议把光猫改为桥接模式；',
             '以上均不可行（如运营商 CGNAT），可向运营商申请公网 IP/前缀。'
           ];
-        default:
+        default: {
+          // unknown：UPnP 已映射时把「开 UPnP」引导替换为成功态提示
+          if (relayStatus.value?.upnp === 'mapped') {
+            return [
+              'UPnP 端口映射已成功，AutoNAT 仍在判定公网可达性，请稍后刷新；',
+              '若长期停留「判定中」：检查系统防火墙放行监听端口（默认 15002）；蜂窝/CGNAT 网络下可向运营商申请公网前缀。'
+            ];
+          }
+          if (relayStatus.value?.upnp === 'failed') {
+            return [
+              'UPnP 映射失败/不可用：请检查路由器 UPnP 开关，或把光猫改为桥接模式（双层 NAT 时尤其需要）；',
+              'AutoNAT 正在判定公网可达性，请稍后刷新；蜂窝/CGNAT 网络下可向运营商申请公网前缀。'
+            ];
+          }
           return [
             'AutoNAT 正在判定公网可达性，请稍后刷新；',
             '若长期停留「判定中」：在路由器开启 UPnP，或把光猫改为桥接模式；蜂窝/CGNAT 网络下可向运营商申请公网前缀。'
           ];
+        }
       }
     });
 

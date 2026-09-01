@@ -5,7 +5,7 @@
 use std::collections::HashSet;
 
 use libp2p::swarm::{ConnectionId, SwarmEvent};
-use libp2p::{PeerId, autonat, gossipsub, identify, kad, mdns, request_response};
+use libp2p::{PeerId, autonat, gossipsub, identify, kad, mdns, request_response, upnp};
 use serde_json::Value;
 
 use crate::p2p::P2pError;
@@ -24,6 +24,11 @@ impl<S: StorageBackend> EventLoop<S> {
     pub(super) fn handle_swarm_event(&mut self, event: SwarmEvent<SparkBehaviourEvent>) {
         match event {
             SwarmEvent::NewListenAddr { .. } => {
+                // relay 角色服务时登记 external address（预约响应地址来源，
+                // 见 register_relay_external_addrs 注释）。每个 NewListenAddr
+                // 都跑：多监听地址逐个异步生效，首次事件时公网段（如 tcp6）
+                // 可能尚未绑定，幂等重复登记无副作用。
+                self.register_relay_external_addrs(None);
                 if !self.port_persisted {
                     let addrs = self.listen_addr_strings();
                     if let Some(port) = listen_port::parse_ws_listen_port(&addrs)
@@ -581,6 +586,26 @@ impl<S: StorageBackend> EventLoop<S> {
                 // server 自动启停 + spark:relay 共享池 provide/撤下
                 self.on_autonat_status_changed(new);
             }
+            // U2 向导三态（relay-implementation §3）：UPnP 映射状态记账——
+            // 成功映射记账地址；映射过期同址清除并标失败；网关探测失败标失败
+            SparkBehaviourEvent::Upnp(upnp::Event::NewExternalAddr(addr)) => {
+                self.upnp_mapping = Some(addr.clone());
+                self.upnp_failed = false;
+                // UPnP 映射地址即公网可达地址：登记 external（预约响应地址来源）
+                self.register_relay_external_addrs(Some(addr));
+            }
+            SparkBehaviourEvent::Upnp(upnp::Event::ExpiredExternalAddr(addr)) => {
+                if self.upnp_mapping.as_ref() == Some(&addr) {
+                    self.upnp_mapping = None;
+                }
+                self.upnp_failed = true;
+            }
+            SparkBehaviourEvent::Upnp(
+                upnp::Event::GatewayNotFound | upnp::Event::NonRoutableGateway,
+            ) => {
+                // 网关未找到/网关非公网（双层 NAT 迹象）：UPnP 不可用
+                self.upnp_failed = true;
+            }
             SparkBehaviourEvent::Mdns(mdns::Event::Discovered(peers)) => {
                 let now = self.now();
                 let self_id = self.self_peer_id().to_base58();
@@ -791,6 +816,18 @@ impl<S: StorageBackend> EventLoop<S> {
                 ..
             }) => {
                 self.resolve_org_failure(request_id, true);
+            }
+            SparkBehaviourEvent::RelayServer(libp2p::relay::Event::ReservationReqAccepted {
+                src_peer_id,
+                ..
+            }) => {
+                eprintln!("[p2p] relay server: reservation accepted from {src_peer_id}");
+            }
+            SparkBehaviourEvent::RelayServer(libp2p::relay::Event::ReservationReqDenied {
+                src_peer_id,
+                ..
+            }) => {
+                eprintln!("[p2p] relay server: reservation DENIED for {src_peer_id}");
             }
             SparkBehaviourEvent::RelayClient(libp2p::relay::client::Event::ReservationReqAccepted {
                 relay_peer_id,

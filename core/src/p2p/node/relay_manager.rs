@@ -143,10 +143,17 @@ impl<S: StorageBackend> EventLoop<S> {
         {
             return;
         }
-        // 构造 /p2p/<relayPeer>/p2p-circuit 监听地址
-        let mut circuit_addr = Multiaddr::empty();
-        circuit_addr.push(Protocol::P2p(relay_peer.into()));
-        circuit_addr.push(Protocol::P2pCircuit);
+        // 电路监听地址必须携带 relay 的完整传输地址
+        // （<relay-addr>/p2p/<relayPeer>/p2p-circuit）：libp2p-relay 0.21
+        // client transport 对裸 /p2p/<relayPeer>/p2p-circuit 返回
+        // MissingRelayAddr（listen_on Err，预约永远无法形成）。
+        let circuit_addr = self.build_circuit_address(relay_peer);
+        if !multiaddr_has_transport(&circuit_addr) {
+            // overlay 尚无该 relay 的可用传输地址，listen_on 必失败——
+            // 本轮跳过，等地址到位后由周期 tick 重试。
+            return;
+        }
+        eprintln!("[p2p] relay reservation request -> {relay_peer} addr={circuit_addr}");
         if self.swarm.listen_on(circuit_addr).is_err() {
             self.emit(super::P2pEvent::Warning(format!(
                 "relay listen failed for {relay_peer}"
@@ -163,6 +170,7 @@ impl<S: StorageBackend> EventLoop<S> {
     /// （§4.6.1：对端可据其中 relay 的完整地址直接拨号走中继）；裸 `/p2p/<relayPeer>/p2p-circuit`
     /// 缺 relay 可达地址，冷启动拨号方拨不动。
     pub(super) fn on_reservation_accepted(&mut self, relay_peer: PeerId) {
+        eprintln!("[p2p] relay reservation accepted from {relay_peer}");
         // 预约确认：结束 in-flight
         self.relay_reservations_inflight.remove(&relay_peer);
         let circuit_addr = self.build_circuit_address(relay_peer);
@@ -181,7 +189,7 @@ impl<S: StorageBackend> EventLoop<S> {
     /// 构造对外可达的完整电路地址：取 relay peer 的邻居池已知地址（过滤不可路由/
     /// link-local），追加 `/p2p/<relayPeer>/p2p-circuit`。若拿不到完整地址则回退为
     /// `/p2p/<relayPeer>/p2p-circuit`（对端已有该 relay 连接时仍可用）。
-    fn build_circuit_address(&mut self, relay_peer: PeerId) -> Multiaddr {
+    pub(super) fn build_circuit_address(&mut self, relay_peer: PeerId) -> Multiaddr {
         let base_addrs: Vec<String> = {
             let mut store = crate::p2p::overlay_store::OverlayPeerStore::new(&mut self.storage);
             store
@@ -213,6 +221,12 @@ impl<S: StorageBackend> EventLoop<S> {
             }
         }
         if let Some(mut ma) = best {
+            // 基地址可能自带 /p2p/<peer> 尾段（overlay 来源不一）：剥掉再拼，
+            // 否则得到 .../p2p/<relay>/p2p/<relay>/p2p-circuit 双重尾段，
+            // 电路监听/拨号无法成立（真机实测）。
+            if matches!(ma.iter().last(), Some(Protocol::P2p(_))) {
+                ma.pop();
+            }
             ma.push(Protocol::P2p(relay_peer.into()));
             ma.push(Protocol::P2pCircuit);
             return ma;
@@ -318,7 +332,7 @@ impl<S: StorageBackend> EventLoop<S> {
             return;
         }
         match status {
-            autonat::NatStatus::Public(_) => {
+            autonat::NatStatus::Public(ref addr) => {
                 if self.swarm.behaviour().relay_server.as_ref().is_none() {
                     let local = self.self_peer_id();
                     self.swarm.behaviour_mut().relay_server =
@@ -326,6 +340,8 @@ impl<S: StorageBackend> EventLoop<S> {
                             crate::p2p::behaviour::build_relay_server(local),
                         ));
                 }
+                // 预约响应地址来源：登记 external address（含判定地址本身）
+                self.register_relay_external_addrs(Some(addr.clone()));
                 // R2：就绪（Public + 角色开启）即对共享池 provide/刷新
                 self.provide_relay_pool_record();
             }
@@ -344,6 +360,30 @@ impl<S: StorageBackend> EventLoop<S> {
                     .remove(crate::p2p::constants::SPARK_RELAY_KEY.as_bytes());
             }
             autonat::NatStatus::Unknown => {}
+        }
+    }
+
+    /// relay 角色服务期间登记 external address：libp2p relay server 的预约
+    /// 响应只携带 swarm external addresses——空集时客户端以
+    /// NoAddressesInReservation 失败，预约永远无法成立（真机实测）。登记范围
+    /// = 公网段监听地址（与 spark:relay 共享池发布同口径
+    /// is_public_external_addr）+ 可选显式地址（AutoNAT Public 判定地址、
+    /// UPnP 映射地址）。角色未服务时（Toggle None）不登记。
+    pub(super) fn register_relay_external_addrs(&mut self, extra: Option<Multiaddr>) {
+        if self.swarm.behaviour().relay_server.as_ref().is_none() {
+            return;
+        }
+        if let Some(addr) = extra {
+            self.swarm.add_external_address(addr);
+        }
+        let candidates: Vec<Multiaddr> = self
+            .listen_addr_strings()
+            .into_iter()
+            .filter_map(|a| a.parse::<Multiaddr>().ok())
+            .filter(|ma| crate::p2p::peer_targets::is_public_external_addr(ma))
+            .collect();
+        for ma in candidates {
+            self.swarm.add_external_address(ma);
         }
     }
 
@@ -409,6 +449,14 @@ impl<S: StorageBackend> EventLoop<S> {
             reservations,
             pool_size: self.relay_pool_candidates.len(),
             stability_low: self.relay_stability_low,
+            upnp: if self.upnp_mapping.is_some() {
+                "mapped"
+            } else if self.upnp_failed {
+                "failed"
+            } else {
+                "unknown"
+            }
+            .to_string(),
         }
     }
 
@@ -473,11 +521,51 @@ impl<S: StorageBackend> EventLoop<S> {
                 .build();
             let _ = self.swarm.dial(opts);
         }
+        // #2 stability 回填：get_providers 只回 PeerId——对 spark:relay 补一次
+        // get_record 取载荷解析 stability（last-writer 单记录，多 provider 的
+        // stability 以现存记录为准；无载荷/失败静默，保持「无降权」现状）
+        if let Some(kad) = self.swarm.behaviour_mut().kad.as_mut() {
+            let query_id = kad.get_record(kad::RecordKey::new(
+                &crate::p2p::constants::SPARK_RELAY_KEY,
+            ));
+            self.relay_pool_record_queries.insert(query_id);
+        }
+    }
+
+    /// #2：spark:relay 载荷回填（resolve_dht_get 分流）——解析
+    /// [`RelayProviderHint`] 的 stability，低稳候选记入 `relay_pool_stability`
+    /// （R3 `sort_relay_tier` 据此垫底）；非 low/缺字段清除标记（覆盖旧值）。
+    pub(super) fn on_relay_pool_record(&mut self, result: kad::GetRecordResult) {
+        let Ok(kad::GetRecordOk::FoundRecord(peer_record)) = result else {
+            return;
+        };
+        let Some(hint) = RelayProviderHint::from_record_value(&peer_record.record.value)
+        else {
+            return;
+        };
+        let Ok(peer) = hint.peer_id.parse::<PeerId>() else {
+            return;
+        };
+        if hint.stability.as_deref() == Some("low") {
+            self.relay_pool_stability.insert(peer, true);
+        } else {
+            self.relay_pool_stability.remove(&peer);
+        }
     }
 }
 
 /// 从电路监听地址（…/p2p/<relayPeer>/p2p-circuit）提取 relay peer。
 /// 仅当地址含 /p2p-circuit 段时返回——普通监听地址关闭不涉及预约状态。
+/// multiaddr 是否含可用传输段（非 unspecified 的 Ip4/Ip6）——电路监听地址
+/// 的 relay 段完整性检查（build_circuit_address 回退裸形式时为 false）。
+fn multiaddr_has_transport(addr: &Multiaddr) -> bool {
+    addr.iter().any(|p| match p {
+        Protocol::Ip4(ip) => !ip.is_unspecified(),
+        Protocol::Ip6(ip) => !ip.is_unspecified() && !ip.is_loopback(),
+        _ => false,
+    })
+}
+
 fn circuit_addr_relay_peer(addr: &Multiaddr) -> Option<PeerId> {
     let mut relay = None;
     let mut has_circuit = false;

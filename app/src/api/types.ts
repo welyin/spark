@@ -181,6 +181,8 @@ export type RelayStatusDto = {
   reservations: RelayReservationDto[];
   poolSize: number;
   stabilityLow: boolean;
+  /** UPnP 端口映射三态（U2 向导）：mapped=已映射 / failed=失败或不可用 / unknown=尚无事件 */
+  upnp: 'mapped' | 'failed' | 'unknown';
 };
 
 /** 设备清单项（devices.list 返回，派生自 ElectronAPI；设备管理页数据源）。 */

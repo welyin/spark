@@ -239,6 +239,8 @@ pub(super) struct EventLoop<S: StorageBackend> {
     /// get_providers 只回 PeerId，载荷 stability 需 get_record 补充（后续；
     /// 谓词注入已就位，本机自身 provide 已随载荷宣告）。
     pub(super) relay_pool_stability: std::collections::HashMap<PeerId, bool>,
+    /// #2：spark:relay 载荷回填在途 get_record 查询（stability 闭环）。
+    pub(super) relay_pool_record_queries: std::collections::HashSet<kad::QueryId>,
     /// R2：上次共享池查询时刻（ms，节流依据）。
     pub(super) last_relay_pool_query_at: i64,
     /// R1 动态 IP 降权（粗略口径）：网络快照变化日志（确认变化的时刻 ms，
@@ -248,6 +250,12 @@ pub(super) struct EventLoop<S: StorageBackend> {
     pub(super) relay_stability_low: bool,
     /// AutoNAT 公网判定快照（U1 状态页；StatusChanged 时更新）。
     pub(super) nat_status: super::NatStatusLabel,
+    /// UPnP 最新成功外部映射地址（U2 向导三态；NewExternalAddr 记账，
+    /// ExpiredExternalAddr 同址时清除）。
+    pub(super) upnp_mapping: Option<Multiaddr>,
+    /// UPnP 失败/不可用标记（ExpiredExternalAddr / GatewayNotFound /
+    /// NonRoutableGateway 置位；尚无事件时为 false → 状态展示 unknown）。
+    pub(super) upnp_failed: bool,
     /// dm 入站异步处理完成通道：任务经 tx 送回结果，事件循环收到后
     /// 按任务 id 找回 ResponseChannel 并 send_response。
     pub(super) dm_completion_tx: mpsc::UnboundedSender<DmCompletion>,
