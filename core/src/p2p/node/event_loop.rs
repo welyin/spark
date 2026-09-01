@@ -349,6 +349,33 @@ fn is_ipv6_link_local(address: &str) -> bool {
     }
 }
 
+/// 环回地址（127.0.0.0/8 / ::1）：与远端可达性无关，不计入网络变化快照。
+fn is_loopback_addr(address: &str) -> bool {
+    let Ok(addr) = address.parse::<Multiaddr>() else {
+        return false;
+    };
+    match addr.iter().next() {
+        Some(Protocol::Ip4(ip)) => ip.is_loopback(),
+        Some(Protocol::Ip6(ip)) => ip.is_loopback(),
+        _ => false,
+    }
+}
+
+/// 可达性归一键：v4 全地址；v6 仅 /64 前缀（同一前缀内的临时地址轮换
+/// 不构成网络变化）。
+fn canonical_reach_key(address: String) -> String {
+    let Ok(addr) = address.parse::<Multiaddr>() else {
+        return address;
+    };
+    match addr.iter().next() {
+        Some(Protocol::Ip6(ip)) => {
+            let seg = ip.segments();
+            format!("/ip6/{:x}:{:x}:{:x}:{:x}:*", seg[0], seg[1], seg[2], seg[3])
+        }
+        _ => address,
+    }
+}
+
 impl<S: StorageBackend> EventLoop<S> {
     pub(super) fn now(&self) -> i64 {        (self.now_fn)()
     }
@@ -568,6 +595,12 @@ impl<S: StorageBackend> EventLoop<S> {
             .into_iter()
             .map(|addr| addr.to_string())
             .filter(|a| !is_ipv6_link_local(a))
+            // 环回具体 listener（若出现）对远端可达性判定无意义，剔除
+            // （真机实测：虚拟网卡/VPN 抖动会把环回地址带进快照引发假变化）。
+            .filter(|a| !is_loopback_addr(a))
+            // 可达性归一：v6 仅保留 /64 前缀——临时隐私地址轮换只在同一前缀内
+            // 变，是假变化的常见来源（真机实测每数分钟轮换触发一轮突发重拨）。
+            .map(canonical_reach_key)
             .collect();
         // 排序去重：Vec 比较对顺序敏感，接口枚举顺序不稳定会造成假变化
         addrs.sort();
@@ -602,6 +635,12 @@ impl<S: StorageBackend> EventLoop<S> {
         if let Some(base) = &self.last_network_snapshot
             && base != &current
         {
+            // [诊断] 快照差异打点：懒连接下突发拨号的归因证据（应为低频）。
+            let removed: Vec<_> = base.iter().filter(|a| !current.contains(a)).collect();
+            let added: Vec<_> = current.iter().filter(|a| !base.contains(a)).collect();
+            log::info!(
+                "[NETCHG] snapshot changed | +{added:?} -{removed:?}"
+            );
             self.arm_network_change_timer();
         }
         self.last_network_snapshot = Some(current);
