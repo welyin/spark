@@ -28,7 +28,7 @@
 mod contact_group_ops;
 mod contact_ops;
 mod contact_request_ops;
-mod data_access;
+pub(crate) mod data_access;
 mod data_orgq;
 mod data_orgq_read;
 mod device_ops;

@@ -774,8 +774,9 @@ fn orgq_online_delete_writes_tombstone_and_org_dlog() {
     let (m_key, m_root) = self_identity(3);
     let (_self_key, self_root) = self_identity(2);
     let mut s = setup_filtered_collection(&self_root, &m_root);
-    // 数据账号先驻留一条记录（vv=1）
-    write_org_data(&mut s, "node-b", ORG_ID, NAME, VERSION, "k-del", "\"v1\"", NOW);
+    // 数据账号先驻留一条记录
+    let resident = write_org_data(&mut s, "node-b", ORG_ID, NAME, VERSION, "k-del", "\"v1\"", NOW);
+    let resident_seq = *resident.vv.get("node-b").unwrap();
     let record_key = format!("{}k-del", org_data_prefix(ORG_ID, NAME, VERSION));
     assert!(s.get(&record_key).unwrap().is_some(), "删除前记录驻留");
 
@@ -795,9 +796,24 @@ fn orgq_online_delete_writes_tombstone_and_org_dlog() {
     assert_eq!(resp["accepted"], json!(1), "删除受理 accepted");
     // 记录本体已删除
     assert!(s.get(&record_key).unwrap().is_none(), "记录本体已删（不落 null 字符串）");
-    // 墓碑 pmeta 已写（tombstone: true, vv bump）
+    // 墓碑 pmeta 已写（tombstone: true, vv = per-node 序号分配器当前值）
     let meta = get_personal_meta(&s, &record_key).unwrap().expect("墓碑 pmeta 存在");
     assert_eq!(meta.tombstone, Some(true), "pmeta 墓碑标记");
+    let alloc_seq = spark_core::sync::personal::current_vv_seq(&s, "node-b").unwrap();
+    assert!(
+        alloc_seq > resident_seq,
+        "受理删除须推进序号分配器越过驻留写（修复前 per-key bump 不动序号键 → 折叠失明）"
+    );
+    assert_eq!(
+        meta.vv.get("node-b"),
+        Some(&alloc_seq),
+        "墓碑 vv = 序号分配器当前值（per-node 序号）"
+    );
+    assert_eq!(
+        s.get("p2p:vvseq:node-b").unwrap().and_then(|v| v.parse::<i64>().ok()),
+        Some(alloc_seq),
+        "p2p:vvseq 序号键随墓碑同 batch 推进"
+    );
     // org 域 dlog 有序号
     let entries = org_dlog_entries_after(&s, ORG_ID, NAME, VERSION, 0).unwrap();
     assert_eq!(entries.len(), 1, "org dlog 有条目");
@@ -823,7 +839,8 @@ fn orgq_offline_delete_replay_writes_tombstone() {
     declare_org_collection(&mut s, "node-b", ORG_ID, NAME, VERSION, Accounts::DataAccounts, &self_root, NOW);
     let col = format!("{NAME}@v{VERSION}");
     // 数据账号侧先驻留记录
-    write_org_data(&mut s, "node-b", ORG_ID, NAME, VERSION, "k-del", "\"v1\"", NOW);
+    let resident = write_org_data(&mut s, "node-b", ORG_ID, NAME, VERSION, "k-del", "\"v1\"", NOW);
+    let resident_seq = *resident.vv.get("node-b").unwrap();
     let record_key = format!("{}k-del", org_data_prefix(ORG_ID, NAME, VERSION));
 
     // 成员离线写删除入队（value:null）
@@ -857,6 +874,21 @@ fn orgq_offline_delete_replay_writes_tombstone() {
     assert!(s.get(&record_key).unwrap().is_none(), "离线删除记录本体已删");
     let meta = get_personal_meta(&s, &record_key).unwrap().expect("墓碑 pmeta 存在");
     assert_eq!(meta.tombstone, Some(true), "pmeta 墓碑标记");
+    let alloc_seq = spark_core::sync::personal::current_vv_seq(&s, "node-b").unwrap();
+    assert!(
+        alloc_seq > resident_seq,
+        "受理删除须推进序号分配器越过驻留写"
+    );
+    assert_eq!(
+        meta.vv.get("node-b"),
+        Some(&alloc_seq),
+        "墓碑 vv = 序号分配器当前值（per-node 序号）"
+    );
+    assert_eq!(
+        s.get("p2p:vvseq:node-b").unwrap().and_then(|v| v.parse::<i64>().ok()),
+        Some(alloc_seq),
+        "p2p:vvseq 序号键随墓碑同 batch 推进"
+    );
     let entries = org_dlog_entries_after(&s, ORG_ID, NAME, VERSION, 0).unwrap();
     assert_eq!(entries.len(), 1, "org dlog 有条目");
     assert_eq!(entries[0].1, record_key);

@@ -160,7 +160,8 @@ impl OrganizationService {
             Some(node_id) => {
                 Self::save_record_pdsync(storage, &record, now_ms, node_id)?;
                 // O2b 工作项 1：注册内建 all-members 集合（org:structure/
-                // org:contacts/org:invites），声明记录随 orgsync 声明先行同步。
+                // org:contacts），声明记录随 orgsync 声明先行同步。（F7：
+                // org:invites 已退出 orgsync，不再注册。）
                 crate::plugindata::declare_builtin_org_collections(
                     storage,
                     &record.org_id,

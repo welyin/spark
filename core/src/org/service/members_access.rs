@@ -33,31 +33,41 @@ impl OrganizationService {
         current_root_id: &str,
         now_ms: i64,
     ) -> Result<OrganizationRecord> {
-        Self::publish_access_key_impl(storage, org_id, access_key, current_root_id, now_ms, None)
+        let mut record = Self::require_organization(storage, org_id)?;
+        if Self::publish_access_key_mutate(storage, &mut record, org_id, access_key, current_root_id, now_ms)? {
+            Self::save_record(storage, &record)?;
+        }
+        Ok(record)
     }
 
-    /// pdsync 感知的 [`Self::publish_access_key`]：落库走
-    /// [`Self::save_record_pdsync`]（`org:meta` 写 pmeta，可经自设备 pdsync 同步）。
+    /// pdsync 感知的 [`Self::publish_access_key`]：落库走原子段原语
+    /// [`Self::update_record_atomic`]（F8——本函数正是联调 F1/F8 的高频
+    /// 并发写入口；`org:meta` 写 pmeta，可经自设备 pdsync 同步）。
     pub fn publish_access_key_pdsync<S: StorageBackend>(
         storage: &mut S,
+        io_lock: &super::OrgMetaWriteLock,
         org_id: &str,
         access_key: &OrganizationAccessKey,
         current_root_id: &str,
         now_ms: i64,
         node_id: &str,
     ) -> Result<OrganizationRecord> {
-        Self::publish_access_key_impl(storage, org_id, access_key, current_root_id, now_ms, Some(node_id))
+        let _ = node_id; // 记账由中间件完成，参数保留以稳定签名
+        Self::update_record_atomic(storage, io_lock, org_id, |storage, record| {
+            Self::publish_access_key_mutate(storage, record, org_id, access_key, current_root_id, now_ms)
+        })
     }
 
-    fn publish_access_key_impl<S: StorageBackend>(
+    /// F8 拆段的纯变更段：返回是否发生变更（accessKey 无变化 → Ok(false)
+    /// 幂等无写）。
+    fn publish_access_key_mutate<S: StorageBackend>(
         storage: &mut S,
+        record: &mut OrganizationRecord,
         org_id: &str,
         access_key: &OrganizationAccessKey,
         current_root_id: &str,
         now_ms: i64,
-        node_id: Option<&str>,
-    ) -> Result<OrganizationRecord> {
-        let mut record = Self::require_organization(storage, org_id)?;
+    ) -> Result<bool> {
         let Some(index) = record
             .members
             .iter()
@@ -67,7 +77,7 @@ impl OrganizationService {
         };
         // 幂等：accessKey 无变化不 bump 版本
         if record.members[index].access_key.as_ref() == Some(access_key) {
-            return Ok(record);
+            return Ok(false);
         }
         record.members[index].access_key = Some(access_key.clone());
         record.updated_at = now_ms;
@@ -89,14 +99,10 @@ impl OrganizationService {
             },
         )?;
         Self::rebuild_sync_after_mutation(
-            &mut record,
+            record,
             previous_last_synced_at,
             transaction.created_at,
         );
-        match node_id {
-            Some(node_id) => Self::save_record_pdsync(storage, &record, now_ms, node_id)?,
-            None => Self::save_record(storage, &record)?,
-        }
-        Ok(record)
+        Ok(true)
     }
 }

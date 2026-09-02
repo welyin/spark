@@ -19,9 +19,12 @@ import threading
 import time
 from pathlib import Path
 
-# 节点二进制：code/core/target/debug/examples/e2e_node（env 可覆盖）
+# 节点二进制：code/core/target/debug/examples/e2e_node（env 可覆盖；
+# Windows 下为 e2e_node.exe）
 CODE_CORE = Path(__file__).resolve().parents[2] / "core"
 DEFAULT_BIN = CODE_CORE / "target" / "debug" / "examples" / "e2e_node"
+if os.name == "nt":
+    DEFAULT_BIN = DEFAULT_BIN.with_suffix(".exe")
 NODE_BIN = Path(os.environ.get("E2E_NODE_BIN", DEFAULT_BIN))
 
 # 事件/命令默认超时（秒）
@@ -105,7 +108,9 @@ class Node:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=stderr_log,
-            text=True,
+            # 节点输出为 UTF-8（含中文昵称/组织名）；Windows 缺省 GBK 会解码失败
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
         )
         self._reader = threading.Thread(target=self._read_loop, daemon=True)
@@ -157,6 +162,11 @@ class Node:
 
     def stop_p2p(self):
         self.send("stop-p2p")
+
+    def set_org_pull_blackhole(self, on):
+        """故障注入（F6 验收，org-sync-stall-fix §5）：on=True 后本节点
+        收到 org-pull 请求不应答（复现对端半连接长超时）。"""
+        return self.send("fault-org-pull-blackhole", on=on)
 
     # ------------------------------------------------------------------
     # 命令收发

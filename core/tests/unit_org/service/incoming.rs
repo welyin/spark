@@ -41,6 +41,7 @@ fn apply_node_info_claim_full_rules() {
     // 落库：admin + 成员双条件满足
     let applied = OrganizationService::apply_node_info_claim(
         &mut storage,
+        &crate::test_io_lock(),
         &claim,
         &admin,
         Some("12D3KooWMember"),
@@ -72,6 +73,7 @@ fn apply_node_info_claim_full_rules() {
     // 与现有 nodeInfo 完全一致 → 跳过，不 bump 版本
     let applied = OrganizationService::apply_node_info_claim(
         &mut storage,
+        &crate::test_io_lock(),
         &claim,
         &admin,
         Some("12D3KooWMember"),
@@ -87,6 +89,7 @@ fn apply_node_info_claim_full_rules() {
     // remotePeerId 不匹配 → 静默丢弃
     let applied = OrganizationService::apply_node_info_claim(
         &mut storage,
+        &crate::test_io_lock(),
         &claim,
         &admin,
         Some("12D3KooWOther"),
@@ -98,6 +101,7 @@ fn apply_node_info_claim_full_rules() {
     // 非 admin 当前用户 → 静默跳过
     let applied = OrganizationService::apply_node_info_claim(
         &mut storage,
+        &crate::test_io_lock(),
         &claim,
         &rid('x'),
         None,
@@ -110,6 +114,7 @@ fn apply_node_info_claim_full_rules() {
     let outsider_claim = claim_for(MNEMONIC, Some("12D3KooWAdmin2"), NOW);
     let applied = OrganizationService::apply_node_info_claim(
         &mut storage,
+        &crate::test_io_lock(),
         &outsider_claim,
         &member_id,
         None,
@@ -121,7 +126,7 @@ fn apply_node_info_claim_full_rules() {
     // 过期 claim → 不落库
     let stale_claim = claim_for(MNEMONIC2, Some("12D3KooWMember"), NOW - 20 * 60 * 1000);
     let applied =
-        OrganizationService::apply_node_info_claim(&mut storage, &stale_claim, &admin, None, NOW)
+        OrganizationService::apply_node_info_claim(&mut storage, &crate::test_io_lock(), &stale_claim, &admin, None, NOW)
             .unwrap();
     assert!(applied.is_empty());
 }
@@ -135,7 +140,7 @@ fn recovery_view_admin_lazy_backfill() {
         .unwrap();
 
     // 有 recoverySecret → 直接返回，只有含地址成员的 nodeInfo
-    let view = OrganizationService::get_recovery_view(&mut storage, &admin, NOW, "node-a").unwrap();
+    let view = OrganizationService::get_recovery_view(&mut storage, &crate::test_io_lock(), &admin, NOW, "node-a").unwrap();
     assert_eq!(view.len(), 1);
     assert_eq!(view[0].org_id, record.org_id);
     assert_eq!(view[0].recovery_secret.len(), 64);
@@ -160,10 +165,10 @@ fn recovery_view_admin_lazy_backfill() {
     OrganizationService::save_record(&mut storage, &bare).unwrap();
 
     // 非 admin 成员本轮跳过
-    let view = OrganizationService::get_recovery_view(&mut storage, &member_id, NOW + 10, "node-a").unwrap();
+    let view = OrganizationService::get_recovery_view(&mut storage, &crate::test_io_lock(), &member_id, NOW + 10, "node-a").unwrap();
     assert!(view.is_empty());
     // admin 补齐：生成盐、bump updatedAt、保留 transactionsVersion 与 lastSyncedAt
-    let view = OrganizationService::get_recovery_view(&mut storage, &admin, NOW + 20, "node-a").unwrap();
+    let view = OrganizationService::get_recovery_view(&mut storage, &crate::test_io_lock(), &admin, NOW + 20, "node-a").unwrap();
     assert_eq!(view.len(), 1);
     assert_eq!(view[0].recovery_secret.len(), 64);
     let patched = OrganizationService::get_record(&storage, &record.org_id)
@@ -178,7 +183,7 @@ fn recovery_view_admin_lazy_backfill() {
     );
     assert_eq!(sync.last_synced_at, 777, "保留原 lastSyncedAt");
     // 成员侧随后也能看到
-    let view = OrganizationService::get_recovery_view(&mut storage, &member_id, NOW + 30, "node-a").unwrap();
+    let view = OrganizationService::get_recovery_view(&mut storage, &crate::test_io_lock(), &member_id, NOW + 30, "node-a").unwrap();
     assert_eq!(view.len(), 1);
 }
 
@@ -189,7 +194,7 @@ fn apply_incoming_snapshot_accepts_both_shapes() {
     // 原始记录线形（org-share 推送）
     let value = serde_json::to_value(&record).unwrap();
     let merged =
-        OrganizationService::apply_incoming_snapshot(&mut storage, &value, NOW + 1).unwrap();
+        OrganizationService::apply_incoming_snapshot(&mut storage, &crate::test_io_lock(), &value, NOW + 1).unwrap();
     assert_eq!(merged.org_id, record.org_id);
     assert_eq!(merged.sync.as_ref().unwrap().last_synced_at, NOW + 1);
 
@@ -197,7 +202,7 @@ fn apply_incoming_snapshot_accepts_both_shapes() {
     let snapshot = spark_core::org::snapshot::build_organization_sync_snapshot(&record, &[]);
     let value2 = serde_json::to_value(&snapshot).unwrap();
     let merged2 =
-        OrganizationService::apply_incoming_snapshot(&mut storage, &value2, NOW + 2).unwrap();
+        OrganizationService::apply_incoming_snapshot(&mut storage, &crate::test_io_lock(), &value2, NOW + 2).unwrap();
     assert_eq!(merged2.members.len(), 1);
     assert_eq!(merged2.sync.as_ref().unwrap().last_synced_at, NOW + 2);
 }
@@ -222,14 +227,14 @@ fn apply_incoming_snapshot_propagates_avatar() {
     let mut member_storage = MemoryStorage::new();
     let value = serde_json::to_value(&record).unwrap();
     let merged =
-        OrganizationService::apply_incoming_snapshot(&mut member_storage, &value, NOW + 1).unwrap();
+        OrganizationService::apply_incoming_snapshot(&mut member_storage, &crate::test_io_lock(), &value, NOW + 1).unwrap();
     assert_eq!(merged.avatar, logo);
 
     // 快照线形（org-pull 响应）同样携带
     let snapshot = spark_core::org::snapshot::build_organization_sync_snapshot(&record, &[]);
     let value2 = serde_json::to_value(&snapshot).unwrap();
     let merged2 =
-        OrganizationService::apply_incoming_snapshot(&mut member_storage, &value2, NOW + 2).unwrap();
+        OrganizationService::apply_incoming_snapshot(&mut member_storage, &crate::test_io_lock(), &value2, NOW + 2).unwrap();
     assert_eq!(merged2.avatar, logo);
 
     // listMine 的 OrgView 里可见 avatar

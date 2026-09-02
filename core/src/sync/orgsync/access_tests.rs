@@ -274,3 +274,78 @@ fn orgkey_pending_key_and_scan_parse() {
     orgkey_pending_remove(&mut store, org, col, &recipient, 3);
     assert!(orgkey_pending_for_org(&store, org).is_empty());
 }
+
+/// F3 残余 §7.2 防回归守卫：pending 键迁出同步命名空间——`orgkey-pending:`
+/// 连字符前缀不匹配 pdsync `orgkey:` category、不属任何 orgsync 受管键域；
+/// 版本化句柄写 pending 不产生 pmeta（本地键不进同步流量，任何句柄都不会
+/// 误入——命名空间级不变量，不依赖调用方走 raw）。
+#[test]
+fn orgkey_pending_key_outside_sync_namespace() {
+    let key = orgkey_pending_key("org_01", "ai-chat:payroll@v1.0.0", &"r".repeat(64), 1);
+    assert!(key.starts_with("orgkey-pending:"));
+    assert!(
+        crate::sync::pdsync::category_for_key(&key).is_none(),
+        "pending 键不匹配任何 pdsync category"
+    );
+    assert!(
+        crate::sync::orgsync::legacy_org_key_scope(&key).is_none(),
+        "pending 键不属内建集合键域"
+    );
+    // 版本化句柄写 pending：不产生 pmeta（修复前 orgkey: 前缀误入 category）
+    use crate::storage::StorageBackend as _;
+    let mut s = crate::sync::versioned::VersionedStorage::new(
+        crate::storage::MemoryStorage::new(),
+        crate::sync::versioned::shared_node_id("node-a"),
+    );
+    s.put(&key, "1700").unwrap();
+    assert!(
+        crate::sync::get_personal_meta(s.raw(), &key).unwrap().is_none(),
+        "版本化句柄写 pending 不产生 pmeta"
+    );
+    // 重投删除后不残留（无孤儿 pmeta 可留——从未产生）
+    s.delete(&key).unwrap();
+    assert!(s.get(&key).unwrap().is_none());
+    assert!(
+        crate::sync::get_personal_meta(s.raw(), &key).unwrap().is_none(),
+        "删除后无孤儿 pmeta"
+    );
+    // 暂存键同口径（§7.1 本地键）
+    let stash = orgkey_stash_key("org_01", "ai-chat:payroll@v1.0.0", &"s".repeat(64), 2);
+    assert!(crate::sync::pdsync::category_for_key(&stash).is_none());
+}
+
+/// F3 残余 §7.1：暂存键 put/scan/remove 往返 + 同键 ts 新者覆盖（去重）。
+#[test]
+fn orgkey_stash_roundtrip_and_ts_overwrite() {
+    let mut store = crate::storage::MemoryStorage::new();
+    let org = "org_0000000000000001";
+    let col = "ai-chat:payroll@v1.0.0"; // 含 `:` 分隔符（右向解析）
+    let sender = "s".repeat(64);
+    let body_old = json!({"orgId": org, "collection": col, "epoch": 2, "ts": 1000});
+    let body_new = json!({"orgId": org, "collection": col, "epoch": 2, "ts": 2000});
+    orgkey_stash_put(&mut store, org, col, &sender, 2, &body_old);
+    orgkey_stash_put(&mut store, org, col, &sender, 2, &body_new);
+    let stashed = orgkey_stash_for_org(&store, org);
+    assert_eq!(stashed.len(), 1, "同键去重");
+    assert_eq!(stashed[0].0, col);
+    assert_eq!(stashed[0].1, sender);
+    assert_eq!(stashed[0].2, 2);
+    assert_eq!(stashed[0].3, serde_json::to_string(&body_new).unwrap(), "ts 新者覆盖");
+    // 旧 ts 不回覆盖
+    orgkey_stash_put(&mut store, org, col, &sender, 2, &body_old);
+    assert_eq!(
+        orgkey_stash_for_org(&store, org)[0].3,
+        serde_json::to_string(&body_new).unwrap(),
+        "旧 ts 不覆盖新者"
+    );
+    // 换 org 扫描不到；删除后消失
+    assert!(orgkey_stash_for_org(&store, "org_other").is_empty());
+    orgkey_stash_remove(&mut store, org, col, &sender, 2);
+    assert!(orgkey_stash_for_org(&store, org).is_empty());
+    // 暂存不污染同步流量：无 pmeta 产生（裸写路径）
+    assert!(
+        crate::sync::get_personal_meta(&store, &orgkey_stash_key(org, col, &sender, 2))
+            .unwrap()
+            .is_none()
+    );
+}

@@ -104,10 +104,17 @@ pub fn set_meta<S: StorageBackend>(
     Ok(())
 }
 
-/// `generateUpdatedMeta`：在既有 meta 上递增本节点计数并刷新时间戳。
+/// `generateUpdatedMeta`：刷新本节点 vv 分量与时间戳。
 ///
-/// `now_ms` 由调用方注入（对齐 TS `Date.now()`）；既有 meta 的其余字段（如
-/// tombstone）原样保留——逐行对齐 TS 行为。
+/// vv 分量取 **per-node 单调序号**（`current_vv_seq` 分配器，与个人/org 域
+/// 共享 `p2p:vvseq:{nodeId}`，见 wiki/architecture/sync/org-vv-fix.md §2.3），
+/// 替换 TS 遗留的 per-key 计数——同一节点只允许一条计数语义。
+///
+/// 返回 `(meta, seq)`：调用方必须把 [`crate::sync::personal::vv_seq_batch_op`]
+/// 并入与 meta 落库的**同一 batch**（序号键与记录原子提交）。既有 meta 的
+/// 其余字段（如 tombstone）原样保留——逐行对齐 TS 行为。
+///
+/// `now_ms` 由调用方注入（对齐 TS `Date.now()`）。
 pub fn generate_updated_meta<S: StorageBackend>(
     storage: &S,
     node_id: &str,
@@ -115,12 +122,13 @@ pub fn generate_updated_meta<S: StorageBackend>(
     collection: &str,
     id: &str,
     now_ms: i64,
-) -> crate::sync::SyncResult<DocMeta> {
+) -> crate::sync::SyncResult<(DocMeta, i64)> {
     let mut meta = get_meta(storage, domain, collection, id)?.unwrap_or_default();
-    *meta.vv.entry(node_id.to_string()).or_insert(0) += 1;
+    let seq = crate::sync::personal::current_vv_seq(storage, node_id)? + 1;
+    meta.vv.insert(node_id.to_string(), seq);
     meta.ts = now_ms;
     meta.node_id = Some(node_id.to_string());
-    Ok(meta)
+    Ok((meta, seq))
 }
 
 /// `compareVersionVectors`：逐 key 取大比较；双 null / 双空 → `Equal`。

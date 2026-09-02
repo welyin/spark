@@ -34,17 +34,17 @@ def main():
             lambda d: d["request"]["rootId"] == a.root_id
             and d["request"]["status"] == "accepted",
         )
-        # 双方都有同 rootId 的设备朋友记录（带对端 peer 寻址）
+        # 双方都有同 rootId 的设备朋友记录（O1 端点化：peers 端点列表含对端寻址）
         device_a = poll_until(
             lambda: a.friend_entry(a.root_id),
             what="A 的设备朋友记录",
         )
         check(
-            device_a["peer"]["peerId"] == a2.peer_id,
-            "A 侧设备记录指向 A2 的 peerId",
+            any(p["peerId"] == a2.peer_id for p in device_a.get("peers", [])),
+            "A 侧设备记录 peers 指向 A2 的 peerId",
         )
         poll_until(
-            lambda: (lambda f: f if f and f.get("peer") else None)(a2.friend_entry(a2.root_id)),
+            lambda: (lambda f: f if f and f.get("peers") else None)(a2.friend_entry(a2.root_id)),
             what="A2 的设备朋友记录",
         )
 

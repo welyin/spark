@@ -55,7 +55,9 @@ use super::listen_port;
 use super::plugin_announce::PluginAnnounceValidator;
 use super::{P2pError, Result};
 
-use api::Command;
+// pub(crate) 再导出：F6 故障注入单测（kernel org-sync stall_tests）经
+// `P2pNode::stub_for_test` 持有命令接收端，需命名 Command 做选择性应答。
+pub(crate) use api::Command;
 use event_loop::EventLoop;
 
 /// 时间源（now_ms 注入）。
@@ -531,6 +533,8 @@ impl P2pNode {
                 .unwrap_or(PLUGIN_ANNOUNCE_RELAY_TENURE_MS),
             peer_connected_since: HashMap::new(),
             topic_cache: HashMap::new(),
+            org_pull_blackhole: false,
+            stalled_pull_channels: Vec::new(),
         };
         let keepalive_interval = config.keepalive_interval;
         let task = tokio::spawn(async move {
@@ -573,6 +577,26 @@ impl P2pNode {
     pub fn take_events(&mut self) -> mpsc::UnboundedReceiver<P2pEvent> {
         let (_tx, rx) = mpsc::unbounded_channel();
         std::mem::replace(&mut self.event_rx, rx)
+    }
+
+    /// 测试用桩节点（F6 故障注入单测）：命令通道接收端交还测试持有——
+    /// 测试扮演「假事件循环」，选择性应答/挂起命令（如 org_pull_request
+    /// 挂起复现对端长超时）。无真实网络与事件循环。
+    #[cfg(test)]
+    pub(crate) fn stub_for_test() -> (Self, mpsc::UnboundedReceiver<Command>) {
+        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+        let (_event_tx, event_rx) = mpsc::unbounded_channel();
+        (
+            Self {
+                peer_id: "stub-peer".to_string(),
+                device_pub_key: String::new(),
+                leaf_mode: false,
+                cmd_tx,
+                event_rx,
+                task: std::sync::Mutex::new(None),
+            },
+            cmd_rx,
+        )
     }
 
     /// 停止节点（`&self` 语义：发送 Shutdown 并等待事件循环退出；重复调用安全）。

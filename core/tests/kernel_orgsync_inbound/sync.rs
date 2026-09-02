@@ -104,6 +104,111 @@ fn orgsync_hello_need_data_converges_two_nodes() {
     assert_eq!(meta_a.vv.get("node-a"), Some(&2));
 }
 
+/// org-vv-fix §4.2 双端收敛（联调前置验收）：A 写 k1 → 删 k1（墓碑经 org
+/// dlog 传播）→ B 收讫墓碑 → A 再写 k2 → B 经 hello→need→data 收讫 k2，
+/// 两端记录集与折叠 vv（node-a 分量）收敛一致。修复前 k2 与墓碑序号碰撞，
+/// 对已持墓碑的 B 永久失明。
+#[test]
+fn orgsync_converges_after_tombstone_then_write() {
+    let (a_key, a_root) = self_identity(1);
+    let (b_key, b_root) = self_identity(2);
+    let mut a = MemoryStorage::new();
+    let mut b = MemoryStorage::new();
+    for (s, rid) in [(&mut a, &a_root), (&mut b, &b_root)] {
+        save_org(
+            s,
+            ORG_ID,
+            vec![
+                (a_root.as_str(), OrganizationRole::Admin),
+                (b_root.as_str(), OrganizationRole::Admin),
+            ],
+            &[],
+        );
+        let _ = rid;
+    }
+    declare_org_collection(&mut a, "node-a", ORG_ID, NAME, VERSION, Accounts::AllMembers, &a_root, NOW);
+    declare_org_collection(&mut b, "node-b", ORG_ID, NAME, VERSION, Accounts::AllMembers, &b_root, NOW);
+
+    let k1 = format!("{}k1", org_data_prefix(ORG_ID, NAME, VERSION));
+    let k2 = format!("{}k2", org_data_prefix(ORG_ID, NAME, VERSION));
+
+    // A 写 k1 → 删 k1（墓碑 + org dlog）
+    write_org_data(&mut a, "node-a", ORG_ID, NAME, VERSION, "k1", "\"v1\"", NOW);
+    let (_, tomb_a) = delete_org_data(&mut a, "node-a", ORG_ID, NAME, VERSION, "k1", NOW + 1);
+    let tomb_seq = *tomb_a.vv.get("node-a").unwrap();
+
+    // 第 1 轮：A hello → B 回 need → A 回 data → B 合入（收讫 k1 墓碑）
+    let hello_a = build_hello_for(&a, ORG_ID, &b_root, "peer-b");
+    let r = deliver_orgsync(
+        &mut b, &b_root, "B", &a_key, &a_root, &b_root,
+        dm_envelope::KIND_ORGSYNC_HELLO, hello_a, "peer-a", "node-b",
+    );
+    let needs: Vec<_> = r.orgsync_out.iter().filter(|o| o.body().get("knownVv").is_some()).collect();
+    assert_eq!(needs.len(), 1, "B 回 need");
+    let r2 = deliver_orgsync(
+        &mut a, &a_root, "A", &b_key, &b_root, &a_root,
+        dm_envelope::KIND_ORGSYNC_NEED, needs[0].body().clone(), "peer-b", "node-a",
+    );
+    let datas: Vec<_> = r2.orgsync_out.iter().filter(|o| o.body().get("records").is_some()).collect();
+    assert!(!datas.is_empty(), "A 回 data");
+    for d in &datas {
+        let r3 = deliver_orgsync(
+            &mut b, &b_root, "B", &a_key, &a_root, &b_root,
+            dm_envelope::KIND_ORGSYNC_DATA, d.body().clone(), "peer-a", "node-b",
+        );
+        assert_eq!(r3.response, json!({ "ok": true }));
+    }
+    // B 端 k1 墓碑已落（B 折叠 vv 含墓碑序号）
+    let b_tomb = get_personal_meta(&b, &k1).unwrap().expect("B 端 k1 墓碑 pmeta");
+    assert!(is_tombstone(&b_tomb), "B 收讫 k1 墓碑");
+    assert_eq!(b_tomb.vv.get("node-a"), Some(&tomb_seq));
+    assert!(b.get(&k1).unwrap().is_none(), "B 端 k1 本体已删");
+
+    // A 受理删除后再写 k2（修复前与墓碑同序号碰撞 → 对 B 失明）
+    write_org_data(&mut a, "node-a", ORG_ID, NAME, VERSION, "k2", "\"v2\"", NOW + 2);
+    let a_k2 = get_personal_meta(&a, &k2).unwrap().unwrap();
+    assert!(
+        a_k2.vv.get("node-a").unwrap() > &tomb_seq,
+        "k2 序号 > 墓碑序号（无碰撞）"
+    );
+
+    // 第 2 轮：A hello → B（折叠已含墓碑序号）回 need → A 回 data → B 合入
+    let hello_a2 = build_hello_for(&a, ORG_ID, &b_root, "peer-b");
+    let r = deliver_orgsync(
+        &mut b, &b_root, "B", &a_key, &a_root, &b_root,
+        dm_envelope::KIND_ORGSYNC_HELLO, hello_a2, "peer-a", "node-b",
+    );
+    let needs: Vec<_> = r.orgsync_out.iter().filter(|o| o.body().get("knownVv").is_some()).collect();
+    assert_eq!(needs.len(), 1, "B 回 need");
+    let r2 = deliver_orgsync(
+        &mut a, &a_root, "A", &b_key, &b_root, &a_root,
+        dm_envelope::KIND_ORGSYNC_NEED, needs[0].body().clone(), "peer-b", "node-a",
+    );
+    let datas: Vec<_> = r2.orgsync_out.iter().filter(|o| o.body().get("records").is_some()).collect();
+    assert!(
+        datas.iter().any(|d| d.body()["records"].as_array().unwrap().iter()
+            .any(|rec| rec["key"].as_str() == Some(k2.as_str()))),
+        "A 的 data 批次必含 k2（修复前 Equal 跳过 → 永久失明）"
+    );
+    for d in &datas {
+        deliver_orgsync(
+            &mut b, &b_root, "B", &a_key, &a_root, &b_root,
+            dm_envelope::KIND_ORGSYNC_DATA, d.body().clone(), "peer-a", "node-b",
+        );
+    }
+
+    // 收敛断言：B 收到 k2，两端记录集与折叠 vv（node-a 分量）一致
+    assert_eq!(b.get(&k2).unwrap().as_deref(), Some("\"v2\""), "B 合入 k2");
+    let b_k2 = get_personal_meta(&b, &k2).unwrap().unwrap();
+    assert_eq!(b_k2.vv, a_k2.vv, "两端 k2 vv 一致");
+    let fold_a = spark_core::sync::orgsync::collect_org_collection_vv(&a, ORG_ID, NAME, VERSION).unwrap();
+    let fold_b = spark_core::sync::orgsync::collect_org_collection_vv(&b, ORG_ID, NAME, VERSION).unwrap();
+    assert_eq!(
+        fold_a.get("node-a"), fold_b.get("node-a"),
+        "两端折叠 vv 的 node-a 分量收敛一致（{fold_a:?} vs {fold_b:?}）"
+    );
+}
+
 // ── R3. acl 走 org:structure（all-members）全员可达 ─────────────────────
 
 /// R3：acl（org:acl:）是 all-members 系统数据（§20.7），复制组=全体成员——

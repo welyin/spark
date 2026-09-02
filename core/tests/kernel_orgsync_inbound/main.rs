@@ -25,6 +25,7 @@ mod auth;
 #[path = "../common/mod.rs"]
 mod common;
 mod deliver;
+mod merge;
 mod orgq;
 mod sync;
 mod tombstone;
@@ -44,7 +45,8 @@ use spark_core::storage::{MemoryStorage, ScanOptions, StorageBackend};
 use spark_core::sync::meta::DocMeta;
 use spark_core::sync::orgsync::{
     build_orgsync_data_batch, build_orgsync_hello, build_orgsync_need, collect_org_collections,
-    collect_org_incremental, collect_org_tombstones_after, org_dlog_append_ops,
+    collect_org_incremental, collect_org_tombstones_after, collect_org_collection_vv,
+    org_dlog_current_seq,
     org_dlog_entries_after,
 };
 use spark_core::sync::{get_personal_meta, is_tombstone, put_personal};
@@ -171,7 +173,8 @@ fn write_org_data(
     .unwrap()
 }
 
-/// A 侧本地删 orgd 数据（复刻中间件墓碑：tombstone pmeta + org 域 dlog）。
+/// A 侧本地删 orgd 数据（复刻中间件墓碑：per-node 序号 bump + tombstone
+/// pmeta + org 域 dlog，同一 batch——即 `org_tombstone_local` 原语）。
 fn delete_org_data(
     storage: &mut MemoryStorage,
     node_id: &str,
@@ -182,17 +185,11 @@ fn delete_org_data(
     now: i64,
 ) -> (u64, DocMeta) {
     let record_key = format!("{}{key}", org_data_prefix(org_id, name, version));
-    let mut meta = get_personal_meta(storage, &record_key)
-        .unwrap()
-        .unwrap_or_default();
-    *meta.vv.entry(node_id.to_string()).or_insert(0) += 1;
-    meta.ts = now;
-    meta.node_id = Some(node_id.to_string());
-    meta.tombstone = Some(true);
-    spark_core::sync::set_personal_meta(storage, &record_key, &meta).unwrap();
-    storage.delete(&record_key).unwrap();
-    let (seq, ops) = org_dlog_append_ops(storage, org_id, name, version, &record_key).unwrap();
-    storage.batch(ops).unwrap();
+    let meta = spark_core::sync::orgsync::org_tombstone_local(
+        storage, node_id, org_id, name, version, &record_key, now,
+    )
+    .unwrap();
+    let seq = org_dlog_current_seq(storage, org_id, name, version).unwrap();
     (seq, meta)
 }
 

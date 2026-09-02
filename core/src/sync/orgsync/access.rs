@@ -272,12 +272,18 @@ pub fn generate_epoch_key() -> [u8; 32] {
 // ── O5 orgkey 离线投递 pending ─────────────────────────────────────────
 
 /// orgkey 离线投递 pending 前缀（本机待重投的 orgkey-deliver 目标）：
-/// `orgkey:pending:{orgId}:{collection}:{recipientRootId}:{epoch}` = `{ts}`。
+/// `orgkey-pending:{orgId}:{collection}:{recipientRootId}:{epoch}` = `{ts}`。
 /// 投递失败（收件人离线/无 accessKey）落此键，收到对方 orgsync-hello（上线）
 /// 时扫描重投。本键是**本地键**（不进同步流量），重投成功后删除。
-pub const ORGKEY_PENDING_PREFIX: &str = "orgkey:pending:";
+///
+/// **命名空间不变量**（org-acl-genesis-fix §7.2 裁决）：`orgkey:` 前缀 =
+/// 同步密钥表（pdsync category），本地键一律用连字符前缀
+/// （`orgkey-pending:`/`orgkey-deliver-stash:`）——任何句柄（版本化/裸）
+/// 写本地键都不可能误入同步流量，不依赖调用方记得走 raw（先例 =
+/// `mkt:ann-count` 排除出 `mkt:ann:`，pdsync.rs）。
+pub const ORGKEY_PENDING_PREFIX: &str = "orgkey-pending:";
 
-/// orgkey pending 键 `orgkey:pending:{orgId}:{collection}:{recipientRootId}:{epoch}`。
+/// orgkey pending 键 `orgkey-pending:{orgId}:{collection}:{recipientRootId}:{epoch}`。
 pub fn orgkey_pending_key(
     org_id: &str,
     collection: &str,
@@ -336,6 +342,87 @@ pub fn orgkey_pending_for_org<S: crate::storage::StorageBackend>(
                     let epoch = epoch_str.parse::<u64>().ok()?;
                     let ts = raw.parse::<i64>().unwrap_or(0);
                     Some((collection.to_string(), recipient.to_string(), epoch, ts))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+// ── F3 残余 §7.1 orgkey-deliver 收端暂存 ───────────────────────────────
+
+/// orgkey-deliver 收端暂存前缀（「同步未到」等待态的投递原始 body）：
+/// `orgkey-deliver-stash:{orgId}:{collection}:{senderRootId}:{epoch}` =
+/// 原始 body JSON。**本地键**（不进同步流量，连字符前缀同 §7.2 命名空间
+/// 不变量）；acl / org:meta（成员表 accessKey 段）合入后重放校验链
+/// （`kernel/inbound_dm/orgkey.rs::reevaluate_orgkey_stash`）。
+pub const ORGKEY_DELIVER_STASH_PREFIX: &str = "orgkey-deliver-stash:";
+
+/// orgkey-deliver 暂存键
+/// `orgkey-deliver-stash:{orgId}:{collection}:{senderRootId}:{epoch}`。
+pub fn orgkey_stash_key(
+    org_id: &str,
+    collection: &str,
+    sender_root_id: &str,
+    epoch: u64,
+) -> String {
+    format!("{ORGKEY_DELIVER_STASH_PREFIX}{org_id}:{collection}:{sender_root_id}:{epoch}")
+}
+
+/// 暂存一条「同步未到」的 orgkey-deliver 原始 body（同键去重：保留 body
+/// `ts` 新者——重投/乱序到达幂等；键维度即 (sender, epoch) 粒度，封顶自然
+/// 成立）。
+pub fn orgkey_stash_put<S: crate::storage::StorageBackend>(
+    storage: &mut S,
+    org_id: &str,
+    collection: &str,
+    sender_root_id: &str,
+    epoch: u64,
+    body: &serde_json::Value,
+) {
+    let key = orgkey_stash_key(org_id, collection, sender_root_id, epoch);
+    let new_ts = body.get("ts").and_then(serde_json::Value::as_i64).unwrap_or(0);
+    if let Ok(Some(existing)) = storage.get(&key) {
+        let old_ts = serde_json::from_str::<serde_json::Value>(&existing)
+            .ok()
+            .and_then(|v| v.get("ts").and_then(serde_json::Value::as_i64))
+            .unwrap_or(0);
+        if old_ts >= new_ts {
+            return; // 已有同键更新者 → 不覆盖
+        }
+    }
+    let _ = storage.put(&key, &serde_json::to_string(body).unwrap_or_default());
+}
+
+/// 删除一条暂存（重评估够格落库 / 真拒绝 / 损坏后）。
+pub fn orgkey_stash_remove<S: crate::storage::StorageBackend>(
+    storage: &mut S,
+    org_id: &str,
+    collection: &str,
+    sender_root_id: &str,
+    epoch: u64,
+) {
+    let _ = storage.delete(&orgkey_stash_key(org_id, collection, sender_root_id, epoch));
+}
+
+/// 读取本机某组织的全部暂存 → `(collection, senderRootId, epoch, bodyJson)`
+/// （从右解析：末段 epoch、次末段 sender、剩余为 collection——同 pending
+/// 键的右向解析口径，collection 含 `:` 分隔符）。
+pub fn orgkey_stash_for_org<S: crate::storage::StorageBackend>(
+    storage: &S,
+    org_id: &str,
+) -> Vec<(String, String, u64, String)> {
+    let prefix = format!("{ORGKEY_DELIVER_STASH_PREFIX}{org_id}:");
+    storage
+        .scan(&crate::storage::ScanOptions::prefix(&prefix))
+        .map(|entries| {
+            entries
+                .into_iter()
+                .filter_map(|(key, raw)| {
+                    let rest = key.strip_prefix(&prefix)?;
+                    let (sender_epoch, epoch_str) = rest.rsplit_once(':')?;
+                    let (collection, sender) = sender_epoch.rsplit_once(':')?;
+                    let epoch = epoch_str.parse::<u64>().ok()?;
+                    Some((collection.to_string(), sender.to_string(), epoch, raw))
                 })
                 .collect()
         })

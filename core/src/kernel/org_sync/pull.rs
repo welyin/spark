@@ -266,6 +266,7 @@ impl OrgSyncContext {
                 let now = self.now();
                 let merged = match OrganizationService::apply_incoming_snapshot(
                     &mut self.storage.clone(),
+                    &self.io_lock,
                     &organization,
                     now,
                 ) {

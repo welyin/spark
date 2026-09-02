@@ -82,9 +82,10 @@ pub trait OrgqPermHook {
 /// 受理一条 orgq 写入记录落库（数据账号侧，§20.5）。`base` 为集合数据键前缀。
 ///
 /// - `value` 非 null → `put_personal` 版本化写入（现状，随复制组扩散）；
-/// - `value` 为 null → **删除语义**（Z1）：墓碑 pmeta + org 域 dlog + 记录
-///   本体删除，与本地 `tombstone_local` 删除路径同口径（orgd: 键只登 org 域
-///   dlog，不污染个人域）。返回 `true` = 落库成功。
+/// - `value` 为 null → **删除语义**（Z1）：走 org 域本地墓碑原语
+///   [`crate::sync::orgsync::org_tombstone_local`]——per-node 序号 bump +
+///   墓碑 pmeta + org 域 dlog + 本体删除同一 batch 原子提交（orgd: 键只登
+///   org 域 dlog，不污染个人域）。返回 `true` = 落库成功。
 fn apply_orgq_write<S: StorageBackend>(
     storage: &mut S,
     ctx: &InboundContext<'_>,
@@ -107,28 +108,14 @@ fn apply_orgq_write<S: StorageBackend>(
         );
         return true;
     }
-    // 删除：墓碑 pmeta（vv bump + tombstone）+ org 域 dlog + 记录本体删除。
-    // 对齐本地删除路径（tombstone_local）——远端 orgsync 合入墓碑同样补登
-    // org 域 dlog（handle_orgsync_data），保证删除在复制组内接力传播。
-    let mut meta = crate::sync::get_personal_meta(storage, &key)
-        .ok()
-        .flatten()
-        .unwrap_or_default();
-    *meta.vv.entry(ctx.node_id.to_string()).or_insert(0) += 1;
-    meta.ts = now;
-    meta.node_id = Some(ctx.node_id.to_string());
-    meta.tombstone = Some(true);
-    if crate::sync::set_personal_meta(storage, &key, &meta).is_err() {
-        return false;
-    }
-    if storage.delete(&key).is_err() {
-        return false;
-    }
-    match crate::sync::orgsync::org_dlog_append_ops(storage, org_id, name, version, &key) {
-        Ok((_seq, ops)) => {
-            if storage.batch(ops).is_err() {
-                return false;
-            }
+    // 删除受理：per-key bump 不推进序号分配器会导致后续新写与墓碑序号碰撞
+    // （折叠失明，org-vv-fix §1.2）——统一走 org_tombstone_local，与个人域
+    // delete_personal 同口径。远端 orgsync 合入墓碑同样补登 org 域 dlog
+    // （handle_orgsync_data），保证删除在复制组内接力传播。
+    match crate::sync::orgsync::org_tombstone_local(
+        storage, ctx.node_id, org_id, name, version, &key, now,
+    ) {
+        Ok(_) => {
             log::info!("[ORGQ] write tombstone | org={org_id} key={key}");
             true
         }
@@ -372,7 +359,7 @@ pub(super) fn handle_orgq_req<S: StorageBackend>(
         pdsync_out: Vec::new(),
         orgsync_out: out,
         profile_applied: false,
-        orgkey_unbox: None,
+        orgkey_unbox: Vec::new(),
         feed_blob_out: None,
     })
 }
@@ -541,7 +528,7 @@ pub(super) fn handle_orgq_resp<S: StorageBackend>(
         pdsync_out: Vec::new(),
         orgsync_out: Vec::new(),
         profile_applied: false,
-        orgkey_unbox: None,
+        orgkey_unbox: Vec::new(),
         feed_blob_out: None,
     })
 }

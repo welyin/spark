@@ -446,9 +446,9 @@ fn split_orgsync_batches_single_batch_when_small() {
     assert_eq!(batches[0].len(), 3);
 }
 
-/// B5：`org:coll:` 声明作为保留系统集合随增量同步——`collect_org_incremental`
-/// 把声明记录（及其 pmeta）纳入该集合的增量，`collect_org_collection_vv`
-/// 把声明 pmeta 折叠进集合 vv。
+/// B5/F2-P1：`org:coll:` 声明并入 org:structure 键域全员同步——声明 pmeta
+/// 折叠进 **org:structure** 集合 vv、随 org:structure 增量传播；所属插件
+/// 集合的折叠/增量不再 per-collection 携带声明（避免双通道重复）。
 #[test]
 fn org_coll_declaration_is_synced_as_system_collection() {
     use crate::sync::personal::put_personal;
@@ -473,21 +473,30 @@ fn org_coll_declaration_is_synced_as_system_collection() {
     )
     .unwrap();
 
-    // 折叠 vv 包含声明 pmeta 分量
-    let folded = collect_org_collection_vv(&s, "org_01", "finance:ledger", "1.0.0").unwrap();
-    assert!(folded.get("node-a").copied().unwrap_or(0) >= 5, "声明 pmeta 折叠进集合 vv");
+    // F2-P1：声明 pmeta 折叠进 org:structure（all-members）集合 vv
+    let folded = collect_org_collection_vv(&s, "org_01", "org:structure", "1").unwrap();
+    assert!(folded.get("node-a").copied().unwrap_or(0) >= 5, "声明 pmeta 折叠进 org:structure vv");
+    // 插件集合折叠不再携带声明（decl 不在 orgd: 键域）
+    let plugin_fold = collect_org_collection_vv(&s, "org_01", "finance:ledger", "1.0.0").unwrap();
+    assert_eq!(plugin_fold.get("node-a").copied(), Some(1), "插件集合折叠只含数据记录");
 
-    // 增量：knownVv node-a=4 → 声明（node-a:5 领先）纳入；
-    // 数据记录（node-a=1 < known 4）被正确跳过
+    // 增量：org:structure 通道 knownVv node-a=4 → 声明（node-a:5 领先）纳入
     let known: VersionVector = [("node-a".to_string(), 4)].into_iter().collect();
-    let inc = collect_org_incremental(&s, "org_01", "finance:ledger", "1.0.0", &known, 0).unwrap();
+    let inc = collect_org_incremental(&s, "org_01", "org:structure", "1", &known, 0).unwrap();
     assert!(
         inc.iter().any(|r| r.key == decl_key),
-        "声明记录纳入增量（声明先行同步）"
+        "声明记录经 org:structure 增量传播（声明先行全员可达）"
+    );
+    // 插件集合增量只含数据记录（knownVv 空 → 数据纳入；声明不内联携带）
+    let inc_plugin =
+        collect_org_incremental(&s, "org_01", "finance:ledger", "1.0.0", &Default::default(), 0).unwrap();
+    assert!(
+        inc_plugin.iter().any(|r| r.key == format!("{prefix}k")),
+        "数据记录纳入插件集合增量"
     );
     assert!(
-        !inc.iter().any(|r| r.key == format!("{prefix}k")),
-        "旧数据记录不纳入增量"
+        !inc_plugin.iter().any(|r| r.key == decl_key),
+        "声明不再随所属集合流量携带"
     );
 }
 
@@ -577,8 +586,8 @@ fn builtin_collection_names_versions() {
     assert_eq!(s.full_name(), "org:structure@v1");
     assert_eq!(s.merge(), MergeRule::Whole);
     assert_eq!(BuiltinOrgCollection::Contacts.merge(), MergeRule::LwwRecord);
-    assert_eq!(BuiltinOrgCollection::Invites.merge(), MergeRule::LwwRecord);
-    assert!(BuiltinOrgCollection::all().len() == 3);
+    // F7：org:invites 退出 orgsync（邀请记录回归 personal 域自设备同步）
+    assert!(BuiltinOrgCollection::all().len() == 2);
 }
 
 /// 键域归属：内建集合映射到存量键前缀（键不搬家，零迁移）。
@@ -587,24 +596,19 @@ fn builtin_collection_key_domains() {
     let org = "org_0000000000000001";
     // R3：org:structure 额外承载 `org:acl:{orgId}:`（授权名单，all-members
     // 系统数据）——全员经此集合同步 acl（否则随 encrypted 集合 data-accounts
-    // 复制组流动，普通成员收不到）。
+    // 复制组流动，普通成员收不到）。F2-P1：`org:coll:{orgId}:`（集合声明）
+    // 同性质并入——声明全员可见，不经 hello 复制组裁剪。
     assert_eq!(
         BuiltinOrgCollection::Structure.data_prefixes(org),
         vec![
             "org:meta:org_0000000000000001",
-            "org:acl:org_0000000000000001:"
+            "org:acl:org_0000000000000001:",
+            "org:coll:org_0000000000000001:"
         ]
     );
     assert_eq!(
         BuiltinOrgCollection::Contacts.data_prefixes(org),
         vec!["ct:org:org_0000000000000001:"]
-    );
-    assert_eq!(
-        BuiltinOrgCollection::Invites.data_prefixes(org),
-        vec![
-            "org:inv:in:org_0000000000000001:",
-            "org:inv:out:org_0000000000000001:"
-        ]
     );
     // 线上标识键
     assert_eq!(
@@ -639,14 +643,10 @@ fn legacy_org_key_scope_maps_to_builtin_collections() {
     let (oid, name, _) = legacy_org_key_scope("ct:org:org_01:x").unwrap();
     assert_eq!(oid, "org_01");
     assert_eq!(name, "org:contacts");
-    // org:inv:in:{orgId}:{peer}
-    let (oid, name, _) = legacy_org_key_scope("org:inv:in:org_01:peer-a").unwrap();
-    assert_eq!(oid, "org_01");
-    assert_eq!(name, "org:invites");
-    // org:inv:out:{orgId}:{peer}
-    let (oid, name, _) = legacy_org_key_scope("org:inv:out:org_01:peer-a").unwrap();
-    assert_eq!(oid, "org_01");
-    assert_eq!(name, "org:invites");
+    // F7：org:inv:in/out 退出 orgsync——不再映射任何内建集合（删除只登
+    // 个人域 dlog，墓碑随 pdsync 自设备传播）
+    assert!(legacy_org_key_scope("org:inv:in:org_01:peer-a").is_none());
+    assert!(legacy_org_key_scope("org:inv:out:org_01:peer-a").is_none());
     // 非存量组织键 → None（插件 orgd: 走 parse_org_data_key）
     assert!(legacy_org_key_scope("orgd:org_01:c@v1:k").is_none());
     assert!(legacy_org_key_scope("ct:friend:x").is_none());
@@ -662,8 +662,6 @@ fn builtin_collection_incremental_scans_legacy_prefix() {
     put_personal(&mut s, "node-a", "ct:org:org_01:member-x", "\"v1\"", 1000).unwrap();
     // org:structure 集合的数据在 org:meta:{orgId}（单记录 whole）
     put_personal(&mut s, "node-a", "org:meta:org_01", "{\"name\":\"t\"}", 1001).unwrap();
-    // org:invites 集合的数据在 org:inv:in/out:{orgId}:*
-    put_personal(&mut s, "node-a", "org:inv:out:org_01:peer-a", "\"inv\"", 1002).unwrap();
 
     // 折叠 vv 应包含各内建集合的数据（node-a 分量）
     assert!(collect_org_collection_vv(&s, "org_01", "org:contacts", "1")
@@ -671,10 +669,6 @@ fn builtin_collection_incremental_scans_legacy_prefix() {
         .get("node-a")
         .is_some());
     assert!(collect_org_collection_vv(&s, "org_01", "org:structure", "1")
-        .unwrap()
-        .get("node-a")
-        .is_some());
-    assert!(collect_org_collection_vv(&s, "org_01", "org:invites", "1")
         .unwrap()
         .get("node-a")
         .is_some());
@@ -688,10 +682,11 @@ fn builtin_collection_incremental_scans_legacy_prefix() {
         .unwrap();
     assert_eq!(structure.len(), 1);
     assert_eq!(structure[0].key, "org:meta:org_01");
-    let invites = collect_org_incremental(&s, "org_01", "org:invites", "1", &VersionVector::new(), 0)
-        .unwrap();
-    assert_eq!(invites.len(), 1);
-    assert_eq!(invites[0].key, "org:inv:out:org_01:peer-a");
+    // F7：org:inv:* 已非任何 orgsync 集合键域——`org:invites` 集合不存在，
+    // 折叠/增量为空
+    assert!(collect_org_collection_vv(&s, "org_01", "org:invites", "1")
+        .unwrap()
+        .is_empty());
 }
 
 /// 内建集合删除日志：collect_org_tombstones_after 只认本集合键域的墓碑。

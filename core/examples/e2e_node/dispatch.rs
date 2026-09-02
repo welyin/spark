@@ -3,7 +3,7 @@
 use serde_json::{Map, Value, json};
 use spark_core::kernel::Kernel;
 
-use crate::{contact, identity, message, org, print_line};
+use crate::{contact, data, identity, message, org, print_line};
 
 /// 参数提取助手：统一处理缺参错误与三态字段。
 pub struct Params<'a> {
@@ -86,6 +86,8 @@ pub fn handle_line(text: &str, kernel: &mut Kernel) -> bool {
         "p2p-status" => identity::p2p_status(kernel),
         "make-node-card" => identity::make_node_card(kernel, &params),
         "import-node-card" => identity::import_node_card(kernel, &params),
+        // 故障注入（F6 验收，org-sync-stall-fix §5）
+        "fault-org-pull-blackhole" => identity::fault_org_pull_blackhole(kernel, &params),
         // 联系人
         "contact-overview" => contact::overview(kernel, &params),
         "send-request" => contact::send_request(kernel, &params),
@@ -111,6 +113,18 @@ pub fn handle_line(text: &str, kernel: &mut Kernel) -> bool {
         "org-view" => org::view(kernel, &params),
         "org-update-info" => org::update_info(kernel, &params),
         "org-update-my-identity" => org::update_my_identity(kernel, &params),
+        "org-set-member-role" => org::set_member_role(kernel, &params),
+        // 数据（声明式数据 API / orgsync 折叠断言）
+        "data-declare" => data::declare(kernel, &params),
+        "data-save" => data::save(kernel, &params),
+        "data-delete" => data::delete(kernel, &params),
+        "data-get" => data::get(kernel, &params),
+        "data-query" => data::query(kernel, &params),
+        "data-grant-access" => data::grant_access(kernel, &params),
+        "data-revoke-access" => data::revoke_access(kernel, &params),
+        "data-list-access" => data::list_access(kernel, &params),
+        "org-publish-access-key" => data::publish_access_key(kernel, &params),
+        "org-fold-vv" => data::fold_vv(kernel, &params),
         // 杂项
         "shutdown" => {
             print_line(&json!({"id": id, "ok": true, "data": {"stopping": true}}));

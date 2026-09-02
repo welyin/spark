@@ -54,8 +54,10 @@ impl Kernel {
             bind_sig: bind.signature,
         };
         let node_id = self.sync_node_id();
+        let io_lock = std::sync::Arc::clone(&self.io_lock);
         let _record = OrganizationService::publish_access_key_pdsync(
             self.require_storage_mut()?,
+            &io_lock,
             org_id,
             &ak,
             &root_id,
@@ -340,6 +342,9 @@ impl Kernel {
     /// 信封：owner 组织身份 Ed25519 签名 + crypto_box（recipient 组织身份公钥
     /// X25519）包裹 epoch 密钥；`recipientRootId` 防转投。本方法只做尽力投递
     /// （spawn 到 runtime，不阻塞；投递失败由退避重试兜底）。
+    ///
+    /// 装配逻辑在 [`plan_orgkey_deliveries`]（与 host 层 hello 触发的 pending
+    /// 重投共用，F3）。
     pub(crate) fn deliver_orgkey_to_readers(
         &mut self,
         org_id: &str,
@@ -357,70 +362,11 @@ impl Kernel {
             log::warn!("[ORGKEY] deliver skipped: no seed (locked) | org={org_id}");
             return;
         };
-        let domain = Self::org_access_domain(org_id);
-        let owner_org = crate::identity::derive_domain_identity(&seed, &domain);
-        let owner_x25519_priv = orgsync::ed_sk_to_x25519(&owner_org.signing_key.to_bytes());
-        // sender rootId（签名者 = 调用方 owner；收件人侧以 from 匹配其 accessKey 验签）
         let Ok(sender_root_id) = self.require_current_root_id() else {
             log::warn!("[ORGKEY] deliver skipped: no current root id | org={org_id}");
             return;
         };
-        let storage = self.require_storage();
-        let Ok(storage) = storage else { return };
-        // O5：pending 写入需可变存储句柄（本地键，不进同步流量）。
-        let mut pending_storage = storage.clone();
-        let now = crate::p2p::node::system_now_ms();
-        // 收件人成员记录（取 accessKey 公钥 + peer 寻址）
-        let Ok(Some(record)) = crate::org::OrganizationService::get_record(storage, org_id) else {
-            return;
-        };
-        let col_full = format!("{name}@v{version}");
-        let mut deliveries: Vec<(crate::p2p::peer_targets::PeerNodeInfo, Value)> = Vec::new();
-        for recipient in recipients {
-            let Some(member) = record.find_member(recipient) else { continue };
-            // 收件人须已发布 accessKey（组织身份公钥）；否则无法投递 → 跳过。
-            // O5：落 orgkey pending，对方发布 accessKey / 上线 orgsync-hello 时重投。
-            let Some(access_key) = member.access_key.as_ref() else {
-                log::info!(
-                    "[ORGKEY] deliver skip: recipient={} has no accessKey | col={}",
-                    &recipient[..std::cmp::min(16, recipient.len())],
-                    col_full
-                );
-                for epoch in epochs.clone() {
-                    orgsync::orgkey_pending_put(
-                        &mut pending_storage,
-                        org_id,
-                        &col_full,
-                        recipient,
-                        epoch,
-                        now,
-                    );
-                }
-                continue;
-            };
-            let Ok(pk_bytes) = B64.decode(&access_key.public_key) else { continue };
-            let Ok(pk_arr) = <[u8; 32]>::try_from(pk_bytes.as_slice()) else { continue };
-            let Some(recipient_x25519) = orgsync::ed_pk_to_x25519(&pk_arr) else { continue };
-            // 收件人 peer 寻址（member node_info 端点）
-            let Some(node_info) = member.node_info.clone() else {
-                log::info!(
-                    "[ORGKEY] deliver skip: recipient={} no node info | col={}",
-                    &recipient[..std::cmp::min(16, recipient.len())],
-                    col_full
-                );
-                for epoch in epochs.clone() {
-                    orgsync::orgkey_pending_put(
-                        &mut pending_storage,
-                        org_id,
-                        &col_full,
-                        recipient,
-                        epoch,
-                        now,
-                    );
-                }
-                continue;
-            };
-            // 根私钥：dm 信封必须由根身份签名（from==rootId 绑定，verify_envelope
+        // 根私钥：dm 信封必须由根身份签名（from==rootId 绑定，verify_envelope
         // 以 pubKey=根公钥 → from 强绑定；orgkey-deliver 的 dm 信封签名者必须是
         // root，否则对端「from 验签」失败——信封的 dm 层签名与 body 内的
         // org-access 域签名是两套独立体系）。body sig 仍为 owner 组织域身份
@@ -433,54 +379,17 @@ impl Kernel {
             log::warn!("[ORGKEY] deliver skipped: no root signing key | org={org_id}");
             return;
         };
-        // 逐 epoch 投递
-            for epoch in epochs.clone() {
-                let Some(epoch_key) =
-                    orgsync::get_epoch_key(storage, org_id, name, version, epoch)
-                else {
-                    log::warn!(
-                        "[ORGKEY] deliver skip: no epoch key {} | col={}",
-                        epoch,
-                        col_full
-                    );
-                    continue;
-                };
-                let Some(body) = orgsync::build_orgkey_deliver(
-                    org_id,
-                    name,
-                    version,
-                    epoch,
-                    &epoch_key,
-                    &sender_root_id,
-                    recipient,
-                    &recipient_x25519,
-                    &owner_org.signing_key,
-                    &owner_x25519_priv,
-                    now,
-                ) else {
-                    continue;
-                };
-                // 装配 dm 信封（from=owner rootId、to=recipient）：**dm 信封用
-                // 根私钥签名**（from==rootId 绑定，R1），body 内 sig 保持
-                // org-access 域身份签名（验签锚 = 成员表 accessKey）。
-                let envelope = crate::kernel::dm_envelope::build_envelope(
-                    crate::kernel::dm_envelope::KIND_ORGKEY_DELIVER,
-                    &sender_root_id,
-                    recipient,
-                    now,
-                    body,
-                    &root_key,
-                );
-                // 逐端点投递（多设备聚合）
-                for info in node_info.iter() {
-                    let peer = crate::p2p::peer_targets::PeerNodeInfo {
-                        peer_id: info.peer_id.clone(),
-                        addresses: info.addresses.clone(),
-                    };
-                    deliveries.push((peer, envelope.clone()));
-                }
-            }
-        }
+        let deliveries = {
+            let Ok(storage) = self.require_storage_mut() else { return };
+            let mut ctx = OrgkeyDeliverCtx {
+                storage,
+                seed,
+                sender_root_id,
+                root_key,
+                now_ms: crate::p2p::node::system_now_ms(),
+            };
+            plan_orgkey_deliveries(&mut ctx, org_id, name, version, recipients, epochs)
+        };
         if deliveries.is_empty() {
             return;
         }
@@ -490,49 +399,213 @@ impl Kernel {
     /// O5：收到对方 orgsync-hello（成员上线）后扫描本机 orgkey pending，向该
     /// 成员重投未送达的 orgkey-deliver（离线期间 grant/revoke 的密钥补投）。
     ///
-    /// **接线点**（host 层 orgsync-hello 收尾）：对端 `from` ∈ 成员表即调本方法
-    /// 重投其 pending。重投后删除该键（对端已有 ≥ epoch 幂等丢弃，重投无害；
-    /// 失败由下次 hello 再重投——密钥只增不减）。本方法需 `&mut self`
-    /// （`deliver_orgkey_to_readers` 需变更存储句柄），host 层须持 Kernel 引用。
-    ///
-    /// `#[allow(dead_code)]`：host 层（`KernelDmHandler`）以共享格处理入站，
-    /// 不持 `&mut Kernel`；orgsync-hello → resend 的接线需 host 层先持有 Kernel
-    /// 引用（既定设计点，测试直调覆盖本方法路径）。pending 持久化本身已在此
-    /// 落库（`deliver_orgkey_to_readers` 的 skip 分支），resend 方法经测试验证。
+    /// F3 接线：host 层（`host/dm_handler/replies.rs::spawn_orgkey_pending_resend`）
+    /// 不持 `&mut Kernel`，hello 触发路径直接复用 [`plan_pending_orgkey_resend`]
+    /// + 共享装配原语；本方法保留为 Kernel 内入口（测试直调覆盖）。
+    /// 解锁态缺失（无 seed/根私钥）时**保留 pending** 等下次 hello，不清键。
     #[allow(dead_code)]
     pub(crate) fn resend_pending_orgkey(&mut self, org_id: &str, recipient_root_id: &str) {
-        let storage = match self.require_storage() {
-            Ok(s) => s,
-            Err(_) => return,
+        let (Some(seed), Some(root_key)) = (
+            self.unlocked.as_ref().map(|u| u.seed),
+            self.unlocked
+                .as_ref()
+                .map(|u| u.identity.signing_key.clone()),
+        ) else {
+            return;
         };
-        let pending = orgsync::orgkey_pending_for_org(storage, org_id);
-        let mut pending_storage = storage.clone();
-        for (col_full, recipient, epoch, _ts) in pending {
-            if recipient != recipient_root_id {
-                continue;
+        let Ok(sender_root_id) = self.require_current_root_id() else {
+            return;
+        };
+        let deliveries = {
+            let Ok(storage) = self.require_storage_mut() else { return };
+            let mut ctx = OrgkeyDeliverCtx {
+                storage,
+                seed,
+                sender_root_id,
+                root_key,
+                now_ms: crate::p2p::node::system_now_ms(),
+            };
+            plan_pending_orgkey_resend(&mut ctx, org_id, recipient_root_id)
+        };
+        if deliveries.is_empty() {
+            return;
+        }
+        self.spawn_deliveries_with_retry(deliveries, &DM_RETRY_DELAYS);
+    }
+}
+
+/// orgkey-deliver 投递装配上下文（F3 提取）：Kernel 出站（grant/revoke/reset/
+/// resend）与 host 层 hello 触发的 pending 重投共用同一装配逻辑——两侧持有
+/// 的资源形态不同（Kernel 字段 vs host 共享格），装配规则只有一份。
+pub(crate) struct OrgkeyDeliverCtx<'a, S: StorageBackend> {
+    /// 存储句柄（读成员表/epoch 密钥；收件人不可达的 skip 分支落 pending）。
+    pub storage: &'a mut S,
+    /// 解锁期 BIP39 种子（owner 组织域身份即时派生，不持久化）。
+    pub seed: [u8; 64],
+    /// 本机 rootId（投递 sender；收端以 from 匹配其成员表 accessKey 验签）。
+    pub sender_root_id: String,
+    /// 根签名私钥（dm 信封签名，from==rootId 绑定；body 内 sig 为组织域身份
+    /// 签名，两套独立体系）。
+    pub root_key: ed25519_dalek::SigningKey,
+    /// 当前时间（ms）。
+    pub now_ms: i64,
+}
+
+/// 装配 orgkey-deliver 投递（§20.6）：逐 (recipient, epoch) 构造「根签名 dm
+/// 信封 + 组织域身份签名 body + crypto_box 包裹 epoch 密钥」，按收件人成员
+/// 记录的 node_info 逐端点展开为 (peer, envelope) 列表。
+///
+/// 收件人未发布 accessKey 或无 node_info（离线/不可寻址）→ 落
+/// `orgkey-pending:` 待重投键并跳过（对端上线 hello 时由
+/// [`plan_pending_orgkey_resend`] 重投）。
+pub(crate) fn plan_orgkey_deliveries<S: StorageBackend>(
+    ctx: &mut OrgkeyDeliverCtx<'_, S>,
+    org_id: &str,
+    name: &str,
+    version: &str,
+    recipients: &[String],
+    epochs: std::ops::RangeInclusive<u64>,
+) -> Vec<(crate::p2p::peer_targets::PeerNodeInfo, Value)> {
+    let domain = Kernel::org_access_domain(org_id);
+    let owner_org = crate::identity::derive_domain_identity(&ctx.seed, &domain);
+    let owner_x25519_priv = orgsync::ed_sk_to_x25519(&owner_org.signing_key.to_bytes());
+    let now = ctx.now_ms;
+    // 收件人成员记录（取 accessKey 公钥 + peer 寻址）
+    let Ok(Some(record)) = OrganizationService::get_record(&*ctx.storage, org_id) else {
+        return Vec::new();
+    };
+    let col_full = format!("{name}@v{version}");
+    let mut deliveries: Vec<(crate::p2p::peer_targets::PeerNodeInfo, Value)> = Vec::new();
+    for recipient in recipients {
+        let Some(member) = record.find_member(recipient) else { continue };
+        // 收件人须已发布 accessKey（组织身份公钥）；否则无法投递 → 跳过。
+        // O5：落 orgkey pending，对方发布 accessKey / 上线 orgsync-hello 时重投。
+        let Some(access_key) = member.access_key.as_ref() else {
+            log::info!(
+                "[ORGKEY] deliver skip: recipient={} has no accessKey | col={}",
+                &recipient[..std::cmp::min(16, recipient.len())],
+                col_full
+            );
+            for epoch in epochs.clone() {
+                orgsync::orgkey_pending_put(
+                    ctx.storage,
+                    org_id,
+                    &col_full,
+                    recipient,
+                    epoch,
+                    now,
+                );
             }
-            // 解析 name/version（collection 为 `{name}@v{version}`）
-            let Some(at) = col_full.rfind("@v") else { continue };
-            let name = &col_full[..at];
-            let version = &col_full[at + 2..];
-            self.deliver_orgkey_to_readers(
+            continue;
+        };
+        let Ok(pk_bytes) = B64.decode(&access_key.public_key) else { continue };
+        let Ok(pk_arr) = <[u8; 32]>::try_from(pk_bytes.as_slice()) else { continue };
+        let Some(recipient_x25519) = orgsync::ed_pk_to_x25519(&pk_arr) else { continue };
+        // 收件人 peer 寻址（member node_info 端点）
+        let Some(node_info) = member.node_info.clone() else {
+            log::info!(
+                "[ORGKEY] deliver skip: recipient={} no node info | col={}",
+                &recipient[..std::cmp::min(16, recipient.len())],
+                col_full
+            );
+            for epoch in epochs.clone() {
+                orgsync::orgkey_pending_put(
+                    ctx.storage,
+                    org_id,
+                    &col_full,
+                    recipient,
+                    epoch,
+                    now,
+                );
+            }
+            continue;
+        };
+        // 逐 epoch 投递
+        for epoch in epochs.clone() {
+            let Some(epoch_key) =
+                orgsync::get_epoch_key(&*ctx.storage, org_id, name, version, epoch)
+            else {
+                log::warn!(
+                    "[ORGKEY] deliver skip: no epoch key {} | col={}",
+                    epoch,
+                    col_full
+                );
+                continue;
+            };
+            let Some(body) = orgsync::build_orgkey_deliver(
                 org_id,
                 name,
                 version,
-                std::slice::from_ref(&recipient_root_id.to_string()),
-                epoch..=epoch,
-            );
-            // 重投后删除 pending（投递成功/对端幂等丢弃均无害；失败由下次
-            // hello 再重投——密钥只增不减，重投幂等）。
-            orgsync::orgkey_pending_remove(
-                &mut pending_storage,
-                org_id,
-                &col_full,
-                &recipient,
                 epoch,
+                &epoch_key,
+                &ctx.sender_root_id,
+                recipient,
+                &recipient_x25519,
+                &owner_org.signing_key,
+                &owner_x25519_priv,
+                now,
+            ) else {
+                continue;
+            };
+            // 装配 dm 信封（from=owner rootId、to=recipient）：**dm 信封用
+            // 根私钥签名**（from==rootId 绑定，R1），body 内 sig 保持
+            // org-access 域身份签名（验签锚 = 成员表 accessKey）。
+            let envelope = crate::kernel::dm_envelope::build_envelope(
+                crate::kernel::dm_envelope::KIND_ORGKEY_DELIVER,
+                &ctx.sender_root_id,
+                recipient,
+                now,
+                body,
+                &ctx.root_key,
             );
+            // 逐端点投递（多设备聚合）
+            for info in node_info.iter() {
+                let peer = crate::p2p::peer_targets::PeerNodeInfo {
+                    peer_id: info.peer_id.clone(),
+                    addresses: info.addresses.clone(),
+                };
+                deliveries.push((peer, envelope.clone()));
+            }
         }
     }
+    deliveries
+}
+
+/// hello 触发的 pending 重投装配（F3，§20.6 离线补投）：扫描本机
+/// `orgkey-pending:{orgId}:` 中收件人为 `recipient_root_id` 的条目，逐条经
+/// [`plan_orgkey_deliveries`] 装配投递并删除 pending 键。
+///
+/// 删除口径：重投幂等（收端已有 ≥ epoch 密钥即静默丢弃，重复无害）；投递仍
+/// 不可达（无 accessKey/node_info）时 skip 分支会重写 pending，净效果保留。
+///
+/// 返回待投递的 (peer, envelope) 列表，发送由调用方 spawn（退避重试）。
+pub(crate) fn plan_pending_orgkey_resend<S: StorageBackend>(
+    ctx: &mut OrgkeyDeliverCtx<'_, S>,
+    org_id: &str,
+    recipient_root_id: &str,
+) -> Vec<(crate::p2p::peer_targets::PeerNodeInfo, Value)> {
+    let pending = orgsync::orgkey_pending_for_org(&*ctx.storage, org_id);
+    let mut deliveries = Vec::new();
+    for (col_full, recipient, epoch, _ts) in pending {
+        if recipient != recipient_root_id {
+            continue;
+        }
+        // 解析 name/version（collection 为 `{name}@v{version}`）
+        let Some(at) = col_full.rfind("@v") else { continue };
+        let name = &col_full[..at];
+        let version = &col_full[at + 2..];
+        deliveries.extend(plan_orgkey_deliveries(
+            ctx,
+            org_id,
+            name,
+            version,
+            std::slice::from_ref(&recipient),
+            epoch..=epoch,
+        ));
+        // 重投后删除 pending（投递成功/对端幂等丢弃均无害）。
+        orgsync::orgkey_pending_remove(ctx.storage, org_id, &col_full, &recipient, epoch);
+    }
+    deliveries
 }
 
 #[cfg(test)]

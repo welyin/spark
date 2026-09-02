@@ -52,7 +52,11 @@ def main():
         check(friend_ab is not None, "A 的朋友列表应有 B")
         check(friend_ba is not None, "B 的朋友列表应有 A")
         check(friend_ba["nickname"] == "Alice", "B 侧朋友昵称取申请方昵称")
-        check(friend_ab["peer"]["peerId"] == b.peer_id, "A 侧朋友记录带 B 的 peerId")
+        # O1 端点化：寻址从单 `peer` 字段迁移为 `peers` 端点列表
+        check(
+            any(p["peerId"] == b.peer_id for p in friend_ab.get("peers", [])),
+            "A 侧朋友记录 peers 含 B 的 peerId",
+        )
 
         # ---- A→C：申请 → C 询问 → A 收 replied → A 答复 → C 接受 ----------
         outgoing = a.send(

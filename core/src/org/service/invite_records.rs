@@ -30,8 +30,13 @@ impl OrganizationService {
         Ok(())
     }
 
-    /// pdsync 感知的邀请记录写入（P5）：落 `org:inv:*`；版本记账由中间件
-    /// 自动完成（调用方传版本化句柄）。
+    /// pdsync 感知的邀请记录写入（P5）：落 `org:inv:*`。
+    ///
+    /// **命名陷阱警示（F7，org-invite-scope-fix §2.2）**：版本记账依赖调用方
+    /// 句柄——版本化句柄（内核门面路径）经中间件自动记账；**raw 句柄（入站
+    /// handler）上本函数沉默无记账**（记录无 pmeta，同步面失明）。raw 调用方
+    /// 必须改用显式 `crate::sync::put_personal`（先例：
+    /// `kernel/inbound_dm/org_invite.rs` 两 handler）。
     pub fn put_invite_record_pdsync<S: StorageBackend>(
         storage: &mut S,
         record: &OrgInviteRecord,
@@ -152,6 +157,10 @@ impl OrganizationService {
     }
 
     /// pdsync 感知的状态流转（P5）：落 `org:inv:*` + bump pmeta。
+    ///
+    /// 命名陷阱同 [`Self::put_invite_record_pdsync`]（F7）：记账依赖调用方
+    /// 句柄——raw 句柄（入站 handler）上沉默无记账，raw 调用方改用显式
+    /// `crate::sync::put_personal`（org-invite-scope-fix §2.2）。
     pub fn mark_invite_status_pdsync<S: StorageBackend>(
         storage: &mut S,
         direction: OrgInviteDirection,
@@ -194,4 +203,67 @@ impl OrganizationService {
             .map(|(_, value)| serde_json::from_str(&value).map_err(OrgError::from))
             .collect()
     }
+}
+
+/// F7 存量迁移（org-invite-scope-fix §2.3，升级一次性、幂等）：
+/// org:invites 退出 orgsync 后——
+///
+/// 1. 扫删 `org:inv:in:*` **全部**入站邀请记录及其 pmeta（裸删，不墓碑不进
+///    dlog——自有与泄漏记录无法区分（记录无 invitee 字段），且被覆盖设备上
+///    的自有 pending 已是粘滞坏态；恢复路径 = 邀请人重发（幂等 upsert 重建
+///    干净记录）；自设备各自迁移自清）；
+/// 2. 存量 org:invites 声明记录（`org:coll:{orgId}:org:invites@v1`，已随
+///    orgsync 流出）墓碑化删除——本地不再驱动 org:invites 的 hello/diff；
+///    旧端漂浮的同名声明为空集合（无数据键），无害。墓碑 pmeta 保留既有 vv
+///    分量不 bump（迁移不是同步写事件）。
+///
+/// 幂等：in: 前缀扫空即无操作；声明不存在或已是墓碑即跳过。
+/// 返回 (删除的入站记录数, 墓碑化的声明数)。
+pub fn migrate_org_invites_out_of_orgsync<S: StorageBackend>(
+    storage: &mut S,
+    now_ms: i64,
+) -> Result<(usize, usize)> {
+    let mut ops = Vec::new();
+    // 1. 入站邀请记录 + pmeta 全清
+    let mut removed_records = 0usize;
+    for (key, _) in storage.scan(&ScanOptions::prefix(ORG_INV_IN_PREFIX))? {
+        ops.push(crate::storage::BatchOperation::delete(key.clone()));
+        ops.push(crate::storage::BatchOperation::delete(
+            crate::sync::personal_meta_key(&key),
+        ));
+        removed_records += 1;
+    }
+    // 2. org:invites 声明墓碑化（扫 org:coll: 前缀按集合名过滤）
+    let mut tombstoned_decls = 0usize;
+    for (key, _) in storage.scan(&ScanOptions::prefix("org:coll:"))? {
+        if !key.ends_with(":org:invites@v1") {
+            continue;
+        }
+        let pmeta_key = crate::sync::personal_meta_key(&key);
+        // pmeta 直读直解析（缺失/损坏视为无；SyncError 不进 OrgError 通道）
+        let pmeta: Option<crate::sync::meta::DocMeta> = storage
+            .get(&pmeta_key)?
+            .and_then(|raw| serde_json::from_str(&raw).ok());
+        if storage.get(&key)?.is_none()
+            && pmeta.as_ref().is_none_or(crate::sync::is_tombstone)
+        {
+            continue; // 已迁移（记录不在且 pmeta 缺/已墓碑）
+        }
+        ops.push(crate::storage::BatchOperation::delete(key));
+        let tombstone = crate::sync::meta::DocMeta {
+            vv: pmeta.map(|m| m.vv).unwrap_or_default(),
+            ts: now_ms,
+            node_id: None,
+            tombstone: Some(true),
+        };
+        ops.push(crate::storage::BatchOperation::put(
+            pmeta_key,
+            serde_json::to_string(&tombstone)?,
+        ));
+        tombstoned_decls += 1;
+    }
+    if !ops.is_empty() {
+        storage.batch(ops)?;
+    }
+    Ok((removed_records, tombstoned_decls))
 }

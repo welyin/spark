@@ -29,7 +29,7 @@ fn with_out(out: Vec<PdsyncOut>) -> Result<InboundDmResult> {
         pdsync_out: out,
         orgsync_out: Vec::new(),
         profile_applied: false,
-        orgkey_unbox: None,
+        orgkey_unbox: Vec::new(),
         feed_blob_out: None,
     })
 }

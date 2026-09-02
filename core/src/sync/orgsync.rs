@@ -15,7 +15,7 @@
 //!
 //! 目录形态（Z1 拆分，按职责）：
 //! - [`builtin`]：内建 all-members 集合注册 + 存量键作用域 + 公共常量；
-//! - [`dlog`]：复制组判定 + org 域 dlog 辅助与 GC；
+//! - [`dlog`]：复制组判定 + org 域 dlog 辅助与 GC + org 域本地墓碑原语；
 //! - [`envelope`]：三信封 build/parse + 记录类型 + 分批切分；
 //! - [`collect`]：vv 折叠、增量采集、墓碑采集、diff 裁决、角色履职；
 //! - [`orgq`]（O3）：orgq-req/orgq-resp 信封 build/parse + requestId 关联 +
@@ -41,7 +41,9 @@ pub use access::{
     build_orgkey_deliver, decrypt_value, deliver_sign_payload, ed_pk_to_x25519, ed_sk_to_x25519,
     encrypt_value, generate_epoch_key, get_epoch_key, max_known_epoch, orgkey_key,
     orgkey_pending_for_org, orgkey_pending_key, orgkey_pending_put, orgkey_pending_remove,
-    orgkey_prefix, parse_acl_key, parse_orgkey_deliver, put_epoch_key, unbox_epoch_key,
+    orgkey_prefix, orgkey_stash_for_org, orgkey_stash_key, orgkey_stash_put,
+    orgkey_stash_remove, parse_acl_key, parse_orgkey_deliver, put_epoch_key, unbox_epoch_key,
+    ORGKEY_DELIVER_STASH_PREFIX,
 };
 pub use access_data::{
     AccessDataError, current_acl_epoch, decrypt_orgd_value, encrypt_orgd_value,
@@ -58,7 +60,7 @@ pub use collect::{
 pub use dlog::{
     is_in_replication_group, org_dlog_append_ops, org_dlog_current_seq, org_dlog_entries_after,
     org_dlog_gc, org_dlog_gc_threshold, org_dlog_get_seen, org_dlog_get_watermark,
-    org_dlog_set_seen, org_dlog_set_watermark, replication_group_members,
+    org_dlog_set_seen, org_dlog_set_watermark, org_tombstone_local, replication_group_members,
 };
 pub use envelope::{OrgsyncRecord, build_orgsync_data_batch, build_orgsync_hello, build_orgsync_need, parse_orgsync_data, parse_orgsync_hello, parse_orgsync_need, split_orgsync_batches};
 pub use orgq::{

@@ -124,7 +124,7 @@ fn handle_self_friend_request<S: StorageBackend>(
         pdsync_out: Vec::new(),
         orgsync_out: Vec::new(),
         profile_applied: false,
-        orgkey_unbox: None,
+        orgkey_unbox: Vec::new(),
         feed_blob_out: None,
     })
 }
@@ -203,7 +203,7 @@ pub(super) fn handle_friend_request<S: StorageBackend>(
             pdsync_out: Vec::new(),
             orgsync_out: Vec::new(),
             profile_applied: false,
-            orgkey_unbox: None,
+            orgkey_unbox: Vec::new(),
             feed_blob_out: None,
         });
     }
@@ -366,7 +366,7 @@ pub(super) fn handle_friend_accept<S: StorageBackend>(
         pdsync_out: Vec::new(),
         orgsync_out: Vec::new(),
         profile_applied: false,
-        orgkey_unbox: None,
+        orgkey_unbox: Vec::new(),
         feed_blob_out: None,
     })
 }

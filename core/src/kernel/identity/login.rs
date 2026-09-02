@@ -101,6 +101,21 @@ impl Kernel {
         // 存量迁移：旧版整域单 key 的联系人标签/分组拆分为独立记录（幂等；
         // 读路径已用新前缀，不迁移则老用户升级后标签/分组不可见）
         self.migrate_contact_items_to_records();
+        // F7 存量迁移（org-invite-scope-fix §2.3）：org:invites 退出 orgsync——
+        // 清空 org:inv:in:* 入站邀请记录（含 pmeta，自有/泄漏不可区分，恢复靠
+        // 邀请人重发）+ 存量 org:invites 声明墓碑化。幂等；失败仅记录日志。
+        // 走 raw 句柄：记录清除是数据治理而非同步写（不墓碑、不进 dlog）。
+        {
+            let now = crate::p2p::node::system_now_ms();
+            if let Ok(storage) = self.require_storage_raw_mut()
+                && let Err(e) =
+                    crate::org::service::migrate_org_invites_out_of_orgsync(
+                        storage, now,
+                    )
+            {
+                eprintln!("[kernel] migrate org:inv:in cleanup failed: {e}");
+            }
+        }
         Ok(root_id)
     }
 

@@ -1,0 +1,76 @@
+{
+  "description": "orgsync 三信封（hello/need/data）body 线形 golden vectors（org-orgsync.md §20.3/§20.4）。固定信封 body 的字段与形状作为协议面基线；vv 计数语义（per-node 单调序号）不影响线形。由 Rust 构造器（sync/orgsync/envelope.rs）生成后登记，测试逐字节比对 + parse 往返。",
+  "orgsyncHello": {
+    "input": {
+      "orgId": "org_0123456789abcdef",
+      "collections": {
+        "ai-chat:finance@v1.0.0": { "vv": { "node-a": 3 }, "dlogAck": 2 }
+      },
+      "roles": ["data"],
+      "deviceClass": "pc"
+    },
+    "expected": {
+      "orgId": "org_0123456789abcdef",
+      "collections": {
+        "ai-chat:finance@v1.0.0": { "vv": { "node-a": 3 }, "dlogAck": 2 }
+      },
+      "roles": ["data"],
+      "deviceClass": "pc"
+    }
+  },
+  "orgsyncNeed": {
+    "input": {
+      "orgId": "org_0123456789abcdef",
+      "collection": "ai-chat:finance@v1.0.0",
+      "knownVv": { "node-a": 3 },
+      "dlogAck": 2
+    },
+    "expected": {
+      "orgId": "org_0123456789abcdef",
+      "collection": "ai-chat:finance@v1.0.0",
+      "knownVv": { "node-a": 3 },
+      "dlogAck": 2
+    }
+  },
+  "orgsyncData": {
+    "input": {
+      "orgId": "org_0123456789abcdef",
+      "collection": "ai-chat:finance@v1.0.0",
+      "records": [
+        {
+          "key": "orgd:org_0123456789abcdef:ai-chat:finance@v1.0.0:k1",
+          "value": { "amt": 1 },
+          "meta": { "vv": { "node-a": 3 }, "ts": 1720000000000, "nodeId": "node-a" },
+          "dseq": null
+        },
+        {
+          "key": "orgd:org_0123456789abcdef:ai-chat:finance@v1.0.0:k0",
+          "value": null,
+          "meta": { "vv": { "node-a": 2 }, "ts": 1720000000001, "tombstone": true },
+          "dseq": 1
+        }
+      ],
+      "batchSeq": 0,
+      "batchTotal": 1
+    },
+    "expected": {
+      "orgId": "org_0123456789abcdef",
+      "collection": "ai-chat:finance@v1.0.0",
+      "records": [
+        {
+          "key": "orgd:org_0123456789abcdef:ai-chat:finance@v1.0.0:k1",
+          "value": { "amt": 1 },
+          "meta": { "vv": { "node-a": 3 }, "ts": 1720000000000, "nodeId": "node-a" }
+        },
+        {
+          "key": "orgd:org_0123456789abcdef:ai-chat:finance@v1.0.0:k0",
+          "value": null,
+          "meta": { "vv": { "node-a": 2 }, "ts": 1720000000001, "tombstone": true },
+          "dseq": 1
+        }
+      ],
+      "batchSeq": 0,
+      "batchTotal": 1
+    }
+  }
+}

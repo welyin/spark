@@ -11,6 +11,7 @@
 //! 命令；stdin 读取与事件接收各起一个线程，经 mpsc 汇入主循环。
 
 mod contact;
+mod data;
 mod dispatch;
 mod identity;
 mod message;

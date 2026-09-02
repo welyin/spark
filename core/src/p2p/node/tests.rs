@@ -119,6 +119,8 @@ async fn test_loop_with(
         plugin_announce_tenure_ms: PLUGIN_ANNOUNCE_RELAY_TENURE_MS,
         peer_connected_since: HashMap::new(),
         topic_cache: HashMap::new(),
+        org_pull_blackhole: false,
+        stalled_pull_channels: Vec::new(),
     }
 }
 

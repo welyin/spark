@@ -550,6 +550,85 @@ impl KernelDmHandler {
             let _ = node.dm_direct(&target, envelope).await;
         });
     }
+
+    /// F3（§20.6 离线补投）：对端 orgsync-hello（成员上线）触发——扫描本机
+    /// orgkey pending，向该成员（`from_root_id`）重投未送达的 orgkey-deliver
+    /// （离线/无 accessKey 期间 grant/revoke 的密钥补投）。
+    ///
+    /// 装配复用 [`crate::kernel::data_access::plan_pending_orgkey_resend`]
+    /// （与 Kernel 出站同一份规则，host 不持 `&Kernel`，资源全部来自共享格）；
+    /// 发送经 `dm_direct` + 退避重试（`deliver_with_retry`，同
+    /// `spawn_deliveries_with_retry` 语义）。重投幂等（收端已有 ≥ epoch 密钥
+    /// 静默丢弃）；装配与 pending 清理在 io_lock 内（与入站落库互斥）。
+    /// 无该成员 pending / 未解锁（无 seed、根私钥）/ 节点未回填 → 静默跳过。
+    pub(super) fn spawn_orgkey_pending_resend(
+        &self,
+        my_root_id: &str,
+        org_id: &str,
+        from_root_id: &str,
+    ) {
+        // 稳态快路径：无该成员的 pending 直接返回（零 spawn 开销）
+        let has_pending = crate::sync::orgsync::orgkey_pending_for_org(&self.storage, org_id)
+            .iter()
+            .any(|(_, recipient, _, _)| recipient == from_root_id);
+        if !has_pending {
+            return;
+        }
+        let seed = self
+            .seed_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let root_key = self
+            .signing_key_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let node = self
+            .node_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let (Some(seed), Some(root_key), Some(node)) = (seed, root_key, node) else {
+            return;
+        };
+        let org_id = org_id.to_string();
+        let from_root_id = from_root_id.to_string();
+        let sender_root_id = my_root_id.to_string();
+        let mut storage = self.storage.clone();
+        let io_lock = std::sync::Arc::clone(&self.io_lock);
+        tokio::spawn(async move {
+            let deliveries = {
+                let _io = io_lock.lock().unwrap_or_else(|e| e.into_inner());
+                let mut ctx = crate::kernel::data_access::OrgkeyDeliverCtx {
+                    storage: &mut storage,
+                    seed,
+                    sender_root_id,
+                    root_key,
+                    now_ms: system_now_ms(),
+                };
+                crate::kernel::data_access::plan_pending_orgkey_resend(
+                    &mut ctx,
+                    &org_id,
+                    &from_root_id,
+                )
+            };
+            if deliveries.is_empty() {
+                return;
+            }
+            log::info!(
+                "[ORGKEY] resend pending on hello | org={org_id} to={} count={}",
+                &from_root_id[..std::cmp::min(16, from_root_id.len())],
+                deliveries.len()
+            );
+            crate::kernel::dm_delivery::deliver_with_retry(
+                &node,
+                deliveries,
+                &crate::kernel::dm_delivery::DM_RETRY_DELAYS,
+            )
+            .await;
+        });
+    }
 }
 
 /// 出站 body 中墓碑记录的最大 dseq（无墓碑 → None）。

@@ -823,6 +823,9 @@ pub fn drop_version<S: StorageBackend>(storage: &mut S, decl: &CollectionDeclara
 }
 
 pub mod blob;
+mod decl_converge;
+
+pub use decl_converge::apply_org_decl_convergent;
 
 #[cfg(test)]
 mod tests;

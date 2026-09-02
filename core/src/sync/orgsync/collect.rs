@@ -18,8 +18,11 @@ use super::envelope::OrgsyncRecord;
 // ── hello 摘要折叠 ──────────────────────────────────────────────────────
 
 /// 收集某个 org 集合的合并折叠 vv：扫描该集合**全部数据键域**（插件 `orgd:`
-/// 或内建存量键前缀）下各记录的 pmeta + 该集合声明记录（`org:coll:`）的
-/// pmeta，逐条 merge 取 max。
+/// 或内建存量键前缀）下各记录的 pmeta，逐条 merge 取 max。
+///
+/// F2-P1：声明（`org:coll:`）与授权名单（`org:acl:`）已并入 org:structure
+/// 键域（builtin.rs），随 all-members 集合折叠——不再随所属集合流量
+/// per-collection 携带（避免双通道重复折叠）。
 pub fn collect_org_collection_vv<S: StorageBackend>(
     storage: &S,
     org_id: &str,
@@ -39,17 +42,6 @@ pub fn collect_org_collection_vv<S: StorageBackend>(
             if let Ok(meta) = serde_json::from_str::<crate::sync::meta::DocMeta>(&raw) {
                 folded = merge_version_vectors(Some(&folded), Some(&meta.vv));
             }
-        }
-    }
-    // 声明记录 + 授权名单（O4）也参与折叠（保留系统集合，全量随集合同步）
-    for sys_key in [
-        crate::plugindata::org_decl_key(org_id, name, version),
-        super::access::acl_key(org_id, name, version),
-    ] {
-        if let Ok(Some(raw)) = storage.get(&format!("pmeta:{sys_key}"))
-            && let Ok(meta) = serde_json::from_str::<crate::sync::meta::DocMeta>(&raw)
-        {
-            folded = merge_version_vectors(Some(&folded), Some(&meta.vv));
         }
     }
     Ok(folded)
@@ -113,23 +105,6 @@ pub fn diff_org_collection(local_vv: &VersionVector, remote_vv: &VersionVector) 
 
 // ── 增量采集 ─────────────────────────────────────────────────────────────
 
-/// 读取集合声明记录（`org:coll:`）及其 pmeta——保留系统集合的同步载体。
-/// 记录不存在或未版本化 → `Ok(None)`（未声明/损坏态跳过，不阻塞）。
-fn collect_system_record<S: StorageBackend>(
-    storage: &S,
-    decl_key: &str,
-) -> SyncResult<Option<(String, crate::sync::meta::DocMeta)>> {
-    let raw_value = match storage.get(decl_key)? {
-        Some(v) => v,
-        None => return Ok(None),
-    };
-    let meta = match crate::sync::get_personal_meta(storage, decl_key)? {
-        Some(m) => m,
-        None => return Ok(None),
-    };
-    Ok(Some((raw_value, meta)))
-}
-
 /// 按 `knownVv` 采集 org 集合增量（need 的处理）：扫描该集合全部数据键域
 /// 记录，凡本地 pmeta 相对 knownVv 不是 `Remote`/`Equal` → 纳入返回。
 pub fn collect_org_incremental<S: StorageBackend>(
@@ -165,36 +140,10 @@ pub fn collect_org_incremental<S: StorageBackend>(
             }
         }
     }
-    // B5：集合声明记录（org:coll:）+ 授权名单（org:acl:，O4）随增量同步
-    // （保留系统集合，声明先行/名单全员可见）。
-    let sys_keys = [
-        crate::plugindata::org_decl_key(org_id, name, version),
-        super::access::acl_key(org_id, name, version),
-    ];
-    for sys_key in sys_keys {
-        if let Some((raw_value, meta)) = collect_system_record(storage, &sys_key)? {
-            if !crate::sync::is_tombstone(&meta)
-                && !matches!(
-                    compare_version_vectors(Some(&meta.vv), Some(known_vv)),
-                    CompareResult::Remote | CompareResult::Equal
-                )
-            {
-                let value = match serde_json::from_str(&raw_value) {
-                    Ok(v) => v,
-                    Err(error) => {
-                        eprintln!("[orgsync] skip corrupted sys record {sys_key}: {error}");
-                        return Ok(records);
-                    }
-                };
-                records.push(OrgsyncRecord {
-                    key: sys_key,
-                    value,
-                    meta,
-                    dseq: None,
-                });
-            }
-        }
-    }
+    // B5/F2-P1：集合声明（org:coll:）与授权名单（org:acl:）已并入
+    // org:structure 键域（builtin.rs），随 all-members 集合的折叠/增量全员
+    // 同步——不再随所属集合流量 per-collection 携带（避免双通道重复；
+    // 声明收敛合入见 inbound_dm/orgsync.rs 的 decl 分支）。
     // 墓碑增量：删除日志驱动
     records.extend(collect_org_tombstones_after(
         storage, org_id, name, version, dlog_ack,

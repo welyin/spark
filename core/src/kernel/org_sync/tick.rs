@@ -1,5 +1,6 @@
 //! keepalive 组织保活周期任务（p2p-node.ts `maintainOrganizationNetwork`）：
-//! 网关 DHT 提供 → 组织地址发布 → 反熵拉取
+//! 四阶段分预算执行（org-sync-stall-fix §3.2，F6：S0 网关/地址发布 →
+//! S1 自设备链路 → S2 反熵对账 → S3 orgsync-hello 恒执行，各阶段独立超时）。
 //! （覆盖网维护已在 p2p 事件循环内完成；覆盖网成员不周期拨号，connection-policy
 //! M5。M6：tick 内主动外联（网关拨号 / 失联恢复查询 / **管理员补副本**）全删，
 //! 彻底事件驱动——连接仅由懒拨号（发送时 / 登录时 / 网络恢复时）与被动接受
@@ -174,77 +175,129 @@ impl OrgSyncContext {
     // keepalive 组织保活（p2p-node.ts:379-445 `maintainOrganizationNetwork`）
     // ------------------------------------------------------------------
 
-    /// 单个 keepalive tick 的组织层保活：网关 DHT 提供 → 组织地址发布 → 反熵
-    /// 拉取（覆盖网维护已在 p2p 事件循环内完成；覆盖网成员不周期拨号，
-    /// connection-policy M5）。M6 起 **tick 内不再有任何主动外联**（网关拨号 /
-    /// 失联恢复查询 / **管理员补副本**全删）——组织成员连接只由懒拨号（发送时 /
-    /// 登录时 / 网络恢复时）与被动接受入站建立；`connected_gateway_candidates`
-    /// 保留仅作反熵拉取源与失联判空依据（无已连接候选时拉取循环天然空转，正是
-    /// 「没连接就不拉取」）。补副本改由组织写入事件点触发（push.rs
-    /// `ensure_replicas_after_write`），tick 自此零主动外联。
+    /// 单个 keepalive tick 的组织层保活（p2p-node.ts:379-445
+    /// `maintainOrganizationNetwork`），四阶段分预算执行（org-sync-stall-fix
+    /// §3.2，F6）：
+    ///
+    /// - **S0** 网关/地址发布（[`Self::refresh_gateway_providing`] +
+    ///   [`Self::refresh_org_address_publishing`]，10s）；
+    /// - **S1** 自设备链路状态机（断→连跳变 Resync、稳态 steady hello，10s）。
+    ///   不做周期补拨（M4 懒拨号：写入触发 `self_hello_now` 才拨一次）——两端
+    ///   错峰上线靠任一方写入触发懒拨号会合，或对端主动拨过来；
+    /// - **S2** 反熵对账（≤2 个已连接网关候选，捎带自签 claim，20s）。M6 起
+    ///   tick 内零主动外联——候选仅由已连接网关构成，无候选即跳过（「没连接
+    ///   就不拉取」）；
+    /// - **S3** orgsync-hello（向已连接复制组成员发摘要，O2a §20.3，10s）——
+    ///   tick 的出口语义，**恒执行**：前序阶段超时放弃不得跳过。
+    ///
+    /// 各阶段包 `tokio::time::timeout`，超时即放弃本阶段进入下一阶段（阶段间
+    /// 无依赖）；总预算 ≤50s（外加 S1/S2 前一次 5s 超时兜底的
+    /// `local_node_info` 读取），约小于生产 keepalive 间隔（60s）。
     pub(crate) async fn maintain_org_tick(&self) {
         let Some(root_id) = self.root_id() else {
             return;
         };
-        // 0) 网关职责：本机是某组织网关 → 在该组织私有 DHT key 上提供成员提示
-        //    （§15；幂等，dht off 时静默跳过）
-        self.refresh_gateway_providing(&root_id).await;
-        // 0.5) 公开组织职责：持钥节点新签/重发组织地址记录，非持钥网关重发缓存
-        //      记录（§16；同落点同静默口径）
-        self.refresh_org_address_publishing(&root_id).await;
+        let budgets = self.tick_budgets;
+
+        // S0) 网关/地址发布：本机是某组织活跃网关 → 私有 DHT key 提供成员提示
+        //     （§15）；公开组织持钥节点新签/重发地址记录（§16）。均幂等、失败
+        //     静默（dht off 时下轮重试）。
+        self.run_tick_stage("S0", budgets.gateway_publish, async {
+            self.refresh_gateway_providing(&root_id).await;
+            self.refresh_org_address_publishing(&root_id).await;
+        })
+        .await;
+
+        // 本机节点信息一次取用：候选收集（排除本机 peerId）与连接快照共用
+        // （API 层 5s 超时兜底，org-sync-stall-fix §3.3）
+        let local_info = self.node.local_node_info().await.ok();
+
+        // S1) 自设备链路状态机
+        self.run_tick_stage(
+            "S1",
+            budgets.self_device_link,
+            self.maintain_self_device_link(&root_id, local_info.as_ref()),
+        )
+        .await;
 
         let now = self.now();
-        // 本机节点信息一次取用：候选收集（排除本机 peerId）与连接快照共用
-        let local_info = self.node.local_node_info().await.ok();
-        // 0.6) 自设备链路状态机：断→连跳变 Resync、稳态 steady hello。不做周期
-        //      补拨（M4 懒拨号：写入触发 `self_hello_now` 才拨一次）——两端错峰
-        //      上线靠任一方写入触发懒拨号会合，或对端主动拨过来。
-        self.maintain_self_device_link(&root_id, local_info.as_ref())
-            .await;
         let candidates = collect_org_peer_candidates(
             &self.storage,
             &root_id,
             local_info.as_ref().and_then(|i| i.peer_id.as_deref()),
         );
-        if candidates.is_empty() {
-            // 无任何已知成员地址：无候选可拉取/无成员可同步，直接返回（M6 后
-            // 不再触发恢复拨号——本地端点全不通即沉默，等下一次懒拨号事件）。
-            return;
-        }
-
         let connected: HashSet<String> = local_info
             .map(|info| info.connected_peers.into_iter().collect())
             .unwrap_or_default();
 
-        // 已连接候选（供反熵拉取/失联判空）：已连接 ∩ 活跃网关并入判定集
-        // （I4）。M6 后 tick 不再拨号，`connected_candidates` 仅由已连接网关
-        // 构成——够用即停后静默，失联判空依赖它（无已连接候选时拉取循环
-        // 天然空转，不拉取）。
-        let connected_candidates = {
-            let orgs = crate::org::OrganizationService::read_all_organizations(&self.storage)
-                .unwrap_or_default();
-            connected_gateway_candidates(&orgs, &root_id, &connected, now)
-        };
-
-        // 反熵拉取：最多 2 个已连接候选（捎带自签 claim）
-        for candidate in connected_candidates.iter().take(PULL_CANDIDATES_PER_TICK) {
-            if let Err(e) = self.reconcile_from_peer(candidate, true).await {
-                self.warn(format!(
-                    "[p2p][keepalive] pull from candidate failed: peerId={:?}, error={e}",
-                    candidate.peer_id
-                ));
-            }
+        // S2) 反熵对账：最多 2 个已连接候选。无任何已知成员地址时跳过
+        //     （M6 后不再触发恢复拨号——本地端点全不通即沉默，等下一次懒拨号
+        //     事件）；S3 不受影响，仍恒执行。
+        if !candidates.is_empty() {
+            let connected_candidates = {
+                let orgs = crate::org::OrganizationService::read_all_organizations(&self.storage)
+                    .unwrap_or_default();
+                connected_gateway_candidates(&orgs, &root_id, &connected, now)
+            };
+            self.run_tick_stage("S2", budgets.reconcile, async {
+                for candidate in connected_candidates.iter().take(PULL_CANDIDATES_PER_TICK) {
+                    if let Err(e) = self.reconcile_from_peer(candidate, true).await {
+                        self.warn(format!(
+                            "[p2p][keepalive] pull from candidate failed: peerId={:?}, error={e}",
+                            candidate.peer_id
+                        ));
+                    }
+                }
+            })
+            .await;
         }
 
         // 3) 管理员补副本：M6 起不在 tick 内做（零主动外联）——改由组织写入
         //    事件点触发（push.rs `ensure_replicas_after_write`），此处不再调用。
 
-        // 3.5) orgsync-hello 触发：本机作为复制组成员，向已连接的复制组成员
-        //       发送 orgsync-hello 摘要（O2a §20.3）。
-        //       TODO: 完整接线——从 VersionedStorage 变更信号（last_local_write_ms）
-        //       驱动即时 hello + 1s 防抖；当前最小闭环：每 tick 遍历组织与集合，
-        //       向已连接复制组成员发送 hello。后续需接入 orgd 写变更 watcher。
-        self.maybe_send_orgsync_hello(&root_id, &connected).await;
+        // S3) orgsync-hello 触发：本机作为复制组成员，向已连接的复制组成员
+        //     发送 orgsync-hello 摘要（O2a §20.3）。tick 出口语义，恒执行。
+        //     TODO: 完整接线——从 VersionedStorage 变更信号（last_local_write_ms）
+        //     驱动即时 hello + 1s 防抖；当前最小闭环：每 tick 遍历组织与集合，
+        //     向已连接复制组成员发送 hello。后续需接入 orgd 写变更 watcher。
+        self.run_tick_stage(
+            "S3",
+            budgets.orgsync_hello,
+            self.maybe_send_orgsync_hello(&root_id, &connected),
+        )
+        .await;
+    }
+
+    /// tick 单阶段执行器（org-sync-stall-fix §3.2/§3.4）：包 `timeout`，超时
+    /// 即放弃本阶段返回（阶段间无依赖，后续阶段照常）；进入/完成 DEBUG，完成
+    /// 耗时 >5s 升 WARN，超时 WARN 明示放弃——与「静默缓慢」区分。
+    async fn run_tick_stage(
+        &self,
+        stage: &'static str,
+        budget: std::time::Duration,
+        fut: impl std::future::Future<Output = ()>,
+    ) {
+        log::debug!("[ORG_SYNC] tick stage enter | stage={stage}");
+        let started = std::time::Instant::now();
+        if tokio::time::timeout(budget, fut).await.is_err() {
+            log::warn!(
+                "[ORG_SYNC] tick stage budget exceeded, skipped | stage={stage} budget={}ms",
+                budget.as_millis()
+            );
+            return;
+        }
+        let elapsed = started.elapsed();
+        if elapsed > std::time::Duration::from_secs(5) {
+            log::warn!(
+                "[ORG_SYNC] tick stage slow | stage={stage} elapsed={}ms",
+                elapsed.as_millis()
+            );
+        } else {
+            log::debug!(
+                "[ORG_SYNC] tick stage done | stage={stage} elapsed={}ms",
+                elapsed.as_millis()
+            );
+        }
     }
 
     /// 自设备链路维护（connection-policy M4 懒拨号后）：**不再周期补拨**。

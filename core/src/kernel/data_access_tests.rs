@@ -264,7 +264,7 @@ fn publish_access_key_binds_and_serializes_compatibly() {
 }
 
 /// O5：orgkey 离线投递 pending——收件人无 accessKey（不可达）时 grant 落
-/// `orgkey:pending:` 键；`resend_pending_orgkey` 按 org 扫描并清空这些 pending
+/// `orgkey-pending:` 键；`resend_pending_orgkey` 按 org 扫描并清空这些 pending
 /// （重投路径幂等，对端已有 ≥ epoch 丢弃无害）。
 #[test]
 fn orgkey_offline_delivery_persists_and_resends_pending() {
@@ -316,4 +316,166 @@ fn orgkey_offline_delivery_persists_and_resends_pending() {
         !after.iter().any(|(c, r, e, _)| c == col_full && r == BOB && *e == 1),
         "resend 后 pending 已清"
     );
+}
+
+/// F3：orgkey pending 重投的端到端 roundtrip（hello 触发重投 host 接线所用
+/// 的共享原语 `plan_pending_orgkey_resend`）——grant 时收件人无 accessKey
+/// （不可达）落 pending；收件人 accessKey/node_info 同步到 owner 侧后，重投
+/// 装配产出 orgkey-deliver 信封并清空 pending；信封在收端过「资格（sender ∈
+/// acl owners）→ 验签（成员表 accessKey）→ 幂等」判定产出 unbox 指令，解出
+/// 的 epoch 密钥与 owner 侧 orgkey 表逐字节一致（收端拿到真实密钥）。
+#[test]
+fn orgkey_pending_resend_receiver_unboxes_epoch_key() {
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD as B64;
+
+    let (_dir, mut kernel) = unlocked_kernel();
+    let org = kernel
+        .create_org(CreateOrganizationInput {
+            name: "测试组织".to_string(),
+            description: None,
+            avatar: None,
+            base_plugin_domain: None,
+        })
+        .unwrap();
+    let org_id = org.record.org_id.clone();
+    let owner_root = kernel.require_current_root_id().unwrap();
+    const BOB: &str = "b0b0000000000000000000000000000000000000000000000000000000000000";
+    kernel.org_add_member(&org_id, BOB, None).unwrap();
+    kernel
+        .data_declare_collection(
+            "plugin:ai-chat",
+            DeclareInput {
+                name: "ai-chat:payroll".to_string(),
+                version: Some("1.0.0".to_string()),
+                space: Some(Space::Org),
+                accounts: Some(Accounts::DataAccounts),
+                confidentiality: Some(Confidentiality::Encrypted),
+                scope: Some(Scope::Sync),
+                ..Default::default()
+            },
+            Some(&org_id),
+        )
+        .unwrap();
+    // grant（自动发布 owner accessKey）→ BOB 无 accessKey 不可达 → 落 pending
+    kernel
+        .data_grant_access(&org_id, "ai-chat:payroll", "1.0.0", &[BOB.to_string()])
+        .unwrap();
+    let col_full = "ai-chat:payroll@v1.0.0";
+    let raw = kernel.require_storage().unwrap().raw().clone();
+    assert!(
+        orgsync::orgkey_pending_for_org(&raw, &org_id)
+            .iter()
+            .any(|(c, r, e, _)| c == col_full && r == BOB && *e == 1),
+        "grant 时 BOB 不可达 → 落 orgkey pending"
+    );
+    let epoch_key = orgsync::get_epoch_key(&raw, &org_id, "ai-chat:payroll", "1.0.0", 1)
+        .expect("owner 侧 epoch 1 密钥已落 orgkey 表");
+
+    // BOB（另一账号）发布 accessKey + 端点上线 → 同步到 owner 侧成员表
+    // （测试直写成员记录，等价于成员表经 org:structure 同步到达）。
+    let bob_seed = [9u8; 64];
+    let bob_org =
+        crate::identity::derive_domain_identity(&bob_seed, &Kernel::org_access_domain(&org_id));
+    let mut record = OrganizationService::get_record(&raw, &org_id).unwrap().unwrap();
+    let bob = record
+        .members
+        .iter_mut()
+        .find(|m| m.root_id == BOB)
+        .expect("BOB 成员记录");
+    bob.access_key = Some(crate::org::types::OrganizationAccessKey {
+        public_key: B64.encode(bob_org.public_key()),
+        bind_sig: String::new(),
+    });
+    bob.node_info = Some(crate::org::types::OrganizationDeviceSet {
+        endpoints: vec![crate::org::types::OrganizationNodeInfo {
+            device_uid: None,
+            peer_id: Some("peer-bob".to_string()),
+            addresses: Vec::new(),
+        }],
+    });
+    let mut raw_mut = raw.clone();
+    OrganizationService::save_record(&mut raw_mut, &record).unwrap();
+
+    // hello 触发重投装配（host 接线路径 `spawn_orgkey_pending_resend` 的同一
+    // 原语；无节点句柄时不实际发送，直接取装配产物验证线上形态）。
+    let (seed, root_key) = {
+        let unlocked = kernel.unlocked.as_ref().expect("已解锁");
+        (unlocked.seed, unlocked.identity.signing_key.clone())
+    };
+    let mut ctx = OrgkeyDeliverCtx {
+        storage: &mut raw_mut,
+        seed,
+        sender_root_id: owner_root.clone(),
+        root_key,
+        now_ms: crate::p2p::node::system_now_ms(),
+    };
+    let deliveries = plan_pending_orgkey_resend(&mut ctx, &org_id, BOB);
+    assert_eq!(deliveries.len(), 1, "单端点 × 单 epoch → 一条投递");
+    assert_eq!(deliveries[0].0.peer_id.as_deref(), Some("peer-bob"));
+    assert!(
+        orgsync::orgkey_pending_for_org(&raw_mut, &org_id).is_empty(),
+        "重投装配后 pending 已清"
+    );
+
+    // 信封线上形态：kind/from/to + 收端 verify_envelope 通过（根签名 from 绑定）
+    let envelope = &deliveries[0].1;
+    assert_eq!(
+        envelope["kind"],
+        crate::kernel::dm_envelope::KIND_ORGKEY_DELIVER
+    );
+    let verified = crate::kernel::dm_envelope::verify_envelope(
+        envelope,
+        BOB,
+        crate::p2p::node::system_now_ms(),
+    )
+    .expect("收端信封验签通过");
+    assert_eq!(verified.from, owner_root, "信封 from = owner rootId");
+
+    // 收端（BOB 的存储）：成员表 + acl（owner ∈ owners）→ 入站判定 → unbox 指令
+    let mut recv = crate::storage::MemoryStorage::new();
+    OrganizationService::save_record(&mut recv, &record).unwrap();
+    let acl = orgsync::AclRecord {
+        owners: vec![owner_root.clone()],
+        readers: vec![owner_root.clone(), BOB.to_string()],
+        epoch: 1,
+        updated_at: 100,
+        reset_by: None,
+        sig: String::new(),
+    };
+    recv.put(
+        &orgsync::acl_key(&org_id, "ai-chat:payroll", "1.0.0"),
+        &serde_json::to_string(&acl).unwrap(),
+    )
+    .unwrap();
+    let online = std::collections::HashSet::new();
+    let ictx = crate::kernel::inbound_dm::InboundContext {
+        my_root_id: BOB,
+        my_nickname: "bob",
+        remote_peer_id: "peer-owner",
+        online_peers: &online,
+        node_id: "node-bob",
+        now_ms: crate::p2p::node::system_now_ms(),
+        kverify: None,
+    };
+    let res =
+        crate::kernel::inbound_dm::handle_orgkey_deliver(&mut recv, &ictx, &owner_root, &verified.body)
+            .unwrap();
+    let unbox = res.orgkey_unbox.into_iter().next().expect("重投信封过收端判定 → unbox 指令");
+
+    // host 解包（apply_orgkey_unbox 的纯逻辑等价）：BOB 域身份私钥解 box，
+    // 解出的 epoch 密钥与 owner 侧 orgkey 表逐字节一致。
+    let bob_x25519 = orgsync::ed_sk_to_x25519(&bob_org.signing_key.to_bytes());
+    let got = orgsync::unbox_epoch_key(
+        &unbox.wrapped_key,
+        &unbox.nonce24,
+        &unbox.sender_x25519,
+        &bob_x25519,
+        &unbox.org_id,
+        col_full,
+        &unbox.sender_root_id,
+        BOB,
+    )
+    .expect("BOB 解 box 成功");
+    assert_eq!(got, epoch_key, "重投后收端解出的 epoch 密钥与 owner 侧一致");
 }

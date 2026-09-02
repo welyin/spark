@@ -28,3 +28,9 @@ mod sync_state;
 mod tx;
 #[path = "unit_org/types.rs"]
 mod types;
+
+/// F8：service 写路径的 io_lock 参数（org:meta 原子段互斥锁）——单测无并发
+/// 入站，每次调用一把新锁即可。
+pub(crate) fn test_io_lock() -> spark_core::org::service::OrgMetaWriteLock {
+    std::sync::Arc::new(std::sync::Mutex::new(()))
+}

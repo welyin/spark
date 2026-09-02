@@ -31,6 +31,26 @@ pub(crate) fn delivery_needs_retry(
     }
 }
 
+/// 逐信封顺序投递 + 退避重试（`spawn_deliveries_with_retry` 的任务体抽出）：
+/// host 层 hello 触发的 orgkey pending 重投（F3，§20.6）不持 `&Kernel`，
+/// 持 Arc 节点句柄直接复用同一投递/重试语义。
+pub(crate) async fn deliver_with_retry(
+    node: &crate::p2p::P2pNode,
+    deliveries: Vec<(PeerNodeInfo, Value)>,
+    retry_delays: &'static [std::time::Duration],
+) {
+    for (peer, envelope) in deliveries {
+        let mut result = node.dm_direct(&peer, envelope.clone()).await;
+        for delay in retry_delays {
+            if !delivery_needs_retry(&result) {
+                break;
+            }
+            tokio::time::sleep(*delay).await;
+            result = node.dm_direct(&peer, envelope.clone()).await;
+        }
+    }
+}
+
 impl Kernel {
     /// spawn 顺序投递任务（尽力而为；不捕获 `&Kernel`——节点句柄为 Arc 克隆，
     /// host `spawn_auto_accept` 同模式）。用于控制信封（read/recall/设备同步），
@@ -86,16 +106,7 @@ impl Kernel {
             return;
         };
         self.runtime.handle().spawn(async move {
-            for (peer, envelope) in deliveries {
-                let mut result = node.dm_direct(&peer, envelope.clone()).await;
-                for delay in retry_delays {
-                    if !delivery_needs_retry(&result) {
-                        break;
-                    }
-                    tokio::time::sleep(*delay).await;
-                    result = node.dm_direct(&peer, envelope.clone()).await;
-                }
-            }
+            deliver_with_retry(&node, deliveries, retry_delays).await;
         });
     }
 

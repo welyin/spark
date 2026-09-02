@@ -88,7 +88,15 @@ fn doc_write_meta_evidence_and_restart() {
     let meta_raw = &entries["meta:chat:messages:id1"];
     let meta: Value = serde_json::from_str(meta_raw).unwrap();
     let node_id = meta["nodeId"].as_str().unwrap();
-    assert_eq!(meta["vv"][node_id], 2, "本节点两次写入计数");
+    // per-node 单调序号（org-vv-fix §2.3）：vv 分量 = 节点全局分配器当前值，
+    // 不再是该 key 的写入次数
+    let vv_val = meta["vv"][node_id].as_i64().unwrap();
+    let seq_key = format!("p2p:vvseq:{node_id}");
+    let persisted_seq: i64 = entries[&seq_key]
+        .parse()
+        .expect("p2p:vvseq 序号为整数");
+    assert_eq!(vv_val, persisted_seq, "doc meta vv = per-node 序号分配器当前值");
+    assert!(vv_val >= 2, "两次写入后序号 ≥ 2");
     assert_ne!(
         node_id, "local-node",
         "已初始化身份：nodeId 应派生自持久化 p2p 身份（pdsync 节点唯一性）"

@@ -32,7 +32,9 @@ def main():
             [sys.executable, str(script)],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            text=True,
+            # 场景输出含中文（UTF-8）；Windows 缺省 GBK 解码会崩 reader 线程
+            encoding="utf-8",
+            errors="replace",
         )
         try:
             output, _ = proc.communicate(timeout=SCENARIO_TIMEOUT)

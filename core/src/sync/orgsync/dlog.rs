@@ -1,8 +1,11 @@
-//! orgsync 复制组判定 + org 域删除日志（dlog）辅助与 GC。
+//! orgsync 复制组判定 + org 域删除日志（dlog）辅助与 GC + org 域本地墓碑原语。
 //!
 //! 复制组判定：all-members（全体成员）/ data-accounts（数据账号集）。
 //! org 域 dlog 的 seq 空间按设备维护（架构裁决 B6）：seen/wm 键含 peerId 段，
 //! 读写方传入口岸 ctx 的 remote_peer_id。
+//! 墓碑原语 [`org_tombstone_local`]：org 域受理删除的唯一入口（per-node 序号
+//! bump + 墓碑 pmeta + org dlog + 本体删除，同一 batch），见
+//! wiki/architecture/sync/org-vv-fix.md §2.2。
 
 use std::collections::BTreeMap;
 
@@ -262,4 +265,48 @@ pub fn org_dlog_gc_threshold<S: StorageBackend>(
         }
     }
     Ok(if threshold == u64::MAX { 0 } else { threshold })
+}
+
+// ── org 域本地墓碑原语 ──────────────────────────────────────────────────
+
+/// org 域本地墓碑：per-node 序号 bump + tombstone pmeta + org 域 dlog +
+/// 本体删除，**同一 batch 原子提交**。语义对齐个人域
+/// [`crate::sync::delete_personal`]，差异仅在 dlog 作用域（org 域记录只登
+/// org 域 dlog，不污染个人域）。
+///
+/// vv 分量取节点全局单调序号（`current_vv_seq` 分配器，org 域与个人域共享
+/// `p2p:vvseq:{nodeId}`）：per-key 计数下受理删除不推进序号键，后续新写与
+/// 墓碑序号碰撞，已收讫墓碑的对端折叠判 Equal 跳过新记录（折叠失明，见
+/// wiki/architecture/sync/org-vv-fix.md §1.2）。
+///
+/// 调用方：入站 handler 持有裸存储的 org 域删除受理（orgq `value:null`）。
+pub fn org_tombstone_local<S: StorageBackend>(
+    storage: &mut S,
+    node_id: &str,
+    org_id: &str,
+    name: &str,
+    version: &str,
+    record_key: &str,
+    now_ms: i64,
+) -> SyncResult<crate::sync::meta::DocMeta> {
+    let mut meta = crate::sync::get_personal_meta(storage, record_key)?.unwrap_or_default();
+    let seq = crate::sync::personal::current_vv_seq(storage, node_id)? + 1;
+    meta.vv.insert(node_id.to_string(), seq);
+    meta.ts = now_ms;
+    meta.node_id = Some(node_id.to_string());
+    meta.tombstone = Some(true);
+
+    let (_dlog_seq, dlog_ops) = org_dlog_append_ops(storage, org_id, name, version, record_key)?;
+    let mut ops = vec![
+        crate::storage::BatchOperation::delete(record_key),
+        crate::storage::BatchOperation::put(
+            crate::sync::personal_meta_key(record_key),
+            serde_json::to_string(&meta)?,
+        ),
+        crate::sync::personal::vv_seq_batch_op(node_id, seq),
+    ];
+    ops.extend(dlog_ops);
+    storage.batch(ops)?;
+
+    Ok(meta)
 }

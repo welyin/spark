@@ -123,9 +123,10 @@ impl<S: StorageBackend> VersionedStorage<S> {
     /// key 是否为 org 域受管（orgd: 数据 / org:coll: 声明 / 内建 all-members
     /// 集合的存量组织键）。
     ///
-    /// O2b：存量组织键（org:meta/ct:org/org:inv）纳管为内建 all-members
-    /// 集合，其删除须落 **org 域 dlog**（作用域 = 所属内建集合），墓碑可
-    /// 经 orgsync 中继——不再只落个人域 dlog。
+    /// O2b：存量组织键（org:meta/ct:org）纳管为内建 all-members 集合，其删除
+    /// 须落 **org 域 dlog**（作用域 = 所属内建集合），墓碑可经 orgsync 中继
+    /// ——不再只落个人域 dlog。F7：org:inv:* 退出 orgsync（`legacy_org_key_scope`
+    /// 不再命中）——删除回落为只登个人域 dlog（随 pdsync 自设备传播）。
     fn is_org_key(key: &str) -> bool {
         key.starts_with("orgd:")
             || key.starts_with("org:coll:")
@@ -184,9 +185,10 @@ impl<S: StorageBackend> VersionedStorage<S> {
     /// dlog 路由：
     /// - `orgd:`/`org:coll:`（orgsync 专属）→ 只写 **org 域 dlog**
     ///   （`dlog:org:{orgId}:{name}@v{version}`，A→B→C 接力传播）；
-    /// - 存量组织键（`org:meta`/`ct:org`/`org:inv`，O2b 内建集合）→ **同时写
+    /// - 存量组织键（`org:meta`/`ct:org`，O2b 内建集合）→ **同时写
     ///   org 域 dlog 与个人域 dlog**——orgsync 成员间反熵走 org dlog，pdsync
-    ///   自设备同步照旧走个人 dlog（"键不搬家、pdsync 不动"）；墓碑两路中继；
+    ///   自设备同步照旧走个人 dlog（"键不搬家、pdsync 不动"）；墓碑两路中继。
+    ///   （F7：`org:inv:*` 已退出 orgsync，不在此列——只登个人域 dlog）；
     /// - 其余个人域 key → 只写个人域 dlog。
     fn tombstone_local(
         &self,

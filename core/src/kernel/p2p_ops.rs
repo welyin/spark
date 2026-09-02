@@ -123,6 +123,9 @@ impl Kernel {
             config.dht_mode = mode;
         }
         let (org_sync_tx, org_sync_rx) = tokio::sync::mpsc::unbounded_channel();
+        // KeepaliveTick 在飞标记（F6 §3.1 注入合并）：事件泵注入侧与 worker
+        // 共享——已有在飞 tick 时跳过注入，幂等周期任务不积压
+        let tick_in_flight = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let host = Box::new(KernelHost {
             storage: raw.clone(),
             current_root_id: Arc::clone(&self.current_root_id_shared),
@@ -206,6 +209,9 @@ impl Kernel {
             filter_caps: Arc::clone(&self.plugin_host.filter_caps),
             replica_check: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             recovery_refresh: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            tick_in_flight: Arc::clone(&tick_in_flight),
+            tick_budgets: Default::default(),
+            io_lock: Arc::clone(&self.io_lock),
         };
         let worker = org_sync::spawn_worker(self.runtime.handle(), ctx, org_sync_rx);
 
@@ -252,11 +258,14 @@ impl Kernel {
         let org_tx = org_sync_tx.clone();
         let links = Arc::clone(&self.self_device_links);
         let my_peer = peer_id.clone();
+        let tick_flag = Arc::clone(&tick_in_flight);
         let pump = self.runtime.handle().spawn(async move {
             while let Some(event) = events.recv().await {
                 match &event {
                     P2pEvent::KeepaliveTick(_) => {
-                        let _ = org_tx.send(OrgSyncRequest::KeepaliveTick);
+                        // 注入合并（F6 §3.1）：已有在飞 tick 时跳过——tick 是幂等
+                        // 周期任务，积压 N 份与 1 份语义相同
+                        org_sync::inject_keepalive_tick(&org_tx, &tick_flag);
                     }
                     P2pEvent::PeerConnected { peer_id } => {
                         if peer_id != &my_peer {
@@ -490,6 +499,10 @@ impl Kernel {
             filter_caps: Arc::clone(&self.plugin_host.filter_caps),
             replica_check: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             recovery_refresh: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            // 即席上下文不走 worker/tick：在飞标记独立占位即可，预算用默认
+            tick_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            tick_budgets: Default::default(),
+            io_lock: Arc::clone(&self.io_lock),
         })
     }
 
@@ -695,6 +708,18 @@ impl Kernel {
     /// 订阅 P2P 事件流（壳层消费；慢订阅者收到 `Lagged` 表示丢事件）。
     pub fn subscribe_p2p_events(&self) -> broadcast::Receiver<P2pEvent> {
         self.event_tx.subscribe()
+    }
+
+    /// 故障注入开关（**仅供 e2e 测试驱动**，e2e_node `fault-org-pull-blackhole`；
+    /// org-sync-stall-fix §5）：开启后本节点收到 org-pull 请求不应答（应答
+    /// 通道挂起至请求方协议读超时），复现「对端半连接长超时」。p2p 未启动
+    /// 报 `NotStarted`。
+    pub fn p2p_set_org_pull_blackhole(&self, on: bool) -> Result<()> {
+        let node = self.p2p.as_ref().ok_or(P2pError::NotStarted)?;
+        self.runtime
+            .handle()
+            .block_on(node.set_org_pull_blackhole(on))?;
+        Ok(())
     }
 
     // ------------------------------------------------------------------

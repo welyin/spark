@@ -287,6 +287,20 @@ impl<S: StorageBackend> EventLoop<S> {
         request: String,
         channel: request_response::ResponseChannel<String>,
     ) {
+        // 故障注入（e2e 专用，org-sync-stall-fix §5）：黑洞开启时 org-pull
+        // 入站扣住应答通道不响应——请求方走协议读超时，复现「对端半连接
+        // 长超时」；org-share 正常应答（应答面不瘫痪，仅 pull 链路挂起）。
+        if self.org_pull_blackhole
+            && let Ok(Some((kind, _))) = direct::parse_org_share_request(&request)
+            && matches!(
+                kind,
+                direct::OrgShareRequestKind::OrgPullList | direct::OrgShareRequestKind::OrgPullOrg
+            )
+        {
+            log::info!("[p2p] fault injection: org-pull request blackholed (no response)");
+            self.stalled_pull_channels.push(channel);
+            return;
+        }
         let response = match direct::parse_org_share_request(&request) {
             Err(_) => direct::build_org_share_error_response("empty or invalid json"),
             Ok(None) => direct::build_org_share_error_response("invalid type"),

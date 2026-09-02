@@ -114,8 +114,19 @@ pub(super) fn handle_org_invite<S: StorageBackend>(
             updated_at: ctx.now_ms,
         },
     };
-    // P5：邀请记录写 pmeta，供自设备 pdsync 同步
-    OrganizationService::put_invite_record_pdsync(storage, &record, ctx.now_ms, ctx.node_id)?;
+    // F7（org-invite-scope-fix §2.2）：入站记录是**本机事实**（我收到了邀请），
+    // 记账对象 = 本机 nodeId。入站 handler 持 raw 存储（§X 防回声结构不变量
+    // 不动）——`put_invite_record_pdsync` 的记账已下沉中间件、在 raw 句柄上
+    // 沉默无记账（F7 第二成因）；此处显式 `put_personal`（per-node 序号），
+    // 自设备 pdsync 立即可见。
+    let invite_key = crate::org::invite_record::org_invite_in_key(&record.org_id, &record.peer_root_id);
+    crate::sync::put_personal(
+        storage,
+        ctx.node_id,
+        &invite_key,
+        &serde_json::to_string(&record)?,
+        ctx.now_ms,
+    )?;
 
     let conv = ensure_system_conversation(storage, ctx.now_ms)?;
     let mut events = Vec::new();
@@ -199,20 +210,23 @@ pub(super) fn handle_org_invite_reply<S: StorageBackend>(
     } else {
         OrgInviteStatus::Declined
     };
-    let mut record = OrganizationService::mark_invite_status_pdsync(
-        storage,
-        OrgInviteDirection::Outgoing,
-        org_id,
-        from,
-        status,
-        ctx.now_ms,
-        ctx.node_id,
-    )?
-    .expect("record checked pending above");
+    // F7（org-invite-scope-fix §2.2）：出站记录的状态流转同样写在入站 raw
+    // 路径上——同一潜伏缺陷的另一落点。显式 put_personal 记账（本机 nodeId、
+    // per-node 序号）；「终态不重置」由上方 pending 校验保证。
+    let mut record = record.expect("record checked pending above");
+    record.status = status;
+    record.updated_at = ctx.now_ms;
     if !nickname.is_empty() && record.peer_nickname != nickname {
         record.peer_nickname = nickname.to_string();
-        OrganizationService::put_invite_record_pdsync(storage, &record, ctx.now_ms, ctx.node_id)?;
     }
+    let invite_key = crate::org::invite_record::org_invite_out_key(org_id, from);
+    crate::sync::put_personal(
+        storage,
+        ctx.node_id,
+        &invite_key,
+        &serde_json::to_string(&record)?,
+        ctx.now_ms,
+    )?;
     done(
         ok_response(),
         vec![P2pEvent::OrgInviteUpdated(serde_json::to_value(

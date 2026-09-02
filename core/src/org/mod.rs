@@ -24,6 +24,7 @@ pub mod claim;
 pub mod gateway;
 pub mod invite;
 pub mod invite_record;
+pub mod meta_merge;
 pub mod node_card;
 pub mod org_address;
 pub mod plugin_docs;
@@ -84,6 +85,7 @@ pub use replica::{
     decide_org_network_status, member_ever_synced, replica_sufficient,
 };
 pub use service::OrganizationService;
+pub use meta_merge::merge_org_meta_record;
 pub use snapshot::{
     ORGANIZATION_SYNC_RESERVED_KEYS, OrganizationSyncSnapshot, OrganizationSyncSummary,
     SnapshotMember, build_organization_sync_snapshot, build_organization_sync_versions,

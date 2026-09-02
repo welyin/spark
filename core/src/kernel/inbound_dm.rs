@@ -1,4 +1,4 @@
-﻿//! dm 入站编排：信封校验 → 按 kind 分发落库 → 生成壳层事件与直连应答。
+//! dm 入站编排：信封校验 → 按 kind 分发落库 → 生成壳层事件与直连应答。
 //!
 //! 纯函数（存储泛型），不触碰 p2p——`KernelHost::handle_dm` 在事件循环内
 //! 调用本函数并把返回的事件逐个 emit。校验/业务拒绝都体现在 `response`
@@ -46,6 +46,13 @@ KIND_PDSYNC_NEED, KIND_PROFILE_SYNC, KIND_READ, KIND_RECALL, KIND_RECOVERY, veri
 pub use orgq::OrgqPermHook;
 /// O4 orgkey-deliver 解包指令（reader 侧合法投递，host 用 seed 解包落库）。
 pub use orgkey::OrgkeyUnbox;
+/// O4 orgkey-deliver 入站判定（reader 侧资格/验签/幂等）——crate 内集成
+/// 测试（F3 重投 roundtrip）直调。
+#[cfg(test)]
+pub(crate) use orgkey::handle_orgkey_deliver;
+/// F3 残余 §7.1：orgkey-deliver 暂存的重评估（acl/org:meta 合入后触发，
+/// orgsync 入站与 legacy 快照平面合用）。
+pub(crate) use orgkey::reevaluate_orgkey_stash;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
 use crate::contact::{ContactError, ContactService, FriendRecord};
@@ -166,10 +173,11 @@ pub struct InboundDmResult {
     /// 本次 pdsync-data 是否合入了 `profile:self`（远端胜出）。host 据此
     /// 回写身份文件资料（仅解锁态），保证 sled 镜像与身份文件一致。
     pub profile_applied: bool,
-    /// O4 orgkey-deliver 解包指令（reader 侧收到合法 orgkey-deliver）：host
+    /// O4 orgkey-deliver 解包指令（reader 侧收到合法 orgkey-deliver；F3 残余
+    /// 起为 Vec——acl/org:meta 合入触发的暂存重评估可一次产出多条）：host
     /// 用本机组织身份私钥（seed）解 box 并落 orgkey 表——解包需 recipient
     /// 私钥，纯逻辑层只做资格/验签判定后产出本指令。
-    pub orgkey_unbox: Option<orgkey::OrgkeyUnbox>,
+    pub orgkey_unbox: Vec<orgkey::OrgkeyUnbox>,
     /// feed-blob 出站指令（连接层对端）：跨联系人分块传输的响应/续拉。
     /// body 已在纯逻辑层构建（io_lock 内），host 只负责包信封 + dm_direct。
     pub feed_blob_out: Option<FeedBlobOut>,
@@ -327,7 +335,7 @@ pub fn done(response: Value, events: Vec<P2pEvent>) -> Result<InboundDmResult> {
         pdsync_out: Vec::new(),
         orgsync_out: Vec::new(),
         profile_applied: false,
-        orgkey_unbox: None,
+        orgkey_unbox: Vec::new(),
         feed_blob_out: None,
     })
 }

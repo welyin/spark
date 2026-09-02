@@ -29,9 +29,12 @@ mod pull;
 mod push;
 mod recovery;
 mod replica;
+#[cfg(test)]
+mod stall_tests;
 mod tick;
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use ed25519_dalek::SigningKey;
@@ -84,6 +87,55 @@ const REPLICA_CHECK_MIN_INTERVAL_MS: i64 = 5 * 60 * 1000;
 /// connect_peer），远超出站预算。距上次刷新 < 该间隔直接跳过本次刷新
 /// （事件驱动非周期，重复触发防风暴；参照 REPLICA_CHECK_MIN_INTERVAL_MS）。
 const RECOVERY_REFRESH_MIN_INTERVAL_MS: i64 = 60_000;
+
+/// keepalive tick 四阶段超时预算（org-sync-stall-fix §3.2，F6）：单 tick 的
+/// 串行链在 join 编排期可吃满到分钟级，队列积压把末段 orgsync-hello 无限
+/// 推迟；分阶段 `timeout` 后任一阶段超时即放弃本阶段进入下一阶段（阶段间
+/// 无依赖），S3（orgsync-hello，tick 出口语义）恒执行不被前序超时跳过。
+/// 总预算 ≤50s（另加 S1/S2 前一次 `local_node_info` 读取，API 层 5s 超时
+/// 兜底，§3.3），约小于生产 keepalive 间隔（60s）；e2e 1s 注入下超时轮次
+/// 由注入合并（[`inject_keepalive_tick`]）吸收，不积压。
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TickStageBudgets {
+    /// S0 网关/地址发布（正常为本地读写 + 即时返回的 provide）。
+    pub gateway_publish: std::time::Duration,
+    /// S1 自设备链路（含 Resync 快照 4 连发；最坏 4×dm 超时的截断）。
+    pub self_device_link: std::time::Duration,
+    /// S2 反熵对账（reconcile × ≤2 候选；给一次 connect+list 超时的完整余量）。
+    pub reconcile: std::time::Duration,
+    /// S3 orgsync-hello（逐端点 dm 直发，正常 <100ms）。
+    pub orgsync_hello: std::time::Duration,
+}
+
+impl Default for TickStageBudgets {
+    fn default() -> Self {
+        Self {
+            gateway_publish: std::time::Duration::from_secs(10),
+            self_device_link: std::time::Duration::from_secs(10),
+            reconcile: std::time::Duration::from_secs(20),
+            orgsync_hello: std::time::Duration::from_secs(10),
+        }
+    }
+}
+
+/// KeepaliveTick 注入合并（org-sync-stall-fix §3.1，F6 背压）：tick 是幂等
+/// 周期任务，积压 N 份与 1 份语义相同——已有在飞（已注入未开始处理）的
+/// tick 时跳过注入。`in_flight` 标记由事件泵注入侧（本函数）置位、worker
+/// 开始处理 tick 时清除（见 [`spawn_worker`]）。PushOrg/SelfHelloNow 是事件
+/// 语义，不经过本函数、不合并。返回是否实际注入（发送失败时回退标记）。
+pub(crate) fn inject_keepalive_tick(
+    tx: &tokio::sync::mpsc::UnboundedSender<OrgSyncRequest>,
+    in_flight: &AtomicBool,
+) -> bool {
+    if in_flight.swap(true, Ordering::SeqCst) {
+        return false;
+    }
+    if tx.send(OrgSyncRequest::KeepaliveTick).is_err() {
+        in_flight.store(false, Ordering::SeqCst);
+        return false;
+    }
+    true
+}
 
 /// 自设备稳态 hello 触发状态（org-sync tick `maintain_self_device_link` 的
 /// StayConnected 分支用；跨 tick 持久，断→连跳变的 Resync 会重置重建基线）。
@@ -261,10 +313,25 @@ pub(crate) struct OrgSyncContext {
     /// 连败路径（`refresh_org_endpoints_and_dial`）消费，超限跳过重复
     /// DHT 查询 + 拨号（出站防风暴）。
     pub(crate) recovery_refresh: Arc<Mutex<HashMap<String, i64>>>,
+    /// KeepaliveTick 在飞标记（org-sync-stall-fix §3.1，F6）：事件泵注入侧
+    /// 置位（[`inject_keepalive_tick`]），worker 开始处理 tick 时清除——
+    /// 处理期间到达的新 tick 事件可再注入一份，队列至多积压 1 份 tick。
+    pub(crate) tick_in_flight: Arc<AtomicBool>,
+    /// tick 四阶段超时预算（org-sync-stall-fix §3.2；测试可注入缩短值）。
+    pub(crate) tick_budgets: TickStageBudgets,
+    /// org:meta 写路径原子段互斥锁（org-meta-rmw-fix §2.2，F8）：kernel
+    /// `io_lock` 同一把——worker 的 org:meta 写（pull 快照应用/claim 回填/
+    /// recovery 补齐）经 `update_record_atomic` 持锁，与入站落库互斥。
+    pub(crate) io_lock: Arc<Mutex<()>>,
 }
 
 /// org-sync worker 主循环：推送/保活串行消费（kernel `start_p2p` 装配，
-/// 随 p2p 起停；`KeepaliveTick` 由事件泵拦截 node 事件注入）。
+/// 随 p2p 起停；`KeepaliveTick` 由事件泵拦截 node 事件、经
+/// [`inject_keepalive_tick`] 合并注入——幂等周期任务至多积压 1 份）。
+///
+/// 完成心跳（org-sync-stall-fix §3.4）：每完成一个请求打一行 INFO——停滞
+/// 复现时从「最后一条 done 的 kind + 下一阶段未出现」直接读出卡点；
+/// `queue_depth` 读 UnboundedReceiver 当前积压，判队列是否积压。
 pub(crate) fn spawn_worker(
     handle: &tokio::runtime::Handle,
     ctx: OrgSyncContext,
@@ -272,14 +339,31 @@ pub(crate) fn spawn_worker(
 ) -> tokio::task::JoinHandle<()> {
     handle.spawn(async move {
         while let Some(request) = rx.recv().await {
+            let kind = match &request {
+                OrgSyncRequest::PushOrg { .. } => "PushOrg",
+                OrgSyncRequest::KeepaliveTick => "KeepaliveTick",
+                OrgSyncRequest::SelfHelloNow => "SelfHelloNow",
+            };
+            let started = std::time::Instant::now();
             match request {
                 OrgSyncRequest::PushOrg {
                     org_id,
                     actor_root_id,
                 } => ctx.push_org_to_known_members(&org_id, &actor_root_id).await,
-                OrgSyncRequest::KeepaliveTick => ctx.maintain_org_tick().await,
+                OrgSyncRequest::KeepaliveTick => {
+                    // 在飞标记在开始处理时清除：处理期间到达的 tick 事件可再
+                    // 注入一份（合并保证至多 1 份在飞 + 1 份积压）
+                    ctx.tick_in_flight.store(false, Ordering::SeqCst);
+                    ctx.maintain_org_tick().await;
+                }
                 OrgSyncRequest::SelfHelloNow => ctx.self_hello_now(),
             }
+            log::info!(
+                "[ORG_SYNC] request done | kind={} elapsed={}ms queue_depth≈{}",
+                kind,
+                started.elapsed().as_millis(),
+                rx.len(),
+            );
         }
     })
 }

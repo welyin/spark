@@ -24,6 +24,7 @@ fn add_member_pdsync_writes_pmeta() {
     let member_id = root_id_of(MNEMONIC2);
     OrganizationService::add_member_pdsync(
         &mut storage,
+        &crate::test_io_lock(),
         &record.org_id,
         &member_id,
         None,
@@ -38,6 +39,7 @@ fn add_member_pdsync_writes_pmeta() {
 
     OrganizationService::remove_member_pdsync(
         &mut storage,
+        &crate::test_io_lock(),
         &record.org_id,
         &member_id,
         &admin,

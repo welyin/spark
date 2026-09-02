@@ -300,7 +300,7 @@ fn collect_org_tombstones_after_skips_rebuilt_key() {
 
     let meta = get_personal_meta(&s, &data_key).unwrap().unwrap();
     assert!(!is_tombstone(&meta), "重建后 pmeta 非墓碑");
-    assert_eq!(meta.vv.get("node-a"), Some(&3), "重建 bump 到 node-a:3");
+    assert_eq!(meta.vv.get("node-a"), Some(&4), "重建 bump 到 node-a:4（声明1+写2+删3+重建4）");
     assert_eq!(
         s.get(&data_key).unwrap().as_deref(),
         Some("\"v2-rebuilt\""),

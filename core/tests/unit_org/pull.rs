@@ -95,7 +95,7 @@ fn auth_status_rules() {
 fn pull_list_missing_requester() {
     let (mut storage, _, _) = setup();
     let (response, applied) =
-        handle_pull_list_request(&mut storage, &serde_json::json!({}), None, None, NOW).unwrap();
+        handle_pull_list_request(&mut storage, &crate::test_io_lock(), &serde_json::json!({}), None, None, NOW).unwrap();
     assert!(applied.is_empty());
     assert_eq!(response["ok"], false);
     assert_eq!(response["type"], "org-pull-list-response");
@@ -112,6 +112,7 @@ fn pull_list_filters_by_membership() {
     // 成员可见（sync 为 record.sync.versions 未塌缩形状）
     let (response, applied) = handle_pull_list_request(
         &mut storage,
+        &crate::test_io_lock(),
         &serde_json::json!({"requesterRootId": member}),
         Some(&admin),
         None,
@@ -128,6 +129,7 @@ fn pull_list_filters_by_membership() {
     // 非成员 → 空列表
     let (response, applied) = handle_pull_list_request(
         &mut storage,
+        &crate::test_io_lock(),
         &serde_json::json!({"requesterRootId": "cd".repeat(32)}),
         Some(&admin),
         None,
@@ -161,6 +163,7 @@ fn pull_list_claim_applied_only_for_known_member() {
     // 已知成员：claim 应用 → 回填 nodeInfo（且 admin 视角重读可见）
     let (response, applied) = handle_pull_list_request(
         &mut storage,
+        &crate::test_io_lock(),
         &serde_json::json!({
             "requesterRootId": member,
             "requesterPeerId": "member-peer",
@@ -210,6 +213,7 @@ fn pull_list_claim_applied_only_for_known_member() {
         .unwrap();
     let (response, applied) = handle_pull_list_request(
         &mut storage,
+        &crate::test_io_lock(),
         &serde_json::json!({
             "requesterRootId": stranger,
             "nodeInfoClaim": claim_v,

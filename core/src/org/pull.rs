@@ -138,6 +138,7 @@ fn resolve_requester_peer_id<'a>(
 /// "落库后推送"（service.ts:450）。
 pub fn handle_pull_list_request<S: StorageBackend>(
     storage: &mut S,
+    io_lock: &crate::org::service::OrgMetaWriteLock,
     payload: &Value,
     current_root_id: Option<&str>,
     remote_peer_id: Option<&str>,
@@ -177,6 +178,7 @@ pub fn handle_pull_list_request<S: StorageBackend>(
                 .map(|claim| {
                     OrganizationService::apply_node_info_claim(
                         storage,
+                        io_lock,
                         &claim,
                         root_id,
                         remote_peer_id,

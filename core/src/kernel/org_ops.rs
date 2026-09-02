@@ -108,8 +108,10 @@ impl Kernel {
     ) -> Result<OrganizationView> {
         let root_id = self.require_unlocked_root_id()?;
         let node_id = self.sync_node_id();
+        let io_lock = std::sync::Arc::clone(&self.io_lock);
         let record = OrganizationService::add_member_pdsync(
             self.require_storage_mut()?,
+            &io_lock,
             org_id,
             member_root_id,
             node_info,
@@ -136,8 +138,10 @@ impl Kernel {
     ) -> Result<OrganizationView> {
         let root_id = self.require_unlocked_root_id()?;
         let node_id = self.sync_node_id();
+        let io_lock = std::sync::Arc::clone(&self.io_lock);
         let record = OrganizationService::remove_member_pdsync(
             self.require_storage_mut()?,
+            &io_lock,
             org_id,
             member_root_id,
             &root_id,
@@ -159,8 +163,10 @@ impl Kernel {
     ) -> Result<OrganizationView> {
         let root_id = self.require_unlocked_root_id()?;
         let node_id = self.sync_node_id();
+        let io_lock = std::sync::Arc::clone(&self.io_lock);
         let record = OrganizationService::set_org_gateways_pdsync(
             self.require_storage_mut()?,
+            &io_lock,
             org_id,
             gateways,
             &root_id,
@@ -186,8 +192,10 @@ impl Kernel {
     ) -> Result<OrganizationView> {
         let root_id = self.require_unlocked_root_id()?;
         let node_id = self.sync_node_id();
+        let io_lock = std::sync::Arc::clone(&self.io_lock);
         let record = OrganizationService::set_org_data_accounts_pdsync(
             self.require_storage_mut()?,
+            &io_lock,
             org_id,
             data_accounts,
             &root_id,
@@ -213,8 +221,10 @@ impl Kernel {
     ) -> Result<OrganizationView> {
         let root_id = self.require_unlocked_root_id()?;
         let node_id = self.sync_node_id();
+        let io_lock = std::sync::Arc::clone(&self.io_lock);
         let record = OrganizationService::set_member_role_pdsync(
             self.require_storage_mut()?,
+            &io_lock,
             org_id,
             member_root_id,
             role,
@@ -242,8 +252,10 @@ impl Kernel {
     ) -> Result<OrganizationView> {
         let root_id = self.require_unlocked_root_id()?;
         let node_id = self.sync_node_id();
+        let io_lock = std::sync::Arc::clone(&self.io_lock);
         let record = OrganizationService::update_org_info_pdsync(
             self.require_storage_mut()?,
+            &io_lock,
             org_id,
             name,
             description,
@@ -270,8 +282,10 @@ impl Kernel {
     ) -> Result<OrganizationView> {
         let root_id = self.require_unlocked_root_id()?;
         let node_id = self.sync_node_id();
+        let io_lock = std::sync::Arc::clone(&self.io_lock);
         let record = OrganizationService::update_my_identity_pdsync(
             self.require_storage_mut()?,
+            &io_lock,
             org_id,
             patch,
             &root_id,
@@ -300,8 +314,10 @@ impl Kernel {
     ) -> Result<OrganizationView> {
         let root_id = self.require_unlocked_root_id()?;
         let node_id = self.sync_node_id();
+        let io_lock = std::sync::Arc::clone(&self.io_lock);
         let record = OrganizationService::set_org_public_pdsync(
             self.require_storage_mut()?,
+            &io_lock,
             org_id,
             public,
             display_name,
@@ -434,8 +450,10 @@ impl Kernel {
                 && let Some(organization) = organization
             {
                 let now = system_now_ms();
+                let io_lock = std::sync::Arc::clone(&self.io_lock);
                 let merged = OrganizationService::apply_incoming_snapshot(
                     self.require_storage_mut()?,
+                    &io_lock,
                     organization,
                     now,
                 )?;

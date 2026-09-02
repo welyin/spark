@@ -28,6 +28,7 @@ impl OrganizationService {
     /// 已知成员时才处理其 claim（org-pull-sync.ts:165-184）——该判定在 p2p 层。
     pub fn apply_node_info_claim<S: StorageBackend>(
         storage: &mut S,
+        io_lock: &super::OrgMetaWriteLock,
         claim: &NodeInfoClaim,
         current_root_id: &str,
         remote_peer_id: Option<&str>,
@@ -59,64 +60,81 @@ impl OrganizationService {
             };
             // 端点化：回填落库键从 peerId 维度改 deviceUid 维度——把声明端点
             // 按 deviceUid 合并进成员端点集，同 deviceUid 新 peerId 墓碑化替换。
-            // 先克隆判断是否变更（upsert 需要可变借用；无变化不 bump 版本）。
+            // 先克隆判断是否变更（廉价预过滤；原子段内还会基于提交时刻的记录
+            // 重判一次）。
             let mut probe = member.node_info.clone().unwrap_or_default();
-            let changed = probe.upsert(&claimed_node_info);
-            if !changed {
+            if !probe.upsert(&claimed_node_info) {
                 continue;
             }
 
-            let mut updated = record.clone();
-            for m in &mut updated.members {
-                if m.root_id == claim_root_id {
-                    match m.node_info.as_mut() {
-                        Some(set) => {
-                            set.upsert(&claimed_node_info);
-                        }
-                        None => {
-                            m.node_info = Some(OrganizationDeviceSet::from_single(
-                                claimed_node_info.clone(),
-                            ));
+            // F8：claim 回填走原子段原语——成员端点合并在提交时刻的记录基线
+            // 上进行（不再有「读在循环开始、写在循环末尾」的脱节窗口）。
+            let mut changed = false;
+            Self::update_record_atomic(storage, io_lock, &record.org_id, |storage, rec| {
+                let Some(fresh_member) = rec.find_member(&claim_root_id) else {
+                    return Ok(false);
+                };
+                // 端点化：回填落库键从 peerId 维度改 deviceUid 维度——把声明
+                // 端点按 deviceUid 合并进成员端点集，同 deviceUid 新 peerId
+                // 墓碑化替换。先探测是否变更（无变化不 bump 版本）。
+                let mut probe = fresh_member.node_info.clone().unwrap_or_default();
+                if !probe.upsert(&claimed_node_info) {
+                    return Ok(false);
+                }
+                for m in &mut rec.members {
+                    if m.root_id == claim_root_id {
+                        match m.node_info.as_mut() {
+                            Some(set) => {
+                                set.upsert(&claimed_node_info);
+                            }
+                            None => {
+                                m.node_info = Some(OrganizationDeviceSet::from_single(
+                                    claimed_node_info.clone(),
+                                ));
+                            }
                         }
                     }
                 }
+                rec.updated_at = now_ms;
+                let previous_last_synced_at =
+                    rec.sync.as_ref().map(|s| s.last_synced_at).unwrap_or(0);
+                let transaction = append_organization_transaction(
+                    storage,
+                    OrganizationTransactionRecord {
+                        tx_id: String::new(),
+                        org_id: rec.org_id.clone(),
+                        type_: OrganizationTransactionType::MemberUpdate,
+                        created_at: now_ms,
+                        actor_root_id: claim_root_id.clone(),
+                        target_root_id: Some(claim_root_id.clone()),
+                        summary: format!(
+                            "成员节点地址自动回填 {}",
+                            &claim_root_id[..8.min(claim_root_id.len())]
+                        ),
+                        payload: Some(
+                            [
+                                (
+                                    "nodeInfo".to_string(),
+                                    serde_json::to_value(&claimed_node_info)?,
+                                ),
+                                ("source".to_string(), Value::from("node-info-claim")),
+                            ]
+                            .into_iter()
+                            .collect(),
+                        ),
+                    },
+                )?;
+                Self::rebuild_sync_after_mutation(
+                    rec,
+                    previous_last_synced_at,
+                    transaction.created_at,
+                );
+                changed = true;
+                Ok(true)
+            })?;
+            if changed {
+                applied.push(record.org_id.clone());
             }
-            updated.updated_at = now_ms;
-            let previous_last_synced_at =
-                updated.sync.as_ref().map(|s| s.last_synced_at).unwrap_or(0);
-            let transaction = append_organization_transaction(
-                storage,
-                OrganizationTransactionRecord {
-                    tx_id: String::new(),
-                    org_id: updated.org_id.clone(),
-                    type_: OrganizationTransactionType::MemberUpdate,
-                    created_at: now_ms,
-                    actor_root_id: claim_root_id.clone(),
-                    target_root_id: Some(claim_root_id.clone()),
-                    summary: format!(
-                        "成员节点地址自动回填 {}",
-                        &claim_root_id[..8.min(claim_root_id.len())]
-                    ),
-                    payload: Some(
-                        [
-                            (
-                                "nodeInfo".to_string(),
-                                serde_json::to_value(&claimed_node_info)?,
-                            ),
-                            ("source".to_string(), Value::from("node-info-claim")),
-                        ]
-                        .into_iter()
-                        .collect(),
-                    ),
-                },
-            )?;
-            Self::rebuild_sync_after_mutation(
-                &mut updated,
-                previous_last_synced_at,
-                transaction.created_at,
-            );
-            Self::save_record(storage, &updated)?;
-            applied.push(updated.org_id.clone());
         }
         Ok(applied)
     }
@@ -124,16 +142,26 @@ impl OrganizationService {
     /// 接收侧快照落库（org.md §7.4：`normalizeIncomingSnapshot` → `merge` → 写
     /// `org:meta:<orgId>`）。接受两种线形（原始记录 / 重建快照）。
     ///
+    /// F8：合并在原子段原语内进行——读取基线取**提交时刻**的记录（跨 await
+    /// 编排路径的网络取数在段外完成，取回的快照作为 mutate 输入）。
+    ///
     /// 定向投递校验（targetRootId 匹配、本机在成员列表）在 p2p 层完成。
     pub fn apply_incoming_snapshot<S: StorageBackend>(
         storage: &mut S,
+        io_lock: &super::OrgMetaWriteLock,
         organization: &Value,
         now_ms: i64,
     ) -> Result<OrganizationRecord> {
         let snapshot = normalize_incoming_snapshot(organization)?;
-        let existing = Self::get_record(storage, &snapshot.org_id)?;
-        let merged = merge_organization_sync_snapshot(existing.as_ref(), &snapshot, now_ms);
-        Self::save_record(storage, &merged)?;
-        Ok(merged)
+        if Self::get_record(storage, &snapshot.org_id)?.is_none() {
+            // 本地无记录 = 新建（无基线，无 RMW 脱节面）——维持原直接落库
+            let merged = merge_organization_sync_snapshot(None, &snapshot, now_ms);
+            Self::save_record(storage, &merged)?;
+            return Ok(merged);
+        }
+        Self::update_record_atomic(storage, io_lock, &snapshot.org_id, |_storage, record| {
+            *record = merge_organization_sync_snapshot(Some(record), &snapshot, now_ms);
+            Ok(true)
+        })
     }
 }

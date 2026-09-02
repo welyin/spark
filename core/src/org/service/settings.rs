@@ -35,22 +35,21 @@ impl OrganizationService {
         current_root_id: &str,
         now_ms: i64,
     ) -> Result<OrganizationRecord> {
-        Self::update_org_info_impl(
-            storage,
-            org_id,
-            name,
-            description,
-            avatar,
-            current_root_id,
-            now_ms,
-            None,
-        )
+        let mut record = Self::require_organization(storage, org_id)?;
+        if Self::update_org_info_mutate(
+            storage, &mut record, org_id, name, description, avatar, current_root_id, now_ms,
+        )? {
+            Self::save_record(storage, &record)?;
+        }
+        Ok(record)
     }
 
-    /// pdsync 感知的 [`Self::update_org_info`]：组织记录落库走
-    /// [`Self::save_record_pdsync`]（`org:meta` 写 pmeta，可经自设备 pdsync 同步）。
+    /// pdsync 感知的 [`Self::update_org_info`]：组织记录落库走原子段原语
+    /// [`Self::update_record_atomic`]（F8；`org:meta` 写 pmeta，可经自设备
+    /// pdsync 同步）。
     pub fn update_org_info_pdsync<S: StorageBackend>(
         storage: &mut S,
+        io_lock: &super::OrgMetaWriteLock,
         org_id: &str,
         name: Option<&str>,
         description: Option<&str>,
@@ -59,31 +58,28 @@ impl OrganizationService {
         now_ms: i64,
         node_id: &str,
     ) -> Result<OrganizationRecord> {
-        Self::update_org_info_impl(
-            storage,
-            org_id,
-            name,
-            description,
-            avatar,
-            current_root_id,
-            now_ms,
-            Some(node_id),
-        )
+        let _ = node_id; // 记账由中间件完成，参数保留以稳定签名
+        Self::update_record_atomic(storage, io_lock, org_id, |storage, record| {
+            Self::update_org_info_mutate(
+                storage, record, org_id, name, description, avatar, current_root_id, now_ms,
+            )
+        })
     }
 
+    /// F8 拆段的纯变更段：在调用方给定的记录上校验 + 变更（+ 事务/sync 重建）；
+    /// 不读不写 org:meta 记录本身。返回是否发生变更（false = 幂等无写）。
     #[allow(clippy::too_many_arguments)]
-    fn update_org_info_impl<S: StorageBackend>(
+    fn update_org_info_mutate<S: StorageBackend>(
         storage: &mut S,
+        record: &mut OrganizationRecord,
         org_id: &str,
         name: Option<&str>,
         description: Option<&str>,
         avatar: Option<&str>,
         current_root_id: &str,
         now_ms: i64,
-        node_id: Option<&str>,
-    ) -> Result<OrganizationRecord> {
-        let mut record = Self::require_organization(storage, org_id)?;
-        Self::require_admin(&record, current_root_id)?;
+    ) -> Result<bool> {
+        Self::require_admin(record, current_root_id)?;
 
         let name = name
             .map(|value| normalize_text(value, "Organization name"))
@@ -106,7 +102,7 @@ impl OrganizationService {
         let description_unchanged = description.is_none_or(|value| value == record.description);
         let avatar_unchanged = avatar.as_deref().is_none_or(|value| value == record.avatar);
         if name_unchanged && description_unchanged && avatar_unchanged {
-            return Ok(record);
+            return Ok(false);
         }
 
         if let Some(value) = &name {
@@ -151,15 +147,11 @@ impl OrganizationService {
             },
         )?;
         Self::rebuild_sync_after_mutation(
-            &mut record,
+            record,
             previous_last_synced_at,
             transaction.created_at,
         );
-        match node_id {
-            Some(node_id) => Self::save_record_pdsync(storage, &record, now_ms, node_id)?,
-            None => Self::save_record(storage, &record)?,
-        }
-        Ok(record)
+        Ok(true)
     }
 
     /// `setOrgGateways`（org.md §14 + O1 账号角色模型）：管理员显式指定组织
@@ -177,39 +169,40 @@ impl OrganizationService {
         current_root_id: &str,
         now_ms: i64,
     ) -> Result<OrganizationRecord> {
-        Self::set_org_gateways_impl(storage, org_id, gateways, current_root_id, now_ms, None)
+        let mut record = Self::require_organization(storage, org_id)?;
+        if Self::set_org_gateways_mutate(storage, &mut record, org_id, gateways, current_root_id, now_ms)? {
+            Self::save_record(storage, &record)?;
+        }
+        Ok(record)
     }
 
-    /// pdsync 感知的 [`Self::set_org_gateways`]：组织记录落库走
-    /// [`Self::save_record_pdsync`]（`org:meta` 写 pmeta，可经自设备 pdsync 同步）。
+    /// pdsync 感知的 [`Self::set_org_gateways`]：组织记录落库走原子段原语
+    /// [`Self::update_record_atomic`]（F8）。
     pub fn set_org_gateways_pdsync<S: StorageBackend>(
         storage: &mut S,
+        io_lock: &super::OrgMetaWriteLock,
         org_id: &str,
         gateways: &[String],
         current_root_id: &str,
         now_ms: i64,
         node_id: &str,
     ) -> Result<OrganizationRecord> {
-        Self::set_org_gateways_impl(
-            storage,
-            org_id,
-            gateways,
-            current_root_id,
-            now_ms,
-            Some(node_id),
-        )
+        let _ = node_id; // 记账由中间件完成，参数保留以稳定签名
+        Self::update_record_atomic(storage, io_lock, org_id, |storage, record| {
+            Self::set_org_gateways_mutate(storage, record, org_id, gateways, current_root_id, now_ms)
+        })
     }
 
-    fn set_org_gateways_impl<S: StorageBackend>(
+    /// F8 拆段的纯变更段（见 [`Self::update_org_info_mutate`]）。
+    fn set_org_gateways_mutate<S: StorageBackend>(
         storage: &mut S,
+        record: &mut OrganizationRecord,
         org_id: &str,
         gateways: &[String],
         current_root_id: &str,
         now_ms: i64,
-        node_id: Option<&str>,
-    ) -> Result<OrganizationRecord> {
-        let mut record = Self::require_organization(storage, org_id)?;
-        Self::require_admin(&record, current_root_id)?;
+    ) -> Result<bool> {
+        Self::require_admin(record, current_root_id)?;
 
         let mut normalized: Vec<String> = Vec::new();
         for gateway in gateways {
@@ -225,7 +218,7 @@ impl OrganizationService {
             return Err(OrgError::InvalidGateways);
         }
         if record.gateways == normalized {
-            return Ok(record);
+            return Ok(false);
         }
 
         record.gateways = normalized.clone();
@@ -249,15 +242,11 @@ impl OrganizationService {
             },
         )?;
         Self::rebuild_sync_after_mutation(
-            &mut record,
+            record,
             previous_last_synced_at,
             transaction.created_at,
         );
-        match node_id {
-            Some(node_id) => Self::save_record_pdsync(storage, &record, now_ms, node_id)?,
-            None => Self::save_record(storage, &record)?,
-        }
-        Ok(record)
+        Ok(true)
     }
 
     /// `setOrgDataAccounts`（O1 账号角色模型）：管理员显式指定数据账号
@@ -270,38 +259,40 @@ impl OrganizationService {
         current_root_id: &str,
         now_ms: i64,
     ) -> Result<OrganizationRecord> {
-        Self::set_org_data_accounts_impl(storage, org_id, data_accounts, current_root_id, now_ms, None)
+        let mut record = Self::require_organization(storage, org_id)?;
+        if Self::set_org_data_accounts_mutate(storage, &mut record, org_id, data_accounts, current_root_id, now_ms)? {
+            Self::save_record(storage, &record)?;
+        }
+        Ok(record)
     }
 
-    /// pdsync 感知的 [`Self::set_org_data_accounts`]。
+    /// pdsync 感知的 [`Self::set_org_data_accounts`]：组织记录落库走原子段
+    /// 原语 [`Self::update_record_atomic`]（F8）。
     pub fn set_org_data_accounts_pdsync<S: StorageBackend>(
         storage: &mut S,
+        io_lock: &super::OrgMetaWriteLock,
         org_id: &str,
         data_accounts: &[String],
         current_root_id: &str,
         now_ms: i64,
         node_id: &str,
     ) -> Result<OrganizationRecord> {
-        Self::set_org_data_accounts_impl(
-            storage,
-            org_id,
-            data_accounts,
-            current_root_id,
-            now_ms,
-            Some(node_id),
-        )
+        let _ = node_id; // 记账由中间件完成，参数保留以稳定签名
+        Self::update_record_atomic(storage, io_lock, org_id, |storage, record| {
+            Self::set_org_data_accounts_mutate(storage, record, org_id, data_accounts, current_root_id, now_ms)
+        })
     }
 
-    fn set_org_data_accounts_impl<S: StorageBackend>(
+    /// F8 拆段的纯变更段（见 [`Self::update_org_info_mutate`]）。
+    fn set_org_data_accounts_mutate<S: StorageBackend>(
         storage: &mut S,
+        record: &mut OrganizationRecord,
         org_id: &str,
         data_accounts: &[String],
         current_root_id: &str,
         now_ms: i64,
-        node_id: Option<&str>,
-    ) -> Result<OrganizationRecord> {
-        let mut record = Self::require_organization(storage, org_id)?;
-        Self::require_admin(&record, current_root_id)?;
+    ) -> Result<bool> {
+        Self::require_admin(record, current_root_id)?;
 
         let mut normalized: Vec<String> = Vec::new();
         for account in data_accounts {
@@ -314,7 +305,7 @@ impl OrganizationService {
             return Err(OrgError::InvalidDataAccounts);
         }
         if record.data_accounts == normalized {
-            return Ok(record);
+            return Ok(false);
         }
 
         record.data_accounts = normalized.clone();
@@ -342,15 +333,11 @@ impl OrganizationService {
             },
         )?;
         Self::rebuild_sync_after_mutation(
-            &mut record,
+            record,
             previous_last_synced_at,
             transaction.created_at,
         );
-        match node_id {
-            Some(node_id) => Self::save_record_pdsync(storage, &record, now_ms, node_id)?,
-            None => Self::save_record(storage, &record)?,
-        }
-        Ok(record)
+        Ok(true)
     }
 
     /// `setOrgPublic`（org.md §16）：管理员开关组织公开标志，可选更新地址记录
@@ -370,13 +357,19 @@ impl OrganizationService {
         current_root_id: &str,
         now_ms: i64,
     ) -> Result<OrganizationRecord> {
-        Self::set_org_public_impl(storage, org_id, public, display_name, current_root_id, now_ms, None)
+        let mut record = Self::require_organization(storage, org_id)?;
+        if Self::set_org_public_mutate(storage, &mut record, org_id, public, display_name, current_root_id, now_ms)? {
+            Self::save_record(storage, &record)?;
+        }
+        Ok(record)
     }
 
-    /// pdsync 感知的 [`Self::set_org_public`]：组织记录落库走
-    /// [`Self::save_record_pdsync`]（`org:meta` 写 pmeta，可经自设备 pdsync 同步）。
+    /// pdsync 感知的 [`Self::set_org_public`]：组织记录落库走原子段原语
+    /// [`Self::update_record_atomic`]（F8；`org:meta` 写 pmeta，可经自设备
+    /// pdsync 同步）。
     pub fn set_org_public_pdsync<S: StorageBackend>(
         storage: &mut S,
+        io_lock: &super::OrgMetaWriteLock,
         org_id: &str,
         public: bool,
         display_name: Option<&str>,
@@ -384,29 +377,24 @@ impl OrganizationService {
         now_ms: i64,
         node_id: &str,
     ) -> Result<OrganizationRecord> {
-        Self::set_org_public_impl(
-            storage,
-            org_id,
-            public,
-            display_name,
-            current_root_id,
-            now_ms,
-            Some(node_id),
-        )
+        let _ = node_id; // 记账由中间件完成，参数保留以稳定签名
+        Self::update_record_atomic(storage, io_lock, org_id, |storage, record| {
+            Self::set_org_public_mutate(storage, record, org_id, public, display_name, current_root_id, now_ms)
+        })
     }
 
+    /// F8 拆段的纯变更段（见 [`Self::update_org_info_mutate`]）。
     #[allow(clippy::too_many_arguments)]
-    fn set_org_public_impl<S: StorageBackend>(
+    fn set_org_public_mutate<S: StorageBackend>(
         storage: &mut S,
+        record: &mut OrganizationRecord,
         org_id: &str,
         public: bool,
         display_name: Option<&str>,
         current_root_id: &str,
         now_ms: i64,
-        node_id: Option<&str>,
-    ) -> Result<OrganizationRecord> {
-        let mut record = Self::require_organization(storage, org_id)?;
-        Self::require_admin(&record, current_root_id)?;
+    ) -> Result<bool> {
+        Self::require_admin(record, current_root_id)?;
 
         // 三态：None = 不更新；Some(trim 后空串) = 清除；Some(非空) = 覆盖
         let display_name = display_name.map(str::trim);
@@ -415,7 +403,7 @@ impl OrganizationService {
             Some(name) => record.display_name_override() == (!name.is_empty()).then_some(name),
         };
         if record.is_public == public && display_name_unchanged {
-            return Ok(record);
+            return Ok(false);
         }
 
         // 懒补齐组织根密钥对（存量组织开启公开时；org.md §15）
@@ -471,14 +459,10 @@ impl OrganizationService {
             },
         )?;
         Self::rebuild_sync_after_mutation(
-            &mut record,
+            record,
             previous_last_synced_at,
             transaction.created_at,
         );
-        match node_id {
-            Some(node_id) => Self::save_record_pdsync(storage, &record, now_ms, node_id)?,
-            None => Self::save_record(storage, &record)?,
-        }
-        Ok(record)
+        Ok(true)
     }
 }

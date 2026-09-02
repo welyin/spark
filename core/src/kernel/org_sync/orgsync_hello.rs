@@ -159,7 +159,16 @@ impl OrgSyncContext {
                         hello_body,
                         &signing_key,
                     );
-                    let _ = self.node.dm_direct(&target, envelope).await;
+                    let delivered = self.node.dm_direct(&target, envelope).await.is_ok();
+                    // F6 核心观测指标（org-sync-stall-fix §3.4）：orgsync-hello
+                    // 出站归零即 worker 停滞——逐发送记账使「稀疏→归零」可从
+                    // 日志直接读出节奏与断点
+                    log::info!(
+                        "[ORGSYNC] hello sent | org={} to={} delivered={}",
+                        org_id,
+                        peer_id,
+                        delivered
+                    );
                 }
             }
         }
@@ -177,9 +186,10 @@ impl OrgSyncContext {
     }
 
     /// O2b 存量迁移（惰性，幂等）：为组织补注册内建 all-members 集合声明
-    /// （org:structure/org:contacts/org:invites）。新建组织在 create 时已注册；
-    /// 存量组织首次走 orgsync 时经本方法补齐——使存量键域（org:meta/ct:org/
-    /// org:inv）纳入 orgsync 反熵面（键不搬家、零迁移）。
+    /// （org:structure/org:contacts）。新建组织在 create 时已注册；
+    /// 存量组织首次走 orgsync 时经本方法补齐——使存量键域（org:meta/ct:org）
+    /// 纳入 orgsync 反熵面（键不搬家、零迁移）。F7：org:invites 已退出
+    /// orgsync（邀请记录回归 personal 域），不在补注册之列。
     ///
     /// 声明记录走 **raw 句柄**写入（不经 VersionedStorage 自动版本化——本
     /// helper 手动写 pmeta，避免双 bump vv）。写入失败仅告警，不阻断 hello

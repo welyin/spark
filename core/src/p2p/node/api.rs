@@ -14,7 +14,15 @@ use crate::p2p::{P2pError, Result};
 
 use super::{KeepaliveStats, LocalP2PNodeInfo, P2pNode};
 
-pub(super) enum Command {
+/// 本地命令应答的超时（org-sync-stall-fix §3.3，F6 硬化）：命令应答是本地
+/// 事件循环往返，正常亚毫秒；5s 容忍事件循环极端繁忙，又不构成可感停滞
+/// （对齐既有 connect 10s / pull 15s 量级之下限）。此前裸 `rx.await` 无界
+/// 悬挂是 worker 链路上仅有的无界点。
+const LOCAL_CMD_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// pub(crate) 而非私有：kernel org-sync 的 F6 故障注入单测需要构造
+/// 「挂起不应答」的假事件循环（`P2pNode::stub_for_test`，cfg(test)）。
+pub(crate) enum Command {
     Broadcast {
         topic: String,
         body: Map<String, Value>,
@@ -109,6 +117,12 @@ pub(super) enum Command {
         /// 武装时的网络快照基线
         base: Vec<String>,
     },
+    /// 故障注入开关（e2e 测试专用，org-sync-stall-fix §5）：on=true 后本节点
+    /// 收到 org-pull 请求扣住应答通道不响应（复现对端半连接长超时）。
+    SetOrgPullBlackhole {
+        on: bool,
+        tx: oneshot::Sender<Result<()>>,
+    },
     Tick {
         tx: oneshot::Sender<KeepaliveStats>,
     },
@@ -128,14 +142,20 @@ impl P2pNode {
             body,
             tx,
         })?;
-        rx.await.map_err(|_| P2pError::NotStarted)?
+        tokio::time::timeout(LOCAL_CMD_TIMEOUT, rx)
+            .await
+            .map_err(|_| P2pError::Protocol("broadcast timeout".to_string()))?
+            .map_err(|_| P2pError::NotStarted)?
     }
 
     /// 立即发布一次 node-announce（地址变化补发之外的主动触发）。
     pub async fn announce_now(&self) -> Result<bool> {
         let (tx, rx) = oneshot::channel();
         self.send_cmd(Command::AnnounceNow { tx })?;
-        rx.await.map_err(|_| P2pError::NotStarted)?
+        tokio::time::timeout(LOCAL_CMD_TIMEOUT, rx)
+            .await
+            .map_err(|_| P2pError::Protocol("announce timeout".to_string()))?
+            .map_err(|_| P2pError::NotStarted)?
     }
 
     /// 发布 plugin-announce 声明（plugin-dist §8）：调用方负责构造完整消息
@@ -147,7 +167,10 @@ impl P2pNode {
             json: json.to_string(),
             tx,
         })?;
-        rx.await.map_err(|_| P2pError::NotStarted)?
+        tokio::time::timeout(LOCAL_CMD_TIMEOUT, rx)
+            .await
+            .map_err(|_| P2pError::Protocol("plugin announce timeout".to_string()))?
+            .map_err(|_| P2pError::NotStarted)?
     }
 
     /// 按候选地址列表拨号连接目标成员（默认 10s 超时）。
@@ -280,7 +303,10 @@ impl P2pNode {
     pub async fn local_node_info(&self) -> Result<LocalP2PNodeInfo> {
         let (tx, rx) = oneshot::channel();
         self.send_cmd(Command::LocalNodeInfo { tx })?;
-        rx.await.map_err(|_| P2pError::NotStarted)
+        tokio::time::timeout(LOCAL_CMD_TIMEOUT, rx)
+            .await
+            .map_err(|_| P2pError::Protocol("local node info timeout".to_string()))?
+            .map_err(|_| P2pError::NotStarted)
     }
 
     /// relay 状态快照（U1 状态页 / U2 托管向导自检，relay-implementation §3；
@@ -288,7 +314,10 @@ impl P2pNode {
     pub async fn relay_status(&self) -> Result<super::LocalRelayStatus> {
         let (tx, rx) = oneshot::channel();
         self.send_cmd(Command::RelayStatus { tx })?;
-        rx.await.map_err(|_| P2pError::NotStarted)
+        tokio::time::timeout(LOCAL_CMD_TIMEOUT, rx)
+            .await
+            .map_err(|_| P2pError::Protocol("relay status timeout".to_string()))?
+            .map_err(|_| P2pError::NotStarted)
     }
 
     /// 向公共 DHT 发布一条记录（原始 key/value 字节，TTL 8h 本地周期重发；
@@ -372,7 +401,22 @@ impl P2pNode {
             peer_id: peer_id.to_string(),
             tx,
         })?;
-        rx.await.map_err(|_| P2pError::NotStarted)?
+        tokio::time::timeout(LOCAL_CMD_TIMEOUT, rx)
+            .await
+            .map_err(|_| P2pError::Protocol("disconnect timeout".to_string()))?
+            .map_err(|_| P2pError::NotStarted)?
+    }
+
+    /// 故障注入开关（**仅供 e2e 测试驱动**，e2e_node `fault-org-pull-blackhole`；
+    /// org-sync-stall-fix §5）：开启后本节点收到 org-pull-list/org-pull-org
+    /// 请求扣住应答通道不响应（请求方走协议读超时），复现对端半连接长超时。
+    pub async fn set_org_pull_blackhole(&self, on: bool) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.send_cmd(Command::SetOrgPullBlackhole { on, tx })?;
+        tokio::time::timeout(LOCAL_CMD_TIMEOUT, rx)
+            .await
+            .map_err(|_| P2pError::Protocol("fault config timeout".to_string()))?
+            .map_err(|_| P2pError::NotStarted)?
     }
 
     /// 手动触发一次 keepalive tick（测试用；周期 tick 由循环内 interval 驱动）。

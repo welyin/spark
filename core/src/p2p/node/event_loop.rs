@@ -277,6 +277,12 @@ pub(super) struct EventLoop<S: StorageBackend> {
     pub(super) peer_connected_since: HashMap<PeerId, i64>,
     /// gossipsub topic → IdentTopic 缓存（构造含字符串哈希；topic 为协议常量集合）。
     pub(super) topic_cache: HashMap<String, gossipsub::IdentTopic>,
+    /// 故障注入（e2e 专用，org-sync-stall-fix §5）：true 时 org-pull 入站
+    /// 请求扣住应答通道不响应（复现对端半连接长超时）；org-share 不受影响。
+    pub(super) org_pull_blackhole: bool,
+    /// 黑洞模式挂起的 org-pull 应答通道（持有不响应，请求方走协议读超时；
+    /// 节点停止时随事件循环释放）。
+    pub(super) stalled_pull_channels: Vec<request_response::ResponseChannel<String>>,
 }
 
 /// 一块网卡的可拨号信息（自 `if_addrs::Interface` 抽取，便于单测构造）。
@@ -854,6 +860,11 @@ impl<S: StorageBackend> EventLoop<S> {
             }
             Command::Tick { tx } => {
                 let _ = tx.send(self.run_keepalive_tick());
+            }
+            Command::SetOrgPullBlackhole { on, tx } => {
+                self.org_pull_blackhole = on;
+                log::info!("[p2p] fault injection: org-pull blackhole = {on}");
+                let _ = tx.send(Ok(()));
             }
             Command::Shutdown => return true,
         }

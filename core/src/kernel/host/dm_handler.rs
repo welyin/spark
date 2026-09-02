@@ -221,9 +221,7 @@ impl KernelDmHandler {
                     if r.profile_sync_reply.is_some() {
                         acc.profile_sync_reply = r.profile_sync_reply;
                     }
-                    if r.orgkey_unbox.is_some() {
-                        acc.orgkey_unbox = r.orgkey_unbox;
-                    }
+                    acc.orgkey_unbox.extend(r.orgkey_unbox);
                     if r.feed_blob_out.is_some() {
                         acc.feed_blob_out = r.feed_blob_out;
                     }
@@ -252,6 +250,23 @@ impl KernelDmHandler {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(peer_id.to_string());
+    }
+
+    /// F3（§20.6 离线补投）：验签通过的 orgsync-hello → 提取 (orgId, from)，
+    /// 供 [`Self::spawn_orgkey_pending_resend`] 重投该成员的 orgkey pending
+    /// （离线/无 accessKey 期间 grant/revoke 的密钥补投）。
+    ///
+    /// 完整验签先于触发——伪造信封不得驱动出站投递（重投本身幂等无害，
+    /// 但验签节流避免被恶意信封反复触发扫描/装配）。成员资格由入站编排
+    /// 校验；pending 收件人本就来自成员表（plan 内 find_member 兜底）。
+    pub(crate) fn orgkey_resend_trigger(payload: &Value, my_root_id: &str) -> Option<(String, String)> {
+        let kind = payload.get("kind").and_then(Value::as_str)?;
+        if kind != super::super::dm_envelope::KIND_ORGSYNC_HELLO {
+            return None;
+        }
+        let verified = dm_envelope::verify_envelope(payload, my_root_id, system_now_ms()).ok()?;
+        let (org_id, ..) = crate::sync::orgsync::parse_orgsync_hello(&verified.body)?;
+        Some((org_id, verified.from))
     }
 
     /// O2b §20.8 能力探测判定：仅当 orgsync-* 信封**验签通过**（from ∈
@@ -372,6 +387,11 @@ impl DmHandler for KernelDmHandler {
         if let Some(peer) = Self::orgsync_capability_mark(&payload, &root_id, remote_peer_id) {
             self.kernel_orgsync_capable_mark(&peer);
         }
+        // F3（§20.6 离线补投）：验签通过的 orgsync-hello = 该成员上线——
+        // 重投其在本机的 orgkey pending。稳态零成本（无 pending 直接跳过）。
+        if let Some((org_id, from)) = Self::orgkey_resend_trigger(&payload, &root_id) {
+            self.spawn_orgkey_pending_resend(&root_id, &org_id, &from);
+        }
         // 入站落库整体在 io_lock 内执行（与 Tauri 命令线程的变更互斥）
         // S6 E2E（2026-08-11 架构师裁决：root 密钥直接转换）：取本机 **root**
         // 签名私钥（解锁态填入；锁定态 None，无法解密带 ephPub 的加密信封，
@@ -467,7 +487,8 @@ impl DmHandler for KernelDmHandler {
         // O4 orgkey-deliver 解包落库：纯逻辑层已验签/验 owner/验幂等，这里用
         // 本机组织域身份私钥（seed 派生）解 box 并写 personal 域 orgkey 表
         // （§20.6；密钥经 pdsync 自设备扩散，永不进 orgsync 组织流量）。
-        if let Some(unbox) = result.orgkey_unbox {
+        // F3 残余：Vec——含暂存重评估一次产出的多条 unbox 指令。
+        for unbox in result.orgkey_unbox {
             self.apply_orgkey_unbox(&root_id, &unbox);
         }
         // feed-blob 出站：把纯逻辑层构建好的 body 装配成 feed-blob-req/resp
@@ -505,7 +526,7 @@ impl KernelDmHandler {
     /// 私钥（seed 派生 X25519）+ sender（owner）组织身份公钥 X25519 解
     /// crypto_box，得 32B epoch 密钥后写 orgkey 表。seed 缺失（锁定态）或
     /// 解包失败 → 静默跳过（不落库；后续重新投递补投）。
-    fn apply_orgkey_unbox(&self, my_root_id: &str, unbox: &crate::kernel::inbound_dm::OrgkeyUnbox) {
+    pub(crate) fn apply_orgkey_unbox(&self, my_root_id: &str, unbox: &crate::kernel::inbound_dm::OrgkeyUnbox) {
         let seed = self.seed_shared.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let Some(seed) = seed else {
             log::info!("[ORGKEY] unbox skipped: no seed (locked) | col={}:{}", unbox.org_id, unbox.name);
@@ -617,6 +638,67 @@ mod tests {
         let e = orgsync_env(dm_envelope::KIND_ORGSYNC_HELLO, "some-other-member", &key);
         assert_eq!(
             KernelDmHandler::orgsync_capability_mark(&e, &my_root, "peer-x"),
+            None
+        );
+    }
+
+    /// F3：验签通过的 orgsync-hello → 提取 (orgId, from) 供 pending 重投；
+    /// 非 hello kind / body 畸形 / 验签失败均不触发。
+    #[test]
+    fn orgkey_resend_trigger_on_verified_orgsync_hello() {
+        let key = SigningKey::from_bytes(&[3u8; 32]);
+        let from = hex::encode(sha2::Sha256::digest(key.verifying_key().to_bytes()));
+        let my_root = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1";
+        let org_id = "org_0123456789abcdef";
+        let body = crate::sync::orgsync::build_orgsync_hello(
+            org_id,
+            serde_json::Map::new(),
+            &["data".to_string()],
+            "pc",
+        );
+        let hello = dm_envelope::build_envelope(
+            dm_envelope::KIND_ORGSYNC_HELLO,
+            &from,
+            my_root,
+            crate::p2p::node::system_now_ms(),
+            body,
+            &key,
+        );
+        assert_eq!(
+            KernelDmHandler::orgkey_resend_trigger(&hello, my_root),
+            Some((org_id.to_string(), from.clone())),
+            "合法 hello 触发 (orgId, from)"
+        );
+
+        // 非 hello 的 orgsync kind 不触发
+        let need = dm_envelope::build_envelope(
+            dm_envelope::KIND_ORGSYNC_NEED,
+            &from,
+            my_root,
+            crate::p2p::node::system_now_ms(),
+            json!({}),
+            &key,
+        );
+        assert_eq!(KernelDmHandler::orgkey_resend_trigger(&need, my_root), None);
+
+        // hello kind 但 body 畸形（缺 orgId/collections）不触发
+        let bad_body = orgsync_env(dm_envelope::KIND_ORGSYNC_HELLO, my_root, &key);
+        assert_eq!(
+            KernelDmHandler::orgkey_resend_trigger(&bad_body, my_root),
+            None
+        );
+
+        // 验签失败（to 非本机）不触发——伪造信封不得驱动出站重投
+        let not_for_me = dm_envelope::build_envelope(
+            dm_envelope::KIND_ORGSYNC_HELLO,
+            &from,
+            "some-other-member",
+            crate::p2p::node::system_now_ms(),
+            crate::sync::orgsync::build_orgsync_hello(org_id, serde_json::Map::new(), &[], "pc"),
+            &key,
+        );
+        assert_eq!(
+            KernelDmHandler::orgkey_resend_trigger(&not_for_me, my_root),
             None
         );
     }

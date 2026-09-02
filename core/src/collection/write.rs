@@ -53,13 +53,14 @@ impl DocumentCollection {
             }
         }
 
-        // 新版 meta 与 doc 同 batch 提交
-        let meta =
+        // 新版 meta 与 doc 同 batch 提交；序号键并入同一 batch（原子）
+        let (meta, seq) =
             generate_updated_meta(storage, node_id, &self.domain, &self.collection, id, now_ms)?;
         ops.push(BatchOperation::put(
             meta_key(&self.domain, &self.collection, id),
             serde_json::to_string(&meta)?,
         ));
+        ops.push(crate::sync::personal::vv_seq_batch_op(node_id, seq));
 
         if policy.enable_evidence {
             let meta_value = serde_json::to_value(&meta)?;
@@ -107,8 +108,9 @@ impl DocumentCollection {
             ops.push(BatchOperation::delete(self.index_key(&field, &value, id)));
         }
 
-        // 墓碑 meta：注意不带 nodeId（对齐 TS `{vv, ts, tombstone: true}`）
-        let meta =
+        // 墓碑 meta：注意不带 nodeId（对齐 TS `{vv, ts, tombstone: true}`）；
+        // 序号键并入同一 batch（原子）
+        let (meta, seq) =
             generate_updated_meta(storage, node_id, &self.domain, &self.collection, id, now_ms)?;
         let tombstone = DocMeta {
             vv: meta.vv.clone(),
@@ -120,6 +122,7 @@ impl DocumentCollection {
             meta_key(&self.domain, &self.collection, id),
             serde_json::to_string(&tombstone)?,
         ));
+        ops.push(crate::sync::personal::vv_seq_batch_op(node_id, seq));
 
         if policy.enable_evidence {
             let tombstone_value = serde_json::to_value(&tombstone)?;

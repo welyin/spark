@@ -253,8 +253,33 @@ impl P2pHost for KernelHost {
         };
         let now = system_now_ms();
         let merged =
-            OrganizationService::apply_incoming_snapshot(&mut self.storage, &organization, now)
+            OrganizationService::apply_incoming_snapshot(&mut self.storage, &self.io_lock, &organization, now)
                 .map_err(|e| e.to_string())?;
+        // F3 残余 §7.1（评审复核点）：org:meta 成员表（accessKey 段）也可经
+        // legacy 快照平面到达——合入后同样重评估 orgkey-deliver 暂存
+        // （orgsync 平面同款触发在 `inbound_dm/orgsync.rs`）。暂存通常为空，
+        // 稳态一次空前缀扫描。
+        if let Some(receiver_root_id) = current.clone() {
+            let online = HashSet::new();
+            let ctx = crate::kernel::inbound_dm::InboundContext {
+                my_root_id: &receiver_root_id,
+                my_nickname: "",
+                remote_peer_id: "",
+                online_peers: &online,
+                node_id: "",
+                now_ms: now,
+                kverify: None,
+            };
+            let unboxes = crate::kernel::inbound_dm::reevaluate_orgkey_stash(
+                &mut self.storage,
+                &ctx,
+                &merged.org_id,
+            )
+            .map_err(|e| e.to_string())?;
+            for unbox in unboxes {
+                self.dm_handler_impl().apply_orgkey_unbox(&receiver_root_id, &unbox);
+            }
+        }
         // pluginDocs 随快照捎带（plugin-org-sync.ts `applyPluginDocSyncItems`）
         if !plugin_docs.is_empty() {
             let items: Vec<PluginDocSyncItem> = plugin_docs
@@ -302,6 +327,7 @@ impl P2pHost for KernelHost {
         let now = system_now_ms();
         let (response, applied_orgs) = handle_pull_list_request(
             &mut self.storage,
+            &self.io_lock,
             &payload,
             current.as_deref(),
             remote_peer_id.as_deref(),
@@ -377,6 +403,7 @@ impl P2pHost for KernelHost {
             .unwrap_or_else(|| super::doc_ops::persisted_sync_node_id(&self.storage));
         OrganizationService::get_recovery_view(
             &mut self.storage,
+            &self.io_lock,
             &root_id,
             system_now_ms(),
             &node_id,

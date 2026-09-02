@@ -97,6 +97,20 @@ pub fn update_info(kernel: &mut Kernel, params: &Params) -> Result<Value, String
     ))
 }
 
+/// `org-set-member-role`：晋升/降级成员角色（"admin"/"member"；仅 admin）。
+pub fn set_member_role(kernel: &mut Kernel, params: &Params) -> Result<Value, String> {
+    let role = match params.need_str("role")? {
+        "admin" => spark_core::org::OrganizationRole::Admin,
+        "member" => spark_core::org::OrganizationRole::Member,
+        other => return Err(format!("unknown role: {other}")),
+    };
+    to_json(kernel.org_set_member_role(
+        params.need_str("orgId")?,
+        params.need_str("rootId")?,
+        role,
+    ))
+}
+
 /// `org-update-my-identity`：改自己的组织内身份（avatar 三态："" 清除）。
 pub fn update_my_identity(kernel: &mut Kernel, params: &Params) -> Result<Value, String> {
     let org_id = params.need_str("orgId")?;

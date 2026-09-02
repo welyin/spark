@@ -409,10 +409,11 @@ fn org_declare_validation() {
 }
 
 /// O2b：`declare_builtin_org_collections` 为组织注册全部内建 all-members
-/// 集合（org:structure/org:contacts/org:invites）——声明记录 + pmeta，
-/// 幂等，键域与 [`crate::sync::orgsync::BuiltinOrgCollection`] 对齐。
+/// 集合（org:structure/org:contacts；F7 起 org:invites 退出 orgsync）——
+/// 声明记录 + pmeta，幂等，键域与
+/// [`crate::sync::orgsync::BuiltinOrgCollection`] 对齐。
 #[test]
-fn declare_builtin_org_collections_registers_all_three() {
+fn declare_builtin_org_collections_registers_all_builtin() {
     let mut s = MemoryStorage::new();
     declare_builtin_org_collections(&mut s, "org_01", "creator", 1000, "node-a").unwrap();
     for builtin in crate::sync::orgsync::BuiltinOrgCollection::all() {

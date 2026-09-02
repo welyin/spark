@@ -73,6 +73,34 @@ impl OrganizationService {
         Ok(views)
     }
 
+    /// pdsync 感知的 [`Self::add_member`]：组织记录落库走原子段原语
+    /// [`Self::update_record_atomic`]（F8：提交前重读校验 + 三路合并，
+    /// `org:meta` 写 pmeta，可经自设备 pdsync 同步）。
+    pub fn add_member_pdsync<S: StorageBackend>(
+        storage: &mut S,
+        io_lock: &super::OrgMetaWriteLock,
+        org_id: &str,
+        member_root_id: &str,
+        node_info: Option<&OrganizationNodeInfo>,
+        current_root_id: &str,
+        now_ms: i64,
+        node_id: &str,
+    ) -> Result<OrganizationRecord> {
+        let _ = node_id; // 记账由中间件完成，参数保留以稳定签名
+        Self::update_record_atomic(storage, io_lock, org_id, |storage, record| {
+            Self::add_member_mutate(
+                storage,
+                record,
+                org_id,
+                member_root_id,
+                node_info,
+                current_root_id,
+                now_ms,
+            )?;
+            Ok(true)
+        })
+    }
+
     /// `addMember`（service.ts:216-309，网络推送部分除外）：
     /// - rootId 规范化后查重；重复添加视为"更新 nodeInfo"（未提供时保留原值）
     /// - 新成员 role 固定 `member`
@@ -88,51 +116,34 @@ impl OrganizationService {
         current_root_id: &str,
         now_ms: i64,
     ) -> Result<OrganizationRecord> {
-        Self::add_member_impl(
-            storage,
-            org_id,
-            member_root_id,
-            node_info,
-            current_root_id,
-            now_ms,
-            None,
-        )
-    }
-
-    /// pdsync 感知的 [`Self::add_member`]：组织记录落库走
-    /// [`Self::save_record_pdsync`]（`org:meta` 写 pmeta，可经自设备 pdsync 同步）。
-    pub fn add_member_pdsync<S: StorageBackend>(
-        storage: &mut S,
-        org_id: &str,
-        member_root_id: &str,
-        node_info: Option<&OrganizationNodeInfo>,
-        current_root_id: &str,
-        now_ms: i64,
-        node_id: &str,
-    ) -> Result<OrganizationRecord> {
-        Self::add_member_impl(
-            storage,
-            org_id,
-            member_root_id,
-            node_info,
-            current_root_id,
-            now_ms,
-            Some(node_id),
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn add_member_impl<S: StorageBackend>(
-        storage: &mut S,
-        org_id: &str,
-        member_root_id: &str,
-        node_info: Option<&OrganizationNodeInfo>,
-        current_root_id: &str,
-        now_ms: i64,
-        node_id: Option<&str>,
-    ) -> Result<OrganizationRecord> {
         let mut record = Self::require_organization(storage, org_id)?;
-        Self::require_admin(&record, current_root_id)?;
+        Self::add_member_mutate(
+            storage,
+            &mut record,
+            org_id,
+            member_root_id,
+            node_info,
+            current_root_id,
+            now_ms,
+        )?;
+        Self::save_record(storage, &record)?;
+        Ok(record)
+    }
+
+    /// addMember 的纯变更段（F8 拆段）：在调用方给定的记录上校验 + 变更 +
+    /// 追加事务 + 重建 sync；不读不写 org:meta 记录本身（读基线/落库由
+    /// 调用方——原子段原语或裸写包装——负责）。
+    #[allow(clippy::too_many_arguments)]
+    fn add_member_mutate<S: StorageBackend>(
+        storage: &mut S,
+        record: &mut OrganizationRecord,
+        org_id: &str,
+        member_root_id: &str,
+        node_info: Option<&OrganizationNodeInfo>,
+        current_root_id: &str,
+        now_ms: i64,
+    ) -> Result<()> {
+        Self::require_admin(record, current_root_id)?;
 
         let normalized_root_id = normalize_root_id(member_root_id)?;
         let normalized_node_info = normalize_optional_node_info(node_info)?;
@@ -203,15 +214,11 @@ impl OrganizationService {
             },
         )?;
         Self::rebuild_sync_after_mutation(
-            &mut record,
+            record,
             previous_last_synced_at,
             transaction.created_at,
         );
-        match node_id {
-            Some(node_id) => Self::save_record_pdsync(storage, &record, now_ms, node_id)?,
-            None => Self::save_record(storage, &record)?,
-        }
-        Ok(record)
+        Ok(())
     }
 
     /// `updateMyIdentity`：成员更新自己的组织内身份字段（昵称/头像/签名/性别/
@@ -222,6 +229,24 @@ impl OrganizationService {
     ///   序列化 200KB、性别 16/地区 64/签名 128 字符）
     /// - 无变化时幂等返回（不 bump 版本），与 `updateOrgInfo` 同口径
     /// - 变更后追加事务并重建 sync，经既有快照同步广播扩散（与 addMember 同模式）
+    /// pdsync 感知的 [`Self::update_my_identity`]：组织记录落库走原子段原语
+    /// [`Self::update_record_atomic`]（F8；`org:meta` 写 pmeta，可经自设备
+    /// pdsync 同步）。
+    pub fn update_my_identity_pdsync<S: StorageBackend>(
+        storage: &mut S,
+        io_lock: &super::OrgMetaWriteLock,
+        org_id: &str,
+        patch: &OrgIdentityPatch,
+        current_root_id: &str,
+        now_ms: i64,
+        node_id: &str,
+    ) -> Result<OrganizationRecord> {
+        let _ = node_id; // 记账由中间件完成，参数保留以稳定签名
+        Self::update_record_atomic(storage, io_lock, org_id, |storage, record| {
+            Self::update_my_identity_mutate(storage, record, org_id, patch, current_root_id, now_ms)
+        })
+    }
+
     pub fn update_my_identity<S: StorageBackend>(
         storage: &mut S,
         org_id: &str,
@@ -229,31 +254,23 @@ impl OrganizationService {
         current_root_id: &str,
         now_ms: i64,
     ) -> Result<OrganizationRecord> {
-        Self::update_my_identity_impl(storage, org_id, patch, current_root_id, now_ms, None)
-    }
-
-    /// pdsync 感知的 [`Self::update_my_identity`]：组织记录落库走
-    /// [`Self::save_record_pdsync`]（`org:meta` 写 pmeta，可经自设备 pdsync 同步）。
-    pub fn update_my_identity_pdsync<S: StorageBackend>(
-        storage: &mut S,
-        org_id: &str,
-        patch: &OrgIdentityPatch,
-        current_root_id: &str,
-        now_ms: i64,
-        node_id: &str,
-    ) -> Result<OrganizationRecord> {
-        Self::update_my_identity_impl(storage, org_id, patch, current_root_id, now_ms, Some(node_id))
-    }
-
-    fn update_my_identity_impl<S: StorageBackend>(
-        storage: &mut S,
-        org_id: &str,
-        patch: &OrgIdentityPatch,
-        current_root_id: &str,
-        now_ms: i64,
-        node_id: Option<&str>,
-    ) -> Result<OrganizationRecord> {
         let mut record = Self::require_organization(storage, org_id)?;
+        if Self::update_my_identity_mutate(storage, &mut record, org_id, patch, current_root_id, now_ms)? {
+            Self::save_record(storage, &record)?;
+        }
+        Ok(record)
+    }
+
+    /// `updateMyIdentity` 的纯变更段（F8 拆段）：返回是否发生变更（false =
+    /// 幂等无写，不 bump 版本）。
+    fn update_my_identity_mutate<S: StorageBackend>(
+        storage: &mut S,
+        record: &mut OrganizationRecord,
+        org_id: &str,
+        patch: &OrgIdentityPatch,
+        current_root_id: &str,
+        now_ms: i64,
+    ) -> Result<bool> {
         let Some(index) = record
             .members
             .iter()
@@ -272,7 +289,7 @@ impl OrganizationService {
             && values.signature == member.signature
             && values.use_personal_identity == member.use_personal_identity;
         if unchanged {
-            return Ok(record);
+            return Ok(false);
         }
 
         let member = &mut record.members[index];
@@ -329,15 +346,11 @@ impl OrganizationService {
             },
         )?;
         Self::rebuild_sync_after_mutation(
-            &mut record,
+            record,
             previous_last_synced_at,
             transaction.created_at,
         );
-        match node_id {
-            Some(node_id) => Self::save_record_pdsync(storage, &record, now_ms, node_id)?,
-            None => Self::save_record(storage, &record)?,
-        }
-        Ok(record)
+        Ok(true)
     }
 
     /// `removeMember`（service.ts:460-498）：移除 admin 时若 admin 总数 ≤ 1 拒绝。
@@ -348,39 +361,40 @@ impl OrganizationService {
         current_root_id: &str,
         now_ms: i64,
     ) -> Result<OrganizationRecord> {
-        Self::remove_member_impl(storage, org_id, member_root_id, current_root_id, now_ms, None)
+        let mut record = Self::require_organization(storage, org_id)?;
+        Self::remove_member_mutate(storage, &mut record, org_id, member_root_id, current_root_id, now_ms)?;
+        Self::save_record(storage, &record)?;
+        Ok(record)
     }
 
-    /// pdsync 感知的 [`Self::remove_member`]：组织记录落库走
-    /// [`Self::save_record_pdsync`]（`org:meta` 写 pmeta，可经自设备 pdsync 同步）。
+    /// pdsync 感知的 [`Self::remove_member`]：组织记录落库走原子段原语
+    /// [`Self::update_record_atomic`]（F8；`org:meta` 写 pmeta）。
     pub fn remove_member_pdsync<S: StorageBackend>(
         storage: &mut S,
+        io_lock: &super::OrgMetaWriteLock,
         org_id: &str,
         member_root_id: &str,
         current_root_id: &str,
         now_ms: i64,
         node_id: &str,
     ) -> Result<OrganizationRecord> {
-        Self::remove_member_impl(
-            storage,
-            org_id,
-            member_root_id,
-            current_root_id,
-            now_ms,
-            Some(node_id),
-        )
+        let _ = node_id; // 记账由中间件完成，参数保留以稳定签名
+        Self::update_record_atomic(storage, io_lock, org_id, |storage, record| {
+            Self::remove_member_mutate(storage, record, org_id, member_root_id, current_root_id, now_ms)?;
+            Ok(true)
+        })
     }
 
-    fn remove_member_impl<S: StorageBackend>(
+    /// `removeMember` 的纯变更段（F8 拆段）：不读不写 org:meta 记录本身。
+    fn remove_member_mutate<S: StorageBackend>(
         storage: &mut S,
+        record: &mut OrganizationRecord,
         org_id: &str,
         member_root_id: &str,
         current_root_id: &str,
         now_ms: i64,
-        node_id: Option<&str>,
-    ) -> Result<OrganizationRecord> {
-        let mut record = Self::require_organization(storage, org_id)?;
-        Self::require_admin(&record, current_root_id)?;
+    ) -> Result<()> {
+        Self::require_admin(record, current_root_id)?;
 
         let normalized_root_id = normalize_root_id(member_root_id)?;
         let Some(index) = record
@@ -420,15 +434,11 @@ impl OrganizationService {
             },
         )?;
         Self::rebuild_sync_after_mutation(
-            &mut record,
+            record,
             previous_last_synced_at,
             transaction.created_at,
         );
-        match node_id {
-            Some(node_id) => Self::save_record_pdsync(storage, &record, now_ms, node_id)?,
-            None => Self::save_record(storage, &record)?,
-        }
-        Ok(record)
+        Ok(())
     }
 
     /// `setMemberRole`（O1 账号角色模型）：晋升/降级成员角色。
@@ -446,12 +456,18 @@ impl OrganizationService {
         current_root_id: &str,
         now_ms: i64,
     ) -> Result<OrganizationRecord> {
-        Self::set_member_role_impl(storage, org_id, member_root_id, role, current_root_id, now_ms, None)
+        let mut record = Self::require_organization(storage, org_id)?;
+        if Self::set_member_role_mutate(storage, &mut record, org_id, member_root_id, role, current_root_id, now_ms)? {
+            Self::save_record(storage, &record)?;
+        }
+        Ok(record)
     }
 
-    /// pdsync 感知的 [`Self::set_member_role`]。
+    /// pdsync 感知的 [`Self::set_member_role`]：组织记录落库走原子段原语
+    /// [`Self::update_record_atomic`]（F8）。
     pub fn set_member_role_pdsync<S: StorageBackend>(
         storage: &mut S,
+        io_lock: &super::OrgMetaWriteLock,
         org_id: &str,
         member_root_id: &str,
         role: OrganizationRole,
@@ -459,28 +475,24 @@ impl OrganizationService {
         now_ms: i64,
         node_id: &str,
     ) -> Result<OrganizationRecord> {
-        Self::set_member_role_impl(
-            storage,
-            org_id,
-            member_root_id,
-            role,
-            current_root_id,
-            now_ms,
-            Some(node_id),
-        )
+        let _ = node_id; // 记账由中间件完成，参数保留以稳定签名
+        Self::update_record_atomic(storage, io_lock, org_id, |storage, record| {
+            Self::set_member_role_mutate(storage, record, org_id, member_root_id, role, current_root_id, now_ms)
+        })
     }
 
-    fn set_member_role_impl<S: StorageBackend>(
+    /// `setMemberRole` 的纯变更段（F8 拆段）：返回是否发生变更（角色无变化
+    /// → Ok(false) 幂等无写）。
+    fn set_member_role_mutate<S: StorageBackend>(
         storage: &mut S,
+        record: &mut OrganizationRecord,
         org_id: &str,
         member_root_id: &str,
         role: OrganizationRole,
         current_root_id: &str,
         now_ms: i64,
-        node_id: Option<&str>,
-    ) -> Result<OrganizationRecord> {
-        let mut record = Self::require_organization(storage, org_id)?;
-        Self::require_admin(&record, current_root_id)?;
+    ) -> Result<bool> {
+        Self::require_admin(record, current_root_id)?;
 
         let normalized_root_id = normalize_root_id(member_root_id)?;
         let Some(index) = record
@@ -492,7 +504,7 @@ impl OrganizationService {
         };
         let old_role = record.members[index].role;
         if old_role == role {
-            return Ok(record);
+            return Ok(false);
         }
         if old_role == OrganizationRole::Admin
             && role == OrganizationRole::Member
@@ -528,15 +540,11 @@ impl OrganizationService {
             },
         )?;
         Self::rebuild_sync_after_mutation(
-            &mut record,
+            record,
             previous_last_synced_at,
             transaction.created_at,
         );
-        match node_id {
-            Some(node_id) => Self::save_record_pdsync(storage, &record, now_ms, node_id)?,
-            None => Self::save_record(storage, &record)?,
-        }
-        Ok(record)
+        Ok(true)
     }
 
     /// 变更后需要推送快照的接收方（`syncOrganizationToKnownMembers` 的筛选逻辑，
@@ -570,42 +578,53 @@ impl OrganizationService {
     ///
     /// 存量组织缺 recoverySecret 时由 **admin 惰性补齐**（随机 64 hex，bump
     /// updatedAt 后落库，经反熵扩散；非成员角色本轮跳过等待 gossip）。
-    /// 落库走 [`Self::save_record_pdsync`]（`org:meta` 写 pmeta，补齐结果可经
-    /// 自设备 pdsync 同步）。
+    /// 落库走原子段原语 [`Self::update_record_atomic`]（F8；`org:meta` 写
+    /// pmeta，补齐结果可经自设备 pdsync 同步）。
     pub fn get_recovery_view<S: StorageBackend>(
         storage: &mut S,
+        io_lock: &super::OrgMetaWriteLock,
         current_root_id: &str,
         now_ms: i64,
         node_id: &str,
     ) -> Result<Vec<RecoveryViewItem>> {
+        let _ = node_id; // 记账由中间件完成，参数保留以稳定签名
         let records = Self::read_all_organizations(storage)?;
         let mut view = Vec::new();
-        for mut record in records {
+        for record in records {
             let Some(self_member) = record.find_member(current_root_id) else {
                 continue;
             };
             let self_is_admin = self_member.role == OrganizationRole::Admin;
-            if record.recovery_secret().is_none() {
-                // 非管理员等管理员补齐后经 gossip 获得；本轮先跳过
-                if !self_is_admin {
+            let record = if record.recovery_secret().is_none() && self_is_admin {
+                // 原子段内重判（并发下可能已被补齐）→ 幂等无写；
+                // 非管理员等管理员补齐后经 gossip 获得，本轮跳过
+                let org_id = record.org_id.clone();
+                Self::update_record_atomic(storage, io_lock, &org_id, |_storage, rec| {
+                    if rec.recovery_secret().is_some() {
+                        return Ok(false);
+                    }
+                    rec.set_recovery_secret(generate_recovery_secret());
+                    rec.updated_at = now_ms;
+                    let previous = rec.sync.clone();
+                    rec.sync = Some(OrganizationSyncState {
+                        versions: build_organization_sync_versions(
+                            rec,
+                            previous
+                                .as_ref()
+                                .map(|s| s.versions.transactions_version)
+                                .unwrap_or(rec.updated_at),
+                        ),
+                        sections: pick_sync_sections_by_priority(),
+                        last_synced_at: previous.as_ref().map(|s| s.last_synced_at).unwrap_or(0),
+                    });
+                    Ok(true)
+                })?
+            } else {
+                if record.recovery_secret().is_none() {
                     continue;
                 }
-                record.set_recovery_secret(generate_recovery_secret());
-                record.updated_at = now_ms;
-                let previous = record.sync.clone();
-                record.sync = Some(OrganizationSyncState {
-                    versions: build_organization_sync_versions(
-                        &record,
-                        previous
-                            .as_ref()
-                            .map(|s| s.versions.transactions_version)
-                            .unwrap_or(record.updated_at),
-                    ),
-                    sections: pick_sync_sections_by_priority(),
-                    last_synced_at: previous.as_ref().map(|s| s.last_synced_at).unwrap_or(0),
-                });
-                Self::save_record_pdsync(storage, &record, now_ms, node_id)?;
-            }
+                record
+            };
             view.push(RecoveryViewItem {
                 org_id: record.org_id.clone(),
                 recovery_secret: record.recovery_secret().unwrap_or_default().to_string(),
