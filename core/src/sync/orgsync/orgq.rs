@@ -181,8 +181,14 @@ pub fn parse_orgq_req(body: &Value) -> Option<OrgqReq> {
     let request_id = body.get("requestId")?.as_str()?.to_string();
     match body.get("op")?.as_str()? {
         "query" => {
-            let prefix = body.get("prefix").and_then(Value::as_str).map(str::to_string);
-            let cursor = body.get("cursor").and_then(Value::as_str).map(str::to_string);
+            let prefix = body
+                .get("prefix")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let cursor = body
+                .get("cursor")
+                .and_then(Value::as_str)
+                .map(str::to_string);
             let limit = body
                 .get("limit")
                 .and_then(Value::as_u64)
@@ -287,7 +293,10 @@ pub fn parse_orgq_resp(body: &Value) -> Option<OrgqResp> {
             let meta: DocMeta = serde_json::from_value(item.get("meta")?.clone()).ok()?;
             records.push(OrgqRespRecord { key, value, meta });
         }
-        let complete = body.get("complete").and_then(Value::as_bool).unwrap_or(false);
+        let complete = body
+            .get("complete")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let served_at = body.get("servedAt").and_then(Value::as_i64).unwrap_or(0);
         let denied = body.get("denied").and_then(Value::as_bool).unwrap_or(false);
         return Some(OrgqResp::Query {
@@ -628,7 +637,9 @@ mod tests {
         let body = build_orgq_query_resp("o", "c", "req-denied", &[], true, 2000, true);
         let parsed = parse_orgq_resp(&body).unwrap();
         match parsed {
-            OrgqResp::Query { denied, records, .. } => {
+            OrgqResp::Query {
+                denied, records, ..
+            } => {
                 assert!(denied);
                 assert!(records.is_empty(), "denied 时空集");
             }
@@ -686,7 +697,10 @@ mod tests {
         for (i, b) in batches.iter().enumerate() {
             if i + 1 < batches.len() {
                 assert!(
-                    b.iter().map(|r| r.value.to_string().len() + r.key.len()).sum::<usize>() <= 300,
+                    b.iter()
+                        .map(|r| r.value.to_string().len() + r.key.len())
+                        .sum::<usize>()
+                        <= 300,
                     "非末批须满足体积约束"
                 );
             }

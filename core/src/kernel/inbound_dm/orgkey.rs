@@ -98,16 +98,28 @@ pub fn handle_orgkey_deliver<S: StorageBackend>(
             feed_blob_out: None,
         }),
         OrgkeyJudge::Wait => {
-            // 暂存原始 body（键维度 (sender, epoch) 去重，ts 新者覆盖）
+            // 暂存原始 body（键维度 (sender, epoch) 去重，stashedAt 新者覆盖）。
+            // 容量闸（batch1 §1 兜底）：per-org 256 条，满拒新不清旧（打 WARN）——
+            // 旧条目可能是合法待投递，攻击者灌入的条目被容量闸挡在门外。
             if let Some(deliver) = crate::sync::orgsync::parse_orgkey_deliver(body) {
-                crate::sync::orgsync::orgkey_stash_put(
-                    storage,
-                    &deliver.org_id,
-                    &deliver.collection,
-                    &deliver.sender_root_id,
-                    deliver.epoch,
-                    body,
-                );
+                let count = crate::sync::orgsync::orgkey_stash_count(storage, &deliver.org_id);
+                if count >= crate::sync::orgsync::ORGKEY_STASH_MAX_PER_ORG {
+                    log::warn!(
+                        "[ORGKEY] stash full, refusing new entry | org={} count={}",
+                        deliver.org_id,
+                        count
+                    );
+                } else {
+                    crate::sync::orgsync::orgkey_stash_put(
+                        storage,
+                        &deliver.org_id,
+                        &deliver.collection,
+                        &deliver.sender_root_id,
+                        deliver.epoch,
+                        body,
+                        ctx.now_ms,
+                    );
+                }
             }
             done(ok_response(), Vec::new())
         }
@@ -128,6 +140,8 @@ pub fn reevaluate_orgkey_stash<S: StorageBackend>(
     ctx: &InboundContext<'_>,
     org_id: &str,
 ) -> Result<Vec<OrgkeyUnbox>> {
+    // 老化清扫（batch1 §1 卫生层）：24h 未解出的条目顺手清除
+    crate::sync::orgsync::orgkey_stash_age_sweep(storage, org_id, ctx.now_ms);
     let mut unboxes = Vec::new();
     for (collection, sender, epoch, body) in
         crate::sync::orgsync::orgkey_stash_for_org(storage, org_id)
@@ -139,12 +153,24 @@ pub fn reevaluate_orgkey_stash<S: StorageBackend>(
         };
         match judge_orgkey_deliver(storage, ctx, &sender, &body)? {
             OrgkeyJudge::Unbox(unbox) => {
-                crate::sync::orgsync::orgkey_stash_remove(storage, org_id, &collection, &sender, epoch);
+                crate::sync::orgsync::orgkey_stash_remove(
+                    storage,
+                    org_id,
+                    &collection,
+                    &sender,
+                    epoch,
+                );
                 unboxes.push(unbox);
             }
             OrgkeyJudge::Wait => {} // 仍不够格 → 保留暂存
             OrgkeyJudge::Drop => {
-                crate::sync::orgsync::orgkey_stash_remove(storage, org_id, &collection, &sender, epoch);
+                crate::sync::orgsync::orgkey_stash_remove(
+                    storage,
+                    org_id,
+                    &collection,
+                    &sender,
+                    epoch,
+                );
             }
         }
     }
@@ -183,13 +209,19 @@ fn judge_orgkey_deliver<S: StorageBackend>(
     if record.find_member(from).is_none() {
         return Ok(OrgkeyJudge::Drop);
     }
-    // 1. sender ∈ 当前 acl owners——失败含「acl 缺失/陈旧」（同步未到）与
-    // 「sender 真非 owner」两种；暂存方案下统一按等待态处理（重评估时若
-    // sender 仍非 owner 且 acl 已到位……仍为 Wait——保守方向：acl 可能
-    // 仍陈旧。真非 owner 的暂存由「重评估不过即清」在 acl 更新覆盖后仍
-    // Wait 而保留——这是有界的（成员 + 键维度去重），不授予任何权限。
+    // 1. sender ∈ 当前 acl owners——失败分「acl 缺失/陈旧」（同步未到，维持
+    // 等待态）与「sender 从未是 owner」（真拒绝）两种，由下方的 epoch+ts 细化
+    // 规则区分（batch1 §1 + 评审修正：owners 在创世与 reset 之间不变——
+    // grant/revoke 只动 readers；但「reset 必升 epoch」不成立——
+    // `data_reset_access` 的 reset_epoch 取**本地 orgkey 表** max+1，不回看
+    // acl.epoch，非读者管理员接管时可回退（合入侧 resetBy 允许回退）。
+    // 故 epoch 比较须叠加 ts 条件，见下）。
     let current: crate::sync::orgsync::AclRecord = storage
-        .get(&crate::sync::orgsync::acl_key(&deliver.org_id, name, version))
+        .get(&crate::sync::orgsync::acl_key(
+            &deliver.org_id,
+            name,
+            version,
+        ))
         .ok()
         .flatten()
         .and_then(|raw| serde_json::from_str(&raw).ok())
@@ -202,8 +234,29 @@ fn judge_orgkey_deliver<S: StorageBackend>(
             sig: String::new(),
         });
     if !current.is_owner(from) {
+        // DoS 三层防护之判定细化（org-followups-batch1 §1，主；评审修正版）：
+        // 本地 acl 非空 且 `deliver.epoch <= acl.epoch` 且
+        // `deliver.ts <= acl.updatedAt`（投递先于当前 acl 落笔 = 属当前 owner
+        // 谱系的历史，sender 不在其中即从未是 owner）→ definitive Drop
+        // （不暂存）。ts 条件的必要性：reset 可回退 epoch（见上），竞跑的
+        // reset 后投递（新 owner、epoch ≤ 旧 acl.epoch）仅凭 epoch 会被误
+        // Drop——其 ts 必新于本地旧 acl 的 updatedAt（投递时刻晚于旧 acl
+        // 落笔；deliver.ts 在签名覆盖下，中间人不可伪造），回到 Wait 暂存，
+        // 待 reset acl 到达后重评估通过。泛洪面：攻击者取新鲜 ts 可规避
+        // Drop，但落进容量闸（256/org）+ 24h 老化，有界。
+        if !current.is_empty() && deliver.epoch <= current.epoch && deliver.ts <= current.updated_at
+        {
+            log::info!(
+                "[ORGKEY] deliver discarded: sender={} never owner at epoch {} of {}:{}",
+                &from[..std::cmp::min(16, from.len())],
+                deliver.epoch,
+                deliver.org_id,
+                deliver.collection
+            );
+            return Ok(OrgkeyJudge::Drop);
+        }
         log::info!(
-            "[ORGKEY] deliver stashed: sender={} not owner of {}:{} (acl not arrived?)",
+            "[ORGKEY] deliver stashed: sender={} not owner of {}:{} (acl not arrived/stale?)",
             &from[..std::cmp::min(16, from.len())],
             deliver.org_id,
             deliver.collection
@@ -242,7 +295,10 @@ fn judge_orgkey_deliver<S: StorageBackend>(
         return Ok(OrgkeyJudge::Drop);
     };
     if sender_pk
-        .verify(payload.as_bytes(), &ed25519_dalek::Signature::from_bytes(&sig_arr))
+        .verify(
+            payload.as_bytes(),
+            &ed25519_dalek::Signature::from_bytes(&sig_arr),
+        )
         .is_err()
     {
         log::info!(
@@ -286,10 +342,12 @@ fn split_collection_full(col_full: &str) -> Option<(&str, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::engine::general_purpose::STANDARD as B64;
     use crate::identity::derive_domain_identity;
-    use crate::org::types::{OrganizationMember, OrganizationRecord, OrganizationRole, OrganizationAccessKey};
+    use crate::org::types::{
+        OrganizationAccessKey, OrganizationMember, OrganizationRecord, OrganizationRole,
+    };
     use crate::storage::MemoryStorage;
+    use base64::engine::general_purpose::STANDARD as B64;
     use serde_json::json;
 
     const MY_ROOT: &str = "reader-root";
@@ -364,7 +422,10 @@ mod tests {
     #[test]
     fn handle_orgkey_deliver_valid_produces_unbox_instruction() {
         let owner_seed = [7u8; 64];
-        let owner_org = derive_domain_identity(&owner_seed, &crate::kernel::Kernel::org_access_domain("org_0000000000000001"));
+        let owner_org = derive_domain_identity(
+            &owner_seed,
+            &crate::kernel::Kernel::org_access_domain("org_0000000000000001"),
+        );
         let owner_pk_b64 = B64.encode(owner_org.public_key());
         let ak = OrganizationAccessKey {
             public_key: owner_pk_b64,
@@ -389,7 +450,10 @@ mod tests {
         .unwrap();
         // owner 构造 orgkey-deliver（epoch 1）
         let owner_x25519 = crate::sync::orgsync::ed_sk_to_x25519(&owner_org.signing_key.to_bytes());
-        let my_pub = crate::sync::orgsync::ed_pk_to_x25519(&owner_org.signing_key.verifying_key().to_bytes()).unwrap();
+        let my_pub = crate::sync::orgsync::ed_pk_to_x25519(
+            &owner_org.signing_key.verifying_key().to_bytes(),
+        )
+        .unwrap();
         let body = crate::sync::orgsync::build_orgkey_deliver(
             "org_0000000000000001",
             "fin:pay",
@@ -407,19 +471,29 @@ mod tests {
         let online = std::collections::HashSet::new();
         let res = handle_orgkey_deliver(&mut s, &ctx(&online), OWNER_ROOT, &body).unwrap();
         assert_eq!(res.response["ok"], json!(true));
-        let unbox = res.orgkey_unbox.into_iter().next().expect("合法投递产出 unbox 指令");
+        let unbox = res
+            .orgkey_unbox
+            .into_iter()
+            .next()
+            .expect("合法投递产出 unbox 指令");
         assert_eq!(unbox.epoch, 1);
         assert_eq!(unbox.name, "fin:pay");
         assert_eq!(unbox.version, "1");
         // sender_x25519 与 owner 公钥一致
-        assert_eq!(unbox.sender_x25519, crate::sync::orgsync::ed_pk_to_x25519(&owner_org.public_key()).unwrap());
+        assert_eq!(
+            unbox.sender_x25519,
+            crate::sync::orgsync::ed_pk_to_x25519(&owner_org.public_key()).unwrap()
+        );
     }
 
     /// O4 工作项 3：非 owner sender → 静默丢弃（无 unbox 指令，不落 orgkey 表）。
     #[test]
     fn handle_orgkey_deliver_non_owner_discarded() {
         let owner_seed = [8u8; 64];
-        let owner_org = derive_domain_identity(&owner_seed, &crate::kernel::Kernel::org_access_domain("org_0000000000000001"));
+        let owner_org = derive_domain_identity(
+            &owner_seed,
+            &crate::kernel::Kernel::org_access_domain("org_0000000000000001"),
+        );
         let ak = OrganizationAccessKey {
             public_key: B64.encode(owner_org.public_key()),
             bind_sig: "bind".to_string(),
@@ -458,7 +532,8 @@ mod tests {
         assert_eq!(res.response["ok"], json!(true));
         assert!(res.orgkey_unbox.is_empty(), "非 owner 投递静默丢弃");
         assert!(
-            crate::sync::orgsync::get_epoch_key(&s, "org_0000000000000001", "fin:pay", "1", 1).is_none(),
+            crate::sync::orgsync::get_epoch_key(&s, "org_0000000000000001", "fin:pay", "1", 1)
+                .is_none(),
             "被丢弃投递不落 orgkey 表"
         );
     }
@@ -469,16 +544,29 @@ mod tests {
 
     /// 合法投递 body（owner 签名 + box 包裹）+ owner accessKey。
     fn owner_deliver_body() -> (Value, OrganizationAccessKey) {
-        let owner_org = derive_domain_identity(&[7u8; 64], &crate::kernel::Kernel::org_access_domain(ORG));
+        let owner_org =
+            derive_domain_identity(&[7u8; 64], &crate::kernel::Kernel::org_access_domain(ORG));
         let ak = OrganizationAccessKey {
             public_key: B64.encode(owner_org.public_key()),
             bind_sig: "bind".to_string(),
         };
         let owner_x25519 = crate::sync::orgsync::ed_sk_to_x25519(&owner_org.signing_key.to_bytes());
-        let my_pub = crate::sync::orgsync::ed_pk_to_x25519(&owner_org.signing_key.verifying_key().to_bytes()).unwrap();
+        let my_pub = crate::sync::orgsync::ed_pk_to_x25519(
+            &owner_org.signing_key.verifying_key().to_bytes(),
+        )
+        .unwrap();
         let body = crate::sync::orgsync::build_orgkey_deliver(
-            ORG, "fin:pay", "1", 1, &[9u8; 32], OWNER_ROOT, MY_ROOT, &my_pub,
-            &owner_org.signing_key, &owner_x25519, 1500,
+            ORG,
+            "fin:pay",
+            "1",
+            1,
+            &[9u8; 32],
+            OWNER_ROOT,
+            MY_ROOT,
+            &my_pub,
+            &owner_org.signing_key,
+            &owner_x25519,
+            1500,
         )
         .unwrap();
         (body, ak)
@@ -520,16 +608,27 @@ mod tests {
         // 重评估仍不够格（acl 仍未到）→ 保留暂存
         let unboxes = reevaluate_orgkey_stash(&mut s, &ctx(&online), ORG).unwrap();
         assert!(unboxes.is_empty());
-        assert_eq!(crate::sync::orgsync::orgkey_stash_for_org(&s, ORG).len(), 1, "仍不够格保留暂存");
+        assert_eq!(
+            crate::sync::orgsync::orgkey_stash_for_org(&s, ORG).len(),
+            1,
+            "仍不够格保留暂存"
+        );
 
         // acl 到达（orgsync 合入）→ 重评估够格 → unbox + 暂存清除
         put_acl(&mut s);
         let unboxes = reevaluate_orgkey_stash(&mut s, &ctx(&online), ORG).unwrap();
         assert_eq!(unboxes.len(), 1, "acl 到达后重评估产出 unbox");
         assert_eq!(unboxes[0].epoch, 1);
-        assert!(crate::sync::orgsync::orgkey_stash_for_org(&s, ORG).is_empty(), "暂存清除");
+        assert!(
+            crate::sync::orgsync::orgkey_stash_for_org(&s, ORG).is_empty(),
+            "暂存清除"
+        );
         // 幂等：再评估无产出
-        assert!(reevaluate_orgkey_stash(&mut s, &ctx(&online), ORG).unwrap().is_empty());
+        assert!(
+            reevaluate_orgkey_stash(&mut s, &ctx(&online), ORG)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     /// sender accessKey 晚到同构场景：acl 已在、成员表 sender 无 accessKey →
@@ -545,10 +644,18 @@ mod tests {
 
         let res = handle_orgkey_deliver(&mut s, &ctx(&online), OWNER_ROOT, &body).unwrap();
         assert!(res.orgkey_unbox.is_empty());
-        assert_eq!(crate::sync::orgsync::orgkey_stash_for_org(&s, ORG).len(), 1, "accessKey 未到 → 暂存");
+        assert_eq!(
+            crate::sync::orgsync::orgkey_stash_for_org(&s, ORG).len(),
+            1,
+            "accessKey 未到 → 暂存"
+        );
 
         // 重评估仍缺 accessKey → 保留
-        assert!(reevaluate_orgkey_stash(&mut s, &ctx(&online), ORG).unwrap().is_empty());
+        assert!(
+            reevaluate_orgkey_stash(&mut s, &ctx(&online), ORG)
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(crate::sync::orgsync::orgkey_stash_for_org(&s, ORG).len(), 1);
 
         // accessKey 到达（org:meta 合入）→ 重评估够格
@@ -567,34 +674,275 @@ mod tests {
 
         // 签名错误（篡改 sig 为合法 base64 的零签名）→ Drop，不暂存
         let mut s = MemoryStorage::new();
-        crate::org::OrganizationService::save_record(&mut s, &org_record(Some(ak.clone()))).unwrap();
+        crate::org::OrganizationService::save_record(&mut s, &org_record(Some(ak.clone())))
+            .unwrap();
         put_acl(&mut s);
         let mut bad = body.clone();
         bad["sig"] = json!(B64.encode([0u8; 64]));
         let res = handle_orgkey_deliver(&mut s, &ctx(&online), OWNER_ROOT, &bad).unwrap();
         assert!(res.orgkey_unbox.is_empty());
-        assert!(crate::sync::orgsync::orgkey_stash_for_org(&s, ORG).is_empty(), "签名错误不暂存");
+        assert!(
+            crate::sync::orgsync::orgkey_stash_for_org(&s, ORG).is_empty(),
+            "签名错误不暂存"
+        );
 
         // 已有 ≥ epoch（幂等）→ Drop，不暂存
         crate::sync::orgsync::put_epoch_key(&mut s, ORG, "fin:pay", "1", 1, &[9u8; 32]);
         let res = handle_orgkey_deliver(&mut s, &ctx(&online), OWNER_ROOT, &body).unwrap();
         assert!(res.orgkey_unbox.is_empty());
-        assert!(crate::sync::orgsync::orgkey_stash_for_org(&s, ORG).is_empty(), "已有 ≥ epoch 不暂存");
+        assert!(
+            crate::sync::orgsync::orgkey_stash_for_org(&s, ORG).is_empty(),
+            "已有 ≥ epoch 不暂存"
+        );
 
         // recipient 不符（防转投）→ Drop，不暂存
         let mut s2 = MemoryStorage::new();
         crate::org::OrganizationService::save_record(&mut s2, &org_record(Some(ak))).unwrap();
         put_acl(&mut s2);
-        let owner_org = derive_domain_identity(&[7u8; 64], &crate::kernel::Kernel::org_access_domain(ORG));
+        let owner_org =
+            derive_domain_identity(&[7u8; 64], &crate::kernel::Kernel::org_access_domain(ORG));
         let owner_x25519 = crate::sync::orgsync::ed_sk_to_x25519(&owner_org.signing_key.to_bytes());
-        let other_pub = crate::sync::orgsync::ed_pk_to_x25519(&owner_org.signing_key.verifying_key().to_bytes()).unwrap();
+        let other_pub = crate::sync::orgsync::ed_pk_to_x25519(
+            &owner_org.signing_key.verifying_key().to_bytes(),
+        )
+        .unwrap();
         let forwarded = crate::sync::orgsync::build_orgkey_deliver(
-            ORG, "fin:pay", "1", 1, &[9u8; 32], OWNER_ROOT, "someone-else", &other_pub,
-            &owner_org.signing_key, &owner_x25519, 1500,
+            ORG,
+            "fin:pay",
+            "1",
+            1,
+            &[9u8; 32],
+            OWNER_ROOT,
+            "someone-else",
+            &other_pub,
+            &owner_org.signing_key,
+            &owner_x25519,
+            1500,
         )
         .unwrap();
         let res = handle_orgkey_deliver(&mut s2, &ctx(&online), OWNER_ROOT, &forwarded).unwrap();
         assert!(res.orgkey_unbox.is_empty());
-        assert!(crate::sync::orgsync::orgkey_stash_for_org(&s2, ORG).is_empty(), "recipient 不符不暂存");
+        assert!(
+            crate::sync::orgsync::orgkey_stash_for_org(&s2, ORG).is_empty(),
+            "recipient 不符不暂存"
+        );
+    }
+
+    // ── batch1 §1：暂存 DoS 三层防护 ─────────────────────────────────────
+
+    const MEMBER_C: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+
+    /// 成员表含 member-c（非 owner）的记录。
+    fn org_record_with_member_c(
+        owner_access_key: Option<OrganizationAccessKey>,
+    ) -> OrganizationRecord {
+        let mut record = org_record(owner_access_key);
+        record.members.push(OrganizationMember {
+            root_id: MEMBER_C.to_string(),
+            role: OrganizationRole::Member,
+            joined_at: 1000,
+            added_by: "creator".to_string(),
+            ..Default::default()
+        });
+        record
+    }
+
+    /// member-c 名义的投递 body（线形合法；owners 判定先于验签，sig 不真也无所谓）。
+    fn member_c_deliver_body(epoch: u64) -> Value {
+        json!({
+            "orgId": ORG,
+            "collection": "fin:pay@v1",
+            "epoch": epoch,
+            "wrappedKey": "x",
+            "nonce": "y",
+            "senderRootId": MEMBER_C,
+            "recipientRootId": MY_ROOT,
+            "ts": 1500,
+            "sig": "z",
+        })
+    }
+
+    fn put_acl_at_epoch(s: &mut MemoryStorage, epoch: u64) {
+        let acl = crate::sync::orgsync::AclRecord {
+            owners: vec![OWNER_ROOT.to_string()],
+            readers: vec![MY_ROOT.to_string()],
+            epoch,
+            // updated_at 须新于投递 ts（1500）：模型「acl 已到位、投递属当前
+            // 谱系历史」——判定细化的 Drop 分支要求 deliver.ts <= acl.updatedAt
+            updated_at: 2000,
+            reset_by: None,
+            sig: String::new(),
+        };
+        s.put(
+            &crate::sync::orgsync::acl_key(ORG, "fin:pay", "1"),
+            &serde_json::to_string(&acl).unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// 判定细化（主，评审修正版）：本地 acl 非空 + deliver.epoch ≤ acl.epoch
+    /// + deliver.ts ≤ acl.updatedAt（投递属当前 owner 谱系历史）+ sender
+    /// 从未是 owner → definitive Drop（不暂存）；acl 陈旧（deliver.epoch >
+    /// acl.epoch，正常抢跑窗口）→ 维持 Wait。
+    #[test]
+    fn stash_dos_never_owner_old_epoch_dropped_but_stale_acl_waits() {
+        let online = std::collections::HashSet::new();
+        // acl 已到位（epoch 2，updatedAt 2000 新于投递 ts 1500），member-c
+        // 投递 epoch 1（属当前 owner 谱系历史）→ 从未是 owner → Drop 不暂存
+        let mut s = MemoryStorage::new();
+        crate::org::OrganizationService::save_record(&mut s, &org_record_with_member_c(None))
+            .unwrap();
+        put_acl_at_epoch(&mut s, 2);
+        let res = handle_orgkey_deliver(&mut s, &ctx(&online), MEMBER_C, &member_c_deliver_body(1))
+            .unwrap();
+        assert_eq!(res.response["ok"], json!(true));
+        assert!(res.orgkey_unbox.is_empty());
+        assert!(
+            crate::sync::orgsync::orgkey_stash_for_org(&s, ORG).is_empty(),
+            "acl 到位 + 旧 epoch + 投递先于 acl 落笔 + 非 owner → Drop 不暂存"
+        );
+
+        // acl 陈旧（本地 epoch 1 < 投递 epoch 2，正常抢跑窗口）→ 维持 Wait
+        let mut s = MemoryStorage::new();
+        crate::org::OrganizationService::save_record(&mut s, &org_record_with_member_c(None))
+            .unwrap();
+        put_acl_at_epoch(&mut s, 1);
+        let res = handle_orgkey_deliver(&mut s, &ctx(&online), MEMBER_C, &member_c_deliver_body(2))
+            .unwrap();
+        assert!(res.orgkey_unbox.is_empty());
+        assert_eq!(
+            crate::sync::orgsync::orgkey_stash_for_org(&s, ORG).len(),
+            1,
+            "acl 陈旧（投递 epoch 更新）→ 仍 Wait 暂存"
+        );
+    }
+
+    /// 评审回归（batch1 §1 epoch-only 规则的误 Drop 漏洞）：reset 的
+    /// reset_epoch 取本地 orgkey 表 max+1、不回看 acl.epoch——非读者管理员
+    /// 接管可回退 epoch（合入侧 resetBy 允许回退）。竞跑场景：旧 acl
+    /// （epoch 5，owners={OWNER}）仍在本地，reset 后新 owner 的 epoch 1
+    /// 投递先到——epoch-only 规则会误 Drop 合法投递（丢 reset 密钥）；修正
+    /// 后投递 ts 新于旧 acl.updatedAt → Wait 暂存，待 reset acl 到达后重评估。
+    #[test]
+    fn stash_racing_post_reset_deliver_waits_despite_epoch_regression() {
+        let online = std::collections::HashSet::new();
+        let mut s = MemoryStorage::new();
+        crate::org::OrganizationService::save_record(&mut s, &org_record_with_member_c(None))
+            .unwrap();
+        // 旧 acl：epoch 5、owners={OWNER}、updatedAt=1000（早于投递 ts 1500）
+        let old_acl = crate::sync::orgsync::AclRecord {
+            owners: vec![OWNER_ROOT.to_string()],
+            readers: vec![MY_ROOT.to_string()],
+            epoch: 5,
+            updated_at: 1000,
+            reset_by: None,
+            sig: String::new(),
+        };
+        s.put(
+            &crate::sync::orgsync::acl_key(ORG, "fin:pay", "1"),
+            &serde_json::to_string(&old_acl).unwrap(),
+        )
+        .unwrap();
+        // reset 后新 owner 的 epoch 1 投递先到（epoch 回退 5→1；ts 1500 新于
+        // 旧 acl 落笔 1000）——epoch-only 规则（batch1 原案）此处误 Drop
+        let res = handle_orgkey_deliver(&mut s, &ctx(&online), MEMBER_C, &member_c_deliver_body(1))
+            .unwrap();
+        assert_eq!(res.response["ok"], json!(true));
+        assert!(res.orgkey_unbox.is_empty());
+        assert_eq!(
+            crate::sync::orgsync::orgkey_stash_for_org(&s, ORG).len(),
+            1,
+            "竞跑的 reset 后投递（ts 新于旧 acl）必须 Wait 暂存，不得误 Drop"
+        );
+    }
+
+    /// 容量上限（兜底）：per-org 256 条灌满后新暂存被拒且既有条目不动。
+    #[test]
+    fn stash_dos_capacity_cap_refuses_new_keeps_existing() {
+        let mut s = MemoryStorage::new();
+        crate::org::OrganizationService::save_record(&mut s, &org_record(None)).unwrap();
+        let online = std::collections::HashSet::new();
+        // 灌满 256 条（不同 epoch 键维度）
+        for epoch in 1..=crate::sync::orgsync::ORGKEY_STASH_MAX_PER_ORG as u64 {
+            crate::sync::orgsync::orgkey_stash_put(
+                &mut s,
+                ORG,
+                "fin:pay@v1",
+                OWNER_ROOT,
+                epoch,
+                &json!({"orgId": ORG, "ts": epoch as i64}),
+                1000,
+            );
+        }
+        assert_eq!(
+            crate::sync::orgsync::orgkey_stash_count(&s, ORG),
+            crate::sync::orgsync::ORGKEY_STASH_MAX_PER_ORG
+        );
+        // 新暂存（acl 缺失 → Wait 形态）被容量闸拒
+        let (body, _ak) = owner_deliver_body();
+        let res = handle_orgkey_deliver(&mut s, &ctx(&online), OWNER_ROOT, &body).unwrap();
+        assert_eq!(res.response["ok"], json!(true));
+        assert!(
+            res.orgkey_unbox.is_empty() && res.orgkey_unbox.is_empty(),
+            "满容量拒绝新暂存"
+        );
+        assert_eq!(
+            crate::sync::orgsync::orgkey_stash_count(&s, ORG),
+            crate::sync::orgsync::ORGKEY_STASH_MAX_PER_ORG,
+            "既有条目不动（满拒新不清旧）"
+        );
+    }
+
+    /// 老化（卫生）：超 24h 未解出的暂存条目在重评估时点清除。
+    #[test]
+    fn stash_dos_aged_entries_swept_on_reevaluate() {
+        let mut s = MemoryStorage::new();
+        crate::org::OrganizationService::save_record(&mut s, &org_record(None)).unwrap();
+        let now = 1_720_000_000_000i64;
+        // 一条老化（接收时刻 > 24h 前；body 内容无关——清扫先于判定）+ 一条
+        // 新鲜（合法投递 body，acl 未到 → Wait 保留）
+        let aged_body = json!({"orgId": ORG, "collection": "fin:pay@v1", "epoch": 1, "ts": 1500});
+        crate::sync::orgsync::orgkey_stash_put(
+            &mut s,
+            ORG,
+            "fin:pay@v1",
+            OWNER_ROOT,
+            1,
+            &aged_body,
+            now - crate::sync::orgsync::ORGKEY_STASH_MAX_AGE_MS - 1,
+        );
+        // 第二次写入（now 时点）顺手清扫 → 老化条目已清
+        let (fresh_body, _ak) = owner_deliver_body();
+        crate::sync::orgsync::orgkey_stash_put(
+            &mut s,
+            ORG,
+            "fin:pay@v1",
+            OWNER_ROOT,
+            1,
+            &fresh_body,
+            now,
+        );
+        assert_eq!(crate::sync::orgsync::orgkey_stash_count(&s, ORG), 1);
+        // 重评估（acl 未到 → 新鲜条目仍 Wait 保留，老化条目清除）
+        let mut ctx_storage = std::collections::HashSet::new();
+        let r = {
+            let c = InboundContext {
+                my_root_id: MY_ROOT,
+                my_nickname: "me",
+                remote_peer_id: "peer-a",
+                online_peers: &ctx_storage,
+                node_id: "local-node",
+                now_ms: now,
+                kverify: None,
+            };
+            reevaluate_orgkey_stash(&mut s, &c, ORG).unwrap()
+        };
+        assert!(r.is_empty());
+        assert_eq!(
+            crate::sync::orgsync::orgkey_stash_count(&s, ORG),
+            1,
+            "老化条目已清"
+        );
+        let _ = &mut ctx_storage;
     }
 }

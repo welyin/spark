@@ -90,8 +90,7 @@ impl<S: StorageBackend> EventLoop<S> {
         let mut last_seen_map: std::collections::HashMap<PeerId, i64> =
             std::collections::HashMap::new();
         {
-            let mut store =
-                crate::p2p::peer_activity::PeerActivityStore::new(&mut self.storage);
+            let mut store = crate::p2p::peer_activity::PeerActivityStore::new(&mut self.storage);
             for p in connected.iter().chain(self.relay_pool_candidates.iter()) {
                 if let Ok(Some(rec)) = store.get(&p.to_base58()) {
                     last_seen_map.insert(*p, rec.last_seen_at);
@@ -99,9 +98,7 @@ impl<S: StorageBackend> EventLoop<S> {
             }
         }
         let last_seen = |p: &PeerId| last_seen_map.get(p).copied().unwrap_or(0);
-        let is_low = |p: &PeerId| {
-            self.relay_pool_stability.get(p).copied().unwrap_or(false)
-        };
+        let is_low = |p: &PeerId| self.relay_pool_stability.get(p).copied().unwrap_or(false);
 
         // ① 自设备/本组织成员 relay（已连接 + hop ∩ 宿主谓词）
         let tier1: Vec<PeerId> = connected
@@ -175,12 +172,14 @@ impl<S: StorageBackend> EventLoop<S> {
         self.relay_reservations_inflight.remove(&relay_peer);
         let circuit_addr = self.build_circuit_address(relay_peer);
         let now = self.now();
-        self.relay_reservations.retain(|r| r.relay_peer != relay_peer);
-        self.relay_reservations.push(relay_manager::RelayReservation {
-            relay_peer,
-            circuit_addr,
-            created_at: now,
-        });
+        self.relay_reservations
+            .retain(|r| r.relay_peer != relay_peer);
+        self.relay_reservations
+            .push(relay_manager::RelayReservation {
+                relay_peer,
+                circuit_addr,
+                created_at: now,
+            });
         // 地址列表变化 → 重发布 announce + DHT
         let _ = self.publish_announce();
         self.publish_node_presence_record();
@@ -259,7 +258,8 @@ impl<S: StorageBackend> EventLoop<S> {
     /// 预约请求 in-flight 期间连接断开（未收到 ReservationReqAccepted）也计入名额，
     /// 故补选条件看「实际预约 + in-flight」是否低于目标。
     pub(super) fn on_relay_connection_lost(&mut self, relay_peer: PeerId) {
-        self.relay_reservations.retain(|r| r.relay_peer != relay_peer);
+        self.relay_reservations
+            .retain(|r| r.relay_peer != relay_peer);
         self.relay_reservations_inflight.remove(&relay_peer);
         let target = crate::p2p::constants::RELAY_RESERVATION_TARGET;
         let occupied = self.relay_reservations.len() + self.relay_reservations_inflight.len();
@@ -269,7 +269,10 @@ impl<S: StorageBackend> EventLoop<S> {
         // 尝试补充一个预约
         for candidate in self.select_relay_candidates() {
             if candidate != relay_peer
-                && !self.relay_reservations.iter().any(|r| r.relay_peer == candidate)
+                && !self
+                    .relay_reservations
+                    .iter()
+                    .any(|r| r.relay_peer == candidate)
                 && !self.relay_reservations_inflight.contains(&candidate)
             {
                 self.request_relay_reservation(candidate);
@@ -317,7 +320,8 @@ impl<S: StorageBackend> EventLoop<S> {
             };
             let was_inflight = self.relay_reservations_inflight.remove(&relay_peer);
             let before = self.relay_reservations.len();
-            self.relay_reservations.retain(|r| r.relay_peer != relay_peer);
+            self.relay_reservations
+                .retain(|r| r.relay_peer != relay_peer);
             if was_inflight || self.relay_reservations.len() != before {
                 self.emit(super::P2pEvent::Warning(format!(
                     "relay circuit listener closed for {relay_peer}"
@@ -426,9 +430,7 @@ impl<S: StorageBackend> EventLoop<S> {
             addresses: public_addrs,
             // R1 动态 IP 降权：本机 stability=low 时随载荷宣告，消费方（R3
             // 排序）据此降权垫底
-            stability: self
-                .relay_stability_low
-                .then(|| "low".to_string()),
+            stability: self.relay_stability_low.then(|| "low".to_string()),
         };
         let (tx, _rx) = tokio::sync::oneshot::channel();
         self.begin_dht_provide(
@@ -505,9 +507,7 @@ impl<S: StorageBackend> EventLoop<S> {
             .kad
             .as_mut()
             .expect("kad checked above")
-            .get_providers(kad::RecordKey::new(
-                &crate::p2p::constants::SPARK_RELAY_KEY,
-            ));
+            .get_providers(kad::RecordKey::new(&crate::p2p::constants::SPARK_RELAY_KEY));
         self.relay_pool_queries.insert(query_id);
     }
 
@@ -542,9 +542,8 @@ impl<S: StorageBackend> EventLoop<S> {
         // get_record 取载荷解析 stability（last-writer 单记录，多 provider 的
         // stability 以现存记录为准；无载荷/失败静默，保持「无降权」现状）
         if let Some(kad) = self.swarm.behaviour_mut().kad.as_mut() {
-            let query_id = kad.get_record(kad::RecordKey::new(
-                &crate::p2p::constants::SPARK_RELAY_KEY,
-            ));
+            let query_id =
+                kad.get_record(kad::RecordKey::new(&crate::p2p::constants::SPARK_RELAY_KEY));
             self.relay_pool_record_queries.insert(query_id);
         }
     }
@@ -556,8 +555,7 @@ impl<S: StorageBackend> EventLoop<S> {
         let Ok(kad::GetRecordOk::FoundRecord(peer_record)) = result else {
             return;
         };
-        let Some(hint) = RelayProviderHint::from_record_value(&peer_record.record.value)
-        else {
+        let Some(hint) = RelayProviderHint::from_record_value(&peer_record.record.value) else {
             return;
         };
         let Ok(peer) = hint.peer_id.parse::<PeerId>() else {

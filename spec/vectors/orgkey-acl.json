@@ -1,0 +1,50 @@
+{
+  "description": "orgkey-deliver / acl 线形 golden vectors（org-orgsync.md §20.6/§20.7；org-followups-batch1 §4 口径确认补最小组）。线形自 F2/F3 起冻结，本组是回归基线而非设计输入。签名载荷为固定键序紧凑 JSON（逐字节基线）；Ed25519 确定性签名（固定种子 → 签名逐字节稳定）。orgkey-deliver 的 wrappedKey/nonce 含随机数，向量钉住的是载荷形状与验签链，非密文字节。",
+  "acl": {
+    "signerSeedHex": "0707070707070707070707070707070707070707070707070707070707070707",
+    "signerPublicKeyB64": "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=",
+    "input": {
+      "epoch": 1,
+      "orgId": "org_0123456789abcdef",
+      "collection": "fin:pay@v1",
+      "owners": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "readers": [
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ],
+      "resetBy": null,
+      "updatedAt": 1720000000000
+    },
+    "payload": "{\"epoch\":1,\"orgId\":\"org_0123456789abcdef\",\"collection\":\"fin:pay@v1\",\"owners\":[\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"],\"readers\":[\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"],\"resetBy\":null,\"updatedAt\":1720000000000}",
+    "sig": "CiGEReFK2yAT6hoFtGriDlvOTPGKZ65+0odJuUP45xTi1ghGfAwZiGRUrlQvZbTIbYBXFO6sFzpNTvbHSKsmDw==",
+    "recordJson": {
+      "owners": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "readers": [
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ],
+      "epoch": 1,
+      "updatedAt": 1720000000000,
+      "resetBy": null,
+      "sig": "CiGEReFK2yAT6hoFtGriDlvOTPGKZ65+0odJuUP45xTi1ghGfAwZiGRUrlQvZbTIbYBXFO6sFzpNTvbHSKsmDw=="
+    }
+  },
+  "orgkeyDeliver": {
+    "signerSeedHex": "0707070707070707070707070707070707070707070707070707070707070707",
+    "signerPublicKeyB64": "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=",
+    "input": {
+      "collection": "fin:pay@v1",
+      "epoch": 1,
+      "nonce": "bm9uY2UtZml4ZWQtMjRi",
+      "orgId": "org_0123456789abcdef",
+      "recipientRootId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ts": 1720000000000,
+      "wrappedKey": "d3JhcHBlZC1rZXktZml4ZWQ",
+      "senderRootId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "payload": "{\"collection\":\"fin:pay@v1\",\"epoch\":1,\"nonce\":\"bm9uY2UtZml4ZWQtMjRi\",\"orgId\":\"org_0123456789abcdef\",\"recipientRootId\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"ts\":1720000000000,\"wrappedKey\":\"d3JhcHBlZC1rZXktZml4ZWQ\"}",
+    "sig": "fB0vwhyjvDGvj3DkGsIhR7Ur1ZeSPyqyr2GVTEHydDdVd/tDLnlYzQhHMoXwgFGvFX/9kc24i/uy6x8QGi5aBg=="
+  }
+}

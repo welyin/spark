@@ -500,7 +500,7 @@ fn genesis_acl_and_decl_in_same_batch_converge() {
 /// → 结构化合并复活 C → C 回推 → A 判 Remote 覆盖为含 C 的合并版康复。
 #[test]
 fn org_meta_detached_record_self_heals_via_third_party_merge() {
-    let (a_key, a_root) = self_identity(1);
+    let (_a_key, a_root) = self_identity(1);
     let (b_key, b_root) = self_identity(2);
     let (_c_key, c_root) = self_identity(3);
     let meta_key = format!("org:meta:{ORG_ID}");
@@ -605,4 +605,103 @@ fn org_meta_detached_record_self_heals_via_third_party_merge() {
     assert!(rec_a.find_member(&c_root).is_some(), "回推康复：A 重新拥有成员 C");
     let c_member = rec_a.find_member(&c_root).unwrap();
     assert_eq!(c_member.nickname.as_deref(), Some("C 自称"), "C 的本地变更随合并版到达");
+}
+
+/// batch1 §2（f123 建议 2）：同批「org:meta（携带 signer accessKey）+ 创世
+/// acl」一轮合入成功——acl 验签读最新成员表（修复前用函数入口快照，同批
+/// org:meta 已合入也不可见 → `acl-signer-no-access-key` 拒一轮靠重推自愈）。
+#[test]
+fn acl_verify_reads_fresh_member_table_same_batch() {
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD as B64;
+    use spark_core::identity::derive_domain_identity;
+    use spark_core::org::types::OrganizationAccessKey;
+
+    let (a_key, a_root) = self_identity(1);
+    let (_b_key, b_root) = self_identity(2);
+    let mut a = MemoryStorage::new();
+    let mut b = MemoryStorage::new();
+    for s in [&mut a, &mut b] {
+        save_org(
+            s,
+            ORG_ID,
+            vec![
+                (a_root.as_str(), OrganizationRole::Admin),
+                (b_root.as_str(), OrganizationRole::Member),
+            ],
+            &[a_root.as_str()],
+        );
+    }
+    let enc_name = "ai-chat:secret";
+    let enc_version = "1.0.0";
+    let col_full = format!("{enc_name}@v{enc_version}");
+    // 声明两侧一致（declaredBy=A）——创世锚前提隔离出本用例变量
+    let _decl = declare_org_collection(
+        &mut a, "node-a", ORG_ID, enc_name, enc_version, Accounts::DataAccounts, &a_root, NOW,
+    );
+    spark_core::plugindata::declare_builtin_org_collections(&mut b, ORG_ID, &b_root, NOW, "node-b").unwrap();
+    let decl_key = org_decl_key(ORG_ID, enc_name, enc_version);
+    spark_core::plugindata::apply_org_decl_convergent(
+        &mut b, &decl_key, &serde_json::to_value(&_decl).unwrap(),
+        &get_personal_meta(&a, &decl_key).unwrap().unwrap(),
+    ).unwrap();
+
+    // A 发布本人 accessKey（仅 A 侧成员表携带；B 侧成员表没有——修复前 acl
+    // 验签读入口快照必拒）
+    let owner_domain = derive_domain_identity(&[7u8; 64], &format!("org-access:{ORG_ID}"));
+    let owner_ak = OrganizationAccessKey {
+        public_key: B64.encode(owner_domain.public_key()),
+        bind_sig: "bind".to_string(),
+    };
+    let meta_key = format!("org:meta:{ORG_ID}");
+    {
+        let mut rec = OrganizationService::get_record(&a, ORG_ID).unwrap().unwrap();
+        rec.members.iter_mut().find(|m| m.root_id == a_root).unwrap().access_key =
+            Some(owner_ak.clone());
+        rec.updated_at = NOW;
+        put_personal(&mut a, "node-a", &meta_key, &serde_json::to_string(&rec).unwrap(), NOW).unwrap();
+    }
+    let org_meta_record = spark_core::sync::orgsync::OrgsyncRecord {
+        key: meta_key.clone(),
+        value: serde_json::from_str(&a.get(&meta_key).unwrap().unwrap()).unwrap(),
+        meta: get_personal_meta(&a, &meta_key).unwrap().unwrap(),
+        dseq: None,
+    };
+    // B 侧 org:meta 也需有 pmeta 基线（旧内容——无 A 的 accessKey）
+    let b_meta_content = b.get(&meta_key).unwrap().unwrap();
+    put_personal(&mut b, "node-b", &meta_key, &b_meta_content, NOW).unwrap();
+
+    // A 的创世 acl（签名者 = A 组织域身份）
+    let payload = spark_core::sync::orgsync::acl_sign_payload(
+        1, ORG_ID, &col_full, &[a_root.clone()], &[b_root.clone()], None, NOW,
+    );
+    let sig = spark_core::sync::orgsync::acl_sign(&owner_domain.signing_key, &payload);
+    let acl_json = serde_json::json!({
+        "owners": [a_root], "readers": [b_root], "epoch": 1, "updatedAt": NOW, "sig": sig,
+    });
+    let acl_key = spark_core::sync::orgsync::acl_key(ORG_ID, enc_name, enc_version);
+    put_personal(&mut a, "node-a", &acl_key, &acl_json.to_string(), NOW).unwrap();
+    let acl_record = spark_core::sync::orgsync::OrgsyncRecord {
+        key: acl_key.clone(),
+        value: acl_json,
+        meta: get_personal_meta(&a, &acl_key).unwrap().unwrap(),
+        dseq: None,
+    };
+
+    // 同批 [org:meta（携带 accessKey）, 创世 acl] → B 一轮合入成功
+    let body = build_orgsync_data_batch(
+        ORG_ID, &format!("{STRUCT}@v{V1}"), &[org_meta_record, acl_record], 0, 1,
+    );
+    let r = deliver_orgsync(
+        &mut b, &b_root, "B", &a_key, &a_root, &b_root,
+        dm_envelope::KIND_ORGSYNC_DATA, body, "peer-a", "node-b",
+    );
+    assert_eq!(
+        r.response,
+        json!({ "ok": true }),
+        "同批 org:meta+acl 一轮通过（修复前 acl-signer-no-access-key 拒一轮）"
+    );
+    let stored: spark_core::sync::orgsync::AclRecord =
+        serde_json::from_str(&b.get(&acl_key).unwrap().expect("创世 acl 已落库")).unwrap();
+    assert!(stored.is_owner(&a_root) && stored.is_reader(&b_root));
 }

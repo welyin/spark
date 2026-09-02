@@ -448,7 +448,9 @@ impl P2pNode {
             }
         }
         if bound == 0 {
-            return Err(P2pError::Swarm("listen failed on all addresses".to_string()));
+            return Err(P2pError::Swarm(
+                "listen failed on all addresses".to_string(),
+            ));
         }
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();

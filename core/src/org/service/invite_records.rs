@@ -23,7 +23,9 @@ impl OrganizationService {
             record.updated_at = record.created_at;
         }
         let key = match record.direction {
-            OrgInviteDirection::Outgoing => org_invite_out_key(&record.org_id, &record.peer_root_id),
+            OrgInviteDirection::Outgoing => {
+                org_invite_out_key(&record.org_id, &record.peer_root_id)
+            }
             OrgInviteDirection::Incoming => org_invite_in_key(&record.org_id, &record.peer_root_id),
         };
         storage.put(&key, &serde_json::to_string(&record)?)?;
@@ -49,7 +51,9 @@ impl OrganizationService {
             record.updated_at = record.created_at;
         }
         let key = match record.direction {
-            OrgInviteDirection::Outgoing => org_invite_out_key(&record.org_id, &record.peer_root_id),
+            OrgInviteDirection::Outgoing => {
+                org_invite_out_key(&record.org_id, &record.peer_root_id)
+            }
             OrgInviteDirection::Incoming => org_invite_in_key(&record.org_id, &record.peer_root_id),
         };
         let json = serde_json::to_string(&record)?;
@@ -105,9 +109,7 @@ impl OrganizationService {
     }
 
     /// 全部邀请记录（出/入站合并；id 生成的计数种子用）。
-    pub fn list_all_invite_records<S: StorageBackend>(
-        storage: &S,
-    ) -> Result<Vec<OrgInviteRecord>> {
+    pub fn list_all_invite_records<S: StorageBackend>(storage: &S) -> Result<Vec<OrgInviteRecord>> {
         let mut records = Self::scan_invites(storage, ORG_INV_IN_PREFIX)?;
         records.extend(Self::scan_invites(storage, ORG_INV_OUT_PREFIX)?);
         Ok(records)
@@ -208,10 +210,13 @@ impl OrganizationService {
 /// F7 存量迁移（org-invite-scope-fix §2.3，升级一次性、幂等）：
 /// org:invites 退出 orgsync 后——
 ///
-/// 1. 扫删 `org:inv:in:*` **全部**入站邀请记录及其 pmeta（裸删，不墓碑不进
-///    dlog——自有与泄漏记录无法区分（记录无 invitee 字段），且被覆盖设备上
-///    的自有 pending 已是粘滞坏态；恢复路径 = 邀请人重发（幂等 upsert 重建
-///    干净记录）；自设备各自迁移自清）；
+/// 1. `org:inv:in:*` **全部**入站邀请记录：删本体 + 写墓碑 pmeta（**vv 保留
+///    既有分量不 bump、不登 dlog**——batch1 §3 / f7-review 建议 1 裁决：
+///    裸删会留 pdsync 复活窗口（未迁移自设备推回旧记录被判无条件采纳）；
+///    墓碑后本地 vv == 远端 vv → Equal 拒收，复活窗口关闭；折叠侧两端 vv
+///    一致无 diff，无需 dlog 传播）。自有与泄漏记录无法区分（记录无
+///    invitee 字段）；恢复路径 = 邀请人重发（入站写 bump 支配墓碑，正常
+///    落库）；
 /// 2. 存量 org:invites 声明记录（`org:coll:{orgId}:org:invites@v1`，已随
 ///    orgsync 流出）墓碑化删除——本地不再驱动 org:invites 的 hello/diff；
 ///    旧端漂浮的同名声明为空集合（无数据键），无害。墓碑 pmeta 保留既有 vv
@@ -224,12 +229,24 @@ pub fn migrate_org_invites_out_of_orgsync<S: StorageBackend>(
     now_ms: i64,
 ) -> Result<(usize, usize)> {
     let mut ops = Vec::new();
-    // 1. 入站邀请记录 + pmeta 全清
+    // 1. 入站邀请记录：删本体 + 写墓碑 pmeta（vv 保留不 bump、不登 dlog）
     let mut removed_records = 0usize;
     for (key, _) in storage.scan(&ScanOptions::prefix(ORG_INV_IN_PREFIX))? {
-        ops.push(crate::storage::BatchOperation::delete(key.clone()));
-        ops.push(crate::storage::BatchOperation::delete(
-            crate::sync::personal_meta_key(&key),
+        let pmeta_key = crate::sync::personal_meta_key(&key);
+        // pmeta 直读直解析（缺失/损坏视为无；SyncError 不进 OrgError 通道）
+        let pmeta: Option<crate::sync::meta::DocMeta> = storage
+            .get(&pmeta_key)?
+            .and_then(|raw| serde_json::from_str(&raw).ok());
+        ops.push(crate::storage::BatchOperation::delete(key));
+        let tombstone = crate::sync::meta::DocMeta {
+            vv: pmeta.map(|m| m.vv).unwrap_or_default(),
+            ts: now_ms,
+            node_id: None,
+            tombstone: Some(true),
+        };
+        ops.push(crate::storage::BatchOperation::put(
+            pmeta_key,
+            serde_json::to_string(&tombstone)?,
         ));
         removed_records += 1;
     }
@@ -244,9 +261,7 @@ pub fn migrate_org_invites_out_of_orgsync<S: StorageBackend>(
         let pmeta: Option<crate::sync::meta::DocMeta> = storage
             .get(&pmeta_key)?
             .and_then(|raw| serde_json::from_str(&raw).ok());
-        if storage.get(&key)?.is_none()
-            && pmeta.as_ref().is_none_or(crate::sync::is_tombstone)
-        {
+        if storage.get(&key)?.is_none() && pmeta.as_ref().is_none_or(crate::sync::is_tombstone) {
             continue; // 已迁移（记录不在且 pmeta 缺/已墓碑）
         }
         ops.push(crate::storage::BatchOperation::delete(key));

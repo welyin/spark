@@ -2,8 +2,8 @@
 //! spark-sync（业务消息、org-share 推送与 ack）的 pubsub 处理，以及
 //! `publish_envelope` / `publish_raw` 出口。
 
-use libp2p::gossipsub;
 use libp2p::PeerId;
+use libp2p::gossipsub;
 use serde_json::{Map, Value};
 
 use crate::p2p::announce::{announce_to_json, prepare_publish_addresses, sign_node_announce};
@@ -154,8 +154,8 @@ impl<S: StorageBackend> EventLoop<S> {
                     // 显式设置 nodeId 使 save 受管（带 pmeta）——公告经 pdsync
                     // `mkt:ann` 类目同步给叶子（PC 桥角色，无需新增组件）
                     let node_id = self.self_peer_id().to_base58();
-                    let mut store = PluginAnnounceStore::new(&mut self.storage)
-                        .with_node_id(&node_id);
+                    let mut store =
+                        PluginAnnounceStore::new(&mut self.storage).with_node_id(&node_id);
                     store.upsert(&announce, now)
                 };
                 match outcome {
@@ -175,13 +175,12 @@ impl<S: StorageBackend> EventLoop<S> {
                     .get(&source)
                     .copied()
                     .unwrap_or(now);
-                let acceptance = if now.saturating_sub(connected_since)
-                    >= self.plugin_announce_tenure_ms
-                {
-                    gossipsub::MessageAcceptance::Accept
-                } else {
-                    gossipsub::MessageAcceptance::Ignore
-                };
+                let acceptance =
+                    if now.saturating_sub(connected_since) >= self.plugin_announce_tenure_ms {
+                        gossipsub::MessageAcceptance::Accept
+                    } else {
+                        gossipsub::MessageAcceptance::Ignore
+                    };
                 let _ = self
                     .swarm
                     .behaviour_mut()

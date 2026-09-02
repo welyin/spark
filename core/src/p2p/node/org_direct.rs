@@ -120,10 +120,7 @@ impl<S: StorageBackend> EventLoop<S> {
         // 拨同一 peer）已建好连接时，本 attempt 的拨号会同步报错/异步
         // DialFailure——此时直接复用已建连接发请求，而不是误走下一目标
         // 或耗尽放弃（放弃侧无任何重试，推送丢失只能等下次变更触发）。
-        if let Some(peer) = attempt
-            .current_peer
-            .filter(|p| self.swarm.is_connected(p))
-        {
+        if let Some(peer) = attempt.current_peer.filter(|p| self.swarm.is_connected(p)) {
             let request_id = match attempt.kind {
                 OrgAttemptKind::Dm => self
                     .swarm
@@ -156,7 +153,9 @@ impl<S: StorageBackend> EventLoop<S> {
             let already_dialing = self.pending_org_attempts.iter().any(|a| {
                 a.dial_issued
                     && a.in_flight.is_none()
-                    && a.batch.iter().any(|d| base_addr(&d.addr) == base_addr(&target))
+                    && a.batch
+                        .iter()
+                        .any(|d| base_addr(&d.addr) == base_addr(&target))
             });
             if already_dialing {
                 attempt.waiting_base = Some(base_addr(&target).to_string());
@@ -165,10 +164,9 @@ impl<S: StorageBackend> EventLoop<S> {
             }
             // 电路地址补目的段（MissingDstPeerId 根修，peer_targets helper）
             let target = match attempt.current_peer {
-                Some(cp) => crate::p2p::peer_targets::ensure_circuit_dst_peer(
-                    &target,
-                    &cp.to_base58(),
-                ),
+                Some(cp) => {
+                    crate::p2p::peer_targets::ensure_circuit_dst_peer(&target, &cp.to_base58())
+                }
                 None => target,
             };
             match target.parse::<Multiaddr>() {

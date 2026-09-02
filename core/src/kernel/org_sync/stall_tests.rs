@@ -33,8 +33,7 @@ struct TestRig {
 
 fn test_rig(root_id: Option<&str>, budgets: TickStageBudgets) -> TestRig {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let sled =
-        crate::storage::SledStorage::open(tmp.path().join("db")).expect("sled open");
+    let sled = crate::storage::SledStorage::open(tmp.path().join("db")).expect("sled open");
     let storage = crate::sync::versioned::VersionedStorage::new(
         sled,
         Arc::new(Mutex::new("stub-node".to_string())),
@@ -74,11 +73,15 @@ fn test_rig(root_id: Option<&str>, budgets: TickStageBudgets) -> TestRig {
 }
 
 /// 假事件循环：LocalNodeInfo/ConnectPeer 即时应答，OrgPullRequest 挂起
-/// 不应答（故障注入：对端半连接长超时），DmDirect 记录信封 kind 后应答。
-/// 返回捕获的 dm kind 序列。
-fn spawn_fake_event_loop(mut cmd_rx: mpsc::UnboundedReceiver<Command>) -> Arc<Mutex<Vec<String>>> {
+/// 不应答（故障注入：对端半连接长超时）并计数，DmDirect 记录信封 kind 后
+/// 应答。返回（捕获的 dm kind 序列, OrgPullRequest 发起计数）。
+fn spawn_fake_event_loop(
+    mut cmd_rx: mpsc::UnboundedReceiver<Command>,
+) -> (Arc<Mutex<Vec<String>>>, Arc<Mutex<usize>>) {
     let dm_kinds: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let pull_attempts: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
     let kinds = Arc::clone(&dm_kinds);
+    let pulls = Arc::clone(&pull_attempts);
     tokio::spawn(async move {
         // 挂起的 pull 应答通道：持有不响应（调用方靠外层阶段预算放弃）
         let mut stalled = Vec::new();
@@ -96,7 +99,10 @@ fn spawn_fake_event_loop(mut cmd_rx: mpsc::UnboundedReceiver<Command>) -> Arc<Mu
                 Command::ConnectPeer { tx, .. } => {
                     let _ = tx.send(Ok(()));
                 }
-                Command::OrgPullRequest { tx, .. } => stalled.push(tx),
+                Command::OrgPullRequest { tx, .. } => {
+                    *pulls.lock().unwrap() += 1;
+                    stalled.push(tx);
+                }
                 Command::DmDirect { payload, tx, .. } => {
                     if let Some(kind) = payload.get("kind").and_then(|v| v.as_str()) {
                         kinds.lock().unwrap().push(kind.to_string());
@@ -108,14 +114,14 @@ fn spawn_fake_event_loop(mut cmd_rx: mpsc::UnboundedReceiver<Command>) -> Arc<Mu
         }
         drop(stalled);
     });
-    dm_kinds
+    (dm_kinds, pull_attempts)
 }
 
 /// 测试组织：本机 root-a（管理员，非网关）+ root-b（peer-b，显式指定网关
 /// ——跳过缺省活跃集轮换的时间依赖，S2 反熵对账恒选中已连接的 peer-b）。
 fn test_org_record() -> OrganizationRecord {
-    let member = |root_id: &str, role: OrganizationRole, peer_id: Option<&str>| {
-        OrganizationMember {
+    let member =
+        |root_id: &str, role: OrganizationRole, peer_id: Option<&str>| OrganizationMember {
             root_id: root_id.to_string(),
             role,
             joined_at: 1000,
@@ -135,8 +141,7 @@ fn test_org_record() -> OrganizationRecord {
             use_personal_identity: None,
             access_key: None,
             extra: Default::default(),
-        }
-    };
+        };
     OrganizationRecord {
         org_id: "org_stall".to_string(),
         name: "stall-test".to_string(),
@@ -226,7 +231,7 @@ async fn reconcile_stall_does_not_skip_orgsync_hello() {
     OrganizationService::save_record(&mut rig.ctx.storage.raw().clone(), &test_org_record())
         .expect("save org record");
     let cmd_rx = std::mem::replace(&mut rig.cmd_rx, mpsc::unbounded_channel().1);
-    let dm_kinds = spawn_fake_event_loop(cmd_rx);
+    let (dm_kinds, _pulls) = spawn_fake_event_loop(cmd_rx);
 
     let started = std::time::Instant::now();
     rig.ctx.maintain_org_tick().await;
@@ -244,5 +249,38 @@ async fn reconcile_stall_does_not_skip_orgsync_hello() {
             .iter()
             .any(|k| k == crate::kernel::dm_envelope::KIND_ORGSYNC_HELLO),
         "S2 超时放弃不得跳过 S3 orgsync-hello，实际 dm kinds={kinds:?}"
+    );
+}
+
+/// batch1 §5（stall-fix §6 可后续项落地）：S2 候选循环每轮迭代前检查阶段
+/// 剩余预算——预算为零时不再发起任何候选请求（在飞请求不受影响：本用例
+/// 压根没有在飞请求，纯验证「不开始下一条」）；S3 恒执行不受影响。
+#[tokio::test]
+async fn reconcile_skips_remaining_candidates_when_budget_exhausted() {
+    let budgets = TickStageBudgets {
+        gateway_publish: Duration::from_millis(500),
+        self_device_link: Duration::from_millis(500),
+        reconcile: Duration::ZERO, // 剩余预算恒不足 → 候选循环首轮即放弃
+        orgsync_hello: Duration::from_secs(2),
+    };
+    let mut rig = test_rig(Some("root-a"), budgets);
+    OrganizationService::save_record(&mut rig.ctx.storage.raw().clone(), &test_org_record())
+        .expect("save org record");
+    let cmd_rx = std::mem::replace(&mut rig.cmd_rx, mpsc::unbounded_channel().1);
+    let (dm_kinds, pull_attempts) = spawn_fake_event_loop(cmd_rx);
+
+    rig.ctx.maintain_org_tick().await;
+
+    assert_eq!(
+        *pull_attempts.lock().unwrap(),
+        0,
+        "预算耗尽的 S2 不发起任何候选请求"
+    );
+    let kinds = dm_kinds.lock().unwrap();
+    assert!(
+        kinds
+            .iter()
+            .any(|k| k == crate::kernel::dm_envelope::KIND_ORGSYNC_HELLO),
+        "S3 orgsync-hello 恒执行（不受 S2 预算放弃影响）"
     );
 }

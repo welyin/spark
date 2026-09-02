@@ -21,8 +21,8 @@ use libp2p::{
 use super::constants::{
     DHT_RECORD_TTL_SECS, DIRECT_DM_PROTOCOL, DIRECT_ORG_RECOVERY_PROTOCOL,
     DIRECT_ORG_SHARE_PROTOCOL, DIRECT_PEER_EXCHANGE_PROTOCOL, DIRECT_VERSION_PROTOCOL,
-    DM_READ_TIMEOUT_MS, KAD_PROTOCOL_NAME, NODE_CHALLENGE_PROTOCOL,
-    NODE_CHALLENGE_READ_TIMEOUT_MS, ORG_RECOVERY_READ_TIMEOUT_MS, ORG_SHARE_READ_TIMEOUT_MS,
+    DM_READ_TIMEOUT_MS, KAD_PROTOCOL_NAME, NODE_CHALLENGE_PROTOCOL, NODE_CHALLENGE_READ_TIMEOUT_MS,
+    ORG_RECOVERY_READ_TIMEOUT_MS, ORG_SHARE_READ_TIMEOUT_MS,
     PEER_EXCHANGE_READ_RESPONSE_TIMEOUT_MS, RELAY_DEFAULT_DATA_LIMIT_BYTES,
     RELAY_DEFAULT_DURATION_LIMIT_SECS, RELAY_MAX_RESERVATIONS, VERSION_PROTOCOL_READ_TIMEOUT_MS,
 };
@@ -313,10 +313,12 @@ pub fn build_behaviour(
     // 受管落库同步给叶子），leaf 不订阅、发布守卫（gossip.rs）保留。
     if !options.leaf_mode {
         gossipsub_behaviour.subscribe(&gossipsub::IdentTopic::new(super::constants::SYNC_TOPIC))?;
-        gossipsub_behaviour.subscribe(&gossipsub::IdentTopic::new(super::constants::OVERLAY_TOPIC))?;
-        // 插件市场广播索引（plugin-dist §8；启动即订阅，relay 校验链在 gossip 层）
         gossipsub_behaviour
-            .subscribe(&gossipsub::IdentTopic::new(super::constants::PLUGIN_ANNOUNCE_TOPIC))?;
+            .subscribe(&gossipsub::IdentTopic::new(super::constants::OVERLAY_TOPIC))?;
+        // 插件市场广播索引（plugin-dist §8；启动即订阅，relay 校验链在 gossip 层）
+        gossipsub_behaviour.subscribe(&gossipsub::IdentTopic::new(
+            super::constants::PLUGIN_ANNOUNCE_TOPIC,
+        ))?;
     }
 
     let mdns_behaviour = if options.enable_mdns {

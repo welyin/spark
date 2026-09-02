@@ -244,7 +244,9 @@ pub fn get_epoch_key<S: crate::storage::StorageBackend>(
     version: &str,
     epoch: u64,
 ) -> Option<[u8; 32]> {
-    let raw = storage.get(&orgkey_key(org_id, name, version, epoch)).ok()??;
+    let raw = storage
+        .get(&orgkey_key(org_id, name, version, epoch))
+        .ok()??;
     let b64 = raw.trim();
     let bytes = B64.decode(b64).ok()?;
     bytes.try_into().ok()
@@ -316,7 +318,12 @@ pub fn orgkey_pending_remove<S: crate::storage::StorageBackend>(
     recipient_root_id: &str,
     epoch: u64,
 ) {
-    let _ = storage.delete(&orgkey_pending_key(org_id, collection, recipient_root_id, epoch));
+    let _ = storage.delete(&orgkey_pending_key(
+        org_id,
+        collection,
+        recipient_root_id,
+        epoch,
+    ));
 }
 
 /// 读取本机某组织的全部 orgkey pending 条目 → `(collection, recipientRootId, epoch, ts)`。
@@ -352,10 +359,23 @@ pub fn orgkey_pending_for_org<S: crate::storage::StorageBackend>(
 
 /// orgkey-deliver 收端暂存前缀（「同步未到」等待态的投递原始 body）：
 /// `orgkey-deliver-stash:{orgId}:{collection}:{senderRootId}:{epoch}` =
-/// 原始 body JSON。**本地键**（不进同步流量，连字符前缀同 §7.2 命名空间
-/// 不变量）；acl / org:meta（成员表 accessKey 段）合入后重放校验链
+/// `{"body": 原始 body, "stashedAt": 本地接收时刻 ms}`。**本地键**（不进同步
+/// 流量，连字符前缀同 §7.2 命名空间不变量）；acl / org:meta（成员表
+/// accessKey 段）合入后重放校验链
 /// （`kernel/inbound_dm/orgkey.rs::reevaluate_orgkey_stash`）。
+///
+/// DoS 三层防护（org-followups-batch1 §1）：judge 判定细化（主，
+/// orgkey.rs）+ per-org 容量上限（兜底）+ 24h 老化（卫生，按本地接收时刻
+/// ——body 内 deliver.ts 发送方可任意取值，不可作老化依据）。
 pub const ORGKEY_DELIVER_STASH_PREFIX: &str = "orgkey-deliver-stash:";
+
+/// per-org 暂存容量上限（256 条 ≈ 50KB 有界；合法暂存量级为个位数，留两个
+/// 数量级余量）。满拒新、不清旧——旧条目可能是合法待投递。
+pub const ORGKEY_STASH_MAX_PER_ORG: usize = 256;
+
+/// 暂存老化上限（24h）：合法暂存在 acl/org:meta 到达后分钟级解出，24h 为
+/// 极端离线窗口的宽松上限。在暂存写入/重评估时点顺手清除（不设独立定时器）。
+pub const ORGKEY_STASH_MAX_AGE_MS: i64 = 24 * 3600 * 1000;
 
 /// orgkey-deliver 暂存键
 /// `orgkey-deliver-stash:{orgId}:{collection}:{senderRootId}:{epoch}`。
@@ -368,9 +388,24 @@ pub fn orgkey_stash_key(
     format!("{ORGKEY_DELIVER_STASH_PREFIX}{org_id}:{collection}:{sender_root_id}:{epoch}")
 }
 
-/// 暂存一条「同步未到」的 orgkey-deliver 原始 body（同键去重：保留 body
-/// `ts` 新者——重投/乱序到达幂等；键维度即 (sender, epoch) 粒度，封顶自然
-/// 成立）。
+/// 暂存值解包：`{"body", "stashedAt"}` → (body, stashedAt)。旧形态（裸 body
+/// JSON，无 envelope）按 stashedAt=0 兼容读出（未发版，下一轮老化即清）。
+fn stash_unpack(raw: &str) -> Option<(serde_json::Value, i64)> {
+    let v: serde_json::Value = serde_json::from_str(raw).ok()?;
+    if let Some(body) = v.get("body") {
+        let stashed_at = v
+            .get("stashedAt")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0);
+        Some((body.clone(), stashed_at))
+    } else {
+        Some((v, 0))
+    }
+}
+
+/// 暂存一条「同步未到」的 orgkey-deliver 原始 body（同键去重：保留
+/// `stashedAt` 新者——重投/乱序到达幂等；键维度即 (sender, epoch) 粒度）。
+/// `now_ms` = 本地接收时刻（老化依据）。写入前顺手做一次老化清扫。
 pub fn orgkey_stash_put<S: crate::storage::StorageBackend>(
     storage: &mut S,
     org_id: &str,
@@ -378,22 +413,21 @@ pub fn orgkey_stash_put<S: crate::storage::StorageBackend>(
     sender_root_id: &str,
     epoch: u64,
     body: &serde_json::Value,
+    now_ms: i64,
 ) {
+    orgkey_stash_age_sweep(storage, org_id, now_ms);
     let key = orgkey_stash_key(org_id, collection, sender_root_id, epoch);
-    let new_ts = body.get("ts").and_then(serde_json::Value::as_i64).unwrap_or(0);
     if let Ok(Some(existing)) = storage.get(&key) {
-        let old_ts = serde_json::from_str::<serde_json::Value>(&existing)
-            .ok()
-            .and_then(|v| v.get("ts").and_then(serde_json::Value::as_i64))
-            .unwrap_or(0);
-        if old_ts >= new_ts {
+        let old_stashed_at = stash_unpack(&existing).map(|(_, ts)| ts).unwrap_or(0);
+        if old_stashed_at >= now_ms {
             return; // 已有同键更新者 → 不覆盖
         }
     }
-    let _ = storage.put(&key, &serde_json::to_string(body).unwrap_or_default());
+    let value = serde_json::json!({ "body": body, "stashedAt": now_ms });
+    let _ = storage.put(&key, &value.to_string());
 }
 
-/// 删除一条暂存（重评估够格落库 / 真拒绝 / 损坏后）。
+/// 删除一条暂存（重评估够格落库 / 真拒绝 / 损坏 / 老化后）。
 pub fn orgkey_stash_remove<S: crate::storage::StorageBackend>(
     storage: &mut S,
     org_id: &str,
@@ -404,9 +438,45 @@ pub fn orgkey_stash_remove<S: crate::storage::StorageBackend>(
     let _ = storage.delete(&orgkey_stash_key(org_id, collection, sender_root_id, epoch));
 }
 
+/// 本机某组织的暂存条数（容量闸用）。
+pub fn orgkey_stash_count<S: crate::storage::StorageBackend>(storage: &S, org_id: &str) -> usize {
+    let prefix = format!("{ORGKEY_DELIVER_STASH_PREFIX}{org_id}:");
+    storage
+        .scan(&crate::storage::ScanOptions::prefix(prefix))
+        .map(|entries| entries.len())
+        .unwrap_or(0)
+}
+
+/// 老化清扫：删除接收时刻早于 `now_ms - ORGKEY_STASH_MAX_AGE_MS` 的暂存，
+/// 返回清除条数（顺手调用点：暂存写入 / 重评估入口）。
+pub fn orgkey_stash_age_sweep<S: crate::storage::StorageBackend>(
+    storage: &mut S,
+    org_id: &str,
+    now_ms: i64,
+) -> usize {
+    let prefix = format!("{ORGKEY_DELIVER_STASH_PREFIX}{org_id}:");
+    let aged: Vec<String> = storage
+        .scan(&crate::storage::ScanOptions::prefix(&prefix))
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(_, raw)| {
+            stash_unpack(raw)
+                .map(|(_, stashed_at)| now_ms.saturating_sub(stashed_at) > ORGKEY_STASH_MAX_AGE_MS)
+                .unwrap_or(true) // 不可解析 = 损坏，顺手清
+        })
+        .map(|(key, _)| key)
+        .collect();
+    let n = aged.len();
+    for key in aged {
+        let _ = storage.delete(&key);
+    }
+    n
+}
+
 /// 读取本机某组织的全部暂存 → `(collection, senderRootId, epoch, bodyJson)`
 /// （从右解析：末段 epoch、次末段 sender、剩余为 collection——同 pending
-/// 键的右向解析口径，collection 含 `:` 分隔符）。
+/// 键的右向解析口径，collection 含 `:` 分隔符）。bodyJson 为 envelope 解包
+/// 后的原始投递 body。
 pub fn orgkey_stash_for_org<S: crate::storage::StorageBackend>(
     storage: &S,
     org_id: &str,
@@ -422,7 +492,13 @@ pub fn orgkey_stash_for_org<S: crate::storage::StorageBackend>(
                     let (sender_epoch, epoch_str) = rest.rsplit_once(':')?;
                     let (collection, sender) = sender_epoch.rsplit_once(':')?;
                     let epoch = epoch_str.parse::<u64>().ok()?;
-                    Some((collection.to_string(), sender.to_string(), epoch, raw))
+                    let (body, _) = stash_unpack(&raw)?;
+                    Some((
+                        collection.to_string(),
+                        sender.to_string(),
+                        epoch,
+                        serde_json::to_string(&body).unwrap_or_default(),
+                    ))
                 })
                 .collect()
         })
@@ -542,7 +618,13 @@ pub fn build_orgkey_deliver(
     )?;
     let ts = now_ms;
     let payload = deliver_sign_payload(
-        &collection, epoch, &nonce24, org_id, recipient_root_id, ts, &wrapped_key,
+        &collection,
+        epoch,
+        &nonce24,
+        org_id,
+        recipient_root_id,
+        ts,
+        &wrapped_key,
     );
     let sig = B64.encode(owner_org_signing_key.sign(payload.as_bytes()).to_bytes());
     Some(json!({
@@ -661,7 +743,9 @@ pub fn unbox_epoch_key(
         return None;
     }
     let cipher = Aes256Gcm::new_from_slice(&box_key).ok()?;
-    let plain = cipher.decrypt(&Nonce::<Aes256Gcm>::from(nonce_arr), ct.as_ref()).ok()?;
+    let plain = cipher
+        .decrypt(&Nonce::<Aes256Gcm>::from(nonce_arr), ct.as_ref())
+        .ok()?;
     plain.try_into().ok()
 }
 

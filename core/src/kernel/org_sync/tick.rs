@@ -8,14 +8,14 @@
 
 use std::collections::HashSet;
 
+use super::dial::connected_gateway_candidates;
 use super::{
     ORG_ADDRESS_REPUBLISH_INTERVAL_MS, OrgSyncContext, PULL_CANDIDATES_PER_TICK,
     SELF_HELLO_IMMEDIATE_MIN_INTERVAL_MS, SelfHelloState, collect_org_peer_candidates,
 };
-use super::dial::connected_gateway_candidates;
 use crate::contact::ContactService;
-use crate::org::gateway::{OrgMemberHint, org_members_dht_key};
 use crate::org::OrganizationService;
+use crate::org::gateway::{OrgMemberHint, org_members_dht_key};
 use crate::p2p::constants::OVERLAY_TOPIC;
 use crate::p2p::envelope::build_org_body;
 use crate::p2p::node::LocalP2PNodeInfo;
@@ -62,12 +62,10 @@ impl OrgSyncContext {
                     // 有已连接自设备 → 直发 hello
                     (Some(root_id), false) => Act::Send(root_id, peers),
                     // 无已连接自设备 → 懒拨号一次（写入即重连时机）
-                    (Some(root_id), true) => {
-                        match self.resolve_self_device_peer() {
-                            Some(peer) => Act::Dial(root_id, peer),
-                            None => Act::Skip,
-                        }
-                    }
+                    (Some(root_id), true) => match self.resolve_self_device_peer() {
+                        Some(peer) => Act::Dial(root_id, peer),
+                        None => Act::Skip,
+                    },
                     _ => Act::Skip,
                 }
             } else if !st.trailing_pending {
@@ -131,10 +129,8 @@ impl OrgSyncContext {
             Act::Schedule(delay_ms) => {
                 let ctx = self.clone();
                 tokio::spawn(async move {
-                    tokio::time::sleep(std::time::Duration::from_millis(
-                        delay_ms.max(0) as u64,
-                    ))
-                    .await;
+                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms.max(0) as u64))
+                        .await;
                     ctx.self_hello_now();
                 });
             }
@@ -240,7 +236,22 @@ impl OrgSyncContext {
                 connected_gateway_candidates(&orgs, &root_id, &connected, now)
             };
             self.run_tick_stage("S2", budgets.reconcile, async {
+                let stage_started = std::time::Instant::now();
                 for candidate in connected_candidates.iter().take(PULL_CANDIDATES_PER_TICK) {
+                    // 候选循环内剩余预算检查（org-sync-stall-fix §6 可后续项，
+                    // batch1 §5 口径确认）：每次迭代前检查 S2 阶段剩余预算，
+                    // 不足一次请求的超时量级（5s，api 层裸 await 超时）即放弃
+                    // 本轮余下候选——不中断在飞的一次请求（外层 timeout 兜底）。
+                    let remaining = budgets
+                        .reconcile
+                        .saturating_sub(stage_started.elapsed());
+                    if remaining < std::time::Duration::from_secs(5) {
+                        log::info!(
+                            "[ORG_SYNC] tick S2 remaining budget low, skip remaining candidates | remaining={}ms",
+                            remaining.as_millis()
+                        );
+                        break;
+                    }
                     if let Err(e) = self.reconcile_from_peer(candidate, true).await {
                         self.warn(format!(
                             "[p2p][keepalive] pull from candidate failed: peerId={:?}, error={e}",
@@ -309,7 +320,11 @@ impl OrgSyncContext {
     /// （§5.2 / §2.3 改造点）。此处 tick 只维护链路状态机（断→连跳变
     /// Resync、稳态 steady hello），不做周期拨号——两端错峰上线靠任一方
     /// 写入数据触发懒拨号会合，或对端主动拨过来。
-    async fn maintain_self_device_link(&self, root_id: &str, local_info: Option<&LocalP2PNodeInfo>) {
+    async fn maintain_self_device_link(
+        &self,
+        root_id: &str,
+        local_info: Option<&LocalP2PNodeInfo>,
+    ) {
         let mut storage = self.storage.clone();
         // 双来源解析配对设备：FriendRecord.peers 优先（带地址，多设备遍历），DeviceRecord
         // 兜底（仅 peerId）。懒拨号地址由写入触发路径 `resolve_self_device_peer`
@@ -371,7 +386,10 @@ impl OrgSyncContext {
             Idle,
         }
         let action = {
-            let mut last = self.self_device_link.lock().unwrap_or_else(|e| e.into_inner());
+            let mut last = self
+                .self_device_link
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             if connected {
                 if last.as_deref() == Some(peer_id.as_str()) {
                     Action::StayConnected
@@ -443,7 +461,11 @@ impl OrgSyncContext {
     /// 增量/周期触发共用；失败静默）。自 FriendRecord 键对称排除（peer 为
     /// 设备相对值，不可互灌——双设备同账号排除键相同，folded vv 保持一致）。
     async fn send_pdsync_hello(&self, root_id: &str, peer_id: &str, now: i64) {
-        let signing_key = self.signing_key.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let signing_key = self
+            .signing_key
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         let Some(signing_key) = signing_key else {
             return;
         };
@@ -486,7 +508,11 @@ impl OrgSyncContext {
     /// 能力集合按 peerId 键控：同身份多台设备共享 rootId，按 rootId 判定会
     /// 让一台新设备停掉所有自设备的旧快照回退。
     async fn send_self_snapshots(&self, root_id: &str, peer_id: &str) {
-        let signing_key = self.signing_key.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let signing_key = self
+            .signing_key
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         let Some(signing_key) = signing_key else {
             return;
         };
@@ -511,8 +537,7 @@ impl OrgSyncContext {
         if !pdsync_capable {
             // 1) device-sync：本机设备记录（读取既有记录，不 upsert——避免每
             //    tick 刷新 updatedAt 推高 LWW 水位）
-            if let Ok(Some(record)) =
-                crate::device::DeviceService::get(&self.storage, &my_peer_id)
+            if let Ok(Some(record)) = crate::device::DeviceService::get(&self.storage, &my_peer_id)
             {
                 if let Ok(body) = serde_json::to_value(&record) {
                     let envelope = crate::kernel::dm_envelope::build_envelope(
@@ -560,9 +585,7 @@ impl OrgSyncContext {
             }
             // 3) contact-sync：通讯录全量快照（朋友/申请/标签/分组/拉黑；
             //    LWW 幂等，对端按时间戳裁决，重复投递无害）
-            if let Ok(body) =
-                crate::contact::build_contact_sync_snapshot(&self.storage, root_id)
-            {
+            if let Ok(body) = crate::contact::build_contact_sync_snapshot(&self.storage, root_id) {
                 let envelope = crate::kernel::dm_envelope::build_envelope(
                     crate::kernel::dm_envelope::KIND_CONTACT_SYNC,
                     root_id,
@@ -760,8 +783,7 @@ fn local_personal_write_digest<S: StorageBackend>(
             for (meta_key, raw) in rows {
                 // 与 collect_category_vv 同口径：剥离 pmeta 前缀后必须仍命中
                 // category 前缀；排除键（自记录）不参与
-                let Some(record_key) =
-                    meta_key.strip_prefix(crate::sync::personal::PMETA_PREFIX)
+                let Some(record_key) = meta_key.strip_prefix(crate::sync::personal::PMETA_PREFIX)
                 else {
                     continue;
                 };
@@ -831,15 +853,28 @@ mod tests {
         assert!(d1 > d0, "本机写入必须反映到 digest");
 
         // 远端合入（新 key，直接采纳）→ digest 不变
-        apply_personal_remote(&mut s, "ct:friend:y", "\"v2\"", &remote_meta("node-b", 1, 2000))
-            .unwrap();
-        assert_eq!(local_personal_write_digest(&s, "node-a", None), d1, "远端合入不得触发");
+        apply_personal_remote(
+            &mut s,
+            "ct:friend:y",
+            "\"v2\"",
+            &remote_meta("node-b", 1, 2000),
+        )
+        .unwrap();
+        assert_eq!(
+            local_personal_write_digest(&s, "node-a", None),
+            d1,
+            "远端合入不得触发"
+        );
 
         // 远端合入覆盖本机已有 key（远端 vv 领先）→ digest 仍不变
         let mut meta = remote_meta("node-b", 2, 3000);
         meta.vv.insert("node-a".to_string(), 1);
         apply_personal_remote(&mut s, "ct:friend:x", "\"v3\"", &meta).unwrap();
-        assert_eq!(local_personal_write_digest(&s, "node-a", None), d1, "远端胜出覆盖也不计入本机分量");
+        assert_eq!(
+            local_personal_write_digest(&s, "node-a", None),
+            d1,
+            "远端胜出覆盖也不计入本机分量"
+        );
 
         // 本机再写（含折叠排除键语义：自记录排除后不参与 digest）→ digest 递增
         put_personal(&mut s, "node-a", "ct:friend:z", "\"v4\"", 4000).unwrap();

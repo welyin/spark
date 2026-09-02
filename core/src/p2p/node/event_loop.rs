@@ -322,9 +322,7 @@ pub(super) fn expand_wildcard_listeners(
                 for iface in interfaces {
                     // loopback 与未运行网卡不参与展开；仅同协议族替换
                     // （v4 通配配 v4 网卡，v6 同理）。
-                    if iface.is_loopback
-                        || !iface.is_up
-                        || iface.ip.is_ipv4() != wildcard.is_ipv4()
+                    if iface.is_loopback || !iface.is_up || iface.ip.is_ipv4() != wildcard.is_ipv4()
                     {
                         continue;
                     }
@@ -413,7 +411,8 @@ fn canonical_reach_key(address: String) -> String {
 }
 
 impl<S: StorageBackend> EventLoop<S> {
-    pub(super) fn now(&self) -> i64 {        (self.now_fn)()
+    pub(super) fn now(&self) -> i64 {
+        (self.now_fn)()
     }
 
     pub(super) fn emit(&self, event: P2pEvent) {
@@ -434,8 +433,7 @@ impl<S: StorageBackend> EventLoop<S> {
     pub(super) fn redial_priority_peers(&mut self) {
         let now = self.now();
         let priority_peers: Vec<String> = {
-            let mut store =
-                crate::p2p::priority_peers::PriorityPeerStore::new(&mut self.storage);
+            let mut store = crate::p2p::priority_peers::PriorityPeerStore::new(&mut self.storage);
             store.list().unwrap_or_default()
         };
         for pid in priority_peers {
@@ -458,8 +456,7 @@ impl<S: StorageBackend> EventLoop<S> {
             let is_android = cfg!(target_os = "android");
             let self_addrs = self.self_listen_addr_set();
             let cached_addrs: Vec<Multiaddr> = {
-                let mut store =
-                    crate::p2p::overlay_store::OverlayPeerStore::new(&mut self.storage);
+                let mut store = crate::p2p::overlay_store::OverlayPeerStore::new(&mut self.storage);
                 store
                     .get(&peer.to_base58())
                     .ok()
@@ -470,10 +467,7 @@ impl<S: StorageBackend> EventLoop<S> {
                     .filter_map(|a| filter_dial_candidate(a, is_android))
                     .filter(|a| !self_addrs.contains(a))
                     .map(|a| {
-                        crate::p2p::peer_targets::ensure_circuit_dst_peer(
-                            &a,
-                            &peer.to_base58(),
-                        )
+                        crate::p2p::peer_targets::ensure_circuit_dst_peer(&a, &peer.to_base58())
                     })
                     .filter_map(|a| a.parse().ok())
                     .collect()
@@ -532,7 +526,11 @@ impl<S: StorageBackend> EventLoop<S> {
         let candidates = {
             let mut store = crate::p2p::overlay_store::OverlayPeerStore::new(&mut self.storage);
             store
-                .sample_dial_candidates(&exclude, now, crate::p2p::constants::OVERLAY_TICK_DIAL_BUDGET)
+                .sample_dial_candidates(
+                    &exclude,
+                    now,
+                    crate::p2p::constants::OVERLAY_TICK_DIAL_BUDGET,
+                )
                 .unwrap_or_default()
         };
         for candidate in candidates {
@@ -544,9 +542,7 @@ impl<S: StorageBackend> EventLoop<S> {
                 .iter()
                 .filter_map(|a| filter_dial_candidate(a, is_android))
                 .filter(|a| !self_addrs.contains(a))
-                .map(|a| {
-                    crate::p2p::peer_targets::ensure_circuit_dst_peer(&a, &peer.to_base58())
-                })
+                .map(|a| crate::p2p::peer_targets::ensure_circuit_dst_peer(&a, &peer.to_base58()))
                 .filter_map(|a| a.parse().ok())
                 .collect();
             if addrs.is_empty() {
@@ -687,16 +683,17 @@ impl<S: StorageBackend> EventLoop<S> {
             // [诊断] 快照差异打点：懒连接下突发拨号的归因证据（应为低频）。
             let removed: Vec<_> = base.iter().filter(|a| !current.contains(a)).collect();
             let added: Vec<_> = current.iter().filter(|a| !base.contains(a)).collect();
-            log::info!(
-                "[NETCHG] snapshot changed | +{added:?} -{removed:?}"
-            );
+            log::info!("[NETCHG] snapshot changed | +{added:?} -{removed:?}");
             self.arm_network_change_timer();
         }
         self.last_network_snapshot = Some(current);
     }
 
     /// 读取某 peer 的地址记分卡（M9，供拨号目标排序）。
-    pub(super) fn addr_meta_for(&mut self, peer_id: &str) -> HashMap<String, crate::p2p::overlay_store::AddrScore> {
+    pub(super) fn addr_meta_for(
+        &mut self,
+        peer_id: &str,
+    ) -> HashMap<String, crate::p2p::overlay_store::AddrScore> {
         let mut store = crate::p2p::overlay_store::OverlayPeerStore::new(&mut self.storage);
         store
             .get(peer_id)
@@ -898,13 +895,15 @@ impl<S: StorageBackend> EventLoop<S> {
     // 连接管理
     // ------------------------------------------------------------------
 
-    pub(super) fn begin_connect(&mut self, node_info: PeerNodeInfo, tx: oneshot::Sender<Result<()>>) {
+    pub(super) fn begin_connect(
+        &mut self,
+        node_info: PeerNodeInfo,
+        tx: oneshot::Sender<Result<()>>,
+    ) {
         // 出站抑制：目标 peer 已被撤销时直接失败，不进入拨号。
         if let Some(peer_id) = extract_peer_id(&node_info) {
             if self.host.is_revoked_peer(&peer_id) {
-                let _ = tx.send(Err(P2pError::Dial(format!(
-                    "peer {peer_id} is revoked"
-                ))));
+                let _ = tx.send(Err(P2pError::Dial(format!("peer {peer_id} is revoked"))));
                 return;
             }
         }
@@ -1043,7 +1042,6 @@ impl<S: StorageBackend> EventLoop<S> {
     }
 }
 
-
 #[cfg(test)]
 mod wildcard_tests {
     //! 通配 listener 展开单测（纯函数，不依赖真实网卡）。
@@ -1085,10 +1083,7 @@ mod wildcard_tests {
 
     #[test]
     fn concrete_listeners_kept_first_and_not_reexpanded() {
-        let listeners = vec![
-            addr("/ip4/1.2.3.4/tcp/4001"),
-            addr("/ip4/0.0.0.0/tcp/4001"),
-        ];
+        let listeners = vec![addr("/ip4/1.2.3.4/tcp/4001"), addr("/ip4/0.0.0.0/tcp/4001")];
         let interfaces = vec![iface(
             IpAddr::V4(Ipv4Addr::new(192, 168, 31, 134)),
             false,
@@ -1119,11 +1114,7 @@ mod wildcard_tests {
         let interfaces = vec![
             iface(IpAddr::V4(Ipv4Addr::new(192, 168, 31, 134)), false, true),
             iface(IpAddr::V6(Ipv6Addr::LOCALHOST), true, true),
-            iface(
-                IpAddr::V6("2408:8207:1::1".parse().unwrap()),
-                false,
-                true,
-            ),
+            iface(IpAddr::V6("2408:8207:1::1".parse().unwrap()), false, true),
         ];
         assert_eq!(
             strings(expand_wildcard_listeners(&listeners, &interfaces)),
@@ -1133,10 +1124,7 @@ mod wildcard_tests {
 
     #[test]
     fn duplicate_expansions_deduped() {
-        let listeners = vec![
-            addr("/ip4/0.0.0.0/tcp/4001"),
-            addr("/ip4/0.0.0.0/tcp/4001"),
-        ];
+        let listeners = vec![addr("/ip4/0.0.0.0/tcp/4001"), addr("/ip4/0.0.0.0/tcp/4001")];
         let interfaces = vec![iface(
             IpAddr::V4(Ipv4Addr::new(192, 168, 31, 134)),
             false,

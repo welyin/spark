@@ -144,7 +144,7 @@ impl P2pNode {
         })?;
         tokio::time::timeout(LOCAL_CMD_TIMEOUT, rx)
             .await
-            .map_err(|_| P2pError::Protocol("broadcast timeout".to_string()))?
+            .map_err(|_| P2pError::Timeout("broadcast timeout".to_string()))?
             .map_err(|_| P2pError::NotStarted)?
     }
 
@@ -154,7 +154,7 @@ impl P2pNode {
         self.send_cmd(Command::AnnounceNow { tx })?;
         tokio::time::timeout(LOCAL_CMD_TIMEOUT, rx)
             .await
-            .map_err(|_| P2pError::Protocol("announce timeout".to_string()))?
+            .map_err(|_| P2pError::Timeout("announce timeout".to_string()))?
             .map_err(|_| P2pError::NotStarted)?
     }
 
@@ -169,7 +169,7 @@ impl P2pNode {
         })?;
         tokio::time::timeout(LOCAL_CMD_TIMEOUT, rx)
             .await
-            .map_err(|_| P2pError::Protocol("plugin announce timeout".to_string()))?
+            .map_err(|_| P2pError::Timeout("plugin announce timeout".to_string()))?
             .map_err(|_| P2pError::NotStarted)?
     }
 
@@ -212,7 +212,7 @@ impl P2pNode {
         })?;
         tokio::time::timeout(Duration::from_secs(10), rx)
             .await
-            .map_err(|_| P2pError::Protocol("exchange timeout".to_string()))?
+            .map_err(|_| P2pError::Timeout("exchange timeout".to_string()))?
             .map_err(|_| P2pError::NotStarted)?
     }
 
@@ -232,7 +232,7 @@ impl P2pNode {
         })?;
         tokio::time::timeout(Duration::from_secs(10), rx)
             .await
-            .map_err(|_| P2pError::Protocol("recovery query timeout".to_string()))?
+            .map_err(|_| P2pError::Timeout("recovery query timeout".to_string()))?
             .map_err(|_| P2pError::NotStarted)?
     }
 
@@ -246,7 +246,7 @@ impl P2pNode {
         })?;
         tokio::time::timeout(Duration::from_secs(15), rx)
             .await
-            .map_err(|_| P2pError::Protocol("org-share timeout".to_string()))?
+            .map_err(|_| P2pError::Timeout("org-share timeout".to_string()))?
             .map_err(|_| P2pError::NotStarted)?
     }
 
@@ -264,7 +264,7 @@ impl P2pNode {
         })?;
         tokio::time::timeout(Duration::from_secs(15), rx)
             .await
-            .map_err(|_| P2pError::Protocol("org-pull timeout".to_string()))?
+            .map_err(|_| P2pError::Timeout("org-pull timeout".to_string()))?
             .map_err(|_| P2pError::NotStarted)?
     }
 
@@ -295,7 +295,7 @@ impl P2pNode {
         })?;
         tokio::time::timeout(Duration::from_millis(DM_READ_TIMEOUT_MS + 5_000), rx)
             .await
-            .map_err(|_| P2pError::Protocol("dm timeout".to_string()))?
+            .map_err(|_| P2pError::Timeout("dm timeout".to_string()))?
             .map_err(|_| P2pError::NotStarted)?
     }
 
@@ -305,7 +305,7 @@ impl P2pNode {
         self.send_cmd(Command::LocalNodeInfo { tx })?;
         tokio::time::timeout(LOCAL_CMD_TIMEOUT, rx)
             .await
-            .map_err(|_| P2pError::Protocol("local node info timeout".to_string()))?
+            .map_err(|_| P2pError::Timeout("local node info timeout".to_string()))?
             .map_err(|_| P2pError::NotStarted)
     }
 
@@ -316,7 +316,7 @@ impl P2pNode {
         self.send_cmd(Command::RelayStatus { tx })?;
         tokio::time::timeout(LOCAL_CMD_TIMEOUT, rx)
             .await
-            .map_err(|_| P2pError::Protocol("relay status timeout".to_string()))?
+            .map_err(|_| P2pError::Timeout("relay status timeout".to_string()))?
             .map_err(|_| P2pError::NotStarted)
     }
 
@@ -331,7 +331,7 @@ impl P2pNode {
         })?;
         tokio::time::timeout(Duration::from_secs(15), rx)
             .await
-            .map_err(|_| P2pError::Protocol("dht put timeout".to_string()))?
+            .map_err(|_| P2pError::Timeout("dht put timeout".to_string()))?
             .map_err(|_| P2pError::NotStarted)?
     }
 
@@ -344,7 +344,7 @@ impl P2pNode {
         })?;
         tokio::time::timeout(Duration::from_secs(15), rx)
             .await
-            .map_err(|_| P2pError::Protocol("dht get timeout".to_string()))?
+            .map_err(|_| P2pError::Timeout("dht get timeout".to_string()))?
             .map_err(|_| P2pError::NotStarted)?
     }
 
@@ -362,7 +362,7 @@ impl P2pNode {
         })?;
         tokio::time::timeout(Duration::from_secs(15), rx)
             .await
-            .map_err(|_| P2pError::Protocol("dht provide timeout".to_string()))?
+            .map_err(|_| P2pError::Timeout("dht provide timeout".to_string()))?
             .map_err(|_| P2pError::NotStarted)?
     }
 
@@ -375,7 +375,7 @@ impl P2pNode {
         })?;
         tokio::time::timeout(Duration::from_secs(15), rx)
             .await
-            .map_err(|_| P2pError::Protocol("dht get providers timeout".to_string()))?
+            .map_err(|_| P2pError::Timeout("dht get providers timeout".to_string()))?
             .map_err(|_| P2pError::NotStarted)?
     }
 
@@ -389,7 +389,7 @@ impl P2pNode {
         })?;
         tokio::time::timeout(Duration::from_secs(10), rx)
             .await
-            .map_err(|_| P2pError::Protocol("challenge timeout".to_string()))?
+            .map_err(|_| P2pError::Timeout("challenge timeout".to_string()))?
             .map_err(|_| P2pError::NotStarted)?
     }
 
@@ -403,7 +403,7 @@ impl P2pNode {
         })?;
         tokio::time::timeout(LOCAL_CMD_TIMEOUT, rx)
             .await
-            .map_err(|_| P2pError::Protocol("disconnect timeout".to_string()))?
+            .map_err(|_| P2pError::Timeout("disconnect timeout".to_string()))?
             .map_err(|_| P2pError::NotStarted)?
     }
 
@@ -415,7 +415,7 @@ impl P2pNode {
         self.send_cmd(Command::SetOrgPullBlackhole { on, tx })?;
         tokio::time::timeout(LOCAL_CMD_TIMEOUT, rx)
             .await
-            .map_err(|_| P2pError::Protocol("fault config timeout".to_string()))?
+            .map_err(|_| P2pError::Timeout("fault config timeout".to_string()))?
             .map_err(|_| P2pError::NotStarted)?
     }
 
@@ -425,7 +425,7 @@ impl P2pNode {
         self.send_cmd(Command::Tick { tx })?;
         tokio::time::timeout(Duration::from_secs(10), rx)
             .await
-            .map_err(|_| P2pError::Protocol("tick timeout".to_string()))?
+            .map_err(|_| P2pError::Timeout("tick timeout".to_string()))?
             .map_err(|_| P2pError::NotStarted)
     }
 

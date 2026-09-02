@@ -17,9 +17,7 @@
 //!
 //! 集合名恒为 `org:{kind}`（保留 org 插件前缀），版本恒 "1"（初版无代际演进）。
 
-use crate::plugindata::{
-    MergeRule, org_data_prefix, org_decl_key,
-};
+use crate::plugindata::{MergeRule, org_data_prefix, org_decl_key};
 
 // ── 常量 ────────────────────────────────────────────────────────────────
 

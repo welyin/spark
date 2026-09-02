@@ -143,9 +143,15 @@ impl<S: StorageBackend> EventLoop<S> {
         let now = self.now();
         let Some(payload) = direct::parse_dm_request(&request) else {
             if request.len() < 500 {
-                log::warn!("[P2P_DM_INBOUND] raw request is not valid JSON object: {}", request);
+                log::warn!(
+                    "[P2P_DM_INBOUND] raw request is not valid JSON object: {}",
+                    request
+                );
             } else {
-                log::warn!("[P2P_DM_INBOUND] raw request is not valid JSON object (len={})", request.len());
+                log::warn!(
+                    "[P2P_DM_INBOUND] raw request is not valid JSON object (len={})",
+                    request.len()
+                );
             }
             let response = direct::build_dm_error_response("invalid-request");
             let _ = self
@@ -270,10 +276,7 @@ impl<S: StorageBackend> EventLoop<S> {
         let is_android = cfg!(target_os = "android");
         let mut seen: HashSet<String> = HashSet::new();
         let mut merged: Vec<String> = Vec::new();
-        for addr in neighbor_addrs
-            .iter()
-            .chain(node_info.addresses.iter())
-        {
+        for addr in neighbor_addrs.iter().chain(node_info.addresses.iter()) {
             let Some(addr) = filter_dial_candidate(addr, is_android) else {
                 continue;
             };

@@ -9,14 +9,14 @@
 
 use std::collections::BTreeMap;
 
-use crate::org::roles::{data_account_set, is_data_account};
 use crate::org::OrganizationRecord;
-use crate::storage::{ScanOptions, StorageBackend};
-use crate::sync::SyncResult;
+use crate::org::roles::{data_account_set, is_data_account};
 use crate::plugindata::{
-    Accounts, org_dlog_entry_prefix, org_dlog_seq_key, org_dlog_wm_key, org_dlog_seen_key,
+    Accounts, org_dlog_entry_prefix, org_dlog_seen_key, org_dlog_seq_key, org_dlog_wm_key,
     org_dlog_wm_prefix,
 };
+use crate::storage::{ScanOptions, StorageBackend};
+use crate::sync::SyncResult;
 
 // ── 复制组判定 ───────────────────────────────────────────────────────────
 
@@ -38,10 +38,7 @@ pub fn is_in_replication_group(
 }
 
 /// 获取集合的复制组成员 rootId 列表（用于 GC 等待集合等）。
-pub fn replication_group_members(
-    record: &OrganizationRecord,
-    accounts: Accounts,
-) -> Vec<String> {
+pub fn replication_group_members(record: &OrganizationRecord, accounts: Accounts) -> Vec<String> {
     match accounts {
         Accounts::AllMembers => record.members.iter().map(|m| m.root_id.clone()).collect(),
         Accounts::DataAccounts => data_account_set(record),
@@ -141,7 +138,11 @@ pub fn org_dlog_append_ops<S: StorageBackend>(
     record_key: &str,
 ) -> SyncResult<(u64, Vec<crate::storage::BatchOperation>)> {
     let seq = org_dlog_current_seq(storage, org_id, name, version)? + 1;
-    let entry_key = format!("{}{:016}", org_dlog_entry_prefix(org_id, name, version), seq);
+    let entry_key = format!(
+        "{}{:016}",
+        org_dlog_entry_prefix(org_id, name, version),
+        seq
+    );
     let seq_key = org_dlog_seq_key(org_id, name, version);
     Ok((
         seq,

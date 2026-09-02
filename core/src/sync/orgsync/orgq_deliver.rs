@@ -102,10 +102,7 @@ pub fn orgq_pending_remove<S: StorageBackend>(storage: &mut S, request_id: &str)
 
 /// TTL 清理：删除所有超过 TTL 未应答的在途记录，返回清理条数。由投递路径
 /// 在写新 pending 前调用（防泄漏兜底；`now_ms` 注入）。
-pub fn orgq_pending_cleanup_stale<S: StorageBackend>(
-    storage: &mut S,
-    now_ms: i64,
-) -> usize {
+pub fn orgq_pending_cleanup_stale<S: StorageBackend>(storage: &mut S, now_ms: i64) -> usize {
     let prefix = "orgq:pending:";
     let mut removed = 0;
     let keys: Vec<String> = storage
@@ -141,8 +138,7 @@ pub fn orgq_wait_cleared<S: StorageBackend>(
     poll_interval_ms: u64,
     timeout_ms: u64,
 ) -> bool {
-    let deadline = std::time::Instant::now()
-        + std::time::Duration::from_millis(timeout_ms);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
     loop {
         if orgq_pending_get(storage, request_id).is_none() {
             return true;
@@ -177,10 +173,7 @@ pub fn orgq_resp_put<S: StorageBackend>(
 
 /// TTL 清理未消费的 orgq 写入回执（nit：`orgq:resp:` 若调用方未 `orgq_resp_take`
 /// 会残留，定期回收防泄漏）。返回清理条数。
-pub fn orgq_resp_cleanup_stale<S: StorageBackend>(
-    storage: &mut S,
-    now_ms: i64,
-) -> usize {
+pub fn orgq_resp_cleanup_stale<S: StorageBackend>(storage: &mut S, now_ms: i64) -> usize {
     let prefix = "orgq:resp:";
     let mut removed = 0;
     let keys: Vec<String> = storage
@@ -214,9 +207,15 @@ pub fn orgq_resp_take<S: StorageBackend>(
     let _ = storage.delete(&orgq_resp_key(request_id));
     let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
     Some((
-        v.get("accepted").and_then(serde_json::Value::as_u64).unwrap_or(0) as usize,
-        v.get("rejected").and_then(serde_json::Value::as_u64).unwrap_or(0) as usize,
-        v.get("denied").and_then(serde_json::Value::as_bool).unwrap_or(false),
+        v.get("accepted")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0) as usize,
+        v.get("rejected")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0) as usize,
+        v.get("denied")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
     ))
 }
 
@@ -233,7 +232,11 @@ mod tests {
         let rec = orgq_pending_get(&s, "req-1").expect("在途记录已写入");
         assert_eq!(rec["orgId"], json!("org_01"));
         assert_eq!(rec["op"], json!("query"));
-        assert_eq!(rec["targetRootId"], json!("da-a"), "在途记录补存目标数据账号");
+        assert_eq!(
+            rec["targetRootId"],
+            json!("da-a"),
+            "在途记录补存目标数据账号"
+        );
         assert_eq!(rec["ts"], json!(1000));
         let a = orgq_gen_request_id(1000);
         let b = orgq_gen_request_id(1000);
@@ -247,8 +250,16 @@ mod tests {
     fn orgq_pending_respects_max() {
         let mut s = crate::storage::MemoryStorage::new();
         for i in 0..ORGQ_PENDING_MAX {
-            orgq_pending_put(&mut s, &format!("req-{i}"), "org_01", "c@v1", "query", "da-a", 1000)
-                .unwrap();
+            orgq_pending_put(
+                &mut s,
+                &format!("req-{i}"),
+                "org_01",
+                "c@v1",
+                "query",
+                "da-a",
+                1000,
+            )
+            .unwrap();
         }
         assert!(
             orgq_pending_put(&mut s, "req-over", "org_01", "c@v1", "query", "da-a", 1000).is_err(),

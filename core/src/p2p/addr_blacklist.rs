@@ -104,10 +104,17 @@ mod tests {
         let mut storage = MemoryStorage::new();
         let mut bl = AddrBlacklistStore::new(&mut storage);
         assert!(!bl.is_blocked(&addr("/ip4/1.2.3.4/tcp/15002"), 0).unwrap());
-        bl.block(&addr("/ip4/1.2.3.4/tcp/15002"), 1000, 10_000).unwrap();
-        assert!(bl.is_blocked(&addr("/ip4/1.2.3.4/tcp/15002"), 5000).unwrap());
+        bl.block(&addr("/ip4/1.2.3.4/tcp/15002"), 1000, 10_000)
+            .unwrap();
+        assert!(
+            bl.is_blocked(&addr("/ip4/1.2.3.4/tcp/15002"), 5000)
+                .unwrap()
+        );
         // TTL 过期后不再拦截
-        assert!(!bl.is_blocked(&addr("/ip4/1.2.3.4/tcp/15002"), 11_001).unwrap());
+        assert!(
+            !bl.is_blocked(&addr("/ip4/1.2.3.4/tcp/15002"), 11_001)
+                .unwrap()
+        );
     }
 
     #[test]
@@ -129,7 +136,8 @@ mod tests {
     fn unblock_removes_entry() {
         let mut storage = MemoryStorage::new();
         let mut bl = AddrBlacklistStore::new(&mut storage);
-        bl.block(&addr("/ip4/5.6.7.8/tcp/15002"), 0, 10_000).unwrap();
+        bl.block(&addr("/ip4/5.6.7.8/tcp/15002"), 0, 10_000)
+            .unwrap();
         assert!(bl.is_blocked(&addr("/ip4/5.6.7.8/tcp/15002"), 0).unwrap());
         bl.unblock(&addr("/ip4/5.6.7.8/tcp/15002")).unwrap();
         assert!(!bl.is_blocked(&addr("/ip4/5.6.7.8/tcp/15002"), 0).unwrap());
@@ -140,7 +148,8 @@ mod tests {
         // 含 /p2p 段地址也能 block（剥 base 后存取）
         let mut storage = MemoryStorage::new();
         let mut bl = AddrBlacklistStore::new(&mut storage);
-        bl.block(&addr("/ip4/9.9.9.9/tcp/15002/p2p/xyz"), 0, 10_000).unwrap();
+        bl.block(&addr("/ip4/9.9.9.9/tcp/15002/p2p/xyz"), 0, 10_000)
+            .unwrap();
         assert!(bl.is_blocked(&addr("/ip4/9.9.9.9/tcp/15002"), 0).unwrap());
     }
 }

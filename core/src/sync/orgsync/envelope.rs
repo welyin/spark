@@ -45,7 +45,12 @@ pub fn build_orgsync_hello(
 /// 的容错口径）。
 pub fn parse_orgsync_hello(
     body: &Value,
-) -> Option<(String, BTreeMap<String, (VersionVector, u64, bool)>, Vec<String>, String)> {
+) -> Option<(
+    String,
+    BTreeMap<String, (VersionVector, u64, bool)>,
+    Vec<String>,
+    String,
+)> {
     let org_id = body.get("orgId")?.as_str()?.to_string();
     let collections_obj = body.get("collections")?.as_object()?;
     let mut collections = BTreeMap::new();
@@ -56,13 +61,21 @@ pub fn parse_orgsync_hello(
         };
         let dlog_ack = col_val.get("dlogAck").and_then(Value::as_u64).unwrap_or(0);
         // F4：保留 degraded 标注（缺省 false = 可服务）
-        let degraded = col_val.get("degraded").and_then(Value::as_bool).unwrap_or(false);
+        let degraded = col_val
+            .get("degraded")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         collections.insert(col_name.clone(), (vv, dlog_ack, degraded));
     }
     let roles: Vec<String> = body
         .get("roles")
         .and_then(Value::as_array)
-        .map(|arr| arr.iter().filter_map(Value::as_str).map(String::from).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(Value::as_str)
+                .map(String::from)
+                .collect()
+        })
         .unwrap_or_default();
     let device_class = body
         .get("deviceClass")
@@ -137,9 +150,15 @@ pub fn parse_orgsync_data(body: &Value) -> Option<(String, String, Vec<OrgsyncRe
     for item in items {
         let key = item.get("key")?.as_str()?.to_string();
         let value = item.get("value").cloned().unwrap_or(Value::Null);
-        let meta: crate::sync::meta::DocMeta = serde_json::from_value(item.get("meta")?.clone()).ok()?;
+        let meta: crate::sync::meta::DocMeta =
+            serde_json::from_value(item.get("meta")?.clone()).ok()?;
         let dseq = item.get("dseq").and_then(Value::as_u64);
-        records.push(OrgsyncRecord { key, value, meta, dseq });
+        records.push(OrgsyncRecord {
+            key,
+            value,
+            meta,
+            dseq,
+        });
     }
     Some((org_id, collection, records))
 }

@@ -26,9 +26,7 @@ use serde_json::Value;
 
 use crate::storage::StorageBackend;
 
-use super::access::{
-    acl_key, decrypt_value, encrypt_value, get_epoch_key, AclRecord,
-};
+use super::access::{AclRecord, acl_key, decrypt_value, encrypt_value, get_epoch_key};
 
 /// 当前 epoch 密钥不可达（本机非读者 / 未收到该 epoch 密钥）——AEAD 语义下
 /// 即无写权限 / 读权限。文案对齐 plugin-data-api §8 的 KeyUnavailable。
@@ -119,9 +117,8 @@ pub fn decrypt_orgd_value<S: StorageBackend>(
         .get("epoch")
         .and_then(Value::as_u64)
         .ok_or_else(|| AccessDataError::BadCiphertext("no epoch".to_string()))?;
-    let key = get_epoch_key(storage, org_id, name, version, epoch).ok_or_else(|| {
-        AccessDataError::KeyUnavailable(format!("no key for epoch {epoch}"))
-    })?;
+    let key = get_epoch_key(storage, org_id, name, version, epoch)
+        .ok_or_else(|| AccessDataError::KeyUnavailable(format!("no key for epoch {epoch}")))?;
     let col_full = format!("{name}@v{version}");
     decrypt_value(org_id, &col_full, rel_key, &key, &ct)
         .ok_or_else(|| AccessDataError::BadCiphertext("decrypt failed".to_string()))

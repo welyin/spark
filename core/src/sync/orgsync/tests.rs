@@ -65,10 +65,26 @@ fn replication_group_all_members_includes_all() {
 #[test]
 fn replication_group_data_accounts_only_data_accounts() {
     let record = make_record(&["a", "b", "c"], &["a", "c"]);
-    assert!(is_in_replication_group(&record, "a", Accounts::DataAccounts));
-    assert!(!is_in_replication_group(&record, "b", Accounts::DataAccounts));
-    assert!(is_in_replication_group(&record, "c", Accounts::DataAccounts));
-    assert!(!is_in_replication_group(&record, "x", Accounts::DataAccounts));
+    assert!(is_in_replication_group(
+        &record,
+        "a",
+        Accounts::DataAccounts
+    ));
+    assert!(!is_in_replication_group(
+        &record,
+        "b",
+        Accounts::DataAccounts
+    ));
+    assert!(is_in_replication_group(
+        &record,
+        "c",
+        Accounts::DataAccounts
+    ));
+    assert!(!is_in_replication_group(
+        &record,
+        "x",
+        Accounts::DataAccounts
+    ));
 }
 
 #[test]
@@ -117,14 +133,26 @@ fn org_dlog_append_and_read_roundtrip() {
 #[test]
 fn org_dlog_seen_monotonic() {
     let mut s = MemoryStorage::new();
-    assert_eq!(org_dlog_get_seen(&s, "org_01", "c", "1", "root-a", "peer-1").unwrap(), 0);
+    assert_eq!(
+        org_dlog_get_seen(&s, "org_01", "c", "1", "root-a", "peer-1").unwrap(),
+        0
+    );
     org_dlog_set_seen(&mut s, "org_01", "c", "1", "root-a", "peer-1", 5).unwrap();
-    assert_eq!(org_dlog_get_seen(&s, "org_01", "c", "1", "root-a", "peer-1").unwrap(), 5);
+    assert_eq!(
+        org_dlog_get_seen(&s, "org_01", "c", "1", "root-a", "peer-1").unwrap(),
+        5
+    );
     // 只增不减
     org_dlog_set_seen(&mut s, "org_01", "c", "1", "root-a", "peer-1", 3).unwrap();
-    assert_eq!(org_dlog_get_seen(&s, "org_01", "c", "1", "root-a", "peer-1").unwrap(), 5);
+    assert_eq!(
+        org_dlog_get_seen(&s, "org_01", "c", "1", "root-a", "peer-1").unwrap(),
+        5
+    );
     // 不同设备各自独立
-    assert_eq!(org_dlog_get_seen(&s, "org_01", "c", "1", "root-a", "peer-2").unwrap(), 0);
+    assert_eq!(
+        org_dlog_get_seen(&s, "org_01", "c", "1", "root-a", "peer-2").unwrap(),
+        0
+    );
 }
 
 #[test]
@@ -164,9 +192,12 @@ fn org_dlog_gc_threshold_uses_min_device_watermark() {
     org_dlog_set_watermark(&mut s, "org_01", "c", "1", "root-a", "peer-a1", 2).unwrap();
     org_dlog_set_watermark(&mut s, "org_01", "c", "1", "root-a", "peer-a2", 9).unwrap();
     org_dlog_set_watermark(&mut s, "org_01", "c", "1", "root-b", "peer-b1", 5).unwrap();
-    let members = vec!["root-a".to_string(), "root-b".to_string(), "self".to_string()];
-    let threshold =
-        org_dlog_gc_threshold(&s, "org_01", "c", "1", &members, "self").unwrap();
+    let members = vec![
+        "root-a".to_string(),
+        "root-b".to_string(),
+        "self".to_string(),
+    ];
+    let threshold = org_dlog_gc_threshold(&s, "org_01", "c", "1", &members, "self").unwrap();
     assert_eq!(threshold, 2);
 }
 
@@ -180,8 +211,7 @@ fn org_dlog_gc_threshold_ignores_stale_watermark_keys_outside_wait_set() {
     org_dlog_set_watermark(&mut s, "org_01", "c", "1", "root-a", "peer-a1", 8).unwrap();
     org_dlog_set_watermark(&mut s, "org_01", "c", "1", "root-gone", "peer-gone", 1).unwrap();
     let members = vec!["root-a".to_string(), "self".to_string()];
-    let threshold =
-        org_dlog_gc_threshold(&s, "org_01", "c", "1", &members, "self").unwrap();
+    let threshold = org_dlog_gc_threshold(&s, "org_01", "c", "1", &members, "self").unwrap();
     assert_eq!(
         threshold, 8,
         "min 只覆盖等待集合内成员水位，残留键不压低阈值"
@@ -193,9 +223,12 @@ fn org_dlog_gc_threshold_blocks_when_member_has_no_device_watermark() {
     let mut s = MemoryStorage::new();
     // root-a 有设备水位，但 root-b 无任何设备水位记录 → 阻塞不清（返回 0）
     org_dlog_set_watermark(&mut s, "org_01", "c", "1", "root-a", "peer-a1", 7).unwrap();
-    let members = vec!["root-a".to_string(), "root-b".to_string(), "self".to_string()];
-    let threshold =
-        org_dlog_gc_threshold(&s, "org_01", "c", "1", &members, "self").unwrap();
+    let members = vec![
+        "root-a".to_string(),
+        "root-b".to_string(),
+        "self".to_string(),
+    ];
+    let threshold = org_dlog_gc_threshold(&s, "org_01", "c", "1", &members, "self").unwrap();
     assert_eq!(threshold, 0, "无记录阻塞不清");
 }
 
@@ -206,8 +239,7 @@ fn org_dlog_gc_threshold_empty_wait_set_returns_current_seq() {
     s.batch(ops).unwrap();
     // 只有本机一个成员 → 无等待集合 → 返回当前最大序号
     let members = vec!["self".to_string()];
-    let threshold =
-        org_dlog_gc_threshold(&s, "org_01", "c", "1", &members, "self").unwrap();
+    let threshold = org_dlog_gc_threshold(&s, "org_01", "c", "1", &members, "self").unwrap();
     assert_eq!(threshold, 1);
 }
 
@@ -261,12 +293,10 @@ fn collect_org_collections_per_recipient_dlog_ack() {
 
     let collections = vec![("c".to_string(), "1".to_string())];
     // 收件人 A：dlogAck = 3
-    let map_a = collect_org_collections(&s, "org_01", &collections, "member-a", "peer-a1")
-        .unwrap();
+    let map_a = collect_org_collections(&s, "org_01", &collections, "member-a", "peer-a1").unwrap();
     assert_eq!(map_a["c@v1"]["dlogAck"], json!(3));
     // 收件人 B：dlogAck = 9
-    let map_b = collect_org_collections(&s, "org_01", &collections, "member-b", "peer-b1")
-        .unwrap();
+    let map_b = collect_org_collections(&s, "org_01", &collections, "member-b", "peer-b1").unwrap();
     assert_eq!(map_b["c@v1"]["dlogAck"], json!(9));
 }
 
@@ -357,19 +387,16 @@ fn collect_org_incremental_finds_newer_records() {
     let known: VersionVector = [("node-a".to_string(), 1), ("node-b".to_string(), 1)]
         .into_iter()
         .collect();
-    let records =
-        collect_org_incremental(&s, "org_01", "c", "1", &known, 0).unwrap();
+    let records = collect_org_incremental(&s, "org_01", "c", "1", &known, 0).unwrap();
     // a 本机领先 → 纳入；b 并发 → 纳入（CompareResult 不是 Remote/Equal）
     assert!(records.iter().any(|r| r.key == format!("{prefix}a")));
     assert!(records.iter().any(|r| r.key == format!("{prefix}b")));
 
     // knownVv 包含 node-b:3 → b Equal，不纳入
-    let known2: VersionVector =
-        [("node-a".to_string(), 1), ("node-b".to_string(), 3)]
-            .into_iter()
-            .collect();
-    let records2 =
-        collect_org_incremental(&s, "org_01", "c", "1", &known2, 0).unwrap();
+    let known2: VersionVector = [("node-a".to_string(), 1), ("node-b".to_string(), 3)]
+        .into_iter()
+        .collect();
+    let records2 = collect_org_incremental(&s, "org_01", "c", "1", &known2, 0).unwrap();
     assert!(!records2.iter().any(|r| r.key == format!("{prefix}b")));
 }
 
@@ -475,10 +502,17 @@ fn org_coll_declaration_is_synced_as_system_collection() {
 
     // F2-P1：声明 pmeta 折叠进 org:structure（all-members）集合 vv
     let folded = collect_org_collection_vv(&s, "org_01", "org:structure", "1").unwrap();
-    assert!(folded.get("node-a").copied().unwrap_or(0) >= 5, "声明 pmeta 折叠进 org:structure vv");
+    assert!(
+        folded.get("node-a").copied().unwrap_or(0) >= 5,
+        "声明 pmeta 折叠进 org:structure vv"
+    );
     // 插件集合折叠不再携带声明（decl 不在 orgd: 键域）
     let plugin_fold = collect_org_collection_vv(&s, "org_01", "finance:ledger", "1.0.0").unwrap();
-    assert_eq!(plugin_fold.get("node-a").copied(), Some(1), "插件集合折叠只含数据记录");
+    assert_eq!(
+        plugin_fold.get("node-a").copied(),
+        Some(1),
+        "插件集合折叠只含数据记录"
+    );
 
     // 增量：org:structure 通道 knownVv node-a=4 → 声明（node-a:5 领先）纳入
     let known: VersionVector = [("node-a".to_string(), 4)].into_iter().collect();
@@ -488,8 +522,15 @@ fn org_coll_declaration_is_synced_as_system_collection() {
         "声明记录经 org:structure 增量传播（声明先行全员可达）"
     );
     // 插件集合增量只含数据记录（knownVv 空 → 数据纳入；声明不内联携带）
-    let inc_plugin =
-        collect_org_incremental(&s, "org_01", "finance:ledger", "1.0.0", &Default::default(), 0).unwrap();
+    let inc_plugin = collect_org_incremental(
+        &s,
+        "org_01",
+        "finance:ledger",
+        "1.0.0",
+        &Default::default(),
+        0,
+    )
+    .unwrap();
     assert!(
         inc_plugin.iter().any(|r| r.key == format!("{prefix}k")),
         "数据记录纳入插件集合增量"
@@ -561,10 +602,22 @@ fn diff_org_equal_remote_local_concurrent() {
     let a2: VersionVector = [("a".to_string(), 2)].into_iter().collect();
     let b1: VersionVector = [("b".to_string(), 1)].into_iter().collect();
 
-    assert!(matches!(diff_org_collection(&a1, &a1), OrgDiffOutcome::Equal));
-    assert!(matches!(diff_org_collection(&a1, &a2), OrgDiffOutcome::LocalBehind { .. }));
-    assert!(matches!(diff_org_collection(&a2, &a1), OrgDiffOutcome::LocalAhead));
-    assert!(matches!(diff_org_collection(&a1, &b1), OrgDiffOutcome::Concurrent));
+    assert!(matches!(
+        diff_org_collection(&a1, &a1),
+        OrgDiffOutcome::Equal
+    ));
+    assert!(matches!(
+        diff_org_collection(&a1, &a2),
+        OrgDiffOutcome::LocalBehind { .. }
+    ));
+    assert!(matches!(
+        diff_org_collection(&a2, &a1),
+        OrgDiffOutcome::LocalAhead
+    ));
+    assert!(matches!(
+        diff_org_collection(&a1, &b1),
+        OrgDiffOutcome::Concurrent
+    ));
 }
 
 // ── 设备类（F7：与 pdsync 复用同一份 local_device_class）───────────────
@@ -661,32 +714,47 @@ fn builtin_collection_incremental_scans_legacy_prefix() {
     // org:contacts 集合的数据在 ct:org:{orgId}:* 前缀（非 orgd:）
     put_personal(&mut s, "node-a", "ct:org:org_01:member-x", "\"v1\"", 1000).unwrap();
     // org:structure 集合的数据在 org:meta:{orgId}（单记录 whole）
-    put_personal(&mut s, "node-a", "org:meta:org_01", "{\"name\":\"t\"}", 1001).unwrap();
+    put_personal(
+        &mut s,
+        "node-a",
+        "org:meta:org_01",
+        "{\"name\":\"t\"}",
+        1001,
+    )
+    .unwrap();
 
     // 折叠 vv 应包含各内建集合的数据（node-a 分量）
-    assert!(collect_org_collection_vv(&s, "org_01", "org:contacts", "1")
-        .unwrap()
-        .get("node-a")
-        .is_some());
-    assert!(collect_org_collection_vv(&s, "org_01", "org:structure", "1")
-        .unwrap()
-        .get("node-a")
-        .is_some());
+    assert!(
+        collect_org_collection_vv(&s, "org_01", "org:contacts", "1")
+            .unwrap()
+            .get("node-a")
+            .is_some()
+    );
+    assert!(
+        collect_org_collection_vv(&s, "org_01", "org:structure", "1")
+            .unwrap()
+            .get("node-a")
+            .is_some()
+    );
 
     // 增量采集：knownVv 空 → 三条存量记录全部纳入各自集合
-    let contacts = collect_org_incremental(&s, "org_01", "org:contacts", "1", &VersionVector::new(), 0)
-        .unwrap();
+    let contacts =
+        collect_org_incremental(&s, "org_01", "org:contacts", "1", &VersionVector::new(), 0)
+            .unwrap();
     assert_eq!(contacts.len(), 1);
     assert_eq!(contacts[0].key, "ct:org:org_01:member-x");
-    let structure = collect_org_incremental(&s, "org_01", "org:structure", "1", &VersionVector::new(), 0)
-        .unwrap();
+    let structure =
+        collect_org_incremental(&s, "org_01", "org:structure", "1", &VersionVector::new(), 0)
+            .unwrap();
     assert_eq!(structure.len(), 1);
     assert_eq!(structure[0].key, "org:meta:org_01");
     // F7：org:inv:* 已非任何 orgsync 集合键域——`org:invites` 集合不存在，
     // 折叠/增量为空
-    assert!(collect_org_collection_vv(&s, "org_01", "org:invites", "1")
-        .unwrap()
-        .is_empty());
+    assert!(
+        collect_org_collection_vv(&s, "org_01", "org:invites", "1")
+            .unwrap()
+            .is_empty()
+    );
 }
 
 /// 内建集合删除日志：collect_org_tombstones_after 只认本集合键域的墓碑。
@@ -704,8 +772,11 @@ fn builtin_collection_tombstones_are_filtered_to_key_domain() {
         node_id: Some("node-a".to_string()),
         tombstone: Some(true),
     };
-    s.put(&format!("pmeta:{key}"), &serde_json::to_string(&tomb).unwrap())
-        .unwrap();
+    s.put(
+        &format!("pmeta:{key}"),
+        &serde_json::to_string(&tomb).unwrap(),
+    )
+    .unwrap();
 
     // org:contacts 采集到该墓碑；org:structure 采集不到（键域外）
     let contacts = collect_org_tombstones_after(&s, "org_01", "org:contacts", "1", 0).unwrap();

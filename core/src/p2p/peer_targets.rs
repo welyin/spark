@@ -14,8 +14,8 @@ pub struct PeerNodeInfo {
 
 use std::net::IpAddr;
 
-use libp2p::multiaddr::Protocol;
 use libp2p::Multiaddr;
+use libp2p::multiaddr::Protocol;
 
 /// 提取目标 peerId：优先显式 `peer_id`，回退从地址 `/p2p/<peerId>` 尾段解析。
 pub fn extract_peer_id(node_info: &PeerNodeInfo) -> Option<String> {
@@ -144,7 +144,10 @@ pub(crate) fn is_public_external_addr(addr: &Multiaddr) -> bool {
             true
         }
         IpAddr::V6(v6) => {
-            !(v6.is_loopback() || v6.is_unique_local() || v6.is_unicast_link_local() || v6.is_unspecified())
+            !(v6.is_loopback()
+                || v6.is_unique_local()
+                || v6.is_unicast_link_local()
+                || v6.is_unspecified())
         }
     }
 }
@@ -289,16 +292,20 @@ pub fn addr_static_rank(a: &str) -> u8 {
     if ma.iter().any(|p| matches!(p, Protocol::P2pCircuit)) {
         return 10;
     }
-    let is_ws = ma.iter().any(|p| matches!(p, Protocol::Ws(_) | Protocol::Wss(_)));
+    let is_ws = ma
+        .iter()
+        .any(|p| matches!(p, Protocol::Ws(_) | Protocol::Wss(_)));
     let ipv6 = ma.iter().any(|p| matches!(p, Protocol::Ip6(_)));
     // 先判 ip 族，再判 tcp/ws；loopback/link-local 一律垫底（不管协议）
     if let Some(p) = ma.iter().next() {
         let is_loopback_or_linklocal = match p {
             Protocol::Ip4(ip) => ip.is_loopback(),
-            Protocol::Ip6(ip) => ip.is_loopback() || {
-                let seg = ip.segments();
-                seg[0] >= 0xfe80 && seg[0] <= 0xfebf
-            },
+            Protocol::Ip6(ip) => {
+                ip.is_loopback() || {
+                    let seg = ip.segments();
+                    seg[0] >= 0xfe80 && seg[0] <= 0xfebf
+                }
+            }
             _ => false,
         };
         if is_loopback_or_linklocal {
@@ -306,8 +313,8 @@ pub fn addr_static_rank(a: &str) -> u8 {
         }
     }
     match (ipv6, is_ws) {
-        (true, false) => 0, // IPv6 公网 tcp
-        (true, true) => 1,  // IPv6 公网 ws
+        (true, false) => 0,  // IPv6 公网 tcp
+        (true, true) => 1,   // IPv6 公网 ws
         (false, false) => 2, // IPv4 tcp
         (false, true) => 3,  // IPv4 ws
     }
@@ -447,7 +454,11 @@ mod tests {
         let public_v6 = "/ip6/2408:8207:1::1/tcp/15002".to_string();
         let private_v6 = "/ip6/fd00::1/tcp/15002".to_string();
         let loopback_v6 = "/ip6/::1/tcp/15002".to_string();
-        let sorted = sort_addresses(vec![loopback_v6.clone(), private_v6.clone(), public_v6.clone()]);
+        let sorted = sort_addresses(vec![
+            loopback_v6.clone(),
+            private_v6.clone(),
+            public_v6.clone(),
+        ]);
         // 公网 IPv6 排最前；私网与回环 IPv6 同档（rank 1），保持插入序
         assert_eq!(sorted[0], public_v6);
         let mut tail = sorted[1..].to_vec();
@@ -461,16 +472,25 @@ mod tests {
         let plain = "/ip4/1.2.3.4/tcp/15002".to_string();
         // Android：ws 剔除，普通地址保留
         assert_eq!(filter_dial_candidate(&ws, true), None);
-        assert_eq!(filter_dial_candidate(&plain, true).as_deref(), Some("/ip4/1.2.3.4/tcp/15002"));
+        assert_eq!(
+            filter_dial_candidate(&plain, true).as_deref(),
+            Some("/ip4/1.2.3.4/tcp/15002")
+        );
         // 非 Android（PC 桌面端）：ws 保留
-        assert_eq!(filter_dial_candidate(&ws, false).as_deref(), Some("/ip4/1.2.3.4/tcp/15002/ws"));
+        assert_eq!(
+            filter_dial_candidate(&ws, false).as_deref(),
+            Some("/ip4/1.2.3.4/tcp/15002/ws")
+        );
     }
 
     #[test]
     fn filter_wss_dropped_on_android() {
         let wss = "/ip4/1.2.3.4/tcp/443/wss".to_string();
         assert_eq!(filter_dial_candidate(&wss, true), None);
-        assert_eq!(filter_dial_candidate(&wss, false).as_deref(), Some("/ip4/1.2.3.4/tcp/443/wss"));
+        assert_eq!(
+            filter_dial_candidate(&wss, false).as_deref(),
+            Some("/ip4/1.2.3.4/tcp/443/wss")
+        );
     }
 
     #[test]
@@ -478,8 +498,14 @@ mod tests {
         // 回环/私网保留（同机/局域网场景仍可用），只由排序降权
         let loopback = "/ip4/127.0.0.1/tcp/15002".to_string();
         let private = "/ip4/10.0.0.5/tcp/15002".to_string();
-        assert_eq!(filter_dial_candidate(&loopback, true).as_deref(), Some("/ip4/127.0.0.1/tcp/15002"));
-        assert_eq!(filter_dial_candidate(&private, true).as_deref(), Some("/ip4/10.0.0.5/tcp/15002"));
+        assert_eq!(
+            filter_dial_candidate(&loopback, true).as_deref(),
+            Some("/ip4/127.0.0.1/tcp/15002")
+        );
+        assert_eq!(
+            filter_dial_candidate(&private, true).as_deref(),
+            Some("/ip4/10.0.0.5/tcp/15002")
+        );
     }
 
     #[test]
@@ -494,7 +520,9 @@ mod tests {
         // 本机监听地址（identify 被对端回灌本机地址）→ 剔除，防 kad 自拨
         let self_addrs: HashSet<String> =
             ["/ip4/127.0.0.1/tcp/15002", "/ip4/192.168.31.134/tcp/15002"]
-                .iter().map(|s| s.to_string()).collect();
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
         assert!(!filter_kad_addr(
             &"/ip4/127.0.0.1/tcp/15002".parse().unwrap(),
             &self_addrs
@@ -515,17 +543,30 @@ mod tests {
         use std::collections::HashSet;
         let empty: HashSet<String> = HashSet::new();
         // 通配不可路由
-        assert!(!filter_kad_addr(&"/ip4/0.0.0.0/tcp/15002".parse().unwrap(), &empty));
+        assert!(!filter_kad_addr(
+            &"/ip4/0.0.0.0/tcp/15002".parse().unwrap(),
+            &empty
+        ));
         // ws/wss 形态：桌面 kad 不拨 ws（即使非本机地址）
-        assert!(!filter_kad_addr(&"/ip4/1.2.3.4/tcp/15002/ws".parse().unwrap(), &empty));
-        assert!(!filter_kad_addr(&"/ip4/1.2.3.4/tcp/443/wss".parse().unwrap(), &empty));
+        assert!(!filter_kad_addr(
+            &"/ip4/1.2.3.4/tcp/15002/ws".parse().unwrap(),
+            &empty
+        ));
+        assert!(!filter_kad_addr(
+            &"/ip4/1.2.3.4/tcp/443/wss".parse().unwrap(),
+            &empty
+        ));
     }
 
     #[test]
     fn public_external_keeps_public_v4_and_v6() {
         // 公网 IPv4 保留
-        assert!(is_public_external_addr(&"/ip4/203.0.113.9/tcp/15002".parse().unwrap()));
-        assert!(is_public_external_addr(&"/ip4/1.2.3.4/tcp/15002".parse().unwrap()));
+        assert!(is_public_external_addr(
+            &"/ip4/203.0.113.9/tcp/15002".parse().unwrap()
+        ));
+        assert!(is_public_external_addr(
+            &"/ip4/1.2.3.4/tcp/15002".parse().unwrap()
+        ));
         // 公网 IPv6 保留（移动网络直连主要靠它）
         assert!(is_public_external_addr(
             &"/ip6/2408:8207:1::1/tcp/15002".parse().unwrap()
@@ -539,30 +580,56 @@ mod tests {
     #[test]
     fn public_external_drops_private_loopback_linklocal_wildcard_cgnat() {
         // 私网 IPv4（10/8、172.16/12、192.168/16）剔
-        assert!(!is_public_external_addr(&"/ip4/10.1.2.3/tcp/15002".parse().unwrap()));
-        assert!(!is_public_external_addr(&"/ip4/172.16.5.5/tcp/15002".parse().unwrap()));
-        assert!(!is_public_external_addr(&"/ip4/192.168.31.134/tcp/15002".parse().unwrap()));
+        assert!(!is_public_external_addr(
+            &"/ip4/10.1.2.3/tcp/15002".parse().unwrap()
+        ));
+        assert!(!is_public_external_addr(
+            &"/ip4/172.16.5.5/tcp/15002".parse().unwrap()
+        ));
+        assert!(!is_public_external_addr(
+            &"/ip4/192.168.31.134/tcp/15002".parse().unwrap()
+        ));
         // loopback 剔
-        assert!(!is_public_external_addr(&"/ip4/127.0.0.1/tcp/15002".parse().unwrap()));
-        assert!(!is_public_external_addr(&"/ip6/::1/tcp/15002".parse().unwrap()));
+        assert!(!is_public_external_addr(
+            &"/ip4/127.0.0.1/tcp/15002".parse().unwrap()
+        ));
+        assert!(!is_public_external_addr(
+            &"/ip6/::1/tcp/15002".parse().unwrap()
+        ));
         // 链路本地（169.254/16）剔
-        assert!(!is_public_external_addr(&"/ip4/169.254.1.1/tcp/15002".parse().unwrap()));
+        assert!(!is_public_external_addr(
+            &"/ip4/169.254.1.1/tcp/15002".parse().unwrap()
+        ));
         // 通配剔
-        assert!(!is_public_external_addr(&"/ip4/0.0.0.0/tcp/15002".parse().unwrap()));
-        assert!(!is_public_external_addr(&"/ip6/::/tcp/15002".parse().unwrap()));
+        assert!(!is_public_external_addr(
+            &"/ip4/0.0.0.0/tcp/15002".parse().unwrap()
+        ));
+        assert!(!is_public_external_addr(
+            &"/ip6/::/tcp/15002".parse().unwrap()
+        ));
         // CGNAT 100.64/10 剔（标准库 is_private 不覆盖，手写判定）
-        assert!(!is_public_external_addr(&"/ip4/100.64.0.1/tcp/15002".parse().unwrap()));
-        assert!(!is_public_external_addr(&"/ip4/100.127.255.254/tcp/15002".parse().unwrap()));
+        assert!(!is_public_external_addr(
+            &"/ip4/100.64.0.1/tcp/15002".parse().unwrap()
+        ));
+        assert!(!is_public_external_addr(
+            &"/ip4/100.127.255.254/tcp/15002".parse().unwrap()
+        ));
         // 唯一本地 / 链路本地 IPv6 剔
-        assert!(!is_public_external_addr(&"/ip6/fd00::1/tcp/15002".parse().unwrap()));
-        assert!(!is_public_external_addr(&"/ip6/fe80::1/tcp/15002".parse().unwrap()));
+        assert!(!is_public_external_addr(
+            &"/ip6/fd00::1/tcp/15002".parse().unwrap()
+        ));
+        assert!(!is_public_external_addr(
+            &"/ip6/fe80::1/tcp/15002".parse().unwrap()
+        ));
     }
 
     #[test]
     fn filter_kad_keeps_legit_peer_tcp_addr() {
         use std::collections::HashSet;
-        let self_addrs: HashSet<String> =
-            ["/ip4/127.0.0.1/tcp/15002"].iter().map(|s| s.to_string()).collect();
+        let self_addrs: HashSet<String> = ["/ip4/127.0.0.1/tcp/15002"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         // 合法对端 TCP 地址（非本机、非通配、非 ws）→ 保留
         assert!(filter_kad_addr(
             &"/ip4/203.0.113.9/tcp/15002".parse().unwrap(),
@@ -583,8 +650,7 @@ mod tests {
             addresses: vec!["/ip4/1.2.3.4/tcp/15002".to_string()],
         };
         // 同一地址只出一个目标：raw + /p2p 变体互认去重
-        let targets =
-            build_dial_targets(&info, Some(&HashMap::new()), &HashSet::new()).unwrap();
+        let targets = build_dial_targets(&info, Some(&HashMap::new()), &HashSet::new()).unwrap();
         assert_eq!(targets.len(), 2, "raw + /p2p 变体各一个");
         assert_eq!(targets[0], "/ip4/1.2.3.4/tcp/15002");
         assert_eq!(targets[1], "/ip4/1.2.3.4/tcp/15002/p2p/12D3KooWExamplePeer");
@@ -600,8 +666,9 @@ mod tests {
                 "/ip4/8.8.8.8/tcp/15002".to_string(),
             ],
         };
-        let self_addrs: HashSet<String> =
-            ["/ip4/192.168.1.5/tcp/15002".to_string()].into_iter().collect();
+        let self_addrs: HashSet<String> = ["/ip4/192.168.1.5/tcp/15002".to_string()]
+            .into_iter()
+            .collect();
         let targets = build_dial_targets(&info, Some(&HashMap::new()), &self_addrs).unwrap();
         assert!(
             !targets.iter().any(|t| t.contains("192.168.1.5")),
@@ -612,10 +679,26 @@ mod tests {
 
     #[test]
     fn static_rank_loopback_last() {
-        assert_eq!(addr_static_rank("/ip4/192.168.31.134/tcp/15002"), 2, "私网 IPv4 tcp");
-        assert_eq!(addr_static_rank("/ip4/127.0.0.1/tcp/15002"), 5, "loopback 垫底");
-        assert_eq!(addr_static_rank("/ip6/2408::1/tcp/15002"), 0, "IPv6 公网 tcp");
-        assert_eq!(addr_static_rank("/ip6/2408::1/tcp/15002/ws"), 1, "IPv6 公网 ws");
+        assert_eq!(
+            addr_static_rank("/ip4/192.168.31.134/tcp/15002"),
+            2,
+            "私网 IPv4 tcp"
+        );
+        assert_eq!(
+            addr_static_rank("/ip4/127.0.0.1/tcp/15002"),
+            5,
+            "loopback 垫底"
+        );
+        assert_eq!(
+            addr_static_rank("/ip6/2408::1/tcp/15002"),
+            0,
+            "IPv6 公网 tcp"
+        );
+        assert_eq!(
+            addr_static_rank("/ip6/2408::1/tcp/15002/ws"),
+            1,
+            "IPv6 公网 ws"
+        );
         assert_eq!(addr_static_rank("/ip4/1.2.3.4/tcp/15002/ws"), 3, "IPv4 ws");
     }
 
@@ -631,8 +714,7 @@ mod tests {
         };
         let targets = build_dial_targets(&info, Some(&HashMap::new()), &HashSet::new()).unwrap();
         assert_eq!(
-            targets[0],
-            "/ip4/192.168.31.134/tcp/15002",
+            targets[0], "/ip4/192.168.31.134/tcp/15002",
             "私网 IPv4 tcp 在 loopback 之前"
         );
     }
@@ -652,9 +734,16 @@ mod tests {
         let mut meta = HashMap::new();
         meta.insert(
             "/ip4/1.2.3.4/tcp/15002".to_string(),
-            AddrScore { success_count: 3, last_success_at: 900, ..Default::default() },
+            AddrScore {
+                success_count: 3,
+                last_success_at: 900,
+                ..Default::default()
+            },
         );
         let targets = build_dial_targets(&info, Some(&meta), &HashSet::new()).unwrap();
-        assert_eq!(targets[0], "/ip4/1.2.3.4/tcp/15002", "success 证据优先于零分 IPv6");
+        assert_eq!(
+            targets[0], "/ip4/1.2.3.4/tcp/15002",
+            "success 证据优先于零分 IPv6"
+        );
     }
 }

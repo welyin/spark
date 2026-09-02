@@ -8,8 +8,10 @@ use serde_json::{Map, Value, json};
 
 use crate::org::OrganizationRecord;
 use crate::storage::{ScanOptions, StorageBackend};
-use crate::sync::meta::{VersionVector, compare_version_vectors, merge_version_vectors, CompareResult};
 use crate::sync::SyncResult;
+use crate::sync::meta::{
+    CompareResult, VersionVector, compare_version_vectors, merge_version_vectors,
+};
 
 use super::builtin::collection_data_prefixes;
 use super::dlog::org_dlog_entries_after;
@@ -64,8 +66,14 @@ pub fn collect_org_collections<S: StorageBackend>(
     let mut map = Map::new();
     for (name, version) in collections {
         let vv = collect_org_collection_vv(storage, org_id, name, version)?;
-        let dlog_ack =
-            super::dlog::org_dlog_get_seen(storage, org_id, name, version, recipient_root_id, recipient_peer_id)?;
+        let dlog_ack = super::dlog::org_dlog_get_seen(
+            storage,
+            org_id,
+            name,
+            version,
+            recipient_root_id,
+            recipient_peer_id,
+        )?;
         map.insert(
             format!("{name}@v{version}"),
             json!({ "vv": vv, "dlogAck": dlog_ack }),
@@ -80,9 +88,7 @@ pub fn collect_org_collections<S: StorageBackend>(
 #[derive(Clone, Debug)]
 pub enum OrgDiffOutcome {
     /// 本地落后：发 `orgsync-need`。
-    LocalBehind {
-        local_vv: VersionVector,
-    },
+    LocalBehind { local_vv: VersionVector },
     /// 本地领先：主动推 `orgsync-data`。
     LocalAhead,
     /// 并发：双向交换。
@@ -135,7 +141,12 @@ pub fn collect_org_incremental<S: StorageBackend>(
                             continue;
                         }
                     };
-                    records.push(OrgsyncRecord { key, value, meta, dseq: None });
+                    records.push(OrgsyncRecord {
+                        key,
+                        value,
+                        meta,
+                        dseq: None,
+                    });
                 }
             }
         }

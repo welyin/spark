@@ -13,7 +13,9 @@ pub fn build_dm_request(payload: &Value) -> String {
 
 /// 解析 dm 直连请求帧：合法 JSON 即放行（字段校验在 kernel 层）。
 pub fn parse_dm_request(text: &str) -> Option<Value> {
-    serde_json::from_str::<Value>(text).ok().filter(|v| v.is_object())
+    serde_json::from_str::<Value>(text)
+        .ok()
+        .filter(|v| v.is_object())
 }
 
 /// 构造 dm 应答侧错误响应帧（宿主拒绝/未实现时）。
@@ -23,7 +25,9 @@ pub fn build_dm_error_response(reason: &str) -> String {
 
 /// 解析 dm 直连响应：合法 JSON 对象即视为有应答。
 pub fn parse_dm_response(text: &str) -> Option<Value> {
-    serde_json::from_str::<Value>(text).ok().filter(|v| v.is_object())
+    serde_json::from_str::<Value>(text)
+        .ok()
+        .filter(|v| v.is_object())
 }
 
 /// 应答侧限流的豁免判定：控制类 kind（read/recall/friend-accept）与
@@ -62,13 +66,24 @@ pub fn dm_kind_is_rate_limit_exempt(kind: Option<&str>) -> bool {
     matches!(
         kind,
         Some(
-            "read" | "recall" | "friend-accept"
-                | "pdsync-hello" | "pdsync-need" | "pdsync-data"
-                | "pdsync-attachment-req" | "pdsync-attachment-resp"
-                | "orgsync-hello" | "orgsync-need" | "orgsync-data"
+            "read"
+                | "recall"
+                | "friend-accept"
+                | "pdsync-hello"
+                | "pdsync-need"
+                | "pdsync-data"
+                | "pdsync-attachment-req"
+                | "pdsync-attachment-resp"
+                | "orgsync-hello"
+                | "orgsync-need"
+                | "orgsync-data"
                 | "orgkey-deliver"
-                | "contact-sync" | "conv-sync" | "profile-sync" | "device-sync"
-                | "feed-blob-req" | "feed-blob-resp"
+                | "contact-sync"
+                | "conv-sync"
+                | "profile-sync"
+                | "device-sync"
+                | "feed-blob-req"
+                | "feed-blob-resp"
         )
     )
 }

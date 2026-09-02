@@ -49,7 +49,10 @@ pub fn orgq_queue_put<S: StorageBackend>(
         "key": key,
         "value": value,
     });
-    storage.put(&orgq_queue_key(org_id, collection, key), &record.to_string())
+    storage.put(
+        &orgq_queue_key(org_id, collection, key),
+        &record.to_string(),
+    )
 }
 
 /// 某集合全部离线写入队列条目（重放为 orgq-req 写入记录）。队列值存
@@ -110,9 +113,14 @@ pub fn orgq_queue_read_by_org<S: StorageBackend>(
     org_id: &str,
 ) -> Vec<(String, Vec<crate::sync::orgsync::OrgqWriteRecord>)> {
     let prefix = format!("orgq:queue:{org_id}:");
-    let mut by_collection: std::collections::HashMap<String, Vec<crate::sync::orgsync::OrgqWriteRecord>> =
-        std::collections::HashMap::new();
-    for (key, _) in storage.scan(&ScanOptions::prefix(&prefix)).unwrap_or_default() {
+    let mut by_collection: std::collections::HashMap<
+        String,
+        Vec<crate::sync::orgsync::OrgqWriteRecord>,
+    > = std::collections::HashMap::new();
+    for (key, _) in storage
+        .scan(&ScanOptions::prefix(&prefix))
+        .unwrap_or_default()
+    {
         let rec: Value = storage
             .get(&key)
             .ok()

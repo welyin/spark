@@ -43,9 +43,7 @@ async fn test_loop_with(
     enable_relay_server: bool,
 ) -> EventLoop<MemoryStorage> {
     let keypair = libp2p::identity::Keypair::generate_ed25519();
-    let swarm = build_swarm(&keypair, &options)
-        .await
-        .expect("build swarm");
+    let swarm = build_swarm(&keypair, &options).await.expect("build swarm");
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<Command>();
     let (event_tx, _event_rx) = mpsc::unbounded_channel();
     let (dm_completion_tx, dm_completion_rx) = mpsc::unbounded_channel();
@@ -128,11 +126,17 @@ async fn test_loop_with(
 fn dm_attempt(
     targets: &[&str],
     peer: PeerId,
-) -> (OrgAttempt, oneshot::Receiver<crate::p2p::Result<Option<Value>>>) {
+) -> (
+    OrgAttempt,
+    oneshot::Receiver<crate::p2p::Result<Option<Value>>>,
+) {
     let (tx, rx) = oneshot::channel();
     let attempt = OrgAttempt {
         kind: OrgAttemptKind::Dm,
-        targets: targets.iter().map(|s| s.to_string()).collect::<VecDeque<_>>(),
+        targets: targets
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<VecDeque<_>>(),
         batch: Vec::new(),
         current_peer: Some(peer),
         request_json: "{}".to_string(),
@@ -173,7 +177,10 @@ fn conn_established(peer: PeerId, remote: &str) -> SwarmEvent<SparkBehaviourEven
     }
 }
 
-fn conn_error(connection_id: ConnectionId, peer_id: Option<PeerId>) -> SwarmEvent<SparkBehaviourEvent> {
+fn conn_error(
+    connection_id: ConnectionId,
+    peer_id: Option<PeerId>,
+) -> SwarmEvent<SparkBehaviourEvent> {
     SwarmEvent::OutgoingConnectionError {
         connection_id,
         peer_id,
@@ -194,7 +201,10 @@ async fn conn_established_serves_dialer_and_waiter() {
     push_dialed(&mut el, b);
     assert_eq!(el.pending_org_attempts.len(), 2);
     assert!(el.pending_org_attempts[0].dial_issued, "先到者实际拨号");
-    assert!(!el.pending_org_attempts[1].dial_issued, "同地址后来者登记等待");
+    assert!(
+        !el.pending_org_attempts[1].dial_issued,
+        "同地址后来者登记等待"
+    );
     assert!(
         el.pending_org_attempts[1].waiting_base.is_some(),
         "同地址后来者登记等待"
@@ -202,7 +212,9 @@ async fn conn_established_serves_dialer_and_waiter() {
 
     el.handle_swarm_event(conn_established(peer, addr));
     assert!(
-        el.pending_org_attempts.iter().all(|a| a.in_flight.is_some()),
+        el.pending_org_attempts
+            .iter()
+            .all(|a| a.in_flight.is_some()),
         "等待者也要随已建立连接发出请求"
     );
 }
@@ -304,7 +316,10 @@ async fn connect_error_advances_by_conn_id_and_stale_pruned() {
     assert_eq!(el.pending_connects.len(), 1);
     assert_eq!(el.pending_connects[0].in_flight.len(), 3);
     assert!(
-        !el.pending_connects[0].in_flight.iter().any(|d| d.conn_id == conn),
+        !el.pending_connects[0]
+            .in_flight
+            .iter()
+            .any(|d| d.conn_id == conn),
         "失败的在途目标已移除"
     );
 
@@ -360,7 +375,10 @@ async fn rediscovery_dial_failure_attribution() {
     assert!(
         matches!(
             el.rediscovery_states.get(&peer),
-            Some(RediscoveryState::Racing { dht_query_id: Some(_), .. })
+            Some(RediscoveryState::Racing {
+                dht_query_id: Some(_),
+                ..
+            })
         ),
         "start_rediscovery 后应处于 Racing（DHT 查询在途），实际: {:?}",
         el.rediscovery_states.get(&peer)
@@ -442,7 +460,9 @@ async fn rediscovery_failure_aborts_to_idle() {
     // 竞速在途时再次触发被守卫拒绝（不重复竞速）
     el.start_rediscovery(peer);
     assert_eq!(
-        el.rediscovery_states.get(&peer).map(|s| matches!(s, RediscoveryState::Racing { .. })),
+        el.rediscovery_states
+            .get(&peer)
+            .map(|s| matches!(s, RediscoveryState::Racing { .. })),
         Some(true),
         "Racing 中重复触发应被守卫拒绝"
     );
@@ -537,8 +557,7 @@ async fn dial_timeout_advances_past_blackhole_target() {
     assert_eq!(el.pending_org_attempts.len(), 1);
     assert_eq!(el.pending_org_attempts[0].batch.len(), 1);
     assert_eq!(
-        el.pending_org_attempts[0].batch[0].addr,
-        addr2,
+        el.pending_org_attempts[0].batch[0].addr, addr2,
         "黑洞目标被移除，addr2 仍在途"
     );
     assert!(el.pending_org_attempts[0].dial_issued);
@@ -729,10 +748,7 @@ async fn connect_batch_any_success_stops_rest() {
     let conn1 = el.pending_connects[0].in_flight[0].conn_id;
     // 其中一路连通 → 收手：清空其余在途拨号
     el.handle_swarm_event(conn_established(peer, "/ip4/127.0.0.1/tcp/4201"));
-    assert!(
-        el.pending_connects.is_empty(),
-        "连通即收手，connect 终结"
-    );
+    assert!(el.pending_connects.is_empty(), "连通即收手，connect 终结");
     // 其余在途拨号的迟到失败（conn_id 已不在批次）不得误操作
     el.handle_swarm_event(conn_error(conn1, None));
     assert!(el.pending_connects.is_empty());
@@ -744,16 +760,29 @@ async fn connect_batch_full_failure_opens_next() {
     let mut el = test_loop().await;
     let peer = PeerId::random();
     // 5 个地址 → 两批（4 + 1）；构造超过批大小
-    let addresses: Vec<String> = (4201..=4205).map(|p| format!("/ip4/127.0.0.1/tcp/{p}")).collect();
+    let addresses: Vec<String> = (4201..=4205)
+        .map(|p| format!("/ip4/127.0.0.1/tcp/{p}"))
+        .collect();
     // 为控制批大小，手动构造 attempt 而非走 begin_connect（begin_connect 首批
     // 即填满 DIAL_BATCH_SIZE）
-    let (a, _rx) = dm_attempt(&addresses.iter().map(String::as_str).collect::<Vec<_>>().as_slice(), peer);
+    let (a, _rx) = dm_attempt(
+        &addresses
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .as_slice(),
+        peer,
+    );
     // 先拨第一批 4 个（DIAL_BATCH_SIZE）
     push_dialed(&mut el, a);
     assert_eq!(el.pending_org_attempts[0].batch.len(), 4, "首批 4 个在途");
     assert_eq!(el.pending_org_attempts[0].targets.len(), 1, "剩 1 个待拨");
     // 逐个失败直至本批全败 → 开下一批
-    let batch1: Vec<_> = el.pending_org_attempts[0].batch.iter().map(|d| d.conn_id).collect();
+    let batch1: Vec<_> = el.pending_org_attempts[0]
+        .batch
+        .iter()
+        .map(|d| d.conn_id)
+        .collect();
     for conn in &batch1 {
         el.handle_swarm_event(conn_error(*conn, None));
     }
@@ -859,7 +888,10 @@ async fn leaf_guards_block_exchange_and_overlay_maintenance() {
     let (tx, rx) = oneshot::channel();
     el.begin_exchange(&PeerId::random().to_base58(), tx);
     assert!(matches!(rx.await, Ok(Ok(0))), "leaf 下 exchange 返回 Ok(0)");
-    assert!(el.pending_exchange.is_empty(), "leaf 下无在途 exchange 请求");
+    assert!(
+        el.pending_exchange.is_empty(),
+        "leaf 下无在途 exchange 请求"
+    );
     // overlay 孤岛自举关闭：预置候选也不拨
     let peer = PeerId::random();
     {
@@ -911,7 +943,8 @@ async fn autonat_status_drives_relay_server_role() {
         "显式 true 初始挂载（现状兼容）"
     );
     // 公网 external 地址（R2 provide 载荷取公网段）
-    el.swarm.add_external_address("/ip4/203.0.113.1/tcp/4001".parse().unwrap());
+    el.swarm
+        .add_external_address("/ip4/203.0.113.1/tcp/4001".parse().unwrap());
 
     // Public → 角色在 + spark:relay provide 登记
     el.handle_swarm_event(autonat_status_event(
@@ -992,7 +1025,11 @@ async fn relay_pool_query_registers_candidates() {
     );
     // 模拟查询结果：provider 落候选源 + 触发拨号尝试
     let provider = PeerId::random();
-    let qid = *el.relay_pool_queries.iter().next().expect("query in flight");
+    let qid = *el
+        .relay_pool_queries
+        .iter()
+        .next()
+        .expect("query in flight");
     el.resolve_dht_providers(
         qid,
         Ok(libp2p::kad::GetProvidersOk::FoundProviders {
@@ -1194,11 +1231,12 @@ async fn relay_status_snapshot_reflects_role_and_pool() {
     let mut circuit = Multiaddr::empty();
     circuit.push(libp2p::multiaddr::Protocol::P2p(relay.into()));
     circuit.push(libp2p::multiaddr::Protocol::P2pCircuit);
-    el.relay_reservations.push(super::relay_manager::RelayReservation {
-        relay_peer: relay,
-        circuit_addr: circuit,
-        created_at: 0,
-    });
+    el.relay_reservations
+        .push(super::relay_manager::RelayReservation {
+            relay_peer: relay,
+            circuit_addr: circuit,
+            created_at: 0,
+        });
     let st = el.local_relay_status();
     assert_eq!(st.reservations.len(), 1);
     assert_eq!(st.reservations[0].peer, relay.to_base58());
@@ -1211,7 +1249,11 @@ async fn relay_status_snapshot_reflects_role_and_pool() {
 #[tokio::test]
 async fn upnp_events_drive_three_state_status() {
     let mut el = test_loop().await;
-    assert_eq!(el.local_relay_status().upnp, "unknown", "尚无事件为 unknown");
+    assert_eq!(
+        el.local_relay_status().upnp,
+        "unknown",
+        "尚无事件为 unknown"
+    );
     let mapped: Multiaddr = "/ip4/203.0.113.1/tcp/15002".parse().unwrap();
     el.handle_swarm_event(SwarmEvent::Behaviour(SparkBehaviourEvent::Upnp(
         libp2p::upnp::Event::NewExternalAddr(mapped.clone()),
@@ -1242,7 +1284,11 @@ async fn relay_pool_record_backfills_stability() {
         key: libp2p::kad::RecordKey::new(&crate::p2p::constants::SPARK_RELAY_KEY),
         providers: [low_peer, normal_peer].into_iter().collect(),
     }));
-    assert_eq!(el.relay_pool_record_queries.len(), 1, "providers 后应发起回填查询");
+    assert_eq!(
+        el.relay_pool_record_queries.len(),
+        1,
+        "providers 后应发起回填查询"
+    );
     let qid = *el.relay_pool_record_queries.iter().next().unwrap();
     // 构造带 stability:"low" 的提供记录回填
     let hint = RelayProviderHint {
@@ -1252,15 +1298,17 @@ async fn relay_pool_record_backfills_stability() {
     };
     el.resolve_dht_get(
         qid,
-        Ok(libp2p::kad::GetRecordOk::FoundRecord(libp2p::kad::PeerRecord {
-            peer: None,
-            record: libp2p::kad::Record {
-                key: libp2p::kad::RecordKey::new(&crate::p2p::constants::SPARK_RELAY_KEY),
-                value: hint.to_record_value(),
-                publisher: None,
-                expires: None,
+        Ok(libp2p::kad::GetRecordOk::FoundRecord(
+            libp2p::kad::PeerRecord {
+                peer: None,
+                record: libp2p::kad::Record {
+                    key: libp2p::kad::RecordKey::new(&crate::p2p::constants::SPARK_RELAY_KEY),
+                    value: hint.to_record_value(),
+                    publisher: None,
+                    expires: None,
+                },
             },
-        })),
+        )),
     );
     assert_eq!(
         el.relay_pool_stability.get(&low_peer),

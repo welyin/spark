@@ -275,9 +275,8 @@ pub fn build_signed_announce(
 ) -> std::result::Result<(PluginAnnounce, String), String> {
     use ed25519_dalek::Signer as _;
 
-    let field_invalid = |field: &str, reason: &str| {
-        format!("Plugin announce field invalid: {field}: {reason}")
-    };
+    let field_invalid =
+        |field: &str, reason: &str| format!("Plugin announce field invalid: {field}: {reason}");
     if !announce_id_valid(&input.id) {
         return Err(format!("Plugin announce id invalid: {}", input.id));
     }
@@ -331,12 +330,12 @@ impl SlidingWindowLimiter {
 
     /// 命中限流返回 true；未命中则记录本次。
     fn is_rate_limited(&mut self, peer: &str, now_ms: i64) -> bool {
-        if !self.hits.contains_key(peer) && self.hits.len() >= PLUGIN_ANNOUNCE_RATE_LIMIT_TRACKED_PEERS
+        if !self.hits.contains_key(peer)
+            && self.hits.len() >= PLUGIN_ANNOUNCE_RATE_LIMIT_TRACKED_PEERS
         {
             let window = self.window_ms;
-            self.hits.retain(|_, q| {
-                q.back().is_some_and(|last| now_ms - *last < window)
-            });
+            self.hits
+                .retain(|_, q| q.back().is_some_and(|last| now_ms - *last < window));
             if self.hits.len() >= PLUGIN_ANNOUNCE_RATE_LIMIT_TRACKED_PEERS {
                 self.hits.clear();
             }
@@ -611,28 +610,34 @@ impl<'a, S: StorageBackend> PluginAnnounceStore<'a, S> {
                 AnnounceUpsert::Duplicate
             }
             Some(e) => {
-                self.save(&PluginAnnounceIndexEntry {
-                    announce: announce.clone(),
-                    first_seen_at: e.first_seen_at,
-                    updated_at: now_ms,
-                    verified: AnnounceVerified::Pending,
-                    verify_error: String::new(),
-                    verified_at: 0,
-                    // 新声明到达：旧核查结论与校正字段一并作废
-                    corrected: None,
-                }, now_ms)?;
+                self.save(
+                    &PluginAnnounceIndexEntry {
+                        announce: announce.clone(),
+                        first_seen_at: e.first_seen_at,
+                        updated_at: now_ms,
+                        verified: AnnounceVerified::Pending,
+                        verify_error: String::new(),
+                        verified_at: 0,
+                        // 新声明到达：旧核查结论与校正字段一并作废
+                        corrected: None,
+                    },
+                    now_ms,
+                )?;
                 AnnounceUpsert::Replaced
             }
             None => {
-                self.save(&PluginAnnounceIndexEntry {
-                    announce: announce.clone(),
-                    first_seen_at: now_ms,
-                    updated_at: now_ms,
-                    verified: AnnounceVerified::Pending,
-                    verify_error: String::new(),
-                    verified_at: 0,
-                    corrected: None,
-                }, now_ms)?;
+                self.save(
+                    &PluginAnnounceIndexEntry {
+                        announce: announce.clone(),
+                        first_seen_at: now_ms,
+                        updated_at: now_ms,
+                        verified: AnnounceVerified::Pending,
+                        verify_error: String::new(),
+                        verified_at: 0,
+                        corrected: None,
+                    },
+                    now_ms,
+                )?;
                 AnnounceUpsert::Inserted
             }
         };
@@ -769,7 +774,9 @@ mod tests {
         let mut s = MemoryStorage::new();
         {
             let mut store = PluginAnnounceStore::new(&mut s).with_node_id("node-pc");
-            let outcome = store.upsert(&sample_announce("com.example.a"), 1000).unwrap();
+            let outcome = store
+                .upsert(&sample_announce("com.example.a"), 1000)
+                .unwrap();
             assert_eq!(outcome, AnnounceUpsert::Inserted);
         }
         let meta = get_personal_meta(&s, "mkt:ann:com.example.a")

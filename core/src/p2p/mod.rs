@@ -74,9 +74,14 @@ pub enum P2pError {
     #[error("dial failed: {0}")]
     Dial(String),
 
-    /// 协议读写失败或超时。
+    /// 协议读写失败。
     #[error("protocol error: {0}")]
     Protocol(String),
+
+    /// 超时（命令通道/协议等待超预算；F6 评审建议落地——与协议错误分变体，
+    /// 监控与重试策略可区分「对端不应答」与「协议损坏」）。
+    #[error("timeout: {0}")]
+    Timeout(String),
 
     /// libp2p 装配错误。
     #[error("swarm error: {0}")]

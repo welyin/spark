@@ -12,8 +12,7 @@ fn key() -> [u8; 32] {
 #[test]
 fn encrypt_decrypt_roundtrip() {
     let k = key();
-    let enc = encrypt_value("org_x", "fin:pay@v1.0.0", "2026-08", 1, &k, r#"{"a":1}"#)
-        .unwrap();
+    let enc = encrypt_value("org_x", "fin:pay@v1.0.0", "2026-08", 1, &k, r#"{"a":1}"#).unwrap();
     assert_eq!(enc["epoch"], json!(1));
     assert!(enc["nonce"].is_string());
     assert!(enc["ct"].is_string());
@@ -115,7 +114,10 @@ fn epoch_key_roundtrip() {
     let mut store = crate::storage::MemoryStorage::new();
     let k = [3u8; 32];
     put_epoch_key(&mut store, "org_01", "fin:pay", "1", 2, &k);
-    assert_eq!(get_epoch_key(&store, "org_01", "fin:pay", "1", 2).unwrap(), k);
+    assert_eq!(
+        get_epoch_key(&store, "org_01", "fin:pay", "1", 2).unwrap(),
+        k
+    );
     assert!(get_epoch_key(&store, "org_01", "fin:pay", "1", 3).is_none());
 }
 
@@ -129,22 +131,49 @@ fn box_unbox_roundtrip() {
     let owner_pub = ed_pk_to_x25519(&owner_sk.verifying_key().to_bytes()).unwrap();
     let epoch_key = [9u8; 32];
     let ctx = ("org_01", "fin:pay@v1", "owner-root", "reader-root");
-    let (wrapped, nonce24) =
-        box_epoch_key(&epoch_key, &recipient_pub, &owner_x, ctx.0, ctx.1, ctx.2, ctx.3)
-            .unwrap();
-    let got = unbox_epoch_key(&wrapped, &nonce24, &owner_pub, &recipient_x, ctx.0, ctx.1, ctx.2, ctx.3)
-        .unwrap();
+    let (wrapped, nonce24) = box_epoch_key(
+        &epoch_key,
+        &recipient_pub,
+        &owner_x,
+        ctx.0,
+        ctx.1,
+        ctx.2,
+        ctx.3,
+    )
+    .unwrap();
+    let got = unbox_epoch_key(
+        &wrapped,
+        &nonce24,
+        &owner_pub,
+        &recipient_x,
+        ctx.0,
+        ctx.1,
+        ctx.2,
+        ctx.3,
+    )
+    .unwrap();
     assert_eq!(got, epoch_key);
     // 第三方解不开（用另一个私钥）
     let evil_x = ed_sk_to_x25519(&[0u8; 32]);
     assert!(
-        unbox_epoch_key(&wrapped, &nonce24, &owner_pub, &evil_x, ctx.0, ctx.1, ctx.2, ctx.3)
-            .is_none()
+        unbox_epoch_key(
+            &wrapped, &nonce24, &owner_pub, &evil_x, ctx.0, ctx.1, ctx.2, ctx.3
+        )
+        .is_none()
     );
     // H1b：域分隔——换集合上下文后 unbox 失败（同一 DH 共享不跨上下文复用）
     assert!(
-        unbox_epoch_key(&wrapped, &nonce24, &owner_pub, &recipient_x, ctx.0, "other@v1", ctx.2, ctx.3)
-            .is_none(),
+        unbox_epoch_key(
+            &wrapped,
+            &nonce24,
+            &owner_pub,
+            &recipient_x,
+            ctx.0,
+            "other@v1",
+            ctx.2,
+            ctx.3
+        )
+        .is_none(),
         "域分隔：换 collection 上下文解不开"
     );
 }
@@ -299,14 +328,18 @@ fn orgkey_pending_key_outside_sync_namespace() {
     );
     s.put(&key, "1700").unwrap();
     assert!(
-        crate::sync::get_personal_meta(s.raw(), &key).unwrap().is_none(),
+        crate::sync::get_personal_meta(s.raw(), &key)
+            .unwrap()
+            .is_none(),
         "版本化句柄写 pending 不产生 pmeta"
     );
     // 重投删除后不残留（无孤儿 pmeta 可留——从未产生）
     s.delete(&key).unwrap();
     assert!(s.get(&key).unwrap().is_none());
     assert!(
-        crate::sync::get_personal_meta(s.raw(), &key).unwrap().is_none(),
+        crate::sync::get_personal_meta(s.raw(), &key)
+            .unwrap()
+            .is_none(),
         "删除后无孤儿 pmeta"
     );
     // 暂存键同口径（§7.1 本地键）
@@ -314,29 +347,35 @@ fn orgkey_pending_key_outside_sync_namespace() {
     assert!(crate::sync::pdsync::category_for_key(&stash).is_none());
 }
 
-/// F3 残余 §7.1：暂存键 put/scan/remove 往返 + 同键 ts 新者覆盖（去重）。
+/// F3 残余 §7.1 + batch1 §1：暂存键 put/scan/remove 往返 + 同键 stashedAt
+/// 新者覆盖（去重）+ 24h 老化清扫。
 #[test]
-fn orgkey_stash_roundtrip_and_ts_overwrite() {
+fn orgkey_stash_roundtrip_overwrite_and_aging() {
     let mut store = crate::storage::MemoryStorage::new();
     let org = "org_0000000000000001";
     let col = "ai-chat:payroll@v1.0.0"; // 含 `:` 分隔符（右向解析）
     let sender = "s".repeat(64);
     let body_old = json!({"orgId": org, "collection": col, "epoch": 2, "ts": 1000});
     let body_new = json!({"orgId": org, "collection": col, "epoch": 2, "ts": 2000});
-    orgkey_stash_put(&mut store, org, col, &sender, 2, &body_old);
-    orgkey_stash_put(&mut store, org, col, &sender, 2, &body_new);
+    // 去重按本地接收时刻（stashedAt）：后收到的覆盖
+    orgkey_stash_put(&mut store, org, col, &sender, 2, &body_old, 10_000);
+    orgkey_stash_put(&mut store, org, col, &sender, 2, &body_new, 20_000);
     let stashed = orgkey_stash_for_org(&store, org);
     assert_eq!(stashed.len(), 1, "同键去重");
     assert_eq!(stashed[0].0, col);
     assert_eq!(stashed[0].1, sender);
     assert_eq!(stashed[0].2, 2);
-    assert_eq!(stashed[0].3, serde_json::to_string(&body_new).unwrap(), "ts 新者覆盖");
-    // 旧 ts 不回覆盖
-    orgkey_stash_put(&mut store, org, col, &sender, 2, &body_old);
+    assert_eq!(
+        stashed[0].3,
+        serde_json::to_string(&body_new).unwrap(),
+        "stashedAt 新者覆盖"
+    );
+    // 更旧的接收时刻不回覆盖
+    orgkey_stash_put(&mut store, org, col, &sender, 2, &body_old, 15_000);
     assert_eq!(
         orgkey_stash_for_org(&store, org)[0].3,
         serde_json::to_string(&body_new).unwrap(),
-        "旧 ts 不覆盖新者"
+        "旧 stashedAt 不覆盖新者"
     );
     // 换 org 扫描不到；删除后消失
     assert!(orgkey_stash_for_org(&store, "org_other").is_empty());
@@ -348,4 +387,45 @@ fn orgkey_stash_roundtrip_and_ts_overwrite() {
             .unwrap()
             .is_none()
     );
+
+    // 老化（batch1 §1 卫生层）：接收时刻超 24h 的条目在写入/重评估时点清除
+    let aged_sender = "a".repeat(64);
+    let now = 100 * ORGKEY_STASH_MAX_AGE_MS;
+    orgkey_stash_put(
+        &mut store,
+        org,
+        col,
+        &aged_sender,
+        1,
+        &body_old,
+        now - ORGKEY_STASH_MAX_AGE_MS - 1,
+    );
+    assert_eq!(orgkey_stash_count(&store, org), 1);
+    // 第二次写入（now 时点）顺手清扫 → 老化条目已清
+    orgkey_stash_put(&mut store, org, col, &sender, 3, &body_new, now);
+    assert_eq!(
+        orgkey_stash_count(&store, org),
+        1,
+        "写入时点顺手清除老化条目"
+    );
+    let swept = orgkey_stash_age_sweep(&mut store, org, now);
+    assert_eq!(swept, 0, "显式清扫幂等（已无老化条目）");
+    // 剩余的是未过期条目
+    let rest = orgkey_stash_for_org(&store, org);
+    assert_eq!(rest.len(), 1);
+    assert_eq!(rest[0].2, 3, "未过期条目保留");
+}
+
+/// batch1 §1 容量闸：per-org 256 条上限的计数基元。
+#[test]
+fn orgkey_stash_count_tracks_entries() {
+    let mut store = crate::storage::MemoryStorage::new();
+    let org = "org_0000000000000001";
+    let body = json!({"orgId": org, "collection": "c@v1", "epoch": 1, "ts": 1});
+    assert_eq!(orgkey_stash_count(&store, org), 0);
+    for epoch in 1..=3u64 {
+        orgkey_stash_put(&mut store, org, "c@v1", &"s".repeat(64), epoch, &body, 1000);
+    }
+    assert_eq!(orgkey_stash_count(&store, org), 3);
+    assert_eq!(orgkey_stash_count(&store, "org_other"), 0);
 }

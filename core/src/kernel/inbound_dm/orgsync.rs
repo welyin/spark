@@ -93,7 +93,9 @@ pub(super) fn handle_orgsync_hello<S: StorageBackend>(
             .get(&decl_key)
             .ok()
             .flatten()
-            .and_then(|raw| serde_json::from_str::<crate::plugindata::CollectionDeclaration>(&raw).ok())
+            .and_then(|raw| {
+                serde_json::from_str::<crate::plugindata::CollectionDeclaration>(&raw).ok()
+            })
             .map(|d| d.accounts)
             .unwrap_or_default();
 
@@ -114,40 +116,50 @@ pub(super) fn handle_orgsync_hello<S: StorageBackend>(
 
         let diff = crate::sync::orgsync::diff_org_collection(&local_vv, remote_vv);
         // 我对对端删除日志的已收序号（B6：按 (rootId=from, peerId) 设备粒度）
-        let my_seen =
-            crate::sync::orgsync::org_dlog_get_seen(storage, &org_id, name, version, from, ctx.remote_peer_id)
-                .unwrap_or(0);
+        let my_seen = crate::sync::orgsync::org_dlog_get_seen(
+            storage,
+            &org_id,
+            name,
+            version,
+            from,
+            ctx.remote_peer_id,
+        )
+        .unwrap_or(0);
 
         // 推进对端回执水位 + 尝试 GC（B6：水位按 (from, peerId) 设备粒度）
         if *remote_dlog_ack > 0 {
             let _ = crate::sync::orgsync::org_dlog_set_watermark(
-                storage, &org_id, name, version, from, ctx.remote_peer_id, *remote_dlog_ack,
+                storage,
+                &org_id,
+                name,
+                version,
+                from,
+                ctx.remote_peer_id,
+                *remote_dlog_ack,
             );
             // 尝试 GC
-            let members =
-                crate::sync::orgsync::replication_group_members(&record, accounts);
+            let members = crate::sync::orgsync::replication_group_members(&record, accounts);
             if let Ok(threshold) = crate::sync::orgsync::org_dlog_gc_threshold(
-                storage, &org_id, name, version, &members, ctx.my_root_id,
+                storage,
+                &org_id,
+                name,
+                version,
+                &members,
+                ctx.my_root_id,
             ) {
                 if let Ok(removed) =
                     crate::sync::orgsync::org_dlog_gc(storage, &org_id, name, version, threshold)
                     && removed > 0
                 {
-                    log::info!(
-                        "[ORGSYNC] dlog gc | org={org_id} col={col_full} removed={removed}"
-                    );
+                    log::info!("[ORGSYNC] dlog gc | org={org_id} col={col_full} removed={removed}");
                 }
             }
         }
 
         match diff {
             crate::sync::orgsync::OrgDiffOutcome::LocalBehind { local_vv } => {
-                let need_body = crate::sync::orgsync::build_orgsync_need(
-                    &org_id,
-                    col_full,
-                    &local_vv,
-                    my_seen,
-                );
+                let need_body =
+                    crate::sync::orgsync::build_orgsync_need(&org_id, col_full, &local_vv, my_seen);
                 out.push(OrgsyncOut::Need {
                     to_root_id: from.to_string(),
                     body: need_body,
@@ -167,12 +179,8 @@ pub(super) fn handle_orgsync_hello<S: StorageBackend>(
                 );
             }
             crate::sync::orgsync::OrgDiffOutcome::Concurrent => {
-                let need_body = crate::sync::orgsync::build_orgsync_need(
-                    &org_id,
-                    col_full,
-                    &local_vv,
-                    my_seen,
-                );
+                let need_body =
+                    crate::sync::orgsync::build_orgsync_need(&org_id, col_full, &local_vv, my_seen);
                 out.push(OrgsyncOut::Need {
                     to_root_id: from.to_string(),
                     body: need_body,
@@ -192,7 +200,11 @@ pub(super) fn handle_orgsync_hello<S: StorageBackend>(
             crate::sync::orgsync::OrgDiffOutcome::Equal => {
                 // 墓碑独立补推
                 let Ok(tombs) = crate::sync::orgsync::collect_org_tombstones_after(
-                    storage, &org_id, name, version, *remote_dlog_ack,
+                    storage,
+                    &org_id,
+                    name,
+                    version,
+                    *remote_dlog_ack,
                 ) else {
                     continue;
                 };
@@ -281,11 +293,22 @@ pub(super) fn handle_orgsync_need<S: StorageBackend>(
     // 对齐 pdsync ack_remote_journal 两路 GC——need 是另一条回执通道）
     if dlog_ack > 0 {
         let _ = crate::sync::orgsync::org_dlog_set_watermark(
-            storage, &org_id, name, version, from, ctx.remote_peer_id, dlog_ack,
+            storage,
+            &org_id,
+            name,
+            version,
+            from,
+            ctx.remote_peer_id,
+            dlog_ack,
         );
         let members = crate::sync::orgsync::replication_group_members(&record, accounts);
         if let Ok(threshold) = crate::sync::orgsync::org_dlog_gc_threshold(
-            storage, &org_id, name, version, &members, ctx.my_root_id,
+            storage,
+            &org_id,
+            name,
+            version,
+            &members,
+            ctx.my_root_id,
         ) {
             if let Ok(removed) =
                 crate::sync::orgsync::org_dlog_gc(storage, &org_id, name, version, threshold)
@@ -312,9 +335,8 @@ pub(super) fn handle_orgsync_need<S: StorageBackend>(
     let total = batches.len();
     let mut out = Vec::with_capacity(total);
     for (i, batch) in batches.into_iter().enumerate() {
-        let body = crate::sync::orgsync::build_orgsync_data_batch(
-            &org_id, &col_full, &batch, i, total,
-        );
+        let body =
+            crate::sync::orgsync::build_orgsync_data_batch(&org_id, &col_full, &batch, i, total);
         out.push(OrgsyncOut::Data {
             to_root_id: from.to_string(),
             body,
@@ -348,9 +370,7 @@ pub(super) fn handle_orgsync_data<S: StorageBackend>(
     from: &str,
     body: &Value,
 ) -> Result<InboundDmResult> {
-    let Some((org_id, col_full, records)) =
-        crate::sync::orgsync::parse_orgsync_data(body)
-    else {
+    let Some((org_id, col_full, records)) = crate::sync::orgsync::parse_orgsync_data(body) else {
         return done(fail_response("invalid-body"), Vec::new());
     };
 
@@ -395,9 +415,7 @@ pub(super) fn handle_orgsync_data<S: StorageBackend>(
     // O4：授权名单（org:acl:）为 all-members 系统数据，随本集合组织流量同步。
     let coll_acl_prefix = crate::sync::orgsync::acl_key(&org_id, name, version);
     for record_item in &records {
-        let valid = data_prefixes
-            .iter()
-            .any(|p| record_item.key.starts_with(p))
+        let valid = data_prefixes.iter().any(|p| record_item.key.starts_with(p))
             || record_item.key.starts_with(&coll_decl_prefix)
             || record_item.key.starts_with(&coll_acl_prefix);
         if !valid {
@@ -421,12 +439,16 @@ pub(super) fn handle_orgsync_data<S: StorageBackend>(
     // 声明会创世锚失败整批拒收、声明永不落地、下轮同序同败（死锁）。两趟
     // 稳定排序：acl 记录一律最后处理（max_dseq 是 max 聚合，与顺序无关）。
     let mut ordered: Vec<&crate::sync::orgsync::OrgsyncRecord> = Vec::with_capacity(records.len());
-    ordered.extend(records.iter().filter(|r| {
-        crate::sync::orgsync::parse_acl_key(&r.key).is_none()
-    }));
-    ordered.extend(records.iter().filter(|r| {
-        crate::sync::orgsync::parse_acl_key(&r.key).is_some()
-    }));
+    ordered.extend(
+        records
+            .iter()
+            .filter(|r| crate::sync::orgsync::parse_acl_key(&r.key).is_none()),
+    );
+    ordered.extend(
+        records
+            .iter()
+            .filter(|r| crate::sync::orgsync::parse_acl_key(&r.key).is_some()),
+    );
     for record_item in ordered {
         if let Some(dseq) = record_item.dseq {
             max_dseq = Some(max_dseq.map_or(dseq, |m: u64| m.max(dseq)));
@@ -451,9 +473,24 @@ pub(super) fn handle_orgsync_data<S: StorageBackend>(
                 );
                 return done(fail_response("acl-scope-mismatch"), Vec::new());
             }
+            // batch1 §2（f123 建议 2）：acl 验签读**最新**成员表——同批
+            // org:meta（携带 signer accessKey）已先合入（两趟排序 acl 最后），
+            // 函数入口快照不含它；重读见到的是过了全部既有闸（复制组 + 白名单
+            // + F1 合并 accessKey 写一次守卫）的快照。
+            let fresh_record = match OrganizationService::get_record(storage, &a_org_id) {
+                Ok(Some(r)) => r,
+                _ => record.clone(), // 记录异常缺失/损坏 → 回退入口快照（不会更糟）
+            };
             if let Some(reason) = apply_acl_record_verified(
-                storage, &record, from, &a_org_id, &a_name, &a_version,
-                &record_item.value, &record_item.meta, ctx.now_ms,
+                storage,
+                &fresh_record,
+                from,
+                &a_org_id,
+                &a_name,
+                &a_version,
+                &record_item.value,
+                &record_item.meta,
+                ctx.now_ms,
             )? {
                 log::info!(
                     "[ORGSYNC] acl rejected | org={org_id} col={col_full} from={} reason={}",
@@ -464,7 +501,9 @@ pub(super) fn handle_orgsync_data<S: StorageBackend>(
             }
             // F3 残余 §7.1：acl 合入（含本地胜出保留——acl 可能此前已更新）
             // 后重评估 orgkey-deliver 暂存
-            stash_unboxes.extend(super::orgkey::reevaluate_orgkey_stash(storage, ctx, &org_id)?);
+            stash_unboxes.extend(super::orgkey::reevaluate_orgkey_stash(
+                storage, ctx, &org_id,
+            )?);
             continue;
         }
 
@@ -475,15 +514,20 @@ pub(super) fn handle_orgsync_data<S: StorageBackend>(
             && !crate::sync::is_tombstone(&record_item.meta)
         {
             if apply_org_meta_record_merged(
-                storage, &record_item.key, &record_item.value, &record_item.meta, from,
+                storage,
+                &record_item.key,
+                &record_item.value,
+                &record_item.meta,
+                from,
             )? {
                 log::info!(
                     "[ORGSYNC] data applied | org={org_id} col={col_full} key={}",
                     record_item.key
                 );
                 // F3 残余 §7.1：org:meta（成员表 accessKey 段）合入后重评估暂存
-                stash_unboxes
-                    .extend(super::orgkey::reevaluate_orgkey_stash(storage, ctx, &org_id)?);
+                stash_unboxes.extend(super::orgkey::reevaluate_orgkey_stash(
+                    storage, ctx, &org_id,
+                )?);
             }
             continue;
         }
@@ -491,11 +535,13 @@ pub(super) fn handle_orgsync_data<S: StorageBackend>(
         // F2-P2：集合声明记录（org:coll:）合入走确定性收敛（同策略按
         // (declaredAt, declaredBy) 小者胜、败方原位替换不 bump 本机分量；
         // 策略冲突保留先见者），替代整值 LWW/「保留先见者」。
-        if record_item.key.starts_with("org:coll:")
-            && !crate::sync::is_tombstone(&record_item.meta)
+        if record_item.key.starts_with("org:coll:") && !crate::sync::is_tombstone(&record_item.meta)
         {
             crate::plugindata::apply_org_decl_convergent(
-                storage, &record_item.key, &record_item.value, &record_item.meta,
+                storage,
+                &record_item.key,
+                &record_item.value,
+                &record_item.meta,
             )?;
             continue;
         }
@@ -516,7 +562,11 @@ pub(super) fn handle_orgsync_data<S: StorageBackend>(
                 // 远端墓碑落地 → 补登 org 域 dlog（作用域
                 // dlog:org:{orgId}:{name}@v{version}），保证接力传播
                 let (_seq, dlog_ops) = crate::sync::orgsync::org_dlog_append_ops(
-                    storage, &org_id, name, version, &record_item.key,
+                    storage,
+                    &org_id,
+                    name,
+                    version,
+                    &record_item.key,
                 )?;
                 let mut ops = dlog_ops;
                 // F5：存量组织键（内建 all-members 集合键域 org:meta/ct:org，
@@ -535,9 +585,7 @@ pub(super) fn handle_orgsync_data<S: StorageBackend>(
                     let (_pseq, p_ops) = crate::sync::dlog::append_ops(storage, &record_item.key)?;
                     ops.extend(p_ops);
                 }
-                storage
-                    .batch(ops)
-                    .map_err(crate::sync::SyncError::from)?;
+                storage.batch(ops).map_err(crate::sync::SyncError::from)?;
             }
             log::info!(
                 "[ORGSYNC] data applied | org={org_id} col={col_full} key={}",
@@ -551,22 +599,30 @@ pub(super) fn handle_orgsync_data<S: StorageBackend>(
     if let Some(dseq) = max_dseq {
         // B6：已收序号按 (from, peerId) 设备粒度
         let _ = crate::sync::orgsync::org_dlog_set_seen(
-            storage, &org_id, name, version, from, ctx.remote_peer_id, dseq,
+            storage,
+            &org_id,
+            name,
+            version,
+            from,
+            ctx.remote_peer_id,
+            dseq,
         );
         // 立即回发 need 携带 dlogAck
-        let local_vv = crate::sync::orgsync::collect_org_collection_vv(
-            storage, &org_id, name, version,
-        )
-        .unwrap_or_default();
+        let local_vv =
+            crate::sync::orgsync::collect_org_collection_vv(storage, &org_id, name, version)
+                .unwrap_or_default();
         let seen = crate::sync::orgsync::org_dlog_get_seen(
-            storage, &org_id, name, version, from, ctx.remote_peer_id,
+            storage,
+            &org_id,
+            name,
+            version,
+            from,
+            ctx.remote_peer_id,
         )
         .unwrap_or(0);
         out.push(OrgsyncOut::Need {
             to_root_id: from.to_string(),
-            body: crate::sync::orgsync::build_orgsync_need(
-                &org_id, &col_full, &local_vv, seen,
-            ),
+            body: crate::sync::orgsync::build_orgsync_need(&org_id, &col_full, &local_vv, seen),
         });
     }
 
@@ -618,11 +674,10 @@ fn apply_org_meta_record_merged<S: StorageBackend>(
         let value_str = serde_json::to_string(value)?;
         let r = crate::sync::apply_personal_remote_no_dlog(storage, key, &value_str, remote_meta)?;
         if r.did_apply() && !local_members.is_empty() {
-            let incoming_members: Vec<String> = serde_json::from_value::<OrganizationRecord>(
-                value.clone(),
-            )
-            .map(|r| r.members.iter().map(|m| m.root_id.clone()).collect())
-            .unwrap_or_default();
+            let incoming_members: Vec<String> =
+                serde_json::from_value::<OrganizationRecord>(value.clone())
+                    .map(|r| r.members.iter().map(|m| m.root_id.clone()).collect())
+                    .unwrap_or_default();
             let missing: Vec<String> = local_members
                 .iter()
                 .filter(|m| !incoming_members.contains(m))
@@ -730,7 +785,9 @@ fn apply_acl_record_verified<S: StorageBackend>(
             .get(&decl_key)
             .ok()
             .flatten()
-            .and_then(|raw| serde_json::from_str::<crate::plugindata::CollectionDeclaration>(&raw).ok())
+            .and_then(|raw| {
+                serde_json::from_str::<crate::plugindata::CollectionDeclaration>(&raw).ok()
+            })
             .and_then(|d| d.declared_by);
         if declared_by.as_deref() != Some(from) {
             return Ok(Some("acl-genesis-signer-not-declared-by".to_string()));
@@ -783,12 +840,9 @@ fn apply_acl_record_verified<S: StorageBackend>(
 
 /// F5 幂等判定：个人域 dlog（`dlog:entry:{seq}` → record_key）是否已含该
 /// 记录键——远端存量组织键墓碑补登个人 dlog 前检查，防同一删除双写。
-fn personal_dlog_has_entry<S: StorageBackend>(
-    storage: &S,
-    record_key: &str,
-) -> Result<bool> {
-    let entries = crate::sync::dlog::entries_after(storage, 0)
-        .map_err(crate::sync::SyncError::from)?;
+fn personal_dlog_has_entry<S: StorageBackend>(storage: &S, record_key: &str) -> Result<bool> {
+    let entries =
+        crate::sync::dlog::entries_after(storage, 0).map_err(crate::sync::SyncError::from)?;
     Ok(entries.iter().any(|(_, k)| k == record_key))
 }
 
@@ -832,12 +886,8 @@ fn flush_orgq_offline_queue<S: StorageBackend>(
             from,
             ctx.now_ms + seq as i64,
         );
-        let body = crate::sync::orgsync::build_orgq_write_req(
-            org_id,
-            &collection,
-            &records,
-            &request_id,
-        );
+        let body =
+            crate::sync::orgsync::build_orgq_write_req(org_id, &collection, &records, &request_id);
         out.push(OrgsyncOut::OrgqReq {
             to_root_id: from.to_string(),
             body,
@@ -868,9 +918,8 @@ fn push_org_collection_data<S: StorageBackend>(
     );
     let total = batches.len();
     for (i, batch) in batches.into_iter().enumerate() {
-        let body = crate::sync::orgsync::build_orgsync_data_batch(
-            org_id, col_full, &batch, i, total,
-        );
+        let body =
+            crate::sync::orgsync::build_orgsync_data_batch(org_id, col_full, &batch, i, total);
         out.push(OrgsyncOut::Data {
             to_root_id: to_root_id.to_string(),
             body,
@@ -1147,7 +1196,8 @@ mod tests {
             Some(org_id),
         )
         .unwrap();
-        s.put(&decl_key, &serde_json::to_string(&decl).unwrap()).unwrap();
+        s.put(&decl_key, &serde_json::to_string(&decl).unwrap())
+            .unwrap();
         s.put(
             &format!("pmeta:{decl_key}"),
             &serde_json::to_string(&meta("node-a", 1)).unwrap(),
@@ -1196,7 +1246,11 @@ mod tests {
         handle_orgsync_data(&mut s, &c, "member-a", &body2).unwrap();
         assert_eq!(s.get(key).unwrap().as_deref(), Some("\"member-value\""));
         let stored2 = crate::sync::get_personal_meta(&s, key).unwrap().unwrap();
-        assert_eq!(stored2.vv.get("node-a"), Some(&1), "同 vv 重复到达不重复 bump");
+        assert_eq!(
+            stored2.vv.get("node-a"),
+            Some(&1),
+            "同 vv 重复到达不重复 bump"
+        );
     }
 
     /// F5：远端合入**存量组织键**（内建集合键域 ct:org:）墓碑 → org dlog 与
@@ -1225,7 +1279,8 @@ mod tests {
             Some(org_id),
         )
         .unwrap();
-        s.put(&decl_key, &serde_json::to_string(&decl).unwrap()).unwrap();
+        s.put(&decl_key, &serde_json::to_string(&decl).unwrap())
+            .unwrap();
         s.put(
             &format!("pmeta:{decl_key}"),
             &serde_json::to_string(&meta("node-a", 1)).unwrap(),
@@ -1255,8 +1310,9 @@ mod tests {
         );
         handle_orgsync_data(&mut s, &c, "member-a", &body).unwrap();
         // org dlog 有（接力）
-        let org_entries = crate::sync::orgsync::org_dlog_entries_after(&s, org_id, "org:contacts", "1", 0)
-            .unwrap();
+        let org_entries =
+            crate::sync::orgsync::org_dlog_entries_after(&s, org_id, "org:contacts", "1", 0)
+                .unwrap();
         assert_eq!(org_entries.len(), 1, "存量键墓碑登 org dlog");
         assert_eq!(org_entries[0].1, key);
         // 个人域 dlog 也有（pdsync 自设备同步）
@@ -1295,7 +1351,8 @@ mod tests {
             Some(org_id),
         )
         .unwrap();
-        s.put(&decl_key, &serde_json::to_string(&decl).unwrap()).unwrap();
+        s.put(&decl_key, &serde_json::to_string(&decl).unwrap())
+            .unwrap();
         s.put(
             &format!("pmeta:{decl_key}"),
             &serde_json::to_string(&meta("node-a", 1)).unwrap(),
@@ -1352,9 +1409,9 @@ mod tests {
     /// 本地；未发布 accessKey 的成员发起的变更 → 拒绝并保留本地。
     #[test]
     fn orgsync_acl_verified_merge_positive_and_negative() {
+        use crate::identity::derive_domain_identity;
         use base64::Engine as _;
         use base64::engine::general_purpose::STANDARD as B64;
-        use crate::identity::derive_domain_identity;
 
         let org_id = "org_0000000000000001";
         let name = "ai-chat:finance";
@@ -1512,7 +1569,13 @@ mod tests {
         // (c) 负向：未发布 accessKey 的成员（self 本机无 accessKey）发起的变更
         // → acl-signer-no-access-key 拒绝，本地保留
         let self_payload = crate::sync::orgsync::acl_sign_payload(
-            1, org_id, &col_full, &[self_root.clone()], &[self_root.clone()], None, 300,
+            1,
+            org_id,
+            &col_full,
+            &[self_root.clone()],
+            &[self_root.clone()],
+            None,
+            300,
         );
         // 用 owner 的域身份签（self 无域身份可用；重点是走「无 accessKey」分支）
         let self_sig = crate::sync::orgsync::acl_sign(&owner_domain.signing_key, &self_payload);
@@ -1549,9 +1612,9 @@ mod tests {
     /// - 合入 acl 的 epoch 低于本地当前 epoch（非 reset）→ 拒绝降级。
     #[test]
     fn orgsync_acl_genesis_anchor_time_window_and_epoch_monotonic() {
+        use crate::identity::derive_domain_identity;
         use base64::Engine as _;
         use base64::engine::general_purpose::STANDARD as B64;
-        use crate::identity::derive_domain_identity;
 
         let org_id = "org_0000000000000001";
         let name = "ai-chat:fin2";
@@ -1560,10 +1623,8 @@ mod tests {
         // 声明者 = owner（declaredBy），攻击者 = other（有 accessKey 但非声明者）
         let owner_seed = [21u8; 64];
         let other_seed = [22u8; 64];
-        let owner_domain =
-            derive_domain_identity(&owner_seed, &format!("org-access:{org_id}"));
-        let other_domain =
-            derive_domain_identity(&other_seed, &format!("org-access:{org_id}"));
+        let owner_domain = derive_domain_identity(&owner_seed, &format!("org-access:{org_id}"));
+        let other_domain = derive_domain_identity(&other_seed, &format!("org-access:{org_id}"));
         let owner_root = "owner-b".to_string() + &"b".repeat(48);
         let other_root = "other-c".to_string() + &"c".repeat(48);
         let self_root = "self-d".to_string() + &"d".repeat(48);
@@ -1705,7 +1766,10 @@ mod tests {
         );
         let r1 = deliver_acl(&mut s, &other_root, squatter);
         assert_eq!(r1.response["ok"], json!(false));
-        assert_eq!(r1.response["reason"], json!("acl-genesis-signer-not-declared-by"));
+        assert_eq!(
+            r1.response["reason"],
+            json!("acl-genesis-signer-not-declared-by")
+        );
         assert!(s.get(&acl_key).unwrap().is_none(), "创世抢注 acl 不落库");
 
         // (2) 正向：声明者（owner）创世 acl 合入

@@ -36,33 +36,35 @@ mod orgq_online;
 mod orgq_queue;
 
 pub use access::{
-    KIND_ORGKEY_DELIVER, ORGKEY_PENDING_PREFIX, ORGKEY_PREFIX, ORG_ACL_PREFIX, AclRecord,
+    AclRecord, KIND_ORGKEY_DELIVER, ORG_ACL_PREFIX, ORGKEY_DELIVER_STASH_PREFIX,
+    ORGKEY_PENDING_PREFIX, ORGKEY_PREFIX, ORGKEY_STASH_MAX_AGE_MS, ORGKEY_STASH_MAX_PER_ORG,
     OrgkeyDeliver, acl_key, acl_merge, acl_sign, acl_sign_payload, acl_verify, box_epoch_key,
     build_orgkey_deliver, decrypt_value, deliver_sign_payload, ed_pk_to_x25519, ed_sk_to_x25519,
     encrypt_value, generate_epoch_key, get_epoch_key, max_known_epoch, orgkey_key,
     orgkey_pending_for_org, orgkey_pending_key, orgkey_pending_put, orgkey_pending_remove,
-    orgkey_prefix, orgkey_stash_for_org, orgkey_stash_key, orgkey_stash_put,
-    orgkey_stash_remove, parse_acl_key, parse_orgkey_deliver, put_epoch_key, unbox_epoch_key,
-    ORGKEY_DELIVER_STASH_PREFIX,
+    orgkey_prefix, orgkey_stash_age_sweep, orgkey_stash_count, orgkey_stash_for_org,
+    orgkey_stash_key, orgkey_stash_put, orgkey_stash_remove, parse_acl_key, parse_orgkey_deliver,
+    put_epoch_key, unbox_epoch_key,
 };
-pub use access_data::{
-    AccessDataError, current_acl_epoch, decrypt_orgd_value, encrypt_orgd_value,
-};
+pub use access_data::{AccessDataError, current_acl_epoch, decrypt_orgd_value, encrypt_orgd_value};
 pub use builtin::{
-    ORGSYNC_BATCH_BYTES, ORGSYNC_DLOG_ACK_RETRY_FIRST_MS, ORGSYNC_DLOG_ACK_RETRY_SECOND_MS,
-    ORGSYNC_HELLO_DEBOUNCE_MS, BuiltinOrgCollection, builtin_collection_by_name,
+    BuiltinOrgCollection, ORGSYNC_BATCH_BYTES, ORGSYNC_DLOG_ACK_RETRY_FIRST_MS,
+    ORGSYNC_DLOG_ACK_RETRY_SECOND_MS, ORGSYNC_HELLO_DEBOUNCE_MS, builtin_collection_by_name,
     collection_data_prefixes, legacy_org_key_scope,
 };
 pub use collect::{
-    OrgDiffOutcome, collect_org_collection_vv, collect_org_collections,
-    collect_org_incremental, collect_org_tombstones_after, diff_org_collection, self_roles,
+    OrgDiffOutcome, collect_org_collection_vv, collect_org_collections, collect_org_incremental,
+    collect_org_tombstones_after, diff_org_collection, self_roles,
 };
 pub use dlog::{
     is_in_replication_group, org_dlog_append_ops, org_dlog_current_seq, org_dlog_entries_after,
     org_dlog_gc, org_dlog_gc_threshold, org_dlog_get_seen, org_dlog_get_watermark,
     org_dlog_set_seen, org_dlog_set_watermark, org_tombstone_local, replication_group_members,
 };
-pub use envelope::{OrgsyncRecord, build_orgsync_data_batch, build_orgsync_hello, build_orgsync_need, parse_orgsync_data, parse_orgsync_hello, parse_orgsync_need, split_orgsync_batches};
+pub use envelope::{
+    OrgsyncRecord, build_orgsync_data_batch, build_orgsync_hello, build_orgsync_need,
+    parse_orgsync_data, parse_orgsync_hello, parse_orgsync_need, split_orgsync_batches,
+};
 pub use orgq::{
     ORGQ_AUDIT_PREFIX, ORGQ_LIMIT_DEFAULT, ORGQ_LIMIT_MAX, OrgqReq, OrgqResp, OrgqRespRecord,
     OrgqWriteRecord, build_orgq_query_req, build_orgq_query_resp, build_orgq_write_req,
@@ -73,22 +75,20 @@ pub use orgq_cache::{
     ORGQ_CACHE_MAX_KEYS_PER_COLLECTION, orgq_cache_evict, orgq_cache_has_data, orgq_cache_key,
     orgq_cache_prefix,
 };
-pub use orgq_online::{
-    MemberReadPlan, member_orgq_read_plan, orgq_da_degraded_key, orgq_da_online_key,
-    orgq_degraded_for_collection, orgq_mark_data_account_degraded,
-    orgq_mark_data_account_online, orgq_online_data_accounts, select_online_data_account,
-    should_route_orgq,
-};
-pub use orgq_queue::{
-    orgq_queue_clear_by_collection, orgq_queue_drain, orgq_queue_drain_by_org,
-    orgq_queue_has_data, orgq_queue_key, orgq_queue_prefix, orgq_queue_put,
-    orgq_queue_read_by_org, orgq_wipe_org_local,
-};
 pub use orgq_deliver::{
     ORGQ_PENDING_MAX, ORGQ_PENDING_TTL_MS, PendingPutError, orgq_gen_request_id,
     orgq_pending_cleanup_stale, orgq_pending_get, orgq_pending_key, orgq_pending_put,
     orgq_pending_remove, orgq_resp_cleanup_stale, orgq_resp_key, orgq_resp_put, orgq_resp_take,
     orgq_wait_cleared,
+};
+pub use orgq_online::{
+    MemberReadPlan, member_orgq_read_plan, orgq_da_degraded_key, orgq_da_online_key,
+    orgq_degraded_for_collection, orgq_mark_data_account_degraded, orgq_mark_data_account_online,
+    orgq_online_data_accounts, select_online_data_account, should_route_orgq,
+};
+pub use orgq_queue::{
+    orgq_queue_clear_by_collection, orgq_queue_drain, orgq_queue_drain_by_org, orgq_queue_has_data,
+    orgq_queue_key, orgq_queue_prefix, orgq_queue_put, orgq_queue_read_by_org, orgq_wipe_org_local,
 };
 
 #[cfg(test)]

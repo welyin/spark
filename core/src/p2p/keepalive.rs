@@ -44,8 +44,6 @@ impl RecoveryState {
     }
 }
 
-
-
 /// peer-exchange 轮选：已连接邻居排序后按游标轮转。
 pub fn pick_exchange_target(
     connected: &HashSet<String>,
@@ -80,7 +78,9 @@ impl Default for RecoveryTrigger {
 
 impl RecoveryTrigger {
     pub fn new() -> Self {
-        Self { last_query_at: None }
+        Self {
+            last_query_at: None,
+        }
     }
 
     /// 记录一轮 DHT 刷新查询的发起时间（懒连接链 DHT 刷新环节实际发起查询时

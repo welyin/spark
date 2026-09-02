@@ -211,11 +211,14 @@ impl<'a> OverlayPeerStore<'a> {
         };
         let Some(score) = existing.addr_meta.get_mut(addr) else {
             // 该地址此前未入池（如监听方向连上但未记录）：仍记一笔 success
-            existing.addr_meta.insert(addr.to_string(), AddrScore {
-                success_count: 1,
-                last_success_at: now_ms,
-                ..Default::default()
-            });
+            existing.addr_meta.insert(
+                addr.to_string(),
+                AddrScore {
+                    success_count: 1,
+                    last_success_at: now_ms,
+                    ..Default::default()
+                },
+            );
             return self.save(&existing);
         };
         score.success_count = score.success_count.saturating_add(1);
@@ -225,12 +228,7 @@ impl<'a> OverlayPeerStore<'a> {
 
     /// 记分卡：一组地址被签名 node-announce / 签名 DHT 节点记录 / peer-exchange
     /// 采样验证「活着」（valid 证据）。仅对记录中已存在的地址记账。
-    pub fn mark_addrs_valid(
-        &mut self,
-        peer_id: &str,
-        addrs: &[String],
-        now_ms: i64,
-    ) -> Result<()> {
+    pub fn mark_addrs_valid(&mut self, peer_id: &str, addrs: &[String], now_ms: i64) -> Result<()> {
         let Some(mut existing) = self.get(peer_id)? else {
             return Ok(());
         };
@@ -353,7 +351,11 @@ fn sort_for_sample(records: &mut [OverlayPeerRecord]) {
         r.last_dial_result.as_deref() == Some("failure")
     }
     records.sort_by(|a, b| {
-        (b.verified, !dial_failed(b), b.last_seen_at).cmp(&(a.verified, !dial_failed(a), a.last_seen_at))
+        (b.verified, !dial_failed(b), b.last_seen_at).cmp(&(
+            a.verified,
+            !dial_failed(a),
+            a.last_seen_at,
+        ))
     });
 }
 
@@ -405,11 +407,19 @@ mod tests {
         let mut meta = HashMap::new();
         meta.insert(
             "/ip4/2.2.2.2/tcp/15002".to_string(),
-            AddrScore { valid_count: 1, last_valid_at: 200, ..Default::default() },
+            AddrScore {
+                valid_count: 1,
+                last_valid_at: 200,
+                ..Default::default()
+            },
         );
         meta.insert(
             "/ip4/3.3.3.3/tcp/15002".to_string(),
-            AddrScore { success_count: 1, last_success_at: 300, ..Default::default() },
+            AddrScore {
+                success_count: 1,
+                last_success_at: 300,
+                ..Default::default()
+            },
         );
         sort_by_addr_rank(&mut addrs, &meta);
         assert_eq!(addrs[0], "/ip4/3.3.3.3/tcp/15002", "success 优先");
@@ -420,12 +430,15 @@ mod tests {
     #[test]
     fn zero_score_sorted_by_static_priority_v6_tcp_over_v4_ws() {
         let mut addrs = vec![
-            "/ip4/1.1.1.1/tcp/15002/ws".to_string(), // IPv4 ws
+            "/ip4/1.1.1.1/tcp/15002/ws".to_string(),     // IPv4 ws
             "/ip6/2408:8207:1::1/tcp/15002".to_string(), // IPv6 tcp
-            "/ip4/2.2.2.2/tcp/15002".to_string(),    // IPv4 tcp
+            "/ip4/2.2.2.2/tcp/15002".to_string(),        // IPv4 tcp
         ];
         sort_by_addr_rank(&mut addrs, &HashMap::new());
-        assert_eq!(addrs[0], "/ip6/2408:8207:1::1/tcp/15002", "IPv6 公网 tcp 优先");
+        assert_eq!(
+            addrs[0], "/ip6/2408:8207:1::1/tcp/15002",
+            "IPv6 公网 tcp 优先"
+        );
         assert_eq!(addrs[1], "/ip4/2.2.2.2/tcp/15002", "IPv4 tcp 其次");
         assert_eq!(addrs[2], "/ip4/1.1.1.1/tcp/15002/ws", "IPv4 ws 最后");
     }
@@ -471,7 +484,8 @@ mod tests {
             "高证据地址被保留（淘汰垫底）"
         );
         assert!(
-            !rec.addresses.contains(&"/ip4/10.9.9.9/tcp/15002".to_string()),
+            !rec.addresses
+                .contains(&"/ip4/10.9.9.9/tcp/15002".to_string()),
             "新零分地址在满额时被挤出"
         );
     }
@@ -491,7 +505,9 @@ mod tests {
                 &HashSet::new(),
             )
             .unwrap();
-        store.mark_addr_success("p1", "/ip4/1.1.1.1/tcp/15002", 500).unwrap();
+        store
+            .mark_addr_success("p1", "/ip4/1.1.1.1/tcp/15002", 500)
+            .unwrap();
         let rec = store.get("p1").unwrap().unwrap();
         let score = rec.addr_meta.get("/ip4/1.1.1.1/tcp/15002").unwrap();
         assert_eq!(score.success_count, 1);
@@ -510,7 +526,8 @@ mod tests {
         // 先写黑名单（模拟 M9 删除污染地址时写入）
         {
             let mut bl = AddrBlacklistStore::new(&mut storage);
-            bl.block("/ip4/192.168.31.218/tcp/15002", 0, 10_000).unwrap();
+            bl.block("/ip4/192.168.31.218/tcp/15002", 0, 10_000)
+                .unwrap();
         }
         let mut store = OverlayPeerStore::new(&mut storage);
         store
@@ -573,8 +590,9 @@ mod tests {
     fn self_filter_excludes_self_id_and_self_addrs() {
         let mut storage = MemoryStorage::new();
         let mut store = OverlayPeerStore::new(&mut storage);
-        let self_addrs: HashSet<String> =
-            ["/ip4/192.168.1.5/tcp/15002".to_string()].into_iter().collect();
+        let self_addrs: HashSet<String> = ["/ip4/192.168.1.5/tcp/15002".to_string()]
+            .into_iter()
+            .collect();
         // 本机 peerId 不入池
         store
             .remember(
@@ -587,7 +605,10 @@ mod tests {
                 &self_addrs,
             )
             .unwrap();
-        assert!(store.get("self-peer").unwrap().is_none(), "本机 peerId 不入池");
+        assert!(
+            store.get("self-peer").unwrap().is_none(),
+            "本机 peerId 不入池"
+        );
         // 本机监听地址不得记为对端地址
         store
             .remember(

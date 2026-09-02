@@ -105,7 +105,9 @@ pub fn select_online_data_account(
     degraded: &std::collections::HashSet<String>,
 ) -> Option<String> {
     // 第一遍：跳过 degraded 的在线数据账号
-    if let Some(pick) = pick_online(record, online_peer_ids, my_root_id, |r| !degraded.contains(r)) {
+    if let Some(pick) = pick_online(record, online_peer_ids, my_root_id, |r| {
+        !degraded.contains(r)
+    }) {
         return Some(pick);
     }
     // 全部在线数据账号都 degraded → 退而选之（全降级才选）
@@ -127,15 +129,12 @@ fn pick_online(
             continue;
         };
         // 连接层在线：成员端点集任一 peer ∈ online_peers
-        let reachable = member
-            .node_info
-            .as_ref()
-            .is_some_and(|set| {
-                set.endpoints
-                    .iter()
-                    .filter_map(|e| e.peer_id.as_deref())
-                    .any(|p| online_peer_ids.contains(p))
-            });
+        let reachable = member.node_info.as_ref().is_some_and(|set| {
+            set.endpoints
+                .iter()
+                .filter_map(|e| e.peer_id.as_deref())
+                .any(|p| online_peer_ids.contains(p))
+        });
         if reachable {
             return Some(root_id);
         }
@@ -286,11 +285,16 @@ mod tests {
     #[test]
     fn select_online_data_account_skips_self() {
         let record = org_record(
-            &[("me", OrganizationRole::Member), ("da-a", OrganizationRole::Member)],
+            &[
+                ("me", OrganizationRole::Member),
+                ("da-a", OrganizationRole::Member),
+            ],
             &["me", "da-a"],
         );
         let online: std::collections::HashSet<String> =
-            ["peer-me".to_string(), "peer-da-a".to_string()].into_iter().collect();
+            ["peer-me".to_string(), "peer-da-a".to_string()]
+                .into_iter()
+                .collect();
         let none = std::collections::HashSet::new();
         assert_eq!(
             select_online_data_account(&record, &online, "me", &none),
@@ -311,7 +315,9 @@ mod tests {
             &["da-a", "da-b"],
         );
         let online: std::collections::HashSet<String> =
-            ["peer-da-a".to_string(), "peer-da-b".to_string()].into_iter().collect();
+            ["peer-da-a".to_string(), "peer-da-b".to_string()]
+                .into_iter()
+                .collect();
         // da-a degraded，da-b 正常 → 优先选 da-b
         let degraded: std::collections::HashSet<String> =
             ["da-a".to_string()].into_iter().collect();
@@ -321,7 +327,9 @@ mod tests {
         );
         // 全部在线数据账号都 degraded → 退选（全降级才选之）
         let all_degraded: std::collections::HashSet<String> =
-            ["da-a".to_string(), "da-b".to_string()].into_iter().collect();
+            ["da-a".to_string(), "da-b".to_string()]
+                .into_iter()
+                .collect();
         let picked = select_online_data_account(&record, &online, "me", &all_degraded);
         assert!(picked.is_some(), "全降级仍选一个（宁选 degraded 也不空）");
     }
@@ -329,7 +337,10 @@ mod tests {
     #[test]
     fn should_route_orgq_only_for_non_data_account() {
         let record = org_record(
-            &[("me", OrganizationRole::Member), ("da", OrganizationRole::Admin)],
+            &[
+                ("me", OrganizationRole::Member),
+                ("da", OrganizationRole::Admin),
+            ],
             &["da"],
         );
         assert!(should_route_orgq(&record, "me"));
@@ -339,18 +350,31 @@ mod tests {
     #[test]
     fn member_orgq_read_plan_local_when_resident() {
         let record = org_record(
-            &[("me", OrganizationRole::Member), ("da", OrganizationRole::Admin)],
+            &[
+                ("me", OrganizationRole::Member),
+                ("da", OrganizationRole::Admin),
+            ],
             &["da"],
         );
         let none = std::collections::HashSet::new();
-        let plan = member_orgq_read_plan(&record, "me", &std::collections::HashSet::new(), true, false, &none);
+        let plan = member_orgq_read_plan(
+            &record,
+            "me",
+            &std::collections::HashSet::new(),
+            true,
+            false,
+            &none,
+        );
         assert_eq!(plan, MemberReadPlan::Local);
     }
 
     #[test]
     fn member_orgq_read_plan_orgq_when_online_data_account() {
         let record = org_record(
-            &[("me", OrganizationRole::Member), ("da", OrganizationRole::Admin)],
+            &[
+                ("me", OrganizationRole::Member),
+                ("da", OrganizationRole::Admin),
+            ],
             &["da"],
         );
         let online: std::collections::HashSet<String> =
@@ -368,7 +392,10 @@ mod tests {
     #[test]
     fn member_orgq_read_plan_offline_reports_cache() {
         let record = org_record(
-            &[("me", OrganizationRole::Member), ("da", OrganizationRole::Admin)],
+            &[
+                ("me", OrganizationRole::Member),
+                ("da", OrganizationRole::Admin),
+            ],
             &["da"],
         );
         let none = std::collections::HashSet::new();

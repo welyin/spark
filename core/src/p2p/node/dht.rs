@@ -384,10 +384,7 @@ impl<S: StorageBackend> EventLoop<S> {
         let Some(parsed) = challenge::parse_challenge_request(&request) else {
             return;
         };
-        if self
-            .challenge_limiter
-            .is_rate_limited(&peer_id, now)
-        {
+        if self.challenge_limiter.is_rate_limited(&peer_id, now) {
             return;
         }
         if let Ok(text) = challenge::sign_challenge_response(&self.keypair, &parsed.nonce, now) {

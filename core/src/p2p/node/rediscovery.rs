@@ -58,9 +58,7 @@ impl<S: StorageBackend> EventLoop<S> {
                 .iter()
                 .filter_map(|a| crate::p2p::peer_targets::filter_dial_candidate(a, is_android))
                 .filter(|a| !self_addrs.contains(a))
-                .map(|a| {
-                    crate::p2p::peer_targets::ensure_circuit_dst_peer(&a, &peer.to_base58())
-                })
+                .map(|a| crate::p2p::peer_targets::ensure_circuit_dst_peer(&a, &peer.to_base58()))
                 .filter_map(|a| a.parse().ok())
                 .collect()
         };
@@ -161,9 +159,7 @@ impl<S: StorageBackend> EventLoop<S> {
             let addrs: Vec<libp2p::Multiaddr> = announce
                 .addresses
                 .iter()
-                .map(|a| {
-                    crate::p2p::peer_targets::ensure_circuit_dst_peer(a, &peer.to_base58())
-                })
+                .map(|a| crate::p2p::peer_targets::ensure_circuit_dst_peer(a, &peer.to_base58()))
                 .filter_map(|a| a.parse().ok())
                 .collect();
             if !addrs.is_empty() {
@@ -195,7 +191,11 @@ impl<S: StorageBackend> EventLoop<S> {
         }
     }
 
-    fn finish_rediscovery_confirm(&mut self, peer: PeerId, announce: crate::p2p::announce::NodeAnnounce) {
+    fn finish_rediscovery_confirm(
+        &mut self,
+        peer: PeerId,
+        announce: crate::p2p::announce::NodeAnnounce,
+    ) {
         let now = self.now();
         let nonce = crate::p2p::challenge::generate_nonce();
         let request = crate::p2p::challenge::build_challenge_request(&nonce, now);
@@ -236,7 +236,11 @@ impl<S: StorageBackend> EventLoop<S> {
     }
 
     /// DHT 竞速未命中：回 Idle 静默，等下一个真实事件再触发。
-    pub(super) fn on_rediscovery_dht_miss(&mut self, peer: PeerId, dht_query_id: Option<kad::QueryId>) {
+    pub(super) fn on_rediscovery_dht_miss(
+        &mut self,
+        peer: PeerId,
+        dht_query_id: Option<kad::QueryId>,
+    ) {
         let _ = dht_query_id;
         self.abort_rediscovery_attempt(peer);
     }

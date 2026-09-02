@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::p2p::P2pError;
 use crate::p2p::behaviour::SparkBehaviourEvent;
-use crate::p2p::constants::{OVERLAY_TOPIC, PLUGIN_ANNOUNCE_TOPIC, P2P_LISTEN_WS_PORT};
+use crate::p2p::constants::{OVERLAY_TOPIC, P2P_LISTEN_WS_PORT, PLUGIN_ANNOUNCE_TOPIC};
 use crate::p2p::listen_port;
 use crate::p2p::overlay_store::{OverlayPeerSource, OverlayPeerStore};
 use crate::p2p::peer_activity::{NodeObservation, PeerActivityStore};
@@ -67,7 +67,11 @@ impl<S: StorageBackend> EventLoop<S> {
                 num_established,
                 ..
             } => {
-                let direction = if endpoint.is_dialer() { "dialer" } else { "listener" };
+                let direction = if endpoint.is_dialer() {
+                    "dialer"
+                } else {
+                    "listener"
+                };
                 eprintln!(
                     "[p2p] ConnectionEstablished: peer={peer_id} remote_addr={} num_established={num_established} direction={direction}",
                     endpoint.get_remote_address()
@@ -219,7 +223,9 @@ impl<S: StorageBackend> EventLoop<S> {
                 self.begin_version_probe(peer_id);
             }
             SwarmEvent::ConnectionClosed {
-                peer_id, num_established, ..
+                peer_id,
+                num_established,
+                ..
             } => {
                 if num_established == 0 {
                     let now = self.now();
@@ -237,8 +243,15 @@ impl<S: StorageBackend> EventLoop<S> {
                     // 本机网络恢复事件的重拨（redial_priority_peers）仍保留。
                 }
             }
-            SwarmEvent::OutgoingConnectionError { peer_id, connection_id, error, .. } => {
-                let peer = peer_id.map(|p| p.to_base58()).unwrap_or_else(|| "(unknown)".to_string());
+            SwarmEvent::OutgoingConnectionError {
+                peer_id,
+                connection_id,
+                error,
+                ..
+            } => {
+                let peer = peer_id
+                    .map(|p| p.to_base58())
+                    .unwrap_or_else(|| "(unknown)".to_string());
                 // 本机端口复用冲突（AddrInUse/10048）是 kad 行为层为维持 DHT 路由
                 // 表对未连接 peer 的自动拨号失败（PortUse::Reuse 复用监听端口），
                 // 业务拨号全部用 allocate_new_port（临时端口）不会触发。这类错误
@@ -256,18 +269,19 @@ impl<S: StorageBackend> EventLoop<S> {
                 // → rediscovery 竞速 → 其余（kad 行为层/未追踪源）。
                 let attribution = {
                     let cid = connection_id;
-                    let in_connects = self.pending_connects.iter().any(|p| {
-                        p.in_flight.iter().any(|d| d.conn_id == cid)
-                    });
-                    let in_org = self.pending_org_attempts.iter().any(|a| {
-                        a.batch.iter().any(|d| d.conn_id == cid)
-                    });
-                    let in_overlay = peer_id.map_or(false, |p| {
-                        self.pending_overlay_dials.contains_key(&p)
-                    });
-                    let in_redis = self.rediscovery_states.contains_key(
-                        &peer_id.unwrap_or(libp2p::PeerId::random()),
-                    );
+                    let in_connects = self
+                        .pending_connects
+                        .iter()
+                        .any(|p| p.in_flight.iter().any(|d| d.conn_id == cid));
+                    let in_org = self
+                        .pending_org_attempts
+                        .iter()
+                        .any(|a| a.batch.iter().any(|d| d.conn_id == cid));
+                    let in_overlay =
+                        peer_id.map_or(false, |p| self.pending_overlay_dials.contains_key(&p));
+                    let in_redis = self
+                        .rediscovery_states
+                        .contains_key(&peer_id.unwrap_or(libp2p::PeerId::random()));
                     if in_connects {
                         "connect/dm"
                     } else if in_org {
@@ -364,7 +378,10 @@ impl<S: StorageBackend> EventLoop<S> {
             SwarmEvent::Behaviour(behaviour_event) => self.handle_behaviour_event(behaviour_event),
             SwarmEvent::IncomingConnection { .. } => {}
             SwarmEvent::IncomingConnectionError {
-                local_addr, send_back_addr, error, ..
+                local_addr,
+                send_back_addr,
+                error,
+                ..
             } => {
                 eprintln!(
                     "[p2p] IncomingConnectionError: local_addr={local_addr} send_back_addr={send_back_addr} error={error:?}"
@@ -522,9 +539,11 @@ impl<S: StorageBackend> EventLoop<S> {
                     // plugin-announce：字节校验在校验链内做（失败 Reject 扣分），
                     // 非 UTF-8 直接按结构非法上报
                     match String::from_utf8(message.data) {
-                        Ok(text) => {
-                            self.handle_inbound_plugin_announce(&text, propagation_source, message_id)
-                        }
+                        Ok(text) => self.handle_inbound_plugin_announce(
+                            &text,
+                            propagation_source,
+                            message_id,
+                        ),
                         Err(_) => {
                             let _ = self
                                 .swarm
@@ -786,16 +805,18 @@ impl<S: StorageBackend> EventLoop<S> {
                 self.resolve_org_failure(request_id, false);
             }
             SparkBehaviourEvent::DmRr(request_response::Event::Message {
-                peer,
-                message,
-                ..
+                peer, message, ..
             }) => match message {
                 request_response::Message::Request {
                     request, channel, ..
                 } => {
                     // 诊断日志（debug 级）：最低层捕获所有 request-response 请求，
                     // 默认不输出避免污染日志；排查入站消息时可开 debug 观察
-                    let preview = if request.len() <= 200 { &request[..] } else { &request[..200] };
+                    let preview = if request.len() <= 200 {
+                        &request[..]
+                    } else {
+                        &request[..200]
+                    };
                     log::debug!(
                         "[P2P_SWARM_MSG] DmRr Request from_peer={} preview={}",
                         &peer.to_base58()[..std::cmp::min(16, peer.to_base58().len())],
@@ -829,10 +850,9 @@ impl<S: StorageBackend> EventLoop<S> {
             }) => {
                 eprintln!("[p2p] relay server: reservation DENIED for {src_peer_id}");
             }
-            SparkBehaviourEvent::RelayClient(libp2p::relay::client::Event::ReservationReqAccepted {
-                relay_peer_id,
-                ..
-            }) => {
+            SparkBehaviourEvent::RelayClient(
+                libp2p::relay::client::Event::ReservationReqAccepted { relay_peer_id, .. },
+            ) => {
                 // 预约成功：记录电路地址，触发 announce + DHT 重发（peer-rediscovery §4.6）。
                 // 只认 ReservationReqAccepted——OutboundCircuitEstablished 是"我们经 relay
                 // 拨出"，与预约无关，不能据此登记自己对外可达的电路地址。

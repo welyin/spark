@@ -212,8 +212,10 @@ fn f7_outgoing_records_two_admins_stay_local_and_pdsync_kept() {
     );
 }
 
-/// F7 存量迁移：预制 in: 记录 + pmeta + org:invites 声明 → 迁移后三者清净
-/// （声明墓碑化），out: 记录与其余声明保留；二次执行幂等。
+/// F7 存量迁移（batch1 §3 修订：墓碑化复活窗口闭合）：预制 in: 记录 + pmeta
+/// + org:invites 声明 → 迁移后 in: 本体清净 + 墓碑 pmeta（vv 不 bump）、声明
+/// 墓碑化；out: 记录与其余声明保留；未迁移自设备推回旧记录（同 vv）→
+/// Equal 拒收不复活；邀请人重发（bump 支配墓碑）→ 正常落库；二次执行幂等。
 #[test]
 fn f7_migration_cleans_leaked_incoming_and_tombstones_decl() {
     let mut s = MemoryStorage::new();
@@ -238,16 +240,20 @@ fn f7_migration_cleans_leaked_incoming_and_tombstones_decl() {
         spark_core::org::service::migrate_org_invites_out_of_orgsync(&mut s, NOW + 1000).unwrap();
     assert_eq!(removed, 2, "两条 in: 记录删除");
     assert_eq!(tombstoned, 1, "org:invites 声明墓碑化");
-    // in: 记录与 pmeta 清净
+    // in: 本体清净；pmeta 为墓碑（batch1 §3：复活窗口关闭的关键）
     assert!(
         s.scan(&spark_core::storage::ScanOptions::prefix("org:inv:in:"))
             .unwrap()
             .is_empty()
     );
+    let tomb_key = format!("org:inv:in:{ORG_ID}:{}", "aa".repeat(32));
+    let tomb_meta = get_personal_meta(&s, &tomb_key).unwrap().expect("墓碑 pmeta 存在");
+    assert_eq!(tomb_meta.tombstone, Some(true));
+    assert_eq!(tomb_meta.vv.get("node-x"), Some(&1), "墓碑保留既有 vv 分量不 bump");
+    // 个人域 dlog 无条目（不登 dlog——Equal 拒收已闭合复活窗口）
     assert!(
-        s.scan(&spark_core::storage::ScanOptions::prefix("pmeta:org:inv:in:"))
-            .unwrap()
-            .is_empty()
+        spark_core::sync::dlog::entries_after(&s, 0).unwrap().is_empty(),
+        "迁移墓碑不登 dlog"
     );
     // out: 记录保留（出站是 inviter 自己的记账，不在泄漏面）
     assert!(s.get(&out_key).unwrap().is_some(), "out: 记录保留");
@@ -261,8 +267,29 @@ fn f7_migration_cleans_leaked_incoming_and_tombstones_decl() {
     let contacts_meta = get_personal_meta(&s, &contacts_decl).unwrap().unwrap();
     assert_ne!(contacts_meta.tombstone, Some(true));
 
-    // 幂等：二次执行无操作
+    // 幂等：二次执行无操作（in: 前缀已空——墓碑 pmeta 不在 org:inv:in: 前缀
+    // 扫描面）。注意须先于重发断言：重发重建的 in: 记录会被迁移再清（迁移
+    // 是升级一次性动作，先于新邀请到达运行）。
     let (r2, t2) =
         spark_core::org::service::migrate_org_invites_out_of_orgsync(&mut s, NOW + 2000).unwrap();
     assert_eq!((r2, t2), (0, 0), "二次执行幂等");
+
+    // 未迁移自设备推回旧记录（同 vv）→ Equal 拒收、本地不复活
+    let leaked_meta = DocMeta {
+        vv: [("node-x".to_string(), 1)].into_iter().collect(),
+        ts: NOW,
+        node_id: Some("node-x".to_string()),
+        ..Default::default()
+    };
+    let applied = spark_core::sync::apply_personal_remote_no_dlog(
+        &mut s, &tomb_key, &json!({"id":"inv-self"}).to_string(), &leaked_meta,
+    )
+    .unwrap();
+    assert_eq!(applied, spark_core::sync::ApplyResult::Equal, "同 vv 旧记录 Equal 拒收");
+    assert!(s.get(&tomb_key).unwrap().is_none(), "本地不复活");
+
+    // 邀请人重发（入站写 bump 支配墓碑）→ 正常落库
+    let resent = put_personal(&mut s, "node-x", &tomb_key, &json!({"id":"inv-new"}).to_string(), NOW + 3000).unwrap();
+    assert_eq!(resent.tombstone, None, "重发记录非墓碑");
+    assert!(s.get(&tomb_key).unwrap().is_some(), "重发正常落库");
 }
