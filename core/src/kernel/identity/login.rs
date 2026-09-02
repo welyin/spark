@@ -70,8 +70,8 @@ impl Kernel {
                 identity::migrate_v1_to_v2(&file, password).map_err(map_identity_decrypt_error)?;
             self.write_identity_file(&file)?;
         }
-        let (payload, identity, session_key) =
-            identity::unlock_identity_and_key(&file, password).map_err(map_identity_decrypt_error)?;
+        let (payload, identity, session_key) = identity::unlock_identity_and_key(&file, password)
+            .map_err(map_identity_decrypt_error)?;
         if identity.id() != file.root_id {
             return Err(KernelError::Internal(
                 "Root identity verification failed".to_string(),
@@ -109,9 +109,7 @@ impl Kernel {
             let now = crate::p2p::node::system_now_ms();
             if let Ok(storage) = self.require_storage_raw_mut()
                 && let Err(e) =
-                    crate::org::service::migrate_org_invites_out_of_orgsync(
-                        storage, now,
-                    )
+                    crate::org::service::migrate_org_invites_out_of_orgsync(storage, now)
             {
                 eprintln!("[kernel] migrate org:inv:in cleanup failed: {e}");
             }
@@ -269,14 +267,13 @@ impl Kernel {
         check_password(new_password)?;
         let normalized = normalize_mnemonic_input(mnemonic_input);
         let (file, identity, key) =
-            identity::recover_identity_and_key(&normalized, new_password, nickname, avatar).map_err(
-                |e| match e {
+            identity::recover_identity_and_key(&normalized, new_password, nickname, avatar)
+                .map_err(|e| match e {
                     identity::IdentityError::InvalidMnemonic(_) => KernelError::Internal(
                         "助记词校验失败：请检查是否有错别字、漏字或顺序错误".to_string(),
                     ),
                     other => KernelError::Identity(other),
-                },
-            )?;
+                })?;
         if self.read_identity_file(&file.root_id)?.is_some() {
             return Err(KernelError::Internal(
                 "该账号已在本设备上，请直接登录".to_string(),
@@ -402,9 +399,7 @@ impl Kernel {
             let a_ipv4 = a.starts_with("/ip4/");
             let b_ipv4 = b.starts_with("/ip4/");
             // IPv4 直连在前；同档内短地址在前（短 = 更大概率是可拨内网/公网直连）
-            b_ipv4
-                .cmp(&a_ipv4)
-                .then_with(|| a.len().cmp(&b.len()))
+            b_ipv4.cmp(&a_ipv4).then_with(|| a.len().cmp(&b.len()))
         });
         kept.truncate(QR_MAX_ADDRS);
         kept.into_iter().map(str::to_string).collect()
@@ -433,7 +428,10 @@ impl Kernel {
             let parse_err = |_e: &dyn std::fmt::Debug| {
                 KernelError::Internal("备份数据无效或已损坏".to_string())
             };
-            let peer_and_pwv = |w: &serde_json::Value| -> Result<(Option<(String, Vec<String>)>, Option<crate::pw::PasswordVerifier>)> {
+            let peer_and_pwv = |w: &serde_json::Value| -> Result<(
+                Option<(String, Vec<String>)>,
+                Option<crate::pw::PasswordVerifier>,
+            )> {
                 let pid = w.get("p").and_then(|v| v.as_str()).map(String::from);
                 let addrs: Option<Vec<String>> = w
                     .get("a")
@@ -450,9 +448,8 @@ impl Kernel {
                     .get("pwv")
                     .cloned()
                     .map(|v| {
-                        serde_json::from_value::<crate::pw::PasswordVerifier>(v).map_err(|e| {
-                            KernelError::Internal(format!("备份载荷 pwv 无效: {e}"))
-                        })
+                        serde_json::from_value::<crate::pw::PasswordVerifier>(v)
+                            .map_err(|e| KernelError::Internal(format!("备份载荷 pwv 无效: {e}")))
                     })
                     .transpose()?;
                 Ok((peer, injected))
@@ -483,9 +480,8 @@ impl Kernel {
                     };
                     let compact: identity::file::CompactBackupFile =
                         serde_json::from_str(&inner).map_err(|e| parse_err(&e))?;
-                    let file = identity::file::decode_compact_backup(&compact).map_err(|e| {
-                        KernelError::Internal(format!("备份数据无效或已损坏: {e}"))
-                    })?;
+                    let file = identity::file::decode_compact_backup(&compact)
+                        .map_err(|e| KernelError::Internal(format!("备份数据无效或已损坏: {e}")))?;
                     let (peer, injected) = peer_and_pwv(&w)?;
                     (file, peer, injected)
                 }
@@ -502,16 +498,16 @@ impl Kernel {
             }
         };
 
-        let (payload, identity, session_key) =
-            identity::unlock_identity_and_key(&file, password).map_err(|e| match e {
-                identity::IdentityError::DecryptionFailed => {
-                    KernelError::Internal("密码不正确".to_string())
-                }
-                identity::IdentityError::InvalidMnemonic(_) | identity::IdentityError::Json(_) => {
-                    KernelError::Internal("备份数据无效或已损坏".to_string())
-                }
-                other => KernelError::Identity(other),
-            })?;
+        let (payload, identity, session_key) = identity::unlock_identity_and_key(&file, password)
+            .map_err(|e| match e {
+            identity::IdentityError::DecryptionFailed => {
+                KernelError::Internal("密码不正确".to_string())
+            }
+            identity::IdentityError::InvalidMnemonic(_) | identity::IdentityError::Json(_) => {
+                KernelError::Internal("备份数据无效或已损坏".to_string())
+            }
+            other => KernelError::Identity(other),
+        })?;
         if identity.id() != file.root_id {
             return Err(KernelError::Internal(
                 "备份数据校验失败：rootId 不匹配".to_string(),
@@ -575,11 +571,7 @@ impl Kernel {
     /// 设备记录并向目标 peer 发 friend-request（同账号自设备自动接受）。
     /// 供 dev_harness / 双端联调脚本免扫码完成设备配对。
     #[cfg(debug_assertions)]
-    pub fn dev_pair_peer(
-        &mut self,
-        peer_id: &str,
-        addresses: &[String],
-    ) -> Result<()> {
+    pub fn dev_pair_peer(&mut self, peer_id: &str, addresses: &[String]) -> Result<()> {
         let root_id = self.require_unlocked_root_id()?;
         self.recover_backup_pair_peer(&root_id, peer_id, addresses);
         Ok(())
@@ -593,10 +585,10 @@ impl Kernel {
         gen_peer_id: &str,
         gen_addresses: &[String],
     ) {
+        use super::super::SendFriendRequestInput;
         use crate::contact::{ContactService, FriendRecord};
         use crate::message::PeerRef;
         use crate::p2p::node::system_now_ms;
-        use super::super::SendFriendRequestInput;
 
         let now = system_now_ms();
         let nickname = self.my_nickname(my_root_id);
@@ -640,7 +632,8 @@ impl Kernel {
                     friend.peers.push(PeerRef {
                         peer_id,
                         addresses: gen_addresses.to_vec(),
-                    ..Default::default()});
+                        ..Default::default()
+                    });
                 }
             } else {
                 eprintln!(
@@ -703,9 +696,16 @@ mod tests {
                 .all(|a| !a.contains("0.0.0.0") && !a.contains("/ip6::")),
             "不得保留通配地址：{trimmed:?}"
         );
-        assert!(trimmed.len() <= 3, "封顶 3 条，实际 {}：{trimmed:?}", trimmed.len());
+        assert!(
+            trimmed.len() <= 3,
+            "封顶 3 条，实际 {}：{trimmed:?}",
+            trimmed.len()
+        );
         // IPv4 直连优先，且同档内短地址在前
-        assert!(trimmed[0].starts_with("/ip4/"), "IPv4 直连优先：{trimmed:?}");
+        assert!(
+            trimmed[0].starts_with("/ip4/"),
+            "IPv4 直连优先：{trimmed:?}"
+        );
         // 空 / 全中继 / 全通配输入不 panic，返回空（v1 封装仍带 peerId/pwv）
         assert!(Kernel::trim_qr_addresses(&[]).is_empty());
         assert!(

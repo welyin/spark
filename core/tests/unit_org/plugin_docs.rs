@@ -1,9 +1,7 @@
 use serde_json::{Value, json};
 
 use spark_core::org::plugin_docs::*;
-use spark_core::plugindata::{
-    Accounts, CollectionDeclaration, Space, get_declaration_org,
-};
+use spark_core::plugindata::{Accounts, CollectionDeclaration, Space, get_declaration_org};
 use spark_core::schema::CollectionSchemaDeclaration;
 use spark_core::storage::{MemoryStorage, StorageBackend};
 use spark_core::sync::versioned::{VersionedStorage, shared_node_id};
@@ -190,7 +188,10 @@ fn collect_carries_schema_when_declared() {
     let items = collect_syncable_plugin_docs(&storage, "org_x", false).unwrap();
     assert_eq!(items.len(), 1);
     let schema = items[0].schema.as_ref().unwrap();
-    assert_eq!(schema.sync_strategy, Some(spark_core::schema::SyncStrategy::Lww));
+    assert_eq!(
+        schema.sync_strategy,
+        Some(spark_core::schema::SyncStrategy::Lww)
+    );
 }
 
 #[test]
@@ -320,8 +321,8 @@ fn migrate_moves_doc_to_orgd_and_declares_collection() {
         false,
     );
     // 迁移：全缺省 accounts（data-accounts）。
-    let migrated = migrate_plugin_docs(&mut storage, "org_x", Accounts::DataAccounts, "admin", 1000)
-        .unwrap();
+    let migrated =
+        migrate_plugin_docs(&mut storage, "org_x", Accounts::DataAccounts, "admin", 1000).unwrap();
     assert_eq!(migrated, 1, "迁入 1 条 orgd: 记录");
 
     // 集合已声明为 org scope、accounts=data-accounts。
@@ -336,11 +337,14 @@ fn migrate_moves_doc_to_orgd_and_declares_collection() {
     // 数据已迁入 orgd: 键域（值 = payload 原样 JSON）。
     let data_key = "orgd:org_x:chat:messages@v1:m1";
     let stored = storage.get(data_key).unwrap().expect("orgd 记录存在");
-    assert_eq!(serde_json::from_str::<Value>(&stored).unwrap()["text"], "hi");
+    assert_eq!(
+        serde_json::from_str::<Value>(&stored).unwrap()["text"],
+        "hi"
+    );
 
     // 幂等：重复迁移 0 条新增（集合已声明、orgd 键已存在）。
-    let again = migrate_plugin_docs(&mut storage, "org_x", Accounts::DataAccounts, "admin", 2000)
-        .unwrap();
+    let again =
+        migrate_plugin_docs(&mut storage, "org_x", Accounts::DataAccounts, "admin", 2000).unwrap();
     assert_eq!(again, 0, "重复迁移无新增");
 }
 
@@ -384,12 +388,22 @@ fn migrate_skips_sync_disabled_docs() {
         &json!({"orgId": "org_x"}),
         false,
     );
-    let migrated = migrate_plugin_docs(&mut storage, "org_x", Accounts::DataAccounts, "admin", 1000)
-        .unwrap();
+    let migrated =
+        migrate_plugin_docs(&mut storage, "org_x", Accounts::DataAccounts, "admin", 1000).unwrap();
     // m1 不迁移（local），只迁 m2。
     assert_eq!(migrated, 1);
-    assert!(storage.get("orgd:org_x:chat:messages@v1:m1").unwrap().is_none());
-    assert!(storage.get("orgd:org_x:chat:messages@v1:m2").unwrap().is_some());
+    assert!(
+        storage
+            .get("orgd:org_x:chat:messages@v1:m1")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        storage
+            .get("orgd:org_x:chat:messages@v1:m2")
+            .unwrap()
+            .is_some()
+    );
 }
 
 /// F7：迁移遇非法集合名（declare 失败）逐条跳过 + warn，一颗耗子屎不堵
@@ -415,8 +429,8 @@ fn migrate_skips_invalid_name_and_continues() {
         &json!({"orgId": "org_x"}),
         false,
     );
-    let migrated = migrate_plugin_docs(&mut storage, "org_x", Accounts::DataAccounts, "admin", 1000)
-        .unwrap();
+    let migrated =
+        migrate_plugin_docs(&mut storage, "org_x", Accounts::DataAccounts, "admin", 1000).unwrap();
     // 非法名被跳过，正常那条仍被迁移（整体不中断）。
     assert_eq!(migrated, 1, "非法名跳过，正常那条迁入");
     assert!(
@@ -424,7 +438,8 @@ fn migrate_skips_invalid_name_and_continues() {
         "非法集合未迁入"
     );
     assert!(
-        storage.get("orgd:org_x:chat:messages@v1:good")
+        storage
+            .get("orgd:org_x:chat:messages@v1:good")
             .unwrap()
             .is_some(),
         "正常集合已迁入"
@@ -445,7 +460,12 @@ fn collect_stops_after_migration_only_for_capable_recipient() {
         true,
     );
     // 迁移前：旧通道收集到。
-    assert_eq!(collect_syncable_plugin_docs(storage.raw(), "org_x", false).unwrap().len(), 1);
+    assert_eq!(
+        collect_syncable_plugin_docs(storage.raw(), "org_x", false)
+            .unwrap()
+            .len(),
+        1
+    );
     // 迁移后：集合已声明 → capable 收件人停用。
     migrate_plugin_docs(&mut storage, "org_x", Accounts::DataAccounts, "admin", 1000).unwrap();
     assert!(

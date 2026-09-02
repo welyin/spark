@@ -159,7 +159,13 @@ impl SyncableProfile {
 
     /// 转回 ProfileInfo（空串 → `None`）。
     pub fn to_profile_info(&self) -> ProfileInfo {
-        let empty = |s: &str| if s.is_empty() { None } else { Some(s.to_string()) };
+        let empty = |s: &str| {
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            }
+        };
         ProfileInfo {
             nickname: empty(&self.nickname),
             avatar: empty(&self.avatar),
@@ -410,10 +416,7 @@ impl Kernel {
         *self.password_shared.lock().unwrap() = Some(password.to_string());
         *self.seed_shared.lock().unwrap() = Some(seed);
         // 昵称/头像共享格同步（dm 入站应答用；身份文件在调用点前已落盘）
-        let profile = self
-            .read_identity_file(&identity.id())
-            .ok()
-            .flatten();
+        let profile = self.read_identity_file(&identity.id()).ok().flatten();
         let nickname = profile
             .as_ref()
             .and_then(|f| f.nickname.clone())

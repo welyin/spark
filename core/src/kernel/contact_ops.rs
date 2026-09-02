@@ -14,12 +14,12 @@ use serde::Deserialize;
 use super::dm_envelope::{KIND_FRIEND_ACCEPT, KIND_FRIEND_REQUEST};
 use super::{Kernel, KernelError, Result};
 use crate::contact::{
-    ContactService, FriendRecord, FriendRequestRecord, FriendRequestStatus, PeerRef,
-    ProfilePatch, SpaceContactsView,
+    ContactService, FriendRecord, FriendRequestRecord, FriendRequestStatus, PeerRef, ProfilePatch,
+    SpaceContactsView,
 };
 use crate::org::OrganizationService;
-use crate::p2p::{P2pEvent, PeerNodeInfo};
 use crate::p2p::node::system_now_ms;
+use crate::p2p::{P2pEvent, PeerNodeInfo};
 use crate::plugin::{PluginHostShared, Result as PluginResult};
 
 /// Bot 联系人注册的共享实现：[`Kernel::contact_ensure_bot`] 门面与插件后台
@@ -216,9 +216,8 @@ impl Kernel {
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
-            let mut priority = crate::p2p::priority_peers::PriorityPeerStore::new(
-                self.require_storage_mut()?,
-            );
+            let mut priority =
+                crate::p2p::priority_peers::PriorityPeerStore::new(self.require_storage_mut()?);
             for pid in peer_ids {
                 if let Err(e) = priority.remove(&pid) {
                     eprintln!("[contact] block priority peer remove failed: {e}");
@@ -266,9 +265,8 @@ impl Kernel {
             node_id,
         );
         // 移出优先类目集合（peer-rediscovery §4.4）
-        let mut priority = crate::p2p::priority_peers::PriorityPeerStore::new(
-            self.require_storage_mut()?,
-        );
+        let mut priority =
+            crate::p2p::priority_peers::PriorityPeerStore::new(self.require_storage_mut()?);
         for pid in peer_ids {
             if let Err(e) = priority.remove(&pid) {
                 eprintln!("[contact] priority peer remove failed: {e}");
@@ -543,9 +541,7 @@ impl Kernel {
             &node_id,
         )?;
         if !resolved {
-            return Err(KernelError::Internal(
-                "好友申请不存在或已处理".to_string(),
-            ));
+            return Err(KernelError::Internal("好友申请不存在或已处理".to_string()));
         }
         let request = ContactService::get_incoming_request(self.require_storage()?, request_id)?
             .expect("resolved above");
@@ -630,8 +626,7 @@ impl Kernel {
             if let Some(node_info) = self.local_node_info_json() {
                 body["nodeInfo"] = node_info;
             }
-            if let Ok(envelope) =
-                self.build_dm_envelope(KIND_FRIEND_ACCEPT, &request.root_id, body)
+            if let Ok(envelope) = self.build_dm_envelope(KIND_FRIEND_ACCEPT, &request.root_id, body)
             {
                 let target = PeerNodeInfo {
                     peer_id: (!peer.peer_id.is_empty()).then(|| peer.peer_id.clone()),
@@ -651,13 +646,15 @@ impl Kernel {
             return Ok(PeerRef {
                 peer_id: input.peer_id.clone().unwrap_or_default(),
                 addresses: addresses.clone(),
-            ..Default::default()});
+                ..Default::default()
+            });
         }
         if let Ok(card) = crate::org::parse_and_verify_node_card(&input.raw, now) {
             return Ok(PeerRef {
                 peer_id: card.peer_id,
                 addresses: card.addresses,
-            ..Default::default()});
+                ..Default::default()
+            });
         }
         let storage = self.require_storage()?;
         for record in OrganizationService::read_all_organizations(storage)? {
@@ -670,7 +667,8 @@ impl Kernel {
                 return Ok(PeerRef {
                     peer_id: info.peer_id.clone().unwrap_or_default(),
                     addresses: info.addresses.clone(),
-                ..Default::default()});
+                    ..Default::default()
+                });
             }
         }
         Err(KernelError::Internal(
@@ -682,7 +680,11 @@ impl Kernel {
     /// 通讯录列表中。若已存在则保留已有资料（不覆盖备注、分组等用户自定义
     /// 字段），只刷新 nickname。
     pub fn contact_ensure_bot(&mut self, bot_root_id: &str, display_name: &str) -> Result<()> {
-        Ok(ensure_bot_shared(&self.plugin_host, bot_root_id, display_name)?)
+        Ok(ensure_bot_shared(
+            &self.plugin_host,
+            bot_root_id,
+            display_name,
+        )?)
     }
 
     // ------------------------------------------------------------------

@@ -40,7 +40,9 @@ fn orgsync_hello_vector() {
     // parse 往返：vv / dlogAck / roles / deviceClass / degraded 缺省 false
     let (org_id, cols, roles, device_class) = parse_orgsync_hello(&body).expect("parse hello");
     assert_eq!(org_id, input["orgId"].as_str().unwrap());
-    let (vv, dlog_ack, degraded) = cols.get("ai-chat:finance@v1.0.0").expect("collection entry");
+    let (vv, dlog_ack, degraded) = cols
+        .get("ai-chat:finance@v1.0.0")
+        .expect("collection entry");
     assert_eq!(vv.get("node-a"), Some(&3));
     assert_eq!(*dlog_ack, 2);
     assert!(!degraded, "degraded 缺省 false");

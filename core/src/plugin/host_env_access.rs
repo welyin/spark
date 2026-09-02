@@ -83,7 +83,13 @@ impl PluginHostShared {
         let now = crate::p2p::node::system_now_ms();
         let col_full = format!("{name}@v{version}");
         let payload = crate::sync::orgsync::acl_sign_payload(
-            epoch, org_id, &col_full, &owners, &readers, reset_by.as_deref(), now,
+            epoch,
+            org_id,
+            &col_full,
+            &owners,
+            &readers,
+            reset_by.as_deref(),
+            now,
         );
         let sig = crate::sync::orgsync::acl_sign(&derived.signing_key, &payload);
         let acl = crate::sync::orgsync::AclRecord {
@@ -157,24 +163,33 @@ impl PluginHostShared {
             return;
         };
         let derived = crate::identity::derive_domain_identity(&seed, &org_access_domain(org_id));
-        let owner_x25519_priv = crate::sync::orgsync::ed_sk_to_x25519(&derived.signing_key.to_bytes());
+        let owner_x25519_priv =
+            crate::sync::orgsync::ed_sk_to_x25519(&derived.signing_key.to_bytes());
         let now = crate::p2p::node::system_now_ms();
         let col_full = format!("{name}@v{version}");
         let mut deliveries: Vec<(PeerNodeInfo, Value)> = Vec::new();
         for recipient in recipients {
-            let Some(member) = record.find_member(recipient) else { continue };
-            let Some(access_key) = member.access_key.as_ref() else { continue };
+            let Some(member) = record.find_member(recipient) else {
+                continue;
+            };
+            let Some(access_key) = member.access_key.as_ref() else {
+                continue;
+            };
             use base64::Engine as _;
             let Ok(pk_bytes) =
                 base64::engine::general_purpose::STANDARD.decode(&access_key.public_key)
             else {
                 continue;
             };
-            let Ok(pk_arr) = <[u8; 32]>::try_from(pk_bytes.as_slice()) else { continue };
+            let Ok(pk_arr) = <[u8; 32]>::try_from(pk_bytes.as_slice()) else {
+                continue;
+            };
             let Some(recipient_x25519) = crate::sync::orgsync::ed_pk_to_x25519(&pk_arr) else {
                 continue;
             };
-            let Some(node_info) = member.node_info.clone() else { continue };
+            let Some(node_info) = member.node_info.clone() else {
+                continue;
+            };
             for epoch in epochs.clone() {
                 let Some(epoch_key) =
                     crate::sync::orgsync::get_epoch_key(&storage, org_id, name, version, epoch)
@@ -304,7 +319,12 @@ impl PluginHostShared {
         let members: Vec<String> = payload
             .get("members")
             .and_then(Value::as_array)
-            .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
             .unwrap_or_default();
         let my_root = self.current_root()?;
         self.require_org_member(&storage, &org_id, &my_root)?;
@@ -370,7 +390,12 @@ impl PluginHostShared {
         let remove: Vec<String> = payload
             .get("members")
             .and_then(Value::as_array)
-            .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
             .unwrap_or_default();
         let my_root = self.current_root()?;
         self.require_org_member(&storage, &org_id, &my_root)?;

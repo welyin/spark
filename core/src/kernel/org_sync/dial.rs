@@ -16,8 +16,8 @@
 
 use std::collections::HashSet;
 
-use crate::org::types::OrganizationRecord;
 use crate::org::roles;
+use crate::org::types::OrganizationRecord;
 use crate::p2p::peer_targets::{PeerNodeInfo, extract_peer_id};
 
 /// 收集**已连接**的活跃网关端点候选（I4）：当前用户所属 org 的活跃网关中，
@@ -54,9 +54,7 @@ pub fn connected_gateway_candidates(
 }
 
 /// 从成员端点集提取可拨号候选（peerId 或地址任一非空）。
-fn member_endpoint_candidates(
-    member: &crate::org::types::OrganizationMember,
-) -> Vec<PeerNodeInfo> {
+fn member_endpoint_candidates(member: &crate::org::types::OrganizationMember) -> Vec<PeerNodeInfo> {
     let Some(set) = &member.node_info else {
         return Vec::new();
     };
@@ -66,10 +64,7 @@ fn member_endpoint_candidates(
             addresses: info.addresses.clone(),
         })
         .filter(|c| {
-            c.peer_id
-                .as_deref()
-                .is_some_and(|p| !p.trim().is_empty())
-                || !c.addresses.is_empty()
+            c.peer_id.as_deref().is_some_and(|p| !p.trim().is_empty()) || !c.addresses.is_empty()
         })
         .collect()
 }
@@ -84,8 +79,11 @@ pub fn has_connected_org_member(
     record.members.iter().any(|m| {
         m.root_id != current_root_id
             && m.node_info.as_ref().is_some_and(|set| {
-                set.iter()
-                    .any(|info| info.peer_id.as_deref().is_some_and(|p| connected.contains(p)))
+                set.iter().any(|info| {
+                    info.peer_id
+                        .as_deref()
+                        .is_some_and(|p| connected.contains(p))
+                })
             })
     })
 }
@@ -219,7 +217,11 @@ mod tests {
     fn connected_gateway_candidates_includes_connected() {
         let record = org_with_gateways(
             "org-1",
-            vec![member("g1", "p-g1"), member("g2", "p-g2"), member("g3", "p-g3")],
+            vec![
+                member("g1", "p-g1"),
+                member("g2", "p-g2"),
+                member("g3", "p-g3"),
+            ],
             vec!["g1", "g2", "g3"],
         );
         // 已连接 g1、g3 → 返回这两个网关端点（供反熵拉取/恢复判空）

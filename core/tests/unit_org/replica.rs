@@ -167,7 +167,11 @@ fn peer_id_is_trimmed_for_state_lookup() {
         |root, legacy_peer| {
             // O1 账号口径：rootId 为主键，legacy peerId 是迁移回填的辅助键
             assert_eq!(root, rid('b'), "lookup 主键是账号 rootId");
-            assert_eq!(legacy_peer, Some("peer-b"), "legacy 键必须用 trim 后的 peerId");
+            assert_eq!(
+                legacy_peer,
+                Some("peer-b"),
+                "legacy 键必须用 trim 后的 peerId"
+            );
             Some(state)
         },
         NOW,

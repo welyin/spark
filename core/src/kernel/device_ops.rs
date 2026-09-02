@@ -50,10 +50,7 @@ impl Kernel {
     /// 本机记录缺失时（p2p 未启动过、存储迁移前）兜底采集落库一条——
     /// 设备管理页任意时刻打开都有本机设备可看。
     pub fn devices_list(&mut self) -> Result<Vec<DeviceView>> {
-        let local_peer_id = self
-            .p2p
-            .as_ref()
-            .map(|n| n.peer_id().to_string());
+        let local_peer_id = self.p2p.as_ref().map(|n| n.peer_id().to_string());
         let connected: Vec<String> = match self.p2p.as_ref() {
             Some(node) => self
                 .runtime
@@ -69,22 +66,23 @@ impl Kernel {
         // app_version 先取出再借 storage：避免与 require_storage_mut 的互斥借用冲突
         let app_version = self.config.app_version.clone();
         // D2：在取 storage 可变借用前先派生会话 Kverify（需要读 self.unlocked + storage）。
-        let kverify = crate::kernel::pw_ops::derive_session_kverify(self).ok().flatten();
+        let kverify = crate::kernel::pw_ops::derive_session_kverify(self)
+            .ok()
+            .flatten();
         {
             let storage = self.require_storage_mut()?;
             // 本机记录兜底：p2p 已启动但清单无本机条目时采集落库
             if let Some(peer_id) = &local_peer_id {
                 if crate::device::DeviceService::get(storage, peer_id)?.is_none() {
                     let device_pub_key = crate::p2p::identity_store::load_libp2p_pub_key(storage);
-                    let record =
-                        crate::device::DeviceService::upsert_self(
-                            storage,
-                            peer_id,
-                            now,
-                            &node_id,
-                            &app_version,
-                            device_pub_key,
-                        )?;
+                    let record = crate::device::DeviceService::upsert_self(
+                        storage,
+                        peer_id,
+                        now,
+                        &node_id,
+                        &app_version,
+                        device_pub_key,
+                    )?;
                     if let Some(ref root_id) = root_id {
                         let _ = crate::epoch::EpochService::maybe_grant_epoch_key(
                             storage,
@@ -99,7 +97,9 @@ impl Kernel {
                         );
                     }
                     if let Ok(data) = serde_json::to_value(&record) {
-                        let _ = self.event_tx.send(crate::p2p::P2pEvent::DeviceUpdated(data));
+                        let _ = self
+                            .event_tx
+                            .send(crate::p2p::P2pEvent::DeviceUpdated(data));
                     }
                 }
             }
@@ -110,7 +110,12 @@ impl Kernel {
             .map(|r| self.to_device_view(r, local_peer_id.as_deref(), &connected))
             .collect::<Vec<_>>();
         let mut views = views;
-        views.sort_by_key(|v| (std::cmp::Reverse(v.is_self), std::cmp::Reverse(v.last_seen_at)));
+        views.sort_by_key(|v| {
+            (
+                std::cmp::Reverse(v.is_self),
+                std::cmp::Reverse(v.last_seen_at),
+            )
+        });
         Ok(views)
     }
 
@@ -150,8 +155,8 @@ impl Kernel {
         if local_peer_id == device_id {
             return Err(KernelError::Internal("Cannot revoke current device".into()));
         }
-        let local_device_uid = DeviceService::get(self.require_storage()?, &local_peer_id)?
-            .and_then(|r| r.device_uid);
+        let local_device_uid =
+            DeviceService::get(self.require_storage()?, &local_peer_id)?.and_then(|r| r.device_uid);
         if local_device_uid.as_deref() == Some(device_id) {
             return Err(KernelError::Internal("Cannot revoke current device".into()));
         }
@@ -229,7 +234,11 @@ impl Kernel {
 
         // M3：撤销触发 epoch 密钥轮换。
         if let Err(e) = crate::kernel::epoch_ops::after_revoke_snapshot(self, &record.peer_id) {
-            log::error!("[revoke-device] epoch rotation after revoke failed for peer={}: {}", record.peer_id, e);
+            log::error!(
+                "[revoke-device] epoch rotation after revoke failed for peer={}: {}",
+                record.peer_id,
+                e
+            );
             let _ = DeviceService::append_security_log(
                 self.require_storage_mut()?,
                 "rotation_failed",

@@ -23,7 +23,16 @@ fn orgsync_rejects_non_member_and_outside_replication_group() {
         ],
         &[a_root.as_str(), self_root.as_str()],
     );
-    declare_org_collection(&mut s, "node-b", ORG_ID, NAME, VERSION, Accounts::DataAccounts, &self_root, NOW);
+    declare_org_collection(
+        &mut s,
+        "node-b",
+        ORG_ID,
+        NAME,
+        VERSION,
+        Accounts::DataAccounts,
+        &self_root,
+        NOW,
+    );
 
     let data_key = format!("{}k1", org_data_prefix(ORG_ID, NAME, VERSION));
 
@@ -59,11 +68,22 @@ fn orgsync_rejects_non_member_and_outside_replication_group() {
         "peer-m",
         "node-b",
     );
-    assert_eq!(r.response["ok"], true, "复制组外成员 hello 静默跳过（非 rejected）");
-    assert!(r.orgsync_out.is_empty(), "复制组外成员 hello 无 diff 输出（零合入）");
+    assert_eq!(
+        r.response["ok"], true,
+        "复制组外成员 hello 静默跳过（非 rejected）"
+    );
+    assert!(
+        r.orgsync_out.is_empty(),
+        "复制组外成员 hello 无 diff 输出（零合入）"
+    );
 
     // (b2) 复制组外普通成员发 need → rejected（need/data 走显式拒绝）
-    let need_m = build_orgsync_need(ORG_ID, &format!("{NAME}@v{VERSION}"), &Default::default(), 0);
+    let need_m = build_orgsync_need(
+        ORG_ID,
+        &format!("{NAME}@v{VERSION}"),
+        &Default::default(),
+        0,
+    );
     let r = deliver_orgsync(
         &mut s,
         &self_root,
@@ -77,7 +97,11 @@ fn orgsync_rejects_non_member_and_outside_replication_group() {
         "node-b",
     );
     assert_eq!(r.response["ok"], false);
-    assert_eq!(r.response["reason"], json!("rejected"), "复制组外成员 need 拒绝");
+    assert_eq!(
+        r.response["reason"],
+        json!("rejected"),
+        "复制组外成员 need 拒绝"
+    );
 
     // (c) 复制组外普通成员发 data（携带合法 orgd 键）→ rejected 且零合入
     let records = vec![spark_core::sync::orgsync::OrgsyncRecord {
@@ -105,11 +129,12 @@ fn orgsync_rejects_non_member_and_outside_replication_group() {
         "node-b",
     );
     assert_eq!(r.response["ok"], false);
-    assert_eq!(r.response["reason"], json!("rejected"), "复制组外成员 data 拒绝");
-    assert!(
-        s.get(&data_key).unwrap().is_none(),
-        "被拒 data 零合入"
+    assert_eq!(
+        r.response["reason"],
+        json!("rejected"),
+        "复制组外成员 data 拒绝"
     );
+    assert!(s.get(&data_key).unwrap().is_none(), "被拒 data 零合入");
 
     // (d) 非成员发 need → rejected
     let need_body = build_orgsync_need(
@@ -151,7 +176,16 @@ fn orgsync_data_rejects_keys_outside_collection_prefix() {
         ],
         &[],
     );
-    declare_org_collection(&mut s, "node-b", ORG_ID, NAME, VERSION, Accounts::AllMembers, &self_root, NOW);
+    declare_org_collection(
+        &mut s,
+        "node-b",
+        ORG_ID,
+        NAME,
+        VERSION,
+        Accounts::AllMembers,
+        &self_root,
+        NOW,
+    );
 
     // 越界键：org:meta:（组织记录键，用不存在的组织 id 防止撞上真实 org 记录）
     // 与 pdoc:（个人域同步键）
@@ -210,8 +244,7 @@ fn orgsync_data_rejects_keys_outside_collection_prefix() {
             dseq: None,
         },
     ];
-    let data_body =
-        build_orgsync_data_batch(ORG_ID, &format!("{NAME}@v{VERSION}"), &records, 0, 1);
+    let data_body = build_orgsync_data_batch(ORG_ID, &format!("{NAME}@v{VERSION}"), &records, 0, 1);
     let r = deliver_orgsync(
         &mut s,
         &self_root,

@@ -119,9 +119,8 @@ fn decode_rejects_invalid_inviter_root() {
         );
     }
     // inviter 整个缺失
-    let raw = format!(
-        r#"{{"type":"spark-org-invite","version":1,"orgId":"org_x","createdAt":{NOW}}}"#
-    );
+    let raw =
+        format!(r#"{{"type":"spark-org-invite","version":1,"orgId":"org_x","createdAt":{NOW}}}"#);
     let code = URL_SAFE_NO_PAD.encode(raw.as_bytes());
     assert_eq!(
         decode_org_invite_at(&code, NOW),

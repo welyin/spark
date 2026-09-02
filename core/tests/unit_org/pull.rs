@@ -94,8 +94,15 @@ fn auth_status_rules() {
 #[test]
 fn pull_list_missing_requester() {
     let (mut storage, _, _) = setup();
-    let (response, applied) =
-        handle_pull_list_request(&mut storage, &crate::test_io_lock(), &serde_json::json!({}), None, None, NOW).unwrap();
+    let (response, applied) = handle_pull_list_request(
+        &mut storage,
+        &crate::test_io_lock(),
+        &serde_json::json!({}),
+        None,
+        None,
+        NOW,
+    )
+    .unwrap();
     assert!(applied.is_empty());
     assert_eq!(response["ok"], false);
     assert_eq!(response["type"], "org-pull-list-response");
@@ -185,7 +192,14 @@ fn pull_list_claim_applied_only_for_known_member() {
         .unwrap();
     let m = updated.find_member(&member).unwrap();
     assert_eq!(
-        m.node_info.as_ref().unwrap().iter().next().unwrap().peer_id.as_deref(),
+        m.node_info
+            .as_ref()
+            .unwrap()
+            .iter()
+            .next()
+            .unwrap()
+            .peer_id
+            .as_deref(),
         Some("member-peer")
     );
     // 响应里的版本是回填后重读的版本（= NOW  bump 后的 updatedAt）

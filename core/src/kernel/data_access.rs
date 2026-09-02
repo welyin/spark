@@ -24,8 +24,8 @@ use serde_json::Value;
 
 use super::dm_delivery::DM_RETRY_DELAYS;
 use super::{Kernel, Result};
-use crate::org::types::access_key_bind_payload;
 use crate::org::OrganizationService;
+use crate::org::types::access_key_bind_payload;
 use crate::storage::StorageBackend;
 use crate::sync::orgsync;
 
@@ -77,16 +77,16 @@ impl Kernel {
         let storage = self.require_storage()?;
         let acl_key = orgsync::acl_key(org_id, name, version);
         let raw = storage.get(&acl_key)?;
-        let acl: orgsync::AclRecord = raw
-            .and_then(|r| serde_json::from_str(&r).ok())
-            .unwrap_or(orgsync::AclRecord {
-                owners: Vec::new(),
-                readers: Vec::new(),
-                epoch: 0,
-                updated_at: 0,
-                reset_by: None,
-                sig: String::new(),
-            });
+        let acl: orgsync::AclRecord =
+            raw.and_then(|r| serde_json::from_str(&r).ok())
+                .unwrap_or(orgsync::AclRecord {
+                    owners: Vec::new(),
+                    readers: Vec::new(),
+                    epoch: 0,
+                    updated_at: 0,
+                    reset_by: None,
+                    sig: String::new(),
+                });
         Ok(acl)
     }
 
@@ -196,8 +196,7 @@ impl Kernel {
             acl.owners.clone()
         };
         let epoch = acl.epoch.max(1);
-        let new_acl =
-            self.sign_and_put_acl(org_id, name, version, epoch, owners, readers, None)?;
+        let new_acl = self.sign_and_put_acl(org_id, name, version, epoch, owners, readers, None)?;
         // O4 工作项 4：创世（acl 先前为空 → epoch 从 0 跳到 1）时生成并落
         // 本机 orgkey 表 epoch=1 密钥——owner 侧写 encrypted 数据须持有当前
         // epoch 密钥（AEAD 语义：密钥持有者集合 = 写权限集合）。新读者经
@@ -252,7 +251,13 @@ impl Kernel {
         orgsync::put_epoch_key(storage, org_id, name, version, epoch, &new_key);
         // O4 工作项 3（出站）：revoke 轮换后向剩余 readers 逐一投递新 epoch。
         if !remaining_readers.is_empty() {
-            self.deliver_orgkey_to_readers(org_id, name, version, &remaining_readers, epoch..=epoch);
+            self.deliver_orgkey_to_readers(
+                org_id,
+                name,
+                version,
+                &remaining_readers,
+                epoch..=epoch,
+            );
         }
         Ok(new_acl)
     }
@@ -279,9 +284,8 @@ impl Kernel {
             .ok()
             .flatten()
             .is_some_and(|rec| {
-                rec.find_member(&my_root).is_some_and(|m| {
-                    m.role == crate::org::OrganizationRole::Admin
-                })
+                rec.find_member(&my_root)
+                    .is_some_and(|m| m.role == crate::org::OrganizationRole::Admin)
             });
         if !is_admin {
             return Err(super::KernelError::AccessDenied);
@@ -295,8 +299,8 @@ impl Kernel {
         // 被幂等丢弃（「本地已有 ≥ epoch」）导致新密钥不到达，新旧读者分裂。
         // §20.7 语义保留：接管后无历史密钥（只能重启、读不到历史），仅 epoch
         // 号不复用。
-        let reset_epoch = orgsync::max_known_epoch(storage, org_id, name, version)
-            .map_or(1, |m| m + 1);
+        let reset_epoch =
+            orgsync::max_known_epoch(storage, org_id, name, version).map_or(1, |m| m + 1);
         let new_acl = self.sign_and_put_acl(
             org_id,
             name,
@@ -354,11 +358,7 @@ impl Kernel {
         epochs: std::ops::RangeInclusive<u64>,
     ) {
         // owner 组织身份（签名 + X25519 私钥）：seed 派生
-        let Some(seed) = self
-            .unlocked
-            .as_ref()
-            .map(|u| u.seed)
-        else {
+        let Some(seed) = self.unlocked.as_ref().map(|u| u.seed) else {
             log::warn!("[ORGKEY] deliver skipped: no seed (locked) | org={org_id}");
             return;
         };
@@ -380,7 +380,9 @@ impl Kernel {
             return;
         };
         let deliveries = {
-            let Ok(storage) = self.require_storage_mut() else { return };
+            let Ok(storage) = self.require_storage_mut() else {
+                return;
+            };
             let mut ctx = OrgkeyDeliverCtx {
                 storage,
                 seed,
@@ -417,7 +419,9 @@ impl Kernel {
             return;
         };
         let deliveries = {
-            let Ok(storage) = self.require_storage_mut() else { return };
+            let Ok(storage) = self.require_storage_mut() else {
+                return;
+            };
             let mut ctx = OrgkeyDeliverCtx {
                 storage,
                 seed,
@@ -477,7 +481,9 @@ pub(crate) fn plan_orgkey_deliveries<S: StorageBackend>(
     let col_full = format!("{name}@v{version}");
     let mut deliveries: Vec<(crate::p2p::peer_targets::PeerNodeInfo, Value)> = Vec::new();
     for recipient in recipients {
-        let Some(member) = record.find_member(recipient) else { continue };
+        let Some(member) = record.find_member(recipient) else {
+            continue;
+        };
         // 收件人须已发布 accessKey（组织身份公钥）；否则无法投递 → 跳过。
         // O5：落 orgkey pending，对方发布 accessKey / 上线 orgsync-hello 时重投。
         let Some(access_key) = member.access_key.as_ref() else {
@@ -487,20 +493,19 @@ pub(crate) fn plan_orgkey_deliveries<S: StorageBackend>(
                 col_full
             );
             for epoch in epochs.clone() {
-                orgsync::orgkey_pending_put(
-                    ctx.storage,
-                    org_id,
-                    &col_full,
-                    recipient,
-                    epoch,
-                    now,
-                );
+                orgsync::orgkey_pending_put(ctx.storage, org_id, &col_full, recipient, epoch, now);
             }
             continue;
         };
-        let Ok(pk_bytes) = B64.decode(&access_key.public_key) else { continue };
-        let Ok(pk_arr) = <[u8; 32]>::try_from(pk_bytes.as_slice()) else { continue };
-        let Some(recipient_x25519) = orgsync::ed_pk_to_x25519(&pk_arr) else { continue };
+        let Ok(pk_bytes) = B64.decode(&access_key.public_key) else {
+            continue;
+        };
+        let Ok(pk_arr) = <[u8; 32]>::try_from(pk_bytes.as_slice()) else {
+            continue;
+        };
+        let Some(recipient_x25519) = orgsync::ed_pk_to_x25519(&pk_arr) else {
+            continue;
+        };
         // 收件人 peer 寻址（member node_info 端点）
         let Some(node_info) = member.node_info.clone() else {
             log::info!(
@@ -509,14 +514,7 @@ pub(crate) fn plan_orgkey_deliveries<S: StorageBackend>(
                 col_full
             );
             for epoch in epochs.clone() {
-                orgsync::orgkey_pending_put(
-                    ctx.storage,
-                    org_id,
-                    &col_full,
-                    recipient,
-                    epoch,
-                    now,
-                );
+                orgsync::orgkey_pending_put(ctx.storage, org_id, &col_full, recipient, epoch, now);
             }
             continue;
         };
@@ -591,7 +589,9 @@ pub(crate) fn plan_pending_orgkey_resend<S: StorageBackend>(
             continue;
         }
         // 解析 name/version（collection 为 `{name}@v{version}`）
-        let Some(at) = col_full.rfind("@v") else { continue };
+        let Some(at) = col_full.rfind("@v") else {
+            continue;
+        };
         let name = &col_full[..at];
         let version = &col_full[at + 2..];
         deliveries.extend(plan_orgkey_deliveries(

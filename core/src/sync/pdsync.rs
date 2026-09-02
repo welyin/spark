@@ -20,7 +20,7 @@ use serde_json::{Map, Value, json};
 
 use crate::storage::{ScanOptions, StorageBackend};
 use crate::sync::meta::{
-    DocMeta, VersionVector, compare_version_vectors, merge_version_vectors, CompareResult,
+    CompareResult, DocMeta, VersionVector, compare_version_vectors, merge_version_vectors,
 };
 use crate::sync::personal::get_personal_meta;
 
@@ -47,50 +47,110 @@ pub struct Category {
 /// `ct:org` 前缀覆盖组织空间全部 `ct:org:{orgId}:*` 键（成员 extra / req:out /
 /// tags / tree）；tags/tree 集合型数据按整域单记录同步。
 pub const CATEGORIES: &[Category] = &[
-    Category { name: "ct:friend", prefixes: &["ct:friend:"] },
-    Category { name: "ct:req", prefixes: &["ct:req:in:", "ct:req:out:"] },
-    Category { name: "ct:tag", prefixes: &["ct:tag:"] },
-    Category { name: "ct:group", prefixes: &["ct:group:"] },
-    Category { name: "ct:blocked", prefixes: &["ct:blocked:"] },
-    Category { name: "device", prefixes: &["device:"] },
-    Category { name: "profile:self", prefixes: &["profile:self"] },
-    Category { name: "msg:conv", prefixes: &["msg:conv:personal:"] },
-    Category { name: "org:meta", prefixes: &["org:meta:"] },
-    Category { name: "ct:org", prefixes: &["ct:org:"] },
-    Category { name: "org:inv", prefixes: &["org:inv:in:", "org:inv:out:"] },
+    Category {
+        name: "ct:friend",
+        prefixes: &["ct:friend:"],
+    },
+    Category {
+        name: "ct:req",
+        prefixes: &["ct:req:in:", "ct:req:out:"],
+    },
+    Category {
+        name: "ct:tag",
+        prefixes: &["ct:tag:"],
+    },
+    Category {
+        name: "ct:group",
+        prefixes: &["ct:group:"],
+    },
+    Category {
+        name: "ct:blocked",
+        prefixes: &["ct:blocked:"],
+    },
+    Category {
+        name: "device",
+        prefixes: &["device:"],
+    },
+    Category {
+        name: "profile:self",
+        prefixes: &["profile:self"],
+    },
+    Category {
+        name: "msg:conv",
+        prefixes: &["msg:conv:personal:"],
+    },
+    Category {
+        name: "org:meta",
+        prefixes: &["org:meta:"],
+    },
+    Category {
+        name: "ct:org",
+        prefixes: &["ct:org:"],
+    },
+    Category {
+        name: "org:inv",
+        prefixes: &["org:inv:in:", "org:inv:out:"],
+    },
     // P6 插件声明式 API（personal scope）：声明记录先行（对端合入数据前必已
     // 知策略），数据记录随统一反熵。`ldoc:`（local scope）有意不在表内——
     // 永不离开本机。
     // 注意：`pdecl:` 含 local scope 集合的声明——声明可见性经 2026-08-31
     // 裁决为**有意设计**（同账号设备互可见装了哪些插件不是秘密，且
     // 「声明先行」要求合入方先读到声明；wiki plugin-data-api §声明校验 3）。
-    Category { name: "pdecl", prefixes: &["pdecl:"] },
-    Category { name: "pdoc", prefixes: &["pdoc:"] },
+    Category {
+        name: "pdecl",
+        prefixes: &["pdecl:"],
+    },
+    Category {
+        name: "pdoc",
+        prefixes: &["pdoc:"],
+    },
     // O4 encrypted 集合：orgkey 表（personal 域，32B 集合对称密钥）经 pdsync
     // 自设备扩散（同账号设备间），**永不进 orgsync 组织流量**（orgsync 数据
     // 白名单只放行 orgd:/org:coll:/org:acl:/存量组织键，见 inbound_dm/orgsync）。
-    Category { name: "orgkey", prefixes: &["orgkey:"] },
+    Category {
+        name: "orgkey",
+        prefixes: &["orgkey:"],
+    },
     // M3 epoch 状态/包裹：epoch:state 与 ikey:* 记录均通过 pdsync 在自设备间扩散。
     // ikey: 在前：category_for_key 取首个命中，两前缀互不包含，顺序无吞并风险；
     // 保持历史顺序避免无关变更。
-    Category { name: "epoch", prefixes: &["ikey:", "epoch:"] },
+    Category {
+        name: "epoch",
+        prefixes: &["ikey:", "epoch:"],
+    },
     // M3 口令校验器：V/ack 在自设备间扩散，明文豁免。
-    Category { name: "pwv", prefixes: &["pwv:"] },
-    Category { name: "pwack", prefixes: &["pwack:"] },
+    Category {
+        name: "pwv",
+        prefixes: &["pwv:"],
+    },
+    Category {
+        name: "pwack",
+        prefixes: &["pwack:"],
+    },
     // S2 dm_e2e 会话密钥表（personal 域，AES-256-GCM 会话密钥）经 pdsync 自设备
     // 扩散：同一 rootId 的多台设备共享同一份 1:1 会话密钥（离线密文在换钥后
     // 仍可由同账号其它设备解密）。历史密钥随记录体同步，不单列键。
-    Category { name: "dm:e2e", prefixes: &["dm:e2e:key:"] },
+    Category {
+        name: "dm:e2e",
+        prefixes: &["dm:e2e:key:"],
+    },
     // S3 dm_offline 离线投递队列（personal 域 `dm:pending:`，含 feed 复用）经
     // pdsync 自设备扩散：同一 rootId 的多台设备互为补投备份——任一台在线设备
     // 上线都 flush 补投。组织 pending（`org:dm:pending:`）不进此表，走 org-sync
     // 网关同步（通道未就绪，见 dm_offline 模块注释）。
-    Category { name: "dm:pending", prefixes: &["dm:pending:"] },
+    Category {
+        name: "dm:pending",
+        prefixes: &["dm:pending:"],
+    },
     // 插件市场索引（plugin-dist §8；mobile-leaf-mode：公告分发从 gossipsub 订阅
     // 改为经 pdsync 同步，leaf 不再订阅 PLUGIN_ANNOUNCE_TOPIC）。公告自含签名
     // +PoW、为公开数据，推送明文豁免（epoch classify_for_push）。计数键
     // `mkt:ann-count`（连字符）不匹配 `mkt:ann:` 前缀，天然排除出同步。
-    Category { name: "mkt:ann", prefixes: &["mkt:ann:"] },
+    Category {
+        name: "mkt:ann",
+        prefixes: &["mkt:ann:"],
+    },
 ];
 
 /// 按前缀从注册表解析 category（不存在 → `None`，如组织/消息前缀）。
@@ -282,7 +342,12 @@ pub fn collect_incremental<S: StorageBackend>(
                             continue;
                         }
                     };
-                    records.push(PdsyncRecord { key, value, meta, dseq: None });
+                    records.push(PdsyncRecord {
+                        key,
+                        value,
+                        meta,
+                        dseq: None,
+                    });
                 }
             }
         }
@@ -549,7 +614,12 @@ pub fn parse_data(body: &Value) -> Option<(String, Vec<PdsyncRecord>)> {
         let value = item.get("value").cloned().unwrap_or(Value::Null);
         let meta: DocMeta = serde_json::from_value(item.get("meta")?.clone()).ok()?;
         let dseq = item.get("dseq").and_then(Value::as_u64);
-        records.push(PdsyncRecord { key, value, meta, dseq });
+        records.push(PdsyncRecord {
+            key,
+            value,
+            meta,
+            dseq,
+        });
     }
     Some((category.to_string(), records))
 }
@@ -571,7 +641,11 @@ pub struct MessageWindow {
 impl MessageWindow {
     /// 默认窗口（对齐文档 §6：500 条 / 30 天）。
     pub fn default_() -> Self {
-        Self { max_per_conv: 500, max_age_ms: 30 * 24 * 3600 * 1000, msg_sync_after: None }
+        Self {
+            max_per_conv: 500,
+            max_age_ms: 30 * 24 * 3600 * 1000,
+            msg_sync_after: None,
+        }
     }
 
     /// 从 hello 的 `msgWindow` + `lastMsgSyncAt` 解析；缺失或无效回退默认。
@@ -595,7 +669,11 @@ impl MessageWindow {
 
     /// "全部"窗口：条数与时间都极大（设备声明收齐完整历史）。
     pub fn all() -> Self {
-        Self { max_per_conv: usize::MAX, max_age_ms: i64::MAX, msg_sync_after: None }
+        Self {
+            max_per_conv: usize::MAX,
+            max_age_ms: i64::MAX,
+            msg_sync_after: None,
+        }
     }
 }
 
@@ -650,8 +728,8 @@ pub fn collect_message_window<S: StorageBackend>(
 ) -> crate::sync::SyncResult<Vec<PdsyncRecord>> {
     // max_age_ms 双保险钳制（from_hello 已钳，直接构造的窗口也安全）；
     // saturating_sub 防 now < max_age_ms 时下溢
-    let age_lower = crate::p2p::node::system_now_ms()
-        .saturating_sub(window.max_age_ms.clamp(0, i64::MAX));
+    let age_lower =
+        crate::p2p::node::system_now_ms().saturating_sub(window.max_age_ms.clamp(0, i64::MAX));
     // msg_sync_after：对端声明上次同步时间，取 max 得到有效下界
     let lower_bound = std::cmp::max(age_lower, window.msg_sync_after.unwrap_or(0));
     let mut out = Vec::new();
@@ -659,13 +737,12 @@ pub fn collect_message_window<S: StorageBackend>(
         let Some(conv_id) = conv_key.strip_prefix("msg:conv:personal:") else {
             continue;
         };
-        let msg_prefix = if let Some(plugin_id) =
-            conv_id.strip_prefix(crate::message::APP_CONV_PREFIX)
-        {
-            crate::message::app_message_prefix("personal", plugin_id)
-        } else {
-            crate::message::message_prefix("personal", conv_id)
-        };
+        let msg_prefix =
+            if let Some(plugin_id) = conv_id.strip_prefix(crate::message::APP_CONV_PREFIX) {
+                crate::message::app_message_prefix("personal", plugin_id)
+            } else {
+                crate::message::message_prefix("personal", conv_id)
+            };
         // 倒序取最新 max_per_conv 条（键序即时间序），返回降序（新→旧）
         let rows = storage.scan(&ScanOptions {
             prefix: msg_prefix,
@@ -688,7 +765,12 @@ pub fn collect_message_window<S: StorageBackend>(
             if created_at < lower_bound {
                 break;
             }
-            conv_records.push(PdsyncRecord { key, value, meta: DocMeta::default(), dseq: None });
+            conv_records.push(PdsyncRecord {
+                key,
+                value,
+                meta: DocMeta::default(),
+                dseq: None,
+            });
         }
         out.extend(conv_records.into_iter().rev());
     }
@@ -775,10 +857,7 @@ pub fn set_last_msg_sync_at<S: StorageBackend>(
 // ── 批量切分 ───────────────────────────────────────────────────────
 
 /// 按单批字节上限切分记录列表（近似：以每条序列化长度为累加单位）。
-pub fn split_batches(
-    records: Vec<PdsyncRecord>,
-    max_batch_bytes: usize,
-) -> Vec<Vec<PdsyncRecord>> {
+pub fn split_batches(records: Vec<PdsyncRecord>, max_batch_bytes: usize) -> Vec<Vec<PdsyncRecord>> {
     let mut batches: Vec<Vec<PdsyncRecord>> = Vec::new();
     let mut current: Vec<PdsyncRecord> = Vec::new();
     let mut current_bytes = 0usize;
@@ -798,7 +877,6 @@ pub fn split_batches(
     }
     batches
 }
-
 
 #[cfg(test)]
 mod tests;

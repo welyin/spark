@@ -93,10 +93,7 @@ impl super::inbound_dm::OrgqPermHook for QuickJsOrgqHook {
     fn has_runtime(&self, col_full: &str, kind: &str) -> bool {
         let plugin_id = Self::plugin_id(col_full);
         let name = Self::collection_name(col_full);
-        let registered = self
-            .query
-            .plugin_host
-            .has_filter(name, kind);
+        let registered = self.query.plugin_host.has_filter(name, kind);
         // 插件后台运行中（注册表可达）且注册了该种类过滤器
         registered && self.query.plugin_registry.is_running(plugin_id)
     }
@@ -214,7 +211,8 @@ impl Kernel {
         kind: &str,
         payload: serde_json::Value,
     ) -> Option<serde_json::Value> {
-        self.plugin_host_query_handle().query(plugin_id, kind, payload)
+        self.plugin_host_query_handle()
+            .query(plugin_id, kind, payload)
     }
 
     /// 克隆宿主查询句柄（`PluginHostShared` 与注册表均为 Arc 共享格，克隆

@@ -3,7 +3,9 @@
 use crate::storage::StorageBackend;
 use crate::sync::put_personal;
 
-use super::super::{ContactGroup, FRIEND_PREFIX, GROUP_PREFIX, GROUPS_KEY, Result, sync_err_to_contact};
+use super::super::{
+    ContactGroup, FRIEND_PREFIX, GROUP_PREFIX, GROUPS_KEY, Result, sync_err_to_contact,
+};
 use super::{ContactService, read_json, scan_json};
 
 impl ContactService {
@@ -27,8 +29,7 @@ impl ContactService {
         };
         let key = format!("{GROUP_PREFIX}{id}");
         let json = serde_json::to_string(&group)?;
-        put_personal(storage, node_id, &key, &json, now_ms)
-            .map_err(sync_err_to_contact)?;
+        put_personal(storage, node_id, &key, &json, now_ms).map_err(sync_err_to_contact)?;
         super::sync::bump_version(storage, super::sync::SyncDomain::Groups, now_ms)?;
         Ok(group)
     }
@@ -47,8 +48,7 @@ impl ContactService {
         };
         group.name = name.to_string();
         let json = serde_json::to_string(&group)?;
-        put_personal(storage, node_id, &key, &json, now_ms)
-            .map_err(sync_err_to_contact)?;
+        put_personal(storage, node_id, &key, &json, now_ms).map_err(sync_err_to_contact)?;
         super::sync::bump_version(storage, super::sync::SyncDomain::Groups, now_ms)?;
         Ok(())
     }
@@ -105,8 +105,7 @@ impl ContactService {
             g.order = i as i32;
             let key = format!("{GROUP_PREFIX}{}", g.id);
             let json = serde_json::to_string(&g)?;
-            put_personal(storage, node_id, &key, &json, now_ms)
-                .map_err(sync_err_to_contact)?;
+            put_personal(storage, node_id, &key, &json, now_ms).map_err(sync_err_to_contact)?;
         }
         super::sync::bump_version(storage, super::sync::SyncDomain::Groups, now_ms)?;
         Ok(())
@@ -143,8 +142,7 @@ impl ContactService {
             group.order = i as i32;
             let key = format!("{GROUP_PREFIX}{}", group.id);
             let json = serde_json::to_string(&group)?;
-            put_personal(storage, node_id, &key, &json, now_ms)
-                .map_err(sync_err_to_contact)?;
+            put_personal(storage, node_id, &key, &json, now_ms).map_err(sync_err_to_contact)?;
         }
         storage.delete(GROUPS_KEY)?;
         super::sync::bump_version(storage, super::sync::SyncDomain::Groups, now_ms)?;

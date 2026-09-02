@@ -20,10 +20,26 @@ fn remember_merges_and_caps_addresses() {
     let mut store = OverlayPeerStore::new(&mut storage);
     let (sid, saddrs) = self_ctx();
     store
-        .remember("p1", &addr(1), OverlayPeerSource::Connect, false, 100, sid, &saddrs)
+        .remember(
+            "p1",
+            &addr(1),
+            OverlayPeerSource::Connect,
+            false,
+            100,
+            sid,
+            &saddrs,
+        )
         .unwrap();
     store
-        .remember("p1", &addr(2), OverlayPeerSource::Exchange, false, 200, sid, &saddrs)
+        .remember(
+            "p1",
+            &addr(2),
+            OverlayPeerSource::Exchange,
+            false,
+            200,
+            sid,
+            &saddrs,
+        )
         .unwrap();
     let rec = store.get("p1").unwrap().unwrap();
     assert_eq!(rec.first_seen_at, 100);
@@ -32,7 +48,15 @@ fn remember_merges_and_caps_addresses() {
     assert_eq!(rec.source, OverlayPeerSource::Exchange);
     // 重复地址去重
     store
-        .remember("p1", &addr(1), OverlayPeerSource::Connect, false, 300, sid, &saddrs)
+        .remember(
+            "p1",
+            &addr(1),
+            OverlayPeerSource::Connect,
+            false,
+            300,
+            sid,
+            &saddrs,
+        )
         .unwrap();
     assert_eq!(store.get("p1").unwrap().unwrap().addresses.len(), 2);
 }
@@ -43,10 +67,26 @@ fn verified_is_sticky() {
     let mut store = OverlayPeerStore::new(&mut storage);
     let (sid, saddrs) = self_ctx();
     store
-        .remember("p1", &addr(1), OverlayPeerSource::Announce, true, 100, sid, &saddrs)
+        .remember(
+            "p1",
+            &addr(1),
+            OverlayPeerSource::Announce,
+            true,
+            100,
+            sid,
+            &saddrs,
+        )
         .unwrap();
     store
-        .remember("p1", &addr(2), OverlayPeerSource::Exchange, false, 200, sid, &saddrs)
+        .remember(
+            "p1",
+            &addr(2),
+            OverlayPeerSource::Exchange,
+            false,
+            200,
+            sid,
+            &saddrs,
+        )
         .unwrap();
     assert!(store.get("p1").unwrap().unwrap().verified);
 }
@@ -57,21 +97,58 @@ fn sample_prefers_verified_then_recency() {
     let mut store = OverlayPeerStore::new(&mut storage);
     let (sid, saddrs) = self_ctx();
     store
-        .remember("old-verified", &addr(1), OverlayPeerSource::Announce, true, 100, sid, &saddrs)
+        .remember(
+            "old-verified",
+            &addr(1),
+            OverlayPeerSource::Announce,
+            true,
+            100,
+            sid,
+            &saddrs,
+        )
         .unwrap();
     store
-        .remember("new-unverified", &addr(2), OverlayPeerSource::Exchange, false, 900, sid, &saddrs)
+        .remember(
+            "new-unverified",
+            &addr(2),
+            OverlayPeerSource::Exchange,
+            false,
+            900,
+            sid,
+            &saddrs,
+        )
         .unwrap();
     store
-        .remember("old-unverified", &addr(3), OverlayPeerSource::Exchange, false, 200, sid, &saddrs)
+        .remember(
+            "old-unverified",
+            &addr(3),
+            OverlayPeerSource::Exchange,
+            false,
+            200,
+            sid,
+            &saddrs,
+        )
         .unwrap();
     let now = 1_000_000i64;
-    let sample = store.sample_dial_candidates(&HashSet::new(), now, 10).unwrap();
+    let sample = store
+        .sample_dial_candidates(&HashSet::new(), now, 10)
+        .unwrap();
     let order: Vec<&str> = sample.iter().map(|r| r.peer_id.as_str()).collect();
-    assert_eq!(order, vec!["old-verified", "new-unverified", "old-unverified"]);
+    assert_eq!(
+        order,
+        vec!["old-verified", "new-unverified", "old-unverified"]
+    );
     // 排除 + 无地址条目
     store
-        .remember("no-addr", &[], OverlayPeerSource::Exchange, false, 1000, sid, &saddrs)
+        .remember(
+            "no-addr",
+            &[],
+            OverlayPeerSource::Exchange,
+            false,
+            1000,
+            sid,
+            &saddrs,
+        )
         .unwrap();
     let sample = store
         .sample_dial_candidates(&HashSet::from(["old-verified".to_string()]), now, 10)
@@ -87,7 +164,15 @@ fn dial_sample_filters_stale_beyond_freshness_window() {
     let (sid, saddrs) = self_ctx();
     let now = 1_000_000i64;
     store
-        .remember("fresh", &addr(1), OverlayPeerSource::Connect, false, now - 1000, sid, &saddrs)
+        .remember(
+            "fresh",
+            &addr(1),
+            OverlayPeerSource::Connect,
+            false,
+            now - 1000,
+            sid,
+            &saddrs,
+        )
         .unwrap();
     // 超 24h 窗口（connection-policy M7：IPv6 前缀/DHCP 复用尸体地址）的陈旧候选
     store
@@ -101,7 +186,9 @@ fn dial_sample_filters_stale_beyond_freshness_window() {
             &saddrs,
         )
         .unwrap();
-    let sample = store.sample_dial_candidates(&HashSet::new(), now, 10).unwrap();
+    let sample = store
+        .sample_dial_candidates(&HashSet::new(), now, 10)
+        .unwrap();
     let ids: Vec<&str> = sample.iter().map(|r| r.peer_id.as_str()).collect();
     assert_eq!(ids, vec!["fresh"], "超新鲜度窗口的候选应被滤除");
 }
@@ -126,9 +213,19 @@ fn dial_sample_drops_candidates_with_only_non_dialable_addresses() {
         )
         .unwrap();
     store
-        .remember("concrete", &addr(1), OverlayPeerSource::Connect, false, now, sid, &saddrs)
+        .remember(
+            "concrete",
+            &addr(1),
+            OverlayPeerSource::Connect,
+            false,
+            now,
+            sid,
+            &saddrs,
+        )
         .unwrap();
-    let sample = store.sample_dial_candidates(&HashSet::new(), now, 10).unwrap();
+    let sample = store
+        .sample_dial_candidates(&HashSet::new(), now, 10)
+        .unwrap();
     let ids: Vec<&str> = sample.iter().map(|r| r.peer_id.as_str()).collect();
     assert_eq!(ids, vec!["concrete"], "仅含不可拨通配地址的候选应被剔除");
 }
@@ -140,7 +237,15 @@ fn exchange_sample_respects_age_window() {
     let (sid, saddrs) = self_ctx();
     let now = 1_000_000i64;
     store
-        .remember("fresh", &addr(1), OverlayPeerSource::Connect, false, now - 1000, sid, &saddrs)
+        .remember(
+            "fresh",
+            &addr(1),
+            OverlayPeerSource::Connect,
+            false,
+            now - 1000,
+            sid,
+            &saddrs,
+        )
         .unwrap();
     store
         .remember(
@@ -166,7 +271,15 @@ fn eviction_drops_unverified_first() {
     let (sid, saddrs) = self_ctx();
     // 填满 200：199 个未验证 + 1 个最旧的已验证
     store
-        .remember("verified-oldest", &addr(0), OverlayPeerSource::Announce, true, 1, sid, &saddrs)
+        .remember(
+            "verified-oldest",
+            &addr(0),
+            OverlayPeerSource::Announce,
+            true,
+            1,
+            sid,
+            &saddrs,
+        )
         .unwrap();
     for i in 1..200usize {
         store
@@ -184,7 +297,15 @@ fn eviction_drops_unverified_first() {
     assert_eq!(store.list_all().unwrap().len(), 200);
     // 再插一个 → 淘汰最久未见的未验证（peer-1，lastSeenAt=10）
     store
-        .remember("newcomer", &addr(999), OverlayPeerSource::Exchange, false, 1_000_000, sid, &saddrs)
+        .remember(
+            "newcomer",
+            &addr(999),
+            OverlayPeerSource::Exchange,
+            false,
+            1_000_000,
+            sid,
+            &saddrs,
+        )
         .unwrap();
     let all = store.list_all().unwrap();
     assert_eq!(all.len(), 200);

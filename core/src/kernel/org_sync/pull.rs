@@ -31,8 +31,7 @@ impl OrgSyncContext {
         let info = self.node.local_node_info().await.ok()?;
         // 端点化：声明携带本机 deviceUid，管理员侧按 deviceUid 聚合端点。
         let mut storage = self.storage.clone();
-        let device_uid =
-            crate::device::get_or_create_device_uid(&mut storage).ok();
+        let device_uid = crate::device::get_or_create_device_uid(&mut storage).ok();
         Some(sign_node_info_claim(
             &key,
             OrganizationNodeInfo {
@@ -407,7 +406,8 @@ mod tests {
             .unwrap();
         s.put(&format!("orgq:queue:{org_id}:finance:ledger@v1:k1"), "{}")
             .unwrap();
-        s.put(&format!("orgq:da:online:{org_id}:da-a"), "123").unwrap();
+        s.put(&format!("orgq:da:online:{org_id}:da-a"), "123")
+            .unwrap();
 
         // 本机已被移除（成员表不含 my）→ 触发擦除
         let removed_record = record_with_members(org_id, &["da-a"]);
@@ -425,7 +425,9 @@ mod tests {
             "移除后离线队列擦除"
         );
         assert!(
-            s.get(&format!("orgq:da:online:{org_id}:da-a")).unwrap().is_none(),
+            s.get(&format!("orgq:da:online:{org_id}:da-a"))
+                .unwrap()
+                .is_none(),
             "移除后在线目录擦除"
         );
 
@@ -443,8 +445,11 @@ mod tests {
 
         // 跨组织隔离：他组织的 orgq 现场不受影响
         let other_id = "org_0000000000000002";
-        s.put(&orgq_cache_key(other_id, "finance:ledger@v1", "k9"), "\"v\"")
-            .unwrap();
+        s.put(
+            &orgq_cache_key(other_id, "finance:ledger@v1", "k9"),
+            "\"v\"",
+        )
+        .unwrap();
         let _ = wipe_orgq_if_member_removed(&mut s, &removed_record, "my");
         assert!(
             s.get(&orgq_cache_key(other_id, "finance:ledger@v1", "k9"))

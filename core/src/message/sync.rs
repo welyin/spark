@@ -182,8 +182,9 @@ mod tests {
         let applied = apply_conv_sync_snapshot(&mut b, &body, NOW + 300, NODE_A, NODE_B).unwrap();
         assert_eq!(applied, 1);
 
-        let synced =
-            MessageService::find_direct_conversation(&b, "personal", &rid('b')).unwrap().unwrap();
+        let synced = MessageService::find_direct_conversation(&b, "personal", &rid('b'))
+            .unwrap()
+            .unwrap();
         assert_eq!(synced.title, "好友甲");
         assert!(synced.pinned_at > 0, "置顶传播");
         assert_eq!(synced.draft, "草稿内容", "草稿传播");
@@ -270,7 +271,9 @@ mod tests {
             0
         );
         assert!(
-            MessageService::list_conversations(&b, "personal").unwrap().is_empty(),
+            MessageService::list_conversations(&b, "personal")
+                .unwrap()
+                .is_empty(),
             "非 direct 会话不同步"
         );
     }

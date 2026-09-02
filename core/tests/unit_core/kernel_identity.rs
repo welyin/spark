@@ -112,7 +112,10 @@ fn change_password_updates_unlock_and_session_cache() {
     // 未解锁态调用 → Locked
     kernel.lock();
     assert_eq!(
-        kernel.change_password(PASSWORD, NEW_PASSWORD).unwrap_err().to_string(),
+        kernel
+            .change_password(PASSWORD, NEW_PASSWORD)
+            .unwrap_err()
+            .to_string(),
         "Root identity is locked"
     );
 

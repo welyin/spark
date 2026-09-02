@@ -14,8 +14,8 @@ use crate::storage::{BatchOperation, ScanOptions, StorageBackend};
 
 use super::types::{
     APP_MSG_RATE_LIMIT, APP_MSG_RATE_WINDOW_MS, APP_SUMMARY_MAX_CHARS, AppMessageCard,
-    AppMessageRecord, ConversationRecord, app_conversation_id, app_message_key,
-    app_message_prefix, conversation_key, is_valid_plugin_id,
+    AppMessageRecord, ConversationRecord, app_conversation_id, app_message_key, app_message_prefix,
+    conversation_key, is_valid_plugin_id,
 };
 use super::{MessageError, Result};
 
@@ -217,10 +217,12 @@ impl AppMessageService {
         storage: &S,
         space: &str,
     ) -> Result<Vec<ConversationRecord>> {
-        Ok(super::service::MessageService::list_conversations(storage, space)?
-            .into_iter()
-            .filter(|c| c.kind == super::types::ConversationKind::App)
-            .collect())
+        Ok(
+            super::service::MessageService::list_conversations(storage, space)?
+                .into_iter()
+                .filter(|c| c.kind == super::types::ConversationKind::App)
+                .collect(),
+        )
     }
 
     // ---------- 已读 / 删除 ----------
@@ -239,7 +241,8 @@ impl AppMessageService {
             return Ok(());
         };
         let mut ops = Vec::new();
-        for (key, value) in storage.scan(&ScanOptions::prefix(app_message_prefix(space, plugin_id)))?
+        for (key, value) in
+            storage.scan(&ScanOptions::prefix(app_message_prefix(space, plugin_id)))?
         {
             let mut msg: AppMessageRecord = serde_json::from_str(&value)?;
             if !msg.read {
@@ -267,11 +270,11 @@ impl AppMessageService {
             .into_iter()
             .map(|(key, _)| key)
             .collect();
-        let mut ops: Vec<BatchOperation> =
-            keys.into_iter().map(BatchOperation::delete).collect();
-        ops.push(BatchOperation::delete(
-            conversation_key(space, &app_conversation_id(plugin_id)),
-        ));
+        let mut ops: Vec<BatchOperation> = keys.into_iter().map(BatchOperation::delete).collect();
+        ops.push(BatchOperation::delete(conversation_key(
+            space,
+            &app_conversation_id(plugin_id),
+        )));
         storage.batch(ops)?;
         Ok(())
     }

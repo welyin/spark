@@ -90,9 +90,7 @@ pub(crate) fn replica_check_due(last_ms: i64, now_ms: i64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::org::types::{
-        OrganizationMember, OrganizationNodeInfo, OrganizationRole,
-    };
+    use crate::org::types::{OrganizationMember, OrganizationNodeInfo, OrganizationRole};
 
     fn member(root_id: &str, peer_id: &str) -> OrganizationMember {
         let node_info = if peer_id.is_empty() {
@@ -157,7 +155,9 @@ mod tests {
 
     /// 命中该成员 rootId → 返回最近同步过（30 天窗口内）的 sync-state，计入副本。
     /// `synced_roots` 集合内的成员视为已同步。
-    fn synced_state<'a>(synced_roots: &'a [String]) -> impl FnMut(&str, Option<&str>) -> Option<OrgSyncState> + 'a {
+    fn synced_state<'a>(
+        synced_roots: &'a [String],
+    ) -> impl FnMut(&str, Option<&str>) -> Option<OrgSyncState> + 'a {
         move |root_id, _| {
             if synced_roots.iter().any(|r| r == root_id) {
                 Some(OrgSyncState {
@@ -176,7 +176,11 @@ mod tests {
         let record = admin_org("org-1", vec![member("a", "p-a"), member("b", "p-b")]);
         let targets = plan_replica_push_targets(&record, "self", no_state, 1000);
         let got: Vec<String> = targets.iter().map(|t| t.1.clone()).collect();
-        assert_eq!(got, vec!["a".to_string(), "b".to_string()], "不足 K 推全部未同步成员");
+        assert_eq!(
+            got,
+            vec!["a".to_string(), "b".to_string()],
+            "不足 K 推全部未同步成员"
+        );
         // 端点带出 peerId（供 `sync_org_to_member` 懒拨号）
         assert_eq!(targets[0].0.peer_id.as_deref(), Some("p-a"));
     }
@@ -187,8 +191,7 @@ mod tests {
         // 本机 + 2 个已同步成员 = 3 ≥ K
         let record = admin_org("org-1", vec![member("a", "p-a"), member("b", "p-b")]);
         let synced = ["a".to_string(), "b".to_string()];
-        let targets =
-            plan_replica_push_targets(&record, "self", synced_state(&synced), 1000);
+        let targets = plan_replica_push_targets(&record, "self", synced_state(&synced), 1000);
         assert!(targets.is_empty(), "副本已足 → 零外联");
     }
 
@@ -228,7 +231,10 @@ mod tests {
     fn replica_check_throttle_window() {
         let interval = REPLICA_CHECK_MIN_INTERVAL_MS;
         assert!(replica_check_due(0, 1000), "从未检查 → 立即允许");
-        assert!(!replica_check_due(1000, 1000 + interval - 1), "间隔内 → 短路跳过");
+        assert!(
+            !replica_check_due(1000, 1000 + interval - 1),
+            "间隔内 → 短路跳过"
+        );
         assert!(replica_check_due(1000, 1000 + interval), "到达间隔 → 允许");
     }
 }

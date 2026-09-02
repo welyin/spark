@@ -21,7 +21,9 @@ fn libp2p_peer_id(sk: &[u8; 32]) -> String {
 fn main() {
     let writer_sk = [0x11u8; 32];
     let recipient_sk = [0x22u8; 32];
-    let writer_pk = SigningKey::from_bytes(&writer_sk).verifying_key().to_bytes();
+    let writer_pk = SigningKey::from_bytes(&writer_sk)
+        .verifying_key()
+        .to_bytes();
     let recipient_pk = SigningKey::from_bytes(&recipient_sk)
         .verifying_key()
         .to_bytes();
@@ -146,7 +148,8 @@ fn main() {
         rotated_by: writer_peer.clone(),
         reason: RotationReason::Unknown,
     };
-    let state_unknown_json = serde_json::to_string(&state_unknown).expect("state unknown serialize");
+    let state_unknown_json =
+        serde_json::to_string(&state_unknown).expect("state unknown serialize");
     assert!(
         serde_json::from_str::<EpochState>("{\"current\":2,\"rotatedAt\":1755000000000,\"rotatedBy\":\"12D3KooWPqT2nMDSiXUSx5D7fasaxhxKigVhcqfkKqrLghCq9jxz\",\"reason\":\"heal\"}").is_ok(),
         "new reason 'heal' deserializes"
@@ -202,7 +205,10 @@ fn main() {
     });
 
     let out = concat!(env!("CARGO_MANIFEST_DIR"), "/../spec/vectors/epoch.json");
-    std::fs::write(out, format!("{}\n", serde_json::to_string_pretty(&doc).unwrap()))
-        .expect("write vectors");
+    std::fs::write(
+        out,
+        format!("{}\n", serde_json::to_string_pretty(&doc).unwrap()),
+    )
+    .expect("write vectors");
     println!("written: {out}");
 }

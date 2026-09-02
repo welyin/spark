@@ -80,7 +80,9 @@ pub fn p2p_status(kernel: &Kernel) -> Result<Value, String> {
             "addresses": info.addresses,
             "connectedPeers": info.connected_peers,
         })),
-        None => Ok(json!({"started": false, "peerId": null, "addresses": [], "connectedPeers": []})),
+        None => {
+            Ok(json!({"started": false, "peerId": null, "addresses": [], "connectedPeers": []}))
+        }
     }
 }
 

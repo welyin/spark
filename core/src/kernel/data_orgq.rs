@@ -33,8 +33,8 @@ use crate::p2p::node::system_now_ms;
 use crate::plugindata::CollectionDeclaration;
 use crate::storage::StorageBackend;
 use crate::sync::orgsync::{
-    self, build_orgq_query_req, build_orgq_write_req, orgq_pending_cleanup_stale,
-    orgq_pending_put, orgq_pending_remove, orgq_resp_take, select_online_data_account,
+    self, build_orgq_query_req, build_orgq_write_req, orgq_pending_cleanup_stale, orgq_pending_put,
+    orgq_pending_remove, orgq_resp_take, select_online_data_account,
 };
 
 /// orgq-req 同步等待应答的有界超时（任务建议 5-10s，取 8s）。
@@ -73,7 +73,9 @@ impl Kernel {
         }
         let storage = self.require_storage()?;
         let my_root = self.require_current_root_id()?;
-        let Some(record) = crate::org::OrganizationService::get_record(storage, oid).ok().flatten()
+        let Some(record) = crate::org::OrganizationService::get_record(storage, oid)
+            .ok()
+            .flatten()
         else {
             return Ok(WriteRoute::Local);
         };
@@ -84,9 +86,7 @@ impl Kernel {
         // 在线数据账号集合（连接层 peer 在线，与读路由同口径）→ 在线投递
         let online_peer_ids = self.online_peer_ids();
         let col_full = format!("{}@v{}", decl.name, decl.version);
-        let degraded = crate::sync::orgsync::orgq_degraded_for_collection(
-            storage, oid, &col_full,
-        );
+        let degraded = crate::sync::orgsync::orgq_degraded_for_collection(storage, oid, &col_full);
         if let Some(target) =
             select_online_data_account(&record, &online_peer_ids, &my_root, &degraded)
         {
@@ -109,15 +109,17 @@ impl Kernel {
     ) {
         let col_full = format!("{}@v{}", decl.name, decl.version);
         let relative = key
-            .strip_prefix(&crate::plugindata::org_data_prefix(oid, &decl.name, &decl.version))
+            .strip_prefix(&crate::plugindata::org_data_prefix(
+                oid,
+                &decl.name,
+                &decl.version,
+            ))
             .unwrap_or(key);
         // F7：存储不可用时静默跳过（best-effort 入队，不 unwrap）
         let Ok(mut storage) = self.require_storage().map(|s| s.clone()) else {
             return;
         };
-        let _ = crate::sync::orgsync::orgq_queue_put(
-            &mut storage, oid, &col_full, relative, value,
-        );
+        let _ = crate::sync::orgsync::orgq_queue_put(&mut storage, oid, &col_full, relative, value);
     }
 
     /// 解析目标数据账号成员的连接层 peer（与 `resolve_conv_peer` 的组织空间

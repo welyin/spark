@@ -115,8 +115,10 @@ impl KernelDmHandler {
             return false;
         }
         // 共享格刷新（dm 应答/出站口径）+ 前端通知
-        *self.nickname_shared.lock().unwrap_or_else(|e| e.into_inner()) =
-            file.nickname.clone().unwrap_or_default();
+        *self
+            .nickname_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = file.nickname.clone().unwrap_or_default();
         *self.avatar_shared.lock().unwrap_or_else(|e| e.into_inner()) =
             file.avatar.clone().unwrap_or_default();
         let mut data = serde_json::json!({
@@ -125,7 +127,9 @@ impl KernelDmHandler {
         if let Some(a) = &file.avatar {
             data["avatar"] = Value::from(a.clone());
         }
-        let _ = self.event_tx.send(crate::p2p::P2pEvent::SelfProfileSynced(data));
+        let _ = self
+            .event_tx
+            .send(crate::p2p::P2pEvent::SelfProfileSynced(data));
         false
     }
 
@@ -152,7 +156,8 @@ impl KernelDmHandler {
         else {
             return;
         };
-        let Ok(profile) = serde_json::from_str::<crate::kernel::identity::SyncableProfile>(&raw) else {
+        let Ok(profile) = serde_json::from_str::<crate::kernel::identity::SyncableProfile>(&raw)
+        else {
             return;
         };
         let info = profile.to_profile_info();
@@ -215,8 +220,10 @@ impl KernelDmHandler {
         if crate::kernel::identity::write_identity_file_atomic(&path, &text).is_err() {
             return;
         }
-        *self.nickname_shared.lock().unwrap_or_else(|e| e.into_inner()) =
-            file.nickname.clone().unwrap_or_default();
+        *self
+            .nickname_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = file.nickname.clone().unwrap_or_default();
         *self.avatar_shared.lock().unwrap_or_else(|e| e.into_inner()) =
             file.avatar.clone().unwrap_or_default();
         // 前端通知（与 apply_self_profile 同口径）：我的资料已被自设备同步更新
@@ -226,6 +233,8 @@ impl KernelDmHandler {
         if let Some(a) = &file.avatar {
             data["avatar"] = Value::from(a.clone());
         }
-        let _ = self.event_tx.send(crate::p2p::P2pEvent::SelfProfileSynced(data));
+        let _ = self
+            .event_tx
+            .send(crate::p2p::P2pEvent::SelfProfileSynced(data));
     }
 }

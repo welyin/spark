@@ -7,12 +7,10 @@
 
 use serde_json::{Value, json};
 
-use super::{
-    InboundContext, InboundDmResult, PdsyncOut, Result, done, fail_response, ok_response,
-};
-use crate::kernel::message_ops::{conversation_view, message_view};
+use super::{InboundContext, InboundDmResult, PdsyncOut, Result, done, fail_response, ok_response};
 use crate::contact::ContactService;
 use crate::device::{DeviceRecord, DeviceService};
+use crate::kernel::message_ops::{conversation_view, message_view};
 use crate::message::{MessageRecord, MessageService};
 use crate::p2p::P2pEvent;
 use crate::storage::StorageBackend;
@@ -189,8 +187,7 @@ pub(super) fn handle_pdsync_hello<S: StorageBackend>(
         match diff {
             crate::sync::pdsync::DiffOutcome::LocalBehind { local_vv } => {
                 // 本机落后：请求对端补增量
-                let need_body =
-                    crate::sync::pdsync::build_need(category.name, &local_vv, my_seen);
+                let need_body = crate::sync::pdsync::build_need(category.name, &local_vv, my_seen);
                 out.push(PdsyncOut::Need { body: need_body });
             }
             crate::sync::pdsync::DiffOutcome::LocalAhead => {
@@ -219,8 +216,7 @@ pub(super) fn handle_pdsync_hello<S: StorageBackend>(
                     &local_vv,
                     &remote_vv,
                 );
-                let need_body =
-                    crate::sync::pdsync::build_need(category.name, &local_vv, my_seen);
+                let need_body = crate::sync::pdsync::build_need(category.name, &local_vv, my_seen);
                 out.push(PdsyncOut::Need { body: need_body });
                 if !push_gated {
                     push_category_data(
@@ -242,10 +238,7 @@ pub(super) fn handle_pdsync_hello<S: StorageBackend>(
                 // Equal 可能由同 nodeId 其他记录的分量撑起）——墓碑按日志
                 // ACK 游标独立补推（无未确认条目时为空操作）
                 let Ok(tombs) = crate::sync::pdsync::collect_tombstones_after(
-                    storage,
-                    category,
-                    exclude,
-                    dlog_ack,
+                    storage, category, exclude, dlog_ack,
                 ) else {
                     continue;
                 };
@@ -255,8 +248,7 @@ pub(super) fn handle_pdsync_hello<S: StorageBackend>(
                     remote_class.as_deref(),
                 );
                 if !tombs.is_empty() {
-                    let batches =
-                        crate::sync::pdsync::split_batches(tombs, PDSYNC_BATCH_BYTES);
+                    let batches = crate::sync::pdsync::split_batches(tombs, PDSYNC_BATCH_BYTES);
                     let total = batches.len();
                     for (i, batch) in batches.into_iter().enumerate() {
                         let body =
@@ -281,17 +273,14 @@ pub(super) fn handle_pdsync_hello<S: StorageBackend>(
             let (app_records, item_records): (Vec<_>, Vec<_>) = window_records
                 .into_iter()
                 .partition(|r| r.key.starts_with("msg:app:"));
-            for (category, records) in
-                [("msg:item", item_records), ("msg:app", app_records)]
-            {
+            for (category, records) in [("msg:item", item_records), ("msg:app", app_records)] {
                 let batches = crate::sync::pdsync::split_batches(records, PDSYNC_BATCH_BYTES);
                 let total = batches.len();
                 // M3 消息窗口同样用 min(本地 effective, 对端声明 effective) 加密。
                 for (i, batch) in batches.into_iter().enumerate() {
-                    let batch = encrypt_records_for_push(storage, &batch, remote_epoch)
-                        .unwrap_or_default();
-                    let body =
-                        crate::sync::pdsync::build_data_batch(category, &batch, i, total);
+                    let batch =
+                        encrypt_records_for_push(storage, &batch, remote_epoch).unwrap_or_default();
+                    let body = crate::sync::pdsync::build_data_batch(category, &batch, i, total);
                     out.push(PdsyncOut::Data { body });
                 }
             }
@@ -327,8 +316,7 @@ pub(super) fn handle_pdsync_need<S: StorageBackend>(
     if from != ctx.my_root_id {
         return done(fail_response("not-self-device"), Vec::new());
     }
-    let Some((category_name, known_vv, dlog_ack)) = crate::sync::pdsync::parse_need(body)
-    else {
+    let Some((category_name, known_vv, dlog_ack)) = crate::sync::pdsync::parse_need(body) else {
         return done(fail_response("invalid-body"), Vec::new());
     };
     let Some(category) = crate::sync::pdsync::category_by_name(&category_name) else {
@@ -349,14 +337,13 @@ pub(super) fn handle_pdsync_need<S: StorageBackend>(
     };
     // P6 驻留裁剪：按请求方最近一次 hello 声明的设备类过滤 pdoc 记录
     let remote_class = storage
-        .get(&crate::sync::pdsync::remote_device_class_key(ctx.remote_peer_id))
+        .get(&crate::sync::pdsync::remote_device_class_key(
+            ctx.remote_peer_id,
+        ))
         .ok()
         .flatten();
-    let records = crate::sync::pdsync::trim_records_by_residency(
-        storage,
-        records,
-        remote_class.as_deref(),
-    );
+    let records =
+        crate::sync::pdsync::trim_records_by_residency(storage, records, remote_class.as_deref());
     if category_name == "ct:friend" {
         let tombs: Vec<_> = records
             .iter()
@@ -373,8 +360,8 @@ pub(super) fn handle_pdsync_need<S: StorageBackend>(
     // M3 发送侧加密：need 响应同样走 encrypt_records_for_push。
     // need body 不携带 remote epoch，用持久化存储的 pdsync:epoch:{peer} 值。
     let remote_epoch = crate::sync::pdsync::get_remote_epoch(storage, ctx.remote_peer_id);
-    let records = encrypt_records_for_push(storage, &records, Some(remote_epoch))
-        .unwrap_or_default();
+    let records =
+        encrypt_records_for_push(storage, &records, Some(remote_epoch)).unwrap_or_default();
 
     let batches = crate::sync::pdsync::split_batches(records, PDSYNC_BATCH_BYTES);
     let total = batches.len();
@@ -519,10 +506,9 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
                     ops.extend(dlog_ops);
                     storage.batch(ops).map_err(crate::sync::SyncError::from)?;
                     convs_applied += 1;
-                } else if let Ok(remote) =
-                    serde_json::from_value::<crate::message::ConversationRecord>(
-                        record.value.clone(),
-                    )
+                } else if let Ok(remote) = serde_json::from_value::<
+                    crate::message::ConversationRecord,
+                >(record.value.clone())
                 {
                     let merged = match local_before {
                         // 远端胜出：同步字段合并进本地副本，保留本地未读/更新时间
@@ -530,8 +516,8 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
                             // 自聊会话（peer_root == 本机 rootId）的 peer 是设备
                             // 相对寻址（各指向对方设备），与自 FriendRecord 同性质
                             // ——保留本地值，不随远端快照覆盖
-                            let self_conv_peer = (local.peer_root_id == ctx.my_root_id)
-                                .then(|| local.peer.clone());
+                            let self_conv_peer =
+                                (local.peer_root_id == ctx.my_root_id).then(|| local.peer.clone());
                             crate::message::MessageService::merge_conv_meta(&mut local, &remote);
                             if let Some(peer) = self_conv_peer {
                                 local.peer = peer;
@@ -647,9 +633,8 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
                 }
                 continue;
             }
-            let upper_bound = (ctx.now_ms as u64).saturating_add(
-                crate::kernel::dm_envelope::ENVELOPE_TS_WINDOW_MS as u64,
-            );
+            let upper_bound = (ctx.now_ms as u64)
+                .saturating_add(crate::kernel::dm_envelope::ENVELOPE_TS_WINDOW_MS as u64);
             if incoming.changed_at > upper_bound {
                 log::warn!(
                     "[PDSYNC_DATA] pwv:self future ts rejected | changed_at={} now={}",
@@ -661,12 +646,8 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
             if let Ok(Some(cur)) = crate::pw::get_pwv(storage) {
                 let _ = crate::pw::put_last_good_v(storage, &cur);
             }
-            let result = crate::sync::apply_personal_remote(
-                storage,
-                &record.key,
-                &value_str,
-                &record.meta,
-            )?;
+            let result =
+                crate::sync::apply_personal_remote(storage, &record.key, &value_str, &record.meta)?;
             if result.did_apply() {
                 crate::pw::put_stale(storage, true)?;
                 crate::device::DeviceService::append_security_log(
@@ -697,12 +678,8 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
                 .ok()
                 .flatten()
                 .map(|m| (m.ts, m.vv.clone()));
-            let result = crate::sync::apply_personal_remote(
-                storage,
-                &record.key,
-                &value_str,
-                &record.meta,
-            )?;
+            let result =
+                crate::sync::apply_personal_remote(storage, &record.key, &value_str, &record.meta)?;
             log::info!(
                 "[PROFILE_CHAIN] pdsync profile:self inbound | remote ts={} vv={:?} | local ts/vv={:?} | applied={}",
                 record.meta.ts,
@@ -729,9 +706,7 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
                 // 已存在消息重复收会触发无意义的 ChatReceived（对已删除 bot
                 // 的会话尤甚——bot 配置已删但会话还在，每次 Hello 都路由到插件
                 // 侧却找不到 bot，产生"孤儿联系人"噪音）。
-                if MessageService::get_message(storage, "personal", &conv_id, &msg.id)?
-                    .is_none()
-                {
+                if MessageService::get_message(storage, "personal", &conv_id, &msg.id)?.is_none() {
                     latest_msg_by_conv
                         .entry(conv_id)
                         .and_modify(|cur| {
@@ -757,7 +732,11 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
         let result =
             crate::sync::apply_personal_remote(storage, &record.key, &value_str, &record.meta)?;
         if record.key.starts_with("ct:") {
-            log::info!("[CT_SYNC] ct applied={} | key={}", result.did_apply(), record.key);
+            log::info!(
+                "[CT_SYNC] ct applied={} | key={}",
+                result.did_apply(),
+                record.key
+            );
         }
         // P6 blob 热切：新合入的 pdoc 记录收集引用（墓碑无本体，跳过）
         if result.did_apply()
@@ -822,7 +801,9 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
     // - 消息 → 逐会话一条 ChatReceived（最新一条 + 当前会话快照；前端按 id
     //   去重、信任快照未读——窗口合入不动 unread_count，快照即现状）。
     if contacts_applied > 0 {
-        events.push(P2pEvent::ContactsSynced(json!({ "applied": contacts_applied })));
+        events.push(P2pEvent::ContactsSynced(
+            json!({ "applied": contacts_applied }),
+        ));
     }
     if org_meta_applied > 0 || org_contacts_applied > 0 {
         events.push(P2pEvent::OrgSynced(json!({
@@ -831,13 +812,14 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
         })));
     }
     if convs_applied > 0 {
-        events.push(P2pEvent::ConversationsSynced(json!({ "applied": convs_applied })));
+        events.push(P2pEvent::ConversationsSynced(
+            json!({ "applied": convs_applied }),
+        ));
     }
     for (conv_id, message) in latest_msg_by_conv {
         // 会话壳尚未同步到本机时跳过事件（conv 元数据到达后列表自会刷新，
         // 打开会话时消息从库内水合）
-        let Ok(Some(conv)) = MessageService::get_conversation(storage, "personal", &conv_id)
-        else {
+        let Ok(Some(conv)) = MessageService::get_conversation(storage, "personal", &conv_id) else {
             continue;
         };
         // online 判定与 handle_chat 同口径：conv.peer 缺失时回退朋友记录
@@ -1052,7 +1034,11 @@ fn ack_remote_journal<S: StorageBackend>(storage: &mut S, ctx: &InboundContext<'
     if let Ok(removed) = crate::sync::dlog::gc(storage, threshold)
         && removed > 0
     {
-        log::info!("[CT_SYNC] dlog gc | removed={} threshold={}", removed, threshold);
+        log::info!(
+            "[CT_SYNC] dlog gc | removed={} threshold={}",
+            removed,
+            threshold
+        );
     }
 }
 
@@ -1106,7 +1092,10 @@ fn encrypt_records_for_push<S: StorageBackend>(
     if enc_epoch == 0 {
         return Ok(records.to_vec());
     }
-    let Some(epoch_key) = crate::epoch::get_local_key(storage, enc_epoch).ok().flatten() else {
+    let Some(epoch_key) = crate::epoch::get_local_key(storage, enc_epoch)
+        .ok()
+        .flatten()
+    else {
         // effective>0 但本地 epoch 密钥缺失：宁可整批不推，也不明文泄漏。
         return Ok(Vec::new());
     };
@@ -1188,8 +1177,7 @@ fn push_category_data<S: StorageBackend>(
     let records = crate::sync::pdsync::trim_records_by_residency(storage, records, remote_class);
 
     // M3 发送侧加密：取 min(本机 effective, 对端宣告 effective)。
-    let records =
-        encrypt_records_for_push(storage, &records, remote_epoch).unwrap_or_default();
+    let records = encrypt_records_for_push(storage, &records, remote_epoch).unwrap_or_default();
 
     if category.name == "ct:friend" {
         let tombs: Vec<_> = records
@@ -1273,18 +1261,26 @@ mod tests {
         .unwrap();
 
         // ① 对端未声明 mkt:ann：不产生该类目推送
-        let result =
-            handle_pdsync_hello(&mut s, &ctx("root-x", "peer-y", &online), "root-x", &hello_body(false))
-                .unwrap();
+        let result = handle_pdsync_hello(
+            &mut s,
+            &ctx("root-x", "peer-y", &online),
+            "root-x",
+            &hello_body(false),
+        )
+        .unwrap();
         assert!(
             !out_has_mkt_ann_data(&result),
             "对端未声明 mkt:ann 不得推送（灰度防整批拒收）"
         );
 
         // ② 对端已声明 mkt:ann：本机领先 → 推送该类目
-        let result =
-            handle_pdsync_hello(&mut s, &ctx("root-x", "peer-y", &online), "root-x", &hello_body(true))
-                .unwrap();
+        let result = handle_pdsync_hello(
+            &mut s,
+            &ctx("root-x", "peer-y", &online),
+            "root-x",
+            &hello_body(true),
+        )
+        .unwrap();
         assert!(
             out_has_mkt_ann_data(&result),
             "对端已声明 mkt:ann 且本机领先应推送"

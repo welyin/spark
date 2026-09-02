@@ -54,9 +54,11 @@ fn enqueue_list_remove_roundtrip() {
     assert_eq!(list[0].1, r1);
 
     remove(&mut s, &list[0].0).unwrap();
-    assert!(list_for_recipient(&s, PendingSpace::Personal, "rootB", 3000)
-        .unwrap()
-        .is_empty());
+    assert!(
+        list_for_recipient(&s, PendingSpace::Personal, "rootB", 3000)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 /// 不同 recipient / 不同 messageId 各自独立键。
@@ -93,7 +95,12 @@ fn different_recipients_and_ids_isolated() {
 
     let b = list_for_recipient(&s, PendingSpace::Personal, "rootB", 3000).unwrap();
     assert_eq!(b.len(), 2);
-    assert_eq!(list_for_recipient(&s, PendingSpace::Personal, "rootC", 3000).unwrap().len(), 1);
+    assert_eq!(
+        list_for_recipient(&s, PendingSpace::Personal, "rootC", 3000)
+            .unwrap()
+            .len(),
+        1
+    );
     // 组织空间独立于个人空间
     let org = list_for_recipient(&s, PendingSpace::Org("org_abc"), "rootB", 3000).unwrap();
     assert!(org.is_empty());
@@ -216,14 +223,28 @@ fn pending_converges_via_pdsync() {
 fn org_space_islanded() {
     let mut s = MemoryStorage::new();
     let rec = record("rootB", "m1", "chat", 1000);
-    enqueue(&mut s, PendingSpace::Org("org_abc"), "rootB", &rec, NODE_A, 1000).unwrap();
+    enqueue(
+        &mut s,
+        PendingSpace::Org("org_abc"),
+        "rootB",
+        &rec,
+        NODE_A,
+        1000,
+    )
+    .unwrap();
     let list = list_for_recipient(&s, PendingSpace::Org("org_abc"), "rootB", 3000).unwrap();
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].0, "org:dm:pending:org_abc:rootB:m1");
     // 个人空间不受影响
-    assert!(list_for_recipient(&s, PendingSpace::Personal, "rootB", 3000).unwrap().is_empty());
+    assert!(
+        list_for_recipient(&s, PendingSpace::Personal, "rootB", 3000)
+            .unwrap()
+            .is_empty()
+    );
     // 不同 orgId 隔离
-    assert!(list_for_recipient(&s, PendingSpace::Org("org_xyz"), "rootB", 3000)
-        .unwrap()
-        .is_empty());
+    assert!(
+        list_for_recipient(&s, PendingSpace::Org("org_xyz"), "rootB", 3000)
+            .unwrap()
+            .is_empty()
+    );
 }

@@ -42,9 +42,16 @@ fn repro_org_tombstone_seq_collision_blindness_fixed() {
     // D 受理写 k1（seq 1）
     put_personal(&mut s, NODE_D, &data_key("k1"), "\"v1\"", NOW).unwrap();
     // D 受理删除 k1 → 墓碑（修复前：per-key bump 得 {D:2} 但序号键不动）
-    let tomb =
-        org_tombstone_local(&mut s, NODE_D, ORG_ID, NAME, VERSION, &data_key("k1"), NOW + 1)
-            .unwrap();
+    let tomb = org_tombstone_local(
+        &mut s,
+        NODE_D,
+        ORG_ID,
+        NAME,
+        VERSION,
+        &data_key("k1"),
+        NOW + 1,
+    )
+    .unwrap();
     assert_eq!(tomb.tombstone, Some(true), "墓碑标记");
     assert_eq!(tomb.vv.get(NODE_D), Some(&2), "墓碑序号 = 2");
     assert!(s.get(&data_key("k1")).unwrap().is_none(), "本体已删");
@@ -54,8 +61,8 @@ fn repro_org_tombstone_seq_collision_blindness_fixed() {
         "序号键与墓碑同 batch 推进（修复前不动 → 碰撞根源）"
     );
     // org 域 dlog 有序号（墓碑传播双通道之一）
-    let entries = spark_core::sync::orgsync::org_dlog_entries_after(&s, ORG_ID, NAME, VERSION, 0)
-        .unwrap();
+    let entries =
+        spark_core::sync::orgsync::org_dlog_entries_after(&s, ORG_ID, NAME, VERSION, 0).unwrap();
     assert_eq!(entries, vec![(1, data_key("k1"))], "org dlog 登记删除");
 
     // D 再写 k2 → 序号 3（修复前恰分到 2，与墓碑同值碰撞）
@@ -114,10 +121,7 @@ impl StorageBackend for FailBatchStorage {
     fn batch(&mut self, _operations: Vec<BatchOperation>) -> spark_core::storage::Result<()> {
         Err(StorageError::Backend("injected batch failure".to_string()))
     }
-    fn scan(
-        &self,
-        options: &ScanOptions,
-    ) -> spark_core::storage::Result<Vec<(String, String)>> {
+    fn scan(&self, options: &ScanOptions) -> spark_core::storage::Result<Vec<(String, String)>> {
         self.inner.scan(options)
     }
 }
@@ -131,7 +135,15 @@ fn org_tombstone_local_atomic_on_batch_failure() {
     put_personal(&mut inner, NODE_D, &data_key("k1"), "\"v1\"", NOW).unwrap();
     let mut s = FailBatchStorage { inner };
 
-    let r = org_tombstone_local(&mut s, NODE_D, ORG_ID, NAME, VERSION, &data_key("k1"), NOW + 1);
+    let r = org_tombstone_local(
+        &mut s,
+        NODE_D,
+        ORG_ID,
+        NAME,
+        VERSION,
+        &data_key("k1"),
+        NOW + 1,
+    );
     assert!(r.is_err(), "batch 注入失败 → 整体 Err");
     // 无任何半态：本体仍在、pmeta 非墓碑、序号键仍停在 1、dlog 无条目
     assert!(s.get(&data_key("k1")).unwrap().is_some(), "本体未被删");
@@ -143,8 +155,8 @@ fn org_tombstone_local_atomic_on_batch_failure() {
         Some("1"),
         "序号键未推进"
     );
-    let entries = spark_core::sync::orgsync::org_dlog_entries_after(&s, ORG_ID, NAME, VERSION, 0)
-        .unwrap();
+    let entries =
+        spark_core::sync::orgsync::org_dlog_entries_after(&s, ORG_ID, NAME, VERSION, 0).unwrap();
     assert!(entries.is_empty(), "org dlog 无条目");
 }
 
@@ -166,11 +178,21 @@ fn org_tombstone_seq_seeds_above_legacy_per_key_pmeta() {
         &serde_json::to_string(&legacy).unwrap(),
     )
     .unwrap();
-    assert!(s.get(VV_SEQ_KEY).unwrap().is_none(), "前置：无序号键（存量态）");
+    assert!(
+        s.get(VV_SEQ_KEY).unwrap().is_none(),
+        "前置：无序号键（存量态）"
+    );
 
-    let tomb =
-        org_tombstone_local(&mut s, NODE_D, ORG_ID, NAME, VERSION, &data_key("k-old"), NOW + 1)
-            .unwrap();
+    let tomb = org_tombstone_local(
+        &mut s,
+        NODE_D,
+        ORG_ID,
+        NAME,
+        VERSION,
+        &data_key("k-old"),
+        NOW + 1,
+    )
+    .unwrap();
     assert_eq!(
         tomb.vv.get(NODE_D),
         Some(&6),

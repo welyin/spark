@@ -23,8 +23,8 @@ use std::sync::mpsc;
 
 use serde_json::{Value, json};
 use spark_core::kernel::{Kernel, KernelConfig};
-use spark_core::p2p::{P2pConfig, P2pEvent};
 use spark_core::p2p::node::system_now_ms;
+use spark_core::p2p::{P2pConfig, P2pEvent};
 
 /// 测试节点统一口令（脚本可经 `password` 参数覆盖）。
 pub const DEFAULT_PASSWORD: &str = "e2e-password-123";
@@ -146,16 +146,18 @@ fn main() {
 
     // p2p 事件线程：broadcast 接收端阻塞读（同步上下文可用 blocking_recv）
     let mut events = kernel.subscribe_p2p_events();
-    std::thread::spawn(move || loop {
-        match events.blocking_recv() {
-            Ok(event) => {
-                if tx.send(Input::Event(event)).is_err() {
-                    return;
+    std::thread::spawn(move || {
+        loop {
+            match events.blocking_recv() {
+                Ok(event) => {
+                    if tx.send(Input::Event(event)).is_err() {
+                        return;
+                    }
                 }
+                // 滞后丢弃继续；频道关闭即退出
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
             }
-            // 滞后丢弃继续；频道关闭即退出
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-            Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
         }
     });
 

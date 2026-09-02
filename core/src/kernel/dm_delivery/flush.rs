@@ -122,7 +122,9 @@ pub(crate) async fn flush_pending_for_recipient<S: StorageBackend>(
             .as_ref()
             .and_then(|r| r.get("ok").and_then(Value::as_bool))
             .unwrap_or(false);
-        let reason = resp.as_ref().and_then(|r| r.get("reason").and_then(Value::as_str));
+        let reason = resp
+            .as_ref()
+            .and_then(|r| r.get("reason").and_then(Value::as_str));
         if ok {
             let _ = remove(storage, &key);
             write_back(storage, &record, "delivered", &event_tx, &io_lock);

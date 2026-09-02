@@ -114,8 +114,7 @@ pub use service::{
     write_session_key_record,
 };
 pub use types::{
-    DM_E2E_DOMAIN, E2E_KEY_PREFIX, HISTORY_KEY_CAP, HKDF_INFO_PREFIX, HistoryKey,
-    SessionKeyRecord,
+    DM_E2E_DOMAIN, E2E_KEY_PREFIX, HISTORY_KEY_CAP, HKDF_INFO_PREFIX, HistoryKey, SessionKeyRecord,
 };
 
 #[cfg(test)]

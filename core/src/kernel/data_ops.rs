@@ -144,9 +144,9 @@ impl Kernel {
                     crate::sync::orgsync::AccessDataError::KeyUnavailable(m) => {
                         super::KernelError::KeyUnavailable(m)
                     }
-                    other => super::KernelError::Internal(format!(
-                        "encrypt {col_full}:{key}: {other}"
-                    )),
+                    other => {
+                        super::KernelError::Internal(format!("encrypt {col_full}:{key}: {other}"))
+                    }
                 })?;
                 value = serde_json::from_str(&ct).unwrap_or(Value::String(ct));
             }
@@ -196,9 +196,7 @@ impl Kernel {
                 let Some(oid) = org_id else {
                     return Ok(());
                 };
-                match self
-                    .data_orgq_write(oid, &decl, &target_root_id, key, &Value::Null)?
-                {
+                match self.data_orgq_write(oid, &decl, &target_root_id, key, &Value::Null)? {
                     Some(true) => return Ok(()), // 受理（数据账号侧已落墓碑）
                     // F5：denied → AccessDenied（与 data_save 对称，不吞 denied）
                     Some(false) => return Err(super::KernelError::AccessDenied),
@@ -334,11 +332,16 @@ impl Kernel {
     }
 
     /// blob 保存（base64 入、内容哈希出）。
-    pub fn data_save_blob(&mut self, data_base64: &str) -> Result<crate::plugindata::blob::BlobInfo> {
+    pub fn data_save_blob(
+        &mut self,
+        data_base64: &str,
+    ) -> Result<crate::plugindata::blob::BlobInfo> {
         use base64::Engine as _;
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(data_base64)
-            .map_err(|e| crate::plugindata::PlugindataError::Blob(format!("invalid base64: {e}")))?;
+            .map_err(|e| {
+                crate::plugindata::PlugindataError::Blob(format!("invalid base64: {e}"))
+            })?;
         let storage = self.require_storage_mut()?;
         Ok(plugindata::blob::save_blob(storage, &bytes)?)
     }
@@ -359,7 +362,9 @@ impl Kernel {
     ) -> Result<crate::sync::orgsync::MemberReadPlan> {
         let storage = self.require_storage()?;
         let my_root = self.require_current_root_id()?;
-        let Some(record) = crate::org::OrganizationService::get_record(storage, org_id).ok().flatten()
+        let Some(record) = crate::org::OrganizationService::get_record(storage, org_id)
+            .ok()
+            .flatten()
         else {
             return Ok(crate::sync::orgsync::MemberReadPlan::Local);
         };
@@ -376,9 +381,9 @@ impl Kernel {
         let is_all_members = decl.accounts == crate::plugindata::Accounts::AllMembers;
         let local_resident = is_data || is_all_members;
         let col_full = format!("{name}@v{version}");
-        let cache_populated =
-            crate::sync::orgsync::orgq_cache_has_data(storage, org_id, &col_full);
-        let degraded = crate::sync::orgsync::orgq_degraded_for_collection(storage, org_id, &col_full);
+        let cache_populated = crate::sync::orgsync::orgq_cache_has_data(storage, org_id, &col_full);
+        let degraded =
+            crate::sync::orgsync::orgq_degraded_for_collection(storage, org_id, &col_full);
         Ok(crate::sync::orgsync::member_orgq_read_plan(
             &record,
             &my_root,

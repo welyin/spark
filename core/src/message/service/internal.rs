@@ -1,10 +1,10 @@
 use crate::storage::{BatchOperation, ScanOptions, StorageBackend};
 
+use super::super::Result;
 use super::super::types::{
     ConversationRecord, MessageRecord, message_id_index_key, message_id_index_prefix,
     message_prefix,
 };
-use super::super::Result;
 use super::MessageService;
 
 impl MessageService {
@@ -102,7 +102,9 @@ impl MessageService {
             .collect();
         keys.extend(
             storage
-                .scan(&ScanOptions::prefix(message_id_index_prefix(space, conv_id)))?
+                .scan(&ScanOptions::prefix(message_id_index_prefix(
+                    space, conv_id,
+                )))?
                 .into_iter()
                 .map(|(key, _)| key),
         );

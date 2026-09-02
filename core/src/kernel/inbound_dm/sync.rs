@@ -10,19 +10,15 @@ use super::{
     InboundContext, InboundDmResult, ProfileSyncReply, Result, done, fail_response, is_blocked,
     ok_response, valid_space_key,
 };
-use crate::kernel::message_ops::direct_conversation_id;
 use crate::contact::ContactService;
+use crate::kernel::message_ops::direct_conversation_id;
 use crate::message::MessageService;
 use crate::org::OrganizationService;
 use crate::p2p::{P2pEvent, PeerNodeInfo};
 use crate::storage::StorageBackend;
 
 /// 组织空间成员校验：`org:` 空间要求 from 是该组织成员。
-fn check_org_membership<S: StorageBackend>(
-    storage: &S,
-    space: &str,
-    from: &str,
-) -> Result<bool> {
+fn check_org_membership<S: StorageBackend>(storage: &S, space: &str, from: &str) -> Result<bool> {
     let Some(org_id) = space.strip_prefix("org:") else {
         return Ok(true);
     };
@@ -124,8 +120,7 @@ pub(super) fn handle_profile_sync<S: StorageBackend>(
     let is_self = from == ctx.my_root_id;
     // 自设备快照上抛独立于朋友记录存在与否（新设备恢复后可能尚未创建自
     // FriendRecord，资料同步不应丢失）
-    let is_self_snapshot =
-        is_self && body.get("updatedAt").and_then(Value::as_i64).is_some();
+    let is_self_snapshot = is_self && body.get("updatedAt").and_then(Value::as_i64).is_some();
     let self_profile = if is_self_snapshot {
         Some(body.clone())
     } else {
@@ -258,18 +253,17 @@ pub(super) fn handle_device_sync<S: StorageBackend>(
     // 互为回包形成 ping-pong 风暴（对 profile-sync 的 LWW 回发裁决同口径：
     // 收敛后不再互发）。
     let reply = if changed {
-        ContactService::get_friend(storage, from)?
-            .and_then(|f| {
-                // 多设备寻址：优先匹配连接层对端 peerId（本帧来源权威），否则取首个
-                f.peers
-                    .iter()
-                    .find(|p| p.peer_id == ctx.remote_peer_id)
-                    .or_else(|| f.peers.first())
-                    .map(|p| PeerNodeInfo {
-                        peer_id: (!p.peer_id.is_empty()).then_some(p.peer_id.clone()),
-                        addresses: p.addresses.clone(),
-                    })
-            })
+        ContactService::get_friend(storage, from)?.and_then(|f| {
+            // 多设备寻址：优先匹配连接层对端 peerId（本帧来源权威），否则取首个
+            f.peers
+                .iter()
+                .find(|p| p.peer_id == ctx.remote_peer_id)
+                .or_else(|| f.peers.first())
+                .map(|p| PeerNodeInfo {
+                    peer_id: (!p.peer_id.is_empty()).then_some(p.peer_id.clone()),
+                    addresses: p.addresses.clone(),
+                })
+        })
     } else {
         None
     };

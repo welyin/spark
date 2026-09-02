@@ -13,8 +13,9 @@ use crate::p2p::node::system_now_ms;
 use crate::storage::StorageBackend;
 
 fn require_x25519_self(storage: &dyn StorageBackend) -> Result<[u8; 32], KernelError> {
-    identity_store::load_x25519_private_key(storage)
-        .ok_or_else(|| KernelError::Internal("无法读取本机 libp2p 私钥以执行 epoch 轮换".to_string()))
+    identity_store::load_x25519_private_key(storage).ok_or_else(|| {
+        KernelError::Internal("无法读取本机 libp2p 私钥以执行 epoch 轮换".to_string())
+    })
 }
 
 fn build_authorized<'a>(
@@ -80,7 +81,9 @@ pub fn rotate(
     // 轮换派发的 ikey 包裹走裸存储、不触发变更信号——挂 hello 补发旗标，
     // 让已连接自设备下一轮反熵即拿到新密钥（watchdog 消费，见
     // sync::pdsync::HELLO_REQUEST_KEY 注释）。
-    let _ = storage.raw_mut().put(crate::sync::pdsync::HELLO_REQUEST_KEY, "1");
+    let _ = storage
+        .raw_mut()
+        .put(crate::sync::pdsync::HELLO_REQUEST_KEY, "1");
     Ok(Some(state))
 }
 

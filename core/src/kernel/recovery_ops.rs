@@ -13,8 +13,8 @@ use crate::device::DeviceService;
 use crate::kernel::dm_envelope::KIND_RECOVERY;
 use crate::kernel::error::{KernelError, Result};
 use crate::kernel::{Kernel, KernelStorage};
-use crate::p2p::node::{P2pEvent, system_now_ms};
 use crate::p2p::PeerNodeInfo;
+use crate::p2p::node::{P2pEvent, system_now_ms};
 use crate::recovery::{
     KEY_PENDING, PendingRecovery, RecoveryError, RecoveryOp, RecoveryService, RecoveryState,
 };

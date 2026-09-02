@@ -135,8 +135,7 @@ fn peer_id_mismatch_rejected() {
     let other = make_keypair();
     let now = 1_720_000_000_000i64;
     // 用 A 的私钥签、peerId 填 B 的 → 验签公钥来自 peerId，必失败
-    let card =
-        sign_node_card(&keypair, &peer_id_of(&other), &sample_addrs(), now, None).unwrap();
+    let card = sign_node_card(&keypair, &peer_id_of(&other), &sample_addrs(), now, None).unwrap();
     assert_eq!(
         parse_and_verify_node_card(&encode_node_card(&card), now),
         Err(NodeCardReject::BadSignature)

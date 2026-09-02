@@ -181,8 +181,10 @@ impl Kernel {
         let Some(mut file) = self.read_identity_file(&root_id)? else {
             return Err(KernelError::NotInitialized);
         };
-        identity::update_profile(&mut file, password, nickname, avatar, gender, region, signature)
-            .map_err(map_identity_decrypt_error)?;
+        identity::update_profile(
+            &mut file, password, nickname, avatar, gender, region, signature,
+        )
+        .map_err(map_identity_decrypt_error)?;
         self.write_identity_file(&file)?;
         log::info!(
             "[PROFILE_CHAIN] local update saved | file.updated_at={} nickname={:?} signature={:?}",

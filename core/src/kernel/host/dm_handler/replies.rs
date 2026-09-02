@@ -37,7 +37,12 @@ impl KernelDmHandler {
     /// 自动接受/重确认的回发：取本机节点信息装配 friend-accept 信封
     /// （设备配对 from==to==我；重确认 to=请求方 rootId），经节点命令通道
     /// 尽力投递。
-    pub(super) fn spawn_auto_accept(&self, my_root_id: &str, nickname: &str, auto_accept: AutoAccept) {
+    pub(super) fn spawn_auto_accept(
+        &self,
+        my_root_id: &str,
+        nickname: &str,
+        auto_accept: AutoAccept,
+    ) {
         let node = self
             .node_shared
             .lock()
@@ -385,8 +390,7 @@ impl KernelDmHandler {
             };
             for delay_ms in [5_000u64, 15_000] {
                 tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-                let watermark =
-                    crate::sync::dlog::get_watermark(&storage, &peer_id).unwrap_or(0);
+                let watermark = crate::sync::dlog::get_watermark(&storage, &peer_id).unwrap_or(0);
                 if watermark >= max_dseq {
                     break; // 回执已到（对端 need/hello 的 dlogAck 推进了水位）
                 }
@@ -396,8 +400,7 @@ impl KernelDmHandler {
                     watermark,
                     max_dseq
                 );
-                let failed =
-                    send_pdsync_outputs(&node, &signing_key, &to, &target, &outputs).await;
+                let failed = send_pdsync_outputs(&node, &signing_key, &to, &target, &outputs).await;
                 enqueue_pdsync_failures(&mut storage, &to, &failed, &node_id);
             }
         });
@@ -469,14 +472,7 @@ impl KernelDmHandler {
             // L4（mobile-leaf-mode §6）：确认不可达的 orgsync-data 入
             // `org:dm:pending:`（to=成员 rootId），成员设备 app-ready 时经
             // `on_peer_app_ready` flush 重发；对端 dlog/vv 幂等合入
-            let failed = send_orgsync_outputs(
-                &node,
-                &signing_key,
-                &from,
-                &target,
-                &outputs,
-            )
-            .await;
+            let failed = send_orgsync_outputs(&node, &signing_key, &from, &target, &outputs).await;
             enqueue_orgsync_failures(&mut storage, &failed, &node_id);
             let (Some(max_dseq), Some(peer_id), Some((root_id, (org_id, name, version)))) =
                 (pushed_max_dseq, wm_peer_id, ack_ctx)
@@ -499,14 +495,8 @@ impl KernelDmHandler {
                     wm,
                     max_dseq
                 );
-                let failed = send_orgsync_outputs(
-                    &node,
-                    &signing_key,
-                    &from,
-                    &target,
-                    &outputs,
-                )
-                .await;
+                let failed =
+                    send_orgsync_outputs(&node, &signing_key, &from, &target, &outputs).await;
                 enqueue_orgsync_failures(&mut storage, &failed, &node_id);
             }
         });
@@ -709,8 +699,7 @@ async fn send_pdsync_outputs(
         };
         // L4 离线暂存：确认不可达的集合数据（pdsync-data）收集返回，由调用方
         // 入 pending；`Ok(Some(_))`（含限流重试耗尽，对端在线）不算失败。
-        if !matches!(&response, Ok(Some(_)))
-            && kind == crate::kernel::dm_envelope::KIND_PDSYNC_DATA
+        if !matches!(&response, Ok(Some(_))) && kind == crate::kernel::dm_envelope::KIND_PDSYNC_DATA
         {
             failed.push((output.body().clone(), envelope));
         }
@@ -719,7 +708,10 @@ async fn send_pdsync_outputs(
 }
 
 /// 检查 device_joined 通知补发窗口是否仍然有效。
-pub(super) fn device_notice_window_open(storage: &crate::storage::SledStorage, now_ms: i64) -> bool {
+pub(super) fn device_notice_window_open(
+    storage: &crate::storage::SledStorage,
+    now_ms: i64,
+) -> bool {
     use crate::p2p::constants::P2P_DEVICE_NOTICE_SELF_UNTIL;
     storage
         .get(P2P_DEVICE_NOTICE_SELF_UNTIL)

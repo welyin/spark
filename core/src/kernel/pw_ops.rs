@@ -337,14 +337,12 @@ pub(crate) fn password_unify_status(kernel: &Kernel) -> Result<PasswordUnifyStat
     let v_changed_by_device = v_changed_by
         .as_ref()
         .and_then(|by| {
-            DeviceService::list(storage.raw())
-                .ok()
-                .and_then(|records| {
-                    records
-                        .iter()
-                        .find(|r| r.peer_id == *by)
-                        .map(|r| r.device_name.clone())
-                })
+            DeviceService::list(storage.raw()).ok().and_then(|records| {
+                records
+                    .iter()
+                    .find(|r| r.peer_id == *by)
+                    .map(|r| r.device_name.clone())
+            })
         })
         .or_else(|| v_changed_by.clone());
 

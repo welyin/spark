@@ -34,14 +34,12 @@ type HmacSha256 = Hmac<Sha256>;
 pub fn hkdf_sha256(shared: &[u8; 32], info: &str) -> [u8; 32] {
     // extract：salt 全零
     let salt = [0u8; 32];
-    let mut extract_mac =
-        HmacSha256::new_from_slice(&salt).expect("hmac accepts 32B salt");
+    let mut extract_mac = HmacSha256::new_from_slice(&salt).expect("hmac accepts 32B salt");
     extract_mac.update(shared);
     let prk = extract_mac.finalize().into_bytes();
 
     // expand：T(1) = HMAC(PRK, info || 0x01)
-    let mut expand_mac =
-        HmacSha256::new_from_slice(&prk).expect("hmac accepts 32B prk");
+    let mut expand_mac = HmacSha256::new_from_slice(&prk).expect("hmac accepts 32B prk");
     expand_mac.update(info.as_bytes());
     expand_mac.update(&[0x01u8]);
     let okm = expand_mac.finalize().into_bytes();

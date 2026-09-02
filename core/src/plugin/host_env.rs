@@ -272,12 +272,18 @@ impl PluginHostShared {
     fn reply_stream_start(&self, plugin_id: &str, payload: &Value) -> Result<Value> {
         let space = required_str(payload, "spaceKey")?;
         let conv_id = required_str(payload, "convId")?;
-        eprintln!("[stream-dbg] replyStreamStart enter plugin={plugin_id} space={space} conv={conv_id}");
+        eprintln!(
+            "[stream-dbg] replyStreamStart enter plugin={plugin_id} space={space} conv={conv_id}"
+        );
         let (bot_root_id, bot_name) =
             crate::kernel::require_owned_bot_conv(self, plugin_id, space, conv_id)?;
         eprintln!("[stream-dbg] replyStreamStart owned bot={bot_root_id}");
         let message_id = crate::kernel::bot_reply_stream_start_shared(
-            self, space, conv_id, &bot_root_id, &bot_name,
+            self,
+            space,
+            conv_id,
+            &bot_root_id,
+            &bot_name,
         )?;
         eprintln!("[stream-dbg] replyStreamStart done messageId={message_id}");
         Ok(serde_json::json!({ "messageId": message_id }))
@@ -292,7 +298,13 @@ impl PluginHostShared {
         let (bot_root_id, bot_name) =
             crate::kernel::require_owned_bot_conv(self, plugin_id, space, conv_id)?;
         crate::kernel::bot_reply_stream_chunk_shared(
-            self, space, conv_id, &bot_root_id, &bot_name, message_id, text,
+            self,
+            space,
+            conv_id,
+            &bot_root_id,
+            &bot_name,
+            message_id,
+            text,
         )?;
         Ok(serde_json::json!({ "ok": true }))
     }
@@ -307,7 +319,13 @@ impl PluginHostShared {
         let (bot_root_id, bot_name) =
             crate::kernel::require_owned_bot_conv(self, plugin_id, space, conv_id)?;
         crate::kernel::bot_reply_stream_end_shared(
-            self, space, conv_id, &bot_root_id, &bot_name, message_id, error,
+            self,
+            space,
+            conv_id,
+            &bot_root_id,
+            &bot_name,
+            message_id,
+            error,
         )?;
         // 终态定稿后回同步自设备（与 bot_reply_shared 的 deliver_to_devices 同口径）
         if let Some(my_root_id) = self
@@ -343,7 +361,10 @@ fn capability_permission(capability: &str) -> Option<&'static str> {
         "docs.get" | "docs.query" => Some("storage:read"),
         "docs.put" | "docs.delete" | "docs.defineCollection" => Some("storage:write"),
         "data.get" | "data.query" | "data.readBlob" => Some("storage:read"),
-        "data.save" | "data.delete" | "data.declareCollection" | "data.dropVersion"
+        "data.save"
+        | "data.delete"
+        | "data.declareCollection"
+        | "data.dropVersion"
         | "data.saveBlob" => Some("storage:write"),
         // R2：encrypted 授权名单三方法归入 storage:write（grant/revoke 落 acl
         // + 轮换密钥，list 只读但同属 encrypted 能力面——owner 侧管控）。
@@ -511,8 +532,12 @@ fn resolve_doc_domain<'a>(
         Some(domain) if domain == plugin_id => Ok(plugin_id),
         Some(domain) if domain == plugin_root => Ok(domain),
         Some(domain) if domain == "space:personal" || domain == "space:org" => {
-            let collection = payload.get("collection").and_then(Value::as_str).unwrap_or("");
-            if access == DocAccess::Read && SPACE_DOMAIN_READABLE_COLLECTIONS.contains(&collection) {
+            let collection = payload
+                .get("collection")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if access == DocAccess::Read && SPACE_DOMAIN_READABLE_COLLECTIONS.contains(&collection)
+            {
                 Ok(domain)
             } else {
                 Err(PluginError::InvalidCall(format!(
@@ -568,7 +593,12 @@ impl PluginHostShared {
     }
 
     /// 集合配置缓存写入（对齐 `Kernel::make_collection`）。
-    fn remember_collection_config(&self, domain: &str, collection: &str, config: &CollectionConfig) {
+    fn remember_collection_config(
+        &self,
+        domain: &str,
+        collection: &str,
+        config: &CollectionConfig,
+    ) {
         self.collection_configs
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -680,9 +710,8 @@ impl PluginHostShared {
 
     fn doc_define_collection(&self, plugin_id: &str, payload: &Value) -> Result<Value> {
         let collection = required_str(payload, "collection")?;
-        let declaration: CollectionSchemaDeclaration = serde_json::from_value(
-            payload.get("schema").cloned().unwrap_or(Value::Null),
-        )?;
+        let declaration: CollectionSchemaDeclaration =
+            serde_json::from_value(payload.get("schema").cloned().unwrap_or(Value::Null))?;
         let _io = self.io_lock.lock().unwrap_or_else(|e| e.into_inner());
         let mut storage = self.require_storage()?;
         declare_collection_schema(
@@ -705,7 +734,10 @@ impl PluginHostShared {
         &self,
         plugin_id: &str,
         payload: &Value,
-    ) -> Result<(crate::plugindata::CollectionDeclaration, crate::kernel::KernelStorage)> {
+    ) -> Result<(
+        crate::plugindata::CollectionDeclaration,
+        crate::kernel::KernelStorage,
+    )> {
         let name = required_str(payload, "name")?;
         // 插件只能触达自己前缀的集合（与声明校验同口径）
         if !name.starts_with(&format!("{plugin_id}:")) {
@@ -766,8 +798,9 @@ impl PluginHostShared {
         }
         let _io = self.io_lock.lock().unwrap_or_else(|e| e.into_inner());
         let mut storage = self.require_storage()?;
-        let decl = crate::plugindata::declare(&mut storage, plugin_id, input, system_now_ms(), org_id)
-            .map_err(|e| PluginError::InvalidCall(e.to_string()))?;
+        let decl =
+            crate::plugindata::declare(&mut storage, plugin_id, input, system_now_ms(), org_id)
+                .map_err(|e| PluginError::InvalidCall(e.to_string()))?;
         serde_json::to_value(&decl).map_err(Into::into)
     }
 
@@ -788,13 +821,22 @@ impl PluginHostShared {
 
     /// F1：org data-accounts 且本机非数据账号 → orgq 离线入队（不落 orgd 副本）。
     /// 入队用相对 key，value 为 null 即删除（与 Kernel 侧 data_org_enqueue 同口径）。
-    fn orgq_enqueue_write(&self, decl: &crate::plugindata::CollectionDeclaration, key: &str, value: &Value) {
+    fn orgq_enqueue_write(
+        &self,
+        decl: &crate::plugindata::CollectionDeclaration,
+        key: &str,
+        value: &Value,
+    ) {
         let Some(oid) = decl.org_id.as_deref() else {
             return;
         };
         let col_full = format!("{}@v{}", decl.name, decl.version);
         let relative = key
-            .strip_prefix(&crate::plugindata::org_data_prefix(oid, &decl.name, &decl.version))
+            .strip_prefix(&crate::plugindata::org_data_prefix(
+                oid,
+                &decl.name,
+                &decl.version,
+            ))
             .unwrap_or(key);
         if let Ok(storage) = self.require_storage().map(|s| s.clone()) {
             let _ = crate::sync::orgsync::orgq_queue_put(
@@ -869,9 +911,7 @@ impl PluginHostShared {
         // O3 读路径透明路由（QuickJS 通路）：org data-accounts 集合对本机
         // 非数据账号 → 走成员侧缓存（数据账号离线回缓存；在线 orgq 由宿主
         // 接线）。本机数据账号 / all-members 集合直接读本地。
-        if decl.space == Some(crate::plugindata::Space::Org)
-            && !self.org_local_resident(&decl)?
-        {
+        if decl.space == Some(crate::plugindata::Space::Org) && !self.org_local_resident(&decl)? {
             if let Some(v) = self.orgq_cached_get(&storage, &decl, key)? {
                 return Ok(v);
             }
@@ -887,7 +927,12 @@ impl PluginHostShared {
                 if decl.confidentiality == crate::plugindata::Confidentiality::Encrypted {
                     if let Some(oid) = decl.org_id.as_deref() {
                         match crate::sync::orgsync::decrypt_orgd_value(
-                            &storage, oid, &decl.name, &decl.version, key, &text,
+                            &storage,
+                            oid,
+                            &decl.name,
+                            &decl.version,
+                            key,
+                            &text,
                         ) {
                             Ok(plain) => {
                                 serde_json::from_str(&plain).unwrap_or(Value::String(plain))
@@ -1018,9 +1063,7 @@ impl PluginHostShared {
         use crate::kernel::dm_envelope::{KIND_FEED_BLOB_REQ, build_envelope};
         // 逐 hash 节流（§19.6）：距上次请求不足 BLOB_REQ_THROTTLE_MS 跳过
         let now = system_now_ms();
-        if !crate::plugindata::blob::throttle_request(storage, hash, now)
-            .unwrap_or(false)
-        {
+        if !crate::plugindata::blob::throttle_request(storage, hash, now).unwrap_or(false) {
             return;
         }
         // 解析来源 rootId 的对端（friend 记录择优；无可寻址端点跳过）
@@ -1032,12 +1075,23 @@ impl PluginHostShared {
         };
         // 本机 rootId + 签名私钥
         let (Some(my_root_id), Some(signing_key)) = (
-            self.my_root_id.lock().unwrap_or_else(|e| e.into_inner()).clone(),
-            self.signing_key.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+            self.my_root_id
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone(),
+            self.signing_key
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone(),
         ) else {
             return;
         };
-        let Some(node) = self.p2p_node.lock().unwrap_or_else(|e| e.into_inner()).clone() else {
+        let Some(node) = self
+            .p2p_node
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        else {
             return;
         };
         let envelope = build_envelope(
@@ -1138,9 +1192,10 @@ impl PluginHostShared {
             .map(str::to_string);
         let event_tx = rtx.event_tx.clone();
         self.runtime.spawn(async move {
-            let result =
-                tokio::task::spawn_blocking(move || crate::sys::exec_blocking(&program, &args, workdir.as_deref()))
-                    .await;
+            let result = tokio::task::spawn_blocking(move || {
+                crate::sys::exec_blocking(&program, &args, workdir.as_deref())
+            })
+            .await;
             let payload = match result {
                 Ok(Ok(r)) => serde_json::json!({
                     "callId": call_id,
@@ -1170,7 +1225,10 @@ impl PluginHostShared {
     fn sys_exec_stream_start(&self, rtx: &PluginRuntimeContext, payload: &Value) -> Result<Value> {
         let call_id = required_call_id(payload)?;
         let program = required_str(payload, "program")?.to_string();
-        eprintln!("[stream-dbg] execStream start program={program} args={:?}", payload.get("args"));
+        eprintln!(
+            "[stream-dbg] execStream start program={program} args={:?}",
+            payload.get("args")
+        );
         let args: Vec<String> = payload
             .get("args")
             .and_then(Value::as_array)
@@ -1194,7 +1252,12 @@ impl PluginHostShared {
                     &args,
                     workdir.as_deref(),
                     move |chunk| {
-                        eprintln!("[stream-dbg] execStream chunk done={} text_len={} exit={:?}", chunk.done, chunk.text.len(), chunk.exit_code);
+                        eprintln!(
+                            "[stream-dbg] execStream chunk done={} text_len={} exit={:?}",
+                            chunk.done,
+                            chunk.text.len(),
+                            chunk.exit_code
+                        );
                         let _ = chunk_tx.send(PluginEvent::Dispatch {
                             kind: "sys-exec-chunk".to_string(),
                             payload: serde_json::json!({
@@ -1212,7 +1275,11 @@ impl PluginHostShared {
             .await;
             let payload = match result {
                 Ok(Ok(r)) => {
-                    eprintln!("[stream-dbg] execStream done exit={} stderr_len={}", r.exit_code, r.stderr.len());
+                    eprintln!(
+                        "[stream-dbg] execStream done exit={} stderr_len={}",
+                        r.exit_code,
+                        r.stderr.len()
+                    );
                     serde_json::json!({
                         "callId": call_id,
                         "exitCode": r.exit_code,
@@ -1258,15 +1325,18 @@ impl PluginHostShared {
             .map(str::to_string);
         let event_tx = rtx.event_tx.clone();
         self.runtime.spawn(async move {
-            let payload = match crate::sys::fetch(&url, method.as_deref(), headers.as_ref(), body.as_deref()).await {
-                Ok(r) => serde_json::json!({
-                    "callId": call_id,
-                    "status": r.status,
-                    "headers": r.headers,
-                    "body": r.body,
-                }),
-                Err(error) => serde_json::json!({ "callId": call_id, "error": error }),
-            };
+            let payload =
+                match crate::sys::fetch(&url, method.as_deref(), headers.as_ref(), body.as_deref())
+                    .await
+                {
+                    Ok(r) => serde_json::json!({
+                        "callId": call_id,
+                        "status": r.status,
+                        "headers": r.headers,
+                        "body": r.body,
+                    }),
+                    Err(error) => serde_json::json!({ "callId": call_id, "error": error }),
+                };
             let _ = event_tx.send(PluginEvent::Dispatch {
                 kind: "sys-fetch-result".to_string(),
                 payload,
@@ -1390,7 +1460,13 @@ impl PluginHostShared {
         let recipients: Vec<String> = payload
             .get("recipients")
             .and_then(Value::as_array)
-            .map(|items| items.iter().filter_map(Value::as_str).map(String::from).collect())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(String::from)
+                    .collect()
+            })
             .unwrap_or_default();
         let reply_to = payload.get("replyTo").and_then(Value::as_str);
         let result = crate::kernel::feed_deliver_shared(
@@ -1455,10 +1531,7 @@ impl PluginHostShared {
     fn identity_sign(&self, plugin_id: &str, payload: &Value) -> Result<Value> {
         let pl = required_str(payload, "payload")?;
         // 域缺省 = 插件根域；显式指定的域必须 == 插件根域（防越权签他域）
-        let domain = payload
-            .get("domain")
-            .and_then(Value::as_str)
-            .unwrap_or("");
+        let domain = payload.get("domain").and_then(Value::as_str).unwrap_or("");
         let root_domain = format!("plugin:{plugin_id}");
         let domain = if domain.is_empty() {
             root_domain.as_str()

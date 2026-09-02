@@ -72,14 +72,18 @@ fn setup() -> (Kernel, Kernel, String, String) {
         peer_id: kernel_b.p2p_status().unwrap().unwrap().peer_id,
         addresses: dialable_addrs(&kernel_b),
     };
-    kernel_a.org_add_member(&org_id, &root_b, Some(&b_node)).unwrap();
+    kernel_a
+        .org_add_member(&org_id, &root_b, Some(&b_node))
+        .unwrap();
     kernel_a
         .org_set_data_accounts(&org_id, &[root_a.clone()])
         .unwrap();
     // 回填 A 自身成员 nodeInfo（B 据此选在线数据账号）
     {
         let mut raw = kernel_a.__test_storage().unwrap();
-        let mut record = OrganizationService::get_record(&raw, &org_id).unwrap().unwrap();
+        let mut record = OrganizationService::get_record(&raw, &org_id)
+            .unwrap()
+            .unwrap();
         let a_node = spark_core::org::OrganizationNodeInfo {
             device_uid: None,
             peer_id: Some(kernel_a.p2p_status().unwrap().unwrap().peer_id.unwrap()),
@@ -107,7 +111,15 @@ fn connect_member(kernel_a: &Kernel, kernel_b: &mut Kernel, org_id: &str) {
         .unwrap();
     let a_peer = kernel_a.p2p_status().unwrap().unwrap().peer_id.unwrap();
     wait_until(
-        || kernel_b.p2p_status().unwrap().unwrap().connected_peers.iter().any(|p| *p == a_peer),
+        || {
+            kernel_b
+                .p2p_status()
+                .unwrap()
+                .unwrap()
+                .connected_peers
+                .iter()
+                .any(|p| *p == a_peer)
+        },
         15_000,
         "B 连接 A",
     );
@@ -133,7 +145,11 @@ fn member_online_query_delivers_and_caches() {
         )
         .unwrap();
     kernel_a
-        .plugin_start_background("orgq", &filter_plugin(true, false), &["data:write".to_string()])
+        .plugin_start_background(
+            "orgq",
+            &filter_plugin(true, false),
+            &["data:write".to_string()],
+        )
         .unwrap();
     connect_member(&kernel_a, &mut kernel_b, &org_id);
 
@@ -181,7 +197,11 @@ fn member_online_query_hook_reject_returns_empty() {
         .unwrap();
     // canRead 拒绝
     kernel_a
-        .plugin_start_background("orgq", &filter_plugin(false, false), &["data:write".to_string()])
+        .plugin_start_background(
+            "orgq",
+            &filter_plugin(false, false),
+            &["data:write".to_string()],
+        )
         .unwrap();
     connect_member(&kernel_a, &mut kernel_b, &org_id);
 
@@ -197,7 +217,10 @@ fn member_online_query_hook_reject_returns_empty() {
             Some(&org_id),
         )
         .unwrap();
-    assert!(local.is_some(), "对照：A 数据账号本地直读命中 k1（数据驻留）");
+    assert!(
+        local.is_some(),
+        "对照：A 数据账号本地直读命中 k1（数据驻留）"
+    );
 
     let page = kernel_b
         .data_query(
@@ -227,7 +250,11 @@ fn member_online_write_accepted_lands_on_a() {
         .unwrap();
     // canWrite 放行
     kernel_a
-        .plugin_start_background("orgq", &filter_plugin(true, true), &["data:write".to_string()])
+        .plugin_start_background(
+            "orgq",
+            &filter_plugin(true, true),
+            &["data:write".to_string()],
+        )
         .unwrap();
     connect_member(&kernel_a, &mut kernel_b, &org_id);
 
@@ -245,11 +272,23 @@ fn member_online_write_accepted_lands_on_a() {
     // A 侧已落库（orgd: 数据键，随复制组扩散）
     let data_key = format!("orgd:{org_id}:orgq:deliver@v1.0.0:k9");
     wait_until(
-        || kernel_a.__test_storage().unwrap().get(&data_key).unwrap().is_some(),
+        || {
+            kernel_a
+                .__test_storage()
+                .unwrap()
+                .get(&data_key)
+                .unwrap()
+                .is_some()
+        },
         10_000,
         "A 侧落库",
     );
-    let raw = kernel_a.__test_storage().unwrap().get(&data_key).unwrap().unwrap();
+    let raw = kernel_a
+        .__test_storage()
+        .unwrap()
+        .get(&data_key)
+        .unwrap()
+        .unwrap();
     assert!(raw.contains("\"b\""), "A 侧记录 = B 写入值");
 
     kernel_a.shutdown().unwrap();
@@ -266,7 +305,11 @@ fn member_online_write_denied_maps_access_denied() {
         .unwrap();
     // canWrite 拒绝 → denied=true
     kernel_a
-        .plugin_start_background("orgq", &filter_plugin(true, false), &["data:write".to_string()])
+        .plugin_start_background(
+            "orgq",
+            &filter_plugin(true, false),
+            &["data:write".to_string()],
+        )
         .unwrap();
     connect_member(&kernel_a, &mut kernel_b, &org_id);
 
@@ -287,7 +330,12 @@ fn member_online_write_denied_maps_access_denied() {
     // A 侧未落库
     let data_key = format!("orgd:{org_id}:orgq:deliver@v1.0.0:k9");
     assert!(
-        kernel_a.__test_storage().unwrap().get(&data_key).unwrap().is_none(),
+        kernel_a
+            .__test_storage()
+            .unwrap()
+            .get(&data_key)
+            .unwrap()
+            .is_none(),
         "被拒写入不落库"
     );
 
@@ -345,14 +393,18 @@ fn orgkey_deliver_reaches_reader_and_enables_decrypt() {
         peer_id: kernel_b.p2p_status().unwrap().unwrap().peer_id,
         addresses: dialable_addrs(&kernel_b),
     };
-    kernel_a.org_add_member(&org_id, &root_b, Some(&b_node)).unwrap();
+    kernel_a
+        .org_add_member(&org_id, &root_b, Some(&b_node))
+        .unwrap();
     kernel_a
         .org_set_data_accounts(&org_id, &[root_a.clone()])
         .unwrap();
     // 回填 A 自身 nodeInfo（B 据此选在线数据账号）
     {
         let mut raw = kernel_a.__test_storage().unwrap();
-        let mut record = OrganizationService::get_record(&raw, &org_id).unwrap().unwrap();
+        let mut record = OrganizationService::get_record(&raw, &org_id)
+            .unwrap()
+            .unwrap();
         let a_node = spark_core::org::OrganizationNodeInfo {
             device_uid: None,
             peer_id: Some(kernel_a.p2p_status().unwrap().unwrap().peer_id.unwrap()),
@@ -381,7 +433,15 @@ fn orgkey_deliver_reaches_reader_and_enables_decrypt() {
             .unwrap();
         let a_peer = kernel_a.p2p_status().unwrap().unwrap().peer_id.unwrap();
         wait_until(
-            || kernel_b.p2p_status().unwrap().unwrap().connected_peers.iter().any(|p| *p == a_peer),
+            || {
+                kernel_b
+                    .p2p_status()
+                    .unwrap()
+                    .unwrap()
+                    .connected_peers
+                    .iter()
+                    .any(|p| *p == a_peer)
+            },
             15_000,
             "B 连接 A",
         );
@@ -392,10 +452,16 @@ fn orgkey_deliver_reaches_reader_and_enables_decrypt() {
     kernel_b.org_publish_access_key(&org_id).unwrap();
     {
         let b_raw = kernel_b.__test_storage().unwrap();
-        let b_record = OrganizationService::get_record(&b_raw, &org_id).unwrap().unwrap();
-        let b_access_key = b_record.find_member(&root_b).and_then(|m| m.access_key.clone());
+        let b_record = OrganizationService::get_record(&b_raw, &org_id)
+            .unwrap()
+            .unwrap();
+        let b_access_key = b_record
+            .find_member(&root_b)
+            .and_then(|m| m.access_key.clone());
         let mut a_raw = kernel_a.__test_storage().unwrap();
-        let mut a_record = OrganizationService::get_record(&a_raw, &org_id).unwrap().unwrap();
+        let mut a_record = OrganizationService::get_record(&a_raw, &org_id)
+            .unwrap()
+            .unwrap();
         if let Some(m) = a_record.members.iter_mut().find(|m| m.root_id == root_b) {
             m.access_key = b_access_key;
         }
@@ -405,8 +471,13 @@ fn orgkey_deliver_reaches_reader_and_enables_decrypt() {
     assert!(
         {
             let raw = kernel_a.__test_storage().unwrap();
-            let record = OrganizationService::get_record(&raw, &org_id).unwrap().unwrap();
-            record.find_member(&root_b).and_then(|m| m.access_key.as_ref()).is_some()
+            let record = OrganizationService::get_record(&raw, &org_id)
+                .unwrap()
+                .unwrap();
+            record
+                .find_member(&root_b)
+                .and_then(|m| m.access_key.as_ref())
+                .is_some()
         },
         "A 侧已持有 B 的 accessKey"
     );
@@ -415,10 +486,16 @@ fn orgkey_deliver_reaches_reader_and_enables_decrypt() {
     kernel_a.org_publish_access_key(&org_id).unwrap();
     {
         let a_raw = kernel_a.__test_storage().unwrap();
-        let a_record = OrganizationService::get_record(&a_raw, &org_id).unwrap().unwrap();
-        let a_access_key = a_record.find_member(&root_a).and_then(|m| m.access_key.clone());
+        let a_record = OrganizationService::get_record(&a_raw, &org_id)
+            .unwrap()
+            .unwrap();
+        let a_access_key = a_record
+            .find_member(&root_a)
+            .and_then(|m| m.access_key.clone());
         let mut b_raw = kernel_b.__test_storage().unwrap();
-        let mut b_record = OrganizationService::get_record(&b_raw, &org_id).unwrap().unwrap();
+        let mut b_record = OrganizationService::get_record(&b_raw, &org_id)
+            .unwrap()
+            .unwrap();
         if let Some(m) = b_record.members.iter_mut().find(|m| m.root_id == root_a) {
             m.access_key = a_access_key;
         }
@@ -483,7 +560,12 @@ fn orgkey_deliver_reaches_reader_and_enables_decrypt() {
         .unwrap();
     let data_key = format!("orgd:{org_id}:enc:secret@v1.0.0:k1");
     // A 侧密文
-    let stored = kernel_a.__test_storage().unwrap().get(&data_key).unwrap().unwrap();
+    let stored = kernel_a
+        .__test_storage()
+        .unwrap()
+        .get(&data_key)
+        .unwrap()
+        .unwrap();
     assert!(!stored.contains("999"), "A 侧 orgd 为密文（无明文）");
     // 审计测试：orgsync-data 采集 encrypted 集合增量 → 记录 value 为密文
     // `{epoch,nonce,ct}`，无明文——复制组流量只有密文（org-orgsync §20.4）。
@@ -497,14 +579,13 @@ fn orgkey_deliver_reaches_reader_and_enables_decrypt() {
     )
     .unwrap();
     assert!(
-        records
-            .iter()
-            .filter(|r| r.key == data_key)
-            .any(|r| {
-                let v = r.value.to_string();
-                v.contains("\"epoch\"") && v.contains("\"nonce\"") && v.contains("\"ct\"")
-                    && !v.contains("999")
-            }),
+        records.iter().filter(|r| r.key == data_key).any(|r| {
+            let v = r.value.to_string();
+            v.contains("\"epoch\"")
+                && v.contains("\"nonce\"")
+                && v.contains("\"ct\"")
+                && !v.contains("999")
+        }),
         "orgsync-data 中 encrypted 集合 value 为密文、无明文"
     );
     // B（普通成员）读明文：B 非数据账号，encrypted 集合读经 orgq 在线查询 A，

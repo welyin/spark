@@ -225,12 +225,18 @@ fn exec_with_limits(
     let (stdout_tx, stdout_rx) = std::sync::mpsc::channel::<Vec<u8>>();
     let (stderr_tx, stderr_rx) = std::sync::mpsc::channel::<Vec<u8>>();
     let stdout_reader = std::thread::spawn(move || {
-        let mut sink = CappedSink { buf: Vec::new(), cap: max_output };
+        let mut sink = CappedSink {
+            buf: Vec::new(),
+            cap: max_output,
+        };
         let _ = std::io::copy(&mut child_stdout, &mut sink);
         let _ = stdout_tx.send(sink.buf);
     });
     let stderr_reader = std::thread::spawn(move || {
-        let mut sink = CappedSink { buf: Vec::new(), cap: max_output };
+        let mut sink = CappedSink {
+            buf: Vec::new(),
+            cap: max_output,
+        };
         let _ = std::io::copy(&mut child_stderr, &mut sink);
         let _ = stderr_tx.send(sink.buf);
     });
@@ -263,8 +269,12 @@ fn exec_with_limits(
 
     // 子进程正常退出但孙进程仍握管道写端时，读者等不到 EOF：限时等待，
     // 超宽限放弃 join——读者线程随管道最终关闭自行结束（detach），不阻塞返回
-    let stdout = stdout_rx.recv_timeout(READER_DRAIN_GRACE).unwrap_or_default();
-    let stderr = stderr_rx.recv_timeout(READER_DRAIN_GRACE).unwrap_or_default();
+    let stdout = stdout_rx
+        .recv_timeout(READER_DRAIN_GRACE)
+        .unwrap_or_default();
+    let stderr = stderr_rx
+        .recv_timeout(READER_DRAIN_GRACE)
+        .unwrap_or_default();
     drop(stdout_reader);
     drop(stderr_reader);
 
@@ -301,7 +311,14 @@ pub fn exec_streaming_blocking<F>(
 where
     F: FnMut(SysExecChunk) + Send + 'static,
 {
-    exec_streaming_with_limits(program, args, workdir, EXEC_TIMEOUT, EXEC_MAX_OUTPUT, on_chunk)
+    exec_streaming_with_limits(
+        program,
+        args,
+        workdir,
+        EXEC_TIMEOUT,
+        EXEC_MAX_OUTPUT,
+        on_chunk,
+    )
 }
 
 fn exec_streaming_with_limits<F>(
@@ -365,7 +382,11 @@ where
                     for &b in &buf[..n] {
                         total += 1;
                         if b == b'\n' {
-                            let text = if total <= max_output { line.clone() } else { Vec::new() };
+                            let text = if total <= max_output {
+                                line.clone()
+                            } else {
+                                Vec::new()
+                            };
                             let _ = stdout_tx.send(Ok(text));
                             line.clear();
                         } else {
@@ -382,7 +403,10 @@ where
     // stderr 一次性捕获（诊断用）
     let (stderr_tx, stderr_rx) = std::sync::mpsc::channel::<Vec<u8>>();
     let stderr_reader = std::thread::spawn(move || {
-        let mut sink = CappedSink { buf: Vec::new(), cap: max_output };
+        let mut sink = CappedSink {
+            buf: Vec::new(),
+            cap: max_output,
+        };
         let _ = std::io::copy(&mut child_stderr, &mut sink);
         let _ = stderr_tx.send(sink.buf);
     });
@@ -397,7 +421,11 @@ where
             Ok(Ok(line)) => {
                 let text = String::from_utf8_lossy(&line).into_owned();
                 if !text.is_empty() {
-                    on_chunk(SysExecChunk { text, done: false, exit_code: None });
+                    on_chunk(SysExecChunk {
+                        text,
+                        done: false,
+                        exit_code: None,
+                    });
                 }
             }
             Ok(Err(())) => stdout_eof = true,
@@ -413,7 +441,9 @@ where
                         let _ = child.wait();
                         let _ = stdout_reader.join();
                         let _ = stderr_reader.join();
-                        return Err(format!("命令 {program} 执行超过 {timeout:?} 超时，已强制终止"));
+                        return Err(format!(
+                            "命令 {program} 执行超过 {timeout:?} 超时，已强制终止"
+                        ));
                     }
                 }
                 Err(e) => {
@@ -430,11 +460,17 @@ where
 
     let status = status_opt.expect("退出状态已在循环内取得");
     let _ = stdout_reader.join();
-    let stderr = stderr_rx.recv_timeout(READER_DRAIN_GRACE).unwrap_or_default();
+    let stderr = stderr_rx
+        .recv_timeout(READER_DRAIN_GRACE)
+        .unwrap_or_default();
     drop(stderr_reader);
 
     let exit_code = status.code().unwrap_or(-1);
-    on_chunk(SysExecChunk { text: String::new(), done: true, exit_code: Some(exit_code) });
+    on_chunk(SysExecChunk {
+        text: String::new(),
+        done: true,
+        exit_code: Some(exit_code),
+    });
 
     Ok(SysExecResult {
         stdout: String::new(), // 流式模式全文经 on_chunk 推送，不回填
@@ -524,7 +560,10 @@ async fn fetch_bounded(
         req = req.body(body.to_string());
     }
 
-    let mut response = req.send().await.map_err(|e| format!("HTTP 请求失败: {e}"))?;
+    let mut response = req
+        .send()
+        .await
+        .map_err(|e| format!("HTTP 请求失败: {e}"))?;
 
     let status = response.status().as_u16();
     let resp_headers: HashMap<String, String> = response
@@ -638,7 +677,10 @@ where
         req = req.body(body.to_string());
     }
 
-    let mut response = req.send().await.map_err(|e| format!("HTTP 请求失败: {e}"))?;
+    let mut response = req
+        .send()
+        .await
+        .map_err(|e| format!("HTTP 请求失败: {e}"))?;
 
     let status = response.status().as_u16();
     let resp_headers: HashMap<String, String> = response
@@ -949,10 +991,7 @@ mod tests {
     }
 
     /// 收集 fetch_stream 回调产生的全部块
-    async fn collect_stream(
-        url: &str,
-        max_body: usize,
-    ) -> Result<Vec<SysFetchChunk>, String> {
+    async fn collect_stream(url: &str, max_body: usize) -> Result<Vec<SysFetchChunk>, String> {
         use std::sync::{Arc, Mutex};
         let chunks = Arc::new(Mutex::new(Vec::new()));
         {
@@ -965,7 +1004,9 @@ mod tests {
         // 闭包内的 Arc 引用已随 fetch_stream 结束而 drop，此处应可唯一取出；
         // Mutex 无并发持锁，PoisonError 也仅返回原锁内容
         let inner = match Arc::try_unwrap(chunks) {
-            Ok(mutex) => mutex.into_inner().unwrap_or_else(|poison| poison.into_inner()),
+            Ok(mutex) => mutex
+                .into_inner()
+                .unwrap_or_else(|poison| poison.into_inner()),
             Err(_) => unreachable!("collect_stream 内不应残留 Arc 引用"),
         };
         Ok(inner)
@@ -998,10 +1039,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn fetch_stream_delivers_chunks_and_done() {
-        let url = spawn_stream_server(
-            vec![b"Hello".to_vec(), b", Spark".to_vec()],
-            5,
-        );
+        let url = spawn_stream_server(vec![b"Hello".to_vec(), b", Spark".to_vec()], 5);
         let chunks = collect_stream(&url, 4096).await.expect("流式请求应成功");
         assert!(
             chunks.len() >= 3,
@@ -1022,14 +1060,21 @@ mod tests {
         for c in chunks.iter().take(chunks.len() - 1) {
             assert!(c.headers.is_empty(), "中间块 headers 应为空");
         }
-        assert!(!chunks.last().unwrap().headers.is_empty(), "done 块应携带 headers");
+        assert!(
+            !chunks.last().unwrap().headers.is_empty(),
+            "done 块应携带 headers"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn fetch_stream_keeps_chinese_across_chunks() {
         // 分块输出完整中文（多次 write 制造多 chunk），累计不应出现 U+FFFD
         let url = spawn_stream_server(
-            vec![b"\xe4\xbd".to_vec(), b"\xa0\xe5\xa5".to_vec(), b"\xbd".to_vec()],
+            vec![
+                b"\xe4\xbd".to_vec(),
+                b"\xa0\xe5\xa5".to_vec(),
+                b"\xbd".to_vec(),
+            ],
             5,
         );
         let chunks = collect_stream(&url, 4096).await.expect("流式请求应成功");
@@ -1058,7 +1103,10 @@ mod tests {
             "HTTP/1.1 200 OK\r\nContent-Length: 1048576\r\nConnection: close\r\n\r\n",
             Vec::new(),
         );
-        let err = collect_stream(&url, 4096).await.err().expect("声明超限应报错");
+        let err = collect_stream(&url, 4096)
+            .await
+            .err()
+            .expect("声明超限应报错");
         assert!(err.contains("上限"), "应报超限错误，实际: {err}");
     }
 }

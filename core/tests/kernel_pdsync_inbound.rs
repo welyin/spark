@@ -15,6 +15,7 @@ use ed25519_dalek::SigningKey;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use spark_core::contact::{ContactService, FriendRecord, PeerRef};
+use spark_core::epoch::{put_effective, put_local_key};
 use spark_core::kernel::{direct_conversation_id, dm_envelope, handle_inbound_dm};
 use spark_core::message::{
     AppMessageRecord, ConversationKind, ConversationRecord, MessageRecord, MessageService,
@@ -26,7 +27,6 @@ use spark_core::storage::{MemoryStorage, StorageBackend};
 use spark_core::sync::meta::DocMeta;
 use spark_core::sync::pdsync::{PdsyncRecord, build_data_batch, build_hello, self_friend_key};
 use spark_core::sync::{get_personal_meta, is_tombstone};
-use spark_core::epoch::{put_effective, put_local_key};
 
 const PERSONAL: &str = "personal";
 const NOW: i64 = 1_720_000_000_000;
@@ -95,8 +95,18 @@ fn deliver_pdsync_data_kv(
         body,
         key,
     );
-    handle_inbound_dm(storage, my_root, "我", envelope, "peer-self-b", &HashSet::new(), NOW, NODE, kverify)
-        .unwrap()
+    handle_inbound_dm(
+        storage,
+        my_root,
+        "我",
+        envelope,
+        "peer-self-b",
+        &HashSet::new(),
+        NOW,
+        NODE,
+        kverify,
+    )
+    .unwrap()
 }
 
 #[test]
@@ -294,11 +304,7 @@ fn pdsync_data_emits_events_for_contacts_devices_messages() {
     };
     let result = deliver_pdsync_data(&mut s, &key, &my_root, "msg:item", &[message]);
     assert_eq!(result.response, json!({ "ok": true }));
-    assert_eq!(
-        s.get(&msg_key).unwrap().is_some(),
-        true,
-        "消息本体落库"
-    );
+    assert_eq!(s.get(&msg_key).unwrap().is_some(), true, "消息本体落库");
     let chat_events: Vec<_> = result
         .events
         .iter()
@@ -400,7 +406,9 @@ fn pdsync_hello_window_exchange_delivers_item_and_app() {
         "peer-self-b",
         &HashSet::new(),
         now,
-        NODE, None)
+        NODE,
+        None,
+    )
     .unwrap();
     assert!(
         !hello_result.pdsync_out.is_empty(),
@@ -434,7 +442,9 @@ fn pdsync_hello_window_exchange_delivers_item_and_app() {
             "peer-self-b",
             &HashSet::new(),
             now,
-            NODE, None)
+            NODE,
+            None,
+        )
         .unwrap();
         assert_eq!(
             r.response,
@@ -456,7 +466,10 @@ fn pdsync_hello_window_exchange_delivers_item_and_app() {
     );
     // msg:item 的 byid 索引随落盘重建；msg:app 无 byid（与本地 append 口径一致）
     let idx = message_id_index_key(PERSONAL, &conv_id, "m1");
-    assert_eq!(receiver.get(&idx).unwrap().as_deref(), Some(item_key.as_str()));
+    assert_eq!(
+        receiver.get(&idx).unwrap().as_deref(),
+        Some(item_key.as_str())
+    );
 }
 
 /// M-inbound 回归：入站 chat 落库走 append_message_pdsync——「只收不发」的
@@ -495,7 +508,9 @@ fn pdsync_inbound_chat_bumps_conv_pmeta() {
         "peer-self-b",
         &HashSet::new(),
         now,
-        NODE, None)
+        NODE,
+        None,
+    )
     .unwrap();
     assert_eq!(r.response, json!({ "ok": true }));
 
@@ -608,7 +623,11 @@ fn pdsync_hello_window_push_encrypts_msg_records_when_remote_epoch_announced() {
     let epoch1_key: [u8; 32] = [0x47; 32];
     put_local_key(&mut sender, 1, &epoch1_key).unwrap();
     put_effective(&mut sender, 1).unwrap();
-    assert_eq!(spark_core::epoch::get_effective(&sender).unwrap(), 1, "前置 effective=1");
+    assert_eq!(
+        spark_core::epoch::get_effective(&sender).unwrap(),
+        1,
+        "前置 effective=1"
+    );
 
     // 对端 hello 宣告 epoch=1（其已生效 epoch1）→ 发送侧按 min(1,1)=1 加密窗口记录。
     let hello_body = json!({
@@ -633,9 +652,14 @@ fn pdsync_hello_window_push_encrypts_msg_records_when_remote_epoch_announced() {
         "peer-self-b",
         &HashSet::new(),
         now,
-        NODE, None)
+        NODE,
+        None,
+    )
     .unwrap();
-    assert!(!hello_result.pdsync_out.is_empty(), "hello 应触发消息窗口 data 推送");
+    assert!(
+        !hello_result.pdsync_out.is_empty(),
+        "hello 应触发消息窗口 data 推送"
+    );
 
     // 逐个 data 批次检查：msg:item / msg:app 记录 value 为 ikey 密文，且不含明文内容。
     let mut saw_item_batch = false;
@@ -700,7 +724,8 @@ fn friend_record_with_peer(root_id: &str, peer_id: &str) -> FriendRecord {
         peers: vec![PeerRef {
             peer_id: peer_id.to_string(),
             addresses: Vec::new(),
-        ..Default::default()}],
+            ..Default::default()
+        }],
         remark: String::new(),
         phones: Vec::new(),
         tag_ids: Vec::new(),
@@ -723,8 +748,18 @@ fn deliver_pdsync(
     node: &str,
 ) -> spark_core::kernel::InboundDmResult {
     let envelope = dm_envelope::build_envelope(kind, my_root, my_root, NOW, body, key);
-    handle_inbound_dm(storage, my_root, "我", envelope, "peer-self-other", &HashSet::new(), NOW, node, None)
-        .unwrap()
+    handle_inbound_dm(
+        storage,
+        my_root,
+        "我",
+        envelope,
+        "peer-self-other",
+        &HashSet::new(),
+        NOW,
+        node,
+        None,
+    )
+    .unwrap()
 }
 
 /// 把一侧处理 hello 产生的 pdsync_out 逐条过链路：Data 由对侧落库；Need
@@ -809,12 +844,26 @@ fn pdsync_self_friend_record_not_cross_fed() {
 
     // A → B：hello（排除自记录键）→ B 的 need/data 过链路
     let hello_a = build_hello(&a, 2_592_000_000, 500, "eager", Some(&self_key), None).unwrap();
-    let r = deliver_pdsync(&mut b, &key, &my_root, dm_envelope::KIND_PDSYNC_HELLO, hello_a, "node-b");
+    let r = deliver_pdsync(
+        &mut b,
+        &key,
+        &my_root,
+        dm_envelope::KIND_PDSYNC_HELLO,
+        hello_a,
+        "node-b",
+    );
     let bodies: Vec<_> = r.pdsync_out.iter().map(|o| o.body().clone()).collect();
     route_pdsync_out(bodies, &mut b, "node-b", &mut a, "node-a", &key, &my_root);
     // B → A：反向
     let hello_b = build_hello(&b, 2_592_000_000, 500, "eager", Some(&self_key), None).unwrap();
-    let r = deliver_pdsync(&mut a, &key, &my_root, dm_envelope::KIND_PDSYNC_HELLO, hello_b, "node-a");
+    let r = deliver_pdsync(
+        &mut a,
+        &key,
+        &my_root,
+        dm_envelope::KIND_PDSYNC_HELLO,
+        hello_b,
+        "node-a",
+    );
     let bodies: Vec<_> = r.pdsync_out.iter().map(|o| o.body().clone()).collect();
     route_pdsync_out(bodies, &mut a, "node-a", &mut b, "node-b", &key, &my_root);
 
@@ -843,21 +892,33 @@ fn pdsync_self_friend_record_not_cross_fed() {
 
     // 收敛：再互发 hello → ct:friend 无 need/data（folded vv 无伪 diff）
     let hello_a2 = build_hello(&a, 2_592_000_000, 500, "eager", Some(&self_key), None).unwrap();
-    let r = deliver_pdsync(&mut b, &key, &my_root, dm_envelope::KIND_PDSYNC_HELLO, hello_a2, "node-b");
+    let r = deliver_pdsync(
+        &mut b,
+        &key,
+        &my_root,
+        dm_envelope::KIND_PDSYNC_HELLO,
+        hello_a2,
+        "node-b",
+    );
     assert!(
-        r.pdsync_out
-            .iter()
-            .all(|o| o.body().get("category").and_then(serde_json::Value::as_str)
-                != Some("ct:friend")),
+        r.pdsync_out.iter().all(
+            |o| o.body().get("category").and_then(serde_json::Value::as_str) != Some("ct:friend")
+        ),
         "收敛后 ct:friend 不应再有 diff 输出"
     );
     let hello_b2 = build_hello(&b, 2_592_000_000, 500, "eager", Some(&self_key), None).unwrap();
-    let r = deliver_pdsync(&mut a, &key, &my_root, dm_envelope::KIND_PDSYNC_HELLO, hello_b2, "node-a");
+    let r = deliver_pdsync(
+        &mut a,
+        &key,
+        &my_root,
+        dm_envelope::KIND_PDSYNC_HELLO,
+        hello_b2,
+        "node-a",
+    );
     assert!(
-        r.pdsync_out
-            .iter()
-            .all(|o| o.body().get("category").and_then(serde_json::Value::as_str)
-                != Some("ct:friend")),
+        r.pdsync_out.iter().all(
+            |o| o.body().get("category").and_then(serde_json::Value::as_str) != Some("ct:friend")
+        ),
         "收敛后 ct:friend 不应再有 diff 输出"
     );
 }
@@ -1020,7 +1081,9 @@ fn self_friend_request_with_self_pointing_peer_is_rejected() {
         "peer-self-other",
         &HashSet::new(),
         NOW,
-        NODE, None)
+        NODE,
+        None,
+    )
     .unwrap();
     assert_eq!(result.response["ok"], true, "自指请求仍正常应答 ok");
 
@@ -1059,7 +1122,8 @@ fn pdsync_self_conv_merge_preserves_local_peer() {
     local.peer = Some(PeerRef {
         peer_id: "peer-device-b".to_string(),
         addresses: Vec::new(),
-    ..Default::default()});
+        ..Default::default()
+    });
     MessageService::upsert_conversation(&mut s, PERSONAL, &local).unwrap();
 
     // 对端设备快照：同一会话、peer 指向「本机设备」（对它而言的对端）
@@ -1067,7 +1131,8 @@ fn pdsync_self_conv_merge_preserves_local_peer() {
     remote.peer = Some(PeerRef {
         peer_id: "peer-device-a".to_string(),
         addresses: Vec::new(),
-    ..Default::default()});
+        ..Default::default()
+    });
     remote.pinned_at = 123;
     let record = PdsyncRecord {
         key: format!("msg:conv:personal:{conv_id}"),
@@ -1127,7 +1192,14 @@ fn need_path_encryption_end_to_end_and_revoked_cannot_decrypt() {
 
     // B 发 need：对 ct:friend 一无所知（knownVv 空）→ A 全量响应。
     let need_body = json!({ "category": "ct:friend", "knownVv": {}, "dlogAck": 0 });
-    let r = deliver_pdsync(&mut a, &key, &my_root, dm_envelope::KIND_PDSYNC_NEED, need_body, "node-b");
+    let r = deliver_pdsync(
+        &mut a,
+        &key,
+        &my_root,
+        dm_envelope::KIND_PDSYNC_NEED,
+        need_body,
+        "node-b",
+    );
     assert_eq!(r.response, json!({ "ok": true }));
 
     // A 的响应批次：恰好一个 Data，记录 value 为 ikey 密文、外层不含明文。
@@ -1144,7 +1216,11 @@ fn need_path_encryption_end_to_end_and_revoked_cannot_decrypt() {
             .and_then(serde_json::Value::as_array)
             .unwrap_or(&Vec::new())
         {
-            let key_ = rec.get("key").and_then(serde_json::Value::as_str).unwrap().to_string();
+            let key_ = rec
+                .get("key")
+                .and_then(serde_json::Value::as_str)
+                .unwrap()
+                .to_string();
             let value = rec.get("value").cloned().unwrap_or(json!(null));
             assert!(
                 spark_core::epoch::is_ikey_ciphertext(&value),
@@ -1174,9 +1250,22 @@ fn need_path_encryption_end_to_end_and_revoked_cannot_decrypt() {
         "batchSeq": 0,
         "batchTotal": 1,
     });
-    let r2 = deliver_pdsync(&mut b, &key, &my_root, dm_envelope::KIND_PDSYNC_DATA, data_body, "node-b");
-    assert_eq!(r2.response, json!({ "ok": true }), "B 应接受并合入 need 响应");
-    let stored = ContactService::get_friend(&b, &friend_root).unwrap().expect("B 解开后合入朋友");
+    let r2 = deliver_pdsync(
+        &mut b,
+        &key,
+        &my_root,
+        dm_envelope::KIND_PDSYNC_DATA,
+        data_body,
+        "node-b",
+    );
+    assert_eq!(
+        r2.response,
+        json!({ "ok": true }),
+        "B 应接受并合入 need 响应"
+    );
+    let stored = ContactService::get_friend(&b, &friend_root)
+        .unwrap()
+        .expect("B 解开后合入朋友");
     assert_eq!(
         stored.peers.first().map(|p| p.peer_id.as_str()),
         Some("peer-x"),
@@ -1209,7 +1298,14 @@ fn need_path_encryption_end_to_end_and_revoked_cannot_decrypt() {
 
     // C 向 D 发 need。
     let need_c = json!({ "category": "ct:friend", "knownVv": {}, "dlogAck": 0 });
-    let rd = deliver_pdsync(&mut d, &key, &my_root, dm_envelope::KIND_PDSYNC_NEED, need_c, "node-d");
+    let rd = deliver_pdsync(
+        &mut d,
+        &key,
+        &my_root,
+        dm_envelope::KIND_PDSYNC_NEED,
+        need_c,
+        "node-d",
+    );
     assert_eq!(rd.response, json!({ "ok": true }));
 
     // D 的响应：epoch2 密文。
@@ -1221,10 +1317,20 @@ fn need_path_encryption_end_to_end_and_revoked_cannot_decrypt() {
             .and_then(serde_json::Value::as_array)
             .unwrap_or(&Vec::new())
         {
-            let key_ = rec.get("key").and_then(serde_json::Value::as_str).unwrap().to_string();
+            let key_ = rec
+                .get("key")
+                .and_then(serde_json::Value::as_str)
+                .unwrap()
+                .to_string();
             let value = rec.get("value").cloned().unwrap_or(json!(null));
-            assert!(spark_core::epoch::is_ikey_ciphertext(&value), "D 响应应为 epoch2 密文");
-            assert_eq!(value.get("epoch").and_then(serde_json::Value::as_u64), Some(2));
+            assert!(
+                spark_core::epoch::is_ikey_ciphertext(&value),
+                "D 响应应为 epoch2 密文"
+            );
+            assert_eq!(
+                value.get("epoch").and_then(serde_json::Value::as_u64),
+                Some(2)
+            );
             d_ciphers.push((key_, value));
         }
     }
@@ -1240,8 +1346,19 @@ fn need_path_encryption_end_to_end_and_revoked_cannot_decrypt() {
         "batchSeq": 0,
         "batchTotal": 1,
     });
-    let rc = deliver_pdsync(&mut c, &key, &my_root, dm_envelope::KIND_PDSYNC_DATA, data_c, "node-c");
-    assert_eq!(rc.response, json!({ "ok": true }), "C 解不开也应 ok（不解不推进）");
+    let rc = deliver_pdsync(
+        &mut c,
+        &key,
+        &my_root,
+        dm_envelope::KIND_PDSYNC_DATA,
+        data_c,
+        "node-c",
+    );
+    assert_eq!(
+        rc.response,
+        json!({ "ok": true }),
+        "C 解不开也应 ok（不解不推进）"
+    );
     assert!(
         ContactService::get_friend(&c, &friend_y).unwrap().is_none(),
         "C 无 epoch2 密钥不得合入新数据（R1 攻击路径锁死）"
@@ -1291,7 +1408,11 @@ fn epoch_active_normal_pdoc_pushed_as_plaintext_end_to_end() {
     let epoch1_key: [u8; 32] = [0x73; 32];
     put_local_key(&mut sender, 1, &epoch1_key).unwrap();
     put_effective(&mut sender, 1).unwrap();
-    assert_eq!(spark_core::epoch::get_effective(&sender).unwrap(), 1, "前置 effective=1");
+    assert_eq!(
+        spark_core::epoch::get_effective(&sender).unwrap(),
+        1,
+        "前置 effective=1"
+    );
 
     // 对端 hello 宣告 epoch=1 → P4 消息窗口/数据推。
     let hello_body = json!({
@@ -1316,9 +1437,14 @@ fn epoch_active_normal_pdoc_pushed_as_plaintext_end_to_end() {
         "peer-self-b",
         &HashSet::new(),
         now,
-        NODE, None)
+        NODE,
+        None,
+    )
     .unwrap();
-    assert!(!hello_result.pdsync_out.is_empty(), "hello 应触发 pdoc 推送");
+    assert!(
+        !hello_result.pdsync_out.is_empty(),
+        "hello 应触发 pdoc 推送"
+    );
 
     // 收集 pdoc 批次的记录：Normal pdoc → 明文照推（value 非 $enc），且含在批次内。
     let mut saw_pdoc = false;
@@ -1333,7 +1459,10 @@ fn epoch_active_normal_pdoc_pushed_as_plaintext_end_to_end() {
             .cloned()
             .unwrap_or_default();
         for rec in &records {
-            let rec_key = rec.get("key").and_then(serde_json::Value::as_str).unwrap_or("");
+            let rec_key = rec
+                .get("key")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
             if rec_key != "pdoc:notes@v1:doc-1" {
                 continue;
             }
@@ -1429,7 +1558,9 @@ fn encrypt_record_skipped_when_effective_key_missing_but_plain_pushed() {
         "peer-self-b",
         &HashSet::new(),
         now,
-        NODE, None)
+        NODE,
+        None,
+    )
     .unwrap();
 
     // 密钥缺失 → Encrypt 类记录不得明文外泄：msg:item 不出现在任何 data 批次。
@@ -1441,7 +1572,10 @@ fn encrypt_record_skipped_when_effective_key_missing_but_plain_pushed() {
             .cloned()
             .unwrap_or_default();
         for rec in &records {
-            let rec_key = rec.get("key").and_then(serde_json::Value::as_str).unwrap_or("");
+            let rec_key = rec
+                .get("key")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
             assert_ne!(
                 rec_key, item_key,
                 "Encrypt 类记录密钥缺失不得明文外泄（整批 fail-closed 丢弃），实为 {rec_key}"
@@ -1499,7 +1633,9 @@ fn malformed_pdecl_classify_error_skips_pdoc_record() {
         "peer-self-b",
         &HashSet::new(),
         now,
-        NODE, None)
+        NODE,
+        None,
+    )
     .unwrap();
 
     // 损坏声明的 pdoc 记录不得被明文推送（classify Err → Skip）。
@@ -1514,7 +1650,10 @@ fn malformed_pdecl_classify_error_skips_pdoc_record() {
             .cloned()
             .unwrap_or_default()
         {
-            let rec_key = rec.get("key").and_then(serde_json::Value::as_str).unwrap_or("");
+            let rec_key = rec
+                .get("key")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
             assert_ne!(
                 rec_key, "pdoc:broken@v1:doc-x",
                 "损坏声明的 pdoc 记录不得明文推送（classify Err → Skip）"
@@ -1576,16 +1715,17 @@ fn pwv_inbound_auto_unifies_when_session_password_matches_v() {
         dseq: None,
     };
     // Kverify 按当前（合入后对端）salt 派生——等价生产下一条信封的口径。
-    let salt2 = base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        &remote_v.salt,
-    )
-    .unwrap();
+    let salt2 =
+        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &remote_v.salt).unwrap();
     let kverify = derive_kverify(password, &salt2.try_into().unwrap()).unwrap();
     deliver_pdsync_data_kv(&mut s, &key, &my_root, "pwv", &[record], Some(&kverify));
 
     assert!(!pw::get_stale(&s).unwrap(), "自愈后 stale 清除");
-    assert_eq!(pw::get_applied_vts(&s).unwrap(), 3000, "水位推进到胜者的 changedAt");
+    assert_eq!(
+        pw::get_applied_vts(&s).unwrap(),
+        3000,
+        "水位推进到胜者的 changedAt"
+    );
     assert!(
         pw::get_pwack(&s, NODE).unwrap().is_some(),
         "自锚 ack 落库（D′ 门控闭合的前提）"
@@ -1619,11 +1759,8 @@ fn pwv_inbound_no_auto_unify_when_password_mismatches_v() {
         meta: remote_meta("peer-b", 1, NOW),
         dseq: None,
     };
-    let salt2 = base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        &remote_v.salt,
-    )
-    .unwrap();
+    let salt2 =
+        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &remote_v.salt).unwrap();
     let kverify = derive_kverify("old-pw", &salt2.try_into().unwrap()).unwrap();
     deliver_pdsync_data_kv(&mut s, &key, &my_root, "pwv", &[record], Some(&kverify));
 
@@ -1685,7 +1822,9 @@ fn pwv_inbound_replay_merges_remote_vv_into_pmeta() {
     assert_eq!(stored.changed_at, 6000, "回放不得覆写内容");
     assert_eq!(pw::get_applied_vts(&s).unwrap(), 5000, "水位不变");
     assert!(!pw::get_stale(&s).unwrap(), "回放不置 stale");
-    let meta = get_personal_meta(&s, pw::PWV_KEY).unwrap().expect("pmeta 存在");
+    let meta = get_personal_meta(&s, pw::PWV_KEY)
+        .unwrap()
+        .expect("pmeta 存在");
     assert_eq!(meta.vv.get(NODE).copied(), Some(1), "本机分量保留");
     assert_eq!(
         meta.vv.get("peerB").copied(),

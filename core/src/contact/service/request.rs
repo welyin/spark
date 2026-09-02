@@ -40,8 +40,14 @@ impl ContactService {
         node_id: &str,
     ) -> Result<()> {
         let key = format!("{REQ_IN_PREFIX}{}", request.id);
-        put_personal(storage, node_id, &key, &serde_json::to_string(request)?, now_ms)
-            .map_err(sync_err_to_contact)?;
+        put_personal(
+            storage,
+            node_id,
+            &key,
+            &serde_json::to_string(request)?,
+            now_ms,
+        )
+        .map_err(sync_err_to_contact)?;
         Ok(())
     }
 
@@ -58,7 +64,11 @@ impl ContactService {
         if request.updated_at == 0 {
             request.updated_at = request.created_at;
         }
-        write_json(storage, &format!("{REQ_OUT_PREFIX}{}", request.id), &request)
+        write_json(
+            storage,
+            &format!("{REQ_OUT_PREFIX}{}", request.id),
+            &request,
+        )
     }
 
     /// pdsync 感知的落库发出的好友申请（`updated_at` 兜底同
@@ -74,8 +84,14 @@ impl ContactService {
             request.updated_at = request.created_at;
         }
         let key = format!("{REQ_OUT_PREFIX}{}", request.id);
-        put_personal(storage, node_id, &key, &serde_json::to_string(&request)?, now_ms)
-            .map_err(sync_err_to_contact)?;
+        put_personal(
+            storage,
+            node_id,
+            &key,
+            &serde_json::to_string(&request)?,
+            now_ms,
+        )
+        .map_err(sync_err_to_contact)?;
         Ok(())
     }
 
@@ -139,9 +155,7 @@ impl ContactService {
         };
         request.updated_at = now_ms;
         match node_id {
-            Some(node_id) => {
-                Self::put_incoming_request_pdsync(storage, &request, now_ms, node_id)?
-            }
+            Some(node_id) => Self::put_incoming_request_pdsync(storage, &request, now_ms, node_id)?,
             None => Self::put_incoming_request(storage, &request)?,
         }
         Ok(true)
@@ -239,8 +253,14 @@ impl ContactService {
         request.updated_at = now_ms;
         match node_id {
             Some(node_id) => {
-                put_personal(storage, node_id, &key, &serde_json::to_string(&request)?, now_ms)
-                    .map_err(sync_err_to_contact)?;
+                put_personal(
+                    storage,
+                    node_id,
+                    &key,
+                    &serde_json::to_string(&request)?,
+                    now_ms,
+                )
+                .map_err(sync_err_to_contact)?;
             }
             None => write_json(storage, &key, &request)?,
         }
@@ -290,8 +310,14 @@ impl ContactService {
         request.updated_at = now_ms;
         match node_id {
             Some(node_id) => {
-                put_personal(storage, node_id, &key, &serde_json::to_string(&request)?, now_ms)
-                    .map_err(sync_err_to_contact)?;
+                put_personal(
+                    storage,
+                    node_id,
+                    &key,
+                    &serde_json::to_string(&request)?,
+                    now_ms,
+                )
+                .map_err(sync_err_to_contact)?;
             }
             None => write_json(storage, &key, &request)?,
         }
@@ -337,8 +363,14 @@ impl ContactService {
         request.updated_at = now_ms;
         match node_id {
             Some(node_id) => {
-                put_personal(storage, node_id, &key, &serde_json::to_string(&request)?, now_ms)
-                    .map_err(sync_err_to_contact)?;
+                put_personal(
+                    storage,
+                    node_id,
+                    &key,
+                    &serde_json::to_string(&request)?,
+                    now_ms,
+                )
+                .map_err(sync_err_to_contact)?;
             }
             None => write_json(storage, &key, &request)?,
         }
@@ -381,10 +413,12 @@ impl ContactService {
         storage: &S,
         org_id: &str,
     ) -> Result<Vec<FriendRequestRecord>> {
-        Ok(scan_json::<S, FriendRequestRecord>(storage, &org_req_out_prefix(org_id))?
-            .into_iter()
-            .map(|(_, record)| record)
-            .collect())
+        Ok(
+            scan_json::<S, FriendRequestRecord>(storage, &org_req_out_prefix(org_id))?
+                .into_iter()
+                .map(|(_, record)| record)
+                .collect(),
+        )
     }
 
     /// 对方凭码加入后把发出的邀请标记为 accepted（pending → accepted + 刷

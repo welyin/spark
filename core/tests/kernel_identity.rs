@@ -228,10 +228,16 @@ fn qr_backup_payload_compact_and_recoverable() {
     let wrapper: Value = serde_json::from_str(&qr).unwrap();
     if let Some(addrs) = wrapper.get("a").and_then(|v| v.as_array()) {
         assert!(
-            addrs.iter().all(|a| !a.as_str().unwrap_or("").contains("/p2p-circuit")),
+            addrs
+                .iter()
+                .all(|a| !a.as_str().unwrap_or("").contains("/p2p-circuit")),
             "备份二维码不得携带中继电路地址"
         );
-        assert!(addrs.len() <= 3, "备份二维码内嵌地址封顶 3 条，实际 {}", addrs.len());
+        assert!(
+            addrs.len() <= 3,
+            "备份二维码内嵌地址封顶 3 条，实际 {}",
+            addrs.len()
+        );
     }
     assert_eq!(qr_json["rootId"], root_id);
     assert!(qr_json.get("avatar").is_none(), "文件外层无 avatar");
@@ -261,7 +267,9 @@ fn qr_backup_payload_compact_and_recoverable() {
         let as_ = kernel_a.__test_storage().unwrap();
         let a_pwv = pw::get_pwv(&as_).unwrap().expect("A 有 V");
         let bs = kernel_b.__test_storage().unwrap();
-        let b_pwv = pw::get_pwv(&bs).unwrap().expect("B 恢复后应有 V（载荷携带）");
+        let b_pwv = pw::get_pwv(&bs)
+            .unwrap()
+            .expect("B 恢复后应有 V（载荷携带）");
         assert_eq!(
             b_pwv.changed_at, a_pwv.changed_at,
             "B 恢复后 pwv.changedAt 必须 == A 的 V（载荷携带生效），不得为 B 自建分叉 V（当前 B changedAt={} A changedAt={}）",
@@ -284,13 +292,29 @@ fn qr_backup_payload_compact_and_recoverable() {
 
     // B 恢复后 on_unlock 自动自锚+自动 ack；B 连接 A（QR 载荷含生成端地址，B 已配对）。
     wait_until(
-        || kernel_b.p2p_status().unwrap().unwrap().connected_peers.iter().any(|p| *p == a_peer),
+        || {
+            kernel_b
+                .p2p_status()
+                .unwrap()
+                .unwrap()
+                .connected_peers
+                .iter()
+                .any(|p| *p == a_peer)
+        },
         20_000,
         "B 连接 A（QR 恢复配对）",
     );
     // A 也确认连到 B（双向握手完成）。
     wait_until(
-        || kernel_a.p2p_status().unwrap().unwrap().connected_peers.iter().any(|p| *p == b_peer),
+        || {
+            kernel_a
+                .p2p_status()
+                .unwrap()
+                .unwrap()
+                .connected_peers
+                .iter()
+                .any(|p| *p == b_peer)
+        },
         20_000,
         "A 连接 B",
     );
@@ -368,7 +392,9 @@ fn qr_backup_legacy_without_pwv_converges_via_lww() {
     let dir_a = tempfile::tempdir().unwrap();
     let mut kernel_a = fresh_kernel(dir_a.path());
     let avatar = format!("data:image/png;base64,{}", "A".repeat(30 * 1024));
-    let init = kernel_a.init_identity(PASSWORD, "小明", Some(&avatar)).unwrap();
+    let init = kernel_a
+        .init_identity(PASSWORD, "小明", Some(&avatar))
+        .unwrap();
     let (root_id, _mnemonic) = (init.root_id, init.mnemonic);
     kernel_a.start_p2p().unwrap();
     let qr = kernel_a.backup_payload_qr(PASSWORD).unwrap();
@@ -381,18 +407,37 @@ fn qr_backup_legacy_without_pwv_converges_via_lww() {
     // B 用旧版 QR 恢复 → has_v=false（载荷未携带 V）→ 懒发布兜底自建 V。
     let dir_b = tempfile::tempdir().unwrap();
     let mut kernel_b = fresh_kernel(dir_b.path());
-    assert_eq!(kernel_b.recover_backup(&legacy_qr, PASSWORD).unwrap(), root_id);
+    assert_eq!(
+        kernel_b.recover_backup(&legacy_qr, PASSWORD).unwrap(),
+        root_id
+    );
     kernel_b.start_p2p().unwrap();
     let a_peer = kernel_a.p2p_status().unwrap().unwrap().peer_id.unwrap();
     let b_peer = kernel_b.p2p_status().unwrap().unwrap().peer_id.unwrap();
 
     wait_until(
-        || kernel_b.p2p_status().unwrap().unwrap().connected_peers.iter().any(|p| *p == a_peer),
+        || {
+            kernel_b
+                .p2p_status()
+                .unwrap()
+                .unwrap()
+                .connected_peers
+                .iter()
+                .any(|p| *p == a_peer)
+        },
         20_000,
         "旧版 QR：B 连接 A",
     );
     wait_until(
-        || kernel_a.p2p_status().unwrap().unwrap().connected_peers.iter().any(|p| *p == b_peer),
+        || {
+            kernel_a
+                .p2p_status()
+                .unwrap()
+                .unwrap()
+                .connected_peers
+                .iter()
+                .any(|p| *p == b_peer)
+        },
         20_000,
         "旧版 QR：A 连接 B",
     );
@@ -412,7 +457,11 @@ fn qr_backup_legacy_without_pwv_converges_via_lww() {
         "旧版 QR：LWW 收敛后头像找回",
     );
     let converged = kernel_b.current_identity().unwrap().unwrap();
-    assert_eq!(converged.avatar, Some(avatar), "旧版无 pwv QR 经 LWW 收敛后头像找回");
+    assert_eq!(
+        converged.avatar,
+        Some(avatar),
+        "旧版无 pwv QR 经 LWW 收敛后头像找回"
+    );
     kernel_a.shutdown().unwrap();
     kernel_b.shutdown().unwrap();
 }
@@ -738,8 +787,5 @@ fn update_profile_session_reuses_key_salt_stable() {
     kernel.shutdown().unwrap();
 
     let kernel = fresh_kernel(dir.path());
-    assert_eq!(
-        kernel.status().unwrap().nickname.as_deref(),
-        Some("密钥二")
-    );
+    assert_eq!(kernel.status().unwrap().nickname.as_deref(), Some("密钥二"));
 }

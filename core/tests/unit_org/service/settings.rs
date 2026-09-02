@@ -25,12 +25,28 @@ fn update_org_info_rules() {
         Err(OrgError::AdminRequired)
     ));
     assert!(matches!(
-        OrganizationService::update_org_info(&mut storage, "org_nope", Some("新名字"), None, None, &admin, NOW + 1),
+        OrganizationService::update_org_info(
+            &mut storage,
+            "org_nope",
+            Some("新名字"),
+            None,
+            None,
+            &admin,
+            NOW + 1
+        ),
         Err(OrgError::OrganizationNotFound)
     ));
     // 名称 trim 后为空：拒绝
     assert!(matches!(
-        OrganizationService::update_org_info(&mut storage, &record.org_id, Some("   "), None, None, &admin, NOW + 1),
+        OrganizationService::update_org_info(
+            &mut storage,
+            &record.org_id,
+            Some("   "),
+            None,
+            None,
+            &admin,
+            NOW + 1
+        ),
         Err(OrgError::Required(_))
     ));
     // 非法 logo（非 data:image/ 前缀）：拒绝
@@ -65,7 +81,8 @@ fn update_org_info_rules() {
         updated.sync.as_ref().unwrap().versions.summary_version,
         NOW + 2
     );
-    let txs = spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 1).unwrap();
+    let txs =
+        spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 1).unwrap();
     assert_eq!(txs[0].summary, "更新组织信息");
     assert_eq!(
         txs[0].payload.as_ref().unwrap()["name"],
@@ -99,7 +116,8 @@ fn update_org_info_rules() {
     assert_eq!(cleared.name, "星火团队");
     assert_eq!(cleared.description, "");
     assert_eq!(cleared.updated_at, NOW + 3, "清除是一次真实变更，bump 版本");
-    let txs = spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 1).unwrap();
+    let txs =
+        spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 1).unwrap();
     assert_eq!(
         txs[0].payload.as_ref().unwrap()["description"],
         serde_json::json!("")
@@ -130,7 +148,8 @@ fn update_org_info_avatar_rules() {
         NOW + 1,
         "与 name/description 同口径：版本字段 = updatedAt"
     );
-    let txs = spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 1).unwrap();
+    let txs =
+        spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 1).unwrap();
     assert_eq!(
         txs[0].payload.as_ref().unwrap()["avatar"],
         serde_json::json!(logo)
@@ -225,14 +244,9 @@ fn set_org_gateways_rules() {
     .unwrap();
     assert_eq!(narrowed.gateways, vec![admin.clone()]);
     // O1：空列表清除显式指定（回落缺省全员候选）
-    let cleared = OrganizationService::set_org_gateways(
-        &mut storage,
-        &record.org_id,
-        &[],
-        &admin,
-        NOW + 3,
-    )
-    .unwrap();
+    let cleared =
+        OrganizationService::set_org_gateways(&mut storage, &record.org_id, &[], &admin, NOW + 3)
+            .unwrap();
     assert!(cleared.gateways.is_empty());
     // 非成员 / 非法 rootId
     assert!(matches!(
@@ -277,7 +291,8 @@ fn set_org_gateways_rules() {
         updated.sync.as_ref().unwrap().versions.summary_version,
         NOW + 4
     );
-    let txs = spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 1).unwrap();
+    let txs =
+        spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 1).unwrap();
     assert_eq!(txs[0].summary, "更新组织网关（2 个）");
     assert_eq!(
         txs[0].payload.as_ref().unwrap()["gateways"],
@@ -333,7 +348,8 @@ fn set_org_public_rules() {
     assert_eq!(updated.updated_at, NOW + 2);
     // 组织根密钥对已存在（创建时生成）→ 不重新生成
     assert_eq!(updated.org_address, record.org_address);
-    let txs = spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 1).unwrap();
+    let txs =
+        spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 1).unwrap();
     assert_eq!(txs[0].summary, "开启组织公开");
     assert_eq!(
         txs[0].payload.as_ref().unwrap()["isPublic"],
@@ -410,7 +426,8 @@ fn set_org_public_rules() {
     assert_eq!(closed.display_name_override(), None);
     assert_eq!(closed.org_address, record.org_address);
     assert!(closed.org_root_secret().is_some());
-    let txs = spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 1).unwrap();
+    let txs =
+        spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 1).unwrap();
     assert_eq!(txs[0].summary, "关闭组织公开");
 }
 
@@ -440,7 +457,9 @@ fn set_org_public_lazy_backfills_root_keypair() {
     .unwrap();
     // 懒补齐：orgAddress 生成、orgSecret 补齐、根私钥密文可解密且闭环
     let org_address = updated.org_address.clone().expect("backfilled orgAddress");
-    assert!(spark_core::org::org_address::is_valid_org_address(&org_address));
+    assert!(spark_core::org::org_address::is_valid_org_address(
+        &org_address
+    ));
     assert_eq!(updated.org_secret().map(str::len), Some(64));
     let signing = spark_core::org::org_address::org_root_signing_key(&updated).expect("opens");
     let digest = spark_core::org::org_address::decode_org_address(&org_address).unwrap();

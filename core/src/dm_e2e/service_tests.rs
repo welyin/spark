@@ -84,11 +84,27 @@ fn encrypt_decrypt_roundtrip_and_aad_tamper() {
 
     // A、B 各自协商同一份 A→B 会话密钥（值相同，键各为对端 rootId）
     ensure_session_key(
-        &mut a, &a_key, &root_x_pub(&b_key), "b-root-pub-b64", "rootA", "rootB", "rootB", NODE_A, 1000,
+        &mut a,
+        &a_key,
+        &root_x_pub(&b_key),
+        "b-root-pub-b64",
+        "rootA",
+        "rootB",
+        "rootB",
+        NODE_A,
+        1000,
     )
     .unwrap();
     ensure_session_key(
-        &mut b, &b_key, &root_x_pub(&a_key), "a-root-pub-b64", "rootA", "rootB", "rootA", NODE_B, 1000,
+        &mut b,
+        &b_key,
+        &root_x_pub(&a_key),
+        "a-root-pub-b64",
+        "rootA",
+        "rootB",
+        "rootA",
+        NODE_B,
+        1000,
     )
     .unwrap();
 
@@ -110,19 +126,21 @@ fn encrypt_decrypt_roundtrip_and_aad_tamper() {
     assert!(decrypt_body(&b, "rootA", "rootC", "chat", ts, &enc).is_err());
     // 篡改密文字节 → AEAD 失败
     let mut tampered = enc.clone();
-    tampered["ciphertext"] = json!(tampered["ciphertext"]
-        .as_str()
-        .unwrap()
-        .chars()
-        .next()
-        .map(|_| {
-            // 翻转 base64 尾字符制造坏密文（仅演示路径可达，不必真字节改）
-            let s = tampered["ciphertext"].as_str().unwrap();
-            let mut v: Vec<char> = s.chars().collect();
-            v[0] = if v[0] == 'A' { 'B' } else { 'A' };
-            v.into_iter().collect::<String>()
-        })
-        .unwrap());
+    tampered["ciphertext"] = json!(
+        tampered["ciphertext"]
+            .as_str()
+            .unwrap()
+            .chars()
+            .next()
+            .map(|_| {
+                // 翻转 base64 尾字符制造坏密文（仅演示路径可达，不必真字节改）
+                let s = tampered["ciphertext"].as_str().unwrap();
+                let mut v: Vec<char> = s.chars().collect();
+                v[0] = if v[0] == 'A' { 'B' } else { 'A' };
+                v.into_iter().collect::<String>()
+            })
+            .unwrap()
+    );
     assert!(decrypt_body(&b, "rootA", "rootB", "chat", ts, &tampered).is_err());
 }
 
@@ -140,7 +158,15 @@ fn long_lived_session_key_is_not_rotated() {
 
     // 首次协商：写盘（返回 true）
     let first = ensure_session_key(
-        &mut b, &b_key, &peer_x_pub, peer_root_pub_b64, "rootA", "rootB", "rootA", NODE_B, 1000,
+        &mut b,
+        &b_key,
+        &peer_x_pub,
+        peer_root_pub_b64,
+        "rootA",
+        "rootB",
+        "rootA",
+        NODE_B,
+        1000,
     )
     .unwrap();
     assert!(first, "首次协商写盘");
@@ -153,15 +179,29 @@ fn long_lived_session_key_is_not_rotated() {
     // → 返回同一密钥、不写盘（false）、不产生 history 条目
     let far_future = 1000 + 48 * H;
     let second = ensure_session_key(
-        &mut b, &b_key, &peer_x_pub, peer_root_pub_b64, "rootA", "rootB", "rootA", NODE_B, far_future,
+        &mut b,
+        &b_key,
+        &peer_x_pub,
+        peer_root_pub_b64,
+        "rootA",
+        "rootB",
+        "rootA",
+        NODE_B,
+        far_future,
     )
     .unwrap();
     assert!(!second, "既有 current 密钥 → 复用不写盘（写盘次数不增长）");
     let rec2 = read_session_key_record(&b, "rootA").unwrap().unwrap();
     assert_eq!(rec2.current_key, k1, "长期密钥恒等，仍为同一密钥");
-    assert!(rec2.history_keys.is_empty(), "不复用不产生同值 history 条目");
+    assert!(
+        rec2.history_keys.is_empty(),
+        "不复用不产生同值 history 条目"
+    );
     assert_eq!(rec2.current_since, 1000, "currentSince 不被后续调用刷新");
-    assert_eq!(rec2.last_seen, 1000, "lastSeen 不被后续调用刷新（复用不写盘）");
+    assert_eq!(
+        rec2.last_seen, 1000,
+        "lastSeen 不被后续调用刷新（复用不写盘）"
+    );
 }
 
 /// 历史密钥解密：换钥后，用旧密钥签发的离线密文仍可解（select_key_for_ts 按
@@ -229,8 +269,14 @@ fn select_key_by_ts() {
         current_since: 3000,
         last_seen: 3000,
         history_keys: vec![
-            HistoryKey { key: "K1".into(), since: 1000 },
-            HistoryKey { key: "K2".into(), since: 2000 },
+            HistoryKey {
+                key: "K1".into(),
+                since: 1000,
+            },
+            HistoryKey {
+                key: "K2".into(),
+                since: 2000,
+            },
         ],
         peer_root_pub: None,
     };
@@ -256,7 +302,10 @@ fn session_key_converges_via_pdsync() {
         current_key: B64.encode([7u8; 32]),
         current_since: 1000,
         last_seen: 1000,
-        history_keys: vec![HistoryKey { key: B64.encode([6u8; 32]), since: 500 }],
+        history_keys: vec![HistoryKey {
+            key: B64.encode([6u8; 32]),
+            since: 500,
+        }],
         peer_root_pub: None,
     };
     write_session_key_record(&mut a, "rootB", &rec, NODE_A, 1000).unwrap();
@@ -297,14 +346,19 @@ fn ephemeral_two_sides_derive_same_key() {
     let send_key =
         derive_session_key_ephemeral(&eph_priv, &root_x_pub(&b_key), "rootA", "rootB").unwrap();
     // 接收方：我方（B）root 私钥 + 对端 ephPub
-    let recv_key =
-        derive_session_key_from_eph_pub(&b_key, &eph_pub, "rootA", "rootB").unwrap();
-    assert_eq!(send_key, recv_key, "X25519 交换性：临时交换两路径派生同一会话密钥");
+    let recv_key = derive_session_key_from_eph_pub(&b_key, &eph_pub, "rootA", "rootB").unwrap();
+    assert_eq!(
+        send_key, recv_key,
+        "X25519 交换性：临时交换两路径派生同一会话密钥"
+    );
 
     // 临时路径方向无关：A→B 与 B→A 派生同一临时会话密钥
     let reversed =
         derive_session_key_ephemeral(&eph_priv, &root_x_pub(&b_key), "rootB", "rootA").unwrap();
-    assert_eq!(send_key, reversed, "临时交换路径亦方向无关（HKDF info 排序）");
+    assert_eq!(
+        send_key, reversed,
+        "临时交换路径亦方向无关（HKDF info 排序）"
+    );
 }
 
 /// 临时交换与 root 直接转换回退路径产出**不同**会话密钥：临时路径引入一次性
@@ -318,10 +372,16 @@ fn ephemeral_and_pure_root_paths_differ() {
     let ephemeral =
         derive_session_key_ephemeral(&eph_priv, &root_x_pub(&b_key), "rootA", "rootB").unwrap();
     let pure_root = derive_session_key(&a_key, &root_x_pub(&b_key), "rootA", "rootB").unwrap();
-    assert_ne!(ephemeral, pure_root, "临时交换提供前向保密，密钥与 root DH 不同");
+    assert_ne!(
+        ephemeral, pure_root,
+        "临时交换提供前向保密，密钥与 root DH 不同"
+    );
     // 回退路径（root 直接转换 DH）双端一致——即对端未升级时的跨版本兼容密钥
     let fallback_recv = derive_session_key(&b_key, &root_x_pub(&a_key), "rootA", "rootB").unwrap();
-    assert_eq!(pure_root, fallback_recv, "回退路径双端派生一致（无前向保密但兼容）");
+    assert_eq!(
+        pure_root, fallback_recv,
+        "回退路径双端派生一致（无前向保密但兼容）"
+    );
 }
 
 /// 旧记录兼容：`lastSeen` 字段缺省（旧版本线形）反序列化为 0（`#[serde(default)]`），
@@ -350,7 +410,8 @@ fn ephemeral_key_roundtrip_encrypt_decrypt() {
     let b_key = root(2);
     let (eph_priv, eph_pub) = generate_ephemeral_keypair();
     // 发送方临时会话密钥
-    let send_key = derive_session_key_ephemeral(&eph_priv, &root_x_pub(&b_key), "rootA", "rootB").unwrap();
+    let send_key =
+        derive_session_key_ephemeral(&eph_priv, &root_x_pub(&b_key), "rootA", "rootB").unwrap();
     // 接收方 ephPub 派生同一密钥
     let recv_key = derive_session_key_from_eph_pub(&b_key, &eph_pub, "rootA", "rootB").unwrap();
     assert_eq!(send_key, recv_key);
@@ -416,10 +477,12 @@ fn full_e2e_envelope_outbound_inbound() {
     // 出站（A→B）：① 临时密钥对 ② 我方临时私钥 + 对端(B)root 公钥派生
     let (eph_priv, eph_pub) = generate_ephemeral_keypair();
     let peer_x25519 = root_x_pub(&b_key);
-    let session_key = derive_session_key_ephemeral(&eph_priv, &peer_x25519, "rootA", "rootB").unwrap();
+    let session_key =
+        derive_session_key_ephemeral(&eph_priv, &peer_x25519, "rootA", "rootB").unwrap();
     let ts = 1000;
     let body = json!({ "topic": "moments:p", "feedId": "f1", "payload": { "text": "hi" } });
-    let encrypted = encrypt_body_with_key(&session_key, "rootA", "rootB", "feed", ts, &body).unwrap();
+    let encrypted =
+        encrypt_body_with_key(&session_key, "rootA", "rootB", "feed", ts, &body).unwrap();
 
     // 出站信封（携带 ephPub，参与签名）——签名用 A 的 root 签名私钥
     let envelope = crate::kernel::dm_envelope::build_envelope_with_eph(
@@ -437,9 +500,26 @@ fn full_e2e_envelope_outbound_inbound() {
     // 入站（B）：验签（此处 from/to 用 rootA/rootB，验签需 pubKey==sha256(from)；
     // 简化验证 ephPub 派生路径解密，验签本身在 dm_envelope 测试覆盖）
     let eph_pub_b64 = envelope.get("ephPub").and_then(Value::as_str).unwrap();
-    let recv_key = derive_session_key_from_eph_pub(&b_key, &B64.decode(eph_pub_b64).unwrap().try_into().unwrap(), "rootA", "rootB").unwrap();
-    assert_eq!(recv_key, session_key, "X25519 交换性：收发两端派生同一会话密钥");
-    let dec = decrypt_body_with_key(&recv_key, "rootA", "rootB", "feed", ts, envelope.get("body").unwrap()).unwrap();
+    let recv_key = derive_session_key_from_eph_pub(
+        &b_key,
+        &B64.decode(eph_pub_b64).unwrap().try_into().unwrap(),
+        "rootA",
+        "rootB",
+    )
+    .unwrap();
+    assert_eq!(
+        recv_key, session_key,
+        "X25519 交换性：收发两端派生同一会话密钥"
+    );
+    let dec = decrypt_body_with_key(
+        &recv_key,
+        "rootA",
+        "rootB",
+        "feed",
+        ts,
+        envelope.get("body").unwrap(),
+    )
+    .unwrap();
     assert_eq!(dec, body, "入站 ephPub 派生密钥解密还原明文");
 }
 
@@ -453,8 +533,30 @@ fn fallback_without_eph_pub_uses_key_table() {
     let mut a = MemoryStorage::new();
     let mut b = MemoryStorage::new();
     // A、B 各自以 root DH 派生同一会话密钥（无 ephPub 回退）
-    ensure_session_key(&mut a, &a_key, &root_x_pub(&b_key), "b-root-pub-b64", "rootA", "rootB", "rootB", NODE_A, 1000).unwrap();
-    ensure_session_key(&mut b, &b_key, &root_x_pub(&a_key), "a-root-pub-b64", "rootA", "rootB", "rootA", NODE_B, 1000).unwrap();
+    ensure_session_key(
+        &mut a,
+        &a_key,
+        &root_x_pub(&b_key),
+        "b-root-pub-b64",
+        "rootA",
+        "rootB",
+        "rootB",
+        NODE_A,
+        1000,
+    )
+    .unwrap();
+    ensure_session_key(
+        &mut b,
+        &b_key,
+        &root_x_pub(&a_key),
+        "a-root-pub-b64",
+        "rootA",
+        "rootB",
+        "rootA",
+        NODE_B,
+        1000,
+    )
+    .unwrap();
     let ts = 1000;
     // 出站：无 ephPub 的 root 直接转换加密（encrypt_body 按密钥表 current 密钥）
     let enc = encrypt_body(&a, "rootA", "rootB", "chat", ts, &plain()).unwrap();
@@ -475,7 +577,10 @@ fn record_inbound_peer_root_pub_writes_and_updates() {
     record_inbound_peer_root_pub(&mut s, "rootB", "b-pub-v1", NODE_A, 1000).unwrap();
     let rec = read_session_key_record(&s, "rootB").unwrap().unwrap();
     assert_eq!(rec.peer_root_pub.as_deref(), Some("b-pub-v1"));
-    assert!(rec.current_key.is_empty(), "占位记录会话密钥为空，待 ensure 补全");
+    assert!(
+        rec.current_key.is_empty(),
+        "占位记录会话密钥为空，待 ensure 补全"
+    );
 
     // 已存值相同：不写盘（peer_root_pub 不变）
     record_inbound_peer_root_pub(&mut s, "rootB", "b-pub-v1", NODE_A, 1001).unwrap();
@@ -500,8 +605,18 @@ fn encrypt_outbound_body_e2e_roundtrip() {
     let mut a = MemoryStorage::new();
 
     // 无对端公钥记录 → NoSessionKey
-    let err = encrypt_outbound_body(&mut a, &a_key, "rootA", "rootB", "chat", 1000, &plain(), NODE_A, 1000)
-        .unwrap_err();
+    let err = encrypt_outbound_body(
+        &mut a,
+        &a_key,
+        "rootA",
+        "rootB",
+        "chat",
+        1000,
+        &plain(),
+        NODE_A,
+        1000,
+    )
+    .unwrap_err();
     assert!(matches!(err, DmE2eError::NoSessionKey));
 
     // 入站先记录 B 的 root 公钥（模拟 B 曾给 A 发过信封）
@@ -509,7 +624,15 @@ fn encrypt_outbound_body_e2e_roundtrip() {
 
     // A 出站加密：读 B 公钥 → ensure → 临时 → 加密
     let (encrypted, eph_pub_b64) = encrypt_outbound_body(
-        &mut a, &a_key, "rootA", "rootB", "chat", 1000, &plain(), NODE_A, 1000,
+        &mut a,
+        &a_key,
+        "rootA",
+        "rootB",
+        "chat",
+        1000,
+        &plain(),
+        NODE_A,
+        1000,
     )
     .unwrap();
     assert_eq!(encrypted["encrypted"], json!(true));

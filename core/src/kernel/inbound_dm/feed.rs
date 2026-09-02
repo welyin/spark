@@ -98,19 +98,16 @@ pub(super) fn handle_feed<S: StorageBackend>(
     if let Some(r) = reply_to {
         data["replyTo"] = json!(r);
     }
-    done(
-        ok_response(),
-        vec![P2pEvent::FeedReceived(data)],
-    )
+    done(ok_response(), vec![P2pEvent::FeedReceived(data)])
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashSet;
     use crate::contact::{ContactService, FriendRecord};
     use crate::kernel::feed::{FEED_INBOX_PREFIX, inbox_pull};
     use crate::storage::{MemoryStorage, ScanOptions};
+    use std::collections::HashSet;
 
     /// 空在线 peer 集合（每个测试独立持有，避免返回借用局部临时值）。
     fn ctx<'a>(now: i64, online: &'a HashSet<String>) -> InboundContext<'a> {
@@ -152,7 +149,9 @@ mod tests {
 
     fn blocked(storage: &mut MemoryStorage, root_id: &str) {
         use crate::contact::BLOCKED_PREFIX;
-        storage.put(&format!("{BLOCKED_PREFIX}{root_id}"), "1").unwrap();
+        storage
+            .put(&format!("{BLOCKED_PREFIX}{root_id}"), "1")
+            .unwrap();
     }
 
     /// 信封 ts（发送方时间）；测试里与 ctx.now_ms 可不同，验证记录/事件用信封 ts。
@@ -161,9 +160,11 @@ mod tests {
     }
 
     fn inbox_count(s: &MemoryStorage, plugin_id: &str) -> usize {
-        s.scan(&ScanOptions::prefix(&format!("{FEED_INBOX_PREFIX}{plugin_id}:")))
-            .unwrap()
-            .len()
+        s.scan(&ScanOptions::prefix(&format!(
+            "{FEED_INBOX_PREFIX}{plugin_id}:"
+        )))
+        .unwrap()
+        .len()
     }
 
     /// 正常投递：落收件箱 + FeedReceived 事件 + blob 来源登记。
@@ -172,7 +173,14 @@ mod tests {
         let mut s = MemoryStorage::new();
         ContactService::upsert_friend(&mut s, &friend("fromA")).unwrap();
         let payload = json!({ "text": "hi", "img": { "$blob": "hashA" } });
-        let result = handle_feed(&mut s, &ctx(1000, &empty_online()), "fromA", &body("moments:p", "f1", payload, None), env_ts()).unwrap();
+        let result = handle_feed(
+            &mut s,
+            &ctx(1000, &empty_online()),
+            "fromA",
+            &body("moments:p", "f1", payload, None),
+            env_ts(),
+        )
+        .unwrap();
         assert_eq!(result.response["ok"], json!(true));
         // FeedReceived 事件
         assert_eq!(result.events.len(), 1);
@@ -184,12 +192,20 @@ mod tests {
         assert_eq!(data["feedId"], json!("f1"));
         assert_eq!(data["payload"]["text"], json!("hi"));
         // I6：事件 ts 用信封时间戳（发送方时间 env_ts=900），非接收方 ctx.now_ms（1000）
-        assert_eq!(data["ts"], json!(env_ts()), "事件 ts 应为信封时间戳而非接收方本地时间");
+        assert_eq!(
+            data["ts"],
+            json!(env_ts()),
+            "事件 ts 应为信封时间戳而非接收方本地时间"
+        );
         // 收件箱落库：记录 ts 同样用信封时间戳
         let (items, _) = inbox_pull(&s, "moments", None, 10).unwrap();
         assert_eq!(items[0].ts, env_ts(), "收件箱记录 ts 应为信封时间戳");
         // blob 来源登记（feed 入站扫描 {$blob: hash}）
-        assert!(s.get(&crate::kernel::feed::feed_blob_src_key("hashA")).unwrap().is_some());
+        assert!(
+            s.get(&crate::kernel::feed::feed_blob_src_key("hashA"))
+                .unwrap()
+                .is_some()
+        );
     }
 
     /// 拉黑拒收：blocked。
@@ -197,7 +213,14 @@ mod tests {
     fn blocked_sender_rejected() {
         let mut s = MemoryStorage::new();
         blocked(&mut s, "evil");
-        let result = handle_feed(&mut s, &ctx(1000, &empty_online()), "evil", &body("moments:p", "f1", json!({}), None), env_ts()).unwrap();
+        let result = handle_feed(
+            &mut s,
+            &ctx(1000, &empty_online()),
+            "evil",
+            &body("moments:p", "f1", json!({}), None),
+            env_ts(),
+        )
+        .unwrap();
         assert_eq!(result.response["reason"], json!("blocked"));
         assert!(result.events.is_empty());
         assert_eq!(inbox_count(&s, "moments"), 0);
@@ -209,11 +232,25 @@ mod tests {
         let mut s = MemoryStorage::new();
         ContactService::upsert_friend(&mut s, &friend("a")).unwrap();
         // topic 无 sub
-        let r = handle_feed(&mut s, &ctx(1000, &empty_online()), "a", &body("moments", "f1", json!({}), None), env_ts()).unwrap();
+        let r = handle_feed(
+            &mut s,
+            &ctx(1000, &empty_online()),
+            "a",
+            &body("moments", "f1", json!({}), None),
+            env_ts(),
+        )
+        .unwrap();
         assert_eq!(r.response["reason"], json!("invalid-body"));
         // payload 超 32 KiB
         let big = json!({ "d": "x".repeat(crate::kernel::feed::FEED_PAYLOAD_MAX_BYTES) });
-        let r = handle_feed(&mut s, &ctx(1000, &empty_online()), "a", &body("moments:p", "f1", big, None), env_ts()).unwrap();
+        let r = handle_feed(
+            &mut s,
+            &ctx(1000, &empty_online()),
+            "a",
+            &body("moments:p", "f1", big, None),
+            env_ts(),
+        )
+        .unwrap();
         assert_eq!(r.response["reason"], json!("invalid-body"));
         assert_eq!(inbox_count(&s, "moments"), 0);
     }
@@ -237,8 +274,22 @@ mod tests {
     fn inbox_recoverable_via_pull() {
         let mut s = MemoryStorage::new();
         ContactService::upsert_friend(&mut s, &friend("a")).unwrap();
-        handle_feed(&mut s, &ctx(1000, &empty_online()), "a", &body("moments:p", "f1", json!({}), None), env_ts()).unwrap();
-        handle_feed(&mut s, &ctx(2000, &empty_online()), "a", &body("moments:p", "f2", json!({}), Some("f1")), env_ts()).unwrap();
+        handle_feed(
+            &mut s,
+            &ctx(1000, &empty_online()),
+            "a",
+            &body("moments:p", "f1", json!({}), None),
+            env_ts(),
+        )
+        .unwrap();
+        handle_feed(
+            &mut s,
+            &ctx(2000, &empty_online()),
+            "a",
+            &body("moments:p", "f2", json!({}), Some("f1")),
+            env_ts(),
+        )
+        .unwrap();
         let (items, _) = inbox_pull(&s, "moments", None, 10).unwrap();
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].feed_id, "f1");

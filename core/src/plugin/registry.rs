@@ -33,7 +33,10 @@ impl PluginRuntimeRegistry {
     /// 移除——崩溃线程不得误删同名插件新一轮启动的句柄。
     pub(crate) fn remove_if_generation(&self, plugin_id: &str, generation: u64) {
         let mut inner = self.lock();
-        if inner.get(plugin_id).is_some_and(|h| h.generation == generation) {
+        if inner
+            .get(plugin_id)
+            .is_some_and(|h| h.generation == generation)
+        {
             inner.remove(plugin_id);
         }
     }
@@ -202,7 +205,10 @@ mod tests {
     #[test]
     fn skips_non_bot_conversation() {
         assert_eq!(bot_owner_plugin_id(&chat_payload("abc123", "abc123")), None);
-        assert_eq!(bot_owner_plugin_id(&chat_payload("bot:no-bot-id", "me")), None);
+        assert_eq!(
+            bot_owner_plugin_id(&chat_payload("bot:no-bot-id", "me")),
+            None
+        );
         assert_eq!(bot_owner_plugin_id(&chat_payload("bot:", "me")), None);
     }
 

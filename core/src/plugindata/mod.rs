@@ -143,7 +143,11 @@ pub struct CollectionDeclaration {
     #[serde(rename = "declaredAt", default)]
     pub declared_at: i64,
     /// 声明者 rootId（org 声明记录线形用；personal scope 可选）。
-    #[serde(rename = "declaredBy", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "declaredBy",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub declared_by: Option<String>,
     /// 声明时间戳（org 声明记录线形用；与 declared_at 语义重复但名称不同，
     /// 用于对齐 org-orgsync.md §20.2.1 线形）。
@@ -197,12 +201,21 @@ impl CollectionDeclaration {
     }
 
     /// org scope 数据记录键。
-    pub fn org_data_key(org_id: &str, name: &str, version: &str, key: &str, merge: MergeRule) -> String {
+    pub fn org_data_key(
+        org_id: &str,
+        name: &str,
+        version: &str,
+        key: &str,
+        merge: MergeRule,
+    ) -> String {
         let effective = match merge {
             MergeRule::Whole => WHOLE_KEY,
             _ => key,
         };
-        format!("{}{effective}", Self::org_data_prefix(org_id, name, version))
+        format!(
+            "{}{effective}",
+            Self::org_data_prefix(org_id, name, version)
+        )
     }
 
     /// 数据记录键（whole 集合 key 恒为 [`WHOLE_KEY`]）。
@@ -322,7 +335,9 @@ pub enum PlugindataError {
     NotDeclared(String),
 
     /// 代际内重复声明策略冲突（声明不可变更）。
-    #[error("collection \"{name}\" version \"{version}\" is already declared with a different strategy and cannot be re-declared")]
+    #[error(
+        "collection \"{name}\" version \"{version}\" is already declared with a different strategy and cannot be re-declared"
+    )]
     ConflictingDeclaration {
         /// 集合名。
         name: String,
@@ -336,7 +351,9 @@ pub enum PlugindataError {
 
     /// 集合名非法（必须是 `{pluginId}:{collection}`，collection 段 `[A-Za-z0-9_-]+`，
     /// 不得含 `@`）。
-    #[error("invalid collection name \"{0}\": expected \"{{pluginId}}:{{collection}}\", collection part allows [A-Za-z0-9_-], \"@\" is reserved")]
+    #[error(
+        "invalid collection name \"{0}\": expected \"{{pluginId}}:{{collection}}\", collection part allows [A-Za-z0-9_-], \"@\" is reserved"
+    )]
     InvalidName(String),
 
     /// name 的插件前缀与调用方插件 id 不一致。
@@ -381,9 +398,9 @@ fn is_valid_collection_part(part: &str) -> bool {
 
 fn is_valid_version(version: &str) -> bool {
     !version.is_empty()
-        && version.bytes().all(|b| {
-            matches!(b, b'0'..=b'9' | b'A'..=b'Z' | b'a'..=b'z' | b'.' | b'-')
-        })
+        && version
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'A'..=b'Z' | b'a'..=b'z' | b'.' | b'-'))
 }
 
 /// 声明输入（host 层从插件载荷解析；`name`/`version` 之外的轴均有缺省）。
@@ -456,9 +473,7 @@ pub fn declare<S: StorageBackend>(
     match space {
         Space::Org => {
             // encrypted 必须搭配 data-accounts（与 all-members 语义冲突）
-            if confidentiality == Confidentiality::Encrypted
-                && accounts == Accounts::AllMembers
-            {
+            if confidentiality == Confidentiality::Encrypted && accounts == Accounts::AllMembers {
                 return Err(PlugindataError::DeclarationConflict(
                     "encrypted requires accounts: data-accounts, not all-members".to_string(),
                 ));
@@ -476,9 +491,7 @@ pub fn declare<S: StorageBackend>(
         }
         Space::Personal => {
             // accounts/confidentiality 仅在 org 空间可用
-            if accounts != Accounts::default()
-                || confidentiality != Confidentiality::default()
-            {
+            if accounts != Accounts::default() || confidentiality != Confidentiality::default() {
                 return Err(PlugindataError::DeclarationConflict(
                     "accounts/confidentiality are only valid in org space".to_string(),
                 ));
@@ -490,11 +503,15 @@ pub fn declare<S: StorageBackend>(
     // `Option<String>`（org space 时缺失即报错），后续既有查找与键构造
     // 复用，不再重复 `org_id.ok_or_else`。
     let org_id_owned = match space {
-        Space::Org => Some(org_id.ok_or_else(|| {
-            PlugindataError::DeclarationConflict(
-                "org_id is required for org space declarations".to_string(),
-            )
-        })?.to_string()),
+        Space::Org => Some(
+            org_id
+                .ok_or_else(|| {
+                    PlugindataError::DeclarationConflict(
+                        "org_id is required for org space declarations".to_string(),
+                    )
+                })?
+                .to_string(),
+        ),
         Space::Personal => None,
     };
     let decl = CollectionDeclaration {
@@ -516,8 +533,11 @@ pub fn declare<S: StorageBackend>(
     // 查找既有声明（同一 name@version）
     let existing = match space {
         Space::Org => {
-            let key =
-                CollectionDeclaration::org_decl_key(org_id_owned.as_deref().unwrap_or(""), &decl.name, &decl.version);
+            let key = CollectionDeclaration::org_decl_key(
+                org_id_owned.as_deref().unwrap_or(""),
+                &decl.name,
+                &decl.version,
+            );
             storage
                 .get(&key)?
                 .and_then(|raw| serde_json::from_str::<CollectionDeclaration>(&raw).ok())
@@ -578,9 +598,7 @@ pub fn declare_builtin_org_collections<S: StorageBackend>(
         // 幂等：已声明且策略一致 → 跳过；冲突 → 报错（代际内不可变更）。
         if let Some(raw) = storage.get(&decl_key)? {
             if let Ok(existing) = serde_json::from_str::<CollectionDeclaration>(&raw) {
-                if existing.accounts == Accounts::AllMembers
-                    && existing.space == Some(Space::Org)
-                {
+                if existing.accounts == Accounts::AllMembers && existing.space == Some(Space::Org) {
                     continue;
                 }
             }
@@ -653,7 +671,11 @@ pub fn list_versions<S: StorageBackend>(
             out.push(decl);
         }
     }
-    out.sort_by(|a, b| a.declared_at.cmp(&b.declared_at).then(a.version.cmp(&b.version)));
+    out.sort_by(|a, b| {
+        a.declared_at
+            .cmp(&b.declared_at)
+            .then(a.version.cmp(&b.version))
+    });
     Ok(out)
 }
 
@@ -673,7 +695,11 @@ pub fn list_versions_org<S: StorageBackend>(
             out.push(decl);
         }
     }
-    out.sort_by(|a, b| a.declared_at.cmp(&b.declared_at).then(a.version.cmp(&b.version)));
+    out.sort_by(|a, b| {
+        a.declared_at
+            .cmp(&b.declared_at)
+            .then(a.version.cmp(&b.version))
+    });
     Ok(out)
 }
 
@@ -736,7 +762,12 @@ fn data_prefix_for(decl: &CollectionDeclaration) -> String {
 
 /// 写记录（自动版本化由 VersionedStorage 句柄保证；whole 集合 key 归一为
 /// [`WHOLE_KEY`]；append-only 拒绝覆盖已存在 key；org scope 路由到 `orgd:` 键）。
-pub fn save<S: StorageBackend>(storage: &mut S, decl: &CollectionDeclaration, key: &str, value: &str) -> Result<()> {
+pub fn save<S: StorageBackend>(
+    storage: &mut S,
+    decl: &CollectionDeclaration,
+    key: &str,
+    value: &str,
+) -> Result<()> {
     let data_key = data_key_for(decl, key);
     if decl.merge == MergeRule::AppendOnly && storage.get(&data_key)?.is_some() {
         return Err(PlugindataError::AppendOnlyViolation(decl.name.clone()));
@@ -747,7 +778,11 @@ pub fn save<S: StorageBackend>(storage: &mut S, decl: &CollectionDeclaration, ke
 
 /// 删记录（append-only 拒绝；删除经中间件自动墓碑 + 删除日志，传播到复制组；
 /// org scope 路由到 `orgd:` 键）。
-pub fn del<S: StorageBackend>(storage: &mut S, decl: &CollectionDeclaration, key: &str) -> Result<()> {
+pub fn del<S: StorageBackend>(
+    storage: &mut S,
+    decl: &CollectionDeclaration,
+    key: &str,
+) -> Result<()> {
     if decl.merge == MergeRule::AppendOnly {
         return Err(PlugindataError::AppendOnlyViolation(decl.name.clone()));
     }
@@ -756,7 +791,11 @@ pub fn del<S: StorageBackend>(storage: &mut S, decl: &CollectionDeclaration, key
 }
 
 /// 读单条（whole 集合忽略 key；org scope 路由到 `orgd:` 键）。
-pub fn get<S: StorageBackend>(storage: &S, decl: &CollectionDeclaration, key: &str) -> Result<Option<String>> {
+pub fn get<S: StorageBackend>(
+    storage: &S,
+    decl: &CollectionDeclaration,
+    key: &str,
+) -> Result<Option<String>> {
     storage.get(&data_key_for(decl, key)).map_err(Into::into)
 }
 
@@ -808,7 +847,10 @@ pub fn query<S: StorageBackend>(
 }
 
 /// 清理一个代际：声明记录 + 全部数据键（受管命名空间经中间件墓碑化传播）。
-pub fn drop_version<S: StorageBackend>(storage: &mut S, decl: &CollectionDeclaration) -> Result<()> {
+pub fn drop_version<S: StorageBackend>(
+    storage: &mut S,
+    decl: &CollectionDeclaration,
+) -> Result<()> {
     let prefix = decl.data_prefix();
     let keys: Vec<String> = storage
         .scan(&ScanOptions::prefix(&prefix))?

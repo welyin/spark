@@ -27,10 +27,16 @@ use spark_core::kernel::dm_envelope::{
 };
 
 fn vectors() -> Vec<serde_json::Value> {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../spec/vectors/dm_envelope.json");
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../spec/vectors/dm_envelope.json"
+    );
     let raw = std::fs::read_to_string(path).expect("read dm_envelope vector");
     let parsed: serde_json::Value = serde_json::from_str(&raw).expect("parse dm_envelope vector");
-    parsed.as_array().cloned().expect("dm_envelope.json 应为数组")
+    parsed
+        .as_array()
+        .cloned()
+        .expect("dm_envelope.json 应为数组")
 }
 
 #[test]
@@ -67,7 +73,11 @@ fn dm_signing_payload_and_signature_match_vectors() {
         //  - 无 ephPub：body/from/kind/to/ts
         //  - 带 ephPub：body/ephPub/from/kind/to/ts（ephPub 插在 body 之后、参与签名）
         let payload = build_signing_payload_with_eph(kind, from, to, ts, body, eph_pub);
-        assert_eq!(payload, v["payload"].as_str().unwrap(), "kind={kind} 签名载荷精确匹配");
+        assert_eq!(
+            payload,
+            v["payload"].as_str().unwrap(),
+            "kind={kind} 签名载荷精确匹配"
+        );
 
         // ed25519 确定性签名
         let sig = key.sign(payload.as_bytes());
@@ -94,7 +104,11 @@ fn dm_signing_payload_and_signature_match_vectors() {
         assert_eq!(verified.from, from);
         assert_eq!(verified.ts, ts);
         assert_eq!(verified.body, *body);
-        assert_eq!(verified.eph_pub.as_deref(), eph_pub, "kind={kind} ephPub 回传一致");
+        assert_eq!(
+            verified.eph_pub.as_deref(),
+            eph_pub,
+            "kind={kind} ephPub 回传一致"
+        );
     }
 }
 
@@ -107,12 +121,16 @@ fn vectors_cover_new_feed_and_e2e_kinds() {
     }
     // 至少一个 E2E 加密信封（body 携带 encrypted=true）
     assert!(
-        vs.iter().any(|v| v["body"]["encrypted"].as_bool() == Some(true)),
+        vs.iter()
+            .any(|v| v["body"]["encrypted"].as_bool() == Some(true)),
         "应含 E2E 加密信封 vector（body.encrypted=true）"
     );
     // 至少一个携带 ephPub 的轮换信封（外层可选字段，参与签名）
     assert!(
-        vs.iter().any(|v| v.get("ephPub").and_then(serde_json::Value::as_str).is_some()),
+        vs.iter().any(|v| v
+            .get("ephPub")
+            .and_then(serde_json::Value::as_str)
+            .is_some()),
         "应含携带 ephPub 的轮换信封 vector（密钥轮换，临时公钥参与签名）"
     );
 }

@@ -196,10 +196,7 @@ fn collect_refs(value: &serde_json::Value, out: &mut Vec<String>) {
 /// 调和扫描：全部 `pdoc:` 记录值中引用而本地缺失的 blob hash（去重）。
 /// 另并入 want 标记（lazy 拉取意图）。调用方按设备类决定是否扫描记录引用
 /// （PC eager 扫、手机只取 want）。
-pub fn missing_blobs<S: StorageBackend>(
-    storage: &S,
-    scan_records: bool,
-) -> Result<Vec<String>> {
+pub fn missing_blobs<S: StorageBackend>(storage: &S, scan_records: bool) -> Result<Vec<String>> {
     let mut missing = std::collections::BTreeSet::new();
     if scan_records {
         for (_key, raw) in storage.scan(&ScanOptions::prefix("pdoc:"))? {
@@ -223,7 +220,11 @@ pub fn missing_blobs<S: StorageBackend>(
 
 /// 节流判定：距上次请求不足 [`BLOB_REQ_THROTTLE_MS`] → false（调用方应跳过）。
 /// 通过则记录本次时间。
-pub fn throttle_request<S: StorageBackend>(storage: &mut S, hash: &str, now_ms: i64) -> Result<bool> {
+pub fn throttle_request<S: StorageBackend>(
+    storage: &mut S,
+    hash: &str,
+    now_ms: i64,
+) -> Result<bool> {
     if let Some(raw) = storage.get(&blob_req_key(hash))?
         && let Ok(last) = raw.parse::<i64>()
         && now_ms - last < BLOB_REQ_THROTTLE_MS
@@ -270,7 +271,10 @@ pub fn ingest_chunk<S: StorageBackend>(
         .map_err(|e| PlugindataError::Blob(format!("chunk base64 decode failed: {e}")))?;
     let part_key = blob_part_key(hash);
     // 已收 base64 字符数 → 原始字节数（暂存段皆整 4 字符、3 的倍数字节）
-    let received_bytes = storage.get(&part_key)?.map(|s| s.len() / 4 * 3).unwrap_or(0);
+    let received_bytes = storage
+        .get(&part_key)?
+        .map(|s| s.len() / 4 * 3)
+        .unwrap_or(0);
     if offset != received_bytes {
         // 乱序/重复块：静默忽略，等待按序重发（节流驱动的下轮调和兜底）
         return Ok(false);
@@ -359,12 +363,16 @@ mod tests {
                 break;
             }
         }
-        let got = B64.decode(read_blob(&client, &info.hash).unwrap().unwrap()).unwrap();
+        let got = B64
+            .decode(read_blob(&client, &info.hash).unwrap().unwrap())
+            .unwrap();
         assert_eq!(got, data, "分块拼接后哈希校验通过且内容一致");
         // 乱序块被拒绝且不破坏暂存
         let mut c2 = MemoryStorage::new();
         let (chunk0, total) = serve_chunk(&server, &info.hash, 0).unwrap().unwrap();
-        let (chunk1, _) = serve_chunk(&server, &info.hash, BLOB_CHUNK_BYTES).unwrap().unwrap();
+        let (chunk1, _) = serve_chunk(&server, &info.hash, BLOB_CHUNK_BYTES)
+            .unwrap()
+            .unwrap();
         assert!(!ingest_chunk(&mut c2, &info.hash, BLOB_CHUNK_BYTES, &chunk1, total).unwrap());
         assert!(!ingest_chunk(&mut c2, &info.hash, 0, &chunk0, total).unwrap());
         // 哈希不匹配：收齐后校验失败并清理
@@ -391,7 +399,11 @@ mod tests {
         )
         .unwrap();
         // 非 pdoc 键不参与扫描
-        s.put("msg:item:x", &serde_json::json!({ "$blob": "zzz" }).to_string()).unwrap();
+        s.put(
+            "msg:item:x",
+            &serde_json::json!({ "$blob": "zzz" }).to_string(),
+        )
+        .unwrap();
         let missing = missing_blobs(&s, true).unwrap();
         assert_eq!(missing, vec!["abc123".to_string()], "已持有的不算缺失");
         // 不扫记录时为空；want 标记并入

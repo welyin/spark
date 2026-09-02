@@ -170,12 +170,32 @@ fn orgq_req_rejects_non_member() {
         ],
         &[a_root.as_str(), self_root.as_str()],
     );
-    declare_org_collection(&mut s, "node-b", ORG_ID, NAME, VERSION, Accounts::DataAccounts, &self_root, NOW);
+    declare_org_collection(
+        &mut s,
+        "node-b",
+        ORG_ID,
+        NAME,
+        VERSION,
+        Accounts::DataAccounts,
+        &self_root,
+        NOW,
+    );
 
-    let body = build_orgq_query_req(ORG_ID, &format!("{NAME}@v{VERSION}"), None, 10, None, "req-1");
+    let body = build_orgq_query_req(
+        ORG_ID,
+        &format!("{NAME}@v{VERSION}"),
+        None,
+        10,
+        None,
+        "req-1",
+    );
     let r = deliver_orgq_req(&mut s, &self_root, &x_key, &x_root, &self_root, body);
     assert_eq!(r.response["ok"], false);
-    assert_eq!(r.response["reason"], json!("rejected"), "非成员 orgq-req 拒绝");
+    assert_eq!(
+        r.response["reason"],
+        json!("rejected"),
+        "非成员 orgq-req 拒绝"
+    );
     assert!(r.orgsync_out.is_empty(), "被拒 req 无应答输出");
 }
 
@@ -195,15 +215,35 @@ fn orgq_req_filtered_degrades_when_plugin_not_serving() {
         ],
         &[self_root.as_str()],
     );
-    declare_org_collection(&mut s, "node-b", ORG_ID, NAME, VERSION, Accounts::DataAccounts, &self_root, NOW);
+    declare_org_collection(
+        &mut s,
+        "node-b",
+        ORG_ID,
+        NAME,
+        VERSION,
+        Accounts::DataAccounts,
+        &self_root,
+        NOW,
+    );
 
     // 查询
-    let body = build_orgq_query_req(ORG_ID, &format!("{NAME}@v{VERSION}"), None, 10, None, "req-f1");
+    let body = build_orgq_query_req(
+        ORG_ID,
+        &format!("{NAME}@v{VERSION}"),
+        None,
+        10,
+        None,
+        "req-f1",
+    );
     let r = deliver_orgq_req(&mut s, &self_root, &m_key, &m_root, &self_root, body);
     assert_eq!(r.response["ok"], true, "数据账号受理（应答走 orgsync_out）");
     assert_eq!(r.orgsync_out.len(), 1, "回一条 orgq-resp");
     let resp = r.orgsync_out[0].body();
-    assert_eq!(resp["denied"], json!(true), "filtered 插件未运行 → denied 空集降级");
+    assert_eq!(
+        resp["denied"],
+        json!(true),
+        "filtered 插件未运行 → denied 空集降级"
+    );
     assert_eq!(resp["records"], json!([]));
 }
 
@@ -227,7 +267,16 @@ fn orgq_req_encrypted_reader_filtering() {
         &[self_root.as_str()],
     );
     // 声明 encrypted 集合（须 data-accounts）
-    declare_org_collection(&mut s, "node-b", ORG_ID, NAME, VERSION, Accounts::DataAccounts, &self_root, NOW);
+    declare_org_collection(
+        &mut s,
+        "node-b",
+        ORG_ID,
+        NAME,
+        VERSION,
+        Accounts::DataAccounts,
+        &self_root,
+        NOW,
+    );
     let mut d = spark_core::plugindata::get_declaration_org(&s, ORG_ID, NAME, VERSION)
         .unwrap()
         .unwrap();
@@ -251,17 +300,26 @@ fn orgq_req_encrypted_reader_filtering() {
     let r = deliver_orgq_req(&mut s, &self_root, &m_key, &m_root, &self_root, wbody);
     let resp = r.orgsync_out[0].body();
     assert_eq!(
-        resp["accepted"], json!(1),
+        resp["accepted"],
+        json!(1),
         "encrypted 写入被数据账号受理（AEAD 读取方把关）"
     );
     assert_eq!(resp["denied"], json!(false));
 
     // 无 acl 记录 → 非读者（m 不在 readers）→ 查询 denied 空集，元数据不给
-    let body = build_orgq_query_req(ORG_ID, &format!("{NAME}@v{VERSION}"), None, 10, None, "req-e1");
+    let body = build_orgq_query_req(
+        ORG_ID,
+        &format!("{NAME}@v{VERSION}"),
+        None,
+        10,
+        None,
+        "req-e1",
+    );
     let r = deliver_orgq_req(&mut s, &self_root, &m_key, &m_root, &self_root, body);
     let resp = r.orgsync_out[0].body();
     assert_eq!(
-        resp["denied"], json!(true),
+        resp["denied"],
+        json!(true),
         "encrypted 非读者查询 denied 空集"
     );
     assert_eq!(resp["records"], json!([]));
@@ -280,11 +338,21 @@ fn orgq_req_encrypted_reader_filtering() {
         &serde_json::to_string(&acl).unwrap(),
     )
     .unwrap();
-    let body = build_orgq_query_req(ORG_ID, &format!("{NAME}@v{VERSION}"), None, 10, None, "req-e3");
+    let body = build_orgq_query_req(
+        ORG_ID,
+        &format!("{NAME}@v{VERSION}"),
+        None,
+        10,
+        None,
+        "req-e3",
+    );
     let r = deliver_orgq_req(&mut s, &self_root, &m_key, &m_root, &self_root, body);
     let resp = r.orgsync_out[0].body();
     assert_eq!(resp["denied"], json!(false), "读者查询放行");
-    assert!(!resp["records"].as_array().unwrap().is_empty(), "读者拿到驻留密文");
+    assert!(
+        !resp["records"].as_array().unwrap().is_empty(),
+        "读者拿到驻留密文"
+    );
 }
 
 /// 数据账号侧处理 orgq-req 后产生出站 orgq-resp（orgsync_out 携带 to_root_id
@@ -303,8 +371,24 @@ fn orgq_req_outbound_resp_carries_member_to_root() {
         ],
         &[self_root.as_str()],
     );
-    declare_org_collection(&mut s, "node-b", ORG_ID, NAME, VERSION, Accounts::DataAccounts, &self_root, NOW);
-    let body = build_orgq_query_req(ORG_ID, &format!("{NAME}@v{VERSION}"), None, 10, None, "req-to");
+    declare_org_collection(
+        &mut s,
+        "node-b",
+        ORG_ID,
+        NAME,
+        VERSION,
+        Accounts::DataAccounts,
+        &self_root,
+        NOW,
+    );
+    let body = build_orgq_query_req(
+        ORG_ID,
+        &format!("{NAME}@v{VERSION}"),
+        None,
+        10,
+        None,
+        "req-to",
+    );
     let r = deliver_orgq_req(&mut s, &self_root, &m_key, &m_root, &self_root, body);
     assert_eq!(r.orgsync_out.len(), 1);
     assert_eq!(
@@ -332,10 +416,22 @@ fn orgq_resp_rejects_non_data_account() {
         &[], // 无显式数据账号 → 缺省全体管理员，self 是 member → 非数据账号
     );
     mark_pending(&mut s, "req-1", ORG_ID, &m_root, "query");
-    let body = build_orgq_query_resp(ORG_ID, &format!("{NAME}@v{VERSION}"), "req-1", &[], true, NOW, false);
+    let body = build_orgq_query_resp(
+        ORG_ID,
+        &format!("{NAME}@v{VERSION}"),
+        "req-1",
+        &[],
+        true,
+        NOW,
+        false,
+    );
     let r = deliver_orgq_resp(&mut s, &self_root, &m_key, &m_root, &self_root, body);
     assert_eq!(r.response["ok"], false);
-    assert_eq!(r.response["reason"], json!("rejected"), "非数据账号 resp 拒绝");
+    assert_eq!(
+        r.response["reason"],
+        json!("rejected"),
+        "非数据账号 resp 拒绝"
+    );
 }
 
 /// 未知 requestId（未发出过对应 orgq-req）→ 请求-应答关联拒绝。
@@ -354,10 +450,22 @@ fn orgq_resp_unknown_request_id_rejected() {
         &[da_root.as_str()],
     );
     // 无在途记录
-    let body = build_orgq_query_resp(ORG_ID, &format!("{NAME}@v{VERSION}"), "req-ghost", &[], true, NOW, false);
+    let body = build_orgq_query_resp(
+        ORG_ID,
+        &format!("{NAME}@v{VERSION}"),
+        "req-ghost",
+        &[],
+        true,
+        NOW,
+        false,
+    );
     let r = deliver_orgq_resp(&mut s, &self_root, &da_key, &da_root, &self_root, body);
     assert_eq!(r.response["ok"], false);
-    assert_eq!(r.response["reason"], json!("unknown-request"), "未知 requestId 拒绝");
+    assert_eq!(
+        r.response["reason"],
+        json!("unknown-request"),
+        "未知 requestId 拒绝"
+    );
 }
 
 /// 合法查询应答：写入成员侧缓存命名空间 + 清除在途记录。
@@ -398,10 +506,7 @@ fn orgq_resp_query_writes_member_cache() {
     // 成员侧缓存写入（独立命名空间，相对 key）
     let cache_key = orgq_cache_key(ORG_ID, &col, "2026-08");
     let cached = s.get(&cache_key).unwrap().expect("缓存已写入");
-    assert!(
-        cached.contains("\"amt\":100"),
-        "缓存值含应答记录内容"
-    );
+    assert!(cached.contains("\"amt\":100"), "缓存值含应答记录内容");
     // 在途记录已清除（应答只消费一次）
     assert!(s.get(&format!("orgq:pending:req-c1")).unwrap().is_none());
     // 不在 orgd: 数据键域落库（缓存不算副本）
@@ -449,7 +554,16 @@ fn hello_with_data_role_marks_online_data_account() {
         ],
         &[da_root.as_str()],
     );
-    declare_org_collection(&mut s, "node-b", ORG_ID, NAME, VERSION, Accounts::AllMembers, &self_root, NOW);
+    declare_org_collection(
+        &mut s,
+        "node-b",
+        ORG_ID,
+        NAME,
+        VERSION,
+        Accounts::AllMembers,
+        &self_root,
+        NOW,
+    );
     // 构造 roles=["data"] 的 hello
     let mut collections = serde_json::Map::new();
     collections.insert(
@@ -471,7 +585,9 @@ fn hello_with_data_role_marks_online_data_account() {
     );
     assert_eq!(r.response["ok"], true);
     assert!(
-        s.get(&orgq_da_online_key(ORG_ID, &da_root)).unwrap().is_some(),
+        s.get(&orgq_da_online_key(ORG_ID, &da_root))
+            .unwrap()
+            .is_some(),
         "hello roles=[data] 标记在线数据账号"
     );
 }
@@ -479,10 +595,7 @@ fn hello_with_data_role_marks_online_data_account() {
 // ── 4. O3 权限钩子（filtered）：钩子通过 / 钩子拒绝 / 插件未运行降级 ──────
 
 /// 数据账号侧组织成员 + data-accounts 集合（filtered）就绪的公共 setup。
-fn setup_filtered_collection(
-    self_root: &str,
-    member_root: &str,
-) -> MemoryStorage {
+fn setup_filtered_collection(self_root: &str, member_root: &str) -> MemoryStorage {
     let mut s = MemoryStorage::new();
     save_org(
         &mut s,
@@ -495,9 +608,19 @@ fn setup_filtered_collection(
     );
     // 集合默认 filtered（confidentiality 缺省即 filtered）+ data-accounts
     let d = declare_org_collection(
-        &mut s, "node-b", ORG_ID, NAME, VERSION, Accounts::DataAccounts, &self_root, NOW,
+        &mut s,
+        "node-b",
+        ORG_ID,
+        NAME,
+        VERSION,
+        Accounts::DataAccounts,
+        &self_root,
+        NOW,
     );
-    assert_eq!(d.confidentiality, spark_core::plugindata::Confidentiality::Filtered);
+    assert_eq!(
+        d.confidentiality,
+        spark_core::plugindata::Confidentiality::Filtered
+    );
     s
 }
 
@@ -509,19 +632,47 @@ fn orgq_req_filtered_query_hook_pass_serves_records() {
     let mut s = setup_filtered_collection(&self_root, &m_root);
     // 数据账号驻留两条记录
     write_org_data(&mut s, "node-b", ORG_ID, NAME, VERSION, "k1", "\"v1\"", NOW);
-    write_org_data(&mut s, "node-b", ORG_ID, NAME, VERSION, "k2", "\"v2\"", NOW + 1);
+    write_org_data(
+        &mut s,
+        "node-b",
+        ORG_ID,
+        NAME,
+        VERSION,
+        "k2",
+        "\"v2\"",
+        NOW + 1,
+    );
 
-    let body = build_orgq_query_req(ORG_ID, &format!("{NAME}@v{VERSION}"), None, 10, None, "req-hp");
+    let body = build_orgq_query_req(
+        ORG_ID,
+        &format!("{NAME}@v{VERSION}"),
+        None,
+        10,
+        None,
+        "req-hp",
+    );
     let r = deliver_orgq_req_with_hook(
-        &mut s, &self_root, &m_key, &m_root, &self_root, body,
-        &FakeHook { runtime: true, read: true, write: false },
+        &mut s,
+        &self_root,
+        &m_key,
+        &m_root,
+        &self_root,
+        body,
+        &FakeHook {
+            runtime: true,
+            read: true,
+            write: false,
+        },
     );
     assert_eq!(r.response["ok"], true);
     let resp = r.orgsync_out[0].body();
     assert_eq!(resp["denied"], json!(false), "钩子通过 → 受理（非降级）");
     let records = resp["records"].as_array().unwrap();
     assert_eq!(records.len(), 2, "canRead 放行两条驻留记录");
-    assert_eq!(records[0]["key"], json!(format!("{}k1", org_data_prefix(ORG_ID, NAME, VERSION))));
+    assert_eq!(
+        records[0]["key"],
+        json!(format!("{}k1", org_data_prefix(ORG_ID, NAME, VERSION)))
+    );
 }
 
 /// F9-2：canRead 按 key **部分放行**——驻留多条，仅放行部分 key，其余被过滤
@@ -532,14 +683,40 @@ fn orgq_req_filtered_query_hook_partial_allow_by_key() {
     let (_self_key, self_root) = self_identity(2);
     let mut s = setup_filtered_collection(&self_root, &m_root);
     write_org_data(&mut s, "node-b", ORG_ID, NAME, VERSION, "k1", "\"v1\"", NOW);
-    write_org_data(&mut s, "node-b", ORG_ID, NAME, VERSION, "k2", "\"v2\"", NOW + 1);
-    write_org_data(&mut s, "node-b", ORG_ID, NAME, VERSION, "k3", "\"v3\"", NOW + 2);
+    write_org_data(
+        &mut s,
+        "node-b",
+        ORG_ID,
+        NAME,
+        VERSION,
+        "k2",
+        "\"v2\"",
+        NOW + 1,
+    );
+    write_org_data(
+        &mut s,
+        "node-b",
+        ORG_ID,
+        NAME,
+        VERSION,
+        "k3",
+        "\"v3\"",
+        NOW + 2,
+    );
 
     let hook = FakeHookPartial {
         allow_read: ["k1".to_string(), "k3".to_string()].into_iter().collect(),
     };
-    let body = build_orgq_query_req(ORG_ID, &format!("{NAME}@v{VERSION}"), None, 10, None, "req-part");
-    let r = deliver_orgq_req_with_hook(&mut s, &self_root, &m_key, &m_root, &self_root, body, &hook);
+    let body = build_orgq_query_req(
+        ORG_ID,
+        &format!("{NAME}@v{VERSION}"),
+        None,
+        10,
+        None,
+        "req-part",
+    );
+    let r =
+        deliver_orgq_req_with_hook(&mut s, &self_root, &m_key, &m_root, &self_root, body, &hook);
     let resp = r.orgsync_out[0].body();
     assert_eq!(resp["denied"], json!(false));
     let records = resp["records"].as_array().unwrap();
@@ -555,7 +732,11 @@ fn orgq_req_filtered_query_hook_partial_allow_by_key() {
                 .to_string()
         })
         .collect();
-    assert_eq!(rels, vec!["k1".to_string(), "k3".to_string()], "canRead 按 key 逐条部分放行");
+    assert_eq!(
+        rels,
+        vec!["k1".to_string(), "k3".to_string()],
+        "canRead 按 key 逐条部分放行"
+    );
 }
 
 /// 钩子拒绝（query）：canRead 拒绝全部 → 空集（非读者连元数据都不给）。
@@ -566,14 +747,34 @@ fn orgq_req_filtered_query_hook_reject_returns_empty() {
     let mut s = setup_filtered_collection(&self_root, &m_root);
     write_org_data(&mut s, "node-b", ORG_ID, NAME, VERSION, "k1", "\"v1\"", NOW);
 
-    let body = build_orgq_query_req(ORG_ID, &format!("{NAME}@v{VERSION}"), None, 10, None, "req-hr");
+    let body = build_orgq_query_req(
+        ORG_ID,
+        &format!("{NAME}@v{VERSION}"),
+        None,
+        10,
+        None,
+        "req-hr",
+    );
     let r = deliver_orgq_req_with_hook(
-        &mut s, &self_root, &m_key, &m_root, &self_root, body,
-        &FakeHook { runtime: true, read: false, write: false },
+        &mut s,
+        &self_root,
+        &m_key,
+        &m_root,
+        &self_root,
+        body,
+        &FakeHook {
+            runtime: true,
+            read: false,
+            write: false,
+        },
     );
     let resp = r.orgsync_out[0].body();
     assert_eq!(resp["denied"], json!(false));
-    assert_eq!(resp["records"], json!([]), "canRead 拒绝 → 空集（元数据不给）");
+    assert_eq!(
+        resp["records"],
+        json!([]),
+        "canRead 拒绝 → 空集（元数据不给）"
+    );
 }
 
 /// 钩子拒绝（write）：canWrite 拒绝 → rejected 计数，数据不落库。
@@ -584,15 +785,26 @@ fn orgq_req_filtered_write_hook_reject_no_land() {
     let mut s = setup_filtered_collection(&self_root, &m_root);
 
     let wbody = build_orgq_write_req(
-        ORG_ID, &format!("{NAME}@v{VERSION}"),
+        ORG_ID,
+        &format!("{NAME}@v{VERSION}"),
         &[spark_core::sync::orgsync::OrgqWriteRecord {
-            key: "k1".to_string(), value: json!({"a": 1}),
+            key: "k1".to_string(),
+            value: json!({"a": 1}),
         }],
         "req-wr",
     );
     let r = deliver_orgq_req_with_hook(
-        &mut s, &self_root, &m_key, &m_root, &self_root, wbody,
-        &FakeHook { runtime: true, read: false, write: false },
+        &mut s,
+        &self_root,
+        &m_key,
+        &m_root,
+        &self_root,
+        wbody,
+        &FakeHook {
+            runtime: true,
+            read: false,
+            write: false,
+        },
     );
     let resp = r.orgsync_out[0].body();
     assert_eq!(resp["denied"], json!(false));
@@ -610,15 +822,26 @@ fn orgq_req_filtered_write_hook_pass_lands() {
     let mut s = setup_filtered_collection(&self_root, &m_root);
 
     let wbody = build_orgq_write_req(
-        ORG_ID, &format!("{NAME}@v{VERSION}"),
+        ORG_ID,
+        &format!("{NAME}@v{VERSION}"),
         &[spark_core::sync::orgsync::OrgqWriteRecord {
-            key: "k1".to_string(), value: json!({"a": 1}),
+            key: "k1".to_string(),
+            value: json!({"a": 1}),
         }],
         "req-wp",
     );
     let r = deliver_orgq_req_with_hook(
-        &mut s, &self_root, &m_key, &m_root, &self_root, wbody,
-        &FakeHook { runtime: true, read: false, write: true },
+        &mut s,
+        &self_root,
+        &m_key,
+        &m_root,
+        &self_root,
+        wbody,
+        &FakeHook {
+            runtime: true,
+            read: false,
+            write: true,
+        },
     );
     let resp = r.orgsync_out[0].body();
     assert_eq!(resp["denied"], json!(false));
@@ -655,17 +878,27 @@ fn orgq_cache_evict_trims_over_capacity() {
     let removed = orgq_cache_evict(&mut s, ORG_ID, &col);
     assert_eq!(removed, 10, "淘汰超限的最旧 10 条");
     let remaining: Vec<_> = s
-        .scan(&spark_core::storage::ScanOptions::prefix(&format!("orgq:cache:{ORG_ID}:{col}:")))
+        .scan(&spark_core::storage::ScanOptions::prefix(&format!(
+            "orgq:cache:{ORG_ID}:{col}:"
+        )))
         .unwrap()
         .into_iter()
         .collect();
     assert_eq!(remaining.len(), ORGQ_CACHE_MAX_KEYS_PER_COLLECTION);
     // 最旧的 k0..k9 已被淘汰
     for i in 0..10 {
-        assert!(s.get(&orgq_cache_key(ORG_ID, &col, &format!("k{i}"))).unwrap().is_none());
+        assert!(
+            s.get(&orgq_cache_key(ORG_ID, &col, &format!("k{i}")))
+                .unwrap()
+                .is_none()
+        );
     }
     // 最新的仍在
-    assert!(s.get(&orgq_cache_key(ORG_ID, &col, &format!("k{}", over - 1))).unwrap().is_some());
+    assert!(
+        s.get(&orgq_cache_key(ORG_ID, &col, &format!("k{}", over - 1)))
+            .unwrap()
+            .is_some()
+    );
 }
 
 /// 成员移除擦除：缓存 + 离线队列 + 在线目录全部清除。
@@ -687,12 +920,29 @@ fn orgq_wipe_org_local_clears_cache_queue_online_dir() {
 
     let removed = orgq_wipe_org_local(&mut s, ORG_ID);
     assert!(removed >= 4, "缓存/队列/在线目录全部擦除");
-    assert!(s.get(&orgq_cache_key(ORG_ID, &col, "k1")).unwrap().is_none());
-    assert!(s.get(&orgq_queue_key(ORG_ID, &col, "qk")).unwrap().is_none());
-    assert!(s.get(&orgq_da_online_key(ORG_ID, "da-a")).unwrap().is_none());
+    assert!(
+        s.get(&orgq_cache_key(ORG_ID, &col, "k1"))
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        s.get(&orgq_queue_key(ORG_ID, &col, "qk"))
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        s.get(&orgq_da_online_key(ORG_ID, "da-a"))
+            .unwrap()
+            .is_none()
+    );
     // 其他组织的缓存不受影响（跨组织隔离）
-    s.put(&orgq_cache_key("org_other", &col, "kx"), "\"v\"").unwrap();
-    assert!(s.get(&orgq_cache_key("org_other", &col, "kx")).unwrap().is_some());
+    s.put(&orgq_cache_key("org_other", &col, "kx"), "\"v\"")
+        .unwrap();
+    assert!(
+        s.get(&orgq_cache_key("org_other", &col, "kx"))
+            .unwrap()
+            .is_some()
+    );
 }
 
 // ── 6. O3 全离线排队-上线收敛 ──────────────────────────────────────────
@@ -713,7 +963,16 @@ fn orgq_offline_queue_flushes_on_data_account_online() {
         ],
         &[da_root.as_str()],
     );
-    declare_org_collection(&mut s, "node-b", ORG_ID, NAME, VERSION, Accounts::DataAccounts, &self_root, NOW);
+    declare_org_collection(
+        &mut s,
+        "node-b",
+        ORG_ID,
+        NAME,
+        VERSION,
+        Accounts::DataAccounts,
+        &self_root,
+        NOW,
+    );
 
     // 成员离线写入排队（O3 工作项 3：全部数据账号离线 → data_ops 落本地队列，
     // 经 orgq_queue_put 写入 `{collection,key,value}`）
@@ -726,8 +985,16 @@ fn orgq_offline_queue_flushes_on_data_account_online() {
     collections.insert(col.clone(), json!({ "vv": {}, "dlogAck": 0 }));
     let hello = build_orgsync_hello(ORG_ID, collections, &["data".to_string()], "pc");
     let r = deliver_orgsync(
-        &mut s, &self_root, "M", &da_key, &da_root, &self_root,
-        dm_envelope::KIND_ORGSYNC_HELLO, hello, "peer-da", "node-m",
+        &mut s,
+        &self_root,
+        "M",
+        &da_key,
+        &da_root,
+        &self_root,
+        dm_envelope::KIND_ORGSYNC_HELLO,
+        hello,
+        "peer-da",
+        "node-m",
     );
     assert_eq!(r.response["ok"], true);
     // 冲刷出 orgq-req 写入信封（body op=write 即 orgq-req 形态）
@@ -756,7 +1023,9 @@ fn orgq_offline_queue_flushes_on_data_account_online() {
     );
     // 模拟数据账号受理回执 → 成员侧 handle_orgq_resp 消费 → 清理该集合队列
     let write_resp = build_orgq_write_resp(ORG_ID, &col, req_id, 1, 0, false);
-    let resp_r = deliver_orgq_resp(&mut s, &self_root, &da_key, &da_root, &self_root, write_resp);
+    let resp_r = deliver_orgq_resp(
+        &mut s, &self_root, &da_key, &da_root, &self_root, write_resp,
+    );
     assert_eq!(resp_r.response["accepted"], json!(1));
     assert!(
         !spark_core::sync::orgsync::orgq_queue_has_data(&s, ORG_ID),
@@ -775,29 +1044,47 @@ fn orgq_online_delete_writes_tombstone_and_org_dlog() {
     let (_self_key, self_root) = self_identity(2);
     let mut s = setup_filtered_collection(&self_root, &m_root);
     // 数据账号先驻留一条记录
-    let resident = write_org_data(&mut s, "node-b", ORG_ID, NAME, VERSION, "k-del", "\"v1\"", NOW);
+    let resident = write_org_data(
+        &mut s, "node-b", ORG_ID, NAME, VERSION, "k-del", "\"v1\"", NOW,
+    );
     let resident_seq = *resident.vv.get("node-b").unwrap();
     let record_key = format!("{}k-del", org_data_prefix(ORG_ID, NAME, VERSION));
     assert!(s.get(&record_key).unwrap().is_some(), "删除前记录驻留");
 
     // 在线写删除：value:null，canWrite 放行
     let wbody = build_orgq_write_req(
-        ORG_ID, &format!("{NAME}@v{VERSION}"),
+        ORG_ID,
+        &format!("{NAME}@v{VERSION}"),
         &[spark_core::sync::orgsync::OrgqWriteRecord {
-            key: "k-del".to_string(), value: json!(null),
+            key: "k-del".to_string(),
+            value: json!(null),
         }],
         "req-del-online",
     );
     let r = deliver_orgq_req_with_hook(
-        &mut s, &self_root, &m_key, &m_root, &self_root, wbody,
-        &FakeHook { runtime: true, read: true, write: true },
+        &mut s,
+        &self_root,
+        &m_key,
+        &m_root,
+        &self_root,
+        wbody,
+        &FakeHook {
+            runtime: true,
+            read: true,
+            write: true,
+        },
     );
     let resp = r.orgsync_out[0].body();
     assert_eq!(resp["accepted"], json!(1), "删除受理 accepted");
     // 记录本体已删除
-    assert!(s.get(&record_key).unwrap().is_none(), "记录本体已删（不落 null 字符串）");
+    assert!(
+        s.get(&record_key).unwrap().is_none(),
+        "记录本体已删（不落 null 字符串）"
+    );
     // 墓碑 pmeta 已写（tombstone: true, vv = per-node 序号分配器当前值）
-    let meta = get_personal_meta(&s, &record_key).unwrap().expect("墓碑 pmeta 存在");
+    let meta = get_personal_meta(&s, &record_key)
+        .unwrap()
+        .expect("墓碑 pmeta 存在");
     assert_eq!(meta.tombstone, Some(true), "pmeta 墓碑标记");
     let alloc_seq = spark_core::sync::personal::current_vv_seq(&s, "node-b").unwrap();
     assert!(
@@ -810,7 +1097,9 @@ fn orgq_online_delete_writes_tombstone_and_org_dlog() {
         "墓碑 vv = 序号分配器当前值（per-node 序号）"
     );
     assert_eq!(
-        s.get("p2p:vvseq:node-b").unwrap().and_then(|v| v.parse::<i64>().ok()),
+        s.get("p2p:vvseq:node-b")
+            .unwrap()
+            .and_then(|v| v.parse::<i64>().ok()),
         Some(alloc_seq),
         "p2p:vvseq 序号键随墓碑同 batch 推进"
     );
@@ -836,10 +1125,21 @@ fn orgq_offline_delete_replay_writes_tombstone() {
         ],
         &[da_root.as_str()],
     );
-    declare_org_collection(&mut s, "node-b", ORG_ID, NAME, VERSION, Accounts::DataAccounts, &self_root, NOW);
+    declare_org_collection(
+        &mut s,
+        "node-b",
+        ORG_ID,
+        NAME,
+        VERSION,
+        Accounts::DataAccounts,
+        &self_root,
+        NOW,
+    );
     let col = format!("{NAME}@v{VERSION}");
     // 数据账号侧先驻留记录
-    let resident = write_org_data(&mut s, "node-b", ORG_ID, NAME, VERSION, "k-del", "\"v1\"", NOW);
+    let resident = write_org_data(
+        &mut s, "node-b", ORG_ID, NAME, VERSION, "k-del", "\"v1\"", NOW,
+    );
     let resident_seq = *resident.vv.get("node-b").unwrap();
     let record_key = format!("{}k-del", org_data_prefix(ORG_ID, NAME, VERSION));
 
@@ -850,8 +1150,16 @@ fn orgq_offline_delete_replay_writes_tombstone() {
     collections.insert(col.clone(), json!({ "vv": {}, "dlogAck": 0 }));
     let hello = build_orgsync_hello(ORG_ID, collections, &["data".to_string()], "pc");
     let r = deliver_orgsync(
-        &mut s, &self_root, "M", &da_key, &da_root, &self_root,
-        dm_envelope::KIND_ORGSYNC_HELLO, hello, "peer-da", "node-m",
+        &mut s,
+        &self_root,
+        "M",
+        &da_key,
+        &da_root,
+        &self_root,
+        dm_envelope::KIND_ORGSYNC_HELLO,
+        hello,
+        "peer-da",
+        "node-m",
     );
     let reqs: Vec<_> = r
         .orgsync_out
@@ -865,14 +1173,28 @@ fn orgq_offline_delete_replay_writes_tombstone() {
     let rec_key = req["records"][0]["key"].as_str().unwrap();
     assert_eq!(rec_key, "k-del");
     let ar = deliver_orgq_req_with_hook(
-        &mut s, &da_root, &self_key, &self_root, &da_root, req,
-        &FakeHook { runtime: true, read: true, write: true },
+        &mut s,
+        &da_root,
+        &self_key,
+        &self_root,
+        &da_root,
+        req,
+        &FakeHook {
+            runtime: true,
+            read: true,
+            write: true,
+        },
     );
     let resp = ar.orgsync_out[0].body();
     assert_eq!(resp["accepted"], json!(1), "离线删除受理 accepted");
     // 记录本体删除 + 墓碑 pmeta + org dlog 有序号
-    assert!(s.get(&record_key).unwrap().is_none(), "离线删除记录本体已删");
-    let meta = get_personal_meta(&s, &record_key).unwrap().expect("墓碑 pmeta 存在");
+    assert!(
+        s.get(&record_key).unwrap().is_none(),
+        "离线删除记录本体已删"
+    );
+    let meta = get_personal_meta(&s, &record_key)
+        .unwrap()
+        .expect("墓碑 pmeta 存在");
     assert_eq!(meta.tombstone, Some(true), "pmeta 墓碑标记");
     let alloc_seq = spark_core::sync::personal::current_vv_seq(&s, "node-b").unwrap();
     assert!(
@@ -885,7 +1207,9 @@ fn orgq_offline_delete_replay_writes_tombstone() {
         "墓碑 vv = 序号分配器当前值（per-node 序号）"
     );
     assert_eq!(
-        s.get("p2p:vvseq:node-b").unwrap().and_then(|v| v.parse::<i64>().ok()),
+        s.get("p2p:vvseq:node-b")
+            .unwrap()
+            .and_then(|v| v.parse::<i64>().ok()),
         Some(alloc_seq),
         "p2p:vvseq 序号键随墓碑同 batch 推进"
     );
@@ -904,15 +1228,33 @@ fn orgq_query_paginates_with_cursor() {
     let mut s = setup_filtered_collection(&self_root, &m_root);
     // 数据账号驻留 5 条（字典序 k1..k5）
     for i in 1..=5 {
-        write_org_data(&mut s, "node-b", ORG_ID, NAME, VERSION, &format!("k{i}"), &format!("\"v{i}\""), NOW + i);
+        write_org_data(
+            &mut s,
+            "node-b",
+            ORG_ID,
+            NAME,
+            VERSION,
+            &format!("k{i}"),
+            &format!("\"v{i}\""),
+            NOW + i,
+        );
     }
     let col = format!("{NAME}@v{VERSION}");
 
     // 第一页：limit=2
     let body = build_orgq_query_req(ORG_ID, &col, None, 2, None, "req-page1");
     let r = deliver_orgq_req_with_hook(
-        &mut s, &self_root, &m_key, &m_root, &self_root, body,
-        &FakeHook { runtime: true, read: true, write: true },
+        &mut s,
+        &self_root,
+        &m_key,
+        &m_root,
+        &self_root,
+        body,
+        &FakeHook {
+            runtime: true,
+            read: true,
+            write: true,
+        },
     );
     assert_eq!(r.orgsync_out.len(), 1, "一页 2 条单批");
     let resp = r.orgsync_out[0].body();
@@ -921,27 +1263,56 @@ fn orgq_query_paginates_with_cursor() {
     assert_eq!(recs.len(), 2, "limit=2 返回 2 条");
     assert_eq!(resp["complete"], json!(false), "还有更多 → complete=false");
     let last_key = recs[1]["key"].as_str().unwrap();
-    let last_rel = last_key.strip_prefix(&org_data_prefix(ORG_ID, NAME, VERSION)).unwrap();
+    let last_rel = last_key
+        .strip_prefix(&org_data_prefix(ORG_ID, NAME, VERSION))
+        .unwrap();
 
     // 第二页：cursor = 上一页末相对 key → 续扫剩余 3 条
     let body2 = build_orgq_query_req(ORG_ID, &col, None, 2, Some(last_rel), "req-page2");
     let r2 = deliver_orgq_req_with_hook(
-        &mut s, &self_root, &m_key, &m_root, &self_root, body2,
-        &FakeHook { runtime: true, read: true, write: true },
+        &mut s,
+        &self_root,
+        &m_key,
+        &m_root,
+        &self_root,
+        body2,
+        &FakeHook {
+            runtime: true,
+            read: true,
+            write: true,
+        },
     );
     let recs2 = r2.orgsync_out[0].body();
-    assert_eq!(recs2["records"].as_array().unwrap().len(), 2, "续扫返回 2 条");
+    assert_eq!(
+        recs2["records"].as_array().unwrap().len(),
+        2,
+        "续扫返回 2 条"
+    );
     assert_eq!(recs2["complete"], json!(false), "仍有余量");
 
     // 第三页：续扫剩余 1 条 → complete=true（末页）
     let third = {
         let last = recs2["records"].as_array().unwrap().last().unwrap();
-        last["key"].as_str().unwrap().strip_prefix(&org_data_prefix(ORG_ID, NAME, VERSION)).unwrap().to_string()
+        last["key"]
+            .as_str()
+            .unwrap()
+            .strip_prefix(&org_data_prefix(ORG_ID, NAME, VERSION))
+            .unwrap()
+            .to_string()
     };
     let body3 = build_orgq_query_req(ORG_ID, &col, None, 2, Some(&third), "req-page3");
     let r3 = deliver_orgq_req_with_hook(
-        &mut s, &self_root, &m_key, &m_root, &self_root, body3,
-        &FakeHook { runtime: true, read: true, write: true },
+        &mut s,
+        &self_root,
+        &m_key,
+        &m_root,
+        &self_root,
+        body3,
+        &FakeHook {
+            runtime: true,
+            read: true,
+            write: true,
+        },
     );
     let recs3 = r3.orgsync_out[0].body();
     assert_eq!(recs3["records"].as_array().unwrap().len(), 1, "末页 1 条");
@@ -1001,7 +1372,16 @@ fn orgq_encrypted_delete_requires_reader_and_audits() {
         ],
         &[self_root.as_str()],
     );
-    declare_org_collection(&mut s, "node-b", ORG_ID, NAME, VERSION, Accounts::DataAccounts, &self_root, NOW);
+    declare_org_collection(
+        &mut s,
+        "node-b",
+        ORG_ID,
+        NAME,
+        VERSION,
+        Accounts::DataAccounts,
+        &self_root,
+        NOW,
+    );
     // 声明为 encrypted
     let mut d = spark_core::plugindata::get_declaration_org(&s, ORG_ID, NAME, VERSION)
         .unwrap()
@@ -1014,7 +1394,14 @@ fn orgq_encrypted_delete_requires_reader_and_audits() {
     .unwrap();
     // 先落一条密文记录（删除对象）
     let data_key = format!("{}k9", org_data_prefix(ORG_ID, NAME, VERSION));
-    put_personal(&mut s, "node-b", &data_key, r#"{"epoch":1,"nonce":"n","ct":"c"}"#, NOW).unwrap();
+    put_personal(
+        &mut s,
+        "node-b",
+        &data_key,
+        r#"{"epoch":1,"nonce":"n","ct":"c"}"#,
+        NOW,
+    )
+    .unwrap();
 
     let col = format!("{NAME}@v{VERSION}");
     // (a) 无 acl → m 非读者 → 删除拒绝（rejected=1，墓碑不落）
@@ -1034,7 +1421,9 @@ fn orgq_encrypted_delete_requires_reader_and_audits() {
     assert!(s.get(&data_key).unwrap().is_some(), "非读者删除不落墓碑");
     // 审计日志为空（被拒删除不审计）
     assert!(
-        s.scan(&ScanOptions::prefix("orgq:audit:")).unwrap().is_empty(),
+        s.scan(&ScanOptions::prefix("orgq:audit:"))
+            .unwrap()
+            .is_empty(),
         "被拒删除不写审计日志"
     );
 

@@ -101,9 +101,7 @@ fn is_authenticated_self_request(
     if claim.root_id.trim().to_lowercase() != requester_root_id {
         return false;
     }
-    if let (Some(remote), Some(claimed)) =
-        (remote_peer_id, claim.node_info.peer_id.as_deref())
-    {
+    if let (Some(remote), Some(claimed)) = (remote_peer_id, claim.node_info.peer_id.as_deref()) {
         if claimed != remote {
             return false;
         }
@@ -207,8 +205,13 @@ pub fn handle_pull_list_request<S: StorageBackend>(
     let visible: Vec<Value> = organizations
         .iter()
         .filter(|record| {
-            member_auth_status(record, requester_root_id, requester_peer_id, authenticated_self)
-                .is_ok()
+            member_auth_status(
+                record,
+                requester_root_id,
+                requester_peer_id,
+                authenticated_self,
+            )
+            .is_ok()
         })
         .map(|record| {
             let mut item = Map::new();

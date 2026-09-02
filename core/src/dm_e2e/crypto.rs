@@ -30,8 +30,7 @@ pub fn encrypt_body_with_key(
     let aad = format!("{kind}:{from}:{to}:{ts}");
     let mut nonce_bytes = [0u8; 12];
     rand::rng().fill_bytes(&mut nonce_bytes);
-    let cipher = Aes256Gcm::new_from_slice(key)
-        .map_err(|e| DmE2eError::Aead(e.to_string()))?;
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| DmE2eError::Aead(e.to_string()))?;
     let plaintext = plaintext_body.to_string();
     let payload = aes_gcm::aead::Payload {
         msg: plaintext.as_bytes(),
@@ -67,17 +66,18 @@ pub fn decrypt_body_with_key(
         .get("nonce")
         .and_then(Value::as_str)
         .ok_or_else(|| DmE2eError::InvalidCiphertext("missing nonce".into()))?;
-    let ct = B64.decode(ct_b64)
+    let ct = B64
+        .decode(ct_b64)
         .map_err(|_| DmE2eError::InvalidCiphertext("ciphertext not base64".into()))?;
-    let nonce_raw = B64.decode(nonce_b64)
+    let nonce_raw = B64
+        .decode(nonce_b64)
         .map_err(|_| DmE2eError::InvalidCiphertext("nonce not base64".into()))?;
     let nonce_arr: [u8; 12] = nonce_raw
         .try_into()
         .map_err(|_| DmE2eError::InvalidCiphertext("nonce not 12B".into()))?;
 
     let aad = format!("{kind}:{from}:{to}:{ts}");
-    let cipher = Aes256Gcm::new_from_slice(key)
-        .map_err(|e| DmE2eError::Aead(e.to_string()))?;
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| DmE2eError::Aead(e.to_string()))?;
     let payload = aes_gcm::aead::Payload {
         msg: ct.as_ref(),
         aad: aad.as_bytes(),

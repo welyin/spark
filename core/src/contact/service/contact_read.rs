@@ -59,7 +59,8 @@ mod tests {
             peers: vec![crate::contact::PeerRef {
                 peer_id: "peer-1".to_string(),
                 addresses: vec!["/ip4/1.2.3.4/tcp/4001".to_string()],
-            ..Default::default()}],
+                ..Default::default()
+            }],
             // 保留字段
             group_id: "grp_001".to_string(),
             tag_ids: vec!["tag_a".to_string(), "tag_b".to_string()],
@@ -82,7 +83,10 @@ mod tests {
         assert_eq!(summary.nickname, "阿强");
         assert_eq!(summary.avatar.as_deref(), Some("data:image/png;base64,AAA"));
         assert_eq!(summary.group_id, "grp_001");
-        assert_eq!(summary.tag_ids, vec!["tag_a".to_string(), "tag_b".to_string()]);
+        assert_eq!(
+            summary.tag_ids,
+            vec!["tag_a".to_string(), "tag_b".to_string()]
+        );
         assert_eq!(summary.permission, "open");
 
         // 序列化线形：敏感字段的键不得出现
@@ -99,7 +103,10 @@ mod tests {
             "addedAt",
             "updatedAt",
         ] {
-            assert!(json.get(sensitive).is_none(), "敏感字段 {sensitive} 不应暴露");
+            assert!(
+                json.get(sensitive).is_none(),
+                "敏感字段 {sensitive} 不应暴露"
+            );
         }
         // 保留字段的 camelCase 键齐全
         for kept in ["rootId", "nickname", "groupId", "tagIds", "permission"] {

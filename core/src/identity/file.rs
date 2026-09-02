@@ -306,10 +306,7 @@ pub fn migrate_v1_to_v2(file: &IdentityFile, password: &str) -> Result<IdentityF
     }
     let payload = decrypt_payload(file, password)?;
     // 资料以 v1 文件明文头为准（payload 已无资料字段），sanitize 后写回明文头。
-    let (nickname, avatar) = sanitize_profile(
-        file.nickname.as_deref(),
-        file.avatar.as_deref(),
-    );
+    let (nickname, avatar) = sanitize_profile(file.nickname.as_deref(), file.avatar.as_deref());
     let now = now_ms();
     let new_payload = IdentityPayload {
         mnemonic: payload.mnemonic,
@@ -425,8 +422,12 @@ fn patch_profile_fields(
     }
     file.gender = patch_extra_field(file.gender.take(), gender, "gender", GENDER_MAX_CHARS)?;
     file.region = patch_extra_field(file.region.take(), region, "region", REGION_MAX_CHARS)?;
-    file.signature =
-        patch_extra_field(file.signature.take(), signature, "signature", SIGNATURE_MAX_CHARS)?;
+    file.signature = patch_extra_field(
+        file.signature.take(),
+        signature,
+        "signature",
+        SIGNATURE_MAX_CHARS,
+    )?;
     if file.nickname != before.0
         || file.avatar != before.1
         || file.gender != before.2
@@ -897,19 +898,28 @@ mod tests {
         let mut bad_salt = serde_json::to_value(&compact).unwrap();
         bad_salt["salt"] = serde_json::Value::String("!!!not-base64!!!".into());
         let parsed: CompactBackupFile = serde_json::from_value(bad_salt).unwrap();
-        assert!(decode_compact_backup(&parsed).is_err(), "非法 base64 必须 fail-closed");
+        assert!(
+            decode_compact_backup(&parsed).is_err(),
+            "非法 base64 必须 fail-closed"
+        );
 
         // 版本不符 → 失败
         let mut bad_v = serde_json::to_value(&compact).unwrap();
         bad_v["v"] = serde_json::Value::from(1u32);
         let parsed: CompactBackupFile = serde_json::from_value(bad_v).unwrap();
-        assert!(decode_compact_backup(&parsed).is_err(), "版本不符必须 fail-closed");
+        assert!(
+            decode_compact_backup(&parsed).is_err(),
+            "版本不符必须 fail-closed"
+        );
 
         // kdf 不符 → 失败
         let mut bad_kdf = serde_json::to_value(&compact).unwrap();
         bad_kdf["kdf"] = serde_json::Value::String("pbkdf2".into());
         let parsed: CompactBackupFile = serde_json::from_value(bad_kdf).unwrap();
-        assert!(decode_compact_backup(&parsed).is_err(), "kdf 不符必须 fail-closed");
+        assert!(
+            decode_compact_backup(&parsed).is_err(),
+            "kdf 不符必须 fail-closed"
+        );
     }
 
     #[test]
@@ -927,12 +937,24 @@ mod tests {
         };
         // 合法 base64 但字节数不符（15B / 11B / 15B 而非 16/12/16）。
         let bad_salt = patch("salt", &B64.encode([0u8; 15]));
-        assert!(decode_compact_backup(&bad_salt).is_err(), "salt 长度不符必须 fail-closed");
+        assert!(
+            decode_compact_backup(&bad_salt).is_err(),
+            "salt 长度不符必须 fail-closed"
+        );
         let bad_iv = patch("iv", &B64.encode([0u8; 11]));
-        assert!(decode_compact_backup(&bad_iv).is_err(), "iv 长度不符必须 fail-closed");
+        assert!(
+            decode_compact_backup(&bad_iv).is_err(),
+            "iv 长度不符必须 fail-closed"
+        );
         let bad_tag = patch("authTag", &B64.encode([0u8; 15]));
-        assert!(decode_compact_backup(&bad_tag).is_err(), "authTag 长度不符必须 fail-closed");
+        assert!(
+            decode_compact_backup(&bad_tag).is_err(),
+            "authTag 长度不符必须 fail-closed"
+        );
         // 正常长度仍通过
-        assert!(decode_compact_backup(&compact).is_ok(), "正常字段长度应通过");
+        assert!(
+            decode_compact_backup(&compact).is_ok(),
+            "正常字段长度应通过"
+        );
     }
 }

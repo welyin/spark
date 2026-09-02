@@ -14,8 +14,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::storage::StorageBackend;
-use crate::sync::personal::put_personal;
 use crate::sync::SyncError;
+use crate::sync::personal::put_personal;
 
 /// scrypt log2(N)；N = 32768，与身份文件 v2 同档。
 pub const SCRYPT_LOG_N: u8 = 15;
@@ -131,9 +131,8 @@ impl PasswordAck {
 
 /// 派生 Kverify = scrypt(password, salt, N=32768, r=8, p=1)。
 pub fn derive_kverify(password: &str, salt: &[u8; 16]) -> Result<[u8; 32]> {
-    let params =
-        scrypt::Params::new(SCRYPT_LOG_N, SCRYPT_R, SCRYPT_P)
-            .map_err(|e| PwError::Crypto(format!("scrypt params: {e}")))?;
+    let params = scrypt::Params::new(SCRYPT_LOG_N, SCRYPT_R, SCRYPT_P)
+        .map_err(|e| PwError::Crypto(format!("scrypt params: {e}")))?;
     let mut key = [0u8; 32];
     scrypt::scrypt(password.as_bytes(), salt, &params, &mut key)
         .map_err(|e| PwError::Crypto(format!("scrypt: {e}")))?;
@@ -190,15 +189,14 @@ pub fn decrypt_with_kverify(kverify: &[u8; 32], value: &PasswordVerifier) -> Opt
 }
 
 fn encrypt_with_kverify(kverify: &[u8; 32], nonce: &[u8; 12]) -> Result<String> {
-    let cipher = Aes256Gcm::new_from_slice(kverify)
-        .map_err(|e| PwError::Crypto(format!("aes key: {e}")))?;
+    let cipher =
+        Aes256Gcm::new_from_slice(kverify).map_err(|e| PwError::Crypto(format!("aes key: {e}")))?;
     let n: Nonce<Aes256Gcm> = (*nonce).into();
     let sealed = cipher
         .encrypt(&n, PWV_PLAINTEXT.as_bytes())
         .map_err(|e| PwError::Crypto(format!("aes-gcm encrypt: {e}")))?;
     Ok(B64.encode(sealed))
 }
-
 
 // ── Kack / ack MAC ─────────────────────────────────────────────────────
 
@@ -346,7 +344,11 @@ pub fn get_last_verified_vts<S: StorageBackend>(storage: &S, peer: &str) -> Resu
 }
 
 /// 写入某设备最近一次成功验证的 V 水位。
-pub fn put_last_verified_vts<S: StorageBackend>(storage: &mut S, peer: &str, vts: u64) -> Result<()> {
+pub fn put_last_verified_vts<S: StorageBackend>(
+    storage: &mut S,
+    peer: &str,
+    vts: u64,
+) -> Result<()> {
     storage.put(&last_verified_vts_key(peer), &vts.to_string())?;
     Ok(())
 }
@@ -376,10 +378,7 @@ pub fn get_last_good_v<S: StorageBackend>(storage: &S) -> Result<Option<Password
 }
 
 /// 写入 last-good V。
-pub fn put_last_good_v<S: StorageBackend>(
-    storage: &mut S,
-    pwv: &PasswordVerifier,
-) -> Result<()> {
+pub fn put_last_good_v<S: StorageBackend>(storage: &mut S, pwv: &PasswordVerifier) -> Result<()> {
     storage.put(LAST_GOOD_V_KEY, &pwv.to_json()?)?;
     Ok(())
 }
@@ -404,7 +403,8 @@ pub fn apply_value<S: StorageBackend>(
     if incoming.changed_at <= applied {
         return Ok(false);
     }
-    let upper_bound = (now_ms as u64).saturating_add(crate::kernel::dm_envelope::ENVELOPE_TS_WINDOW_MS as u64);
+    let upper_bound =
+        (now_ms as u64).saturating_add(crate::kernel::dm_envelope::ENVELOPE_TS_WINDOW_MS as u64);
     if incoming.changed_at > upper_bound {
         return Err(PwError::Crypto(format!(
             "pwv future ts rejected: changed_at={} now={}",
@@ -436,8 +436,8 @@ pub fn inject_pwv<S: StorageBackend>(
     if incoming.changed_at <= applied {
         return Ok(());
     }
-    let upper_bound = (now_ms as u64)
-        .saturating_add(crate::kernel::dm_envelope::ENVELOPE_TS_WINDOW_MS as u64);
+    let upper_bound =
+        (now_ms as u64).saturating_add(crate::kernel::dm_envelope::ENVELOPE_TS_WINDOW_MS as u64);
     if incoming.changed_at > upper_bound {
         return Err(PwError::Crypto(format!(
             "pwv future ts rejected: changed_at={} now={}",

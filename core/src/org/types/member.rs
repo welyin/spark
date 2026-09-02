@@ -36,11 +36,7 @@ impl OrganizationRole {
 pub struct OrganizationNodeInfo {
     /// 物理设备稳定标识（个人域 `p2p:device:uid`；旧版本声明/记录缺省为 None，
     /// 无法归属到设备时按 peerId 聚合兜底）。
-    #[serde(
-        rename = "deviceUid",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "deviceUid", default, skip_serializing_if = "Option::is_none")]
     pub device_uid: Option<String>,
     /// libp2p peerId（可省）。
     #[serde(rename = "peerId", default, skip_serializing_if = "Option::is_none")]
@@ -157,13 +153,15 @@ impl<'de> serde::Deserialize<'de> for OrganizationDeviceSet {
                 Ok(Self { endpoints })
             }
             obj @ Value::Object(_) => {
-                let single =
-                    serde_json::from_value::<OrganizationNodeInfo>(obj).map_err(serde::de::Error::custom)?;
+                let single = serde_json::from_value::<OrganizationNodeInfo>(obj)
+                    .map_err(serde::de::Error::custom)?;
                 Ok(Self {
                     endpoints: vec![single],
                 })
             }
-            _ => Err(serde::de::Error::custom("nodeInfo must be an object or array")),
+            _ => Err(serde::de::Error::custom(
+                "nodeInfo must be an object or array",
+            )),
         }
     }
 }
@@ -215,7 +213,8 @@ impl OrganizationDeviceSet {
                 .iter_mut()
                 .find(|e| e.device_uid.as_deref() == Some(uid))
             {
-                let unchanged = existing.peer_id == incoming.peer_id && existing.addresses == incoming.addresses;
+                let unchanged = existing.peer_id == incoming.peer_id
+                    && existing.addresses == incoming.addresses;
                 *existing = incoming.clone();
                 return removed_stale || !unchanged;
             }
@@ -327,11 +326,7 @@ pub struct OrganizationMember {
     /// 组织身份访问密钥（O4）：`org-access:{orgId}` 域身份公钥 + 根密钥绑定签名。
     /// 仅本人可改（与 nickname/avatar 同路径）；`None` = 尚未发布（未启用
     /// encrypted 能力/未加入组织惰性派生），存量记录兼容。
-    #[serde(
-        rename = "accessKey",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "accessKey", default, skip_serializing_if = "Option::is_none")]
     pub access_key: Option<OrganizationAccessKey>,
     /// 非标准动态键。
     #[serde(flatten)]

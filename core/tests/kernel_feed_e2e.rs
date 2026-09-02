@@ -44,7 +44,9 @@ fn feed_body(topic: &str, feed_id: &str, payload: Value) -> Value {
 
 /// 收件箱条目数（`feed:inbox:{pluginId}:` 前缀扫描）。
 fn inbox_count(s: &MemoryStorage, plugin_id: &str) -> usize {
-    s.scan(&ScanOptions::prefix(&format!("feed:inbox:{plugin_id}:"))).unwrap().len()
+    s.scan(&ScanOptions::prefix(&format!("feed:inbox:{plugin_id}:")))
+        .unwrap()
+        .len()
 }
 
 /// 构造 E2E 加密的 feed 信封：发送方用「我方临时私钥 + 对端 root 公钥
@@ -59,10 +61,12 @@ fn build_e2e_feed_envelope(
 ) -> Value {
     let (eph_priv, eph_pub) = generate_ephemeral_keypair();
     let peer_x25519 = ed_pk_to_x25519(&receiver_key.verifying_key().to_bytes()).unwrap();
-    let session_key = derive_session_key_ephemeral(&eph_priv, &peer_x25519, sender_root, receiver_root).unwrap();
+    let session_key =
+        derive_session_key_ephemeral(&eph_priv, &peer_x25519, sender_root, receiver_root).unwrap();
     let ts = system_now_ms();
     let body = feed_body("moments:p", feed_id, json!({ "text": text }));
-    let encrypted = encrypt_body_with_key(&session_key, sender_root, receiver_root, "feed", ts, &body).unwrap();
+    let encrypted =
+        encrypt_body_with_key(&session_key, sender_root, receiver_root, "feed", ts, &body).unwrap();
     dm_envelope::build_envelope_with_eph(
         "feed",
         sender_root,
@@ -81,7 +85,14 @@ fn e2e_feed_encrypted_lands_inbox_and_emits_event() {
     let receiver_key = root_key(3);
     let receiver_root = root_id_of(&receiver_key);
 
-    let envelope = build_e2e_feed_envelope(&sender_key, &sender_root, &receiver_key, &receiver_root, "f-e2e-1", "你好朋友圈");
+    let envelope = build_e2e_feed_envelope(
+        &sender_key,
+        &sender_root,
+        &receiver_key,
+        &receiver_root,
+        "f-e2e-1",
+        "你好朋友圈",
+    );
 
     // 接收方入站：验签 → ephPub 派生解密（我方 root 私钥）→ feed handler
     let mut s = MemoryStorage::new();
@@ -118,7 +129,8 @@ fn e2e_plaintext_feed_inbound_compatible() {
     let receiver_root = root_id_of(&root_key(3));
     let ts = system_now_ms();
     let body = feed_body("moments:p", "f-plain", json!({ "text": "plain" }));
-    let envelope = dm_envelope::build_envelope("feed", &sender_root, &receiver_root, ts, body, &sender_key);
+    let envelope =
+        dm_envelope::build_envelope("feed", &sender_root, &receiver_root, ts, body, &sender_key);
 
     let mut s = MemoryStorage::new();
     let result = handle_inbound_dm_with_e2e(
@@ -150,14 +162,40 @@ fn feed_inbound_dedup_and_blocked() {
 
     // 正常收一条明文 feed
     let body = feed_body("moments:p", "f1", json!({ "text": "hi" }));
-    let envelope = dm_envelope::build_envelope("feed", &sender_root, &receiver_root, ts, body, &sender_key);
-    let r = handle_inbound_dm_with_e2e(&mut s, &receiver_root, "我", envelope, "peer-s", &empty, ts, NODE, None, Some(&root_key(3))).unwrap();
+    let envelope =
+        dm_envelope::build_envelope("feed", &sender_root, &receiver_root, ts, body, &sender_key);
+    let r = handle_inbound_dm_with_e2e(
+        &mut s,
+        &receiver_root,
+        "我",
+        envelope,
+        "peer-s",
+        &empty,
+        ts,
+        NODE,
+        None,
+        Some(&root_key(3)),
+    )
+    .unwrap();
     assert_eq!(r.events.len(), 1);
 
     // 重复 (from, feedId)：幂等，不再事件/落库
     let body = feed_body("moments:p", "f1", json!({ "text": "hi" }));
-    let envelope = dm_envelope::build_envelope("feed", &sender_root, &receiver_root, ts, body, &sender_key);
-    let r = handle_inbound_dm_with_e2e(&mut s, &receiver_root, "我", envelope, "peer-s", &empty, ts, NODE, None, Some(&root_key(3))).unwrap();
+    let envelope =
+        dm_envelope::build_envelope("feed", &sender_root, &receiver_root, ts, body, &sender_key);
+    let r = handle_inbound_dm_with_e2e(
+        &mut s,
+        &receiver_root,
+        "我",
+        envelope,
+        "peer-s",
+        &empty,
+        ts,
+        NODE,
+        None,
+        Some(&root_key(3)),
+    )
+    .unwrap();
     assert_eq!(r.response["ok"], json!(true));
     assert!(r.events.is_empty(), "重复投递不重复事件");
     assert_eq!(inbox_count(&s, "moments"), 1, "重复投递不重复落库");
@@ -165,8 +203,21 @@ fn feed_inbound_dedup_and_blocked() {
     // 拉黑后拒收（拉黑集合键 `ct:blocked:{rootId}`，值 "1"）
     s.put(&format!("ct:blocked:{sender_root}"), "1").unwrap();
     let body = feed_body("moments:p", "f2", json!({ "text": "blocked" }));
-    let envelope = dm_envelope::build_envelope("feed", &sender_root, &receiver_root, ts, body, &sender_key);
-    let r = handle_inbound_dm_with_e2e(&mut s, &receiver_root, "我", envelope, "peer-s", &empty, ts, NODE, None, Some(&root_key(3))).unwrap();
+    let envelope =
+        dm_envelope::build_envelope("feed", &sender_root, &receiver_root, ts, body, &sender_key);
+    let r = handle_inbound_dm_with_e2e(
+        &mut s,
+        &receiver_root,
+        "我",
+        envelope,
+        "peer-s",
+        &empty,
+        ts,
+        NODE,
+        None,
+        Some(&root_key(3)),
+    )
+    .unwrap();
     assert_eq!(r.response["reason"], json!("blocked"));
     assert!(r.events.is_empty());
     assert_eq!(inbox_count(&s, "moments"), 1, "被拉黑后不再落收件箱");

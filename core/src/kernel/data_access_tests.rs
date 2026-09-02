@@ -13,7 +13,9 @@ fn unlocked_kernel() -> (tempfile::TempDir, Kernel) {
         p2p: None,
     })
     .unwrap();
-    kernel.init_identity("correct-horse-battery", "alice", None).unwrap();
+    kernel
+        .init_identity("correct-horse-battery", "alice", None)
+        .unwrap();
     (dir, kernel)
 }
 
@@ -78,7 +80,9 @@ fn encrypted_access_grant_revoke_list() {
     let acl_key = orgsync::acl_key(&org_id, "ai-chat:payroll", "1.0.0");
     let storage = kernel.require_storage().unwrap();
     assert!(
-        crate::sync::get_personal_meta(storage, &acl_key).unwrap().is_some(),
+        crate::sync::get_personal_meta(storage, &acl_key)
+            .unwrap()
+            .is_some(),
         "acl 为 all-members 系统数据，受管版本化"
     );
 }
@@ -172,7 +176,10 @@ fn encrypted_admin_reset_takeover() {
         )
         .unwrap();
     // O3：不复用历史 epoch（grant=1, revoke=2 → reset 取 max+1=3）
-    assert_eq!(reset.epoch, 3, "接管不复用历史 epoch 号（取 max known + 1）");
+    assert_eq!(
+        reset.epoch, 3,
+        "接管不复用历史 epoch 号（取 max known + 1）"
+    );
     assert_eq!(
         reset.reset_by.as_deref(),
         Some(kernel.require_current_root_id().unwrap().as_str())
@@ -300,12 +307,11 @@ fn orgkey_offline_delivery_persists_and_resends_pending() {
         .data_grant_access(&org_id, "ai-chat:payroll", "1.0.0", &[BOB.to_string()])
         .unwrap();
     let col_full = "ai-chat:payroll@v1.0.0";
-    let pending = orgsync::orgkey_pending_for_org(
-        kernel.require_storage().unwrap().raw(),
-        &org_id,
-    );
+    let pending = orgsync::orgkey_pending_for_org(kernel.require_storage().unwrap().raw(), &org_id);
     assert!(
-        pending.iter().any(|(c, r, e, _)| c == col_full && r == BOB && *e == 1),
+        pending
+            .iter()
+            .any(|(c, r, e, _)| c == col_full && r == BOB && *e == 1),
         "BOB 无 accessKey → grant 落 orgkey pending"
     );
     // 上线（hello）触发重投：resend 后清空 pending（重投投递仍不可达会再落，
@@ -313,7 +319,9 @@ fn orgkey_offline_delivery_persists_and_resends_pending() {
     kernel.resend_pending_orgkey(&org_id, BOB);
     let after = orgsync::orgkey_pending_for_org(kernel.require_storage().unwrap().raw(), &org_id);
     assert!(
-        !after.iter().any(|(c, r, e, _)| c == col_full && r == BOB && *e == 1),
+        !after
+            .iter()
+            .any(|(c, r, e, _)| c == col_full && r == BOB && *e == 1),
         "resend 后 pending 已清"
     );
 }
@@ -377,7 +385,9 @@ fn orgkey_pending_resend_receiver_unboxes_epoch_key() {
     let bob_seed = [9u8; 64];
     let bob_org =
         crate::identity::derive_domain_identity(&bob_seed, &Kernel::org_access_domain(&org_id));
-    let mut record = OrganizationService::get_record(&raw, &org_id).unwrap().unwrap();
+    let mut record = OrganizationService::get_record(&raw, &org_id)
+        .unwrap()
+        .unwrap();
     let bob = record
         .members
         .iter_mut()
@@ -458,10 +468,18 @@ fn orgkey_pending_resend_receiver_unboxes_epoch_key() {
         now_ms: crate::p2p::node::system_now_ms(),
         kverify: None,
     };
-    let res =
-        crate::kernel::inbound_dm::handle_orgkey_deliver(&mut recv, &ictx, &owner_root, &verified.body)
-            .unwrap();
-    let unbox = res.orgkey_unbox.into_iter().next().expect("重投信封过收端判定 → unbox 指令");
+    let res = crate::kernel::inbound_dm::handle_orgkey_deliver(
+        &mut recv,
+        &ictx,
+        &owner_root,
+        &verified.body,
+    )
+    .unwrap();
+    let unbox = res
+        .orgkey_unbox
+        .into_iter()
+        .next()
+        .expect("重投信封过收端判定 → unbox 指令");
 
     // host 解包（apply_orgkey_unbox 的纯逻辑等价）：BOB 域身份私钥解 box，
     // 解出的 epoch 密钥与 owner 侧 orgkey 表逐字节一致。

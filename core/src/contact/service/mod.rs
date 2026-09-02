@@ -21,9 +21,7 @@ use crate::sync::put_personal;
 
 use super::sync_err_to_contact;
 
-use super::{
-    ContactError, ContactProfileRecord, FriendRecord, ProfilePatch, Result, org_tags_key,
-};
+use super::{ContactError, ContactProfileRecord, FriendRecord, ProfilePatch, Result, org_tags_key};
 
 /// 通讯录服务（无状态；全部方法以存储与参数为输入）。
 pub struct ContactService;
@@ -54,17 +52,18 @@ fn require_org_space(space: &str) -> Result<&str> {
     }
 }
 
-fn read_json<S: StorageBackend, T: DeserializeOwned>(
-    storage: &S,
-    key: &str,
-) -> Result<Option<T>> {
+fn read_json<S: StorageBackend, T: DeserializeOwned>(storage: &S, key: &str) -> Result<Option<T>> {
     let Some(raw) = storage.get(key)? else {
         return Ok(None);
     };
     Ok(Some(serde_json::from_str(&raw)?))
 }
 
-fn write_json<S: StorageBackend, T: Serialize>(storage: &mut S, key: &str, value: &T) -> Result<()> {
+fn write_json<S: StorageBackend, T: Serialize>(
+    storage: &mut S,
+    key: &str,
+    value: &T,
+) -> Result<()> {
     storage.put(key, &serde_json::to_string(value)?)?;
     Ok(())
 }

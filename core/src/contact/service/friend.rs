@@ -7,10 +7,9 @@ use crate::storage::StorageBackend;
 
 use super::*;
 use crate::contact::{
-    BLOCKED_PREFIX, ContactProfileRecord, ContactTag, ContactGroup,
-    FRIEND_PREFIX, FriendRecord, FriendRequestRecord,
-    GROUP_PREFIX, ProfilePatch, REQ_IN_PREFIX, REQ_OUT_PREFIX, SpaceContactsView,
-    TAG_PREFIX, org_extra_prefix, org_tree_key,
+    BLOCKED_PREFIX, ContactGroup, ContactProfileRecord, ContactTag, FRIEND_PREFIX, FriendRecord,
+    FriendRequestRecord, GROUP_PREFIX, ProfilePatch, REQ_IN_PREFIX, REQ_OUT_PREFIX,
+    SpaceContactsView, TAG_PREFIX, org_extra_prefix, org_tree_key,
 };
 
 impl ContactService {
@@ -102,7 +101,11 @@ impl ContactService {
 
     /// 新增或覆盖朋友记录（upsert，对齐 TS `addFriend` 后写资料的组合语义）。
     pub fn upsert_friend<S: StorageBackend>(storage: &mut S, friend: &FriendRecord) -> Result<()> {
-        write_json(storage, &format!("{FRIEND_PREFIX}{}", friend.root_id), friend)
+        write_json(
+            storage,
+            &format!("{FRIEND_PREFIX}{}", friend.root_id),
+            friend,
+        )
     }
 
     /// 删除朋友（设计 §5.5：只删关系，不清拉黑状态——mock 下直接移除条目）。
@@ -226,7 +229,9 @@ impl ContactService {
 
     /// 个人空间拉黑判定（查独立集合；陌生人亦可被拉黑）。
     pub fn is_blocked<S: StorageBackend>(storage: &S, root_id: &str) -> Result<bool> {
-        Ok(storage.get(&format!("{BLOCKED_PREFIX}{root_id}"))?.is_some())
+        Ok(storage
+            .get(&format!("{BLOCKED_PREFIX}{root_id}"))?
+            .is_some())
     }
 
     /// 读取组织成员的本地附加资料；不存在返回 `Ok(None)`（入站拉黑判定等

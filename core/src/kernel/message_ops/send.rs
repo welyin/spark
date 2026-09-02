@@ -5,14 +5,12 @@
 
 use std::collections::HashSet;
 
+use super::super::KernelError;
+use super::super::dm_envelope::{KIND_CHAT, KIND_RECALL};
 use super::{
     ChatMessageView, Kernel, Result, conversation_view, message_view, sanitize_link_preview,
 };
-use super::super::KernelError;
-use super::super::dm_envelope::{KIND_CHAT, KIND_RECALL};
-use crate::contact::{
-    ContactService, DmChannel, DmRecipientSkipReason,
-};
+use crate::contact::{ContactService, DmChannel, DmRecipientSkipReason};
 use crate::message::{
     ConversationKind, LinkPreview, MAX_TEXT_BYTES, MessageError, MessageRecord, MessageService,
     MessageType, QuoteRef, generate_message_id,
@@ -63,18 +61,27 @@ pub(crate) fn bot_reply_shared(
         recalled: false,
         read: false,
     };
-    MessageService::append_message_pdsync(&mut storage, space, conv_id, &record, now, Some(&node_id))?;
+    MessageService::append_message_pdsync(
+        &mut storage,
+        space,
+        conv_id,
+        &record,
+        now,
+        Some(&node_id),
+    )?;
     let conv_view = conversation_view(&conv, &HashSet::new(), None, None);
     let msg_view = message_view(&record, Some("__bot_sender__"));
     if let (Ok(conversation), Ok(message)) = (
         serde_json::to_value(&conv_view),
         serde_json::to_value(&msg_view),
     ) {
-        let _ = host.event_tx.send(P2pEvent::ChatReceived(serde_json::json!({
-            "spaceKey": space,
-            "conversation": conversation,
-            "message": message
-        })));
+        let _ = host
+            .event_tx
+            .send(P2pEvent::ChatReceived(serde_json::json!({
+                "spaceKey": space,
+                "conversation": conversation,
+                "message": message
+            })));
     }
     if let Some(my_root_id) = host
         .my_root_id
@@ -130,7 +137,16 @@ pub(crate) fn bot_reply_stream_start_shared(
     bot_name: &str,
 ) -> crate::plugin::Result<String> {
     let message_id = generate_message_id(system_now_ms());
-    let _ = bot_reply_stream_upsert(host, space, conv_id, bot_root_id, bot_name, &message_id, "", "streaming")?;
+    let _ = bot_reply_stream_upsert(
+        host,
+        space,
+        conv_id,
+        bot_root_id,
+        bot_name,
+        &message_id,
+        "",
+        "streaming",
+    )?;
     Ok(message_id)
 }
 
@@ -147,8 +163,9 @@ pub(crate) fn bot_reply_stream_chunk_shared(
 ) -> crate::plugin::Result<()> {
     let _io = host.io_lock.lock().unwrap_or_else(|e| e.into_inner());
     let storage = host.require_storage()?;
-    let existing = MessageService::get_message(&storage, space, conv_id, message_id)?
-        .ok_or(PluginError::InvalidCall(format!("stream message not found: {message_id}")))?;
+    let existing = MessageService::get_message(&storage, space, conv_id, message_id)?.ok_or(
+        PluginError::InvalidCall(format!("stream message not found: {message_id}")),
+    )?;
     let mut content = existing.content;
     content.push_str(chunk_text);
     if content.len() > MAX_TEXT_BYTES {
@@ -158,7 +175,16 @@ pub(crate) fn bot_reply_stream_chunk_shared(
     }
     drop(storage);
     drop(_io);
-    let _ = bot_reply_stream_upsert(host, space, conv_id, bot_root_id, bot_name, message_id, &content, "streaming")?;
+    let _ = bot_reply_stream_upsert(
+        host,
+        space,
+        conv_id,
+        bot_root_id,
+        bot_name,
+        message_id,
+        &content,
+        "streaming",
+    )?;
     Ok(())
 }
 
@@ -174,17 +200,31 @@ pub(crate) fn bot_reply_stream_end_shared(
 ) -> crate::plugin::Result<()> {
     let _io = host.io_lock.lock().unwrap_or_else(|e| e.into_inner());
     let storage = host.require_storage()?;
-    let existing = MessageService::get_message(&storage, space, conv_id, message_id)?
-        .ok_or(PluginError::InvalidCall(format!("stream message not found: {message_id}")))?;
+    let existing = MessageService::get_message(&storage, space, conv_id, message_id)?.ok_or(
+        PluginError::InvalidCall(format!("stream message not found: {message_id}")),
+    )?;
     let content = if existing.content.is_empty() {
         error.unwrap_or("（无响应）").to_string()
     } else {
         existing.content.clone()
     };
-    let status = if error.is_some() { "failed" } else { "delivered" };
+    let status = if error.is_some() {
+        "failed"
+    } else {
+        "delivered"
+    };
     drop(storage);
     drop(_io);
-    let _ = bot_reply_stream_upsert(host, space, conv_id, bot_root_id, bot_name, message_id, &content, status)?;
+    let _ = bot_reply_stream_upsert(
+        host,
+        space,
+        conv_id,
+        bot_root_id,
+        bot_name,
+        message_id,
+        &content,
+        status,
+    )?;
     Ok(())
 }
 
@@ -226,7 +266,14 @@ fn bot_reply_stream_upsert(
         recalled: false,
         read: false,
     };
-    MessageService::append_message_pdsync(&mut storage, space, conv_id, &record, now, Some(&host.sync_node_id()))?;
+    MessageService::append_message_pdsync(
+        &mut storage,
+        space,
+        conv_id,
+        &record,
+        now,
+        Some(&host.sync_node_id()),
+    )?;
     let conv = MessageService::get_conversation(&storage, space, conv_id)?
         .ok_or(MessageError::ConversationNotFound)?;
     let conv_view = conversation_view(&conv, &HashSet::new(), None, None);
@@ -235,11 +282,13 @@ fn bot_reply_stream_upsert(
         serde_json::to_value(&conv_view),
         serde_json::to_value(&msg_view),
     ) {
-        let _ = host.event_tx.send(P2pEvent::ChatReceived(serde_json::json!({
-            "spaceKey": space,
-            "conversation": conversation,
-            "message": message
-        })));
+        let _ = host
+            .event_tx
+            .send(P2pEvent::ChatReceived(serde_json::json!({
+                "spaceKey": space,
+                "conversation": conversation,
+                "message": message
+            })));
     }
     Ok(msg_view)
 }
@@ -333,7 +382,9 @@ impl Kernel {
                     message_id,
                     "failed",
                 )?;
-                return Err(KernelError::Internal("你已拉黑对方，无法发送消息".to_string()));
+                return Err(KernelError::Internal(
+                    "你已拉黑对方，无法发送消息".to_string(),
+                ));
             }
             match self.prepare_chat_delivery(space, &conv, &record)? {
                 Some((peer, envelope)) => {
@@ -416,9 +467,7 @@ impl Kernel {
             .find(|m| m.id == message_id)
             .ok_or_else(|| KernelError::Internal("Message not found".to_string()))?;
         if record.recalled {
-            return Err(KernelError::Internal(
-                "已撤回的消息不能重发".to_string(),
-            ));
+            return Err(KernelError::Internal("已撤回的消息不能重发".to_string()));
         }
         let is_self_conv = conv.peer_root_id == my_root_id;
         // 自己会话豁免状态门槛（自消息恒 delivered，重发 = 重投向各设备投递）
@@ -457,7 +506,9 @@ impl Kernel {
                     message_id,
                     "failed",
                 )?;
-                return Err(KernelError::Internal("你已拉黑对方，无法发送消息".to_string()));
+                return Err(KernelError::Internal(
+                    "你已拉黑对方，无法发送消息".to_string(),
+                ));
             }
             match self.prepare_chat_delivery(space, &conv, &record)? {
                 Some((peer, envelope)) => {
@@ -513,18 +564,22 @@ impl Kernel {
         let my_root_id = self.require_unlocked_root_id()?;
         let conv = MessageService::get_conversation(self.require_storage()?, space, conv_id)?
             .ok_or(crate::message::MessageError::ConversationNotFound)?;
-        let message = MessageService::get_message(self.require_storage()?, space, conv_id, message_id)?;
+        let message =
+            MessageService::get_message(self.require_storage()?, space, conv_id, message_id)?;
         if let Some(msg) = &message
             && msg.sender_id != my_root_id
         {
-            return Err(KernelError::Internal(
-                "只能撤回自己发送的消息".to_string(),
-            ));
+            return Err(KernelError::Internal("只能撤回自己发送的消息".to_string()));
         }
         let original_status = message.and_then(|m| m.status);
         let now = system_now_ms();
-        let recalled =
-            MessageService::recall_message(self.require_storage_raw_mut()?, space, conv_id, message_id, now)?;
+        let recalled = MessageService::recall_message(
+            self.require_storage_raw_mut()?,
+            space,
+            conv_id,
+            message_id,
+            now,
+        )?;
         if recalled && matches!(original_status.as_deref(), Some("delivered" | "read")) {
             self.notify_peer(
                 space,

@@ -41,7 +41,8 @@ impl Kernel {
             return Err(KernelError::Internal("回复内容为空或过长".to_string()));
         }
         let now = system_now_ms();
-        let Some(record) = ContactService::get_outgoing_request(self.require_storage()?, request_id)?
+        let Some(record) =
+            ContactService::get_outgoing_request(self.require_storage()?, request_id)?
         else {
             return Err(KernelError::Internal("申请不存在".to_string()));
         };
@@ -90,7 +91,8 @@ impl Kernel {
             return Err(KernelError::Internal("询问内容为空或过长".to_string()));
         }
         let now = system_now_ms();
-        let Some(record) = ContactService::get_incoming_request(self.require_storage()?, request_id)?
+        let Some(record) =
+            ContactService::get_incoming_request(self.require_storage()?, request_id)?
         else {
             return Err(KernelError::Internal("申请不存在".to_string()));
         };
@@ -126,7 +128,12 @@ impl Kernel {
 
     /// 投递 friend-reply 信封（复用记录已存 peer；带退避重试——丢失即静默
     /// 卡死且无失败 UI）。信封构造失败跳过投递，本地 thread 已落。
-    fn deliver_friend_reply(&self, record: &FriendRequestRecord, wire_request_id: &str, text: &str) {
+    fn deliver_friend_reply(
+        &self,
+        record: &FriendRequestRecord,
+        wire_request_id: &str,
+        text: &str,
+    ) {
         let body = friend_reply_body(wire_request_id, text);
         if let Ok(envelope) = self.build_dm_envelope(KIND_FRIEND_REPLY, &record.root_id, body) {
             let peer = record.peer.as_ref().expect("peer checked by caller");

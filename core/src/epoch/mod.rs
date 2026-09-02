@@ -183,7 +183,12 @@ pub fn is_ikey_ciphertext(value: &Value) -> bool {
 /// `ikey-box\0{rootId}\0{epoch}\0{writerPeer}\0{recipientPeer}`
 /// （`\0` 为单字节 0x00；epoch 为十进制 ASCII；rootId 为 64hex UTF-8；
 /// peerId 为 base58 UTF-8）。绑定 root+epoch+双向设备，防包裹跨上下文搬迁。
-pub fn box_domain_info(root_id: &str, epoch: u64, writer_peer: &str, recipient_peer: &str) -> Vec<u8> {
+pub fn box_domain_info(
+    root_id: &str,
+    epoch: u64,
+    writer_peer: &str,
+    recipient_peer: &str,
+) -> Vec<u8> {
     let mut info = b"ikey-box\0".to_vec();
     info.extend_from_slice(root_id.as_bytes());
     info.push(0);
@@ -301,7 +306,12 @@ pub fn unbox_ikey(
 /// 值加密（方案 §5.2）：AES-256-GCM，密钥 = epoch 密钥，明文 = 值 JSON
 /// 序列化 UTF-8，AAD = 记录完整键 UTF-8（防密文跨记录搬迁），nonce 12B 随机。
 /// 输出线形 `{"$enc":"ikey","epoch":N,"nonce":b64,"ct":b64}`。
-pub fn wrap_value(epoch_key: &[u8; 32], record_key: &str, epoch: u64, plaintext: &str) -> Option<Value> {
+pub fn wrap_value(
+    epoch_key: &[u8; 32],
+    record_key: &str,
+    epoch: u64,
+    plaintext: &str,
+) -> Option<Value> {
     let mut nonce12 = [0u8; 12];
     rand::rng().fill_bytes(&mut nonce12);
     wrap_value_with_nonce(epoch_key, record_key, epoch, &nonce12, plaintext)
@@ -415,10 +425,12 @@ pub fn get_local_key<S: StorageBackend>(storage: &S, epoch: u64) -> Result<Optio
     let Some(raw) = storage.get(&local_key_key(epoch))? else {
         return Ok(None);
     };
-    let bytes = B64.decode(raw).map_err(|e| EpochError::Other(e.to_string()))?;
-    let arr: [u8; 32] = bytes.try_into().map_err(|_| {
-        EpochError::Other(format!("local key for epoch {epoch} is not 32 bytes"))
-    })?;
+    let bytes = B64
+        .decode(raw)
+        .map_err(|e| EpochError::Other(e.to_string()))?;
+    let arr: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| EpochError::Other(format!("local key for epoch {epoch} is not 32 bytes")))?;
     Ok(Some(arr))
 }
 
@@ -432,10 +444,11 @@ pub fn put_local_key<S: StorageBackend>(storage: &mut S, epoch: u64, key: &[u8; 
 pub fn list_local_keys<S: StorageBackend>(storage: &S) -> Result<BTreeMap<u64, [u8; 32]>> {
     let mut out = BTreeMap::new();
     for (key, raw) in storage.scan(&ScanOptions::prefix(LOCAL_KEY_PREFIX))? {
-        let epoch = parse_local_key_epoch(&key).ok_or_else(|| {
-            EpochError::Other(format!("invalid local key table entry: {key}"))
-        })?;
-        let bytes = B64.decode(raw).map_err(|e| EpochError::Other(e.to_string()))?;
+        let epoch = parse_local_key_epoch(&key)
+            .ok_or_else(|| EpochError::Other(format!("invalid local key table entry: {key}")))?;
+        let bytes = B64
+            .decode(raw)
+            .map_err(|e| EpochError::Other(e.to_string()))?;
         let arr: [u8; 32] = bytes.try_into().map_err(|_| {
             EpochError::Other(format!("local key for epoch {epoch} is not 32 bytes"))
         })?;
@@ -496,9 +509,7 @@ pub fn should_skip_init_as_recovered<S: StorageBackend>(storage: &mut S) -> Resu
         // 等待主导 epoch 超时（双恢复加入方等死锁）：自升主导，清除标记与等待时间。
         storage.delete(RECOVERED_KEY)?;
         storage.delete(RECOVERED_AT_KEY)?;
-        log::warn!(
-            "[epoch] 恢复加入方等待主导 epoch 超时({RECOVERED_ESCAPE_MS}ms)，自升主导 init"
-        );
+        log::warn!("[epoch] 恢复加入方等待主导 epoch 超时({RECOVERED_ESCAPE_MS}ms)，自升主导 init");
         return Ok(false);
     }
     Ok(true)
@@ -510,10 +521,11 @@ pub fn should_skip_init_as_recovered<S: StorageBackend>(storage: &mut S) -> Resu
 pub fn get_remote_epoch<S: StorageBackend>(storage: &S, peer: &str) -> Result<Option<u64>> {
     let key = format!("{REMOTE_EPOCH_PREFIX}{peer}");
     match storage.get(&key)? {
-        Some(raw) => Ok(Some(
-            raw.parse::<u64>()
-                .map_err(|e| EpochError::Other(format!("remote epoch parse: {e}")))?,
-        )),
+        Some(raw) => {
+            Ok(Some(raw.parse::<u64>().map_err(|e| {
+                EpochError::Other(format!("remote epoch parse: {e}"))
+            })?))
+        }
         None => Ok(None),
     }
 }
@@ -879,9 +891,8 @@ impl EpochService {
             }
         }
 
-        let epoch_key = get_local_key(storage, effective)?.ok_or_else(|| {
-            EpochError::Other(format!("local epoch key missing for {effective}"))
-        })?;
+        let epoch_key = get_local_key(storage, effective)?
+            .ok_or_else(|| EpochError::Other(format!("local epoch key missing for {effective}")))?;
         let self_x25519_priv = crate::p2p::identity_store::load_x25519_private_key(storage)
             .ok_or_else(|| {
                 EpochError::Other("cannot load x25519 private key for grant".to_string())
@@ -889,9 +900,9 @@ impl EpochService {
         let recipient_ed_pk_bytes = B64.decode(device_pub_key_b64).map_err(|e| {
             EpochError::Other(format!("invalid device_pub_key base64 for {peer}: {e}"))
         })?;
-        let recipient_ed_pk: [u8; 32] = recipient_ed_pk_bytes.try_into().map_err(|_| {
-            EpochError::Other(format!("device_pub_key for {peer} is not 32 bytes"))
-        })?;
+        let recipient_ed_pk: [u8; 32] = recipient_ed_pk_bytes
+            .try_into()
+            .map_err(|_| EpochError::Other(format!("device_pub_key for {peer} is not 32 bytes")))?;
         let Some(recipient_x25519_pub) = ed_pk_to_x25519(&recipient_ed_pk) else {
             return Ok(false);
         };
@@ -1064,7 +1075,9 @@ mod tests {
     /// `load_x25519_private_key` 派生的私钥与 `x_priv(dev)` 一致。
     fn persist_identity(storage: &mut MemoryStorage, dev: &Keypair) {
         let raw = dev.to_protobuf_encoding().unwrap();
-        storage.put(P2P_IDENTITY_PRIVATE_KEY, &B64.encode(raw)).unwrap();
+        storage
+            .put(P2P_IDENTITY_PRIVATE_KEY, &B64.encode(raw))
+            .unwrap();
     }
 
     /// 根因验证（2026-08-13）：两设备各自 `maybe_init`/`rotate(Init)` 到相同
@@ -1115,12 +1128,58 @@ mod tests {
         let mut s_k = MemoryStorage::new();
         persist_identity(&mut s_w, &dev_w);
         persist_identity(&mut s_k, &dev_k);
-        let w_pk = B64.encode(dev_w.clone().try_into_ed25519().unwrap().public().to_bytes());
-        let k_pk = B64.encode(dev_k.clone().try_into_ed25519().unwrap().public().to_bytes());
-        crate::device::DeviceService::upsert_self(&mut s_w, "peerW", 1000, "nodeW", "t", Some(w_pk.clone())).unwrap();
-        crate::device::DeviceService::upsert_self(&mut s_k, "peerK", 1000, "nodeK", "t", Some(k_pk.clone())).unwrap();
-        crate::device::DeviceService::upsert_self(&mut s_w, "peerK", 1000, "nodeK", "t", Some(k_pk.clone())).unwrap();
-        crate::device::DeviceService::upsert_self(&mut s_k, "peerW", 1000, "nodeW", "t", Some(w_pk.clone())).unwrap();
+        let w_pk = B64.encode(
+            dev_w
+                .clone()
+                .try_into_ed25519()
+                .unwrap()
+                .public()
+                .to_bytes(),
+        );
+        let k_pk = B64.encode(
+            dev_k
+                .clone()
+                .try_into_ed25519()
+                .unwrap()
+                .public()
+                .to_bytes(),
+        );
+        crate::device::DeviceService::upsert_self(
+            &mut s_w,
+            "peerW",
+            1000,
+            "nodeW",
+            "t",
+            Some(w_pk.clone()),
+        )
+        .unwrap();
+        crate::device::DeviceService::upsert_self(
+            &mut s_k,
+            "peerK",
+            1000,
+            "nodeK",
+            "t",
+            Some(k_pk.clone()),
+        )
+        .unwrap();
+        crate::device::DeviceService::upsert_self(
+            &mut s_w,
+            "peerK",
+            1000,
+            "nodeK",
+            "t",
+            Some(k_pk.clone()),
+        )
+        .unwrap();
+        crate::device::DeviceService::upsert_self(
+            &mut s_k,
+            "peerW",
+            1000,
+            "nodeW",
+            "t",
+            Some(w_pk.clone()),
+        )
+        .unwrap();
 
         // 两端各 init 到 epoch 1：各自密钥不同，各自 effective=1。
         let key_w = generate_ikey();
@@ -1133,31 +1192,92 @@ mod tests {
 
         // epoch:state 经 pdsync LWW 收敛到单一 rotated_by=peerW（W 是赢家）：
         // 两端 state 一致地认为 rotated_by=peerW。
-        put_epoch_state(&mut s_w, "nodeW", &EpochState { current: 1, rotated_at: 2000, rotated_by: "peerW".into(), reason: RotationReason::Init }, 2000).unwrap();
-        put_epoch_state(&mut s_k, "nodeK", &EpochState { current: 1, rotated_at: 2000, rotated_by: "peerW".into(), reason: RotationReason::Init }, 2000).unwrap();
+        put_epoch_state(
+            &mut s_w,
+            "nodeW",
+            &EpochState {
+                current: 1,
+                rotated_at: 2000,
+                rotated_by: "peerW".into(),
+                reason: RotationReason::Init,
+            },
+            2000,
+        )
+        .unwrap();
+        put_epoch_state(
+            &mut s_k,
+            "nodeK",
+            &EpochState {
+                current: 1,
+                rotated_at: 2000,
+                rotated_by: "peerW".into(),
+                reason: RotationReason::Init,
+            },
+            2000,
+        )
+        .unwrap();
 
         // 互灌 ikey：W 把 keyW box 给 K；K 把 keyK box 给 W。
-        let (wrapped_wk, nonce_wk) = box_ikey(&key_w, &x_pub(&dev_k), &x_priv(&dev_w), root_id, 1, "peerW", "peerK").unwrap();
-        let ikey_wk = IkeyRecord { wrapped_key: wrapped_wk, nonce: nonce_wk, ts: 1000 };
-        s_k.put(&ikey_key(1, "peerW", "peerK"), &serde_json::to_string(&ikey_wk).unwrap()).unwrap();
-        let (wrapped_kw, nonce_kw) = box_ikey(&key_k, &x_pub(&dev_w), &x_priv(&dev_k), root_id, 1, "peerK", "peerW").unwrap();
-        let ikey_kw = IkeyRecord { wrapped_key: wrapped_kw, nonce: nonce_kw, ts: 1000 };
-        s_w.put(&ikey_key(1, "peerK", "peerW"), &serde_json::to_string(&ikey_kw).unwrap()).unwrap();
+        let (wrapped_wk, nonce_wk) = box_ikey(
+            &key_w,
+            &x_pub(&dev_k),
+            &x_priv(&dev_w),
+            root_id,
+            1,
+            "peerW",
+            "peerK",
+        )
+        .unwrap();
+        let ikey_wk = IkeyRecord {
+            wrapped_key: wrapped_wk,
+            nonce: nonce_wk,
+            ts: 1000,
+        };
+        s_k.put(
+            &ikey_key(1, "peerW", "peerK"),
+            &serde_json::to_string(&ikey_wk).unwrap(),
+        )
+        .unwrap();
+        let (wrapped_kw, nonce_kw) = box_ikey(
+            &key_k,
+            &x_pub(&dev_w),
+            &x_priv(&dev_k),
+            root_id,
+            1,
+            "peerK",
+            "peerW",
+        )
+        .unwrap();
+        let ikey_kw = IkeyRecord {
+            wrapped_key: wrapped_kw,
+            nonce: nonce_kw,
+            ts: 1000,
+        };
+        s_w.put(
+            &ikey_key(1, "peerK", "peerW"),
+            &serde_json::to_string(&ikey_kw).unwrap(),
+        )
+        .unwrap();
 
         // 方案 X：赢家 W 保留自己密钥（rotated_by==自己直接返回）；败者 K 采用赢家 W 的包裹。
         EpochService::try_refresh_keys(&mut s_w, root_id, "peerW", 1001).unwrap();
         EpochService::try_refresh_keys(&mut s_k, root_id, "peerK", 1001).unwrap();
 
         // 两端应收敛到同一把 = keyW（赢家 W 的密钥）。
-        let final_w = get_local_key(&s_w, 1).unwrap().expect("W 应有 epoch 1 密钥");
-        let final_k = get_local_key(&s_k, 1).unwrap().expect("K 应有 epoch 1 密钥");
+        let final_w = get_local_key(&s_w, 1)
+            .unwrap()
+            .expect("W 应有 epoch 1 密钥");
+        let final_k = get_local_key(&s_k, 1)
+            .unwrap()
+            .expect("K 应有 epoch 1 密钥");
         assert_eq!(final_w, key_w, "赢家 W 保留自己密钥");
         assert_eq!(final_k, key_w, "败者 K 采用赢家 W 的密钥");
         assert_eq!(final_w, final_k, "两端 epoch 密钥收敛一致");
 
         // 收敛后互解成功（风暴消除）。
         let wrapped = wrap_value(&final_w, "profile:self", 1, r#"{"nickname":"W"}"#).unwrap();
-        let plain = unwrap_value(&final_k, "profile:self", &wrapped).expect("收敛后对端可解密 profile:self");
+        let plain = unwrap_value(&final_k, "profile:self", &wrapped)
+            .expect("收敛后对端可解密 profile:self");
         assert!(plain.contains("W"));
     }
 
@@ -1204,7 +1324,10 @@ mod tests {
     fn recovered_skip_init_semantics() {
         // 主导设备：无恢复标记 → 不跳过。
         let mut s = MemoryStorage::new();
-        assert!(!should_skip_init_as_recovered(&mut s).unwrap(), "主导设备照常 init");
+        assert!(
+            !should_skip_init_as_recovered(&mut s).unwrap(),
+            "主导设备照常 init"
+        );
 
         // 恢复加入方：有标记、未超时 → 跳过。
         s.put(RECOVERED_KEY, "1").unwrap();
@@ -1213,10 +1336,17 @@ mod tests {
             .unwrap()
             .as_millis() as i64;
         s.put(RECOVERED_AT_KEY, &now.to_string()).unwrap();
-        assert!(should_skip_init_as_recovered(&mut s).unwrap(), "恢复加入方未超时跳过 init");
+        assert!(
+            should_skip_init_as_recovered(&mut s).unwrap(),
+            "恢复加入方未超时跳过 init"
+        );
 
         // 恢复加入方：等待超时（模拟已等 31s）→ 清除标记自升主导。
-        s.put(RECOVERED_AT_KEY, &(now - RECOVERED_ESCAPE_MS - 1000).to_string()).unwrap();
+        s.put(
+            RECOVERED_AT_KEY,
+            &(now - RECOVERED_ESCAPE_MS - 1000).to_string(),
+        )
+        .unwrap();
         assert!(
             !should_skip_init_as_recovered(&mut s).unwrap(),
             "恢复加入方超时后自升主导 init"

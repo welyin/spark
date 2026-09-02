@@ -395,8 +395,7 @@ mod tests {
         );
 
         let keypair = libp2p::identity::Keypair::generate_ed25519();
-        let expected =
-            libp2p::identity::PeerId::from_public_key(&keypair.public()).to_base58();
+        let expected = libp2p::identity::PeerId::from_public_key(&keypair.public()).to_base58();
         store_p2p_identity(&mut s, &keypair);
 
         let id = persisted_sync_node_id(&s);

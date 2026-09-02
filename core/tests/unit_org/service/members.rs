@@ -92,12 +92,20 @@ fn add_member_new_and_repeat_update() {
     .unwrap();
     let m2 = updated2.find_member(&member_id).unwrap();
     assert_eq!(
-        m2.node_info.as_ref().unwrap().iter().next().unwrap().peer_id.as_deref(),
+        m2.node_info
+            .as_ref()
+            .unwrap()
+            .iter()
+            .next()
+            .unwrap()
+            .peer_id
+            .as_deref(),
         Some("12D3KooWMember")
     );
     assert_eq!(updated2.members.len(), 2);
 
-    let txs = spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 20).unwrap();
+    let txs =
+        spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 20).unwrap();
     let types: Vec<_> = txs.iter().map(|t| t.type_).collect();
     assert_eq!(
         types,
@@ -177,7 +185,8 @@ fn remove_member_admin_guard() {
     )
     .unwrap();
     assert_eq!(updated.members.len(), 1);
-    let txs = spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 1).unwrap();
+    let txs =
+        spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 1).unwrap();
     assert_eq!(txs[0].type_, OrganizationTransactionType::MemberRemove);
     assert_eq!(txs[0].payload.as_ref().unwrap()["removedRole"], "member");
 }
@@ -270,7 +279,13 @@ fn update_my_identity_patch_and_merge_semantics() {
         ..Default::default()
     };
     assert!(matches!(
-        OrganizationService::update_my_identity(&mut storage, &record.org_id, &patch, &rid('q'), NOW + 2),
+        OrganizationService::update_my_identity(
+            &mut storage,
+            &record.org_id,
+            &patch,
+            &rid('q'),
+            NOW + 2
+        ),
         Err(OrgError::MemberNotFound)
     ));
 
@@ -302,7 +317,8 @@ fn update_my_identity_patch_and_merge_semantics() {
     // 他人（admin）记录不受影响
     assert_eq!(updated.find_member(&admin).unwrap().nickname, None);
     // 记事务（对齐 update_info/members 写法）
-    let txs = spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 1).unwrap();
+    let txs =
+        spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 1).unwrap();
     assert_eq!(txs[0].type_, OrganizationTransactionType::MemberUpdate);
     assert_eq!(txs[0].target_root_id.as_deref(), Some(member_id.as_str()));
     assert_eq!(txs[0].summary, "更新组织身份信息");
@@ -316,7 +332,10 @@ fn update_my_identity_patch_and_merge_semantics() {
     );
     assert_eq!(payload["gender"], serde_json::json!("女".len() as i64));
     assert_eq!(payload["region"], serde_json::json!("杭州".len() as i64));
-    assert_eq!(payload["signature"], serde_json::json!("保持热爱".len() as i64));
+    assert_eq!(
+        payload["signature"],
+        serde_json::json!("保持热爱".len() as i64)
+    );
     assert_eq!(payload["usePersonalIdentity"], serde_json::json!(true));
 
     // 幂等：同值重复设置不 bump 版本
@@ -351,10 +370,15 @@ fn update_my_identity_patch_and_merge_semantics() {
     assert_eq!(member.gender.as_deref(), Some("女"), "None 不变");
     assert_eq!(member.use_personal_identity, Some(true), "None 不变");
     // m1：清除的审计摘要为 false；未变更字段为 Null
-    let txs = spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 1).unwrap();
+    let txs =
+        spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 1).unwrap();
     let payload = txs[0].payload.as_ref().unwrap();
     assert_eq!(payload["avatar"], serde_json::json!(false), "清除 → false");
-    assert_eq!(payload["signature"], serde_json::json!(false), "空白清除 → false");
+    assert_eq!(
+        payload["signature"],
+        serde_json::json!(false),
+        "空白清除 → false"
+    );
     assert_eq!(payload["gender"], serde_json::Value::Null, "未变更 → Null");
 }
 

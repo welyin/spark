@@ -22,23 +22,42 @@ fn org_dlog_gc_blocks_until_all_replication_members_advance() {
         ],
         &[],
     );
-    declare_org_collection(&mut a, "node-a", ORG_ID, NAME, VERSION, Accounts::AllMembers, &a_root, NOW);
+    declare_org_collection(
+        &mut a,
+        "node-a",
+        ORG_ID,
+        NAME,
+        VERSION,
+        Accounts::AllMembers,
+        &a_root,
+        NOW,
+    );
 
     // A 写入两条数据后删除 → A 的 org dlog 两条墓碑条目（seq 1,2）
     write_org_data(&mut a, "node-a", ORG_ID, NAME, VERSION, "k1", "\"v1\"", NOW);
-    write_org_data(&mut a, "node-a", ORG_ID, NAME, VERSION, "k2", "\"v2\"", NOW + 1);
+    write_org_data(
+        &mut a,
+        "node-a",
+        ORG_ID,
+        NAME,
+        VERSION,
+        "k2",
+        "\"v2\"",
+        NOW + 1,
+    );
     let (seq1, _) = delete_org_data(&mut a, "node-a", ORG_ID, NAME, VERSION, "k1", NOW + 2);
     let (seq2, _) = delete_org_data(&mut a, "node-a", ORG_ID, NAME, VERSION, "k2", NOW + 3);
     assert_eq!(seq1, 1);
     assert_eq!(seq2, 2);
-    assert_eq!(org_dlog_entries_after(&a, ORG_ID, NAME, VERSION, 0).unwrap().len(), 2);
+    assert_eq!(
+        org_dlog_entries_after(&a, ORG_ID, NAME, VERSION, 0)
+            .unwrap()
+            .len(),
+        2
+    );
 
     // 复制组成员 = [A,B,C]，等待集合 = 除 A 外的 [B, C]。
-    let members = vec![
-        a_root.clone(),
-        b_root.clone(),
-        c_root.clone(),
-    ];
+    let members = vec![a_root.clone(), b_root.clone(), c_root.clone()];
 
     // 仅 B 推进水位（B 发 hello 带 dlogAck=2，B 已确认 A 的删除日志到 seq2）
     // → C 无水位记录 → 阻塞不清
@@ -56,17 +75,14 @@ fn org_dlog_gc_blocks_until_all_replication_members_advance() {
         "node-a",
     );
     let threshold = spark_core::sync::orgsync::org_dlog_gc_threshold(
-        &a,
-        ORG_ID,
-        NAME,
-        VERSION,
-        &members,
-        &a_root,
+        &a, ORG_ID, NAME, VERSION, &members, &a_root,
     )
     .unwrap();
     assert_eq!(threshold, 0, "C 无水位记录 → 阻塞不清");
     assert_eq!(
-        org_dlog_entries_after(&a, ORG_ID, NAME, VERSION, 0).unwrap().len(),
+        org_dlog_entries_after(&a, ORG_ID, NAME, VERSION, 0)
+            .unwrap()
+            .len(),
         2,
         "条目保留（未清理）"
     );
@@ -86,32 +102,33 @@ fn org_dlog_gc_blocks_until_all_replication_members_advance() {
         "node-a",
     );
     let threshold = spark_core::sync::orgsync::org_dlog_gc_threshold(
-        &a,
-        ORG_ID,
-        NAME,
-        VERSION,
-        &members,
-        &a_root,
+        &a, ORG_ID, NAME, VERSION, &members, &a_root,
     )
     .unwrap();
     assert_eq!(threshold, 2, "全部成员推进 → threshold=2");
     // wm 键按 (rootId, peerId) 设备粒度
     assert!(
-        a.get(&spark_core::plugindata::org_dlog_wm_key(ORG_ID, NAME, VERSION, &b_root, "peer-b"))
-            .unwrap()
-            .is_some(),
+        a.get(&spark_core::plugindata::org_dlog_wm_key(
+            ORG_ID, NAME, VERSION, &b_root, "peer-b"
+        ))
+        .unwrap()
+        .is_some(),
         "B 水位已按 (rootId,peerId) 记录"
     );
     assert!(
-        a.get(&spark_core::plugindata::org_dlog_wm_key(ORG_ID, NAME, VERSION, &c_root, "peer-c"))
-            .unwrap()
-            .is_some(),
+        a.get(&spark_core::plugindata::org_dlog_wm_key(
+            ORG_ID, NAME, VERSION, &c_root, "peer-c"
+        ))
+        .unwrap()
+        .is_some(),
         "C 水位已按 (rootId,peerId) 记录"
     );
     // 清理生效：C 的 hello 触发的 hello 处理器内 GC 已按 threshold=2 清掉 seq<=2
     // （`org_dlog_gc` 在处理器内随水位推进自动执行，无需测试侧手动触发）。
     assert_eq!(
-        org_dlog_entries_after(&a, ORG_ID, NAME, VERSION, 0).unwrap().len(),
+        org_dlog_entries_after(&a, ORG_ID, NAME, VERSION, 0)
+            .unwrap()
+            .len(),
         0,
         "清理生效：seq<=2 两条条目被删"
     );
@@ -141,9 +158,36 @@ fn org_tombstone_relays_a_to_b_to_c_without_personal_dlog_pollution() {
         );
     }
     // 各端声明集合（声明随流量同步，但此测试聚焦墓碑接力，端侧预声明）
-    declare_org_collection(&mut a, "node-a", ORG_ID, NAME, VERSION, Accounts::AllMembers, &a_root, NOW);
-    declare_org_collection(&mut b, "node-b", ORG_ID, NAME, VERSION, Accounts::AllMembers, &b_root, NOW);
-    declare_org_collection(&mut c, "node-c", ORG_ID, NAME, VERSION, Accounts::AllMembers, &c_root, NOW);
+    declare_org_collection(
+        &mut a,
+        "node-a",
+        ORG_ID,
+        NAME,
+        VERSION,
+        Accounts::AllMembers,
+        &a_root,
+        NOW,
+    );
+    declare_org_collection(
+        &mut b,
+        "node-b",
+        ORG_ID,
+        NAME,
+        VERSION,
+        Accounts::AllMembers,
+        &b_root,
+        NOW,
+    );
+    declare_org_collection(
+        &mut c,
+        "node-c",
+        ORG_ID,
+        NAME,
+        VERSION,
+        Accounts::AllMembers,
+        &c_root,
+        NOW,
+    );
 
     let data_key = format!("{}k1", org_data_prefix(ORG_ID, NAME, VERSION));
     write_org_data(&mut a, "node-a", ORG_ID, NAME, VERSION, "k1", "\"v1\"", NOW);
@@ -258,10 +302,7 @@ fn org_tombstone_relays_a_to_b_to_c_without_personal_dlog_pollution() {
         .find(|o| o.body().get("records").is_some())
         .expect("B 回 data");
     let (_, _, recs_c) = spark_core::sync::orgsync::parse_orgsync_data(data_b.body()).unwrap();
-    assert!(
-        recs_c.iter().any(|r| r.dseq.is_some()),
-        "B 向 C 中继墓碑"
-    );
+    assert!(recs_c.iter().any(|r| r.dseq.is_some()), "B 向 C 中继墓碑");
     deliver_orgsync(
         &mut c,
         &c_root,
@@ -290,17 +331,39 @@ fn collect_org_tombstones_after_skips_rebuilt_key() {
         vec![(self_identity(1).1.as_str(), OrganizationRole::Admin)],
         &[],
     );
-    declare_org_collection(&mut s, "node-a", ORG_ID, NAME, VERSION, Accounts::AllMembers, &self_identity(1).1, NOW);
+    declare_org_collection(
+        &mut s,
+        "node-a",
+        ORG_ID,
+        NAME,
+        VERSION,
+        Accounts::AllMembers,
+        &self_identity(1).1,
+        NOW,
+    );
     let data_key = format!("{}k1", org_data_prefix(ORG_ID, NAME, VERSION));
 
     // 写入 → 删除（seq1 墓碑）→ 重建（新 pmeta 非墓碑）
     write_org_data(&mut s, "node-a", ORG_ID, NAME, VERSION, "k1", "\"v1\"", NOW);
     delete_org_data(&mut s, "node-a", ORG_ID, NAME, VERSION, "k1", NOW + 1);
-    write_org_data(&mut s, "node-a", ORG_ID, NAME, VERSION, "k1", "\"v2-rebuilt\"", NOW + 2);
+    write_org_data(
+        &mut s,
+        "node-a",
+        ORG_ID,
+        NAME,
+        VERSION,
+        "k1",
+        "\"v2-rebuilt\"",
+        NOW + 2,
+    );
 
     let meta = get_personal_meta(&s, &data_key).unwrap().unwrap();
     assert!(!is_tombstone(&meta), "重建后 pmeta 非墓碑");
-    assert_eq!(meta.vv.get("node-a"), Some(&4), "重建 bump 到 node-a:4（声明1+写2+删3+重建4）");
+    assert_eq!(
+        meta.vv.get("node-a"),
+        Some(&4),
+        "重建 bump 到 node-a:4（声明1+写2+删3+重建4）"
+    );
     assert_eq!(
         s.get(&data_key).unwrap().as_deref(),
         Some("\"v2-rebuilt\""),
@@ -316,6 +379,9 @@ fn collect_org_tombstones_after_skips_rebuilt_key() {
 
     // 增量采集（knownVv 空）→ 该 key 作为普通数据（非墓碑）随增量走
     let inc = collect_org_incremental(&s, ORG_ID, NAME, VERSION, &Default::default(), 0).unwrap();
-    let rec = inc.iter().find(|r| r.key == data_key).expect("重建记录在增量中");
+    let rec = inc
+        .iter()
+        .find(|r| r.key == data_key)
+        .expect("重建记录在增量中");
     assert!(rec.dseq.is_none(), "重建记录不带墓碑 dseq");
 }

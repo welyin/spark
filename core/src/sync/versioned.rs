@@ -144,7 +144,10 @@ impl<S: StorageBackend> VersionedStorage<S> {
         }
         if key.starts_with("org:coll:") || key.starts_with("org:acl:") {
             // org:coll:{orgId}:{name}@v{version} / org:acl:{orgId}:{name}@v{version}
-            let rest = key.strip_prefix("org:coll:").unwrap_or(key).strip_prefix("org:acl:")?;
+            let rest = key
+                .strip_prefix("org:coll:")
+                .unwrap_or(key)
+                .strip_prefix("org:acl:")?;
             let (org_id, rest) = rest.split_once(':')?;
             let at = rest.rfind("@v")?;
             let name = &rest[..at];
@@ -206,7 +209,11 @@ impl<S: StorageBackend> VersionedStorage<S> {
             && let Some((org_id, name, version)) = Self::org_scope_of(key)
         {
             let (_seq, dlog_ops) = crate::sync::orgsync::org_dlog_append_ops(
-                &self.inner, &org_id, &name, &version, key,
+                &self.inner,
+                &org_id,
+                &name,
+                &version,
+                key,
             )
             .map_err(|e| crate::storage::StorageError::Backend(e.to_string()))?;
             ops.extend(dlog_ops);
@@ -249,12 +256,17 @@ impl<S: StorageBackend> StorageBackend for VersionedStorage<S> {
                 BatchOperation::Put { key, value } if Self::managed(&key) => {
                     if vv_seq.is_none() {
                         vv_seq = Some(
-                            crate::sync::personal::current_vv_seq(&self.inner, &node_id)
-                                .map_err(|e| crate::storage::StorageError::Backend(e.to_string()))?,
+                            crate::sync::personal::current_vv_seq(&self.inner, &node_id).map_err(
+                                |e| crate::storage::StorageError::Backend(e.to_string()),
+                            )?,
                         );
                     }
-                    let (ts, meta) =
-                        self.bump_local(&key, &node_id, &mut pmeta_cache, vv_seq.as_mut().expect("vv_seq initialized"))?;
+                    let (ts, meta) = self.bump_local(
+                        &key,
+                        &node_id,
+                        &mut pmeta_cache,
+                        vv_seq.as_mut().expect("vv_seq initialized"),
+                    )?;
                     let meta_raw = serde_json::to_string(&meta)
                         .map_err(|e| crate::storage::StorageError::Backend(e.to_string()))?;
                     out.push(BatchOperation::put(personal_meta_key(&key), meta_raw));
@@ -264,12 +276,17 @@ impl<S: StorageBackend> StorageBackend for VersionedStorage<S> {
                 BatchOperation::Delete { key } if Self::managed(&key) => {
                     if vv_seq.is_none() {
                         vv_seq = Some(
-                            crate::sync::personal::current_vv_seq(&self.inner, &node_id)
-                                .map_err(|e| crate::storage::StorageError::Backend(e.to_string()))?,
+                            crate::sync::personal::current_vv_seq(&self.inner, &node_id).map_err(
+                                |e| crate::storage::StorageError::Backend(e.to_string()),
+                            )?,
                         );
                     }
-                    let (ts, meta, dlog_ops) =
-                        self.tombstone_local(&key, &node_id, &mut pmeta_cache, vv_seq.as_mut().expect("vv_seq initialized"))?;
+                    let (ts, meta, dlog_ops) = self.tombstone_local(
+                        &key,
+                        &node_id,
+                        &mut pmeta_cache,
+                        vv_seq.as_mut().expect("vv_seq initialized"),
+                    )?;
                     let meta_raw = serde_json::to_string(&meta)
                         .map_err(|e| crate::storage::StorageError::Backend(e.to_string()))?;
                     out.push(BatchOperation::delete(key.clone()));
@@ -356,19 +373,25 @@ mod tests {
         let mut s = new_store();
         // 个人空间普通会话：受管
         s.put("msg:conv:personal:root-x", "{}").unwrap();
-        assert!(get_personal_meta(s.raw(), "msg:conv:personal:root-x")
-            .unwrap()
-            .is_some());
+        assert!(
+            get_personal_meta(s.raw(), "msg:conv:personal:root-x")
+                .unwrap()
+                .is_some()
+        );
         // 组织会话：不受管（走 org-pull）
         s.put("msg:conv:org:o1:root-x", "{}").unwrap();
         // 应用会话：不受管（现状不参与 pdsync）
         s.put("msg:conv:personal:app:ai-chat", "{}").unwrap();
-        assert!(get_personal_meta(s.raw(), "msg:conv:org:o1:root-x")
-            .unwrap()
-            .is_none());
-        assert!(get_personal_meta(s.raw(), "msg:conv:personal:app:ai-chat")
-            .unwrap()
-            .is_none());
+        assert!(
+            get_personal_meta(s.raw(), "msg:conv:org:o1:root-x")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            get_personal_meta(s.raw(), "msg:conv:personal:app:ai-chat")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -409,15 +432,25 @@ mod tests {
         s.put(&key, "c2VjcmV0").unwrap();
         assert_eq!(s.get(&key).unwrap().as_deref(), Some("c2VjcmV0"));
         let meta = get_personal_meta(s.raw(), &key).unwrap().unwrap();
-        assert_eq!(meta.vv.get("node-a"), Some(&1), "orgkey 写经版本化自动 pmeta");
+        assert_eq!(
+            meta.vv.get("node-a"),
+            Some(&1),
+            "orgkey 写经版本化自动 pmeta"
+        );
         // 对照：经 raw 写则无 pmeta（自设备不可同步——O6 修复前即如此）
         let mut raw = s.raw().clone();
-        raw.put(&crate::sync::orgsync::orgkey_key("org_01", "fin:pay", "1", 2), "x")
-            .unwrap();
+        raw.put(
+            &crate::sync::orgsync::orgkey_key("org_01", "fin:pay", "1", 2),
+            "x",
+        )
+        .unwrap();
         assert!(
-            get_personal_meta(s.raw(), &crate::sync::orgsync::orgkey_key("org_01", "fin:pay", "1", 2))
-                .unwrap()
-                .is_none(),
+            get_personal_meta(
+                s.raw(),
+                &crate::sync::orgsync::orgkey_key("org_01", "fin:pay", "1", 2)
+            )
+            .unwrap()
+            .is_none(),
             "raw 写不记账（对照）"
         );
     }
@@ -464,9 +497,14 @@ mod tests {
         let key = "org:meta:org_01";
         s.put(key, "{\"name\":\"t\"}").unwrap();
         s.delete(key).unwrap();
-        let org_entries =
-            crate::sync::orgsync::org_dlog_entries_after(s.raw(), "org_01", "org:structure", "1", 0)
-                .unwrap();
+        let org_entries = crate::sync::orgsync::org_dlog_entries_after(
+            s.raw(),
+            "org_01",
+            "org:structure",
+            "1",
+            0,
+        )
+        .unwrap();
         assert_eq!(org_entries.len(), 1);
         assert_eq!(org_entries[0].1, key);
         // 个人域 dlog 也保留（pdsync 自设备同步不动）

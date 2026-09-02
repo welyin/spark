@@ -193,11 +193,7 @@ impl Kernel {
         let now = crate::p2p::node::system_now_ms();
         let node_id = self.sync_node_id();
         let profile = super::super::identity::SyncableProfile::from_options(
-            nickname,
-            avatar,
-            gender,
-            region,
-            signature,
+            nickname, avatar, gender, region, signature,
         );
         let key = super::super::identity::PROFILE_SELF_KEY;
         let json = serde_json::to_string(&profile).unwrap_or_default();

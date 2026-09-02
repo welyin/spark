@@ -220,8 +220,8 @@ fn handle_committed<S: StorageBackend>(
         return done(fail_response("invalid-body"), Vec::new());
     }
 
-    let changed = RecoveryService::<S>::get_seen(storage, request_id)?
-        .is_some_and(|s| !s.committed);
+    let changed =
+        RecoveryService::<S>::get_seen(storage, request_id)?.is_some_and(|s| !s.committed);
     if !changed {
         return done(ok_response(), Vec::new());
     }

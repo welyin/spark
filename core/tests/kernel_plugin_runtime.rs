@@ -70,7 +70,8 @@ fn seed_feed_recipient(kernel: &mut Kernel, root_id: &str) {
         peers: vec![PeerRef {
             peer_id: "peer-1".to_string(),
             addresses: vec![],
-        ..Default::default()}],
+            ..Default::default()
+        }],
         ..Default::default()
     };
     let mut storage = kernel.__test_storage().unwrap();
@@ -82,7 +83,14 @@ fn seed_feed_recipient(kernel: &mut Kernel, root_id: &str) {
     use spark_core::p2p::node::system_now_ms;
     let key = SigningKey::from_bytes(&[7; 32]);
     let pub_b64 = base64::engine::general_purpose::STANDARD.encode(key.verifying_key().to_bytes());
-    record_inbound_peer_root_pub(&mut storage, root_id, &pub_b64, "local-node", system_now_ms()).unwrap();
+    record_inbound_peer_root_pub(
+        &mut storage,
+        root_id,
+        &pub_b64,
+        "local-node",
+        system_now_ms(),
+    )
+    .unwrap();
 }
 
 fn kernel_with_identity() -> (tempfile::TempDir, Kernel, String) {
@@ -127,7 +135,9 @@ fn bot_replies(kernel: &Kernel, conv_id: &str) -> Vec<String> {
 fn bot_message_reaches_runtime_and_reply_persisted() {
     let (_dir, mut kernel, _root) = kernel_with_identity();
     let conv_id = setup_bot_conv(&mut kernel);
-    kernel.plugin_start_background("echo-plugin", ECHO_SCRIPT, &test_permissions()).unwrap();
+    kernel
+        .plugin_start_background("echo-plugin", ECHO_SCRIPT, &test_permissions())
+        .unwrap();
 
     send_text(&mut kernel, &conv_id, "hello");
 
@@ -137,7 +147,10 @@ fn bot_message_reaches_runtime_and_reply_persisted() {
         "bot 回复落库",
     );
     // 防循环：bot 回复不回投 JS，会话消息恒为用户一条 + 回复一条
-    let total = kernel.message_list_messages(PERSONAL, &conv_id).unwrap().len();
+    let total = kernel
+        .message_list_messages(PERSONAL, &conv_id)
+        .unwrap()
+        .len();
     assert_eq!(total, 2, "echo 回复不得再触发 JS（防循环）");
     assert!(kernel.plugin_background_running("echo-plugin"));
 }
@@ -148,7 +161,9 @@ fn chat_received_broadcast_routed_to_runtime() {
     // 同款）→ 路由任务 → 插件。这里直接经测试口发广播模拟。
     let (_dir, mut kernel, _root) = kernel_with_identity();
     let conv_id = setup_bot_conv(&mut kernel);
-    kernel.plugin_start_background("echo-plugin", ECHO_SCRIPT, &test_permissions()).unwrap();
+    kernel
+        .plugin_start_background("echo-plugin", ECHO_SCRIPT, &test_permissions())
+        .unwrap();
 
     let conversations = kernel.message_list_conversations(PERSONAL).unwrap();
     let conv = conversations.iter().find(|c| c.id == conv_id).unwrap();
@@ -173,9 +188,12 @@ fn stop_halts_processing_and_restart_allowed() {
     let (_dir, mut kernel, _root) = kernel_with_identity();
     let conv_id = setup_bot_conv(&mut kernel);
 
-    kernel.plugin_start_background("echo-plugin", ECHO_SCRIPT, &test_permissions()).unwrap();
+    kernel
+        .plugin_start_background("echo-plugin", ECHO_SCRIPT, &test_permissions())
+        .unwrap();
     // 重复启动被拒
-    let duplicated = kernel.plugin_start_background("echo-plugin", ECHO_SCRIPT, &test_permissions());
+    let duplicated =
+        kernel.plugin_start_background("echo-plugin", ECHO_SCRIPT, &test_permissions());
     assert!(duplicated.is_err(), "重复启动应报 AlreadyRunning");
 
     kernel.plugin_stop_background("echo-plugin").unwrap();
@@ -183,10 +201,15 @@ fn stop_halts_processing_and_restart_allowed() {
 
     send_text(&mut kernel, &conv_id, "while-stopped");
     std::thread::sleep(std::time::Duration::from_millis(500));
-    assert!(bot_replies(&kernel, &conv_id).is_empty(), "停机后不得处理消息");
+    assert!(
+        bot_replies(&kernel, &conv_id).is_empty(),
+        "停机后不得处理消息"
+    );
 
     // 停机后可重新启动并恢复处理
-    kernel.plugin_start_background("echo-plugin", ECHO_SCRIPT, &test_permissions()).unwrap();
+    kernel
+        .plugin_start_background("echo-plugin", ECHO_SCRIPT, &test_permissions())
+        .unwrap();
     send_text(&mut kernel, &conv_id, "after-restart");
     wait_until(
         || bot_replies(&kernel, &conv_id) == vec!["echo: after-restart".to_string()],
@@ -204,7 +227,9 @@ fn plugin_registers_own_bot_via_capability() {
 spark.ensureBot('helper', '自助 Bot');
 spark.onMessage(function (payload) { spark.reply(payload, 'pong'); });
 "#;
-    kernel.plugin_start_background("echo-plugin", script, &test_permissions()).unwrap();
+    kernel
+        .plugin_start_background("echo-plugin", script, &test_permissions())
+        .unwrap();
 
     wait_until(
         || {
@@ -218,7 +243,10 @@ spark.onMessage(function (payload) { spark.reply(payload, 'pong'); });
         5_000,
         "bot 联系人经 ensureBot 能力注册",
     );
-    let conv_id = kernel.message_ensure_direct(PERSONAL, ECHO_BOT, "自助 Bot").unwrap().id;
+    let conv_id = kernel
+        .message_ensure_direct(PERSONAL, ECHO_BOT, "自助 Bot")
+        .unwrap()
+        .id;
     send_text(&mut kernel, &conv_id, "ping");
     wait_until(
         || bot_replies(&kernel, &conv_id) == vec!["pong".to_string()],
@@ -241,7 +269,9 @@ if (result.items.length !== 1) throw new Error('docs.query mismatch');
 spark.ensureBot('docs-bot', 'Docs Bot');
 spark.onMessage(function () {});
 "#;
-    kernel.plugin_start_background("echo-plugin", script, &test_permissions()).unwrap();
+    kernel
+        .plugin_start_background("echo-plugin", script, &test_permissions())
+        .unwrap();
     // 脚本加载即执行 docs 写入（JS 线程异步，轮询等待）
     wait_until(
         || {
@@ -286,7 +316,9 @@ var report = [
 spark.ensureBot('d-bot', 'D Bot');
 spark.onMessage(function (payload) { spark.reply(payload, report); });
 "#;
-    kernel.plugin_start_background("echo-plugin", script, &test_permissions()).unwrap();
+    kernel
+        .plugin_start_background("echo-plugin", script, &test_permissions())
+        .unwrap();
     let conv_id = setup_bot_conv_named(&mut kernel, "bot:echo-plugin:d-bot", "D Bot");
     send_text(&mut kernel, &conv_id, "go");
     wait_until(
@@ -380,7 +412,10 @@ spark.onMessage(function (payload) {
         "未授权 docs.put 被拒",
     );
     assert!(
-        kernel.doc_get("echo-plugin", "notes", "n1").unwrap().is_none(),
+        kernel
+            .doc_get("echo-plugin", "notes", "n1")
+            .unwrap()
+            .is_none(),
         "被拒的写入不得落库"
     );
 }
@@ -394,20 +429,30 @@ spark.onQuery('bot:query', function (payload) {
     return { exists: payload.contactId === 'bot:echo-plugin:helper' };
 });
 "#;
-    kernel.plugin_start_background("echo-plugin", script, &test_permissions()).unwrap();
+    kernel
+        .plugin_start_background("echo-plugin", script, &test_permissions())
+        .unwrap();
 
     // JS 线程异步加载脚本，先等对 handler 注册完成（首次查询可能赶在加载前）
     wait_until(
         || {
             kernel
-                .plugin_host_query("echo-plugin", "bot:query", serde_json::json!({"contactId": "bot:echo-plugin:helper"}))
+                .plugin_host_query(
+                    "echo-plugin",
+                    "bot:query",
+                    serde_json::json!({"contactId": "bot:echo-plugin:helper"}),
+                )
                 .is_some_and(|reply| reply["exists"] == true)
         },
         5_000,
         "宿主查询回流 exists=true",
     );
     let negative = kernel
-        .plugin_host_query("echo-plugin", "bot:query", serde_json::json!({"contactId": "bot:echo-plugin:ghost"}))
+        .plugin_host_query(
+            "echo-plugin",
+            "bot:query",
+            serde_json::json!({"contactId": "bot:echo-plugin:ghost"}),
+        )
         .unwrap();
     assert_eq!(negative["exists"], false);
     // 未运行的插件：立即 None（不等超时）
@@ -429,7 +474,9 @@ spark.onQuery('bot:query', function (payload) {
     return { ok: true };
 });
 "#;
-    kernel.plugin_start_background("echo-plugin", script, &test_permissions()).unwrap();
+    kernel
+        .plugin_start_background("echo-plugin", script, &test_permissions())
+        .unwrap();
 
     // JS 线程异步加载脚本，先等对 handler 注册完成（首次查询可能赶在加载前）
     wait_until(
@@ -442,7 +489,11 @@ spark.onQuery('bot:query', function (payload) {
         "查询处理器注册就绪",
     );
     let reply = kernel
-        .plugin_host_query("echo-plugin", "bot:query", serde_json::json!({ "boom": true }))
+        .plugin_host_query(
+            "echo-plugin",
+            "bot:query",
+            serde_json::json!({ "boom": true }),
+        )
         .expect("同步抛错应回流错误应答，而非超时无应答");
     assert!(
         reply["error"]
@@ -468,7 +519,9 @@ fn host_query_wait_does_not_hold_kernel_state() {
     let script = r#"
 spark.onQuery('bot:query', function () { return new Promise(function () {}); });
 "#;
-    kernel.plugin_start_background("echo-plugin", script, &test_permissions()).unwrap();
+    kernel
+        .plugin_start_background("echo-plugin", script, &test_permissions())
+        .unwrap();
     let kernel = std::sync::Arc::new(std::sync::Mutex::new(kernel));
 
     let waiter_kernel = kernel.clone();
@@ -483,7 +536,10 @@ spark.onQuery('bot:query', function () { return new Promise(function () {}); });
     std::thread::sleep(std::time::Duration::from_millis(300));
     let started = std::time::Instant::now();
     assert!(
-        kernel.lock().unwrap().plugin_background_running("echo-plugin"),
+        kernel
+            .lock()
+            .unwrap()
+            .plugin_background_running("echo-plugin"),
         "等待中的宿主查询不得挡住其他内核操作"
     );
     assert!(
@@ -517,7 +573,9 @@ spark.onMessage(function (payload) {{
 "#,
         args_json = serde_json::to_string(&args).unwrap()
     );
-    kernel.plugin_start_background("echo-plugin", &script, &test_permissions()).unwrap();
+    kernel
+        .plugin_start_background("echo-plugin", &script, &test_permissions())
+        .unwrap();
     let conv_id = setup_bot_conv_named(&mut kernel, "bot:echo-plugin:exec-bot", "Exec Bot");
     send_text(&mut kernel, &conv_id, "go");
     wait_until(
@@ -526,7 +584,9 @@ spark.onMessage(function (payload) {{
                 .message_list_messages(PERSONAL, &conv_id)
                 .unwrap()
                 .iter()
-                .any(|m| m.sender_id == "bot:echo-plugin:exec-bot" && m.content.contains("async-ok"))
+                .any(|m| {
+                    m.sender_id == "bot:echo-plugin:exec-bot" && m.content.contains("async-ok")
+                })
         },
         10_000,
         "sys.exec 异步结果回流并回复",
@@ -551,7 +611,9 @@ spark.onMessage(function (payload) {{
 }});
 "#
     );
-    kernel.plugin_start_background("echo-plugin", &script, &test_permissions()).unwrap();
+    kernel
+        .plugin_start_background("echo-plugin", &script, &test_permissions())
+        .unwrap();
 
     send_text(&mut kernel, &conv_id, "hi");
     std::thread::sleep(std::time::Duration::from_millis(500));
@@ -614,7 +676,10 @@ spark.onMessage(function (payload) {{ spark.reply(payload, results.join(',')); }
                 .message_list_messages(PERSONAL, &conv_id)
                 .unwrap()
                 .iter()
-                .any(|m| m.sender_id == "bot:echo-plugin:feed-bot" && m.content.contains("err:RateLimited"))
+                .any(|m| {
+                    m.sender_id == "bot:echo-plugin:feed-bot"
+                        && m.content.contains("err:RateLimited")
+                })
         },
         5_000,
         "feed.deliver 全链路结果回传（含限流/前缀校验）",
@@ -628,9 +693,16 @@ spark.onMessage(function (payload) {{ spark.reply(payload, results.join(',')); }
     // 前 10 次 ok（requested/accepted 按入参），第 11 次 err:RateLimited，
     // 前缀非本插件 err:InvalidTopic
     let parts: Vec<&str> = report.split(',').collect();
-    assert_eq!(parts.len(), 12, "10 次 deliver + 1 次超限 + 1 次前缀，报告：{report}");
+    assert_eq!(
+        parts.len(),
+        12,
+        "10 次 deliver + 1 次超限 + 1 次前缀，报告：{report}"
+    );
     for i in 0..10 {
-        assert_eq!(parts[i], "ok:1:1", "第 {i} 次 deliver 应放行并计数 requested=1 accepted=1");
+        assert_eq!(
+            parts[i], "ok:1:1",
+            "第 {i} 次 deliver 应放行并计数 requested=1 accepted=1"
+        );
     }
     assert!(
         parts[10].contains("RateLimited"),
@@ -699,7 +771,9 @@ spark.onMessage(function (payload) {
                 .message_list_messages(PERSONAL, &conv_id)
                 .unwrap()
                 .iter()
-                .any(|m| m.sender_id == "bot:echo-plugin:pull-bot" && m.content == "count=1 feedId=f1")
+                .any(|m| {
+                    m.sender_id == "bot:echo-plugin:pull-bot" && m.content == "count=1 feedId=f1"
+                })
         },
         5_000,
         "spark.feed.pull 补读收件箱并回传",
@@ -725,7 +799,8 @@ fn read_blob_miss_triggers_feed_blob_req_when_source_registered() {
                 peers: vec![PeerRef {
                     peer_id: "peer-1".to_string(),
                     addresses: vec![],
-                ..Default::default()}],
+                    ..Default::default()
+                }],
                 ..Default::default()
             },
         )
@@ -766,7 +841,10 @@ spark.onMessage(function (payload) {{
                 .message_list_messages(PERSONAL, &conv_id)
                 .unwrap()
                 .iter()
-                .any(|m| m.sender_id == "bot:echo-plugin:blob-bot" && m.content.starts_with("withSrc=pending"))
+                .any(|m| {
+                    m.sender_id == "bot:echo-plugin:blob-bot"
+                        && m.content.starts_with("withSrc=pending")
+                })
         },
         5_000,
         "data.readBlob 未命中回 pending",
@@ -775,17 +853,26 @@ spark.onMessage(function (payload) {{
     let storage = kernel.__test_storage().unwrap();
     // 有来源登记：节流键被置（请求路径已进入；p2p 未启动仅跳过实际投递）
     assert!(
-        storage.get(&spark_core::plugindata::blob::blob_req_key(&hash_with_src)).unwrap().is_some(),
+        storage
+            .get(&spark_core::plugindata::blob::blob_req_key(&hash_with_src))
+            .unwrap()
+            .is_some(),
         "有来源登记 → 触发 feed-blob-req 路径（blob:req 节流键置位）"
     );
     // 无来源登记：节流键不置（维持 pdsync 自设备拉取现状）
     assert!(
-        storage.get(&spark_core::plugindata::blob::blob_req_key(&hash_no_src)).unwrap().is_none(),
+        storage
+            .get(&spark_core::plugindata::blob::blob_req_key(&hash_no_src))
+            .unwrap()
+            .is_none(),
         "无来源登记 → 不触发 feed-blob-req（维持 pdsync want）"
     );
     // 两者都置了 want 标记（未命中回 pending 的通用行为）
     assert!(
-        storage.get(&spark_core::plugindata::blob::blob_want_key(&hash_no_src)).unwrap().is_some(),
+        storage
+            .get(&spark_core::plugindata::blob::blob_want_key(&hash_no_src))
+            .unwrap()
+            .is_some(),
         "未命中置 want 标记"
     );
 }
@@ -819,7 +906,13 @@ spark.data.save('spark-moments:posts', 'sig-result', {
     wait_until(
         || {
             kernel
-                .data_get("plugin:spark-moments", "spark-moments:posts", "sig-result", None, None)
+                .data_get(
+                    "plugin:spark-moments",
+                    "spark-moments:posts",
+                    "sig-result",
+                    None,
+                    None,
+                )
                 .unwrap()
                 .is_some()
         },
@@ -827,11 +920,24 @@ spark.data.save('spark-moments:posts', 'sig-result', {
         "identity.sign/verify 结果落库",
     );
     let result = kernel
-        .data_get("plugin:spark-moments", "spark-moments:posts", "sig-result", None, None)
+        .data_get(
+            "plugin:spark-moments",
+            "spark-moments:posts",
+            "sig-result",
+            None,
+            None,
+        )
         .unwrap()
         .unwrap();
-    assert_eq!(result["domain"], "plugin:spark-moments", "sign 域缺省 = 插件根域");
-    assert_eq!(result["valid"], serde_json::json!(true), "原始 payload 验签通过");
+    assert_eq!(
+        result["domain"], "plugin:spark-moments",
+        "sign 域缺省 = 插件根域"
+    );
+    assert_eq!(
+        result["valid"],
+        serde_json::json!(true),
+        "原始 payload 验签通过"
+    );
     assert_eq!(
         result["tampered"],
         serde_json::json!(false),
@@ -864,7 +970,13 @@ try {
     wait_until(
         || {
             kernel
-                .data_get("plugin:spark-moments", "spark-moments:posts", "deny-check", None, None)
+                .data_get(
+                    "plugin:spark-moments",
+                    "spark-moments:posts",
+                    "deny-check",
+                    None,
+                    None,
+                )
                 .unwrap()
                 .is_some()
         },
@@ -872,10 +984,20 @@ try {
         "未授权 sign 拒绝分支落库",
     );
     let result = kernel
-        .data_get("plugin:spark-moments", "spark-moments:posts", "deny-check", None, None)
+        .data_get(
+            "plugin:spark-moments",
+            "spark-moments:posts",
+            "deny-check",
+            None,
+            None,
+        )
         .unwrap()
         .unwrap();
-    assert_eq!(result["denied"], serde_json::json!(true), "未授权 sign 应被拒");
+    assert_eq!(
+        result["denied"],
+        serde_json::json!(true),
+        "未授权 sign 应被拒"
+    );
     assert!(
         result["msg"].as_str().unwrap().contains("identity:sign"),
         "拒绝消息应含缺失权限：{}",
@@ -908,7 +1030,13 @@ spark.onMessage(function (payload) {
     // 超时取 20s：后台插件线程在并发全量运行时受调度争抢，需给足窗口；
     // 断言仍要求 3 条全部写入（不弱化）。
     wait_until(
-        || kernel.message_app_list(PERSONAL, "spark-moments").unwrap().len() == 3,
+        || {
+            kernel
+                .message_app_list(PERSONAL, "spark-moments")
+                .unwrap()
+                .len()
+                == 3
+        },
         20_000,
         "3 条互动通知全部写入 app 会话",
     );
@@ -953,7 +1081,13 @@ spark.onMessage(function (payload) {
     wait_until(
         || {
             kernel
-                .data_get("plugin:spark-moments", "spark-moments:posts", "burst-result", None, None)
+                .data_get(
+                    "plugin:spark-moments",
+                    "spark-moments:posts",
+                    "burst-result",
+                    None,
+                    None,
+                )
                 .unwrap()
                 .is_some()
         },
@@ -961,7 +1095,13 @@ spark.onMessage(function (payload) {
         "burst 限流分支落库",
     );
     let result = kernel
-        .data_get("plugin:spark-moments", "spark-moments:posts", "burst-result", None, None)
+        .data_get(
+            "plugin:spark-moments",
+            "spark-moments:posts",
+            "burst-result",
+            None,
+            None,
+        )
         .unwrap()
         .unwrap();
     assert!(
@@ -969,5 +1109,9 @@ spark.onMessage(function (payload) {
         "超过 10 条/60s 应被限流拒绝：{}",
         result["rejected"]
     );
-    assert_eq!(result["sent"], serde_json::json!(10), "前 10 条成功、第 11 条被拒");
+    assert_eq!(
+        result["sent"],
+        serde_json::json!(10),
+        "前 10 条成功、第 11 条被拒"
+    );
 }

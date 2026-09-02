@@ -144,7 +144,9 @@ mod tests {
         let mut s = VersionedStorage::new(inner, shared_node_id("node-b"));
         prefab_org(s.raw_mut());
         // 既有基线：B 已有一笔本地写（pmeta {node-b:1}）
-        let base_record = OrganizationService::get_record(s.raw(), "org_01").unwrap().unwrap();
+        let base_record = OrganizationService::get_record(s.raw(), "org_01")
+            .unwrap()
+            .unwrap();
         crate::sync::put_personal(
             s.raw_mut(),
             "node-b",
@@ -159,7 +161,9 @@ mod tests {
         let hook = |st: &mut VersionedStorage<MemoryStorage>| {
             // 模拟入站合入：A 加了成员 C（内容 + pmeta {node-a:7}）——经 raw
             // 句柄写（对端版本不 bump 本机分量）
-            let mut rec = OrganizationService::get_record(st.raw(), "org_01").unwrap().unwrap();
+            let mut rec = OrganizationService::get_record(st.raw(), "org_01")
+                .unwrap()
+                .unwrap();
             rec.members.push(member("root-c", OrganizationRole::Member));
             rec.updated_at = 2000;
             crate::sync::apply_personal_remote_no_dlog(
@@ -197,9 +201,14 @@ mod tests {
         // 三路合并：我的 nickname 变更 + 外部新增成员 C 都在
         let mb = out.members.iter().find(|m| m.root_id == "root-b").unwrap();
         assert_eq!(mb.nickname.as_deref(), Some("B 改名"), "我的变更保留");
-        assert!(out.members.iter().any(|m| m.root_id == "root-c"), "外部新增成员 C 合并进来（不丢）");
+        assert!(
+            out.members.iter().any(|m| m.root_id == "root-c"),
+            "外部新增成员 C 合并进来（不丢）"
+        );
         // vv 支配双输入：{node-a:7}（外部）+ node-b 按最新 pmeta bump（1→2）
-        let meta = crate::sync::get_personal_meta(s.raw(), "org:meta:org_01").unwrap().unwrap();
+        let meta = crate::sync::get_personal_meta(s.raw(), "org:meta:org_01")
+            .unwrap()
+            .unwrap();
         assert_eq!(meta.vv.get("node-a"), Some(&7), "外部分量并入");
         assert_eq!(meta.vv.get("node-b"), Some(&2), "本机分量按最新 pmeta bump");
     }
@@ -211,19 +220,16 @@ mod tests {
         let mut s = VersionedStorage::new(inner, shared_node_id("node-b"));
         prefab_org(s.raw_mut());
         let lock: OrgMetaWriteLock = Arc::new(Mutex::new(()));
-        let out = OrganizationService::update_record_atomic(
-            &mut s,
-            &lock,
-            "org_01",
-            |_st, rec| {
-                rec.name = "改名".to_string();
-                rec.updated_at = 1600;
-                Ok(true)
-            },
-        )
+        let out = OrganizationService::update_record_atomic(&mut s, &lock, "org_01", |_st, rec| {
+            rec.name = "改名".to_string();
+            rec.updated_at = 1600;
+            Ok(true)
+        })
         .unwrap();
         assert_eq!(out.name, "改名");
-        let meta = crate::sync::get_personal_meta(s.raw(), "org:meta:org_01").unwrap().unwrap();
+        let meta = crate::sync::get_personal_meta(s.raw(), "org:meta:org_01")
+            .unwrap()
+            .unwrap();
         assert_eq!(meta.vv.get("node-b"), Some(&1));
     }
 
@@ -234,11 +240,16 @@ mod tests {
         let mut s = VersionedStorage::new(inner, shared_node_id("node-b"));
         prefab_org(s.raw_mut());
         let lock: OrgMetaWriteLock = Arc::new(Mutex::new(()));
-        let out = OrganizationService::update_record_atomic(&mut s, &lock, "org_01", |_st, _rec| Ok(false))
+        let out =
+            OrganizationService::update_record_atomic(&mut s, &lock, "org_01", |_st, _rec| {
+                Ok(false)
+            })
             .unwrap();
         assert_eq!(out.name, "t");
         assert!(
-            crate::sync::get_personal_meta(s.raw(), "org:meta:org_01").unwrap().is_none(),
+            crate::sync::get_personal_meta(s.raw(), "org:meta:org_01")
+                .unwrap()
+                .is_none(),
             "无写 → 无 pmeta"
         );
     }

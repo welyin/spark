@@ -21,14 +21,14 @@
 use serde_json::Value;
 use std::sync::Arc;
 
+use super::Result;
 use super::dm_envelope::{self, KIND_FEED};
 use super::feed::{FEED_RECIPIENTS_MAX, inbox_pull, plugin_id_of_topic, validate_feed_body};
 use super::feed_ops::{FeedDeliverResult, FeedPullResult};
-use super::Result;
 use crate::contact::{ContactService, DmChannel};
 use crate::message::PeerRef;
-use crate::p2p::node::system_now_ms;
 use crate::p2p::PeerNodeInfo;
+use crate::p2p::node::system_now_ms;
 use crate::plugin::PluginHostShared;
 use crate::storage::StorageBackend;
 
@@ -36,7 +36,10 @@ use crate::storage::StorageBackend;
 /// feed 通道（`DmChannel::Feed`：拉黑 + 仅聊天 + 非朋友）过滤。返回
 /// [`crate::contact::DmRecipientFilter`]（accepted 为放行名单，skipped 为
 /// 静默跳过名单）。存储读取失败按空过滤（不阻断投递，错误由下游暴露）。
-pub(crate) fn feed_recipient_filter<S: StorageBackend>(storage: &S, recipients: &[String]) -> crate::contact::DmRecipientFilter {
+pub(crate) fn feed_recipient_filter<S: StorageBackend>(
+    storage: &S,
+    recipients: &[String],
+) -> crate::contact::DmRecipientFilter {
     let mut seen = std::collections::HashSet::new();
     let unique: Vec<String> = recipients
         .iter()
@@ -124,7 +127,9 @@ fn build_feed_envelope_shared(
         &node_id,
         ts,
     )
-    .map_err(|e| crate::plugin::PluginError::InvalidInput(format!("feed e2e encrypt failed: {e}")))?;
+    .map_err(|e| {
+        crate::plugin::PluginError::InvalidInput(format!("feed e2e encrypt failed: {e}"))
+    })?;
     Ok(dm_envelope::build_envelope_with_eph(
         KIND_FEED,
         from,
@@ -232,8 +237,15 @@ pub(crate) fn feed_deliver_shared(
         if let Some(peer) = resolve_feed_recipient_peer_shared(&storage, root_id)
             .map_err(|e| crate::plugin::PluginError::InvalidInput(e.to_string()))?
         {
-            match build_feed_envelope_shared(host, &my_root_id, root_id, topic, feed_id, payload, reply_to)
-            {
+            match build_feed_envelope_shared(
+                host,
+                &my_root_id,
+                root_id,
+                topic,
+                feed_id,
+                payload,
+                reply_to,
+            ) {
                 Ok(envelope) => {
                     deliveries.push((peer, envelope, root_id.clone(), feed_id.to_string()));
                     accepted += 1;
@@ -244,9 +256,23 @@ pub(crate) fn feed_deliver_shared(
             }
         }
     }
-    let p2p_node = host.p2p_node.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    let host_storage = host.storage.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    spawn_feed_deliveries_impl(p2p_node, host_storage, host.runtime.clone(), deliveries, &node_id);
+    let p2p_node = host
+        .p2p_node
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    let host_storage = host
+        .storage
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    spawn_feed_deliveries_impl(
+        p2p_node,
+        host_storage,
+        host.runtime.clone(),
+        deliveries,
+        &node_id,
+    );
     Ok(FeedDeliverResult {
         requested: recipients.len(),
         accepted,

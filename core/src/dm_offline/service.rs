@@ -24,8 +24,8 @@ use crate::storage::{ScanOptions, StorageBackend};
 use crate::sync::put_personal;
 
 use super::types::{
-    GLOBAL_PENDING_CAP, ORG_PENDING_PREFIX, PENDING_PREFIX, PER_RECIPIENT_PENDING_CAP,
-    PENDING_TTL_MS, PendingRecord,
+    GLOBAL_PENDING_CAP, ORG_PENDING_PREFIX, PENDING_PREFIX, PENDING_TTL_MS,
+    PER_RECIPIENT_PENDING_CAP, PendingRecord,
 };
 
 /// 空间：个人（pdsync 自设备扩散）或某个组织（org-sync 待接入）。
@@ -59,7 +59,9 @@ pub type Result<T> = std::result::Result<T, DmOfflineError>;
 pub fn pending_key(space: PendingSpace, to_root_id: &str, message_id: &str) -> String {
     match space {
         PendingSpace::Personal => format!("{PENDING_PREFIX}{to_root_id}:{message_id}"),
-        PendingSpace::Org(org_id) => format!("{ORG_PENDING_PREFIX}{org_id}:{to_root_id}:{message_id}"),
+        PendingSpace::Org(org_id) => {
+            format!("{ORG_PENDING_PREFIX}{org_id}:{to_root_id}:{message_id}")
+        }
     }
 }
 
@@ -192,7 +194,8 @@ fn enforce_caps<S: StorageBackend>(storage: &mut S, space: PendingSpace) -> Resu
     }
 
     // 2) 单 recipient cap（统计各 recipient 未删条数，最旧优先删）
-    let mut per_recip: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    let mut per_recip: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
     for (key, r) in &items {
         if !to_delete.contains(key) {
             *per_recip.entry(r.to.clone()).or_insert(0) += 1;

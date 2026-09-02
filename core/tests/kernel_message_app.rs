@@ -59,18 +59,35 @@ fn build_app_message_validation() {
     // summary 超 200 字符 → SummaryTooLong
     let long = "长".repeat(201);
     assert!(matches!(
-        AppMessageService::build_app_message("spark-example", payload(&long), None, "m1".into(), NOW),
+        AppMessageService::build_app_message(
+            "spark-example",
+            payload(&long),
+            None,
+            "m1".into(),
+            NOW
+        ),
         Err(MessageError::SummaryTooLong)
     ));
     // 恰好 200 字符放行
     let exact = "好".repeat(200);
     assert!(
-        AppMessageService::build_app_message("spark-example", payload(&exact), None, "m1".into(), NOW)
-            .is_ok()
+        AppMessageService::build_app_message(
+            "spark-example",
+            payload(&exact),
+            None,
+            "m1".into(),
+            NOW
+        )
+        .is_ok()
     );
 
     // pluginId 字符集：大写 / 含冒号 / 空串 / 超长 → InvalidPluginId
-    for bad in ["SparkExample", "plugin:spark-example", "", "a".repeat(65).as_str()] {
+    for bad in [
+        "SparkExample",
+        "plugin:spark-example",
+        "",
+        "a".repeat(65).as_str(),
+    ] {
         assert!(matches!(
             AppMessageService::build_app_message(bad, payload("s"), None, "m1".into(), NOW),
             Err(MessageError::InvalidPluginId)
@@ -97,12 +114,19 @@ fn service_append_list_mark_read_delete() {
     ));
 
     // ensure 幂等 + id 约定 + kind=app
-    let conv = AppMessageService::ensure_app_conversation(&mut storage, PERSONAL, "spark-example", NOW).unwrap();
+    let conv =
+        AppMessageService::ensure_app_conversation(&mut storage, PERSONAL, "spark-example", NOW)
+            .unwrap();
     assert_eq!(conv.id, app_conversation_id("spark-example"));
     assert_eq!(conv.id, "app:spark-example");
     assert_eq!(conv.kind, ConversationKind::App);
-    let again =
-        AppMessageService::ensure_app_conversation(&mut storage, PERSONAL, "spark-example", NOW + 1).unwrap();
+    let again = AppMessageService::ensure_app_conversation(
+        &mut storage,
+        PERSONAL,
+        "spark-example",
+        NOW + 1,
+    )
+    .unwrap();
     assert_eq!(again.id, conv.id);
 
     // 写入两条：未读 +2，updatedAt 前进；乱序写入不回退 updatedAt
@@ -123,7 +147,8 @@ fn service_append_list_mark_read_delete() {
     assert_eq!(conv.updated_at, NOW + 1000);
 
     // 列表：时间升序
-    let messages = AppMessageService::list_app_messages(&storage, PERSONAL, "spark-example").unwrap();
+    let messages =
+        AppMessageService::list_app_messages(&storage, PERSONAL, "spark-example").unwrap();
     assert_eq!(messages.len(), 2);
     assert_eq!(messages[0].id, "m1");
     assert_eq!(messages[1].summary, "第二条");
@@ -202,7 +227,12 @@ fn app_send_list_mark_read_delete_flow() {
         serde_json::from_value(json!({ "viewId": "notice-card", "data": { "level": "info" } }))
             .unwrap();
     let view = kernel
-        .message_app_send(PERSONAL, "spark-example", payload("欢迎"), Some(card.clone()))
+        .message_app_send(
+            PERSONAL,
+            "spark-example",
+            payload("欢迎"),
+            Some(card.clone()),
+        )
         .unwrap();
     assert_eq!(view.plugin_id, "spark-example");
     assert_eq!(view.summary, "欢迎");
@@ -224,7 +254,9 @@ fn app_send_list_mark_read_delete_flow() {
     let messages = kernel.message_app_list(PERSONAL, "spark-example").unwrap();
     assert_eq!(messages.len(), 2);
     assert!(messages.iter().all(|m| m.status == "local"));
-    kernel.message_app_mark_read(PERSONAL, "spark-example").unwrap();
+    kernel
+        .message_app_mark_read(PERSONAL, "spark-example")
+        .unwrap();
     assert_eq!(
         kernel.message_list_conversations(PERSONAL).unwrap()[0].unread_count,
         0
@@ -243,14 +275,30 @@ fn app_send_list_mark_read_delete_flow() {
             .message_app_send(PERSONAL, "spark-example", json!({ "kind": "notice" }), None)
             .is_err()
     );
-    assert_eq!(kernel.message_app_list(PERSONAL, "spark-example").unwrap().len(), 2);
+    assert_eq!(
+        kernel
+            .message_app_list(PERSONAL, "spark-example")
+            .unwrap()
+            .len(),
+        2
+    );
 
     // 删除会话
     kernel
         .message_app_delete_conversation(PERSONAL, "spark-example")
         .unwrap();
-    assert!(kernel.message_app_list(PERSONAL, "spark-example").unwrap().is_empty());
-    assert!(kernel.message_list_conversations(PERSONAL).unwrap().is_empty());
+    assert!(
+        kernel
+            .message_app_list(PERSONAL, "spark-example")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        kernel
+            .message_list_conversations(PERSONAL)
+            .unwrap()
+            .is_empty()
+    );
     kernel.shutdown().unwrap();
 }
 
@@ -296,7 +344,12 @@ fn app_send_rate_limited_and_counted() {
     );
     for i in 0..APP_MSG_RATE_LIMIT {
         kernel
-            .message_app_send(PERSONAL, "spark-example", payload(&format!("第{i}条")), None)
+            .message_app_send(
+                PERSONAL,
+                "spark-example",
+                payload(&format!("第{i}条")),
+                None,
+            )
             .unwrap();
     }
     // 第 11 条：rate-limited，不落库、未读不变、拒绝计数 +1
@@ -307,9 +360,15 @@ fn app_send_rate_limited_and_counted() {
         err.to_string().contains("rate-limited"),
         "限流错误应含 reason：{err}"
     );
-    assert_eq!(kernel.message_app_rate_rejected(PERSONAL, "spark-example"), 1);
     assert_eq!(
-        kernel.message_app_list(PERSONAL, "spark-example").unwrap().len() as u32,
+        kernel.message_app_rate_rejected(PERSONAL, "spark-example"),
+        1
+    );
+    assert_eq!(
+        kernel
+            .message_app_list(PERSONAL, "spark-example")
+            .unwrap()
+            .len() as u32,
         APP_MSG_RATE_LIMIT
     );
     assert_eq!(

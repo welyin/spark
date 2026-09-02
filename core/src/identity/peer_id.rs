@@ -12,8 +12,7 @@
 //!   多余/缺失字段都会使解码失败，故逐字节等值判定）。
 
 /// base58btc 字符集（Bitcoin 序）。
-const B58_ALPHABET: &[u8; 58] =
-    b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+const B58_ALPHABET: &[u8; 58] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
 /// protobuf Ed25519 公钥头：`0x08 0x01`（field1 varint = KeyType::Ed25519）
 /// + `0x12 0x20`（field2 length-delimited，32 字节）。

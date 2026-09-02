@@ -14,7 +14,9 @@ use super::super::snapshot::{merge_organization_sync_snapshot, normalize_incomin
 use super::super::tx::{
     OrganizationTransactionRecord, OrganizationTransactionType, append_organization_transaction,
 };
-use super::super::types::{OrganizationDeviceSet, OrganizationRecord, normalize_optional_node_info};
+use super::super::types::{
+    OrganizationDeviceSet, OrganizationRecord, normalize_optional_node_info,
+};
 use super::OrganizationService;
 
 impl OrganizationService {

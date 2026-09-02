@@ -10,10 +10,7 @@ fn main() {
     println!("cargo:rustc-env=SPARK_BUILD_UNIX={secs}");
 
     // 人类可读 UTC（不依赖 chrono，手算 Y-M-D H:M:S）
-    println!(
-        "cargo:rustc-env=SPARK_BUILD_TIME={}",
-        format_unix_utc(secs)
-    );
+    println!("cargo:rustc-env=SPARK_BUILD_TIME={}", format_unix_utc(secs));
 
     // 任何源码变化都应触发重跑 build.rs（默认即如此：无 cargo:rerun-if 时每次全跑）。
     // 显式监听核心目录，保证增量编译也刷新时间戳。

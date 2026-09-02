@@ -14,9 +14,7 @@ pub fn create(kernel: &mut Kernel, params: &Params) -> Result<Value, String> {
         name: params.need_str("name")?.to_string(),
         description: params.opt_str("description").map(ToString::to_string),
         avatar: params.opt_str("avatar").map(ToString::to_string),
-        base_plugin_domain: params
-            .opt_str("basePluginDomain")
-            .map(ToString::to_string),
+        base_plugin_domain: params.opt_str("basePluginDomain").map(ToString::to_string),
     }))
 }
 
@@ -104,11 +102,7 @@ pub fn set_member_role(kernel: &mut Kernel, params: &Params) -> Result<Value, St
         "member" => spark_core::org::OrganizationRole::Member,
         other => return Err(format!("unknown role: {other}")),
     };
-    to_json(kernel.org_set_member_role(
-        params.need_str("orgId")?,
-        params.need_str("rootId")?,
-        role,
-    ))
+    to_json(kernel.org_set_member_role(params.need_str("orgId")?, params.need_str("rootId")?, role))
 }
 
 /// `org-update-my-identity`：改自己的组织内身份（avatar 三态："" 清除）。

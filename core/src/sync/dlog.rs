@@ -38,8 +38,7 @@ const DLOG_SEEN_PREFIX: &str = "dlog:seen:";
 const DLOG_MIGRATED_KEY: &str = "dlog:migrated";
 
 fn read_u64(raw: Option<String>) -> u64 {
-    raw.and_then(|v| v.trim().parse::<u64>().ok())
-        .unwrap_or(0)
+    raw.and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(0)
 }
 
 fn entry_key(seq: u64) -> String {
@@ -73,10 +72,7 @@ pub(crate) fn append_ops<S: StorageBackend>(
 }
 
 /// 读取 `seq > after` 的日志条目（升序）。
-pub fn entries_after<S: StorageBackend>(
-    storage: &S,
-    after: u64,
-) -> SyncResult<Vec<(u64, String)>> {
+pub fn entries_after<S: StorageBackend>(storage: &S, after: u64) -> SyncResult<Vec<(u64, String)>> {
     let mut out = Vec::new();
     for (key, value) in storage.scan(&ScanOptions::prefix(DLOG_ENTRY_PREFIX))? {
         let Some(seq_str) = key.strip_prefix(DLOG_ENTRY_PREFIX) else {
@@ -99,11 +95,7 @@ pub fn get_seen<S: StorageBackend>(storage: &S, peer_id: &str) -> SyncResult<u64
 }
 
 /// 推进已收序号（只增不减）。
-pub fn set_seen<S: StorageBackend>(
-    storage: &mut S,
-    peer_id: &str,
-    seq: u64,
-) -> SyncResult<()> {
+pub fn set_seen<S: StorageBackend>(storage: &mut S, peer_id: &str, seq: u64) -> SyncResult<()> {
     let current = get_seen(storage, peer_id)?;
     if seq > current {
         storage.put(&seen_key(peer_id), &seq.to_string())?;
@@ -191,7 +183,9 @@ pub fn backfill_from_tombstones<S: StorageBackend>(storage: &mut S) -> SyncResul
     let mut seq = read_u64(storage.get(DLOG_SEQ_KEY)?);
     let mut count = 0usize;
     let mut ops = Vec::new();
-    for (meta_key, raw) in storage.scan(&ScanOptions::prefix(crate::sync::personal::PMETA_PREFIX))? {
+    for (meta_key, raw) in
+        storage.scan(&ScanOptions::prefix(crate::sync::personal::PMETA_PREFIX))?
+    {
         let Ok(meta) = serde_json::from_str::<crate::sync::meta::DocMeta>(&raw) else {
             continue;
         };
@@ -275,7 +269,11 @@ mod tests {
         assert_eq!(get_seen(&s, "peer-b").unwrap(), 5, "seen 只增不减");
 
         assert_eq!(set_watermark(&mut s, "peer-b", 4).unwrap(), 4);
-        assert_eq!(set_watermark(&mut s, "peer-b", 2).unwrap(), 4, "水位只增不减");
+        assert_eq!(
+            set_watermark(&mut s, "peer-b", 2).unwrap(),
+            4,
+            "水位只增不减"
+        );
         assert_eq!(get_watermark(&s, "peer-b").unwrap(), 4);
     }
 

@@ -59,8 +59,7 @@ fn empty_db_exports_empty_entries() {
 #[test]
 fn write_dump_to_file_and_stats() {
     let s = fixture();
-    let dir =
-        std::env::temp_dir().join(format!("spark-core-export-test-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("spark-core-export-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("dump.json");
 

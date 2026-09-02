@@ -180,7 +180,11 @@ fn event_json(event: &P2pEvent) -> Option<Value> {
         P2pEvent::PluginAnnounceReceived { id, publisher } => {
             json!({"event": "plugin-announce-received", "id": id, "publisher": publisher})
         }
-        P2pEvent::PluginAnnounceVerified { id, verified, error } => {
+        P2pEvent::PluginAnnounceVerified {
+            id,
+            verified,
+            error,
+        } => {
             json!({"event": "plugin-announce-verified", "id": id, "verified": verified, "error": error})
         }
         P2pEvent::DeviceNoticeReceived(data) => {

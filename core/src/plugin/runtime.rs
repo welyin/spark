@@ -13,9 +13,9 @@
 //! `spark.onMessage(fn)` / `spark.reply(payload, text)` /
 //! `spark.ensureBot(botId, displayName)` / `spark.log(msg)`。
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
-use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rquickjs::{Context, Ctx, Function, Runtime};
@@ -122,8 +122,8 @@ fn run_plugin(
     rx: &Receiver<PluginEvent>,
     stop: &Arc<AtomicBool>,
 ) -> Result<()> {
-    let runtime = Runtime::new()
-        .map_err(|e| PluginError::Script(format!("create quickjs runtime: {e}")))?;
+    let runtime =
+        Runtime::new().map_err(|e| PluginError::Script(format!("create quickjs runtime: {e}")))?;
     runtime.set_memory_limit(JS_MEMORY_LIMIT_BYTES);
     runtime.set_max_stack_size(JS_STACK_LIMIT_BYTES);
     // 中断源二合一：外部停机请求，或单次回调超时（deadline 为 epoch millis）
@@ -131,9 +131,7 @@ fn run_plugin(
     runtime.set_interrupt_handler(Some(Box::new({
         let stop = Arc::clone(stop);
         let deadline = Arc::clone(&deadline);
-        move || {
-            stop.load(Ordering::Relaxed) || now_epoch_ms() >= deadline.load(Ordering::Relaxed)
-        }
+        move || stop.load(Ordering::Relaxed) || now_epoch_ms() >= deadline.load(Ordering::Relaxed)
     })));
     let context = Context::full(&runtime)
         .map_err(|e| PluginError::Script(format!("create quickjs context: {e}")))?;
@@ -342,8 +340,10 @@ spark.data.onWriteFilter("data-filter-test:ledger", function (member, key, value
         .unwrap();
         registry.register("data-filter-test", handle);
         wait_until(
-            || host.has_filter("data-filter-test:ledger", "read")
-                && host.has_filter("data-filter-test:ledger", "write"),
+            || {
+                host.has_filter("data-filter-test:ledger", "read")
+                    && host.has_filter("data-filter-test:ledger", "write")
+            },
             "onReadFilter/onWriteFilter 注册到 filter_caps",
         );
         // 插件未注册该集合的过滤器 → has_filter false（fail-closed 判定来源）

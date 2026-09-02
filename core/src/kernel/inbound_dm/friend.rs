@@ -14,14 +14,17 @@ use crate::contact::{
     ThreadFrom,
 };
 use crate::message::{MAX_TEXT_BYTES, PeerRef};
-use crate::p2p::{P2pEvent, PeerNodeInfo};
 use crate::p2p::constants::{DEVICE_NOTICE_REPLAY_WINDOW_MS, P2P_DEVICE_NOTICE_SELF_UNTIL};
+use crate::p2p::{P2pEvent, PeerNodeInfo};
 use crate::storage::StorageBackend;
 
 /// 解析 body.nodeInfo（`{peerId, addresses}`）为 PeerRef。
 fn parse_node_info(body: &Value) -> Option<PeerRef> {
     let info = body.get("nodeInfo")?;
-    let peer_id = info.get("peerId").and_then(Value::as_str).unwrap_or_default();
+    let peer_id = info
+        .get("peerId")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     let addresses: Vec<String> = info
         .get("addresses")
         .and_then(Value::as_array)
@@ -38,7 +41,8 @@ fn parse_node_info(body: &Value) -> Option<PeerRef> {
     Some(PeerRef {
         peer_id: peer_id.to_string(),
         addresses,
-    ..Default::default()})
+        ..Default::default()
+    })
 }
 
 /// friend-request 的 from==我 分支（同身份另一台设备的配对请求）：自动
@@ -433,8 +437,14 @@ pub(super) fn handle_friend_reply<S: StorageBackend>(
             {
                 return done(ok_response(), Vec::new());
             }
-            let record = ContactService::append_outgoing_thread_pdsync(storage, request_id, msg.clone(), ctx.now_ms, ctx.node_id)?
-                .expect("outgoing request just fetched");
+            let record = ContactService::append_outgoing_thread_pdsync(
+                storage,
+                request_id,
+                msg.clone(),
+                ctx.now_ms,
+                ctx.node_id,
+            )?
+            .expect("outgoing request just fetched");
             let event = P2pEvent::FriendRequestSent(json!({
                 "request": serde_json::to_value(&record)?,
             }));
@@ -456,8 +466,14 @@ pub(super) fn handle_friend_reply<S: StorageBackend>(
         {
             return done(ok_response(), Vec::new());
         }
-        let record = ContactService::append_incoming_thread_pdsync(storage, &inbox_id, msg, ctx.now_ms, ctx.node_id)?
-            .expect("incoming request just fetched");
+        let record = ContactService::append_incoming_thread_pdsync(
+            storage,
+            &inbox_id,
+            msg,
+            ctx.now_ms,
+            ctx.node_id,
+        )?
+        .expect("incoming request just fetched");
         let event = P2pEvent::FriendRequestReceived(json!({
             "request": serde_json::to_value(&record)?,
         }));

@@ -48,7 +48,11 @@ fn make_announce_json(id: &str, timestamp: i64) -> String {
 /// 带难度/资历覆盖启动节点。
 async fn start_announce_node(
     relay_tenure_ms: i64,
-) -> (P2pNode, std::sync::Arc<std::sync::Mutex<HostState>>, SharedStorage) {
+) -> (
+    P2pNode,
+    std::sync::Arc<std::sync::Mutex<HostState>>,
+    SharedStorage,
+) {
     let storage = SharedStorage::new();
     let (host, state) = TestHost::new(None, storage.clone());
     let mut config = test_config(NOW);
@@ -65,7 +69,11 @@ async fn start_announce_node(
 
 fn index_has(storage: &SharedStorage, id: &str) -> bool {
     let mut s = storage.clone();
-    PluginAnnounceStore::new(&mut s).get(id).ok().flatten().is_some()
+    PluginAnnounceStore::new(&mut s)
+        .get(id)
+        .ok()
+        .flatten()
+        .is_some()
 }
 
 /// 双节点：声明广播 → 对端校验通过入索引并发 PluginAnnounceReceived 事件。
@@ -96,7 +104,10 @@ async fn announce_broadcast_two_nodes() {
         if index_has(&s_b, "github.com/acme/todo") {
             break;
         }
-        assert!(tokio::time::Instant::now() < deadline, "announce not delivered");
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "announce not delivered"
+        );
         nonce_offset += 1;
     }
 
@@ -239,9 +250,12 @@ async fn announce_invalid_rejected() {
     }
 
     // bits 低于节点下限（结构拒）
-    let (mut bad, payload) =
-        build_signed_announce(&announce_input("github.com/acme/bad"), &test_signing_key(), NOW)
-            .unwrap();
+    let (mut bad, payload) = build_signed_announce(
+        &announce_input("github.com/acme/bad"),
+        &test_signing_key(),
+        NOW,
+    )
+    .unwrap();
     bad.pow = AnnouncePow {
         bits: 1,
         nonce: mine_announce_nonce(&payload, 1),

@@ -237,13 +237,37 @@ mod tests {
         let mut b_member = member("root-b", OrganizationRole::Member, 1000);
         b_member.access_key = Some(access_key(2));
         // A 侧记录：只有自己发布了；B 侧记录：只有 B 发布了（并发）
-        let rec_a = record(vec![a_member.clone(), member("root-b", OrganizationRole::Member, 1000)], 2000);
-        let rec_b = record(vec![member("root-a", OrganizationRole::Admin, 1000), b_member.clone()], 2001);
+        let rec_a = record(
+            vec![
+                a_member.clone(),
+                member("root-b", OrganizationRole::Member, 1000),
+            ],
+            2000,
+        );
+        let rec_b = record(
+            vec![
+                member("root-a", OrganizationRole::Admin, 1000),
+                b_member.clone(),
+            ],
+            2001,
+        );
 
         let merged = merge_org_meta_record(&rec_a, &rec_b);
-        assert_eq!(merged.members.len(), 2, "members 并集去重（共有成员不重复）");
-        let ma = merged.members.iter().find(|m| m.root_id == "root-a").unwrap();
-        let mb = merged.members.iter().find(|m| m.root_id == "root-b").unwrap();
+        assert_eq!(
+            merged.members.len(),
+            2,
+            "members 并集去重（共有成员不重复）"
+        );
+        let ma = merged
+            .members
+            .iter()
+            .find(|m| m.root_id == "root-a")
+            .unwrap();
+        let mb = merged
+            .members
+            .iter()
+            .find(|m| m.root_id == "root-b")
+            .unwrap();
         assert_eq!(ma.access_key, Some(access_key(1)), "A 的 accessKey 保留");
         assert_eq!(mb.access_key, Some(access_key(2)), "B 的 accessKey 保留");
         assert_eq!(merged.updated_at, 2001);
@@ -287,15 +311,31 @@ mod tests {
         a.access_key = Some(access_key(1));
         let mut b = member("root-b", OrganizationRole::Member, 1000);
         b.nickname = Some("乙".to_string());
-        let rec_a = record(vec![a, member("root-b", OrganizationRole::Member, 1000)], 2000);
-        let rec_b = record(vec![member("root-a", OrganizationRole::Admin, 1000), b], 2001);
+        let rec_a = record(
+            vec![a, member("root-b", OrganizationRole::Member, 1000)],
+            2000,
+        );
+        let rec_b = record(
+            vec![member("root-a", OrganizationRole::Admin, 1000), b],
+            2001,
+        );
 
         let merged = merge_org_meta_record(&rec_a, &rec_b);
-        assert_eq!(merged.members.len(), 2, "members 并集去重（共有成员不重复）");
+        assert_eq!(
+            merged.members.len(),
+            2,
+            "members 并集去重（共有成员不重复）"
+        );
         let again_a = merge_org_meta_record(&merged, &rec_a);
         let again_b = merge_org_meta_record(&merged, &rec_b);
-        assert_eq!(serde_json::to_string(&merged).unwrap(), serde_json::to_string(&again_a).unwrap());
-        assert_eq!(serde_json::to_string(&merged).unwrap(), serde_json::to_string(&again_b).unwrap());
+        assert_eq!(
+            serde_json::to_string(&merged).unwrap(),
+            serde_json::to_string(&again_a).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_string(&merged).unwrap(),
+            serde_json::to_string(&again_b).unwrap()
+        );
     }
 
     /// 字段组按记录秩整组选取：秩高一侧的管理员字段组与本人字段组整体生效。
@@ -312,37 +352,76 @@ mod tests {
         let rec_b = record(vec![x_b], 2000);
 
         let merged = merge_org_meta_record(&rec_a, &rec_b);
-        let x = merged.members.iter().find(|m| m.root_id == "root-x").unwrap();
+        let x = merged
+            .members
+            .iter()
+            .find(|m| m.root_id == "root-x")
+            .unwrap();
         assert_eq!(x.role, OrganizationRole::Admin, "管理员字段组取秩高侧（A）");
         assert_eq!(x.nickname, None, "本人字段组同取秩高侧（字段组级残余，§5）");
 
         // 反向：B 秩高 → 本人字段组变更生效、role 回退为 B 侧值
         let rec_a2 = record(vec![member("root-x", OrganizationRole::Admin, 1000)], 2000);
-        let rec_b2 = record(vec![{
-            let mut m = member("root-x", OrganizationRole::Member, 1000);
-            m.nickname = Some("X 自称".to_string());
-            m
-        }], 2002);
+        let rec_b2 = record(
+            vec![{
+                let mut m = member("root-x", OrganizationRole::Member, 1000);
+                m.nickname = Some("X 自称".to_string());
+                m
+            }],
+            2002,
+        );
         let merged2 = merge_org_meta_record(&rec_a2, &rec_b2);
-        let x2 = merged2.members.iter().find(|m| m.root_id == "root-x").unwrap();
-        assert_eq!(x2.role, OrganizationRole::Member, "管理员字段组取秩高侧（B）");
-        assert_eq!(x2.nickname.as_deref(), Some("X 自称"), "本人字段组取秩高侧（B）");
+        let x2 = merged2
+            .members
+            .iter()
+            .find(|m| m.root_id == "root-x")
+            .unwrap();
+        assert_eq!(
+            x2.role,
+            OrganizationRole::Member,
+            "管理员字段组取秩高侧（B）"
+        );
+        assert_eq!(
+            x2.nickname.as_deref(),
+            Some("X 自称"),
+            "本人字段组取秩高侧（B）"
+        );
     }
 
     /// 仅一侧存在的成员原样保留；nodeInfo 端点集按 deviceUid 取并集。
     #[test]
     fn member_union_and_endpoint_union() {
         let mut a = member("root-a", OrganizationRole::Admin, 1000);
-        a.node_info = Some(OrganizationDeviceSet::from_single(endpoint("peer-a1", Some("uid-a"))));
+        a.node_info = Some(OrganizationDeviceSet::from_single(endpoint(
+            "peer-a1",
+            Some("uid-a"),
+        )));
         let mut a2 = member("root-a", OrganizationRole::Admin, 1000);
-        a2.node_info = Some(OrganizationDeviceSet::from_single(endpoint("peer-a2", Some("uid-a2"))));
+        a2.node_info = Some(OrganizationDeviceSet::from_single(endpoint(
+            "peer-a2",
+            Some("uid-a2"),
+        )));
         let rec_a = record(vec![a], 2000);
-        let rec_b = record(vec![a2, member("root-c", OrganizationRole::Member, 1000)], 2001);
+        let rec_b = record(
+            vec![a2, member("root-c", OrganizationRole::Member, 1000)],
+            2001,
+        );
 
         let merged = merge_org_meta_record(&rec_a, &rec_b);
-        assert_eq!(merged.members.len(), 2, "并集去重：root-a（双侧共有）+ root-c");
-        assert!(merged.members.iter().any(|m| m.root_id == "root-c"), "仅 B 侧存在的成员保留");
-        let ma = merged.members.iter().find(|m| m.root_id == "root-a").unwrap();
+        assert_eq!(
+            merged.members.len(),
+            2,
+            "并集去重：root-a（双侧共有）+ root-c"
+        );
+        assert!(
+            merged.members.iter().any(|m| m.root_id == "root-c"),
+            "仅 B 侧存在的成员保留"
+        );
+        let ma = merged
+            .members
+            .iter()
+            .find(|m| m.root_id == "root-a")
+            .unwrap();
         let set = ma.node_info.as_ref().unwrap();
         assert_eq!(set.len(), 2, "两端点并集（不同 deviceUid 各保留）");
     }
@@ -368,15 +447,23 @@ mod tests {
     fn extra_union_conflict_high_rank_wins() {
         let mut rec_a = record(vec![member("root-a", OrganizationRole::Admin, 1000)], 2000);
         rec_a.extra.insert("k1".to_string(), serde_json::json!("a"));
-        rec_a.extra.insert("shared".to_string(), serde_json::json!("from-a"));
+        rec_a
+            .extra
+            .insert("shared".to_string(), serde_json::json!("from-a"));
         let mut rec_b = record(vec![member("root-a", OrganizationRole::Admin, 1000)], 2001);
         rec_b.extra.insert("k2".to_string(), serde_json::json!("b"));
-        rec_b.extra.insert("shared".to_string(), serde_json::json!("from-b"));
+        rec_b
+            .extra
+            .insert("shared".to_string(), serde_json::json!("from-b"));
 
         let merged = merge_org_meta_record(&rec_a, &rec_b);
         assert_eq!(merged.extra["k1"], serde_json::json!("a"));
         assert_eq!(merged.extra["k2"], serde_json::json!("b"));
-        assert_eq!(merged.extra["shared"], serde_json::json!("from-b"), "冲突键取秩高侧");
+        assert_eq!(
+            merged.extra["shared"],
+            serde_json::json!("from-b"),
+            "冲突键取秩高侧"
+        );
         let keys: Vec<&String> = merged.extra.keys().collect();
         let mut sorted = keys.clone();
         sorted.sort();

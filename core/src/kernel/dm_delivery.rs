@@ -162,7 +162,13 @@ impl Kernel {
 
     /// 尽力向会话对端投递 read/recall 控制信封（失败静默；投递 spawn 到
     /// kernel runtime，不阻塞命令线程）。
-    pub(crate) fn notify_peer(&self, space: &str, conv: &ConversationRecord, kind: &str, body: Value) {
+    pub(crate) fn notify_peer(
+        &self,
+        space: &str,
+        conv: &ConversationRecord,
+        kind: &str,
+        body: Value,
+    ) {
         let Ok(Some(peer)) = self.resolve_conv_peer(space, conv) else {
             return;
         };

@@ -26,9 +26,24 @@ fn invite_record_put_get_and_list() {
     let peer_a = rid('a');
     let peer_b = rid('b');
 
-    let outgoing = record("inv-1", "org_aaaabbbbccccdddd", &peer_a, OrgInviteDirection::Outgoing);
-    let incoming = record("inv-2", "org_aaaabbbbccccdddd", &peer_b, OrgInviteDirection::Incoming);
-    let other_org = record("inv-3", "org_eeeeffff00001111", &peer_a, OrgInviteDirection::Outgoing);
+    let outgoing = record(
+        "inv-1",
+        "org_aaaabbbbccccdddd",
+        &peer_a,
+        OrgInviteDirection::Outgoing,
+    );
+    let incoming = record(
+        "inv-2",
+        "org_aaaabbbbccccdddd",
+        &peer_b,
+        OrgInviteDirection::Incoming,
+    );
+    let other_org = record(
+        "inv-3",
+        "org_eeeeffff00001111",
+        &peer_a,
+        OrgInviteDirection::Outgoing,
+    );
     for r in [&outgoing, &incoming, &other_org] {
         OrganizationService::put_invite_record(&mut storage, r).unwrap();
     }

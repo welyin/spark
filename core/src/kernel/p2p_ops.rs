@@ -155,9 +155,10 @@ impl Kernel {
         // 不提供（无 enter 直接 panic "no reactor running"）。
         let start_outcome = {
             let _guard = self.runtime.handle().enter();
-            self.runtime
-                .handle()
-                .block_on(tokio::time::timeout(std::time::Duration::from_secs(30), node_fut))
+            self.runtime.handle().block_on(tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                node_fut,
+            ))
         };
         let mut node = match start_outcome {
             Ok(res) => res?,
@@ -269,7 +270,10 @@ impl Kernel {
                     }
                     P2pEvent::PeerConnected { peer_id } => {
                         if peer_id != &my_peer {
-                            links.lock().unwrap_or_else(|e| e.into_inner()).insert(peer_id.clone());
+                            links
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .insert(peer_id.clone());
                         }
                     }
                     P2pEvent::PeerDisconnected { peer_id } => {
@@ -308,8 +312,7 @@ impl Kernel {
         let now = system_now_ms();
         if let Ok(mut storage) = self.require_storage().map(|s| s.clone()) {
             let node_id = self.sync_node_id();
-            let device_pub_key = Some(node.device_pub_key().to_string())
-                .filter(|s| !s.is_empty());
+            let device_pub_key = Some(node.device_pub_key().to_string()).filter(|s| !s.is_empty());
             if let Ok(record) = crate::device::DeviceService::upsert_self(
                 &mut storage,
                 &peer_id,
@@ -376,8 +379,7 @@ impl Kernel {
         let mut by_peer: std::collections::HashMap<String, Vec<String>> =
             std::collections::HashMap::new();
         for d in crate::device::DeviceService::list(storage)?.into_iter() {
-            if local_peer_id.as_deref() != Some(d.peer_id.as_str())
-                && !d.peer_id.trim().is_empty()
+            if local_peer_id.as_deref() != Some(d.peer_id.as_str()) && !d.peer_id.trim().is_empty()
             {
                 by_peer.entry(d.peer_id).or_default();
             }
@@ -388,7 +390,10 @@ impl Kernel {
                 if local_peer_id.as_deref() != Some(p.peer_id.as_str())
                     && !p.peer_id.trim().is_empty()
                 {
-                    by_peer.entry(p.peer_id.clone()).or_default().extend(p.addresses);
+                    by_peer
+                        .entry(p.peer_id.clone())
+                        .or_default()
+                        .extend(p.addresses);
                 }
             }
         }
@@ -543,9 +548,7 @@ impl Kernel {
     /// 有 peerId 的好友加入集合；自设备由 handle_self_friend_request 单独维护。
     fn backfill_priority_peers(&mut self) -> Result<()> {
         let prefix = crate::contact::FRIEND_PREFIX;
-        let rows = self
-            .require_storage()?
-            .scan(&ScanOptions::prefix(prefix))?;
+        let rows = self.require_storage()?.scan(&ScanOptions::prefix(prefix))?;
         for (key, _) in rows {
             let Some(root_id) = key.strip_prefix(prefix) else {
                 continue;
@@ -606,9 +609,7 @@ impl Kernel {
     pub fn relay_status(&self) -> Result<Option<crate::p2p::LocalRelayStatus>> {
         match &self.p2p {
             None => Ok(None),
-            Some(node) => Ok(Some(
-                self.runtime.handle().block_on(node.relay_status())?,
-            )),
+            Some(node) => Ok(Some(self.runtime.handle().block_on(node.relay_status())?)),
         }
     }
 

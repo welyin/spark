@@ -68,10 +68,7 @@ impl Kernel {
         overview.data_accounts = crate::org::roles::data_account_set(record)
             .into_iter()
             .map(|root_id| {
-                let member_view = overview
-                    .members
-                    .iter()
-                    .find(|m| m.root_id == root_id);
+                let member_view = overview.members.iter().find(|m| m.root_id == root_id);
                 let device_class = record
                     .find_member(&root_id)
                     .zip(storage)
@@ -79,8 +76,7 @@ impl Kernel {
                     .unwrap_or("pc");
                 crate::org::DataAccountOverview {
                     root_id,
-                    pc_synced: device_class == "pc"
-                        && member_view.is_some_and(|m| m.ever_synced),
+                    pc_synced: device_class == "pc" && member_view.is_some_and(|m| m.ever_synced),
                     device_class,
                 }
             })

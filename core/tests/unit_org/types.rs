@@ -177,7 +177,11 @@ fn gateways_serde_roundtrip() {
 // 成员表端点化（O1 工作项 1）：deviceUid 聚合 / 同设备墓碑化替换 / wire 兼容
 // ---------------------------------------------------------------------------
 
-fn ep(device_uid: Option<&str>, peer_id: Option<&str>, addresses: Vec<&str>) -> OrganizationNodeInfo {
+fn ep(
+    device_uid: Option<&str>,
+    peer_id: Option<&str>,
+    addresses: Vec<&str>,
+) -> OrganizationNodeInfo {
     OrganizationNodeInfo {
         device_uid: device_uid.map(str::to_string),
         peer_id: peer_id.map(str::to_string),
@@ -189,13 +193,17 @@ fn ep(device_uid: Option<&str>, peer_id: Option<&str>, addresses: Vec<&str>) -> 
 /// 换设备/重装后 peerId 漂移，凭稳定 deviceUid 识别同一台物理设备）。
 #[test]
 fn device_set_upsert_tombstones_stale_peer_same_device() {
-    let mut set = OrganizationDeviceSet::from_single(ep(Some("uid-A"), Some("peer-old"), vec!["/a"]));
+    let mut set =
+        OrganizationDeviceSet::from_single(ep(Some("uid-A"), Some("peer-old"), vec!["/a"]));
     assert_eq!(set.len(), 1);
     // 同 deviceUid 新 peerId：墓碑化旧端点，保留新。
     let changed = set.upsert(&ep(Some("uid-A"), Some("peer-new"), vec!["/a", "/b"]));
     assert!(changed);
     assert_eq!(set.len(), 1);
-    assert_eq!(set.iter().next().unwrap().peer_id.as_deref(), Some("peer-new"));
+    assert_eq!(
+        set.iter().next().unwrap().peer_id.as_deref(),
+        Some("peer-new")
+    );
     assert_eq!(set.iter().next().unwrap().addresses, vec!["/a", "/b"]);
     // 再次同 peerId 同地址：无变更。
     assert!(!set.upsert(&ep(Some("uid-A"), Some("peer-new"), vec!["/a", "/b"])));
@@ -232,11 +240,17 @@ fn legacy_single_endpoint_node_info_deserialize_and_reserialize() {
     let member: OrganizationMember = serde_json::from_str(legacy).unwrap();
     let set = member.node_info.as_ref().unwrap();
     assert_eq!(set.len(), 1);
-    assert_eq!(set.iter().next().unwrap().peer_id.as_deref(), Some("12D3KooWLegacy"));
+    assert_eq!(
+        set.iter().next().unwrap().peer_id.as_deref(),
+        Some("12D3KooWLegacy")
+    );
     // 重新序列化：单端点无 deviceUid → 仍为对象线形。
     let re = serde_json::to_value(&member).unwrap();
     assert!(re["nodeInfo"].is_object());
-    assert_eq!(re["nodeInfo"]["peerId"], serde_json::json!("12D3KooWLegacy"));
+    assert_eq!(
+        re["nodeInfo"]["peerId"],
+        serde_json::json!("12D3KooWLegacy")
+    );
 }
 
 /// 新端点集（多设备）序列化为数组线形。
@@ -283,7 +297,10 @@ fn single_endpoint_with_device_uid_serializes_as_object() {
     let back: OrganizationMember = serde_json::from_value(json).unwrap();
     let set_back = back.node_info.as_ref().unwrap();
     assert_eq!(set_back.len(), 1);
-    assert_eq!(set_back.iter().next().unwrap().device_uid.as_deref(), Some("uid-A"));
+    assert_eq!(
+        set_back.iter().next().unwrap().device_uid.as_deref(),
+        Some("uid-A")
+    );
 }
 
 /// F2：升级路径——incoming 携带 deviceUid 而既有端点是同 peerId 无 uid 的
@@ -295,7 +312,11 @@ fn device_set_upsert_adopts_same_peer_legacy_without_uid() {
     // 升级声明：同 peerId，携带 deviceUid。
     let changed = set.upsert(&ep(Some("uid-1"), Some("peer-X"), vec!["/new"]));
     assert!(changed);
-    assert_eq!(set.len(), 1, "同 peerId 旧无 uid 端点应被吸收，不得双端点并存");
+    assert_eq!(
+        set.len(),
+        1,
+        "同 peerId 旧无 uid 端点应被吸收，不得双端点并存"
+    );
     let only = set.iter().next().unwrap();
     assert_eq!(only.device_uid.as_deref(), Some("uid-1"), "uid 收养进端点");
     assert_eq!(only.peer_id.as_deref(), Some("peer-X"));
@@ -317,5 +338,12 @@ fn device_set_upsert_adopts_only_same_peer_legacy() {
     let peers: Vec<_> = set.iter().map(|e| e.peer_id.clone()).collect();
     assert!(peers.contains(&Some("peer-X".to_string())));
     assert!(peers.contains(&Some("peer-B".to_string())));
-    assert_eq!(set.iter().find(|e| e.peer_id == Some("peer-X".to_string())).unwrap().device_uid.as_deref(), Some("uid-1"));
+    assert_eq!(
+        set.iter()
+            .find(|e| e.peer_id == Some("peer-X".to_string()))
+            .unwrap()
+            .device_uid
+            .as_deref(),
+        Some("uid-1")
+    );
 }

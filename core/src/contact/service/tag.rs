@@ -3,8 +3,10 @@
 use crate::storage::StorageBackend;
 use crate::sync::put_personal;
 
-use super::super::{ContactTag, Result, TAG_PREFIX, TAGS_KEY, org_tags_key, FRIEND_PREFIX, sync_err_to_contact};
-use super::{ContactService, parse_space, read_json, read_vec, scan_json, Space};
+use super::super::{
+    ContactTag, FRIEND_PREFIX, Result, TAG_PREFIX, TAGS_KEY, org_tags_key, sync_err_to_contact,
+};
+use super::{ContactService, Space, parse_space, read_json, read_vec, scan_json};
 
 impl ContactService {
     /// 新建标签（id 由调用方给定）。
@@ -31,8 +33,7 @@ impl ContactService {
                 };
                 let key = format!("{TAG_PREFIX}{id}");
                 let json = serde_json::to_string(&tag)?;
-                put_personal(storage, node_id, &key, &json, now_ms)
-                    .map_err(sync_err_to_contact)?;
+                put_personal(storage, node_id, &key, &json, now_ms).map_err(sync_err_to_contact)?;
                 super::sync::bump_version(storage, super::sync::SyncDomain::Tags, now_ms)?;
                 Ok(tag)
             }
@@ -46,8 +47,14 @@ impl ContactService {
                 };
                 tags.push(tag.clone());
                 // P5：组织标签整域单记录同步（写 pmeta，供自设备 pdsync）
-                put_personal(storage, node_id, &key, &serde_json::to_string(&tags)?, now_ms)
-                    .map_err(sync_err_to_contact)?;
+                put_personal(
+                    storage,
+                    node_id,
+                    &key,
+                    &serde_json::to_string(&tags)?,
+                    now_ms,
+                )
+                .map_err(sync_err_to_contact)?;
                 Ok(tag)
             }
         }
@@ -70,8 +77,7 @@ impl ContactService {
                 };
                 tag.name = name.to_string();
                 let json = serde_json::to_string(&tag)?;
-                put_personal(storage, node_id, &key, &json, now_ms)
-                    .map_err(sync_err_to_contact)?;
+                put_personal(storage, node_id, &key, &json, now_ms).map_err(sync_err_to_contact)?;
                 super::sync::bump_version(storage, super::sync::SyncDomain::Tags, now_ms)?;
                 Ok(())
             }
@@ -80,8 +86,14 @@ impl ContactService {
                 let mut tags: Vec<ContactTag> = read_vec(storage, &key)?;
                 if let Some(tag) = tags.iter_mut().find(|tag| tag.id == tag_id) {
                     tag.name = name.to_string();
-                    put_personal(storage, node_id, &key, &serde_json::to_string(&tags)?, now_ms)
-                        .map_err(sync_err_to_contact)?;
+                    put_personal(
+                        storage,
+                        node_id,
+                        &key,
+                        &serde_json::to_string(&tags)?,
+                        now_ms,
+                    )
+                    .map_err(sync_err_to_contact)?;
                 }
                 Ok(())
             }
@@ -185,8 +197,14 @@ impl ContactService {
                 let tag = tags.remove(from);
                 let to = to_index.min(tags.len());
                 tags.insert(to, tag);
-                put_personal(storage, node_id, &key, &serde_json::to_string(&tags)?, now_ms)
-                    .map_err(sync_err_to_contact)?;
+                put_personal(
+                    storage,
+                    node_id,
+                    &key,
+                    &serde_json::to_string(&tags)?,
+                    now_ms,
+                )
+                .map_err(sync_err_to_contact)?;
                 Ok(())
             }
         }
@@ -223,8 +241,7 @@ impl ContactService {
             tag.order = i as i32;
             let key = format!("{TAG_PREFIX}{}", tag.id);
             let json = serde_json::to_string(&tag)?;
-            put_personal(storage, node_id, &key, &json, now_ms)
-                .map_err(sync_err_to_contact)?;
+            put_personal(storage, node_id, &key, &json, now_ms).map_err(sync_err_to_contact)?;
         }
         storage.delete(TAGS_KEY)?;
         super::sync::bump_version(storage, super::sync::SyncDomain::Tags, now_ms)?;

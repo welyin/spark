@@ -9,11 +9,11 @@
 
 use std::time::Duration;
 
+use super::replica::{plan_replica_push_targets, replica_check_due};
 use super::{
     ACK_WAIT_MS, OrgSyncContext, RETRY_INTERVALS_MS, SUBSCRIBER_POLL_MS, SUBSCRIBER_WAIT_MS,
     generate_sync_id,
 };
-use super::replica::{plan_replica_push_targets, replica_check_due};
 use crate::org::sync_state::{
     should_skip_share_push, sync_state_after_share_acked, sync_state_after_share_delivered,
 };
@@ -245,7 +245,8 @@ impl OrgSyncContext {
         // 检查——不足 K 才向未同步成员推快照（复用 `sync_org_to_member`，内部本就
         // 是发送时懒拨号）。替代被删除的 keepalive tick 周期补副本；带每 org 最小
         // 检查间隔节流（见 [`Self::ensure_replicas_after_write`]）。
-        self.ensure_replicas_after_write(org_id, actor_root_id).await;
+        self.ensure_replicas_after_write(org_id, actor_root_id)
+            .await;
     }
 
     /// leaf 模式 §5（H-D）：组织写入推送的单一目标——① 当前组织连接（已连接
@@ -274,7 +275,11 @@ impl OrgSyncContext {
                 continue;
             };
             for info in set.iter() {
-                if info.peer_id.as_deref().is_some_and(|p| connected.contains(p)) {
+                if info
+                    .peer_id
+                    .as_deref()
+                    .is_some_and(|p| connected.contains(p))
+                {
                     return Some((
                         PeerNodeInfo {
                             peer_id: info.peer_id.clone(),
@@ -294,22 +299,18 @@ impl OrgSyncContext {
                 .flatten()
                 .map(|r| r.last_seen_at)
         };
-        let first = super::dial::leaf_ordered_org_candidates(
-            record,
-            actor_root_id,
-            now,
-            &mut last_seen_of,
-        )
-        .into_iter()
-        .next()?;
+        let first =
+            super::dial::leaf_ordered_org_candidates(record, actor_root_id, now, &mut last_seen_of)
+                .into_iter()
+                .next()?;
         let root_id = record
             .members
             .iter()
             .find(|m| {
                 m.root_id != actor_root_id
-                    && m.node_info.as_ref().is_some_and(|set| {
-                        set.iter().any(|info| info.peer_id == first.peer_id)
-                    })
+                    && m.node_info
+                        .as_ref()
+                        .is_some_and(|set| set.iter().any(|info| info.peer_id == first.peer_id))
             })?
             .root_id
             .clone();

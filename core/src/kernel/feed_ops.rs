@@ -27,13 +27,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::dm_envelope::{self, KIND_FEED};
-use super::feed::{FEED_RECIPIENTS_MAX, FeedInboxRecord, inbox_pull, plugin_id_of_topic, validate_feed_body};
+use super::feed::{
+    FEED_RECIPIENTS_MAX, FeedInboxRecord, inbox_pull, plugin_id_of_topic, validate_feed_body,
+};
 use super::feed_shared::{
     feed_recipient_filter, resolve_feed_recipient_peer_shared, spawn_feed_deliveries_impl,
 };
 use super::{Kernel, KernelError, Result};
-use crate::p2p::node::system_now_ms;
 use crate::p2p::PeerNodeInfo;
+use crate::p2p::node::system_now_ms;
 
 /// feed 投递返回的聚合计数。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,7 +79,9 @@ impl Kernel {
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
         let my_root_id = self.require_unlocked_root_id()?;
         if recipients.is_empty() || recipients.len() > FEED_RECIPIENTS_MAX {
-            return Err(KernelError::Internal("feed recipients out of range".to_string()));
+            return Err(KernelError::Internal(
+                "feed recipients out of range".to_string(),
+            ));
         }
         // body 校验（出站同入站口径）
         if let Err(_) = validate_feed_body(topic, feed_id, payload, reply_to) {
@@ -108,7 +112,14 @@ impl Kernel {
         let mut accepted = 0usize;
         for root_id in &filter.accepted {
             if let Some(peer) = self.resolve_feed_recipient_peer(root_id)? {
-                match self.build_feed_envelope(&my_root_id, root_id, topic, feed_id, payload, reply_to) {
+                match self.build_feed_envelope(
+                    &my_root_id,
+                    root_id,
+                    topic,
+                    feed_id,
+                    payload,
+                    reply_to,
+                ) {
                     Ok(envelope) => {
                         deliveries.push((peer, envelope, root_id.clone(), feed_id.to_string()));
                         accepted += 1;
@@ -221,10 +232,20 @@ impl Kernel {
     /// dm_direct 投递，失败（不可达/超时）把密文信封入 `dm:pending:`
     /// 离线队列（个人空间，feed 复用）补投——任一台在线设备上线 flush。
     /// feed 无消息状态可回写（区别于 chat），投递成功即出队由 flush 处理。
-    fn spawn_feed_deliveries(&self, deliveries: Vec<(PeerNodeInfo, Value, String, String)>, node_id: &str) {
+    fn spawn_feed_deliveries(
+        &self,
+        deliveries: Vec<(PeerNodeInfo, Value, String, String)>,
+        node_id: &str,
+    ) {
         let node = self.p2p.clone();
         let storage = self.storage.clone();
-        spawn_feed_deliveries_impl(node, storage, self.runtime.handle().clone(), deliveries, node_id);
+        spawn_feed_deliveries_impl(
+            node,
+            storage,
+            self.runtime.handle().clone(),
+            deliveries,
+            node_id,
+        );
     }
 }
 
@@ -254,7 +275,13 @@ mod tests {
         ContactService::upsert_friend(&mut s, &friend("root-open", "open")).unwrap();
         ContactService::upsert_friend(&mut s, &friend("root-chatonly", "chatOnly")).unwrap();
         s.put("ct:blocked:root-blocked", "1").unwrap();
-        let recipients = ids(&["root-open", "root-chatonly", "root-blocked", "root-stranger", "root-open"]);
+        let recipients = ids(&[
+            "root-open",
+            "root-chatonly",
+            "root-blocked",
+            "root-stranger",
+            "root-open",
+        ]);
         let filter = feed_recipient_filter(&s, &recipients);
         // 只有 open 放行（去重后）；其余静默跳过
         assert_eq!(filter.accepted, vec!["root-open".to_string()]);

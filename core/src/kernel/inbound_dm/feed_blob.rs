@@ -42,7 +42,10 @@ fn with_out(out: FeedBlobOut) -> Result<InboundDmResult> {
 
 /// 请求方是否本机朋友（feed-blob 鉴权：hash 即能力，但请求方必须是朋友）。
 fn is_friend<S: StorageBackend>(storage: &S, from: &str) -> bool {
-    ContactService::get_friend(storage, from).ok().flatten().is_some()
+    ContactService::get_friend(storage, from)
+        .ok()
+        .flatten()
+        .is_some()
 }
 
 /// `feed-blob-req`：服务本地本体分块（对齐 attachment.rs 的 `serve_chunk`）。
@@ -59,10 +62,7 @@ pub(super) fn handle_feed_blob_req<S: StorageBackend>(
     let Some(hash) = body.get("hash").and_then(Value::as_str) else {
         return done(fail_response("invalid-body"), Vec::new());
     };
-    let offset = body
-        .get("offset")
-        .and_then(Value::as_u64)
-        .unwrap_or(0) as usize;
+    let offset = body.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
     // 逐 hash 节流（§19.6 服务方 `BLOB_REQ_THROTTLE_MS` 口径）：仅对**首块**
     // （offset 0）限流——续拉块（offset > 0）是一次活跃拉取的连续往返，不得
     // 被打断；首块限流防止对端在窗口内反复发起同 hash 的拉取（防洪）。
@@ -110,7 +110,10 @@ pub(super) fn handle_feed_blob_resp<S: StorageBackend>(
     };
     let completed = blob::ingest_chunk(storage, hash, offset as usize, data, total)?;
     if completed {
-        log::info!("[FEED-BLOB] assembled | hash={}", &hash[..16.min(hash.len())]);
+        log::info!(
+            "[FEED-BLOB] assembled | hash={}",
+            &hash[..16.min(hash.len())]
+        );
         return done(ok_response(), Vec::new());
     }
     // 未收齐且本块被接受（offset 对齐）→ 续拉下一块
@@ -143,10 +146,10 @@ fn base64_chunk_bytes(b64: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashSet;
-    use base64::Engine as _;
     use crate::contact::{ContactService, FriendRecord};
     use crate::storage::MemoryStorage;
+    use base64::Engine as _;
+    use std::collections::HashSet;
 
     fn ctx<'a>(online: &'a HashSet<String>) -> InboundContext<'a> {
         InboundContext {
@@ -182,18 +185,30 @@ mod tests {
         ContactService::upsert_friend(&mut client, &friend("serverRoot")).unwrap();
 
         // 服务方保存本体（2.5 块）
-        let data: Vec<u8> = (0..(blob::BLOB_CHUNK_BYTES * 2 + 1234)).map(|i| (i % 251) as u8).collect();
+        let data: Vec<u8> = (0..(blob::BLOB_CHUNK_BYTES * 2 + 1234))
+            .map(|i| (i % 251) as u8)
+            .collect();
         let info = blob::save_blob(&mut server, &data).unwrap();
 
         // 客户端请求 offset 0 → 服务方回第一块
         let req0 = json!({ "hash": info.hash, "offset": 0 });
-        let r = handle_feed_blob_req(&mut server, &ctx(&empty_online()), "clientRoot", &req0).unwrap();
+        let r =
+            handle_feed_blob_req(&mut server, &ctx(&empty_online()), "clientRoot", &req0).unwrap();
         let resp0 = r.feed_blob_out.expect("服务方应回 feed-blob-resp");
-        assert_eq!(resp0.kind(), crate::kernel::dm_envelope::KIND_FEED_BLOB_RESP);
+        assert_eq!(
+            resp0.kind(),
+            crate::kernel::dm_envelope::KIND_FEED_BLOB_RESP
+        );
         assert_eq!(resp0.body()["totalBytes"], json!(data.len() as u64));
 
         // 请求方收块（offset 对齐）→ 未齐续拉下一块
-        let r = handle_feed_blob_resp(&mut client, &ctx(&empty_online()), "serverRoot", resp0.body()).unwrap();
+        let r = handle_feed_blob_resp(
+            &mut client,
+            &ctx(&empty_online()),
+            "serverRoot",
+            resp0.body(),
+        )
+        .unwrap();
         let next = r.feed_blob_out.expect("未收齐应续拉下一块");
         assert_eq!(next.kind(), crate::kernel::dm_envelope::KIND_FEED_BLOB_REQ);
 
@@ -204,10 +219,18 @@ mod tests {
         let mut done = false;
         while !done {
             let req = json!({ "hash": info.hash, "offset": offset });
-            let r = handle_feed_blob_req(&mut server, &ctx(&empty_online()), "clientRoot", &req).unwrap();
+            let r = handle_feed_blob_req(&mut server, &ctx(&empty_online()), "clientRoot", &req)
+                .unwrap();
             let resp = r.feed_blob_out.expect("服务方应回块");
-            offset += crate::plugindata::blob::BLOB_CHUNK_BYTES.min(data.len().saturating_sub(offset));
-            let r = handle_feed_blob_resp(&mut client, &ctx(&empty_online()), "serverRoot", resp.body()).unwrap();
+            offset +=
+                crate::plugindata::blob::BLOB_CHUNK_BYTES.min(data.len().saturating_sub(offset));
+            let r = handle_feed_blob_resp(
+                &mut client,
+                &ctx(&empty_online()),
+                "serverRoot",
+                resp.body(),
+            )
+            .unwrap();
             if r.feed_blob_out.is_none() && blob::has_blob(&client, &info.hash) {
                 done = true;
             }
@@ -224,26 +247,52 @@ mod tests {
     fn feed_blob_req_first_chunk_throttled() {
         let mut server = MemoryStorage::new();
         ContactService::upsert_friend(&mut server, &friend("clientRoot")).unwrap();
-        let data: Vec<u8> = (0..(blob::BLOB_CHUNK_BYTES + 10)).map(|i| (i % 251) as u8).collect();
+        let data: Vec<u8> = (0..(blob::BLOB_CHUNK_BYTES + 10))
+            .map(|i| (i % 251) as u8)
+            .collect();
         let info = blob::save_blob(&mut server, &data).unwrap();
 
         // 首块（offset 0）：首次放行（登记节流时间戳）
-        let r0 = handle_feed_blob_req(&mut server, &ctx(&empty_online()), "clientRoot", &json!({ "hash": info.hash, "offset": 0 })).unwrap();
+        let r0 = handle_feed_blob_req(
+            &mut server,
+            &ctx(&empty_online()),
+            "clientRoot",
+            &json!({ "hash": info.hash, "offset": 0 }),
+        )
+        .unwrap();
         assert!(r0.feed_blob_out.is_some(), "首次首块应放行");
 
         // 窗口内再次首块 → 节流（不回数据）
-        let r1 = handle_feed_blob_req(&mut server, &ctx(&empty_online()), "clientRoot", &json!({ "hash": info.hash, "offset": 0 })).unwrap();
+        let r1 = handle_feed_blob_req(
+            &mut server,
+            &ctx(&empty_online()),
+            "clientRoot",
+            &json!({ "hash": info.hash, "offset": 0 }),
+        )
+        .unwrap();
         assert!(r1.feed_blob_out.is_none(), "窗口内重复首块应被节流跳过");
 
         // 续拉块（offset > 0）不受节流影响（活跃拉取连续往返）
-        let r2 = handle_feed_blob_req(&mut server, &ctx(&empty_online()), "clientRoot", &json!({ "hash": info.hash, "offset": blob::BLOB_CHUNK_BYTES })).unwrap();
+        let r2 = handle_feed_blob_req(
+            &mut server,
+            &ctx(&empty_online()),
+            "clientRoot",
+            &json!({ "hash": info.hash, "offset": blob::BLOB_CHUNK_BYTES }),
+        )
+        .unwrap();
         assert!(r2.feed_blob_out.is_some(), "续拉块不应被节流");
 
         // 跨过节流窗口后首块重新放行
         let later_online = empty_online();
         let mut later_ctx = ctx(&later_online);
         later_ctx.now_ms = 1000 + blob::BLOB_REQ_THROTTLE_MS;
-        let r3 = handle_feed_blob_req(&mut server, &later_ctx, "clientRoot", &json!({ "hash": info.hash, "offset": 0 })).unwrap();
+        let r3 = handle_feed_blob_req(
+            &mut server,
+            &later_ctx,
+            "clientRoot",
+            &json!({ "hash": info.hash, "offset": 0 }),
+        )
+        .unwrap();
         assert!(r3.feed_blob_out.is_some(), "跨窗口后首块重新放行");
     }
 
@@ -253,10 +302,22 @@ mod tests {
         let mut server = MemoryStorage::new();
         ContactService::upsert_friend(&mut server, &friend("friendRoot")).unwrap();
         // 非朋友请求：不回数据（ok 但无 feed_blob_out）
-        let r = handle_feed_blob_req(&mut server, &ctx(&empty_online()), "stranger", &json!({ "hash": "h", "offset": 0 })).unwrap();
+        let r = handle_feed_blob_req(
+            &mut server,
+            &ctx(&empty_online()),
+            "stranger",
+            &json!({ "hash": "h", "offset": 0 }),
+        )
+        .unwrap();
         assert!(r.feed_blob_out.is_none(), "非朋友请求不回数据");
         // 朋友但 hash 缺失 → missing:true
-        let r = handle_feed_blob_req(&mut server, &ctx(&empty_online()), "friendRoot", &json!({ "hash": "nope", "offset": 0 })).unwrap();
+        let r = handle_feed_blob_req(
+            &mut server,
+            &ctx(&empty_online()),
+            "friendRoot",
+            &json!({ "hash": "nope", "offset": 0 }),
+        )
+        .unwrap();
         let resp = r.feed_blob_out.expect("朋友请求应回应答");
         assert_eq!(resp.body()["missing"], json!(true));
     }

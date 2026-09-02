@@ -268,7 +268,10 @@ mod tests {
         );
         assert_eq!(classify_key("meta:plugin:app:col:id"), UsageClass::SyncMeta);
         // social-feed §13：feed / dm:pending / dm:e2e:key 归入 syncMeta
-        assert_eq!(classify_key("feed:inbox:moments:0001:f1"), UsageClass::SyncMeta);
+        assert_eq!(
+            classify_key("feed:inbox:moments:0001:f1"),
+            UsageClass::SyncMeta
+        );
         assert_eq!(classify_key("feed:blob-src:hashA"), UsageClass::SyncMeta);
         assert_eq!(
             classify_key("dm:pending:rootX:msg1"),

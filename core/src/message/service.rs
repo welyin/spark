@@ -1,4 +1,4 @@
-﻿//! 消息服务层（对齐 `app/src/mock/messages.ts` 的 store 方法语义）。
+//! 消息服务层（对齐 `app/src/mock/messages.ts` 的 store 方法语义）。
 //!
 //! 纯逻辑层：只操作 [`StorageBackend`]，不触碰网络（发送/接收、加密、网关
 //! 转发属 p2p 模块职责；`'me'` 与真实 rootId 的映射在 kernel 视图层完成）。
@@ -52,9 +52,11 @@ impl MessageService {
         space: &str,
         peer_root_id: &str,
     ) -> Result<Option<ConversationRecord>> {
-        Ok(Self::list_conversations(storage, space)?.into_iter().find(|c| {
-            c.kind == super::types::ConversationKind::Direct && c.peer_root_id == peer_root_id
-        }))
+        Ok(Self::list_conversations(storage, space)?
+            .into_iter()
+            .find(|c| {
+                c.kind == super::types::ConversationKind::Direct && c.peer_root_id == peer_root_id
+            }))
     }
 
     /// 找到或创建与 `peer_root_id` 的 1:1 会话（存在即原样返回，幂等）。
@@ -109,10 +111,7 @@ impl MessageService {
     /// 由调用侧（inbound_dm 的 pdsync-data conv 合入分支）在合并后恢复本地值。
     ///
     /// 返回合并后的记录（不落盘，调用方自行写）。
-    pub fn merge_conv_meta(
-        local: &mut ConversationRecord,
-        remote: &ConversationRecord,
-    ) {
+    pub fn merge_conv_meta(local: &mut ConversationRecord, remote: &ConversationRecord) {
         // 身份字段：远端为准（同会话 id 同 peer）
         local.kind = remote.kind;
         local.title = remote.title.clone();
@@ -542,5 +541,4 @@ impl MessageService {
         }
         Ok(())
     }
-
 }

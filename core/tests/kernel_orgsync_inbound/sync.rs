@@ -30,8 +30,26 @@ fn orgsync_hello_need_data_converges_two_nodes() {
         ],
         &[],
     );
-    declare_org_collection(&mut a, "node-a", ORG_ID, NAME, VERSION, Accounts::AllMembers, &a_root, NOW);
-    declare_org_collection(&mut b, "node-b", ORG_ID, NAME, VERSION, Accounts::AllMembers, &b_root, NOW);
+    declare_org_collection(
+        &mut a,
+        "node-a",
+        ORG_ID,
+        NAME,
+        VERSION,
+        Accounts::AllMembers,
+        &a_root,
+        NOW,
+    );
+    declare_org_collection(
+        &mut b,
+        "node-b",
+        ORG_ID,
+        NAME,
+        VERSION,
+        Accounts::AllMembers,
+        &b_root,
+        NOW,
+    );
 
     // A 写入一条 orgd 数据（per-node 序号：集合声明耗 seq 1，数据为 seq 2）
     let data_key = format!("{}k1", org_data_prefix(ORG_ID, NAME, VERSION));
@@ -53,7 +71,11 @@ fn orgsync_hello_need_data_converges_two_nodes() {
     );
     assert_eq!(r.response, json!({ "ok": true }));
     // orgsync-out 用 body 形状区分：Need 带 knownVv，Data 带 records
-    let needs: Vec<_> = r.orgsync_out.iter().filter(|o| o.body().get("knownVv").is_some()).collect();
+    let needs: Vec<_> = r
+        .orgsync_out
+        .iter()
+        .filter(|o| o.body().get("knownVv").is_some())
+        .collect();
     assert_eq!(needs.len(), 1, "B 落后应回 need");
     assert_eq!(needs[0].to_root_id(), &a_root);
 
@@ -72,7 +94,11 @@ fn orgsync_hello_need_data_converges_two_nodes() {
         "node-a",
     );
     assert_eq!(r2.response, json!({ "ok": true }));
-    let datas: Vec<_> = r2.orgsync_out.iter().filter(|o| o.body().get("records").is_some()).collect();
+    let datas: Vec<_> = r2
+        .orgsync_out
+        .iter()
+        .filter(|o| o.body().get("records").is_some())
+        .collect();
     assert_eq!(datas.len(), 1, "A 应回 data 批次");
     assert_eq!(datas[0].to_root_id(), &b_root);
 
@@ -126,8 +152,26 @@ fn orgsync_converges_after_tombstone_then_write() {
         );
         let _ = rid;
     }
-    declare_org_collection(&mut a, "node-a", ORG_ID, NAME, VERSION, Accounts::AllMembers, &a_root, NOW);
-    declare_org_collection(&mut b, "node-b", ORG_ID, NAME, VERSION, Accounts::AllMembers, &b_root, NOW);
+    declare_org_collection(
+        &mut a,
+        "node-a",
+        ORG_ID,
+        NAME,
+        VERSION,
+        Accounts::AllMembers,
+        &a_root,
+        NOW,
+    );
+    declare_org_collection(
+        &mut b,
+        "node-b",
+        ORG_ID,
+        NAME,
+        VERSION,
+        Accounts::AllMembers,
+        &b_root,
+        NOW,
+    );
 
     let k1 = format!("{}k1", org_data_prefix(ORG_ID, NAME, VERSION));
     let k2 = format!("{}k2", org_data_prefix(ORG_ID, NAME, VERSION));
@@ -140,32 +184,75 @@ fn orgsync_converges_after_tombstone_then_write() {
     // 第 1 轮：A hello → B 回 need → A 回 data → B 合入（收讫 k1 墓碑）
     let hello_a = build_hello_for(&a, ORG_ID, &b_root, "peer-b");
     let r = deliver_orgsync(
-        &mut b, &b_root, "B", &a_key, &a_root, &b_root,
-        dm_envelope::KIND_ORGSYNC_HELLO, hello_a, "peer-a", "node-b",
+        &mut b,
+        &b_root,
+        "B",
+        &a_key,
+        &a_root,
+        &b_root,
+        dm_envelope::KIND_ORGSYNC_HELLO,
+        hello_a,
+        "peer-a",
+        "node-b",
     );
-    let needs: Vec<_> = r.orgsync_out.iter().filter(|o| o.body().get("knownVv").is_some()).collect();
+    let needs: Vec<_> = r
+        .orgsync_out
+        .iter()
+        .filter(|o| o.body().get("knownVv").is_some())
+        .collect();
     assert_eq!(needs.len(), 1, "B 回 need");
     let r2 = deliver_orgsync(
-        &mut a, &a_root, "A", &b_key, &b_root, &a_root,
-        dm_envelope::KIND_ORGSYNC_NEED, needs[0].body().clone(), "peer-b", "node-a",
+        &mut a,
+        &a_root,
+        "A",
+        &b_key,
+        &b_root,
+        &a_root,
+        dm_envelope::KIND_ORGSYNC_NEED,
+        needs[0].body().clone(),
+        "peer-b",
+        "node-a",
     );
-    let datas: Vec<_> = r2.orgsync_out.iter().filter(|o| o.body().get("records").is_some()).collect();
+    let datas: Vec<_> = r2
+        .orgsync_out
+        .iter()
+        .filter(|o| o.body().get("records").is_some())
+        .collect();
     assert!(!datas.is_empty(), "A 回 data");
     for d in &datas {
         let r3 = deliver_orgsync(
-            &mut b, &b_root, "B", &a_key, &a_root, &b_root,
-            dm_envelope::KIND_ORGSYNC_DATA, d.body().clone(), "peer-a", "node-b",
+            &mut b,
+            &b_root,
+            "B",
+            &a_key,
+            &a_root,
+            &b_root,
+            dm_envelope::KIND_ORGSYNC_DATA,
+            d.body().clone(),
+            "peer-a",
+            "node-b",
         );
         assert_eq!(r3.response, json!({ "ok": true }));
     }
     // B 端 k1 墓碑已落（B 折叠 vv 含墓碑序号）
-    let b_tomb = get_personal_meta(&b, &k1).unwrap().expect("B 端 k1 墓碑 pmeta");
+    let b_tomb = get_personal_meta(&b, &k1)
+        .unwrap()
+        .expect("B 端 k1 墓碑 pmeta");
     assert!(is_tombstone(&b_tomb), "B 收讫 k1 墓碑");
     assert_eq!(b_tomb.vv.get("node-a"), Some(&tomb_seq));
     assert!(b.get(&k1).unwrap().is_none(), "B 端 k1 本体已删");
 
     // A 受理删除后再写 k2（修复前与墓碑同序号碰撞 → 对 B 失明）
-    write_org_data(&mut a, "node-a", ORG_ID, NAME, VERSION, "k2", "\"v2\"", NOW + 2);
+    write_org_data(
+        &mut a,
+        "node-a",
+        ORG_ID,
+        NAME,
+        VERSION,
+        "k2",
+        "\"v2\"",
+        NOW + 2,
+    );
     let a_k2 = get_personal_meta(&a, &k2).unwrap().unwrap();
     assert!(
         a_k2.vv.get("node-a").unwrap() > &tomb_seq,
@@ -175,25 +262,60 @@ fn orgsync_converges_after_tombstone_then_write() {
     // 第 2 轮：A hello → B（折叠已含墓碑序号）回 need → A 回 data → B 合入
     let hello_a2 = build_hello_for(&a, ORG_ID, &b_root, "peer-b");
     let r = deliver_orgsync(
-        &mut b, &b_root, "B", &a_key, &a_root, &b_root,
-        dm_envelope::KIND_ORGSYNC_HELLO, hello_a2, "peer-a", "node-b",
+        &mut b,
+        &b_root,
+        "B",
+        &a_key,
+        &a_root,
+        &b_root,
+        dm_envelope::KIND_ORGSYNC_HELLO,
+        hello_a2,
+        "peer-a",
+        "node-b",
     );
-    let needs: Vec<_> = r.orgsync_out.iter().filter(|o| o.body().get("knownVv").is_some()).collect();
+    let needs: Vec<_> = r
+        .orgsync_out
+        .iter()
+        .filter(|o| o.body().get("knownVv").is_some())
+        .collect();
     assert_eq!(needs.len(), 1, "B 回 need");
     let r2 = deliver_orgsync(
-        &mut a, &a_root, "A", &b_key, &b_root, &a_root,
-        dm_envelope::KIND_ORGSYNC_NEED, needs[0].body().clone(), "peer-b", "node-a",
+        &mut a,
+        &a_root,
+        "A",
+        &b_key,
+        &b_root,
+        &a_root,
+        dm_envelope::KIND_ORGSYNC_NEED,
+        needs[0].body().clone(),
+        "peer-b",
+        "node-a",
     );
-    let datas: Vec<_> = r2.orgsync_out.iter().filter(|o| o.body().get("records").is_some()).collect();
+    let datas: Vec<_> = r2
+        .orgsync_out
+        .iter()
+        .filter(|o| o.body().get("records").is_some())
+        .collect();
     assert!(
-        datas.iter().any(|d| d.body()["records"].as_array().unwrap().iter()
+        datas.iter().any(|d| d.body()["records"]
+            .as_array()
+            .unwrap()
+            .iter()
             .any(|rec| rec["key"].as_str() == Some(k2.as_str()))),
         "A 的 data 批次必含 k2（修复前 Equal 跳过 → 永久失明）"
     );
     for d in &datas {
         deliver_orgsync(
-            &mut b, &b_root, "B", &a_key, &a_root, &b_root,
-            dm_envelope::KIND_ORGSYNC_DATA, d.body().clone(), "peer-a", "node-b",
+            &mut b,
+            &b_root,
+            "B",
+            &a_key,
+            &a_root,
+            &b_root,
+            dm_envelope::KIND_ORGSYNC_DATA,
+            d.body().clone(),
+            "peer-a",
+            "node-b",
         );
     }
 
@@ -201,10 +323,13 @@ fn orgsync_converges_after_tombstone_then_write() {
     assert_eq!(b.get(&k2).unwrap().as_deref(), Some("\"v2\""), "B 合入 k2");
     let b_k2 = get_personal_meta(&b, &k2).unwrap().unwrap();
     assert_eq!(b_k2.vv, a_k2.vv, "两端 k2 vv 一致");
-    let fold_a = spark_core::sync::orgsync::collect_org_collection_vv(&a, ORG_ID, NAME, VERSION).unwrap();
-    let fold_b = spark_core::sync::orgsync::collect_org_collection_vv(&b, ORG_ID, NAME, VERSION).unwrap();
+    let fold_a =
+        spark_core::sync::orgsync::collect_org_collection_vv(&a, ORG_ID, NAME, VERSION).unwrap();
+    let fold_b =
+        spark_core::sync::orgsync::collect_org_collection_vv(&b, ORG_ID, NAME, VERSION).unwrap();
     assert_eq!(
-        fold_a.get("node-a"), fold_b.get("node-a"),
+        fold_a.get("node-a"),
+        fold_b.get("node-a"),
         "两端折叠 vv 的 node-a 分量收敛一致（{fold_a:?} vs {fold_b:?}）"
     );
 }
@@ -274,14 +399,18 @@ fn acl_travels_via_all_members_org_structure_to_regular_member() {
         bind_sig: "bind".to_string(),
     };
     {
-        let mut rec = OrganizationService::get_record(&mut a, ORG_ID).unwrap().unwrap();
+        let mut rec = OrganizationService::get_record(&mut a, ORG_ID)
+            .unwrap()
+            .unwrap();
         if let Some(m) = rec.members.iter_mut().find(|m| m.root_id == a_root) {
             m.access_key = Some(owner_ak.clone());
         }
         OrganizationService::save_record(&mut a, &rec).unwrap();
     }
     {
-        let mut rec = OrganizationService::get_record(&mut b, ORG_ID).unwrap().unwrap();
+        let mut rec = OrganizationService::get_record(&mut b, ORG_ID)
+            .unwrap()
+            .unwrap();
         if let Some(m) = rec.members.iter_mut().find(|m| m.root_id == a_root) {
             m.access_key = Some(owner_ak.clone());
         }
@@ -330,14 +459,12 @@ fn acl_travels_via_all_members_org_structure_to_regular_member() {
 
     // 成员 B（非数据账号）通过 org:structure 拉取即得 acl：装配 org:structure
     // data 发 B，B 合入 acl（签名者 a_root ∈ owners，acl 验签通过）。
-    let acl_record = struct_inc.iter().find(|r| r.key == acl_key).unwrap().clone();
-    let data_body = build_orgsync_data_batch(
-        ORG_ID,
-        "org:structure@v1",
-        &[acl_record],
-        0,
-        1,
-    );
+    let acl_record = struct_inc
+        .iter()
+        .find(|r| r.key == acl_key)
+        .unwrap()
+        .clone();
+    let data_body = build_orgsync_data_batch(ORG_ID, "org:structure@v1", &[acl_record], 0, 1);
     let r = deliver_orgsync(
         &mut b,
         &b_root,
@@ -350,7 +477,11 @@ fn acl_travels_via_all_members_org_structure_to_regular_member() {
         "peer-a",
         "node-b",
     );
-    assert_eq!(r.response, json!({ "ok": true }), "acl 经 org:structure 全员合入");
+    assert_eq!(
+        r.response,
+        json!({ "ok": true }),
+        "acl 经 org:structure 全员合入"
+    );
     let stored: spark_core::sync::orgsync::AclRecord =
         serde_json::from_str(&b.get(&acl_key).unwrap().unwrap()).unwrap();
     assert!(stored.is_reader(&b_root), "B 收到 acl（readers 含自己）");
@@ -397,13 +528,8 @@ fn org_declaration_syncs_and_conflicts_rejected() {
         meta: get_personal_meta(&a, &decl_key).unwrap().unwrap(),
         dseq: None,
     };
-    let data_body = build_orgsync_data_batch(
-        ORG_ID,
-        &format!("{NAME}@v{VERSION}"),
-        &[decl_record],
-        0,
-        1,
-    );
+    let data_body =
+        build_orgsync_data_batch(ORG_ID, &format!("{NAME}@v{VERSION}"), &[decl_record], 0, 1);
     let r = deliver_orgsync(
         &mut b,
         &self_root,
@@ -416,7 +542,11 @@ fn org_declaration_syncs_and_conflicts_rejected() {
         "peer-a",
         "node-b",
     );
-    assert_eq!(r.response, json!({ "ok": true }), "声明记录 org:coll: 白名单放行");
+    assert_eq!(
+        r.response,
+        json!({ "ok": true }),
+        "声明记录 org:coll: 白名单放行"
+    );
 
     // B 合入声明 → resolve_org 可读
     let resolved = spark_core::plugindata::resolve_org(&b, ORG_ID, NAME, Some(VERSION)).unwrap();
@@ -440,10 +570,7 @@ fn org_declaration_syncs_and_conflicts_rejected() {
         NOW,
         Some(ORG_ID),
     );
-    assert!(
-        conflict.is_err(),
-        "代际内冲突声明应被拒绝"
-    );
+    assert!(conflict.is_err(), "代际内冲突声明应被拒绝");
     let err = conflict.unwrap_err();
     assert!(
         err.to_string().contains("already declared"),

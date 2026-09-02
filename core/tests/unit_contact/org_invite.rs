@@ -39,23 +39,34 @@ fn org_outgoing_request_crud_and_mark_accepted() {
         .unwrap()
         .unwrap();
     assert_eq!(stored.invite_code.as_deref(), Some("invite-code-1"));
-    assert!(ContactService::get_org_outgoing_request(&s, "org-1", "inv-9").unwrap().is_none());
+    assert!(
+        ContactService::get_org_outgoing_request(&s, "org-1", "inv-9")
+            .unwrap()
+            .is_none()
+    );
 
     let list = ContactService::list_org_outgoing_requests(&s, "org-1").unwrap();
     assert_eq!(list.len(), 2);
 
     // pending → accepted + 刷 updated_at；重复（非 pending）与不存在返回 Ok(false)
-    assert!(ContactService::mark_org_outgoing_accepted(&mut s, "org-1", "inv-1", NOW + 10).unwrap());
+    assert!(
+        ContactService::mark_org_outgoing_accepted(&mut s, "org-1", "inv-1", NOW + 10).unwrap()
+    );
     let accepted = ContactService::get_org_outgoing_request(&s, "org-1", "inv-1")
         .unwrap()
         .unwrap();
     assert_eq!(accepted.status, FriendRequestStatus::Accepted);
     assert_eq!(accepted.updated_at, NOW + 10);
-    assert!(!ContactService::mark_org_outgoing_accepted(&mut s, "org-1", "inv-1", NOW + 20).unwrap());
+    assert!(
+        !ContactService::mark_org_outgoing_accepted(&mut s, "org-1", "inv-1", NOW + 20).unwrap()
+    );
     assert!(!ContactService::mark_org_outgoing_accepted(&mut s, "org-1", "inv-x", NOW).unwrap());
 
     // 线形：invite_code 为 Some 时带 camelCase inviteCode，None 时不序列化
-    let raw = s.get(&format!("ct:org:org-1:req:out:inv-1")).unwrap().unwrap();
+    let raw = s
+        .get(&format!("ct:org:org-1:req:out:inv-1"))
+        .unwrap()
+        .unwrap();
     assert!(raw.contains("\"inviteCode\":\"invite-code-1\""));
     let raw = s.get("ct:req:out:missing").unwrap();
     assert!(raw.is_none());
@@ -70,14 +81,27 @@ fn org_outgoing_request_crud_and_mark_accepted() {
 fn overview_org_space_includes_outgoing_invites() {
     let mut s = MemoryStorage::new();
     // 空组织空间 outgoing 为空 vec
-    assert!(ContactService::overview(&s, ORG).unwrap().outgoing.is_empty());
+    assert!(
+        ContactService::overview(&s, ORG)
+            .unwrap()
+            .outgoing
+            .is_empty()
+    );
 
     ContactService::put_org_outgoing_request(&mut s, "org-1", &org_outgoing("inv-1", &rid('b')))
         .unwrap();
     let view = ContactService::overview(&s, ORG).unwrap();
     assert_eq!(view.outgoing.len(), 1);
     assert_eq!(view.outgoing[0].id, "inv-1");
-    assert_eq!(view.outgoing[0].invite_code.as_deref(), Some("invite-code-1"));
+    assert_eq!(
+        view.outgoing[0].invite_code.as_deref(),
+        Some("invite-code-1")
+    );
     // 组织空间 org outbox 不串到个人空间
-    assert!(ContactService::overview(&s, PERSONAL).unwrap().outgoing.is_empty());
+    assert!(
+        ContactService::overview(&s, PERSONAL)
+            .unwrap()
+            .outgoing
+            .is_empty()
+    );
 }

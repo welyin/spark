@@ -6,9 +6,9 @@
 
 use serde_json::Value;
 
-use super::addressing::{heal_self_pointing_friend_record, list_self_device_peer_infos};
-use super::super::{KernelError, Result};
 use super::super::dm_envelope;
+use super::super::{KernelError, Result};
+use super::addressing::{heal_self_pointing_friend_record, list_self_device_peer_infos};
 use crate::contact::ContactService;
 use crate::device::DeviceService;
 use crate::p2p::PeerNodeInfo;
@@ -30,7 +30,10 @@ impl PluginHostShared {
             return;
         };
         if peers.is_empty() {
-            eprintln!("[deliver-to-devices] no paired devices rootId={} kind={}", my_root_id, kind);
+            eprintln!(
+                "[deliver-to-devices] no paired devices rootId={} kind={}",
+                my_root_id, kind
+            );
         }
         for peer in &peers {
             if peer.addresses.is_empty() {

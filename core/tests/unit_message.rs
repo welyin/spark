@@ -33,7 +33,8 @@ fn setup(storage: &mut MemoryStorage) -> spark_core::message::ConversationRecord
         Some(PeerRef {
             peer_id: "12D3KooW".to_string(),
             addresses: vec!["/ip4/1.2.3.4/tcp/4001".to_string()],
-        ..Default::default()}),
+            ..Default::default()
+        }),
         NOW,
     )
     .unwrap()
@@ -56,12 +57,23 @@ fn ensure_direct_conversation_creates_and_is_idempotent() {
     assert_eq!(conv.peer.as_ref().unwrap().peer_id, "12D3KooW");
 
     // 幂等：再次 ensure 返回同一会话，不产生新记录
-    let again =
-        MessageService::ensure_direct_conversation(&mut s, "personal", PEER, "别的标题", None, NOW + 1)
-            .unwrap();
+    let again = MessageService::ensure_direct_conversation(
+        &mut s,
+        "personal",
+        PEER,
+        "别的标题",
+        None,
+        NOW + 1,
+    )
+    .unwrap();
     assert_eq!(again.id, conv.id);
     assert_eq!(again.title, "王小明");
-    assert_eq!(MessageService::list_conversations(&s, "personal").unwrap().len(), 1);
+    assert_eq!(
+        MessageService::list_conversations(&s, "personal")
+            .unwrap()
+            .len(),
+        1
+    );
 
     // get / find 读取
     assert_eq!(
@@ -82,13 +94,21 @@ fn ensure_direct_conversation_creates_and_is_idempotent() {
 fn spaces_are_isolated() {
     let mut s = MemoryStorage::new();
     setup(&mut s);
-    assert_eq!(MessageService::list_conversations(&s, "personal").unwrap().len(), 1);
-    assert!(MessageService::list_conversations(&s, "org:o1").unwrap().is_empty());
+    assert_eq!(
+        MessageService::list_conversations(&s, "personal")
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        MessageService::list_conversations(&s, "org:o1")
+            .unwrap()
+            .is_empty()
+    );
     // 同 peer 在另一个空间可独立建会话
-    let org_conv = MessageService::ensure_direct_conversation(
-        &mut s, "org:o1", PEER, "张伟", None, NOW,
-    )
-    .unwrap();
+    let org_conv =
+        MessageService::ensure_direct_conversation(&mut s, "org:o1", PEER, "张伟", None, NOW)
+            .unwrap();
     assert_eq!(
         MessageService::find_direct_conversation(&s, "org:o1", PEER)
             .unwrap()
@@ -96,7 +116,12 @@ fn spaces_are_isolated() {
             .id,
         org_conv.id
     );
-    assert_eq!(MessageService::list_conversations(&s, "personal").unwrap().len(), 1);
+    assert_eq!(
+        MessageService::list_conversations(&s, "personal")
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 // ---------- 消息 append 与顺序 ----------
@@ -106,8 +131,13 @@ fn append_message_stores_in_time_order_and_bumps_updated_at() {
     let mut s = MemoryStorage::new();
     let conv = setup(&mut s);
     // 乱序追加：键内 13 位零填充时间戳保证 scan 字典序 = 时间序
-    MessageService::append_message(&mut s, "personal", &conv.id, &msg("m2", PEER, NOW + 2_000, None))
-        .unwrap();
+    MessageService::append_message(
+        &mut s,
+        "personal",
+        &conv.id,
+        &msg("m2", PEER, NOW + 2_000, None),
+    )
+    .unwrap();
     MessageService::append_message(&mut s, "personal", &conv.id, &msg("m0", PEER, NOW, None))
         .unwrap();
     MessageService::append_message(
@@ -136,8 +166,9 @@ fn append_message_stores_in_time_order_and_bumps_updated_at() {
 #[test]
 fn append_message_requires_conversation() {
     let mut s = MemoryStorage::new();
-    let err = MessageService::append_message(&mut s, "personal", "no-such", &msg("m0", ME, NOW, None))
-        .unwrap_err();
+    let err =
+        MessageService::append_message(&mut s, "personal", "no-such", &msg("m0", ME, NOW, None))
+            .unwrap_err();
     assert!(matches!(err, MessageError::ConversationNotFound));
 }
 
@@ -156,8 +187,13 @@ fn message_key_uses_zero_padded_timestamp() {
 fn set_message_status_flows_and_skips_recalled() {
     let mut s = MemoryStorage::new();
     let conv = setup(&mut s);
-    MessageService::append_message(&mut s, "personal", &conv.id, &msg("m1", ME, NOW, Some("sending")))
-        .unwrap();
+    MessageService::append_message(
+        &mut s,
+        "personal",
+        &conv.id,
+        &msg("m1", ME, NOW, Some("sending")),
+    )
+    .unwrap();
 
     for status in ["sent", "delivered", "read"] {
         MessageService::set_message_status(&mut s, "personal", &conv.id, "m1", status).unwrap();
@@ -166,7 +202,9 @@ fn set_message_status_flows_and_skips_recalled() {
     }
 
     // 撤回后不再改状态
-    assert!(MessageService::recall_message(&mut s, "personal", &conv.id, "m1", NOW + 1_000).unwrap());
+    assert!(
+        MessageService::recall_message(&mut s, "personal", &conv.id, "m1", NOW + 1_000).unwrap()
+    );
     MessageService::set_message_status(&mut s, "personal", &conv.id, "m1", "failed").unwrap();
     let list = MessageService::get_messages(&s, "personal", &conv.id).unwrap();
     assert_eq!(list[0].status.as_deref(), Some("read"));
@@ -197,7 +235,10 @@ fn mark_peer_messages_read_only_touches_own_sent_or_delivered() {
     // 「对方已读我发的」：调用方传自己的 rootId
     let changed =
         MessageService::mark_peer_messages_read(&mut s, "personal", &conv.id, ME).unwrap();
-    assert_eq!(changed, vec!["own-delivered".to_string(), "own-sent".to_string()]);
+    assert_eq!(
+        changed,
+        vec!["own-delivered".to_string(), "own-sent".to_string()]
+    );
 
     let list = MessageService::get_messages(&s, "personal", &conv.id).unwrap();
     let status_of = |id: &str| list.iter().find(|m| m.id == id).unwrap().status.clone();
@@ -210,9 +251,11 @@ fn mark_peer_messages_read_only_touches_own_sent_or_delivered() {
     assert_eq!(status_of("peer-none"), None);
 
     // 幂等：再跑一次没有可改的
-    assert!(MessageService::mark_peer_messages_read(&mut s, "personal", &conv.id, ME)
-        .unwrap()
-        .is_empty());
+    assert!(
+        MessageService::mark_peer_messages_read(&mut s, "personal", &conv.id, ME)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 // ---------- 未读 / 置顶 / 免打扰 / 草稿 ----------
@@ -277,7 +320,11 @@ fn clear_messages_keeps_conversation_and_resets_unread() {
     MessageService::increment_unread(&mut s, "personal", &conv.id).unwrap();
 
     MessageService::clear_messages(&mut s, "personal", &conv.id).unwrap();
-    assert!(MessageService::get_messages(&s, "personal", &conv.id).unwrap().is_empty());
+    assert!(
+        MessageService::get_messages(&s, "personal", &conv.id)
+            .unwrap()
+            .is_empty()
+    );
     let conv_after = MessageService::get_conversation(&s, "personal", &conv.id)
         .unwrap()
         .unwrap();
@@ -296,9 +343,17 @@ fn delete_conversation_removes_everything() {
         MessageService::get_conversation(&s, "personal", &conv.id).unwrap(),
         None
     );
-    assert!(MessageService::get_messages(&s, "personal", &conv.id).unwrap().is_empty());
+    assert!(
+        MessageService::get_messages(&s, "personal", &conv.id)
+            .unwrap()
+            .is_empty()
+    );
     // 存储层也无残留
-    assert!(s.scan(&spark_core::storage::ScanOptions::prefix("msg:")).unwrap().is_empty());
+    assert!(
+        s.scan(&spark_core::storage::ScanOptions::prefix("msg:"))
+            .unwrap()
+            .is_empty()
+    );
 }
 
 // ---------- 撤回 / 删除消息 ----------
@@ -307,8 +362,13 @@ fn delete_conversation_removes_everything() {
 fn recall_message_two_minute_window() {
     let mut s = MemoryStorage::new();
     let conv = setup(&mut s);
-    MessageService::append_message(&mut s, "personal", &conv.id, &msg("m1", ME, NOW, Some("sent")))
-        .unwrap();
+    MessageService::append_message(
+        &mut s,
+        "personal",
+        &conv.id,
+        &msg("m1", ME, NOW, Some("sent")),
+    )
+    .unwrap();
 
     // 边界：恰好 2 分钟仍允许（TS 口径为 > 2min 拒绝）
     assert!(
@@ -316,9 +376,7 @@ fn recall_message_two_minute_window() {
             .unwrap()
     );
     // 重复撤回失败
-    assert!(
-        !MessageService::recall_message(&mut s, "personal", &conv.id, "m1", NOW + 1).unwrap()
-    );
+    assert!(!MessageService::recall_message(&mut s, "personal", &conv.id, "m1", NOW + 1).unwrap());
     assert!(MessageService::get_messages(&s, "personal", &conv.id).unwrap()[0].recalled);
 
     // 超过窗口拒绝
@@ -329,14 +387,16 @@ fn recall_message_two_minute_window() {
         &msg("m2", ME, NOW, Some("sent")),
     )
     .unwrap();
-    assert!(!MessageService::recall_message(
-        &mut s,
-        "personal",
-        &conv.id,
-        "m2",
-        NOW + RECALL_WINDOW_MS + 1
-    )
-    .unwrap());
+    assert!(
+        !MessageService::recall_message(
+            &mut s,
+            "personal",
+            &conv.id,
+            "m2",
+            NOW + RECALL_WINDOW_MS + 1
+        )
+        .unwrap()
+    );
     assert!(!MessageService::get_messages(&s, "personal", &conv.id).unwrap()[1].recalled);
 
     // 消息不存在：false
@@ -372,20 +432,33 @@ fn delete_message_removes_only_target() {
 fn delete_peer_message_decrements_unread() {
     let mut s = MemoryStorage::new();
     let conv = setup(&mut s);
-    MessageService::append_message(&mut s, "personal", &conv.id, &msg("m1", PEER, NOW, None)).unwrap();
-    MessageService::append_message(&mut s, "personal", &conv.id, &msg("m2", ME, NOW + 1, Some("delivered"))).unwrap();
+    MessageService::append_message(&mut s, "personal", &conv.id, &msg("m1", PEER, NOW, None))
+        .unwrap();
+    MessageService::append_message(
+        &mut s,
+        "personal",
+        &conv.id,
+        &msg("m2", ME, NOW + 1, Some("delivered")),
+    )
+    .unwrap();
     MessageService::increment_unread(&mut s, "personal", &conv.id).unwrap();
 
     // 删对端消息且 unread>0：未读 -1
     MessageService::delete_message(&mut s, "personal", &conv.id, "m1").unwrap();
     assert_eq!(
-        MessageService::get_conversation(&s, "personal", &conv.id).unwrap().unwrap().unread_count,
+        MessageService::get_conversation(&s, "personal", &conv.id)
+            .unwrap()
+            .unwrap()
+            .unread_count,
         0
     );
     // unread==0 时不出现下溢；删自己发的消息不影响未读
     MessageService::delete_message(&mut s, "personal", &conv.id, "m2").unwrap();
     assert_eq!(
-        MessageService::get_conversation(&s, "personal", &conv.id).unwrap().unwrap().unread_count,
+        MessageService::get_conversation(&s, "personal", &conv.id)
+            .unwrap()
+            .unwrap()
+            .unread_count,
         0
     );
 }
@@ -394,8 +467,15 @@ fn delete_peer_message_decrements_unread() {
 fn force_recall_requires_matching_sender() {
     let mut s = MemoryStorage::new();
     let conv = setup(&mut s);
-    MessageService::append_message(&mut s, "personal", &conv.id, &msg("m1", PEER, NOW, None)).unwrap();
-    MessageService::append_message(&mut s, "personal", &conv.id, &msg("m2", ME, NOW + 1, Some("delivered"))).unwrap();
+    MessageService::append_message(&mut s, "personal", &conv.id, &msg("m1", PEER, NOW, None))
+        .unwrap();
+    MessageService::append_message(
+        &mut s,
+        "personal",
+        &conv.id,
+        &msg("m2", ME, NOW + 1, Some("delivered")),
+    )
+    .unwrap();
 
     // 归属匹配：发送者撤回自己的消息
     assert!(MessageService::force_recall(&mut s, "personal", &conv.id, "m1", PEER).unwrap());
@@ -438,7 +518,13 @@ fn records_serialize_camel_case_and_skip_none() {
         .unwrap();
     let v: serde_json::Value = serde_json::from_str(&raw_conv).unwrap();
     for key in [
-        "peerRootId", "peer", "unreadCount", "pinnedAt", "muted", "draft", "updatedAt",
+        "peerRootId",
+        "peer",
+        "unreadCount",
+        "pinnedAt",
+        "muted",
+        "draft",
+        "updatedAt",
     ] {
         assert!(v.get(key).is_some(), "missing {key}");
     }
@@ -451,8 +537,15 @@ fn records_serialize_camel_case_and_skip_none() {
 fn mark_read_flags_peer_messages_and_delete_skips_read_ones() {
     let mut s = MemoryStorage::new();
     let conv = setup(&mut s);
-    MessageService::append_message(&mut s, "personal", &conv.id, &msg("m1", PEER, NOW, None)).unwrap();
-    MessageService::append_message(&mut s, "personal", &conv.id, &msg("m2", PEER, NOW + 1, None)).unwrap();
+    MessageService::append_message(&mut s, "personal", &conv.id, &msg("m1", PEER, NOW, None))
+        .unwrap();
+    MessageService::append_message(
+        &mut s,
+        "personal",
+        &conv.id,
+        &msg("m2", PEER, NOW + 1, None),
+    )
+    .unwrap();
     MessageService::increment_unread(&mut s, "personal", &conv.id).unwrap();
     MessageService::increment_unread(&mut s, "personal", &conv.id).unwrap();
 
@@ -462,20 +555,32 @@ fn mark_read_flags_peer_messages_and_delete_skips_read_ones() {
     assert!(list.iter().all(|m| m.read), "对端消息均被标记已读");
 
     // 新到一条未读
-    MessageService::append_message(&mut s, "personal", &conv.id, &msg("m3", PEER, NOW + 2, None)).unwrap();
+    MessageService::append_message(
+        &mut s,
+        "personal",
+        &conv.id,
+        &msg("m3", PEER, NOW + 2, None),
+    )
+    .unwrap();
     MessageService::increment_unread(&mut s, "personal", &conv.id).unwrap();
 
     // 删已读的历史消息：不清真正未读的角标（修复前的启发式会误 -1）
     MessageService::delete_message(&mut s, "personal", &conv.id, "m1").unwrap();
     assert_eq!(
-        MessageService::get_conversation(&s, "personal", &conv.id).unwrap().unwrap().unread_count,
+        MessageService::get_conversation(&s, "personal", &conv.id)
+            .unwrap()
+            .unwrap()
+            .unread_count,
         1,
         "删已读消息不影响未读"
     );
     // 删真正未读的消息：未读 -1
     MessageService::delete_message(&mut s, "personal", &conv.id, "m3").unwrap();
     assert_eq!(
-        MessageService::get_conversation(&s, "personal", &conv.id).unwrap().unwrap().unread_count,
+        MessageService::get_conversation(&s, "personal", &conv.id)
+            .unwrap()
+            .unwrap()
+            .unread_count,
         0
     );
 }
@@ -484,33 +589,59 @@ fn mark_read_flags_peer_messages_and_delete_skips_read_ones() {
 fn set_message_status_if_sending_is_compare_and_set() {
     let mut s = MemoryStorage::new();
     let conv = setup(&mut s);
-    MessageService::append_message(&mut s, "personal", &conv.id, &msg("m1", ME, NOW, Some("sending")))
-        .unwrap();
+    MessageService::append_message(
+        &mut s,
+        "personal",
+        &conv.id,
+        &msg("m1", ME, NOW, Some("sending")),
+    )
+    .unwrap();
 
     // sending → delivered：写入成功
     assert!(
-        MessageService::set_message_status_if_sending(&mut s, "personal", &conv.id, "m1", "delivered")
-            .unwrap()
+        MessageService::set_message_status_if_sending(
+            &mut s,
+            "personal",
+            &conv.id,
+            "m1",
+            "delivered"
+        )
+        .unwrap()
     );
     // 已是终态：旧投递任务的迟到回写放弃（resend 竞态防护）
     assert!(
-        !MessageService::set_message_status_if_sending(&mut s, "personal", &conv.id, "m1", "failed")
-            .unwrap()
+        !MessageService::set_message_status_if_sending(
+            &mut s, "personal", &conv.id, "m1", "failed"
+        )
+        .unwrap()
     );
     let list = MessageService::get_messages(&s, "personal", &conv.id).unwrap();
-    assert_eq!(list[0].status.as_deref(), Some("delivered"), "终态不被过期回写覆盖");
+    assert_eq!(
+        list[0].status.as_deref(),
+        Some("delivered"),
+        "终态不被过期回写覆盖"
+    );
 
     // 已撤回/不存在：均不写入
-    MessageService::append_message(&mut s, "personal", &conv.id, &msg("m2", ME, NOW + 1, Some("sending")))
-        .unwrap();
+    MessageService::append_message(
+        &mut s,
+        "personal",
+        &conv.id,
+        &msg("m2", ME, NOW + 1, Some("sending")),
+    )
+    .unwrap();
     assert!(MessageService::recall_message(&mut s, "personal", &conv.id, "m2", NOW + 2).unwrap());
     assert!(
-        !MessageService::set_message_status_if_sending(&mut s, "personal", &conv.id, "m2", "failed")
-            .unwrap()
+        !MessageService::set_message_status_if_sending(
+            &mut s, "personal", &conv.id, "m2", "failed"
+        )
+        .unwrap()
     );
     assert!(
-        !MessageService::set_message_status_if_sending(&mut s, "personal", &conv.id, "no-such", "failed")
-            .unwrap()
+        !MessageService::set_message_status_if_sending(
+            &mut s, "personal", &conv.id, "no-such", "failed"
+        )
+        .unwrap()
     );
 }
 
@@ -518,7 +649,8 @@ fn set_message_status_if_sending_is_compare_and_set() {
 fn message_id_index_maintained_on_append_delete_clear() {
     let mut s = MemoryStorage::new();
     let conv = setup(&mut s);
-    MessageService::append_message(&mut s, "personal", &conv.id, &msg("m1", PEER, NOW, None)).unwrap();
+    MessageService::append_message(&mut s, "personal", &conv.id, &msg("m1", PEER, NOW, None))
+        .unwrap();
 
     // append 写索引：msg:byid:{space}:{convId}:{msgId} → 消息存储键
     let index_key = spark_core::message::message_id_index_key("personal", &conv.id, "m1");
@@ -529,21 +661,36 @@ fn message_id_index_maintained_on_append_delete_clear() {
     );
     // get_message 走索引直取
     assert_eq!(
-        MessageService::get_message(&s, "personal", &conv.id, "m1").unwrap().unwrap().id,
+        MessageService::get_message(&s, "personal", &conv.id, "m1")
+            .unwrap()
+            .unwrap()
+            .id,
         "m1"
     );
 
     // delete_message 清理索引
     MessageService::delete_message(&mut s, "personal", &conv.id, "m1").unwrap();
     assert_eq!(s.get(&index_key).unwrap(), None, "delete 清理索引项");
-    assert_eq!(MessageService::get_message(&s, "personal", &conv.id, "m1").unwrap(), None);
+    assert_eq!(
+        MessageService::get_message(&s, "personal", &conv.id, "m1").unwrap(),
+        None
+    );
 
     // clear_messages 清理全部索引项
-    MessageService::append_message(&mut s, "personal", &conv.id, &msg("m2", PEER, NOW, None)).unwrap();
-    MessageService::append_message(&mut s, "personal", &conv.id, &msg("m3", PEER, NOW + 1, None)).unwrap();
+    MessageService::append_message(&mut s, "personal", &conv.id, &msg("m2", PEER, NOW, None))
+        .unwrap();
+    MessageService::append_message(
+        &mut s,
+        "personal",
+        &conv.id,
+        &msg("m3", PEER, NOW + 1, None),
+    )
+    .unwrap();
     MessageService::clear_messages(&mut s, "personal", &conv.id).unwrap();
     assert!(
-        s.scan(&spark_core::storage::ScanOptions::prefix("msg:byid:")).unwrap().is_empty(),
+        s.scan(&spark_core::storage::ScanOptions::prefix("msg:byid:"))
+            .unwrap()
+            .is_empty(),
         "clear 清理会话全部索引项"
     );
 }
@@ -565,5 +712,8 @@ fn get_message_falls_back_to_scan_for_legacy_rows_without_index() {
     assert_eq!(found.as_ref().map(|m| m.id.as_str()), Some("legacy-1"));
     assert!(MessageService::force_recall(&mut s, "personal", &conv.id, "legacy-1", PEER).unwrap());
     MessageService::delete_message(&mut s, "personal", &conv.id, "legacy-1").unwrap();
-    assert_eq!(MessageService::get_message(&s, "personal", &conv.id, "legacy-1").unwrap(), None);
+    assert_eq!(
+        MessageService::get_message(&s, "personal", &conv.id, "legacy-1").unwrap(),
+        None
+    );
 }

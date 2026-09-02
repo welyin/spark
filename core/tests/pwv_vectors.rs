@@ -3,13 +3,13 @@
 //!
 //! 规格：`wiki/protocol/p2p/personal-data-sync.md` §13。
 
-use serde_json::Value;
 use base64::Engine as _;
+use serde_json::Value;
 use spark_core::epoch::RotationReason;
 use spark_core::pw::{
     GateDecision, PasswordAck, PasswordVerifier, apply_value, build_ack, build_value,
-    compute_ack_mac, decrypt_with_kverify, derive_kack, derive_kverify, get_applied_vts,
-    get_pwv, put_applied_vts, should_gate, verify_ack_mac, verify_value,
+    compute_ack_mac, decrypt_with_kverify, derive_kack, derive_kverify, get_applied_vts, get_pwv,
+    put_applied_vts, should_gate, verify_ack_mac, verify_value,
 };
 use spark_core::storage::MemoryStorage;
 
@@ -100,7 +100,10 @@ fn pwv_kack_and_ack_mac() {
 
     // ack 线形对象序列化。
     let ack = build_ack(&kverify, peer, v_ts);
-    assert!(verify_ack_mac(&kack, peer, v_ts, &ack.mac), "verify ack mac");
+    assert!(
+        verify_ack_mac(&kack, peer, v_ts, &ack.mac),
+        "verify ack mac"
+    );
 }
 
 #[test]
@@ -157,13 +160,20 @@ fn pwv_watermark_monotonic() {
     };
 
     let applied = apply_value(&mut storage, "node1", &incoming, 1760000000000_i64).unwrap();
-    assert_eq!(applied, expect["apply"].as_bool().unwrap(), "replay ignored");
+    assert_eq!(
+        applied,
+        expect["apply"].as_bool().unwrap(),
+        "replay ignored"
+    );
     assert_eq!(
         get_applied_vts(&storage).unwrap(),
         expect["watermarkStays"].as_u64().unwrap(),
         "watermark stays"
     );
-    assert!(get_pwv(&storage).unwrap().is_none(), "pwv not written on replay");
+    assert!(
+        get_pwv(&storage).unwrap().is_none(),
+        "pwv not written on replay"
+    );
 }
 
 #[test]
@@ -174,7 +184,11 @@ fn pwv_self_serde_bytes() {
     let expect_json = t["expect"]["json"].as_str().unwrap();
 
     let pwv: PasswordVerifier = serde_json::from_str(expect_json).expect("parse pwv:self");
-    assert_eq!(pwv.to_json().unwrap(), expect_json, "pwv:self serialization exact");
+    assert_eq!(
+        pwv.to_json().unwrap(),
+        expect_json,
+        "pwv:self serialization exact"
+    );
 }
 
 #[test]
@@ -185,7 +199,11 @@ fn pwack_wire_bytes() {
     let expect_json = t["expect"]["json"].as_str().unwrap();
 
     let ack: PasswordAck = serde_json::from_str(expect_json).expect("parse pwack");
-    assert_eq!(ack.to_json().unwrap(), expect_json, "pwack serialization exact");
+    assert_eq!(
+        ack.to_json().unwrap(),
+        expect_json,
+        "pwack serialization exact"
+    );
 }
 
 #[test]
@@ -220,8 +238,15 @@ fn epoch_state_reason_password_reset() {
     let state: spark_core::epoch::EpochState = serde_json::from_str(expect_json).expect("parse");
     assert_eq!(state.reason, RotationReason::PasswordReset);
     assert_eq!(state.reason.as_str(), "password_reset");
-    assert_eq!(serde_json::to_string(&state.reason).unwrap(), "\"password_reset\"");
-    assert_eq!(serde_json::to_string(&state).unwrap(), expect_json, "serialization exact");
+    assert_eq!(
+        serde_json::to_string(&state.reason).unwrap(),
+        "\"password_reset\""
+    );
+    assert_eq!(
+        serde_json::to_string(&state).unwrap(),
+        expect_json,
+        "serialization exact"
+    );
 }
 
 #[test]
@@ -233,6 +258,10 @@ fn epoch_state_unknown_reason_fallback() {
     let parses_as_unknown = t["expect"]["parsesAsUnknown"].as_bool().unwrap();
 
     let state: spark_core::epoch::EpochState = serde_json::from_str(input_json).expect("parse");
-    assert_eq!(state.reason, RotationReason::Unknown, "unknown reason fallback");
+    assert_eq!(
+        state.reason,
+        RotationReason::Unknown,
+        "unknown reason fallback"
+    );
     assert!(parses_as_unknown, "vector marks as unknown fallback");
 }

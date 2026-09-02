@@ -39,8 +39,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 pub use service::ContactService;
-pub use service::{DmChannel, DmRecipientFilter, DmRecipientSkipReason, SkippedRecipient};
 pub(crate) use service::sync::{apply_contact_sync_snapshot, build_contact_sync_snapshot};
+pub use service::{DmChannel, DmRecipientFilter, DmRecipientSkipReason, SkippedRecipient};
 
 /// 朋友记录键前缀（`ct:friend:{rootId}`）。
 pub(crate) const FRIEND_PREFIX: &str = "ct:friend:";
@@ -490,8 +490,16 @@ mod tests {
         let record = FriendRecord {
             root_id: "root-a".to_string(),
             peers: vec![
-                PeerRef { peer_id: "peer-1".to_string(), addresses: vec![], ..Default::default()},
-                PeerRef { peer_id: "peer-2".to_string(), addresses: vec!["/ip4/5.6.7.8/tcp/4001".to_string()], ..Default::default()},
+                PeerRef {
+                    peer_id: "peer-1".to_string(),
+                    addresses: vec![],
+                    ..Default::default()
+                },
+                PeerRef {
+                    peer_id: "peer-2".to_string(),
+                    addresses: vec!["/ip4/5.6.7.8/tcp/4001".to_string()],
+                    ..Default::default()
+                },
             ],
             added_at: 100,
             updated_at: 200,

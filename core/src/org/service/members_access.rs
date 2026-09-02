@@ -34,7 +34,14 @@ impl OrganizationService {
         now_ms: i64,
     ) -> Result<OrganizationRecord> {
         let mut record = Self::require_organization(storage, org_id)?;
-        if Self::publish_access_key_mutate(storage, &mut record, org_id, access_key, current_root_id, now_ms)? {
+        if Self::publish_access_key_mutate(
+            storage,
+            &mut record,
+            org_id,
+            access_key,
+            current_root_id,
+            now_ms,
+        )? {
             Self::save_record(storage, &record)?;
         }
         Ok(record)
@@ -54,7 +61,14 @@ impl OrganizationService {
     ) -> Result<OrganizationRecord> {
         let _ = node_id; // 记账由中间件完成，参数保留以稳定签名
         Self::update_record_atomic(storage, io_lock, org_id, |storage, record| {
-            Self::publish_access_key_mutate(storage, record, org_id, access_key, current_root_id, now_ms)
+            Self::publish_access_key_mutate(
+                storage,
+                record,
+                org_id,
+                access_key,
+                current_root_id,
+                now_ms,
+            )
         })
     }
 
@@ -94,15 +108,13 @@ impl OrganizationService {
                 summary: "发布组织身份访问密钥".to_string(),
                 // m1：不落完整公钥/签名（审计面记录变更事实，不含密码学材料）
                 payload: Some(
-                    [("accessKey".to_string(), Value::from(true))].into_iter().collect(),
+                    [("accessKey".to_string(), Value::from(true))]
+                        .into_iter()
+                        .collect(),
                 ),
             },
         )?;
-        Self::rebuild_sync_after_mutation(
-            record,
-            previous_last_synced_at,
-            transaction.created_at,
-        );
+        Self::rebuild_sync_after_mutation(record, previous_last_synced_at, transaction.created_at);
         Ok(true)
     }
 }

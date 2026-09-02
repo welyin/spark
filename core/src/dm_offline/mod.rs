@@ -29,8 +29,8 @@ pub use service::{
     DmOfflineError, PendingSpace, enqueue, list_for_recipient, pending_key, prune_expired, remove,
 };
 pub use types::{
-    GLOBAL_PENDING_CAP, ORG_PENDING_PREFIX, PENDING_PREFIX, PER_RECIPIENT_PENDING_CAP,
-    PENDING_TTL_MS, PendingRecord,
+    GLOBAL_PENDING_CAP, ORG_PENDING_PREFIX, PENDING_PREFIX, PENDING_TTL_MS,
+    PER_RECIPIENT_PENDING_CAP, PendingRecord,
 };
 
 #[cfg(test)]

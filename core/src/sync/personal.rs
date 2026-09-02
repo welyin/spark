@@ -10,8 +10,8 @@
 //! collection 级 vv）。
 
 use crate::storage::{BatchOperation, ScanOptions, StorageBackend};
-use crate::sync::meta::{CompareResult, DocMeta, compare_version_vectors};
 use crate::sync::SyncResult;
+use crate::sync::meta::{CompareResult, DocMeta, compare_version_vectors};
 
 /// 节点写入序号键（`p2p:` 前缀不进 pdsync 流量）：vv 计数采用 **per-node
 /// 单调序号**（该节点个人域第 N 次写），而非 per-key 计数。per-key 计数下

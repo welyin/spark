@@ -59,7 +59,10 @@ async fn outbound_dm_and_connect_to_revoked_fail() {
         .await
         .unwrap_err()
         .to_string();
-    assert!(err.contains("is revoked"), "connect_peer 到 revoked 应立即失败，实为 {err}");
+    assert!(
+        err.contains("is revoked"),
+        "connect_peer 到 revoked 应立即失败，实为 {err}"
+    );
 
     // dm_direct 到 revoked → 立即失败。
     let err = a
@@ -73,7 +76,10 @@ async fn outbound_dm_and_connect_to_revoked_fail() {
         .await
         .unwrap_err()
         .to_string();
-    assert!(err.contains("is revoked"), "dm_direct 到 revoked 应立即失败，实为 {err}");
+    assert!(
+        err.contains("is revoked"),
+        "dm_direct 到 revoked 应立即失败，实为 {err}"
+    );
 
     a.stop().await;
     b.stop().await;
@@ -165,10 +171,7 @@ async fn inbound_dm_from_revoked_returns_revoked_and_skips_host() {
         None => {} // 连接被 B 断开（M9 多连接 + M2 断开全部连接），合法
     }
     let dms = state_b.lock().unwrap().dms.clone();
-    assert!(
-        dms.is_empty(),
-        "revoked peer 的 dm 不得进入宿主 handle_dm"
-    );
+    assert!(dms.is_empty(), "revoked peer 的 dm 不得进入宿主 handle_dm");
 
     a.stop().await;
     b.stop().await;

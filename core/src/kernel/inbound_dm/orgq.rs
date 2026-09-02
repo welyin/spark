@@ -62,8 +62,13 @@ pub trait OrgqPermHook {
     /// `canRead(member, collection, key)` 裁决：true = 放行该 key 给 member。
     fn can_read(&self, member: &str, collection: &str, key: &str) -> bool;
     /// `canWrite(member, collection, key, value)` 裁决：true = 放行该写入。
-    fn can_write(&self, member: &str, collection: &str, key: &str, value: &serde_json::Value)
-        -> bool;
+    fn can_write(
+        &self,
+        member: &str,
+        collection: &str,
+        key: &str,
+        value: &serde_json::Value,
+    ) -> bool;
 }
 
 /// orgq-req 入站（**数据账号侧**）：受理成员的按需查询 / 写入。
@@ -113,7 +118,13 @@ fn apply_orgq_write<S: StorageBackend>(
     // delete_personal 同口径。远端 orgsync 合入墓碑同样补登 org 域 dlog
     // （handle_orgsync_data），保证删除在复制组内接力传播。
     match crate::sync::orgsync::org_tombstone_local(
-        storage, ctx.node_id, org_id, name, version, &key, now,
+        storage,
+        ctx.node_id,
+        org_id,
+        name,
+        version,
+        &key,
+        now,
     ) {
         Ok(_) => {
             log::info!("[ORGQ] write tombstone | org={org_id} key={key}");
@@ -137,14 +148,10 @@ pub(super) fn handle_orgq_req<S: StorageBackend>(
     // req 不再借用冲突
     let (org_id, col_full, name, version) = match &req {
         crate::sync::orgsync::OrgqReq::Query {
-            org_id,
-            collection,
-            ..
+            org_id, collection, ..
         }
         | crate::sync::orgsync::OrgqReq::Write {
-            org_id,
-            collection,
-            ..
+            org_id, collection, ..
         } => {
             let Some((name, version)) = split_collection_full(collection) else {
                 return done(fail_response("invalid-collection"), Vec::new());
@@ -168,12 +175,9 @@ pub(super) fn handle_orgq_req<S: StorageBackend>(
 
     // 集合须为已声明的 org scope 集合
     let decl_key = crate::plugindata::org_decl_key(&org_id, &name, &version);
-    let Some(decl) = storage
-        .get(&decl_key)
-        .ok()
-        .flatten()
-        .and_then(|raw| serde_json::from_str::<crate::plugindata::CollectionDeclaration>(&raw).ok())
-    else {
+    let Some(decl) = storage.get(&decl_key).ok().flatten().and_then(|raw| {
+        serde_json::from_str::<crate::plugindata::CollectionDeclaration>(&raw).ok()
+    }) else {
         return done(fail_response("collection-not-declared"), Vec::new());
     };
 
@@ -226,7 +230,13 @@ pub(super) fn handle_orgq_req<S: StorageBackend>(
             let denied = (is_encrypted && !acl_reader) || (is_filtered && !filtered_serving);
             if denied {
                 let resp = crate::sync::orgsync::build_orgq_query_resp(
-                    &org_id, &col_full, &request_id, &[], true, now, true,
+                    &org_id,
+                    &col_full,
+                    &request_id,
+                    &[],
+                    true,
+                    now,
+                    true,
                 );
                 out.push(OrgsyncOut::OrgqResp {
                     to_root_id: from.to_string(),
@@ -246,17 +256,16 @@ pub(super) fn handle_orgq_req<S: StorageBackend>(
                     Some(h) => h.can_read(from, &col_full, rel),
                     None => true,
                 };
-                let (records, has_more) =
-                    crate::sync::orgsync::collect_orgq_records_page(
-                        storage,
-                        &org_id,
-                        &name,
-                        &version,
-                        prefix.as_deref(),
-                        limit,
-                        cursor.as_deref(),
-                        allow,
-                    );
+                let (records, has_more) = crate::sync::orgsync::collect_orgq_records_page(
+                    storage,
+                    &org_id,
+                    &name,
+                    &version,
+                    prefix.as_deref(),
+                    limit,
+                    cursor.as_deref(),
+                    allow,
+                );
                 // 按 dm 信封体积分批（Z6：complete 仅末批 true；非末批 false）。
                 let page_complete = !has_more;
                 let batches = crate::sync::orgsync::split_orgq_resp_batches(
@@ -267,7 +276,13 @@ pub(super) fn handle_orgq_req<S: StorageBackend>(
                 for (i, batch) in batches.into_iter().enumerate() {
                     let batch_complete = i == last - 1 && page_complete;
                     let resp = crate::sync::orgsync::build_orgq_query_resp(
-                        &org_id, &col_full, &request_id, &batch, batch_complete, now, false,
+                        &org_id,
+                        &col_full,
+                        &request_id,
+                        &batch,
+                        batch_complete,
+                        now,
+                        false,
                     );
                     out.push(OrgsyncOut::OrgqResp {
                         to_root_id: from.to_string(),
@@ -308,7 +323,17 @@ pub(super) fn handle_orgq_req<S: StorageBackend>(
                         rejected += 1;
                         continue;
                     }
-                    if apply_orgq_write(storage, ctx, &org_id, &name, &version, &base, rel, &record.value, now) {
+                    if apply_orgq_write(
+                        storage,
+                        ctx,
+                        &org_id,
+                        &name,
+                        &version,
+                        &base,
+                        rel,
+                        &record.value,
+                        now,
+                    ) {
                         // O4：encrypted 删除受理落审计日志（from,key,ts）——
                         // 最简独立审计键族，防删除越权事后追查。
                         if record.value.is_null() {
@@ -326,7 +351,17 @@ pub(super) fn handle_orgq_req<S: StorageBackend>(
                 for record in &records {
                     let rel = record.key.strip_prefix(&base).unwrap_or(&record.key);
                     if hook.can_write(from, &col_full, rel, &record.value) {
-                        if apply_orgq_write(storage, ctx, &org_id, &name, &version, &base, rel, &record.value, now) {
+                        if apply_orgq_write(
+                            storage,
+                            ctx,
+                            &org_id,
+                            &name,
+                            &version,
+                            &base,
+                            rel,
+                            &record.value,
+                            now,
+                        ) {
                             accepted += 1;
                         } else {
                             rejected += 1;
@@ -339,7 +374,12 @@ pub(super) fn handle_orgq_req<S: StorageBackend>(
                 rejected = records.len();
             }
             let resp = crate::sync::orgsync::build_orgq_write_resp(
-                &org_id, &col_full, &request_id, accepted, rejected, denied,
+                &org_id,
+                &col_full,
+                &request_id,
+                accepted,
+                rejected,
+                denied,
             );
             out.push(OrgsyncOut::OrgqResp {
                 to_root_id: from.to_string(),
@@ -494,13 +534,17 @@ pub(super) fn handle_orgq_resp<S: StorageBackend>(
             // 写入回执落 `orgq:resp:{requestId}`（成员侧 data_save 在线投递据此
             // 判定 accepted/rejected/denied）。
             crate::sync::orgsync::orgq_resp_put(
-                storage, &request_id, accepted, rejected, denied, ctx.now_ms,
+                storage,
+                &request_id,
+                accepted,
+                rejected,
+                denied,
+                ctx.now_ms,
             );
             // Z4：flush 冲刷的离线队列收到受理回执 → 确认后清理该集合队列条目
             // （send-then-delete 的删除端；超时未回执的队列条目保留，下次冲刷重发）。
-            let cleared = crate::sync::orgsync::orgq_queue_clear_by_collection(
-                storage, &org_id, &col_full,
-            );
+            let cleared =
+                crate::sync::orgsync::orgq_queue_clear_by_collection(storage, &org_id, &col_full);
             if cleared > 0 {
                 log::info!(
                     "[ORGQ] resp cleared offline queue | org={org_id} col={col_full} cleared={cleared}"

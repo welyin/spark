@@ -13,8 +13,7 @@
 //! - org 写入推送 / orgsync-hello 懒拨号时，本地端点全不通走本环节。
 
 use super::{
-    OrgSyncContext, RECOVERY_DIAL_BUDGET, RECOVERY_ORGS_PER_ROUND,
-    RECOVERY_REFRESH_MIN_INTERVAL_MS,
+    OrgSyncContext, RECOVERY_DIAL_BUDGET, RECOVERY_ORGS_PER_ROUND, RECOVERY_REFRESH_MIN_INTERVAL_MS,
 };
 use crate::org::gateway::{OrgMemberHint, org_members_dht_key};
 use crate::org::{OrganizationService, active_recovery_tokens};
@@ -95,8 +94,14 @@ impl OrgSyncContext {
         let view = {
             let mut storage = self.storage.clone();
             let node_id = self.node.peer_id().to_string();
-            OrganizationService::get_recovery_view(&mut storage, &self.io_lock, root_id, now, &node_id)
-                .unwrap_or_default()
+            OrganizationService::get_recovery_view(
+                &mut storage,
+                &self.io_lock,
+                root_id,
+                now,
+                &node_id,
+            )
+            .unwrap_or_default()
         };
         let neighbors: Vec<String> = self
             .node
@@ -119,10 +124,7 @@ impl OrgSyncContext {
                 return;
             }
             // 无恢复视图/邻居但 DHT 提示命中：仅拨号
-            self.recovery_trigger
-                .lock()
-                .unwrap()
-                .note_query(now);
+            self.recovery_trigger.lock().unwrap().note_query(now);
             for candidate in plan_recovery_dials(&dialed, RECOVERY_DIAL_BUDGET) {
                 let _ = self.node.connect_peer(&candidate).await;
             }
@@ -155,11 +157,7 @@ impl OrgSyncContext {
     /// [`super::dial::leaf_ordered_org_candidates`] 排序（网关活跃集 → 数据
     /// 账号 → 最近在线成员）汇总，剔除已连接端点（建立一条后保持；`connect_peer`
     /// 对已连接目标也会短路，此处剔除是为让「首个候选」指向真正需要拨的）。
-    async fn leaf_org_link_candidates(
-        &self,
-        root_id: &str,
-        now: i64,
-    ) -> Vec<PeerNodeInfo> {
+    async fn leaf_org_link_candidates(&self, root_id: &str, now: i64) -> Vec<PeerNodeInfo> {
         let orgs = OrganizationService::read_all_organizations(&self.storage).unwrap_or_default();
         let connected: std::collections::HashSet<String> = self
             .node

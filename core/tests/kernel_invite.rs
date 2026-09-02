@@ -362,7 +362,15 @@ fn accept_invite_two_kernels_full() {
         .expect("B 是成员");
     let b_peer = kernel_b.p2p_status().unwrap().unwrap().peer_id.unwrap();
     assert_eq!(
-        b_member.node_info.as_ref().unwrap().iter().next().unwrap().peer_id.as_deref(),
+        b_member
+            .node_info
+            .as_ref()
+            .unwrap()
+            .iter()
+            .next()
+            .unwrap()
+            .peer_id
+            .as_deref(),
         Some(b_peer.as_str()),
         "claim 回填 B 的 peerId"
     );
@@ -422,7 +430,13 @@ fn org_send_invite_persists_outgoing_record_idempotent() {
     let target = "cd".repeat(32);
 
     let record = kernel
-        .org_send_invite(&org.record.org_id, &target, Some("peer-target-123"), &[], Some("小张"))
+        .org_send_invite(
+            &org.record.org_id,
+            &target,
+            Some("peer-target-123"),
+            &[],
+            Some("小张"),
+        )
         .unwrap();
     assert_eq!(record.direction, OrgInviteDirection::Outgoing);
     assert_eq!(record.status, OrgInviteStatus::Pending);
@@ -434,7 +448,13 @@ fn org_send_invite_persists_outgoing_record_idempotent() {
 
     // 重复邀请：原地更新（新邀请 id、回 pending），同 (orgId, peer) 只留一条
     let again = kernel
-        .org_send_invite(&org.record.org_id, &target, Some("peer-target-123"), &[], None)
+        .org_send_invite(
+            &org.record.org_id,
+            &target,
+            Some("peer-target-123"),
+            &[],
+            None,
+        )
         .unwrap();
     assert_ne!(again.id, record.id, "重复邀请生成新邀请 id");
     assert_eq!(again.status, OrgInviteStatus::Pending);
@@ -512,11 +532,22 @@ fn org_send_invite_guard_errors() {
         .unwrap_err()
         .to_string();
     assert!(err.contains("无法确定对方节点地址"), "得到 {err}");
-    assert!(kernel.org_invite_records(&org.record.org_id).unwrap().is_empty());
+    assert!(
+        kernel
+            .org_invite_records(&org.record.org_id)
+            .unwrap()
+            .is_empty()
+    );
     // 组织不存在
     assert!(
         kernel
-            .org_send_invite("org_eeeeffff00001111", &"cd".repeat(32), Some("peer-x"), &[], None)
+            .org_send_invite(
+                "org_eeeeffff00001111",
+                &"cd".repeat(32),
+                Some("peer-x"),
+                &[],
+                None
+            )
             .is_err()
     );
     kernel.shutdown().unwrap();

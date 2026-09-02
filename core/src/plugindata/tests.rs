@@ -18,7 +18,14 @@ fn declare_sync<S: StorageBackend>(s: &mut S, name: &str) -> CollectionDeclarati
 #[test]
 fn declare_persists_and_is_idempotent() {
     let mut s = MemoryStorage::new();
-    let d1 = declare(&mut s, "ai-chat", input("ai-chat:conversations"), 1000, None).unwrap();
+    let d1 = declare(
+        &mut s,
+        "ai-chat",
+        input("ai-chat:conversations"),
+        1000,
+        None,
+    )
+    .unwrap();
     assert_eq!(d1.version, "1", "version 缺省 1");
     assert_eq!(d1.scope, Scope::Sync);
     assert_eq!(d1.devices, Devices::All);
@@ -26,7 +33,14 @@ fn declare_persists_and_is_idempotent() {
     // 声明记录落在 pdecl: 命名空间
     assert!(s.get("pdecl:ai-chat:conversations@v1").unwrap().is_some());
     // 同策略重复声明幂等（保留首次 declaredAt）
-    let d2 = declare(&mut s, "ai-chat", input("ai-chat:conversations"), 2000, None).unwrap();
+    let d2 = declare(
+        &mut s,
+        "ai-chat",
+        input("ai-chat:conversations"),
+        2000,
+        None,
+    )
+    .unwrap();
     assert_eq!(d2.declared_at, 1000);
 }
 
@@ -40,7 +54,10 @@ fn declare_conflicting_strategy_rejected() {
         ..Default::default()
     };
     let err = declare(&mut s, "ai-chat", conflict, 2000, None).unwrap_err();
-    assert!(matches!(err, PlugindataError::ConflictingDeclaration { .. }));
+    assert!(matches!(
+        err,
+        PlugindataError::ConflictingDeclaration { .. }
+    ));
 }
 
 #[test]
@@ -54,8 +71,15 @@ fn declare_new_version_creates_independent_namespace() {
         ..Default::default()
     };
     let d2 = declare(&mut s, "ai-chat", v2, 2000, None).unwrap();
-    assert!(s.get("pdecl:ai-chat:conversations@v2.0.0").unwrap().is_some());
-    assert_ne!(d2.data_prefix(), declare_sync(&mut s, "ai-chat:conversations").data_prefix());
+    assert!(
+        s.get("pdecl:ai-chat:conversations@v2.0.0")
+            .unwrap()
+            .is_some()
+    );
+    assert_ne!(
+        d2.data_prefix(),
+        declare_sync(&mut s, "ai-chat:conversations").data_prefix()
+    );
 }
 
 #[test]
@@ -227,7 +251,10 @@ fn whole_merge_forces_single_key() {
     save(&mut s, &decl, "ignored-a", "\"x\"").unwrap();
     save(&mut s, &decl, "ignored-b", "\"y\"").unwrap();
     // 任意 key 读写都落到同一条记录
-    assert_eq!(get(&s, &decl, "whatever").unwrap().as_deref(), Some("\"y\""));
+    assert_eq!(
+        get(&s, &decl, "whatever").unwrap().as_deref(),
+        Some("\"y\"")
+    );
     let page = query(&s, &decl, None, None, None).unwrap();
     assert_eq!(page.items.len(), 1);
     assert_eq!(page.items[0].0, WHOLE_KEY);
@@ -245,7 +272,10 @@ fn devices_residency_matrix() {
     let backup = declare(
         &mut s,
         "ai-chat",
-        DeclareInput { version: Some("2".into()), ..base(Devices::PcBackup) },
+        DeclareInput {
+            version: Some("2".into()),
+            ..base(Devices::PcBackup)
+        },
         2,
         None,
     )
@@ -253,7 +283,10 @@ fn devices_residency_matrix() {
     let pc = declare(
         &mut s,
         "ai-chat",
-        DeclareInput { version: Some("3".into()), ..base(Devices::PcOnly) },
+        DeclareInput {
+            version: Some("3".into()),
+            ..base(Devices::PcOnly)
+        },
         3,
         None,
     )
@@ -261,7 +294,10 @@ fn devices_residency_matrix() {
     let mobile = declare(
         &mut s,
         "ai-chat",
-        DeclareInput { version: Some("4".into()), ..base(Devices::MobileOnly) },
+        DeclareInput {
+            version: Some("4".into()),
+            ..base(Devices::MobileOnly)
+        },
         4,
         None,
     )
@@ -320,7 +356,9 @@ fn org_declare_and_read_write_route_to_org_keys() {
     assert_eq!(decl.confidentiality, Confidentiality::Encrypted);
     // 声明记录落在 org:coll: 键域
     assert!(
-        s.get("org:coll:org_01:ai-chat:finance@v1.0.0").unwrap().is_some(),
+        s.get("org:coll:org_01:ai-chat:finance@v1.0.0")
+            .unwrap()
+            .is_some(),
         "org 声明落 org:coll: 键"
     );
     assert!(
@@ -355,8 +393,15 @@ fn org_declare_and_read_write_route_to_org_keys() {
 
     // 读写路由：save 落 orgd: 键，get/query 按 org 域读
     save(&mut s, &decl, "k1", "\"v1\"").unwrap();
-    assert!(s.get("orgd:org_01:ai-chat:finance@v1.0.0:k1").unwrap().is_some());
-    assert!(s.get("pdoc:ai-chat:finance@v1.0.0:k1").unwrap().is_none(), "不落 personal pdoc");
+    assert!(
+        s.get("orgd:org_01:ai-chat:finance@v1.0.0:k1")
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        s.get("pdoc:ai-chat:finance@v1.0.0:k1").unwrap().is_none(),
+        "不落 personal pdoc"
+    );
     assert_eq!(get(&s, &decl, "k1").unwrap().as_deref(), Some("\"v1\""));
     let page = query(&s, &decl, Some("k"), None, None).unwrap();
     assert_eq!(page.items.len(), 1);

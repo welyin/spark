@@ -36,18 +36,17 @@ use ed25519_dalek::SigningKey;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use spark_core::kernel::{dm_envelope, handle_inbound_dm};
-use spark_core::org::types::{OrganizationMember, OrganizationRecord, OrganizationRole};
 use spark_core::org::OrganizationService;
+use spark_core::org::types::{OrganizationMember, OrganizationRecord, OrganizationRole};
 use spark_core::plugindata::{
     Accounts, CollectionDeclaration, DeclareInput, Space, declare, org_data_prefix, org_decl_key,
 };
 use spark_core::storage::{MemoryStorage, ScanOptions, StorageBackend};
 use spark_core::sync::meta::DocMeta;
 use spark_core::sync::orgsync::{
-    build_orgsync_data_batch, build_orgsync_hello, build_orgsync_need, collect_org_collections,
-    collect_org_incremental, collect_org_tombstones_after, collect_org_collection_vv,
-    org_dlog_current_seq,
-    org_dlog_entries_after,
+    build_orgsync_data_batch, build_orgsync_hello, build_orgsync_need, collect_org_collection_vv,
+    collect_org_collections, collect_org_incremental, collect_org_tombstones_after,
+    org_dlog_current_seq, org_dlog_entries_after,
 };
 use spark_core::sync::{get_personal_meta, is_tombstone, put_personal};
 
@@ -186,7 +185,13 @@ fn delete_org_data(
 ) -> (u64, DocMeta) {
     let record_key = format!("{}{key}", org_data_prefix(org_id, name, version));
     let meta = spark_core::sync::orgsync::org_tombstone_local(
-        storage, node_id, org_id, name, version, &record_key, now,
+        storage,
+        node_id,
+        org_id,
+        name,
+        version,
+        &record_key,
+        now,
     )
     .unwrap();
     let seq = org_dlog_current_seq(storage, org_id, name, version).unwrap();
@@ -215,7 +220,9 @@ fn deliver_orgsync(
         remote_peer_id,
         &HashSet::new(),
         NOW,
-        node_id, None)
+        node_id,
+        None,
+    )
     .unwrap()
 }
 
@@ -226,9 +233,14 @@ fn build_hello_for(
     recipient_root: &str,
     recipient_peer: &str,
 ) -> serde_json::Value {
-    let collections =
-        collect_org_collections(storage, org_id, &[(NAME.to_string(), VERSION.to_string())], recipient_root, recipient_peer)
-            .unwrap();
+    let collections = collect_org_collections(
+        storage,
+        org_id,
+        &[(NAME.to_string(), VERSION.to_string())],
+        recipient_root,
+        recipient_peer,
+    )
+    .unwrap();
     build_orgsync_hello(org_id, collections, &["data".to_string()], "pc")
 }
 

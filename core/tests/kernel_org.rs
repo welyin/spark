@@ -140,7 +140,14 @@ fn org_member_management() {
         .find(|m| m.root_id == member_root)
         .unwrap();
     assert_eq!(
-        m.node_info.as_ref().unwrap().iter().next().unwrap().peer_id.as_deref(),
+        m.node_info
+            .as_ref()
+            .unwrap()
+            .iter()
+            .next()
+            .unwrap()
+            .peer_id
+            .as_deref(),
         Some("12D3KooWMemberPeerX")
     );
 
@@ -214,9 +221,16 @@ fn org_update_my_identity_self_only_and_view_readback() {
     assert_eq!(me.avatar.as_deref(), Some(ORG_LOGO));
     assert_eq!(me.signature.as_deref(), Some("保持热爱"));
     assert_eq!(me.use_personal_identity, Some(true));
-    let other = view.members.iter().find(|m| m.root_id == member_root).unwrap();
+    let other = view
+        .members
+        .iter()
+        .find(|m| m.root_id == member_root)
+        .unwrap();
     assert_eq!(other.nickname, None, "他人成员记录不可改");
-    assert_eq!(other.use_personal_identity, None, "未设置 = None（视同 false）");
+    assert_eq!(
+        other.use_personal_identity, None,
+        "未设置 = None（视同 false）"
+    );
 
     // 视图回读（list_orgs 持久化后再读）
     let views = kernel.list_orgs().unwrap();
@@ -253,7 +267,9 @@ fn org_update_info_avatar_patch() {
     assert_eq!(view.record.avatar, "");
 
     // Some(非空) = 设置（视图带出 avatar）
-    let view = kernel.org_update_info(&org_id, None, None, Some(ORG_LOGO)).unwrap();
+    let view = kernel
+        .org_update_info(&org_id, None, None, Some(ORG_LOGO))
+        .unwrap();
     assert_eq!(view.record.avatar, ORG_LOGO);
 
     // 非法 logo 拒绝（非 data:image/ 前缀）
@@ -269,7 +285,9 @@ fn org_update_info_avatar_patch() {
     assert_eq!(view.record.avatar, ORG_LOGO);
 
     // Some("") = 清除
-    let view = kernel.org_update_info(&org_id, None, None, Some("")).unwrap();
+    let view = kernel
+        .org_update_info(&org_id, None, None, Some(""))
+        .unwrap();
     assert_eq!(view.record.avatar, "");
 
     kernel.shutdown().unwrap();

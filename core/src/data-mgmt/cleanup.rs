@@ -245,7 +245,8 @@ mod tests {
         )
         .unwrap();
         // 新鲜墓碑 → 留
-        s.put("pmeta:ct:friend:fresh", &tombstone_json(NOW)).unwrap();
+        s.put("pmeta:ct:friend:fresh", &tombstone_json(NOW))
+            .unwrap();
         // 非墓碑 pmeta → 留
         s.put("pmeta:ct:friend:live", "{\"vv\":{\"n1\":1},\"ts\":1}")
             .unwrap();

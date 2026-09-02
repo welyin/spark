@@ -48,6 +48,7 @@ pub use invite::{
     decode_org_invite_at, encode_org_invite,
 };
 pub use invite_record::{OrgInviteDirection, OrgInviteRecord, OrgInviteStatus};
+pub use meta_merge::merge_org_meta_record;
 pub use node_card::{
     NODE_CARD_MAX_AGE_MS, NODE_CARD_TYPE, NodeCard, NodeCardReject, build_node_card_payload,
     decode_node_card, encode_node_card, make_node_card, parse_and_verify_node_card, sign_node_card,
@@ -65,9 +66,9 @@ pub use org_address::{
     strip_org_root_secret, verify_org_address_record,
 };
 pub use plugin_docs::{
-    PLUGIN_DOC_PREFIX, PluginDocSyncItem, apply_plugin_doc_sync_items,
-    collect_org_plugin_domains, collect_syncable_plugin_docs, is_sync_disabled,
-    migrate_plugin_docs, parse_plugin_doc_key, resolve_org_id,
+    PLUGIN_DOC_PREFIX, PluginDocSyncItem, apply_plugin_doc_sync_items, collect_org_plugin_domains,
+    collect_syncable_plugin_docs, is_sync_disabled, migrate_plugin_docs, parse_plugin_doc_key,
+    resolve_org_id,
 };
 pub use pull::{
     PullOrgOutcome, classify_pull_org_response, handle_pull_list_request, handle_pull_org_request,
@@ -85,7 +86,6 @@ pub use replica::{
     decide_org_network_status, member_ever_synced, replica_sufficient,
 };
 pub use service::OrganizationService;
-pub use meta_merge::merge_org_meta_record;
 pub use snapshot::{
     ORGANIZATION_SYNC_RESERVED_KEYS, OrganizationSyncSnapshot, OrganizationSyncSummary,
     SnapshotMember, build_organization_sync_snapshot, build_organization_sync_versions,

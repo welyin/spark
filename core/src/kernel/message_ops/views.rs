@@ -3,8 +3,8 @@
 
 use std::collections::HashSet;
 
-use super::{AppMessageView, ChatMessageView, ConversationView, Kernel, Result};
 use super::direct_conversation_id;
+use super::{AppMessageView, ChatMessageView, ConversationView, Kernel, Result};
 use crate::message::types::ConversationKind;
 use crate::message::{AppMessageRecord, ConversationRecord, MessageRecord, MessageService};
 use crate::p2p::node::system_now_ms;
@@ -113,7 +113,11 @@ impl Kernel {
 
     /// 会话消息列表（时间升序；自己发的消息 `senderId`/`senderName` 映射为
     /// `"me"`/`"我"`）。
-    pub fn message_list_messages(&self, space: &str, conv_id: &str) -> Result<Vec<ChatMessageView>> {
+    pub fn message_list_messages(
+        &self,
+        space: &str,
+        conv_id: &str,
+    ) -> Result<Vec<ChatMessageView>> {
         let my_root_id = self.require_current_root_id()?;
         let messages = MessageService::get_messages(self.require_storage()?, space, conv_id)?;
         Ok(messages
@@ -198,16 +202,19 @@ mod tests {
     #[test]
     fn online_uses_conv_peer_first() {
         let set = online(&["peer-conv"]);
-        assert!(conversation_view(
-            &conv(Some(PeerRef {
-                peer_id: "peer-conv".to_string(),
-                addresses: Vec::new(),
-            ..Default::default()})),
-            &set,
-            None,
-            None,
-        )
-        .online);
+        assert!(
+            conversation_view(
+                &conv(Some(PeerRef {
+                    peer_id: "peer-conv".to_string(),
+                    addresses: Vec::new(),
+                    ..Default::default()
+                })),
+                &set,
+                None,
+                None,
+            )
+            .online
+        );
     }
 
     #[test]
@@ -227,7 +234,8 @@ mod tests {
         let c = conv(Some(PeerRef {
             peer_id: "peer-conv".to_string(),
             addresses: Vec::new(),
-        ..Default::default()}));
+            ..Default::default()
+        }));
         assert!(!conversation_view(&c, &set, None, Some("peer-friend")).online);
     }
 

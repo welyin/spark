@@ -184,7 +184,10 @@ pub(crate) fn apply_contact_sync_snapshot<S: StorageBackend>(
     }
 
     // 2) 申请（in/out 两个方向）：记录级 LWW
-    for (field, prefix) in [("requestsIn", REQ_IN_PREFIX), ("requestsOut", REQ_OUT_PREFIX)] {
+    for (field, prefix) in [
+        ("requestsIn", REQ_IN_PREFIX),
+        ("requestsOut", REQ_OUT_PREFIX),
+    ] {
         if let Some(items) = body.get(field).and_then(Value::as_array) {
             for item in items {
                 let Ok(incoming) = serde_json::from_value::<FriendRequestRecord>(item.clone())
@@ -354,7 +357,14 @@ pub(crate) fn apply_contact_sync_snapshot<S: StorageBackend>(
 #[allow(dead_code)]
 pub(crate) fn snapshot_summary(body: &Value) -> Map<String, Value> {
     let mut out = Map::new();
-    for key in ["friends", "requestsIn", "requestsOut", "tags", "groups", "blocked"] {
+    for key in [
+        "friends",
+        "requestsIn",
+        "requestsOut",
+        "tags",
+        "groups",
+        "blocked",
+    ] {
         let count = body
             .get(key)
             .and_then(Value::as_array)
@@ -399,7 +409,12 @@ mod tests {
         }
     }
 
-    fn request(id: &str, root_id: &str, status: FriendRequestStatus, updated_at: i64) -> FriendRequestRecord {
+    fn request(
+        id: &str,
+        root_id: &str,
+        status: FriendRequestStatus,
+        updated_at: i64,
+    ) -> FriendRequestRecord {
         FriendRequestRecord {
             id: id.to_string(),
             root_id: root_id.to_string(),
@@ -438,22 +453,36 @@ mod tests {
         .unwrap();
         ContactService::create_tag_with_id(&mut a, "personal", "t1", "邻居", NOW, NODE_A).unwrap();
         ContactService::create_group_with_id(&mut a, "g1", "家人", NOW, NODE_A).unwrap();
-        ContactService::set_blocked(&mut a, "personal", &"ee".repeat(32), true, NOW, NODE_A).unwrap();
+        ContactService::set_blocked(&mut a, "personal", &"ee".repeat(32), true, NOW, NODE_A)
+            .unwrap();
 
         // A → B
         let body = build_contact_sync_snapshot(&a, MY_ROOT).unwrap();
-        let applied = apply_contact_sync_snapshot(&mut b, MY_ROOT, &body, NODE_A, NODE_B, NOW).unwrap();
+        let applied =
+            apply_contact_sync_snapshot(&mut b, MY_ROOT, &body, NODE_A, NODE_B, NOW).unwrap();
         assert!(applied > 0);
 
         // 朋友同步（自记录除外）
-        assert!(ContactService::get_friend(&b, &"bb".repeat(32)).unwrap().is_some());
+        assert!(
+            ContactService::get_friend(&b, &"bb".repeat(32))
+                .unwrap()
+                .is_some()
+        );
         assert!(
             ContactService::get_friend(&b, MY_ROOT).unwrap().is_none(),
             "自记录不同步"
         );
         // 申请双向
-        assert!(ContactService::get_incoming_request(&b, "in-1").unwrap().is_some());
-        assert!(ContactService::get_outgoing_request(&b, "out-1").unwrap().is_some());
+        assert!(
+            ContactService::get_incoming_request(&b, "in-1")
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            ContactService::get_outgoing_request(&b, "out-1")
+                .unwrap()
+                .is_some()
+        );
         // 标签/分组/拉黑
         let view = ContactService::overview(&b, "personal").unwrap();
         assert_eq!(view.tags.len(), 1);
@@ -461,12 +490,14 @@ mod tests {
         assert!(ContactService::is_blocked(&b, &"ee".repeat(32)).unwrap());
 
         // 幂等：重放同快照无新写入
-        let again = apply_contact_sync_snapshot(&mut b, MY_ROOT, &body, NODE_A, NODE_B, NOW).unwrap();
+        let again =
+            apply_contact_sync_snapshot(&mut b, MY_ROOT, &body, NODE_A, NODE_B, NOW).unwrap();
         assert_eq!(again, 0, "同快照重放幂等");
 
         // 反向 B → A：B 上没有比 A 更新的数据，空转（无新写入）
         let body_b = build_contact_sync_snapshot(&b, MY_ROOT).unwrap();
-        let applied_b = apply_contact_sync_snapshot(&mut a, MY_ROOT, &body_b, NODE_B, NODE_A, NOW).unwrap();
+        let applied_b =
+            apply_contact_sync_snapshot(&mut a, MY_ROOT, &body_b, NODE_B, NODE_A, NOW).unwrap();
         assert_eq!(applied_b, 0, "反向无更新");
     }
 
@@ -482,19 +513,27 @@ mod tests {
 
         // A（旧）→ B（新）：不覆盖
         let body = build_contact_sync_snapshot(&a, MY_ROOT).unwrap();
-        let applied = apply_contact_sync_snapshot(&mut b, MY_ROOT, &body, NODE_A, NODE_B, NOW).unwrap();
+        let applied =
+            apply_contact_sync_snapshot(&mut b, MY_ROOT, &body, NODE_A, NODE_B, NOW).unwrap();
         assert_eq!(applied, 0);
         assert_eq!(
-            ContactService::get_friend(&b, &root).unwrap().unwrap().nickname,
+            ContactService::get_friend(&b, &root)
+                .unwrap()
+                .unwrap()
+                .nickname,
             "新名"
         );
 
         // B（新）→ A（旧）：覆盖
         let body = build_contact_sync_snapshot(&b, MY_ROOT).unwrap();
-        let applied = apply_contact_sync_snapshot(&mut a, MY_ROOT, &body, NODE_B, NODE_A, NOW).unwrap();
+        let applied =
+            apply_contact_sync_snapshot(&mut a, MY_ROOT, &body, NODE_B, NODE_A, NOW).unwrap();
         assert_eq!(applied, 1);
         assert_eq!(
-            ContactService::get_friend(&a, &root).unwrap().unwrap().nickname,
+            ContactService::get_friend(&a, &root)
+                .unwrap()
+                .unwrap()
+                .nickname,
             "新名"
         );
     }
@@ -511,18 +550,32 @@ mod tests {
         .unwrap();
         ContactService::put_outgoing_request(
             &mut b,
-            &request("r1", &"cc".repeat(32), FriendRequestStatus::Accepted, NOW + 500),
+            &request(
+                "r1",
+                &"cc".repeat(32),
+                FriendRequestStatus::Accepted,
+                NOW + 500,
+            ),
         )
         .unwrap();
 
         // 旧（pending）→ 新（accepted）：不动
         let body = build_contact_sync_snapshot(&a, MY_ROOT).unwrap();
-        assert_eq!(apply_contact_sync_snapshot(&mut b, MY_ROOT, &body, NODE_A, NODE_B, NOW).unwrap(), 0);
+        assert_eq!(
+            apply_contact_sync_snapshot(&mut b, MY_ROOT, &body, NODE_A, NODE_B, NOW).unwrap(),
+            0
+        );
         // 新 → 旧：覆盖
         let body = build_contact_sync_snapshot(&b, MY_ROOT).unwrap();
-        assert_eq!(apply_contact_sync_snapshot(&mut a, MY_ROOT, &body, NODE_B, NODE_A, NOW).unwrap(), 1);
         assert_eq!(
-            ContactService::get_outgoing_request(&a, "r1").unwrap().unwrap().status,
+            apply_contact_sync_snapshot(&mut a, MY_ROOT, &body, NODE_B, NODE_A, NOW).unwrap(),
+            1
+        );
+        assert_eq!(
+            ContactService::get_outgoing_request(&a, "r1")
+                .unwrap()
+                .unwrap()
+                .status,
             FriendRequestStatus::Accepted
         );
     }
@@ -541,7 +594,8 @@ mod tests {
         ContactService::delete_group(&mut a, "g2", NOW + 2000, NODE_A).unwrap();
 
         let body = build_contact_sync_snapshot(&a, MY_ROOT).unwrap();
-        let applied = apply_contact_sync_snapshot(&mut b, MY_ROOT, &body, NODE_A, NODE_B, NOW).unwrap();
+        let applied =
+            apply_contact_sync_snapshot(&mut b, MY_ROOT, &body, NODE_A, NODE_B, NOW).unwrap();
         assert!(applied > 0);
         let view = ContactService::overview(&b, "personal").unwrap();
         assert_eq!(view.groups.len(), 1, "删除随整域替换传播");
@@ -564,7 +618,10 @@ mod tests {
             1
         );
         assert_eq!(
-            ContactService::get_friend(&b, &root).unwrap().unwrap().nickname,
+            ContactService::get_friend(&b, &root)
+                .unwrap()
+                .unwrap()
+                .nickname,
             "新"
         );
     }
@@ -579,10 +636,12 @@ mod tests {
             ContactService::set_blocked(s, "personal", &target, true, ts, NODE_A).unwrap();
         }
         // A 取消拉黑（版本前进）
-        ContactService::set_blocked(&mut a, "personal", &target, false, NOW + 3000, NODE_A).unwrap();
+        ContactService::set_blocked(&mut a, "personal", &target, false, NOW + 3000, NODE_A)
+            .unwrap();
 
         let body = build_contact_sync_snapshot(&a, MY_ROOT).unwrap();
-        let applied = apply_contact_sync_snapshot(&mut b, MY_ROOT, &body, NODE_A, NODE_B, NOW).unwrap();
+        let applied =
+            apply_contact_sync_snapshot(&mut b, MY_ROOT, &body, NODE_A, NODE_B, NOW).unwrap();
         assert!(applied > 0);
         assert!(
             !ContactService::is_blocked(&b, &target).unwrap(),

@@ -18,14 +18,22 @@ use crate::storage::{ScanOptions, StorageBackend};
 impl OrgSyncContext {
     /// orgsync-hello 触发：遍历组织与 org 集合，向已连接的复制组成员逐成员
     /// 发送 hello（每收件人独立裁剪 collections + 独立 dlogAck）。
-    pub(crate) async fn maybe_send_orgsync_hello(&self, root_id: &str, connected: &std::collections::HashSet<String>) {
-        let signing_key = self.signing_key.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    pub(crate) async fn maybe_send_orgsync_hello(
+        &self,
+        root_id: &str,
+        connected: &std::collections::HashSet<String>,
+    ) {
+        let signing_key = self
+            .signing_key
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         let Some(signing_key) = signing_key else {
             return;
         };
         let now = self.now();
-        let records =
-            crate::org::OrganizationService::read_all_organizations(&self.storage).unwrap_or_default();
+        let records = crate::org::OrganizationService::read_all_organizations(&self.storage)
+            .unwrap_or_default();
         for record in records {
             let org_id = &record.org_id;
             // 本机必须是成员
@@ -59,7 +67,9 @@ impl OrgSyncContext {
                 else {
                     continue;
                 };
-                let stem = key.strip_prefix(&format!("org:coll:{org_id}:")).unwrap_or(key);
+                let stem = key
+                    .strip_prefix(&format!("org:coll:{org_id}:"))
+                    .unwrap_or(key);
                 if let Some(at) = stem.rfind("@v") {
                     let name = &stem[..at];
                     let version = &stem[at + 2..];
@@ -102,18 +112,28 @@ impl OrgSyncContext {
                     let mut col_map = serde_json::Map::new();
                     for (col_full, name, version, accounts, confidentiality) in &collections {
                         if !crate::sync::orgsync::is_in_replication_group(
-                            &record, &member.root_id, *accounts,
+                            &record,
+                            &member.root_id,
+                            *accounts,
                         ) {
                             continue;
                         }
                         // 逐集合折叠 vv + 对收件人的 dlogAck
                         let Ok(vv) = crate::sync::orgsync::collect_org_collection_vv(
-                            &self.storage, org_id, name, version,
+                            &self.storage,
+                            org_id,
+                            name,
+                            version,
                         ) else {
                             continue;
                         };
                         let Ok(dlog_ack) = crate::sync::orgsync::org_dlog_get_seen(
-                            &self.storage, org_id, name, version, &member.root_id, peer_id,
+                            &self.storage,
+                            org_id,
+                            name,
+                            version,
+                            &member.root_id,
+                            peer_id,
                         ) else {
                             continue;
                         };
@@ -145,7 +165,10 @@ impl OrgSyncContext {
                         continue;
                     }
                     let hello_body = crate::sync::orgsync::build_orgsync_hello(
-                        org_id, col_map, &roles, device_class,
+                        org_id,
+                        col_map,
+                        &roles,
+                        device_class,
                     );
                     let target = PeerNodeInfo {
                         peer_id: Some(peer_id.clone()),

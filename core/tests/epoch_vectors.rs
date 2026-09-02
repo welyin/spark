@@ -36,8 +36,7 @@ fn hex32(v: &Value, field: &str) -> [u8; 32] {
 
 /// libp2p 独立推导 peerId（与向量里的 peerId 交叉验证）。
 fn libp2p_peer_id(sk: &[u8; 32]) -> String {
-    let secret =
-        libp2p::identity::ed25519::SecretKey::try_from_bytes(*sk).expect("ed25519 sk");
+    let secret = libp2p::identity::ed25519::SecretKey::try_from_bytes(*sk).expect("ed25519 sk");
     let keypair = libp2p::identity::ed25519::Keypair::from(secret);
     let public = libp2p::identity::PublicKey::from(keypair.public());
     libp2p::PeerId::from_public_key(&public).to_base58()
@@ -59,7 +58,9 @@ fn box_unbox_roundtrip_and_exact_values() {
     let nonce24_b64 = b["nonce24Base64"].as_str().unwrap();
 
     // 公钥与 peerId 交叉验证（libp2p 独立推导）。
-    let writer_pk = SigningKey::from_bytes(&writer_sk).verifying_key().to_bytes();
+    let writer_pk = SigningKey::from_bytes(&writer_sk)
+        .verifying_key()
+        .to_bytes();
     let recipient_pk = SigningKey::from_bytes(&recipient_sk)
         .verifying_key()
         .to_bytes();
@@ -224,7 +225,10 @@ fn value_wrap_exact_and_aad_binding() {
 
     // 判别规则。
     assert!(is_ikey_ciphertext(ciphertext), "ciphertext detected");
-    assert!(!is_ikey_ciphertext(&serde_json::json!({"a": 1})), "plain value");
+    assert!(
+        !is_ikey_ciphertext(&serde_json::json!({"a": 1})),
+        "plain value"
+    );
     assert!(
         !is_ikey_ciphertext(&serde_json::json!({"$enc": "ikey"})),
         "missing fields"
@@ -320,6 +324,12 @@ fn epoch_state_wire_format() {
         serde_json::to_string(&RotationReason::PasswordReset).unwrap(),
         "\"password_reset\""
     );
-    assert_eq!(serde_json::to_string(&RotationReason::Heal).unwrap(), "\"heal\"");
-    assert_eq!(serde_json::to_string(&RotationReason::Unknown).unwrap(), "\"unknown\"");
+    assert_eq!(
+        serde_json::to_string(&RotationReason::Heal).unwrap(),
+        "\"heal\""
+    );
+    assert_eq!(
+        serde_json::to_string(&RotationReason::Unknown).unwrap(),
+        "\"unknown\""
+    );
 }

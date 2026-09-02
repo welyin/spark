@@ -189,7 +189,14 @@ impl Kernel {
                 // 非终态（不可达/超时/rate-limited）：密文入离线队列自动补投，
                 // 状态保持 sending（不置 failed）。入队失败不阻断——消息仍留在
                 // sending，由 message_resend 手动兜底。
-                enqueue_pending(&mut storage, &space, &conv_id, &message_id, &envelope, &node_id);
+                enqueue_pending(
+                    &mut storage,
+                    &space,
+                    &conv_id,
+                    &message_id,
+                    &envelope,
+                    &node_id,
+                );
                 return;
             }
             let status = "delivered";

@@ -170,20 +170,50 @@ fn backup_code_v2_base64_matches_scrypt_benchmark() {
 
     // base64 ↔ hex 同源往返（CompactBackupFile base64 ↔ IdentityFile hex）
     let b64 = |b: &[u8]| base64_encode(b);
-    assert_eq!(b64(&hex::decode(sv["saltHex"].as_str().unwrap()).unwrap()), bc["saltBase64"]);
-    assert_eq!(b64(&hex::decode(sv["ivHex"].as_str().unwrap()).unwrap()), bc["ivBase64"]);
-    assert_eq!(b64(&hex::decode(sv["ciphertextHex"].as_str().unwrap()).unwrap()), bc["dataBase64"]);
-    assert_eq!(b64(&hex::decode(sv["authTagHex"].as_str().unwrap()).unwrap()), bc["authTagBase64"]);
+    assert_eq!(
+        b64(&hex::decode(sv["saltHex"].as_str().unwrap()).unwrap()),
+        bc["saltBase64"]
+    );
+    assert_eq!(
+        b64(&hex::decode(sv["ivHex"].as_str().unwrap()).unwrap()),
+        bc["ivBase64"]
+    );
+    assert_eq!(
+        b64(&hex::decode(sv["ciphertextHex"].as_str().unwrap()).unwrap()),
+        bc["dataBase64"]
+    );
+    assert_eq!(
+        b64(&hex::decode(sv["authTagHex"].as_str().unwrap()).unwrap()),
+        bc["authTagBase64"]
+    );
     // v2 码重建磁盘 IdentityFile 时补全的 publicKeyHex = 从助记词派生值（期望断言）
-    assert_eq!(b64(&hex::decode(rv["publicKeyHex"].as_str().unwrap()).unwrap()), bc["expectedDerivedPublicKeyBase64"]);
-    assert_eq!(rv["publicKeyHex"].as_str().unwrap(), bc["expectedDerivedPublicKeyHex"].as_str().unwrap());
+    assert_eq!(
+        b64(&hex::decode(rv["publicKeyHex"].as_str().unwrap()).unwrap()),
+        bc["expectedDerivedPublicKeyBase64"]
+    );
+    assert_eq!(
+        rv["publicKeyHex"].as_str().unwrap(),
+        bc["expectedDerivedPublicKeyHex"].as_str().unwrap()
+    );
 
     // 反向：base64 → hex 回到磁盘 IdentityFile 的 hex 字段
     let hx = |s: &str| base64_decode(s);
-    assert_eq!(hex::encode(hx(bc["saltBase64"].as_str().unwrap())), sv["saltHex"].as_str().unwrap());
-    assert_eq!(hex::encode(hx(bc["ivBase64"].as_str().unwrap())), sv["ivHex"].as_str().unwrap());
-    assert_eq!(hex::encode(hx(bc["dataBase64"].as_str().unwrap())), sv["ciphertextHex"].as_str().unwrap());
-    assert_eq!(hex::encode(hx(bc["authTagBase64"].as_str().unwrap())), sv["authTagHex"].as_str().unwrap());
+    assert_eq!(
+        hex::encode(hx(bc["saltBase64"].as_str().unwrap())),
+        sv["saltHex"].as_str().unwrap()
+    );
+    assert_eq!(
+        hex::encode(hx(bc["ivBase64"].as_str().unwrap())),
+        sv["ivHex"].as_str().unwrap()
+    );
+    assert_eq!(
+        hex::encode(hx(bc["dataBase64"].as_str().unwrap())),
+        sv["ciphertextHex"].as_str().unwrap()
+    );
+    assert_eq!(
+        hex::encode(hx(bc["authTagBase64"].as_str().unwrap())),
+        sv["authTagHex"].as_str().unwrap()
+    );
 }
 
 /// 备份码 v2 载荷可解密出与 scryptV2 相同的明文 payload（字节级）。
@@ -224,7 +254,11 @@ fn backup_code_v2_hex_base64_same_source_roundtrip() {
         let b64_s = bc[b64_f].as_str().unwrap();
         let bytes = hex::decode(hex_s).unwrap();
         assert_eq!(base64_encode(&bytes), b64_s, "{hex_f} → {b64_f}");
-        assert_eq!(hex::encode(base64_decode(b64_s)), hex_s, "{b64_f} → {hex_f}");
+        assert_eq!(
+            hex::encode(base64_decode(b64_s)),
+            hex_s,
+            "{b64_f} → {hex_f}"
+        );
     }
 }
 
@@ -263,7 +297,15 @@ fn compact_backup_file_serialize_and_decode_framework() {
         .map(|k| k.as_str())
         .collect();
     let expected_order = [
-        "v", "kdf", "salt", "iv", "data", "authTag", "rootId", "nickname", "createdAt",
+        "v",
+        "kdf",
+        "salt",
+        "iv",
+        "data",
+        "authTag",
+        "rootId",
+        "nickname",
+        "createdAt",
         "updatedAt",
     ];
     assert_eq!(order, expected_order, "serde 字段序必须与 §4.2 一致");
@@ -411,15 +453,43 @@ fn update_profile_flow() {
     assert_eq!(unlocked.public_key_hex(), identity.public_key_hex());
 
     // 清除头像（Some(None)），昵称不变（None）
-    update_profile(&mut file, "P@ssw0rd-test", None, Some(None), None, None, None).unwrap();
+    update_profile(
+        &mut file,
+        "P@ssw0rd-test",
+        None,
+        Some(None),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
     assert_eq!(file.avatar, None);
     assert_eq!(file.nickname.as_deref(), Some("新昵称"));
 
     // 非法昵称/头像被拒
-    assert!(update_profile(&mut file, "P@ssw0rd-test", Some(&"x".repeat(25)), None, None, None, None).is_err());
     assert!(
-        update_profile(&mut file, "P@ssw0rd-test", None, Some(Some("http://a.png")), None, None, None)
-            .is_err()
+        update_profile(
+            &mut file,
+            "P@ssw0rd-test",
+            Some(&"x".repeat(25)),
+            None,
+            None,
+            None,
+            None
+        )
+        .is_err()
+    );
+    assert!(
+        update_profile(
+            &mut file,
+            "P@ssw0rd-test",
+            None,
+            Some(Some("http://a.png")),
+            None,
+            None,
+            None
+        )
+        .is_err()
     );
 
     // 错误密码不能解锁

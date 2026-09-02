@@ -10,9 +10,7 @@
 
 use serde_json::{Value, json};
 
-use super::{
-    InboundContext, InboundDmResult, PdsyncOut, Result, done, fail_response, ok_response,
-};
+use super::{InboundContext, InboundDmResult, PdsyncOut, Result, done, fail_response, ok_response};
 use crate::plugindata::blob;
 use crate::storage::StorageBackend;
 
@@ -47,10 +45,7 @@ pub(super) fn handle_attachment_req<S: StorageBackend>(
     let Some(hash) = body.get("hash").and_then(Value::as_str) else {
         return done(fail_response("invalid-body"), Vec::new());
     };
-    let offset = body
-        .get("offset")
-        .and_then(Value::as_u64)
-        .unwrap_or(0) as usize;
+    let offset = body.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
     let resp_body = match blob::serve_chunk(storage, hash, offset)? {
         Some((data, total_bytes)) => json!({
             "hash": hash,
@@ -91,7 +86,11 @@ pub(super) fn handle_attachment_resp<S: StorageBackend>(
     };
     let completed = blob::ingest_chunk(storage, hash, offset as usize, data, total)?;
     if completed {
-        log::info!("[BLOB] assembled | hash={} bytes={}", &hash[..16.min(hash.len())], total);
+        log::info!(
+            "[BLOB] assembled | hash={} bytes={}",
+            &hash[..16.min(hash.len())],
+            total
+        );
         return with_out(Vec::new());
     }
     // 未收齐且本块被接受（offset 对齐）→ 续拉下一块；未对齐（乱序）则等调和

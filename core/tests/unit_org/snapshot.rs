@@ -235,11 +235,12 @@ fn merge_into_empty() {
 #[test]
 fn merge_member_nodeinfo_fallback_and_order() {
     let mut existing = sample_record();
-    existing.members[1].node_info = Some(OrganizationDeviceSet::from_single(OrganizationNodeInfo {
-        device_uid: None,
-        peer_id: Some("peer-b-123".to_string()),
-        addresses: vec!["/ip4/9.9.9.9/tcp/1".to_string()],
-    }));
+    existing.members[1].node_info =
+        Some(OrganizationDeviceSet::from_single(OrganizationNodeInfo {
+            device_uid: None,
+            peer_id: Some("peer-b-123".to_string()),
+            addresses: vec!["/ip4/9.9.9.9/tcp/1".to_string()],
+        }));
     existing.updated_at = 3000; // 本地 updatedAt 更大 → max 保留
 
     // incoming：b 不带 nodeInfo（应保留 existing），新成员 c，且 a 角色被覆盖
@@ -422,7 +423,11 @@ fn snapshot_member_identity_fields_flow() {
     let snapshot = build_organization_sync_snapshot(&record, &[]);
     assert_eq!(snapshot.members[0].nickname.as_deref(), Some("管理员小A"));
     assert_eq!(snapshot.members[0].use_personal_identity, Some(true));
-    assert_eq!(snapshot.members[0].avatar.as_deref(), Some(""), "未设置 → 显式空串上线");
+    assert_eq!(
+        snapshot.members[0].avatar.as_deref(),
+        Some(""),
+        "未设置 → 显式空串上线"
+    );
     assert_eq!(snapshot.members[1].nickname.as_deref(), Some(""));
 
     // 合并：incoming 覆盖、键缺失（None）保留 existing

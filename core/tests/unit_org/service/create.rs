@@ -36,7 +36,8 @@ fn create_organization_normalizes_and_persists() {
         .unwrap();
     assert_eq!(loaded, record);
     // create 事务已写入
-    let txs = spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 20).unwrap();
+    let txs =
+        spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 20).unwrap();
     assert_eq!(txs.len(), 1);
     assert_eq!(txs[0].type_, OrganizationTransactionType::Create);
     assert_eq!(txs[0].summary, "创建组织 星火 组织");
@@ -93,8 +94,8 @@ fn create_organization_avatar_rules() {
     let record =
         OrganizationService::create_organization(&mut storage, &with_logo, &admin, NOW).unwrap();
     assert_eq!(record.avatar, logo);
-    let txs = spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 1)
-        .unwrap();
+    let txs =
+        spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 1).unwrap();
     assert_eq!(
         txs[0].payload.as_ref().unwrap()["avatar"],
         serde_json::json!(logo)
@@ -102,10 +103,7 @@ fn create_organization_avatar_rules() {
 
     // 省略（None）或空白均视为未设置：空串落记录，payload 不含 avatar 键
     for avatar in [None, Some("   ".to_string())] {
-        let input = CreateOrganizationInput {
-            avatar,
-            ..input()
-        };
+        let input = CreateOrganizationInput { avatar, ..input() };
         let record =
             OrganizationService::create_organization(&mut storage, &input, &admin, NOW).unwrap();
         assert_eq!(record.avatar, "");
@@ -137,11 +135,14 @@ fn create_organization_generates_org_root_keypair() {
     // orgAddress：创建时生成，55 字符可解码（org.md §15）
     let org_address = record.org_address.clone().expect("orgAddress generated");
     assert_eq!(org_address.len(), 55);
-    assert!(spark_core::org::org_address::is_valid_org_address(&org_address));
+    assert!(spark_core::org::org_address::is_valid_org_address(
+        &org_address
+    ));
     // 默认不公开
     assert!(!record.is_public);
     // 根私钥密文存 extra，可解密回 SigningKey 且公钥与 orgAddress 闭环
-    let signing = spark_core::org::org_address::org_root_signing_key(&record).expect("root key opens");
+    let signing =
+        spark_core::org::org_address::org_root_signing_key(&record).expect("root key opens");
     let digest = spark_core::org::org_address::decode_org_address(&org_address).unwrap();
     assert_eq!(
         <sha2::Sha256 as sha2::Digest>::digest(signing.verifying_key().to_bytes()).as_slice(),
@@ -168,7 +169,8 @@ fn delete_organization_flow() {
             .unwrap()
             .is_none()
     );
-    let txs = spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 1).unwrap();
+    let txs =
+        spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 1).unwrap();
     assert_eq!(txs[0].type_, OrganizationTransactionType::Delete);
 }
 
@@ -198,9 +200,19 @@ fn create_delete_pdsync_write_pmeta_and_tombstone() {
     assert!(!is_tombstone(&meta));
 
     // 删除：记录消失，pmeta 留 tombstone（删除可经 pdsync 传播）
-    OrganizationService::delete_organization_pdsync(&mut storage, &record.org_id, &admin, NOW + 1, "node-a")
-        .unwrap();
-    assert!(OrganizationService::get_record(storage.raw(), &record.org_id).unwrap().is_none());
+    OrganizationService::delete_organization_pdsync(
+        &mut storage,
+        &record.org_id,
+        &admin,
+        NOW + 1,
+        "node-a",
+    )
+    .unwrap();
+    assert!(
+        OrganizationService::get_record(storage.raw(), &record.org_id)
+            .unwrap()
+            .is_none()
+    );
     let meta = get_personal_meta(storage.raw(), &key).unwrap().unwrap();
     assert!(is_tombstone(&meta));
     // per-node 单调序号：org:meta 创建 seq 1 + 两个内建集合声明（structure/

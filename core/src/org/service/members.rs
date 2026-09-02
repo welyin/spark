@@ -23,7 +23,9 @@ use super::super::types::{
     normalize_optional_node_info, normalize_root_id, sort_members,
 };
 use super::super::{OrgError, Result};
-use super::{OrganizationService, OrgIdentityPatch, clearable_audit, node_info_payload, tri_state_audit};
+use super::{
+    OrgIdentityPatch, OrganizationService, clearable_audit, node_info_payload, tri_state_audit,
+};
 
 impl OrganizationService {
     /// `toView`（service.ts:573-587）：成员排序（admin 优先，joinedAt 升序）+
@@ -173,7 +175,8 @@ impl OrganizationService {
                         set.upsert(incoming);
                     }
                     None => {
-                        member.node_info = Some(OrganizationDeviceSet::from_single(incoming.clone()));
+                        member.node_info =
+                            Some(OrganizationDeviceSet::from_single(incoming.clone()));
                     }
                 }
             }
@@ -213,11 +216,7 @@ impl OrganizationService {
                 payload: Some(node_info_payload(normalized_node_info.as_ref())),
             },
         )?;
-        Self::rebuild_sync_after_mutation(
-            record,
-            previous_last_synced_at,
-            transaction.created_at,
-        );
+        Self::rebuild_sync_after_mutation(record, previous_last_synced_at, transaction.created_at);
         Ok(())
     }
 
@@ -255,7 +254,14 @@ impl OrganizationService {
         now_ms: i64,
     ) -> Result<OrganizationRecord> {
         let mut record = Self::require_organization(storage, org_id)?;
-        if Self::update_my_identity_mutate(storage, &mut record, org_id, patch, current_root_id, now_ms)? {
+        if Self::update_my_identity_mutate(
+            storage,
+            &mut record,
+            org_id,
+            patch,
+            current_root_id,
+            now_ms,
+        )? {
             Self::save_record(storage, &record)?;
         }
         Ok(record)
@@ -315,7 +321,11 @@ impl OrganizationService {
                     [
                         (
                             "nickname".to_string(),
-                            patch.nickname.as_deref().map(Value::from).unwrap_or(Value::Null),
+                            patch
+                                .nickname
+                                .as_deref()
+                                .map(Value::from)
+                                .unwrap_or(Value::Null),
                         ),
                         // avatar/gender/region/signature 变更纳入审计，但只记
                         // 摘要（不变 Null / 清除 false / 设置记长度），不落完整内容
@@ -337,7 +347,10 @@ impl OrganizationService {
                         ),
                         (
                             "usePersonalIdentity".to_string(),
-                            patch.use_personal_identity.map(Value::from).unwrap_or(Value::Null),
+                            patch
+                                .use_personal_identity
+                                .map(Value::from)
+                                .unwrap_or(Value::Null),
                         ),
                     ]
                     .into_iter()
@@ -345,11 +358,7 @@ impl OrganizationService {
                 ),
             },
         )?;
-        Self::rebuild_sync_after_mutation(
-            record,
-            previous_last_synced_at,
-            transaction.created_at,
-        );
+        Self::rebuild_sync_after_mutation(record, previous_last_synced_at, transaction.created_at);
         Ok(true)
     }
 
@@ -362,7 +371,14 @@ impl OrganizationService {
         now_ms: i64,
     ) -> Result<OrganizationRecord> {
         let mut record = Self::require_organization(storage, org_id)?;
-        Self::remove_member_mutate(storage, &mut record, org_id, member_root_id, current_root_id, now_ms)?;
+        Self::remove_member_mutate(
+            storage,
+            &mut record,
+            org_id,
+            member_root_id,
+            current_root_id,
+            now_ms,
+        )?;
         Self::save_record(storage, &record)?;
         Ok(record)
     }
@@ -380,7 +396,14 @@ impl OrganizationService {
     ) -> Result<OrganizationRecord> {
         let _ = node_id; // 记账由中间件完成，参数保留以稳定签名
         Self::update_record_atomic(storage, io_lock, org_id, |storage, record| {
-            Self::remove_member_mutate(storage, record, org_id, member_root_id, current_root_id, now_ms)?;
+            Self::remove_member_mutate(
+                storage,
+                record,
+                org_id,
+                member_root_id,
+                current_root_id,
+                now_ms,
+            )?;
             Ok(true)
         })
     }
@@ -413,7 +436,9 @@ impl OrganizationService {
         // O1：角色列表随成员移除自动剔除（显式指定引用已退出成员无意义；
         // roles 解析层本就有非成员过滤，这里是落库层的主动清理）
         record.gateways.retain(|g| *g != normalized_root_id);
-        record.data_accounts.retain(|rid| *rid != normalized_root_id);
+        record
+            .data_accounts
+            .retain(|rid| *rid != normalized_root_id);
         record.updated_at = now_ms;
         let previous_last_synced_at = record.sync.as_ref().map(|s| s.last_synced_at).unwrap_or(0);
         let transaction = append_organization_transaction(
@@ -433,11 +458,7 @@ impl OrganizationService {
                 ),
             },
         )?;
-        Self::rebuild_sync_after_mutation(
-            record,
-            previous_last_synced_at,
-            transaction.created_at,
-        );
+        Self::rebuild_sync_after_mutation(record, previous_last_synced_at, transaction.created_at);
         Ok(())
     }
 
@@ -457,7 +478,15 @@ impl OrganizationService {
         now_ms: i64,
     ) -> Result<OrganizationRecord> {
         let mut record = Self::require_organization(storage, org_id)?;
-        if Self::set_member_role_mutate(storage, &mut record, org_id, member_root_id, role, current_root_id, now_ms)? {
+        if Self::set_member_role_mutate(
+            storage,
+            &mut record,
+            org_id,
+            member_root_id,
+            role,
+            current_root_id,
+            now_ms,
+        )? {
             Self::save_record(storage, &record)?;
         }
         Ok(record)
@@ -477,7 +506,15 @@ impl OrganizationService {
     ) -> Result<OrganizationRecord> {
         let _ = node_id; // 记账由中间件完成，参数保留以稳定签名
         Self::update_record_atomic(storage, io_lock, org_id, |storage, record| {
-            Self::set_member_role_mutate(storage, record, org_id, member_root_id, role, current_root_id, now_ms)
+            Self::set_member_role_mutate(
+                storage,
+                record,
+                org_id,
+                member_root_id,
+                role,
+                current_root_id,
+                now_ms,
+            )
         })
     }
 
@@ -539,11 +576,7 @@ impl OrganizationService {
                 ),
             },
         )?;
-        Self::rebuild_sync_after_mutation(
-            record,
-            previous_last_synced_at,
-            transaction.created_at,
-        );
+        Self::rebuild_sync_after_mutation(record, previous_last_synced_at, transaction.created_at);
         Ok(true)
     }
 

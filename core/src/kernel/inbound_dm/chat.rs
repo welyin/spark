@@ -10,23 +10,19 @@ use super::{
     merge_friend_record, ok_response, valid_space_key,
 };
 use crate::contact::{ContactService, FriendRequestStatus};
+use crate::kernel::message_ops::{
+    conversation_view, direct_conversation_id, message_view, sanitize_link_preview,
+};
 use crate::message::{
     ConversationKind, ConversationRecord, MAX_TEXT_BYTES, MessageRecord, MessageService,
     MessageType, PeerRef,
 };
+use crate::org::OrganizationService;
 use crate::p2p::P2pEvent;
 use crate::storage::StorageBackend;
-use crate::kernel::message_ops::{
-    conversation_view, direct_conversation_id, message_view, sanitize_link_preview,
-};
-use crate::org::OrganizationService;
 
 /// 组织空间成员校验：`org:` 空间要求 from 是该组织成员。
-fn check_org_membership<S: StorageBackend>(
-    storage: &S,
-    space: &str,
-    from: &str,
-) -> Result<bool> {
+fn check_org_membership<S: StorageBackend>(storage: &S, space: &str, from: &str) -> Result<bool> {
     let Some(org_id) = space.strip_prefix("org:") else {
         return Ok(true);
     };
@@ -41,7 +37,13 @@ fn resolve_conv_title<S: StorageBackend>(
     fallback: &str,
 ) -> Result<String> {
     let title = ContactService::get_friend(storage, from)?
-        .map(|f| if f.remark.is_empty() { f.nickname } else { f.remark })
+        .map(|f| {
+            if f.remark.is_empty() {
+                f.nickname
+            } else {
+                f.remark
+            }
+        })
         .filter(|t| !t.is_empty())
         .unwrap_or_else(|| fallback.to_string());
     Ok(title)
@@ -62,7 +64,8 @@ fn ensure_inbound_conversation<S: StorageBackend>(
             existing.peer = Some(PeerRef {
                 peer_id: ctx.remote_peer_id.to_string(),
                 addresses: Vec::new(),
-            ..Default::default()});
+                ..Default::default()
+            });
             MessageService::upsert_conversation(storage, space, &existing)?;
         }
         return Ok(existing);
@@ -75,7 +78,8 @@ fn ensure_inbound_conversation<S: StorageBackend>(
         peer: Some(PeerRef {
             peer_id: ctx.remote_peer_id.to_string(),
             addresses: Vec::new(),
-        ..Default::default()}),
+            ..Default::default()
+        }),
         unread_count: 0,
         pinned_at: 0,
         muted: false,
@@ -118,12 +122,11 @@ pub(super) fn handle_chat<S: StorageBackend>(
     if !check_org_membership(storage, space, from)? {
         return done(fail_response("not-member"), Vec::new());
     }
-    let mut message: MessageRecord = match serde_json::from_value(
-        body.get("message").cloned().unwrap_or(Value::Null),
-    ) {
-        Ok(m) => m,
-        Err(_) => return done(fail_response("invalid-message"), Vec::new()),
-    };
+    let mut message: MessageRecord =
+        match serde_json::from_value(body.get("message").cloned().unwrap_or(Value::Null)) {
+            Ok(m) => m,
+            Err(_) => return done(fail_response("invalid-message"), Vec::new()),
+        };
     // 入站消息不携带发送状态（状态仅为本机发送侧概念）
     message.status = None;
     // link 为对端自报字段：入库前与出站同口径收敛（限长截断、空 url 整条丢弃）
@@ -154,7 +157,12 @@ pub(super) fn handle_chat<S: StorageBackend>(
         && let Some(request) = ContactService::find_outgoing_by_root(storage, from)?
         && request.status == FriendRequestStatus::Pending
     {
-        ContactService::mark_outgoing_accepted_pdsync(storage, &request.id, ctx.now_ms, ctx.node_id)?;
+        ContactService::mark_outgoing_accepted_pdsync(
+            storage,
+            &request.id,
+            ctx.now_ms,
+            ctx.node_id,
+        )?;
         let request = ContactService::get_outgoing_request(storage, &request.id)?;
         let friend = merge_friend_record(
             storage,
@@ -164,7 +172,8 @@ pub(super) fn handle_chat<S: StorageBackend>(
             Some(PeerRef {
                 peer_id: ctx.remote_peer_id.to_string(),
                 addresses: Vec::new(),
-            ..Default::default()}),
+                ..Default::default()
+            }),
             ctx.now_ms,
             ctx.node_id,
         )?;

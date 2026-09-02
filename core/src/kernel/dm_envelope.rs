@@ -230,7 +230,11 @@ pub struct VerifiedDm {
 /// 入站信封校验；任一失败返回 `Err(reason)`（reason 供 `{"ok":false,"reason"}`
 /// 应答原样回传）。ts 与 `now_ms` 偏差超过 [`ENVELOPE_TS_WINDOW_MS`] 拒绝
 /// （reason `stale`，防重放）。
-pub fn verify_envelope(payload: &Value, my_root_id: &str, now_ms: i64) -> Result<VerifiedDm, String> {
+pub fn verify_envelope(
+    payload: &Value,
+    my_root_id: &str,
+    now_ms: i64,
+) -> Result<VerifiedDm, String> {
     let invalid = || "invalid-envelope".to_string();
     let kind = payload
         .get("kind")
@@ -248,7 +252,10 @@ pub fn verify_envelope(payload: &Value, my_root_id: &str, now_ms: i64) -> Result
         .get("ts")
         .and_then(Value::as_i64)
         .ok_or_else(invalid)?;
-    let body = payload.get("body").filter(|v| v.is_object()).ok_or_else(invalid)?;
+    let body = payload
+        .get("body")
+        .filter(|v| v.is_object())
+        .ok_or_else(invalid)?;
     let pub_key = payload
         .get("pubKey")
         .and_then(Value::as_str)
@@ -259,7 +266,10 @@ pub fn verify_envelope(payload: &Value, my_root_id: &str, now_ms: i64) -> Result
         .ok_or_else(invalid)?;
     // 可选外层字段 ephPub（base64 临时 X25519 公钥）：携带时参与签名，防中间人
     // 替换临时公钥。线形键序随 build_signing_payload 处理（body/ephPub/.../ts）。
-    let eph_pub = payload.get("ephPub").and_then(Value::as_str).map(String::from);
+    let eph_pub = payload
+        .get("ephPub")
+        .and_then(Value::as_str)
+        .map(String::from);
 
     if to != my_root_id {
         return Err("not-for-me".to_string());
@@ -276,7 +286,8 @@ pub fn verify_envelope(payload: &Value, my_root_id: &str, now_ms: i64) -> Result
     if hex::encode(Sha256::digest(&pub_key_bytes)) != from {
         return Err("bad-pubkey".to_string());
     }
-    let signing_payload = build_signing_payload_with_eph(kind, from, to, ts, body, eph_pub.as_deref());
+    let signing_payload =
+        build_signing_payload_with_eph(kind, from, to, ts, body, eph_pub.as_deref());
     if !verify_ed25519_signature(&signing_payload, sig, pub_key) {
         return Err("bad-signature".to_string());
     }
@@ -321,7 +332,11 @@ mod tests {
     #[test]
     fn accepts_ts_at_window_edges() {
         let now = 1_720_000_000_000i64;
-        for ts in [now, now - ENVELOPE_TS_WINDOW_MS, now + ENVELOPE_TS_WINDOW_MS] {
+        for ts in [
+            now,
+            now - ENVELOPE_TS_WINDOW_MS,
+            now + ENVELOPE_TS_WINDOW_MS,
+        ] {
             let (envelope, from) = signed_envelope(ts);
             let verified = verify_envelope(&envelope, &from, now)
                 .unwrap_or_else(|e| panic!("ts={ts} 窗口边界内应通过，得到 {e}"));

@@ -34,27 +34,14 @@ mod recovery;
 mod sync;
 
 use super::dm_envelope::{
-KIND_CHAT, KIND_CONTACT_SYNC, KIND_CONV_SYNC, KIND_DEVICE_NOTICE, KIND_DEVICE_SYNC,
-KIND_FEED, KIND_FEED_BLOB_REQ, KIND_FEED_BLOB_RESP, KIND_FRIEND_ACCEPT, KIND_FRIEND_REPLY,
-KIND_FRIEND_REQUEST, KIND_ORG_INVITE, KIND_ORG_INVITE_REPLY, KIND_ORGKEY_DELIVER,
-KIND_ORGSYNC_DATA, KIND_ORGSYNC_HELLO, KIND_ORGSYNC_NEED, KIND_ORGQ_REQ, KIND_ORGQ_RESP,
-KIND_PDSYNC_ATTACHMENT_REQ, KIND_PDSYNC_ATTACHMENT_RESP, KIND_PDSYNC_DATA, KIND_PDSYNC_HELLO,
-KIND_PDSYNC_NEED, KIND_PROFILE_SYNC, KIND_READ, KIND_RECALL, KIND_RECOVERY, verify_envelope,
+    KIND_CHAT, KIND_CONTACT_SYNC, KIND_CONV_SYNC, KIND_DEVICE_NOTICE, KIND_DEVICE_SYNC, KIND_FEED,
+    KIND_FEED_BLOB_REQ, KIND_FEED_BLOB_RESP, KIND_FRIEND_ACCEPT, KIND_FRIEND_REPLY,
+    KIND_FRIEND_REQUEST, KIND_ORG_INVITE, KIND_ORG_INVITE_REPLY, KIND_ORGKEY_DELIVER,
+    KIND_ORGQ_REQ, KIND_ORGQ_RESP, KIND_ORGSYNC_DATA, KIND_ORGSYNC_HELLO, KIND_ORGSYNC_NEED,
+    KIND_PDSYNC_ATTACHMENT_REQ, KIND_PDSYNC_ATTACHMENT_RESP, KIND_PDSYNC_DATA, KIND_PDSYNC_HELLO,
+    KIND_PDSYNC_NEED, KIND_PROFILE_SYNC, KIND_READ, KIND_RECALL, KIND_RECOVERY, verify_envelope,
 };
 
-/// O3 filtered 集合权限钩子（orgq-req 数据账号侧裁决契约，见 [`orgq`]）。
-pub use orgq::OrgqPermHook;
-/// O4 orgkey-deliver 解包指令（reader 侧合法投递，host 用 seed 解包落库）。
-pub use orgkey::OrgkeyUnbox;
-/// O4 orgkey-deliver 入站判定（reader 侧资格/验签/幂等）——crate 内集成
-/// 测试（F3 重投 roundtrip）直调。
-#[cfg(test)]
-pub(crate) use orgkey::handle_orgkey_deliver;
-/// F3 残余 §7.1：orgkey-deliver 暂存的重评估（acl/org:meta 合入后触发，
-/// orgsync 入站与 legacy 快照平面合用）。
-pub(crate) use orgkey::reevaluate_orgkey_stash;
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as B64;
 use crate::contact::{ContactError, ContactService, FriendRecord};
 use crate::dm_e2e::{
     decrypt_body, decrypt_body_with_key, derive_session_key_from_eph_pub,
@@ -64,6 +51,19 @@ use crate::message::{MessageError, PeerRef};
 use crate::org::OrgError;
 use crate::p2p::{P2pEvent, PeerNodeInfo};
 use crate::storage::StorageBackend;
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as B64;
+/// O4 orgkey-deliver 解包指令（reader 侧合法投递，host 用 seed 解包落库）。
+pub use orgkey::OrgkeyUnbox;
+/// O4 orgkey-deliver 入站判定（reader 侧资格/验签/幂等）——crate 内集成
+/// 测试（F3 重投 roundtrip）直调。
+#[cfg(test)]
+pub(crate) use orgkey::handle_orgkey_deliver;
+/// F3 残余 §7.1：orgkey-deliver 暂存的重评估（acl/org:meta 合入后触发，
+/// orgsync 入站与 legacy 快照平面合用）。
+pub(crate) use orgkey::reevaluate_orgkey_stash;
+/// O3 filtered 集合权限钩子（orgq-req 数据账号侧裁决契约，见 [`orgq`]）。
+pub use orgq::OrgqPermHook;
 
 /// dm 入站编排统一错误（保留来源模块；`KernelHost::handle_dm` 接线处
 /// `.to_string()` 拍平为直连应答 reason）。
@@ -342,16 +342,11 @@ pub fn done(response: Value, events: Vec<P2pEvent>) -> Result<InboundDmResult> {
 
 /// 拉黑判定：个人空间查独立拉黑集合（陌生人亦可被拉黑），组织空间查成员
 /// 附加资料 blocked。
-pub fn is_blocked<S: StorageBackend>(
-    storage: &S,
-    space: &str,
-    root_id: &str,
-) -> Result<bool> {
+pub fn is_blocked<S: StorageBackend>(storage: &S, space: &str, root_id: &str) -> Result<bool> {
     let blocked = if space == "personal" {
         ContactService::is_blocked(storage, root_id)?
     } else if let Some(org_id) = space.strip_prefix("org:") {
-        ContactService::get_org_profile(storage, org_id, root_id)?
-            .is_some_and(|p| p.blocked)
+        ContactService::get_org_profile(storage, org_id, root_id)?.is_some_and(|p| p.blocked)
     } else {
         false
     };
@@ -492,11 +487,11 @@ fn heal_self_friend_peer<S: StorageBackend>(storage: &mut S, ctx: &InboundContex
         friend.peers.push(PeerRef {
             peer_id: ctx.remote_peer_id.to_string(),
             addresses: Vec::new(),
-        ..Default::default()});
+            ..Default::default()
+        });
     }
     friend.updated_at = ctx.now_ms;
-    if let Err(e) =
-        ContactService::upsert_friend_pdsync(storage, &friend, ctx.now_ms, ctx.node_id)
+    if let Err(e) = ContactService::upsert_friend_pdsync(storage, &friend, ctx.now_ms, ctx.node_id)
     {
         eprintln!("[dm] self friend peer heal failed: {e}");
     }
@@ -629,51 +624,53 @@ fn decrypt_inbound_body<S: StorageBackend>(
     my_signing_key: Option<&ed25519_dalek::SigningKey>,
 ) -> Result<DecryptedBody> {
     let body = &envelope.body;
-    let encrypted = body.get("encrypted").and_then(Value::as_bool).unwrap_or(false);
+    let encrypted = body
+        .get("encrypted")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     if !encrypted {
         // 明文 body（同步类 kind / 兼容对端）：原样分发
         return Ok(DecryptedBody::Plain(body.clone()));
     }
-    let dec_result: std::result::Result<Value, crate::dm_e2e::DmE2eError> =
-        match &envelope.eph_pub {
-            // ephPub 路径：我方 root 私钥 + 对端 ephPub 派生临时会话密钥
-            Some(eph_b64) => {
-                let Some(my_signing_key) = my_signing_key else {
-                    // 锁定态无已解锁身份：无法派生 ephPub 会话密钥
-                    return Ok(DecryptedBody::Rejected("internal-error"));
-                };
-                let eph_raw: [u8; 32] =
-                    match B64.decode(eph_b64).ok().and_then(|v| v.try_into().ok()) {
-                        Some(e) => e,
-                        None => return Ok(DecryptedBody::Rejected("invalid-body")),
-                    };
-                match derive_session_key_from_eph_pub(
-                    my_signing_key,
-                    &eph_raw,
-                    &envelope.from,
-                    my_root_id,
-                ) {
-                    Ok(key) => decrypt_body_with_key(
-                        &key,
-                        &envelope.from,
-                        my_root_id,
-                        &envelope.kind,
-                        envelope.ts,
-                        body,
-                    ),
-                    Err(e) => Err(e),
-                }
-            }
-            // 无 ephPub：密钥表回退（root 直接转换 DH 会话密钥）
-            None => decrypt_body(
-                storage,
+    let dec_result: std::result::Result<Value, crate::dm_e2e::DmE2eError> = match &envelope.eph_pub
+    {
+        // ephPub 路径：我方 root 私钥 + 对端 ephPub 派生临时会话密钥
+        Some(eph_b64) => {
+            let Some(my_signing_key) = my_signing_key else {
+                // 锁定态无已解锁身份：无法派生 ephPub 会话密钥
+                return Ok(DecryptedBody::Rejected("internal-error"));
+            };
+            let eph_raw: [u8; 32] = match B64.decode(eph_b64).ok().and_then(|v| v.try_into().ok()) {
+                Some(e) => e,
+                None => return Ok(DecryptedBody::Rejected("invalid-body")),
+            };
+            match derive_session_key_from_eph_pub(
+                my_signing_key,
+                &eph_raw,
                 &envelope.from,
                 my_root_id,
-                &envelope.kind,
-                envelope.ts,
-                body,
-            ),
-        };
+            ) {
+                Ok(key) => decrypt_body_with_key(
+                    &key,
+                    &envelope.from,
+                    my_root_id,
+                    &envelope.kind,
+                    envelope.ts,
+                    body,
+                ),
+                Err(e) => Err(e),
+            }
+        }
+        // 无 ephPub：密钥表回退（root 直接转换 DH 会话密钥）
+        None => decrypt_body(
+            storage,
+            &envelope.from,
+            my_root_id,
+            &envelope.kind,
+            envelope.ts,
+            body,
+        ),
+    };
     match dec_result {
         Ok(plain) => Ok(DecryptedBody::Plain(plain)),
         Err(_) => Ok(DecryptedBody::Rejected("invalid-body")),
@@ -709,7 +706,9 @@ fn handle_inbound_dm_inner<S: StorageBackend>(
     if envelope.from != my_root_id
         && let Some(pub_key) = payload.get("pubKey").and_then(Value::as_str)
     {
-        if let Err(e) = record_inbound_peer_root_pub(storage, &envelope.from, pub_key, node_id, now_ms) {
+        if let Err(e) =
+            record_inbound_peer_root_pub(storage, &envelope.from, pub_key, node_id, now_ms)
+        {
             log::warn!("[dm] record peer root pub failed: {e}");
         }
     }
@@ -732,9 +731,7 @@ fn handle_inbound_dm_inner<S: StorageBackend>(
     // 无已解锁身份且需 ephPub 派生 → `internal-error`。非加密信封原样分发。
     let body = match decrypt_inbound_body(storage, &envelope, my_root_id, my_signing_key)? {
         DecryptedBody::Plain(body) => body,
-        DecryptedBody::Rejected(reason) => {
-            return done(fail_response(reason), Vec::new())
-        }
+        DecryptedBody::Rejected(reason) => return done(fail_response(reason), Vec::new()),
     };
     log::info!(
         "[INBOUND_DM] routing kind={} from={}",
@@ -745,74 +742,38 @@ fn handle_inbound_dm_inner<S: StorageBackend>(
         KIND_CHAT => chat::handle_chat(storage, &ctx, &envelope.from, &body),
         KIND_READ => sync::handle_read(storage, &ctx, &envelope.from, &body),
         KIND_RECALL => sync::handle_recall(storage, &ctx, &envelope.from, &body),
-        KIND_FRIEND_REQUEST => {
-            friend::handle_friend_request(storage, &ctx, &envelope.from, &body)
-        }
-        KIND_FRIEND_ACCEPT => {
-            friend::handle_friend_accept(storage, &ctx, &envelope.from, &body)
-        }
-        KIND_FRIEND_REPLY => {
-            friend::handle_friend_reply(storage, &ctx, &envelope.from, &body)
-        }
-        KIND_PROFILE_SYNC => {
-            sync::handle_profile_sync(storage, &ctx, &envelope.from, &body)
-        }
-        KIND_DEVICE_SYNC => {
-            sync::handle_device_sync(storage, &ctx, &envelope.from, &body)
-        }
-        KIND_DEVICE_NOTICE => {
-            notice::handle_device_notice(&ctx, &envelope.from, &envelope.body)
-        }
+        KIND_FRIEND_REQUEST => friend::handle_friend_request(storage, &ctx, &envelope.from, &body),
+        KIND_FRIEND_ACCEPT => friend::handle_friend_accept(storage, &ctx, &envelope.from, &body),
+        KIND_FRIEND_REPLY => friend::handle_friend_reply(storage, &ctx, &envelope.from, &body),
+        KIND_PROFILE_SYNC => sync::handle_profile_sync(storage, &ctx, &envelope.from, &body),
+        KIND_DEVICE_SYNC => sync::handle_device_sync(storage, &ctx, &envelope.from, &body),
+        KIND_DEVICE_NOTICE => notice::handle_device_notice(&ctx, &envelope.from, &envelope.body),
         KIND_RECOVERY => {
             recovery::handle_recovery(storage, &ctx, &envelope.from, envelope.ts, &envelope.body)
         }
-        KIND_CONTACT_SYNC => {
-            sync::handle_contact_sync(storage, &ctx, &envelope.from, &body)
-        }
+        KIND_CONTACT_SYNC => sync::handle_contact_sync(storage, &ctx, &envelope.from, &body),
         KIND_CONV_SYNC => sync::handle_conv_sync(storage, &ctx, &envelope.from, &body),
-        KIND_PDSYNC_HELLO => {
-            pdsync::handle_pdsync_hello(storage, &ctx, &envelope.from, &body)
-        }
-        KIND_PDSYNC_NEED => {
-            pdsync::handle_pdsync_need(storage, &ctx, &envelope.from, &body)
-        }
-        KIND_PDSYNC_DATA => {
-            pdsync::handle_pdsync_data(storage, &ctx, &envelope.from, &body)
-        }
+        KIND_PDSYNC_HELLO => pdsync::handle_pdsync_hello(storage, &ctx, &envelope.from, &body),
+        KIND_PDSYNC_NEED => pdsync::handle_pdsync_need(storage, &ctx, &envelope.from, &body),
+        KIND_PDSYNC_DATA => pdsync::handle_pdsync_data(storage, &ctx, &envelope.from, &body),
         KIND_PDSYNC_ATTACHMENT_REQ => {
             attachment::handle_attachment_req(storage, &ctx, &envelope.from, &body)
         }
         KIND_PDSYNC_ATTACHMENT_RESP => {
             attachment::handle_attachment_resp(storage, &ctx, &envelope.from, &body)
         }
-        KIND_ORG_INVITE => {
-            org_invite::handle_org_invite(storage, &ctx, &envelope.from, &body)
-        }
+        KIND_ORG_INVITE => org_invite::handle_org_invite(storage, &ctx, &envelope.from, &body),
         KIND_ORG_INVITE_REPLY => {
             org_invite::handle_org_invite_reply(storage, &ctx, &envelope.from, &body)
         }
-        KIND_ORGSYNC_HELLO => {
-            orgsync::handle_orgsync_hello(storage, &ctx, &envelope.from, &body)
-        }
-        KIND_ORGSYNC_NEED => {
-            orgsync::handle_orgsync_need(storage, &ctx, &envelope.from, &body)
-        }
-        KIND_ORGSYNC_DATA => {
-            orgsync::handle_orgsync_data(storage, &ctx, &envelope.from, &body)
-        }
-        KIND_ORGQ_REQ => {
-            orgq::handle_orgq_req(storage, &ctx, &envelope.from, &body, orgq_hook)
-        }
-        KIND_ORGQ_RESP => {
-            orgq::handle_orgq_resp(storage, &ctx, &envelope.from, &body)
-        }
-        KIND_ORGKEY_DELIVER => {
-            orgkey::handle_orgkey_deliver(storage, &ctx, &envelope.from, &body)
-        }
+        KIND_ORGSYNC_HELLO => orgsync::handle_orgsync_hello(storage, &ctx, &envelope.from, &body),
+        KIND_ORGSYNC_NEED => orgsync::handle_orgsync_need(storage, &ctx, &envelope.from, &body),
+        KIND_ORGSYNC_DATA => orgsync::handle_orgsync_data(storage, &ctx, &envelope.from, &body),
+        KIND_ORGQ_REQ => orgq::handle_orgq_req(storage, &ctx, &envelope.from, &body, orgq_hook),
+        KIND_ORGQ_RESP => orgq::handle_orgq_resp(storage, &ctx, &envelope.from, &body),
+        KIND_ORGKEY_DELIVER => orgkey::handle_orgkey_deliver(storage, &ctx, &envelope.from, &body),
         KIND_FEED => feed::handle_feed(storage, &ctx, &envelope.from, &body, envelope.ts),
-        KIND_FEED_BLOB_REQ => {
-            feed_blob::handle_feed_blob_req(storage, &ctx, &envelope.from, &body)
-        }
+        KIND_FEED_BLOB_REQ => feed_blob::handle_feed_blob_req(storage, &ctx, &envelope.from, &body),
         KIND_FEED_BLOB_RESP => {
             feed_blob::handle_feed_blob_resp(storage, &ctx, &envelope.from, &body)
         }
@@ -835,7 +796,8 @@ mod tests {
         let self_peer = Some(PeerRef {
             peer_id: node_id.to_string(),
             addresses: vec!["addr".to_string()],
-        ..Default::default()});
+            ..Default::default()
+        });
         assert!(
             reject_self_pointing_peer(node_id, self_peer).is_none(),
             "自指 peer 必须被拒绝"
@@ -845,7 +807,8 @@ mod tests {
         let normal = Some(PeerRef {
             peer_id: "peer-other-device".to_string(),
             addresses: vec!["addr".to_string()],
-        ..Default::default()});
+            ..Default::default()
+        });
         assert_eq!(
             reject_self_pointing_peer(node_id, normal.clone())
                 .map(|p| p.peer_id)
@@ -858,7 +821,8 @@ mod tests {
         let empty = Some(PeerRef {
             peer_id: String::new(),
             addresses: Vec::new(),
-        ..Default::default()});
+            ..Default::default()
+        });
         assert!(
             reject_self_pointing_peer(node_id, empty).is_some(),
             "空 peer_id 放行"

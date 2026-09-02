@@ -73,15 +73,17 @@ fn repro_grant_fold_includes_ikey() {
     assert!(pmeta.is_some(), "ikey pmeta 应存在: {:?}", pmeta);
     println!("ikey pmeta raw = {:?}", pmeta);
     // epoch 前缀下全部 pmeta 扫描（复刻 collect_category_vv 的扫描）。
-    let scanned: Vec<(String, String)> =
-        spark_core::storage::StorageBackend::scan(&s, &spark_core::storage::ScanOptions {
+    let scanned: Vec<(String, String)> = spark_core::storage::StorageBackend::scan(
+        &s,
+        &spark_core::storage::ScanOptions {
             prefix: "pmeta:ikey:".to_string(),
             start: None,
             end: None,
             reverse: false,
             limit: None,
-        })
-        .unwrap();
+        },
+    )
+    .unwrap();
     println!("scan pmeta:ikey: → {} 条", scanned.len());
     for (k, v) in &scanned {
         println!("  {k} = {v}");
@@ -104,15 +106,22 @@ fn repro_two_records_same_category_collision() {
     // 失明，collect_incremental 判 Equal 跳过、第二条永久不可见。
     let mut s = MemoryStorage::new();
     let now = 1_720_000_000_000i64;
-    spark_core::sync::personal::put_personal(&mut s, "node-a", "ct:friend:x", "\"X\"", now).unwrap();
-    spark_core::sync::personal::put_personal(&mut s, "node-a", "ct:friend:y", "\"Y\"", now + 1).unwrap();
+    spark_core::sync::personal::put_personal(&mut s, "node-a", "ct:friend:x", "\"X\"", now)
+        .unwrap();
+    spark_core::sync::personal::put_personal(&mut s, "node-a", "ct:friend:y", "\"Y\"", now + 1)
+        .unwrap();
     let cat = CATEGORIES.iter().find(|c| c.name == "ct:friend").unwrap();
     let fold = collect_category_vv(&s, cat, None).unwrap();
     println!("ct:friend fold = {fold:?}");
     assert_eq!(fold.get("node-a").copied(), Some(2), "折叠应为 {{a:2}}");
-    let known: std::collections::BTreeMap<String, i64> = [("node-a".to_string(), 1)].into_iter().collect();
+    let known: std::collections::BTreeMap<String, i64> =
+        [("node-a".to_string(), 1)].into_iter().collect();
     let inc = spark_core::sync::pdsync::collect_incremental(&s, cat, &known, None, 0).unwrap();
     let keys: Vec<String> = inc.iter().map(|r| r.key.clone()).collect();
     println!("incremental vs {{a:1}} = {keys:?}");
-    assert_eq!(keys, vec!["ct:friend:y".to_string()], "只缺第二条 → 只推第二条");
+    assert_eq!(
+        keys,
+        vec!["ct:friend:y".to_string()],
+        "只缺第二条 → 只推第二条"
+    );
 }

@@ -32,12 +32,12 @@ use crate::org::{
     OrganizationService, PluginDocSyncItem, apply_plugin_doc_sync_items, handle_pull_list_request,
     handle_pull_org_request, validate_incoming_share_payload,
 };
+use crate::p2p::P2pNode;
 use crate::p2p::host::{DmHandler, OrgShareAck, P2pHost};
 use crate::p2p::node::system_now_ms;
 use crate::p2p::overlay_store::{OverlayPeerSource, OverlayPeerStore};
 use crate::p2p::peer_activity::{NodeObservation, PeerActivityStore};
 use crate::p2p::peer_targets::PeerNodeInfo;
-use crate::p2p::P2pNode;
 use crate::schema::CollectionSchemaDeclaration;
 use crate::storage::{SledStorage, StorageBackend};
 use crate::sync::apply::{ApplyRemoteOptions, apply_remote_update};
@@ -136,8 +136,7 @@ pub(crate) struct KernelHost {
     pub(crate) pdsync_capable_self_devices: Arc<Mutex<std::collections::HashSet<String>>>,
     /// 已证明支持 orgsync 的成员设备 peerId 集合（O2b 能力探测，§20.8；
     /// 与 kernel 共享，host `handle_dm` 写入、org-sync 推送读取）。
-    pub(crate) orgsync_capable_member_peers:
-        Arc<Mutex<std::collections::HashSet<String>>>,
+    pub(crate) orgsync_capable_member_peers: Arc<Mutex<std::collections::HashSet<String>>>,
     /// 插件后台运行时宿主查询句柄（O3 filtered 权限钩子在 dm 入站执行）。
     pub(crate) plugin_host_query: crate::kernel::PluginHostQuery,
     /// Kverify 派生缓存（与 KernelDmHandler 共享同一 Arc；见 dm_handler.rs
@@ -252,9 +251,13 @@ impl P2pHost for KernelHost {
             return Ok(None);
         };
         let now = system_now_ms();
-        let merged =
-            OrganizationService::apply_incoming_snapshot(&mut self.storage, &self.io_lock, &organization, now)
-                .map_err(|e| e.to_string())?;
+        let merged = OrganizationService::apply_incoming_snapshot(
+            &mut self.storage,
+            &self.io_lock,
+            &organization,
+            now,
+        )
+        .map_err(|e| e.to_string())?;
         // F3 残余 §7.1（评审复核点）：org:meta 成员表（accessKey 段）也可经
         // legacy 快照平面到达——合入后同样重评估 orgkey-deliver 暂存
         // （orgsync 平面同款触发在 `inbound_dm/orgsync.rs`）。暂存通常为空，
@@ -277,7 +280,8 @@ impl P2pHost for KernelHost {
             )
             .map_err(|e| e.to_string())?;
             for unbox in unboxes {
-                self.dm_handler_impl().apply_orgkey_unbox(&receiver_root_id, &unbox);
+                self.dm_handler_impl()
+                    .apply_orgkey_unbox(&receiver_root_id, &unbox);
             }
         }
         // pluginDocs 随快照捎带（plugin-org-sync.ts `applyPluginDocSyncItems`）
@@ -364,14 +368,12 @@ impl P2pHost for KernelHost {
         let now = system_now_ms();
         // F6：org-pull 请求方（收件人）设备是否 orgsync-capable——灰度停用旧
         // 通道按收件人能力判定（旧端成员仍收 pluginDocs）。
-        let recipient_orgsync_capable = remote_peer_id
-            .as_deref()
-            .is_some_and(|pid| {
-                self.orgsync_capable_member_peers
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .contains(pid)
-            });
+        let recipient_orgsync_capable = remote_peer_id.as_deref().is_some_and(|pid| {
+            self.orgsync_capable_member_peers
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains(pid)
+        });
         let response = handle_pull_org_request(
             &self.storage,
             &payload,
@@ -472,7 +474,8 @@ impl P2pHost for KernelHost {
             for record in &orgs {
                 for member in &record.members {
                     let hit = member.node_info.as_ref().is_some_and(|set| {
-                        set.iter().any(|info| info.peer_id.as_deref() == Some(peer_id))
+                        set.iter()
+                            .any(|info| info.peer_id.as_deref() == Some(peer_id))
                     });
                     if hit {
                         org_targets.push((record.org_id.clone(), member.root_id.clone()));
@@ -659,12 +662,10 @@ impl P2pHost for KernelHost {
     /// 查 sled 中的 `PriorityPeerStore`；集合仅存本地，不上网。
     fn is_priority_peer(&mut self, peer_id: &str) -> bool {
         let mut store = crate::p2p::priority_peers::PriorityPeerStore::new(&mut self.storage);
-        store
-            .is_priority(peer_id)
-            .unwrap_or_else(|_| {
-                eprintln!("[kernel] priority peer lookup failed for {peer_id}");
-                false
-            })
+        store.is_priority(peer_id).unwrap_or_else(|_| {
+            eprintln!("[kernel] priority peer lookup failed for {peer_id}");
+            false
+        })
     }
 
     /// peer 是否已被本机撤销：查 `DeviceService` 看是否存在 peer_id 对应的
@@ -693,7 +694,8 @@ impl P2pHost for KernelHost {
             .any(|record| {
                 record.members.iter().any(|m| {
                     m.node_info.as_ref().is_some_and(|set| {
-                        set.iter().any(|info| info.peer_id.as_deref() == Some(peer_id))
+                        set.iter()
+                            .any(|info| info.peer_id.as_deref() == Some(peer_id))
                     })
                 })
             })
@@ -768,14 +770,7 @@ mod tests {
         );
 
         // 自设备但非 pdsync kind：不标记
-        let profile = dm_envelope::build_envelope(
-            KIND_PROFILE_SYNC,
-            &root,
-            &root,
-            now,
-            body,
-            &key,
-        );
+        let profile = dm_envelope::build_envelope(KIND_PROFILE_SYNC, &root, &root, now, body, &key);
         assert_eq!(
             KernelDmHandler::pdsync_capability_mark(&profile, &root, "peer-a"),
             None

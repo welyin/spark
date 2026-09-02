@@ -21,22 +21,14 @@ pub const GATEWAY_ACTIVE_ROTATE_MS: i64 = 3_600_000;
 ///
 /// - 显式指定（`gateways` 非空）：在列表即活跃；
 /// - 缺省（未指定）：全体成员候选，确定性轮换取前 [`GATEWAY_ACTIVE_LIMIT`] 个。
-pub fn is_gateway_active(
-    record: &OrganizationRecord,
-    root_id: &str,
-    now_ms: i64,
-) -> bool {
+pub fn is_gateway_active(record: &OrganizationRecord, root_id: &str, now_ms: i64) -> bool {
     if record.find_member(root_id).is_none() {
         return false;
     }
     if !record.gateways.is_empty() {
         return record.is_gateway(root_id);
     }
-    let mut candidates: Vec<&str> = record
-        .members
-        .iter()
-        .map(|m| m.root_id.as_str())
-        .collect();
+    let mut candidates: Vec<&str> = record.members.iter().map(|m| m.root_id.as_str()).collect();
     candidates.sort_unstable();
     let bucket = (now_ms / GATEWAY_ACTIVE_ROTATE_MS) as u64;
     candidates.sort_by_key(|rid| rotate_key(&record.org_id, bucket, rid));
@@ -56,11 +48,7 @@ pub fn gateway_active_set(record: &OrganizationRecord, now_ms: i64) -> Vec<Strin
             .cloned()
             .collect();
     }
-    let mut candidates: Vec<String> = record
-        .members
-        .iter()
-        .map(|m| m.root_id.clone())
-        .collect();
+    let mut candidates: Vec<String> = record.members.iter().map(|m| m.root_id.clone()).collect();
     candidates.sort_unstable();
     let bucket = (now_ms / GATEWAY_ACTIVE_ROTATE_MS) as u64;
     candidates.sort_by_key(|rid| rotate_key(&record.org_id, bucket, rid));

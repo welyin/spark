@@ -12,9 +12,7 @@ use crate::kernel::message_ops::{conversation_view, message_view};
 use crate::message::{
     ConversationKind, ConversationRecord, LinkPreview, MessageRecord, MessageService, MessageType,
 };
-use crate::org::{
-    OrgInviteDirection, OrgInviteRecord, OrgInviteStatus, OrganizationService,
-};
+use crate::org::{OrgInviteDirection, OrgInviteRecord, OrgInviteStatus, OrganizationService};
 use crate::p2p::P2pEvent;
 use crate::storage::StorageBackend;
 
@@ -119,7 +117,8 @@ pub(super) fn handle_org_invite<S: StorageBackend>(
     // 不动）——`put_invite_record_pdsync` 的记账已下沉中间件、在 raw 句柄上
     // 沉默无记账（F7 第二成因）；此处显式 `put_personal`（per-node 序号），
     // 自设备 pdsync 立即可见。
-    let invite_key = crate::org::invite_record::org_invite_in_key(&record.org_id, &record.peer_root_id);
+    let invite_key =
+        crate::org::invite_record::org_invite_in_key(&record.org_id, &record.peer_root_id);
     crate::sync::put_personal(
         storage,
         ctx.node_id,
@@ -229,8 +228,6 @@ pub(super) fn handle_org_invite_reply<S: StorageBackend>(
     )?;
     done(
         ok_response(),
-        vec![P2pEvent::OrgInviteUpdated(serde_json::to_value(
-            &record,
-        )?)],
+        vec![P2pEvent::OrgInviteUpdated(serde_json::to_value(&record)?)],
     )
 }

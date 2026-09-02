@@ -79,7 +79,11 @@ fn gateway_default_all_members_active_limited() {
     let next = gateway_active_set(&record, 1_700_000_000_000 + GATEWAY_ACTIVE_ROTATE_MS);
     assert_eq!(next.len(), GATEWAY_ACTIVE_LIMIT);
     // 非成员永不活跃
-    assert!(!is_gateway_active(&record, &"f".repeat(64), 1_700_000_000_000));
+    assert!(!is_gateway_active(
+        &record,
+        &"f".repeat(64),
+        1_700_000_000_000
+    ));
 }
 
 #[test]
@@ -92,7 +96,10 @@ fn gateway_explicit_override() {
     record.gateways = vec![M1.to_string(), M2.to_string()];
     assert!(is_gateway_active(&record, M1, 0));
     assert!(is_gateway_active(&record, M2, 0));
-    assert!(!is_gateway_active(&record, ADMIN, 0), "显式指定后缺省推导不生效");
+    assert!(
+        !is_gateway_active(&record, ADMIN, 0),
+        "显式指定后缺省推导不生效"
+    );
     // 指定了已退出成员：过滤掉
     record.gateways = vec![M1.to_string(), "9".repeat(64)];
     assert_eq!(gateway_active_set(&record, 0), vec![M1.to_string()]);
@@ -124,7 +131,10 @@ fn data_account_explicit_override() {
     record.data_accounts = vec![M1.to_string()];
     assert_eq!(data_account_set(&record), vec![M1.to_string()]);
     assert!(is_data_account(&record, M1));
-    assert!(!is_data_account(&record, ADMIN), "显式指定后管理员不自动担责");
+    assert!(
+        !is_data_account(&record, ADMIN),
+        "显式指定后管理员不自动担责"
+    );
     assert!(has_explicit_data_accounts(&record));
     // 指定非成员：过滤
     record.data_accounts = vec!["9".repeat(64)];
@@ -210,7 +220,11 @@ fn member_device_class_falls_back_pc_when_endpoints_have_no_peer_id() {
         device_pub_key: None,
     };
     crate::device::DeviceService::upsert_pdsync(&mut s2, &mobile, 1000, "node-a").unwrap();
-    assert_eq!(member_device_class(&s2, &m), "mobile", "任一可查端点 mobile → mobile");
+    assert_eq!(
+        member_device_class(&s2, &m),
+        "mobile",
+        "任一可查端点 mobile → mobile"
+    );
 }
 
 /// 成员换设备（同 deviceUid 新 peerId）记账不漂：peerId 漂移后设备类判定不变，
@@ -262,7 +276,11 @@ fn device_class_stable_across_peer_id_drift_same_device_uid() {
         ..device
     };
     DeviceService::upsert_pdsync(&mut storage, &drifted, 2000, "node-a").unwrap();
-    assert_eq!(member_device_class(&storage, &m_new), "pc", "换设备后 PC 计入不漂");
+    assert_eq!(
+        member_device_class(&storage, &m_new),
+        "pc",
+        "换设备后 PC 计入不漂"
+    );
 
     // 角色绑账号（rootId），与设备/peerId 无关——换设备角色不漂。
     m_new.role = OrganizationRole::Admin;

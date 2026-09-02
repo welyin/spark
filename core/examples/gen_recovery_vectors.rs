@@ -19,11 +19,7 @@ fn root_id_from_key(key: &SigningKey) -> String {
     hex::encode(sha2::Sha256::digest(pub_key))
 }
 
-fn vector(
-    description: &str,
-    kind: &str,
-    body: serde_json::Value,
-) -> String {
+fn vector(description: &str, kind: &str, body: serde_json::Value) -> String {
     let secret: [u8; 32] = hex::decode(SECRET_HEX).unwrap().try_into().unwrap();
     let key = SigningKey::from_bytes(&secret);
     let root_id = root_id_from_key(&key);

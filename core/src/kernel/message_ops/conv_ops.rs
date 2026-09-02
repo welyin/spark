@@ -3,10 +3,10 @@
 //! （[`Kernel::broadcast_conv_sync`]）；read 信封按会话对象走对端
 //! [`Kernel::notify_peer`] 或自设备 [`Kernel::deliver_to_devices`]。
 
-use super::{Kernel, Result};
 use super::super::dm_envelope::KIND_READ;
-use crate::message::types::ConversationKind;
+use super::{Kernel, Result};
 use crate::message::MessageService;
+use crate::message::types::ConversationKind;
 use crate::p2p::node::system_now_ms;
 
 impl Kernel {
@@ -14,7 +14,12 @@ impl Kernel {
     pub fn message_delete(&mut self, space: &str, conv_id: &str, message_id: &str) -> Result<()> {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
-        MessageService::delete_message(self.require_storage_raw_mut()?, space, conv_id, message_id)?;
+        MessageService::delete_message(
+            self.require_storage_raw_mut()?,
+            space,
+            conv_id,
+            message_id,
+        )?;
         Ok(())
     }
 
@@ -24,7 +29,8 @@ impl Kernel {
         let __io = std::sync::Arc::clone(&self.io_lock);
         let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
         MessageService::mark_read(self.require_storage_raw_mut()?, space, conv_id)?;
-        if let Some(conv) = MessageService::get_conversation(self.require_storage()?, space, conv_id)?
+        if let Some(conv) =
+            MessageService::get_conversation(self.require_storage()?, space, conv_id)?
             && conv.kind == ConversationKind::Direct
         {
             let body = serde_json::json!({ "spaceKey": space });

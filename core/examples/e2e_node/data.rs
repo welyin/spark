@@ -6,9 +6,7 @@
 
 use serde_json::{Value, json};
 use spark_core::kernel::Kernel;
-use spark_core::plugindata::{
-    Accounts, Confidentiality, DeclareInput, MergeRule, Space,
-};
+use spark_core::plugindata::{Accounts, Confidentiality, DeclareInput, MergeRule, Space};
 
 use crate::dispatch::{Params, to_json};
 
@@ -106,7 +104,10 @@ pub fn query(kernel: &Kernel, params: &Params) -> Result<Value, String> {
             params.need_str("domain")?,
             params.need_str("name")?,
             params.opt_str("prefix"),
-            params.opt_value("limit").and_then(Value::as_u64).map(|n| n as usize),
+            params
+                .opt_value("limit")
+                .and_then(Value::as_u64)
+                .map(|n| n as usize),
             params.opt_str("cursor"),
             params.opt_str("version"),
             params.opt_str("orgId"),

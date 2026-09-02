@@ -92,14 +92,22 @@ fn update_profile_blocked_remove_friend() {
             },
         )
         .unwrap();
-    kernel.contact_set_blocked(PERSONAL, &root_id, true).unwrap();
-    let friend = ContactService::get_friend(&storage, &root_id).unwrap().unwrap();
+    kernel
+        .contact_set_blocked(PERSONAL, &root_id, true)
+        .unwrap();
+    let friend = ContactService::get_friend(&storage, &root_id)
+        .unwrap()
+        .unwrap();
     assert_eq!(friend.remark, "备注");
     assert_eq!(friend.memo, "备忘");
     assert!(friend.blocked);
 
     kernel.contact_remove_friend(&root_id, false).unwrap();
-    assert!(ContactService::get_friend(&storage, &root_id).unwrap().is_none());
+    assert!(
+        ContactService::get_friend(&storage, &root_id)
+            .unwrap()
+            .is_none()
+    );
 
     // 删除后再改资料报 ContactNotFound
     let err = kernel
@@ -115,9 +123,13 @@ fn tags_groups_org_tree_use_client_ids() {
     init_identity(&mut kernel);
 
     // 标签（个人空间）
-    let tag = kernel.contact_tag_create(PERSONAL, "tag-1", "邻居").unwrap();
+    let tag = kernel
+        .contact_tag_create(PERSONAL, "tag-1", "邻居")
+        .unwrap();
     assert_eq!(tag.id, "tag-1", "标签 id 由前端生成传入");
-    kernel.contact_tag_rename(PERSONAL, "tag-1", "好邻居").unwrap();
+    kernel
+        .contact_tag_rename(PERSONAL, "tag-1", "好邻居")
+        .unwrap();
     let tags = kernel.contact_overview(PERSONAL).unwrap().tags;
     assert_eq!(tags[0].name, "好邻居");
 
@@ -149,7 +161,9 @@ fn tags_groups_org_tree_use_client_ids() {
             .is_none(),
         "父不存在返回 None"
     );
-    kernel.contact_org_group_rename(ORG, "og-2", "研发部").unwrap();
+    kernel
+        .contact_org_group_rename(ORG, "og-2", "研发部")
+        .unwrap();
     let tree = kernel.contact_overview(ORG).unwrap().group_tree;
     assert_eq!(tree[0].children[0].name, "研发部");
     kernel.contact_org_group_delete(ORG, "og-1").unwrap();
@@ -184,7 +198,8 @@ fn resolve_request_accept_creates_friend() {
             peer: Some(PeerRef {
                 peer_id: "peer-1".to_string(),
                 addresses: vec!["/ip4/1.2.3.4/tcp/9000".to_string()],
-            ..Default::default()}),
+                ..Default::default()
+            }),
             thread: Vec::new(),
             invite_code: None,
         },
@@ -203,7 +218,9 @@ fn resolve_request_accept_creates_friend() {
     assert_eq!(friend.nickname, "申请人");
 
     // 重复处理报错
-    let err = kernel.contact_resolve_request("req-1", true, None).unwrap_err();
+    let err = kernel
+        .contact_resolve_request("req-1", true, None)
+        .unwrap_err();
     assert_eq!(err.to_string(), "好友申请不存在或已处理");
 }
 
@@ -254,7 +271,11 @@ fn send_request_with_node_card() {
         .contact_send_request(request_input("req-1", &peer_root, &card))
         .unwrap();
     assert_eq!(record.id, "req-1", "outbox id 用前端传入值");
-    assert_eq!(record.status, FriendRequestStatus::Pending, "落库 pending 即返回");
+    assert_eq!(
+        record.status,
+        FriendRequestStatus::Pending,
+        "落库 pending 即返回"
+    );
     assert_eq!(record.peer.as_ref().unwrap().peer_id, peer_id);
 
     let outgoing = kernel.contact_overview(PERSONAL).unwrap().outgoing;
@@ -285,7 +306,10 @@ fn send_request_with_explicit_peer_addresses() {
         .unwrap();
     let peer = record.peer.as_ref().unwrap();
     assert_eq!(peer.peer_id, "12D3KooWPeer");
-    assert_eq!(peer.addresses, vec!["/ip4/192.168.31.98/tcp/15002".to_string()]);
+    assert_eq!(
+        peer.addresses,
+        vec!["/ip4/192.168.31.98/tcp/15002".to_string()]
+    );
 
     // 空 addresses 视为未提供，回退后续寻址（此处无名片/组织成员 → 报错）
     let err = kernel
@@ -318,7 +342,7 @@ fn send_request_persists_across_restart() {
                 peer_id: Some("12D3KooWPeer".to_string()),
                 addresses: Some(vec!["/ip4/192.168.31.98/tcp/15002".to_string()]),
                 source: "名片".to_string(),
-            message: "交个朋友".to_string(),
+                message: "交个朋友".to_string(),
             })
             .unwrap();
         kernel.shutdown().unwrap();
@@ -362,7 +386,11 @@ fn send_request_offline_marks_failed_and_emits_event() {
     assert_eq!(record.status, FriendRequestStatus::Pending);
 
     let stored = kernel.contact_overview(PERSONAL).unwrap().outgoing;
-    assert_eq!(stored[0].status, FriendRequestStatus::Failed, "p2p 未运行置 Failed");
+    assert_eq!(
+        stored[0].status,
+        FriendRequestStatus::Failed,
+        "p2p 未运行置 Failed"
+    );
     assert!(stored[0].updated_at >= stored[0].created_at);
 
     let event = events.try_recv().expect("应发出 FriendRequestSent 事件");
@@ -398,7 +426,8 @@ fn send_request_retry_reuses_stored_record() {
             peer: Some(PeerRef {
                 peer_id: "peer-1".to_string(),
                 addresses: vec!["/ip4/1.2.3.4/tcp/9000".to_string()],
-            ..Default::default()}),
+                ..Default::default()
+            }),
             thread: Vec::new(),
             invite_code: None,
         },
@@ -419,7 +448,11 @@ fn send_request_retry_reuses_stored_record() {
         })
         .unwrap();
     assert_eq!(record.status, FriendRequestStatus::Pending, "重置 pending");
-    assert_eq!(record.peer.as_ref().unwrap().peer_id, "peer-1", "复用已存 peer");
+    assert_eq!(
+        record.peer.as_ref().unwrap().peer_id,
+        "peer-1",
+        "复用已存 peer"
+    );
     assert_eq!(record.message, "旧验证消息", "复用已存 message");
     assert_eq!(record.source, "扫码", "复用已存 source");
     assert_eq!(record.created_at, NOW, "createdAt 保留首次时间");
@@ -531,7 +564,6 @@ fn send_request_to_self_allowed() {
     assert_eq!(record.peer.as_ref().unwrap().peer_id, peer_id);
 }
 
-
 // ---------------------------------------------------------------------------
 // 安全/正确性回归：接受合并保留本地资料、拉黑独立集合
 // ---------------------------------------------------------------------------
@@ -566,7 +598,8 @@ fn resolve_request_accept_merges_existing_friend() {
             peer: Some(PeerRef {
                 peer_id: "peer-1".to_string(),
                 addresses: vec!["/ip4/1.2.3.4/tcp/9000".to_string()],
-            ..Default::default()}),
+                ..Default::default()
+            }),
             thread: Vec::new(),
             invite_code: None,
         },
@@ -576,7 +609,9 @@ fn resolve_request_accept_merges_existing_friend() {
     kernel
         .contact_resolve_request(&format!("{peer_root}:req-1"), true, None)
         .unwrap();
-    let friend = ContactService::get_friend(&storage, &peer_root).unwrap().unwrap();
+    let friend = ContactService::get_friend(&storage, &peer_root)
+        .unwrap()
+        .unwrap();
     assert_eq!(friend.nickname, "新昵称", "非空 nickname 刷新");
     assert_eq!(friend.peers[0].peer_id, "peer-1", "Some peer 刷新");
     assert_eq!(friend.remark, "旧备注", "本地资料保留");
@@ -595,12 +630,17 @@ fn blocked_stranger_and_blocked_survives_remove_friend() {
     let storage = kernel.__test_storage().unwrap();
 
     // 拉黑陌生人（无 friend 记录）
-    kernel.contact_set_blocked(PERSONAL, &peer_root, true).unwrap();
+    kernel
+        .contact_set_blocked(PERSONAL, &peer_root, true)
+        .unwrap();
     assert!(ContactService::is_blocked(&storage, &peer_root).unwrap());
 
     // 加成朋友后删除：拉黑仍生效；overview 以集合为准
-    ContactService::upsert_friend(&mut kernel.__test_storage().unwrap(), &friend_record(&peer_root))
-        .unwrap();
+    ContactService::upsert_friend(
+        &mut kernel.__test_storage().unwrap(),
+        &friend_record(&peer_root),
+    )
+    .unwrap();
     kernel.contact_remove_friend(&peer_root, false).unwrap();
     assert!(
         ContactService::is_blocked(&storage, &peer_root).unwrap(),
@@ -615,13 +655,20 @@ fn remove_friend_with_block_writes_blocked_set() {
     init_identity(&mut kernel);
     kernel.stop_p2p().unwrap();
     let peer_root = "dd".repeat(32);
-    ContactService::upsert_friend(&mut kernel.__test_storage().unwrap(), &friend_record(&peer_root))
-        .unwrap();
+    ContactService::upsert_friend(
+        &mut kernel.__test_storage().unwrap(),
+        &friend_record(&peer_root),
+    )
+    .unwrap();
 
     // 删除 + 同时拉黑（§5.5）：friend 记录删除、拉黑集合写入
     kernel.contact_remove_friend(&peer_root, true).unwrap();
     let storage = kernel.__test_storage().unwrap();
-    assert!(ContactService::get_friend(&storage, &peer_root).unwrap().is_none());
+    assert!(
+        ContactService::get_friend(&storage, &peer_root)
+            .unwrap()
+            .is_none()
+    );
     assert!(ContactService::is_blocked(&storage, &peer_root).unwrap());
 
     // overview：friends 不含该人（仅剩自己条目）
@@ -629,10 +676,17 @@ fn remove_friend_with_block_writes_blocked_set() {
     assert!(view.friends.iter().all(|f| f.root_id != peer_root));
 
     // 重新加回朋友：overview 的 blocked 以拉黑集合为准 overlay
-    ContactService::upsert_friend(&mut kernel.__test_storage().unwrap(), &friend_record(&peer_root))
-        .unwrap();
+    ContactService::upsert_friend(
+        &mut kernel.__test_storage().unwrap(),
+        &friend_record(&peer_root),
+    )
+    .unwrap();
     let view = kernel.contact_overview(PERSONAL).unwrap();
-    let friend = view.friends.iter().find(|f| f.root_id == peer_root).unwrap();
+    let friend = view
+        .friends
+        .iter()
+        .find(|f| f.root_id == peer_root)
+        .unwrap();
     assert!(friend.blocked, "重新加回后仍以拉黑集合为准");
 }
 
@@ -645,53 +699,73 @@ fn ask_request_state_gate_and_thread() {
     let peer_root = "ee".repeat(32);
 
     // 申请不存在 / 空文本
-    let err = kernel.contact_ask_request("req-nope", "请问你是哪位？").unwrap_err();
+    let err = kernel
+        .contact_ask_request("req-nope", "请问你是哪位？")
+        .unwrap_err();
     assert_eq!(err.to_string(), "申请不存在");
     let err = kernel.contact_ask_request("req-nope", "   ").unwrap_err();
     assert_eq!(err.to_string(), "询问内容为空或过长");
 
-    let seed = |kernel: &mut Kernel, id: &str, status: FriendRequestStatus, peer: Option<PeerRef>| {
-        ContactService::put_incoming_request(
-            &mut kernel.__test_storage().unwrap(),
-            &FriendRequestRecord {
-                id: id.to_string(),
-                root_id: peer_root.clone(),
-                nickname: "申请人".to_string(),
-                avatar: None,
-                message: "hi".to_string(),
-                source: "扫码".to_string(),
-                status,
-                created_at: NOW,
-                updated_at: NOW,
-                peer,
-                thread: Vec::new(),
-                invite_code: None,
-            },
-        )
-        .unwrap();
-    };
+    let seed =
+        |kernel: &mut Kernel, id: &str, status: FriendRequestStatus, peer: Option<PeerRef>| {
+            ContactService::put_incoming_request(
+                &mut kernel.__test_storage().unwrap(),
+                &FriendRequestRecord {
+                    id: id.to_string(),
+                    root_id: peer_root.clone(),
+                    nickname: "申请人".to_string(),
+                    avatar: None,
+                    message: "hi".to_string(),
+                    source: "扫码".to_string(),
+                    status,
+                    created_at: NOW,
+                    updated_at: NOW,
+                    peer,
+                    thread: Vec::new(),
+                    invite_code: None,
+                },
+            )
+            .unwrap();
+        };
 
     // 无 peer 寻址：报错（不重解析名片，同 reply 先例）
-    seed(&mut kernel, "req-noaddr", FriendRequestStatus::Pending, None);
-    let err = kernel.contact_ask_request("req-noaddr", "请问你是哪位？").unwrap_err();
+    seed(
+        &mut kernel,
+        "req-noaddr",
+        FriendRequestStatus::Pending,
+        None,
+    );
+    let err = kernel
+        .contact_ask_request("req-noaddr", "请问你是哪位？")
+        .unwrap_err();
     assert_eq!(err.to_string(), "无法确定对方节点地址");
 
     let peer = || {
         Some(PeerRef {
             peer_id: "peer-1".to_string(),
             addresses: vec![],
-        ..Default::default()})
+            ..Default::default()
+        })
     };
 
     // 非 pending（已 accepted）不可询问
-    seed(&mut kernel, "req-accepted", FriendRequestStatus::Accepted, peer());
-    let err = kernel.contact_ask_request("req-accepted", "请问你是哪位？").unwrap_err();
+    seed(
+        &mut kernel,
+        "req-accepted",
+        FriendRequestStatus::Accepted,
+        peer(),
+    );
+    let err = kernel
+        .contact_ask_request("req-accepted", "请问你是哪位？")
+        .unwrap_err();
     assert_eq!(err.to_string(), "当前状态不可询问");
 
     // pending → 询问成功：status 保持 pending（仍待我接受/忽略），thread 追加
     // from=me（trim 后落库）；p2p 未运行跳过投递
     seed(&mut kernel, "req-1", FriendRequestStatus::Pending, peer());
-    let record = kernel.contact_ask_request("req-1", " 请问你是哪位？ ").unwrap();
+    let record = kernel
+        .contact_ask_request("req-1", " 请问你是哪位？ ")
+        .unwrap();
     assert_eq!(record.status, FriendRequestStatus::Pending);
     assert_eq!(record.thread.len(), 1);
     assert_eq!(record.thread[0].text, "请问你是哪位？", "trim 后落库");

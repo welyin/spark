@@ -34,8 +34,14 @@ fn validate_topic_shape_and_charset() {
 
 #[test]
 fn validate_feed_id_length() {
-    assert!(validate_feed_body("p:sub", "", &json!({}), None).is_err(), "空 feedId 拒绝");
-    assert!(validate_feed_body("p:sub", &"a".repeat(65), &json!({}), None).is_err(), "超 64 拒绝");
+    assert!(
+        validate_feed_body("p:sub", "", &json!({}), None).is_err(),
+        "空 feedId 拒绝"
+    );
+    assert!(
+        validate_feed_body("p:sub", &"a".repeat(65), &json!({}), None).is_err(),
+        "超 64 拒绝"
+    );
     assert!(validate_feed_body("p:sub", &"a".repeat(64), &json!({}), None).is_ok());
 }
 
@@ -43,14 +49,20 @@ fn validate_feed_id_length() {
 fn validate_payload_size_limit() {
     // payload 紧凑序列化 ≤ 32 KiB
     let big_payload = json!({ "data": "x".repeat(FEED_PAYLOAD_MAX_BYTES) });
-    assert!(validate_feed_body("p:sub", "f", &big_payload, None).is_err(), "超 32 KiB 拒绝");
+    assert!(
+        validate_feed_body("p:sub", "f", &big_payload, None).is_err(),
+        "超 32 KiB 拒绝"
+    );
     let ok_payload = json!({ "data": "x".repeat(1024) });
     assert!(validate_feed_body("p:sub", "f", &ok_payload, None).is_ok());
 }
 
 #[test]
 fn validate_reply_to_must_be_nonempty() {
-    assert!(validate_feed_body("p:sub", "f", &json!({}), Some("")).is_err(), "空 replyTo 拒绝");
+    assert!(
+        validate_feed_body("p:sub", "f", &json!({}), Some("")).is_err(),
+        "空 replyTo 拒绝"
+    );
     assert!(validate_feed_body("p:sub", "f", &json!({}), Some("f0")).is_ok());
 }
 
@@ -60,9 +72,18 @@ fn validate_reply_to_must_be_nonempty() {
 fn inbox_dedup_by_from_and_feed_id() {
     let mut s = MemoryStorage::new();
     inbox_put(&mut s, "moments", 1000, &rec("a", "f1", 1000, "moments:p")).unwrap();
-    assert!(inbox_has(&s, "moments", "a", "f1").unwrap(), "同 (from, feedId) 查重命中");
-    assert!(!inbox_has(&s, "moments", "b", "f1").unwrap(), "不同 from 不判重");
-    assert!(!inbox_has(&s, "moments", "a", "f2").unwrap(), "不同 feedId 不判重");
+    assert!(
+        inbox_has(&s, "moments", "a", "f1").unwrap(),
+        "同 (from, feedId) 查重命中"
+    );
+    assert!(
+        !inbox_has(&s, "moments", "b", "f1").unwrap(),
+        "不同 from 不判重"
+    );
+    assert!(
+        !inbox_has(&s, "moments", "a", "f2").unwrap(),
+        "不同 feedId 不判重"
+    );
     // 不同 pluginId 域隔离
     assert!(!inbox_has(&s, "other", "a", "f1").unwrap());
 }
@@ -74,7 +95,13 @@ fn inbox_put_and_pull_pagination() {
     inbox_put(&mut s, "moments", 1000, &rec("a", "f1", 1000, "moments:p")).unwrap();
     inbox_put(&mut s, "moments", 2000, &rec("b", "f2", 2000, "moments:p")).unwrap();
     // 另一个 pluginId 的记录不进本域
-    inbox_put(&mut s, "ai-chat", 3000, &rec("c", "f3", 3000, "ai-chat:sub")).unwrap();
+    inbox_put(
+        &mut s,
+        "ai-chat",
+        3000,
+        &rec("c", "f3", 3000, "ai-chat:sub"),
+    )
+    .unwrap();
 
     // pull 第一页（limit 1）：游标补读语义
     let (page1, cursor) = inbox_pull(&s, "moments", None, 1).unwrap();
@@ -120,8 +147,14 @@ fn blob_source_registration_ttl() {
     });
     register_blob_sources(&mut s, "rootA", &payload, 1000).unwrap();
     // 两个 hash 都登记到 rootA
-    assert_eq!(blob_source(&s, "hashA", 1000).unwrap().as_deref(), Some("rootA"));
-    assert_eq!(blob_source(&s, "hashB", 1000).unwrap().as_deref(), Some("rootA"));
+    assert_eq!(
+        blob_source(&s, "hashA", 1000).unwrap().as_deref(),
+        Some("rootA")
+    );
+    assert_eq!(
+        blob_source(&s, "hashB", 1000).unwrap().as_deref(),
+        Some("rootA")
+    );
     // 无引用 hash 未登记
     assert_eq!(blob_source(&s, "hashC", 1000).unwrap(), None);
     // TTL 30 天过期
@@ -133,7 +166,9 @@ fn blob_source_registration_ttl() {
     // 换一个 from 重新登记（同 hash 幂等覆盖，TTL 重置）
     register_blob_sources(&mut s, "rootB", &payload, 1000 + FEED_BLOB_SRC_TTL_MS).unwrap();
     assert_eq!(
-        blob_source(&s, "hashA", 1000 + FEED_BLOB_SRC_TTL_MS).unwrap().as_deref(),
+        blob_source(&s, "hashA", 1000 + FEED_BLOB_SRC_TTL_MS)
+            .unwrap()
+            .as_deref(),
         Some("rootB"),
         "重新登记后来源更新为最新"
     );
@@ -170,13 +205,22 @@ fn deliver_rate_limit_allows_quota_and_rejects_excess() {
     let mut limiter = FeedDeliverRateLimiter::default();
     // 第 1..10 次放行
     for i in 0..FEED_DELIVER_RATE_LIMIT {
-        assert!(limiter.check("personal", "moments", 1000 + i as i64), "第 {i} 次应放行");
+        assert!(
+            limiter.check("personal", "moments", 1000 + i as i64),
+            "第 {i} 次应放行"
+        );
     }
     // 第 11 次超限拒绝
-    assert!(!limiter.check("personal", "moments", 1000 + FEED_DELIVER_RATE_LIMIT as i64), "第 11 次超限");
+    assert!(
+        !limiter.check("personal", "moments", 1000 + FEED_DELIVER_RATE_LIMIT as i64),
+        "第 11 次超限"
+    );
     assert_eq!(limiter.rejected_count("personal", "moments"), 1);
     // 不同 pluginId 独立配额
-    assert!(limiter.check("personal", "ai-chat", 1000 + FEED_DELIVER_RATE_LIMIT as i64), "其它插件独立配额");
+    assert!(
+        limiter.check("personal", "ai-chat", 1000 + FEED_DELIVER_RATE_LIMIT as i64),
+        "其它插件独立配额"
+    );
 }
 
 #[test]
@@ -188,7 +232,11 @@ fn deliver_rate_limit_window_resets() {
         assert!(limiter.check("personal", "moments", start + i as i64));
     }
     // 窗口内仍超限
-    assert!(!limiter.check("personal", "moments", start + FEED_DELIVER_RATE_LIMIT as i64 - 1));
+    assert!(!limiter.check(
+        "personal",
+        "moments",
+        start + FEED_DELIVER_RATE_LIMIT as i64 - 1
+    ));
     // 跨过 60s 窗口边界 → 重置放行
     let after = start + FEED_DELIVER_RATE_WINDOW_MS;
     assert!(limiter.check("personal", "moments", after), "窗口过期重置");

@@ -27,7 +27,9 @@ pub(crate) const DEVICE_PREFIX: &str = "device:";
 const DEVICE_UID_KEY: &str = "p2p:device:uid";
 
 /// 读取或创建本机设备 UID（同设备稳定，跨重启/peerId 漂移不变）。
-pub fn get_or_create_device_uid<S: StorageBackend>(storage: &mut S) -> crate::contact::Result<String> {
+pub fn get_or_create_device_uid<S: StorageBackend>(
+    storage: &mut S,
+) -> crate::contact::Result<String> {
     if let Some(uid) = storage.get(DEVICE_UID_KEY)? {
         let uid = uid.trim().to_string();
         if !uid.is_empty() {
@@ -148,7 +150,10 @@ pub fn collect_os_version() -> String {
 /// （`sw_vers` / `cmd /c ver`）；采集仅发生在 p2p 启动与本机条目兜底，频率极低。
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn run_capture(args: &[&str]) -> String {
-    let Ok(output) = std::process::Command::new(args[0]).args(&args[1..]).output() else {
+    let Ok(output) = std::process::Command::new(args[0])
+        .args(&args[1..])
+        .output()
+    else {
         return String::new();
     };
     if !output.status.success() {
@@ -180,7 +185,11 @@ fn os_release_pretty_name() -> Option<String> {
     for line in raw.lines() {
         if let Some(v) = line.strip_prefix("PRETTY_NAME=") {
             let v = v.trim().trim_matches('"').trim();
-            return if v.is_empty() { None } else { Some(v.to_string()) };
+            return if v.is_empty() {
+                None
+            } else {
+                Some(v.to_string())
+            };
         }
     }
     None
@@ -298,7 +307,11 @@ fn sys_class_net_macs() -> Vec<String> {
 /// MAC 可用性过滤：形如 6 组 hex、非全零、非 Android 随机化占位。
 fn is_usable_mac(mac: &str) -> bool {
     let parts: Vec<&str> = mac.split(':').collect();
-    if parts.len() != 6 || !parts.iter().all(|p| p.len() == 2 && p.bytes().all(|b| b.is_ascii_hexdigit())) {
+    if parts.len() != 6
+        || !parts
+            .iter()
+            .all(|p| p.len() == 2 && p.bytes().all(|b| b.is_ascii_hexdigit()))
+    {
         return false;
     }
     mac != "00:00:00:00:00:00" && mac != "02:00:00:00:00:00"
@@ -368,7 +381,10 @@ impl DeviceService {
     }
 
     /// 读取单台设备记录。
-    pub fn get<S: StorageBackend>(storage: &S, peer_id: &str) -> crate::contact::Result<Option<DeviceRecord>> {
+    pub fn get<S: StorageBackend>(
+        storage: &S,
+        peer_id: &str,
+    ) -> crate::contact::Result<Option<DeviceRecord>> {
         let key = format!("{DEVICE_PREFIX}{peer_id}");
         let Some(raw) = storage.get(&key)? else {
             return Ok(None);
@@ -540,20 +556,21 @@ impl DeviceService {
         )?;
         let existing = Self::get(storage, &record.peer_id)?;
         // 撤销粘性：本地已撤销则保留 revoked_at，不允许远端同步洗白。
-        if existing.as_ref().is_some_and(|e| e.revoked_at.is_some()) && record.revoked_at.is_none() {
+        if existing.as_ref().is_some_and(|e| e.revoked_at.is_some()) && record.revoked_at.is_none()
+        {
             record.revoked_at = existing.as_ref().and_then(|e| e.revoked_at);
         }
         let changed = existing
             .as_ref()
-            .map(|e| {
-                record.updated_at > e.updated_at
-                    || record.revoked_at != e.revoked_at
-            })
+            .map(|e| record.updated_at > e.updated_at || record.revoked_at != e.revoked_at)
             .unwrap_or(true);
         let base_updated = if changed {
             record.updated_at
         } else {
-            existing.as_ref().map(|e| e.updated_at).unwrap_or(record.updated_at)
+            existing
+                .as_ref()
+                .map(|e| e.updated_at)
+                .unwrap_or(record.updated_at)
         };
         if !changed {
             // 内容不更新，但 last_seen 推进（设备在线证据）；对端记账防回声
@@ -586,11 +603,15 @@ mod tests {
     #[test]
     fn usable_peer_id_format() {
         // 典型 libp2p Ed25519 peerId（base58btc ≈ 52 字符）
-        assert!(is_usable_peer_id("12D3KooWRbyE1L8FJdY1Mq4NdWkHnGbnmuV7VNn5LbbKLkQDMXJm"));
+        assert!(is_usable_peer_id(
+            "12D3KooWRbyE1L8FJdY1Mq4NdWkHnGbnmuV7VNn5LbbKLkQDMXJm"
+        ));
         // 过短
         assert!(!is_usable_peer_id("12D3"));
         // 含非法字符（base58 不含 '0', 'O', 'I', 'l'）
-        assert!(!is_usable_peer_id("12D3KooWRbyE1L8FJ0Y1Mq4NdWkHnGbnmuV7VNn5LbbKLkQDMXJm"));
+        assert!(!is_usable_peer_id(
+            "12D3KooWRbyE1L8FJ0Y1Mq4NdWkHnGbnmuV7VNn5LbbKLkQDMXJm"
+        ));
     }
 
     #[test]
@@ -613,7 +634,11 @@ mod tests {
         let second =
             DeviceService::upsert_self(&mut storage, "peer-new", 200, "node-a", "0.2.1", None)
                 .unwrap();
-        assert_eq!(second.device_uid.as_deref(), Some(uid.as_str()), "同设备 UID 稳定");
+        assert_eq!(
+            second.device_uid.as_deref(),
+            Some(uid.as_str()),
+            "同设备 UID 稳定"
+        );
 
         // 旧 peerId 记录本体已删 + 墓碑 pmeta 保留（供同步传播）
         assert!(DeviceService::get(&storage, "peer-old").unwrap().is_none());
@@ -684,7 +709,9 @@ mod tests {
         };
         DeviceService::apply_remote(&mut storage, incoming, 200, "node-b", "node-a").unwrap();
         assert!(
-            DeviceService::get(&storage, "peer-legacy").unwrap().is_some(),
+            DeviceService::get(&storage, "peer-legacy")
+                .unwrap()
+                .is_some(),
             "无 deviceUid 的旧记录保留（手动清理）"
         );
     }
@@ -706,8 +733,14 @@ mod tests {
             revoked_at: None,
             device_pub_key: None,
         };
-        let (applied, changed) =
-            DeviceService::apply_remote(&mut storage, older.clone(), 100, "remote-node", "local-node").unwrap();
+        let (applied, changed) = DeviceService::apply_remote(
+            &mut storage,
+            older.clone(),
+            100,
+            "remote-node",
+            "local-node",
+        )
+        .unwrap();
         assert!(changed);
         assert_eq!(applied.device_name, "旧名字");
 
@@ -718,7 +751,8 @@ mod tests {
             ..older.clone()
         };
         let (applied, changed) =
-            DeviceService::apply_remote(&mut storage, stale, 200, "remote-node", "local-node").unwrap();
+            DeviceService::apply_remote(&mut storage, stale, 200, "remote-node", "local-node")
+                .unwrap();
         assert!(!changed);
         assert_eq!(applied.device_name, "旧名字");
         assert_eq!(applied.last_seen_at, 200);
@@ -730,7 +764,8 @@ mod tests {
             ..older
         };
         let (applied, changed) =
-            DeviceService::apply_remote(&mut storage, newer, 300, "remote-node", "local-node").unwrap();
+            DeviceService::apply_remote(&mut storage, newer, 300, "remote-node", "local-node")
+                .unwrap();
         assert!(changed);
         assert_eq!(applied.device_name, "新名字");
     }

@@ -69,8 +69,13 @@ fn f7_inbound_invite_versioned_and_not_clobbered_by_leaked_remote() {
 
     // A 邀 C：入站落库 + 显式记账
     let r = deliver_invite(
-        &mut c, &c_root, &a_key, &a_root,
-        dm_envelope::KIND_ORG_INVITE, invite_body("inv-c", ORG_ID), "node-c",
+        &mut c,
+        &c_root,
+        &a_key,
+        &a_root,
+        dm_envelope::KIND_ORG_INVITE,
+        invite_body("inv-c", ORG_ID),
+        "node-c",
     );
     assert_eq!(r.response, json!({ "ok": true }));
     let key = format!("org:inv:in:{ORG_ID}:{a_root}");
@@ -78,7 +83,9 @@ fn f7_inbound_invite_versioned_and_not_clobbered_by_leaked_remote() {
         serde_json::from_str(&c.get(&key).unwrap().expect("入站记录落库")).unwrap();
     assert_eq!(record.id, "inv-c");
     assert_eq!(record.status, OrgInviteStatus::Pending);
-    let meta = get_personal_meta(&c, &key).unwrap().expect("显式记账：pmeta 存在");
+    let meta = get_personal_meta(&c, &key)
+        .unwrap()
+        .expect("显式记账：pmeta 存在");
     assert!(
         meta.vv.get("node-c").copied().unwrap_or(0) >= 1,
         "per-node 序号记账（本机 nodeId）"
@@ -100,7 +107,10 @@ fn f7_inbound_invite_versioned_and_not_clobbered_by_leaked_remote() {
         ..Default::default()
     };
     let applied = spark_core::sync::apply_personal_remote_no_dlog(
-        &mut c, &key, &leaked.to_string(), &leaked_meta,
+        &mut c,
+        &key,
+        &leaked.to_string(),
+        &leaked_meta,
     )
     .unwrap();
     assert!(!applied.did_apply(), "泄漏的远端旧版本不得覆盖本地 pending");
@@ -122,7 +132,12 @@ fn f7_inbound_invite_versioned_and_not_clobbered_by_leaked_remote() {
     );
     assert!(
         spark_core::sync::orgsync::collect_org_incremental(
-            &c, ORG_ID, "org:invites", "1", &Default::default(), 0,
+            &c,
+            ORG_ID,
+            "org:invites",
+            "1",
+            &Default::default(),
+            0,
         )
         .unwrap()
         .is_empty(),
@@ -147,11 +162,14 @@ fn f7_inbound_invite_versioned_and_not_clobbered_by_leaked_remote() {
     };
     OrganizationService::put_invite_record(&mut a, &out_record).unwrap();
     let r = deliver_invite(
-        &mut a, &a_root, &{
+        &mut a,
+        &a_root,
+        &{
             // C 的签名钥
             let (c_key, _) = self_identity(2);
             c_key
-        }, &c_root,
+        },
+        &c_root,
         dm_envelope::KIND_ORG_INVITE_REPLY,
         json!({ "orgId": ORG_ID, "accept": true, "nickname": "小C" }),
         "node-a",
@@ -162,7 +180,9 @@ fn f7_inbound_invite_versioned_and_not_clobbered_by_leaked_remote() {
         serde_json::from_str(&a.get(&out_key).unwrap().unwrap()).unwrap();
     assert_eq!(updated.status, OrgInviteStatus::Accepted);
     assert_eq!(updated.peer_nickname, "小C");
-    let out_meta = get_personal_meta(&a, &out_key).unwrap().expect("reply 流转显式记账");
+    let out_meta = get_personal_meta(&a, &out_key)
+        .unwrap()
+        .expect("reply 流转显式记账");
     assert!(
         out_meta.vv.get("node-a").copied().unwrap_or(0) >= 1,
         "per-node 序号记账"
@@ -193,17 +213,26 @@ fn f7_outgoing_records_two_admins_stay_local_and_pdsync_kept() {
             updated_at: NOW,
         };
         OrganizationService::put_invite_record(&mut s, &record).unwrap();
-        put_personal(&mut s, node, &out_key, &serde_json::to_string(&record).unwrap(), NOW)
-            .unwrap();
+        put_personal(
+            &mut s,
+            node,
+            &out_key,
+            &serde_json::to_string(&record).unwrap(),
+            NOW,
+        )
+        .unwrap();
         let stored: OrgInviteRecord =
             serde_json::from_str(&s.get(&out_key).unwrap().unwrap()).unwrap();
-        assert_eq!(stored.id, format!("inv-{tag}"), "各自出站记录留存（无互盖）");
+        assert_eq!(
+            stored.id,
+            format!("inv-{tag}"),
+            "各自出站记录留存（无互盖）"
+        );
         assert!(get_personal_meta(&s, &out_key).unwrap().is_some());
     }
     // pdsync 自设备同步面保留（F7 不动 personal 域）
     assert_eq!(
-        spark_core::sync::pdsync::category_for_key(&format!("org:inv:in:{org}:x"))
-            .map(|c| c.name),
+        spark_core::sync::pdsync::category_for_key(&format!("org:inv:in:{org}:x")).map(|c| c.name),
         Some("org:inv")
     );
     assert_eq!(
@@ -223,18 +252,46 @@ fn f7_migration_cleans_leaked_incoming_and_tombstones_decl() {
     // + 各自 pmeta
     for (inviter, tag) in [("aa".repeat(32), "self"), ("bb".repeat(32), "leaked")] {
         let key = format!("org:inv:in:{ORG_ID}:{inviter}");
-        s.put(&key, &json!({"id": format!("inv-{tag}")}).to_string()).unwrap();
-        put_personal(&mut s, "node-x", &key, &json!({"id": format!("inv-{tag}")}).to_string(), NOW)
+        s.put(&key, &json!({"id": format!("inv-{tag}")}).to_string())
             .unwrap();
+        put_personal(
+            &mut s,
+            "node-x",
+            &key,
+            &json!({"id": format!("inv-{tag}")}).to_string(),
+            NOW,
+        )
+        .unwrap();
     }
     // out: 记录（应保留）+ pmeta
     let out_key = format!("org:inv:out:{ORG_ID}:{}", "cd".repeat(32));
-    put_personal(&mut s, "node-x", &out_key, &json!({"id": "inv-out"}).to_string(), NOW).unwrap();
+    put_personal(
+        &mut s,
+        "node-x",
+        &out_key,
+        &json!({"id": "inv-out"}).to_string(),
+        NOW,
+    )
+    .unwrap();
     // org:invites 声明（应墓碑化）+ pmeta；org:contacts 声明（对照，不动）
     let invites_decl = format!("org:coll:{ORG_ID}:org:invites@v1");
     let contacts_decl = format!("org:coll:{ORG_ID}:org:contacts@v1");
-    put_personal(&mut s, "node-x", &invites_decl, &json!({"name":"org:invites"}).to_string(), NOW).unwrap();
-    put_personal(&mut s, "node-x", &contacts_decl, &json!({"name":"org:contacts"}).to_string(), NOW).unwrap();
+    put_personal(
+        &mut s,
+        "node-x",
+        &invites_decl,
+        &json!({"name":"org:invites"}).to_string(),
+        NOW,
+    )
+    .unwrap();
+    put_personal(
+        &mut s,
+        "node-x",
+        &contacts_decl,
+        &json!({"name":"org:contacts"}).to_string(),
+        NOW,
+    )
+    .unwrap();
 
     let (removed, tombstoned) =
         spark_core::org::service::migrate_org_invites_out_of_orgsync(&mut s, NOW + 1000).unwrap();
@@ -247,21 +304,35 @@ fn f7_migration_cleans_leaked_incoming_and_tombstones_decl() {
             .is_empty()
     );
     let tomb_key = format!("org:inv:in:{ORG_ID}:{}", "aa".repeat(32));
-    let tomb_meta = get_personal_meta(&s, &tomb_key).unwrap().expect("墓碑 pmeta 存在");
+    let tomb_meta = get_personal_meta(&s, &tomb_key)
+        .unwrap()
+        .expect("墓碑 pmeta 存在");
     assert_eq!(tomb_meta.tombstone, Some(true));
-    assert_eq!(tomb_meta.vv.get("node-x"), Some(&1), "墓碑保留既有 vv 分量不 bump");
+    assert_eq!(
+        tomb_meta.vv.get("node-x"),
+        Some(&1),
+        "墓碑保留既有 vv 分量不 bump"
+    );
     // 个人域 dlog 无条目（不登 dlog——Equal 拒收已闭合复活窗口）
     assert!(
-        spark_core::sync::dlog::entries_after(&s, 0).unwrap().is_empty(),
+        spark_core::sync::dlog::entries_after(&s, 0)
+            .unwrap()
+            .is_empty(),
         "迁移墓碑不登 dlog"
     );
     // out: 记录保留（出站是 inviter 自己的记账，不在泄漏面）
     assert!(s.get(&out_key).unwrap().is_some(), "out: 记录保留");
     // 声明墓碑化：记录删除 + pmeta 墓碑
     assert!(s.get(&invites_decl).unwrap().is_none());
-    let decl_meta = get_personal_meta(&s, &invites_decl).unwrap().expect("声明墓碑 pmeta");
+    let decl_meta = get_personal_meta(&s, &invites_decl)
+        .unwrap()
+        .expect("声明墓碑 pmeta");
     assert_eq!(decl_meta.tombstone, Some(true));
-    assert_eq!(decl_meta.vv.get("node-x"), Some(&4), "墓碑保留既有 vv 分量不 bump");
+    assert_eq!(
+        decl_meta.vv.get("node-x"),
+        Some(&4),
+        "墓碑保留既有 vv 分量不 bump"
+    );
     // 对照：其余声明不动
     assert!(s.get(&contacts_decl).unwrap().is_some());
     let contacts_meta = get_personal_meta(&s, &contacts_decl).unwrap().unwrap();
@@ -282,14 +353,28 @@ fn f7_migration_cleans_leaked_incoming_and_tombstones_decl() {
         ..Default::default()
     };
     let applied = spark_core::sync::apply_personal_remote_no_dlog(
-        &mut s, &tomb_key, &json!({"id":"inv-self"}).to_string(), &leaked_meta,
+        &mut s,
+        &tomb_key,
+        &json!({"id":"inv-self"}).to_string(),
+        &leaked_meta,
     )
     .unwrap();
-    assert_eq!(applied, spark_core::sync::ApplyResult::Equal, "同 vv 旧记录 Equal 拒收");
+    assert_eq!(
+        applied,
+        spark_core::sync::ApplyResult::Equal,
+        "同 vv 旧记录 Equal 拒收"
+    );
     assert!(s.get(&tomb_key).unwrap().is_none(), "本地不复活");
 
     // 邀请人重发（入站写 bump 支配墓碑）→ 正常落库
-    let resent = put_personal(&mut s, "node-x", &tomb_key, &json!({"id":"inv-new"}).to_string(), NOW + 3000).unwrap();
+    let resent = put_personal(
+        &mut s,
+        "node-x",
+        &tomb_key,
+        &json!({"id":"inv-new"}).to_string(),
+        NOW + 3000,
+    )
+    .unwrap();
     assert_eq!(resent.tombstone, None, "重发记录非墓碑");
     assert!(s.get(&tomb_key).unwrap().is_some(), "重发正常落库");
 }

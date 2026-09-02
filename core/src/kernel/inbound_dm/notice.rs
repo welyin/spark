@@ -6,7 +6,7 @@
 
 use serde_json::{Value, json};
 
-use super::{InboundContext, InboundDmResult, Result, fail_response, ok_response, done};
+use super::{InboundContext, InboundDmResult, Result, done, fail_response, ok_response};
 use crate::p2p::P2pEvent;
 
 pub(crate) fn handle_device_notice(

@@ -42,8 +42,14 @@ impl ContactService {
             parent.children.push(node.clone());
         }
         // P5：组织分组树整域单记录同步（写 pmeta，供自设备 pdsync）
-        put_personal(storage, node_id, &key, &serde_json::to_string(&tree)?, now_ms)
-            .map_err(sync_err_to_contact)?;
+        put_personal(
+            storage,
+            node_id,
+            &key,
+            &serde_json::to_string(&tree)?,
+            now_ms,
+        )
+        .map_err(sync_err_to_contact)?;
         Ok(Some(node))
     }
 
@@ -67,8 +73,14 @@ impl ContactService {
             .find(|item| item.id == id)
             .expect("siblings located by id");
         node.name = name.to_string();
-        put_personal(storage, node_id, &key, &serde_json::to_string(&tree)?, now_ms)
-            .map_err(sync_err_to_contact)?;
+        put_personal(
+            storage,
+            node_id,
+            &key,
+            &serde_json::to_string(&tree)?,
+            now_ms,
+        )
+        .map_err(sync_err_to_contact)?;
         Ok(())
     }
 
@@ -96,11 +108,20 @@ impl ContactService {
         for (offset, child) in node.children.into_iter().enumerate() {
             siblings.insert(index + offset, child);
         }
-        put_personal(storage, node_id, &key, &serde_json::to_string(&tree)?, now_ms)
-            .map_err(sync_err_to_contact)?;
+        put_personal(
+            storage,
+            node_id,
+            &key,
+            &serde_json::to_string(&tree)?,
+            now_ms,
+        )
+        .map_err(sync_err_to_contact)?;
         let prefix = org_extra_prefix(org_id);
         for (key, mut profile) in scan_json::<S, ContactProfileRecord>(storage, &prefix)? {
-            if removed_ids.iter().any(|removed| removed == &profile.group_id) {
+            if removed_ids
+                .iter()
+                .any(|removed| removed == &profile.group_id)
+            {
                 profile.group_id = String::new();
                 put_personal(
                     storage,
@@ -142,8 +163,14 @@ impl ContactService {
         let moved = siblings.remove(from);
         let insert_at = if from < target { target - 1 } else { target };
         siblings.insert(insert_at, moved);
-        put_personal(storage, node_id, &key, &serde_json::to_string(&tree)?, now_ms)
-            .map_err(sync_err_to_contact)?;
+        put_personal(
+            storage,
+            node_id,
+            &key,
+            &serde_json::to_string(&tree)?,
+            now_ms,
+        )
+        .map_err(sync_err_to_contact)?;
         Ok(())
     }
 
@@ -213,8 +240,14 @@ impl ContactService {
         };
         let clamped = index.min(target.len());
         target.insert(clamped, node);
-        put_personal(storage, node_id, &key, &serde_json::to_string(&tree)?, now_ms)
-            .map_err(sync_err_to_contact)?;
+        put_personal(
+            storage,
+            node_id,
+            &key,
+            &serde_json::to_string(&tree)?,
+            now_ms,
+        )
+        .map_err(sync_err_to_contact)?;
         Ok(())
     }
 }
@@ -243,11 +276,16 @@ fn tree_contains(nodes: &[OrgGroupNode], id: &str) -> bool {
 }
 
 /// 查找 id 所在层（根数组或某节点的 children）的可变引用；不存在返回 `None`。
-fn find_siblings_mut<'a>(tree: &'a mut Vec<OrgGroupNode>, id: &str) -> Option<&'a mut Vec<OrgGroupNode>> {
+fn find_siblings_mut<'a>(
+    tree: &'a mut Vec<OrgGroupNode>,
+    id: &str,
+) -> Option<&'a mut Vec<OrgGroupNode>> {
     if tree.iter().any(|node| node.id == id) {
         return Some(tree);
     }
-    let index = tree.iter().position(|node| tree_contains(&node.children, id))?;
+    let index = tree
+        .iter()
+        .position(|node| tree_contains(&node.children, id))?;
     find_siblings_mut(&mut tree[index].children, id)
 }
 

@@ -501,13 +501,9 @@ mod tests {
     #[test]
     fn pair_new_device_unsupported() {
         let mut s = mem();
-        let err = RecoveryService::<MemoryStorage>::initiate(
-            &mut s,
-            0,
-            RecoveryOp::PairNewDevice,
-            None,
-        )
-        .unwrap_err();
+        let err =
+            RecoveryService::<MemoryStorage>::initiate(&mut s, 0, RecoveryOp::PairNewDevice, None)
+                .unwrap_err();
         assert_eq!(err, RecoveryError::UnsupportedOp);
     }
 
@@ -567,7 +563,9 @@ mod tests {
         // 乱序否决到达。
         RecoveryService::<MemoryStorage>::apply_inbound_vetoed(&mut s, now + 1000, "rc123", "d2")
             .unwrap();
-        let seen = RecoveryService::<MemoryStorage>::get_seen(&s, "rc123").unwrap().unwrap();
+        let seen = RecoveryService::<MemoryStorage>::get_seen(&s, "rc123")
+            .unwrap()
+            .unwrap();
         assert!(seen.vetoed);
     }
 }

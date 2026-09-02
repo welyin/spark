@@ -18,10 +18,10 @@ use std::sync::{Arc, Mutex};
 use base64::Engine;
 use serde_json::Value;
 
+use crate::p2p::P2pNode;
 use crate::p2p::host::DmHandler;
 use crate::p2p::node::system_now_ms;
 use crate::p2p::peer_targets::PeerNodeInfo;
-use crate::p2p::P2pNode;
 use crate::storage::SledStorage;
 
 use super::super::dm_envelope;
@@ -45,7 +45,10 @@ fn derive_kverify_from_password_shared(
     password_shared: &Arc<Mutex<Option<String>>>,
     cache: &Arc<Mutex<Option<(String, [u8; 32])>>>,
 ) -> Option<[u8; 32]> {
-    let password = password_shared.lock().unwrap_or_else(|e| e.into_inner()).clone()?;
+    let password = password_shared
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()?;
     let pwv = crate::pw::get_pwv(storage).ok().flatten()?;
     let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((cached_salt, k)) = cache.as_ref() {
@@ -118,9 +121,8 @@ impl KernelDmHandler {
             // O3 filtered 权限钩子接线：orgq-req 注入宿主钩子（数据账号侧
             // 经插件 QuickJS 后台运行时执行 canRead/canWrite）。插件未运行
             // 时 has_runtime=false → fail-closed 降级（只存不服务）。
-            let hook = super::super::plugin_ops::QuickJsOrgqHook::new(
-                self.plugin_host_query.clone(),
-            );
+            let hook =
+                super::super::plugin_ops::QuickJsOrgqHook::new(self.plugin_host_query.clone());
             super::super::inbound_dm::handle_inbound_dm_with_orgq_hooks(
                 storage,
                 root_id,
@@ -175,8 +177,15 @@ impl KernelDmHandler {
             .unwrap_or(0);
         if !is_pdsync_data || record_count <= Self::INBOUND_CHUNK_SIZE {
             return self.process_one_inbound(
-                storage, root_id, nickname, payload, remote_peer_id, online_peers, node_id,
-                kverify, my_signing_key,
+                storage,
+                root_id,
+                nickname,
+                payload,
+                remote_peer_id,
+                online_peers,
+                node_id,
+                kverify,
+                my_signing_key,
             );
         }
         // 拆批：records 数组按 INBOUND_CHUNK_SIZE 切片，其余字段原样
@@ -197,8 +206,15 @@ impl KernelDmHandler {
                 obj.insert("records".to_string(), Value::Array(chunk.to_vec()));
             }
             let r = self.process_one_inbound(
-                storage, root_id, nickname, chunk_payload, remote_peer_id, online_peers,
-                node_id, kverify, my_signing_key,
+                storage,
+                root_id,
+                nickname,
+                chunk_payload,
+                remote_peer_id,
+                online_peers,
+                node_id,
+                kverify,
+                my_signing_key,
             )?;
             merged = Some(match merged {
                 None => r,
@@ -259,7 +275,10 @@ impl KernelDmHandler {
     /// 完整验签先于触发——伪造信封不得驱动出站投递（重投本身幂等无害，
     /// 但验签节流避免被恶意信封反复触发扫描/装配）。成员资格由入站编排
     /// 校验；pending 收件人本就来自成员表（plan 内 find_member 兜底）。
-    pub(crate) fn orgkey_resend_trigger(payload: &Value, my_root_id: &str) -> Option<(String, String)> {
+    pub(crate) fn orgkey_resend_trigger(
+        payload: &Value,
+        my_root_id: &str,
+    ) -> Option<(String, String)> {
         let kind = payload.get("kind").and_then(Value::as_str)?;
         if kind != super::super::dm_envelope::KIND_ORGSYNC_HELLO {
             return None;
@@ -293,8 +312,7 @@ impl KernelDmHandler {
         // 完整验签：`to == my_root_id` + 签名有效才证明对端是真实成员设备、
         // 支持 orgsync（防伪造信封欺骗能力探测）。成员资格由入站编排校验，
         // 此处只需确认信封合法——from 非本机（orgsync 来自其他成员）。
-        let _verified =
-            dm_envelope::verify_envelope(payload, my_root_id, system_now_ms()).ok()?;
+        let _verified = dm_envelope::verify_envelope(payload, my_root_id, system_now_ms()).ok()?;
         Some(remote_peer_id.to_string())
     }
 
@@ -333,8 +351,7 @@ impl KernelDmHandler {
         ) {
             return None;
         }
-        let verified =
-            dm_envelope::verify_envelope(payload, my_root_id, system_now_ms()).ok()?;
+        let verified = dm_envelope::verify_envelope(payload, my_root_id, system_now_ms()).ok()?;
         (verified.from == my_root_id).then(|| remote_peer_id.to_string())
     }
 }
@@ -507,11 +524,7 @@ impl DmHandler for KernelDmHandler {
 impl KernelDmHandler {
     /// M1 补发窗口内：若自设备 peer 首次连接且窗口未过期，广播本机
     /// device_joined 通知。幂等键 `p2p:device:noticeSent:{peerId}` 防止重复发送。
-    pub(crate) fn maybe_spawn_device_notice_broadcast(
-        &self,
-        my_root_id: &str,
-        peer_id: &str,
-    ) {
+    pub(crate) fn maybe_spawn_device_notice_broadcast(&self, my_root_id: &str, peer_id: &str) {
         let now_ms = crate::p2p::node::system_now_ms();
         if !replies::device_notice_window_open(&self.storage, now_ms) {
             return;
@@ -526,10 +539,22 @@ impl KernelDmHandler {
     /// 私钥（seed 派生 X25519）+ sender（owner）组织身份公钥 X25519 解
     /// crypto_box，得 32B epoch 密钥后写 orgkey 表。seed 缺失（锁定态）或
     /// 解包失败 → 静默跳过（不落库；后续重新投递补投）。
-    pub(crate) fn apply_orgkey_unbox(&self, my_root_id: &str, unbox: &crate::kernel::inbound_dm::OrgkeyUnbox) {
-        let seed = self.seed_shared.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    pub(crate) fn apply_orgkey_unbox(
+        &self,
+        my_root_id: &str,
+        unbox: &crate::kernel::inbound_dm::OrgkeyUnbox,
+    ) {
+        let seed = self
+            .seed_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         let Some(seed) = seed else {
-            log::info!("[ORGKEY] unbox skipped: no seed (locked) | col={}:{}", unbox.org_id, unbox.name);
+            log::info!(
+                "[ORGKEY] unbox skipped: no seed (locked) | col={}:{}",
+                unbox.org_id,
+                unbox.name
+            );
             return;
         };
         let domain = crate::kernel::Kernel::org_access_domain(&unbox.org_id);

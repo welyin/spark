@@ -19,17 +19,17 @@ pub use meta::{
     generate_updated_meta, get_meta, merge_version_vectors, meta_key, resolve_conflict_by_lww,
     set_meta,
 };
-pub use personal::{
-    ApplyResult, bump_personal_meta, delete_personal, get_personal_meta, is_tombstone,
-    personal_meta_key, put_personal, set_personal_meta, PMETA_PREFIX, apply_personal_remote,
-    apply_personal_remote_no_dlog,
-};
 pub use pdsync::{
     CATEGORIES, Category, DiffOutcome, MessageWindow, PdsyncRecord, apply_message_record,
     build_data_batch, build_hello, build_need, category_by_name, category_for_key,
     collect_all_categories, collect_category_vv, collect_incremental, collect_message_window,
     collect_tombstones_after, diff_category, parse_data, parse_hello_categories, parse_need,
     split_batches,
+};
+pub use personal::{
+    ApplyResult, PMETA_PREFIX, apply_personal_remote, apply_personal_remote_no_dlog,
+    bump_personal_meta, delete_personal, get_personal_meta, is_tombstone, personal_meta_key,
+    put_personal, set_personal_meta,
 };
 
 /// sync 模块错误。

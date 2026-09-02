@@ -252,11 +252,11 @@ async fn dm_direct_rate_limited() {
         .expect("first dm ok");
     assert_eq!(first, Some(json!({"ok": true})));
     // 窗口内第二条：被限流（B 侧 now_fn 固定为 now，窗口判定确定）
-    let second = a.dm_direct(&target(), envelope).await.expect("second dm ok");
-    assert_eq!(
-        second,
-        Some(json!({"ok": false, "reason": "rate-limited"}))
-    );
+    let second = a
+        .dm_direct(&target(), envelope)
+        .await
+        .expect("second dm ok");
+    assert_eq!(second, Some(json!({"ok": false, "reason": "rate-limited"})));
     // 被限流的请求不进入宿主
     assert_eq!(state_b.lock().unwrap().dms.len(), 1);
 
@@ -336,7 +336,10 @@ async fn dm_and_org_share_concurrent_no_crosstalk() {
         a.org_share_direct(&target, share_payload),
         a.dm_direct(&target, envelope.clone()),
     );
-    assert!(share_result.expect("share ok"), "org-share 应送达（未被 dm 响应错配）");
+    assert!(
+        share_result.expect("share ok"),
+        "org-share 应送达（未被 dm 响应错配）"
+    );
     assert_eq!(
         dm_result.expect("dm ok"),
         Some(json!({"ok": true})),

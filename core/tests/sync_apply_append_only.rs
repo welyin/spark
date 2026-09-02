@@ -248,8 +248,10 @@ fn meta_key_and_generate_updated_meta() {
     set_meta(&mut s, "chat", "messages", "m1", &meta).unwrap();
     // per-node 序号：序号键须随 meta 落库（真实调用方在同一 batch 并入
     // vv_seq_batch_op），下一次生成才能取到递增序号
-    s.batch(vec![spark_core::sync::personal::vv_seq_batch_op("nodeA", seq)])
-        .unwrap();
+    s.batch(vec![spark_core::sync::personal::vv_seq_batch_op(
+        "nodeA", seq,
+    )])
+    .unwrap();
     let (meta2, _) = generate_updated_meta(&s, "nodeA", "chat", "messages", "m1", 2000).unwrap();
     assert_eq!(meta2.vv, vv(&[("nodeA", 2)]));
     assert_eq!(meta2.ts, 2000);

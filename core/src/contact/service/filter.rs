@@ -84,7 +84,10 @@ impl ContactService {
                 });
                 continue;
             }
-            let friend = match read_json::<S, FriendRecord>(storage, &format!("{FRIEND_PREFIX}{root_id}"))? {
+            let friend = match read_json::<S, FriendRecord>(
+                storage,
+                &format!("{FRIEND_PREFIX}{root_id}"),
+            )? {
                 Some(f) => f,
                 None => {
                     // 非朋友：feed 通道跳过；chat 通道放行（聊天不要求是朋友）
@@ -139,7 +142,9 @@ mod tests {
     }
 
     fn set_blocked(storage: &mut MemoryStorage, root_id: &str) {
-        storage.put(&format!("{BLOCKED_PREFIX}{root_id}"), "1").unwrap();
+        storage
+            .put(&format!("{BLOCKED_PREFIX}{root_id}"), "1")
+            .unwrap();
     }
 
     fn ids(v: &[String]) -> Vec<String> {
@@ -200,7 +205,11 @@ mod tests {
         // chat 通道：仅拉黑被过滤；chatOnly 与非朋友放行
         assert_eq!(
             out.accepted,
-            vec!["root-open".to_string(), "root-chatonly".to_string(), "root-nonfriend".to_string()]
+            vec![
+                "root-open".to_string(),
+                "root-chatonly".to_string(),
+                "root-nonfriend".to_string()
+            ]
         );
         assert_eq!(
             out.skipped,

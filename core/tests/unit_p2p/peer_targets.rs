@@ -109,22 +109,22 @@ fn build_dial_targets_dedups_and_sorts_by_score() {
     let info = PeerNodeInfo {
         peer_id: Some("peerA".to_string()),
         addresses: vec![
-            "/ip4/9.9.9.9/tcp/15002".to_string(),       // 高证据
+            "/ip4/9.9.9.9/tcp/15002".to_string(),           // 高证据
             "/ip4/9.9.9.9/tcp/15002/p2p/peerA".to_string(), // 同 base，去重
-            "/ip4/8.8.8.8/tcp/15002".to_string(),       // 零分
+            "/ip4/8.8.8.8/tcp/15002".to_string(),           // 零分
         ],
     };
     let mut meta = HashMap::new();
     meta.insert(
         "/ip4/9.9.9.9/tcp/15002".to_string(),
-        AddrScore { success_count: 2, last_success_at: 500, ..Default::default() },
+        AddrScore {
+            success_count: 2,
+            last_success_at: 500,
+            ..Default::default()
+        },
     );
     let targets = build_dial_targets(&info, Some(&meta), &HashSet::new()).unwrap();
-    assert_eq!(
-        targets[0],
-        "/ip4/9.9.9.9/tcp/15002",
-        "高证据地址优先"
-    );
+    assert_eq!(targets[0], "/ip4/9.9.9.9/tcp/15002", "高证据地址优先");
     assert_eq!(targets[1], "/ip4/9.9.9.9/tcp/15002/p2p/peerA");
     assert_eq!(targets[2], "/ip4/8.8.8.8/tcp/15002");
 }

@@ -70,8 +70,14 @@ fn id_validation_matrix() {
     ] {
         assert!(!announce_id_valid(bad), "should reject: {bad}");
     }
-    assert!(!announce_id_valid(&format!("github.com/{}/r", "a".repeat(101))));
-    assert!(!announce_id_valid(&format!("github.com/o/{}", "r".repeat(300))));
+    assert!(!announce_id_valid(&format!(
+        "github.com/{}/r",
+        "a".repeat(101)
+    )));
+    assert!(!announce_id_valid(&format!(
+        "github.com/o/{}",
+        "r".repeat(300)
+    )));
 }
 
 // ------------------------------------------------------------------
@@ -90,8 +96,8 @@ fn payload_fixed_key_order_byte_level() {
         )
     );
     // publisher = sha256hex(pubKey)
-    use sha2::Digest as _;
     use base64::Engine as _;
+    use sha2::Digest as _;
     let raw = base64::engine::general_purpose::STANDARD
         .decode(&pub_key)
         .unwrap();
@@ -171,9 +177,15 @@ fn pow_golden_vector() {
         "80485aac5fa4f41710a99c0b58cc476bb5b0e57a687afdd2c4ef67737e2a326a"
     );
     // 摘要首字节 0x80 → 前导零 0：bits=0 必过、bits=1 必拒（确定性）
-    let zero = AnnouncePow { bits: 0, nonce: 12345 };
+    let zero = AnnouncePow {
+        bits: 0,
+        nonce: 12345,
+    };
     assert!(verify_announce_pow("payload-bytes", &zero, 0));
-    let one = AnnouncePow { bits: 1, nonce: 12345 };
+    let one = AnnouncePow {
+        bits: 1,
+        nonce: 12345,
+    };
     assert!(!verify_announce_pow("payload-bytes", &one, 1));
 }
 
@@ -258,25 +270,43 @@ fn structure_field_matrix() {
     let reject_cases: Vec<String> = vec![
         // name：空 / 65 字符（上限 64）
         base.replace("\"name\":\"待办\"", "\"name\":\"\""),
-        base.replace("\"name\":\"待办\"", &format!("\"name\":\"{}\"", "名".repeat(65))),
+        base.replace(
+            "\"name\":\"待办\"",
+            &format!("\"name\":\"{}\"", "名".repeat(65)),
+        ),
         // summary：空 / 257 字符（上限 256）
         base.replace("\"summary\":\"测试插件\"", "\"summary\":\"\""),
-        base.replace("\"summary\":\"测试插件\"", &format!("\"summary\":\"{}\"", "简".repeat(257))),
+        base.replace(
+            "\"summary\":\"测试插件\"",
+            &format!("\"summary\":\"{}\"", "简".repeat(257)),
+        ),
         // category：白名单外
         base.replace("\"category\":\"business\"", "\"category\":\"social\""),
         // version：两段 / 非数字段 / 超 32 字符
         base.replace("\"version\":\"0.2.0\"", "\"version\":\"0.2\""),
         base.replace("\"version\":\"0.2.0\"", "\"version\":\"0.2.x\""),
-        base.replace("\"version\":\"0.2.0\"", &format!("\"version\":\"{}\"", "1".repeat(33))),
+        base.replace(
+            "\"version\":\"0.2.0\"",
+            &format!("\"version\":\"{}\"", "1".repeat(33)),
+        ),
         // icon：三形态外（http）/ https 超 512 / data 超 28672 字符
         base.replace("\"icon\":\"\"", "\"icon\":\"http://evil.com/x.png\""),
-        base.replace("\"icon\":\"\"", &format!("\"icon\":\"https://{}\"", "a".repeat(512))),
         base.replace(
             "\"icon\":\"\"",
-            &format!("\"icon\":\"data:{}\"", "A".repeat(PLUGIN_ANNOUNCE_ICON_MAX_CHARS + 1)),
+            &format!("\"icon\":\"https://{}\"", "a".repeat(512)),
+        ),
+        base.replace(
+            "\"icon\":\"\"",
+            &format!(
+                "\"icon\":\"data:{}\"",
+                "A".repeat(PLUGIN_ANNOUNCE_ICON_MAX_CHARS + 1)
+            ),
         ),
         // releaseUrl：非 https / 超 512 字符
-        base.replace(&format!("\"releaseUrl\":\"{release_url}\""), "\"releaseUrl\":\"http://github.com/x\""),
+        base.replace(
+            &format!("\"releaseUrl\":\"{release_url}\""),
+            "\"releaseUrl\":\"http://github.com/x\"",
+        ),
         base.replace(
             &format!("\"releaseUrl\":\"{release_url}\""),
             &format!("\"releaseUrl\":\"https://{}\"", "a".repeat(512)),
@@ -314,16 +344,23 @@ fn structure_field_matrix() {
         a.version = version.to_string();
         resign_and_mine(&mut a);
         assert!(
-            validator().validate(&plugin_announce_to_json(&a), "peer-a", NOW).is_ok(),
+            validator()
+                .validate(&plugin_announce_to_json(&a), "peer-a", NOW)
+                .is_ok(),
             "version {version} should pass"
         );
     }
-    for icon in ["https://cdn.example.com/icon.png", "data:image/png;base64,AA=="] {
+    for icon in [
+        "https://cdn.example.com/icon.png",
+        "data:image/png;base64,AA==",
+    ] {
         let mut a = make_announce(NOW);
         a.icon = icon.to_string();
         resign_and_mine(&mut a);
         assert!(
-            validator().validate(&plugin_announce_to_json(&a), "peer-a", NOW).is_ok(),
+            validator()
+                .validate(&plugin_announce_to_json(&a), "peer-a", NOW)
+                .is_ok(),
             "icon {icon} should pass"
         );
     }
@@ -339,11 +376,19 @@ fn validate_rejects_structure_violations() {
         Err(PluginAnnounceReject::Structure)
     );
     assert_eq!(
-        validator().validate(&text.replace("spark-plugin-announce", "spark-other"), "peer-a", NOW),
+        validator().validate(
+            &text.replace("spark-plugin-announce", "spark-other"),
+            "peer-a",
+            NOW
+        ),
         Err(PluginAnnounceReject::Structure)
     );
     assert_eq!(
-        validator().validate(&text.replace("github.com/acme/todo", "example.com/acme/todo"), "peer-a", NOW),
+        validator().validate(
+            &text.replace("github.com/acme/todo", "example.com/acme/todo"),
+            "peer-a",
+            NOW
+        ),
         Err(PluginAnnounceReject::Structure)
     );
     assert_eq!(
@@ -359,7 +404,11 @@ fn validate_rejects_structure_violations() {
         Err(PluginAnnounceReject::Structure)
     );
     // 超限消息（> 48 KiB）
-    let oversized = format!("{}{}", &text[..text.len() - 1], ",".repeat(PLUGIN_ANNOUNCE_MAX_BYTES));
+    let oversized = format!(
+        "{}{}",
+        &text[..text.len() - 1],
+        ",".repeat(PLUGIN_ANNOUNCE_MAX_BYTES)
+    );
     assert_eq!(
         validator().validate(&oversized, "peer-a", NOW),
         Err(PluginAnnounceReject::Structure)
@@ -373,7 +422,8 @@ fn validate_per_peer_rate_limit() {
     for i in 0..10 {
         let a = make_announce(NOW + i);
         assert!(
-            v.validate(&plugin_announce_to_json(&a), "peer-a", NOW + i).is_ok(),
+            v.validate(&plugin_announce_to_json(&a), "peer-a", NOW + i)
+                .is_ok(),
             "message {i} should pass"
         );
     }
@@ -384,11 +434,13 @@ fn validate_per_peer_rate_limit() {
     );
     // 其他 peer 不受影响
     assert!(
-        v.validate(&plugin_announce_to_json(&extra), "peer-b", NOW + 100).is_ok()
+        v.validate(&plugin_announce_to_json(&extra), "peer-b", NOW + 100)
+            .is_ok()
     );
     // 窗口滑过后恢复
     assert!(
-        v.validate(&plugin_announce_to_json(&extra), "peer-a", NOW + 3_600_001).is_ok()
+        v.validate(&plugin_announce_to_json(&extra), "peer-a", NOW + 3_600_001)
+            .is_ok()
     );
 }
 
@@ -408,10 +460,16 @@ fn store_keeps_newest_per_id() {
         AnnounceUpsert::Stale
     );
     // 同 timestamp → Duplicate 仅刷 updatedAt
-    assert_eq!(store.upsert(&a1, NOW + 1).unwrap(), AnnounceUpsert::Duplicate);
+    assert_eq!(
+        store.upsert(&a1, NOW + 1).unwrap(),
+        AnnounceUpsert::Duplicate
+    );
     // 新 timestamp → Replaced 且 verified 重置 pending
     let a2 = make_announce(NOW + 2000);
-    assert_eq!(store.upsert(&a2, NOW + 2).unwrap(), AnnounceUpsert::Replaced);
+    assert_eq!(
+        store.upsert(&a2, NOW + 2).unwrap(),
+        AnnounceUpsert::Replaced
+    );
     let entry = store.get("github.com/acme/todo").unwrap().unwrap();
     assert_eq!(entry.announce.timestamp, NOW + 2000);
     assert_eq!(entry.verified, AnnounceVerified::Pending);
@@ -485,7 +543,14 @@ fn store_mark_verified_persists() {
     // 不存在条目 → false
     assert!(
         !store
-            .mark_verified("github.com/ghost/none", AnnounceVerified::Verified, "", NOW, NOW, None)
+            .mark_verified(
+                "github.com/ghost/none",
+                AnnounceVerified::Verified,
+                "",
+                NOW,
+                NOW,
+                None
+            )
             .unwrap()
     );
     // 同 timestamp 重复到达（Duplicate）：verified 与 corrected 不重置
@@ -566,7 +631,10 @@ fn store_list_purges_expired() {
     store.upsert(&a2, NOW).unwrap();
     assert_eq!(store.list(NOW).unwrap().len(), 2);
     // ttl 过后惰性清除
-    assert_eq!(store.list(NOW + PLUGIN_ANNOUNCE_TTL_MS + 1).unwrap().len(), 0);
+    assert_eq!(
+        store.list(NOW + PLUGIN_ANNOUNCE_TTL_MS + 1).unwrap().len(),
+        0
+    );
 }
 
 #[test]

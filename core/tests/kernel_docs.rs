@@ -92,10 +92,11 @@ fn doc_write_meta_evidence_and_restart() {
     // 不再是该 key 的写入次数
     let vv_val = meta["vv"][node_id].as_i64().unwrap();
     let seq_key = format!("p2p:vvseq:{node_id}");
-    let persisted_seq: i64 = entries[&seq_key]
-        .parse()
-        .expect("p2p:vvseq 序号为整数");
-    assert_eq!(vv_val, persisted_seq, "doc meta vv = per-node 序号分配器当前值");
+    let persisted_seq: i64 = entries[&seq_key].parse().expect("p2p:vvseq 序号为整数");
+    assert_eq!(
+        vv_val, persisted_seq,
+        "doc meta vv = per-node 序号分配器当前值"
+    );
     assert!(vv_val >= 2, "两次写入后序号 ≥ 2");
     assert_ne!(
         node_id, "local-node",

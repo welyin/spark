@@ -37,7 +37,14 @@ impl OrganizationService {
     ) -> Result<OrganizationRecord> {
         let mut record = Self::require_organization(storage, org_id)?;
         if Self::update_org_info_mutate(
-            storage, &mut record, org_id, name, description, avatar, current_root_id, now_ms,
+            storage,
+            &mut record,
+            org_id,
+            name,
+            description,
+            avatar,
+            current_root_id,
+            now_ms,
         )? {
             Self::save_record(storage, &record)?;
         }
@@ -61,7 +68,14 @@ impl OrganizationService {
         let _ = node_id; // 记账由中间件完成，参数保留以稳定签名
         Self::update_record_atomic(storage, io_lock, org_id, |storage, record| {
             Self::update_org_info_mutate(
-                storage, record, org_id, name, description, avatar, current_root_id, now_ms,
+                storage,
+                record,
+                org_id,
+                name,
+                description,
+                avatar,
+                current_root_id,
+                now_ms,
             )
         })
     }
@@ -146,11 +160,7 @@ impl OrganizationService {
                 ),
             },
         )?;
-        Self::rebuild_sync_after_mutation(
-            record,
-            previous_last_synced_at,
-            transaction.created_at,
-        );
+        Self::rebuild_sync_after_mutation(record, previous_last_synced_at, transaction.created_at);
         Ok(true)
     }
 
@@ -170,7 +180,14 @@ impl OrganizationService {
         now_ms: i64,
     ) -> Result<OrganizationRecord> {
         let mut record = Self::require_organization(storage, org_id)?;
-        if Self::set_org_gateways_mutate(storage, &mut record, org_id, gateways, current_root_id, now_ms)? {
+        if Self::set_org_gateways_mutate(
+            storage,
+            &mut record,
+            org_id,
+            gateways,
+            current_root_id,
+            now_ms,
+        )? {
             Self::save_record(storage, &record)?;
         }
         Ok(record)
@@ -189,7 +206,14 @@ impl OrganizationService {
     ) -> Result<OrganizationRecord> {
         let _ = node_id; // 记账由中间件完成，参数保留以稳定签名
         Self::update_record_atomic(storage, io_lock, org_id, |storage, record| {
-            Self::set_org_gateways_mutate(storage, record, org_id, gateways, current_root_id, now_ms)
+            Self::set_org_gateways_mutate(
+                storage,
+                record,
+                org_id,
+                gateways,
+                current_root_id,
+                now_ms,
+            )
         })
     }
 
@@ -212,9 +236,7 @@ impl OrganizationService {
             }
         }
         // O1：空列表 = 清除显式指定（回落缺省全员候选）；显式指定限 1–3 名成员
-        if normalized.len() > 3
-            || normalized.iter().any(|g| record.find_member(g).is_none())
-        {
+        if normalized.len() > 3 || normalized.iter().any(|g| record.find_member(g).is_none()) {
             return Err(OrgError::InvalidGateways);
         }
         if record.gateways == normalized {
@@ -241,11 +263,7 @@ impl OrganizationService {
                 ),
             },
         )?;
-        Self::rebuild_sync_after_mutation(
-            record,
-            previous_last_synced_at,
-            transaction.created_at,
-        );
+        Self::rebuild_sync_after_mutation(record, previous_last_synced_at, transaction.created_at);
         Ok(true)
     }
 
@@ -260,7 +278,14 @@ impl OrganizationService {
         now_ms: i64,
     ) -> Result<OrganizationRecord> {
         let mut record = Self::require_organization(storage, org_id)?;
-        if Self::set_org_data_accounts_mutate(storage, &mut record, org_id, data_accounts, current_root_id, now_ms)? {
+        if Self::set_org_data_accounts_mutate(
+            storage,
+            &mut record,
+            org_id,
+            data_accounts,
+            current_root_id,
+            now_ms,
+        )? {
             Self::save_record(storage, &record)?;
         }
         Ok(record)
@@ -279,7 +304,14 @@ impl OrganizationService {
     ) -> Result<OrganizationRecord> {
         let _ = node_id; // 记账由中间件完成，参数保留以稳定签名
         Self::update_record_atomic(storage, io_lock, org_id, |storage, record| {
-            Self::set_org_data_accounts_mutate(storage, record, org_id, data_accounts, current_root_id, now_ms)
+            Self::set_org_data_accounts_mutate(
+                storage,
+                record,
+                org_id,
+                data_accounts,
+                current_root_id,
+                now_ms,
+            )
         })
     }
 
@@ -301,7 +333,10 @@ impl OrganizationService {
                 normalized.push(root_id);
             }
         }
-        if normalized.iter().any(|rid| record.find_member(rid).is_none()) {
+        if normalized
+            .iter()
+            .any(|rid| record.find_member(rid).is_none())
+        {
             return Err(OrgError::InvalidDataAccounts);
         }
         if record.data_accounts == normalized {
@@ -332,11 +367,7 @@ impl OrganizationService {
                 ),
             },
         )?;
-        Self::rebuild_sync_after_mutation(
-            record,
-            previous_last_synced_at,
-            transaction.created_at,
-        );
+        Self::rebuild_sync_after_mutation(record, previous_last_synced_at, transaction.created_at);
         Ok(true)
     }
 
@@ -358,7 +389,15 @@ impl OrganizationService {
         now_ms: i64,
     ) -> Result<OrganizationRecord> {
         let mut record = Self::require_organization(storage, org_id)?;
-        if Self::set_org_public_mutate(storage, &mut record, org_id, public, display_name, current_root_id, now_ms)? {
+        if Self::set_org_public_mutate(
+            storage,
+            &mut record,
+            org_id,
+            public,
+            display_name,
+            current_root_id,
+            now_ms,
+        )? {
             Self::save_record(storage, &record)?;
         }
         Ok(record)
@@ -379,7 +418,15 @@ impl OrganizationService {
     ) -> Result<OrganizationRecord> {
         let _ = node_id; // 记账由中间件完成，参数保留以稳定签名
         Self::update_record_atomic(storage, io_lock, org_id, |storage, record| {
-            Self::set_org_public_mutate(storage, record, org_id, public, display_name, current_root_id, now_ms)
+            Self::set_org_public_mutate(
+                storage,
+                record,
+                org_id,
+                public,
+                display_name,
+                current_root_id,
+                now_ms,
+            )
         })
     }
 
@@ -458,11 +505,7 @@ impl OrganizationService {
                 ),
             },
         )?;
-        Self::rebuild_sync_after_mutation(
-            record,
-            previous_last_synced_at,
-            transaction.created_at,
-        );
+        Self::rebuild_sync_after_mutation(record, previous_last_synced_at, transaction.created_at);
         Ok(true)
     }
 }

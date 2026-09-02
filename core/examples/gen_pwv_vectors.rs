@@ -15,8 +15,8 @@
 
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
-use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use hmac::{Hmac, Mac};
 use scrypt::Params;
 use sha2::{Digest, Sha256};
@@ -26,8 +26,12 @@ use std::path::PathBuf;
 // ---- 固定测试常量（与向量一一对应） ----
 const P2: &str = "spark-e1-golden-password";
 const P_WRONG: &str = "spark-e1-wrong-password";
-const SALT: &[u8; 16] = &[0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f];
-const NONCE: &[u8; 12] = &[0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b];
+const SALT: &[u8; 16] = &[
+    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+];
+const NONCE: &[u8; 12] = &[
+    0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b,
+];
 const CHANGED_AT: u64 = 1_760_000_000_000;
 const PEER: &str = "12D3KooWPqT2nMDSiXUSx5D7fasaxhxKigVhcqfkKqrLghCq9jxz";
 const PLAINTEXT_TAG: &[u8] = b"spark-pwv1"; // 公开常量明文（8B），无 AAD
@@ -76,7 +80,10 @@ fn b64(x: &[u8]) -> String {
 }
 
 fn main() {
-    let repo_root: PathBuf = std::env::args().nth(1).expect("usage: gen_pwv_vectors <repo_root>").into();
+    let repo_root: PathBuf = std::env::args()
+        .nth(1)
+        .expect("usage: gen_pwv_vectors <repo_root>")
+        .into();
     let out_path = repo_root.join("code/spec/vectors/pwv.json");
 
     // ---- 向量 1: build/verify 往返 ----
@@ -87,7 +94,10 @@ fn main() {
     assert_eq!(dec, PLAINTEXT_TAG, "vector1: P2 还原明文");
     // 错口令 Kverify' 解密失败
     let kverify_wrong = scrypt_kverify(P_WRONG.as_bytes(), SALT);
-    assert!(aes_gcm_decrypt(&kverify_wrong, NONCE, &ct).is_none(), "vector1: 错口令失败");
+    assert!(
+        aes_gcm_decrypt(&kverify_wrong, NONCE, &ct).is_none(),
+        "vector1: 错口令失败"
+    );
 
     // ---- 向量 2: Kack 派生 + ack MAC ----
     let kack_val = kack(&kverify);
@@ -97,35 +107,48 @@ fn main() {
     // ---- 向量 3: 伪造 V（错口令）拒用 + last-good ----
     let forged_ct = aes_gcm_encrypt(&kverify_wrong, NONCE, PLAINTEXT_TAG);
     let forged_dec = aes_gcm_decrypt(&kverify, NONCE, &forged_ct);
-    assert!(forged_dec.is_none(), "vector3: 错口令密文用真口令解不开 -> 拒用, last-good 保留");
+    assert!(
+        forged_dec.is_none(),
+        "vector3: 错口令密文用真口令解不开 -> 拒用, last-good 保留"
+    );
 
     // ---- 向量 5: pwv:self serde 字节级（字段序逐字节固定） ----
     let pwv_self = format!(
         "{{\"v\":1,\"kdf\":\"scrypt\",\"salt\":\"{}\",\"nonce\":\"{}\",\"ct\":\"{}\",\"changedAt\":{},\"changedBy\":\"{}\"}}",
-        b64(SALT), b64(NONCE), b64(&ct), CHANGED_AT, PEER
+        b64(SALT),
+        b64(NONCE),
+        b64(&ct),
+        CHANGED_AT,
+        PEER
     );
 
     // ---- 向量 6: pwack 线形 ----
     let pwack_val = format!(
         "{{\"v\":1,\"vTs\":{},\"mac\":\"{}\"}}",
-        CHANGED_AT, b64(&mac_val)
+        CHANGED_AT,
+        b64(&mac_val)
     );
 
     // ---- 向量 10: 伪 ack（错 Kack 派生的错误 MAC）—— verify_and_anchor_ack 不锚定 ----
     let wrong_kack = [0xAAu8; 32]; // 伪造者不知道真 Kverify/Kack，用任意错密钥
     let forged_mac = ack_mac(&wrong_kack, PEER, CHANGED_AT);
-    assert_ne!(forged_mac, mac_val, "vector10: 错 Kack 的 MAC 必须不同于真 MAC");
+    assert_ne!(
+        forged_mac, mac_val,
+        "vector10: 错 Kack 的 MAC 必须不同于真 MAC"
+    );
 
     // ---- 向量 8/9: epoch:state reason 扩展（password_reset / 未知容错） ----
     // reason:"password_reset" 样例（带 serde(other) 兜底后合法）。
     let state_reset = format!(
         "{{\"current\":3,\"rotatedAt\":{},\"rotatedBy\":\"{}\",\"reason\":\"password_reset\"}}",
-        CHANGED_AT + 1, PEER
+        CHANGED_AT + 1,
+        PEER
     );
     // 未知 reason：新实现必须 `#[serde(other)] Unknown` 兜底反序列化，不得 fail-closed。
     let state_unknown = format!(
         "{{\"current\":4,\"rotatedAt\":{},\"rotatedBy\":\"{}\",\"reason\":\"some_future_reason\"}}",
-        CHANGED_AT + 2, PEER
+        CHANGED_AT + 2,
+        PEER
     );
 
     let vectors = serde_json::json!([
@@ -237,17 +260,34 @@ fn main() {
         }
     ]);
 
-    fs::write(&out_path, serde_json::to_string_pretty(&vectors).unwrap() + "\n").expect("write pwv.json");
+    fs::write(
+        &out_path,
+        serde_json::to_string_pretty(&vectors).unwrap() + "\n",
+    )
+    .expect("write pwv.json");
     println!("wrote {}", out_path.display());
 
     // ---- 自检 ----
-    let parsed: serde_json::Value = serde_json::from_str(&fs::read_to_string(&out_path).unwrap()).unwrap();
+    let parsed: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&out_path).unwrap()).unwrap();
     assert_eq!(parsed.as_array().unwrap().len(), 13, "13 条向量");
     assert_eq!(parsed[4]["expect"]["json"], pwv_self, "vector5 json 自洽");
     assert_eq!(parsed[5]["expect"]["json"], pwack_val, "vector6 json 自洽");
-    assert_eq!(parsed[9]["expect"]["gatePasses"], false, "vector10 伪 ack 门控不 Pass");
-    assert_eq!(parsed[10]["expect"]["anchored"], true, "vector11 合法 ack 锚定");
-    assert_eq!(parsed[11]["expect"]["futureRejected"], true, "vector12 未来 ts 拒收");
-    assert_eq!(parsed[12]["expect"]["replayRejected"], true, "vector13 回放拒收");
+    assert_eq!(
+        parsed[9]["expect"]["gatePasses"], false,
+        "vector10 伪 ack 门控不 Pass"
+    );
+    assert_eq!(
+        parsed[10]["expect"]["anchored"], true,
+        "vector11 合法 ack 锚定"
+    );
+    assert_eq!(
+        parsed[11]["expect"]["futureRejected"], true,
+        "vector12 未来 ts 拒收"
+    );
+    assert_eq!(
+        parsed[12]["expect"]["replayRejected"], true,
+        "vector13 回放拒收"
+    );
     println!("self-check ok: 13 vectors");
 }

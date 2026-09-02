@@ -295,8 +295,7 @@ pub(crate) struct OrgSyncContext {
     /// 已证明支持 orgsync 的成员设备 peerId 集合（O2b §20.8；host 验签通过后
     /// 按连接层 peerId 写入——按设备粒度；org-share/org-pull 出站读取决定是否
     /// 回退旧快照链路）。
-    pub(crate) orgsync_capable_member_peers:
-        Arc<Mutex<std::collections::HashSet<String>>>,
+    pub(crate) orgsync_capable_member_peers: Arc<Mutex<std::collections::HashSet<String>>>,
     /// 自设备稳态 hello 触发状态（变更 digest 基线 + 周期兜底计时；仅
     /// keepalive tick 的 StayConnected/Resync 分支读写）。
     pub(crate) self_hello_state: Arc<Mutex<SelfHelloState>>,
@@ -394,7 +393,12 @@ impl OrgSyncContext {
 
     /// 读取 org-sync-state（缺失/损坏 → None）。O1 账号口径：rootId 定键，
     /// 旧 peerId 键自动迁移读取回填。
-    fn read_sync_state(&self, root_id: &str, org_id: &str, legacy_peer_id: Option<&str>) -> Option<OrgSyncState> {
+    fn read_sync_state(
+        &self,
+        root_id: &str,
+        org_id: &str,
+        legacy_peer_id: Option<&str>,
+    ) -> Option<OrgSyncState> {
         let mut storage = self.storage.clone();
         crate::org::sync_state::read_org_sync_state_account(
             &mut storage,
@@ -480,10 +484,12 @@ fn collect_org_peer_candidates(
             continue;
         }
         if let Some(peer_id) = extract_peer_id(&candidate) {
-            let entry = by_peer.entry(peer_id.clone()).or_insert_with(|| PeerNodeInfo {
-                peer_id: Some(peer_id),
-                addresses: Vec::new(),
-            });
+            let entry = by_peer
+                .entry(peer_id.clone())
+                .or_insert_with(|| PeerNodeInfo {
+                    peer_id: Some(peer_id),
+                    addresses: Vec::new(),
+                });
             for addr in &candidate.addresses {
                 if !entry.addresses.contains(addr) {
                     entry.addresses.push(addr.clone());

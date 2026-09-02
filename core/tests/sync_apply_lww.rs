@@ -5,7 +5,9 @@
 mod common;
 
 use serde_json::{Value, json};
-use spark_core::evidence::{EvidenceOp, get_evidence_entry, get_evidence_head, verify_evidence_chain};
+use spark_core::evidence::{
+    EvidenceOp, get_evidence_entry, get_evidence_head, verify_evidence_chain,
+};
 use spark_core::schema::{
     CollectionSchemaDeclaration, SyncStrategy, declare_collection_schema, get_collection_schema,
 };

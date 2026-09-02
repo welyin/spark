@@ -36,7 +36,12 @@ fn temp_kernel() -> (tempfile::TempDir, Kernel) {
 }
 
 /// 在 writer 存储上构造一条 `pwv:self` 并推进 applied 水位。
-fn put_self_pwv(s: &mut MemoryStorage, node: &str, password: &str, changed_at: u64) -> PasswordVerifier {
+fn put_self_pwv(
+    s: &mut MemoryStorage,
+    node: &str,
+    password: &str,
+    changed_at: u64,
+) -> PasswordVerifier {
     let pwv = build_value(password, &[0x11; 16], &[0x22; 12], changed_at, node).unwrap();
     put_pwv(s, node, &pwv, changed_at as i64).unwrap();
     put_applied_vts(s, changed_at).unwrap();
@@ -79,7 +84,12 @@ fn scan_log_kinds(s: &MemoryStorage) -> Vec<String> {
     s.scan(&spark_core::storage::ScanOptions::prefix("security:log:"))
         .unwrap()
         .into_iter()
-        .map(|(_k, v)| serde_json::from_str::<Value>(&v).unwrap()["kind"].as_str().unwrap_or("").to_string())
+        .map(|(_k, v)| {
+            serde_json::from_str::<Value>(&v).unwrap()["kind"]
+                .as_str()
+                .unwrap_or("")
+                .to_string()
+        })
         .collect()
 }
 
@@ -156,7 +166,13 @@ fn gate_verified_device_grace_expired_is_gated() {
         "曾验证设备 grace 耗尽 → 暂扣"
     );
 
-    rotate_with_devices(&mut s, "peer-a", "node-a", now_after_grace as i64, &["peer-b"]);
+    rotate_with_devices(
+        &mut s,
+        "peer-a",
+        "node-a",
+        now_after_grace as i64,
+        &["peer-b"],
+    );
     assert!(
         s.get("ikey:1:peer-a:peer-b").unwrap().is_none(),
         "grace 耗尽设备不得收到包裹"
@@ -173,8 +189,8 @@ fn gate_anchor_covers_latest_v_passes_even_past_grace() {
     let kverify = derive_kverify(PW, &[0x11; 16]).unwrap();
     let ack = spark_core::pw::build_ack(&kverify, "peer-b", 1_000_000);
     spark_core::pw::put_pwack(&mut s, "node-a", "peer-b", &ack, 1_000_000).unwrap();
-    let anchored = spark_core::pw::verify_and_anchor_ack(&mut s, "peer-b", &kverify, 1_000_000)
-        .unwrap();
+    let anchored =
+        spark_core::pw::verify_and_anchor_ack(&mut s, "peer-b", &kverify, 1_000_000).unwrap();
     assert!(anchored, "合法 ack 应通过 MAC 并推进可信锚");
 
     let now_far = 1_000_000u64 + DEFAULT_GRACE_MS + 10_000_000;
@@ -210,10 +226,15 @@ fn forged_v_verify_rejected_at_crypto_layer() {
 #[test]
 fn verify_ticket_three_states() {
     let (_dir, mut kernel) = temp_kernel();
-    kernel.init_identity(PW, "alice", None).expect("init identity");
+    kernel
+        .init_identity(PW, "alice", None)
+        .expect("init identity");
 
     kernel.verify_password_ticket(PW).expect("正确口令验票通过");
-    let err = kernel.verify_password_ticket("wrong-password").unwrap_err().to_string();
+    let err = kernel
+        .verify_password_ticket("wrong-password")
+        .unwrap_err()
+        .to_string();
     assert_eq!(err, "Ticket mismatch", "错误口令 → TicketMismatch");
 }
 
@@ -234,7 +255,11 @@ fn apply_value_rejects_replay_but_accepts_newer() {
     };
     let applied_replay = apply_value(&mut s, "node-a", &replay, 1_500_000).unwrap();
     assert!(!applied_replay, "回放（<=applied）应被忽略");
-    assert_eq!(get_pwv(&s).unwrap().unwrap().changed_at, 1_000_000, "last-good 未被回放覆盖");
+    assert_eq!(
+        get_pwv(&s).unwrap().unwrap().changed_at,
+        1_000_000,
+        "last-good 未被回放覆盖"
+    );
 
     // 新 V（changed_at > applied）→ 应用并推进水位。
     let newer = PasswordVerifier {
@@ -255,7 +280,9 @@ fn apply_value_rejects_replay_but_accepts_newer() {
 #[test]
 fn heal_does_not_fire_without_epoch_state() {
     let (_dir, mut kernel) = temp_kernel();
-    kernel.init_identity(PW, "alice", None).expect("init identity");
+    kernel
+        .init_identity(PW, "alice", None)
+        .expect("init identity");
     let healed = kernel.maybe_heal_password(PW).unwrap();
     assert!(!healed, "无 epoch state 不得触发 heal");
 }
@@ -264,7 +291,9 @@ fn heal_does_not_fire_without_epoch_state() {
 #[test]
 fn heal_does_not_fire_when_locked() {
     let (_dir, mut kernel) = temp_kernel();
-    kernel.init_identity(PW, "alice", None).expect("init identity");
+    kernel
+        .init_identity(PW, "alice", None)
+        .expect("init identity");
     kernel.lock();
     let healed = kernel.maybe_heal_password(PW).unwrap();
     assert!(!healed, "锁定态不得触发 heal");
@@ -285,7 +314,10 @@ fn heal_threshold_decoupled_from_grace_ms() {
     let _ = now;
     // 注：heal 正向触发需 kernel 内部存储注入，集成不可达；此处确认 graceMs
     // 独立存储键存在且可写（解耦面）。
-    assert_eq!(spark_core::pw::get_grace_ms(&s).unwrap(), 7 * 24 * 60 * 60 * 1000);
+    assert_eq!(
+        spark_core::pw::get_grace_ms(&s).unwrap(),
+        7 * 24 * 60 * 60 * 1000
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -295,19 +327,29 @@ fn heal_threshold_decoupled_from_grace_ms() {
 #[test]
 fn legacy_no_pwv_gate_always_passes() {
     let s = MemoryStorage::new();
-    assert_eq!(should_gate(&s, "peer-b", 1_000_000).unwrap(), GateDecision::Pass, "无 pwv 恒放行");
+    assert_eq!(
+        should_gate(&s, "peer-b", 1_000_000).unwrap(),
+        GateDecision::Pass,
+        "无 pwv 恒放行"
+    );
 }
 
 #[test]
 fn rotation_reason_unknown_serde_fallback() {
-    let s: spark_core::epoch::EpochState =
-        serde_json::from_str(r#"{"current":3,"rotatedAt":1,"rotatedBy":"a","reason":"future_reason"}"#)
-            .unwrap();
-    assert_eq!(s.reason, RotationReason::Unknown, "未知 reason → Unknown 兜底");
+    let s: spark_core::epoch::EpochState = serde_json::from_str(
+        r#"{"current":3,"rotatedAt":1,"rotatedBy":"a","reason":"future_reason"}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        s.reason,
+        RotationReason::Unknown,
+        "未知 reason → Unknown 兜底"
+    );
     assert_eq!(s.reason.as_str(), "unknown");
 
     let heal: spark_core::epoch::EpochState =
-        serde_json::from_str(r#"{"current":3,"rotatedAt":1,"rotatedBy":"a","reason":"heal"}"#).unwrap();
+        serde_json::from_str(r#"{"current":3,"rotatedAt":1,"rotatedBy":"a","reason":"heal"}"#)
+            .unwrap();
     assert_eq!(heal.reason, RotationReason::Heal);
     let pr: spark_core::epoch::EpochState = serde_json::from_str(
         r#"{"current":3,"rotatedAt":1,"rotatedBy":"a","reason":"password_reset"}"#,

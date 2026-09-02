@@ -10,20 +10,29 @@ fn incoming_request_state_machine() {
     let mut s = MemoryStorage::new();
     ContactService::put_incoming_request(&mut s, &incoming("req-1", &rid('r'))).unwrap();
     assert_eq!(
-        ContactService::get_incoming_request(&s, "req-1").unwrap().unwrap().status,
+        ContactService::get_incoming_request(&s, "req-1")
+            .unwrap()
+            .unwrap()
+            .status,
         FriendRequestStatus::Pending
     );
 
     // 接受：pending → accepted
     assert!(ContactService::resolve_incoming_request(&mut s, "req-1", true, NOW).unwrap());
     assert_eq!(
-        ContactService::get_incoming_request(&s, "req-1").unwrap().unwrap().status,
+        ContactService::get_incoming_request(&s, "req-1")
+            .unwrap()
+            .unwrap()
+            .status,
         FriendRequestStatus::Accepted
     );
     // 非 pending 忽略并返回 false
     assert!(!ContactService::resolve_incoming_request(&mut s, "req-1", false, NOW).unwrap());
     assert_eq!(
-        ContactService::get_incoming_request(&s, "req-1").unwrap().unwrap().status,
+        ContactService::get_incoming_request(&s, "req-1")
+            .unwrap()
+            .unwrap()
+            .status,
         FriendRequestStatus::Accepted
     );
     // 不存在返回 false
@@ -33,7 +42,10 @@ fn incoming_request_state_machine() {
     ContactService::put_incoming_request(&mut s, &incoming("req-2", &rid('s'))).unwrap();
     assert!(ContactService::resolve_incoming_request(&mut s, "req-2", false, NOW).unwrap());
     assert_eq!(
-        ContactService::get_incoming_request(&s, "req-2").unwrap().unwrap().status,
+        ContactService::get_incoming_request(&s, "req-2")
+            .unwrap()
+            .unwrap()
+            .status,
         FriendRequestStatus::Ignored
     );
 }
@@ -61,7 +73,8 @@ fn outgoing_request_lifecycle() {
         Some(PeerRef {
             peer_id: "peer-2".to_string(),
             addresses: vec![],
-        ..Default::default()}),
+            ..Default::default()
+        }),
         NOW,
     )
     .unwrap();
@@ -71,16 +84,23 @@ fn outgoing_request_lifecycle() {
     assert_eq!(first.created_at, NOW);
 
     // find_outgoing_by_root
-    let found = ContactService::find_outgoing_by_root(&s, &rid('b')).unwrap().unwrap();
+    let found = ContactService::find_outgoing_by_root(&s, &rid('b'))
+        .unwrap()
+        .unwrap();
     assert_eq!(found.id, second.id);
     assert_eq!(found.peer.as_ref().unwrap().peer_id, "peer-2");
-    assert_eq!(ContactService::find_outgoing_by_root(&s, &rid('z')).unwrap(), None);
+    assert_eq!(
+        ContactService::find_outgoing_by_root(&s, &rid('z')).unwrap(),
+        None
+    );
 
     // mark_outgoing_accepted：pending → accepted；重复与非存在返回 false
     assert!(ContactService::mark_outgoing_accepted(&mut s, &first.id, NOW).unwrap());
     assert!(!ContactService::mark_outgoing_accepted(&mut s, &first.id, NOW).unwrap());
     assert!(!ContactService::mark_outgoing_accepted(&mut s, "out-x", NOW).unwrap());
-    let accepted = ContactService::find_outgoing_by_root(&s, &rid('a')).unwrap().unwrap();
+    let accepted = ContactService::find_outgoing_by_root(&s, &rid('a'))
+        .unwrap()
+        .unwrap();
     assert_eq!(accepted.status, FriendRequestStatus::Accepted);
 }
 
@@ -104,13 +124,17 @@ fn request_writes_maintain_updated_at() {
     // 入站处理刷新 updated_at、保留 created_at
     ContactService::put_incoming_request(&mut s, &incoming("req-1", &rid('r'))).unwrap();
     assert!(ContactService::resolve_incoming_request(&mut s, "req-1", true, NOW + 10).unwrap());
-    let resolved = ContactService::get_incoming_request(&s, "req-1").unwrap().unwrap();
+    let resolved = ContactService::get_incoming_request(&s, "req-1")
+        .unwrap()
+        .unwrap();
     assert_eq!(resolved.created_at, NOW);
     assert_eq!(resolved.updated_at, NOW + 10);
 
     // 出站被接受刷新 updated_at
     assert!(ContactService::mark_outgoing_accepted(&mut s, &outgoing.id, NOW + 20).unwrap());
-    let accepted = ContactService::get_outgoing_request(&s, &outgoing.id).unwrap().unwrap();
+    let accepted = ContactService::get_outgoing_request(&s, &outgoing.id)
+        .unwrap()
+        .unwrap();
     assert_eq!(accepted.created_at, NOW);
     assert_eq!(accepted.updated_at, NOW + 20);
 
@@ -119,7 +143,9 @@ fn request_writes_maintain_updated_at() {
     legacy.id = "out-legacy".to_string();
     legacy.updated_at = 0;
     ContactService::put_outgoing_request(&mut s, &legacy).unwrap();
-    let stored = ContactService::get_outgoing_request(&s, "out-legacy").unwrap().unwrap();
+    let stored = ContactService::get_outgoing_request(&s, "out-legacy")
+        .unwrap()
+        .unwrap();
     assert_eq!(stored.updated_at, stored.created_at);
 }
 
@@ -169,9 +195,10 @@ fn append_outgoing_thread_state_transitions() {
         text: "请问你是哪位？".to_string(),
         ts: NOW + 1,
     };
-    let record = ContactService::append_outgoing_thread(&mut s, &outgoing.id, peer_msg.clone(), NOW + 1)
-        .unwrap()
-        .expect("记录存在");
+    let record =
+        ContactService::append_outgoing_thread(&mut s, &outgoing.id, peer_msg.clone(), NOW + 1)
+            .unwrap()
+            .expect("记录存在");
     assert_eq!(record.status, FriendRequestStatus::Replied);
     assert_eq!(record.thread, vec![peer_msg.clone()]);
     assert_eq!(record.updated_at, NOW + 1);
@@ -182,15 +209,18 @@ fn append_outgoing_thread_state_transitions() {
         text: "我是张三".to_string(),
         ts: NOW + 2,
     };
-    let record = ContactService::append_outgoing_thread(&mut s, &outgoing.id, my_msg.clone(), NOW + 2)
-        .unwrap()
-        .expect("记录存在");
+    let record =
+        ContactService::append_outgoing_thread(&mut s, &outgoing.id, my_msg.clone(), NOW + 2)
+            .unwrap()
+            .expect("记录存在");
     assert_eq!(record.status, FriendRequestStatus::Pending);
     assert_eq!(record.thread, vec![peer_msg, my_msg]);
     assert_eq!(record.updated_at, NOW + 2);
 
     // 落库内容与返回值一致
-    let stored = ContactService::get_outgoing_request(&s, &outgoing.id).unwrap().unwrap();
+    let stored = ContactService::get_outgoing_request(&s, &outgoing.id)
+        .unwrap()
+        .unwrap();
     assert_eq!(stored, record);
 
     // 记录不存在返回 Ok(None)
@@ -259,8 +289,16 @@ fn append_thread_truncates_to_cap() {
         .unwrap()
         .unwrap();
     assert_eq!(stored.thread.len(), 100, "截断到上限");
-    assert_eq!(stored.thread.first().unwrap().text, "第 5 条", "最旧的被丢弃");
-    assert_eq!(stored.thread.last().unwrap().text, "第 104 条", "最新的保留");
+    assert_eq!(
+        stored.thread.first().unwrap().text,
+        "第 5 条",
+        "最旧的被丢弃"
+    );
+    assert_eq!(
+        stored.thread.last().unwrap().text,
+        "第 104 条",
+        "最新的保留"
+    );
 
     // 入站申请 thread 同口径
     ContactService::put_incoming_request(&mut s, &incoming("req-cap", &rid('r'))).unwrap();
@@ -300,11 +338,12 @@ fn mark_outgoing_accepted_allows_replied() {
     };
     ContactService::append_outgoing_thread(&mut s, &outgoing.id, msg, NOW).unwrap();
     assert!(ContactService::mark_outgoing_accepted(&mut s, &outgoing.id, NOW).unwrap());
-    let stored = ContactService::get_outgoing_request(&s, &outgoing.id).unwrap().unwrap();
+    let stored = ContactService::get_outgoing_request(&s, &outgoing.id)
+        .unwrap()
+        .unwrap();
     assert_eq!(stored.status, FriendRequestStatus::Accepted);
     assert_eq!(stored.thread.len(), 1, "thread 保留");
 }
-
 
 // ------------------------------------------------------------------
 // pdsync 变体（ct:req 类写 pmeta）
@@ -325,7 +364,9 @@ fn request_pdsync_variants_write_pmeta() {
     out.id = "out-legacy".to_string();
     out.updated_at = 0;
     ContactService::put_outgoing_request_pdsync(&mut s, &out, NOW, NODE).unwrap();
-    let stored = ContactService::get_outgoing_request(&s, "out-legacy").unwrap().unwrap();
+    let stored = ContactService::get_outgoing_request(&s, "out-legacy")
+        .unwrap()
+        .unwrap();
     assert_eq!(stored.updated_at, stored.created_at);
 
     // 入站落库 + 处理：pmeta 随每次写入递增（vv 取 per-node 单调序号：
@@ -334,17 +375,25 @@ fn request_pdsync_variants_write_pmeta() {
         .unwrap();
     let meta = get_personal_meta(&s, "ct:req:in:req-1").unwrap().unwrap();
     assert_eq!(meta.vv.get(NODE), Some(&3));
-    assert!(ContactService::resolve_incoming_request_pdsync(&mut s, "req-1", true, NOW + 10, NODE).unwrap());
+    assert!(
+        ContactService::resolve_incoming_request_pdsync(&mut s, "req-1", true, NOW + 10, NODE)
+            .unwrap()
+    );
     let meta = get_personal_meta(&s, "ct:req:in:req-1").unwrap().unwrap();
     assert_eq!(meta.vv.get(NODE), Some(&4));
     assert_eq!(
-        ContactService::get_incoming_request(&s, "req-1").unwrap().unwrap().status,
+        ContactService::get_incoming_request(&s, "req-1")
+            .unwrap()
+            .unwrap()
+            .status,
         FriendRequestStatus::Accepted
     );
 
     // 出站接受 + 线程追加：pmeta 同步 bump（vv = per-node 序号：出站接受为
     // 本节点第 5 次受管写，线程追加为第 6 次）
-    assert!(ContactService::mark_outgoing_accepted_pdsync(&mut s, "out-1", NOW + 20, NODE).unwrap());
+    assert!(
+        ContactService::mark_outgoing_accepted_pdsync(&mut s, "out-1", NOW + 20, NODE).unwrap()
+    );
     let meta = get_personal_meta(&s, "ct:req:out:out-1").unwrap().unwrap();
     assert_eq!(meta.vv.get(NODE), Some(&5));
     let msg = RequestThreadMessage {

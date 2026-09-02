@@ -99,11 +99,7 @@ pub struct SnapshotMember {
     /// 组织身份访问密钥（O4）：`org-access:{orgId}` 域身份公钥 + 根密钥绑定
     /// 签名。None = 未携带（合并保留 existing——仅本人可改，其它成员快照
     /// 不带该字段时必须保留已发布密钥）。
-    #[serde(
-        rename = "accessKey",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "accessKey", default, skip_serializing_if = "Option::is_none")]
     pub access_key: Option<OrganizationAccessKey>,
 }
 
@@ -375,14 +371,26 @@ pub fn merge_organization_sync_snapshot(
                 &incoming.node_info,
                 existing_ref.and_then(|m| m.node_info.as_ref()),
             ),
-            nickname: merge_tombstone(&incoming.nickname, existing_ref.and_then(|m| m.nickname.as_ref())),
-            avatar: merge_avatar(&incoming.avatar, existing_ref.and_then(|m| m.avatar.as_ref())),
+            nickname: merge_tombstone(
+                &incoming.nickname,
+                existing_ref.and_then(|m| m.nickname.as_ref()),
+            ),
+            avatar: merge_avatar(
+                &incoming.avatar,
+                existing_ref.and_then(|m| m.avatar.as_ref()),
+            ),
             signature: merge_tombstone(
                 &incoming.signature,
                 existing_ref.and_then(|m| m.signature.as_ref()),
             ),
-            gender: merge_tombstone(&incoming.gender, existing_ref.and_then(|m| m.gender.as_ref())),
-            region: merge_tombstone(&incoming.region, existing_ref.and_then(|m| m.region.as_ref())),
+            gender: merge_tombstone(
+                &incoming.gender,
+                existing_ref.and_then(|m| m.gender.as_ref()),
+            ),
+            region: merge_tombstone(
+                &incoming.region,
+                existing_ref.and_then(|m| m.region.as_ref()),
+            ),
             // incoming Some → 采用（含 false）；None（键缺失）→ 保留 existing
             use_personal_identity: or_existing(
                 &incoming.use_personal_identity,

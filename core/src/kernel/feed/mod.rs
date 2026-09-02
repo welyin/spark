@@ -186,7 +186,12 @@ pub struct FeedInboxRecord {
 
 /// 校验 `topic` 形态：`{pluginId}:{sub}`，总长 ≤ 128，字符集 `[a-z0-9:._-]`，
 /// 前缀（pluginId）非空。返回 `Err(reason)` 供 `invalid-body` 应答。
-pub fn validate_feed_body(topic: &str, feed_id: &str, payload: &Value, reply_to: Option<&str>) -> Result<(), &'static str> {
+pub fn validate_feed_body(
+    topic: &str,
+    feed_id: &str,
+    payload: &Value,
+    reply_to: Option<&str>,
+) -> Result<(), &'static str> {
     // topic
     if topic.is_empty() || topic.len() > FEED_TOPIC_MAX_CHARS {
         return Err("invalid topic length");
@@ -195,10 +200,9 @@ pub fn validate_feed_body(topic: &str, feed_id: &str, payload: &Value, reply_to:
     if plugin_id.is_empty() || plugin_id == topic {
         return Err("topic missing pluginId:sub");
     }
-    if !topic
-        .bytes()
-        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b':' | b'.' | b'_' | b'-'))
-    {
+    if !topic.bytes().all(|b| {
+        b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b':' | b'.' | b'_' | b'-')
+    }) {
         return Err("topic invalid charset");
     }
     // feedId
@@ -250,7 +254,10 @@ pub fn inbox_put<S: StorageBackend>(
     let key = feed_inbox_key(plugin_id, ts, &rec.feed_id);
     // FeedInboxRecord 全字段可序列化，to_string 不可失败（feedId 等均由调用方
     // 校验过长度/类型）
-    storage.put(&key, &serde_json::to_string(rec).expect("feed inbox record serializable"))?;
+    storage.put(
+        &key,
+        &serde_json::to_string(rec).expect("feed inbox record serializable"),
+    )?;
     enforce_inbox_cap(storage, plugin_id)
 }
 
@@ -360,4 +367,3 @@ pub fn blob_source<S: StorageBackend>(
 
 #[cfg(test)]
 mod tests;
-

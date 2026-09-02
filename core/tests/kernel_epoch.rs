@@ -50,7 +50,12 @@ fn root(seed: u8) -> (SigningKey, String) {
 }
 
 /// 构造带 devicePubKey 的设备记录（M3 包裹投递前提）。
-fn device_record(peer: &str, uid: &str, pub_key: Option<[u8; 32]>, revoked: Option<i64>) -> DeviceRecord {
+fn device_record(
+    peer: &str,
+    uid: &str,
+    pub_key: Option<[u8; 32]>,
+    revoked: Option<i64>,
+) -> DeviceRecord {
     DeviceRecord {
         peer_id: peer.to_string(),
         device_uid: Some(uid.to_string()),
@@ -80,10 +85,7 @@ fn seed_libp2p_keypair(storage: &mut MemoryStorage, seed: &[u8; 32]) {
     let lp = libp2p::identity::Keypair::from(keypair);
     let raw = lp.to_protobuf_encoding().expect("protobuf encode");
     storage
-        .put(
-            "p2p:identity:privateKey",
-            &B64.encode(&raw),
-        )
+        .put("p2p:identity:privateKey", &B64.encode(&raw))
         .unwrap();
 }
 
@@ -112,8 +114,18 @@ fn deliver_pdsync_data(
         body,
         key,
     );
-    handle_inbound_dm(storage, my_root, "我", envelope, "peer-self-c", &HashSet::new(), NOW, NODE, None)
-        .unwrap()
+    handle_inbound_dm(
+        storage,
+        my_root,
+        "我",
+        envelope,
+        "peer-self-c",
+        &HashSet::new(),
+        NOW,
+        NODE,
+        None,
+    )
+    .unwrap()
 }
 
 fn remote_meta(node: &str, counter: i64, ts: i64) -> DocMeta {
@@ -241,19 +253,52 @@ fn rotate_writes_state_keytable_effective_and_wraps_authorized_only() {
     let (c_key, _) = root(3);
     let (revoked_key, _) = root(4);
     // 授权设备：B、C 带公钥；D 被撤销；E 无公钥（跳过）。
-    DeviceService::upsert_pdsync(&mut s, &device_record("peer-b", "uid-b", Some(ed_pub(&b_key)), None), NOW, NODE).unwrap();
-    DeviceService::upsert_pdsync(&mut s, &device_record("peer-c", "uid-c", Some(ed_pub(&c_key)), None), NOW, NODE).unwrap();
-    DeviceService::upsert_pdsync(&mut s, &device_record("peer-d", "uid-d", Some(ed_pub(&revoked_key)), Some(NOW)), NOW, NODE).unwrap();
-    DeviceService::upsert_pdsync(&mut s, &device_record("peer-e", "uid-e", None, None), NOW, NODE).unwrap();
+    DeviceService::upsert_pdsync(
+        &mut s,
+        &device_record("peer-b", "uid-b", Some(ed_pub(&b_key)), None),
+        NOW,
+        NODE,
+    )
+    .unwrap();
+    DeviceService::upsert_pdsync(
+        &mut s,
+        &device_record("peer-c", "uid-c", Some(ed_pub(&c_key)), None),
+        NOW,
+        NODE,
+    )
+    .unwrap();
+    DeviceService::upsert_pdsync(
+        &mut s,
+        &device_record("peer-d", "uid-d", Some(ed_pub(&revoked_key)), Some(NOW)),
+        NOW,
+        NODE,
+    )
+    .unwrap();
+    DeviceService::upsert_pdsync(
+        &mut s,
+        &device_record("peer-e", "uid-e", None, None),
+        NOW,
+        NODE,
+    )
+    .unwrap();
 
     let b_pub = ed_pub(&b_key);
     let c_pub = ed_pub(&c_key);
     // 授权设备集合由调用方（S4）先过滤 revoked 再传入；此处即传入已过滤结果：
     // B、C 授权；E 无公钥（跳过投递）。revoked 的 D 不在此集合内。
     let devices: Vec<AuthorizedDevice> = vec![
-        AuthorizedDevice { peer: "peer-b", device_pub_key: Some(&b_pub) },
-        AuthorizedDevice { peer: "peer-c", device_pub_key: Some(&c_pub) },
-        AuthorizedDevice { peer: "peer-e", device_pub_key: None },
+        AuthorizedDevice {
+            peer: "peer-b",
+            device_pub_key: Some(&b_pub),
+        },
+        AuthorizedDevice {
+            peer: "peer-c",
+            device_pub_key: Some(&c_pub),
+        },
+        AuthorizedDevice {
+            peer: "peer-e",
+            device_pub_key: None,
+        },
     ];
 
     let state = EpochService::rotate(
@@ -264,7 +309,9 @@ fn rotate_writes_state_keytable_effective_and_wraps_authorized_only() {
         NOW,
         RotationReason::Revoke,
         &x25519_priv_from_sk(&writer_key),
-        &devices, None)
+        &devices,
+        None,
+    )
     .unwrap();
 
     // epoch:state：current=1（首轮）、reason=revoke、rotatedBy=writer。
@@ -289,8 +336,14 @@ fn rotate_writes_state_keytable_effective_and_wraps_authorized_only() {
     let e_wrap_key = ikey_key(1, writer_peer, "peer-e");
     assert!(s.get(&b_wrap_key).unwrap().is_some(), "B 应有包裹");
     assert!(s.get(&c_wrap_key).unwrap().is_some(), "C 应有包裹");
-    assert!(s.get(&d_wrap_key).unwrap().is_none(), "未授权（revoked）设备不投递包裹");
-    assert!(s.get(&e_wrap_key).unwrap().is_none(), "无 devicePubKey 不得有包裹");
+    assert!(
+        s.get(&d_wrap_key).unwrap().is_none(),
+        "未授权（revoked）设备不投递包裹"
+    );
+    assert!(
+        s.get(&e_wrap_key).unwrap().is_none(),
+        "无 devicePubKey 不得有包裹"
+    );
 
     // 包裹可解回同一密钥。
     let b_rec: spark_core::epoch::IkeyRecord =
@@ -315,9 +368,17 @@ fn rotate_writes_state_keytable_effective_and_wraps_authorized_only() {
         .scan(&spark_core::storage::ScanOptions::prefix("security:log:"))
         .unwrap()
         .into_iter()
-        .map(|(_k, v)| serde_json::from_str::<Value>(&v).unwrap()["kind"].as_str().unwrap_or("").to_string())
+        .map(|(_k, v)| {
+            serde_json::from_str::<Value>(&v).unwrap()["kind"]
+                .as_str()
+                .unwrap_or("")
+                .to_string()
+        })
         .collect();
-    assert!(kinds.contains(&"epoch_rotated".to_string()), "应含 epoch_rotated 日志，实为 {kinds:?}");
+    assert!(
+        kinds.contains(&"epoch_rotated".to_string()),
+        "应含 epoch_rotated 日志，实为 {kinds:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -370,7 +431,11 @@ fn revoked_device_cannot_decrypt_new_data_forwarded_by_ignorant_peer() {
         b_peer,
     )
     .unwrap();
-    let rec1 = spark_core::epoch::IkeyRecord { wrapped_key: wrap1, nonce: nonce1, ts: NOW };
+    let rec1 = spark_core::epoch::IkeyRecord {
+        wrapped_key: wrap1,
+        nonce: nonce1,
+        ts: NOW,
+    };
     b_store
         .put(&ikey_key(1, "peer-a", b_peer), &rec1.to_json().unwrap())
         .unwrap();
@@ -393,16 +458,22 @@ fn revoked_device_cannot_decrypt_new_data_forwarded_by_ignorant_peer() {
     // 这里直接模拟 A 在撤销 B 之后（B.revokedAt 已置位）再做 rotate。
     let mut b_in_a = device_record(b_peer, "uid-b", Some(ed_pub(&b_sk)), None);
     // 先落 epoch1 state 以便 rotate 从 1 递增到 2。
-    let state1 = EpochState { current: 1, rotated_at: NOW - 1000, rotated_by: "peer-a".to_string(), reason: RotationReason::Init };
+    let state1 = EpochState {
+        current: 1,
+        rotated_at: NOW - 1000,
+        rotated_by: "peer-a".to_string(),
+        reason: RotationReason::Init,
+    };
     spark_core::epoch::put_epoch_state(&mut a_store, NODE, &state1, NOW - 1000).unwrap();
     // A 授权设备：C（在线转发者）；B 在撤销后 revoked_at 已置位（模拟 A 侧已撤销 B）。
     b_in_a.revoked_at = Some(NOW);
     DeviceService::upsert_pdsync(&mut a_store, &b_in_a, NOW, NODE).unwrap();
 
     let c_pub = ed_pub(&c_sk);
-    let devices: Vec<AuthorizedDevice> = vec![
-        AuthorizedDevice { peer: "peer-c", device_pub_key: Some(&c_pub) },
-    ];
+    let devices: Vec<AuthorizedDevice> = vec![AuthorizedDevice {
+        peer: "peer-c",
+        device_pub_key: Some(&c_pub),
+    }];
     let state2 = EpochService::rotate(
         &mut a_store,
         &my_root,
@@ -411,7 +482,9 @@ fn revoked_device_cannot_decrypt_new_data_forwarded_by_ignorant_peer() {
         NOW,
         RotationReason::Revoke,
         &a_x_priv,
-        &devices, None)
+        &devices,
+        None,
+    )
     .unwrap();
     assert_eq!(state2.current, 2, "A 撤销后应推进到 epoch2");
 
@@ -419,8 +492,7 @@ fn revoked_device_cannot_decrypt_new_data_forwarded_by_ignorant_peer() {
     let epoch2_key = *list_local_keys(&a_store).unwrap().get(&2).unwrap();
     let data_key = "ct:friend:friend-x";
     let plaintext = json!({"rootId": "friend-x", "nickname": "新朋友"}).to_string();
-    let ciphertext =
-        spark_core::epoch::wrap_value(&epoch2_key, data_key, 2, &plaintext).unwrap();
+    let ciphertext = spark_core::epoch::wrap_value(&epoch2_key, data_key, 2, &plaintext).unwrap();
 
     // B 收到 epoch2 的 state（明文 pdsync 扩散），但无 epoch2 密钥。
     spark_core::epoch::put_epoch_state(&mut b_store, NODE, &state2, NOW).unwrap();
@@ -433,11 +505,20 @@ fn revoked_device_cannot_decrypt_new_data_forwarded_by_ignorant_peer() {
         meta: remote_meta("peer-c", 1, NOW),
         dseq: Some(99),
     };
-    let r2 = deliver_pdsync_data(&mut b_store, &root_key, &my_root, "ct:friend", &[data_rec.clone()]);
+    let r2 = deliver_pdsync_data(
+        &mut b_store,
+        &root_key,
+        &my_root,
+        "ct:friend",
+        &[data_rec.clone()],
+    );
     assert_eq!(r2.response, json!({ "ok": true }));
 
     // B 库中无此记录（解不开跳过）。
-    assert!(b_store.get(data_key).unwrap().is_none(), "B 不得合入解不开的密文记录");
+    assert!(
+        b_store.get(data_key).unwrap().is_none(),
+        "B 不得合入解不开的密文记录"
+    );
     // B 的 effective 仍停在 1（无 epoch2 密钥）。
     assert_eq!(
         spark_core::epoch::get_effective(&b_store).unwrap(),
@@ -464,7 +545,11 @@ fn revoked_device_cannot_decrypt_new_data_forwarded_by_ignorant_peer() {
         b_peer,
     )
     .unwrap();
-    let rec2 = spark_core::epoch::IkeyRecord { wrapped_key: wrap2, nonce: nonce2, ts: NOW };
+    let rec2 = spark_core::epoch::IkeyRecord {
+        wrapped_key: wrap2,
+        nonce: nonce2,
+        ts: NOW,
+    };
     let ikey2_key = ikey_key(2, "peer-c", b_peer);
     b_store.put(&ikey2_key, &rec2.to_json().unwrap()).unwrap();
     // try_refresh_keys 需 writer 的设备记录解析其 devicePubKey。
@@ -494,7 +579,11 @@ fn revoked_device_cannot_decrypt_new_data_forwarded_by_ignorant_peer() {
         b_peer,
     )
     .unwrap();
-    let rec2a = spark_core::epoch::IkeyRecord { wrapped_key: wrap2a, nonce: nonce2a, ts: NOW };
+    let rec2a = spark_core::epoch::IkeyRecord {
+        wrapped_key: wrap2a,
+        nonce: nonce2a,
+        ts: NOW,
+    };
     b_store
         .put(&ikey_key(2, "peer-a", b_peer), &rec2a.to_json().unwrap())
         .unwrap();
@@ -509,7 +598,10 @@ fn revoked_device_cannot_decrypt_new_data_forwarded_by_ignorant_peer() {
     let r3 = deliver_pdsync_data(&mut b_store, &root_key, &my_root, "ct:friend", &[data_rec]);
     assert_eq!(r3.response, json!({ "ok": true }));
     let stored = b_store.get(data_key).unwrap().expect("密钥到位后应合入");
-    assert!(stored.contains("新朋友"), "B 解开后应合入新数据，实为 {stored}");
+    assert!(
+        stored.contains("新朋友"),
+        "B 解开后应合入新数据，实为 {stored}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -534,8 +626,16 @@ fn no_key_ciphertext_does_not_advance_pmeta_and_recovers_after_grant() {
 
     // 记录基线 pmeta：本地已有一条 version1（来自对端 old-node）。
     let plain_old = json!({"rootId":"z","nickname":"旧值"}).to_string();
-    spark_core::sync::apply_personal_remote(&mut s, data_key, &plain_old, &remote_meta("old-node", 1, NOW - 100)).unwrap();
-    let baseline = spark_core::sync::get_personal_meta(&s, data_key).unwrap().unwrap();
+    spark_core::sync::apply_personal_remote(
+        &mut s,
+        data_key,
+        &plain_old,
+        &remote_meta("old-node", 1, NOW - 100),
+    )
+    .unwrap();
+    let baseline = spark_core::sync::get_personal_meta(&s, data_key)
+        .unwrap()
+        .unwrap();
 
     let rec = PdsyncRecord {
         key: data_key.to_string(),
@@ -547,7 +647,9 @@ fn no_key_ciphertext_does_not_advance_pmeta_and_recovers_after_grant() {
     assert_eq!(r.response, json!({ "ok": true }));
 
     // 不解不推进：pmeta 不覆盖、dseq 不计。
-    let after = spark_core::sync::get_personal_meta(&s, data_key).unwrap().unwrap();
+    let after = spark_core::sync::get_personal_meta(&s, data_key)
+        .unwrap()
+        .unwrap();
     assert_eq!(
         after.vv.get("old-node"),
         baseline.vv.get("old-node"),
@@ -555,7 +657,11 @@ fn no_key_ciphertext_does_not_advance_pmeta_and_recovers_after_grant() {
     );
     // 本地值保持旧值。
     assert_eq!(s.get(data_key).unwrap().unwrap(), plain_old);
-    assert_eq!(spark_core::sync::dlog::get_seen(&s, "peer-a").unwrap_or(0), 0, "dseq 不计");
+    assert_eq!(
+        spark_core::sync::dlog::get_seen(&s, "peer-a").unwrap_or(0),
+        0,
+        "dseq 不计"
+    );
 
     // 密钥到位后重投 → 合入成功（自愈语义）。
     spark_core::epoch::put_local_key(&mut s, 3, &epoch3_key).unwrap();
@@ -568,7 +674,11 @@ fn no_key_ciphertext_does_not_advance_pmeta_and_recovers_after_grant() {
     };
     let r2 = deliver_pdsync_data(&mut s, &root_key, &my_root, "ct:friend", &[rec2]);
     assert_eq!(r2.response, json!({ "ok": true }));
-    assert_eq!(s.get(data_key).unwrap().unwrap(), json!({"rootId":"z","nickname":"z"}).to_string(), "密钥到位后合入成功");
+    assert_eq!(
+        s.get(data_key).unwrap().unwrap(),
+        json!({"rootId":"z","nickname":"z"}).to_string(),
+        "密钥到位后合入成功"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -635,19 +745,44 @@ fn receiver_activates_key_when_ikey_arrives_but_not_without() {
     let writer_peer = "peer-writer";
 
     // 写入 epoch:state current=2 + 本机（B）作为 recipient 的包裹，尚未激活。
-    let state = EpochState { current: 2, rotated_at: NOW, rotated_by: writer_peer.to_string(), reason: RotationReason::Init };
+    let state = EpochState {
+        current: 2,
+        rotated_at: NOW,
+        rotated_by: writer_peer.to_string(),
+        reason: RotationReason::Init,
+    };
     spark_core::epoch::put_epoch_state(&mut s, NODE, &state, NOW).unwrap();
     // B 本机 libp2p keypair（try_refresh_keys 用其 x25519 私钥解包裹）。
     seed_libp2p_keypair(&mut s, &[0x62; 32]);
     let epoch_key = generate_ikey();
     let b_x_pub = x25519_pub(&b_sk).unwrap();
     let writer_x_priv = x25519_priv_from_sk(&writer_sk);
-    let (wrap, nonce) = spark_core::epoch::box_ikey(&epoch_key, &b_x_pub, &writer_x_priv, &my_root, 2, writer_peer, b_peer).unwrap();
-    let rec = spark_core::epoch::IkeyRecord { wrapped_key: wrap, nonce, ts: NOW };
-    s.put(&ikey_key(2, writer_peer, b_peer), &rec.to_json().unwrap()).unwrap();
+    let (wrap, nonce) = spark_core::epoch::box_ikey(
+        &epoch_key,
+        &b_x_pub,
+        &writer_x_priv,
+        &my_root,
+        2,
+        writer_peer,
+        b_peer,
+    )
+    .unwrap();
+    let rec = spark_core::epoch::IkeyRecord {
+        wrapped_key: wrap,
+        nonce,
+        ts: NOW,
+    };
+    s.put(&ikey_key(2, writer_peer, b_peer), &rec.to_json().unwrap())
+        .unwrap();
 
     // writer 设备记录带 devicePubKey（try_refresh_keys 解包依赖它）。
-    DeviceService::upsert_pdsync(&mut s, &device_record(writer_peer, "uid-w", Some(ed_pub(&writer_sk)), None), NOW, NODE).unwrap();
+    DeviceService::upsert_pdsync(
+        &mut s,
+        &device_record(writer_peer, "uid-w", Some(ed_pub(&writer_sk)), None),
+        NOW,
+        NODE,
+    )
+    .unwrap();
 
     // 刷新前：无密钥、effective=0。
     assert!(spark_core::epoch::get_effective(&s).unwrap() == 0);
@@ -663,18 +798,32 @@ fn receiver_activates_key_when_ikey_arrives_but_not_without() {
     );
 
     // 日志 epoch_key_activated。
-    let kinds: Vec<String> = s.scan(&spark_core::storage::ScanOptions::prefix("security:log:"))
-        .unwrap().into_iter()
-        .map(|(_k, v)| serde_json::from_str::<Value>(&v).unwrap()["kind"].as_str().unwrap_or("").to_string())
+    let kinds: Vec<String> = s
+        .scan(&spark_core::storage::ScanOptions::prefix("security:log:"))
+        .unwrap()
+        .into_iter()
+        .map(|(_k, v)| {
+            serde_json::from_str::<Value>(&v).unwrap()["kind"]
+                .as_str()
+                .unwrap_or("")
+                .to_string()
+        })
         .collect();
-    assert!(kinds.contains(&"epoch_key_activated".to_string()), "应含 epoch_key_activated");
+    assert!(
+        kinds.contains(&"epoch_key_activated".to_string()),
+        "应含 epoch_key_activated"
+    );
 
     // 包裹未到 / 解不开 → effective 不推进（用空存储新场景：state 有但无包裹）。
     let mut s2 = MemoryStorage::new();
     spark_core::epoch::put_epoch_state(&mut s2, NODE, &state, NOW).unwrap();
     seed_libp2p_keypair(&mut s2, &[0x62; 32]);
     spark_core::epoch::EpochService::try_refresh_keys(&mut s2, &my_root, b_peer, NOW).unwrap();
-    assert_eq!(spark_core::epoch::get_effective(&s2).unwrap(), 0, "无包裹不得推进 effective");
+    assert_eq!(
+        spark_core::epoch::get_effective(&s2).unwrap(),
+        0,
+        "无包裹不得推进 effective"
+    );
     let _ = root_key;
 }
 
@@ -695,7 +844,18 @@ fn new_device_grant_writes_ikey_but_revoked_does_not() {
     let epoch_key = generate_ikey();
     spark_core::epoch::put_local_key(&mut s, 2, &epoch_key).unwrap();
     spark_core::epoch::put_effective(&mut s, 2).unwrap();
-    spark_core::epoch::put_epoch_state(&mut s, NODE, &EpochState { current: 2, rotated_at: NOW, rotated_by: self_peer.to_string(), reason: RotationReason::Init }, NOW).unwrap();
+    spark_core::epoch::put_epoch_state(
+        &mut s,
+        NODE,
+        &EpochState {
+            current: 2,
+            rotated_at: NOW,
+            rotated_by: self_peer.to_string(),
+            reason: RotationReason::Init,
+        },
+        NOW,
+    )
+    .unwrap();
     // 本机 libp2p keypair（maybe_grant 用其 x25519 私钥作 writer 包裹）。
     seed_libp2p_keypair(&mut s, &[0x70; 32]);
 
@@ -746,18 +906,38 @@ fn new_device_grant_writes_ikey_but_revoked_does_not() {
     )
     .unwrap();
     assert!(!granted2, "revoked 设备不得补发");
-    assert!(s.get(&ikey_key(2, self_peer, "peer-revoked")).unwrap().is_none());
+    assert!(
+        s.get(&ikey_key(2, self_peer, "peer-revoked"))
+            .unwrap()
+            .is_none()
+    );
 
     // 无 devicePubKey 不补发。
     let granted3 = spark_core::epoch::EpochService::maybe_grant_epoch_key(
-        &mut s, &my_root, self_peer, NODE, NOW, "peer-nopub", None, None, None,
+        &mut s,
+        &my_root,
+        self_peer,
+        NODE,
+        NOW,
+        "peer-nopub",
+        None,
+        None,
+        None,
     )
     .unwrap();
     assert!(!granted3, "无 devicePubKey 不补发");
 
     // 幂等：已补发不重复写。
     let granted4 = spark_core::epoch::EpochService::maybe_grant_epoch_key(
-        &mut s, &my_root, self_peer, NODE, NOW, new_peer, Some(&B64.encode(ed_pub(&new_sk))), None, None,
+        &mut s,
+        &my_root,
+        self_peer,
+        NODE,
+        NOW,
+        new_peer,
+        Some(&B64.encode(ed_pub(&new_sk))),
+        None,
+        None,
     )
     .unwrap();
     assert!(!granted4, "已补发不重复");
@@ -779,7 +959,13 @@ fn old_epoch_ciphertext_readable_with_historical_key() {
 
     let data_key = "ct:friend:old";
     // 用 epoch1 加密的旧数据（不知情设备在升级前发出的滞后数据）。
-    let old_ct = spark_core::epoch::wrap_value(&epoch1_key, data_key, 1, &json!({"rootId":"old","nickname":"老"}).to_string()).unwrap();
+    let old_ct = spark_core::epoch::wrap_value(
+        &epoch1_key,
+        data_key,
+        1,
+        &json!({"rootId":"old","nickname":"老"}).to_string(),
+    )
+    .unwrap();
     // 当前 effective=2 也能解 epoch1 密文（全历史密钥保留）。
     assert_eq!(
         spark_core::epoch::unwrap_value(&epoch1_key, data_key, &old_ct).as_deref(),
@@ -805,13 +991,21 @@ fn wrap_unwrap_aad_binding_and_discern() {
     // 判别：密文正判；明文/缺字段不误判。
     assert!(spark_core::epoch::is_ikey_ciphertext(&ct));
     assert!(!spark_core::epoch::is_ikey_ciphertext(&json!({"a":1})));
-    assert!(!spark_core::epoch::is_ikey_ciphertext(&json!({"$enc":"ikey"})));
+    assert!(!spark_core::epoch::is_ikey_ciphertext(
+        &json!({"$enc":"ikey"})
+    ));
 
     // 往返。
-    assert_eq!(spark_core::epoch::unwrap_value(&key, record_key, &ct).as_deref(), Some(plain));
+    assert_eq!(
+        spark_core::epoch::unwrap_value(&key, record_key, &ct).as_deref(),
+        Some(plain)
+    );
 
     // AAD 绑定：改键解密失败。
-    assert!(spark_core::epoch::unwrap_value(&key, "ct:friend:wrong", &ct).is_none(), "AAD 绑定：改键失败");
+    assert!(
+        spark_core::epoch::unwrap_value(&key, "ct:friend:wrong", &ct).is_none(),
+        "AAD 绑定：改键失败"
+    );
     // 错密钥失败。
     let mut wrong = key;
     wrong[0] ^= 1;
@@ -821,7 +1015,10 @@ fn wrap_unwrap_aad_binding_and_discern() {
 
     // 解析 ikey 键。
     let (epoch, writer, recipient) = parse_ikey_key("ikey:2:peer-a:peer-b").unwrap();
-    assert_eq!((epoch, writer.as_str(), recipient.as_str()), (2, "peer-a", "peer-b"));
+    assert_eq!(
+        (epoch, writer.as_str(), recipient.as_str()),
+        (2, "peer-a", "peer-b")
+    );
     assert!(parse_ikey_key("ct:friend:a").is_none());
     assert!(parse_ikey_key("ikey:2:peer-a:peer-b:extra").is_none());
 }
@@ -843,7 +1040,11 @@ fn hello_remote_epoch_negotiation_plain_vs_cipher() {
     assert_eq!(crate_min_enc_epoch(&s, Some(0)), 0, "对端宣告 0 → 明文");
 
     // 对端宣告 < 本机 → 按对端值加密。
-    assert_eq!(crate_min_enc_epoch(&s, Some(2)), 2, "对端 2 < 本机 3 → 按 2 加密");
+    assert_eq!(
+        crate_min_enc_epoch(&s, Some(2)),
+        2,
+        "对端 2 < 本机 3 → 按 2 加密"
+    );
 
     // 对端 ≥ 本机 → 按本机 effective。
     assert_eq!(crate_min_enc_epoch(&s, Some(3)), 3);
@@ -853,7 +1054,9 @@ fn hello_remote_epoch_negotiation_plain_vs_cipher() {
 
 // 镜像发送侧 enc_epoch = min(local_effective, remote_epoch ?? 0) 的选取逻辑。
 fn crate_min_enc_epoch(_s: &MemoryStorage, remote_epoch: Option<u64>) -> u64 {
-    spark_core::epoch::get_effective(_s).unwrap_or(0).min(remote_epoch.unwrap_or(0))
+    spark_core::epoch::get_effective(_s)
+        .unwrap_or(0)
+        .min(remote_epoch.unwrap_or(0))
 }
 
 // ---------------------------------------------------------------------------
@@ -874,7 +1077,9 @@ fn start_p2p_initializes_epoch1_idempotently() {
         1,
         "start_p2p 首次应初始化到 epoch1"
     );
-    let state = spark_core::epoch::get_epoch_state(&storage).unwrap().unwrap();
+    let state = spark_core::epoch::get_epoch_state(&storage)
+        .unwrap()
+        .unwrap();
     assert_eq!(state.current, 1);
     assert_eq!(state.reason, RotationReason::Init);
 
@@ -884,7 +1089,10 @@ fn start_p2p_initializes_epoch1_idempotently() {
     k.start_p2p().expect("restart p2p");
     let storage2 = k.__test_storage().unwrap();
     assert_eq!(
-        spark_core::epoch::get_epoch_state(&storage2).unwrap().unwrap().current,
+        spark_core::epoch::get_epoch_state(&storage2)
+            .unwrap()
+            .unwrap()
+            .current,
         1,
         "已有 state 的二次 start_p2p 不得重复 init"
     );
@@ -894,7 +1102,12 @@ fn start_p2p_initializes_epoch1_idempotently() {
         .scan(&spark_core::storage::ScanOptions::prefix("security:log:"))
         .unwrap()
         .into_iter()
-        .map(|(_k, v)| serde_json::from_str::<Value>(&v).unwrap()["kind"].as_str().unwrap_or("").to_string())
+        .map(|(_k, v)| {
+            serde_json::from_str::<Value>(&v).unwrap()["kind"]
+                .as_str()
+                .unwrap_or("")
+                .to_string()
+        })
         .collect();
     assert!(
         kinds.contains(&"epoch_rotated".to_string()),
@@ -947,10 +1160,19 @@ fn epoch_state_arrives_via_pdsync_data_and_auto_activates_key() {
         NODE,
     )
     .unwrap();
-    let rec = spark_core::epoch::IkeyRecord { wrapped_key: wrap, nonce, ts: NOW };
+    let rec = spark_core::epoch::IkeyRecord {
+        wrapped_key: wrap,
+        nonce,
+        ts: NOW,
+    };
 
     // 同批 data 记录：epoch:state（明文）+ 本机 ikey: 包裹，category 名为 "epoch"。
-    let state = EpochState { current: 2, rotated_at: NOW, rotated_by: writer_peer.to_string(), reason: RotationReason::Revoke };
+    let state = EpochState {
+        current: 2,
+        rotated_at: NOW,
+        rotated_by: writer_peer.to_string(),
+        reason: RotationReason::Revoke,
+    };
     let state_rec = PdsyncRecord {
         key: "epoch:state".to_string(),
         value: serde_json::from_str(&state.to_json().unwrap()).unwrap(),
@@ -969,7 +1191,11 @@ fn epoch_state_arrives_via_pdsync_data_and_auto_activates_key() {
 
     // 经 pdsync data 通道投递 epoch category——应合入且不被 category-mismatch 拒收。
     let r = deliver_pdsync_data(&mut s, &root_key, &my_root, "epoch", &[state_rec, ikey_rec]);
-    assert_eq!(r.response, json!({ "ok": true }), "epoch category 应被识别并合入");
+    assert_eq!(
+        r.response,
+        json!({ "ok": true }),
+        "epoch category 应被识别并合入"
+    );
 
     // epoch:state 已落库（明文通道，含 AAD 豁免）。
     let state_stored = spark_core::epoch::get_epoch_state(&s).unwrap().unwrap();

@@ -51,7 +51,11 @@ impl PluginHostShared {
         let oid = decl.org_id.as_deref().unwrap_or("");
         let col_full = format!("{}@v{}", decl.name, decl.version);
         let relative = key
-            .strip_prefix(&crate::plugindata::org_data_prefix(oid, &decl.name, &decl.version))
+            .strip_prefix(&crate::plugindata::org_data_prefix(
+                oid,
+                &decl.name,
+                &decl.version,
+            ))
             .unwrap_or(key);
         let cache_key = crate::sync::orgsync::orgq_cache_key(oid, &col_full, relative);
         let raw = storage
@@ -167,9 +171,8 @@ impl PluginHostShared {
             .get("version")
             .and_then(Value::as_str)
             .map(str::to_string);
-        let parse_axis = |field: &str| -> Option<&str> {
-            payload.get(field).and_then(Value::as_str)
-        };
+        let parse_axis =
+            |field: &str| -> Option<&str> { payload.get(field).and_then(Value::as_str) };
         let scope = match parse_axis("scope") {
             None => None,
             Some("sync") => Some(Scope::Sync),
@@ -253,7 +256,10 @@ impl PluginHostShared {
             sensitivity,
             devices,
             merge,
-            declared_by: payload.get("declaredBy").and_then(Value::as_str).map(str::to_string),
+            declared_by: payload
+                .get("declaredBy")
+                .and_then(Value::as_str)
+                .map(str::to_string),
         })
     }
 
@@ -285,10 +291,7 @@ impl PluginHostShared {
 
     /// 合并过滤种类到 filter_caps（read/write/read-write）。
     pub(crate) fn remember_filter_cap(&self, collection: &str, kind: &str) {
-        let mut caps = self
-            .filter_caps
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut caps = self.filter_caps.lock().unwrap_or_else(|e| e.into_inner());
         let cur = caps.get(collection).cloned().unwrap_or_default();
         let merged = if cur.contains(kind) {
             cur
@@ -301,10 +304,9 @@ impl PluginHostShared {
 
 /// 取载荷必填字符串字段（缺失/非字符串为非法调用）。
 fn required_str<'a>(payload: &'a Value, field: &str) -> Result<&'a str> {
-    payload
-        .get(field)
-        .and_then(Value::as_str)
-        .ok_or_else(|| super::error::PluginError::InvalidCall(format!("missing string field: {field}")))
+    payload.get(field).and_then(Value::as_str).ok_or_else(|| {
+        super::error::PluginError::InvalidCall(format!("missing string field: {field}"))
+    })
 }
 
 #[cfg(test)]
@@ -399,7 +401,9 @@ mod tests {
             &serde_json::to_string(&rec("k2", 2)).unwrap(),
         )
         .unwrap();
-        let page = host.orgq_cached_query(&s, &decl, None, Some(10), None).unwrap();
+        let page = host
+            .orgq_cached_query(&s, &decl, None, Some(10), None)
+            .unwrap();
         assert_eq!(page.items.len(), 2, "缓存前缀扫描返回两条");
         assert_eq!(page.items[0].0, "k1");
     }

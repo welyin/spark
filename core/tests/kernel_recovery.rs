@@ -45,16 +45,20 @@ fn deliver_recovery(
     now_ms: i64,
     body: Value,
 ) -> spark_core::kernel::InboundDmResult {
-    let envelope = dm_envelope::build_envelope(
-        RECOVERY_KIND,
+    let envelope =
+        dm_envelope::build_envelope(RECOVERY_KIND, my_root, my_root, ts, body, signing_key);
+    handle_inbound_dm(
+        storage,
         my_root,
-        my_root,
-        ts,
-        body,
-        signing_key,
-    );
-    handle_inbound_dm(storage, my_root, "我", envelope, "peer-conn", &HashSet::new(), now_ms, NODE, None)
-        .unwrap()
+        "我",
+        envelope,
+        "peer-conn",
+        &HashSet::new(),
+        now_ms,
+        NODE,
+        None,
+    )
+    .unwrap()
 }
 
 // ---------------------------------------------------------------------------
@@ -85,7 +89,11 @@ fn state_machine_initiate_tooearly_veto_and_normal_commit() {
         &pending.request_id,
     )
     .unwrap_err();
-    assert_eq!(err, RecoveryError::TooEarly, "deadline 前 confirm → TooEarly");
+    assert_eq!(
+        err,
+        RecoveryError::TooEarly,
+        "deadline 前 confirm → TooEarly"
+    );
 
     // veto → pending 置 vetoed + 墓碑。
     let vetoed = RecoveryService::<MemoryStorage>::veto(
@@ -96,7 +104,9 @@ fn state_machine_initiate_tooearly_veto_and_normal_commit() {
     )
     .unwrap();
     assert!(vetoed);
-    let p2 = RecoveryService::<MemoryStorage>::get_pending(&s).unwrap().unwrap();
+    let p2 = RecoveryService::<MemoryStorage>::get_pending(&s)
+        .unwrap()
+        .unwrap();
     assert_eq!(p2.state, RecoveryState::Vetoed);
     assert!(p2.vetoed);
     assert!(
@@ -113,7 +123,11 @@ fn state_machine_initiate_tooearly_veto_and_normal_commit() {
         &pending.request_id,
     )
     .unwrap_err();
-    assert_eq!(err2, RecoveryError::RecoveryVetoed, "veto 后 confirm → RecoveryVetoed");
+    assert_eq!(
+        err2,
+        RecoveryError::RecoveryVetoed,
+        "veto 后 confirm → RecoveryVetoed"
+    );
 
     // 正常路径：新请求，deadline 后 confirm ready → committed。
     let pending2 = RecoveryService::<MemoryStorage>::initiate(
@@ -138,8 +152,14 @@ fn state_machine_initiate_tooearly_veto_and_normal_commit() {
     .unwrap();
     assert_eq!(ready.request_id, pending2.request_id, "deadline 到达可确认");
     RecoveryService::<MemoryStorage>::mark_committed(&mut s, &pending2.request_id).unwrap();
-    let p3 = RecoveryService::<MemoryStorage>::get_pending(&s).unwrap().unwrap();
-    assert_eq!(p3.state, RecoveryState::Committed, "确认后 pending → committed");
+    let p3 = RecoveryService::<MemoryStorage>::get_pending(&s)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        p3.state,
+        RecoveryState::Committed,
+        "确认后 pending → committed"
+    );
     // seen 命中者 committed 标记。
     let seen = RecoveryService::<MemoryStorage>::get_seen(&s, &pending2.request_id).unwrap();
     // 本机发起时不一定有 seen（broadcast 由 p2p 负责），仅断言 committed 状态即可。
@@ -163,32 +183,30 @@ fn initiate_rejects_duplicate_active_and_pair_new_device() {
         Some(0.001),
     )
     .unwrap_err();
-    assert_eq!(err, RecoveryError::RecoveryPending, "活跃 pending 时再发起 → RecoveryPending");
+    assert_eq!(
+        err,
+        RecoveryError::RecoveryPending,
+        "活跃 pending 时再发起 → RecoveryPending"
+    );
 
     // 已有 committed 后可再发起（单槽复用）。
-    let pending = RecoveryService::<MemoryStorage>::get_pending(&s).unwrap().unwrap();
+    let pending = RecoveryService::<MemoryStorage>::get_pending(&s)
+        .unwrap()
+        .unwrap();
     RecoveryService::<MemoryStorage>::mark_committed(&mut s, &pending.request_id).unwrap();
     RecoveryService::<MemoryStorage>::initiate(&mut s, 0, RecoveryOp::ResetPassword, Some(0.001))
         .unwrap();
 
     // PairNewDevice 不支持。
-    let err2 = RecoveryService::<MemoryStorage>::initiate(
-        &mut s,
-        0,
-        RecoveryOp::PairNewDevice,
-        None,
-    )
-    .unwrap_err();
+    let err2 =
+        RecoveryService::<MemoryStorage>::initiate(&mut s, 0, RecoveryOp::PairNewDevice, None)
+            .unwrap_err();
     assert_eq!(err2, RecoveryError::UnsupportedOp);
 
     // 过短 delay → InvalidInput。
-    let err3 = RecoveryService::<MemoryStorage>::initiate(
-        &mut s,
-        0,
-        RecoveryOp::ResetPassword,
-        Some(0.0),
-    )
-    .unwrap_err();
+    let err3 =
+        RecoveryService::<MemoryStorage>::initiate(&mut s, 0, RecoveryOp::ResetPassword, Some(0.0))
+            .unwrap_err();
     assert_eq!(err3, RecoveryError::InvalidInput);
 }
 
@@ -245,14 +263,14 @@ fn clock_safety_window_clamp_and_out_of_window_veto() {
         .unwrap();
     assert!(ok, "窗口边界时刻可否决");
     // 窗外（t0+window+1）→ VetoWindowExpired（已置墓碑后再次 veto 走 seen 分支）。
-    let err = RecoveryService::<MemoryStorage>::veto(
-        &mut s,
-        t0 + window + 1,
-        "rc-clock-1",
-        "peer-b",
-    )
-    .unwrap_err();
-    assert_eq!(err, RecoveryError::VetoWindowExpired, "窗外 veto → VetoWindowExpired");
+    let err =
+        RecoveryService::<MemoryStorage>::veto(&mut s, t0 + window + 1, "rc-clock-1", "peer-b")
+            .unwrap_err();
+    assert_eq!(
+        err,
+        RecoveryError::VetoWindowExpired,
+        "窗外 veto → VetoWindowExpired"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -293,12 +311,20 @@ fn inbound_from_not_self_silently_rejected() {
         "peer-conn",
         &HashSet::new(),
         1_000_000,
-        NODE, None)
+        NODE,
+        None,
+    )
     .unwrap();
-    assert_eq!(r.response, json!({ "ok": false, "reason": "not-self" }), "非自设备信封应静默拒");
+    assert_eq!(
+        r.response,
+        json!({ "ok": false, "reason": "not-self" }),
+        "非自设备信封应静默拒"
+    );
     assert!(r.events.is_empty());
     assert!(
-        RecoveryService::<MemoryStorage>::get_seen(&s, "rc-x").unwrap().is_none(),
+        RecoveryService::<MemoryStorage>::get_seen(&s, "rc-x")
+            .unwrap()
+            .is_none(),
         "非自设备不得落 seen"
     );
     let _ = key;
@@ -319,7 +345,11 @@ fn inbound_initiated_missing_fields_rejected() {
         json!({"kind":"initiated","op":"reset_password","requestId":"rc-a","fromDevice":"peer-a"}),
     );
     assert_eq!(r.response, json!({ "ok": false, "reason": "invalid-body" }));
-    assert!(RecoveryService::<MemoryStorage>::get_seen(&s, "rc-a").unwrap().is_none());
+    assert!(
+        RecoveryService::<MemoryStorage>::get_seen(&s, "rc-a")
+            .unwrap()
+            .is_none()
+    );
 
     // 非法 op → invalid-body。
     let r2 = deliver_recovery(
@@ -330,7 +360,10 @@ fn inbound_initiated_missing_fields_rejected() {
         1_000_000,
         json!({"kind":"initiated","op":"bogus","requestId":"rc-b","deadline":2_000_000,"fromDevice":"peer-a"}),
     );
-    assert_eq!(r2.response, json!({ "ok": false, "reason": "invalid-body" }));
+    assert_eq!(
+        r2.response,
+        json!({ "ok": false, "reason": "invalid-body" })
+    );
 
     // requestId 空 → invalid-body。
     let r3 = deliver_recovery(
@@ -341,7 +374,10 @@ fn inbound_initiated_missing_fields_rejected() {
         1_000_000,
         json!({"kind":"initiated","op":"reset_password","requestId":"","deadline":2_000_000,"fromDevice":"peer-a"}),
     );
-    assert_eq!(r3.response, json!({ "ok": false, "reason": "invalid-body" }));
+    assert_eq!(
+        r3.response,
+        json!({ "ok": false, "reason": "invalid-body" })
+    );
 
     // 未知 kind → invalid-kind。
     let r4 = deliver_recovery(
@@ -352,7 +388,10 @@ fn inbound_initiated_missing_fields_rejected() {
         1_000_000,
         json!({"kind":"nope","requestId":"rc-c"}),
     );
-    assert_eq!(r4.response, json!({ "ok": false, "reason": "invalid-kind" }));
+    assert_eq!(
+        r4.response,
+        json!({ "ok": false, "reason": "invalid-kind" })
+    );
 }
 
 #[test]
@@ -377,17 +416,32 @@ fn inbound_initiated_valid_writes_seen_with_local_clock_and_emits_event() {
         matches!(e, spark_core::p2p::P2pEvent::RecoveryUpdated { state, .. } if state == "initiated")
     });
     assert!(ev.is_some(), "首次到达应发 RecoveryUpdated{{initiated}}");
-    if let Some(spark_core::p2p::P2pEvent::RecoveryUpdated { deadline: ev_deadline, from_device, op, .. }) = ev {
+    if let Some(spark_core::p2p::P2pEvent::RecoveryUpdated {
+        deadline: ev_deadline,
+        from_device,
+        op,
+        ..
+    }) = ev
+    {
         assert_eq!(from_device, "peer-a");
         assert_eq!(op.as_deref(), Some("reset_password"));
         // 事件 deadline = localArrival + clamp(deadline - envelope_ts)。
         let window = RecoveryService::<MemoryStorage>::recovery_window_ms(deadline, envelope_ts);
-        assert_eq!(*ev_deadline, Some(local_now + window), "事件 deadline 用本地否决窗终点");
+        assert_eq!(
+            *ev_deadline,
+            Some(local_now + window),
+            "事件 deadline 用本地否决窗终点"
+        );
     }
 
-    let seen = RecoveryService::<MemoryStorage>::get_seen(&s, "rc-ok").unwrap().unwrap();
+    let seen = RecoveryService::<MemoryStorage>::get_seen(&s, "rc-ok")
+        .unwrap()
+        .unwrap();
     assert_eq!(seen.local_arrival_ms, local_now, "seen 记录本地到达时间");
-    assert_eq!(seen.window_ms, RecoveryService::<MemoryStorage>::recovery_window_ms(deadline, envelope_ts));
+    assert_eq!(
+        seen.window_ms,
+        RecoveryService::<MemoryStorage>::recovery_window_ms(deadline, envelope_ts)
+    );
     assert!(!seen.vetoed && !seen.committed);
 
     // 重复到达幂等：不发第二次事件。
@@ -418,7 +472,9 @@ fn inbound_veto_tombstone_before_initiated_lands_vetoed() {
     );
     assert_eq!(r_veto.response, json!({ "ok": true }));
     assert!(
-        RecoveryService::<MemoryStorage>::get_veto_tombstone(&s, "rc-late").unwrap().is_some(),
+        RecoveryService::<MemoryStorage>::get_veto_tombstone(&s, "rc-late")
+            .unwrap()
+            .is_some(),
         "veto 乱序先到落墓碑"
     );
 
@@ -432,7 +488,9 @@ fn inbound_veto_tombstone_before_initiated_lands_vetoed() {
         initiated_body("rc-late", "reset_password", 2_000_000, "peer-a"),
     );
     assert_eq!(r_init.response, json!({ "ok": true }));
-    let seen = RecoveryService::<MemoryStorage>::get_seen(&s, "rc-late").unwrap().unwrap();
+    let seen = RecoveryService::<MemoryStorage>::get_seen(&s, "rc-late")
+        .unwrap()
+        .unwrap();
     assert!(seen.vetoed, "墓碑存在时 initiated 落库即带 vetoed");
 
     // 重复 veto 幂等：不再发第二次事件（changed=false）。
@@ -473,7 +531,10 @@ fn inbound_committed_unknown_request_silent_ok() {
         1_000_000,
         json!({"kind":"committed","op":"reset_password","requestId":"rc-unknown"}),
     );
-    assert_eq!(r2.response, json!({ "ok": false, "reason": "invalid-body" }));
+    assert_eq!(
+        r2.response,
+        json!({ "ok": false, "reason": "invalid-body" })
+    );
 }
 
 #[test]
@@ -499,7 +560,9 @@ fn inbound_committed_marks_seen_and_pending_terminal() {
         json!({"kind":"committed","op":"reset_password","requestId":"rc-done","fromDevice":"peer-a"}),
     );
     assert_eq!(r.response, json!({ "ok": true }));
-    let seen = RecoveryService::<MemoryStorage>::get_seen(&s, "rc-done").unwrap().unwrap();
+    let seen = RecoveryService::<MemoryStorage>::get_seen(&s, "rc-done")
+        .unwrap()
+        .unwrap();
     assert!(seen.committed, "seen 命中 committed");
     assert!(
         r.events.iter().any(|e| matches!(e, spark_core::p2p::P2pEvent::RecoveryUpdated { state, .. } if state == "committed")),
@@ -522,7 +585,8 @@ fn reset_password_session_strength_reencrypt_and_unlock() {
     assert!(err.contains("at least 8"), "强度<8 应拒：{err}");
 
     // 重封为强口令。
-    k.reset_password_session("newpassword456").expect("reset ok");
+    k.reset_password_session("newpassword456")
+        .expect("reset ok");
 
     // 新口令可再次查看助记词，且一致。
     let revealed = k.reveal_mnemonic("newpassword456").expect("new pw reveal");
@@ -542,15 +606,21 @@ fn reset_password_session_changes_unlock_behavior() {
 
     // 锁定后：旧口令可解锁 → 重封新口令 → 旧口令失效、新口令可解锁。
     k.lock();
-    k.unlock(PASSWORD, Some(&root_clone)).expect("old pw unlock before reset");
+    k.unlock(PASSWORD, Some(&root_clone))
+        .expect("old pw unlock before reset");
 
     k.reset_password_session("brandnew789").expect("reset");
 
     k.lock();
-    let err = k.unlock(PASSWORD, Some(&root_clone)).unwrap_err().to_string();
+    let err = k
+        .unlock(PASSWORD, Some(&root_clone))
+        .unwrap_err()
+        .to_string();
     assert!(err.contains("Invalid"), "旧口令解锁应失败：{err}");
 
-    let ok = k.unlock("brandnew789", Some(&root_clone)).expect("new pw unlock");
+    let ok = k
+        .unlock("brandnew789", Some(&root_clone))
+        .expect("new pw unlock");
     assert_eq!(ok, root_id, "新口令解锁返回同一 rootId");
 }
 
@@ -575,7 +645,9 @@ fn committed_is_terminal_out_of_order_veto_does_not_overwrite() {
     )
     .unwrap();
     RecoveryService::<MemoryStorage>::mark_committed(&mut s, &pending.request_id).unwrap();
-    let p = RecoveryService::<MemoryStorage>::get_pending(&s).unwrap().unwrap();
+    let p = RecoveryService::<MemoryStorage>::get_pending(&s)
+        .unwrap()
+        .unwrap();
     assert_eq!(p.state, RecoveryState::Committed);
 
     // 乱序 veto 入站 → pending 仍 Committed（终态不可逆）。
@@ -588,7 +660,9 @@ fn committed_is_terminal_out_of_order_veto_does_not_overwrite() {
         json!({"kind":"vetoed","requestId":pending.request_id,"fromDevice":"peer-b"}),
     );
     assert_eq!(r.response, json!({ "ok": true }));
-    let p2 = RecoveryService::<MemoryStorage>::get_pending(&s).unwrap().unwrap();
+    let p2 = RecoveryService::<MemoryStorage>::get_pending(&s)
+        .unwrap()
+        .unwrap();
     assert_eq!(
         p2.state,
         RecoveryState::Committed,
@@ -616,7 +690,9 @@ fn vetoed_is_terminal_late_committed_does_not_overwrite() {
     .unwrap();
     let rid = pending.request_id.clone();
     RecoveryService::<MemoryStorage>::veto(&mut s, 1_100_000, &rid, "peer-b").unwrap();
-    let p = RecoveryService::<MemoryStorage>::get_pending(&s).unwrap().unwrap();
+    let p = RecoveryService::<MemoryStorage>::get_pending(&s)
+        .unwrap()
+        .unwrap();
     assert_eq!(p.state, RecoveryState::Vetoed);
 
     // 迟到 committed 入站 → pending 仍 Vetoed（终态不可逆）。
@@ -629,7 +705,9 @@ fn vetoed_is_terminal_late_committed_does_not_overwrite() {
         json!({"kind":"committed","op":"reset_password","requestId":rid,"fromDevice":"peer-a"}),
     );
     assert_eq!(r.response, json!({ "ok": true }));
-    let p2 = RecoveryService::<MemoryStorage>::get_pending(&s).unwrap().unwrap();
+    let p2 = RecoveryService::<MemoryStorage>::get_pending(&s)
+        .unwrap()
+        .unwrap();
     assert_eq!(
         p2.state,
         RecoveryState::Vetoed,
@@ -668,7 +746,9 @@ fn handle_committed_respects_veto_first_seen_guard() {
     );
     assert_eq!(r_init.response, json!({ "ok": true }));
     assert!(
-        RecoveryService::<MemoryStorage>::get_seen(&s, &rid).unwrap().is_some(),
+        RecoveryService::<MemoryStorage>::get_seen(&s, &rid)
+            .unwrap()
+            .is_some(),
         "前置：seen 已落库"
     );
 
@@ -682,10 +762,18 @@ fn handle_committed_respects_veto_first_seen_guard() {
         json!({"kind":"vetoed","requestId":rid,"fromDevice":"peer-b"}),
     );
     assert_eq!(r_veto.response, json!({ "ok": true }));
-    let seen = RecoveryService::<MemoryStorage>::get_seen(&s, &rid).unwrap().unwrap();
-    assert!(seen.vetoed && !seen.committed, "前置：seen vetoed 且未 committed");
+    let seen = RecoveryService::<MemoryStorage>::get_seen(&s, &rid)
+        .unwrap()
+        .unwrap();
+    assert!(
+        seen.vetoed && !seen.committed,
+        "前置：seen vetoed 且未 committed"
+    );
     assert_eq!(
-        RecoveryService::<MemoryStorage>::get_pending(&s).unwrap().unwrap().state,
+        RecoveryService::<MemoryStorage>::get_pending(&s)
+            .unwrap()
+            .unwrap()
+            .state,
         RecoveryState::Vetoed
     );
 
@@ -699,13 +787,17 @@ fn handle_committed_respects_veto_first_seen_guard() {
         json!({"kind":"committed","op":"reset_password","requestId":rid,"fromDevice":"peer-a"}),
     );
     assert_eq!(r.response, json!({ "ok": true }));
-    let p = RecoveryService::<MemoryStorage>::get_pending(&s).unwrap().unwrap();
+    let p = RecoveryService::<MemoryStorage>::get_pending(&s)
+        .unwrap()
+        .unwrap();
     assert_eq!(
         p.state,
         RecoveryState::Vetoed,
         "否决优先：seen.vetoed 时 committed 不得把 pending 翻回 Committed"
     );
-    let seen2 = RecoveryService::<MemoryStorage>::get_seen(&s, &rid).unwrap().unwrap();
+    let seen2 = RecoveryService::<MemoryStorage>::get_seen(&s, &rid)
+        .unwrap()
+        .unwrap();
     assert!(seen2.vetoed, "seen 保留 vetoed");
     let _ = r.events;
 }

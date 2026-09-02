@@ -21,9 +21,7 @@ use ed25519_dalek::SigningKey;
 use serde_json::Value;
 
 use super::crypto::{decrypt_body_with_key, encrypt_body_with_key};
-use super::derive::{
-    derive_session_key, derive_session_key_ephemeral, generate_ephemeral_keypair,
-};
+use super::derive::{derive_session_key, derive_session_key_ephemeral, generate_ephemeral_keypair};
 use super::types::{E2E_KEY_PREFIX, SessionKeyRecord};
 use crate::storage::StorageBackend;
 use crate::sync::orgsync::ed_pk_to_x25519;
@@ -246,8 +244,9 @@ pub fn encrypt_outbound_body<S: StorageBackend>(
     let peer_root_pub: [u8; 32] = peer_root_pub_raw
         .try_into()
         .map_err(|_| DmE2eError::InvalidCiphertext("peer root pub not 32B".into()))?;
-    let peer_x25519 = ed_pk_to_x25519(&peer_root_pub)
-        .ok_or(DmE2eError::InvalidCiphertext("peer root pub not on curve".into()))?;
+    let peer_x25519 = ed_pk_to_x25519(&peer_root_pub).ok_or(DmE2eError::InvalidCiphertext(
+        "peer root pub not on curve".into(),
+    ))?;
     // 协商/轮换（root 私钥 + 对端 root 公钥 X25519）
     ensure_session_key(
         storage,
@@ -279,11 +278,10 @@ pub fn encrypt_body<S: StorageBackend>(
     ts: i64,
     plaintext_body: &Value,
 ) -> Result<Value> {
-    let record = read_session_key_record(storage, to)?
-        .ok_or(DmE2eError::NoSessionKey)?;
-    let key_raw = B64.decode(&record.current_key).map_err(|_| {
-        DmE2eError::InvalidCiphertext("current key not valid base64".into())
-    })?;
+    let record = read_session_key_record(storage, to)?.ok_or(DmE2eError::NoSessionKey)?;
+    let key_raw = B64
+        .decode(&record.current_key)
+        .map_err(|_| DmE2eError::InvalidCiphertext("current key not valid base64".into()))?;
     let key_arr: [u8; 32] = key_raw
         .try_into()
         .map_err(|_| DmE2eError::InvalidCiphertext("current key not 32B".into()))?;
@@ -305,10 +303,10 @@ pub fn decrypt_body<S: StorageBackend>(
     ts: i64,
     encrypted_body: &Value,
 ) -> Result<Value> {
-    let record = read_session_key_record(storage, from)?
-        .ok_or(DmE2eError::NoSessionKey)?;
+    let record = read_session_key_record(storage, from)?.ok_or(DmE2eError::NoSessionKey)?;
     let key_b64 = select_key_for_ts(&record, ts).ok_or(DmE2eError::NoKeyForTs(ts))?;
-    let key_raw = B64.decode(key_b64)
+    let key_raw = B64
+        .decode(key_b64)
         .map_err(|_| DmE2eError::InvalidCiphertext("key not valid base64".into()))?;
     let key_arr: [u8; 32] = key_raw
         .try_into()

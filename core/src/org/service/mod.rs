@@ -24,11 +24,11 @@ mod members_access;
 mod settings;
 mod snapshot_apply;
 
+/// F8：org:meta 写路径的原子段原语与注入锁类型（org-meta-rmw-fix §2.2）。
+pub use atomic::OrgMetaWriteLock;
 /// F7 存量迁移（org-invite-scope-fix §2.3）：org:invites 退出 orgsync 的
 /// 一次性清理（入站邀请记录清空 + 声明墓碑化），unlock 时幂等执行。
 pub use invite_records::migrate_org_invites_out_of_orgsync;
-/// F8：org:meta 写路径的原子段原语与注入锁类型（org-meta-rmw-fix §2.2）。
-pub use atomic::OrgMetaWriteLock;
 
 use serde_json::Value;
 

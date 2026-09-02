@@ -545,8 +545,7 @@ impl Kernel {
         let mut count =
             OrganizationService::list_all_invite_records(self.require_storage()?)?.len();
         let mut invite_id = format!("inv-{now}-{count}");
-        while OrganizationService::find_invite_by_id(self.require_storage()?, &invite_id)?
-            .is_some()
+        while OrganizationService::find_invite_by_id(self.require_storage()?, &invite_id)?.is_some()
         {
             count += 1;
             invite_id = format!("inv-{now}-{count}");
@@ -686,9 +685,10 @@ impl Kernel {
             return Ok(record);
         }
         if accept {
-            let code = record.invite_code.clone().ok_or_else(|| {
-                KernelError::Internal("邀请记录缺少邀请码，无法接受".to_string())
-            })?;
+            let code = record
+                .invite_code
+                .clone()
+                .ok_or_else(|| KernelError::Internal("邀请记录缺少邀请码，无法接受".to_string()))?;
             // 加入编排（网络段，不持 io_lock，与 org_accept_invite 命令同口径）；
             // 失败原样报错：记录保持 pending、不回发
             self.accept_invite(&code)?;
