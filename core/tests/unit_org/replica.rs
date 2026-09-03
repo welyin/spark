@@ -44,11 +44,44 @@ fn no_state() -> impl FnMut(&str, Option<&str>) -> Option<OrgSyncState> {
     |_, _| None
 }
 
+/// 由成员列表构造记录（K 口径测试夹具）。
+fn record_of(members: &[OrganizationMember]) -> spark_core::org::types::OrganizationRecord {
+    spark_core::org::types::OrganizationRecord {
+        org_id: "org_x".to_string(),
+        created_by: rid('z'),
+        members: members.to_vec(),
+        ..Default::default()
+    }
+}
+
+/// batch2 新签名的调用包装：成员级用例默认无履职观测、K 不适用
+/// （has_data_collections=false → synced_peers 保持成员级口径）。
+fn overview_of(
+    members: &[OrganizationMember],
+    current_root_id: Option<&str>,
+    current_versions: Option<&OrganizationSyncVersions>,
+    state_lookup: impl FnMut(&str, Option<&str>) -> Option<OrgSyncState>,
+    duty: &[DutyObservation],
+    has_data_collections: bool,
+    now_ms: i64,
+) -> OrgSyncOverview {
+    compute_org_sync_overview(
+        &record_of(members),
+        current_root_id,
+        current_versions,
+        state_lookup,
+        duty,
+        has_data_collections,
+        |_| "pc",
+        now_ms,
+    )
+}
+
 #[test]
 fn self_always_counts() {
     let members = vec![member('a', None)];
     let overview =
-        compute_org_sync_overview("org_x", &members, Some(&rid('a')), None, no_state(), NOW);
+        overview_of(&members, Some(&rid('a')), None, no_state(), &[], false, NOW);
     assert_eq!(overview.synced_peers, 1);
     assert!(overview.members[0].is_self);
     assert!(overview.members[0].ever_synced);
@@ -64,22 +97,24 @@ fn recently_synced_within_30d_window() {
     };
     let current = versions(100);
     // 窗口内（恰好 30 天边界） → 计入
-    let overview = compute_org_sync_overview(
-        "org_x",
+    let overview = overview_of(
         &members,
         None,
         Some(&current),
         |_, _| Some(state_at(NOW - ORG_REPLICA_FRESH_WINDOW_MS)),
+        &[],
+        false,
         NOW,
     );
     assert!(overview.members[0].ever_synced, "30 天边界仍计入");
     // 超出窗口 1ms 且版本落后 → 不计入
-    let overview = compute_org_sync_overview(
-        "org_x",
+    let overview = overview_of(
         &members,
         None,
         Some(&current),
         |_, _| Some(state_at(NOW - ORG_REPLICA_FRESH_WINDOW_MS - 1)),
+        &[],
+        false,
         NOW,
     );
     assert!(!overview.members[0].ever_synced);
@@ -96,12 +131,13 @@ fn covers_current_counts_stale_ttl_but_fresh_versions() {
         last_synced_at: NOW - 365 * 24 * 60 * 60 * 1000,
     };
     assert!(covers_current(&stale_ttl, Some(&current)));
-    let overview = compute_org_sync_overview(
-        "org_x",
+    let overview = overview_of(
         &members,
         None,
         Some(&current),
         |_, _| Some(stale_ttl),
+        &[],
+        false,
         NOW,
     );
     assert!(overview.members[0].ever_synced);
@@ -116,12 +152,13 @@ fn covers_current_counts_stale_ttl_but_fresh_versions() {
         ..stale_ttl
     };
     assert!(!covers_current(&lagging, Some(&current)));
-    let overview = compute_org_sync_overview(
-        "org_x",
+    let overview = overview_of(
         &members,
         None,
         Some(&current),
         |_, _| Some(lagging),
+        &[],
+        false,
         NOW,
     );
     assert!(!overview.members[0].ever_synced);
@@ -135,7 +172,7 @@ fn member_without_peer_has_no_state() {
     let members = vec![member('b', None), member('c', Some("  "))];
     let current = versions(100);
     let overview =
-        compute_org_sync_overview("org_x", &members, None, Some(&current), no_state(), NOW);
+        overview_of(&members, None, Some(&current), no_state(), &[], false, NOW);
     assert_eq!(overview.synced_peers, 0);
     assert_eq!(overview.total_members, 2);
     assert_eq!(overview.members[0].peer_id, None);
@@ -147,7 +184,7 @@ fn empty_root_id_members_skipped() {
     let mut blank = member('b', Some("peer-b"));
     blank.root_id = String::new();
     let members = vec![blank, member('c', None)];
-    let overview = compute_org_sync_overview("org_x", &members, None, None, no_state(), NOW);
+    let overview = overview_of(&members, None, None, no_state(), &[], false, NOW);
     assert_eq!(overview.total_members, 1);
 }
 
@@ -159,8 +196,7 @@ fn peer_id_is_trimmed_for_state_lookup() {
         last_synced_at: NOW,
     };
     let current = versions(100);
-    let overview = compute_org_sync_overview(
-        "org_x",
+    let overview = overview_of(
         &members,
         None,
         Some(&current),
@@ -174,6 +210,8 @@ fn peer_id_is_trimmed_for_state_lookup() {
             );
             Some(state)
         },
+        &[],
+        false,
         NOW,
     );
     assert_eq!(overview.members[0].peer_id.as_deref(), Some("peer-b"));
@@ -198,12 +236,13 @@ fn replica_sufficiency() {
         versions: versions(1),
         last_synced_at: NOW,
     };
-    let overview = compute_org_sync_overview(
-        "org_x",
+    let overview = overview_of(
         &members,
         Some(&rid('a')),
         Some(&current),
         |_, _| Some(fresh),
+        &[],
+        false,
         NOW,
     );
     assert_eq!(overview.synced_peers, 3);
@@ -336,4 +375,116 @@ fn status_strings_stable() {
     assert_eq!(OrgNetworkStatus::Lost.as_str(), "lost");
     assert_eq!(OrgNetworkStatus::Recovering.as_str(), "recovering");
     assert_eq!(OrgNetworkStatus::LocalOnly.as_str(), "localOnly");
+}
+
+// ---------------------------------------------------------------------------
+// batch2 §1.2：K 口径细分（hello 履职观测驱动，计数单元 = 数据账号 × PC 设备）
+// ---------------------------------------------------------------------------
+
+fn admin(root: char) -> OrganizationMember {
+    let mut m = member(root, None);
+    m.role = OrganizationRole::Admin;
+    m
+}
+
+fn duty_of(root: char, peer: &str, class: &str, at: i64) -> DutyObservation {
+    DutyObservation {
+        root_id: rid(root),
+        peer_id: peer.to_string(),
+        device_class: class.to_string(),
+        observed_at: at,
+    }
+}
+
+/// (1,1,1) 合格：三个数据账号各一台 PC 窗口内履职 → 组织级 3 ≥ K 且逐账号达标。
+#[test]
+fn k_sufficient_one_pc_per_account() {
+    let members = vec![admin('a'), admin('b'), admin('c')];
+    let duty = vec![
+        duty_of('a', "p-a", "pc", NOW),
+        duty_of('b', "p-b", "pc", NOW),
+        duty_of('c', "p-c", "pc", NOW),
+    ];
+    let overview = overview_of(&members, None, None, no_state(), &duty, true, NOW);
+    assert!(overview.k_applicable);
+    assert_eq!(overview.synced_peers, 3, "去重 PC 履职对合计");
+    assert!(overview.data_accounts.iter().all(|a| a.pc_synced));
+    assert!(overview.is_replica_sufficient(), "(1,1,1) 合格");
+}
+
+/// (3) 合格：单数据账号三台 PC 履职（小组织默认形态）→ 组织级 3 + 该账号达标。
+#[test]
+fn k_sufficient_single_account_three_pcs() {
+    let members = vec![admin('a')];
+    let duty = vec![
+        duty_of('a', "p-a1", "pc", NOW),
+        duty_of('a', "p-a2", "pc", NOW),
+        duty_of('a', "p-a3", "pc", NOW),
+    ];
+    let overview = overview_of(&members, None, None, no_state(), &duty, true, NOW);
+    assert_eq!(overview.synced_peers, 3);
+    assert!(overview.is_replica_sufficient(), "(3) 合格");
+}
+
+/// (2,0) 不达标：两数据账号，一个有 2 台 PC、一个空心（无履职）→ 组织级
+/// 不足 + 空心账号 → 不达标（只提醒，记录口径可辨识）。
+#[test]
+fn k_insufficient_hollow_account() {
+    let members = vec![admin('a'), admin('b')];
+    let duty = vec![
+        duty_of('a', "p-a1", "pc", NOW),
+        duty_of('a', "p-a2", "pc", NOW),
+    ];
+    let overview = overview_of(&members, None, None, no_state(), &duty, true, NOW);
+    assert_eq!(overview.synced_peers, 2, "空心账号不计");
+    let b = overview.data_accounts.iter().find(|a| a.root_id == rid('b')).unwrap();
+    assert!(!b.pc_synced, "空心数据账号标记不达标");
+    assert!(!overview.is_replica_sufficient(), "(2,0) 不达标");
+}
+
+/// all-members 组织无 K：不适用 → 不提醒（恒达标），成员级计数保持展示口径。
+#[test]
+fn k_not_applicable_for_all_members_org() {
+    let members = vec![member('a', None), member('b', None)];
+    let overview = overview_of(&members, None, None, no_state(), &[], false, NOW);
+    assert!(!overview.k_applicable, "无 data-accounts 集合 → 无 K");
+    assert!(overview.is_replica_sufficient(), "无 K 不提醒（恒达标）");
+    assert!(overview.data_accounts.is_empty());
+}
+
+/// 窗口外履职不计；mobile 不计；去重（同账号同设备重复观测算一对）。
+#[test]
+fn k_duty_window_and_device_class_and_dedup() {
+    let members = vec![admin('a'), admin('b'), admin('c')];
+    let duty = vec![
+        // 窗口外（30 天 + 1ms）→ 不计
+        duty_of('a', "p-a", "pc", NOW - ORG_REPLICA_FRESH_WINDOW_MS - 1),
+        // mobile 不计
+        duty_of('b', "p-b", "mobile", NOW),
+        // 重复观测同（账号, 设备）→ 去重算一对
+        duty_of('c', "p-c", "pc", NOW),
+        duty_of('c', "p-c", "pc", NOW - 1000),
+    ];
+    let overview = overview_of(&members, None, None, no_state(), &duty, true, NOW);
+    assert_eq!(overview.synced_peers, 1, "窗口外 + mobile + 去重后仅 1 对");
+    assert!(!overview.is_replica_sufficient());
+    // 窗口边界恰好 30 天仍计入
+    let duty_edge = vec![
+        duty_of('a', "p-a", "pc", NOW - ORG_REPLICA_FRESH_WINDOW_MS),
+        duty_of('b', "p-b", "pc", NOW),
+        duty_of('c', "p-c", "pc", NOW),
+    ];
+    let overview = overview_of(&members, None, None, no_state(), &duty_edge, true, NOW);
+    assert_eq!(overview.synced_peers, 3, "30 天边界仍计入");
+    assert!(overview.is_replica_sufficient());
+}
+
+/// 本机是数据账号且为 PC → 自证计入（无需 hello 自观测）。
+#[test]
+fn k_self_data_account_pc_counts() {
+    let members = vec![admin('a'), admin('b'), admin('c')];
+    let duty = vec![duty_of('b', "p-b", "pc", NOW), duty_of('c', "p-c", "pc", NOW)];
+    let overview = overview_of(&members, Some(&rid('a')), None, no_state(), &duty, true, NOW);
+    assert_eq!(overview.synced_peers, 3, "本机自证 + 两台观测 = 3");
+    assert!(overview.is_replica_sufficient());
 }

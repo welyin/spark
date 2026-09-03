@@ -1014,3 +1014,62 @@ fn acl_verify_reads_fresh_member_table_same_batch() {
         serde_json::from_str(&b.get(&acl_key).unwrap().expect("创世 acl 已落库")).unwrap();
     assert!(stored.is_owner(&a_root) && stored.is_reader(&b_root));
 }
+
+/// 卫生批项2（replica.rs overview 记账切 orgsync 平面）：验签成功的
+/// orgsync-hello 交换反哺 org-sync-state（账号口径）——纯 orgsync 双端的
+/// overview everSynced 不再恒为「未同步」。
+#[test]
+fn orgsync_hello_feeds_sync_state_overview() {
+    let (a_key, a_root) = self_identity(1);
+    let (_b_key, b_root) = self_identity(2);
+    let mut a = MemoryStorage::new();
+    let mut b = MemoryStorage::new();
+    for s in [&mut a, &mut b] {
+        save_org(
+            s,
+            ORG_ID,
+            vec![
+                (a_root.as_str(), OrganizationRole::Admin),
+                (b_root.as_str(), OrganizationRole::Member),
+            ],
+            &[],
+        );
+    }
+    spark_core::plugindata::declare_builtin_org_collections(&mut a, ORG_ID, &a_root, NOW, "node-a").unwrap();
+    spark_core::plugindata::declare_builtin_org_collections(&mut b, ORG_ID, &b_root, NOW, "node-b").unwrap();
+
+    // A hello → B：B 侧应记下「A 账号最近同步过」
+    let hello = build_hello_for(&a, ORG_ID, &b_root, "peer-b");
+    let r = deliver_orgsync(
+        &mut b, &b_root, "B", &a_key, &a_root, &b_root,
+        dm_envelope::KIND_ORGSYNC_HELLO, hello, "peer-a", "node-b",
+    );
+    assert_eq!(r.response, json!({ "ok": true }));
+    let state_key = spark_core::org::sync_state::org_sync_state_account_key(&a_root, ORG_ID);
+    let state = spark_core::org::sync_state::OrgSyncState::from_json(
+        &b.get(&state_key).unwrap().expect("orgsync 交换反哺 sync-state"),
+    )
+    .expect("state 解析");
+    assert_eq!(state.last_synced_at, NOW);
+
+    // overview 口径：A 账号 ever_synced（recentlySynced 窗口内）
+    let record = OrganizationService::get_record(&b, ORG_ID).unwrap().unwrap();
+    let versions = record.sync.as_ref().map(|s| s.versions);
+    let mut b2 = b.clone();
+    let overview = spark_core::org::compute_org_sync_overview(
+        &record,
+        Some(&b_root),
+        versions.as_ref(),
+        |root_id, legacy_peer| {
+            spark_core::org::sync_state::read_org_sync_state_account(&mut b2, root_id, ORG_ID, legacy_peer)
+        },
+        &[],
+        false,
+        |_| "pc",
+        NOW,
+    );
+    let member_a = overview.members.iter().find(|m| m.root_id == a_root).unwrap();
+    assert!(member_a.ever_synced, "反哺后 A 账号计入 everSynced");
+    let member_b = overview.members.iter().find(|m| m.root_id == b_root).unwrap();
+    assert!(member_b.ever_synced, "本机恒 everSynced");
+}

@@ -144,6 +144,13 @@ fn apply_patch_to_profile(profile: &mut ContactProfileRecord, patch: &ProfilePat
 
 impl ContactService {
     /// 写入朋友记录并 bump pmeta（pdsync P1）。
+    ///
+    /// **命名陷阱警示（同 F7 邀请记录的裁决口径）**：版本记账依赖调用方
+    /// 句柄——版本化句柄（kernel 门面）经中间件自动记账；**raw 句柄（入站
+    /// handler / worker）上沉默无记账**（记录无 pmeta，不进 pdsync 折叠）。
+    /// 卫生批普查结论：friend 系 raw 调用点不修——入站朋友记录的传播走
+    /// contact-sync 快照（LWW by updatedAt）通道而非 pdsync 折叠，现状成立；
+    /// 未来新增 raw 调用点须重新评估该前提。
     pub fn upsert_friend_pdsync<S: StorageBackend>(
         storage: &mut S,
         friend: &FriendRecord,

@@ -36,9 +36,23 @@ impl Kernel {
             .or_else(|| Some(build_organization_sync_versions_default(&record)));
         let now = system_now_ms();
         let mut state_storage = storage.clone();
+        // batch2 §1.2：K 口径证据 = hello 履职观测（设备粒度）+ data-accounts
+        // 集合声明适用性 + 设备类兜底查询
+        let duty: Vec<crate::org::DutyObservation> =
+            crate::sync::orgsync::orgq_da_duty_observations(storage, org_id)
+                .into_iter()
+                .map(|(root_id, peer_id, device_class, observed_at)| crate::org::DutyObservation {
+                    root_id,
+                    peer_id,
+                    device_class,
+                    observed_at,
+                })
+                .collect();
+        let has_data_collections =
+            crate::plugindata::org_has_data_account_collections(storage, org_id);
+        let class_storage = storage.clone();
         let mut overview = compute_org_sync_overview(
-            org_id,
-            &record.members,
+            &record,
             current_root_id.as_deref(),
             versions.as_ref(),
             |root_id_q, legacy_peer_id| {
@@ -49,39 +63,20 @@ impl Kernel {
                     legacy_peer_id,
                 )
             },
+            &duty,
+            has_data_collections,
+            |root_id| {
+                record
+                    .find_member(root_id)
+                    .map(|m| crate::org::roles::member_device_class(&class_storage, m))
+                    .unwrap_or("pc")
+            },
             now,
         );
-        self.fill_data_accounts_overview(&mut overview, &record);
         self.fill_org_network_status(&mut overview, now);
         Ok(overview)
     }
 
-    /// 填充 O1 两级记账的数据账号级概览（`dataAccounts`）：逐数据账号的
-    /// PC 设备达标状态。设备类经 [`crate::org::roles::member_device_class`]
-    /// 判定（无设备记录兜底 pc——宁可多算不漏算）。
-    fn fill_data_accounts_overview(
-        &self,
-        overview: &mut OrgSyncOverview,
-        record: &crate::org::OrganizationRecord,
-    ) {
-        let storage = self.require_storage().ok();
-        overview.data_accounts = crate::org::roles::data_account_set(record)
-            .into_iter()
-            .map(|root_id| {
-                let member_view = overview.members.iter().find(|m| m.root_id == root_id);
-                let device_class = record
-                    .find_member(&root_id)
-                    .zip(storage)
-                    .map(|(member, s)| crate::org::roles::member_device_class(s, member))
-                    .unwrap_or("pc");
-                crate::org::DataAccountOverview {
-                    root_id,
-                    pc_synced: device_class == "pc" && member_view.is_some_and(|m| m.ever_synced),
-                    device_class,
-                }
-            })
-            .collect();
-    }
 
     /// 填充副本概览的网络状态字段（org_overview 的扩展段）。
     ///

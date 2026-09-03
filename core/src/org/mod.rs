@@ -80,7 +80,7 @@ pub use recovery::{
     recovery_token,
 };
 pub use replica::{
-    DataAccountOverview, MemberSyncOverview, ORG_NETWORK_LOST_DEBOUNCE_MS,
+    DataAccountOverview, DutyObservation, MemberSyncOverview, ORG_NETWORK_LOST_DEBOUNCE_MS,
     ORG_REPLICA_FRESH_WINDOW_MS, ORG_REPLICA_TARGET, OrgNetworkStatus, OrgNetworkStatusInput,
     OrgSyncOverview, compute_org_sync_overview, covers_current, data_accounts_sufficient,
     decide_org_network_status, member_ever_synced, replica_sufficient,

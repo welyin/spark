@@ -97,3 +97,15 @@ pub fn apply_org_decl_convergent<S: StorageBackend>(
     }
     Ok(false)
 }
+
+/// 组织是否声明了 data-accounts 集合（overview K 口径适用性判定，batch2
+/// §1.2：只有 data-accounts 集合参与 K=3 记账；纯 all-members 组织无 K）。
+pub fn org_has_data_account_collections<S: StorageBackend>(storage: &S, org_id: &str) -> bool {
+    let prefix = format!("org:coll:{org_id}:");
+    storage
+        .scan(&crate::storage::ScanOptions::prefix(&prefix))
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|(_, raw)| serde_json::from_str::<CollectionDeclaration>(&raw).ok())
+        .any(|decl| decl.accounts == super::Accounts::DataAccounts)
+}

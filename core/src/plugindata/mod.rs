@@ -867,7 +867,7 @@ pub fn drop_version<S: StorageBackend>(
 pub mod blob;
 mod decl_converge;
 
-pub use decl_converge::apply_org_decl_convergent;
+pub use decl_converge::{apply_org_decl_convergent, org_has_data_account_collections};
 
 #[cfg(test)]
 mod tests;

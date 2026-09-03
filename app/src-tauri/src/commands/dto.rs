@@ -270,6 +270,9 @@ pub struct OrgSyncOverviewDto {
     pub dht_mode: String,
     /// 组织网络状态：good / unstable / lost / recovering / localOnly。
     pub status: String,
+    /// K 口径是否适用（组织有 data-accounts 集合；batch2 §1.2）。false =
+    /// 纯 all-members 组织无 K，不提醒。
+    pub k_applicable: bool,
     /// O1 两级记账：逐数据账号的 PC 设备达标状态（账号角色模型，
     /// org-data-sync §4）。
     pub data_accounts: Vec<DataAccountOverviewDto>,
@@ -326,6 +329,7 @@ impl From<OrgSyncOverview> for OrgSyncOverviewDto {
             last_connected_at: overview.last_connected_at,
             dht_mode: overview.dht_mode.as_str().to_string(),
             status: overview.status.as_str().to_string(),
+            k_applicable: overview.k_applicable,
             data_accounts: overview
                 .data_accounts
                 .into_iter()

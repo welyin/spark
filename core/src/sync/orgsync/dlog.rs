@@ -311,3 +311,35 @@ pub fn org_tombstone_local<S: StorageBackend>(
 
     Ok(meta)
 }
+
+/// 已退出成员的 org dlog 水位/已收键清理（卫生批项3）：`wm:`/`seen:` 键按
+/// (rootId, peerId) 设备粒度残留（GC 阈值计算已由 F8 修正为只取等待集合，
+/// 残留键不影响正确性但随成员更替累积）。成员移除时按 org 清理其全部
+/// 设备粒度的 wm/seen 键。
+///
+/// 键形：`dlog:org:{orgId}:{name}@v{version}:{wm|seen}:{rootId}:{peerId}`
+/// ——name 含 `:`（插件前缀），从**右**解析（peerId / rootId / 标记段）。
+/// 返回清理条数。
+pub fn org_dlog_remove_member_marks<S: StorageBackend>(
+    storage: &mut S,
+    org_id: &str,
+    root_id: &str,
+) -> SyncResult<usize> {
+    let prefix = format!("dlog:org:{org_id}:");
+    let mut removed = 0usize;
+    let mut ops = Vec::new();
+    for (key, _) in storage.scan(&ScanOptions::prefix(&prefix))? {
+        let Some(rest) = key.strip_prefix(&prefix) else { continue };
+        let mut segs = rest.rsplit(':');
+        let (_peer, root, marker) = (segs.next(), segs.next(), segs.next());
+        let (Some(root), Some(marker)) = (root, marker) else { continue };
+        if (marker == "wm" || marker == "seen") && root == root_id {
+            ops.push(crate::storage::BatchOperation::delete(key));
+            removed += 1;
+        }
+    }
+    if !ops.is_empty() {
+        storage.batch(ops)?;
+    }
+    Ok(removed)
+}

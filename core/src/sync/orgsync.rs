@@ -59,7 +59,8 @@ pub use collect::{
 pub use dlog::{
     is_in_replication_group, org_dlog_append_ops, org_dlog_current_seq, org_dlog_entries_after,
     org_dlog_gc, org_dlog_gc_threshold, org_dlog_get_seen, org_dlog_get_watermark,
-    org_dlog_set_seen, org_dlog_set_watermark, org_tombstone_local, replication_group_members,
+    org_dlog_remove_member_marks, org_dlog_set_seen, org_dlog_set_watermark, org_tombstone_local,
+    replication_group_members,
 };
 pub use envelope::{
     OrgsyncRecord, build_orgsync_data_batch, build_orgsync_hello, build_orgsync_need,
@@ -84,7 +85,8 @@ pub use orgq_deliver::{
 pub use orgq_online::{
     MemberReadPlan, member_orgq_read_plan, orgq_da_degraded_key, orgq_da_online_key,
     orgq_degraded_for_collection, orgq_mark_data_account_degraded, orgq_mark_data_account_online,
-    orgq_online_data_accounts, select_online_data_account, should_route_orgq,
+    orgq_da_duty_observations, orgq_note_data_account_duty, orgq_online_data_accounts,
+    select_online_data_account, should_route_orgq,
 };
 pub use orgq_queue::{
     orgq_queue_clear_by_collection, orgq_queue_drain, orgq_queue_drain_by_org, orgq_queue_has_data,

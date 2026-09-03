@@ -439,6 +439,16 @@ impl OrganizationService {
         record
             .data_accounts
             .retain(|rid| *rid != normalized_root_id);
+        // 卫生批项3：已退出成员的 org dlog 水位/已收键（wm/seen，设备粒度）
+        // 随移除清理——残留键虽已被 GC 阈值计算排除（F8 修正：min 只取等待
+        // 集合），但随成员更替累积。清理失败不阻断移除（残留仅积累噪音）。
+        if let Err(e) = crate::sync::orgsync::org_dlog_remove_member_marks(
+            storage,
+            org_id,
+            &normalized_root_id,
+        ) {
+            log::warn!("[ORG] remove member dlog marks cleanup failed: {e}");
+        }
         record.updated_at = now_ms;
         let previous_last_synced_at = record.sync.as_ref().map(|s| s.last_synced_at).unwrap_or(0);
         let transaction = append_organization_transaction(

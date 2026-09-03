@@ -72,6 +72,56 @@ pub fn orgq_mark_data_account_online<S: StorageBackend>(
     let _ = storage.put(&orgq_da_online_key(org_id, root_id), &now_ms.to_string());
 }
 
+// ── 履职观测（batch2 §1.2：overview K 记账的证据源）─────────────────────
+
+/// 数据账号履职观测键（设备粒度）：`orgq:da-duty:{orgId}:{rootId}:{peerId}`
+/// → `{"ts": ms, "deviceClass": "pc"|"mobile"}`。hello 入站 roles 含 "data"
+/// 时按设备记录——hello 即「我驻留 data-accounts 集合数据并可服务」的履职
+/// 声明（org-orgsync §20.3）。**本地键**（不进同步流量）；K 记账需要窗口期
+/// 持久观测（在线目录是瞬态语义，只记最近在线时刻、不带设备类）。
+pub fn orgq_da_duty_key(org_id: &str, root_id: &str, peer_id: &str) -> String {
+    format!("orgq:da-duty:{org_id}:{root_id}:{peer_id}")
+}
+
+/// 记录一次履职观测（hello 入站 roles 含 "data" + deviceClass）。
+pub fn orgq_note_data_account_duty<S: StorageBackend>(
+    storage: &mut S,
+    org_id: &str,
+    root_id: &str,
+    peer_id: &str,
+    device_class: &str,
+    now_ms: i64,
+) {
+    let value = serde_json::json!({ "ts": now_ms, "deviceClass": device_class });
+    let _ = storage.put(&orgq_da_duty_key(org_id, root_id, peer_id), &value.to_string());
+}
+
+/// 读取某组织的全部履职观测 → `(rootId, peerId, deviceClass, 观测时刻)`。
+pub fn orgq_da_duty_observations<S: StorageBackend>(
+    storage: &S,
+    org_id: &str,
+) -> Vec<(String, String, String, i64)> {
+    let prefix = format!("orgq:da-duty:{org_id}:");
+    storage
+        .scan(&crate::storage::ScanOptions::prefix(&prefix))
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|(key, raw)| {
+            // 键形 `...:{rootId}:{peerId}`，从右解析
+            let rest = key.strip_prefix(&prefix)?;
+            let (root_id, peer_id) = rest.rsplit_once(':')?;
+            let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+            let ts = v.get("ts").and_then(serde_json::Value::as_i64)?;
+            let device_class = v
+                .get("deviceClass")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("pc")
+                .to_string();
+            Some((root_id.to_string(), peer_id.to_string(), device_class, ts))
+        })
+        .collect()
+}
+
 /// 在线数据账号目录中某组织标记在线的数据账号（rootId, 最后在线时间戳）。
 pub fn orgq_online_data_accounts<S: StorageBackend>(
     storage: &S,
@@ -243,6 +293,25 @@ mod tests {
             is_public: false,
             extra: Default::default(),
         }
+    }
+
+    /// batch2 §1.2：履职观测键读写（设备粒度 + deviceClass + 观测时刻）。
+    #[test]
+    fn da_duty_observation_write_read() {
+        let mut s = crate::storage::MemoryStorage::new();
+        orgq_note_data_account_duty(&mut s, "org_01", "da-a", "peer-a1", "pc", 1000);
+        orgq_note_data_account_duty(&mut s, "org_01", "da-a", "peer-a2", "mobile", 2000);
+        orgq_note_data_account_duty(&mut s, "org_02", "da-x", "peer-x", "pc", 3000);
+        let obs = orgq_da_duty_observations(&s, "org_01");
+        assert_eq!(obs.len(), 2);
+        assert!(obs.contains(&("da-a".to_string(), "peer-a1".to_string(), "pc".to_string(), 1000)));
+        assert!(obs.contains(&("da-a".to_string(), "peer-a2".to_string(), "mobile".to_string(), 2000)));
+        assert_eq!(orgq_da_duty_observations(&s, "org_02").len(), 1);
+        // 覆盖写（同设备再次履职刷新时刻）
+        orgq_note_data_account_duty(&mut s, "org_01", "da-a", "peer-a1", "pc", 5000);
+        let obs = orgq_da_duty_observations(&s, "org_01");
+        assert_eq!(obs.len(), 2);
+        assert!(obs.contains(&("da-a".to_string(), "peer-a1".to_string(), "pc".to_string(), 5000)));
     }
 
     #[test]

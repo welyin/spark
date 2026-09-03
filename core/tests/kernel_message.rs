@@ -27,6 +27,7 @@ use spark_core::org::{OrgInviteDirection, OrgInviteRecord, OrgInviteStatus, Orga
 use spark_core::p2p::P2pEvent;
 use spark_core::p2p::node::system_now_ms;
 use spark_core::storage::MemoryStorage;
+use spark_core::storage::StorageBackend as _;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
@@ -3789,4 +3790,117 @@ fn sanitize_link_preview_rejects_non_http_schemes() {
         })
         .is_some()
     );
+}
+
+// ---------------------------------------------------------------------------
+// 阶段二批 §2.2/§2.3：friend 系两点补记账（accept 建朋友 / 重确认刷新 avatar）
+// ---------------------------------------------------------------------------
+
+/// accept 建朋友（本机新事实）→ 显式 put_personal 记账：pmeta 存在、vv 为
+/// 本机 per-node 序号、记录经 pdsync 增量可见；对端合入后双方折叠收敛
+/// Equal（无回声——put_personal 直调 raw 不 touch last_local_write_ms）。
+#[test]
+fn friend_accept_versions_record_for_pdsync_no_echo() {
+    let mut s = MemoryStorage::new();
+    let my_root = "aa".repeat(32);
+    let (key, from) = peer_root(7);
+    let outgoing =
+        ContactService::create_outgoing_request(&mut s, &from, "", "hi", "扫码", None, NOW)
+            .unwrap();
+    let body = json!({
+        "requestId": outgoing.id,
+        "nickname": "对方昵称",
+        "nodeInfo": { "peerId": "peer-a", "addresses": [] },
+    });
+    let envelope = dm_envelope::build_envelope("friend-accept", &from, &my_root, NOW, body, &key);
+    let result = handle_inbound_dm(
+        &mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE, None,
+    )
+    .unwrap();
+    assert_eq!(result.response, json!({ "ok": true }));
+
+    // 显式记账：pmeta 存在、本机 per-node 序号、nodeId 为本机
+    let friend_key = format!("ct:friend:{from}");
+    let meta = spark_core::sync::get_personal_meta(&s, &friend_key)
+        .unwrap()
+        .expect("accept 建朋友写 pmeta（阶段二批 §2.2 补记账）");
+    assert!(meta.vv.get(NODE).copied().unwrap_or(0) >= 1, "本机 per-node 序号");
+    assert_eq!(meta.node_id.as_deref(), Some(NODE));
+
+    // 记录经 pdsync 增量可见（legacy contact-sync 退役后传播不断）
+    let cat = spark_core::sync::pdsync::CATEGORIES
+        .iter()
+        .find(|c| c.name == "ct:friend")
+        .unwrap();
+    let inc = spark_core::sync::pdsync::collect_incremental(&s, cat, &Default::default(), None, 0)
+        .unwrap();
+    assert!(inc.iter().any(|r| r.key == friend_key), "pdsync 增量可见");
+
+    // 无回声：对端合入（保留远端 vv、不推本机分量）→ 双方折叠收敛 Equal
+    let mut t = MemoryStorage::new();
+    let value = s.get(&friend_key).unwrap().unwrap();
+    let r = spark_core::sync::apply_personal_remote(&mut t, &friend_key, &value, &meta).unwrap();
+    assert_eq!(r, spark_core::sync::ApplyResult::Applied);
+    let fold_s = spark_core::sync::pdsync::collect_category_vv(&s, cat, None).unwrap();
+    let fold_t = spark_core::sync::pdsync::collect_category_vv(&t, cat, None).unwrap();
+    assert_eq!(fold_s, fold_t, "双方折叠收敛一致");
+    let inc_t = spark_core::sync::pdsync::collect_incremental(&t, cat, &fold_s, None, 0).unwrap();
+    assert!(inc_t.is_empty(), "收敛后增量为空（Equal 不动点，无回声）");
+    // 对端再次被推同一版本 → Equal 幂等
+    let r2 = spark_core::sync::apply_personal_remote(&mut t, &friend_key, &value, &meta).unwrap();
+    assert_eq!(r2, spark_core::sync::ApplyResult::Equal);
+}
+
+/// 已是朋友又收申请（重确认捎带 avatar）→ 刷新记录 = 本机新事实，pmeta
+/// 本机分量推进（friend.rs:189 调用点补记账）。
+#[test]
+fn friend_reconfirm_avatar_refresh_versioned() {
+    let mut s = MemoryStorage::new();
+    let my_root = "aa".repeat(32);
+    let (key, from) = peer_root(7);
+    // 先建朋友（accept 流程）
+    let outgoing =
+        ContactService::create_outgoing_request(&mut s, &from, "", "hi", "扫码", None, NOW)
+            .unwrap();
+    let body = json!({
+        "requestId": outgoing.id,
+        "nickname": "对方昵称",
+        "nodeInfo": { "peerId": "peer-a", "addresses": [] },
+    });
+    let envelope = dm_envelope::build_envelope("friend-accept", &from, &my_root, NOW, body, &key);
+    handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE, None)
+        .unwrap();
+    let friend_key = format!("ct:friend:{from}");
+    let vv_before = spark_core::sync::get_personal_meta(&s, &friend_key)
+        .unwrap()
+        .unwrap()
+        .vv.get(NODE)
+        .copied()
+        .unwrap();
+
+    // 重确认：friend-request 捎带新 avatar（已是朋友 → 走刷新分支）
+    let avatar = "data:image/png;base64,AAAA";
+    let body2 = json!({
+        "requestId": "req-reconfirm",
+        "nickname": "对方昵称",
+        "avatar": avatar,
+        "nodeInfo": { "peerId": "peer-a", "addresses": [] },
+    });
+    let envelope2 =
+        dm_envelope::build_envelope("friend-request", &from, &my_root, NOW + 1, body2, &key);
+    let r2 = handle_inbound_dm(
+        &mut s, &my_root, "", envelope2, "peer-a", &HashSet::new(), NOW + 1, NODE, None,
+    )
+    .unwrap();
+    assert_eq!(r2.response["ok"], json!(true));
+
+    let friend = ContactService::get_friend(&s, &from).unwrap().unwrap();
+    assert_eq!(friend.avatar.as_deref(), Some(avatar), "avatar 已刷新");
+    let vv_after = spark_core::sync::get_personal_meta(&s, &friend_key)
+        .unwrap()
+        .unwrap()
+        .vv.get(NODE)
+        .copied()
+        .unwrap();
+    assert!(vv_after > vv_before, "刷新推进本机分量（{vv_before} → {vv_after}）");
 }

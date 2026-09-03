@@ -183,3 +183,25 @@ pub fn should_skip_share_push(
 pub fn is_org_sync_state_expired(last_synced_at: i64, now_ms: i64) -> bool {
     now_ms - last_synced_at > ORG_SYNC_STATE_MAX_AGE_MS
 }
+
+/// orgsync 平面活动反哺记账（replica.rs「overview 记账切 orgsync 平面」
+/// TODO 落地，卫生批）：与 `from` 成员的一次验签成功的 orgsync-hello/data
+/// 交换后，按账号口径写 sync-state（versions = 本机当前组织版本，
+/// lastSyncedAt = 现在）。
+///
+/// 语义：orgsync 反熵平面里「交换过 hello/data」即互为副本（内建
+/// all-members 集合全员全量，hello 摘要即覆盖证明）；`p2p:` 前缀键不进
+/// 同步流量，幂等覆盖（交换频繁时只是刷新时间戳）。
+pub fn note_orgsync_activity<S: crate::storage::StorageBackend>(
+    storage: &mut S,
+    record: &super::types::OrganizationRecord,
+    from_root_id: &str,
+    now_ms: i64,
+) {
+    let versions = super::resolve_local_versions(record);
+    let state = OrgSyncState {
+        versions,
+        last_synced_at: now_ms,
+    };
+    let _ = storage.put(&org_sync_state_account_key(from_root_id, &record.org_id), &state.to_json());
+}

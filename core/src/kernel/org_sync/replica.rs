@@ -21,7 +21,8 @@ use crate::p2p::peer_targets::PeerNodeInfo;
 /// 副本已足 / 非管理员 / 无未同步可寻址成员时返回空（零外联短路）。
 ///
 /// 拆出来便于单测：网络推送只在有返回值时发生，测试直接断言空/非空与目标集合。
-pub(crate) fn plan_replica_push_targets(
+pub(crate) fn plan_replica_push_targets<S: crate::storage::StorageBackend>(
+    storage: &S,
     record: &OrganizationRecord,
     actor_root_id: &str,
     mut state_lookup: impl FnMut(&str, Option<&str>) -> Option<OrgSyncState>,
@@ -36,12 +37,33 @@ pub(crate) fn plan_replica_push_targets(
         .as_ref()
         .map(|s| s.versions)
         .or_else(|| Some(resolve_local_versions(record)));
+    // batch2 §1.2：K 口径证据 = hello 履职观测 + data-accounts 声明适用性 +
+    // 设备类兜底（无观测时按设备记录，无记录兜底 pc）
+    let duty: Vec<crate::org::DutyObservation> =
+        crate::sync::orgsync::orgq_da_duty_observations(storage, &record.org_id)
+            .into_iter()
+            .map(|(root_id, peer_id, device_class, observed_at)| crate::org::DutyObservation {
+                root_id,
+                peer_id,
+                device_class,
+                observed_at,
+            })
+            .collect();
+    let has_data_collections =
+        crate::plugindata::org_has_data_account_collections(storage, &record.org_id);
     let overview = compute_org_sync_overview(
-        &record.org_id,
-        &record.members,
+        record,
         Some(actor_root_id),
         versions.as_ref(),
         &mut state_lookup,
+        &duty,
+        has_data_collections,
+        |root_id| {
+            record
+                .find_member(root_id)
+                .map(|m| crate::org::roles::member_device_class(storage, m))
+                .unwrap_or("pc")
+        },
         now_ms,
     );
     if overview.is_replica_sufficient() {
@@ -153,6 +175,24 @@ mod tests {
         None
     }
 
+    /// batch2 K 口径测试设施：含一条 data-accounts 集合声明的存储
+    ///（K 口径适用；纯 all-members 组织无 K 不做达标判定）。
+    fn storage_with_data_decl() -> crate::storage::MemoryStorage {
+        let mut s = crate::storage::MemoryStorage::new();
+        crate::storage::StorageBackend::put(
+            &mut s,
+            "org:coll:org-1:ai-chat:x@v1",
+            r#"{"name":"ai-chat:x","version":"1","accounts":"data-accounts"}"#,
+        )
+        .unwrap();
+        s
+    }
+
+    /// 写一条 PC 履职观测（hello roles 含 data + deviceClass=pc 的等价落库）。
+    fn duty(s: &mut crate::storage::MemoryStorage, root: &str, peer: &str, ts: i64) {
+        crate::sync::orgsync::orgq_note_data_account_duty(s, "org-1", root, peer, "pc", ts);
+    }
+
     /// 命中该成员 rootId → 返回最近同步过（30 天窗口内）的 sync-state，计入副本。
     /// `synced_roots` 集合内的成员视为已同步。
     fn synced_state<'a>(
@@ -174,7 +214,7 @@ mod tests {
     #[test]
     fn replica_insufficient_pushes_unsynced_members() {
         let record = admin_org("org-1", vec![member("a", "p-a"), member("b", "p-b")]);
-        let targets = plan_replica_push_targets(&record, "self", no_state, 1000);
+        let targets = plan_replica_push_targets(&mut storage_with_data_decl(), &record, "self", no_state, 1000);
         let got: Vec<String> = targets.iter().map(|t| t.1.clone()).collect();
         assert_eq!(
             got,
@@ -188,10 +228,12 @@ mod tests {
     /// 副本充足（含本机 ≥ K）→ 零外联（返回空，不推送）。
     #[test]
     fn replica_sufficient_no_push() {
-        // 本机 + 2 个已同步成员 = 3 ≥ K
+        // batch2 口径：本机（数据账号 PC 自证 1 对）+ 2 台 PC 履职观测 = 3 ≥ K
         let record = admin_org("org-1", vec![member("a", "p-a"), member("b", "p-b")]);
-        let synced = ["a".to_string(), "b".to_string()];
-        let targets = plan_replica_push_targets(&record, "self", synced_state(&synced), 1000);
+        let mut storage = storage_with_data_decl();
+        duty(&mut storage, "a", "p-a", 1000);
+        duty(&mut storage, "b", "p-b", 1000);
+        let targets = plan_replica_push_targets(&storage, &record, "self", no_state, 1000);
         assert!(targets.is_empty(), "副本已足 → 零外联");
     }
 
@@ -200,7 +242,7 @@ mod tests {
     fn non_admin_never_pushes() {
         let record = admin_org("org-1", vec![member("a", "p-a")]);
         // actor 非管理员（org 里没有的角色）
-        let targets = plan_replica_push_targets(&record, "not-admin", no_state, 1000);
+        let targets = plan_replica_push_targets(&mut storage_with_data_decl(), &record, "not-admin", no_state, 1000);
         assert!(targets.is_empty(), "非管理员不触发补副本");
     }
 
@@ -211,7 +253,7 @@ mod tests {
             "org-1",
             vec![member("a", "p-a"), member("b", "p-b"), member("c", "p-c")],
         );
-        let targets = plan_replica_push_targets(&record, "self", no_state, 1000);
+        let targets = plan_replica_push_targets(&mut storage_with_data_decl(), &record, "self", no_state, 1000);
         assert_eq!(targets.len(), 2, "每组织最多推送 2 个");
         assert_eq!(targets[0].1, "a");
         assert_eq!(targets[1].1, "b");
@@ -222,7 +264,7 @@ mod tests {
     fn replica_push_skips_unaddressable_member() {
         // 本机 + 一个无 nodeInfo 的未同步成员 → 副本不足但无可推目标
         let record = admin_org("org-1", vec![member("a", "")]);
-        let targets = plan_replica_push_targets(&record, "self", no_state, 1000);
+        let targets = plan_replica_push_targets(&mut storage_with_data_decl(), &record, "self", no_state, 1000);
         assert!(targets.is_empty(), "无寻址端点的成员不可推，返回空");
     }
 

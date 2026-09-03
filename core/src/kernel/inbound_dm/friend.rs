@@ -186,7 +186,17 @@ pub(super) fn handle_friend_request<S: StorageBackend>(
         if let Some(avatar) = &avatar {
             friend.avatar = Some(avatar.clone());
             friend.updated_at = ctx.now_ms;
-            ContactService::upsert_friend_pdsync(storage, &friend, ctx.now_ms, ctx.node_id)?;
+            // 记账（阶段二批裁决 §2.2）：重确认刷新本人侧朋友记录 = 本机新事实
+            // → raw 句柄直调 put_personal（对齐 orgq/F7 先例；无回声分析见
+            // org-followups-batch2 §2.2）。
+            let friend_key = format!("{}{}", crate::contact::FRIEND_PREFIX, friend.root_id);
+            crate::sync::put_personal(
+                storage,
+                ctx.node_id,
+                &friend_key,
+                &serde_json::to_string(&friend)?,
+                ctx.now_ms,
+            )?;
         }
         let auto_accept = peer.map(|p| AutoAccept {
             target: PeerNodeInfo {

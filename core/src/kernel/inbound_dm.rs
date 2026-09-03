@@ -437,10 +437,22 @@ pub fn merge_friend_record<S: StorageBackend>(
             friend.peers.push(safe_peer);
         }
     }
-    // 接受产生的朋友记录是本机状态变更：刷新 LWW 时间（随 contact-sync
-    // 传播到其他自设备）
+    // 接受产生的朋友记录是本机状态变更：刷新 LWW 时间。
+    //
+    // 记账（阶段二批裁决 §2.2）：本机新事实（我接受 → 朋友关系成立）→ 本机
+    // 分量记账——raw 句柄上直调 put_personal（对齐 orgq/F7 先例；
+    // `upsert_friend_pdsync` 记账已下沉中间件，raw 上沉默无记账）。
+    // put_personal 不 touch last_local_write_ms（无即时 hello 回声）；双方
+    // 写不同键（A 写 ct:friend:B、B 写 ct:friend:A），无共享键并发互灌。
     friend.updated_at = now_ms;
-    ContactService::upsert_friend_pdsync(storage, &friend, now_ms, node_id)?;
+    let friend_key = format!("{}{}", crate::contact::FRIEND_PREFIX, friend.root_id);
+    crate::sync::put_personal(
+        storage,
+        node_id,
+        &friend_key,
+        &serde_json::to_string(&friend)?,
+        now_ms,
+    )?;
     // pdsync/好友接受等所有好友合并路径统一回填优先集合（§4.4；已拉黑不加入）
     if !friend.blocked {
         let mut priority = crate::p2p::priority_peers::PriorityPeerStore::new(storage);

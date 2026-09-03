@@ -785,3 +785,30 @@ fn builtin_collection_tombstones_are_filtered_to_key_domain() {
     let structure = collect_org_tombstones_after(&s, "org_01", "org:structure", "1", 0).unwrap();
     assert!(structure.is_empty(), "键域外墓碑不误采集");
 }
+
+/// 卫生批项3：已退出成员的 org dlog wm/seen 键清理——按 org 清该成员全部
+/// 设备粒度键，其他成员/其他 org 的键不受影响。
+#[test]
+fn org_dlog_remove_member_marks_scoped() {
+    use crate::plugindata::{org_dlog_seen_key, org_dlog_wm_key};
+    let mut s = MemoryStorage::new();
+    let org = "org_01";
+    let (x, y) = ("x".repeat(64), "y".repeat(64));
+    // X 的两台设备 wm + seen（两个集合）+ Y 的一台 + 另一个 org 的 X
+    let keys = vec![
+        org_dlog_wm_key(org, "ai-chat:finance", "1.0.0", &x, "peer-x1"),
+        org_dlog_seen_key(org, "ai-chat:finance", "1.0.0", &x, "peer-x2"),
+        org_dlog_wm_key(org, "org:structure", "1", &x, "peer-x1"),
+        org_dlog_wm_key(org, "ai-chat:finance", "1.0.0", &y, "peer-y1"),
+        org_dlog_wm_key("org_02", "ai-chat:finance", "1.0.0", &x, "peer-x1"),
+    ];
+    for k in &keys {
+        s.put(k, "3").unwrap();
+    }
+    let removed = super::dlog::org_dlog_remove_member_marks(&mut s, org, &x).unwrap();
+    assert_eq!(removed, 3, "X 在本 org 的 wm+seen 全清");
+    assert!(s.get(&keys[3]).unwrap().is_some(), "Y 的键保留");
+    assert!(s.get(&keys[4]).unwrap().is_some(), "其他 org 的 X 键保留");
+    // 幂等：再清为零
+    assert_eq!(super::dlog::org_dlog_remove_member_marks(&mut s, org, &x).unwrap(), 0);
+}

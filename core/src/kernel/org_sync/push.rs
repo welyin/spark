@@ -347,6 +347,7 @@ impl OrgSyncContext {
             }
         };
         let targets = plan_replica_push_targets(
+            &self.storage,
             &record,
             actor_root_id,
             |root_id_q, legacy_peer_id| {
