@@ -406,6 +406,21 @@ fn orgkey_pending_resend_receiver_unboxes_epoch_key() {
     });
     let mut raw_mut = raw.clone();
     OrganizationService::save_record(&mut raw_mut, &record).unwrap();
+    // 阶段四A P1-a 双写口径：测试直写绕过原子段，须同步 BOB 成员条目——
+    // 装配视图以条目为权威，grant/add_member 双写的旧条目（无 accessKey/
+    // nodeInfo）会盖住 whole 的直写回填。
+    let bob_entry = record
+        .members
+        .iter()
+        .find(|m| m.root_id == BOB)
+        .unwrap()
+        .clone();
+    raw_mut
+        .put(
+            &crate::org::types::org_member_key(&org_id, BOB),
+            &serde_json::to_string(&bob_entry).unwrap(),
+        )
+        .unwrap();
 
     // hello 触发重投装配（host 接线路径 `spawn_orgkey_pending_resend` 的同一
     // 原语；无节点句柄时不实际发送，直接取装配产物验证线上形态）。

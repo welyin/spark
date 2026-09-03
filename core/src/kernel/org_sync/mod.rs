@@ -12,7 +12,8 @@
 //!    rootId）恒拒——跨身份反推从未生效（仅同身份多设备成立）。Rust 先按对端
 //!    peerId 在组织成员表里反查目标 rootId，查不到才回退 TS 原值（同身份
 //!    多设备路径不受影响）。
-//! 2. 推送触发点与 TS 一致（addMember / claim 落库后，尽力而为），但 TS 的
+//! 2. 推送触发点与 TS 一致（addMember 后，尽力而为；阶段四A P2 起 claim
+//!    通道退役，「claim 落库后推送」触发点随之消失），但 TS 的
 //!    "先推送后落库"顺序拉平为"落库后异步推送"（kernel 门面为同步 API，
 //!    推送经 worker 队列异步执行；TS 推送失败本就只 warn 不阻断落库）。
 //! 3. removeMember / applyIncomingOrgShare 不触发推送（与 TS 一致——移除经
@@ -201,7 +202,7 @@ pub(crate) enum OrgSyncRequest {
     PushOrg {
         /// 组织 id。
         org_id: String,
-        /// 操作者 rootId（addMember 为当前管理员，claim 落库后为本机当前用户）。
+        /// 操作者 rootId（addMember 为当前管理员）。
         actor_root_id: String,
     },
     /// keepalive tick 的组织层保活（只读可达性发布 + 已连接集上的反熵/hello；
@@ -319,8 +320,8 @@ pub(crate) struct OrgSyncContext {
     /// tick 四阶段超时预算（org-sync-stall-fix §3.2；测试可注入缩短值）。
     pub(crate) tick_budgets: TickStageBudgets,
     /// org:meta 写路径原子段互斥锁（org-meta-rmw-fix §2.2，F8）：kernel
-    /// `io_lock` 同一把——worker 的 org:meta 写（pull 快照应用/claim 回填/
-    /// recovery 补齐）经 `update_record_atomic` 持锁，与入站落库互斥。
+    /// `io_lock` 同一把——worker 的 org:meta 写（pull 快照应用/recovery
+    /// 补齐）经 `update_record_atomic` 持锁，与入站落库互斥。
     pub(crate) io_lock: Arc<Mutex<()>>,
 }
 
@@ -443,8 +444,9 @@ fn generate_sync_id() -> String {
 ///
 /// 多设备同步修复：候选额外纳入**同身份已配对自设备**（个人空间
 /// rootId==自己 且带 peer 寻址的朋友记录）——自设备间经 org-pull 反熵
-/// 对账（pull-list 捎带自签 claim → 逐组织快照合并），新设备由此从在线
-/// 自设备拉回「我的组织」全量记录；`local_peer_id`（本机）排除在外。
+/// 对账（P2 L2 claim 退役后 pull-list 不再捎带 claim，逐组织快照合并
+/// 不变），新设备由此从在线自设备拉回「我的组织」全量记录；
+/// `local_peer_id`（本机）排除在外。
 fn collect_org_peer_candidates(
     storage: &crate::kernel::KernelStorage,
     current_root_id: &str,

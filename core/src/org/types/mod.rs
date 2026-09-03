@@ -27,8 +27,9 @@ pub use member::{
     sort_members,
 };
 pub use normalize::{
-    ORG_META_PREFIX, generate_org_secret, generate_organization_id, generate_recovery_secret,
-    is_valid_root_id, normalize_plugin_domain, normalize_root_id, normalize_text, organization_key,
+    ORG_META_PREFIX, ORG_MEMBER_PREFIX, generate_org_secret, generate_organization_id,
+    generate_recovery_secret, is_valid_root_id, normalize_plugin_domain, normalize_root_id,
+    normalize_text, org_member_key, organization_key,
 };
 pub use record::{
     OrganizationRecord, OrganizationSyncSection, OrganizationSyncState, OrganizationSyncVersions,

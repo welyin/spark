@@ -316,6 +316,9 @@ pub enum P2pEvent {
     /// 组织邀请状态更新（入站 org-invite-reply 校验通过并落库后发出；
     /// data 为更新后的 `OrgInviteRecord` JSON，前端按 id upsert）。
     OrgInviteUpdated(serde_json::Value),
+    /// 本机被移出组织（入站 org-member-removed 校验通过并本地擦除后发出，
+    /// 阶段四A P2 L3）；data 为 `{"orgId"}`，前端刷新组织列表。
+    OrgRemoved(serde_json::Value),
     /// 社交定向投递入站（feed 信封验签/解密/落收件箱后发出，social-feed §8）。
     /// data 为 `{"topic", "from", "feedId", "payload", "ts", "replyTo"?}`，
     /// 前端/插件按 topic 前缀路由到对应插件实时刷新（pull 补读兜底）。

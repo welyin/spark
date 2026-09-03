@@ -252,7 +252,7 @@ impl OrgSyncContext {
                         );
                         break;
                     }
-                    if let Err(e) = self.reconcile_from_peer(candidate, true).await {
+                    if let Err(e) = self.reconcile_from_peer(candidate).await {
                         self.warn(format!(
                             "[p2p][keepalive] pull from candidate failed: peerId={:?}, error={e}",
                             candidate.peer_id
@@ -274,7 +274,7 @@ impl OrgSyncContext {
         self.run_tick_stage(
             "S3",
             budgets.orgsync_hello,
-            self.maybe_send_orgsync_hello(&root_id, &connected),
+            self.maybe_send_orgsync_hello(&root_id, &connected, None),
         )
         .await;
     }

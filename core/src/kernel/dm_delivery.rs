@@ -32,7 +32,7 @@ pub(crate) use addressing::{
     heal_self_friend_to_healthy_device, heal_self_pointing_friend_record,
     list_self_device_peer_infos,
 };
-pub(crate) use flush::{flush_pending_for_recipient, is_terminal_rejection};
+pub(crate) use flush::{flush_pending_for_recipient, is_terminal_rejection, org_pending_removed_targets};
 pub(crate) use spawn::{deliver_with_retry, delivery_needs_retry, enqueue_sync_pending};
 
 /// 退避重试节奏（[`Kernel::spawn_deliveries_with_retry`]）：首次失败后 +2s、+5s。

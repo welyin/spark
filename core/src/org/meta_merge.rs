@@ -103,6 +103,26 @@ pub fn merge_org_meta_record(
     }
 }
 
+/// 成员级合并（阶段四A P1：F1 的成员条目部分独立成函数，降级复用——
+/// whole 合并退役到 summary 字段组后，成员条目并发由本函数裁决）。
+///
+/// 秩 = `(pmeta.ts, canonical 字节)` 字典序（成员条目自身无 updatedAt
+/// 字段，秩由调用方从该条目的 pmeta 给），大者秩高；accessKey 写一次 +
+/// nodeInfo 按 deviceUid 并集 + extra 并集（与 `merge_member` 同口径）。
+pub fn merge_member_record(
+    existing: &OrganizationMember,
+    incoming: &OrganizationMember,
+    existing_rank: &(i64, String),
+    incoming_rank: &(i64, String),
+) -> OrganizationMember {
+    let (high, low) = if existing_rank >= incoming_rank {
+        (existing, incoming)
+    } else {
+        (incoming, existing)
+    };
+    merge_member(low, high)
+}
+
 /// 逐成员分字段组合并（`low`/`high` 为同 rootId 成员在两侧记录中的版本，
 /// 按所属记录的秩定高低——记录秩是整份记录的属性，逐成员沿用）。
 fn merge_member(low: &OrganizationMember, high: &OrganizationMember) -> OrganizationMember {
@@ -468,5 +488,91 @@ mod tests {
         let mut sorted = keys.clone();
         sorted.sort();
         assert_eq!(keys, sorted, "extra 键序归一（字典序）");
+    }
+
+    // ── 阶段四A P1：merge_member_record（条目级并发合并）──────────────────
+
+    /// 条目秩 = (pmeta.ts, canonical 字节)，大者秩高。
+    fn entry_rank(ts: i64, m: &OrganizationMember) -> (i64, String) {
+        (ts, serde_json::to_string(m).unwrap_or_default())
+    }
+
+    /// accessKey 写一次守卫下沉到成员记录合入：本地 Some vs incoming None →
+    /// 保留本地（不论秩高低）；两侧 Some 且不同 → 确定性取秩高侧（方向无关）。
+    #[test]
+    fn member_record_merge_access_key_write_once() {
+        let mut local = member("root-x", OrganizationRole::Member, 1000);
+        local.access_key = Some(access_key(1));
+        let incoming = member("root-x", OrganizationRole::Admin, 1000);
+        // incoming 秩更高（ts 大）但无 accessKey → 本地 accessKey 保留，
+        // 管理员字段组（role）仍取秩高侧
+        let merged = merge_member_record(
+            &local,
+            &incoming,
+            &entry_rank(2000, &local),
+            &entry_rank(2001, &incoming),
+        );
+        assert_eq!(merged.access_key, Some(access_key(1)), "本地 accessKey 保留");
+        assert_eq!(merged.role, OrganizationRole::Admin, "role 取秩高侧");
+        // 反向同结论（确定性）
+        let rev = merge_member_record(
+            &incoming,
+            &local,
+            &entry_rank(2001, &incoming),
+            &entry_rank(2000, &local),
+        );
+        assert_eq!(
+            serde_json::to_string(&merged).unwrap(),
+            serde_json::to_string(&rev).unwrap(),
+            "方向无关（逐字节）"
+        );
+
+        // 两侧 Some 且不同（异常分叉）：取秩高侧 + 方向无关
+        let mut other = member("root-x", OrganizationRole::Member, 1000);
+        other.access_key = Some(access_key(2));
+        let m1 = merge_member_record(
+            &local,
+            &other,
+            &entry_rank(2000, &local),
+            &entry_rank(2001, &other),
+        );
+        let m2 = merge_member_record(
+            &other,
+            &local,
+            &entry_rank(2001, &other),
+            &entry_rank(2000, &local),
+        );
+        assert_eq!(m1.access_key, m2.access_key, "分叉选取方向无关");
+        assert_eq!(m1.access_key, Some(access_key(2)), "秩高侧胜出");
+    }
+
+    /// 条目级合并的并集语义：nodeInfo 端点集按 deviceUid 并集、extra 并集
+    /// （冲突取秩高侧）；低秩侧独有的本人字段组字段随字段组整组取舍（与
+    /// whole 合并的成员条目部分同口径——字段组按条目秩整组选取）。
+    #[test]
+    fn member_record_merge_unions_and_rank_pick() {
+        let mut a = member("root-x", OrganizationRole::Member, 1000);
+        a.node_info = Some(OrganizationDeviceSet::from_single(endpoint(
+            "peer-1",
+            Some("uid-1"),
+        )));
+        a.nickname = Some("低秩昵称".to_string());
+        a.extra.insert("k-low".to_string(), serde_json::json!("l"));
+        let mut b = member("root-x", OrganizationRole::Member, 1000);
+        b.node_info = Some(OrganizationDeviceSet::from_single(endpoint(
+            "peer-2",
+            Some("uid-2"),
+        )));
+        b.signature = Some("高秩签名".to_string());
+        b.extra.insert("k-high".to_string(), serde_json::json!("h"));
+
+        let merged = merge_member_record(&a, &b, &entry_rank(2000, &a), &entry_rank(2001, &b));
+        let set = merged.node_info.as_ref().unwrap();
+        assert_eq!(set.len(), 2, "nodeInfo 端点并集");
+        assert_eq!(merged.extra["k-low"], serde_json::json!("l"), "extra 并集");
+        assert_eq!(merged.extra["k-high"], serde_json::json!("h"));
+        // 本人字段组整组取秩高侧（B）：B 未改 nickname → None 覆盖低秩侧昵称
+        assert_eq!(merged.nickname, None, "本人字段组随秩高侧整组选取");
+        assert_eq!(merged.signature.as_deref(), Some("高秩签名"));
     }
 }

@@ -103,8 +103,10 @@ pub(crate) struct KernelHost {
     pub(crate) current_root_id: Arc<Mutex<Option<String>>>,
     pub(crate) collection_configs: CollectionConfigs,
     pub(crate) org_acks: SharedOrgShareAckTracker,
-    /// claim 落库后的推送通知（org-sync 请求队列）：host 处于同步上下文，
-    /// 异步推送由 kernel 的 org-sync worker 消费（对齐 service.ts:450）。
+    /// org 事件的推送通知（org-sync 请求队列）：host 处于同步上下文，
+    /// 异步推送由 kernel 的 org-sync worker 消费（对齐 service.ts:450；P2 前
+    /// 为「claim 落库后推送」触发点，claim 退役后该来源恒空）。
+    /// P2 起亦承载 org-member-removed 通知失败的 pending 补投（L3）。
     pub(crate) push_notify: tokio::sync::mpsc::UnboundedSender<super::org_sync::OrgSyncRequest>,
     /// dm 入站事件的广播通道（ChatReceived/ChatStatus/FriendRequest* 由
     /// [`super::inbound_dm`] 产出，host 在此 emit 给壳层订阅者）。
@@ -258,6 +260,19 @@ impl P2pHost for KernelHost {
             now,
         )
         .map_err(|e| e.to_string())?;
+        // 阶段四A P1 混跑兼容（设计 §6）：legacy 快照平面只有 whole——合入后
+        // 就地投影成员条目（远端语义不 bump 本机；与 orgsync 平面
+        // `inbound_dm/orgsync/data.rs` 的 whole 合入点同款挂点）。
+        if let Ok(whole_meta) =
+            crate::sync::get_personal_meta(&self.storage, &crate::org::types::organization_key(&merged.org_id))
+        {
+            let _ = crate::org::service::project_member_entries_from_whole(
+                &mut self.storage,
+                &merged.org_id,
+                &merged.members,
+                &whole_meta.unwrap_or_default(),
+            );
+        }
         // F3 残余 §7.1（评审复核点）：org:meta 成员表（accessKey 段）也可经
         // legacy 快照平面到达——合入后同样重评估 orgkey-deliver 暂存
         // （orgsync 平面同款触发在 `inbound_dm/orgsync.rs`）。暂存通常为空，
@@ -283,29 +298,9 @@ impl P2pHost for KernelHost {
                 self.dm_handler_impl()
                     .apply_orgkey_unbox(&receiver_root_id, &unbox);
             }
-            // F4 第二层（batch3 §1.2）：legacy 快照平面的 org:meta 合入同样
-            // 挂成员表对账（invitee 已在成员表 ⟹ 必已接受 → outbound pending
-            // 原地标 accepted + 投影同步 + OrgInviteUpdated 事件）。
-            let node_id = self
-                .node_shared
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .as_ref()
-                .map(|node| node.peer_id().to_string())
-                .unwrap_or_else(|| super::doc_ops::persisted_sync_node_id(&self.storage));
-            if let Ok(reconciled) = crate::org::service::reconcile_outbound_invites_with_members(
-                &mut self.storage,
-                &merged,
-                now,
-                &node_id,
-                &receiver_root_id,
-            ) {
-                for inv in reconciled {
-                    let _ = self.event_tx.send(crate::p2p::P2pEvent::OrgInviteUpdated(
-                        serde_json::to_value(&inv).unwrap_or(Value::Null),
-                    ));
-                }
-            }
+            // 阶段四A P2：F4 成员表对账挂点已从 legacy 快照平面**挪净**——
+            // 组织对账由 orgsync 平面的 org:meta 合入点承担
+            // （`inbound_dm/orgsync/data.rs`，batch3 §1.2 同款挂点）。
         }
         // pluginDocs 随快照捎带（plugin-org-sync.ts `applyPluginDocSyncItems`）
         if !plugin_docs.is_empty() {
@@ -338,9 +333,10 @@ impl P2pHost for KernelHost {
         }))
     }
 
-    /// org-pull-list 响应（org-pull-sync.ts:149-198）：先处理 claim（仅已知
-    /// 成员）→ 重读记录 → 成员身份过滤。claim 落库的组织经 push_notify 通知
-    /// org-sync worker 推送（service.ts:450 落库后推送的异步化）。
+    /// org-pull-list 响应（org-pull-sync.ts:149-198）：成员身份过滤生成组织
+    /// 列表。阶段四A P2（L2 claim 退役）：nodeInfoClaim 不再落库——成员端点
+    /// 由成员自写 `org:member` 条目经 orgsync 扩散；`handle_pull_list_request`
+    /// 第二返回元（原 claim 落库组织列表）恒空，推送通知段随之空置。
     fn handle_org_pull_list(
         &mut self,
         payload: Value,
@@ -361,7 +357,8 @@ impl P2pHost for KernelHost {
             now,
         )
         .map_err(|e| e.to_string())?;
-        // claim 落库后向已知成员推送（actor = 本机当前用户，service.ts:450-451）
+        // P2 claim 退役后恒空（无落库组织 → 无推送触发）；段保留以稳结构，
+        // P4 入站清除时随 legacy 平面一并删除
         if let Some(actor) = current {
             for org_id in applied_orgs {
                 let _ = self
@@ -504,6 +501,13 @@ impl P2pHost for KernelHost {
                         org_targets.push((record.org_id.clone(), member.root_id.clone()));
                     }
                 }
+            }
+            // P2 L3：org-member-removed 补投——被移除者已出成员表，上方反查
+            // 覆盖不到；按 pending 记录 body 内嵌的 targetPeerIds 快照匹配
+            for (org_id, to_root_id) in
+                super::dm_delivery::org_pending_removed_targets(&self.storage, peer_id)
+            {
+                org_targets.push((org_id, to_root_id));
             }
             if !org_targets.is_empty() {
                 if let Some(node) = self

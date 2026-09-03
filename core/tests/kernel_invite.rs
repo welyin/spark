@@ -14,8 +14,14 @@ use spark_core::org::{
 };
 use spark_core::p2p::P2pEvent;
 use spark_core::p2p::node::system_now_ms;
+use spark_core::storage::StorageBackend;
 
 use common::*;
+
+/// join 通道开关是进程级 AtomicBool（阶段四A P2）——翻转它的 legacy 用例
+/// 与跑新通道（默认）的用例必须互斥（同一测试二进制并行线程，翻转窗口
+/// 会击穿对侧断言；评测 READ_ASSEMBLY 的 ASSEMBLY_LOCK 同手法）。
+static JOIN_FLAG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[test]
 fn accept_invite_guard_errors() {
@@ -123,6 +129,10 @@ impl spark_core::p2p::P2pHost for InviteAdminHost {
 
 #[test]
 fn accept_invite_full_flow() {
+    // 本用例的邀请方是只服务 org-pull 的原始 P2pNode（不应答 orgsync）——
+    // 钉 legacy join 通道（P2 回退开关）；与新通道用例互斥。
+    let _g = JOIN_FLAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    spark_core::kernel::set_join_via_orgsync(false);
     // 加入方 kernel（先建身份，管理员记录需要预录其 rootId）
     let joiner_dir = tempfile::tempdir().unwrap();
     let mut joiner = fresh_kernel(joiner_dir.path());
@@ -243,6 +253,7 @@ fn accept_invite_full_flow() {
 
     joiner.shutdown().unwrap();
     rt.block_on(admin_node.stop());
+    spark_core::kernel::set_join_via_orgsync(true); // 恢复默认（新通道）
 }
 
 // ---------------------------------------------------------------------------
@@ -309,9 +320,12 @@ fn org_share_push_delivers_between_kernels() {
     kernel_b.shutdown().unwrap();
 }
 
-/// org-pull 响应方接线：双 kernel accept_invite 全流程（邀请方也是 kernel）。
+/// P2 join 新通道全流程：双 kernel accept_invite（邀请方也是 kernel）——
+/// stub 自举 + 即时 orgsync-hello → 邀请人回推 data → 收敛落库确认；
+/// 成员自写条目取代 claim 回填（B 的端点经 org:member 条目扩散到 A）。
 #[test]
 fn accept_invite_two_kernels_full() {
+    let _g = JOIN_FLAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir_a = tempfile::tempdir().unwrap();
     let dir_b = tempfile::tempdir().unwrap();
     let mut kernel_a = fresh_kernel(dir_a.path());
@@ -321,7 +335,7 @@ fn accept_invite_two_kernels_full() {
     kernel_a.start_p2p().unwrap();
     kernel_b.start_p2p().unwrap();
 
-    // A 建组织 + 预录 B（无 nodeInfo——邀请码引导 claim 回填）
+    // A 建组织 + 预录 B（无 nodeInfo——P2 起由 B 自写条目扩散端点）
     let view = kernel_a
         .create_org(CreateOrganizationInput {
             name: "邀请组织".to_string(),
@@ -345,34 +359,50 @@ fn accept_invite_two_kernels_full() {
         system_now_ms(),
     ));
 
-    // B 接受邀请：connect → pull-list（捎带 claim）→ pull-org → 落库确认
+    // B 接受邀请：connect → stub 自举 + orgsync-hello → 收敛 → 落库确认
     let acceptance = kernel_b.accept_invite(&code).unwrap();
     assert_eq!(acceptance.org_id, org_id);
     assert_eq!(acceptance.member_count, 2);
     let mine_b = kernel_b.list_orgs().unwrap();
     assert_eq!(mine_b.len(), 1);
     assert!(!mine_b[0].is_current_user_admin);
-
-    // A 侧 claim 已回填 B 的 nodeInfo（handle_org_pull_list 的 claim 应用路径）
-    let record_a = kernel_a.list_orgs().unwrap();
-    let b_member = record_a[0]
-        .members
-        .iter()
-        .find(|m| m.root_id == root_b)
-        .expect("B 是成员");
+    // B 侧 stub 已与真实记录合并（updatedAt 取真实值，非 stub 的 0）
+    assert!(mine_b[0].record.updated_at > 0, "stub 已被真实版本合并");
+    // B 的成员条目已自写（含本机端点；L2 claim 退役的取代通道）
+    let b_entry_key = spark_core::org::types::org_member_key(&org_id, &root_b);
+    let b_entry_raw = kernel_b
+        .__test_storage()
+        .unwrap()
+        .get(&b_entry_key)
+        .unwrap()
+        .expect("B 自写成员条目");
     let b_peer = kernel_b.p2p_status().unwrap().unwrap().peer_id.unwrap();
-    assert_eq!(
-        b_member
-            .node_info
-            .as_ref()
-            .unwrap()
-            .iter()
-            .next()
-            .unwrap()
-            .peer_id
-            .as_deref(),
-        Some(b_peer.as_str()),
-        "claim 回填 B 的 peerId"
+    assert!(
+        b_entry_raw.contains(&b_peer),
+        "B 条目携带本机 peerId（端点自写）"
+    );
+
+    // A 侧经 orgsync 收敛见到 B 的端点（装配视图：B 条目覆盖 whole）——
+    // 取代原「claim 回填 B 的 nodeInfo」断言（claim 通道已退役）
+    wait_until(
+        || {
+            kernel_a
+                .list_orgs()
+                .ok()
+                .and_then(|orgs| {
+                    orgs[0]
+                        .members
+                        .iter()
+                        .find(|m| m.root_id == root_b)
+                        .and_then(|m| m.node_info.clone())
+                })
+                .is_some_and(|set| {
+                    set.iter()
+                        .any(|e| e.peer_id.as_deref() == Some(b_peer.as_str()))
+                })
+        },
+        30_000,
+        "A 侧经 orgsync 收敛见到 B 的端点（成员自写条目）",
     );
 
     // A 再加一名成员：触发向已知成员推送 → B 收到更新（成员数 3）

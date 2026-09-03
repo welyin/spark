@@ -1,5 +1,6 @@
 //! orgsync-data 入站（从 `orgsync` 拆出，文件长度硬线）：逐条合入 + B3 键域
-//! 白名单 + acl/org:meta/声明三个分流分支 + 删除日志回执。零逻辑变化。
+//! 白名单 + acl/org:meta/org:member/声明四个分流分支 + 删除日志回执。
+//! （阶段四A P1：新增 org:member per-member 记录分支与 whole 合入就地投影。）
 
 use serde_json::Value;
 
@@ -191,6 +192,55 @@ pub(crate) fn handle_orgsync_data<S: StorageBackend>(
                         serde_json::to_value(&inv)?,
                     ));
                 }
+                // 阶段四A P1 混跑兼容（设计 §6）：旧端只写 whole org:meta——
+                // whole 合入后就地投影成员条目（远端语义，不 bump 本机）。
+                let whole_meta = crate::sync::get_personal_meta(storage, &record_item.key)?
+                    .unwrap_or_default();
+                crate::org::service::project_member_entries_from_whole(
+                    storage,
+                    &org_id,
+                    &fresh.members,
+                    &whole_meta,
+                )?;
+            }
+            continue;
+        }
+
+        // 阶段四A P1：org:member:{orgId}:{rootId} per-member 记录合入——
+        // Concurrent 走成员级结构化合并（merge_member_record：字段组按条目
+        // 秩、accessKey 写一次守卫下沉于此、nodeInfo/extra 并集）；Remote 整值
+        // 覆盖、Local/Equal 不写（lww-record 既有规则）。墓碑不落本分支——
+        // 成员移除 = 成员记录墓碑，走下方通用 LWW + org 域 dlog 接力路径。
+        if record_item
+            .key
+            .starts_with(crate::org::types::ORG_MEMBER_PREFIX)
+            && !crate::sync::is_tombstone(&record_item.meta)
+        {
+            if apply_org_member_record_merged(
+                storage,
+                &record_item.key,
+                &record_item.value,
+                &record_item.meta,
+            )? {
+                log::info!(
+                    "[ORGSYNC] data applied | org={org_id} col={col_full} key={}",
+                    record_item.key
+                );
+                // F4 第二层挂点补齐（评审发现，P2 通道迁移后）：P2 join 只产生
+                // org:member 条目流量（成员自写条目），邀请人侧 org:meta 无合入
+                // 事件——对账若只挂 org:meta 分支在 P2 主链路永不触发（回执
+                // 丢失时 outbound 永久 pending）。条目入站到达 =  invitee 已
+                // 接受（预录条目是本机双写产物，不会经入站到达）→ 同款对账。
+                let Ok(Some(fresh)) = OrganizationService::get_record(storage, &org_id) else {
+                    continue;
+                };
+                for inv in crate::org::service::reconcile_outbound_invites_with_members(
+                    storage, &fresh, ctx.now_ms, ctx.node_id, ctx.my_root_id,
+                )? {
+                    events.push(crate::p2p::P2pEvent::OrgInviteUpdated(
+                        serde_json::to_value(&inv)?,
+                    ));
+                }
             }
             continue;
         }
@@ -372,6 +422,76 @@ fn apply_org_meta_record_merged<S: StorageBackend>(
     };
     let merged = crate::org::meta_merge::merge_org_meta_record(&local_rec, &remote_rec);
     let local_meta = local_meta.unwrap_or_default();
+    let merged_meta = crate::sync::meta::DocMeta {
+        vv: crate::sync::merge_version_vectors(Some(&local_meta.vv), Some(&remote_meta.vv)),
+        ts: local_meta.ts.max(remote_meta.ts),
+        node_id: None,
+        tombstone: None,
+    };
+    storage
+        .batch(vec![
+            crate::storage::BatchOperation::put(key, serde_json::to_string(&merged)?),
+            crate::storage::BatchOperation::put(
+                crate::sync::personal_meta_key(key),
+                serde_json::to_string(&merged_meta)?,
+            ),
+        ])
+        .map_err(crate::sync::SyncError::from)?;
+    Ok(true)
+}
+
+/// 阶段四A P1：org:member per-member 记录合入分流——Remote 整值覆盖（快
+/// 路径）、Local/Equal 不写、**Concurrent 走成员级结构化合并**
+/// （[`crate::org::meta_merge::merge_member_record`]：字段组按条目秩选取、
+/// accessKey 写一次守卫下沉于此、nodeInfo/extra 并集）。
+///
+/// 条目秩 = `(pmeta.ts, canonical 字节)`（成员条目自身无 updatedAt 字段）。
+/// 合并落库 = batch[ put 合并值, put pmeta{ vv: 合并 vv（支配两个输入）,
+/// ts: max, nodeId: None } ]——合入语义而非本地写：不 bump 本机分量、不写
+/// 序号键（防回声，与 [`apply_org_meta_record_merged`] 同口径）。解析失败
+/// （损坏记录）回退整值 LWW，不阻塞同步。返回是否实际落库。
+fn apply_org_member_record_merged<S: StorageBackend>(
+    storage: &mut S,
+    key: &str,
+    value: &Value,
+    remote_meta: &crate::sync::meta::DocMeta,
+) -> Result<bool> {
+    let local_meta = crate::sync::get_personal_meta(storage, key)?;
+    let cmp = crate::sync::compare_version_vectors(
+        local_meta.as_ref().map(|m| &m.vv),
+        Some(&remote_meta.vv),
+    );
+    let value_str = serde_json::to_string(value)?;
+    let fallback_lww = |storage: &mut S| -> Result<bool> {
+        let r =
+            crate::sync::apply_personal_remote_no_dlog(storage, key, &value_str, remote_meta)?;
+        Ok(r.did_apply())
+    };
+    if !matches!(cmp, crate::sync::meta::CompareResult::Concurrent) {
+        return fallback_lww(storage);
+    }
+    // Concurrent：成员级结构化合并
+    let parsed = storage
+        .get(key)?
+        .and_then(|raw| {
+            serde_json::from_str::<crate::org::types::OrganizationMember>(&raw).ok()
+        })
+        .zip(serde_json::from_value::<crate::org::types::OrganizationMember>(value.clone()).ok());
+    let Some((local_m, remote_m)) = parsed else {
+        return fallback_lww(storage);
+    };
+    let local_meta = local_meta.unwrap_or_default();
+    let local_rank = (
+        local_meta.ts,
+        serde_json::to_string(&local_m).unwrap_or_default(),
+    );
+    let remote_rank = (remote_meta.ts, value_str);
+    let merged = crate::org::meta_merge::merge_member_record(
+        &local_m,
+        &remote_m,
+        &local_rank,
+        &remote_rank,
+    );
     let merged_meta = crate::sync::meta::DocMeta {
         vv: crate::sync::merge_version_vectors(Some(&local_meta.vv), Some(&remote_meta.vv)),
         ts: local_meta.ts.max(remote_meta.ts),

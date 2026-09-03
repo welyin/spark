@@ -48,7 +48,7 @@ pub use invite::{
     decode_org_invite_at, encode_org_invite,
 };
 pub use invite_record::{OrgInviteDirection, OrgInviteRecord, OrgInviteStatus};
-pub use meta_merge::merge_org_meta_record;
+pub use meta_merge::{merge_member_record, merge_org_meta_record};
 pub use node_card::{
     NODE_CARD_MAX_AGE_MS, NODE_CARD_TYPE, NodeCard, NodeCardReject, build_node_card_payload,
     decode_node_card, encode_node_card, make_node_card, parse_and_verify_node_card, sign_node_card,

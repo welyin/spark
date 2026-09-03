@@ -403,7 +403,8 @@ impl Kernel {
     ///
     /// 会话同时缓存 BIP39 种子（域派生用）、口令（密码门控路径用）与 v2
     /// 封装密钥（免 scrypt 资料重封用，v1 遗留文件为 `None`）；`lock` 时随
-    /// `unlocked` 整体清除。签名私钥同步给 org-sync worker（自签 claim 用）。
+    /// `unlocked` 整体清除。签名私钥同步给 org-sync worker（orgsync 信封
+    /// 签名用；P2 前的自签 claim 用途已随 L2 退役）。
     pub(crate) fn set_unlocked(
         &mut self,
         identity: identity::Identity,

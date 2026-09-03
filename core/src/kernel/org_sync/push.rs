@@ -221,6 +221,18 @@ impl OrgSyncContext {
             }
         }
         let mut any_sync_ok = false;
+        // 阶段四A P2：orgsync-capable 对端（sync_org_to_member 单出口跳过快照
+        // 推送）的更新改由 orgsync 反熵承接——但无 keepalive 的环境（测试/事件
+        // 静默期）下个 tick 可能很久，写入后对**已连接** capable 端点即时踢一
+        // 脚 hello（M8：hello 不拨号），对端立即回 need 拉走 diff。
+        let any_capable_target = targets.iter().any(|(peer, _)| {
+            extract_peer_id(peer).is_some_and(|peer_id| {
+                self.orgsync_capable_member_peers
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .contains(peer_id.as_str())
+            })
+        });
         for (peer, member_root_id) in targets {
             if let Err(e) = self
                 .sync_org_to_member(&peer, &member_root_id, org_id)
@@ -240,6 +252,20 @@ impl OrgSyncContext {
         // 沉默）。仅在 org 写入推送路径（事件驱动）触发。
         if !any_sync_ok {
             self.refresh_org_endpoints_and_dial(actor_root_id).await;
+        }
+        // P2 即时 orgsync-hello（见 targets 处注释）：capable 对端不等 tick
+        if any_capable_target && let Some(root_id) = self.root_id() {
+            let connected: std::collections::HashSet<String> = self
+                .node
+                .local_node_info()
+                .await
+                .ok()
+                .map(|info| info.connected_peers.into_iter().collect())
+                .unwrap_or_default();
+            if !connected.is_empty() {
+                self.maybe_send_orgsync_hello(&root_id, &connected, Some(org_id))
+                    .await;
+            }
         }
         // M6 事件驱动补副本：组织写入（主推送完成）后由管理员触发一次副本充足性
         // 检查——不足 K 才向未同步成员推快照（复用 `sync_org_to_member`，内部本就

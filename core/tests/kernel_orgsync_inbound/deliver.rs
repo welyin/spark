@@ -92,7 +92,35 @@ fn setup() -> (Kernel, Kernel, String, String) {
         if let Some(m) = record.members.iter_mut().find(|m| m.root_id == root_a) {
             m.node_info = Some(spark_core::org::OrganizationDeviceSet::from_single(a_node));
         }
-        OrganizationService::save_record(&mut raw, &record).unwrap();
+        // 阶段四A P1-a 双写口径：夹具此处绕过原子段直写，须 whole + 成员
+        // 条目同步记账（put_personal 复刻中间件 bump）——只直写 whole 时
+        // vv 不推进、whole 更新不随 orgsync 流出，而 create 双写的旧条目
+        // （无 nodeInfo）会以「条目权威」在对端装配视图盖住 whole 回填。
+        // 生产路径全部走原子段双写，无此分叉。
+        let a_entry = record
+            .members
+            .iter()
+            .find(|m| m.root_id == root_a)
+            .unwrap()
+            .clone();
+        let node_id = kernel_a.p2p_status().unwrap().unwrap().peer_id.unwrap();
+        let now = spark_core::p2p::node::system_now_ms();
+        spark_core::sync::put_personal(
+            &mut raw,
+            &node_id,
+            &spark_core::org::types::organization_key(&org_id),
+            &serde_json::to_string(&record).unwrap(),
+            now,
+        )
+        .unwrap();
+        spark_core::sync::put_personal(
+            &mut raw,
+            &node_id,
+            &spark_core::org::types::org_member_key(&org_id, &root_a),
+            &serde_json::to_string(&a_entry).unwrap(),
+            now,
+        )
+        .unwrap();
     }
     (kernel_a, kernel_b, org_id, root_a)
 }
@@ -413,7 +441,32 @@ fn orgkey_deliver_reaches_reader_and_enables_decrypt() {
         if let Some(m) = record.members.iter_mut().find(|m| m.root_id == root_a) {
             m.node_info = Some(spark_core::org::OrganizationDeviceSet::from_single(a_node));
         }
-        OrganizationService::save_record(&mut raw, &record).unwrap();
+        // P1-a 双写口径：夹具绕过原子段直写，whole + 成员条目同步记账
+        // （put_personal 复刻中间件 bump），理由见 member_online 组 setup。
+        let a_entry = record
+            .members
+            .iter()
+            .find(|m| m.root_id == root_a)
+            .unwrap()
+            .clone();
+        let node_id = kernel_a.p2p_status().unwrap().unwrap().peer_id.unwrap();
+        let now = spark_core::p2p::node::system_now_ms();
+        spark_core::sync::put_personal(
+            &mut raw,
+            &node_id,
+            &spark_core::org::types::organization_key(&org_id),
+            &serde_json::to_string(&record).unwrap(),
+            now,
+        )
+        .unwrap();
+        spark_core::sync::put_personal(
+            &mut raw,
+            &node_id,
+            &spark_core::org::types::org_member_key(&org_id, &root_a),
+            &serde_json::to_string(&a_entry).unwrap(),
+            now,
+        )
+        .unwrap();
     }
     // A 声明 encrypted 集合
     kernel_a
@@ -465,7 +518,24 @@ fn orgkey_deliver_reaches_reader_and_enables_decrypt() {
         if let Some(m) = a_record.members.iter_mut().find(|m| m.root_id == root_b) {
             m.access_key = b_access_key;
         }
+        // P1-a 双写口径：whole + B 条目同步（装配视图以条目为权威——只写
+        // whole 会被 A 侧既有的 B 条目（无 accessKey）盖住）。
+        let b_entry = a_record
+            .members
+            .iter()
+            .find(|m| m.root_id == root_b)
+            .unwrap()
+            .clone();
         OrganizationService::save_record(&mut a_raw, &a_record).unwrap();
+        let a_node_id = kernel_a.p2p_status().unwrap().unwrap().peer_id.unwrap();
+        spark_core::sync::put_personal(
+            &mut a_raw,
+            &a_node_id,
+            &spark_core::org::types::org_member_key(&org_id, &root_b),
+            &serde_json::to_string(&b_entry).unwrap(),
+            spark_core::p2p::node::system_now_ms(),
+        )
+        .unwrap();
     }
     // A 侧确认收到 B 的 accessKey（供出站投递用）
     assert!(
@@ -500,6 +570,24 @@ fn orgkey_deliver_reaches_reader_and_enables_decrypt() {
             m.access_key = a_access_key;
         }
         OrganizationService::save_record(&mut b_raw, &b_record).unwrap();
+        // P1-a 双写口径：同步 A 条目（装配视图以条目为权威——B 侧已有 A 的
+        // 投影条目（无 accessKey），只写 whole 会被盖住；orgsync 反熵虽最终
+        // 会补，但夹具不等它，消除时序窗）。
+        let a_entry_at_b = b_record
+            .members
+            .iter()
+            .find(|m| m.root_id == root_a)
+            .unwrap()
+            .clone();
+        let b_node_id = kernel_b.p2p_status().unwrap().unwrap().peer_id.unwrap();
+        spark_core::sync::put_personal(
+            &mut b_raw,
+            &b_node_id,
+            &spark_core::org::types::org_member_key(&org_id, &root_a),
+            &serde_json::to_string(&a_entry_at_b).unwrap(),
+            spark_core::p2p::node::system_now_ms(),
+        )
+        .unwrap();
     }
     // A grant B → 生成 epoch-1 密钥 + 出站 orgkey-deliver 投递给 B
     kernel_a

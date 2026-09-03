@@ -2,7 +2,7 @@
 //!
 //! 线形 JSON：
 //! ```json
-//! { "kind": "chat|read|recall|friend-request|friend-accept|friend-reply|org-invite|org-invite-reply",
+//! { "kind": "chat|read|recall|friend-request|friend-accept|friend-reply|org-invite|org-invite-reply|org-member-removed",
 //!   "from": "<rootId>", "to": "<rootId>", "ts": 123,
 //!   "body": { ... },
 //!   "ephPub": "<可选，base64 临时 X25519 公钥，见密钥轮换>",
@@ -63,6 +63,10 @@ pub(crate) const KIND_CONV_SYNC: &str = "conv-sync";
 pub const KIND_ORG_INVITE: &str = "org-invite";
 /// 信封 kind：组织邀请回执（被邀请人接受/拒绝）。
 pub const KIND_ORG_INVITE_REPLY: &str = "org-invite-reply";
+/// 信封 kind：成员移除定向通知（admin → 被移除成员，阶段四A P2 L3；body
+/// `{orgId, targetPeerIds}`——targetPeerIds 为发送侧离线补投的寻址快照，
+/// 收端不消费）。替代 legacy org-pull `removed` 状态的剔除传播。
+pub const KIND_ORG_MEMBER_REMOVED: &str = "org-member-removed";
 /// 信封 kind：好友申请回复（接收方询问 / 申请方回答同 kind，接收侧按本端
 /// 记录匹配方向）。
 pub const KIND_FRIEND_REPLY: &str = "friend-reply";

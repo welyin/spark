@@ -215,9 +215,10 @@ fn create_delete_pdsync_write_pmeta_and_tombstone() {
     );
     let meta = get_personal_meta(storage.raw(), &key).unwrap().unwrap();
     assert!(is_tombstone(&meta));
-    // per-node 单调序号：org:meta 创建 seq 1 + 三个内建集合声明（structure/
-    // contacts/invitations；F7 退出 org:invites、batch3 §2 加入
-    // org:invitations）各 2 次受管写（声明记录 put + put_personal，seq 2–7）
-    // + 删除 tombstone seq 8
-    assert_eq!(meta.vv.get("node-a"), Some(&8));
+    // per-node 单调序号：org:meta 创建 seq 1 + P1-a 双写初始成员条目 seq 2
+    // + 三个内建集合声明（structure/contacts/invitations；F7 退出
+    // org:invites、batch3 §2 加入 org:invitations）各 2 次受管写（声明记录
+    // put + put_personal，seq 3–8）+ 删除 tombstone seq 9（成员条目墓碑
+    // seq 10 随后）
+    assert_eq!(meta.vv.get("node-a"), Some(&9));
 }

@@ -232,6 +232,31 @@ fn org_dlog_gc_threshold_blocks_when_member_has_no_device_watermark() {
     assert_eq!(threshold, 0, "无记录阻塞不清");
 }
 
+/// 阶段四A P1 钉住（org-member-split §2.1「GC 注意」）：成员移除 = 成员记录
+/// 墓碑，被踢者随 whole 合入**出成员表**（等待集合按当前成员表动态计算）——
+/// 其无任何设备水位记录也不阻塞其墓碑的 GC（若在等待集合内则会阻塞，见上
+/// 例）；其残留 wm 键也不压低阈值（F8 口径的 P1 场景化）。
+#[test]
+fn org_dlog_gc_threshold_kicked_member_does_not_block() {
+    let mut s = MemoryStorage::new();
+    // 剩余成员 root-a 有水位 6；被踢者 root-kicked 无任何水位记录
+    org_dlog_set_watermark(&mut s, "org_01", "c", "1", "root-a", "peer-a1", 6).unwrap();
+    // 场景一：被踢者已出复制组（等待集合按当前成员表）→ 不阻塞
+    let members_after_kick = vec!["root-a".to_string(), "self".to_string()];
+    let threshold =
+        org_dlog_gc_threshold(&s, "org_01", "c", "1", &members_after_kick, "self").unwrap();
+    assert_eq!(threshold, 6, "被踢者出表后不阻塞 GC（其墓碑可清）");
+    // 场景二（对照）：被踢者仍在成员表且无水位 → 阻塞
+    let members_before_kick = vec![
+        "root-a".to_string(),
+        "root-kicked".to_string(),
+        "self".to_string(),
+    ];
+    let blocked =
+        org_dlog_gc_threshold(&s, "org_01", "c", "1", &members_before_kick, "self").unwrap();
+    assert_eq!(blocked, 0, "在表成员无水位仍阻塞（对照）");
+}
+
 #[test]
 fn org_dlog_gc_threshold_empty_wait_set_returns_current_seq() {
     let mut s = MemoryStorage::new();
@@ -653,13 +678,15 @@ fn builtin_collection_key_domains() {
     // R3：org:structure 额外承载 `org:acl:{orgId}:`（授权名单，all-members
     // 系统数据）——全员经此集合同步 acl（否则随 encrypted 集合 data-accounts
     // 复制组流动，普通成员收不到）。F2-P1：`org:coll:{orgId}:`（集合声明）
-    // 同性质并入——声明全员可见，不经 hello 复制组裁剪。
+    // 同性质并入——声明全员可见，不经 hello 复制组裁剪。阶段四A P1：
+    // `org:member:{orgId}:`（per-member 成员记录）并入——全员流动。
     assert_eq!(
         BuiltinOrgCollection::Structure.data_prefixes(org),
         vec![
             "org:meta:org_0000000000000001",
             "org:acl:org_0000000000000001:",
-            "org:coll:org_0000000000000001:"
+            "org:coll:org_0000000000000001:",
+            "org:member:org_0000000000000001:"
         ]
     );
     assert_eq!(

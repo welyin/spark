@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::storage::StorageBackend;
 
-use super::super::types::{OrganizationRecord, organization_key};
+use super::super::types::{OrganizationMember, OrganizationRecord, org_member_key, organization_key};
 use super::{OrganizationService, Result};
 
 /// org:meta 原子段互斥锁（kernel 装配注入的 `io_lock` 同一把）。纯逻辑层
@@ -80,6 +80,7 @@ impl OrganizationService {
         };
         let base_vv = read_vv(storage);
         let mut record = Self::require_organization(storage, org_id)?;
+        let base_record = record.clone();
         if !mutate(storage, &mut record)? {
             return Ok(record); // 幂等无写（不 bump 版本）
         }
@@ -96,7 +97,37 @@ impl OrganizationService {
             );
             record = crate::org::meta_merge::merge_org_meta_record(&record, &current);
         }
-        Self::save_record(storage, &record)?;
+        // P1-a 双写（阶段四A分拆）：whole 记录 + 变更成员条目（新增/变更写、
+        // 移除删——版本化句柄逐键记账，删除自动墓碑 + org 域 dlog 传播）
+        // 同一 batch 原子提交。raw 句柄上组织记录本就不版本化（个人域/测试
+        // 路径），成员条目同样裸写。
+        let mut ops = vec![crate::storage::BatchOperation::put(
+            key,
+            serde_json::to_string(&record)?,
+        )];
+        let base_members: std::collections::HashMap<&str, &OrganizationMember> = base_record
+            .members
+            .iter()
+            .map(|m| (m.root_id.as_str(), m))
+            .collect();
+        let final_roots: std::collections::HashSet<&str> =
+            record.members.iter().map(|m| m.root_id.as_str()).collect();
+        for member in &record.members {
+            if base_members.get(member.root_id.as_str()) != Some(&member) {
+                ops.push(crate::storage::BatchOperation::put(
+                    org_member_key(org_id, &member.root_id),
+                    serde_json::to_string(member)?,
+                ));
+            }
+        }
+        for root_id in base_members.keys() {
+            if !final_roots.contains(root_id) {
+                ops.push(crate::storage::BatchOperation::delete(
+                    org_member_key(org_id, root_id),
+                ));
+            }
+        }
+        storage.batch(ops)?;
         Ok(record)
     }
 }
@@ -252,5 +283,72 @@ mod tests {
                 .is_none(),
             "无写 → 无 pmeta"
         );
+    }
+
+    /// 阶段四A P1-a 双写一致性：原子段成员变更（加 C、改 B 昵称、删 A）后，
+    /// whole 记录 members 段与 `org:member:` 条目逐字段等价；被移除成员的
+    /// 条目删除（版本化句柄上 = 值删除 + 墓碑 pmeta，org 域 dlog 记账由
+    /// 中间件完成）；未变更成员的条目不产生多余写（本用例 B/C 条目各 bump
+    /// 一次，与 whole 同批）。
+    #[test]
+    fn atomic_section_dual_writes_member_entries() {
+        use crate::org::types::{ORG_MEMBER_PREFIX, org_member_key};
+        let inner = MemoryStorage::new();
+        let mut s = VersionedStorage::new(inner, shared_node_id("node-b"));
+        prefab_org(s.raw_mut());
+        let lock: OrgMetaWriteLock = Arc::new(Mutex::new(()));
+        let out = OrganizationService::update_record_atomic(&mut s, &lock, "org_01", |_st, rec| {
+            rec.members
+                .iter_mut()
+                .find(|m| m.root_id == "root-b")
+                .unwrap()
+                .nickname = Some("B 改名".to_string());
+            rec.members.push(member("root-c", OrganizationRole::Member));
+            rec.members.retain(|m| m.root_id != "root-a");
+            rec.updated_at = 1600;
+            Ok(true)
+        })
+        .unwrap();
+
+        // whole.members == {b, c}
+        assert_eq!(out.members.len(), 2);
+        // 条目逐字段等价（序列化级）
+        for m in &out.members {
+            let raw = s
+                .raw()
+                .get(&org_member_key("org_01", &m.root_id))
+                .unwrap()
+                .unwrap_or_else(|| panic!("成员条目已双写: {}", m.root_id));
+            assert_eq!(
+                raw,
+                serde_json::to_string(m).unwrap(),
+                "条目与 whole 同名成员逐字段等价"
+            );
+        }
+        // 被移除成员 A：值删除 + 墓碑 pmeta
+        let tomb_key = org_member_key("org_01", "root-a");
+        assert!(s.raw().get(&tomb_key).unwrap().is_none(), "移除成员条目值已删");
+        let meta = crate::sync::get_personal_meta(s.raw(), &tomb_key)
+            .unwrap()
+            .expect("墓碑 pmeta 存在");
+        assert_eq!(meta.tombstone, Some(true), "成员移除 = 成员记录墓碑");
+        // 变更/新增成员条目经中间件本机 bump（可经 orgsync 传播）。vv 分量值
+        // 是 per-node 共享序号（同批逐键递增：org:meta=1、条目依次推进），
+        // 只断言分量存在（bump 发生），不钉具体值。
+        for root in ["root-b", "root-c"] {
+            let meta = crate::sync::get_personal_meta(s.raw(), &org_member_key("org_01", root))
+                .unwrap()
+                .expect("成员条目 pmeta 存在");
+            assert!(
+                meta.vv.get("node-b").is_some_and(|v| *v >= 1),
+                "条目本机分量已 bump"
+            );
+        }
+        // 本 org 只产生 3 个成员键域条目（b/c 值 + a 墓碑），无泄漏键
+        let entries = s
+            .raw()
+            .scan(&crate::storage::ScanOptions::prefix(ORG_MEMBER_PREFIX))
+            .unwrap();
+        assert_eq!(entries.len(), 2, "存活条目 = 当前成员数");
     }
 }

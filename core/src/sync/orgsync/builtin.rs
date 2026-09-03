@@ -94,10 +94,14 @@ impl BuiltinOrgCollection {
             // 同性质并入——声明是全员可见的组织元数据（传播范围与数据面
             // accounts 轴解耦），修复「data-accounts 集合的声明普通成员永远
             // 收不到」的实现漂移。声明不经 hello 的复制组裁剪。
+            // P1（阶段四A 分拆）：org:member:{orgId}: 并入——成员条目
+            // lww-record 逐成员一条，与 org:acl:/org:coll: 同集合全员流动；
+            // 成员移除 = 成员记录墓碑（org 域 dlog 传播）。
             BuiltinOrgCollection::Structure => vec![
                 format!("org:meta:{org_id}"),
                 format!("org:acl:{org_id}:"),
                 format!("org:coll:{org_id}:"),
+                format!("org:member:{org_id}:"),
             ],
             BuiltinOrgCollection::Contacts => vec![format!("ct:org:{org_id}:")],
             BuiltinOrgCollection::Invitations => vec![format!("org:invpub:{org_id}:")],

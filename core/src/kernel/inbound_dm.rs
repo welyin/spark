@@ -38,7 +38,8 @@ use super::dm_envelope::{
     KIND_FEED_BLOB_REQ, KIND_FEED_BLOB_RESP, KIND_FRIEND_ACCEPT, KIND_FRIEND_REPLY,
     KIND_FRIEND_REQUEST, KIND_ORG_INVITE, KIND_ORG_INVITE_REPLY, KIND_ORGKEY_DELIVER,
     KIND_ORGQ_REQ, KIND_ORGQ_RESP, KIND_ORGSYNC_DATA, KIND_ORGSYNC_HELLO, KIND_ORGSYNC_NEED,
-    KIND_PDSYNC_ATTACHMENT_REQ, KIND_PDSYNC_ATTACHMENT_RESP, KIND_PDSYNC_DATA, KIND_PDSYNC_HELLO,
+    KIND_ORG_MEMBER_REMOVED, KIND_PDSYNC_ATTACHMENT_REQ, KIND_PDSYNC_ATTACHMENT_RESP,
+    KIND_PDSYNC_DATA, KIND_PDSYNC_HELLO,
     KIND_PDSYNC_NEED, KIND_PROFILE_SYNC, KIND_READ, KIND_RECALL, KIND_RECOVERY, verify_envelope,
 };
 
@@ -777,6 +778,9 @@ fn handle_inbound_dm_inner<S: StorageBackend>(
         KIND_ORG_INVITE => org_invite::handle_org_invite(storage, &ctx, &envelope.from, &body),
         KIND_ORG_INVITE_REPLY => {
             org_invite::handle_org_invite_reply(storage, &ctx, &envelope.from, &body)
+        }
+        KIND_ORG_MEMBER_REMOVED => {
+            org_invite::handle_org_member_removed(storage, &ctx, &envelope.from, &body)
         }
         KIND_ORGSYNC_HELLO => orgsync::handle_orgsync_hello(storage, &ctx, &envelope.from, &body),
         KIND_ORGSYNC_NEED => orgsync::handle_orgsync_need(storage, &ctx, &envelope.from, &body),

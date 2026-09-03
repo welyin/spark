@@ -55,6 +55,40 @@ pub(crate) fn is_terminal_rejection(reason: Option<&str>) -> bool {
     )
 }
 
+/// 阶段四A P2 L3：`org-member-removed` 补投目标的反查——被移除者已出成员
+/// 表，`on_peer_app_ready` 的「成员表端点 → rootId」反查覆盖不到；该通知
+/// 入队时 body 内嵌了 `targetPeerIds` 寻址快照（发送侧自用字段，收端不
+/// 消费），此处按快照匹配连接事件。返回待 flush 的 `(orgId, toRootId)`。
+pub(crate) fn org_pending_removed_targets<S: StorageBackend>(
+    storage: &S,
+    peer_id: &str,
+) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let rows = storage
+        .scan(&crate::storage::ScanOptions::prefix(
+            crate::dm_offline::ORG_PENDING_PREFIX,
+        ))
+        .unwrap_or_default();
+    for (_, raw) in rows {
+        let Ok(record) = serde_json::from_str::<PendingRecord>(&raw) else {
+            continue;
+        };
+        if record.kind != crate::kernel::dm_envelope::KIND_ORG_MEMBER_REMOVED {
+            continue;
+        }
+        let hit = record
+            .envelope
+            .get("body")
+            .and_then(|b| b.get("targetPeerIds"))
+            .and_then(Value::as_array)
+            .is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some(peer_id)));
+        if hit && let Some(org_id) = record.space_key.strip_prefix("org:") {
+            out.push((org_id.to_string(), record.to.clone()));
+        }
+    }
+    out
+}
+
 /// 单条补投成功/终态拒绝后的 chat 回写（compare-and-set，对齐 spawn.rs 口径）：
 /// 仅 chat 通道（`conv_id` 非空）回写消息状态并 emit `ChatStatus` 事件。
 /// CAS 未命中（状态已被新投递尝试改走）时不发事件——状态属于另一次尝试。

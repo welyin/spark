@@ -177,6 +177,9 @@ fn event_json(event: &P2pEvent) -> Option<Value> {
         P2pEvent::OrgInviteUpdated(data) => {
             json!({"event": "org-invite-updated", "data": data})
         }
+        P2pEvent::OrgRemoved(data) => {
+            json!({"event": "org-removed", "data": data})
+        }
         P2pEvent::PluginAnnounceReceived { id, publisher } => {
             json!({"event": "plugin-announce-received", "id": id, "publisher": publisher})
         }

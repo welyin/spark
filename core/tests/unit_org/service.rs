@@ -15,6 +15,8 @@ mod invite_records;
 mod members;
 #[path = "service/settings.rs"]
 mod settings;
+#[path = "service/split.rs"]
+mod split;
 
 use spark_core::identity::{derive_root_identity, parse_mnemonic};
 use spark_core::org::types::OrganizationRecord;

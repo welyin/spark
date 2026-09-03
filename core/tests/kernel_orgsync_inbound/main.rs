@@ -4,7 +4,9 @@
 //! 目录形态（N3 拆分，按场景）：
 //! - [`sync`]：双节点信封往返收敛 + 声明先行随流量同步；
 //! - [`auth`]：资格拒绝（非成员/复制组外）+ 键白名单整批拒收；
-//! - [`tombstone`]：GC 等待集合 + 墓碑接力 A→B→C + 删除后重建。
+//! - [`tombstone`]：GC 等待集合 + 墓碑接力 A→B→C + 删除后重建；
+//! - [`member_split`]：阶段四A P1 per-member 分拆——成员记录入站合并/
+//!   accessKey 守卫、whole 合入就地投影、成员移除墓碑传播。
 //!
 //! 与 pdsync 的差异：orgsync 信封 `from`/`to` 是成员 rootId（非自设备），
 //! 各节点用各自身份签名；`remote_peer_id` 为对端设备的 libp2p peerId
@@ -25,6 +27,7 @@ mod auth;
 #[path = "../common/mod.rs"]
 mod common;
 mod deliver;
+mod member_split;
 mod merge;
 mod orgq;
 mod sync;

@@ -1,6 +1,10 @@
 //! orgsync-hello 出站触发（O2a §20.3）：本机作为复制组成员，向已连接的
 //! 复制组成员发送 orgsync-hello 摘要。
 //!
+//! 阶段四A P2：本文件的周期触发同时承担**成员自写条目刷新**（L2 claim
+//! 退役的取代通道）——hello 前把本机当前端点 upsert 进自己的
+//! `org:member:{org}:{self}` 条目，端点经条目反熵全员扩散。
+//!
 //! 从 `tick.rs` 拆出的子模块（F4，tick.rs 已超 650 行硬线）——orgsync 的
 //! hello 触发逻辑单独成文件，不再加重 tick。
 //!
@@ -22,6 +26,7 @@ impl OrgSyncContext {
         &self,
         root_id: &str,
         connected: &std::collections::HashSet<String>,
+        only_org: Option<&str>,
     ) {
         let signing_key = self
             .signing_key
@@ -32,13 +37,40 @@ impl OrgSyncContext {
             return;
         };
         let now = self.now();
+        // 阶段四A P2（L2 claim 退役）：成员自写条目的周期刷新点——把本机当前
+        // 端点 upsert 进自己的 org:member 条目（随本文件的 hello→need→data
+        // 反熵全员扩散）。端点取一次逐组织复用；失败仅告警不阻断 hello。
+        let local_info = self.node.local_node_info().await.ok();
+        let device_uid =
+            crate::device::get_or_create_device_uid(&mut self.storage.clone()).ok();
         let records = crate::org::OrganizationService::read_all_organizations(&self.storage)
             .unwrap_or_default();
         for record in records {
             let org_id = &record.org_id;
+            // P2 即时 hello（组织写入推送后踢一脚）按 org 过滤
+            if let Some(only) = only_org
+                && org_id != only
+            {
+                continue;
+            }
             // 本机必须是成员
             if record.find_member(root_id).is_none() {
                 continue;
+            }
+            if let Some(info) = &local_info {
+                let own_endpoint = crate::org::types::OrganizationNodeInfo {
+                    device_uid: device_uid.clone(),
+                    peer_id: info.peer_id.clone(),
+                    addresses: info.addresses.clone(),
+                };
+                if let Err(e) = crate::org::OrganizationService::upsert_own_member_entry(
+                    &mut self.storage.clone(),
+                    org_id,
+                    root_id,
+                    &own_endpoint,
+                ) {
+                    self.warn(format!("[orgsync] self member entry upsert failed: {e}"));
+                }
             }
             // O2b 存量迁移（惰性）：为存量组织补注册内建 all-members 集合声明
             // （组织创建时已注册；存量组织首次走 orgsync 时补齐），声明先行

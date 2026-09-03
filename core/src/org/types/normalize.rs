@@ -12,6 +12,15 @@ pub fn organization_key(org_id: &str) -> String {
     format!("{ORG_META_PREFIX}{org_id}")
 }
 
+/// 成员条目存储键前缀（阶段四A P1 分拆）：`org:member:{orgId}:`——归属
+/// org:structure@v1 键域，lww-record 逐成员一条；成员移除 = 成员记录墓碑。
+pub const ORG_MEMBER_PREFIX: &str = "org:member:";
+
+/// 成员条目存储键：`org:member:{orgId}:{rootId}`。
+pub fn org_member_key(org_id: &str, root_id: &str) -> String {
+    format!("{ORG_MEMBER_PREFIX}{org_id}:{root_id}")
+}
+
 /// rootId 合法性：`trim().toLowerCase()` 后匹配 `^[0-9a-f]{64}$`。
 pub fn is_valid_root_id(root_id: &str) -> bool {
     let normalized = root_id.trim().to_lowercase();

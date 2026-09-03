@@ -114,6 +114,15 @@ impl Kernel {
                 eprintln!("[kernel] migrate org:inv:in cleanup failed: {e}");
             }
         }
+        // 阶段四A P1 存量迁移（org-member-split §2.4）：org:meta 成员段逐成员
+        // 写 org:member: 条目（已存在跳过 = 幂等扫尾；不动 org:meta 的
+        // members 段）。走**版本化句柄**（迁移产出本机 bump，首轮 orgsync 判
+        // Concurrent 收敛，与 F7 raw 治理口径各自不同）；失败仅记录日志。
+        if let Ok(storage) = self.require_storage_mut()
+            && let Err(e) = crate::org::service::migrate_org_members_split(storage)
+        {
+            eprintln!("[kernel] migrate org:member split failed: {e}");
+        }
         Ok(root_id)
     }
 

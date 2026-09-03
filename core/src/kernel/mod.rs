@@ -45,6 +45,8 @@ mod host;
 mod identity;
 mod inbound_dm;
 mod message_ops;
+mod org_invite_ops;
+mod org_join_ops;
 mod org_ops;
 mod org_overview;
 mod org_sync;
@@ -89,6 +91,8 @@ pub(crate) use message_ops::{
     bot_reply_stream_start_shared, message_app_send_shared, message_view, require_owned_bot_conv,
 };
 pub use org_sync::{OrgReconcileStats, PeerOrgSyncResult};
+/// 阶段四A P2：join 通道开关（orgsync 收敛等待 ⟷ legacy pull 回退）。
+pub use org_join_ops::{join_via_orgsync, set_join_via_orgsync};
 
 /// 随机字节的十六进制串（`crypto.randomBytes(n)` 对齐，用于不可预测的
 /// 令牌片段，如 orgq requestId 的随机段）。`byte_len` 为随机字节数，

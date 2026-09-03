@@ -111,6 +111,7 @@ impl<S: StorageBackend> VersionedStorage<S> {
             || key.starts_with("org:coll:")
             || key.starts_with("org:acl:")
             || key.starts_with("org:invpub:")
+            || key.starts_with("org:member:")
         {
             return true;
         }
@@ -136,6 +137,7 @@ impl<S: StorageBackend> VersionedStorage<S> {
             || key.starts_with("org:coll:")
             || key.starts_with("org:acl:")
             || key.starts_with("org:invpub:")
+            || key.starts_with("org:member:")
             || crate::sync::orgsync::legacy_org_key_scope(key).is_some()
     }
 
@@ -146,6 +148,12 @@ impl<S: StorageBackend> VersionedStorage<S> {
     fn org_scope_of(key: &str) -> Option<(String, String, String)> {
         if key.starts_with("orgd:") {
             return crate::plugindata::parse_org_data_key(key);
+        }
+        if key.starts_with("org:member:") {
+            // org:member:{orgId}:{rootId} → org:structure@v1（成员条目归属
+            // 结构集合；成员移除墓碑经 org 域 dlog 传播，P1）
+            let org_id = key.strip_prefix("org:member:")?.split(':').next()?;
+            return Some((org_id.to_string(), "org:structure".to_string(), "1".to_string()));
         }
         if let Some(rest) = key.strip_prefix("org:invpub:") {
             // org:invpub:{orgId}:{inviterRoot}:{inviteeRoot} → org:invitations@v1

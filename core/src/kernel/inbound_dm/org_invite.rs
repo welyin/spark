@@ -1,4 +1,5 @@
-//! dm 入站编排（org-invite 系）：org-invite / org-invite-reply 组织邀请。
+//! dm 入站编排（org 系）：org-invite / org-invite-reply 组织邀请 +
+//! org-member-removed 成员移除通知（阶段四A P2 L3）。
 //!
 //! 从 `inbound_dm` 拆出的子模块（文件长度约束），共享父模块的
 //! [`InboundContext`]/应答助手/[`is_blocked`] 等。
@@ -242,5 +243,50 @@ pub(super) fn handle_org_invite_reply<S: StorageBackend>(
     done(
         ok_response(),
         vec![P2pEvent::OrgInviteUpdated(serde_json::to_value(&record)?)],
+    )
+}
+
+/// org-member-removed（阶段四A P2 L3）：admin 移除成员后的定向通知——替代
+/// legacy org-pull `removed` 状态的剔除传播。
+///
+/// 校验：本地仍持该组织记录时，发送方须为装配视图中的 **admin**（伪造通知
+/// 不擦）；本地已无记录（重复通知 / 成员墓碑先行收敛后 wipe 过）幂等通过。
+/// 通过即本地擦除该组织（whole + 成员条目 + orgq 现场，
+/// [`crate::org::service::wipe_org_local`]）并发 `OrgRemoved` 事件。
+/// 信封验签/`to` 定向校验在外层 `handle_inbound_dm` 已完成。
+pub(super) fn handle_org_member_removed<S: StorageBackend>(
+    storage: &mut S,
+    _ctx: &InboundContext<'_>,
+    from: &str,
+    body: &Value,
+) -> Result<InboundDmResult> {
+    if is_blocked(storage, "personal", from)? {
+        return done(fail_response("blocked"), Vec::new());
+    }
+    let Some(org_id) = body
+        .get("orgId")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+    else {
+        return done(fail_response("invalid-body"), Vec::new());
+    };
+
+    if let Some(record) = OrganizationService::get_record(storage, org_id)? {
+        let sender_is_admin = record
+            .find_member(from)
+            .is_some_and(|m| m.role == crate::org::types::OrganizationRole::Admin);
+        if !sender_is_admin {
+            log::info!(
+                "[ORG] member-removed rejected: from={} not admin | org={org_id}",
+                &from[..std::cmp::min(16, from.len())]
+            );
+            return done(fail_response("rejected"), Vec::new());
+        }
+    }
+    let wiped = crate::org::service::wipe_org_local(storage, org_id)?;
+    log::info!("[ORG] member-removed applied | org={org_id} wiped_entries={wiped}");
+    done(
+        ok_response(),
+        vec![P2pEvent::OrgRemoved(json!({ "orgId": org_id }))],
     )
 }

@@ -1,5 +1,9 @@
 //! org-pull 反熵对账链路（org-pull-sync.ts `reconcileFromPeer`）：org-pull-list
-//! （捎带自签 nodeInfoClaim）→ 逐组织双向 stale 比较 → 拉取合并 / 反推 / 删除。
+//! → 逐组织双向 stale 比较 → 拉取合并 / 反推 / 删除。
+//!
+//! 阶段四A P2（L2 claim 退役）：pull-list **不再捎带 nodeInfoClaim**——成员
+//! 端点改由成员自写 `org:member:{org}:{self}` 条目经 orgsync 扩散（worker
+//! 周期刷新见 `orgsync_hello.rs`）；对端 claim 处理同批退役（org/pull.rs）。
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -13,10 +17,9 @@ use super::{
 use crate::org::sync_state::sync_state_after_pull_synced;
 use crate::org::types::organization_key;
 use crate::org::{
-    NodeInfoClaim, OrganizationNodeInfo, OrganizationRecord, OrganizationService,
-    OrganizationSyncVersions, PluginDocSyncItem, PullOrgOutcome, apply_plugin_doc_sync_items,
-    classify_pull_org_response, is_organization_sync_stale, parse_pull_list_organizations,
-    resolve_local_versions, sign_node_info_claim,
+    OrganizationRecord, OrganizationService, OrganizationSyncVersions, PluginDocSyncItem,
+    PullOrgOutcome, apply_plugin_doc_sync_items, classify_pull_org_response,
+    is_organization_sync_stale, parse_pull_list_organizations, resolve_local_versions,
 };
 use crate::p2p::direct::{build_pull_list_request, build_pull_org_request};
 use crate::p2p::peer_targets::{PeerNodeInfo, extract_peer_id};
@@ -25,34 +28,14 @@ impl OrgSyncContext {
     // org-pull 反熵对账（org-pull-sync.ts:298-467 `reconcileFromPeer`）
     // ------------------------------------------------------------------
 
-    /// 自签 nodeInfoClaim（bootstrap.ts `buildSelfNodeInfoClaim`；未解锁返回 None）。
-    async fn self_node_info_claim(&self) -> Option<NodeInfoClaim> {
-        let key = self.signing_key.lock().unwrap().clone()?;
-        let info = self.node.local_node_info().await.ok()?;
-        // 端点化：声明携带本机 deviceUid，管理员侧按 deviceUid 聚合端点。
-        let mut storage = self.storage.clone();
-        let device_uid = crate::device::get_or_create_device_uid(&mut storage).ok();
-        Some(sign_node_info_claim(
-            &key,
-            OrganizationNodeInfo {
-                device_uid,
-                peer_id: info.peer_id,
-                addresses: info.addresses,
-            },
-            self.now(),
-        ))
-    }
-
-    /// 从某 peer 对账全部共同组织：org-pull-list（捎带 claim）→ 逐组织
+    /// 从某 peer 对账全部共同组织：org-pull-list → 逐组织
     /// 双向 stale 比较 → 拉取合并 / 反推 / 删除。
     pub(crate) async fn reconcile_from_peer(
         &self,
         node_info: &PeerNodeInfo,
-        with_claim: bool,
     ) -> Result<OrgReconcileStats, String> {
         self.reconcile_from_peer_with_dial_timeout(
             node_info,
-            with_claim,
             Duration::from_secs(crate::p2p::constants::CONNECT_TIMEOUT_SECS),
         )
         .await
@@ -63,7 +46,6 @@ impl OrgSyncContext {
     pub(crate) async fn reconcile_from_peer_with_dial_timeout(
         &self,
         node_info: &PeerNodeInfo,
-        with_claim: bool,
         dial_timeout: Duration,
     ) -> Result<OrgReconcileStats, String> {
         let mut stats = OrgReconcileStats::default();
@@ -80,12 +62,6 @@ impl OrgSyncContext {
             .await
             .ok()
             .and_then(|i| i.peer_id);
-        let claim = if with_claim {
-            self.self_node_info_claim().await
-        } else {
-            None
-        };
-        let claim_value = claim.as_ref().and_then(|c| serde_json::to_value(c).ok());
 
         // 自设备目标判定（对端 peerId ∈ 自 FriendRecord.peers 任一 peerId）：
         // 影响 removed 分支语义——自设备空存储不触发本地删除，转反推补齐
@@ -100,8 +76,8 @@ impl OrgSyncContext {
             })
             .unwrap_or(false);
 
-        let list_request =
-            build_pull_list_request(&root_id, local_peer_id.as_deref(), claim_value.clone());
+        // P2 L2：claim 退役——pull-list 不再捎带 nodeInfoClaim（None）
+        let list_request = build_pull_list_request(&root_id, local_peer_id.as_deref(), None);
         let list_response = self
             .node
             .org_pull_request(node_info, &list_request)
@@ -140,7 +116,6 @@ impl OrgSyncContext {
                             &root_id,
                             local_peer_id.as_deref(),
                             &org_id,
-                            claim_value.as_ref(),
                             is_self_target,
                             &mut stats,
                         )
@@ -170,7 +145,6 @@ impl OrgSyncContext {
                         &root_id,
                         local_peer_id.as_deref(),
                         &org_id,
-                        claim_value.as_ref(),
                         is_self_target,
                         &mut stats,
                     )
@@ -182,7 +156,6 @@ impl OrgSyncContext {
                         &root_id,
                         local_peer_id.as_deref(),
                         &org_id,
-                        claim_value.as_ref(),
                         is_self_target,
                         &mut stats,
                     )
@@ -230,11 +203,11 @@ impl OrgSyncContext {
         root_id: &str,
         local_peer_id: Option<&str>,
         org_id: &str,
-        claim: Option<&Value>,
         is_self_target: bool,
         stats: &mut OrgReconcileStats,
     ) -> PullBranch {
-        let request = build_pull_org_request(root_id, local_peer_id, org_id, claim.cloned());
+        // P2 L2：claim 退役——pull-org 请求不再捎带 nodeInfoClaim（None）
+        let request = build_pull_org_request(root_id, local_peer_id, org_id, None);
         let response = self
             .node
             .org_pull_request(node_info, &request)
@@ -247,13 +220,13 @@ impl OrgSyncContext {
                     // 自设备空存储不代表成员资格变化：不删除，转反推补齐
                     return PullBranch::Unavailable;
                 }
-                // org.md §9.4：removed 与"非成员"不可区分，据此删除本地记录
+                // org.md §9.4：removed 与"非成员"不可区分，据此删除本地记录。
+                // 阶段四A P2 收口：擦除扩到 whole + org:member 条目（值与
+                // pmeta）+ orgq 现场（`wipe_org_local`——org:meta 删除经
+                // 版本化句柄留墓碑，自设备 pdsync 传播不变）。
                 let mut storage = self.storage.clone();
-                match crate::storage::StorageBackend::delete(
-                    &mut storage,
-                    &organization_key(org_id),
-                ) {
-                    Ok(()) => stats.removed += 1,
+                match crate::org::service::wipe_org_local(&mut storage, org_id) {
+                    Ok(_) => stats.removed += 1,
                     Err(e) => self.warn(format!("org-pull remove local failed: {e}")),
                 }
                 PullBranch::Applied
@@ -275,6 +248,19 @@ impl OrgSyncContext {
                         return PullBranch::Applied;
                     }
                 };
+                // 阶段四A P1 混跑兼容（设计 §6）：legacy pull 平面同样只有
+                // whole——合入后就地投影成员条目（远端语义不 bump 本机；与
+                // host/mod.rs org-share 挂点同款）。
+                if let Ok(whole_meta) =
+                    crate::sync::get_personal_meta(&self.storage, &organization_key(org_id))
+                {
+                    let _ = crate::org::service::project_member_entries_from_whole(
+                        &mut self.storage.clone(),
+                        org_id,
+                        &merged.members,
+                        &whole_meta.unwrap_or_default(),
+                    );
+                }
                 // O3 成员移除擦除现场：合入后本机 rootId 已不在成员表（被移除）→
                 // 尽力擦除该组织的 orgq 缓存/离线队列/在线数据账号目录（缓存非副本、
                 // 移除后不再有资格持有；离线队列对已退出组织无意义）。见

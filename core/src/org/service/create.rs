@@ -13,9 +13,10 @@ use super::super::tx::{
     OrganizationTransactionRecord, OrganizationTransactionType, append_organization_transaction,
 };
 use super::super::types::{
-    OrganizationMember, OrganizationRecord, OrganizationRole, OrganizationSyncState,
-    generate_org_secret, generate_organization_id, generate_recovery_secret,
-    normalize_plugin_domain, normalize_text, organization_key,
+    ORG_MEMBER_PREFIX, OrganizationMember, OrganizationRecord, OrganizationRole,
+    OrganizationSyncState, generate_org_secret, generate_organization_id,
+    generate_recovery_secret, normalize_plugin_domain, normalize_text, org_member_key,
+    organization_key,
 };
 use super::super::{OrgError, Result, org_address};
 use super::{CreateOrganizationInput, OrganizationService};
@@ -172,6 +173,14 @@ impl OrganizationService {
             }
             None => Self::save_record(storage, &record)?,
         }
+        // P1-a 双写（阶段四A分拆）：初始成员（creator）落 org:member 条目。
+        // 版本化句柄逐键记账；raw 句柄裸写（对齐 save_record 口径）。
+        for member in &record.members {
+            storage.put(
+                &org_member_key(&record.org_id, &member.root_id),
+                &serde_json::to_string(member)?,
+            )?;
+        }
         Ok(record)
     }
 
@@ -226,6 +235,17 @@ impl OrganizationService {
         match node_id {
             Some(node_id) => Self::delete_record_pdsync(storage, org_id, now_ms, node_id)?,
             None => storage.delete(&organization_key(org_id))?,
+        }
+        // P1-a 双写对称（阶段四A分拆）：成员条目一并删除。版本化句柄上删除
+        // 自动墓碑 + org 域 dlog 传播（组织删除对端可收）；raw 句柄裸删。
+        let prefix = format!("{ORG_MEMBER_PREFIX}{org_id}:");
+        let keys: Vec<String> = storage
+            .scan(&crate::storage::ScanOptions::prefix(&prefix))?
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect();
+        for key in keys {
+            storage.delete(&key)?;
         }
         Ok(())
     }

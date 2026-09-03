@@ -35,6 +35,8 @@ fn add_member_pdsync_writes_pmeta() {
     .unwrap();
     let key = format!("org:meta:{}", record.org_id);
     let meta = get_personal_meta(storage.raw(), &key).unwrap().unwrap();
+    // P1-a 双写：add_member 批次 = org:meta put（seq 1）+ 新成员条目 put
+    // （seq 2），per-node 共享序号逐键递增
     assert_eq!(meta.vv.get("node-a"), Some(&1));
 
     OrganizationService::remove_member_pdsync(
@@ -48,7 +50,8 @@ fn add_member_pdsync_writes_pmeta() {
     )
     .unwrap();
     let meta = get_personal_meta(storage.raw(), &key).unwrap().unwrap();
-    assert_eq!(meta.vv.get("node-a"), Some(&2));
+    // remove_member 批次 = org:meta put（seq 3）+ 被删成员条目墓碑（seq 4）
+    assert_eq!(meta.vv.get("node-a"), Some(&3));
 }
 
 #[test]

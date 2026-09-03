@@ -4,8 +4,10 @@
 mod common;
 
 use spark_core::org::invite::{OrgInviteInviter, OrgInvitePayload, encode_org_invite};
+use spark_core::org::OrganizationService;
 use spark_core::org::service::CreateOrganizationInput;
 use spark_core::p2p::node::system_now_ms;
+use spark_core::storage::StorageBackend;
 
 use common::*;
 
@@ -181,6 +183,160 @@ fn org_member_management() {
     );
 
     kernel.shutdown().unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// 阶段四A P2（L3）：org-member-removed 移除通知通道
+// ---------------------------------------------------------------------------
+
+/// 双 kernel 全链：A 移除 B → B 收 `org-member-removed` 定向通知 → 本地擦除
+/// （whole + 成员条目 + orgq 现场）。B 已出成员表，orgsync/org-share 均不再
+/// 覆盖 B——该 dm 是移除的**唯一**主动通道（墓碑收敛 + legacy pull 兜底）。
+#[test]
+fn org_member_removed_notify_wipes_local_org() {
+    let dir_a = tempfile::tempdir().unwrap();
+    let dir_b = tempfile::tempdir().unwrap();
+    let mut kernel_a = fresh_kernel(dir_a.path());
+    let mut kernel_b = fresh_kernel(dir_b.path());
+    let (_root_a, _) = init_identity(&mut kernel_a);
+    let (root_b, _) = init_identity(&mut kernel_b);
+    kernel_a.start_p2p().unwrap();
+    kernel_b.start_p2p().unwrap();
+
+    // A 建组织 + 预录 B（带 B 的真实 nodeInfo → 推送与通知均可直连）
+    let view = kernel_a
+        .create_org(CreateOrganizationInput {
+            name: "移除组织".to_string(),
+            description: None,
+            avatar: None,
+            base_plugin_domain: Some("plugin:app".to_string()),
+        })
+        .unwrap();
+    let org_id = view.record.org_id.clone();
+    let b_node = spark_core::org::OrganizationNodeInfo {
+        device_uid: None,
+        peer_id: Some(kernel_b.p2p_status().unwrap().unwrap().peer_id.unwrap()),
+        addresses: dialable_addrs(&kernel_b),
+    };
+    kernel_a
+        .org_add_member(&org_id, &root_b, Some(&b_node))
+        .unwrap();
+    wait_until(
+        || kernel_b.list_orgs().map(|l| l.len() == 1).unwrap_or(false),
+        20_000,
+        "B 收到组织快照",
+    );
+
+    // A 移除 B → B 收通知 → 本地擦除
+    kernel_a.org_remove_member(&org_id, &root_b).unwrap();
+    wait_until(
+        || kernel_b.list_orgs().map(|l| l.is_empty()).unwrap_or(false),
+        20_000,
+        "B 收 org-member-removed 后本地组织擦除",
+    );
+    // 成员条目一并擦除（wipe_org_local：值与 pmeta 同删）
+    let leftover = kernel_b
+        .__test_storage()
+        .unwrap()
+        .scan(&spark_core::storage::ScanOptions::prefix(
+            spark_core::org::types::ORG_MEMBER_PREFIX,
+        ))
+        .unwrap();
+    assert!(leftover.is_empty(), "成员条目随移除擦除");
+
+    kernel_a.shutdown().unwrap();
+    kernel_b.shutdown().unwrap();
+}
+
+/// 入站校验：非 admin 发送的 org-member-removed 不擦除（伪造面）；重复通知
+/// （本地已无记录）幂等通过。
+#[test]
+fn org_member_removed_inbound_validation() {
+    use sha2::{Digest as _, Sha256};
+    use spark_core::kernel::{dm_envelope, handle_inbound_dm};
+    use spark_core::storage::MemoryStorage;
+
+    // 身份：rootId = sha256hex(签名公钥)（与 dm_envelope 验签口径一致）
+    let identity = |seed: u8| {
+        let key = ed25519_dalek::SigningKey::from_bytes(&[seed; 32]);
+        let root = hex::encode(Sha256::digest(key.verifying_key().to_bytes()));
+        (key, root)
+    };
+    let (a_key, a_root) = identity(1);
+    let (_b_key, b_root) = identity(2);
+    let (c_key, c_root) = identity(3);
+    let now = system_now_ms();
+
+    let mut s = MemoryStorage::new();
+    let record = OrganizationService::create_organization(
+        &mut s,
+        &CreateOrganizationInput {
+            name: "t".to_string(),
+            description: None,
+            avatar: None,
+            base_plugin_domain: None,
+        },
+        &a_root,
+        now,
+    )
+    .unwrap();
+    let org_id = record.org_id.clone();
+    OrganizationService::add_member(&mut s, &org_id, &b_root, None, &a_root, now).unwrap();
+    OrganizationService::add_member(&mut s, &org_id, &c_root, None, &a_root, now).unwrap();
+    let deliver = |s: &mut MemoryStorage, key: &ed25519_dalek::SigningKey, from: &str| {
+        let envelope = dm_envelope::build_envelope(
+            dm_envelope::KIND_ORG_MEMBER_REMOVED,
+            from,
+            &b_root,
+            now,
+            serde_json::json!({ "orgId": org_id, "targetPeerIds": ["peer-b"] }),
+            key,
+        );
+        handle_inbound_dm(
+            s,
+            &b_root,
+            "B",
+            envelope,
+            "peer-a",
+            &std::collections::HashSet::new(),
+            now,
+            "node-b",
+            None,
+        )
+        .unwrap()
+    };
+
+    // 非 admin（C 是普通成员）发送 → rejected，组织保留
+    let r = deliver(&mut s, &c_key, &c_root);
+    assert_eq!(r.response, serde_json::json!({ "ok": false, "reason": "rejected" }));
+    assert!(
+        OrganizationService::get_record(&s, &org_id).unwrap().is_some(),
+        "伪造通知不擦除"
+    );
+
+    // admin（A）发送 → 擦除 + OrgRemoved 事件
+    let r = deliver(&mut s, &a_key, &a_root);
+    assert_eq!(r.response, serde_json::json!({ "ok": true }));
+    assert!(
+        r.events
+            .iter()
+            .any(|e| matches!(e, spark_core::p2p::P2pEvent::OrgRemoved(_))),
+        "擦除后发 OrgRemoved 事件"
+    );
+    assert!(
+        OrganizationService::get_record(&s, &org_id).unwrap().is_none(),
+        "whole 已擦除"
+    );
+    let leftover = s
+        .scan(&spark_core::storage::ScanOptions::prefix(
+            spark_core::org::types::ORG_MEMBER_PREFIX,
+        ))
+        .unwrap();
+    assert!(leftover.is_empty(), "成员条目（值+pmeta）已擦除");
+
+    // 重复通知（本地已无记录）→ 幂等通过
+    let r = deliver(&mut s, &a_key, &a_root);
+    assert_eq!(r.response, serde_json::json!({ "ok": true }), "重复通知幂等");
 }
 
 // ---------------------------------------------------------------------------

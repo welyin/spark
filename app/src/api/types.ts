@@ -95,6 +95,8 @@ export type P2pEventDto =
   | { kind: 'DeviceOutOfGrace'; data: { passwordChangedAt: number; graceMs: number } }
   | { kind: 'OrgInviteReceived'; data: OrgInviteRecordDto }
   | { kind: 'OrgInviteUpdated'; data: OrgInviteRecordDto }
+  // 阶段四A P2：本机被移出组织（org-member-removed 入站擦除后发出），前端刷新组织列表
+  | { kind: 'OrgRemoved'; data: { orgId: string } }
   | { kind: 'Warning'; data: string }
   | { kind: 'Stopped' }
   | { kind: 'Lagged'; skipped: number };

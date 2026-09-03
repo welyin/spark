@@ -124,16 +124,11 @@ fn resolve_requester_peer_id<'a>(
 
 /// `org-pull-list` 响应（org-pull-sync.ts:162-198）。
 ///
-/// 顺序要点（此前 review 修过的点）：**仅当 requesterRootId 是本地任一组织
-/// 成员时才处理其 nodeInfoClaim**（未认证请求不得触发 claim 验签与落库
-/// 扫描）；claim 可能 bump 版本，处理后**重新读取全部组织记录**再生成
-/// 响应列表，否则响应里的旧版本会让拉取方误判"本地更新"而把记录回推。
-///
-/// `current_root_id` 为 `None`（未登录）时跳过 claim 应用（TS 的
-/// applyNodeInfoClaim 会抛"未解锁"被 catch，等价效果）。
-///
-/// 返回 `(响应帧, claim 实际落库的组织 id 列表)`——后者供宿主触发
-/// "落库后推送"（service.ts:450）。
+/// 阶段四A P2（L2 claim 退役）：**不再应用 nodeInfoClaim**——成员端点改由
+/// 成员自写 `org:member:{org}:{self}` 条目经 orgsync 扩散。payload 中的
+/// claim 字段仅继续供 `is_authenticated_self_request` 做自设备请求验明
+/// （读验签，不落库）。返回 `(响应帧, 恒空 Vec)`——第二元曾是 claim 落库
+/// 的组织 id 列表（宿主据此触发推送），退役后恒空，签名保留以稳调用方。
 pub fn handle_pull_list_request<S: StorageBackend>(
     storage: &mut S,
     io_lock: &crate::org::service::OrgMetaWriteLock,
@@ -142,6 +137,7 @@ pub fn handle_pull_list_request<S: StorageBackend>(
     remote_peer_id: Option<&str>,
     now_ms: i64,
 ) -> Result<(Value, Vec<String>)> {
+    let _ = io_lock; // claim 落库（唯一写径）已退役，锁形参保留稳签名
     let requester_root_id = payload
         .get("requesterRootId")
         .and_then(Value::as_str)
@@ -159,38 +155,7 @@ pub fn handle_pull_list_request<S: StorageBackend>(
     };
     let requester_peer_id = resolve_requester_peer_id(payload, remote_peer_id);
 
-    let mut organizations = OrganizationService::read_all_organizations(storage)?;
-    let mut applied_orgs: Vec<String> = Vec::new();
-
-    // nodeInfoClaim：requesterRootId 是已知成员才应用；应用后重读记录
-    if let Some(claim_value) = payload.get("nodeInfoClaim").filter(|v| !v.is_null())
-        && let Some(root_id) = current_root_id
-    {
-        let is_known_member = organizations
-            .iter()
-            .any(|r| r.members.iter().any(|m| m.root_id == requester_root_id));
-        if is_known_member {
-            // claim 解析/校验/落库失败仅告警，不阻断响应（org-pull-sync.ts:177-183）
-            let applied = serde_json::from_value::<NodeInfoClaim>(claim_value.clone())
-                .ok()
-                .map(|claim| {
-                    OrganizationService::apply_node_info_claim(
-                        storage,
-                        io_lock,
-                        &claim,
-                        root_id,
-                        remote_peer_id,
-                        now_ms,
-                    )
-                });
-            if let Some(Ok(ids)) = applied {
-                applied_orgs = ids;
-                if !applied_orgs.is_empty() {
-                    organizations = OrganizationService::read_all_organizations(storage)?;
-                }
-            }
-        }
-    }
+    let organizations = OrganizationService::read_all_organizations(storage)?;
 
     // 自设备请求验明（claim 验签 + rootId 同源 + peer 绑定）：放开
     // peer-mismatch 过滤，使任一台自设备都能拉到自己作为成员的组织
@@ -233,7 +198,7 @@ pub fn handle_pull_list_request<S: StorageBackend>(
             "type": "org-pull-list-response",
             "organizations": visible
         }),
-        applied_orgs,
+        Vec::new(), // P2 L2：claim 退役后无「落库的组织」可报（恒空）
     ))
 }
 

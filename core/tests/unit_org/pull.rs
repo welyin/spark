@@ -147,8 +147,12 @@ fn pull_list_filters_by_membership() {
     assert_eq!(response["organizations"].as_array().unwrap().len(), 0);
 }
 
+/// 阶段四A P2（L2 claim 退役）：pull-list 携带 nodeInfoClaim **不再落库**——
+/// 不回填 nodeInfo、不 bump 版本、第二返回元恒空；响应列表照旧（成员可见
+/// 性过滤不受影响）。成员端点扩散由成员自写 org:member 条目承担
+/// （split.rs::upsert_own_member_entry_* 钉住）。
 #[test]
-fn pull_list_claim_applied_only_for_known_member() {
+fn pull_list_claim_no_longer_applied() {
     let (mut storage, admin, record) = setup();
     let member = root_id_of(MNEMONIC2);
     OrganizationService::add_member(&mut storage, &record.org_id, &member, None, &admin, NOW)
@@ -166,8 +170,11 @@ fn pull_list_claim_applied_only_for_known_member() {
         NOW,
     );
     let claim_value = serde_json::to_value(&claim).unwrap();
+    let before = OrganizationService::get_record(&storage, &record.org_id)
+        .unwrap()
+        .unwrap();
 
-    // 已知成员：claim 应用 → 回填 nodeInfo（且 admin 视角重读可见）
+    // 已知成员携带 claim：不应用（组织记录零改动），响应列表照常
     let (response, applied) = handle_pull_list_request(
         &mut storage,
         &crate::test_io_lock(),
@@ -181,32 +188,16 @@ fn pull_list_claim_applied_only_for_known_member() {
         NOW,
     )
     .unwrap();
-    assert_eq!(
-        applied,
-        vec![record.org_id.clone()],
-        "claim 应用组织随响应返回"
-    );
+    assert!(applied.is_empty(), "claim 退役：无「落库组织」可报");
     assert_eq!(response["ok"], true);
-    let updated = OrganizationService::get_record(&storage, &record.org_id)
+    let orgs = response["organizations"].as_array().unwrap();
+    assert_eq!(orgs.len(), 1, "成员可见性过滤不受影响");
+    let after = OrganizationService::get_record(&storage, &record.org_id)
         .unwrap()
         .unwrap();
-    let m = updated.find_member(&member).unwrap();
-    assert_eq!(
-        m.node_info
-            .as_ref()
-            .unwrap()
-            .iter()
-            .next()
-            .unwrap()
-            .peer_id
-            .as_deref(),
-        Some("member-peer")
-    );
-    // 响应里的版本是回填后重读的版本（= NOW  bump 后的 updatedAt）
-    let orgs = response["organizations"].as_array().unwrap();
-    assert_eq!(orgs[0]["sync"]["membersVersion"], Value::from(NOW));
+    assert_eq!(before, after, "claim 不再回填/不再 bump 版本");
 
-    // 非成员：claim 不应用（组织记录不被触碰）
+    // 非成员：claim 不应用（组织记录不被触碰），可见列表为空
     let stranger = "ee".repeat(32);
     let parsed = parse_mnemonic(MNEMONIC2).unwrap();
     let identity = derive_root_identity(&parsed.seed);
@@ -220,11 +211,7 @@ fn pull_list_claim_applied_only_for_known_member() {
         NOW,
     );
     let mut claim_v = serde_json::to_value(&stranger_claim).unwrap();
-    // 把 claim 的 rootId 换成非成员（验签会失败，但门卫在验签之前就该拦截）
     claim_v["rootId"] = Value::from(stranger.clone());
-    let before = OrganizationService::get_record(&storage, &record.org_id)
-        .unwrap()
-        .unwrap();
     let (response, applied) = handle_pull_list_request(
         &mut storage,
         &crate::test_io_lock(),
