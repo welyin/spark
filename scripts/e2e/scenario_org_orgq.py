@@ -18,6 +18,8 @@ fail-closed 不可受理；encrypted 写恒受理、删除要求 from ∈ acl re
   折叠失明）→ 对端必须收讫 k2 → B 再写 k3 + 读回 k2 → A/C 折叠 vv 收敛。
 """
 
+import time
+
 from node import Node, NodeError, check, poll_until, run_scenario
 
 EVENT_TIMEOUT = 40.0
@@ -54,16 +56,27 @@ def join_org(admin, member, org_id):
     received = member.wait_event(
         "OrgInviteReceived", lambda d: d.get("orgId") == org_id, timeout=EVENT_TIMEOUT
     )
-    # 等管理员快照推送落地再应答（接受编排 pull-list 有 per-peer 限流）
-    poll_until(
-        lambda: any(o["orgId"] == org_id for o in member.send("org-list")),
-        timeout=EVENT_TIMEOUT,
-        what=f"{member.name} 收到预录组织快照",
-    )
-    responded = member.send(
-        "org-respond-invite", inviteId=received["id"], accept=True
-    )
+    # P3 后 join 全靠接受编排（stub 自举 + connect + 有界等 orgsync 收敛）——
+    # 不再预等「预录快照」（legacy 推送通道已删）。收敛超时/失败按 TS 口径
+    # 报错可重试（幂等，等价 UI 用户再点一次确认）。
+    responded = None
+    for attempt in range(3):
+        try:
+            responded = member.send(
+                "org-respond-invite", inviteId=received["id"], accept=True
+            )
+            break
+        except NodeError:
+            if attempt == 2:
+                raise
+            time.sleep(2)
     check(responded["status"] == "accepted", f"{member.name} 侧邀请记录置 accepted")
+    # 接受后确认：本地 org-list 经收敛可见该组织
+    poll_until(
+        lambda: any(o["orgId"] == org_id for o in member.send("org-list")) or None,
+        timeout=EVENT_TIMEOUT,
+        what=f"{member.name} 接受后收敛看到组织",
+    )
     # 邀请回执（org-invite-reply）为尽力投递：可能迟到/丢失，但成员关系已由
     # 预录 + 接受编排生效。轮询管理员侧邀请记录收口；不到达则告警继续
     # （O2 数据验收不依赖该回执），丢失情况记入验收报告。

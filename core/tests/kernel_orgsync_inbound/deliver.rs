@@ -125,15 +125,43 @@ fn setup() -> (Kernel, Kernel, String, String) {
     (kernel_a, kernel_b, org_id, root_a)
 }
 
-/// 让 B 拉取组织 + 声明同一集合 + 等待 A/B 连接就绪。
-fn connect_member(kernel_a: &Kernel, kernel_b: &mut Kernel, org_id: &str) {
-    let a_node = spark_core::org::OrganizationNodeInfo {
-        device_uid: None,
-        peer_id: kernel_a.p2p_status().unwrap().unwrap().peer_id,
-        addresses: dialable_addrs(kernel_a),
-    };
-    let result = kernel_b.sync_peer_organizations(&a_node).unwrap();
-    assert!(result.pull_checked >= 1, "B 拉到组织");
+/// 让 B 加入组织 + 声明同一集合 + 等待 A/B 连接就绪。
+///
+/// 阶段四A P3：org-pull 回拉出站停发——预录成员的组织到达改走**邀请流**
+/// （A 发 DM 邀请 → B 应答 accept 走 P2 join：stub 自举 + orgsync 收敛）。
+fn connect_member(kernel_a: &mut Kernel, kernel_b: &mut Kernel, org_id: &str) {
+    let root_b = kernel_b.current_root_id().unwrap().unwrap();
+    kernel_a
+        .org_send_invite(
+            org_id,
+            &root_b,
+            kernel_b.p2p_status().unwrap().unwrap().peer_id.as_deref(),
+            &dialable_addrs(kernel_b),
+            None,
+        )
+        .unwrap();
+    // 等 B 收到入站邀请记录（dm 投递 + 入站落库）
+    wait_until(
+        || {
+            kernel_b
+                .org_invite_records(org_id)
+                .map(|rs| {
+                    rs.iter()
+                        .any(|r| r.direction == spark_core::org::OrgInviteDirection::Incoming)
+                })
+                .unwrap_or(false)
+        },
+        15_000,
+        "B 收到 org-invite",
+    );
+    let invite = kernel_b
+        .org_invite_records(org_id)
+        .unwrap()
+        .into_iter()
+        .find(|r| r.direction == spark_core::org::OrgInviteDirection::Incoming)
+        .expect("入站邀请已落库");
+    // accept → P2 join（stub + 即时 hello → 收敛），返回即已加入
+    kernel_b.org_respond_invite(&invite.id, true).unwrap();
     kernel_b
         .data_declare_collection("plugin:orgq", data_accounts_declare(), Some(org_id))
         .unwrap();
@@ -179,7 +207,7 @@ fn member_online_query_delivers_and_caches() {
             &["data:write".to_string()],
         )
         .unwrap();
-    connect_member(&kernel_a, &mut kernel_b, &org_id);
+    connect_member(&mut kernel_a, &mut kernel_b, &org_id);
 
     let page = kernel_b
         .data_query(
@@ -231,7 +259,7 @@ fn member_online_query_hook_reject_returns_empty() {
             &["data:write".to_string()],
         )
         .unwrap();
-    connect_member(&kernel_a, &mut kernel_b, &org_id);
+    connect_member(&mut kernel_a, &mut kernel_b, &org_id);
 
     // F9-1 对照段：A 是数据账号 → 本地直读 k1 应命中（数据确已驻留）；B 经
     // orgq 查询却被 canRead 拒绝 → 空集。对照说明 B 空集是权限拒绝而非数据
@@ -284,7 +312,7 @@ fn member_online_write_accepted_lands_on_a() {
             &["data:write".to_string()],
         )
         .unwrap();
-    connect_member(&kernel_a, &mut kernel_b, &org_id);
+    connect_member(&mut kernel_a, &mut kernel_b, &org_id);
 
     // B 在线写入 → 受理 → 成功返回
     kernel_b
@@ -339,7 +367,7 @@ fn member_online_write_denied_maps_access_denied() {
             &["data:write".to_string()],
         )
         .unwrap();
-    connect_member(&kernel_a, &mut kernel_b, &org_id);
+    connect_member(&mut kernel_a, &mut kernel_b, &org_id);
 
     let err = kernel_b
         .data_save(
@@ -472,15 +500,38 @@ fn orgkey_deliver_reaches_reader_and_enables_decrypt() {
     kernel_a
         .data_declare_collection("plugin:enc", encrypted_declare(), Some(&org_id))
         .unwrap();
-    // B 拉组织 + 声明同一集合 + 连接 A
+    // B 加入组织 + 声明同一集合 + 连接 A（P3：邀请流 join，见 connect_member）
     {
-        let a_node = spark_core::org::OrganizationNodeInfo {
-            device_uid: None,
-            peer_id: kernel_a.p2p_status().unwrap().unwrap().peer_id,
-            addresses: dialable_addrs(&kernel_a),
-        };
-        let result = kernel_b.sync_peer_organizations(&a_node).unwrap();
-        assert!(result.pull_checked >= 1, "B 拉到组织");
+        let root_b = kernel_b.current_root_id().unwrap().unwrap();
+        kernel_a
+            .org_send_invite(
+                &org_id,
+                &root_b,
+                kernel_b.p2p_status().unwrap().unwrap().peer_id.as_deref(),
+                &dialable_addrs(&kernel_b),
+                None,
+            )
+            .unwrap();
+        wait_until(
+            || {
+                kernel_b
+                    .org_invite_records(&org_id)
+                    .map(|rs| {
+                        rs.iter()
+                            .any(|r| r.direction == spark_core::org::OrgInviteDirection::Incoming)
+                    })
+                    .unwrap_or(false)
+            },
+            15_000,
+            "B 收到 org-invite",
+        );
+        let invite = kernel_b
+            .org_invite_records(&org_id)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.direction == spark_core::org::OrgInviteDirection::Incoming)
+            .expect("入站邀请已落库");
+        kernel_b.org_respond_invite(&invite.id, true).unwrap();
         kernel_b
             .data_declare_collection("plugin:enc", encrypted_declare(), Some(&org_id))
             .unwrap();

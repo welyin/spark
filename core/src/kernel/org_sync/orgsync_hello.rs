@@ -20,6 +20,60 @@ use crate::p2p::peer_targets::PeerNodeInfo;
 use crate::storage::{ScanOptions, StorageBackend};
 
 impl OrgSyncContext {
+    /// P3 sync-now（`p2p-sync-peer-organizations` 的新语义）：连接目标 peer
+    /// 并向其发送本机全部组织的 orgsync-hello（收敛异步：对端回 need 拉走
+    /// diff，或对方主动 hello 回来）。legacy pull 对账出站已停发——返回
+    /// 形状的 pull 字段恒 0；`attempted/synced = 1` 表示连接成功且 hello
+    /// 已发出（orgsync 是反熵协议，「发出 hello」即本次同步动作完成）。
+    pub(crate) async fn orgsync_round_with_peer(
+        &self,
+        node_info: &PeerNodeInfo,
+        dial_timeout: std::time::Duration,
+    ) -> Result<super::PeerOrgSyncResult, String> {
+        self.node
+            .connect_peer_with_timeout(node_info, dial_timeout)
+            .await
+            .map_err(|e| e.to_string())?;
+        let Some(root_id) = self.root_id() else {
+            return Ok(super::PeerOrgSyncResult::default());
+        };
+        let connected: std::collections::HashSet<String> = self
+            .node
+            .local_node_info()
+            .await
+            .ok()
+            .map(|info| info.connected_peers.into_iter().collect())
+            .unwrap_or_default();
+        self.maybe_send_orgsync_hello(&root_id, &connected, None)
+            .await;
+        Ok(super::PeerOrgSyncResult {
+            attempted: 1,
+            synced: 1,
+            ..Default::default()
+        })
+    }
+
+    /// 组织写入事件驱动的即时 hello（P3：org-share 推送出站停发后，「组织
+    /// 写入 → 通知成员」的唯一通道）：对已连接复制组成员发该组织的
+    /// orgsync-hello（M8：hello 不拨号；未连接成员等其上线后收敛）。
+    pub(crate) async fn orgsync_hello_now(&self, org_id: &str) {
+        let Some(root_id) = self.root_id() else {
+            return;
+        };
+        let connected: std::collections::HashSet<String> = self
+            .node
+            .local_node_info()
+            .await
+            .ok()
+            .map(|info| info.connected_peers.into_iter().collect())
+            .unwrap_or_default();
+        if connected.is_empty() {
+            return;
+        }
+        self.maybe_send_orgsync_hello(&root_id, &connected, Some(org_id))
+            .await;
+    }
+
     /// orgsync-hello 触发：遍历组织与 org 集合，向已连接的复制组成员逐成员
     /// 发送 hello（每收件人独立裁剪 collections + 独立 dlogAck）。
     pub(crate) async fn maybe_send_orgsync_hello(

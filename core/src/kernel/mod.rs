@@ -231,12 +231,6 @@ pub struct Kernel {
     /// 保活读取。
     pub(crate) pdsync_capable_self_devices:
         Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
-    /// 已证明支持 orgsync 的成员设备 peerId 集合（O2b 能力探测，§20.8：
-    /// 收到验签通过的 orgsync-hello/need/data 即按连接层 peerId 标记——按
-    /// 设备粒度，与 pdsync 同款；org-share/org-pull 出站据此决定是否回退
-    /// 旧快照链路）。host `handle_dm` 写入、org-sync 推送读取。
-    pub(crate) orgsync_capable_member_peers:
-        Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
     /// doc_* 调用登记的集合配置（远端应用的索引维护依据，见 host.rs）。
     pub(crate) collection_configs: CollectionConfigs,
     /// 存储读写互斥：p2p 事件循环（host `handle_dm`）与 Tauri 命令线程的
@@ -324,9 +318,6 @@ impl Kernel {
             self_device_link: Arc::new(Mutex::new(None)),
             self_device_links: Arc::new(Mutex::new(std::collections::HashSet::new())),
             pdsync_capable_self_devices: Arc::new(std::sync::Mutex::new(
-                std::collections::HashSet::new(),
-            )),
-            orgsync_capable_member_peers: Arc::new(std::sync::Mutex::new(
                 std::collections::HashSet::new(),
             )),
             collection_configs,

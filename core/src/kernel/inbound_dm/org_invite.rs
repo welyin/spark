@@ -256,7 +256,7 @@ pub(super) fn handle_org_invite_reply<S: StorageBackend>(
 /// 信封验签/`to` 定向校验在外层 `handle_inbound_dm` 已完成。
 pub(super) fn handle_org_member_removed<S: StorageBackend>(
     storage: &mut S,
-    _ctx: &InboundContext<'_>,
+    ctx: &InboundContext<'_>,
     from: &str,
     body: &Value,
 ) -> Result<InboundDmResult> {
@@ -283,7 +283,7 @@ pub(super) fn handle_org_member_removed<S: StorageBackend>(
             return done(fail_response("rejected"), Vec::new());
         }
     }
-    let wiped = crate::org::service::wipe_org_local(storage, org_id)?;
+    let wiped = crate::org::service::wipe_org_local(storage, org_id, ctx.node_id, ctx.now_ms)?;
     log::info!("[ORG] member-removed applied | org={org_id} wiped_entries={wiped}");
     done(
         ok_response(),

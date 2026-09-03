@@ -112,10 +112,7 @@ impl Kernel {
             &node_id,
         )?;
         if let Some(tx) = &self.org_sync_tx {
-            let _ = tx.send(OrgSyncRequest::PushOrg {
-                org_id: record.org_id.clone(),
-                actor_root_id: root_id.clone(),
-            });
+            let _ = tx.send(OrgSyncRequest::PushOrg { org_id: record.org_id.clone() });
         }
         Ok(OrganizationService::to_view(&record, &root_id))
     }
@@ -192,10 +189,7 @@ impl Kernel {
             &node_id,
         )?;
         if let Some(tx) = &self.org_sync_tx {
-            let _ = tx.send(OrgSyncRequest::PushOrg {
-                org_id: record.org_id.clone(),
-                actor_root_id: root_id.clone(),
-            });
+            let _ = tx.send(OrgSyncRequest::PushOrg { org_id: record.org_id.clone() });
         }
         Ok(OrganizationService::to_view(&record, &root_id))
     }
@@ -221,10 +215,7 @@ impl Kernel {
             &node_id,
         )?;
         if let Some(tx) = &self.org_sync_tx {
-            let _ = tx.send(OrgSyncRequest::PushOrg {
-                org_id: record.org_id.clone(),
-                actor_root_id: root_id.clone(),
-            });
+            let _ = tx.send(OrgSyncRequest::PushOrg { org_id: record.org_id.clone() });
         }
         Ok(OrganizationService::to_view(&record, &root_id))
     }
@@ -251,10 +242,7 @@ impl Kernel {
             &node_id,
         )?;
         if let Some(tx) = &self.org_sync_tx {
-            let _ = tx.send(OrgSyncRequest::PushOrg {
-                org_id: record.org_id.clone(),
-                actor_root_id: root_id.clone(),
-            });
+            let _ = tx.send(OrgSyncRequest::PushOrg { org_id: record.org_id.clone() });
         }
         Ok(OrganizationService::to_view(&record, &root_id))
     }
@@ -283,10 +271,7 @@ impl Kernel {
             &node_id,
         )?;
         if let Some(tx) = &self.org_sync_tx {
-            let _ = tx.send(OrgSyncRequest::PushOrg {
-                org_id: record.org_id.clone(),
-                actor_root_id: root_id.clone(),
-            });
+            let _ = tx.send(OrgSyncRequest::PushOrg { org_id: record.org_id.clone() });
         }
         Ok(OrganizationService::to_view(&record, &root_id))
     }
@@ -311,10 +296,7 @@ impl Kernel {
             &node_id,
         )?;
         if let Some(tx) = &self.org_sync_tx {
-            let _ = tx.send(OrgSyncRequest::PushOrg {
-                org_id: record.org_id.clone(),
-                actor_root_id: root_id.clone(),
-            });
+            let _ = tx.send(OrgSyncRequest::PushOrg { org_id: record.org_id.clone() });
         }
         Ok(OrganizationService::to_view(&record, &root_id))
     }
@@ -344,16 +326,14 @@ impl Kernel {
             &node_id,
         )?;
         if let Some(tx) = &self.org_sync_tx {
-            let _ = tx.send(OrgSyncRequest::PushOrg {
-                org_id: record.org_id.clone(),
-                actor_root_id: root_id.clone(),
-            });
+            let _ = tx.send(OrgSyncRequest::PushOrg { org_id: record.org_id.clone() });
         }
         Ok(OrganizationService::to_view(&record, &root_id))
     }
 
     /// 删除组织（仅 admin，service.ts:199-214）。只落库不推送（对齐 TS——
-    /// 删除经 org-pull 的 `removed` 状态传播）。
+    /// 删除传播：P2 起经 org-member-removed 通知 + orgsync 墓碑收敛；P3 前
+    /// 另有 org-pull `removed` 状态兜底，P3 出站停发后移除）。
     pub fn org_delete(&mut self, org_id: &str) -> Result<()> {
         let root_id = self.require_unlocked_root_id()?;
         let node_id = self.sync_node_id();
@@ -370,31 +350,14 @@ impl Kernel {
     // 组织同步编排 API（org_sync/；ipc/p2p.ts 对齐）
     // ------------------------------------------------------------------
 
-    /// 向指定成员推送组织快照（org-share-sync.ts `syncOrganizationToMember`：
-    /// stale 跳过 → 直连优先 → pubsub 五次重试等 ack → sync-state 记账）。
+    /// `p2p-sync-peer-organizations`（ipc/p2p.ts:72-93）：**阶段四A P3 起改
+    /// 为 orgsync 触发**——连接目标 peer 并向其发送本机全部组织的
+    /// orgsync-hello（对端回 need 拉走 diff；收敛异步完成）。legacy
+    /// pull 对账（pull-list/pull-org 出站）已停发。
     ///
-    /// p2p 未启动报 `p2p node not started`；全部重试失败报
-    /// `Organization sync ack timeout: ...`（TS 同文案）。
-    pub fn sync_org_to_member(
-        &self,
-        node_info: &OrganizationNodeInfo,
-        target_root_id: &str,
-        org_id: &str,
-    ) -> Result<()> {
-        let ctx = self.org_sync_context().ok_or(P2pError::NotStarted)?;
-        let peer = PeerNodeInfo {
-            peer_id: node_info.peer_id.clone(),
-            addresses: node_info.addresses.clone(),
-        };
-        self.runtime
-            .handle()
-            .block_on(ctx.sync_org_to_member(&peer, target_root_id, org_id))
-            .map_err(KernelError::Internal)
-    }
-
-    /// `p2p-sync-peer-organizations`（ipc/p2p.ts:72-93）：从指定 peer 反熵
-    /// 对账全部共同组织（不带 claim，对齐该通道的调用形状）。校验顺序与
-    /// 错误文案对齐 TS：p2p 未启动 → 身份锁定 → 地址缺失。
+    /// 校验顺序与错误文案对齐 TS：p2p 未启动 → 身份锁定 → 地址缺失。
+    /// 返回形状的 pull 字段恒 0（无 pull 发生）；`attempted` = 是否成功
+    /// 连接并发出 hello。
     pub fn sync_peer_organizations(
         &self,
         target_peer: &OrganizationNodeInfo,
@@ -406,9 +369,7 @@ impl Kernel {
     }
 
     /// 同 `sync_peer_organizations`，但单 peer 拨号超时由调用方指定：
-    /// 手动 sync-now（用户可感路径）传更短超时让不可达成员快速失败，
-    /// 避免整批串行拨号阻塞；对账语义（双向 stale 推送 + pull + removed
-    /// 清理）完全一致。
+    /// 手动 sync-now（用户可感路径）传更短超时让不可达成员快速失败。
     pub fn sync_peer_organizations_with_dial_timeout(
         &self,
         target_peer: &OrganizationNodeInfo,
@@ -429,12 +390,10 @@ impl Kernel {
             peer_id: target_peer.peer_id.clone(),
             addresses: target_peer.addresses.clone(),
         };
-        let stats = self
-            .runtime
+        self.runtime
             .handle()
-            .block_on(ctx.reconcile_from_peer_with_dial_timeout(&peer, dial_timeout))
-            .map_err(KernelError::Internal)?;
-        Ok(stats.into())
+            .block_on(ctx.orgsync_round_with_peer(&peer, dial_timeout))
+            .map_err(KernelError::Internal)
     }
 
     /// 手动执行一次组织保活 tick（候选拨号/反熵/补副本/recovery；

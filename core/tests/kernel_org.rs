@@ -203,7 +203,8 @@ fn org_member_removed_notify_wipes_local_org() {
     kernel_a.start_p2p().unwrap();
     kernel_b.start_p2p().unwrap();
 
-    // A 建组织 + 预录 B（带 B 的真实 nodeInfo → 推送与通知均可直连）
+    // A 建组织 + 预录 B（带 B 的真实 nodeInfo）→ P3：组织到达走邀请流
+    // （org-share 推送已停发）——A 发 DM 邀请，B 应答 accept 完成 join
     let view = kernel_a
         .create_org(CreateOrganizationInput {
             name: "移除组织".to_string(),
@@ -221,11 +222,30 @@ fn org_member_removed_notify_wipes_local_org() {
     kernel_a
         .org_add_member(&org_id, &root_b, Some(&b_node))
         .unwrap();
+    kernel_a
+        .org_send_invite(&org_id, &root_b, b_node.peer_id.as_deref(), &b_node.addresses, None)
+        .unwrap();
     wait_until(
-        || kernel_b.list_orgs().map(|l| l.len() == 1).unwrap_or(false),
-        20_000,
-        "B 收到组织快照",
+        || {
+            kernel_b
+                .org_invite_records(&org_id)
+                .map(|rs| {
+                    rs.iter()
+                        .any(|r| r.direction == spark_core::org::OrgInviteDirection::Incoming)
+                })
+                .unwrap_or(false)
+        },
+        15_000,
+        "B 收到 org-invite",
     );
+    let invite = kernel_b
+        .org_invite_records(&org_id)
+        .unwrap()
+        .into_iter()
+        .find(|r| r.direction == spark_core::org::OrgInviteDirection::Incoming)
+        .expect("入站邀请已落库");
+    kernel_b.org_respond_invite(&invite.id, true).unwrap();
+    assert_eq!(kernel_b.list_orgs().unwrap().len(), 1, "B 已加入组织");
 
     // A 移除 B → B 收通知 → 本地擦除
     kernel_a.org_remove_member(&org_id, &root_b).unwrap();

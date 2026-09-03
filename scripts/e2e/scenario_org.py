@@ -71,16 +71,9 @@ def main():
         check(card["message"]["link"]["title"] == "E2E 组织", "卡片标题为组织名")
 
         # ---- B 接受 → 双方状态收敛 ----------------------------------------
-        # 接受编排是 pull-list + pull-org 连发（org-pull 有 per-peer 限流），
-        # B 无本地记录时全靠拉取会确定性被限；真实流程里管理员的快照推送
-        # 先于用户点确认到达，这里等推送落地再应答（邀请 DM 仍是预录后
-        # 立即连发，重试兜底已在上面卡片断言中验证）
-        poll_until(
-            lambda: any(o["orgId"] == org_id for o in b.send("org-list")),
-            what="B 收到预录组织快照",
-        )
-        # 接受触发凭码加入编排（connectAndPull）：失败保持 pending 可安全
-        # 重试（等价 UI 用户再点一次确认）
+        # P3 后 join 全靠接受编排（stub 自举 + connect + 有界等 orgsync 收敛），
+        # 不再预等「预录快照」（legacy 推送通道已删）；失败保持 pending 可安全
+        # 重试（幂等，等价 UI 用户再点一次确认）
         responded = None
         for attempt in range(3):
             try:
@@ -91,7 +84,12 @@ def main():
                     raise
                 time.sleep(2)
         check(responded["status"] == "accepted", "B 侧邀请记录置 accepted")
-        mine_b = b.send("org-list")
+        mine_b = poll_until(
+            lambda: (lambda l: l if any(o["orgId"] == org_id for o in l) else None)(
+                b.send("org-list")
+            ),
+            what="B 接受后收敛看到组织",
+        )
         org_b = next((o for o in mine_b if o["orgId"] == org_id), None)
         check(org_b is not None, "B 的组织列表应有该组织")
         check(org_b["memberCount"] == 2, "B 侧成员数为 2")

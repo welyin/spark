@@ -3,9 +3,8 @@
 //! - [`OrganizationService::upsert_own_member_entry`]：成员自写条目（L2
 //!   claim 退役的取代通道）——本机端点（nodeInfo）经 `org:member:{org}:{self}`
 //!   条目随 orgsync 全员扩散，取代 nodeInfoClaim 捎带的管理员回填；
-//! - [`wipe_org_local`]：本机被移出组织的本地擦除（L3 removed 通知入站与
-//!   legacy pull Removed 分支共用）——whole + 成员条目（值与 pmeta）+ orgq
-//!   现场一并清除。
+//! - [`wipe_org_local`]：本机被移出组织的本地擦除（L3 removed 通知入站；
+//!   org:meta 经 delete_personal 墓碑化——同账号自设备经 pdsync 同步擦除）。
 
 use crate::storage::{ScanOptions, StorageBackend};
 
@@ -48,19 +47,22 @@ impl OrganizationService {
     }
 }
 
-/// 本机被移出组织的本地擦除（P2 L3）：删 org:meta whole（句柄语义——版本化
-/// 句柄=墓碑+pdsync 自设备传播，raw=裸删）+ 全部 `org:member:{orgId}:` 条目
-/// （值与 pmeta 同删）+ orgq 现场（缓存/离线队列/在线目录，
+/// 本机被移出组织的本地擦除（P2 L3；P3 起 legacy pull 出站停发，本函数是
+/// 移除擦除的唯一通道）：org:meta whole 经 [`crate::sync::delete_personal`]
+/// 删除（墓碑 + 个人域 dlog——**账号级传播**：同账号其他自设备经 pdsync
+/// 收墓碑同步擦除组织）+ 全部 `org:member:{orgId}:` 条目（值与 pmeta 同删
+/// ——orgsync 原生键，本地擦除不产墓碑/dlog：被移除者的 orgsync 信封过不
+/// 了对端「from ∈ 成员表」前置，墓碑传播无意义；自设备上的条目残留因
+/// org:meta 墓碑而不可见，无害）+ orgq 现场（缓存/离线队列/在线目录，
 /// `orgq_wipe_org_local` 既有语义）。幂等。返回擦除的条目数（观测用）。
-///
-/// 句柄差异说明：入站 `handle_org_member_removed` 持 raw 句柄（裸删无
-/// 墓碑）；legacy pull Removed 分支持版本化句柄——条目删除会先产墓碑再
-/// 被紧随的 pmeta 裸删覆盖（净效果同上），org/个人 dlog 会留条目（org 侧
-/// 传播无意义：被移除者的信封过不了对端「from ∈ 成员表」前置；个人侧经
-/// pdsync 驱动自设备条目擦除——正是所需）。自设备擦除的完备性挂账
-/// P3/P4（设计 §4）。
-pub fn wipe_org_local<S: StorageBackend>(storage: &mut S, org_id: &str) -> Result<usize> {
-    storage.delete(&organization_key(org_id))?;
+pub fn wipe_org_local<S: StorageBackend>(
+    storage: &mut S,
+    org_id: &str,
+    node_id: &str,
+    now_ms: i64,
+) -> Result<usize> {
+    crate::sync::delete_personal(storage, node_id, &organization_key(org_id), now_ms)
+        .map_err(|e| super::OrgError::Storage(crate::storage::StorageError::Backend(e.to_string())))?;
     let prefix = format!("{}{}:", super::super::types::ORG_MEMBER_PREFIX, org_id);
     let keys: Vec<String> = storage
         .scan(&ScanOptions::prefix(&prefix))?

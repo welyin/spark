@@ -1,17 +1,16 @@
 //! keepalive 组织保活周期任务（p2p-node.ts `maintainOrganizationNetwork`）：
-//! 四阶段分预算执行（org-sync-stall-fix §3.2，F6：S0 网关/地址发布 →
-//! S1 自设备链路 → S2 反熵对账 → S3 orgsync-hello 恒执行，各阶段独立超时）。
+//! 分阶段预算执行（org-sync-stall-fix §3.2，F6：S0 网关/地址发布 →
+//! S1 自设备链路 → S3 orgsync-hello 恒执行，各阶段独立超时）。
 //! （覆盖网维护已在 p2p 事件循环内完成；覆盖网成员不周期拨号，connection-policy
-//! M5。M6：tick 内主动外联（网关拨号 / 失联恢复查询 / **管理员补副本**）全删，
-//! 彻底事件驱动——连接仅由懒拨号（发送时 / 登录时 / 网络恢复时）与被动接受
-//! 入站建立；补副本挪到组织写入事件点（push.rs `ensure_replicas_after_write`）。
+//! M5。M6：tick 内主动外联（网关拨号 / 失联恢复查询 / 管理员补副本）全删，
+//! 彻底事件驱动。阶段四A P3：S2 legacy org-pull 反熵对账随出站停发删除——
+//! 组织对账由 orgsync 反熵承接。）
 
 use std::collections::HashSet;
 
-use super::dial::connected_gateway_candidates;
 use super::{
-    ORG_ADDRESS_REPUBLISH_INTERVAL_MS, OrgSyncContext, PULL_CANDIDATES_PER_TICK,
-    SELF_HELLO_IMMEDIATE_MIN_INTERVAL_MS, SelfHelloState, collect_org_peer_candidates,
+    ORG_ADDRESS_REPUBLISH_INTERVAL_MS, OrgSyncContext, SELF_HELLO_IMMEDIATE_MIN_INTERVAL_MS,
+    SelfHelloState,
 };
 use crate::contact::ContactService;
 use crate::org::OrganizationService;
@@ -172,7 +171,7 @@ impl OrgSyncContext {
     // ------------------------------------------------------------------
 
     /// 单个 keepalive tick 的组织层保活（p2p-node.ts:379-445
-    /// `maintainOrganizationNetwork`），四阶段分预算执行（org-sync-stall-fix
+    /// `maintainOrganizationNetwork`），分阶段预算执行（org-sync-stall-fix
     /// §3.2，F6）：
     ///
     /// - **S0** 网关/地址发布（[`Self::refresh_gateway_providing`] +
@@ -180,14 +179,15 @@ impl OrgSyncContext {
     /// - **S1** 自设备链路状态机（断→连跳变 Resync、稳态 steady hello，10s）。
     ///   不做周期补拨（M4 懒拨号：写入触发 `self_hello_now` 才拨一次）——两端
     ///   错峰上线靠任一方写入触发懒拨号会合，或对端主动拨过来；
-    /// - **S2** 反熵对账（≤2 个已连接网关候选，捎带自签 claim，20s）。M6 起
-    ///   tick 内零主动外联——候选仅由已连接网关构成，无候选即跳过（「没连接
-    ///   就不拉取」）；
     /// - **S3** orgsync-hello（向已连接复制组成员发摘要，O2a §20.3，10s）——
     ///   tick 的出口语义，**恒执行**：前序阶段超时放弃不得跳过。
     ///
+    /// 阶段四A P3：S2（legacy org-pull 反熵对账）随出站停发删除——组织对账
+    /// 由 orgsync 反熵（S3 + 写入触发的即时 hello）承接；`reconcile` 预算
+    /// 字段同删。
+    ///
     /// 各阶段包 `tokio::time::timeout`，超时即放弃本阶段进入下一阶段（阶段间
-    /// 无依赖）；总预算 ≤50s（外加 S1/S2 前一次 5s 超时兜底的
+    /// 无依赖）；总预算 ≤30s（外加 S1 前一次 5s 超时兜底的
     /// `local_node_info` 读取），约小于生产 keepalive 间隔（60s）。
     pub(crate) async fn maintain_org_tick(&self) {
         let Some(root_id) = self.root_id() else {
@@ -204,8 +204,8 @@ impl OrgSyncContext {
         })
         .await;
 
-        // 本机节点信息一次取用：候选收集（排除本机 peerId）与连接快照共用
-        // （API 层 5s 超时兜底，org-sync-stall-fix §3.3）
+        // 本机节点信息一次取用：连接快照供 S3 使用（API 层 5s 超时兜底，
+        // org-sync-stall-fix §3.3）
         let local_info = self.node.local_node_info().await.ok();
 
         // S1) 自设备链路状态机
@@ -216,61 +216,16 @@ impl OrgSyncContext {
         )
         .await;
 
-        let now = self.now();
-        let candidates = collect_org_peer_candidates(
-            &self.storage,
-            &root_id,
-            local_info.as_ref().and_then(|i| i.peer_id.as_deref()),
-        );
         let connected: HashSet<String> = local_info
             .map(|info| info.connected_peers.into_iter().collect())
             .unwrap_or_default();
-
-        // S2) 反熵对账：最多 2 个已连接候选。无任何已知成员地址时跳过
-        //     （M6 后不再触发恢复拨号——本地端点全不通即沉默，等下一次懒拨号
-        //     事件）；S3 不受影响，仍恒执行。
-        if !candidates.is_empty() {
-            let connected_candidates = {
-                let orgs = crate::org::OrganizationService::read_all_organizations(&self.storage)
-                    .unwrap_or_default();
-                connected_gateway_candidates(&orgs, &root_id, &connected, now)
-            };
-            self.run_tick_stage("S2", budgets.reconcile, async {
-                let stage_started = std::time::Instant::now();
-                for candidate in connected_candidates.iter().take(PULL_CANDIDATES_PER_TICK) {
-                    // 候选循环内剩余预算检查（org-sync-stall-fix §6 可后续项，
-                    // batch1 §5 口径确认）：每次迭代前检查 S2 阶段剩余预算，
-                    // 不足一次请求的超时量级（5s，api 层裸 await 超时）即放弃
-                    // 本轮余下候选——不中断在飞的一次请求（外层 timeout 兜底）。
-                    let remaining = budgets
-                        .reconcile
-                        .saturating_sub(stage_started.elapsed());
-                    if remaining < std::time::Duration::from_secs(5) {
-                        log::info!(
-                            "[ORG_SYNC] tick S2 remaining budget low, skip remaining candidates | remaining={}ms",
-                            remaining.as_millis()
-                        );
-                        break;
-                    }
-                    if let Err(e) = self.reconcile_from_peer(candidate).await {
-                        self.warn(format!(
-                            "[p2p][keepalive] pull from candidate failed: peerId={:?}, error={e}",
-                            candidate.peer_id
-                        ));
-                    }
-                }
-            })
-            .await;
-        }
-
-        // 3) 管理员补副本：M6 起不在 tick 内做（零主动外联）——改由组织写入
-        //    事件点触发（push.rs `ensure_replicas_after_write`），此处不再调用。
 
         // S3) orgsync-hello 触发：本机作为复制组成员，向已连接的复制组成员
         //     发送 orgsync-hello 摘要（O2a §20.3）。tick 出口语义，恒执行。
         //     TODO: 完整接线——从 VersionedStorage 变更信号（last_local_write_ms）
         //     驱动即时 hello + 1s 防抖；当前最小闭环：每 tick 遍历组织与集合，
         //     向已连接复制组成员发送 hello。后续需接入 orgd 写变更 watcher。
+        //     （P2 起组织写入路径已挂即时 hello，本 tick 为周期兜底。）
         self.run_tick_stage(
             "S3",
             budgets.orgsync_hello,

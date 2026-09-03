@@ -1,5 +1,5 @@
-//! kernel 网络编排集成测试：双 kernel 反熵对账 + keepalive 注入、
-//! 节点名片导入（未验证入池）与名片生成守卫。
+//! kernel 网络编排集成测试：邀请加入（P3 起 orgsync 收敛）+ sync-now
+//! orgsync 触发 + keepalive 注入、节点名片导入（未验证入池）与名片生成守卫。
 
 mod common;
 
@@ -13,9 +13,10 @@ use spark_core::p2p::{P2pConfig, P2pEvent};
 
 use common::*;
 
-/// 反熵对账 + keepalive 注入 + clear_peer_records：
-/// B 的 nodeInfo 地址故意写错（推送不可达），B 经 sync_peer_organizations
-/// 显式反熵收敛；短间隔 keepalive 验证 tick 编排不炸。
+/// 邀请加入 + sync-now + keepalive 注入 + clear_peer_records：
+/// A 预录 B 并发 DM 邀请 → B 应答 accept（P2 join：stub + orgsync 收敛）；
+/// sync_peer_organizations 在 P3 起是 orgsync 触发（连接 + 发 hello），
+/// 返回形状的 pull 字段恒 0；短间隔 keepalive 验证 tick 编排不炸。
 #[test]
 fn reconcile_and_keepalive_converge() {
     let keepalive_config = |dir: &Path| KernelConfig {
@@ -35,7 +36,7 @@ fn reconcile_and_keepalive_converge() {
     kernel_a.start_p2p().unwrap();
     kernel_b.start_p2p().unwrap();
 
-    // A 建组织 + 预录 B：peerId 真实但地址错误（推送不可达，B 只能靠自己回拉）
+    // A 建组织 + 预录 B（P3：预录后组织到达走邀请流，不再有 org-pull 回拉）
     let view = kernel_a
         .create_org(CreateOrganizationInput {
             name: "反熵组织".to_string(),
@@ -45,47 +46,77 @@ fn reconcile_and_keepalive_converge() {
         })
         .unwrap();
     let org_id = view.record.org_id.clone();
-    let b_peer = kernel_b.p2p_status().unwrap().unwrap().peer_id.unwrap();
-    let b_node_broken = spark_core::org::OrganizationNodeInfo {
-        device_uid: None,
-        peer_id: Some(b_peer.clone()),
-        addresses: vec!["/ip4/127.0.0.1/tcp/1".to_string()],
-    };
-    kernel_a
-        .org_add_member(&org_id, &root_b, Some(&b_node_broken))
-        .unwrap();
+    kernel_a.org_add_member(&org_id, &root_b, None).unwrap();
     assert!(
         kernel_b.list_orgs().unwrap().is_empty(),
-        "推送不可达，B 尚无记录"
+        "邀请前 B 尚无记录"
     );
 
-    // B 显式反熵：pull-list（memberAuthStatus 凭 peerId 放行）→ B 无本地记录 → 拉取
+    // A 发 DM 邀请 → B 应答 accept → P2 join（stub 自举 + orgsync 收敛）
+    kernel_a
+        .org_send_invite(
+            &org_id,
+            &root_b,
+            kernel_b.p2p_status().unwrap().unwrap().peer_id.as_deref(),
+            &dialable_addrs(&kernel_b),
+            None,
+        )
+        .unwrap();
+    wait_until(
+        || {
+            kernel_b
+                .org_invite_records(&org_id)
+                .map(|rs| {
+                    rs.iter()
+                        .any(|r| r.direction == spark_core::org::OrgInviteDirection::Incoming)
+                })
+                .unwrap_or(false)
+        },
+        15_000,
+        "B 收到 org-invite",
+    );
+    let invite = kernel_b
+        .org_invite_records(&org_id)
+        .unwrap()
+        .into_iter()
+        .find(|r| r.direction == spark_core::org::OrgInviteDirection::Incoming)
+        .expect("入站邀请已落库");
+    kernel_b.org_respond_invite(&invite.id, true).unwrap();
+    let mine_b = kernel_b.list_orgs().unwrap();
+    assert_eq!(mine_b.len(), 1, "B 经邀请流加入（orgsync 收敛）");
+    assert_eq!(mine_b[0].member_count, 2);
+
+    // sync-now（P3 新语义：连接 + orgsync-hello 触发；pull 字段恒 0）
     let a_node = spark_core::org::OrganizationNodeInfo {
         device_uid: None,
         peer_id: kernel_a.p2p_status().unwrap().unwrap().peer_id,
         addresses: dialable_addrs(&kernel_a),
     };
     let result = kernel_b.sync_peer_organizations(&a_node).unwrap();
-    assert_eq!(result.pull_checked, 1);
-    assert_eq!(result.pull_synced, 1, "B 拉到组织");
-    assert_eq!(result.removed, 0);
-    let mine_b = kernel_b.list_orgs().unwrap();
-    assert_eq!(mine_b.len(), 1);
-    assert_eq!(mine_b[0].member_count, 2);
-
-    // 版本一致后再对账：skip 分支
-    let result = kernel_b.sync_peer_organizations(&a_node).unwrap();
-    assert_eq!(result.pull_checked, 1);
+    assert_eq!(result.attempted, 1, "连接 + hello 已发出");
+    assert_eq!(result.pull_checked, 0, "P3：无 pull 发生");
     assert_eq!(result.pull_synced, 0);
-    assert_eq!(result.skipped, 1, "版本一致跳过");
+    assert_eq!(result.removed, 0);
 
-    // A 侧有向 B 的失败拨号记录 → clear_peer_records 清空
+    // 版本一致后再触发：幂等（hello 交换判 Equal 无流量，调用本身成功）
+    let result = kernel_b.sync_peer_organizations(&a_node).unwrap();
+    assert_eq!(result.attempted, 1);
+
+    // A 向 B 的错地址 sync-now（拨号失败产生活跃度记录）→ clear_peer_records
+    // 清空
+    let b_peer = kernel_b.p2p_status().unwrap().unwrap().peer_id.unwrap();
+    let b_node_broken = spark_core::org::OrganizationNodeInfo {
+        device_uid: None,
+        peer_id: Some(b_peer.clone()),
+        addresses: vec!["/ip4/127.0.0.1/tcp/1".to_string()],
+    };
+    let _ = kernel_a.sync_peer_organizations(&b_node_broken); // 拨号失败，尽力而为
     let cleared = kernel_a.clear_peer_records().unwrap();
     assert!(cleared >= 1, "A 的活跃度记录被清除");
     assert_eq!(kernel_a.clear_peer_records().unwrap(), 0, "已清空");
 
-    // keepalive tick 自然驱动（800ms 间隔）：A 继续拨号 B（错地址失败静默）、
-    // B 无候选；观察 B 的 KeepaliveTick 事件证明 tick → worker 链路存活
+    // keepalive tick 自然驱动（800ms 间隔）：观察 B 的 KeepaliveTick 事件
+    // 证明 tick → worker 链路存活
     let mut events = kernel_b.subscribe_p2p_events();
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()

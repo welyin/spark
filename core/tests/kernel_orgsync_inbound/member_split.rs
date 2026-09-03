@@ -329,7 +329,7 @@ fn member_removal_tombstone_propagates_and_excludes() {
 /// = 写入设备 peerId，与端点 peerId 同命名空间——本用例对齐为同值。）
 #[test]
 fn outbound_invite_reconciled_on_member_entry_arrival() {
-    let (a_key, a_root) = self_identity(1);
+    let (_a_key, a_root) = self_identity(1);
     let (c_key, c_root) = self_identity(3);
     let mut a = MemoryStorage::new();
     save_org(
@@ -408,7 +408,7 @@ fn outbound_invite_reconciled_on_member_entry_arrival() {
 /// 覆盖两个挂点：org:meta 分支（whole 合入）与 org:member 分支（中继条目）。
 #[test]
 fn outbound_invite_not_marked_on_prerecord_or_relay_then_declined_lands() {
-    let (a_key, a_root) = self_identity(1);
+    let (_a_key, a_root) = self_identity(1);
     let (_b_key, b_root) = self_identity(2);
     let (c_key, c_root) = self_identity(3);
     let mut a = MemoryStorage::new();
@@ -538,7 +538,7 @@ fn outbound_invite_not_marked_on_prerecord_or_relay_then_declined_lands() {
 /// accepted。
 #[test]
 fn outbound_invite_reconciled_on_whole_with_invitee_component() {
-    let (a_key, a_root) = self_identity(1);
+    let (_a_key, a_root) = self_identity(1);
     let (_d_key, d_root) = self_identity(4);
     let mut a = MemoryStorage::new();
     save_org(

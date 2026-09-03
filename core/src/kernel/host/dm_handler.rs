@@ -83,9 +83,6 @@ pub(crate) struct KernelDmHandler {
     pub(crate) io_lock: Arc<Mutex<()>>,
     /// 已证明支持 pdsync 的自设备 peerId 集合（收尾能力探测，§7.1，按设备粒度）。
     pub(crate) pdsync_capable_self_devices: Arc<Mutex<std::collections::HashSet<String>>>,
-    /// 已证明支持 orgsync 的成员设备 peerId 集合（O2b 能力探测，§20.8，按
-    /// 设备粒度；org-share/org-pull 出站读取决定是否回退旧快照链路）。
-    pub(crate) orgsync_capable_member_peers: Arc<Mutex<std::collections::HashSet<String>>>,
     /// 插件后台运行时宿主查询句柄（O3 filtered 权限钩子在 dm 入站执行：
     /// orgq-req 的 canRead/canWrite 经此投递到插件 QuickJS 后台运行时）。
     pub(crate) plugin_host_query: crate::kernel::PluginHostQuery,
@@ -258,16 +255,6 @@ impl KernelDmHandler {
             .insert(peer_id.to_string());
     }
 
-    /// 收尾（O2b §20.8）：标记某成员设备（连接层 peerId）已证明支持 orgsync。
-    /// 出站据此对该端停用 org-share 快照/org-pull 反熵、只走 orgsync。
-    /// 幂等（集合内重复无影响）。
-    fn kernel_orgsync_capable_mark(&self, peer_id: &str) {
-        self.orgsync_capable_member_peers
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(peer_id.to_string());
-    }
-
     /// F3（§20.6 离线补投）：验签通过的 orgsync-hello → 提取 (orgId, from)，
     /// 供 [`Self::spawn_orgkey_pending_resend`] 重投该成员的 orgkey pending
     /// （离线/无 accessKey 期间 grant/revoke 的密钥补投）。
@@ -286,34 +273,6 @@ impl KernelDmHandler {
         let verified = dm_envelope::verify_envelope(payload, my_root_id, system_now_ms()).ok()?;
         let (org_id, ..) = crate::sync::orgsync::parse_orgsync_hello(&verified.body)?;
         Some((org_id, verified.from))
-    }
-
-    /// O2b §20.8 能力探测判定：仅当 orgsync-* 信封**验签通过**（from ∈
-    /// 成员表由入站编排校验）时，返回应标记的连接层 peerId——收到对端
-    /// orgsync-hello/need/data 即证明该设备支持 orgsync。
-    ///
-    /// 验签防误标：伪造信封（未验签通过）不得欺骗能力探测；按连接层
-    /// peerId（每设备唯一）而非 rootId 键控——同 rootId 的每台设备各自
-    /// 证明，避免一台新设备停掉同账号其他设备的旧快照回退。
-    pub(crate) fn orgsync_capability_mark(
-        payload: &Value,
-        my_root_id: &str,
-        remote_peer_id: &str,
-    ) -> Option<String> {
-        let kind = payload.get("kind").and_then(Value::as_str)?;
-        if !matches!(
-            kind,
-            super::super::dm_envelope::KIND_ORGSYNC_HELLO
-                | super::super::dm_envelope::KIND_ORGSYNC_NEED
-                | super::super::dm_envelope::KIND_ORGSYNC_DATA
-        ) {
-            return None;
-        }
-        // 完整验签：`to == my_root_id` + 签名有效才证明对端是真实成员设备、
-        // 支持 orgsync（防伪造信封欺骗能力探测）。成员资格由入站编排校验，
-        // 此处只需确认信封合法——from 非本机（orgsync 来自其他成员）。
-        let _verified = dm_envelope::verify_envelope(payload, my_root_id, system_now_ms()).ok()?;
-        Some(remote_peer_id.to_string())
     }
 
     /// 本地写入节点 id：p2p 运行中为 peerId；否则回退持久化 p2p 身份派生的
@@ -397,12 +356,6 @@ impl DmHandler for KernelDmHandler {
         // 正确性（验签不过不标记）。
         if let Some(peer) = Self::pdsync_capability_mark(&payload, &root_id, remote_peer_id) {
             self.kernel_pdsync_capable_mark(&peer);
-        }
-        // O2b §20.8 能力探测：收到验签通过的 orgsync-* 信封即证明对端（连接层
-        // peerId 设备）支持 orgsync——出站据此对该端停用 org-share/org-pull
-        // 旧链路、只走 orgsync。
-        if let Some(peer) = Self::orgsync_capability_mark(&payload, &root_id, remote_peer_id) {
-            self.kernel_orgsync_capable_mark(&peer);
         }
         // F3（§20.6 离线补投）：验签通过的 orgsync-hello = 该成员上线——
         // 重投其在本机的 orgkey pending。稳态零成本（无 pending 直接跳过）。
@@ -606,67 +559,6 @@ mod tests {
     use serde_json::json;
     use sha2::Digest;
 
-    /// 构造合法签名的 orgsync 信封：from = sha256hex(pubKey)（verify_envelope
-    /// 要求 from == sha256hex(pubKey)），to = my_root，ts = 当前时间（避免 stale）。
-    fn orgsync_env(kind: &str, to: &str, key: &SigningKey) -> Value {
-        let from = hex::encode(sha2::Sha256::digest(key.verifying_key().to_bytes()));
-        dm_envelope::build_envelope(
-            kind,
-            &from,
-            to,
-            crate::p2p::node::system_now_ms(),
-            json!({}),
-            key,
-        )
-    }
-
-    /// O2b §20.8：收到验签通过的 orgsync-hello/need/data → 标记该连接层
-    /// peerId 支持 orgsync；非 orgsync 信封 / 验签失败不标记。
-    #[test]
-    fn orgsync_capability_mark_on_verified_orgsync_envelopes() {
-        let key = SigningKey::from_bytes(&[1u8; 32]);
-        let from = hex::encode(sha2::Sha256::digest(key.verifying_key().to_bytes()));
-        let my_root = from.clone(); // 本机 rootId（to 须 == my_root）
-        let peer = "peer-device-x";
-        // orgsync-hello：标记
-        let e = orgsync_env(dm_envelope::KIND_ORGSYNC_HELLO, &my_root, &key);
-        assert_eq!(
-            KernelDmHandler::orgsync_capability_mark(&e, &my_root, peer),
-            Some(peer.to_string())
-        );
-        // orgsync-need / orgsync-data 同样标记
-        let e = orgsync_env(dm_envelope::KIND_ORGSYNC_NEED, &my_root, &key);
-        assert_eq!(
-            KernelDmHandler::orgsync_capability_mark(&e, &my_root, peer),
-            Some(peer.to_string())
-        );
-        let e = orgsync_env(dm_envelope::KIND_ORGSYNC_DATA, &my_root, &key);
-        assert_eq!(
-            KernelDmHandler::orgsync_capability_mark(&e, &my_root, peer),
-            Some(peer.to_string())
-        );
-        // 非 orgsync 信封不标记
-        let e = orgsync_env(dm_envelope::KIND_PDSYNC_HELLO, &my_root, &key);
-        assert_eq!(
-            KernelDmHandler::orgsync_capability_mark(&e, &my_root, peer),
-            None
-        );
-    }
-
-    /// O2b §20.8：验签失败（to 非本机）不得标记——防伪造信封欺骗能力探测。
-    #[test]
-    fn orgsync_capability_mark_rejects_unverified() {
-        let key = SigningKey::from_bytes(&[1u8; 32]);
-        let from = hex::encode(sha2::Sha256::digest(key.verifying_key().to_bytes()));
-        let my_root = from.clone(); // 本机 rootId
-        // 信封 to 指向"另一台设备"（非本机 rootId）→ 验签失败（not-for-me）→ 不标记
-        let e = orgsync_env(dm_envelope::KIND_ORGSYNC_HELLO, "some-other-member", &key);
-        assert_eq!(
-            KernelDmHandler::orgsync_capability_mark(&e, &my_root, "peer-x"),
-            None
-        );
-    }
-
     /// F3：验签通过的 orgsync-hello → 提取 (orgId, from) 供 pending 重投；
     /// 非 hello kind / body 畸形 / 验签失败均不触发。
     #[test]
@@ -707,7 +599,14 @@ mod tests {
         assert_eq!(KernelDmHandler::orgkey_resend_trigger(&need, my_root), None);
 
         // hello kind 但 body 畸形（缺 orgId/collections）不触发
-        let bad_body = orgsync_env(dm_envelope::KIND_ORGSYNC_HELLO, my_root, &key);
+        let bad_body = dm_envelope::build_envelope(
+            dm_envelope::KIND_ORGSYNC_HELLO,
+            &from,
+            my_root,
+            crate::p2p::node::system_now_ms(),
+            json!({}),
+            &key,
+        );
         assert_eq!(
             KernelDmHandler::orgkey_resend_trigger(&bad_body, my_root),
             None

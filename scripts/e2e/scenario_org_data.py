@@ -9,6 +9,8 @@ A（管理员/数据账号）+ B（成员）两端，all-members 集合（复制
   双端折叠 vv 收敛一致（org-fold-vv 与 orgsync-hello 摘要同口径）。
 """
 
+import time
+
 from node import Node, NodeError, check, poll_until, run_scenario
 
 EVENT_TIMEOUT = 40.0
@@ -46,16 +48,25 @@ def join_org(admin, member, org_name):
     received = member.wait_event(
         "OrgInviteReceived", lambda d: d.get("orgId") == org_id, timeout=EVENT_TIMEOUT
     )
-    # 等管理员快照推送落地再应答（接受编排 pull-list 有 per-peer 限流，见 scenario_org）
-    poll_until(
-        lambda: any(o["orgId"] == org_id for o in member.send("org-list")),
-        timeout=EVENT_TIMEOUT,
-        what=f"{member.name} 收到预录组织快照",
-    )
-    responded = member.send(
-        "org-respond-invite", inviteId=received["id"], accept=True
-    )
+    # P3 后 join 全靠接受编排（stub 自举 + connect + 有界等 orgsync 收敛）——
+    # 不再预等「预录快照」（legacy 推送通道已删）；失败保持 pending 可重试。
+    responded = None
+    for attempt in range(3):
+        try:
+            responded = member.send(
+                "org-respond-invite", inviteId=received["id"], accept=True
+            )
+            break
+        except NodeError:
+            if attempt == 2:
+                raise
+            time.sleep(2)
     check(responded["status"] == "accepted", f"{member.name} 侧邀请记录置 accepted")
+    poll_until(
+        lambda: any(o["orgId"] == org_id for o in member.send("org-list")) or None,
+        timeout=EVENT_TIMEOUT,
+        what=f"{member.name} 接受后收敛看到组织",
+    )
     admin.wait_event(
         "OrgInviteUpdated",
         lambda d: d.get("orgId") == org_id and d.get("status") == "accepted",

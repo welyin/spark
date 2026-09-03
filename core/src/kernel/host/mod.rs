@@ -64,23 +64,6 @@ pub(crate) struct OrgShareAckTracker {
 }
 
 impl OrgShareAckTracker {
-    /// 注册等待器（调用方随后 await 返回的接收端）。
-    pub(crate) fn register(&mut self, sync_id: &str) -> tokio::sync::oneshot::Receiver<()> {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        self.waiters.insert(sync_id.to_string(), tx);
-        rx
-    }
-
-    /// 超时清理等待器（避免泄漏）。
-    pub(crate) fn remove_waiter(&mut self, sync_id: &str) {
-        self.waiters.remove(sync_id);
-    }
-
-    /// 竞态缓存查询：ack 先于 register 到达时命中（一次性消费）。
-    pub(crate) fn take_early_ack(&mut self, sync_id: &str) -> bool {
-        self.early_acks.remove(sync_id)
-    }
-
     /// ack 到达：有等待器则唤醒，否则进竞态缓存。
     pub(crate) fn mark_ack(&mut self, sync_id: &str) {
         if let Some(tx) = self.waiters.remove(sync_id) {
@@ -103,11 +86,6 @@ pub(crate) struct KernelHost {
     pub(crate) current_root_id: Arc<Mutex<Option<String>>>,
     pub(crate) collection_configs: CollectionConfigs,
     pub(crate) org_acks: SharedOrgShareAckTracker,
-    /// org 事件的推送通知（org-sync 请求队列）：host 处于同步上下文，
-    /// 异步推送由 kernel 的 org-sync worker 消费（对齐 service.ts:450；P2 前
-    /// 为「claim 落库后推送」触发点，claim 退役后该来源恒空）。
-    /// P2 起亦承载 org-member-removed 通知失败的 pending 补投（L3）。
-    pub(crate) push_notify: tokio::sync::mpsc::UnboundedSender<super::org_sync::OrgSyncRequest>,
     /// dm 入站事件的广播通道（ChatReceived/ChatStatus/FriendRequest* 由
     /// [`super::inbound_dm`] 产出，host 在此 emit 给壳层订阅者）。
     pub(crate) event_tx: tokio::sync::broadcast::Sender<crate::p2p::P2pEvent>,
@@ -136,9 +114,6 @@ pub(crate) struct KernelHost {
     /// peerId 键控=按设备粒度，与 kernel 共享，host `handle_dm` 写入、
     /// org-sync 保活读取）。
     pub(crate) pdsync_capable_self_devices: Arc<Mutex<std::collections::HashSet<String>>>,
-    /// 已证明支持 orgsync 的成员设备 peerId 集合（O2b 能力探测，§20.8；
-    /// 与 kernel 共享，host `handle_dm` 写入、org-sync 推送读取）。
-    pub(crate) orgsync_capable_member_peers: Arc<Mutex<std::collections::HashSet<String>>>,
     /// 插件后台运行时宿主查询句柄（O3 filtered 权限钩子在 dm 入站执行）。
     pub(crate) plugin_host_query: crate::kernel::PluginHostQuery,
     /// Kverify 派生缓存（与 KernelDmHandler 共享同一 Arc；见 dm_handler.rs
@@ -174,7 +149,6 @@ impl KernelHost {
             data_dir: self.data_dir.clone(),
             io_lock: Arc::clone(&self.io_lock),
             pdsync_capable_self_devices: Arc::clone(&self.pdsync_capable_self_devices),
-            orgsync_capable_member_peers: Arc::clone(&self.orgsync_capable_member_peers),
             plugin_host_query: self.plugin_host_query.clone(),
             kverify_cache: Arc::clone(&self.kverify_cache),
         }
@@ -348,7 +322,7 @@ impl P2pHost for KernelHost {
             .unwrap_or_else(|e| e.into_inner())
             .clone();
         let now = system_now_ms();
-        let (response, applied_orgs) = handle_pull_list_request(
+        let (response, _applied_orgs) = handle_pull_list_request(
             &mut self.storage,
             &self.io_lock,
             &payload,
@@ -357,18 +331,8 @@ impl P2pHost for KernelHost {
             now,
         )
         .map_err(|e| e.to_string())?;
-        // P2 claim 退役后恒空（无落库组织 → 无推送触发）；段保留以稳结构，
-        // P4 入站清除时随 legacy 平面一并删除
-        if let Some(actor) = current {
-            for org_id in applied_orgs {
-                let _ = self
-                    .push_notify
-                    .send(super::org_sync::OrgSyncRequest::PushOrg {
-                        org_id,
-                        actor_root_id: actor.clone(),
-                    });
-            }
-        }
+        // P2 claim 退役后 applied_orgs 恒空——原「claim 落库后推送」通知段
+        // 随之删除（P3 起 PushOrg 语义为 orgsync 即时 hello，无 actor 维度）。
         Ok(response)
     }
 
@@ -386,21 +350,16 @@ impl P2pHost for KernelHost {
             .unwrap_or_else(|e| e.into_inner())
             .clone();
         let now = system_now_ms();
-        // F6：org-pull 请求方（收件人）设备是否 orgsync-capable——灰度停用旧
-        // 通道按收件人能力判定（旧端成员仍收 pluginDocs）。
-        let recipient_orgsync_capable = remote_peer_id.as_deref().is_some_and(|pid| {
-            self.orgsync_capable_member_peers
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .contains(pid)
-        });
+        // P3：orgsync 能力探测已随出站停发删除——pull-org 响应的
+        // pluginDocs 裁剪恒按「旧端」口径携带（P4 入站清除时随 legacy
+        // 平面一并删形参）。
         let response = handle_pull_org_request(
             &self.storage,
             &payload,
             remote_peer_id.as_deref(),
             current.as_deref(),
             now,
-            recipient_orgsync_capable,
+            false,
         )
         .map_err(|e| e.to_string())?;
         Ok(response)

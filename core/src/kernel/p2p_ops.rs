@@ -129,9 +129,6 @@ impl Kernel {
         let host = Box::new(KernelHost {
             storage: raw.clone(),
             current_root_id: Arc::clone(&self.current_root_id_shared),
-            collection_configs: Arc::clone(&self.collection_configs),
-            org_acks: Arc::clone(&self.org_acks),
-            push_notify: org_sync_tx.clone(),
             event_tx: self.event_tx.clone(),
             nickname_shared: Arc::clone(&self.nickname_shared),
             avatar_shared: Arc::clone(&self.avatar_shared),
@@ -140,9 +137,10 @@ impl Kernel {
             password_shared: Arc::clone(&self.password_shared),
             seed_shared: Arc::clone(&self.seed_shared),
             data_dir: self.config.data_dir.clone(),
-            io_lock: Arc::clone(&self.io_lock),
             pdsync_capable_self_devices: Arc::clone(&self.pdsync_capable_self_devices),
-            orgsync_capable_member_peers: Arc::clone(&self.orgsync_capable_member_peers),
+            collection_configs: Arc::clone(&self.collection_configs),
+            org_acks: Arc::clone(&self.org_acks),
+            io_lock: Arc::clone(&self.io_lock),
             plugin_host_query: self.plugin_host_query_handle(),
             kverify_cache: Arc::new(std::sync::Mutex::new(None)),
         });
@@ -188,10 +186,7 @@ impl Kernel {
             node: Arc::clone(&node),
             current_root_id: Arc::clone(&self.current_root_id_shared),
             signing_key: Arc::clone(&self.signing_key_shared),
-            collection_configs: Arc::clone(&self.collection_configs),
-            org_acks: Arc::clone(&self.org_acks),
             event_tx: self.event_tx.clone(),
-            recovery_trigger: Arc::clone(&self.recovery_trigger),
             org_address_publish: Arc::clone(&self.org_address_publish),
             data_dir: self.config.data_dir.clone(),
             self_device_link: Arc::clone(&self.self_device_link),
@@ -200,7 +195,6 @@ impl Kernel {
             // 要等下轮 keepalive 才收敛）
             self_device_links: Arc::clone(&self.self_device_links),
             pdsync_capable_self_devices: Arc::clone(&self.pdsync_capable_self_devices),
-            orgsync_capable_member_peers: Arc::clone(&self.orgsync_capable_member_peers),
             // 稳态 hello 触发状态仅 keepalive tick 消费：worker 上下文（start_p2p
             // 装配，随 p2p 会话存活）持有即够；门面即席上下文新建空状态即可
             self_hello_state: Arc::new(std::sync::Mutex::new(org_sync::SelfHelloState::default())),
@@ -208,11 +202,8 @@ impl Kernel {
                 org_sync::ImmediateHelloState::default(),
             )),
             filter_caps: Arc::clone(&self.plugin_host.filter_caps),
-            replica_check: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
-            recovery_refresh: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             tick_in_flight: Arc::clone(&tick_in_flight),
             tick_budgets: Default::default(),
-            io_lock: Arc::clone(&self.io_lock),
         };
         let worker = org_sync::spawn_worker(self.runtime.handle(), ctx, org_sync_rx);
 
@@ -485,16 +476,12 @@ impl Kernel {
             node: Arc::clone(node),
             current_root_id: Arc::clone(&self.current_root_id_shared),
             signing_key: Arc::clone(&self.signing_key_shared),
-            collection_configs: Arc::clone(&self.collection_configs),
-            org_acks: Arc::clone(&self.org_acks),
             event_tx: self.event_tx.clone(),
-            recovery_trigger: Arc::clone(&self.recovery_trigger),
             org_address_publish: Arc::clone(&self.org_address_publish),
             data_dir: self.config.data_dir.clone(),
             self_device_link: Arc::clone(&self.self_device_link),
             self_device_links: Arc::clone(&self.self_device_links),
             pdsync_capable_self_devices: Arc::clone(&self.pdsync_capable_self_devices),
-            orgsync_capable_member_peers: Arc::clone(&self.orgsync_capable_member_peers),
             // 稳态 hello 触发状态仅 keepalive tick 消费：worker 上下文（start_p2p
             // 装配，随 p2p 会话存活）持有即够；门面即席上下文新建空状态即可
             self_hello_state: Arc::new(std::sync::Mutex::new(org_sync::SelfHelloState::default())),
@@ -502,12 +489,9 @@ impl Kernel {
                 org_sync::ImmediateHelloState::default(),
             )),
             filter_caps: Arc::clone(&self.plugin_host.filter_caps),
-            replica_check: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
-            recovery_refresh: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             // 即席上下文不走 worker/tick：在飞标记独立占位即可，预算用默认
             tick_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tick_budgets: Default::default(),
-            io_lock: Arc::clone(&self.io_lock),
         })
     }
 

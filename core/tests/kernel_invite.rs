@@ -261,7 +261,9 @@ fn accept_invite_full_flow() {
 // （org-share 推送 / org-pull 响应方 / accept_invite 全流程）
 // ---------------------------------------------------------------------------
 
-/// org-share 推送编排：A add_member 触发推送 → B（目标 rootId）落库 + A 记账。
+/// P3 组织到达通道：A 预录 B + DM 邀请 → B accept（P2 join：stub + orgsync
+/// 收敛）→ B 落库 + A 经 orgsync 活动反哺记账（ever_synced）。（前身：
+/// org-share 推送编排用例——P3 出站停发后 org-share 不再发送。）
 #[test]
 fn org_share_push_delivers_between_kernels() {
     let dir_a = tempfile::tempdir().unwrap();
@@ -273,7 +275,7 @@ fn org_share_push_delivers_between_kernels() {
     kernel_a.start_p2p().unwrap();
     kernel_b.start_p2p().unwrap();
 
-    // A 建组织并把 B 预录为成员（带 B 的真实 nodeInfo → 推送可直连送达）
+    // A 建组织并把 B 预录为成员（带 B 的真实 nodeInfo）
     let view = kernel_a
         .create_org(CreateOrganizationInput {
             name: "推送组织".to_string(),
@@ -292,29 +294,53 @@ fn org_share_push_delivers_between_kernels() {
         .org_add_member(&org_id, &root_b, Some(&b_node))
         .unwrap();
 
-    // B 收到快照落库（org-share 接收应答：target 匹配 + 成员包含 + merge）
+    // P3：组织到达走邀请流（org-share 推送已停发；预录后 B 不会自动收到——
+    // A 发 DM 邀请，B 应答 accept 完成 join）
+    kernel_a
+        .org_send_invite(&org_id, &root_b, b_node.peer_id.as_deref(), &b_node.addresses, None)
+        .unwrap();
     wait_until(
-        || kernel_b.list_orgs().map(|l| l.len() == 1).unwrap_or(false),
-        20_000,
-        "B 收到组织快照",
+        || {
+            kernel_b
+                .org_invite_records(&org_id)
+                .map(|rs| {
+                    rs.iter()
+                        .any(|r| r.direction == OrgInviteDirection::Incoming)
+                })
+                .unwrap_or(false)
+        },
+        15_000,
+        "B 收到 org-invite",
     );
+    let invite = kernel_b
+        .org_invite_records(&org_id)
+        .unwrap()
+        .into_iter()
+        .find(|r| r.direction == OrgInviteDirection::Incoming)
+        .expect("入站邀请已落库");
+    kernel_b.org_respond_invite(&invite.id, true).unwrap();
+
+    // B 落库（join 收敛完成）：成员数 2、B 为 member 角色
     let mine_b = kernel_b.list_orgs().unwrap();
+    assert_eq!(mine_b.len(), 1);
     assert_eq!(mine_b[0].record.org_id, org_id);
     assert_eq!(mine_b[0].member_count, 2);
     assert!(!mine_b[0].is_current_user_admin, "B 为 member 角色");
-    // B 侧记录成员集与 A 一致
     let members_a = kernel_a.list_orgs().unwrap();
     assert_eq!(members_a[0].member_count, 2);
 
-    // A 对 B 的 sync-state 已记账（K 副本口径：B everSynced）
-    let overview = kernel_a.org_overview(&org_id).unwrap();
-    let b_entry = overview
-        .members
-        .iter()
-        .find(|m| m.root_id == root_b)
-        .expect("B 在概览中");
-    assert!(b_entry.ever_synced, "直连送达后记账生效");
-    assert!(b_entry.last_synced_at.is_some());
+    // A 对 B 的记账经 orgsync 活动反哺（join 的 hello/data 交换已发生）
+    wait_until(
+        || {
+            kernel_a
+                .org_overview(&org_id)
+                .ok()
+                .and_then(|o| o.members.into_iter().find(|m| m.root_id == root_b))
+                .is_some_and(|e| e.ever_synced)
+        },
+        15_000,
+        "A 侧 ever_synced 经 orgsync 活动记账",
+    );
 
     kernel_a.shutdown().unwrap();
     kernel_b.shutdown().unwrap();

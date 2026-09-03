@@ -372,7 +372,7 @@ fn wipe_org_local_clears_everything_idempotent() {
             "\"v\"",
         )
         .unwrap();
-    let wiped = spark_core::org::service::wipe_org_local(&mut storage, org_id).unwrap();
+    let wiped = spark_core::org::service::wipe_org_local(&mut storage, org_id, "node-t", 1000).unwrap();
     assert_eq!(wiped, 1, "create 双写的初始条目被擦");
     assert!(
         OrganizationService::get_record(&storage, org_id).unwrap().is_none(),
@@ -395,6 +395,6 @@ fn wipe_org_local_clears_everything_idempotent() {
         "orgq 现场擦除"
     );
     // 幂等
-    let wiped = spark_core::org::service::wipe_org_local(&mut storage, org_id).unwrap();
+    let wiped = spark_core::org::service::wipe_org_local(&mut storage, org_id, "node-t", 1000).unwrap();
     assert_eq!(wiped, 0);
 }

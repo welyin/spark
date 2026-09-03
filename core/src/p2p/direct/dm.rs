@@ -69,6 +69,14 @@ pub fn dm_kind_is_rate_limit_exempt(kind: Option<&str>) -> bool {
             "read"
                 | "recall"
                 | "friend-accept"
+                // 阶段四A P2/P3：组织邀请回执与成员移除通知是低频控制类信封
+                // （friend-accept 同族先例）——join 编排（reply + orgsync-hello
+                // 连发）与紧随的 orgq-req 共享同一 1s 桶会被确定性误限流；
+                // orgq-resp 是请求方主动拉起的应答（洪泛面由 req 侧限流守住，
+                // O3 对 orgq-req 的不豁免口径不动）。
+                | "org-invite-reply"
+                | "org-member-removed"
+                | "orgq-resp"
                 | "pdsync-hello"
                 | "pdsync-need"
                 | "pdsync-data"
@@ -94,10 +102,24 @@ mod tests {
 
     #[test]
     fn control_kinds_are_exempt_chat_and_unknown_are_not() {
-        for kind in ["read", "recall", "friend-accept"] {
+        for kind in [
+            "read",
+            "recall",
+            "friend-accept",
+            "org-invite-reply",
+            "org-member-removed",
+            "orgq-resp",
+        ] {
             assert!(dm_kind_is_rate_limit_exempt(Some(kind)), "{kind} 应豁免");
         }
-        for kind in ["chat", "friend-request", "friend-reply", "unknown-kind"] {
+        for kind in [
+            "chat",
+            "friend-request",
+            "friend-reply",
+            "unknown-kind",
+            "org-invite",
+            "orgq-req",
+        ] {
             assert!(!dm_kind_is_rate_limit_exempt(Some(kind)), "{kind} 不应豁免");
         }
         assert!(!dm_kind_is_rate_limit_exempt(None), "缺失 kind 不应豁免");

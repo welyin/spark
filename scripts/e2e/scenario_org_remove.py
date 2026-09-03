@@ -7,13 +7,16 @@ C 离线时 A 移除 C → 通知入 org 域 pending 队列 → C 上线后补�
 C 收 OrgRemoved + 本地擦除。
 """
 
-from node import Node, check, poll_until, run_scenario
+import time
+
+from node import Node, NodeError, check, poll_until, run_scenario
 
 EVENT_TIMEOUT = 40.0
 
 
 def join_org(admin, member, org_id):
-    """预录（带 nodeInfo）+ 邀请 + 接受全流程。"""
+    """预录（带 nodeInfo）+ 邀请 + 接受全流程（P3 口径：接受编排内部
+    stub 自举 + connect + 有界等 orgsync 收敛，不再预等预录快照）。"""
     admin.send(
         "org-add-member",
         orgId=org_id,
@@ -29,13 +32,23 @@ def join_org(admin, member, org_id):
     received = member.wait_event(
         "OrgInviteReceived", lambda d: d.get("orgId") == org_id, timeout=EVENT_TIMEOUT
     )
+    responded = None
+    for attempt in range(3):
+        try:
+            responded = member.send(
+                "org-respond-invite", inviteId=received["id"], accept=True
+            )
+            break
+        except NodeError:
+            if attempt == 2:
+                raise
+            time.sleep(2)
+    check(responded["status"] == "accepted", f"{member.name} 侧邀请记录置 accepted")
     poll_until(
         lambda: any(o["orgId"] == org_id for o in member.send("org-list")) or None,
         timeout=EVENT_TIMEOUT,
-        what=f"{member.name} 收到预录组织快照",
+        what=f"{member.name} 接受后收敛看到组织",
     )
-    responded = member.send("org-respond-invite", inviteId=received["id"], accept=True)
-    check(responded["status"] == "accepted", f"{member.name} 侧邀请记录置 accepted")
 
 
 def org_visible(node, org_id):
