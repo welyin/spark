@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""场景：组织邀请与资料同步。
+"""场景：组织邀请与资料同步 + P2 join 新通道。
 
 A 建组织 → 预录 B（nodeInfo）→ org-send-invite → B 收 OrgInviteReceived +
 sys:notice 系统会话链接卡片 → B org-respond-invite(accept) → B org-list 有该组织
 → A 收 OrgInviteUpdated(accepted) → B 改组织昵称 → A 经快照同步可见 →
-A 改组织 logo → B 可见。
+A 改组织 logo → B 可见 →
+**P2 L1/L2**：成员 E 不预录寻址（邀请走显式 peerId/addresses 直达）→ E 经
+orgsync 收敛看到组织（join 不再走 legacy pull 编排）→ E 接受后自写成员条目
+（claim 退役）→ A 装配视图看到 E 的端点回填。
 """
 
 import time
@@ -20,9 +23,11 @@ TINY_PNG = (
 
 def main():
     a, b = Node("A").start(), Node("B").start()
-    nodes = [a, b]
+    e = Node("E").start()
+    nodes = [a, b, e]
     a.init("Alice")
     b.init("Bob")
+    e.init("Eve")
 
     def scenario():
         # ---- 建组织 + 预录 B（带真实 nodeInfo，推送可直连送达）------------
@@ -120,6 +125,51 @@ def main():
             return view if view and view.get("avatar") == TINY_PNG else None
 
         poll_until(b_sees_avatar, what="B 经快照同步看到组织新 logo")
+
+        # ---- P2 L1/L2：无预录寻址的成员 E——邀请经显式寻址直达，接受走
+        #      orgsync 收敛（L1），E 自写成员条目回填 nodeInfo（L2，claim
+        #      通道已退役）→ A 经装配视图看到 E 的端点 ----------------------
+        a.send("org-add-member", orgId=org_id, rootId=e.root_id)  # 不带 nodeInfo
+        invite_e = a.send(
+            "org-send-invite",
+            orgId=org_id,
+            targetRootId=e.root_id,
+            targetPeerId=e.peer_id,
+            targetAddresses=e.addresses,
+            targetNickname="Eve",
+        )
+        check(invite_e["status"] == "pending", "E 的出站邀请初始 pending")
+        received_e = e.wait_event(
+            "OrgInviteReceived", lambda d: d.get("orgId") == org_id
+        )
+        # L1：E 无预录寻址，接受编排内部完成 stub 自举 + connect + 有界等待
+        # orgsync 收敛（替代 legacy pull 编排）——直接应答，不预等快照
+        responded_e = None
+        for attempt in range(3):
+            try:
+                responded_e = e.send("org-respond-invite", inviteId=received_e["id"], accept=True)
+                break
+            except NodeError:
+                if attempt == 2:
+                    raise
+                time.sleep(2)
+        check(responded_e["status"] == "accepted", "E 侧邀请记录置 accepted")
+        poll_until(
+            lambda: any(o["orgId"] == org_id for o in e.send("org-list")) or None,
+            what="E 接受后经 orgsync 收敛看到组织（L1）",
+        )
+
+        # L2：E 接受后自写成员条目（含自身端点）→ A 装配视图可见
+        def a_sees_e_endpoint():
+            view = a.send("org-view", orgId=org_id)
+            if not view:
+                return None
+            member = next((m for m in view["members"] if m["rootId"] == e.root_id), None)
+            if member and member.get("nodeInfo"):
+                return member
+            return None
+
+        poll_until(a_sees_e_endpoint, what="A 看到 E 自写条目的端点回填（L2）")
 
     elapsed = run_scenario(scenario, nodes)
     print(f"PASS scenario_org  {elapsed:.1f}s")

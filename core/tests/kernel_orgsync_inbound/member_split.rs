@@ -322,11 +322,11 @@ fn member_removal_tombstone_propagates_and_excludes() {
     assert!(personal.is_empty(), "org:member 墓碑只登 org 域 dlog");
 }
 
-/// F4 第二层 P2 挂点（评审补齐）：P2 join 主链路只产 org:member 条目流量
-/// （成员自写条目）——invitee 自写条目入站到达（= 已接受；预录条目是本机
-/// 双写产物，不经入站到达）→ 邀请人侧 outbound pending 对账标 accepted +
-/// OrgInviteUpdated 事件。修复前对账只挂 org:meta 分支，P2 主链路回执丢失
-/// 时永不触发。
+/// F4 第二层 P2 挂点（评审补齐）+ 裁决 §10.2 精确触发：P2 join 主链路只产
+/// org:member 条目流量（成员自写条目）——invitee 自写条目入站到达（合入
+/// 记录 vv 含 invitee 本人设备分量 ⟹ 真走了接受编排）→ 邀请人侧 outbound
+/// pending 对账标 accepted + OrgInviteUpdated 事件。（生产口径：vv 分量键
+/// = 写入设备 peerId，与端点 peerId 同命名空间——本用例对齐为同值。）
 #[test]
 fn outbound_invite_reconciled_on_member_entry_arrival() {
     let (a_key, a_root) = self_identity(1);
@@ -375,7 +375,9 @@ fn outbound_invite_reconciled_on_member_entry_arrival() {
         &[org_record(
             &entry_key,
             serde_json::to_value(&c_entry).unwrap(),
-            remote_meta("node-c", 1, NOW + 100),
+            // vv 分量 = 写入设备 peerId（生产 node_id 即 peerId）——裁决
+            // §10.2 条件 3 命中 C 的已知端点
+            remote_meta("peer-c", 1, NOW + 100),
         )],
         0,
         1,
@@ -394,6 +396,214 @@ fn outbound_invite_reconciled_on_member_entry_arrival() {
         updated.status,
         spark_core::org::OrgInviteStatus::Accepted,
         "条目入站到达触发对账：outbound 标 accepted"
+    );
+    assert!(
+        r.events.iter().any(|e| matches!(e, spark_core::p2p::P2pEvent::OrgInviteUpdated(_))),
+        "OrgInviteUpdated 事件已发"
+    );
+}
+
+/// 裁决 §10.2 负面对照：预录/中继类合入**不误标** accepted（vv 只含他人
+/// 分量），后续 declined 回执正常落账（终态不重置不再被误标挡门）。
+/// 覆盖两个挂点：org:meta 分支（whole 合入）与 org:member 分支（中继条目）。
+#[test]
+fn outbound_invite_not_marked_on_prerecord_or_relay_then_declined_lands() {
+    let (a_key, a_root) = self_identity(1);
+    let (_b_key, b_root) = self_identity(2);
+    let (c_key, c_root) = self_identity(3);
+    let mut a = MemoryStorage::new();
+    save_org(
+        &mut a,
+        ORG_ID,
+        vec![
+            (a_root.as_str(), OrganizationRole::Admin),
+            (b_root.as_str(), OrganizationRole::Member),
+        ],
+        &[],
+    );
+    spark_core::plugindata::declare_builtin_org_collections(&mut a, ORG_ID, &a_root, NOW, "node-a")
+        .unwrap();
+    // A 侧 outbound pending 邀请（A 邀 C；C 已由 addMember 预录进成员表——
+    // 预录即携端点 peer-c，e2e join_org 形态）
+    let mut whole = OrganizationService::get_record(&a, ORG_ID).unwrap().unwrap();
+    whole.members.push({
+        let mut m = member(&c_root, OrganizationRole::Member);
+        m.node_info = Some(spark_core::org::types::OrganizationDeviceSet::from_single(
+            spark_core::org::types::OrganizationNodeInfo {
+                device_uid: Some("uid-c".to_string()),
+                peer_id: Some("peer-c".to_string()),
+                addresses: Vec::new(),
+            },
+        ));
+        m
+    });
+    put_personal(&mut a, "node-a", &format!("org:meta:{ORG_ID}"),
+        &serde_json::to_string(&whole).unwrap(), NOW).unwrap();
+    let out_record = spark_core::org::invite_record::OrgInviteRecord {
+        id: "inv-a-c".to_string(),
+        org_id: ORG_ID.to_string(),
+        org_name: "t".to_string(),
+        org_avatar: None,
+        peer_root_id: c_root.clone(),
+        peer_nickname: "C".to_string(),
+        direction: spark_core::org::OrgInviteDirection::Outgoing,
+        status: spark_core::org::OrgInviteStatus::Pending,
+        invite_code: None,
+        created_at: NOW,
+        updated_at: NOW,
+    };
+    OrganizationService::put_invite_record(&mut a, &out_record).unwrap();
+    let invite_status = |s: &MemoryStorage| {
+        OrganizationService::get_outgoing_invite(s, ORG_ID, &c_root)
+            .unwrap()
+            .map(|r| r.status)
+    };
+
+    // 1) org:meta 挂点：他人 whole 到达（中继，vv 只含 B 的分量）→ applied
+    //    但 C 无本人分量 → 不误标
+    let mut incoming_whole = whole.clone();
+    incoming_whole.updated_at = NOW + 10;
+    let data_body = build_orgsync_data_batch(
+        ORG_ID,
+        COL_FULL,
+        &[org_record(
+            &format!("org:meta:{ORG_ID}"),
+            serde_json::to_value(&incoming_whole).unwrap(),
+            remote_meta("peer-b", 4, NOW + 10),
+        )],
+        0,
+        1,
+    );
+    let r = deliver_orgsync(
+        &mut a, &a_root, "A", &_b_key, &b_root, &a_root,
+        dm_envelope::KIND_ORGSYNC_DATA, data_body, "peer-b", "node-a",
+    );
+    assert_eq!(r.response, json!({ "ok": true }));
+    assert_eq!(
+        invite_status(&a),
+        Some(spark_core::org::OrgInviteStatus::Pending),
+        "whole 中继合入（无 C 本人分量）不误标 accepted"
+    );
+
+    // 2) org:member 挂点：C 的预录条目（含端点 peer-c）经 B 中继到达——
+    //    vv 只含 B 的分量（写入设备是 B 的中继来源/管理员双写产物）→ 不误标
+    let entry_key = org_member_key(ORG_ID, &c_root);
+    let prerecorded_entry = whole.members.iter().find(|m| m.root_id == c_root).unwrap().clone();
+    let data_body = build_orgsync_data_batch(
+        ORG_ID,
+        COL_FULL,
+        &[org_record(
+            &entry_key,
+            serde_json::to_value(&prerecorded_entry).unwrap(),
+            remote_meta("peer-b", 5, NOW + 20),
+        )],
+        0,
+        1,
+    );
+    let r = deliver_orgsync(
+        &mut a, &a_root, "A", &_b_key, &b_root, &a_root,
+        dm_envelope::KIND_ORGSYNC_DATA, data_body, "peer-b", "node-a",
+    );
+    assert_eq!(r.response, json!({ "ok": true }));
+    assert_eq!(
+        invite_status(&a),
+        Some(spark_core::org::OrgInviteStatus::Pending),
+        "预录条目中继合入（vv 无 C 分量）不误标 accepted"
+    );
+
+    // 3) declined 回执正常落账（误标曾凭「终态不重置」把 declined 挡在门外）
+    let reply = dm_envelope::build_envelope(
+        dm_envelope::KIND_ORG_INVITE_REPLY,
+        &c_root,
+        &a_root,
+        NOW + 30,
+        json!({ "orgId": ORG_ID, "accept": false, "nickname": "C" }),
+        &c_key,
+    );
+    let r = spark_core::kernel::handle_inbound_dm(
+        &mut a, &a_root, "A", reply, "peer-c",
+        &std::collections::HashSet::new(), NOW + 30, "node-a", None,
+    )
+    .unwrap();
+    assert_eq!(r.response, json!({ "ok": true }));
+    assert_eq!(
+        invite_status(&a),
+        Some(spark_core::org::OrgInviteStatus::Declined),
+        "未被误标 → declined 回执正常落账"
+    );
+}
+
+/// 裁决 §10.2 org:meta 挂点正向：whole 记录携带 invitee 本人分量（legacy
+/// join 形态——invitee 经快照合入 bump 本机分量后 whole 回流）→ 对账标
+/// accepted。
+#[test]
+fn outbound_invite_reconciled_on_whole_with_invitee_component() {
+    let (a_key, a_root) = self_identity(1);
+    let (_d_key, d_root) = self_identity(4);
+    let mut a = MemoryStorage::new();
+    save_org(
+        &mut a,
+        ORG_ID,
+        vec![
+            (a_root.as_str(), OrganizationRole::Admin),
+            (d_root.as_str(), OrganizationRole::Member),
+        ],
+        &[],
+    );
+    spark_core::plugindata::declare_builtin_org_collections(&mut a, ORG_ID, &a_root, NOW, "node-a")
+        .unwrap();
+    // D 预录携端点 peer-d
+    let mut whole = OrganizationService::get_record(&a, ORG_ID).unwrap().unwrap();
+    whole.members.iter_mut().find(|m| m.root_id == d_root).unwrap().node_info =
+        Some(spark_core::org::types::OrganizationDeviceSet::from_single(
+            spark_core::org::types::OrganizationNodeInfo {
+                device_uid: Some("uid-d".to_string()),
+                peer_id: Some("peer-d".to_string()),
+                addresses: Vec::new(),
+            },
+        ));
+    OrganizationService::save_record(&mut a, &whole).unwrap();
+    let out_record = spark_core::org::invite_record::OrgInviteRecord {
+        id: "inv-a-d".to_string(),
+        org_id: ORG_ID.to_string(),
+        org_name: "t".to_string(),
+        org_avatar: None,
+        peer_root_id: d_root.clone(),
+        peer_nickname: "D".to_string(),
+        direction: spark_core::org::OrgInviteDirection::Outgoing,
+        status: spark_core::org::OrgInviteStatus::Pending,
+        invite_code: None,
+        created_at: NOW,
+        updated_at: NOW,
+    };
+    OrganizationService::put_invite_record(&mut a, &out_record).unwrap();
+
+    // legacy join 回流：whole 携带 D 的本机分量（vv 键 = D 的设备 peerId）
+    let mut incoming = whole.clone();
+    incoming.updated_at = NOW + 50;
+    let data_body = build_orgsync_data_batch(
+        ORG_ID,
+        COL_FULL,
+        &[org_record(
+            &format!("org:meta:{ORG_ID}"),
+            serde_json::to_value(&incoming).unwrap(),
+            remote_meta("peer-d", 1, NOW + 50),
+        )],
+        0,
+        1,
+    );
+    let r = deliver_orgsync(
+        &mut a, &a_root, "A", &_d_key, &d_root, &a_root,
+        dm_envelope::KIND_ORGSYNC_DATA, data_body, "peer-d", "node-a",
+    );
+    assert_eq!(r.response, json!({ "ok": true }));
+    let updated = OrganizationService::get_outgoing_invite(&a, ORG_ID, &d_root)
+        .unwrap()
+        .expect("outbound 记录存在");
+    assert_eq!(
+        updated.status,
+        spark_core::org::OrgInviteStatus::Accepted,
+        "whole 携 invitee 本人分量 → 对账标 accepted"
     );
     assert!(
         r.events.iter().any(|e| matches!(e, spark_core::p2p::P2pEvent::OrgInviteUpdated(_))),

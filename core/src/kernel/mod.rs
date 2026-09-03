@@ -202,7 +202,8 @@ pub struct Kernel {
     pub(crate) avatar_shared: Arc<Mutex<String>>,
     /// p2p 节点句柄共享格（host 回发 auto_accept 用；start 后回填、stop 清空）。
     pub(crate) p2p_node_shared: Arc<Mutex<Option<Arc<P2pNode>>>>,
-    /// 解锁期签名私钥（org-sync worker 自签 nodeInfoClaim 用；lock 时清除）。
+    /// 解锁期签名私钥（orgsync/dm 信封签名用；lock 时清除。P2 前的
+    /// 「自签 nodeInfoClaim」用途已随 claim 通道退役）。
     pub(crate) signing_key_shared: Arc<Mutex<Option<ed25519_dalek::SigningKey>>>,
     /// 解锁期会话口令（host 侧应用自设备 profile-sync 全量快照时重封身份
     /// 文件用——与 unlocked 会话同源，lock 时清除）。

@@ -160,7 +160,9 @@ impl Kernel {
     ///    `updated_at = 0` 保证 F1 合并时真实记录全字段秩高（stub 只提供
     ///    「from ∈ 成员表」与复制组判定的最小前提；本人端点经成员并集 +
     ///    nodeInfo 并集自然存活）；stub 经版本化句柄落库（本机分量 bump，
-    ///    与对端 whole 判 Concurrent → 结构化合并而非整值覆盖）；
+    ///    与对端 whole 判 Concurrent → 结构化合并而非整值覆盖），落库后
+    ///    pmeta.ts 压 0（裁决 §10.1：零信息占位在任何裁决面皆输——对齐
+    ///    pdsync ts 裁决与条目级合并秩）；
     /// 2. 立即向邀请人发 orgsync-hello（本机集合 vv 为空 ⟹ 邀请人回推全量
     ///    data）；发送失败不中断——邀请人侧 tick hello 会反向触发同一交换；
     /// 3. 有界轮询本地记录「真实到达」（`updated_at > 0` ⟹ 已与邀请人版本
@@ -182,8 +184,15 @@ impl Kernel {
         let node_id = self.sync_node_id();
         let org_id = &payload.org_id;
 
-        // 1. stub 自举（已有记录 = 重入/他设备已加入 → 跳过）
-        if OrganizationService::get_record(self.require_storage()?, org_id)?.is_none() {
+        // 1. stub 自举（已有记录 = 重入/他设备已加入 → 跳过）。整段持
+        //    io_lock（评审修复）：版本化落库与 ts 压 0 的 raw 补写之间若不
+        //    持锁，入站合入线程可穿插——真实 whole 合并落地后被 ts=0 补写
+        //        回盖成 stub pmeta（vv 回退 + 内容/vv 脱节，F8 类病灶）。
+        //    锁域只包本段（步骤 2/3 的 block_on/轮询不持锁）。
+        {
+            let __io = std::sync::Arc::clone(&self.io_lock);
+            let _io = __io.lock().unwrap_or_else(|e| e.into_inner());
+            if OrganizationService::get_record(self.require_storage()?, org_id)?.is_none() {
             let self_endpoint = OrganizationNodeInfo {
                 device_uid: self_device_uid.clone(),
                 peer_id: local.peer_id.clone(),
@@ -230,9 +239,37 @@ impl Kernel {
             crate::plugindata::declare_builtin_org_collections(
                 storage, org_id, root_id, now, &node_id,
             )?;
+            // 裁决 §10.1（org-p2-channel-review 建议 1）：stub 是**零信息
+            // 占位**——`updated_at=0` 只压住 F1 记录秩；版本化句柄落库的
+            // pmeta.ts = 当下时刻，pdsync 的 Concurrent 裁决按 pmeta.ts，
+            // 后加入设备的 stub 可凭 ts 优势整值覆盖先加入设备的真实
+            // whole（多设备窗口）。此处把 stub whole 与 stub 成员条目的
+            // pmeta.ts 压 0（任何裁决面皆输；vv 保留——传播/后续合并正常）。
+            // 已核：apply_personal_remote 无 ts 时间窗拦截（pwv 专用窗不
+            // 涉及），折叠只看 vv 不受 ts=0 影响。
+            {
+                let mut keys = vec![crate::org::types::organization_key(org_id)];
+                keys.extend(
+                    stub.members
+                        .iter()
+                        .map(|m| crate::org::types::org_member_key(org_id, &m.root_id)),
+                );
+                let raw = self.require_storage_mut()?.raw_mut();
+                for key in keys {
+                    let Some(mut meta) = crate::sync::get_personal_meta(raw, &key)
+                        .map_err(|e| KernelError::Internal(e.to_string()))?
+                    else {
+                        continue;
+                    };
+                    meta.ts = 0;
+                    crate::sync::set_personal_meta(raw, &key, &meta)
+                        .map_err(|e| KernelError::Internal(e.to_string()))?;
+                }
+            }
         }
+    }
 
-        // 2. 即时 orgsync-hello 踢一脚（失败不中断——等对端 tick 反向触发）
+    // 2. 即时 orgsync-hello 踢一脚（失败不中断——等对端 tick 反向触发）
         {
             let storage = self.require_storage()?;
             if let Ok(collections) = crate::sync::orgsync::collect_org_collections(

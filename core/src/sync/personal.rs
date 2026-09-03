@@ -537,6 +537,34 @@ mod tests {
         assert_eq!(r, ApplyResult::Applied);
     }
 
+    /// 裁决 §10.1（阶段四A P2 join stub）：stub 自举占位记录的 pmeta.ts 压 0——
+    /// Concurrent 裁决按 pmeta.ts，ts=0 的零信息占位对任何真实记录皆输（多
+    /// 设备账号中后加入设备的 stub 不得覆盖先加入设备的真实 whole）。同时钉
+    /// 「无 ts 时间窗拦截」的对照：ts 更高的并发远端正常胜出。
+    #[test]
+    fn apply_concurrent_stub_ts_zero_always_loses() {
+        let mut s = storage();
+        // 先加入设备的真实记录（ts 是过去的真实时刻）
+        let _ = put_personal(&mut s, NODE_A, KEY, r#""real""#, 1000).unwrap();
+        // 后加入设备的 stub：vv 并发（{node-b:1} vs {node-a:1}）、ts=0
+        let stub_meta = DocMeta {
+            vv: vec![(NODE_B.to_string(), 1)].into_iter().collect(),
+            ts: 0,
+            node_id: Some(NODE_B.to_string()),
+            ..Default::default()
+        };
+        let r = apply_personal_remote(&mut s, KEY, r#""stub""#, &stub_meta).unwrap();
+        assert_eq!(r, ApplyResult::LocalWins, "ts=0 的 stub 对真实记录必输");
+        assert_eq!(s.get(KEY).unwrap().unwrap(), r#""real""#, "真实记录不被覆盖");
+        // 对照：ts>0 的并发远端同 vv 形态会赢（ts 裁决生效，无 ts 窗拦截）
+        let real_remote = DocMeta {
+            ts: 3000,
+            ..stub_meta.clone()
+        };
+        let r = apply_personal_remote(&mut s, KEY, r#""remote""#, &real_remote).unwrap();
+        assert_eq!(r, ApplyResult::Applied, "ts 更高的并发远端正常胜出");
+    }
+
     #[test]
     fn delete_personal_writes_tombstone() {
         let mut s = storage();

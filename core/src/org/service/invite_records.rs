@@ -346,16 +346,30 @@ fn org_invite_out_key_of(record: &OrgInviteRecord) -> String {
     super::super::invite_record::org_invite_out_key(&record.org_id, &record.peer_root_id)
 }
 
-/// F4 第二层（batch3 §1.2 成员表对账兜底）：org:meta 合入后发现「某
-/// outbound pending 邀请的 invitee 已在成员表」⟹ 其必已接受（加入只能经
-/// accept 编排）——原地标 accepted + 投影同步（batch3 §2：对账置 accepted
-/// 时同步投影）。返回被对账的记录（事件由调用方发 OrgInviteUpdated）。
+/// F4 第二层（batch3 §1.2 成员表对账兜底）：org:meta / org:member 合入后
+/// 发现「某 outbound pending 邀请的 invitee 已在成员表」⟹ 其必已接受
+/// ——原地标 accepted + 投影同步（batch3 §2：对账置 accepted 时同步投影）。
+/// 返回被对账的记录（事件由调用方发 OrgInviteUpdated）。
+///
+/// 触发条件（裁决 §10.2，org-p2-channel-review 建议 1——收紧「在成员表
+/// ⟹ 已接受」的预录模型冲突）：
+/// 1. 合入 applied=true（调用方保证，仅合入生效时调用）；
+/// 2. 合入后 invitee 在成员表（本函数检查）；
+/// 3. `incoming_vv`（**本次合入记录**的 meta.vv，非合并落库结果）至少一个
+///    分量键 ∈ invitee 已知端点 peerId 集（取自本地成员表 node_info）——
+///    vv 分量 = 写入设备，命中 ⟹ 该记录由 invitee 本人设备写过 ⟹ invitee
+///    真走了接受编排（自写条目只在 accept 路径产生）。预录/中继类记录
+///    （管理员双写产物、他人中继）只含他人分量 → 不误标；终态不重置
+///    语义不变（前提收紧后 declined 回执不再被误标记录挡在门外）。
+/// 已知保守边界：invitee 换设备（peerId 漂移）且新端点尚未被本地知晓时
+/// 不触发——pending 停留，由第一层补投通道与端点刷新后收敛兜底。
 ///
 /// 记账：派生记账是本机事实（成员表是事实源，回执只是通知）——入站 raw
 /// 句柄上显式 put_personal（F7 先例），投影同口径。
 pub fn reconcile_outbound_invites_with_members<S: StorageBackend>(
     storage: &mut S,
     record: &OrganizationRecord,
+    incoming_vv: &crate::sync::meta::VersionVector,
     now_ms: i64,
     node_id: &str,
     inviter_root: &str,
@@ -365,8 +379,17 @@ pub fn reconcile_outbound_invites_with_members<S: StorageBackend>(
         if inv.org_id != record.org_id || inv.status != OrgInviteStatus::Pending {
             continue;
         }
-        if record.find_member(&inv.peer_root_id).is_none() {
+        let Some(member) = record.find_member(&inv.peer_root_id) else {
             continue;
+        };
+        // 裁决 §10.2 条件 3：合入记录 vv 分量 ∩ invitee 已知端点 peerId 集
+        let self_written = member.node_info.as_ref().is_some_and(|set| {
+            set.iter()
+                .filter_map(|e| e.peer_id.as_deref())
+                .any(|peer| incoming_vv.contains_key(peer))
+        });
+        if !self_written {
+            continue; // 预录/中继记录（无 invitee 本人分量）不误标
         }
         let mut inv = inv;
         inv.status = OrgInviteStatus::Accepted;

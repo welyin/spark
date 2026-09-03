@@ -105,6 +105,15 @@ pub fn set_member_role(kernel: &mut Kernel, params: &Params) -> Result<Value, St
     to_json(kernel.org_set_member_role(params.need_str("orgId")?, params.need_str("rootId")?, role))
 }
 
+/// `org-remove-member`：移除成员（仅 admin；落库后向被移除者发
+/// org-member-removed 定向通知，失败入 org 域 pending 补投）。
+pub fn remove_member(kernel: &mut Kernel, params: &Params) -> Result<Value, String> {
+    to_json(kernel.org_remove_member(
+        params.need_str("orgId")?,
+        params.need_str("rootId")?,
+    ))
+}
+
 /// `org-update-my-identity`：改自己的组织内身份（avatar 三态："" 清除）。
 pub fn update_my_identity(kernel: &mut Kernel, params: &Params) -> Result<Value, String> {
     let org_id = params.need_str("orgId")?;

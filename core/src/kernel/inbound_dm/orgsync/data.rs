@@ -179,14 +179,19 @@ pub(crate) fn handle_orgsync_data<S: StorageBackend>(
                 stash_unboxes.extend(super::super::orgkey::reevaluate_orgkey_stash(
                     storage, ctx, &org_id,
                 )?);
-                // F4 第二层（batch3 §1.2 成员表对账兜底）：invitee 已在成员表
-                // ⟹ 必已接受——对应 outbound pending 邀请原地标 accepted +
-                // 管理面投影同步 + OrgInviteUpdated 事件。重读合并后的最新记录。
+                // F4 第二层（batch3 §1.2 成员表对账兜底；裁决 §10.2 收紧触发
+                // 为「invitee 自写分量到达」）：合入记录 vv 分量 ∩ invitee 已知
+                // 端点非空才置 accepted（预录/中继不误标）。重读合并后的最新记录。
                 let Ok(Some(fresh)) = OrganizationService::get_record(storage, &org_id) else {
                     continue;
                 };
                 for inv in crate::org::service::reconcile_outbound_invites_with_members(
-                    storage, &fresh, ctx.now_ms, ctx.node_id, ctx.my_root_id,
+                    storage,
+                    &fresh,
+                    &record_item.meta.vv,
+                    ctx.now_ms,
+                    ctx.node_id,
+                    ctx.my_root_id,
                 )? {
                     events.push(crate::p2p::P2pEvent::OrgInviteUpdated(
                         serde_json::to_value(&inv)?,
@@ -226,16 +231,21 @@ pub(crate) fn handle_orgsync_data<S: StorageBackend>(
                     "[ORGSYNC] data applied | org={org_id} col={col_full} key={}",
                     record_item.key
                 );
-                // F4 第二层挂点补齐（评审发现，P2 通道迁移后）：P2 join 只产生
-                // org:member 条目流量（成员自写条目），邀请人侧 org:meta 无合入
-                // 事件——对账若只挂 org:meta 分支在 P2 主链路永不触发（回执
-                // 丢失时 outbound 永久 pending）。条目入站到达 =  invitee 已
-                // 接受（预录条目是本机双写产物，不会经入站到达）→ 同款对账。
+                // F4 第二层挂点（P2 主链路：join 只产生 org:member 条目流量，
+                // 邀请人侧 org:meta 无合入事件）；裁决 §10.2 收紧触发为
+                // 「invitee 自写分量到达」（vv 分量 ∩ invitee 已知端点非空
+                // 才置 accepted——预录条目是管理员双写产物，只含管理员分量，
+                // 不误标）。
                 let Ok(Some(fresh)) = OrganizationService::get_record(storage, &org_id) else {
                     continue;
                 };
                 for inv in crate::org::service::reconcile_outbound_invites_with_members(
-                    storage, &fresh, ctx.now_ms, ctx.node_id, ctx.my_root_id,
+                    storage,
+                    &fresh,
+                    &record_item.meta.vv,
+                    ctx.now_ms,
+                    ctx.node_id,
+                    ctx.my_root_id,
                 )? {
                     events.push(crate::p2p::P2pEvent::OrgInviteUpdated(
                         serde_json::to_value(&inv)?,

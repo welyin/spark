@@ -1184,9 +1184,10 @@ fn invpub_projection_syncs_between_admins() {
     assert_eq!(proj2["status"], json!("accepted"), "B 侧投影同步转终态");
 }
 
-/// F4 第二层（batch3 §1.2 成员表对账兜底）：invitee 出现在 org:meta 成员表
-/// ⟹ 必已接受——orgsync org:meta 合入点把对应 outbound pending 原地标
-/// accepted + 投影同步 + OrgInviteUpdated 事件。
+/// F4 第二层（batch3 §1.2 成员表对账兜底）× 裁决 §10.2 收紧：仅「在成员表」
+/// 不再够（预录模型冲突——预录未应答者也在表内）——合入记录 vv 须含
+/// invitee 本人设备分量才标 accepted。本用例钉「预录到达不误标 → 本人分量
+/// 到达（legacy join 回流形态）才标」两段式。
 #[test]
 fn outbound_invite_reconciled_when_invitee_in_member_table() {
     let (a_key, a_root) = self_identity(1);
@@ -1225,9 +1226,20 @@ fn outbound_invite_reconciled_when_invitee_in_member_table() {
     let (pk, pv) = spark_core::org::service::invpub_projection(&rec, &b_root).unwrap();
     put_personal(&mut b, "node-b", &pk, &serde_json::to_string(&pv).unwrap(), NOW).unwrap();
 
-    // A 把 C 加进成员表（C 已接受的等价事实）→ org:meta 经 org:structure 到 B
+    // A 把 C 加进成员表（预录——携端点 peer-c 但 C 尚未应答）→ org:meta 经
+    // org:structure 到 B：vv 只含 A 的分量（无 C 本人分量）→ 不误标
     let mut rec_a = OrganizationService::get_record(&a, ORG_ID).unwrap().unwrap();
-    rec_a.members.push(member(&c_root, OrganizationRole::Member));
+    rec_a.members.push({
+        let mut m = member(&c_root, OrganizationRole::Member);
+        m.node_info = Some(spark_core::org::types::OrganizationDeviceSet::from_single(
+            spark_core::org::types::OrganizationNodeInfo {
+                device_uid: Some("uid-c".to_string()),
+                peer_id: Some("peer-c".to_string()),
+                addresses: Vec::new(),
+            },
+        ));
+        m
+    });
     rec_a.updated_at = NOW + 100;
     let meta_key = format!("org:meta:{ORG_ID}");
     put_personal(&mut a, "node-a", &meta_key, &serde_json::to_string(&rec_a).unwrap(), NOW + 100).unwrap();
@@ -1242,10 +1254,33 @@ fn outbound_invite_reconciled_when_invitee_in_member_table() {
         dm_envelope::KIND_ORGSYNC_DATA, body, "peer-a", "node-b");
     assert_eq!(r.response, json!({ "ok": true }));
 
-    // 对账生效：outbound pending → accepted + 投影同步 + 事件
+    // 裁决 §10.2：预录到达（vv 无 C 本人分量）→ 不误标，停留 pending
+    let still: spark_core::org::invite_record::OrgInviteRecord =
+        serde_json::from_str(&b.get(&format!("org:inv:out:{ORG_ID}:{c_root}")).unwrap().unwrap()).unwrap();
+    assert_eq!(
+        still.status,
+        spark_core::org::OrgInviteStatus::Pending,
+        "预录形态（vv 无 invitee 本人分量）不误标 accepted"
+    );
+
+    // C 真走接受编排后回流（legacy join 形态：C 快照合入 bump 本机分量，
+    // whole 携带 C 分量）→ 对账生效：pending → accepted + 投影同步 + 事件
+    let mut meta_with_c = get_personal_meta(&a, &meta_key).unwrap().unwrap();
+    meta_with_c.vv.insert("peer-c".to_string(), 1);
+    meta_with_c.ts = NOW + 200;
+    let org_meta_record2 = spark_core::sync::orgsync::OrgsyncRecord {
+        key: meta_key.clone(),
+        value: serde_json::from_str(&a.get(&meta_key).unwrap().unwrap()).unwrap(),
+        meta: meta_with_c,
+        dseq: None,
+    };
+    let body = build_orgsync_data_batch(ORG_ID, &format!("{STRUCT}@v{V1}"), &[org_meta_record2], 0, 1);
+    let r = deliver_orgsync(&mut b, &b_root, "B", &a_key, &a_root, &b_root,
+        dm_envelope::KIND_ORGSYNC_DATA, body, "peer-a", "node-b");
+    assert_eq!(r.response, json!({ "ok": true }));
     let updated: spark_core::org::invite_record::OrgInviteRecord =
         serde_json::from_str(&b.get(&format!("org:inv:out:{ORG_ID}:{c_root}")).unwrap().unwrap()).unwrap();
-    assert_eq!(updated.status, spark_core::org::OrgInviteStatus::Accepted, "成员表对账原地标 accepted");
+    assert_eq!(updated.status, spark_core::org::OrgInviteStatus::Accepted, "本人分量到达 → 对账原地标 accepted");
     let proj: serde_json::Value = serde_json::from_str(&b.get(&pk).unwrap().unwrap()).unwrap();
     assert_eq!(proj["status"], json!("accepted"), "投影同步转 accepted");
     assert!(
