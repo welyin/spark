@@ -201,13 +201,26 @@ fn node_card_import_lands_unverified_pool_entry() {
         "篡改名片报错：{err}"
     );
 
-    // 关停 B 后直接读 sled：邻居池存在 A 的未验证条目（信任边界不变）
+    // 关停 B 后直接读库：邻居池存在 A 的未验证条目（信任边界不变）。
+    // 后端分岔（sqlite-backend 覆盖口）：sled = 目录直开；sqlite = .db 单文件
+    //（邻居池键同样在 kv 表内）。
+    let b_root = kernel_b.status().unwrap().root_id.expect("B 已初始化");
     let b_storage_dir = kernel_b.storage_dir().unwrap();
     kernel_b.shutdown().unwrap();
     kernel_a.shutdown().unwrap();
-    let mut storage = spark_core::storage::SledStorage::open(&b_storage_dir).unwrap();
-    let mut store = spark_core::p2p::OverlayPeerStore::new(&mut storage);
-    let entry = store.get(&a_peer).unwrap().expect("A 在 B 的邻居池");
+    let entry = if std::env::var_os("SPARK_STORAGE_BACKEND").is_some_and(|v| v == "sqlite") {
+        let file = dir_b.path().join(format!("sqlite-{b_root}.db"));
+        let mut storage = spark_core::storage::SqliteStorage::open(&file).unwrap();
+        spark_core::p2p::OverlayPeerStore::new(&mut storage)
+            .get(&a_peer)
+            .unwrap()
+    } else {
+        let mut storage = spark_core::storage::SledStorage::open(&b_storage_dir).unwrap();
+        spark_core::p2p::OverlayPeerStore::new(&mut storage)
+            .get(&a_peer)
+            .unwrap()
+    };
+    let entry = entry.expect("A 在 B 的邻居池");
     assert!(!entry.verified, "名片导入一律未验证口径");
     assert!(!entry.addresses.is_empty());
 }

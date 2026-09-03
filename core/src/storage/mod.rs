@@ -17,8 +17,10 @@ use std::ops::Bound;
 #[cfg(test)]
 pub(crate) mod contract;
 pub mod sled;
+pub mod sqlite;
 
 pub use sled::SledStorage;
+pub use sqlite::SqliteStorage;
 
 /// 前缀范围扫描的排他上界字符（`\u{10FFFF}`，UTF-8 编码 F4 8F BF BF）。
 pub const KEY_RANGE_UPPER_BOUND: char = '\u{10FFFF}';
@@ -121,6 +123,74 @@ pub trait StorageBackend {
 
     /// 前缀范围扫描，按键升序（`reverse` 时降序）返回键值对。
     fn scan(&self, options: &ScanOptions) -> Result<Vec<(String, String)>>;
+}
+
+/// 平台选型后的存储后端调度枚举（sqlite-backend §2.6）：kernel 的
+/// `KernelStorage = VersionedStorage<Backend>` 保持具体类型不变，
+/// `open_storage` 按平台装入对应后端，业务零感知。弃用
+/// `Box<dyn StorageBackend>`（动态分发无收益，枚举显式且零成本）。
+#[derive(Clone)]
+pub enum Backend {
+    /// sled（桌面默认，存量安装零迁移）。
+    Sled(SledStorage),
+    /// SQLite（移动端默认）。
+    Sqlite(SqliteStorage),
+}
+
+impl Backend {
+    /// 刷盘（kernel shutdown 的确定性收尾；逐后端委托）。
+    pub fn flush(&self) -> Result<()> {
+        match self {
+            Backend::Sled(s) => s.flush(),
+            Backend::Sqlite(s) => s.flush(),
+        }
+    }
+}
+
+impl std::fmt::Debug for Backend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Backend::Sled(s) => f.debug_tuple("Backend::Sled").field(s).finish(),
+            Backend::Sqlite(s) => f.debug_tuple("Backend::Sqlite").field(s).finish(),
+        }
+    }
+}
+
+impl StorageBackend for Backend {
+    fn get(&self, key: &str) -> Result<Option<String>> {
+        match self {
+            Backend::Sled(s) => s.get(key),
+            Backend::Sqlite(s) => s.get(key),
+        }
+    }
+
+    fn put(&mut self, key: &str, value: &str) -> Result<()> {
+        match self {
+            Backend::Sled(s) => s.put(key, value),
+            Backend::Sqlite(s) => s.put(key, value),
+        }
+    }
+
+    fn delete(&mut self, key: &str) -> Result<()> {
+        match self {
+            Backend::Sled(s) => s.delete(key),
+            Backend::Sqlite(s) => s.delete(key),
+        }
+    }
+
+    fn batch(&mut self, operations: Vec<BatchOperation>) -> Result<()> {
+        match self {
+            Backend::Sled(s) => s.batch(operations),
+            Backend::Sqlite(s) => s.batch(operations),
+        }
+    }
+
+    fn scan(&self, options: &ScanOptions) -> Result<Vec<(String, String)>> {
+        match self {
+            Backend::Sled(s) => s.scan(options),
+            Backend::Sqlite(s) => s.scan(options),
+        }
+    }
 }
 
 /// 内存后端（`BTreeMap`）：供单元测试与早期集成使用。

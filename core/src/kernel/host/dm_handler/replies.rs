@@ -709,7 +709,7 @@ async fn send_pdsync_outputs(
 
 /// 检查 device_joined 通知补发窗口是否仍然有效。
 pub(super) fn device_notice_window_open(
-    storage: &crate::storage::SledStorage,
+    storage: &crate::storage::Backend,
     now_ms: i64,
 ) -> bool {
     use crate::p2p::constants::P2P_DEVICE_NOTICE_SELF_UNTIL;
@@ -722,7 +722,7 @@ pub(super) fn device_notice_window_open(
 }
 
 /// 检查是否已向指定 peer 发送过 device_joined 通知（幂等键）。
-pub(super) fn device_notice_sent(storage: &crate::storage::SledStorage, peer_id: &str) -> bool {
+pub(super) fn device_notice_sent(storage: &crate::storage::Backend, peer_id: &str) -> bool {
     storage
         .get(&format!("{P2P_DEVICE_NOTICE_SENT_PREFIX}{peer_id}"))
         .ok()
@@ -799,7 +799,7 @@ async fn send_orgsync_outputs(
 /// 个人空间 `dm:pending:`（to=自 rootId；自设备场景 from==to，flush 由
 /// `on_peer_app_ready` 朋友自记录路径触发，天然兼容）。
 fn enqueue_pdsync_failures(
-    storage: &mut crate::storage::SledStorage,
+    storage: &mut crate::storage::Backend,
     to: &str,
     failed: &[(Value, Value)],
     node_id: &str,
@@ -821,7 +821,7 @@ fn enqueue_pdsync_failures(
 /// `org:dm:pending:`；orgId 从 data body 解析（`body_org_scope` 既有口径），
 /// 解析不出（形状异常）跳过——反熵兜底语义不变。
 fn enqueue_orgsync_failures(
-    storage: &mut crate::storage::SledStorage,
+    storage: &mut crate::storage::Backend,
     failed: &[(String, Value, Value)],
     node_id: &str,
 ) {

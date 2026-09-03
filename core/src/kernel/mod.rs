@@ -158,12 +158,13 @@ impl UnlockedIdentity {
     }
 }
 
-/// kernel 存储类型：版本化中间件（写侧同步记账下沉，§11.5）包装 sled。
+/// kernel 存储类型：版本化中间件（写侧同步记账下沉，§11.5）包装平台后端
+/// （sqlite-backend §2.6：桌面 sled / 移动端 SQLite，`Backend` 调度枚举）。
 ///
 /// 经 `require_storage*` 拿到的写句柄对受管前缀自动完成 vv bump/pmeta/
 /// 墓碑/删除日志；远端合入与消息驱动的 conv 更新经
 /// [`Kernel::require_storage_raw_mut`] 绕过（不触发本地记账）。
-pub(crate) type KernelStorage = crate::sync::versioned::VersionedStorage<SledStorage>;
+pub(crate) type KernelStorage = crate::sync::versioned::VersionedStorage<crate::storage::Backend>;
 
 /// kernel 门面：壳层持有的单例。
 pub struct Kernel {
@@ -373,7 +374,28 @@ impl Kernel {
         format!("spark-sled-{prefix}")
     }
 
+    /// 移动端 SQLite 库文件名（sqlite-backend §2.6：与 sled 目录同级，
+    /// WAL 伴生 `-wal`/`-shm` 文件）。
+    fn sqlite_file_name(root_id: &str) -> String {
+        format!("sqlite-{root_id}.db")
+    }
+
+    /// 存储后端选型（sqlite-backend §2.5）：Android/iOS → SQLite，其余 →
+    /// sled（桌面存量零迁移）。`SPARK_STORAGE_BACKEND=sqlite|sled` 环境变量
+    /// 为测试/诊断覆盖口（桌面跑 SQLite 后端联调）。
+    fn backend_is_sqlite() -> bool {
+        match std::env::var("SPARK_STORAGE_BACKEND").as_deref() {
+            Ok("sqlite") => true,
+            Ok("sled") => false,
+            _ => cfg!(target_os = "android") || cfg!(target_os = "ios"),
+        }
+    }
+
     /// 当前打开的存储目录（诊断用；未打开为 `None`）。
+    ///
+    /// 注意：返回 **sled 目录**口径（桌面默认后端；SQLite 后端的 .db 文件
+    /// 路径在 `open_storage` 内构造，移动端无 sled 目录——存量诊断调用
+    /// 不变）。
     pub fn storage_dir(&self) -> Option<PathBuf> {
         self.storage_root_id
             .as_ref()
@@ -382,9 +404,24 @@ impl Kernel {
 
     /// 打开指定身份的存储并启动数据治理服务（调用方负责先停 P2P）。
     fn open_storage(&mut self, root_id: &str) -> Result<()> {
-        let dir = self.config.data_dir.join(Self::sled_dir_name(root_id));
-        let mut raw = SledStorage::open(&dir)?;
-        let mut dm = DataManagementService::new(Some(dir.to_string_lossy().into_owned()));
+        // sqlite-backend §2.6：唯一后端打开点，按平台选型装入 Backend 调度
+        // 枚举；其余代码（VersionedStorage、数据治理、全部业务）零感知。
+        let (mut raw, location) = if Self::backend_is_sqlite() {
+            let file = self.config.data_dir.join(Self::sqlite_file_name(root_id));
+            (
+                crate::storage::Backend::Sqlite(crate::storage::SqliteStorage::open(&file)?),
+                file.to_string_lossy().into_owned(),
+            )
+        } else {
+            let dir = self.config.data_dir.join(Self::sled_dir_name(root_id));
+            (
+                crate::storage::Backend::Sled(SledStorage::open(&dir)?),
+                dir.to_string_lossy().into_owned(),
+            )
+        };
+        // DataManagementService 参数语义 = 「数据文件位置」（sqlite-backend
+        // §2.6：sled 为目录、SQLite 为 .db 文件路径）
+        let mut dm = DataManagementService::new(Some(location));
         dm.start();
         // 删除日志升级迁移：journal 引入前的既有墓碑 pmeta 一次性补登，
         // 否则这些历史删除无法按新机制传播（幂等，标记键门控；在原始句柄
@@ -463,7 +500,7 @@ impl Kernel {
     ///    版本的数据，经中间件会被错误二次 bump（回声污染 vv）；
     /// 2. 消息驱动的 conv 记录更新（追加/已读/未读计数）：高频消息流
     ///    不得推高 pmeta（`bump_personal_meta` 自定义 ts 语义的同族）。
-    pub(crate) fn require_storage_raw_mut(&mut self) -> Result<&mut SledStorage> {
+    pub(crate) fn require_storage_raw_mut(&mut self) -> Result<&mut crate::storage::Backend> {
         Ok(self
             .storage
             .as_mut()
@@ -471,10 +508,10 @@ impl Kernel {
             .raw_mut())
     }
 
-    /// 测试专用：克隆共享存储句柄（sled 内部为 Arc，克隆不重复占用锁）。
+    /// 测试专用：克隆共享存储句柄（后端内部为 Arc 共享，克隆不重复占用锁）。
     /// 仅供壳层测试断言底层 KV，正常代码路径请走公开 API。
     #[doc(hidden)]
-    pub fn __test_storage(&self) -> Option<SledStorage> {
+    pub fn __test_storage(&self) -> Option<crate::storage::Backend> {
         self.storage.as_ref().map(|s| s.raw().clone())
     }
 
@@ -494,5 +531,25 @@ impl std::fmt::Debug for Kernel {
             .field("unlocked", &self.unlocked.is_some())
             .field("p2p_running", &self.p2p.is_some())
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod storage_backend_choice_tests {
+    /// sqlite-backend §2.5：桌面默认 sled（存量零迁移）；移动目标走 SQLite。
+    ///（环境变量覆盖口 SPARK_STORAGE_BACKEND 不测试——进程级 env 读写与
+    /// 并行测试相斥，诊断口人工验证。）
+    #[test]
+    fn desktop_defaults_to_sled() {
+        // 覆盖口激活时不判默认（SPARK_STORAGE_BACKEND 是进程级 env——带覆盖
+        // 跑全量（如 sqlite 后端联调）时本断言必然失败，属预期而非回归）
+        if std::env::var_os("SPARK_STORAGE_BACKEND").is_some() {
+            return;
+        }
+        if cfg!(target_os = "android") || cfg!(target_os = "ios") {
+            assert!(super::Kernel::backend_is_sqlite(), "移动端默认 SQLite");
+        } else {
+            assert!(!super::Kernel::backend_is_sqlite(), "桌面默认 sled");
+        }
     }
 }

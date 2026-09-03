@@ -9,7 +9,8 @@
 //! `host`，P4 才清除）。回滚 = 版本回退（设计 §4）。
 //!
 //! 线程模型：全部方法为 async，跑在 kernel 内部 tokio runtime 上（事件泵/worker
-//! 或门面方法的 `block_on`）。存储经 [`SledStorage`] 克隆句柄访问（线程安全）。
+//! 或门面方法的 `block_on`）。存储经 [`crate::storage::Backend`] 克隆句柄访问
+//! （线程安全；阶段四B 起桌面 sled / 移动端 SQLite）。
 //!
 //! 代码组织：本文件为 [`OrgSyncContext`]（worker 与门面共享的句柄包）、worker
 //! 主循环与各链路共用的私有辅助；orgsync hello 触发在 `orgsync_hello`，

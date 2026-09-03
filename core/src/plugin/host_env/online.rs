@@ -329,7 +329,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let sled = crate::storage::SledStorage::open(dir.path().join("db")).unwrap();
         let storage = crate::sync::versioned::VersionedStorage::new(
-            sled,
+            crate::storage::Backend::Sled(sled),
             crate::sync::versioned::shared_node_id("node-test"),
         );
         let host = PluginHostShared {

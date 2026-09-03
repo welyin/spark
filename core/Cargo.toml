@@ -26,6 +26,14 @@ serde_json = { version = "1.0.151", features = ["preserve_order"] }
 sha2 = "0.11.0"
 # sled：纯 Rust 嵌入式 KV（维护模式，API 冻结可接受），kernel 门面的持久化后端。
 sled = "0.34.7"
+# libsqlite3-sys（bundled = vendored SQLite C 源码经 cc 编译）：移动端存储
+# 后端（sqlite-backend §2.4）——无系统库依赖、版本确定，Android 交叉编译只需
+# NDK 工具链（prebuilt 绑定，不需要 libclang——对照 rquickjs 的 bindgen 坑）。
+# 设计原定 rusqlite 包装层；实施环境离线拉取不到 rusqlite 本体（其依赖
+# hashlink/smallvec/memchr 已缓存而本体与 fallible-* 缺失），降级为直用其
+# bundled 底层 libsqlite3-sys + 本库自持的薄同步封装（storage/sqlite.rs）。
+# 依赖非可选（不 feature gate）：桌面 CI 同轨编译，避免移动端路径回归盲区。
+libsqlite3-sys = { version = "0.30", features = ["bundled"] }
 thiserror = "2.0.19"
 # O4 encrypted 集合：orgkey-deliver 的 NaCl crypto_box 需要 Ed25519→X25519
 # 转换（CompressedEdwardsY::decompress + to_montgomery）与 X25519 共享密钥

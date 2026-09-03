@@ -61,13 +61,23 @@ fn identity_full_lifecycle() {
     assert_eq!(file_json["nickname"], "小明", "昵称已 trim");
     assert!(file_json["authTag"].is_string() && file_json["publicKeyHex"].is_string());
 
-    // 存储目录按身份对齐
+    // 存储目录按身份对齐（sled 路径；SPARK_STORAGE_BACKEND=sqlite 覆盖口下
+    // 存储是 .db 文件、无 sled 目录——改断言 sqlite 库文件存在）
     let storage_dir = kernel.storage_dir().expect("storage open");
-    assert_eq!(
-        storage_dir.file_name().unwrap().to_string_lossy(),
-        format!("spark-sled-{}", &root_id[..16])
-    );
-    assert!(storage_dir.exists());
+    if std::env::var_os("SPARK_STORAGE_BACKEND").is_some_and(|v| v == "sqlite") {
+        assert!(
+            dir.path()
+                .join(format!("sqlite-{root_id}.db"))
+                .exists(),
+            "sqlite 覆盖口：库文件按身份落位"
+        );
+    } else {
+        assert_eq!(
+            storage_dir.file_name().unwrap().to_string_lossy(),
+            format!("spark-sled-{}", &root_id[..16])
+        );
+        assert!(storage_dir.exists());
+    }
 
     // status / list
     let status = kernel.status().unwrap();

@@ -3,7 +3,7 @@
 //! （节点句柄/签名私钥/会话口令）的回发指令装配成信封 spawn 到 runtime 投递。
 //!
 //! 从 `host` 拆出的子模块（文件长度约束）：[`KernelDmHandler`] 字段全部为
-//! `Arc`/`SledStorage` 克隆（`Send + Sync`），由事件循环 spawn 到阻塞线程池执行
+//! `Arc`/`Backend` 克隆（`Send + Sync`），由事件循环 spawn 到阻塞线程池执行
 //! （验签/落库等重 IO 不占事件循环线程）；本模块只做装配与错误映射，业务规则
 //! 全在 `super::super::inbound_dm`。
 //!
@@ -22,7 +22,7 @@ use crate::p2p::P2pNode;
 use crate::p2p::host::DmHandler;
 use crate::p2p::node::system_now_ms;
 use crate::p2p::peer_targets::PeerNodeInfo;
-use crate::storage::SledStorage;
+use crate::storage::Backend;
 
 use super::super::dm_envelope;
 
@@ -41,7 +41,7 @@ mod replies;
 /// 伴随 pwv salt 轮换，键控 salt 天然含失效语义；password_shared 本就常驻
 /// 内存，缓存不引入新的暴露面。
 fn derive_kverify_from_password_shared(
-    storage: &SledStorage,
+    storage: &Backend,
     password_shared: &Arc<Mutex<Option<String>>>,
     cache: &Arc<Mutex<Option<(String, [u8; 32])>>>,
 ) -> Option<[u8; 32]> {
@@ -65,10 +65,10 @@ fn derive_kverify_from_password_shared(
     Some(k)
 }
 
-/// kernel 的 dm 入站处理器：字段全部为 `Arc`/`SledStorage` 克隆，`Send + Sync`，
+/// kernel 的 dm 入站处理器：字段全部为 `Arc`/`Backend` 克隆，`Send + Sync`，
 /// 由事件循环 spawn 到阻塞线程池执行（验签/落库等重 IO 不占事件循环线程）。
 pub(crate) struct KernelDmHandler {
-    pub(crate) storage: SledStorage,
+    pub(crate) storage: Backend,
     pub(crate) current_root_id: Arc<Mutex<Option<String>>>,
     pub(crate) nickname_shared: Arc<Mutex<String>>,
     pub(crate) avatar_shared: Arc<Mutex<String>>,
@@ -101,7 +101,7 @@ impl KernelDmHandler {
     /// 在独立 io_lock 持期内处理一个（子）信封：验签 + 合入 + 事件聚合。
     fn process_one_inbound(
         &self,
-        storage: &mut SledStorage,
+        storage: &mut Backend,
         root_id: &str,
         nickname: &str,
         payload: Value,
@@ -154,7 +154,7 @@ impl KernelDmHandler {
     /// 非 pdsync-data 或记录量低于阈值 → 直接单次处理（原路径）。
     fn maybe_chunked_process(
         &self,
-        storage: &mut SledStorage,
+        storage: &mut Backend,
         root_id: &str,
         nickname: &str,
         payload: Value,

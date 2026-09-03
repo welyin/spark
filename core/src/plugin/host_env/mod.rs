@@ -426,12 +426,8 @@ mod tests {
         }
     }
 
-    /// R2：encrypted 授权名单三方法已纳入权限映射（storage:write）——
-    /// 零权限插件（无 storage:write）调用 grantAccess 等将因
-    /// `capability_permission` 返回 Some 而由 dispatch 前置强制拒绝。
-    #[test]
     /// batch3 §3：在线 ops 权限映射——读归 storage:read、写归 storage:write
-    /// （与既有 data.* 同轴；未授权插件调用被 dispatch 前置拒绝）。
+    ///（与既有 data.* 同轴；未授权插件调用被 dispatch 前置拒绝）。
     #[test]
     fn online_ops_permission_mapping() {
         for cap in ["data.onlineGet", "data.onlineQuery"] {
@@ -442,6 +438,10 @@ mod tests {
         }
     }
 
+    /// R2：encrypted 授权名单三方法已纳入权限映射（storage:write）——
+    /// 零权限插件（无 storage:write）调用 grantAccess 等将因
+    /// `capability_permission` 返回 Some 而由 dispatch 前置强制拒绝。
+    #[test]
     fn access_api_requires_storage_write_permission() {
         for cap in ["data.grantAccess", "data.revokeAccess", "data.listAccess"] {
             assert_eq!(

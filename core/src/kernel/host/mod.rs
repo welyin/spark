@@ -39,7 +39,7 @@ use crate::p2p::overlay_store::{OverlayPeerSource, OverlayPeerStore};
 use crate::p2p::peer_activity::{NodeObservation, PeerActivityStore};
 use crate::p2p::peer_targets::PeerNodeInfo;
 use crate::schema::CollectionSchemaDeclaration;
-use crate::storage::{SledStorage, StorageBackend};
+use crate::storage::{Backend, StorageBackend};
 use crate::sync::apply::{ApplyRemoteOptions, apply_remote_update};
 use crate::sync::meta::RemoteMeta;
 
@@ -82,7 +82,7 @@ pub(crate) type SharedOrgShareAckTracker = Arc<Mutex<OrgShareAckTracker>>;
 
 /// kernel 宿主：持有与门面共享的存储句柄与当前身份指针。
 pub(crate) struct KernelHost {
-    pub(crate) storage: SledStorage,
+    pub(crate) storage: Backend,
     pub(crate) current_root_id: Arc<Mutex<Option<String>>>,
     pub(crate) collection_configs: CollectionConfigs,
     pub(crate) org_acks: SharedOrgShareAckTracker,

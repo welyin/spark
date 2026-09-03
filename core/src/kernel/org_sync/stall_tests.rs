@@ -27,7 +27,7 @@ fn test_rig(root_id: Option<&str>, budgets: TickStageBudgets) -> TestRig {
     let tmp = tempfile::tempdir().expect("tempdir");
     let sled = crate::storage::SledStorage::open(tmp.path().join("db")).expect("sled open");
     let storage = crate::sync::versioned::VersionedStorage::new(
-        sled,
+        crate::storage::Backend::Sled(sled),
         Arc::new(Mutex::new("stub-node".to_string())),
     );
     let (node, _cmd_rx) = P2pNode::stub_for_test();
