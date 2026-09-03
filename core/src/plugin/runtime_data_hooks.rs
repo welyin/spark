@@ -207,6 +207,31 @@ pub(crate) const PRELUDE: &str = r#"
             },
             listAccess: function (name, version) {
                 return call('data.listAccess', { collection: name, version: version || null });
+            },
+            // batch3 §3：在线 orgq 查询/写入（org data-accounts 集合、本机非
+            // 驻留时经 orgq-req 在线投递数据账号；超时/全离线回退缓存语义/
+            // 离线入队确认，与 Tauri 通路口径一致）。既有 data.* 缓存/入队
+            // 路由不变——online ops 是纯增量，插件按能力选择。
+            onlineGet: function (name, key, version) {
+                return startAsync('data.onlineGet', { name: name, key: key, version: version || null })
+                    .then(function (r) { return r.value; });
+            },
+            onlineQuery: function (name, options, version) {
+                options = options || {};
+                return startAsync('data.onlineQuery', {
+                    name: name,
+                    prefix: options.prefix || null,
+                    limit: options.limit || null,
+                    cursor: options.cursor || null,
+                    version: version || null
+                }).then(function (r) { return { items: r.items, nextCursor: r.nextCursor || null }; });
+            },
+            // 写三态应答：{accepted:true} 受理 / {denied:true} 拒绝 / {queued:true} 已入离线队列
+            onlineSave: function (name, key, value, version) {
+                return startAsync('data.onlineSave', { name: name, key: key, value: value, version: version || null });
+            },
+            onlineDelete: function (name, key, version) {
+                return startAsync('data.onlineDelete', { name: name, key: key, version: version || null });
             }
         },
         sys: {
@@ -336,7 +361,8 @@ pub(crate) const PRELUDE: &str = r#"
 
     globalThis.__spark_dispatch = function (kind, payloadJson) {
         var payload = JSON.parse(payloadJson);
-        if (kind === 'sys-exec-result' || kind === 'sys-fetch-result' || kind === 'sys-stream-result') {
+        if (kind === 'sys-exec-result' || kind === 'sys-fetch-result' || kind === 'sys-stream-result'
+            || kind === 'data-online-result') {
             settleAsync(payload);
             return;
         }

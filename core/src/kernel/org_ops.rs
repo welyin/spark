@@ -586,13 +586,12 @@ impl Kernel {
                 updated_at: now,
             },
         };
-        // P5：邀请记录写 pmeta，供自设备 pdsync 同步
-        let node_id = self.sync_node_id();
-        OrganizationService::put_invite_record_pdsync(
+        // P5：邀请记录写 pmeta（自设备 pdsync 同步）+ batch3 §2 管理面投影
+        // 双写（org:invitations@v1 / org:invpub:，同一 batch 原子）
+        crate::org::service::put_invite_record_with_projection(
             self.require_storage_mut()?,
             &record,
-            now,
-            &node_id,
+            &root_id,
         )?;
 
         // 信封 body：inviteCode 供接受方走 accept_invite 编排；组织/邀请人
@@ -755,8 +754,74 @@ impl Kernel {
         if let Ok(envelope) =
             self.build_dm_envelope(KIND_ORG_INVITE_REPLY, &record.peer_root_id, body)
         {
-            // 应答丢失则邀请人侧永远 pending，同样带退避重试
-            self.spawn_deliveries_with_retry(vec![(inviter, envelope)], &DM_RETRY_DELAYS);
+            // F4 第一层（org-followups-batch3 §1.2）：退避重试（2s/5s）耗尽
+            // 仍不可达 → 入 `org:dm:pending:{orgId}:` 队列（邀请人端点上线时
+            // 经 host `on_peer_app_ready` 的 Org 空间通道按成员表端点补投——
+            // 邀请人不必是好友）。终态拒绝（blocked 等语义性拒绝）不入队
+            // （重试无意义；本侧 accepted 状态保留，不回滚已加入事实）。
+            // messageId 定 inviteId——同邀请重复回执幂等覆盖。
+            let mut storage = match self.require_storage() {
+                Ok(s) => s.clone(),
+                Err(_) => return,
+            };
+            let io_lock = std::sync::Arc::clone(&self.io_lock);
+            let org_id = record.org_id.clone();
+            let to_root_id = record.peer_root_id.clone();
+            let message_id = format!("org-invite-reply-{}", record.id);
+            let node_id = self.sync_node_id();
+            // 入队助手：退避耗尽与「p2p 未启动 = 即时不可达」共用（裁决 §1.2
+            // 「重试耗尽（或即时判定不可达）后入队」）。
+            let enqueue_pending = {
+                let io_lock = std::sync::Arc::clone(&io_lock);
+                let org_id = org_id.clone();
+                move |storage: &mut super::KernelStorage, envelope: Value| {
+                    let _io = io_lock.lock().unwrap_or_else(|e| e.into_inner());
+                    let to = to_root_id.clone();
+                    let pending = crate::dm_offline::PendingRecord {
+                        to: to.clone(),
+                        message_id,
+                        kind: KIND_ORG_INVITE_REPLY.to_string(),
+                        space_key: format!("org:{org_id}"),
+                        conv_id: None, // write_back 空操作（无消息状态可回写）
+                        envelope,
+                        created_at: crate::p2p::node::system_now_ms(),
+                    };
+                    let now = pending.created_at;
+                    if let Err(e) = crate::dm_offline::enqueue(
+                        storage,
+                        crate::dm_offline::PendingSpace::Org(&org_id),
+                        &to,
+                        &pending,
+                        &node_id,
+                        now,
+                    ) {
+                        log::warn!("[ORG-INVITE] reply enqueue failed: {e}");
+                    } else {
+                        log::info!(
+                            "[ORG-INVITE] reply queued for flush | org={org_id} to={}",
+                            &to[..std::cmp::min(16, to.len())]
+                        );
+                    }
+                }
+            };
+            let Some(node) = self.p2p.clone() else {
+                // p2p 未启动 = 即时不可达：直接入队（不错过补投窗口）
+                enqueue_pending(&mut storage, envelope);
+                return;
+            };
+            self.runtime.handle().spawn(async move {
+                let mut result = node.dm_direct(&inviter, envelope.clone()).await;
+                for delay in DM_RETRY_DELAYS.iter() {
+                    if !crate::kernel::dm_delivery::delivery_needs_retry(&result) {
+                        break;
+                    }
+                    tokio::time::sleep(*delay).await;
+                    result = node.dm_direct(&inviter, envelope.clone()).await;
+                }
+                if crate::kernel::dm_delivery::delivery_needs_retry(&result) {
+                    enqueue_pending(&mut storage, envelope);
+                }
+            });
         }
     }
 

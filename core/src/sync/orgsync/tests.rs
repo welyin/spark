@@ -639,8 +639,11 @@ fn builtin_collection_names_versions() {
     assert_eq!(s.full_name(), "org:structure@v1");
     assert_eq!(s.merge(), MergeRule::Whole);
     assert_eq!(BuiltinOrgCollection::Contacts.merge(), MergeRule::LwwRecord);
-    // F7：org:invites 退出 orgsync（邀请记录回归 personal 域自设备同步）
-    assert!(BuiltinOrgCollection::all().len() == 2);
+    // F7：org:invites 退出 orgsync（邀请记录回归 personal 域自设备同步）；
+    // batch3 §2：org:invitations 管理面投影集合加入（invpub 键域）
+    assert!(BuiltinOrgCollection::all().len() == 3);
+    assert_eq!(BuiltinOrgCollection::Invitations.name(), "org:invitations");
+    assert_eq!(BuiltinOrgCollection::Invitations.merge(), MergeRule::LwwRecord);
 }
 
 /// 键域归属：内建集合映射到存量键前缀（键不搬家，零迁移）。
@@ -662,6 +665,10 @@ fn builtin_collection_key_domains() {
     assert_eq!(
         BuiltinOrgCollection::Contacts.data_prefixes(org),
         vec!["ct:org:org_0000000000000001:"]
+    );
+    assert_eq!(
+        BuiltinOrgCollection::Invitations.data_prefixes(org),
+        vec!["org:invpub:org_0000000000000001:"]
     );
     // 线上标识键
     assert_eq!(

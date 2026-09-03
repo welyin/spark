@@ -283,6 +283,29 @@ impl P2pHost for KernelHost {
                 self.dm_handler_impl()
                     .apply_orgkey_unbox(&receiver_root_id, &unbox);
             }
+            // F4 第二层（batch3 §1.2）：legacy 快照平面的 org:meta 合入同样
+            // 挂成员表对账（invitee 已在成员表 ⟹ 必已接受 → outbound pending
+            // 原地标 accepted + 投影同步 + OrgInviteUpdated 事件）。
+            let node_id = self
+                .node_shared
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+                .map(|node| node.peer_id().to_string())
+                .unwrap_or_else(|| super::doc_ops::persisted_sync_node_id(&self.storage));
+            if let Ok(reconciled) = crate::org::service::reconcile_outbound_invites_with_members(
+                &mut self.storage,
+                &merged,
+                now,
+                &node_id,
+                &receiver_root_id,
+            ) {
+                for inv in reconciled {
+                    let _ = self.event_tx.send(crate::p2p::P2pEvent::OrgInviteUpdated(
+                        serde_json::to_value(&inv).unwrap_or(Value::Null),
+                    ));
+                }
+            }
         }
         // pluginDocs 随快照捎带（plugin-org-sync.ts `applyPluginDocSyncItems`）
         if !plugin_docs.is_empty() {

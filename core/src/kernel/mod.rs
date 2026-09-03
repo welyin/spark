@@ -30,7 +30,7 @@ mod contact_ops;
 mod contact_request_ops;
 pub(crate) mod data_access;
 mod data_ops;
-mod data_orgq;
+pub(crate) mod data_orgq;
 mod data_orgq_read;
 mod device_ops;
 mod dm_delivery;

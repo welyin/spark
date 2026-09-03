@@ -1073,3 +1073,183 @@ fn orgsync_hello_feeds_sync_state_overview() {
     let member_b = overview.members.iter().find(|m| m.root_id == b_root).unwrap();
     assert!(member_b.ever_synced, "本机恒 everSynced");
 }
+
+
+// ── batch3 §2 管理面邀请投影（org:invitations@v1 / org:invpub:）──────────────
+
+/// 双管理员互见 pending 邀请：A 邀 C 的投影经 orgsync（org:invitations 集合
+/// 流量）到达 B；A 侧转 accepted 后 B 侧投影同步转终态；投影不含 inviteCode；
+/// 键双维度无碰撞（同邀请人两人 / 两邀请人同一人共存）。
+#[test]
+fn invpub_projection_syncs_between_admins() {
+    let (a_key, a_root) = self_identity(1);
+    let (b_key, b_root) = self_identity(2);
+    let c_root = self_identity(3).1;
+    let d_root = self_identity(4).1;
+    let mut a = MemoryStorage::new();
+    let mut b = MemoryStorage::new();
+    for s in [&mut a, &mut b] {
+        save_org(
+            s,
+            ORG_ID,
+            vec![
+                (a_root.as_str(), OrganizationRole::Admin),
+                (b_root.as_str(), OrganizationRole::Admin),
+            ],
+            &[],
+        );
+        spark_core::plugindata::declare_builtin_org_collections(s, ORG_ID, &a_root, NOW, "node-x").unwrap();
+    }
+    let inv_key_a_c = spark_core::org::service::org_invpub_key(ORG_ID, &a_root, &c_root);
+    let invite = |_inviter: &str, invitee: &str, status, now| spark_core::org::invite_record::OrgInviteRecord {
+        id: format!("inv-{now}"),
+        org_id: ORG_ID.to_string(),
+        org_name: "t".to_string(),
+        org_avatar: None,
+        peer_root_id: invitee.to_string(),
+        peer_nickname: "待加入成员".to_string(),
+        direction: spark_core::org::OrgInviteDirection::Outgoing,
+        status,
+        invite_code: None,
+        created_at: now,
+        updated_at: now,
+    };
+
+    // A：出站记录（personal 域）+ 投影（管理面）显式记账（raw 测试口径，
+    // 生产 facade 为 put_invite_record_with_projection 单 batch 双写）
+    let rec = invite(&a_root, &c_root, spark_core::org::OrgInviteStatus::Pending, NOW);
+    put_personal(&mut a, "node-a", &format!("org:inv:out:{ORG_ID}:{c_root}"),
+        &serde_json::to_string(&rec).unwrap(), NOW).unwrap();
+    let (pk, pv) = spark_core::org::service::invpub_projection(&rec, &a_root).unwrap();
+    assert_eq!(pk, inv_key_a_c);
+    assert!(pv.get("inviteCode").is_none(), "投影不含 inviteCode");
+    put_personal(&mut a, "node-a", &pk, &serde_json::to_string(&pv).unwrap(), NOW).unwrap();
+    // 碰撞面：A 再邀 D、B 邀 C——三键共存
+    let rec2 = invite(&a_root, &d_root, spark_core::org::OrgInviteStatus::Pending, NOW + 1);
+    let (pk2, pv2) = spark_core::org::service::invpub_projection(&rec2, &a_root).unwrap();
+    assert_ne!(pk, pk2, "同邀请人两被邀请人不撞键");
+    let rec3 = invite(&b_root, &c_root, spark_core::org::OrgInviteStatus::Pending, NOW + 2);
+    let (pk3, _) = spark_core::org::service::invpub_projection(&rec3, &b_root).unwrap();
+    assert_ne!(pk, pk3, "两邀请人同被邀请人不撞键");
+    put_personal(&mut a, "node-a", &pk2, &serde_json::to_string(&pv2).unwrap(), NOW).unwrap();
+
+    // A → B 交换 org:invitations
+    let collections = collect_org_collections(&a, ORG_ID, &[("org:invitations".to_string(), "1".to_string())], &b_root, "peer-b").unwrap();
+    let hello = build_orgsync_hello(ORG_ID, collections, &["data".to_string()], "pc");
+    let r = deliver_orgsync(&mut b, &b_root, "B", &a_key, &a_root, &b_root,
+        dm_envelope::KIND_ORGSYNC_HELLO, hello, "peer-a", "node-b");
+    for out in &r.orgsync_out {
+        let body = out.body().clone();
+        if body.get("knownVv").is_some() {
+            let r2 = deliver_orgsync(&mut a, &a_root, "A", &b_key, &b_root, &a_root,
+                dm_envelope::KIND_ORGSYNC_NEED, body, "peer-b", "node-a");
+            for out2 in &r2.orgsync_out {
+                if out2.body().get("records").is_some() {
+                    let r3 = deliver_orgsync(&mut b, &b_root, "B", &a_key, &a_root, &b_root,
+                        dm_envelope::KIND_ORGSYNC_DATA, out2.body().clone(), "peer-a", "node-b");
+                    assert_eq!(r3.response, json!({ "ok": true }));
+                }
+            }
+        }
+    }
+    // B 互见：两条投影都在（A→C、A→D），pending 状态
+    let proj: serde_json::Value = serde_json::from_str(&b.get(&inv_key_a_c).unwrap().expect("B 收讫 A→C 投影")).unwrap();
+    assert_eq!(proj["inviter"], json!(a_root));
+    assert_eq!(proj["invitee"], json!(c_root));
+    assert_eq!(proj["status"], json!("pending"));
+    assert!(b.get(&pk2).unwrap().is_some(), "A→D 投影同批到达");
+
+    // A 侧转 accepted（回执受理/对账同口径：投影 put_personal 重写）→ B 同步转终态
+    let rec_a = spark_core::org::OrgInviteRecord { status: spark_core::org::OrgInviteStatus::Accepted, updated_at: NOW + 10, ..rec };
+    let (_, pv_a) = spark_core::org::service::invpub_projection(&rec_a, &a_root).unwrap();
+    put_personal(&mut a, "node-a", &inv_key_a_c, &serde_json::to_string(&pv_a).unwrap(), NOW + 10).unwrap();
+    let collections = collect_org_collections(&a, ORG_ID, &[("org:invitations".to_string(), "1".to_string())], &b_root, "peer-b").unwrap();
+    let hello = build_orgsync_hello(ORG_ID, collections, &["data".to_string()], "pc");
+    let r = deliver_orgsync(&mut b, &b_root, "B", &a_key, &a_root, &b_root,
+        dm_envelope::KIND_ORGSYNC_HELLO, hello, "peer-a", "node-b");
+    for out in &r.orgsync_out {
+        let body = out.body().clone();
+        if body.get("knownVv").is_some() {
+            let r2 = deliver_orgsync(&mut a, &a_root, "A", &b_key, &b_root, &a_root,
+                dm_envelope::KIND_ORGSYNC_NEED, body, "peer-b", "node-a");
+            for out2 in &r2.orgsync_out {
+                if out2.body().get("records").is_some() {
+                    deliver_orgsync(&mut b, &b_root, "B", &a_key, &a_root, &b_root,
+                        dm_envelope::KIND_ORGSYNC_DATA, out2.body().clone(), "peer-a", "node-b");
+                }
+            }
+        }
+    }
+    let proj2: serde_json::Value = serde_json::from_str(&b.get(&inv_key_a_c).unwrap().unwrap()).unwrap();
+    assert_eq!(proj2["status"], json!("accepted"), "B 侧投影同步转终态");
+}
+
+/// F4 第二层（batch3 §1.2 成员表对账兜底）：invitee 出现在 org:meta 成员表
+/// ⟹ 必已接受——orgsync org:meta 合入点把对应 outbound pending 原地标
+/// accepted + 投影同步 + OrgInviteUpdated 事件。
+#[test]
+fn outbound_invite_reconciled_when_invitee_in_member_table() {
+    let (a_key, a_root) = self_identity(1);
+    let (_b_key, b_root) = self_identity(2);
+    let c_root = self_identity(3).1;
+    let mut a = MemoryStorage::new();
+    let mut b = MemoryStorage::new();
+    for s in [&mut a, &mut b] {
+        save_org(
+            s,
+            ORG_ID,
+            vec![
+                (a_root.as_str(), OrganizationRole::Admin),
+                (b_root.as_str(), OrganizationRole::Admin),
+            ],
+            &[],
+        );
+        spark_core::plugindata::declare_builtin_org_collections(s, ORG_ID, &a_root, NOW, "node-x").unwrap();
+    }
+    // B 侧：邀 C 的 outbound pending（回执丢失形态）+ 投影
+    let rec = spark_core::org::invite_record::OrgInviteRecord {
+        id: "inv-c".to_string(),
+        org_id: ORG_ID.to_string(),
+        org_name: "t".to_string(),
+        org_avatar: None,
+        peer_root_id: c_root.clone(),
+        peer_nickname: "待加入成员".to_string(),
+        direction: spark_core::org::OrgInviteDirection::Outgoing,
+        status: spark_core::org::OrgInviteStatus::Pending,
+        invite_code: None,
+        created_at: NOW,
+        updated_at: NOW,
+    };
+    put_personal(&mut b, "node-b", &format!("org:inv:out:{ORG_ID}:{c_root}"),
+        &serde_json::to_string(&rec).unwrap(), NOW).unwrap();
+    let (pk, pv) = spark_core::org::service::invpub_projection(&rec, &b_root).unwrap();
+    put_personal(&mut b, "node-b", &pk, &serde_json::to_string(&pv).unwrap(), NOW).unwrap();
+
+    // A 把 C 加进成员表（C 已接受的等价事实）→ org:meta 经 org:structure 到 B
+    let mut rec_a = OrganizationService::get_record(&a, ORG_ID).unwrap().unwrap();
+    rec_a.members.push(member(&c_root, OrganizationRole::Member));
+    rec_a.updated_at = NOW + 100;
+    let meta_key = format!("org:meta:{ORG_ID}");
+    put_personal(&mut a, "node-a", &meta_key, &serde_json::to_string(&rec_a).unwrap(), NOW + 100).unwrap();
+    let org_meta_record = spark_core::sync::orgsync::OrgsyncRecord {
+        key: meta_key.clone(),
+        value: serde_json::from_str(&a.get(&meta_key).unwrap().unwrap()).unwrap(),
+        meta: get_personal_meta(&a, &meta_key).unwrap().unwrap(),
+        dseq: None,
+    };
+    let body = build_orgsync_data_batch(ORG_ID, &format!("{STRUCT}@v{V1}"), &[org_meta_record], 0, 1);
+    let r = deliver_orgsync(&mut b, &b_root, "B", &a_key, &a_root, &b_root,
+        dm_envelope::KIND_ORGSYNC_DATA, body, "peer-a", "node-b");
+    assert_eq!(r.response, json!({ "ok": true }));
+
+    // 对账生效：outbound pending → accepted + 投影同步 + 事件
+    let updated: spark_core::org::invite_record::OrgInviteRecord =
+        serde_json::from_str(&b.get(&format!("org:inv:out:{ORG_ID}:{c_root}")).unwrap().unwrap()).unwrap();
+    assert_eq!(updated.status, spark_core::org::OrgInviteStatus::Accepted, "成员表对账原地标 accepted");
+    let proj: serde_json::Value = serde_json::from_str(&b.get(&pk).unwrap().unwrap()).unwrap();
+    assert_eq!(proj["status"], json!("accepted"), "投影同步转 accepted");
+    assert!(
+        r.events.iter().any(|e| matches!(e, spark_core::p2p::P2pEvent::OrgInviteUpdated(_))),
+        "发出 OrgInviteUpdated 事件"
+    );
+}

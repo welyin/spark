@@ -603,3 +603,84 @@ fn org_respond_invite_decline_marks_declined_idempotent() {
 
     kernel.shutdown().unwrap();
 }
+
+// ---------------------------------------------------------------------------
+// F4 第一层（batch3 §1.2）：回执重试耗尽入 Org 空间 pending 队列
+// ---------------------------------------------------------------------------
+
+/// 邀请人不可达（无端点）时被邀请人应答 → 回执投递失败 + 退避耗尽 →
+/// `org:dm:pending:{orgId}:` 入队（messageId = org-invite-reply-{inviteId}，
+/// 同邀请幂等覆盖）；本侧状态已落库（declined），不回滚。
+#[test]
+fn invite_reply_enqueues_org_pending_when_inviter_unreachable() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut kernel = fresh_kernel(dir.path());
+    init_identity(&mut kernel); // 登录即在线（p2p 自动启动）
+
+    let org = kernel
+        .create_org(CreateOrganizationInput {
+            name: "回执组织".to_string(),
+            ..Default::default()
+        })
+        .unwrap();
+    let org_id = org.record.org_id.clone();
+    let inviter_root = "cc".repeat(32);
+    // 入站邀请记录（邀请人端点不可达：peerId 虚构、无地址）
+    let payload = OrgInvitePayload::new(
+        &org_id,
+        "回执组织",
+        OrgInviteInviter {
+            root_id: inviter_root.clone(),
+            peer_id: Some("peer-unreachable".to_string()),
+            addresses: vec![],
+        },
+        system_now_ms(),
+    );
+    let code = encode_org_invite(&payload);
+    let rec = OrgInviteRecord {
+        id: "inv-unreach".to_string(),
+        org_id: org_id.clone(),
+        org_name: "回执组织".to_string(),
+        org_avatar: None,
+        peer_root_id: inviter_root.clone(),
+        peer_nickname: "邀请人".to_string(),
+        direction: OrgInviteDirection::Incoming,
+        status: OrgInviteStatus::Pending,
+        invite_code: Some(code),
+        created_at: system_now_ms(),
+        updated_at: system_now_ms(),
+    };
+    let mut s = kernel.__test_storage().unwrap();
+    OrganizationService::put_invite_record(&mut s, &rec).unwrap();
+
+    // 应答拒绝（不走 accept 编排）→ 本地标 declined + 回执投递（不可达）
+    let updated = kernel.org_respond_invite("inv-unreach", false).unwrap();
+    assert_eq!(updated.status, OrgInviteStatus::Declined, "本侧状态先行落库");
+
+    // 投递失败 + 2s/5s 退避耗尽 → 入队。轮询（不固定 sleep 卡死）
+    let prefix = format!("org:dm:pending:{org_id}:");
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    let mut found = false;
+    while std::time::Instant::now() < deadline {
+        let scan = spark_core::storage::StorageBackend::scan(
+            &kernel.__test_storage().unwrap(),
+            &spark_core::storage::ScanOptions::prefix(&prefix),
+        )
+        .unwrap();
+        if scan
+            .iter()
+            .any(|(_, raw)| raw.contains("org-invite-reply") && raw.contains("inv-unreach"))
+        {
+            found = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert!(found, "重试耗尽后回执入 Org 空间 pending 队列");
+    // 本侧状态不回滚
+    let rec_after = OrganizationService::get_incoming_invite(&kernel.__test_storage().unwrap(), &org_id, &inviter_root)
+        .unwrap()
+        .unwrap();
+    assert_eq!(rec_after.status, OrgInviteStatus::Declined, "终态拒绝/不可达不回滚本侧状态");
+    kernel.shutdown().unwrap();
+}

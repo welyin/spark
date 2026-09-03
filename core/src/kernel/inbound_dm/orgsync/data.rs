@@ -82,6 +82,7 @@ pub(crate) fn handle_orgsync_data<S: StorageBackend>(
     // F3 残余 §7.1：acl / org:meta（成员表 accessKey 段）合入后重评估
     // orgkey-deliver 暂存产出的 unbox 指令（随本结果带出，host 解包落库）。
     let mut stash_unboxes: Vec<super::super::orgkey::OrgkeyUnbox> = Vec::new();
+    let mut events = Vec::new();
     // F2-P3 同批顺序（评审修复）：创世 acl 的锚 = 本地收敛声明的 declaredBy
     // ——同批到达时必须先合入声明（及 org:meta/数据/墓碑）再验 acl。采集侧按
     // 前缀序 org:acl: < org:coll: 排列（builtin.rs 键域序），同批 acl 抢跑
@@ -177,6 +178,19 @@ pub(crate) fn handle_orgsync_data<S: StorageBackend>(
                 stash_unboxes.extend(super::super::orgkey::reevaluate_orgkey_stash(
                     storage, ctx, &org_id,
                 )?);
+                // F4 第二层（batch3 §1.2 成员表对账兜底）：invitee 已在成员表
+                // ⟹ 必已接受——对应 outbound pending 邀请原地标 accepted +
+                // 管理面投影同步 + OrgInviteUpdated 事件。重读合并后的最新记录。
+                let Ok(Some(fresh)) = OrganizationService::get_record(storage, &org_id) else {
+                    continue;
+                };
+                for inv in crate::org::service::reconcile_outbound_invites_with_members(
+                    storage, &fresh, ctx.now_ms, ctx.node_id, ctx.my_root_id,
+                )? {
+                    events.push(crate::p2p::P2pEvent::OrgInviteUpdated(
+                        serde_json::to_value(&inv)?,
+                    ));
+                }
             }
             continue;
         }
@@ -280,7 +294,7 @@ pub(crate) fn handle_orgsync_data<S: StorageBackend>(
 
     Ok(InboundDmResult {
         response: ok_response(),
-        events: Vec::new(),
+        events,
         auto_accept: None,
         self_profile: None,
         device_sync_reply: None,

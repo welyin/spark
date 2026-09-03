@@ -13,7 +13,7 @@
 
 use super::snapshot::is_organization_sync_stale;
 use super::sync_state::OrgSyncState;
-use super::types::{OrganizationMember, OrganizationRecord, OrganizationSyncVersions};
+use super::types::{OrganizationRecord, OrganizationSyncVersions};
 use crate::p2p::{DhtMode, RecoveryState};
 
 /// 副本目标 K（含本机，p2p/constants.ts:152）。

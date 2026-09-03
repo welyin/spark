@@ -29,6 +29,11 @@ pub use atomic::OrgMetaWriteLock;
 /// F7 存量迁移（org-invite-scope-fix §2.3）：org:invites 退出 orgsync 的
 /// 一次性清理（入站邀请记录清空 + 声明墓碑化），unlock 时幂等执行。
 pub use invite_records::migrate_org_invites_out_of_orgsync;
+/// batch3 §2 管理面邀请投影（org:invitations@v1）：键构造/投影/双写/对账。
+pub use invite_records::{
+    invpub_projection, org_invpub_key, put_invite_record_with_projection,
+    reconcile_outbound_invites_with_members,
+};
 
 use serde_json::Value;
 

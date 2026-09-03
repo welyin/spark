@@ -90,6 +90,7 @@ pub(crate) struct PluginRuntimeContext {
 mod data;
 mod docs;
 mod misc;
+mod online;
 mod sys;
 
 impl PluginHostShared {
@@ -175,6 +176,12 @@ impl PluginHostShared {
             "data.get" => self.data_get(plugin_id, &payload),
             "data.query" => self.data_query(plugin_id, &payload),
             "data.dropVersion" => self.data_drop_version(plugin_id, &payload),
+            // batch3 §3：在线 orgq 查询/写入（增量 ops；异步配对模式同
+            // sys.exec.start——启动即返，结果经 data-online-result 回流）
+            "data.onlineGet" => self.data_online_get(rtx, &payload),
+            "data.onlineQuery" => self.data_online_query(rtx, &payload),
+            "data.onlineSave" => self.data_online_save(rtx, &payload),
+            "data.onlineDelete" => self.data_online_delete(rtx, &payload),
             // O4 插件 API 访问控制（encrypted 授权名单，§5.2）：owner 维护名单，
             // 内核按 owner 验签（无额外权限项）。data_access 方法在
             // host_env_access 模块。
@@ -362,11 +369,14 @@ fn capability_permission(capability: &str) -> Option<&'static str> {
         "docs.get" | "docs.query" => Some("storage:read"),
         "docs.put" | "docs.delete" | "docs.defineCollection" => Some("storage:write"),
         "data.get" | "data.query" | "data.readBlob" => Some("storage:read"),
+        // batch3 §3：在线 ops 沿用 storage:read/write 权限轴
+        "data.onlineGet" | "data.onlineQuery" => Some("storage:read"),
         "data.save"
         | "data.delete"
         | "data.declareCollection"
         | "data.dropVersion"
         | "data.saveBlob" => Some("storage:write"),
+        "data.onlineSave" | "data.onlineDelete" => Some("storage:write"),
         // R2：encrypted 授权名单三方法归入 storage:write（grant/revoke 落 acl
         // + 轮换密钥，list 只读但同属 encrypted 能力面——owner 侧管控）。
         "data.grantAccess" | "data.revokeAccess" | "data.listAccess" => Some("storage:write"),
@@ -420,6 +430,18 @@ mod tests {
     /// 零权限插件（无 storage:write）调用 grantAccess 等将因
     /// `capability_permission` 返回 Some 而由 dispatch 前置强制拒绝。
     #[test]
+    /// batch3 §3：在线 ops 权限映射——读归 storage:read、写归 storage:write
+    /// （与既有 data.* 同轴；未授权插件调用被 dispatch 前置拒绝）。
+    #[test]
+    fn online_ops_permission_mapping() {
+        for cap in ["data.onlineGet", "data.onlineQuery"] {
+            assert_eq!(capability_permission(cap), Some("storage:read"), "{cap}");
+        }
+        for cap in ["data.onlineSave", "data.onlineDelete"] {
+            assert_eq!(capability_permission(cap), Some("storage:write"), "{cap}");
+        }
+    }
+
     fn access_api_requires_storage_write_permission() {
         for cap in ["data.grantAccess", "data.revokeAccess", "data.listAccess"] {
             assert_eq!(

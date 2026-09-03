@@ -9,6 +9,7 @@ use super::super::invite_record::{
     ORG_INV_IN_PREFIX, ORG_INV_OUT_PREFIX, OrgInviteDirection, OrgInviteRecord, OrgInviteStatus,
     org_invite_in_key, org_invite_out_key,
 };
+use super::super::types::OrganizationRecord;
 use super::super::{OrgError, Result};
 use super::OrganizationService;
 
@@ -111,7 +112,7 @@ impl OrganizationService {
     /// 全部邀请记录（出/入站合并；id 生成的计数种子用）。
     pub fn list_all_invite_records<S: StorageBackend>(storage: &S) -> Result<Vec<OrgInviteRecord>> {
         let mut records = Self::scan_invites(storage, ORG_INV_IN_PREFIX)?;
-        records.extend(Self::scan_invites(storage, ORG_INV_OUT_PREFIX)?);
+        records.extend(OrganizationService::scan_invites(storage, ORG_INV_OUT_PREFIX)?);
         Ok(records)
     }
 
@@ -281,4 +282,112 @@ pub fn migrate_org_invites_out_of_orgsync<S: StorageBackend>(
         storage.batch(ops)?;
     }
     Ok((removed_records, tombstoned_decls))
+}
+
+// ── batch3 §2 管理面邀请投影（org:invitations@v1 / org:invpub:）──────────────
+
+/// 管理面邀请投影键：`org:invpub:{orgId}:{inviterRoot}:{inviteeRoot}`
+/// （**双维度定键**——F7 的碰撞缺陷在键形上根除：同邀请人多人、多邀请人
+/// 同一人均不撞）。
+pub fn org_invpub_key(org_id: &str, inviter_root: &str, invitee_root: &str) -> String {
+    format!("org:invpub:{org_id}:{inviter_root}:{invitee_root}")
+}
+
+/// 出站邀请记录的管理面投影（值 = 公开元数据，**不含 inviteCode**——出站
+/// 记录本就不存邀请码，投影维持此边界）。仅 Outgoing 方向有投影（入站记录
+/// 是 invitee 私有应答状态，F7 裁决不进 orgsync）。
+pub fn invpub_projection(
+    record: &OrgInviteRecord,
+    inviter_root: &str,
+) -> Option<(String, serde_json::Value)> {
+    if record.direction != OrgInviteDirection::Outgoing {
+        return None;
+    }
+    let key = org_invpub_key(&record.org_id, inviter_root, &record.peer_root_id);
+    Some((
+        key,
+        serde_json::json!({
+            "inviter": inviter_root,
+            "invitee": record.peer_root_id,
+            "status": record.status,
+            "createdAt": record.created_at,
+            "updatedAt": record.updated_at,
+        }),
+    ))
+}
+
+/// 邀请发送/状态流转的双写：原出站记录 + 管理面投影，同一 batch（版本化
+/// 句柄一次 batch 两键，中间件逐键记账，原子）。
+pub fn put_invite_record_with_projection<S: StorageBackend>(
+    storage: &mut S,
+    record: &OrgInviteRecord,
+    inviter_root: &str,
+) -> Result<()> {
+    let mut ops = Vec::new();
+    let mut r = record.clone();
+    if r.updated_at == 0 {
+        r.updated_at = r.created_at;
+    }
+    ops.push(crate::storage::BatchOperation::put(
+        org_invite_out_key_of(&r),
+        serde_json::to_string(&r)?,
+    ));
+    if let Some((key, projection)) = invpub_projection(&r, inviter_root) {
+        ops.push(crate::storage::BatchOperation::put(
+            key,
+            serde_json::to_string(&projection)?,
+        ));
+    }
+    storage.batch(ops)?;
+    Ok(())
+}
+
+fn org_invite_out_key_of(record: &OrgInviteRecord) -> String {
+    super::super::invite_record::org_invite_out_key(&record.org_id, &record.peer_root_id)
+}
+
+/// F4 第二层（batch3 §1.2 成员表对账兜底）：org:meta 合入后发现「某
+/// outbound pending 邀请的 invitee 已在成员表」⟹ 其必已接受（加入只能经
+/// accept 编排）——原地标 accepted + 投影同步（batch3 §2：对账置 accepted
+/// 时同步投影）。返回被对账的记录（事件由调用方发 OrgInviteUpdated）。
+///
+/// 记账：派生记账是本机事实（成员表是事实源，回执只是通知）——入站 raw
+/// 句柄上显式 put_personal（F7 先例），投影同口径。
+pub fn reconcile_outbound_invites_with_members<S: StorageBackend>(
+    storage: &mut S,
+    record: &OrganizationRecord,
+    now_ms: i64,
+    node_id: &str,
+    inviter_root: &str,
+) -> Result<Vec<OrgInviteRecord>> {
+    let mut reconciled = Vec::new();
+    for inv in OrganizationService::scan_invites(storage, ORG_INV_OUT_PREFIX)? {
+        if inv.org_id != record.org_id || inv.status != OrgInviteStatus::Pending {
+            continue;
+        }
+        if record.find_member(&inv.peer_root_id).is_none() {
+            continue;
+        }
+        let mut inv = inv;
+        inv.status = OrgInviteStatus::Accepted;
+        inv.updated_at = now_ms;
+        // 原记录（personal 域）+ 投影（orgsync 管理面）同口径显式记账
+        let sync_err = |e: crate::sync::SyncError| {
+            OrgError::Storage(crate::storage::StorageError::Backend(e.to_string()))
+        };
+        crate::sync::put_personal(
+            storage,
+            node_id,
+            &org_invite_out_key_of(&inv),
+            &serde_json::to_string(&inv)?,
+            now_ms,
+        )
+        .map_err(sync_err)?;
+        if let Some((key, projection)) = invpub_projection(&inv, inviter_root) {
+            crate::sync::put_personal(storage, node_id, &key, &serde_json::to_string(&projection)?, now_ms)
+                .map_err(sync_err)?;
+        }
+        reconciled.push(inv);
+    }
+    Ok(reconciled)
 }

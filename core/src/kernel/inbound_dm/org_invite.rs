@@ -226,6 +226,19 @@ pub(super) fn handle_org_invite_reply<S: StorageBackend>(
         &serde_json::to_string(&record)?,
         ctx.now_ms,
     )?;
+    // batch3 §2：管理面投影同步（回执受理置终态时投影同口径；邀请人 =
+    // 本机账号）。raw 句柄显式 put_personal（与原记录同规则）。
+    if let Some((proj_key, projection)) =
+        crate::org::service::invpub_projection(&record, ctx.my_root_id)
+    {
+        crate::sync::put_personal(
+            storage,
+            ctx.node_id,
+            &proj_key,
+            &serde_json::to_string(&projection)?,
+            ctx.now_ms,
+        )?;
+    }
     done(
         ok_response(),
         vec![P2pEvent::OrgInviteUpdated(serde_json::to_value(&record)?)],

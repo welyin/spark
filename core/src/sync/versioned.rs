@@ -107,7 +107,11 @@ impl<S: StorageBackend> VersionedStorage<S> {
     fn managed(key: &str) -> bool {
         // org 域受管：orgd:{orgId}: 数据 + org:coll: 声明（保留系统集合）+
         // org:acl:{orgId}: 授权名单（O4，all-members 系统数据，进 orgsync 流量）
-        if key.starts_with("orgd:") || key.starts_with("org:coll:") || key.starts_with("org:acl:") {
+        if key.starts_with("orgd:")
+            || key.starts_with("org:coll:")
+            || key.starts_with("org:acl:")
+            || key.starts_with("org:invpub:")
+        {
             return true;
         }
         if let Some(rest) = key.strip_prefix("msg:conv:") {
@@ -131,6 +135,7 @@ impl<S: StorageBackend> VersionedStorage<S> {
         key.starts_with("orgd:")
             || key.starts_with("org:coll:")
             || key.starts_with("org:acl:")
+            || key.starts_with("org:invpub:")
             || crate::sync::orgsync::legacy_org_key_scope(key).is_some()
     }
 
@@ -141,6 +146,11 @@ impl<S: StorageBackend> VersionedStorage<S> {
     fn org_scope_of(key: &str) -> Option<(String, String, String)> {
         if key.starts_with("orgd:") {
             return crate::plugindata::parse_org_data_key(key);
+        }
+        if let Some(rest) = key.strip_prefix("org:invpub:") {
+            // org:invpub:{orgId}:{inviterRoot}:{inviteeRoot} → org:invitations@v1
+            let org_id = rest.split(':').next()?;
+            return Some((org_id.to_string(), "org:invitations".to_string(), "1".to_string()));
         }
         if key.starts_with("org:coll:") || key.starts_with("org:acl:") {
             // org:coll:{orgId}:{name}@v{version} / org:acl:{orgId}:{name}@v{version}

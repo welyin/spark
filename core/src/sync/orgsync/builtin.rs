@@ -7,7 +7,9 @@
 //!
 //! 键域归属（org-orgsync.md §20.8 灰度关系）：
 //! - org:structure@v1 → org:meta:{orgId}（单记录，whole 语义）；
-//! - org:contacts@v1  → ct:org:{orgId}:*（多记录，lww-record）。
+//! - org:contacts@v1  → ct:org:{orgId}:*（多记录，lww-record）；
+//! - org:invitations@v1 → org:invpub:{orgId}:*（多记录，lww-record；batch3 §2
+//!   管理面邀请投影，值不含 inviteCode）。
 //!
 //! F7（org-invite-scope-fix §2.1）：`org:inv:in:/out:`（邀请记录）**退出
 //! orgsync**——它是 per-account 的一对一关系状态（入站=invitee 私有应答
@@ -38,6 +40,10 @@ pub enum BuiltinOrgCollection {
     Structure,
     /// 组织通讯录/成员扩展：`ct:org:{orgId}:*` 多记录（lww-record）。
     Contacts,
+    /// 管理面邀请投影：`org:invpub:{orgId}:{inviterRoot}:{inviteeRoot}`
+    /// 多记录（lww-record，batch3 §2——值 = 不含 inviteCode 的公开元数据
+    /// 投影，真源是 personal 域 `org:inv:out:` 记录）。
+    Invitations,
 }
 
 impl BuiltinOrgCollection {
@@ -46,6 +52,7 @@ impl BuiltinOrgCollection {
         match self {
             BuiltinOrgCollection::Structure => "org:structure",
             BuiltinOrgCollection::Contacts => "org:contacts",
+            BuiltinOrgCollection::Invitations => "org:invitations",
         }
     }
 
@@ -63,7 +70,9 @@ impl BuiltinOrgCollection {
     pub fn merge(&self) -> MergeRule {
         match self {
             BuiltinOrgCollection::Structure => MergeRule::Whole,
-            BuiltinOrgCollection::Contacts => MergeRule::LwwRecord,
+            BuiltinOrgCollection::Contacts | BuiltinOrgCollection::Invitations => {
+                MergeRule::LwwRecord
+            }
         }
     }
 
@@ -91,21 +100,23 @@ impl BuiltinOrgCollection {
                 format!("org:coll:{org_id}:"),
             ],
             BuiltinOrgCollection::Contacts => vec![format!("ct:org:{org_id}:")],
+            BuiltinOrgCollection::Invitations => vec![format!("org:invpub:{org_id}:")],
         }
     }
 
     /// 全部内建集合（供内核组织创建/迁移时逐一注册声明）。
-    pub fn all() -> [BuiltinOrgCollection; 2] {
+    pub fn all() -> [BuiltinOrgCollection; 3] {
         [
             BuiltinOrgCollection::Structure,
             BuiltinOrgCollection::Contacts,
+            BuiltinOrgCollection::Invitations,
         ]
     }
 }
 
-/// 按集合名解析内建集合（`org:structure`/`org:contacts`；F7 起
-/// `org:invites` 已退出）；非内建 → `None`（插件声明集合，数据键域走
-/// `orgd:`）。
+/// 按集合名解析内建集合（`org:structure`/`org:contacts`/`org:invitations`；
+/// F7 起 `org:invites` 已退出）；非内建 → `None`（插件声明集合，数据键域
+/// 走 `orgd:`）。
 pub fn builtin_collection_by_name(name: &str) -> Option<BuiltinOrgCollection> {
     BuiltinOrgCollection::all()
         .into_iter()

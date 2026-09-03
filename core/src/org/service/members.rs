@@ -449,6 +449,19 @@ impl OrganizationService {
         ) {
             log::warn!("[ORG] remove member dlog marks cleanup failed: {e}");
         }
+        // batch3 §2：成员移除 → 其相关管理面邀请投影（inviter 或 invitee
+        // 维度）墓碑化（org 域 dlog 既有机制传播；版本化句柄删除即自动墓碑，
+        // raw 句柄为裸删）
+        let invpub_prefix = format!("org:invpub:{org_id}:");
+        for (key, _) in storage.scan(&crate::storage::ScanOptions::prefix(&invpub_prefix))? {
+            let Some(rest) = key.strip_prefix(&invpub_prefix) else {
+                continue;
+            };
+            // 键形 {inviterRoot}:{inviteeRoot}（rootId 无冒号）
+            if rest.split(':').any(|seg| seg == normalized_root_id) {
+                storage.delete(&key)?;
+            }
+        }
         record.updated_at = now_ms;
         let previous_last_synced_at = record.sync.as_ref().map(|s| s.last_synced_at).unwrap_or(0);
         let transaction = append_organization_transaction(
