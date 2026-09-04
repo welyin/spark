@@ -1055,6 +1055,10 @@ export type ElectronAPI = {
     setProxy: (proxy: string) => Promise<void>;
     /** 移动端返回键在一级页（栈底）时显式退出应用（原生默认动作已被 JS 监听拦截） */
     exitApp: () => Promise<void>;
+    /** 聊天消息系统通知（Android 真弹；桌面 no-op——阶段四C） */
+    notifyChat: (spaceKey: string, convId: string, title: string, body: string, unread: number) => Promise<void>;
+    /** 系统事件泛化提醒（不含具体内容；Android system 渠道，桌面 no-op） */
+    notifyGeneric: (title: string, body: string) => Promise<void>;
   };
 
   dataManagement: {

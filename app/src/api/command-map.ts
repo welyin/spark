@@ -166,6 +166,9 @@ export const COMMAND_MAP: Record<string, string> = {
   'system-set-proxy': 'system_set_proxy',
   // 移动端返回键栈底退出应用（App.vue 一级页返回处理）
   'system-exit-app': 'system_exit_app',
+  // 阶段四C 系统通知（Android 系统通知；桌面 no-op，见 src-tauri commands/system.rs）
+  'system-notify-chat': 'system_notify_chat',
+  'system-notify-generic': 'system_notify_generic',
   // sys 代理（插件通过内核代理执行外部命令 / HTTP 请求）
   'sys-exec': 'sys_exec',
   'sys-fetch': 'sys_fetch',
@@ -290,6 +293,8 @@ export const ARG_NAMES: Record<string, string[]> = {
   'root-password-unify': ['oldPassword', 'newPassword'],
   'root-password-unify-status': [],
   'system-set-badge': ['count'],
+  'system-notify-chat': ['spaceKey', 'convId', 'title', 'body', 'unread'],
+  'system-notify-generic': ['title', 'body'],
   'system-set-proxy': ['proxy'],
   'sys-exec': ['program', 'args', 'workdir'],
   'sys-fetch': ['url', 'options'],

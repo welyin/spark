@@ -608,6 +608,11 @@ export function closeConversation(key: SpaceKey): void {
   delete activeConversation[key];
 }
 
+/** 该会话是否正被用户查看（阶段四C 通知编排的「前台正在看」判定）。 */
+export function isConversationActive(key: SpaceKey, convId: string): boolean {
+  return activeConversation[key] === convId;
+}
+
 export function markRead(key: SpaceKey, convId: string): void {
   const conv = findConversation(ensureSpace(key), convId);
   if (conv) conv.unreadCount = 0;

@@ -67,6 +67,39 @@ pub fn system_exit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
 
+// ------------------------------------------------------------------
+// 阶段四C 系统通知（android-notifications §2）：Android 经 JNI 发系统通知；
+// 桌面本期 no-op（后续接 tauri-plugin-notification）。命令恒返回 Ok——
+// 通知是装饰性反馈，权限缺失/内部错误静默降级（前端 fire-and-forget）。
+// ------------------------------------------------------------------
+
+/// 聊天消息系统通知：messages 渠道（可响铃）；标题=会话名、正文=内容截断、
+/// unread=未读计数（聚合组计数）；稳定 id 同会话覆盖（Kotlin 侧 convId
+/// hash）。
+#[tauri::command]
+pub fn system_notify_chat(
+    space_key: String,
+    conv_id: String,
+    title: String,
+    body: String,
+    unread: i64,
+) {
+    #[cfg(target_os = "android")]
+    crate::android_native::notify_chat(&space_key, &conv_id, &title, &body, unread);
+    #[cfg(not(target_os = "android"))]
+    let _ = (space_key, conv_id, title, body, unread);
+}
+
+/// 系统事件泛化提醒（system 渠道静默）：只泛化提醒不含具体内容——内容以
+/// 消息页 sys:notice 系统会话内的记录为准（通知是铃铛，会话记录是留痕）。
+#[tauri::command]
+pub fn system_notify_generic(title: String, body: String) {
+    #[cfg(target_os = "android")]
+    crate::android_native::notify_generic(&title, &body);
+    #[cfg(not(target_os = "android"))]
+    let _ = (title, body);
+}
+
 /// 设置代理：空串=关闭；否则须为 host:port（校验见 proxy::validate_proxy）。
 /// 保存后立即更新环境变量——后续新建的 reqwest 客户端生效；市场 OnceLock
 /// 客户端与 updater 客户端等已建立连接不追溯，需重启应用（前端已提示）。

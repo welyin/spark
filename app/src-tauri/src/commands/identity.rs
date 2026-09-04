@@ -78,6 +78,9 @@ pub(crate) fn unlock_inner(
 
 pub(crate) fn lock_inner(kernel: &mut Kernel) -> super::dto::SuccessResult {
     kernel.lock();
+    // 阶段四C：登出即停前台服务（幂等；与 stop_inner 同路径互补）
+    #[cfg(target_os = "android")]
+    crate::android_native::keepalive_stop();
     super::dto::SuccessResult::ok()
 }
 

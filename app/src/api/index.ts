@@ -501,7 +501,11 @@ export function createTauriApi(): ElectronAPI {
       getProxy: () => call('system-get-proxy'),
       setProxy: (proxy) => call('system-set-proxy', proxy),
       // 移动端返回键在一级页（栈底）时退出应用；桌面无系统返回键，不会触达
-      exitApp: () => call('system-exit-app')
+      exitApp: () => call('system-exit-app'),
+      // 阶段四C 系统通知：Android 经 JNI 发系统通知；桌面命令侧 no-op
+      notifyChat: (spaceKey, convId, title, body, unread) =>
+        call('system-notify-chat', spaceKey, convId, title, body, unread),
+      notifyGeneric: (title, body) => call('system-notify-generic', title, body)
     },
     sys: {
       exec: (program, args, workdir) =>

@@ -65,6 +65,10 @@ pub struct NodeCardImportDto {
 
 pub(crate) fn start_inner(kernel: &mut Kernel) -> Result<P2pStartResultDto, String> {
     let peer_id = kernel.start_p2p().map_err(err)?;
+    // 阶段四C：P2P 启动成功（事件泵存活）才挂前台服务（keepalive 低打扰
+    // 渠道常驻通知）；非 Android 为编译期 no-op
+    #[cfg(target_os = "android")]
+    crate::android_native::keepalive_start();
     Ok(P2pStartResultDto {
         started: true,
         peer_id,
@@ -73,6 +77,9 @@ pub(crate) fn start_inner(kernel: &mut Kernel) -> Result<P2pStartResultDto, Stri
 
 pub(crate) fn stop_inner(kernel: &mut Kernel) -> Result<P2pStopResultDto, String> {
     kernel.stop_p2p().map_err(err)?;
+    // 阶段四C：停止 P2P 即停前台服务（登出/退出同走 lock/stop 路径）
+    #[cfg(target_os = "android")]
+    crate::android_native::keepalive_stop();
     Ok(P2pStopResultDto { started: false })
 }
 

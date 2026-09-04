@@ -13,6 +13,9 @@
 // pub 以便 tests/ 下的集成测试（unit_app）按公开 API 直调；私有项保持原可见性。
 #[cfg(target_os = "android")]
 mod android_activity;
+// 阶段四C：通知/前台服务/网络回调的 JNI 桥（NotificationHelper/NetworkHelper）
+#[cfg(target_os = "android")]
+mod android_native;
 // M4 生物识别解锁：BiometricKeystoreHelper 的 JNI 桥（见 commands/biometric.rs）
 #[cfg(target_os = "android")]
 mod biometric_android;
@@ -193,6 +196,10 @@ pub fn run() {
             #[cfg(not(debug_assertions))]
             let kernel = Arc::new(Mutex::new(kernel));
             app.manage(kernel);
+            // 阶段四C：网络回调直调内核的静态句柄槽（NetworkHelper →
+            // nativeOnNetworkChanged，不经 WebView 转发）
+            #[cfg(target_os = "android")]
+            android_native::register_kernel(app.state::<KernelState>().inner());
             spawn_p2p_event_forwarder(app.handle().clone(), events);
             // 插件市场：状态/包目录在 app_data_dir，本地 dist-market 与插件源码
             // 目录按编译期 crate 位置解析（见 market::MarketPaths::for_app）；
@@ -391,6 +398,9 @@ pub fn run() {
             commands::system::system_set_proxy,
             // 退出应用（Android 系统返回键在一级页时由前端调用；plugin:app|exit 不在 ACL 内不可用）
             commands::system::system_exit_app,
+            // 阶段四C：系统通知（Android JNI 发通知；桌面 no-op）
+            commands::system::system_notify_chat,
+            commands::system::system_notify_generic,
             // sys 代理：插件通过内核代理执行外部命令 / HTTP 请求
             commands::sys::sys_exec,
             commands::sys::sys_fetch,

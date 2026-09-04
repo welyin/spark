@@ -242,6 +242,7 @@ import MobileTopBar from './components/MobileTopBar.vue';
 import MobileSpaceDrawer from './components/MobileSpaceDrawer.vue';
 import { isMobileLayout, MOBILE_TABS } from './stores/ui-layout';
 import { listenP2pEvents } from './api';
+import { initNotify } from './stores/notify';
 import { currentPage, popPage, resetStack } from './stores/mobile-nav';
 import { hasOverlay, requestCloseOverlay } from './stores/overlay-stack';
 import { requestOpenSystemSection } from './stores/pending-system-section';
@@ -528,6 +529,8 @@ export default defineComponent({
       // 插件后台运行时对账（内核 QuickJS 沙箱）：身份切换会停全部插件后台，
       // 进入主界面按当前身份重新拉起（幂等）
       window.electronAPI?.pluginRuntime?.syncBackgrounds().catch(() => {});
+      // 阶段四C：系统通知编排（Android 真弹/桌面 no-op；判流在 stores/notify）
+      initNotify();
       // 自设备资料同步（多设备）：本机资料被其他设备的全量快照更新后刷新展示
       void listenP2pEvents((event) => {
         // M1 新设备加入通知（m1-m2-implementation-plan §3.4）：store 按 deviceId 幂等

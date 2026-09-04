@@ -56,6 +56,18 @@
         class="block-gap"
       />
 
+      <!-- 阶段四C（android-notifications §3.3）：Android 后台运行说明——
+           前台服务保活是合规标准姿势，不主动申请商店敏感权限；国产 ROM 的
+           额外杀后台策略无法从代码侧根治，如实说明 + 引导系统设置手动加白 -->
+      <el-alert
+        v-if="isAndroid"
+        title="为保证及时收到消息，Spark 会保持后台连接（状态栏有一条「正在保持连接」的常驻提示）。如遇收不到消息，请在系统设置的「应用管理 → Spark」中允许后台运行/关闭省电限制。"
+        type="info"
+        :closable="false"
+        show-icon
+        class="block-gap"
+      />
+
       <!-- 节点信息：全部细节直接展示（身份 ID + 节点 ID/地址 + 运行状态） -->
       <template v-if="activeCategory === 'identity'">
         <div class="network-simple">
@@ -177,6 +189,10 @@ export default defineComponent({
         // 存储不可用时仅本次会话生效
       }
     };
+
+    // 阶段四C：Android 平台判定（无 OS 探测依赖，userAgent 口径；
+    // 仅用于「后台运行说明」文案的显隐）
+    const isAndroid = navigator.userAgent.includes('Android');
 
     // ---------------- 普通视图摘要 ----------------
     const connected = computed(() => props.p2pInfo.started && props.p2pInfo.connectedPeers.length > 0);
@@ -305,6 +321,7 @@ export default defineComponent({
       activeCategory,
       advanced,
       toggleAdvanced,
+      isAndroid,
       connected,
       syncHealthy,
       categories,
