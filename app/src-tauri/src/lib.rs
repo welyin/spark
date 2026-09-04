@@ -353,6 +353,7 @@ pub fn run() {
             commands::evidence::evidence_head_hash,
             commands::evidence::evidence_verify,
             commands::evidence::evidence_entry,
+            commands::evidence::evidence_export,
             // P2P
             commands::p2p::p2p_start,
             commands::p2p::p2p_stop,

@@ -269,6 +269,43 @@ pub(crate) fn handle_orgsync_data<S: StorageBackend>(
             continue;
         }
 
+        // 阶段四F §8：存证锚（org:evi:anchor:）LWW 覆盖前的分叉证据保全——
+        // 同 nodeId 回退/同 seq 异 hash → 双份签名锚留档（本地 org:evi:fork:
+        // 键）+ WARN 告警后仍按 LWW 合入（检测分歧、不做裁决；治理面采纳时
+        // 查留档拒绝该节点锚）。同步面不验签（§6 既定口径）。
+        if record_item
+            .key
+            .starts_with(crate::evidence::EVIDENCE_ANCHOR_PREFIX)
+            && !crate::sync::is_tombstone(&record_item.meta)
+        {
+            let local_anchor = storage
+                .get(&record_item.key)?
+                .and_then(|raw| serde_json::from_str::<crate::evidence::AnchorRecord>(&raw).ok());
+            let incoming_anchor =
+                serde_json::from_value::<crate::evidence::AnchorRecord>(record_item.value.clone())
+                    .ok();
+            if let (Some(local), Some(incoming)) = (local_anchor, incoming_anchor)
+                && let Some(kind) = crate::evidence::detect_anchor_fork(&local, &incoming)
+            {
+                let archive_key = crate::evidence::fork_archive_key(
+                    &incoming.org_id,
+                    &incoming.node_id,
+                    ctx.now_ms,
+                );
+                let archive = crate::evidence::fork_archive_value(&local, &incoming, kind, ctx.now_ms);
+                storage
+                    .put(&archive_key, &serde_json::to_string(&archive)?)
+                    .map_err(crate::sync::SyncError::from)?;
+                log::warn!(
+                    "[ORGSYNC] evidence anchor fork detected | org={} node={} kind={} —— 双份签名锚已留档 {}",
+                    incoming.org_id,
+                    incoming.node_id,
+                    kind.as_str(),
+                    archive_key
+                );
+            }
+        }
+
         // 逐条 LWW 合入（幂等）。org 记录走 no-dlog 变体（B4：不污染个人域
         // 删除日志），墓碑落地后由本机补登 **org 域 dlog**（接力传播，
         // A→B→C）。

@@ -38,6 +38,7 @@ pub mod dm_envelope;
 mod doc_ops;
 mod epoch_ops;
 mod error;
+mod evidence_ops;
 mod feed;
 mod feed_ops;
 mod feed_shared;

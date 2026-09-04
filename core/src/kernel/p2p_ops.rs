@@ -210,6 +210,9 @@ impl Kernel {
         // 阶段四E：上线拉一次邮箱（设计 §2.6 触发点：start_p2p 拉一次；
         // 另有 orgsync tick 节奏，见 tick.rs S3 后）
         self.spawn_org_mail_fetch();
+        // 阶段四F：上线兜底锚定刷新（停机期间的链头变化收敛到锚记录；
+        // 幂等——链头未变不写）
+        let _ = self.refresh_evidence_anchors();
 
         // 变更信号观察：版本化中间件的受管本地写入（put/delete）→ 防抖后
         // 向已连接自设备即时补发 pdsync-hello。替代分散在各业务操作里的

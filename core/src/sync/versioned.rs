@@ -106,12 +106,14 @@ impl<S: StorageBackend> VersionedStorage<S> {
     ///   pdsync（其删除传播是另行记录的已知缺口）。
     fn managed(key: &str) -> bool {
         // org 域受管：orgd:{orgId}: 数据 + org:coll: 声明（保留系统集合）+
-        // org:acl:{orgId}: 授权名单（O4，all-members 系统数据，进 orgsync 流量）
+        // org:acl:{orgId}: 授权名单（O4，all-members 系统数据，进 orgsync 流量）+
+        // org:evi:anchor: 存证节点锚（阶段四F，org:structure@v1 键域）
         if key.starts_with("orgd:")
             || key.starts_with("org:coll:")
             || key.starts_with("org:acl:")
             || key.starts_with("org:invpub:")
             || key.starts_with("org:member:")
+            || key.starts_with("org:evi:anchor:")
         {
             return true;
         }
@@ -138,6 +140,7 @@ impl<S: StorageBackend> VersionedStorage<S> {
             || key.starts_with("org:acl:")
             || key.starts_with("org:invpub:")
             || key.starts_with("org:member:")
+            || key.starts_with("org:evi:anchor:")
             || crate::sync::orgsync::legacy_org_key_scope(key).is_some()
     }
 
@@ -153,6 +156,15 @@ impl<S: StorageBackend> VersionedStorage<S> {
             // org:member:{orgId}:{rootId} → org:structure@v1（成员条目归属
             // 结构集合；成员移除墓碑经 org 域 dlog 传播，P1）
             let org_id = key.strip_prefix("org:member:")?.split(':').next()?;
+            return Some((org_id.to_string(), "org:structure".to_string(), "1".to_string()));
+        }
+        if key.starts_with("org:evi:anchor:") {
+            // org:evi:anchor:{orgId}:{nodeId} → org:structure@v1（阶段四F
+            // 存证节点锚，与成员条目同集合归属）
+            let org_id = key
+                .strip_prefix("org:evi:anchor:")?
+                .split(':')
+                .next()?;
             return Some((org_id.to_string(), "org:structure".to_string(), "1".to_string()));
         }
         if let Some(rest) = key.strip_prefix("org:invpub:") {

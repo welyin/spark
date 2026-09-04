@@ -1,0 +1,216 @@
+{
+  "_comment": "sync-evidence §10 存证锚定/导出包 golden vectors（阶段四F）。生成器：core/examples/gen_evidence_anchor_vectors.rs（Rust 自产，含五步核验自检）；消费：core/tests/evidence_anchor_vectors.rs。",
+  "anchor": {
+    "desc": "锚记录：固定 orgId/nodeId/root 密钥/headSeq/headHash/ts → canonical 签名载荷串逐字节 + sig 固定值；篡改任一字段验签必败（消费侧断言）",
+    "input": {
+      "rootKey": "ERERERERERERERERERERERERERERERERERERERERERE=",
+      "orgId": "org_0000000000000001",
+      "nodeId": "12D3KooWNodeA",
+      "headSeq": 42,
+      "headHash": "abababababababababababababababababababababababababababababababab",
+      "ts": 1720000000000
+    },
+    "expect": {
+      "payload": "{\"anchorV\":\"1\",\"headHash\":\"\\\"abababababababababababababababababababababababababababababababab\\\"\",\"headSeq\":\"42\",\"nodeId\":\"\\\"12D3KooWNodeA\\\"\",\"orgId\":\"\\\"org_0000000000000001\\\"\",\"publicKey\":\"\\\"0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc=\\\"\",\"rootId\":\"\\\"10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d\\\"\",\"ts\":\"1720000000000\"}",
+      "record": {
+        "anchorV": 1,
+        "orgId": "org_0000000000000001",
+        "nodeId": "12D3KooWNodeA",
+        "rootId": "10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+        "publicKey": "0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc=",
+        "headSeq": 42,
+        "headHash": "abababababababababababababababababababababababababababababababab",
+        "ts": 1720000000000,
+        "sig": "DL0MDZpevj3O5hwhjrl8TzaPf1FurjIVzbucUsBsDagkNhhgkZ7Yd22ZEd4HHt6BzAPMnqEnLBsZuDd5Rn6PBw=="
+      },
+      "sig": "DL0MDZpevj3O5hwhjrl8TzaPf1FurjIVzbucUsBsDagkNhhgkZ7Yd22ZEd4HHt6BzAPMnqEnLBsZuDd5Rn6PBw=="
+    }
+  },
+  "merkle": {
+    "desc": "默克尔根：同一锚记录集合 → 固定 anchorRoot；覆盖单叶/偶数叶/奇数叶（末叶复制）三形态",
+    "input": {
+      "anchors": {
+        "A": {
+          "anchorV": 1,
+          "orgId": "org_0000000000000001",
+          "nodeId": "12D3KooWNodeA",
+          "rootId": "10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+          "publicKey": "0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc=",
+          "headSeq": 42,
+          "headHash": "abababababababababababababababababababababababababababababababab",
+          "ts": 1720000000000,
+          "sig": "DL0MDZpevj3O5hwhjrl8TzaPf1FurjIVzbucUsBsDagkNhhgkZ7Yd22ZEd4HHt6BzAPMnqEnLBsZuDd5Rn6PBw=="
+        },
+        "B": {
+          "anchorV": 1,
+          "orgId": "org_0000000000000001",
+          "nodeId": "12D3KooWNodeB",
+          "rootId": "1325b850c2871916eae203f0efc3c8987f64e5e3cdb27679e6d1fa97808357e6",
+          "publicKey": "oJql9HpnWYAv+VX43C0qFKXJnSO+l/hkEn/5ODRVpPA=",
+          "headSeq": 17,
+          "headHash": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+          "ts": 1720000001000,
+          "sig": "VQ6hcqYDjpfduc0Cqln/9WUYZWbCKKk12fjKQwd6bmkFKBu+nbzGpf4fmQyyO/EC3KpdRNzKJp684Im8rtzPCw=="
+        },
+        "C": {
+          "anchorV": 1,
+          "orgId": "org_0000000000000001",
+          "nodeId": "12D3KooWNodeC",
+          "rootId": "6c8f8607dbe87077a62a2990ce07d94aaf749df76f87b98eb786a6d10f030765",
+          "publicKey": "F8t5+ytBIPKx7GXkGY1uCLKOgT/rAeSkAIObheGAgM4=",
+          "headSeq": 88,
+          "headHash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+          "ts": 1720000002000,
+          "sig": "wRzBcuByz/DD97Z6mXefvA0zYqNGbx53vFQhsG0OCUSv59MjAAGyozEk5D2xtk1YCQ6tHEo5mif/g9XchLC4BQ=="
+        }
+      }
+    },
+    "expect": {
+      "leafA": "c0cc1413b996fbb2950668e1dfae1243c97e6484ffcc27d7ef90d3b886a812bc",
+      "rootSingle": "c0cc1413b996fbb2950668e1dfae1243c97e6484ffcc27d7ef90d3b886a812bc",
+      "rootEven": "b8ae25bbc9866041c86b793bbd83dce734c80f5fdfcbab203129e56529bb9649",
+      "rootOdd": "fcc14f9594ea8659c356f389e4a4e4600c5ae4bd45748d96a03e48dc11dfb947"
+    }
+  },
+  "proof": {
+    "desc": "inclusion proof：固定树 → 每叶 proof（自叶向根兄弟 hex 序列）逐字节；验证通过 + 篡改 sibling/换叶索引失败（消费侧断言）",
+    "input": {
+      "anchors": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    "expect": {
+      "root": "fcc14f9594ea8659c356f389e4a4e4600c5ae4bd45748d96a03e48dc11dfb947",
+      "proofA": [
+        "e1c78f75e628f092670eefc9457ad6bebd79f3e76ef9bf2652eb57fba43544c0",
+        "243aed117082cbcd9d02dc6bc949cebe24d5e914e034f5d058e46f4c70f9dc4d"
+      ],
+      "proofB": [
+        "c0cc1413b996fbb2950668e1dfae1243c97e6484ffcc27d7ef90d3b886a812bc",
+        "243aed117082cbcd9d02dc6bc949cebe24d5e914e034f5d058e46f4c70f9dc4d"
+      ],
+      "proofC": [
+        "8becd99dffb9b9920addda0ff5c659ba229fbd4478c156ee59b8ed80e123a8af",
+        "b8ae25bbc9866041c86b793bbd83dce734c80f5fdfcbab203129e56529bb9649"
+      ]
+    }
+  },
+  "export": {
+    "desc": "导出包：固定链（3 条目）+ 固定锚集（A/B）+ 固定导出者密钥/ts → canonical 包字节 + exporter.sig 固定值；逐字段篡改与断链必败（消费侧断言）",
+    "input": {
+      "exporterKey": "7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u4=",
+      "exporterTs": 1720000005000,
+      "scope": {
+        "domain": "plugin:vote",
+        "collection": "ballots",
+        "orgId": "org_0000000000000001"
+      }
+    },
+    "expect": {
+      "package": {
+        "formatVersion": 1,
+        "scope": {
+          "domain": "plugin:vote",
+          "collection": "ballots",
+          "orgId": "org_0000000000000001"
+        },
+        "exporter": {
+          "rootId": "64c529fa1d95175275706c1025da8b9c9dae85650e5dc3f89e97953196a6209b",
+          "publicKey": "gUci3nHFsU50jf8yKuf3xBXO5Vh2ZJUpLNbEwKap3yg=",
+          "ts": 1720000005000,
+          "sig": "uE67N8KIWYqZ5afRYdLi3P1+lKsjI6qszDxPyElB3jvvQjQ2DHWoIwWYAIQWCN5qWXjQZQdbrcaXNQf2UeBPCg=="
+        },
+        "head": {
+          "seq": 3,
+          "hash": "d76755edb7249af86c0bd6d68bdc594444bb17d3b2d5bdb7dec3b83afe90cba3"
+        },
+        "entries": [
+          {
+            "seq": 1,
+            "prevHash": null,
+            "domain": "plugin:vote",
+            "collection": "ballots",
+            "id": "ballot-1",
+            "op": "put",
+            "dataHash": "7406627668866e1afb3b2e4d777a09a0fbec28c26c0bd1e5e52c6615891dc230",
+            "payloadHash": "08b81d4d7f96b755fe4367c7f83c00e205739180cea474a64fd7731c725aae28",
+            "metaHash": null,
+            "hash": "7a13c2326f93f8233d58088945959f83ac5c82019ae02ac45ef8c56d63996ee4",
+            "timestamp": 1720000001000,
+            "nodeId": "12D3KooWNodeA"
+          },
+          {
+            "seq": 2,
+            "prevHash": "7a13c2326f93f8233d58088945959f83ac5c82019ae02ac45ef8c56d63996ee4",
+            "domain": "plugin:vote",
+            "collection": "ballots",
+            "id": "ballot-2",
+            "op": "put",
+            "dataHash": "e3bc20a2d2e2ca9d0c45468fb5bf9a044c521d56ebf4b8fe2c3d75ee5d74abdf",
+            "payloadHash": "f96a33e48fb3047c7f2ecbe0dc277e22649ebf9891ce0c5f5c67a638a18551b1",
+            "metaHash": null,
+            "hash": "48d719c80bd62cdcc8d2e948505740e1476616598cda827671dc95a0d056d4cd",
+            "timestamp": 1720000002000,
+            "nodeId": "12D3KooWNodeA"
+          },
+          {
+            "seq": 3,
+            "prevHash": "48d719c80bd62cdcc8d2e948505740e1476616598cda827671dc95a0d056d4cd",
+            "domain": "plugin:vote",
+            "collection": "ballots",
+            "id": "ballot-3",
+            "op": "put",
+            "dataHash": "0ed81073c4d7a60261485602d41f79b7c992a6b6fa79bc0685603924a735e885",
+            "payloadHash": "02592da6641bf8fbde5fc9f535c70282aff0f074e2ca1d390626c16069a5179a",
+            "metaHash": null,
+            "hash": "d76755edb7249af86c0bd6d68bdc594444bb17d3b2d5bdb7dec3b83afe90cba3",
+            "timestamp": 1720000003000,
+            "nodeId": "12D3KooWNodeA"
+          }
+        ],
+        "anchors": [
+          {
+            "anchorV": 1,
+            "orgId": "org_0000000000000001",
+            "nodeId": "12D3KooWNodeA",
+            "rootId": "10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+            "publicKey": "0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc=",
+            "headSeq": 42,
+            "headHash": "abababababababababababababababababababababababababababababababab",
+            "ts": 1720000000000,
+            "sig": "DL0MDZpevj3O5hwhjrl8TzaPf1FurjIVzbucUsBsDagkNhhgkZ7Yd22ZEd4HHt6BzAPMnqEnLBsZuDd5Rn6PBw=="
+          },
+          {
+            "anchorV": 1,
+            "orgId": "org_0000000000000001",
+            "nodeId": "12D3KooWNodeB",
+            "rootId": "1325b850c2871916eae203f0efc3c8987f64e5e3cdb27679e6d1fa97808357e6",
+            "publicKey": "oJql9HpnWYAv+VX43C0qFKXJnSO+l/hkEn/5ODRVpPA=",
+            "headSeq": 17,
+            "headHash": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "ts": 1720000001000,
+            "sig": "VQ6hcqYDjpfduc0Cqln/9WUYZWbCKKk12fjKQwd6bmkFKBu+nbzGpf4fmQyyO/EC3KpdRNzKJp684Im8rtzPCw=="
+          }
+        ],
+        "anchorRoot": "b8ae25bbc9866041c86b793bbd83dce734c80f5fdfcbab203129e56529bb9649",
+        "anchorProofs": {
+          "12D3KooWNodeA": [
+            "e1c78f75e628f092670eefc9457ad6bebd79f3e76ef9bf2652eb57fba43544c0"
+          ],
+          "12D3KooWNodeB": [
+            "c0cc1413b996fbb2950668e1dfae1243c97e6484ffcc27d7ef90d3b886a812bc"
+          ]
+        },
+        "spec": {
+          "canonicalJson": "normalizeObject：key 排序（整数型 key 数值升序在前，其余 UTF-16 字典序），嵌套对象递归 normalize 后作为 JSON 字符串值嵌入；数字按 JS Number::toString，字符串按 JS JSON 转义",
+          "specRef": "sync-evidence §1–§2、§6–§9"
+        }
+      },
+      "canonicalPackage": "{\"anchorProofs\":\"{\\\"12D3KooWNodeA\\\":\\\"{\\\\\\\"0\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"e1c78f75e628f092670eefc9457ad6bebd79f3e76ef9bf2652eb57fba43544c0\\\\\\\\\\\\\\\"\\\\\\\"}\\\",\\\"12D3KooWNodeB\\\":\\\"{\\\\\\\"0\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"c0cc1413b996fbb2950668e1dfae1243c97e6484ffcc27d7ef90d3b886a812bc\\\\\\\\\\\\\\\"\\\\\\\"}\\\"}\",\"anchorRoot\":\"\\\"b8ae25bbc9866041c86b793bbd83dce734c80f5fdfcbab203129e56529bb9649\\\"\",\"anchors\":\"{\\\"0\\\":\\\"{\\\\\\\"anchorV\\\\\\\":\\\\\\\"1\\\\\\\",\\\\\\\"headHash\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"abababababababababababababababababababababababababababababababab\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"headSeq\\\\\\\":\\\\\\\"42\\\\\\\",\\\\\\\"nodeId\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"12D3KooWNodeA\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"orgId\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"org_0000000000000001\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"publicKey\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc=\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"rootId\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"sig\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"DL0MDZpevj3O5hwhjrl8TzaPf1FurjIVzbucUsBsDagkNhhgkZ7Yd22ZEd4HHt6BzAPMnqEnLBsZuDd5Rn6PBw==\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"ts\\\\\\\":\\\\\\\"1720000000000\\\\\\\"}\\\",\\\"1\\\":\\\"{\\\\\\\"anchorV\\\\\\\":\\\\\\\"1\\\\\\\",\\\\\\\"headHash\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"headSeq\\\\\\\":\\\\\\\"17\\\\\\\",\\\\\\\"nodeId\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"12D3KooWNodeB\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"orgId\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"org_0000000000000001\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"publicKey\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"oJql9HpnWYAv+VX43C0qFKXJnSO+l/hkEn/5ODRVpPA=\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"rootId\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"1325b850c2871916eae203f0efc3c8987f64e5e3cdb27679e6d1fa97808357e6\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"sig\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"VQ6hcqYDjpfduc0Cqln/9WUYZWbCKKk12fjKQwd6bmkFKBu+nbzGpf4fmQyyO/EC3KpdRNzKJp684Im8rtzPCw==\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"ts\\\\\\\":\\\\\\\"1720000001000\\\\\\\"}\\\"}\",\"entries\":\"{\\\"0\\\":\\\"{\\\\\\\"collection\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"ballots\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"dataHash\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"7406627668866e1afb3b2e4d777a09a0fbec28c26c0bd1e5e52c6615891dc230\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"domain\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"plugin:vote\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"hash\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"7a13c2326f93f8233d58088945959f83ac5c82019ae02ac45ef8c56d63996ee4\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"id\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"ballot-1\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"metaHash\\\\\\\":\\\\\\\"null\\\\\\\",\\\\\\\"nodeId\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"12D3KooWNodeA\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"op\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"put\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"payloadHash\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"08b81d4d7f96b755fe4367c7f83c00e205739180cea474a64fd7731c725aae28\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"prevHash\\\\\\\":\\\\\\\"null\\\\\\\",\\\\\\\"seq\\\\\\\":\\\\\\\"1\\\\\\\",\\\\\\\"timestamp\\\\\\\":\\\\\\\"1720000001000\\\\\\\"}\\\",\\\"1\\\":\\\"{\\\\\\\"collection\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"ballots\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"dataHash\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"e3bc20a2d2e2ca9d0c45468fb5bf9a044c521d56ebf4b8fe2c3d75ee5d74abdf\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"domain\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"plugin:vote\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"hash\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"48d719c80bd62cdcc8d2e948505740e1476616598cda827671dc95a0d056d4cd\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"id\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"ballot-2\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"metaHash\\\\\\\":\\\\\\\"null\\\\\\\",\\\\\\\"nodeId\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"12D3KooWNodeA\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"op\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"put\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"payloadHash\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"f96a33e48fb3047c7f2ecbe0dc277e22649ebf9891ce0c5f5c67a638a18551b1\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"prevHash\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"7a13c2326f93f8233d58088945959f83ac5c82019ae02ac45ef8c56d63996ee4\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"seq\\\\\\\":\\\\\\\"2\\\\\\\",\\\\\\\"timestamp\\\\\\\":\\\\\\\"1720000002000\\\\\\\"}\\\",\\\"2\\\":\\\"{\\\\\\\"collection\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"ballots\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"dataHash\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"0ed81073c4d7a60261485602d41f79b7c992a6b6fa79bc0685603924a735e885\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"domain\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"plugin:vote\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"hash\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"d76755edb7249af86c0bd6d68bdc594444bb17d3b2d5bdb7dec3b83afe90cba3\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"id\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"ballot-3\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"metaHash\\\\\\\":\\\\\\\"null\\\\\\\",\\\\\\\"nodeId\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"12D3KooWNodeA\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"op\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"put\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"payloadHash\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"02592da6641bf8fbde5fc9f535c70282aff0f074e2ca1d390626c16069a5179a\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"prevHash\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"48d719c80bd62cdcc8d2e948505740e1476616598cda827671dc95a0d056d4cd\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"seq\\\\\\\":\\\\\\\"3\\\\\\\",\\\\\\\"timestamp\\\\\\\":\\\\\\\"1720000003000\\\\\\\"}\\\"}\",\"exporter\":\"{\\\"publicKey\\\":\\\"\\\\\\\"gUci3nHFsU50jf8yKuf3xBXO5Vh2ZJUpLNbEwKap3yg=\\\\\\\"\\\",\\\"rootId\\\":\\\"\\\\\\\"64c529fa1d95175275706c1025da8b9c9dae85650e5dc3f89e97953196a6209b\\\\\\\"\\\",\\\"sig\\\":\\\"\\\\\\\"uE67N8KIWYqZ5afRYdLi3P1+lKsjI6qszDxPyElB3jvvQjQ2DHWoIwWYAIQWCN5qWXjQZQdbrcaXNQf2UeBPCg==\\\\\\\"\\\",\\\"ts\\\":\\\"1720000005000\\\"}\",\"formatVersion\":\"1\",\"head\":\"{\\\"hash\\\":\\\"\\\\\\\"d76755edb7249af86c0bd6d68bdc594444bb17d3b2d5bdb7dec3b83afe90cba3\\\\\\\"\\\",\\\"seq\\\":\\\"3\\\"}\",\"scope\":\"{\\\"collection\\\":\\\"\\\\\\\"ballots\\\\\\\"\\\",\\\"domain\\\":\\\"\\\\\\\"plugin:vote\\\\\\\"\\\",\\\"orgId\\\":\\\"\\\\\\\"org_0000000000000001\\\\\\\"\\\"}\",\"spec\":\"{\\\"canonicalJson\\\":\\\"\\\\\\\"normalizeObject：key 排序（整数型 key 数值升序在前，其余 UTF-16 字典序），嵌套对象递归 normalize 后作为 JSON 字符串值嵌入；数字按 JS Number::toString，字符串按 JS JSON 转义\\\\\\\"\\\",\\\"specRef\\\":\\\"\\\\\\\"sync-evidence §1–§2、§6–§9\\\\\\\"\\\"}\"}",
+      "signPayload": "{\"anchorProofs\":\"{\\\"12D3KooWNodeA\\\":\\\"{\\\\\\\"0\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"e1c78f75e628f092670eefc9457ad6bebd79f3e76ef9bf2652eb57fba43544c0\\\\\\\\\\\\\\\"\\\\\\\"}\\\",\\\"12D3KooWNodeB\\\":\\\"{\\\\\\\"0\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"c0cc1413b996fbb2950668e1dfae1243c97e6484ffcc27d7ef90d3b886a812bc\\\\\\\\\\\\\\\"\\\\\\\"}\\\"}\",\"anchorRoot\":\"\\\"b8ae25bbc9866041c86b793bbd83dce734c80f5fdfcbab203129e56529bb9649\\\"\",\"anchors\":\"{\\\"0\\\":\\\"{\\\\\\\"anchorV\\\\\\\":\\\\\\\"1\\\\\\\",\\\\\\\"headHash\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"abababababababababababababababababababababababababababababababab\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"headSeq\\\\\\\":\\\\\\\"42\\\\\\\",\\\\\\\"nodeId\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"12D3KooWNodeA\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"orgId\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"org_0000000000000001\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"publicKey\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc=\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"rootId\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"sig\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"DL0MDZpevj3O5hwhjrl8TzaPf1FurjIVzbucUsBsDagkNhhgkZ7Yd22ZEd4HHt6BzAPMnqEnLBsZuDd5Rn6PBw==\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"ts\\\\\\\":\\\\\\\"1720000000000\\\\\\\"}\\\",\\\"1\\\":\\\"{\\\\\\\"anchorV\\\\\\\":\\\\\\\"1\\\\\\\",\\\\\\\"headHash\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"headSeq\\\\\\\":\\\\\\\"17\\\\\\\",\\\\\\\"nodeId\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"12D3KooWNodeB\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"orgId\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"org_0000000000000001\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"publicKey\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"oJql9HpnWYAv+VX43C0qFKXJnSO+l/hkEn/5ODRVpPA=\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"rootId\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"1325b850c2871916eae203f0efc3c8987f64e5e3cdb27679e6d1fa97808357e6\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"sig\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"VQ6hcqYDjpfduc0Cqln/9WUYZWbCKKk12fjKQwd6bmkFKBu+nbzGpf4fmQyyO/EC3KpdRNzKJp684Im8rtzPCw==\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"ts\\\\\\\":\\\\\\\"1720000001000\\\\\\\"}\\\"}\",\"entries\":\"{\\\"0\\\":\\\"{\\\\\\\"collection\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"ballots\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"dataHash\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"7406627668866e1afb3b2e4d777a09a0fbec28c26c0bd1e5e52c6615891dc230\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"domain\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"plugin:vote\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"hash\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"7a13c2326f93f8233d58088945959f83ac5c82019ae02ac45ef8c56d63996ee4\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"id\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"ballot-1\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"metaHash\\\\\\\":\\\\\\\"null\\\\\\\",\\\\\\\"nodeId\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"12D3KooWNodeA\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"op\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"put\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"payloadHash\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"08b81d4d7f96b755fe4367c7f83c00e205739180cea474a64fd7731c725aae28\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"prevHash\\\\\\\":\\\\\\\"null\\\\\\\",\\\\\\\"seq\\\\\\\":\\\\\\\"1\\\\\\\",\\\\\\\"timestamp\\\\\\\":\\\\\\\"1720000001000\\\\\\\"}\\\",\\\"1\\\":\\\"{\\\\\\\"collection\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"ballots\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"dataHash\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"e3bc20a2d2e2ca9d0c45468fb5bf9a044c521d56ebf4b8fe2c3d75ee5d74abdf\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"domain\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"plugin:vote\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"hash\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"48d719c80bd62cdcc8d2e948505740e1476616598cda827671dc95a0d056d4cd\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"id\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"ballot-2\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"metaHash\\\\\\\":\\\\\\\"null\\\\\\\",\\\\\\\"nodeId\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"12D3KooWNodeA\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"op\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"put\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"payloadHash\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"f96a33e48fb3047c7f2ecbe0dc277e22649ebf9891ce0c5f5c67a638a18551b1\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"prevHash\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"7a13c2326f93f8233d58088945959f83ac5c82019ae02ac45ef8c56d63996ee4\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"seq\\\\\\\":\\\\\\\"2\\\\\\\",\\\\\\\"timestamp\\\\\\\":\\\\\\\"1720000002000\\\\\\\"}\\\",\\\"2\\\":\\\"{\\\\\\\"collection\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"ballots\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"dataHash\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"0ed81073c4d7a60261485602d41f79b7c992a6b6fa79bc0685603924a735e885\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"domain\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"plugin:vote\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"hash\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"d76755edb7249af86c0bd6d68bdc594444bb17d3b2d5bdb7dec3b83afe90cba3\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"id\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"ballot-3\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"metaHash\\\\\\\":\\\\\\\"null\\\\\\\",\\\\\\\"nodeId\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"12D3KooWNodeA\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"op\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"put\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"payloadHash\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"02592da6641bf8fbde5fc9f535c70282aff0f074e2ca1d390626c16069a5179a\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"prevHash\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"48d719c80bd62cdcc8d2e948505740e1476616598cda827671dc95a0d056d4cd\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"seq\\\\\\\":\\\\\\\"3\\\\\\\",\\\\\\\"timestamp\\\\\\\":\\\\\\\"1720000003000\\\\\\\"}\\\"}\",\"exporter\":\"{\\\"publicKey\\\":\\\"\\\\\\\"gUci3nHFsU50jf8yKuf3xBXO5Vh2ZJUpLNbEwKap3yg=\\\\\\\"\\\",\\\"rootId\\\":\\\"\\\\\\\"64c529fa1d95175275706c1025da8b9c9dae85650e5dc3f89e97953196a6209b\\\\\\\"\\\",\\\"ts\\\":\\\"1720000005000\\\"}\",\"formatVersion\":\"1\",\"head\":\"{\\\"hash\\\":\\\"\\\\\\\"d76755edb7249af86c0bd6d68bdc594444bb17d3b2d5bdb7dec3b83afe90cba3\\\\\\\"\\\",\\\"seq\\\":\\\"3\\\"}\",\"scope\":\"{\\\"collection\\\":\\\"\\\\\\\"ballots\\\\\\\"\\\",\\\"domain\\\":\\\"\\\\\\\"plugin:vote\\\\\\\"\\\",\\\"orgId\\\":\\\"\\\\\\\"org_0000000000000001\\\\\\\"\\\"}\",\"spec\":\"{\\\"canonicalJson\\\":\\\"\\\\\\\"normalizeObject：key 排序（整数型 key 数值升序在前，其余 UTF-16 字典序），嵌套对象递归 normalize 后作为 JSON 字符串值嵌入；数字按 JS Number::toString，字符串按 JS JSON 转义\\\\\\\"\\\",\\\"specRef\\\":\\\"\\\\\\\"sync-evidence §1–§2、§6–§9\\\\\\\"\\\"}\"}",
+      "exporterSig": "uE67N8KIWYqZ5afRYdLi3P1+lKsjI6qszDxPyElB3jvvQjQ2DHWoIwWYAIQWCN5qWXjQZQdbrcaXNQf2UeBPCg=="
+    }
+  }
+}

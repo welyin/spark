@@ -42,6 +42,24 @@ pub(crate) fn entry_inner(kernel: &Kernel, seq: u64) -> Result<Option<EvidenceEn
     kernel.evidence_entry(seq).map_err(err)
 }
 
+/// `evidence-export` 核心实现（阶段四F）：构建自包含存证导出包（§9）并
+/// 返回 canonical 可复算的 JSON 文本（落盘/打印归调用方）。
+pub(crate) fn export_inner(
+    kernel: &mut Kernel,
+    domain: Option<String>,
+    collection: Option<String>,
+    org_id: Option<String>,
+) -> Result<String, String> {
+    let package = kernel
+        .evidence_export(spark_core::evidence::ExportScope {
+            domain,
+            collection,
+            org_id,
+        })
+        .map_err(err)?;
+    serde_json::to_string_pretty(&package).map_err(|e| e.to_string())
+}
+
 // ------------------------------------------------------------------
 // Tauri 命令
 // ------------------------------------------------------------------
@@ -66,6 +84,18 @@ pub fn evidence_entry(
     seq: u64,
 ) -> Result<Option<EvidenceEntry>, String> {
     entry_inner(&*lock_kernel(&state)?, seq)
+}
+
+/// `evidence-export`（阶段四F 新增，只读三命令之外的导出命令）：scope 各
+/// 字段可省（全省 = 全链导出）；返回导出包 JSON 文本。
+#[tauri::command]
+pub fn evidence_export(
+    state: tauri::State<'_, KernelState>,
+    domain: Option<String>,
+    collection: Option<String>,
+    org_id: Option<String>,
+) -> Result<String, String> {
+    export_inner(&mut *lock_kernel(&state)?, domain, collection, org_id)
 }
 
 // ------------------------------------------------------------------

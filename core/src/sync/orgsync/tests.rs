@@ -680,13 +680,15 @@ fn builtin_collection_key_domains() {
     // 复制组流动，普通成员收不到）。F2-P1：`org:coll:{orgId}:`（集合声明）
     // 同性质并入——声明全员可见，不经 hello 复制组裁剪。阶段四A P1：
     // `org:member:{orgId}:`（per-member 成员记录）并入——全员流动。
+    // 阶段四F：`org:evi:anchor:{orgId}:`（存证节点锚）并入——全员流动。
     assert_eq!(
         BuiltinOrgCollection::Structure.data_prefixes(org),
         vec![
             "org:meta:org_0000000000000001",
             "org:acl:org_0000000000000001:",
             "org:coll:org_0000000000000001:",
-            "org:member:org_0000000000000001:"
+            "org:member:org_0000000000000001:",
+            "org:evi:anchor:org_0000000000000001:"
         ]
     );
     assert_eq!(

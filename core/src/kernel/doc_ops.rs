@@ -158,6 +158,8 @@ impl Kernel {
             Some(serde_json::to_value(&write.schema)?),
         );
         self.broadcast_sync_body(body);
+        // 阶段四F：链头变化触发锚定刷新（设计 §1.2；幂等——链头未变不写锚）
+        let _ = self.refresh_evidence_anchors();
         Ok(())
     }
 
@@ -185,6 +187,8 @@ impl Kernel {
             Some(serde_json::to_value(&write.schema)?),
         );
         self.broadcast_sync_body(body);
+        // 阶段四F：链头变化触发锚定刷新（同 doc_put）
+        let _ = self.refresh_evidence_anchors();
         Ok(true)
     }
 

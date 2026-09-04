@@ -97,11 +97,14 @@ impl BuiltinOrgCollection {
             // P1（阶段四A 分拆）：org:member:{orgId}: 并入——成员条目
             // lww-record 逐成员一条，与 org:acl:/org:coll: 同集合全员流动；
             // 成员移除 = 成员记录墓碑（org 域 dlog 传播）。
+            // 阶段四F：org:evi:anchor:{orgId}: 并入——存证节点锚记录
+            // （sync-evidence §6，lww-record 逐节点一条）。
             BuiltinOrgCollection::Structure => vec![
                 format!("org:meta:{org_id}"),
                 format!("org:acl:{org_id}:"),
                 format!("org:coll:{org_id}:"),
                 format!("org:member:{org_id}:"),
+                format!("org:evi:anchor:{org_id}:"),
             ],
             BuiltinOrgCollection::Contacts => vec![format!("ct:org:{org_id}:")],
             BuiltinOrgCollection::Invitations => vec![format!("org:invpub:{org_id}:")],
