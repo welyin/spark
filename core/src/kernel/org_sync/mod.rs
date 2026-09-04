@@ -224,6 +224,9 @@ pub(crate) struct OrgSyncContext {
     pub(crate) node: Arc<P2pNode>,
     pub(crate) current_root_id: Arc<Mutex<Option<String>>>,
     pub(crate) signing_key: Arc<Mutex<Option<SigningKey>>>,
+    /// 解锁期 BIP39 种子（org-mail 拉取的域身份派生用，阶段四E；
+    /// 与 Kernel 共享同一 Arc）。
+    pub(crate) seed_shared: Arc<Mutex<Option<[u8; 64]>>>,
     pub(crate) event_tx: broadcast::Sender<P2pEvent>,
     /// 组织地址记录发布状态：orgAddress → 最近一次发布时间（ms）。
     /// 跨 tick 持久（kernel 持有，worker 与门面注入共用一份）。

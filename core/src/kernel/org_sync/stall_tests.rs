@@ -40,6 +40,7 @@ fn test_rig(root_id: Option<&str>, budgets: TickStageBudgets) -> TestRig {
             signing_key: Arc::new(Mutex::new(Some(
                 crate::org::org_address::generate_org_root_signing_key(),
             ))),
+            seed_shared: Arc::new(Mutex::new(None)),
             event_tx,
             org_address_publish: Default::default(),
             data_dir: tmp.path().to_path_buf(),

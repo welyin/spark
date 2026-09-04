@@ -186,6 +186,7 @@ impl Kernel {
             node: Arc::clone(&node),
             current_root_id: Arc::clone(&self.current_root_id_shared),
             signing_key: Arc::clone(&self.signing_key_shared),
+            seed_shared: Arc::clone(&self.seed_shared),
             event_tx: self.event_tx.clone(),
             org_address_publish: Arc::clone(&self.org_address_publish),
             data_dir: self.config.data_dir.clone(),
@@ -206,6 +207,9 @@ impl Kernel {
             tick_budgets: Default::default(),
         };
         let worker = org_sync::spawn_worker(self.runtime.handle(), ctx, org_sync_rx);
+        // 阶段四E：上线拉一次邮箱（设计 §2.6 触发点：start_p2p 拉一次；
+        // 另有 orgsync tick 节奏，见 tick.rs S3 后）
+        self.spawn_org_mail_fetch();
 
         // 变更信号观察：版本化中间件的受管本地写入（put/delete）→ 防抖后
         // 向已连接自设备即时补发 pdsync-hello。替代分散在各业务操作里的
@@ -476,6 +480,7 @@ impl Kernel {
             node: Arc::clone(node),
             current_root_id: Arc::clone(&self.current_root_id_shared),
             signing_key: Arc::clone(&self.signing_key_shared),
+            seed_shared: Arc::clone(&self.seed_shared),
             event_tx: self.event_tx.clone(),
             org_address_publish: Arc::clone(&self.org_address_publish),
             data_dir: self.config.data_dir.clone(),

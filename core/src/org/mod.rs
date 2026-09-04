@@ -24,6 +24,8 @@ pub mod claim;
 pub mod gateway;
 pub mod invite;
 pub mod invite_record;
+pub mod mailbox;
+pub mod mailbox_store;
 pub mod meta_merge;
 pub mod node_card;
 pub mod org_address;

@@ -48,6 +48,7 @@ mod message_ops;
 mod org_invite_ops;
 mod org_join_ops;
 mod org_ops;
+pub mod org_mail_ops;
 mod org_overview;
 mod org_sync;
 mod p2p_ops;

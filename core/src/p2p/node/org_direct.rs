@@ -33,6 +33,7 @@ impl<S: StorageBackend> EventLoop<S> {
         payload: Value,
         tx: OrgTx,
         is_share: bool,
+        is_mail: bool,
     ) {
         // 惰性回收调用方已放弃的滞留 attempt（同 begin_connect 口径）
         self.pending_org_attempts.retain(|a| !a.tx.is_closed());
@@ -54,6 +55,9 @@ impl<S: StorageBackend> EventLoop<S> {
                     OrgTx::Dm(tx) => {
                         let _ = tx.send(Err(e));
                     }
+                    OrgTx::Mail(tx) => {
+                        let _ = tx.send(Err(e));
+                    }
                 }
                 return;
             }
@@ -71,11 +75,17 @@ impl<S: StorageBackend> EventLoop<S> {
                 direct::build_org_share_request(payload),
             )
         } else {
+            // Pull / Mail 同形：payload 即帧文本（调用方已选好 kind）
             let text = match payload {
                 Value::String(s) => s,
                 _ => String::new(),
             };
-            (OrgAttemptKind::Pull, text)
+            let kind = if is_mail {
+                OrgAttemptKind::Mail
+            } else {
+                OrgAttemptKind::Pull
+            };
+            (kind, text)
         };
         let mut attempt = OrgAttempt {
             kind,
@@ -95,11 +105,18 @@ impl<S: StorageBackend> EventLoop<S> {
             .and_then(|s| s.parse::<PeerId>().ok())
             .filter(|p| self.swarm.is_connected(p));
         if let Some(peer) = connected_peer {
-            let request_id = self
-                .swarm
-                .behaviour_mut()
-                .org_share_rr
-                .send_request(&peer, attempt.request_json.clone());
+            let request_id = match attempt.kind {
+                OrgAttemptKind::Mail => self
+                    .swarm
+                    .behaviour_mut()
+                    .org_mail_rr
+                    .send_request(&peer, attempt.request_json.clone()),
+                _ => self
+                    .swarm
+                    .behaviour_mut()
+                    .org_share_rr
+                    .send_request(&peer, attempt.request_json.clone()),
+            };
             attempt.in_flight = Some(request_id);
             attempt.current_peer = Some(peer);
             self.pending_org_attempts.push(attempt);
@@ -126,6 +143,11 @@ impl<S: StorageBackend> EventLoop<S> {
                     .swarm
                     .behaviour_mut()
                     .dm_rr
+                    .send_request(&peer, attempt.request_json.clone()),
+                OrgAttemptKind::Mail => self
+                    .swarm
+                    .behaviour_mut()
+                    .org_mail_rr
                     .send_request(&peer, attempt.request_json.clone()),
                 _ => self
                     .swarm
@@ -374,6 +396,10 @@ impl<S: StorageBackend> EventLoop<S> {
                         matches!(serde_json::from_str::<Value>(&response), Ok(v) if v.is_object())
                     }
                     OrgAttemptKind::Dm => direct::parse_dm_response(&response).is_some(),
+                    // Mail：应答须为可解析 JSON 对象（deliver {ok}/fetch {ok,envelopes}）
+                    OrgAttemptKind::Mail => {
+                        matches!(serde_json::from_str::<Value>(&response), Ok(v) if v.is_object())
+                    }
                 };
                 if delivered {
                     match (&attempt.kind, attempt.tx) {
@@ -388,6 +414,10 @@ impl<S: StorageBackend> EventLoop<S> {
                             let value = direct::parse_dm_response(&response);
                             let _ = tx.send(Ok(value));
                         }
+                        (OrgAttemptKind::Mail, OrgTx::Mail(tx)) => {
+                            let value = serde_json::from_str::<Value>(&response).ok();
+                            let _ = tx.send(Ok(value));
+                        }
                         // 类别与通道不匹配属内部错误，按耗尽处理
                         (kind, tx) => {
                             let _ = kind;
@@ -399,6 +429,9 @@ impl<S: StorageBackend> EventLoop<S> {
                                     let _ = tx.send(Ok(None));
                                 }
                                 OrgTx::Dm(tx) => {
+                                    let _ = tx.send(Ok(None));
+                                }
+                                OrgTx::Mail(tx) => {
                                     let _ = tx.send(Ok(None));
                                 }
                             }
@@ -423,6 +456,68 @@ impl<S: StorageBackend> EventLoop<S> {
         self.emit(P2pEvent::Warning(format!(
             "org/dm response for unknown request id {request_id:?} (from_dm={from_dm})"
         )));
+    }
+
+    /// org-mail 应答解析（第三协议：`org_mail_rr` 的 OutboundRequestId 独立
+    /// 递增，不与 dm/org_share 共享——专用解析避免跨协议误配）。
+    pub(super) fn resolve_mail_response(
+        &mut self,
+        request_id: request_response::OutboundRequestId,
+        response: Option<String>,
+    ) {
+        let mut i = 0;
+        while i < self.pending_org_attempts.len() {
+            let a = &self.pending_org_attempts[i];
+            if matches!(a.kind, OrgAttemptKind::Mail) && a.in_flight == Some(request_id) {
+                let mut attempt = self.pending_org_attempts.remove(i);
+                attempt.in_flight = None;
+                match response {
+                    Some(text)
+                        if matches!(serde_json::from_str::<Value>(&text), Ok(v) if v.is_object()) =>
+                    {
+                        if let OrgTx::Mail(tx) = attempt.tx {
+                            let _ = tx.send(Ok(serde_json::from_str::<Value>(&text).ok()));
+                        }
+                    }
+                    // 未送达/不可解析：开下一批地址
+                    _ => {
+                        attempt.batch.clear();
+                        attempt.waiting_base = None;
+                        self.dial_next_org_target(&mut attempt);
+                        if attempt.has_dial_activity() {
+                            self.pending_org_attempts.push(attempt);
+                        } else {
+                            attempt.finish_exhausted();
+                        }
+                    }
+                }
+                return;
+            }
+            i += 1;
+        }
+    }
+
+    /// org-mail 出站失败（协议读超时/连接失败）——与 resolve_org_failure
+    /// 同推进语义，按 Mail 类别过滤。
+    pub(super) fn resolve_mail_failure(&mut self, request_id: request_response::OutboundRequestId) {
+        let mut i = 0;
+        while i < self.pending_org_attempts.len() {
+            let a = &self.pending_org_attempts[i];
+            if matches!(a.kind, OrgAttemptKind::Mail) && a.in_flight == Some(request_id) {
+                let mut attempt = self.pending_org_attempts.remove(i);
+                attempt.in_flight = None;
+                attempt.batch.clear();
+                attempt.waiting_base = None;
+                self.dial_next_org_target(&mut attempt);
+                if attempt.has_dial_activity() {
+                    self.pending_org_attempts.push(attempt);
+                } else {
+                    attempt.finish_exhausted();
+                }
+                return;
+            }
+            i += 1;
+        }
     }
 
     pub(super) fn resolve_org_failure(

@@ -96,6 +96,17 @@ pub trait P2pHost: Send {
         Err("dm not supported".into())
     }
 
+    /// org-mail 直连接收（`/spark/org-mail/1.0.0`，阶段四E p2p-org-mail §21）：
+    /// payload 为 `{op: deliver|fetch, ...}` 请求 JSON；默认实现拒绝
+    /// （非网关/轻量宿主不当邮箱——wrong-org）。
+    fn handle_org_mail(
+        &mut self,
+        _payload: &Value,
+        _remote_peer_id: &str,
+    ) -> std::result::Result<Value, String> {
+        Ok(serde_json::json!({ "ok": false, "reason": "wrong-org" }))
+    }
+
     /// 重 IO dm 入站处理器：返回 `Some` 时事件循环把 dm 请求 spawn 到阻塞
     /// 线程池调用该句柄（完成后再回到事件循环 send_response），事件循环
     /// 线程不再执行存储 IO；返回 `None` 退化为事件循环内同步 `handle_dm`。

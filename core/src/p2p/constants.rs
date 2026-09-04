@@ -16,6 +16,9 @@ pub const DIRECT_ORG_RECOVERY_PROTOCOL: &str = "/spark/org-recovery/1.0.0";
 /// dm（direct message：1:1 聊天消息与好友请求投递）直连协议名。
 pub const DIRECT_DM_PROTOCOL: &str = "/spark/dm/1.0.0";
 
+/// org-mail（跨组织网关邮箱）直连协议名（阶段四E，p2p-org-mail §21）。
+pub const DIRECT_ORG_MAIL_PROTOCOL: &str = "/spark/org-mail/1.0.0";
+
 /// 本地持久化 libp2p 私钥的存储键（值 = protobuf 序列化的 base64）。
 pub const P2P_IDENTITY_PRIVATE_KEY: &str = "p2p:identity:privateKey";
 
@@ -131,6 +134,10 @@ pub const ORG_RECOVERY_READ_TIMEOUT_MS: u64 = 3_000;
 
 /// 直连协议读超时：org-share / org-pull（4000ms）。
 pub const ORG_SHARE_READ_TIMEOUT_MS: u64 = 4_000;
+
+/// 直连协议读超时：org-mail（阶段四E，同 org-share 量级——投递/拉取均为
+/// 网关侧轻量存储读写）。
+pub const ORG_MAIL_READ_TIMEOUT_MS: u64 = 4_000;
 
 /// 直连协议读超时：dm（10000ms，对齐 dm 单地址尝试量级；命令侧外层超时 15s）。
 pub const DM_READ_TIMEOUT_MS: u64 = 10_000;

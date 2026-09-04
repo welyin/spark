@@ -415,6 +415,34 @@ impl P2pHost for KernelHost {
             .handle_dm(payload, remote_peer_id, &HashSet::new())
     }
 
+    /// org-mail 直连接收（阶段四E）：deliver/fetch 两 op 的网关侧处理——
+    /// 轻量同步存储 IO（对齐 org-share 入站口径）。本机 peerId 取节点共享格。
+    fn handle_org_mail(
+        &mut self,
+        payload: &Value,
+        remote_peer_id: &str,
+    ) -> std::result::Result<Value, String> {
+        let my_root = self
+            .current_root_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let my_peer = self
+            .node_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|node| node.peer_id().to_string())
+            .unwrap_or_default();
+        crate::kernel::org_mail_ops::handle_org_mail_inbound(
+            &mut self.storage,
+            my_root.as_deref(),
+            &my_peer,
+            payload,
+            remote_peer_id,
+        )
+    }
+
     /// dm 入站重 IO（验签/落库）交给阻塞线程池执行的异步处理器。
     fn dm_handler(&self) -> Option<Arc<dyn DmHandler>> {
         Some(Arc::new(self.dm_handler_impl()))

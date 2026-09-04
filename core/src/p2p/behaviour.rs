@@ -19,10 +19,10 @@ use libp2p::{
 };
 
 use super::constants::{
-    DHT_RECORD_TTL_SECS, DIRECT_DM_PROTOCOL, DIRECT_ORG_RECOVERY_PROTOCOL,
+    DHT_RECORD_TTL_SECS, DIRECT_DM_PROTOCOL, DIRECT_ORG_MAIL_PROTOCOL, DIRECT_ORG_RECOVERY_PROTOCOL,
     DIRECT_ORG_SHARE_PROTOCOL, DIRECT_PEER_EXCHANGE_PROTOCOL, DIRECT_VERSION_PROTOCOL,
     DM_READ_TIMEOUT_MS, KAD_PROTOCOL_NAME, NODE_CHALLENGE_PROTOCOL, NODE_CHALLENGE_READ_TIMEOUT_MS,
-    ORG_RECOVERY_READ_TIMEOUT_MS, ORG_SHARE_READ_TIMEOUT_MS,
+    ORG_MAIL_READ_TIMEOUT_MS, ORG_RECOVERY_READ_TIMEOUT_MS, ORG_SHARE_READ_TIMEOUT_MS,
     PEER_EXCHANGE_READ_RESPONSE_TIMEOUT_MS, RELAY_DEFAULT_DATA_LIMIT_BYTES,
     RELAY_DEFAULT_DURATION_LIMIT_SECS, RELAY_MAX_RESERVATIONS, VERSION_PROTOCOL_READ_TIMEOUT_MS,
 };
@@ -259,6 +259,8 @@ pub struct SparkBehaviour {
     pub exchange_rr: request_response::Behaviour<JsonFrameCodec>,
     pub recovery_rr: request_response::Behaviour<JsonFrameCodec>,
     pub org_share_rr: request_response::Behaviour<JsonFrameCodec>,
+    /// org-mail（跨组织网关邮箱）直连（阶段四E，p2p-org-mail §21）。
+    pub org_mail_rr: request_response::Behaviour<JsonFrameCodec>,
     pub node_challenge_rr: request_response::Behaviour<JsonFrameCodec>,
     pub dm_rr: request_response::Behaviour<JsonFrameCodec>,
 }
@@ -400,6 +402,15 @@ pub fn build_behaviour(
         request_response::Config::default()
             .with_request_timeout(Duration::from_millis(NODE_CHALLENGE_READ_TIMEOUT_MS)),
     );
+    // 阶段四E：org-mail 直连协议（JsonFrameCodec 模式同族）
+    let org_mail_rr = request_response::Behaviour::new(
+        [(
+            StreamProtocol::new(DIRECT_ORG_MAIL_PROTOCOL),
+            request_response::ProtocolSupport::Full,
+        )],
+        request_response::Config::default()
+            .with_request_timeout(Duration::from_millis(ORG_MAIL_READ_TIMEOUT_MS)),
+    );
     let dm_rr = request_response::Behaviour::new(
         [(
             StreamProtocol::new(DIRECT_DM_PROTOCOL),
@@ -448,6 +459,7 @@ pub fn build_behaviour(
         exchange_rr,
         recovery_rr,
         org_share_rr,
+        org_mail_rr,
         node_challenge_rr,
         dm_rr,
     })

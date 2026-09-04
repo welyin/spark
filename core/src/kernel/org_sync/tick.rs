@@ -232,6 +232,30 @@ impl OrgSyncContext {
             self.maybe_send_orgsync_hello(&root_id, &connected, None),
         )
         .await;
+
+        // 阶段四E（设计 §2.6）：orgsync hello 节奏后拉一轮跨组织邮箱
+        //（复用既有 tick 触发点，不新增周期任务；未解锁/未启动时函数内
+        // 静默无操作）。
+        // 评审修正：spawn 分离而非内联 await——拉取是 组织×网关×端点×两轮
+        // 的出站网络链（每请求 15s 超时），内联会无界拖长 tick、把 PushOrg/
+        // SelfHelloNow 事件语义请求压在串行 worker 队列后（F6 纪律：事件
+        // 不合并，长链不入队尾）。
+        let seed = self
+            .seed_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some(seed) = seed {
+            let storage = self.storage.clone();
+            let node = std::sync::Arc::clone(&self.node);
+            let root_id = root_id.clone();
+            tokio::spawn(async move {
+                let _ = crate::kernel::org_mail_ops::org_mail_fetch_async(
+                    storage, node, seed, root_id,
+                )
+                .await;
+            });
+        }
     }
 
     /// tick 单阶段执行器（org-sync-stall-fix §3.2/§3.4）：包 `timeout`，超时

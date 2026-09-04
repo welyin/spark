@@ -75,6 +75,9 @@ pub(super) enum OrgAttemptKind {
     Pull,
     /// dm 直连投递（`/spark/dm/1.0.0`）：返回对方应用层应答 JSON。
     Dm,
+    /// org-mail 直连（`/spark/org-mail/1.0.0`，阶段四E）：返回应答 JSON
+    ///（deliver 回执 / fetch 信封列表）。
+    Mail,
 }
 
 /// org/dm 直连尝试的最终结果通道（按类别直接回传给调用方）。
@@ -82,6 +85,8 @@ pub(super) enum OrgTx {
     Share(oneshot::Sender<Result<bool>>),
     Pull(oneshot::Sender<Result<Option<Value>>>),
     Dm(oneshot::Sender<Result<Option<Value>>>),
+    /// org-mail（阶段四E）。
+    Mail(oneshot::Sender<Result<Option<Value>>>),
 }
 
 impl OrgTx {
@@ -92,6 +97,7 @@ impl OrgTx {
             OrgTx::Share(tx) => tx.is_closed(),
             OrgTx::Pull(tx) => tx.is_closed(),
             OrgTx::Dm(tx) => tx.is_closed(),
+            OrgTx::Mail(tx) => tx.is_closed(),
         }
     }
 }
@@ -132,6 +138,9 @@ impl OrgAttempt {
                 let _ = tx.send(Ok(None));
             }
             OrgTx::Dm(tx) => {
+                let _ = tx.send(Ok(None));
+            }
+            OrgTx::Mail(tx) => {
                 let _ = tx.send(Ok(None));
             }
         }
@@ -768,7 +777,7 @@ impl<S: StorageBackend> EventLoop<S> {
                 payload,
                 tx,
             } => {
-                self.begin_org_attempt(node_info, payload, OrgTx::Share(tx), true);
+                self.begin_org_attempt(node_info, payload, OrgTx::Share(tx), true, false);
             }
             Command::OrgPullRequest {
                 node_info,
@@ -780,6 +789,20 @@ impl<S: StorageBackend> EventLoop<S> {
                     Value::String(request_json),
                     OrgTx::Pull(tx),
                     false,
+                    false,
+                );
+            }
+            Command::OrgMailRequest {
+                node_info,
+                request_json,
+                tx,
+            } => {
+                self.begin_org_attempt(
+                    node_info,
+                    Value::String(request_json),
+                    OrgTx::Mail(tx),
+                    false,
+                    true,
                 );
             }
             Command::DmDirect {

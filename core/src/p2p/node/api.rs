@@ -133,6 +133,13 @@ pub(crate) enum Command {
         addr: Multiaddr,
         tx: oneshot::Sender<Result<()>>,
     },
+    /// org-mail 直连请求（阶段四E `/spark/org-mail/1.0.0`；deliver/fetch
+    /// 两 op 共用——帧文本由 kernel 构造，本层透明转发）。
+    OrgMailRequest {
+        node_info: PeerNodeInfo,
+        request_json: String,
+        tx: oneshot::Sender<Result<Option<Value>>>,
+    },
     Tick {
         tx: oneshot::Sender<KeepaliveStats>,
     },
@@ -275,6 +282,25 @@ impl P2pNode {
         tokio::time::timeout(Duration::from_secs(15), rx)
             .await
             .map_err(|_| P2pError::Timeout("org-pull timeout".to_string()))?
+            .map_err(|_| P2pError::NotStarted)?
+    }
+
+    /// org-mail 直连请求（阶段四E）：deliver/fetch 两 op 共用；帧文本由
+    /// kernel 构造（不验不解释），返回首个可解析应答 JSON。
+    pub async fn org_mail_request(
+        &self,
+        node_info: &PeerNodeInfo,
+        request_json: &str,
+    ) -> Result<Option<Value>> {
+        let (tx, rx) = oneshot::channel();
+        self.send_cmd(Command::OrgMailRequest {
+            node_info: node_info.clone(),
+            request_json: request_json.to_string(),
+            tx,
+        })?;
+        tokio::time::timeout(Duration::from_secs(15), rx)
+            .await
+            .map_err(|_| P2pError::Timeout("org-mail timeout".to_string()))?
             .map_err(|_| P2pError::NotStarted)?
     }
 

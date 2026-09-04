@@ -1,0 +1,94 @@
+{
+  "_comment": "阶段四E 跨组织网关邮箱 golden vectors（p2p-org-mail §21.8 六组）。生成器：core/examples/gen_org_mail_vectors.rs（勿手改）。",
+  "envelope": {
+    "desc": "§21.8-1 信封构造：固定两侧域身份种子/id/ts/ttl/nonce/明文 → 逐字节 ct+sig",
+    "input": {
+      "seedA": "oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoQ==",
+      "seedB": "srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysg==",
+      "orgA": "org_aaaaaaaaaaaaaaaa",
+      "orgB": "org_bbbbbbbbbbbbbbbb",
+      "orgKeyA": "ERERERERERERERERERERERERERERERERERERERERERE=",
+      "orgKeyB": "IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI=",
+      "gatewayBRoot": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "id": "0123456789abcdef01234567",
+      "ts": 1720000000000,
+      "ttl": 604800000,
+      "nonce": "ISEhISEhISEhISEh",
+      "plaintext": "{\"kind\":\"text\",\"text\":\"hello 跨组织\"}"
+    },
+    "expect": {
+      "id": "0123456789abcdef01234567",
+      "to": {
+        "orgAddress": "{\"orgAddress\":\"cms3qugcq4mrn2xcapyo7q6itb7wjzpdzwzhm6pg2h5jpaedk7tjl5i\",\"orgId\":\"org_bbbbbbbbbbbbbbbb\",\"orgPublicKey\":\"oJql9HpnWYAv+VX43C0qFKXJnSO+l/hkEn/5ODRVpPA=\",\"displayName\":\"组织B\",\"gateways\":[\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\"],\"seq\":1,\"publishedAt\":1720000000000,\"ttl\":3600000,\"signature\":\"SwiOYNv40Ro4kXEUS/kg5JYIG866YmKzUwFmCGDeXrGkdUj8EwcKIGMakG+6lhvmYZmn2CeSFtv4mDGUM6IEBg==\"}",
+        "domainId": "v03U8hr/Mstc4oN8a2orlJbhLQGBPdOCyZd/xBoYpLI="
+      },
+      "from": {
+        "domainId": "UOeTkX2rveIUMLSixD5S2QSz+KhUrM2m5UedkajdgVI=",
+        "orgAddress": "{\"orgAddress\":\"cc5gqlek2e2rhfy6rnliqgvlrplqfo4ao6lozkazgldtlkknnzw2uka\",\"orgId\":\"org_aaaaaaaaaaaaaaaa\",\"orgPublicKey\":\"0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc=\",\"displayName\":\"组织A\",\"gateways\":[],\"seq\":1,\"publishedAt\":1720000000000,\"ttl\":3600000,\"signature\":\"7nj9nOdK6g8N9V038vf3Go6l4GWD/lGpB1IGxbvMmgaknGbIcMptjQayhpbbrfbL7Z1Rvsy34vvOl21mdenmCQ==\"}"
+      },
+      "ts": 1720000000000,
+      "ttl": 604800000,
+      "nonce": "ISEhISEhISEhISEh",
+      "ct": "hKimCsFANDLw0Jf2EWWwqtgZ0y/02vq5mIhw+nRts1/B7VurVPX+nPekVpXrfOvD0haLtLsNUAo=",
+      "sig": "nDxBfJG83uiJc92j9DpBy9uqz3W/EYI8OTetXWWmMu4HAp46sqplfwQgOFqikqgwkmR3fofb0YEMDO9HHQ8fDg=="
+    }
+  },
+  "box": {
+    "desc": "§21.8-2 box 往返 + 低阶点（全零共享）拒绝",
+    "input": {
+      "seedA": "oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoQ==",
+      "seedB": "srKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysrKysg==",
+      "nonce": "ISEhISEhISEhISEh",
+      "plaintext": "{\"kind\":\"text\",\"text\":\"hello 跨组织\"}"
+    },
+    "expect": {
+      "nonce": "ISEhISEhISEhISEh",
+      "ct": "hKimCsFANDLw0Jf2EWWwqtgZ0y/02vq5mIhw+nRts1/B7VurVPX+nPekVpXrfOvD0haLtLsNUAo=",
+      "lowOrderRejectDomainId": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    }
+  },
+  "aadRelocate": {
+    "desc": "§21.8-3 AAD 搬迁拒收：ct 搬到不同 id 的信封解密必败",
+    "input": {
+      "tamperedId": "1123456789abcdef01234567"
+    },
+    "expect": {
+      "unboxOk": false
+    }
+  },
+  "signPayload": {
+    "desc": "§21.8-4 签名载荷两形态（含/不含 from.orgAddress）逐字节 + sig 固定值",
+    "expect": {
+      "withOrgAddress": "{\"ct\":\"hKimCsFANDLw0Jf2EWWwqtgZ0y/02vq5mIhw+nRts1/B7VurVPX+nPekVpXrfOvD0haLtLsNUAo=\",\"from\":{\"domainId\":\"UOeTkX2rveIUMLSixD5S2QSz+KhUrM2m5UedkajdgVI=\",\"orgAddress\":\"{\\\"orgAddress\\\":\\\"cc5gqlek2e2rhfy6rnliqgvlrplqfo4ao6lozkazgldtlkknnzw2uka\\\",\\\"orgId\\\":\\\"org_aaaaaaaaaaaaaaaa\\\",\\\"orgPublicKey\\\":\\\"0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc=\\\",\\\"displayName\\\":\\\"组织A\\\",\\\"gateways\\\":[],\\\"seq\\\":1,\\\"publishedAt\\\":1720000000000,\\\"ttl\\\":3600000,\\\"signature\\\":\\\"7nj9nOdK6g8N9V038vf3Go6l4GWD/lGpB1IGxbvMmgaknGbIcMptjQayhpbbrfbL7Z1Rvsy34vvOl21mdenmCQ==\\\"}\"},\"id\":\"0123456789abcdef01234567\",\"nonce\":\"ISEhISEhISEhISEh\",\"to\":{\"domainId\":\"v03U8hr/Mstc4oN8a2orlJbhLQGBPdOCyZd/xBoYpLI=\",\"orgAddress\":\"{\\\"orgAddress\\\":\\\"cms3qugcq4mrn2xcapyo7q6itb7wjzpdzwzhm6pg2h5jpaedk7tjl5i\\\",\\\"orgId\\\":\\\"org_bbbbbbbbbbbbbbbb\\\",\\\"orgPublicKey\\\":\\\"oJql9HpnWYAv+VX43C0qFKXJnSO+l/hkEn/5ODRVpPA=\\\",\\\"displayName\\\":\\\"组织B\\\",\\\"gateways\\\":[\\\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\\\"],\\\"seq\\\":1,\\\"publishedAt\\\":1720000000000,\\\"ttl\\\":3600000,\\\"signature\\\":\\\"SwiOYNv40Ro4kXEUS/kg5JYIG866YmKzUwFmCGDeXrGkdUj8EwcKIGMakG+6lhvmYZmn2CeSFtv4mDGUM6IEBg==\\\"}\"},\"ts\":1720000000000,\"ttl\":604800000}",
+      "withoutOrgAddress": "{\"ct\":\"hKimCsFANDLw0Jf2EWWwqtgZ0y/02vq5mIhw+nRts1/B7VurVPX+nPekVpXrfOvD0haLtLsNUAo=\",\"from\":{\"domainId\":\"UOeTkX2rveIUMLSixD5S2QSz+KhUrM2m5UedkajdgVI=\"},\"id\":\"0123456789abcdef01234567\",\"nonce\":\"ISEhISEhISEhISEh\",\"to\":{\"domainId\":\"v03U8hr/Mstc4oN8a2orlJbhLQGBPdOCyZd/xBoYpLI=\",\"orgAddress\":\"{\\\"orgAddress\\\":\\\"cms3qugcq4mrn2xcapyo7q6itb7wjzpdzwzhm6pg2h5jpaedk7tjl5i\\\",\\\"orgId\\\":\\\"org_bbbbbbbbbbbbbbbb\\\",\\\"orgPublicKey\\\":\\\"oJql9HpnWYAv+VX43C0qFKXJnSO+l/hkEn/5ODRVpPA=\\\",\\\"displayName\\\":\\\"组织B\\\",\\\"gateways\\\":[\\\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\\\"],\\\"seq\\\":1,\\\"publishedAt\\\":1720000000000,\\\"ttl\\\":3600000,\\\"signature\\\":\\\"SwiOYNv40Ro4kXEUS/kg5JYIG866YmKzUwFmCGDeXrGkdUj8EwcKIGMakG+6lhvmYZmn2CeSFtv4mDGUM6IEBg==\\\"}\"},\"ts\":1720000000000,\"ttl\":604800000}",
+      "sigWith": "nDxBfJG83uiJc92j9DpBy9uqz3W/EYI8OTetXWWmMu4HAp46sqplfwQgOFqikqgwkmR3fofb0YEMDO9HHQ8fDg==",
+      "sigWithout": "0fG1lciAsXTtxNo5eLGTRZ36nRtjdOMgt/K3zRCbUtpTTjwe58OkTm+GIWh6b/aM+BDu0d5FRVJrnTs0h73OCg=="
+    }
+  },
+  "challenge": {
+    "desc": "§21.8-5 挑战载荷串 + challenge sig 固定值；错 peer/ts/重放必败",
+    "input": {
+      "nonce": "QkJCQkJCQkJCQkJCQkJCQg==",
+      "gatewayPeerId": "12D3KooWGatewayPeerIdFixedForVectors000000000000",
+      "challengeTs": 1720000060000
+    },
+    "expect": {
+      "payload": "orgmail-fetch\u0000QkJCQkJCQkJCQkJCQkJCQg==\u000012D3KooWGatewayPeerIdFixedForVectors000000000000\u00001720000060000",
+      "challenge": "T7NUk9+ccO1hle4gA8t2J86RLhY9y1OREeukniNFN/SUVJQjBqCeL5KAjiaxwcxwBR5WrA3stw09gnVlkAq2Aw=="
+    }
+  },
+  "quotaTtl": {
+    "desc": "§21.8-6 配额/TTL 判定边界表",
+    "expect": {
+      "ttlClamp": {
+        "input": 2592000001,
+        "output": 2592000000
+      },
+      "ttlDefault": 604800000,
+      "orgCap": 1000,
+      "orgCapRejectAt": 1000,
+      "recipientCap": 100,
+      "recipientCapRejectAt": 100
+    }
+  }
+}

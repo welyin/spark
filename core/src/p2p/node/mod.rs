@@ -22,6 +22,7 @@ mod dm;
 mod event_loop;
 mod gossip;
 mod org_direct;
+mod org_mail;
 mod rediscovery;
 mod relay_manager;
 mod rr_protocols;

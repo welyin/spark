@@ -61,6 +61,9 @@ pub struct HostState {
     /// 运行期可切换的「视为已撤销」peer：建连后再标记可触及 dm/challenge
     /// 入站黑名单分支（ConnectionEstablished 守卫断开前的纵深防御）。
     pub revoked_peer: Option<String>,
+    /// org-mail 宿主回调用的本机 libp2p peerId（节点启动后由测试回填——
+    /// 挑战签名载荷绑网关 peerId，宿主验签要与节点真实 peerId 一致）。
+    pub my_peer_id: Option<String>,
 }
 
 pub struct TestHost {
@@ -199,6 +202,29 @@ impl P2pHost for TestHost {
             .dms
             .push((payload, remote_peer_id.to_string()));
         Ok(serde_json::json!({"ok": true}))
+    }
+
+    /// org-mail 直连接收（阶段四E）：委托 kernel 层真实入站分发（deliver/
+    /// fetch 两 op），本机 peerId 取 HostState 回填值（挑战验签绑定）。
+    fn handle_org_mail(
+        &mut self,
+        payload: &Value,
+        remote_peer_id: &str,
+    ) -> Result<Value, String> {
+        let my_peer_id = self
+            .state
+            .lock()
+            .unwrap()
+            .my_peer_id
+            .clone()
+            .unwrap_or_default();
+        spark_core::kernel::org_mail_ops::handle_org_mail_inbound(
+            &mut self.storage,
+            self.root_id.as_deref(),
+            &my_peer_id,
+            payload,
+            remote_peer_id,
+        )
     }
 
     /// 组织私有 DHT 成员提示回填（§15）：记录回调 + 按未验证口径入邻居池

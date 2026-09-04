@@ -838,6 +838,31 @@ impl<S: StorageBackend> EventLoop<S> {
             }) => {
                 self.resolve_org_failure(request_id, true);
             }
+            // 阶段四E：org-mail 直连（投递/拉取两 op）。入站 → 宿主网关处理
+            //（邮箱代收/挑战拉取在 kernel 层）；出站应答按 Mail 类别解析
+            //（org_mail_rr 的 request id 独立递增，专用解析避免跨协议误配）。
+            SparkBehaviourEvent::OrgMailRr(request_response::Event::Message {
+                peer, message, ..
+            }) => match message {
+                request_response::Message::Request {
+                    request, channel, ..
+                } => {
+                    self.handle_org_mail_inbound(peer, request, channel);
+                }
+                request_response::Message::Response {
+                    request_id,
+                    response,
+                    ..
+                } => {
+                    self.resolve_mail_response(request_id, Some(response));
+                }
+            },
+            SparkBehaviourEvent::OrgMailRr(request_response::Event::OutboundFailure {
+                request_id,
+                ..
+            }) => {
+                self.resolve_mail_failure(request_id);
+            }
             SparkBehaviourEvent::RelayServer(libp2p::relay::Event::ReservationReqAccepted {
                 src_peer_id,
                 ..
