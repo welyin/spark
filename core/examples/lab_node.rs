@@ -498,6 +498,7 @@ async fn main() {
         plugin_announce_relay_tenure_ms: None,
         dht_republish_ticks: None,
         enable_relay_server: true,
+        enable_dcutr: true,
         now_fn: Arc::new(spark_core::p2p::node::system_now_ms),
     };
 

@@ -55,6 +55,8 @@ libp2p = { version = "0.56.0", features = [
   "identify",
   "ping",
   "relay",
+  # dcutr：电路升直连打洞（dcutr-hole-punch 设计 §2.1；纯 Rust 无平台依赖，移动端同编译）
+  "dcutr",
   "autonat",
   "upnp",
   "request-response",

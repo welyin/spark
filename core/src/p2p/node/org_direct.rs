@@ -173,8 +173,9 @@ impl<S: StorageBackend> EventLoop<S> {
                 Ok(ma) => {
                     // allocate_new_port：复用监听端口 [::]:15002 会与多 listener
                     // 冲突 EADDRINUSE，用 OS 临时端口恢复 PC 主动拨号。
-                    // 止血：dcutr 未接入（§7.1 阶段 B），relay 不依赖源端口；
-                    // 待 dcutr 接入时重新评估端口复用（wiki §4.6.3/§7.1）。
+                    // 止血维持（dcutr-hole-punch §2.4）：dcutr 已接入（尽力升级层），
+                    // 源端口复用维持 OS 临时端口；端口复用增益待真机成功率
+                    // 实测后再评估（真机联调观察项）。
                     let opts = DialOpts::unknown_peer_id()
                         .address(ma)
                         .allocate_new_port()

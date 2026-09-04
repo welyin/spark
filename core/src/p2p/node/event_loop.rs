@@ -475,8 +475,9 @@ impl<S: StorageBackend> EventLoop<S> {
             if !cached_addrs.is_empty() {
                 // allocate_new_port：拨号源端口用 OS 临时端口，避免复用监听端口
                 // [::]:15002 与多 listener 冲突 EADDRINUSE（PC 主动拨号瘫痪）。
-                // 止血：dcutr 未接入（§7.1 阶段 B），relay 不依赖源端口；
-                // 待 dcutr 接入时重新评估端口复用（wiki §4.6.3/§7.1）。
+                // 止血维持（dcutr-hole-punch §2.4）：dcutr 已接入（尽力升级层），
+                // 源端口复用维持 OS 临时端口；端口复用增益待真机成功率实测后
+                // 再评估（真机联调观察项）。
                 let opts = libp2p::swarm::dial_opts::DialOpts::peer_id(peer)
                     .addresses(cached_addrs)
                     .allocate_new_port()
@@ -549,9 +550,9 @@ impl<S: StorageBackend> EventLoop<S> {
                 continue;
             }
             // allocate_new_port：复用监听端口 [::]:15002 会与多 listener 冲突
-            // EADDRINUSE，用 OS 临时端口恢复 PC 主动拨号。止血：dcutr 未接入
-            // （§7.1 阶段 B），relay 不依赖源端口；待 dcutr 接入时重新评估端口
-            // 复用（wiki §4.6.3/§7.1）。
+            // EADDRINUSE，用 OS 临时端口恢复 PC 主动拨号。止血维持（dcutr-hole-punch §2.4）：dcutr 已接入
+            //（尽力升级层），源端口复用维持 OS 临时端口；端口复用增益待真机
+            // 成功率实测后再评估（真机联调观察项）。
             let opts = libp2p::swarm::dial_opts::DialOpts::peer_id(peer)
                 .addresses(addrs)
                 .allocate_new_port()
@@ -863,6 +864,12 @@ impl<S: StorageBackend> EventLoop<S> {
                 log::info!("[p2p] fault injection: org-pull blackhole = {on}");
                 let _ = tx.send(Ok(()));
             }
+            Command::TestAddExternalAddress { addr, tx } => {
+                // 测试专用：登记 external address（loopback 下 relay 预约
+                // 响应的地址来源，真机路径不变）
+                self.swarm.add_external_address(addr);
+                let _ = tx.send(Ok(()));
+            }
             Command::Shutdown => return true,
         }
         false
@@ -976,8 +983,9 @@ impl<S: StorageBackend> EventLoop<S> {
                 Ok(ma) => {
                     // allocate_new_port：复用监听端口 [::]:15002 会与多 listener
                     // 冲突 EADDRINUSE，用 OS 临时端口恢复 PC 主动拨号。
-                    // 止血：dcutr 未接入（§7.1 阶段 B），relay 不依赖源端口；
-                    // 待 dcutr 接入时重新评估端口复用（wiki §4.6.3/§7.1）。
+                    // 止血维持（dcutr-hole-punch §2.4）：dcutr 已接入（尽力升级层），
+                    // 源端口复用维持 OS 临时端口；端口复用增益待真机成功率
+                    // 实测后再评估（真机联调观察项）。
                     let opts = DialOpts::unknown_peer_id()
                         .address(ma)
                         .allocate_new_port()

@@ -248,6 +248,10 @@ pub struct SparkBehaviour {
     pub ping: ping::Behaviour,
     pub relay_server: Toggle<relay::Behaviour>,
     pub relay_client: relay::client::Behaviour,
+    // dcutr 打洞（电路升直连，dcutr-hole-punch §2.1）：leaf/桌面同挂——
+    // 客户端行为，与是否提供 relay server 无关；依赖 identify + relay client
+    //（均已挂载）。Toggle 挂载：测试/运维可关（旧端模拟、故障排查）。
+    pub dcutr: Toggle<libp2p::dcutr::Behaviour>,
     pub autonat: autonat::Behaviour,
     pub upnp: Toggle<upnp::tokio::Behaviour>,
     pub kad: Toggle<kad::Behaviour<kad::store::MemoryStore>>,
@@ -267,6 +271,9 @@ pub struct BehaviourOptions {
     /// 是否挂载 relay server（接受他人预约）。桌面默认 true；移动端 false
     /// （peer-rediscovery §7.2：移动端只作 relay client）。
     pub enable_relay_server: bool,
+    /// dcutr 打洞（电路升直连）挂载开关：默认 true；关 = 旧端形态
+    /// （identify 协议清单不含 /libp2p/dcutr，对端不发起升级）。
+    pub enable_dcutr: bool,
     pub dht_mode: DhtMode,
     /// 叶子模式（mobile-leaf-mode §3）：gossipsub 业务 mesh 订阅关闭（只消费
     /// 不服务，不为他人中继）。
@@ -279,6 +286,7 @@ impl Default for BehaviourOptions {
             enable_mdns: true,
             enable_upnp: true,
             enable_relay_server: true,
+            enable_dcutr: true,
             dht_mode: DhtMode::default(),
             leaf_mode: false,
         }
@@ -428,6 +436,11 @@ pub fn build_behaviour(
         ping: ping::Behaviour::new(ping::Config::new()),
         relay_server,
         relay_client,
+        dcutr: Toggle::from(
+            options
+                .enable_dcutr
+                .then(|| libp2p::dcutr::Behaviour::new(local_peer_id)),
+        ),
         autonat: autonat::Behaviour::new(local_peer_id, autonat::Config::default()),
         upnp: upnp_behaviour,
         kad: kad_behaviour,

@@ -104,6 +104,10 @@ pub struct P2pConfig {
     /// 是否启用 relay server（接受他人预约）。桌面默认 true；移动端强制 false
     /// （节省流量与电量，移动端只作 relay client，peer-rediscovery §7.2）。
     pub enable_relay_server: bool,
+    /// dcutr 打洞挂载开关（dcutr-hole-punch §2.1）：默认 true；关 = 旧端
+    /// 形态（测试/运维关停口——identify 协议清单不含 /libp2p/dcutr，对端
+    /// 不发起升级，电路中继保底）。
+    pub enable_dcutr: bool,
     /// 叶子模式（mobile-leaf-mode §3）：只消费不服务——kad 仅一次性查询客户端，
     /// gossipsub announce 发布 / peer-exchange / overlay 邻居池维护全关；
     /// mDNS、relay client、监听、直连协议全部保留。桌面默认 false，移动端注入 true。
@@ -129,6 +133,7 @@ impl Default for P2pConfig {
             plugin_announce_relay_tenure_ms: None,
             dht_republish_ticks: None,
             enable_relay_server: true,
+            enable_dcutr: true,
             leaf_mode: false,
             now_fn: Arc::new(system_now_ms),
         }
@@ -423,6 +428,7 @@ impl P2pNode {
             enable_mdns: config.enable_mdns,
             enable_upnp: config.enable_upnp,
             enable_relay_server: config.enable_relay_server,
+            enable_dcutr: config.enable_dcutr,
             // leaf 模式 §3：kad 仅一次性查询客户端（只发查询、不应答、不入他人
             // 路由表）；显式 Off（隐私开关）优先，不被 leaf 覆盖
             dht_mode: match (config.leaf_mode, config.dht_mode) {

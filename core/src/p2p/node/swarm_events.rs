@@ -865,6 +865,30 @@ impl<S: StorageBackend> EventLoop<S> {
                 // 电路建立（出站经 relay 拨出 / 入站对端经我们预约连入）均不改变对外
                 // 可达的电路地址集合；对外发布只以 ReservationReqAccepted 为准（§4.6）。
             }
+            // dcutr 打洞（电路升直连，dcutr-hole-punch §2.1）：尽力升级——
+            // 成功：直连连接本身的 ConnectionEstablished 走既有 dialer 记账
+            //（mark_addr_success + 黑名单解锁 + 覆盖网入池，拨号排序提升同源），
+            // 此分支只记日志；relay 预约照常维护（升直连后 relay 仍是回退保底，
+            // relay_manager 零改动）。
+            // 失败：仅 debug 日志，电路中继保底——不重试风暴（dcutr 每次电路
+            // 建立自动重试，无需应用层补逻辑）。
+            SparkBehaviourEvent::Dcutr(event) => match event.result {
+                Ok(connection_id) => {
+                    // eprintln 与本文件既有 p2p 连接诊断同风格（测试可视证据；
+                    // log 门面在测试进程无 logger 不可见）
+                    eprintln!(
+                        "[p2p] dcutr hole-punch SUCCEEDED: peer={} conn={:?}（直连记账走 ConnectionEstablished 既有路径）",
+                        event.remote_peer_id.to_base58(),
+                        connection_id
+                    );
+                }
+                Err(error) => {
+                    log::debug!(
+                        "[p2p] dcutr hole-punch failed（电路中继保底不变）: peer={} err={error}",
+                        event.remote_peer_id.to_base58()
+                    );
+                }
+            },
             _ => {}
         }
     }

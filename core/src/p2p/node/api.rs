@@ -11,6 +11,7 @@ use tokio::sync::oneshot;
 use crate::p2p::constants::DM_READ_TIMEOUT_MS;
 use crate::p2p::peer_targets::PeerNodeInfo;
 use crate::p2p::{P2pError, Result};
+use libp2p::Multiaddr;
 
 use super::{KeepaliveStats, LocalP2PNodeInfo, P2pNode};
 
@@ -121,6 +122,15 @@ pub(crate) enum Command {
     /// 收到 org-pull 请求扣住应答通道不响应（复现对端半连接长超时）。
     SetOrgPullBlackhole {
         on: bool,
+        tx: oneshot::Sender<Result<()>>,
+    },
+    /// 测试专用（dcutr loopback 冒烟）：登记一个 external address——loopback
+    /// 下 AutoNAT 不探测回环地址（永不 Public），relay server 的预约响应只
+    /// 携带 swarm external addresses，空集时客户端 NoAddressesInReservation
+    /// 永远预约不成（relay_manager.rs 实测注释）。真机路径不变（AutoNAT
+    /// Public / UPnP 映射登记）。
+    TestAddExternalAddress {
+        addr: Multiaddr,
         tx: oneshot::Sender<Result<()>>,
     },
     Tick {
@@ -416,6 +426,20 @@ impl P2pNode {
         tokio::time::timeout(LOCAL_CMD_TIMEOUT, rx)
             .await
             .map_err(|_| P2pError::Timeout("fault config timeout".to_string()))?
+            .map_err(|_| P2pError::NotStarted)?
+    }
+
+    /// 测试专用（dcutr loopback 冒烟）：登记 external address（语义见
+    /// Command::TestAddExternalAddress 注释）。
+    pub async fn __test_add_external_address(&self, addr: &str) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        let ma = addr
+            .parse()
+            .map_err(|e| P2pError::Swarm(format!("invalid addr {addr}: {e}")))?;
+        self.send_cmd(Command::TestAddExternalAddress { addr: ma, tx })?;
+        tokio::time::timeout(LOCAL_CMD_TIMEOUT, rx)
+            .await
+            .map_err(|_| P2pError::Timeout("test add external addr timeout".to_string()))?
             .map_err(|_| P2pError::NotStarted)?
     }
 

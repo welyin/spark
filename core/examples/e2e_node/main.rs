@@ -111,6 +111,7 @@ fn test_p2p_config(preferred_port: u16) -> P2pConfig {
         plugin_announce_relay_tenure_ms: None,
         dht_republish_ticks: None,
         enable_relay_server: true,
+        enable_dcutr: true,
         now_fn: Arc::new(system_now_ms),
     }
 }

@@ -34,6 +34,7 @@ pub fn test_p2p_config() -> P2pConfig {
         plugin_announce_relay_tenure_ms: None,
         dht_republish_ticks: None,
         enable_relay_server: false,
+        enable_dcutr: true,
         now_fn: Arc::new(system_now_ms),
     }
 }
