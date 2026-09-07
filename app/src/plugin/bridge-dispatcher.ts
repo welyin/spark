@@ -27,7 +27,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { ElMessageBox } from 'element-plus';
-import type { PluginSpaceContext } from '../../../packages/plugin-sdk/src';
+import type { PluginCredentialsAPI, PluginSpaceContext } from '../../../packages/plugin-sdk/src';
 import type { BridgeHostHandler } from '../../../packages/plugin-sdk/src/bridge/host';
 import { createPluginBackend } from './sdk-browser';
 import { listAppMessages, markAppMessagesRead, sendAppMessage } from './messages';
@@ -64,10 +64,6 @@ const CALL_PERMISSIONS: Record<string, string> = {
   'data.delete': 'storage:write',
   'data.dropVersion': 'storage:write',
   'data.saveBlob': 'storage:write',
-  // R2：encrypted 授权名单三方法归入 storage:write（owner 侧管控名单）
-  'data.grantAccess': 'storage:write',
-  'data.revokeAccess': 'storage:write',
-  'data.listAccess': 'storage:write',
   'runtime.listMineOrganizations': 'org:read',
   'runtime.syncOrganizationData': 'org:sync',
   'p2p.broadcast': 'network:broadcast',
@@ -91,7 +87,45 @@ const CALL_PERMISSIONS: Record<string, string> = {
   'contacts.listTags': 'contact:read',
   // 社交定向投递（social-feed §9.3 feed:deliver 高级 + 内核限流；onReceive/pull
   // 接收侧免权限——不在本表即放行）
-  'feed.deliver': 'feed:deliver'
+  'feed.deliver': 'feed:deliver',
+  // 内容面 blob（public-topics §七 sdk.content）：读/拉取/列表归 storage:read，
+  // 保存/根标记/GC 归 storage:write（与 data.readBlob/saveBlob 同权限口径）
+  'content.readBlob': 'storage:read',
+  'content.fetchBlob': 'storage:read',
+  'content.listBlobs': 'storage:read',
+  'content.saveBlob': 'storage:write',
+  'content.pinRoot': 'storage:write',
+  'content.unpinRoot': 'storage:write',
+  'content.gcSweep': 'storage:write',
+  // community-affairs §7.2：事务读/写（写含关注/取关/提交操作）、凭证只读、
+  // 策略读/写。读位 affairs:read / credentials:read / policy:read，写位
+  // affairs:write / policy:write；与内核 market/permissions.rs 逐字对齐。
+  'affairs.listFollowed': 'affairs:read',
+  'affairs.readLog': 'affairs:read',
+  'affairs.readRules': 'affairs:read',
+  'affairs.readResolution': 'affairs:read',
+  'affairs.ladderStatus': 'affairs:read',
+  'affairs.publicProfile': 'affairs:read',
+  'affairs.snapshotPayload': 'affairs:read',
+  'affairs.readExec': 'affairs:read',
+  'affairs.orgEffects': 'affairs:read',
+  'affairs.follow': 'affairs:write',
+  'affairs.unfollow': 'affairs:write',
+  'affairs.submitOp': 'affairs:write',
+  // 回执编排写 org:effectrcpt: 并逐条存证（幂等、LWW）——与提交操作同写位
+  'affairs.applyOrgEffects': 'affairs:write',
+  'credentials.listHeld': 'credentials:read',
+  'credentials.presentHolderProof': 'credentials:read',
+  'credentials.queryVerifiers': 'credentials:read',
+  'credentials.verify': 'credentials:read',
+  'credentials.queryRevocations': 'credentials:read',
+  'policy.read': 'policy:read',
+  'policy.submitDraft': 'policy:write',
+  // 发布合入（org:policydoc: 同步键域，管理员授权面）与草稿提交同写位
+  'policy.publish': 'policy:write'
+  // 注：affairs.create 是桥 client 侧组合（identity.sign + affairs.follow，
+  // 逐调用各自由本表强制）；affairs.onChange 走事件订阅通道（subscribe
+  // 不经 call 表，与 data.onChange 同口径，事件载荷仅 affairId+变更类别）
 };
 
 /**
@@ -238,11 +272,7 @@ export async function createPluginBridgeDispatcher(identity: PluginBridgeIdentit
       query: backend.data.query,
       dropVersion: backend.data.dropVersion,
       saveBlob: backend.data.saveBlob,
-      readBlob: backend.data.readBlob,
-      // O4 encrypted 授权名单（owner 侧；内核按 acl owner 验签，无额外权限项）
-      grantAccess: backend.data.grantAccess,
-      revokeAccess: backend.data.revokeAccess,
-      listAccess: backend.data.listAccess
+      readBlob: backend.data.readBlob
     },
     identity: {
       sign: backend.identity.sign,
@@ -336,6 +366,53 @@ export async function createPluginBridgeDispatcher(identity: PluginBridgeIdentit
         assertTopicOwned(input.topic, identity.pluginId);
         return backend.feed!.pull(input);
       }
+    },
+    // 内容面 blob（public-topics §七 sdk.content；CALL_PERMISSIONS 强制
+    // storage:read/storage:write；CID 形状与哈希校验在内核兜底）
+    content: {
+      saveBlob: (dataBase64: string) => backend.content!.saveBlob(dataBase64),
+      readBlob: (cid: string) => backend.content!.readBlob(cid),
+      fetchBlob: (cid: string) => backend.content!.fetchBlob(cid),
+      listBlobs: () => backend.content!.listBlobs(),
+      pinRoot: (cid: string, root: string) => backend.content!.pinRoot(cid, root),
+      unpinRoot: (cid: string, root: string) => backend.content!.unpinRoot(cid, root),
+      gcSweep: () => backend.content!.gcSweep()
+    },
+    // community-affairs §7.2 sdk.affairs：内核 affair 门面薄壳（权限经
+    // CALL_PERMISSIONS 强制 affairs:read/affairs:write；affairId 自报面由
+    // 内核门面以创世复算/形态校验兜底）
+    affairs: {
+      follow: (genesis: Record<string, unknown>) => backend.affairs!.follow(genesis),
+      unfollow: (affairId: string) => backend.affairs!.unfollow(affairId),
+      listFollowed: () => backend.affairs!.listFollowed(),
+      submitOp: (op: Record<string, unknown>) => backend.affairs!.submitOp(op),
+      readLog: (affairId: string) => backend.affairs!.readLog(affairId),
+      readRules: (affairId: string) => backend.affairs!.readRules(affairId),
+      readResolution: (affairId: string) => backend.affairs!.readResolution(affairId),
+      ladderStatus: (affairId: string) => backend.affairs!.ladderStatus(affairId),
+      publicProfile: (identity: string) => backend.affairs!.publicProfile(identity),
+      snapshotPayload: (affairId: string, asOf?: string) => backend.affairs!.snapshotPayload(affairId, asOf),
+      readExec: (affairId: string) => backend.affairs!.readExec(affairId),
+      orgEffects: (orgId: string, affairId: string) => backend.affairs!.orgEffects(orgId, affairId),
+      applyOrgEffects: (orgId: string, affairId: string) => backend.affairs!.applyOrgEffects(orgId, affairId)
+    },
+    // community-affairs §7.2 sdk.credentials：backend 已按绑定域注入签名域
+    // （presentHolderProof 的 pluginDomain 插件不可自报）
+    credentials: {
+      listHeld: () => backend.credentials!.listHeld(),
+      presentHolderProof: (input: { credId: string; requestId: string; orgId: string; collection: string }) =>
+        backend.credentials!.presentHolderProof(input),
+      queryVerifiers: (orgId: string) => backend.credentials!.queryVerifiers(orgId),
+      // 桥入参为插件自报的宽松 JSON；结构校验在内核验证链（§6 第 1–5 步），此处仅做类型过渡
+      verify: (credential: Record<string, unknown>) =>
+        backend.credentials!.verify(credential as Parameters<PluginCredentialsAPI['verify']>[0]),
+      queryRevocations: (issuer: string) => backend.credentials!.queryRevocations(issuer)
+    },
+    // community-affairs §7.2 sdk.policy：本地策略草稿读写 + 发布合入
+    policy: {
+      read: (orgId: string) => backend.policy!.read(orgId),
+      submitDraft: (doc: Record<string, unknown>) => backend.policy!.submitDraft(doc),
+      publish: (orgId: string) => backend.policy!.publish(orgId)
     },
     // sys 代理（内核外呼）：仅代理不加工；插件享有完整权限，内核命令侧负责业务安全
     sys: {

@@ -21,6 +21,8 @@ fn member(root_id: &str, role: OrganizationRole) -> OrganizationMember {
         region: None,
         use_personal_identity: None,
         access_key: None,
+        kind: None,
+        org_binding: None,
         extra: Default::default(),
     }
 }
@@ -41,6 +43,7 @@ fn org(members: Vec<OrganizationMember>) -> OrganizationRecord {
         data_accounts: vec![],
         org_address: None,
         is_public: false,
+        domain_type: None,
         extra: Default::default(),
     }
 }

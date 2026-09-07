@@ -1,7 +1,7 @@
 //! org 模块单元测试（自 `src/org/**` 迁移：只依赖 spark-core 公开 API 的用例）。
 
-#[path = "unit_org/claim.rs"]
-mod claim;
+#[path = "unit_org/community_invite.rs"]
+mod community_invite;
 #[path = "unit_org/gateway.rs"]
 mod gateway;
 #[path = "unit_org/invite.rs"]
@@ -12,8 +12,6 @@ mod node_card;
 mod org_address;
 #[path = "unit_org/plugin_docs.rs"]
 mod plugin_docs;
-#[path = "unit_org/pull.rs"]
-mod pull;
 #[path = "unit_org/recovery.rs"]
 mod recovery;
 #[path = "unit_org/replica.rs"]

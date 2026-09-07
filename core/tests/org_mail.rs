@@ -170,12 +170,7 @@ async fn org_mail_deliver_fetch_roundtrip() {
     let chal_ts = resp1["ts"].as_i64().unwrap();
 
     // 第二轮：挑战应答（载荷绑 nonce + 网关 peerId + ts）
-    let challenge = fetch_challenge_sign(
-        &recipient.signing_key,
-        &chal_nonce,
-        g.peer_id(),
-        chal_ts,
-    );
+    let challenge = fetch_challenge_sign(&recipient.signing_key, &chal_nonce, g.peer_id(), chal_ts);
     let resp2 = r
         .org_mail_request(
             &target_g(),

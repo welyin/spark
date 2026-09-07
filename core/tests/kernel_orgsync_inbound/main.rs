@@ -30,6 +30,7 @@ mod deliver;
 mod member_split;
 mod merge;
 mod orgq;
+mod read_gate;
 mod sync;
 mod tombstone;
 
@@ -79,6 +80,8 @@ fn member(root_id: &str, role: OrganizationRole) -> OrganizationMember {
         region: None,
         use_personal_identity: None,
         access_key: None,
+        kind: Default::default(),
+        org_binding: Default::default(),
         extra: Default::default(),
     }
 }
@@ -108,6 +111,7 @@ fn save_org(
         data_accounts: data_accounts.iter().map(|r| r.to_string()).collect(),
         org_address: None,
         is_public: false,
+        domain_type: None,
         extra: Default::default(),
     };
     OrganizationService::save_record(storage, &record).unwrap();

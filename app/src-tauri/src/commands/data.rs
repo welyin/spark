@@ -170,6 +170,7 @@ mod tests {
                 description: None,
                 avatar: None,
                 base_plugin_domain: Some("plugin:base".into()),
+                ..Default::default()
             })
             .unwrap();
         // 未确认导出 → 拒绝执行

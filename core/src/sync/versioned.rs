@@ -101,19 +101,28 @@ impl<S: StorageBackend> VersionedStorage<S> {
     /// 先行进 orgsync 流量，全员同步（accounts 恒 AllMembers，无需查声明）。
     ///
     /// `msg:conv` 需细分（category 前缀 `msg:conv:` 过宽）：
-    /// - 仅个人空间会话受管（`msg:conv:personal:*`）——组织会话走 org-pull；
+    /// - 仅个人空间会话受管（`msg:conv:personal:*`）——组织会话不受管
+    ///   （legacy org-pull 通道已随该平面退役删除）；
     /// - 应用会话（`msg:conv:personal:app:*`）不受管——维持现状不参与
     ///   pdsync（其删除传播是另行记录的已知缺口）。
     fn managed(key: &str) -> bool {
         // org 域受管：orgd:{orgId}: 数据 + org:coll: 声明（保留系统集合）+
-        // org:acl:{orgId}: 授权名单（O4，all-members 系统数据，进 orgsync 流量）+
-        // org:evi:anchor: 存证节点锚（阶段四F，org:structure@v1 键域）
+        // org:evi:anchor: 存证节点锚（阶段四F，org:structure@v1 键域）+
+        // org:genesis:/org:policy: 创世与策略修订链（C1，org:structure@v1）+
+        // org:verifiers: 验证人信任声明（credential §4，org:structure@v1）+
+        // org:policydoc: 发布策略文档（policy §2 sigSet 合入，org:structure@v1）+
+        // org:cleave: 共同体退出留史记录（append-only，org:structure@v1）。
+        // （C7：org:acl: 授权名单键域随 encrypted 轴退役移除。）
         if key.starts_with("orgd:")
             || key.starts_with("org:coll:")
-            || key.starts_with("org:acl:")
             || key.starts_with("org:invpub:")
             || key.starts_with("org:member:")
             || key.starts_with("org:evi:anchor:")
+            || key.starts_with("org:genesis:")
+            || key.starts_with("org:policy:")
+            || key.starts_with("org:verifiers:")
+            || key.starts_with("org:policydoc:")
+            || key.starts_with("org:cleave:")
         {
             return true;
         }
@@ -137,10 +146,14 @@ impl<S: StorageBackend> VersionedStorage<S> {
     fn is_org_key(key: &str) -> bool {
         key.starts_with("orgd:")
             || key.starts_with("org:coll:")
-            || key.starts_with("org:acl:")
             || key.starts_with("org:invpub:")
             || key.starts_with("org:member:")
             || key.starts_with("org:evi:anchor:")
+            || key.starts_with("org:genesis:")
+            || key.starts_with("org:policy:")
+            || key.starts_with("org:verifiers:")
+            || key.starts_with("org:policydoc:")
+            || key.starts_with("org:cleave:")
             || crate::sync::orgsync::legacy_org_key_scope(key).is_some()
     }
 
@@ -156,28 +169,54 @@ impl<S: StorageBackend> VersionedStorage<S> {
             // org:member:{orgId}:{rootId} → org:structure@v1（成员条目归属
             // 结构集合；成员移除墓碑经 org 域 dlog 传播，P1）
             let org_id = key.strip_prefix("org:member:")?.split(':').next()?;
-            return Some((org_id.to_string(), "org:structure".to_string(), "1".to_string()));
+            return Some((
+                org_id.to_string(),
+                "org:structure".to_string(),
+                "1".to_string(),
+            ));
         }
         if key.starts_with("org:evi:anchor:") {
             // org:evi:anchor:{orgId}:{nodeId} → org:structure@v1（阶段四F
             // 存证节点锚，与成员条目同集合归属）
-            let org_id = key
-                .strip_prefix("org:evi:anchor:")?
-                .split(':')
-                .next()?;
-            return Some((org_id.to_string(), "org:structure".to_string(), "1".to_string()));
+            let org_id = key.strip_prefix("org:evi:anchor:")?.split(':').next()?;
+            return Some((
+                org_id.to_string(),
+                "org:structure".to_string(),
+                "1".to_string(),
+            ));
+        }
+        for prefix in [
+            "org:genesis:",
+            "org:policy:",
+            "org:verifiers:",
+            "org:policydoc:",
+            "org:cleave:",
+        ] {
+            // org:genesis:{orgId} / org:policy:{orgId}:{seq} /
+            // org:verifiers:{orgId} / org:policydoc:{orgId} /
+            // org:cleave:{orgId}:{memberIdentity}:{leftAt} → org:structure@v1
+            // （C1 创世与策略修订链、credential §4 信任声明、policy §2 发布
+            // 策略文档、共同体退出留史记录，与成员条目同集合归属）
+            if let Some(rest) = key.strip_prefix(prefix) {
+                let org_id = rest.split(':').next()?;
+                return Some((
+                    org_id.to_string(),
+                    "org:structure".to_string(),
+                    "1".to_string(),
+                ));
+            }
         }
         if let Some(rest) = key.strip_prefix("org:invpub:") {
             // org:invpub:{orgId}:{inviterRoot}:{inviteeRoot} → org:invitations@v1
             let org_id = rest.split(':').next()?;
-            return Some((org_id.to_string(), "org:invitations".to_string(), "1".to_string()));
+            return Some((
+                org_id.to_string(),
+                "org:invitations".to_string(),
+                "1".to_string(),
+            ));
         }
-        if key.starts_with("org:coll:") || key.starts_with("org:acl:") {
-            // org:coll:{orgId}:{name}@v{version} / org:acl:{orgId}:{name}@v{version}
-            let rest = key
-                .strip_prefix("org:coll:")
-                .unwrap_or(key)
-                .strip_prefix("org:acl:")?;
+        if let Some(rest) = key.strip_prefix("org:coll:") {
+            // org:coll:{orgId}:{name}@v{version}
             let (org_id, rest) = rest.split_once(':')?;
             let at = rest.rfind("@v")?;
             let name = &rest[..at];
@@ -408,7 +447,7 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
-        // 组织会话：不受管（走 org-pull）
+        // 组织会话：不受管（legacy org-pull 已退役）
         s.put("msg:conv:org:o1:root-x", "{}").unwrap();
         // 应用会话：不受管（现状不参与 pdsync）
         s.put("msg:conv:personal:app:ai-chat", "{}").unwrap();
@@ -449,40 +488,6 @@ mod tests {
         // 同 batch 内 put→delete：缓存连续 bump，vv=2（不是两次都从旧值 bump 成 1）
         assert_eq!(meta.vv.get("node-a"), Some(&2));
         assert_eq!(s.get("local:pref").unwrap().as_deref(), Some("x"));
-    }
-
-    /// O6：orgkey（personal 域，pdsync category `orgkey:`）经版本化句柄写入
-    /// 即自动 pmeta 记账——自设备经 pdsync 才真实扩散。若绕过版本化（raw），
-    /// orgkey 无 pmeta，自设备收不到密钥。
-    #[test]
-    fn orgkey_write_via_versioned_handle_versions_for_pdsync() {
-        let mut s = new_store();
-        let key = crate::sync::orgsync::orgkey_key("org_01", "fin:pay", "1", 1);
-        // 经版本化句柄写 orgkey → pmeta 记账（自设备 pdsync 扩散的载体）
-        s.put(&key, "c2VjcmV0").unwrap();
-        assert_eq!(s.get(&key).unwrap().as_deref(), Some("c2VjcmV0"));
-        let meta = get_personal_meta(s.raw(), &key).unwrap().unwrap();
-        assert_eq!(
-            meta.vv.get("node-a"),
-            Some(&1),
-            "orgkey 写经版本化自动 pmeta"
-        );
-        // 对照：经 raw 写则无 pmeta（自设备不可同步——O6 修复前即如此）
-        let mut raw = s.raw().clone();
-        raw.put(
-            &crate::sync::orgsync::orgkey_key("org_01", "fin:pay", "1", 2),
-            "x",
-        )
-        .unwrap();
-        assert!(
-            get_personal_meta(
-                s.raw(),
-                &crate::sync::orgsync::orgkey_key("org_01", "fin:pay", "1", 2)
-            )
-            .unwrap()
-            .is_none(),
-            "raw 写不记账（对照）"
-        );
     }
 
     #[test]

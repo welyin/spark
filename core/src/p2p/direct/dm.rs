@@ -46,12 +46,6 @@ pub fn parse_dm_response(text: &str) -> Option<Value> {
 ///   信封由**复制组成员** Ed25519 签名、入站验签失败即被 kernel 丢弃，
 ///   后续有软限流挂账（防单个成员长期高频淹没复制组）。故同列豁免，否则
 ///   多集合 diff 的第 2 批起被确定性丢弃、反熵永不收敛。
-/// - **orgkey-deliver 豁免**（O5）：encrypted 集合 owner 在 grant/revoke 时向
-///   读者定向投递密钥，一次 grant 对 N 读者 × M epoch 连发多条；revoke 对剩余
-///   读者各发一条。与同步类同档（控制类派生连发）：共享 1s 限流桶会让第 2 条
-///   起必被限流、新读者缺历史 epoch 密钥、revoke 后旧读者收不到新 epoch——
-///   密钥是同步收敛的依赖，断一发即不可用。入站验签失败即被 kernel 丢弃
-///   （非 owner 无法投毒），软限流挂账同 orgsync。
 ///
 /// 安全取舍：p2p 层限流判定在验签**之前**（验签在 kernel 层入站处理中），
 /// 故豁免是全局 kind 豁免而非「验签通过的自设备/好友/成员」豁免——伪造 kind
@@ -85,7 +79,11 @@ pub fn dm_kind_is_rate_limit_exempt(kind: Option<&str>) -> bool {
                 | "orgsync-hello"
                 | "orgsync-need"
                 | "orgsync-data"
-                | "orgkey-deliver"
+                // 事务复制面反熵（affair-sync §2）：关注者反熵 hello→need→多批
+                // data 与 orgsync 同构，豁免口径同族（C4）
+                | "affairsync-hello"
+                | "affairsync-need"
+                | "affairsync-data"
                 | "contact-sync"
                 | "conv-sync"
                 | "profile-sync"
@@ -125,16 +123,6 @@ mod tests {
         assert!(!dm_kind_is_rate_limit_exempt(None), "缺失 kind 不应豁免");
     }
 
-    /// orgkey-deliver 豁免（O5）：owner 向读者逐 epoch 定向投递密钥，一次
-    /// grant/revoke 连发多条（同同步类背靠背），断一发即新读者缺历史密钥。
-    #[test]
-    fn orgkey_deliver_is_rate_limit_exempt() {
-        assert!(
-            dm_kind_is_rate_limit_exempt(Some("orgkey-deliver")),
-            "orgkey-deliver 应豁免（同步类同档）"
-        );
-    }
-
     /// 自设备同步类 kind 豁免：pdsync 反熵 hello→need→多批 data 是背靠背
     /// 连发（同一 1s 窗口内 3+ 条），逐条判定都必须豁免，否则第 2 条起被
     /// 限流丢弃、多 category diff 残缺丢失。
@@ -150,6 +138,10 @@ mod tests {
             "conv-sync",
             "profile-sync",
             "device-sync",
+            // C4：事务复制面反熵族同列豁免（affair-sync §2）
+            "affairsync-hello",
+            "affairsync-need",
+            "affairsync-data",
         ] {
             assert!(dm_kind_is_rate_limit_exempt(Some(kind)), "{kind} 应豁免");
         }

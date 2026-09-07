@@ -80,8 +80,7 @@ fn overview_of(
 #[test]
 fn self_always_counts() {
     let members = vec![member('a', None)];
-    let overview =
-        overview_of(&members, Some(&rid('a')), None, no_state(), &[], false, NOW);
+    let overview = overview_of(&members, Some(&rid('a')), None, no_state(), &[], false, NOW);
     assert_eq!(overview.synced_peers, 1);
     assert!(overview.members[0].is_self);
     assert!(overview.members[0].ever_synced);
@@ -171,8 +170,7 @@ fn covers_current_counts_stale_ttl_but_fresh_versions() {
 fn member_without_peer_has_no_state() {
     let members = vec![member('b', None), member('c', Some("  "))];
     let current = versions(100);
-    let overview =
-        overview_of(&members, None, Some(&current), no_state(), &[], false, NOW);
+    let overview = overview_of(&members, None, Some(&current), no_state(), &[], false, NOW);
     assert_eq!(overview.synced_peers, 0);
     assert_eq!(overview.total_members, 2);
     assert_eq!(overview.members[0].peer_id, None);
@@ -437,7 +435,11 @@ fn k_insufficient_hollow_account() {
     ];
     let overview = overview_of(&members, None, None, no_state(), &duty, true, NOW);
     assert_eq!(overview.synced_peers, 2, "空心账号不计");
-    let b = overview.data_accounts.iter().find(|a| a.root_id == rid('b')).unwrap();
+    let b = overview
+        .data_accounts
+        .iter()
+        .find(|a| a.root_id == rid('b'))
+        .unwrap();
     assert!(!b.pc_synced, "空心数据账号标记不达标");
     assert!(!overview.is_replica_sufficient(), "(2,0) 不达标");
 }
@@ -483,8 +485,19 @@ fn k_duty_window_and_device_class_and_dedup() {
 #[test]
 fn k_self_data_account_pc_counts() {
     let members = vec![admin('a'), admin('b'), admin('c')];
-    let duty = vec![duty_of('b', "p-b", "pc", NOW), duty_of('c', "p-c", "pc", NOW)];
-    let overview = overview_of(&members, Some(&rid('a')), None, no_state(), &duty, true, NOW);
+    let duty = vec![
+        duty_of('b', "p-b", "pc", NOW),
+        duty_of('c', "p-c", "pc", NOW),
+    ];
+    let overview = overview_of(
+        &members,
+        Some(&rid('a')),
+        None,
+        no_state(),
+        &duty,
+        true,
+        NOW,
+    );
     assert_eq!(overview.synced_peers, 3, "本机自证 + 两台观测 = 3");
     assert!(overview.is_replica_sufficient());
 }

@@ -14,7 +14,7 @@
 //!   `seq` 相同取 `publishedAt` 最新。
 //! - **本地缓存**：sled 键前缀 `p2p:org-address:`，尊重记录 `ttl`（过期即失效）。
 //!
-//! 签名/验签模式照抄 claim.rs（固定键序紧凑 JSON 载荷 + `now_ms` 注入的纯函数）。
+//! 签名/验签模式（固定键序紧凑 JSON 载荷 + `now_ms` 注入的纯函数）。
 //!
 //! 代码组织：orgAddress 生成/解析在 `address`，地址记录与五步校验链在 `record`，
 //! 本地缓存在 `cache`，组织根密钥对与密文存取在 `root_key`；单测在

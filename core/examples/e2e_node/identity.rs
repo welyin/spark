@@ -104,13 +104,3 @@ pub fn import_node_card(kernel: &mut Kernel, params: &Params) -> Result<Value, S
         "connectError": result.connect_error,
     }))
 }
-
-/// `fault-org-pull-blackhole`：故障注入开关（F6 验收，org-sync-stall-fix §5）——
-/// on=true 后本节点收到 org-pull 请求不应答，复现对端半连接长超时。
-pub fn fault_org_pull_blackhole(kernel: &mut Kernel, params: &Params) -> Result<Value, String> {
-    let on = params.opt_bool("on").unwrap_or(false);
-    kernel
-        .p2p_set_org_pull_blackhole(on)
-        .map_err(|e| e.to_string())?;
-    Ok(json!({"orgPullBlackhole": on}))
-}

@@ -120,12 +120,20 @@ pub const KIND_ORGQ_REQ: &str = "orgq-req";
 /// orgsync §20.5）。沿用 dm 按 from 限流（数据账号侧应答非背靠背多信封）。
 pub const KIND_ORGQ_RESP: &str = "orgq-resp";
 
-// ── O4 orgkey-deliver 密钥定向投递 ─────────────────────────────────────
+// ── C4/C5 affairsync 三信封（事务复制面，关注者反熵）─────────────────────
+// 常量本体定义在 sync::affairsync::envelope（与该面 build/parse 同处），此处
+// 转引对齐（KIND_RECOVERY 同先例），p2p 限流豁免清单用同族字面量。
 
-/// 信封 kind：encrypted 集合密钥定向投递（名单 owner → reader，见
-/// orgsync §20.6）。dm 直连、验签 + crypto_box 解包后落 personal 域 orgkey 表；
-/// 密钥永不进 orgsync 组织流量。
-pub const KIND_ORGKEY_DELIVER: &str = "orgkey-deliver";
+/// 信封 kind：affairsync 摘要交换（关注者间；body 携带 affairId + 折叠 vv +
+/// DAG 头集合 + deviceClass，见 affair-sync §3.1）。
+pub const KIND_AFFAIRSYNC_HELLO: &str = crate::sync::affairsync::KIND_AFFAIRSYNC_HELLO;
+/// 信封 kind：affairsync diff 请求（关注者间；body 携带 affairId + knownVv，
+/// 见 affair-sync §3.2）。
+pub const KIND_AFFAIRSYNC_NEED: &str = crate::sync::affairsync::KIND_AFFAIRSYNC_NEED;
+/// 信封 kind：affairsync 数据传输（关注者间；body 携带 affairId + 逐条
+/// records + 批次号，无 dseq——affair 域纯 append-only 无墓碑面，见
+/// affair-sync §3.3）。
+pub const KIND_AFFAIRSYNC_DATA: &str = crate::sync::affairsync::KIND_AFFAIRSYNC_DATA;
 
 /// 签名载荷：固定键序 body/from/kind/to/ts 的紧凑 JSON 串（无 `ephPub`，
 /// 向后兼容纯域身份 DH 信封）。内部委托 [`build_signing_payload_with_eph`]

@@ -1,12 +1,13 @@
 //! 组织同步编排（kernel 层 async worker）：orgsync 反熵（hello/need/data）
-//! 与 keepalive 组织保活。
+//! 与 keepalive 组织保活；事务复制面（affairsync，affair-sync §7）的出站
+//! 反熵触发同驻本 worker（复用串行队列与连接快照）。
 //!
-//! **阶段四A P3（legacy 出站停发）**：org-share 快照推送与 org-pull 反熵
-//! 对账的**出站**已删除（能力探测回退一并删）——组织更新传播由 orgsync
-//! 承接（写入事件即时 hello + tick 周期 hello；join 走 P2 的 stub 自举 +
-//! 收敛等待；移除走 org-member-removed dm）。**入站保留**（旧端/legacy
-//! join 回退路径仍可能呼入：host 的 org-pull 响应与 org-share 合入在
-//! `host`，P4 才清除）。回滚 = 版本回退（设计 §4）。
+//! **阶段四A P3（legacy 出站停发）→ P4（入站清除）**：org-share 快照推送与
+//! org-pull 反熵对账的出站已删除，入站（host 的 org-pull 响应与 org-share
+//! 合入、`/spark/org-share/1.0.0` 直连协议、pubsub org-share/org-share-ack
+//! 分支）亦已随 legacy 平面整体退役——组织更新传播由 orgsync 承接（写入
+//! 事件即时 hello + tick 周期 hello；join 走 P2 的 stub 自举 + 收敛等待；
+//! 移除走 org-member-removed dm）。回滚 = 版本回退（设计 §4）。
 //!
 //! 线程模型：全部方法为 async，跑在 kernel 内部 tokio runtime 上（事件泵/worker
 //! 或门面方法的 `block_on`）。存储经 [`crate::storage::Backend`] 克隆句柄访问
@@ -14,9 +15,10 @@
 //!
 //! 代码组织：本文件为 [`OrgSyncContext`]（worker 与门面共享的句柄包）、worker
 //! 主循环与各链路共用的私有辅助；orgsync hello 触发在 `orgsync_hello`，
-//! keepalive 周期任务在 `tick`（M6 后零主动外联；P3 起 S2 reconcile 段随
-//! legacy pull 出站停发删除）。
+//! affairsync hello 触发在 `affairsync_hello`，keepalive 周期任务在 `tick`
+//! （M6 后零主动外联；P3 起 S2 reconcile 段随 legacy pull 出站停发删除）。
 
+mod affairsync_hello;
 mod orgsync_hello;
 #[cfg(test)]
 mod stall_tests;
@@ -31,8 +33,6 @@ use tokio::sync::broadcast;
 
 use crate::p2p::node::system_now_ms;
 use crate::p2p::{P2pEvent, P2pNode};
-
-
 
 /// 组织地址记录的 DHT/gossip 重发间隔（p2p-messages.md §16：周期重发同 §13.2，
 /// 即 DHT 记录 TTL 8h 之半）。
@@ -59,6 +59,8 @@ pub(crate) struct TickStageBudgets {
     pub self_device_link: std::time::Duration,
     /// S3 orgsync-hello（逐端点 dm 直发，正常 <100ms）。
     pub orgsync_hello: std::time::Duration,
+    /// S4 affairsync-hello（逐关注者 dm 直发，与 S3 同量级）。
+    pub affairsync_hello: std::time::Duration,
 }
 
 impl Default for TickStageBudgets {
@@ -67,6 +69,7 @@ impl Default for TickStageBudgets {
             gateway_publish: std::time::Duration::from_secs(10),
             self_device_link: std::time::Duration::from_secs(10),
             orgsync_hello: std::time::Duration::from_secs(10),
+            affairsync_hello: std::time::Duration::from_secs(10),
         }
     }
 }
@@ -164,26 +167,14 @@ pub(crate) enum OrgSyncRequest {
     /// keepalive tick（最坏 ~60s），立即向已连接自设备补发 pdsync-hello，
     /// 对端回 need 即拉走墓碑（删除传播秒级）。
     SelfHelloNow,
-}
-
-/// org-pull 对账计数（org-pull-sync.ts:458-467；`synced === pulled` 如实保留）。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OrgReconcileStats {
-    /// 对账的组织数（本地 ∪ 对端可见）。
-    pub checked: u32,
-    /// 同步成功数（恒等于 `pulled`，TS 返回形状保留）。
-    pub synced: u32,
-    /// 对端标记 removed 后本地删除的组织数。
-    pub removed: u32,
-    /// 反推尝试数。
-    pub push_attempted: u32,
-    /// 反推成功数。
-    pub pushed: u32,
-    /// 拉取成功数。
-    pub pulled: u32,
-    /// 版本等价跳过数（含反推无目标可寻的跳过）。
-    pub skipped: u32,
+    /// affair 域即时 hello（affair-sync §7 出站触发）：本机关注/本地事务
+    /// 写入后，向该事务目录中已连接的关注者发 affairsync-hello（对端按
+    /// diff 回 need/推 data 收敛）。`affair_id=None` 表示全部已关注事务
+    /// （tick 周期兜底 / 连接建立后的批量触发）。
+    AffairHello {
+        /// 目标事务 id；None = 全部已关注事务。
+        affair_id: Option<String>,
+    },
 }
 
 /// ipc `p2p-sync-peer-organizations` 的返回形状（desktop/src/main/ipc/p2p.ts:86-93）。
@@ -194,27 +185,14 @@ pub struct PeerOrgSyncResult {
     pub attempted: u32,
     /// 反推成功数（= 对账 pushed）。
     pub synced: u32,
-    /// 对账组织数。
+    /// 对账组织数（恒 0——legacy org-pull 对账已退役，字段仅为 TS 返回形状保留）。
     pub pull_checked: u32,
-    /// 拉取成功数。
+    /// 拉取成功数（恒 0，同上）。
     pub pull_synced: u32,
     /// 本地删除数。
     pub removed: u32,
     /// 跳过数。
     pub skipped: u32,
-}
-
-impl From<OrgReconcileStats> for PeerOrgSyncResult {
-    fn from(stats: OrgReconcileStats) -> Self {
-        Self {
-            attempted: stats.push_attempted,
-            synced: stats.pushed,
-            pull_checked: stats.checked,
-            pull_synced: stats.pulled,
-            removed: stats.removed,
-            skipped: stats.skipped,
-        }
-    }
 }
 
 /// 组织同步编排上下文（worker 与门面方法共享的句柄包；全部 Clone 廉价）。
@@ -280,6 +258,7 @@ pub(crate) fn spawn_worker(
                 OrgSyncRequest::PushOrg { .. } => "PushOrg",
                 OrgSyncRequest::KeepaliveTick => "KeepaliveTick",
                 OrgSyncRequest::SelfHelloNow => "SelfHelloNow",
+                OrgSyncRequest::AffairHello { .. } => "AffairHello",
             };
             let started = std::time::Instant::now();
             match request {
@@ -296,6 +275,9 @@ pub(crate) fn spawn_worker(
                     ctx.maintain_org_tick().await;
                 }
                 OrgSyncRequest::SelfHelloNow => ctx.self_hello_now(),
+                OrgSyncRequest::AffairHello { affair_id } => {
+                    ctx.affairsync_hello_now(affair_id.as_deref()).await;
+                }
             }
             log::info!(
                 "[ORG_SYNC] request done | kind={} elapsed={}ms queue_depth≈{}",
@@ -319,5 +301,4 @@ impl OrgSyncContext {
     fn warn(&self, msg: impl Into<String>) {
         let _ = self.event_tx.send(P2pEvent::Warning(msg.into()));
     }
-
 }

@@ -66,6 +66,9 @@ fn wire_shapes_match_preload_declarations() {
     assert_eq!(item["lastCheckReason"], "installed");
     // 侧载插件无仓库声明缓存：supportedSpaces 回落安装时落库的解析值
     assert_eq!(item["supportedSpaces"], serde_json::json!(["personal", "org"]));
+    // 信任级进入数据模型：侧载 = L0；requires 未声明时省略（None skip）
+    assert_eq!(item["trustLevel"], serde_json::json!("L0"));
+    assert!(item.get("requires").is_none(), "requires None 应省略");
     // 无声明缓存 → 派生的清单 URL 为空（合成条目不携带远端清单地址）
     assert_eq!(item["package"]["updateManifestUrl"], serde_json::json!(""));
 
@@ -81,6 +84,7 @@ fn wire_shapes_match_preload_declarations() {
         granted_permissions: vec!["org:sync".to_string()],
         trust: None,
         supported_spaces: None,
+        requires: None,
     })
     .unwrap();
     for key in [
@@ -109,6 +113,7 @@ fn wire_shapes_match_preload_declarations() {
         granted_permissions: vec![],
         trust: None,
         supported_spaces: Some(vec!["personal".to_string()]),
+        requires: None,
     })
     .unwrap();
     assert_eq!(

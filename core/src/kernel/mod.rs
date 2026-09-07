@@ -23,12 +23,17 @@
 //! `message_ops`（出站投递机器在 `dm_delivery`），通讯录门面在 `contact_ops`
 //! （标签/分组树在 `contact_group_ops`），dm 信封构造/校验在
 //! `dm_envelope`，dm 入站编排在 `inbound_dm`（host.rs 的 `handle_dm` 接线），
-//! 插件市场广播索引（发布/索引/核查回写）在 `plugin_announce_ops`。
+//! 插件市场广播索引（发布/索引/核查回写）在 `plugin_announce_ops`，公开履历
+//! 跨事务聚合查询在 `affair_profile_ops`。
 
+mod affair_ops;
+mod affair_profile_ops;
+mod community_ops;
 mod contact_group_ops;
 mod contact_ops;
 mod contact_request_ops;
-pub(crate) mod data_access;
+mod content_ops;
+mod credential_ops;
 mod data_ops;
 pub(crate) mod data_orgq;
 mod data_orgq_read;
@@ -45,16 +50,18 @@ mod feed_shared;
 mod host;
 mod identity;
 mod inbound_dm;
+mod index_ops;
 mod message_ops;
 mod org_invite_ops;
 mod org_join_ops;
-mod org_ops;
 pub mod org_mail_ops;
+mod org_ops;
 mod org_overview;
 mod org_sync;
 mod p2p_ops;
 mod plugin_announce_ops;
 mod plugin_ops;
+mod policy_ops;
 mod pw_ops;
 mod recovery_ops;
 
@@ -64,8 +71,10 @@ use std::sync::{Arc, Mutex};
 
 use tokio::sync::broadcast;
 
+pub use community_ops::CommunityAcceptResult;
 pub use contact_ops::SendFriendRequestInput;
 pub(crate) use contact_ops::ensure_bot_shared;
+pub use data_orgq::build_query_read_auth;
 pub use device_ops::DeviceView;
 pub use doc_ops::{EvidenceChainStatus, PurgePreviewInfo};
 pub use error::{KernelError, Result};
@@ -92,9 +101,7 @@ pub(crate) use message_ops::{
     bot_reply_shared, bot_reply_stream_chunk_shared, bot_reply_stream_end_shared,
     bot_reply_stream_start_shared, message_app_send_shared, message_view, require_owned_bot_conv,
 };
-pub use org_sync::{OrgReconcileStats, PeerOrgSyncResult};
-/// 阶段四A P2：join 通道开关（orgsync 收敛等待 ⟷ legacy pull 回退）。
-pub use org_join_ops::{join_via_orgsync, set_join_via_orgsync};
+pub use org_sync::PeerOrgSyncResult;
 
 /// 随机字节的十六进制串（`crypto.randomBytes(n)` 对齐，用于不可预测的
 /// 令牌片段，如 orgq requestId 的随机段）。`byte_len` 为随机字节数，
@@ -117,7 +124,7 @@ use crate::p2p::{P2pConfig, P2pEvent, P2pNode};
 use crate::plugin::{PluginHostShared, PluginRuntimeRegistry};
 use crate::storage::SledStorage;
 
-use host::{CollectionConfigs, SharedOrgShareAckTracker};
+use host::CollectionConfigs;
 use org_sync::OrgSyncRequest;
 
 /// 事件通道容量（慢订阅者丢旧事件，`broadcast::RecvError::Lagged` 上报）。
@@ -205,17 +212,18 @@ pub struct Kernel {
     pub(crate) avatar_shared: Arc<Mutex<String>>,
     /// p2p 节点句柄共享格（host 回发 auto_accept 用；start 后回填、stop 清空）。
     pub(crate) p2p_node_shared: Arc<Mutex<Option<Arc<P2pNode>>>>,
+    /// indexer 角色配置共享格（affair-metadata §7/§8：host 应答查询与 gossip
+    /// 收录门控前读；门面 set_indexer_enabled / set_indexer_coverage 写。
+    /// 会话级内存态，默认关闭 + 全覆盖）。
+    pub(crate) indexer_role_shared: Arc<Mutex<crate::index::directory::IndexRoleConfig>>,
     /// 解锁期签名私钥（orgsync/dm 信封签名用；lock 时清除。P2 前的
     /// 「自签 nodeInfoClaim」用途已随 claim 通道退役）。
     pub(crate) signing_key_shared: Arc<Mutex<Option<ed25519_dalek::SigningKey>>>,
     /// 解锁期会话口令（host 侧应用自设备 profile-sync 全量快照时重封身份
     /// 文件用——与 unlocked 会话同源，lock 时清除）。
     pub(crate) password_shared: Arc<Mutex<Option<String>>>,
-    /// 解锁期 BIP39 种子（O4 orgkey-deliver 解包 orgkey 需组织域身份私钥派生；
-    /// host dm 入站 orgkey-unbox 用；lock 时清除）。
+    /// 解锁期 BIP39 种子（组织域身份派生等宿主场景用；lock 时清除）。
     pub(crate) seed_shared: Arc<Mutex<Option<[u8; 64]>>>,
-    /// org-share-ack 等待器注册表（host 与 worker 共享）。
-    pub(crate) org_acks: SharedOrgShareAckTracker,
     /// org-recovery 触发器（跨 tick 状态：连续失联计数 + 全局冷却）。
     pub(crate) recovery_trigger: Arc<Mutex<RecoveryTrigger>>,
     /// 组织地址记录发布状态（orgAddress → 最近发布时间；org.md §16）。
@@ -272,6 +280,7 @@ impl Kernel {
         let seed_shared = Arc::new(Mutex::new(None));
         let io_lock = Arc::new(Mutex::new(()));
         let collection_configs = Arc::new(Mutex::new(HashMap::new()));
+        let indexer_role_shared = Arc::new(Mutex::new(crate::index::directory::IndexRoleConfig::default()));
         // 应用消息限流器：内核门面与插件宿主共享同一实例（`plugin_host.app_msg_limiter`）
         let app_msg_limiter =
             Arc::new(Mutex::new(crate::message::AppMessageRateLimiter::default()));
@@ -312,10 +321,10 @@ impl Kernel {
             nickname_shared: Arc::new(Mutex::new(String::new())),
             avatar_shared: Arc::new(Mutex::new(String::new())),
             p2p_node_shared,
+            indexer_role_shared,
             signing_key_shared,
             password_shared: Arc::new(Mutex::new(None)),
             seed_shared,
-            org_acks: Arc::new(Mutex::new(Default::default())),
             recovery_trigger: Arc::new(Mutex::new(RecoveryTrigger::new())),
             org_address_publish: Arc::new(Mutex::new(HashMap::new())),
             self_device_link: Arc::new(Mutex::new(None)),

@@ -51,11 +51,15 @@ fn envelope_construction_byte_exact() {
     );
     assert!(orgmail_verify(&expect), "信封验签过");
     // sig 与 sign 重算逐字节一致（Ed25519 确定性签名）
-    assert_eq!(orgmail_sign(&sender.signing_key, &{
-        let mut e = expect.clone();
-        e.sig = String::new();
-        e
-    }), expect.sig, "sig 重算逐字节");
+    assert_eq!(
+        orgmail_sign(&sender.signing_key, &{
+            let mut e = expect.clone();
+            e.sig = String::new();
+            e
+        }),
+        expect.sig,
+        "sig 重算逐字节"
+    );
 }
 
 /// §21.8-2 box 往返 + 低阶点拒绝。
@@ -95,11 +99,17 @@ fn box_roundtrip_and_low_order_reject() {
         &nonce,
     )
     .expect("box ok");
-    assert_eq!(n, v["box"]["expect"]["nonce"].as_str().unwrap(), "nonce 逐字节");
+    assert_eq!(
+        n,
+        v["box"]["expect"]["nonce"].as_str().unwrap(),
+        "nonce 逐字节"
+    );
     assert_eq!(ct, v["box"]["expect"]["ct"].as_str().unwrap(), "ct 逐字节");
 
     // 低阶点拒绝：收件人 domainId = Edwards 单位点（y=1 → Montgomery u=0）
-    let low = v["box"]["expect"]["lowOrderRejectDomainId"].as_str().unwrap();
+    let low = v["box"]["expect"]["lowOrderRejectDomainId"]
+        .as_str()
+        .unwrap();
     assert!(
         orgmail_box(
             plain.as_bytes(),
@@ -295,7 +305,12 @@ fn gateway_deliver_full_pipeline() {
     };
     // 旧信封签名失效（ts 变了）——直接写库模拟存量过期信
     s.put(
-        &spark_core::org::mailbox_store::mailbox_key(&serde_json::from_str::<spark_core::org::OrgAddressRecord>(&old.to.org_address).unwrap().org_id, &old.id),
+        &spark_core::org::mailbox_store::mailbox_key(
+            &serde_json::from_str::<spark_core::org::OrgAddressRecord>(&old.to.org_address)
+                .unwrap()
+                .org_id,
+            &old.id,
+        ),
         &serde_json::to_string(&old).unwrap(),
     )
     .unwrap();
@@ -383,7 +398,13 @@ fn fetch_two_round_handshake() {
     let wrong = derive_domain_identity(&[0x99; 64], &org_mail_domain("org_bbbbbbbbbbbbbbbb"));
     let bad_sig = fetch_challenge_sign(&wrong.signing_key, &nonce, gateway_peer, chal_ts);
     let r = gateway_fetch(
-        &mut s, &my_domain_id, &nonce, chal_ts, &bad_sig, gateway_peer, NOW + 2100,
+        &mut s,
+        &my_domain_id,
+        &nonce,
+        chal_ts,
+        &bad_sig,
+        gateway_peer,
+        NOW + 2100,
     );
     assert_eq!(
         r,
@@ -397,7 +418,13 @@ fn fetch_two_round_handshake() {
     let chal_ts = r1["ts"].as_i64().unwrap();
     let sig = fetch_challenge_sign(&recipient.signing_key, &nonce, gateway_peer, chal_ts);
     let r2 = gateway_fetch(
-        &mut s, &my_domain_id, &nonce, chal_ts, &sig, gateway_peer, NOW + 2300,
+        &mut s,
+        &my_domain_id,
+        &nonce,
+        chal_ts,
+        &sig,
+        gateway_peer,
+        NOW + 2300,
     );
     assert_eq!(r2["ok"], serde_json::json!(true));
     let envelopes = r2["envelopes"].as_array().unwrap();
@@ -411,7 +438,13 @@ fn fetch_two_round_handshake() {
     assert_eq!(left.len(), 1, "取信即删（同事务）");
     // 重放已焚 nonce → invalid-challenge
     let r = gateway_fetch(
-        &mut s, &my_domain_id, &nonce, chal_ts, &sig, gateway_peer, NOW + 2400,
+        &mut s,
+        &my_domain_id,
+        &nonce,
+        chal_ts,
+        &sig,
+        gateway_peer,
+        NOW + 2400,
     );
     assert_eq!(
         r,

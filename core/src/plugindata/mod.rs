@@ -69,15 +69,16 @@ pub enum Accounts {
 }
 
 /// 保密轴（O2a，org scope 专有）：数据可见性模型。
+///
+/// C7（community-affairs §5 决策 3）：`encrypted` 值已退役——org scope 集合级
+/// 加密不再由平台提供（保密边界 = 域边界），轴收缩为单值 `filtered`。存量
+/// 含 `"encrypted"` 的声明记录反序列化会失败（未发版、存量面为零，可接受）。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Confidentiality {
-    /// 明文过滤（缺省）：数据账号持明文，执行权限钩子。
+    /// 明文过滤：数据账号持明文，执行权限钩子。
     #[default]
     #[serde(rename = "filtered")]
     Filtered,
-    /// 密文仓库：数据账号只存密文，不执行内容级钩子。
-    #[serde(rename = "encrypted")]
-    Encrypted,
 }
 
 /// 敏感轴（M3，personal scope 专有）：决定是否用 epoch 包裹加密。
@@ -109,6 +110,78 @@ pub enum MergeRule {
 
 /// whole 集合的唯一记录 key。
 pub const WHOLE_KEY: &str = "__whole__";
+
+/// 读授权门禁种类（read-gate §2 readPolicy.kind，org scope 专有）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReadPolicyKind {
+    /// 组织成员可读（缺省=现状）：orgq 既有资格检查 + filtered 钩子。
+    #[default]
+    #[serde(rename = "members")]
+    Members,
+    /// 公开发布：无需凭证即可拉取（查询面不经插件钩子，直接服务）。
+    #[serde(rename = "public")]
+    Public,
+    /// 持凭证放行：credTypes 任一匹配 + issuer ∈ verifierDomain 现行信任
+    /// 声明 + holderProof 绑定本次请求（read-gate §4 验证链，fail-closed）。
+    #[serde(rename = "credential")]
+    Credential,
+}
+
+/// 读授权门禁声明（read-gate §2：`org:coll` 声明记录的可选追加字段）。
+///
+/// 线形纪律：代际内不可变（声明冻结；改 readPolicy = 同名新 version 声明）；
+/// 旧端解析忽略未知键无损（nodeInfo 先例）。`policyRef` 缺省语义为 null，
+/// 保持 `Option` 直序列化（显式 null 上线形，与 golden 向量 readGate.declExt
+/// 逐字节对齐）；`credTypes`/`verifierDomain` 为 kind=credential 专用，其余
+/// kind 省略（skip 空值）。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReadPolicy {
+    /// 门禁种类。
+    pub kind: ReadPolicyKind,
+    /// 放行的凭证类型集（kind=credential 必填，任一匹配）。
+    #[serde(rename = "credTypes", default, skip_serializing_if = "Vec::is_empty")]
+    pub cred_types: Vec<String>,
+    /// 验证人信任声明所在域（kind=credential 必填：凭证 subjectDomain 必须
+    /// 等于它，且信任声明读 `org:verifiers:{verifierDomain}`）。
+    #[serde(rename = "verifierDomain", default, skip_serializing_if = "String::is_empty")]
+    pub verifier_domain: String,
+    /// B1 策略文档哈希（policy §2 文档的 policyDocHash；字段级掩码/向上开放
+    /// 矩阵等细化规则）。缺省 null = 凭证类型匹配即可读全集合。
+    #[serde(rename = "policyRef", default)]
+    pub policy_ref: Option<String>,
+}
+
+impl ReadPolicy {
+    /// 声明录入校验（早失败）：kind=credential 的必填面与字段形状。
+    /// 运行期裁决一律 fail-closed 由门禁兜底，此处只拦明显非法的声明。
+    pub fn validate(&self) -> Result<()> {
+        if self.kind != ReadPolicyKind::Credential {
+            return Ok(());
+        }
+        if self.cred_types.is_empty() {
+            return Err(PlugindataError::DeclarationConflict(
+                "readPolicy kind=credential requires non-empty credTypes".to_string(),
+            ));
+        }
+        if !crate::affair::is_valid_org_id(&self.verifier_domain) {
+            return Err(PlugindataError::DeclarationConflict(
+                "readPolicy verifierDomain must be a valid orgId (dual-form)".to_string(),
+            ));
+        }
+        if let Some(policy_ref) = &self.policy_ref {
+            let valid = policy_ref.len() == 64
+                && policy_ref
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+            if !valid {
+                return Err(PlugindataError::DeclarationConflict(
+                    "readPolicy policyRef must be 64 lowercase hex".to_string(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
 
 /// 集合声明记录（持久化于 `pdecl:` 或 `org:coll:`，代际内不可变更）。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -158,6 +231,15 @@ pub struct CollectionDeclaration {
     /// 持久化（org 声明存于 `org:coll:{orgId}:`，同代际内 org_id 恒定）。
     #[serde(rename = "orgId", default, skip_serializing_if = "Option::is_none")]
     pub org_id: Option<String>,
+    /// 读授权门禁声明（read-gate §2，org scope 专有；缺省 = members 现状）。
+    /// 代际内不可变（改 readPolicy = 同名新 version 声明）；缺省键省略——
+    /// 旧声明记录线形一字节不变，旧端解析忽略未知键无损（nodeInfo 先例）。
+    #[serde(
+        rename = "readPolicy",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub read_policy: Option<ReadPolicy>,
 }
 
 /// 运行空间（由内核按插件运行空间解析后写入线上记录）。
@@ -426,6 +508,8 @@ pub struct DeclareInput {
     pub merge: Option<MergeRule>,
     /// 声明者 rootId（org scope 用）。
     pub declared_by: Option<String>,
+    /// 读授权门禁（read-gate §2，org scope 专有；缺省 members=现状）。
+    pub read_policy: Option<ReadPolicy>,
 }
 
 /// 校验 name 形态与插件前缀归属。
@@ -472,12 +556,6 @@ pub fn declare<S: StorageBackend>(
     // ── org 轴校验 ──
     match space {
         Space::Org => {
-            // encrypted 必须搭配 data-accounts（与 all-members 语义冲突）
-            if confidentiality == Confidentiality::Encrypted && accounts == Accounts::AllMembers {
-                return Err(PlugindataError::DeclarationConflict(
-                    "encrypted requires accounts: data-accounts, not all-members".to_string(),
-                ));
-            }
             // sensitivity 仅在 personal 空间可用
             if sensitivity != Sensitivity::default() {
                 return Err(PlugindataError::DeclarationConflict(
@@ -490,13 +568,25 @@ pub fn declare<S: StorageBackend>(
             }
         }
         Space::Personal => {
-            // accounts/confidentiality 仅在 org 空间可用
-            if accounts != Accounts::default() || confidentiality != Confidentiality::default() {
+            // accounts 仅在 org 空间可用（confidentiality 已收缩为单值 filtered，
+            // 恒等于缺省，不再参与校验）
+            if accounts != Accounts::default() {
                 return Err(PlugindataError::DeclarationConflict(
-                    "accounts/confidentiality are only valid in org space".to_string(),
+                    "accounts is only valid in org space".to_string(),
                 ));
             }
         }
+    }
+
+    // readPolicy 仅 org 空间可声明；录入即校验（早失败——运行期裁决一律由
+    // 门禁 fail-closed 兜底，此处只拦明显非法的声明）
+    if let Some(read_policy) = &input.read_policy {
+        if space != Space::Org {
+            return Err(PlugindataError::DeclarationConflict(
+                "readPolicy is only valid in org space".to_string(),
+            ));
+        }
+        read_policy.validate()?;
     }
 
     // F9 收敛：org space 的 org_id 必填校验只做一次——resolve 为
@@ -528,6 +618,7 @@ pub fn declare<S: StorageBackend>(
         declared_by: input.declared_by,
         ts: Some(now_ms),
         org_id: org_id_owned.clone(),
+        read_policy: input.read_policy.clone(),
     };
 
     // 查找既有声明（同一 name@version）
@@ -550,7 +641,8 @@ pub fn declare<S: StorageBackend>(
             && existing.merge == decl.merge
             && existing.accounts == decl.accounts
             && existing.confidentiality == decl.confidentiality
-            && existing.space == decl.space;
+            && existing.space == decl.space
+            && existing.read_policy == decl.read_policy;
         if same {
             // 幂等返回：补回 org_id（旧记录可能未存该字段，路由依赖它）
             existing.org_id = org_id_owned.clone();
@@ -620,6 +712,7 @@ pub fn declare_builtin_org_collections<S: StorageBackend>(
             declared_by: Some(declared_by.to_string()),
             ts: Some(now_ms),
             org_id: Some(org_id.to_string()),
+            read_policy: None,
         };
         let raw = serde_json::to_string(&decl)?;
         storage.put(&decl_key, &raw)?;

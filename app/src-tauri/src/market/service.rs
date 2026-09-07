@@ -1,4 +1,4 @@
-//! 市场服务主体：状态装载、grantedPermissions 回填、旧侧载 supportedSpaces 回填。
+//! 市场服务主体：状态装载、grantedPermissions 回填、旧侧载 supportedSpaces/requires 回填。
 //! （解耦 plugin_decoupling.md §4.3：启动不再对账内置 bundle / 源码目录——
 //! 已安装状态只由 .spkg 落盘文件 + plugin-market-state.json 决定。）
 
@@ -35,12 +35,12 @@ impl PluginMarketService {
         }
     }
 
-    /// TS `initialize`：读状态 → 回填授权 → 旧侧载 supportedSpaces 回填。
+    /// TS `initialize`：读状态 → 回填授权 → 旧侧载 supportedSpaces/requires 回填。
     /// 解耦后不再做内置目录对账（reconcile_bundled_installed_state 已删除）。
     pub fn initialize(&mut self) -> Result<(), String> {
         self.state = read_state_file(&self.paths.state_file);
         self.backfill_granted_permissions()?;
-        self.backfill_sideload_supported_spaces()?;
+        self.backfill_sideload_manifest_fields()?;
         Ok(())
     }
 
@@ -61,17 +61,17 @@ impl PluginMarketService {
         Ok(())
     }
 
-    /// 旧侧载安装态 supportedSpaces 回填（spaces-and-plugins §4 历史数据迁移）：
-    /// supported_spaces 字段后于侧载链路落地，旧记录缺该值（serde default → None）；
-    /// 对 trust == "sideloaded" 且 supported_spaces 为 None 的记录重解析落盘 .spkg
-    /// 包内 manifest.json 回填。包丢失/解析失败/包内未声明均保持 None（按未声明
-    /// ["org"] 口径处理），不阻断启动；幂等，包内未声明时每次启动重读一次本地文件，
+    /// 旧侧载安装态 supportedSpaces/requires 回填（spaces-and-plugins §4 与规格
+    /// §2.1 requires 字段的历史数据迁移）：两个字段均后于侧载链路落地，旧记录缺值
+    /// （serde default → None）；对 trust == "sideloaded" 且字段为 None 的记录重解析
+    /// 落盘 .spkg 包内 manifest.json 回填。包丢失/解析失败/包内未声明均保持 None
+    /// （按未声明口径处理），不阻断启动；幂等，包内未声明时每次启动重读一次本地文件，
     /// 代价可忽略故不引入额外迁移标记。
-    fn backfill_sideload_supported_spaces(&mut self) -> Result<(), String> {
+    fn backfill_sideload_manifest_fields(&mut self) -> Result<(), String> {
         let mut changed = false;
         for installed in self.state.installed.values_mut() {
-            if installed.supported_spaces.is_some()
-                || installed.trust.as_deref() != Some("sideloaded")
+            if installed.trust.as_deref() != Some("sideloaded")
+                || (installed.supported_spaces.is_some() && installed.requires.is_some())
             {
                 continue;
             }
@@ -85,11 +85,22 @@ impl PluginMarketService {
             if container.plugin_id != installed.plugin_id {
                 continue;
             }
-            let spaces = super::sideload::read_inner_manifest(&container)
-                .and_then(|m| m.supported_spaces);
-            if let Some(spaces) = super::sideload::normalize_supported_spaces(spaces) {
-                installed.supported_spaces = Some(spaces);
-                changed = true;
+            let inner = super::sideload::read_inner_manifest(&container);
+            if installed.supported_spaces.is_none() {
+                let spaces = inner
+                    .as_ref()
+                    .and_then(|m| m.supported_spaces.clone());
+                if let Some(spaces) = super::sideload::normalize_supported_spaces(spaces) {
+                    installed.supported_spaces = Some(spaces);
+                    changed = true;
+                }
+            }
+            if installed.requires.is_none() {
+                let requires = inner.and_then(|m| m.requires);
+                if let Some(requires) = requires.and_then(super::sideload::normalize_requires) {
+                    installed.requires = Some(requires);
+                    changed = true;
+                }
             }
         }
         if changed {

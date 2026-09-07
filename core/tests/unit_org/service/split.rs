@@ -33,7 +33,10 @@ fn create_and_delete_dual_write_member_entries() {
     let (admin, record) = setup_org(&mut storage);
     // create：初始成员条目已写，内容与 whole.members[0] 逐字段等价
     let entry_key = org_member_key(&record.org_id, &admin);
-    let raw = storage.get(&entry_key).unwrap().expect("初始成员条目已双写");
+    let raw = storage
+        .get(&entry_key)
+        .unwrap()
+        .expect("初始成员条目已双写");
     assert_eq!(
         raw,
         serde_json::to_string(&record.members[0]).unwrap(),
@@ -63,13 +66,19 @@ fn assembled_view_overrides_whole_and_excludes_tombstones() {
     let b_root = rid('b');
     // whole 里补一个成员 B（模拟旧端只有 whole 的形态），并清掉 create 双写
     // 的 A 条目（隔离变量：本用例聚焦条目覆盖/排除语义）
-    let mut whole = OrganizationService::get_record(&storage, org_id).unwrap().unwrap();
-    whole.members.push(bare_member(&b_root, OrganizationRole::Member));
+    let mut whole = OrganizationService::get_record(&storage, org_id)
+        .unwrap()
+        .unwrap();
+    whole
+        .members
+        .push(bare_member(&b_root, OrganizationRole::Member));
     OrganizationService::save_record(&mut storage, &whole).unwrap();
     storage.delete(&org_member_key(org_id, &admin)).unwrap();
 
     // 1. 无 B 条目时：whole 读原样（whole 独有成员保留）
-    let view = OrganizationService::get_record(&storage, org_id).unwrap().unwrap();
+    let view = OrganizationService::get_record(&storage, org_id)
+        .unwrap()
+        .unwrap();
     assert!(view.find_member(&b_root).is_some(), "whole 独有成员保留");
     assert!(
         view.find_member(&b_root).unwrap().nickname.is_none(),
@@ -80,9 +89,14 @@ fn assembled_view_overrides_whole_and_excludes_tombstones() {
     let mut b_entry = bare_member(&b_root, OrganizationRole::Member);
     b_entry.nickname = Some("条目昵称".to_string());
     storage
-        .put(&org_member_key(org_id, &b_root), &serde_json::to_string(&b_entry).unwrap())
+        .put(
+            &org_member_key(org_id, &b_root),
+            &serde_json::to_string(&b_entry).unwrap(),
+        )
         .unwrap();
-    let view = OrganizationService::get_record(&storage, org_id).unwrap().unwrap();
+    let view = OrganizationService::get_record(&storage, org_id)
+        .unwrap()
+        .unwrap();
     assert_eq!(
         view.find_member(&b_root).unwrap().nickname.as_deref(),
         Some("条目昵称"),
@@ -103,7 +117,9 @@ fn assembled_view_overrides_whole_and_excludes_tombstones() {
         },
     )
     .unwrap();
-    let view = OrganizationService::get_record(&storage, org_id).unwrap().unwrap();
+    let view = OrganizationService::get_record(&storage, org_id)
+        .unwrap()
+        .unwrap();
     assert!(
         view.find_member(&b_root).is_none(),
         "墓碑条目从装配视图排除"
@@ -123,7 +139,10 @@ fn read_switch_rolls_back_to_whole() {
     // whole 不含 B，仅条目含 B（迁移窗口形态）
     let b_entry = bare_member(&b_root, OrganizationRole::Member);
     storage
-        .put(&org_member_key(org_id, &b_root), &serde_json::to_string(&b_entry).unwrap())
+        .put(
+            &org_member_key(org_id, &b_root),
+            &serde_json::to_string(&b_entry).unwrap(),
+        )
         .unwrap();
     assert!(
         OrganizationService::get_record(&storage, org_id)
@@ -134,7 +153,9 @@ fn read_switch_rolls_back_to_whole() {
         "开关开：装配视图含条目成员"
     );
     set_member_read_assembled(false);
-    let whole_view = OrganizationService::get_record(&storage, org_id).unwrap().unwrap();
+    let whole_view = OrganizationService::get_record(&storage, org_id)
+        .unwrap()
+        .unwrap();
     set_member_read_assembled(true); // 立即恢复（缩小全局翻转窗口）
     assert!(
         whole_view.find_member(&b_root).is_none(),
@@ -161,8 +182,12 @@ fn migrate_org_members_split_idempotent_and_sweeps_half_state() {
     let org_id = &record.org_id;
     storage.delete(&org_member_key(org_id, &admin)).unwrap();
     let b_root = rid('b');
-    let mut whole = OrganizationService::get_record(&storage, org_id).unwrap().unwrap();
-    whole.members.push(bare_member(&b_root, OrganizationRole::Member));
+    let mut whole = OrganizationService::get_record(&storage, org_id)
+        .unwrap()
+        .unwrap();
+    whole
+        .members
+        .push(bare_member(&b_root, OrganizationRole::Member));
     OrganizationService::save_record(&mut storage, &whole).unwrap();
     let whole_bytes_before = storage
         .get(&spark_core::org::types::organization_key(org_id))
@@ -177,7 +202,11 @@ fn migrate_org_members_split_idempotent_and_sweeps_half_state() {
             .get(&org_member_key(org_id, &m.root_id))
             .unwrap()
             .expect("迁移写出条目");
-        assert_eq!(raw, serde_json::to_string(m).unwrap(), "条目与 whole 成员等价");
+        assert_eq!(
+            raw,
+            serde_json::to_string(m).unwrap(),
+            "条目与 whole 成员等价"
+        );
     }
     // 幂等：二轮 0 写
     let written = migrate_org_members_split(&mut storage).unwrap();
@@ -220,11 +249,21 @@ fn upsert_own_member_entry_entry_only_write() {
         .unwrap();
     let entry: OrganizationMember = serde_json::from_str(&raw).unwrap();
     assert_eq!(
-        entry.node_info.as_ref().unwrap().iter().next().unwrap().peer_id.as_deref(),
+        entry
+            .node_info
+            .as_ref()
+            .unwrap()
+            .iter()
+            .next()
+            .unwrap()
+            .peer_id
+            .as_deref(),
         Some("peer-new")
     );
     // whole 不动（条目单写口径）
-    let whole = OrganizationService::get_record(&storage, org_id).unwrap().unwrap();
+    let whole = OrganizationService::get_record(&storage, org_id)
+        .unwrap()
+        .unwrap();
     let whole_raw = storage
         .get(&spark_core::org::types::organization_key(org_id))
         .unwrap()
@@ -278,7 +317,9 @@ fn projection_concurrent_merges_instead_of_clobbering() {
         },
     )
     .unwrap();
-    storage.put(&key, &serde_json::to_string(&entry).unwrap()).unwrap();
+    storage
+        .put(&key, &serde_json::to_string(&entry).unwrap())
+        .unwrap();
 
     // whole 侧（旧端/管理员路径）：同成员 role 段更新但无自写字段（vv
     // node-a 与条目并发，ts 低）
@@ -303,9 +344,15 @@ fn projection_concurrent_merges_instead_of_clobbering() {
     // 条目 ts 高（9000 > 8000）→ 秩高侧 = 条目：本人字段组/管理员字段组
     // 均取条目侧；whole 侧 ts 低被整组覆盖——但 whole 的 added_by 变更丢失
     // 是字段组级秩选取的既有口径（merge_member_record 同语义）
-    assert_eq!(merged.nickname.as_deref(), Some("自写昵称"), "自写本人字段组存活");
+    assert_eq!(
+        merged.nickname.as_deref(),
+        Some("自写昵称"),
+        "自写本人字段组存活"
+    );
     assert_eq!(merged.extra["self"], serde_json::json!(1), "extra 并集保留");
-    let meta = spark_core::sync::get_personal_meta(&storage, &key).unwrap().unwrap();
+    let meta = spark_core::sync::get_personal_meta(&storage, &key)
+        .unwrap()
+        .unwrap();
     assert_eq!(meta.vv.get("node-m"), Some(&3), "合并 vv 支配双输入");
     assert_eq!(meta.vv.get("node-a"), Some(&7));
     assert_eq!(meta.ts, 9000, "ts 取大");
@@ -332,7 +379,9 @@ fn projection_concurrent_whole_side_newer_wins_groups() {
         },
     )
     .unwrap();
-    storage.put(&key, &serde_json::to_string(&entry).unwrap()).unwrap();
+    storage
+        .put(&key, &serde_json::to_string(&entry).unwrap())
+        .unwrap();
     // whole 侧更新（昵称，ts 高，vv 与条目并发）
     let mut whole_member = bare_member(&admin, OrganizationRole::Admin);
     whole_member.nickname = Some("whole 新昵称".to_string());
@@ -372,10 +421,13 @@ fn wipe_org_local_clears_everything_idempotent() {
             "\"v\"",
         )
         .unwrap();
-    let wiped = spark_core::org::service::wipe_org_local(&mut storage, org_id, "node-t", 1000).unwrap();
+    let wiped =
+        spark_core::org::service::wipe_org_local(&mut storage, org_id, "node-t", 1000).unwrap();
     assert_eq!(wiped, 1, "create 双写的初始条目被擦");
     assert!(
-        OrganizationService::get_record(&storage, org_id).unwrap().is_none(),
+        OrganizationService::get_record(&storage, org_id)
+            .unwrap()
+            .is_none(),
         "whole 擦除"
     );
     let entry_key = org_member_key(org_id, &_admin);
@@ -389,12 +441,15 @@ fn wipe_org_local_clears_everything_idempotent() {
     );
     assert!(
         storage
-            .get(&spark_core::sync::orgsync::orgq_cache_key(org_id, "c@v1", "k1"))
+            .get(&spark_core::sync::orgsync::orgq_cache_key(
+                org_id, "c@v1", "k1"
+            ))
             .unwrap()
             .is_none(),
         "orgq 现场擦除"
     );
     // 幂等
-    let wiped = spark_core::org::service::wipe_org_local(&mut storage, org_id, "node-t", 1000).unwrap();
+    let wiped =
+        spark_core::org::service::wipe_org_local(&mut storage, org_id, "node-t", 1000).unwrap();
     assert_eq!(wiped, 0);
 }

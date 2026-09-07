@@ -3,8 +3,8 @@
 
 mod common;
 
-use spark_core::org::invite::{OrgInviteInviter, OrgInvitePayload, encode_org_invite};
 use spark_core::org::OrganizationService;
+use spark_core::org::invite::{OrgInviteInviter, OrgInvitePayload, encode_org_invite};
 use spark_core::org::service::CreateOrganizationInput;
 use spark_core::p2p::node::system_now_ms;
 use spark_core::storage::StorageBackend;
@@ -27,6 +27,7 @@ fn org_create_invite_and_overview() {
             description: Some("描述".to_string()),
             avatar: None,
             base_plugin_domain: Some("plugin:notes".to_string()),
+            ..Default::default()
         })
         .unwrap();
     assert_eq!(view.record.name, "测试组织", "组织名 trim");
@@ -117,6 +118,7 @@ fn org_member_management() {
             description: None,
             avatar: None,
             base_plugin_domain: Some("plugin:app".to_string()),
+            ..Default::default()
         })
         .unwrap();
     let org_id = view.record.org_id.clone();
@@ -190,8 +192,8 @@ fn org_member_management() {
 // ---------------------------------------------------------------------------
 
 /// 双 kernel 全链：A 移除 B → B 收 `org-member-removed` 定向通知 → 本地擦除
-/// （whole + 成员条目 + orgq 现场）。B 已出成员表，orgsync/org-share 均不再
-/// 覆盖 B——该 dm 是移除的**唯一**主动通道（墓碑收敛 + legacy pull 兜底）。
+/// （whole + 成员条目 + orgq 现场）。B 已出成员表，orgsync 不再覆盖 B——
+/// 该 dm 是移除的**唯一**主动通道（成员条目墓碑收敛兜底）。
 #[test]
 fn org_member_removed_notify_wipes_local_org() {
     let dir_a = tempfile::tempdir().unwrap();
@@ -211,6 +213,7 @@ fn org_member_removed_notify_wipes_local_org() {
             description: None,
             avatar: None,
             base_plugin_domain: Some("plugin:app".to_string()),
+            ..Default::default()
         })
         .unwrap();
     let org_id = view.record.org_id.clone();
@@ -223,7 +226,13 @@ fn org_member_removed_notify_wipes_local_org() {
         .org_add_member(&org_id, &root_b, Some(&b_node))
         .unwrap();
     kernel_a
-        .org_send_invite(&org_id, &root_b, b_node.peer_id.as_deref(), &b_node.addresses, None)
+        .org_send_invite(
+            &org_id,
+            &root_b,
+            b_node.peer_id.as_deref(),
+            &b_node.addresses,
+            None,
+        )
         .unwrap();
     wait_until(
         || {
@@ -295,6 +304,7 @@ fn org_member_removed_inbound_validation() {
             description: None,
             avatar: None,
             base_plugin_domain: None,
+            ..Default::default()
         },
         &a_root,
         now,
@@ -328,9 +338,14 @@ fn org_member_removed_inbound_validation() {
 
     // 非 admin（C 是普通成员）发送 → rejected，组织保留
     let r = deliver(&mut s, &c_key, &c_root);
-    assert_eq!(r.response, serde_json::json!({ "ok": false, "reason": "rejected" }));
+    assert_eq!(
+        r.response,
+        serde_json::json!({ "ok": false, "reason": "rejected" })
+    );
     assert!(
-        OrganizationService::get_record(&s, &org_id).unwrap().is_some(),
+        OrganizationService::get_record(&s, &org_id)
+            .unwrap()
+            .is_some(),
         "伪造通知不擦除"
     );
 
@@ -344,7 +359,9 @@ fn org_member_removed_inbound_validation() {
         "擦除后发 OrgRemoved 事件"
     );
     assert!(
-        OrganizationService::get_record(&s, &org_id).unwrap().is_none(),
+        OrganizationService::get_record(&s, &org_id)
+            .unwrap()
+            .is_none(),
         "whole 已擦除"
     );
     let leftover = s
@@ -356,7 +373,11 @@ fn org_member_removed_inbound_validation() {
 
     // 重复通知（本地已无记录）→ 幂等通过
     let r = deliver(&mut s, &a_key, &a_root);
-    assert_eq!(r.response, serde_json::json!({ "ok": true }), "重复通知幂等");
+    assert_eq!(
+        r.response,
+        serde_json::json!({ "ok": true }),
+        "重复通知幂等"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -377,6 +398,7 @@ fn org_update_my_identity_self_only_and_view_readback() {
             description: None,
             avatar: None,
             base_plugin_domain: None,
+            ..Default::default()
         })
         .unwrap();
     let org_id = view.record.org_id.clone();
@@ -433,6 +455,7 @@ fn org_update_info_avatar_patch() {
             description: None,
             avatar: None,
             base_plugin_domain: None,
+            ..Default::default()
         })
         .unwrap();
     let org_id = view.record.org_id.clone();

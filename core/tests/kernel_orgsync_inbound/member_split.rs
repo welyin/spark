@@ -17,7 +17,11 @@ fn ak(tag: &str) -> spark_core::org::types::OrganizationAccessKey {
     }
 }
 
-fn org_record(key: &str, value: serde_json::Value, meta: DocMeta) -> spark_core::sync::orgsync::OrgsyncRecord {
+fn org_record(
+    key: &str,
+    value: serde_json::Value,
+    meta: DocMeta,
+) -> spark_core::sync::orgsync::OrgsyncRecord {
     spark_core::sync::orgsync::OrgsyncRecord {
         key: key.to_string(),
         value,
@@ -109,11 +113,19 @@ fn member_record_concurrent_merge_keeps_local_access_key() {
         "peer-a",
         "node-b",
     );
-    assert_eq!(r.response, json!({ "ok": true }), "org:member 键域过 B3 白名单");
+    assert_eq!(
+        r.response,
+        json!({ "ok": true }),
+        "org:member 键域过 B3 白名单"
+    );
 
     let stored: OrganizationMember =
         serde_json::from_str(&b.get(&entry_key).unwrap().unwrap()).unwrap();
-    assert_eq!(stored.access_key, Some(ak("b")), "accessKey 写一次守卫：本地保留");
+    assert_eq!(
+        stored.access_key,
+        Some(ak("b")),
+        "accessKey 写一次守卫：本地保留"
+    );
     assert_eq!(stored.role, OrganizationRole::Admin, "管理员字段组取秩高侧");
     let meta = get_personal_meta(&b, &entry_key).unwrap().unwrap();
     assert_eq!(meta.vv.get("node-a"), Some(&3), "合并 vv 并入远端分量");
@@ -124,7 +136,9 @@ fn member_record_concurrent_merge_keeps_local_access_key() {
     );
     assert_eq!(meta.ts, NOW + 100, "ts 取大");
     // 装配视图：get_record 读到条目覆盖后的成员
-    let view = OrganizationService::get_record(&b, ORG_ID).unwrap().unwrap();
+    let view = OrganizationService::get_record(&b, ORG_ID)
+        .unwrap()
+        .unwrap();
     let m = view.find_member(&b_root).unwrap();
     assert_eq!(m.access_key, Some(ak("b")));
     assert_eq!(m.role, OrganizationRole::Admin);
@@ -178,7 +192,9 @@ fn legacy_whole_apply_projects_member_entries() {
         .unwrap();
 
     // 旧端 whole：b_root 改了 nickname（B 本地 whole 无 pmeta → Remote 覆盖）
-    let mut whole = OrganizationService::get_record(&b, ORG_ID).unwrap().unwrap();
+    let mut whole = OrganizationService::get_record(&b, ORG_ID)
+        .unwrap()
+        .unwrap();
     whole
         .members
         .iter_mut()
@@ -218,15 +234,25 @@ fn legacy_whole_apply_projects_member_entries() {
             .get(&org_member_key(ORG_ID, &m.root_id))
             .unwrap()
             .expect("whole 合入后就地投影出成员条目");
-        assert_eq!(raw, serde_json::to_string(m).unwrap(), "投影内容与 whole 等价");
+        assert_eq!(
+            raw,
+            serde_json::to_string(m).unwrap(),
+            "投影内容与 whole 等价"
+        );
         let meta = get_personal_meta(&b, &org_member_key(ORG_ID, &m.root_id))
             .unwrap()
             .unwrap();
         assert_eq!(meta.vv, whole_meta.vv, "投影 pmeta 复制 whole 远端 vv");
-        assert_eq!(meta.vv.get("node-b"), None, "远端语义：无本机分量（防回声）");
+        assert_eq!(
+            meta.vv.get("node-b"),
+            None,
+            "远端语义：无本机分量（防回声）"
+        );
     }
     // 装配视图 == whole（投影一致）
-    let view = OrganizationService::get_record(&b, ORG_ID).unwrap().unwrap();
+    let view = OrganizationService::get_record(&b, ORG_ID)
+        .unwrap()
+        .unwrap();
     assert_eq!(
         view.find_member(&b_root).unwrap().nickname.as_deref(),
         Some("旧端昵称")
@@ -263,7 +289,9 @@ fn member_removal_tombstone_propagates_and_excludes() {
     .unwrap();
 
     // A 侧：whole 移除 C + C 条目墓碑（同批）
-    let mut whole = OrganizationService::get_record(&b, ORG_ID).unwrap().unwrap();
+    let mut whole = OrganizationService::get_record(&b, ORG_ID)
+        .unwrap()
+        .unwrap();
     whole.members.retain(|m| m.root_id != c_root);
     whole.updated_at = NOW + 60;
     let tomb_meta = DocMeta {
@@ -308,7 +336,9 @@ fn member_removal_tombstone_propagates_and_excludes() {
     let meta = get_personal_meta(&b, &c_entry_key).unwrap().unwrap();
     assert!(is_tombstone(&meta), "成员移除 = 成员记录墓碑");
     // 装配视图排除 C
-    let view = OrganizationService::get_record(&b, ORG_ID).unwrap().unwrap();
+    let view = OrganizationService::get_record(&b, ORG_ID)
+        .unwrap()
+        .unwrap();
     assert!(view.find_member(&c_root).is_none(), "装配视图排除被踢成员");
     assert_eq!(view.members.len(), 2);
     // org 域 dlog 接力补登（A→B→C 传播）
@@ -383,8 +413,16 @@ fn outbound_invite_reconciled_on_member_entry_arrival() {
         1,
     );
     let r = deliver_orgsync(
-        &mut a, &a_root, "A", &c_key, &c_root, &a_root,
-        dm_envelope::KIND_ORGSYNC_DATA, data_body, "peer-c", "node-a",
+        &mut a,
+        &a_root,
+        "A",
+        &c_key,
+        &c_root,
+        &a_root,
+        dm_envelope::KIND_ORGSYNC_DATA,
+        data_body,
+        "peer-c",
+        "node-a",
     );
     assert_eq!(r.response, json!({ "ok": true }));
 
@@ -398,7 +436,9 @@ fn outbound_invite_reconciled_on_member_entry_arrival() {
         "条目入站到达触发对账：outbound 标 accepted"
     );
     assert!(
-        r.events.iter().any(|e| matches!(e, spark_core::p2p::P2pEvent::OrgInviteUpdated(_))),
+        r.events
+            .iter()
+            .any(|e| matches!(e, spark_core::p2p::P2pEvent::OrgInviteUpdated(_))),
         "OrgInviteUpdated 事件已发"
     );
 }
@@ -425,7 +465,9 @@ fn outbound_invite_not_marked_on_prerecord_or_relay_then_declined_lands() {
         .unwrap();
     // A 侧 outbound pending 邀请（A 邀 C；C 已由 addMember 预录进成员表——
     // 预录即携端点 peer-c，e2e join_org 形态）
-    let mut whole = OrganizationService::get_record(&a, ORG_ID).unwrap().unwrap();
+    let mut whole = OrganizationService::get_record(&a, ORG_ID)
+        .unwrap()
+        .unwrap();
     whole.members.push({
         let mut m = member(&c_root, OrganizationRole::Member);
         m.node_info = Some(spark_core::org::types::OrganizationDeviceSet::from_single(
@@ -437,8 +479,14 @@ fn outbound_invite_not_marked_on_prerecord_or_relay_then_declined_lands() {
         ));
         m
     });
-    put_personal(&mut a, "node-a", &format!("org:meta:{ORG_ID}"),
-        &serde_json::to_string(&whole).unwrap(), NOW).unwrap();
+    put_personal(
+        &mut a,
+        "node-a",
+        &format!("org:meta:{ORG_ID}"),
+        &serde_json::to_string(&whole).unwrap(),
+        NOW,
+    )
+    .unwrap();
     let out_record = spark_core::org::invite_record::OrgInviteRecord {
         id: "inv-a-c".to_string(),
         org_id: ORG_ID.to_string(),
@@ -475,8 +523,16 @@ fn outbound_invite_not_marked_on_prerecord_or_relay_then_declined_lands() {
         1,
     );
     let r = deliver_orgsync(
-        &mut a, &a_root, "A", &_b_key, &b_root, &a_root,
-        dm_envelope::KIND_ORGSYNC_DATA, data_body, "peer-b", "node-a",
+        &mut a,
+        &a_root,
+        "A",
+        &_b_key,
+        &b_root,
+        &a_root,
+        dm_envelope::KIND_ORGSYNC_DATA,
+        data_body,
+        "peer-b",
+        "node-a",
     );
     assert_eq!(r.response, json!({ "ok": true }));
     assert_eq!(
@@ -488,7 +544,12 @@ fn outbound_invite_not_marked_on_prerecord_or_relay_then_declined_lands() {
     // 2) org:member 挂点：C 的预录条目（含端点 peer-c）经 B 中继到达——
     //    vv 只含 B 的分量（写入设备是 B 的中继来源/管理员双写产物）→ 不误标
     let entry_key = org_member_key(ORG_ID, &c_root);
-    let prerecorded_entry = whole.members.iter().find(|m| m.root_id == c_root).unwrap().clone();
+    let prerecorded_entry = whole
+        .members
+        .iter()
+        .find(|m| m.root_id == c_root)
+        .unwrap()
+        .clone();
     let data_body = build_orgsync_data_batch(
         ORG_ID,
         COL_FULL,
@@ -501,8 +562,16 @@ fn outbound_invite_not_marked_on_prerecord_or_relay_then_declined_lands() {
         1,
     );
     let r = deliver_orgsync(
-        &mut a, &a_root, "A", &_b_key, &b_root, &a_root,
-        dm_envelope::KIND_ORGSYNC_DATA, data_body, "peer-b", "node-a",
+        &mut a,
+        &a_root,
+        "A",
+        &_b_key,
+        &b_root,
+        &a_root,
+        dm_envelope::KIND_ORGSYNC_DATA,
+        data_body,
+        "peer-b",
+        "node-a",
     );
     assert_eq!(r.response, json!({ "ok": true }));
     assert_eq!(
@@ -521,8 +590,15 @@ fn outbound_invite_not_marked_on_prerecord_or_relay_then_declined_lands() {
         &c_key,
     );
     let r = spark_core::kernel::handle_inbound_dm(
-        &mut a, &a_root, "A", reply, "peer-c",
-        &std::collections::HashSet::new(), NOW + 30, "node-a", None,
+        &mut a,
+        &a_root,
+        "A",
+        reply,
+        "peer-c",
+        &std::collections::HashSet::new(),
+        NOW + 30,
+        "node-a",
+        None,
     )
     .unwrap();
     assert_eq!(r.response, json!({ "ok": true }));
@@ -553,15 +629,21 @@ fn outbound_invite_reconciled_on_whole_with_invitee_component() {
     spark_core::plugindata::declare_builtin_org_collections(&mut a, ORG_ID, &a_root, NOW, "node-a")
         .unwrap();
     // D 预录携端点 peer-d
-    let mut whole = OrganizationService::get_record(&a, ORG_ID).unwrap().unwrap();
-    whole.members.iter_mut().find(|m| m.root_id == d_root).unwrap().node_info =
-        Some(spark_core::org::types::OrganizationDeviceSet::from_single(
-            spark_core::org::types::OrganizationNodeInfo {
-                device_uid: Some("uid-d".to_string()),
-                peer_id: Some("peer-d".to_string()),
-                addresses: Vec::new(),
-            },
-        ));
+    let mut whole = OrganizationService::get_record(&a, ORG_ID)
+        .unwrap()
+        .unwrap();
+    whole
+        .members
+        .iter_mut()
+        .find(|m| m.root_id == d_root)
+        .unwrap()
+        .node_info = Some(spark_core::org::types::OrganizationDeviceSet::from_single(
+        spark_core::org::types::OrganizationNodeInfo {
+            device_uid: Some("uid-d".to_string()),
+            peer_id: Some("peer-d".to_string()),
+            addresses: Vec::new(),
+        },
+    ));
     OrganizationService::save_record(&mut a, &whole).unwrap();
     let out_record = spark_core::org::invite_record::OrgInviteRecord {
         id: "inv-a-d".to_string(),
@@ -593,8 +675,16 @@ fn outbound_invite_reconciled_on_whole_with_invitee_component() {
         1,
     );
     let r = deliver_orgsync(
-        &mut a, &a_root, "A", &_d_key, &d_root, &a_root,
-        dm_envelope::KIND_ORGSYNC_DATA, data_body, "peer-d", "node-a",
+        &mut a,
+        &a_root,
+        "A",
+        &_d_key,
+        &d_root,
+        &a_root,
+        dm_envelope::KIND_ORGSYNC_DATA,
+        data_body,
+        "peer-d",
+        "node-a",
     );
     assert_eq!(r.response, json!({ "ok": true }));
     let updated = OrganizationService::get_outgoing_invite(&a, ORG_ID, &d_root)
@@ -606,7 +696,9 @@ fn outbound_invite_reconciled_on_whole_with_invitee_component() {
         "whole 携 invitee 本人分量 → 对账标 accepted"
     );
     assert!(
-        r.events.iter().any(|e| matches!(e, spark_core::p2p::P2pEvent::OrgInviteUpdated(_))),
+        r.events
+            .iter()
+            .any(|e| matches!(e, spark_core::p2p::P2pEvent::OrgInviteUpdated(_))),
         "OrgInviteUpdated 事件已发"
     );
 }

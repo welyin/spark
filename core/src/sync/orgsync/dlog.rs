@@ -329,10 +329,14 @@ pub fn org_dlog_remove_member_marks<S: StorageBackend>(
     let mut removed = 0usize;
     let mut ops = Vec::new();
     for (key, _) in storage.scan(&ScanOptions::prefix(&prefix))? {
-        let Some(rest) = key.strip_prefix(&prefix) else { continue };
+        let Some(rest) = key.strip_prefix(&prefix) else {
+            continue;
+        };
         let mut segs = rest.rsplit(':');
         let (_peer, root, marker) = (segs.next(), segs.next(), segs.next());
-        let (Some(root), Some(marker)) = (root, marker) else { continue };
+        let (Some(root), Some(marker)) = (root, marker) else {
+            continue;
+        };
         if (marker == "wm" || marker == "seen") && root == root_id {
             ops.push(crate::storage::BatchOperation::delete(key));
             removed += 1;

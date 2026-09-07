@@ -502,6 +502,64 @@ impl KernelDmHandler {
         });
     }
 
+    /// affairsync 出站投递：把纯逻辑层构建好的 need/data body 装配成完整
+    /// affairsync-* 信封（kind=KIND_AFFAIRSYNC_*、from=本机 rootId、to=各
+    /// output 携带的对端关注者 rootId），逐个 `dm_direct` 回投（spawn 模式同
+    /// `spawn_orgsync_reply`，失败静默）。
+    ///
+    /// 与 orgsync 的差异（affair-sync §1）：affair 域纯 append-only，无
+    /// 墓碑/dlog 面——不做 ACK 水位重发；投递失败不入 pending 离线队列
+    /// （`dm:pending:`/`org:dm:pending:` 按 personal/org 空间分域，无 affair
+    /// 空间），丢失由周期反熵 hello 兜底收敛。
+    pub(super) fn spawn_affairsync_reply(
+        &self,
+        my_root_id: &str,
+        target: PeerNodeInfo,
+        outputs: Vec<crate::kernel::inbound_dm::AffairsyncDmOut>,
+    ) {
+        let node = self
+            .node_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let signing_key = self
+            .signing_key_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let (Some(node), Some(signing_key)) = (node, signing_key) else {
+            return;
+        };
+        let from = my_root_id.to_string();
+        tokio::spawn(async move {
+            for output in outputs {
+                let envelope = dm_envelope::build_envelope(
+                    output.kind(),
+                    &from,
+                    output.to_root_id(),
+                    system_now_ms(),
+                    output.body().clone(),
+                    &signing_key,
+                );
+                // rate-limited 有限重试（与 pdsync/orgsync 同口径：affairsync-*
+                // 已入应答侧限流豁免名单，重试仅兼容未升级旧对端）
+                let mut retries = 0;
+                loop {
+                    let response = node.dm_direct(&target, envelope.clone()).await;
+                    let rate_limited = matches!(&response, Ok(v) if dm_response_is_rate_limited(v));
+                    if !rate_limited || retries >= PDSYNC_RATE_LIMIT_MAX_RETRIES {
+                        break;
+                    }
+                    retries += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(
+                        PDSYNC_RATE_LIMIT_RETRY_DELAY_MS,
+                    ))
+                    .await;
+                }
+            }
+        });
+    }
+
     /// 回发 feed-blob 出站信封（feed-blob-req/resp，跨联系人分块传输通道）。
     /// 单条输出（`InboundDmResult::feed_blob_out`），from=本机 rootId、
     /// to=连接层对端 rootId（feed 原作者/拉取方）。spawn 到 runtime 投递，
@@ -538,85 +596,6 @@ impl KernelDmHandler {
         );
         tokio::spawn(async move {
             let _ = node.dm_direct(&target, envelope).await;
-        });
-    }
-
-    /// F3（§20.6 离线补投）：对端 orgsync-hello（成员上线）触发——扫描本机
-    /// orgkey pending，向该成员（`from_root_id`）重投未送达的 orgkey-deliver
-    /// （离线/无 accessKey 期间 grant/revoke 的密钥补投）。
-    ///
-    /// 装配复用 [`crate::kernel::data_access::plan_pending_orgkey_resend`]
-    /// （与 Kernel 出站同一份规则，host 不持 `&Kernel`，资源全部来自共享格）；
-    /// 发送经 `dm_direct` + 退避重试（`deliver_with_retry`，同
-    /// `spawn_deliveries_with_retry` 语义）。重投幂等（收端已有 ≥ epoch 密钥
-    /// 静默丢弃）；装配与 pending 清理在 io_lock 内（与入站落库互斥）。
-    /// 无该成员 pending / 未解锁（无 seed、根私钥）/ 节点未回填 → 静默跳过。
-    pub(super) fn spawn_orgkey_pending_resend(
-        &self,
-        my_root_id: &str,
-        org_id: &str,
-        from_root_id: &str,
-    ) {
-        // 稳态快路径：无该成员的 pending 直接返回（零 spawn 开销）
-        let has_pending = crate::sync::orgsync::orgkey_pending_for_org(&self.storage, org_id)
-            .iter()
-            .any(|(_, recipient, _, _)| recipient == from_root_id);
-        if !has_pending {
-            return;
-        }
-        let seed = self
-            .seed_shared
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        let root_key = self
-            .signing_key_shared
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        let node = self
-            .node_shared
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        let (Some(seed), Some(root_key), Some(node)) = (seed, root_key, node) else {
-            return;
-        };
-        let org_id = org_id.to_string();
-        let from_root_id = from_root_id.to_string();
-        let sender_root_id = my_root_id.to_string();
-        let mut storage = self.storage.clone();
-        let io_lock = std::sync::Arc::clone(&self.io_lock);
-        tokio::spawn(async move {
-            let deliveries = {
-                let _io = io_lock.lock().unwrap_or_else(|e| e.into_inner());
-                let mut ctx = crate::kernel::data_access::OrgkeyDeliverCtx {
-                    storage: &mut storage,
-                    seed,
-                    sender_root_id,
-                    root_key,
-                    now_ms: system_now_ms(),
-                };
-                crate::kernel::data_access::plan_pending_orgkey_resend(
-                    &mut ctx,
-                    &org_id,
-                    &from_root_id,
-                )
-            };
-            if deliveries.is_empty() {
-                return;
-            }
-            log::info!(
-                "[ORGKEY] resend pending on hello | org={org_id} to={} count={}",
-                &from_root_id[..std::cmp::min(16, from_root_id.len())],
-                deliveries.len()
-            );
-            crate::kernel::dm_delivery::deliver_with_retry(
-                &node,
-                deliveries,
-                &crate::kernel::dm_delivery::DM_RETRY_DELAYS,
-            )
-            .await;
         });
     }
 }
@@ -708,10 +687,7 @@ async fn send_pdsync_outputs(
 }
 
 /// 检查 device_joined 通知补发窗口是否仍然有效。
-pub(super) fn device_notice_window_open(
-    storage: &crate::storage::Backend,
-    now_ms: i64,
-) -> bool {
+pub(super) fn device_notice_window_open(storage: &crate::storage::Backend, now_ms: i64) -> bool {
     use crate::p2p::constants::P2P_DEVICE_NOTICE_SELF_UNTIL;
     storage
         .get(P2P_DEVICE_NOTICE_SELF_UNTIL)

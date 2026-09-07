@@ -84,27 +84,34 @@ impl BuiltinOrgCollection {
     /// 该集合的数据键域：一组按 org 展开的存量键前缀（键不搬家）。
     pub fn data_prefixes(&self, org_id: &str) -> Vec<String> {
         match self {
-            // R3：org:structure 额外承载 `org:acl:{orgId}:`（O4 授权名单）——
-            // acl 本身是 all-members 系统数据（§20.7），复制组=全体成员。否则
-            // acl 随 encrypted 集合（data-accounts 复制组）流动，普通成员读者
-            // 收不到，orgkey-deliver 入站无法验 sender∈owners。把 acl 并入
-            // org:structure 的 all-members 键域，全员经此集合同步可见。
-            //
             // F2-P1（org-acl-genesis-fix §2.1）：`org:coll:{orgId}:`（集合声明）
-            // 同性质并入——声明是全员可见的组织元数据（传播范围与数据面
+            // 并入——声明是全员可见的组织元数据（传播范围与数据面
             // accounts 轴解耦），修复「data-accounts 集合的声明普通成员永远
             // 收不到」的实现漂移。声明不经 hello 的复制组裁剪。
             // P1（阶段四A 分拆）：org:member:{orgId}: 并入——成员条目
-            // lww-record 逐成员一条，与 org:acl:/org:coll: 同集合全员流动；
+            // lww-record 逐成员一条，与 org:coll: 同集合全员流动；
             // 成员移除 = 成员记录墓碑（org 域 dlog 传播）。
             // 阶段四F：org:evi:anchor:{orgId}: 并入——存证节点锚记录
             // （sync-evidence §6，lww-record 逐节点一条）。
+            // C7：`org:acl:{orgId}:`（O4 授权名单）随 encrypted 轴退役移出本键域。
+            // C1：org:genesis:（创世策略记录，写一次不可变）/ org:policy:
+            // （策略修订链）/ org:verifiers:（验证人信任声明，credential §4）
+            // 并入——组织策略与信任锚属结构集合，全员流动。
+            // policy §2：org:policydoc:（发布策略文档，sigSet 合入校验，
+            // sdk.policy.publish 产出）同集合全员流动。
+            // 退出留史：org:cleave:{orgId}:（共同体退出留史记录，append-only，
+            // community-model「退出留史」）同集合全员流动——各节点由名册 +
+            // 留史记录确定性推导空域只读档案状态。
             BuiltinOrgCollection::Structure => vec![
                 format!("org:meta:{org_id}"),
-                format!("org:acl:{org_id}:"),
                 format!("org:coll:{org_id}:"),
                 format!("org:member:{org_id}:"),
                 format!("org:evi:anchor:{org_id}:"),
+                format!("org:genesis:{org_id}"),
+                format!("org:policy:{org_id}:"),
+                format!("org:verifiers:{org_id}"),
+                format!("org:policydoc:{org_id}"),
+                format!("org:cleave:{org_id}:"),
             ],
             BuiltinOrgCollection::Contacts => vec![format!("ct:org:{org_id}:")],
             BuiltinOrgCollection::Invitations => vec![format!("org:invpub:{org_id}:")],

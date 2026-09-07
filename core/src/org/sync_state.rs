@@ -17,15 +17,15 @@
 //! 2. K 副本统计 `coversCurrent` 对污染记录恒 true → 该成员永久计入
 //!    everSynced（绕过 30 天窗口，org.md §12.3）。
 //!
-//! Rust 内核三个写入时机**一律写规范 versions 形状**（见下方三个构造函数），
-//! stale / coversCurrent 均按四字段真实比较。读取侧 [`OrgSyncState`]
+//! Rust 内核写入一律为规范 versions 形状；legacy org-share/org-pull 平面
+//! 退役后，唯一写入点是 orgsync 平面的活动反哺（[`note_orgsync_activity`]）。
+//! coversCurrent 按四字段真实比较。读取侧 [`OrgSyncState`]
 //! 的反序列化对 TS 遗留污染形状做**兼容解包**（外壳里嵌套的 versions 才是
 //! 有效数据），避免把 bug 传播回新实现。
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::snapshot::is_organization_sync_stale;
 use super::types::OrganizationSyncVersions;
 
 /// org-sync-state 存储键前缀（p2p/constants.ts:146）。
@@ -129,55 +129,6 @@ impl OrgSyncState {
     }
 }
 
-/// 写入时机 1：org-share **直连送达**确认后（org-share-sync.ts:439）。
-pub fn sync_state_after_share_delivered(
-    versions: OrganizationSyncVersions,
-    now_ms: i64,
-) -> OrgSyncState {
-    OrgSyncState {
-        versions,
-        last_synced_at: now_ms,
-    }
-}
-
-/// 写入时机 2：org-share **pubsub 收到 ack** 后（org-share-sync.ts:464）。
-pub fn sync_state_after_share_acked(
-    versions: OrganizationSyncVersions,
-    now_ms: i64,
-) -> OrgSyncState {
-    OrgSyncState {
-        versions,
-        last_synced_at: now_ms,
-    }
-}
-
-/// 写入时机 3：org-pull **成功拉取**某组织后（org-pull-sync.ts:279-296，
-/// 经 `onSyncState` 回调；versions 取本地记录的 `sync.versions`）。
-pub fn sync_state_after_pull_synced(
-    versions: OrganizationSyncVersions,
-    now_ms: i64,
-) -> OrgSyncState {
-    OrgSyncState {
-        versions,
-        last_synced_at: now_ms,
-    }
-}
-
-/// 推送前跳过判定（org-share-sync.ts:394-404 的正确语义版）：
-/// 存在历史 sync-state 且该 peer 记录的版本**不落后**于待推送版本时跳过。
-///
-/// 有意修复：TS 因污染形状使该判定恒为 true（首次送达后永不推送）；
-/// Rust 按四字段真实比较——对端已覆盖当前版本才跳过。
-pub fn should_skip_share_push(
-    previous_state: Option<&OrgSyncState>,
-    current_versions: &OrganizationSyncVersions,
-) -> bool {
-    match previous_state {
-        Some(state) => !is_organization_sync_stale(Some(&state.versions), current_versions),
-        None => false,
-    }
-}
-
 /// 90 天清理判定（data-management cleanup.ts:80-92）：
 /// `now - lastSyncedAt > 90天` 时删除。
 pub fn is_org_sync_state_expired(last_synced_at: i64, now_ms: i64) -> bool {
@@ -198,10 +149,13 @@ pub fn note_orgsync_activity<S: crate::storage::StorageBackend>(
     from_root_id: &str,
     now_ms: i64,
 ) {
-    let versions = super::resolve_local_versions(record);
+    let versions = super::snapshot::resolve_local_versions(record);
     let state = OrgSyncState {
         versions,
         last_synced_at: now_ms,
     };
-    let _ = storage.put(&org_sync_state_account_key(from_root_id, &record.org_id), &state.to_json());
+    let _ = storage.put(
+        &org_sync_state_account_key(from_root_id, &record.org_id),
+        &state.to_json(),
+    );
 }

@@ -14,9 +14,12 @@
 //! 处理自己见过的 requestId（即 orgq-req 的接收方），否则静默丢弃。
 //!
 //! ```json
-//! // orgq-req：查询
+//! // orgq-req：查询（readAuth 可选，read-gate §3：readPolicy.kind=credential
+//! // 的集合须携带凭证呈现段）
 //! { "op":"query", "orgId":"org_...", "collection":"finance:ledger",
-//!   "prefix":"2026-", "limit":500, "cursor":"<上一页末 key>", "requestId":"..." }
+//!   "prefix":"2026-", "limit":500, "cursor":"<上一页末 key>", "requestId":"...",
+//!   "readAuth": { "gateV":1, "credentials":[...], "holderProofs":[...],
+//!                 "presentedAt":1720000000000 } }
 //! // orgq-req：写入
 //! { "op":"write", "orgId":"org_...", "collection":"finance:ledger",
 //!   "records":[{"key":"...","value":{...}},{"key":"...","value":null}], "requestId":"..." }
@@ -77,6 +80,10 @@ pub enum OrgqReq {
         limit: usize,
         cursor: Option<String>,
         request_id: String,
+        /// 凭证呈现段（read-gate §3 readAuth；可选——仅 `readPolicy.kind ==
+        /// "credential"` 的集合消费，缺省/结构非法按「未呈现」由门禁
+        /// fail-closed 拒绝）。
+        read_auth: Option<crate::credential::ReadAuth>,
     },
     /// 写入受理。
     Write {
@@ -128,7 +135,8 @@ pub struct OrgqRespRecord {
     pub meta: DocMeta,
 }
 
-/// 构造 orgq-req 查询请求 body。
+/// 构造 orgq-req 查询请求 body。`read_auth` 为凭证呈现段（read-gate §3；
+/// 仅 `readPolicy.kind == "credential"` 的集合消费，缺省不带 = 未呈现）。
 pub fn build_orgq_query_req(
     org_id: &str,
     collection: &str,
@@ -136,6 +144,7 @@ pub fn build_orgq_query_req(
     limit: usize,
     cursor: Option<&str>,
     request_id: &str,
+    read_auth: Option<&crate::credential::ReadAuth>,
 ) -> Value {
     let limit = limit.clamp(1, ORGQ_LIMIT_MAX);
     let mut body = json!({
@@ -150,6 +159,9 @@ pub fn build_orgq_query_req(
     }
     if let Some(c) = cursor {
         body["cursor"] = json!(c);
+    }
+    if let Some(ra) = read_auth {
+        body["readAuth"] = serde_json::to_value(ra).unwrap_or(Value::Null);
     }
     body
 }
@@ -195,6 +207,11 @@ pub fn parse_orgq_req(body: &Value) -> Option<OrgqReq> {
                 .map(|n| n as usize)
                 .unwrap_or(ORGQ_LIMIT_DEFAULT)
                 .clamp(1, ORGQ_LIMIT_MAX);
+            // readAuth 结构非法按「未呈现」处理（None）——查询方得到协议语义的
+            // denied 空集应答（门禁 fail-closed），而非整请求 invalid-body 无应答。
+            let read_auth = body
+                .get("readAuth")
+                .and_then(|v| serde_json::from_value::<crate::credential::ReadAuth>(v.clone()).ok());
             Some(OrgqReq::Query {
                 org_id,
                 collection,
@@ -202,6 +219,7 @@ pub fn parse_orgq_req(body: &Value) -> Option<OrgqReq> {
                 limit,
                 cursor,
                 request_id,
+                read_auth,
             })
         }
         "write" => {
@@ -427,42 +445,6 @@ pub fn collect_orgq_records_page<S: StorageBackend>(
     (records, has_more)
 }
 
-// ── O4 encrypted 删除审计 ──────────────────────────────────────────────
-
-/// encrypted 集合删除审计日志键（独立审计键族，不参与同步流量）：
-/// `orgq:audit:{orgId}:{collection}:{seq:016}` = `{from,key,ts}` JSON。
-/// 最简审计口径（org-orgsync §20.5 注释）：encrypted 删除是权力行为（墓碑无
-/// 密文可验、非读者删除须拒绝），受理侧持久化 (from,key,ts) 供越权删除事后追查。
-pub const ORGQ_AUDIT_PREFIX: &str = "orgq:audit:";
-
-/// 追加一条 encrypted 删除审计日志条目。返回写入序号（自增，扫描取 max+1）。
-/// 纯本地键（不进 orgsync/pdsync 流量）。
-pub fn orgq_audit_log_delete<S: StorageBackend>(
-    storage: &mut S,
-    org_id: &str,
-    collection: &str,
-    from: &str,
-    rel_key: &str,
-    ts: i64,
-) -> u64 {
-    let prefix = format!("{ORGQ_AUDIT_PREFIX}{org_id}:{collection}:");
-    let seq = storage
-        .scan(&crate::storage::ScanOptions::prefix(&prefix))
-        .map(|entries| {
-            entries
-                .iter()
-                .filter_map(|(k, _)| k.strip_prefix(&prefix).and_then(|s| s.parse::<u64>().ok()))
-                .max()
-                .unwrap_or(0)
-        })
-        .unwrap_or(0)
-        + 1;
-    let key = format!("{prefix}{seq:016}");
-    let entry = serde_json::json!({ "from": from, "key": rel_key, "ts": ts });
-    let _ = storage.put(&key, &entry.to_string());
-    seq
-}
-
 /// 把一页 orgq 查询应答记录按**信封体积约束**切成多批（Z6，§20.5：resp 分批，
 /// `complete` 仅末批 true）。`batch_bytes` 用 dm 信封体积约束
 /// （`ORGSYNC_BATCH_BYTES`）。返回批序列（至少一批）；调用方按批序标记末批
@@ -508,6 +490,7 @@ mod tests {
             100,
             Some("2026-08"),
             "req-1",
+            None,
         );
         let parsed = parse_orgq_req(&body).unwrap();
         match parsed {
@@ -518,6 +501,7 @@ mod tests {
                 limit,
                 cursor,
                 request_id,
+                read_auth,
             } => {
                 assert_eq!(org_id, "org_0000000000000001");
                 assert_eq!(collection, "finance:ledger");
@@ -525,6 +509,7 @@ mod tests {
                 assert_eq!(limit, 100);
                 assert_eq!(cursor.as_deref(), Some("2026-08"));
                 assert_eq!(request_id, "req-1");
+                assert!(read_auth.is_none(), "未携带 readAuth → None");
             }
             _ => panic!("expected query"),
         }
@@ -542,7 +527,7 @@ mod tests {
             _ => panic!("expected query"),
         }
         // 构造侧钳到上限：9999 → 2000
-        let body = build_orgq_query_req("o", "c", None, 9999, None, "r");
+        let body = build_orgq_query_req("o", "c", None, 9999, None, "r", None);
         let parsed = parse_orgq_req(&body).unwrap();
         match parsed {
             OrgqReq::Query { limit, .. } => assert_eq!(limit, ORGQ_LIMIT_MAX),
@@ -556,6 +541,35 @@ mod tests {
         let parsed = parse_orgq_req(&body).unwrap();
         match parsed {
             OrgqReq::Query { limit, .. } => assert_eq!(limit, ORGQ_LIMIT_MAX),
+            _ => panic!("expected query"),
+        }
+    }
+
+    #[test]
+    fn orgq_query_req_read_auth_roundtrip() {
+        // 携带 readAuth（read-gate §3 呈现段）→ 线形带 readAuth 键，解析还原
+        let read_auth = crate::credential::ReadAuth {
+            gate_v: 1,
+            credentials: vec![],
+            holder_proofs: vec![],
+            presented_at: 1720000000000,
+        };
+        let body = build_orgq_query_req("o", "c", None, 10, None, "req-ra", Some(&read_auth));
+        assert!(body.get("readAuth").is_some(), "线形携带 readAuth 段");
+        let parsed = parse_orgq_req(&body).unwrap();
+        match parsed {
+            OrgqReq::Query { read_auth, .. } => {
+                let ra = read_auth.expect("readAuth 解析还原");
+                assert_eq!(ra.gate_v, 1);
+                assert_eq!(ra.presented_at, 1720000000000);
+            }
+            _ => panic!("expected query"),
+        }
+        // readAuth 结构非法 → 按「未呈现」解析为 None（门禁 fail-closed 口径）
+        let mut bad = build_orgq_query_req("o", "c", None, 10, None, "req-rb", None);
+        bad["readAuth"] = json!({"gateV": 99});
+        match parse_orgq_req(&bad).unwrap() {
+            OrgqReq::Query { read_auth, .. } => assert!(read_auth.is_none()),
             _ => panic!("expected query"),
         }
     }

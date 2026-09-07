@@ -31,6 +31,7 @@ import {
   parseBridgeMessage,
   type BridgeResultMessage
 } from './protocol';
+import { buildGenesisDraft, deriveIdentity, signPayload } from '../affair-wire';
 
 /** 消息端点的最小接口（Window 的子集，便于测试注入伪造端点） */
 export type WindowMessageEndpoint = Pick<Window, 'addEventListener' | 'removeEventListener' | 'postMessage'>;
@@ -410,13 +411,6 @@ export function connectPluginBridge(options: ConnectPluginBridgeOptions): Promis
           call('data', 'saveBlob', [dataBase64]) as Promise<{ hash: string; size: number }>,
         readBlob: (hash: string) =>
           call('data', 'readBlob', [hash]) as Promise<{ status: 'ready'; data: string } | { status: 'pending' }>,
-        // O4 encrypted 授权名单（owner 侧；orgId 由桥绑定注入，插件不感知）
-        grantAccess: (name, members, version) =>
-          call('data', 'grantAccess', [name, members, version ?? '1']) as Promise<{ owners: string[]; readers: string[]; epoch: number }>,
-        revokeAccess: (name, members, version) =>
-          call('data', 'revokeAccess', [name, members, version ?? '1']) as Promise<{ owners: string[]; readers: string[]; epoch: number }>,
-        listAccess: (name, version) =>
-          call('data', 'listAccess', [name, version ?? '1']) as Promise<{ owners: string[]; readers: string[]; epoch: number }>,
         // 远端合入通知：封装 events 订阅（同一连接内的本地注册表 + 桥订阅），
         // 事件名与 P2pEventDto kind 同口径；payload 按归属插件过滤
         onChange: async (handler) => {
@@ -502,6 +496,98 @@ export function connectPluginBridge(options: ConnectPluginBridgeOptions): Promis
           };
           await events.subscribe('FeedReceived', wrapped);
         }
+      },
+      // 内容面 blob 模块（public-topics §七「持有即做种」sdk.content；
+      // 权限由桥 dispatcher 强制 storage:read/storage:write）。fetchBlob 是
+      // 网络长时调用（Kad 检索 + 逐 provider 直连拉取，最坏数十秒），不能用
+      // 普通 call 的 10s 默认超时——与 sys 长时外呼同口径放宽
+      content: {
+        saveBlob: (dataBase64: string) =>
+          call('content', 'saveBlob', [dataBase64]) as Promise<import('../index').PluginContentBlobInfo>,
+        readBlob: (cid: string) =>
+          call('content', 'readBlob', [cid]) as Promise<string | null>,
+        fetchBlob: (cid: string) =>
+          call('content', 'fetchBlob', [cid], SYS_CALL_TIMEOUT_MS) as Promise<string | null>,
+        listBlobs: () => call('content', 'listBlobs', []) as Promise<string[]>,
+        pinRoot: (cid: string, root: string) =>
+          call('content', 'pinRoot', [cid, root]) as Promise<{ success: boolean }>,
+        unpinRoot: (cid: string, root: string) =>
+          call('content', 'unpinRoot', [cid, root]) as Promise<{ success: boolean }>,
+        gcSweep: () => call('content', 'gcSweep', []) as Promise<string[]>
+      },
+      // 共同体事务模块（community-affairs §7.2 sdk.affairs；权限由桥
+      // dispatcher 强制 affairs:read/affairs:write，信封 v:1 不变）
+      affairs: {
+        // 创建事务（插件内嵌创建流的 SDK 承载）：本地构造创世记录（线形
+        // 见 affair-wire）→ 两次 identity.sign（探测取公钥 + 记录签名）→
+        // follow。签名是内核入站校验硬要求，用户拒绝即整体上抛（不降级）。
+        create: async (input) => {
+          const probe = (await call('identity', 'sign', ['spark:affair-actor-probe'])) as {
+            publicKey: string;
+          };
+          const actor = {
+            kind: 'person' as const,
+            identity: deriveIdentity(probe.publicKey),
+            publicKey: probe.publicKey
+          };
+          const draft = buildGenesisDraft(input, actor, Date.now());
+          const signed = (await call('identity', 'sign', [signPayload(draft)])) as {
+            signature: string;
+          };
+          const genesis = { ...draft, sig: signed.signature };
+          const affairId = (await call('affairs', 'follow', [genesis])) as string;
+          return { affairId, genesis };
+        },
+        follow: (genesis) => call('affairs', 'follow', [genesis]) as Promise<string>,
+        unfollow: (affairId) => call('affairs', 'unfollow', [affairId]) as Promise<void>,
+        listFollowed: () => call('affairs', 'listFollowed', []) as Promise<string[]>,
+        submitOp: (op) =>
+          call('affairs', 'submitOp', [op]) as Promise<{ affairId: string; opHash: string; status: import('../index').AffairOpStatus }>,
+        readLog: (affairId) => call('affairs', 'readLog', [affairId]) as Promise<import('../index').AffairLog>,
+        readRules: (affairId) =>
+          call('affairs', 'readRules', [affairId]) as Promise<import('../index').AffairRulesView>,
+        readResolution: (affairId) =>
+          call('affairs', 'readResolution', [affairId]) as Promise<import('../index').AffairResolutions>,
+        ladderStatus: (affairId) =>
+          call('affairs', 'ladderStatus', [affairId]) as Promise<import('../index').AffairLadderStatus>,
+        publicProfile: (identity) =>
+          call('affairs', 'publicProfile', [identity]) as Promise<import('../index').AffairPublicProfile>,
+        snapshotPayload: (affairId, asOf) =>
+          call('affairs', 'snapshotPayload', asOf === undefined ? [affairId] : [affairId, asOf]) as Promise<import('../index').AffairSnapshotPayload>,
+        readExec: (affairId) =>
+          call('affairs', 'readExec', [affairId]) as Promise<import('../index').AffairExecView>,
+        orgEffects: (orgId, affairId) =>
+          call('affairs', 'orgEffects', [orgId, affairId]) as Promise<import('../index').AffairOrgEffects>,
+        applyOrgEffects: (orgId, affairId) =>
+          call('affairs', 'applyOrgEffects', [orgId, affairId]) as Promise<import('../index').AffairOrgEffectsApplyResult>,
+        // 变更订阅：经既有 events.subscribe 通道订阅 AffairChanged（内核
+        // P2pEvent::AffairChanged → 壳层 p2p-event → 宿主桥转发；事件载荷
+        // 只有 affairId 与变更类别，与 PluginDataChanged 同口径的轻量通知）
+        onChange: async (handler) => {
+          await events.subscribe('AffairChanged', handler as PluginEventHandler);
+        }
+      },
+      // 资格凭证模块（community-affairs §7.2 sdk.credentials；域身份由桥按绑定
+      // 身份注入——presentHolderProof 的签名域插件不可自报，无签发接口）
+      credentials: {
+        listHeld: () => call('credentials', 'listHeld', []) as Promise<import('../index').HeldCredential[]>,
+        presentHolderProof: (input) =>
+          call('credentials', 'presentHolderProof', [input]) as Promise<import('../index').HolderProofPresentation>,
+        queryVerifiers: (orgId) =>
+          call('credentials', 'queryVerifiers', [orgId]) as Promise<import('../index').VerifierSet>,
+        verify: (credential) =>
+          call('credentials', 'verify', [credential]) as Promise<import('../index').CredentialVerifyResult>,
+        queryRevocations: (issuer) =>
+          call('credentials', 'queryRevocations', [issuer]) as Promise<import('../index').RevocationSnapshotView>
+      },
+      // 策略模块（community-affairs §7.2 sdk.policy：本地草稿读写 + 发布合入；
+      // 权限由桥 dispatcher 强制 policy:read/policy:write）
+      policy: {
+        read: (orgId) => call('policy', 'read', [orgId]) as Promise<import('../index').PolicyDraft | null>,
+        submitDraft: (doc) =>
+          call('policy', 'submitDraft', [doc]) as Promise<import('../index').PolicySubmitResult>,
+        publish: (orgId) =>
+          call('policy', 'publish', [orgId]) as Promise<import('../index').PolicyPublishResult>
       },
       events,
       onHostCall: (event: string, handler: (payload: unknown) => unknown | Promise<unknown>) => {

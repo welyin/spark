@@ -71,8 +71,7 @@ unsafe impl Send for Connection {}
 impl Connection {
     fn open(path: &Path) -> Result<Self> {
         let path_bytes = path.as_os_str().as_encoded_bytes();
-        let c_path = CString::new(path_bytes)
-            .map_err(|e| backend_err("open path", e))?;
+        let c_path = CString::new(path_bytes).map_err(|e| backend_err("open path", e))?;
         let mut db = std::ptr::null_mut();
         // 安全说明：c_path 在本调用内有效；db 由 SQLite 写回。
         let rc = unsafe {
@@ -306,8 +305,11 @@ impl std::fmt::Debug for SqliteStorage {
 impl StorageBackend for SqliteStorage {
     fn get(&self, key: &str) -> Result<Option<String>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        conn.prepare("SELECT value FROM kv WHERE key = ?1", &[BindParam::Text(key)])?
-            .step_value()
+        conn.prepare(
+            "SELECT value FROM kv WHERE key = ?1",
+            &[BindParam::Text(key)],
+        )?
+        .step_value()
     }
 
     fn put(&mut self, key: &str, value: &str) -> Result<()> {
@@ -332,11 +334,12 @@ impl StorageBackend for SqliteStorage {
         let applied = (|| -> Result<()> {
             for op in operations {
                 match op {
-                    BatchOperation::Put { key, value } => conn.prepare(
-                        "INSERT OR REPLACE INTO kv (key, value) VALUES (?1, ?2)",
-                        &[BindParam::Text(&key), BindParam::Text(&value)],
-                    )?
-                    .execute()?,
+                    BatchOperation::Put { key, value } => conn
+                        .prepare(
+                            "INSERT OR REPLACE INTO kv (key, value) VALUES (?1, ?2)",
+                            &[BindParam::Text(&key), BindParam::Text(&value)],
+                        )?
+                        .execute()?,
                     BatchOperation::Delete { key } => conn
                         .prepare("DELETE FROM kv WHERE key = ?1", &[BindParam::Text(&key)])?
                         .execute()?,

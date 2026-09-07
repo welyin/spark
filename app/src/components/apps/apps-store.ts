@@ -30,7 +30,13 @@ export const PERMISSION_LABELS: Record<string, string> = {
   'network:broadcast': '网络广播',
   'proof:verify': '存证核验',
   'identity:sign': '域身份签名',
-  'message:app': '发送应用消息'
+  'message:app': '发送应用消息',
+  // community-affairs §7.2 新权限位的展示名
+  'affairs:read': '读取共同体事务',
+  'affairs:write': '关注/提交共同体事务',
+  'credentials:read': '读取资格凭证',
+  'policy:read': '读取策略文档',
+  'policy:write': '提交策略文档草稿'
 };
 
 export function permissionLabel(permission: string): string {

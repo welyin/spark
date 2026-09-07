@@ -17,7 +17,11 @@ async fn start_node_with(
     root_id: Option<&str>,
     enable_relay_server: bool,
     enable_dcutr: bool,
-) -> (spark_core::p2p::P2pNode, std::sync::Arc<std::sync::Mutex<HostState>>, SharedStorage) {
+) -> (
+    spark_core::p2p::P2pNode,
+    std::sync::Arc<std::sync::Mutex<HostState>>,
+    SharedStorage,
+) {
     let storage = SharedStorage::new();
     let (host, state) = TestHost::new(root_id, storage.clone());
     let mut config = test_config(now_ms);
@@ -186,9 +190,11 @@ async fn dcutr_legacy_peer_falls_back_to_circuit() {
     // 电路连接照常建立（A 经电路连 B 成功）
     let circuit = circuit_addr(&dialable_r[0], &r_peer, &b_peer);
     connect(&a, &b_peer, &[circuit.clone()]).await;
-    let hit = wait_for_timeout(&mut a, Duration::from_secs(10), |e| {
-        matches!(e, spark_core::p2p::P2pEvent::PeerConnected { peer_id } if *peer_id == b_peer)
-    })
+    let hit = wait_for_timeout(
+        &mut a,
+        Duration::from_secs(10),
+        |e| matches!(e, spark_core::p2p::P2pEvent::PeerConnected { peer_id } if *peer_id == b_peer),
+    )
     .await;
     assert!(hit, "电路连接建立（PeerConnected）");
     // 旧端不升级：无直连地址的成功记账（给协商留 3s 窗；邻居池内该 peer

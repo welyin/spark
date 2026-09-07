@@ -351,3 +351,116 @@ describe('feed 域（社交投递层 §9 sdk.feed：deliver 需 feed:deliver，o
     await expect(handler('feed', 'onReceive', ['x'])).rejects.toThrow(/Access denied/);
   });
 });
+
+
+describe('affairs 域（community-affairs §7.2 sdk.affairs：读须 affairs:read，写须 affairs:write）', () => {
+  it('未授权：读/写方法一律拒绝', async () => {
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    await expect(handler('affairs', 'listFollowed', [])).rejects.toThrow(/Access denied/);
+    await expect(handler('affairs', 'readLog', ['af_x'])).rejects.toThrow(/Access denied/);
+    await expect(handler('affairs', 'readResolution', ['af_x'])).rejects.toThrow(/Access denied/);
+    await expect(handler('affairs', 'ladderStatus', ['af_x'])).rejects.toThrow(/Access denied/);
+    await expect(handler('affairs', 'follow', [{ kind: 'affair-genesis' }])).rejects.toThrow(/Access denied/);
+    await expect(handler('affairs', 'unfollow', ['af_x'])).rejects.toThrow(/Access denied/);
+    await expect(handler('affairs', 'submitOp', [{ affairId: 'af_x', opType: 'vote' }])).rejects.toThrow(
+      /Access denied/
+    );
+  });
+
+  it('affairs:read 授权：只读方法放行，写方法仍拒绝', async () => {
+    mockGrantedPermissions(['affairs:read']);
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    await expect(handler('affairs', 'listFollowed', [])).resolves.toBeNull();
+    await expect(handler('affairs', 'readLog', ['af_x'])).resolves.toBeNull();
+    await expect(handler('affairs', 'readResolution', ['af_x'])).resolves.toBeNull();
+    await expect(handler('affairs', 'ladderStatus', ['af_x'])).resolves.toBeNull();
+    await expect(handler('affairs', 'follow', [{ kind: 'affair-genesis' }])).rejects.toThrow(/Access denied/);
+    await expect(handler('affairs', 'submitOp', [{ affairId: 'af_x', opType: 'vote' }])).rejects.toThrow(
+      /Access denied/
+    );
+  });
+
+  it('affairs:write 授权：写方法放行（读方法按 affairs:read 仍拒绝）', async () => {
+    mockGrantedPermissions(['affairs:write']);
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    await expect(handler('affairs', 'follow', [{ kind: 'affair-genesis' }])).resolves.toBeNull();
+    await expect(handler('affairs', 'unfollow', ['af_x'])).resolves.toBeNull();
+    await expect(handler('affairs', 'submitOp', [{ affairId: 'af_x', opType: 'vote' }])).resolves.toBeNull();
+    await expect(handler('affairs', 'readLog', ['af_x'])).rejects.toThrow(/Access denied/);
+  });
+
+  it('message-card 视图无 affairs 域（有授权也拒绝）', async () => {
+    mockGrantedPermissions(['affairs:read', 'affairs:write']);
+    const handler = await createPluginBridgeDispatcher({ ...BASE_IDENTITY, viewType: 'message-card' });
+    await expect(handler('affairs', 'readLog', ['af_x'])).rejects.toThrow(/Access denied/);
+    await expect(handler('affairs', 'follow', [{ kind: 'affair-genesis' }])).rejects.toThrow(/Access denied/);
+  });
+
+  it('未知 affairs 方法拒绝（未知调用）', async () => {
+    mockGrantedPermissions(['affairs:read', 'affairs:write']);
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    await expect(handler('affairs', 'deleteAffair', ['af_x'])).rejects.toThrow(/Access denied/);
+  });
+});
+
+describe('credentials 域（community-affairs §7.2 sdk.credentials：credentials:read）', () => {
+  it('credentials:read 未授权：三个方法一律拒绝', async () => {
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    await expect(handler('credentials', 'listHeld', [])).rejects.toThrow(/Access denied/);
+    await expect(
+      handler('credentials', 'presentHolderProof', [{ credId: 'c1', requestId: 'r1', orgId: 'org_1', collection: 'docs' }])
+    ).rejects.toThrow(/Access denied/);
+    await expect(handler('credentials', 'queryVerifiers', ['org_1'])).rejects.toThrow(/Access denied/);
+  });
+
+  it('credentials:read 授权：放行并落到 electronAPI.credentials', async () => {
+    mockGrantedPermissions(['credentials:read']);
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    await expect(handler('credentials', 'listHeld', [])).resolves.toBeNull();
+    await expect(
+      handler('credentials', 'presentHolderProof', [{ credId: 'c1', requestId: 'r1', orgId: 'org_1', collection: 'docs' }])
+    ).resolves.toBeNull();
+    await expect(handler('credentials', 'queryVerifiers', ['org_1'])).resolves.toBeNull();
+  });
+
+  it('message-card 视图无 credentials 域（有授权也拒绝）', async () => {
+    mockGrantedPermissions(['credentials:read']);
+    const handler = await createPluginBridgeDispatcher({ ...BASE_IDENTITY, viewType: 'message-card' });
+    await expect(handler('credentials', 'listHeld', [])).rejects.toThrow(/Access denied/);
+  });
+
+  it('未知 credentials 方法拒绝（签发接口不存在于 SDK）', async () => {
+    mockGrantedPermissions(['credentials:read']);
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    await expect(handler('credentials', 'issue', [{}])).rejects.toThrow(/Access denied/);
+  });
+});
+
+describe('policy 域（community-affairs §7.2 sdk.policy：读须 policy:read，写须 policy:write）', () => {
+  it('未授权：read/submitDraft 一律拒绝', async () => {
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    await expect(handler('policy', 'read', ['org_1'])).rejects.toThrow(/Access denied/);
+    await expect(handler('policy', 'submitDraft', [{ policyV: 1 }])).rejects.toThrow(/Access denied/);
+  });
+
+  it('policy:read 授权：read 放行，submitDraft 仍拒绝', async () => {
+    mockGrantedPermissions(['policy:read']);
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    await expect(handler('policy', 'read', ['org_1'])).resolves.toBeNull();
+    await expect(handler('policy', 'submitDraft', [{ policyV: 1 }])).rejects.toThrow(/Access denied/);
+  });
+
+  it('policy:write 授权：submitDraft 放行（read 按 policy:read 仍拒绝）', async () => {
+    mockGrantedPermissions(['policy:write']);
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    await expect(handler('policy', 'submitDraft', [{ policyV: 1 }])).resolves.toBeNull();
+    await expect(handler('policy', 'read', ['org_1'])).rejects.toThrow(/Access denied/);
+  });
+
+  it('message-card 视图无 policy 域（有授权也拒绝）', async () => {
+    mockGrantedPermissions(['policy:read', 'policy:write']);
+    const handler = await createPluginBridgeDispatcher({ ...BASE_IDENTITY, viewType: 'message-card' });
+    await expect(handler('policy', 'read', ['org_1'])).rejects.toThrow(/Access denied/);
+    await expect(handler('policy', 'submitDraft', [{ policyV: 1 }])).rejects.toThrow(/Access denied/);
+  });
+});

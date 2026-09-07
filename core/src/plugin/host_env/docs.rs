@@ -2,8 +2,6 @@
 //! docs.* 文档读写、data.* 插件数据（含 orgq 路由）、blob 读写、feed-blob
 //! 拉取。零逻辑变化。
 
-
-
 use serde_json::Value;
 
 use crate::collection::{CollectionConfig, DocumentCollection};
@@ -15,7 +13,6 @@ use crate::schema::{CollectionSchemaDeclaration, SyncStrategy, declare_collectio
 use crate::plugin::error::{PluginError, Result};
 
 use super::{PluginHostShared, required_str};
-
 
 // ------------------------------------------------------------------
 // 文档能力（docs.*）：域缺省为插件 id；显式域经合法性约束（见
@@ -277,5 +274,4 @@ impl PluginHostShared {
         };
         Ok((decl, storage))
     }
-
 }

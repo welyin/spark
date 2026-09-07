@@ -31,6 +31,9 @@
             </div>
           </div>
           <p class="repo-preview-summary">{{ repoPreview.summary }}</p>
+          <!-- 平台约束（plugin-dist §2.1 requires.platforms）：仅声明受限平台时展示；
+               不兼容时壳层安装接口硬拒，此处只做提示 -->
+          <p v-if="repoPlatformsText" class="repo-preview-permissions">运行平台：{{ repoPlatformsText }}</p>
           <p v-if="repoPreview.permissions.length > 0" class="repo-preview-permissions">
             声明权限：{{ repoPreview.permissions.join('、') }}
           </p>
@@ -57,6 +60,8 @@
         </p>
         <!-- 支持空间（spaces-and-plugins §4）：未声明按 ['org'] 口径展示 -->
         <p class="repo-preview-permissions">支持空间：{{ sideloadSpacesText }}</p>
+        <!-- 平台约束（包内 manifest requires.platforms）：仅声明受限平台时展示 -->
+        <p v-if="sideloadPlatformsText" class="repo-preview-permissions">运行平台：{{ sideloadPlatformsText }}</p>
         <p class="repo-preview-permissions">文件：{{ sideloadPreview.fileName }}（{{ sideloadSizeText }}）</p>
         <!-- 侧载绕过签名信任链与仓库锚定，哈希核对责任在用户（trust = "sideloaded"） -->
         <el-alert type="warning" :closable="false" show-icon>
@@ -76,8 +81,18 @@
 <script lang="ts">
 import { computed, defineComponent, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import type { RepoPluginDeclarationDto, SideloadPreviewDto } from '../../api/types';
+import type { PluginRequires, RepoPluginDeclarationDto, SideloadPreviewDto } from '../../api/types';
 import { pickSpkgFile } from '../../api';
+
+/** 平台约束展示文案（requires.platforms；空 = 全平台不展示） */
+const platformsText = (requires?: PluginRequires): string => {
+  const platforms = requires?.platforms ?? [];
+  if (platforms.length === 0) {
+    return '';
+  }
+  const labels = platforms.map((platform) => (platform === 'desktop' ? '桌面端' : '移动端'));
+  return labels.length === 2 ? '桌面端与移动端' : `仅${labels[0]}`;
+};
 
 export default defineComponent({
   name: 'AppInstallTools',
@@ -161,6 +176,10 @@ export default defineComponent({
       return labels.length === 2 ? '个人与组织空间' : `仅${labels[0]}`;
     });
 
+    // 平台约束展示（仓库声明 / 侧载包内 manifest 的 requires.platforms）
+    const repoPlatformsText = computed(() => platformsText(repoPreview.value?.requires));
+    const sideloadPlatformsText = computed(() => platformsText(sideloadPreview.value?.requires));
+
     const confirmSideload = async () => {
       const preview = sideloadPreview.value;
       if (!preview) {
@@ -221,6 +240,8 @@ export default defineComponent({
       sideloadImporting,
       sideloadSizeText,
       sideloadSpacesText,
+      repoPlatformsText,
+      sideloadPlatformsText,
       openSideload,
       confirmSideload
     };

@@ -4,9 +4,9 @@
 //! 从 `inbound_dm` 拆出的子模块（O2a），共享父模块的 [`InboundContext`]/
 //! 应答助手/[`done`] 等。
 //!
-//! 目录形态（卫生批拆分，按职责）：`acl`（acl 验签+whole 合并）、
-//! `data`（orgsync-data 合入主循环 + F1/F2 分流）、`tests`（模块内单测）；
-//! hello/need 两 handler 留在本文件。
+//! 目录形态（卫生批拆分，按职责）：`data`（orgsync-data 合入主循环 +
+//! F1/F2 分流）、`tests`（模块内单测）；hello/need 两 handler 留在本文件。
+//! （C7：原 `acl` 子模块随 encrypted 轴退役移除。）
 //!
 //! 验签规则：
 //! 1. 公共前置：from ∈ org:meta 成员表；
@@ -24,7 +24,6 @@ use super::{
 use crate::org::OrganizationService;
 use crate::storage::StorageBackend;
 
-mod acl;
 mod data;
 #[cfg(test)]
 mod tests;
@@ -69,7 +68,12 @@ pub(super) fn handle_orgsync_hello<S: StorageBackend>(
         // batch2 §1.2：履职观测持久化（K 记账证据）——按设备粒度记录
         // deviceClass + 观测时刻（在线目录是瞬态提示，K 记账要窗口期持久观测）
         crate::sync::orgsync::orgq_note_data_account_duty(
-            storage, &org_id, from, ctx.remote_peer_id, &device_class, ctx.now_ms,
+            storage,
+            &org_id,
+            from,
+            ctx.remote_peer_id,
+            &device_class,
+            ctx.now_ms,
         );
     }
 
@@ -251,8 +255,8 @@ pub(super) fn handle_orgsync_hello<S: StorageBackend>(
         profile_sync_reply: None,
         pdsync_out: Vec::new(),
         orgsync_out: out,
+        affairsync_out: Vec::new(),
         profile_applied: false,
-        orgkey_unbox: Vec::new(),
         feed_blob_out: None,
     })
 }
@@ -371,8 +375,8 @@ pub(super) fn handle_orgsync_need<S: StorageBackend>(
         profile_sync_reply: None,
         pdsync_out: Vec::new(),
         orgsync_out: out,
+        affairsync_out: Vec::new(),
         profile_applied: false,
-        orgkey_unbox: Vec::new(),
         feed_blob_out: None,
     })
 }
@@ -462,4 +466,3 @@ fn push_org_collection_data<S: StorageBackend>(
         });
     }
 }
-

@@ -164,7 +164,6 @@ fn should_encrypt_classification_matrix() {
         "ct:org:o",
         "org:inv:in:a",
         "org:inv:out:a",
-        "orgkey:o",
         "ct:group:g",
         "ct:blocked:b",
     ] {

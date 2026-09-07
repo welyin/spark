@@ -66,9 +66,7 @@ fn identity_full_lifecycle() {
     let storage_dir = kernel.storage_dir().expect("storage open");
     if std::env::var_os("SPARK_STORAGE_BACKEND").is_some_and(|v| v == "sqlite") {
         assert!(
-            dir.path()
-                .join(format!("sqlite-{root_id}.db"))
-                .exists(),
+            dir.path().join(format!("sqlite-{root_id}.db")).exists(),
             "sqlite 覆盖口：库文件按身份落位"
         );
     } else {

@@ -52,10 +52,35 @@ pub struct OrganizationSyncState {
     pub last_synced_at: i64,
 }
 
+/// 组织域类型（org-genesis §3.1）：`domainType?: 'leaf' | 'community'`，键缺失 =
+/// leaf（向后兼容：存量记录无此键即叶组织）；创建时确定、不可变更。
+/// 成员种类约束：community 域只接受组织成员、leaf 域只接受个人成员（§3.2
+/// 内核硬规则，加入验证时强制）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DomainType {
+    /// 叶组织（成员为个人）。
+    #[default]
+    Leaf,
+    /// 共同体域（成员为组织）。
+    Community,
+}
+
+impl DomainType {
+    /// TS 字符串形式。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Leaf => "leaf",
+            Self::Community => "community",
+        }
+    }
+}
+
 /// 组织记录（`org:meta:<orgId>` 的值）。
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct OrganizationRecord {
-    /// `org_` + 16 hex。
+    /// `org_` + 16 hex（legacy）或 `org_` + 64 hex（创世哈希型，org-genesis §2
+    /// 双形态；判别 = 长度）。
     #[serde(rename = "orgId")]
     pub org_id: String,
     /// 组织名（trim + 连续空白归一）。
@@ -114,6 +139,15 @@ pub struct OrganizationRecord {
     /// 公开组织标志（org.md §16，保留键：公开后网关节点发布组织地址记录）。
     #[serde(rename = "isPublic", default, skip_serializing_if = "is_false")]
     pub is_public: bool,
+    /// 域类型（org-genesis §3.1）：`None` = 键缺失 = leaf（向后兼容）。
+    /// 新组织（创世哈希型）必须显式携带且与创世策略记录一致；创建时确定、
+    /// 不可变更。
+    #[serde(
+        rename = "domainType",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub domain_type: Option<DomainType>,
     /// 动态字段（含 `recoverySecret`/`orgSecret` 等非保留键，随快照 metadata 流动）。
     #[serde(flatten)]
     pub extra: serde_json::Map<String, Value>,

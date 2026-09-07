@@ -1,6 +1,6 @@
 //! p2p 基础协议集成测试（本机 loopback 双真实 libp2p 节点，Rust↔Rust）：
 //! gossipsub 消息收发 + 信封验签、node-announce 交换、peer-exchange 请求响应、
-//! org-recovery 命中、org-share 直连推送与 pubsub 推送 + ack、keepalive tick。
+//! org-recovery 命中、keepalive tick。
 
 mod common;
 
@@ -10,8 +10,7 @@ use serde_json::json;
 use spark_core::org::recovery::{RecoveryViewItem, active_recovery_tokens};
 use spark_core::org::types::OrganizationNodeInfo;
 use spark_core::p2p::overlay_store::{OverlayPeerSource, OverlayPeerStore};
-use spark_core::p2p::peer_targets::PeerNodeInfo;
-use spark_core::p2p::{KeepaliveStats, P2pEvent, build_org_body, build_update_body};
+use spark_core::p2p::{KeepaliveStats, P2pEvent, build_update_body};
 
 use common::p2p::*;
 
@@ -279,73 +278,6 @@ async fn org_recovery_forward_second_hop() {
     a.stop().await;
     b.stop().await;
     c.stop().await;
-}
-
-/// org-share：直连推送确认 + pubsub 推送 + ack 回流。
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn org_share_direct_and_pubsub_ack() {
-    let now = 1_720_000_000_000i64;
-    let root_b = "bb".repeat(32);
-    let (mut a, state_a, _s_a) = start_node(now, Some(&"aa".repeat(32))).await;
-    let (mut b, state_b, _s_b) = start_node(now, Some(&root_b)).await;
-    let addrs_b = started_addresses(&mut b).await;
-    let _ = started_addresses(&mut a).await;
-
-    connect(&a, b.peer_id(), &dialable(&addrs_b)).await;
-    wait_for(&mut b, Duration::from_secs(10), |e| {
-        matches!(e, P2pEvent::PeerConnected { .. })
-    })
-    .await;
-
-    let org = json!({
-        "orgId": "org_0123456789abcdef",
-        "members": [{"rootId": root_b, "role": "member", "joinedAt": now, "addedBy": "aa".repeat(32)}],
-    });
-    let payload = json!({
-        "targetRootId": root_b,
-        "syncId": "0123456789abcdef01234567",
-        "organization": org,
-        "pluginDocs": [],
-        "nodeInfo": {"peerId": b.peer_id(), "addresses": []},
-    });
-
-    // 直连推送：ok && syncId 匹配 → true，B 侧记录接收
-    let delivered = a
-        .org_share_direct(
-            &PeerNodeInfo {
-                peer_id: Some(b.peer_id().to_string()),
-                addresses: dialable(&addrs_b),
-            },
-            payload.clone(),
-        )
-        .await
-        .expect("direct share ok");
-    assert!(delivered, "direct org-share delivered");
-    assert!(
-        state_b
-            .lock()
-            .unwrap()
-            .shares
-            .iter()
-            .any(|(_, source)| *source == "direct")
-    );
-
-    // pubsub 推送：B 接受 → 广播 org-share-ack → A 的宿主收到 ack
-    let mut pubsub_payload = payload.clone();
-    pubsub_payload["syncId"] = json!("fedcba9876543210fedcba98");
-    let body = build_org_body("org-share", pubsub_payload);
-    let acks = state_a.clone();
-    broadcast_until(&a, "spark-sync", body, move || {
-        !acks.lock().unwrap().acks.is_empty()
-    })
-    .await;
-    let ack = state_a.lock().unwrap().acks[0].clone();
-    assert_eq!(ack["syncId"], "fedcba9876543210fedcba98");
-    assert_eq!(ack["orgId"], "org_0123456789abcdef");
-    assert_eq!(ack["receiverRootId"], root_b);
-
-    a.stop().await;
-    b.stop().await;
 }
 
 /// keepalive tick：覆盖网维护返回统计（无邻居时为零值）。

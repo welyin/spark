@@ -2,11 +2,10 @@
 //!
 //! 已接线的回调：`current_root_id`、`evidence_head_hash`、`apply_remote_update`
 //! （sync 模块远端应用 + purge 水位线拦截）、`recovery_view`（org 模块恢复视图）、
-//! org-share 接收应答（`apply_incoming_org_share`：快照合并 → 落库 → pluginDocs
-//! → ack）、org-pull-list/org 响应（`handle_org_pull_*`，org::pull 纯逻辑）、
-//! org-share-ack 唤醒（`on_org_share_ack` → 推送编排的等待器注册表）。
+//! org-mail 入站（`handle_org_mail` → 网关代收/挑战拉取）。
+//! （legacy org-share 接收/ack 与 org-pull 响应已随该平面退役删除。）
 //!
-//! 纯逻辑全在 org 模块（snapshot/pull/plugin_docs），本层只做编排与错误映射。
+//! 纯逻辑全在 org/sync 模块，本层只做编排与错误映射。
 //!
 //! 代码组织：本文件为 `P2pHost` 实现（[`KernelHost`]，组织/同步/存证回调）；
 //! dm 入站处理器 [`KernelDmHandler`]（`DmHandler` 实现与各 spawn 回发）拆在
@@ -26,14 +25,11 @@ use crate::contact::ContactService;
 use crate::data_mgmt::watermark::StoragePurgeWatermark;
 use crate::device::DeviceService;
 use crate::evidence::get_evidence_head_hash;
+use crate::org::OrganizationService;
 use crate::org::gateway::OrgMemberHint;
 use crate::org::recovery::RecoveryViewItem;
-use crate::org::{
-    OrganizationService, PluginDocSyncItem, apply_plugin_doc_sync_items, handle_pull_list_request,
-    handle_pull_org_request, validate_incoming_share_payload,
-};
 use crate::p2p::P2pNode;
-use crate::p2p::host::{DmHandler, OrgShareAck, P2pHost};
+use crate::p2p::host::{DmHandler, P2pHost};
 use crate::p2p::node::system_now_ms;
 use crate::p2p::overlay_store::{OverlayPeerSource, OverlayPeerStore};
 use crate::p2p::peer_activity::{NodeObservation, PeerActivityStore};
@@ -52,40 +48,11 @@ use super::dm_envelope::{self, KIND_PROFILE_SYNC};
 /// 按无索引字段处理（文档与 meta 仍落库，仅不建二级索引）。
 pub(crate) type CollectionConfigs = Arc<Mutex<HashMap<(String, String), CollectionConfig>>>;
 
-/// org-share-ack 等待器注册表（对齐 TS OrgShareSessionState）：
-/// 推送编排在 pubsub 重试节奏中按 syncId 注册 oneshot 等待器；pubsub 收到
-/// `org-share-ack` 时由 [`KernelHost::on_org_share_ack`] 按 syncId 唤醒。
-/// ack 先于等待器注册到达时进竞态缓存（org-share-session.ts:11-38 的
-/// early-ack 语义）；无等待器且缓存满时丢弃。
-#[derive(Default)]
-pub(crate) struct OrgShareAckTracker {
-    waiters: HashMap<String, tokio::sync::oneshot::Sender<()>>,
-    early_acks: std::collections::HashSet<String>,
-}
-
-impl OrgShareAckTracker {
-    /// ack 到达：有等待器则唤醒，否则进竞态缓存。
-    pub(crate) fn mark_ack(&mut self, sync_id: &str) {
-        if let Some(tx) = self.waiters.remove(sync_id) {
-            let _ = tx.send(());
-            return;
-        }
-        if self.early_acks.len() >= 256 {
-            self.early_acks.clear();
-        }
-        self.early_acks.insert(sync_id.to_string());
-    }
-}
-
-/// 共享 ack 注册表（host 与 org-sync worker 跨线程）。
-pub(crate) type SharedOrgShareAckTracker = Arc<Mutex<OrgShareAckTracker>>;
-
 /// kernel 宿主：持有与门面共享的存储句柄与当前身份指针。
 pub(crate) struct KernelHost {
     pub(crate) storage: Backend,
     pub(crate) current_root_id: Arc<Mutex<Option<String>>>,
     pub(crate) collection_configs: CollectionConfigs,
-    pub(crate) org_acks: SharedOrgShareAckTracker,
     /// dm 入站事件的广播通道（ChatReceived/ChatStatus/FriendRequest* 由
     /// [`super::inbound_dm`] 产出，host 在此 emit 给壳层订阅者）。
     pub(crate) event_tx: tokio::sync::broadcast::Sender<crate::p2p::P2pEvent>,
@@ -103,8 +70,6 @@ pub(crate) struct KernelHost {
     /// 解锁期会话口令共享格（自设备 profile-sync 全量快照应用身份文件时
     /// 重封加密 payload 用；lock 时清除）。
     pub(crate) password_shared: Arc<Mutex<Option<String>>>,
-    /// 解锁期 BIP39 种子（O4 orgkey-deliver 入站解包 orgkey 用；lock 时清除）。
-    pub(crate) seed_shared: Arc<Mutex<Option<[u8; 64]>>>,
     /// 数据目录（身份文件读写路径推导用，与 kernel `config.data_dir` 同源）。
     pub(crate) data_dir: std::path::PathBuf,
     /// 存储读写互斥（与 kernel 变更类门面方法同一把；`handle_dm` 的入站
@@ -119,6 +84,10 @@ pub(crate) struct KernelHost {
     /// Kverify 派生缓存（与 KernelDmHandler 共享同一 Arc；见 dm_handler.rs
     /// `derive_kverify_from_password_shared` 注释）。
     pub(crate) kverify_cache: Arc<Mutex<Option<(String, [u8; 32])>>>,
+    /// indexer 角色配置共享格（affair-metadata §7/§8；kernel
+    /// `set_indexer_enabled` / `set_indexer_coverage` 写、host 查询应答/
+    /// 收录门控与 p2p 周期自公告读）。
+    pub(crate) indexer_role_shared: Arc<Mutex<crate::index::directory::IndexRoleConfig>>,
 }
 
 impl KernelHost {
@@ -145,7 +114,6 @@ impl KernelHost {
             node_shared: Arc::clone(&self.node_shared),
             signing_key_shared: Arc::clone(&self.signing_key_shared),
             password_shared: Arc::clone(&self.password_shared),
-            seed_shared: Arc::clone(&self.seed_shared),
             data_dir: self.data_dir.clone(),
             io_lock: Arc::clone(&self.io_lock),
             pdsync_capable_self_devices: Arc::clone(&self.pdsync_capable_self_devices),
@@ -208,163 +176,6 @@ impl P2pHost for KernelHost {
         .map_err(|e| e.to_string())
     }
 
-    /// org-share 接收（org-share-sync.ts:178-252）：定向校验 → 快照合并落库
-    /// → pluginDocs 应用 → ack。校验不命中按 TS 语义静默跳过（`Ok(None)`）。
-    fn apply_incoming_org_share(
-        &mut self,
-        payload: Value,
-        _source: &'static str,
-    ) -> std::result::Result<Option<OrgShareAck>, String> {
-        let current = self
-            .current_root_id
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        let Ok((target_root_id, organization, sync_id, plugin_docs)) =
-            validate_incoming_share_payload(&payload, current.as_deref())
-        else {
-            // TS：invalid payload / target mismatch / 非成员 → console.warn 后 accepted:false
-            return Ok(None);
-        };
-        let now = system_now_ms();
-        let merged = OrganizationService::apply_incoming_snapshot(
-            &mut self.storage,
-            &self.io_lock,
-            &organization,
-            now,
-        )
-        .map_err(|e| e.to_string())?;
-        // 阶段四A P1 混跑兼容（设计 §6）：legacy 快照平面只有 whole——合入后
-        // 就地投影成员条目（远端语义不 bump 本机；与 orgsync 平面
-        // `inbound_dm/orgsync/data.rs` 的 whole 合入点同款挂点）。
-        if let Ok(whole_meta) =
-            crate::sync::get_personal_meta(&self.storage, &crate::org::types::organization_key(&merged.org_id))
-        {
-            let _ = crate::org::service::project_member_entries_from_whole(
-                &mut self.storage,
-                &merged.org_id,
-                &merged.members,
-                &whole_meta.unwrap_or_default(),
-            );
-        }
-        // F3 残余 §7.1（评审复核点）：org:meta 成员表（accessKey 段）也可经
-        // legacy 快照平面到达——合入后同样重评估 orgkey-deliver 暂存
-        // （orgsync 平面同款触发在 `inbound_dm/orgsync.rs`）。暂存通常为空，
-        // 稳态一次空前缀扫描。
-        if let Some(receiver_root_id) = current.clone() {
-            let online = HashSet::new();
-            let ctx = crate::kernel::inbound_dm::InboundContext {
-                my_root_id: &receiver_root_id,
-                my_nickname: "",
-                remote_peer_id: "",
-                online_peers: &online,
-                node_id: "",
-                now_ms: now,
-                kverify: None,
-            };
-            let unboxes = crate::kernel::inbound_dm::reevaluate_orgkey_stash(
-                &mut self.storage,
-                &ctx,
-                &merged.org_id,
-            )
-            .map_err(|e| e.to_string())?;
-            for unbox in unboxes {
-                self.dm_handler_impl()
-                    .apply_orgkey_unbox(&receiver_root_id, &unbox);
-            }
-            // 阶段四A P2：F4 成员表对账挂点已从 legacy 快照平面**挪净**——
-            // 组织对账由 orgsync 平面的 org:meta 合入点承担
-            // （`inbound_dm/orgsync/data.rs`，batch3 §1.2 同款挂点）。
-        }
-        // pluginDocs 随快照捎带（plugin-org-sync.ts `applyPluginDocSyncItems`）
-        if !plugin_docs.is_empty() {
-            let items: Vec<PluginDocSyncItem> = plugin_docs
-                .iter()
-                .filter_map(|v| serde_json::from_value(v.clone()).ok())
-                .collect();
-            let configs = Arc::clone(&self.collection_configs);
-            apply_plugin_doc_sync_items(
-                &mut self.storage,
-                &items,
-                |domain, collection| {
-                    let config = configs
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .get(&(domain.to_string(), collection.to_string()))
-                        .cloned()
-                        .unwrap_or_default();
-                    DocumentCollection::new(domain, collection, config)
-                },
-                now,
-            )
-            .map_err(|e| e.to_string())?;
-        }
-        Ok(Some(OrgShareAck {
-            sync_id,
-            org_id: merged.org_id,
-            target_root_id,
-            receiver_root_id: current.expect("validated above"),
-        }))
-    }
-
-    /// org-pull-list 响应（org-pull-sync.ts:149-198）：成员身份过滤生成组织
-    /// 列表。阶段四A P2（L2 claim 退役）：nodeInfoClaim 不再落库——成员端点
-    /// 由成员自写 `org:member` 条目经 orgsync 扩散；`handle_pull_list_request`
-    /// 第二返回元（原 claim 落库组织列表）恒空，推送通知段随之空置。
-    fn handle_org_pull_list(
-        &mut self,
-        payload: Value,
-        remote_peer_id: Option<String>,
-    ) -> std::result::Result<Value, String> {
-        let current = self
-            .current_root_id
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        let now = system_now_ms();
-        let (response, _applied_orgs) = handle_pull_list_request(
-            &mut self.storage,
-            &self.io_lock,
-            &payload,
-            current.as_deref(),
-            remote_peer_id.as_deref(),
-            now,
-        )
-        .map_err(|e| e.to_string())?;
-        // P2 claim 退役后 applied_orgs 恒空——原「claim 落库后推送」通知段
-        // 随之删除（P3 起 PushOrg 语义为 orgsync 即时 hello，无 actor 维度）。
-        Ok(response)
-    }
-
-    /// org-pull-org 响应（org-pull-sync.ts:200-241）。纯逻辑层
-    /// `handle_pull_org_request` 保持只读。传入本机身份用于自设备
-    /// claim 验明（放开 peer-mismatch，见 org/pull.rs）。
-    fn handle_org_pull_org(
-        &mut self,
-        payload: Value,
-        remote_peer_id: Option<String>,
-    ) -> std::result::Result<Value, String> {
-        let current = self
-            .current_root_id
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        let now = system_now_ms();
-        // P3：orgsync 能力探测已随出站停发删除——pull-org 响应的
-        // pluginDocs 裁剪恒按「旧端」口径携带（P4 入站清除时随 legacy
-        // 平面一并删形参）。
-        let response = handle_pull_org_request(
-            &self.storage,
-            &payload,
-            remote_peer_id.as_deref(),
-            current.as_deref(),
-            now,
-            false,
-        )
-        .map_err(|e| e.to_string())?;
-        Ok(response)
-    }
-
     fn recovery_view(&mut self) -> Vec<RecoveryViewItem> {
         let Some(root_id) = self
             .current_root_id
@@ -392,15 +203,117 @@ impl P2pHost for KernelHost {
         .unwrap_or_default()
     }
 
-    /// org-share-ack 唤醒：按 syncId 匹配推送编排注册的等待器（含竞态缓存）。
-    fn on_org_share_ack(&mut self, payload: Value) {
-        let Some(sync_id) = payload.get("syncId").and_then(Value::as_str) else {
-            return;
-        };
-        self.org_acks
+    /// 议题元数据公告入站（affair-metadata §4/§5）：完整线形校验 → 修订链
+    /// 复算（本地有日志副本）→ 暂存区裁决 → 更新本地索引。与日志复算矛盾
+    /// 的公告丢弃并告警（§4：公告 + 日志片段并排即证据）。暂存区是客户端
+    /// 缓存语义（本地键不进同步），任何节点都收；索引查询应答由角色开关
+    /// 另行门控。例外：角色启用且配置了子集覆盖时，收录面收窄到覆盖子集
+    /// （§7 目录面——覆盖外公告不入暂存区/索引，索引内容与名片宣告一致）。
+    fn on_affair_meta(&mut self, announce: Value) {
+        let role = self
+            .indexer_role_shared
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .mark_ack(sync_id);
+            .clone();
+        if role.enabled && !role.coverage.is_full() {
+            // 覆盖过滤在完整线形校验前做粗筛：tags 提取失败按空集处理
+            // （覆盖维度受限时空 tags 必不覆盖，等价于丢弃畸形公告）
+            let tags: Vec<String> = announce
+                .get("tags")
+                .and_then(Value::as_array)
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(Value::as_str)
+                        .map(ToString::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let region = announce
+                .get("region")
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+                .or_else(|| crate::index::announce::extract_region(&tags));
+            if !role.coverage.covers_announce(region.as_deref(), &tags) {
+                return; // 覆盖外公告：静默跳过收录（目录宣告的子集之外不服务）
+            }
+        }
+        let _guard = self.io_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let outcome = match crate::index::query::ingest_announcement(
+            &mut self.storage,
+            &announce,
+            system_now_ms(),
+        ) {
+            Ok(outcome) => outcome,
+            Err(e) => {
+                self.event_tx
+                    .send(crate::p2p::P2pEvent::Warning(format!(
+                        "affair-meta ingest failed: {e}"
+                    )))
+                    .ok();
+                return;
+            }
+        };
+        match outcome {
+            crate::index::query::IngestOutcome::ConflictDropped => {
+                self.event_tx
+                    .send(crate::p2p::P2pEvent::Warning(
+                        "affair-meta announce conflicts with local log replay; dropped".to_string(),
+                    ))
+                    .ok();
+            }
+            crate::index::query::IngestOutcome::Inserted
+            | crate::index::query::IngestOutcome::Replaced => {
+                let affair_id = announce
+                    .get("affairId")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                self.event_tx
+                    .send(crate::p2p::P2pEvent::AffairMetaReceived { affair_id })
+                    .ok();
+            }
+            crate::index::query::IngestOutcome::Kept => { /* 裁决保留既有，静默 */ }
+        }
+    }
+
+    /// indexer 查询应答（affair-metadata §8）：角色开关门控（未启用回
+    /// indexer-disabled），启用但查询超出子集覆盖回 indexer-not-covered
+    /// （§7 目录面：客户端据此换目录内其他 indexer 重查），覆盖内则走与
+    /// 本地直查完全相同的确定性分发。
+    fn handle_affair_meta_query(&mut self, payload: &Value) -> Value {
+        let role = self
+            .indexer_role_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if !role.enabled {
+            return serde_json::json!({ "error": "indexer-disabled" });
+        }
+        let Some(search) = crate::index::query::parse_search(payload) else {
+            return serde_json::json!({ "error": "bad-query" });
+        };
+        if !role
+            .coverage
+            .covers_query(search.region.as_deref(), &search.tags)
+        {
+            return serde_json::json!({ "error": "indexer-not-covered" });
+        }
+        let _guard = self.io_lock.lock().unwrap_or_else(|e| e.into_inner());
+        match crate::index::query::run_search(&self.storage, &search, system_now_ms()) {
+            Ok(payload) => payload,
+            Err(e) => serde_json::json!({ "error": format!("indexer: {e}") }),
+        }
+    }
+
+    /// indexer 角色配置（p2p tick 周期自公告读）：Some(覆盖) = 启用，
+    /// None = 未启用。
+    fn indexer_role(&mut self) -> Option<crate::index::directory::IndexCoverage> {
+        let role = self
+            .indexer_role_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        role.enabled.then_some(role.coverage)
     }
 
     /// dm 直连接收（同步回退路径）：事件循环优先走 [`Self::dm_handler`]
@@ -638,7 +551,8 @@ impl P2pHost for KernelHost {
     }
 
     /// 组织私有 DHT 成员提示回填（p2p-messages.md §15）：按未验证口径入邻居池
-    /// + 活跃度 'seen' 记账；组织校验仍走 pull/claim 链路，信任边界不变。
+    /// + 活跃度 'seen' 记账；组织成员关系以组织记录/成员条目为准（邀请流 +
+    /// orgsync 收敛），信任边界不变。
     fn on_org_member_hints(&mut self, hints: &[OrgMemberHint]) {
         let now = system_now_ms();
         for hint in hints {

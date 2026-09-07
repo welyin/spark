@@ -1,7 +1,6 @@
-//! request-response 协议三件套（二）：org-share / org-pull 直连。
-//!
-//! 逐地址尝试的出站编排（`OrgAttempt` 状态机）与应答侧处理；拨号成功后的
-//! 请求发出与失败重试挂钩在 `swarm_events` 的连接事件分支。
+//! request-response 直连出站编排：dm / org-mail 的逐地址尝试（`OrgAttempt`
+//! 状态机）；拨号成功后的请求发出与失败重试挂钩在 `swarm_events` 的连接
+//! 事件分支。（legacy org-share / org-pull 直连已随该平面退役删除。）
 
 use std::collections::VecDeque;
 use std::time::Duration;
@@ -27,14 +26,7 @@ pub(super) fn base_addr(addr: &str) -> &str {
 }
 
 impl<S: StorageBackend> EventLoop<S> {
-    pub(super) fn begin_org_attempt(
-        &mut self,
-        node_info: PeerNodeInfo,
-        payload: Value,
-        tx: OrgTx,
-        is_share: bool,
-        is_mail: bool,
-    ) {
+    pub(super) fn begin_org_attempt(&mut self, node_info: PeerNodeInfo, payload: Value, tx: OrgTx) {
         // 惰性回收调用方已放弃的滞留 attempt（同 begin_connect 口径）
         self.pending_org_attempts.retain(|a| !a.tx.is_closed());
         // M9：带地址记分卡排序 + 自过滤（不拨本机监听地址）
@@ -46,12 +38,6 @@ impl<S: StorageBackend> EventLoop<S> {
             Ok(t) => VecDeque::from(t),
             Err(e) => {
                 match tx {
-                    OrgTx::Share(tx) => {
-                        let _ = tx.send(Err(e));
-                    }
-                    OrgTx::Pull(tx) => {
-                        let _ = tx.send(Err(e));
-                    }
                     OrgTx::Dm(tx) => {
                         let _ = tx.send(Err(e));
                     }
@@ -62,30 +48,14 @@ impl<S: StorageBackend> EventLoop<S> {
                 return;
             }
         };
-        let (kind, request_json) = if is_share {
-            let sync_id = payload
-                .get("syncId")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
-            (
-                OrgAttemptKind::Share {
-                    expected_sync_id: sync_id,
-                },
-                direct::build_org_share_request(payload),
-            )
-        } else {
-            // Pull / Mail 同形：payload 即帧文本（调用方已选好 kind）
-            let text = match payload {
-                Value::String(s) => s,
-                _ => String::new(),
-            };
-            let kind = if is_mail {
-                OrgAttemptKind::Mail
-            } else {
-                OrgAttemptKind::Pull
-            };
-            (kind, text)
+        // Dm / Mail 同形：payload 即帧文本（调用方已选好 kind）
+        let text = match payload {
+            Value::String(s) => s,
+            _ => String::new(),
+        };
+        let kind = match tx {
+            OrgTx::Dm(_) => OrgAttemptKind::Dm,
+            OrgTx::Mail(_) => OrgAttemptKind::Mail,
         };
         let mut attempt = OrgAttempt {
             kind,
@@ -93,7 +63,7 @@ impl<S: StorageBackend> EventLoop<S> {
             batch: Vec::new(),
             // 目标 peer 在构建时即记录（同 begin_dm_attempt 的并发恢复口径）
             current_peer: extract_peer_id(&node_info).and_then(|s| s.parse::<PeerId>().ok()),
-            request_json,
+            request_json: text,
             in_flight: None,
             dial_issued: false,
             waiting_base: None,
@@ -106,15 +76,15 @@ impl<S: StorageBackend> EventLoop<S> {
             .filter(|p| self.swarm.is_connected(p));
         if let Some(peer) = connected_peer {
             let request_id = match attempt.kind {
+                OrgAttemptKind::Dm => self
+                    .swarm
+                    .behaviour_mut()
+                    .dm_rr
+                    .send_request(&peer, attempt.request_json.clone()),
                 OrgAttemptKind::Mail => self
                     .swarm
                     .behaviour_mut()
                     .org_mail_rr
-                    .send_request(&peer, attempt.request_json.clone()),
-                _ => self
-                    .swarm
-                    .behaviour_mut()
-                    .org_share_rr
                     .send_request(&peer, attempt.request_json.clone()),
             };
             attempt.in_flight = Some(request_id);
@@ -133,7 +103,7 @@ impl<S: StorageBackend> EventLoop<S> {
     pub(super) fn dial_next_org_target(&mut self, attempt: &mut OrgAttempt) {
         // 进入新一轮目标尝试：上一目标（如有）的拨号归属失效
         attempt.dial_issued = false;
-        // 同地址并发拨号恢复：并行尝试（如 org-share 推送与 dm 邀请同时
+        // 同地址并发拨号恢复：并行尝试（如 org-mail 投递与 dm 邀请同时
         // 拨同一 peer）已建好连接时，本 attempt 的拨号会同步报错/异步
         // DialFailure——此时直接复用已建连接发请求，而不是误走下一目标
         // 或耗尽放弃（放弃侧无任何重试，推送丢失只能等下次变更触发）。
@@ -148,11 +118,6 @@ impl<S: StorageBackend> EventLoop<S> {
                     .swarm
                     .behaviour_mut()
                     .org_mail_rr
-                    .send_request(&peer, attempt.request_json.clone()),
-                _ => self
-                    .swarm
-                    .behaviour_mut()
-                    .org_share_rr
                     .send_request(&peer, attempt.request_json.clone()),
             };
             attempt.in_flight = Some(request_id);
@@ -302,78 +267,15 @@ impl<S: StorageBackend> EventLoop<S> {
         }
     }
 
-    pub(super) fn handle_org_share_inbound(
-        &mut self,
-        peer: PeerId,
-        request: String,
-        channel: request_response::ResponseChannel<String>,
-    ) {
-        // 故障注入（e2e 专用，org-sync-stall-fix §5）：黑洞开启时 org-pull
-        // 入站扣住应答通道不响应——请求方走协议读超时，复现「对端半连接
-        // 长超时」；org-share 正常应答（应答面不瘫痪，仅 pull 链路挂起）。
-        if self.org_pull_blackhole
-            && let Ok(Some((kind, _))) = direct::parse_org_share_request(&request)
-            && matches!(
-                kind,
-                direct::OrgShareRequestKind::OrgPullList | direct::OrgShareRequestKind::OrgPullOrg
-            )
-        {
-            log::info!("[p2p] fault injection: org-pull request blackholed (no response)");
-            self.stalled_pull_channels.push(channel);
-            return;
-        }
-        let response = match direct::parse_org_share_request(&request) {
-            Err(_) => direct::build_org_share_error_response("empty or invalid json"),
-            Ok(None) => direct::build_org_share_error_response("invalid type"),
-            Ok(Some((direct::OrgShareRequestKind::OrgShare, payload))) => {
-                match self
-                    .host
-                    .apply_incoming_org_share(payload.clone(), "direct")
-                {
-                    Ok(Some(ack)) => {
-                        self.emit(P2pEvent::OrgShareAccepted {
-                            org_id: ack.org_id.clone(),
-                            sync_id: ack.sync_id.clone(),
-                            source: "direct",
-                        });
-                        direct::build_org_share_ack_response(
-                            ack.sync_id.as_deref(),
-                            &ack.org_id,
-                            &ack.receiver_root_id,
-                        )
-                    }
-                    _ => direct::build_org_share_error_response("not accepted"),
-                }
-            }
-            Ok(Some((direct::OrgShareRequestKind::OrgPullList, payload))) => {
-                match self.host.handle_org_pull_list(payload, Some(peer.to_base58())) {
-                    Ok(value) => value.to_string(),
-                    Err(e) => serde_json::json!({"ok": false, "type": "org-pull-list-response", "reason": e}).to_string(),
-                }
-            }
-            Ok(Some((direct::OrgShareRequestKind::OrgPullOrg, payload))) => {
-                match self.host.handle_org_pull_org(payload, Some(peer.to_base58())) {
-                    Ok(value) => value.to_string(),
-                    Err(e) => serde_json::json!({"ok": false, "type": "org-pull-org-response", "orgId": "", "reason": e}).to_string(),
-                }
-            }
-        };
-        let _ = self
-            .swarm
-            .behaviour_mut()
-            .org_share_rr
-            .send_response(channel, response);
-    }
-
     // ------------------------------------------------------------------
     // org 直连 outbound 汇总
     // ------------------------------------------------------------------
     //
-    // `from_dm` 标记事件来源协议：`org_share_rr` 与 `dm_rr` 的
-    // OutboundRequestId 各自从 1 递增，同一 id 在两个 behaviour 上并存；
-    // 两个分支共用 pending_org_attempts，必须按 kind 类别过滤——DmRr 分支
-    // 只匹配 Dm attempt，OrgShareRr 分支只匹配 Share/Pull，否则「边同步边
-    // 聊天」时 org ack 会被当成 dm 应答（反之亦然）。
+    // `from_dm` 标记事件来源协议：`dm_rr` 与其余 rr 协议的
+    // OutboundRequestId 各自从 1 递增，同一 id 在多个 behaviour 上并存；
+    // 分支共用 pending_org_attempts，必须按 kind 类别过滤——DmRr 分支
+    // 只匹配 Dm attempt，否则「边同步边聊天」时应答会被错配到对方协议的
+    // attempt。
 
     pub(super) fn resolve_org_response(
         &mut self,
@@ -389,12 +291,6 @@ impl<S: StorageBackend> EventLoop<S> {
                 let mut attempt = self.pending_org_attempts.remove(i);
                 attempt.in_flight = None;
                 let delivered = match &attempt.kind {
-                    OrgAttemptKind::Share { expected_sync_id } => {
-                        direct::parse_org_share_direct_response(&response, expected_sync_id)
-                    }
-                    OrgAttemptKind::Pull => {
-                        matches!(serde_json::from_str::<Value>(&response), Ok(v) if v.is_object())
-                    }
                     OrgAttemptKind::Dm => direct::parse_dm_response(&response).is_some(),
                     // Mail：应答须为可解析 JSON 对象（deliver {ok}/fetch {ok,envelopes}）
                     OrgAttemptKind::Mail => {
@@ -403,13 +299,6 @@ impl<S: StorageBackend> EventLoop<S> {
                 };
                 if delivered {
                     match (&attempt.kind, attempt.tx) {
-                        (OrgAttemptKind::Share { .. }, OrgTx::Share(tx)) => {
-                            let _ = tx.send(Ok(true));
-                        }
-                        (OrgAttemptKind::Pull, OrgTx::Pull(tx)) => {
-                            let value = serde_json::from_str::<Value>(&response).ok();
-                            let _ = tx.send(Ok(value));
-                        }
                         (OrgAttemptKind::Dm, OrgTx::Dm(tx)) => {
                             let value = direct::parse_dm_response(&response);
                             let _ = tx.send(Ok(value));
@@ -422,12 +311,6 @@ impl<S: StorageBackend> EventLoop<S> {
                         (kind, tx) => {
                             let _ = kind;
                             match tx {
-                                OrgTx::Share(tx) => {
-                                    let _ = tx.send(Ok(false));
-                                }
-                                OrgTx::Pull(tx) => {
-                                    let _ = tx.send(Ok(None));
-                                }
                                 OrgTx::Dm(tx) => {
                                     let _ = tx.send(Ok(None));
                                 }
@@ -472,9 +355,7 @@ impl<S: StorageBackend> EventLoop<S> {
                 let mut attempt = self.pending_org_attempts.remove(i);
                 attempt.in_flight = None;
                 match response {
-                    Some(text)
-                        if matches!(serde_json::from_str::<Value>(&text), Ok(v) if v.is_object()) =>
-                    {
+                    Some(text) if matches!(serde_json::from_str::<Value>(&text), Ok(v) if v.is_object()) => {
                         if let OrgTx::Mail(tx) = attempt.tx {
                             let _ = tx.send(Ok(serde_json::from_str::<Value>(&text).ok()));
                         }

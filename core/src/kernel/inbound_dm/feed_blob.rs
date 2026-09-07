@@ -34,8 +34,8 @@ fn with_out(out: FeedBlobOut) -> Result<InboundDmResult> {
         profile_sync_reply: None,
         pdsync_out: Vec::new(),
         orgsync_out: Vec::new(),
+        affairsync_out: Vec::new(),
         profile_applied: false,
-        orgkey_unbox: Vec::new(),
         feed_blob_out: Some(out),
     })
 }

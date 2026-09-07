@@ -3,7 +3,30 @@
  *
  * 职责：ElectronAPI 接口形状与各域 DTO 类型，对齐旧 desktop/src/main/preload.ts；
  * 内联 PluginPermission/DomainSignature 的最小定义，避免跨进程目录引用。
+ * community-affairs §7.2 起，affairs/credentials/policy 域直接复用 plugin-sdk
+ * DTO 类型（与 @spark/plugin-sdk 同源，避免两处定义漂移）。
  */
+
+import type {
+  AffairExecView,
+  AffairLadderStatus,
+  AffairLog,
+  AffairOpStatus,
+  AffairOrgEffects,
+  AffairOrgEffectsApplyResult,
+  AffairPublicProfile,
+  AffairResolutions,
+  AffairRulesView,
+  AffairSnapshotPayload,
+  CredentialVerifyResult,
+  HeldCredential,
+  HolderProofPresentation,
+  PolicyDraft,
+  PolicyPublishResult,
+  PolicySubmitResult,
+  RevocationSnapshotView,
+  VerifierSet
+} from '../../../packages/plugin-sdk/src';
 
 // ------------------------------------------------------------------
 // 主程序自动更新（src-tauri commands/updater.rs；tauri-plugin-updater
@@ -56,7 +79,6 @@ export type P2pEventDto =
   | { kind: 'AnnouncePublished'; data: { addresses: number } }
   | { kind: 'AnnounceAccepted'; data: { peerId: string } }
   | { kind: 'PeerExchangeCompleted'; data: { responder: string; merged: number } }
-  | { kind: 'OrgShareAccepted'; data: { orgId: string; syncId: string | null; source: string } }
   | { kind: 'SyncMessageApplied'; data: { msgType: string; domain: string } }
   | { kind: 'MessageDropped'; data: { reason: string } }
   | { kind: 'KeepaliveTick'; data: { overlayDialed: number; exchanged: number; announced: boolean } }
@@ -71,6 +93,19 @@ export type P2pEventDto =
   | { kind: 'ContactsSynced'; data: { applied: number } }
   | { kind: 'OrgSynced'; data: { orgMeta: number; orgContacts: number } }
   | { kind: 'PluginDataChanged'; data: { pluginId: string; name: string; keys: string[] } }
+  // sdk.affairs.onChange 事件源（内核 P2pEvent::AffairChanged）：本地副本
+  // 关注/取关/提交/复制合入后发出；变更通知非可靠队列，插件重读 readLog 收敛
+  | {
+      kind: 'AffairChanged';
+      data: {
+        affairId: string;
+        change: 'followed' | 'unfollowed' | 'submitted' | 'replicated';
+        opHash?: string;
+        status?: string;
+        accepted?: number;
+        drained?: number;
+      };
+    }
   | { kind: 'ConversationsSynced'; data: { applied: number } }
   | { kind: 'DeviceUpdated'; data: DeviceDto }
   // M1 新设备通知（m1-m2-implementation-plan §3.3）：kind 恒 'device_joined'，
@@ -253,6 +288,8 @@ export type PluginMarketItemDto = {
   lastCheckReason: string;
   /** 已授权权限清单（桥 dispatcher 权限中间件数据源；未安装时为空） */
   grantedPermissions: PluginPermission[];
+  /** 安装通路信任级（'L0' | 'L1' | 'L2'；signed=L2 / repo-anchored=L1 / sideloaded=L0，community-model §十） */
+  trustLevel?: string;
 };
 
 export type PluginUpdateProbeDto = {
@@ -274,6 +311,8 @@ export type InstalledPluginStateDto = {
   grantedPermissions: PluginPermission[];
   /** 信任层级：'signed' | 'repo-anchored'（仓库锚定，plugin-dist §4.2）| 'sideloaded'（.spkg 侧载）；缺省 = 签名信任链 */
   trust?: string;
+  /** 安装时记录的运行时前提（repo 取声明文件 / 侧载取包内 manifest.json；缺省 = 全平台可装） */
+  requires?: PluginRequires;
 };
 
 /** .spkg 侧载预览（plugin-market-inspect-local 出参；网络差降级，波次 2b） */
@@ -286,6 +325,8 @@ export type SideloadPreviewDto = {
   permissions: string[];
   /** 包内 manifest.json 声明的支持空间（已规范化；缺省 = 未声明，按 ['org'] 口径） */
   supportedSpaces?: PluginSpaceType[];
+  /** 包内 manifest.json 声明的运行时前提（已规范化；缺省 = 无约束；import 时壳层硬校验平台） */
+  requires?: PluginRequires;
   /** 整包 sha256（确认对话框展示供核对；import 复核） */
   sha256: string;
   size: number;
@@ -303,8 +344,10 @@ export type RepoPluginDeclarationDto = {
   releaseAssetPattern: string;
   permissions: string[];
   mirrors: string[];
-  /** 插件支持的空间类型（可选；缺省按 ['org'] 处理，§2.1） */
+  /** 插件支持的空间类型；缺省按 ['org'] 处理（spaces-and-plugins §4） */
   supportedSpaces?: PluginSpaceType[];
+  /** 运行时前提（平台/能力约束；缺省 = 全平台可装） */
+  requires?: PluginRequires;
   sdkVersion: string;
 };
 
@@ -386,6 +429,10 @@ export type OrgView = {
     region?: string;
     /** true = 组织内展示个人身份；缺省键不出现（视为 false） */
     usePersonalIdentity?: boolean;
+    /** 成员种类（org-genesis §3.2）：缺省 'person'；'org' 时 rootId 槽位承载该组织在本域的域身份 id */
+    kind?: 'person' | 'org';
+    /** opt-in 公开组织绑定（org-genesis §3.2；仅 kind='org' 有意义，缺省不公开） */
+    orgBinding?: { orgId?: string; orgAddress?: string };
   }>;
   currentUserRole: 'admin' | 'member' | null;
   isCurrentUserAdmin: boolean;
@@ -408,6 +455,36 @@ export type OrgAddressRecordDto = {
   publishedAt: number;
   ttl: number;
   signature: string;
+};
+
+/** 共同体邀请码创建结果（community-invite-create；org-genesis §3/§4）。 */
+export type CreatedCommunityInviteDto = {
+  /** 邀请码（base64url；经 communitySendInvite 走 org-mail 投递或带外渠道传播） */
+  code: string;
+  communityOrgId: string;
+  communityOrgName: string;
+};
+
+/** 共同体加入确认结果（community-invite-accept）。 */
+export type CommunityAcceptDto = {
+  communityOrgId: string;
+  communityOrgName: string;
+  /** 本组织在该共同体的域身份 id（成员条目 rootId 槽位，64hex） */
+  memberIdentity: string;
+  /** 是否已是成员（重复接受幂等） */
+  alreadyMember: boolean;
+  /** 加入通知是否已回发邀请人（尽力而为；false 不阻塞本地落库） */
+  noticeSent: boolean;
+};
+
+/** 共同体成员条目（community-list-members；名册中 kind=org 的成员）。 */
+export type CommunityMemberDto = {
+  /** 组织在本共同体的域身份 id（64hex） */
+  identity: string;
+  role: 'admin' | 'member';
+  joinedAt: number;
+  /** 公开组织绑定（未公开时键不出现——可见性策略如实呈现） */
+  orgBinding?: { orgId?: string; orgAddress?: string };
 };
 
 /** 组织网络状态（core `OrgNetworkStatus::as_str`）。 */
@@ -803,24 +880,6 @@ export type ElectronAPI = {
     dataDropVersion: (name: string, version: string, pluginDomain?: string) => Promise<{ success: boolean }>;
     dataSaveBlob: (dataBase64: string) => Promise<{ hash: string; size: number }>;
     dataReadBlob: (hash: string) => Promise<{ status: 'ready'; data: string } | { status: 'pending' }>;
-    /** O4 encrypted 授权名单（owner 侧）：orgId 由桥绑定注入 */
-    dataGrantAccess: (
-      orgId: string,
-      name: string,
-      version: string,
-      members: string[]
-    ) => Promise<{ owners: string[]; readers: string[]; epoch: number }>;
-    dataRevokeAccess: (
-      orgId: string,
-      name: string,
-      version: string,
-      members: string[]
-    ) => Promise<{ owners: string[]; readers: string[]; epoch: number }>;
-    dataListAccess: (
-      orgId: string,
-      name: string,
-      version: string
-    ) => Promise<{ owners: string[]; readers: string[]; epoch: number }>;
   };
   pluginMarket: {
     list: () => Promise<PluginMarketItemDto[]>;
@@ -856,7 +915,7 @@ export type ElectronAPI = {
   };
   organization: {
     listMine: () => Promise<OrgView[]>;
-    create: (input: { name: string; description?: string; avatar?: string; basePluginDomain?: string }) => Promise<OrgView>;
+    create: (input: { name: string; description?: string; avatar?: string; basePluginDomain?: string; domainType?: 'leaf' | 'community' }) => Promise<OrgView>;
     delete: (orgId: string) => Promise<{ success: boolean }>;
     addMember: (orgId: string, input: { rootId: string; nodeInfo?: OrgNodeInfo }) => Promise<OrgView>;
     removeMember: (orgId: string, memberRootId: string) => Promise<OrgView>;
@@ -901,6 +960,22 @@ export type ElectronAPI = {
     respondInvite: (input: { inviteId: string; accept: boolean }) => Promise<OrgInviteRecordDto>;
     /** 某组织的邀请记录（出/入站合并） */
     inviteRecords: (orgId: string) => Promise<OrgInviteRecordDto[]>;
+    /** 共同体：创建邀请码（仅共同体域 admin；个人邀请码的共同体版，传输走 org-mail 或带外渠道） */
+    communityCreateInvite: (communityOrgId: string) => Promise<CreatedCommunityInviteDto>;
+    /** 共同体：邀请码经 org-mail 投递到目标组织信箱（目标地址记录线形 + 收件人域身份为带外通道输入，p2p-org-mail §21.1） */
+    communitySendInvite: (input: {
+      communityOrgId: string;
+      code: string;
+      toOrgAddress: string;
+      recipientDomainId: string;
+      gatewayPeerId?: string | null;
+      gatewayAddresses?: string[] | null;
+    }) => Promise<unknown>;
+    /** 共同体：接受邀请（本机为待加入组织管理员；落库前 validate_org_join 硬规则；
+     *  publishBinding = 公开 orgId/地址绑定 opt-in，org-genesis §3.2） */
+    communityAcceptInvite: (joinerOrgId: string, code: string, publishBinding: boolean) => Promise<CommunityAcceptDto>;
+    /** 共同体：列成员（本地名册 kind=org 条目） */
+    communityListMembers: (communityOrgId: string) => Promise<CommunityMemberDto[]>;
   };
   contacts: {
     overview: (spaceKey: string) => Promise<SpaceContactsDto>;
@@ -945,6 +1020,54 @@ export type ElectronAPI = {
       cursor?: string,
       limit?: number
     ) => Promise<FeedPullResultDto>;
+  };
+  // 内容面 blob（public-topics §七「持有即做种」sdk.content 域；本体一律
+  // base64 出入；读/拉取命中返回 base64，未命中/拉取失败返回 null）
+  content: {
+    saveBlob: (dataBase64: string) => Promise<{ cid: string; size: number }>;
+    readBlob: (cid: string) => Promise<string | null>;
+    fetchBlob: (cid: string) => Promise<string | null>;
+    listBlobs: () => Promise<string[]>;
+    pinRoot: (cid: string, root: string) => Promise<{ success: boolean }>;
+    unpinRoot: (cid: string, root: string) => Promise<{ success: boolean }>;
+    gcSweep: () => Promise<string[]>;
+  };
+  // community-affairs §7.2 sdk.affairs：内核 affair 门面薄壳（DTO 与 plugin-sdk 同源）
+  affairs: {
+    follow: (genesis: Record<string, unknown>) => Promise<string>;
+    unfollow: (affairId: string) => Promise<void>;
+    listFollowed: () => Promise<string[]>;
+    submitOp: (op: Record<string, unknown>) => Promise<{ affairId: string; opHash: string; status: AffairOpStatus }>;
+    readLog: (affairId: string) => Promise<AffairLog>;
+    readRules: (affairId: string) => Promise<AffairRulesView>;
+    readResolution: (affairId: string) => Promise<AffairResolutions>;
+    ladderStatus: (affairId: string) => Promise<AffairLadderStatus>;
+    publicProfile: (identity: string) => Promise<AffairPublicProfile>;
+    snapshotPayload: (affairId: string, asOf?: string) => Promise<AffairSnapshotPayload>;
+    readExec: (affairId: string) => Promise<AffairExecView>;
+    orgEffects: (orgId: string, affairId: string) => Promise<AffairOrgEffects>;
+    applyOrgEffects: (orgId: string, affairId: string) => Promise<AffairOrgEffectsApplyResult>;
+  };
+  // community-affairs §7.2 sdk.credentials：持有凭证只读 + holderProof 呈现
+  // （域身份由桥绑定注入 pluginDomain，不信插件自报）+ 验证/注销查询
+  credentials: {
+    listHeld: () => Promise<HeldCredential[]>;
+    presentHolderProof: (
+      pluginDomain: string,
+      credId: string,
+      requestId: string,
+      orgId: string,
+      collection: string
+    ) => Promise<HolderProofPresentation>;
+    queryVerifiers: (orgId: string) => Promise<VerifierSet>;
+    verify: (credential: Record<string, unknown>) => Promise<CredentialVerifyResult>;
+    queryRevocations: (issuer: string) => Promise<RevocationSnapshotView>;
+  };
+  // community-affairs §7.2 sdk.policy：本地策略草稿读写 + 发布合入
+  policy: {
+    read: (orgId: string) => Promise<PolicyDraft | null>;
+    submitDraft: (doc: Record<string, unknown>) => Promise<PolicySubmitResult>;
+    publish: (orgId: string) => Promise<PolicyPublishResult>;
   };
   messages: {
     listConversations: (spaceKey: string) => Promise<ConversationDto[]>;

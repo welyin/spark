@@ -12,12 +12,12 @@
 //! 不同——不复用其函数（域串/nonce 尺寸/AAD 均不同），复用
 //! `ed_pk_to_x25519`/`ed_sk_to_x25519` 转换助手。
 
+use aes_gcm::KeyInit as _;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
 use ed25519_dalek::{Signer, Verifier};
 use rand::Rng as _;
 use serde::{Deserialize, Serialize};
-use aes_gcm::KeyInit as _;
 use sha2::{Digest, Sha256};
 
 /// 邮箱域身份域串（§21.1）：`org-mail:{orgId}`。
@@ -153,12 +153,10 @@ pub fn orgmail_box_with_nonce(
     nonce12: &[u8; 12],
 ) -> Option<(String, String)> {
     use aes_gcm::aead::{Aead, Payload};
-    let recipient_x25519 = crate::sync::orgsync::access::ed_pk_to_x25519(&parse_domain_id(
-        recipient_domain_id,
-    )?)?;
-    let sender_x25519_priv = crate::sync::orgsync::access::ed_sk_to_x25519(
-        &sender_signing_key.to_bytes(),
-    );
+    let recipient_x25519 =
+        crate::sync::orgsync::access::ed_pk_to_x25519(&parse_domain_id(recipient_domain_id)?)?;
+    let sender_x25519_priv =
+        crate::sync::orgsync::access::ed_sk_to_x25519(&sender_signing_key.to_bytes());
     let shared = curve25519_dalek::montgomery::MontgomeryPoint(recipient_x25519)
         .mul_clamped(sender_x25519_priv)
         .to_bytes();
@@ -179,10 +177,13 @@ pub fn orgmail_box_with_nonce(
     let aad = format!("{to_org_address}:{recipient_domain_id}:{envelope_id}");
     let nonce = aes_gcm::aead::Nonce::<aes_gcm::Aes256Gcm>::from(*nonce12);
     let ct = cipher
-        .encrypt(&nonce, Payload {
-            msg: plaintext,
-            aad: aad.as_bytes(),
-        })
+        .encrypt(
+            &nonce,
+            Payload {
+                msg: plaintext,
+                aad: aad.as_bytes(),
+            },
+        )
         .ok()?;
     Some((B64.encode(nonce12), B64.encode(ct)))
 }
@@ -194,12 +195,10 @@ pub fn orgmail_unbox(
     recipient_signing_key: &ed25519_dalek::SigningKey,
 ) -> Option<Vec<u8>> {
     use aes_gcm::aead::{Aead, Payload};
-    let sender_x25519 = crate::sync::orgsync::access::ed_pk_to_x25519(&parse_domain_id(
-        &envelope.from.domain_id,
-    )?)?;
-    let recipient_x25519_priv = crate::sync::orgsync::access::ed_sk_to_x25519(
-        &recipient_signing_key.to_bytes(),
-    );
+    let sender_x25519 =
+        crate::sync::orgsync::access::ed_pk_to_x25519(&parse_domain_id(&envelope.from.domain_id)?)?;
+    let recipient_x25519_priv =
+        crate::sync::orgsync::access::ed_sk_to_x25519(&recipient_signing_key.to_bytes());
     let shared = curve25519_dalek::montgomery::MontgomeryPoint(sender_x25519)
         .mul_clamped(recipient_x25519_priv)
         .to_bytes();
@@ -276,10 +275,7 @@ pub fn orgmail_sign_payload(envelope: &OrgMailEnvelope) -> String {
 }
 
 /// 发送方域身份签名（§21.4）：对签名载荷 UTF-8 字节 Ed25519 签名 → b64。
-pub fn orgmail_sign(
-    signing_key: &ed25519_dalek::SigningKey,
-    envelope: &OrgMailEnvelope,
-) -> String {
+pub fn orgmail_sign(signing_key: &ed25519_dalek::SigningKey, envelope: &OrgMailEnvelope) -> String {
     let payload = orgmail_sign_payload(envelope);
     B64.encode(signing_key.sign(payload.as_bytes()).to_bytes())
 }

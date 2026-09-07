@@ -22,9 +22,10 @@ use crate::storage::{ScanOptions, StorageBackend};
 impl OrgSyncContext {
     /// P3 sync-now（`p2p-sync-peer-organizations` 的新语义）：连接目标 peer
     /// 并向其发送本机全部组织的 orgsync-hello（收敛异步：对端回 need 拉走
-    /// diff，或对方主动 hello 回来）。legacy pull 对账出站已停发——返回
-    /// 形状的 pull 字段恒 0；`attempted/synced = 1` 表示连接成功且 hello
-    /// 已发出（orgsync 是反熵协议，「发出 hello」即本次同步动作完成）。
+    /// diff，或对方主动 hello 回来）；同轮补发全部已关注事务的
+    /// affairsync-hello（affair-sync §7 同族反熵）。legacy pull 对账出站已
+    /// 停发——返回形状的 pull 字段恒 0；`attempted/synced = 1` 表示连接成功
+    /// 且 hello 已发出（反熵协议，「发出 hello」即本次同步动作完成）。
     pub(crate) async fn orgsync_round_with_peer(
         &self,
         node_info: &PeerNodeInfo,
@@ -45,6 +46,10 @@ impl OrgSyncContext {
             .map(|info| info.connected_peers.into_iter().collect())
             .unwrap_or_default();
         self.maybe_send_orgsync_hello(&root_id, &connected, None)
+            .await;
+        // affair 域同轮（affair-sync §7）：连接建立即向已连接关注者发
+        // affairsync-hello（目录中无该对端线索时天然空转）。
+        self.maybe_send_affairsync_hello(&root_id, &connected, None)
             .await;
         Ok(super::PeerOrgSyncResult {
             attempted: 1,
@@ -95,8 +100,7 @@ impl OrgSyncContext {
         // 端点 upsert 进自己的 org:member 条目（随本文件的 hello→need→data
         // 反熵全员扩散）。端点取一次逐组织复用；失败仅告警不阻断 hello。
         let local_info = self.node.local_node_info().await.ok();
-        let device_uid =
-            crate::device::get_or_create_device_uid(&mut self.storage.clone()).ok();
+        let device_uid = crate::device::get_or_create_device_uid(&mut self.storage.clone()).ok();
         let records = crate::org::OrganizationService::read_all_organizations(&self.storage)
             .unwrap_or_default();
         for record in records {
@@ -362,7 +366,8 @@ mod tests {
         assert!(!hello_collection_degraded(true, true, false, true));
         // 非数据账号 → 不降标（普通成员本就不宣告 data 服务）
         assert!(!hello_collection_degraded(false, true, false, false));
-        // 非 filtered（encrypted/all-members）→ 不降标
+        // 非 filtered → 不降标（C7 后 confidentiality 恒为 filtered，
+        // 此分支纯防御）
         assert!(!hello_collection_degraded(true, false, false, false));
     }
 }

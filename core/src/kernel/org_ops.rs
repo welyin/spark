@@ -10,9 +10,7 @@ use super::{Kernel, KernelError, PeerOrgSyncResult, Result};
 use crate::org::service::{
     CreateOrganizationInput, CreatedOrgInvite, InviteAcceptance, OrgIdentityPatch,
 };
-use crate::org::{
-    OrgInvitePayload, OrganizationNodeInfo, OrganizationService, OrganizationView,
-};
+use crate::org::{OrgInvitePayload, OrganizationNodeInfo, OrganizationService, OrganizationView};
 use crate::p2p::node::system_now_ms;
 use crate::p2p::{P2pError, PeerNodeInfo};
 
@@ -112,21 +110,23 @@ impl Kernel {
             &node_id,
         )?;
         if let Some(tx) = &self.org_sync_tx {
-            let _ = tx.send(OrgSyncRequest::PushOrg { org_id: record.org_id.clone() });
+            let _ = tx.send(OrgSyncRequest::PushOrg {
+                org_id: record.org_id.clone(),
+            });
         }
         Ok(OrganizationService::to_view(&record, &root_id))
     }
 
     /// 移除组织成员（仅 admin；移除 admin 时组织至少保留 1 名 admin，
-    /// service.ts:460-498）。TS 移除路径**不推送**（成员经 org-pull 的
-    /// `removed` 状态传播剔除）。
+    /// service.ts:460-498）。TS 移除路径**不推送**（历史口径：成员经 org-pull
+    /// 的 `removed` 状态传播剔除，该平面已退役；本实现替代通道见下）。
     ///
     /// 阶段四A P2（L3 移除通道迁移）：落库后向被移除者发
     /// `org-member-removed` 定向通知（逐端点投递 + 退避重试，全失败入
     /// org 域 pending 队列补投——F4 既有设施，on_peer_app_ready flush；
     /// 被移除者已出成员表，flush 反查走 pending 记录内嵌的 targetPeerIds
     /// 快照）。通知失败/无寻址不阻塞移除——成员条目墓碑 + whole 双写经
-    /// orgsync 收敛，legacy pull removed 分支（P3 前存活）兜底。
+    /// orgsync 收敛兜底。
     pub fn org_remove_member(
         &mut self,
         org_id: &str,
@@ -189,7 +189,9 @@ impl Kernel {
             &node_id,
         )?;
         if let Some(tx) = &self.org_sync_tx {
-            let _ = tx.send(OrgSyncRequest::PushOrg { org_id: record.org_id.clone() });
+            let _ = tx.send(OrgSyncRequest::PushOrg {
+                org_id: record.org_id.clone(),
+            });
         }
         Ok(OrganizationService::to_view(&record, &root_id))
     }
@@ -215,7 +217,9 @@ impl Kernel {
             &node_id,
         )?;
         if let Some(tx) = &self.org_sync_tx {
-            let _ = tx.send(OrgSyncRequest::PushOrg { org_id: record.org_id.clone() });
+            let _ = tx.send(OrgSyncRequest::PushOrg {
+                org_id: record.org_id.clone(),
+            });
         }
         Ok(OrganizationService::to_view(&record, &root_id))
     }
@@ -242,7 +246,9 @@ impl Kernel {
             &node_id,
         )?;
         if let Some(tx) = &self.org_sync_tx {
-            let _ = tx.send(OrgSyncRequest::PushOrg { org_id: record.org_id.clone() });
+            let _ = tx.send(OrgSyncRequest::PushOrg {
+                org_id: record.org_id.clone(),
+            });
         }
         Ok(OrganizationService::to_view(&record, &root_id))
     }
@@ -271,7 +277,9 @@ impl Kernel {
             &node_id,
         )?;
         if let Some(tx) = &self.org_sync_tx {
-            let _ = tx.send(OrgSyncRequest::PushOrg { org_id: record.org_id.clone() });
+            let _ = tx.send(OrgSyncRequest::PushOrg {
+                org_id: record.org_id.clone(),
+            });
         }
         Ok(OrganizationService::to_view(&record, &root_id))
     }
@@ -296,7 +304,9 @@ impl Kernel {
             &node_id,
         )?;
         if let Some(tx) = &self.org_sync_tx {
-            let _ = tx.send(OrgSyncRequest::PushOrg { org_id: record.org_id.clone() });
+            let _ = tx.send(OrgSyncRequest::PushOrg {
+                org_id: record.org_id.clone(),
+            });
         }
         Ok(OrganizationService::to_view(&record, &root_id))
     }
@@ -326,7 +336,9 @@ impl Kernel {
             &node_id,
         )?;
         if let Some(tx) = &self.org_sync_tx {
-            let _ = tx.send(OrgSyncRequest::PushOrg { org_id: record.org_id.clone() });
+            let _ = tx.send(OrgSyncRequest::PushOrg {
+                org_id: record.org_id.clone(),
+            });
         }
         Ok(OrganizationService::to_view(&record, &root_id))
     }

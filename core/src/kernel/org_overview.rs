@@ -41,12 +41,14 @@ impl Kernel {
         let duty: Vec<crate::org::DutyObservation> =
             crate::sync::orgsync::orgq_da_duty_observations(storage, org_id)
                 .into_iter()
-                .map(|(root_id, peer_id, device_class, observed_at)| crate::org::DutyObservation {
-                    root_id,
-                    peer_id,
-                    device_class,
-                    observed_at,
-                })
+                .map(
+                    |(root_id, peer_id, device_class, observed_at)| crate::org::DutyObservation {
+                        root_id,
+                        peer_id,
+                        device_class,
+                        observed_at,
+                    },
+                )
                 .collect();
         let has_data_collections =
             crate::plugindata::org_has_data_account_collections(storage, org_id);
@@ -76,7 +78,6 @@ impl Kernel {
         self.fill_org_network_status(&mut overview, now);
         Ok(overview)
     }
-
 
     /// 填充副本概览的网络状态字段（org_overview 的扩展段）。
     ///

@@ -15,8 +15,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::types::{
-    OrganizationAccessKey, OrganizationDeviceSet, OrganizationMember, OrganizationRecord,
-    OrganizationRole, OrganizationSyncSection, OrganizationSyncState, OrganizationSyncVersions,
+    MemberKind, OrgBinding, OrganizationAccessKey, OrganizationDeviceSet, OrganizationMember,
+    OrganizationRecord, OrganizationRole, OrganizationSyncSection, OrganizationSyncState,
+    OrganizationSyncVersions,
 };
 use super::{OrgError, Result};
 
@@ -101,6 +102,18 @@ pub struct SnapshotMember {
     /// 不带该字段时必须保留已发布密钥）。
     #[serde(rename = "accessKey", default, skip_serializing_if = "Option::is_none")]
     pub access_key: Option<OrganizationAccessKey>,
+    /// 成员种类（org-genesis §3.2）：键缺失 = person（旧对端未携带，合并
+    /// 保留 existing）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<MemberKind>,
+    /// opt-in 公开组织绑定（org-genesis §3.2；仅本人可改，同 accessKey 口径：
+    /// None = 未携带，合并保留 existing）。
+    #[serde(
+        rename = "orgBinding",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub org_binding: Option<OrgBinding>,
 }
 
 impl From<&OrganizationMember> for SnapshotMember {
@@ -121,6 +134,9 @@ impl From<&OrganizationMember> for SnapshotMember {
             use_personal_identity: member.use_personal_identity,
             // accessKey 原样上线（None 也省略键——缺省兼容，旧端可忽略）
             access_key: member.access_key.clone(),
+            // kind/orgBinding 原样上线（键缺失 = person / 不公开，缺省兼容）
+            kind: member.kind,
+            org_binding: member.org_binding.clone(),
         }
     }
 }
@@ -396,18 +412,25 @@ pub fn merge_organization_sync_snapshot(
                 &incoming.use_personal_identity,
                 existing_ref.and_then(|m| m.use_personal_identity.as_ref()),
             ),
-            // O4 accessKey：仅本人可改（O2）。快照合入采取保守策略——**成员
+            // accessKey：仅本人可改（O2）。快照合入采取保守策略——**成员
             // 已有 accessKey 时，incoming 携带不同的 accessKey 不采用**（保留
-            // 本地）。理由：accessKey 由成员本人自发布（`publish_access_key`，
-            // 根密钥绑定签名），peer 快照无法独立复核根绑定签名（纯逻辑层无
-            // 根公钥），故不信任 peer 对他人 accessKey 的改动——否则恶意成员
-            // 可把他人 accessKey 换成自己密钥，窃取其 orgkey-deliver 密钥。
-            // 成员自身经 `publish_access_key` 直接落库，不依赖本合并路径传播。
+            // 本地）。理由：accessKey 由成员本人自发布（根密钥绑定签名），
+            // peer 快照无法独立复核根绑定签名（纯逻辑层无根公钥），故不信任
+            // peer 对他人 accessKey 的改动。
+            // （C7：accessKey 的原消费方 acl/orgkey-deliver 已随 encrypted 轴
+            // 退役；字段保留为惰性可选位，合并守卫语义不变。）
             // 新成员（existing 无 accessKey）则采用 incoming。
             access_key: match existing_ref.and_then(|m| m.access_key.as_ref()) {
                 Some(_) => existing_ref.and_then(|m| m.access_key.clone()),
                 None => incoming.access_key.clone(),
             },
+            // 成员种类/组织绑定（org-genesis §3.2）：incoming 携带则采用，
+            // 键缺失保留 existing（同 or_existing 口径）。
+            kind: or_existing(&incoming.kind, existing_ref.and_then(|m| m.kind.as_ref())),
+            org_binding: or_existing(
+                &incoming.org_binding,
+                existing_ref.and_then(|m| m.org_binding.as_ref()),
+            ),
             extra: existing_member.map(|m| m.extra).unwrap_or_default(),
         };
         match index_by_root_id.get(&incoming.root_id) {
@@ -486,6 +509,10 @@ pub fn merge_organization_sync_snapshot(
             .summary
             .is_public
             .unwrap_or_else(|| existing.is_some_and(|e| e.is_public)),
+        // 域类型（org-genesis §3.1）：快照 summary 不携带——经 org:genesis:
+        // 键域流动，由 snapshot_apply 合入后从本地创世记录解析回填；此处保留
+        // 本地值。
+        domain_type: existing.and_then(|e| e.domain_type),
         members: merged_members,
         sync: Some(OrganizationSyncState {
             versions: snapshot.sync,
@@ -515,6 +542,18 @@ pub fn is_organization_sync_stale(
         || incoming.members_version > local.members_version
         || incoming.member_details_version > local.member_details_version
         || incoming.transactions_version > local.transactions_version
+}
+
+/// 本地组织版本解析（原 org-pull-sync.ts:274-276 `resolveLocalVersions`，随
+/// legacy pull 平面退役迁入本模块）：`record.sync.versions` 缺失时按重建
+/// 快照兜底（版本塌缩到 updatedAt）。orgsync 平面的 sync-state 反哺记账
+/// （`sync_state::note_orgsync_activity`）依赖本函数。
+pub fn resolve_local_versions(record: &OrganizationRecord) -> OrganizationSyncVersions {
+    record
+        .sync
+        .as_ref()
+        .map(|s| s.versions)
+        .unwrap_or_else(|| build_organization_sync_versions_default(record))
 }
 
 /// `normalizeIncomingSnapshot`（org-share-snapshot.ts:4-23）：兼容两种线形。

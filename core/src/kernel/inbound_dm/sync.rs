@@ -151,8 +151,8 @@ pub(super) fn handle_profile_sync<S: StorageBackend>(
             profile_sync_reply,
             pdsync_out: Vec::new(),
             orgsync_out: Vec::new(),
+            affairsync_out: Vec::new(),
             profile_applied: false,
-            orgkey_unbox: Vec::new(),
             feed_blob_out: None,
         });
     };
@@ -197,8 +197,8 @@ pub(super) fn handle_profile_sync<S: StorageBackend>(
         profile_sync_reply,
         pdsync_out: Vec::new(),
         orgsync_out: Vec::new(),
+        affairsync_out: Vec::new(),
         profile_applied: false,
-        orgkey_unbox: Vec::new(),
         feed_blob_out: None,
     })
 }
@@ -277,8 +277,8 @@ pub(super) fn handle_device_sync<S: StorageBackend>(
         profile_sync_reply: None,
         pdsync_out: Vec::new(),
         orgsync_out: Vec::new(),
+        affairsync_out: Vec::new(),
         profile_applied: false,
-        orgkey_unbox: Vec::new(),
         feed_blob_out: None,
     })
 }
@@ -321,8 +321,8 @@ pub(super) fn handle_contact_sync<S: StorageBackend>(
         profile_sync_reply: None,
         pdsync_out: Vec::new(),
         orgsync_out: Vec::new(),
+        affairsync_out: Vec::new(),
         profile_applied: false,
-        orgkey_unbox: Vec::new(),
         feed_blob_out: None,
     })
 }
@@ -362,8 +362,8 @@ pub(super) fn handle_conv_sync<S: StorageBackend>(
         profile_sync_reply: None,
         pdsync_out: Vec::new(),
         orgsync_out: Vec::new(),
+        affairsync_out: Vec::new(),
         profile_applied: false,
-        orgkey_unbox: Vec::new(),
         feed_blob_out: None,
     })
 }

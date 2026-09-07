@@ -190,7 +190,8 @@ export default defineComponent({
         const created = await window.electronAPI.organization.create({
           name: form.name,
           description: form.description,
-          avatar: form.avatar || undefined
+          avatar: form.avatar || undefined,
+          domainType: form.domainType
         });
         // 本地缓存一份即时展示（refreshOrganizations 也会把内核 avatar 回写进缓存）
         if (form.avatar) {

@@ -121,36 +121,6 @@ impl Kernel {
             Some(oid) => resolve_org_owned(storage, domain, oid, name, version)?,
             None => resolve_owned(storage, domain, name, version)?,
         };
-        // O4 工作项 4：encrypted 集合透明加解密——save 以当前 epoch 密钥加密
-        // 后落 `orgd:` 密文（复制组流量只有密文）。在**路由前**加密：本地 /
-        // orgq 在线 / 离线入队三条写路径统一携带密文。无当前 epoch 密钥
-        // （非 reader）→ KeyUnavailable（AEAD 语义：密钥持有者集合 = 写权限
-        // 集合，无密钥即无写权限）。
-        let mut value = value;
-        if decl.confidentiality == crate::plugindata::Confidentiality::Encrypted {
-            if let Some(oid) = org_id {
-                let col_full = format!("{}@v{}", decl.name, decl.version);
-                let ct = crate::sync::orgsync::encrypt_orgd_value(
-                    storage,
-                    oid,
-                    &decl.name,
-                    &decl.version,
-                    key,
-                    &value.to_string(),
-                )
-                .map_err(|e| match e {
-                    // H3：密钥不可达 → 独立错误码（非 Internal），上层可识别为
-                    // 「非 reader/密钥缺失」而非内部故障。
-                    crate::sync::orgsync::AccessDataError::KeyUnavailable(m) => {
-                        super::KernelError::KeyUnavailable(m)
-                    }
-                    other => {
-                        super::KernelError::Internal(format!("encrypt {col_full}:{key}: {other}"))
-                    }
-                })?;
-                value = serde_json::from_str(&ct).unwrap_or(Value::String(ct));
-            }
-        }
         // nit：Online 分支仅在 org 集合时返回（org_id 有值），用 if let 显式
         // 解构避免 unwrap。
         match self.data_org_write_route(&decl, org_id, key, &value)? {
@@ -240,14 +210,16 @@ impl Kernel {
                 let col_full = format!("{}@v{}", decl.name, decl.version);
                 if let Some(target) = self.orgq_online_target(oid, &col_full) {
                     // 投递 orgq-req 查询（prefix=key 精确拉取），等待应答落缓存
-                    let _ = self.data_orgq_query(oid, &decl, &target, Some(key), Some(1), None)?;
+                    let _ =
+                        self.data_orgq_query(domain, oid, &decl, &target, Some(key), Some(1), None)?;
                 }
                 return self.data_orgq_cached_get(storage, &decl, key);
             }
         }
         let raw = plugindata::get(storage, &decl, key)?;
         Ok(match raw {
-            Some(text) => Some(self.decrypt_orgd_read_value(&decl, key, &text)?),
+            // C7 后 orgd 值恒为明文（encrypted 轴已退役）
+            Some(text) => Some(serde_json::from_str(&text).unwrap_or(Value::String(text))),
             None => None,
         })
     }
@@ -295,32 +267,12 @@ impl Kernel {
             if !self.data_org_local_resident(&decl, storage)? {
                 let col_full = format!("{}@v{}", decl.name, decl.version);
                 if let Some(target) = self.orgq_online_target(oid, &col_full) {
-                    return self.data_orgq_query(oid, &decl, &target, prefix, limit, cursor);
+                    return self.data_orgq_query(domain, oid, &decl, &target, prefix, limit, cursor);
                 }
                 return Ok(self.data_orgq_cached_query(storage, &decl, prefix, limit, cursor)?);
             }
         }
-        let mut page = plugindata::query(storage, &decl, prefix, limit, cursor)?;
-        // O4 工作项 4：encrypted 集合本地 query 解密——`plugindata::query` 返回
-        // `orgd:` 密文，逐条按记录 epoch 解密为插件明文。解密失败（非 reader/
-        // 密钥未达）→ 该条置 Null（UnavailableOffline 语义），不中断整页。
-        if decl.confidentiality == crate::plugindata::Confidentiality::Encrypted {
-            let oid = decl.org_id.as_deref().unwrap_or("");
-            for (rel_key, value) in page.items.iter_mut() {
-                if let Ok(plain) = crate::sync::orgsync::decrypt_orgd_value(
-                    storage,
-                    oid,
-                    &decl.name,
-                    &decl.version,
-                    rel_key,
-                    value,
-                ) {
-                    *value = plain;
-                } else {
-                    *value = "null".to_string();
-                }
-            }
-        }
+        let page = plugindata::query(storage, &decl, prefix, limit, cursor)?;
         Ok(page)
     }
 

@@ -63,7 +63,7 @@ impl OrgqPermHook for FakeHookPartial {
 }
 
 /// 构造并投递 orgq-req（数据账号侧），注入测试权限钩子。
-fn deliver_orgq_req_with_hook(
+pub(super) fn deliver_orgq_req_with_hook(
     s: &mut MemoryStorage,
     my_root: &str,
     from_key: &SigningKey,
@@ -188,6 +188,7 @@ fn orgq_req_rejects_non_member() {
         10,
         None,
         "req-1",
+        None,
     );
     let r = deliver_orgq_req(&mut s, &self_root, &x_key, &x_root, &self_root, body);
     assert_eq!(r.response["ok"], false);
@@ -234,6 +235,7 @@ fn orgq_req_filtered_degrades_when_plugin_not_serving() {
         10,
         None,
         "req-f1",
+        None,
     );
     let r = deliver_orgq_req(&mut s, &self_root, &m_key, &m_root, &self_root, body);
     assert_eq!(r.response["ok"], true, "数据账号受理（应答走 orgsync_out）");
@@ -245,114 +247,6 @@ fn orgq_req_filtered_degrades_when_plugin_not_serving() {
         "filtered 插件未运行 → denied 空集降级"
     );
     assert_eq!(resp["records"], json!([]));
-}
-
-/// encrypted 集合（O4 实装）：
-/// - 查询按当前 acl `readers` 名单过滤——非读者 denied 空集（连元数据都不给）；
-/// - 写入不做名单校验（AEAD 在读取方把关），数据账号直接受理落库。
-#[test]
-fn orgq_req_encrypted_reader_filtering() {
-    use spark_core::plugindata::Confidentiality;
-    use spark_core::sync::orgsync::AclRecord;
-    let (m_key, m_root) = self_identity(3); // 成员（非读者）
-    let (_self_key, self_root) = self_identity(2); // 本机 B（数据账号）
-    let mut s = MemoryStorage::new();
-    save_org(
-        &mut s,
-        ORG_ID,
-        vec![
-            (m_root.as_str(), OrganizationRole::Member),
-            (self_root.as_str(), OrganizationRole::Admin),
-        ],
-        &[self_root.as_str()],
-    );
-    // 声明 encrypted 集合（须 data-accounts）
-    declare_org_collection(
-        &mut s,
-        "node-b",
-        ORG_ID,
-        NAME,
-        VERSION,
-        Accounts::DataAccounts,
-        &self_root,
-        NOW,
-    );
-    let mut d = spark_core::plugindata::get_declaration_org(&s, ORG_ID, NAME, VERSION)
-        .unwrap()
-        .unwrap();
-    d.confidentiality = Confidentiality::Encrypted;
-    s.put(
-        &org_decl_key(ORG_ID, NAME, VERSION),
-        &serde_json::to_string(&d).unwrap(),
-    )
-    .unwrap();
-
-    // 写入 → 受理（encrypted 写入不做名单校验，AEAD 在读取方把关）
-    let wbody = build_orgq_write_req(
-        ORG_ID,
-        &format!("{NAME}@v{VERSION}"),
-        &[spark_core::sync::orgsync::OrgqWriteRecord {
-            key: "k1".to_string(),
-            value: json!({"a": 1}),
-        }],
-        "req-e2",
-    );
-    let r = deliver_orgq_req(&mut s, &self_root, &m_key, &m_root, &self_root, wbody);
-    let resp = r.orgsync_out[0].body();
-    assert_eq!(
-        resp["accepted"],
-        json!(1),
-        "encrypted 写入被数据账号受理（AEAD 读取方把关）"
-    );
-    assert_eq!(resp["denied"], json!(false));
-
-    // 无 acl 记录 → 非读者（m 不在 readers）→ 查询 denied 空集，元数据不给
-    let body = build_orgq_query_req(
-        ORG_ID,
-        &format!("{NAME}@v{VERSION}"),
-        None,
-        10,
-        None,
-        "req-e1",
-    );
-    let r = deliver_orgq_req(&mut s, &self_root, &m_key, &m_root, &self_root, body);
-    let resp = r.orgsync_out[0].body();
-    assert_eq!(
-        resp["denied"],
-        json!(true),
-        "encrypted 非读者查询 denied 空集"
-    );
-    assert_eq!(resp["records"], json!([]));
-
-    // 建立 acl，m 加入 readers（读者）→ 查询返回驻留密文记录
-    let acl = AclRecord {
-        owners: vec![self_root.clone()],
-        readers: vec![m_root.clone()],
-        epoch: 1,
-        updated_at: NOW,
-        reset_by: None,
-        sig: String::new(),
-    };
-    s.put(
-        &spark_core::sync::orgsync::acl_key(ORG_ID, NAME, VERSION),
-        &serde_json::to_string(&acl).unwrap(),
-    )
-    .unwrap();
-    let body = build_orgq_query_req(
-        ORG_ID,
-        &format!("{NAME}@v{VERSION}"),
-        None,
-        10,
-        None,
-        "req-e3",
-    );
-    let r = deliver_orgq_req(&mut s, &self_root, &m_key, &m_root, &self_root, body);
-    let resp = r.orgsync_out[0].body();
-    assert_eq!(resp["denied"], json!(false), "读者查询放行");
-    assert!(
-        !resp["records"].as_array().unwrap().is_empty(),
-        "读者拿到驻留密文"
-    );
 }
 
 /// 数据账号侧处理 orgq-req 后产生出站 orgq-resp（orgsync_out 携带 to_root_id
@@ -388,6 +282,7 @@ fn orgq_req_outbound_resp_carries_member_to_root() {
         10,
         None,
         "req-to",
+        None,
     );
     let r = deliver_orgq_req(&mut s, &self_root, &m_key, &m_root, &self_root, body);
     assert_eq!(r.orgsync_out.len(), 1);
@@ -650,6 +545,7 @@ fn orgq_req_filtered_query_hook_pass_serves_records() {
         10,
         None,
         "req-hp",
+        None,
     );
     let r = deliver_orgq_req_with_hook(
         &mut s,
@@ -714,6 +610,7 @@ fn orgq_req_filtered_query_hook_partial_allow_by_key() {
         10,
         None,
         "req-part",
+        None,
     );
     let r =
         deliver_orgq_req_with_hook(&mut s, &self_root, &m_key, &m_root, &self_root, body, &hook);
@@ -754,6 +651,7 @@ fn orgq_req_filtered_query_hook_reject_returns_empty() {
         10,
         None,
         "req-hr",
+        None,
     );
     let r = deliver_orgq_req_with_hook(
         &mut s,
@@ -1242,7 +1140,7 @@ fn orgq_query_paginates_with_cursor() {
     let col = format!("{NAME}@v{VERSION}");
 
     // 第一页：limit=2
-    let body = build_orgq_query_req(ORG_ID, &col, None, 2, None, "req-page1");
+    let body = build_orgq_query_req(ORG_ID, &col, None, 2, None, "req-page1", None);
     let r = deliver_orgq_req_with_hook(
         &mut s,
         &self_root,
@@ -1268,7 +1166,7 @@ fn orgq_query_paginates_with_cursor() {
         .unwrap();
 
     // 第二页：cursor = 上一页末相对 key → 续扫剩余 3 条
-    let body2 = build_orgq_query_req(ORG_ID, &col, None, 2, Some(last_rel), "req-page2");
+    let body2 = build_orgq_query_req(ORG_ID, &col, None, 2, Some(last_rel), "req-page2", None);
     let r2 = deliver_orgq_req_with_hook(
         &mut s,
         &self_root,
@@ -1300,7 +1198,7 @@ fn orgq_query_paginates_with_cursor() {
             .unwrap()
             .to_string()
     };
-    let body3 = build_orgq_query_req(ORG_ID, &col, None, 2, Some(&third), "req-page3");
+    let body3 = build_orgq_query_req(ORG_ID, &col, None, 2, Some(&third), "req-page3", None);
     let r3 = deliver_orgq_req_with_hook(
         &mut s,
         &self_root,
@@ -1349,119 +1247,4 @@ fn orgq_resp_mismatched_target_dropped() {
         s.get(&format!("orgq:pending:req-mis")).unwrap().is_some(),
         "错配应答不消费在途记录"
     );
-}
-
-/// O4：encrypted 集合 orgq **删除**（value:null）须 from ∈ 当前 acl readers——
-/// 墓碑无密文可验（AEAD 无法为删除提供完整性），非读者删除拒绝。普通写维持
-/// AEAD 兜底（不判名单）。受理删除落审计日志 (from,key,ts)。
-#[test]
-fn orgq_encrypted_delete_requires_reader_and_audits() {
-    use spark_core::plugindata::Confidentiality;
-    use spark_core::sync::orgsync::AclRecord;
-    let (m_key, m_root) = self_identity(3); // 成员（先非读者，后读者）
-    let (_da_key, da_root) = self_identity(1); // 数据账号（本机 B）
-    let (_self_key, self_root) = self_identity(2);
-    let mut s = MemoryStorage::new();
-    save_org(
-        &mut s,
-        ORG_ID,
-        vec![
-            (da_root.as_str(), OrganizationRole::Admin),
-            (m_root.as_str(), OrganizationRole::Member),
-            (self_root.as_str(), OrganizationRole::Admin),
-        ],
-        &[self_root.as_str()],
-    );
-    declare_org_collection(
-        &mut s,
-        "node-b",
-        ORG_ID,
-        NAME,
-        VERSION,
-        Accounts::DataAccounts,
-        &self_root,
-        NOW,
-    );
-    // 声明为 encrypted
-    let mut d = spark_core::plugindata::get_declaration_org(&s, ORG_ID, NAME, VERSION)
-        .unwrap()
-        .unwrap();
-    d.confidentiality = Confidentiality::Encrypted;
-    s.put(
-        &org_decl_key(ORG_ID, NAME, VERSION),
-        &serde_json::to_string(&d).unwrap(),
-    )
-    .unwrap();
-    // 先落一条密文记录（删除对象）
-    let data_key = format!("{}k9", org_data_prefix(ORG_ID, NAME, VERSION));
-    put_personal(
-        &mut s,
-        "node-b",
-        &data_key,
-        r#"{"epoch":1,"nonce":"n","ct":"c"}"#,
-        NOW,
-    )
-    .unwrap();
-
-    let col = format!("{NAME}@v{VERSION}");
-    // (a) 无 acl → m 非读者 → 删除拒绝（rejected=1，墓碑不落）
-    let del_body = build_orgq_write_req(
-        ORG_ID,
-        &col,
-        &[spark_core::sync::orgsync::OrgqWriteRecord {
-            key: "k9".to_string(),
-            value: serde_json::Value::Null,
-        }],
-        "req-o1",
-    );
-    let r = deliver_orgq_req(&mut s, &self_root, &m_key, &m_root, &self_root, del_body);
-    let resp = r.orgsync_out[0].body();
-    assert_eq!(resp["accepted"], json!(0), "非读者删除被拒");
-    assert_eq!(resp["rejected"], json!(1));
-    assert!(s.get(&data_key).unwrap().is_some(), "非读者删除不落墓碑");
-    // 审计日志为空（被拒删除不审计）
-    assert!(
-        s.scan(&ScanOptions::prefix("orgq:audit:"))
-            .unwrap()
-            .is_empty(),
-        "被拒删除不写审计日志"
-    );
-
-    // (b) m 加入 readers → 删除受理 + 审计日志 (from,key,ts)
-    let acl = AclRecord {
-        owners: vec![self_root.clone()],
-        readers: vec![m_root.clone()],
-        epoch: 1,
-        updated_at: NOW,
-        reset_by: None,
-        sig: String::new(),
-    };
-    s.put(
-        &spark_core::sync::orgsync::acl_key(ORG_ID, NAME, VERSION),
-        &serde_json::to_string(&acl).unwrap(),
-    )
-    .unwrap();
-    let del_body = build_orgq_write_req(
-        ORG_ID,
-        &col,
-        &[spark_core::sync::orgsync::OrgqWriteRecord {
-            key: "k9".to_string(),
-            value: serde_json::Value::Null,
-        }],
-        "req-o2",
-    );
-    let r = deliver_orgq_req(&mut s, &self_root, &m_key, &m_root, &self_root, del_body);
-    let resp = r.orgsync_out[0].body();
-    assert_eq!(resp["accepted"], json!(1), "读者删除受理");
-    assert_eq!(resp["rejected"], json!(0));
-    assert!(s.get(&data_key).unwrap().is_none(), "读者删除落墓碑");
-    let audits: Vec<_> = s
-        .scan(&ScanOptions::prefix("orgq:audit:"))
-        .unwrap()
-        .into_iter()
-        .collect();
-    assert_eq!(audits.len(), 1, "受理删除写审计日志");
-    let entry: serde_json::Value = serde_json::from_str(&audits[0].1).unwrap();
-    assert_eq!(entry["from"], json!(m_root), "审计记录 from");
-    assert_eq!(entry["key"], json!("k9"), "审计记录 key");
 }

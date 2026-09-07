@@ -327,184 +327,6 @@ fn decl_travels_via_org_structure_to_plain_member() {
     assert_eq!(resolved.name, NAME, "普通成员读到声明");
 }
 
-/// F2 靶心回归（联调绕过序列正面化）+ P2/P3：成员 B 本地声明
-/// （declaredBy=B、declaredAt 更晚）→ 收到 owner A 的同策略声明
-/// （declaredAt 更早）→ B 本地声明被确定性替换为 declaredBy=A（不 bump 本机
-/// 序号，无回声）→ A 的创世 acl 在 B 侧接受（创世锚钉在收敛后的声明上）。
-/// 重放同一声明幂等（不动）。
-#[test]
-fn decl_converges_then_genesis_acl_accepted() {
-    use base64::Engine as _;
-    use base64::engine::general_purpose::STANDARD as B64;
-    use spark_core::identity::derive_domain_identity;
-    use spark_core::org::types::OrganizationAccessKey;
-
-    let (a_key, a_root) = self_identity(1);
-    let (_b_key, b_root) = self_identity(2);
-    let mut a = MemoryStorage::new();
-    let mut b = MemoryStorage::new();
-    for s in [&mut a, &mut b] {
-        save_org(
-            s,
-            ORG_ID,
-            vec![
-                (a_root.as_str(), OrganizationRole::Admin),
-                (b_root.as_str(), OrganizationRole::Member),
-            ],
-            &[a_root.as_str()],
-        );
-    }
-    let enc_name = "ai-chat:secret";
-    let enc_version = "1.0.0";
-    let col_full = format!("{enc_name}@v{enc_version}");
-
-    // owner A 声明（declaredAt 较早）；B 本地声明（declaredBy=B、更晚——
-    // 联调实测形态：成员插件本地声明被 F10 钉死 declaredBy=自己）
-    let decl_a = declare_org_collection(
-        &mut a,
-        "node-a",
-        ORG_ID,
-        enc_name,
-        enc_version,
-        Accounts::DataAccounts,
-        &a_root,
-        NOW,
-    );
-    let _decl_b = declare_org_collection(
-        &mut b,
-        "node-b",
-        ORG_ID,
-        enc_name,
-        enc_version,
-        Accounts::DataAccounts,
-        &b_root,
-        NOW + 100,
-    );
-    let decl_key = org_decl_key(ORG_ID, enc_name, enc_version);
-
-    // B 侧需持有 A 的 accessKey（acl 验签锚）
-    let owner_domain = derive_domain_identity(&[7u8; 64], &format!("org-access:{ORG_ID}"));
-    let owner_ak = OrganizationAccessKey {
-        public_key: B64.encode(owner_domain.public_key()),
-        bind_sig: "bind".to_string(),
-    };
-    for s in [&mut a, &mut b] {
-        let mut rec = OrganizationService::get_record(s, ORG_ID).unwrap().unwrap();
-        if let Some(m) = rec.members.iter_mut().find(|m| m.root_id == a_root) {
-            m.access_key = Some(owner_ak.clone());
-        }
-        OrganizationService::save_record(s, &rec).unwrap();
-    }
-
-    // A 的声明经 org:structure 到达 B → 确定性收敛：B 的本地声明被原位替换
-    let decl_record = spark_core::sync::orgsync::OrgsyncRecord {
-        key: decl_key.clone(),
-        value: serde_json::to_value(&decl_a).unwrap(),
-        meta: get_personal_meta(&a, &decl_key).unwrap().unwrap(),
-        dseq: None,
-    };
-    let data_body = build_orgsync_data_batch(
-        ORG_ID,
-        &format!("{STRUCT}@v{V1}"),
-        std::slice::from_ref(&decl_record),
-        0,
-        1,
-    );
-    let r = deliver_orgsync(
-        &mut b,
-        &b_root,
-        "B",
-        &a_key,
-        &a_root,
-        &b_root,
-        dm_envelope::KIND_ORGSYNC_DATA,
-        data_body,
-        "peer-a",
-        "node-b",
-    );
-    assert_eq!(r.response, json!({ "ok": true }));
-    let stored: spark_core::plugindata::CollectionDeclaration =
-        serde_json::from_str(&b.get(&decl_key).unwrap().unwrap()).unwrap();
-    assert_eq!(
-        stored.declared_by.as_deref(),
-        Some(a_root.as_str()),
-        "同策略声明收敛：(declaredAt, declaredBy) 小者（A）胜，B 的自封声明被替换"
-    );
-    // 败方替换不 bump 本机分量（无回声）：替换后声明 pmeta == 远端 meta
-    // （无 node-b 分量；入站流程的其它记账（设备 upsert）只推 vvseq 键、
-    // 不动该记录 pmeta）
-    let decl_meta_b = get_personal_meta(&b, &decl_key).unwrap().unwrap();
-    assert_eq!(
-        decl_meta_b.vv.get("node-b"),
-        None,
-        "替换以胜者远端 meta 落库，无本机分量"
-    );
-    // 幂等：重放同一声明 → 不动
-    let data_body2 =
-        build_orgsync_data_batch(ORG_ID, &format!("{STRUCT}@v{V1}"), &[decl_record], 0, 1);
-    let r2 = deliver_orgsync(
-        &mut b,
-        &b_root,
-        "B",
-        &a_key,
-        &a_root,
-        &b_root,
-        dm_envelope::KIND_ORGSYNC_DATA,
-        data_body2,
-        "peer-a",
-        "node-b",
-    );
-    assert_eq!(r2.response, json!({ "ok": true }), "重放同一声明幂等");
-
-    // P3：A 的创世 acl 在 B 侧接受（创世锚钉在收敛后的声明 declaredBy=A 上；
-    // 修复前 B 侧恒 acl-genesis-signer-not-declared-by 被拒）
-    let payload = spark_core::sync::orgsync::acl_sign_payload(
-        1,
-        ORG_ID,
-        &col_full,
-        &[a_root.clone()],
-        &[b_root.clone()],
-        None,
-        NOW,
-    );
-    let sig = spark_core::sync::orgsync::acl_sign(&owner_domain.signing_key, &payload);
-    let acl_json = serde_json::json!({
-        "owners": [a_root], "readers": [b_root], "epoch": 1, "updatedAt": NOW, "sig": sig,
-    });
-    let acl_key = spark_core::sync::orgsync::acl_key(ORG_ID, enc_name, enc_version);
-    put_personal(&mut a, "node-a", &acl_key, &acl_json.to_string(), NOW).unwrap();
-    let acl_meta = get_personal_meta(&a, &acl_key).unwrap().unwrap();
-    let acl_record = spark_core::sync::orgsync::OrgsyncRecord {
-        key: acl_key.clone(),
-        value: acl_json,
-        meta: acl_meta,
-        dseq: None,
-    };
-    // acl 时间窗校验用 ctx.now_ms——deliver_orgsync 固定 NOW，对齐
-    let data_body3 =
-        build_orgsync_data_batch(ORG_ID, &format!("{STRUCT}@v{V1}"), &[acl_record], 0, 1);
-    let r3 = deliver_orgsync(
-        &mut b,
-        &b_root,
-        "B",
-        &a_key,
-        &a_root,
-        &b_root,
-        dm_envelope::KIND_ORGSYNC_DATA,
-        data_body3,
-        "peer-a",
-        "node-b",
-    );
-    assert_eq!(
-        r3.response,
-        json!({ "ok": true }),
-        "创世 acl 在收敛声明上被接受"
-    );
-    let stored_acl: spark_core::sync::orgsync::AclRecord =
-        serde_json::from_str(&b.get(&acl_key).unwrap().unwrap()).unwrap();
-    assert!(stored_acl.is_owner(&a_root) && stored_acl.is_reader(&b_root));
-}
-
 /// F2-P2：策略真实分歧（accounts 不同）→ 维持「保留先见者 + 冲突日志」，
 /// 不自动调和（先到者保留，后到的不替换）。
 #[test]
@@ -580,125 +402,6 @@ fn decl_strategy_conflict_keeps_first_seen() {
         "策略冲突保留先见者（B 本地声明不被替换）"
     );
     assert_eq!(stored.accounts, decl_b.accounts, "策略轴维持本地值");
-}
-
-/// F2-P3 同批顺序死锁回归（评审发现）：采集侧按 org:structure 前缀序
-/// （org:meta → org:acl: → org:coll:）排列批次记录，创世 acl 排在声明之前；
-///  acl 处理失败会整批拒收——排在后面的声明永不落地，下轮同批同序同样失败，
-/// 新成员永远收不到声明与 acl（设计 P3「抢跑整批拒、下轮收敛」在确定性
-/// 坏序下不成立）。修复后：同批内声明先于 acl 合入，创世锚一次通过。
-#[test]
-fn genesis_acl_and_decl_in_same_batch_converge() {
-    use base64::Engine as _;
-    use base64::engine::general_purpose::STANDARD as B64;
-    use spark_core::identity::derive_domain_identity;
-    use spark_core::org::types::OrganizationAccessKey;
-
-    let (a_key, a_root) = self_identity(1);
-    let (_b_key, b_root) = self_identity(2);
-    let mut a = MemoryStorage::new();
-    let mut b = MemoryStorage::new();
-    for s in [&mut a, &mut b] {
-        save_org(
-            s,
-            ORG_ID,
-            vec![
-                (a_root.as_str(), OrganizationRole::Admin),
-                (b_root.as_str(), OrganizationRole::Member),
-            ],
-            &[a_root.as_str()],
-        );
-    }
-    let enc_name = "ai-chat:secret";
-    let enc_version = "1.0.0";
-    let col_full = format!("{enc_name}@v{enc_version}");
-
-    // owner A 声明 + B 侧持有 A 的 accessKey（acl 验签锚）；B 无任何本地声明
-    // （全新成员形态）
-    let decl_a = declare_org_collection(
-        &mut a,
-        "node-a",
-        ORG_ID,
-        enc_name,
-        enc_version,
-        Accounts::DataAccounts,
-        &a_root,
-        NOW,
-    );
-    let decl_key = org_decl_key(ORG_ID, enc_name, enc_version);
-    let owner_domain = derive_domain_identity(&[7u8; 64], &format!("org-access:{ORG_ID}"));
-    let owner_ak = OrganizationAccessKey {
-        public_key: B64.encode(owner_domain.public_key()),
-        bind_sig: "bind".to_string(),
-    };
-    for s in [&mut a, &mut b] {
-        let mut rec = OrganizationService::get_record(s, ORG_ID).unwrap().unwrap();
-        if let Some(m) = rec.members.iter_mut().find(|m| m.root_id == a_root) {
-            m.access_key = Some(owner_ak.clone());
-        }
-        OrganizationService::save_record(s, &rec).unwrap();
-    }
-
-    // A 的创世 acl
-    let payload = spark_core::sync::orgsync::acl_sign_payload(
-        1,
-        ORG_ID,
-        &col_full,
-        &[a_root.clone()],
-        &[b_root.clone()],
-        None,
-        NOW,
-    );
-    let sig = spark_core::sync::orgsync::acl_sign(&owner_domain.signing_key, &payload);
-    let acl_json = serde_json::json!({
-        "owners": [a_root], "readers": [b_root], "epoch": 1, "updatedAt": NOW, "sig": sig,
-    });
-    let acl_key = spark_core::sync::orgsync::acl_key(ORG_ID, enc_name, enc_version);
-    put_personal(&mut a, "node-a", &acl_key, &acl_json.to_string(), NOW).unwrap();
-
-    let decl_record = spark_core::sync::orgsync::OrgsyncRecord {
-        key: decl_key.clone(),
-        value: serde_json::to_value(&decl_a).unwrap(),
-        meta: get_personal_meta(&a, &decl_key).unwrap().unwrap(),
-        dseq: None,
-    };
-    let acl_record = spark_core::sync::orgsync::OrgsyncRecord {
-        key: acl_key.clone(),
-        value: acl_json,
-        meta: get_personal_meta(&a, &acl_key).unwrap().unwrap(),
-        dseq: None,
-    };
-    // 生产采集序：acl（org:acl:）排在声明（org:coll:）之前
-    let data_body = build_orgsync_data_batch(
-        ORG_ID,
-        &format!("{STRUCT}@v{V1}"),
-        &[acl_record, decl_record],
-        0,
-        1,
-    );
-    let r = deliver_orgsync(
-        &mut b,
-        &b_root,
-        "B",
-        &a_key,
-        &a_root,
-        &b_root,
-        dm_envelope::KIND_ORGSYNC_DATA,
-        data_body,
-        "peer-a",
-        "node-b",
-    );
-    assert_eq!(
-        r.response,
-        json!({ "ok": true }),
-        "同批 acl+声明：声明先合入，创世锚一次通过"
-    );
-    let stored_decl: spark_core::plugindata::CollectionDeclaration =
-        serde_json::from_str(&b.get(&decl_key).unwrap().expect("声明已落库")).unwrap();
-    assert_eq!(stored_decl.declared_by.as_deref(), Some(a_root.as_str()));
-    let stored_acl: spark_core::sync::orgsync::AclRecord =
-        serde_json::from_str(&b.get(&acl_key).unwrap().expect("创世 acl 已落库")).unwrap();
-    assert!(stored_acl.is_owner(&a_root) && stored_acl.is_reader(&b_root));
 }
 
 // ── F8. 写侧脱节（RMW vv/内容脱节）自愈链 ──────────────────────────────
@@ -852,14 +555,24 @@ fn org_meta_detached_record_self_heals_via_third_party_merge() {
 
     // 4) 自愈回流：orgsync 推送面此时对 C 已关闭（A 的成员表被脱节记录
     //    抹掉 C，C 的信封过不了「from ∈ 成员表」公共前置）——现实自愈通道是
-    //    A 经 org-pull 反熵从 C 拉回（pull 响应合入不做该前置校验，响应的
-    //    是 A 自己发起的请求）。apply_incoming_snapshot 成员级并集合并复活 C。
+    //    A 主动发起协调后把 C 的整值快照合入本地（合入侧不做该前置校验，
+    //    响应的是 A 自己发起的请求）。此处用保留的快照合并原语（normalize →
+    //    merge → 原子段落库）模拟该合入：成员级并集合并复活 C。
     //    （设计 §2.3 写的是「C 回推 → A 判 Remote」——该路径被信封鉴权挡住，
-    //    以代码现实为准走 pull/快照面，见交还报告偏差说明。）
+    //    以代码现实为准走快照合入面，见交还报告偏差说明。）
     let healed_json: serde_json::Value =
         serde_json::from_str(&c.get(&meta_key).unwrap().unwrap()).unwrap();
     let io_lock = std::sync::Arc::new(std::sync::Mutex::new(()));
-    OrganizationService::apply_incoming_snapshot(&mut a, &io_lock, &healed_json, NOW + 2).unwrap();
+    let snapshot = spark_core::org::snapshot::normalize_incoming_snapshot(&healed_json).unwrap();
+    OrganizationService::update_record_atomic(&mut a, &io_lock, ORG_ID, |_storage, record| {
+        *record = spark_core::org::snapshot::merge_organization_sync_snapshot(
+            Some(record),
+            &snapshot,
+            NOW + 2,
+        );
+        Ok(true)
+    })
+    .unwrap();
     let rec_a = OrganizationService::get_record(&a, ORG_ID)
         .unwrap()
         .unwrap();
@@ -873,146 +586,6 @@ fn org_meta_detached_record_self_heals_via_third_party_merge() {
         Some("C 自称"),
         "C 的本地变更随合并版到达"
     );
-}
-
-/// batch1 §2（f123 建议 2）：同批「org:meta（携带 signer accessKey）+ 创世
-/// acl」一轮合入成功——acl 验签读最新成员表（修复前用函数入口快照，同批
-/// org:meta 已合入也不可见 → `acl-signer-no-access-key` 拒一轮靠重推自愈）。
-#[test]
-fn acl_verify_reads_fresh_member_table_same_batch() {
-    use base64::Engine as _;
-    use base64::engine::general_purpose::STANDARD as B64;
-    use spark_core::identity::derive_domain_identity;
-    use spark_core::org::types::OrganizationAccessKey;
-
-    let (a_key, a_root) = self_identity(1);
-    let (_b_key, b_root) = self_identity(2);
-    let mut a = MemoryStorage::new();
-    let mut b = MemoryStorage::new();
-    for s in [&mut a, &mut b] {
-        save_org(
-            s,
-            ORG_ID,
-            vec![
-                (a_root.as_str(), OrganizationRole::Admin),
-                (b_root.as_str(), OrganizationRole::Member),
-            ],
-            &[a_root.as_str()],
-        );
-    }
-    let enc_name = "ai-chat:secret";
-    let enc_version = "1.0.0";
-    let col_full = format!("{enc_name}@v{enc_version}");
-    // 声明两侧一致（declaredBy=A）——创世锚前提隔离出本用例变量
-    let _decl = declare_org_collection(
-        &mut a,
-        "node-a",
-        ORG_ID,
-        enc_name,
-        enc_version,
-        Accounts::DataAccounts,
-        &a_root,
-        NOW,
-    );
-    spark_core::plugindata::declare_builtin_org_collections(&mut b, ORG_ID, &b_root, NOW, "node-b")
-        .unwrap();
-    let decl_key = org_decl_key(ORG_ID, enc_name, enc_version);
-    spark_core::plugindata::apply_org_decl_convergent(
-        &mut b,
-        &decl_key,
-        &serde_json::to_value(&_decl).unwrap(),
-        &get_personal_meta(&a, &decl_key).unwrap().unwrap(),
-    )
-    .unwrap();
-
-    // A 发布本人 accessKey（仅 A 侧成员表携带；B 侧成员表没有——修复前 acl
-    // 验签读入口快照必拒）
-    let owner_domain = derive_domain_identity(&[7u8; 64], &format!("org-access:{ORG_ID}"));
-    let owner_ak = OrganizationAccessKey {
-        public_key: B64.encode(owner_domain.public_key()),
-        bind_sig: "bind".to_string(),
-    };
-    let meta_key = format!("org:meta:{ORG_ID}");
-    {
-        let mut rec = OrganizationService::get_record(&a, ORG_ID)
-            .unwrap()
-            .unwrap();
-        rec.members
-            .iter_mut()
-            .find(|m| m.root_id == a_root)
-            .unwrap()
-            .access_key = Some(owner_ak.clone());
-        rec.updated_at = NOW;
-        put_personal(
-            &mut a,
-            "node-a",
-            &meta_key,
-            &serde_json::to_string(&rec).unwrap(),
-            NOW,
-        )
-        .unwrap();
-    }
-    let org_meta_record = spark_core::sync::orgsync::OrgsyncRecord {
-        key: meta_key.clone(),
-        value: serde_json::from_str(&a.get(&meta_key).unwrap().unwrap()).unwrap(),
-        meta: get_personal_meta(&a, &meta_key).unwrap().unwrap(),
-        dseq: None,
-    };
-    // B 侧 org:meta 也需有 pmeta 基线（旧内容——无 A 的 accessKey）
-    let b_meta_content = b.get(&meta_key).unwrap().unwrap();
-    put_personal(&mut b, "node-b", &meta_key, &b_meta_content, NOW).unwrap();
-
-    // A 的创世 acl（签名者 = A 组织域身份）
-    let payload = spark_core::sync::orgsync::acl_sign_payload(
-        1,
-        ORG_ID,
-        &col_full,
-        &[a_root.clone()],
-        &[b_root.clone()],
-        None,
-        NOW,
-    );
-    let sig = spark_core::sync::orgsync::acl_sign(&owner_domain.signing_key, &payload);
-    let acl_json = serde_json::json!({
-        "owners": [a_root], "readers": [b_root], "epoch": 1, "updatedAt": NOW, "sig": sig,
-    });
-    let acl_key = spark_core::sync::orgsync::acl_key(ORG_ID, enc_name, enc_version);
-    put_personal(&mut a, "node-a", &acl_key, &acl_json.to_string(), NOW).unwrap();
-    let acl_record = spark_core::sync::orgsync::OrgsyncRecord {
-        key: acl_key.clone(),
-        value: acl_json,
-        meta: get_personal_meta(&a, &acl_key).unwrap().unwrap(),
-        dseq: None,
-    };
-
-    // 同批 [org:meta（携带 accessKey）, 创世 acl] → B 一轮合入成功
-    let body = build_orgsync_data_batch(
-        ORG_ID,
-        &format!("{STRUCT}@v{V1}"),
-        &[org_meta_record, acl_record],
-        0,
-        1,
-    );
-    let r = deliver_orgsync(
-        &mut b,
-        &b_root,
-        "B",
-        &a_key,
-        &a_root,
-        &b_root,
-        dm_envelope::KIND_ORGSYNC_DATA,
-        body,
-        "peer-a",
-        "node-b",
-    );
-    assert_eq!(
-        r.response,
-        json!({ "ok": true }),
-        "同批 org:meta+acl 一轮通过（修复前 acl-signer-no-access-key 拒一轮）"
-    );
-    let stored: spark_core::sync::orgsync::AclRecord =
-        serde_json::from_str(&b.get(&acl_key).unwrap().expect("创世 acl 已落库")).unwrap();
-    assert!(stored.is_owner(&a_root) && stored.is_reader(&b_root));
 }
 
 /// 卫生批项2（replica.rs overview 记账切 orgsync 平面）：验签成功的
@@ -1035,25 +608,39 @@ fn orgsync_hello_feeds_sync_state_overview() {
             &[],
         );
     }
-    spark_core::plugindata::declare_builtin_org_collections(&mut a, ORG_ID, &a_root, NOW, "node-a").unwrap();
-    spark_core::plugindata::declare_builtin_org_collections(&mut b, ORG_ID, &b_root, NOW, "node-b").unwrap();
+    spark_core::plugindata::declare_builtin_org_collections(&mut a, ORG_ID, &a_root, NOW, "node-a")
+        .unwrap();
+    spark_core::plugindata::declare_builtin_org_collections(&mut b, ORG_ID, &b_root, NOW, "node-b")
+        .unwrap();
 
     // A hello → B：B 侧应记下「A 账号最近同步过」
     let hello = build_hello_for(&a, ORG_ID, &b_root, "peer-b");
     let r = deliver_orgsync(
-        &mut b, &b_root, "B", &a_key, &a_root, &b_root,
-        dm_envelope::KIND_ORGSYNC_HELLO, hello, "peer-a", "node-b",
+        &mut b,
+        &b_root,
+        "B",
+        &a_key,
+        &a_root,
+        &b_root,
+        dm_envelope::KIND_ORGSYNC_HELLO,
+        hello,
+        "peer-a",
+        "node-b",
     );
     assert_eq!(r.response, json!({ "ok": true }));
     let state_key = spark_core::org::sync_state::org_sync_state_account_key(&a_root, ORG_ID);
     let state = spark_core::org::sync_state::OrgSyncState::from_json(
-        &b.get(&state_key).unwrap().expect("orgsync 交换反哺 sync-state"),
+        &b.get(&state_key)
+            .unwrap()
+            .expect("orgsync 交换反哺 sync-state"),
     )
     .expect("state 解析");
     assert_eq!(state.last_synced_at, NOW);
 
     // overview 口径：A 账号 ever_synced（recentlySynced 窗口内）
-    let record = OrganizationService::get_record(&b, ORG_ID).unwrap().unwrap();
+    let record = OrganizationService::get_record(&b, ORG_ID)
+        .unwrap()
+        .unwrap();
     let versions = record.sync.as_ref().map(|s| s.versions);
     let mut b2 = b.clone();
     let overview = spark_core::org::compute_org_sync_overview(
@@ -1061,19 +648,31 @@ fn orgsync_hello_feeds_sync_state_overview() {
         Some(&b_root),
         versions.as_ref(),
         |root_id, legacy_peer| {
-            spark_core::org::sync_state::read_org_sync_state_account(&mut b2, root_id, ORG_ID, legacy_peer)
+            spark_core::org::sync_state::read_org_sync_state_account(
+                &mut b2,
+                root_id,
+                ORG_ID,
+                legacy_peer,
+            )
         },
         &[],
         false,
         |_| "pc",
         NOW,
     );
-    let member_a = overview.members.iter().find(|m| m.root_id == a_root).unwrap();
+    let member_a = overview
+        .members
+        .iter()
+        .find(|m| m.root_id == a_root)
+        .unwrap();
     assert!(member_a.ever_synced, "反哺后 A 账号计入 everSynced");
-    let member_b = overview.members.iter().find(|m| m.root_id == b_root).unwrap();
+    let member_b = overview
+        .members
+        .iter()
+        .find(|m| m.root_id == b_root)
+        .unwrap();
     assert!(member_b.ever_synced, "本机恒 everSynced");
 }
-
 
 // ── batch3 §2 管理面邀请投影（org:invitations@v1 / org:invpub:）──────────────
 
@@ -1098,89 +697,214 @@ fn invpub_projection_syncs_between_admins() {
             ],
             &[],
         );
-        spark_core::plugindata::declare_builtin_org_collections(s, ORG_ID, &a_root, NOW, "node-x").unwrap();
+        spark_core::plugindata::declare_builtin_org_collections(s, ORG_ID, &a_root, NOW, "node-x")
+            .unwrap();
     }
     let inv_key_a_c = spark_core::org::service::org_invpub_key(ORG_ID, &a_root, &c_root);
-    let invite = |_inviter: &str, invitee: &str, status, now| spark_core::org::invite_record::OrgInviteRecord {
-        id: format!("inv-{now}"),
-        org_id: ORG_ID.to_string(),
-        org_name: "t".to_string(),
-        org_avatar: None,
-        peer_root_id: invitee.to_string(),
-        peer_nickname: "待加入成员".to_string(),
-        direction: spark_core::org::OrgInviteDirection::Outgoing,
-        status,
-        invite_code: None,
-        created_at: now,
-        updated_at: now,
+    let invite = |_inviter: &str, invitee: &str, status, now| {
+        spark_core::org::invite_record::OrgInviteRecord {
+            id: format!("inv-{now}"),
+            org_id: ORG_ID.to_string(),
+            org_name: "t".to_string(),
+            org_avatar: None,
+            peer_root_id: invitee.to_string(),
+            peer_nickname: "待加入成员".to_string(),
+            direction: spark_core::org::OrgInviteDirection::Outgoing,
+            status,
+            invite_code: None,
+            created_at: now,
+            updated_at: now,
+        }
     };
 
     // A：出站记录（personal 域）+ 投影（管理面）显式记账（raw 测试口径，
     // 生产 facade 为 put_invite_record_with_projection 单 batch 双写）
-    let rec = invite(&a_root, &c_root, spark_core::org::OrgInviteStatus::Pending, NOW);
-    put_personal(&mut a, "node-a", &format!("org:inv:out:{ORG_ID}:{c_root}"),
-        &serde_json::to_string(&rec).unwrap(), NOW).unwrap();
+    let rec = invite(
+        &a_root,
+        &c_root,
+        spark_core::org::OrgInviteStatus::Pending,
+        NOW,
+    );
+    put_personal(
+        &mut a,
+        "node-a",
+        &format!("org:inv:out:{ORG_ID}:{c_root}"),
+        &serde_json::to_string(&rec).unwrap(),
+        NOW,
+    )
+    .unwrap();
     let (pk, pv) = spark_core::org::service::invpub_projection(&rec, &a_root).unwrap();
     assert_eq!(pk, inv_key_a_c);
     assert!(pv.get("inviteCode").is_none(), "投影不含 inviteCode");
-    put_personal(&mut a, "node-a", &pk, &serde_json::to_string(&pv).unwrap(), NOW).unwrap();
+    put_personal(
+        &mut a,
+        "node-a",
+        &pk,
+        &serde_json::to_string(&pv).unwrap(),
+        NOW,
+    )
+    .unwrap();
     // 碰撞面：A 再邀 D、B 邀 C——三键共存
-    let rec2 = invite(&a_root, &d_root, spark_core::org::OrgInviteStatus::Pending, NOW + 1);
+    let rec2 = invite(
+        &a_root,
+        &d_root,
+        spark_core::org::OrgInviteStatus::Pending,
+        NOW + 1,
+    );
     let (pk2, pv2) = spark_core::org::service::invpub_projection(&rec2, &a_root).unwrap();
     assert_ne!(pk, pk2, "同邀请人两被邀请人不撞键");
-    let rec3 = invite(&b_root, &c_root, spark_core::org::OrgInviteStatus::Pending, NOW + 2);
+    let rec3 = invite(
+        &b_root,
+        &c_root,
+        spark_core::org::OrgInviteStatus::Pending,
+        NOW + 2,
+    );
     let (pk3, _) = spark_core::org::service::invpub_projection(&rec3, &b_root).unwrap();
     assert_ne!(pk, pk3, "两邀请人同被邀请人不撞键");
-    put_personal(&mut a, "node-a", &pk2, &serde_json::to_string(&pv2).unwrap(), NOW).unwrap();
+    put_personal(
+        &mut a,
+        "node-a",
+        &pk2,
+        &serde_json::to_string(&pv2).unwrap(),
+        NOW,
+    )
+    .unwrap();
 
     // A → B 交换 org:invitations
-    let collections = collect_org_collections(&a, ORG_ID, &[("org:invitations".to_string(), "1".to_string())], &b_root, "peer-b").unwrap();
+    let collections = collect_org_collections(
+        &a,
+        ORG_ID,
+        &[("org:invitations".to_string(), "1".to_string())],
+        &b_root,
+        "peer-b",
+    )
+    .unwrap();
     let hello = build_orgsync_hello(ORG_ID, collections, &["data".to_string()], "pc");
-    let r = deliver_orgsync(&mut b, &b_root, "B", &a_key, &a_root, &b_root,
-        dm_envelope::KIND_ORGSYNC_HELLO, hello, "peer-a", "node-b");
+    let r = deliver_orgsync(
+        &mut b,
+        &b_root,
+        "B",
+        &a_key,
+        &a_root,
+        &b_root,
+        dm_envelope::KIND_ORGSYNC_HELLO,
+        hello,
+        "peer-a",
+        "node-b",
+    );
     for out in &r.orgsync_out {
         let body = out.body().clone();
         if body.get("knownVv").is_some() {
-            let r2 = deliver_orgsync(&mut a, &a_root, "A", &b_key, &b_root, &a_root,
-                dm_envelope::KIND_ORGSYNC_NEED, body, "peer-b", "node-a");
+            let r2 = deliver_orgsync(
+                &mut a,
+                &a_root,
+                "A",
+                &b_key,
+                &b_root,
+                &a_root,
+                dm_envelope::KIND_ORGSYNC_NEED,
+                body,
+                "peer-b",
+                "node-a",
+            );
             for out2 in &r2.orgsync_out {
                 if out2.body().get("records").is_some() {
-                    let r3 = deliver_orgsync(&mut b, &b_root, "B", &a_key, &a_root, &b_root,
-                        dm_envelope::KIND_ORGSYNC_DATA, out2.body().clone(), "peer-a", "node-b");
+                    let r3 = deliver_orgsync(
+                        &mut b,
+                        &b_root,
+                        "B",
+                        &a_key,
+                        &a_root,
+                        &b_root,
+                        dm_envelope::KIND_ORGSYNC_DATA,
+                        out2.body().clone(),
+                        "peer-a",
+                        "node-b",
+                    );
                     assert_eq!(r3.response, json!({ "ok": true }));
                 }
             }
         }
     }
     // B 互见：两条投影都在（A→C、A→D），pending 状态
-    let proj: serde_json::Value = serde_json::from_str(&b.get(&inv_key_a_c).unwrap().expect("B 收讫 A→C 投影")).unwrap();
+    let proj: serde_json::Value =
+        serde_json::from_str(&b.get(&inv_key_a_c).unwrap().expect("B 收讫 A→C 投影")).unwrap();
     assert_eq!(proj["inviter"], json!(a_root));
     assert_eq!(proj["invitee"], json!(c_root));
     assert_eq!(proj["status"], json!("pending"));
     assert!(b.get(&pk2).unwrap().is_some(), "A→D 投影同批到达");
 
     // A 侧转 accepted（回执受理/对账同口径：投影 put_personal 重写）→ B 同步转终态
-    let rec_a = spark_core::org::OrgInviteRecord { status: spark_core::org::OrgInviteStatus::Accepted, updated_at: NOW + 10, ..rec };
+    let rec_a = spark_core::org::OrgInviteRecord {
+        status: spark_core::org::OrgInviteStatus::Accepted,
+        updated_at: NOW + 10,
+        ..rec
+    };
     let (_, pv_a) = spark_core::org::service::invpub_projection(&rec_a, &a_root).unwrap();
-    put_personal(&mut a, "node-a", &inv_key_a_c, &serde_json::to_string(&pv_a).unwrap(), NOW + 10).unwrap();
-    let collections = collect_org_collections(&a, ORG_ID, &[("org:invitations".to_string(), "1".to_string())], &b_root, "peer-b").unwrap();
+    put_personal(
+        &mut a,
+        "node-a",
+        &inv_key_a_c,
+        &serde_json::to_string(&pv_a).unwrap(),
+        NOW + 10,
+    )
+    .unwrap();
+    let collections = collect_org_collections(
+        &a,
+        ORG_ID,
+        &[("org:invitations".to_string(), "1".to_string())],
+        &b_root,
+        "peer-b",
+    )
+    .unwrap();
     let hello = build_orgsync_hello(ORG_ID, collections, &["data".to_string()], "pc");
-    let r = deliver_orgsync(&mut b, &b_root, "B", &a_key, &a_root, &b_root,
-        dm_envelope::KIND_ORGSYNC_HELLO, hello, "peer-a", "node-b");
+    let r = deliver_orgsync(
+        &mut b,
+        &b_root,
+        "B",
+        &a_key,
+        &a_root,
+        &b_root,
+        dm_envelope::KIND_ORGSYNC_HELLO,
+        hello,
+        "peer-a",
+        "node-b",
+    );
     for out in &r.orgsync_out {
         let body = out.body().clone();
         if body.get("knownVv").is_some() {
-            let r2 = deliver_orgsync(&mut a, &a_root, "A", &b_key, &b_root, &a_root,
-                dm_envelope::KIND_ORGSYNC_NEED, body, "peer-b", "node-a");
+            let r2 = deliver_orgsync(
+                &mut a,
+                &a_root,
+                "A",
+                &b_key,
+                &b_root,
+                &a_root,
+                dm_envelope::KIND_ORGSYNC_NEED,
+                body,
+                "peer-b",
+                "node-a",
+            );
             for out2 in &r2.orgsync_out {
                 if out2.body().get("records").is_some() {
-                    deliver_orgsync(&mut b, &b_root, "B", &a_key, &a_root, &b_root,
-                        dm_envelope::KIND_ORGSYNC_DATA, out2.body().clone(), "peer-a", "node-b");
+                    deliver_orgsync(
+                        &mut b,
+                        &b_root,
+                        "B",
+                        &a_key,
+                        &a_root,
+                        &b_root,
+                        dm_envelope::KIND_ORGSYNC_DATA,
+                        out2.body().clone(),
+                        "peer-a",
+                        "node-b",
+                    );
                 }
             }
         }
     }
-    let proj2: serde_json::Value = serde_json::from_str(&b.get(&inv_key_a_c).unwrap().unwrap()).unwrap();
+    let proj2: serde_json::Value =
+        serde_json::from_str(&b.get(&inv_key_a_c).unwrap().unwrap()).unwrap();
     assert_eq!(proj2["status"], json!("accepted"), "B 侧投影同步转终态");
 }
 
@@ -1205,7 +929,8 @@ fn outbound_invite_reconciled_when_invitee_in_member_table() {
             ],
             &[],
         );
-        spark_core::plugindata::declare_builtin_org_collections(s, ORG_ID, &a_root, NOW, "node-x").unwrap();
+        spark_core::plugindata::declare_builtin_org_collections(s, ORG_ID, &a_root, NOW, "node-x")
+            .unwrap();
     }
     // B 侧：邀 C 的 outbound pending（回执丢失形态）+ 投影
     let rec = spark_core::org::invite_record::OrgInviteRecord {
@@ -1221,14 +946,29 @@ fn outbound_invite_reconciled_when_invitee_in_member_table() {
         created_at: NOW,
         updated_at: NOW,
     };
-    put_personal(&mut b, "node-b", &format!("org:inv:out:{ORG_ID}:{c_root}"),
-        &serde_json::to_string(&rec).unwrap(), NOW).unwrap();
+    put_personal(
+        &mut b,
+        "node-b",
+        &format!("org:inv:out:{ORG_ID}:{c_root}"),
+        &serde_json::to_string(&rec).unwrap(),
+        NOW,
+    )
+    .unwrap();
     let (pk, pv) = spark_core::org::service::invpub_projection(&rec, &b_root).unwrap();
-    put_personal(&mut b, "node-b", &pk, &serde_json::to_string(&pv).unwrap(), NOW).unwrap();
+    put_personal(
+        &mut b,
+        "node-b",
+        &pk,
+        &serde_json::to_string(&pv).unwrap(),
+        NOW,
+    )
+    .unwrap();
 
     // A 把 C 加进成员表（预录——携端点 peer-c 但 C 尚未应答）→ org:meta 经
     // org:structure 到 B：vv 只含 A 的分量（无 C 本人分量）→ 不误标
-    let mut rec_a = OrganizationService::get_record(&a, ORG_ID).unwrap().unwrap();
+    let mut rec_a = OrganizationService::get_record(&a, ORG_ID)
+        .unwrap()
+        .unwrap();
     rec_a.members.push({
         let mut m = member(&c_root, OrganizationRole::Member);
         m.node_info = Some(spark_core::org::types::OrganizationDeviceSet::from_single(
@@ -1242,21 +982,43 @@ fn outbound_invite_reconciled_when_invitee_in_member_table() {
     });
     rec_a.updated_at = NOW + 100;
     let meta_key = format!("org:meta:{ORG_ID}");
-    put_personal(&mut a, "node-a", &meta_key, &serde_json::to_string(&rec_a).unwrap(), NOW + 100).unwrap();
+    put_personal(
+        &mut a,
+        "node-a",
+        &meta_key,
+        &serde_json::to_string(&rec_a).unwrap(),
+        NOW + 100,
+    )
+    .unwrap();
     let org_meta_record = spark_core::sync::orgsync::OrgsyncRecord {
         key: meta_key.clone(),
         value: serde_json::from_str(&a.get(&meta_key).unwrap().unwrap()).unwrap(),
         meta: get_personal_meta(&a, &meta_key).unwrap().unwrap(),
         dseq: None,
     };
-    let body = build_orgsync_data_batch(ORG_ID, &format!("{STRUCT}@v{V1}"), &[org_meta_record], 0, 1);
-    let r = deliver_orgsync(&mut b, &b_root, "B", &a_key, &a_root, &b_root,
-        dm_envelope::KIND_ORGSYNC_DATA, body, "peer-a", "node-b");
+    let body =
+        build_orgsync_data_batch(ORG_ID, &format!("{STRUCT}@v{V1}"), &[org_meta_record], 0, 1);
+    let r = deliver_orgsync(
+        &mut b,
+        &b_root,
+        "B",
+        &a_key,
+        &a_root,
+        &b_root,
+        dm_envelope::KIND_ORGSYNC_DATA,
+        body,
+        "peer-a",
+        "node-b",
+    );
     assert_eq!(r.response, json!({ "ok": true }));
 
     // 裁决 §10.2：预录到达（vv 无 C 本人分量）→ 不误标，停留 pending
-    let still: spark_core::org::invite_record::OrgInviteRecord =
-        serde_json::from_str(&b.get(&format!("org:inv:out:{ORG_ID}:{c_root}")).unwrap().unwrap()).unwrap();
+    let still: spark_core::org::invite_record::OrgInviteRecord = serde_json::from_str(
+        &b.get(&format!("org:inv:out:{ORG_ID}:{c_root}"))
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
     assert_eq!(
         still.status,
         spark_core::org::OrgInviteStatus::Pending,
@@ -1274,17 +1036,43 @@ fn outbound_invite_reconciled_when_invitee_in_member_table() {
         meta: meta_with_c,
         dseq: None,
     };
-    let body = build_orgsync_data_batch(ORG_ID, &format!("{STRUCT}@v{V1}"), &[org_meta_record2], 0, 1);
-    let r = deliver_orgsync(&mut b, &b_root, "B", &a_key, &a_root, &b_root,
-        dm_envelope::KIND_ORGSYNC_DATA, body, "peer-a", "node-b");
+    let body = build_orgsync_data_batch(
+        ORG_ID,
+        &format!("{STRUCT}@v{V1}"),
+        &[org_meta_record2],
+        0,
+        1,
+    );
+    let r = deliver_orgsync(
+        &mut b,
+        &b_root,
+        "B",
+        &a_key,
+        &a_root,
+        &b_root,
+        dm_envelope::KIND_ORGSYNC_DATA,
+        body,
+        "peer-a",
+        "node-b",
+    );
     assert_eq!(r.response, json!({ "ok": true }));
-    let updated: spark_core::org::invite_record::OrgInviteRecord =
-        serde_json::from_str(&b.get(&format!("org:inv:out:{ORG_ID}:{c_root}")).unwrap().unwrap()).unwrap();
-    assert_eq!(updated.status, spark_core::org::OrgInviteStatus::Accepted, "本人分量到达 → 对账原地标 accepted");
+    let updated: spark_core::org::invite_record::OrgInviteRecord = serde_json::from_str(
+        &b.get(&format!("org:inv:out:{ORG_ID}:{c_root}"))
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        updated.status,
+        spark_core::org::OrgInviteStatus::Accepted,
+        "本人分量到达 → 对账原地标 accepted"
+    );
     let proj: serde_json::Value = serde_json::from_str(&b.get(&pk).unwrap().unwrap()).unwrap();
     assert_eq!(proj["status"], json!("accepted"), "投影同步转 accepted");
     assert!(
-        r.events.iter().any(|e| matches!(e, spark_core::p2p::P2pEvent::OrgInviteUpdated(_))),
+        r.events
+            .iter()
+            .any(|e| matches!(e, spark_core::p2p::P2pEvent::OrgInviteUpdated(_))),
         "发出 OrgInviteUpdated 事件"
     );
 }

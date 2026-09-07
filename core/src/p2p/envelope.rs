@@ -164,7 +164,8 @@ pub fn build_delete_body(
     body
 }
 
-/// 构造 `org-share` / `org-share-ack` 类信封 body（键序 `type, domain, payload`）。
+/// 构造组织类信封 body（键序 `type, domain, payload`；org-address gossip
+/// 记录等 `domain:"system"` 的组织消息共用）。
 pub fn build_org_body(msg_type: &str, payload: Value) -> Map<String, Value> {
     let mut body = Map::new();
     body.insert("type".to_string(), Value::String(msg_type.to_string()));

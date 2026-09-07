@@ -90,8 +90,7 @@ impl OrgSyncOverview {
         if !self.k_applicable {
             return true;
         }
-        self.synced_peers >= self.replica_target
-            && self.data_accounts.iter().all(|a| a.pc_synced)
+        self.synced_peers >= self.replica_target && self.data_accounts.iter().all(|a| a.pc_synced)
     }
 }
 
@@ -323,8 +322,8 @@ pub fn compute_org_sync_overview(
                 .iter()
                 .any(|d| d.root_id == *root_id && d.is_pc_fresh(now_ms));
             // 本机是数据账号且为 PC → 自证计入（本地驻留可服务是事实）
-            let self_pc = current_root_id == Some(root_id.as_str())
-                && device_class_of(root_id) == "pc";
+            let self_pc =
+                current_root_id == Some(root_id.as_str()) && device_class_of(root_id) == "pc";
             let observed_class: &'static str = match duty.iter().find(|d| d.root_id == *root_id) {
                 Some(d) if d.device_class == "pc" => "pc",
                 Some(_) => "mobile",
@@ -344,9 +343,7 @@ pub fn compute_org_sync_overview(
         .map(|d| (d.root_id.as_str(), d.peer_id.as_str()))
         .collect();
     let self_pair = if let (Some(self_root), true) = (current_root_id, k_applicable) {
-        if data_account_roots.iter().any(|r| r == self_root)
-            && device_class_of(self_root) == "pc"
-        {
+        if data_account_roots.iter().any(|r| r == self_root) && device_class_of(self_root) == "pc" {
             1
         } else {
             0

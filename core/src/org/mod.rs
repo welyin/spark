@@ -1,4 +1,4 @@
-//! 组织模块：邀请码、组织记录、nodeInfoClaim、同步快照合并、org-sync-state
+//! 组织模块：邀请码、组织记录、同步快照合并、org-sync-state
 //! 记账、K 副本统计、recovery token、pluginDocs 随组织同步、本地事务审计。
 //!
 //! 算法精确规格见 `core/spec/org.md`（网络消息格式见 `core/spec/p2p-messages.md`），
@@ -20,8 +20,10 @@
 //! 「sync-state 版本不落后于当前组织版本」判定。读取侧对 TS 遗留的污染形状做
 //! 兼容解包（[`sync_state::OrgSyncState`] 的反序列化），不会把 bug 传播回来。
 
-pub mod claim;
+pub mod community_invite;
+pub mod community_leave;
 pub mod gateway;
+pub mod genesis;
 pub mod invite;
 pub mod invite_record;
 pub mod mailbox;
@@ -30,21 +32,33 @@ pub mod meta_merge;
 pub mod node_card;
 pub mod org_address;
 pub mod plugin_docs;
-pub mod pull;
 pub mod recovery;
 pub mod replica;
 pub mod roles;
 pub mod service;
+pub mod sigset;
 pub mod snapshot;
 pub mod sync_state;
 pub mod tx;
 pub mod types;
 
-pub use claim::{
-    ClaimVerification, NODE_INFO_CLAIM_MAX_AGE_MS, NodeInfoClaim, NodeInfoClaimUnsigned,
-    build_node_info_claim_payload, sign_node_info_claim, verify_node_info_claim,
+pub use community_invite::{
+    COMMUNITY_ORG_INVITE_TYPE, COMMUNITY_ORG_JOIN_NOTICE_TYPE, CommunityInviteError,
+    CommunityOrgInvitePayload, build_community_invite_mail_body, build_community_join_notice,
+    community_domain, decode_community_org_invite_at, encode_community_org_invite,
+};
+pub use community_leave::{
+    CommunityLeaveRecord, ORG_COMMUNITY_LEAVE_PREFIX, community_leave_key, community_leave_prefix,
 };
 pub use gateway::{ORG_MEMBERS_DHT_KEY_SUFFIX, OrgMemberHint, org_members_dht_key};
+pub use genesis::{
+    BornOf, GenesisPolicyRecord, ORG_GENESIS_PREFIX, ORG_POLICY_PREFIX, OrgDomainIdentity,
+    PolicyRevisionRecord, PolicyVersion, SigningPolicy, TransitionDecl, VetoThreshold,
+    default_transition_decl, enforce_member_kind, genesis_org_id, genesis_policy_hash,
+    genesis_sign_payload, is_genesis_form_org_id, membership_would_cycle, org_genesis_key,
+    org_policy_key, policy_revision_hash, policy_revision_payload, sign_genesis_record,
+    verify_genesis_signature, verify_org_address_binding,
+};
 pub use invite::{
     ORG_INVITE_MAX_AGE_MS, OrgInviteError, OrgInviteInviter, OrgInvitePayload, decode_org_invite,
     decode_org_invite_at, encode_org_invite,
@@ -68,14 +82,8 @@ pub use org_address::{
     strip_org_root_secret, verify_org_address_record,
 };
 pub use plugin_docs::{
-    PLUGIN_DOC_PREFIX, PluginDocSyncItem, apply_plugin_doc_sync_items, collect_org_plugin_domains,
-    collect_syncable_plugin_docs, is_sync_disabled, migrate_plugin_docs, parse_plugin_doc_key,
-    resolve_org_id,
-};
-pub use pull::{
-    PullOrgOutcome, classify_pull_org_response, handle_pull_list_request, handle_pull_org_request,
-    member_auth_status, parse_pull_list_organizations, resolve_local_versions,
-    validate_incoming_share_payload,
+    PLUGIN_DOC_PREFIX, collect_org_plugin_domains, is_sync_disabled, migrate_plugin_docs,
+    parse_plugin_doc_key, resolve_org_id,
 };
 pub use recovery::{
     RECOVERY_TIME_BUCKET_MS, RecoveryViewItem, active_recovery_tokens, recovery_time_bucket,
@@ -88,16 +96,20 @@ pub use replica::{
     decide_org_network_status, member_ever_synced, replica_sufficient,
 };
 pub use service::OrganizationService;
+pub use sigset::{
+    DEGRADED_LEGACY_ORG_ID, OrgSigSetVerdict, OrgSigSetVerifyContext, SigSetReject,
+    component_sign_payload, roster_member_set_hash,
+};
 pub use snapshot::{
     ORGANIZATION_SYNC_RESERVED_KEYS, OrganizationSyncSnapshot, OrganizationSyncSummary,
     SnapshotMember, build_organization_sync_snapshot, build_organization_sync_versions,
     build_organization_sync_versions_default, is_organization_sync_stale,
     merge_organization_sync_snapshot, normalize_incoming_snapshot, pick_sync_sections_by_priority,
+    resolve_local_versions,
 };
 pub use sync_state::{
     ORG_SYNC_STATE_MAX_AGE_MS, ORG_SYNC_STATE_PREFIX, OrgSyncState, is_org_sync_state_expired,
-    org_sync_state_key, should_skip_share_push, sync_state_after_pull_synced,
-    sync_state_after_share_acked, sync_state_after_share_delivered,
+    org_sync_state_key,
 };
 pub use tx::{
     ORG_TX_PREFIX, OrganizationTransactionRecord, OrganizationTransactionType,
@@ -105,11 +117,12 @@ pub use tx::{
     list_organization_transactions, organization_transaction_key,
 };
 pub use types::{
-    ORG_META_PREFIX, OrganizationDeviceSet, OrganizationMember, OrganizationNodeInfo,
-    OrganizationRecord, OrganizationRole, OrganizationSyncSection, OrganizationSyncState,
-    OrganizationSyncVersions, OrganizationView, generate_org_secret, generate_organization_id,
-    generate_recovery_secret, is_valid_root_id, normalize_node_info, normalize_optional_node_info,
-    normalize_plugin_domain, normalize_root_id, normalize_text, organization_key, sort_members,
+    DomainType, MemberKind, ORG_META_PREFIX, OrganizationDeviceSet, OrganizationMember,
+    OrganizationNodeInfo, OrganizationRecord, OrganizationRole, OrganizationSyncSection,
+    OrganizationSyncState, OrganizationSyncVersions, OrganizationView, generate_org_secret,
+    generate_organization_id, generate_recovery_secret, is_valid_org_id, is_valid_root_id,
+    normalize_node_info, normalize_optional_node_info, normalize_plugin_domain, normalize_root_id,
+    normalize_text, organization_key, sort_members,
 };
 
 /// 组织模块统一错误。
@@ -118,6 +131,10 @@ pub enum OrgError {
     /// 邀请码错误（消息与 TS 一致，面向用户可读）。
     #[error("{0}")]
     Invite(#[from] OrgInviteError),
+
+    /// 共同体邀请码错误（组织加入共同体流，面向用户可读）。
+    #[error("{0}")]
+    CommunityInvite(#[from] CommunityInviteError),
 
     /// 必填文本字段为空（`{label} is required`）。
     #[error("{0} is required")]
@@ -136,6 +153,16 @@ pub enum OrgError {
     #[error("Invalid member rootId")]
     InvalidMemberRootId,
 
+    /// 成员种类与域类型不匹配（org-genesis §3.2 内核硬规则）：共同体域只接受
+    /// 组织成员、叶组织只接受个人成员。文案逐字稳定（用户可见）。
+    #[error("{0}")]
+    MemberKindNotAllowed(String),
+
+    /// 加入操作将成环（org-genesis §3.3 禁止成环）：待加入组织已出现在
+    /// 目标域的可达祖先集中（含目标域本身）。
+    #[error("Membership would create a cycle")]
+    MembershipCycle,
+
     /// 节点信息为空（peerId 与 addresses 至少其一）。
     #[error("Member node info is required: provide peerId or at least one address")]
     NodeInfoRequired,
@@ -143,6 +170,11 @@ pub enum OrgError {
     /// peerId 非法（trim 后不足 8 字符）。
     #[error("Invalid peerId")]
     InvalidPeerId,
+
+    /// 组织签名策略非法（org-genesis §1：m-of-n 须满足 1 ≤ m ≤ n，且 n 不超过
+    /// 当前快照内 admin 数——创建时为唯一初始 admin 即 n ≤ 1）。
+    #[error("Invalid signing policy")]
+    InvalidSigningPolicy,
 
     /// 组织不存在。
     #[error("Organization not found")]
@@ -155,6 +187,24 @@ pub enum OrgError {
     /// 需要组织管理员权限。
     #[error("Organization admin required")]
     AdminRequired,
+
+    /// 共同体域不可删除（community-model：域不可解散，只可退出——全体成员
+    /// 退出后域成为空域，只读历史档案，无人能写入）。删除本地组织记录会
+    /// 抹掉档案，故内核层面拒绝。
+    #[error("共同体域不可删除（域只可退出，不可解散；历史保留为只读档案）")]
+    CommunityDomainNotDeletable,
+
+    /// 共同体域已是空域只读档案（community-model：最后一个成员组织退出后
+    /// 无人能写入）：组织记录更新/成员变更/邀请与加入等写路径一律拒绝，
+    /// 读路径（历史查询）不受影响。状态由「名册无 kind=org 成员 + 存在
+    /// `org:cleave:` 留史记录」确定性推导。
+    #[error("共同体域已是空域只读档案（全员已退出，历史保留，无法写入）")]
+    CommunityDomainArchived,
+
+    /// 退出组织不是该共同体成员（成员条目缺失、非 kind=org 条目，或公开
+    /// 绑定与退出组织不符）。
+    #[error("该组织不是此共同体成员")]
+    NotCommunityMember,
 
     /// 组织必须保留至少一名管理员。
     #[error("Organization must keep at least one admin")]

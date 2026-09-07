@@ -6,6 +6,7 @@
 
 pub mod biometric;
 pub mod contact;
+pub mod content;
 pub mod data;
 pub mod device;
 pub mod docs;
@@ -24,6 +25,10 @@ pub mod pw;
 pub mod recovery;
 pub mod system;
 pub mod sys;
+// community-affairs §7.2：sdk.affairs / sdk.credentials / sdk.policy 壳层薄壳
+pub mod affairs;
+pub mod credentials;
+pub mod policy;
 // tauri-plugin-updater 仅桌面可用；门控用内建 target_os（与 Cargo.toml 的
 // target 依赖表一致），tauri 自定义 cfg(desktop) 对依赖解析器不可见
 #[cfg(not(any(target_os = "android", target_os = "ios")))]

@@ -18,7 +18,7 @@ use crate::sync::meta::DocMeta;
 use super::CollectionDeclaration;
 
 /// 策略等价判定（与 `declare()` 幂等路径同一字段集：scope/devices/merge/
-/// accounts/confidentiality/space；name/version/orgId 同键隐含一致）。
+/// accounts/confidentiality/space/readPolicy；name/version/orgId 同键隐含一致）。
 /// declaredAt/declaredBy/ts 不参与——它们是收敛排序键，不是策略分歧。
 fn decl_strategy_eq(a: &CollectionDeclaration, b: &CollectionDeclaration) -> bool {
     a.scope == b.scope
@@ -27,6 +27,7 @@ fn decl_strategy_eq(a: &CollectionDeclaration, b: &CollectionDeclaration) -> boo
         && a.accounts == b.accounts
         && a.confidentiality == b.confidentiality
         && a.space == b.space
+        && a.read_policy == b.read_policy
 }
 
 /// orgsync-data 合入声明记录：确定性收敛。返回是否发生落库（写入或替换）。

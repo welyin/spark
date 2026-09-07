@@ -1,7 +1,6 @@
 //! query/feed/identity/messages 能力（从 `host_env` 拆出，文件长度硬线）。
 //! 零逻辑变化。
 
-
 use serde_json::Value;
 
 use crate::plugin::error::{PluginError, Result};
@@ -162,7 +161,11 @@ impl PluginHostShared {
     /// （必填，trim 后 ≤200 字符）；card 可选（{viewId, data}，内核只透传）。
     /// 限流在共享 `app_msg_limiter` 内强制（与 Kernel 门面 `message_app_send`
     /// 同实例，10 条/60s）。space 缺省 "personal"（插件后台无 org 会话写）。
-    pub(super) fn messages_send_app_message(&self, plugin_id: &str, payload: &Value) -> Result<Value> {
+    pub(super) fn messages_send_app_message(
+        &self,
+        plugin_id: &str,
+        payload: &Value,
+    ) -> Result<Value> {
         let space = payload
             .get("spaceKey")
             .and_then(Value::as_str)

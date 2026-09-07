@@ -13,16 +13,6 @@ use serde_json::Value;
 use crate::org::gateway::OrgMemberHint;
 use crate::org::recovery::RecoveryViewItem;
 
-/// org-share 接收结果（accepted 时携带 ack 载荷）。
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct OrgShareAck {
-    /// 发送方 syncId（pubsub 回发 ack / 直连响应回显）。
-    pub sync_id: Option<String>,
-    pub org_id: String,
-    pub target_root_id: String,
-    pub receiver_root_id: String,
-}
-
 /// 宿主业务回调（对齐 TS P2PRuntimeOptions + pubsub-message-handler 的分支）。
 ///
 /// 所有方法均有默认空实现，宿主按需覆盖。
@@ -49,35 +39,6 @@ pub trait P2pHost: Send {
         _schema: Option<Value>,
     ) -> std::result::Result<(), String> {
         Ok(())
-    }
-
-    /// org-share 接收（org.md §7；pubsub 与直连共用，`source` 为 "pubsub"/"direct"）。
-    /// 返回 `Ok(Some(ack))` 表示接受。
-    fn apply_incoming_org_share(
-        &mut self,
-        _payload: Value,
-        _source: &'static str,
-    ) -> std::result::Result<Option<OrgShareAck>, String> {
-        Ok(None)
-    }
-
-    /// org-pull-list 响应生成（org.md §9.2）：返回完整响应帧 JSON
-    /// （`{"ok":...,"type":"org-pull-list-response",...}`）。`remote_peer_id` 为连接层对端。
-    fn handle_org_pull_list(
-        &mut self,
-        _payload: Value,
-        _remote_peer_id: Option<String>,
-    ) -> std::result::Result<Value, String> {
-        Err("org-pull-list not implemented".to_string())
-    }
-
-    /// org-pull-org 响应生成（org.md §9.3）。
-    fn handle_org_pull_org(
-        &mut self,
-        _payload: Value,
-        _remote_peer_id: Option<String>,
-    ) -> std::result::Result<Value, String> {
-        Err("org-pull-org not implemented".to_string())
     }
 
     /// org-recovery 恢复视图（org.md §10）。
@@ -130,13 +91,30 @@ pub trait P2pHost: Send {
     /// [`P2pHost::on_peer_app_ready`] 驱动。
     fn on_peer_connected(&mut self, _peer_id: &str) {}
 
-    /// org-share-ack 唤醒（按 payload.syncId 匹配发送方等待器）。
-    fn on_org_share_ack(&mut self, _payload: Value) {}
-
     /// 组织私有 DHT 命中的成员提示回填（p2p-messages.md §15）：网关提供的
     /// `{peerId, addresses}` 条目，业务层按未验证口径入邻居池（`verified=false`）；
-    /// 组织校验仍走 pull/claim 链路，信任边界不变。
+    /// 组织成员关系以组织记录/成员条目为准（邀请流 + orgsync 收敛），信任边界不变。
     fn on_org_member_hints(&mut self, _hints: &[OrgMemberHint]) {}
+
+    /// 议题元数据公告入站（`spark-affair-meta` 主题 + type='affair-meta'，
+    /// affair-metadata §2/§4）：payload 为 §3 公告线形 JSON（已通过信封规则
+    /// 与线形 parse 的 p2p 层校验）。p2p 层不落业务库——暂存区/裁决/收录归
+    /// 宿主（C10 indexer 角色或客户端元数据缓存）。
+    fn on_affair_meta(&mut self, _announce: Value) {}
+
+    /// indexer 查询应答（`/spark/affairmeta/1.0.0` 入站，affair-metadata §8）：
+    /// payload 为 search 语义对象，返回结果/错误 payload（p2p 层只包帧）。
+    /// 缺省回 unsupported——未实现角色的宿主显式拒绝。
+    fn handle_affair_meta_query(&mut self, _payload: &Value) -> Value {
+        serde_json::json!({ "error": "unsupported" })
+    }
+
+    /// indexer 角色配置（affair-metadata §7 目录面）：Some(覆盖配置) = 角色
+    /// 启用（空覆盖 = 全覆盖），None = 未启用。事件循环 tick 据此周期发布
+    /// indexer-card 自公告；缺省 None（未实现角色的宿主不自公告）。
+    fn indexer_role(&mut self) -> Option<crate::index::directory::IndexCoverage> {
+        None
+    }
 
     /// 判断 peer 是否属于优先类目（自设备 / 好友）。返回 true 时该 peer 断开
     /// 后走并行竞速恢复（peer-rediscovery §4.3）；否则维持组织成员串行兜底。

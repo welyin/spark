@@ -1,22 +1,32 @@
 //! 组织创建与删除（service.ts `createOrganization`/`deleteOrganization`）。
 //!
-//! 创建：创建者为唯一初始 admin，生成 orgId/recoverySecret/orgSecret/组织根
-//! 密钥对与 orgAddress（org.md §13/§15），追加 `create` 事务并落库。
-//! 删除：admin 校验 + `delete` 事务 + 删记录。
+//! 创建（C1，org-genesis §1/§2）：新组织一律创世哈希型——生成组织根密钥对，
+//! 构造并签名创世策略记录（含 domainType/互绑 orgAddress），orgId =
+//! `genesis_org_id(创世记录)`（`org_<64hex>` 自认证），创世记录落
+//! `org:genesis:{orgId}`（org:structure@v1 键域，写一次不可变，随 orgsync
+//! 全员流动）；创建者为唯一初始 admin，追加 `create` 事务并落库。
+//! legacy `org_<16hex>` 仅为存量形态（既有数据原样可读/同步/加入），不再产生。
+//! 删除：admin 校验 + 域删除守卫（共同体域不可删除，community-model「域不可
+//! 解散，只可退出」）+ `delete` 事务 + 删记录。
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as B64;
 use serde_json::Value;
 
 use crate::storage::StorageBackend;
 
+use super::super::genesis::{
+    GenesisPolicyRecord, SigningPolicy, default_transition_decl, genesis_org_id, org_genesis_key,
+    sign_genesis_record,
+};
 use super::super::snapshot::{build_organization_sync_versions, pick_sync_sections_by_priority};
 use super::super::tx::{
     OrganizationTransactionRecord, OrganizationTransactionType, append_organization_transaction,
 };
 use super::super::types::{
-    ORG_MEMBER_PREFIX, OrganizationMember, OrganizationRecord, OrganizationRole,
-    OrganizationSyncState, generate_org_secret, generate_organization_id,
-    generate_recovery_secret, normalize_plugin_domain, normalize_text, org_member_key,
-    organization_key,
+    DomainType, ORG_MEMBER_PREFIX, OrganizationMember, OrganizationRecord, OrganizationRole,
+    OrganizationSyncState, generate_org_secret, generate_recovery_secret, normalize_plugin_domain,
+    normalize_text, org_member_key, organization_key,
 };
 use super::super::{OrgError, Result, org_address};
 use super::{CreateOrganizationInput, OrganizationService};
@@ -82,8 +92,51 @@ impl OrganizationService {
             .map(normalize_plugin_domain)
             .transpose()?;
 
+        // C1 创世路径（org-genesis §1/§2）：域类型/签名策略/过渡声明先定
+        // （创建时确定、不可变更），再生成组织根密钥对、构造创世策略记录——
+        // orgId = genesis_org_id(创世记录)，自认证（org_<64hex>）。
+        let domain_type = input.domain_type.unwrap_or_default();
+        let signing_policy = input
+            .signing_policy
+            .clone()
+            .unwrap_or(SigningPolicy::AnyAdmin);
+        // m-of-n 校验（org-genesis §1：1 ≤ m ≤ n；实现口径 n ≤ 快照内 admin
+        // 数——创建时创建者为唯一初始 admin，即 n ≤ 1）
+        if let SigningPolicy::MOfN { m, n } = &signing_policy
+            && (*m == 0 || m > n || *n > 1)
+        {
+            return Err(OrgError::InvalidSigningPolicy);
+        }
+        let transition = input
+            .transition
+            .clone()
+            .or_else(|| Some(default_transition_decl()));
+
+        // 组织根密钥对与 orgAddress（org.md §15）：创建时生成独立 Ed25519 密钥对；
+        // 根私钥加密存 extra（不进快照、不同步出本机）
+        let org_root_key = org_address::generate_org_root_signing_key();
+        let org_address =
+            org_address::org_address_from_public_key(&org_root_key.verifying_key().to_bytes());
+        let mut genesis = GenesisPolicyRecord {
+            genesis_v: 1,
+            name: name.clone(),
+            description: description.clone(),
+            domain_type,
+            root_public_key: B64.encode(org_root_key.verifying_key().to_bytes()),
+            // 互绑（C1）：创世记录 orgAddress = §15 公式对 rootPublicKey 的派生值
+            org_address: org_address.clone(),
+            signing_policy,
+            transition,
+            born_of: input.born_of.clone(),
+            created_by: current_root_id.to_string(),
+            created_at: now_ms,
+            sig: String::new(),
+        };
+        sign_genesis_record(&mut genesis, &org_root_key);
+        let org_id = genesis_org_id(&genesis)?;
+
         let mut record = OrganizationRecord {
-            org_id: generate_organization_id(),
+            org_id,
             name: name.clone(),
             description: description.clone(),
             avatar: avatar.clone(),
@@ -104,6 +157,8 @@ impl OrganizationService {
                 region: None,
                 use_personal_identity: None,
                 access_key: None,
+                kind: None,
+                org_binding: None,
                 extra: Default::default(),
             }],
             sync: None,
@@ -111,19 +166,19 @@ impl OrganizationService {
             // 数据=全体管理员即创建者）
             gateways: Vec::new(),
             data_accounts: Vec::new(),
-            org_address: None,
+            // 互绑（C1，org-genesis §1）：record.orgAddress 与创世记录同源——
+            // 同一把组织根密钥对的派生地址，verify_org_address_binding 可复算
+            org_address: Some(org_address.clone()),
             is_public: false,
+            // 域类型（org-genesis §3.1）：创建时显式携带，与创世记录一致
+            domain_type: Some(domain_type),
             extra: Default::default(),
         };
         record.set_recovery_secret(generate_recovery_secret());
         // orgSecret（org.md §13）：创建时生成，经 extra 动态键随快照在成员间流动
         record.set_org_secret(generate_org_secret());
-        // 组织根密钥对与 orgAddress（org.md §15）：创建时生成独立 Ed25519 密钥对，
-        // orgAddress 落记录（保留键）；根私钥加密存 extra（不进快照、不同步出本机）
-        let org_root_key = org_address::generate_org_root_signing_key();
-        record.org_address = Some(org_address::org_address_from_public_key(
-            &org_root_key.verifying_key().to_bytes(),
-        ));
+        // 根私钥加密存 extra（不进快照、不同步出本机）——封存的是创世签名
+        // 所用的同一把根密钥对（org.md §15），可对创世记录验签
         record.set_org_root_secret(org_address::seal_org_root_secret(
             &org_root_key,
             record.org_secret().expect("orgSecret just set"),
@@ -157,6 +212,13 @@ impl OrganizationService {
             sections: pick_sync_sections_by_priority(),
             last_synced_at: 0,
         });
+        // 创世策略记录落库（org-genesis §2.1）：`org:genesis:{orgId}`，写一次
+        // 不可变；org:structure@v1 键域（versioned.rs 已纳管），随 orgsync 全员
+        // 流动。删除组织时按 spec 不清除（创世记录是 orgId 的自认证锚）。
+        storage.put(
+            &org_genesis_key(&record.org_id),
+            &serde_json::to_string(&genesis)?,
+        )?;
         match node_id {
             Some(node_id) => {
                 Self::save_record_pdsync(storage, &record, now_ms, node_id)?;
@@ -184,7 +246,9 @@ impl OrganizationService {
         Ok(record)
     }
 
-    /// `deleteOrganization`（service.ts:199-214）：admin 校验 + `delete` 事务 + 删记录。
+    /// `deleteOrganization`（service.ts:199-214）：admin 校验 + 域删除守卫
+    /// （共同体域拒绝删除，`OrgError::CommunityDomainNotDeletable`）+
+    /// `delete` 事务 + 删记录。
     pub fn delete_organization<S: StorageBackend>(
         storage: &mut S,
         org_id: &str,
@@ -215,6 +279,12 @@ impl OrganizationService {
     ) -> Result<()> {
         let record = Self::require_organization(storage, org_id)?;
         Self::require_admin(&record, current_root_id)?;
+        // 域删除守卫（community-model：域不可解散，只可退出——全员退出后域
+        // 成为空域只读历史档案，无人能写入）：共同体域拒绝删除，删除本地
+        // 组织记录会抹掉档案。domainType 缺省（None）= leaf 存量形态，不受影响。
+        if record.domain_type == Some(DomainType::Community) {
+            return Err(OrgError::CommunityDomainNotDeletable);
+        }
         append_organization_transaction(
             storage,
             OrganizationTransactionRecord {

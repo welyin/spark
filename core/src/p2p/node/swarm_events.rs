@@ -184,17 +184,17 @@ impl<S: StorageBackend> EventLoop<S> {
                     };
                     if matched {
                         let attempt = &mut self.pending_org_attempts[j];
-                        // dm 尝试走 /spark/dm/1.0.0，org-share/pull 走 /spark/org-share/1.0.0
+                        // dm 尝试走 /spark/dm/1.0.0，org-mail 走 /spark/org-mail/1.0.0
                         let request_id = match attempt.kind {
                             OrgAttemptKind::Dm => self
                                 .swarm
                                 .behaviour_mut()
                                 .dm_rr
                                 .send_request(&peer_id, attempt.request_json.clone()),
-                            _ => self
+                            OrgAttemptKind::Mail => self
                                 .swarm
                                 .behaviour_mut()
-                                .org_share_rr
+                                .org_mail_rr
                                 .send_request(&peer_id, attempt.request_json.clone()),
                         };
                         attempt.in_flight = Some(request_id);
@@ -585,6 +585,14 @@ impl<S: StorageBackend> EventLoop<S> {
                     } else {
                         self.handle_inbound_announce(&text);
                     }
+                } else if message.topic
+                    == gossipsub::IdentTopic::new(crate::p2p::constants::AFFAIR_META_TOPIC).hash()
+                {
+                    // spark-affair-meta 分流（affair-metadata §2/§6）：
+                    // type='affair-meta' 公告走元数据校验链（不落业务库，交宿主
+                    // 回调）；type='org-card' 组织公开名片走收录面（§16 校验链 +
+                    // 沉淀本地名片缓存）
+                    self.handle_inbound_affair_meta(&text);
                 } else {
                     self.handle_sync_message(&text);
                 }
@@ -780,7 +788,7 @@ impl<S: StorageBackend> EventLoop<S> {
             }) => {
                 self.resolve_recovery_outbound(request_id, None);
             }
-            SparkBehaviourEvent::OrgShareRr(request_response::Event::Message {
+            SparkBehaviourEvent::AffairMetaRr(request_response::Event::Message {
                 peer,
                 message,
                 ..
@@ -788,21 +796,21 @@ impl<S: StorageBackend> EventLoop<S> {
                 request_response::Message::Request {
                     request, channel, ..
                 } => {
-                    self.handle_org_share_inbound(peer, request, channel);
+                    self.answer_affair_meta(peer, request, channel);
                 }
                 request_response::Message::Response {
                     request_id,
                     response,
                     ..
                 } => {
-                    self.resolve_org_response(request_id, response, false);
+                    self.resolve_affair_meta_outbound(request_id, Some(response));
                 }
             },
-            SparkBehaviourEvent::OrgShareRr(request_response::Event::OutboundFailure {
+            SparkBehaviourEvent::AffairMetaRr(request_response::Event::OutboundFailure {
                 request_id,
                 ..
             }) => {
-                self.resolve_org_failure(request_id, false);
+                self.resolve_affair_meta_outbound(request_id, None);
             }
             SparkBehaviourEvent::DmRr(request_response::Event::Message {
                 peer, message, ..
@@ -842,7 +850,9 @@ impl<S: StorageBackend> EventLoop<S> {
             //（邮箱代收/挑战拉取在 kernel 层）；出站应答按 Mail 类别解析
             //（org_mail_rr 的 request id 独立递增，专用解析避免跨协议误配）。
             SparkBehaviourEvent::OrgMailRr(request_response::Event::Message {
-                peer, message, ..
+                peer,
+                message,
+                ..
             }) => match message {
                 request_response::Message::Request {
                     request, channel, ..
@@ -862,6 +872,34 @@ impl<S: StorageBackend> EventLoop<S> {
                 ..
             }) => {
                 self.resolve_mail_failure(request_id);
+            }
+            // 内容面 blob 拉取（public-topics §七）：入站从本地 content store
+            // 服务本体（读出重算校验）；出站校验 + 落库 + 自动做种在
+            // resolve_blob_fetch 内完成。request id 与其他 rr 协议独立递增，
+            // 专用 pending 表不误配。
+            SparkBehaviourEvent::BlobFetchRr(request_response::Event::Message {
+                peer,
+                message,
+                ..
+            }) => match message {
+                request_response::Message::Request {
+                    request, channel, ..
+                } => {
+                    self.handle_blob_fetch_inbound(peer, request, channel);
+                }
+                request_response::Message::Response {
+                    request_id,
+                    response,
+                    ..
+                } => {
+                    self.resolve_blob_fetch(request_id, Some(response));
+                }
+            },
+            SparkBehaviourEvent::BlobFetchRr(request_response::Event::OutboundFailure {
+                request_id,
+                ..
+            }) => {
+                self.resolve_blob_fetch(request_id, None);
             }
             SparkBehaviourEvent::RelayServer(libp2p::relay::Event::ReservationReqAccepted {
                 src_peer_id,

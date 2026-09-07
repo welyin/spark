@@ -100,6 +100,23 @@ export interface PluginDataDeclaration {
   devices?: 'all' | 'pc-backup' | 'pc-only' | 'mobile-only';
   /** 合并规则，缺省 lww-record */
   merge?: 'lww-record' | 'append-only' | 'whole';
+  /**
+   * 读授权门禁（read-gate §2，org scope 专有）：缺省省略 = members（组织成员可读，现状）。
+   * 代际内不可变——改 readPolicy = 同名新 version 声明。
+   */
+  readPolicy?: PluginDataReadPolicy;
+}
+
+/** 读授权门禁声明（read-gate §2 readPolicy 线形；kind=credential 时 credTypes/verifierDomain 必填） */
+export interface PluginDataReadPolicy {
+  /** members（缺省=现状）/ public（公开发布无需凭证）/ credential（持凭证放行） */
+  kind: 'members' | 'public' | 'credential';
+  /** 放行的凭证类型集（kind=credential 必填，任一匹配） */
+  credTypes?: string[];
+  /** 验证人信任声明所在域 orgId（kind=credential 必填） */
+  verifierDomain?: string;
+  /** B1 策略文档哈希（字段级掩码等细化规则）；缺省 null = 凭证类型匹配即可读全集合 */
+  policyRef?: string | null;
 }
 
 /** P6 声明式数据 API（personal scope 已落地；org 轴随组织同步架构启用） */
@@ -131,12 +148,6 @@ export interface PluginDataAPI {
    * 本地写不触发（本地路径即时可见）。
    */
   onChange: (handler: (event: { pluginId: string; name: string; keys: string[] }) => void) => Promise<void>;
-  /** O4 encrypted 授权名单：把成员加入 readers（owner 侧，内核按 acl owner 验签）。返回更新后 acl */
-  grantAccess: (name: string, members: string[], version?: string) => Promise<{ owners: string[]; readers: string[]; epoch: number }>;
-  /** O4 encrypted 授权名单：把成员移出 readers（epoch+1 轮换密钥）。返回更新后 acl */
-  revokeAccess: (name: string, members: string[], version?: string) => Promise<{ owners: string[]; readers: string[]; epoch: number }>;
-  /** O4 encrypted 授权名单：读取当前名单 */
-  listAccess: (name: string, version?: string) => Promise<{ owners: string[]; readers: string[]; epoch: number }>;
 }
 
 /** 域签名结果（与壳层 api/types.ts DomainSignature 同形，结构类型天然兼容） */
@@ -354,6 +365,610 @@ export interface PluginFeedAPI {
 }
 
 // ------------------------------------------------------------------
+// 内容面模块（public-topics §七「持有即做种」，sdk.content 域）
+// ------------------------------------------------------------------
+
+/** 内容面 blob 信息（saveBlob 返回；cid = SHA-256 hex，64 位小写） */
+export type PluginContentBlobInfo = {
+  cid: string;
+  size: number;
+};
+
+/**
+ * 内容面 blob 模块（public-topics §七）：内容寻址存储 + Kad provider
+ * 「持有即做种」。与 `data.saveBlob`/`data.readBlob`（pdsync 面，同身份自
+ * 设备间附件同步）是两个互不复用的存储区：本模块是跨主体内容面——保存
+ * 即声明 provider，fetchBlob 本地未命中时经 Kad 检索 provider 并直连拉回
+ * 本体（接收侧 CID 哈希校验，hash 即能力）。
+ * blob 本体一律 base64 出入。pinRoot/unpinRoot 管理 GC 根标记（root 为
+ * 持有理由标签，如 `topic:{topicId}`），无根 blob 经宽限期后由 gcSweep
+ * 两段式回收（回收即停止做种）。
+ * 仅 iframe 桥模式可用，故在 PluginSDK 上为可选字段（同 events/messages）。
+ */
+export interface PluginContentAPI {
+  /** 保存 blob（base64 入，幂等；同内容同 cid）并声明 provider */
+  saveBlob: (dataBase64: string) => Promise<PluginContentBlobInfo>;
+  /** 本地读取（命中 → base64；未命中 → null，不触发网络拉取） */
+  readBlob: (cid: string) => Promise<string | null>;
+  /** 按 cid 取 blob：本地未命中时经 Kad provider 逐台拉取；全部失败 → null */
+  fetchBlob: (cid: string) => Promise<string | null>;
+  /** 本地持有的全部 blob cid（升序） */
+  listBlobs: () => Promise<string[]>;
+  /** 打 GC 根标记（root 为持有理由标签，如 `topic:{topicId}`、`user-pin`） */
+  pinRoot: (cid: string, root: string) => Promise<{ success: boolean }>;
+  /** 移除一个 GC 根标记；最后一个根移除后进入宽限期回收路径 */
+  unpinRoot: (cid: string, root: string) => Promise<{ success: boolean }>;
+  /** 无根 blob 两段式回收（每回收一个即同步停止做种）；返回回收的 cid 列表 */
+  gcSweep: () => Promise<string[]>;
+}
+
+// ------------------------------------------------------------------
+// 共同体事务模块（community-affairs §7.2 sdk.affairs：内核 affair 门面的
+// 类型化暴露；决议/阶梯只从链上锚定时间确定性推导，插件伪造不了）
+// ------------------------------------------------------------------
+
+// 事务间引用（affair.md §10）与创世线形构造：类型自 affair-wire 模块
+// re-export（运行实现同处，sdk.affairs.create 与插件共用一份协议线形代码）。
+// 注：export type ... from 不带入本地作用域，接口签名内引用需另行 import type。
+import type { AffairGenesisInput } from './affair-wire';
+export type {
+  AffairActor,
+  AffairGenesisInput,
+  AffairRef,
+  AffairRefRel
+} from './affair-wire';
+
+/** 提交操作的判定状态（与复制面入站同口径：未知指向持久暂存为 pending） */
+export type AffairOpStatus = 'accepted' | 'pending' | 'duplicate';
+
+/**
+ * 事务变更事件（sdk.affairs.onChange 载荷）：本地副本在关注/取关/本地提交/
+ * 复制面入站合入后由内核发出（P2pEvent::AffairChanged → 桥事件）。
+ * 变更通知不是可靠队列（重启/慢订阅会丢），收到后应重读 readLog 收敛——
+ * 与 data.onChange（PluginDataChanged）同口径。
+ */
+export type AffairChangeEvent = {
+  affairId: string;
+  change: 'followed' | 'unfollowed' | 'submitted' | 'replicated';
+  /** submitted：本条操作哈希 */
+  opHash?: string;
+  /** submitted：本条操作判定状态 */
+  status?: AffairOpStatus;
+  /** replicated：本批接受/暂存补齐条数 */
+  accepted?: number;
+  drained?: number;
+};
+
+/** 操作日志条目（opHash 字典序，§8 排序键） */
+export type AffairLogEntry = {
+  opHash: string;
+  op: Record<string, unknown>;
+};
+
+/** 本地副本日志（sdk.affairs.readLog）：创世 + 已接受操作 + DAG 头 + 关注状态 */
+export type AffairLog = {
+  affairId: string;
+  /** 创世记录（本地完全未知的事务为 null） */
+  genesis: Record<string, unknown> | null;
+  ops: AffairLogEntry[];
+  heads: string[];
+  /** 关注时刻；未关注为 null */
+  followedAt: number | null;
+};
+
+/** 决议公示期状态（§6.2 两态 + unanchored：未锚定不用声明时间冒充链上时间） */
+export type AffairResolutionState = 'pending' | 'effective' | 'vetoed' | 'unanchored';
+
+/** 单条决议（opType=resolution 的操作 + 公示期状态） */
+export type AffairResolution = {
+  opHash: string;
+  result: unknown;
+  condition: unknown;
+  countedOps: unknown;
+  rulesHash: string;
+  pubPeriodMs: number;
+  /** 本副本存证链锚定时刻；未锚定为 null */
+  anchoredMs: number | null;
+  objections: number;
+  state: AffairResolutionState;
+};
+
+/** 决议集合（sdk.affairs.readResolution） */
+export type AffairResolutions = {
+  affairId: string;
+  resolutions: AffairResolution[];
+};
+
+/** 阶梯名册条目（§5.5 一人一票，不加权；账龄从链上最早活跃推导） */
+export type AffairLadderEntry = {
+  identity: string;
+  /** observer / contributor / voter（§5.5 取值） */
+  tier: 'observer' | 'contributor' | 'voter';
+  /** 累计采纳次数（生效） */
+  accepts: number;
+  /** 进入当前级别时刻（ms）；从未晋级为 null */
+  tierSinceMs: number | null;
+  /** 最近活跃时刻（ms）；无活跃为 null */
+  lastActivityMs: number | null;
+  /** 账龄（ms，链上最早活跃至 now）；无链上记录为 null */
+  accountAgeMs: number | null;
+};
+
+/** 阶梯/账龄状态（sdk.affairs.ladderStatus；时间源只认链上锚定时刻） */
+export type AffairLadderStatus = {
+  affairId: string;
+  nowMs: number;
+  entries: AffairLadderEntry[];
+  /** 当前有投票权的身份集合 */
+  voters: string[];
+};
+
+// ------------------------------------------------------------------
+// 规则版本链 / 快照 / 执行状态 / 组织效力（sdk.affairs 读出口与效力编排）
+// ------------------------------------------------------------------
+
+/** 规则文档单个版本（§5.4「每一版本确定性可溯」） */
+export type AffairRulesVersion = {
+  seq: number;
+  /** 版本依据（创世 = affairId；rule-change = 依据操作 opHash） */
+  basisOpHash: string;
+  rulesHash: string;
+  /** 生效时刻（链上锚定 ms）；未生效为 null */
+  effectiveMs: number | null;
+};
+
+/** 未生效 rule-change 条目的归宿（pending / rejected + 稳定 reason） */
+export type AffairRuleChangeFate = {
+  opHash: string;
+  fate: 'pending' | 'rejected';
+  reason: string;
+};
+
+/** 规则文档版本链（sdk.affairs.readRules）：现行版本 = 创世规则 + 已生效 rule-change 链 */
+export type AffairRulesView = {
+  affairId: string;
+  nowMs: number;
+  current: {
+    seq: number;
+    rulesHash: string;
+    /** 现行规则文档原文（JSON，插件语义参数内核不解释） */
+    rules: Record<string, unknown>;
+  };
+  versions: AffairRulesVersion[];
+  changes: AffairRuleChangeFate[];
+};
+
+/** 阶梯快照 payload（sdk.affairs.snapshotPayload，§9 投票前快照的获取侧） */
+export type AffairSnapshotPayload = {
+  affairId: string;
+  /** 供插件签名后以 snapshot 操作提交的 payload */
+  payload: { basis: string; asOf: string; rosterHash: string };
+  /** 名册原文（透明呈现） */
+  roster: string[];
+  /** asOf 切口的链上锚定时刻（ms） */
+  asOfAnchoredMs: number;
+};
+
+/** 执行型事务状态机状态（§6.2-3 八态，与内核 ExecState::as_str 逐字对齐） */
+export type AffairExecStateName =
+  | 'unanchored'
+  | 'resolution-pending'
+  | 'resolution-vetoed'
+  | 'awaiting-execution'
+  | 'in-progress'
+  | 'verifying'
+  | 'returned'
+  | 'closed';
+
+/** 单决议的执行状态（derive_exec_states 推导结果） */
+export type AffairExecState = {
+  resolutionOpHash: string;
+  state: AffairExecStateName;
+  /** 最新有效执行回报 opHash；无回报为 null */
+  reportOpHash: string | null;
+  /** 决议链上锚定时刻（ms）；未锚定为 null */
+  anchoredMs: number | null;
+  /** 决议生效时刻（ms）；未生效为 null */
+  effectiveMs: number | null;
+};
+
+/** 执行状态读出口（sdk.affairs.readExec）；exec == null 的事务 states 为空、exec 为 null */
+export type AffairExecView = {
+  affairId: string;
+  nowMs: number;
+  /** 现行规则版本的 exec 声明原文；非执行型事务为 null */
+  exec: unknown;
+  /** vote 核查名册大小（执行型事务才有） */
+  rosterSize?: number;
+  states: AffairExecState[];
+};
+
+/** 组织效力判定结果（org-genesis §6 三线判定；与内核 EffectHookOutcome 逐字对齐） */
+export type AffairEffectOutcome =
+  | 'apply'
+  | 'notDeclared'
+  | 'revoked'
+  | 'resolutionNotEffective'
+  | 'grantNotAnchored'
+  | 'resolutionNotAnchored'
+  | 'notPrior';
+
+/** 待应用效力事件（outcome = apply 时携带） */
+export type AffairPendingEffect = {
+  orgId: string;
+  affairId: string;
+  resolutionOpHash: string;
+  scope: string;
+  grantKey: string;
+};
+
+/** 效力回执状态标注（apply_org_effects 的消费留痕读口） */
+export type AffairEffectReceipt = {
+  /** recorded = 同键回执且决议一致；unrecorded = 待消费 */
+  state: 'recorded' | 'unrecorded';
+  receiptKey: string;
+};
+
+/** 单条效力判定行（声明 × 决议） */
+export type AffairOrgEffect = {
+  scope: string;
+  grantKey: string;
+  resolutionOpHash: string;
+  outcome: AffairEffectOutcome;
+  pendingEffect?: AffairPendingEffect;
+  receipt?: AffairEffectReceipt;
+};
+
+/** 决议组织效力钩子读出口（sdk.affairs.orgEffects） */
+export type AffairOrgEffects = {
+  orgId: string;
+  affairId: string;
+  nowMs: number;
+  effects: AffairOrgEffect[];
+  /** 复算无效被剔除的决议 opHash（§6.1 无效集，不产生效力） */
+  invalidResolutions: string[];
+};
+
+/** 回执编排逐条动作（sdk.affairs.applyOrgEffects 返回的 actions 条目） */
+export type AffairOrgEffectApplyAction = {
+  scope: string;
+  resolutionOpHash: string;
+  /** recorded / already-recorded / superseded / skipped（幂等 + 链上时间 LWW） */
+  action: 'recorded' | 'already-recorded' | 'superseded' | 'skipped';
+  /** skipped 时的判定归宿（如 superseded-by-newer 或非 apply 的 outcome） */
+  outcome?: string;
+  receiptKey?: string;
+};
+
+/** 待应用效力事件的消费编排结果（sdk.affairs.applyOrgEffects） */
+export type AffairOrgEffectsApplyResult = {
+  orgId: string;
+  affairId: string;
+  nowMs: number;
+  actions: AffairOrgEffectApplyAction[];
+  invalidResolutions: string[];
+};
+
+/** 单事务履历分量（sdk.affairs.publicProfile 的 perAffair 条目） */
+export type AffairProfileStats = {
+  affairId: string;
+  /** 该身份在本事务的 person 操作数（全类型） */
+  opCount: number;
+  /** 提议数（meta-revise + rule-change，全机制） */
+  proposals: number;
+  /** 采纳数（affair §13 口径：delayed-veto 生效者；vote/multisig 生效不计） */
+  adoptions: number;
+  /** 内核级表决票总数 / 其中 yes / 其中 no */
+  votes: number;
+  votesYes: number;
+  votesNo: number;
+  /** 本事务内最早 / 最近链上活跃时刻（ms，只认锚定时刻）；无 = null */
+  firstActivityMs: number | null;
+  lastActivityMs: number | null;
+};
+
+/** 投票历史条目（内核级表决票，affair §4 vote 操作） */
+export type AffairProfileVote = {
+  affairId: string;
+  opHash: string;
+  /** 表决目标（rule-change / meta-revise 提议 opHash） */
+  proposal: string;
+  choice: 'yes' | 'no';
+  /** 本副本存证链锚定时刻；未锚定为 null */
+  anchoredMs: number | null;
+};
+
+/**
+ * 公开履历聚合视图（sdk.affairs.publicProfile；community-affairs §7.3/§10
+ * 决策 4：内核确定性聚合，同一查询任何节点对同一副本集合复算一致）。
+ * 本地副本所见：未关注/未复制到的事务不参与聚合（诚实边界）。
+ */
+export type AffairPublicProfile = {
+  identity: string;
+  nowMs: number;
+  /** 参与的事务数（≥1 条 person 操作） */
+  affairsParticipated: number;
+  /** 跨事务最早链上活跃时刻（ms）；无已锚定活动为 null */
+  firstActivityMs: number | null;
+  /** 账龄（ms）= nowMs − firstActivityMs；无链上活动为 null */
+  accountAgeMs: number | null;
+  /** 提议/采纳精确计数对（采纳率 = adoptions/proposals，呈现归客户端） */
+  proposals: number;
+  adoptions: number;
+  /** 跨事务内核级表决票总数 / yes / no */
+  votes: number;
+  votesYes: number;
+  votesNo: number;
+  /** 单事务分量，按 affairId 字典序 */
+  perAffair: AffairProfileStats[];
+  /** 逐票历史，按（affairId, 锚定时刻, opHash）排序 */
+  voteHistory: AffairProfileVote[];
+};
+
+/**
+ * 共同体事务模块（community-affairs §7.2 sdk.affairs）。
+ * 关注/取关/提交操作/回执编排（applyOrgEffects）须 `affairs:write`（高级），
+ * 只读查询须 `affairs:read`。
+ * affairId 一律以创世记录自认证复算为准，插件不传不猜。
+ * 仅 iframe 桥模式可用，故在 PluginSDK 上为可选字段（同 events/messages）。
+ */
+export interface PluginAffairsAPI {
+  /**
+   * 创建事务（affairs:write；插件内嵌创建流的 SDK 承载）：按类型化描述
+   * 构造创世记录（线形见 affair-wire 模块）→ 插件域身份签名 → follow
+   * （内核全链校验 + affairId 自认证复算）。返回 affairId 与已落库的
+   * 签名创世记录（供调用方展示/转发关注）。refs 走 §10 类型化枚举，
+   * 形状非法在签名前拒绝；自指禁令由内核 enforced。
+   */
+  create: (input: AffairGenesisInput) => Promise<{ affairId: string; genesis: Record<string, unknown> }>;
+  /** 关注事务（genesis 创世记录全链校验；返回自认证 affairId） */
+  follow: (genesis: Record<string, unknown>) => Promise<string>;
+  /** 取关（只删关注簿记，保留已复制数据） */
+  unfollow: (affairId: string) => Promise<void>;
+  /** 本机关注的事务 id 列表（字典序） */
+  listFollowed: () => Promise<string[]>;
+  /** 提交一条操作（须先关注；与复制面入站同一校验链） */
+  submitOp: (op: Record<string, unknown>) => Promise<{ affairId: string; opHash: string; status: AffairOpStatus }>;
+  /** 读本地副本操作日志 */
+  readLog: (affairId: string) => Promise<AffairLog>;
+  /** 读规则文档版本链（现行版本 + 未生效条目归宿，§5.4 确定性可溯） */
+  readRules: (affairId: string) => Promise<AffairRulesView>;
+  /** 读决议（公示期状态按链上锚定时刻推导） */
+  readResolution: (affairId: string) => Promise<AffairResolutions>;
+  /** 阶梯/账龄状态（确定性推导） */
+  ladderStatus: (affairId: string) => Promise<AffairLadderStatus>;
+  /** 公开履历聚合（公共身份跨事务账龄/采纳/投票历史，确定性推导） */
+  publicProfile: (identity: string) => Promise<AffairPublicProfile>;
+  /**
+   * 阶梯快照 payload 生产助手（§9 投票前快照的获取侧）：asOf 缺省 = 当前
+   * 最大 opHash（无操作 = 创世切口）；返回 payload 供插件签名后以 snapshot
+   * 操作提交。asOf 未知/未锚定 → 报错（fail-closed）。
+   */
+  snapshotPayload: (affairId: string, asOf?: string) => Promise<AffairSnapshotPayload>;
+  /** 执行型事务状态读出口（八态状态机推导；exec == null 的事务返回空状态集） */
+  readExec: (affairId: string) => Promise<AffairExecView>;
+  /**
+   * 决议组织效力钩子（org-genesis §6）：对 (orgId, affairId) 逐声明 × 逐有效
+   * 决议求值三线，产出待应用事件并标注回执状态（recorded/unrecorded）。
+   * 只产出事件，不做名册/策略应用。
+   */
+  orgEffects: (orgId: string, affairId: string) => Promise<AffairOrgEffects>;
+  /**
+   * 待应用效力事件的消费编排（affairs:write）：对 orgEffects 判为 Apply 的
+   * 事件写 org:effectrcpt: 回执并逐条存证（幂等；同 scope 多决议并存时回执
+   * 只跟踪最新决议——链上时间 LWW）。**名册/策略内容的实际变更不在内核**——
+   * 调用方（插件/组织侧）须先完成内容应用再调用本方法写回执凭据。
+   */
+  applyOrgEffects: (orgId: string, affairId: string) => Promise<AffairOrgEffectsApplyResult>;
+  /**
+   * 订阅本机事务副本变更（AffairChanged 桥事件；变更通知非可靠队列，
+   * 收到后重读 readLog 收敛）。替代视图轮询/手动刷新。
+   */
+  onChange: (handler: (event: AffairChangeEvent) => void) => Promise<void>;
+}
+
+// ------------------------------------------------------------------
+// 资格凭证模块（community-affairs §7.2 sdk.credentials；无签发接口——
+// 签发走验证插件的人机流程，内核只验格式与签名）
+// ------------------------------------------------------------------
+
+/** 凭证身份引用（credential §2） */
+export type PluginCredentialIdentityRef = {
+  kind: string;
+  identity: string;
+  publicKey: string;
+};
+
+/** 凭证持有者引用 */
+export type PluginCredentialHolderRef = {
+  kind: string;
+  identity: string;
+  publicKey: string;
+};
+
+/** 持有凭证（credential §2 线形；claims 最小披露，禁止身份标识） */
+export type PluginCredential = {
+  credV: number;
+  credType: string;
+  issuer: PluginCredentialIdentityRef;
+  holder: PluginCredentialHolderRef;
+  subjectDomain: string;
+  claims: Record<string, unknown>;
+  /** 核验方式标识（验证插件 id + 方法名） */
+  method: string;
+  linkRef: string | null;
+  issuedAt: number;
+  sig: string;
+};
+
+/** 本机持有凭证条目（sdk.credentials.listHeld；cred:held: 键域） */
+export type HeldCredential = {
+  credId: string;
+  credential: PluginCredential;
+};
+
+/** 持有证明（read-gate §3 载荷的域身份签名；域私钥不出内核） */
+export type HolderProof = {
+  credId: string;
+  sig: string;
+};
+
+/** holderProof 呈现结果（sdk.credentials.presentHolderProof） */
+export type HolderProofPresentation = {
+  credential: PluginCredential;
+  holderProof: HolderProof;
+  /** 呈现时刻（ms） */
+  presentedAt: number;
+};
+
+/** 验证人授权条目（org:verifiers: 信任声明 verifiers[]） */
+export type VerifierGrant = {
+  identity: string;
+  publicKey: string;
+  credTypes: string[];
+  /** 授权方法模式集；尾部 * 为前缀通配 */
+  methods: string[];
+};
+
+/** 验证人信任声明（sdk.credentials.queryVerifiers） */
+export type VerifierSet = {
+  orgId: string;
+  effectiveFrom: number;
+  seq: number;
+  updatedAt: number;
+  verifiers: VerifierGrant[];
+};
+
+/** 注销检查三态（快照缺失/链无效 = unavailable，fail-closed，与 read-gate 同口径） */
+export type CredentialRevocationStatus = 'not-revoked' | 'revoked' | 'unavailable';
+
+/**
+ * 凭证验证裁决（sdk.credentials.verify；credential §6 第 1–5 步逐段结果）。
+ * 结构化返回而非整体报错——凭证来自不可信来源，逐项失败原因如实回显；
+ * valid=true 当且仅当静态链全过、签发人信任链匹配且注销检查明确通过。
+ * reason 为首个失败段的稳定诊断码（内核 CredentialError::kind 逐字）。
+ */
+export type CredentialVerifyResult = {
+  /** 复算的 credId（静态链不过为 null） */
+  credId: string | null;
+  valid: boolean;
+  checks: {
+    /** 结构 + credId 复算 + 验签（不随时间变化） */
+    static: boolean;
+    /** 签发人信任链（org:verifiers: 声明，按 issuedAt 时刻） */
+    trust: boolean;
+    revocation: CredentialRevocationStatus;
+  };
+  reason: string | null;
+};
+
+/** 注销条目视图（sdk.credentials.queryRevocations） */
+export type RevocationEntryView = {
+  seq: number;
+  credId: string;
+  revokedAt: number;
+  reason: string | null;
+};
+
+/**
+ * 注销快照视图（sdk.credentials.queryRevocations）。available:false = 本地
+ * 无该 issuer 快照（分发承载面未定，快照由分发渠道落地后写入）——如实报告，
+ * 不冒充「无注销」（fail-closed 取舍归消费方）。
+ */
+export type RevocationSnapshotView =
+  | { issuer: string; available: false }
+  | {
+      issuer: string;
+      available: true;
+      headSeq: number;
+      headHash: string;
+      asOf: number;
+      entries: RevocationEntryView[];
+    };
+
+/**
+ * 资格凭证模块（community-affairs §7.2 sdk.credentials）。
+ * 只读持有凭证/验证人/验证/注销查询须 `credentials:read`；presentHolderProof
+ * 的域身份由桥按绑定身份注入（插件不自报），凭证持有者的公钥必须与该域
+ * 身份一致。无签发接口。仅 iframe 桥模式可用（同 events/messages）。
+ */
+export interface PluginCredentialsAPI {
+  /** 本机持有的凭证列表（credId 字典序） */
+  listHeld: () => Promise<HeldCredential[]>;
+  /** 呈现 holderProof：静态校验持有凭证后用本插件域身份签 read-gate §3 载荷 */
+  presentHolderProof: (input: {
+    credId: string;
+    requestId: string;
+    orgId: string;
+    collection: string;
+  }) => Promise<HolderProofPresentation>;
+  /** 查询某组织的验证人信任声明（缺失返回空集，结构损坏报错） */
+  queryVerifiers: (orgId: string) => Promise<VerifierSet>;
+  /** 验证协议线形凭证（§6 第 1–5 步结构化裁决；holderProof 绑定归 read-gate） */
+  verify: (credential: PluginCredential) => Promise<CredentialVerifyResult>;
+  /** 按 issuer identity 查询本地注销快照（缺失如实报 available:false） */
+  queryRevocations: (issuer: string) => Promise<RevocationSnapshotView>;
+}
+
+// ------------------------------------------------------------------
+// 策略模块（community-affairs §7.2 sdk.policy：策略插件只产出声明式文档，
+// B1 求值器在内核；本面只有本地草稿的读取与提交）
+// ------------------------------------------------------------------
+
+/** 静态分析发现项（severity 字面量对齐内核线形） */
+export type PolicyFinding = {
+  severity: 'error' | 'warning';
+  code: string;
+  detail: string;
+};
+
+/** 本地策略草稿（sdk.policy.read；无草稿为 null） */
+export type PolicyDraft = {
+  doc: Record<string, unknown>;
+  policyDocHash: string;
+  savedAt: number;
+};
+
+/** 草稿提交结果（sdk.policy.submitDraft） */
+export type PolicySubmitResult = {
+  policyDocHash: string;
+  findings: PolicyFinding[];
+};
+
+/**
+ * 发布结果（sdk.policy.publish）：草稿附组织签名包（OrgSigSet）落
+ * `org:policydoc:` 键域（org:structure@v1，随组织同步分发，入站合入以
+ * 同一五步链把关）。degraded=true 表示 legacy 组织的降级证明
+ * （org-signature §5.1，信任裁决归消费方）。
+ */
+export type PolicyPublishResult = {
+  orgId: string;
+  policyDocHash: string;
+  publishedAt: number;
+  /** 签名主体（本机 root 身份 id，须为名册 admin） */
+  signer: string;
+  degraded: boolean;
+};
+
+/**
+ * 策略模块（community-affairs §7.2 sdk.policy）。读草稿须 `policy:read`，
+ * 提交草稿与发布须 `policy:write`（高级，管理员授权面）。
+ * 提交 = 结构/引擎校验（非 b1 拒绝）+ §5 静态分析 + 落本地草稿键
+ * （policy:draft: 本地工作副本，不进同步流量）；
+ * 发布 = 草稿附 OrgSigSet 落 org:policydoc: 同步键域（本机须为名册
+ * admin；AnyAdmin 单签自足，m-of-n 多签收集流不在本面，如实报错）。
+ * 仅 iframe 桥模式可用（同 events/messages）。
+ */
+export interface PluginPolicyAPI {
+  /** 读本组织最新本地策略草稿（无草稿为 null） */
+  read: (orgId: string) => Promise<PolicyDraft | null>;
+  /** 提交策略文档草稿：返回 policyDocHash 与静态分析 findings */
+  submitDraft: (doc: Record<string, unknown>) => Promise<PolicySubmitResult>;
+  /** 发布本地草稿：附组织签名包落同步键域（重复发布同文档 = 幂等覆写） */
+  publish: (orgId: string) => Promise<PolicyPublishResult>;
+}
+
+// ------------------------------------------------------------------
 // 事件模块（随桥协议落地，见 bridge/client.ts）
 // ------------------------------------------------------------------
 
@@ -449,6 +1064,14 @@ export interface PluginSDK {
   contacts?: PluginContactsAPI;
   /** 社交投递模块（social-feed §9.1 sdk.feed：deliver/onReceive/pull）：仅 iframe 桥模式可用 */
   feed?: PluginFeedAPI;
+  /** 内容面 blob 模块（public-topics §七「持有即做种」sdk.content）：仅 iframe 桥模式可用 */
+  content?: PluginContentAPI;
+  /** 共同体事务模块（community-affairs §7.2 sdk.affairs）：仅 iframe 桥模式可用 */
+  affairs?: PluginAffairsAPI;
+  /** 资格凭证模块（community-affairs §7.2 sdk.credentials：无签发接口）：仅 iframe 桥模式可用 */
+  credentials?: PluginCredentialsAPI;
+  /** 策略模块（community-affairs §7.2 sdk.policy：本地草稿读写）：仅 iframe 桥模式可用 */
+  policy?: PluginPolicyAPI;
   /** 系统代理模块（sys.exec / sys.fetch）：仅 iframe 桥模式可用 */
   sys?: PluginSysAPI;
   /**

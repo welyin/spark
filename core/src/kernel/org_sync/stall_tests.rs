@@ -70,7 +70,9 @@ fn tick_injection_coalesces_on_in_flight() {
     assert_eq!(rx.len(), 1, "3 次注入合并为队列中的 1 份");
 
     // PushOrg/SelfHelloNow 是事件语义：不经过合并，不受在飞标记限制
-    tx.send(OrgSyncRequest::PushOrg { org_id: "org1".to_string() })
+    tx.send(OrgSyncRequest::PushOrg {
+        org_id: "org1".to_string(),
+    })
     .unwrap();
     tx.send(OrgSyncRequest::SelfHelloNow).unwrap();
     assert_eq!(rx.len(), 3, "事件语义请求不合并");

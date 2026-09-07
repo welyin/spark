@@ -2,7 +2,6 @@ use serde_json::{Value, json};
 
 use spark_core::org::plugin_docs::*;
 use spark_core::plugindata::{Accounts, CollectionDeclaration, Space, get_declaration_org};
-use spark_core::schema::CollectionSchemaDeclaration;
 use spark_core::storage::{MemoryStorage, StorageBackend};
 use spark_core::sync::versioned::{VersionedStorage, shared_node_id};
 use spark_core::sync::{DocMeta, meta_key};
@@ -95,103 +94,6 @@ fn put_doc(
             )
             .unwrap();
     }
-}
-
-#[test]
-fn collect_filters_by_org_and_sync_marker() {
-    let mut storage = MemoryStorage::new();
-    put_doc(
-        &mut storage,
-        "plugin:chat",
-        "messages",
-        "m1",
-        &json!({"orgId": "org_x", "text": "hi"}),
-        true,
-    );
-    put_doc(
-        &mut storage,
-        "plugin:chat",
-        "messages",
-        "m2",
-        &json!({"orgId": "org_other"}),
-        true,
-    );
-    put_doc(
-        &mut storage,
-        "plugin:chat",
-        "messages",
-        "m3",
-        &json!({"orgId": "org_x", "__sync": false}),
-        true,
-    );
-    put_doc(
-        &mut storage,
-        "plugin:chat",
-        "messages",
-        "m4",
-        &json!({"orgId": "org_x"}),
-        false,
-    ); // 无 meta
-    storage
-        .put("doc:plugin:chat:messages:m5", "{broken")
-        .unwrap(); // 损坏
-    put_doc(
-        &mut storage,
-        "plugin:chat",
-        "messages",
-        "m6",
-        &json!({"orgId": " org_x "}),
-        true,
-    ); // trim 命中
-
-    // F6：无声明集合时，收件人能力不影响收集（均不过灰度停用判定）。
-    let items = collect_syncable_plugin_docs(&storage, "org_x", false).unwrap();
-    let ids: Vec<&str> = items.iter().map(|i| i.id.as_str()).collect();
-    assert_eq!(ids, vec!["m1", "m6"]);
-    assert_eq!(items[0].meta.ts, 1234);
-    assert_eq!(items[0].meta.node_id.as_deref(), Some("node1"));
-    // capable 收件人：无声明集合同样收集到（无停用对象）。
-    assert_eq!(
-        collect_syncable_plugin_docs(&storage, "org_x", true)
-            .unwrap()
-            .len(),
-        2
-    );
-
-    // 空 orgId → 空集
-    assert!(
-        collect_syncable_plugin_docs(&storage, "  ", false)
-            .unwrap()
-            .is_empty()
-    );
-}
-
-#[test]
-fn collect_carries_schema_when_declared() {
-    let mut storage = MemoryStorage::new();
-    spark_core::schema::declare_collection_schema(
-        &mut storage,
-        "plugin:chat",
-        "messages",
-        &CollectionSchemaDeclaration::lww(),
-        1000,
-    )
-    .unwrap();
-    put_doc(
-        &mut storage,
-        "plugin:chat",
-        "messages",
-        "m1",
-        &json!({"orgId": "org_x"}),
-        true,
-    );
-    let items = collect_syncable_plugin_docs(&storage, "org_x", false).unwrap();
-    assert_eq!(items.len(), 1);
-    let schema = items[0].schema.as_ref().unwrap();
-    assert_eq!(
-        schema.sync_strategy,
-        Some(spark_core::schema::SyncStrategy::Lww)
-    );
 }
 
 #[test]
@@ -443,43 +345,5 @@ fn migrate_skips_invalid_name_and_continues() {
             .unwrap()
             .is_some(),
         "正常集合已迁入"
-    );
-}
-
-/// 灰度停用按**收件人能力**（F6）：集合迁入新声明通道后，仅对 orgsync-capable
-/// 收件人停用旧快照插件文档收集；旧端（非 capable）成员仍收。
-#[test]
-fn collect_stops_after_migration_only_for_capable_recipient() {
-    let mut storage = new_versioned();
-    put_doc(
-        storage.raw_mut(),
-        "plugin:chat",
-        "messages",
-        "m1",
-        &json!({"orgId": "org_x"}),
-        true,
-    );
-    // 迁移前：旧通道收集到。
-    assert_eq!(
-        collect_syncable_plugin_docs(storage.raw(), "org_x", false)
-            .unwrap()
-            .len(),
-        1
-    );
-    // 迁移后：集合已声明 → capable 收件人停用。
-    migrate_plugin_docs(&mut storage, "org_x", Accounts::DataAccounts, "admin", 1000).unwrap();
-    assert!(
-        collect_syncable_plugin_docs(storage.raw(), "org_x", true)
-            .unwrap()
-            .is_empty(),
-        "capable 收件人：迁入新声明通道后旧快照插件文档收集停用"
-    );
-    // 旧端（非 capable）成员仍收 pluginDocs（不停用灰度）。
-    assert_eq!(
-        collect_syncable_plugin_docs(storage.raw(), "org_x", false)
-            .unwrap()
-            .len(),
-        1,
-        "旧端成员仍收 pluginDocs"
     );
 }

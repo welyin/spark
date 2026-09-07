@@ -23,7 +23,9 @@ use std::sync::{Arc, Mutex};
 
 use crate::storage::StorageBackend;
 
-use super::super::types::{OrganizationMember, OrganizationRecord, org_member_key, organization_key};
+use super::super::types::{
+    OrganizationMember, OrganizationRecord, org_member_key, organization_key,
+};
 use super::{OrganizationService, Result};
 
 /// org:meta 原子段互斥锁（kernel 装配注入的 `io_lock` 同一把）。纯逻辑层
@@ -122,9 +124,9 @@ impl OrganizationService {
         }
         for root_id in base_members.keys() {
             if !final_roots.contains(root_id) {
-                ops.push(crate::storage::BatchOperation::delete(
-                    org_member_key(org_id, root_id),
-                ));
+                ops.push(crate::storage::BatchOperation::delete(org_member_key(
+                    org_id, root_id,
+                )));
             }
         }
         storage.batch(ops)?;
@@ -327,7 +329,10 @@ mod tests {
         }
         // 被移除成员 A：值删除 + 墓碑 pmeta
         let tomb_key = org_member_key("org_01", "root-a");
-        assert!(s.raw().get(&tomb_key).unwrap().is_none(), "移除成员条目值已删");
+        assert!(
+            s.raw().get(&tomb_key).unwrap().is_none(),
+            "移除成员条目值已删"
+        );
         let meta = crate::sync::get_personal_meta(s.raw(), &tomb_key)
             .unwrap()
             .expect("墓碑 pmeta 存在");

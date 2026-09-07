@@ -412,7 +412,8 @@ pub struct ProfilePatch {
 /// `overview` 返回的空间通讯录视图（对齐 TS `SpaceContacts`）：
 /// 个人空间 `group_tree`/`member_extras` 为空；组织空间
 /// `friends`/`requests`/`groups` 为空（`outgoing` 为我发出的邀请记录，
-/// 对方凭码加入后由 org-pull-org 响应路径置 accepted）。
+/// 对方凭码加入后经 orgsync 合入的成员表对账置 accepted——invite_records
+/// 对账兜底）。
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpaceContactsView {

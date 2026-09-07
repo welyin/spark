@@ -8,7 +8,7 @@ use spark_core::org::recovery::RecoveryViewItem;
 use spark_core::p2p::overlay_store::{OverlayPeerRecord, OverlayPeerSource, OverlayPeerStore};
 use spark_core::p2p::peer_targets::PeerNodeInfo;
 use spark_core::p2p::{
-    OrgShareAck, P2pConfig, P2pEvent, P2pHost, P2pNode, announce_to_json, sign_node_announce,
+    P2pConfig, P2pEvent, P2pHost, P2pNode, announce_to_json, sign_node_announce,
 };
 use spark_core::storage::{BatchOperation, MemoryStorage, ScanOptions, StorageBackend};
 
@@ -44,14 +44,12 @@ impl StorageBackend for SharedStorage {
 }
 
 // ---------------------------------------------------------------------------
-// 测试宿主：记录回调、可编程 org-share/pull 响应与恢复视图
+// 测试宿主：记录回调、可编程恢复视图
 // ---------------------------------------------------------------------------
 
 #[derive(Default)]
 pub struct HostState {
     pub applied: Vec<(String, String, String, Value)>,
-    pub shares: Vec<(Value, &'static str)>,
-    pub acks: Vec<Value>,
     pub versions: Vec<(String, String)>,
     pub recovery_view: Vec<RecoveryViewItem>,
     /// 组织私有 DHT 命中的成员提示（on_org_member_hints 回调记录）。
@@ -69,8 +67,6 @@ pub struct HostState {
 pub struct TestHost {
     root_id: Option<String>,
     state: Arc<Mutex<HostState>>,
-    /// 接受所有指向本机 rootId 的 org-share。
-    accept_shares: bool,
     /// 邻居池/活跃度回填（on_org_member_hints 的宿主口径与 KernelHost 一致）。
     storage: SharedStorage,
     /// 撤销 peer 集合：命中即被连接层黑名单拦截（测试连接层四拦截点）。
@@ -84,7 +80,6 @@ impl TestHost {
             Self {
                 root_id: root_id.map(ToString::to_string),
                 state: state.clone(),
-                accept_shares: true,
                 storage,
                 revoked_peers: std::collections::HashSet::new(),
             },
@@ -103,7 +98,6 @@ impl TestHost {
             Self {
                 root_id: root_id.map(ToString::to_string),
                 state: state.clone(),
-                accept_shares: true,
                 storage,
                 revoked_peers: revoked.iter().map(|s| s.to_string()).collect(),
             },
@@ -140,44 +134,6 @@ impl P2pHost for TestHost {
         Ok(())
     }
 
-    fn apply_incoming_org_share(
-        &mut self,
-        payload: Value,
-        source: &'static str,
-    ) -> Result<Option<OrgShareAck>, String> {
-        self.state
-            .lock()
-            .unwrap()
-            .shares
-            .push((payload.clone(), source));
-        if !self.accept_shares {
-            return Ok(None);
-        }
-        let target_root_id = payload
-            .get("targetRootId")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        if Some(target_root_id.as_str()) != self.root_id.as_deref() {
-            return Ok(None);
-        }
-        let org_id = payload
-            .get("organization")
-            .and_then(|o| o.get("orgId"))
-            .and_then(Value::as_str)
-            .unwrap_or("org_unknown")
-            .to_string();
-        Ok(Some(OrgShareAck {
-            sync_id: payload
-                .get("syncId")
-                .and_then(Value::as_str)
-                .map(ToString::to_string),
-            org_id,
-            target_root_id,
-            receiver_root_id: self.root_id.clone().unwrap_or_default(),
-        }))
-    }
-
     fn recovery_view(&mut self) -> Vec<RecoveryViewItem> {
         self.state.lock().unwrap().recovery_view.clone()
     }
@@ -188,10 +144,6 @@ impl P2pHost for TestHost {
             .unwrap()
             .versions
             .push((peer_id.to_string(), version.to_string()));
-    }
-
-    fn on_org_share_ack(&mut self, payload: Value) {
-        self.state.lock().unwrap().acks.push(payload);
     }
 
     /// dm 直连接收：记录信封与对端 peerId，回 `{"ok": true}` 应答。
@@ -206,11 +158,7 @@ impl P2pHost for TestHost {
 
     /// org-mail 直连接收（阶段四E）：委托 kernel 层真实入站分发（deliver/
     /// fetch 两 op），本机 peerId 取 HostState 回填值（挑战验签绑定）。
-    fn handle_org_mail(
-        &mut self,
-        payload: &Value,
-        remote_peer_id: &str,
-    ) -> Result<Value, String> {
+    fn handle_org_mail(&mut self, payload: &Value, remote_peer_id: &str) -> Result<Value, String> {
         let my_peer_id = self
             .state
             .lock()

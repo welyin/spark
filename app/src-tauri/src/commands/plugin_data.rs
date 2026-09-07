@@ -51,6 +51,15 @@ pub(crate) fn data_declare_collection_inner(
         sensitivity: parse_enum_axis::<spark_core::plugindata::Sensitivity>(&declaration, "sensitivity")?,
         merge: parse_enum_axis::<spark_core::plugindata::MergeRule>(&declaration, "merge")?,
         declared_by: axis("declaredBy"),
+        // readPolicy（read-gate §2，org scope 专有）：按内核 ReadPolicy 线形
+        // 透传；缺省/显式 null → None（members 缺省，向后兼容）；取值合法性
+        // 由内核 declare 录入校验兜底。
+        read_policy: match declaration.get("readPolicy") {
+            None | Some(Value::Null) => None,
+            Some(v) => serde_json::from_value::<spark_core::plugindata::ReadPolicy>(v.clone())
+                .map(Some)
+                .map_err(|e| format!("invalid readPolicy: {e}"))?,
+        },
     };
     // org space：payload 中可携带 orgId（由内核按插件运行空间传入）
     let org_id = declaration.get("orgId").and_then(Value::as_str);
@@ -152,52 +161,6 @@ pub(crate) fn data_read_blob_inner(kernel: &mut Kernel, hash: &str) -> Result<Va
         Some(data) => Ok(serde_json::json!({ "status": "ready", "data": data })),
         None => Ok(serde_json::json!({ "status": "pending" })),
     }
-}
-
-// ------------------------------------------------------------------
-// O4 encrypted 授权名单（plugin-data-api §5.2）：grantAccess / revokeAccess /
-// listAccess（owner 侧）。内核按 acl owner 验签，无额外权限项；非 owner →
-// AccessDenied。
-// ------------------------------------------------------------------
-
-pub(crate) fn data_grant_access_inner(
-    kernel: &mut Kernel,
-    org_id: &str,
-    name: &str,
-    version: &str,
-    members: Vec<String>,
-) -> Result<Value, String> {
-    let acl = kernel
-        .data_grant_access(org_id, name, version, &members)
-        .map_err(err)?;
-    serde_json::to_value(&acl).map_err(|e| e.to_string())
-}
-
-pub(crate) fn data_revoke_access_inner(
-    kernel: &mut Kernel,
-    org_id: &str,
-    name: &str,
-    version: &str,
-    members: Vec<String>,
-) -> Result<Value, String> {
-    let acl = kernel
-        .data_revoke_access(org_id, name, version, &members)
-        .map_err(err)?;
-    serde_json::to_value(&acl).map_err(|e| e.to_string())
-}
-
-pub(crate) fn data_list_access_inner(
-    kernel: &Kernel,
-    org_id: &str,
-    name: &str,
-    version: &str,
-) -> Result<Value, String> {
-    let acl = kernel.data_list_access(org_id, name, version).map_err(err)?;
-    Ok(serde_json::json!({
-        "owners": acl.owners,
-        "readers": acl.readers,
-        "epoch": acl.epoch,
-    }))
 }
 
 // ------------------------------------------------------------------
@@ -321,50 +284,6 @@ pub fn data_read_blob(
     data_read_blob_inner(&mut *lock_kernel(&state)?, &hash)
 }
 
-#[tauri::command]
-pub fn data_grant_access(
-    state: tauri::State<'_, KernelState>,
-    org_id: String,
-    name: String,
-    version: String,
-    members: Vec<String>,
-) -> Result<Value, String> {
-    data_grant_access_inner(
-        &mut *lock_kernel(&state)?,
-        &org_id,
-        &name,
-        &version,
-        members,
-    )
-}
-
-#[tauri::command]
-pub fn data_revoke_access(
-    state: tauri::State<'_, KernelState>,
-    org_id: String,
-    name: String,
-    version: String,
-    members: Vec<String>,
-) -> Result<Value, String> {
-    data_revoke_access_inner(
-        &mut *lock_kernel(&state)?,
-        &org_id,
-        &name,
-        &version,
-        members,
-    )
-}
-
-#[tauri::command]
-pub fn data_list_access(
-    state: tauri::State<'_, KernelState>,
-    org_id: String,
-    name: String,
-    version: String,
-) -> Result<Value, String> {
-    data_list_access_inner(&*lock_kernel(&state)?, &org_id, &name, &version)
-}
-
 // ------------------------------------------------------------------
 // 单元测试
 // ------------------------------------------------------------------
@@ -484,6 +403,7 @@ mod tests {
                 description: None,
                 avatar: None,
                 base_plugin_domain: None,
+                ..Default::default()
             })
             .unwrap();
         let org_id = org.record.org_id.clone();
@@ -518,6 +438,83 @@ mod tests {
         );
     }
 
+    /// readPolicy 透传（read-gate §2）：org space 声明携带 credential 门禁
+    /// → 声明记录落 readPolicy；缺省不带 → 记录无 readPolicy 键（members
+    /// 缺省，旧线形一字节不变）；personal space 带 readPolicy → 拒绝。
+    #[test]
+    fn declare_read_policy_passthrough() {
+        let (_dir, mut kernel) = unlocked_kernel();
+        let org = kernel
+            .create_org(spark_core::org::service::CreateOrganizationInput {
+                name: "门禁组织".to_string(),
+                description: None,
+                avatar: None,
+                base_plugin_domain: None,
+                ..Default::default()
+            })
+            .unwrap();
+        let org_id = org.record.org_id.clone();
+        // credential 门禁声明透传
+        let decl = data_declare_collection_inner(
+            &mut kernel,
+            "plugin:ai-chat",
+            json!({
+                "name": "ai-chat:ledger",
+                "space": "org",
+                "orgId": org_id,
+                "readPolicy": {
+                    "kind": "credential",
+                    "credTypes": ["member"],
+                    "verifierDomain": org_id,
+                    "policyRef": null
+                }
+            }),
+        )
+        .unwrap();
+        assert_eq!(decl["readPolicy"]["kind"], json!("credential"));
+        assert_eq!(decl["readPolicy"]["credTypes"], json!(["member"]));
+        assert_eq!(decl["readPolicy"]["verifierDomain"], json!(org_id));
+        // 缺省不带 readPolicy → 记录无该键（members 缺省）
+        let plain = data_declare_collection_inner(
+            &mut kernel,
+            "plugin:ai-chat",
+            json!({ "name": "ai-chat:plain", "space": "org", "orgId": org_id }),
+        )
+        .unwrap();
+        assert!(
+            plain.get("readPolicy").is_none(),
+            "缺省 readPolicy 键省略（members 现状）"
+        );
+        // personal space 带 readPolicy → 拒绝（org scope 专有轴）
+        assert!(
+            data_declare_collection_inner(
+                &mut kernel,
+                "plugin:ai-chat",
+                json!({
+                    "name": "ai-chat:bad",
+                    "readPolicy": { "kind": "public" }
+                }),
+            )
+            .is_err(),
+            "personal space 声明 readPolicy 被拒"
+        );
+        // readPolicy 结构非法（缺 kind）→ 拒绝
+        assert!(
+            data_declare_collection_inner(
+                &mut kernel,
+                "plugin:ai-chat",
+                json!({
+                    "name": "ai-chat:bad2",
+                    "space": "org",
+                    "orgId": org_id,
+                    "readPolicy": { "credTypes": ["member"] }
+                }),
+            )
+            .is_err(),
+            "readPolicy 结构非法被拒"
+        );
+    }
+
     #[test]
     fn blob_roundtrip_and_pending() {
         let (_dir, mut kernel) = unlocked_kernel();
@@ -531,64 +528,5 @@ mod tests {
         // 未命中 → pending（want 标记已置）
         let missing = data_read_blob_inner(&mut kernel, &"0".repeat(64)).unwrap();
         assert_eq!(missing["status"], json!("pending"));
-    }
-
-    /// O4 工作项 5（iframe 桥通路）：encrypted 授权名单三命令——grantAccess
-    /// （创世，owner 自签）→ listAccess 反映 → revokeAccess 轮换 epoch。无额外
-    /// 权限项，内核按 acl owner 验签。
-    #[test]
-    fn access_grant_revoke_list_commands() {
-        use spark_core::plugindata::{Accounts, Confidentiality, DeclareInput, Scope, Space};
-        let (_dir, mut kernel) = unlocked_kernel();
-        let org = kernel
-            .create_org(spark_core::org::service::CreateOrganizationInput {
-                name: "测试组织".to_string(),
-                description: None,
-                avatar: None,
-                base_plugin_domain: None,
-            })
-            .unwrap();
-        let org_id = org.record.org_id.clone();
-        const BOB: &str = "b0b0000000000000000000000000000000000000000000000000000000000000";
-        kernel.org_add_member(&org_id, BOB, None).unwrap();
-        kernel
-            .data_declare_collection(
-                "plugin:ai-chat",
-                DeclareInput {
-                    name: "ai-chat:payroll".to_string(),
-                    version: Some("1.0.0".to_string()),
-                    space: Some(Space::Org),
-                    accounts: Some(Accounts::DataAccounts),
-                    confidentiality: Some(Confidentiality::Encrypted),
-                    scope: Some(Scope::Sync),
-                    ..Default::default()
-                },
-                Some(&org_id),
-            )
-            .unwrap();
-        // grant（创世，owner 自签）
-        let granted = data_grant_access_inner(
-            &mut kernel,
-            &org_id,
-            "ai-chat:payroll",
-            "1.0.0",
-            vec![BOB.to_string()],
-        )
-        .unwrap();
-        assert_eq!(granted["epoch"], json!(1));
-        // list
-        let listed = data_list_access_inner(&kernel, &org_id, "ai-chat:payroll", "1.0.0").unwrap();
-        assert!(listed["readers"].as_array().unwrap().iter().any(|r| r == BOB));
-        // revoke → epoch+1
-        let revoked = data_revoke_access_inner(
-            &mut kernel,
-            &org_id,
-            "ai-chat:payroll",
-            "1.0.0",
-            vec![BOB.to_string()],
-        )
-        .unwrap();
-        assert_eq!(revoked["epoch"], json!(2));
-        assert!(revoked["readers"].as_array().unwrap().is_empty());
     }
 }

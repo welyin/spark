@@ -15,6 +15,14 @@ plugins/<id>/
 
 完整示例见 `spark-example/`（插件体系参考实现：多视图、应用通知、签名演示）。
 
+C11 参考插件三件套（共同体/公共事务线，见 wiki/architecture/community-affairs.md §9 C11）：
+
+- `spark-affairs/`：公共议题客户端（事务墙/议题详情/发起/贡献与投票，sdk.affairs + message-card 卡片）；
+- `spark-verify-hoa/`：验证插件示例·业主场景（申请人材料引导 + 验证人签发凭证，sdk.credentials，强制 L1 开源语义见 spark-plugin.json 注释）；
+- `spark-threshold-vouch/`：门槛插件示例·担保链（N 名参与者签名担保 → 产出「是否满足门槛」的签名证明，内核只验证产物）。
+
+构建：`npm run build:affairs` / `build:verify-hoa` / `build:threshold-vouch`（vite 构建 + `scripts/copy-plugin-dist.mjs` 收尾自检）；单测随 `code/app` vitest 一起执行。
+
 ## 边界约定
 
 - 插件**只依赖**独立 SDK 包 `@spark/plugin-sdk`（`code/packages/plugin-sdk`，相对路径引用），禁止 import 壳层（`app/src`）任何模块；

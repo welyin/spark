@@ -35,10 +35,10 @@ sled = "0.34.7"
 # 依赖非可选（不 feature gate）：桌面 CI 同轨编译，避免移动端路径回归盲区。
 libsqlite3-sys = { version = "0.30", features = ["bundled"] }
 thiserror = "2.0.19"
-# O4 encrypted 集合：orgkey-deliver 的 NaCl crypto_box 需要 Ed25519→X25519
-# 转换（CompressedEdwardsY::decompress + to_montgomery）与 X25519 共享密钥
-# （MontgomeryPoint::mul_clamped，内部 clamp）。纯 Rust，已在 lockfile 中经
-# libp2p 传递引入；对称加密部分复用 aes-gcm（与值加密同族）。
+# M3 身份级 epoch / 跨组织邮箱：Ed25519→X25519 转换（CompressedEdwardsY::
+# decompress + to_montgomery）与 X25519 共享密钥（MontgomeryPoint::mul_clamped，
+# 内部 clamp）。纯 Rust，已在 lockfile 中经 libp2p 传递引入；对称加密部分
+# 复用 aes-gcm。（原 O4 orgkey-deliver 注释随 C7 encrypted 轴退役改写。）
 curve25519-dalek = "4.1"
 
 # p2p 模块网络栈（core/spec/p2p-messages.md §1）：

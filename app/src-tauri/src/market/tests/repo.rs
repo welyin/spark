@@ -356,6 +356,7 @@ fn synthesize_catalog_entry_supported_spaces_two_level() {
         granted_permissions: vec![],
         trust: Some("repo-anchored".to_string()),
         supported_spaces: Some(vec!["personal".to_string()]),
+        requires: None,
     };
     // installed 回落：无声明缓存时取安装态落库值（侧载插件即此路径）
     let service = fixture.service();
@@ -384,4 +385,138 @@ fn synthesize_catalog_entry_supported_spaces_two_level() {
     };
     let entry = synthesize_catalog_entry(&fixture.service(), &installed_none);
     assert_eq!(entry.supported_spaces, None);
+}
+
+/// 声明文件 requires 辅助：在基准声明文本上注入 requires 对象。
+fn repo_declaration_text_with_requires(version: &str, requires: serde_json::Value) -> String {
+    let mut declaration: serde_json::Value =
+        serde_json::from_str(&repo_declaration_text(version)).unwrap();
+    declaration["requires"] = requires;
+    declaration.to_string()
+}
+
+/// 当前平台之外的另一个平台（测试环境恒为 desktop/mobile 二值口径）。
+fn other_platform() -> &'static str {
+    if super::super::catalog::current_platform() == "desktop" {
+        "mobile"
+    } else {
+        "desktop"
+    }
+}
+
+#[test]
+fn install_from_repo_enforces_platform_requires() {
+    // 声明 requires.platforms 不含当前平台 → 安装即拒（规格 §2.1 安装时校验）
+    let fixture = Fixture::new();
+    let declaration =
+        repo_declaration_text_with_requires("0.2.0", serde_json::json!({"platforms": [other_platform()]}));
+    let fetcher = fetcher_of(&[
+        (DECL_RELEASE_URL, declaration.clone()),
+        (DECL_PROXY_URL, declaration),
+    ]);
+    let mut service = fixture.service();
+    assert_eq!(
+        service.install_from_repo_with(&fetcher, REPO_ID).unwrap_err(),
+        format!(
+            "Plugin platform unsupported: {REPO_ID} requires platforms [{}], current platform is {}",
+            other_platform(),
+            super::super::catalog::current_platform()
+        )
+    );
+    assert!(!service.state.installed.contains_key(REPO_ID));
+
+    // 声明含当前平台 → 正常安装，requires 落库并随市场合成条目透出
+    let fixture = Fixture::new();
+    let (package_text, digest, size) = repo_package_text("0.2.0");
+    let manifest = repo_manifest_text("0.2.0", PACKAGE_URL, &digest, size, "spark-plugin-todo-0.2.0.spkg");
+    let declaration = repo_declaration_text_with_requires(
+        "0.2.0",
+        serde_json::json!({"platforms": [super::super::catalog::current_platform()]}),
+    );
+    let fetcher = fetcher_of(&[
+        (DECL_RELEASE_URL, declaration.clone()),
+        (DECL_PROXY_URL, declaration),
+        (MANIFEST_URL, manifest.clone()),
+        (MANIFEST_PROXY_URL, manifest),
+        (PACKAGE_URL, package_text),
+    ]);
+    let mut service = fixture.service();
+    let installed = service.install_from_repo_with(&fetcher, REPO_ID).unwrap();
+    assert_eq!(
+        installed.requires.as_ref().unwrap().platforms,
+        vec![super::super::catalog::current_platform().to_string()]
+    );
+    let entry = service
+        .list_market()
+        .into_iter()
+        .find(|i| i.catalog.id == REPO_ID)
+        .unwrap();
+    assert_eq!(
+        entry.catalog.requires.as_ref().unwrap().platforms,
+        vec![super::super::catalog::current_platform().to_string()]
+    );
+    // 信任级进入数据模型：repo-anchored → L1
+    assert_eq!(entry.trust_level.as_deref(), Some("L1"));
+}
+
+#[test]
+fn install_from_repo_rejects_invalid_requires_platforms() {
+    // 声明文件为信任锚：requires.platforms 非法值即拒（fail-loud，不静默丢弃）
+    let fixture = Fixture::new();
+    let declaration =
+        repo_declaration_text_with_requires("0.2.0", serde_json::json!({"platforms": ["watch"]}));
+    let fetcher = fetcher_of(&[
+        (DECL_RELEASE_URL, declaration.clone()),
+        (DECL_PROXY_URL, declaration),
+    ]);
+    let mut service = fixture.service();
+    assert_eq!(
+        service.install_from_repo_with(&fetcher, REPO_ID).unwrap_err(),
+        format!("Repo plugin declaration invalid: {REPO_ID}: requires.platforms invalid")
+    );
+
+    // 重复平台值去重后合法（decl 双源一致）
+    let fixture = Fixture::new();
+    let (package_text, digest, size) = repo_package_text("0.2.0");
+    let manifest = repo_manifest_text("0.2.0", PACKAGE_URL, &digest, size, "spark-plugin-todo-0.2.0.spkg");
+    let declaration = repo_declaration_text_with_requires(
+        "0.2.0",
+        serde_json::json!({"platforms": ["desktop", "desktop", "mobile"]}),
+    );
+    let fetcher = fetcher_of(&[
+        (DECL_RELEASE_URL, declaration.clone()),
+        (DECL_PROXY_URL, declaration),
+        (MANIFEST_URL, manifest.clone()),
+        (MANIFEST_PROXY_URL, manifest),
+        (PACKAGE_URL, package_text),
+    ]);
+    let mut service = fixture.service();
+    let installed = service.install_from_repo_with(&fetcher, REPO_ID).unwrap();
+    assert_eq!(
+        installed.requires.as_ref().unwrap().platforms,
+        vec!["desktop".to_string(), "mobile".to_string()]
+    );
+}
+
+#[test]
+fn install_from_repo_verification_class_passes_l1() {
+    // 验证类插件（声明 credentials:*）走仓库锚定（L1）满足强制级，正常安装
+    let fixture = Fixture::new();
+    let (package_text, digest, size) = repo_package_text("0.2.0");
+    let manifest = repo_manifest_text("0.2.0", PACKAGE_URL, &digest, size, "spark-plugin-todo-0.2.0.spkg");
+    let mut declaration: serde_json::Value =
+        serde_json::from_str(&repo_declaration_text("0.2.0")).unwrap();
+    declaration["permissions"] = serde_json::json!(["credentials:read"]);
+    let declaration = declaration.to_string();
+    let fetcher = fetcher_of(&[
+        (DECL_RELEASE_URL, declaration.clone()),
+        (DECL_PROXY_URL, declaration),
+        (MANIFEST_URL, manifest.clone()),
+        (MANIFEST_PROXY_URL, manifest),
+        (PACKAGE_URL, package_text),
+    ]);
+    let mut service = fixture.service();
+    let installed = service.install_from_repo_with(&fetcher, REPO_ID).unwrap();
+    assert_eq!(installed.trust.as_deref(), Some("repo-anchored"));
+    assert!(installed.granted_permissions.contains(&"credentials:read".to_string()));
 }

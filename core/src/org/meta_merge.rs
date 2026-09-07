@@ -96,6 +96,8 @@ pub fn merge_org_meta_record(
         data_accounts: high.data_accounts.clone(),
         org_address: high.org_address.clone(),
         is_public: high.is_public,
+        // 域类型（org-genesis §3.1）：summary 字段组，取秩高一侧。
+        domain_type: high.domain_type,
         extra: merged_extra,
         // org_id 两侧相同（同键合入），updated_at 取大
         org_id: high.org_id.clone(),
@@ -164,6 +166,10 @@ fn merge_member(low: &OrganizationMember, high: &OrganizationMember) -> Organiza
         region: high.region.clone(),
         use_personal_identity: high.use_personal_identity,
         access_key,
+        // 成员种类/组织绑定（org-genesis §3.2）：kind 随角色组取秩高一侧；
+        // orgBinding 随本人字段组取秩高一侧。
+        kind: high.kind,
+        org_binding: high.org_binding.clone(),
         // 动态键：并集（冲突键取秩高一侧），字典序插入保确定性
         extra: merge_extra_maps(&low.extra, &high.extra),
     }
@@ -512,7 +518,11 @@ mod tests {
             &entry_rank(2000, &local),
             &entry_rank(2001, &incoming),
         );
-        assert_eq!(merged.access_key, Some(access_key(1)), "本地 accessKey 保留");
+        assert_eq!(
+            merged.access_key,
+            Some(access_key(1)),
+            "本地 accessKey 保留"
+        );
         assert_eq!(merged.role, OrganizationRole::Admin, "role 取秩高侧");
         // 反向同结论（确定性）
         let rev = merge_member_record(

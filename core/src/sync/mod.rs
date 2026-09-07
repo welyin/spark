@@ -3,6 +3,7 @@
 //! 算法精确规格见 `core/spec/sync-evidence.md` §4，验收向量见
 //! `core/spec/vectors/sync-evidence.json`。
 
+pub mod affairsync;
 pub mod apply;
 pub mod dlog;
 pub mod meta;

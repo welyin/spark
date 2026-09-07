@@ -1,0 +1,19 @@
+{
+  "id": "spark-threshold-vouch",
+  "domain": "plugin:spark-threshold-vouch",
+  "name": "担保链门槛（示例）",
+  "version": "0.1.0",
+  "entryView": "default",
+  "description": "门槛插件参考示例（C11，担保链）：被担保人发起请求，N 名已有参与者担保（担保与组装签名均以插件域身份出具，演示级——密码学上不证明担保人个人身份，担保人 rootId 为自报文本），收齐后组装「是否满足门槛」的签名证明。内核/事务客户端只验证证明产物，不执行担保流程（community-affairs.md §7.3）。",
+  "category": "tool",
+  "supportedSpaces": ["personal"],
+  "views": [
+    { "id": "default", "type": "app", "title": "担保链门槛" }
+  ],
+  "permissions": ["storage:read", "storage:write", "identity:sign"],
+  "sdkVersion": "1",
+  "package": {
+    "updateManifestUrl": "https://github.com/welyin/spark/releases/latest/download/spark-plugin-spark-threshold-vouch-manifest.json",
+    "packageName": "spark-plugin-spark-threshold-vouch-0.1.0.spkg"
+  }
+}

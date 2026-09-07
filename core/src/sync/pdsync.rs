@@ -105,13 +105,7 @@ pub const CATEGORIES: &[Category] = &[
         name: "pdoc",
         prefixes: &["pdoc:"],
     },
-    // O4 encrypted 集合：orgkey 表（personal 域，32B 集合对称密钥）经 pdsync
-    // 自设备扩散（同账号设备间），**永不进 orgsync 组织流量**（orgsync 数据
-    // 白名单只放行 orgd:/org:coll:/org:acl:/存量组织键，见 inbound_dm/orgsync）。
-    Category {
-        name: "orgkey",
-        prefixes: &["orgkey:"],
-    },
+    // C7：原 "orgkey" category（O4 encrypted 集合密钥表）随 encrypted 轴退役移除。
     // M3 epoch 状态/包裹：epoch:state 与 ikey:* 记录均通过 pdsync 在自设备间扩散。
     // ikey: 在前：category_for_key 取首个命中，两前缀互不包含，顺序无吞并风险；
     // 保持历史顺序避免无关变更。

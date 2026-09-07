@@ -49,10 +49,7 @@ impl Kernel {
             .as_ref()
             .map(|u| u.seed)
             .ok_or(KernelError::Locked)?;
-        let sender = crate::identity::derive_domain_identity(
-            &seed,
-            &org_mail_domain(from_org_id),
-        );
+        let sender = crate::identity::derive_domain_identity(&seed, &org_mail_domain(from_org_id));
         // 信封 to.orgAddress = 地址记录**完整线形**（网关归属判定要重解析验签
         // + 取 gateways，§21.2；不是 55 字符地址串）
         let record_json = serde_json::to_string(&record)
@@ -177,94 +174,91 @@ pub(crate) async fn org_mail_fetch_async(
     let now = system_now_ms();
     let mut fetched = 0usize;
     for record in crate::org::OrganizationService::read_all_organizations(&storage)? {
-            if record.find_member(&root_id).is_none() {
-                continue;
+        if record.find_member(&root_id).is_none() {
+            continue;
+        }
+        // 私有组织不参与（不发布地址记录即无邮箱入口）；地址记录本身
+        // 不在本地 org 记录内——邮箱存在性以「有网关可拉」判定
+        let domain = org_mail_domain(&record.org_id);
+        let identity = crate::identity::derive_domain_identity(&seed, &domain);
+        let my_domain_id = domain_id_of(&identity.signing_key.verifying_key());
+        // 活跃网关 = 显式 gateways，缺省推导活跃集（roles::gateway_active_set）
+        let gateways = if record.gateways.is_empty() {
+            crate::org::roles::gateway_active_set(&record, now)
+        } else {
+            record.gateways.clone()
+        };
+        for gateway_root in gateways {
+            if gateway_root == root_id {
+                continue; // 自己是网关：信在本机箱内，拉取无意义（本地直读另行）
             }
-            // 私有组织不参与（不发布地址记录即无邮箱入口）；地址记录本身
-            // 不在本地 org 记录内——邮箱存在性以「有网关可拉」判定
-            let domain = org_mail_domain(&record.org_id);
-            let identity = crate::identity::derive_domain_identity(&seed, &domain);
-            let my_domain_id = domain_id_of(&identity.signing_key.verifying_key());
-            // 活跃网关 = 显式 gateways，缺省推导活跃集（roles::gateway_active_set）
-            let gateways = if record.gateways.is_empty() {
-                crate::org::roles::gateway_active_set(&record, now)
-            } else {
-                record.gateways.clone()
+            let Some(member) = record.find_member(&gateway_root) else {
+                continue;
             };
-            for gateway_root in gateways {
-                if gateway_root == root_id {
-                    continue; // 自己是网关：信在本机箱内，拉取无意义（本地直读另行）
+            let Some(set) = &member.node_info else {
+                continue;
+            };
+            for endpoint in set.iter() {
+                let target = PeerNodeInfo {
+                    peer_id: endpoint.peer_id.clone(),
+                    addresses: endpoint.addresses.clone(),
+                };
+                let gateway_peer_id = endpoint.peer_id.clone().unwrap_or_default();
+                // 第一轮：取挑战
+                let round1 = json!({ "op": "fetch", "recipientDomainId": my_domain_id });
+                let Ok(Some(resp)) = node.org_mail_request(&target, &round1.to_string()).await
+                else {
+                    continue;
+                };
+                if resp.get("ok").and_then(Value::as_bool) != Some(true) {
+                    continue;
                 }
-                let Some(member) = record.find_member(&gateway_root) else {
+                let Some(nonce) = resp.get("nonce").and_then(Value::as_str) else {
                     continue;
                 };
-                let Some(set) = &member.node_info else {
+                let Some(challenge_ts) = resp.get("ts").and_then(Value::as_i64) else {
                     continue;
                 };
-                for endpoint in set.iter() {
-                    let target = PeerNodeInfo {
-                        peer_id: endpoint.peer_id.clone(),
-                        addresses: endpoint.addresses.clone(),
-                    };
-                    let gateway_peer_id = endpoint.peer_id.clone().unwrap_or_default();
-                    // 第一轮：取挑战
-                    let round1 = json!({ "op": "fetch", "recipientDomainId": my_domain_id });
-                    let Ok(Some(resp)) =
-                        node.org_mail_request(&target, &round1.to_string()).await
-                    else {
+                // 第二轮：挑战应答（载荷绑 nonce + 网关 peerId + ts，防跨网关/重放）
+                let challenge = fetch_challenge_sign(
+                    &identity.signing_key,
+                    nonce,
+                    &gateway_peer_id,
+                    challenge_ts,
+                );
+                let round2 = json!({
+                    "op": "fetch",
+                    "recipientDomainId": my_domain_id,
+                    "nonce": nonce,
+                    "challengeTs": challenge_ts,
+                    "challenge": challenge,
+                });
+                let Ok(Some(resp2)) = node.org_mail_request(&target, &round2.to_string()).await
+                else {
+                    continue;
+                };
+                if resp2.get("ok").and_then(Value::as_bool) != Some(true) {
+                    continue;
+                }
+                let Some(envelopes) = resp2.get("envelopes").and_then(Value::as_array) else {
+                    continue;
+                };
+                for value in envelopes {
+                    let Ok(env) = serde_json::from_value::<OrgMailEnvelope>(value.clone()) else {
                         continue;
                     };
-                    if resp.get("ok").and_then(Value::as_bool) != Some(true) {
-                        continue;
-                    }
-                    let Some(nonce) = resp.get("nonce").and_then(Value::as_str) else {
-                        continue;
-                    };
-                    let Some(challenge_ts) = resp.get("ts").and_then(Value::as_i64) else {
-                        continue;
-                    };
-                    // 第二轮：挑战应答（载荷绑 nonce + 网关 peerId + ts，防跨网关/重放）
-                    let challenge = fetch_challenge_sign(
-                        &identity.signing_key,
-                        nonce,
-                        &gateway_peer_id,
-                        challenge_ts,
-                    );
-                    let round2 = json!({
-                        "op": "fetch",
-                        "recipientDomainId": my_domain_id,
-                        "nonce": nonce,
-                        "challengeTs": challenge_ts,
-                        "challenge": challenge,
-                    });
-                    let Ok(Some(resp2)) =
-                        node.org_mail_request(&target, &round2.to_string()).await
-                    else {
-                        continue;
-                    };
-                    if resp2.get("ok").and_then(Value::as_bool) != Some(true) {
-                        continue;
-                    }
-                    let Some(envelopes) = resp2.get("envelopes").and_then(Value::as_array) else {
-                        continue;
-                    };
-                    for value in envelopes {
-                        let Ok(env) = serde_json::from_value::<OrgMailEnvelope>(value.clone())
-                        else {
-                            continue;
-                        };
-                        // 收信落本地（解箱在呈现层之前——先落原始信封，明文由
-                        // 读取方按需 orgmail_unbox；这里只做写入，幂等键 = id）
-                        let key = inbox_key(&my_domain_id, &env.id);
-                        if storage.get(&key)?.is_none() {
-                            storage.clone().put(&key, &serde_json::to_string(&env)?)?;
-                            fetched += 1;
-                        }
+                    // 收信落本地（解箱在呈现层之前——先落原始信封，明文由
+                    // 读取方按需 orgmail_unbox；这里只做写入，幂等键 = id）
+                    let key = inbox_key(&my_domain_id, &env.id);
+                    if storage.get(&key)?.is_none() {
+                        storage.clone().put(&key, &serde_json::to_string(&env)?)?;
+                        fetched += 1;
                     }
                 }
             }
         }
-        Ok(fetched)
+    }
+    Ok(fetched)
 }
 
 /// 网关入站处理（KernelHost `handle_org_mail` 的实现体；存储 + 本机身份 +
@@ -288,15 +282,13 @@ pub fn handle_org_mail_inbound(
             let Some(env_value) = payload.get("envelope") else {
                 return Ok(json!({ "ok": false, "reason": "invalid-envelope" }));
             };
-            let Ok(envelope) = serde_json::from_value::<OrgMailEnvelope>(env_value.clone())
-            else {
+            let Ok(envelope) = serde_json::from_value::<OrgMailEnvelope>(env_value.clone()) else {
                 return Ok(json!({ "ok": false, "reason": "invalid-envelope" }));
             };
             Ok(gateway_deliver(storage, &envelope, now, my_root_id))
         }
         "fetch" => {
-            let Some(recipient) = payload.get("recipientDomainId").and_then(Value::as_str)
-            else {
+            let Some(recipient) = payload.get("recipientDomainId").and_then(Value::as_str) else {
                 return Ok(json!({ "ok": false, "reason": "invalid-request" }));
             };
             let (nonce, challenge_ts, challenge) = (
@@ -307,13 +299,7 @@ pub fn handle_org_mail_inbound(
             match (nonce, challenge_ts, challenge) {
                 (None, None, None) => Ok(gateway_fetch_challenge(storage, recipient, now)),
                 (Some(nonce), Some(ts), Some(challenge)) => Ok(gateway_fetch(
-                    storage,
-                    recipient,
-                    nonce,
-                    ts,
-                    challenge,
-                    my_peer_id,
-                    now,
+                    storage, recipient, nonce, ts, challenge, my_peer_id, now,
                 )),
                 _ => Ok(json!({ "ok": false, "reason": "invalid-request" })),
             }

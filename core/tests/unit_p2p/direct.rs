@@ -122,42 +122,6 @@ fn recovery_view_match() {
 }
 
 #[test]
-fn org_share_request_dispatch() {
-    let share = build_org_share_request(json!({"syncId":"s1"}));
-    let (kind, payload) = parse_org_share_request(&share).unwrap().unwrap();
-    assert_eq!(kind, OrgShareRequestKind::OrgShare);
-    assert_eq!(payload["syncId"], "s1");
-
-    let list = build_pull_list_request(&"aa".repeat(32), Some("peerX"), None);
-    let (kind, _) = parse_org_share_request(&list).unwrap().unwrap();
-    assert_eq!(kind, OrgShareRequestKind::OrgPullList);
-
-    let org = build_pull_org_request(&"aa".repeat(32), None, "org_0123456789abcdef", None);
-    let (kind, payload) = parse_org_share_request(&org).unwrap().unwrap();
-    assert_eq!(kind, OrgShareRequestKind::OrgPullOrg);
-    assert_eq!(payload["orgId"], "org_0123456789abcdef");
-
-    assert!(parse_org_share_request("not json").is_err());
-    assert!(
-        parse_org_share_request("{\"type\":\"bogus\"}")
-            .unwrap()
-            .is_none()
-    );
-}
-
-#[test]
-fn org_share_direct_response_matching() {
-    let ok = build_org_share_ack_response(Some("sync-1"), "org_x", "receiver");
-    assert!(parse_org_share_direct_response(&ok, "sync-1"));
-    assert!(!parse_org_share_direct_response(&ok, "sync-2"));
-    assert!(!parse_org_share_direct_response(
-        &build_org_share_error_response("not accepted"),
-        "sync-1"
-    ));
-    assert!(!parse_org_share_direct_response("garbage", "sync-1"));
-}
-
-#[test]
 fn rate_limiter() {
     let mut limiter = MinIntervalRateLimiter::new(60_000);
     assert!(!limiter.is_rate_limited("p1", 1000));

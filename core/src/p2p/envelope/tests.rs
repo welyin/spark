@@ -102,7 +102,7 @@ fn sign_and_verify_roundtrip_byte_level() {
 #[test]
 fn verify_accepts_pem_public_key() {
     // TS 侧 pubKey 为 PEM：验签侧必须兼容（同一把临时密钥）
-    let body = build_org_body("org-share-ack", json!({"syncId":"abc"}));
+    let body = build_org_body("custom-plugin-msg", json!({"syncId":"abc"}));
     let mut envelope = Envelope::new(body, None, 1_720_000_000_000);
     let signer = test_signer();
     envelope.attach_public_key(&signer);
@@ -151,10 +151,10 @@ fn tampered_envelope_fails_verification() {
 
 #[test]
 fn unsigned_and_unparseable() {
-    let body = build_org_body("org-share", json!({}));
+    let body = build_org_body("custom-plugin-msg", json!({}));
     let envelope = Envelope::new(body, None, 1);
     let text = envelope.to_compact_json();
-    let parsed = parse_and_verify_envelope(&text).expect("unsigned org-share parses");
+    let parsed = parse_and_verify_envelope(&text).expect("unsigned envelope parses");
     assert!(!parsed.signed);
     assert!(!parsed.signature_valid);
     assert!(matches!(
@@ -168,8 +168,6 @@ fn mandatory_signature_types() {
     assert!(is_signature_mandatory_type("update"));
     assert!(is_signature_mandatory_type("delete"));
     assert!(is_signature_mandatory_type("history-response"));
-    assert!(!is_signature_mandatory_type("org-share"));
-    assert!(!is_signature_mandatory_type("org-share-ack"));
     assert!(!is_signature_mandatory_type("custom-plugin-msg"));
 }
 

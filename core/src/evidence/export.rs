@@ -32,8 +32,7 @@ use crate::storage::{ScanOptions, StorageBackend};
 /// spec 自描述指针（§9 恒定值）。
 pub const SPEC_REF: &str = "sync-evidence §1–§2、§6–§9";
 /// canonicalJson 规则人读摘要（§9）。
-pub const CANONICAL_JSON_SUMMARY: &str =
-    "normalizeObject：key 排序（整数型 key 数值升序在前，其余 UTF-16 字典序），\
+pub const CANONICAL_JSON_SUMMARY: &str = "normalizeObject：key 排序（整数型 key 数值升序在前，其余 UTF-16 字典序），\
      嵌套对象递归 normalize 后作为 JSON 字符串值嵌入；数字按 JS Number::toString，\
      字符串按 JS JSON 转义";
 
@@ -185,11 +184,7 @@ pub fn build_export_package<S: StorageBackend>(
         },
     };
     let payload = export_sign_payload(&package);
-    package.exporter.sig = B64.encode(
-        exporter_signing_key
-            .sign(payload.as_bytes())
-            .to_bytes(),
-    );
+    package.exporter.sig = B64.encode(exporter_signing_key.sign(payload.as_bytes()).to_bytes());
     Ok(package)
 }
 
@@ -234,14 +229,17 @@ pub fn verify_export_package(raw: &str) -> VerifyReport {
     let package: EvidenceExportPackage = match serde_json::from_str(raw) {
         Ok(p) => p,
         Err(e) => {
-            report.failures.push(format!("parse: 包 JSON 解析失败: {e}"));
+            report
+                .failures
+                .push(format!("parse: 包 JSON 解析失败: {e}"));
             return report;
         }
     };
     if package.format_version != 1 {
-        report
-            .failures
-            .push(format!("format: 未知 formatVersion {}", package.format_version));
+        report.failures.push(format!(
+            "format: 未知 formatVersion {}",
+            package.format_version
+        ));
     }
     report.height = package.head.seq;
     report.anchor_count = package.anchors.len();
@@ -249,8 +247,8 @@ pub fn verify_export_package(raw: &str) -> VerifyReport {
 
     // ① 导出者签名（publicKey ⟹ rootId 绑定 + Ed25519 验签）
     let step1 = (|| -> Result<(), String> {
-        let pk_arr = parse_b64_32(&package.exporter.public_key)
-            .ok_or("exporter.publicKey 形状非法")?;
+        let pk_arr =
+            parse_b64_32(&package.exporter.public_key).ok_or("exporter.publicKey 形状非法")?;
         if hex::encode(Sha256::digest(pk_arr)) != package.exporter.root_id {
             return Err("exporter.publicKey 与 rootId 不绑定".to_string());
         }
@@ -475,9 +473,17 @@ mod tests {
         p1.entries[1].id = "forged".to_string();
         let r = verify_export_package(&serde_json::to_string(&p1).unwrap());
         assert!(!r.ok());
-        assert!(r.failures.iter().any(|f| f.contains('②')), "{:?}", r.failures);
+        assert!(
+            r.failures.iter().any(|f| f.contains('②')),
+            "{:?}",
+            r.failures
+        );
         // ① 也应失败（签名覆盖全文）
-        assert!(r.failures.iter().any(|f| f.contains('①')), "{:?}", r.failures);
+        assert!(
+            r.failures.iter().any(|f| f.contains('①')),
+            "{:?}",
+            r.failures
+        );
 
         // 篡改 head
         let mut p2 = pkg.clone();
@@ -518,6 +524,10 @@ mod tests {
         .unwrap();
         let r = verify_export_package(&serde_json::to_string(&pkg).unwrap());
         assert!(!r.ok());
-        assert!(r.failures.iter().any(|f| f.contains('④')), "{:?}", r.failures);
+        assert!(
+            r.failures.iter().any(|f| f.contains('④')),
+            "{:?}",
+            r.failures
+        );
     }
 }

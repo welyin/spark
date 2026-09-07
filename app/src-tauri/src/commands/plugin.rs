@@ -76,7 +76,7 @@ pub(crate) fn identity_verify_inner(
 /// 与 TS 的两处实现差异（语义等价）：
 /// - TS `ensureCoreServicesStarted` → 内核幂等 `start_p2p`；
 /// - TS 逐成员 `pullOrganizationsFromPeer` → 内核 `sync_peer_organizations`
-///   （同一对账编排：双向 stale 推送 + org-pull + removed 清理）。TS 的成功
+///   （P3 起为 orgsync 即时 hello 对账：连接 + hello，收敛异步完成）。TS 的成功
 ///   判定 `pulled > 0 || synced > 0` 中 `synced` 恒等于 `pulled`，故对齐到
 ///   内核只看 `pull_synced`（内核 `synced` 是反推成功数，对应 TS `pushed`，
 ///   TS 未计入）。成员仅报 peerId 不带地址时内核对账报"地址缺失"，与 TS

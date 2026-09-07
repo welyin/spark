@@ -17,6 +17,13 @@
           placeholder="可选，描述组织用途"
         />
       </el-form-item>
+      <el-form-item label="域类型">
+        <el-radio-group v-model="createForm.domainType">
+          <el-radio value="leaf">普通组织</el-radio>
+          <el-radio value="community">共同体域</el-radio>
+        </el-radio-group>
+        <p class="hint">共同体域的成员是组织（用于跨组织协作）；创建后不可变更。</p>
+      </el-form-item>
     </el-form>
     <p class="hint">创建人会自动成为该组织的管理员和首位成员。</p>
     <template #footer>
@@ -45,7 +52,7 @@ export default defineComponent({
   },
   emits: ['update:modelValue', 'submit'],
   setup(props, { emit, expose }) {
-    const createForm = ref<CreateForm>({ name: '', description: '', avatar: '' });
+    const createForm = ref<CreateForm>({ name: '', description: '', avatar: '', domainType: 'leaf' });
 
     const dialogVisible = computed({
       get: () => props.modelValue,
@@ -61,7 +68,8 @@ export default defineComponent({
       createForm.value = {
         name: '',
         description: '',
-        avatar: ''
+        avatar: '',
+        domainType: 'leaf'
       };
     };
 

@@ -52,15 +52,18 @@ pub(crate) enum Command {
         want: usize,
         tx: oneshot::Sender<Result<Vec<PeerNodeInfo>>>,
     },
-    OrgShareDirect {
-        node_info: PeerNodeInfo,
-        payload: Value,
-        tx: oneshot::Sender<Result<bool>>,
+    /// 向已连接的 indexer 角色节点发元数据查询（affair-metadata §8；帧文本
+    /// 进出，语义校验在 index 层）。
+    AffairMetaQuery {
+        peer_id: String,
+        request: String,
+        tx: oneshot::Sender<Result<String>>,
     },
-    OrgPullRequest {
-        node_info: PeerNodeInfo,
-        request_json: String,
-        tx: oneshot::Sender<Result<Option<Value>>>,
+    /// 发布本节点 indexer 目录名片（affair-metadata §7；payload 由事件循环
+    /// 内以节点私钥签名，返回名片 payload）。
+    PublishIndexerCard {
+        coverage: crate::index::directory::IndexCoverage,
+        tx: oneshot::Sender<Result<Value>>,
     },
     DmDirect {
         node_info: PeerNodeInfo,
@@ -97,6 +100,29 @@ pub(crate) enum Command {
         key: Vec<u8>,
         tx: oneshot::Sender<Result<Vec<String>>>,
     },
+    /// 内容面「持有即做种」（public-topics §七）：声明本节点为某 blob CID
+    /// 的 Kad provider 并登记周期重发。leaf 模式关闭——手机持有副本但不服务。
+    BlobProvide {
+        cid: String,
+        tx: oneshot::Sender<Result<()>>,
+    },
+    /// 停止做种（退出议题 / 不再持有 / GC 回收时调用）。
+    BlobStopProvide {
+        cid: String,
+        tx: oneshot::Sender<Result<()>>,
+    },
+    /// 检索某 blob CID 的 provider 集合（peerId 字符串列表）。
+    BlobGetProviders {
+        cid: String,
+        tx: oneshot::Sender<Result<Vec<String>>>,
+    },
+    /// 按 CID 向已连接 provider 拉取 blob 本体（`/spark/blob-fetch/1.0.0`）：
+    /// 响应经 CID 哈希校验后落 content store，非 leaf 自动登记做种。
+    BlobFetch {
+        peer_id: String,
+        cid: String,
+        tx: oneshot::Sender<Result<crate::content::ContentBlobInfo>>,
+    },
     /// 向已连接对端发起 node-challenge 身份确认。
     ChallengePeer {
         peer_id: String,
@@ -117,12 +143,6 @@ pub(crate) enum Command {
     NetworkChangeFired {
         /// 武装时的网络快照基线
         base: Vec<String>,
-    },
-    /// 故障注入开关（e2e 测试专用，org-sync-stall-fix §5）：on=true 后本节点
-    /// 收到 org-pull 请求扣住应答通道不响应（复现对端半连接长超时）。
-    SetOrgPullBlackhole {
-        on: bool,
-        tx: oneshot::Sender<Result<()>>,
     },
     /// 测试专用（dcutr loopback 冒烟）：登记一个 external address——loopback
     /// 下 AutoNAT 不探测回环地址（永不 Public），relay server 的预约响应只
@@ -253,35 +273,33 @@ impl P2pNode {
             .map_err(|_| P2pError::NotStarted)?
     }
 
-    /// 直连 org-share 推送（逐地址尝试，ok && syncId 匹配即送达）。
-    pub async fn org_share_direct(&self, node_info: &PeerNodeInfo, payload: Value) -> Result<bool> {
+    /// 向指定 peer（indexer 角色节点）发 `affair-meta-query` 帧，返回响应帧
+    /// 文本（affair-metadata §8）。寻址由调用方经 indexer 目录/覆盖网完成。
+    pub async fn query_affair_meta(&self, peer_id: &str, request_json: &str) -> Result<String> {
         let (tx, rx) = oneshot::channel();
-        self.send_cmd(Command::OrgShareDirect {
-            node_info: node_info.clone(),
-            payload,
+        self.send_cmd(Command::AffairMetaQuery {
+            peer_id: peer_id.to_string(),
+            request: request_json.to_string(),
             tx,
         })?;
-        tokio::time::timeout(Duration::from_secs(15), rx)
+        tokio::time::timeout(Duration::from_secs(10), rx)
             .await
-            .map_err(|_| P2pError::Timeout("org-share timeout".to_string()))?
+            .map_err(|_| P2pError::Timeout("affair-meta query timeout".to_string()))?
             .map_err(|_| P2pError::NotStarted)?
     }
 
-    /// 直连 org-pull 请求（org-pull-list / org-pull-org 帧文本），返回首个可解析响应。
-    pub async fn org_pull_request(
+    /// 发布本节点 indexer 目录名片（affair-metadata §7 目录面）：payload 由
+    /// 事件循环以节点私钥签名后经 `spark-affair-meta` 洪泛，并自落本地目录。
+    /// 返回名片 payload；leaf 模式报错（叶子不服务）。
+    pub async fn publish_indexer_card(
         &self,
-        node_info: &PeerNodeInfo,
-        request_json: &str,
-    ) -> Result<Option<Value>> {
+        coverage: crate::index::directory::IndexCoverage,
+    ) -> Result<Value> {
         let (tx, rx) = oneshot::channel();
-        self.send_cmd(Command::OrgPullRequest {
-            node_info: node_info.clone(),
-            request_json: request_json.to_string(),
-            tx,
-        })?;
-        tokio::time::timeout(Duration::from_secs(15), rx)
+        self.send_cmd(Command::PublishIndexerCard { coverage, tx })?;
+        tokio::time::timeout(LOCAL_CMD_TIMEOUT, rx)
             .await
-            .map_err(|_| P2pError::Timeout("org-pull timeout".to_string()))?
+            .map_err(|_| P2pError::Timeout("indexer card publish timeout".to_string()))?
             .map_err(|_| P2pError::NotStarted)?
     }
 
@@ -415,6 +433,85 @@ impl P2pNode {
             .map_err(|_| P2pError::NotStarted)?
     }
 
+    /// 内容面「持有即做种」（public-topics §七）：在 `spark:blob:{cid}` 上
+    /// 声明本节点为该 blob 的 Kad provider，随后挂 keepalive tick 周期重发
+    /// （provider 声明无 TTL，靠重发维持——dht-republish-libp2p §provider）。
+    ///
+    /// 幂等：重复声明为空操作。leaf 模式报错（手机持有副本但不服务）。
+    /// 无已知路由节点时 start_providing 本地仍会登记，路由表建立后由
+    /// 周期重发补上（对齐 `republish_provided` 的 NoKnownPeers 口径）。
+    pub async fn provide_blob(&self, cid: &str) -> Result<()> {
+        // CID 形状在 API 边界校验（内容寻址体系的入口守卫）
+        crate::content::Cid::parse(cid)
+            .map_err(|e| P2pError::Malformed(format!("blob provide: {e}")))?;
+        let (tx, rx) = oneshot::channel();
+        self.send_cmd(Command::BlobProvide {
+            cid: cid.to_string(),
+            tx,
+        })?;
+        tokio::time::timeout(Duration::from_secs(15), rx)
+            .await
+            .map_err(|_| P2pError::Timeout("blob provide timeout".to_string()))?
+            .map_err(|_| P2pError::NotStarted)?
+    }
+
+    /// 停止做种（退出议题 / GC 回收本体 / 不再持有时调用）。幂等；
+    /// 未在提供中的 CID 为空操作。leaf 模式同样允许（本就是未提供状态）。
+    pub async fn stop_providing_blob(&self, cid: &str) -> Result<()> {
+        crate::content::Cid::parse(cid)
+            .map_err(|e| P2pError::Malformed(format!("blob stop provide: {e}")))?;
+        let (tx, rx) = oneshot::channel();
+        self.send_cmd(Command::BlobStopProvide {
+            cid: cid.to_string(),
+            tx,
+        })?;
+        tokio::time::timeout(Duration::from_secs(15), rx)
+            .await
+            .map_err(|_| P2pError::Timeout("blob stop provide timeout".to_string()))?
+            .map_err(|_| P2pError::NotStarted)?
+    }
+
+    /// 检索某 blob CID 的 provider 集合（peerId 字符串列表；空列表 =
+    /// 暂无持有者可见）。leaf 模式允许（叶子只消费不服务，查询不受限）。
+    pub async fn find_blob_providers(&self, cid: &str) -> Result<Vec<String>> {
+        crate::content::Cid::parse(cid)
+            .map_err(|e| P2pError::Malformed(format!("blob get providers: {e}")))?;
+        let (tx, rx) = oneshot::channel();
+        self.send_cmd(Command::BlobGetProviders {
+            cid: cid.to_string(),
+            tx,
+        })?;
+        tokio::time::timeout(Duration::from_secs(15), rx)
+            .await
+            .map_err(|_| P2pError::Timeout("blob get providers timeout".to_string()))?
+            .map_err(|_| P2pError::NotStarted)?
+    }
+
+    /// 按 CID 向已连接 provider 拉取 blob 本体（`/spark/blob-fetch/1.0.0`，
+    /// public-topics §七）：响应经 CID 哈希校验一致后落本地 content store，
+    /// 非 leaf 节点随后自动登记为 provider（持有即做种）。返回落库的
+    /// `ContentBlobInfo`；连接编排（解析地址/拨号）由调用方完成。
+    ///
+    /// 外层超时 = 协议读超时（30s，按 10 MiB 本体慢链路余量）+ 5s 通道余量。
+    pub async fn fetch_blob(&self, peer_id: &str, cid: &str) -> Result<crate::content::ContentBlobInfo> {
+        // CID 形状在 API 边界校验（内容寻址体系的入口守卫）
+        crate::content::Cid::parse(cid)
+            .map_err(|e| P2pError::Malformed(format!("blob fetch: {e}")))?;
+        let (tx, rx) = oneshot::channel();
+        self.send_cmd(Command::BlobFetch {
+            peer_id: peer_id.to_string(),
+            cid: cid.to_string(),
+            tx,
+        })?;
+        tokio::time::timeout(
+            Duration::from_millis(crate::p2p::constants::BLOB_FETCH_READ_TIMEOUT_MS + 5_000),
+            rx,
+        )
+        .await
+        .map_err(|_| P2pError::Timeout("blob fetch timeout".to_string()))?
+        .map_err(|_| P2pError::NotStarted)?
+    }
+
     /// 向已连接对端发起 node-challenge 身份确认（三层确认第③层）；
     /// 未连接或回执验签失败返回 Ok(false)。
     pub async fn challenge_peer(&self, peer_id: &str) -> Result<bool> {
@@ -440,18 +537,6 @@ impl P2pNode {
         tokio::time::timeout(LOCAL_CMD_TIMEOUT, rx)
             .await
             .map_err(|_| P2pError::Timeout("disconnect timeout".to_string()))?
-            .map_err(|_| P2pError::NotStarted)?
-    }
-
-    /// 故障注入开关（**仅供 e2e 测试驱动**，e2e_node `fault-org-pull-blackhole`；
-    /// org-sync-stall-fix §5）：开启后本节点收到 org-pull-list/org-pull-org
-    /// 请求扣住应答通道不响应（请求方走协议读超时），复现对端半连接长超时。
-    pub async fn set_org_pull_blackhole(&self, on: bool) -> Result<()> {
-        let (tx, rx) = oneshot::channel();
-        self.send_cmd(Command::SetOrgPullBlackhole { on, tx })?;
-        tokio::time::timeout(LOCAL_CMD_TIMEOUT, rx)
-            .await
-            .map_err(|_| P2pError::Timeout("fault config timeout".to_string()))?
             .map_err(|_| P2pError::NotStarted)?
     }
 

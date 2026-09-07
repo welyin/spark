@@ -31,6 +31,9 @@ pub enum OrganizationTransactionType {
     /// 移除成员。
     #[serde(rename = "member-remove")]
     MemberRemove,
+    /// 组织退出共同体（留史：名册移除 + `org:cleave:` 留史记录追加）。
+    #[serde(rename = "member-leave")]
+    MemberLeave,
     /// 删除组织。
     #[serde(rename = "delete")]
     Delete,

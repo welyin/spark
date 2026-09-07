@@ -9,16 +9,20 @@
 //! 昵称等均为对端自报字段，仅作展示落库。
 //!
 //! 代码组织：本文件保留公共类型（[`InboundDmError`]/[`InboundDmResult`]/
-//! [`AutoAccept`]/[`ProfileSyncReply`]/[`PdsyncOut`]）、入站上下文
-//! [`InboundContext`]、共享应答/校验/自愈助手与总分发 [`handle_inbound_dm`]；
-//! 各 kind 处理器按域拆到子模块——`friend`（friend 系）、`chat`（chat）、
+//! [`AutoAccept`]/[`ProfileSyncReply`]/[`PdsyncOut`]/[`OrgsyncOut`]/
+//! [`AffairsyncDmOut`]）、入站上下文 [`InboundContext`]、共享应答/校验/自愈
+//! 助手与总分发 [`handle_inbound_dm`]；各 kind 处理器按域拆到子模块——
+//! `friend`（friend 系）、`chat`（chat）、
 //! `sync`（read/recall/profile-sync/device-sync/contact-sync/conv-sync）、
-//! `pdsync`（pdsync 三信封）、`org_invite`（org-invite/org-invite-reply）。
+//! `pdsync`（pdsync 三信封）、`orgsync`（orgsync 三信封）、
+//! `affairsync`（affairsync 三信封，affair-sync §7）、
+//! `org_invite`（org-invite/org-invite-reply）。
 
 use std::collections::HashSet;
 
 use serde_json::{Value, json};
 
+mod affairsync;
 mod attachment;
 mod chat;
 mod feed;
@@ -26,7 +30,6 @@ mod feed_blob;
 mod friend;
 mod notice;
 mod org_invite;
-mod orgkey;
 mod orgq;
 mod orgsync;
 mod pdsync;
@@ -34,12 +37,12 @@ mod recovery;
 mod sync;
 
 use super::dm_envelope::{
-    KIND_CHAT, KIND_CONTACT_SYNC, KIND_CONV_SYNC, KIND_DEVICE_NOTICE, KIND_DEVICE_SYNC, KIND_FEED,
+    KIND_AFFAIRSYNC_DATA, KIND_AFFAIRSYNC_HELLO, KIND_AFFAIRSYNC_NEED, KIND_CHAT,
+    KIND_CONTACT_SYNC, KIND_CONV_SYNC, KIND_DEVICE_NOTICE, KIND_DEVICE_SYNC, KIND_FEED,
     KIND_FEED_BLOB_REQ, KIND_FEED_BLOB_RESP, KIND_FRIEND_ACCEPT, KIND_FRIEND_REPLY,
-    KIND_FRIEND_REQUEST, KIND_ORG_INVITE, KIND_ORG_INVITE_REPLY, KIND_ORGKEY_DELIVER,
+    KIND_FRIEND_REQUEST, KIND_ORG_INVITE, KIND_ORG_INVITE_REPLY, KIND_ORG_MEMBER_REMOVED,
     KIND_ORGQ_REQ, KIND_ORGQ_RESP, KIND_ORGSYNC_DATA, KIND_ORGSYNC_HELLO, KIND_ORGSYNC_NEED,
-    KIND_ORG_MEMBER_REMOVED, KIND_PDSYNC_ATTACHMENT_REQ, KIND_PDSYNC_ATTACHMENT_RESP,
-    KIND_PDSYNC_DATA, KIND_PDSYNC_HELLO,
+    KIND_PDSYNC_ATTACHMENT_REQ, KIND_PDSYNC_ATTACHMENT_RESP, KIND_PDSYNC_DATA, KIND_PDSYNC_HELLO,
     KIND_PDSYNC_NEED, KIND_PROFILE_SYNC, KIND_READ, KIND_RECALL, KIND_RECOVERY, verify_envelope,
 };
 
@@ -54,15 +57,6 @@ use crate::p2p::{P2pEvent, PeerNodeInfo};
 use crate::storage::StorageBackend;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
-/// O4 orgkey-deliver 解包指令（reader 侧合法投递，host 用 seed 解包落库）。
-pub use orgkey::OrgkeyUnbox;
-/// O4 orgkey-deliver 入站判定（reader 侧资格/验签/幂等）——crate 内集成
-/// 测试（F3 重投 roundtrip）直调。
-#[cfg(test)]
-pub(crate) use orgkey::handle_orgkey_deliver;
-/// F3 残余 §7.1：orgkey-deliver 暂存的重评估（acl/org:meta 合入后触发，
-/// orgsync 入站与 legacy 快照平面合用）。
-pub(crate) use orgkey::reevaluate_orgkey_stash;
 /// O3 filtered 集合权限钩子（orgq-req 数据账号侧裁决契约，见 [`orgq`]）。
 pub use orgq::OrgqPermHook;
 
@@ -171,14 +165,14 @@ pub struct InboundDmResult {
     /// host 只负责包信封 + dm_direct。kind 为 KIND_ORGSYNC_*、
     /// from=本机 rootId、to=对端成员 rootId。
     pub orgsync_out: Vec<OrgsyncOut>,
+    /// affairsync 出站指令（连接层对端）：收到 affairsync-hello 的 diff 回发、
+    /// 或 affairsync-need 的增量数据回发。body 已在纯逻辑层构建（io_lock 内），
+    /// host 只负责包信封 + dm_direct。kind 为 KIND_AFFAIRSYNC_*、
+    /// from=本机 rootId、to=对端关注者 rootId（语义同 OrgsyncOut 的 B1）。
+    pub affairsync_out: Vec<AffairsyncDmOut>,
     /// 本次 pdsync-data 是否合入了 `profile:self`（远端胜出）。host 据此
     /// 回写身份文件资料（仅解锁态），保证 sled 镜像与身份文件一致。
     pub profile_applied: bool,
-    /// O4 orgkey-deliver 解包指令（reader 侧收到合法 orgkey-deliver；F3 残余
-    /// 起为 Vec——acl/org:meta 合入触发的暂存重评估可一次产出多条）：host
-    /// 用本机组织身份私钥（seed）解 box 并落 orgkey 表——解包需 recipient
-    /// 私钥，纯逻辑层只做资格/验签判定后产出本指令。
-    pub orgkey_unbox: Vec<orgkey::OrgkeyUnbox>,
     /// feed-blob 出站指令（连接层对端）：跨联系人分块传输的响应/续拉。
     /// body 已在纯逻辑层构建（io_lock 内），host 只负责包信封 + dm_direct。
     pub feed_blob_out: Option<FeedBlobOut>,
@@ -236,6 +230,49 @@ impl OrgsyncOut {
             | Self::Data { to_root_id, .. }
             | Self::OrgqReq { to_root_id, .. }
             | Self::OrgqResp { to_root_id, .. } => to_root_id,
+        }
+    }
+}
+
+/// affairsync 出站信封（body 已构建，host 装配完整信封并经 p2p 节点投递）。
+/// kind 为 KIND_AFFAIRSYNC_*、from=本机 rootId、to=对端关注者 rootId
+/// （affair 域无名册/墓碑面：无 orgq 变体、无 dlog ACK 重发，投递失败静默
+/// 由反熵兜底，见 affair-sync §1/§7）。
+#[derive(Clone, Debug)]
+pub enum AffairsyncDmOut {
+    /// affairsync-need diff 请求（本机落后/并发时回给对端）。
+    Need {
+        /// 目标关注者 rootId（信封 to）。
+        to_root_id: String,
+        body: Value,
+    },
+    /// affairsync-data 数据传输（单批）。
+    Data {
+        /// 目标关注者 rootId（信封 to）。
+        to_root_id: String,
+        body: Value,
+    },
+}
+
+impl AffairsyncDmOut {
+    pub fn body(&self) -> &Value {
+        match self {
+            Self::Need { body, .. } | Self::Data { body, .. } => body,
+        }
+    }
+
+    /// 目标关注者 rootId（信封 to）。
+    pub fn to_root_id(&self) -> &str {
+        match self {
+            Self::Need { to_root_id, .. } | Self::Data { to_root_id, .. } => to_root_id,
+        }
+    }
+
+    /// 出站信封 kind。
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Need { .. } => KIND_AFFAIRSYNC_NEED,
+            Self::Data { .. } => KIND_AFFAIRSYNC_DATA,
         }
     }
 }
@@ -335,8 +372,8 @@ pub fn done(response: Value, events: Vec<P2pEvent>) -> Result<InboundDmResult> {
         profile_sync_reply: None,
         pdsync_out: Vec::new(),
         orgsync_out: Vec::new(),
+        affairsync_out: Vec::new(),
         profile_applied: false,
-        orgkey_unbox: Vec::new(),
         feed_blob_out: None,
     })
 }
@@ -364,13 +401,8 @@ pub fn valid_space_key(space: &str) -> bool {
     let Some(org_id) = space.strip_prefix("org:") else {
         return false;
     };
-    let Some(hex_part) = org_id.strip_prefix("org_") else {
-        return false;
-    };
-    hex_part.len() == 16
-        && hex_part
-            .bytes()
-            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    // orgId 双形态（org-genesis §2）：legacy `org_<16hex>` / 创世哈希型 `org_<64hex>`
+    crate::org::types::is_valid_org_id(org_id)
 }
 
 /// 入站消息时间戳允许的未来偏移（10 分钟）：远未来消息会把会话钉在列表
@@ -785,9 +817,17 @@ fn handle_inbound_dm_inner<S: StorageBackend>(
         KIND_ORGSYNC_HELLO => orgsync::handle_orgsync_hello(storage, &ctx, &envelope.from, &body),
         KIND_ORGSYNC_NEED => orgsync::handle_orgsync_need(storage, &ctx, &envelope.from, &body),
         KIND_ORGSYNC_DATA => orgsync::handle_orgsync_data(storage, &ctx, &envelope.from, &body),
+        KIND_AFFAIRSYNC_HELLO => {
+            affairsync::handle_affairsync_hello(storage, &ctx, &envelope.from, &body)
+        }
+        KIND_AFFAIRSYNC_NEED => {
+            affairsync::handle_affairsync_need(storage, &ctx, &envelope.from, &body)
+        }
+        KIND_AFFAIRSYNC_DATA => {
+            affairsync::handle_affairsync_data(storage, &ctx, &envelope.from, &body)
+        }
         KIND_ORGQ_REQ => orgq::handle_orgq_req(storage, &ctx, &envelope.from, &body, orgq_hook),
         KIND_ORGQ_RESP => orgq::handle_orgq_resp(storage, &ctx, &envelope.from, &body),
-        KIND_ORGKEY_DELIVER => orgkey::handle_orgkey_deliver(storage, &ctx, &envelope.from, &body),
         KIND_FEED => feed::handle_feed(storage, &ctx, &envelope.from, &body, envelope.ts),
         KIND_FEED_BLOB_REQ => feed_blob::handle_feed_blob_req(storage, &ctx, &envelope.from, &body),
         KIND_FEED_BLOB_RESP => {

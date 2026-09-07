@@ -17,7 +17,11 @@ use super::{PluginHostShared, PluginRuntimeContext, required_call_id, required_s
 impl PluginHostShared {
     /// `sys.exec.start`：spawn 到内核 runtime（内部 spawn_blocking），完成
     /// 后向本插件事件队列回 `sys-exec-result`。
-    pub(super) fn sys_exec_start(&self, rtx: &PluginRuntimeContext, payload: &Value) -> Result<Value> {
+    pub(super) fn sys_exec_start(
+        &self,
+        rtx: &PluginRuntimeContext,
+        payload: &Value,
+    ) -> Result<Value> {
         let call_id = required_call_id(payload)?;
         let program = required_str(payload, "program")?.to_string();
         let args: Vec<String> = payload
@@ -66,7 +70,11 @@ impl PluginHostShared {
     /// stream-json` 等 NDJSON 流工具）。stdout 按完整行逐块回 `sys-exec-chunk`
     /// （callId 配对，prelude 分发到 onChunk），进程退出回 `sys-exec-result`
     /// 终态兑现 Promise。与非流式 `sys.exec.start` 的区别：多次中间事件 + 一次终态。
-    pub(super) fn sys_exec_stream_start(&self, rtx: &PluginRuntimeContext, payload: &Value) -> Result<Value> {
+    pub(super) fn sys_exec_stream_start(
+        &self,
+        rtx: &PluginRuntimeContext,
+        payload: &Value,
+    ) -> Result<Value> {
         let call_id = required_call_id(payload)?;
         let program = required_str(payload, "program")?.to_string();
         eprintln!(
@@ -148,7 +156,11 @@ impl PluginHostShared {
         Ok(serde_json::json!({ "started": true }))
     }
 
-    pub(super) fn sys_fetch_start(&self, rtx: &PluginRuntimeContext, payload: &Value) -> Result<Value> {
+    pub(super) fn sys_fetch_start(
+        &self,
+        rtx: &PluginRuntimeContext,
+        payload: &Value,
+    ) -> Result<Value> {
         let call_id = required_call_id(payload)?;
         let url = required_str(payload, "url")?.to_string();
         let method = payload
@@ -193,7 +205,11 @@ impl PluginHostShared {
     /// 事件队列回 `sys-stream-chunk`（callId 配对，prelude 分发到 onChunk），
     /// 流结束回 `sys-stream-result`（done 块载荷，prelude 兑现 Promise）。
     /// 与非流式 `sys.fetch.start` 的区别：多次中间事件 + 一次终态事件。
-    pub(super) fn sys_fetch_stream_start(&self, rtx: &PluginRuntimeContext, payload: &Value) -> Result<Value> {
+    pub(super) fn sys_fetch_stream_start(
+        &self,
+        rtx: &PluginRuntimeContext,
+        payload: &Value,
+    ) -> Result<Value> {
         let call_id = required_call_id(payload)?;
         let url = required_str(payload, "url")?.to_string();
         let method = payload

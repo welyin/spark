@@ -17,6 +17,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use spark_core::storage::{SledStorage, StorageBackend};
 
+use super::catalog::PluginRequires;
 use super::permissions::{normalize_declared_permissions, resolve_granted_permissions};
 use super::sources::now_millis;
 use super::types::{InstalledPluginState, PluginReleaseManifest, PluginUpdateProbe};
@@ -183,6 +184,10 @@ pub struct SparkPluginDeclaration {
     /// 缺省按 ["org"] 处理——spaces-and-plugins §4，规格 §2.1）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supported_spaces: Option<Vec<String>>,
+    /// 运行时平台约束（规格 §2.1；可选，缺省全平台可用，安装时校验——
+    /// 当前平台不在 requires.platforms 列表中即拒）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requires: Option<PluginRequires>,
     pub sdk_version: String,
 }
 
@@ -255,6 +260,24 @@ fn validate_declaration(raw_text: &str, expected: &RepoId) -> Result<SparkPlugin
         spaces.retain(|space| {
             let first_seen = !seen.contains(space);
             seen.push(space.clone());
+            first_seen
+        });
+    }
+    // requires.platforms（规格 §2.1）：可选值仅 "desktop" / "mobile"，其余值即拒
+    // （声明文件是信任锚，非法值 fail-loud，不做静默丢弃）；重复值去重，
+    // 空列表按无约束（全平台可用）处理
+    if let Some(requires) = &mut declaration.requires {
+        if requires
+            .platforms
+            .iter()
+            .any(|platform| platform != "desktop" && platform != "mobile")
+        {
+            return Err(invalid("requires.platforms invalid"));
+        }
+        let mut seen: Vec<String> = Vec::with_capacity(requires.platforms.len());
+        requires.platforms.retain(|platform| {
+            let first_seen = !seen.contains(platform);
+            seen.push(platform.clone());
             first_seen
         });
     }
@@ -587,6 +610,11 @@ impl PluginMarketService {
         let repo_id = RepoId::parse(id)?;
         let plugin_id = repo_id.normalized();
         let declaration = self.fetch_repo_declaration(fetcher, &repo_id)?;
+        // 平台约束强制点（规格 §2.1：安装时校验，当前平台不在 requires.platforms
+        // 列表中即拒；空列表 = 无约束）。在触网拉清单/包体之前 fail-fast
+        if let Some(requires) = &declaration.requires {
+            super::catalog::ensure_platform_supported(&plugin_id, &requires.platforms)?;
+        }
         let (tag, _package_name, manifest_asset, signature_asset) =
             derive_release_names(&declaration, &repo_id);
 
@@ -641,6 +669,16 @@ impl PluginMarketService {
                 declaration.version, manifest.version
             ));
         }
+        // grantedPermissions 声明源（规格 §5：清单声明优先，缺省用声明文件）；
+        // 提前解析供 L 级强制校验（包体下载前 fail-fast）
+        let declared = match manifest.permissions.as_ref() {
+            Some(raw) => normalize_declared_permissions(raw),
+            None => normalize_declared_permissions(&declaration.permissions),
+        };
+        // L 级强制（community-model §十）：验证类插件（声明 credentials:*）安装通路
+        // 信任级必须 ≥ L1；仓库锚定（L1）与签名链（L2）恒过，此处在数据模型上
+        // 把强制级别落成硬校验而非文本声明
+        trust::ensure_trust_requirement(&plugin_id, &declared, Some(trust_level))?;
         let asset = manifest
             .package_asset()
             .ok_or_else(|| format!("Repo plugin manifest invalid: {plugin_id}: no package asset"))?
@@ -658,11 +696,6 @@ impl PluginMarketService {
             .fetch_bytes(&asset.url, asset.size)?
             .ok_or_else(|| format!("Repo plugin package fetch failed: {plugin_id}"))?;
         let (file_path, digest, size) = self.save_verified_package_bytes(&asset, &plugin_id, &bytes)?;
-        // grantedPermissions = 基础 ∪ 声明∩高级：清单声明优先，缺省用声明文件（规格 §5）
-        let declared = match manifest.permissions.as_ref() {
-            Some(raw) => normalize_declared_permissions(raw),
-            None => normalize_declared_permissions(&declaration.permissions),
-        };
         let installed_state = InstalledPluginState {
             plugin_id: plugin_id.clone(),
             version: manifest.version.clone(),
@@ -674,6 +707,7 @@ impl PluginMarketService {
             granted_permissions: resolve_granted_permissions(&declared),
             trust: Some(trust_level.to_string()),
             supported_spaces: declaration.supported_spaces.clone(),
+            requires: declaration.requires.clone(),
         };
         self.state
             .installed
@@ -754,10 +788,14 @@ pub(crate) fn synthesize_catalog_entry(
         // 支持空间：声明文件缓存优先，缺省回落安装时落库的 supportedSpaces
         // （侧载插件无声明缓存，取包内 manifest.json 解析值）
         supported_spaces: declaration
-            .and_then(|d| d.supported_spaces)
+            .as_ref()
+            .and_then(|d| d.supported_spaces.clone())
             .or_else(|| installed.supported_spaces.clone()),
-        // 运行时前提：仓库声明/侧载 manifest 暂无 requires 字段，恒无约束
-        requires: None,
+        // 运行时前提（规格 §2.1 requires）：声明文件缓存优先，缺省回落安装时
+        // 落库的 requires（侧载插件取包内 manifest.json 解析值）；两级皆无 = 无约束
+        requires: declaration
+            .and_then(|d| d.requires)
+            .or_else(|| installed.requires.clone()),
         package: super::catalog::PluginCatalogPackage {
             update_manifest_url,
             signature_url,
@@ -953,6 +991,7 @@ mod tests {
             permissions: vec![],
             mirrors: vec![],
             supported_spaces: None,
+            requires: None,
             sdk_version: "1.0.0".to_string(),
         };
         assert_eq!(

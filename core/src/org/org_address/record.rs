@@ -21,12 +21,13 @@ pub const ORG_ADDRESS_FUTURE_TOLERANCE_MS: i64 = 10 * 60 * 1000;
 /// gossip 信封 `type`（p2p-messages.md §16：spark-overlay 主题，`domain='system'`）。
 pub const ORG_ADDRESS_GOSSIP_TYPE: &str = "org-address";
 
-/// orgId 格式：`^org_[0-9a-f]{16}$`（§16.3 第 3 步）。
+/// orgId 双形态（org-genesis §2.1 登记变更）：`^org_[0-9a-f]{16}$`（legacy）/
+/// `^org_[0-9a-f]{64}$`（创世哈希型）；两者之外一律非法。
 fn is_valid_org_id(org_id: &str) -> bool {
     let Some(hex_part) = org_id.strip_prefix("org_") else {
         return false;
     };
-    hex_part.len() == 16
+    (hex_part.len() == 16 || hex_part.len() == 64)
         && hex_part
             .bytes()
             .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
@@ -41,7 +42,7 @@ fn is_valid_org_id(org_id: &str) -> bool {
 pub struct OrgAddressRecordUnsigned {
     /// 自认证组织地址（55 字符）。
     pub org_address: String,
-    /// `org_<16hex>`。
+    /// orgId 双形态（org-genesis §2.1）：`org_<16hex>`（legacy）/ `org_<64hex>`（创世哈希型）。
     pub org_id: String,
     /// 组织根公钥 base64（原始 32 字节）。
     pub org_public_key: String,
@@ -66,7 +67,7 @@ pub struct OrgAddressRecord {
     /// 自认证组织地址。
     #[serde(rename = "orgAddress")]
     pub org_address: String,
-    /// `org_<16hex>`。
+    /// orgId 双形态（org-genesis §2.1）：`org_<16hex>`（legacy）/ `org_<64hex>`（创世哈希型）。
     #[serde(rename = "orgId")]
     pub org_id: String,
     /// 组织根公钥 base64（原始 32 字节）。
@@ -116,7 +117,7 @@ impl OrgAddressRecord {
     }
 }
 
-/// JS 字符串 JSON 转义（与 claim.rs 同款：复用 serde_json 的字符串序列化规则）。
+/// JS 字符串 JSON 转义（复用 serde_json 的字符串序列化规则）。
 fn json_string(s: &str) -> String {
     serde_json::to_string(s).expect("string serialization is infallible")
 }
@@ -160,7 +161,7 @@ pub enum OrgAddressVerification {
     MalformedRecord,
     /// ttl 非法（≤0 或超 7 天）/ 已过期 / `publishedAt` 超未来容忍。
     TtlWindow,
-    /// orgId 非 `org_<16hex>`。
+    /// orgId 非双形态之一（`org_<16hex>` legacy / `org_<64hex>` 创世哈希型，org-genesis §2.1）。
     InvalidOrgId,
     /// 自认证闭环断裂：`orgPublicKey` 非 32 字节或 `sha256(orgPublicKey) ≠ orgAddress 内嵌 digest`。
     AddressMismatch,

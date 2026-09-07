@@ -962,7 +962,7 @@ pub enum EncryptDecision {
 ///   （基础设施/口令校验器/本地；市场公告为 plugin-dist §8 公开数据）。
 /// - `pdoc:` → 按对应 `pdecl:` 声明的 `sensitivity` 字段；声明缺失 → Skip。
 /// - 其余已注册个人域 category（ct:, device, profile:self, msg:conv,
-///   org:meta, ct:org, org:inv, orgkey, msg:item, msg:app）→ Encrypt。
+///   org:meta, ct:org, org:inv, msg:item, msg:app）→ Encrypt。
 /// - 未注册前缀 → Skip。
 pub fn classify_for_push<S: StorageBackend>(
     storage: &S,
@@ -998,7 +998,7 @@ pub fn classify_for_push<S: StorageBackend>(
     }
 
     // 其余注册 category：ct:, device, profile:self, msg:conv, org:meta,
-    // ct:org, org:inv, orgkey 均加密。
+    // ct:org, org:inv 均加密。（C7：原 orgkey category 随 encrypted 轴退役移除。）
     if let Some(cat) = category_for_key(key) {
         if cat.name == "pdecl" || cat.name == "pdoc" {
             Ok(EncryptDecision::Skip)

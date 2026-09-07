@@ -170,6 +170,7 @@ fn import_overwrite_higher_trust_requires_confirmation() {
             granted_permissions: vec![],
             trust: Some("repo-anchored".to_string()),
             supported_spaces: None,
+            requires: None,
         },
     );
     let spkg = good_spkg(&fixture);
@@ -315,4 +316,134 @@ fn inspect_reads_supported_spaces_and_initialize_backfills_legacy_records() {
         persisted.installed["todo-local"].supported_spaces,
         Some(vec!["personal".to_string()])
     );
+}
+
+/// 当前平台之外的另一个平台（测试环境恒为 desktop/mobile 二值口径）。
+fn other_platform() -> &'static str {
+    if crate::market::catalog::current_platform() == "desktop" {
+        "mobile"
+    } else {
+        "desktop"
+    }
+}
+
+#[test]
+fn import_rejects_verification_class_sideload() {
+    // L1 强制（community-model §十）：验证类插件（声明 credentials:*）侧载 = L0，
+    // 不满足「L1 源码公开可审计」，import 即拒
+    let fixture = Fixture::new();
+    let manifest = r#"{"id":"verify-local","name":"本地验证","permissions":["credentials:read"]}"#;
+    let spkg = write_spkg(
+        &fixture,
+        "spark-plugin-verify-local-1.0.0.spkg",
+        &spkg_text(
+            "verify-local",
+            &[("manifest.json", manifest.as_bytes()), ("views/main.js", b"hello")],
+        ),
+    );
+    let mut service = fixture.service();
+    let preview = service.inspect_local_package(spkg.to_str().unwrap()).unwrap();
+    assert_eq!(
+        service
+            .import_local_package(spkg.to_str().unwrap(), &preview.sha256, false)
+            .unwrap_err(),
+        "Plugin trust requirement unmet: verify-local is verification-class (declares credentials:* permission) and requires L1 open-source-auditable install, current trust is L0 (sideloaded)"
+    );
+    assert!(read_state_file(&fixture.state_file).installed.is_empty());
+}
+
+#[test]
+fn import_enforces_platform_requires() {
+    // 包内 manifest requires.platforms 不含当前平台 → 侧载同样拒装（安装通路不豁免）
+    let fixture = Fixture::new();
+    let manifest = format!(
+        r#"{{"id":"todo-local","name":"本地待办","requires":{{"platforms":["{}"]}}}}"#,
+        other_platform()
+    );
+    let spkg = write_spkg(
+        &fixture,
+        "spark-plugin-todo-local-1.0.0.spkg",
+        &spkg_text(
+            "todo-local",
+            &[("manifest.json", manifest.as_bytes()), ("views/main.js", b"hello")],
+        ),
+    );
+    let mut service = fixture.service();
+    let preview = service.inspect_local_package(spkg.to_str().unwrap()).unwrap();
+    // 预览透出平台约束（前端展示用）
+    assert_eq!(
+        preview.requires.as_ref().unwrap().platforms,
+        vec![other_platform().to_string()]
+    );
+    assert_eq!(
+        service
+            .import_local_package(spkg.to_str().unwrap(), &preview.sha256, false)
+            .unwrap_err(),
+        format!(
+            "Plugin platform unsupported: todo-local requires platforms [{}], current platform is {}",
+            other_platform(),
+            crate::market::catalog::current_platform()
+        )
+    );
+    assert!(read_state_file(&fixture.state_file).installed.is_empty());
+}
+
+#[test]
+fn import_persists_requires_and_initialize_backfills_legacy_records() {
+    // requires 宽进归一化：非法平台值丢弃，合法值保留并落库
+    let fixture = Fixture::new();
+    let current = crate::market::catalog::current_platform();
+    let manifest = format!(
+        r#"{{"id":"todo-local","name":"本地待办","requires":{{"platforms":["{}","watch"]}}}}"#,
+        current
+    );
+    let spkg = write_spkg(
+        &fixture,
+        "spark-plugin-todo-local-1.0.0.spkg",
+        &spkg_text(
+            "todo-local",
+            &[("manifest.json", manifest.as_bytes()), ("views/main.js", b"hello")],
+        ),
+    );
+    let mut service = fixture.service();
+    let preview = service.inspect_local_package(spkg.to_str().unwrap()).unwrap();
+    let state = service
+        .import_local_package(spkg.to_str().unwrap(), &preview.sha256, false)
+        .unwrap();
+    assert_eq!(
+        state.requires.as_ref().unwrap().platforms,
+        vec![current.to_string()]
+    );
+
+    // 模拟旧版状态文件：抹掉 requires 字段，启动对账应从包内 manifest 回填
+    let raw = fs::read_to_string(&fixture.state_file).unwrap();
+    let mut value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    value["installed"]["todo-local"]
+        .as_object_mut()
+        .unwrap()
+        .remove("requires");
+    fs::write(&fixture.state_file, value.to_string()).unwrap();
+
+    let mut reloaded = fixture.service();
+    reloaded.initialize().unwrap();
+    assert_eq!(
+        reloaded.state.installed["todo-local"]
+            .requires
+            .as_ref()
+            .unwrap()
+            .platforms,
+        vec![current.to_string()]
+    );
+    // 市场合成条目回落安装态落库值（侧载插件无声明缓存）
+    let entry = reloaded
+        .list_market()
+        .into_iter()
+        .find(|i| i.catalog.id == "todo-local")
+        .unwrap();
+    assert_eq!(
+        entry.catalog.requires.as_ref().unwrap().platforms,
+        vec![current.to_string()]
+    );
+    // 侧载信任级 = L0
+    assert_eq!(entry.trust_level.as_deref(), Some("L0"));
 }

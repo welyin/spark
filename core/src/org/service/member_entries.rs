@@ -61,8 +61,9 @@ pub fn wipe_org_local<S: StorageBackend>(
     node_id: &str,
     now_ms: i64,
 ) -> Result<usize> {
-    crate::sync::delete_personal(storage, node_id, &organization_key(org_id), now_ms)
-        .map_err(|e| super::OrgError::Storage(crate::storage::StorageError::Backend(e.to_string())))?;
+    crate::sync::delete_personal(storage, node_id, &organization_key(org_id), now_ms).map_err(
+        |e| super::OrgError::Storage(crate::storage::StorageError::Backend(e.to_string())),
+    )?;
     let prefix = format!("{}{}:", super::super::types::ORG_MEMBER_PREFIX, org_id);
     let keys: Vec<String> = storage
         .scan(&ScanOptions::prefix(&prefix))?

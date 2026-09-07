@@ -19,10 +19,11 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
+use super::catalog::PluginRequires;
 use super::permissions::{normalize_declared_permissions, resolve_granted_permissions};
 use super::sources::{file_size, now_millis};
 use super::types::{InstalledPluginState, PluginUpdateProbe};
-use super::PluginMarketService;
+use super::{PluginMarketService, trust};
 
 /// .spkg 容器文件条目（与 code/plugins/scripts/build-example-package.mjs 产物同构）。
 #[derive(Deserialize)]
@@ -45,13 +46,16 @@ pub(crate) struct SpkgContainer {
 }
 
 /// 包内 manifest.json 消费字段（名称/权限用于预览与授权；supportedSpaces 用于
-/// 市场按空间过滤；其余字段忽略）。
+/// 市场按空间过滤；requires 用于平台约束校验与展示；其余字段忽略）。
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SpkgInnerManifest {
     name: Option<String>,
     permissions: Option<Vec<String>>,
     pub(crate) supported_spaces: Option<Vec<String>>,
+    /// 运行时前提（平台/能力约束；可选，缺省 = 无约束全平台可装）
+    #[serde(default)]
+    pub(crate) requires: Option<PluginRequires>,
 }
 
 /// supportedSpaces 归一化（宽进）：只保留 personal/org，去重；空结果按未声明
@@ -67,6 +71,18 @@ pub(crate) fn normalize_supported_spaces(raw: Option<Vec<String>>) -> Option<Vec
     if spaces.is_empty() { None } else { Some(spaces) }
 }
 
+/// requires 归一化（包内 manifest 自证，宽进口径）：platforms 经
+/// `normalize_requires_platforms` 过滤非法值；capabilities / mobileReadonly
+/// 原样保留（前向兼容，本期不强制）。归一化后无任何约束内容按未声明（None）处理。
+pub(crate) fn normalize_requires(mut raw: PluginRequires) -> Option<PluginRequires> {
+    raw.platforms = super::catalog::normalize_requires_platforms(&raw.platforms);
+    if raw.platforms.is_empty() && raw.capabilities.is_empty() && !raw.mobile_readonly {
+        None
+    } else {
+        Some(raw)
+    }
+}
+
 /// inspect 出参（camelCase，与命令层线形一致）。
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -80,6 +96,10 @@ pub struct SideloadPreview {
     /// 包内 manifest.json 声明的支持空间（已规范化；缺省 = 未声明，按 ["org"] 口径）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub supported_spaces: Option<Vec<String>>,
+    /// 包内 manifest.json 声明的运行时前提（已规范化；缺省 = 无约束全平台可装；
+    /// 前端预览展示平台约束，import 时壳层硬校验）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requires: Option<PluginRequires>,
     /// 整包 sha256（前端展示供核对；import 复核）
     pub sha256: String,
     pub size: u64,
@@ -202,6 +222,10 @@ impl PluginMarketService {
         let supported_spaces = inner
             .as_ref()
             .and_then(|m| m.supported_spaces.clone());
+        let requires = inner
+            .as_ref()
+            .and_then(|m| m.requires.clone())
+            .and_then(normalize_requires);
         Ok(SideloadPreview {
             plugin_id: container.plugin_id.clone(),
             domain: container.domain.clone(),
@@ -216,6 +240,7 @@ impl PluginMarketService {
                 .map(|raw| normalize_declared_permissions(&raw))
                 .unwrap_or_default(),
             supported_spaces: normalize_supported_spaces(supported_spaces),
+            requires,
             sha256: hex::encode(sha2::Sha256::digest(&bytes)),
             size: bytes.len() as u64,
             file_name: source
@@ -277,7 +302,19 @@ impl PluginMarketService {
             .and_then(|m| m.permissions.clone())
             .map(|raw| normalize_declared_permissions(&raw))
             .unwrap_or_default();
-        let supported_spaces = normalize_supported_spaces(inner.and_then(|m| m.supported_spaces));
+        let supported_spaces = normalize_supported_spaces(inner.as_ref().and_then(|m| m.supported_spaces.clone()));
+        // 包内 manifest 自证的 requires 宽进归一化后落库（与 inspect 预览同口径）
+        let requires = inner
+            .and_then(|m| m.requires)
+            .and_then(normalize_requires);
+
+        // 平台约束强制点（规格 §2.1 安装时校验口径；侧载同为安装通路不豁免）
+        if let Some(requires) = &requires {
+            super::catalog::ensure_platform_supported(&container.plugin_id, &requires.platforms)?;
+        }
+        // L 级强制（community-model §十）：验证类插件（声明 credentials:*）强制
+        // L1 源码公开可审计；侧载 = L0（仅用户核对哈希，无源码锚定）即命中此拒
+        trust::ensure_trust_requirement(&container.plugin_id, &declared, Some("sideloaded"))?;
 
         let file_name = source
             .file_name()
@@ -303,6 +340,7 @@ impl PluginMarketService {
             granted_permissions: resolve_granted_permissions(&declared),
             trust: Some("sideloaded".to_string()),
             supported_spaces,
+            requires,
         };
         self.state
             .installed

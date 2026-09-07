@@ -1,27 +1,19 @@
-//! kernel 接受邀请与组织推送编排集成测试：accept_invite 守卫/全流程
-//! （原始 P2pNode 扮演邀请方）、双 kernel 互连对跑与 org-share 推送。
+//! kernel 接受邀请与组织同步编排集成测试：accept_invite 守卫/全流程
+//! （双 kernel 互连对跑，P2 orgsync 收敛通道）与组织到达/邀请应答。
 
 mod common;
 
 use std::time::Duration;
-
-use serde_json::{Value, json};
 
 use spark_core::org::invite::{OrgInviteInviter, OrgInvitePayload, encode_org_invite};
 use spark_core::org::service::CreateOrganizationInput;
 use spark_core::org::{
     OrgInviteDirection, OrgInviteRecord, OrgInviteStatus, OrganizationNodeInfo, OrganizationService,
 };
-use spark_core::p2p::P2pEvent;
 use spark_core::p2p::node::system_now_ms;
 use spark_core::storage::StorageBackend;
 
 use common::*;
-
-/// join 通道开关是进程级 AtomicBool（阶段四A P2）——翻转它的 legacy 用例
-/// 与跑新通道（默认）的用例必须互斥（同一测试二进制并行线程，翻转窗口
-/// 会击穿对侧断言；评测 READ_ASSEMBLY 的 ASSEMBLY_LOCK 同手法）。
-static JOIN_FLAG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[test]
 fn accept_invite_guard_errors() {
@@ -77,188 +69,8 @@ fn accept_invite_guard_errors() {
 }
 
 // ---------------------------------------------------------------------------
-// accept_invite 全流程：原始 P2pNode 扮演邀请方（org-pull 响应宿主），
-// kernel 作为加入方完成 连接 → claim 捎带 → 拉取 → 落库确认。
-// ---------------------------------------------------------------------------
-
-/// 邀请方宿主：serve 受邀组织快照与 pluginDocs（org-pull 直连响应）。
-struct InviteAdminHost {
-    org_id: String,
-    record_value: Value,
-    plugin_docs: Vec<Value>,
-}
-
-impl spark_core::p2p::P2pHost for InviteAdminHost {
-    fn handle_org_pull_list(
-        &mut self,
-        _payload: Value,
-        _remote_peer_id: Option<String>,
-    ) -> Result<Value, String> {
-        Ok(json!({
-            "ok": true,
-            "type": "org-pull-list-response",
-            "organizations": [{ "orgId": self.org_id }]
-        }))
-    }
-
-    fn handle_org_pull_org(
-        &mut self,
-        payload: Value,
-        _remote_peer_id: Option<String>,
-    ) -> Result<Value, String> {
-        let org_id = payload.get("orgId").and_then(Value::as_str).unwrap_or("");
-        if org_id != self.org_id {
-            return Ok(json!({
-                "ok": true,
-                "type": "org-pull-org-response",
-                "orgId": org_id,
-                "status": "removed",
-                "reason": "org-not-found"
-            }));
-        }
-        Ok(json!({
-            "ok": true,
-            "type": "org-pull-org-response",
-            "orgId": self.org_id,
-            "status": "member",
-            "organization": self.record_value,
-            "pluginDocs": self.plugin_docs,
-        }))
-    }
-}
-
-#[test]
-fn accept_invite_full_flow() {
-    // 本用例的邀请方是只服务 org-pull 的原始 P2pNode（不应答 orgsync）——
-    // 钉 legacy join 通道（P2 回退开关）；与新通道用例互斥。
-    let _g = JOIN_FLAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    spark_core::kernel::set_join_via_orgsync(false);
-    // 加入方 kernel（先建身份，管理员记录需要预录其 rootId）
-    let joiner_dir = tempfile::tempdir().unwrap();
-    let mut joiner = fresh_kernel(joiner_dir.path());
-    let (joiner_root, _) = init_identity(&mut joiner);
-
-    // 管理员侧组织记录：创建者 admin + 预录加入方为 member
-    let admin_root = "ef".repeat(32);
-    let now = system_now_ms();
-    let mut admin_storage = spark_core::storage::MemoryStorage::new();
-    let record = spark_core::org::OrganizationService::create_organization(
-        &mut admin_storage,
-        &CreateOrganizationInput {
-            name: "邀请组织".to_string(),
-            description: None,
-            avatar: None,
-            base_plugin_domain: Some("plugin:app".to_string()),
-        },
-        &admin_root,
-        now,
-    )
-    .unwrap();
-    let org_id = record.org_id.clone();
-    let record = spark_core::org::OrganizationService::add_member(
-        &mut admin_storage,
-        &org_id,
-        &joiner_root,
-        None,
-        &admin_root,
-        now,
-    )
-    .unwrap();
-    let record_value = serde_json::to_value(&record).unwrap();
-
-    // 随快照捎带的插件文档（接收方应应用落库）
-    let plugin_docs = vec![json!({
-        "domain": "plugin:app",
-        "collection": "notes",
-        "id": "d1",
-        "payload": {"text": "hello", "orgId": org_id},
-        "meta": {"vv": {"admin-node": 1}, "ts": now, "nodeId": "admin-node"}
-    })];
-
-    // 邀请方节点（独立 tokio runtime；P2pNode 句柄可跨 block_on 持有，
-    // 事件循环在该 runtime 上存活，拉取完成后显式 stop）
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .build()
-        .unwrap();
-    let (admin_peer, admin_addrs, admin_node) = rt.block_on(async {
-        let host = InviteAdminHost {
-            org_id: org_id.clone(),
-            record_value,
-            plugin_docs,
-        };
-        let mut node = spark_core::p2p::P2pNode::start(
-            test_p2p_config(),
-            spark_core::storage::MemoryStorage::new(),
-            Box::new(host),
-        )
-        .await
-        .expect("admin node starts");
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-        let addrs = loop {
-            let event = tokio::time::timeout(
-                deadline.saturating_duration_since(tokio::time::Instant::now()),
-                node.next_event(),
-            )
-            .await
-            .expect("Started event")
-            .expect("event stream open");
-            if let P2pEvent::Started {
-                listen_addresses, ..
-            } = event
-            {
-                break listen_addresses;
-            }
-        };
-        let peer = node.peer_id().to_string();
-        let dialable: Vec<String> = addrs
-            .iter()
-            .filter(|a| a.contains("/ip4/"))
-            .map(|a| a.replace("/ip4/0.0.0.0/", "/ip4/127.0.0.1/"))
-            .collect();
-        (peer, dialable, node)
-    });
-    assert!(!admin_addrs.is_empty(), "管理员节点应有可拨地址");
-
-    // 邀请码：管理员 rootId + 节点信息
-    let code = encode_org_invite(&OrgInvitePayload::new(
-        org_id.clone(),
-        "邀请组织".to_string(),
-        OrgInviteInviter {
-            root_id: admin_root.clone(),
-            peer_id: Some(admin_peer),
-            addresses: admin_addrs,
-        },
-        system_now_ms(),
-    ));
-
-    // 加入方启动 p2p 并接受邀请：连接 → claim 捎带 → 拉取 → 落库确认
-    joiner.start_p2p().unwrap();
-    let acceptance = joiner.accept_invite(&code).unwrap();
-    assert_eq!(acceptance.org_id, org_id);
-    assert_eq!(acceptance.org_name, "邀请组织");
-    assert_eq!(acceptance.member_count, 2);
-
-    // 组织记录落库：当前用户为 member 角色
-    let mine = joiner.list_orgs().unwrap();
-    assert_eq!(mine.len(), 1);
-    assert_eq!(mine[0].record.org_id, org_id);
-    assert!(!mine[0].is_current_user_admin);
-    assert_eq!(mine[0].member_count, 2);
-
-    // pluginDocs 已应用
-    let doc = joiner.doc_get("plugin:app", "notes", "d1").unwrap();
-    assert_eq!(doc, Some(json!({"text": "hello", "orgId": org_id})));
-
-    joiner.shutdown().unwrap();
-    rt.block_on(admin_node.stop());
-    spark_core::kernel::set_join_via_orgsync(true); // 恢复默认（新通道）
-}
-
-// ---------------------------------------------------------------------------
 // 阶段③c 组织同步编排：双 kernel 互连对跑
-// （org-share 推送 / org-pull 响应方 / accept_invite 全流程）
+// （组织到达 / accept_invite 全流程）
 // ---------------------------------------------------------------------------
 
 /// P3 组织到达通道：A 预录 B + DM 邀请 → B accept（P2 join：stub + orgsync
@@ -282,6 +94,7 @@ fn org_share_push_delivers_between_kernels() {
             description: None,
             avatar: None,
             base_plugin_domain: Some("plugin:app".to_string()),
+            ..Default::default()
         })
         .unwrap();
     let org_id = view.record.org_id.clone();
@@ -297,7 +110,13 @@ fn org_share_push_delivers_between_kernels() {
     // P3：组织到达走邀请流（org-share 推送已停发；预录后 B 不会自动收到——
     // A 发 DM 邀请，B 应答 accept 完成 join）
     kernel_a
-        .org_send_invite(&org_id, &root_b, b_node.peer_id.as_deref(), &b_node.addresses, None)
+        .org_send_invite(
+            &org_id,
+            &root_b,
+            b_node.peer_id.as_deref(),
+            &b_node.addresses,
+            None,
+        )
         .unwrap();
     wait_until(
         || {
@@ -351,7 +170,6 @@ fn org_share_push_delivers_between_kernels() {
 /// 成员自写条目取代 claim 回填（B 的端点经 org:member 条目扩散到 A）。
 #[test]
 fn accept_invite_two_kernels_full() {
-    let _g = JOIN_FLAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir_a = tempfile::tempdir().unwrap();
     let dir_b = tempfile::tempdir().unwrap();
     let mut kernel_a = fresh_kernel(dir_a.path());
@@ -368,6 +186,7 @@ fn accept_invite_two_kernels_full() {
             description: None,
             avatar: None,
             base_plugin_domain: Some("plugin:app".to_string()),
+            ..Default::default()
         })
         .unwrap();
     let org_id = view.record.org_id.clone();
@@ -711,7 +530,11 @@ fn invite_reply_enqueues_org_pending_when_inviter_unreachable() {
 
     // 应答拒绝（不走 accept 编排）→ 本地标 declined + 回执投递（不可达）
     let updated = kernel.org_respond_invite("inv-unreach", false).unwrap();
-    assert_eq!(updated.status, OrgInviteStatus::Declined, "本侧状态先行落库");
+    assert_eq!(
+        updated.status,
+        OrgInviteStatus::Declined,
+        "本侧状态先行落库"
+    );
 
     // 投递失败 + 2s/5s 退避耗尽 → 入队。轮询（不固定 sleep 卡死）
     let prefix = format!("org:dm:pending:{org_id}:");
@@ -734,9 +557,17 @@ fn invite_reply_enqueues_org_pending_when_inviter_unreachable() {
     }
     assert!(found, "重试耗尽后回执入 Org 空间 pending 队列");
     // 本侧状态不回滚
-    let rec_after = OrganizationService::get_incoming_invite(&kernel.__test_storage().unwrap(), &org_id, &inviter_root)
-        .unwrap()
-        .unwrap();
-    assert_eq!(rec_after.status, OrgInviteStatus::Declined, "终态拒绝/不可达不回滚本侧状态");
+    let rec_after = OrganizationService::get_incoming_invite(
+        &kernel.__test_storage().unwrap(),
+        &org_id,
+        &inviter_root,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        rec_after.status,
+        OrgInviteStatus::Declined,
+        "终态拒绝/不可达不回滚本侧状态"
+    );
     kernel.shutdown().unwrap();
 }

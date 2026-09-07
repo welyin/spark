@@ -1,5 +1,6 @@
 //! 数据命令（P6 声明式数据 API 直通内核门面）：data-declare / data-save /
-//! data-delete / data-get / data-query / data-grant-access / org-fold-vv。
+//! data-delete / data-get / data-query / org-fold-vv。
+//! （C7：data-grant-access/revoke-access/list-access 随 encrypted 轴退役移除。）
 //!
 //! `domain` 为插件域（裸 pluginId，如 "e2e"），集合名须带其前缀
 //! （`e2e:ledger`）。org 集合传 `orgId`；personal 集合省略。
@@ -27,7 +28,6 @@ pub fn declare(kernel: &mut Kernel, params: &Params) -> Result<Value, String> {
     };
     let confidentiality = match params.opt_str("confidentiality") {
         Some("filtered") => Some(Confidentiality::Filtered),
-        Some("encrypted") => Some(Confidentiality::Encrypted),
         Some(other) => return Err(format!("unknown confidentiality: {other}")),
         None => None,
     };
@@ -121,47 +121,6 @@ pub fn query(kernel: &Kernel, params: &Params) -> Result<Value, String> {
         })
         .collect();
     Ok(json!({"items": items, "nextCursor": page.next_cursor}))
-}
-
-/// `data-grant-access`：owner 将成员加入 encrypted 集合 readers
-/// （创世首个 grant 自签 acl epoch=1，并向新读者投递密钥）。
-pub fn grant_access(kernel: &mut Kernel, params: &Params) -> Result<Value, String> {
-    let readers = params.opt_strings("readers").unwrap_or_default();
-    to_json(kernel.data_grant_access(
-        params.need_str("orgId")?,
-        params.need_str("name")?,
-        params.str_or("version", "1"),
-        &readers,
-    ))
-}
-
-/// `data-revoke-access`：owner 将成员移出 readers（epoch+1 轮换密钥）。
-pub fn revoke_access(kernel: &mut Kernel, params: &Params) -> Result<Value, String> {
-    let members = params.opt_strings("members").unwrap_or_default();
-    to_json(kernel.data_revoke_access(
-        params.need_str("orgId")?,
-        params.need_str("name")?,
-        params.str_or("version", "1"),
-        &members,
-    ))
-}
-
-/// `data-list-access`：读本机 acl 名单（{owners, readers, epoch}；无记录 → 空）。
-pub fn list_access(kernel: &Kernel, params: &Params) -> Result<Value, String> {
-    to_json(kernel.data_list_access(
-        params.need_str("orgId")?,
-        params.need_str("name")?,
-        params.str_or("version", "1"),
-    ))
-}
-
-/// `org-publish-access-key`：发布本人组织身份访问密钥到成员表（org:structure
-/// 全员同步；orgkey-deliver 的前提——收件人无 accessKey 时投递跳过）。
-pub fn publish_access_key(kernel: &mut Kernel, params: &Params) -> Result<Value, String> {
-    kernel
-        .org_publish_access_key(params.need_str("orgId")?)
-        .map_err(|e| e.to_string())?;
-    Ok(json!({"published": true}))
 }
 
 /// `org-fold-vv`：本机某 org 集合的折叠 vv（orgsync-hello 摘要同口径），

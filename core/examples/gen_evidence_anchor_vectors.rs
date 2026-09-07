@@ -15,9 +15,7 @@ use spark_core::evidence::anchor::{
 use spark_core::evidence::export::{
     ExportScope, build_export_package, export_sign_payload, verify_export_package,
 };
-use spark_core::evidence::{
-    EvidenceOp, NewEvidenceEntry, append_evidence, normalize_object,
-};
+use spark_core::evidence::{EvidenceOp, NewEvidenceEntry, append_evidence, normalize_object};
 use spark_core::storage::{MemoryStorage, StorageBackend};
 
 const ORG: &str = "org_0000000000000001";

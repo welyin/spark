@@ -1,9 +1,6 @@
 //! p2p 模块协议常量（逐一对齐 desktop/src/main/p2p/constants.ts 与
 //! core/spec/p2p-messages.md §13 速查表）。
 
-/// org-share 直连协议名。
-pub const DIRECT_ORG_SHARE_PROTOCOL: &str = "/spark/org-share/1.0.0";
-
 /// 对端版本探测协议名。
 pub const DIRECT_VERSION_PROTOCOL: &str = "/spark/version/1.0.0";
 
@@ -18,6 +15,10 @@ pub const DIRECT_DM_PROTOCOL: &str = "/spark/dm/1.0.0";
 
 /// org-mail（跨组织网关邮箱）直连协议名（阶段四E，p2p-org-mail §21）。
 pub const DIRECT_ORG_MAIL_PROTOCOL: &str = "/spark/org-mail/1.0.0";
+
+/// blob-fetch（内容面按 CID 拉取 blob 本体）直连协议名
+///（public-topics §七「持有即做种」的传输协议）。
+pub const DIRECT_BLOB_FETCH_PROTOCOL: &str = "/spark/blob-fetch/1.0.0";
 
 /// 本地持久化 libp2p 私钥的存储键（值 = protobuf 序列化的 base64）。
 pub const P2P_IDENTITY_PRIVATE_KEY: &str = "p2p:identity:privateKey";
@@ -70,6 +71,16 @@ pub const OVERLAY_TOPIC: &str = "spark-overlay";
 
 /// 业务数据主题。
 pub const SYNC_TOPIC: &str = "spark-sync";
+
+/// 议题元数据面主题（affair-metadata §2；C4 起订阅，入站分流见 swarm_events）。
+pub const AFFAIR_META_TOPIC: &str = "spark-affair-meta";
+
+/// indexer 查询协议（affair-metadata §8：轻客户端向启用角色的节点查询）。
+pub const AFFAIR_META_RR_PROTOCOL: &str = "/spark/affairmeta/1.0.0";
+
+/// indexer 查询响应侧限流：同一请求方两次服务的最小间隔（5s；目录查询
+/// 读本地索引，成本远低于 org-pull，故阈值远低于 PEER_EXCHANGE 的 60s）。
+pub const AFFAIR_META_QUERY_MIN_INTERVAL_MS: i64 = 5_000;
 
 /// node-announce 周期发送间隔（5 分钟）。
 pub const NODE_ANNOUNCE_INTERVAL_MS: i64 = 5 * 60_000;
@@ -132,15 +143,24 @@ pub const PEER_EXCHANGE_READ_RESPONSE_TIMEOUT_MS: u64 = 4_000;
 /// 直连协议读超时：org-recovery（3000ms）。
 pub const ORG_RECOVERY_READ_TIMEOUT_MS: u64 = 3_000;
 
-/// 直连协议读超时：org-share / org-pull（4000ms）。
-pub const ORG_SHARE_READ_TIMEOUT_MS: u64 = 4_000;
-
-/// 直连协议读超时：org-mail（阶段四E，同 org-share 量级——投递/拉取均为
+/// 直连协议读超时：org-mail（阶段四E，4000ms——投递/拉取均为
 /// 网关侧轻量存储读写）。
 pub const ORG_MAIL_READ_TIMEOUT_MS: u64 = 4_000;
 
+/// 直连协议读超时：blob-fetch（30000ms——响应帧携带本体 base64，
+/// 上限 10 MiB 内容 ≈ 14 MB 帧，慢链路上远大于 dm/org-mail 的轻量读写）。
+pub const BLOB_FETCH_READ_TIMEOUT_MS: u64 = 30_000;
+
+/// blob-fetch 应答侧限流：同一请求方两次服务的最小间隔（1s，对齐 dm 口径；
+/// 响应载体的重 IO 协议，防刷）。
+pub const BLOB_FETCH_MIN_INTERVAL_MS: i64 = 1_000;
+
 /// 直连协议读超时：dm（10000ms，对齐 dm 单地址尝试量级；命令侧外层超时 15s）。
 pub const DM_READ_TIMEOUT_MS: u64 = 10_000;
+
+/// 直连协议读超时：indexer 查询（5000ms；本地索引扫描为轻量存储读，
+/// 介于 org-recovery 3s 与 dm 10s 之间）。
+pub const AFFAIR_META_READ_TIMEOUT_MS: u64 = 5_000;
 
 /// connect_peer 默认拨号超时（10s）：保活/反熵等后台路径沿用；
 /// 用户可感的手动 sync-now 路径由调用方传更短超时快速失败。

@@ -16,8 +16,8 @@
 
 use serde_json::Value;
 
-use crate::kernel::data_orgq::{OrgqOnlineCtx, orgq_online_query, orgq_online_write};
 use crate::kernel::data_orgq::orgq_online_target;
+use crate::kernel::data_orgq::{OrgqOnlineCtx, orgq_online_query, orgq_online_write};
 use crate::plugin::error::{PluginError, Result};
 use crate::plugin::runtime::PluginEvent;
 
@@ -28,80 +28,70 @@ const ONLINE_RESULT_KIND: &str = "data-online-result";
 
 impl PluginHostShared {
     /// 装配在线投递共享上下文（资源全部来自共享格；未解锁/未启动 p2p →
-    /// None，调用方回退缓存/入队语义）。
+    /// None，调用方回退缓存/入队语义）。holder_domain 由调用方按插件域
+    /// 补设（read-gate §3 查询侧 readAuth 的 holder 身份匹配口径）。
     fn online_ctx(&self) -> Option<OrgqOnlineCtx> {
         Some(OrgqOnlineCtx {
             storage: self.require_storage().ok()?,
-            my_root_id: self.my_root_id.lock().unwrap_or_else(|e| e.into_inner()).clone()?,
+            my_root_id: self
+                .my_root_id
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()?,
             signing_key: self
                 .signing_key
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .clone()?,
-            node: self.p2p_node.lock().unwrap_or_else(|e| e.into_inner()).clone()?,
+            node: self
+                .p2p_node
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()?,
             runtime: self.runtime.clone(),
+            seed: self
+                .seed_shared
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone(),
+            holder_domain: None,
         })
     }
 
     /// 在线目标数据账号（共享规则 `orgq_online_target`）：在线 peer 集经
     /// 节点命令通道取（spawn_blocking 上下文内 `Handle::block_on` 驱动，
     /// 与内核同步编排同口径——插件线程本身零 block_on）。
-    fn online_target(
-        ctx: &OrgqOnlineCtx,
-        org_id: &str,
-        col_full: &str,
-    ) -> Option<String> {
+    fn online_target(ctx: &OrgqOnlineCtx, org_id: &str, col_full: &str) -> Option<String> {
         let online_peers = ctx
             .runtime
             .block_on(ctx.node.local_node_info())
             .ok()
             .map(|info| info.connected_peers.into_iter().collect())
             .unwrap_or_default();
-        orgq_online_target(&ctx.storage, &online_peers, org_id, col_full, &ctx.my_root_id)
-    }
-
-    /// encrypted 集合写前加密（与 `data_save` 同口径：三条写路径统一携带
-    /// 密文；非 reader 无当前 epoch 密钥 → KeyUnavailable）。
-    fn encrypt_for_org_write(
-        &self,
-        decl: &crate::plugindata::CollectionDeclaration,
-        key: &str,
-        value: &Value,
-    ) -> Result<Value> {
-        let mut value = value.clone();
-        if decl.confidentiality == crate::plugindata::Confidentiality::Encrypted
-            && let Some(oid) = decl.org_id.as_deref()
-        {
-            let storage = self.require_storage()?;
-            let ct = crate::sync::orgsync::encrypt_orgd_value(
-                &storage,
-                oid,
-                &decl.name,
-                &decl.version,
-                key,
-                &value.to_string(),
-            )
-            .map_err(|e| match e {
-                crate::sync::orgsync::AccessDataError::KeyUnavailable(m) => {
-                    PluginError::KeyUnavailable(m)
-                }
-                other => PluginError::InvalidCall(format!("encrypt {key}: {other}")),
-            })?;
-            value = serde_json::from_str(&ct).unwrap_or(Value::String(ct));
-        }
-        Ok(value)
+        orgq_online_target(
+            &ctx.storage,
+            &online_peers,
+            org_id,
+            col_full,
+            &ctx.my_root_id,
+        )
     }
 
     /// `data.onlineGet`：在线拉取单条（prefix=key 精确查询 → 读缓存）。
-    pub(super) fn data_online_get(&self, rtx: &PluginRuntimeContext, payload: &Value) -> Result<Value> {
+    pub(super) fn data_online_get(
+        &self,
+        rtx: &PluginRuntimeContext,
+        payload: &Value,
+    ) -> Result<Value> {
         let call_id = payload.get("callId").and_then(Value::as_u64).unwrap_or(0);
         let key = required_str(payload, "key")?.to_string();
         let (decl, _storage) = self.resolve_data_declaration(rtx.plugin_id.as_str(), payload)?;
         let host = self.clone();
         let event_tx = rtx.event_tx.clone();
+        let domain = format!("plugin:{}", rtx.plugin_id);
         self.runtime.spawn(async move {
             let result = tokio::task::spawn_blocking(move || {
-                host.online_get_work(&decl, &key)
+                host.online_get_work(&decl, &key, &domain)
             })
             .await;
             let mut out = result.unwrap_or_else(|e| serde_json::json!({ "value": Value::Null, "error": format!("onlineGet task join failed: {e}") }));
@@ -115,17 +105,31 @@ impl PluginHostShared {
     }
 
     /// `data.onlineQuery`：在线前缀分页查询 → 读缓存页。
-    pub(super) fn data_online_query(&self, rtx: &PluginRuntimeContext, payload: &Value) -> Result<Value> {
+    pub(super) fn data_online_query(
+        &self,
+        rtx: &PluginRuntimeContext,
+        payload: &Value,
+    ) -> Result<Value> {
         let call_id = payload.get("callId").and_then(Value::as_u64).unwrap_or(0);
-        let prefix = payload.get("prefix").and_then(Value::as_str).map(str::to_string);
-        let limit = payload.get("limit").and_then(Value::as_u64).map(|n| n as usize);
-        let cursor = payload.get("cursor").and_then(Value::as_str).map(str::to_string);
+        let prefix = payload
+            .get("prefix")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let limit = payload
+            .get("limit")
+            .and_then(Value::as_u64)
+            .map(|n| n as usize);
+        let cursor = payload
+            .get("cursor")
+            .and_then(Value::as_str)
+            .map(str::to_string);
         let (decl, _storage) = self.resolve_data_declaration(rtx.plugin_id.as_str(), payload)?;
         let host = self.clone();
         let event_tx = rtx.event_tx.clone();
+        let domain = format!("plugin:{}", rtx.plugin_id);
         self.runtime.spawn(async move {
             let result = tokio::task::spawn_blocking(move || {
-                host.online_query_work(&decl, prefix.as_deref(), limit, cursor.as_deref())
+                host.online_query_work(&decl, prefix.as_deref(), limit, cursor.as_deref(), &domain)
             })
             .await;
             let mut out = result.unwrap_or_else(|e| {
@@ -143,16 +147,29 @@ impl PluginHostShared {
     /// `data.onlineSave` / `data.onlineDelete`：在线写入受理（三态应答：
     /// `accepted` / `denied` / `queued`——超时/失败回退离线入队，与 Tauri
     /// 通路「不丢写」口径一致）。
-    pub(super) fn data_online_save(&self, rtx: &PluginRuntimeContext, payload: &Value) -> Result<Value> {
+    pub(super) fn data_online_save(
+        &self,
+        rtx: &PluginRuntimeContext,
+        payload: &Value,
+    ) -> Result<Value> {
         self.online_write(rtx, payload, false)
     }
 
     /// `data.onlineDelete`（见 onlineSave）。
-    pub(super) fn data_online_delete(&self, rtx: &PluginRuntimeContext, payload: &Value) -> Result<Value> {
+    pub(super) fn data_online_delete(
+        &self,
+        rtx: &PluginRuntimeContext,
+        payload: &Value,
+    ) -> Result<Value> {
         self.online_write(rtx, payload, true)
     }
 
-    fn online_write(&self, rtx: &PluginRuntimeContext, payload: &Value, is_delete: bool) -> Result<Value> {
+    fn online_write(
+        &self,
+        rtx: &PluginRuntimeContext,
+        payload: &Value,
+        is_delete: bool,
+    ) -> Result<Value> {
         let call_id = payload.get("callId").and_then(Value::as_u64).unwrap_or(0);
         let key = required_str(payload, "key")?.to_string();
         let value = if is_delete {
@@ -161,23 +178,15 @@ impl PluginHostShared {
             payload.get("value").cloned().unwrap_or(Value::Null)
         };
         let (decl, _storage) = self.resolve_data_declaration(rtx.plugin_id.as_str(), payload)?;
-        // 写前加密（三条写路径统一携带密文；删除 value=null 不加密不可删——
-        // encrypt_for_org_write 对 Null 值仍走加密分支……delete 明确跳过）
-        let value = if is_delete {
-            Value::Null
-        } else {
-            self.encrypt_for_org_write(&decl, &key, &value)?
-        };
         let host = self.clone();
         let event_tx = rtx.event_tx.clone();
         self.runtime.spawn(async move {
-            let result = tokio::task::spawn_blocking(move || {
-                host.online_write_work(&decl, &key, &value)
-            })
-            .await;
-            let mut out = result.unwrap_or_else(|e| {
-                serde_json::json!({ "error": format!("online write task join failed: {e}") })
-            });
+            let result =
+                tokio::task::spawn_blocking(move || host.online_write_work(&decl, &key, &value))
+                    .await;
+            let mut out = result.unwrap_or_else(
+                |e| serde_json::json!({ "error": format!("online write task join failed: {e}") }),
+            );
             out["callId"] = Value::from(call_id);
             let _ = event_tx.send(PluginEvent::Dispatch {
                 kind: ONLINE_RESULT_KIND.to_string(),
@@ -191,37 +200,35 @@ impl PluginHostShared {
 
     /// onlineGet 工作体：本机驻留 → 本地读（委托 data_get 同规则）；非驻留 →
     /// 有在线数据账号投递查询后读缓存；超时/全离线 → 回退成员侧缓存。
+    /// `domain` = 调用方插件域（credential 门禁集合的 readAuth holder 匹配口径）。
     fn online_get_work(
         &self,
         decl: &crate::plugindata::CollectionDeclaration,
         key: &str,
+        domain: &str,
     ) -> Value {
         if decl.space != Some(crate::plugindata::Space::Org)
             || self.org_local_resident(decl).unwrap_or(true)
         {
-            let raw = self
-                .require_storage()
-                .and_then(|s| {
-                    crate::plugindata::get(&s, decl, key)
-                        .map_err(|e| PluginError::InvalidCall(e.to_string()))
-                });
-            let value = raw.ok().flatten().map(|text| {
-                serde_json::from_str(&text).unwrap_or(Value::String(text))
+            let raw = self.require_storage().and_then(|s| {
+                crate::plugindata::get(&s, decl, key)
+                    .map_err(|e| PluginError::InvalidCall(e.to_string()))
             });
+            let value = raw
+                .ok()
+                .flatten()
+                .map(|text| serde_json::from_str(&text).unwrap_or(Value::String(text)));
             return serde_json::json!({ "value": value });
         }
         let oid = decl.org_id.clone().unwrap_or_default();
         let col_full = format!("{}@v{}", decl.name, decl.version);
-        if let Some(ctx) = self.online_ctx()
+        if let Some(mut ctx) = self.online_ctx()
             && let Some(target) = Self::online_target(&ctx, &oid, &col_full)
         {
             // 在线投递（prefix=key 精确拉取）——应答到达即落缓存；超时继续读旧缓存
+            ctx.holder_domain = Some(domain.to_string());
             let _ = orgq_online_query(&ctx, &oid, decl, &target, Some(key), Some(1), None);
-            if let Some(v) = self
-                .orgq_cached_get(&ctx.storage, decl, key)
-                .ok()
-                .flatten()
-            {
+            if let Some(v) = self.orgq_cached_get(&ctx.storage, decl, key).ok().flatten() {
                 return serde_json::json!({ "value": v });
             }
         }
@@ -240,6 +247,7 @@ impl PluginHostShared {
         prefix: Option<&str>,
         limit: Option<usize>,
         cursor: Option<&str>,
+        domain: &str,
     ) -> Value {
         if decl.space != Some(crate::plugindata::Space::Org)
             || self.org_local_resident(decl).unwrap_or(true)
@@ -255,8 +263,9 @@ impl PluginHostShared {
         }
         let oid = decl.org_id.clone().unwrap_or_default();
         let col_full = format!("{}@v{}", decl.name, decl.version);
-        if let Some(ctx) = self.online_ctx() {
+        if let Some(mut ctx) = self.online_ctx() {
             if let Some(target) = Self::online_target(&ctx, &oid, &col_full) {
+                ctx.holder_domain = Some(domain.to_string());
                 let _ = orgq_online_query(&ctx, &oid, decl, &target, prefix, limit, cursor);
             }
             if let Ok(page) = self.orgq_cached_query(&ctx.storage, decl, prefix, limit, cursor) {
@@ -280,8 +289,8 @@ impl PluginHostShared {
         key: &str,
         value: &Value,
     ) -> Value {
-        // 本机驻留 → 本地写（委托 data_save/data_delete 的规则集：encrypted
-        // 已在调用点加密，此处直接落库）
+        // 本机驻留 → 本地写（委托 data_save/data_delete 的规则集；C7 后 orgd
+        // 值恒为明文，此处直接落库）
         if decl.space != Some(crate::plugindata::Space::Org)
             || self.org_local_resident(decl).unwrap_or(true)
         {
@@ -325,7 +334,11 @@ mod tests {
 
     /// 测试宿主：tempdir sled（版本化句柄镜像）+ 每用例一条事件通道
     /// （返回 (host, 事件接收端)）。
-    fn test_host() -> (PluginHostShared, std::sync::mpsc::Receiver<PluginEvent>, tempfile::TempDir) {
+    fn test_host() -> (
+        PluginHostShared,
+        std::sync::mpsc::Receiver<PluginEvent>,
+        tempfile::TempDir,
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let sled = crate::storage::SledStorage::open(dir.path().join("db")).unwrap();
         let storage = crate::sync::versioned::VersionedStorage::new(
@@ -434,7 +447,11 @@ mod tests {
         )
         .unwrap();
         let payload = recv_result(&rx2);
-        assert_eq!(payload["queued"], serde_json::json!(true), "全离线 → 入队确认");
+        assert_eq!(
+            payload["queued"],
+            serde_json::json!(true),
+            "全离线 → 入队确认"
+        );
         assert!(
             crate::sync::orgsync::orgq_queue_has_data(&host.require_storage().unwrap(), &org_id),
             "离线队列有条目（不丢写）"
@@ -467,7 +484,11 @@ mod tests {
         )
         .unwrap();
         let payload = recv_result(&rx2);
-        assert_eq!(payload["value"]["v"], serde_json::json!(42), "回退缓存返回缓存值");
+        assert_eq!(
+            payload["value"]["v"],
+            serde_json::json!(42),
+            "回退缓存返回缓存值"
+        );
     }
 
     /// onlineGet：本机驻留（personal 集合）→ 本地直读。
@@ -498,6 +519,10 @@ mod tests {
         )
         .unwrap();
         let payload = recv_result(&rx2);
-        assert_eq!(payload["value"]["n"], serde_json::json!(9), "驻留集合本地直读");
+        assert_eq!(
+            payload["value"]["n"],
+            serde_json::json!(9),
+            "驻留集合本地直读"
+        );
     }
 }

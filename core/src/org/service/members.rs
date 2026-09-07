@@ -12,15 +12,16 @@ use crate::identity::{
 };
 use crate::storage::StorageBackend;
 
+use super::super::genesis::enforce_member_kind;
 use super::super::recovery::RecoveryViewItem;
 use super::super::snapshot::{build_organization_sync_versions, pick_sync_sections_by_priority};
 use super::super::tx::{
     OrganizationTransactionRecord, OrganizationTransactionType, append_organization_transaction,
 };
 use super::super::types::{
-    OrganizationDeviceSet, OrganizationMember, OrganizationNodeInfo, OrganizationRecord,
-    OrganizationRole, OrganizationSyncState, OrganizationView, generate_recovery_secret,
-    normalize_optional_node_info, normalize_root_id, sort_members,
+    MemberKind, OrganizationDeviceSet, OrganizationMember, OrganizationNodeInfo,
+    OrganizationRecord, OrganizationRole, OrganizationSyncState, OrganizationView,
+    generate_recovery_secret, normalize_optional_node_info, normalize_root_id, sort_members,
 };
 use super::super::{OrgError, Result};
 use super::{
@@ -147,6 +148,11 @@ impl OrganizationService {
     ) -> Result<()> {
         Self::require_admin(record, current_root_id)?;
 
+        // 成员种类硬规则（org-genesis §3.2）：本路径只录入个人成员——目标域为
+        // 共同体域（community）时拒绝；组织成员加入走
+        // [`OrganizationService::validate_org_join`] 的跨组织路径。
+        enforce_member_kind(record.domain_type.unwrap_or_default(), MemberKind::Person)?;
+
         let normalized_root_id = normalize_root_id(member_root_id)?;
         let normalized_node_info = normalize_optional_node_info(node_info)?;
         // 端点化：addMember 的入参是单端点，聚合成端点集（按 deviceUid 键）。
@@ -196,6 +202,8 @@ impl OrganizationService {
                 region: None,
                 use_personal_identity: None,
                 access_key: None,
+                kind: None,
+                org_binding: None,
                 extra: Default::default(),
             });
             tx_type = OrganizationTransactionType::MemberAdd;
@@ -277,6 +285,8 @@ impl OrganizationService {
         current_root_id: &str,
         now_ms: i64,
     ) -> Result<bool> {
+        // 空域只读档案：共同体全员退出后无人能写入（含成员自写身份字段）。
+        Self::require_community_writable(storage, record)?;
         let Some(index) = record
             .members
             .iter()
@@ -418,6 +428,9 @@ impl OrganizationService {
         now_ms: i64,
     ) -> Result<()> {
         Self::require_admin(record, current_root_id)?;
+        // 空域只读档案：共同体全员退出后无人能写入（成员移除也是写路径；
+        // 组织成员的退出走 leave_community 的留史路径，不经本函数）。
+        Self::require_community_writable(storage, record)?;
 
         let normalized_root_id = normalize_root_id(member_root_id)?;
         let Some(index) = record
@@ -442,11 +455,9 @@ impl OrganizationService {
         // 卫生批项3：已退出成员的 org dlog 水位/已收键（wm/seen，设备粒度）
         // 随移除清理——残留键虽已被 GC 阈值计算排除（F8 修正：min 只取等待
         // 集合），但随成员更替累积。清理失败不阻断移除（残留仅积累噪音）。
-        if let Err(e) = crate::sync::orgsync::org_dlog_remove_member_marks(
-            storage,
-            org_id,
-            &normalized_root_id,
-        ) {
+        if let Err(e) =
+            crate::sync::orgsync::org_dlog_remove_member_marks(storage, org_id, &normalized_root_id)
+        {
             log::warn!("[ORG] remove member dlog marks cleanup failed: {e}");
         }
         // batch3 §2：成员移除 → 其相关管理面邀请投影（inviter 或 invitee
@@ -553,6 +564,8 @@ impl OrganizationService {
         now_ms: i64,
     ) -> Result<bool> {
         Self::require_admin(record, current_root_id)?;
+        // 空域只读档案：共同体全员退出后无人能写入（角色变更也是写路径）。
+        Self::require_community_writable(storage, record)?;
 
         let normalized_root_id = normalize_root_id(member_root_id)?;
         let Some(index) = record

@@ -29,6 +29,8 @@ fn member(root_id: &str) -> OrganizationMember {
         region: None,
         use_personal_identity: None,
         access_key: None,
+        kind: None,
+        org_binding: None,
         extra: Default::default(),
     }
 }
@@ -49,6 +51,7 @@ fn make_record(members: &[&str], data_accounts: &[&str]) -> OrganizationRecord {
         data_accounts: data_accounts.iter().map(|r| r.to_string()).collect(),
         org_address: None,
         is_public: false,
+        domain_type: None,
         extra: Default::default(),
     };
     record
@@ -668,27 +671,38 @@ fn builtin_collection_names_versions() {
     // batch3 §2：org:invitations 管理面投影集合加入（invpub 键域）
     assert!(BuiltinOrgCollection::all().len() == 3);
     assert_eq!(BuiltinOrgCollection::Invitations.name(), "org:invitations");
-    assert_eq!(BuiltinOrgCollection::Invitations.merge(), MergeRule::LwwRecord);
+    assert_eq!(
+        BuiltinOrgCollection::Invitations.merge(),
+        MergeRule::LwwRecord
+    );
 }
 
 /// 键域归属：内建集合映射到存量键前缀（键不搬家，零迁移）。
 #[test]
 fn builtin_collection_key_domains() {
     let org = "org_0000000000000001";
-    // R3：org:structure 额外承载 `org:acl:{orgId}:`（授权名单，all-members
-    // 系统数据）——全员经此集合同步 acl（否则随 encrypted 集合 data-accounts
-    // 复制组流动，普通成员收不到）。F2-P1：`org:coll:{orgId}:`（集合声明）
-    // 同性质并入——声明全员可见，不经 hello 复制组裁剪。阶段四A P1：
-    // `org:member:{orgId}:`（per-member 成员记录）并入——全员流动。
-    // 阶段四F：`org:evi:anchor:{orgId}:`（存证节点锚）并入——全员流动。
+    // F2-P1：`org:coll:{orgId}:`（集合声明）并入——声明全员可见，不经 hello
+    // 复制组裁剪。阶段四A P1：`org:member:{orgId}:`（per-member 成员记录）
+    // 并入——全员流动。阶段四F：`org:evi:anchor:{orgId}:`（存证节点锚）并入
+    // ——全员流动。C7：`org:acl:{orgId}:`（O4 授权名单）随 encrypted 轴退役
+    // 移出本键域。C1：`org:genesis:`（创世策略记录）/ `org:policy:`（策略
+    // 修订链）/ `org:verifiers:`（验证人信任声明）并入——组织策略与信任锚
+    // 属结构集合，全员流动。policy §2：`org:policydoc:`（发布策略文档，
+    // sigSet 合入校验）并入——同集合全员流动。退出留史：`org:cleave:`
+    // （共同体退出留史记录，append-only）并入——全员流动，各节点据此确定性
+    // 推导空域只读档案状态。
     assert_eq!(
         BuiltinOrgCollection::Structure.data_prefixes(org),
         vec![
             "org:meta:org_0000000000000001",
-            "org:acl:org_0000000000000001:",
             "org:coll:org_0000000000000001:",
             "org:member:org_0000000000000001:",
-            "org:evi:anchor:org_0000000000000001:"
+            "org:evi:anchor:org_0000000000000001:",
+            "org:genesis:org_0000000000000001",
+            "org:policy:org_0000000000000001:",
+            "org:verifiers:org_0000000000000001",
+            "org:policydoc:org_0000000000000001",
+            "org:cleave:org_0000000000000001:"
         ]
     );
     assert_eq!(
@@ -846,5 +860,8 @@ fn org_dlog_remove_member_marks_scoped() {
     assert!(s.get(&keys[3]).unwrap().is_some(), "Y 的键保留");
     assert!(s.get(&keys[4]).unwrap().is_some(), "其他 org 的 X 键保留");
     // 幂等：再清为零
-    assert_eq!(super::dlog::org_dlog_remove_member_marks(&mut s, org, &x).unwrap(), 0);
+    assert_eq!(
+        super::dlog::org_dlog_remove_member_marks(&mut s, org, &x).unwrap(),
+        0
+    );
 }

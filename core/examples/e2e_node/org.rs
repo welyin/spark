@@ -15,6 +15,7 @@ pub fn create(kernel: &mut Kernel, params: &Params) -> Result<Value, String> {
         description: params.opt_str("description").map(ToString::to_string),
         avatar: params.opt_str("avatar").map(ToString::to_string),
         base_plugin_domain: params.opt_str("basePluginDomain").map(ToString::to_string),
+        ..Default::default()
     }))
 }
 
@@ -108,10 +109,7 @@ pub fn set_member_role(kernel: &mut Kernel, params: &Params) -> Result<Value, St
 /// `org-remove-member`：移除成员（仅 admin；落库后向被移除者发
 /// org-member-removed 定向通知，失败入 org 域 pending 补投）。
 pub fn remove_member(kernel: &mut Kernel, params: &Params) -> Result<Value, String> {
-    to_json(kernel.org_remove_member(
-        params.need_str("orgId")?,
-        params.need_str("rootId")?,
-    ))
+    to_json(kernel.org_remove_member(params.need_str("orgId")?, params.need_str("rootId")?))
 }
 
 /// `org-update-my-identity`：改自己的组织内身份（avatar 三态："" 清除）。

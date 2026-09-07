@@ -1,17 +1,12 @@
 //! org golden vectors 验收测试：加载 `../spec/vectors/org.json` 逐条断言。
 //!
 //! 向量由 `desktop/scripts/extract-org-vectors.mts` 用真实 TS 实现生成：
-//! - nodeInfoClaim：真实 recover 的 root 密钥签名 → Rust 逐字节重建载荷 +
-//!   dalek 验签 nacl 签名 + 同密钥重签字节级一致（Ed25519 确定性签名）
 //! - 邀请码：真实 encode/decode 往返（含 24h 边界、未来 createdAt、中文错误消息）
 //! - recovery token / stale / buildSnapshot / merge：真实 TS 输出逐字段对齐
+//! （nodeInfoClaim 组已随 legacy claim 通道退役，不再逐条验收——向量文件
+//! 中该段保留作历史存档。）
 
 use serde_json::Value;
-use spark_core::identity::{derive_root_identity, parse_mnemonic};
-use spark_core::org::claim::{
-    ClaimVerification, NodeInfoClaim, build_node_info_claim_payload, sign_node_info_claim,
-    verify_node_info_claim,
-};
 use spark_core::org::gateway::org_members_dht_key;
 use spark_core::org::invite::{OrgInviteError, decode_org_invite_at, encode_org_invite};
 use spark_core::org::recovery::{active_recovery_tokens, recovery_time_bucket, recovery_token};
@@ -32,73 +27,6 @@ fn vectors() -> Value {
 
 fn versions_from(value: &Value) -> OrganizationSyncVersions {
     serde_json::from_value(value.clone()).expect("sync versions")
-}
-
-#[test]
-fn node_info_claim_cross_validation() {
-    let v = vectors();
-    let section = &v["nodeInfoClaim"];
-    let mnemonic = section["mnemonic"].as_str().unwrap();
-    let parsed = parse_mnemonic(mnemonic).unwrap();
-    let identity = derive_root_identity(&parsed.seed);
-    assert_eq!(identity.id(), section["rootId"].as_str().unwrap());
-
-    for case in section["cases"].as_array().unwrap() {
-        let name = case["name"].as_str().unwrap();
-        let claim: NodeInfoClaim =
-            serde_json::from_value(case["claim"].clone()).expect("claim deserializes");
-
-        // 1. 载荷逐字节一致（固定键序 + peerId ?? null 归一）
-        let payload = build_node_info_claim_payload(&claim.unsigned());
-        assert_eq!(
-            payload,
-            case["payload"].as_str().unwrap(),
-            "{name}: payload bytes"
-        );
-
-        // 2. dalek 验签 TS(nacl) 签名通过；负例 reason 对齐
-        assert_eq!(
-            verify_node_info_claim(&claim, NOW),
-            ClaimVerification::Ok,
-            "{name}: verify TS signature"
-        );
-        let mut tampered = claim.clone();
-        tampered.timestamp += 1;
-        assert_eq!(
-            verify_node_info_claim(&tampered, NOW),
-            ClaimVerification::InvalidSignature,
-            "{name}: tampered timestamp"
-        );
-        assert_eq!(
-            case["verifyTampered"]["reason"].as_str().unwrap(),
-            "invalid-signature"
-        );
-        assert_eq!(
-            verify_node_info_claim(&claim, NOW + 10 * 60 * 1000 + 1),
-            ClaimVerification::StaleClaim,
-            "{name}: stale"
-        );
-        assert_eq!(
-            case["verifyStale"]["reason"].as_str().unwrap(),
-            "stale-claim"
-        );
-
-        // 3. 同密钥同载荷重签：Ed25519 确定性签名 ⇒ 与 TS 签名逐字节一致
-        let resigned = sign_node_info_claim(
-            &identity.signing_key,
-            claim.node_info.clone(),
-            claim.timestamp,
-        );
-        assert_eq!(
-            resigned.signature, claim.signature,
-            "{name}: deterministic re-sign"
-        );
-        assert_eq!(
-            resigned.public_key, claim.public_key,
-            "{name}: publicKey base64"
-        );
-        assert_eq!(resigned.root_id, claim.root_id, "{name}: rootId");
-    }
 }
 
 #[test]

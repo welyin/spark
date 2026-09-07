@@ -164,6 +164,9 @@ impl From<QueryResult> for QueryResultDto {
 
 /// 创建组织入参（TS `CreateOrganizationInput`）。
 /// `basePluginDomain` 可选：组织与插件不再强关联（设计 §7.2）。
+/// `domainType` 可选（org-genesis §3.1）：`"leaf"`（缺省）/ `"community"` 共同体域；
+/// 创建时确定、不可变更。signingPolicy/transition/bornOf 不暴露于壳层入参
+/// （bornOf 权限在桥层强制；策略取产品默认值）。
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateOrgInputDto {
@@ -171,6 +174,7 @@ pub struct CreateOrgInputDto {
     pub description: Option<String>,
     pub avatar: Option<String>,
     pub base_plugin_domain: Option<String>,
+    pub domain_type: Option<spark_core::org::types::DomainType>,
 }
 
 impl From<CreateOrgInputDto> for CreateOrganizationInput {
@@ -180,6 +184,8 @@ impl From<CreateOrgInputDto> for CreateOrganizationInput {
             description: dto.description,
             avatar: dto.avatar,
             base_plugin_domain: dto.base_plugin_domain,
+            domain_type: dto.domain_type,
+            ..Default::default()
         }
     }
 }
@@ -245,6 +251,116 @@ impl From<InviteAcceptance> for InviteAcceptanceDto {
             org_id: acceptance.org_id,
             org_name: acceptance.org_name,
             member_count: acceptance.member_count,
+        }
+    }
+}
+
+// ------------------------------------------------------------------
+// 共同体域（组织加入共同体的邀请/接受流，org-genesis §3/§4）
+// ------------------------------------------------------------------
+
+/// 共同体邀请码创建结果（`communityCreateInvite` 返回）。
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatedCommunityInviteDto {
+    pub code: String,
+    pub community_org_id: String,
+    pub community_org_name: String,
+}
+
+impl From<spark_core::org::service::CreatedCommunityOrgInvite> for CreatedCommunityInviteDto {
+    fn from(created: spark_core::org::service::CreatedCommunityOrgInvite) -> Self {
+        Self {
+            code: created.code,
+            community_org_id: created.community_org_id,
+            community_org_name: created.community_org_name,
+        }
+    }
+}
+
+/// 共同体加入确认结果（`communityAcceptInvite` 返回）。
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CommunityAcceptDto {
+    pub community_org_id: String,
+    pub community_org_name: String,
+    /// 本组织在该共同体的域身份 id（成员条目 rootId 槽位）。
+    pub member_identity: String,
+    /// 是否已是成员（重复接受幂等）。
+    pub already_member: bool,
+    /// 加入通知是否已回发邀请人（尽力而为；false 不阻塞本地落库）。
+    pub notice_sent: bool,
+}
+
+impl From<spark_core::kernel::CommunityAcceptResult> for CommunityAcceptDto {
+    fn from(result: spark_core::kernel::CommunityAcceptResult) -> Self {
+        Self {
+            community_org_id: result.community_org_id,
+            community_org_name: result.community_org_name,
+            member_identity: result.member_identity,
+            already_member: result.already_member,
+            notice_sent: result.notice_sent,
+        }
+    }
+}
+
+/// 共同体退出结果（`communityLeave` 返回）。
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CommunityLeaveDto {
+    pub community_org_id: String,
+    pub community_org_name: String,
+    /// 退出组织在该共同体的域身份 id（名册成员条目 rootId 槽位）。
+    pub member_identity: String,
+    /// 本次退出是否使域进入空域只读档案（最后一个成员组织退出）。
+    pub domain_archived: bool,
+}
+
+impl From<spark_core::org::service::CommunityLeaveOutcome> for CommunityLeaveDto {
+    fn from(outcome: spark_core::org::service::CommunityLeaveOutcome) -> Self {
+        Self {
+            community_org_id: outcome.community_org_id,
+            community_org_name: outcome.community_org_name,
+            member_identity: outcome.member_identity,
+            domain_archived: outcome.domain_archived,
+        }
+    }
+}
+
+/// 成员的公开组织绑定（org-genesis §3.2 `orgBinding`，opt-in）。
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OrgBindingDto {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub org_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub org_address: Option<String>,
+}
+
+/// 共同体成员条目（`communityListMembers` 返回；名册中 kind=org 的成员）。
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CommunityMemberDto {
+    /// 组织在本共同体的域身份 id（64hex）。
+    pub identity: String,
+    /// 角色（"admin" | "member"）。
+    pub role: String,
+    pub joined_at: i64,
+    /// 公开组织绑定（未公开为 null——可见性策略如实呈现）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub org_binding: Option<OrgBindingDto>,
+}
+
+impl From<spark_core::org::service::CommunityOrgMemberView> for CommunityMemberDto {
+    fn from(member: spark_core::org::service::CommunityOrgMemberView) -> Self {
+        Self {
+            identity: member.identity,
+            role: member.role.as_str().to_string(),
+            joined_at: member.joined_at,
+            org_binding: member.org_binding.map(|b| OrgBindingDto {
+                org_id: b.org_id,
+                org_address: b.org_address,
+            }),
         }
     }
 }

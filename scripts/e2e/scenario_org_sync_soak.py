@@ -19,8 +19,7 @@ import re
 import time
 from pathlib import Path
 
-from node import Node, check, poll_until, run_scenario
-from scenario_org_orgq import join_org
+from node import Node, check, poll_until, run_scenario, join_org
 
 EVENT_TIMEOUT = 40.0
 # tick 总预算上限（10+10+10s，S2 已随 P3 删除）+ local_node_info 5s 兜底 + 余量

@@ -64,6 +64,7 @@ async fn test_loop_with(
         exchange_limiter: MinIntervalRateLimiter::new(0),
         recovery_limiter: MinIntervalRateLimiter::new(0),
         last_announced_at: 0,
+        last_indexer_card_at: 0,
         overlay_exchange_cursor: 0,
         started_emitted: false,
         port_persisted: false,
@@ -74,6 +75,10 @@ async fn test_loop_with(
         pending_exchange: HashMap::new(),
         pending_recovery: HashMap::new(),
         pending_recovery_extra: HashMap::new(),
+        pending_affair_meta: HashMap::new(),
+        affair_meta_limiter: MinIntervalRateLimiter::new(0),
+        pending_blob_fetch: HashMap::new(),
+        blob_fetch_limiter: MinIntervalRateLimiter::new(0),
         pending_forward: HashMap::new(),
         pending_forward_extra: HashMap::new(),
         pending_org_attempts: Vec::new(),
@@ -86,6 +91,7 @@ async fn test_loop_with(
         pending_dht_get: HashMap::new(),
         pending_dht_providers: HashMap::new(),
         provided_records: HashMap::new(),
+        provided_blobs: HashSet::new(),
         dht_tick_counter: 0,
         dht_republish_ticks: crate::p2p::constants::DHT_REPUBLISH_TICKS,
         pending_network_change: None,
@@ -117,8 +123,6 @@ async fn test_loop_with(
         plugin_announce_tenure_ms: PLUGIN_ANNOUNCE_RELAY_TENURE_MS,
         peer_connected_since: HashMap::new(),
         topic_cache: HashMap::new(),
-        org_pull_blackhole: false,
-        stalled_pull_channels: Vec::new(),
     }
 }
 
@@ -1322,4 +1326,218 @@ async fn relay_pool_record_backfills_stability() {
     let mut tier = vec![low_peer, normal_peer];
     sort_relay_tier(&mut tier, &last_seen, &is_low);
     assert_eq!(tier, vec![normal_peer, low_peer], "low 候选垫底");
+}
+
+// ------------------------------------------------------------------
+// 组织公开名片收录（affair-metadata §6，C11）
+// ------------------------------------------------------------------
+
+/// 构造签名的 org-card 信封文本（type='org-card'、domain='affair'、
+/// id=orgAddress、payload=§16 地址记录全文；时间戳与 test_loop 的 now_fn
+/// 同为 0）。
+fn org_card_envelope(id: &str, payload: Value) -> String {
+    let mut body = crate::p2p::envelope::build_org_body("org-card", payload);
+    body.insert("domain".to_string(), Value::String("affair".to_string()));
+    body.insert("id".to_string(), Value::String(id.to_string()));
+    let mut envelope = crate::p2p::envelope::Envelope::new(body, None, 0);
+    envelope.sign(&EnvelopeSigner::generate());
+    envelope.to_compact_json()
+}
+
+/// org-card 入站收录：线形合规且信封 id == orgAddress、§16.3 五步校验链
+/// 通过 → 沉淀 `p2p:org-address:` 本地缓存（冲突裁决：旧 seq 不覆盖）；
+/// id 不符 / 验签失败 / 过期记录静默丢弃。查询路径（kernel
+/// `resolve_org_address` / `search_known_orgs`）读本缓存，收录即接通。
+#[tokio::test]
+async fn org_card_intake_caches_address_record() {
+    let mut el = test_loop().await;
+    let org_key = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
+    let org_id = format!("org_{}", "ab".repeat(32));
+    // test_loop 的 now_fn 恒 0：published_at=0、ttl=默认 24h 恰在窗口内
+    let record = crate::org::sign_org_address_record(
+        &org_key,
+        &org_id,
+        Some("星火共同体".to_string()),
+        vec!["cd".repeat(32)],
+        1,
+        0,
+        crate::org::ORG_ADDRESS_RECORD_DEFAULT_TTL_MS,
+    );
+
+    // 合规信封：收录落缓存，读回字节一致
+    let text = org_card_envelope(
+        &record.org_address,
+        serde_json::to_value(&record).unwrap(),
+    );
+    el.handle_inbound_affair_meta(&text);
+    let cached = crate::org::read_cached_org_address_record(&el.storage, &record.org_address)
+        .expect("org-card 收录后应沉淀本地缓存");
+    assert_eq!(cached, record);
+
+    // 冲突裁决：同 orgAddress 旧 seq 记录不覆盖缓存
+    let stale = crate::org::sign_org_address_record(
+        &org_key,
+        &org_id,
+        Some("旧名片".to_string()),
+        vec![],
+        0,
+        0,
+        crate::org::ORG_ADDRESS_RECORD_DEFAULT_TTL_MS,
+    );
+    let text = org_card_envelope(&stale.org_address, serde_json::to_value(&stale).unwrap());
+    el.handle_inbound_affair_meta(&text);
+    let cached = crate::org::read_cached_org_address_record(&el.storage, &record.org_address)
+        .expect("缓存仍在");
+    assert_eq!(cached.seq, 1, "旧 seq 不得覆盖较新缓存");
+
+    // 信封 id ≠ orgAddress：丢弃
+    let other_key = ed25519_dalek::SigningKey::from_bytes(&[8u8; 32]);
+    let other = crate::org::sign_org_address_record(
+        &other_key,
+        &format!("org_{}", "ef".repeat(32)),
+        None,
+        vec![],
+        1,
+        0,
+        crate::org::ORG_ADDRESS_RECORD_DEFAULT_TTL_MS,
+    );
+    let text = org_card_envelope("org_mismatch", serde_json::to_value(&other).unwrap());
+    el.handle_inbound_affair_meta(&text);
+    assert!(
+        crate::org::read_cached_org_address_record(&el.storage, &other.org_address).is_none(),
+        "id 不符的信封不得收录"
+    );
+
+    // 验签失败（签名被篡改）：丢弃
+    let mut tampered = other.clone();
+    tampered.signature = record.signature.clone();
+    let text = org_card_envelope(&tampered.org_address, serde_json::to_value(&tampered).unwrap());
+    el.handle_inbound_affair_meta(&text);
+    assert!(
+        crate::org::read_cached_org_address_record(&el.storage, &other.org_address).is_none(),
+        "验签失败的记录不得收录"
+    );
+
+    // 已过期（published_at 远超 ttl 窗口）：丢弃
+    let expired = crate::org::sign_org_address_record(
+        &other_key,
+        &format!("org_{}", "ef".repeat(32)),
+        None,
+        vec![],
+        2,
+        -crate::org::ORG_ADDRESS_RECORD_MAX_TTL_MS - 1,
+        crate::org::ORG_ADDRESS_RECORD_MAX_TTL_MS,
+    );
+    let text = org_card_envelope(&expired.org_address, serde_json::to_value(&expired).unwrap());
+    el.handle_inbound_affair_meta(&text);
+    assert!(
+        crate::org::read_cached_org_address_record(&el.storage, &expired.org_address).is_none(),
+        "过期记录不得收录"
+    );
+
+    // 畸形 payload / 缺 id / 非 org-card 类型：静默不 panic
+    el.handle_inbound_affair_meta(&org_card_envelope(&other.org_address, Value::Null));
+    let mut body = crate::p2p::envelope::build_org_body("org-card", serde_json::to_value(&other).unwrap());
+    body.insert("domain".to_string(), Value::String("affair".to_string()));
+    let mut envelope = crate::p2p::envelope::Envelope::new(body, None, 0);
+    envelope.sign(&EnvelopeSigner::generate());
+    el.handle_inbound_affair_meta(&envelope.to_compact_json());
+    assert!(
+        crate::org::read_cached_org_address_record(&el.storage, &other.org_address).is_none(),
+        "畸形/缺 id 信封不得收录"
+    );
+}
+
+// ------------------------------------------------------------------
+// indexer 目录名片（affair-metadata §7 目录面，indexer-card）
+// ------------------------------------------------------------------
+
+/// 构造签名的 indexer-card 信封文本（type='indexer-card'、domain='affair'、
+/// id=peerId、payload=节点私钥签名的名片；线形同 gossip.rs 发布路径）。
+fn indexer_card_envelope(id: &str, payload: Value) -> String {
+    let mut body = crate::p2p::envelope::build_org_body("indexer-card", payload);
+    body.insert("domain".to_string(), Value::String("affair".to_string()));
+    body.insert("id".to_string(), Value::String(id.to_string()));
+    let mut envelope = crate::p2p::envelope::Envelope::new(body, None, 0);
+    envelope.sign(&EnvelopeSigner::generate());
+    envelope.to_compact_json()
+}
+
+/// 名片入站收录：线形合规（签名绑定 peerId）且信封 id == 卡内 peerId →
+/// 目录落账；id 不符 / 验签失败（payload 篡改）/ 本机自卡均不收录。
+#[tokio::test]
+async fn indexer_card_intake_updates_directory() {
+    use crate::index::directory::{
+        IndexCoverage, build_card, build_card_signing_payload, card_to_value, list_indexers,
+        parse_card,
+    };
+    let mut el = test_loop().await;
+    let other_kp = libp2p::identity::Keypair::generate_ed25519();
+    let other_peer = PeerId::from_public_key(&other_kp.public()).to_base58();
+    let coverage = IndexCoverage {
+        regions: vec!["110105".to_string()],
+        topics: Vec::new(),
+    };
+    let signing = build_card_signing_payload(&other_peer, &coverage, 1000);
+    let sig = other_kp.sign(signing.as_bytes()).unwrap();
+    let card = build_card(&other_peer, &coverage, 1000, &sig);
+
+    // 合规名片：收录入目录
+    el.handle_inbound_affair_meta(&indexer_card_envelope(&other_peer, card_to_value(&card)));
+    let entries = list_indexers(&mut el.storage, 0).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].peer_id, other_peer);
+    assert_eq!(entries[0].coverage.regions, vec!["110105".to_string()]);
+
+    // 信封 id ≠ 卡内 peerId：丢弃
+    let kp2 = libp2p::identity::Keypair::generate_ed25519();
+    let peer2 = PeerId::from_public_key(&kp2.public()).to_base58();
+    let signing2 = build_card_signing_payload(&peer2, &IndexCoverage::default(), 1000);
+    let sig2 = kp2.sign(signing2.as_bytes()).unwrap();
+    let card2 = build_card(&peer2, &IndexCoverage::default(), 1000, &sig2);
+    el.handle_inbound_affair_meta(&indexer_card_envelope(&other_peer, card_to_value(&card2)));
+    assert_eq!(list_indexers(&mut el.storage, 0).unwrap().len(), 1, "id 不符不得收录");
+
+    // 验签失败（payload 覆盖字段被篡改）：丢弃
+    let mut tampered = card_to_value(&card2);
+    tampered["topics"] = serde_json::json!(["forged"]);
+    el.handle_inbound_affair_meta(&indexer_card_envelope(&peer2, tampered));
+    assert_eq!(list_indexers(&mut el.storage, 0).unwrap().len(), 1, "验签失败不得收录");
+
+    // 本机自卡经 gossip 回灌（如多路径转发）：不重复收录（发布路径已落账）
+    let self_peer = el.self_peer_id().to_base58();
+    let self_signing = build_card_signing_payload(&self_peer, &IndexCoverage::default(), 1000);
+    let self_sig = el.keypair.sign(self_signing.as_bytes()).unwrap();
+    let self_card = build_card(&self_peer, &IndexCoverage::default(), 1000, &self_sig);
+    el.handle_inbound_affair_meta(&indexer_card_envelope(&self_peer, card_to_value(&self_card)));
+    let entries = list_indexers(&mut el.storage, 0).unwrap();
+    assert!(
+        entries.iter().all(|e| e.peer_id != self_peer),
+        "本机自卡不经入站路径收录"
+    );
+
+    // 收录的名片 payload 可被任何节点复验（确定性线形 + 签名自证）
+    let reparsed = parse_card(&card_to_value(&card)).unwrap();
+    assert_eq!(reparsed, card);
+}
+
+/// 发布路径：名片以本节点私钥签名（peerId 可复验），发布后自卡落本地目录
+/// （gossipsub 不回灌自发消息）。
+#[tokio::test]
+async fn publish_indexer_card_self_registers() {
+    use crate::index::directory::{IndexCoverage, list_indexers, parse_card};
+    let mut el = test_loop().await;
+    // test_loop 的 now_fn 恒 0：名片线形要求 updatedAt > 0，改为固定 1000
+    el.now_fn = Arc::new(|| 1000);
+    let coverage = IndexCoverage {
+        regions: vec!["110105".to_string()],
+        topics: vec!["hoa".to_string()],
+    };
+    let payload = el.publish_indexer_card_now(&coverage).unwrap();
+    let parsed = parse_card(&payload).expect("自发名片应通过校验链");
+    assert_eq!(parsed.peer_id, el.self_peer_id().to_base58());
+    assert_eq!(parsed.coverage, coverage);
+    let entries = list_indexers(&mut el.storage, 1000).unwrap();
+    assert_eq!(entries.len(), 1, "自卡应落本地目录");
+    assert_eq!(entries[0].peer_id, parsed.peer_id);
 }

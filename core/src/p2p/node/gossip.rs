@@ -1,5 +1,5 @@
 //! gossip 入站与信封发布：spark-overlay（node-announce / org-address 记录）与
-//! spark-sync（业务消息、org-share 推送与 ack）的 pubsub 处理，以及
+//! spark-sync（业务消息）的 pubsub 处理，以及
 //! `publish_envelope` / `publish_raw` 出口。
 
 use libp2p::PeerId;
@@ -7,7 +7,7 @@ use libp2p::gossipsub;
 use serde_json::{Map, Value};
 
 use crate::p2p::announce::{announce_to_json, prepare_publish_addresses, sign_node_announce};
-use crate::p2p::constants::{OVERLAY_TOPIC, PLUGIN_ANNOUNCE_TOPIC, SYNC_TOPIC};
+use crate::p2p::constants::{OVERLAY_TOPIC, PLUGIN_ANNOUNCE_TOPIC};
 use crate::p2p::envelope::Envelope;
 use crate::p2p::overlay_store::{OverlayPeerSource, OverlayPeerStore};
 use crate::p2p::plugin_announce::{AnnounceUpsert, PluginAnnounceReject, PluginAnnounceStore};
@@ -234,6 +234,159 @@ impl<S: StorageBackend> EventLoop<S> {
     }
 
     // ------------------------------------------------------------------
+    // 议题元数据公告 gossip 入站（affair-metadata §2/§4，C4）
+    // ------------------------------------------------------------------
+
+    /// spark-affair-meta 信封 `type='affair-meta'` 的入站校验链：
+    /// 信封规则（§3.4：携带签名则必须验签通过；本类型不强制签名）→ 公告线形
+    /// parse（metaV=1、affairId == 信封 id、metaSeq/updatedAt 存在）→ 交宿主
+    /// 回调（不落业务库，暂存区归 C10/宿主）。`type='org-card'` 信封分流到
+    /// [`Self::handle_inbound_org_card`]（affair-metadata §6 组织公开名片
+    /// 收录，C11）；`type='indexer-card'` 分流到
+    /// [`Self::handle_inbound_indexer_card`]（§7 indexer 目录名片收录）。
+    /// 其余类型静默丢弃（与 node-announce 同口径）。
+    pub(super) fn handle_inbound_affair_meta(&mut self, text: &str) {
+        let verified = match crate::p2p::envelope::parse_and_verify_envelope(text) {
+            Ok(v) => v,
+            Err(_) => return, // 信封验签失败/畸形：静默丢弃（§3.4）
+        };
+        if verified.msg_type == "org-card" {
+            self.handle_inbound_org_card(&verified);
+            return;
+        }
+        if verified.msg_type == crate::index::directory::INDEXER_CARD_TYPE {
+            self.handle_inbound_indexer_card(&verified);
+            return;
+        }
+        if verified.msg_type != "affair-meta" {
+            return;
+        }
+        let Some(affair_id) = verified.map.get("id").and_then(Value::as_str) else {
+            return;
+        };
+        let Some(payload) = verified.map.get("payload").cloned() else {
+            return;
+        };
+        // 线形 parse（affair-metadata §3）：字段缺失/类型错即丢弃
+        if payload.get("metaV").and_then(Value::as_u64) != Some(1) {
+            return;
+        }
+        if payload.get("affairId").and_then(Value::as_str) != Some(affair_id) {
+            return; // affairId 必须等于信封 id
+        }
+        if !crate::affair::is_valid_identity_id(affair_id) {
+            return;
+        }
+        if payload.get("metaSeq").and_then(Value::as_u64).is_none() {
+            return;
+        }
+        if payload.get("updatedAt").and_then(Value::as_i64).is_none() {
+            return;
+        }
+        self.host.on_affair_meta(payload);
+    }
+
+    /// 组织公开名片收录（affair-metadata §6，C11）：spark-affair-meta 主题
+    /// `type='org-card'` 信封，domain='affair'、id=orgAddress、payload =
+    /// 组织地址记录全文（org-address §16 线形）。
+    ///
+    /// 收录点校验链：信封 id 必须等于记录 orgAddress → §16.3 五步校验链
+    /// （结构 → ttl 窗口 → orgId 格式 → 自认证闭环 → 验签，记录本就自认证
+    /// 签名，无需新机制）→ seq/publishedAt 冲突裁决后沉淀本地缓存
+    /// （`p2p:org-address:` 前缀，与 spark-overlay `org-address` 入站同径
+    /// 同库）。查询路径 = kernel `resolve_org_address` / `search_known_orgs`
+    /// （读同一缓存，org.md §16.4），收录即接通。任一失败静默丢弃（与
+    /// node-announce 同口径）。
+    fn handle_inbound_org_card(&mut self, verified: &crate::p2p::envelope::VerifiedEnvelope) {
+        let Some(id) = verified.map.get("id").and_then(Value::as_str) else {
+            return;
+        };
+        let Some(payload) = verified.map.get("payload") else {
+            return;
+        };
+        let Ok(record) = serde_json::from_value::<crate::org::OrgAddressRecord>(payload.clone())
+        else {
+            return;
+        };
+        if record.org_address != id {
+            return; // 信封 id 必须等于 orgAddress（affair-metadata §6）
+        }
+        if !crate::org::verify_org_address_record(&record, self.now()).is_ok() {
+            return;
+        }
+        // 冲突裁决在 cache_org_address_record 内（seq 最大，同 seq 取 publishedAt 最新）
+        let _ = crate::org::cache_org_address_record(&mut self.storage, &record);
+    }
+
+    // ------------------------------------------------------------------
+    // indexer 目录名片（affair-metadata §7 目录面，indexer-card）
+    // ------------------------------------------------------------------
+
+    /// 发布本节点 indexer 名片：payload 以 libp2p 节点私钥签名（绑定 peerId，
+    /// node-announce 同款自证口径），装信封（type='indexer-card'、
+    /// domain='affair'、id=peerId）经 `spark-affair-meta` 洪泛；随后自卡
+    /// 落本地目录（gossipsub 不回灌自发消息，本机目录需显式补记）。
+    /// 返回名片 payload（调用方确认/测试断言用）。
+    pub(super) fn publish_indexer_card_now(
+        &mut self,
+        coverage: &crate::index::directory::IndexCoverage,
+    ) -> Result<Value> {
+        // leaf 模式 §3：叶子不为他人服务，发布切断（tick 路径已门控，此为
+        // 命令直达路径的双保险）
+        if self.leaf_mode {
+            return Err(P2pError::Protocol(
+                "indexer card publish disabled in leaf mode".to_string(),
+            ));
+        }
+        let peer_id = self.self_peer_id().to_base58();
+        let now = self.now();
+        let signing_payload =
+            crate::index::directory::build_card_signing_payload(&peer_id, coverage, now);
+        let signature = self
+            .keypair
+            .sign(signing_payload.as_bytes())
+            .map_err(|e| P2pError::Swarm(format!("indexer card sign failed: {e}")))?;
+        let card = crate::index::directory::build_card(&peer_id, coverage, now, &signature);
+        let payload = crate::index::directory::card_to_value(&card);
+        let mut body = Map::new();
+        body.insert(
+            "type".to_string(),
+            Value::String(crate::index::directory::INDEXER_CARD_TYPE.to_string()),
+        );
+        body.insert("domain".to_string(), Value::String("affair".to_string()));
+        body.insert("id".to_string(), Value::String(peer_id));
+        body.insert("payload".to_string(), payload.clone());
+        self.publish_envelope(crate::p2p::constants::AFFAIR_META_TOPIC, body)?;
+        // 自卡落本地目录（与入站收录同径同库）
+        let _ = crate::index::directory::upsert_card(&mut self.storage, &card, now);
+        Ok(payload)
+    }
+
+    /// `type='indexer-card'` 信封收录（§7）：信封 id 必须等于卡内 peerId →
+    /// 名片校验链（结构 + 覆盖线形 + peerId 内嵌公钥验签）→ 目录 upsert
+    /// （updatedAt 裁决 + 本地 TTL）。任一失败静默丢弃（与 node-announce
+    /// 同口径）；本机 peerId 的名片不重复收录（发布路径已落账）。
+    fn handle_inbound_indexer_card(&mut self, verified: &crate::p2p::envelope::VerifiedEnvelope) {
+        let Some(id) = verified.map.get("id").and_then(Value::as_str) else {
+            return;
+        };
+        let Some(payload) = verified.map.get("payload") else {
+            return;
+        };
+        let Ok(card) = crate::index::directory::parse_card(payload) else {
+            return;
+        };
+        if card.peer_id != id {
+            return; // 信封 id 必须等于卡内 peerId
+        }
+        if card.peer_id == self.self_peer_id().to_base58() {
+            return;
+        }
+        let now = self.now();
+        let _ = crate::index::directory::upsert_card(&mut self.storage, &card, now);
+    }
+
+    // ------------------------------------------------------------------
     // pubsub 业务消息（spark-sync）
     // ------------------------------------------------------------------
 
@@ -329,43 +482,6 @@ impl<S: StorageBackend> EventLoop<S> {
                     msg_type: verified.msg_type,
                     domain,
                 });
-            }
-            "org-share" => {
-                let payload = map.get("payload").cloned().unwrap_or(Value::Null);
-                match self.host.apply_incoming_org_share(payload, "pubsub") {
-                    Ok(Some(ack)) => {
-                        let org_id = ack.org_id.clone();
-                        let sync_id = ack.sync_id.clone();
-                        self.emit(P2pEvent::OrgShareAccepted {
-                            org_id,
-                            sync_id: sync_id.clone(),
-                            source: "pubsub",
-                        });
-                        if let Some(sync_id) = &ack.sync_id {
-                            let ack_payload = serde_json::json!({
-                                "syncId": sync_id,
-                                "orgId": ack.org_id,
-                                "targetRootId": ack.target_root_id,
-                                "receiverRootId": ack.receiver_root_id,
-                            });
-                            let body =
-                                crate::p2p::envelope::build_org_body("org-share-ack", ack_payload);
-                            if let Err(e) = self.publish_envelope(SYNC_TOPIC, body) {
-                                self.emit(P2pEvent::Warning(format!(
-                                    "org-share-ack broadcast failed: {e}"
-                                )));
-                            }
-                        }
-                    }
-                    Ok(None) => { /* 未接受，静默 */ }
-                    Err(e) => self.emit(P2pEvent::Warning(format!("org-share apply failed: {e}"))),
-                }
-            }
-            "org-share-ack" => {
-                let payload = map.get("payload").cloned().unwrap_or(Value::Null);
-                if payload.get("syncId").and_then(Value::as_str).is_some() {
-                    self.host.on_org_share_ack(payload);
-                }
             }
             _ => { /* 插件自定义等：不强制签名，p2p 不处理 */ }
         }

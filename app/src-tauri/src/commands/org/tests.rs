@@ -282,6 +282,66 @@ fn accept_invite_error_paths() {        let (_dir, mut kernel) = unlocked_kernel
 }
 
 // ------------------------------------------------------------------
+// 共同体域（组织加入共同体：community_*_inner 直调）
+// ------------------------------------------------------------------
+
+#[test]
+fn community_invite_accept_flow() {
+    let (_dir, mut kernel) = unlocked_kernel();
+    // 共同体域 + 待加入 leaf 组织（domainType 经 DTO camelCase 入参）
+    let community = create_inner(
+        &mut kernel,
+        serde_json::from_value(serde_json::json!({
+            "name": "阳光共同体",
+            "domainType": "community"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let joiner = create_inner(&mut kernel, input()).unwrap();
+    let community_id = community.record.org_id.clone();
+    let joiner_id = joiner.record.org_id.clone();
+
+    // leaf 域创建共同体邀请 → 域类型硬规则拒绝
+    assert_eq!(
+        community_create_invite_inner(&kernel, &joiner_id).unwrap_err(),
+        "Leaf domain only accepts person members"
+    );
+
+    // 创建邀请码 → 接受（公开绑定）→ 列成员
+    let created = community_create_invite_inner(&kernel, &community_id).unwrap();
+    assert_eq!(created.community_org_id, community_id);
+    let accepted =
+        community_accept_invite_inner(&mut kernel, &joiner_id, &created.code, true)
+            .unwrap();
+    assert_eq!(accepted.community_org_id, community_id);
+    assert!(!accepted.already_member);
+    assert!(!accepted.notice_sent); // 无回信寻址（未发布地址记录），不阻塞落库
+    assert_eq!(accepted.member_identity.len(), 64);
+
+    let members = community_list_members_inner(&kernel, &community_id).unwrap();
+    assert_eq!(members.len(), 1);
+    assert_eq!(members[0].identity, accepted.member_identity);
+    assert_eq!(
+        members[0].org_binding.as_ref().and_then(|b| b.org_id.as_deref()),
+        Some(joiner_id.as_str())
+    );
+
+    // DTO 线形：camelCase 键 + orgBinding 嵌套
+    let json = serde_json::to_value(&accepted).unwrap();
+    assert_eq!(json["communityOrgId"], community_id);
+    assert!(json.get("noticeSent").is_some());
+    let json = serde_json::to_value(&members[0]).unwrap();
+    assert_eq!(json["orgBinding"]["orgId"], joiner_id);
+    assert!(json["orgBinding"].get("orgAddress").is_some());
+
+    // 重复接受幂等；坏邀请码报错透传
+    let again = community_accept_invite_inner(&mut kernel, &joiner_id, &created.code, true).unwrap();
+    assert!(again.already_member);
+    assert!(community_accept_invite_inner(&mut kernel, &joiner_id, "not-a-code", true).is_err());
+}
+
+// ------------------------------------------------------------------
 // 命令层 patch 语义：org_update_info avatar 三态 / org_update_my_identity
 // ------------------------------------------------------------------
 

@@ -9,8 +9,8 @@
 //!   recoveryToken 形状（仅形状 `^[0-9a-f]{64}$`，不校验有效性）→ 从 peerId
 //!   提取内嵌公钥验签；
 //! - **导入口径**：一律按未验证提示 `remember(..., verified=false)` 入邻居池
-//!   并发起连接（见 kernel `import_node_card`）；后续组织校验照旧走
-//!   pull/claim 链路，信任边界不变。
+//!   并发起连接（见 kernel `import_node_card`）；组织成员关系以组织记录/
+//!   成员条目为准（邀请流 + orgsync 收敛），信任边界不变。
 
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD as B64, URL_SAFE_NO_PAD};

@@ -107,6 +107,7 @@ fn uninstall_keeps_package_path_outside_plugins_dir() {
             granted_permissions: vec![],
             trust: None,
             supported_spaces: None,
+            requires: None,
         },
     );
     service.persist().unwrap();
@@ -149,6 +150,7 @@ fn uninstall_refuses_symlink_escape() {
             granted_permissions: vec![],
             trust: None,
             supported_spaces: None,
+            requires: None,
         },
     );
     service.persist().unwrap();

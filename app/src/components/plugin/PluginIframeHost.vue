@@ -123,6 +123,8 @@ export default defineComponent({
       unlistenDataChanged = null;
       unlistenFeedReceived?.();
       unlistenFeedReceived = null;
+      unlistenAffairChanged?.();
+      unlistenAffairChanged = null;
       // 主视图实例登记清理（仅清自己：同插件新实例已接管时不误删）
       if (host) {
         unregisterMainViewInstance(props.pluginId, pluginSpaceKey(props.space), host);
@@ -143,6 +145,11 @@ export default defineComponent({
     // 社交投递入站推送（social-feed §8）：内核 FeedReceived → 桥 FeedReceived
     // 事件，按 topic 前缀（== pluginId）过滤后推给插件 sdk.feed.onReceive 订阅
     let unlistenFeedReceived: (() => void) | null = null;
+    // 事务副本变更推送（sdk.affairs.onChange）：内核 AffairChanged → 桥事件。
+    // 载荷只含 affairId 与变更类别（无插件归属维度），订阅了的插件实例都收
+    // （host.pushEvent 内部按订阅集合过滤；与 PluginDataChanged 同口径的
+    // 轻量通知，插件收到后重读 readLog 收敛）
+    let unlistenAffairChanged: (() => void) | null = null;
 
     const init = async (): Promise<void> => {
       const gen = ++generation;
@@ -285,6 +292,23 @@ export default defineComponent({
               return;
             }
             unlistenFeedReceived = un;
+          })
+          .catch(() => {});
+        // 事务副本变更推送（sdk.affairs.onChange）：AffairChanged → 桥事件。
+        // 无插件归属维度（affair 不属于任何插件），凡订阅的实例都推——
+        // host.pushEvent 按订阅集合过滤，未订阅的实例零开销。
+        void listenP2pEvents((event) => {
+          if (event.kind !== 'AffairChanged') {
+            return;
+          }
+          host?.pushEvent('AffairChanged', event.data);
+        })
+          .then((un) => {
+            if (isStale(gen)) {
+              un();
+              return;
+            }
+            unlistenAffairChanged = un;
           })
           .catch(() => {});
         watchdog?.startHeartbeat();

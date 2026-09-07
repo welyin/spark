@@ -69,10 +69,6 @@ pub(super) struct ForwardCtx {
 }
 
 pub(super) enum OrgAttemptKind {
-    /// org-share 直连推送：ok && syncId 匹配即 true。
-    Share { expected_sync_id: String },
-    /// org-pull：返回首个可解析响应 JSON。
-    Pull,
     /// dm 直连投递（`/spark/dm/1.0.0`）：返回对方应用层应答 JSON。
     Dm,
     /// org-mail 直连（`/spark/org-mail/1.0.0`，阶段四E）：返回应答 JSON
@@ -82,8 +78,6 @@ pub(super) enum OrgAttemptKind {
 
 /// org/dm 直连尝试的最终结果通道（按类别直接回传给调用方）。
 pub(super) enum OrgTx {
-    Share(oneshot::Sender<Result<bool>>),
-    Pull(oneshot::Sender<Result<Option<Value>>>),
     Dm(oneshot::Sender<Result<Option<Value>>>),
     /// org-mail（阶段四E）。
     Mail(oneshot::Sender<Result<Option<Value>>>),
@@ -94,8 +88,6 @@ impl OrgTx {
     /// 据此惰性回收滞留 attempt（拨号无响应等无事件路径下 vec 才有界）
     pub(super) fn is_closed(&self) -> bool {
         match self {
-            OrgTx::Share(tx) => tx.is_closed(),
-            OrgTx::Pull(tx) => tx.is_closed(),
             OrgTx::Dm(tx) => tx.is_closed(),
             OrgTx::Mail(tx) => tx.is_closed(),
         }
@@ -131,12 +123,6 @@ impl OrgAttempt {
     /// 地址/重试耗尽：按类别回传终态。
     pub(super) fn finish_exhausted(self) {
         match self.tx {
-            OrgTx::Share(tx) => {
-                let _ = tx.send(Ok(false));
-            }
-            OrgTx::Pull(tx) => {
-                let _ = tx.send(Ok(None));
-            }
             OrgTx::Dm(tx) => {
                 let _ = tx.send(Ok(None));
             }
@@ -171,6 +157,8 @@ pub(super) struct EventLoop<S: StorageBackend> {
     pub(super) exchange_limiter: MinIntervalRateLimiter,
     pub(super) recovery_limiter: MinIntervalRateLimiter,
     pub(super) last_announced_at: i64,
+    /// indexer 目录名片最近发布时间（与 node-announce 同节奏；角色启用才发）。
+    pub(super) last_indexer_card_at: i64,
     pub(super) overlay_exchange_cursor: u64,
     pub(super) started_emitted: bool,
     pub(super) port_persisted: bool,
@@ -181,6 +169,17 @@ pub(super) struct EventLoop<S: StorageBackend> {
     pub(super) pending_exchange:
         HashMap<request_response::OutboundRequestId, (PeerId, oneshot::Sender<Result<usize>>)>,
     pub(super) pending_recovery: HashMap<request_response::OutboundRequestId, RecoverySession>,
+    /// 内容面 blob 拉取（`/spark/blob-fetch/1.0.0`）：请求 id →（目标 CID，
+    /// 调用方等待器）。
+    pub(super) pending_blob_fetch:
+        HashMap<request_response::OutboundRequestId, super::blob_fetch::PendingBlobFetch>,
+    /// blob-fetch 应答侧限流（同一请求方最小间隔）。
+    pub(super) blob_fetch_limiter: MinIntervalRateLimiter,
+    /// indexer 查询：请求 id → 调用方等待器（单发单收，无 fan-out）。
+    pub(super) pending_affair_meta:
+        HashMap<request_response::OutboundRequestId, oneshot::Sender<Result<String>>>,
+    /// indexer 查询应答侧限流（affair-metadata §8）。
+    pub(super) affair_meta_limiter: MinIntervalRateLimiter,
     /// 同一恢复 session 的其余请求 → 首个请求 id。
     pub(super) pending_recovery_extra:
         HashMap<request_response::OutboundRequestId, request_response::OutboundRequestId>,
@@ -210,6 +209,10 @@ pub(super) struct EventLoop<S: StorageBackend> {
         HashMap<libp2p::kad::QueryId, oneshot::Sender<Result<Vec<String>>>>,
     /// 本网关职责内提供的 (key → value)，挂 keepalive tick 周期重发（§15）。
     pub(super) provided_records: HashMap<Vec<u8>, Vec<u8>>,
+    /// 内容面「持有即做种」：本节点声明为 provider 的 blob Kad key 集合
+    /// （`spark:blob:{cid}`），挂 keepalive tick 周期重发 start_providing
+    /// （provider 声明无 TTL，靠重发维持——dht-republish-libp2p §provider）。
+    pub(super) provided_blobs: HashSet<Vec<u8>>,
     /// keepalive tick 计数（DHT 节点存在记录按间隔重发）。
     pub(super) dht_tick_counter: u64,
     /// DHT 周期重发间隔（tick 计数；桌面默认 240≈4h，移动端 120≈2h）。
@@ -286,12 +289,6 @@ pub(super) struct EventLoop<S: StorageBackend> {
     pub(super) peer_connected_since: HashMap<PeerId, i64>,
     /// gossipsub topic → IdentTopic 缓存（构造含字符串哈希；topic 为协议常量集合）。
     pub(super) topic_cache: HashMap<String, gossipsub::IdentTopic>,
-    /// 故障注入（e2e 专用，org-sync-stall-fix §5）：true 时 org-pull 入站
-    /// 请求扣住应答通道不响应（复现对端半连接长超时）；org-share 不受影响。
-    pub(super) org_pull_blackhole: bool,
-    /// 黑洞模式挂起的 org-pull 应答通道（持有不响应，请求方走协议读超时；
-    /// 节点停止时随事件循环释放）。
-    pub(super) stalled_pull_channels: Vec<request_response::ResponseChannel<String>>,
 }
 
 /// 一块网卡的可拨号信息（自 `if_addrs::Interface` 抽取，便于单测构造）。
@@ -772,38 +769,22 @@ impl<S: StorageBackend> EventLoop<S> {
             } => {
                 self.begin_recovery_query(&token, &neighbors, want, tx);
             }
-            Command::OrgShareDirect {
-                node_info,
-                payload,
+            Command::AffairMetaQuery {
+                peer_id,
+                request,
                 tx,
             } => {
-                self.begin_org_attempt(node_info, payload, OrgTx::Share(tx), true, false);
+                self.begin_affair_meta_query(&peer_id, request, tx);
             }
-            Command::OrgPullRequest {
-                node_info,
-                request_json,
-                tx,
-            } => {
-                self.begin_org_attempt(
-                    node_info,
-                    Value::String(request_json),
-                    OrgTx::Pull(tx),
-                    false,
-                    false,
-                );
+            Command::PublishIndexerCard { coverage, tx } => {
+                let _ = tx.send(self.publish_indexer_card_now(&coverage));
             }
             Command::OrgMailRequest {
                 node_info,
                 request_json,
                 tx,
             } => {
-                self.begin_org_attempt(
-                    node_info,
-                    Value::String(request_json),
-                    OrgTx::Mail(tx),
-                    false,
-                    true,
-                );
+                self.begin_org_attempt(node_info, Value::String(request_json), OrgTx::Mail(tx));
             }
             Command::DmDirect {
                 node_info,
@@ -822,6 +803,18 @@ impl<S: StorageBackend> EventLoop<S> {
             Command::DhtGetRecord { key, tx } => self.begin_dht_get(key, tx),
             Command::DhtProvide { key, value, tx } => self.begin_dht_provide(key, value, tx),
             Command::DhtGetProviders { key, tx } => self.begin_dht_get_providers(key, tx),
+            Command::BlobProvide { cid, tx } => self.begin_blob_provide(&cid, tx),
+            Command::BlobStopProvide { cid, tx } => self.begin_blob_stop_provide(&cid, tx),
+            Command::BlobGetProviders { cid, tx } => self.begin_blob_get_providers(&cid, tx),
+            Command::BlobFetch { peer_id, cid, tx } => {
+                // CID 已在 API 边界校验；此处再解析一次供 pending 登记（失败属内部错误）
+                match crate::content::Cid::parse(&cid) {
+                    Ok(parsed) => self.begin_blob_fetch(&peer_id, parsed, tx),
+                    Err(e) => {
+                        let _ = tx.send(Err(P2pError::Malformed(format!("blob fetch: {e}"))));
+                    }
+                }
+            }
             Command::ChallengePeer { peer_id, tx } => self.begin_challenge(&peer_id, tx),
             Command::DisconnectPeer { peer_id, tx } => {
                 let result = match peer_id.parse::<PeerId>() {
@@ -881,11 +874,6 @@ impl<S: StorageBackend> EventLoop<S> {
             }
             Command::Tick { tx } => {
                 let _ = tx.send(self.run_keepalive_tick());
-            }
-            Command::SetOrgPullBlackhole { on, tx } => {
-                self.org_pull_blackhole = on;
-                log::info!("[p2p] fault injection: org-pull blackhole = {on}");
-                let _ = tx.send(Ok(()));
             }
             Command::TestAddExternalAddress { addr, tx } => {
                 // 测试专用：登记 external address（loopback 下 relay 预约

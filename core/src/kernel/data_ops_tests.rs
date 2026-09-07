@@ -33,6 +33,7 @@ fn member_write_to_offline_data_accounts_enqueues() {
             description: None,
             avatar: None,
             base_plugin_domain: None,
+            ..Default::default()
         })
         .unwrap();
     let org_id = org.record.org_id.clone();
@@ -92,6 +93,7 @@ fn data_orgq_read_plan_routes_offline_for_member() {
             description: None,
             avatar: None,
             base_plugin_domain: None,
+            ..Default::default()
         })
         .unwrap();
     let org_id = org.record.org_id.clone();
@@ -144,6 +146,7 @@ fn org_read_routes_to_member_cache() {
             description: None,
             avatar: None,
             base_plugin_domain: None,
+            ..Default::default()
         })
         .unwrap();
     let org_id = org.record.org_id.clone();
@@ -209,137 +212,6 @@ fn org_read_routes_to_member_cache() {
     assert_eq!(got["amt"], json!(9), "成员读 data-accounts 回缓存");
 }
 
-/// O4 工作项 4：encrypted 集合本地 save → `orgd:` 落密文 `{epoch,nonce,ct}`，
-/// 插件 data_get 读到明文（存储中间件透明加解密，插件不接触密钥/密文）。
-#[test]
-fn encrypted_save_stores_ciphertext_get_returns_plaintext() {
-    use crate::plugindata::Confidentiality;
-    let (_dir, mut kernel) = unlocked_kernel();
-    let org = kernel
-        .create_org(CreateOrganizationInput {
-            name: "测试组织".to_string(),
-            description: None,
-            avatar: None,
-            base_plugin_domain: None,
-        })
-        .unwrap();
-    let org_id = org.record.org_id.clone();
-    const BOB: &str = "b0b0000000000000000000000000000000000000000000000000000000000000";
-    kernel.org_add_member(&org_id, BOB, None).unwrap();
-    kernel
-        .data_declare_collection(
-            "plugin:ai-chat",
-            DeclareInput {
-                name: "ai-chat:payroll".to_string(),
-                version: Some("1.0.0".to_string()),
-                space: Some(Space::Org),
-                accounts: Some(Accounts::DataAccounts),
-                confidentiality: Some(Confidentiality::Encrypted),
-                scope: Some(Scope::Sync),
-                ..Default::default()
-            },
-            Some(&org_id),
-        )
-        .unwrap();
-    kernel
-        .data_grant_access(&org_id, "ai-chat:payroll", "1.0.0", &[BOB.to_string()])
-        .unwrap();
-    kernel
-        .data_save(
-            "plugin:ai-chat",
-            "ai-chat:payroll",
-            "k1",
-            json!({"amt": 100}),
-            Some("1.0.0"),
-            Some(&org_id),
-        )
-        .unwrap();
-    let data_key = format!("orgd:{org_id}:ai-chat:payroll@v1.0.0:k1");
-    let stored_raw = kernel
-        .require_storage()
-        .unwrap()
-        .get(&data_key)
-        .unwrap()
-        .unwrap();
-    let stored: serde_json::Value = serde_json::from_str(&stored_raw).unwrap();
-    assert!(stored.get("epoch").is_some(), "密文含 epoch");
-    assert!(stored.get("nonce").is_some(), "密文含 nonce");
-    assert!(stored.get("ct").is_some(), "密文含 ct");
-    assert!(stored.get("amt").is_none(), "密文不含明文内容");
-    assert!(!stored_raw.contains("100"), "明文不落 orgd 存储值");
-    let got = kernel
-        .data_get(
-            "plugin:ai-chat",
-            "ai-chat:payroll",
-            "k1",
-            Some("1.0.0"),
-            Some(&org_id),
-        )
-        .unwrap()
-        .expect("读取命中");
-    assert_eq!(got["amt"], json!(100), "插件读到明文");
-    let page = kernel
-        .data_query(
-            "plugin:ai-chat",
-            "ai-chat:payroll",
-            None,
-            Some(10),
-            None,
-            Some("1.0.0"),
-            Some(&org_id),
-        )
-        .unwrap();
-    assert_eq!(page.items.len(), 1);
-    let (rel, val) = &page.items[0];
-    assert_eq!(rel, "k1");
-    let v: serde_json::Value = serde_json::from_str(val).unwrap();
-    assert_eq!(v["amt"], json!(100), "query 解密返回明文");
-}
-
-/// O4 工作项 4：无密钥（非 reader）save encrypted 集合 → 拒绝
-/// （AEAD 语义：密钥持有者集合 = 写权限集合）。
-#[test]
-fn encrypted_save_rejected_without_key() {
-    use crate::plugindata::Confidentiality;
-    let (_dir, mut kernel) = unlocked_kernel();
-    let org = kernel
-        .create_org(CreateOrganizationInput {
-            name: "测试组织".to_string(),
-            description: None,
-            avatar: None,
-            base_plugin_domain: None,
-        })
-        .unwrap();
-    let org_id = org.record.org_id.clone();
-    kernel
-        .data_declare_collection(
-            "plugin:ai-chat",
-            DeclareInput {
-                name: "ai-chat:payroll".to_string(),
-                version: Some("1.0.0".to_string()),
-                space: Some(Space::Org),
-                accounts: Some(Accounts::DataAccounts),
-                confidentiality: Some(Confidentiality::Encrypted),
-                scope: Some(Scope::Sync),
-                ..Default::default()
-            },
-            Some(&org_id),
-        )
-        .unwrap();
-    let res = kernel.data_save(
-        "plugin:ai-chat",
-        "ai-chat:payroll",
-        "k1",
-        json!({"amt": 1}),
-        Some("1.0.0"),
-        Some(&org_id),
-    );
-    assert!(
-        res.is_err(),
-        "无密钥（未 grant）save encrypted 拒绝（KeyUnavailable）"
-    );
-}
-
 /// O7：org 分支（Some(oid) → resolve_org）同样强制插件前缀归属——插件 A 用
 /// 他插件 B 的集合名前缀调 org data_save → NamePrefixMismatch 拒绝（与个人
 /// 路径对称，防越权触达他插件集合）。
@@ -352,6 +224,7 @@ fn org_branch_rejects_cross_plugin_collection_prefix() {
             description: None,
             avatar: None,
             base_plugin_domain: None,
+            ..Default::default()
         })
         .unwrap();
     let org_id = org.record.org_id.clone();

@@ -555,7 +555,11 @@ mod tests {
         };
         let r = apply_personal_remote(&mut s, KEY, r#""stub""#, &stub_meta).unwrap();
         assert_eq!(r, ApplyResult::LocalWins, "ts=0 的 stub 对真实记录必输");
-        assert_eq!(s.get(KEY).unwrap().unwrap(), r#""real""#, "真实记录不被覆盖");
+        assert_eq!(
+            s.get(KEY).unwrap().unwrap(),
+            r#""real""#,
+            "真实记录不被覆盖"
+        );
         // 对照：ts>0 的并发远端同 vv 形态会赢（ts 裁决生效，无 ts 窗拦截）
         let real_remote = DocMeta {
             ts: 3000,

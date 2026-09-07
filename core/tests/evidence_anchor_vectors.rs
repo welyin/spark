@@ -202,7 +202,12 @@ fn inclusion_proof_byte_exact_and_tamper_fails() {
     let proof_a = inclusion_proof(&tree, "12D3KooWNodeA").unwrap();
     assert!(!verify_inclusion(&tree, "12D3KooWNodeC", &proof_a, root));
     // 证明长度截断必败
-    assert!(!verify_inclusion(&tree, "12D3KooWNodeC", &proof_c[..1], root));
+    assert!(!verify_inclusion(
+        &tree,
+        "12D3KooWNodeC",
+        &proof_c[..1],
+        root
+    ));
 }
 
 /// 与生成器同输入重建导出包（锚 A/B 落库后构建）。
@@ -269,13 +274,21 @@ fn export_package_tamper_and_broken_chain_fail() {
     let mut p = pkg.clone();
     p.entries[0].id = "forged".to_string();
     let r = verify_export_package(&serde_json::to_string(&p).unwrap());
-    assert!(!r.ok() && r.failures.iter().any(|f| f.contains('②')), "{:?}", r.failures);
+    assert!(
+        !r.ok() && r.failures.iter().any(|f| f.contains('②')),
+        "{:?}",
+        r.failures
+    );
 
     // 篡改条目 hash
     let mut p = pkg.clone();
     p.entries[1].hash = "00".repeat(32);
     let r = verify_export_package(&serde_json::to_string(&p).unwrap());
-    assert!(!r.ok() && r.failures.iter().any(|f| f.contains('②')), "{:?}", r.failures);
+    assert!(
+        !r.ok() && r.failures.iter().any(|f| f.contains('②')),
+        "{:?}",
+        r.failures
+    );
 
     // 篡改 head
     let mut p = pkg.clone();
@@ -287,7 +300,11 @@ fn export_package_tamper_and_broken_chain_fail() {
     let mut p = pkg.clone();
     p.anchors[0].head_seq += 1;
     let r = verify_export_package(&serde_json::to_string(&p).unwrap());
-    assert!(!r.ok() && r.failures.iter().any(|f| f.contains('③')), "{:?}", r.failures);
+    assert!(
+        !r.ok() && r.failures.iter().any(|f| f.contains('③')),
+        "{:?}",
+        r.failures
+    );
 
     // 篡改 proof（换 sibling）
     let mut p = pkg.clone();
@@ -295,23 +312,39 @@ fn export_package_tamper_and_broken_chain_fail() {
     p.anchor_proofs
         .insert(first_node, serde_json::json!(["00".repeat(32)]));
     let r = verify_export_package(&serde_json::to_string(&p).unwrap());
-    assert!(!r.ok() && r.failures.iter().any(|f| f.contains('③')), "{:?}", r.failures);
+    assert!(
+        !r.ok() && r.failures.iter().any(|f| f.contains('③')),
+        "{:?}",
+        r.failures
+    );
 
     // 篡改 anchorRoot
     let mut p = pkg.clone();
     p.anchor_root = Some("ff".repeat(32));
     let r = verify_export_package(&serde_json::to_string(&p).unwrap());
-    assert!(!r.ok() && r.failures.iter().any(|f| f.contains('③')), "{:?}", r.failures);
+    assert!(
+        !r.ok() && r.failures.iter().any(|f| f.contains('③')),
+        "{:?}",
+        r.failures
+    );
 
     // 篡改导出者签名
     let mut p = pkg.clone();
     p.exporter.sig = B64.encode([0x42; 64]);
     let r = verify_export_package(&serde_json::to_string(&p).unwrap());
-    assert!(!r.ok() && r.failures.iter().any(|f| f.contains('①')), "{:?}", r.failures);
+    assert!(
+        !r.ok() && r.failures.iter().any(|f| f.contains('①')),
+        "{:?}",
+        r.failures
+    );
 
     // 断链（删中间条目）
     let mut p = pkg.clone();
     p.entries.remove(1);
     let r = verify_export_package(&serde_json::to_string(&p).unwrap());
-    assert!(!r.ok() && r.failures.iter().any(|f| f.contains('②')), "{:?}", r.failures);
+    assert!(
+        !r.ok() && r.failures.iter().any(|f| f.contains('②')),
+        "{:?}",
+        r.failures
+    );
 }

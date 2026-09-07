@@ -9,7 +9,7 @@
 
 use super::{Kernel, KernelError, Result};
 use crate::evidence::{
-    AnchorRecord, ExportScope, EvidenceExportPackage, anchor_key, build_export_package,
+    AnchorRecord, EvidenceExportPackage, ExportScope, anchor_key, build_export_package,
     get_evidence_head, sign_anchor,
 };
 use crate::identity::derive_root_identity;

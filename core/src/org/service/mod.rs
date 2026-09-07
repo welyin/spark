@@ -11,26 +11,29 @@
 //!
 //! 代码组织：本文件为 [`OrganizationService`] 门面、公开输入/返回类型与各变更
 //! 路径共用的私有辅助（记录读写、admin 校验、sync 重建）；创建/删除在 `create`，
-//! 成员增删与各类视图在 `members`，邀请码生成/接受确认在 `invites`，入站数据
-//! 落库（快照/nodeInfoClaim）在 `snapshot_apply`，网关与公开标志在 `settings`；
-//! 阶段四A per-member 条目的自写/本地擦除在 `member_entries`（P2）；单测按域
-//! 拆在 `tests/`。
+//! 成员增删与各类视图在 `members`，邀请码生成/接受确认在 `invites`，网关与公开
+//! 标志在 `settings`；阶段四A per-member 条目的自写/本地擦除在 `member_entries`
+//! （P2）；单测按域拆在 `tests/`。（legacy org-share/org-pull 平面的入站落库
+//! `snapshot_apply` 已随该平面退役删除。）
 
 mod atomic;
+mod community;
 mod create;
 mod invite_records;
 mod invites;
 mod member_entries;
 mod members;
-mod members_access;
+mod policy_doc;
 mod settings;
-mod snapshot_apply;
+mod verifiers;
 
 /// F8：org:meta 写路径的原子段原语与注入锁类型（org-meta-rmw-fix §2.2）。
 pub use atomic::OrgMetaWriteLock;
-/// 阶段四A P2：本机被移出组织的本地擦除（removed 通知入站 / legacy pull
-/// Removed 分支共用）。
-pub use member_entries::wipe_org_local;
+/// 共同体加入/退出流（邀请码创建/接受落库/成员视图；org-genesis §3/§4 +
+/// community-model 退出留史与空域只读档案）。
+pub use community::{
+    CommunityJoinOutcome, CommunityLeaveOutcome, CommunityOrgMemberView, CreatedCommunityOrgInvite,
+};
 /// F7 存量迁移（org-invite-scope-fix §2.3）：org:invites 退出 orgsync 的
 /// 一次性清理（入站邀请记录清空 + 声明墓碑化），unlock 时幂等执行。
 pub use invite_records::migrate_org_invites_out_of_orgsync;
@@ -39,6 +42,19 @@ pub use invite_records::{
     invpub_projection, org_invpub_key, put_invite_record_with_projection,
     reconcile_outbound_invites_with_members,
 };
+/// 阶段四A P2：本机被移出组织的本地擦除（removed 通知入站 / legacy pull
+/// Removed 分支共用）。
+pub use member_entries::wipe_org_local;
+/// C1/C3 生产接线：创世记录入站校验、trustDecl 合入裁决、存储背衬
+/// OrgSigSet 验证上下文（orgsync-data 入站分支调用）。
+pub use verifiers::{
+    TrustDeclMerge, adjudicate_incoming_trust_decl, admit_incoming_genesis, load_policy_chain,
+    sigset_storage_closures,
+};
+/// B1 策略文档发布承载（sdk.policy.publish 发布键域 + orgsync-data 入站合入裁决）。
+pub use policy_doc::{
+    POLICY_DOC_PREFIX, PolicyDocMerge, adjudicate_incoming_policy_doc, policy_doc_key,
+};
 
 use serde_json::Value;
 
@@ -46,12 +62,16 @@ use crate::storage::{ScanOptions, StorageBackend};
 
 use super::snapshot::{build_organization_sync_versions, pick_sync_sections_by_priority};
 use super::types::{
-    ORG_META_PREFIX, OrganizationMember, OrganizationNodeInfo, OrganizationRecord,
+    DomainType, ORG_META_PREFIX, OrganizationMember, OrganizationNodeInfo, OrganizationRecord,
     OrganizationSyncState, org_member_key, organization_key,
 };
-use super::{OrgError, Result};
+use super::{BornOf, OrgError, Result, SigningPolicy, TransitionDecl};
 
-/// 创建组织输入（types.ts:95-99）。
+/// 创建组织输入（types.ts:95-99 + org-genesis §1 创世参数）。
+///
+/// C1：新组织一律为创世哈希型（orgId = `org_` + sha256(创世策略记录剔除
+/// sig)），创建时生成组织根密钥对、构造并签名创世策略记录落
+/// `org:genesis:{orgId}`；legacy `org_<16hex>` 仅为存量形态，不再产生。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CreateOrganizationInput {
     /// 组织名（trim + 连续空白归一）。
@@ -63,6 +83,19 @@ pub struct CreateOrganizationInput {
     pub avatar: Option<String>,
     /// 基础插件域（`plugin:` 前缀，可省——组织与插件不再强关联，设计 §7.2）。
     pub base_plugin_domain: Option<String>,
+    /// 域类型（org-genesis §3.1）：`None` = leaf（缺省向后兼容）；
+    /// `community` = 共同体域（成员为组织）。创建时确定、不可变更，显式落
+    /// 组织记录并与创世策略记录一致。
+    pub domain_type: Option<DomainType>,
+    /// 组织签名策略（org-genesis §1；`None` = 默认 any-admin）。m-of-n 须满足
+    /// 1 ≤ m ≤ n 且 n ≤ 创建时 admin 数（创建者为唯一初始 admin，即 n ≤ 1）。
+    pub signing_policy: Option<SigningPolicy>,
+    /// 单人→集体决策过渡声明（org-genesis §1；`None` = 产品「创建者默认值」
+    /// delayed-veto 声明，见 [`crate::org::default_transition_decl`]）。
+    pub transition: Option<TransitionDecl>,
+    /// 出生证明（org-genesis §6；决议创设组织时由内部调用方携带，普通创建
+    /// 为 `None`）。不暴露于壳层命令入参（权限在桥层强制）。
+    pub born_of: Option<BornOf>,
 }
 
 /// `createOrgInvite` 的返回（service.ts:315-339）。
@@ -150,7 +183,8 @@ impl OrganizationService {
         let rows = storage.scan(&ScanOptions::prefix(ORG_META_PREFIX))?;
         rows.into_iter()
             .map(|(_, value)| {
-                let record: OrganizationRecord = serde_json::from_str(&value).map_err(OrgError::from)?;
+                let record: OrganizationRecord =
+                    serde_json::from_str(&value).map_err(OrgError::from)?;
                 Self::assemble_members(storage, record)
             })
             .collect()
@@ -200,9 +234,7 @@ impl OrganizationService {
             // 墓碑条目排除（成员移除 = 成员记录墓碑）
             let is_tomb = storage
                 .get(&crate::sync::personal_meta_key(&key))?
-                .and_then(|raw| {
-                    serde_json::from_str::<crate::sync::meta::DocMeta>(&raw).ok()
-                })
+                .and_then(|raw| serde_json::from_str::<crate::sync::meta::DocMeta>(&raw).ok())
                 .is_some_and(|m| m.tombstone == Some(true));
             if is_tomb {
                 continue;
@@ -429,8 +461,8 @@ pub fn migrate_org_members_split<S: StorageBackend>(storage: &mut S) -> Result<u
             let key = org_member_key(&record.org_id, &member.root_id);
             if storage.get(&key)?.is_some() {
                 continue; // 已存在（含墓碑条目不复活：value 缺失但 pmeta 墓碑
-                          // 时 get 为 None——此处重写会与 whole 一致地恢复该
-                          // 成员，与 whole 的 members 段口径相同，可接受）
+                // 时 get 为 None——此处重写会与 whole 一致地恢复该
+                // 成员，与 whole 的 members 段口径相同，可接受）
             }
             storage.put(&key, &serde_json::to_string(member)?)?;
             written += 1;

@@ -22,9 +22,12 @@
 //!   成员侧缓存命名空间 + 在线数据账号目录 + 成员侧路由决策；
 //! - [`orgq_deliver`]（O3）：成员侧在线 orgq-req 投递的纯逻辑辅助——在途记录
 //!   读写 / TTL 清理 / 上限 / 写入回执存储 / 同步等待清除（三通路共享骨架）。
+//!
+//! C7（community-affairs §5）：org 集合级 `encrypted` 轴已退役——原
+//! `access`/`access_data` 的 orgkey 密钥表、org:acl、orgkey-deliver、
+//! encrypted 值加密面全部移除；`access` 仅存 Ed25519↔X25519 转换原语。
 
 pub(crate) mod access;
-mod access_data;
 mod builtin;
 mod collect;
 mod dlog;
@@ -35,18 +38,7 @@ mod orgq_deliver;
 mod orgq_online;
 mod orgq_queue;
 
-pub use access::{
-    AclRecord, KIND_ORGKEY_DELIVER, ORG_ACL_PREFIX, ORGKEY_DELIVER_STASH_PREFIX,
-    ORGKEY_PENDING_PREFIX, ORGKEY_PREFIX, ORGKEY_STASH_MAX_AGE_MS, ORGKEY_STASH_MAX_PER_ORG,
-    OrgkeyDeliver, acl_key, acl_merge, acl_sign, acl_sign_payload, acl_verify, box_epoch_key,
-    build_orgkey_deliver, decrypt_value, deliver_sign_payload, ed_pk_to_x25519, ed_sk_to_x25519,
-    encrypt_value, generate_epoch_key, get_epoch_key, max_known_epoch, orgkey_key,
-    orgkey_pending_for_org, orgkey_pending_key, orgkey_pending_put, orgkey_pending_remove,
-    orgkey_prefix, orgkey_stash_age_sweep, orgkey_stash_count, orgkey_stash_for_org,
-    orgkey_stash_key, orgkey_stash_put, orgkey_stash_remove, parse_acl_key, parse_orgkey_deliver,
-    put_epoch_key, unbox_epoch_key,
-};
-pub use access_data::{AccessDataError, current_acl_epoch, decrypt_orgd_value, encrypt_orgd_value};
+pub use access::{ed_pk_to_x25519, ed_sk_to_x25519};
 pub use builtin::{
     BuiltinOrgCollection, ORGSYNC_BATCH_BYTES, ORGSYNC_DLOG_ACK_RETRY_FIRST_MS,
     ORGSYNC_DLOG_ACK_RETRY_SECOND_MS, ORGSYNC_HELLO_DEBOUNCE_MS, builtin_collection_by_name,
@@ -67,10 +59,10 @@ pub use envelope::{
     parse_orgsync_data, parse_orgsync_hello, parse_orgsync_need, split_orgsync_batches,
 };
 pub use orgq::{
-    ORGQ_AUDIT_PREFIX, ORGQ_LIMIT_DEFAULT, ORGQ_LIMIT_MAX, OrgqReq, OrgqResp, OrgqRespRecord,
-    OrgqWriteRecord, build_orgq_query_req, build_orgq_query_resp, build_orgq_write_req,
-    build_orgq_write_resp, collect_orgq_records, collect_orgq_records_page, orgq_audit_log_delete,
-    parse_orgq_req, parse_orgq_resp, split_orgq_resp_batches,
+    ORGQ_LIMIT_DEFAULT, ORGQ_LIMIT_MAX, OrgqReq, OrgqResp, OrgqRespRecord, OrgqWriteRecord,
+    build_orgq_query_req, build_orgq_query_resp, build_orgq_write_req, build_orgq_write_resp,
+    collect_orgq_records, collect_orgq_records_page, parse_orgq_req, parse_orgq_resp,
+    split_orgq_resp_batches,
 };
 pub use orgq_cache::{
     ORGQ_CACHE_MAX_KEYS_PER_COLLECTION, orgq_cache_evict, orgq_cache_has_data, orgq_cache_key,
@@ -83,9 +75,9 @@ pub use orgq_deliver::{
     orgq_wait_cleared,
 };
 pub use orgq_online::{
-    MemberReadPlan, member_orgq_read_plan, orgq_da_degraded_key, orgq_da_online_key,
-    orgq_degraded_for_collection, orgq_mark_data_account_degraded, orgq_mark_data_account_online,
-    orgq_da_duty_observations, orgq_note_data_account_duty, orgq_online_data_accounts,
+    MemberReadPlan, member_orgq_read_plan, orgq_da_degraded_key, orgq_da_duty_observations,
+    orgq_da_online_key, orgq_degraded_for_collection, orgq_mark_data_account_degraded,
+    orgq_mark_data_account_online, orgq_note_data_account_duty, orgq_online_data_accounts,
     select_online_data_account, should_route_orgq,
 };
 pub use orgq_queue::{

@@ -58,8 +58,9 @@ impl OrganizationService {
 
     /// `acceptOrgInvite` 的前半段（service.ts:345-351）：解码校验 + 拒绝自邀。
     ///
-    /// 之后的 `connectAndPull`（连接邀请人并反熵拉取，可捎带自签 nodeInfoClaim）
-    /// 属网络层；拉取完成后调 [`Self::check_invite_accepted`] 确认。
+    /// 之后的连接邀请人与收敛等待属网络层（kernel `org_join_ops` 编排：
+    /// stub 自举 + orgsync-hello）；收敛完成后调 [`Self::check_invite_accepted`]
+    /// 确认。
     pub fn prepare_accept_invite(
         code: &str,
         current_root_id: &str,

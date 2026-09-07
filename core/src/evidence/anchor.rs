@@ -10,7 +10,7 @@
 //! 验签材料内嵌偏差（待协议守护会签补记 §6）：§6 字段表只有
 //! `anchorV/orgId/nodeId/headSeq/headHash/ts/sig`，但 sig 的验签键是 root
 //! 身份公钥，而 rootId = sha256hex(公钥) 不可逆推——锚记录不带公钥则任何
-//! 消费方（含导出包独立核验方）都无法验签。按 `org/claim.rs` nodeInfoClaim
+//! 消费方（含导出包独立核验方）都无法验签。按 `org/org_address` 地址记录
 //! 既有模式内嵌 `rootId` + `publicKey`（b64），两字段**入签名载荷**（防
 //! 公钥替换）。golden vectors 以此线形为验收权威。
 
@@ -109,11 +109,7 @@ pub fn sign_anchor(
         sig: String::new(),
     };
     let payload = anchor_sign_payload(&record);
-    record.sig = B64.encode(
-        root_signing_key
-            .sign(payload.as_bytes())
-            .to_bytes(),
-    );
+    record.sig = B64.encode(root_signing_key.sign(payload.as_bytes()).to_bytes());
     record
 }
 
@@ -331,7 +327,14 @@ mod tests {
     }
 
     fn anchor(b: u8, node: &str, seq: u64, hash: &str) -> AnchorRecord {
-        sign_anchor(&keypair(b), "org_0000000000000001", node, seq, hash, 1_720_000_000_000)
+        sign_anchor(
+            &keypair(b),
+            "org_0000000000000001",
+            node,
+            seq,
+            hash,
+            1_720_000_000_000,
+        )
     }
 
     #[test]
@@ -377,7 +380,12 @@ mod tests {
         assert_eq!(root1, hex::encode(anchor_leaf(&a)));
         let p1 = inclusion_proof(std::slice::from_ref(&a), "nodeA").unwrap();
         assert!(p1.is_empty());
-        assert!(verify_inclusion(std::slice::from_ref(&a), "nodeA", &p1, &root1));
+        assert!(verify_inclusion(
+            std::slice::from_ref(&a),
+            "nodeA",
+            &p1,
+            &root1
+        ));
 
         // 偶数叶
         let two = vec![a.clone(), b.clone()];
@@ -394,7 +402,10 @@ mod tests {
         for node in ["nodeA", "nodeB", "nodeC"] {
             let p = inclusion_proof(&three, node).unwrap();
             assert_eq!(p.len(), 2);
-            assert!(verify_inclusion(&three, node, &p, &root3), "{node} 证明通过");
+            assert!(
+                verify_inclusion(&three, node, &p, &root3),
+                "{node} 证明通过"
+            );
         }
 
         // 篡改 sibling / 换叶 / 错根 → 失败

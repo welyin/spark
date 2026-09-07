@@ -233,6 +233,17 @@ impl OrgSyncContext {
         )
         .await;
 
+        // S4) affairsync-hello 触发（affair-sync §7）：本机作为关注者，向各
+        //     已关注事务目录中已连接的关注者发送摘要。周期兜底——连接建立
+        //     后的收敛由本阶段覆盖（新连上的关注者下轮 tick 即被 hello 命中）；
+        //     关注/本地事务写入的即时触发走 AffairHello 请求（affair_ops）。
+        self.run_tick_stage(
+            "S4",
+            budgets.affairsync_hello,
+            self.maybe_send_affairsync_hello(&root_id, &connected, None),
+        )
+        .await;
+
         // 阶段四E（设计 §2.6）：orgsync hello 节奏后拉一轮跨组织邮箱
         //（复用既有 tick 触发点，不新增周期任务；未解锁/未启动时函数内
         // 静默无操作）。
@@ -250,10 +261,9 @@ impl OrgSyncContext {
             let node = std::sync::Arc::clone(&self.node);
             let root_id = root_id.clone();
             tokio::spawn(async move {
-                let _ = crate::kernel::org_mail_ops::org_mail_fetch_async(
-                    storage, node, seed, root_id,
-                )
-                .await;
+                let _ =
+                    crate::kernel::org_mail_ops::org_mail_fetch_async(storage, node, seed, root_id)
+                        .await;
             });
         }
     }

@@ -30,6 +30,19 @@ pub fn is_valid_root_id(root_id: &str) -> bool {
             .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
 }
 
+/// orgId 双形态（org-genesis §2 识别规则 = 长度判别）：
+/// legacy `^org_[0-9a-f]{16}$` / 创世哈希型 `^org_[0-9a-f]{64}$`；
+/// 两者之外的 orgId 一律非法。
+pub fn is_valid_org_id(org_id: &str) -> bool {
+    let Some(hex_part) = org_id.strip_prefix("org_") else {
+        return false;
+    };
+    (hex_part.len() == 16 || hex_part.len() == 64)
+        && hex_part
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+}
+
 /// `normalizeRootId`：trim + lowercase + 格式校验。
 pub fn normalize_root_id(root_id: &str) -> Result<String> {
     let normalized = root_id.trim().to_lowercase();

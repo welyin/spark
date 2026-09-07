@@ -340,20 +340,20 @@ fn decl_key_parsing_from_data_key() {
 #[test]
 fn org_declare_and_read_write_route_to_org_keys() {
     let mut s = MemoryStorage::new();
-    // org 声明：space=Org、accounts/confidentiality 生效、org_id 必填
+    // org 声明：space=Org、accounts 生效、org_id 必填（C7：confidentiality
+    // 轴已收缩为单值 filtered，声明仍带该字段）
     let input = DeclareInput {
         name: "ai-chat:finance".to_string(),
         version: Some("1.0.0".to_string()),
         space: Some(Space::Org),
         accounts: Some(Accounts::DataAccounts),
-        confidentiality: Some(Confidentiality::Encrypted),
         ..Default::default()
     };
     let decl = declare(&mut s, "ai-chat", input, 1000, Some("org_01")).unwrap();
     assert_eq!(decl.space, Some(Space::Org));
     assert_eq!(decl.org_id.as_deref(), Some("org_01"));
     assert_eq!(decl.accounts, Accounts::DataAccounts);
-    assert_eq!(decl.confidentiality, Confidentiality::Encrypted);
+    assert_eq!(decl.confidentiality, Confidentiality::Filtered);
     // 声明记录落在 org:coll: 键域
     assert!(
         s.get("org:coll:org_01:ai-chat:finance@v1.0.0")
@@ -372,7 +372,6 @@ fn org_declare_and_read_write_route_to_org_keys() {
         version: Some("1.0.0".to_string()),
         space: Some(Space::Org),
         accounts: Some(Accounts::DataAccounts),
-        confidentiality: Some(Confidentiality::Encrypted),
         ..Default::default()
     };
     let decl2 = declare(&mut s, "ai-chat", again, 2000, Some("org_01")).unwrap();
@@ -410,7 +409,8 @@ fn org_declare_and_read_write_route_to_org_keys() {
     assert!(get(&s, &decl, "k1").unwrap().is_none());
 }
 
-/// B5：org 声明 org_id 必填；encrypted 不得搭配 all-members。
+/// B5：org 声明 org_id 必填（C7：encrypted+all-members 冲突校验随 encrypted
+/// 轴退役移除）。
 #[test]
 fn org_declare_validation() {
     let mut s = MemoryStorage::new();
@@ -422,18 +422,6 @@ fn org_declare_validation() {
     };
     assert!(matches!(
         declare(&mut s, "ai-chat", no_oid, 1, None).unwrap_err(),
-        PlugindataError::DeclarationConflict(_)
-    ));
-    // encrypted + all-members 冲突
-    let bad = DeclareInput {
-        name: "ai-chat:y".to_string(),
-        space: Some(Space::Org),
-        accounts: Some(Accounts::AllMembers),
-        confidentiality: Some(Confidentiality::Encrypted),
-        ..Default::default()
-    };
-    assert!(matches!(
-        declare(&mut s, "ai-chat", bad, 1, Some("org_01")).unwrap_err(),
         PlugindataError::DeclarationConflict(_)
     ));
     // org 解析变体
@@ -483,4 +471,148 @@ fn declare_builtin_org_collections_registers_all_builtin() {
         .map(|raw| serde_json::from_str::<CollectionDeclaration>(&raw).unwrap())
         .unwrap();
     assert_eq!(decl.declared_at, 1000, "幂等保留首次声明时间");
+}
+
+// ── read-gate：readPolicy 声明字段（read-gate §2）─────────────────────────
+
+const GATE_ORG: &str = "org_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+fn credential_read_policy() -> ReadPolicy {
+    ReadPolicy {
+        kind: ReadPolicyKind::Credential,
+        cred_types: vec!["household-owner".to_string(), "resident".to_string()],
+        verifier_domain: GATE_ORG.to_string(),
+        policy_ref: None,
+    }
+}
+
+fn org_input_with_policy(name: &str, read_policy: Option<ReadPolicy>) -> DeclareInput {
+    DeclareInput {
+        name: name.to_string(),
+        version: Some("1.0.0".to_string()),
+        space: Some(Space::Org),
+        accounts: Some(Accounts::DataAccounts),
+        read_policy,
+        ..Default::default()
+    }
+}
+
+/// readPolicy 随声明记录持久化：解析往返字段一致，policyRef 缺省显式 null
+/// 上线形（与 golden 向量 readGate.declExt 口径一致）。
+#[test]
+fn read_policy_declare_parse_roundtrip() {
+    let mut s = MemoryStorage::new();
+    let decl = declare(
+        &mut s,
+        "ai-chat",
+        org_input_with_policy("ai-chat:finance", Some(credential_read_policy())),
+        1000,
+        Some("org_01"),
+    )
+    .unwrap();
+    assert_eq!(decl.read_policy, Some(credential_read_policy()));
+
+    let raw = s
+        .get("org:coll:org_01:ai-chat:finance@v1.0.0")
+        .unwrap()
+        .expect("声明记录已落库");
+    let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(value["readPolicy"]["kind"], "credential");
+    assert_eq!(
+        value["readPolicy"]["credTypes"],
+        serde_json::json!(["household-owner", "resident"])
+    );
+    assert_eq!(value["readPolicy"]["verifierDomain"], GATE_ORG);
+    assert!(
+        value["readPolicy"].get("policyRef").is_some_and(|v| v.is_null()),
+        "policyRef 缺省显式 null 上线形"
+    );
+    // 解析往返：线上记录 → 结构体字段完全一致
+    let parsed: CollectionDeclaration = serde_json::from_str(&raw).unwrap();
+    assert_eq!(parsed.read_policy, Some(credential_read_policy()));
+}
+
+/// 声明录入校验（早失败）：kind=credential 的必填面与字段形状非法即拒绝；
+/// readPolicy 仅 org 空间可声明。
+#[test]
+fn read_policy_validate_rejected_at_declare() {
+    let mut s = MemoryStorage::new();
+    // credTypes 空
+    let mut bad = credential_read_policy();
+    bad.cred_types = vec![];
+    assert!(matches!(
+        declare(&mut s, "ai-chat", org_input_with_policy("ai-chat:a", Some(bad)), 1, Some("org_01")).unwrap_err(),
+        PlugindataError::DeclarationConflict(_)
+    ));
+    // verifierDomain 非 orgId 双形态
+    let mut bad = credential_read_policy();
+    bad.verifier_domain = "not-an-org".to_string();
+    assert!(matches!(
+        declare(&mut s, "ai-chat", org_input_with_policy("ai-chat:b", Some(bad)), 1, Some("org_01")).unwrap_err(),
+        PlugindataError::DeclarationConflict(_)
+    ));
+    // policyRef 非 64 位小写 hex
+    let mut bad = credential_read_policy();
+    bad.policy_ref = Some("xyz".to_string());
+    assert!(matches!(
+        declare(&mut s, "ai-chat", org_input_with_policy("ai-chat:c", Some(bad)), 1, Some("org_01")).unwrap_err(),
+        PlugindataError::DeclarationConflict(_)
+    ));
+    // personal 空间声明 readPolicy → 拒绝
+    let personal = DeclareInput {
+        name: "ai-chat:p".to_string(),
+        read_policy: Some(credential_read_policy()),
+        ..Default::default()
+    };
+    assert!(matches!(
+        declare(&mut s, "ai-chat", personal, 1, None).unwrap_err(),
+        PlugindataError::DeclarationConflict(_)
+    ));
+}
+
+/// 向后兼容：无 readPolicy 的旧声明记录解析为 None，再序列化一字节不变
+/// （read-gate §2 变更注记：旧端解析忽略未知键无损，旧记录线形不动）。
+#[test]
+fn read_policy_absent_keeps_old_record_byte_identical() {
+    let old = r#"{"name":"ai-chat:finance","version":"1.0.0","scope":"sync","space":"org","accounts":"data-accounts","devices":"all","confidentiality":"filtered","sensitivity":"normal","merge":"lww-record","declaredAt":1000,"declaredBy":"root-x","ts":1000,"orgId":"org_01"}"#;
+    let decl: CollectionDeclaration = serde_json::from_str(old).unwrap();
+    assert_eq!(decl.read_policy, None);
+    assert_eq!(serde_json::to_string(&decl).unwrap(), old, "旧记录线形一字节不变");
+}
+
+/// 代际内不可变：同 name@version 以不同 readPolicy 重复声明 → 冲突；
+/// 相同 readPolicy → 幂等返回既有。
+#[test]
+fn read_policy_change_is_conflicting_declaration() {
+    let mut s = MemoryStorage::new();
+    declare(
+        &mut s,
+        "ai-chat",
+        org_input_with_policy("ai-chat:finance", Some(credential_read_policy())),
+        1000,
+        Some("org_01"),
+    )
+    .unwrap();
+    // 相同 readPolicy 幂等
+    let again = declare(
+        &mut s,
+        "ai-chat",
+        org_input_with_policy("ai-chat:finance", Some(credential_read_policy())),
+        2000,
+        Some("org_01"),
+    )
+    .unwrap();
+    assert_eq!(again.declared_at, 1000, "幂等保留首次声明");
+    // 无 readPolicy（= members 缺省）与 credential 门禁策略分歧 → 冲突
+    assert!(matches!(
+        declare(&mut s, "ai-chat", org_input_with_policy("ai-chat:finance", None), 3000, Some("org_01")).unwrap_err(),
+        PlugindataError::ConflictingDeclaration { .. }
+    ));
+    // 不同 credTypes 同样冲突（改 readPolicy = 同名新 version 声明）
+    let mut other = credential_read_policy();
+    other.cred_types = vec!["resident".to_string()];
+    assert!(matches!(
+        declare(&mut s, "ai-chat", org_input_with_policy("ai-chat:finance", Some(other)), 4000, Some("org_01")).unwrap_err(),
+        PlugindataError::ConflictingDeclaration { .. }
+    ));
 }

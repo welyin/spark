@@ -1,0 +1,19 @@
+{
+  "id": "spark-verify-hoa",
+  "domain": "plugin:spark-verify-hoa",
+  "name": "业主资格验证（示例）",
+  "version": "0.1.0",
+  "entryView": "default",
+  "description": "验证插件参考示例（C11，业主场景）：申请人侧材料提交引导 + 验证人侧审核签发资格凭证（业主/居住）。演示「验证插件是方法，验证人才是信任」的分工；凭证只暴露资格结论（户号），不含姓名证件号。诚实口径：签发/注销签名的主体是插件域身份（不证明验证人个人身份，issuerRootId 为自报文本），签发产物为演示级线形，不与内核凭证体系互操作（见插件 README）。本插件经手个人敏感材料，按产品规则强制 L1 源码公开可审计（见 spark-plugin.json 注释）。",
+  "category": "tool",
+  "supportedSpaces": ["org"],
+  "views": [
+    { "id": "default", "type": "app", "title": "业主验证" }
+  ],
+  "permissions": ["storage:read", "storage:write", "identity:sign", "credentials:read"],
+  "sdkVersion": "1",
+  "package": {
+    "updateManifestUrl": "https://github.com/welyin/spark/releases/latest/download/spark-plugin-spark-verify-hoa-manifest.json",
+    "packageName": "spark-plugin-spark-verify-hoa-0.1.0.spkg"
+  }
+}

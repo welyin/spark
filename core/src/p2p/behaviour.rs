@@ -19,16 +19,22 @@ use libp2p::{
 };
 
 use super::constants::{
-    DHT_RECORD_TTL_SECS, DIRECT_DM_PROTOCOL, DIRECT_ORG_MAIL_PROTOCOL, DIRECT_ORG_RECOVERY_PROTOCOL,
-    DIRECT_ORG_SHARE_PROTOCOL, DIRECT_PEER_EXCHANGE_PROTOCOL, DIRECT_VERSION_PROTOCOL,
+    AFFAIR_META_READ_TIMEOUT_MS, AFFAIR_META_RR_PROTOCOL, BLOB_FETCH_READ_TIMEOUT_MS,
+    DHT_RECORD_TTL_SECS, DIRECT_BLOB_FETCH_PROTOCOL, DIRECT_DM_PROTOCOL, DIRECT_ORG_MAIL_PROTOCOL,
+    DIRECT_ORG_RECOVERY_PROTOCOL, DIRECT_PEER_EXCHANGE_PROTOCOL, DIRECT_VERSION_PROTOCOL,
     DM_READ_TIMEOUT_MS, KAD_PROTOCOL_NAME, NODE_CHALLENGE_PROTOCOL, NODE_CHALLENGE_READ_TIMEOUT_MS,
-    ORG_MAIL_READ_TIMEOUT_MS, ORG_RECOVERY_READ_TIMEOUT_MS, ORG_SHARE_READ_TIMEOUT_MS,
-    PEER_EXCHANGE_READ_RESPONSE_TIMEOUT_MS, RELAY_DEFAULT_DATA_LIMIT_BYTES,
-    RELAY_DEFAULT_DURATION_LIMIT_SECS, RELAY_MAX_RESERVATIONS, VERSION_PROTOCOL_READ_TIMEOUT_MS,
+    ORG_MAIL_READ_TIMEOUT_MS, ORG_RECOVERY_READ_TIMEOUT_MS, PEER_EXCHANGE_READ_RESPONSE_TIMEOUT_MS,
+    RELAY_DEFAULT_DATA_LIMIT_BYTES, RELAY_DEFAULT_DURATION_LIMIT_SECS, RELAY_MAX_RESERVATIONS,
+    VERSION_PROTOCOL_READ_TIMEOUT_MS,
 };
 
 /// 直连协议单帧上限（1 MiB，防畸形放大；正常帧远小于此）。
 const MAX_FRAME_LEN: u64 = 1024 * 1024;
+
+/// blob-fetch 协议单帧上限：响应帧携带本体 base64（内容上限
+/// [`crate::content::CONTENT_BLOB_MAX_BYTES`] = 10 MiB ≈ 14 MB 线形），
+/// 取 16 MiB 留 JSON 包装余量；其余直连协议仍用 1 MiB。
+const BLOB_FETCH_FRAME_MAX_LEN: u64 = 16 * 1024 * 1024;
 
 /// 直连协议帧编解码：整段 UTF-8 JSON 作为单帧写入（**不在 codec 内关流**——
 /// request-response handler 在写完请求/响应后自行 `stream.close()`，对端以 EOF
@@ -51,6 +57,11 @@ impl JsonFrameCodec {
         Self {
             max_len: MAX_FRAME_LEN,
         }
+    }
+
+    /// 自定义单帧上限（blob-fetch 等大帧协议用；`Behaviour::with_codec` 装配）。
+    pub fn with_max_len(max_len: u64) -> Self {
+        Self { max_len }
     }
 }
 
@@ -258,11 +269,15 @@ pub struct SparkBehaviour {
     pub version_rr: request_response::Behaviour<VersionFrameCodec>,
     pub exchange_rr: request_response::Behaviour<JsonFrameCodec>,
     pub recovery_rr: request_response::Behaviour<JsonFrameCodec>,
-    pub org_share_rr: request_response::Behaviour<JsonFrameCodec>,
     /// org-mail（跨组织网关邮箱）直连（阶段四E，p2p-org-mail §21）。
     pub org_mail_rr: request_response::Behaviour<JsonFrameCodec>,
     pub node_challenge_rr: request_response::Behaviour<JsonFrameCodec>,
     pub dm_rr: request_response::Behaviour<JsonFrameCodec>,
+    /// indexer 查询（affair-metadata §8；C10）。
+    pub affair_meta_rr: request_response::Behaviour<JsonFrameCodec>,
+    /// 内容面 blob 拉取（public-topics §七「持有即做种」的传输协议；
+    /// 大帧 codec——响应携带本体 base64）。
+    pub blob_fetch_rr: request_response::Behaviour<JsonFrameCodec>,
 }
 
 /// 装配开关（测试可关闭 mDNS/UPnP）。
@@ -316,11 +331,13 @@ pub fn build_behaviour(
         gossipsub_config,
     )
     .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    // leaf 模式 §3：gossipsub 订阅全砍（SYNC/OVERLAY/PLUGIN_ANNOUNCE）——leaf
+    // leaf 模式 §3：gossipsub 订阅全砍（SYNC/OVERLAY/PLUGIN_ANNOUNCE/AFFAIR_META）——leaf
     // 不为他人中继（订阅一断 publish 自然空操作，与 gossip.rs 发布守卫双保险）。
     // PLUGIN_ANNOUNCE 亦砍：市场索引改经 pdsync `mkt:ann` 类目同步分发
     // （mobile-leaf-mode；plugin-dist §8 公告自含签名，PC 桥接收 gossip 后
     // 受管落库同步给叶子），leaf 不订阅、发布守卫（gossip.rs）保留。
+    // AFFAIR_META 同砍：轻客户端/叶子不订阅元数据面，只向 indexer 查询
+    // （affair-metadata §2「订阅与否由角色决定」）。
     if !options.leaf_mode {
         gossipsub_behaviour.subscribe(&gossipsub::IdentTopic::new(super::constants::SYNC_TOPIC))?;
         gossipsub_behaviour
@@ -328,6 +345,10 @@ pub fn build_behaviour(
         // 插件市场广播索引（plugin-dist §8；启动即订阅，relay 校验链在 gossip 层）
         gossipsub_behaviour.subscribe(&gossipsub::IdentTopic::new(
             super::constants::PLUGIN_ANNOUNCE_TOPIC,
+        ))?;
+        // 议题元数据公告（affair-metadata §2；不强制签名，暂存区归 C10）
+        gossipsub_behaviour.subscribe(&gossipsub::IdentTopic::new(
+            super::constants::AFFAIR_META_TOPIC,
         ))?;
     }
 
@@ -386,14 +407,6 @@ pub fn build_behaviour(
         request_response::Config::default()
             .with_request_timeout(Duration::from_millis(ORG_RECOVERY_READ_TIMEOUT_MS)),
     );
-    let org_share_rr = request_response::Behaviour::new(
-        [(
-            StreamProtocol::new(DIRECT_ORG_SHARE_PROTOCOL),
-            request_response::ProtocolSupport::Full,
-        )],
-        request_response::Config::default()
-            .with_request_timeout(Duration::from_millis(ORG_SHARE_READ_TIMEOUT_MS)),
-    );
     let node_challenge_rr = request_response::Behaviour::new(
         [(
             StreamProtocol::new(NODE_CHALLENGE_PROTOCOL),
@@ -418,6 +431,26 @@ pub fn build_behaviour(
         )],
         request_response::Config::default()
             .with_request_timeout(Duration::from_millis(DM_READ_TIMEOUT_MS)),
+    );
+    // C10：indexer 查询协议（affair-metadata §8；轻客户端 → 启用角色节点）
+    let affair_meta_rr = request_response::Behaviour::new(
+        [(
+            StreamProtocol::new(AFFAIR_META_RR_PROTOCOL),
+            request_response::ProtocolSupport::Full,
+        )],
+        request_response::Config::default()
+            .with_request_timeout(Duration::from_millis(AFFAIR_META_READ_TIMEOUT_MS)),
+    );
+    // 内容面 blob 拉取（public-topics §七）：大帧 codec（响应携带本体 base64），
+    // 超时按 10 MiB 本体在慢链路上的传输余量取 30s
+    let blob_fetch_rr = request_response::Behaviour::with_codec(
+        JsonFrameCodec::with_max_len(BLOB_FETCH_FRAME_MAX_LEN),
+        [(
+            StreamProtocol::new(DIRECT_BLOB_FETCH_PROTOCOL),
+            request_response::ProtocolSupport::Full,
+        )],
+        request_response::Config::default()
+            .with_request_timeout(Duration::from_millis(BLOB_FETCH_READ_TIMEOUT_MS)),
     );
 
     // Kad：Off 不挂载；Client 挂但只查不服务；Server 全量。
@@ -458,9 +491,10 @@ pub fn build_behaviour(
         version_rr,
         exchange_rr,
         recovery_rr,
-        org_share_rr,
         org_mail_rr,
         node_challenge_rr,
         dm_rr,
+        affair_meta_rr,
+        blob_fetch_rr,
     })
 }

@@ -73,7 +73,8 @@ export type BridgeCallMessage = {
   v: typeof BRIDGE_PROTOCOL_VERSION;
   type: 'call';
   id: string;
-  /** SDK 模块名（docs/identity/evidence/p2p/runtime/messages） */
+  /** SDK 模块名（docs/identity/evidence/p2p/runtime/messages/contacts/feed/sys/
+   *  affairs/credentials/policy；v:1 信封不变，新模块即新方法面） */
   module: string;
   method: string;
   args: unknown[];

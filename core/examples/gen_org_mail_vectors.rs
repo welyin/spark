@@ -77,7 +77,9 @@ fn envelope_with(from_org_address: Option<String>) -> OrgMailEnvelope {
 }
 
 fn main() {
-    let out = std::env::args().nth(1).expect("usage: gen_org_mail_vectors <out.json>");
+    let out = std::env::args()
+        .nth(1)
+        .expect("usage: gen_org_mail_vectors <out.json>");
     let sender = derive_domain_identity(&SEED_A, &org_mail_domain(ORG_A));
     let recipient = derive_domain_identity(&SEED_B, &org_mail_domain(ORG_B));
 
@@ -155,10 +157,17 @@ fn main() {
       },
     });
     // 自检：生成器产物必须过验签（防生成器与实现漂移）
-    assert!(spark_core::org::mailbox::orgmail_verify(&env_full), "self-check verify");
+    assert!(
+        spark_core::org::mailbox::orgmail_verify(&env_full),
+        "self-check verify"
+    );
     let plain = spark_core::org::mailbox::orgmail_unbox(&env_full, &recipient.signing_key)
         .expect("self-check unbox");
-    assert_eq!(String::from_utf8(plain).unwrap(), PLAIN, "self-check plaintext");
+    assert_eq!(
+        String::from_utf8(plain).unwrap(),
+        PLAIN,
+        "self-check plaintext"
+    );
     std::fs::write(&out, serde_json::to_string_pretty(&vectors).unwrap()).expect("write vectors");
     eprintln!("written {out}");
     // 防未用告警（生成器内值都已使用；sender 仅用于上游派生自检）

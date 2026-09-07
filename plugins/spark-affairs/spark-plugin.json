@@ -1,0 +1,16 @@
+{
+  "comment": "id 暂用插件短名；随分发模型迁移后改为仓库地址（见插件分发规格 §1）。C11 参考插件：公共议题客户端，sdk.affairs 能力面对接见 wiki/architecture/community-affairs.md §7.2；权限位 affairs:read / affairs:write / policy:write 等全高级（policy:write 服务决议 policy 效力的内容应用——决议结果作为策略草稿提交，见 service.applyOrgEffects；须声明才授予，见 market/permissions.rs）。",
+  "id": "spark-affairs",
+  "name": "公共议题客户端",
+  "icon": "",
+  "summary": "公共事务参考客户端：事务墙、议题详情、发起议题、贡献与投票（sdk.affairs）。",
+  "category": "social",
+  "version": "0.1.0",
+  "release": {
+    "assetNaming": "spark-plugin-spark-affairs-<version>.spkg",
+    "updateManifestAsset": "spark-plugin-spark-affairs-manifest.json",
+    "signatureAsset": "spark-plugin-spark-affairs-manifest.sig"
+  },
+  "permissions": ["affairs:read", "affairs:write", "identity:sign", "message:app", "policy:write"],
+  "mirrors": []
+}

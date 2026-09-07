@@ -71,6 +71,68 @@ pub(crate) struct OrgqOnlineCtx {
     /// 须为同步上下文（Tauri 命令线程 / spawn_blocking），插件 OS 线程不
     /// 直接持有 async 上下文）。
     pub runtime: tokio::runtime::Handle,
+    /// 解锁期 BIP39 种子（read-gate §3 查询侧 readAuth：holderProof 用调用方
+    /// 域身份私钥签名，域密钥由种子即时派生、不落盘）。None = 未解锁，
+    /// 查询不附 readAuth（维持现状语义）。
+    pub seed: Option<[u8; 64]>,
+    /// 查询发起方域（`plugin:{pluginId}`——holder 身份匹配口径，与
+    /// `credential_present_holder_proof` 的签名域同源）。None = 不构造 readAuth。
+    pub holder_domain: Option<String>,
+}
+
+/// 查询侧 readAuth 构造（read-gate §3）：`read_policy` 为 credential 门禁时，
+/// 从本地持有凭证（`cred:held:` 键域）筛选匹配 readPolicy 且 holder 为
+/// 调用方域身份的凭证，派生域私钥逐凭证签 holderProof（载荷绑定本次
+/// requestId/集合/呈现时刻）。
+///
+/// 无匹配凭证 / 门禁种类非 credential / 记录损坏 → `None`（查询不附
+/// readAuth，维持现状语义——服务端门禁 fail-closed 判 denied；best-effort
+/// 不阻塞查询本身）。
+pub fn build_query_read_auth<S: StorageBackend>(
+    storage: &S,
+    seed: &[u8; 64],
+    domain: &str,
+    read_policy: &crate::plugindata::ReadPolicy,
+    request_id: &str,
+    col_full: &str,
+    now: i64,
+) -> Option<crate::credential::ReadAuth> {
+    use base64::Engine as _;
+    use ed25519_dalek::Signer as _;
+
+    if read_policy.kind != crate::plugindata::ReadPolicyKind::Credential {
+        return None;
+    }
+    let holder = crate::identity::derive_domain_identity(seed, domain);
+    let holder_pub = base64::engine::general_purpose::STANDARD
+        .encode(holder.signing_key.verifying_key().to_bytes());
+    let policy = crate::credential::CredentialReadPolicy {
+        cred_types: read_policy.cred_types.clone(),
+        verifier_domain: read_policy.verifier_domain.clone(),
+    };
+    // 持有凭证全量扫描（cred:held: 本地键域；损坏记录跳过，不阻塞其余候选）
+    let held: Vec<crate::credential::Credential> = storage
+        .scan(&crate::storage::ScanOptions::prefix(
+            crate::credential::CRED_HELD_PREFIX,
+        ))
+        .ok()?
+        .into_iter()
+        .filter_map(|(_key, raw)| serde_json::from_str(&raw).ok())
+        .collect();
+    let presentable =
+        crate::credential::select_presentable_credentials(held, &policy, &holder_pub);
+    crate::credential::build_read_auth(
+        &presentable,
+        request_id,
+        col_full,
+        now,
+        &|payload| {
+            Some(
+                base64::engine::general_purpose::STANDARD
+                    .encode(holder.signing_key.sign(payload.as_bytes()).to_bytes()),
+            )
+        },
+    )
 }
 
 /// 当前是否有在线数据账号（决策复用 `select_online_data_account`，F4 按
@@ -89,8 +151,7 @@ pub(crate) fn orgq_online_target<S: StorageBackend>(
     if crate::org::roles::is_data_account(&record, my_root_id) {
         return None; // 本机是数据账号 → 本地直读，不投递
     }
-    let degraded =
-        crate::sync::orgsync::orgq_degraded_for_collection(storage, org_id, col_full);
+    let degraded = crate::sync::orgsync::orgq_degraded_for_collection(storage, org_id, col_full);
     select_online_data_account(&record, online_peer_ids, my_root_id, &degraded)
 }
 
@@ -190,6 +251,20 @@ pub(crate) fn orgq_online_query(
     {
         return Ok(false);
     }
+    // read-gate §3：credential 门禁集合在本地持有匹配凭证时附 readAuth
+    // 呈现段；无匹配凭证则不带（维持现状语义，服务端 fail-closed denied）。
+    let read_auth = match (&ctx.seed, &ctx.holder_domain, decl.read_policy.as_ref()) {
+        (Some(seed), Some(domain), Some(read_policy)) => build_query_read_auth(
+            &ctx.storage,
+            seed,
+            domain,
+            read_policy,
+            &request_id,
+            &col_full,
+            now,
+        ),
+        _ => None,
+    };
     let body = build_orgq_query_req(
         org_id,
         &col_full,
@@ -197,6 +272,7 @@ pub(crate) fn orgq_online_query(
         limit.unwrap_or(orgsync::ORGQ_LIMIT_DEFAULT),
         cursor,
         &request_id,
+        read_auth.as_ref(),
     );
     let arrived = orgq_deliver_and_wait(ctx, org_id, target_root_id, &request_id, body)?;
     if !arrived {
@@ -341,6 +417,7 @@ impl Kernel {
 
     /// 装配在线投递上下文（p2p/签名/身份就绪才给 Some；batch3 §3.2 编排
     /// 下沉后，Kernel facade 只是把字段装进共享 ctx 再调自由函数）。
+    /// holder_domain 由调用方按查询发起插件域补设（本层不感知域）。
     fn orgq_online_ctx(&self) -> Option<OrgqOnlineCtx> {
         Some(OrgqOnlineCtx {
             storage: self.require_storage().ok()?.clone(),
@@ -348,6 +425,8 @@ impl Kernel {
             signing_key: self.unlocked.as_ref()?.identity.signing_key.clone(),
             node: self.p2p.clone()?,
             runtime: self.runtime.handle().clone(),
+            seed: self.unlocked.as_ref().map(|u| u.seed),
+            holder_domain: None,
         })
     }
 
@@ -366,8 +445,11 @@ impl Kernel {
 
     /// 成员在线查询投递（data_query 的 Orgq 分支）：发 orgq-req 查询 → 等待
     /// 应答 → 从缓存返回分页。超时/失败回退成员侧缓存（无缓存空页）。
+    /// `domain` 为查询发起插件域（read-gate §3：credential 门禁集合据此
+    /// 匹配本机持有凭证的 holder 域身份并构造 readAuth 呈现段）。
     pub(crate) fn data_orgq_query(
         &self,
+        domain: &str,
         org_id: &str,
         decl: &CollectionDeclaration,
         target_root_id: &str,
@@ -375,7 +457,8 @@ impl Kernel {
         limit: Option<usize>,
         cursor: Option<&str>,
     ) -> Result<crate::plugindata::QueryPage> {
-        if let Some(ctx) = self.orgq_online_ctx() {
+        if let Some(mut ctx) = self.orgq_online_ctx() {
+            ctx.holder_domain = Some(domain.to_string());
             let _ = orgq_online_query(&ctx, org_id, decl, target_root_id, prefix, limit, cursor)?;
         }
         // 无论超时与否都从缓存读（应答到达已落缓存；超时则读旧缓存/空页）

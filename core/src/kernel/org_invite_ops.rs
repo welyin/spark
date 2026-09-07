@@ -12,8 +12,8 @@ use crate::contact::ContactService;
 use crate::org::{
     OrgInviteDirection, OrgInviteRecord, OrgInviteStatus, OrganizationService, decode_org_invite_at,
 };
-use crate::p2p::node::system_now_ms;
 use crate::p2p::PeerNodeInfo;
+use crate::p2p::node::system_now_ms;
 
 impl Kernel {
     // ------------------------------------------------------------------

@@ -179,8 +179,10 @@ export function createTauriApi(): ElectronAPI {
       info: () => call('p2p-info'),
       broadcast: (topic, message) => call('p2p-broadcast', topic, message),
       clearPeerRecords: () => call('p2p-clear-peer-records'),
-      // 定向反熵对账：内核编排（双向 stale 推送 + org-pull + removed 清理），
-      // 返回形状对齐 TS { attempted, synced, pullChecked, pullSynced, removed, skipped }
+      // 定向同步触发：内核连接目标 peer 并发送本机全部组织的 orgsync-hello
+      // （收敛异步由 orgsync 反熵完成；legacy org-pull 对账已退役）。
+      // 返回形状对齐 TS { attempted, synced, pullChecked, pullSynced, removed, skipped }，
+      // 其中 pull 字段恒 0（无 pull 发生）
       syncPeerOrganizations: (targetPeer) => call('p2p-sync-peer-organizations', targetPeer),
       // DHT 隐私开关：off=完全私有 / server=开放（默认）；client 为移动端预留
       getDhtMode: () => call('p2p-get-dht-mode'),
@@ -267,14 +269,7 @@ export function createTauriApi(): ElectronAPI {
       dataSaveBlob: (dataBase64) =>
         invoke('data_save_blob', { dataBase64 }),
       dataReadBlob: (hash) =>
-        invoke('data_read_blob', { hash }),
-      // O4 encrypted 授权名单（owner 侧）
-      dataGrantAccess: (orgId, name, version, members) =>
-        invoke('data_grant_access', { orgId, name, version, members }),
-      dataRevokeAccess: (orgId, name, version, members) =>
-        invoke('data_revoke_access', { orgId, name, version, members }),
-      dataListAccess: (orgId, name, version) =>
-        invoke('data_list_access', { orgId, name, version })
+        invoke('data_read_blob', { hash })
     },
     pluginMarket: {
       // 市场服务在 src-tauri market 模块（验签/下载/落状态/对账）；
@@ -322,8 +317,8 @@ export function createTauriApi(): ElectronAPI {
       setDataAccounts: (orgId, dataAccounts) => call('org-set-data-accounts', orgId, dataAccounts),
       setMemberRole: (orgId, memberRootId, role) => call('org-set-member-role', orgId, memberRootId, role),
       createInvite: (orgId) => call('org-invite-create', orgId),
-      // 内核 accept_invite 已编排全段：解码邀请 → 连接邀请人 → claim 捎带 →
-      // org-pull 拉取 → 成员确认（对齐 TS service.ts acceptOrgInvite）。
+      // 内核 accept_invite 已编排全段：解码邀请 → 连接邀请人 → stub 自举 +
+      // orgsync 收敛 → 成员确认（对齐 TS service.ts acceptOrgInvite）。
       acceptInvite: (code) => call('org-invite-accept', code),
       getSyncOverview: (orgId) => call('org-sync-overview', orgId),
       setPublic: (orgId, isPublic, displayName) =>
@@ -360,7 +355,23 @@ export function createTauriApi(): ElectronAPI {
           input.targetNickname ?? null
         ),
       respondInvite: (input) => call('org-respond-invite', input.inviteId, input.accept),
-      inviteRecords: (orgId) => call('org-invite-records', orgId)
+      inviteRecords: (orgId) => call('org-invite-records', orgId),
+      // 共同体域（组织加入共同体，org-genesis §3/§4）：邀请码模式同个人邀请，
+      // 传输换成跨组织网关邮箱（org-mail）；接受侧组织域身份由组织根密钥派生
+      communityCreateInvite: (communityOrgId) => call('community-invite-create', communityOrgId),
+      communitySendInvite: (input) =>
+        call(
+          'community-invite-send',
+          input.communityOrgId,
+          input.code,
+          input.toOrgAddress,
+          input.recipientDomainId,
+          input.gatewayPeerId ?? null,
+          input.gatewayAddresses ?? null
+        ),
+      communityAcceptInvite: (joinerOrgId, code, publishBinding) =>
+        call('community-invite-accept', joinerOrgId, code, publishBinding),
+      communityListMembers: (communityOrgId) => call('community-list-members', communityOrgId)
     },
     contacts: {
       overview: (spaceKey) => call('contact-overview', spaceKey),
@@ -398,6 +409,48 @@ export function createTauriApi(): ElectronAPI {
         call('feed-deliver', pluginId, topic, payload, recipients, replyTo ?? undefined, feedId ?? undefined),
       pull: (pluginId, topic, cursor, limit) =>
         call('feed-pull', pluginId, topic, cursor ?? undefined, limit ?? undefined)
+    },
+    // 内容面 blob（public-topics §七 sdk.content 域薄壳；权限
+    // storage:read/storage:write 在桥 dispatcher 层强制）
+    content: {
+      saveBlob: (dataBase64) => call('content-save-blob', dataBase64),
+      readBlob: (cid) => call('content-read-blob', cid),
+      fetchBlob: (cid) => call('content-fetch-blob', cid),
+      listBlobs: () => call('content-list-blobs'),
+      pinRoot: (cid, root) => call('content-pin-root', cid, root),
+      unpinRoot: (cid, root) => call('content-unpin-root', cid, root),
+      gcSweep: () => call('content-gc-sweep')
+    },
+    // community-affairs §7.2：sdk.affairs / sdk.credentials / sdk.policy 薄壳。
+    // 权限（affairs:read/write、credentials:read、policy:read/write）在桥
+    // dispatcher 层强制；credentials 的签名域由桥绑定身份注入（requireDomain）
+    affairs: {
+      follow: (genesis) => call('affairs-follow', genesis),
+      unfollow: (affairId) => call('affairs-unfollow', affairId),
+      listFollowed: () => call('affairs-list-followed'),
+      submitOp: (op) => call('affairs-submit-op', op),
+      readLog: (affairId) => call('affairs-read-log', affairId),
+      readRules: (affairId) => call('affairs-read-rules', affairId),
+      readResolution: (affairId) => call('affairs-read-resolution', affairId),
+      ladderStatus: (affairId) => call('affairs-ladder-status', affairId),
+      publicProfile: (identity) => call('affairs-public-profile', identity),
+      snapshotPayload: (affairId, asOf) => call('affairs-snapshot-payload', affairId, asOf ?? undefined),
+      readExec: (affairId) => call('affairs-read-exec', affairId),
+      orgEffects: (orgId, affairId) => call('affairs-org-effects', orgId, affairId),
+      applyOrgEffects: (orgId, affairId) => call('affairs-apply-org-effects', orgId, affairId)
+    },
+    credentials: {
+      listHeld: () => call('credentials-list-held'),
+      presentHolderProof: (pluginDomain, credId, requestId, orgId, collection) =>
+        call('credentials-present-holder-proof', requireDomain(pluginDomain), credId, requestId, orgId, collection),
+      queryVerifiers: (orgId) => call('credentials-query-verifiers', orgId),
+      verify: (credential) => call('credentials-verify', credential),
+      queryRevocations: (issuer) => call('credentials-query-revocations', issuer)
+    },
+    policy: {
+      read: (orgId) => call('policy-read', orgId),
+      submitDraft: (doc) => call('policy-submit-draft', doc),
+      publish: (orgId) => call('policy-publish', orgId)
     },
     messages: {
       listConversations: (spaceKey) => call('message-list-conversations', spaceKey),

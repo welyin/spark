@@ -135,14 +135,13 @@ impl Kernel {
             node_shared: Arc::clone(&self.p2p_node_shared),
             signing_key_shared: Arc::clone(&self.signing_key_shared),
             password_shared: Arc::clone(&self.password_shared),
-            seed_shared: Arc::clone(&self.seed_shared),
             data_dir: self.config.data_dir.clone(),
             pdsync_capable_self_devices: Arc::clone(&self.pdsync_capable_self_devices),
             collection_configs: Arc::clone(&self.collection_configs),
-            org_acks: Arc::clone(&self.org_acks),
             io_lock: Arc::clone(&self.io_lock),
             plugin_host_query: self.plugin_host_query_handle(),
             kverify_cache: Arc::new(std::sync::Mutex::new(None)),
+            indexer_role_shared: Arc::clone(&self.indexer_role_shared),
         });
         let node_fut = P2pNode::start(config, raw.clone(), host);
         // 启动超时护栏：MIUI 锁屏/后台网络受限等环境网络初始化可无限阻塞
@@ -645,8 +644,8 @@ impl Kernel {
 
     /// 导入节点名片（org.md §17.3-4）：完整校验链（结构 → 新鲜度 → token
     /// 形状 → 验签）→ **一律未验证口径**入覆盖网邻居池 → best-effort 发起
-    /// 连接（失败不使导入失败，错误记入返回值）。后续组织校验照旧走
-    /// pull/claim 链路，不在本命令内做（信任边界不变）。
+    /// 连接（失败不使导入失败，错误记入返回值）。组织成员关系校验由组织
+    /// 同步链路（邀请流 + orgsync 收敛）完成，不在本命令内做（信任边界不变）。
     pub fn import_node_card(&mut self, card: &str) -> Result<NodeCardImport> {
         let now = system_now_ms();
         let parsed = crate::org::parse_and_verify_node_card(card, now)
@@ -701,18 +700,6 @@ impl Kernel {
     /// 订阅 P2P 事件流（壳层消费；慢订阅者收到 `Lagged` 表示丢事件）。
     pub fn subscribe_p2p_events(&self) -> broadcast::Receiver<P2pEvent> {
         self.event_tx.subscribe()
-    }
-
-    /// 故障注入开关（**仅供 e2e 测试驱动**，e2e_node `fault-org-pull-blackhole`；
-    /// org-sync-stall-fix §5）：开启后本节点收到 org-pull 请求不应答（应答
-    /// 通道挂起至请求方协议读超时），复现「对端半连接长超时」。p2p 未启动
-    /// 报 `NotStarted`。
-    pub fn p2p_set_org_pull_blackhole(&self, on: bool) -> Result<()> {
-        let node = self.p2p.as_ref().ok_or(P2pError::NotStarted)?;
-        self.runtime
-            .handle()
-            .block_on(node.set_org_pull_blackhole(on))?;
-        Ok(())
     }
 
     // ------------------------------------------------------------------

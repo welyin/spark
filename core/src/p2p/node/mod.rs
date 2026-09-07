@@ -12,11 +12,13 @@
 //! 代码组织：本文件为节点句柄（启动/停止/事件流）与公开类型；对外命令方法在
 //! `api`，事件循环主体在 `event_loop`，swarm 事件分发在 `swarm_events`，gossip
 //! 入站与信封发布在 `gossip`，version/peer-exchange/org-recovery 三个
-//! request-response 协议在 `rr_protocols`，org-share/org-pull 直连在
+//! request-response 协议在 `rr_protocols`，org-mail 直连出站编排在
 //! `org_direct`，dm（1:1 聊天/好友请求）直连在 `dm`，Kad DHT 与 node-challenge
-//! 三层确认在 `dht`，keepalive tick 编排在 `tick`。
+//! 三层确认在 `dht`，内容面 blob 拉取（持有即做种传输协议）在 `blob_fetch`，
+//! keepalive tick 编排在 `tick`。
 
 mod api;
+mod blob_fetch;
 mod dht;
 mod dm;
 mod event_loop;
@@ -44,7 +46,8 @@ use crate::storage::StorageBackend;
 use super::announce::NodeAnnounceValidator;
 use super::behaviour::{BehaviourOptions, DhtMode, SparkBehaviour, build_behaviour};
 use super::constants::{
-    CHALLENGE_MIN_INTERVAL_MS, DM_MIN_INTERVAL_MS, ORG_KEEPALIVE_INTERVAL_MS, P2P_LISTEN_WS_PORT,
+    AFFAIR_META_QUERY_MIN_INTERVAL_MS, BLOB_FETCH_MIN_INTERVAL_MS, CHALLENGE_MIN_INTERVAL_MS,
+    DM_MIN_INTERVAL_MS, ORG_KEEPALIVE_INTERVAL_MS, P2P_LISTEN_WS_PORT,
     PEER_EXCHANGE_MIN_INTERVAL_MS, PLUGIN_ANNOUNCE_MIN_POW_BITS, PLUGIN_ANNOUNCE_RELAY_TENURE_MS,
     RECOVERY_QUERY_MIN_INTERVAL_MS,
 };
@@ -265,12 +268,6 @@ pub enum P2pEvent {
         responder: String,
         merged: usize,
     },
-    /// org-share 推送被接受（pubsub/直连）。
-    OrgShareAccepted {
-        org_id: String,
-        sync_id: Option<String>,
-        source: &'static str,
-    },
     /// 数据类消息已交宿主落库。
     SyncMessageApplied {
         msg_type: String,
@@ -344,6 +341,16 @@ pub enum P2pEvent {
         verified: bool,
         error: Option<String>,
     },
+    /// 议题元数据公告入暂存区并入索引（affair-metadata §4/§5；C10）。
+    AffairMetaReceived {
+        affair_id: String,
+    },
+    /// 事务本地副本变更通知（sdk.affairs.onChange 的事件源）：关注/取关/
+    /// 本地提交操作/复制面入站合入后发出。data 为
+    /// `{"affairId", "change": "followed"|"unfollowed"|"submitted"|"replicated",
+    ///   "opHash"?, "status"?, "accepted"?}`——变更通知不是可靠队列，插件
+    /// 收到后应重读 readLog 收敛（与 PluginDataChanged 同口径）。
+    AffairChanged(serde_json::Value),
     /// keepalive tick 完成（宿主应执行组织层保活）。
     KeepaliveTick(KeepaliveStats),
     /// M5 延迟恢复请求状态更新（initiated / vetoed / committed）。`from_device`
@@ -484,6 +491,7 @@ impl P2pNode {
             exchange_limiter: MinIntervalRateLimiter::new(PEER_EXCHANGE_MIN_INTERVAL_MS),
             recovery_limiter: MinIntervalRateLimiter::new(RECOVERY_QUERY_MIN_INTERVAL_MS),
             last_announced_at: 0,
+            last_indexer_card_at: 0,
             overlay_exchange_cursor: 0,
             started_emitted: false,
             port_persisted: false,
@@ -494,6 +502,10 @@ impl P2pNode {
             pending_exchange: HashMap::new(),
             pending_recovery: HashMap::new(),
             pending_recovery_extra: HashMap::new(),
+            pending_affair_meta: HashMap::new(),
+            affair_meta_limiter: MinIntervalRateLimiter::new(AFFAIR_META_QUERY_MIN_INTERVAL_MS),
+            pending_blob_fetch: HashMap::new(),
+            blob_fetch_limiter: MinIntervalRateLimiter::new(BLOB_FETCH_MIN_INTERVAL_MS),
             pending_forward: HashMap::new(),
             pending_forward_extra: HashMap::new(),
             pending_org_attempts: Vec::new(),
@@ -506,6 +518,7 @@ impl P2pNode {
             pending_dht_get: HashMap::new(),
             pending_dht_providers: HashMap::new(),
             provided_records: HashMap::new(),
+            provided_blobs: HashSet::new(),
             dht_tick_counter: 0,
             dht_republish_ticks: config
                 .dht_republish_ticks
@@ -545,8 +558,6 @@ impl P2pNode {
                 .unwrap_or(PLUGIN_ANNOUNCE_RELAY_TENURE_MS),
             peer_connected_since: HashMap::new(),
             topic_cache: HashMap::new(),
-            org_pull_blackhole: false,
-            stalled_pull_channels: Vec::new(),
         };
         let keepalive_interval = config.keepalive_interval;
         let task = tokio::spawn(async move {
@@ -592,8 +603,7 @@ impl P2pNode {
     }
 
     /// 测试用桩节点（F6 故障注入单测）：命令通道接收端交还测试持有——
-    /// 测试扮演「假事件循环」，选择性应答/挂起命令（如 org_pull_request
-    /// 挂起复现对端长超时）。无真实网络与事件循环。
+    /// 测试扮演「假事件循环」，选择性应答/挂起命令。无真实网络与事件循环。
     #[cfg(test)]
     pub(crate) fn stub_for_test() -> (Self, mpsc::UnboundedReceiver<Command>) {
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();

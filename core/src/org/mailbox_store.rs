@@ -18,8 +18,7 @@ use serde_json::{Value, json};
 use crate::storage::{ScanOptions, StorageBackend};
 
 use super::mailbox::{
-    MAIL_TS_FRESHNESS_WINDOW_MS, OrgMailEnvelope, normalize_ttl, orgmail_verify,
-    parse_domain_id,
+    MAIL_TS_FRESHNESS_WINDOW_MS, OrgMailEnvelope, normalize_ttl, orgmail_verify, parse_domain_id,
 };
 
 /// 每组织邮箱容量上限（条）。
@@ -94,12 +93,9 @@ fn validate_shape(envelope: &OrgMailEnvelope) -> Result<(), &'static str> {
         return Err("invalid-envelope");
     }
     let b64 = base64::Engine::decode;
-    let nonce_ok = b64(
-        &base64::engine::general_purpose::STANDARD,
-        &envelope.nonce,
-    )
-    .map(|v| v.len() == 12)
-    .unwrap_or(false);
+    let nonce_ok = b64(&base64::engine::general_purpose::STANDARD, &envelope.nonce)
+        .map(|v| v.len() == 12)
+        .unwrap_or(false);
     let ct_ok = b64(&base64::engine::general_purpose::STANDARD, &envelope.ct).is_ok();
     let sig_ok = b64(&base64::engine::general_purpose::STANDARD, &envelope.sig)
         .map(|v| v.len() == 64)
@@ -181,7 +177,10 @@ fn gateway_deliver_inner<S: StorageBackend>(
     let mut org_bytes = 0usize;
     let mut recipient_count = 0usize;
     for (_, raw) in storage
-        .scan(&ScanOptions::prefix(format!("orgmail:box:{}:", record.org_id)))
+        .scan(&ScanOptions::prefix(format!(
+            "orgmail:box:{}:",
+            record.org_id
+        )))
         .map_err(|e| e.to_string())?
     {
         org_count += 1;
@@ -230,10 +229,7 @@ pub fn gateway_fetch_challenge<S: StorageBackend>(
     }
     let mut nonce = [0u8; 16];
     rand::Rng::fill_bytes(&mut rand::rng(), &mut nonce);
-    let nonce_b64 = base64::Engine::encode(
-        &base64::engine::general_purpose::STANDARD,
-        nonce,
-    );
+    let nonce_b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, nonce);
     let record = json!({ "ts": now_ms, "recipientDomainId": recipient_domain_id });
     if storage
         .put(&challenge_key(&nonce_b64), &record.to_string())
@@ -304,10 +300,9 @@ fn gateway_fetch_inner<S: StorageBackend>(
     let Some(recipient_pk_raw) = parse_domain_id(recipient_domain_id) else {
         return Err("invalid-request".to_string());
     };
-    let Ok(challenge_sig) = base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        challenge,
-    ) else {
+    let Ok(challenge_sig) =
+        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, challenge)
+    else {
         return Err("invalid-challenge".to_string());
     };
     // nonce 在册且未过期未用（用后即焚：先取出再删，任何后续路径都不再放回）
@@ -380,9 +375,9 @@ fn gateway_fetch_inner<S: StorageBackend>(
     // 限流记账（按网关视角的组织归属逐信封记同一收件人键——key 后缀即
     // recipientDomainId，fetch 侧扫后缀取最近值）
     for env in &envelopes {
-        if let Ok(record) = serde_json::from_str::<crate::org::org_address::OrgAddressRecord>(
-            &env.to.org_address,
-        ) {
+        if let Ok(record) =
+            serde_json::from_str::<crate::org::org_address::OrgAddressRecord>(&env.to.org_address)
+        {
             let _ = storage.put(
                 &rl_fetch_key(&record.org_id, recipient_domain_id),
                 &now_ms.to_string(),

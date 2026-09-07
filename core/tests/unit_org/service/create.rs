@@ -5,7 +5,37 @@ use super::*;
 
 use spark_core::org::OrgError;
 use spark_core::org::tx::OrganizationTransactionType;
-use spark_core::org::types::OrganizationRole;
+use spark_core::org::types::{DomainType, OrganizationRole};
+use spark_core::storage::StorageBackend;
+
+/// C1 共同体域创建（org-genesis §3.1）：domainType=community 全链路落库——
+/// 组织记录与创世策略记录一致携带，创世哈希型 orgId。
+#[test]
+fn create_community_domain_organization() {
+    let mut storage = MemoryStorage::new();
+    let admin = rid('a');
+    let community_input = CreateOrganizationInput {
+        domain_type: Some(DomainType::Community),
+        ..input()
+    };
+    let record =
+        OrganizationService::create_organization(&mut storage, &community_input, &admin, NOW)
+            .unwrap();
+    assert_eq!(record.domain_type, Some(DomainType::Community));
+    assert!(spark_core::org::is_genesis_form_org_id(&record.org_id));
+    let genesis_raw = storage
+        .get(&spark_core::org::org_genesis_key(&record.org_id))
+        .unwrap()
+        .expect("genesis record persisted");
+    let genesis: spark_core::org::GenesisPolicyRecord = serde_json::from_str(&genesis_raw).unwrap();
+    assert_eq!(genesis.domain_type, DomainType::Community);
+    assert!(spark_core::org::verify_genesis_signature(&genesis));
+    assert!(spark_core::org::verify_org_address_binding(&genesis));
+    // 缺省（None）= leaf：域类型显式落记录（spec §3.1）
+    let record =
+        OrganizationService::create_organization(&mut storage, &input(), &admin, NOW).unwrap();
+    assert_eq!(record.domain_type, Some(DomainType::Leaf));
+}
 
 #[test]
 fn create_organization_normalizes_and_persists() {
@@ -14,7 +44,37 @@ fn create_organization_normalizes_and_persists() {
     assert_eq!(record.name, "星火 组织");
     assert_eq!(record.description, "描述");
     assert_eq!(record.base_plugin_domain.as_deref(), Some("plugin:chat"));
-    assert!(record.org_id.starts_with("org_") && record.org_id.len() == 20);
+    // C1：新组织一律创世哈希型 orgId（`org_` + 64hex，org-genesis §2）
+    assert!(record.org_id.starts_with("org_") && record.org_id.len() == 68);
+    assert!(spark_core::org::is_genesis_form_org_id(&record.org_id));
+    // 创世策略记录落库（org-genesis §2.1）：org:genesis:{orgId}，写一次不可变；
+    // 三重校验全过（orgId 自认证复算 + 根签名验签 + orgAddress 互绑复算）
+    let genesis_raw = storage
+        .get(&spark_core::org::org_genesis_key(&record.org_id))
+        .unwrap()
+        .expect("genesis record persisted");
+    let genesis: spark_core::org::GenesisPolicyRecord = serde_json::from_str(&genesis_raw).unwrap();
+    assert_eq!(
+        spark_core::org::genesis_org_id(&genesis).unwrap(),
+        record.org_id
+    );
+    assert!(spark_core::org::verify_genesis_signature(&genesis));
+    assert!(spark_core::org::verify_org_address_binding(&genesis));
+    // record 与创世记录一致：domainType 显式携带、orgAddress 同源（单根密钥对）
+    assert_eq!(record.domain_type, Some(genesis.domain_type));
+    assert_eq!(
+        record.org_address.as_deref(),
+        Some(genesis.org_address.as_str())
+    );
+    // 封存的根私钥 = 创世签名密钥（可对创世记录验签闭环）
+    let root_key = spark_core::org::org_address::org_root_signing_key(&record).unwrap();
+    assert_eq!(
+        base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            root_key.verifying_key().to_bytes()
+        ),
+        genesis.root_public_key
+    );
     assert_eq!(record.recovery_secret().map(str::len), Some(64));
     // orgSecret：创建时生成（org.md §13），与 recoverySecret 相互独立
     assert_eq!(record.org_secret().map(str::len), Some(64));
@@ -174,6 +234,51 @@ fn delete_organization_flow() {
     assert_eq!(txs[0].type_, OrganizationTransactionType::Delete);
 }
 
+/// 域删除守卫（community-model「域不可解散，只可退出」）：共同体域
+/// （domainType=community）admin 删除被拒绝并返回明确错误；组织记录原样
+/// 保留、不追加 delete 事务。叶组织删除不受影响（`delete_organization_flow`）。
+#[test]
+fn delete_community_domain_rejected() {
+    let mut storage = MemoryStorage::new();
+    let admin = rid('a');
+    let community_input = CreateOrganizationInput {
+        domain_type: Some(DomainType::Community),
+        ..input()
+    };
+    let record =
+        OrganizationService::create_organization(&mut storage, &community_input, &admin, NOW)
+            .unwrap();
+    assert_eq!(record.domain_type, Some(DomainType::Community));
+    // admin 删除共同体域：拒绝 + 明确错误
+    assert!(matches!(
+        OrganizationService::delete_organization(&mut storage, &record.org_id, &admin, NOW + 1),
+        Err(OrgError::CommunityDomainNotDeletable)
+    ));
+    // pdsync 变体走同一 impl，同样被守卫
+    assert!(matches!(
+        OrganizationService::delete_organization_pdsync(
+            &mut storage,
+            &record.org_id,
+            &admin,
+            NOW + 1,
+            "node-a",
+        ),
+        Err(OrgError::CommunityDomainNotDeletable)
+    ));
+    // 记录原样保留，未追加 delete 事务（仍只有 create）
+    assert!(
+        OrganizationService::get_record(&storage, &record.org_id)
+            .unwrap()
+            .is_some()
+    );
+    let txs =
+        spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 20).unwrap();
+    assert!(
+        txs.iter()
+            .all(|t| t.type_ != OrganizationTransactionType::Delete)
+    );
+}
+
 #[test]
 fn create_delete_pdsync_write_pmeta_and_tombstone() {
     use spark_core::sync::versioned::{VersionedStorage, shared_node_id};
@@ -193,10 +298,12 @@ fn create_delete_pdsync_write_pmeta_and_tombstone() {
         .unwrap();
         (admin, record)
     };
-    // 创建：org:meta 记录落库 + pmeta（vv 含 node-a:1，非 tombstone）
+    // 创建：org:meta 记录落库 + pmeta（非 tombstone）。受管写顺序：创世记录
+    // org:genesis: 落库 seq 1（C1 纳管 org:structure@v1，先于记录保存段），
+    // org:meta 创建 seq 2
     let key = format!("org:meta:{}", record.org_id);
     let meta = get_personal_meta(storage.raw(), &key).unwrap().unwrap();
-    assert_eq!(meta.vv.get("node-a"), Some(&1));
+    assert_eq!(meta.vv.get("node-a"), Some(&2));
     assert!(!is_tombstone(&meta));
 
     // 删除：记录消失，pmeta 留 tombstone（删除可经 pdsync 传播）
@@ -215,10 +322,12 @@ fn create_delete_pdsync_write_pmeta_and_tombstone() {
     );
     let meta = get_personal_meta(storage.raw(), &key).unwrap().unwrap();
     assert!(is_tombstone(&meta));
-    // per-node 单调序号：org:meta 创建 seq 1 + P1-a 双写初始成员条目 seq 2
+    // per-node 单调序号：创世记录 org:genesis: 落库 seq 1（C1 纳管
+    // org:structure@v1，先于记录保存段）+ org:meta 创建 seq 2
+    // + P1-a 双写初始成员条目 seq 3
     // + 三个内建集合声明（structure/contacts/invitations；F7 退出
     // org:invites、batch3 §2 加入 org:invitations）各 2 次受管写（声明记录
-    // put + put_personal，seq 3–8）+ 删除 tombstone seq 9（成员条目墓碑
-    // seq 10 随后）
-    assert_eq!(meta.vv.get("node-a"), Some(&9));
+    // put + put_personal，seq 4–9）+ 删除 tombstone seq 10（成员条目墓碑
+    // seq 11 随后）
+    assert_eq!(meta.vv.get("node-a"), Some(&10));
 }

@@ -9,7 +9,8 @@ use spark_core::org::service::OrgIdentityPatch;
 use spark_core::org::{OrgInvitePayload, OrgInviteRecord, OrganizationView};
 
 use super::dto::{
-    AddOrgMemberInputDto, CreateOrgInputDto, CreatedOrgInviteDto, InviteAcceptanceDto,
+    AddOrgMemberInputDto, CommunityAcceptDto, CommunityLeaveDto, CommunityMemberDto,
+    CreateOrgInputDto, CreatedCommunityInviteDto, CreatedOrgInviteDto, InviteAcceptanceDto,
     OrgAddressRecordDto, OrgSyncOverviewDto, SuccessResult, avatar_patch,
 };
 use super::{err, lock_kernel};
@@ -231,6 +232,74 @@ pub(crate) fn invite_records_inner(
 }
 
 // ------------------------------------------------------------------
+// 共同体域（组织加入共同体：org-mail 邀请/接受，org-genesis §3/§4）
+// ------------------------------------------------------------------
+
+pub(crate) fn community_create_invite_inner(
+    kernel: &Kernel,
+    community_org_id: &str,
+) -> Result<CreatedCommunityInviteDto, String> {
+    kernel
+        .community_create_invite(community_org_id)
+        .map(CreatedCommunityInviteDto::from)
+        .map_err(err)
+}
+
+pub(crate) fn community_send_invite_inner(
+    kernel: &mut Kernel,
+    community_org_id: &str,
+    code: &str,
+    to_org_address: &str,
+    recipient_domain_id: &str,
+    gateway_peer_id: Option<String>,
+    gateway_addresses: Option<Vec<String>>,
+) -> Result<serde_json::Value, String> {
+    kernel
+        .community_send_invite(
+            community_org_id,
+            code,
+            to_org_address,
+            recipient_domain_id,
+            gateway_peer_id.as_deref(),
+            &gateway_addresses.unwrap_or_default(),
+        )
+        .map_err(err)
+}
+
+pub(crate) fn community_accept_invite_inner(
+    kernel: &mut Kernel,
+    joiner_org_id: &str,
+    code: &str,
+    publish_binding: bool,
+) -> Result<CommunityAcceptDto, String> {
+    kernel
+        .community_accept_invite(joiner_org_id, code, publish_binding)
+        .map(CommunityAcceptDto::from)
+        .map_err(err)
+}
+
+pub(crate) fn community_list_members_inner(
+    kernel: &Kernel,
+    community_org_id: &str,
+) -> Result<Vec<CommunityMemberDto>, String> {
+    kernel
+        .community_list_members(community_org_id)
+        .map(|members| members.into_iter().map(CommunityMemberDto::from).collect())
+        .map_err(err)
+}
+
+pub(crate) fn community_leave_inner(
+    kernel: &mut Kernel,
+    community_org_id: &str,
+    leaver_org_id: &str,
+) -> Result<CommunityLeaveDto, String> {
+    kernel
+        .community_leave(community_org_id, leaver_org_id)
+        .map(CommunityLeaveDto::from)
+        .map_err(err)
+}
+
+// ------------------------------------------------------------------
 // Tauri 命令
 // ------------------------------------------------------------------
 
@@ -408,7 +477,7 @@ pub fn org_search_known(
     search_known_inner(&*lock_kernel(&state)?, &keyword)
 }
 
-/// 接受邀请码（内核编排：解码 → 连接邀请人 → claim 捎带 → 拉取 → 成员确认）。
+/// 接受邀请码（内核编排：解码 → 连接邀请人 → stub 自举 + orgsync 收敛 → 成员确认）。
 #[tauri::command]
 pub fn org_accept_invite(
     state: tauri::State<'_, KernelState>,
@@ -454,6 +523,79 @@ pub fn org_invite_records(
     org_id: String,
 ) -> Result<Vec<OrgInviteRecord>, String> {
     invite_records_inner(&*lock_kernel(&state)?, &org_id)
+}
+
+/// 创建共同体邀请码（仅共同体域 admin；org-mail `community-org-invite` 载荷
+/// 内嵌的 code，投递走 `community_send_invite` 或带外渠道）。
+#[tauri::command]
+pub fn community_create_invite(
+    state: tauri::State<'_, KernelState>,
+    community_org_id: String,
+) -> Result<CreatedCommunityInviteDto, String> {
+    community_create_invite_inner(&*lock_kernel(&state)?, &community_org_id)
+}
+
+/// 邀请码经 org-mail 投递到目标组织信箱（目标组织地址记录完整线形 + 收件人
+/// 域身份为带外通道输入；网关寻址线索可省，内核按 显式 hint → 地址记录
+/// gateways 联系人 解析）。
+#[tauri::command]
+pub fn community_send_invite(
+    state: tauri::State<'_, KernelState>,
+    community_org_id: String,
+    code: String,
+    to_org_address: String,
+    recipient_domain_id: String,
+    gateway_peer_id: Option<String>,
+    gateway_addresses: Option<Vec<String>>,
+) -> Result<serde_json::Value, String> {
+    community_send_invite_inner(
+        &mut *lock_kernel(&state)?,
+        &community_org_id,
+        &code,
+        &to_org_address,
+        &recipient_domain_id,
+        gateway_peer_id,
+        gateway_addresses,
+    )
+}
+
+/// 接受共同体邀请（本机为待加入组织的管理员）：组织根私钥派生共同体域身份
+/// → 落库前 validate_org_join 硬规则 → 名册写 kind=org 成员条目；
+/// `publish_binding` = 是否公开 orgId/地址绑定（opt-in，org-genesis §3.2）。
+#[tauri::command]
+pub fn community_accept_invite(
+    state: tauri::State<'_, KernelState>,
+    joiner_org_id: String,
+    code: String,
+    publish_binding: bool,
+) -> Result<CommunityAcceptDto, String> {
+    community_accept_invite_inner(
+        &mut *lock_kernel(&state)?,
+        &joiner_org_id,
+        &code,
+        publish_binding,
+    )
+}
+
+/// 列共同体成员（本地名册中 kind=org 的条目）。
+#[tauri::command]
+pub fn community_list_members(
+    state: tauri::State<'_, KernelState>,
+    community_org_id: String,
+) -> Result<Vec<CommunityMemberDto>, String> {
+    community_list_members_inner(&*lock_kernel(&state)?, &community_org_id)
+}
+
+/// 组织退出共同体（本机为退出组织的管理员）：组织根私钥派生域身份核账 →
+/// 留史记录（append-only）+ 名册移除；最后一个成员组织退出后域进入空域
+/// 只读档案（`domainArchived=true`，此后该域写入一律拒绝）。
+#[tauri::command]
+pub fn community_leave(
+    state: tauri::State<'_, KernelState>,
+    community_org_id: String,
+    leaver_org_id: String,
+) -> Result<CommunityLeaveDto, String> {
+    community_leave_inner(&mut *lock_kernel(&state)?, &community_org_id, &leaver_org_id)
 }
 
 // ------------------------------------------------------------------

@@ -22,16 +22,17 @@ mod record;
 mod view;
 
 pub use member::{
-    OrganizationAccessKey, OrganizationDeviceSet, OrganizationMember, OrganizationNodeInfo,
-    OrganizationRole, access_key_bind_payload, normalize_node_info, normalize_optional_node_info,
-    sort_members,
+    MemberKind, OrgBinding, OrganizationAccessKey, OrganizationDeviceSet, OrganizationMember,
+    OrganizationNodeInfo, OrganizationRole, access_key_bind_payload, normalize_node_info,
+    normalize_optional_node_info, sort_members,
 };
 pub use normalize::{
-    ORG_META_PREFIX, ORG_MEMBER_PREFIX, generate_org_secret, generate_organization_id,
-    generate_recovery_secret, is_valid_root_id, normalize_plugin_domain, normalize_root_id,
-    normalize_text, org_member_key, organization_key,
+    ORG_MEMBER_PREFIX, ORG_META_PREFIX, generate_org_secret, generate_organization_id,
+    generate_recovery_secret, is_valid_org_id, is_valid_root_id, normalize_plugin_domain,
+    normalize_root_id, normalize_text, org_member_key, organization_key,
 };
 pub use record::{
-    OrganizationRecord, OrganizationSyncSection, OrganizationSyncState, OrganizationSyncVersions,
+    DomainType, OrganizationRecord, OrganizationSyncSection, OrganizationSyncState,
+    OrganizationSyncVersions,
 };
 pub use view::{OrganizationRecordFlattened, OrganizationView};

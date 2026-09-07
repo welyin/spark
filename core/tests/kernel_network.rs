@@ -43,6 +43,7 @@ fn reconcile_and_keepalive_converge() {
             description: None,
             avatar: None,
             base_plugin_domain: Some("plugin:app".to_string()),
+            ..Default::default()
         })
         .unwrap();
     let org_id = view.record.org_id.clone();
@@ -166,6 +167,7 @@ fn node_card_import_lands_unverified_pool_entry() {
             description: None,
             avatar: None,
             base_plugin_domain: Some("plugin:app".to_string()),
+            ..Default::default()
         })
         .unwrap();
     let card = kernel_a.make_node_card(Some(&view.record.org_id)).unwrap();

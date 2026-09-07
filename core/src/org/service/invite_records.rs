@@ -112,7 +112,10 @@ impl OrganizationService {
     /// 全部邀请记录（出/入站合并；id 生成的计数种子用）。
     pub fn list_all_invite_records<S: StorageBackend>(storage: &S) -> Result<Vec<OrgInviteRecord>> {
         let mut records = Self::scan_invites(storage, ORG_INV_IN_PREFIX)?;
-        records.extend(OrganizationService::scan_invites(storage, ORG_INV_OUT_PREFIX)?);
+        records.extend(OrganizationService::scan_invites(
+            storage,
+            ORG_INV_OUT_PREFIX,
+        )?);
         Ok(records)
     }
 
@@ -407,8 +410,14 @@ pub fn reconcile_outbound_invites_with_members<S: StorageBackend>(
         )
         .map_err(sync_err)?;
         if let Some((key, projection)) = invpub_projection(&inv, inviter_root) {
-            crate::sync::put_personal(storage, node_id, &key, &serde_json::to_string(&projection)?, now_ms)
-                .map_err(sync_err)?;
+            crate::sync::put_personal(
+                storage,
+                node_id,
+                &key,
+                &serde_json::to_string(&projection)?,
+                now_ms,
+            )
+            .map_err(sync_err)?;
         }
         reconciled.push(inv);
     }

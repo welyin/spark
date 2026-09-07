@@ -22,7 +22,7 @@ use super::envelope::OrgsyncRecord;
 /// 收集某个 org 集合的合并折叠 vv：扫描该集合**全部数据键域**（插件 `orgd:`
 /// 或内建存量键前缀）下各记录的 pmeta，逐条 merge 取 max。
 ///
-/// F2-P1：声明（`org:coll:`）与授权名单（`org:acl:`）已并入 org:structure
+/// F2-P1：声明（`org:coll:`）已并入 org:structure
 /// 键域（builtin.rs），随 all-members 集合折叠——不再随所属集合流量
 /// per-collection 携带（避免双通道重复折叠）。
 pub fn collect_org_collection_vv<S: StorageBackend>(
@@ -151,8 +151,8 @@ pub fn collect_org_incremental<S: StorageBackend>(
             }
         }
     }
-    // B5/F2-P1：集合声明（org:coll:）与授权名单（org:acl:）已并入
-    // org:structure 键域（builtin.rs），随 all-members 集合的折叠/增量全员
+    // B5/F2-P1：集合声明（org:coll:）已并入 org:structure 键域
+    // （builtin.rs），随 all-members 集合的折叠/增量全员
     // 同步——不再随所属集合流量 per-collection 携带（避免双通道重复；
     // 声明收敛合入见 inbound_dm/orgsync.rs 的 decl 分支）。
     // 墓碑增量：删除日志驱动
@@ -172,13 +172,12 @@ pub fn collect_org_tombstones_after<S: StorageBackend>(
 ) -> SyncResult<Vec<OrgsyncRecord>> {
     let data_prefixes = collection_data_prefixes(org_id, name, version);
     let decl_key = crate::plugindata::org_decl_key(org_id, name, version);
-    let acl_key = super::access::acl_key(org_id, name, version);
     let mut records = Vec::new();
     for (seq, record_key) in org_dlog_entries_after(storage, org_id, name, version, dlog_ack)? {
-        // B5：数据键（任一数据键域前缀）与声明键（org:coll:）/授权名单键
-        // （org:acl:，O4）的墓碑都算该集合删除日志。
+        // B5：数据键（任一数据键域前缀）与声明键（org:coll:）的墓碑都算该集合
+        // 删除日志。（C7：org:acl: 授权名单键随 encrypted 轴退役移除。）
         let in_data_domain = data_prefixes.iter().any(|p| record_key.starts_with(p));
-        if !in_data_domain && record_key != decl_key && record_key != acl_key {
+        if !in_data_domain && record_key != decl_key {
             continue;
         }
         let Ok(Some(meta)) = crate::sync::get_personal_meta(storage, &record_key) else {

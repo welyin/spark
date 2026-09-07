@@ -31,10 +31,8 @@ pub(crate) fn delivery_needs_retry(
     }
 }
 
-/// 逐信封顺序投递 + 退避重试（`spawn_deliveries_with_retry` 的任务体抽出）：
-/// host 层 hello 触发的 orgkey pending 重投（F3，§20.6）不持 `&Kernel`，
-/// 持 Arc 节点句柄直接复用同一投递/重试语义。
-pub(crate) async fn deliver_with_retry(
+/// 逐信封顺序投递 + 退避重试（`spawn_deliveries_with_retry` 的任务体抽出）。
+async fn deliver_with_retry(
     node: &crate::p2p::P2pNode,
     deliveries: Vec<(PeerNodeInfo, Value)>,
     retry_delays: &'static [std::time::Duration],

@@ -27,6 +27,7 @@ fn purge_preview_and_execute_guards() {
             description: None,
             avatar: None,
             base_plugin_domain: None,
+            ..Default::default()
         })
         .unwrap();
     let org_id = view.record.org_id.clone();
@@ -107,6 +108,7 @@ fn purge_preview_empty_domain_short_circuit() {
             description: None,
             avatar: None,
             base_plugin_domain: None,
+            ..Default::default()
         })
         .unwrap();
     let org_id = view.record.org_id.clone();

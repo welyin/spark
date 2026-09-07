@@ -266,10 +266,6 @@ pub fn run() {
             commands::plugin_data::data_drop_version,
             commands::plugin_data::data_save_blob,
             commands::plugin_data::data_read_blob,
-            // O4 encrypted 授权名单（owner 侧）
-            commands::plugin_data::data_grant_access,
-            commands::plugin_data::data_revoke_access,
-            commands::plugin_data::data_list_access,
             // 组织
             commands::org::org_list_mine,
             commands::org::org_create,
@@ -292,6 +288,12 @@ pub fn run() {
             commands::org::org_send_invite,
             commands::org::org_respond_invite,
             commands::org::org_invite_records,
+            // 共同体域（组织加入共同体的邀请/接受流 + 退出留史）
+            commands::org::community_create_invite,
+            commands::org::community_send_invite,
+            commands::org::community_accept_invite,
+            commands::org::community_list_members,
+            commands::org::community_leave,
             // 通讯录
             commands::contact::contact_overview,
             commands::contact::contact_update_profile,
@@ -322,6 +324,34 @@ pub fn run() {
             // 社交定向投递（social-feed S7，sdk.feed 壳层薄壳）
             commands::feed::plugin_feed_deliver,
             commands::feed::plugin_feed_pull,
+            // community-affairs §7.2：sdk.affairs / sdk.credentials / sdk.policy 薄壳
+            commands::affairs::plugin_affairs_follow,
+            commands::affairs::plugin_affairs_unfollow,
+            commands::affairs::plugin_affairs_list_followed,
+            commands::affairs::plugin_affairs_submit_op,
+            commands::affairs::plugin_affairs_read_log,
+            commands::affairs::plugin_affairs_read_rules,
+            commands::affairs::plugin_affairs_read_resolution,
+            commands::affairs::plugin_affairs_ladder_status,
+            commands::affairs::plugin_affairs_public_profile,
+            commands::affairs::plugin_affairs_snapshot_payload,
+            commands::affairs::plugin_affairs_read_exec,
+            commands::affairs::plugin_affairs_org_effects,
+            commands::affairs::plugin_affairs_apply_org_effects,
+            // affair-metadata §7/§8：indexer 角色配置 / 目录 / 查询薄壳
+            commands::affairs::plugin_affairs_set_indexer_enabled,
+            commands::affairs::plugin_affairs_set_indexer_coverage,
+            commands::affairs::plugin_affairs_indexer_config,
+            commands::affairs::plugin_affairs_indexer_directory,
+            commands::affairs::plugin_affairs_indexer_query,
+            commands::credentials::plugin_credentials_list_held,
+            commands::credentials::plugin_credentials_present_holder_proof,
+            commands::credentials::plugin_credentials_query_verifiers,
+            commands::credentials::plugin_credentials_verify,
+            commands::credentials::plugin_credentials_query_revocations,
+            commands::policy::plugin_policy_read,
+            commands::policy::plugin_policy_submit_draft,
+            commands::policy::plugin_policy_publish,
             // 消息
             commands::message::message_list_conversations,
             commands::message::message_list_messages,
@@ -369,6 +399,14 @@ pub fn run() {
             commands::p2p::p2p_make_node_card,
             commands::p2p::p2p_import_node_card,
             commands::p2p::p2p_network_changed,
+            // 内容面（持有即做种：blob 存取/拉取/GC）
+            commands::content::content_save_blob,
+            commands::content::content_read_blob,
+            commands::content::content_fetch_blob,
+            commands::content::content_list_blobs,
+            commands::content::content_pin_root,
+            commands::content::content_unpin_root,
+            commands::content::content_gc_sweep,
             // 插件运行时（tab 模式语义，见 commands/plugin.rs 注记）
             commands::plugin::plugin_identity_sign,
             commands::plugin::plugin_identity_verify,

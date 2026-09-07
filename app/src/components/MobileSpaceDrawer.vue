@@ -246,7 +246,8 @@ export default defineComponent({
         const created = await window.electronAPI.organization.create({
           name: form.name,
           description: form.description,
-          avatar: form.avatar || undefined
+          avatar: form.avatar || undefined,
+          domainType: form.domainType
         });
         if (form.avatar) {
           setOrgAvatar(created.orgId, form.avatar);

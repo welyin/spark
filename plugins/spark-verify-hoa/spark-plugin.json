@@ -1,0 +1,17 @@
+{
+  "comment": "id 暂用插件短名；随分发模型迁移后改为仓库地址（见插件分发规格 §1）。C11 验证插件示例（业主场景）。强制 L1 开源语义（community-model.md §十：验证插件经手个人敏感材料，强制源码公开可审计，不设官方人工审核名单）：manifest.json 经 fetch+JSON.parse 加载、不允许注释，故在此与 manifest description 中双写声明；L1 级别由分发/市场侧校验，插件自身无法自证。",
+  "id": "spark-verify-hoa",
+  "name": "业主资格验证（示例）",
+  "icon": "",
+  "summary": "验证插件参考示例：申请人材料提交引导 + 验证人审核签发业主/居住凭证（sdk.credentials 只读面：持有凭证/holderProof 出示/验证人信任声明；签发 = 人机流程 + identity:sign，签名为插件域身份，演示级线形不与内核凭证体系互操作）。",
+  "category": "tool",
+  "version": "0.1.0",
+  "license": "MIT",
+  "release": {
+    "assetNaming": "spark-plugin-spark-verify-hoa-<version>.spkg",
+    "updateManifestAsset": "spark-plugin-spark-verify-hoa-manifest.json",
+    "signatureAsset": "spark-plugin-spark-verify-hoa-manifest.sig"
+  },
+  "permissions": ["storage:read", "storage:write", "identity:sign", "credentials:read"],
+  "mirrors": []
+}

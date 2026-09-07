@@ -54,6 +54,10 @@ pub enum KernelError {
     #[error(transparent)]
     Plugindata(#[from] crate::plugindata::PlugindataError),
 
+    /// 内容面模块错误。
+    #[error(transparent)]
+    Content(#[from] crate::content::ContentError),
+
     /// 文件 IO 错误。
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
@@ -98,16 +102,10 @@ pub enum KernelError {
     #[error("Password must be at least 8 characters")]
     PasswordTooShort,
 
-    /// orgq 写入被数据账号侧拒绝（denied：encrypted 非读者 / filtered 插件
-    /// 未运行降级；O3 写路径映射）。
+    /// orgq 写入被数据账号侧拒绝（denied：filtered 插件未运行 fail-closed
+    /// 不可受理；O3 写路径映射）。
     #[error("Access denied")]
     AccessDenied,
-
-    /// encrypted 集合密钥不可达（非 reader / 未收到该 epoch 密钥）——
-    /// AEAD 语义下无密钥即无读写权限。独立错误码（H3），不混入 Internal，
-    /// 便于上层识别为「权限/密钥缺失」而非内部故障。
-    #[error("Key unavailable: {0}")]
-    KeyUnavailable(String),
 
     /// M5 延迟恢复通道专用错误（文案与前端映射一致）。
     #[error("TooEarly")]

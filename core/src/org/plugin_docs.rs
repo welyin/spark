@@ -1,46 +1,25 @@
-//! pluginDocs 随组织同步（对齐 desktop/src/main/p2p/plugin-org-sync.ts）。
+//! `doc:plugin:` 键域工具（对齐 desktop/src/main/p2p/plugin-org-sync.ts 的
+//! 键形/禁用判定口径）。
 //!
-//! 收集：扫 `doc:plugin:` 前缀键（键形 `doc:<domain=plugin:*>:<collection>:<id>`），
-//! 仅取 `payload.orgId === 目标 orgId` 且未标记同步禁用的文档；meta 从本地
-//! meta 键读取（须有 vv 与 ts），schema 从集合策略注册表读取。
-//! 应用：逐条 `applyRemoteUpdate`（org.md §11）。
+//! 现役职责：键形解析（[`parse_plugin_doc_key`]）、同步禁用判定
+//! （[`is_sync_disabled`]）、orgId 解析（[`resolve_org_id`]）、旧通道向
+//! orgsync 声明通道的迁移（[`migrate_plugin_docs`]`doc:plugin:` → org scope
+//! 集合声明 + `orgd:` 数据键）、purge 数据域定位（[`collect_org_plugin_domains`]）。
 //!
-//! 挂载点（网络侧组装，属 p2p 模块）：org-share `payload.pluginDocs`、
-//! org-pull-org 响应 `pluginDocs`。
+//! （legacy org-share/org-pull 平面的 pluginDocs 收集/应用挂载点——org-share
+//! `payload.pluginDocs` 与 org-pull-org 响应——已随该平面退役删除；插件文档
+//! 经迁移后的 org 声明集合走 orgsync 反熵。）
 
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::plugindata::{Accounts, DeclareInput, Scope, Space, declare, org_data_prefix};
-use crate::schema::{CollectionSchemaDeclaration, get_collection_schema};
 use crate::storage::{ScanOptions, StorageBackend};
 use crate::sync::versioned::VersionedStorage;
-use crate::sync::{
-    ApplyRemoteOptions, CollectionAdapter, RemoteMeta, apply_remote_update, get_meta,
-};
 
 use super::Result;
 
 /// 插件文档键前缀（plugin-org-sync.ts:16）。
 pub const PLUGIN_DOC_PREFIX: &str = "doc:plugin:";
-
-/// 随组织同步的插件文档条目（plugin-org-sync.ts:7-14）。
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct PluginDocSyncItem {
-    /// 插件域（`plugin:*`）。
-    pub domain: String,
-    /// 集合名。
-    pub collection: String,
-    /// 文档 id。
-    pub id: String,
-    /// 文档内容。
-    pub payload: Value,
-    /// 同步 meta（`{vv, ts, nodeId?}`）。
-    pub meta: RemoteMeta,
-    /// 集合策略声明（供接收方按相同策略应用）。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub schema: Option<CollectionSchemaDeclaration>,
-}
 
 /// `parsePluginDocKey`（plugin-org-sync.ts:18-29）：
 /// `^doc:(plugin:[^:]+):([^:]+):(.+)$`。
@@ -110,89 +89,6 @@ pub fn resolve_org_id(payload: &Value) -> String {
         .to_string()
 }
 
-/// `collectSyncablePluginDocsByOrg`（plugin-org-sync.ts:58-124）：
-/// 扫 `doc:plugin:` 前缀，收集目标组织的可同步文档。
-///
-/// - 键形不符 / JSON 损坏 / orgId 不匹配 / 标记同步禁用 → 跳过
-/// - meta 缺失或缺 vv/ts → 跳过（`get_meta` 解析失败同样跳过）
-/// - schema 从本地集合策略注册表读取（有则携带）
-///
-/// `recipient_orgsync_capable`：灰度停用按**收件人能力**判定（F6）——对端
-/// 设备已证明支持 orgsync（走 orgsync 反熵拿数据）时，旧快照插件文档收集
-/// 停用；对端是旧端（非 orgsync-capable）时不停用，旧端成员仍收 pluginDocs。
-pub fn collect_syncable_plugin_docs<S: StorageBackend>(
-    storage: &S,
-    org_id: &str,
-    recipient_orgsync_capable: bool,
-) -> Result<Vec<PluginDocSyncItem>> {
-    let target_org_id = org_id.trim();
-    if target_org_id.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let rows = storage.scan(&ScanOptions::prefix(PLUGIN_DOC_PREFIX))?;
-    let mut results = Vec::new();
-    for (key, value) in rows {
-        let Some((domain, collection, id)) = parse_plugin_doc_key(&key) else {
-            continue;
-        };
-        let Ok(payload) = serde_json::from_str::<Value>(&value) else {
-            continue;
-        };
-        if resolve_org_id(&payload) != target_org_id {
-            continue;
-        }
-        if is_sync_disabled(&payload) {
-            continue;
-        }
-        // 灰度停用（O2 工作项 5，F6 按收件人能力）：该插件集合已迁入新声明
-        // 通道（org:coll: 声明存在）且**收件人 orgsync-capable** 时，旧快照
-        // 插件文档收集停用——数据已走 orgsync 复制组；旧端成员仍收。
-        if recipient_orgsync_capable
-            && let Some(plugin_id) = domain.strip_prefix("plugin:")
-            && !plugin_id.is_empty()
-            && !collection.is_empty()
-            && storage
-                .get(&crate::plugindata::org_decl_key(
-                    target_org_id,
-                    &format!("{plugin_id}:{collection}"),
-                    "1",
-                ))
-                .ok()
-                .flatten()
-                .is_some()
-        {
-            continue;
-        }
-        // meta 须有 vv 与 ts（plugin-org-sync.ts:93-96）；DocMeta 两者恒在，
-        // 解析失败即视为缺失
-        let Ok(Some(meta)) = get_meta(storage, &domain, &collection, &id) else {
-            continue;
-        };
-        let schema = get_collection_schema(storage, &domain, &collection)
-            .ok()
-            .flatten()
-            .map(|record| CollectionSchemaDeclaration {
-                sync_strategy: record.sync_strategy,
-                governance: record.governance,
-                enable_evidence: record.enable_evidence,
-            });
-        results.push(PluginDocSyncItem {
-            domain,
-            collection,
-            id,
-            payload,
-            meta: RemoteMeta {
-                vv: meta.vv,
-                ts: meta.ts,
-                node_id: meta.node_id,
-            },
-            schema,
-        });
-    }
-    Ok(results)
-}
-
 /// `doc:plugin:` 旧通道 → declareCollection 声明 + `orgd:` 键域（O2 工作项 5）。
 ///
 /// 按 plugin-data-api §7 映射：
@@ -259,6 +155,7 @@ pub fn migrate_plugin_docs<S: StorageBackend>(
                 sensitivity: None,
                 merge: None,
                 declared_by: Some(declared_by.to_string()),
+                read_policy: None,
             },
             now_ms,
             Some(target_org_id),
@@ -313,42 +210,4 @@ pub fn collect_org_plugin_domains<S: StorageBackend>(
         }
     }
     Ok(domains)
-}
-
-/// `applyPluginDocSyncItems`（plugin-org-sync.ts:126-147）：逐条
-/// `applyRemoteUpdate`，返回应用条数。
-///
-/// 集合适配器由调用方按 (domain, collection) 构造（TS 为
-/// `new DocumentCollection(db, domain, collection, {})`）。
-pub fn apply_plugin_doc_sync_items<S, A>(
-    storage: &mut S,
-    items: &[PluginDocSyncItem],
-    mut adapter_for: impl FnMut(&str, &str) -> A,
-    now_ms: i64,
-) -> Result<usize>
-where
-    S: StorageBackend,
-    A: CollectionAdapter,
-{
-    let mut applied = 0;
-    for item in items {
-        let adapter = adapter_for(&item.domain, &item.collection);
-        apply_remote_update(
-            storage,
-            &adapter,
-            &item.domain,
-            &item.collection,
-            &item.id,
-            Some(&item.payload),
-            &item.meta,
-            ApplyRemoteOptions {
-                schema: item.schema.clone(),
-                watermark: None,
-                now_ms,
-            },
-        )
-        .map_err(|e| super::OrgError::Malformed(format!("apply plugin doc: {e}")))?;
-        applied += 1;
-    }
-    Ok(applied)
 }

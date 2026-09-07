@@ -1,0 +1,16 @@
+{
+  "comment": "id 暂用插件短名；随分发模型迁移后改为仓库地址（见插件分发规格 §1）。C11 门槛插件示例（担保链）：产出「是否满足门槛」的签名证明（ThresholdProof），内核/事务客户端只验证产物——担保流程本身在插件侧（community-affairs.md §7.3 门槛插件）。诚实口径：签名主体为插件域身份（不证明担保人个人身份），演示级实现，见插件 README。",
+  "id": "spark-threshold-vouch",
+  "name": "担保链门槛（示例）",
+  "icon": "",
+  "summary": "门槛插件参考示例：N 名已有参与者担保（签名为插件域身份、演示级）→ 组装满足门槛的签名证明；产物可免权限验签（验插件域签名与载荷完整性）。",
+  "category": "tool",
+  "version": "0.1.0",
+  "release": {
+    "assetNaming": "spark-plugin-spark-threshold-vouch-<version>.spkg",
+    "updateManifestAsset": "spark-plugin-spark-threshold-vouch-manifest.json",
+    "signatureAsset": "spark-plugin-spark-threshold-vouch-manifest.sig"
+  },
+  "permissions": ["storage:read", "storage:write", "identity:sign"],
+  "mirrors": []
+}

@@ -94,6 +94,8 @@ impl OrganizationService {
         now_ms: i64,
     ) -> Result<bool> {
         Self::require_admin(record, current_root_id)?;
+        // 空域只读档案：共同体全员退出后无人能写入（组织记录更新）。
+        Self::require_community_writable(storage, record)?;
 
         let name = name
             .map(|value| normalize_text(value, "Organization name"))
@@ -227,6 +229,8 @@ impl OrganizationService {
         now_ms: i64,
     ) -> Result<bool> {
         Self::require_admin(record, current_root_id)?;
+        // 空域只读档案：共同体全员退出后无人能写入（网关指定也是写路径）。
+        Self::require_community_writable(storage, record)?;
 
         let mut normalized: Vec<String> = Vec::new();
         for gateway in gateways {
@@ -325,6 +329,8 @@ impl OrganizationService {
         now_ms: i64,
     ) -> Result<bool> {
         Self::require_admin(record, current_root_id)?;
+        // 空域只读档案：共同体全员退出后无人能写入（数据账号指定也是写路径）。
+        Self::require_community_writable(storage, record)?;
 
         let mut normalized: Vec<String> = Vec::new();
         for account in data_accounts {
@@ -442,6 +448,8 @@ impl OrganizationService {
         now_ms: i64,
     ) -> Result<bool> {
         Self::require_admin(record, current_root_id)?;
+        // 空域只读档案：共同体全员退出后无人能写入（公开标志切换也是写路径）。
+        Self::require_community_writable(storage, record)?;
 
         // 三态：None = 不更新；Some(trim 后空串) = 清除；Some(非空) = 覆盖
         let display_name = display_name.map(str::trim);

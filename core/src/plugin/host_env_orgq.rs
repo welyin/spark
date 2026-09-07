@@ -62,32 +62,10 @@ impl PluginHostShared {
             .get(&cache_key)
             .map_err(|e| super::error::PluginError::InvalidCall(e.to_string()))?;
         Ok(raw.map(|r| {
-            let val = serde_json::from_str::<crate::sync::orgsync::OrgqRespRecord>(&r)
+            // 缓存值 = OrgqRespRecord JSON，取其中 value 字段（C7 后恒为明文）
+            serde_json::from_str::<crate::sync::orgsync::OrgqRespRecord>(&r)
                 .map(|rec| rec.value)
-                .unwrap_or_else(|_| serde_json::from_str(&r).unwrap_or(Value::Null));
-            // O4 工作项 4：encrypted 集合缓存值为密文，取记录 epoch 密钥解密为
-            // 明文。解密失败（非 reader/密钥未达）→ 回 Null（UnavailableOffline）。
-            if decl.confidentiality == crate::plugindata::Confidentiality::Encrypted {
-                if let Some(cid) = decl.org_id.as_deref() {
-                    let ct_str = if let Value::String(s) = &val {
-                        s.clone()
-                    } else {
-                        serde_json::to_string(&val).unwrap_or_default()
-                    };
-                    if let Ok(plain) = crate::sync::orgsync::decrypt_orgd_value(
-                        storage,
-                        cid,
-                        &decl.name,
-                        &decl.version,
-                        &relative,
-                        &ct_str,
-                    ) {
-                        return serde_json::from_str(&plain).unwrap_or(Value::String(plain));
-                    }
-                    return Value::Null;
-                }
-            }
-            val
+                .unwrap_or_else(|_| serde_json::from_str(&r).unwrap_or(Value::Null))
         }))
     }
 
@@ -127,27 +105,9 @@ impl PluginHostShared {
             .map_err(|e| super::error::PluginError::InvalidCall(e.to_string()))?;
         for (key, raw) in scanned {
             let relative = key[cache_prefix.len()..].to_string();
-            let mut value = serde_json::from_str::<crate::sync::orgsync::OrgqRespRecord>(&raw)
+            let value = serde_json::from_str::<crate::sync::orgsync::OrgqRespRecord>(&raw)
                 .map(|rec| rec.value.to_string())
                 .unwrap_or_else(|_| raw.clone());
-            // O4 工作项 4：encrypted 集合缓存值为密文，取记录 epoch 密钥解密为
-            // 明文。解密失败（非 reader/密钥未达）→ 该条置 null。
-            if decl.confidentiality == crate::plugindata::Confidentiality::Encrypted {
-                if let Some(cid) = decl.org_id.as_deref() {
-                    if let Ok(plain) = crate::sync::orgsync::decrypt_orgd_value(
-                        storage,
-                        cid,
-                        &decl.name,
-                        &decl.version,
-                        &relative,
-                        &value,
-                    ) {
-                        value = plain;
-                    } else {
-                        value = "null".to_string();
-                    }
-                }
-            }
             page.items.push((relative.clone(), value));
             if page.items.len() >= limit {
                 page.next_cursor = Some(relative);
@@ -206,10 +166,16 @@ impl PluginHostShared {
         let confidentiality = match parse_axis("confidentiality") {
             None => None,
             Some("filtered") => Some(Confidentiality::Filtered),
-            Some("encrypted") => Some(Confidentiality::Encrypted),
+            // C7：encrypted 轴已退役——显式传入即报错（不再静默忽略，防插件
+            // 误以为集合级加密仍生效）
+            Some("encrypted") => {
+                return Err(super::error::PluginError::InvalidCall(
+                    "confidentiality 'encrypted' is retired (C7): org collections are plaintext-filtered only".to_string(),
+                ));
+            }
             Some(other) => {
                 return Err(super::error::PluginError::InvalidCall(format!(
-                    "confidentiality must be 'filtered' or 'encrypted', got {other:?}"
+                    "confidentiality must be 'filtered', got {other:?}"
                 )));
             }
         };
@@ -246,6 +212,17 @@ impl PluginHostShared {
                 )));
             }
         };
+        // readPolicy（read-gate §2，org scope 专有）：结构按内核 ReadPolicy
+        // 线形反序列化（缺省键省略 = members 现状）；取值合法性（org 空间
+        // 限定 + credential 必填面）由 plugindata::declare 录入校验兜底。
+        let read_policy = match payload.get("readPolicy") {
+            None | Some(Value::Null) => None,
+            Some(v) => serde_json::from_value::<crate::plugindata::ReadPolicy>(v.clone())
+                .map(Some)
+                .map_err(|e| {
+                    super::error::PluginError::InvalidCall(format!("invalid readPolicy: {e}"))
+                })?,
+        };
         Ok(DeclareInput {
             name,
             version,
@@ -260,6 +237,7 @@ impl PluginHostShared {
                 .get("declaredBy")
                 .and_then(Value::as_str)
                 .map(str::to_string),
+            read_policy,
         })
     }
 
@@ -329,6 +307,7 @@ mod tests {
             declared_by: None,
             ts: None,
             org_id: Some(org_id.to_string()),
+            read_policy: None,
         }
     }
 
@@ -348,6 +327,54 @@ mod tests {
             app_msg_limiter: std::sync::Arc::new(std::sync::Mutex::new(Default::default())),
             runtime: tokio::runtime::Handle::current(),
         }
+    }
+
+    /// readPolicy 声明入参解析（read-gate §2）：线形键 readPolicy → DeclareInput
+    /// .read_policy；缺省/显式 null → None（members 缺省，向后兼容）；结构非法
+    /// → InvalidCall 早失败。
+    #[test]
+    fn parse_declare_input_parses_read_policy() {
+        // 缺省 → None（members 现状）
+        let input = PluginHostShared::parse_declare_input(&serde_json::json!({
+            "name": "ai-chat:c"
+        }))
+        .unwrap();
+        assert!(input.read_policy.is_none(), "缺省 readPolicy → None");
+        // 显式 null → None
+        let input = PluginHostShared::parse_declare_input(&serde_json::json!({
+            "name": "ai-chat:c", "readPolicy": null
+        }))
+        .unwrap();
+        assert!(input.read_policy.is_none());
+        // credential 门禁线形透传（kind/credTypes/verifierDomain/policyRef）
+        let input = PluginHostShared::parse_declare_input(&serde_json::json!({
+            "name": "ai-chat:c",
+            "space": "org",
+            "readPolicy": {
+                "kind": "credential",
+                "credTypes": ["member", "resident"],
+                "verifierDomain": "org_abababababababababababababababababababababababababababababababab",
+                "policyRef": null
+            }
+        }))
+        .unwrap();
+        let policy = input.read_policy.expect("readPolicy 解析入 input");
+        assert_eq!(policy.kind, crate::plugindata::ReadPolicyKind::Credential);
+        assert_eq!(policy.cred_types, vec!["member", "resident"]);
+        assert_eq!(
+            policy.verifier_domain,
+            "org_abababababababababababababababababababababababababababababababab"
+        );
+        assert_eq!(policy.policy_ref, None);
+        // 结构非法（缺 kind）→ InvalidCall
+        assert!(
+            PluginHostShared::parse_declare_input(&serde_json::json!({
+                "name": "ai-chat:c",
+                "readPolicy": { "credTypes": ["member"] }
+            }))
+            .is_err(),
+            "readPolicy 结构非法早失败"
+        );
     }
 
     /// O3 读路径透明路由（QuickJS 通路）：`orgq_cached_get` 从成员侧缓存

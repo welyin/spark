@@ -299,11 +299,13 @@ async fn dm_direct_invalid_request() {
     b.stop().await;
 }
 
-/// request_id 碰撞回归：org_share_rr 与 dm_rr 的 OutboundRequestId 各自递增，
-/// 同 id 并发时响应不得错配到对方协议的 attempt（org ack 误判 dm 送达 /
-/// dm 响应误判 org 失败）。并发跑一对 org-share + dm，两者都应正确成交。
+/// request_id 碰撞回归：org_mail_rr 与 dm_rr 的 OutboundRequestId 各自递增，
+/// 同 id 并发时响应不得错配到对方协议的 attempt（mail 应答误判 dm 送达 /
+/// dm 响应误判 mail 失败）。并发跑一对 org-mail + dm，两者都应正确成交。
+/// （前身：org_share_rr × dm_rr 串话用例——org-share 平面退役后 org-mail
+/// 是与 dm 共用 pending_org_attempts 队列的另一协议。）
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn dm_and_org_share_concurrent_no_crosstalk() {
+async fn dm_and_org_mail_concurrent_no_crosstalk() {
     let now = 1_720_000_000_000i64;
     let root_a = "aa".repeat(32);
     let root_b = "bb".repeat(32);
@@ -322,33 +324,30 @@ async fn dm_and_org_share_concurrent_no_crosstalk() {
         peer_id: Some(b.peer_id().to_string()),
         addresses: dialable(&addrs_b),
     };
-    let share_payload = json!({
-        "targetRootId": root_b,
-        "syncId": "0123456789abcdef01234567",
-        "organization": {"orgId": "org_0123456789abcdef", "members": []},
-        "pluginDocs": [],
-        "nodeInfo": {"peerId": b.peer_id(), "addresses": []},
-    });
+    // 畸形 deliver（envelope 非对象）：B 侧网关回 `{ok:false,...}` JSON 对象
+    let mail_request = r#"{"op":"deliver","envelope":{}}"#;
     let envelope = dm_envelope("chat", &root_a, &root_b, now, json!({"text": "concurrent"}));
 
     // 节点 A 上两类协议的首个出站请求（两侧 request_id 均为 1），并发等待
-    let (share_result, dm_result) = tokio::join!(
-        a.org_share_direct(&target, share_payload),
+    let (mail_result, dm_result) = tokio::join!(
+        a.org_mail_request(&target, mail_request),
         a.dm_direct(&target, envelope.clone()),
     );
-    assert!(
-        share_result.expect("share ok"),
-        "org-share 应送达（未被 dm 响应错配）"
+    let mail_resp = mail_result
+        .expect("mail ok")
+        .expect("org-mail 应拿到应答（未被 dm 响应错配）");
+    assert_eq!(
+        mail_resp["ok"], false,
+        "org-mail 应答应为网关的拒绝帧，得到 {mail_resp}"
     );
     assert_eq!(
         dm_result.expect("dm ok"),
         Some(json!({"ok": true})),
-        "dm 应拿到应答（未被 org ack 错配）"
+        "dm 应拿到应答（未被 mail 应答错配）"
     );
 
-    // B 侧两类接收都记录
+    // B 侧 dm 接收记录
     let state = state_b.lock().unwrap();
-    assert!(state.shares.iter().any(|(_, s)| *s == "direct"));
     assert_eq!(state.dms.len(), 1);
     assert_eq!(state.dms[0].0, envelope);
 

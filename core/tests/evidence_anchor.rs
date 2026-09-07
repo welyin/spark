@@ -29,6 +29,7 @@ fn governance_collection_anchor_export_verify_chain() {
             description: None,
             avatar: None,
             base_plugin_domain: None,
+            ..Default::default()
         })
         .unwrap();
     let org_id = view.record.org_id.clone();

@@ -122,13 +122,6 @@ fn event_json(event: &P2pEvent) -> Option<Value> {
         P2pEvent::PeerExchangeCompleted { responder, merged } => {
             json!({"event": "peer-exchange-completed", "responder": responder, "merged": merged})
         }
-        P2pEvent::OrgShareAccepted {
-            org_id,
-            sync_id,
-            source,
-        } => {
-            json!({"event": "org-share-accepted", "orgId": org_id, "syncId": sync_id, "source": source})
-        }
         P2pEvent::SyncMessageApplied { msg_type, domain } => {
             json!({"event": "sync-applied", "msgType": msg_type, "domain": domain})
         }
@@ -239,8 +232,12 @@ fn event_json(event: &P2pEvent) -> Option<Value> {
                 "graceMs": grace_ms,
             })
         }
-        // ready 行单独打印；keepalive tick 在本例程禁用
-        P2pEvent::Started { .. } | P2pEvent::KeepaliveTick(_) => return None,
+        // ready 行单独打印；keepalive tick 在本例程禁用；议题元数据公告（C10）
+        // 与议题变更通知不参与本例程脚本，忽略
+        P2pEvent::Started { .. }
+        | P2pEvent::KeepaliveTick(_)
+        | P2pEvent::AffairMetaReceived { .. }
+        | P2pEvent::AffairChanged(_) => return None,
     };
     let mut obj = Map::new();
     obj.insert("type".to_string(), Value::String("event".to_string()));

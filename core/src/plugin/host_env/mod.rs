@@ -48,8 +48,7 @@ pub(crate) struct PluginHostShared {
     /// 解锁期签名私钥共享格（= kernel `signing_key_shared`，自设备回同步
     /// 信封自签用）。
     pub(crate) signing_key: Arc<Mutex<Option<ed25519_dalek::SigningKey>>>,
-    /// 解锁期 BIP39 种子（O4 grantAccess/revokeAccess 组织域身份派生用，=
-    /// kernel `seed_shared`；lock 时清除）。
+    /// 解锁期 BIP39 种子（= kernel `seed_shared`；lock 时清除）。
     pub(crate) seed_shared: Arc<Mutex<Option<[u8; 64]>>>,
     /// 集合配置缓存（= kernel `collection_configs`；docs.put/delete/query 时
     /// 写入兜底声明，已持久化的集合声明优先）。
@@ -182,12 +181,6 @@ impl PluginHostShared {
             "data.onlineQuery" => self.data_online_query(rtx, &payload),
             "data.onlineSave" => self.data_online_save(rtx, &payload),
             "data.onlineDelete" => self.data_online_delete(rtx, &payload),
-            // O4 插件 API 访问控制（encrypted 授权名单，§5.2）：owner 维护名单，
-            // 内核按 owner 验签（无额外权限项）。data_access 方法在
-            // host_env_access 模块。
-            "data.grantAccess" => self.data_grant_access(plugin_id, &payload),
-            "data.revokeAccess" => self.data_revoke_access(plugin_id, &payload),
-            "data.listAccess" => self.data_list_access(plugin_id, &payload),
             // 内建 blob：内容哈希寻址；拉取（eager/lazy 调和）由 pdsync 链路完成
             "data.saveBlob" => self.data_save_blob(plugin_id, &payload),
             "data.readBlob" => self.data_read_blob(plugin_id, &payload),
@@ -377,9 +370,6 @@ fn capability_permission(capability: &str) -> Option<&'static str> {
         | "data.dropVersion"
         | "data.saveBlob" => Some("storage:write"),
         "data.onlineSave" | "data.onlineDelete" => Some("storage:write"),
-        // R2：encrypted 授权名单三方法归入 storage:write（grant/revoke 落 acl
-        // + 轮换密钥，list 只读但同属 encrypted 能力面——owner 侧管控）。
-        "data.grantAccess" | "data.revokeAccess" | "data.listAccess" => Some("storage:write"),
         "contact.ensureBot" | "message.reply" => Some("message:app"),
         "sys.exec.start" | "sys.execStream.start" => Some("system:exec"),
         "sys.fetch.start" | "sys.fetchStream.start" => Some("network:fetch"),
@@ -435,27 +425,6 @@ mod tests {
         }
         for cap in ["data.onlineSave", "data.onlineDelete"] {
             assert_eq!(capability_permission(cap), Some("storage:write"), "{cap}");
-        }
-    }
-
-    /// R2：encrypted 授权名单三方法已纳入权限映射（storage:write）——
-    /// 零权限插件（无 storage:write）调用 grantAccess 等将因
-    /// `capability_permission` 返回 Some 而由 dispatch 前置强制拒绝。
-    #[test]
-    fn access_api_requires_storage_write_permission() {
-        for cap in ["data.grantAccess", "data.revokeAccess", "data.listAccess"] {
-            assert_eq!(
-                capability_permission(cap),
-                Some("storage:write"),
-                "{cap} 应归入 storage:write 权限"
-            );
-        }
-        // 与桥 dispatcher 的 CALL_PERMISSIONS 逐字对齐（R2：两侧一致）
-        for cap in ["data.grantAccess", "data.revokeAccess", "data.listAccess"] {
-            // 零权限（空 permissions）→ 前置拒绝（此处仅验映射存在；dispatch
-            // 的权限过滤在 call() 前置，permissions 不含 storage:write 即拒）。
-            let required = capability_permission(cap).expect("映射存在");
-            assert_eq!(required, "storage:write");
         }
     }
 

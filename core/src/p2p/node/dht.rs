@@ -181,6 +181,52 @@ impl<S: StorageBackend> EventLoop<S> {
         self.pending_dht_providers.insert(query_id, tx);
     }
 
+    /// 内容面「持有即做种」（public-topics §七）：在 `spark:blob:{cid}` 上
+    /// start_providing 并登记周期重发。幂等；CID 形状已在 API 边界校验。
+    ///
+    /// 与 `begin_dht_provide` 的差异：纯 provider 声明，不 put_record——blob
+    /// 本体不走 DHT 记录（体积与 TTL 语义都不合适），Kad 只回答「谁持有」。
+    pub(super) fn begin_blob_provide(&mut self, cid: &str, tx: oneshot::Sender<Result<()>>) {
+        // leaf 模式 §3 + public-topics §七：移动端叶子持有副本但不服务
+        if self.leaf_mode {
+            let _ = tx.send(Err(P2pError::Protocol(
+                "blob provide disabled in leaf mode".to_string(),
+            )));
+            return;
+        }
+        let key = crate::content::blob_kad_key(cid);
+        let Some(kad) = self.swarm.behaviour_mut().kad.as_mut() else {
+            let _ = tx.send(Err(P2pError::Protocol("dht disabled".to_string())));
+            return;
+        };
+        // 先登记再声明：无已知路由节点时 start_providing 报 NoKnownPeers，
+        // 本地登记保留，路由表建立后的 tick 周期重发补上（对齐
+        // `republish_provided` 对 NoKnownPeers 的既有口径）
+        self.provided_blobs.insert(key.clone());
+        let _ = kad.start_providing(kad::RecordKey::new(&key));
+        let _ = tx.send(Ok(()));
+    }
+
+    /// 停止做种（退出议题 / GC 回收本体）：撤销登记 + stop_providing。幂等。
+    pub(super) fn begin_blob_stop_provide(&mut self, cid: &str, tx: oneshot::Sender<Result<()>>) {
+        let key = crate::content::blob_kad_key(cid);
+        self.provided_blobs.remove(&key);
+        if let Some(kad) = self.swarm.behaviour_mut().kad.as_mut() {
+            kad.stop_providing(&kad::RecordKey::new(&key));
+        }
+        let _ = tx.send(Ok(()));
+    }
+
+    /// 检索 blob CID 的 provider 集合（复用 pending_dht_providers 线形）。
+    /// leaf 模式允许查询（叶子只消费不服务）。
+    pub(super) fn begin_blob_get_providers(
+        &mut self,
+        cid: &str,
+        tx: oneshot::Sender<Result<Vec<String>>>,
+    ) {
+        self.begin_dht_get_providers(crate::content::blob_kad_key(cid), tx);
+    }
+
     pub(super) fn resolve_dht_providers(
         &mut self,
         query_id: kad::QueryId,

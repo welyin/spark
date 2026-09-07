@@ -196,18 +196,6 @@ pub(crate) const PRELUDE: &str = r#"
                 writeFilters[name] = fn;
                 call('data.onWriteFilter', { collection: name });
             },
-            // O4 encrypted 授权名单（R2）：owner 侧维护名单。orgId 按运行空间
-            // 绑定注入——QuickJS 侧不传 orgId（内核从声明记录取 org 绑定），
-            // 不接受 payload 自报（自报可越权到其它组织）。
-            grantAccess: function (name, members, version) {
-                return call('data.grantAccess', { collection: name, members: members || [], version: version || null });
-            },
-            revokeAccess: function (name, members, version) {
-                return call('data.revokeAccess', { collection: name, members: members || [], version: version || null });
-            },
-            listAccess: function (name, version) {
-                return call('data.listAccess', { collection: name, version: version || null });
-            },
             // batch3 §3：在线 orgq 查询/写入（org data-accounts 集合、本机非
             // 驻留时经 orgq-req 在线投递数据账号；超时/全离线回退缓存语义/
             // 离线入队确认，与 Tauri 通路口径一致）。既有 data.* 缓存/入队

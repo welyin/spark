@@ -167,6 +167,8 @@ impl PluginMarketService {
                     .map(|p| p.reason.clone())
                     .unwrap_or_else(|| "not-checked".to_string()),
                 granted_permissions: installed.granted_permissions.clone(),
+                // 信任级（L0/L1/L2）由落库 trust 派生，进入市场条目数据模型
+                trust_level: Some(super::trust::trust_level_of(installed.trust.as_deref()).to_string()),
             });
         }
         items

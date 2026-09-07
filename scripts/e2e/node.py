@@ -163,11 +163,6 @@ class Node:
     def stop_p2p(self):
         self.send("stop-p2p")
 
-    def set_org_pull_blackhole(self, on):
-        """故障注入（F6 验收，org-sync-stall-fix §5）：on=True 后本节点
-        收到 org-pull 请求不应答（复现对端半连接长超时）。"""
-        return self.send("fault-org-pull-blackhole", on=on)
-
     # ------------------------------------------------------------------
     # 命令收发
     # ------------------------------------------------------------------
@@ -355,6 +350,67 @@ def make_friends(a, b, timeout=EVENT_TIMEOUT):
     )
     check(a.friend_entry(b.root_id) is not None, f"{a.name} 的朋友列表应有 {b.name}")
     check(b.friend_entry(a.root_id) is not None, f"{b.name} 的朋友列表应有 {a.name}")
+
+
+def join_org(admin, member, org_id, timeout=EVENT_TIMEOUT):
+    """向已建组织邀 member 加入（全流程：加成员 → 邀请 → 接受 → orgsync 收敛）。"""
+    admin.send(
+        "org-add-member",
+        orgId=org_id,
+        rootId=member.root_id,
+        nodeInfo={"peerId": member.peer_id, "addresses": member.addresses},
+    )
+    invite = admin.send(
+        "org-send-invite",
+        orgId=org_id,
+        targetRootId=member.root_id,
+        targetNickname=member.name,
+    )
+    check(invite["status"] == "pending", f"{admin.name}→{member.name} 出站邀请 pending")
+    received = member.wait_event(
+        "OrgInviteReceived", lambda d: d.get("orgId") == org_id, timeout=timeout
+    )
+    # P3 后 join 全靠接受编排（stub 自举 + connect + 有界等 orgsync 收敛）——
+    # 不再预等「预录快照」（legacy 推送通道已删）。收敛超时/失败按 TS 口径
+    # 报错可重试（幂等，等价 UI 用户再点一次确认）。
+    responded = None
+    for attempt in range(3):
+        try:
+            responded = member.send(
+                "org-respond-invite", inviteId=received["id"], accept=True
+            )
+            break
+        except NodeError:
+            if attempt == 2:
+                raise
+            time.sleep(2)
+    check(responded["status"] == "accepted", f"{member.name} 侧邀请记录置 accepted")
+    # 接受后确认：本地 org-list 经收敛可见该组织
+    poll_until(
+        lambda: any(o["orgId"] == org_id for o in member.send("org-list")) or None,
+        timeout=timeout,
+        what=f"{member.name} 接受后收敛看到组织",
+    )
+    # 邀请回执（org-invite-reply）为尽力投递：可能迟到/丢失，但成员关系已由
+    # 预录 + 接受编排生效。轮询管理员侧邀请记录收口；不到达则告警继续
+    # （数据验收不依赖该回执），丢失情况记入验收报告。
+    try:
+        poll_until(
+            lambda: any(
+                r.get("direction") == "outgoing"
+                and r.get("peerRootId") == member.root_id
+                and r.get("status") == "accepted"
+                for r in admin.send("org-invite-records", orgId=org_id)
+            )
+            or None,
+            timeout=20.0,
+            what=f"{admin.name} 收讫 {member.name} 的邀请回执",
+        )
+    except AssertionError:
+        print(
+            f"  WARN: {admin.name} 未收到 {member.name} 的 org-invite-reply"
+            "（尽力投递边界），成员关系已生效，继续"
+        )
 
 
 def kill_all(nodes):

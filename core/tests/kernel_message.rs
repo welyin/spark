@@ -231,6 +231,7 @@ fn send_to_blocked_recipient_fails_and_does_not_deliver() {
             description: None,
             base_plugin_domain: None,
             avatar: None,
+            ..Default::default()
         },
         &kernel.current_root_id().unwrap().unwrap(),
         NOW,
@@ -1425,6 +1426,7 @@ fn inbound_org_chat_member_check() {
             description: None,
             base_plugin_domain: Some("plugin:notes".to_string()),
             avatar: None,
+            ..Default::default()
         },
         &my_root,
         NOW,
@@ -2213,6 +2215,7 @@ fn inbound_read_recall_require_org_membership() {
             description: None,
             base_plugin_domain: None,
             avatar: None,
+            ..Default::default()
         },
         &my_root,
         NOW,
@@ -3814,7 +3817,15 @@ fn friend_accept_versions_record_for_pdsync_no_echo() {
     });
     let envelope = dm_envelope::build_envelope("friend-accept", &from, &my_root, NOW, body, &key);
     let result = handle_inbound_dm(
-        &mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE, None,
+        &mut s,
+        &my_root,
+        "",
+        envelope,
+        "peer-a",
+        &HashSet::new(),
+        NOW,
+        NODE,
+        None,
     )
     .unwrap();
     assert_eq!(result.response, json!({ "ok": true }));
@@ -3824,7 +3835,10 @@ fn friend_accept_versions_record_for_pdsync_no_echo() {
     let meta = spark_core::sync::get_personal_meta(&s, &friend_key)
         .unwrap()
         .expect("accept 建朋友写 pmeta（阶段二批 §2.2 补记账）");
-    assert!(meta.vv.get(NODE).copied().unwrap_or(0) >= 1, "本机 per-node 序号");
+    assert!(
+        meta.vv.get(NODE).copied().unwrap_or(0) >= 1,
+        "本机 per-node 序号"
+    );
     assert_eq!(meta.node_id.as_deref(), Some(NODE));
 
     // 记录经 pdsync 增量可见（legacy contact-sync 退役后传播不断）
@@ -3868,13 +3882,24 @@ fn friend_reconfirm_avatar_refresh_versioned() {
         "nodeInfo": { "peerId": "peer-a", "addresses": [] },
     });
     let envelope = dm_envelope::build_envelope("friend-accept", &from, &my_root, NOW, body, &key);
-    handle_inbound_dm(&mut s, &my_root, "", envelope, "peer-a", &HashSet::new(), NOW, NODE, None)
-        .unwrap();
+    handle_inbound_dm(
+        &mut s,
+        &my_root,
+        "",
+        envelope,
+        "peer-a",
+        &HashSet::new(),
+        NOW,
+        NODE,
+        None,
+    )
+    .unwrap();
     let friend_key = format!("ct:friend:{from}");
     let vv_before = spark_core::sync::get_personal_meta(&s, &friend_key)
         .unwrap()
         .unwrap()
-        .vv.get(NODE)
+        .vv
+        .get(NODE)
         .copied()
         .unwrap();
 
@@ -3889,7 +3914,15 @@ fn friend_reconfirm_avatar_refresh_versioned() {
     let envelope2 =
         dm_envelope::build_envelope("friend-request", &from, &my_root, NOW + 1, body2, &key);
     let r2 = handle_inbound_dm(
-        &mut s, &my_root, "", envelope2, "peer-a", &HashSet::new(), NOW + 1, NODE, None,
+        &mut s,
+        &my_root,
+        "",
+        envelope2,
+        "peer-a",
+        &HashSet::new(),
+        NOW + 1,
+        NODE,
+        None,
     )
     .unwrap();
     assert_eq!(r2.response["ok"], json!(true));
@@ -3899,8 +3932,12 @@ fn friend_reconfirm_avatar_refresh_versioned() {
     let vv_after = spark_core::sync::get_personal_meta(&s, &friend_key)
         .unwrap()
         .unwrap()
-        .vv.get(NODE)
+        .vv
+        .get(NODE)
         .copied()
         .unwrap();
-    assert!(vv_after > vv_before, "刷新推进本机分量（{vv_before} → {vv_after}）");
+    assert!(
+        vv_after > vv_before,
+        "刷新推进本机分量（{vv_before} → {vv_after}）"
+    );
 }

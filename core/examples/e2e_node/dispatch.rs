@@ -88,8 +88,6 @@ pub fn handle_line(text: &str, kernel: &mut Kernel) -> bool {
         "p2p-status" => identity::p2p_status(kernel),
         "make-node-card" => identity::make_node_card(kernel, &params),
         "import-node-card" => identity::import_node_card(kernel, &params),
-        // 故障注入（F6 验收，org-sync-stall-fix §5）
-        "fault-org-pull-blackhole" => identity::fault_org_pull_blackhole(kernel, &params),
         // 联系人
         "contact-overview" => contact::overview(kernel, &params),
         "send-request" => contact::send_request(kernel, &params),
@@ -123,10 +121,6 @@ pub fn handle_line(text: &str, kernel: &mut Kernel) -> bool {
         "data-delete" => data::delete(kernel, &params),
         "data-get" => data::get(kernel, &params),
         "data-query" => data::query(kernel, &params),
-        "data-grant-access" => data::grant_access(kernel, &params),
-        "data-revoke-access" => data::revoke_access(kernel, &params),
-        "data-list-access" => data::list_access(kernel, &params),
-        "org-publish-access-key" => data::publish_access_key(kernel, &params),
         "org-fold-vv" => data::fold_vv(kernel, &params),
         // 杂项
         "shutdown" => {

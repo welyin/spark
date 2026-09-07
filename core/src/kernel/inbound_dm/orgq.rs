@@ -14,11 +14,23 @@
 //! ## filtered 钩子执行（数据账号侧）
 //!
 //! §20.5 过滤分流：`filtered` 集合查询经插件 `canRead`、写入经 `canWrite` 钩子，
-//! 钩子在数据账号侧**插件后台运行时**执行；`encrypted` 由内核按当前 acl
-//! `readers` 名单过滤（O4 落地）。纯逻辑层无法执行 JS 钩子，故本层按规格
+//! 钩子在数据账号侧**插件后台运行时**执行（C7：`encrypted` 轴已退役，org 集合
+//! 恒为 filtered）。纯逻辑层无法执行 JS 钩子，故本层按规格
 //! 「插件未运行时该集合**只存不服务**」语义 **fail-closed**：回 `denied` 降级。
 //! 钩子的真实接线（host 层插件运行时）是 O3 工作项 2 的宿主接线点，本层只保证
 //! 「未接线即降级」的安全默认。
+//!
+//! ## read-gate（读授权门禁，community read-gate §4）
+//!
+//! 声明带 `readPolicy` 的 org 集合，查询面授权口径按 `kind` 分流：
+//! - `members`（缺省）：维持上述成员前置 + filtered 钩子路径（零变化）；
+//! - `public`：公开发布——无需成员资格/凭证，不经插件钩子直接服务；
+//! - `credential`：凭证校验**替代**插件钩子（read-gate §1「钩子换为凭证校验」）
+//!   ——查询方无需加入来源组织，凭 readAuth 段过验证链（`verify_read_auth`，
+//!   §4 第 1–4 步）+ policyRef 存在时经 B1 策略文档求值（`evaluate_read`，
+//!   §4 第 5 步）；任一失败 fail-closed → `denied` 空集应答（非授权者连元数据
+//!   都不给，§20.5 既有口径）。写路径不受 readPolicy 影响（写权限仍属来源
+//!   组织成员 + canWrite 钩子）。
 
 use serde_json::{Value, json};
 
@@ -76,14 +88,12 @@ pub trait OrgqPermHook {
 /// 验签：
 /// 1. 公共前置：`from` ∈ org:meta 成员表；
 /// 2. 集合须为**已声明的 org scope 集合**（`org:coll:{orgId}:{name}@v{version}`）；
-/// 3. confidentiality 分流（§20.5）：
-///    - `encrypted`：O4 名单过滤占位——本机查询/写入统一回 `denied`（明确
-///      未实现，注释标清：O4 填内核 acl readers 名单过滤来源）；
-///    - `filtered`：钩子在数据账号侧插件后台运行时执行（`canRead`/`canWrite`）。
-///      纯逻辑层无法执行 JS 钩子，按规格「插件未运行时该集合**只存不服务**」
-///      语义 **fail-closed**——本层不能确认插件运行 + 钩子放行，故回 `denied`
-///      降级。宿主把钩子执行接线到插件后台运行时后，此处即真实放行点
-///      （O3 工作项 2 的宿主接线，本层只保证「未接线即降级」的安全默认）。
+/// 3. filtered 钩子（§20.5）：钩子在数据账号侧插件后台运行时执行
+///    （`canRead`/`canWrite`）。纯逻辑层无法执行 JS 钩子，按规格「插件未运行时
+///    该集合**只存不服务**」语义 **fail-closed**——本层不能确认插件运行 +
+///    钩子放行，故回 `denied` 降级。宿主把钩子执行接线到插件后台运行时后，
+///    此处即真实放行点（O3 工作项 2 的宿主接线，本层只保证「未接线即降级」
+///    的安全默认）。
 /// 受理一条 orgq 写入记录落库（数据账号侧，§20.5）。`base` 为集合数据键前缀。
 ///
 /// - `value` 非 null → `put_personal` 版本化写入（现状，随复制组扩散）；
@@ -134,6 +144,204 @@ fn apply_orgq_write<S: StorageBackend>(
     }
 }
 
+/// denied 空集查询应答（非授权者连元数据都不给，§20.5 既有口径）：
+/// 插件未运行降级 / read-gate 门禁拒绝共用同一应答形态。
+fn push_denied_query_resp(
+    out: &mut Vec<OrgsyncOut>,
+    org_id: &str,
+    col_full: &str,
+    request_id: &str,
+    now: i64,
+    from: &str,
+) {
+    let resp = crate::sync::orgsync::build_orgq_query_resp(
+        org_id, col_full, request_id, &[], true, now, true,
+    );
+    out.push(OrgsyncOut::OrgqResp {
+        to_root_id: from.to_string(),
+        body: resp,
+    });
+}
+
+/// 放行采集 + 按 dm 信封体积分批应答（Z6：complete 仅末批 true）。
+/// `allow` 逐 key 裁决（filtered canRead 钩子 / 门禁通过后的恒真）。
+#[allow(clippy::too_many_arguments)]
+fn serve_query_page<S: StorageBackend>(
+    storage: &S,
+    out: &mut Vec<OrgsyncOut>,
+    org_id: &str,
+    col_full: &str,
+    name: &str,
+    version: &str,
+    prefix: Option<&str>,
+    limit: usize,
+    cursor: Option<&str>,
+    allow: &dyn Fn(&str) -> bool,
+    request_id: &str,
+    now: i64,
+    from: &str,
+) {
+    // 放行：按 limit/cursor 字典序续扫驻留记录。
+    let (records, has_more) = crate::sync::orgsync::collect_orgq_records_page(
+        storage, org_id, name, version, prefix, limit, cursor, allow,
+    );
+    let page_complete = !has_more;
+    let batches =
+        crate::sync::orgsync::split_orgq_resp_batches(records, crate::sync::orgsync::ORGSYNC_BATCH_BYTES);
+    let last = batches.len();
+    for (i, batch) in batches.into_iter().enumerate() {
+        let batch_complete = i == last - 1 && page_complete;
+        let resp = crate::sync::orgsync::build_orgq_query_resp(
+            org_id,
+            col_full,
+            request_id,
+            &batch,
+            batch_complete,
+            now,
+            false,
+        );
+        out.push(OrgsyncOut::OrgqResp {
+            to_root_id: from.to_string(),
+            body: resp,
+        });
+    }
+}
+
+/// read-gate 门禁裁决（read-gate §4 第 1–5 步，fail-closed）：true = 放行。
+///
+/// 第 1–4 步由 [`crate::credential::verify_read_auth`] 承载（结构/新鲜度 →
+/// 逐凭证验证链 → credType/subjectDomain 匹配 readPolicy → holderProof 绑定
+/// 本次请求）；第 5 步 policyRef 存在时载入数据属主组织的 B1 策略文档求值
+/// 向上开放矩阵（[`crate::policy::evaluate_read`]）。任一环节数据缺失或
+/// 校验失败 → false（denied 空集应答由调用方落）。
+#[allow(clippy::too_many_arguments)]
+fn read_gate_allows<S: StorageBackend>(
+    storage: &S,
+    owner_org_id: &str,
+    read_policy: &crate::plugindata::ReadPolicy,
+    read_auth: Option<&crate::credential::ReadAuth>,
+    request_id: &str,
+    col_full: &str,
+    is_member: bool,
+    now: i64,
+) -> bool {
+    let Some(read_auth) = read_auth else {
+        log::info!("[ORGQ] read-gate denied: readAuth missing | col={col_full}");
+        return false;
+    };
+    let policy = crate::credential::CredentialReadPolicy {
+        cred_types: read_policy.cred_types.clone(),
+        verifier_domain: read_policy.verifier_domain.clone(),
+    };
+    // 信任声明：verifierDomain 现行版本（org:verifiers: 键域）；缺失/损坏
+    // fail-closed。
+    let trust_decl = storage
+        .get(&crate::credential::trust_decl_key(&read_policy.verifier_domain))
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str::<crate::credential::TrustDecl>(&raw).ok());
+    let Some(trust_decl) = trust_decl else {
+        log::info!(
+            "[ORGQ] read-gate denied: trust decl unavailable | domain={}",
+            read_policy.verifier_domain
+        );
+        return false;
+    };
+    // 注销证明：cred:rev: 本地快照（分发承载面未定，credential §3「承载面随
+    // C10 定」——渠道落地后按 issuer 写入本键域）；缺失 = 数据不可用 →
+    // fail-closed（verify_read_auth 内 revocation-unavailable）。
+    let revocation_for = |issuer: &str| {
+        let raw = storage
+            .get(&crate::credential::revocation_snapshot_key(issuer))
+            .ok()
+            .flatten()?;
+        let snap: crate::credential::RevocationSnapshot = serde_json::from_str(&raw).ok()?;
+        Some((snap.entries, snap.head))
+    };
+    if let Err(e) = crate::credential::verify_read_auth(
+        read_auth,
+        request_id,
+        col_full,
+        &policy,
+        &[&trust_decl],
+        &revocation_for,
+        now,
+    ) {
+        log::info!("[ORGQ] read-gate denied: {} | col={col_full}", e.kind());
+        return false;
+    }
+    // 第 5 步：policyRef 求值（缺省 = 凭证类型匹配即可读全集合，read-gate §2）。
+    let Some(policy_ref) = read_policy.policy_ref.as_deref() else {
+        return true;
+    };
+    policy_ref_allows(storage, owner_org_id, policy_ref, read_auth, col_full, is_member)
+}
+
+/// read-gate §4 第 5 步：policyRef → 数据属主组织的 B1 策略文档求值
+/// （fail-closed：文档缺失 / 引用错位 / 规则未覆盖一律拒绝）。
+fn policy_ref_allows<S: StorageBackend>(
+    storage: &S,
+    owner_org_id: &str,
+    policy_ref: &str,
+    read_auth: &crate::credential::ReadAuth,
+    col_full: &str,
+    is_member: bool,
+) -> bool {
+    // 策略文档：优先发布件（`org:policydoc:` 键域，sdk.policy.publish 产出、
+    // OrgSigSet 合入把关的生效面），缺省回退本地草稿簿记（policy:draft:
+    // 键域，未发布组织的过渡路径）；两路皆缺失即 fail-closed。
+    let doc = storage
+        .get(&crate::org::service::policy_doc_key(owner_org_id))
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str::<crate::policy::PolicyDoc>(&raw).ok())
+        .or_else(|| {
+            storage
+                .get(&crate::kernel::policy_ops::policy_draft_key(owner_org_id))
+                .ok()
+                .flatten()
+                .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+                .and_then(|v| v.get("doc").cloned())
+                .and_then(|v| serde_json::from_value::<crate::policy::PolicyDoc>(v).ok())
+        });
+    let Some(doc) = doc else {
+        log::info!("[ORGQ] read-gate denied: policy doc unavailable | ref={policy_ref}");
+        return false;
+    };
+    let requester = crate::policy::RequesterContext {
+        is_org_member: is_member,
+        // 代表关系判定不在内核（eval 契约：由数据账号侧装配；本期无来源 → false）
+        is_representative: false,
+        credentials: read_auth
+            .credentials
+            .iter()
+            .map(|c| crate::policy::PresentedCredential {
+                cred_type: c.cred_type.clone(),
+                subject_domain: c.subject_domain.clone(),
+            })
+            .collect(),
+    };
+    match crate::policy::evaluate_read(
+        policy_ref,
+        &doc,
+        &requester,
+        &crate::policy::ReadRequest::Collection {
+            collection: col_full,
+        },
+    ) {
+        Ok(verdict) => {
+            if !verdict.is_allow() {
+                log::info!("[ORGQ] read-gate denied: policy {} | col={col_full}", verdict.kind());
+            }
+            verdict.is_allow()
+        }
+        Err(e) => {
+            log::info!("[ORGQ] read-gate denied: policy {} | col={col_full}", e.kind());
+            false
+        }
+    }
+}
+
 pub(super) fn handle_orgq_req<S: StorageBackend>(
     storage: &mut S,
     ctx: &InboundContext<'_>,
@@ -164,130 +372,142 @@ pub(super) fn handle_orgq_req<S: StorageBackend>(
             )
         }
     };
-    // 公共前置：from ∈ 成员表
+    // 公共前置：from ∈ 成员表（read-gate 开放种类见下——credential/public 的
+    // 查询面向组织外开放，凭证/公开声明即授权，read-gate §5）
     let Ok(Some(record)) = OrganizationService::get_record(storage, &org_id) else {
         return done(fail_response("rejected"), Vec::new());
     };
-    if record.find_member(from).is_none() {
+    let is_member = record.find_member(from).is_some();
+
+    // 集合须为已声明的 org scope 集合（声明先行解析：readPolicy 决定资格口径；
+    // 损坏记录按未声明处理，与既有 has_decl 口径一致）
+    let decl_key = crate::plugindata::org_decl_key(&org_id, &name, &version);
+    let decl = storage.get(&decl_key).ok().flatten().and_then(|raw| {
+        serde_json::from_str::<crate::plugindata::CollectionDeclaration>(&raw).ok()
+    });
+    let gate_kind = decl
+        .as_ref()
+        .and_then(|d| d.read_policy.as_ref())
+        .map(|p| p.kind);
+    // 组织外查询仅对 credential/public 门禁的查询开放；写路径恒要求成员
+    let query_open = matches!(req, crate::sync::orgsync::OrgqReq::Query { .. })
+        && matches!(
+            gate_kind,
+            Some(
+                crate::plugindata::ReadPolicyKind::Credential | crate::plugindata::ReadPolicyKind::Public
+            )
+        );
+    if !is_member && !query_open {
         log::info!("[ORGQ] req rejected: from={from} not in org={org_id}");
         return done(fail_response("rejected"), Vec::new());
     }
-
-    // 集合须为已声明的 org scope 集合
-    let decl_key = crate::plugindata::org_decl_key(&org_id, &name, &version);
-    let Some(decl) = storage.get(&decl_key).ok().flatten().and_then(|raw| {
-        serde_json::from_str::<crate::plugindata::CollectionDeclaration>(&raw).ok()
-    }) else {
+    let Some(decl) = decl else {
         return done(fail_response("collection-not-declared"), Vec::new());
     };
 
     let now = ctx.now_ms;
     let mut out = Vec::new();
-    // confidentiality 分流（§20.5）：
-    // - encrypted：内核按当前 acl `readers` 名单过滤（查询非读者 denied 空集、
-    //   连元数据都不给；写入不做名单校验——AEAD 在读取方把关）；
-    // - filtered：钩子在数据账号侧插件后台运行时执行（canRead/canWrite），
-    //   无运行时 fail-closed。
-    let is_encrypted = matches!(
-        decl.confidentiality,
-        crate::plugindata::Confidentiality::Encrypted
-    );
     // filtered 钩子可用性：宿主注入钩子且该集合注册了对应读/写钩子（插件运行中）。
     // 读/写能力独立判定（kind），只注册 canRead 的集合写入仍 fail-closed 拒绝。
-    let is_filtered = matches!(
-        decl.confidentiality,
-        crate::plugindata::Confidentiality::Filtered
-    );
+    // （C7：encrypted 轴退役，org 集合恒为 filtered。）
     let kind = if matches!(req, crate::sync::orgsync::OrgqReq::Query { .. }) {
         "read"
     } else {
         "write"
     };
-    let filtered_serving = is_filtered && hook.is_some_and(|h| h.has_runtime(&col_full, kind));
-    // encrypted 集合：读取方须为当前 acl readers 成员（O4 填实名单来源）。
-    // 无 acl 记录（异常态）→ 非读者（不泄露元数据）。
-    let acl_reader = if is_encrypted {
-        storage
-            .get(&crate::sync::orgsync::acl_key(&org_id, &name, &version))
-            .ok()
-            .flatten()
-            .and_then(|raw| serde_json::from_str::<crate::sync::orgsync::AclRecord>(&raw).ok())
-            .is_some_and(|acl| acl.is_reader(from))
-    } else {
-        false
-    };
+    let filtered_serving = hook.is_some_and(|h| h.has_runtime(&col_full, kind));
     match req {
         crate::sync::orgsync::OrgqReq::Query {
             request_id,
             prefix,
             limit,
             cursor,
+            read_auth,
             ..
         } => {
-            // 分流：encrypted 非读者 / filtered 无运行时 fail-closed → denied 空集。
-            // encrypted 读者 / filtered 钩子运行中 → 放行采集（encrypted 返回密文，
-            // 成员本地解密）。
-            let denied = (is_encrypted && !acl_reader) || (is_filtered && !filtered_serving);
-            if denied {
-                let resp = crate::sync::orgsync::build_orgq_query_resp(
-                    &org_id,
-                    &col_full,
-                    &request_id,
-                    &[],
-                    true,
-                    now,
-                    true,
-                );
-                out.push(OrgsyncOut::OrgqResp {
-                    to_root_id: from.to_string(),
-                    body: resp,
-                });
-            } else {
-                // 放行：按 limit/cursor 字典序续扫驻留记录。
-                // - filtered：逐条过 canRead 过滤（非读者连元数据都不给）；
-                // - encrypted：密文对 readers 全量放行（无内容级过滤，ciphertext
-                //   对 readers 语义透明；写权限由 AEAD 把关）。
-                let hook = if is_filtered {
-                    Some(hook.expect("filtered_serving 隐含 hook 存在"))
-                } else {
-                    None
-                };
-                let allow = |rel: &str| match hook {
-                    Some(h) => h.can_read(from, &col_full, rel),
-                    None => true,
-                };
-                let (records, has_more) = crate::sync::orgsync::collect_orgq_records_page(
-                    storage,
-                    &org_id,
-                    &name,
-                    &version,
-                    prefix.as_deref(),
-                    limit,
-                    cursor.as_deref(),
-                    allow,
-                );
-                // 按 dm 信封体积分批（Z6：complete 仅末批 true；非末批 false）。
-                let page_complete = !has_more;
-                let batches = crate::sync::orgsync::split_orgq_resp_batches(
-                    records,
-                    crate::sync::orgsync::ORGSYNC_BATCH_BYTES,
-                );
-                let last = batches.len();
-                for (i, batch) in batches.into_iter().enumerate() {
-                    let batch_complete = i == last - 1 && page_complete;
-                    let resp = crate::sync::orgsync::build_orgq_query_resp(
+            // read-gate 分流（read-gate §4/§5）：门禁种类决定查询面授权口径。
+            match gate_kind {
+                // credential：凭证校验替代插件钩子——门禁通过即全集合放行
+                // （不过 canRead）；失败 fail-closed → denied 空集。
+                Some(crate::plugindata::ReadPolicyKind::Credential) => {
+                    let read_policy = decl
+                        .read_policy
+                        .as_ref()
+                        .expect("gate_kind 隐含 readPolicy 存在");
+                    if read_gate_allows(
+                        storage,
+                        &org_id,
+                        read_policy,
+                        read_auth.as_ref(),
+                        &request_id,
+                        &col_full,
+                        is_member,
+                        now,
+                    ) {
+                        serve_query_page(
+                            storage,
+                            &mut out,
+                            &org_id,
+                            &col_full,
+                            &name,
+                            &version,
+                            prefix.as_deref(),
+                            limit,
+                            cursor.as_deref(),
+                            &|_| true,
+                            &request_id,
+                            now,
+                            from,
+                        );
+                    } else {
+                        push_denied_query_resp(&mut out, &org_id, &col_full, &request_id, now, from);
+                    }
+                }
+                // public：公开发布——无需凭证、不经插件钩子直接服务。
+                Some(crate::plugindata::ReadPolicyKind::Public) => {
+                    serve_query_page(
+                        storage,
+                        &mut out,
                         &org_id,
                         &col_full,
+                        &name,
+                        &version,
+                        prefix.as_deref(),
+                        limit,
+                        cursor.as_deref(),
+                        &|_| true,
                         &request_id,
-                        &batch,
-                        batch_complete,
                         now,
-                        false,
+                        from,
                     );
-                    out.push(OrgsyncOut::OrgqResp {
-                        to_root_id: from.to_string(),
-                        body: resp,
-                    });
+                }
+                // members（缺省现状）：filtered 无运行时 fail-closed → denied
+                // 空集；钩子运行中 → 放行采集（逐条过 canRead 过滤，非读者连
+                // 元数据都不给）。
+                _ => {
+                    if !filtered_serving {
+                        push_denied_query_resp(
+                            &mut out, &org_id, &col_full, &request_id, now, from,
+                        );
+                    } else {
+                        let hook = hook.expect("filtered_serving 隐含 hook 存在");
+                        let allow = |rel: &str| hook.can_read(from, &col_full, rel);
+                        serve_query_page(
+                            storage,
+                            &mut out,
+                            &org_id,
+                            &col_full,
+                            &name,
+                            &version,
+                            prefix.as_deref(),
+                            limit,
+                            cursor.as_deref(),
+                            &allow,
+                            &request_id,
+                            now,
+                            from,
+                        );
+                    }
                 }
             }
         }
@@ -296,57 +516,14 @@ pub(super) fn handle_orgq_req<S: StorageBackend>(
             records,
             ..
         } => {
-            // encrypted 写入**不做名单校验**（§20.5/org-data-sync §5）：集合密钥
-            // 同时提供完整性，非密钥持有者构造的写入在读取方解密失败被丢弃；
-            // 数据账号侧只存密文、不判名单。filtered 无运行时 fail-closed denied
-            //（杜绝未授权写库）；filtered + 钩子运行中 → 逐条 canWrite 裁决。
+            // filtered 无运行时 fail-closed denied（杜绝未授权写库）；
+            // filtered + 钩子运行中 → 逐条 canWrite 裁决。
             let mut accepted = 0usize;
             let mut rejected = 0usize;
-            // encrypted 恒受理（写入资格 = 持有集合密钥，读取方 AEAD 把关）；
             // filtered 无运行时 → denied（整批拒绝）。
-            let denied = is_filtered && !filtered_serving;
+            let denied = !filtered_serving;
             let base = crate::plugindata::org_data_prefix(&org_id, &name, &version);
-            if is_encrypted {
-                // encrypted：数据账号只存密文。普通写不判名单（AEAD 在读取方
-                // 把关——密钥持有者集合=写权限集合）。**删除（value:null）例外**
-                // （O4）：墓碑无密文可验，须要求 from ∈ 当前 acl readers（普通写
-                // 维持 AEAD 兜底；删除是权力行为，非读者删除拒绝）。受理删除
-                // 落审计日志 `orgq:audit:{orgId}:{collection}:{seq}` = (from,key,ts)。
-                for record in &records {
-                    let rel = record.key.strip_prefix(&base).unwrap_or(&record.key);
-                    if record.value.is_null() && !acl_reader {
-                        log::info!(
-                            "[ORGQ] encrypted delete denied: from={} non-reader col={col_full} key={}",
-                            &from[..std::cmp::min(16, from.len())],
-                            &rel[..std::cmp::min(16, rel.len())]
-                        );
-                        rejected += 1;
-                        continue;
-                    }
-                    if apply_orgq_write(
-                        storage,
-                        ctx,
-                        &org_id,
-                        &name,
-                        &version,
-                        &base,
-                        rel,
-                        &record.value,
-                        now,
-                    ) {
-                        // O4：encrypted 删除受理落审计日志（from,key,ts）——
-                        // 最简独立审计键族，防删除越权事后追查。
-                        if record.value.is_null() {
-                            crate::sync::orgsync::orgq_audit_log_delete(
-                                storage, &org_id, &col_full, from, rel, now,
-                            );
-                        }
-                        accepted += 1;
-                    } else {
-                        rejected += 1;
-                    }
-                }
-            } else if !denied {
+            if !denied {
                 let hook = hook.expect("filtered_serving 隐含 hook 存在");
                 for record in &records {
                     let rel = record.key.strip_prefix(&base).unwrap_or(&record.key);
@@ -398,8 +575,8 @@ pub(super) fn handle_orgq_req<S: StorageBackend>(
         profile_sync_reply: None,
         pdsync_out: Vec::new(),
         orgsync_out: out,
+        affairsync_out: Vec::new(),
         profile_applied: false,
-        orgkey_unbox: Vec::new(),
         feed_blob_out: None,
     })
 }
@@ -571,8 +748,8 @@ pub(super) fn handle_orgq_resp<S: StorageBackend>(
         profile_sync_reply: None,
         pdsync_out: Vec::new(),
         orgsync_out: Vec::new(),
+        affairsync_out: Vec::new(),
         profile_applied: false,
-        orgkey_unbox: Vec::new(),
         feed_blob_out: None,
     })
 }

@@ -5,6 +5,44 @@ use serde_json::Value;
 
 use super::super::{OrgError, Result};
 
+/// 成员种类（org-genesis §3.2）：`kind?: 'person' | 'org'`，键缺失 = person
+/// （向后兼容：存量成员记录无此键即个人成员）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MemberKind {
+    /// 个人成员（只能加入叶组织）。
+    #[default]
+    Person,
+    /// 组织成员（以其在本域的域身份 id 入册，只能加入共同体域）。
+    Org,
+}
+
+impl MemberKind {
+    /// TS 字符串形式。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Person => "person",
+            Self::Org => "org",
+        }
+    }
+}
+
+/// 成员的公开组织绑定（org-genesis §3.2 `orgBinding`）：opt-in 公开 orgId /
+/// 组织地址（可见性策略；缺省不公开）。仅本人可改（与 accessKey 同口径）。
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrgBinding {
+    /// 公开 orgId 绑定（双形态；可省）。
+    #[serde(rename = "orgId", default, skip_serializing_if = "Option::is_none")]
+    pub org_id: Option<String>,
+    /// 公开组织地址（可省）。
+    #[serde(
+        rename = "orgAddress",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub org_address: Option<String>,
+}
+
 /// 组织成员角色。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -248,8 +286,8 @@ impl OrganizationDeviceSet {
         }
     }
 
-    /// 遍历端点，供消费方（org-pull 候选 / orgsync-hello 目标 / dm 寻址 /
-    /// 记账）构造 [`crate::p2p::peer_targets::PeerNodeInfo`]。
+    /// 遍历端点，供消费方（orgsync-hello 目标 / dm 寻址 / 记账）构造
+    /// [`crate::p2p::peer_targets::PeerNodeInfo`]。
     pub fn iter(&self) -> impl Iterator<Item = &OrganizationNodeInfo> {
         self.endpoints.iter()
     }
@@ -260,7 +298,9 @@ impl OrganizationDeviceSet {
 ///
 /// 线形含 `publicKey`（域身份公钥 b64）与 `bindSig`（根密钥对绑定载荷的签名
 /// b64）。绑定载荷 = `"org-access:{orgId}:{publicKey}"`——由成员根私钥签名，
-/// 证明本成员拥有该组织访问身份（验签方据此拿公钥验 acl/orgkey-deliver 签名）。
+/// 证明本成员拥有该组织访问身份。
+/// （C7：原消费方 acl/orgkey-deliver 已随 encrypted 轴退役；字段作为惰性
+/// 可选位保留——serde 缺省兼容，不主动写入。）
 /// 组织身份字段仅本人可改（与 nickname/avatar 同路径，经快照 members 段传播）。
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OrganizationAccessKey {
@@ -328,9 +368,28 @@ pub struct OrganizationMember {
     /// encrypted 能力/未加入组织惰性派生），存量记录兼容。
     #[serde(rename = "accessKey", default, skip_serializing_if = "Option::is_none")]
     pub access_key: Option<OrganizationAccessKey>,
+    /// 成员种类（org-genesis §3.2）：`None` = 键缺失 = person（向后兼容）。
+    /// `kind: 'org'` 时 `root_id` 槽位承载该组织在本域的域身份 id（
+    /// org-genesis §4 派生，仍 `^[0-9a-f]{64}$`）；orgId 不直接出现在成员关系中。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<MemberKind>,
+    /// opt-in 公开组织绑定（org-genesis §3.2；仅本人可改，同 accessKey 口径）。
+    #[serde(
+        rename = "orgBinding",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub org_binding: Option<OrgBinding>,
     /// 非标准动态键。
     #[serde(flatten)]
     pub extra: serde_json::Map<String, Value>,
+}
+
+impl OrganizationMember {
+    /// 成员种类（键缺失 = person，org-genesis §3.2 缺省向后兼容）。
+    pub fn member_kind(&self) -> MemberKind {
+        self.kind.unwrap_or_default()
+    }
 }
 
 /// `sortMembers`（service.ts:79-86）：admin 优先，其余按 joinedAt 升序。

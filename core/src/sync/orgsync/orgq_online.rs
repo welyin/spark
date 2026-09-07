@@ -93,7 +93,10 @@ pub fn orgq_note_data_account_duty<S: StorageBackend>(
     now_ms: i64,
 ) {
     let value = serde_json::json!({ "ts": now_ms, "deviceClass": device_class });
-    let _ = storage.put(&orgq_da_duty_key(org_id, root_id, peer_id), &value.to_string());
+    let _ = storage.put(
+        &orgq_da_duty_key(org_id, root_id, peer_id),
+        &value.to_string(),
+    );
 }
 
 /// 读取某组织的全部履职观测 → `(rootId, peerId, deviceClass, 观测时刻)`。
@@ -283,6 +286,8 @@ mod tests {
                     region: None,
                     use_personal_identity: None,
                     access_key: None,
+                    kind: None,
+                    org_binding: None,
                     extra: Default::default(),
                 })
                 .collect(),
@@ -291,6 +296,7 @@ mod tests {
             data_accounts: data_accounts.iter().map(|r| r.to_string()).collect(),
             org_address: None,
             is_public: false,
+            domain_type: None,
             extra: Default::default(),
         }
     }
@@ -304,14 +310,29 @@ mod tests {
         orgq_note_data_account_duty(&mut s, "org_02", "da-x", "peer-x", "pc", 3000);
         let obs = orgq_da_duty_observations(&s, "org_01");
         assert_eq!(obs.len(), 2);
-        assert!(obs.contains(&("da-a".to_string(), "peer-a1".to_string(), "pc".to_string(), 1000)));
-        assert!(obs.contains(&("da-a".to_string(), "peer-a2".to_string(), "mobile".to_string(), 2000)));
+        assert!(obs.contains(&(
+            "da-a".to_string(),
+            "peer-a1".to_string(),
+            "pc".to_string(),
+            1000
+        )));
+        assert!(obs.contains(&(
+            "da-a".to_string(),
+            "peer-a2".to_string(),
+            "mobile".to_string(),
+            2000
+        )));
         assert_eq!(orgq_da_duty_observations(&s, "org_02").len(), 1);
         // 覆盖写（同设备再次履职刷新时刻）
         orgq_note_data_account_duty(&mut s, "org_01", "da-a", "peer-a1", "pc", 5000);
         let obs = orgq_da_duty_observations(&s, "org_01");
         assert_eq!(obs.len(), 2);
-        assert!(obs.contains(&("da-a".to_string(), "peer-a1".to_string(), "pc".to_string(), 5000)));
+        assert!(obs.contains(&(
+            "da-a".to_string(),
+            "peer-a1".to_string(),
+            "pc".to_string(),
+            5000
+        )));
     }
 
     #[test]

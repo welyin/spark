@@ -18,6 +18,7 @@
 
 import type { ElectronAPI } from '../api';
 import type { FetchStreamHandle, PluginSDK, SysFetchChunk } from '../../../packages/plugin-sdk/src';
+import { buildGenesisDraft, deriveIdentity, signPayload } from '../../../packages/plugin-sdk/src/affair-wire';
 
 // 类型门面：SDK 类型的唯一来源是 @spark/plugin-sdk，此处统一 re-export
 export type {
@@ -30,6 +31,10 @@ export type {
   PluginIdentityAPI,
   PluginCollectionSchema,
   PluginDeclaredCollectionSchema,
+  // community-affairs §7.2 新模块类型
+  PluginAffairsAPI,
+  PluginCredentialsAPI,
+  PluginPolicyAPI,
   PluginSDK
 } from '../../../packages/plugin-sdk/src';
 
@@ -131,13 +136,6 @@ export function createPluginBackend(
         electronAPI.plugin.dataSaveBlob(dataBase64),
       readBlob: (hash) =>
         electronAPI.plugin.dataReadBlob(hash),
-      // O4 encrypted 授权名单（owner 侧）：orgId 由桥绑定注入（boundOrgId）
-      grantAccess: (name, members, version) =>
-        electronAPI.plugin.dataGrantAccess(boundOrgId ?? '', name, version ?? '1', members),
-      revokeAccess: (name, members, version) =>
-        electronAPI.plugin.dataRevokeAccess(boundOrgId ?? '', name, version ?? '1', members),
-      listAccess: (name, version) =>
-        electronAPI.plugin.dataListAccess(boundOrgId ?? '', name, version ?? '1'),
       // iframe 侧远端合入通知由 PluginIframeHost 经桥事件通道实现；
       // 本后端（宿主内嵌 QuickJS 等直连接口）无该通路，以 no-op 满足契约
       onChange: async () => {}
@@ -172,6 +170,74 @@ export function createPluginBackend(
       // 本后端（宿主内嵌 QuickJS 等直连接口）无该通路，以 no-op 满足契约
       // （同 data.onChange 口径）
       onReceive: async () => {}
+    },
+    // 内容面 blob（public-topics §七 sdk.content；权限由桥 dispatcher 强制
+    // storage:read/storage:write）
+    content: {
+      saveBlob: (dataBase64: string) => electronAPI.content.saveBlob(dataBase64),
+      readBlob: (cid: string) => electronAPI.content.readBlob(cid),
+      fetchBlob: (cid: string) => electronAPI.content.fetchBlob(cid),
+      listBlobs: () => electronAPI.content.listBlobs(),
+      pinRoot: (cid: string, root: string) => electronAPI.content.pinRoot(cid, root),
+      unpinRoot: (cid: string, root: string) => electronAPI.content.unpinRoot(cid, root),
+      gcSweep: () => electronAPI.content.gcSweep()
+    },
+    // community-affairs §7.2 sdk.affairs：内核 affair 门面薄壳；权限由桥
+    // dispatcher 强制（affairs:read / affairs:write）
+    affairs: {
+      // 创建事务（与桥 client 同构的组合实现）：构造创世记录 → 两次域身份
+      // 签名（探测取公钥 + 记录签名）→ follow（内核全链校验）
+      create: async (input) => {
+        const probe = await electronAPI.plugin.identitySign('spark:affair-actor-probe', pluginDomain);
+        const actor = {
+          kind: 'person' as const,
+          identity: deriveIdentity(probe.publicKey),
+          publicKey: probe.publicKey
+        };
+        const draft = buildGenesisDraft(input, actor, Date.now());
+        const signed = await electronAPI.plugin.identitySign(signPayload(draft), pluginDomain);
+        const genesis = { ...draft, sig: signed.signature };
+        const affairId = await electronAPI.affairs.follow(genesis);
+        return { affairId, genesis };
+      },
+      follow: (genesis) => electronAPI.affairs.follow(genesis),
+      unfollow: (affairId) => electronAPI.affairs.unfollow(affairId),
+      listFollowed: () => electronAPI.affairs.listFollowed(),
+      submitOp: (op) => electronAPI.affairs.submitOp(op),
+      readLog: (affairId) => electronAPI.affairs.readLog(affairId),
+      readRules: (affairId) => electronAPI.affairs.readRules(affairId),
+      readResolution: (affairId) => electronAPI.affairs.readResolution(affairId),
+      ladderStatus: (affairId) => electronAPI.affairs.ladderStatus(affairId),
+      publicProfile: (identity) => electronAPI.affairs.publicProfile(identity),
+      snapshotPayload: (affairId, asOf) => electronAPI.affairs.snapshotPayload(affairId, asOf),
+      readExec: (affairId) => electronAPI.affairs.readExec(affairId),
+      orgEffects: (orgId, affairId) => electronAPI.affairs.orgEffects(orgId, affairId),
+      applyOrgEffects: (orgId, affairId) => electronAPI.affairs.applyOrgEffects(orgId, affairId),
+      // 变更订阅经桥事件通道（PluginIframeHost 转发 AffairChanged）实现；
+      // 本后端（宿主内嵌直连接口）无该通路，以 no-op 满足契约（同 data.onChange）
+      onChange: async () => {}
+    },
+    // community-affairs §7.2 sdk.credentials：presentHolderProof 的签名域由本
+    // 后端按绑定域注入（插件不可自报他人域）
+    credentials: {
+      listHeld: () => electronAPI.credentials.listHeld(),
+      presentHolderProof: (input) =>
+        electronAPI.credentials.presentHolderProof(
+          pluginDomain,
+          input.credId,
+          input.requestId,
+          input.orgId,
+          input.collection
+        ),
+      queryVerifiers: (orgId) => electronAPI.credentials.queryVerifiers(orgId),
+      verify: (credential) => electronAPI.credentials.verify(credential as Record<string, unknown>),
+      queryRevocations: (issuer) => electronAPI.credentials.queryRevocations(issuer)
+    },
+    // community-affairs §7.2 sdk.policy：本地草稿读写 + 发布合入；权限由桥 dispatcher 强制
+    policy: {
+      read: (orgId) => electronAPI.policy.read(orgId),
+      submitDraft: (doc) => electronAPI.policy.submitDraft(doc),
+      publish: (orgId) => electronAPI.policy.publish(orgId)
     },
     sys: electronAPI.sys
       ? {

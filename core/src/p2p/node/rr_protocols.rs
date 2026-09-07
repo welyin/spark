@@ -451,4 +451,94 @@ impl<S: StorageBackend> EventLoop<S> {
             }
         }
     }
+
+    // ------------------------------------------------------------------
+    // indexer 查询（affair-metadata §8；轻客户端 → 启用角色节点，单发单收）
+    // ------------------------------------------------------------------
+
+    /// 发起：向已连接的 indexer 节点发送查询帧；未连接/解析失败按超时口径
+    /// 回错（目录查询的寻址由调用方经 indexer 目录/覆盖网完成，不在此 fan-out）。
+    pub(super) fn begin_affair_meta_query(
+        &mut self,
+        peer_id: &str,
+        request: String,
+        tx: oneshot::Sender<Result<String>>,
+    ) {
+        let Ok(peer) = peer_id.parse::<PeerId>() else {
+            let _ = tx.send(Err(P2pError::Malformed("invalid peer id".to_string())));
+            return;
+        };
+        if !self.connected_peers().contains(&peer) {
+            let _ = tx.send(Err(P2pError::Protocol(
+                "indexer peer not connected".to_string(),
+            )));
+            return;
+        }
+        let request_id = self
+            .swarm
+            .behaviour_mut()
+            .affair_meta_rr
+            .send_request(&peer, request);
+        self.pending_affair_meta.insert(request_id, tx);
+    }
+
+    /// 应答：帧级校验 → 逐请求方限流 → 交宿主回调（indexer 角色判定与
+    /// 确定性分发全在 host/index 层，p2p 不做业务落库）。坏帧回 bad-query。
+    pub(super) fn answer_affair_meta(
+        &mut self,
+        peer: PeerId,
+        request: String,
+        channel: request_response::ResponseChannel<String>,
+    ) {
+        let respond = |behaviour: &mut crate::p2p::behaviour::SparkBehaviour, text: String| {
+            let _ = behaviour.affair_meta_rr.send_response(channel, text);
+        };
+        let Some((query_id, payload)) = direct::parse_affair_meta_request(&request) else {
+            respond(
+                self.swarm.behaviour_mut(),
+                direct::build_affair_meta_response(
+                    "unknown",
+                    &serde_json::json!({ "error": "bad-query" }),
+                ),
+            );
+            return;
+        };
+        if self
+            .affair_meta_limiter
+            .is_rate_limited(&peer.to_base58(), self.now())
+        {
+            respond(
+                self.swarm.behaviour_mut(),
+                direct::build_affair_meta_response(
+                    &query_id,
+                    &serde_json::json!({ "error": "rate-limited" }),
+                ),
+            );
+            return;
+        }
+        let result = self.host.handle_affair_meta_query(&payload);
+        respond(
+            self.swarm.behaviour_mut(),
+            direct::build_affair_meta_response(&query_id, &result),
+        );
+    }
+
+    pub(super) fn resolve_affair_meta_outbound(
+        &mut self,
+        request_id: request_response::OutboundRequestId,
+        response: Option<String>,
+    ) {
+        if let Some(tx) = self.pending_affair_meta.remove(&request_id) {
+            match response {
+                Some(text) => {
+                    let _ = tx.send(Ok(text));
+                }
+                None => {
+                    let _ = tx.send(Err(P2pError::Timeout(
+                        "affair-meta query failed".to_string(),
+                    )));
+                }
+            }
+        }
+    }
 }

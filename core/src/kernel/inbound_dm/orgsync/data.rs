@@ -1,10 +1,10 @@
 //! orgsync-data 入站（从 `orgsync` 拆出，文件长度硬线）：逐条合入 + B3 键域
-//! 白名单 + acl/org:meta/org:member/声明四个分流分支 + 删除日志回执。
-//! （阶段四A P1：新增 org:member per-member 记录分支与 whole 合入就地投影。）
+//! 白名单 + org:meta/org:member/声明分流分支 + 删除日志回执。
+//! （阶段四A P1：新增 org:member per-member 记录分支与 whole 合入就地投影；
+//! C7：原 acl 分流分支随 encrypted 轴退役移除。）
 
 use serde_json::Value;
 
-use super::acl::apply_acl_record_verified;
 use super::super::{
     InboundContext, InboundDmResult, OrgsyncOut, Result, done, fail_response, ok_response,
 };
@@ -62,15 +62,12 @@ pub(crate) fn handle_orgsync_data<S: StorageBackend>(
     // 此处的精确 decl 前缀放行保留兼容（旧端可能仍内联携带本集合声明）。
     let data_prefixes = crate::sync::orgsync::collection_data_prefixes(&org_id, name, version);
     let coll_decl_prefix = format!("org:coll:{org_id}:{name}@v{version}");
-    // O4：授权名单（org:acl:）为 all-members 系统数据，随本集合组织流量同步。
-    let coll_acl_prefix = crate::sync::orgsync::acl_key(&org_id, name, version);
     for record_item in &records {
         let valid = data_prefixes.iter().any(|p| record_item.key.starts_with(p))
-            || record_item.key.starts_with(&coll_decl_prefix)
-            || record_item.key.starts_with(&coll_acl_prefix);
+            || record_item.key.starts_with(&coll_decl_prefix);
         if !valid {
-            // H4：拒绝日志只打 key 前缀截断（越界 key 可能是敏感键如 orgkey:，
-            // 全量打印泄漏明文）。
+            // H4：拒绝日志只打 key 前缀截断（越界 key 可能是敏感键，全量打印
+            // 泄漏明文）。
             let key_frag = &record_item.key[..std::cmp::min(16, record_item.key.len())];
             log::info!(
                 "[ORGSYNC] data rejected: key out of collection prefix | org={org_id} col={col_full} key={key_frag}"
@@ -80,82 +77,10 @@ pub(crate) fn handle_orgsync_data<S: StorageBackend>(
     }
 
     let mut max_dseq: Option<u64> = None;
-    // F3 残余 §7.1：acl / org:meta（成员表 accessKey 段）合入后重评估
-    // orgkey-deliver 暂存产出的 unbox 指令（随本结果带出，host 解包落库）。
-    let mut stash_unboxes: Vec<super::super::orgkey::OrgkeyUnbox> = Vec::new();
     let mut events = Vec::new();
-    // F2-P3 同批顺序（评审修复）：创世 acl 的锚 = 本地收敛声明的 declaredBy
-    // ——同批到达时必须先合入声明（及 org:meta/数据/墓碑）再验 acl。采集侧按
-    // 前缀序 org:acl: < org:coll: 排列（builtin.rs 键域序），同批 acl 抢跑
-    // 声明会创世锚失败整批拒收、声明永不落地、下轮同序同败（死锁）。两趟
-    // 稳定排序：acl 记录一律最后处理（max_dseq 是 max 聚合，与顺序无关）。
-    let mut ordered: Vec<&crate::sync::orgsync::OrgsyncRecord> = Vec::with_capacity(records.len());
-    ordered.extend(
-        records
-            .iter()
-            .filter(|r| crate::sync::orgsync::parse_acl_key(&r.key).is_none()),
-    );
-    ordered.extend(
-        records
-            .iter()
-            .filter(|r| crate::sync::orgsync::parse_acl_key(&r.key).is_some()),
-    );
-    for record_item in ordered {
+    for record_item in &records {
         if let Some(dseq) = record_item.dseq {
             max_dseq = Some(max_dseq.map_or(dseq, |m: u64| m.max(dseq)));
-        }
-
-        // O4 §20.7：授权名单（org:acl:）合入走 acl 验签 + whole 合并，不直接
-        // LWW 合入——签名者须 ∈ 变更前本地 owners（创世除外）、签名用成员表
-        // accessKey 公钥；验签失败拒绝合入保留本地。
-        if let Some((a_org_id, a_name, a_version)) =
-            crate::sync::orgsync::parse_acl_key(&record_item.key)
-        {
-            // R3：acl 是 all-members 系统数据，经 org:structure 集合流量全员
-            // 同步——允许 acl 的 org 与当前集合一致（org:structure 承载 acl）
-            // 或与当前集合完全匹配（插件集合内联旧路径），防跨组织 acl 混入。
-            let scope_ok = a_org_id == org_id
-                && (a_name == name && a_version == version
-                    || name == "org:structure" && version == "1");
-            if !scope_ok {
-                let key_frag = &record_item.key[..std::cmp::min(16, record_item.key.len())];
-                log::info!(
-                    "[ORGSYNC] acl scope mismatch | org={org_id} col={col_full} key={key_frag}"
-                );
-                return done(fail_response("acl-scope-mismatch"), Vec::new());
-            }
-            // batch1 §2（f123 建议 2）：acl 验签读**最新**成员表——同批
-            // org:meta（携带 signer accessKey）已先合入（两趟排序 acl 最后），
-            // 函数入口快照不含它；重读见到的是过了全部既有闸（复制组 + 白名单
-            // + F1 合并 accessKey 写一次守卫）的快照。
-            let fresh_record = match OrganizationService::get_record(storage, &a_org_id) {
-                Ok(Some(r)) => r,
-                _ => record.clone(), // 记录异常缺失/损坏 → 回退入口快照（不会更糟）
-            };
-            if let Some(reason) = apply_acl_record_verified(
-                storage,
-                &fresh_record,
-                from,
-                &a_org_id,
-                &a_name,
-                &a_version,
-                &record_item.value,
-                &record_item.meta,
-                ctx.now_ms,
-            )? {
-                log::info!(
-                    "[ORGSYNC] acl rejected | org={org_id} col={col_full} from={} reason={}",
-                    &from[..std::cmp::min(16, from.len())],
-                    reason
-                );
-                return done(fail_response(&reason), Vec::new());
-            }
-            // F3 残余 §7.1：acl 合入（含本地胜出保留——acl 可能此前已更新）
-            // 后重评估 orgkey-deliver 暂存
-            stash_unboxes.extend(super::super::orgkey::reevaluate_orgkey_stash(
-                storage, ctx, &org_id,
-            )?);
-            continue;
         }
 
         // F1：org:meta（org:structure whole 记录）并发合入走成员级结构化合并
@@ -175,10 +100,6 @@ pub(crate) fn handle_orgsync_data<S: StorageBackend>(
                     "[ORGSYNC] data applied | org={org_id} col={col_full} key={}",
                     record_item.key
                 );
-                // F3 残余 §7.1：org:meta（成员表 accessKey 段）合入后重评估暂存
-                stash_unboxes.extend(super::super::orgkey::reevaluate_orgkey_stash(
-                    storage, ctx, &org_id,
-                )?);
                 // F4 第二层（batch3 §1.2 成员表对账兜底；裁决 §10.2 收紧触发
                 // 为「invitee 自写分量到达」）：合入记录 vv 分量 ∩ invitee 已知
                 // 端点非空才置 accepted（预录/中继不误标）。重读合并后的最新记录。
@@ -199,14 +120,24 @@ pub(crate) fn handle_orgsync_data<S: StorageBackend>(
                 }
                 // 阶段四A P1 混跑兼容（设计 §6）：旧端只写 whole org:meta——
                 // whole 合入后就地投影成员条目（远端语义，不 bump 本机）。
-                let whole_meta = crate::sync::get_personal_meta(storage, &record_item.key)?
-                    .unwrap_or_default();
+                let whole_meta =
+                    crate::sync::get_personal_meta(storage, &record_item.key)?.unwrap_or_default();
                 crate::org::service::project_member_entries_from_whole(
                     storage,
                     &org_id,
                     &fresh.members,
                     &whole_meta,
                 )?;
+                // C1 合入侧执法（org-genesis §3.2/§3.3）：共同体硬规则
+                // （成员种类 + 成环）对合入后名册逐条校验，违规 kind=org 条目
+                // 剔除——值改写不 bump 本机分量、pmeta 不动（合入语义，与
+                // 结构化合并同口径）。
+                let mut enforced = fresh;
+                if OrganizationService::enforce_incoming_roster(storage, &mut enforced)? > 0 {
+                    storage
+                        .put(&record_item.key, &serde_json::to_string(&enforced)?)
+                        .map_err(crate::sync::SyncError::from)?;
+                }
             }
             continue;
         }
@@ -269,6 +200,95 @@ pub(crate) fn handle_orgsync_data<S: StorageBackend>(
             continue;
         }
 
+        // C1：创世策略记录（org:genesis:）写一次不可变——三重校验（orgId
+        // 自认证复算 + 根签名验签 + orgAddress 互绑复算）过后才准落库；
+        // 本地已有且不一致保留本地（LWW 不适用于自认证锚），校验失败拒收。
+        if record_item.key.starts_with("org:genesis:")
+            && !crate::sync::is_tombstone(&record_item.meta)
+        {
+            if crate::org::service::admit_incoming_genesis(
+                storage,
+                &record_item.key,
+                &record_item.value,
+            )? {
+                let value_str = serde_json::to_string(&record_item.value)?;
+                crate::sync::apply_personal_remote_no_dlog(
+                    storage,
+                    &record_item.key,
+                    &value_str,
+                    &record_item.meta,
+                )?;
+            } else {
+                log::info!(
+                    "[ORGSYNC] genesis record rejected | org={org_id} key={}",
+                    record_item.key
+                );
+            }
+            continue;
+        }
+
+        // credential §4：验证人信任声明（org:verifiers:）合入走
+        // merge_trust_decl（结构 + sigSet 绑定 + OrgSigSet 五步链 + 逐版
+        // LWW）——裁决 Accept 才落地，其余（KeepCurrent/Rejected）不写。
+        if record_item.key.starts_with("org:verifiers:")
+            && !crate::sync::is_tombstone(&record_item.meta)
+        {
+            match crate::org::service::adjudicate_incoming_trust_decl(
+                storage,
+                &org_id,
+                &record_item.value,
+            )? {
+                crate::org::service::TrustDeclMerge::Accept => {
+                    let value_str = serde_json::to_string(&record_item.value)?;
+                    crate::sync::apply_personal_remote_no_dlog(
+                        storage,
+                        &record_item.key,
+                        &value_str,
+                        &record_item.meta,
+                    )?;
+                }
+                crate::org::service::TrustDeclMerge::KeepCurrent => {}
+                crate::org::service::TrustDeclMerge::Rejected => {
+                    log::info!(
+                        "[ORGSYNC] trustDecl rejected | org={org_id} key={}",
+                        record_item.key
+                    );
+                }
+            }
+            continue;
+        }
+
+        // policy §2：发布策略文档（org:policydoc:）合入走
+        // adjudicate_incoming_policy_doc（结构 + sigSet subject 绑定 +
+        // OrgSigSet 五步链 + updatedAt LWW）——裁决 Accept 才落地。
+        if record_item.key.starts_with(crate::org::service::POLICY_DOC_PREFIX)
+            && !crate::sync::is_tombstone(&record_item.meta)
+        {
+            match crate::org::service::adjudicate_incoming_policy_doc(
+                storage,
+                &org_id,
+                &record_item.value,
+            )? {
+                crate::org::service::PolicyDocMerge::Accept => {
+                    let value_str = serde_json::to_string(&record_item.value)?;
+                    crate::sync::apply_personal_remote_no_dlog(
+                        storage,
+                        &record_item.key,
+                        &value_str,
+                        &record_item.meta,
+                    )?;
+                }
+                crate::org::service::PolicyDocMerge::KeepCurrent => {}
+                crate::org::service::PolicyDocMerge::Rejected => {
+                    log::info!(
+                        "[ORGSYNC] policyDoc rejected | org={org_id} key={}",
+                        record_item.key
+                    );
+                }
+            }
+            continue;
+        }
+
         // 阶段四F §8：存证锚（org:evi:anchor:）LWW 覆盖前的分叉证据保全——
         // 同 nodeId 回退/同 seq 异 hash → 双份签名锚留档（本地 org:evi:fork:
         // 键）+ WARN 告警后仍按 LWW 合入（检测分歧、不做裁决；治理面采纳时
@@ -292,7 +312,8 @@ pub(crate) fn handle_orgsync_data<S: StorageBackend>(
                     &incoming.node_id,
                     ctx.now_ms,
                 );
-                let archive = crate::evidence::fork_archive_value(&local, &incoming, kind, ctx.now_ms);
+                let archive =
+                    crate::evidence::fork_archive_value(&local, &incoming, kind, ctx.now_ms);
                 storage
                     .put(&archive_key, &serde_json::to_string(&archive)?)
                     .map_err(crate::sync::SyncError::from)?;
@@ -399,8 +420,8 @@ pub(crate) fn handle_orgsync_data<S: StorageBackend>(
         profile_sync_reply: None,
         pdsync_out: Vec::new(),
         orgsync_out: out,
+        affairsync_out: Vec::new(),
         profile_applied: false,
-        orgkey_unbox: stash_unboxes,
         feed_blob_out: None,
     })
 }
@@ -510,8 +531,7 @@ fn apply_org_member_record_merged<S: StorageBackend>(
     );
     let value_str = serde_json::to_string(value)?;
     let fallback_lww = |storage: &mut S| -> Result<bool> {
-        let r =
-            crate::sync::apply_personal_remote_no_dlog(storage, key, &value_str, remote_meta)?;
+        let r = crate::sync::apply_personal_remote_no_dlog(storage, key, &value_str, remote_meta)?;
         Ok(r.did_apply())
     };
     if !matches!(cmp, crate::sync::meta::CompareResult::Concurrent) {
@@ -520,9 +540,7 @@ fn apply_org_member_record_merged<S: StorageBackend>(
     // Concurrent：成员级结构化合并
     let parsed = storage
         .get(key)?
-        .and_then(|raw| {
-            serde_json::from_str::<crate::org::types::OrganizationMember>(&raw).ok()
-        })
+        .and_then(|raw| serde_json::from_str::<crate::org::types::OrganizationMember>(&raw).ok())
         .zip(serde_json::from_value::<crate::org::types::OrganizationMember>(value.clone()).ok());
     let Some((local_m, remote_m)) = parsed else {
         return fallback_lww(storage);
@@ -533,12 +551,8 @@ fn apply_org_member_record_merged<S: StorageBackend>(
         serde_json::to_string(&local_m).unwrap_or_default(),
     );
     let remote_rank = (remote_meta.ts, value_str);
-    let merged = crate::org::meta_merge::merge_member_record(
-        &local_m,
-        &remote_m,
-        &local_rank,
-        &remote_rank,
-    );
+    let merged =
+        crate::org::meta_merge::merge_member_record(&local_m, &remote_m, &local_rank, &remote_rank);
     let merged_meta = crate::sync::meta::DocMeta {
         vv: crate::sync::merge_version_vectors(Some(&local_meta.vv), Some(&remote_meta.vv)),
         ts: local_meta.ts.max(remote_meta.ts),
@@ -564,4 +578,3 @@ fn personal_dlog_has_entry<S: StorageBackend>(storage: &S, record_key: &str) -> 
         crate::sync::dlog::entries_after(storage, 0).map_err(crate::sync::SyncError::from)?;
     Ok(entries.iter().any(|(_, k)| k == record_key))
 }
-

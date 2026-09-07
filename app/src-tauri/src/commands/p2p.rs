@@ -122,8 +122,8 @@ pub(crate) fn clear_peer_records_inner(
     Ok(P2pClearPeerRecordsResultDto { cleared })
 }
 
-/// `p2p-sync-peer-organizations`：与目标 peer 定向反熵对账（双向 stale 推送
-/// + org-pull 拉取 + removed 清理），校验顺序与文案对齐 TS ipc/p2p.ts。
+/// `p2p-sync-peer-organizations`：与目标 peer 定向对账（P3 起为 orgsync
+/// 即时 hello：连接 + hello 后收敛异步完成），校验顺序与文案对齐 TS ipc/p2p.ts。
 pub(crate) fn sync_peer_organizations_inner(
     kernel: &Kernel,
     target_peer: OrgNodeInfoDto,

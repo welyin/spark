@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::catalog::PluginCatalogItem;
+use super::catalog::{PluginCatalogItem, PluginRequires};
 
 /// 更新清单中的包资产条目（TS `PluginAsset`）。
 #[derive(Clone, Debug, Deserialize)]
@@ -68,6 +68,12 @@ pub struct InstalledPluginState {
     /// 前端按 ["org"] 处理（spaces-and-plugins §4）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supported_spaces: Option<Vec<String>>,
+    /// 安装时记录的运行时前提（平台/能力约束）：repo 安装取声明文件
+    /// spark-plugin.json 的 requires（规格 §2.1），侧载取包内 manifest.json；
+    /// 缺省 = 未声明（全平台可装）。市场列表合成条目回落数据源（repo.rs
+    /// synthesize_catalog_entry）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requires: Option<PluginRequires>,
 }
 
 /// 更新探测结果（TS `PluginUpdateProbe`；仅内存，不持久化）。
@@ -97,6 +103,12 @@ pub struct PluginMarketItem {
     /// 已授权权限清单（grantedPermissions）：桥 dispatcher 权限中间件的数据源；
     /// 未安装（仅 dev-source 兜底也没有）时为空清单
     pub granted_permissions: Vec<String>,
+    /// 安装通路信任级（"L0" / "L1" / "L2"，trust.rs trust_level_of 派生：
+    /// signed=L2 / repo-anchored=L1 / sideloaded·缺省=L0；community-model §十）。
+    /// L 级是信任链数据模型字段而非纯展示文案：验证类插件（credentials:*）
+    /// 强制 L1 的校验即基于此口径（trust.rs ensure_trust_requirement）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trust_level: Option<String>,
 }
 
 /// 持久化状态文件形状（TS `PersistedPluginState`：plugin-market-state.json）。

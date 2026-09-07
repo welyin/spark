@@ -2,9 +2,6 @@
 //! 数据读写/查询/版本丢弃、blob 读写、feed-blob 拉取、orgq 路由写入。
 //! 零逻辑变化。
 
-
-
-
 use serde_json::Value;
 
 use crate::collection::{FilterOp, QueryFilter, QueryOptions};
@@ -15,7 +12,11 @@ use crate::plugin::error::{PluginError, Result};
 use super::{PluginHostShared, required_str};
 
 impl PluginHostShared {
-    pub(super) fn data_declare_collection(&self, plugin_id: &str, payload: &Value) -> Result<Value> {
+    pub(super) fn data_declare_collection(
+        &self,
+        plugin_id: &str,
+        payload: &Value,
+    ) -> Result<Value> {
         let mut input = Self::parse_declare_input(payload)?;
         // F10：declaredBy 防伪造——kernel 侧强制覆盖为调用方 rootId，不信任
         // 插件自报（声明记录属审计面）。
@@ -110,31 +111,6 @@ impl PluginHostShared {
         let key = required_str(payload, "key")?;
         let value = payload.get("value").cloned().unwrap_or(Value::Null);
         let (decl, storage) = self.resolve_data_declaration(plugin_id, payload)?;
-        // O4 工作项 4：encrypted 集合透明加解密——save 以当前 epoch 密钥加密
-        // 后落 `orgd:` 密文（复制组流量只有密文）。在**路由前**加密：本地 /
-        // orgq 离线入队两条写路径统一携带密文。无当前 epoch 密钥（非 reader）
-        // → KeyUnavailable（AEAD 语义：密钥持有者集合 = 写权限集合）。
-        let mut value = value;
-        if decl.confidentiality == crate::plugindata::Confidentiality::Encrypted {
-            if let Some(oid) = decl.org_id.as_deref() {
-                let ct = crate::sync::orgsync::encrypt_orgd_value(
-                    &storage,
-                    oid,
-                    &decl.name,
-                    &decl.version,
-                    key,
-                    &value.to_string(),
-                )
-                .map_err(|e| match e {
-                    // H3：密钥不可达 → 独立错误码（非 InvalidCall）。
-                    crate::sync::orgsync::AccessDataError::KeyUnavailable(m) => {
-                        PluginError::KeyUnavailable(m)
-                    }
-                    other => PluginError::InvalidCall(format!("encrypt {key}: {other}")),
-                })?;
-                value = serde_json::from_str(&ct).unwrap_or(Value::String(ct));
-            }
-        }
         // F1：org data-accounts 非数据账号 → 走 orgq 离线入队（不落孤儿副本）
         if self.orgq_route_write(&decl) {
             self.orgq_enqueue_write(&decl, key, &value);
@@ -178,31 +154,8 @@ impl PluginHostShared {
         let raw = crate::plugindata::get(&storage, &decl, key)
             .map_err(|e| PluginError::InvalidCall(e.to_string()))?;
         Ok(match raw {
-            // O4 工作项 4：encrypted 集合本地读解密——`orgd:` 密文按记录 epoch
-            // 取密钥解密为插件明文。解密失败（非 reader/密钥未达）→ 回 Null。
-            Some(text) => {
-                if decl.confidentiality == crate::plugindata::Confidentiality::Encrypted {
-                    if let Some(oid) = decl.org_id.as_deref() {
-                        match crate::sync::orgsync::decrypt_orgd_value(
-                            &storage,
-                            oid,
-                            &decl.name,
-                            &decl.version,
-                            key,
-                            &text,
-                        ) {
-                            Ok(plain) => {
-                                serde_json::from_str(&plain).unwrap_or(Value::String(plain))
-                            }
-                            Err(_) => Value::Null,
-                        }
-                    } else {
-                        serde_json::from_str(&text).unwrap_or(Value::String(text))
-                    }
-                } else {
-                    serde_json::from_str(&text).unwrap_or(Value::String(text))
-                }
-            }
+            // C7 后 orgd 值恒为明文（encrypted 轴已退役）
+            Some(text) => serde_json::from_str(&text).unwrap_or(Value::String(text)),
             None => Value::Null,
         })
     }
@@ -224,26 +177,11 @@ impl PluginHostShared {
             crate::plugindata::query(&storage, &decl, prefix, limit, cursor)
                 .map_err(|e| PluginError::InvalidCall(e.to_string()))?
         };
-        let is_encrypted = decl.confidentiality == crate::plugindata::Confidentiality::Encrypted;
-        let oid = decl.org_id.as_deref().unwrap_or("");
         let mut value = serde_json::json!({
             "items": page.items.iter().map(|(key, raw)| {
-                // O4 工作项 4：encrypted 集合 query 解密——密文按记录 epoch 取
-                // 密钥解密为明文；失败（非 reader/密钥未达）→ null。
-                let val = if is_encrypted {
-                    match crate::sync::orgsync::decrypt_orgd_value(
-                        &storage, oid, &decl.name, &decl.version, key, raw,
-                    ) {
-                        Ok(plain) => serde_json::from_str::<Value>(&plain)
-                            .unwrap_or(Value::String(plain)),
-                        Err(_) => Value::Null,
-                    }
-                } else {
-                    serde_json::from_str::<Value>(raw).unwrap_or(Value::String(raw.clone()))
-                };
                 serde_json::json!({
                     "key": key,
-                    "value": val,
+                    "value": serde_json::from_str::<Value>(raw).unwrap_or(Value::String(raw.clone())),
                 })
             }).collect::<Vec<_>>(),
         });
@@ -420,5 +358,5 @@ impl PluginHostShared {
                 .unwrap_or(false),
             filter,
         })
-}
+    }
 }

@@ -630,3 +630,96 @@ describe('bridge feed 域（社交投递层 §9 sdk.feed）', () => {
     harness.bridge.destroy();
   });
 });
+
+describe('community-affairs §7.2 新模块（affairs / credentials / policy）', () => {
+  it('sdk.affairs 各方法序列化为 call（module=affairs，参数透传）', async () => {
+    const harness = createHarness();
+    const { sdk } = await connect(harness);
+
+    const genesis = { kind: 'affair-genesis' };
+    await sdk.affairs!.follow(genesis);
+    expect(harness.handler).toHaveBeenCalledWith('affairs', 'follow', [genesis]);
+
+    await sdk.affairs!.unfollow('af_0123456789abcdef0123456789abcdef');
+    expect(harness.handler).toHaveBeenCalledWith('affairs', 'unfollow', ['af_0123456789abcdef0123456789abcdef']);
+
+    await sdk.affairs!.listFollowed();
+    expect(harness.handler).toHaveBeenCalledWith('affairs', 'listFollowed', []);
+
+    const op = { affairId: 'af_x', opType: 'vote', payload: {} };
+    await sdk.affairs!.submitOp(op);
+    expect(harness.handler).toHaveBeenCalledWith('affairs', 'submitOp', [op]);
+
+    await sdk.affairs!.readLog('af_x');
+    expect(harness.handler).toHaveBeenCalledWith('affairs', 'readLog', ['af_x']);
+
+    await sdk.affairs!.readResolution('af_x');
+    expect(harness.handler).toHaveBeenCalledWith('affairs', 'readResolution', ['af_x']);
+
+    await sdk.affairs!.ladderStatus('af_x');
+    expect(harness.handler).toHaveBeenCalledWith('affairs', 'ladderStatus', ['af_x']);
+
+    await sdk.affairs!.readRules('af_x');
+    expect(harness.handler).toHaveBeenCalledWith('affairs', 'readRules', ['af_x']);
+
+    await sdk.affairs!.readExec('af_x');
+    expect(harness.handler).toHaveBeenCalledWith('affairs', 'readExec', ['af_x']);
+
+    // snapshotPayload：asOf 缺省不占用参数位，携带时按位置透传
+    await sdk.affairs!.snapshotPayload('af_x');
+    expect(harness.handler).toHaveBeenCalledWith('affairs', 'snapshotPayload', ['af_x']);
+    await sdk.affairs!.snapshotPayload('af_x', 'op_1');
+    expect(harness.handler).toHaveBeenCalledWith('affairs', 'snapshotPayload', ['af_x', 'op_1']);
+
+    await sdk.affairs!.orgEffects('org_1', 'af_x');
+    expect(harness.handler).toHaveBeenCalledWith('affairs', 'orgEffects', ['org_1', 'af_x']);
+
+    await sdk.affairs!.applyOrgEffects('org_1', 'af_x');
+    expect(harness.handler).toHaveBeenCalledWith('affairs', 'applyOrgEffects', ['org_1', 'af_x']);
+    harness.bridge.destroy();
+  });
+
+  it('sdk.credentials：presentHolderProof 打包 input，域身份不下发插件侧', async () => {
+    const harness = createHarness();
+    const { sdk } = await connect(harness);
+
+    await sdk.credentials!.listHeld();
+    expect(harness.handler).toHaveBeenCalledWith('credentials', 'listHeld', []);
+
+    const input = { credId: 'c1', requestId: 'r1', orgId: 'org_1', collection: 'docs' };
+    await sdk.credentials!.presentHolderProof(input);
+    expect(harness.handler).toHaveBeenCalledWith('credentials', 'presentHolderProof', [input]);
+
+    await sdk.credentials!.queryVerifiers('org_1');
+    expect(harness.handler).toHaveBeenCalledWith('credentials', 'queryVerifiers', ['org_1']);
+    harness.bridge.destroy();
+  });
+
+  it('sdk.policy：read/submitDraft 序列化正确', async () => {
+    const harness = createHarness();
+    const { sdk } = await connect(harness);
+
+    await sdk.policy!.read('org_1');
+    expect(harness.handler).toHaveBeenCalledWith('policy', 'read', ['org_1']);
+
+    const doc = { policyV: 1, engine: 'b1' };
+    await sdk.policy!.submitDraft(doc);
+    expect(harness.handler).toHaveBeenCalledWith('policy', 'submitDraft', [doc]);
+    harness.bridge.destroy();
+  });
+
+  it('新模块 call 的错误面：handler 抛错带 code 拒绝（与既有模块同口径）', async () => {
+    const harness = createHarness({
+      handler: async () => {
+        throw new Error('affair denied');
+      }
+    });
+    const { sdk } = await connect(harness);
+    await expect(sdk.affairs!.readLog('af_x')).rejects.toMatchObject({
+      message: 'affair denied',
+      code: 'call-failed'
+    });
+    await expect(sdk.policy!.read('org_1')).rejects.toMatchObject({ code: 'call-failed' });
+    harness.bridge.destroy();
+  });
+});

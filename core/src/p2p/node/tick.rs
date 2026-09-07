@@ -68,6 +68,20 @@ impl<S: StorageBackend> EventLoop<S> {
             stats.announced = true;
         }
 
+        // 3b) indexer 目录名片周期自公告（affair-metadata §7 目录面）：角色启用
+        // 才发，与 node-announce 同节奏；覆盖配置随角色共享格即时生效
+        if !self.leaf_mode
+            && now - self.last_indexer_card_at >= NODE_ANNOUNCE_INTERVAL_MS
+            && let Some(coverage) = self.host.indexer_role()
+        {
+            match self.publish_indexer_card_now(&coverage) {
+                Ok(_) => self.last_indexer_card_at = now,
+                Err(e) => self.emit(P2pEvent::Warning(format!(
+                    "indexer card publish failed: {e}"
+                ))),
+            }
+        }
+
         // 4) DHT 节点存在记录周期重发（挂 tick 计数：首个 tick 发一次，此后按间隔）
         // leaf 模式 §3：DHT 记录重发与网关 provide 重发全关（只消费不服务）
         if !self.leaf_mode {
@@ -86,6 +100,15 @@ impl<S: StorageBackend> EventLoop<S> {
                         self.emit(P2pEvent::Warning(format!(
                             "dht republish provided failed: {e}"
                         )));
+                    }
+                }
+                // 5b) 内容面 blob provider 声明周期重发（持有即做种；provider
+                // 声明无 TTL，靠重发维持网络侧可见性——dht-republish-libp2p
+                // §provider；best-effort，无路由节点时下轮再补）
+                let blobs: Vec<Vec<u8>> = self.provided_blobs.iter().cloned().collect();
+                if let Some(kad) = self.swarm.behaviour_mut().kad.as_mut() {
+                    for key in blobs {
+                        let _ = kad.start_providing(libp2p::kad::RecordKey::new(&key));
                     }
                 }
             }

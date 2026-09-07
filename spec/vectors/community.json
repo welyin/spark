@@ -1,0 +1,4112 @@
+{
+  "_comment": "community-affairs golden vectors（wiki/protocol/community/ 协议）。C0 组由 code/spec/gen-community-vectors.mjs（Node 参考实现）自产；C1 组（staticCheck/resolutionReplay/metaBasisVerify/metaArbitrate）由 code/core/examples/gen_community_affair_vectors.rs 自产并逐字节复核 C0 affair 组；C2 组由 code/core/examples/gen_credential_vectors.rs 自产。消费：core/tests/community_affair_vectors.rs（C1）、community_credential_vectors.rs（C2）。",
+  "meta": {
+    "constants": {
+      "nowMs": 1720000000000,
+      "freshnessWindowMs": 600000,
+      "defaultPubPeriodMs": 86400000
+    },
+    "actors": {
+      "initiator": {
+        "publicKey": "0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc=",
+        "identity": "10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d"
+      },
+      "personA": {
+        "publicKey": "iEuIV/TqoWE8YVBNs01L6vNGUXoOMd483dTZtCAdnQs=",
+        "identity": "48cca97f8993ffaebcac9728d7f94f7144f18090d329d9370a7dfc42db38d14d"
+      },
+      "personB": {
+        "publicKey": "oJql9HpnWYAv+VX43C0qFKXJnSO+l/hkEn/5ODRVpPA=",
+        "identity": "1325b850c2871916eae203f0efc3c8987f64e5e3cdb27679e6d1fa97808357e6"
+      },
+      "admin1": {
+        "publicKey": "25lf4lFp0UHKubu6krqgH58uHs599MsqwFGQ83/MH50=",
+        "identity": "9a92d2b54a9a5402de3e65a07a5cb12a8dc6758bd8e8c2ec459563d6b2c081c4"
+      },
+      "admin2": {
+        "publicKey": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
+        "identity": "3097e2dee2cb4a34b53840cdb705aed71067c36f68db0e0f559c3f3fa043315f"
+      },
+      "admin3": {
+        "publicKey": "Ivwpd5Lwtv/Av8/bftsMCqFOAlo2XsDjQuhuOCnLdLY=",
+        "identity": "7db0b01f39d179aacf7b03dbd7dd9d71f641598bed40fb9839d3c1e1117e666f"
+      },
+      "orgRoot": {
+        "publicKey": "SAdaWX5yGhVuLgeZ3lzAxTJNxufq8c3UYlCGjsUyFd0=",
+        "identity": "24aa2a5589edcb57fea0be3552f065de6d3a837feaccf60f8bde018fa4926b6a"
+      },
+      "verifier": {
+        "publicKey": "wFDFY3pE+oYp//PMzOIwDLNipj2Z2V/FQUUmb0MyRFo=",
+        "identity": "4b735ac174e40636507716ed5c9a8a75fbf6f462357fabb71ac42b7bd502c64a"
+      }
+    },
+    "placeholders": {
+      "desc": "依赖实现的 case 组（登记于规格文档末节）：ladderDerive（affair §12，C6）；cycleCheck / memberKindEnforce（org-genesis §7，C3）；legacyDegraded（org-signature §6，C3）；readGate.verifyChain 的 policyRef 求值（read-gate §6，C5）。staticCheck / resolutionReplay（affair §12）与 metaBasisVerify / metaArbitrate（affair-metadata §7）已由 C1 core/examples/gen_community_affair_vectors.rs 自产回填；credential.trustTimeline 与 readGate.verifyChain（第 1–4 步）已由 C2 core/examples/gen_credential_vectors.rs 自产回填。"
+    }
+  },
+  "affairGenesis": {
+    "desc": "固定创世输入 → canonical 签名载荷逐字节 + affairId + sig 固定值；篡改任一字段 affairId/验签必败（消费侧断言）",
+    "input": {
+      "seedByte": 17,
+      "createdAt": 1720000000000
+    },
+    "expect": {
+      "payload": "{\"affairV\":\"1\",\"createdAt\":\"1720000000000\",\"initialVoters\":\"{\\\"0\\\":\\\"\\\\\\\"10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d\\\\\\\"\\\"}\",\"initiator\":\"{\\\"identity\\\":\\\"\\\\\\\"10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d\\\\\\\"\\\",\\\"kind\\\":\\\"\\\\\\\"person\\\\\\\"\\\",\\\"publicKey\\\":\\\"\\\\\\\"0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc=\\\\\\\"\\\"}\",\"refs\":\"{\\\"0\\\":\\\"{\\\\\\\"rel\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"inherit\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"target\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"63b373b02faac268d20f8a1086b3d5e8f4b93ded1ef75a24afbca064859a98b5\\\\\\\\\\\\\\\"\\\\\\\"}\\\"}\",\"rules\":\"{\\\"closeConditions\\\":\\\"{\\\\\\\"0\\\\\\\":\\\\\\\"{\\\\\\\\\\\\\\\"count\\\\\\\\\\\\\\\":\\\\\\\\\\\\\\\"100\\\\\\\\\\\\\\\",\\\\\\\\\\\\\\\"opType\\\\\\\\\\\\\\\":\\\\\\\\\\\\\\\"\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"content\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"\\\\\\\\\\\\\\\",\\\\\\\\\\\\\\\"type\\\\\\\\\\\\\\\":\\\\\\\\\\\\\\\"\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"op-count\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"\\\\\\\\\\\\\\\"}\\\\\\\"}\\\",\\\"engine\\\":\\\"\\\\\\\"b1\\\\\\\"\\\",\\\"exec\\\":\\\"null\\\",\\\"participation\\\":\\\"{\\\\\\\"combine\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"all\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"contribute\\\\\\\":\\\\\\\"{\\\\\\\\\\\\\\\"ladder\\\\\\\\\\\\\\\":\\\\\\\\\\\\\\\"\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"contributor\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"\\\\\\\\\\\\\\\"}\\\\\\\",\\\\\\\"vote\\\\\\\":\\\\\\\"{\\\\\\\\\\\\\\\"ladder\\\\\\\\\\\\\\\":\\\\\\\\\\\\\\\"\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"voter\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"\\\\\\\\\\\\\\\"}\\\\\\\"}\\\",\\\"pubPeriod\\\":\\\"{\\\\\\\"delayMs\\\\\\\":\\\\\\\"86400000\\\\\\\"}\\\",\\\"ruleChange\\\":\\\"{\\\\\\\"delayMs\\\\\\\":\\\\\\\"259200000\\\\\\\",\\\\\\\"kind\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"delayed-veto\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"vetoThreshold\\\\\\\":\\\\\\\"{\\\\\\\\\\\\\\\"count\\\\\\\\\\\\\\\":\\\\\\\\\\\\\\\"3\\\\\\\\\\\\\\\"}\\\\\\\"}\\\"}\",\"summary\":\"\\\"阳光小区业委会换届选举\\\"\",\"tags\":\"{\\\"0\\\":\\\"\\\\\\\"region:110105\\\\\\\"\\\",\\\"1\\\":\\\"\\\\\\\"hoa\\\\\\\"\\\"}\",\"title\":\"\\\"第二届业委会选举\\\"\",\"type\":\"\\\"forum\\\"\"}",
+      "affairId": "09595d3d31c1e902f71ee42b73d7944dde81e3460662d14c954f8fa5174cc2cf",
+      "record": {
+        "affairV": 1,
+        "type": "forum",
+        "title": "第二届业委会选举",
+        "summary": "阳光小区业委会换届选举",
+        "tags": [
+          "region:110105",
+          "hoa"
+        ],
+        "initiator": {
+          "kind": "person",
+          "identity": "10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+          "publicKey": "0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc="
+        },
+        "rules": {
+          "engine": "b1",
+          "closeConditions": [
+            {
+              "type": "op-count",
+              "opType": "content",
+              "count": 100
+            }
+          ],
+          "pubPeriod": {
+            "delayMs": 86400000
+          },
+          "participation": {
+            "contribute": {
+              "ladder": "contributor"
+            },
+            "vote": {
+              "ladder": "voter"
+            },
+            "combine": "all"
+          },
+          "ruleChange": {
+            "kind": "delayed-veto",
+            "delayMs": 259200000,
+            "vetoThreshold": {
+              "count": 3
+            }
+          },
+          "exec": null
+        },
+        "initialVoters": [
+          "10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d"
+        ],
+        "refs": [
+          {
+            "target": "63b373b02faac268d20f8a1086b3d5e8f4b93ded1ef75a24afbca064859a98b5",
+            "rel": "inherit"
+          }
+        ],
+        "createdAt": 1720000000000,
+        "sig": "qRJSgpmrsQHr4oD2VTyRxovLbPiLrnwwSA6BA30M3TcewzQX9ApQnHYEYuH9bOwyKI8swPn4a5RAhPsV0oMzDw=="
+      }
+    }
+  },
+  "opChain": {
+    "desc": "3 条固定操作（含合法 DAG 分支：op2/op3 同指 op1）→ opHash 链逐字节；首条 prevOpHash = affairId；sortOrder = opHash 字典序（§8 排序键）",
+    "expect": {
+      "ops": [
+        {
+          "payload": "{\"actor\":\"{\\\"identity\\\":\\\"\\\\\\\"10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d\\\\\\\"\\\",\\\"kind\\\":\\\"\\\\\\\"person\\\\\\\"\\\",\\\"publicKey\\\":\\\"\\\\\\\"0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc=\\\\\\\"\\\"}\",\"affairId\":\"\\\"09595d3d31c1e902f71ee42b73d7944dde81e3460662d14c954f8fa5174cc2cf\\\"\",\"declaredAt\":\"1720000001000\",\"opType\":\"\\\"content\\\"\",\"opV\":\"1\",\"payload\":\"{\\\"kind\\\":\\\"\\\\\\\"post\\\\\\\"\\\",\\\"text\\\":\\\"\\\\\\\"提名候选人公示\\\\\\\"\\\"}\",\"prevOpHash\":\"\\\"09595d3d31c1e902f71ee42b73d7944dde81e3460662d14c954f8fa5174cc2cf\\\"\"}",
+          "opHash": "e733e2abdc9dcc82ee0b87fecda6d79c4fdaf33627680d11acc8b7ecffcc7b77",
+          "entry": {
+            "opV": 1,
+            "affairId": "09595d3d31c1e902f71ee42b73d7944dde81e3460662d14c954f8fa5174cc2cf",
+            "prevOpHash": "09595d3d31c1e902f71ee42b73d7944dde81e3460662d14c954f8fa5174cc2cf",
+            "opType": "content",
+            "payload": {
+              "kind": "post",
+              "text": "提名候选人公示"
+            },
+            "actor": {
+              "kind": "person",
+              "identity": "10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+              "publicKey": "0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc="
+            },
+            "declaredAt": 1720000001000,
+            "sig": "+jmhYZsaOUa0v7pRIvnqIAHNq2+5JR9es+rckW2aiu/1GbvLF4qMAa9iySZTDXNiAa3qfJOQGE4Suex43RqmCg=="
+          }
+        },
+        {
+          "payload": "{\"actor\":\"{\\\"identity\\\":\\\"\\\\\\\"48cca97f8993ffaebcac9728d7f94f7144f18090d329d9370a7dfc42db38d14d\\\\\\\"\\\",\\\"kind\\\":\\\"\\\\\\\"person\\\\\\\"\\\",\\\"publicKey\\\":\\\"\\\\\\\"iEuIV/TqoWE8YVBNs01L6vNGUXoOMd483dTZtCAdnQs=\\\\\\\"\\\"}\",\"affairId\":\"\\\"09595d3d31c1e902f71ee42b73d7944dde81e3460662d14c954f8fa5174cc2cf\\\"\",\"declaredAt\":\"1720000002000\",\"opType\":\"\\\"content\\\"\",\"opV\":\"1\",\"payload\":\"{\\\"kind\\\":\\\"\\\\\\\"post\\\\\\\"\\\",\\\"text\\\":\\\"\\\\\\\"附议\\\\\\\"\\\"}\",\"prevOpHash\":\"\\\"e733e2abdc9dcc82ee0b87fecda6d79c4fdaf33627680d11acc8b7ecffcc7b77\\\"\"}",
+          "opHash": "46feabc4ddc9497626babeec508dc21774272a4c8e02728094232bebccf16f6a",
+          "entry": {
+            "opV": 1,
+            "affairId": "09595d3d31c1e902f71ee42b73d7944dde81e3460662d14c954f8fa5174cc2cf",
+            "prevOpHash": "e733e2abdc9dcc82ee0b87fecda6d79c4fdaf33627680d11acc8b7ecffcc7b77",
+            "opType": "content",
+            "payload": {
+              "kind": "post",
+              "text": "附议"
+            },
+            "actor": {
+              "kind": "person",
+              "identity": "48cca97f8993ffaebcac9728d7f94f7144f18090d329d9370a7dfc42db38d14d",
+              "publicKey": "iEuIV/TqoWE8YVBNs01L6vNGUXoOMd483dTZtCAdnQs="
+            },
+            "declaredAt": 1720000002000,
+            "sig": "cBw6IGI1OYS9Le9ZY7rA1NgBrJBihTMkaY9OvUlc36KtySJyE4E3Tcgm/e/6pJjcXNsSNdzCR2eOpOTK03IoCw=="
+          }
+        },
+        {
+          "payload": "{\"actor\":\"{\\\"identity\\\":\\\"\\\\\\\"1325b850c2871916eae203f0efc3c8987f64e5e3cdb27679e6d1fa97808357e6\\\\\\\"\\\",\\\"kind\\\":\\\"\\\\\\\"person\\\\\\\"\\\",\\\"publicKey\\\":\\\"\\\\\\\"oJql9HpnWYAv+VX43C0qFKXJnSO+l/hkEn/5ODRVpPA=\\\\\\\"\\\"}\",\"affairId\":\"\\\"09595d3d31c1e902f71ee42b73d7944dde81e3460662d14c954f8fa5174cc2cf\\\"\",\"declaredAt\":\"1720000003000\",\"opType\":\"\\\"ref\\\"\",\"opV\":\"1\",\"payload\":\"{\\\"rel\\\":\\\"\\\\\\\"related\\\\\\\"\\\",\\\"target\\\":\\\"\\\\\\\"970edb32e1a71be5b24c1594380cd6aec08a9f01af2d817fbe05bca88c674c34\\\\\\\"\\\"}\",\"prevOpHash\":\"\\\"e733e2abdc9dcc82ee0b87fecda6d79c4fdaf33627680d11acc8b7ecffcc7b77\\\"\"}",
+          "opHash": "90e5f0f24eb75e116dd1ff1d243ed9d599ba8dce6c6207fa99549be72705787a",
+          "entry": {
+            "opV": 1,
+            "affairId": "09595d3d31c1e902f71ee42b73d7944dde81e3460662d14c954f8fa5174cc2cf",
+            "prevOpHash": "e733e2abdc9dcc82ee0b87fecda6d79c4fdaf33627680d11acc8b7ecffcc7b77",
+            "opType": "ref",
+            "payload": {
+              "target": "970edb32e1a71be5b24c1594380cd6aec08a9f01af2d817fbe05bca88c674c34",
+              "rel": "related"
+            },
+            "actor": {
+              "kind": "person",
+              "identity": "1325b850c2871916eae203f0efc3c8987f64e5e3cdb27679e6d1fa97808357e6",
+              "publicKey": "oJql9HpnWYAv+VX43C0qFKXJnSO+l/hkEn/5ODRVpPA="
+            },
+            "declaredAt": 1720000003000,
+            "sig": "tT1MKBRy8sosH7rEJ4jK+qd9G5BEUzZgrBKNQ180TSnKnO0NcjTTK8v+PfGpV2eEqeKz4daTn0gtiLrcd88gCg=="
+          }
+        }
+      ],
+      "sortOrder": [
+        "46feabc4ddc9497626babeec508dc21774272a4c8e02728094232bebccf16f6a",
+        "90e5f0f24eb75e116dd1ff1d243ed9d599ba8dce6c6207fa99549be72705787a",
+        "e733e2abdc9dcc82ee0b87fecda6d79c4fdaf33627680d11acc8b7ecffcc7b77"
+      ]
+    }
+  },
+  "ruleMechanisms": {
+    "desc": "§5.3 三形态机制文档 canonical 逐字节",
+    "expect": {
+      "vote": "{\"kind\":\"\\\"vote\\\"\",\"quorum\":\"{\\\"den\\\":\\\"2\\\",\\\"num\\\":\\\"1\\\"}\",\"snapshot\":\"\\\"required\\\"\",\"threshold\":\"{\\\"den\\\":\\\"2\\\",\\\"num\\\":\\\"1\\\"}\",\"voterSet\":\"\\\"ladder:voters\\\"\"}",
+      "multisig": "{\"kind\":\"\\\"multisig\\\"\",\"m\":\"2\",\"n\":\"3\",\"signers\":\"{\\\"0\\\":\\\"\\\\\\\"9a92d2b54a9a5402de3e65a07a5cb12a8dc6758bd8e8c2ec459563d6b2c081c4\\\\\\\"\\\",\\\"1\\\":\\\"\\\\\\\"3097e2dee2cb4a34b53840cdb705aed71067c36f68db0e0f559c3f3fa043315f\\\\\\\"\\\",\\\"2\\\":\\\"\\\\\\\"7db0b01f39d179aacf7b03dbd7dd9d71f641598bed40fb9839d3c1e1117e666f\\\\\\\"\\\"}\"}",
+      "delayedVeto": "{\"delayMs\":\"259200000\",\"kind\":\"\\\"delayed-veto\\\"\",\"vetoThreshold\":\"{\\\"count\\\":\\\"3\\\"}\"}"
+    }
+  },
+  "snapshot": {
+    "desc": "固定阶梯名册 → rosterHash；固定组织名册 → memberSetHash（均按 identity 字典序）",
+    "expect": {
+      "roster": [
+        {
+          "identity": "10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d"
+        },
+        {
+          "identity": "1325b850c2871916eae203f0efc3c8987f64e5e3cdb27679e6d1fa97808357e6"
+        },
+        {
+          "identity": "48cca97f8993ffaebcac9728d7f94f7144f18090d329d9370a7dfc42db38d14d"
+        }
+      ],
+      "rosterHash": "807243ee2be46b08e0a5037964caa5b219f18f4432c90091451c62cd96892c4c",
+      "memberSet": [
+        {
+          "identity": "3097e2dee2cb4a34b53840cdb705aed71067c36f68db0e0f559c3f3fa043315f",
+          "role": "admin"
+        },
+        {
+          "identity": "7db0b01f39d179aacf7b03dbd7dd9d71f641598bed40fb9839d3c1e1117e666f",
+          "role": "admin"
+        },
+        {
+          "identity": "9a92d2b54a9a5402de3e65a07a5cb12a8dc6758bd8e8c2ec459563d6b2c081c4",
+          "role": "admin"
+        }
+      ],
+      "memberSetHash": "f54c5d605e8a16843b39235c1f90e79b999d63bf60d18c633af5027d31bed1af"
+    }
+  },
+  "orgGenesis": {
+    "desc": "固定创世策略记录 → canonical 载荷逐字节 + 新 orgId（org_+64hex）+ sig 固定值；orgAddress 互绑复算（base32(sha256(pub)‖checksum) = 55 字符）",
+    "input": {
+      "orgRootSeedByte": 49,
+      "createdAt": 1720000000000
+    },
+    "expect": {
+      "payload": "{\"createdAt\":\"1720000000000\",\"createdBy\":\"\\\"10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d\\\"\",\"description\":\"\\\"阳光小区共同体域\\\"\",\"domainType\":\"\\\"community\\\"\",\"genesisV\":\"1\",\"name\":\"\\\"阳光小区\\\"\",\"orgAddress\":\"\\\"esvcuvmj5xfvp7vaxy2vf4df3zwtva375lgpmd4l3yay7jesnnvhiiy\\\"\",\"rootPublicKey\":\"\\\"SAdaWX5yGhVuLgeZ3lzAxTJNxufq8c3UYlCGjsUyFd0=\\\"\",\"signingPolicy\":\"{\\\"kind\\\":\\\"\\\\\\\"any-admin\\\\\\\"\\\"}\",\"transition\":\"{\\\"delayMs\\\":\\\"259200000\\\",\\\"kind\\\":\\\"\\\\\\\"delayed-veto\\\\\\\"\\\",\\\"vetoThreshold\\\":\\\"{\\\\\\\"count\\\\\\\":\\\\\\\"1\\\\\\\"}\\\",\\\"whenMembersExceed\\\":\\\"1\\\"}\"}",
+      "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+      "orgAddress": "esvcuvmj5xfvp7vaxy2vf4df3zwtva375lgpmd4l3yay7jesnnvhiiy",
+      "record": {
+        "genesisV": 1,
+        "name": "阳光小区",
+        "description": "阳光小区共同体域",
+        "domainType": "community",
+        "rootPublicKey": "SAdaWX5yGhVuLgeZ3lzAxTJNxufq8c3UYlCGjsUyFd0=",
+        "orgAddress": "esvcuvmj5xfvp7vaxy2vf4df3zwtva375lgpmd4l3yay7jesnnvhiiy",
+        "signingPolicy": {
+          "kind": "any-admin"
+        },
+        "transition": {
+          "kind": "delayed-veto",
+          "delayMs": 259200000,
+          "vetoThreshold": {
+            "count": 1
+          },
+          "whenMembersExceed": 1
+        },
+        "createdBy": "10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+        "createdAt": 1720000000000,
+        "sig": "tbSWcJOegoV/FFaUE3V7tSH0eFrmZ6U32t9FWhNOGWKpRoKYQH0uAo9iwmp4lC7lLqUDY4qLc2iMkv4fLgf2CA=="
+      },
+      "policyHash0": "f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587"
+    }
+  },
+  "orgDomainIdentity": {
+    "desc": "org-genesis §4：固定组织根私钥 + 域串 → HMAC-SHA512 派生域公钥/身份 id 固定值；两域串派生不同身份（跨域不可关联）",
+    "expect": {
+      "community": {
+        "domain": "community:org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+        "publicKey": "eqlD/pVSiDu+GeFtCQAx7qkkeGjkBV0gc+f0yQrhmjI=",
+        "identity": "9e94854ed86d2356005ffd19a2255dc82d1d854606ac50c19f32eb3df58b59ca"
+      },
+      "affair": {
+        "domain": "affair:09595d3d31c1e902f71ee42b73d7944dde81e3460662d14c954f8fa5174cc2cf",
+        "publicKey": "tq9uSlh7UXZP5qfevuFdY0UsqOWb9NbfPGR5Ipi+pxQ=",
+        "identity": "2235687b8d6ab957a9f2693121100aad8f4ec44def30cf31064e747df3d20ef1"
+      }
+    }
+  },
+  "policyChain": {
+    "desc": "创世 policyHash0 + 一条修订（any-admin → m-of-n 2/3，按修订前策略双签）→ policyHash1 链逐字节",
+    "expect": {
+      "policyHash0": "f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+      "revisionPayload": "{\"orgId\":\"\\\"org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587\\\"\",\"policyV\":\"1\",\"prevPolicyHash\":\"\\\"f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587\\\"\",\"seq\":\"1\",\"signingPolicy\":\"{\\\"kind\\\":\\\"\\\\\\\"m-of-n\\\\\\\"\\\",\\\"m\\\":\\\"2\\\",\\\"n\\\":\\\"3\\\"}\",\"updatedAt\":\"1720000010000\"}",
+      "policyHash1": "e4726f9c680f990d37a1807ab07263883714980cc77346740856a816d64fe7ea",
+      "revision": {
+        "policyV": 1,
+        "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+        "seq": 1,
+        "prevPolicyHash": "f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+        "signingPolicy": {
+          "kind": "m-of-n",
+          "m": 2,
+          "n": 3
+        },
+        "updatedAt": 1720000010000,
+        "sigSet": {
+          "sigSetV": 1,
+          "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+          "subject": "e4726f9c680f990d37a1807ab07263883714980cc77346740856a816d64fe7ea",
+          "policyHash": "f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+          "roster": {
+            "memberSetHash": "f54c5d605e8a16843b39235c1f90e79b999d63bf60d18c633af5027d31bed1af",
+            "anchor": {
+              "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+              "anchorRoot": "6c3dbb273d552d4af3e933c524e0c96934ed25f733b30698fe085e09062def00",
+              "ts": 1720000000000
+            },
+            "snapshot": [
+              {
+                "identity": "3097e2dee2cb4a34b53840cdb705aed71067c36f68db0e0f559c3f3fa043315f",
+                "role": "admin"
+              },
+              {
+                "identity": "7db0b01f39d179aacf7b03dbd7dd9d71f641598bed40fb9839d3c1e1117e666f",
+                "role": "admin"
+              },
+              {
+                "identity": "9a92d2b54a9a5402de3e65a07a5cb12a8dc6758bd8e8c2ec459563d6b2c081c4",
+                "role": "admin"
+              }
+            ]
+          },
+          "signedAt": 1720000000000,
+          "signatures": [
+            {
+              "signer": "9a92d2b54a9a5402de3e65a07a5cb12a8dc6758bd8e8c2ec459563d6b2c081c4",
+              "publicKey": "25lf4lFp0UHKubu6krqgH58uHs599MsqwFGQ83/MH50=",
+              "sig": "5os/QT+RsaMtQMNlEAvxVXNZguezq+QiRW7GIgdn6eG/KZfvEG0zZhnyS0ORqqjYPaMrOD827MeIQwdAuUGQAw=="
+            },
+            {
+              "signer": "3097e2dee2cb4a34b53840cdb705aed71067c36f68db0e0f559c3f3fa043315f",
+              "publicKey": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
+              "sig": "63HrMpCnaD9uDh/sbUyQ19nk+Wwxci0DBG6Q8yhDBQXrFMPrGT4PwAs0C0yjLnjhzA8BvrJYFKSLaJCoVwQTAg=="
+            }
+          ]
+        }
+      }
+    }
+  },
+  "orgSigSet.anyAdmin": {
+    "desc": "any-admin：单管理员分量签名包；分量载荷 8 键固定集逐字节；验证通过",
+    "expect": {
+      "componentPayload": "{\"anchorRoot\":\"\\\"6c3dbb273d552d4af3e933c524e0c96934ed25f733b30698fe085e09062def00\\\"\",\"anchorTs\":\"1720000000000\",\"memberSetHash\":\"\\\"f54c5d605e8a16843b39235c1f90e79b999d63bf60d18c633af5027d31bed1af\\\"\",\"orgId\":\"\\\"org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587\\\"\",\"policyHash\":\"\\\"f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587\\\"\",\"sigSetV\":\"1\",\"signedAt\":\"1720000000000\",\"subject\":\"\\\"82a89f583a0738f8aff6de2f04670cbdc2ee81d57aaf21aabf0c989c962d957b\\\"\"}",
+      "sigSet": {
+        "sigSetV": 1,
+        "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+        "subject": "82a89f583a0738f8aff6de2f04670cbdc2ee81d57aaf21aabf0c989c962d957b",
+        "policyHash": "f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+        "roster": {
+          "memberSetHash": "f54c5d605e8a16843b39235c1f90e79b999d63bf60d18c633af5027d31bed1af",
+          "anchor": {
+            "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+            "anchorRoot": "6c3dbb273d552d4af3e933c524e0c96934ed25f733b30698fe085e09062def00",
+            "ts": 1720000000000
+          },
+          "snapshot": [
+            {
+              "identity": "3097e2dee2cb4a34b53840cdb705aed71067c36f68db0e0f559c3f3fa043315f",
+              "role": "admin"
+            },
+            {
+              "identity": "7db0b01f39d179aacf7b03dbd7dd9d71f641598bed40fb9839d3c1e1117e666f",
+              "role": "admin"
+            },
+            {
+              "identity": "9a92d2b54a9a5402de3e65a07a5cb12a8dc6758bd8e8c2ec459563d6b2c081c4",
+              "role": "admin"
+            }
+          ]
+        },
+        "signedAt": 1720000000000,
+        "signatures": [
+          {
+            "signer": "9a92d2b54a9a5402de3e65a07a5cb12a8dc6758bd8e8c2ec459563d6b2c081c4",
+            "publicKey": "25lf4lFp0UHKubu6krqgH58uHs599MsqwFGQ83/MH50=",
+            "sig": "62beyBjjMJqWvANAWiji3x0w+rvWkgABle4uGxsPP23YN8n0smM4HkRzOoKvyIXM0WvfPzCsKdMLGSK9RAjWCg=="
+          }
+        ]
+      }
+    }
+  },
+  "orgSigSet.mOfN": {
+    "desc": "m-of-n 2/3：两有效分量通过；单分量不足阈值必败、非 admin signer 必败、重复 signer 只计一次（消费侧断言）",
+    "expect": {
+      "componentPayload": "{\"anchorRoot\":\"\\\"6c3dbb273d552d4af3e933c524e0c96934ed25f733b30698fe085e09062def00\\\"\",\"anchorTs\":\"1720000000000\",\"memberSetHash\":\"\\\"f54c5d605e8a16843b39235c1f90e79b999d63bf60d18c633af5027d31bed1af\\\"\",\"orgId\":\"\\\"org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587\\\"\",\"policyHash\":\"\\\"f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587\\\"\",\"sigSetV\":\"1\",\"signedAt\":\"1720000000000\",\"subject\":\"\\\"82a89f583a0738f8aff6de2f04670cbdc2ee81d57aaf21aabf0c989c962d957b\\\"\"}",
+      "sigSet": {
+        "sigSetV": 1,
+        "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+        "subject": "82a89f583a0738f8aff6de2f04670cbdc2ee81d57aaf21aabf0c989c962d957b",
+        "policyHash": "f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+        "roster": {
+          "memberSetHash": "f54c5d605e8a16843b39235c1f90e79b999d63bf60d18c633af5027d31bed1af",
+          "anchor": {
+            "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+            "anchorRoot": "6c3dbb273d552d4af3e933c524e0c96934ed25f733b30698fe085e09062def00",
+            "ts": 1720000000000
+          },
+          "snapshot": [
+            {
+              "identity": "3097e2dee2cb4a34b53840cdb705aed71067c36f68db0e0f559c3f3fa043315f",
+              "role": "admin"
+            },
+            {
+              "identity": "7db0b01f39d179aacf7b03dbd7dd9d71f641598bed40fb9839d3c1e1117e666f",
+              "role": "admin"
+            },
+            {
+              "identity": "9a92d2b54a9a5402de3e65a07a5cb12a8dc6758bd8e8c2ec459563d6b2c081c4",
+              "role": "admin"
+            }
+          ]
+        },
+        "signedAt": 1720000000000,
+        "signatures": [
+          {
+            "signer": "9a92d2b54a9a5402de3e65a07a5cb12a8dc6758bd8e8c2ec459563d6b2c081c4",
+            "publicKey": "25lf4lFp0UHKubu6krqgH58uHs599MsqwFGQ83/MH50=",
+            "sig": "62beyBjjMJqWvANAWiji3x0w+rvWkgABle4uGxsPP23YN8n0smM4HkRzOoKvyIXM0WvfPzCsKdMLGSK9RAjWCg=="
+          },
+          {
+            "signer": "3097e2dee2cb4a34b53840cdb705aed71067c36f68db0e0f559c3f3fa043315f",
+            "publicKey": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
+            "sig": "6GMMTgurwZ++kCHauWRo6pByD5/vBY3du8oIhHzmwHMitp8MLTMc4DT6LFCXha89eYUdmlUoUCBDVLCnKFfWCQ=="
+          }
+        ]
+      }
+    }
+  },
+  "orgSigSet.tamper": {
+    "desc": "篡改 subject/policyHash/memberSetHash/signedAt 后分量载荷变化 → 原签名验签必败（示例：forged subject）",
+    "expect": {
+      "forgedSubjectPayload": "{\"anchorRoot\":\"\\\"6c3dbb273d552d4af3e933c524e0c96934ed25f733b30698fe085e09062def00\\\"\",\"anchorTs\":\"1720000000000\",\"memberSetHash\":\"\\\"f54c5d605e8a16843b39235c1f90e79b999d63bf60d18c633af5027d31bed1af\\\"\",\"orgId\":\"\\\"org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587\\\"\",\"policyHash\":\"\\\"f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587\\\"\",\"sigSetV\":\"1\",\"signedAt\":\"1720000000000\",\"subject\":\"\\\"ccdd35168ab474fa5764a526cfb83621351e23682c5075b2e18d56bddf96aa30\\\"\"}",
+      "validSigOnForged": false
+    }
+  },
+  "credential.issue": {
+    "desc": "固定凭证 → canonical 载荷逐字节 + credId + sig 固定值；篡改字段必败",
+    "expect": {
+      "payload": "{\"claims\":\"{\\\"household\\\":\\\"\\\\\\\"3-502\\\\\\\"\\\"}\",\"credType\":\"\\\"household-owner\\\"\",\"credV\":\"1\",\"holder\":\"{\\\"identity\\\":\\\"\\\\\\\"9e94854ed86d2356005ffd19a2255dc82d1d854606ac50c19f32eb3df58b59ca\\\\\\\"\\\",\\\"kind\\\":\\\"\\\\\\\"org\\\\\\\"\\\",\\\"publicKey\\\":\\\"\\\\\\\"eqlD/pVSiDu+GeFtCQAx7qkkeGjkBV0gc+f0yQrhmjI=\\\\\\\"\\\"}\",\"issuedAt\":\"1720000000000\",\"issuer\":\"{\\\"identity\\\":\\\"\\\\\\\"4b735ac174e40636507716ed5c9a8a75fbf6f462357fabb71ac42b7bd502c64a\\\\\\\"\\\",\\\"publicKey\\\":\\\"\\\\\\\"wFDFY3pE+oYp//PMzOIwDLNipj2Z2V/FQUUmb0MyRFo=\\\\\\\"\\\"}\",\"linkRef\":\"null\",\"method\":\"\\\"plugin:hoa-verify:manual-property-cert\\\"\",\"subjectDomain\":\"\\\"org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587\\\"\"}",
+      "credId": "5ca1b3b7e2521cc6da78de5472e76efd367c401b0ab689a21048487e2816871a",
+      "credential": {
+        "credV": 1,
+        "credType": "household-owner",
+        "issuer": {
+          "identity": "4b735ac174e40636507716ed5c9a8a75fbf6f462357fabb71ac42b7bd502c64a",
+          "publicKey": "wFDFY3pE+oYp//PMzOIwDLNipj2Z2V/FQUUmb0MyRFo="
+        },
+        "holder": {
+          "kind": "org",
+          "identity": "9e94854ed86d2356005ffd19a2255dc82d1d854606ac50c19f32eb3df58b59ca",
+          "publicKey": "eqlD/pVSiDu+GeFtCQAx7qkkeGjkBV0gc+f0yQrhmjI="
+        },
+        "subjectDomain": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+        "claims": {
+          "household": "3-502"
+        },
+        "method": "plugin:hoa-verify:manual-property-cert",
+        "linkRef": null,
+        "issuedAt": 1720000000000,
+        "sig": "2jgjqBToiejIk2eioJcxkuKvoH8Ri5Ry1hNgDRXv94IiC1C5c9Qt4ix0610mLrojqZsoHUa4RxcRvRa7Vs2RCA=="
+      }
+    }
+  },
+  "credential.revokeChain": {
+    "desc": "3 条注销条目 → entryHash/prevHash 链逐字节；断链（删中间条目）必败",
+    "expect": {
+      "entries": [
+        {
+          "payload": "{\"credId\":\"\\\"fbc5c3e69b5bc396fd3d39677c48a280c1037556ea3524ba59b83a3c79c4eb47\\\"\",\"issuer\":\"\\\"4b735ac174e40636507716ed5c9a8a75fbf6f462357fabb71ac42b7bd502c64a\\\"\",\"prevHash\":\"null\",\"reason\":\"null\",\"revV\":\"1\",\"revokedAt\":\"1720000001000\",\"seq\":\"1\"}",
+          "entryHash": "fab807fefa848515b4641515f3021eb596624a4bca892925866cb6dc8bf0767a",
+          "entry": {
+            "revV": 1,
+            "issuer": "4b735ac174e40636507716ed5c9a8a75fbf6f462357fabb71ac42b7bd502c64a",
+            "seq": 1,
+            "prevHash": null,
+            "credId": "fbc5c3e69b5bc396fd3d39677c48a280c1037556ea3524ba59b83a3c79c4eb47",
+            "revokedAt": 1720000001000,
+            "reason": null,
+            "sig": "uKTO/Tth33sRolX7S6t3s+saW+SKCggwPASWzuVIEbwTdy5bWAFfjSd/Ui9Q3qBI2oYlDWigU2s3FYciFN7sAg=="
+          }
+        },
+        {
+          "payload": "{\"credId\":\"\\\"7adaca4f50d1a09a8b8f77f91f1af15c203b25915f50cd0f17e68417a4dec293\\\"\",\"issuer\":\"\\\"4b735ac174e40636507716ed5c9a8a75fbf6f462357fabb71ac42b7bd502c64a\\\"\",\"prevHash\":\"\\\"fab807fefa848515b4641515f3021eb596624a4bca892925866cb6dc8bf0767a\\\"\",\"reason\":\"null\",\"revV\":\"1\",\"revokedAt\":\"1720000002000\",\"seq\":\"2\"}",
+          "entryHash": "c8749e932841f6f3b9892aa05d91f016c8f89735b9c68d5f9c93fde0872356c5",
+          "entry": {
+            "revV": 1,
+            "issuer": "4b735ac174e40636507716ed5c9a8a75fbf6f462357fabb71ac42b7bd502c64a",
+            "seq": 2,
+            "prevHash": "fab807fefa848515b4641515f3021eb596624a4bca892925866cb6dc8bf0767a",
+            "credId": "7adaca4f50d1a09a8b8f77f91f1af15c203b25915f50cd0f17e68417a4dec293",
+            "revokedAt": 1720000002000,
+            "reason": null,
+            "sig": "v8ILBdJU1u4O8OCoBJfZ0sKf4U2zurFUWKSBjejqtLl2tXusAnGfIP+1xoaiCQgeoDJnhGapzRK1RCLfjOD7DQ=="
+          }
+        },
+        {
+          "payload": "{\"credId\":\"\\\"fc4828989d09da482dcfc958c806a0b504f6f99d4c5ec75c174982f957f71dd0\\\"\",\"issuer\":\"\\\"4b735ac174e40636507716ed5c9a8a75fbf6f462357fabb71ac42b7bd502c64a\\\"\",\"prevHash\":\"\\\"c8749e932841f6f3b9892aa05d91f016c8f89735b9c68d5f9c93fde0872356c5\\\"\",\"reason\":\"null\",\"revV\":\"1\",\"revokedAt\":\"1720000003000\",\"seq\":\"3\"}",
+          "entryHash": "df8c6795fa4e1bf55319ce07d707b38bbe35494d6a193c346a91dbbb1fe3260e",
+          "entry": {
+            "revV": 1,
+            "issuer": "4b735ac174e40636507716ed5c9a8a75fbf6f462357fabb71ac42b7bd502c64a",
+            "seq": 3,
+            "prevHash": "c8749e932841f6f3b9892aa05d91f016c8f89735b9c68d5f9c93fde0872356c5",
+            "credId": "fc4828989d09da482dcfc958c806a0b504f6f99d4c5ec75c174982f957f71dd0",
+            "revokedAt": 1720000003000,
+            "reason": null,
+            "sig": "ETwon/5OiBs/utapgPukUEYTOhyo+Y/U2ZLfn1X4RoZsMYDvqzdPX2dZU4qibhKMFDPS1hXU6AxGqBc/cQ4fDA=="
+          }
+        }
+      ]
+    }
+  },
+  "credential.revHead": {
+    "desc": "注销列表头承诺 → 签名载荷逐字节 + sig 固定值",
+    "expect": {
+      "payload": "{\"asOf\":\"1720000005000\",\"headHash\":\"\\\"df8c6795fa4e1bf55319ce07d707b38bbe35494d6a193c346a91dbbb1fe3260e\\\"\",\"headSeq\":\"3\",\"issuer\":\"\\\"4b735ac174e40636507716ed5c9a8a75fbf6f462357fabb71ac42b7bd502c64a\\\"\",\"revHeadV\":\"1\"}",
+      "head": {
+        "revHeadV": 1,
+        "issuer": "4b735ac174e40636507716ed5c9a8a75fbf6f462357fabb71ac42b7bd502c64a",
+        "headSeq": 3,
+        "headHash": "df8c6795fa4e1bf55319ce07d707b38bbe35494d6a193c346a91dbbb1fe3260e",
+        "asOf": 1720000005000,
+        "sig": "k2H9U09j4PhLostU+7Y/c0szbfbPKngRns1lxAIGZ71iDnpGRsnHSaTfimucwABDhLZUSxE27GOdLgicNprRDQ=="
+      }
+    }
+  },
+  "trustDecl": {
+    "desc": "验证人信任声明 → canonical 逐字节 + trustHash；sigSet（any-admin）验证通过；无效 sigSet 拒绝合入（消费侧断言）",
+    "expect": {
+      "payload": "{\"effectiveFrom\":\"1720000000000\",\"orgId\":\"\\\"org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587\\\"\",\"seq\":\"1\",\"trustV\":\"1\",\"updatedAt\":\"1720000000000\",\"verifiers\":\"{\\\"0\\\":\\\"{\\\\\\\"credTypes\\\\\\\":\\\\\\\"{\\\\\\\\\\\\\\\"0\\\\\\\\\\\\\\\":\\\\\\\\\\\\\\\"\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"household-owner\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"\\\\\\\\\\\\\\\",\\\\\\\\\\\\\\\"1\\\\\\\\\\\\\\\":\\\\\\\\\\\\\\\"\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"resident\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"\\\\\\\\\\\\\\\"}\\\\\\\",\\\\\\\"identity\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"4b735ac174e40636507716ed5c9a8a75fbf6f462357fabb71ac42b7bd502c64a\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"methods\\\\\\\":\\\\\\\"{\\\\\\\\\\\\\\\"0\\\\\\\\\\\\\\\":\\\\\\\\\\\\\\\"\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"plugin:hoa-verify:*\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"\\\\\\\\\\\\\\\"}\\\\\\\",\\\\\\\"publicKey\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"wFDFY3pE+oYp//PMzOIwDLNipj2Z2V/FQUUmb0MyRFo=\\\\\\\\\\\\\\\"\\\\\\\"}\\\"}\"}",
+      "trustHash": "487c1d2eb24b4ac6395eebc9c010d32d00b46e888f57c72d1ffed33db068d0c7",
+      "record": {
+        "trustV": 1,
+        "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+        "verifiers": [
+          {
+            "identity": "4b735ac174e40636507716ed5c9a8a75fbf6f462357fabb71ac42b7bd502c64a",
+            "publicKey": "wFDFY3pE+oYp//PMzOIwDLNipj2Z2V/FQUUmb0MyRFo=",
+            "credTypes": [
+              "household-owner",
+              "resident"
+            ],
+            "methods": [
+              "plugin:hoa-verify:*"
+            ]
+          }
+        ],
+        "effectiveFrom": 1720000000000,
+        "seq": 1,
+        "updatedAt": 1720000000000,
+        "sigSet": {
+          "sigSetV": 1,
+          "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+          "subject": "487c1d2eb24b4ac6395eebc9c010d32d00b46e888f57c72d1ffed33db068d0c7",
+          "policyHash": "f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+          "roster": {
+            "memberSetHash": "f54c5d605e8a16843b39235c1f90e79b999d63bf60d18c633af5027d31bed1af",
+            "anchor": {
+              "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+              "anchorRoot": "6c3dbb273d552d4af3e933c524e0c96934ed25f733b30698fe085e09062def00",
+              "ts": 1720000000000
+            },
+            "snapshot": [
+              {
+                "identity": "3097e2dee2cb4a34b53840cdb705aed71067c36f68db0e0f559c3f3fa043315f",
+                "role": "admin"
+              },
+              {
+                "identity": "7db0b01f39d179aacf7b03dbd7dd9d71f641598bed40fb9839d3c1e1117e666f",
+                "role": "admin"
+              },
+              {
+                "identity": "9a92d2b54a9a5402de3e65a07a5cb12a8dc6758bd8e8c2ec459563d6b2c081c4",
+                "role": "admin"
+              }
+            ]
+          },
+          "signedAt": 1720000000000,
+          "signatures": [
+            {
+              "signer": "9a92d2b54a9a5402de3e65a07a5cb12a8dc6758bd8e8c2ec459563d6b2c081c4",
+              "publicKey": "25lf4lFp0UHKubu6krqgH58uHs599MsqwFGQ83/MH50=",
+              "sig": "Pp57Xl/W3KBi94pwIVJ4ezwNRwQJ9s8hRWiuMg12Nd4+AmPz7fihR5RpP7LWVEbH9bJNCVbTH79+XL2NT5XeAQ=="
+            }
+          ]
+        }
+      }
+    }
+  },
+  "samePersonLink": {
+    "desc": "同人关联声明（opt-in）→ linkId + sig 固定值；members<2 拒绝（消费侧断言）",
+    "expect": {
+      "payload": "{\"issuedAt\":\"1720000000000\",\"issuer\":\"{\\\"identity\\\":\\\"\\\\\\\"4b735ac174e40636507716ed5c9a8a75fbf6f462357fabb71ac42b7bd502c64a\\\\\\\"\\\",\\\"publicKey\\\":\\\"\\\\\\\"wFDFY3pE+oYp//PMzOIwDLNipj2Z2V/FQUUmb0MyRFo=\\\\\\\"\\\"}\",\"linkV\":\"1\",\"members\":\"{\\\"0\\\":\\\"{\\\\\\\"credId\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"5ca1b3b7e2521cc6da78de5472e76efd367c401b0ab689a21048487e2816871a\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"holderIdentity\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"9e94854ed86d2356005ffd19a2255dc82d1d854606ac50c19f32eb3df58b59ca\\\\\\\\\\\\\\\"\\\\\\\"}\\\",\\\"1\\\":\\\"{\\\\\\\"credId\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"9d1cb48b5f5cb150d4450de8eafa8b6711c748286d62d28be31cddc737e21582\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"holderIdentity\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"2235687b8d6ab957a9f2693121100aad8f4ec44def30cf31064e747df3d20ef1\\\\\\\\\\\\\\\"\\\\\\\"}\\\"}\",\"statement\":\"\\\"same-person\\\"\",\"subjectDomain\":\"\\\"org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587\\\"\"}",
+      "linkId": "e42d23d7315083dfca3e526803b01f1ec228d49f2266d1955779dc1e6fbadd35",
+      "record": {
+        "linkV": 1,
+        "statement": "same-person",
+        "members": [
+          {
+            "holderIdentity": "9e94854ed86d2356005ffd19a2255dc82d1d854606ac50c19f32eb3df58b59ca",
+            "credId": "5ca1b3b7e2521cc6da78de5472e76efd367c401b0ab689a21048487e2816871a"
+          },
+          {
+            "holderIdentity": "2235687b8d6ab957a9f2693121100aad8f4ec44def30cf31064e747df3d20ef1",
+            "credId": "9d1cb48b5f5cb150d4450de8eafa8b6711c748286d62d28be31cddc737e21582"
+          }
+        ],
+        "issuer": {
+          "identity": "4b735ac174e40636507716ed5c9a8a75fbf6f462357fabb71ac42b7bd502c64a",
+          "publicKey": "wFDFY3pE+oYp//PMzOIwDLNipj2Z2V/FQUUmb0MyRFo="
+        },
+        "subjectDomain": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+        "issuedAt": 1720000000000,
+        "sig": "r+QADir+WWDDnsglcQwzyPSrbOsgC0QjWD9Pu1XQTzvYSZc7vrUqn/NwmfVC1IxayIAqkIRmUWX1X1Tw2KQMCQ=="
+      }
+    }
+  },
+  "readGate.envelope": {
+    "desc": "holderProof：载荷 = canonical({credId,requestId,orgId,collection,presentedAt}) 逐字节 + holder 私钥签名固定值",
+    "expect": {
+      "requestId": "req-78377b525757b494",
+      "holderProofPayload": "{\"collection\":\"\\\"hoa:ledger@v1.0.0\\\"\",\"credId\":\"\\\"5ca1b3b7e2521cc6da78de5472e76efd367c401b0ab689a21048487e2816871a\\\"\",\"orgId\":\"\\\"org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587\\\"\",\"presentedAt\":\"1720000000000\",\"requestId\":\"\\\"req-78377b525757b494\\\"\"}",
+      "holderProof": {
+        "credId": "5ca1b3b7e2521cc6da78de5472e76efd367c401b0ab689a21048487e2816871a",
+        "sig": "J5M1kEGAvjDKhslTFu9Qw0rPrxh6rCOG0eGIXjZ4FTZUM5dldheOP6zugi5uOI+2XytCJW+OnOqnAUgr9b8EAQ=="
+      }
+    }
+  },
+  "readGate.declExt": {
+    "desc": "集合声明追加 readPolicy 的 canonical 往返（既有字段一字节不变）",
+    "expect": {
+      "canonical": "{\"accounts\":\"\\\"data-accounts\\\"\",\"confidentiality\":\"\\\"filtered\\\"\",\"declaredAt\":\"1720000000000\",\"declaredBy\":\"\\\"10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d\\\"\",\"devices\":\"\\\"all\\\"\",\"merge\":\"\\\"lww-record\\\"\",\"name\":\"\\\"hoa:ledger\\\"\",\"readPolicy\":\"{\\\"credTypes\\\":\\\"{\\\\\\\"0\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"household-owner\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"1\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"resident\\\\\\\\\\\\\\\"\\\\\\\"}\\\",\\\"kind\\\":\\\"\\\\\\\"credential\\\\\\\"\\\",\\\"policyRef\\\":\\\"null\\\",\\\"verifierDomain\\\":\\\"\\\\\\\"org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587\\\\\\\"\\\"}\",\"space\":\"\\\"org\\\"\",\"ts\":\"1720000000000\",\"version\":\"\\\"1.0.0\\\"\"}",
+      "record": {
+        "name": "hoa:ledger",
+        "version": "1.0.0",
+        "space": "org",
+        "accounts": "data-accounts",
+        "devices": "all",
+        "confidentiality": "filtered",
+        "merge": "lww-record",
+        "readPolicy": {
+          "kind": "credential",
+          "credTypes": [
+            "household-owner",
+            "resident"
+          ],
+          "verifierDomain": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+          "policyRef": null
+        },
+        "declaredBy": "10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+        "declaredAt": 1720000000000,
+        "ts": 1720000000000
+      }
+    }
+  },
+  "metaAnnounce": {
+    "desc": "元数据公告 canonical 逐字节 + 信封形态（version/type/domain/id 固定值；信封不强制签名，可验证性由 basisOpHash 承担）",
+    "expect": {
+      "announceCanonical": "{\"affairId\":\"\\\"09595d3d31c1e902f71ee42b73d7944dde81e3460662d14c954f8fa5174cc2cf\\\"\",\"basisOpHash\":\"\\\"09595d3d31c1e902f71ee42b73d7944dde81e3460662d14c954f8fa5174cc2cf\\\"\",\"contents\":\"{\\\"0\\\":\\\"{\\\\\\\"kind\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"git\\\\\\\\\\\\\\\"\\\\\\\",\\\\\\\"ref\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"spark-git://071ca2227754705837aa3ef9748ed59e\\\\\\\\\\\\\\\"\\\\\\\"}\\\"}\",\"metaSeq\":\"0\",\"metaV\":\"1\",\"region\":\"\\\"110105\\\"\",\"summary\":\"\\\"阳光小区业委会换届选举\\\"\",\"tags\":\"{\\\"0\\\":\\\"\\\\\\\"region:110105\\\\\\\"\\\",\\\"1\\\":\\\"\\\\\\\"hoa\\\\\\\"\\\"}\",\"title\":\"\\\"第二届业委会选举\\\"\",\"updatedAt\":\"1720000000000\"}",
+      "envelope": {
+        "version": "1",
+        "type": "affair-meta",
+        "domain": "affair",
+        "id": "09595d3d31c1e902f71ee42b73d7944dde81e3460662d14c954f8fa5174cc2cf",
+        "payload": {
+          "metaV": 1,
+          "affairId": "09595d3d31c1e902f71ee42b73d7944dde81e3460662d14c954f8fa5174cc2cf",
+          "title": "第二届业委会选举",
+          "summary": "阳光小区业委会换届选举",
+          "tags": [
+            "region:110105",
+            "hoa"
+          ],
+          "region": "110105",
+          "metaSeq": 0,
+          "basisOpHash": "09595d3d31c1e902f71ee42b73d7944dde81e3460662d14c954f8fa5174cc2cf",
+          "contents": [
+            {
+              "kind": "git",
+              "ref": "spark-git://071ca2227754705837aa3ef9748ed59e"
+            }
+          ],
+          "updatedAt": 1720000000000
+        },
+        "timestamp": 1720000000000
+      }
+    }
+  },
+  "credential.trustTimeline": {
+    "desc": "既往不咎时间线（credential §4 effectiveFrom + §6 第 4 步）：信任撤销前签发的凭证按签发时刻信任集判定仍可信，之后签发的不可信；无任何已生效版本 = 不信任（fail-closed）。生成器：core/examples/gen_credential_vectors.rs（C2）",
+    "trustDecls": [
+      {
+        "trustV": 1,
+        "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+        "verifiers": [
+          {
+            "identity": "4b735ac174e40636507716ed5c9a8a75fbf6f462357fabb71ac42b7bd502c64a",
+            "publicKey": "wFDFY3pE+oYp//PMzOIwDLNipj2Z2V/FQUUmb0MyRFo=",
+            "credTypes": [
+              "household-owner",
+              "resident"
+            ],
+            "methods": [
+              "plugin:hoa-verify:*"
+            ]
+          }
+        ],
+        "effectiveFrom": 1720000000000,
+        "seq": 1,
+        "updatedAt": 1720000000000,
+        "sigSet": {
+          "sigSetV": 1,
+          "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+          "subject": "487c1d2eb24b4ac6395eebc9c010d32d00b46e888f57c72d1ffed33db068d0c7",
+          "policyHash": "f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+          "roster": {
+            "memberSetHash": "f54c5d605e8a16843b39235c1f90e79b999d63bf60d18c633af5027d31bed1af",
+            "anchor": {
+              "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+              "anchorRoot": "6c3dbb273d552d4af3e933c524e0c96934ed25f733b30698fe085e09062def00",
+              "ts": 1720000000000
+            },
+            "snapshot": [
+              {
+                "identity": "3097e2dee2cb4a34b53840cdb705aed71067c36f68db0e0f559c3f3fa043315f",
+                "role": "admin"
+              },
+              {
+                "identity": "7db0b01f39d179aacf7b03dbd7dd9d71f641598bed40fb9839d3c1e1117e666f",
+                "role": "admin"
+              },
+              {
+                "identity": "9a92d2b54a9a5402de3e65a07a5cb12a8dc6758bd8e8c2ec459563d6b2c081c4",
+                "role": "admin"
+              }
+            ]
+          },
+          "signedAt": 1720000000000,
+          "signatures": [
+            {
+              "signer": "9a92d2b54a9a5402de3e65a07a5cb12a8dc6758bd8e8c2ec459563d6b2c081c4",
+              "publicKey": "25lf4lFp0UHKubu6krqgH58uHs599MsqwFGQ83/MH50=",
+              "sig": "Pp57Xl/W3KBi94pwIVJ4ezwNRwQJ9s8hRWiuMg12Nd4+AmPz7fihR5RpP7LWVEbH9bJNCVbTH79+XL2NT5XeAQ=="
+            }
+          ]
+        }
+      },
+      {
+        "trustV": 1,
+        "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+        "verifiers": [],
+        "effectiveFrom": 1720003600000,
+        "seq": 2,
+        "updatedAt": 1720003600000,
+        "sigSet": {
+          "sigSetV": 1,
+          "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+          "subject": "8e814ca405da3d46044ff3270c2b904fbe50b7c84426e6d2ab499bf7ea0d31e6",
+          "policyHash": "f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+          "roster": {
+            "memberSetHash": "f54c5d605e8a16843b39235c1f90e79b999d63bf60d18c633af5027d31bed1af",
+            "anchor": {
+              "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+              "anchorRoot": "6c3dbb273d552d4af3e933c524e0c96934ed25f733b30698fe085e09062def00",
+              "ts": 1720000000000
+            },
+            "snapshot": [
+              {
+                "identity": "3097e2dee2cb4a34b53840cdb705aed71067c36f68db0e0f559c3f3fa043315f",
+                "role": "admin"
+              },
+              {
+                "identity": "7db0b01f39d179aacf7b03dbd7dd9d71f641598bed40fb9839d3c1e1117e666f",
+                "role": "admin"
+              },
+              {
+                "identity": "9a92d2b54a9a5402de3e65a07a5cb12a8dc6758bd8e8c2ec459563d6b2c081c4",
+                "role": "admin"
+              }
+            ]
+          },
+          "signedAt": 1720003600000,
+          "signatures": [
+            {
+              "signer": "9a92d2b54a9a5402de3e65a07a5cb12a8dc6758bd8e8c2ec459563d6b2c081c4",
+              "publicKey": "25lf4lFp0UHKubu6krqgH58uHs599MsqwFGQ83/MH50=",
+              "sig": "vcaft6Q3nvBPxIDvQ2lz1PY2hCLoqnouBrZOuVK0Hl93Qff7TNaal0tqcZQ8qNsV4VSJFeayS1WZVwU9vE1sCQ=="
+            }
+          ]
+        }
+      }
+    ],
+    "credentials": {
+      "beforeRevocation": {
+        "credV": 1,
+        "credType": "household-owner",
+        "issuer": {
+          "identity": "4b735ac174e40636507716ed5c9a8a75fbf6f462357fabb71ac42b7bd502c64a",
+          "publicKey": "wFDFY3pE+oYp//PMzOIwDLNipj2Z2V/FQUUmb0MyRFo="
+        },
+        "holder": {
+          "kind": "org",
+          "identity": "9e94854ed86d2356005ffd19a2255dc82d1d854606ac50c19f32eb3df58b59ca",
+          "publicKey": "eqlD/pVSiDu+GeFtCQAx7qkkeGjkBV0gc+f0yQrhmjI="
+        },
+        "subjectDomain": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+        "claims": {
+          "household": "3-502"
+        },
+        "method": "plugin:hoa-verify:manual-property-cert",
+        "linkRef": null,
+        "issuedAt": 1720000060000,
+        "sig": "klSvxh/pz/Soqx9Gc3dqu1Npam6fVA1lsPaL1gXFUZkQvAF75rkyZcwbush87qexBrwsleWu09+JfzzOPSS9AQ=="
+      },
+      "afterRevocation": {
+        "credV": 1,
+        "credType": "household-owner",
+        "issuer": {
+          "identity": "4b735ac174e40636507716ed5c9a8a75fbf6f462357fabb71ac42b7bd502c64a",
+          "publicKey": "wFDFY3pE+oYp//PMzOIwDLNipj2Z2V/FQUUmb0MyRFo="
+        },
+        "holder": {
+          "kind": "org",
+          "identity": "9e94854ed86d2356005ffd19a2255dc82d1d854606ac50c19f32eb3df58b59ca",
+          "publicKey": "eqlD/pVSiDu+GeFtCQAx7qkkeGjkBV0gc+f0yQrhmjI="
+        },
+        "subjectDomain": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+        "claims": {
+          "household": "3-502"
+        },
+        "method": "plugin:hoa-verify:manual-property-cert",
+        "linkRef": null,
+        "issuedAt": 1720003660000,
+        "sig": "PhwbdgeR3FRJe1aHLw6c9PwWbiP20eCBstyZ5+vg7ZRw7XlV3wgllpMdSv286z4W8soyMbXHtS6NNs19zjtVAA=="
+      }
+    },
+    "cases": [
+      {
+        "name": "issued-before-trust-revoked",
+        "credential": "beforeRevocation",
+        "credId": "de7487934c7b32b3233e5158d176b236b01ce3f5b03d13b4a3bcdace1cd4396f",
+        "at": 1720000060000,
+        "expectDeclSeq": 1,
+        "expectTrusted": true
+      },
+      {
+        "name": "issued-after-trust-revoked",
+        "credential": "afterRevocation",
+        "credId": "6be9964e37854ba675fcfbc9e047d0a66fcf815a94e9fdc0e5a369fba4e67137",
+        "at": 1720003660000,
+        "expectDeclSeq": 2,
+        "expectTrusted": false
+      },
+      {
+        "name": "before-any-decl-effective",
+        "at": 1719999999000,
+        "expectDeclSeq": null,
+        "expectTrusted": false
+      }
+    ]
+  },
+  "readGate.verifyChain": {
+    "desc": "readAuth 验证链（read-gate §4 第 1–4 步，fail-closed）：ok 通过；逐环失败用例（凭证篡改/类型不符/验证人不受信任/已注销/proof 绑定错请求/呈现过期）→ 对应错误名。policyRef 求值归 C5，不在本组。生成器：core/examples/gen_credential_vectors.rs（C2）",
+    "context": {
+      "requestId": "req-78377b525757b494",
+      "collection": "hoa:ledger@v1.0.0",
+      "nowMs": 1720000000000,
+      "policy": {
+        "credTypes": [
+          "household-owner",
+          "resident"
+        ],
+        "verifierDomain": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+        "policyRef": null
+      },
+      "trustDecls": [
+        {
+          "trustV": 1,
+          "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+          "verifiers": [
+            {
+              "identity": "4b735ac174e40636507716ed5c9a8a75fbf6f462357fabb71ac42b7bd502c64a",
+              "publicKey": "wFDFY3pE+oYp//PMzOIwDLNipj2Z2V/FQUUmb0MyRFo=",
+              "credTypes": [
+                "household-owner",
+                "resident"
+              ],
+              "methods": [
+                "plugin:hoa-verify:*"
+              ]
+            }
+          ],
+          "effectiveFrom": 1720000000000,
+          "seq": 1,
+          "updatedAt": 1720000000000,
+          "sigSet": {
+            "sigSetV": 1,
+            "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+            "subject": "487c1d2eb24b4ac6395eebc9c010d32d00b46e888f57c72d1ffed33db068d0c7",
+            "policyHash": "f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+            "roster": {
+              "memberSetHash": "f54c5d605e8a16843b39235c1f90e79b999d63bf60d18c633af5027d31bed1af",
+              "anchor": {
+                "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+                "anchorRoot": "6c3dbb273d552d4af3e933c524e0c96934ed25f733b30698fe085e09062def00",
+                "ts": 1720000000000
+              },
+              "snapshot": [
+                {
+                  "identity": "3097e2dee2cb4a34b53840cdb705aed71067c36f68db0e0f559c3f3fa043315f",
+                  "role": "admin"
+                },
+                {
+                  "identity": "7db0b01f39d179aacf7b03dbd7dd9d71f641598bed40fb9839d3c1e1117e666f",
+                  "role": "admin"
+                },
+                {
+                  "identity": "9a92d2b54a9a5402de3e65a07a5cb12a8dc6758bd8e8c2ec459563d6b2c081c4",
+                  "role": "admin"
+                }
+              ]
+            },
+            "signedAt": 1720000000000,
+            "signatures": [
+              {
+                "signer": "9a92d2b54a9a5402de3e65a07a5cb12a8dc6758bd8e8c2ec459563d6b2c081c4",
+                "publicKey": "25lf4lFp0UHKubu6krqgH58uHs599MsqwFGQ83/MH50=",
+                "sig": "Pp57Xl/W3KBi94pwIVJ4ezwNRwQJ9s8hRWiuMg12Nd4+AmPz7fihR5RpP7LWVEbH9bJNCVbTH79+XL2NT5XeAQ=="
+              }
+            ]
+          }
+        }
+      ],
+      "revocation": {
+        "entries": [
+          {
+            "revV": 1,
+            "issuer": "4b735ac174e40636507716ed5c9a8a75fbf6f462357fabb71ac42b7bd502c64a",
+            "seq": 1,
+            "prevHash": null,
+            "credId": "fbc5c3e69b5bc396fd3d39677c48a280c1037556ea3524ba59b83a3c79c4eb47",
+            "revokedAt": 1720000001000,
+            "reason": null,
+            "sig": "uKTO/Tth33sRolX7S6t3s+saW+SKCggwPASWzuVIEbwTdy5bWAFfjSd/Ui9Q3qBI2oYlDWigU2s3FYciFN7sAg=="
+          },
+          {
+            "revV": 1,
+            "issuer": "4b735ac174e40636507716ed5c9a8a75fbf6f462357fabb71ac42b7bd502c64a",
+            "seq": 2,
+            "prevHash": "fab807fefa848515b4641515f3021eb596624a4bca892925866cb6dc8bf0767a",
+            "credId": "7adaca4f50d1a09a8b8f77f91f1af15c203b25915f50cd0f17e68417a4dec293",
+            "revokedAt": 1720000002000,
+            "reason": null,
+            "sig": "v8ILBdJU1u4O8OCoBJfZ0sKf4U2zurFUWKSBjejqtLl2tXusAnGfIP+1xoaiCQgeoDJnhGapzRK1RCLfjOD7DQ=="
+          },
+          {
+            "revV": 1,
+            "issuer": "4b735ac174e40636507716ed5c9a8a75fbf6f462357fabb71ac42b7bd502c64a",
+            "seq": 3,
+            "prevHash": "c8749e932841f6f3b9892aa05d91f016c8f89735b9c68d5f9c93fde0872356c5",
+            "credId": "fc4828989d09da482dcfc958c806a0b504f6f99d4c5ec75c174982f957f71dd0",
+            "revokedAt": 1720000003000,
+            "reason": null,
+            "sig": "ETwon/5OiBs/utapgPukUEYTOhyo+Y/U2ZLfn1X4RoZsMYDvqzdPX2dZU4qibhKMFDPS1hXU6AxGqBc/cQ4fDA=="
+          }
+        ],
+        "head": {
+          "revHeadV": 1,
+          "issuer": "4b735ac174e40636507716ed5c9a8a75fbf6f462357fabb71ac42b7bd502c64a",
+          "headSeq": 3,
+          "headHash": "df8c6795fa4e1bf55319ce07d707b38bbe35494d6a193c346a91dbbb1fe3260e",
+          "asOf": 1720000005000,
+          "sig": "k2H9U09j4PhLostU+7Y/c0szbfbPKngRns1lxAIGZ71iDnpGRsnHSaTfimucwABDhLZUSxE27GOdLgicNprRDQ=="
+        }
+      }
+    },
+    "cases": [
+      {
+        "name": "ok",
+        "readAuth": {
+          "gateV": 1,
+          "credentials": [
+            {
+              "credV": 1,
+              "credType": "household-owner",
+              "issuer": {
+                "identity": "4b735ac174e40636507716ed5c9a8a75fbf6f462357fabb71ac42b7bd502c64a",
+                "publicKey": "wFDFY3pE+oYp//PMzOIwDLNipj2Z2V/FQUUmb0MyRFo="
+              },
+              "holder": {
+                "kind": "org",
+                "identity": "9e94854ed86d2356005ffd19a2255dc82d1d854606ac50c19f32eb3df58b59ca",
+                "publicKey": "eqlD/pVSiDu+GeFtCQAx7qkkeGjkBV0gc+f0yQrhmjI="
+              },
+              "subjectDomain": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+              "claims": {
+                "household": "3-502"
+              },
+              "method": "plugin:hoa-verify:manual-property-cert",
+              "linkRef": null,
+              "issuedAt": 1720000000000,
+              "sig": "2jgjqBToiejIk2eioJcxkuKvoH8Ri5Ry1hNgDRXv94IiC1C5c9Qt4ix0610mLrojqZsoHUa4RxcRvRa7Vs2RCA=="
+            }
+          ],
+          "holderProofs": [
+            {
+              "credId": "5ca1b3b7e2521cc6da78de5472e76efd367c401b0ab689a21048487e2816871a",
+              "sig": "J5M1kEGAvjDKhslTFu9Qw0rPrxh6rCOG0eGIXjZ4FTZUM5dldheOP6zugi5uOI+2XytCJW+OnOqnAUgr9b8EAQ=="
+            }
+          ],
+          "presentedAt": 1720000000000
+        },
+        "expect": "ok"
+      },
+      {
+        "name": "cred-tampered",
+        "readAuth": {
+          "gateV": 1,
+          "credentials": [
+            {
+              "credV": 1,
+              "credType": "household-owner",
+              "issuer": {
+                "identity": "4b735ac174e40636507716ed5c9a8a75fbf6f462357fabb71ac42b7bd502c64a",
+                "publicKey": "wFDFY3pE+oYp//PMzOIwDLNipj2Z2V/FQUUmb0MyRFo="
+              },
+              "holder": {
+                "kind": "org",
+                "identity": "9e94854ed86d2356005ffd19a2255dc82d1d854606ac50c19f32eb3df58b59ca",
+                "publicKey": "eqlD/pVSiDu+GeFtCQAx7qkkeGjkBV0gc+f0yQrhmjI="
+              },
+              "subjectDomain": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+              "claims": {
+                "household": "3-503"
+              },
+              "method": "plugin:hoa-verify:manual-property-cert",
+              "linkRef": null,
+              "issuedAt": 1720000000000,
+              "sig": "2jgjqBToiejIk2eioJcxkuKvoH8Ri5Ry1hNgDRXv94IiC1C5c9Qt4ix0610mLrojqZsoHUa4RxcRvRa7Vs2RCA=="
+            }
+          ],
+          "holderProofs": [
+            {
+              "credId": "5ca1b3b7e2521cc6da78de5472e76efd367c401b0ab689a21048487e2816871a",
+              "sig": "J5M1kEGAvjDKhslTFu9Qw0rPrxh6rCOG0eGIXjZ4FTZUM5dldheOP6zugi5uOI+2XytCJW+OnOqnAUgr9b8EAQ=="
+            }
+          ],
+          "presentedAt": 1720000000000
+        },
+        "expect": "invalid-signature"
+      },
+      {
+        "name": "cred-type-not-allowed",
+        "readAuth": {
+          "gateV": 1,
+          "credentials": [
+            {
+              "credV": 1,
+              "credType": "household-owner",
+              "issuer": {
+                "identity": "4b735ac174e40636507716ed5c9a8a75fbf6f462357fabb71ac42b7bd502c64a",
+                "publicKey": "wFDFY3pE+oYp//PMzOIwDLNipj2Z2V/FQUUmb0MyRFo="
+              },
+              "holder": {
+                "kind": "org",
+                "identity": "9e94854ed86d2356005ffd19a2255dc82d1d854606ac50c19f32eb3df58b59ca",
+                "publicKey": "eqlD/pVSiDu+GeFtCQAx7qkkeGjkBV0gc+f0yQrhmjI="
+              },
+              "subjectDomain": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+              "claims": {
+                "household": "3-502"
+              },
+              "method": "plugin:hoa-verify:manual-property-cert",
+              "linkRef": null,
+              "issuedAt": 1720000000000,
+              "sig": "2jgjqBToiejIk2eioJcxkuKvoH8Ri5Ry1hNgDRXv94IiC1C5c9Qt4ix0610mLrojqZsoHUa4RxcRvRa7Vs2RCA=="
+            }
+          ],
+          "holderProofs": [
+            {
+              "credId": "5ca1b3b7e2521cc6da78de5472e76efd367c401b0ab689a21048487e2816871a",
+              "sig": "J5M1kEGAvjDKhslTFu9Qw0rPrxh6rCOG0eGIXjZ4FTZUM5dldheOP6zugi5uOI+2XytCJW+OnOqnAUgr9b8EAQ=="
+            }
+          ],
+          "presentedAt": 1720000000000
+        },
+        "policyOverride": {
+          "credTypes": [
+            "resident"
+          ]
+        },
+        "expect": "cred-type-not-allowed"
+      },
+      {
+        "name": "untrusted-issuer",
+        "readAuth": {
+          "gateV": 1,
+          "credentials": [
+            {
+              "credV": 1,
+              "credType": "household-owner",
+              "issuer": {
+                "identity": "4b735ac174e40636507716ed5c9a8a75fbf6f462357fabb71ac42b7bd502c64a",
+                "publicKey": "wFDFY3pE+oYp//PMzOIwDLNipj2Z2V/FQUUmb0MyRFo="
+              },
+              "holder": {
+                "kind": "org",
+                "identity": "9e94854ed86d2356005ffd19a2255dc82d1d854606ac50c19f32eb3df58b59ca",
+                "publicKey": "eqlD/pVSiDu+GeFtCQAx7qkkeGjkBV0gc+f0yQrhmjI="
+              },
+              "subjectDomain": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+              "claims": {
+                "household": "3-502"
+              },
+              "method": "plugin:hoa-verify:manual-property-cert",
+              "linkRef": null,
+              "issuedAt": 1720000000000,
+              "sig": "2jgjqBToiejIk2eioJcxkuKvoH8Ri5Ry1hNgDRXv94IiC1C5c9Qt4ix0610mLrojqZsoHUa4RxcRvRa7Vs2RCA=="
+            }
+          ],
+          "holderProofs": [
+            {
+              "credId": "5ca1b3b7e2521cc6da78de5472e76efd367c401b0ab689a21048487e2816871a",
+              "sig": "J5M1kEGAvjDKhslTFu9Qw0rPrxh6rCOG0eGIXjZ4FTZUM5dldheOP6zugi5uOI+2XytCJW+OnOqnAUgr9b8EAQ=="
+            }
+          ],
+          "presentedAt": 1720000000000
+        },
+        "trustDeclsOverride": [],
+        "expect": "issuer-not-trusted"
+      },
+      {
+        "name": "revoked",
+        "readAuth": {
+          "gateV": 1,
+          "credentials": [
+            {
+              "credV": 1,
+              "credType": "household-owner",
+              "issuer": {
+                "identity": "4b735ac174e40636507716ed5c9a8a75fbf6f462357fabb71ac42b7bd502c64a",
+                "publicKey": "wFDFY3pE+oYp//PMzOIwDLNipj2Z2V/FQUUmb0MyRFo="
+              },
+              "holder": {
+                "kind": "org",
+                "identity": "9e94854ed86d2356005ffd19a2255dc82d1d854606ac50c19f32eb3df58b59ca",
+                "publicKey": "eqlD/pVSiDu+GeFtCQAx7qkkeGjkBV0gc+f0yQrhmjI="
+              },
+              "subjectDomain": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+              "claims": {
+                "household": "3-502"
+              },
+              "method": "plugin:hoa-verify:manual-property-cert",
+              "linkRef": null,
+              "issuedAt": 1720000000000,
+              "sig": "2jgjqBToiejIk2eioJcxkuKvoH8Ri5Ry1hNgDRXv94IiC1C5c9Qt4ix0610mLrojqZsoHUa4RxcRvRa7Vs2RCA=="
+            }
+          ],
+          "holderProofs": [
+            {
+              "credId": "5ca1b3b7e2521cc6da78de5472e76efd367c401b0ab689a21048487e2816871a",
+              "sig": "J5M1kEGAvjDKhslTFu9Qw0rPrxh6rCOG0eGIXjZ4FTZUM5dldheOP6zugi5uOI+2XytCJW+OnOqnAUgr9b8EAQ=="
+            }
+          ],
+          "presentedAt": 1720000000000
+        },
+        "revocationOverride": {
+          "entries": [
+            {
+              "revV": 1,
+              "issuer": "4b735ac174e40636507716ed5c9a8a75fbf6f462357fabb71ac42b7bd502c64a",
+              "seq": 1,
+              "prevHash": null,
+              "credId": "5ca1b3b7e2521cc6da78de5472e76efd367c401b0ab689a21048487e2816871a",
+              "revokedAt": 1720000006000,
+              "reason": null,
+              "sig": "K9jvBl7Vzy1L1w3n6B0qkivlVFq+4mClOFeNxCcDdIvfBZrvUZonghxJYO0LSclrdVyyPG2K5G8WNoMEpDz/BA=="
+            }
+          ],
+          "head": {
+            "revHeadV": 1,
+            "issuer": "4b735ac174e40636507716ed5c9a8a75fbf6f462357fabb71ac42b7bd502c64a",
+            "headSeq": 1,
+            "headHash": "dac5e8372f54c8d29cf106bde6baf2195a2bb9992296eee5f88cd62bc0faa8f3",
+            "asOf": 1720000007000,
+            "sig": "75zxGKdX2h33jP08OVRdUBq4/EpyiZJAL8NBX7UyxCqv9HPgD433TP3YKYnX8LgJ9qVnpvdLv6WBq5PTSHwhCA=="
+          }
+        },
+        "expect": "revoked"
+      },
+      {
+        "name": "holder-proof-wrong-request",
+        "readAuth": {
+          "gateV": 1,
+          "credentials": [
+            {
+              "credV": 1,
+              "credType": "household-owner",
+              "issuer": {
+                "identity": "4b735ac174e40636507716ed5c9a8a75fbf6f462357fabb71ac42b7bd502c64a",
+                "publicKey": "wFDFY3pE+oYp//PMzOIwDLNipj2Z2V/FQUUmb0MyRFo="
+              },
+              "holder": {
+                "kind": "org",
+                "identity": "9e94854ed86d2356005ffd19a2255dc82d1d854606ac50c19f32eb3df58b59ca",
+                "publicKey": "eqlD/pVSiDu+GeFtCQAx7qkkeGjkBV0gc+f0yQrhmjI="
+              },
+              "subjectDomain": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+              "claims": {
+                "household": "3-502"
+              },
+              "method": "plugin:hoa-verify:manual-property-cert",
+              "linkRef": null,
+              "issuedAt": 1720000000000,
+              "sig": "2jgjqBToiejIk2eioJcxkuKvoH8Ri5Ry1hNgDRXv94IiC1C5c9Qt4ix0610mLrojqZsoHUa4RxcRvRa7Vs2RCA=="
+            }
+          ],
+          "holderProofs": [
+            {
+              "credId": "5ca1b3b7e2521cc6da78de5472e76efd367c401b0ab689a21048487e2816871a",
+              "sig": "TJs3wvdkGudTJBwQpVWTesSiFt/m5VQD/aR7SubPFIdVv8px3k1iHJvpRjPRs1kBnwMbsqm4GZps0KZ4bUdJCA=="
+            }
+          ],
+          "presentedAt": 1720000000000
+        },
+        "expect": "holder-proof-invalid"
+      },
+      {
+        "name": "stale-presented-at",
+        "readAuth": {
+          "gateV": 1,
+          "credentials": [
+            {
+              "credV": 1,
+              "credType": "household-owner",
+              "issuer": {
+                "identity": "4b735ac174e40636507716ed5c9a8a75fbf6f462357fabb71ac42b7bd502c64a",
+                "publicKey": "wFDFY3pE+oYp//PMzOIwDLNipj2Z2V/FQUUmb0MyRFo="
+              },
+              "holder": {
+                "kind": "org",
+                "identity": "9e94854ed86d2356005ffd19a2255dc82d1d854606ac50c19f32eb3df58b59ca",
+                "publicKey": "eqlD/pVSiDu+GeFtCQAx7qkkeGjkBV0gc+f0yQrhmjI="
+              },
+              "subjectDomain": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+              "claims": {
+                "household": "3-502"
+              },
+              "method": "plugin:hoa-verify:manual-property-cert",
+              "linkRef": null,
+              "issuedAt": 1720000000000,
+              "sig": "2jgjqBToiejIk2eioJcxkuKvoH8Ri5Ry1hNgDRXv94IiC1C5c9Qt4ix0610mLrojqZsoHUa4RxcRvRa7Vs2RCA=="
+            }
+          ],
+          "holderProofs": [
+            {
+              "credId": "5ca1b3b7e2521cc6da78de5472e76efd367c401b0ab689a21048487e2816871a",
+              "sig": "J5M1kEGAvjDKhslTFu9Qw0rPrxh6rCOG0eGIXjZ4FTZUM5dldheOP6zugi5uOI+2XytCJW+OnOqnAUgr9b8EAQ=="
+            }
+          ],
+          "presentedAt": 1719999340000
+        },
+        "expect": "stale-timestamp"
+      }
+    ]
+  },
+  "staticCheck": {
+    "desc": "§5.6 拒绝用例集 + 正例基线（C1 core/examples 生成器自产）：到达顺序依赖、无公示期 wall-clock、m>n、单点效力、畸形 pubPeriod 形状（fail-closed，缺省只应用于字段整体缺席）、越界 ladderParams 等 fail-closed",
+    "expect": {
+      "cases": [
+        {
+          "name": "baseline-ok",
+          "rules": {
+            "engine": "b1",
+            "closeConditions": [
+              {
+                "type": "op-count",
+                "opType": "content",
+                "count": 100
+              }
+            ],
+            "pubPeriod": {
+              "delayMs": 86400000
+            },
+            "participation": {
+              "contribute": {
+                "ladder": "contributor"
+              },
+              "vote": {
+                "ladder": "voter"
+              },
+              "combine": "all"
+            },
+            "ruleChange": {
+              "kind": "delayed-veto",
+              "delayMs": 259200000,
+              "vetoThreshold": {
+                "count": 3
+              }
+            },
+            "exec": null
+          },
+          "expect": {
+            "ok": true
+          }
+        },
+        {
+          "name": "wall-clock-with-default-pub-period-ok",
+          "rules": {
+            "engine": "b1",
+            "closeConditions": [
+              {
+                "type": "wall-clock",
+                "notBefore": 1720086400000
+              }
+            ],
+            "pubPeriod": {
+              "delayMs": 86400000
+            },
+            "participation": {
+              "contribute": {
+                "ladder": "contributor"
+              },
+              "vote": {
+                "ladder": "voter"
+              },
+              "combine": "all"
+            },
+            "ruleChange": {
+              "kind": "delayed-veto",
+              "delayMs": 259200000,
+              "vetoThreshold": {
+                "count": 3
+              }
+            },
+            "exec": null
+          },
+          "expect": {
+            "ok": true
+          }
+        },
+        {
+          "name": "arrival-order-dependency",
+          "rules": {
+            "engine": "b1",
+            "closeConditions": [
+              {
+                "type": "first-received",
+                "count": 5
+              }
+            ],
+            "pubPeriod": {
+              "delayMs": 86400000
+            },
+            "participation": {
+              "contribute": {
+                "ladder": "contributor"
+              },
+              "vote": {
+                "ladder": "voter"
+              },
+              "combine": "all"
+            },
+            "ruleChange": {
+              "kind": "delayed-veto",
+              "delayMs": 259200000,
+              "vetoThreshold": {
+                "count": 3
+              }
+            },
+            "exec": null
+          },
+          "expect": {
+            "ok": false,
+            "reason": "unknown-close-condition"
+          }
+        },
+        {
+          "name": "wall-clock-without-pub-period",
+          "rules": {
+            "engine": "b1",
+            "closeConditions": [
+              {
+                "type": "wall-clock",
+                "notBefore": 1720086400000
+              }
+            ],
+            "pubPeriod": {
+              "delayMs": 0
+            },
+            "participation": {
+              "contribute": {
+                "ladder": "contributor"
+              },
+              "vote": {
+                "ladder": "voter"
+              },
+              "combine": "all"
+            },
+            "ruleChange": {
+              "kind": "delayed-veto",
+              "delayMs": 259200000,
+              "vetoThreshold": {
+                "count": 3
+              }
+            },
+            "exec": null
+          },
+          "expect": {
+            "ok": false,
+            "reason": "invalid-pub-period"
+          }
+        },
+        {
+          "name": "multisig-m-gt-n",
+          "rules": {
+            "engine": "b1",
+            "closeConditions": [
+              {
+                "type": "op-count",
+                "opType": "content",
+                "count": 100
+              }
+            ],
+            "pubPeriod": {
+              "delayMs": 86400000
+            },
+            "participation": {
+              "contribute": {
+                "ladder": "contributor"
+              },
+              "vote": {
+                "ladder": "voter"
+              },
+              "combine": "all"
+            },
+            "ruleChange": {
+              "kind": "multisig",
+              "m": 3,
+              "n": 2,
+              "signers": [
+                "9a92d2b54a9a5402de3e65a07a5cb12a8dc6758bd8e8c2ec459563d6b2c081c4",
+                "abababababababababababababababababababababababababababababababab",
+                "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+              ]
+            },
+            "exec": null
+          },
+          "expect": {
+            "ok": false,
+            "reason": "invalid-multisig"
+          }
+        },
+        {
+          "name": "single-point-effect",
+          "rules": {
+            "engine": "b1",
+            "closeConditions": [
+              {
+                "type": "op-count",
+                "opType": "content",
+                "count": 100
+              }
+            ],
+            "pubPeriod": {
+              "delayMs": 86400000
+            },
+            "participation": {
+              "contribute": {
+                "ladder": "contributor"
+              },
+              "vote": {
+                "ladder": "voter"
+              },
+              "combine": "all"
+            },
+            "ruleChange": {
+              "kind": "multisig",
+              "m": 1,
+              "n": 1,
+              "signers": [
+                "9a92d2b54a9a5402de3e65a07a5cb12a8dc6758bd8e8c2ec459563d6b2c081c4"
+              ]
+            },
+            "exec": null
+          },
+          "expect": {
+            "ok": false,
+            "reason": "single-point-effect"
+          }
+        },
+        {
+          "name": "unknown-mechanism",
+          "rules": {
+            "engine": "b1",
+            "closeConditions": [
+              {
+                "type": "op-count",
+                "opType": "content",
+                "count": 100
+              }
+            ],
+            "pubPeriod": {
+              "delayMs": 86400000
+            },
+            "participation": {
+              "contribute": {
+                "ladder": "contributor"
+              },
+              "vote": {
+                "ladder": "voter"
+              },
+              "combine": "all"
+            },
+            "ruleChange": {
+              "kind": "dictator"
+            },
+            "exec": null
+          },
+          "expect": {
+            "ok": false,
+            "reason": "unknown-mechanism"
+          }
+        },
+        {
+          "name": "op-count-zero",
+          "rules": {
+            "engine": "b1",
+            "closeConditions": [
+              {
+                "type": "op-count",
+                "opType": "content",
+                "count": 0
+              }
+            ],
+            "pubPeriod": {
+              "delayMs": 86400000
+            },
+            "participation": {
+              "contribute": {
+                "ladder": "contributor"
+              },
+              "vote": {
+                "ladder": "voter"
+              },
+              "combine": "all"
+            },
+            "ruleChange": {
+              "kind": "delayed-veto",
+              "delayMs": 259200000,
+              "vetoThreshold": {
+                "count": 3
+              }
+            },
+            "exec": null
+          },
+          "expect": {
+            "ok": false,
+            "reason": "invalid-count"
+          }
+        },
+        {
+          "name": "threshold-num-gt-den",
+          "rules": {
+            "engine": "b1",
+            "closeConditions": [
+              {
+                "type": "threshold",
+                "base": "ladder:voters",
+                "num": 3,
+                "den": 2
+              }
+            ],
+            "pubPeriod": {
+              "delayMs": 86400000
+            },
+            "participation": {
+              "contribute": {
+                "ladder": "contributor"
+              },
+              "vote": {
+                "ladder": "voter"
+              },
+              "combine": "all"
+            },
+            "ruleChange": {
+              "kind": "delayed-veto",
+              "delayMs": 259200000,
+              "vetoThreshold": {
+                "count": 3
+              }
+            },
+            "exec": null
+          },
+          "expect": {
+            "ok": false,
+            "reason": "invalid-threshold"
+          }
+        },
+        {
+          "name": "threshold-bad-base",
+          "rules": {
+            "engine": "b1",
+            "closeConditions": [
+              {
+                "type": "threshold",
+                "base": "local-clock",
+                "num": 1,
+                "den": 2
+              }
+            ],
+            "pubPeriod": {
+              "delayMs": 86400000
+            },
+            "participation": {
+              "contribute": {
+                "ladder": "contributor"
+              },
+              "vote": {
+                "ladder": "voter"
+              },
+              "combine": "all"
+            },
+            "ruleChange": {
+              "kind": "delayed-veto",
+              "delayMs": 259200000,
+              "vetoThreshold": {
+                "count": 3
+              }
+            },
+            "exec": null
+          },
+          "expect": {
+            "ok": false,
+            "reason": "invalid-threshold-base"
+          }
+        },
+        {
+          "name": "unknown-op-type-in-condition",
+          "rules": {
+            "engine": "b1",
+            "closeConditions": [
+              {
+                "type": "op-count",
+                "opType": "plugin-custom",
+                "count": 1
+              }
+            ],
+            "pubPeriod": {
+              "delayMs": 86400000
+            },
+            "participation": {
+              "contribute": {
+                "ladder": "contributor"
+              },
+              "vote": {
+                "ladder": "voter"
+              },
+              "combine": "all"
+            },
+            "ruleChange": {
+              "kind": "delayed-veto",
+              "delayMs": 259200000,
+              "vetoThreshold": {
+                "count": 3
+              }
+            },
+            "exec": null
+          },
+          "expect": {
+            "ok": false,
+            "reason": "unknown-op-type"
+          }
+        },
+        {
+          "name": "pub-period-not-object",
+          "rules": {
+            "engine": "b1",
+            "closeConditions": [
+              {
+                "type": "op-count",
+                "opType": "content",
+                "count": 100
+              }
+            ],
+            "pubPeriod": "86400000",
+            "participation": {
+              "contribute": {
+                "ladder": "contributor"
+              },
+              "vote": {
+                "ladder": "voter"
+              },
+              "combine": "all"
+            },
+            "ruleChange": {
+              "kind": "delayed-veto",
+              "delayMs": 259200000,
+              "vetoThreshold": {
+                "count": 3
+              }
+            },
+            "exec": null
+          },
+          "expect": {
+            "ok": false,
+            "reason": "malformed-rules"
+          }
+        },
+        {
+          "name": "pub-period-delay-ms-wrong-type",
+          "rules": {
+            "engine": "b1",
+            "closeConditions": [
+              {
+                "type": "op-count",
+                "opType": "content",
+                "count": 100
+              }
+            ],
+            "pubPeriod": {
+              "delayMs": "86400000"
+            },
+            "participation": {
+              "contribute": {
+                "ladder": "contributor"
+              },
+              "vote": {
+                "ladder": "voter"
+              },
+              "combine": "all"
+            },
+            "ruleChange": {
+              "kind": "delayed-veto",
+              "delayMs": 259200000,
+              "vetoThreshold": {
+                "count": 3
+              }
+            },
+            "exec": null
+          },
+          "expect": {
+            "ok": false,
+            "reason": "malformed-rules"
+          }
+        },
+        {
+          "name": "pub-period-veto-threshold-wrong-type",
+          "rules": {
+            "engine": "b1",
+            "closeConditions": [
+              {
+                "type": "op-count",
+                "opType": "content",
+                "count": 100
+              }
+            ],
+            "pubPeriod": {
+              "delayMs": 86400000,
+              "vetoThreshold": "1"
+            },
+            "participation": {
+              "contribute": {
+                "ladder": "contributor"
+              },
+              "vote": {
+                "ladder": "voter"
+              },
+              "combine": "all"
+            },
+            "ruleChange": {
+              "kind": "delayed-veto",
+              "delayMs": 259200000,
+              "vetoThreshold": {
+                "count": 3
+              }
+            },
+            "exec": null
+          },
+          "expect": {
+            "ok": false,
+            "reason": "malformed-rules"
+          }
+        },
+        {
+          "name": "pub-period-veto-count-wrong-type",
+          "rules": {
+            "engine": "b1",
+            "closeConditions": [
+              {
+                "type": "op-count",
+                "opType": "content",
+                "count": 100
+              }
+            ],
+            "pubPeriod": {
+              "delayMs": 86400000,
+              "vetoThreshold": {
+                "count": "1"
+              }
+            },
+            "participation": {
+              "contribute": {
+                "ladder": "contributor"
+              },
+              "vote": {
+                "ladder": "voter"
+              },
+              "combine": "all"
+            },
+            "ruleChange": {
+              "kind": "delayed-veto",
+              "delayMs": 259200000,
+              "vetoThreshold": {
+                "count": 3
+              }
+            },
+            "exec": null
+          },
+          "expect": {
+            "ok": false,
+            "reason": "malformed-rules"
+          }
+        },
+        {
+          "name": "pub-period-absent-default-ok",
+          "rules": {
+            "engine": "b1",
+            "closeConditions": [
+              {
+                "type": "op-count",
+                "opType": "content",
+                "count": 100
+              }
+            ],
+            "participation": {
+              "contribute": {
+                "ladder": "contributor"
+              },
+              "vote": {
+                "ladder": "voter"
+              },
+              "combine": "all"
+            },
+            "ruleChange": {
+              "kind": "delayed-veto",
+              "delayMs": 259200000,
+              "vetoThreshold": {
+                "count": 3
+              }
+            },
+            "exec": null
+          },
+          "expect": {
+            "ok": true
+          }
+        },
+        {
+          "name": "ladder-params-ok",
+          "rules": {
+            "engine": "b1",
+            "closeConditions": [
+              {
+                "type": "op-count",
+                "opType": "content",
+                "count": 100
+              }
+            ],
+            "pubPeriod": {
+              "delayMs": 86400000
+            },
+            "participation": {
+              "contribute": {
+                "ladder": "contributor"
+              },
+              "vote": {
+                "ladder": "voter"
+              },
+              "combine": "all",
+              "ladderParams": {
+                "contributorAccepts": 2,
+                "voterDays": 10,
+                "voterAccepts": 2
+              }
+            },
+            "ruleChange": {
+              "kind": "delayed-veto",
+              "delayMs": 259200000,
+              "vetoThreshold": {
+                "count": 3
+              }
+            },
+            "exec": null
+          },
+          "expect": {
+            "ok": true
+          }
+        },
+        {
+          "name": "ladder-params-voter-days-zero",
+          "rules": {
+            "engine": "b1",
+            "closeConditions": [
+              {
+                "type": "op-count",
+                "opType": "content",
+                "count": 100
+              }
+            ],
+            "pubPeriod": {
+              "delayMs": 86400000
+            },
+            "participation": {
+              "contribute": {
+                "ladder": "contributor"
+              },
+              "vote": {
+                "ladder": "voter"
+              },
+              "combine": "all",
+              "ladderParams": {
+                "voterDays": 0
+              }
+            },
+            "ruleChange": {
+              "kind": "delayed-veto",
+              "delayMs": 259200000,
+              "vetoThreshold": {
+                "count": 3
+              }
+            },
+            "exec": null
+          },
+          "expect": {
+            "ok": false,
+            "reason": "invalid-participation"
+          }
+        },
+        {
+          "name": "ladder-params-not-object",
+          "rules": {
+            "engine": "b1",
+            "closeConditions": [
+              {
+                "type": "op-count",
+                "opType": "content",
+                "count": 100
+              }
+            ],
+            "pubPeriod": {
+              "delayMs": 86400000
+            },
+            "participation": {
+              "contribute": {
+                "ladder": "contributor"
+              },
+              "vote": {
+                "ladder": "voter"
+              },
+              "combine": "all",
+              "ladderParams": "bad"
+            },
+            "ruleChange": {
+              "kind": "delayed-veto",
+              "delayMs": 259200000,
+              "vetoThreshold": {
+                "count": 3
+              }
+            },
+            "exec": null
+          },
+          "expect": {
+            "ok": false,
+            "reason": "invalid-participation"
+          }
+        }
+      ]
+    }
+  },
+  "resolutionReplay": {
+    "desc": "固定操作集合 → resolution 复算一致性（§6.1：countedOps 排序/rulesHash/condition/pubPeriod 逐项复算）。消费侧负例：countedOps 逆序 → counted-ops-mismatch；rulesHash 篡改 → rules-hash-mismatch；condition.count 改为 3 → condition-not-satisfied；wall-clock 锚定落入 ±10min 容忍带 → condition-not-satisfied；threshold 按人去重计入（同一身份多条操作只计一次）→ 多计入同一人操作 = counted-ops-mismatch；自声明 pubPeriod 与 rules 版本不符 → pub-period-mismatch；自声明 pubPeriod 低于 24h（badPubPeriodMs）在解析期即拒",
+    "expect": {
+      "affairId": "283d0542a1a6841ed0453e24a91cdc452540dcc0f51e7a351c965d483f9783ba",
+      "rules": {
+        "engine": "b1",
+        "closeConditions": [
+          {
+            "type": "op-count",
+            "opType": "content",
+            "count": 2
+          }
+        ],
+        "pubPeriod": {
+          "delayMs": 86400000
+        },
+        "ruleChange": {
+          "kind": "delayed-veto",
+          "delayMs": 259200000,
+          "vetoThreshold": {
+            "count": 3
+          }
+        },
+        "exec": null
+      },
+      "ops": [
+        {
+          "entry": {
+            "opV": 1,
+            "affairId": "283d0542a1a6841ed0453e24a91cdc452540dcc0f51e7a351c965d483f9783ba",
+            "prevOpHash": "283d0542a1a6841ed0453e24a91cdc452540dcc0f51e7a351c965d483f9783ba",
+            "opType": "content",
+            "payload": {
+              "kind": "sign",
+              "text": "附议甲"
+            },
+            "actor": {
+              "kind": "person",
+              "identity": "48cca97f8993ffaebcac9728d7f94f7144f18090d329d9370a7dfc42db38d14d",
+              "publicKey": "iEuIV/TqoWE8YVBNs01L6vNGUXoOMd483dTZtCAdnQs="
+            },
+            "declaredAt": 1720000001000,
+            "sig": "poOnkx3TqdLmWzDMj6QTgV4u7wyEnkmAK/dL92GE4tUyoPAdvPxXFDP91hLDRUEFVEKqE67+Zro+PtLl14eqDQ=="
+          },
+          "opHash": "e615ad465059957a137c66a7c917c00821f94915b81ea281146795315d79bb32"
+        },
+        {
+          "entry": {
+            "opV": 1,
+            "affairId": "283d0542a1a6841ed0453e24a91cdc452540dcc0f51e7a351c965d483f9783ba",
+            "prevOpHash": "e615ad465059957a137c66a7c917c00821f94915b81ea281146795315d79bb32",
+            "opType": "content",
+            "payload": {
+              "kind": "sign",
+              "text": "附议乙"
+            },
+            "actor": {
+              "kind": "person",
+              "identity": "1325b850c2871916eae203f0efc3c8987f64e5e3cdb27679e6d1fa97808357e6",
+              "publicKey": "oJql9HpnWYAv+VX43C0qFKXJnSO+l/hkEn/5ODRVpPA="
+            },
+            "declaredAt": 1720000002000,
+            "sig": "PbzC8ppsyusF7PLdPiZcAC+hkNvlC7gI5r3ZFoW7yyh/GNMkFoCFuly9hAk775M1XMfeiBrtZDfasrGcu7j5Dw=="
+          },
+          "opHash": "bae18ff61d223ae0e9b04782d70debebc3754132c4d2bf4c2e8ccf7ac1f9903c"
+        }
+      ],
+      "resolution": {
+        "entry": {
+          "opV": 1,
+          "affairId": "283d0542a1a6841ed0453e24a91cdc452540dcc0f51e7a351c965d483f9783ba",
+          "prevOpHash": "bae18ff61d223ae0e9b04782d70debebc3754132c4d2bf4c2e8ccf7ac1f9903c",
+          "opType": "resolution",
+          "payload": {
+            "result": "passed",
+            "condition": {
+              "type": "op-count",
+              "opType": "content",
+              "count": 2
+            },
+            "countedOps": [
+              "bae18ff61d223ae0e9b04782d70debebc3754132c4d2bf4c2e8ccf7ac1f9903c",
+              "e615ad465059957a137c66a7c917c00821f94915b81ea281146795315d79bb32"
+            ],
+            "tally": {
+              "signs": 2
+            },
+            "quorumSnapshot": null,
+            "rulesHash": "776968ba7770489ff6bb43c005bcee6870090f7b2213ad078b66dbe1db2939f7",
+            "pubPeriod": {
+              "delayMs": 86400000
+            }
+          },
+          "actor": {
+            "kind": "person",
+            "identity": "10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+            "publicKey": "0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc="
+          },
+          "declaredAt": 1720000003000,
+          "sig": "+0IK4SQrPNnJiRqJShDQpn46Z2b3LsxxfcNX5naUiwjc3j6WjKTZu8oD+pp+0Ow4EXcTqzsBEMHaBhJXVeqjAQ=="
+        },
+        "opHash": "48dce8c3bd92bd35af8145923b6b8b44b346c652678be25b3b6840ab66cbf372"
+      },
+      "wallClock": {
+        "rules": {
+          "engine": "b1",
+          "closeConditions": [
+            {
+              "type": "wall-clock",
+              "notBefore": 1720086400000
+            }
+          ],
+          "pubPeriod": {
+            "delayMs": 86400000
+          },
+          "ruleChange": {
+            "kind": "delayed-veto",
+            "delayMs": 259200000,
+            "vetoThreshold": {
+              "count": 3
+            }
+          },
+          "exec": null
+        },
+        "payload": {
+          "result": "passed",
+          "condition": {
+            "type": "wall-clock",
+            "notBefore": 1720086400000
+          },
+          "countedOps": [],
+          "tally": null,
+          "quorumSnapshot": null,
+          "rulesHash": "173587288b15eef0cd8ff4f363abfb4e0f82e213612101a6066f6a3db64ddd82",
+          "pubPeriod": {
+            "delayMs": 86400000
+          }
+        },
+        "anchoredMsReached": 1720087000000,
+        "anchoredMsAmbiguous": 1720086400000
+      },
+      "threshold": {
+        "affairId": "1796b07b01083e64405e21aad0aa9ec532dc769f9e636b2082c969e459b5e5da",
+        "rules": {
+          "engine": "b1",
+          "closeConditions": [
+            {
+              "type": "threshold",
+              "base": "ladder:voters",
+              "num": 1,
+              "den": 2
+            }
+          ],
+          "pubPeriod": {
+            "delayMs": 86400000
+          },
+          "ruleChange": {
+            "kind": "delayed-veto",
+            "delayMs": 259200000,
+            "vetoThreshold": {
+              "count": 3
+            }
+          },
+          "exec": null
+        },
+        "ops": [
+          {
+            "entry": {
+              "opV": 1,
+              "affairId": "1796b07b01083e64405e21aad0aa9ec532dc769f9e636b2082c969e459b5e5da",
+              "prevOpHash": "1796b07b01083e64405e21aad0aa9ec532dc769f9e636b2082c969e459b5e5da",
+              "opType": "content",
+              "payload": {
+                "kind": "post",
+                "text": "甲的第一条"
+              },
+              "actor": {
+                "kind": "person",
+                "identity": "48cca97f8993ffaebcac9728d7f94f7144f18090d329d9370a7dfc42db38d14d",
+                "publicKey": "iEuIV/TqoWE8YVBNs01L6vNGUXoOMd483dTZtCAdnQs="
+              },
+              "declaredAt": 1720000001000,
+              "sig": "T/k2nI0pg7fY4hjVp4ybyYEB19DyTjC2KKbPg2KIHdiSus0NfKuib4iK6qqqVY8471B3i2vPCpioaAIrRJtDAg=="
+            },
+            "opHash": "73c01eb4cadd29e11d11bf9604e46af1f8b9c10491c93fc166aba34289d413c3"
+          },
+          {
+            "entry": {
+              "opV": 1,
+              "affairId": "1796b07b01083e64405e21aad0aa9ec532dc769f9e636b2082c969e459b5e5da",
+              "prevOpHash": "73c01eb4cadd29e11d11bf9604e46af1f8b9c10491c93fc166aba34289d413c3",
+              "opType": "content",
+              "payload": {
+                "kind": "post",
+                "text": "甲的第二条"
+              },
+              "actor": {
+                "kind": "person",
+                "identity": "48cca97f8993ffaebcac9728d7f94f7144f18090d329d9370a7dfc42db38d14d",
+                "publicKey": "iEuIV/TqoWE8YVBNs01L6vNGUXoOMd483dTZtCAdnQs="
+              },
+              "declaredAt": 1720000002000,
+              "sig": "FR25/fM3wYNnJLRM0FeCC9dbklQnY4GV5GiPs1EIBtpYS1Vu001hX/1g9hzA3x2Nr34lv7imKQFckJwV9pWHCQ=="
+            },
+            "opHash": "3b18790ef781f0a0ee8298e5d61e3bed3ef99b017f208be80e4b53875d4c9f0c"
+          },
+          {
+            "entry": {
+              "opV": 1,
+              "affairId": "1796b07b01083e64405e21aad0aa9ec532dc769f9e636b2082c969e459b5e5da",
+              "prevOpHash": "73c01eb4cadd29e11d11bf9604e46af1f8b9c10491c93fc166aba34289d413c3",
+              "opType": "content",
+              "payload": {
+                "kind": "post",
+                "text": "乙的第一条"
+              },
+              "actor": {
+                "kind": "person",
+                "identity": "1325b850c2871916eae203f0efc3c8987f64e5e3cdb27679e6d1fa97808357e6",
+                "publicKey": "oJql9HpnWYAv+VX43C0qFKXJnSO+l/hkEn/5ODRVpPA="
+              },
+              "declaredAt": 1720000003000,
+              "sig": "bAJ5ZvTZ3lEL+15tIpWq06yWTyMsTh4AXc3CUSMmgQLcbF8BIDnVJkcPkIQcCnXjxHblWCT9KjtShq6baVJdCg=="
+            },
+            "opHash": "0b650cf1c087273a90931af1e0f611b61b57aa7de5d3c8a663e276db03873045"
+          }
+        ],
+        "resolution": {
+          "entry": {
+            "opV": 1,
+            "affairId": "1796b07b01083e64405e21aad0aa9ec532dc769f9e636b2082c969e459b5e5da",
+            "prevOpHash": "3b18790ef781f0a0ee8298e5d61e3bed3ef99b017f208be80e4b53875d4c9f0c",
+            "opType": "resolution",
+            "payload": {
+              "result": "passed",
+              "condition": {
+                "type": "threshold",
+                "base": "ladder:voters",
+                "num": 1,
+                "den": 2
+              },
+              "countedOps": [
+                "0b650cf1c087273a90931af1e0f611b61b57aa7de5d3c8a663e276db03873045",
+                "3b18790ef781f0a0ee8298e5d61e3bed3ef99b017f208be80e4b53875d4c9f0c"
+              ],
+              "tally": {
+                "participants": 2
+              },
+              "quorumSnapshot": null,
+              "rulesHash": "ff4fcbfd093ffa34ee84614025b104fd1c2bfb0c608fd14924534dff48567025",
+              "pubPeriod": {
+                "delayMs": 86400000
+              }
+            },
+            "actor": {
+              "kind": "person",
+              "identity": "10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+              "publicKey": "0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc="
+            },
+            "declaredAt": 1720000004000,
+            "sig": "hIZQ+Y+IdKqM3Jst4wSrY/W1dKOw071HyUoF3Z03+NNdUhajEcLYJI1ZyyWw3bGCko4EV7dYQfnYCoQYcOczCQ=="
+          },
+          "opHash": "b3a327b031d23894f6719423e9ebe0d3789c994875ae8fa8358f1c86fa99d9cd"
+        },
+        "ladderVotersSize": 2,
+        "countedOps": [
+          "0b650cf1c087273a90931af1e0f611b61b57aa7de5d3c8a663e276db03873045",
+          "3b18790ef781f0a0ee8298e5d61e3bed3ef99b017f208be80e4b53875d4c9f0c"
+        ]
+      },
+      "badPubPeriodMs": [
+        0,
+        86399999
+      ]
+    }
+  },
+  "metaBasisVerify": {
+    "desc": "公告 vs 日志修订链复算（affair-metadata §4 三态：verified/unverified/矛盾丢弃）。genesis 第 0 代 basisOpHash = affairId；主持人 meta-revise 经 delayed-veto 生效后为第 1 代；非主持人修订不进修订链（basisOpHash 指向它即矛盾）",
+    "expect": {
+      "affairId": "b8ff9f65655f7fb8363fffe60490a4c6b6a7273975db43e711b6695cc29bb0c1",
+      "genesis": {
+        "affairV": 1,
+        "type": "forum",
+        "title": "旧标题",
+        "summary": "旧简介",
+        "tags": [
+          "region:110105"
+        ],
+        "initiator": {
+          "kind": "person",
+          "identity": "10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+          "publicKey": "0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc="
+        },
+        "rules": {
+          "engine": "b1",
+          "closeConditions": [
+            {
+              "type": "op-count",
+              "opType": "content",
+              "count": 100
+            }
+          ],
+          "pubPeriod": {
+            "delayMs": 86400000
+          },
+          "participation": {
+            "contribute": {
+              "ladder": "contributor"
+            },
+            "vote": {
+              "ladder": "voter"
+            },
+            "combine": "all"
+          },
+          "ruleChange": {
+            "kind": "delayed-veto",
+            "delayMs": 259200000,
+            "vetoThreshold": {
+              "count": 3
+            }
+          },
+          "exec": null
+        },
+        "initialVoters": [
+          "10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d"
+        ],
+        "refs": [],
+        "createdAt": 1720000000000,
+        "sig": "R4esV0DvJ4yIzf2C5EXhLf0zMhDR55j5mDEXdY3tEH5NGDycm+Z2C+0VBwoIwgf6oP58zYBOwGInqpKYPsTOCw=="
+      },
+      "genesisMeta": {
+        "title": "旧标题",
+        "summary": "旧简介",
+        "tags": [
+          "region:110105"
+        ]
+      },
+      "revise": {
+        "entry": {
+          "opV": 1,
+          "affairId": "b8ff9f65655f7fb8363fffe60490a4c6b6a7273975db43e711b6695cc29bb0c1",
+          "prevOpHash": "b8ff9f65655f7fb8363fffe60490a4c6b6a7273975db43e711b6695cc29bb0c1",
+          "opType": "meta-revise",
+          "payload": {
+            "title": "新标题",
+            "mechanism": {
+              "kind": "delayed-veto",
+              "delayMs": 1000,
+              "vetoThreshold": {
+                "count": 1
+              }
+            }
+          },
+          "actor": {
+            "kind": "person",
+            "identity": "10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+            "publicKey": "0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc="
+          },
+          "declaredAt": 1720000001000,
+          "sig": "0rAFAJXbcbl5Q2yOt4eIH8Iv0sl5kd/b+J9zWGaKTDbw6N6rxgiHF6mVsnMTi8GTINkvng6Ay15UYUMGfq2EBA=="
+        },
+        "opHash": "c60f5cfc31f9e2924a1af8189d38f30d8dfd2caac879b9440e54f3243511ab2a"
+      },
+      "rogueRevise": {
+        "entry": {
+          "opV": 1,
+          "affairId": "b8ff9f65655f7fb8363fffe60490a4c6b6a7273975db43e711b6695cc29bb0c1",
+          "prevOpHash": "b8ff9f65655f7fb8363fffe60490a4c6b6a7273975db43e711b6695cc29bb0c1",
+          "opType": "meta-revise",
+          "payload": {
+            "title": "伪造标题",
+            "mechanism": {
+              "kind": "delayed-veto",
+              "delayMs": 1000,
+              "vetoThreshold": {
+                "count": 1
+              }
+            }
+          },
+          "actor": {
+            "kind": "person",
+            "identity": "48cca97f8993ffaebcac9728d7f94f7144f18090d329d9370a7dfc42db38d14d",
+            "publicKey": "iEuIV/TqoWE8YVBNs01L6vNGUXoOMd483dTZtCAdnQs="
+          },
+          "declaredAt": 1720000002000,
+          "sig": "3nR7UTCtV89h0NFEt4JZQrAtrIXygMQopZfiMaTusvC2XZOmiNQFampD23QFTTXmC8eYM1d3x1ORJVrvOFwICw=="
+        },
+        "opHash": "f126d3dce8350fc9e17e5f30b297ba2ca8421493f80204d2694ef9e97c23d6f6"
+      },
+      "anchoredMs": 1720000005000,
+      "nowMs": 1720000006000,
+      "generations": [
+        {
+          "metaSeq": 0,
+          "basisOpHash": "b8ff9f65655f7fb8363fffe60490a4c6b6a7273975db43e711b6695cc29bb0c1",
+          "meta": {
+            "title": "旧标题",
+            "summary": "旧简介",
+            "tags": [
+              "region:110105"
+            ]
+          }
+        },
+        {
+          "metaSeq": 1,
+          "basisOpHash": "c60f5cfc31f9e2924a1af8189d38f30d8dfd2caac879b9440e54f3243511ab2a",
+          "meta": {
+            "title": "新标题",
+            "summary": "旧简介",
+            "tags": [
+              "region:110105"
+            ]
+          }
+        }
+      ],
+      "announces": [
+        {
+          "name": "verified",
+          "metaSeq": 1,
+          "basisOpHash": "c60f5cfc31f9e2924a1af8189d38f30d8dfd2caac879b9440e54f3243511ab2a",
+          "meta": {
+            "title": "新标题",
+            "summary": "旧简介",
+            "tags": [
+              "region:110105"
+            ]
+          },
+          "expect": "verified"
+        },
+        {
+          "name": "wrong-basis",
+          "metaSeq": 1,
+          "basisOpHash": "b8ff9f65655f7fb8363fffe60490a4c6b6a7273975db43e711b6695cc29bb0c1",
+          "meta": {
+            "title": "新标题",
+            "summary": "旧简介",
+            "tags": [
+              "region:110105"
+            ]
+          },
+          "expect": "conflict"
+        },
+        {
+          "name": "unknown-seq",
+          "metaSeq": 7,
+          "basisOpHash": "c60f5cfc31f9e2924a1af8189d38f30d8dfd2caac879b9440e54f3243511ab2a",
+          "meta": {
+            "title": "新标题",
+            "summary": "旧简介",
+            "tags": [
+              "region:110105"
+            ]
+          },
+          "expect": "conflict"
+        },
+        {
+          "name": "stale-content",
+          "metaSeq": 1,
+          "basisOpHash": "c60f5cfc31f9e2924a1af8189d38f30d8dfd2caac879b9440e54f3243511ab2a",
+          "meta": {
+            "title": "旧标题",
+            "summary": "旧简介",
+            "tags": [
+              "region:110105"
+            ]
+          },
+          "expect": "conflict"
+        },
+        {
+          "name": "rogue-revise",
+          "metaSeq": 1,
+          "basisOpHash": "f126d3dce8350fc9e17e5f30b297ba2ca8421493f80204d2694ef9e97c23d6f6",
+          "meta": {
+            "title": "伪造标题",
+            "summary": "旧简介",
+            "tags": [
+              "region:110105"
+            ]
+          },
+          "expect": "conflict"
+        },
+        {
+          "name": "no-log-copy",
+          "metaSeq": 1,
+          "basisOpHash": "c60f5cfc31f9e2924a1af8189d38f30d8dfd2caac879b9440e54f3243511ab2a",
+          "meta": {
+            "title": "新标题",
+            "summary": "旧简介",
+            "tags": [
+              "region:110105"
+            ]
+          },
+          "expect": "unverified"
+        }
+      ]
+    }
+  },
+  "metaArbitrate": {
+    "desc": "(metaSeq, updatedAt) 裁决矩阵 + verified 覆盖守卫（affair-metadata §5：metaSeq 优先于 updatedAt；verified 不被 unverified 覆盖）。裁决纯逻辑属 C1；暂存区/淘汰属 C10",
+    "expect": {
+      "cases": [
+        {
+          "name": "seq-wins-over-time",
+          "existing": {
+            "metaSeq": 1,
+            "updatedAt": 100,
+            "verified": false
+          },
+          "incoming": {
+            "metaSeq": 2,
+            "updatedAt": 50,
+            "verified": false
+          },
+          "expect": "replace"
+        },
+        {
+          "name": "time-tiebreak",
+          "existing": {
+            "metaSeq": 2,
+            "updatedAt": 100,
+            "verified": false
+          },
+          "incoming": {
+            "metaSeq": 2,
+            "updatedAt": 200,
+            "verified": false
+          },
+          "expect": "replace"
+        },
+        {
+          "name": "incoming-older",
+          "existing": {
+            "metaSeq": 2,
+            "updatedAt": 200,
+            "verified": false
+          },
+          "incoming": {
+            "metaSeq": 2,
+            "updatedAt": 100,
+            "verified": false
+          },
+          "expect": "keep"
+        },
+        {
+          "name": "verified-guard",
+          "existing": {
+            "metaSeq": 1,
+            "updatedAt": 100,
+            "verified": true
+          },
+          "incoming": {
+            "metaSeq": 2,
+            "updatedAt": 999,
+            "verified": false
+          },
+          "expect": "keep"
+        },
+        {
+          "name": "verified-replaced-by-verified",
+          "existing": {
+            "metaSeq": 1,
+            "updatedAt": 100,
+            "verified": true
+          },
+          "incoming": {
+            "metaSeq": 2,
+            "updatedAt": 50,
+            "verified": true
+          },
+          "expect": "replace"
+        },
+        {
+          "name": "verified-incoming-lower-seq",
+          "existing": {
+            "metaSeq": 2,
+            "updatedAt": 100,
+            "verified": false
+          },
+          "incoming": {
+            "metaSeq": 1,
+            "updatedAt": 50,
+            "verified": true
+          },
+          "expect": "keep"
+        },
+        {
+          "name": "equal-keeps-existing",
+          "existing": {
+            "metaSeq": 2,
+            "updatedAt": 100,
+            "verified": false
+          },
+          "incoming": {
+            "metaSeq": 2,
+            "updatedAt": 100,
+            "verified": false
+          },
+          "expect": "keep"
+        }
+      ]
+    }
+  },
+  "cycleCheck": {
+    "desc": "固定公开成员关系图（名册线形：域→成员组织）→ 成环拒绝/无环放行用例集。判定口径（org-genesis §3.3）：待加入组织出现在目标域的可达祖先集（沿成员→上级边，含目标域本身）即成环；图无单父约束。消费侧由名册反查上级域闭包后实跑 membership_would_cycle",
+    "expect": {
+      "roster": {
+        "org_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a": [
+          "org_b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b",
+          "org_e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5"
+        ],
+        "org_b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b": [
+          "org_c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c",
+          "org_e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5"
+        ],
+        "org_c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c": [],
+        "org_d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d": [],
+        "org_e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5": []
+      },
+      "cases": [
+        {
+          "name": "unrelated-join",
+          "joiner": "org_d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d",
+          "target": "org_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+          "expect": "accept"
+        },
+        {
+          "name": "self-join",
+          "joiner": "org_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+          "target": "org_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+          "expect": "reject"
+        },
+        {
+          "name": "direct-cycle",
+          "joiner": "org_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+          "target": "org_b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b",
+          "expect": "reject"
+        },
+        {
+          "name": "direct-cycle-mirrored",
+          "joiner": "org_b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b",
+          "target": "org_c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c",
+          "expect": "reject"
+        },
+        {
+          "name": "transitive-cycle",
+          "joiner": "org_a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+          "target": "org_c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c",
+          "expect": "reject"
+        },
+        {
+          "name": "multi-parent-dag",
+          "joiner": "org_e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
+          "target": "org_c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c",
+          "expect": "accept"
+        }
+      ]
+    }
+  },
+  "memberKindEnforce": {
+    "desc": "域类型 × 成员 kind 匹配矩阵（org-genesis §3.2 内核硬规则：community 域只接受组织成员、leaf 域只接受个人成员；加入验证时强制，任何组织策略不得覆盖）。缺省向后兼容：成员条目无 kind 键 = person、组织记录无 domainType 键 = leaf",
+    "expect": {
+      "cases": [
+        {
+          "name": "community-accepts-org",
+          "domain": "community",
+          "kind": "org",
+          "expect": "ok"
+        },
+        {
+          "name": "leaf-accepts-person",
+          "domain": "leaf",
+          "kind": "person",
+          "expect": "ok"
+        },
+        {
+          "name": "community-rejects-person",
+          "domain": "community",
+          "kind": "person",
+          "expect": "reject",
+          "message": "Community domain only accepts organization members"
+        },
+        {
+          "name": "leaf-rejects-org",
+          "domain": "leaf",
+          "kind": "org",
+          "expect": "reject",
+          "message": "Leaf domain only accepts person members"
+        }
+      ]
+    }
+  },
+  "legacyDegraded": {
+    "desc": "legacy orgId（org_<16hex>）验证结果标注 degraded 的判定用例（org-signature §5.1）：legacy orgId 无自认证性，五步验证链可完整通过（名册承诺的可信锚退化为传输层可信锚），裁决须如实标注 degraded=\"legacy-orgId\"，接受与否归消费方；创世哈希型对照组同形态签名包闭环至创世记录（orgId 哈希段 == policyHash₀），不降级",
+    "expect": {
+      "genesis": {
+        "genesisV": 1,
+        "name": "阳光小区",
+        "description": "共同体域成员 kind 与组织签名验证用例",
+        "domainType": "community",
+        "rootPublicKey": "SAdaWX5yGhVuLgeZ3lzAxTJNxufq8c3UYlCGjsUyFd0=",
+        "orgAddress": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "signingPolicy": {
+          "kind": "any-admin"
+        },
+        "transition": {
+          "kind": "delayed-veto",
+          "delayMs": 259200000,
+          "vetoThreshold": {
+            "count": 1
+          },
+          "whenMembersExceed": 1
+        },
+        "createdBy": "48cca97f8993ffaebcac9728d7f94f7144f18090d329d9370a7dfc42db38d14d",
+        "createdAt": 1720000000000,
+        "sig": "OMF/WpTv1OKIefcYg9QXo1CvCoaRpzUHs7g5uf/cwZAT1sN0QWme6QOVx0h6BVUun5QYxJgHg99n25wKNUfgAg=="
+      },
+      "policyHash0": "9e63127b4e065abe983052d742b5e480c4e5d2911ff53fbc584ff3bceabb5fdb",
+      "subject": "302c52157f1ae051ba328c8e91a34f2c2607cb1179f554c62e136dce37d60e4b",
+      "anchorRoot": "6cef4b18350b5ac161ddcdd5b46b1a1dd648053d89ec6ece63d24f92f95f07fe",
+      "signedAt": 1720000000000,
+      "cases": [
+        {
+          "name": "legacy-orgId-degraded",
+          "orgId": "org_5e5e5e5e5e5e5e5e",
+          "sigSet": {
+            "sigSetV": 1,
+            "orgId": "org_5e5e5e5e5e5e5e5e",
+            "subject": "302c52157f1ae051ba328c8e91a34f2c2607cb1179f554c62e136dce37d60e4b",
+            "policyHash": "9e63127b4e065abe983052d742b5e480c4e5d2911ff53fbc584ff3bceabb5fdb",
+            "roster": {
+              "memberSetHash": "f54c5d605e8a16843b39235c1f90e79b999d63bf60d18c633af5027d31bed1af",
+              "anchor": {
+                "orgId": "org_5e5e5e5e5e5e5e5e",
+                "anchorRoot": "6cef4b18350b5ac161ddcdd5b46b1a1dd648053d89ec6ece63d24f92f95f07fe",
+                "ts": 1720000000000
+              },
+              "snapshot": [
+                {
+                  "identity": "9a92d2b54a9a5402de3e65a07a5cb12a8dc6758bd8e8c2ec459563d6b2c081c4",
+                  "role": "admin"
+                },
+                {
+                  "identity": "3097e2dee2cb4a34b53840cdb705aed71067c36f68db0e0f559c3f3fa043315f",
+                  "role": "admin"
+                },
+                {
+                  "identity": "7db0b01f39d179aacf7b03dbd7dd9d71f641598bed40fb9839d3c1e1117e666f",
+                  "role": "admin"
+                }
+              ]
+            },
+            "signedAt": 1720000000000,
+            "signatures": [
+              {
+                "signer": "9a92d2b54a9a5402de3e65a07a5cb12a8dc6758bd8e8c2ec459563d6b2c081c4",
+                "publicKey": "25lf4lFp0UHKubu6krqgH58uHs599MsqwFGQ83/MH50=",
+                "sig": "a/7gaVFFCuxqZCMd08miTdA0D0VYc1nLkqMEtAerx0FDLGWGDCj2PqwNcfD6XY8g7OdNTf0JCq6kXVQlAhyvDw=="
+              }
+            ]
+          },
+          "expect": {
+            "verifies": true,
+            "degraded": "legacy-orgId"
+          }
+        },
+        {
+          "name": "genesis-form-clean",
+          "orgId": "org_9e63127b4e065abe983052d742b5e480c4e5d2911ff53fbc584ff3bceabb5fdb",
+          "sigSet": {
+            "sigSetV": 1,
+            "orgId": "org_9e63127b4e065abe983052d742b5e480c4e5d2911ff53fbc584ff3bceabb5fdb",
+            "subject": "302c52157f1ae051ba328c8e91a34f2c2607cb1179f554c62e136dce37d60e4b",
+            "policyHash": "9e63127b4e065abe983052d742b5e480c4e5d2911ff53fbc584ff3bceabb5fdb",
+            "roster": {
+              "memberSetHash": "f54c5d605e8a16843b39235c1f90e79b999d63bf60d18c633af5027d31bed1af",
+              "anchor": {
+                "orgId": "org_9e63127b4e065abe983052d742b5e480c4e5d2911ff53fbc584ff3bceabb5fdb",
+                "anchorRoot": "6cef4b18350b5ac161ddcdd5b46b1a1dd648053d89ec6ece63d24f92f95f07fe",
+                "ts": 1720000000000
+              },
+              "snapshot": [
+                {
+                  "identity": "9a92d2b54a9a5402de3e65a07a5cb12a8dc6758bd8e8c2ec459563d6b2c081c4",
+                  "role": "admin"
+                },
+                {
+                  "identity": "3097e2dee2cb4a34b53840cdb705aed71067c36f68db0e0f559c3f3fa043315f",
+                  "role": "admin"
+                },
+                {
+                  "identity": "7db0b01f39d179aacf7b03dbd7dd9d71f641598bed40fb9839d3c1e1117e666f",
+                  "role": "admin"
+                }
+              ]
+            },
+            "signedAt": 1720000000000,
+            "signatures": [
+              {
+                "signer": "9a92d2b54a9a5402de3e65a07a5cb12a8dc6758bd8e8c2ec459563d6b2c081c4",
+                "publicKey": "25lf4lFp0UHKubu6krqgH58uHs599MsqwFGQ83/MH50=",
+                "sig": "7EKdj6x9AlnXPwJDI2uas0Iqxs7Ed+JQ2b+JI4oiA3DjGasEpf37eZut7VRiR5MVtQU9KW9mFOhsErchMJcrAA=="
+              }
+            ]
+          },
+          "expect": {
+            "verifies": true,
+            "degraded": null
+          }
+        }
+      ]
+    }
+  },
+  "readGate.policyRef": {
+    "desc": "policyRef B1 求值矩阵（policy §4，fail-closed）：名册三档 × 请求者关系、字段级掩码、向上开放矩阵（命中/未覆盖/域不符）、engine 不匹配、policyRef 篡改；附静态分析（policy §5）冲突/暴露面扩大告警码。生成器：core/examples/gen_policy_vectors.rs（C5）",
+    "policies": {
+      "representatives": {
+        "doc": {
+          "policyV": 1,
+          "engine": "b1",
+          "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+          "roster": {
+            "tier": "representatives",
+            "fields": [
+              {
+                "field": "nickname",
+                "audience": "public"
+              },
+              {
+                "field": "phone",
+                "audience": "representatives"
+              }
+            ]
+          },
+          "upward": [
+            {
+              "collection": "finance:monthly@v1",
+              "to": "org_b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
+            }
+          ],
+          "updatedAt": 1720000000000
+        },
+        "policyDocHash": "206a1fee8052a33c02cf91123b98ce1dfc3cc82a1242626a16e5db5da7724a1e"
+      },
+      "public": {
+        "doc": {
+          "policyV": 1,
+          "engine": "b1",
+          "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+          "roster": {
+            "tier": "public",
+            "fields": [
+              {
+                "field": "nickname",
+                "audience": "public"
+              }
+            ]
+          },
+          "updatedAt": 1720000000000
+        },
+        "policyDocHash": "1915a82ddb1495ac91ea0885260b44e7cd15efc88e624150b4f88b53b43f1396"
+      },
+      "orgOnly": {
+        "doc": {
+          "policyV": 1,
+          "engine": "b1",
+          "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+          "roster": {
+            "tier": "org-only"
+          },
+          "updatedAt": 1720000000000
+        },
+        "policyDocHash": "4cc5dcca722127fe7a77d19f2f61eca1b27612a74b20884f8c34829ccd1e3822"
+      }
+    },
+    "cases": [
+      {
+        "name": "member-row-baseline",
+        "policy": "representatives",
+        "requester": {
+          "isOrgMember": true,
+          "isRepresentative": false,
+          "credentials": []
+        },
+        "request": {
+          "kind": "roster-row",
+          "rowIsRepresentative": false
+        },
+        "expect": "allow"
+      },
+      {
+        "name": "member-field-undeclared-baseline",
+        "policy": "representatives",
+        "requester": {
+          "isOrgMember": true,
+          "isRepresentative": false,
+          "credentials": []
+        },
+        "request": {
+          "kind": "roster-field",
+          "field": "address"
+        },
+        "expect": "allow"
+      },
+      {
+        "name": "rep-row-visible-to-rep",
+        "policy": "representatives",
+        "requester": {
+          "isOrgMember": false,
+          "isRepresentative": true,
+          "credentials": []
+        },
+        "request": {
+          "kind": "roster-row",
+          "rowIsRepresentative": true
+        },
+        "expect": "allow"
+      },
+      {
+        "name": "plain-row-hidden-from-rep",
+        "policy": "representatives",
+        "requester": {
+          "isOrgMember": false,
+          "isRepresentative": true,
+          "credentials": []
+        },
+        "request": {
+          "kind": "roster-row",
+          "rowIsRepresentative": false
+        },
+        "expect": "row-hidden"
+      },
+      {
+        "name": "rep-row-visible-to-outsider",
+        "policy": "representatives",
+        "requester": {
+          "isOrgMember": false,
+          "isRepresentative": false,
+          "credentials": []
+        },
+        "request": {
+          "kind": "roster-row",
+          "rowIsRepresentative": true
+        },
+        "expect": "allow"
+      },
+      {
+        "name": "public-tier-row-to-outsider",
+        "policy": "public",
+        "requester": {
+          "isOrgMember": false,
+          "isRepresentative": false,
+          "credentials": []
+        },
+        "request": {
+          "kind": "roster-row",
+          "rowIsRepresentative": false
+        },
+        "expect": "allow"
+      },
+      {
+        "name": "org-only-tier-row-hidden",
+        "policy": "orgOnly",
+        "requester": {
+          "isOrgMember": false,
+          "isRepresentative": true,
+          "credentials": []
+        },
+        "request": {
+          "kind": "roster-row",
+          "rowIsRepresentative": true
+        },
+        "expect": "row-hidden"
+      },
+      {
+        "name": "field-public-to-outsider",
+        "policy": "representatives",
+        "requester": {
+          "isOrgMember": false,
+          "isRepresentative": false,
+          "credentials": []
+        },
+        "request": {
+          "kind": "roster-field",
+          "field": "nickname"
+        },
+        "expect": "allow"
+      },
+      {
+        "name": "field-rep-audience-hidden-from-outsider",
+        "policy": "representatives",
+        "requester": {
+          "isOrgMember": false,
+          "isRepresentative": false,
+          "credentials": []
+        },
+        "request": {
+          "kind": "roster-field",
+          "field": "phone"
+        },
+        "expect": "field-hidden"
+      },
+      {
+        "name": "field-rep-audience-to-rep",
+        "policy": "representatives",
+        "requester": {
+          "isOrgMember": false,
+          "isRepresentative": true,
+          "credentials": []
+        },
+        "request": {
+          "kind": "roster-field",
+          "field": "phone"
+        },
+        "expect": "allow"
+      },
+      {
+        "name": "field-undeclared-hidden",
+        "policy": "representatives",
+        "requester": {
+          "isOrgMember": false,
+          "isRepresentative": false,
+          "credentials": []
+        },
+        "request": {
+          "kind": "roster-field",
+          "field": "address"
+        },
+        "expect": "field-hidden"
+      },
+      {
+        "name": "collection-hit",
+        "policy": "representatives",
+        "requester": {
+          "isOrgMember": false,
+          "isRepresentative": false,
+          "credentials": [
+            {
+              "credType": "household-owner",
+              "subjectDomain": "org_b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
+            }
+          ]
+        },
+        "request": {
+          "kind": "collection",
+          "collection": "finance:monthly@v1"
+        },
+        "expect": "allow"
+      },
+      {
+        "name": "collection-wrong-domain",
+        "policy": "representatives",
+        "requester": {
+          "isOrgMember": false,
+          "isRepresentative": false,
+          "credentials": [
+            {
+              "credType": "household-owner",
+              "subjectDomain": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587"
+            }
+          ]
+        },
+        "request": {
+          "kind": "collection",
+          "collection": "finance:monthly@v1"
+        },
+        "expect": "not-covered"
+      },
+      {
+        "name": "collection-no-credential",
+        "policy": "representatives",
+        "requester": {
+          "isOrgMember": false,
+          "isRepresentative": false,
+          "credentials": []
+        },
+        "request": {
+          "kind": "collection",
+          "collection": "finance:monthly@v1"
+        },
+        "expect": "not-covered"
+      },
+      {
+        "name": "collection-uncovered",
+        "policy": "representatives",
+        "requester": {
+          "isOrgMember": false,
+          "isRepresentative": false,
+          "credentials": [
+            {
+              "credType": "household-owner",
+              "subjectDomain": "org_b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
+            }
+          ]
+        },
+        "request": {
+          "kind": "collection",
+          "collection": "finance:annual@v1"
+        },
+        "expect": "not-covered"
+      },
+      {
+        "name": "engine-mismatch",
+        "policy": "representatives",
+        "engineOverride": "cedar",
+        "requester": {
+          "isOrgMember": true,
+          "isRepresentative": false,
+          "credentials": []
+        },
+        "request": {
+          "kind": "roster-row",
+          "rowIsRepresentative": false
+        },
+        "expect": "unsupported-engine"
+      },
+      {
+        "name": "policyref-tampered",
+        "policy": "representatives",
+        "policyRefOverride": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "requester": {
+          "isOrgMember": true,
+          "isRepresentative": false,
+          "credentials": []
+        },
+        "request": {
+          "kind": "roster-row",
+          "rowIsRepresentative": false
+        },
+        "expect": "policy-ref-mismatch"
+      }
+    ],
+    "analysisCases": [
+      {
+        "name": "clean-first-version",
+        "doc": {
+          "policyV": 1,
+          "engine": "b1",
+          "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+          "roster": {
+            "tier": "representatives",
+            "fields": [
+              {
+                "field": "nickname",
+                "audience": "public"
+              },
+              {
+                "field": "phone",
+                "audience": "representatives"
+              }
+            ]
+          },
+          "upward": [
+            {
+              "collection": "finance:monthly@v1",
+              "to": "org_b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
+            }
+          ],
+          "updatedAt": 1720000000000
+        },
+        "prev": null,
+        "expect": []
+      },
+      {
+        "name": "duplicate-field-rule",
+        "doc": {
+          "policyV": 1,
+          "engine": "b1",
+          "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+          "roster": {
+            "tier": "public",
+            "fields": [
+              {
+                "field": "nickname",
+                "audience": "public"
+              },
+              {
+                "field": "nickname",
+                "audience": "representatives"
+              }
+            ]
+          },
+          "updatedAt": 1720000000000
+        },
+        "prev": null,
+        "expect": [
+          "duplicate-field-rule"
+        ]
+      },
+      {
+        "name": "duplicate-upward-entry",
+        "doc": {
+          "policyV": 1,
+          "engine": "b1",
+          "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+          "roster": {
+            "tier": "public"
+          },
+          "upward": [
+            {
+              "collection": "finance:monthly@v1",
+              "to": "org_b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
+            },
+            {
+              "collection": "finance:monthly@v1",
+              "to": "org_b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
+            }
+          ],
+          "updatedAt": 1720000000000
+        },
+        "prev": null,
+        "expect": [
+          "duplicate-upward-entry"
+        ]
+      },
+      {
+        "name": "field-rule-redundant",
+        "doc": {
+          "policyV": 1,
+          "engine": "b1",
+          "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+          "roster": {
+            "tier": "public",
+            "fields": [
+              {
+                "field": "phone",
+                "audience": "org-members"
+              }
+            ]
+          },
+          "updatedAt": 1720000000000
+        },
+        "prev": null,
+        "expect": [
+          "field-rule-redundant"
+        ]
+      },
+      {
+        "name": "field-rule-shadowed",
+        "doc": {
+          "policyV": 1,
+          "engine": "b1",
+          "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+          "roster": {
+            "tier": "org-only",
+            "fields": [
+              {
+                "field": "nickname",
+                "audience": "public"
+              }
+            ]
+          },
+          "updatedAt": 1720000000000
+        },
+        "prev": null,
+        "expect": [
+          "field-rule-shadowed"
+        ]
+      },
+      {
+        "name": "invalid-structure",
+        "doc": {
+          "policyV": 1,
+          "engine": "b1",
+          "orgId": "bad-org-id",
+          "roster": {
+            "tier": "public"
+          },
+          "updatedAt": 1720000000000
+        },
+        "prev": null,
+        "expect": [
+          "invalid-structure"
+        ]
+      },
+      {
+        "name": "unsupported-engine",
+        "doc": {
+          "policyV": 1,
+          "engine": "cedar",
+          "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+          "roster": {
+            "tier": "public"
+          },
+          "updatedAt": 1720000000000
+        },
+        "prev": null,
+        "expect": [
+          "unsupported-engine"
+        ]
+      },
+      {
+        "name": "roster-tier-raised",
+        "doc": {
+          "policyV": 1,
+          "engine": "b1",
+          "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+          "roster": {
+            "tier": "representatives",
+            "fields": [
+              {
+                "field": "nickname",
+                "audience": "public"
+              },
+              {
+                "field": "phone",
+                "audience": "representatives"
+              }
+            ]
+          },
+          "upward": [
+            {
+              "collection": "finance:monthly@v1",
+              "to": "org_b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
+            }
+          ],
+          "updatedAt": 1720000000000
+        },
+        "prev": {
+          "policyV": 1,
+          "engine": "b1",
+          "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+          "roster": {
+            "tier": "org-only",
+            "fields": [
+              {
+                "field": "nickname",
+                "audience": "public"
+              },
+              {
+                "field": "phone",
+                "audience": "representatives"
+              }
+            ]
+          },
+          "upward": [
+            {
+              "collection": "finance:monthly@v1",
+              "to": "org_b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
+            }
+          ],
+          "updatedAt": 1720000000000
+        },
+        "expect": [
+          "roster-tier-raised"
+        ]
+      },
+      {
+        "name": "field-audience-widened",
+        "doc": {
+          "policyV": 1,
+          "engine": "b1",
+          "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+          "roster": {
+            "tier": "representatives",
+            "fields": [
+              {
+                "field": "nickname",
+                "audience": "public"
+              }
+            ]
+          },
+          "updatedAt": 1720000000000
+        },
+        "prev": {
+          "policyV": 1,
+          "engine": "b1",
+          "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+          "roster": {
+            "tier": "representatives",
+            "fields": [
+              {
+                "field": "nickname",
+                "audience": "representatives"
+              }
+            ]
+          },
+          "updatedAt": 1720000000000
+        },
+        "expect": [
+          "field-audience-widened"
+        ]
+      },
+      {
+        "name": "field-exposed",
+        "doc": {
+          "policyV": 1,
+          "engine": "b1",
+          "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+          "roster": {
+            "tier": "representatives",
+            "fields": [
+              {
+                "field": "nickname",
+                "audience": "public"
+              }
+            ]
+          },
+          "updatedAt": 1720000000000
+        },
+        "prev": {
+          "policyV": 1,
+          "engine": "b1",
+          "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+          "roster": {
+            "tier": "representatives"
+          },
+          "updatedAt": 1720000000000
+        },
+        "expect": [
+          "field-exposed"
+        ]
+      },
+      {
+        "name": "new-upward-entry",
+        "doc": {
+          "policyV": 1,
+          "engine": "b1",
+          "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+          "roster": {
+            "tier": "representatives",
+            "fields": [
+              {
+                "field": "nickname",
+                "audience": "public"
+              },
+              {
+                "field": "phone",
+                "audience": "representatives"
+              }
+            ]
+          },
+          "upward": [
+            {
+              "collection": "finance:monthly@v1",
+              "to": "org_b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
+            }
+          ],
+          "updatedAt": 1720000000000
+        },
+        "prev": {
+          "policyV": 1,
+          "engine": "b1",
+          "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+          "roster": {
+            "tier": "representatives",
+            "fields": [
+              {
+                "field": "nickname",
+                "audience": "public"
+              },
+              {
+                "field": "phone",
+                "audience": "representatives"
+              }
+            ]
+          },
+          "updatedAt": 1720000000000
+        },
+        "expect": [
+          "new-upward-entry"
+        ]
+      },
+      {
+        "name": "narrowing-silent",
+        "doc": {
+          "policyV": 1,
+          "engine": "b1",
+          "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+          "roster": {
+            "tier": "org-only"
+          },
+          "updatedAt": 1720000000000
+        },
+        "prev": {
+          "policyV": 1,
+          "engine": "b1",
+          "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+          "roster": {
+            "tier": "public",
+            "fields": [
+              {
+                "field": "nickname",
+                "audience": "public"
+              }
+            ]
+          },
+          "updatedAt": 1720000000000
+        },
+        "expect": []
+      },
+      {
+        "name": "multi-error-shadowed-and-duplicate",
+        "doc": {
+          "policyV": 1,
+          "engine": "b1",
+          "orgId": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+          "roster": {
+            "tier": "org-only",
+            "fields": [
+              {
+                "field": "nickname",
+                "audience": "public"
+              },
+              {
+                "field": "nickname",
+                "audience": "representatives"
+              }
+            ]
+          },
+          "updatedAt": 1720000000000
+        },
+        "prev": null,
+        "expect": [
+          "duplicate-field-rule",
+          "field-rule-shadowed"
+        ]
+      }
+    ]
+  },
+  "affairSync": {
+    "desc": "事务复制面三信封 body 逐字节（affair-sync §3，dm kind 包装不在组内）+ key 白名单拒收用例。信封不签名：安全边界 = 逐条 verify_op/verify_genesis 链（§4）",
+    "expect": {
+      "affairId": "abababababababababababababababababababababababababababababababab",
+      "hello": {
+        "body": "{\"affairId\":\"abababababababababababababababababababababababababababababababab\",\"vv\":{\"node-a\":3,\"node-b\":1},\"heads\":[\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\",\"efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef\"],\"deviceClass\":\"pc\"}",
+        "vv": {
+          "node-a": 3,
+          "node-b": 1
+        },
+        "heads": [
+          "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+          "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef"
+        ]
+      },
+      "need": {
+        "body": "{\"affairId\":\"abababababababababababababababababababababababababababababababab\",\"knownVv\":{\"node-a\":3,\"node-b\":1}}",
+        "knownVv": {
+          "node-a": 3,
+          "node-b": 1
+        }
+      },
+      "data": {
+        "body": "{\"affairId\":\"abababababababababababababababababababababababababababababababab\",\"records\":[{\"key\":\"affair:op:abababababababababababababababababababababababababababababababab:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\",\"value\":{\"opV\":1,\"affairId\":\"abababababababababababababababababababababababababababababababab\",\"prevOpHash\":\"abababababababababababababababababababababababababababababababab\",\"opType\":\"content\",\"payload\":{\"kind\":\"post\",\"text\":\"向量\"},\"actor\":{\"kind\":\"person\",\"identity\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"publicKey\":\"AAAA\"},\"declaredAt\":1720000000000,\"sig\":\"BBBB\"},\"meta\":{\"vv\":{\"node-a\":2},\"ts\":1720000000000,\"nodeId\":\"node-a\"}}],\"batchSeq\":0,\"batchTotal\":1}",
+        "recordKey": "affair:op:abababababababababababababababababababababababababababababababab:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "recordMeta": {
+          "vv": {
+            "node-a": 2
+          },
+          "ts": 1720000000000,
+          "nodeId": "node-a"
+        }
+      },
+      "whitelist": [
+        {
+          "name": "rec-in-scope",
+          "key": "affair:rec:abababababababababababababababababababababababababababababababab",
+          "inScope": true
+        },
+        {
+          "name": "op-in-scope",
+          "key": "affair:op:abababababababababababababababababababababababababababababababab:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+          "inScope": true
+        },
+        {
+          "name": "org-key-rejected",
+          "key": "org:meta:some-org",
+          "inScope": false
+        },
+        {
+          "name": "other-affair-rec-rejected",
+          "key": "affair:rec:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "inScope": false
+        },
+        {
+          "name": "head-key-rejected",
+          "key": "affair:head:abababababababababababababababababababababababababababababababab",
+          "inScope": false
+        },
+        {
+          "name": "follow-key-rejected",
+          "key": "affair:follow:abababababababababababababababababababababababababababababababab",
+          "inScope": false
+        }
+      ]
+    }
+  },
+  "ladderDerive": {
+    "desc": "固定操作日志 → 阶梯名册确定性推导（affair §5.5/§13）：observer/contributor/voter 三级、delayed-veto 生效采纳口径、在级天数（voterDays 单位天）、近窗活跃与 90 天衰减、初始投票者冷启动与衰减、org 表态不进名册、未锚定操作不参与时间推导。名册按 identity 字典序；accountAgeMs = nowMs − 最早锚定活跃时刻",
+    "expect": {
+      "cases": [
+        {
+          "name": "default-lifecycle",
+          "initialVoters": [],
+          "genesisAnchoredMs": 1713088000000,
+          "participation": {},
+          "ops": [
+            {
+              "opHash": "f3cc469baf36d76b687549aca4d750e742e8a17cb3a2c93d5b170db347e0b173",
+              "actorKind": "person",
+              "actorIdentity": "48cca97f8993ffaebcac9728d7f94f7144f18090d329d9370a7dfc42db38d14d",
+              "opType": "meta-revise",
+              "payload": {
+                "title": "修订 0",
+                "mechanism": {
+                  "kind": "delayed-veto",
+                  "delayMs": 86400000,
+                  "vetoThreshold": {
+                    "count": 1
+                  }
+                }
+              },
+              "anchoredMs": 1716544000000,
+              "objections": 0
+            },
+            {
+              "opHash": "2f8719d2046dbe20fb4296732c5a7d37d9062bea17fab4f1b5698f970351c615",
+              "actorKind": "person",
+              "actorIdentity": "48cca97f8993ffaebcac9728d7f94f7144f18090d329d9370a7dfc42db38d14d",
+              "opType": "meta-revise",
+              "payload": {
+                "title": "修订 1",
+                "mechanism": {
+                  "kind": "delayed-veto",
+                  "delayMs": 86400000,
+                  "vetoThreshold": {
+                    "count": 1
+                  }
+                }
+              },
+              "anchoredMs": 1716716800000,
+              "objections": 0
+            },
+            {
+              "opHash": "fdaebd1c0d7c44e1e76d1118573859c404a12b9003979e01513cb62cfacb8594",
+              "actorKind": "person",
+              "actorIdentity": "48cca97f8993ffaebcac9728d7f94f7144f18090d329d9370a7dfc42db38d14d",
+              "opType": "meta-revise",
+              "payload": {
+                "title": "修订 2",
+                "mechanism": {
+                  "kind": "delayed-veto",
+                  "delayMs": 86400000,
+                  "vetoThreshold": {
+                    "count": 1
+                  }
+                }
+              },
+              "anchoredMs": 1716889600000,
+              "objections": 0
+            },
+            {
+              "opHash": "b2f396b452cff194e28ea2a2763029fbdefa0304dcf15b55cfc709aa0cdfbfca",
+              "actorKind": "person",
+              "actorIdentity": "1325b850c2871916eae203f0efc3c8987f64e5e3cdb27679e6d1fa97808357e6",
+              "opType": "meta-revise",
+              "payload": {
+                "title": "修订 3",
+                "mechanism": {
+                  "kind": "delayed-veto",
+                  "delayMs": 86400000,
+                  "vetoThreshold": {
+                    "count": 1
+                  }
+                }
+              },
+              "anchoredMs": 1719136000000,
+              "objections": 0
+            },
+            {
+              "opHash": "76a4f23060663c6df3cb8e2488e309a14e41baa6534fdb934040bfe2d1b0136b",
+              "actorKind": "person",
+              "actorIdentity": "1325b850c2871916eae203f0efc3c8987f64e5e3cdb27679e6d1fa97808357e6",
+              "opType": "content",
+              "payload": {
+                "kind": "post",
+                "text": "内容"
+              },
+              "anchoredMs": 1719827200000,
+              "objections": 0
+            },
+            {
+              "opHash": "0d0caefecc64061212e898ebd362ef248edfa25f7cac5f741ba9e0c565061a08",
+              "actorKind": "person",
+              "actorIdentity": "10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+              "opType": "content",
+              "payload": {
+                "kind": "post",
+                "text": "内容"
+              },
+              "anchoredMs": 1719913600000,
+              "objections": 0
+            },
+            {
+              "opHash": "836503e7ef2b5477eef43545941c91c3e9336cbc35de703d1c0b1dc2a7cd80bd",
+              "actorKind": "person",
+              "actorIdentity": "10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+              "opType": "meta-revise",
+              "payload": {
+                "title": "修订 6",
+                "mechanism": {
+                  "kind": "delayed-veto",
+                  "delayMs": 86400000,
+                  "vetoThreshold": {
+                    "count": 1
+                  }
+                }
+              },
+              "anchoredMs": null,
+              "objections": 0
+            },
+            {
+              "opHash": "d6a988656e26729094f2bf04f0980d5b061f39d39ed0d327c139d457fefc16d7",
+              "actorKind": "org",
+              "actorIdentity": "24aa2a5589edcb57fea0be3552f065de6d3a837feaccf60f8bde018fa4926b6a",
+              "opType": "meta-revise",
+              "payload": {
+                "title": "组织表态",
+                "mechanism": {
+                  "kind": "delayed-veto",
+                  "delayMs": 86400000,
+                  "vetoThreshold": {
+                    "count": 1
+                  }
+                }
+              },
+              "anchoredMs": 1719568000000,
+              "objections": 0
+            }
+          ],
+          "nowMs": 1720000000000,
+          "roster": [
+            {
+              "identity": "10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+              "tier": "observer",
+              "accepts": 0,
+              "tierSinceMs": null,
+              "lastActivityMs": 1719913600000,
+              "accountAgeMs": 86400000
+            },
+            {
+              "identity": "1325b850c2871916eae203f0efc3c8987f64e5e3cdb27679e6d1fa97808357e6",
+              "tier": "contributor",
+              "accepts": 1,
+              "tierSinceMs": 1719222400000,
+              "lastActivityMs": 1719827200000,
+              "accountAgeMs": 864000000
+            },
+            {
+              "identity": "48cca97f8993ffaebcac9728d7f94f7144f18090d329d9370a7dfc42db38d14d",
+              "tier": "voter",
+              "accepts": 3,
+              "tierSinceMs": 1716630400000,
+              "lastActivityMs": 1716889600000,
+              "accountAgeMs": 3456000000
+            }
+          ],
+          "voters": [
+            "48cca97f8993ffaebcac9728d7f94f7144f18090d329d9370a7dfc42db38d14d"
+          ]
+        },
+        {
+          "name": "voter-decay",
+          "initialVoters": [],
+          "genesisAnchoredMs": null,
+          "participation": {},
+          "ops": [
+            {
+              "opHash": "4ceaeb0b84d2e44e6a18427792363ee8518e41eeb0cfaf322f5b73582b5f9962",
+              "actorKind": "person",
+              "actorIdentity": "48cca97f8993ffaebcac9728d7f94f7144f18090d329d9370a7dfc42db38d14d",
+              "opType": "meta-revise",
+              "payload": {
+                "title": "修订 0",
+                "mechanism": {
+                  "kind": "delayed-veto",
+                  "delayMs": 86400000,
+                  "vetoThreshold": {
+                    "count": 1
+                  }
+                }
+              },
+              "anchoredMs": 1709632000000,
+              "objections": 0
+            },
+            {
+              "opHash": "efc3a6b85897a1608684ec7201d28044ea3f8eea94c6b69f19089ff734398824",
+              "actorKind": "person",
+              "actorIdentity": "48cca97f8993ffaebcac9728d7f94f7144f18090d329d9370a7dfc42db38d14d",
+              "opType": "meta-revise",
+              "payload": {
+                "title": "修订 1",
+                "mechanism": {
+                  "kind": "delayed-veto",
+                  "delayMs": 86400000,
+                  "vetoThreshold": {
+                    "count": 1
+                  }
+                }
+              },
+              "anchoredMs": 1709804800000,
+              "objections": 0
+            },
+            {
+              "opHash": "1b2d358b2fca2befa7024efc0655cc4ffc4abda24284e6f3fd9d61131f0b0b22",
+              "actorKind": "person",
+              "actorIdentity": "48cca97f8993ffaebcac9728d7f94f7144f18090d329d9370a7dfc42db38d14d",
+              "opType": "meta-revise",
+              "payload": {
+                "title": "修订 2",
+                "mechanism": {
+                  "kind": "delayed-veto",
+                  "delayMs": 86400000,
+                  "vetoThreshold": {
+                    "count": 1
+                  }
+                }
+              },
+              "anchoredMs": 1709977600000,
+              "objections": 0
+            }
+          ],
+          "nowMs": 1720000000000,
+          "roster": [
+            {
+              "identity": "48cca97f8993ffaebcac9728d7f94f7144f18090d329d9370a7dfc42db38d14d",
+              "tier": "contributor",
+              "accepts": 3,
+              "tierSinceMs": 1709718400000,
+              "lastActivityMs": 1709977600000,
+              "accountAgeMs": 10368000000
+            }
+          ],
+          "voters": []
+        },
+        {
+          "name": "revive-after-decay",
+          "initialVoters": [],
+          "genesisAnchoredMs": null,
+          "participation": {},
+          "ops": [
+            {
+              "opHash": "91834a39cec434097c84f6f62c17553c5ff34c4bb45dd03503e5313b176231f0",
+              "actorKind": "person",
+              "actorIdentity": "48cca97f8993ffaebcac9728d7f94f7144f18090d329d9370a7dfc42db38d14d",
+              "opType": "meta-revise",
+              "payload": {
+                "title": "修订 0",
+                "mechanism": {
+                  "kind": "delayed-veto",
+                  "delayMs": 86400000,
+                  "vetoThreshold": {
+                    "count": 1
+                  }
+                }
+              },
+              "anchoredMs": 1709632000000,
+              "objections": 0
+            },
+            {
+              "opHash": "2e505e4208efc68e17a1234ec8e57526fbd0f812b4e63d2c423de3a10624e889",
+              "actorKind": "person",
+              "actorIdentity": "48cca97f8993ffaebcac9728d7f94f7144f18090d329d9370a7dfc42db38d14d",
+              "opType": "meta-revise",
+              "payload": {
+                "title": "修订 1",
+                "mechanism": {
+                  "kind": "delayed-veto",
+                  "delayMs": 86400000,
+                  "vetoThreshold": {
+                    "count": 1
+                  }
+                }
+              },
+              "anchoredMs": 1709804800000,
+              "objections": 0
+            },
+            {
+              "opHash": "ae80590408704e81c48c1357d925b64a0b386a0fdf0ebbc435cfbaec872e1e47",
+              "actorKind": "person",
+              "actorIdentity": "48cca97f8993ffaebcac9728d7f94f7144f18090d329d9370a7dfc42db38d14d",
+              "opType": "meta-revise",
+              "payload": {
+                "title": "修订 2",
+                "mechanism": {
+                  "kind": "delayed-veto",
+                  "delayMs": 86400000,
+                  "vetoThreshold": {
+                    "count": 1
+                  }
+                }
+              },
+              "anchoredMs": 1709977600000,
+              "objections": 0
+            },
+            {
+              "opHash": "ae8b16f6fc5403b14f013aa5d159ae5dd30b0e1572a59ecc7a04067367dd4b24",
+              "actorKind": "person",
+              "actorIdentity": "48cca97f8993ffaebcac9728d7f94f7144f18090d329d9370a7dfc42db38d14d",
+              "opType": "content",
+              "payload": {
+                "kind": "post",
+                "text": "内容"
+              },
+              "anchoredMs": 1719913600000,
+              "objections": 0
+            }
+          ],
+          "nowMs": 1720000000000,
+          "roster": [
+            {
+              "identity": "48cca97f8993ffaebcac9728d7f94f7144f18090d329d9370a7dfc42db38d14d",
+              "tier": "voter",
+              "accepts": 3,
+              "tierSinceMs": 1709718400000,
+              "lastActivityMs": 1719913600000,
+              "accountAgeMs": 10368000000
+            }
+          ],
+          "voters": [
+            "48cca97f8993ffaebcac9728d7f94f7144f18090d329d9370a7dfc42db38d14d"
+          ]
+        },
+        {
+          "name": "initial-voter-cold-start",
+          "initialVoters": [
+            "10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d"
+          ],
+          "genesisAnchoredMs": 1715680000000,
+          "participation": {},
+          "ops": [
+            {
+              "opHash": "b4b28b4b3a1dc6f1942cd0f70e38d8472146134c9ce9254596d8a962b141a9d0",
+              "actorKind": "person",
+              "actorIdentity": "48cca97f8993ffaebcac9728d7f94f7144f18090d329d9370a7dfc42db38d14d",
+              "opType": "content",
+              "payload": {
+                "kind": "post",
+                "text": "内容"
+              },
+              "anchoredMs": 1719913600000,
+              "objections": 0
+            }
+          ],
+          "nowMs": 1720000000000,
+          "roster": [
+            {
+              "identity": "10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+              "tier": "voter",
+              "accepts": 0,
+              "tierSinceMs": 1715680000000,
+              "lastActivityMs": null,
+              "accountAgeMs": null
+            },
+            {
+              "identity": "48cca97f8993ffaebcac9728d7f94f7144f18090d329d9370a7dfc42db38d14d",
+              "tier": "observer",
+              "accepts": 0,
+              "tierSinceMs": null,
+              "lastActivityMs": 1719913600000,
+              "accountAgeMs": 86400000
+            }
+          ],
+          "voters": [
+            "10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d"
+          ]
+        },
+        {
+          "name": "initial-voter-decayed",
+          "initialVoters": [
+            "10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d"
+          ],
+          "genesisAnchoredMs": 1702720000000,
+          "participation": {},
+          "ops": [
+            {
+              "opHash": "6d8780a1e3a24ead670979ec355728b32640420f333844d939b4b914d3bda20e",
+              "actorKind": "person",
+              "actorIdentity": "10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+              "opType": "content",
+              "payload": {
+                "kind": "post",
+                "text": "内容"
+              },
+              "anchoredMs": 1711360000000,
+              "objections": 0
+            }
+          ],
+          "nowMs": 1720000000000,
+          "roster": [
+            {
+              "identity": "10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+              "tier": "observer",
+              "accepts": 0,
+              "tierSinceMs": null,
+              "lastActivityMs": 1711360000000,
+              "accountAgeMs": 8640000000
+            }
+          ],
+          "voters": []
+        },
+        {
+          "name": "veto-blocks-adoption",
+          "initialVoters": [],
+          "genesisAnchoredMs": null,
+          "participation": {},
+          "ops": [
+            {
+              "opHash": "1b3eb79c5dc0f743114f2b67fe7597c14e57c396e1af7535ffa76f83bf143dc4",
+              "actorKind": "person",
+              "actorIdentity": "48cca97f8993ffaebcac9728d7f94f7144f18090d329d9370a7dfc42db38d14d",
+              "opType": "meta-revise",
+              "payload": {
+                "title": "修订 0",
+                "mechanism": {
+                  "kind": "delayed-veto",
+                  "delayMs": 86400000,
+                  "vetoThreshold": {
+                    "count": 1
+                  }
+                }
+              },
+              "anchoredMs": 1716544000000,
+              "objections": 1
+            }
+          ],
+          "nowMs": 1720000000000,
+          "roster": [
+            {
+              "identity": "48cca97f8993ffaebcac9728d7f94f7144f18090d329d9370a7dfc42db38d14d",
+              "tier": "observer",
+              "accepts": 0,
+              "tierSinceMs": null,
+              "lastActivityMs": 1716544000000,
+              "accountAgeMs": 3456000000
+            }
+          ],
+          "voters": []
+        },
+        {
+          "name": "params-override",
+          "initialVoters": [],
+          "genesisAnchoredMs": null,
+          "participation": {
+            "ladderParams": {
+              "contributorAccepts": 2,
+              "voterDays": 10,
+              "voterAccepts": 2
+            }
+          },
+          "ops": [
+            {
+              "opHash": "5566993826d9671dce3168bc77d39e03e0ed493482d0176f694b6118cbae0db4",
+              "actorKind": "person",
+              "actorIdentity": "48cca97f8993ffaebcac9728d7f94f7144f18090d329d9370a7dfc42db38d14d",
+              "opType": "meta-revise",
+              "payload": {
+                "title": "修订 0",
+                "mechanism": {
+                  "kind": "delayed-veto",
+                  "delayMs": 86400000,
+                  "vetoThreshold": {
+                    "count": 1
+                  }
+                }
+              },
+              "anchoredMs": 1718272000000,
+              "objections": 0
+            },
+            {
+              "opHash": "8502fa37d5c304d7ee785c2b8bcffbc21996065de4f3a3ff5ff46b5f6976ce78",
+              "actorKind": "person",
+              "actorIdentity": "48cca97f8993ffaebcac9728d7f94f7144f18090d329d9370a7dfc42db38d14d",
+              "opType": "meta-revise",
+              "payload": {
+                "title": "修订 1",
+                "mechanism": {
+                  "kind": "delayed-veto",
+                  "delayMs": 86400000,
+                  "vetoThreshold": {
+                    "count": 1
+                  }
+                }
+              },
+              "anchoredMs": 1718704000000,
+              "objections": 0
+            }
+          ],
+          "nowMs": 1720000000000,
+          "roster": [
+            {
+              "identity": "48cca97f8993ffaebcac9728d7f94f7144f18090d329d9370a7dfc42db38d14d",
+              "tier": "voter",
+              "accepts": 2,
+              "tierSinceMs": 1718790400000,
+              "lastActivityMs": 1718704000000,
+              "accountAgeMs": 1728000000
+            }
+          ],
+          "voters": [
+            "48cca97f8993ffaebcac9728d7f94f7144f18090d329d9370a7dfc42db38d14d"
+          ]
+        }
+      ],
+      "badParams": [
+        {
+          "name": "voter-days-zero",
+          "participation": {
+            "ladderParams": {
+              "voterDays": 0
+            }
+          },
+          "error": "bad-ladder-params"
+        },
+        {
+          "name": "contributor-accepts-zero",
+          "participation": {
+            "ladderParams": {
+              "contributorAccepts": 0
+            }
+          },
+          "error": "bad-ladder-params"
+        },
+        {
+          "name": "not-an-object",
+          "participation": {
+            "ladderParams": "bad"
+          },
+          "error": "bad-ladder-params"
+        }
+      ]
+    }
+  }
+}

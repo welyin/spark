@@ -3,6 +3,8 @@
 //! 网关与公开标志在 `settings`。本文件放各域共用的夹具（固定时间、测试
 //! 助记词、rootId 生成、建组快捷函数）。
 
+#[path = "service/community.rs"]
+mod community;
 #[path = "service/create.rs"]
 mod create;
 #[path = "service/incoming.rs"]
@@ -43,6 +45,7 @@ fn input() -> CreateOrganizationInput {
         description: Some(" 描述 ".to_string()),
         avatar: None,
         base_plugin_domain: Some(" plugin:chat ".to_string()),
+        ..Default::default()
     }
 }
 

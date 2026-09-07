@@ -72,6 +72,57 @@ pub fn verify_manifest_signature(
     })
 }
 
+// ------------------------------------------------------------------
+// 插件信任分级 L0/L1/L2（community-model §十 / public-topics §八）
+// ------------------------------------------------------------------
+
+/// 安装通路信任级映射：signed（官方 Ed25519 签名链）= L2；
+/// repo-anchored（仓库锚定，包内容来自插件 id 指向的开源仓库，源码公开可审计）= L1；
+/// sideloaded / 缺省（旧记录）= L0（仅用户自行核对哈希，无源码锚定）。
+pub fn trust_level_of(trust: Option<&str>) -> &'static str {
+    match trust {
+        Some("signed") => "L2",
+        Some("repo-anchored") => "L1",
+        _ => "L0",
+    }
+}
+
+/// 信任级排序（L2 > L1 > L0）。
+pub fn trust_level_rank(level: &str) -> u8 {
+    match level {
+        "L2" => 2,
+        "L1" => 1,
+        _ => 0,
+    }
+}
+
+/// 验证类插件判定信号（community-model §十：经手个人敏感材料的验证类插件
+/// 强制 L1 源码公开可审计）。设计文档未指定结构化信号，采用最小合理口径：
+/// manifest 声明 `credentials:*` 权限（资格凭证读写 = 经手个人敏感材料的
+/// 验证类能力）即视为验证类。补记于 plugin_system.md「分发与信任」。
+pub fn is_verification_class(declared_permissions: &[String]) -> bool {
+    declared_permissions
+        .iter()
+        .any(|p| p.starts_with("credentials:"))
+}
+
+/// L1 强制（安装/更新共用）：验证类插件的安装通路信任级必须 ≥ L1，
+/// 不满足则拒绝并说明（侧载 L0 即命中此拒）。
+pub fn ensure_trust_requirement(
+    plugin_id: &str,
+    declared_permissions: &[String],
+    trust: Option<&str>,
+) -> Result<(), String> {
+    let level = trust_level_of(trust);
+    if is_verification_class(declared_permissions) && trust_level_rank(level) < 1 {
+        return Err(format!(
+            "Plugin trust requirement unmet: {plugin_id} is verification-class (declares credentials:* permission) and requires L1 open-source-auditable install, current trust is {level} ({})",
+            trust.unwrap_or("unsigned")
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -116,6 +167,42 @@ pub(crate) mod tests {
         // 多 key 任一通过（对齐 TS some()）
         let (pem2, _) = test_keypair(9);
         assert!(verify_manifest_signature(payload, &signature, &[pem2, pem]));
+    }
+
+    #[test]
+    fn trust_level_mapping_and_rank() {
+        // 通路 → L 级映射（数据模型口径，前端信任级展示与 L1 强制共用）
+        assert_eq!(trust_level_of(Some("signed")), "L2");
+        assert_eq!(trust_level_of(Some("repo-anchored")), "L1");
+        assert_eq!(trust_level_of(Some("sideloaded")), "L0");
+        assert_eq!(trust_level_of(None), "L0");
+        assert!(trust_level_rank("L2") > trust_level_rank("L1"));
+        assert!(trust_level_rank("L1") > trust_level_rank("L0"));
+    }
+
+    #[test]
+    fn verification_class_detection() {
+        // 声明 credentials:* 即验证类；其余权限不命中
+        assert!(is_verification_class(&["credentials:read".to_string()]));
+        assert!(!is_verification_class(&["org:sync".to_string()]));
+        assert!(!is_verification_class(&[]));
+    }
+
+    #[test]
+    fn ensure_trust_requirement_matrix() {
+        let verification = vec!["credentials:read".to_string()];
+        // 验证类：L1（repo-anchored）/ L2（signed）通过；L0（sideloaded / 缺省）拒绝
+        assert!(ensure_trust_requirement("p", &verification, Some("repo-anchored")).is_ok());
+        assert!(ensure_trust_requirement("p", &verification, Some("signed")).is_ok());
+        assert_eq!(
+            ensure_trust_requirement("p", &verification, Some("sideloaded")).unwrap_err(),
+            "Plugin trust requirement unmet: p is verification-class (declares credentials:* permission) and requires L1 open-source-auditable install, current trust is L0 (sideloaded)"
+        );
+        assert!(ensure_trust_requirement("p", &verification, None).is_err());
+        // 非验证类：任意通路（含 L0 侧载）均通过
+        let plain = vec!["org:sync".to_string()];
+        assert!(ensure_trust_requirement("p", &plain, Some("sideloaded")).is_ok());
+        assert!(ensure_trust_requirement("p", &plain, None).is_ok());
     }
 
     #[test]

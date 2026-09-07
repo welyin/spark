@@ -43,6 +43,7 @@ fn sample_record() -> OrganizationRecord {
         data_accounts: Vec::new(),
         org_address: None,
         is_public: false,
+        domain_type: None,
         extra: Default::default(),
     };
     record.set_recovery_secret("cd".repeat(32));
@@ -583,7 +584,8 @@ fn legacy_record_and_snapshot_without_identity_fields() {
 
 /// O2：accessKey 合入仅本人可改——成员已有 accessKey 时，peer 快照携带不同
 /// accessKey **不采用**（保留本地），防恶意成员把他人 accessKey 换成自己密钥
-/// 窃取其 orgkey-deliver。新成员（无既有 accessKey）则采用 incoming。
+/// 冒用其组织身份（C7：原 orgkey-deliver 消费方已退役，冒用面收窄为组织
+/// 身份本身）。新成员（无既有 accessKey）则采用 incoming。
 #[test]
 fn snapshot_merge_does_not_let_peer_override_access_key() {
     use spark_core::org::types::OrganizationAccessKey;
