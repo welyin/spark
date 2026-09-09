@@ -8,6 +8,7 @@ pub mod anchor;
 pub mod canonical;
 pub mod chain;
 pub mod export;
+pub mod report;
 
 pub use anchor::{
     AnchorFork, AnchorRecord, EVIDENCE_ANCHOR_PREFIX, EVIDENCE_FORK_PREFIX, anchor_key,
@@ -24,6 +25,9 @@ pub use chain::{
     verify_evidence_hash_matches_remote,
 };
 pub use export::{
-    EvidenceExportPackage, ExportScope, VerifyReport, build_export_package, collect_anchors,
-    export_sign_payload, verify_export_package,
+    BUSINESS_LAYER_NOTE, EvidenceExportPackage, ExportScope, MembershipOutcome, ROSTER_ENTRY_COLLECTION,
+    RosterAnchorRef, RosterMember, RosterSection, RosterSummary, SignerCheck, VerifyReport,
+    build_export_package, collect_anchors, export_sign_payload, roster_commitment_payload,
+    verify_export_package,
 };
+pub use report::{format_utc, render_printable_report};

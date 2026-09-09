@@ -61,6 +61,8 @@ impl Kernel {
         let (new_file, new_key) = identity::change_password(&file, old_password, new_password)
             .map_err(map_identity_decrypt_error)?;
         self.write_identity_file(&new_file)?;
+        // 密码考试（§4.2）：改密 = 真实密码验证事件，刷新 lastPasswordAuth。
+        crate::kernel::pw_ops::record_password_auth(self);
         // 沿用当前会话的 root 身份与 seed，仅刷新口令与会话封装密钥
         if let Some(unlocked) = &self.unlocked {
             self.set_unlocked(
@@ -70,8 +72,23 @@ impl Kernel {
                 Some(new_key),
             );
         }
-        // M3：改密触发 epoch 密钥轮换并发布新 V。
-        if let Err(e) = crate::kernel::epoch_ops::after_password_change(self) {
+        // M3+D′：先发布新 V（D′ 门控以「最新 V」为水位——先发布，随后的 rotate
+        // 逐设备门控才能正确暂扣超 grace 的陈旧设备，否则门控读到旧 V 空转），
+        // 再以同一时戳轮换 epoch（时戳同源，规格 §13.5）。
+        let rotation_now_ms = system_now_ms();
+        if let Err(e) = crate::kernel::pw_ops::publish_pw_value_at(
+            self,
+            new_password,
+            crate::epoch::RotationReason::PasswordChange,
+            rotation_now_ms,
+        ) {
+            log::error!("[change-password] pwv publish failed: {e}");
+        }
+        if let Err(e) = crate::kernel::epoch_ops::rotate_at(
+            self,
+            crate::epoch::RotationReason::PasswordChange,
+            rotation_now_ms,
+        ) {
             log::error!("[change-password] epoch rotation failed: {e}");
             let _ = crate::device::DeviceService::append_security_log(
                 self.require_storage_mut()?,
@@ -79,12 +96,6 @@ impl Kernel {
                 serde_json::json!({"reason": "password_change", "error": format!("{e}")}),
                 system_now_ms(),
             );
-        } else if let Err(e) = crate::kernel::pw_ops::publish_pw_value(
-            self,
-            new_password,
-            crate::epoch::RotationReason::PasswordChange,
-        ) {
-            log::error!("[change-password] pwv publish failed: {e}");
         }
         log::info!("[PROFILE_CHAIN] password changed | root_id={root_id}");
         Ok(())
@@ -138,22 +149,32 @@ impl Kernel {
             new_password,
             Some(new_key),
         );
+        // 密码考试（§4.2）：恢复通道设新密码 = 真实密码输入事件。
+        crate::kernel::pw_ops::record_password_auth(self);
 
-        // M3：恢复改密触发 password_reset epoch 轮换并发布新 V。
-        if let Err(e) = crate::kernel::epoch_ops::after_password_reset(self) {
+        // M3+D′：恢复改密触发 password_reset——同 change_password，先发布新 V
+        // （门控见新水位）再以同一时戳轮换（时戳同源，规格 §13.5）。
+        let rotation_now_ms = crate::p2p::node::system_now_ms();
+        if let Err(e) = crate::kernel::pw_ops::publish_pw_value_at(
+            self,
+            new_password,
+            crate::epoch::RotationReason::PasswordReset,
+            rotation_now_ms,
+        ) {
+            log::error!("[reset-password-session] pwv publish failed: {e}");
+        }
+        if let Err(e) = crate::kernel::epoch_ops::rotate_at(
+            self,
+            crate::epoch::RotationReason::PasswordReset,
+            rotation_now_ms,
+        ) {
             log::error!("[reset-password-session] epoch rotation failed: {e}");
             let _ = crate::device::DeviceService::append_security_log(
                 self.require_storage_mut()?,
                 "rotation_failed",
                 serde_json::json!({"reason": "password_reset", "error": format!("{e}")}),
-                system_now_ms(),
+                crate::p2p::node::system_now_ms(),
             );
-        } else if let Err(e) = crate::kernel::pw_ops::publish_pw_value(
-            self,
-            new_password,
-            crate::epoch::RotationReason::PasswordReset,
-        ) {
-            log::error!("[reset-password-session] pwv publish failed: {e}");
         }
 
         log::info!("[PROFILE_CHAIN] password reset via recovery session | root_id={root_id}");

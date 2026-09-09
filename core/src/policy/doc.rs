@@ -121,12 +121,12 @@ pub struct PolicyDoc {
 
 /// orgId 双形态（org-genesis §2）：legacy `org_<16hex>` / 创世哈希型 `org_<64hex>`。
 /// 统一实现归 affair 模块（全仓单一口径，防双形态判定漂移），此处转调。
-fn is_valid_org_id(org_id: &str) -> bool {
+pub(crate) fn is_valid_org_id(org_id: &str) -> bool {
     crate::affair::is_valid_org_id(org_id)
 }
 
 /// 字段名/集合名形状：非空、≤128、仅 ASCII 标识字符与集合常用符号。
-fn is_valid_name(s: &str) -> bool {
+pub(crate) fn is_valid_name(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 128
         && s.bytes()

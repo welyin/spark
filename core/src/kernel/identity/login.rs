@@ -46,6 +46,7 @@ impl Kernel {
         self.ensure_p2p_identity_ready()?;
         let root_id = file.root_id.clone();
         self.set_unlocked(identity, seed, password, Some(key));
+        crate::kernel::pw_ops::record_password_auth(self);
         if let Err(e) = self.on_unlock_password_ops(password) {
             log::error!("[init-identity] password ops failed: {e}");
         }
@@ -56,6 +57,21 @@ impl Kernel {
     /// `unlock`：密码解锁指定身份（缺省为活动身份），设为当前并触发存储对齐。
     /// v1 遗留文件解锁成功后按 spec §5 迁移为 v2。
     pub fn unlock(&mut self, password: &str, root_id: Option<&str>) -> Result<String> {
+        self.unlock_impl(password, root_id, true)
+    }
+
+    /// 生物识别取回 blob 口令的解锁：与 `unlock` 同一语义，但**不刷新密码考试
+    /// 时间戳**（identity.md §4.2：lastPasswordAuth 只认真实密码输入）。
+    pub fn unlock_bio_sourced(&mut self, password: &str, root_id: Option<&str>) -> Result<String> {
+        self.unlock_impl(password, root_id, false)
+    }
+
+    fn unlock_impl(
+        &mut self,
+        password: &str,
+        root_id: Option<&str>,
+        record_auth: bool,
+    ) -> Result<String> {
         let target = match root_id {
             Some(rid) => rid.to_string(),
             None => self
@@ -89,6 +105,11 @@ impl Kernel {
         // §13.9：unlock 入口同其他「首次解锁」路径，确保真实 peerId 已就绪。
         self.ensure_p2p_identity_ready()?;
         self.set_unlocked(identity, seed, password, session_key);
+        // 密码考试（§4.2）：真实密码解锁成功才刷新 lastPasswordAuth；
+        // bioSourced 通道（unlock_bio_sourced）不刷新。
+        if record_auth {
+            crate::kernel::pw_ops::record_password_auth(self);
+        }
         if let Err(e) = self.on_unlock_password_ops(password) {
             log::error!("[unlock] password ops failed: {e}");
         }
@@ -122,6 +143,23 @@ impl Kernel {
             && let Err(e) = crate::org::service::migrate_org_members_split(storage)
         {
             eprintln!("[kernel] migrate org:member split failed: {e}");
+        }
+        // A16 存量迁移（membership §4.4-4 双写过渡）：本机在册但未发布
+        // accessKey 的组织逐个补齐（org_user_id 全员映射是名册键切换窗口的
+        // 前置条件）。幂等（写一次语义），版本化句柄落库经快照/orgsync 扩散；
+        // 失败仅记录日志。
+        {
+            let now = crate::p2p::node::system_now_ms();
+            if let Ok(storage) = self.require_storage_mut()
+                && let Err(e) = crate::org::service::migrate_access_key_backfill(
+                    storage,
+                    &seed,
+                    &root_id,
+                    now,
+                )
+            {
+                eprintln!("[kernel] migrate accessKey backfill failed: {e}");
+            }
         }
         Ok(root_id)
     }
@@ -296,6 +334,7 @@ impl Kernel {
         self.ensure_p2p_identity_ready()?;
         let root_id = file.root_id.clone();
         self.set_unlocked(identity, seed, new_password, Some(key));
+        crate::kernel::pw_ops::record_password_auth(self);
         if let Err(e) = self.on_unlock_password_ops(new_password) {
             log::error!("[recover-mnemonic] password ops failed: {e}");
         }
@@ -559,6 +598,7 @@ impl Kernel {
         }
         let root_id = file.root_id.clone();
         self.set_unlocked(identity, seed, password, session_key);
+        crate::kernel::pw_ops::record_password_auth(self);
         if let Err(e) = self.on_unlock_password_ops(password) {
             log::error!("[recover-backup] password ops failed: {e}");
         }

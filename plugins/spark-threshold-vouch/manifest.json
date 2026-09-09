@@ -10,6 +10,7 @@
   "views": [
     { "id": "default", "type": "app", "title": "担保链门槛" }
   ],
+  "window": { "defaultWidth": 640, "defaultHeight": 560 },
   "permissions": ["storage:read", "storage:write", "identity:sign"],
   "sdkVersion": "1",
   "package": {

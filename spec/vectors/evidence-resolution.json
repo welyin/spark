@@ -1,0 +1,168 @@
+{
+  "_comment": "affair.md §6.3 evi:resolution 存证条目 golden vectors（A21）。生成器：core/examples/gen_evidence_resolution_vectors.rs（Rust 自产，含确定性/链校验自检）；消费：core/tests/evidence_resolution_vectors.rs。",
+  "entry": {
+    "desc": "evi:resolution 条目逐字节（组织决议，sigSet 原样内嵌）：固定决议操作 + 固定锚时刻 → subject=opHash、conclusionHash、payload canonical 与 payloadHash 固定值；篡改 payload → conclusionHash 必变（消费侧断言）",
+    "input": {
+      "affairId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "resolutionOp": {
+        "opV": 1,
+        "affairId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "prevOpHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "opType": "resolution",
+        "payload": {
+          "result": "passed",
+          "condition": {
+            "type": "op-count",
+            "opType": "content",
+            "count": 1
+          },
+          "countedOps": [
+            "9999999999999999999999999999999999999999999999999999999999999999"
+          ],
+          "tally": null,
+          "quorumSnapshot": null,
+          "rulesHash": "8888888888888888888888888888888888888888888888888888888888888888",
+          "pubPeriod": {
+            "delayMs": 86400000
+          }
+        },
+        "actor": {
+          "kind": "org",
+          "identity": "3097e2dee2cb4a34b53840cdb705aed71067c36f68db0e0f559c3f3fa043315f",
+          "publicKey": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI=",
+          "orgSig": {
+            "sigSetV": 1,
+            "orgId": "org_0000000000000001",
+            "subject": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "policyHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "roster": {
+              "memberSetHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+              "anchor": {
+                "orgId": "org_0000000000000001",
+                "anchorRoot": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+                "ts": 1720000000000
+              }
+            },
+            "signedAt": 1720000009000,
+            "signatures": [
+              {
+                "identity": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                "sig": "c2lnLXN0dWItMQ=="
+              }
+            ]
+          }
+        },
+        "declaredAt": 1720000009500,
+        "sig": "iC2JB0GpHljmSbCmxxWdL5Eqhq4kjwBcsWdW5G8A1cH+b1zgXKQ1cAgwA6aKv7XiHsJaKOvw+S5eQRNZfZQ0Cg=="
+      },
+      "effectiveTs": 1720000010000
+    },
+    "expect": {
+      "subject": "cbae1d1d63ae7b4195298e343e9d2ec7f37176f1663a386868ba6ef01232fbcc",
+      "conclusionHash": "913b6a44399cd26b3953b5c25540f4e0abb897f48e89224c3c249597a1fadc7f",
+      "payload": {
+        "kind": "evi:resolution",
+        "affairId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "subject": "cbae1d1d63ae7b4195298e343e9d2ec7f37176f1663a386868ba6ef01232fbcc",
+        "conclusionHash": "913b6a44399cd26b3953b5c25540f4e0abb897f48e89224c3c249597a1fadc7f",
+        "sigSet": {
+          "sigSetV": 1,
+          "orgId": "org_0000000000000001",
+          "subject": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "policyHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "roster": {
+            "memberSetHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "anchor": {
+              "orgId": "org_0000000000000001",
+              "anchorRoot": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+              "ts": 1720000000000
+            }
+          },
+          "signedAt": 1720000009000,
+          "signatures": [
+            {
+              "identity": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+              "sig": "c2lnLXN0dWItMQ=="
+            }
+          ]
+        },
+        "effectiveTs": 1720000010000
+      },
+      "canonical": "{\"affairId\":\"\\\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\\"\",\"conclusionHash\":\"\\\"913b6a44399cd26b3953b5c25540f4e0abb897f48e89224c3c249597a1fadc7f\\\"\",\"effectiveTs\":\"1720000010000\",\"kind\":\"\\\"evi:resolution\\\"\",\"sigSet\":\"{\\\"orgId\\\":\\\"\\\\\\\"org_0000000000000001\\\\\\\"\\\",\\\"policyHash\\\":\\\"\\\\\\\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\\\\\\\"\\\",\\\"roster\\\":\\\"{\\\\\\\"anchor\\\\\\\":\\\\\\\"{\\\\\\\\\\\\\\\"anchorRoot\\\\\\\\\\\\\\\":\\\\\\\\\\\\\\\"\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"\\\\\\\\\\\\\\\",\\\\\\\\\\\\\\\"orgId\\\\\\\\\\\\\\\":\\\\\\\\\\\\\\\"\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"org_0000000000000001\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"\\\\\\\\\\\\\\\",\\\\\\\\\\\\\\\"ts\\\\\\\\\\\\\\\":\\\\\\\\\\\\\\\"1720000000000\\\\\\\\\\\\\\\"}\\\\\\\",\\\\\\\"memberSetHash\\\\\\\":\\\\\\\"\\\\\\\\\\\\\\\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\\\\\\\\\\\\\\"\\\\\\\"}\\\",\\\"sigSetV\\\":\\\"1\\\",\\\"signatures\\\":\\\"{\\\\\\\"0\\\\\\\":\\\\\\\"{\\\\\\\\\\\\\\\"identity\\\\\\\\\\\\\\\":\\\\\\\\\\\\\\\"\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"\\\\\\\\\\\\\\\",\\\\\\\\\\\\\\\"sig\\\\\\\\\\\\\\\":\\\\\\\\\\\\\\\"\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"c2lnLXN0dWItMQ==\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"\\\\\\\\\\\\\\\"}\\\\\\\"}\\\",\\\"signedAt\\\":\\\"1720000009000\\\",\\\"subject\\\":\\\"\\\\\\\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\\\\\\\"\\\"}\",\"subject\":\"\\\"cbae1d1d63ae7b4195298e343e9d2ec7f37176f1663a386868ba6ef01232fbcc\\\"\"}",
+      "payloadHash": "a29c201cfc66ce16960fc1a48537e553d12e7ce8645444602c752a2ba55db27e"
+    }
+  },
+  "entryPerson": {
+    "desc": "evi:resolution 条目（个人决议）：actor 无 orgSig → sigSet 落 null（如实标注）；conclusionHash 与组 1 一致（结论哈希只绑定决议 payload，不绑定签名面）",
+    "input": {
+      "affairId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "resolutionOp": {
+        "opV": 1,
+        "affairId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "prevOpHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "opType": "resolution",
+        "payload": {
+          "result": "passed",
+          "condition": {
+            "type": "op-count",
+            "opType": "content",
+            "count": 1
+          },
+          "countedOps": [
+            "9999999999999999999999999999999999999999999999999999999999999999"
+          ],
+          "tally": null,
+          "quorumSnapshot": null,
+          "rulesHash": "8888888888888888888888888888888888888888888888888888888888888888",
+          "pubPeriod": {
+            "delayMs": 86400000
+          }
+        },
+        "actor": {
+          "kind": "person",
+          "identity": "3097e2dee2cb4a34b53840cdb705aed71067c36f68db0e0f559c3f3fa043315f",
+          "publicKey": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI="
+        },
+        "declaredAt": 1720000009500,
+        "sig": "7eXa36wkJ9i9Au6VJdLZX/Zl87RjK53ViYHYKJsHkYBNP3QIYzi4L5tT89UnyiFrwDgJyIMbjbw80bCITHijBQ=="
+      },
+      "effectiveTs": 1720000010000
+    },
+    "expect": {
+      "subject": "3235f0b0a2c70a3e9062a4eec5133fc8a49d49fbe9c890ae02a03b399f76e27b",
+      "conclusionHash": "913b6a44399cd26b3953b5c25540f4e0abb897f48e89224c3c249597a1fadc7f",
+      "payload": {
+        "kind": "evi:resolution",
+        "affairId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "subject": "3235f0b0a2c70a3e9062a4eec5133fc8a49d49fbe9c890ae02a03b399f76e27b",
+        "conclusionHash": "913b6a44399cd26b3953b5c25540f4e0abb897f48e89224c3c249597a1fadc7f",
+        "sigSet": null,
+        "effectiveTs": 1720000010000
+      }
+    }
+  },
+  "chainEntry": {
+    "desc": "链上条目逐字节：空链追加 evi:resolution（domain=orgId, collection=resolution, id=决议 opHash，固定 ts/nodeId）→ seq/prevHash/dataHash/payloadHash/hash 固定值；verify_evidence_chain 通过（消费侧断言）",
+    "input": {
+      "orgId": "org_0000000000000001",
+      "timestamp": 1720000010000,
+      "nodeId": "12D3KooWNodeA"
+    },
+    "expect": {
+      "entry": {
+        "seq": 1,
+        "prevHash": null,
+        "domain": "org_0000000000000001",
+        "collection": "resolution",
+        "id": "cbae1d1d63ae7b4195298e343e9d2ec7f37176f1663a386868ba6ef01232fbcc",
+        "op": "put",
+        "dataHash": "78af75f45d084bfb644433dedd1473f7ec6cbc2ab1b41fc03ae74da9882074ae",
+        "payloadHash": "a29c201cfc66ce16960fc1a48537e553d12e7ce8645444602c752a2ba55db27e",
+        "metaHash": null,
+        "hash": "4ad96abf8628539b9d85429edf3b52ebcabd755c0449bc2e103a38ee05618e2f",
+        "timestamp": 1720000010000,
+        "nodeId": "12D3KooWNodeA"
+      }
+    }
+  }
+}

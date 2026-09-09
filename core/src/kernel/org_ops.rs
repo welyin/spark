@@ -39,7 +39,45 @@ impl Kernel {
             system_now_ms(),
             &node_id,
         )?;
+        // A16：创建者即发布本机 accessKey（org_user_id 地基，写一次）。
+        self.org_publish_access_key_if_missing(&record.org_id);
         Ok(OrganizationService::to_view(&record, &root_id))
+    }
+
+    /// A16（membership §4.4）：幂等发布本机成员的 accessKey（seed 确定性派生，
+    /// 写一次）。失败仅记日志——accessKey 缺失只意味着 org_user_id 面暂缺，
+    /// 不阻断组织操作。
+    pub(crate) fn org_publish_access_key_if_missing(&mut self, org_id: &str) {
+        let Some(unlocked) = &self.unlocked else {
+            return;
+        };
+        let root_id = unlocked.root_id().to_string();
+        let access_key = crate::org::access_key::derive_access_key(&unlocked.seed, org_id);
+        let published = match self.require_storage_mut() {
+            Ok(storage) => OrganizationService::publish_access_key(
+                storage,
+                org_id,
+                &root_id,
+                access_key,
+                system_now_ms(),
+            )
+            .unwrap_or_else(|e| {
+                log::error!("[ORG-ACCESS-KEY] 发布失败 | org={org_id} err={e}");
+                false
+            }),
+            Err(e) => {
+                log::error!("[ORG-ACCESS-KEY] 存储不可用 | org={org_id} err={e}");
+                false
+            }
+        };
+        if published {
+            if let Some(tx) = &self.org_sync_tx {
+                let _ = tx.send(OrgSyncRequest::PushOrg {
+                    org_id: org_id.to_string(),
+                });
+            }
+            log::info!("[ORG-ACCESS-KEY] 已发布本机 accessKey | org={org_id}");
+        }
     }
 
     /// 生成组织邀请码（仅 admin；需要 p2p 运行以携带本机节点信息，
@@ -166,95 +204,8 @@ impl Kernel {
         Ok(OrganizationService::to_view(&record, &root_id))
     }
 
-    /// 指定组织网关（仅 admin；org.md §14：2–3 名本组织成员的 rootId）。
-    ///
-    /// 落库后经 org-sync worker 向已知成员推送快照（与 addMember 同模式，
-    /// 尽力而为）；网关节点在随后的 keepalive tick 检测到自己的网关角色后
-    /// 开始在组织私有 DHT 上提供成员提示（p2p-messages.md §15）。
-    pub fn org_set_gateways(
-        &mut self,
-        org_id: &str,
-        gateways: &[String],
-    ) -> Result<OrganizationView> {
-        let root_id = self.require_unlocked_root_id()?;
-        let node_id = self.sync_node_id();
-        let io_lock = std::sync::Arc::clone(&self.io_lock);
-        let record = OrganizationService::set_org_gateways_pdsync(
-            self.require_storage_mut()?,
-            &io_lock,
-            org_id,
-            gateways,
-            &root_id,
-            system_now_ms(),
-            &node_id,
-        )?;
-        if let Some(tx) = &self.org_sync_tx {
-            let _ = tx.send(OrgSyncRequest::PushOrg {
-                org_id: record.org_id.clone(),
-            });
-        }
-        Ok(OrganizationService::to_view(&record, &root_id))
-    }
-
-    /// 指定数据账号（仅 admin；O1 账号角色模型：≥1 名成员，空列表 = 清除
-    /// 显式指定、回落缺省全体管理员）。落库后经 org-sync worker 推送快照
-    /// （与 setGateways 同模式，尽力而为）。
-    pub fn org_set_data_accounts(
-        &mut self,
-        org_id: &str,
-        data_accounts: &[String],
-    ) -> Result<OrganizationView> {
-        let root_id = self.require_unlocked_root_id()?;
-        let node_id = self.sync_node_id();
-        let io_lock = std::sync::Arc::clone(&self.io_lock);
-        let record = OrganizationService::set_org_data_accounts_pdsync(
-            self.require_storage_mut()?,
-            &io_lock,
-            org_id,
-            data_accounts,
-            &root_id,
-            system_now_ms(),
-            &node_id,
-        )?;
-        if let Some(tx) = &self.org_sync_tx {
-            let _ = tx.send(OrgSyncRequest::PushOrg {
-                org_id: record.org_id.clone(),
-            });
-        }
-        Ok(OrganizationService::to_view(&record, &root_id))
-    }
-
-    /// 晋升/降级成员角色（仅 admin；O1：数据职责随角色自动进出——缺省数据
-    /// 账号 = 全体管理员）。降级最后一个管理员拒绝（MustKeepAdmin）。
-    pub fn org_set_member_role(
-        &mut self,
-        org_id: &str,
-        member_root_id: &str,
-        role: crate::org::OrganizationRole,
-    ) -> Result<OrganizationView> {
-        let root_id = self.require_unlocked_root_id()?;
-        let node_id = self.sync_node_id();
-        let io_lock = std::sync::Arc::clone(&self.io_lock);
-        let record = OrganizationService::set_member_role_pdsync(
-            self.require_storage_mut()?,
-            &io_lock,
-            org_id,
-            member_root_id,
-            role,
-            &root_id,
-            system_now_ms(),
-            &node_id,
-        )?;
-        if let Some(tx) = &self.org_sync_tx {
-            let _ = tx.send(OrgSyncRequest::PushOrg {
-                org_id: record.org_id.clone(),
-            });
-        }
-        Ok(OrganizationService::to_view(&record, &root_id))
-    }
-
     /// 更新组织名称/描述/logo（仅 admin）。落库后经 org-sync worker 向已知成员
-    /// 推送快照（与 setGateways/setPublic 同模式，尽力而为）。
+    /// 推送快照（与 setPublic 同模式，尽力而为）。
     pub fn org_update_info(
         &mut self,
         org_id: &str,
@@ -303,6 +254,8 @@ impl Kernel {
             system_now_ms(),
             &node_id,
         )?;
+        // A16：身份字段更新顺带惰性补齐 accessKey（存量成员迁移兜底）。
+        self.org_publish_access_key_if_missing(org_id);
         if let Some(tx) = &self.org_sync_tx {
             let _ = tx.send(OrgSyncRequest::PushOrg {
                 org_id: record.org_id.clone(),
@@ -311,9 +264,27 @@ impl Kernel {
         Ok(OrganizationService::to_view(&record, &root_id))
     }
 
+    /// 当前履职网关活跃集（只读查询，A47 / network §三 G6）：全员候选
+    /// 计分推导（[`crate::org::roles::gateway_active_set`] 存储装配：在线 >
+    /// 最近活跃 > 小时轮换 > 字典序，叶子不履职）；本机账号恒按在线注入。
+    /// 返回履职成员 rootId 列表（≤3；全叶组织为空集 = Q04 部署前置未满足
+    /// 的如实退化）。
+    pub fn org_gateway_active_set(&self, org_id: &str) -> Result<Vec<String>> {
+        let storage = self.require_storage()?;
+        let record = OrganizationService::get_record(storage, org_id)?
+            .ok_or_else(|| KernelError::Internal("Organization not found".to_string()))?;
+        let root_id = self.current_root_id()?.unwrap_or_default();
+        Ok(crate::org::roles::gateway_active_set(
+            storage,
+            &record,
+            Some(&root_id),
+            system_now_ms(),
+        ))
+    }
+
     /// 开关组织公开标志（仅 admin；org.md §16），可选更新地址记录展示名。
     ///
-    /// 落库后经 org-sync worker 向已知成员推送快照（与 setGateways 同模式）；
+    /// 落库后经 org-sync worker 向已知成员推送快照（与 setDataAccounts 同模式）；
     /// 公开组织的发布动作由 keepalive tick 的
     /// `refresh_org_address_publishing` 捡起重发/新签（本机持根私钥或身为网关）。
     pub fn org_set_public(
@@ -343,20 +314,27 @@ impl Kernel {
         Ok(OrganizationService::to_view(&record, &root_id))
     }
 
-    /// 删除组织（仅 admin，service.ts:199-214）。只落库不推送（对齐 TS——
-    /// 删除传播：P2 起经 org-member-removed 通知 + orgsync 墓碑收敛；P3 前
-    /// 另有 org-pull `removed` 状态兜底，P3 出站停发后移除）。
-    pub fn org_delete(&mut self, org_id: &str) -> Result<()> {
+    /// 退出组织（A13 / community-model §4.3：成员自退出，不需 admin）。
+    /// 最后一名成员退出 → 组织成为空域只读档案。落库后经 org-sync worker
+    /// 向已知成员推送快照（与 addMember 同模式，尽力而为）。
+    pub fn org_leave(&mut self, org_id: &str) -> Result<OrganizationView> {
         let root_id = self.require_unlocked_root_id()?;
         let node_id = self.sync_node_id();
-        OrganizationService::delete_organization_pdsync(
+        let io_lock = std::sync::Arc::clone(&self.io_lock);
+        let record = OrganizationService::leave_organization_pdsync(
             self.require_storage_mut()?,
+            &io_lock,
             org_id,
             &root_id,
             system_now_ms(),
             &node_id,
         )?;
-        Ok(())
+        if let Some(tx) = &self.org_sync_tx {
+            let _ = tx.send(OrgSyncRequest::PushOrg {
+                org_id: record.org_id.clone(),
+            });
+        }
+        Ok(OrganizationService::to_view(&record, &root_id))
     }
     // ------------------------------------------------------------------
     // 组织同步编排 API（org_sync/；ipc/p2p.ts 对齐）

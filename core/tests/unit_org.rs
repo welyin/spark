@@ -6,6 +6,8 @@ mod community_invite;
 mod gateway;
 #[path = "unit_org/invite.rs"]
 mod invite;
+#[path = "unit_org/join_request.rs"]
+mod join_request;
 #[path = "unit_org/node_card.rs"]
 mod node_card;
 #[path = "unit_org/org_address.rs"]

@@ -108,6 +108,8 @@ pub struct P2pConfig {
     /// 是否启用 relay server（接受他人预约）。桌面默认 true；移动端强制 false
     /// （节省流量与电量，移动端只作 relay client，peer-rediscovery §7.2）。
     pub enable_relay_server: bool,
+    /// relay server 预约名额覆盖（配额；None = 网络常量 15，测试调小模拟满载）。
+    pub relay_max_reservations: Option<usize>,
     /// dcutr 打洞挂载开关（dcutr-hole-punch §2.1）：默认 true；关 = 旧端
     /// 形态（测试/运维关停口——identify 协议清单不含 /libp2p/dcutr，对端
     /// 不发起升级，电路中继保底）。
@@ -137,6 +139,7 @@ impl Default for P2pConfig {
             plugin_announce_relay_tenure_ms: None,
             dht_republish_ticks: None,
             enable_relay_server: true,
+            relay_max_reservations: None,
             enable_dcutr: true,
             leaf_mode: false,
             now_fn: Arc::new(system_now_ms),
@@ -436,6 +439,7 @@ impl P2pNode {
             enable_mdns: config.enable_mdns,
             enable_upnp: config.enable_upnp,
             enable_relay_server: config.enable_relay_server,
+            relay_max_reservations: config.relay_max_reservations,
             enable_dcutr: config.enable_dcutr,
             // leaf 模式 §3：kad 仅一次性查询客户端（只发查询、不应答、不入他人
             // 路由表）；显式 Off（隐私开关）优先，不被 leaf 覆盖
@@ -531,7 +535,9 @@ impl P2pNode {
             pending_rediscovery_confirm: HashMap::new(),
             relay_reservations: Vec::new(),
             relay_reservations_inflight: std::collections::HashSet::new(),
+            circuit_listeners: std::collections::HashMap::new(),
             enable_relay_server: config.enable_relay_server,
+            relay_max_reservations: config.relay_max_reservations,
             relay_pool_queries: std::collections::HashSet::new(),
             relay_pool_candidates: Vec::new(),
             relay_pool_stability: std::collections::HashMap::new(),

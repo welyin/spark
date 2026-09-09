@@ -13,8 +13,8 @@ import { createApp, h } from 'vue';
 // --- 必须先于 App.vue 的 import 提升 mock 生效 ---
 vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn((channel: string, handler: (event: { payload: unknown }) => void) => {
-    captured[channel] = handler;
-    return Promise.resolve(() => {});
+    (captured[channel] ??= new Set()).add(handler);
+    return Promise.resolve(() => { captured[channel]?.delete(handler); });
   })
 }));
 // ElMessage 对象式调用（ElMessage({type,message})）→ 打成可调用 fn 便于断言；
@@ -29,14 +29,10 @@ vi.mock('element-plus', async (importOriginal) => {
 vi.mock('@tauri-apps/api/app', () => ({
   onBackButtonPress: vi.fn(() => Promise.resolve(() => {}))
 }));
-vi.mock('@element-plus/icons-vue', () => ({
-  ChatDotRound: { name: 'ChatDotRound' },
-  Cpu: { name: 'Cpu' },
-  Grid: { name: 'Grid' },
-  Notebook: { name: 'Notebook' },
-  Setting: { name: 'Setting' },
-  Monitor: { name: 'Monitor' }
-}));
+vi.mock('@element-plus/icons-vue', async () => {
+  const actual = await vi.importActual<typeof import('@element-plus/icons-vue')>('@element-plus/icons-vue');
+  return { ...actual };
+});
 // App.vue 的页面/导航/插件宿主等重依赖打成空壳，聚焦事件分支。
 vi.mock('../../pages/MessagesPage.vue', () => ({ default: { name: 'MessagesPageStub', template: '<div />' } }));
 vi.mock('../../pages/ContactsPage.vue', () => ({ default: { name: 'ContactsPageStub', template: '<div />' } }));
@@ -56,7 +52,7 @@ vi.mock('../../stores/current-user', async (importOriginal) => {
   return { ...actual, refreshCurrentUser: vi.fn(async () => {}) };
 });
 
-const captured = vi.hoisted(() => ({} as Record<string, (event: { payload: unknown }) => void>));
+const captured = vi.hoisted(() => ({} as Record<string, Set<(event: { payload: unknown }) => void>>));
 
 import ElementPlus from 'element-plus';
 import App from '../../App.vue';
@@ -87,7 +83,10 @@ beforeEach(() => {
   };
 });
 
+let mountedApp: ReturnType<typeof createApp> | null = null;
 afterEach(() => {
+  mountedApp?.unmount();
+  mountedApp = null;
   currentUser.rootId = null;
   pendingDeviceNotices.value = [];
   document.body.innerHTML = '';
@@ -100,6 +99,7 @@ function mountApp(): HTMLElement {
   const app = createApp({ render: () => h(App) });
   app.use(ElementPlus);
   app.mount(host);
+  mountedApp = app;
   return host;
 }
 
@@ -109,9 +109,9 @@ async function flush(): Promise<void> {
 }
 
 function dispatchP2pEvent(payload: unknown): void {
-  const handler = captured['p2p-event'];
-  expect(handler).toBeDefined();
-  handler({ payload });
+  const handlers = captured['p2p-event'];
+  expect(handlers?.size).toBeGreaterThan(0);
+  handlers.forEach((handler) => handler({ payload }));
 }
 
 describe('App.vue DeviceNoticeReceived 新设备通知', () => {

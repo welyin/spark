@@ -113,7 +113,7 @@ pub fn handle_line(text: &str, kernel: &mut Kernel) -> bool {
         "org-view" => org::view(kernel, &params),
         "org-update-info" => org::update_info(kernel, &params),
         "org-update-my-identity" => org::update_my_identity(kernel, &params),
-        "org-set-member-role" => org::set_member_role(kernel, &params),
+        "org-set-member-role" => Err("org-set-member-role 已随 A14 指定通路移除退役".to_string()),
         "org-remove-member" => org::remove_member(kernel, &params),
         // 数据（声明式数据 API / orgsync 折叠断言）
         "data-declare" => data::declare(kernel, &params),

@@ -35,15 +35,25 @@ fn build_authorized<'a>(
     devices
 }
 
-/// 通用 epoch 轮换入口。调用方必须已持有 io_lock。
+/// 通用 epoch 轮换入口（取当前时刻为 rotatedAt）。调用方必须已持有 io_lock。
 pub fn rotate(
     kernel: &mut Kernel,
     reason: RotationReason,
 ) -> Result<Option<EpochState>, KernelError> {
+    let now_ms = system_now_ms();
+    rotate_at(kernel, reason, now_ms)
+}
+
+/// 以指定时戳轮换。口令驱动的轮换须与 `pwv:self.changedAt` 时戳同源
+/// （规格 §13.5），由调用方传入与 publish 相同的 `now_ms`。
+pub fn rotate_at(
+    kernel: &mut Kernel,
+    reason: RotationReason,
+    now_ms: i64,
+) -> Result<Option<EpochState>, KernelError> {
     let root_id = kernel.require_unlocked_root_id()?;
     let my_peer = kernel.sync_node_id();
     let node_id = my_peer.clone();
-    let now_ms = system_now_ms();
 
     let records = {
         let storage = kernel.require_storage()?;
@@ -127,14 +137,6 @@ pub fn after_revoke_snapshot(kernel: &mut Kernel, _revoked_peer: &str) -> Result
     Ok(())
 }
 
-/// 修改解锁密码后调用：reason:"password_change"。
-pub fn after_password_change(kernel: &mut Kernel) -> Result<(), KernelError> {
-    rotate(kernel, RotationReason::PasswordChange)?;
-    Ok(())
-}
-
-/// 重置密码会话后调用：reason:"password_reset"。
-pub fn after_password_reset(kernel: &mut Kernel) -> Result<(), KernelError> {
-    rotate(kernel, RotationReason::PasswordReset)?;
-    Ok(())
-}
+// 口令驱动的轮换（change/reset）不再经独立 helper：调用方（identity/profile.rs）
+// 须先 `pw_ops::publish_pw_value_at` 发布新 V，再以同一时戳 `rotate_at`——
+// 门控以「最新 V」为水位且时戳同源（规格 §13.5）。

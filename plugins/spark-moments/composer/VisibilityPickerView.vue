@@ -92,7 +92,8 @@ export default defineComponent({
 </script>
 
 <style scoped>
-.picker { min-height: 100%; background: var(--spark-bg-page, #f5f5f5); }
+/* 页栈子页根 = iframe 内独立滚动容器（父级 .moments-root overflow:hidden 不滚动，须自滚动） */
+.picker { height: 100%; overflow-y: auto; background: var(--spark-bg-page, #f5f5f5); }
 .top { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: var(--spark-bg-card, #fff); }
 .back { border: none; background: none; color: var(--spark-text-2, #475569); font-size: 16px; cursor: pointer; }
 .title { font-weight: 600; }

@@ -111,10 +111,10 @@ fn validate_shape(envelope: &OrgMailEnvelope) -> Result<(), &'static str> {
 /// `{ok:false, reason}`；内部异常文本原样，对齐 §9.1 既有口径）。
 ///
 /// 归属判定（wrong-org）：`to.orgAddress` 解析为自认证组织地址记录并验签
-///（形状/签名/有效期）→ 其 `gateways` 字段须含本机 rootId（发送方指定的
-/// 入口即权威——发送方看到哪个记录就用哪个）且本机本地持有该组织且为
-/// 成员。活跃集漂移容忍：本地记录的 gateways 与信封记录不一致不拦
-///（design §5 网关活跃集漂移——入口以信封所附记录为准）。
+///（形状/签名/有效期）→ 其 `gateways` 字段须含本机 rootId（A9 后地址记录
+/// 携带的是发布方当下计分推导的履职集快照——发送方看到哪个记录就用哪个）
+/// 且本机本地持有该组织且为成员。活跃集漂移容忍：本地推导的履职集与信封
+/// 记录不一致不拦（design §5 网关活跃集漂移——入口以信封所附记录为准）。
 pub fn gateway_deliver<S: StorageBackend>(
     storage: &mut S,
     envelope: &OrgMailEnvelope,

@@ -65,24 +65,17 @@ fn replication_group_all_members_includes_all() {
     assert!(!is_in_replication_group(&record, "x", Accounts::AllMembers));
 }
 
+/// A14 全员数据节点：DataAccounts 集合复制组 = 全体成员（与 AllMembers
+/// 趋同；存量 dataAccounts 指定不再影响推导）。
 #[test]
-fn replication_group_data_accounts_only_data_accounts() {
+fn replication_group_data_accounts_is_all_members() {
     let record = make_record(&["a", "b", "c"], &["a", "c"]);
-    assert!(is_in_replication_group(
-        &record,
-        "a",
-        Accounts::DataAccounts
-    ));
-    assert!(!is_in_replication_group(
-        &record,
-        "b",
-        Accounts::DataAccounts
-    ));
-    assert!(is_in_replication_group(
-        &record,
-        "c",
-        Accounts::DataAccounts
-    ));
+    for rid in ["a", "b", "c"] {
+        assert!(
+            is_in_replication_group(&record, rid, Accounts::DataAccounts),
+            "{rid} 成员即数据节点"
+        );
+    }
     assert!(!is_in_replication_group(
         &record,
         "x",
@@ -95,10 +88,12 @@ fn replication_group_members_collects_correctly() {
     let record = make_record(&["a", "b", "c", "d"], &["a", "c"]);
     let all = replication_group_members(&record, Accounts::AllMembers);
     assert_eq!(all.len(), 4);
+    // A14：DataAccounts 复制组 = 全体成员（4，与 AllMembers 同集）
     let data = replication_group_members(&record, Accounts::DataAccounts);
-    assert_eq!(data.len(), 2);
-    assert!(data.contains(&"a".to_string()));
-    assert!(data.contains(&"c".to_string()));
+    assert_eq!(data.len(), 4, "全员数据节点");
+    for rid in ["a", "b", "c", "d"] {
+        assert!(data.contains(&rid.to_string()));
+    }
 }
 
 // ── org dlog 键生成与 append/seen/watermark/GC ───────────────────────
@@ -688,9 +683,12 @@ fn builtin_collection_key_domains() {
     // 移出本键域。C1：`org:genesis:`（创世策略记录）/ `org:policy:`（策略
     // 修订链）/ `org:verifiers:`（验证人信任声明）并入——组织策略与信任锚
     // 属结构集合，全员流动。policy §2：`org:policydoc:`（发布策略文档，
-    // sigSet 合入校验）并入——同集合全员流动。退出留史：`org:cleave:`
-    // （共同体退出留史记录，append-only）并入——全员流动，各节点据此确定性
-    // 推导空域只读档案状态。
+    // sigSet 合入校验）并入——同集合全员流动。A15：`org:disclosure:`（名册
+    // 开放声明，发布即公示、生效由 effectiveAt 门控）并入——全员流动。
+    // A17：`org:accept:`（准入策略声明 acceptCredentials，同族公示延迟形态）
+    // 并入——全员流动。
+    // 退出留史：`org:cleave:`（共同体退出留史记录，append-only）并入——
+    // 全员流动，各节点据此确定性推导空域只读档案状态。
     assert_eq!(
         BuiltinOrgCollection::Structure.data_prefixes(org),
         vec![
@@ -702,6 +700,8 @@ fn builtin_collection_key_domains() {
             "org:policy:org_0000000000000001:",
             "org:verifiers:org_0000000000000001",
             "org:policydoc:org_0000000000000001",
+            "org:disclosure:org_0000000000000001:",
+            "org:accept:org_0000000000000001",
             "org:cleave:org_0000000000000001:"
         ]
     );

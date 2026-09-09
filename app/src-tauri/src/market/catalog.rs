@@ -33,6 +33,39 @@ pub struct PluginRequires {
     pub mobile_readonly: bool,
 }
 
+/// PC 窗口默认尺寸（TS `PluginWindowSpec`；manifest 顶层可选 `window` 字段，
+/// 插件级，不做 per-view；移动端全屏打开忽略本字段——ui-architecture §4.2）。
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginWindow {
+    /// 默认窗口宽（px；合法范围 320–3840）
+    #[serde(default)]
+    pub default_width: u32,
+    /// 默认窗口高（px；合法范围 220–2160）
+    #[serde(default)]
+    pub default_height: u32,
+}
+
+/// 窗口尺寸合法范围（下限与前端 WindowFrame 最小夹取 320×220 对齐，上限 4K）。
+pub const WINDOW_MIN_WIDTH: u32 = 320;
+pub const WINDOW_MAX_WIDTH: u32 = 3840;
+pub const WINDOW_MIN_HEIGHT: u32 = 220;
+pub const WINDOW_MAX_HEIGHT: u32 = 2160;
+
+/// window 归一化（声明文件与包内 manifest 共用，宽进口径）：任一维度缺失
+/// （serde default → 0）或越界即整体按未声明（None）处理，前端回退默认
+/// 880×620——尺寸是体验提示而非安全约束，非法值不 fail-loud（规格 §2.1）。
+pub fn normalize_window(raw: Option<PluginWindow>) -> Option<PluginWindow> {
+    let window = raw?;
+    let width_ok = (WINDOW_MIN_WIDTH..=WINDOW_MAX_WIDTH).contains(&window.default_width);
+    let height_ok = (WINDOW_MIN_HEIGHT..=WINDOW_MAX_HEIGHT).contains(&window.default_height);
+    if width_ok && height_ok {
+        Some(window)
+    } else {
+        None
+    }
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginCatalogItem {
@@ -55,6 +88,9 @@ pub struct PluginCatalogItem {
     /// 运行时前提（平台/能力约束；None = 无约束，全平台可装）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub requires: Option<PluginRequires>,
+    /// PC 窗口默认尺寸（manifest `window` 声明，已归一化；None = 前端按默认 880×620）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window: Option<PluginWindow>,
     pub package: PluginCatalogPackage,
 }
 
@@ -149,6 +185,25 @@ mod tests {
             ensure_platform_supported_on("p", &["mobile".to_string()], "desktop").unwrap_err(),
             "Plugin platform unsupported: p requires platforms [mobile], current platform is desktop"
         );
+    }
+
+    #[test]
+    fn normalize_window_matrix() {
+        let window = |w: u32, h: u32| Some(PluginWindow { default_width: w, default_height: h });
+        // 正：常规值与边界值
+        assert_eq!(normalize_window(window(880, 620)), window(880, 620));
+        assert_eq!(normalize_window(window(320, 220)), window(320, 220));
+        assert_eq!(normalize_window(window(3840, 2160)), window(3840, 2160));
+        // 反：未声明 / 缺维度（serde default → 0）/ 越界（过小、过大）→ None 回退默认
+        assert_eq!(normalize_window(None), None);
+        assert_eq!(normalize_window(window(0, 620)), None);
+        assert_eq!(normalize_window(window(480, 0)), None);
+        assert_eq!(normalize_window(window(319, 620)), None);
+        assert_eq!(normalize_window(window(480, 219)), None);
+        assert_eq!(normalize_window(window(3841, 620)), None);
+        assert_eq!(normalize_window(window(480, 2161)), None);
+        // 反：单维非法整体作废（不允许半声明半默认的混合尺寸）
+        assert_eq!(normalize_window(window(100, 680)), None);
     }
 
     #[test]

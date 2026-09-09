@@ -44,6 +44,15 @@
           {{ word }}
         </span>
       </div>
+      <!-- A3 onboarding 副本告知（personal-data §4.5/Q01）：新账号单设备 = 1 份副本，
+           只提醒不处置；配对更多设备后副本数自动增加（目标 3 份） -->
+      <el-alert
+        title="你的数据目前只保存在这台设备上（1 份副本）。配对更多设备后，副本数会自动增加（目标 3 份）；副本状态可在「设置 → 存储与副本」随时查看。"
+        type="info"
+        :closable="false"
+        show-icon
+        class="block-gap"
+      />
       <el-button class="submit-btn" type="primary" @click="copyMnemonic">复制助记词</el-button>
       <div class="entry-link">
         <el-button link type="primary" :disabled="!copied" @click="finish">已保存，进入应用</el-button>

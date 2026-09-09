@@ -22,6 +22,19 @@
   --spark-gender-male: #3296fa;
   --spark-gender-female: #eb2f96;
 
+  /* 彩色底上的文字（此前大量裸写 #fff，统一到此；深浅色一致） */
+  --spark-text-on-color: #fff;
+
+  /* 服务号 / 系统标识色（石板蓝灰，中性区别于联系人/应用头像色；深浅色一致） */
+  --spark-service: #64748b;
+
+  /* 分类色板（仅用于头像/分类底标，不承载语义对错；收敛自 contacts.css 等处的散值） */
+  --spark-cat-1: #ff7d00;
+  --spark-cat-2: #3296fa;
+  --spark-cat-3: #f7b500;
+  --spark-cat-4: #64748b;
+  --spark-cat-5: #34c19b;
+
   /* 中性色 */
   --spark-bg-page: var(--el-bg-color-page);
   --spark-bg-card: var(--el-bg-color);
@@ -35,8 +48,8 @@
   /* 左侧导航栏（rail）：浅色主题（随组件库变量，深色模式自动转深），激活项用品牌蓝浅底+蓝字。
      两种宽度：窄栏 64px（图标在上文字在下）/ 宽栏 155px（左图标右文字，行高 40px），点分隔线切换。
      注：参考尺寸按 Retina 屏设备像素测量（310/80），CSS 值为其一半 */
-  --spark-rail-width: 64px;
-  --spark-rail-width-expanded: 155px;
+  --spark-rail-width: 72px;
+  --spark-rail-width-expanded: 240px;
   --spark-rail-bg: var(--el-bg-color);
   --spark-rail-text: var(--el-text-color-secondary);
   --spark-rail-item-hover: var(--el-fill-color-light);
@@ -67,6 +80,27 @@
   /* 间距 */
   --spark-gap-page: 16px;
   --spark-padding-page: 20px;
+
+  /* 动效（时长/曲线；rail 0.2s、item 0.15s、移动栈 260ms、tab 150ms 的令牌化） */
+  --spark-dur-fast: 150ms;
+  --spark-dur-base: 200ms;
+  --spark-dur-page: 260ms;
+  --spark-ease-standard: ease;
+  --spark-ease-ios: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+
+  /* 层级（映射现状语义，新代码一律用令牌，不再随手写数字） */
+  --spark-z-base: 2;        /* 页内浮起元素 */
+  --spark-z-nav: 10;        /* rail / topbar 内部件 */
+  --spark-z-dropdown: 2000; /* 下拉 / 弹层（对齐 Element Plus popper 档位） */
+  --spark-z-overlay: 3000;  /* 全局遮罩（右键菜单级） */
+  --spark-z-gate: 4000;     /* RootGate 等最高层 */
+
+  /* 空间桌面 / 窗口结构常量（新 UI 用；窗口标题栏高复用 topbar 44） */
+  --spark-desktop-icon-size: 76px;
+  --spark-desktop-icon-gap: 16px;
+  --spark-window-titlebar-height: var(--spark-topbar-height);
+  --spark-window-cascade-offset: 20px;
+  --spark-dock-height: 56px;
 }
 
 /* 深色模式：顶栏/阴影跟随组件库深色底（rail 固定深色，两种模式一致） */

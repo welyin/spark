@@ -15,6 +15,15 @@ plugins/<id>/
 
 完整示例见 `spark-example/`（插件体系参考实现：多视图、应用通知、签名演示）。
 
+默认内置插件（communication §4.2，A19；壳层预装、灰度开关 stores/builtin-apps）：
+
+- `spark-chat/`：聊天应用（会话列表/聊天视图，数据经 sdk.messages；应用会话 v1 仍由壳层挂载区呈现）；
+- `spark-contacts/`：通讯录应用（朋友/分组/标签/申请管理，数据经 sdk.contacts；
+  organization 域邀请/成员管理 v1 缺口记录在插件内 sdk-host 头注）。
+
+构建：`npm run build:chat` / `build:contacts`（vite 构建 + `scripts/copy-plugin-dist.mjs` 收尾自检）；单测随 `code/app` vitest 一起执行。
+第三方「最小聊天插件」示例见 `spark-minichat/`（验收：安装后读写同一消息数据）。
+
 C11 参考插件三件套（共同体/公共事务线，见 wiki/architecture/community-affairs.md §9 C11）：
 
 - `spark-affairs/`：公共议题客户端（事务墙/议题详情/发起/贡献与投票，sdk.affairs + message-card 卡片）；

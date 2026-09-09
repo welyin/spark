@@ -78,10 +78,10 @@ fn full_identity_lifecycle() {
     assert!(status.initialized && !status.unlocked);
     assert!(current_identity_inner(&kernel).unwrap().is_none());
 
-    let unlocked = unlock_inner(&mut kernel, PASSWORD, None).unwrap();
+    let unlocked = unlock_inner(&mut kernel, PASSWORD, None, false).unwrap();
     assert_eq!(unlocked.root_id, init.root_id);
     assert_eq!(
-        unlock_inner(&mut kernel, "wrong-password", None).unwrap_err(),
+        unlock_inner(&mut kernel, "wrong-password", None, false).unwrap_err(),
         "Invalid password"
     );
 }
@@ -354,7 +354,7 @@ fn change_password_updates_unlock_and_session() {
     );
 
     // 解锁后旧口令错误 → Invalid password（与 reveal_mnemonic 同口径）
-    unlock_inner(&mut kernel, PASSWORD, None).unwrap();
+    unlock_inner(&mut kernel, PASSWORD, None, false).unwrap();
     assert_eq!(
         change_password_inner(&mut kernel, "wrong-password", NEW_PW).unwrap_err(),
         "Invalid password"
@@ -366,10 +366,10 @@ fn change_password_updates_unlock_and_session() {
     // 旧口令 unlock 失败、新口令 unlock 成功
     lock_inner(&mut kernel);
     assert_eq!(
-        unlock_inner(&mut kernel, PASSWORD, None).unwrap_err(),
+        unlock_inner(&mut kernel, PASSWORD, None, false).unwrap_err(),
         "Invalid password"
     );
-    assert_eq!(unlock_inner(&mut kernel, NEW_PW, None).unwrap().root_id, init.root_id);
+    assert_eq!(unlock_inner(&mut kernel, NEW_PW, None, false).unwrap().root_id, init.root_id);
 
     // 改密后会话缓存口令已更新：免密码 update_profile_session 仍工作
     let profile =
@@ -377,7 +377,7 @@ fn change_password_updates_unlock_and_session() {
     assert_eq!(profile.nickname.as_deref(), Some("alice-renamed"));
     // 资料更新后仍可用新口令解锁
     lock_inner(&mut kernel);
-    assert_eq!(unlock_inner(&mut kernel, NEW_PW, None).unwrap().root_id, init.root_id);
+    assert_eq!(unlock_inner(&mut kernel, NEW_PW, None, false).unwrap().root_id, init.root_id);
 }
 
 #[test]
@@ -397,5 +397,5 @@ fn change_password_short_and_empty_new_password_rejected() {
     );
     // 文件未被改密：原口令仍可解锁
     lock_inner(&mut kernel);
-    assert_eq!(unlock_inner(&mut kernel, PASSWORD, None).unwrap().root_id.is_empty(), false);
+    assert_eq!(unlock_inner(&mut kernel, PASSWORD, None, false).unwrap().root_id.is_empty(), false);
 }

@@ -44,12 +44,17 @@ const click = async (el: HTMLElement, selector: string) => {
 };
 
 describe('主页面挂载冒烟', () => {
-  it('App 外壳：rail 导航 + 顶栏 + 默认消息页', async () => {
+  it('App 外壳：rail 导航 + 桌面常驻；壳层页面在桌面窗口内打开（shell-desktop §一）', async () => {
     const { el, errors, unmount } = await mountPage(App);
     expect(errors.map(String)).toEqual([]);
     expect(el.querySelector('.rail')).toBeTruthy();
+    // PC 默认即桌面（activeTab 恒为 space）：顶栏（上下文条）常驻，无整页消息页
     expect(el.querySelector('.topbar')).toBeTruthy();
-    expect(el.querySelector('.messages-page')).toBeTruthy();
+    expect(el.querySelector('.pc-desktop')).toBeTruthy();
+    expect(el.querySelector('.messages-page')).toBeFalsy();
+    // 点「全部消息」：当前桌面弹出消息窗口（窗口内为消息页）
+    await click(el, '.rail-main .rail-item[title="全部消息"]');
+    expect(el.querySelector('.window-frame .messages-page')).toBeTruthy();
     // 桌面端反断言：移动端底部 tab 导航不渲染（仅窄屏 ≤768px 出现）
     expect(el.querySelector('.mobile-tab-bar')).toBeFalsy();
     unmount();

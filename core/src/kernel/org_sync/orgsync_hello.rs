@@ -175,7 +175,7 @@ impl OrgSyncContext {
             if collections.is_empty() {
                 continue;
             }
-            let roles = crate::sync::orgsync::self_roles(&record, root_id, now);
+            let roles = crate::sync::orgsync::self_roles(&self.storage, &record, root_id, now);
             let device_class = crate::sync::pdsync::local_device_class();
 
             // 遍历本组织其他成员，仅向复制组成员逐成员发送
@@ -235,7 +235,7 @@ impl OrgSyncContext {
                         // 查询此集合会降级/应路由其他数据账号。插件未运行时的
                         // fail-closed 口径与 inbound_dm/orgq.rs 的只存不服务一致。
                         let mut entry = serde_json::json!({ "vv": vv, "dlogAck": dlog_ack });
-                        let is_data = crate::org::roles::is_data_account(&record, root_id);
+                        let is_data = crate::org::roles::is_data_node(&record, root_id);
                         let is_filtered = matches!(
                             *confidentiality,
                             crate::plugindata::Confidentiality::Filtered

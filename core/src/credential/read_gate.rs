@@ -5,8 +5,10 @@
 //! 逐凭证验证链（credential §6 第 1–5 步）、credType/subjectDomain 匹配
 //! readPolicy、holderProof 逐凭证绑定本次请求（防重放转投）。
 //!
-//! policyRef（B1 策略文档字段级掩码）归 C5；C5 前缺省 = 全集合放行
-//! （read-gate §4 第 5 步），本模块因此不消费 policyRef。
+//! policyRef 的求值（A15 起 = 开放声明求值，policy §8）在调用方
+//! （`kernel/inbound_dm/orgq.rs` 第 5 步 `disclosure_allows`）执行，本模块
+//! 只承载 readAuth 段验证（§4 第 1–4 步 + A15 城门名册回查），不消费
+//! policyRef。
 
 use serde_json::json;
 
@@ -160,16 +162,18 @@ pub fn verify_holder_proof(
     Ok(())
 }
 
-/// readAuth 段验证（read-gate §4 第 1–4 步，fail-closed）。
+/// readAuth 段验证（read-gate §4 第 1–4 步 + A15 城门名册回查，fail-closed）。
 ///
 /// - `request_id` / `collection`：本次 orgq-req 的请求 id 与目标集合
 ///   （holderProof 载荷绑定值）；
 /// - `trust_decls`：`policy.verifier_domain` 的全部已知信任声明版本；
 /// - `revocation_for`：按 issuer identity 取注销证明（头承诺 + 全量条目）；
-///   返回 None = 数据缺失 → 失败（fail-closed）。
+///   返回 None = 数据缺失 → 失败（fail-closed）；
+/// - `roster_lookup`：城门名册回查（A15 membership §4.3「成员资格凭证验签 + 名册回查（当时确为成员）」），按 (subjectDomain, holder identity) 查成员资格——`Some(true)` 才放行；`Some(false)` 退队即拒，零密钥轮换；`None` 名册不可用，fail-closed。
 ///
-/// 语义：credentials 非空且**逐条**全过（验证链 + 类型/域匹配 + holderProof），
-/// holderProofs 不得有无凭证对应的孤儿。任一失败即拒绝（`denied` 由调用方落）。
+/// 语义：credentials 非空且**逐条**全过（验证链 + 类型/域匹配 + holderProof +
+/// 名册回查），holderProofs 不得有无凭证对应的孤儿。任一失败即拒绝
+/// （`denied` 由调用方落）。
 #[allow(clippy::too_many_arguments)]
 pub fn verify_read_auth(
     read_auth: &ReadAuth,
@@ -178,6 +182,7 @@ pub fn verify_read_auth(
     policy: &CredentialReadPolicy,
     trust_decls: &[&TrustDecl],
     revocation_for: &dyn Fn(&str) -> Option<(Vec<RevocationEntry>, RevocationHead)>,
+    roster_lookup: &dyn Fn(&str, &str) -> Option<bool>,
     now_ms: i64,
 ) -> Result<()> {
     // 第 1 步：结构 + presentedAt 新鲜度
@@ -213,6 +218,11 @@ pub fn verify_read_auth(
         }
         if cred.subject_domain != policy.verifier_domain {
             return Err(CredentialError::SubjectDomainMismatch);
+        }
+        // 城门名册回查（A15）：持有者当时确为凭证 subjectDomain 成员——退队
+        // 即失效（零密钥轮换；名册不可用 fail-closed）
+        if roster_lookup(&cred.subject_domain, &cred.holder.identity) != Some(true) {
+            return Err(CredentialError::NotSubjectDomainMember);
         }
         // 第 4 步：holderProof 逐凭证验签（载荷绑定 requestId 防重放）
         let proof = find_proof(&read_auth.holder_proofs, &cred_id)?;
@@ -408,12 +418,17 @@ mod tests {
     }
 
     fn verify(f: &Fixture, read_auth: &ReadAuth) -> Result<()> {
+        verify_with_roster(f, read_auth, Some(true))
+    }
+
+    fn verify_with_roster(f: &Fixture, read_auth: &ReadAuth, in_roster: Option<bool>) -> Result<()> {
         let policy = CredentialReadPolicy {
             cred_types: vec!["member".to_string()],
             verifier_domain: org_id(),
         };
         let decls: Vec<&TrustDecl> = vec![&f.trust_decl];
         let revocation_for = |_issuer: &str| Some((f.entries.clone(), f.head.clone()));
+        let roster_lookup = move |_domain: &str, _identity: &str| in_roster;
         verify_read_auth(
             read_auth,
             REQUEST_ID,
@@ -421,6 +436,7 @@ mod tests {
             &policy,
             &decls,
             &revocation_for,
+            &roster_lookup,
             NOW,
         )
     }
@@ -449,5 +465,26 @@ mod tests {
         // 钉住专用错误名（此前误报 holder-proof-missing，与真实原因不符）
         let err = verify(&f, &read_auth).unwrap_err();
         assert_eq!(err.kind(), "duplicate-credential");
+    }
+
+    /// 城门名册回查（A15 membership §4.3）：验证链全过但持有者已退队 →
+    /// 拒（零密钥轮换）；名册数据不可用同样 fail-closed。
+    #[test]
+    fn gate_roster_recheck_fail_closed() {
+        let f = fixture();
+        let read_auth = ReadAuth {
+            gate_v: 1,
+            credentials: vec![f.cred.clone()],
+            holder_proofs: vec![proof_of(&f)],
+            presented_at: NOW,
+        };
+        // 退队（Some(false)）→ not-subject-domain-member
+        let err = verify_with_roster(&f, &read_auth, Some(false)).unwrap_err();
+        assert_eq!(err.kind(), "not-subject-domain-member");
+        // 名册不可用（None）→ 同码 fail-closed
+        let err = verify_with_roster(&f, &read_auth, None).unwrap_err();
+        assert_eq!(err.kind(), "not-subject-domain-member");
+        // 在册（Some(true)）→ 通过
+        assert!(verify_with_roster(&f, &read_auth, Some(true)).is_ok());
     }
 }

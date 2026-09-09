@@ -562,6 +562,14 @@ fn read_gate_verify_chain_cases() {
             ),
         };
         let revocation_for = move |_issuer: &str| Some((rev_entries.clone(), rev_head.clone()));
+        // 城门名册回查（A15）：case 可声明 roster（缺省 member = 在册）
+        let roster_lookup = |_domain: &str, _identity: &str| {
+            match case["roster"].as_str().unwrap_or("member") {
+                "member" => Some(true),
+                "non-member" => Some(false),
+                _ => None, // "unavailable"：名册数据缺失 → fail-closed
+            }
+        };
 
         let result = verify_read_auth(
             &read_auth,
@@ -570,6 +578,7 @@ fn read_gate_verify_chain_cases() {
             &policy,
             &decl_refs,
             &revocation_for,
+            &roster_lookup,
             now,
         );
         let actual = match &result {

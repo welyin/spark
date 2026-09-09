@@ -200,12 +200,19 @@ pub fn collect_org_tombstones_after<S: StorageBackend>(
 
 /// 构建本机角色履职声明（用于 orgsync-hello 的 `roles` 字段）。
 /// 返回如 `["data", "gateway"]`。
-pub fn self_roles(record: &OrganizationRecord, self_root_id: &str, now_ms: i64) -> Vec<String> {
+pub fn self_roles<S: crate::storage::StorageBackend>(
+    storage: &S,
+    record: &OrganizationRecord,
+    self_root_id: &str,
+    now_ms: i64,
+) -> Vec<String> {
     let mut roles = Vec::new();
-    if crate::org::roles::is_data_account(record, self_root_id) {
+    // A14 全员数据节点：成员即数据节点，全员宣告 data（K 记账的履职观测
+    // 证据源 = hello roles 含 data 且 deviceClass=pc）
+    if crate::org::roles::is_data_node(record, self_root_id) {
         roles.push("data".to_string());
     }
-    if crate::org::roles::is_gateway_active(record, self_root_id, now_ms) {
+    if crate::org::roles::is_gateway_active(storage, record, self_root_id, now_ms) {
         roles.push("gateway".to_string());
     }
     roles

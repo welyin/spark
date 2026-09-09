@@ -150,18 +150,43 @@ pub fn save_blob<S: StorageBackend>(storage: &mut S, data: &[u8]) -> Result<Blob
 }
 
 /// 读本体（命中 → base64；未命中 → None）。
+///
+/// A4 读穿（personal-data-sync §16.2）：`blob:data:` 未命中时回退 A1 blob
+/// 层（hash == cid，同一 sha256hex 寻址；补登调和后本体已迁入
+/// `blob:chunk:`）——插件读附件与 P6/feed 服务方零改动获得层内容源。
 pub fn read_blob<S: StorageBackend>(storage: &S, hash: &str) -> Result<Option<String>> {
-    storage.get(&blob_data_key(hash)).map_err(Into::into)
+    if let Some(b64) = storage.get(&blob_data_key(hash))? {
+        return Ok(Some(b64));
+    }
+    read_blob_from_layer(storage, hash)
 }
 
-/// 本体是否已在本地。
+/// blob 层回退读（hash 即 cid；非 hex64 线形直接未命中）。
+fn read_blob_from_layer<S: StorageBackend>(storage: &S, hash: &str) -> Result<Option<String>> {
+    if !crate::sync::blob::is_hex64(hash) {
+        return Ok(None);
+    }
+    crate::sync::blob::read_blob_quiet(storage, hash)
+        .map(|opt| opt.map(|data| B64.encode(data)))
+        .map_err(|e| PlugindataError::Blob(format!("blob layer read: {e}")))
+}
+
+/// 本体是否已在本地（`blob:data:` 命中，或 blob 层完整持有——A4 读穿
+/// 轻量探测，不装配不校验）。
 pub fn has_blob<S: StorageBackend>(storage: &S, hash: &str) -> bool {
-    storage.get(&blob_data_key(hash)).ok().flatten().is_some()
+    if storage.get(&blob_data_key(hash)).ok().flatten().is_some() {
+        return true;
+    }
+    crate::sync::blob::is_hex64(hash) && crate::sync::blob::has_blob_complete(storage, hash)
 }
 
 /// 置 want 标记（lazy 拉取意图，调和时消费）。
+/// 用户显式要读 = 显式意图：解除驱逐标记（§16.4），P6 调和恢复拉取。
 pub fn mark_want<S: StorageBackend>(storage: &mut S, hash: &str) -> Result<()> {
     storage.put(&blob_want_key(hash), "1")?;
+    if crate::sync::blob::is_hex64(hash) {
+        let _ = crate::sync::blob::clear_evicted(storage, hash);
+    }
     Ok(())
 }
 
@@ -202,7 +227,9 @@ pub fn missing_blobs<S: StorageBackend>(storage: &S, scan_records: bool) -> Resu
         for (_key, raw) in storage.scan(&ScanOptions::prefix("pdoc:"))? {
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) {
                 for hash in blob_refs_in(&value) {
-                    if !has_blob(storage, &hash) {
+                    // A4 §16.4：带驱逐标记的 hash 由配额语义接管，P6 不再自动
+                    // 重拉（防驱逐—重拉死循环；显式 mark_want 解除标记后恢复）
+                    if !has_blob(storage, &hash) && !crate::sync::blob::is_evicted(storage, &hash) {
                         missing.insert(hash);
                     }
                 }
@@ -237,17 +264,26 @@ pub fn throttle_request<S: StorageBackend>(
 
 /// 服务方：取 `[offset, offset+BLOB_CHUNK_BYTES)` 的 base64 块。
 /// 返回 `(chunk_base64, total_bytes)`；hash 缺失或 offset 越界 → None。
+/// A4 读穿：`blob:data:` 未命中时回退 blob 层（§16.2，P6 与 feed 两条
+/// 服务路径共用本函数）。
 pub fn serve_chunk<S: StorageBackend>(
     storage: &S,
     hash: &str,
     offset: usize,
 ) -> Result<Option<(String, u64)>> {
-    let Some(b64) = storage.get(&blob_data_key(hash))? else {
+    let data = if let Some(b64) = storage.get(&blob_data_key(hash))? {
+        B64.decode(&b64)
+            .map_err(|e| PlugindataError::Blob(format!("stored blob base64 decode failed: {e}")))?
+    } else if crate::sync::blob::is_hex64(hash) {
+        let Some(data) = crate::sync::blob::read_blob_quiet(storage, hash)
+            .map_err(|e| PlugindataError::Blob(format!("blob layer read: {e}")))?
+        else {
+            return Ok(None);
+        };
+        data
+    } else {
         return Ok(None);
     };
-    let data = B64
-        .decode(&b64)
-        .map_err(|e| PlugindataError::Blob(format!("stored blob base64 decode failed: {e}")))?;
     if offset > data.len() {
         return Ok(None);
     }

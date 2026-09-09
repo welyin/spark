@@ -214,90 +214,73 @@ fn create_organization_generates_org_root_keypair() {
     assert_eq!(raw.len(), 60);
 }
 
+/// 全域删除守卫（A13 / community-model §4.1）：leaf 与 community 两域类型
+/// 删除一律拒绝（统一硬错误「域只可退出，不可解散；历史保留为只读档案」）；
+/// 组织记录原样保留、不追加 delete 事务。service 公开入口已随 A13 全拆
+/// （delete_organization / delete_organization_pdsync 编译期消失），守卫
+/// 留 service 层最深处 fail-closed。
 #[test]
-fn delete_organization_flow() {
+fn delete_guard_rejects_all_domain_types() {
     let mut storage = MemoryStorage::new();
-    let (admin, record) = setup_org(&mut storage);
+    // leaf 域
+    let (_admin, leaf) = setup_org(&mut storage);
     assert!(matches!(
-        OrganizationService::delete_organization(&mut storage, &record.org_id, &rid('x'), NOW),
-        Err(OrgError::AdminRequired)
-    ));
-    OrganizationService::delete_organization(&mut storage, &record.org_id, &admin, NOW + 1)
-        .unwrap();
-    assert!(
-        OrganizationService::get_record(&storage, &record.org_id)
-            .unwrap()
-            .is_none()
-    );
-    let txs =
-        spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 1).unwrap();
-    assert_eq!(txs[0].type_, OrganizationTransactionType::Delete);
-}
-
-/// 域删除守卫（community-model「域不可解散，只可退出」）：共同体域
-/// （domainType=community）admin 删除被拒绝并返回明确错误；组织记录原样
-/// 保留、不追加 delete 事务。叶组织删除不受影响（`delete_organization_flow`）。
-#[test]
-fn delete_community_domain_rejected() {
-    let mut storage = MemoryStorage::new();
-    let admin = rid('a');
-    let community_input = CreateOrganizationInput {
-        domain_type: Some(DomainType::Community),
-        ..input()
-    };
-    let record =
-        OrganizationService::create_organization(&mut storage, &community_input, &admin, NOW)
-            .unwrap();
-    assert_eq!(record.domain_type, Some(DomainType::Community));
-    // admin 删除共同体域：拒绝 + 明确错误
-    assert!(matches!(
-        OrganizationService::delete_organization(&mut storage, &record.org_id, &admin, NOW + 1),
+        OrganizationService::delete_organization_impl(&storage, &leaf.org_id),
         Err(OrgError::CommunityDomainNotDeletable)
     ));
-    // pdsync 变体走同一 impl，同样被守卫
+    // community 域
+    let community = OrganizationService::create_organization(
+        &mut storage,
+        &CreateOrganizationInput {
+            domain_type: Some(DomainType::Community),
+            ..input()
+        },
+        &rid('a'),
+        NOW,
+    )
+    .unwrap();
     assert!(matches!(
-        OrganizationService::delete_organization_pdsync(
-            &mut storage,
-            &record.org_id,
-            &admin,
-            NOW + 1,
-            "node-a",
-        ),
+        OrganizationService::delete_organization_impl(&storage, &community.org_id),
         Err(OrgError::CommunityDomainNotDeletable)
     ));
-    // 记录原样保留，未追加 delete 事务（仍只有 create）
-    assert!(
-        OrganizationService::get_record(&storage, &record.org_id)
-            .unwrap()
-            .is_some()
-    );
-    let txs =
-        spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 20).unwrap();
-    assert!(
-        txs.iter()
-            .all(|t| t.type_ != OrganizationTransactionType::Delete)
-    );
+    // 组织不存在：OrganizationNotFound（同样封死）
+    assert!(matches!(
+        OrganizationService::delete_organization_impl(&storage, "org_nope"),
+        Err(OrgError::OrganizationNotFound)
+    ));
+    // 记录原样保留，未追加 delete 事务
+    for org_id in [&leaf.org_id, &community.org_id] {
+        assert!(
+            OrganizationService::get_record(&storage, org_id)
+                .unwrap()
+                .is_some()
+        );
+        let txs =
+            spark_core::org::tx::list_organization_transactions(&storage, org_id, 20).unwrap();
+        assert!(
+            txs.iter()
+                .all(|t| t.type_ != OrganizationTransactionType::Delete),
+            "不追加 delete 事务"
+        );
+    }
 }
 
 #[test]
-fn create_delete_pdsync_write_pmeta_and_tombstone() {
+fn create_pdsync_writes_pmeta() {
     use spark_core::sync::versioned::{VersionedStorage, shared_node_id};
     use spark_core::sync::{get_personal_meta, is_tombstone};
 
     // 版本化句柄（生产口径：记账由中间件完成）
     let mut storage = VersionedStorage::new(MemoryStorage::new(), shared_node_id("node-a"));
-    let (admin, record) = {
-        let admin = root_id_of(MNEMONIC);
-        let record = OrganizationService::create_organization_pdsync(
-            &mut storage,
-            &input(),
-            &admin,
-            NOW,
-            "node-a",
-        )
-        .unwrap();
-        (admin, record)
-    };
+    let admin = root_id_of(MNEMONIC);
+    let record = OrganizationService::create_organization_pdsync(
+        &mut storage,
+        &input(),
+        &admin,
+        NOW,
+        "node-a",
+    )
+    .unwrap();
     // 创建：org:meta 记录落库 + pmeta（非 tombstone）。受管写顺序：创世记录
     // org:genesis: 落库 seq 1（C1 纳管 org:structure@v1，先于记录保存段），
     // org:meta 创建 seq 2
@@ -305,29 +288,6 @@ fn create_delete_pdsync_write_pmeta_and_tombstone() {
     let meta = get_personal_meta(storage.raw(), &key).unwrap().unwrap();
     assert_eq!(meta.vv.get("node-a"), Some(&2));
     assert!(!is_tombstone(&meta));
-
-    // 删除：记录消失，pmeta 留 tombstone（删除可经 pdsync 传播）
-    OrganizationService::delete_organization_pdsync(
-        &mut storage,
-        &record.org_id,
-        &admin,
-        NOW + 1,
-        "node-a",
-    )
-    .unwrap();
-    assert!(
-        OrganizationService::get_record(storage.raw(), &record.org_id)
-            .unwrap()
-            .is_none()
-    );
-    let meta = get_personal_meta(storage.raw(), &key).unwrap().unwrap();
-    assert!(is_tombstone(&meta));
-    // per-node 单调序号：创世记录 org:genesis: 落库 seq 1（C1 纳管
-    // org:structure@v1，先于记录保存段）+ org:meta 创建 seq 2
-    // + P1-a 双写初始成员条目 seq 3
-    // + 三个内建集合声明（structure/contacts/invitations；F7 退出
-    // org:invites、batch3 §2 加入 org:invitations）各 2 次受管写（声明记录
-    // put + put_personal，seq 4–9）+ 删除 tombstone seq 10（成员条目墓碑
-    // seq 11 随后）
-    assert_eq!(meta.vv.get("node-a"), Some(&10));
+    //（A13：组织删除通路已移除——pdsync 墓碑中间件能力通用，由 sync 模块
+    // 既有测试覆盖，org 侧不再有删除触发点。）
 }

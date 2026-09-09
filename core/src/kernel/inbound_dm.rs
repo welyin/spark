@@ -16,6 +16,8 @@
 //! `sync`（read/recall/profile-sync/device-sync/contact-sync/conv-sync）、
 //! `pdsync`（pdsync 三信封）、`orgsync`（orgsync 三信封）、
 //! `affairsync`（affairsync 三信封，affair-sync §7）、
+//! `attachment`（P6 pdsync-attachment-req/resp）、
+//! `blob_fetch`（A1 blob-fetch/blob-chunk 回补，协议 §14.5）、
 //! `org_invite`（org-invite/org-invite-reply）。
 
 use std::collections::HashSet;
@@ -24,6 +26,7 @@ use serde_json::{Value, json};
 
 mod affairsync;
 mod attachment;
+mod blob_fetch;
 mod chat;
 mod feed;
 mod feed_blob;
@@ -37,13 +40,14 @@ mod recovery;
 mod sync;
 
 use super::dm_envelope::{
-    KIND_AFFAIRSYNC_DATA, KIND_AFFAIRSYNC_HELLO, KIND_AFFAIRSYNC_NEED, KIND_CHAT,
-    KIND_CONTACT_SYNC, KIND_CONV_SYNC, KIND_DEVICE_NOTICE, KIND_DEVICE_SYNC, KIND_FEED,
-    KIND_FEED_BLOB_REQ, KIND_FEED_BLOB_RESP, KIND_FRIEND_ACCEPT, KIND_FRIEND_REPLY,
-    KIND_FRIEND_REQUEST, KIND_ORG_INVITE, KIND_ORG_INVITE_REPLY, KIND_ORG_MEMBER_REMOVED,
-    KIND_ORGQ_REQ, KIND_ORGQ_RESP, KIND_ORGSYNC_DATA, KIND_ORGSYNC_HELLO, KIND_ORGSYNC_NEED,
-    KIND_PDSYNC_ATTACHMENT_REQ, KIND_PDSYNC_ATTACHMENT_RESP, KIND_PDSYNC_DATA, KIND_PDSYNC_HELLO,
-    KIND_PDSYNC_NEED, KIND_PROFILE_SYNC, KIND_READ, KIND_RECALL, KIND_RECOVERY, verify_envelope,
+    KIND_AFFAIRSYNC_DATA, KIND_AFFAIRSYNC_HELLO, KIND_AFFAIRSYNC_NEED, KIND_BLOB_CHUNK,
+    KIND_BLOB_FETCH, KIND_CHAT, KIND_CONTACT_SYNC, KIND_CONV_SYNC, KIND_DEVICE_NOTICE,
+    KIND_DEVICE_SYNC, KIND_FEED, KIND_FEED_BLOB_REQ, KIND_FEED_BLOB_RESP, KIND_FRIEND_ACCEPT,
+    KIND_FRIEND_REPLY, KIND_FRIEND_REQUEST, KIND_ORG_INVITE, KIND_ORG_INVITE_REPLY,
+    KIND_ORG_MEMBER_REMOVED, KIND_ORGQ_REQ, KIND_ORGQ_RESP, KIND_ORGSYNC_DATA, KIND_ORGSYNC_HELLO,
+    KIND_ORGSYNC_NEED, KIND_PDSYNC_ATTACHMENT_REQ, KIND_PDSYNC_ATTACHMENT_RESP, KIND_PDSYNC_DATA,
+    KIND_PDSYNC_HELLO, KIND_PDSYNC_NEED, KIND_PROFILE_SYNC, KIND_READ, KIND_RECALL, KIND_RECOVERY,
+    verify_envelope,
 };
 
 use crate::contact::{ContactError, ContactService, FriendRecord};
@@ -293,6 +297,11 @@ pub enum PdsyncOut {
     /// P6 blob 分块响应：`pdsync-attachment-resp`（`{hash, offset, data,
     /// totalBytes}`）。
     AttachResp { body: Value },
+    /// A1 blob 层回补请求：`blob-fetch`（`{chunkCid, offset?}` 或 `{cid}`）。
+    BlobFetch { body: Value },
+    /// A1 blob 层回补响应：`blob-chunk`（`{chunkCid, data, ...}` /
+    /// `{cid, manifest}` / `{..., missing:true}`）。
+    BlobChunk { body: Value },
 }
 
 impl PdsyncOut {
@@ -303,7 +312,9 @@ impl PdsyncOut {
             | Self::Need { body }
             | Self::Data { body }
             | Self::AttachReq { body }
-            | Self::AttachResp { body } => body,
+            | Self::AttachResp { body }
+            | Self::BlobFetch { body }
+            | Self::BlobChunk { body } => body,
         }
     }
 }
@@ -807,6 +818,8 @@ fn handle_inbound_dm_inner<S: StorageBackend>(
         KIND_PDSYNC_ATTACHMENT_RESP => {
             attachment::handle_attachment_resp(storage, &ctx, &envelope.from, &body)
         }
+        KIND_BLOB_FETCH => blob_fetch::handle_blob_fetch(storage, &ctx, &envelope.from, &body),
+        KIND_BLOB_CHUNK => blob_fetch::handle_blob_chunk(storage, &ctx, &envelope.from, &body),
         KIND_ORG_INVITE => org_invite::handle_org_invite(storage, &ctx, &envelope.from, &body),
         KIND_ORG_INVITE_REPLY => {
             org_invite::handle_org_invite_reply(storage, &ctx, &envelope.from, &body)

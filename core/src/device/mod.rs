@@ -24,7 +24,8 @@ pub(crate) const DEVICE_PREFIX: &str = "device:";
 /// deviceUid 是「物理设备」的稳定标识：随机 128bit，首次生成后持久化，
 /// 重装/清数据才会变更。peerId 因 keypair 丢失/重装而漂移时，凭 deviceUid
 /// 识别「同一台设备的新 peerId」，旧 peerId 记录随即墓碑化替换。
-const DEVICE_UID_KEY: &str = "p2p:device:uid";
+/// `pub`：集成测试按此键预置确定性 deviceUid（A1 blob presence 账本）。
+pub const DEVICE_UID_KEY: &str = "p2p:device:uid";
 
 /// 读取或创建本机设备 UID（同设备稳定，跨重启/peerId 漂移不变）。
 pub fn get_or_create_device_uid<S: StorageBackend>(

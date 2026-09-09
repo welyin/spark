@@ -158,19 +158,24 @@ fn org_secret_via_dynamic_extra() {
     assert_eq!(back.org_secret(), Some(secret.as_str()));
 }
 
+/// A9（network §4.2）：gateways 指定通路退役——存量 JSON 的 gateways 键
+/// 解析兼容（读取即忽略），任何序列化丢键（随保存自然老化、不经 extra）。
 #[test]
-fn gateways_serde_roundtrip() {
-    let mut record = OrganizationRecord::default();
-    // 缺省：序列化丢键、反序列化为空
+fn gateways_retired_parse_compat_and_save_aging() {
+    let record = OrganizationRecord::default();
     let json = serde_json::to_value(&record).unwrap();
     assert!(json.get("gateways").is_none());
-    record.gateways = vec![rid('a'), rid('b')];
-    assert!(record.is_gateway(&rid('a')));
-    assert!(!record.is_gateway(&rid('c')));
-    let json = serde_json::to_value(&record).unwrap();
-    assert_eq!(json["gateways"], serde_json::json!([rid('a'), rid('b')]));
-    let back: OrganizationRecord = serde_json::from_value(json).unwrap();
-    assert_eq!(back.gateways, vec![rid('a'), rid('b')]);
+    // 存量记录含 gateways：正常解析、字段惰性可读但无消费者
+    let mut legacy = serde_json::to_value(&record).unwrap();
+    legacy["gateways"] = serde_json::json!([rid('a'), rid('b')]);
+    let parsed: OrganizationRecord = serde_json::from_value(legacy).unwrap();
+    assert_eq!(parsed.gateways, vec![rid('a'), rid('b')], "解析兼容存量");
+    assert!(!parsed.extra.contains_key("gateways"), "不落 extra");
+    // 保存即老化：再序列化丢键
+    let out = serde_json::to_value(&parsed).unwrap();
+    assert!(out.get("gateways").is_none(), "序列化丢键");
+    let back: OrganizationRecord = serde_json::from_value(out).unwrap();
+    assert!(back.gateways.is_empty());
 }
 
 // ---------------------------------------------------------------------------

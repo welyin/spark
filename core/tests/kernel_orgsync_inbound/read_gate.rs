@@ -1,7 +1,9 @@
 //! read-gate（读授权门禁，community read-gate §4）orgq 查询面集成测试：
 //! `readPolicy.kind == "credential"` 集合的查询方 readAuth 校验
-//! （`verify_read_auth`，§4 第 1–4 步）+ policyRef 求值（`evaluate_read`，
-//! §4 第 5 步）正/反例；`public` 种类与 members 缺省（向后兼容）分流。
+//! （`verify_read_auth`，§4 第 1–4 步 + A15 城门名册回查）+ policyRef 存在时
+//! 开放声明求值（§4 第 5 步，A15 城门口径：`org:disclosure:` 生效记录覆盖
+//! 本集合才放行，旧 B1 文档求值已随口径一次性切换下线，membership §五.2）
+//! 正/反例；`public` 种类与 members 缺省（向后兼容）分流。
 //!
 //! 夹具用真实 ed25519 密钥签名（凭证/注销链/头承诺/holderProof），不 mock
 //! （kernel_credential_policy_ops.rs / community_credential_vectors.rs 同模式）。
@@ -19,8 +21,12 @@ use spark_core::credential::{
     revocation_snapshot_key, trust_decl_key,
 };
 use spark_core::kernel::OrgqPermHook;
+use spark_core::org::types::OrganizationAccessKey;
 use spark_core::plugindata::{ReadPolicy, ReadPolicyKind};
-use spark_core::policy::{PolicyDoc, RosterRules, RosterTier, UpwardEntry, policy_doc_hash};
+use spark_core::policy::{
+    DISCLOSURE_PUB_PERIOD_MS, DISCLOSURE_V, DisclosureRecord, RosterTier, disclosure_key,
+    eval_disclosure,
+};
 use spark_core::sync::orgsync::{build_orgq_query_req, build_orgq_write_req};
 
 /// 验证人信任声明所在域（readPolicy.verifierDomain；创世哈希型 orgId）。
@@ -261,17 +267,53 @@ fn setup_gated_collection(
     s
 }
 
+/// 城门名册（A15 membership §4.3 名册回查）：GATE_ORG（凭证 subjectDomain /
+/// readPolicy.verifierDomain）的组织记录——持有者**当时确为该域成员**城门
+/// 才放行（退队即拒，零密钥轮换；记录缺失 fail-closed）。
+fn setup_gate_roster(s: &mut MemoryStorage, members: Vec<(&str, OrganizationRole)>) {
+    save_org(s, GATE_ORG, members, &[]);
+}
+
+/// 属主组织（ORG_ID）对 GATE_ORG 的开放声明（A15：`org:disclosure:` 记录，
+/// 直接落键域——读路径消费的是合入后的发布件，合入侧五步链把关见
+/// `adjudicate_incoming_disclosure`，不在本组覆盖面）。`effective_at` 注入
+/// 以覆盖「公示延迟窗口内未生效」用例。
+fn setup_disclosure(s: &mut MemoryStorage, collections: Vec<String>, effective_at: i64) {
+    let record = DisclosureRecord {
+        disclosure_v: DISCLOSURE_V,
+        org_id: ORG_ID.to_string(),
+        target_domain: GATE_ORG.to_string(),
+        tier: RosterTier::OrgOnly,
+        fields: vec![],
+        collections,
+        version: 1,
+        updated_at: NOW,
+        effective_at,
+        sig_set: None,
+    };
+    s.put(
+        &disclosure_key(ORG_ID, GATE_ORG),
+        &serde_json::to_string(&record).unwrap(),
+    )
+    .unwrap();
+}
+
 // ── 正例 ────────────────────────────────────────────────────────────────
 
 /// 正例（read-gate §5 核心场景）：**非组织成员**持 GATE_ORG 成员资格凭证
-/// 查询 credential 门禁集合 → 验证链全过 → 放行服务（无需加入来源组织，
-/// 插件钩子未运行也不影响——钩子已换为凭证校验）。
+/// 查询 credential 门禁集合 → 验证链全过 + 城门名册回查在册（A15：持有者是
+/// GATE_ORG 在册成员）→ 放行服务（无需加入来源组织，插件钩子未运行也不
+/// 影响——钩子已换为凭证校验）。
 #[test]
 fn read_gate_non_member_with_valid_credential_served() {
     let f = gate_fixture();
     let (_self_key, self_root) = self_identity(2);
-    // holder(f.holder_root) 不在组织成员表
+    // holder(f.holder_root) 不在来源组织（ORG_ID）成员表，但在 GATE_ORG 名册
     let mut s = setup_gated_collection(&self_root, vec![], gate_policy());
+    setup_gate_roster(
+        &mut s,
+        vec![(f.holder_root.as_str(), OrganizationRole::Member)],
+    );
 
     let read_auth = read_auth_for(&f, "req-g1");
     let body = gate_query_body("req-g1", Some(&read_auth));
@@ -302,6 +344,10 @@ fn read_gate_member_with_valid_credential_served() {
         vec![(f.holder_root.as_str(), OrganizationRole::Member)],
         gate_policy(),
     );
+    setup_gate_roster(
+        &mut s,
+        vec![(f.holder_root.as_str(), OrganizationRole::Member)],
+    );
 
     let read_auth = read_auth_for(&f, "req-g2");
     let body = gate_query_body("req-g2", Some(&read_auth));
@@ -319,38 +365,23 @@ fn read_gate_member_with_valid_credential_served() {
     assert_eq!(resp["records"].as_array().unwrap().len(), 2);
 }
 
-/// 正例（§4 第 5 步）：policyRef 指向的 B1 策略文档向上开放矩阵命中
-/// （collection × GATE_ORG）→ 求值放行。
+/// 正例（§4 第 5 步，A15 城门口径）：policyRef 存在（线形槽位不变，充当
+/// 「本集合受开放声明约束」开关）→ 按**开放声明**求值——属主组织对凭证
+/// subjectDomain（GATE_ORG）的生效 disclosure 记录 collections 覆盖本集合
+/// → 放行（旧 B1 向上开放矩阵语义由 disclosure.collections 吸收，
+/// membership §五.2 一次性切换）。
 #[test]
-fn read_gate_policy_ref_upward_covered_served() {
+fn read_gate_disclosure_covered_served() {
     let f = gate_fixture();
     let (_self_key, self_root) = self_identity(2);
-    let doc = PolicyDoc {
-        policy_v: 1,
-        engine: "b1".to_string(),
-        org_id: ORG_ID.to_string(),
-        roster: RosterRules {
-            tier: RosterTier::OrgOnly,
-            fields: vec![],
-        },
-        upward: vec![UpwardEntry {
-            collection: col_full(),
-            to: GATE_ORG.to_string(),
-        }],
-        updated_at: NOW,
-        sig_set: None,
-    };
     let mut policy = gate_policy();
-    policy.policy_ref = Some(policy_doc_hash(&doc).unwrap());
+    policy.policy_ref = Some("aa".repeat(32));
     let mut s = setup_gated_collection(&self_root, vec![], policy);
-    // 策略文档落本地草稿键（policy_ops 门面同一存储形态）
-    let draft = json!({
-        "doc": serde_json::to_value(&doc).unwrap(),
-        "policyDocHash": policy_doc_hash(&doc).unwrap(),
-        "savedAt": NOW,
-    });
-    s.put(&format!("policy:draft:{ORG_ID}"), &draft.to_string())
-        .unwrap();
+    setup_gate_roster(
+        &mut s,
+        vec![(f.holder_root.as_str(), OrganizationRole::Member)],
+    );
+    setup_disclosure(&mut s, vec![col_full()], NOW);
 
     let read_auth = read_auth_for(&f, "req-g3");
     let body = gate_query_body("req-g3", Some(&read_auth));
@@ -364,7 +395,7 @@ fn read_gate_policy_ref_upward_covered_served() {
         &NeverHook,
     );
     let resp = r.orgsync_out[0].body();
-    assert_eq!(resp["denied"], json!(false), "向上开放矩阵命中 → 放行");
+    assert_eq!(resp["denied"], json!(false), "生效开放声明覆盖本集合 → 放行");
     assert_eq!(resp["records"].as_array().unwrap().len(), 2);
 }
 
@@ -457,6 +488,11 @@ fn read_gate_holder_proof_replay_denied() {
     let (_self_key, self_root) = self_identity(2);
     let mut s = setup_gated_collection(&self_root, vec![], gate_policy());
 
+    // 名册在册（城门前提）——失败隔离在 §4 第 4 步 holderProof 绑定
+    setup_gate_roster(
+        &mut s,
+        vec![(f.holder_root.as_str(), OrganizationRole::Member)],
+    );
     // proof 按 req-old 签，请求用 req-new（载荷绑定不符）
     let read_auth = read_auth_for(&f, "req-old");
     let body = gate_query_body("req-new", Some(&read_auth));
@@ -497,34 +533,20 @@ fn read_gate_revocation_unavailable_denied() {
     assert_gate_denied(&r);
 }
 
-/// 反例（§4 第 5 步）：policyRef 策略文档向上开放矩阵未覆盖本集合 →
-/// denied（not-covered）。
+/// 反例（§4 第 5 步，A15 城门口径）：生效 disclosure 未覆盖本集合 →
+/// denied（fail-closed；未声明即「仅组织」默认档，存量组织默认全隐）。
 #[test]
-fn read_gate_policy_ref_not_covered_denied() {
+fn read_gate_disclosure_not_covered_denied() {
     let f = gate_fixture();
     let (_self_key, self_root) = self_identity(2);
-    let doc = PolicyDoc {
-        policy_v: 1,
-        engine: "b1".to_string(),
-        org_id: ORG_ID.to_string(),
-        roster: RosterRules {
-            tier: RosterTier::OrgOnly,
-            fields: vec![],
-        },
-        upward: vec![], // 无向上开放条目
-        updated_at: NOW,
-        sig_set: None,
-    };
     let mut policy = gate_policy();
-    policy.policy_ref = Some(policy_doc_hash(&doc).unwrap());
+    policy.policy_ref = Some("aa".repeat(32));
     let mut s = setup_gated_collection(&self_root, vec![], policy);
-    let draft = json!({
-        "doc": serde_json::to_value(&doc).unwrap(),
-        "policyDocHash": policy_doc_hash(&doc).unwrap(),
-        "savedAt": NOW,
-    });
-    s.put(&format!("policy:draft:{ORG_ID}"), &draft.to_string())
-        .unwrap();
+    setup_gate_roster(
+        &mut s,
+        vec![(f.holder_root.as_str(), OrganizationRole::Member)],
+    );
+    setup_disclosure(&mut s, vec![], NOW); // 生效但不开放任何集合
 
     let read_auth = read_auth_for(&f, "req-d5");
     let body = gate_query_body("req-d5", Some(&read_auth));
@@ -540,38 +562,21 @@ fn read_gate_policy_ref_not_covered_denied() {
     assert_gate_denied(&r);
 }
 
-/// 反例（§4 第 5 步）：policyRef 与策略文档复算哈希不符（引用错位/篡改）
-/// → denied（policy-ref-mismatch，fail-closed）。
+/// 反例（§4 第 5 步，A15 公示延迟）：disclosure 已发布但 effectiveAt 未到
+/// （扩大方向公示延迟窗口内）→ denied——发布即公示不等于即时生效，窗口内
+/// 读取点仍按无声明处置（fail-closed）。
 #[test]
-fn read_gate_policy_ref_mismatch_denied() {
+fn read_gate_disclosure_pending_denied() {
     let f = gate_fixture();
     let (_self_key, self_root) = self_identity(2);
     let mut policy = gate_policy();
-    policy.policy_ref = Some("ff".repeat(32));
+    policy.policy_ref = Some("aa".repeat(32));
     let mut s = setup_gated_collection(&self_root, vec![], policy);
-    // 草稿存在但哈希对不上
-    let doc = PolicyDoc {
-        policy_v: 1,
-        engine: "b1".to_string(),
-        org_id: ORG_ID.to_string(),
-        roster: RosterRules {
-            tier: RosterTier::OrgOnly,
-            fields: vec![],
-        },
-        upward: vec![UpwardEntry {
-            collection: col_full(),
-            to: GATE_ORG.to_string(),
-        }],
-        updated_at: NOW,
-        sig_set: None,
-    };
-    let draft = json!({
-        "doc": serde_json::to_value(&doc).unwrap(),
-        "policyDocHash": policy_doc_hash(&doc).unwrap(),
-        "savedAt": NOW,
-    });
-    s.put(&format!("policy:draft:{ORG_ID}"), &draft.to_string())
-        .unwrap();
+    setup_gate_roster(
+        &mut s,
+        vec![(f.holder_root.as_str(), OrganizationRole::Member)],
+    );
+    setup_disclosure(&mut s, vec![col_full()], NOW + DISCLOSURE_PUB_PERIOD_MS);
 
     let read_auth = read_auth_for(&f, "req-d6");
     let body = gate_query_body("req-d6", Some(&read_auth));
@@ -585,6 +590,126 @@ fn read_gate_policy_ref_mismatch_denied() {
         &NeverHook,
     );
     assert_gate_denied(&r);
+}
+
+/// 反例（A15 城门真值表）：验证链全过但持有者**当时不是** subjectDomain
+/// 成员 → denied（退队即失效，零密钥轮换）；GATE_ORG 名册记录缺失（不可
+/// 用）同样 fail-closed denied。
+#[test]
+fn read_gate_roster_non_member_denied() {
+    let f = gate_fixture();
+    let (_self_key, self_root) = self_identity(2);
+
+    // 情形一：名册在但 holder 不在册（非成员/已退队）
+    let mut s = setup_gated_collection(&self_root, vec![], gate_policy());
+    setup_gate_roster(&mut s, vec![("someone-else", OrganizationRole::Member)]);
+    let read_auth = read_auth_for(&f, "req-d7");
+    let body = gate_query_body("req-d7", Some(&read_auth));
+    let r = deliver_orgq_req_with_hook(
+        &mut s,
+        &self_root,
+        &f.holder_key,
+        &f.holder_root,
+        &self_root,
+        body,
+        &NeverHook,
+    );
+    assert_gate_denied(&r);
+
+    // 情形二：GATE_ORG 名册记录缺失（不可用）→ fail-closed
+    let mut s = setup_gated_collection(&self_root, vec![], gate_policy());
+    let read_auth = read_auth_for(&f, "req-d8");
+    let body = gate_query_body("req-d8", Some(&read_auth));
+    let r = deliver_orgq_req_with_hook(
+        &mut s,
+        &self_root,
+        &f.holder_key,
+        &f.holder_root,
+        &self_root,
+        body,
+        &NeverHook,
+    );
+    assert_gate_denied(&r);
+}
+
+/// 反例（A15 零密钥轮换）：名册移除持有者后**立即**拒读——同一凭证同一
+/// 请求，名册回查时刻语义（无轮换窗、无缓存宽限）。
+#[test]
+fn read_gate_member_leave_immediately_denied() {
+    let f = gate_fixture();
+    let (_self_key, self_root) = self_identity(2);
+    let mut s = setup_gated_collection(&self_root, vec![], gate_policy());
+    setup_gate_roster(
+        &mut s,
+        vec![(f.holder_root.as_str(), OrganizationRole::Member)],
+    );
+
+    // 退楼前：放行
+    let read_auth = read_auth_for(&f, "req-l1");
+    let body = gate_query_body("req-l1", Some(&read_auth));
+    let r = deliver_orgq_req_with_hook(
+        &mut s,
+        &self_root,
+        &f.holder_key,
+        &f.holder_root,
+        &self_root,
+        body.clone(),
+        &NeverHook,
+    );
+    assert_eq!(r.orgsync_out[0].body()["denied"], json!(false), "在册放行");
+
+    // 退楼（名册移除持有者）→ 同一 readAuth 立即拒读
+    setup_gate_roster(&mut s, vec![]);
+    let r = deliver_orgq_req_with_hook(
+        &mut s,
+        &self_root,
+        &f.holder_key,
+        &f.holder_root,
+        &self_root,
+        body,
+        &NeverHook,
+    );
+    assert_gate_denied(&r);
+}
+
+/// 正例（A16 双键兼容）：名册成员只携带 org_user_id（accessKey 域公钥），
+/// 凭证 holder.identity 按 org_user_id 命中名册 → 城门放行（rootId 槽位
+/// 不出示也能回查）。
+#[test]
+fn read_gate_dual_key_org_user_id_served() {
+    let f = gate_fixture();
+    let (_self_key, self_root) = self_identity(2);
+    let mut s = setup_gated_collection(&self_root, vec![], gate_policy());
+    // 名册条目 rootId 与 holder 无关，但 accessKey 域公钥 = holder 公钥 →
+    // org_user_id = sha256hex(holder 公钥) = cred.holder.identity
+    setup_gate_roster(
+        &mut s,
+        vec![("m-org-user-id-only", OrganizationRole::Member)],
+    );
+    let mut record = spark_core::org::OrganizationService::get_record(&s, GATE_ORG)
+        .unwrap()
+        .expect("gate roster");
+    record.members[0].access_key = Some(OrganizationAccessKey {
+        public_key: b64_pk(&f.holder_key),
+        bind_sig: String::new(), // 名册回查只派生 org_user_id，验绑归合入侧
+        root_pubkey: None,
+    });
+    spark_core::org::OrganizationService::save_record(&mut s, &record).unwrap();
+
+    let read_auth = read_auth_for(&f, "req-g4");
+    let body = gate_query_body("req-g4", Some(&read_auth));
+    let r = deliver_orgq_req_with_hook(
+        &mut s,
+        &self_root,
+        &f.holder_key,
+        &f.holder_root,
+        &self_root,
+        body,
+        &NeverHook,
+    );
+    let resp = r.orgsync_out[0].body();
+    assert_eq!(resp["denied"], json!(false), "org_user_id 命中名册 → 放行");
+    assert_eq!(resp["records"].as_array().unwrap().len(), 2);
 }
 
 // ── public 种类与写路径 / 向后兼容 ───────────────────────────────────────
@@ -735,9 +860,15 @@ fn read_gate_query_side_built_read_auth_served() {
             &serde_json::to_string(&cred).unwrap(),
         )
         .unwrap();
-    // 数据账号侧：门禁集合（查询者非组织成员）
+    // 数据账号侧：门禁集合（查询者非组织成员）；城门名册 = GATE_ORG 含
+    // 持有者的插件域身份（持有证明与信封 root 身份解耦，名册回查按凭证
+    // holder.identity 命中）
     let (_self_key, self_root) = self_identity(2);
     let mut s = setup_gated_collection(&self_root, vec![], gate_policy());
+    setup_gate_roster(
+        &mut s,
+        vec![(cred.holder.identity.as_str(), OrganizationRole::Member)],
+    );
 
     let read_auth = spark_core::kernel::build_query_read_auth(
         &initiator,
@@ -818,6 +949,181 @@ fn read_gate_query_side_without_matching_credential_denied() {
     let (x_key, x_root) = self_identity(9);
     let r = deliver_orgq_req_with_hook(
         &mut s, &self_root, &x_key, &x_root, &self_root, body, &NeverHook,
+    );
+    assert_gate_denied(&r);
+}
+
+// ── 三组织嵌套（membership §六）：开放声明装配视图 + 城门退队拒读 ─────────
+
+/// 街道域（嵌套第三层；楼栋⇂小区⇂街道）。
+const STREET_ORG: &str =
+    "org_cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd";
+
+/// 三组织嵌套集成（membership §六验收）：
+/// 1. 楼栋（GATE_ORG）名册默认不上移——对街道（STREET_ORG）无声明 →
+///    装配视图恒「仅组织」默认档；
+/// 2. 楼栋授权「代表可见」（对小区 ORG_ID 的 disclosure tier=representatives
+///    生效）→ 小区层装配视图可见代表档；
+/// 3. 小区层城门：楼栋成员持楼栋域成员资格凭证读小区托管集合 → 放行；
+///    成员退楼（楼栋名册移除）→ 小区层城门**立即**拒读（零轮换）。
+#[test]
+fn nested_orgs_building_disclosure_view_and_gate() {
+    let f = gate_fixture();
+    let (_self_key, self_root) = self_identity(2);
+    let mut s = setup_gated_collection(&self_root, vec![], gate_policy());
+    setup_gate_roster(
+        &mut s,
+        vec![(f.holder_root.as_str(), OrganizationRole::Member)],
+    );
+
+    // 1. 名册不上移：楼栋对街道无声明 → 仅组织默认档（最保守，fail-closed）
+    let view = eval_disclosure(&[], STREET_ORG, NOW);
+    assert_eq!(view.tier, RosterTier::OrgOnly, "无声明 = 仅组织默认档");
+    assert!(view.fields.is_empty() && view.collections.is_empty());
+
+    // 2. 楼栋 → 小区授权「代表可见」（已生效声明）→ 小区层视图 = representatives
+    let disclosure = DisclosureRecord {
+        disclosure_v: DISCLOSURE_V,
+        org_id: GATE_ORG.to_string(),
+        target_domain: ORG_ID.to_string(),
+        tier: RosterTier::Representatives,
+        fields: vec![],
+        collections: vec![],
+        version: 1,
+        updated_at: NOW,
+        effective_at: NOW,
+        sig_set: None,
+    };
+    let view = eval_disclosure(&[&disclosure], ORG_ID, NOW);
+    assert_eq!(
+        view.tier,
+        RosterTier::Representatives,
+        "授权代表可见后小区层可见代表档"
+    );
+    // 公示延迟窗口内的同键声明不生效（effectiveAt 未到 → 维持默认档）
+    let pending = DisclosureRecord {
+        effective_at: NOW + DISCLOSURE_PUB_PERIOD_MS,
+        ..disclosure.clone()
+    };
+    let view = eval_disclosure(&[&pending], ORG_ID, NOW);
+    assert_eq!(view.tier, RosterTier::OrgOnly, "未生效声明不装配");
+
+    // 3a. 小区层城门：楼栋成员凭证 → 放行
+    let read_auth = read_auth_for(&f, "req-n1");
+    let body = gate_query_body("req-n1", Some(&read_auth));
+    let r = deliver_orgq_req_with_hook(
+        &mut s,
+        &self_root,
+        &f.holder_key,
+        &f.holder_root,
+        &self_root,
+        body.clone(),
+        &NeverHook,
+    );
+    assert_eq!(
+        r.orgsync_out[0].body()["denied"],
+        json!(false),
+        "楼栋成员在册 → 小区层城门放行"
+    );
+
+    // 3b. 成员退楼 → 小区层城门立即拒读（零密钥轮换）
+    setup_gate_roster(&mut s, vec![]);
+    let r = deliver_orgq_req_with_hook(
+        &mut s,
+        &self_root,
+        &f.holder_key,
+        &f.holder_root,
+        &self_root,
+        body,
+        &NeverHook,
+    );
+    assert_gate_denied(&r);
+}
+
+/// 三组织嵌套（membership §六，A16 切片三 org_user_id 键面扩展）：楼栋名册
+/// 条目**只经 org_user_id 可解析**（rootId 槽位不出示成员身份——标识面
+/// 切换后的名册形态）——名册不上移 / 代表可见装配 / 城门 org_user_id 命中
+/// 放行 / 退楼立即拒读（零轮换），与骨架用例同链路、换键面。
+#[test]
+fn nested_orgs_org_user_id_key_face() {
+    let f = gate_fixture();
+    let (_self_key, self_root) = self_identity(2);
+    let mut s = setup_gated_collection(&self_root, vec![], gate_policy());
+    // 楼栋名册：成员 rootId 槽位与 holder 无关；accessKey 域公钥 = holder
+    // 公钥 → org_user_id = cred.holder.identity（名册回查只经 org_user_id
+    // 命中，rootId 槽位不出示成员身份）
+    setup_gate_roster(
+        &mut s,
+        vec![("m-building-member", OrganizationRole::Member)],
+    );
+    let mut record = spark_core::org::OrganizationService::get_record(&s, GATE_ORG)
+        .unwrap()
+        .expect("gate roster");
+    record.members[0].access_key = Some(OrganizationAccessKey {
+        public_key: b64_pk(&f.holder_key),
+        bind_sig: String::new(), // 名册回查只派生 org_user_id，验绑归合入侧
+        root_pubkey: None,
+    });
+    spark_core::org::OrganizationService::save_record(&mut s, &record).unwrap();
+    assert_ne!(
+        record.members[0].root_id, f.holder_root,
+        "名册 rootId 槽位不出示 holder 身份"
+    );
+
+    // 1. 名册不上移：楼栋对街道无声明 → 仅组织默认档（fail-closed）
+    let view = eval_disclosure(&[], STREET_ORG, NOW);
+    assert_eq!(view.tier, RosterTier::OrgOnly, "无声明 = 仅组织默认档");
+    assert!(view.fields.is_empty() && view.collections.is_empty());
+
+    // 2. 楼栋 → 小区授权「代表可见」（已生效声明）→ 小区层视图 = representatives
+    let disclosure = DisclosureRecord {
+        disclosure_v: DISCLOSURE_V,
+        org_id: GATE_ORG.to_string(),
+        target_domain: ORG_ID.to_string(),
+        tier: RosterTier::Representatives,
+        fields: vec![],
+        collections: vec![],
+        version: 1,
+        updated_at: NOW,
+        effective_at: NOW,
+        sig_set: None,
+    };
+    let view = eval_disclosure(&[&disclosure], ORG_ID, NOW);
+    assert_eq!(
+        view.tier,
+        RosterTier::Representatives,
+        "授权代表可见后小区层可见代表档"
+    );
+
+    // 3a. 小区层城门：楼栋成员凭证（holder identity = org_user_id 形态）
+    // 命中楼栋名册 org_user_id → 放行（名册键切换后 rootId 不出示也能回查）
+    let read_auth = read_auth_for(&f, "req-u1");
+    let body = gate_query_body("req-u1", Some(&read_auth));
+    let r = deliver_orgq_req_with_hook(
+        &mut s,
+        &self_root,
+        &f.holder_key,
+        &f.holder_root,
+        &self_root,
+        body.clone(),
+        &NeverHook,
+    );
+    assert_eq!(
+        r.orgsync_out[0].body()["denied"],
+        json!(false),
+        "org_user_id 命中楼栋名册 → 小区层城门放行"
+    );
+
+    // 3b. 成员退楼（名册移除）→ 小区层城门立即拒读（零密钥轮换，键面无关）
+    setup_gate_roster(&mut s, vec![]);
+    let r = deliver_orgq_req_with_hook(
+        &mut s,
+        &self_root,
+        &f.holder_key,
+        &f.holder_root,
+        &self_root,
+        body,
+        &NeverHook,
     );
     assert_gate_denied(&r);
 }

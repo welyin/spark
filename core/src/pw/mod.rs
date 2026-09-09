@@ -41,6 +41,12 @@ pub const LAST_GOOD_V_KEY: &str = "p2p:pw:lastGoodV";
 pub const GRACE_MS_KEY: &str = "p2p:pw:graceMs";
 /// 默认 grace 窗口：7 天（毫秒）。
 pub const DEFAULT_GRACE_MS: u64 = 7 * 24 * 60 * 60 * 1000;
+/// 密码考试（identity.md §4.2）：本机最近一次**真实密码**验证时间戳键
+/// `p2p:pw:lastPasswordAuth`。只认密码输入——bioSourced 生物识别解锁
+/// （`Kernel::unlock_bio_sourced`）不刷新此戳，与 RootGate 口令保鲜纪律同源。
+pub const LAST_PASSWORD_AUTH_KEY: &str = "p2p:pw:lastPasswordAuth";
+/// 密码考试间隔：超过 7 天未真实输密 → 移动端挂起生物识别通道、必须输密码。
+pub const PASSWORD_EXAM_INTERVAL_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 
 /// V 中封装的公开常量明文（10 字节：`"spark-pwv1".len()`）。V 的正确性靠 scrypt 成本而非保密。
 pub const PWV_PLAINTEXT: &str = "spark-pwv1";
@@ -369,6 +375,69 @@ pub fn put_grace_ms<S: StorageBackend>(storage: &mut S, grace_ms: u64) -> Result
     Ok(())
 }
 
+/// 读取最近一次真实密码验证时间戳（毫秒）；缺失 → `Ok(None)`（启用前的老账号）。
+pub fn get_last_password_auth<S: StorageBackend>(storage: &S) -> Result<Option<u64>> {
+    match storage.get(LAST_PASSWORD_AUTH_KEY)? {
+        Some(raw) => raw
+            .parse::<u64>()
+            .map(Some)
+            .map_err(|e| PwError::Crypto(format!("lastPasswordAuth parse: {e}"))),
+        None => Ok(None),
+    }
+}
+
+/// 写入最近一次真实密码验证时间戳（毫秒）。
+pub fn put_last_password_auth<S: StorageBackend>(storage: &mut S, ts: u64) -> Result<()> {
+    storage.put(LAST_PASSWORD_AUTH_KEY, &ts.to_string())?;
+    Ok(())
+}
+
+/// D′ 应用侧挂起键（A45，identity.md §二「已知边界」裁定纳管）：profile-sync
+/// 直发通道快照在本机 ack 未覆盖最新 V 时挂起于此（值 = 快照 JSON），
+/// ack 补齐门控转 Pass 后补应用（与 epoch 补发同型）。
+pub const PENDING_PROFILE_SYNC_KEY: &str = "p2p:pw:pendingProfileSync";
+
+/// profile-sync 快照挂起：只保留 `updatedAt` 最新的一份（回放缓存，非队列）。
+pub fn stash_pending_profile<S: StorageBackend>(
+    storage: &mut S,
+    snapshot: &serde_json::Value,
+) -> Result<()> {
+    let incoming_ts = snapshot
+        .get("updatedAt")
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or(0);
+    if let Some(existing) = storage.get(PENDING_PROFILE_SYNC_KEY)? {
+        let existing_ts = serde_json::from_str::<serde_json::Value>(&existing)
+            .ok()
+            .and_then(|v| v.get("updatedAt").and_then(serde_json::Value::as_i64).map(|t| t.to_owned()))
+            .unwrap_or(0);
+        if incoming_ts <= existing_ts {
+            return Ok(());
+        }
+    }
+    storage.put(PENDING_PROFILE_SYNC_KEY, &snapshot.to_string())?;
+    Ok(())
+}
+
+/// 门控放行（本机 ack 覆盖最新 V / 曾验证 grace 内 / pwv 缺失）时取出并清除
+/// 挂起快照；暂扣（从未验证 / 超 grace）或无挂起 → `Ok(None)`。
+pub fn take_pending_profile_if_allowed<S: StorageBackend>(
+    storage: &mut S,
+    node_id: &str,
+    now_ms: u64,
+) -> Result<Option<serde_json::Value>> {
+    let Some(raw) = storage.get(PENDING_PROFILE_SYNC_KEY)? else {
+        return Ok(None);
+    };
+    if should_gate(storage, node_id, now_ms)? != GateDecision::Pass {
+        return Ok(None);
+    }
+    storage.delete(PENDING_PROFILE_SYNC_KEY)?;
+    let snapshot = serde_json::from_str::<serde_json::Value>(&raw)
+        .map_err(|e| PwError::Crypto(format!("pendingProfileSync parse: {e}")))?;
+    Ok(Some(snapshot))
+}
+
 /// 读取 last-good V；缺失或损坏返回 `Ok(None)`。
 pub fn get_last_good_v<S: StorageBackend>(storage: &S) -> Result<Option<PasswordVerifier>> {
     match storage.get(LAST_GOOD_V_KEY)? {
@@ -426,6 +495,11 @@ pub fn apply_value<S: StorageBackend>(
 ///
 /// 守卫对齐 `apply_value`（防恶意 QR 塞伪造 V 推死水位）：未来 ts 拒收 +
 /// 水位单调（本地已有更新的 V 则忽略）。
+///
+/// **pmeta ts 用 `changed_at` 而非恢复时刻**：恢复时刻落 ts 会让本地 pmeta
+/// 比「QR 生成之后、恢复之前」发布的新 V 更新——并发 vv 下 LWW ts 大者胜，
+/// B 会把注入的旧 V 当成最新，永远学不到他端改密后的新 V（§13.8 口令分叉
+/// 场景死锁）。以源发布时刻落 ts 后，任何真实更新的 V 都在 LWW 中胜出。
 pub fn inject_pwv<S: StorageBackend>(
     storage: &mut S,
     node_id: &str,
@@ -444,7 +518,7 @@ pub fn inject_pwv<S: StorageBackend>(
             incoming.changed_at, now_ms
         )));
     }
-    put_pwv(storage, node_id, incoming, now_ms)?;
+    put_pwv(storage, node_id, incoming, incoming.changed_at as i64)?;
     Ok(())
 }
 

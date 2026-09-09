@@ -60,6 +60,18 @@ pub fn compute_priority(record: &PeerActivityRecord, now_ms: i64) -> i64 {
 /// 无记录候选的最低分（JS `Number.MIN_SAFE_INTEGER`）。
 pub const NO_RECORD_PRIORITY: i64 = -9_007_199_254_740_991;
 
+/// 只读单条查询（`&S` 即可，不经 `&mut` 仓库；org::roles 网关计分等
+/// 只读消费方用）。键形与 [`PeerActivityStore`] 一致。
+pub fn get_peer_activity<S: StorageBackend>(storage: &S, peer_id: &str) -> Option<PeerActivityRecord> {
+    if peer_id.is_empty() {
+        return None;
+    }
+    let raw = storage
+        .get(&format!("{P2P_PEER_RECORD_PREFIX}{peer_id}"))
+        .ok()??;
+    serde_json::from_str(&raw).ok()
+}
+
 /// 节点活跃度仓库。
 pub struct PeerActivityStore<'a> {
     storage: &'a mut dyn StorageBackend,

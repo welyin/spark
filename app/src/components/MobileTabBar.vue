@@ -1,5 +1,5 @@
 <!-- 移动端底部 tab 导航（窄屏 ≤768px 时替代左侧 rail，由 App.vue 按 ui-layout 断点渲染）：
-     消息/通讯录/应用/我的 四个主入口，图标复用 rail 同款（Element Plus 图标），
+     新 UI 四一级入口 消息/空间/事务/我的（docs/ui/README §五），「我的」固定最右；
      激活态与 rail 同一状态源（App.vue activeTab）；
      底部 padding 吃 env(safe-area-inset-bottom)，内容避开 Android 手势导航条（桌面端 env() 为 0） -->
 <template>
@@ -11,16 +11,8 @@
       :class="{ active: activeTab === tab.id }"
       @click="emit('select', tab.id)"
     >
-      <!-- 与 rail 一致：消息/通讯录入口挂未读角标（>99 显示 99+） -->
+      <!-- 与 rail 一致：消息入口挂未读角标（>99 显示 99+） -->
       <el-badge v-if="tab.id === 'messages'" :value="messagesBadge" :max="99" :hidden="messagesBadge === 0">
-        <el-icon :size="22"><component :is="tab.icon" /></el-icon>
-      </el-badge>
-      <el-badge
-        v-else-if="tab.id === 'contacts'"
-        :value="contactsBadge"
-        :max="99"
-        :hidden="contactsBadge === 0"
-      >
         <el-icon :size="22"><component :is="tab.icon" /></el-icon>
       </el-badge>
       <el-icon v-else :size="22"><component :is="tab.icon" /></el-icon>
@@ -31,24 +23,23 @@
 
 <script lang="ts">
 import { defineComponent } from 'vue';
-import { ChatDotRound, Grid, Notebook, User } from '@element-plus/icons-vue';
+import { ChatDotRound, Document, Grid, User } from '@element-plus/icons-vue';
 import { MOBILE_TABS } from '../stores/ui-layout';
 
 export default defineComponent({
   name: 'MobileTabBar',
-  components: { ChatDotRound, Notebook, Grid, User },
+  components: { ChatDotRound, Grid, Document, User },
   props: {
     /** 当前激活 tab（App.vue activeTab，与 rail 同源；插件 tab 打开时无激活项） */
     activeTab: { type: String, required: true },
-    messagesBadge: { type: Number, default: 0 },
-    contactsBadge: { type: Number, default: 0 }
+    messagesBadge: { type: Number, default: 0 }
   },
   emits: ['select'],
   setup(_, { emit }) {
     // 图标映射留在组件内：ui-layout 保持纯逻辑（tab 定义）便于单测；
     // emit 必须从 setup 上下文解构返回，模板里才能用 emit('select', id)
     // （裸 setup() 时模板中的 emit 是 undefined，点击静默无效）
-    const icons = { messages: ChatDotRound, contacts: Notebook, apps: Grid, mine: User };
+    const icons = { messages: ChatDotRound, space: Grid, affairs: Document, mine: User };
     const tabs = MOBILE_TABS.map((tab) => ({ ...tab, icon: icons[tab.id] }));
     return { tabs, emit };
   }

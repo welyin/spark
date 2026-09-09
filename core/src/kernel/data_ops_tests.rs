@@ -22,10 +22,10 @@ fn unlocked_kernel() -> (tempfile::TempDir, Kernel) {
     (dir, kernel)
 }
 
-/// O3 成员写入主动入队：非数据账号成员写 org data-accounts 集合且全部数据
-/// 账号离线 → 落本地 orgq 队列（而非直接落 orgd 副本/报错）。
+/// A14 全员数据节点（membership §4.1）：成员写 org data-accounts 集合 →
+/// 本地驻留直接落 orgd 副本（成员即数据节点，无「数据账号离线入队」旧语义）。
 #[test]
-fn member_write_to_offline_data_accounts_enqueues() {
+fn member_write_data_accounts_lands_local_replica() {
     let (_dir, mut kernel) = unlocked_kernel();
     let org = kernel
         .create_org(CreateOrganizationInput {
@@ -37,14 +37,6 @@ fn member_write_to_offline_data_accounts_enqueues() {
         })
         .unwrap();
     let org_id = org.record.org_id.clone();
-    const BOB: &str = "b0b0000000000000000000000000000000000000000000000000000000000000";
-    kernel.org_add_member(&org_id, BOB, None).unwrap();
-    kernel
-        .org_set_member_role(&org_id, BOB, crate::org::OrganizationRole::Admin)
-        .unwrap();
-    kernel
-        .org_set_data_accounts(&org_id, &[BOB.to_string()])
-        .unwrap();
     kernel
         .data_declare_collection(
             "plugin:ai-chat",
@@ -69,23 +61,22 @@ fn member_write_to_offline_data_accounts_enqueues() {
             Some(&org_id),
         )
         .unwrap();
-    assert!(
-        orgq_queue_has_data(kernel.require_storage().unwrap(), &org_id),
-        "全部数据账号离线 → 成员写入入队"
-    );
     let data_key = format!("orgd:{org_id}:ai-chat:finance@v1.0.0:k1");
     let storage = kernel.require_storage().unwrap();
     assert!(
-        storage.get(&data_key).unwrap().is_none(),
-        "成员写 data-accounts 不落 orgd 副本"
+        storage.get(&data_key).unwrap().is_some(),
+        "成员写 data-accounts 落本地 orgd 副本（全员数据节点）"
+    );
+    assert!(
+        !orgq_queue_has_data(storage, &org_id),
+        "本地驻留不入队"
     );
 }
 
-/// O3 读路由决策：非数据账号成员对 org data-accounts 集合且数据账号离线 →
-/// `Offline`（有缓存回缓存/无缓存 UnavailableOffline）；本机是数据账号 →
-/// `Local`。
+/// A14 读路由决策：成员对 org data-accounts 集合恒 `Local`（成员即数据
+/// 节点，本地直读；无「非数据账号成员 Offline」旧分支）。
 #[test]
-fn data_orgq_read_plan_routes_offline_for_member() {
+fn data_orgq_read_plan_local_for_member() {
     let (_dir, mut kernel) = unlocked_kernel();
     let org = kernel
         .create_org(CreateOrganizationInput {
@@ -97,14 +88,6 @@ fn data_orgq_read_plan_routes_offline_for_member() {
         })
         .unwrap();
     let org_id = org.record.org_id.clone();
-    const BOB: &str = "b0b0000000000000000000000000000000000000000000000000000000000000";
-    kernel.org_add_member(&org_id, BOB, None).unwrap();
-    kernel
-        .org_set_member_role(&org_id, BOB, crate::org::OrganizationRole::Admin)
-        .unwrap();
-    kernel
-        .org_set_data_accounts(&org_id, &[BOB.to_string()])
-        .unwrap();
     kernel
         .data_declare_collection(
             "plugin:ai-chat",
@@ -129,16 +112,15 @@ fn data_orgq_read_plan_routes_offline_for_member() {
         .unwrap();
     assert_eq!(
         plan,
-        crate::sync::orgsync::MemberReadPlan::Offline { has_cache: false },
-        "成员对离线 data-accounts 集合 → Offline"
+        crate::sync::orgsync::MemberReadPlan::Local,
+        "成员对 data-accounts 集合 → Local（全员数据节点）"
     );
 }
 
-/// O3 读路径透明路由（Tauri 通路）：非数据账号成员经 `data_get`（带 org_id）
-/// 读 data-accounts 集合 → 路由到成员侧缓存（无缓存 → None=UnavailableOffline；
-/// 有缓存 → 返回缓存值，UI 标注陈旧）。
+/// A14 读路径：成员经 `data_get`（带 org_id）读 data-accounts 集合 → 本地
+/// orgd 直读（无缓存命中概念——本地副本即数据源）。
 #[test]
-fn org_read_routes_to_member_cache() {
+fn org_read_serves_local_replica() {
     let (_dir, mut kernel) = unlocked_kernel();
     let org = kernel
         .create_org(CreateOrganizationInput {
@@ -150,14 +132,6 @@ fn org_read_routes_to_member_cache() {
         })
         .unwrap();
     let org_id = org.record.org_id.clone();
-    const BOB: &str = "b0b0000000000000000000000000000000000000000000000000000000000000";
-    kernel.org_add_member(&org_id, BOB, None).unwrap();
-    kernel
-        .org_set_member_role(&org_id, BOB, crate::org::OrganizationRole::Admin)
-        .unwrap();
-    kernel
-        .org_set_data_accounts(&org_id, &[BOB.to_string()])
-        .unwrap();
     kernel
         .data_declare_collection(
             "plugin:ai-chat",
@@ -172,6 +146,7 @@ fn org_read_routes_to_member_cache() {
             Some(&org_id),
         )
         .unwrap();
+    // 本地无副本 → None
     assert!(
         kernel
             .data_get(
@@ -183,20 +158,17 @@ fn org_read_routes_to_member_cache() {
             )
             .unwrap()
             .is_none(),
-        "成员读离线 data-accounts 无缓存 → None"
+        "本地无副本 → None"
     );
-    let col = "ai-chat:finance@v1.0.0";
-    let rec = crate::sync::orgsync::OrgqRespRecord {
-        key: format!("orgd:{org_id}:{col}:k1"),
-        value: serde_json::json!({"amt": 9}),
-        meta: Default::default(),
-    };
+    // 写入后 → 本地直读命中
     kernel
-        .require_storage_mut()
-        .unwrap()
-        .put(
-            &crate::sync::orgsync::orgq_cache_key(&org_id, col, "k1"),
-            &serde_json::to_string(&rec).unwrap(),
+        .data_save(
+            "plugin:ai-chat",
+            "ai-chat:finance",
+            "k1",
+            json!({"amt": 9}),
+            Some("1.0.0"),
+            Some(&org_id),
         )
         .unwrap();
     let got = kernel
@@ -208,8 +180,8 @@ fn org_read_routes_to_member_cache() {
             Some(&org_id),
         )
         .unwrap()
-        .expect("缓存命中");
-    assert_eq!(got["amt"], json!(9), "成员读 data-accounts 回缓存");
+        .expect("本地副本命中");
+    assert_eq!(got["amt"], json!(9), "成员读 data-accounts 本地直读");
 }
 
 /// O7：org 分支（Some(oid) → resolve_org）同样强制插件前缀归属——插件 A 用

@@ -282,10 +282,16 @@ impl OrgSigSetVerifyContext<'_> {
         if !(self.anchor_matches)(&sig_set.roster.anchor) {
             return Err(SigSetReject::AnchorMismatch);
         }
+        // 双键兼容（A16 双写过渡）：签名者可按 rootId（旧包/未迁移端）或
+        // org_user_id（域私钥新签）命中名册——任一键在册即认可。
         let admins: BTreeSet<&str> = snapshot
             .iter()
             .filter(|m| m.role == "admin")
-            .map(|m| m.identity.as_str())
+            .flat_map(|m| {
+                [m.identity.as_str()]
+                    .into_iter()
+                    .chain(m.org_user_id.as_deref())
+            })
             .collect();
         let valid_admins: BTreeSet<&'s str> = valid_signers
             .iter()
@@ -451,6 +457,7 @@ mod tests {
             .map(|k| RosterMember {
                 identity: identity_of(k),
                 role: "admin".to_string(),
+                org_user_id: None,
             })
             .collect()
     }
@@ -478,6 +485,79 @@ mod tests {
         let verdict = ctx(&policies).verify_detailed(&sig_set).unwrap();
         assert!(!verdict.degraded);
         assert!(ctx(&policies).verify_org_sig_set(&sig_set));
+    }
+
+    /// A16 双写过渡：域私钥签名（signer=org_user_id）按名册 orgUserId 命中；
+    /// 同名册上 rootId 旧签同样可验（双键兼容）；member 角色的 orgUserId 不算
+    /// admin 签名。
+    #[test]
+    fn domain_signer_and_legacy_root_signer_both_pass_dual_roster() {
+        let fx = community_fixture();
+        let policies = vec![PolicyVersion::Genesis(fx.genesis.clone())];
+        let domain_key = key(0x77);
+        let member_domain = key(0x78);
+        let snapshot = vec![
+            RosterMember {
+                identity: identity_of(&fx.admins[0]),
+                role: "admin".to_string(),
+                org_user_id: Some(identity_of(&domain_key)),
+            },
+            RosterMember {
+                identity: identity_of(&fx.admins[1]),
+                role: "admin".to_string(),
+                org_user_id: None,
+            },
+            RosterMember {
+                identity: identity_of(&fx.admins[2]),
+                role: "admin".to_string(),
+                org_user_id: None,
+            },
+            RosterMember {
+                identity: identity_of(&key(0x10)),
+                role: "member".to_string(),
+                org_user_id: Some(identity_of(&member_domain)),
+            },
+        ];
+
+        // 域私钥签名（signer=org_user_id）→ 通过（org-signature §2.1 口径）。
+        let domain_set = sign_org_sig_set(
+            &fx,
+            &fx.org_id,
+            &"ab".repeat(32),
+            &snapshot,
+            &[&domain_key],
+        );
+        assert_eq!(domain_set.signatures[0].signer, identity_of(&domain_key));
+        assert!(
+            ctx(&policies).verify_org_sig_set(&domain_set),
+            "org_user_id 命中名册（双键兼容）"
+        );
+
+        // 旧 rootId 签名（同一份双写名册）→ 通过（未迁移端签出的包仍可验）。
+        let legacy_set = sign_org_sig_set(
+            &fx,
+            &fx.org_id,
+            &"ab".repeat(32),
+            &snapshot,
+            &[&fx.admins[1]],
+        );
+        assert!(
+            ctx(&policies).verify_org_sig_set(&legacy_set),
+            "rootId 旧签兼容"
+        );
+
+        // member 角色的 orgUserId 不算 admin 签名 → 阈值不足拒绝。
+        let bad = sign_org_sig_set(
+            &fx,
+            &fx.org_id,
+            &"ab".repeat(32),
+            &snapshot,
+            &[&member_domain],
+        );
+        assert_eq!(
+            ctx(&policies).verify_detailed(&bad).unwrap_err(),
+            SigSetReject::ThresholdNotMet
+        );
     }
 
     #[test]

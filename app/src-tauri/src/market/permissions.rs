@@ -7,7 +7,7 @@
 //! 集合运算保持 TS Set 的插入序语义（基础权限在前，高级权限按声明序追加）。
 
 /// 全部合法权限（TS `PLUGIN_PERMISSIONS`）。
-pub const PLUGIN_PERMISSIONS: [&str; 18] = [
+pub const PLUGIN_PERMISSIONS: [&str; 24] = [
     "storage:read",
     "storage:write",
     "org:read",
@@ -23,6 +23,8 @@ pub const PLUGIN_PERMISSIONS: [&str; 18] = [
     // 社交投递层（social-feed §9.3/§9.4）：通讯录只读 + 社交定向投递，
     // 均为高级权限 + 使用时询问/内核限流；对齐桥 dispatcher 的 CALL_PERMISSIONS。
     "contact:read",
+    // A18 起 deliver 的 canonical 权限位为 feed:write（本串保留向后兼容——
+    // 旧插件声明仍授予，但不再门控任何调用面）
     "feed:deliver",
     // community-affairs §7.2：共同体事务 / 资格凭证 / 策略模块权限
     // （读位 advanced——须 manifest 声明并安装授权；写位同）。
@@ -31,6 +33,14 @@ pub const PLUGIN_PERMISSIONS: [&str; 18] = [
     "credentials:read",
     "policy:read",
     "policy:write",
+    // A18 插件数据 API 面（communication §4.1）：IM 数据面 / 通讯录数据面 /
+    // feed 面权限位（均高危确认）
+    "messages:read",
+    "messages:write",
+    "contacts:read",
+    "contacts:write",
+    "feed:read",
+    "feed:write",
 ];
 
 /// 基础权限：默认授予所有插件，无需声明（TS `BASIC_PERMISSIONS`）。
@@ -45,7 +55,7 @@ pub const BASIC_PERMISSIONS: [&str; 5] = [
 ];
 
 /// 高级权限：必须声明并经安装时授权（TS `ADVANCED_PERMISSIONS`）。
-pub const ADVANCED_PERMISSIONS: [&str; 13] = [
+pub const ADVANCED_PERMISSIONS: [&str; 19] = [
     "org:sync",
     "network:broadcast",
     "identity:sign",
@@ -62,6 +72,13 @@ pub const ADVANCED_PERMISSIONS: [&str; 13] = [
     "credentials:read",
     "policy:read",
     "policy:write",
+    // A18 插件数据 API 面（communication §4.1）
+    "messages:read",
+    "messages:write",
+    "contacts:read",
+    "contacts:write",
+    "feed:read",
+    "feed:write",
 ];
 
 pub fn is_plugin_permission(value: &str) -> bool {

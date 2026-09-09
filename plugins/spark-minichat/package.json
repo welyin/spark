@@ -1,0 +1,12 @@
+{
+  "name": "@spark/plugin-spark-minichat",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "第三方最小聊天插件示例（communication §六验收样例：sdk.messages 最小面读写同一消息数据）",
+  "scripts": {
+    "build": "node ../app/node_modules/vite/bin/vite.js build --config vite.config.ts",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.json || tsc --noEmit -p tsconfig.json",
+    "test": "node ../app/node_modules/vitest/vitest.mjs run --config ../app/vitest.config.ts tests"
+  }
+}

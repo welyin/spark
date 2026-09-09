@@ -170,10 +170,11 @@ export default defineComponent({
       });
     });
 
-    // 空状态（设计 §2.4）：区分无会话与搜索无结果
+    // 空状态（设计 §2.4）：区分无会话与搜索无结果。
+    // 消息 = 统一收件箱（私聊 + 应用/系统通知卡片流），不承诺“只有聊天”
     const emptyText = computed(() => {
       if (keyword.value.trim()) return '未找到相关会话';
-      return props.spaceType === 'org' ? '组织消息会出现在这里' : '添加朋友后开始聊天';
+      return '暂无消息：聊天与应用通知会在这里出现';
     });
 
     // 系统会话/应用会话固定顶部与单聊分组展示，不混排（应用会话=服务号模型 §20）

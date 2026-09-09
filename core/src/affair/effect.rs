@@ -16,15 +16,21 @@
 //! 签名集合（`sigSet`）的结构存在性在本层校验；组织签名集合的五步验证链
 //! 属 C3（org-signature），本层不重复实现。
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use super::actor::is_valid_identity_id;
 use super::resolution::ResolutionState;
+use crate::evidence::{normalize_object, sha256_hex};
 
 /// 效力声明记录存储前缀（org-genesis §6 键域，与 `org:tx:` 审计日志分域）。
 pub const EFFECT_GRANT_PREFIX: &str = "org:effectgrant:";
 /// 效力回执存储前缀（最小可用线形，见 [`EffectReceipt`] 头注）。
 pub const EFFECT_RECEIPT_PREFIX: &str = "org:effectrcpt:";
+/// evi:resolution 存证条目集合名（domain = orgId，与 effectrcpt / roster
+/// 承诺条目同族口径，affair.md §6.3）。
+pub const RESOLUTION_ENTRY_COLLECTION: &str = "resolution";
+/// evi:resolution 条目 kind 标记（载荷首键，affair.md §6.3 线形）。
+pub const RESOLUTION_ENTRY_KIND: &str = "evi:resolution";
 
 /// 组织 id 双形态（org-genesis §2：legacy 16hex / 创世哈希 64hex）。
 pub fn is_valid_org_id(org_id: &str) -> bool {
@@ -303,6 +309,37 @@ pub fn parse_effect_receipt(value: &Value) -> Result<EffectReceipt, EffectReject
     })
 }
 
+/// 决议结论哈希（affair.md §6.3）：`sha256hex(normalizeObject(决议 §6.1
+/// payload))`——本体消亡后凭此哈希 + 签名证明决议存在，持有决议原文时证
+/// 内容绑定。
+pub fn conclusion_hash(resolution_payload: &Value) -> String {
+    sha256_hex(&normalize_object(resolution_payload))
+}
+
+/// evi:resolution 条目载荷（affair.md §6.3 线形）。输入全确定性：
+/// - `subject` = 决议 id（resolution 操作的 opHash）；
+/// - `sig_set` = 决议操作 `actor.orgSig` 原样（kind=org 的组织决议）；
+///   kind=person → None → 载荷落 `null`（如实标注：未携带组织签名集合）；
+/// - `effective_ts` = 生效判定所依据的存证锚时刻（决议在本副本链上的锚定
+///   时刻，§7.2 时间源），由调用方注入——跨副本互异是 §7.1 既定诚实边界，
+///   其余四字段全网逐字节一致。
+pub fn resolution_entry_payload(
+    affair_id: &str,
+    resolution_op_hash: &str,
+    resolution_payload: &Value,
+    sig_set: Option<&Value>,
+    effective_ts: i64,
+) -> Value {
+    json!({
+        "kind": RESOLUTION_ENTRY_KIND,
+        "affairId": affair_id,
+        "subject": resolution_op_hash,
+        "conclusionHash": conclusion_hash(resolution_payload),
+        "sigSet": sig_set.cloned().unwrap_or(Value::Null),
+        "effectiveTs": effective_ts,
+    })
+}
+
 /// 待应用效力事件（决议生效 + 事先声明匹配 + 事先性的产物；应用与回执归门面层）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PendingEffect {
@@ -379,6 +416,51 @@ pub fn evaluate_effect_hook(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn sample_resolution_payload() -> Value {
+        json!({
+            "result": "passed",
+            "condition": { "type": "op-count", "opType": "content", "count": 1 },
+            "countedOps": ["ab".repeat(32)],
+            "rulesHash": "cd".repeat(32),
+            "pubPeriod": { "delayMs": 86_400_000i64 },
+        })
+    }
+
+    /// evi:resolution 条目载荷（affair.md §6.3）：字段语义与确定性——同输入
+    /// 逐字节相同；conclusionHash 绑定 payload 内容；sigSet 原样内嵌 / 缺席
+    /// 落 null；canonical 可复算（payloadHash 消费面）。
+    #[test]
+    fn resolution_entry_payload_deterministic_and_binding() {
+        let affair_id = "11".repeat(32);
+        let res_hash = "22".repeat(32);
+        let payload = sample_resolution_payload();
+        let sig_set = json!({ "sigSetV": 1, "orgId": format!("org_{}", "ab".repeat(32)),
+            "subject": "33".repeat(32), "signatures": [] });
+
+        let with_sig = resolution_entry_payload(&affair_id, &res_hash, &payload, Some(&sig_set), 1_720_000_010_000);
+        assert_eq!(with_sig["kind"], json!(RESOLUTION_ENTRY_KIND));
+        assert_eq!(with_sig["affairId"], json!(affair_id));
+        assert_eq!(with_sig["subject"], json!(res_hash));
+        assert_eq!(with_sig["effectiveTs"], json!(1_720_000_010_000i64));
+        // sigSet 原样内嵌（逐字节，不改写签名包任何字段）
+        assert_eq!(with_sig["sigSet"], sig_set);
+        // conclusionHash 绑定 payload：同 payload 同哈希，改一字节即变
+        assert_eq!(
+            with_sig["conclusionHash"].as_str().unwrap(),
+            conclusion_hash(&payload)
+        );
+        let mut tampered = payload.clone();
+        tampered["result"] = json!("rejected");
+        assert_ne!(conclusion_hash(&tampered), conclusion_hash(&payload));
+        // 确定性：同输入逐字节相同（canonical 一致）
+        let again = resolution_entry_payload(&affair_id, &res_hash, &payload, Some(&sig_set), 1_720_000_010_000);
+        assert_eq!(normalize_object(&with_sig), normalize_object(&again));
+        // kind=person 决议（无 orgSig）→ sigSet 落 null
+        let no_sig = resolution_entry_payload(&affair_id, &res_hash, &payload, None, 1_720_000_010_000);
+        assert_eq!(no_sig["sigSet"], Value::Null);
+        assert_eq!(no_sig["conclusionHash"], with_sig["conclusionHash"]);
+    }
 
     fn grant_json(org_id: &str, affair_id: &str, scope: &str) -> Value {
         json!({

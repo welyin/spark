@@ -38,7 +38,9 @@ fn test_permissions() -> Vec<String> {
         "message:app",
         "system:exec",
         "network:fetch",
-        "feed:deliver",
+        // A18 §4.1 权限归一：deliver → feed:write；pull/订阅收件 → feed:read
+        "feed:write",
+        "feed:read",
     ]
     .iter()
     .map(|s| s.to_string())

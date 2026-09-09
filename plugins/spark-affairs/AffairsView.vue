@@ -9,6 +9,11 @@
   诚实口径：已落地 sdk.affairs 没有 indexer 目录面（listWall 不存在），
   议题墙 = 本机关注的议题（关注即持有副本）；关注已有议题需粘贴其创世记录
   原文（affairId 由创世自认证复算，不接受自报 id）。
+
+  窗口化适配（ui-architecture §4.2，窗口最小夹取 320×220）：议题墙为单列
+  卡片流、无宽度断点，三档（320/480/880）同构；详情抽屉尺寸走
+  ui-layout.detailDrawerSize（窄窗全宽、宽窗 70%）；根节点不设 height/overflow，
+  超高内容（发起表单 + 议题列表）由 iframe 原生文档滚动承载。
 -->
 <template>
   <section class="spark-affairs">
@@ -123,7 +128,7 @@
         </div>
       </el-card>
 
-      <el-drawer v-model="detailOpen" size="70%" :title="detailTitle">
+      <el-drawer v-model="detailOpen" :size="detailDrawerSize" :title="detailTitle">
         <AffairDetail v-if="detailId" :service="serviceRef" :affair-id="detailId" />
       </el-drawer>
     </template>
@@ -136,6 +141,7 @@ import { ensurePluginSDK, type PluginSDK } from '../../packages/plugin-sdk/src';
 import type { AffairRef, AffairRefRel } from '../../packages/plugin-sdk/src/affair-wire';
 import { AffairsService } from './service';
 import { AFFAIR_TAG_MAX_COUNT, type AffairCreateInput, type AffairListItem } from './model';
+import { detailDrawerSize } from './ui-layout';
 import AffairDetail from './AffairDetail.vue';
 
 /** 事务间引用关系下拉（affair.md §10 枚举；文案为产品解释，线形只带 rel 字面量） */
@@ -297,6 +303,12 @@ onMounted(async () => {
     })
     .catch((error) => console.warn('[spark-affairs] 变更订阅不可用，降级为手动刷新：', error));
   await reload();
+  // 事务深链（ui-architecture §4.4）：外壳事务列表点卡片打开本插件并注入 affairId
+  // （宿主经 window.__sparkPluginView.cardData 下发）；定位并自动打开该事务详情
+  const bootstrapAffairId = (window.__sparkPluginView?.cardData as { affairId?: string } | undefined)?.affairId;
+  if (bootstrapAffairId) {
+    await openDetail(bootstrapAffairId);
+  }
 });
 </script>
 
@@ -335,7 +347,9 @@ onMounted(async () => {
 }
 .rules-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* 窄窗（320–600）自动塌成单列：固定两列时 el-slider show-input 在 320 档
+     单格不足 150px，滑杆与数字框挤压溢出 */
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
   gap: 12px;
   width: 100%;
 }
@@ -352,10 +366,16 @@ onMounted(async () => {
   align-items: center;
   margin-bottom: 8px;
   width: 100%;
+  /* 窄窗换行堆叠：select + 64hex 输入框 + 移除钮单行在 320 档必然溢出 */
+  flex-wrap: wrap;
+}
+.ref-row .el-input {
+  flex: 1 1 200px;
+  min-width: 0;
 }
 .ref-rel {
+  flex: 0 1 240px;
   max-width: 240px;
-  flex-shrink: 0;
 }
 .hint {
   margin: 6px 0 0;
@@ -389,6 +409,9 @@ onMounted(async () => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  /* 窄窗来源行（发起人 + 时间 + 操作数）与按钮组换行堆叠 */
+  flex-wrap: wrap;
+  gap: 4px 8px;
 }
 .affair-origin {
   font-size: 12px;

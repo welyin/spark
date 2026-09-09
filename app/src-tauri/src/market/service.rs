@@ -61,17 +61,19 @@ impl PluginMarketService {
         Ok(())
     }
 
-    /// 旧侧载安装态 supportedSpaces/requires 回填（spaces-and-plugins §4 与规格
-    /// §2.1 requires 字段的历史数据迁移）：两个字段均后于侧载链路落地，旧记录缺值
-    /// （serde default → None）；对 trust == "sideloaded" 且字段为 None 的记录重解析
-    /// 落盘 .spkg 包内 manifest.json 回填。包丢失/解析失败/包内未声明均保持 None
-    /// （按未声明口径处理），不阻断启动；幂等，包内未声明时每次启动重读一次本地文件，
-    /// 代价可忽略故不引入额外迁移标记。
+    /// 旧侧载安装态 supportedSpaces/requires/window 回填（spaces-and-plugins §4 与
+    /// 规格 §2.1 requires/window 字段的历史数据迁移）：这些字段均后于侧载链路落地，
+    /// 旧记录缺值（serde default → None）；对 trust == "sideloaded" 且字段为 None 的
+    /// 记录重解析落盘 .spkg 包内 manifest.json 回填。包丢失/解析失败/包内未声明均保持
+    /// None（按未声明口径处理），不阻断启动；幂等，包内未声明时每次启动重读一次本地
+    /// 文件，代价可忽略故不引入额外迁移标记。
     fn backfill_sideload_manifest_fields(&mut self) -> Result<(), String> {
         let mut changed = false;
         for installed in self.state.installed.values_mut() {
             if installed.trust.as_deref() != Some("sideloaded")
-                || (installed.supported_spaces.is_some() && installed.requires.is_some())
+                || (installed.supported_spaces.is_some()
+                    && installed.requires.is_some()
+                    && installed.window.is_some())
             {
                 continue;
             }
@@ -96,9 +98,16 @@ impl PluginMarketService {
                 }
             }
             if installed.requires.is_none() {
-                let requires = inner.and_then(|m| m.requires);
+                let requires = inner.as_ref().and_then(|m| m.requires.clone());
                 if let Some(requires) = requires.and_then(super::sideload::normalize_requires) {
                     installed.requires = Some(requires);
+                    changed = true;
+                }
+            }
+            if installed.window.is_none() {
+                let window = super::catalog::normalize_window(inner.and_then(|m| m.window));
+                if let Some(window) = window {
+                    installed.window = Some(window);
                     changed = true;
                 }
             }

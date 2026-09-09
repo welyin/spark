@@ -13,6 +13,12 @@
   诚实口径（评审阻塞 3/4，README 同步）：本插件签发的凭证签名主体是插件域
   身份，不证明验证人个人身份；issuerRootId 为自报文本；HoaCredential 线形
   与内核凭证体系零互操作（演示级数据）。
+
+  窗口化适配（ui-architecture §4.2，窗口最小夹取 320×220）：申请人/验证人/
+  凭证三侧经 el-tabs 分页（非双栏），窄窗天然单列堆叠，tabs 头溢出由
+  Element Plus 自带滚动箭头承载；材料行/操作行 flex-wrap 换行、输入框弹性
+  收缩，材料哈希与自报 rootId 任意断行（overflow-wrap）；根节点不设
+  height/overflow，超高申请/凭证列表由 iframe 原生文档滚动承载。
 -->
 <template>
   <section class="spark-verify-hoa">
@@ -508,15 +514,19 @@ onMounted(async () => {
 .selectors {
   margin-top: 8px;
 }
+/* 材料哈希（64 位 hex）/自报 rootId/内核裁决串是无空格长文本：任意断行不横向溢出 */
 .hint {
   margin: 6px 0;
   font-size: 12px;
   color: var(--el-text-color-secondary);
+  overflow-wrap: anywhere;
 }
+/* 窄窗（窗口最小宽 320）下注销输入框 + 按钮等一行放不下时换行，不横向挤出卡片 */
 .actions {
   display: flex;
   justify-content: flex-end;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 8px;
 }
@@ -526,16 +536,27 @@ onMounted(async () => {
 .kernel-verify-row {
   justify-content: flex-start;
 }
+/* 窄窗换行堆叠：材料名 + 内容 + 移除钮（及出示行的三字段 + 钮）单行在
+   320–480 档必然溢出 */
 .material-row {
   display: flex;
   gap: 8px;
   align-items: flex-start;
   margin-bottom: 8px;
   width: 100%;
+  flex-wrap: wrap;
 }
+/* 字段弹性收缩（min-width:0 否则 flex 项按内容最小宽撑开）：宽窗受
+   max-width 限制，窄窗换行后独占一行 */
 .material-label {
+  flex: 1 1 200px;
+  min-width: 0;
   max-width: 220px;
-  flex-shrink: 0;
+}
+/* 材料内容 textarea 随容器弹性伸缩（同理 min-width:0 防撑开溢出） */
+.material-row .el-textarea {
+  flex: 1 1 200px;
+  min-width: 0;
 }
 .record-item {
   padding: 10px 0;
@@ -550,11 +571,17 @@ onMounted(async () => {
   gap: 8px;
   flex-wrap: wrap;
 }
+/* 申请人/签发人 rootId 为自报文本（无空格长字符串）：任意断行，窄窗不横向溢出 */
 .record-origin {
   font-size: 12px;
   color: var(--el-text-color-secondary);
+  overflow-wrap: anywhere;
 }
+/* 输入框弹性收缩（min-width:0 否则 flex 项按内容最小宽撑开）：
+   宽窗受 max-width 限制右对齐，窄窗换行后独占一行占满可用宽 */
 .revoke-input {
+  flex: 1;
+  min-width: 0;
   max-width: 260px;
   margin-left: auto;
 }

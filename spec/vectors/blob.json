@@ -1,0 +1,179 @@
+[
+  {
+    "id": "manifest_small_blob",
+    "input": {
+      "contentRule": "byte[i] = (i % 251) as u8",
+      "size": 1000
+    },
+    "expect": {
+      "cid": "4e4c294b331f7a2099a379bec34b9f9fc03dc46ab465d998f4d683da53487e6d",
+      "chunkCids": [
+        "4e4c294b331f7a2099a379bec34b9f9fc03dc46ab465d998f4d683da53487e6d"
+      ],
+      "manifestJson": "{\"v\":1,\"cid\":\"4e4c294b331f7a2099a379bec34b9f9fc03dc46ab465d998f4d683da53487e6d\",\"size\":1000,\"chunkSize\":262144,\"chunkCids\":[\"4e4c294b331f7a2099a379bec34b9f9fc03dc46ab465d998f4d683da53487e6d\"]}"
+    }
+  },
+  {
+    "id": "chunking_empty_blob",
+    "input": {
+      "contentRule": "byte[i] = (i % 251) as u8",
+      "size": 0
+    },
+    "expect": {
+      "cid": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "chunkCids": [],
+      "manifestJson": "{\"v\":1,\"cid\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"size\":0,\"chunkSize\":262144,\"chunkCids\":[]}"
+    }
+  },
+  {
+    "id": "chunking_threshold_minus_1",
+    "input": {
+      "contentRule": "byte[i] = (i % 251) as u8",
+      "size": 1048575
+    },
+    "expect": {
+      "cid": "8b55c6a2d3444092a316985030e00c1e6f8608eaf912c896dee7c374d440ed11",
+      "chunkCids": [
+        "8b55c6a2d3444092a316985030e00c1e6f8608eaf912c896dee7c374d440ed11"
+      ],
+      "manifestJson": "{\"v\":1,\"cid\":\"8b55c6a2d3444092a316985030e00c1e6f8608eaf912c896dee7c374d440ed11\",\"size\":1048575,\"chunkSize\":262144,\"chunkCids\":[\"8b55c6a2d3444092a316985030e00c1e6f8608eaf912c896dee7c374d440ed11\"]}"
+    }
+  },
+  {
+    "id": "chunking_threshold_exact",
+    "input": {
+      "contentRule": "byte[i] = (i % 251) as u8",
+      "size": 1048576
+    },
+    "expect": {
+      "cid": "631b84027d6b9e52b539c4e8373622d23032dfadc64d60af87339c9037e4f769",
+      "chunkCids": [
+        "631b84027d6b9e52b539c4e8373622d23032dfadc64d60af87339c9037e4f769"
+      ],
+      "manifestJson": "{\"v\":1,\"cid\":\"631b84027d6b9e52b539c4e8373622d23032dfadc64d60af87339c9037e4f769\",\"size\":1048576,\"chunkSize\":262144,\"chunkCids\":[\"631b84027d6b9e52b539c4e8373622d23032dfadc64d60af87339c9037e4f769\"]}"
+    }
+  },
+  {
+    "id": "chunking_threshold_plus_1",
+    "input": {
+      "contentRule": "byte[i] = (i % 251) as u8",
+      "size": 1048577
+    },
+    "expect": {
+      "cid": "5769f52bc3eef28afa39c6fc68cadb7d0bd69812ae3a3d71452f519ec3c7aa56",
+      "chunkCids": [
+        "31a1f9dea0169551092d05e8bf4a446228c8c3eb4c9b713c66adcb7fd53c89be",
+        "e31bdc63577fe76f6441014aaaa2226d9ffce11b44d0d510cade132b79fd7d76",
+        "c7f1bde9e1efa7d1385d51b077ea87b0c3860d28da43d5d6f221e845c4c2360f",
+        "aa1444be4b64098f5dd863b5b0ac561480b3fb5c41fc07cf50a62edc94124bcc",
+        "5bad0d1132ac152cf657be8918ae163578448d56d40def9a590fe3dcab0c339b"
+      ],
+      "manifestJson": "{\"v\":1,\"cid\":\"5769f52bc3eef28afa39c6fc68cadb7d0bd69812ae3a3d71452f519ec3c7aa56\",\"size\":1048577,\"chunkSize\":262144,\"chunkCids\":[\"31a1f9dea0169551092d05e8bf4a446228c8c3eb4c9b713c66adcb7fd53c89be\",\"e31bdc63577fe76f6441014aaaa2226d9ffce11b44d0d510cade132b79fd7d76\",\"c7f1bde9e1efa7d1385d51b077ea87b0c3860d28da43d5d6f221e845c4c2360f\",\"aa1444be4b64098f5dd863b5b0ac561480b3fb5c41fc07cf50a62edc94124bcc\",\"5bad0d1132ac152cf657be8918ae163578448d56d40def9a590fe3dcab0c339b\"]}"
+    }
+  },
+  {
+    "id": "presence_record_bytes",
+    "expect": {
+      "recordJson": "{\"v\":1,\"cid\":\"abababababababababababababababababababababababababababababababab\",\"deviceUid\":\"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\",\"chunks\":\"CQE=\"}",
+      "bitmapCases": [
+        {
+          "held": [
+            true,
+            false,
+            false
+          ],
+          "encoded": "AQ=="
+        },
+        {
+          "held": [
+            false,
+            false,
+            false
+          ],
+          "encoded": ""
+        },
+        {
+          "held": [
+            true,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            true
+          ],
+          "encoded": "CQE="
+        }
+      ]
+    }
+  },
+  {
+    "id": "presence_deterministic_count",
+    "input": {
+      "chunkCount": 5,
+      "records": [
+        {
+          "json": "{\"v\":1,\"cid\":\"efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef\",\"deviceUid\":\"uid-a\",\"chunks\":\"Hw==\"}",
+          "deviceUid": "uid-a",
+          "held": [
+            true,
+            true,
+            true,
+            true,
+            true
+          ]
+        },
+        {
+          "json": "{\"v\":1,\"cid\":\"efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef\",\"deviceUid\":\"uid-b\",\"chunks\":\"Hw==\"}",
+          "deviceUid": "uid-b",
+          "held": [
+            true,
+            true,
+            true,
+            true,
+            true
+          ]
+        },
+        {
+          "json": "{\"v\":1,\"cid\":\"efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef\",\"deviceUid\":\"uid-c\",\"chunks\":\"FQ==\"}",
+          "deviceUid": "uid-c",
+          "held": [
+            true,
+            false,
+            true,
+            false,
+            true
+          ]
+        }
+      ]
+    },
+    "expect": {
+      "fullReplicaCount": 2,
+      "chunkReplicaCounts": [
+        3,
+        2,
+        3,
+        2,
+        3
+      ]
+    }
+  },
+  {
+    "id": "fetch_envelope_bodies",
+    "input": {
+      "contentRule": "byte[i] = (i % 251) as u8",
+      "wholeChunkSize": 32
+    },
+    "expect": {
+      "fetchChunk": "{\"chunkCid\":\"1111111111111111111111111111111111111111111111111111111111111111\"}",
+      "fetchChunkOffset": "{\"chunkCid\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"offset\":245760}",
+      "fetchManifest": "{\"cid\":\"2222222222222222222222222222222222222222222222222222222222222222\"}",
+      "respChunkWhole": "{\"chunkCid\":\"630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd\",\"data\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\"}",
+      "respChunkMissing": "{\"chunkCid\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"missing\":true}",
+      "respManifest": "{\"cid\":\"630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd\",\"manifest\":{\"v\":1,\"cid\":\"630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd\",\"size\":32,\"chunkSize\":262144,\"chunkCids\":[\"630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd\"]}}",
+      "respManifestMissing": "{\"cid\":\"2222222222222222222222222222222222222222222222222222222222222222\",\"missing\":true}"
+    }
+  }
+]

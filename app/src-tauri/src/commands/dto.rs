@@ -389,16 +389,19 @@ pub struct OrgSyncOverviewDto {
     /// K 口径是否适用（组织有 data-accounts 集合；batch2 §1.2）。false =
     /// 纯 all-members 组织无 K，不提醒。
     pub k_applicable: bool,
-    /// O1 两级记账：逐数据账号的 PC 设备达标状态（账号角色模型，
-    /// org-data-sync §4）。
-    pub data_accounts: Vec<DataAccountOverviewDto>,
+    /// 两级记账第二级：逐成员 PC 设备副本状态（A14 全员数据节点，
+    /// membership §4.1；信息性展示，无逐成员强制要求）。
+    pub member_replicas: Vec<MemberReplicaOverviewDto>,
 }
 
-/// 逐数据账号概览（O1 两级记账第二级）。
+/// 逐成员副本概览（A14 两级记账第二级）。
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct DataAccountOverviewDto {
+pub struct MemberReplicaOverviewDto {
     pub root_id: String,
+    /// 成员 org_user_id（A16 标识面随迁；未发布 accessKey 的成员缺省）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub org_user_id: Option<String>,
     pub pc_synced: bool,
     pub device_class: String,
 }
@@ -408,6 +411,9 @@ pub struct DataAccountOverviewDto {
 #[serde(rename_all = "camelCase")]
 pub struct MemberSyncOverviewDto {
     pub root_id: String,
+    /// 成员 org_user_id（A16 标识面随迁；未发布 accessKey 的成员缺省）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub org_user_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub peer_id: Option<String>,
     pub is_self: bool,
@@ -419,6 +425,7 @@ impl From<MemberSyncOverview> for MemberSyncOverviewDto {
     fn from(member: MemberSyncOverview) -> Self {
         Self {
             root_id: member.root_id,
+            org_user_id: member.org_user_id,
             peer_id: member.peer_id,
             is_self: member.is_self,
             ever_synced: member.ever_synced,
@@ -446,11 +453,12 @@ impl From<OrgSyncOverview> for OrgSyncOverviewDto {
             dht_mode: overview.dht_mode.as_str().to_string(),
             status: overview.status.as_str().to_string(),
             k_applicable: overview.k_applicable,
-            data_accounts: overview
-                .data_accounts
+            member_replicas: overview
+                .member_replicas
                 .into_iter()
-                .map(|a| DataAccountOverviewDto {
+                .map(|a| MemberReplicaOverviewDto {
                     root_id: a.root_id,
+                    org_user_id: a.org_user_id,
                     pc_synced: a.pc_synced,
                     device_class: a.device_class.to_string(),
                 })

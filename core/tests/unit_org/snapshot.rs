@@ -90,39 +90,39 @@ fn build_snapshot_metadata_carries_recovery_secret() {
     assert_eq!(snapshot.sync, versions(2000));
 }
 
+/// A9（network §4.2）：gateways 指定通路移除——构建不再携带、合并一律空集
+/// （存量记录字段读取即忽略，不落 extra 僵尸）；恶意 metadata 携带 gateways
+/// 仍被保留键剔除表拦截（防旧对端注入复活）。
 #[test]
-fn gateways_ride_snapshot_summary_and_merge_fallback() {
-    // 构建：gateways 作为 summary 显式字段传播，不进 metadata
+fn gateways_retired_from_snapshot_and_merge() {
+    // 构建：summary 不再有 gateways 字段；存量 record.gateways（惰性字段）不上线
     let mut record = sample_record();
     record.gateways = vec![rid('a'), rid('b')];
     let snapshot = build_organization_sync_snapshot(&record, &[]);
-    assert_eq!(
-        snapshot.summary.gateways.as_deref(),
-        Some([rid('a'), rid('b')].as_slice())
-    );
     let metadata = snapshot.summary.metadata.as_ref().unwrap();
-    assert!(!metadata.contains_key("gateways"), "保留键不进 metadata");
+    assert!(!metadata.contains_key("gateways"), "不进 metadata");
+    let wire = serde_json::to_value(&snapshot).unwrap();
+    assert!(
+        wire["summary"].get("gateways").is_none(),
+        "summary 线形不携带 gateways"
+    );
 
-    // 合并：incoming 显式携带 → 以 incoming 为准
-    let merged = merge_organization_sync_snapshot(None, &snapshot, 1);
-    assert_eq!(merged.gateways, vec![rid('a'), rid('b')]);
-
-    // incoming 缺省 → 保留 existing
+    // 合并：一律空集（不随快照/存量恢复）
     let mut existing = sample_record();
     existing.gateways = vec![rid('c')];
-    let bare_snapshot = build_organization_sync_snapshot(&sample_record(), &[]);
-    assert!(bare_snapshot.summary.gateways.is_none());
-    let merged = merge_organization_sync_snapshot(Some(&existing), &bare_snapshot, 1);
-    assert_eq!(merged.gateways, vec![rid('c')]);
+    let merged = merge_organization_sync_snapshot(Some(&existing), &snapshot, 1);
+    assert!(merged.gateways.is_empty(), "合并一律空集");
+    assert!(!merged.extra.contains_key("gateways"));
 
-    // 恶意 metadata 携带保留键 gateways → 合并后被剔除
+    // 恶意 metadata 携带 gateways → 合并后被剔除（保留键剔除表仍在）
+    let bare_snapshot = build_organization_sync_snapshot(&sample_record(), &[]);
     let mut poisoned = bare_snapshot.clone();
     let mut metadata = serde_json::Map::new();
     metadata.insert("gateways".to_string(), Value::from(vec![rid('z')]));
     poisoned.summary.metadata = Some(metadata);
     let merged = merge_organization_sync_snapshot(Some(&existing), &poisoned, 1);
-    assert_eq!(merged.gateways, vec![rid('c')], "metadata 不得注入保留键");
-    assert!(!merged.extra.contains_key("gateways"));
+    assert!(merged.gateways.is_empty());
+    assert!(!merged.extra.contains_key("gateways"), "metadata 不得注入僵尸键");
 }
 
 #[test]
@@ -592,10 +592,12 @@ fn snapshot_merge_does_not_let_peer_override_access_key() {
     let mine = OrganizationAccessKey {
         public_key: "my-own-pub".to_string(),
         bind_sig: "self-sig".to_string(),
+        root_pubkey: None,
     };
     let attacker = OrganizationAccessKey {
         public_key: "attacker-pub".to_string(),
         bind_sig: "attacker-sig".to_string(),
+        root_pubkey: None,
     };
 
     // existing：成员 'a' 已有 accessKey = mine
@@ -612,13 +614,39 @@ fn snapshot_merge_does_not_let_peer_override_access_key() {
         "peer 不能覆盖他人已发布 accessKey（保留本地本人密钥）"
     );
 
-    // 新成员：existing 无该成员的 accessKey → 采用 incoming（其本人首次发布）
+    // 新成员首次发布：A16 起须过验绑——attacker 无有效根绑定（无 rootPubkey），
+    // 验绑失败不予采信。
     let mut existing2 = sample_record();
     existing2.members[0].access_key = None;
     let merged2 = merge_organization_sync_snapshot(Some(&existing2), &incoming, 8000);
+    assert!(
+        merged2.members[0].access_key.is_none(),
+        "验绑失败的 accessKey 不采信（A16）"
+    );
+
+    // 真实自发布（rootPubkey 锚定名册键 + 绑定签名有效）→ 采用。
+    let seed = [5u8; 32];
+    let real_key = spark_core::org::access_key::derive_access_key(&seed, "org_0123456789abcdef");
+    let real_root = spark_core::identity::derive_root_identity(&seed);
+    let real_root_id = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(
+        real_root.signing_key.verifying_key().to_bytes(),
+    ));
+    let mut existing3 = sample_record();
+    existing3.members[0].root_id = real_root_id.clone();
+    existing3.members[0].access_key = None;
+    let mut incoming3 = build_organization_sync_snapshot(&existing3, &[]);
+    incoming3.members[0].root_id = real_root_id;
+    incoming3.members[0].access_key = Some(real_key.clone());
+    let merged3 = merge_organization_sync_snapshot(Some(&existing3), &incoming3, 8000);
     assert_eq!(
-        merged2.members[0].access_key.as_ref(),
-        Some(&attacker),
-        "新成员首次发布 accessKey 应被采用"
+        merged3.members[0].access_key.as_ref(),
+        Some(&real_key),
+        "验绑通过的首次发布应被采用（A16）"
+    );
+    // org_user_id 访问器：由已采信 accessKey 派生。
+    assert_eq!(
+        merged3.members[0].org_user_id().unwrap().len(),
+        64,
+        "org_user_id 可派生（64 hex）"
     );
 }

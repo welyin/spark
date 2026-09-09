@@ -7,6 +7,7 @@
 use serde_json::Value;
 
 use super::KernelDmHandler;
+use crate::p2p::node::system_now_ms;
 use crate::storage::StorageBackend;
 
 impl KernelDmHandler {
@@ -64,6 +65,22 @@ impl KernelDmHandler {
             return true;
         }
         if updated_at == file.updated_at as i64 {
+            return false;
+        }
+        // D′ 纳管（A45，identity.md §二「已知边界」裁定：资料不是非敏感面，
+        // 断粮不留旁路）：本机 ack 未覆盖最新 V（从未验证立即暂扣 / 曾验证
+        // 超 grace）→ 快照挂起不应用，ack 补齐后由 maybe_apply_pending_profile
+        // 补应用（与 epoch 补发同型）。曾验证 grace 内与 pwv 缺失（老账号）
+        // 放行——与 epoch 门控同一谓词同一口径。
+        let node_id = self.sync_node_id();
+        if let Ok(crate::pw::GateDecision::Gated { .. }) =
+            crate::pw::should_gate(&self.storage, &node_id, system_now_ms() as u64)
+        {
+            let mut storage = self.storage.clone();
+            if let Err(e) = crate::pw::stash_pending_profile(&mut storage, body) {
+                log::error!("[PROFILE_CHAIN] stash pending profile failed: {e}");
+            }
+            log::info!("[PROFILE_CHAIN] gated: profile-sync snapshot stashed (D′)");
             return false;
         }
         // 线形三态 → update_profile 参数三态：字符串=设置，显式 null=清除，缺省=不变
@@ -131,6 +148,34 @@ impl KernelDmHandler {
             .event_tx
             .send(crate::p2p::P2pEvent::SelfProfileSynced(data));
         false
+    }
+
+    /// D′ 纳管（A45）：ack 补齐门控转 Pass 后，补应用挂起的 profile-sync
+    /// 快照（与 epoch 补发同型）。无挂起时零成本（一次读 + 提前返回）。
+    /// 锁定态（无会话口令，无法重封身份文件）保留挂起待下次。
+    pub(super) fn maybe_apply_pending_profile(&self, root_id: &str) {
+        let mut storage = self.storage.clone();
+        let node_id = self.sync_node_id();
+        let Ok(Some(body)) = crate::pw::take_pending_profile_if_allowed(
+            &mut storage,
+            &node_id,
+            system_now_ms() as u64,
+        ) else {
+            return;
+        };
+        if self
+            .password_shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_none()
+        {
+            // 挂起已被取出——放回去等解锁后补（取出是为防脏数据残留的正常路径）。
+            let mut storage = self.storage.clone();
+            let _ = crate::pw::stash_pending_profile(&mut storage, &body);
+            return;
+        }
+        log::info!("[PROFILE_CHAIN] D′ replay: applying stashed profile-sync snapshot");
+        let _ = self.apply_self_profile(root_id, &body);
     }
 
     /// pdsync 合入 `profile:self` 后回写身份文件（P2）。

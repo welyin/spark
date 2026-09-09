@@ -397,6 +397,9 @@ impl DmHandler for KernelDmHandler {
         if result.profile_applied {
             self.apply_profile_from_sled(&root_id);
         }
+        // D′ 纳管（A45）：本批可能已锚定新 ack（pwack 批尾钩子）使门控转
+        // Pass——尝试补应用挂起的 profile-sync 快照（无挂起零成本）。
+        self.maybe_apply_pending_profile(&root_id);
         // 自设备 device-sync 握手：回发本机设备记录
         if let Some(target) = result.device_sync_reply {
             self.spawn_device_sync_reply(&root_id, target);

@@ -28,6 +28,15 @@
 （以下已落地，仅保留记录）
 - `src/components/settings/ProxySettings.vue` | HTTP 代理设置已真实生效（`src-tauri/src/proxy.rs`） | 已知限制：修改代理需重启应用
 
+## 默认内置插件（communication §4.2，A19 灰度期）
+
+- `plugins/spark-chat/src/ChatView.vue` | 联系人资料卡抽屉 / 组织邀请抽屉未迁移 | 壳层通讯录/组织面职责，插件版 v1 缺口；壳层应用会话挂载区（`app:` 会话）仍由旧 UI 呈现
+- `plugins/spark-chat/src/avatar-sources.ts`、`contacts.ts`、`network-status.ts` | 头像/展示名/「已删除联系人禁发」/离线提示条 v1 桩 | 待 sdk.contacts / 网络状态面接入后升级（avatar-sources 已在 spark-contacts 落地真实版，可回移共享）
+- `plugins/spark-contacts/src/sdk-host.ts` | organization 域缺口（邀请记录 inviteRecords / 发送邀请 / 移除成员 / bot 求证 hostQuery） | SDK 面无 organization 域（接口面变更待拍板）；插件版组织空间「添加成员/移出成员」入口拦截，「我发出的邀请」面板退化
+- `plugins/spark-contacts/src/pending-contact.ts`、`org-identity.ts`、`org-avatars.ts` | 壳层意图（全局搜索打开联系人/顶栏 + 添加）/组织身份/组织 logo 缓存 v1 桩 | 壳层→插件意图通道（host.request 反向面）与 identity 域 SDK 面待拍板
+- 插件版移动端导航（spark-chat ChatApp / spark-contacts ContactsApp） | 壳层 mobile-nav 栈帧/转场/系统返回键栈语义不接 | 插件内自包含本地导航；壳层意图穿越沙箱的通道设计待做
+- 旧内置 UI（MessagesPage/ContactsPage 及 components/messages、components/contacts、mock/contacts） | 灰度并存一个版本后移除 | 开关 `stores/builtin-apps.ts`（设置 → 通用 → 聊天/通讯录界面）；移除动作留后续版本
+
 ## 消息（ui-messages）
 
 > ✅ 已落地：内核 `message` 模块（sled 持久化）+ `/spark/dm/1.0.0` 直连协议 + `messages.*` 命令域。`src/mock/messages.ts` 已改为「内核真实数据 + 内存响应式缓存」接入层。

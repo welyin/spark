@@ -339,7 +339,7 @@ fn main() {
         "policyRef": Value::Null,
     });
     let verify_chain_group = json!({
-        "desc": "readAuth 验证链（read-gate §4 第 1–4 步，fail-closed）：ok 通过；逐环失败用例（凭证篡改/类型不符/验证人不受信任/已注销/proof 绑定错请求/呈现过期）→ 对应错误名。policyRef 求值归 C5，不在本组。生成器：core/examples/gen_credential_vectors.rs（C2）",
+        "desc": "readAuth 验证链（read-gate §4 第 1–4 步 + A15 城门名册回查，fail-closed）：ok 通过；逐环失败用例（凭证篡改/类型不符/验证人不受信任/已注销/proof 绑定错请求/呈现过期/持有者退队/名册不可用）→ 对应错误名。policyRef 求值归 C5，不在本组。生成器：core/examples/gen_credential_vectors.rs（C2）",
         "context": {
             "requestId": request_id,
             "collection": COLLECTION,
@@ -364,6 +364,11 @@ fn main() {
               "expect": "revoked" },
             { "name": "holder-proof-wrong-request", "readAuth": serde_json::to_value(&read_auth_wrong_req).unwrap(), "expect": "holder-proof-invalid" },
             { "name": "stale-presented-at", "readAuth": serde_json::to_value(&read_auth_stale).unwrap(), "expect": "stale-timestamp" },
+            // 城门名册回查（A15）：持有者在册验证链全过才放行；退队/名册不可用各必败
+            { "name": "roster-non-member", "readAuth": serde_json::to_value(&read_auth_ok).unwrap(),
+              "roster": "non-member", "expect": "not-subject-domain-member" },
+            { "name": "roster-unavailable", "readAuth": serde_json::to_value(&read_auth_ok).unwrap(),
+              "roster": "unavailable", "expect": "not-subject-domain-member" },
         ],
     });
 
@@ -499,6 +504,14 @@ fn self_check(
             ),
         };
         let revocation_for = move |_issuer: &str| Some((entries.clone(), head.clone()));
+        // 城门名册回查（A15）：case 可声明 roster（缺省 member = 在册）
+        let roster_lookup = |_domain: &str, _identity: &str| {
+            match case["roster"].as_str().unwrap_or("member") {
+                "member" => Some(true),
+                "non-member" => Some(false),
+                _ => None, // "unavailable"：名册数据缺失 → fail-closed
+            }
+        };
         let result = verify_read_auth(
             &read_auth,
             request_id,
@@ -506,6 +519,7 @@ fn self_check(
             &policy,
             &decl_refs,
             &revocation_for,
+            &roster_lookup,
             now,
         );
         let actual = match &result {

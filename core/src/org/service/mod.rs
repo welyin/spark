@@ -16,11 +16,14 @@
 //! （P2）；单测按域拆在 `tests/`。（legacy org-share/org-pull 平面的入站落库
 //! `snapshot_apply` 已随该平面退役删除。）
 
+mod accept_policy;
 mod atomic;
 mod community;
 mod create;
+mod disclosure;
 mod invite_records;
 mod invites;
+mod join;
 mod member_entries;
 mod members;
 mod policy_doc;
@@ -55,6 +58,12 @@ pub use verifiers::{
 pub use policy_doc::{
     POLICY_DOC_PREFIX, PolicyDocMerge, adjudicate_incoming_policy_doc, policy_doc_key,
 };
+/// A15 名册开放声明发布承载（org:disclosure: 键域 + orgsync-data 入站合入裁决）。
+pub use disclosure::{DisclosureMerge, adjudicate_incoming_disclosure};
+/// A17 免预录凭证入册（org-join §8）：加入声明合入（双路径验证 + 入册）。
+pub use join::JoinOutcome;
+/// A17 准入策略声明发布承载（org:accept: 键域 + orgsync-data 入站合入裁决）。
+pub use accept_policy::{AcceptPolicyMerge, adjudicate_incoming_accept_policy};
 
 use serde_json::Value;
 
@@ -275,20 +284,6 @@ impl OrganizationService {
         Ok(())
     }
 
-    /// pdsync 感知的组织记录删除（P5）：墓碑/删除日志由版本化中间件在
-    /// `delete` 时自动完成（调用方传版本化句柄；裸句柄上本函数不会写
-    /// 墓碑——仅 kernel 门面路径使用）。
-    pub fn delete_record_pdsync<S: StorageBackend>(
-        storage: &mut S,
-        org_id: &str,
-        now_ms: i64,
-        node_id: &str,
-    ) -> Result<()> {
-        let _ = (now_ms, node_id); // 记账已下沉中间件，参数保留以稳定签名
-        storage.delete(&organization_key(org_id))?;
-        Ok(())
-    }
-
     fn require_organization<S: StorageBackend>(
         storage: &S,
         org_id: &str,
@@ -469,6 +464,44 @@ pub fn migrate_org_members_split<S: StorageBackend>(storage: &mut S) -> Result<u
         }
     }
     Ok(written)
+}
+
+/// A16 存量迁移（membership §4.4-4 双写过渡）：本机账号在册但**未发布
+/// accessKey** 的组织逐个补齐（seed 确定性派生 + 写一次发布，whole 与
+/// per-member 条目双写口径同 [`OrganizationService::publish_access_key`]）。
+///
+/// 三个自发布挂点（create_org / accept_invite / update_my_identity）只覆盖
+/// 增量路径；存量成员若从不触发身份更新则长期无 accessKey——本迁移在
+/// unlock 时幂等执行补齐（kernel `identity/login.rs` 挂接），是「全员补齐」
+/// 切换窗口条件（见 [`crate::org::types::org_member_key`] 注释）的执行面。
+/// 已发布/非成员的组织跳过；返回本次补齐的组织数。
+pub fn migrate_access_key_backfill<S: StorageBackend>(
+    storage: &mut S,
+    seed: &[u8],
+    current_root_id: &str,
+    now_ms: i64,
+) -> Result<usize> {
+    let orgs = OrganizationService::read_all_organizations(storage)?;
+    let mut backfilled = 0usize;
+    for record in &orgs {
+        let needs_backfill = record
+            .find_member(current_root_id)
+            .is_some_and(|m| m.access_key.is_none());
+        if !needs_backfill {
+            continue;
+        }
+        let access_key = crate::org::access_key::derive_access_key(seed, &record.org_id);
+        if OrganizationService::publish_access_key(
+            storage,
+            &record.org_id,
+            current_root_id,
+            access_key,
+            now_ms,
+        )? {
+            backfilled += 1;
+        }
+    }
+    Ok(backfilled)
 }
 
 /// 事务 payload 的 `nodeInfo` 键：未提供时整个键缺省（对齐 TS

@@ -7,10 +7,12 @@
   "description": "公共事务（affair）参考客户端（C11）：事务墙、议题详情（日志时间线/规则/阶梯状态）、发起议题、提交贡献与投票。事务全局一等、只有发起人没有归属，数据属于议题本身，本插件仅为参考实现。",
   "category": "social",
   "supportedSpaces": ["personal"],
+  "affairTypes": ["discussion", "vote", "budget", "topic"],
   "views": [
     { "id": "default", "type": "app", "title": "公共议题" },
     { "id": "affair-card", "type": "message-card", "title": "议题卡片" }
   ],
+  "window": { "defaultWidth": 960, "defaultHeight": 640 },
   "permissions": ["affairs:read", "affairs:write", "identity:sign", "message:app", "policy:write"],
   "sdkVersion": "1",
   "package": {

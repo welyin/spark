@@ -85,6 +85,7 @@ fn wire_shapes_match_preload_declarations() {
         trust: None,
         supported_spaces: None,
         requires: None,
+        window: None,
     })
     .unwrap();
     for key in [
@@ -114,6 +115,7 @@ fn wire_shapes_match_preload_declarations() {
         trust: None,
         supported_spaces: Some(vec!["personal".to_string()]),
         requires: None,
+        window: None,
     })
     .unwrap();
     assert_eq!(

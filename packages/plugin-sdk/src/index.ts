@@ -221,6 +221,70 @@ export type PluginCardActionPayload = {
   data?: unknown;
 };
 
+// ------------------------------------------------------------------
+// IM 数据面（A18，communication §4.1 sdk.messages：会话/消息读写 +
+// 新消息事件；接口面 = 现有 Tauri 消息命令的等语义移植，space 由桥绑定注入）
+// ------------------------------------------------------------------
+
+/** 会话（与壳层 ConversationDto 同形；应用会话 kind='app' 时 peerId 为 pluginId 占位） */
+export type PluginConversation = {
+  id: string;
+  kind: 'direct' | 'system' | 'app';
+  title: string;
+  peerId: string;
+  unreadCount: number;
+  pinnedAt: number;
+  muted: boolean;
+  online: boolean;
+  draft: string;
+  updatedAt: number;
+};
+
+/** 引用回复携带的原消息片段（与壳层 QuoteRefDto 同形） */
+export type PluginQuoteRef = {
+  messageId: string;
+  senderName: string;
+  preview: string;
+};
+
+/** 聊天消息（与壳层 ChatMessageDto 同形；E2E 解密在内核，插件只见明文结果） */
+export type PluginChatMessage = {
+  id: string;
+  senderId: string;
+  senderName: string;
+  type: 'text' | 'image' | 'file' | 'link' | 'voice' | 'system';
+  content: string;
+  fileSize?: number;
+  duration?: number;
+  link?: { url: string; title: string; description: string; siteName: string; domain: string };
+  quote?: PluginQuoteRef;
+  createdAt: number;
+  /** 仅自己发送的消息有状态 */
+  status?: 'sending' | 'sent' | 'delivered' | 'read' | 'failed' | 'streaming';
+  recalled: boolean;
+};
+
+/** 新消息事件（sdk.messages.onNewMessage 载荷；space 已由桥按绑定过滤） */
+export type PluginNewMessageEvent = {
+  conversation: PluginConversation;
+  message: PluginChatMessage;
+};
+
+/** 消息状态事件（sdk.messages.onStatus 载荷：已读/撤回/状态流转；space 已由桥过滤） */
+export type PluginChatStatusEvent = {
+  convId: string;
+  messageId?: string;
+  status?: 'sending' | 'sent' | 'delivered' | 'read' | 'failed' | 'streaming';
+  recalled?: boolean;
+  peerRead?: boolean;
+};
+
+/** 对端上下线事件（sdk.messages.onPeerPresence 载荷） */
+export type PluginPeerPresenceEvent = {
+  kind: 'PeerConnected' | 'PeerDisconnected';
+  peerId: string;
+};
+
 /**
  * 消息模块：统一的消息收发入口，支持两种交互模式：
  *
@@ -236,8 +300,56 @@ export type PluginCardActionPayload = {
  * 两种模式共享 `message:app` 权限（高级权限，内核限流 10 条/60s）。
  * pluginId/space 由桥按已认证身份注入，插件侧不传。
  * 仅 iframe 桥模式可用，故在 PluginSDK 上为可选字段（同 events）。
+ *
+ * ── IM 数据面（A18，communication §4.1）──
+ * conversations/list/onNewMessage 须 `messages:read`（高危确认）；
+ * send/recall/markConversationRead 须 `messages:write`（高危确认）。
+ * space 由桥按绑定身份注入（插件只见当前空间的数据）。
  */
 export interface PluginMessagesAPI {
+  // ── IM 数据面（A18） ──
+
+  /** 当前空间会话列表（`messages:read`） */
+  conversations: () => Promise<PluginConversation[]>;
+  /** 读会话消息（窗口内全量，时间升序；`messages:read`） */
+  list: (convId: string) => Promise<PluginChatMessage[]>;
+  /** 发文本消息（`messages:write`；messageId 可省——缺省由桥按壳层同口径生成，
+   *  插件侧乐观入列的自生成 id 应透传（与壳层 message-send-text 等语义：
+   *  同一 id 落库，乐观态与水合按 id 合并不重复）） */
+  send: (convId: string, text: string, quote?: PluginQuoteRef, messageId?: string) => Promise<PluginChatMessage>;
+  /** 撤回消息（`messages:write`；撤回归属校验在内核） */
+  recall: (convId: string, messageId: string) => Promise<{ success: boolean }>;
+  /** 会话清零未读（`messages:write`） */
+  markConversationRead: (convId: string) => Promise<{ success: boolean }>;
+  /** 订阅新消息事件（`messages:read`；桥按绑定 space 过滤后推送） */
+  onNewMessage: (handler: (event: PluginNewMessageEvent) => void) => Promise<void>;
+  /** 订阅消息状态事件（已读/撤回/状态流转；`messages:read`，space 过滤） */
+  onStatus: (handler: (event: PluginChatStatusEvent) => void) => Promise<void>;
+  /** 会话快照合入轻量通知（`messages:read`；收到后重读 conversations 收敛） */
+  onConversationsSynced: (handler: () => void) => Promise<void>;
+  /** 对端上下线（`messages:read`；用于 online 标记刷新） */
+  onPeerPresence: (handler: (event: PluginPeerPresenceEvent) => void) => Promise<void>;
+
+  // ── 写面补全（A19 迁移缺口，等语义移植现有 Tauri 命令；均 `messages:write`） ──
+
+  /** 确保与 peer 的直连会话存在（无则创建） */
+  ensureDirect: (peerId: string, title: string) => Promise<PluginConversation>;
+  /** 重发失败消息 */
+  resend: (convId: string, messageId: string) => Promise<PluginChatMessage>;
+  /** 删除消息（本地不再展示，非撤回） */
+  deleteMessage: (convId: string, messageId: string) => Promise<{ success: boolean }>;
+  /** 设置会话草稿 */
+  setDraft: (convId: string, draft: string) => Promise<{ success: boolean }>;
+  /** 置顶/取消置顶会话 */
+  togglePin: (convId: string) => Promise<{ success: boolean }>;
+  /** 静音/取消静音会话 */
+  toggleMute: (convId: string) => Promise<{ success: boolean }>;
+  /** 清空会话消息（保留会话） */
+  clear: (convId: string) => Promise<{ success: boolean }>;
+  /** 删除会话（含消息） */
+  deleteConversation: (convId: string) => Promise<{ success: boolean }>;
+
+  // ── 服务号（应用会话） ──
   // ── 服务号（应用会话） ──
 
   /** 写入应用消息：payload 必须含非空字符串 summary（trim 后 ≤200 字符，超限拒绝） */
@@ -293,10 +405,101 @@ export type PluginContactGroup = {
   name: string;
 };
 
+// ------------------------------------------------------------------
+// 通讯录数据面（A18，communication §4.1 sdk.contacts：列表/申请应答/
+// 标签分组/拉黑/变更事件；接口面 = 现有 Tauri 通讯录命令的等语义移植，
+// space 由桥绑定注入）
+// ------------------------------------------------------------------
+
+/** 朋友权限（'open' 全开放 / 'chatOnly' 仅聊天） */
+export type PluginFriendPermission = 'open' | 'chatOnly';
+
+/** 朋友（与壳层 FriendDto 同形：含本地资料备注/电话/标签/备忘/照片/拉黑） */
+export type PluginFriend = {
+  rootId: string;
+  nickname: string;
+  signature: string;
+  gender?: 'male' | 'female';
+  avatar?: string;
+  addedAt: number;
+  remark: string;
+  phones: string[];
+  tagIds: string[];
+  groupId: string;
+  memo: string;
+  photos: string[];
+  permission: PluginFriendPermission;
+  blocked: boolean;
+};
+
+/** 朋友/成员申请（与壳层 FriendRequestDto 同形） */
+export type PluginFriendRequest = {
+  id: string;
+  rootId: string;
+  nickname: string;
+  message: string;
+  source: string;
+  status: 'pending' | 'accepted' | 'ignored' | 'replied' | 'failed';
+  createdAt?: number;
+  updatedAt: number;
+  unread?: boolean;
+  thread?: Array<{ from: 'me' | 'peer'; text: string; ts: number }>;
+  inviteCode?: string;
+  avatar?: string;
+};
+
+/** 联系人本地资料（与壳层 ContactProfileDto 同形：备注/电话/标签/备忘/照片/权限/拉黑） */
+export type PluginContactProfile = {
+  remark: string;
+  phones: string[];
+  tagIds: string[];
+  /** 所属分组 id；'' = 未分组 */
+  groupId: string;
+  memo: string;
+  photos: string[];
+  permission: PluginFriendPermission;
+  blocked: boolean;
+};
+
+/** 组织空间分组树节点（与壳层 OrgGroupNodeDto 同形；数组顺序即同级排序） */
+export type PluginOrgGroupNode = {
+  id: string;
+  name: string;
+  children: PluginOrgGroupNode[];
+};
+
+/** 通讯录总览（sdk.contacts.overview；与壳层 SpaceContactsDto 逐字段同形） */
+export type PluginContactOverview = {
+  friends: PluginFriend[];
+  /** 收到的申请 */
+  requests: PluginFriendRequest[];
+  /** 我发出的申请 */
+  outgoing: PluginFriendRequest[];
+  tags: PluginContactTag[];
+  groups: PluginContactGroup[];
+  /** 组织空间：树形分组（个人空间为空数组） */
+  groupTree: PluginOrgGroupNode[];
+  /** 组织空间：成员 rootId → 本地附加资料 */
+  memberExtras: Record<string, PluginContactProfile>;
+};
+
+/** 发起朋友申请的输入（sdk.contacts.sendRequest；raw 为对端名片原文） */
+export type PluginSendFriendRequestInput = {
+  id: string;
+  rootId: string;
+  raw: string;
+  peerId?: string;
+  addresses?: string[];
+  source: string;
+  message: string;
+};
+
 /**
- * 通讯录只读模块：`contact:read` 权限（高级 + 使用时询问）。
+ * 通讯录模块：只读门面（contact:read）+ A18 数据面（contacts:read/write）。
  * 仅 iframe 桥模式可用，故在 PluginSDK 上为可选字段（同 events/messages）。
- * 返回字段均经内核只读门面裁剪，不暴露签名等敏感资料。
+ * 数据面接口 = 现有 Tauri 通讯录命令的等语义移植；space 由桥绑定注入。
+ * overview 须 `contacts:read`；写操作（申请应答/标签分组/拉黑/资料）须
+ * `contacts:write`（高危确认）。
  */
 export interface PluginContactsAPI {
   /** 所有朋友的只读摘要（「谁可以看」选择器依赖） */
@@ -305,6 +508,67 @@ export interface PluginContactsAPI {
   listGroups: () => Promise<PluginContactGroup[]>;
   /** 所有标签（按 order 升序） */
   listTags: () => Promise<PluginContactTag[]>;
+
+  // ── A18 数据面 ──
+
+  /** 通讯录总览：朋友/申请（出入站）/标签/分组（`contacts:read`） */
+  overview: () => Promise<PluginContactOverview>;
+  /** 更新联系人本地资料（备注/电话/标签/备忘/照片/权限；`contacts:write`） */
+  updateProfile: (rootId: string, patch: Partial<{
+    remark: string;
+    phones: string[];
+    tagIds: string[];
+    groupId: string;
+    memo: string;
+    photos: string[];
+    permission: PluginFriendPermission;
+  }>) => Promise<{ success: boolean }>;
+  /** 拉黑/解除拉黑（`contacts:write`） */
+  setBlocked: (rootId: string, blocked: boolean) => Promise<{ success: boolean }>;
+  /** 删除朋友（block=true 同时拉黑；`contacts:write`） */
+  removeFriend: (rootId: string, block?: boolean) => Promise<{ success: boolean }>;
+  /** 发起朋友申请（`contacts:write`） */
+  sendRequest: (input: PluginSendFriendRequestInput) => Promise<PluginFriendRequest>;
+  /** 应答申请（回复文本；`contacts:write`） */
+  replyRequest: (requestId: string, text: string) => Promise<PluginFriendRequest>;
+  /** 追问申请（`contacts:write`） */
+  askRequest: (requestId: string, text: string) => Promise<PluginFriendRequest>;
+  /** 裁决申请（接受须给权限；`contacts:write`） */
+  resolveRequest: (requestId: string, accept: boolean, permission: PluginFriendPermission) => Promise<{ success: boolean }>;
+  /** 新建标签（`contacts:write`） */
+  tagCreate: (id: string, name: string) => Promise<PluginContactTag>;
+  /** 重命名标签（`contacts:write`） */
+  tagRename: (tagId: string, name: string) => Promise<{ success: boolean }>;
+  /** 删除标签（`contacts:write`） */
+  tagDelete: (tagId: string) => Promise<{ success: boolean }>;
+  /** 新建分组（`contacts:write`） */
+  groupCreate: (id: string, name: string) => Promise<PluginContactGroup>;
+  /** 重命名分组（`contacts:write`） */
+  groupRename: (groupId: string, name: string) => Promise<{ success: boolean }>;
+  /** 删除分组（`contacts:write`） */
+  groupDelete: (groupId: string) => Promise<{ success: boolean }>;
+  /** 分组排序（`contacts:write`） */
+  groupMove: (groupId: string, toIndex: number) => Promise<{ success: boolean }>;
+  /** 设置朋友所属分组（`contacts:write`） */
+  setGroup: (rootId: string, groupId: string) => Promise<{ success: boolean }>;
+  /** 组织空间分组树：新建子节点（`contacts:write`，org space；返回新节点，失败为 null） */
+  orgGroupCreate: (parentId: string, id: string, name: string) => Promise<PluginOrgGroupNode | null>;
+  /** 组织空间分组树：重命名（`contacts:write`，org space） */
+  orgGroupRename: (id: string, name: string) => Promise<{ success: boolean }>;
+  /** 组织空间分组树：删除（`contacts:write`，org space） */
+  orgGroupDelete: (id: string) => Promise<{ success: boolean }>;
+  /** 组织空间分组树：移动（`contacts:write`，org space） */
+  orgGroupMove: (id: string, toIndex: number, newParentId?: string) => Promise<{ success: boolean }>;
+  /** 订阅通讯录变更事件（`contacts:read`；轻量通知，收到后重读 overview 收敛；
+   *  同通道含 OrgSynced（组织通讯录合入）） */
+  onChanged: (handler: () => void) => Promise<void>;
+  /** 朋友申请变化（`contacts:read`）：收到新申请 / 我发出的申请更新 / 被接受 */
+  onRequestChanged: (handler: (event: {
+    kind: 'FriendRequestReceived' | 'FriendRequestSent' | 'FriendRequestAccepted';
+    request: PluginFriendRequest;
+  }) => void) => Promise<void>;
+  /** 朋友资料变更（`contacts:read`；昵称/头像同步） */
+  onFriendProfileUpdated: (handler: (event: { rootId: string; nickname?: string; avatar?: string }) => void) => Promise<void>;
 }
 
 // ------------------------------------------------------------------
@@ -1175,11 +1439,29 @@ export type PluginManifest = {
   requires?: PluginRequires;
   /** 依赖的 SDK 契约版本 */
   sdkVersion: string;
-  /** 宿主 chrome（壳层 UI 声明）。可选；缺省时壳层显示默认插件顶栏（返回+标题） */
+  /** 宿主 chrome（壳层 UI 声明）。可选；缺省时壳层显示默认插件顶栏（返回+标题）。
+   *  注意：仅移动端整页 tab 语义——PC 窗口形态下壳层恒由 WindowFrame 提供窗口
+   *  标题栏（拖动/最小化/最大化/关闭），hostTitleBar 不生效，插件内不得再实现
+   *  「关闭应用/返回桌面」类元素（应用内工具栏与视图内返回除外） */
   chrome?: {
     /** false：插件自接管顶栏，壳层隐藏默认顶栏主体、仅保留左上角悬浮返回图标 */
     hostTitleBar?: boolean;
   };
+  /** PC 窗口默认尺寸（可选，插件级不做 per-view；plugin-dist §2.1）：PC 端插件
+   *  在可拖动/缩放的桌面窗口中打开（最小夹取 320×220，插件须响应式），
+   *  defaultWidth/defaultHeight 声明初始尺寸（px，合法范围宽 320–3840 /
+   *  高 220–2160，缺省或越界按壳层默认 880×620）；移动端全屏打开忽略本字段 */
+  window?: {
+    defaultWidth?: number;
+    defaultHeight?: number;
+  };
+  /**
+   * 事务类型承接声明（可选，纯增量，README §4.4 / ui-architecture §4.4）：
+   * 本插件能作为「默认打开程序」处理的事务类型标识清单（如 'vote' / 'budget' / 'discussion'）。
+   * 宿主据此建「事务类型 → 插件」注册表（宿主扫描已装 manifest 自建，内核零改动，§八决策 2）；
+   * 缺省（无此字段）即不承接任何事务类型，保持旧行为。
+   */
+  affairTypes?: string[];
   package?: {
     updateManifestUrl: string;
     packageName: string;

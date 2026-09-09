@@ -297,8 +297,11 @@ fn orgq_req_outbound_resp_carries_member_to_root() {
 
 /// 非数据账号发 orgq-resp → rejected。
 #[test]
-fn orgq_resp_rejects_non_data_account() {
-    let (m_key, m_root) = self_identity(3); // 普通成员（伪造数据账号应答）
+/// A14 全员数据节点：成员（数据节点）resp 资格通过受理；非成员 resp 仍
+/// rejected（资格检查先于 requestId 关联，消 oracle）。
+#[test]
+fn orgq_resp_member_accepted_non_member_rejected() {
+    let (m_key, m_root) = self_identity(3); // 普通成员（A14：数据节点）
     let (_self_key, self_root) = self_identity(2); // 本机 M（成员）
     let mut s = MemoryStorage::new();
     save_org(
@@ -308,7 +311,7 @@ fn orgq_resp_rejects_non_data_account() {
             (m_root.as_str(), OrganizationRole::Member),
             (self_root.as_str(), OrganizationRole::Member),
         ],
-        &[], // 无显式数据账号 → 缺省全体管理员，self 是 member → 非数据账号
+        &[],
     );
     mark_pending(&mut s, "req-1", ORG_ID, &m_root, "query");
     let body = build_orgq_query_resp(
@@ -321,11 +324,30 @@ fn orgq_resp_rejects_non_data_account() {
         false,
     );
     let r = deliver_orgq_resp(&mut s, &self_root, &m_key, &m_root, &self_root, body);
+    assert_ne!(
+        r.response["reason"],
+        json!("rejected"),
+        "成员（数据节点）resp 资格通过"
+    );
+
+    // 对照：非成员 resp → rejected
+    let (x_key, x_root) = self_identity(9);
+    mark_pending(&mut s, "req-2", ORG_ID, &x_root, "query");
+    let body = build_orgq_query_resp(
+        ORG_ID,
+        &format!("{NAME}@v{VERSION}"),
+        "req-2",
+        &[],
+        true,
+        NOW,
+        false,
+    );
+    let r = deliver_orgq_resp(&mut s, &self_root, &x_key, &x_root, &self_root, body);
     assert_eq!(r.response["ok"], false);
     assert_eq!(
         r.response["reason"],
         json!("rejected"),
-        "非数据账号 resp 拒绝"
+        "非成员 resp 拒绝"
     );
 }
 

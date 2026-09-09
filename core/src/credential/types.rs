@@ -128,6 +128,16 @@ pub struct RosterMember {
     pub identity: String,
     /// `admin` | `member`。
     pub role: String,
+    /// 成员 org_user_id（A16 双写过渡：`sha256hex(org-access 域公钥)`；`None` =
+    /// 未发布 accessKey 的存量/旧版成员）。名册回查对 identity 与 orgUserId
+    /// 双键兼容——双写期任何节点都能验 rootId / org_user_id 两种签名；
+    /// memberSetHash 承诺随包内容自洽（携带即计入，旧包无此键不受影响）。
+    #[serde(
+        rename = "orgUserId",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub org_user_id: Option<String>,
 }
 
 /// 名册快照的存证锚引用（org-signature §2 roster.anchor）。

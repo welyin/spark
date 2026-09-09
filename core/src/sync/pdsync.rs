@@ -145,7 +145,22 @@ pub const CATEGORIES: &[Category] = &[
         name: "mkt:ann",
         prefixes: &["mkt:ann:"],
     },
+    // A1 blob 层副本账本（personal-data §4.2 / 协议 §14.4）：
+    // `blob:presence:{cid}:{deviceUid}` 记录（含 chunk 位图）经反熵扩散，
+    // 各设备凭相同记录集合确定性复算副本数。blob 本体键
+    // （blob:meta:/blob:chunk:/blob:asm:）不在表内——内容寻址层按需回补，
+    // 不走反熵。
+    Category {
+        name: "blob:presence",
+        prefixes: &["blob:presence:"],
+    },
 ];
+
+/// 灰度推送门控的 category 名单：这些 category 是后期新增，老端入站白名单
+/// （[`category_for_key`]）不认识会把整批 data 拒收（category-mismatch）——
+/// 仅当对端 hello 声明该 category 才主动推（mkt:ann 先例的推广，见
+/// handle_pdsync_hello 与协议 §14.4）。
+pub const GATED_PUSH_CATEGORIES: &[&str] = &["mkt:ann", "blob:presence"];
 
 /// 按前缀从注册表解析 category（不存在 → `None`，如组织/消息前缀）。
 pub fn category_for_key(key: &str) -> Option<&'static Category> {
@@ -428,6 +443,9 @@ pub fn build_hello<S: StorageBackend>(
         "deviceClass": local_device_class(),
         // M3：宣告本机生效 epoch；对端据此决定加密 epoch 上限。
         "epoch": effective_epoch,
+        // A2：宣告本机 blob 配额（字节；协议 §15.1——用户配置或设备类默认；
+        // 老端不读该字段天然兼容）
+        "blobQuota": crate::sync::blob::get_blob_quota(storage)?,
     });
     if let Some(at) = last_msg_sync_at {
         hello["lastMsgSyncAt"] = json!(at);

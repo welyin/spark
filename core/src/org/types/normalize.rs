@@ -17,6 +17,23 @@ pub fn organization_key(org_id: &str) -> String {
 pub const ORG_MEMBER_PREFIX: &str = "org:member:";
 
 /// 成员条目存储键：`org:member:{orgId}:{rootId}`。
+///
+/// 【A16 双写过渡，membership §4.4-4】目标名册键 =
+/// `org:member:{orgId}:{org_user_id}`（标识面）。双写期条目键**维持 rootId
+/// 形态**：rootId ↔ org_user_id 映射由成员记录内 accessKey 自带（rootPubkey
+/// 锚点，仅组织内可见），消费点一律经双键访问器解析
+/// （`OrganizationRecord::find_member_any_key` / `RosterMember.orgUserId` /
+/// sigset 第 4 步双键回查），条目键本身不换——混跑期旧端只认 rootId 键，
+/// 换键即名册分裂。
+///
+/// 切换窗口与移除 rootId 键的条件（**全部满足才执行，属后续任务**，本批只
+/// 立条件不动键）：
+/// 1. 存量成员 accessKey 全员补齐——`migrate_access_key_backfill` 上线运行
+///    一个版本周期，各域名册 `roster_fully_mapped` 恒真；
+/// 2. 双键消费面稳定一个版本周期——全网端版本均含双键解析（签名面/城门/
+///    寻址/投影），不再出现只认 rootId 的在役端；
+/// 3. 切换动作 = 条目键换 org_user_id + 名册移除 rootId 槽位（协议线形
+///    变更，须先改 `code/spec/` 规格与 golden vectors 再动实现）。
 pub fn org_member_key(org_id: &str, root_id: &str) -> String {
     format!("{ORG_MEMBER_PREFIX}{org_id}:{root_id}")
 }

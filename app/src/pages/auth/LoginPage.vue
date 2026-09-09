@@ -123,6 +123,19 @@ export default defineComponent({
       passwordInput.value?.focus();
       if (!props.rootId || !isMobileLayout.value) return;
       if (!isBiometricUnlockEnabled()) return;
+      // 密码考试（A6，identity.md §4.2）：超 7 天未真实输密 → 挂起生物识别通道，
+      // 必须手动输一次密码（通过即内核刷新时间戳，生物识别自动恢复）。
+      // 查询失败 fail-open：考试是防遗忘 UX，不是安全边界。
+      try {
+        const exam = await window.electronAPI.rootIdentity.passwordExamStatus();
+        if (exam.overdue) {
+          showBioRetry.value = false;
+          message.value = '已超过 7 天未输入密码，请输入密码登录（通过后将恢复指纹/人脸解锁）';
+          return;
+        }
+      } catch {
+        // 状态不可读（如尚未初始化）不挂起
+      }
       try {
         const status = await biometricCheck();
         if (status.hasSecret) {

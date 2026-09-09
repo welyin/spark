@@ -23,6 +23,8 @@ pub use credential::{
     held_credential_key, validate_credential_issuance, validate_credential_structure,
     verify_credential_chain, verify_credential_signature, verify_credential_static,
 };
+// crate 内复用（policy 准入声明校验 / org 加入声明验绑），不开放 crate 外。
+pub(crate) use credential::{identity_matches_public_key, is_valid_cred_type};
 pub use error::{CredentialError, Result};
 pub use link::{
     LINK_STATEMENT, link_id, link_sign_payload, validate_link_issuance, verify_link_membership,

@@ -1,0 +1,25 @@
+{
+  "id": "spark-contacts",
+  "domain": "plugin:spark-contacts",
+  "name": "通讯录",
+  "version": "0.1.0",
+  "entryView": "default",
+  "description": "Spark 默认内置通讯录应用（communication §4.2）：朋友/分组/标签/申请管理，数据经 sdk.contacts 访问（换插件数据原样还在）。",
+  "category": "social",
+  "supportedSpaces": ["personal", "org"],
+  "views": [
+    { "id": "default", "type": "app", "title": "通讯录" }
+  ],
+  "chrome": {
+    "hostTitleBar": false
+  },
+  "permissions": [
+    "contacts:read",
+    "contacts:write"
+  ],
+  "sdkVersion": "1",
+  "package": {
+    "updateManifestUrl": "",
+    "packageName": "spark-plugin-spark-contacts-0.1.0.spkg"
+  }
+}

@@ -270,14 +270,20 @@ onMounted(async () => {
 h3 {
   margin: 0;
 }
+/* 窄窗（窗口最小宽 320）下担保输入框 + 两个按钮一行放不下时换行，不横向挤出卡片 */
 .actions {
   display: flex;
   justify-content: flex-end;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 8px;
 }
+/* 输入框弹性收缩（min-width:0 否则 flex 项按内容最小宽撑开）：
+   宽窗受 max-width 限制右对齐，窄窗换行后独占一行占满可用宽 */
 .voucher-input {
+  flex: 1;
+  min-width: 0;
   max-width: 240px;
   margin-left: auto;
 }
@@ -294,10 +300,16 @@ h3 {
   gap: 8px;
   flex-wrap: wrap;
 }
+/* 治理上下文是用户输入的长字符串（可达 120 字符无空格）：任意断行不横向溢出 */
+.request-meta strong {
+  overflow-wrap: anywhere;
+}
+/* rootId（自报文本）是无空格长字符串：任意断行，窄窗不横向溢出 */
 .hint {
   margin: 6px 0 0;
   font-size: 12px;
   color: var(--el-text-color-secondary);
+  overflow-wrap: anywhere;
 }
 .checks {
   margin: 8px 0 0;
@@ -306,10 +318,12 @@ h3 {
   font-size: 12px;
   color: var(--el-text-color-regular);
 }
+/* 检查项名含担保人 rootId 长字符串（如「担保签名 root-xxx…」）：任意断行不溢出 */
 .checks li {
   display: flex;
   align-items: center;
   gap: 6px;
   margin-top: 4px;
+  overflow-wrap: anywhere;
 }
 </style>

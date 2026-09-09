@@ -357,6 +357,7 @@ fn synthesize_catalog_entry_supported_spaces_two_level() {
         trust: Some("repo-anchored".to_string()),
         supported_spaces: Some(vec!["personal".to_string()]),
         requires: None,
+        window: None,
     };
     // installed 回落：无声明缓存时取安装态落库值（侧载插件即此路径）
     let service = fixture.service();
@@ -385,6 +386,56 @@ fn synthesize_catalog_entry_supported_spaces_two_level() {
     };
     let entry = synthesize_catalog_entry(&fixture.service(), &installed_none);
     assert_eq!(entry.supported_spaces, None);
+}
+
+#[test]
+fn synthesize_catalog_entry_window_two_level() {
+    use super::super::catalog::PluginWindow;
+    use super::super::repo::{CachedRepoDeclaration, synthesize_catalog_entry};
+
+    let fixture = Fixture::new();
+    let installed = InstalledPluginState {
+        plugin_id: REPO_ID.to_string(),
+        version: "0.2.0".to_string(),
+        package_path: String::new(),
+        sha256: String::new(),
+        size: 0,
+        installed_at: 0,
+        enabled: true,
+        granted_permissions: vec![],
+        trust: Some("repo-anchored".to_string()),
+        supported_spaces: None,
+        requires: None,
+        window: Some(PluginWindow { default_width: 480, default_height: 680 }),
+    };
+    // installed 回落：无声明缓存时取安装态落库值（侧载插件即此路径）
+    let service = fixture.service();
+    let entry = synthesize_catalog_entry(&service, &installed);
+    assert_eq!(entry.window, Some(PluginWindow { default_width: 480, default_height: 680 }));
+
+    // 声明缓存优先：声明文件 window 覆盖安装态值；声明文件中的非法值已在
+    // validate 时归一化为未声明（见 repo.rs declaration_window_normalization）
+    let mut service = fixture.service();
+    let mut declaration: serde_json::Value =
+        serde_json::from_str(&repo_declaration_text("0.2.0")).unwrap();
+    declaration["window"] = serde_json::json!({"defaultWidth": 960, "defaultHeight": 640});
+    service.repo_decl_cache.insert(
+        REPO_ID.to_string(),
+        CachedRepoDeclaration {
+            fetched_at: 0,
+            text: declaration.to_string(),
+        },
+    );
+    let entry = synthesize_catalog_entry(&service, &installed);
+    assert_eq!(entry.window, Some(PluginWindow { default_width: 960, default_height: 640 }));
+
+    // 两级皆无 → None（前端按默认 880×620）
+    let installed_none = InstalledPluginState {
+        window: None,
+        ..installed
+    };
+    let entry = synthesize_catalog_entry(&fixture.service(), &installed_none);
+    assert_eq!(entry.window, None);
 }
 
 /// 声明文件 requires 辅助：在基准声明文本上注入 requires 对象。

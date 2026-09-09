@@ -108,6 +108,7 @@ fn uninstall_keeps_package_path_outside_plugins_dir() {
             trust: None,
             supported_spaces: None,
             requires: None,
+            window: None,
         },
     );
     service.persist().unwrap();
@@ -151,6 +152,7 @@ fn uninstall_refuses_symlink_escape() {
             trust: None,
             supported_spaces: None,
             requires: None,
+            window: None,
         },
     );
     service.persist().unwrap();

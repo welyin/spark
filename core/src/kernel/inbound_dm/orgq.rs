@@ -27,10 +27,12 @@
 //! - `public`：公开发布——无需成员资格/凭证，不经插件钩子直接服务；
 //! - `credential`：凭证校验**替代**插件钩子（read-gate §1「钩子换为凭证校验」）
 //!   ——查询方无需加入来源组织，凭 readAuth 段过验证链（`verify_read_auth`，
-//!   §4 第 1–4 步）+ policyRef 存在时经 B1 策略文档求值（`evaluate_read`，
-//!   §4 第 5 步）；任一失败 fail-closed → `denied` 空集应答（非授权者连元数据
-//!   都不给，§20.5 既有口径）。写路径不受 readPolicy 影响（写权限仍属来源
-//!   组织成员 + canWrite 钩子）。
+//!   §4 第 1–4 步 + A15 城门名册回查：持有者当时确为凭证 subjectDomain 成员，
+//!   双键兼容，退队即拒零轮换）+ policyRef 存在时按**开放声明**求值（A15
+//!   城门口径：`disclosure_allows`，旧 B1 文档求值已随口径一次性切换下线，
+//!   membership §五.2）；任一失败 fail-closed → `denied` 空集应答（非授权者
+//!   连元数据都不给，§20.5 既有口径）。写路径不受 readPolicy 影响（写权限
+//!   仍属来源组织成员 + canWrite 钩子）。
 
 use serde_json::{Value, json};
 
@@ -210,10 +212,11 @@ fn serve_query_page<S: StorageBackend>(
 /// read-gate 门禁裁决（read-gate §4 第 1–5 步，fail-closed）：true = 放行。
 ///
 /// 第 1–4 步由 [`crate::credential::verify_read_auth`] 承载（结构/新鲜度 →
-/// 逐凭证验证链 → credType/subjectDomain 匹配 readPolicy → holderProof 绑定
-/// 本次请求）；第 5 步 policyRef 存在时载入数据属主组织的 B1 策略文档求值
-/// 向上开放矩阵（[`crate::policy::evaluate_read`]）。任一环节数据缺失或
-/// 校验失败 → false（denied 空集应答由调用方落）。
+/// 逐凭证验证链 → credType/subjectDomain 匹配 readPolicy → **城门名册回查**
+/// （A15：当时确为 subjectDomain 成员，退队即拒）→ holderProof 绑定本次
+/// 请求）；第 5 步 policyRef 存在时按**开放声明**求值（A15：
+/// [`disclosure_allows`]，旧 B1 文档求值已随口径切换下线）。任一环节数据
+/// 缺失或校验失败 → false（denied 空集应答由调用方落）。
 #[allow(clippy::too_many_arguments)]
 fn read_gate_allows<S: StorageBackend>(
     storage: &S,
@@ -222,7 +225,7 @@ fn read_gate_allows<S: StorageBackend>(
     read_auth: Option<&crate::credential::ReadAuth>,
     request_id: &str,
     col_full: &str,
-    is_member: bool,
+    _is_member: bool,
     now: i64,
 ) -> bool {
     let Some(read_auth) = read_auth else {
@@ -258,6 +261,16 @@ fn read_gate_allows<S: StorageBackend>(
         let snap: crate::credential::RevocationSnapshot = serde_json::from_str(&raw).ok()?;
         Some((snap.entries, snap.head))
     };
+    // 城门名册回查（A15 membership §4.3）：持有者当时确为凭证 subjectDomain
+    // 成员——读该域组织记录查成员表；记录缺失/损坏 → None → fail-closed。
+    // 双键兼容（A16 双写过渡）：holder identity 按 rootId 或 org_user_id
+    // 命中任一即在册。
+    let roster_lookup = |domain: &str, identity: &str| {
+        let record = crate::org::OrganizationService::get_record(storage, domain)
+            .ok()
+            .flatten()?;
+        Some(record.find_member_any_key(identity).is_some())
+    };
     if let Err(e) = crate::credential::verify_read_auth(
         read_auth,
         request_id,
@@ -265,81 +278,53 @@ fn read_gate_allows<S: StorageBackend>(
         &policy,
         &[&trust_decl],
         &revocation_for,
+        &roster_lookup,
         now,
     ) {
         log::info!("[ORGQ] read-gate denied: {} | col={col_full}", e.kind());
         return false;
     }
-    // 第 5 步：policyRef 求值（缺省 = 凭证类型匹配即可读全集合，read-gate §2）。
-    let Some(policy_ref) = read_policy.policy_ref.as_deref() else {
+    // 第 5 步（A15 求值口径一次性切换，membership §五.2）：policyRef 存在时
+    // 按**开放声明**求值——属主组织对凭证 subjectDomain 的生效 disclosure
+    // 记录覆盖本集合才放行；旧 B1 策略文档（名册三档+字段掩码）不再在读取点
+    // 求值，未声明即「仅组织」默认档（fail-closed 最保守；存量组织默认全隐，
+    // 首个开放声明须经公示延迟）。readPolicy 线形不变。
+    if read_policy.policy_ref.is_none() {
         return true;
-    };
-    policy_ref_allows(storage, owner_org_id, policy_ref, read_auth, col_full, is_member)
+    }
+    disclosure_allows(storage, owner_org_id, read_auth, col_full, now)
 }
 
-/// read-gate §4 第 5 步：policyRef → 数据属主组织的 B1 策略文档求值
-/// （fail-closed：文档缺失 / 引用错位 / 规则未覆盖一律拒绝）。
-fn policy_ref_allows<S: StorageBackend>(
+/// read-gate §4 第 5 步（A15 城门口径）：开放声明求值——任一呈现凭证的
+/// subjectDomain 命中属主组织对该域的生效 disclosure（collections 含本集合）
+/// → 放行。声明缺失/未生效/未覆盖一律拒绝（fail-closed）。
+fn disclosure_allows<S: StorageBackend>(
     storage: &S,
     owner_org_id: &str,
-    policy_ref: &str,
     read_auth: &crate::credential::ReadAuth,
     col_full: &str,
-    is_member: bool,
+    now: i64,
 ) -> bool {
-    // 策略文档：优先发布件（`org:policydoc:` 键域，sdk.policy.publish 产出、
-    // OrgSigSet 合入把关的生效面），缺省回退本地草稿簿记（policy:draft:
-    // 键域，未发布组织的过渡路径）；两路皆缺失即 fail-closed。
-    let doc = storage
-        .get(&crate::org::service::policy_doc_key(owner_org_id))
-        .ok()
-        .flatten()
-        .and_then(|raw| serde_json::from_str::<crate::policy::PolicyDoc>(&raw).ok())
-        .or_else(|| {
-            storage
-                .get(&crate::kernel::policy_ops::policy_draft_key(owner_org_id))
-                .ok()
-                .flatten()
-                .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
-                .and_then(|v| v.get("doc").cloned())
-                .and_then(|v| serde_json::from_value::<crate::policy::PolicyDoc>(v).ok())
-        });
-    let Some(doc) = doc else {
-        log::info!("[ORGQ] read-gate denied: policy doc unavailable | ref={policy_ref}");
-        return false;
-    };
-    let requester = crate::policy::RequesterContext {
-        is_org_member: is_member,
-        // 代表关系判定不在内核（eval 契约：由数据账号侧装配；本期无来源 → false）
-        is_representative: false,
-        credentials: read_auth
-            .credentials
-            .iter()
-            .map(|c| crate::policy::PresentedCredential {
-                cred_type: c.cred_type.clone(),
-                subject_domain: c.subject_domain.clone(),
-            })
-            .collect(),
-    };
-    match crate::policy::evaluate_read(
-        policy_ref,
-        &doc,
-        &requester,
-        &crate::policy::ReadRequest::Collection {
-            collection: col_full,
-        },
-    ) {
-        Ok(verdict) => {
-            if !verdict.is_allow() {
-                log::info!("[ORGQ] read-gate denied: policy {} | col={col_full}", verdict.kind());
-            }
-            verdict.is_allow()
+    for cred in &read_auth.credentials {
+        let key = crate::policy::disclosure_key(owner_org_id, &cred.subject_domain);
+        let Some(record) = storage
+            .get(&key)
+            .ok()
+            .flatten()
+            .and_then(|raw| serde_json::from_str::<crate::policy::DisclosureRecord>(&raw).ok())
+        else {
+            continue;
+        };
+        if crate::policy::validate_disclosure(&record).is_err() {
+            continue;
         }
-        Err(e) => {
-            log::info!("[ORGQ] read-gate denied: policy {} | col={col_full}", e.kind());
-            false
+        let view = crate::policy::eval_disclosure(&[&record], &cred.subject_domain, now);
+        if view.collections.iter().any(|c| c == col_full) {
+            return true;
         }
     }
+    log::info!("[ORGQ] read-gate denied: no effective disclosure | col={col_full}");
+    false
 }
 
 pub(super) fn handle_orgq_req<S: StorageBackend>(
@@ -627,8 +612,8 @@ pub(super) fn handle_orgq_resp<S: StorageBackend>(
     let Ok(Some(record)) = OrganizationService::get_record(storage, &org_id) else {
         return done(fail_response("rejected"), Vec::new());
     };
-    if !crate::org::roles::is_data_account(&record, from) {
-        log::info!("[ORGQ] resp rejected: from={from} not a data account of org={org_id}");
+    if !crate::org::roles::is_data_node(&record, from) {
+        log::info!("[ORGQ] resp rejected: from={from} not a data node (member) of org={org_id}");
         return done(fail_response("rejected"), Vec::new());
     }
 

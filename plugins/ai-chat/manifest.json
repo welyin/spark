@@ -11,6 +11,7 @@
     { "id": "chat", "type": "app", "title": "AI 聊天" }
   ],
   "background": "views/background.js",
+  "window": { "defaultWidth": 480, "defaultHeight": 680 },
   "permissions": ["storage:read", "storage:write", "message:app", "system:exec", "network:fetch"],
   "requires": {
     "capabilities": ["system:exec"],

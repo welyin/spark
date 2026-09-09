@@ -26,11 +26,13 @@
 //! 插件市场广播索引（发布/索引/核查回写）在 `plugin_announce_ops`，公开履历
 //! 跨事务聚合查询在 `affair_profile_ops`。
 
+mod affair_evi_ops;
 mod affair_ops;
 mod affair_profile_ops;
 mod community_ops;
 mod contact_group_ops;
 mod contact_ops;
+mod blob_ops;
 mod contact_request_ops;
 mod content_ops;
 mod credential_ops;
@@ -90,8 +92,8 @@ pub use identity::{
     InitIdentityResult, MnemonicCheckInfo, ProfileInfo, PublicIdentity, RootSignatureInfo,
 };
 pub use inbound_dm::{
-    AutoAccept, FeedBlobOut, InboundDmError, InboundDmResult, OrgqPermHook, handle_inbound_dm,
-    handle_inbound_dm_with_e2e, handle_inbound_dm_with_orgq_hooks,
+    AutoAccept, FeedBlobOut, InboundDmError, InboundDmResult, OrgqPermHook, PdsyncOut,
+    handle_inbound_dm, handle_inbound_dm_with_e2e, handle_inbound_dm_with_orgq_hooks,
 };
 pub use message_ops::{
     AppMessageView, ChatMessageView, ConversationView, app_conversation_id, direct_conversation_id,

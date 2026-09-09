@@ -1,0 +1,284 @@
+{
+  "_comment": "evidence §4.1 导出包名册段 golden vectors（A11，2026-09-08）。生成器：core/examples/gen_evidence_roster_vectors.rs（Rust 自产，含六步核验自检）；消费：core/tests/evidence_roster_vectors.rs。",
+  "roster": {
+    "desc": "roster 段逐字节：固定名册（3 条目 identity+role）→ memberSetHash 固定值 + snapshot 线形固定；memberSetHash 复算口径 = affair/snapshot.rs member_set_hash（org-signature §3）",
+    "input": {
+      "members": [
+        {
+          "identity": "64c529fa1d95175275706c1025da8b9c9dae85650e5dc3f89e97953196a6209b",
+          "role": "admin"
+        },
+        {
+          "identity": "10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+          "role": "admin"
+        },
+        {
+          "identity": "1325b850c2871916eae203f0efc3c8987f64e5e3cdb27679e6d1fa97808357e6",
+          "role": "member"
+        }
+      ]
+    },
+    "expect": {
+      "memberSetHash": "cee1f5eaf3f4537622e97db19b9ac6e4890f9ad3b4eb20175762ccd409782310",
+      "snapshot": [
+        {
+          "identity": "64c529fa1d95175275706c1025da8b9c9dae85650e5dc3f89e97953196a6209b",
+          "role": "admin"
+        },
+        {
+          "identity": "10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+          "role": "admin"
+        },
+        {
+          "identity": "1325b850c2871916eae203f0efc3c8987f64e5e3cdb27679e6d1fa97808357e6",
+          "role": "member"
+        }
+      ]
+    }
+  },
+  "anchorProof": {
+    "desc": "anchorProof inclusion 正反：固定锚集（覆盖锚 A + 成员锚 B）→ roster.anchorRoot 与 anchorProof 逐字节；消费侧断言正例可验、篡改 sibling/错 root 必败",
+    "expect": {
+      "anchorRoot": "f326fd2a81ce0718819dd8c666846bd4163be87d3078fd9771bbd7a5401eb0d7",
+      "anchorProof": [
+        "a70a4bebdc0e69d90c4c82ac801465f001c98d32173ea87027a28ad3c3547430"
+      ]
+    }
+  },
+  "packageV2": {
+    "desc": "v2 导出包：固定链（含名册承诺条目）+ 固定锚集 + roster 段 + 固定导出者密钥/ts → 六步核验全过、② 层 Pass、签名清单 3 条全有效；篡改 snapshot/memberSetHash/anchorRoot 各必败（消费侧断言）",
+    "input": {
+      "exporterKey": "7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u4=",
+      "exporterTs": 1720000007000
+    },
+    "expect": {
+      "package": {
+        "formatVersion": 2,
+        "scope": {
+          "domain": "plugin:vote",
+          "collection": "ballots",
+          "orgId": "org_0000000000000001"
+        },
+        "exporter": {
+          "rootId": "64c529fa1d95175275706c1025da8b9c9dae85650e5dc3f89e97953196a6209b",
+          "publicKey": "gUci3nHFsU50jf8yKuf3xBXO5Vh2ZJUpLNbEwKap3yg=",
+          "ts": 1720000007000,
+          "sig": "PUtJLPt/OCOGISfg1qlz1lkMBqTPDn0SnBGXSRiYmDhuM8xU4XwEUJQ0OAi0XdqjRIf4okyW7XdVGQxz1/HjCA=="
+        },
+        "head": {
+          "seq": 4,
+          "hash": "2fc1331e8e7a6f09da8be34cb34d3638cb02d07d45044637d96733e206d8848d"
+        },
+        "entries": [
+          {
+            "seq": 1,
+            "prevHash": null,
+            "domain": "plugin:vote",
+            "collection": "ballots",
+            "id": "ballot-1",
+            "op": "put",
+            "dataHash": "7406627668866e1afb3b2e4d777a09a0fbec28c26c0bd1e5e52c6615891dc230",
+            "payloadHash": "08b81d4d7f96b755fe4367c7f83c00e205739180cea474a64fd7731c725aae28",
+            "metaHash": null,
+            "hash": "7a13c2326f93f8233d58088945959f83ac5c82019ae02ac45ef8c56d63996ee4",
+            "timestamp": 1720000001000,
+            "nodeId": "12D3KooWNodeA"
+          },
+          {
+            "seq": 2,
+            "prevHash": "7a13c2326f93f8233d58088945959f83ac5c82019ae02ac45ef8c56d63996ee4",
+            "domain": "plugin:vote",
+            "collection": "ballots",
+            "id": "ballot-2",
+            "op": "put",
+            "dataHash": "e3bc20a2d2e2ca9d0c45468fb5bf9a044c521d56ebf4b8fe2c3d75ee5d74abdf",
+            "payloadHash": "f96a33e48fb3047c7f2ecbe0dc277e22649ebf9891ce0c5f5c67a638a18551b1",
+            "metaHash": null,
+            "hash": "48d719c80bd62cdcc8d2e948505740e1476616598cda827671dc95a0d056d4cd",
+            "timestamp": 1720000002000,
+            "nodeId": "12D3KooWNodeA"
+          },
+          {
+            "seq": 3,
+            "prevHash": "48d719c80bd62cdcc8d2e948505740e1476616598cda827671dc95a0d056d4cd",
+            "domain": "plugin:vote",
+            "collection": "ballots",
+            "id": "ballot-3",
+            "op": "put",
+            "dataHash": "0ed81073c4d7a60261485602d41f79b7c992a6b6fa79bc0685603924a735e885",
+            "payloadHash": "02592da6641bf8fbde5fc9f535c70282aff0f074e2ca1d390626c16069a5179a",
+            "metaHash": null,
+            "hash": "d76755edb7249af86c0bd6d68bdc594444bb17d3b2d5bdb7dec3b83afe90cba3",
+            "timestamp": 1720000003000,
+            "nodeId": "12D3KooWNodeA"
+          },
+          {
+            "seq": 4,
+            "prevHash": "d76755edb7249af86c0bd6d68bdc594444bb17d3b2d5bdb7dec3b83afe90cba3",
+            "domain": "org_0000000000000001",
+            "collection": "roster",
+            "id": "org_0000000000000001",
+            "op": "put",
+            "dataHash": "d677f2b072797610c4c1536dee55d35018dfc1f85bf1755f4253b46badc010c8",
+            "payloadHash": "5c6416e17368cf34d368cf612132628a61db0c85060a430491d0752b9f4d7f68",
+            "metaHash": null,
+            "hash": "2fc1331e8e7a6f09da8be34cb34d3638cb02d07d45044637d96733e206d8848d",
+            "timestamp": 1720000004000,
+            "nodeId": "12D3KooWNodeA"
+          }
+        ],
+        "anchors": [
+          {
+            "anchorV": 1,
+            "orgId": "org_0000000000000001",
+            "nodeId": "12D3KooWNodeA",
+            "rootId": "10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+            "publicKey": "0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc=",
+            "headSeq": 4,
+            "headHash": "2fc1331e8e7a6f09da8be34cb34d3638cb02d07d45044637d96733e206d8848d",
+            "ts": 1720000005000,
+            "sig": "5MFKXV9XqPgjac53fFnDMU5151LG7cIh+e91zQLXsiH0HO5UvbtHeXz7sU1MPfLYZ4cIjsg/myHtVYhujdPjDQ=="
+          },
+          {
+            "anchorV": 1,
+            "orgId": "org_0000000000000001",
+            "nodeId": "12D3KooWNodeB",
+            "rootId": "1325b850c2871916eae203f0efc3c8987f64e5e3cdb27679e6d1fa97808357e6",
+            "publicKey": "oJql9HpnWYAv+VX43C0qFKXJnSO+l/hkEn/5ODRVpPA=",
+            "headSeq": 5,
+            "headHash": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "ts": 1720000006000,
+            "sig": "hN5SyEWLYjLRQOT8UJ90mwNyDuqnZDZnSY2tlPjoIGRsnB0y1RMl9blINY13DaZecQ3JQRv5xq2Yo0DT9UxcAg=="
+          }
+        ],
+        "anchorRoot": "f326fd2a81ce0718819dd8c666846bd4163be87d3078fd9771bbd7a5401eb0d7",
+        "anchorProofs": {
+          "12D3KooWNodeA": [
+            "a70a4bebdc0e69d90c4c82ac801465f001c98d32173ea87027a28ad3c3547430"
+          ],
+          "12D3KooWNodeB": [
+            "653954b515f2579df2708ed1939a58286114b48819b92f310fa13839177aa2a7"
+          ]
+        },
+        "roster": {
+          "memberSetHash": "cee1f5eaf3f4537622e97db19b9ac6e4890f9ad3b4eb20175762ccd409782310",
+          "anchor": {
+            "orgId": "org_0000000000000001",
+            "anchorRoot": "f326fd2a81ce0718819dd8c666846bd4163be87d3078fd9771bbd7a5401eb0d7",
+            "ts": 1720000005000
+          },
+          "snapshot": [
+            {
+              "identity": "64c529fa1d95175275706c1025da8b9c9dae85650e5dc3f89e97953196a6209b",
+              "role": "admin"
+            },
+            {
+              "identity": "10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+              "role": "admin"
+            },
+            {
+              "identity": "1325b850c2871916eae203f0efc3c8987f64e5e3cdb27679e6d1fa97808357e6",
+              "role": "member"
+            }
+          ],
+          "anchorProof": [
+            "a70a4bebdc0e69d90c4c82ac801465f001c98d32173ea87027a28ad3c3547430"
+          ]
+        },
+        "spec": {
+          "canonicalJson": "normalizeObject：key 排序（整数型 key 数值升序在前，其余 UTF-16 字典序），嵌套对象递归 normalize 后作为 JSON 字符串值嵌入；数字按 JS Number::toString，字符串按 JS JSON 转义",
+          "specRef": "sync-evidence §1–§2、§6–§9"
+        }
+      }
+    }
+  },
+  "v1v2": {
+    "desc": "v1/v2 互验：v1 包 → ① 层通过、② 层 NotCovered（如实标注「本包不含名册快照」，不判失败）；v2 包缺 roster 段必败（消费侧断言）",
+    "expect": {
+      "v1Package": {
+        "formatVersion": 1,
+        "scope": {
+          "domain": "plugin:vote",
+          "collection": "ballots",
+          "orgId": "org_0000000000000001"
+        },
+        "exporter": {
+          "rootId": "64c529fa1d95175275706c1025da8b9c9dae85650e5dc3f89e97953196a6209b",
+          "publicKey": "gUci3nHFsU50jf8yKuf3xBXO5Vh2ZJUpLNbEwKap3yg=",
+          "ts": 1720000007000,
+          "sig": "EnvCn5EV82wgXoOKqcPtcrmsnzw2xblLuPIXliUb+k7/oQMG1gmJb9rE3ODZrVFfXMIBkANZo54kRnqsYCYJCQ=="
+        },
+        "head": {
+          "seq": 3,
+          "hash": "d76755edb7249af86c0bd6d68bdc594444bb17d3b2d5bdb7dec3b83afe90cba3"
+        },
+        "entries": [
+          {
+            "seq": 1,
+            "prevHash": null,
+            "domain": "plugin:vote",
+            "collection": "ballots",
+            "id": "ballot-1",
+            "op": "put",
+            "dataHash": "7406627668866e1afb3b2e4d777a09a0fbec28c26c0bd1e5e52c6615891dc230",
+            "payloadHash": "08b81d4d7f96b755fe4367c7f83c00e205739180cea474a64fd7731c725aae28",
+            "metaHash": null,
+            "hash": "7a13c2326f93f8233d58088945959f83ac5c82019ae02ac45ef8c56d63996ee4",
+            "timestamp": 1720000001000,
+            "nodeId": "12D3KooWNodeA"
+          },
+          {
+            "seq": 2,
+            "prevHash": "7a13c2326f93f8233d58088945959f83ac5c82019ae02ac45ef8c56d63996ee4",
+            "domain": "plugin:vote",
+            "collection": "ballots",
+            "id": "ballot-2",
+            "op": "put",
+            "dataHash": "e3bc20a2d2e2ca9d0c45468fb5bf9a044c521d56ebf4b8fe2c3d75ee5d74abdf",
+            "payloadHash": "f96a33e48fb3047c7f2ecbe0dc277e22649ebf9891ce0c5f5c67a638a18551b1",
+            "metaHash": null,
+            "hash": "48d719c80bd62cdcc8d2e948505740e1476616598cda827671dc95a0d056d4cd",
+            "timestamp": 1720000002000,
+            "nodeId": "12D3KooWNodeA"
+          },
+          {
+            "seq": 3,
+            "prevHash": "48d719c80bd62cdcc8d2e948505740e1476616598cda827671dc95a0d056d4cd",
+            "domain": "plugin:vote",
+            "collection": "ballots",
+            "id": "ballot-3",
+            "op": "put",
+            "dataHash": "0ed81073c4d7a60261485602d41f79b7c992a6b6fa79bc0685603924a735e885",
+            "payloadHash": "02592da6641bf8fbde5fc9f535c70282aff0f074e2ca1d390626c16069a5179a",
+            "metaHash": null,
+            "hash": "d76755edb7249af86c0bd6d68bdc594444bb17d3b2d5bdb7dec3b83afe90cba3",
+            "timestamp": 1720000003000,
+            "nodeId": "12D3KooWNodeA"
+          }
+        ],
+        "anchors": [
+          {
+            "anchorV": 1,
+            "orgId": "org_0000000000000001",
+            "nodeId": "12D3KooWNodeA",
+            "rootId": "10ba682c8ad13513971e8b56881aab8bd702bb807796eca81932c735a94d6e6d",
+            "publicKey": "0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc=",
+            "headSeq": 3,
+            "headHash": "abababababababababababababababababababababababababababababababab",
+            "ts": 1720000005000,
+            "sig": "1uM72KvshBFU76e1mWEmCmIQPD+8AcSDacpPe4H2I+vg8/6ghcwpDWGSOPDi6O0H8q2MrWUKhh7bwC5JLObyBw=="
+          }
+        ],
+        "anchorRoot": "921ff402ee584c1324ac35fd3c54fe2eb48c984ca30b1753d9b0f68ae884040f",
+        "anchorProofs": {
+          "12D3KooWNodeA": []
+        },
+        "spec": {
+          "canonicalJson": "normalizeObject：key 排序（整数型 key 数值升序在前，其余 UTF-16 字典序），嵌套对象递归 normalize 后作为 JSON 字符串值嵌入；数字按 JS Number::toString，字符串按 JS JSON 转义",
+          "specRef": "sync-evidence §1–§2、§6–§9"
+        }
+      },
+      "v1Membership": "not-covered"
+    }
+  }
+}

@@ -7,6 +7,11 @@
 //! - 路由：成员侧对 org data-accounts 集合的读取决策（本地直读 / 走 orgq /
 //!   全离线回缓存或 UnavailableOffline），选一个在线可达的数据账号发 orgq-req。
 //!
+//! A14/A15 口径：成员即数据节点——`should_route_orgq` 对成员恒 false（本地
+//! 直读），本机制对**成员事实不可达**；A15 评估结论 = **保留不瘦身**（保守：
+//! 非成员 credential/public 查询发起侧与已退出成员降级视图仍消费在途记录/
+//! 应答关联，Z2/Z3 关联防伪造是安全语义；membership 篇 §三 同口径）。
+//!
 //! 从 `orgq.rs` 拆出的子模块（Z5 650 行硬线）。纯逻辑（存储泛型）。
 
 use crate::org::OrganizationRecord;
@@ -167,14 +172,14 @@ pub fn select_online_data_account(
     pick_online(record, online_peer_ids, my_root_id, |_| true)
 }
 
-/// 在满足谓词的在线数据账号中选第一个可达的。
+/// 在满足谓词的在线数据节点（A14：全体成员）中选第一个可达的。
 fn pick_online(
     record: &OrganizationRecord,
     online_peer_ids: &std::collections::HashSet<String>,
     my_root_id: &str,
     accept: impl Fn(&str) -> bool,
 ) -> Option<String> {
-    for root_id in crate::org::roles::data_account_set(record) {
+    for root_id in crate::org::roles::data_node_set(record) {
         if root_id == my_root_id || !accept(&root_id) {
             continue;
         }
@@ -196,9 +201,10 @@ fn pick_online(
 }
 
 /// 本机对某 org 数据-accounts 集合是否应走 orgq（按需查询）而非本地直读：
-/// 本机**非数据账号** 且集合 `accounts == data-accounts`。
+/// 本机**非数据节点**（A14 全员数据节点：成员即数据节点——成员恒 false
+/// 本地直读；仅非成员/已退出视图才可能 true）。
 pub fn should_route_orgq(record: &OrganizationRecord, my_root_id: &str) -> bool {
-    !crate::org::roles::is_data_account(record, my_root_id)
+    !crate::org::roles::is_data_node(record, my_root_id)
 }
 
 /// 成员侧一次 org 数据-accounts 集合读取的路由决策（§20.5 / plugin-data-api
@@ -424,8 +430,9 @@ mod tests {
         assert!(picked.is_some(), "全降级仍选一个（宁选 degraded 也不空）");
     }
 
+    /// A14 全员数据节点：成员恒不路由（本地直读）；仅非成员视图路由。
     #[test]
-    fn should_route_orgq_only_for_non_data_account() {
+    fn should_route_orgq_only_for_non_member() {
         let record = org_record(
             &[
                 ("me", OrganizationRole::Member),
@@ -433,8 +440,9 @@ mod tests {
             ],
             &["da"],
         );
-        assert!(should_route_orgq(&record, "me"));
+        assert!(!should_route_orgq(&record, "me"), "成员即数据节点 → 本地直读");
         assert!(!should_route_orgq(&record, "da"));
+        assert!(should_route_orgq(&record, "x"), "非成员视图 → 路由");
     }
 
     #[test]

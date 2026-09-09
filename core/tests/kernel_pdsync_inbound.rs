@@ -1970,3 +1970,136 @@ fn pwack_inbound_bad_mac_not_anchored() {
         "MAC 校验失败 → 零状态写入，不推进锚"
     );
 }
+
+// ── E5 实时事件（A45）：pwv 入站置 stale → PasswordChangeObserved ──────────
+
+/// 新 V 合入且 stale → 广播 PasswordChangeObserved（在线接收设备实时引导）；
+/// 无同 ts epoch:state 时 reason 兜底 password_change。
+#[test]
+fn pwv_inbound_stale_emits_password_change_observed() {
+    let mut s = MemoryStorage::new();
+    let (key, my_root) = self_identity(50);
+    let v = build_value("new-secret", &[7u8; 16], &[9u8; 12], 2000, "peer-a").unwrap();
+    let record = PdsyncRecord {
+        key: pw::PWV_KEY.to_string(),
+        value: serde_json::to_value(&v).unwrap(),
+        meta: remote_meta(NODE, 1, NOW),
+        dseq: None,
+    };
+    let result = deliver_pdsync_data(&mut s, &key, &my_root, "pwv", &[record]);
+
+    let observed = result
+        .events
+        .iter()
+        .find_map(|e| match e {
+            P2pEvent::PasswordChangeObserved {
+                rotated_at,
+                rotated_by,
+                rotated_by_device,
+                reason,
+            } => Some((*rotated_at, rotated_by.clone(), rotated_by_device.clone(), reason.clone())),
+            _ => None,
+        })
+        .expect("stale 时应发 PasswordChangeObserved");
+    assert_eq!(observed.0, 2000);
+    assert_eq!(observed.1, "peer-a");
+    assert_eq!(observed.2, "peer-a", "无设备记录时回退 changedBy");
+    assert_eq!(observed.3, "password_change", "无同 ts epoch:state → 兜底");
+}
+
+/// reason 以 epoch:state 为权威（时戳同源：rotatedAt == changedAt 时采信）。
+#[test]
+fn pwv_inbound_event_reason_from_matching_epoch_state() {
+    let mut s = MemoryStorage::new();
+    let (key, my_root) = self_identity(51);
+    // epoch:state：password_reset 轮换于 NOW（与 incoming V 的 changedAt 同 ts）。
+    let self_x25519 = spark_core::epoch::ed_sk_to_x25519(&[1; 32]);
+    spark_core::epoch::EpochService::rotate(
+        &mut s,
+        &"root-x".to_string(),
+        NODE,
+        NODE,
+        NOW,
+        spark_core::epoch::RotationReason::PasswordReset,
+        &self_x25519,
+        &[],
+        None,
+    )
+    .unwrap();
+    let v = build_value("new-secret", &[7u8; 16], &[9u8; 12], NOW as u64, "peer-a").unwrap();
+    let record = PdsyncRecord {
+        key: pw::PWV_KEY.to_string(),
+        value: serde_json::to_value(&v).unwrap(),
+        meta: remote_meta(NODE, 1, NOW),
+        dseq: None,
+    };
+    let result = deliver_pdsync_data(&mut s, &key, &my_root, "pwv", &[record]);
+    let reason = result
+        .events
+        .iter()
+        .find_map(|e| match e {
+            P2pEvent::PasswordChangeObserved { reason, .. } => Some(reason.clone()),
+            _ => None,
+        })
+        .expect("应发事件");
+    assert_eq!(reason, "password_reset", "同 ts epoch:state 的 reason 为权威");
+}
+
+/// 自愈成功（会话口令可解新 V）→ stale 清除，不发事件（无需用户动作）。
+#[test]
+fn pwv_inbound_auto_unify_suppresses_event() {
+    let mut s = MemoryStorage::new();
+    let (key, my_root) = self_identity(52);
+    let password = "pw-e2e-2026";
+    let local_v = build_value(password, &[1u8; 16], &[2u8; 12], 2000, NODE).unwrap();
+    pw::put_pwv(&mut s, NODE, &local_v, NOW).unwrap();
+    pw::put_applied_vts(&mut s, 2000).unwrap();
+    let remote_v = build_value(password, &[3u8; 16], &[4u8; 12], 3000, "peer-b").unwrap();
+    let record = PdsyncRecord {
+        key: pw::PWV_KEY.to_string(),
+        value: serde_json::to_value(&remote_v).unwrap(),
+        meta: remote_meta("peer-b", 1, NOW),
+        dseq: None,
+    };
+    let salt2 =
+        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &remote_v.salt).unwrap();
+    let kverify = derive_kverify(password, &salt2.try_into().unwrap()).unwrap();
+    let result = deliver_pdsync_data_kv(&mut s, &key, &my_root, "pwv", &[record], Some(&kverify));
+
+    assert!(!pw::get_stale(&s).unwrap(), "自愈成功");
+    assert!(
+        result
+            .events
+            .iter()
+            .all(|e| !matches!(e, P2pEvent::PasswordChangeObserved { .. })),
+        "自愈无用户动作 → 不发事件"
+    );
+}
+
+/// 回放忽略（changedAt <= applied）→ 不置 stale 不发事件（改密端本机回环同构：
+/// 本机发布的 V 已推进 applied，回环到达走此分支，天然不重复自报）。
+#[test]
+fn pwv_inbound_replay_emits_nothing() {
+    let mut s = MemoryStorage::new();
+    let (key, my_root) = self_identity(53);
+    let local_v = build_value("pw", &[1u8; 16], &[2u8; 12], 5000, NODE).unwrap();
+    pw::put_pwv(&mut s, NODE, &local_v, NOW).unwrap();
+    pw::put_applied_vts(&mut s, 5000).unwrap();
+    let replay_v = build_value("pw", &[3u8; 16], &[4u8; 12], 2000, "peer-a").unwrap();
+    let record = PdsyncRecord {
+        key: pw::PWV_KEY.to_string(),
+        value: serde_json::to_value(&replay_v).unwrap(),
+        meta: remote_meta("peer-a", 1, NOW),
+        dseq: None,
+    };
+    let result = deliver_pdsync_data(&mut s, &key, &my_root, "pwv", &[record]);
+
+    assert!(!pw::get_stale(&s).unwrap(), "回放不置 stale");
+    assert!(
+        result
+            .events
+            .iter()
+            .all(|e| !matches!(e, P2pEvent::PasswordChangeObserved { .. })),
+        "回放不发事件"
+    );
+}

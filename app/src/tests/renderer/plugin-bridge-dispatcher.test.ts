@@ -286,16 +286,22 @@ describe('contacts 域（社交投递层 §9.4 contact:read 只读门面）', ()
   });
 });
 
-describe('feed 域（社交投递层 §9 sdk.feed：deliver 需 feed:deliver，onReceive/pull 免权限）', () => {
-  it('feed:deliver 未授权：feed.deliver 拒绝', async () => {
+describe('feed 域（社交投递层 §9 + A18 §4.1 权限归一：deliver 需 feed:write，pull/订阅收件需 feed:read）', () => {
+  it('feed:write 未授权：feed.deliver 拒绝（旧 feed:deliver 位不再门控）', async () => {
     const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
     await expect(
       handler('feed', 'deliver', [{ topic: 'spark-example:posts', payload: {}, recipients: [] }])
     ).rejects.toThrow(/Access denied/);
+    // 仅有旧位 feed:deliver 也拒绝（canonical 已迁 feed:write）
+    mockGrantedPermissions(['feed:deliver']);
+    const legacy = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    await expect(
+      legacy('feed', 'deliver', [{ topic: 'spark-example:posts', payload: {}, recipients: [] }])
+    ).rejects.toThrow(/Access denied/);
   });
 
-  it('feed:deliver 授权：deliver 放行，落到 electronAPI.feed', async () => {
-    mockGrantedPermissions(['feed:deliver']);
+  it('feed:write 授权：deliver 放行，落到 electronAPI.feed', async () => {
+    mockGrantedPermissions(['feed:write']);
     const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
     await expect(
       handler('feed', 'deliver', [{ topic: 'spark-example:posts', payload: { t: 1 }, recipients: ['bob'] }])
@@ -303,7 +309,7 @@ describe('feed 域（社交投递层 §9 sdk.feed：deliver 需 feed:deliver，o
   });
 
   it('出站 topic 前缀校验：非本插件前缀拒绝（架构 §8）', async () => {
-    mockGrantedPermissions(['feed:deliver']);
+    mockGrantedPermissions(['feed:write']);
     const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
     // 前缀 != 调用方插件 id（spark-example）→ InvalidTopic
     await expect(
@@ -315,14 +321,20 @@ describe('feed 域（社交投递层 §9 sdk.feed：deliver 需 feed:deliver，o
     ).resolves.toBeNull();
   });
 
-  it('feed.pull 免权限（无 feed:deliver 也放行，接收侧免权限 §9.3）', async () => {
+  it('feed.pull 需 feed:read（A18 §4.1）：未授权拒绝，授权放行', async () => {
     const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
     await expect(
       handler('feed', 'pull', [{ topic: 'spark-example:posts', cursor: undefined, limit: 20 }])
+    ).rejects.toThrow(/Access denied/);
+    mockGrantedPermissions(['feed:read']);
+    const granted = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    await expect(
+      granted('feed', 'pull', [{ topic: 'spark-example:posts', cursor: undefined, limit: 20 }])
     ).resolves.toBeNull();
   });
 
   it('B2：pull 跨插件 topic 归属校验——读他人收件箱被拒', async () => {
+    mockGrantedPermissions(['feed:read']);
     const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
     // 前缀 != 本插件 id（spark-example）→ InvalidTopic（防 `pull({topic:"spark-moments:posts"})` 读他人收件箱）
     await expect(
@@ -334,8 +346,8 @@ describe('feed 域（社交投递层 §9 sdk.feed：deliver 需 feed:deliver，o
     ).resolves.toBeNull();
   });
 
-  it('message-card 视图无 feed 域（有 feed:deliver 也拒绝）', async () => {
-    mockGrantedPermissions(['feed:deliver']);
+  it('message-card 视图无 feed 域（有 feed:write/feed:read 也拒绝）', async () => {
+    mockGrantedPermissions(['feed:write', 'feed:read']);
     const handler = await createPluginBridgeDispatcher({ ...BASE_IDENTITY, viewType: 'message-card' });
     await expect(
       handler('feed', 'deliver', [{ topic: 'spark-example:posts', payload: {}, recipients: [] }])
@@ -346,7 +358,7 @@ describe('feed 域（社交投递层 §9 sdk.feed：deliver 需 feed:deliver，o
   });
 
   it('未知 feed 方法拒绝（未知调用）', async () => {
-    mockGrantedPermissions(['feed:deliver']);
+    mockGrantedPermissions(['feed:write']);
     const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
     await expect(handler('feed', 'onReceive', ['x'])).rejects.toThrow(/Access denied/);
   });
@@ -462,5 +474,229 @@ describe('policy 域（community-affairs §7.2 sdk.policy：读须 policy:read�
     const handler = await createPluginBridgeDispatcher({ ...BASE_IDENTITY, viewType: 'message-card' });
     await expect(handler('policy', 'read', ['org_1'])).rejects.toThrow(/Access denied/);
     await expect(handler('policy', 'submitDraft', [{ policyV: 1 }])).rejects.toThrow(/Access denied/);
+  });
+});
+
+// ------------------------------------------------------------------
+// A18 插件数据 API 面（communication §4.1）：sdk.messages / sdk.contacts
+// 等语义移植现有 Tauri 命令（同输入同结果 + space 桥绑定注入）+ 权限拒绝
+// ------------------------------------------------------------------
+
+/** 记录型 messages 命令桩（vi.fn 记录调用参数） */
+function mockMessagesApi() {
+  const api = {
+    listConversations: vi.fn(async () => []),
+    listMessages: vi.fn(async () => []),
+    sendText: vi.fn(async (_space: string, _conv: string, id: string, text: string) => ({
+      id,
+      senderId: 'me',
+      senderName: '我',
+      type: 'text',
+      content: text,
+      createdAt: 1000,
+      status: 'sent',
+      recalled: false
+    })),
+    recall: vi.fn(async () => ({ success: true })),
+    markRead: vi.fn(async () => ({ success: true })),
+    ensureDirect: vi.fn(async () => ({ id: 'direct-1' })),
+    resend: vi.fn(async (_s: string, _c: string, id: string) => ({ id })),
+    deleteMessage: vi.fn(async () => ({ success: true })),
+    setDraft: vi.fn(async () => ({ success: true })),
+    togglePin: vi.fn(async () => ({ success: true })),
+    toggleMute: vi.fn(async () => ({ success: true })),
+    clear: vi.fn(async () => ({ success: true })),
+    deleteConversation: vi.fn(async () => ({ success: true }))
+  };
+  (window.electronAPI as any).messages = api;
+  return api;
+}
+
+/** 记录型 contacts 命令桩 */
+function mockContactsApi() {
+  const api = {
+    overview: vi.fn(async () => ({ friends: [], requests: [], outgoing: [], tags: [], groups: [] })),
+    updateProfile: vi.fn(async () => ({ success: true })),
+    setBlocked: vi.fn(async () => ({ success: true })),
+    removeFriend: vi.fn(async () => ({ success: true })),
+    sendRequest: vi.fn(async () => ({ id: 'r1' })),
+    replyRequest: vi.fn(async () => ({ id: 'r1' })),
+    askRequest: vi.fn(async () => ({ id: 'r1' })),
+    resolveRequest: vi.fn(async () => ({ success: true })),
+    tagCreate: vi.fn(async (_s: string, id: string, name: string) => ({ id, name })),
+    tagRename: vi.fn(async () => ({ success: true })),
+    tagDelete: vi.fn(async () => ({ success: true })),
+    groupCreate: vi.fn(async (_s: string, id: string, name: string) => ({ id, name })),
+    groupRename: vi.fn(async () => ({ success: true })),
+    groupDelete: vi.fn(async () => ({ success: true })),
+    groupMove: vi.fn(async () => ({ success: true })),
+    setGroup: vi.fn(async () => ({ success: true })),
+    orgGroupCreate: vi.fn(async () => null),
+    orgGroupRename: vi.fn(async () => ({ success: true })),
+    orgGroupDelete: vi.fn(async () => ({ success: true })),
+    orgGroupMove: vi.fn(async () => ({ success: true }))
+  };
+  (window.electronAPI as any).contacts = api;
+  return api;
+}
+
+describe('A18 sdk.messages IM 数据面（§4.1：等语义移植 + space 桥注入 + messages:read/write）', () => {
+  it('messages:read 未授权：conversations/list 拒绝；messages:write 未授权：send/recall/markConversationRead 拒绝', async () => {
+    mockMessagesApi();
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    await expect(handler('messages', 'conversations', [])).rejects.toThrow(/Access denied/);
+    await expect(handler('messages', 'list', ['c1'])).rejects.toThrow(/Access denied/);
+    mockGrantedPermissions(['messages:read']);
+    const reader = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    await expect(reader('messages', 'send', ['c1', 'hi'])).rejects.toThrow(/Access denied/);
+    await expect(reader('messages', 'recall', ['c1', 'm1'])).rejects.toThrow(/Access denied/);
+    await expect(reader('messages', 'markConversationRead', ['c1'])).rejects.toThrow(/Access denied/);
+  });
+
+  it('等语义对照：同输入落到同一 Tauri 命令（space 由桥绑定注入）', async () => {
+    const api = mockMessagesApi();
+    mockGrantedPermissions(['messages:read', 'messages:write']);
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    await handler('messages', 'conversations', []);
+    expect(api.listConversations).toHaveBeenCalledWith('org:org_1');
+    await handler('messages', 'list', ['c1']);
+    expect(api.listMessages).toHaveBeenCalledWith('org:org_1', 'c1');
+    const quote = { messageId: 'm0', senderName: 'A', preview: 'p' };
+    const sent = (await handler('messages', 'send', ['c1', 'hello', quote])) as { id: string; content: string };
+    expect(api.sendText).toHaveBeenCalledWith('org:org_1', 'c1', expect.stringMatching(/^m\d+-\d+$/), 'hello', quote);
+    expect(sent.content).toBe('hello');
+    await handler('messages', 'recall', ['c1', 'm1']);
+    expect(api.recall).toHaveBeenCalledWith('org:org_1', 'c1', 'm1');
+    await handler('messages', 'markConversationRead', ['c1']);
+    expect(api.markRead).toHaveBeenCalledWith('org:org_1', 'c1');
+  });
+
+  it('personal 空间注入：space key 为 personal', async () => {
+    const api = mockMessagesApi();
+    mockGrantedPermissions(['messages:read'], 'demo-space');
+    const handler = await createPluginBridgeDispatcher({
+      ...BASE_IDENTITY,
+      pluginId: 'demo-space',
+      domain: 'plugin:demo-space',
+      space: { type: 'personal', id: 'personal' },
+      supportedSpaces: ['personal', 'org']
+    });
+    await handler('messages', 'conversations', []);
+    expect(api.listConversations).toHaveBeenCalledWith('personal');
+  });
+
+  it('message-card 视图：有 messages 授权也拒绝（卡片视图不暴露 IM 面）', async () => {
+    mockMessagesApi();
+    mockGrantedPermissions(['messages:read', 'messages:write']);
+    const handler = await createPluginBridgeDispatcher({ ...BASE_IDENTITY, viewType: 'message-card' });
+    await expect(handler('messages', 'conversations', [])).rejects.toThrow(/Access denied/);
+    await expect(handler('messages', 'send', ['c1', 'hi'])).rejects.toThrow(/Access denied/);
+  });
+
+  it('A19 写面补全：八命令等语义映射（space 桥注入），未授权拒绝', async () => {
+    const api = mockMessagesApi();
+    // 未授权：八命令一律拒绝
+    const denied = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    for (const [method, args] of [
+      ['ensureDirect', ['peer-1', '甲']],
+      ['resend', ['c1', 'm1']],
+      ['deleteMessage', ['c1', 'm1']],
+      ['setDraft', ['c1', 'draft']],
+      ['togglePin', ['c1']],
+      ['toggleMute', ['c1']],
+      ['clear', ['c1']],
+      ['deleteConversation', ['c1']]
+    ] as const) {
+      await expect(denied('messages', method, [...args])).rejects.toThrow(/Access denied/);
+    }
+    // 授权：等语义对照（space 桥绑定注入为第一参数）
+    mockGrantedPermissions(['messages:write']);
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    await handler('messages', 'ensureDirect', ['peer-1', '甲']);
+    expect(api.ensureDirect).toHaveBeenCalledWith('org:org_1', 'peer-1', '甲');
+    await handler('messages', 'resend', ['c1', 'm1']);
+    expect(api.resend).toHaveBeenCalledWith('org:org_1', 'c1', 'm1');
+    await handler('messages', 'deleteMessage', ['c1', 'm1']);
+    expect(api.deleteMessage).toHaveBeenCalledWith('org:org_1', 'c1', 'm1');
+    await handler('messages', 'setDraft', ['c1', 'draft']);
+    expect(api.setDraft).toHaveBeenCalledWith('org:org_1', 'c1', 'draft');
+    await handler('messages', 'togglePin', ['c1']);
+    expect(api.togglePin).toHaveBeenCalledWith('org:org_1', 'c1');
+    await handler('messages', 'toggleMute', ['c1']);
+    expect(api.toggleMute).toHaveBeenCalledWith('org:org_1', 'c1');
+    await handler('messages', 'clear', ['c1']);
+    expect(api.clear).toHaveBeenCalledWith('org:org_1', 'c1');
+    await handler('messages', 'deleteConversation', ['c1']);
+    expect(api.deleteConversation).toHaveBeenCalledWith('org:org_1', 'c1');
+  });
+});
+
+describe('A18 sdk.contacts 数据面（§4.1：等语义移植 + space 桥注入 + contacts:read/write）', () => {
+  it('contacts:read 未授权：overview 拒绝；contacts:write 未授权：写操作一律拒绝', async () => {
+    mockContactsApi();
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    await expect(handler('contacts', 'overview', [])).rejects.toThrow(/Access denied/);
+    mockGrantedPermissions(['contacts:read']);
+    const reader = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    await expect(reader('contacts', 'setBlocked', ['r1', true])).rejects.toThrow(/Access denied/);
+    await expect(reader('contacts', 'tagCreate', ['t1', '同事'])).rejects.toThrow(/Access denied/);
+    await expect(reader('contacts', 'resolveRequest', ['r1', true, 'open'])).rejects.toThrow(/Access denied/);
+    await expect(reader('contacts', 'groupMove', ['g1', 0])).rejects.toThrow(/Access denied/);
+    await expect(reader('contacts', 'orgGroupCreate', ['', 'g1', '分组'])).rejects.toThrow(/Access denied/);
+  });
+
+  it('等语义对照：同输入落到同一 Tauri 命令（space 由桥绑定注入）', async () => {
+    const api = mockContactsApi();
+    mockGrantedPermissions(['contacts:read', 'contacts:write']);
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    await handler('contacts', 'overview', []);
+    expect(api.overview).toHaveBeenCalledWith('org:org_1');
+    await handler('contacts', 'updateProfile', ['r1', { remark: 'x' }]);
+    expect(api.updateProfile).toHaveBeenCalledWith('org:org_1', 'r1', { remark: 'x' });
+    await handler('contacts', 'setBlocked', ['r1', true]);
+    expect(api.setBlocked).toHaveBeenCalledWith('org:org_1', 'r1', true);
+    await handler('contacts', 'removeFriend', ['r1', true]);
+    expect(api.removeFriend).toHaveBeenCalledWith('r1', true);
+    const input = { id: 'q1', rootId: 'r2', raw: '{}', source: 'card', message: 'hi' };
+    await handler('contacts', 'sendRequest', [input]);
+    expect(api.sendRequest).toHaveBeenCalledWith(input);
+    await handler('contacts', 'replyRequest', ['r1', '你好']);
+    expect(api.replyRequest).toHaveBeenCalledWith('r1', '你好');
+    await handler('contacts', 'askRequest', ['r1', '哪位']);
+    expect(api.askRequest).toHaveBeenCalledWith('r1', '哪位');
+    await handler('contacts', 'resolveRequest', ['r1', true, 'open']);
+    expect(api.resolveRequest).toHaveBeenCalledWith('r1', true, 'open');
+    await handler('contacts', 'tagCreate', ['t1', '同事']);
+    expect(api.tagCreate).toHaveBeenCalledWith('org:org_1', 't1', '同事');
+    await handler('contacts', 'tagRename', ['t1', '伙伴']);
+    expect(api.tagRename).toHaveBeenCalledWith('org:org_1', 't1', '伙伴');
+    await handler('contacts', 'tagDelete', ['t1']);
+    expect(api.tagDelete).toHaveBeenCalledWith('org:org_1', 't1');
+    await handler('contacts', 'groupCreate', ['g1', '家人']);
+    expect(api.groupCreate).toHaveBeenCalledWith('org:org_1', 'g1', '家人');
+    await handler('contacts', 'groupRename', ['g1', '亲友']);
+    expect(api.groupRename).toHaveBeenCalledWith('org:org_1', 'g1', '亲友');
+    await handler('contacts', 'groupDelete', ['g1']);
+    expect(api.groupDelete).toHaveBeenCalledWith('org:org_1', 'g1');
+    await handler('contacts', 'groupMove', ['g1', 2]);
+    expect(api.groupMove).toHaveBeenCalledWith('org:org_1', 'g1', 2);
+    await handler('contacts', 'setGroup', ['r1', 'g1']);
+    expect(api.setGroup).toHaveBeenCalledWith('org:org_1', 'r1', 'g1');
+    await handler('contacts', 'orgGroupCreate', ['', 'og1', '总部']);
+    expect(api.orgGroupCreate).toHaveBeenCalledWith('org:org_1', '', 'og1', '总部');
+    await handler('contacts', 'orgGroupRename', ['og1', '分部']);
+    expect(api.orgGroupRename).toHaveBeenCalledWith('org:org_1', 'og1', '分部');
+    await handler('contacts', 'orgGroupDelete', ['og1']);
+    expect(api.orgGroupDelete).toHaveBeenCalledWith('org:org_1', 'og1');
+    await handler('contacts', 'orgGroupMove', ['og1', 1, 'og0']);
+    expect(api.orgGroupMove).toHaveBeenCalledWith('org:org_1', 'og1', 1, 'og0');
+  });
+
+  it('message-card 视图：有 contacts 授权也拒绝数据面', async () => {
+    mockContactsApi();
+    mockGrantedPermissions(['contacts:read', 'contacts:write']);
+    const handler = await createPluginBridgeDispatcher({ ...BASE_IDENTITY, viewType: 'message-card' });
+    await expect(handler('contacts', 'overview', [])).rejects.toThrow(/Access denied/);
+    await expect(handler('contacts', 'setBlocked', ['r1', true])).rejects.toThrow(/Access denied/);
   });
 });

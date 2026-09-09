@@ -41,9 +41,10 @@
         @back="onChatBack"
         @removed="onRemoved"
       />
-      <!-- 空态占位仅桌面端：移动端栈深 1 时整页为会话列表 -->
+      <!-- 空态占位仅桌面端：移动端栈深 1 时整页为会话列表。
+           消息 = 统一收件箱（私聊 + 应用/系统通知卡片流，README §4.3），不是纯聊天工具 -->
       <div v-else class="chat-placeholder">
-        <el-empty :image-size="110" description="选择一个会话开始聊天">
+        <el-empty :image-size="110" description="选择一个会话查看详情">
           <div class="chat-placeholder-actions">
             <el-button type="primary" @click="goBrowseContacts">发起新会话</el-button>
             <el-button @click="goAddContact">{{ spaceType === 'org' ? '添加成员' : '添加朋友' }}</el-button>

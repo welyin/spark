@@ -242,7 +242,7 @@ impl Kernel {
         let Ok(Some(record)) = crate::org::OrganizationService::get_record(storage, oid) else {
             return Ok(false);
         };
-        Ok(crate::org::roles::is_data_account(&record, &my_root))
+        Ok(crate::org::roles::is_data_node(&record, &my_root))
     }
 
     /// 前缀分页查询。
@@ -327,9 +327,9 @@ impl Kernel {
                     "collection {name}@v{version} not declared in org {org_id}"
                 ))
             })?;
-        // 本地驻留判定：数据账号（对 data-accounts 集合天然驻留）或 all-members
-        // 集合（全员驻留）→ 直接读本地。普通成员对 data-accounts 恒非驻留。
-        let is_data = crate::org::roles::is_data_account(&record, &my_root);
+        // 本地驻留判定：数据节点（A14 全员数据节点：成员对 data-accounts
+        // 集合天然驻留）或 all-members 集合（全员驻留）→ 直接读本地。
+        let is_data = crate::org::roles::is_data_node(&record, &my_root);
         let is_all_members = decl.accounts == crate::plugindata::Accounts::AllMembers;
         let local_resident = is_data || is_all_members;
         let col_full = format!("{name}@v{version}");

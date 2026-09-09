@@ -6,7 +6,10 @@
 //! - [`auth`]：资格拒绝（非成员/复制组外）+ 键白名单整批拒收；
 //! - [`tombstone`]：GC 等待集合 + 墓碑接力 A→B→C + 删除后重建；
 //! - [`member_split`]：阶段四A P1 per-member 分拆——成员记录入站合并/
-//!   accessKey 守卫、whole 合入就地投影、成员移除墓碑传播。
+//!   accessKey 守卫、whole 合入就地投影、成员移除墓碑传播；
+//! - [`disclosure`]：A15 名册开放声明入站接线（白名单 + 合入裁决拒收路径）；
+//! - [`accept`]：A17 准入策略声明入站接线（白名单 + 合入裁决拒收路径）；
+//! - [`read_gate`]：读授权城门（A15 城门口径）orgq 查询面正/反例。
 //!
 //! 与 pdsync 的差异：orgsync 信封 `from`/`to` 是成员 rootId（非自设备），
 //! 各节点用各自身份签名；`remote_peer_id` 为对端设备的 libp2p peerId
@@ -23,10 +26,12 @@
 //! 仅 hello 的应答措辞与「统一 rejected」不一致。测试按实际行为断言并在
 //! 用例 `orgsync_rejects_non_member_and_outside_replication_group` 中覆盖。
 
+mod accept;
 mod auth;
 #[path = "../common/mod.rs"]
 mod common;
 mod deliver;
+mod disclosure;
 mod member_split;
 mod merge;
 mod orgq;

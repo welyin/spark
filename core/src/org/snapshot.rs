@@ -21,8 +21,11 @@ use super::types::{
 };
 use super::{OrgError, Result};
 
-/// 快照构建时的保留键（sync.ts:26-36 + org.md §4.1 的 gateways + §15/§16 的
-/// orgAddress/isPublic + 组织 logo `avatar`）：其余键全部流入 `summary.metadata`。
+/// 快照构建时的保留键（sync.ts:26-36 + org.md §15/§16 的 orgAddress/isPublic
+/// + 组织 logo `avatar`）：其余键全部流入 `summary.metadata`。
+/// （A9：`gateways` 已非 summary 字段（指定通路移除、旧快照携带时解析忽略），
+/// 但**保留在本表**——本表同时是合并侧 extra 剔除表，防旧对端/恶意 metadata
+/// 携带 gateways 键注入 extra 形成僵尸流动。）
 ///
 /// ⚠️ `orgRootSecret`（组织根私钥密文）**不在**此表——本表同时用于合并时剔除
 /// extra 保留键，会把本机持有的私钥抹掉；其"不进快照"由
@@ -42,7 +45,7 @@ pub const ORGANIZATION_SYNC_RESERVED_KEYS: [&str; 14] = [
     "gateways",
     "orgAddress",
     "isPublic",
-    // O1 账号角色模型：数据账号显式指定列表（与 gateways 同口径传播/回退）
+    // O1 账号角色模型：数据账号显式指定列表（保留键传播/回退）
     "dataAccounts",
 ];
 
@@ -153,7 +156,7 @@ pub struct OrganizationSyncSummary {
     #[serde(default)]
     pub description: String,
     /// 组织 logo（保留键：`data:image/` data URL，空串 = 清除；缺省 = 发送方
-    /// 不支持该字段，接收方保留本地值——与 gateways 同口径回退）。
+    /// 不支持该字段，接收方保留本地值——与 dataAccounts 同口径回退）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub avatar: Option<String>,
     /// 基础插件域。
@@ -178,19 +181,7 @@ pub struct OrganizationSyncSummary {
     /// admin 总数。
     #[serde(rename = "adminCount")]
     pub admin_count: i64,
-    /// 组织网关 rootId 列表（org.md §14 保留键：不进 metadata，作为 summary
-    /// 显式字段随快照传播；缺省 = 发送方未设置，接收方保留本地值）。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub gateways: Option<Vec<String>>,
-    /// 数据账号 rootId 列表（O1 账号角色模型保留键：与 gateways 同口径
-    /// 传播/回退；空 = 未指定 → 缺省全体管理员担责）。
-    #[serde(
-        rename = "dataAccounts",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub data_accounts: Option<Vec<String>>,
-    /// 自认证组织地址（org.md §15 保留键：与 gateways 同口径传播/回退）。
+    /// 自认证组织地址（org.md §15 保留键：显式字段随快照传播/回退）。
     #[serde(
         rename = "orgAddress",
         default,
@@ -296,16 +287,6 @@ pub fn build_organization_sync_snapshot(
             updated_at: record.updated_at,
             member_count: record.members.len() as i64,
             admin_count: record.admin_count() as i64,
-            gateways: if record.gateways.is_empty() {
-                None
-            } else {
-                Some(record.gateways.clone())
-            },
-            data_accounts: if record.data_accounts.is_empty() {
-                None
-            } else {
-                Some(record.data_accounts.clone())
-            },
             org_address: record.org_address.clone(),
             is_public: record.is_public.then_some(true),
             metadata: extract_metadata(record),
@@ -419,10 +400,25 @@ pub fn merge_organization_sync_snapshot(
             // peer 对他人 accessKey 的改动。
             // （C7：accessKey 的原消费方 acl/orgkey-deliver 已随 encrypted 轴
             // 退役；字段保留为惰性可选位，合并守卫语义不变。）
-            // 新成员（existing 无 accessKey）则采用 incoming。
+            // 新成员（existing 无 accessKey）则采用 incoming——A16 起须过验绑
+            // （`rootPubkey` 锚定名册键 + 绑定签名有效），验绑不过不采信。
             access_key: match existing_ref.and_then(|m| m.access_key.as_ref()) {
                 Some(_) => existing_ref.and_then(|m| m.access_key.clone()),
-                None => incoming.access_key.clone(),
+                None => incoming.access_key.clone().and_then(|key| {
+                    if crate::org::access_key::verify_access_key_binding(
+                        &snapshot.org_id,
+                        &incoming.root_id,
+                        &key,
+                    ) {
+                        Some(key)
+                    } else {
+                        log::warn!(
+                            "[ORG-SNAPSHOT] accessKey 验绑失败，不予采信 | member={}",
+                            &incoming.root_id[..std::cmp::min(16, incoming.root_id.len())]
+                        );
+                        None
+                    }
+                }),
             },
             // 成员种类/组织绑定（org-genesis §3.2）：incoming 携带则采用，
             // 键缺失保留 existing（同 or_existing 口径）。
@@ -484,22 +480,14 @@ pub fn merge_organization_sync_snapshot(
             .map(|e| e.updated_at)
             .unwrap_or(0)
             .max(snapshot.summary.updated_at),
-        // gateways（保留键）：incoming 显式携带则以其为准，缺省保留 existing
-        // （org.md §14 经快照扩散）
-        gateways: snapshot
-            .summary
-            .gateways
-            .clone()
-            .or_else(|| existing.map(|e| e.gateways.clone()))
-            .unwrap_or_default(),
-        // dataAccounts（保留键，O1）：同 gateways 回退口径
-        data_accounts: snapshot
-            .summary
-            .data_accounts
-            .clone()
-            .or_else(|| existing.map(|e| e.data_accounts.clone()))
-            .unwrap_or_default(),
-        // orgAddress / isPublic（保留键，org.md §15/§16）：同 gateways 回退口径
+        // gateways（A9 指定通路移除）：合并一律空集——存量记录字段读取即忽略，
+        // 不随快照恢复，落库保存即老化
+        gateways: Vec::new(),
+        // dataAccounts（A14 角色退役）：合并一律空集——存量记录字段读取即忽略，
+        // 不随快照恢复，落库保存即老化（全员数据节点，无指定无缺省角色）
+        data_accounts: Vec::new(),
+        // orgAddress / isPublic（保留键，org.md §15/§16）：incoming 显式携带
+        // 则以其为准，缺省保留 existing
         org_address: snapshot
             .summary
             .org_address

@@ -55,9 +55,6 @@ pub struct OrganizationRecordFlattened {
     /// 同步状态。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sync: Option<OrganizationSyncState>,
-    /// 组织网关 rootId 列表（org.md §14）。
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub gateways: Vec<String>,
     /// 自认证组织地址（org.md §15）。
     #[serde(
         rename = "orgAddress",

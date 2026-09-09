@@ -76,10 +76,8 @@ fn setup() -> (Kernel, Kernel, String, String) {
     kernel_a
         .org_add_member(&org_id, &root_b, Some(&b_node))
         .unwrap();
-    kernel_a
-        .org_set_data_accounts(&org_id, &[root_a.clone()])
-        .unwrap();
-    // 回填 A 自身成员 nodeInfo（B 据此选在线数据账号）
+    //（A14 全员数据节点：A 成员即数据节点，无需指定）
+    // 回填 A 自身成员 nodeInfo（B 据此选在线数据节点）
     {
         let mut raw = kernel_a.__test_storage().unwrap();
         let mut record = OrganizationService::get_record(&raw, &org_id)
@@ -184,13 +182,16 @@ fn connect_member(kernel_a: &mut Kernel, kernel_b: &mut Kernel, org_id: &str) {
 
 /// B 在线查询：A 数据账号驻留记录 + 插件放行 → B 收到并落缓存。
 #[test]
-fn member_online_query_delivers_and_caches() {
+/// A14 全员数据节点：成员读 data-accounts 集合不经 orgq 在线投递——A 写入
+/// 后随复制组（全体成员）orgsync 收敛到 B 本地，B 本地直读（无成员侧缓存）。
+#[test]
+fn member_query_converges_via_replication_group() {
     let _serial = serial_guard();
     let (mut kernel_a, mut kernel_b, org_id, _root_a) = setup();
     kernel_a
         .data_declare_collection("plugin:orgq", data_accounts_declare(), Some(&org_id))
         .unwrap();
-    // A 写入驻留记录（A 是数据账号 → 本地落库）
+    // A 写入驻留记录（A 成员即数据节点 → 本地落库）
     kernel_a
         .data_save(
             "plugin:orgq",
@@ -201,15 +202,24 @@ fn member_online_query_delivers_and_caches() {
             Some(&org_id),
         )
         .unwrap();
-    kernel_a
-        .plugin_start_background(
-            "orgq",
-            &filter_plugin(true, false),
-            &["data:write".to_string()],
-        )
-        .unwrap();
     connect_member(&mut kernel_a, &mut kernel_b, &org_id);
 
+    // 复制组（全体成员）收敛：k1 到达 B 本地 orgd（测试配置无周期 tick，
+    // 手动泵 orgsync hello：B hello → A 服务 diff）
+    let data_key = format!("orgd:{org_id}:orgq:deliver@v1.0.0:k1");
+    wait_until(
+        || {
+            let _ = kernel_b.org_keepalive_once();
+            kernel_b
+                .__test_storage()
+                .unwrap()
+                .get(&data_key)
+                .unwrap()
+                .is_some()
+        },
+        10_000,
+        "B 本地收敛 k1",
+    );
     let page = kernel_b
         .data_query(
             "plugin:orgq",
@@ -221,14 +231,14 @@ fn member_online_query_delivers_and_caches() {
             Some(&org_id),
         )
         .unwrap();
-    assert_eq!(page.items.len(), 1, "B 收到 A 驻留的记录");
+    assert_eq!(page.items.len(), 1, "B 本地直读收敛的记录");
     assert!(page.items[0].1.contains("\"amt\":42"), "记录内容正确");
     let cache = kernel_b
         .__test_storage()
         .unwrap()
         .get(&orgq_cache_key(&org_id, "orgq:deliver@v1.0.0", "k1"))
         .unwrap();
-    assert!(cache.is_some(), "应答已落成员侧缓存");
+    assert!(cache.is_none(), "不经 orgq 在线投递，无成员侧缓存");
 
     kernel_a.shutdown().unwrap();
     kernel_b.shutdown().unwrap();
@@ -296,26 +306,21 @@ fn member_online_query_hook_reject_returns_empty() {
     kernel_b.shutdown().unwrap();
 }
 
-/// B 在线写入：data_save → orgq-req 写 → A 的 canWrite 放行 → accepted 落库，
-/// 随复制组（orgd:）扩散。denied 写入映射 AccessDenied。
+/// A14 全员数据节点：B 写 data-accounts 集合 → 本地落库（B 成员即数据
+/// 节点），随复制组（全体成员）orgsync 收敛到 A。
 #[test]
-fn member_online_write_accepted_lands_on_a() {
+fn member_write_local_converges_to_a() {
     let _serial = serial_guard();
     let (mut kernel_a, mut kernel_b, org_id, _root_a) = setup();
     kernel_a
         .data_declare_collection("plugin:orgq", data_accounts_declare(), Some(&org_id))
         .unwrap();
-    // canWrite 放行
-    kernel_a
-        .plugin_start_background(
-            "orgq",
-            &filter_plugin(true, true),
-            &["data:write".to_string()],
-        )
-        .unwrap();
     connect_member(&mut kernel_a, &mut kernel_b, &org_id);
-
-    // B 在线写入 → 受理 → 成功返回
+    // B 本地持有声明后写入（声明随 orgsync 收敛；同名声明幂等）
+    kernel_b
+        .data_declare_collection("plugin:orgq", data_accounts_declare(), Some(&org_id))
+        .unwrap();
+    // B 写入 → 本地驻留落库（成员即数据节点，不经 orgq 在线投递）
     kernel_b
         .data_save(
             "plugin:orgq",
@@ -326,10 +331,21 @@ fn member_online_write_accepted_lands_on_a() {
             Some(&org_id),
         )
         .unwrap();
-    // A 侧已落库（orgd: 数据键，随复制组扩散）
+    let b_key = format!("orgd:{org_id}:orgq:deliver@v1.0.0:k9");
+    assert!(
+        kernel_b
+            .__test_storage()
+            .unwrap()
+            .get(&b_key)
+            .unwrap()
+            .is_some(),
+        "B 本地落库"
+    );
+    // 复制组收敛：A 侧落库（无周期 tick，手动泵 orgsync：A hello → B 服务 diff）
     let data_key = format!("orgd:{org_id}:orgq:deliver@v1.0.0:k9");
     wait_until(
         || {
+            let _ = kernel_a.org_keepalive_once();
             kernel_a
                 .__test_storage()
                 .unwrap()
@@ -338,7 +354,7 @@ fn member_online_write_accepted_lands_on_a() {
                 .is_some()
         },
         10_000,
-        "A 侧落库",
+        "A 侧收敛落库",
     );
     let raw = kernel_a
         .__test_storage()
@@ -352,50 +368,6 @@ fn member_online_write_accepted_lands_on_a() {
     kernel_b.shutdown().unwrap();
 }
 
-/// B 在线写入被 denied（插件未运行降级 / canWrite 拒绝）→ 映射 AccessDenied。
-#[test]
-fn member_online_write_denied_maps_access_denied() {
-    let _serial = serial_guard();
-    let (mut kernel_a, mut kernel_b, org_id, _root_a) = setup();
-    kernel_a
-        .data_declare_collection("plugin:orgq", data_accounts_declare(), Some(&org_id))
-        .unwrap();
-    // canWrite 拒绝 → denied=true
-    kernel_a
-        .plugin_start_background(
-            "orgq",
-            &filter_plugin(true, false),
-            &["data:write".to_string()],
-        )
-        .unwrap();
-    connect_member(&mut kernel_a, &mut kernel_b, &org_id);
-
-    let err = kernel_b
-        .data_save(
-            "plugin:orgq",
-            "orgq:deliver",
-            "k9",
-            serde_json::json!({"who": "b"}),
-            Some("1.0.0"),
-            Some(&org_id),
-        )
-        .unwrap_err();
-    assert!(
-        err.to_string().contains("denied"),
-        "denied 写入映射 AccessDenied（got: {err}）"
-    );
-    // A 侧未落库
-    let data_key = format!("orgd:{org_id}:orgq:deliver@v1.0.0:k9");
-    assert!(
-        kernel_a
-            .__test_storage()
-            .unwrap()
-            .get(&data_key)
-            .unwrap()
-            .is_none(),
-        "被拒写入不落库"
-    );
-
-    kernel_a.shutdown().unwrap();
-    kernel_b.shutdown().unwrap();
-}
+//（A14：成员写拒绝场景随「数据账号侧 canWrite 投递」退役——写方本地直通
+// 无对端钩子；filtered 写钩子执行点变为写方本地（插件 data.save 规则集，
+// 由 host env 既有用例覆盖），城门接线归 A15 复查。）

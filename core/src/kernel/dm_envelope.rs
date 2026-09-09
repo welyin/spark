@@ -86,6 +86,13 @@ pub const KIND_PDSYNC_ATTACHMENT_REQ: &str = "pdsync-attachment-req";
 /// 信封 kind：P6 blob 分块响应（body `{hash, offset, data, totalBytes}`；
 /// 块长 3 的倍数，接收侧 base64 直接追加拼接，收齐后 SHA-256 校验提升）。
 pub const KIND_PDSYNC_ATTACHMENT_RESP: &str = "pdsync-attachment-resp";
+/// 信封 kind：A1 blob 层按需回补请求（自设备间；body `{chunkCid, offset?}`
+/// 或 `{cid}` 拉 manifest，见 personal-data-sync §14.5）。
+pub const KIND_BLOB_FETCH: &str = "blob-fetch";
+/// 信封 kind：A1 blob 层回补响应（body `{chunkCid, data, offset?, totalBytes?}` /
+/// `{cid, manifest}` / `{..., missing:true}`；收齐后 SHA-256 校验落库并刷新
+/// presence，见 personal-data-sync §14.5–14.6）。
+pub const KIND_BLOB_CHUNK: &str = "blob-chunk";
 
 // ── S6 feed 三信封（social-feed §4.2 / p2p-dm §19.5/§19.6）────────────
 

@@ -5,6 +5,9 @@
 
 use std::time::Duration;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as B64;
+use ed25519_dalek::Signer as _;
 use serde_json::Value;
 
 use super::{Kernel, KernelError, Result};
@@ -116,7 +119,12 @@ impl Kernel {
         let local = self.runtime.handle().block_on(node.local_node_info())?;
 
         self.accept_invite_via_orgsync(&payload, &root_id, &inviter, &local, self_device_uid)?;
-        self.check_join(&payload.org_id)
+        let acceptance = self.check_join(&payload.org_id);
+        if acceptance.is_ok() {
+            // A16：加入成功即发布本机 accessKey（org_user_id 地基，写一次）。
+            self.org_publish_access_key_if_missing(&payload.org_id);
+        }
+        acceptance
     }
 
     /// P2 join 新通道（阶段四A 设计 §4 P2 L1）：connect 后**不再走
@@ -247,7 +255,7 @@ impl Kernel {
                 inviter.peer_id.as_deref().unwrap_or_default(),
             ) && let Some(record) = OrganizationService::get_record(storage, org_id)?
             {
-                let roles = crate::sync::orgsync::self_roles(&record, root_id, now);
+                let roles = crate::sync::orgsync::self_roles(storage, &record, root_id, now);
                 let hello = crate::sync::orgsync::build_orgsync_hello(
                     org_id,
                     collections,
@@ -300,5 +308,159 @@ impl Kernel {
             },
         )?;
         Ok(())
+    }
+
+    /// 加入申请发送（A17 / membership §4.5 免预录凭证入册，org-join §8）：
+    /// 申请人自签加入声明（根私钥签名 + accessKey 自发布挂点复用 + 附凭证）
+    /// 经 **org-mail**（既有邀请流通道复用）投递给目标组织**任一成员**的
+    /// 信箱（`recipient_domain_id` 带外获得，§21.1）——零管理员在线，任一
+    /// 成员节点皆可合入。
+    ///
+    /// - `cred_id`：免预录路径必给（本地 `cred:held:` 持有的凭证，静态校验
+    ///   后随声明携带）；预录-认领路径传 `None`（管理员已预录本机 rootId）；
+    /// - 新载荷类型 `org-join-request` 按 append-only 兼容（旧端不解析即
+    ///   忽略）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn org_send_join_request(
+        &mut self,
+        org_id: &str,
+        to_org_address: &str,
+        recipient_domain_id: &str,
+        cred_id: Option<&str>,
+        gateway_peer_id: Option<&str>,
+        gateway_addresses: &[String],
+    ) -> Result<Value> {
+        let root_id = self.require_unlocked_root_id()?;
+        let seed = self
+            .unlocked
+            .as_ref()
+            .map(|u| u.seed)
+            .ok_or(KernelError::Locked)?;
+        let now = system_now_ms();
+
+        // 申请人根身份 + accessKey 自发布（A16 派生，随声明携带验绑材料）
+        let root_identity = crate::identity::derive_root_identity(&seed);
+        let applicant = crate::credential::IdentityRef {
+            identity: root_id.clone(),
+            public_key: B64.encode(root_identity.signing_key.verifying_key().to_bytes()),
+        };
+        let access_key = crate::org::access_key::derive_access_key(&seed, org_id);
+
+        // 凭证（免预录路径）：本地持有键域读取 + 静态校验（credId 复算绑定）
+        let credential = match cred_id {
+            Some(cred_id) => {
+                let raw = self
+                    .require_storage()?
+                    .get(&crate::credential::held_credential_key(cred_id))?
+                    .ok_or_else(|| {
+                        KernelError::Internal(format!("held credential not found: {cred_id}"))
+                    })?;
+                let cred: crate::credential::Credential = serde_json::from_str(&raw)
+                    .map_err(|e| KernelError::Internal(format!("corrupted held credential: {e}")))?;
+                crate::credential::verify_credential_static(&cred, Some(cred_id))
+                    .map_err(|e| KernelError::Internal(format!("held credential invalid: {e}")))?;
+                Some(cred)
+            }
+            None => None,
+        };
+
+        // 自报端点（受理节点回传名册/寻址用；p2p 未启动时缺省 null）。
+        // deviceUid 先取（可变借用存储），再借 p2p——同 accept_invite 口径。
+        let self_device_uid = if self.p2p.is_some() {
+            crate::device::get_or_create_device_uid(self.require_storage_mut()?).ok()
+        } else {
+            None
+        };
+        let node_info = match &self.p2p {
+            Some(node) => {
+                let local = self.runtime.handle().block_on(node.local_node_info())?;
+                Some(OrganizationNodeInfo {
+                    device_uid: self_device_uid,
+                    peer_id: local.peer_id.clone(),
+                    addresses: local.addresses.clone(),
+                })
+            }
+            None => None,
+        };
+
+        let mut request = crate::org::join_request::JoinRequest {
+            join_v: crate::org::join_request::JOIN_REQUEST_V,
+            type_: crate::org::join_request::ORG_JOIN_REQUEST_TYPE.to_string(),
+            org_id: org_id.to_string(),
+            applicant,
+            access_key,
+            credential,
+            node_info,
+            declared_at: now,
+            sig: String::new(),
+        };
+        let payload = crate::org::join_request::join_request_sign_payload(&request)
+            .map_err(|e| KernelError::Internal(e.to_string()))?;
+        request.sig = B64.encode(
+            root_identity
+                .signing_key
+                .sign(payload.as_bytes())
+                .to_bytes(),
+        );
+
+        let body = serde_json::to_value(&request)?;
+        let hint = if gateway_peer_id.is_some() || !gateway_addresses.is_empty() {
+            Some(PeerNodeInfo {
+                peer_id: gateway_peer_id.map(str::to_string),
+                addresses: gateway_addresses.to_vec(),
+            })
+        } else {
+            None
+        };
+        self.org_mail_send(org_id, to_org_address, recipient_domain_id, &body, hint.as_ref())
+    }
+
+    /// 加入申请合入（A17 / org-join §8.2）：org-mail `org-join-request`
+    /// 载荷解箱后的处理入口（呈现层/自动处理皆经本 op）。本机须为目标组织
+    /// **成员**（名册写入经 orgsync「from ∈ 成员表 ∩ 复制组」前置扩散；
+    /// 零管理员在线 = 任一成员节点皆可受理，不要求 admin）。
+    ///
+    /// 纯逻辑验证（`adjudicate_join_request` 双路径合一：预录-认领 /
+    /// 免预录凭证链）→ 受理即入册（原子段 whole + per-member 条目双写，
+    /// accessKey 自发布挂点复用）；拒收如实返回 kind（不落库）。
+    pub fn org_accept_join_request(&mut self, request: &Value) -> Result<Value> {
+        let root_id = self.require_unlocked_root_id()?;
+        let request: crate::org::join_request::JoinRequest = serde_json::from_value(
+            request.clone(),
+        )
+        .map_err(|e| KernelError::Internal(format!("加入申请格式不正确: {e}")))?;
+        let org_id = request.org_id.clone();
+        let record = OrganizationService::get_record(self.require_storage()?, &org_id)?
+            .ok_or(crate::org::OrgError::OrganizationNotFound)?;
+        if record.find_member(&root_id).is_none() {
+            return Err(KernelError::Internal(
+                "本机不是该组织成员，无法合入加入申请".to_string(),
+            ));
+        }
+
+        let now = system_now_ms();
+        let io_lock = std::sync::Arc::clone(&self.io_lock);
+        let outcome = OrganizationService::accept_join_request(
+            self.require_storage_mut()?,
+            &io_lock,
+            &org_id,
+            &request,
+            now,
+        )?;
+        match outcome {
+            crate::org::service::JoinOutcome::Enrolled { path, cred_id } => Ok(serde_json::json!({
+                "outcome": "enrolled",
+                "orgId": org_id,
+                "applicant": request.applicant.identity,
+                "path": path.as_str(),
+                "credId": cred_id,
+            })),
+            crate::org::service::JoinOutcome::Rejected(kind) => Ok(serde_json::json!({
+                "outcome": "rejected",
+                "orgId": org_id,
+                "applicant": request.applicant.identity,
+                "reason": kind,
+            })),
+        }
     }
 }

@@ -42,12 +42,10 @@ export const COMMAND_MAP: Record<string, string> = {
   'org-respond-invite': 'org_respond_invite',
   'org-invite-records': 'org_invite_records',
   'org-sync-overview': 'org_sync_overview',
-  'org-delete': 'org_delete',
+  'org-leave': 'org_leave',
   'org-add-member': 'org_add_member',
   'org-remove-member': 'org_remove_member',
-  'org-set-gateways': 'org_set_gateways',
-  'org-set-data-accounts': 'org_set_data_accounts',
-  'org-set-member-role': 'org_set_member_role',
+  'org-gateway-active-set': 'org_gateway_active_set',
   'org-set-public': 'org_set_public',
   'org-update-info': 'org_update_info',
   'org-update-my-identity': 'org_update_my_identity',
@@ -181,6 +179,10 @@ export const COMMAND_MAP: Record<string, string> = {
   'policy-read': 'plugin_policy_read',
   'policy-submit-draft': 'plugin_policy_submit_draft',
   'policy-publish': 'plugin_policy_publish',
+  // blob 层（A3）：副本健康度 + 配额配置
+  'root-blob-health': 'root_blob_health',
+  'root-get-blob-quota': 'root_get_blob_quota',
+  'root-set-blob-quota': 'root_set_blob_quota',
   // 设备管理（多设备清单：本机采集 + 自设备 device-sync 同步；M2 撤销；安全日志调试）
   'devices-list': 'devices_list',
   'root-revoke-device': 'root_revoke_device',
@@ -194,6 +196,8 @@ export const COMMAND_MAP: Record<string, string> = {
   'root-password-verify-ticket': 'root_verify_password_ticket',
   'root-password-unify': 'root_unify_password',
   'root-password-unify-status': 'root_password_unify_status',
+  // 密码考试（A6，identity.md §4.2）
+  'root-password-exam-status': 'root_password_exam_status',
   // 系统桥接（未读角标 → dock/任务栏徽标）
   'system-set-badge': 'system_set_badge',
   // HTTP 代理设置（updater/市场链路 GitHub 直连失败的规避，见 src-tauri proxy.rs）
@@ -221,7 +225,7 @@ export const COMMAND_MAP: Record<string, string> = {
  */
 export const ARG_NAMES: Record<string, string[]> = {
   'root-init': ['password', 'nickname', 'avatar'],
-  'root-unlock': ['password', 'rootId'],
+  'root-unlock': ['password', 'rootId', 'bioSourced'],
   'root-set-active': ['rootId'],
   'root-recover-mnemonic': ['mnemonic', 'newPassword', 'nickname', 'avatar'],
   'root-recover-backup': ['payload', 'password'],
@@ -231,6 +235,8 @@ export const ARG_NAMES: Record<string, string[]> = {
   'root-sign': ['payload'],
   'root-derive-domain': ['domain'],
   'root-mnemonic-check': ['input'],
+  // blob 层（A3）
+  'root-set-blob-quota': ['bytes'],
   // M4 生物识别
   'biometric-check': [],
   'biometric-unlock': [],
@@ -245,12 +251,10 @@ export const ARG_NAMES: Record<string, string[]> = {
   'org-respond-invite': ['inviteId', 'accept'],
   'org-invite-records': ['orgId'],
   'org-sync-overview': ['orgId'],
-  'org-delete': ['orgId'],
+  'org-leave': ['orgId'],
   'org-add-member': ['orgId', 'input'],
   'org-remove-member': ['orgId', 'memberRootId'],
-  'org-set-gateways': ['orgId', 'gateways'],
-  'org-set-data-accounts': ['orgId', 'dataAccounts'],
-  'org-set-member-role': ['orgId', 'memberRootId', 'role'],
+  'org-gateway-active-set': ['orgId'],
   'org-set-public': ['orgId', 'public', 'displayName'],
   'org-update-info': ['orgId', 'name', 'description', 'avatar'],
   'org-update-my-identity': ['orgId', 'nickname', 'avatar', 'gender', 'region', 'signature', 'usePersonalIdentity'],
@@ -363,6 +367,7 @@ export const ARG_NAMES: Record<string, string[]> = {
   'root-password-verify-ticket': ['password'],
   'root-password-unify': ['oldPassword', 'newPassword'],
   'root-password-unify-status': [],
+  'root-password-exam-status': [],
   'system-set-badge': ['count'],
   'system-notify-chat': ['spaceKey', 'convId', 'title', 'body', 'unread'],
   'system-notify-generic': ['title', 'body'],

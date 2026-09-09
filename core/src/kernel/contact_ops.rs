@@ -658,7 +658,10 @@ impl Kernel {
         }
         let storage = self.require_storage()?;
         for record in OrganizationService::read_all_organizations(storage)? {
-            if let Some(member) = record.find_member(&input.root_id)
+            // 双键寻址（A16 双写过渡，membership §4.4）：上行身份按 rootId 或
+            // org_user_id 命中任一即解析——公共面去 rootId 后前端持有的可能是
+            // 成员的 org_user_id；rootId 上行照旧兼容。
+            if let Some(member) = record.find_member_any_key(&input.root_id)
                 && let Some(set) = &member.node_info
                 && let Some(info) = set
                     .iter()

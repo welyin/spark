@@ -28,6 +28,7 @@ import { createBridgeHost, type BridgeHost } from '../../../../packages/plugin-s
 import { buildPluginHostSrcdoc, fetchPluginManifest } from '../../plugin/source';
 import { createPluginBridgeDispatcher } from '../../plugin/bridge-dispatcher';
 import { pluginSpaceKey, registerCard, routeCardAction, unregisterCard } from '../../plugin/card-actions';
+import { openPluginDeepLink } from '../../services/deep-link';
 import { themeMode } from '../../stores/theme';
 
 /** 高度上下限（壳层封顶 400px，设计文档「UI 集成点」） */
@@ -153,8 +154,13 @@ export default defineComponent({
           },
           onAction: (_claimedCardId, actionId, data) => {
             // 归属校验在 plugin/card-actions（以桥绑定的 pluginId/cardId 为准，
-            // 插件自报的 cardId 一律忽略）；主实例未运行时 action 丢弃（设计允许）
-            routeCardAction(props.pluginId, spaceKey, cardId, actionId, data);
+            // 插件自报的 cardId 一律忽略）
+            const delivered = routeCardAction(props.pluginId, spaceKey, cardId, actionId, data);
+            // 深链统一（3.5 / README §6.2）：主实例未运行时动作不丢弃——经统一深链
+            // 拉起该插件主视图并携带卡片上下文（affair 类卡片带 affairId 定位详情）
+            if (!delivered) {
+              openPluginDeepLink({ pluginId: props.pluginId, cardData: props.cardData, actionId });
+            }
           }
         });
         await host.ready;

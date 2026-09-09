@@ -137,6 +137,13 @@ pub(super) fn handle_pdsync_hello<S: StorageBackend>(
             class,
         );
     }
+    // 对端 blob 配额（A2，协议 §15.1）：持久化备查，devclass 先例
+    if let Some(quota) = body.get("blobQuota").and_then(serde_json::Value::as_u64) {
+        let _ = storage.put(
+            &crate::sync::blob::remote_blob_quota_key(ctx.remote_peer_id),
+            &quota.to_string(),
+        );
+    }
     // M3：持久化对端 hello 宣告的生效 epoch，发送侧据此决定加密 epoch 上限。
     // need 响应与消息窗口也复用该持久化值（need body 不携带 epoch）。
     let remote_epoch = crate::sync::pdsync::parse_remote_epoch(body);
@@ -179,11 +186,12 @@ pub(super) fn handle_pdsync_hello<S: StorageBackend>(
         }
         // 我对对端删除日志的已收序号（need 中回执，对方据此推墓碑增量）
         let my_seen = crate::sync::dlog::get_seen(storage, ctx.remote_peer_id).unwrap_or(0);
-        // 灰度（plugin-dist §8 市场索引经 pdsync 分发）：mkt:ann 是新增类目，
+        // 灰度推送门控（mkt:ann 先例推广，协议 §14.4）：名单内的新增类目，
         // 老端接收白名单（category_for_key）不认识会整批拒收
-        // （category-mismatch）——仅该类目特判：对端 hello 未声明即不推。
+        // （category-mismatch）——对端 hello 未声明即不推。
         // 既有类目行为不变（历史类目不设此门）。
-        let push_gated = category.name == "mkt:ann" && !remote_cats.contains_key("mkt:ann");
+        let push_gated = crate::sync::pdsync::GATED_PUSH_CATEGORIES.contains(&category.name)
+            && !remote_cats.contains_key(category.name);
         match diff {
             crate::sync::pdsync::DiffOutcome::LocalBehind { local_vv } => {
                 // 本机落后：请求对端补增量
@@ -289,6 +297,50 @@ pub(super) fn handle_pdsync_hello<S: StorageBackend>(
     // P6 blob 调和：PC eager 扫 pdoc 引用、其余设备类取 want 标记（lazy），
     // 缺失即向本 hello 发送方（在线自设备）发起拉取，逐 hash 节流
     super::attachment::reconcile_blob_pulls(storage, ctx, &mut out)?;
+    // A4 补登调和（协议 §16.1）：「pdoc 引用 ∩ blob:data 在库」迁入
+    // blob 层（manifest/chunk/presence）并删 blob:data；幂等稳态，
+    // 存量与增量统一收口。放在驱逐/GC 前（水位与引用集以迁后为准）
+    {
+        let device_uid = crate::device::get_or_create_device_uid(storage)?;
+        let migrated =
+            crate::sync::blob::reconcile_registrations(storage, ctx.node_id, &device_uid, ctx.now_ms)?;
+        if migrated > 0 {
+            log::info!("[blob] backfill reconcile | migrated={migrated}");
+        }
+        // A2 配额驱逐（协议 §15.4，节流 10 分钟）：未超配额/设备 ≤3 台退化
+        // 全量时恒无操作；副本 ≤K 与本机非富余副本在选择器内硬保护。
+        // 驱逐是纯本地行为（只删 chunk 留 manifest），收敛靠 presence 传播
+        if crate::sync::blob::throttle_evict(storage, ctx.now_ms)? {
+            let report =
+                crate::sync::blob::evict_over_quota(storage, ctx.node_id, &device_uid, ctx.now_ms)?;
+            if !report.evicted.is_empty() {
+                log::info!(
+                    "[blob] evict over quota: {} blobs freed, used {} -> {} (quota {}){}",
+                    report.evicted.len(),
+                    report.used_before,
+                    report.used_after,
+                    report.quota_bytes,
+                    if report.still_over { " still-over" } else { "" },
+                );
+            }
+        }
+        // A4 GC 周期（协议 §16.3/§15.5，节流 10 分钟）：引用收集器覆盖
+        // 全部 $blob 形态；未被引用的层内 blob 清 chunk/manifest/presence
+        // （不占驱逐通道、不受位次规则约束）
+        if crate::sync::blob::throttle_gc(storage, ctx.now_ms)? {
+            let referenced = crate::sync::blob::collect_references(storage)?;
+            let cleared = crate::sync::blob::gc_unreferenced(
+                storage,
+                ctx.node_id,
+                &device_uid,
+                &referenced,
+                ctx.now_ms,
+            )?;
+            if !cleared.is_empty() {
+                log::info!("[blob] gc unreferenced | cleared={}", cleared.len());
+            }
+        }
+    }
     Ok(InboundDmResult {
         response: ok_response(),
         events: Vec::new(),
@@ -666,6 +718,42 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
                 // （密码学保证成功，无失败重试需求）。
                 if let Some(kverify) = ctx.kverify {
                     auto_pw_unify_if_verifiable(storage, ctx, kverify);
+                }
+                // E5 实时事件（A45）：自愈未成功（仍 stale）→ 广播
+                // `PasswordChangeObserved` 引导用户统一（此前仅登录时 status
+                // 查询，在线接收设备无实时引导）。改密端本机不回放：本机发布
+                // 的 V 必已推进 applied，回环到达只判回放忽略，到不了此分支。
+                if crate::pw::get_stale(storage)? {
+                    // reason 以 epoch:state 为权威（时戳同源 §13.5：rotatedAt
+                    // == changedAt 时 reason 可信）；未同步到同批 state 时按
+                    // password_change 兜底（后续 status 查询会带出真值）。
+                    let reason = match crate::epoch::get_epoch_state(storage).ok().flatten() {
+                        Some(state)
+                            if state.rotated_at as u64 == incoming.changed_at
+                                && matches!(
+                                    state.reason,
+                                    crate::epoch::RotationReason::PasswordReset
+                                ) =>
+                        {
+                            "password_reset"
+                        }
+                        _ => "password_change",
+                    };
+                    let rotated_by_device = crate::device::DeviceService::list(storage)
+                        .ok()
+                        .and_then(|records| {
+                            records
+                                .iter()
+                                .find(|r| r.peer_id == incoming.changed_by)
+                                .map(|r| r.device_name.clone())
+                        })
+                        .unwrap_or_else(|| incoming.changed_by.clone());
+                    events.push(P2pEvent::PasswordChangeObserved {
+                        rotated_at: incoming.changed_at,
+                        rotated_by: incoming.changed_by.clone(),
+                        rotated_by_device,
+                        reason: reason.to_string(),
+                    });
                 }
             }
             continue;

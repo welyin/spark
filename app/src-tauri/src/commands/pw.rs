@@ -41,6 +41,15 @@ pub struct UnifyStatusDto {
     pub reason: Option<String>,
 }
 
+/// `root_password_exam_status` 返回（TS `PasswordExamStatusDto`）。
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExamStatusDto {
+    pub last_password_auth: u64,
+    pub overdue: bool,
+    pub interval_ms: u64,
+}
+
 // ------------------------------------------------------------------
 // Inner helpers（测试直调，不依赖 Tauri State）
 // ------------------------------------------------------------------
@@ -78,6 +87,15 @@ pub(crate) fn unify_status_inner(kernel: &Kernel) -> Result<UnifyStatusDto, Stri
     })
 }
 
+pub(crate) fn exam_status_inner(kernel: &Kernel) -> Result<ExamStatusDto, String> {
+    let status = kernel.password_exam_status().map_err(err)?;
+    Ok(ExamStatusDto {
+        last_password_auth: status.last_password_auth,
+        overdue: status.overdue,
+        interval_ms: spark_core::pw::PASSWORD_EXAM_INTERVAL_MS,
+    })
+}
+
 // ------------------------------------------------------------------
 // Tauri 命令
 // ------------------------------------------------------------------
@@ -108,6 +126,15 @@ pub fn root_password_unify_status(
     state: tauri::State<'_, KernelState>,
 ) -> Result<UnifyStatusDto, String> {
     unify_status_inner(&*lock_kernel(&state)?)
+}
+
+/// 密码考试状态（identity.md §4.2）：锁定态/未解锁均可调（Kernel::init 已按
+/// 活动身份预开存储）；无 scrypt → 同步 `lock_kernel`（同 unify_status）。
+#[tauri::command]
+pub fn root_password_exam_status(
+    state: tauri::State<'_, KernelState>,
+) -> Result<ExamStatusDto, String> {
+    exam_status_inner(&*lock_kernel(&state)?)
 }
 
 // ------------------------------------------------------------------
@@ -147,12 +174,18 @@ mod tests {
     fn unify_password_success_and_invalid_old() {
         let (_dir, mut kernel) = temp_kernel();
         kernel.init_identity(PW, "alice", None).unwrap();
-        let res = unify_password_inner(&mut kernel, PW, "brand-new-pass").unwrap();
+        // 非分叉收敛形态：V 口令 == 本机口令，unify 到同一账号口令成功
+        // （契约 m45 §13.1：内核复验的是 newPassword 对 V——新口令必须过验票）。
+        let res = unify_password_inner(&mut kernel, PW, PW).unwrap();
         assert!(res.success, "unify 成功形状 success=true");
 
         // 旧密码错误 → invalid-password（identity::change_password 解密失败映射）。
-        let err = unify_password_inner(&mut kernel, "wrong-old", "another-pass").unwrap_err();
+        let err = unify_password_inner(&mut kernel, "wrong-old", PW).unwrap_err();
         assert_eq!(err, "Invalid password", "旧密码错 → invalid-password");
+
+        // 新口令与 V 不一致（分叉场景验错口令/绕过验票）→ ticket-mismatch。
+        let err = unify_password_inner(&mut kernel, PW, "brand-new-pass").unwrap_err();
+        assert_eq!(err, "Ticket mismatch", "新口令不过 V 复验 → ticket-mismatch");
     }
 
     #[test]
@@ -169,6 +202,24 @@ mod tests {
         kernel.lock();
         let st_locked = unify_status_inner(&kernel).unwrap();
         assert!(!st_locked.pending, "锁定态仍可调");
+    }
+
+    #[test]
+    fn exam_status_dto_locked_available_and_camel_case() {
+        let (_dir, mut kernel) = temp_kernel();
+        kernel.init_identity(PW, "alice", None).unwrap();
+        let st = exam_status_inner(&kernel).unwrap();
+        assert!(!st.overdue, "init 刷新时间戳后非 overdue");
+        assert_eq!(st.interval_ms, 7 * 24 * 60 * 60 * 1000, "间隔常量 7 天");
+        // 锁定态可调（登录页生物识别挂起判定消费）。
+        kernel.lock();
+        let st_locked = exam_status_inner(&kernel).unwrap();
+        assert!(!st_locked.overdue, "锁定态仍可调");
+        // DTO camelCase 线形。
+        let v = serde_json::to_value(&st_locked).unwrap();
+        assert!(v.get("lastPasswordAuth").is_some());
+        assert!(v.get("intervalMs").is_some());
+        assert!(v.get("last_password_auth").is_none(), "不得出现 snake_case");
     }
 
     #[test]

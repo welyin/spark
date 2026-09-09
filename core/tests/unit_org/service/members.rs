@@ -194,6 +194,121 @@ fn remove_member_admin_guard() {
     assert_eq!(txs[0].payload.as_ref().unwrap()["removedRole"], "member");
 }
 
+/// A13（community-model §4.3）：成员自退出——不需 admin（非 admin 成员可
+/// 自退）；唯一 admin 且有其他成员时拒绝（须先晋升）；**最后一名成员退出
+/// 放行 → 空域**（成员表为空、记录保留只读、member-leave 事务审计）；
+/// 退出后不可再退（MemberNotFound）。
+#[test]
+fn leave_organization_self_service_flow() {
+    let mut storage = MemoryStorage::new();
+    let (admin, record) = setup_org(&mut storage);
+    let member_id = root_id_of(MNEMONIC2);
+    OrganizationService::add_member(
+        &mut storage,
+        &record.org_id,
+        &member_id,
+        None,
+        &admin,
+        NOW + 1,
+    )
+    .unwrap();
+
+    // 非 admin 成员自退出：放行（不需 admin 校验）
+    let updated = OrganizationService::leave_organization_pdsync(
+        &mut storage,
+        &crate::test_io_lock(),
+        &record.org_id,
+        &member_id,
+        NOW + 2,
+        "node-a",
+    )
+    .unwrap();
+    assert_eq!(updated.members.len(), 1);
+    let txs =
+        spark_core::org::tx::list_organization_transactions(&storage, &record.org_id, 1).unwrap();
+    assert_eq!(txs[0].type_, OrganizationTransactionType::MemberLeave);
+    assert_eq!(txs[0].payload.as_ref().unwrap()["leftRole"], "member");
+
+    // 唯一 admin 且还有其他成员：拒绝（须先晋升他人）
+    let admin2 = root_id_of(MNEMONIC);
+    OrganizationService::add_member(
+        &mut storage,
+        &record.org_id,
+        &rid('b'),
+        None,
+        &admin,
+        NOW + 3,
+    )
+    .unwrap();
+    assert!(matches!(
+        OrganizationService::leave_organization_pdsync(
+            &mut storage,
+            &crate::test_io_lock(),
+            &record.org_id,
+            &admin2,
+            NOW + 4,
+            "node-a",
+        ),
+        Err(OrgError::MustKeepAdmin)
+    ));
+
+    // 另一成员成为 admin 后自退：放行（组织仍留有 admin）。
+    //（A14：setMemberRole 指定通路已移除——测试侧直接改记录模拟治理面
+    // 角色变化的结果）
+    {
+        let mut rec = OrganizationService::get_record(&storage, &record.org_id)
+            .unwrap()
+            .unwrap();
+        rec.members
+            .iter_mut()
+            .find(|m| m.root_id == rid('b'))
+            .unwrap()
+            .role = spark_core::org::types::OrganizationRole::Admin;
+        OrganizationService::save_record(&mut storage, &rec).unwrap();
+    }
+    let updated = OrganizationService::leave_organization_pdsync(
+        &mut storage,
+        &crate::test_io_lock(),
+        &record.org_id,
+        &admin2,
+        NOW + 6,
+        "node-a",
+    )
+    .unwrap();
+    assert_eq!(updated.members.len(), 1);
+
+    // 最后一名成员退出：放行 → 空域（成员表为空、记录保留）
+    let last = updated.members[0].root_id.clone();
+    let emptied = OrganizationService::leave_organization_pdsync(
+        &mut storage,
+        &crate::test_io_lock(),
+        &record.org_id,
+        &last,
+        NOW + 7,
+        "node-a",
+    )
+    .unwrap();
+    assert!(emptied.members.is_empty(), "最后一名成员退出即成空域");
+    assert!(
+        OrganizationService::get_record(&storage, &record.org_id)
+            .unwrap()
+            .is_some(),
+        "组织记录保留（只读档案，不删除）"
+    );
+    // 已退出者再退：MemberNotFound
+    assert!(matches!(
+        OrganizationService::leave_organization_pdsync(
+            &mut storage,
+            &crate::test_io_lock(),
+            &record.org_id,
+            &last,
+            NOW + 8,
+            "node-a",
+        ),
+        Err(OrgError::MemberNotFound)
+    ));
+}
+
 #[test]
 fn list_mine_filters_and_sorts() {
     let mut storage = MemoryStorage::new();

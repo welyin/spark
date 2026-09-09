@@ -97,16 +97,32 @@ fn exchange_structure(
     }
 }
 
-/// 本地发布成员 accessKey：改成员记录 + 写 org:meta（put_personal 记本机
-/// 分量，复刻 VersionedStorage 受管写）。
+/// 本地发布成员 accessKey（A16 真实绑定）：改成员记录 + 写 org:meta
+/// （put_personal 记本机分量，复刻 VersionedStorage 受管写）。返回域公钥 b64
+/// 供断言比对。绑定 = 根密钥签 `"org-access:{orgId}:{publicKey}"` + rootPubkey
+/// 锚点——A16 入站验绑执法后，伪造绑定会被剥除，夹具必须真实。
 fn publish_access_key_local(
     storage: &mut MemoryStorage,
     node_id: &str,
     org_id: &str,
-    root_id: &str,
-    tag: &str,
+    root_key: &SigningKey,
     now: i64,
-) {
+) -> String {
+    use base64::Engine as _;
+    use ed25519_dalek::Signer as _;
+    let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+    let root_id = hex::encode(Sha256::digest(root_key.verifying_key().to_bytes()));
+    // 域私钥由根私钥哈希派生（测试确定性；生产是 SLIP-0010 域串派生）。
+    let domain_secret: [u8; 32] = Sha256::digest(root_key.to_bytes()).into();
+    let domain_key = SigningKey::from_bytes(&domain_secret);
+    let public_key = b64(&domain_key.verifying_key().to_bytes());
+    let payload =
+        spark_core::org::types::access_key_bind_payload(org_id, &public_key);
+    let access_key = spark_core::org::types::OrganizationAccessKey {
+        public_key: public_key.clone(),
+        bind_sig: b64(&root_key.sign(payload.as_bytes()).to_bytes()),
+        root_pubkey: Some(b64(&root_key.verifying_key().to_bytes())),
+    };
     let mut record = OrganizationService::get_record(storage, org_id)
         .unwrap()
         .unwrap();
@@ -115,10 +131,7 @@ fn publish_access_key_local(
         .iter_mut()
         .find(|m| m.root_id == root_id)
         .expect("成员存在");
-    m.access_key = Some(spark_core::org::types::OrganizationAccessKey {
-        public_key: format!("pk-{tag}"),
-        bind_sig: "bind".to_string(),
-    });
+    m.access_key = Some(access_key);
     record.updated_at = now;
     put_personal(
         storage,
@@ -128,6 +141,7 @@ fn publish_access_key_local(
         now,
     )
     .unwrap();
+    public_key
 }
 
 fn member_access_key(storage: &MemoryStorage, org_id: &str, root_id: &str) -> Option<String> {
@@ -169,8 +183,8 @@ fn org_meta_concurrent_access_key_merge_converges() {
     spark_core::plugindata::declare_builtin_org_collections(&mut b, ORG_ID, &b_root, NOW, "node-b")
         .unwrap();
     // 背靠背并发发布（修复前：whole-record LWW，后写方抹掉对方 accessKey）
-    publish_access_key_local(&mut a, "node-a", ORG_ID, &a_root, "a", NOW);
-    publish_access_key_local(&mut b, "node-b", ORG_ID, &b_root, "b", NOW);
+    let pk_a = publish_access_key_local(&mut a, "node-a", ORG_ID, &a_key, NOW);
+    let pk_b = publish_access_key_local(&mut b, "node-b", ORG_ID, &b_key, NOW);
 
     // 第 1 轮：A → B（并发 → B 结构化合并）
     let meta_a_org = get_personal_meta(&a, &format!("org:meta:{ORG_ID}"))
@@ -192,12 +206,12 @@ fn org_meta_concurrent_access_key_merge_converges() {
     assert_eq!(b_member_count, 2, "合并后成员数 = 并集大小（无重复）");
     assert_eq!(
         member_access_key(&b, ORG_ID, &a_root).as_deref(),
-        Some("pk-a"),
+        Some(pk_a.as_str()),
         "B 合并出 A 的 accessKey"
     );
     assert_eq!(
         member_access_key(&b, ORG_ID, &b_root).as_deref(),
-        Some("pk-b"),
+        Some(pk_b.as_str()),
         "B 自己的 accessKey 不丢"
     );
     // 合并 vv 支配两个输入（值/vv 不脱节）：org:meta 的 pmeta 含双分量
@@ -223,11 +237,11 @@ fn org_meta_concurrent_access_key_merge_converges() {
     );
     assert_eq!(
         member_access_key(&a, ORG_ID, &a_root).as_deref(),
-        Some("pk-a")
+        Some(pk_a.as_str())
     );
     assert_eq!(
         member_access_key(&a, ORG_ID, &b_root).as_deref(),
-        Some("pk-b")
+        Some(pk_b.as_str())
     );
 
     // 两端记录逐字节一致 + 折叠 vv 收敛一致

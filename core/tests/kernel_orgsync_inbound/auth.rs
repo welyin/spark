@@ -4,13 +4,14 @@ use super::*;
 
 // ── 2. 资格拒绝：非成员 / 复制组外普通成员 ──────────────────────────────
 
+/// A14 全员数据节点：data-accounts 集合复制组 = 全体成员——普通成员
+/// hello/need/data 正常服务合入；非成员仍 rejected。
 #[test]
-fn orgsync_rejects_non_member_and_outside_replication_group() {
-    // 集合 data-accounts：复制组 = 数据账号（此处显式指定 = [admin]）。
-    let (_a_key, a_root) = self_identity(1); // admin / 数据账号
-    let (m_key, m_root) = self_identity(3); // 普通成员（非复制组）
+fn orgsync_member_in_replication_group_non_member_rejected() {
+    let (_a_key, a_root) = self_identity(1); // admin
+    let (m_key, m_root) = self_identity(3); // 普通成员（A14：也在复制组）
     let (x_key, x_root) = self_identity(9); // 非成员
-    let (_self_key, self_root) = self_identity(2); // 本机 B（成员、数据账号）
+    let (_self_key, self_root) = self_identity(2); // 本机 B（成员）
     let mut s = MemoryStorage::new();
 
     save_org(
@@ -36,7 +37,7 @@ fn orgsync_rejects_non_member_and_outside_replication_group() {
 
     let data_key = format!("{}k1", org_data_prefix(ORG_ID, NAME, VERSION));
 
-    // (a) 非成员 from 发 hello → rejected
+    // (a) 非成员 from 发 hello → rejected（不变）
     let hello_x = build_hello_for(&s, ORG_ID, &x_root, "peer-x");
     let r = deliver_orgsync(
         &mut s,
@@ -53,8 +54,7 @@ fn orgsync_rejects_non_member_and_outside_replication_group() {
     assert_eq!(r.response["ok"], false);
     assert_eq!(r.response["reason"], json!("rejected"), "非成员 hello 拒绝");
 
-    // (b) 复制组外普通成员发 hello → 公共前置通过但集合复制组拒绝 → 该集合
-    // 被静默跳过（ok:true，无任何 diff/合并输出）——不复写数据即安全。
+    // (b) 普通成员发 hello → A14 起在复制组：正常服务（不再静默跳过）
     let hello_m = build_hello_for(&s, ORG_ID, &m_root, "peer-m");
     let r = deliver_orgsync(
         &mut s,
@@ -70,14 +70,10 @@ fn orgsync_rejects_non_member_and_outside_replication_group() {
     );
     assert_eq!(
         r.response["ok"], true,
-        "复制组外成员 hello 静默跳过（非 rejected）"
-    );
-    assert!(
-        r.orgsync_out.is_empty(),
-        "复制组外成员 hello 无 diff 输出（零合入）"
+        "成员（数据节点）hello 正常受理"
     );
 
-    // (b2) 复制组外普通成员发 need → rejected（need/data 走显式拒绝）
+    // (b2) 普通成员发 need → A14 起在复制组：受理（不再 rejected）
     let need_m = build_orgsync_need(
         ORG_ID,
         &format!("{NAME}@v{VERSION}"),
@@ -96,17 +92,16 @@ fn orgsync_rejects_non_member_and_outside_replication_group() {
         "peer-m",
         "node-b",
     );
-    assert_eq!(r.response["ok"], false);
-    assert_eq!(
+    assert_ne!(
         r.response["reason"],
         json!("rejected"),
-        "复制组外成员 need 拒绝"
+        "成员（数据节点）need 不再拒绝"
     );
 
-    // (c) 复制组外普通成员发 data（携带合法 orgd 键）→ rejected 且零合入
+    // (c) 普通成员发 data（携带合法 orgd 键）→ A14 起合入（键落库）
     let records = vec![spark_core::sync::orgsync::OrgsyncRecord {
         key: data_key.clone(),
-        value: json!("poisoned"),
+        value: json!("member-write"),
         meta: DocMeta {
             vv: [("node-m".to_string(), 1)].into_iter().collect(),
             ts: NOW,
@@ -128,15 +123,17 @@ fn orgsync_rejects_non_member_and_outside_replication_group() {
         "peer-m",
         "node-b",
     );
-    assert_eq!(r.response["ok"], false);
-    assert_eq!(
+    assert_ne!(
         r.response["reason"],
         json!("rejected"),
-        "复制组外成员 data 拒绝"
+        "成员（数据节点）data 不再拒绝"
     );
-    assert!(s.get(&data_key).unwrap().is_none(), "被拒 data 零合入");
+    assert!(
+        s.get(&data_key).unwrap().is_some(),
+        "成员数据合入落库（全员数据节点）"
+    );
 
-    // (d) 非成员发 need → rejected
+    // (d) 非成员发 need → rejected（不变）
     let need_body = build_orgsync_need(
         ORG_ID,
         &format!("{NAME}@v{VERSION}"),

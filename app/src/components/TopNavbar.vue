@@ -1,68 +1,59 @@
-<!-- 顶部导航栏（全局固定）：左侧=空间切换器；中间=全局搜索；右侧=网络状态+「⋯」更多菜单（切换账号/退出登录）；
+<!-- 顶部上下文条（README §6.1）：当前身份（域内名）· 空间名称 · 同步状态。
+     左侧=当前身份（域内名）· 当前空间名；中间=全局搜索；右侧=网络状态+「⋯」菜单；
      当前身份头像在 rail 顶部（ui-space-navbar §3/§14） -->
 <template>
   <div class="top-navbar">
     <div class="top-navbar-left">
-      <SpaceSwitcher />
-    </div>
-
-    <div class="top-navbar-center">
-      <GlobalSearch />
+      <!-- 当前空间名 + 域内身份昵称（上下文条 §6.1）；空间切换已移至 rail「空间」二级列表 -->
+      <span class="context-space" :title="`当前空间：${spaceName}`">{{ spaceName }}</span>
+      <span class="context-identity" :title="`当前身份：${identityName}`">
+        <el-icon :size="13"><User /></el-icon>
+        {{ identityName }}
+      </span>
     </div>
 
     <div class="top-navbar-right">
-      <!-- 网络状态全局常驻（「⋯」前）：个人空间=全局 P2P，组织空间=当前组织副本状态 -->
+      <!-- 网络状态全局常驻：个人空间=全局 P2P，组织空间=当前组织副本状态。
+           「⋯」菜单已移至 rail 底部头像右侧（用户评审决策） -->
       <NetworkStatusBar />
-      <el-dropdown trigger="click" @command="onMoreCommand">
-        <button class="top-navbar-more" title="更多">
-          <el-icon :size="18"><MoreFilled /></el-icon>
-        </button>
-        <template #dropdown>
-          <el-dropdown-menu>
-            <!-- 窄屏（移动端布局）：rail 不渲染，设置/测试入口挪到此处（ui-space-navbar §6.4 形态沿用，
-                 测试入口可见性逻辑与 rail 一致——当前均常驻显示，发版隐藏另行处理） -->
-            <el-dropdown-item v-if="isMobileLayout" command="settings">设置</el-dropdown-item>
-            <el-dropdown-item v-if="isMobileLayout" command="test">测试</el-dropdown-item>
-            <el-dropdown-item :divided="isMobileLayout" command="switch-account">切换账号</el-dropdown-item>
-            <el-dropdown-item command="logout" class="top-navbar-more-danger">退出登录</el-dropdown-item>
-          </el-dropdown-menu>
-        </template>
-      </el-dropdown>
     </div>
   </div>
 </template>
 
 <script lang="ts">
-import { defineComponent } from 'vue';
-import { MoreFilled } from '@element-plus/icons-vue';
-import SpaceSwitcher from './SpaceSwitcher.vue';
+import { defineComponent, computed } from 'vue';
+import { User } from '@element-plus/icons-vue';
 import NetworkStatusBar from './NetworkStatusBar.vue';
-import GlobalSearch from './GlobalSearch.vue';
 import { isMobileLayout } from '../stores/ui-layout';
-
-type MoreCommand = 'switch-account' | 'logout' | 'settings' | 'test';
+import { currentSpace, currentSpaceOrgId } from '../stores/current-space';
+import { currentUser } from '../stores/current-user';
+import { getOrgIdentity } from '../stores/org-identity';
+import { findOrg } from '../stores/org-membership';
 
 export default defineComponent({
   name: 'TopNavbar',
   components: {
-    SpaceSwitcher,
     NetworkStatusBar,
-    GlobalSearch,
-    MoreFilled
+    User
   },
-  emits: ['switch-account', 'logout', 'open-tab'],
-  setup(_, { emit }) {
-    // 「⋯」菜单命令转发给 App：设置/测试（窄屏专属）走 open-tab 切 tab，
-    // 切换账号/退出登录维持 lock + reload 语义（与 RootGate.handleLogout 一致）
-    const onMoreCommand = (command: MoreCommand) => {
-      if (command === 'settings' || command === 'test') {
-        emit('open-tab', command);
-        return;
+  setup() {
+    // 域内身份昵称（上下文条）：组织空间显该域昵称（缺省回退根身份），个人空间显根身份
+    const identityName = computed(() => {
+      if (currentSpace.value.type === 'org') {
+        const orgName = getOrgIdentity(currentSpace.value.orgId).nickname;
+        return orgName || currentUser.nickname || '未命名';
       }
-      emit(command === 'logout' ? 'logout' : 'switch-account');
-    };
+      return currentUser.nickname || '未命名';
+    });
 
-    return { onMoreCommand, isMobileLayout };
+    // 当前空间名（上下文条主体）：个人空间 / 组织名
+    const spaceName = computed(() =>
+      currentSpace.value.type === 'personal'
+        ? '个人空间'
+        : findOrg(currentSpaceOrgId.value)?.name ?? '组织空间'
+    );
+
+    return { isMobileLayout, identityName, spaceName };
   }
 });
 </script>
@@ -81,6 +72,36 @@ export default defineComponent({
   gap: 4px;
   min-width: 0;
   flex: 1;
+}
+
+/* 当前空间名（上下文条主体，替代原 SpaceSwitcher 触发器位） */
+.context-space {
+  font-size: var(--spark-font-size-base);
+  font-weight: 600;
+  color: var(--spark-text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+  flex-shrink: 1;
+}
+
+/* 域内身份昵称（上下文条 §6.1）：弱态展示，不抢空间名主体 */
+.context-identity {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+  padding: 3px 8px;
+  border-radius: var(--spark-radius-m);
+  font-size: var(--spark-font-size-secondary);
+  color: var(--spark-text-2);
+  background: var(--spark-bg-hover);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+  flex-shrink: 1;
 }
 
 /* 中间全局搜索：flex 伸展至顶栏约 1/3 宽度，min/max 防止极端窗口变形 */

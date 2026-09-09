@@ -29,6 +29,7 @@ __pycache__/
 
 # Dev 运行时日志
 app/*.log
+core/*.log
 
 # 临时工具脚本
 app/decode-qr*.cjs
@@ -42,3 +43,6 @@ app/vitest-result.json
 app/vitest-check.txt
 *.diff
 .codebuddy-*.diff
+
+# 默认内置插件打包产物（A19，plugins package:builtin 生成）
+app/src-tauri/resources/builtin-plugins/*.spkg

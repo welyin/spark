@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::catalog::{PluginCatalogItem, PluginRequires};
+use super::catalog::{PluginCatalogItem, PluginRequires, PluginWindow};
 
 /// 更新清单中的包资产条目（TS `PluginAsset`）。
 #[derive(Clone, Debug, Deserialize)]
@@ -74,6 +74,11 @@ pub struct InstalledPluginState {
     /// synthesize_catalog_entry）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requires: Option<PluginRequires>,
+    /// 安装时记录的 PC 窗口默认尺寸（manifest `window`，已归一化）：repo 安装
+    /// 取声明文件 spark-plugin.json，侧载/内置预装取包内 manifest.json；
+    /// 缺省 = 未声明，前端按默认 880×620。市场列表合成条目回落数据源
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<PluginWindow>,
 }
 
 /// 更新探测结果（TS `PluginUpdateProbe`；仅内存，不持久化）。

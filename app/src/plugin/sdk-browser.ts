@@ -59,7 +59,10 @@ declare global {
 export function createPluginBackend(
   domain: string,
   orgId?: string,
-  onClose?: () => void
+  onClose?: () => void,
+  /** A18 数据面（contacts/messages 域）注入的绑定 spaceKey：桥 dispatcher
+   * 按绑定身份下传；缺省时数据面方法拒绝（后端不猜 space） */
+  spaceKey?: string
 ): PluginSDK {
   // 沙箱化后后端只在壳层主窗口构造，无跨 frame 回退的合法场景
   const electronAPI: ElectronAPI | undefined = window.electronAPI;
@@ -74,6 +77,13 @@ export function createPluginBackend(
   // O3 org 上下文：插件运行在 org space 时注入 orgId（personal space 为
   // undefined），data.* 读写命令据此路由到 org 集合；内核按实例空间解析。
   const boundOrgId = orgId ?? undefined;
+  // A18 数据面 spaceKey（contacts/messages 命令的第一参数）；缺失即拒
+  const requireSpaceKey = (): string => {
+    if (!spaceKey) {
+      throw new Error('plugin backend: spaceKey is not bound (data plane unavailable outside bridge dispatcher)');
+    }
+    return spaceKey;
+  };
 
   return {
     domain,
@@ -146,11 +156,44 @@ export function createPluginBackend(
       verify: (payload: string, signature: string, publicKey: string) =>
         electronAPI.plugin.identityVerify(payload, signature, publicKey)
     },
-    // 通讯录只读门面（social-feed §9.4 contact:read；权限由桥 dispatcher 强制）
+    // 通讯录只读门面（social-feed §9.4 contact:read）+ A18 数据面
+    // （communication §4.1，等语义移植现有 Tauri 通讯录命令；spaceKey 由
+    // 桥绑定注入；权限 contacts:read/write 由桥 dispatcher 强制）
     contacts: {
       listFriends: () => electronAPI.contacts.listFriends(),
       listGroups: () => electronAPI.contacts.listGroups(),
-      listTags: () => electronAPI.contacts.listTags()
+      listTags: () => electronAPI.contacts.listTags(),
+      overview: () => electronAPI.contacts.overview(requireSpaceKey()),
+      updateProfile: (rootId, patch) =>
+        electronAPI.contacts.updateProfile(requireSpaceKey(), rootId, patch),
+      setBlocked: (rootId, blocked) =>
+        electronAPI.contacts.setBlocked(requireSpaceKey(), rootId, blocked),
+      removeFriend: (rootId, block) => electronAPI.contacts.removeFriend(rootId, block),
+      sendRequest: (input) => electronAPI.contacts.sendRequest(input),
+      replyRequest: (requestId, text) => electronAPI.contacts.replyRequest(requestId, text),
+      askRequest: (requestId, text) => electronAPI.contacts.askRequest(requestId, text),
+      resolveRequest: (requestId, accept, permission) =>
+        electronAPI.contacts.resolveRequest(requestId, accept, permission),
+      tagCreate: (id, name) => electronAPI.contacts.tagCreate(requireSpaceKey(), id, name),
+      tagRename: (tagId, name) => electronAPI.contacts.tagRename(requireSpaceKey(), tagId, name),
+      tagDelete: (tagId) => electronAPI.contacts.tagDelete(requireSpaceKey(), tagId),
+      groupCreate: (id, name) => electronAPI.contacts.groupCreate(requireSpaceKey(), id, name),
+      groupRename: (groupId, name) => electronAPI.contacts.groupRename(requireSpaceKey(), groupId, name),
+      groupDelete: (groupId) => electronAPI.contacts.groupDelete(requireSpaceKey(), groupId),
+      groupMove: (groupId, toIndex) => electronAPI.contacts.groupMove(requireSpaceKey(), groupId, toIndex),
+      setGroup: (rootId, groupId) => electronAPI.contacts.setGroup(requireSpaceKey(), rootId, groupId),
+      orgGroupCreate: (parentId, id, name) =>
+        electronAPI.contacts.orgGroupCreate(requireSpaceKey(), parentId, id, name),
+      orgGroupRename: (id, name) => electronAPI.contacts.orgGroupRename(requireSpaceKey(), id, name),
+      orgGroupDelete: (id) => electronAPI.contacts.orgGroupDelete(requireSpaceKey(), id),
+      orgGroupMove: (id, toIndex, newParentId) =>
+        electronAPI.contacts.orgGroupMove(requireSpaceKey(), id, toIndex, newParentId),
+      // 变更订阅经桥事件通道（PluginIframeHost 转发 ContactsSynced）实现；
+      // 本后端无该通路，以 no-op 满足契约（同 data.onChange 口径）
+      onChanged: async () => {},
+      // A19 事件面（FriendRequest*/FriendProfileUpdated）：同经桥事件通道实现，no-op 满足契约
+      onRequestChanged: async () => {},
+      onFriendProfileUpdated: async () => {}
     },
     // 社交投递（social-feed §9.1 sdk.feed；deliver 权限由桥 dispatcher 强制，
     // onReceive/pull 接收侧免权限）。pluginId 由本后端按域注入（不信插件自报）。

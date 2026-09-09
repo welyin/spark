@@ -81,7 +81,7 @@ pub fn merge_org_meta_record(
     let merged_extra = merge_extra_maps(&low.extra, &high.extra);
 
     OrganizationRecord {
-        // summary 字段（name/description/avatar/createdBy/gateways/
+        // summary 字段（name/description/avatar/createdBy/
         // dataAccounts/orgAddress/isPublic/sync 等）取秩高一侧——管理员低频写，
         // 竞争罕见，近似 LWW
         name: high.name.clone(),
@@ -92,8 +92,10 @@ pub fn merge_org_meta_record(
         created_by: high.created_by.clone(),
         members: sort_members(&merged_members),
         sync: high.sync.clone(),
-        gateways: high.gateways.clone(),
-        data_accounts: high.data_accounts.clone(),
+        // gateways（A9 指定通路移除）/ dataAccounts（A14 角色退役）：合并
+        // 一律空集——存量字段读取即忽略
+        gateways: Vec::new(),
+        data_accounts: Vec::new(),
         org_address: high.org_address.clone(),
         is_public: high.is_public,
         // 域类型（org-genesis §3.1）：summary 字段组，取秩高一侧。
@@ -243,6 +245,7 @@ mod tests {
         OrganizationAccessKey {
             public_key: format!("pk-{tag}"),
             bind_sig: "bind".to_string(),
+            root_pubkey: None,
         }
     }
 

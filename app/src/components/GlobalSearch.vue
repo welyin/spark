@@ -65,6 +65,7 @@ import { mockMode } from '../mock/mode';
 import { appIconBackground, marketItemMatches } from './apps/apps-store';
 import { isPluginVisibleInSpace } from './apps/space-visibility';
 import { openChat } from './contacts/open-intents';
+import { openPluginDeepLink } from '../services/deep-link';
 import UserAvatar from './UserAvatar.vue';
 import OrgAvatar from './OrgAvatar.vue';
 
@@ -276,7 +277,8 @@ export default defineComponent({
       emit('select');
       if (item.kind === 'contact') {
         ensureSpace(item.space);
-        window.dispatchEvent(new CustomEvent('spark:open-contact', { detail: { rootId: item.rootId } }));
+        // 0.3：通讯录是空间插件，经统一深链打开并定位该联系人（cardData.rootId 注入插件消费）
+        openPluginDeepLink({ pluginId: 'spark-contacts', cardData: { rootId: item.rootId } });
       } else if (item.kind === 'conversation') {
         ensureSpace(item.space);
         openChat({ rootId: item.rootId ?? '', name: item.name, conversationId: item.conversationId });

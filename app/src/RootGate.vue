@@ -223,7 +223,9 @@ export default defineComponent({
       await nextTick();
       await new Promise((resolve) => setTimeout(resolve, 0));
       try {
-        const result = await window.electronAPI.rootIdentity.unlock(password);
+        // 密码考试（A6，identity.md §4.2）：bioSourced 解锁不刷新 lastPasswordAuth，
+        // 只认真实密码输入——把来源标记传给内核。
+        const result = await window.electronAPI.rootIdentity.unlock(password, undefined, bioSourced);
         message.value = `登录成功，RootID=${result.rootId}`;
         // 登录成功即活跃：刷新自动锁定的最近活跃时间（§5）
         touchLastActiveAt();

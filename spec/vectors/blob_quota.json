@@ -1,0 +1,191 @@
+[
+  {
+    "id": "k_target_semantics",
+    "expect": {
+      "devices1": 1,
+      "devices2": 2,
+      "devices3": 3,
+      "devices5": 3
+    }
+  },
+  {
+    "id": "quota_defaults",
+    "expect": {
+      "pcBytes": 10737418240,
+      "mobileBytes": 1073741824
+    }
+  },
+  {
+    "id": "eviction_k_equal_never",
+    "input": {
+      "k": 3,
+      "states": [
+        {
+          "cid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "bytes": 1000,
+          "accessTs": 1000,
+          "holders": [
+            "uid-a",
+            "uid-b",
+            "uid-c"
+          ]
+        },
+        {
+          "cid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "bytes": 2000,
+          "accessTs": 500,
+          "holders": [
+            "uid-a",
+            "uid-b",
+            "uid-c"
+          ]
+        }
+      ],
+      "perspectives": [
+        "uid-a",
+        "uid-b",
+        "uid-c"
+      ],
+      "neededBytes": 10000
+    },
+    "expect": {
+      "plans": [
+        [],
+        [],
+        []
+      ]
+    }
+  },
+  {
+    "id": "eviction_over_k_by_age",
+    "input": {
+      "k": 3,
+      "myUid": "uid-d",
+      "states": [
+        {
+          "cid": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "bytes": 100,
+          "accessTs": 3000,
+          "holders": [
+            "uid-a",
+            "uid-b",
+            "uid-c",
+            "uid-d"
+          ]
+        },
+        {
+          "cid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "bytes": 500,
+          "accessTs": 1000,
+          "holders": [
+            "uid-a",
+            "uid-b",
+            "uid-c",
+            "uid-d"
+          ]
+        },
+        {
+          "cid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "bytes": 200,
+          "accessTs": 2000,
+          "holders": [
+            "uid-a",
+            "uid-b",
+            "uid-c",
+            "uid-d"
+          ]
+        }
+      ]
+    },
+    "expect": {
+      "planNeeded600": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ],
+      "planNeeded10000": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      ]
+    }
+  },
+  {
+    "id": "eviction_i_am_keeper",
+    "input": {
+      "k": 3,
+      "myUid": "uid-a",
+      "states": [
+        {
+          "cid": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "bytes": 100,
+          "accessTs": 3000,
+          "holders": [
+            "uid-a",
+            "uid-b",
+            "uid-c",
+            "uid-d"
+          ]
+        },
+        {
+          "cid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "bytes": 500,
+          "accessTs": 1000,
+          "holders": [
+            "uid-a",
+            "uid-b",
+            "uid-c",
+            "uid-d"
+          ]
+        },
+        {
+          "cid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "bytes": 200,
+          "accessTs": 2000,
+          "holders": [
+            "uid-a",
+            "uid-b",
+            "uid-c",
+            "uid-d"
+          ]
+        }
+      ]
+    },
+    "expect": {
+      "plan": []
+    }
+  },
+  {
+    "id": "eviction_concurrent_converges",
+    "input": {
+      "k": 3,
+      "states": [
+        {
+          "cid": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "bytes": 4096,
+          "accessTs": 1234,
+          "holders": [
+            "uid-a",
+            "uid-b",
+            "uid-c",
+            "uid-d",
+            "uid-e"
+          ]
+        }
+      ]
+    },
+    "expect": {
+      "planRank2": [],
+      "planRank3": [
+        "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      ],
+      "planRank4": [
+        "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      ],
+      "survivorsAfterEviction": [
+        "uid-a",
+        "uid-b",
+        "uid-c"
+      ]
+    }
+  }
+]

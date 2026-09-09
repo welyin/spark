@@ -99,6 +99,12 @@ impl BuiltinOrgCollection {
             // 并入——组织策略与信任锚属结构集合，全员流动。
             // policy §2：org:policydoc:（发布策略文档，sigSet 合入校验，
             // sdk.policy.publish 产出）同集合全员流动。
+            // A15：org:disclosure:（名册开放声明，membership §4.3——发布即
+            // 公示随全员流动，生效由记录 effectiveAt 门控；入站合入
+            // adjudicate_incoming_disclosure 五步链把关）同集合全员流动。
+            // A17：org:accept:（准入策略声明 acceptCredentials，membership
+            // §4.5——同族公示延迟形态；入站合入
+            // adjudicate_incoming_accept_policy 五步链把关）同集合全员流动。
             // 退出留史：org:cleave:{orgId}:（共同体退出留史记录，append-only，
             // community-model「退出留史」）同集合全员流动——各节点由名册 +
             // 留史记录确定性推导空域只读档案状态。
@@ -111,6 +117,8 @@ impl BuiltinOrgCollection {
                 format!("org:policy:{org_id}:"),
                 format!("org:verifiers:{org_id}"),
                 format!("org:policydoc:{org_id}"),
+                format!("org:disclosure:{org_id}:"),
+                format!("org:accept:{org_id}"),
                 format!("org:cleave:{org_id}:"),
             ],
             BuiltinOrgCollection::Contacts => vec![format!("ct:org:{org_id}:")],

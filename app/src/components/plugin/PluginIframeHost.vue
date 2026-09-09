@@ -87,7 +87,9 @@ export default defineComponent({
   props: {
     pluginId: { type: String, required: true },
     viewId: { type: String, required: true },
-    space: { type: Object as PropType<PluginSpaceContext>, required: true }
+    space: { type: Object as PropType<PluginSpaceContext>, required: true },
+    /** 视图引导（可选）：注入 window.__sparkPluginView.cardData，如事务打开时传 affairId（3.4 深链） */
+    viewBootstrap: { type: Object as PropType<{ cardData?: unknown }>, default: undefined }
   },
   emits: ['close', 'manifest'],
   setup(props, { emit }) {
@@ -100,7 +102,9 @@ export default defineComponent({
     const runtimeErrorCount = ref(0);
     const reloadToken = ref(0);
 
-    const srcdoc = computed(() => buildPluginHostSrcdoc(props.pluginId));
+    const srcdoc = computed(() =>
+      buildPluginHostSrcdoc(props.pluginId, props.viewBootstrap ? { viewId: props.viewId, viewType: 'app', cardData: props.viewBootstrap.cardData } : undefined)
+    );
 
     const disabledReasonText = computed(() =>
       disabledReason.value === 'ready-errors'
@@ -125,6 +129,14 @@ export default defineComponent({
       unlistenFeedReceived = null;
       unlistenAffairChanged?.();
       unlistenAffairChanged = null;
+      unlistenChatReceived?.();
+      unlistenChatReceived = null;
+      unlistenContactsSynced?.();
+      unlistenContactsSynced = null;
+      unlistenChatStatus?.();
+      unlistenChatStatus = null;
+      unlistenFriendRequests?.();
+      unlistenFriendRequests = null;
       // 主视图实例登记清理（仅清自己：同插件新实例已接管时不误删）
       if (host) {
         unregisterMainViewInstance(props.pluginId, pluginSpaceKey(props.space), host);
@@ -150,6 +162,18 @@ export default defineComponent({
     // （host.pushEvent 内部按订阅集合过滤；与 PluginDataChanged 同口径的
     // 轻量通知，插件收到后重读 readLog 收敛）
     let unlistenAffairChanged: (() => void) | null = null;
+    // A18 IM 数据面（communication §4.1）：ChatReceived 按绑定 space 过滤 +
+    // messages:read 授权门控后推给 sdk.messages.onNewMessage 订阅
+    let unlistenChatReceived: (() => void) | null = null;
+    // A18 通讯录数据面：ContactsSynced 经 contacts:read 授权门控后推给
+    // sdk.contacts.onChanged 订阅（轻量通知，插件重读 overview 收敛）
+    let unlistenContactsSynced: (() => void) | null = null;
+    // A19 聊天/通讯录迁移事件面：ChatStatus 系与 FriendRequest 系监听
+    let unlistenChatStatus: (() => void) | null = null;
+    let unlistenFriendRequests: (() => void) | null = null;
+    // A18 事件门控的授权清单数据源（与 bridge-dispatcher 同格：市场安装
+    // 状态 grantedPermissions，渲染进程不可自报；读取失败按空清单 = 不推）
+    const grantedPermissions = ref<Set<string>>(new Set());
 
     const init = async (): Promise<void> => {
       const gen = ++generation;
@@ -271,12 +295,29 @@ export default defineComponent({
             unlistenDataChanged = un;
           })
           .catch(() => {});
-        // 社交投递入站推送（social-feed §8）：FeedReceived → 桥事件。topic 前缀
-        // == 本插件 id 才推送（topic 即插件归属，插件 sdk.feed.onReceive 内部
-        // 再按订阅 topic 前缀做第二道收敛）。插件经 bridge client 的
+        // A18 事件门控授权清单：市场安装状态（读取失败按空清单 = 全部不推，
+        // 与 dispatcher 最小授权同口径）
+        try {
+          const marketItems = await window.electronAPI.pluginMarket.list();
+          grantedPermissions.value = new Set(
+            marketItems.find((item) => item.id === props.pluginId)?.grantedPermissions ?? []
+          );
+        } catch {
+          grantedPermissions.value = new Set();
+        }
+        if (isStale(gen)) {
+          return;
+        }
+        // 社交投递入站推送（social-feed §8 + A18 §4.1 feed:read 门控）：
+        // FeedReceived → 桥事件。topic 前缀 == 本插件 id 且已授权 feed:read
+        // 才推送（topic 即插件归属，插件 sdk.feed.onReceive 内部再按订阅
+        // topic 前缀做第二道收敛）。插件经 bridge client 的
         // events.subscribe('FeedReceived', fn) 接收（sdk.feed.onReceive 封装）。
         void listenP2pEvents((event) => {
           if (event.kind !== 'FeedReceived') {
+            return;
+          }
+          if (!grantedPermissions.value.has('feed:read')) {
             return;
           }
           const data = event.data as { topic?: string } | undefined;
@@ -292,6 +333,105 @@ export default defineComponent({
               return;
             }
             unlistenFeedReceived = un;
+          })
+          .catch(() => {});
+        // A18 IM 数据面（communication §4.1）：ChatReceived → 桥事件。
+        // 按绑定 space 过滤（payload.spaceKey 须一致）+ messages:read 授权
+        // 门控（事件载荷含消息明文，与读面同权限位）。插件经
+        // sdk.messages.onNewMessage（events.subscribe('ChatReceived')）接收。
+        void listenP2pEvents((event) => {
+          if (event.kind !== 'ChatReceived') {
+            return;
+          }
+          if (!grantedPermissions.value.has('messages:read')) {
+            return;
+          }
+          const data = event.data as { spaceKey?: string } | undefined;
+          if (data?.spaceKey !== pluginSpaceKey(props.space)) {
+            return;
+          }
+          host?.pushEvent('ChatReceived', event.data);
+        })
+          .then((un) => {
+            if (isStale(gen)) {
+              un();
+              return;
+            }
+            unlistenChatReceived = un;
+          })
+          .catch(() => {});
+        // A18 通讯录数据面：ContactsSynced → 桥事件。contacts:read 授权门控
+        // （轻量通知 {applied}，插件重读 overview 收敛，与 PluginDataChanged 同口径）
+        void listenP2pEvents((event) => {
+          if (event.kind !== 'ContactsSynced' && event.kind !== 'OrgSynced') {
+            return;
+          }
+          if (!grantedPermissions.value.has('contacts:read')) {
+            return;
+          }
+          host?.pushEvent(event.kind, event.data);
+        })
+          .then((un) => {
+            if (isStale(gen)) {
+              un();
+              return;
+            }
+            unlistenContactsSynced = un;
+          })
+          .catch(() => {});
+        // A19 聊天应用迁移事件面（communication §4.2）：ChatStatus（已读/撤回/
+        // 状态流转，space 过滤）/ ConversationsSynced / PeerConnected /
+        // PeerDisconnected → 桥事件，messages:read 授权门控
+        void listenP2pEvents((event) => {
+          if (
+            event.kind !== 'ChatStatus' &&
+            event.kind !== 'ConversationsSynced' &&
+            event.kind !== 'PeerConnected' &&
+            event.kind !== 'PeerDisconnected'
+          ) {
+            return;
+          }
+          if (!grantedPermissions.value.has('messages:read')) {
+            return;
+          }
+          if (event.kind === 'ChatStatus') {
+            const data = event.data as { spaceKey?: string } | undefined;
+            if (data?.spaceKey !== pluginSpaceKey(props.space)) {
+              return;
+            }
+          }
+          host?.pushEvent(event.kind, event.data);
+        })
+          .then((un) => {
+            if (isStale(gen)) {
+              un();
+              return;
+            }
+            unlistenChatStatus = un;
+          })
+          .catch(() => {});
+        // A19 通讯录迁移事件面：FriendRequestReceived/Sent/Accepted +
+        // FriendProfileUpdated → 桥事件，contacts:read 授权门控
+        void listenP2pEvents((event) => {
+          if (
+            event.kind !== 'FriendRequestReceived' &&
+            event.kind !== 'FriendRequestSent' &&
+            event.kind !== 'FriendRequestAccepted' &&
+            event.kind !== 'FriendProfileUpdated'
+          ) {
+            return;
+          }
+          if (!grantedPermissions.value.has('contacts:read')) {
+            return;
+          }
+          host?.pushEvent(event.kind, event.data);
+        })
+          .then((un) => {
+            if (isStale(gen)) {
+              un();
+              return;
+            }
+            unlistenFriendRequests = un;
           })
           .catch(() => {});
         // 事务副本变更推送（sdk.affairs.onChange）：AffairChanged → 桥事件。

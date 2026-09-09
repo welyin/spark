@@ -11,7 +11,7 @@ use spark_core::org::{OrgInvitePayload, OrgInviteRecord, OrganizationView};
 use super::dto::{
     AddOrgMemberInputDto, CommunityAcceptDto, CommunityLeaveDto, CommunityMemberDto,
     CreateOrgInputDto, CreatedCommunityInviteDto, CreatedOrgInviteDto, InviteAcceptanceDto,
-    OrgAddressRecordDto, OrgSyncOverviewDto, SuccessResult, avatar_patch,
+    OrgAddressRecordDto, OrgSyncOverviewDto, avatar_patch,
 };
 use super::{err, lock_kernel};
 use crate::KernelState;
@@ -68,9 +68,8 @@ pub(crate) fn sync_overview_inner(
         .map_err(err)
 }
 
-pub(crate) fn delete_inner(kernel: &mut Kernel, org_id: &str) -> Result<SuccessResult, String> {
-    kernel.org_delete(org_id).map_err(err)?;
-    Ok(SuccessResult::ok())
+pub(crate) fn leave_inner(kernel: &mut Kernel, org_id: &str) -> Result<OrganizationView, String> {
+    kernel.org_leave(org_id).map_err(err)
 }
 
 pub(crate) fn add_member_inner(
@@ -90,40 +89,6 @@ pub(crate) fn remove_member_inner(
     member_root_id: &str,
 ) -> Result<OrganizationView, String> {
     kernel.org_remove_member(org_id, member_root_id).map_err(err)
-}
-
-pub(crate) fn set_gateways_inner(
-    kernel: &mut Kernel,
-    org_id: &str,
-    gateways: Vec<String>,
-) -> Result<OrganizationView, String> {
-    kernel.org_set_gateways(org_id, &gateways).map_err(err)
-}
-
-pub(crate) fn set_data_accounts_inner(
-    kernel: &mut Kernel,
-    org_id: &str,
-    data_accounts: Vec<String>,
-) -> Result<OrganizationView, String> {
-    kernel
-        .org_set_data_accounts(org_id, &data_accounts)
-        .map_err(err)
-}
-
-pub(crate) fn set_member_role_inner(
-    kernel: &mut Kernel,
-    org_id: &str,
-    member_root_id: &str,
-    role: &str,
-) -> Result<OrganizationView, String> {
-    let role = match role {
-        "admin" => spark_core::org::OrganizationRole::Admin,
-        "member" => spark_core::org::OrganizationRole::Member,
-        other => return Err(format!("invalid role {other:?}")),
-    };
-    kernel
-        .org_set_member_role(org_id, member_root_id, role)
-        .map_err(err)
 }
 
 pub(crate) fn set_public_inner(
@@ -350,12 +315,14 @@ pub fn org_sync_overview(
     sync_overview_inner(&*lock_kernel(&state)?, &org_id)
 }
 
+/// 退出组织（A13 / community-model §4.3：成员自退出；最后一名成员退出
+/// 即成空域只读档案）。删除通路已整体移除，域只可退出不可解散。
 #[tauri::command]
-pub fn org_delete(
+pub fn org_leave(
     state: tauri::State<'_, KernelState>,
     org_id: String,
-) -> Result<SuccessResult, String> {
-    delete_inner(&mut *lock_kernel(&state)?, &org_id)
+) -> Result<OrganizationView, String> {
+    leave_inner(&mut *lock_kernel(&state)?, &org_id)
 }
 
 #[tauri::command]
@@ -376,38 +343,16 @@ pub fn org_remove_member(
     remove_member_inner(&mut *lock_kernel(&state)?, &org_id, &member_root_id)
 }
 
-/// 指定组织网关（仅 admin；O1 账号角色模型：1–3 名本组织成员的 rootId，
-/// 空列表 = 清除显式指定、回落缺省全员候选，org.md §14 + org-data-sync §2）。
+/// 当前履职网关活跃集（只读；A47 / network §三 G6）：全员候选计分推导，
+/// 返回履职成员 rootId 列表（≤3，全叶组织为空集）。
 #[tauri::command]
-pub fn org_set_gateways(
+pub fn org_gateway_active_set(
     state: tauri::State<'_, KernelState>,
     org_id: String,
-    gateways: Vec<String>,
-) -> Result<OrganizationView, String> {
-    set_gateways_inner(&mut *lock_kernel(&state)?, &org_id, gateways)
-}
-
-/// 指定数据账号（仅 admin；O1：≥1 名成员，空列表 = 清除显式指定、回落
-/// 缺省全体管理员）。
-#[tauri::command]
-pub fn org_set_data_accounts(
-    state: tauri::State<'_, KernelState>,
-    org_id: String,
-    data_accounts: Vec<String>,
-) -> Result<OrganizationView, String> {
-    set_data_accounts_inner(&mut *lock_kernel(&state)?, &org_id, data_accounts)
-}
-
-/// 晋升/降级成员角色（仅 admin；O1：数据职责随角色自动进出；降级最后一个
-/// 管理员拒绝）。
-#[tauri::command]
-pub fn org_set_member_role(
-    state: tauri::State<'_, KernelState>,
-    org_id: String,
-    member_root_id: String,
-    role: String,
-) -> Result<OrganizationView, String> {
-    set_member_role_inner(&mut *lock_kernel(&state)?, &org_id, &member_root_id, &role)
+) -> Result<Vec<String>, String> {
+    lock_kernel(&state)?
+        .org_gateway_active_set(&org_id)
+        .map_err(err)
 }
 
 /// 开关组织公开标志（仅 admin；org.md §16），可选更新地址记录展示名。

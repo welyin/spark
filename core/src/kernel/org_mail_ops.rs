@@ -127,7 +127,7 @@ impl Kernel {
     }
 
     /// 收件人编排（§21.5 fetch 两轮 + §21.6 取信即删）：本机为成员的每个
-    /// 组织 → 逐活跃网关（显式 gateways，缺省推导活跃集，取成员表端点）
+    /// 组织 → 逐活跃网关（计分推导履职集，取成员表端点）
     /// 两轮挑战拉取 → 落 `orgmail:in:`（解箱在呈现层——先落原始信封，
     /// 明文由读取方按需 orgmail_unbox）。返回收取信封数。
     pub fn org_mail_fetch(&mut self) -> Result<usize> {
@@ -182,12 +182,8 @@ pub(crate) async fn org_mail_fetch_async(
         let domain = org_mail_domain(&record.org_id);
         let identity = crate::identity::derive_domain_identity(&seed, &domain);
         let my_domain_id = domain_id_of(&identity.signing_key.verifying_key());
-        // 活跃网关 = 显式 gateways，缺省推导活跃集（roles::gateway_active_set）
-        let gateways = if record.gateways.is_empty() {
-            crate::org::roles::gateway_active_set(&record, now)
-        } else {
-            record.gateways.clone()
-        };
+        // 活跃网关 = 计分推导履职集（A9 指定通路移除，roles::gateway_active_set）
+        let gateways = crate::org::roles::gateway_active_set(&storage, &record, Some(&root_id), now);
         for gateway_root in gateways {
             if gateway_root == root_id {
                 continue; // 自己是网关：信在本机箱内，拉取无意义（本地直读另行）

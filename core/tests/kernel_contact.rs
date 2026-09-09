@@ -326,6 +326,77 @@ fn send_request_with_explicit_peer_addresses() {
     assert_eq!(err.to_string(), "无法确定对方节点地址，请使用扫码名片添加");
 }
 
+/// A16 切片三（membership §4.4 名册键切换消费面）：好友申请寻址双键——
+/// 上行身份按 org_user_id 命中组织成员端点（公共面去 rootId 后前端持有的
+/// 是 org_user_id）；rootId 上行照旧兼容。
+#[test]
+fn send_request_addressed_by_member_org_user_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut kernel = fresh_kernel(dir.path());
+    init_identity(&mut kernel);
+    kernel.stop_p2p().unwrap();
+
+    // 建组织并录入成员 B（带端点）
+    let view = kernel
+        .create_org(spark_core::org::service::CreateOrganizationInput {
+            name: "寻址组织".to_string(),
+            ..Default::default()
+        })
+        .unwrap();
+    let org_id = view.record.org_id.clone();
+    let b_root = "bb".repeat(32);
+    kernel
+        .org_add_member(
+            &org_id,
+            &b_root,
+            Some(&spark_core::org::OrganizationNodeInfo {
+                device_uid: None,
+                peer_id: Some("peer-b-123456".to_string()),
+                addresses: vec![],
+            }),
+        )
+        .unwrap();
+
+    // B 已发布 accessKey（org_user_id 可派生）——模拟名册双写形态
+    let b_access_key = spark_core::org::access_key::derive_access_key(&[7u8; 32], &org_id);
+    let b_uid = spark_core::org::access_key::member_org_user_id(&b_access_key).unwrap();
+    assert_ne!(b_uid, b_root, "org_user_id 与 rootId 不同值");
+    {
+        use spark_core::storage::StorageBackend as _;
+        let mut s = kernel.__test_storage().unwrap();
+        let mut record = spark_core::org::OrganizationService::get_record(&s, &org_id)
+            .unwrap()
+            .unwrap();
+        let idx = record
+            .members
+            .iter()
+            .position(|m| m.root_id == b_root)
+            .unwrap();
+        record.members[idx].access_key = Some(b_access_key);
+        spark_core::org::OrganizationService::save_record(&mut s, &record).unwrap();
+        s.put(
+            &spark_core::org::types::org_member_key(&org_id, &b_root),
+            &serde_json::to_string(&record.members[idx]).unwrap(),
+        )
+        .unwrap();
+    }
+
+    // org_user_id 上行 → 经双键反查命中成员端点
+    let record = kernel
+        .contact_send_request(request_input("req-uid", &b_uid, "x"))
+        .unwrap();
+    assert_eq!(
+        record.peer.as_ref().unwrap().peer_id,
+        "peer-b-123456",
+        "org_user_id 寻址命中成员端点"
+    );
+    // rootId 上行照旧兼容（双写过渡）
+    let record = kernel
+        .contact_send_request(request_input("req-rid", &b_root, "x"))
+        .unwrap();
+    assert_eq!(record.peer.as_ref().unwrap().peer_id, "peer-b-123456");
+}
+
 #[test]
 fn send_request_persists_across_restart() {
     let dir = tempfile::tempdir().unwrap();

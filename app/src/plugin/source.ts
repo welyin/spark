@@ -113,11 +113,16 @@ const sourceCsp = (scriptSrc: string): string =>
 export function buildPluginHostSrcdoc(pluginId: string, mount?: PluginViewBootstrap, devOverride?: boolean): string {
   assertValidPluginId(pluginId);
   const base = pluginSourceBaseUrl(pluginId, devOverride);
-  // CSP 来源用插件源 origin（不含 id 路径段）：CSP 路径匹配规则下，
+  // CSP 来源用插件源 origin（不含任何路径段）：CSP 路径匹配规则下，
   // 不带尾斜杠的路径只精确匹配该路径本身，不匹配子文件（weibo-core/views/main.js 会被
   // script-src http://plugin.localhost/weibo-core 误挡）；origin 级来源才是正确粒度
   // （各插件 id 本就共享同一 origin，路径段不构成隔离）。
-  const origin = base.slice(0, base.length - (encodeURIComponent(pluginId).length + 1));
+  // 注意必须取真 origin（scheme+host）而非仅去 id 段：Tauri+dev 分支 base 带
+  // /plugin/ 前缀（vite 中间件），只去 id 段会把 /plugin 残留进 CSP 路径——
+  // /plugin 不匹配 /plugin/<id>/main.js，插件脚本与样式被全量拦截（2026-09-09 实机 bug）。
+  // 不用 URL.origin：非标准 scheme（plugin://）的 origin 恒为 'null'（URL 规范只对
+  // special scheme 计算 origin）——scheme+host 须手工提取。
+  const origin = base.match(/^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^/]+)/)?.[1] ?? base;
   // mount 引导脚本为内联 script：仅注入 mount 时给 script-src 追加 'unsafe-inline'
   // 放行（iframe 沙箱内插件 bundle 本就是任意代码，CSP 的网络外联约束不受此影响；
   // 主视图不传 mount 则 CSP 维持原口径）

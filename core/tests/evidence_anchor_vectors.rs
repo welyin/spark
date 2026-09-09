@@ -229,6 +229,7 @@ fn rebuild_package() -> EvidenceExportPackage {
         },
         &key(0xEE),
         TS_BASE + 5000,
+        None,
     )
     .expect("build package")
 }

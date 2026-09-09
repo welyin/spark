@@ -154,6 +154,13 @@ export interface PasswordUnifyResultDto {
   success: boolean;
 }
 
+/** 密码考试状态（identity.md §4.2；root_password_exam_status） */
+export interface PasswordExamStatusDto {
+  lastPasswordAuth: number;
+  overdue: boolean;
+  intervalMs: number;
+}
+
 export type PluginPermission = string;
 /** 插件可运行的空间类型（spaces-and-plugins §4）。 */
 export type PluginSpaceType = 'personal' | 'org';
@@ -259,6 +266,14 @@ export type DataUsageReportDto = {
   warnings: { usageExceeded: boolean; diskLow: boolean };
 };
 
+/** PC 窗口默认尺寸（manifest 顶层可选 `window` 字段，插件级不做 per-view；
+ *  合法范围宽 320–3840 / 高 220–2160，缺省或非法值按壳层默认 880×620；
+ *  移动端全屏打开忽略本字段——ui-architecture §4.2 / plugin-dist §2.1） */
+export type PluginWindowSpec = {
+  defaultWidth: number;
+  defaultHeight: number;
+};
+
 // 插件市场线形（对齐旧 preload.ts pluginMarket 声明与 src-tauri market 模块 DTO）
 export type PluginMarketItemDto = {
   id: string;
@@ -273,6 +288,8 @@ export type PluginMarketItemDto = {
   supportedSpaces?: PluginSpaceType[];
   /** 运行时前提（平台/能力约束；缺省 = 全平台可装） */
   requires?: PluginRequires;
+  /** PC 窗口默认尺寸（manifest `window`，壳层已归一化；缺省 = 桌面窗口默认 880×620） */
+  window?: PluginWindowSpec;
   package: {
     updateManifestUrl: string;
     signatureUrl: string;
@@ -313,6 +330,8 @@ export type InstalledPluginStateDto = {
   trust?: string;
   /** 安装时记录的运行时前提（repo 取声明文件 / 侧载取包内 manifest.json；缺省 = 全平台可装） */
   requires?: PluginRequires;
+  /** 安装时记录的 PC 窗口默认尺寸（repo 取声明文件 / 侧载·内置取包内 manifest.json；缺省 = 默认 880×620） */
+  window?: PluginWindowSpec;
 };
 
 /** .spkg 侧载预览（plugin-market-inspect-local 出参；网络差降级，波次 2b） */
@@ -348,6 +367,8 @@ export type RepoPluginDeclarationDto = {
   supportedSpaces?: PluginSpaceType[];
   /** 运行时前提（平台/能力约束；缺省 = 全平台可装） */
   requires?: PluginRequires;
+  /** PC 窗口默认尺寸（plugin-dist §2.1；缺省/非法值 = 默认 880×620） */
+  window?: PluginWindowSpec;
   sdkVersion: string;
 };
 
@@ -438,7 +459,6 @@ export type OrgView = {
   isCurrentUserAdmin: boolean;
   memberCount: number;
   adminCount: number;
-  gateways?: string[];
   orgAddress?: string;
   isPublic?: boolean;
   orgDisplayName?: string;
@@ -528,6 +548,8 @@ export type OrgSyncOverviewDto = {
   totalMembers: number;
   members: Array<{
     rootId: string;
+    /** 成员 org_user_id（A16 标识面随迁；未发布 accessKey 的成员缺省）。 */
+    orgUserId?: string;
     peerId?: string;
     isSelf: boolean;
     everSynced: boolean;
@@ -542,9 +564,13 @@ export type OrgSyncOverviewDto = {
   lastConnectedAt: number | null;
   dhtMode: 'off' | 'client' | 'server';
   status: OrgNetworkStatus;
-  /** O1 两级记账：逐数据账号的 PC 设备达标状态（org-data-sync §4）。 */
-  dataAccounts: Array<{
+  /** K 口径是否适用（组织有 data-accounts 集合；batch2 §1.2）。false = 纯 all-members 组织无 K，不做达标判定、不提醒。 */
+  kApplicable: boolean;
+  /** 两级记账第二级：逐成员 PC 设备副本状态（A14 全员数据节点，membership §4.1）。 */
+  memberReplicas: Array<{
     rootId: string;
+    /** 成员 org_user_id（A16 标识面随迁；未发布 accessKey 的成员缺省）。 */
+    orgUserId?: string;
     pcSynced: boolean;
     deviceClass: string;
   }>;
@@ -785,6 +811,23 @@ export type FeedPullResultDto = {
 };
 
 
+/** blob 层域级副本健康度摘要（`root-blob-health` 返回，serde camelCase 直通） */
+export type BlobHealthDto = {
+  /** 域内未撤销设备数（核心数据全量副本数） */
+  deviceCount: number;
+  /** 副本目标 K = min(3, deviceCount)；设备 ≤3 台退化为全量 */
+  kTarget: number;
+  /** 本机有 manifest 的 blob 数 */
+  totalBlobs: number;
+  /** blob 内容字节总量 */
+  totalBytes: number;
+  /** 完整副本数 <K 的 blob 数 */
+  underKBlobs: number;
+  /** 全部 blob 的完整副本数最小值（无 blob 时为 null） */
+  minFullReplicas: number | null;
+  quota: { quotaBytes: number; usedBytes: number; overBytes: number };
+};
+
 export type ElectronAPI = {
   db: {
     query: (prefix: string) => Promise<Array<{ key: string; value: string }>>;
@@ -916,14 +959,12 @@ export type ElectronAPI = {
   organization: {
     listMine: () => Promise<OrgView[]>;
     create: (input: { name: string; description?: string; avatar?: string; basePluginDomain?: string; domainType?: 'leaf' | 'community' }) => Promise<OrgView>;
-    delete: (orgId: string) => Promise<{ success: boolean }>;
+    /** A13：退出组织（成员自退出；最后一名成员退出即成空域只读档案。删除通路已移除，域只可退出不可解散） */
+    leave: (orgId: string) => Promise<OrgView>;
     addMember: (orgId: string, input: { rootId: string; nodeInfo?: OrgNodeInfo }) => Promise<OrgView>;
     removeMember: (orgId: string, memberRootId: string) => Promise<OrgView>;
-    setGateways: (orgId: string, gateways: string[]) => Promise<OrgView>;
-    /** O1：指定数据账号（空数组 = 清除显式指定、回落缺省全体管理员） */
-    setDataAccounts: (orgId: string, dataAccounts: string[]) => Promise<OrgView>;
-    /** O1：晋升/降级成员角色（数据职责随角色自动进出） */
-    setMemberRole: (orgId: string, memberRootId: string, role: 'admin' | 'member') => Promise<OrgView>;
+    /** A47：当前履职网关活跃集（只读；全员候选计分推导，≤3，全叶组织为空） */
+    getGatewayActiveSet: (orgId: string) => Promise<string[]>;
     createInvite: (orgId: string) => Promise<{ invite: string; orgId: string; orgName: string }>;
     acceptInvite: (code: string) => Promise<{ orgId: string; orgName: string; memberCount: number }>;
     getSyncOverview: (orgId: string) => Promise<OrgSyncOverviewDto | null>;
@@ -1097,8 +1138,11 @@ export type ElectronAPI = {
       gender?: string | null; region?: string | null; signature?: string | null;
     }>;
     initialize: (password: string, nickname: string, avatar?: string | null) => Promise<{ rootId: string; mnemonic: string }>;
-    unlock: (password: string, rootId?: string) => Promise<{ rootId: string }>;
+    /** bioSourced=true 表示口令来自生物识别芯片（不刷新密码考试时间戳，§4.2） */
+    unlock: (password: string, rootId?: string, bioSourced?: boolean) => Promise<{ rootId: string }>;
     lock: () => Promise<{ success: boolean }>;
+    /** 密码考试状态（A6）：移动端据此挂起/恢复生物识别解锁 */
+    passwordExamStatus: () => Promise<PasswordExamStatusDto>;
     sign: (payload: string) => Promise<{ rootId: string; signature: string; payloadHash: string }>;
     deriveDomain: (domain: string) => Promise<{ domain: string; domainId: string; publicKey: string; derivationPath: string }>;
     listIdentities: () => Promise<Array<{ rootId: string; createdAt: number; active: boolean; nickname: string | null; avatar: string | null; gender?: string | null; region?: string | null; signature?: string | null }>>;
@@ -1148,6 +1192,15 @@ export type ElectronAPI = {
     verifyTicket: (password: string) => Promise<PasswordVerifyTicketResultDto>;
     unifyPassword: (oldPassword: string, newPassword: string) => Promise<PasswordUnifyResultDto>;
     status: () => Promise<PasswordUnifyStatusDto>;
+  };
+  /** blob 层（A3）：副本健康度 + 配额配置（只提醒不处置，personal-data §4.5） */
+  blob: {
+    /** 域级副本健康度摘要（确定性聚合，任何节点凭相同账本复算一致） */
+    health: () => Promise<BlobHealthDto>;
+    /** 本机生效配额（字节；用户配置或设备类默认 PC 10GiB/移动 1GiB） */
+    getQuota: () => Promise<number>;
+    /** 设置用户配额（字节）；null 清除配置回落设备类默认 */
+    setQuota: (bytes: number | null) => Promise<void>;
   };
   devices: {
     /** 设备清单：本机置顶（isSelf），其余按最近在线证据降序 */

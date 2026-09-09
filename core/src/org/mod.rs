@@ -20,12 +20,14 @@
 //! 「sync-state 版本不落后于当前组织版本」判定。读取侧对 TS 遗留的污染形状做
 //! 兼容解包（[`sync_state::OrgSyncState`] 的反序列化），不会把 bug 传播回来。
 
+pub mod access_key;
 pub mod community_invite;
 pub mod community_leave;
 pub mod gateway;
 pub mod genesis;
 pub mod invite;
 pub mod invite_record;
+pub mod join_request;
 pub mod mailbox;
 pub mod mailbox_store;
 pub mod meta_merge;
@@ -64,6 +66,12 @@ pub use invite::{
     decode_org_invite_at, encode_org_invite,
 };
 pub use invite_record::{OrgInviteDirection, OrgInviteRecord, OrgInviteStatus};
+/// A17 免预录凭证入册（membership §4.5，org-join §8）：加入声明线形与
+/// 合入侧双路径（预录-认领 / 免预录凭证）合一验证。
+pub use join_request::{
+    JOIN_REQUEST_V, JoinAdmission, JoinPath, JoinRejection, JoinRequest, ORG_JOIN_REQUEST_TYPE,
+    adjudicate_join_request, join_request_sign_payload, validate_join_request,
+};
 pub use meta_merge::{merge_member_record, merge_org_meta_record};
 pub use node_card::{
     NODE_CARD_MAX_AGE_MS, NODE_CARD_TYPE, NodeCard, NodeCardReject, build_node_card_payload,
@@ -90,10 +98,10 @@ pub use recovery::{
     recovery_token,
 };
 pub use replica::{
-    DataAccountOverview, DutyObservation, MemberSyncOverview, ORG_NETWORK_LOST_DEBOUNCE_MS,
+    DutyObservation, MemberReplicaOverview, MemberSyncOverview, ORG_NETWORK_LOST_DEBOUNCE_MS,
     ORG_REPLICA_FRESH_WINDOW_MS, ORG_REPLICA_TARGET, OrgNetworkStatus, OrgNetworkStatusInput,
-    OrgSyncOverview, compute_org_sync_overview, covers_current, data_accounts_sufficient,
-    decide_org_network_status, member_ever_synced, replica_sufficient,
+    OrgSyncOverview, compute_org_sync_overview, covers_current, decide_org_network_status,
+    member_ever_synced, member_replicas_sufficient, replica_sufficient,
 };
 pub use service::OrganizationService;
 pub use sigset::{
@@ -188,10 +196,10 @@ pub enum OrgError {
     #[error("Organization admin required")]
     AdminRequired,
 
-    /// 共同体域不可删除（community-model：域不可解散，只可退出——全体成员
-    /// 退出后域成为空域，只读历史档案，无人能写入）。删除本地组织记录会
-    /// 抹掉档案，故内核层面拒绝。
-    #[error("共同体域不可删除（域只可退出，不可解散；历史保留为只读档案）")]
+    /// 域不可删除（A13 全域口径，community-model：域不可解散，只可退出——
+    /// 全体成员退出后域成为空域，只读历史档案，无人能写入）。删除本地组织
+    /// 记录会抹掉档案，故内核层面拒绝（全部域类型）。
+    #[error("域只可退出，不可解散；历史保留为只读档案")]
     CommunityDomainNotDeletable,
 
     /// 共同体域已是空域只读档案（community-model：最后一个成员组织退出后
@@ -209,16 +217,6 @@ pub enum OrgError {
     /// 组织必须保留至少一名管理员。
     #[error("Organization must keep at least one admin")]
     MustKeepAdmin,
-
-    /// 组织网关列表非法（org.md §14 + O1：显式指定时须为 1–3 名本组织成员
-    /// 的 rootId；空列表 = 清除显式指定、回落缺省全员候选）。
-    #[error("Gateways must be 1 to 3 member rootIds of the organization")]
-    InvalidGateways,
-
-    /// 数据账号列表非法（O1：显式指定时须为至少 1 名本组织成员的 rootId；
-    /// 空列表 = 清除显式指定、回落缺省全体管理员）。
-    #[error("DataAccounts must be member rootIds of the organization")]
-    InvalidDataAccounts,
 
     /// 成员身份字段 / 组织 logo 非法（校验口径复用 identity 资料校验）。
     #[error("{0}")]

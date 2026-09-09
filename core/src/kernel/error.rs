@@ -58,6 +58,10 @@ pub enum KernelError {
     #[error(transparent)]
     Content(#[from] crate::content::ContentError),
 
+    /// 同步层错误（blob 层健康度/配额等 kernel 门面）。
+    #[error(transparent)]
+    Sync(#[from] crate::sync::SyncError),
+
     /// 文件 IO 错误。
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),

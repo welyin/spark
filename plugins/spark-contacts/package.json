@@ -1,0 +1,12 @@
+{
+  "name": "@spark/plugin-spark-contacts",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Spark 默认内置通讯录应用插件（communication §4.2，功能对等迁移自壳层内置 UI）",
+  "scripts": {
+    "build": "node ../app/node_modules/vite/bin/vite.js build --config vite.config.ts",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.json || tsc --noEmit -p tsconfig.json",
+    "test": "node ../app/node_modules/vitest/vitest.mjs run --config ../app/vitest.config.ts tests"
+  }
+}

@@ -132,7 +132,8 @@ export default defineComponent({
 </script>
 
 <style scoped>
-.editor { min-height: 100%; background: var(--spark-bg-page, #f5f5f5); display: flex; flex-direction: column; }
+/* 页栈子页根定高 100%（父级 .moments-root 定高不滚动）：flex 列内 .list 自滚动 */
+.editor { height: 100%; overflow: hidden; background: var(--spark-bg-page, #f5f5f5); display: flex; flex-direction: column; }
 .top { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: var(--spark-bg-card, #fff); }
 .back { border: none; background: none; color: var(--spark-text-2, #475569); font-size: 16px; cursor: pointer; }
 .title { font-weight: 600; }
@@ -140,7 +141,7 @@ export default defineComponent({
 .tabs { display: flex; background: var(--spark-bg-card, #fff); border-bottom: 1px solid var(--spark-border, #f1f5f9); }
 .tab { flex: 1; border: none; background: none; padding: 12px; cursor: pointer; font-size: 14px; color: var(--spark-text-2, #475569); border-bottom: 2px solid transparent; }
 .tab.active { color: var(--spark-primary, #4f7cff); border-bottom-color: var(--spark-primary, #4f7cff); }
-.list { flex: 1; overflow-y: auto; background: var(--spark-bg-card, #fff); margin: 12px; border-radius: 8px; }
+.list { flex: 1; min-height: 0; overflow-y: auto; background: var(--spark-bg-card, #fff); margin: 12px; border-radius: 8px; }
 .row { display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--spark-border, #f1f5f9); cursor: pointer; }
 .name { flex: 1; }
 .count { color: var(--spark-text-3, #94a3b8); font-size: 12px; }

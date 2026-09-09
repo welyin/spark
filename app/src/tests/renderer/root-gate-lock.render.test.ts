@@ -58,7 +58,13 @@ beforeEach(() => {
     rootIdentity: {
       status: () => Promise.resolve(statusValue),
       lock,
-      unlock
+      unlock,
+      // 密码考试（A6）：默认非超期（老测试不受影响），单测可覆写
+      passwordExamStatus: vi.fn().mockResolvedValue({
+        lastPasswordAuth: Date.now(),
+        overdue: false,
+        intervalMs: 7 * DAY
+      })
     },
     biometric: {
       check: vi.fn().mockResolvedValue({ available: false, enrolled: false, hasSecret: false }),
@@ -141,7 +147,8 @@ describe('RootGate 登录成功刷新最近活跃时间', () => {
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
     await flush();
 
-    expect(unlock).toHaveBeenCalledWith('some-password');
+    // bioSourced 第三参：手动输密码 = false（密码考试只认真实密码输入，A6）
+    expect(unlock).toHaveBeenCalledWith('some-password', undefined, false);
     expect(getLastActiveAt()).not.toBeNull();
     // 登录成功进入主界面
     expect(host.querySelector('.app-stub')).toBeTruthy();
@@ -164,7 +171,7 @@ describe('RootGate 口令保鲜：指纹来源跳过重刷（两次指纹回归�
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
     await flush();
 
-    expect(unlock).toHaveBeenCalledWith('typed-pw');
+    expect(unlock).toHaveBeenCalledWith('typed-pw', undefined, false);
     // 手动密码来源：无 bioSourced 标记，口令保鲜照常（覆盖改密后旧 blob 失配）
     const storePassword = (window as any).electronAPI.biometric.storePassword;
     expect(storePassword).toHaveBeenCalledTimes(1);
@@ -194,11 +201,33 @@ describe('RootGate 口令保鲜：指纹来源跳过重刷（两次指纹回归�
 
     // 指纹解锁已弹系统验证并拿到密码 → login('bio-pw', bioSourced=true)
     expect((window as any).electronAPI.biometric.unlock).toHaveBeenCalledTimes(1);
-    expect(unlock).toHaveBeenCalledWith('bio-pw');
+    expect(unlock).toHaveBeenCalledWith('bio-pw', undefined, true);
     // 口令保鲜跳过：不再弹第二次系统指纹验证
     expect(storePassword).not.toHaveBeenCalled();
     // 登录成功进入主界面
     expect(host.querySelector('.app-stub')).toBeTruthy();
+    host.remove();
+  });
+
+  it('密码考试超期（A6）：挂起自动指纹解锁，提示输一次密码恢复', async () => {
+    localStorage.setItem('spark.settings.biometricUnlock', 'true');
+    isMobileLayout.value = true;
+    statusValue.unlocked = false;
+    (window as any).electronAPI.rootIdentity.passwordExamStatus = vi.fn().mockResolvedValue({
+      lastPasswordAuth: Date.now() - 8 * 7 * DAY,
+      overdue: true,
+      intervalMs: 7 * DAY
+    });
+    const bioCheck = vi.fn().mockResolvedValue({ available: true, enrolled: true, hasSecret: true });
+    (window as any).electronAPI.biometric.check = bioCheck;
+
+    const host = mount();
+    await flush();
+    await flush();
+
+    // 超期 → 不再发起生物识别，提示手动输密码
+    expect(bioCheck).not.toHaveBeenCalled();
+    expect(host.textContent).toContain('已超过 7 天未输入密码');
     host.remove();
   });
 });

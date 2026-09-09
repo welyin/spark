@@ -238,16 +238,25 @@ impl DhtMode {
     }
 }
 
-/// relay server（hop）行为构造：初始挂载（build_behaviour）与 R1 AutoNAT
-/// Public 重新挂载共用同一配置。
-pub(crate) fn build_relay_server(local_peer_id: libp2p::PeerId) -> relay::Behaviour {
-    let relay_config = relay::Config {
-        max_reservations: RELAY_MAX_RESERVATIONS,
+/// relay server 配额配置（relay-strategy §1「有配额」）：预约限时限量
+/// （默认 2h / 256MiB）+ 预约名额上限 + 转发限量，全部对齐网络常量。
+/// `max_reservations` 为测试/运维覆盖口（None = 常量 15）。
+pub(crate) fn relay_server_config(max_reservations: Option<usize>) -> relay::Config {
+    relay::Config {
+        max_reservations: max_reservations.unwrap_or(RELAY_MAX_RESERVATIONS),
         reservation_duration: Duration::from_secs(RELAY_DEFAULT_DURATION_LIMIT_SECS),
         max_circuit_bytes: RELAY_DEFAULT_DATA_LIMIT_BYTES,
         ..Default::default()
-    };
-    relay::Behaviour::new(local_peer_id, relay_config)
+    }
+}
+
+/// relay server（hop）行为构造：初始挂载（build_behaviour）与 R1 AutoNAT
+/// Public 重新挂载共用同一配置。
+pub(crate) fn build_relay_server(
+    local_peer_id: libp2p::PeerId,
+    max_reservations: Option<usize>,
+) -> relay::Behaviour {
+    relay::Behaviour::new(local_peer_id, relay_server_config(max_reservations))
 }
 
 /// Spark 组合行为。
@@ -288,6 +297,9 @@ pub struct BehaviourOptions {
     /// 是否挂载 relay server（接受他人预约）。桌面默认 true；移动端 false
     /// （peer-rediscovery §7.2：移动端只作 relay client）。
     pub enable_relay_server: bool,
+    /// relay server 预约名额覆盖（配额，测试/运维调小模拟满载；
+    /// None = 网络常量 [`RELAY_MAX_RESERVATIONS`]）。
+    pub relay_max_reservations: Option<usize>,
     /// dcutr 打洞（电路升直连）挂载开关：默认 true；关 = 旧端形态
     /// （identify 协议清单不含 /libp2p/dcutr，对端不发起升级）。
     pub enable_dcutr: bool,
@@ -303,6 +315,7 @@ impl Default for BehaviourOptions {
             enable_mdns: true,
             enable_upnp: true,
             enable_relay_server: true,
+            relay_max_reservations: None,
             enable_dcutr: true,
             dht_mode: DhtMode::default(),
             leaf_mode: false,
@@ -371,7 +384,10 @@ pub fn build_behaviour(
     // 移动端关闭（只作 relay client，peer-rediscovery §7.2）。R1（relay-implementation
     // §2）：初始挂载为现状兼容；AutoNAT Private 时由事件循环摘牌（Toggle 换 None）。
     let relay_server = if options.enable_relay_server {
-        Toggle::from(Some(build_relay_server(local_peer_id)))
+        Toggle::from(Some(build_relay_server(
+            local_peer_id,
+            options.relay_max_reservations,
+        )))
     } else {
         Toggle::from(None)
     };
@@ -497,4 +513,36 @@ pub fn build_behaviour(
         affair_meta_rr,
         blob_fetch_rr,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// relay 配额接线（relay-strategy §1「预约限时限量（默认 2h / 256MiB
+    /// 续期），转发限量」）：配置全部取自网络常量；覆盖口只调预约名额
+    /// （测试模拟满载）；时限/字节量/名额的执行在 libp2p relay server 内部
+    /// （既有能力，零自研），超限拒绝的行为面见 tests/p2p_relay_quota.rs。
+    #[test]
+    fn relay_server_config_wires_quota_constants() {
+        let cfg = relay_server_config(None);
+        assert_eq!(cfg.max_reservations, RELAY_MAX_RESERVATIONS);
+        assert_eq!(
+            cfg.reservation_duration,
+            Duration::from_secs(RELAY_DEFAULT_DURATION_LIMIT_SECS),
+            "预约限时 2h"
+        );
+        assert_eq!(
+            cfg.max_circuit_bytes, RELAY_DEFAULT_DATA_LIMIT_BYTES,
+            "转发限量 256MiB"
+        );
+        let overridden = relay_server_config(Some(1));
+        assert_eq!(overridden.max_reservations, 1, "覆盖口只调预约名额");
+        assert_eq!(
+            overridden.reservation_duration,
+            Duration::from_secs(RELAY_DEFAULT_DURATION_LIMIT_SECS),
+            "覆盖不影响时限/字节量"
+        );
+        assert_eq!(overridden.max_circuit_bytes, RELAY_DEFAULT_DATA_LIMIT_BYTES);
+    }
 }

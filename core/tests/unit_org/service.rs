@@ -1,8 +1,10 @@
 //! 组织服务层单测：按域拆分——创建/删除在 `create`，成员与视图在 `members`，
 //! 邀请码在 `invite`，入站落库（快照/nodeInfoClaim/recovery 视图）在 `incoming`，
-//! 网关与公开标志在 `settings`。本文件放各域共用的夹具（固定时间、测试
-//! 助记词、rootId 生成、建组快捷函数）。
+//! 网关与公开标志在 `settings`，免预录加入合入（A17）在 `join`。本文件放各域
+//! 共用的夹具（固定时间、测试助记词、rootId 生成、建组快捷函数）。
 
+#[path = "service/access_key.rs"]
+mod access_key;
 #[path = "service/community.rs"]
 mod community;
 #[path = "service/create.rs"]
@@ -13,6 +15,8 @@ mod incoming;
 mod invite;
 #[path = "service/invite_records.rs"]
 mod invite_records;
+#[path = "service/join.rs"]
+mod join;
 #[path = "service/members.rs"]
 mod members;
 #[path = "service/settings.rs"]

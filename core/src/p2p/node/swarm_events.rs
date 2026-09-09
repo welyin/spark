@@ -372,8 +372,10 @@ impl<S: StorageBackend> EventLoop<S> {
                 // 电路监听关闭 = relay 预约失败/过期/被拒（libp2p-relay 0.21
                 // client 无 ReservationReqFailed 事件，N3）：清理预约与
                 // in-flight 标记，重选由周期 tick 自然进行（普通 TCP 监听
-                // 地址关闭不含 /p2p-circuit 段，函数内部忽略）
-                self.on_circuit_listener_closed(&addresses);
+                // 地址关闭不含 /p2p-circuit 段，函数内部忽略；错误关闭时
+                // addresses 为空，靠 listener_id 反查）。关闭原因一并传入：
+                // Unsupported（无 hop 能力）触发 A44 黑名单，其余原因照重试
+                self.on_circuit_listener_closed(listener_id, &addresses, &reason);
             }
             SwarmEvent::Behaviour(behaviour_event) => self.handle_behaviour_event(behaviour_event),
             SwarmEvent::IncomingConnection { .. } => {}

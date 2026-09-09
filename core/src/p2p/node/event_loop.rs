@@ -240,9 +240,17 @@ pub(super) struct EventLoop<S: StorageBackend> {
     /// relay 预约请求 in-flight：已发起尚未收到 ReservationReqAccepted/失败
     /// 的 relay peer，用于避免重复请求（peer-rediscovery §4.6.2）。
     pub(super) relay_reservations_inflight: std::collections::HashSet<PeerId>,
+    /// 电路监听 listener_id → relay peer（listen_on 成功时登记）：预约被拒/
+    /// 失败时 `ListenerClosed` 的 addresses 为**空集**（错误关闭不带地址，
+    /// 配额测试实测），只能靠 listener_id 反查归属 relay 清理 in-flight。
+    pub(super) circuit_listeners:
+        std::collections::HashMap<libp2p::core::transport::ListenerId, PeerId>,
     /// 静态配置快照（R1，relay-implementation §2）：显式 false 优先于 AutoNAT
     /// 自动判定（角色永不开）；true = AutoNAT Public 时自动服务。
     pub(super) enable_relay_server: bool,
+    /// relay server 预约名额覆盖（测试/运维；None = 常量 15）：初始挂载与
+    /// R1 重新挂载共用，防止重挂载丢失覆盖值。
+    pub(super) relay_max_reservations: Option<usize>,
     /// R2：spark:relay 共享池在途 get_providers 查询。
     pub(super) relay_pool_queries: std::collections::HashSet<kad::QueryId>,
     /// R2：共享池发现的 relay 候选（R3 排序消费；去重，上限 8）。

@@ -18,5 +18,6 @@
   ],
   "mirrors": [],
   "sdkVersion": "1",
-  "supportedSpaces": ["personal", "org"]
+  "supportedSpaces": ["personal", "org"],
+  "window": { "defaultWidth": 480, "defaultHeight": 680 }
 }

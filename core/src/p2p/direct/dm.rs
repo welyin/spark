@@ -76,6 +76,9 @@ pub fn dm_kind_is_rate_limit_exempt(kind: Option<&str>) -> bool {
                 | "pdsync-data"
                 | "pdsync-attachment-req"
                 | "pdsync-attachment-resp"
+                // A1 blob 层回补（协议 §14.5）：多块背靠背续拉，同族豁免
+                | "blob-fetch"
+                | "blob-chunk"
                 | "orgsync-hello"
                 | "orgsync-need"
                 | "orgsync-data"
@@ -134,6 +137,9 @@ mod tests {
             "pdsync-data",
             "pdsync-attachment-req",
             "pdsync-attachment-resp",
+            // A1 blob 层回补（协议 §14.5）：多块背靠背续拉
+            "blob-fetch",
+            "blob-chunk",
             "contact-sync",
             "conv-sync",
             "profile-sync",

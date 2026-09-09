@@ -69,9 +69,10 @@ pub use decide::{
 };
 pub use effect::{
     EFFECT_GRANT_PREFIX, EFFECT_RECEIPT_PREFIX, EffectGrant, EffectHookOutcome, EffectReceipt,
-    EffectReject, PendingEffect, build_effect_receipt, effect_grant_key, effect_receipt_key,
+    EffectReject, PendingEffect, RESOLUTION_ENTRY_COLLECTION, RESOLUTION_ENTRY_KIND,
+    build_effect_receipt, conclusion_hash, effect_grant_key, effect_receipt_key,
     encode_effect_scope, evaluate_effect_hook, is_valid_org_id, parse_effect_grant,
-    parse_effect_receipt,
+    parse_effect_receipt, resolution_entry_payload,
 };
 pub use genesis::{
     AffairGenesis, GenesisReject, compute_affair_id, genesis_sign_payload, parse_genesis,

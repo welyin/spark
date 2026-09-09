@@ -188,6 +188,10 @@ pub struct SparkPluginDeclaration {
     /// 当前平台不在 requires.platforms 列表中即拒）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requires: Option<PluginRequires>,
+    /// PC 窗口默认尺寸（规格 §2.1；可选，缺省/非法值按壳层默认 880×620——
+    /// 体验提示而非安全约束，validate 时归一化而非 fail-loud）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<super::catalog::PluginWindow>,
     pub sdk_version: String,
 }
 
@@ -281,6 +285,8 @@ fn validate_declaration(raw_text: &str, expected: &RepoId) -> Result<SparkPlugin
             first_seen
         });
     }
+    // window（规格 §2.1）：体验提示字段，非法值归一化为未声明（None），不 fail-loud
+    declaration.window = super::catalog::normalize_window(declaration.window);
     // id 一致性（规格 §4.1-4）：声明文件 id 规范化后必须等于所在仓库地址
     let declared_id = RepoId::parse(&declaration.id).map_err(|_| {
         format!(
@@ -708,6 +714,7 @@ impl PluginMarketService {
             trust: Some(trust_level.to_string()),
             supported_spaces: declaration.supported_spaces.clone(),
             requires: declaration.requires.clone(),
+            window: declaration.window,
         };
         self.state
             .installed
@@ -791,6 +798,13 @@ pub(crate) fn synthesize_catalog_entry(
             .as_ref()
             .and_then(|d| d.supported_spaces.clone())
             .or_else(|| installed.supported_spaces.clone()),
+        // PC 窗口默认尺寸（规格 §2.1 window）：与 requires 同两级口径
+        // （声明文件缓存优先，缺省回落安装态落库值）；None = 前端默认 880×620。
+        // 先于 requires 求值（declaration 在 requires 处按值消费，此处 as_ref 借用）
+        window: declaration
+            .as_ref()
+            .and_then(|d| d.window)
+            .or(installed.window),
         // 运行时前提（规格 §2.1 requires）：声明文件缓存优先，缺省回落安装时
         // 落库的 requires（侧载插件取包内 manifest.json 解析值）；两级皆无 = 无约束
         requires: declaration
@@ -992,6 +1006,7 @@ mod tests {
             mirrors: vec![],
             supported_spaces: None,
             requires: None,
+            window: None,
             sdk_version: "1.0.0".to_string(),
         };
         assert_eq!(
@@ -1100,6 +1115,45 @@ mod tests {
                 .supported_spaces,
             Some(vec!["org".to_string(), "personal".to_string()])
         );
+    }
+
+    // ---------- window 归一化（规格 §2.1：非法值按未声明，不 fail-loud） ----------
+
+    #[test]
+    fn declaration_window_normalization() {
+        let id = RepoId::parse("github.com/acme/todo").unwrap();
+        let with_window = |window: serde_json::Value| {
+            let mut obj: serde_json::Map<String, serde_json::Value> =
+                serde_json::from_str(&declaration_text("github.com/acme/todo", "0.2.0")).unwrap();
+            obj.insert("window".to_string(), window);
+            serde_json::Value::Object(obj).to_string()
+        };
+        // 正：合法声明原样保留
+        assert_eq!(
+            validate_declaration(&with_window(serde_json::json!({"defaultWidth": 480, "defaultHeight": 680})), &id)
+                .unwrap()
+                .window,
+            Some(super::super::catalog::PluginWindow { default_width: 480, default_height: 680 })
+        );
+        // 反：缺省 / 越界 / 缺维度 → 归一化为 None（声明整体仍有效，不 fail-loud）
+        assert_eq!(
+            validate_declaration(&declaration_text("github.com/acme/todo", "0.2.0"), &id)
+                .unwrap()
+                .window,
+            None
+        );
+        for bad in [
+            serde_json::json!({"defaultWidth": 100, "defaultHeight": 680}),
+            serde_json::json!({"defaultWidth": 480, "defaultHeight": 4000}),
+            serde_json::json!({"defaultWidth": 480}),
+            serde_json::json!({}),
+        ] {
+            assert_eq!(
+                validate_declaration(&with_window(bad.clone()), &id).unwrap().window,
+                None,
+                "window {bad} should normalize to None"
+            );
+        }
     }
 
     // ---------- 字段形状校验（规格 §2.1：version semver / icon 三形态） ----------

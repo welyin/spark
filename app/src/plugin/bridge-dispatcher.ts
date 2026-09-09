@@ -27,11 +27,11 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { ElMessageBox } from 'element-plus';
-import type { PluginCredentialsAPI, PluginSpaceContext } from '../../../packages/plugin-sdk/src';
+import type { PluginCredentialsAPI, PluginSDK, PluginSpaceContext } from '../../../packages/plugin-sdk/src';
 import type { BridgeHostHandler } from '../../../packages/plugin-sdk/src/bridge/host';
 import { createPluginBackend } from './sdk-browser';
 import { listAppMessages, markAppMessagesRead, sendAppMessage } from './messages';
-import type { AppMessageCardDto } from '../api/types';
+import type { AppMessageCardDto, ElectronAPI } from '../api/types';
 import { refreshContacts, ensurePluginContactTag } from '../mock/contacts';
 
 /** 桥事件泵：由外部（PluginIframeHost）注入，用于将 Tauri 事件转发为桥 event。 */
@@ -85,9 +85,48 @@ const CALL_PERMISSIONS: Record<string, string> = {
   'contacts.listFriends': 'contact:read',
   'contacts.listGroups': 'contact:read',
   'contacts.listTags': 'contact:read',
-  // 社交定向投递（social-feed §9.3 feed:deliver 高级 + 内核限流；onReceive/pull
-  // 接收侧免权限——不在本表即放行）
-  'feed.deliver': 'feed:deliver',
+  // 社交定向投递（social-feed §9.3 + A18 §4.1 权限归一：deliver=feed:write
+  // 高级 + 内核限流；pull/订阅收件=feed:read）
+  'feed.deliver': 'feed:write',
+  'feed.pull': 'feed:read',
+  // A18 插件数据 API 面（communication §4.1）：IM 数据面 messages:read/write
+  // （均高危确认）；space 由桥绑定注入
+  'messages.conversations': 'messages:read',
+  'messages.list': 'messages:read',
+  'messages.send': 'messages:write',
+  'messages.recall': 'messages:write',
+  'messages.markConversationRead': 'messages:write',
+  // A19 写面补全（等语义移植；聊天应用迁移缺口）
+  'messages.ensureDirect': 'messages:write',
+  'messages.resend': 'messages:write',
+  'messages.deleteMessage': 'messages:write',
+  'messages.setDraft': 'messages:write',
+  'messages.togglePin': 'messages:write',
+  'messages.toggleMute': 'messages:write',
+  'messages.clear': 'messages:write',
+  'messages.deleteConversation': 'messages:write',
+  // A18 通讯录数据面：overview=contacts:read；写操作（申请应答/标签分组/
+  // 拉黑/资料）=contacts:write（高危确认）
+  'contacts.overview': 'contacts:read',
+  'contacts.updateProfile': 'contacts:write',
+  'contacts.setBlocked': 'contacts:write',
+  'contacts.removeFriend': 'contacts:write',
+  'contacts.sendRequest': 'contacts:write',
+  'contacts.replyRequest': 'contacts:write',
+  'contacts.askRequest': 'contacts:write',
+  'contacts.resolveRequest': 'contacts:write',
+  'contacts.tagCreate': 'contacts:write',
+  'contacts.tagRename': 'contacts:write',
+  'contacts.tagDelete': 'contacts:write',
+  'contacts.groupCreate': 'contacts:write',
+  'contacts.groupRename': 'contacts:write',
+  'contacts.groupDelete': 'contacts:write',
+  'contacts.groupMove': 'contacts:write',
+  'contacts.setGroup': 'contacts:write',
+  'contacts.orgGroupCreate': 'contacts:write',
+  'contacts.orgGroupRename': 'contacts:write',
+  'contacts.orgGroupDelete': 'contacts:write',
+  'contacts.orgGroupMove': 'contacts:write',
   // 内容面 blob（public-topics §七 sdk.content）：读/拉取/列表归 storage:read，
   // 保存/根标记/GC 归 storage:write（与 data.readBlob/saveBlob 同权限口径）
   'content.readBlob': 'storage:read',
@@ -153,6 +192,12 @@ function assertTopicOwned(topic: string, pluginId: string): void {
       `InvalidTopic: topic prefix "${prefix}" does not match plugin "${pluginId}"`
     );
   }
+}
+
+/** 桥侧消息 id 生成（壳层同口径 `m{ts}-{seq}`，见 stores/messages.ts sendText） */
+let bridgeMessageSeq = 0;
+function nextBridgeMessageId(): string {
+  return `m${Date.now()}-${++bridgeMessageSeq}`;
 }
 
 /** view type 裁剪表：null = 全量（仅 grantedPermissions 过滤）；未列出的 view type 整域拒绝 */
@@ -240,7 +285,10 @@ export async function createPluginBridgeDispatcher(identity: PluginBridgeIdentit
   // 取 identity.space.id；personal space 为 undefined）——插件 SDK 签名不变，
   // orgId 由内核按插件实例所属空间解析，桥按绑定身份下发。
   const boundOrgId = identity.space.type === 'org' ? identity.space.id : undefined;
-  const backend = createPluginBackend(identity.domain, boundOrgId, identity.onClose);
+  // messages/contacts 数据面（A18）：pluginId/space 由桥按绑定身份注入
+  // （插件自报一律忽略），先于 backend 构造供其注入
+  const boundSpaceKey = identity.space.type === 'org' ? `org:${identity.space.id}` : 'personal';
+  const backend = createPluginBackend(identity.domain, boundOrgId, identity.onClose, boundSpaceKey);
 
   // messages 域：pluginId/space 由桥按绑定身份注入（插件自报一律忽略）。
   // pluginId 剥离域前缀（'plugin:spark-example' → 'spark-example'，§20.1 存储键口径；
@@ -248,7 +296,6 @@ export async function createPluginBridgeDispatcher(identity: PluginBridgeIdentit
   const boundPluginId = identity.domain.startsWith('plugin:')
     ? identity.domain.slice('plugin:'.length)
     : identity.pluginId;
-  const boundSpaceKey = identity.space.type === 'org' ? `org:${identity.space.id}` : 'personal';
 
   const modules: Record<string, Record<string, (...args: any[]) => Promise<unknown>>> = {
     // 应用级控制（免权限）：插件请求关闭自身视图
@@ -292,8 +339,43 @@ export async function createPluginBridgeDispatcher(identity: PluginBridgeIdentit
       syncOrganizationData: backend.runtime.syncOrganizationData,
       listMineOrganizations: backend.runtime.listMineOrganizations
     },
-    // 统一消息模块：服务号（应用会话 §20）+ 插件联系人
+    // 统一消息模块：IM 数据面（A18，等语义移植现有 Tauri 消息命令，
+    // space 由桥绑定注入）+ 服务号（应用会话 §20）+ 插件联系人
     messages: {
+      // A18 IM 数据面（messages:read/write 经 CALL_PERMISSIONS 强制）
+      conversations: () => window.electronAPI.messages.listConversations(boundSpaceKey),
+      list: (convId: string) => window.electronAPI.messages.listMessages(boundSpaceKey, convId),
+      send: (convId: string, text: string, quote?: { messageId: string; senderName: string; preview: string } | null, messageId?: string | null) =>
+        // messageId 与壳层同语义：插件透传乐观入列的自生成 id（等语义移植
+        // message-send-text），缺省由桥按壳层同口径生成（`m{ts}-{seq}`）
+        window.electronAPI.messages.sendText(
+          boundSpaceKey,
+          convId,
+          typeof messageId === 'string' && messageId ? messageId : nextBridgeMessageId(),
+          text,
+          quote ?? undefined
+        ),
+      recall: (convId: string, messageId: string) =>
+        window.electronAPI.messages.recall(boundSpaceKey, convId, messageId),
+      markConversationRead: (convId: string) =>
+        window.electronAPI.messages.markRead(boundSpaceKey, convId),
+      // A19 写面补全（等语义移植现有 Tauri 命令，space 桥绑定注入）
+      ensureDirect: (peerId: string, title: string) =>
+        window.electronAPI.messages.ensureDirect(boundSpaceKey, peerId, title),
+      resend: (convId: string, messageId: string) =>
+        window.electronAPI.messages.resend(boundSpaceKey, convId, messageId),
+      deleteMessage: (convId: string, messageId: string) =>
+        window.electronAPI.messages.deleteMessage(boundSpaceKey, convId, messageId),
+      setDraft: (convId: string, draft: string) =>
+        window.electronAPI.messages.setDraft(boundSpaceKey, convId, draft),
+      togglePin: (convId: string) =>
+        window.electronAPI.messages.togglePin(boundSpaceKey, convId),
+      toggleMute: (convId: string) =>
+        window.electronAPI.messages.toggleMute(boundSpaceKey, convId),
+      clear: (convId: string) =>
+        window.electronAPI.messages.clear(boundSpaceKey, convId),
+      deleteConversation: (convId: string) =>
+        window.electronAPI.messages.deleteConversation(boundSpaceKey, convId),
       sendAppMessage: (payload: Record<string, unknown>, card?: AppMessageCardDto) =>
         sendAppMessage(boundSpaceKey, boundPluginId, payload, card),
       listAppMessages: () => listAppMessages(boundSpaceKey, boundPluginId),
@@ -342,7 +424,34 @@ export async function createPluginBridgeDispatcher(identity: PluginBridgeIdentit
     contacts: {
       listFriends: () => backend.contacts!.listFriends(),
       listGroups: () => backend.contacts!.listGroups(),
-      listTags: () => backend.contacts!.listTags()
+      listTags: () => backend.contacts!.listTags(),
+      // A18 数据面（等语义移植现有 Tauri 通讯录命令；space 经 backend 按
+      // 绑定注入；contacts:read/write 经 CALL_PERMISSIONS 强制）
+      overview: () => backend.contacts!.overview(),
+      updateProfile: (rootId: string, patch: Parameters<NonNullable<PluginSDK['contacts']>['updateProfile']>[1]) =>
+        backend.contacts!.updateProfile(rootId, patch),
+      setBlocked: (rootId: string, blocked: boolean) => backend.contacts!.setBlocked(rootId, blocked),
+      removeFriend: (rootId: string, block?: boolean) => backend.contacts!.removeFriend(rootId, block),
+      sendRequest: (input: Parameters<NonNullable<PluginSDK['contacts']>['sendRequest']>[0]) =>
+        backend.contacts!.sendRequest(input),
+      replyRequest: (requestId: string, text: string) => backend.contacts!.replyRequest(requestId, text),
+      askRequest: (requestId: string, text: string) => backend.contacts!.askRequest(requestId, text),
+      resolveRequest: (requestId: string, accept: boolean, permission: 'open' | 'chatOnly') =>
+        backend.contacts!.resolveRequest(requestId, accept, permission),
+      tagCreate: (id: string, name: string) => backend.contacts!.tagCreate(id, name),
+      tagRename: (tagId: string, name: string) => backend.contacts!.tagRename(tagId, name),
+      tagDelete: (tagId: string) => backend.contacts!.tagDelete(tagId),
+      groupCreate: (id: string, name: string) => backend.contacts!.groupCreate(id, name),
+      groupRename: (groupId: string, name: string) => backend.contacts!.groupRename(groupId, name),
+      groupDelete: (groupId: string) => backend.contacts!.groupDelete(groupId),
+      groupMove: (groupId: string, toIndex: number) => backend.contacts!.groupMove(groupId, toIndex),
+      setGroup: (rootId: string, groupId: string) => backend.contacts!.setGroup(rootId, groupId),
+      orgGroupCreate: (parentId: string, id: string, name: string) =>
+        backend.contacts!.orgGroupCreate(parentId, id, name),
+      orgGroupRename: (id: string, name: string) => backend.contacts!.orgGroupRename(id, name),
+      orgGroupDelete: (id: string) => backend.contacts!.orgGroupDelete(id),
+      orgGroupMove: (id: string, toIndex: number, newParentId?: string) =>
+        backend.contacts!.orgGroupMove(id, toIndex, newParentId)
     },
     // 社交定向投递（social-feed §9.1 sdk.feed）。deliver 经 CALL_PERMISSIONS
     // 强制 feed:deliver + 出站 topic 前缀校验（架构 §8）；pull/onReceive 接收侧

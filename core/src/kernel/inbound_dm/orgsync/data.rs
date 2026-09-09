@@ -131,9 +131,11 @@ pub(crate) fn handle_orgsync_data<S: StorageBackend>(
                 // C1 合入侧执法（org-genesis §3.2/§3.3）：共同体硬规则
                 // （成员种类 + 成环）对合入后名册逐条校验，违规 kind=org 条目
                 // 剔除——值改写不 bump 本机分量、pmeta 不动（合入语义，与
-                // 结构化合并同口径）。
+                // 结构化合并同口径）。A16 同款执法：验绑失败的 accessKey 剥除。
                 let mut enforced = fresh;
-                if OrganizationService::enforce_incoming_roster(storage, &mut enforced)? > 0 {
+                let roster_fixed = OrganizationService::enforce_incoming_roster(storage, &mut enforced)? > 0;
+                let aks_stripped = crate::org::access_key::strip_unverified_access_keys(&mut enforced) > 0;
+                if roster_fixed || aks_stripped {
                     storage
                         .put(&record_item.key, &serde_json::to_string(&enforced)?)
                         .map_err(crate::sync::SyncError::from)?;
@@ -282,6 +284,94 @@ pub(crate) fn handle_orgsync_data<S: StorageBackend>(
                 crate::org::service::PolicyDocMerge::Rejected => {
                     log::info!(
                         "[ORGSYNC] policyDoc rejected | org={org_id} key={}",
+                        record_item.key
+                    );
+                }
+            }
+            continue;
+        }
+
+        // A15 名册开放声明（org:disclosure:）合入走
+        // adjudicate_incoming_disclosure（结构 + sigSet subject 绑定 +
+        // OrgSigSet 五步链 + version LWW）——裁决 Accept 才落地；发布即公示
+        // （本键域随 org:structure 全员流动），生效由记录 effectiveAt 门控。
+        if record_item
+            .key
+            .starts_with(crate::policy::DISCLOSURE_PREFIX)
+            && !crate::sync::is_tombstone(&record_item.meta)
+        {
+            let target_domain = record_item
+                .key
+                .strip_prefix(&format!("{}{org_id}:", crate::policy::DISCLOSURE_PREFIX));
+            let merge = match target_domain {
+                Some(target) => crate::org::service::adjudicate_incoming_disclosure(
+                    storage,
+                    &org_id,
+                    target,
+                    &record_item.value,
+                )?,
+                // 键形错位（他组织的 disclosure 键混入本组织流量）→ 拒收
+                None => crate::org::service::DisclosureMerge::Rejected,
+            };
+            match merge {
+                crate::org::service::DisclosureMerge::Accept => {
+                    let value_str = serde_json::to_string(&record_item.value)?;
+                    crate::sync::apply_personal_remote_no_dlog(
+                        storage,
+                        &record_item.key,
+                        &value_str,
+                        &record_item.meta,
+                    )?;
+                }
+                crate::org::service::DisclosureMerge::KeepCurrent => {}
+                crate::org::service::DisclosureMerge::Rejected => {
+                    log::info!(
+                        "[ORGSYNC] disclosure rejected | org={org_id} key={}",
+                        record_item.key
+                    );
+                }
+            }
+            continue;
+        }
+
+        // A17 准入策略声明（org:accept:）合入走
+        // adjudicate_incoming_accept_policy（结构 + sigSet subject 绑定 +
+        // OrgSigSet 五步链 + version LWW）——裁决 Accept 才落地；发布即公示
+        // （本键域随 org:structure 全员流动），生效由记录 effectiveAt 门控。
+        if record_item
+            .key
+            .starts_with(crate::policy::ACCEPT_POLICY_PREFIX)
+            && !crate::sync::is_tombstone(&record_item.meta)
+        {
+            // 键形 `org:accept:{orgId}` 单分量：键 orgId 与本组织不符（他组织
+            // 键混入本组织流量）→ 拒收
+            let merge = match record_item
+                .key
+                .strip_prefix(crate::policy::ACCEPT_POLICY_PREFIX)
+            {
+                Some(key_org) if key_org == org_id => {
+                    crate::org::service::adjudicate_incoming_accept_policy(
+                        storage,
+                        &org_id,
+                        &record_item.value,
+                    )?
+                }
+                _ => crate::org::service::AcceptPolicyMerge::Rejected,
+            };
+            match merge {
+                crate::org::service::AcceptPolicyMerge::Accept => {
+                    let value_str = serde_json::to_string(&record_item.value)?;
+                    crate::sync::apply_personal_remote_no_dlog(
+                        storage,
+                        &record_item.key,
+                        &value_str,
+                        &record_item.meta,
+                    )?;
+                }
+                crate::org::service::AcceptPolicyMerge::KeepCurrent => {}
+                crate::org::service::AcceptPolicyMerge::Rejected => {
+                    log::info!(
+                        "[ORGSYNC] accept policy rejected | org={org_id} key={}",
                         record_item.key
                     );
                 }
@@ -524,6 +614,32 @@ fn apply_org_member_record_merged<S: StorageBackend>(
     value: &Value,
     remote_meta: &crate::sync::meta::DocMeta,
 ) -> Result<bool> {
+    // A16 验绑（入站执法）：远端成员条目携带的 accessKey 必须 `rootPubkey`
+    // 锚定名册键且绑定签名有效，否则剥除后合入——不信任 peer 注入的伪造
+    // 绑定（membership §4.4「合入侧验绑」）。
+    let sanitized;
+    let value = {
+        let org_id = key
+            .strip_prefix(crate::org::types::ORG_MEMBER_PREFIX)
+            .and_then(|rest| rest.split(':').next())
+            .unwrap_or_default();
+        match serde_json::from_value::<crate::org::types::OrganizationMember>(value.clone()) {
+            Ok(mut member) if member.access_key.is_some() => {
+                let verified = member.access_key.as_ref().is_some_and(|ak| {
+                    crate::org::access_key::verify_access_key_binding(org_id, &member.root_id, ak)
+                });
+                if verified {
+                    value
+                } else {
+                    log::warn!("[ORGSYNC] accessKey 验绑失败已剥除 | key={key}");
+                    member.access_key = None;
+                    sanitized = serde_json::to_value(&member)?;
+                    &sanitized
+                }
+            }
+            _ => value,
+        }
+    };
     let local_meta = crate::sync::get_personal_meta(storage, key)?;
     let cmp = crate::sync::compare_version_vectors(
         local_meta.as_ref().map(|m| &m.vv),

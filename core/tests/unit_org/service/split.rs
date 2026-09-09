@@ -28,7 +28,7 @@ static ASSEMBLY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// P1-a create/delete 入口双写：create 落初始成员（creator）条目；delete
 /// 连同成员条目一并删除。
 #[test]
-fn create_and_delete_dual_write_member_entries() {
+fn create_dual_writes_member_entries() {
     let mut storage = MemoryStorage::new();
     let (admin, record) = setup_org(&mut storage);
     // create：初始成员条目已写，内容与 whole.members[0] 逐字段等价
@@ -42,17 +42,8 @@ fn create_and_delete_dual_write_member_entries() {
         serde_json::to_string(&record.members[0]).unwrap(),
         "条目与 whole 同名成员逐字段等价"
     );
-    // delete：组织记录与成员条目一并删除
-    OrganizationService::delete_organization(&mut storage, &record.org_id, &admin, NOW + 1)
-        .unwrap();
-    assert!(
-        storage.get(&entry_key).unwrap().is_none(),
-        "成员条目随组织删除"
-    );
-    let leftover = storage
-        .scan(&ScanOptions::prefix(ORG_MEMBER_PREFIX))
-        .unwrap();
-    assert!(leftover.is_empty(), "无残留成员条目");
+    //（A13：组织删除通路已移除——原「delete 成员条目随组织删除」断言随通路
+    // 退役；成员出册走 remove/leave 的成员表路径，条目清理归装配/墓碑机制。）
 }
 
 /// P1-b 装配视图：成员条目逐 rootId 覆盖 whole 同名成员（条目为权威）；

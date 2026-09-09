@@ -7,7 +7,7 @@
     <UserAvatar :root-id="source.seed" :nickname="source.name" :avatar="source.image" :size="avatarSize" />
     <span class="identity-meta">
       <b class="identity-name">{{ source.name }}</b>
-      <span class="identity-subtitle">{{ subtitle }}</span>
+      <span class="identity-subtitle"><slot name="subtitle">{{ subtitle }}</slot></span>
     </span>
   </button>
 </template>

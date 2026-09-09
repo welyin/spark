@@ -11,12 +11,29 @@
     <span class="net-status-dot" :class="`is-${statusKind}`" />
   </button>
 
+  <!-- variant="line"：单行小字态（rail 身份名字下方），悬停弹层同 full -->
+  <el-popover v-else-if="variant === 'line'" placement="top" :width="330" trigger="hover">
+    <template #reference>
+      <span class="net-status-line" :title="statusLabel">
+        <span class="net-status-dot" :class="`is-${statusKind}`" />
+        <span class="net-status-line-label">{{ statusLabel }}</span>
+      </span>
+    </template>
+    <div class="net-status-panel">
+      <div class="net-status-panel-title">
+        <span class="net-status-dot" :class="`is-${statusKind}`" />
+        <b>{{ statusLabel }}</b>
+      </div>
+      <p class="net-status-desc">{{ statusDescription }}</p>
+    </div>
+  </el-popover>
+
   <el-popover v-else placement="bottom-end" :width="330" trigger="hover">
     <template #reference>
       <button class="net-status-tag" :class="`is-${statusKind}`" :title="statusLabel">
         <span class="net-status-dot" :class="`is-${statusKind}`" />
-        <span class="net-status-label">{{ statusLabel }}</span>
-        <span class="net-status-count">{{ peerCountText }}</span>
+        <span v-if="!compact" class="net-status-label">{{ statusLabel }}</span>
+        <span v-if="!compact" class="net-status-count">{{ peerCountText }}</span>
       </button>
     </template>
 
@@ -88,6 +105,7 @@ const POLL_INTERVAL_MS = 30_000;
 export default defineComponent({
   name: 'NetworkStatusBar',
   props: {
+    compact: { type: Boolean, default: false },
     /** 展示形态：'full'=桌面端状态胶囊（含弹层详情）；'dot'=移动端仅状态点（点击跳系统设置网络状态） */
     variant: { type: String, default: 'full' }
   },
@@ -285,6 +303,22 @@ export default defineComponent({
 
 .net-status-tag:hover {
   opacity: 0.85;
+}
+
+/* 单行态（rail 身份名字下方）：小圆点 + 小字标签，无边框无底纹 */
+.net-status-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--spark-text-3);
+  white-space: nowrap;
+}
+
+.net-status-line-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .net-status-tag.is-good {

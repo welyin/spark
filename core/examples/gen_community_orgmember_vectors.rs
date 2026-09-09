@@ -50,6 +50,7 @@ fn admin_roster(admins: &[SigningKey]) -> Vec<RosterMember> {
         .map(|k| RosterMember {
             identity: identity_of(k),
             role: "admin".to_string(),
+            org_user_id: None,
         })
         .collect()
 }

@@ -1,4 +1,4 @@
-//! 组织创建与删除（service.ts `createOrganization`/`deleteOrganization`）。
+//! 组织创建（service.ts `createOrganization`）与全域删除守卫（A13）。
 //!
 //! 创建（C1，org-genesis §1/§2）：新组织一律创世哈希型——生成组织根密钥对，
 //! 构造并签名创世策略记录（含 domainType/互绑 orgAddress），orgId =
@@ -6,8 +6,9 @@
 //! `org:genesis:{orgId}`（org:structure@v1 键域，写一次不可变，随 orgsync
 //! 全员流动）；创建者为唯一初始 admin，追加 `create` 事务并落库。
 //! legacy `org_<16hex>` 仅为存量形态（既有数据原样可读/同步/加入），不再产生。
-//! 删除：admin 校验 + 域删除守卫（共同体域不可删除，community-model「域不可
-//! 解散，只可退出」）+ `delete` 事务 + 删记录。
+//! 删除：通路已整体移除（A13，community-model「域不可解散，只可退出」），
+//! 仅存全域删除守卫 [`OrganizationService::delete_organization_impl`]
+//! （全部域类型拒绝，fail-closed 兜底）。
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
@@ -24,9 +25,9 @@ use super::super::tx::{
     OrganizationTransactionRecord, OrganizationTransactionType, append_organization_transaction,
 };
 use super::super::types::{
-    DomainType, ORG_MEMBER_PREFIX, OrganizationMember, OrganizationRecord, OrganizationRole,
-    OrganizationSyncState, generate_org_secret, generate_recovery_secret, normalize_plugin_domain,
-    normalize_text, org_member_key, organization_key,
+    OrganizationMember, OrganizationRecord, OrganizationRole, OrganizationSyncState,
+    generate_org_secret, generate_recovery_secret, normalize_plugin_domain, normalize_text,
+    org_member_key,
 };
 use super::super::{OrgError, Result, org_address};
 use super::{CreateOrganizationInput, OrganizationService};
@@ -246,77 +247,16 @@ impl OrganizationService {
         Ok(record)
     }
 
-    /// `deleteOrganization`（service.ts:199-214）：admin 校验 + 域删除守卫
-    /// （共同体域拒绝删除，`OrgError::CommunityDomainNotDeletable`）+
-    /// `delete` 事务 + 删记录。
-    pub fn delete_organization<S: StorageBackend>(
-        storage: &mut S,
+    /// 全域删除守卫（A13 / community-model §4.1，fail-closed 兜底）：**全部
+    /// 域类型拒绝删除**——「域只可退出，不可解散；历史保留为只读档案」。
+    /// 删除通路已整体移除（前端/壳层/kernel/service 公开入口全拆，无生产
+    /// 调用方）；本函数留在 service 层最深处——即使上层重新长出入口，底层
+    /// 依然封死。**禁止新增调用方**（唯一消费是守卫单测）。
+    pub fn delete_organization_impl<S: StorageBackend>(
+        storage: &S,
         org_id: &str,
-        current_root_id: &str,
-        now_ms: i64,
     ) -> Result<()> {
-        Self::delete_organization_impl(storage, org_id, current_root_id, now_ms, None)
-    }
-
-    /// pdsync 感知的 [`Self::delete_organization`]：删除走
-    /// [`Self::delete_record_pdsync`]（tombstone pmeta，删除可经自设备 pdsync 传播）。
-    pub fn delete_organization_pdsync<S: StorageBackend>(
-        storage: &mut S,
-        org_id: &str,
-        current_root_id: &str,
-        now_ms: i64,
-        node_id: &str,
-    ) -> Result<()> {
-        Self::delete_organization_impl(storage, org_id, current_root_id, now_ms, Some(node_id))
-    }
-
-    fn delete_organization_impl<S: StorageBackend>(
-        storage: &mut S,
-        org_id: &str,
-        current_root_id: &str,
-        now_ms: i64,
-        node_id: Option<&str>,
-    ) -> Result<()> {
-        let record = Self::require_organization(storage, org_id)?;
-        Self::require_admin(&record, current_root_id)?;
-        // 域删除守卫（community-model：域不可解散，只可退出——全员退出后域
-        // 成为空域只读历史档案，无人能写入）：共同体域拒绝删除，删除本地
-        // 组织记录会抹掉档案。domainType 缺省（None）= leaf 存量形态，不受影响。
-        if record.domain_type == Some(DomainType::Community) {
-            return Err(OrgError::CommunityDomainNotDeletable);
-        }
-        append_organization_transaction(
-            storage,
-            OrganizationTransactionRecord {
-                tx_id: String::new(),
-                org_id: org_id.to_string(),
-                type_: OrganizationTransactionType::Delete,
-                created_at: now_ms,
-                actor_root_id: current_root_id.to_string(),
-                target_root_id: None,
-                summary: format!("删除组织 {}", record.name),
-                payload: Some(
-                    [("orgId".to_string(), Value::from(org_id))]
-                        .into_iter()
-                        .collect(),
-                ),
-            },
-        )?;
-        match node_id {
-            Some(node_id) => Self::delete_record_pdsync(storage, org_id, now_ms, node_id)?,
-            None => storage.delete(&organization_key(org_id))?,
-        }
-        // P1-a 双写对称（阶段四A分拆）：成员条目一并删除。版本化句柄上删除
-        // 自动墓碑 + org 域 dlog 传播（组织删除对端可收）；raw 句柄裸删。
-        let prefix = format!("{ORG_MEMBER_PREFIX}{org_id}:");
-        let keys: Vec<String> = storage
-            .scan(&crate::storage::ScanOptions::prefix(&prefix))?
-            .into_iter()
-            .map(|(key, _)| key)
-            .collect();
-        for key in keys {
-            storage.delete(&key)?;
-        }
-        Ok(())
+        let _record = Self::require_organization(storage, org_id)?;
+        Err(OrgError::CommunityDomainNotDeletable)
     }
 }

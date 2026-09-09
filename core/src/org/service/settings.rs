@@ -1,5 +1,7 @@
-//! 组织设置：名称/描述/logo（`updateOrgInfo`）、网关列表（`setOrgGateways`，
-//! org.md §14）与公开标志（`setOrgPublic`，org.md §16）。
+//! 组织设置：名称/描述/logo（`updateOrgInfo`）与公开标志（`setOrgPublic`，
+//! org.md §16）。
+//!（A9 / network §4.2：`setOrgGateways` 指定通路已移除——网关活跃集全员
+//! 候选计分推导，指定能力不存在。）
 //!
 //! 两者同口径：admin 校验、无变化时幂等返回（不 bump 版本）、变更后追加
 //! 事务并重建 sync；写入结果经既有快照同步广播扩散，推送由调用方以
@@ -12,9 +14,7 @@ use crate::storage::StorageBackend;
 use super::super::tx::{
     OrganizationTransactionRecord, OrganizationTransactionType, append_organization_transaction,
 };
-use super::super::types::{
-    OrganizationRecord, generate_org_secret, normalize_root_id, normalize_text,
-};
+use super::super::types::{OrganizationRecord, generate_org_secret, normalize_text};
 use super::super::{OrgError, Result, org_address};
 use super::OrganizationService;
 
@@ -25,7 +25,7 @@ impl OrganizationService {
     ///   提供时 trim 后覆盖（空串 = 清除描述）；未提供的字段不变
     /// - `avatar` 提供时 trim 后覆盖：空串 = 清除 logo，非空按
     ///   `identity::validate_avatar` 同口径校验，非法拒绝
-    /// - 无变化时幂等返回（不 bump 版本），与 [`Self::set_org_gateways`] 同口径
+    /// - 无变化时幂等返回（不 bump 版本），与 [`Self::update_org_info`] 同口径
     pub fn update_org_info<S: StorageBackend>(
         storage: &mut S,
         org_id: &str,
@@ -166,217 +166,6 @@ impl OrganizationService {
         Ok(true)
     }
 
-    /// `setOrgGateways`（org.md §14 + O1 账号角色模型）：管理员显式指定组织
-    /// 网关（1–3 名成员）。
-    ///
-    /// - 每个 rootId 规范化后查重；必须是本组织成员；**空列表 = 清除显式
-    ///   指定**，回落缺省（全体成员候选、活跃集自荐限流——见
-    ///   [`crate::org::roles`]）
-    /// - 网关角色是记录字段而非成员 role；写入后经既有快照同步广播扩散
-    ///   （推送由调用方以 [`Self::sync_recipients`] 执行，与 addMember 同模式）
-    pub fn set_org_gateways<S: StorageBackend>(
-        storage: &mut S,
-        org_id: &str,
-        gateways: &[String],
-        current_root_id: &str,
-        now_ms: i64,
-    ) -> Result<OrganizationRecord> {
-        let mut record = Self::require_organization(storage, org_id)?;
-        if Self::set_org_gateways_mutate(
-            storage,
-            &mut record,
-            org_id,
-            gateways,
-            current_root_id,
-            now_ms,
-        )? {
-            Self::save_record(storage, &record)?;
-        }
-        Ok(record)
-    }
-
-    /// pdsync 感知的 [`Self::set_org_gateways`]：组织记录落库走原子段原语
-    /// [`Self::update_record_atomic`]（F8）。
-    pub fn set_org_gateways_pdsync<S: StorageBackend>(
-        storage: &mut S,
-        io_lock: &super::OrgMetaWriteLock,
-        org_id: &str,
-        gateways: &[String],
-        current_root_id: &str,
-        now_ms: i64,
-        node_id: &str,
-    ) -> Result<OrganizationRecord> {
-        let _ = node_id; // 记账由中间件完成，参数保留以稳定签名
-        Self::update_record_atomic(storage, io_lock, org_id, |storage, record| {
-            Self::set_org_gateways_mutate(
-                storage,
-                record,
-                org_id,
-                gateways,
-                current_root_id,
-                now_ms,
-            )
-        })
-    }
-
-    /// F8 拆段的纯变更段（见 [`Self::update_org_info_mutate`]）。
-    fn set_org_gateways_mutate<S: StorageBackend>(
-        storage: &mut S,
-        record: &mut OrganizationRecord,
-        org_id: &str,
-        gateways: &[String],
-        current_root_id: &str,
-        now_ms: i64,
-    ) -> Result<bool> {
-        Self::require_admin(record, current_root_id)?;
-        // 空域只读档案：共同体全员退出后无人能写入（网关指定也是写路径）。
-        Self::require_community_writable(storage, record)?;
-
-        let mut normalized: Vec<String> = Vec::new();
-        for gateway in gateways {
-            let root_id = normalize_root_id(gateway).map_err(|_| OrgError::InvalidGateways)?;
-            if !normalized.contains(&root_id) {
-                normalized.push(root_id);
-            }
-        }
-        // O1：空列表 = 清除显式指定（回落缺省全员候选）；显式指定限 1–3 名成员
-        if normalized.len() > 3 || normalized.iter().any(|g| record.find_member(g).is_none()) {
-            return Err(OrgError::InvalidGateways);
-        }
-        if record.gateways == normalized {
-            return Ok(false);
-        }
-
-        record.gateways = normalized.clone();
-        record.updated_at = now_ms;
-        let previous_last_synced_at = record.sync.as_ref().map(|s| s.last_synced_at).unwrap_or(0);
-        let transaction = append_organization_transaction(
-            storage,
-            OrganizationTransactionRecord {
-                tx_id: String::new(),
-                org_id: org_id.to_string(),
-                type_: OrganizationTransactionType::MemberUpdate,
-                created_at: now_ms,
-                actor_root_id: current_root_id.to_string(),
-                target_root_id: None,
-                summary: format!("更新组织网关（{} 个）", normalized.len()),
-                payload: Some(
-                    [("gateways".to_string(), Value::from(normalized.clone()))]
-                        .into_iter()
-                        .collect(),
-                ),
-            },
-        )?;
-        Self::rebuild_sync_after_mutation(record, previous_last_synced_at, transaction.created_at);
-        Ok(true)
-    }
-
-    /// `setOrgDataAccounts`（O1 账号角色模型）：管理员显式指定数据账号
-    /// （≥1 名成员）；**空列表 = 清除显式指定**，回落缺省（全体管理员担责）。
-    /// 与 [`Self::set_org_gateways`] 同模式（记录字段 + 快照扩散 + 事务审计）。
-    pub fn set_org_data_accounts<S: StorageBackend>(
-        storage: &mut S,
-        org_id: &str,
-        data_accounts: &[String],
-        current_root_id: &str,
-        now_ms: i64,
-    ) -> Result<OrganizationRecord> {
-        let mut record = Self::require_organization(storage, org_id)?;
-        if Self::set_org_data_accounts_mutate(
-            storage,
-            &mut record,
-            org_id,
-            data_accounts,
-            current_root_id,
-            now_ms,
-        )? {
-            Self::save_record(storage, &record)?;
-        }
-        Ok(record)
-    }
-
-    /// pdsync 感知的 [`Self::set_org_data_accounts`]：组织记录落库走原子段
-    /// 原语 [`Self::update_record_atomic`]（F8）。
-    pub fn set_org_data_accounts_pdsync<S: StorageBackend>(
-        storage: &mut S,
-        io_lock: &super::OrgMetaWriteLock,
-        org_id: &str,
-        data_accounts: &[String],
-        current_root_id: &str,
-        now_ms: i64,
-        node_id: &str,
-    ) -> Result<OrganizationRecord> {
-        let _ = node_id; // 记账由中间件完成，参数保留以稳定签名
-        Self::update_record_atomic(storage, io_lock, org_id, |storage, record| {
-            Self::set_org_data_accounts_mutate(
-                storage,
-                record,
-                org_id,
-                data_accounts,
-                current_root_id,
-                now_ms,
-            )
-        })
-    }
-
-    /// F8 拆段的纯变更段（见 [`Self::update_org_info_mutate`]）。
-    fn set_org_data_accounts_mutate<S: StorageBackend>(
-        storage: &mut S,
-        record: &mut OrganizationRecord,
-        org_id: &str,
-        data_accounts: &[String],
-        current_root_id: &str,
-        now_ms: i64,
-    ) -> Result<bool> {
-        Self::require_admin(record, current_root_id)?;
-        // 空域只读档案：共同体全员退出后无人能写入（数据账号指定也是写路径）。
-        Self::require_community_writable(storage, record)?;
-
-        let mut normalized: Vec<String> = Vec::new();
-        for account in data_accounts {
-            let root_id = normalize_root_id(account).map_err(|_| OrgError::InvalidDataAccounts)?;
-            if !normalized.contains(&root_id) {
-                normalized.push(root_id);
-            }
-        }
-        if normalized
-            .iter()
-            .any(|rid| record.find_member(rid).is_none())
-        {
-            return Err(OrgError::InvalidDataAccounts);
-        }
-        if record.data_accounts == normalized {
-            return Ok(false);
-        }
-
-        record.data_accounts = normalized.clone();
-        record.updated_at = now_ms;
-        let previous_last_synced_at = record.sync.as_ref().map(|s| s.last_synced_at).unwrap_or(0);
-        let transaction = append_organization_transaction(
-            storage,
-            OrganizationTransactionRecord {
-                tx_id: String::new(),
-                org_id: org_id.to_string(),
-                type_: OrganizationTransactionType::MemberUpdate,
-                created_at: now_ms,
-                actor_root_id: current_root_id.to_string(),
-                target_root_id: None,
-                summary: if normalized.is_empty() {
-                    "清除数据账号指定（回落缺省：全体管理员）".to_string()
-                } else {
-                    format!("指定数据账号（{} 个）", normalized.len())
-                },
-                payload: Some(
-                    [("dataAccounts".to_string(), Value::from(normalized.clone()))]
-                        .into_iter()
-                        .collect(),
-                ),
-            },
-        )?;
-        Self::rebuild_sync_after_mutation(record, previous_last_synced_at, transaction.created_at);
-        Ok(true)
-    }
-
     /// `setOrgPublic`（org.md §16）：管理员开关组织公开标志，可选更新地址记录
     /// 展示名（`displayName`）。
     ///
@@ -385,7 +174,7 @@ impl OrganizationService {
     /// - 存量组织缺组织根密钥对时，开启公开会**懒补齐**（与 recoverySecret 的
     ///   admin 惰性补齐同模式）：生成密钥对、orgAddress 落记录、私钥密文存 extra
     /// - `display_name` 提供时 trim 后覆盖 `orgDisplayName`；空串视为清除
-    /// - 无变化时幂等返回（不 bump 版本），与 [`Self::set_org_gateways`] 同口径
+    /// - 无变化时幂等返回（不 bump 版本），与 [`Self::update_org_info`] 同口径
     pub fn set_org_public<S: StorageBackend>(
         storage: &mut S,
         org_id: &str,

@@ -12,7 +12,14 @@
     "isolatedModules": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "types": ["vite/client"]
+    "types": ["vite/client"],
+    "baseUrl": ".",
+    "paths": {
+      "vue": ["./node_modules/vue/dist/vue.d.ts"],
+      "element-plus": ["./node_modules/element-plus/es/index.d.ts"],
+      "@element-plus/icons-vue": ["./node_modules/@element-plus/icons-vue/dist/types/index.d.ts"],
+      "jsqr": ["./node_modules/jsqr/dist/index.d.ts"]
+    }
   },
   "include": ["src/**/*.ts", "src/**/*.d.ts", "src/**/*.vue", "vite.config.ts"]
 }

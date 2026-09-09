@@ -128,6 +128,171 @@ impl Kernel {
         let doc_hash = policy_doc_hash(&doc)
             .map_err(|e| KernelError::Internal(format!("policy doc hash failed: {e}")))?;
 
+        let (sig_set, signer_id, degraded) = self.build_signed_org_sig_set(org_id, &doc_hash)?;
+        let now = system_now_ms();
+        doc.sig_set = Some(sig_set);
+        let raw = serde_json::to_string(&doc)
+            .map_err(|e| KernelError::Internal(format!("policy doc serialize failed: {e}")))?;
+        // 发布键属 org:structure@v1 受管键域：经 VersionedStorage 写入即
+        // 版本化/pmeta 记账，orgsync 前缀采集自动带出（不能用 raw 句柄绕账）。
+        self.require_storage_mut()?
+            .put(&crate::org::service::policy_doc_key(org_id), &raw)?;
+        Ok(json!({
+            "orgId": org_id,
+            "policyDocHash": doc_hash,
+            "publishedAt": now,
+            "signer": signer_id,
+            "degraded": degraded,
+        }))
+    }
+
+    /// 发布名册开放声明（A15 / membership §4.3）：`org:disclosure:{orgId}:
+    /// {targetDomain}` = { 档位, 字段授权[], 开放集合[], version, effectiveAt,
+    /// OrgSigSet 签名 }——组织级动作（本机须属主组织 admin）。
+    ///
+    /// **公示延迟**：暴露面扩大方向（档位升 / 新增字段授权 / 字段受众升 /
+    /// 新增开放集合，含首份非全隐声明）`effectiveAt = updatedAt + 24h`；
+    /// 收窄/持平即时生效。扩大且未显式确认（`confirm_widening = false`）→
+    /// 如实报错（暴露面扩大必须显式确认，interpretation §4.2 静态分析同族
+    /// 语义）。发布即公示（org:structure@v1 受管键域随 orgsync 全员流动），
+    /// 生效由 effectiveAt 门控；入站合入点
+    /// [`crate::org::service::adjudicate_incoming_disclosure`] 以同一五步链把关。
+    pub fn disclosure_publish(
+        &mut self,
+        org_id: &str,
+        target_domain: &str,
+        tier: crate::policy::RosterTier,
+        fields: Vec<crate::policy::FieldRule>,
+        collections: Vec<String>,
+        confirm_widening: bool,
+    ) -> Result<Value> {
+        if !is_valid_org_id(org_id) || !is_valid_org_id(target_domain) {
+            return Err(KernelError::Internal("invalid orgId/targetDomain".to_string()));
+        }
+        let now = system_now_ms();
+        let storage = self.require_storage()?;
+        let prev: Option<crate::policy::DisclosureRecord> = storage
+            .get(&crate::policy::disclosure_key(org_id, target_domain))?
+            .and_then(|raw| serde_json::from_str(&raw).ok());
+        let mut next = crate::policy::DisclosureRecord {
+            disclosure_v: crate::policy::DISCLOSURE_V,
+            org_id: org_id.to_string(),
+            target_domain: target_domain.to_string(),
+            tier,
+            fields,
+            collections,
+            version: prev.as_ref().map_or(1, |p| p.version + 1),
+            updated_at: now,
+            effective_at: now, // 收窄/持平即时；扩大下方改写
+            sig_set: None,
+        };
+        let widening = crate::policy::disclosure_widening(prev.as_ref(), &next);
+        if widening {
+            if !confirm_widening {
+                return Err(KernelError::Internal(
+                    "暴露面扩大（开放档位/字段授权/开放集合放宽）须显式确认后发布".to_string(),
+                ));
+            }
+            // 公示延迟：扩大方向 24h 后生效（发布即公示，防瞬间开放不可逆暴露）
+            next.effective_at = now + crate::policy::DISCLOSURE_PUB_PERIOD_MS;
+        }
+        crate::policy::validate_disclosure(&next)
+            .map_err(|e| KernelError::Internal(e.to_string()))?;
+        let hash = crate::policy::disclosure_hash(&next)
+            .map_err(|e| KernelError::Internal(format!("disclosure hash failed: {e}")))?;
+        let (sig_set, signer_id, _degraded) = self.build_signed_org_sig_set(org_id, &hash)?;
+        next.sig_set = Some(sig_set);
+        let raw = serde_json::to_string(&next)
+            .map_err(|e| KernelError::Internal(format!("disclosure serialize failed: {e}")))?;
+        self.require_storage_mut()?
+            .put(&crate::policy::disclosure_key(org_id, target_domain), &raw)?;
+        Ok(json!({
+            "orgId": org_id,
+            "targetDomain": target_domain,
+            "disclosureHash": hash,
+            "version": next.version,
+            "widening": widening,
+            "updatedAt": now,
+            "effectiveAt": next.effective_at,
+            "signer": signer_id,
+        }))
+    }
+
+    /// 发布准入策略声明（A17 / membership §4.5）：`org:accept:{orgId}` =
+    /// `{ acceptCredentials[], version, effectiveAt, OrgSigSet 签名 }`——组织级
+    /// 动作（本机须属主组织 admin），声明「接受哪些凭证可免预录入册」。
+    ///
+    /// **公示延迟**（governance §4.1 适用范围）：准入面扩大方向（新增
+    /// `(credType, issuerTrust)` 规则对，含首份非空声明）
+    /// `effectiveAt = updatedAt + 24h`；收窄/持平即时生效。扩大且未显式确认
+    /// （`confirm_widening = false`）→ 如实报错。发布即公示（org:structure@v1
+    /// 受管键域随 orgsync 全员流动），生效由 effectiveAt 门控；入站合入点
+    /// [`crate::org::service::adjudicate_incoming_accept_policy`] 以同一
+    /// 五步链把关。
+    pub fn accept_policy_publish(
+        &mut self,
+        org_id: &str,
+        accept_credentials: Vec<crate::policy::AcceptCredentialRule>,
+        confirm_widening: bool,
+    ) -> Result<Value> {
+        if !is_valid_org_id(org_id) {
+            return Err(KernelError::Internal("invalid orgId".to_string()));
+        }
+        let now = system_now_ms();
+        let storage = self.require_storage()?;
+        let prev: Option<crate::policy::AcceptPolicyRecord> = storage
+            .get(&crate::policy::accept_policy_key(org_id))?
+            .and_then(|raw| serde_json::from_str(&raw).ok());
+        let mut next = crate::policy::AcceptPolicyRecord {
+            accept_v: crate::policy::ACCEPT_POLICY_V,
+            org_id: org_id.to_string(),
+            accept_credentials,
+            version: prev.as_ref().map_or(1, |p| p.version + 1),
+            updated_at: now,
+            effective_at: now, // 收窄/持平即时；扩大下方改写
+            sig_set: None,
+        };
+        let widening = crate::policy::accept_policy_widening(prev.as_ref(), &next);
+        if widening {
+            if !confirm_widening {
+                return Err(KernelError::Internal(
+                    "准入面扩大（新增免预录准入规则）须显式确认后发布".to_string(),
+                ));
+            }
+            // 公示延迟：扩大方向 24h 后生效（发布即公示，防瞬间放宽不可逆准入）
+            next.effective_at = now + crate::policy::ACCEPT_POLICY_PUB_PERIOD_MS;
+        }
+        crate::policy::validate_accept_policy(&next)
+            .map_err(|e| KernelError::Internal(e.to_string()))?;
+        let hash = crate::policy::accept_policy_hash(&next)
+            .map_err(|e| KernelError::Internal(format!("accept policy hash failed: {e}")))?;
+        let (sig_set, signer_id, _degraded) = self.build_signed_org_sig_set(org_id, &hash)?;
+        next.sig_set = Some(sig_set);
+        let raw = serde_json::to_string(&next)
+            .map_err(|e| KernelError::Internal(format!("accept policy serialize failed: {e}")))?;
+        self.require_storage_mut()?
+            .put(&crate::policy::accept_policy_key(org_id), &raw)?;
+        Ok(json!({
+            "orgId": org_id,
+            "acceptPolicyHash": hash,
+            "version": next.version,
+            "widening": widening,
+            "updatedAt": now,
+            "effectiveAt": next.effective_at,
+            "signer": signer_id,
+        }))
+    }
+
+    /// 组织签名包构建（policy_publish / disclosure_publish /
+    /// accept_policy_publish 共用段）：策略链
+    /// 定位（空链 / m>1 多签如实报错）→ 名册快照 + 本机 admin 校验 → A16
+    /// 域私钥签名（signer = org_user_id）→ OrgSigSet 构造 + 自检（不通 =
+    /// 实现 bug，不落库）。返回 (sigSet, signerId, degraded)。
+    fn build_signed_org_sig_set(
+        &self,
+        org_id: &str,
+        subject: &str,
+    ) -> Result<(crate::credential::OrgSigSet, String, bool)> {
         let storage = self.require_storage()?;
         // 策略链：现行签名策略 = 链头（最大 seq 修订，否则创世）；空链无法
         // 定位 policyHash（入站五步链第 2 步必拒）——如实报错。
@@ -163,19 +328,31 @@ impl Kernel {
             .map(|m| crate::credential::RosterMember {
                 identity: m.root_id.clone(),
                 role: m.role.as_str().to_string(),
+                // A16 双写：名册快照携带 org_user_id（签名面切换后名册回查
+                // 按 org_user_id 命中；未发布成员为 None，旧签按 rootId 命中）。
+                org_user_id: m.org_user_id(),
             })
             .collect();
         let unlocked = self.unlocked.as_ref().ok_or(KernelError::Locked)?;
-        let root = crate::identity::derive_root_identity(&unlocked.seed);
-        let signer_id = root.id();
-        if !roster
+        let root_id = unlocked.root_id().to_string();
+        if !record
+            .members
             .iter()
-            .any(|m| m.identity == signer_id && m.role == "admin")
+            .any(|m| m.root_id == root_id && m.role == crate::org::types::OrganizationRole::Admin)
         {
             return Err(KernelError::Internal(
                 "本机身份不是该组织管理员，无权发布策略".to_string(),
             ));
         }
+        // A16 签名面（membership §4.4-2）：组织内操作改用 `org-access:{orgId}`
+        // 域私钥签名（org-signature §2.1 签名者密钥口径本就是「该组织内的域
+        // 身份私钥」——线形零改动，切换的是密钥来源）；signer = org_user_id。
+        let domain_identity = crate::identity::derive_domain_identity(
+            &unlocked.seed,
+            &crate::org::access_key::org_access_domain(org_id),
+        );
+        let domain_pubkey = domain_identity.signing_key.verifying_key().to_bytes();
+        let signer_id = crate::org::access_key::org_user_id_from_pubkey(&domain_pubkey);
 
         // 存证锚根（sync-evidence §7 复算口径，与 sigset_storage_closures 同源）
         let anchor_prefix = format!("{}{}:", crate::evidence::EVIDENCE_ANCHOR_PREFIX, org_id);
@@ -194,7 +371,7 @@ impl Kernel {
         let mut sig_set = crate::credential::OrgSigSet {
             sig_set_v: 1,
             org_id: org_id.to_string(),
-            subject: doc_hash.clone(),
+            subject: subject.to_string(),
             policy_hash,
             roster: crate::credential::RosterCommitment {
                 member_set_hash: crate::org::sigset::roster_member_set_hash(&roster),
@@ -209,13 +386,13 @@ impl Kernel {
             signatures: Vec::new(),
         };
         let payload = crate::org::sigset::component_sign_payload(&sig_set);
-        use ed25519_dalek::Signer as _;
         use base64::Engine as _;
+        use ed25519_dalek::Signer as _;
         sig_set.signatures.push(crate::credential::ComponentSignature {
             signer: signer_id.clone(),
-            public_key: base64::engine::general_purpose::STANDARD.encode(root.public_key()),
+            public_key: base64::engine::general_purpose::STANDARD.encode(domain_pubkey),
             sig: base64::engine::general_purpose::STANDARD
-                .encode(root.signing_key.sign(payload.as_bytes()).to_bytes()),
+                .encode(domain_identity.signing_key.sign(payload.as_bytes()).to_bytes()),
         });
 
         // 自检：产出必须能过入站合入的同一五步链（不通 = 实现 bug，不落库）。
@@ -231,20 +408,6 @@ impl Kernel {
             ctx.verify_detailed(&sig_set)
                 .map_err(|e| KernelError::Internal(format!("sigset self-check failed: {e}")))?
         };
-
-        doc.sig_set = Some(sig_set);
-        let raw = serde_json::to_string(&doc)
-            .map_err(|e| KernelError::Internal(format!("policy doc serialize failed: {e}")))?;
-        // 发布键属 org:structure@v1 受管键域：经 VersionedStorage 写入即
-        // 版本化/pmeta 记账，orgsync 前缀采集自动带出（不能用 raw 句柄绕账）。
-        self.require_storage_mut()?
-            .put(&crate::org::service::policy_doc_key(org_id), &raw)?;
-        Ok(json!({
-            "orgId": org_id,
-            "policyDocHash": doc_hash,
-            "publishedAt": now,
-            "signer": signer_id,
-            "degraded": verdict.degraded,
-        }))
+        Ok((sig_set, signer_id, verdict.degraded))
     }
 }

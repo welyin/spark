@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ElMessageBox } from 'element-plus';
 import { isMobileLayout } from '../../../stores/ui-layout';
 import { promptBiometricBind, setBiometricPromptDismissed, DISMISS_KEY } from '../../../utils/biometric-prompt';
@@ -18,6 +18,12 @@ beforeEach(() => {
   localStorage.clear();
   isMobileLayout.value = true;
   (window as any).__TAURI_INTERNALS__ = {};
+});
+
+afterEach(() => {
+  // 环境标记用毕即清：单线程跑全量时测试文件共享 jsdom 环境，
+  // 泄漏 __TAURI_INTERNALS__ 会让后续文件的 isTauri() 误判为真
+  delete (window as any).__TAURI_INTERNALS__;
 });
 
 describe('promptBiometricBind', () => {

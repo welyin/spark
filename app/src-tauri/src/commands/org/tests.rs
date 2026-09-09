@@ -55,6 +55,12 @@ fn create_and_list_roundtrip() {
     assert_eq!(overview.total_members, 1);
     assert!(overview.synced_peers >= 1);
     assert!(overview.members[0].is_self);
+    // A16 标识面随迁：创建即发布 accessKey → 概览成员携带 orgUserId
+    // （camelCase 线形），且 ≠ rootId（不泄露关联）
+    let member = &overview.members[0];
+    let uid = member.org_user_id.as_deref().expect("概览携带 orgUserId");
+    assert_eq!(uid.len(), 64);
+    assert_ne!(uid, member.root_id);
 }
 
 #[test]
@@ -118,26 +124,23 @@ fn member_management_and_delete() {
         "Organization must keep at least one admin"
     );
 
-    // 删除组织
-    delete_inner(&mut kernel, &org_id).unwrap();
+    // 退出组织（A13：删除通路已移除，域只可退出）——最后一名成员退出
+    // 即成空域：组织记录保留（只读档案），成员表为空
+    let view = leave_inner(&mut kernel, &org_id).unwrap();
+    assert_eq!(view.member_count, 0, "最后一名成员退出后成员表为空");
+    // 已退出者不再是成员（记录保留 = 留史只读档案）
     assert!(list_mine_inner(&kernel).unwrap().is_empty());
     assert_eq!(
-        delete_inner(&mut kernel, &org_id).unwrap_err(),
-        "Organization not found"
+        leave_inner(&mut kernel, &org_id).unwrap_err(),
+        "Member not found",
+        "非成员再退出拒绝"
     );
 }
 
 #[test]
-fn set_gateways_flow() {
+fn create_view_carries_org_secret() {
     let (_dir, mut kernel) = unlocked_kernel();
     let view = create_inner(&mut kernel, input()).unwrap();
-    let org_id = view.record.org_id.clone();
-    let self_root = kernel.current_root_id().unwrap().unwrap();
-    let member_root = "ab".repeat(32);
-    let input: AddOrgMemberInputDto =
-        serde_json::from_value(serde_json::json!({ "rootId": member_root })).unwrap();
-    add_member_inner(&mut kernel, &org_id, input).unwrap();
-
     // 组织创建时已生成 orgSecret（随视图 extra 下发，UI 不渲染）
     assert_eq!(
         view.record
@@ -147,32 +150,19 @@ fn set_gateways_flow() {
             .map(str::len),
         Some(64)
     );
+}
 
-    // 正常设置 2 个网关（含自己），视图携带 gateways
-    let view = set_gateways_inner(
-        &mut kernel,
-        &org_id,
-        vec![self_root.clone(), member_root.clone()],
-    )
-    .unwrap();
-    assert_eq!(view.record.gateways, vec![self_root.clone(), member_root.clone()]);
-
-    // O1：单个成员合法（显式收窄）；超 3 / 非成员 / 非 admin 组织不存在等错误透传
-    let narrowed = set_gateways_inner(&mut kernel, &org_id, vec![self_root.clone()]).unwrap();
-    assert_eq!(narrowed.record.gateways, vec![self_root.clone()]);
-    // 清除显式指定（空列表 = 回落缺省全员候选）
-    let cleared = set_gateways_inner(&mut kernel, &org_id, vec![]).unwrap();
-    assert!(cleared.record.gateways.is_empty());
-    assert_eq!(
-        set_gateways_inner(&mut kernel, &org_id, vec![self_root.clone(), "cd".repeat(32)])
-            .unwrap_err(),
-        "Gateways must be 1 to 3 member rootIds of the organization"
-    );
-    assert_eq!(
-        set_gateways_inner(&mut kernel, "org_nope", vec![self_root.clone(), member_root.clone()])
-            .unwrap_err(),
-        "Organization not found"
-    );
+/// A47（network §三 G6）：当前履职网关只读查询——单成员组织创建者在册
+/// （self 恒在线注入）；组织不存在报错。
+#[test]
+fn gateway_active_set_readonly_query() {
+    let (_dir, mut kernel) = unlocked_kernel();
+    let view = create_inner(&mut kernel, input()).unwrap();
+    let org_id = view.record.org_id.clone();
+    let self_root = kernel.current_root_id().unwrap().unwrap();
+    let set = kernel.org_gateway_active_set(&org_id).unwrap();
+    assert_eq!(set, vec![self_root], "单成员组织创建者履职");
+    assert!(kernel.org_gateway_active_set("org_nope").is_err());
 }
 
 #[test]

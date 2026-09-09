@@ -19,7 +19,8 @@
     "identity:sign",
     "identity:verify",
     "contact:read",
-    "feed:deliver",
+    "feed:read",
+    "feed:write",
     "message:app"
   ],
   "sdkVersion": "1",

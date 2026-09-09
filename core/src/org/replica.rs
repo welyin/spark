@@ -27,6 +27,9 @@ pub const ORG_REPLICA_FRESH_WINDOW_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 pub struct MemberSyncOverview {
     /// 成员 rootId。
     pub root_id: String,
+    /// 成员 org_user_id（A16 标识面随迁：已发布 accessKey 的成员为 Some；
+    /// 公共面去 rootId 后以本字段为成员标识，rootId 保留双写过渡）。
+    pub org_user_id: Option<String>,
     /// 成员 peerId（trim 后；无 nodeInfo 时为 `None`）。
     pub peer_id: Option<String>,
     /// 是否本机当前用户。
@@ -66,31 +69,34 @@ pub struct OrgSyncOverview {
     /// K 口径是否适用（组织声明了 data-accounts 集合）。false = 纯
     /// all-members 组织——无 K，不进达标判定、不提醒（batch2 §1.2）。
     pub k_applicable: bool,
-    /// 两级记账第二级：逐数据账号的 PC 履职达标状态（证据源 = hello 履职
-    /// 观测，见 [`DutyObservation`]）。
-    pub data_accounts: Vec<DataAccountOverview>,
+    /// 两级记账第二级：逐成员 PC 履职状态（A14 全员数据节点；信息性展示，
+    /// 无逐账号强制要求。证据源 = hello 履职观测，见 [`DutyObservation`]）。
+    pub member_replicas: Vec<MemberReplicaOverview>,
 }
 
-/// 逐数据账号概览（O1 两级记账的第二级：组织级 m/3 见 `synced_peers`）。
+/// 逐成员副本概览（A14 两级记账的第二级：组织级 m/3 见 `synced_peers`）。
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DataAccountOverview {
-    /// 数据账号 rootId。
+pub struct MemberReplicaOverview {
+    /// 成员 rootId。
     pub root_id: String,
-    /// 该账号的 PC 类设备是否持有副本（everSynced 且设备类为 pc）。
+    /// 成员 org_user_id（A16 标识面随迁，同 [`MemberSyncOverview`]）。
+    pub org_user_id: Option<String>,
+    /// 该成员的 PC 类设备是否持有副本（everSynced 且设备类为 pc）。
     pub pc_synced: bool,
     /// 设备类（pc/mobile；无设备记录兜底 pc）。
     pub device_class: &'static str,
 }
 
 impl OrgSyncOverview {
-    /// 副本是否达标（batch2 §1.2）：K 不适用（纯 all-members 组织）→ 恒达标
-    /// （不提醒）；适用 → 组织级去重 PC 履职对 ≥ K 且每个数据账号 ≥1 台 PC
-    /// 窗口内履职。不达标只提醒，无自动处置（红线不变）。
+    /// 副本是否达标（A14 / membership §4.1）：K 不适用（纯 all-members
+    /// 组织）→ 恒达标（不提醒）；适用 → 组织级去重（成员 × PC 设备）履职对
+    /// 合计 ≥ K（**集体口径**，无逐成员强制要求）。不达标只提醒，无自动
+    /// 处置（红线不变）。
     pub fn is_replica_sufficient(&self) -> bool {
         if !self.k_applicable {
             return true;
         }
-        self.synced_peers >= self.replica_target && self.data_accounts.iter().all(|a| a.pc_synced)
+        self.synced_peers >= self.replica_target
     }
 }
 
@@ -121,19 +127,12 @@ impl DutyObservation {
     }
 }
 
-/// O1 数据账号达标判定（wiki `org-data-sync.md` §4）：**全体数据账号 PC
-/// 设备副本合计 ≥ 3，且每个数据账号至少 1 台 PC 计入**。
-///
-/// - `pc_total`：数据账号中 PC 且 everSynced 的数量（成员表口径每账号一个
-///   nodeInfo 端点，故逐账号计数）；
-/// - `accounts`：逐账号 PC 达标状态；
-/// 两者都满足才达标。不达标只提醒，无自动处置（决定权在管理员）。
-pub fn data_accounts_sufficient(accounts: &[DataAccountOverview]) -> bool {
-    if accounts.is_empty() {
-        return false;
-    }
-    let pc_total = accounts.iter().filter(|a| a.pc_synced).count() as u32;
-    pc_total >= ORG_REPLICA_TARGET && accounts.iter().all(|a| a.pc_synced)
+/// 全员数据节点达标判定（A14 / membership §4.1）：**全体成员 PC 类设备
+/// 副本合计 ≥ 3**（集体口径；无逐成员强制要求——数据面与治理面解耦）。
+/// 不达标只提醒，无自动处置。
+pub fn member_replicas_sufficient(replicas: &[MemberReplicaOverview]) -> bool {
+    let pc_total = replicas.iter().filter(|a| a.pc_synced).count() as u32;
+    pc_total >= ORG_REPLICA_TARGET
 }
 
 // ------------------------------------------------------------------
@@ -259,16 +258,18 @@ pub fn member_ever_synced(
 /// - `duty`：本组织的 hello 履职观测（batch2 §1.2 的 K 记账证据源；
 ///   `orgq_da_duty_observations` 采集）
 /// - `has_data_collections`：组织声明了 data-accounts 集合（K 口径适用性）；
-/// - `device_class_of`：数据账号的设备类兜底查询（无履职观测时按设备记录
+/// - `device_class_of`：成员的设备类兜底查询（无履职观测时按设备记录
 ///   判定，无记录兜底 pc——宁可多算不漏算）
 /// - rootId 为空串的成员跳过（对齐 TS 的 `if (!rootId) continue`）
 ///
-/// K 口径（batch2 §1.2，overview 两级输出）：all-members 集合**无 K**
-/// （全员全量，不做达标判定）；data-accounts 集合的副本计数单元 =
-/// （数据账号 × PC 设备）对，证据 = 30 天窗口内履职观测（hello roles 含
-/// "data" 且 deviceClass="pc"）。组织级 = 去重合计 ≥ 3；逐账号 = 每个
-/// 数据账号 ≥1 台 PC 窗口内履职。本机是数据账号且为 PC 时自证计入
-/// （本地驻留可服务是事实，无需 hello 自观测）。
+/// K 口径（A14 全员数据节点，membership §4.1，overview 两级输出）：
+/// all-members 集合**无 K**（全员全量，不做达标判定）；data-accounts
+/// 集合的副本计数单元 = （成员 × PC 设备）对，证据 = 30 天窗口内履职
+/// 观测（hello roles 含 "data" 且 deviceClass="pc"——A14 起全员成员
+/// 宣告 data）。组织级 = 去重合计 ≥ 3（集体口径，不达标只提醒）；
+/// 第二级 = 逐成员 PC 履职状态展示（信息性，无逐账号强制要求——数据面
+/// 与治理面解耦）。本机是成员且为 PC 时自证计入（本地驻留可服务是事实，
+/// 无需 hello 自观测）。
 pub fn compute_org_sync_overview(
     record: &OrganizationRecord,
     current_root_id: Option<&str>,
@@ -305,6 +306,7 @@ pub fn compute_org_sync_overview(
         }
         overview_members.push(MemberSyncOverview {
             root_id: member.root_id.clone(),
+            org_user_id: member.org_user_id(),
             peer_id,
             is_self,
             ever_synced,
@@ -312,16 +314,22 @@ pub fn compute_org_sync_overview(
         });
     }
 
-    // batch2 §1.2 K 口径：仅 data-accounts 集合参与 K=3 记账
+    // K 口径：仅 data-accounts 集合参与 K=3 记账（A14：副本池 = 全体成员）；
+    // 第二级（逐成员 PC 状态）同样只在 K 适用时输出——纯 all-members 组织
+    // 无 K 不提醒，第二级为空（与旧形状一致）
     let k_applicable = has_data_collections;
-    let data_account_roots = crate::org::roles::data_account_set(record);
-    let data_accounts: Vec<DataAccountOverview> = data_account_roots
+    let data_node_roots = if k_applicable {
+        crate::org::roles::data_node_set(record)
+    } else {
+        Vec::new()
+    };
+    let member_replicas: Vec<MemberReplicaOverview> = data_node_roots
         .iter()
         .map(|root_id| {
             let has_pc_duty = duty
                 .iter()
                 .any(|d| d.root_id == *root_id && d.is_pc_fresh(now_ms));
-            // 本机是数据账号且为 PC → 自证计入（本地驻留可服务是事实）
+            // 本机是成员且为 PC → 自证计入（本地驻留可服务是事实）
             let self_pc =
                 current_root_id == Some(root_id.as_str()) && device_class_of(root_id) == "pc";
             let observed_class: &'static str = match duty.iter().find(|d| d.root_id == *root_id) {
@@ -329,21 +337,22 @@ pub fn compute_org_sync_overview(
                 Some(_) => "mobile",
                 None => device_class_of(root_id),
             };
-            DataAccountOverview {
+            MemberReplicaOverview {
                 root_id: root_id.clone(),
+                org_user_id: record.find_member(root_id).and_then(|m| m.org_user_id()),
                 pc_synced: has_pc_duty || self_pc,
                 device_class: observed_class,
             }
         })
         .collect();
-    // 组织级：去重后的（数据账号 × PC 设备）履职对合计；本机自证占一对
+    // 组织级：去重后的（成员 × PC 设备）履职对合计；本机自证占一对
     let duty_pairs: std::collections::HashSet<(&str, &str)> = duty
         .iter()
         .filter(|d| d.is_pc_fresh(now_ms))
         .map(|d| (d.root_id.as_str(), d.peer_id.as_str()))
         .collect();
     let self_pair = if let (Some(self_root), true) = (current_root_id, k_applicable) {
-        if data_account_roots.iter().any(|r| r == self_root) && device_class_of(self_root) == "pc" {
+        if data_node_roots.iter().any(|r| r == self_root) && device_class_of(self_root) == "pc" {
             1
         } else {
             0
@@ -370,6 +379,6 @@ pub fn compute_org_sync_overview(
         dht_mode: DhtMode::default(),
         status: OrgNetworkStatus::LocalOnly,
         k_applicable,
-        data_accounts,
+        member_replicas,
     }
 }

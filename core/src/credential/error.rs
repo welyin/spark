@@ -60,6 +60,10 @@ pub enum CredentialError {
     /// 同一 credId 在一次 readAuth 中重复呈现。
     #[error("duplicate credential presentation")]
     DuplicateCredential,
+    /// 城门名册回查失败（A15）：持有者当时不是凭证 subjectDomain 的成员
+    /// （退队即失效，零密钥轮换）；名册数据不可用同样 fail-closed 归本类。
+    #[error("holder not a member of credential subject domain")]
+    NotSubjectDomainMember,
     /// JSON 序列化/反序列化错误。
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
@@ -87,6 +91,7 @@ impl CredentialError {
             Self::HolderProofInvalid => "holder-proof-invalid",
             Self::HolderProofMissing => "holder-proof-missing",
             Self::DuplicateCredential => "duplicate-credential",
+            Self::NotSubjectDomainMember => "not-subject-domain-member",
             Self::Json(_) => "json-error",
         }
     }

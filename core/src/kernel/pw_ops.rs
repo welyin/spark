@@ -14,7 +14,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
 use serde_json::json;
 
-use crate::device::{DeviceRecord, DeviceService};
+use crate::device::DeviceService;
 use crate::epoch::RotationReason;
 use crate::identity;
 use crate::kernel::{Kernel, KernelError, Result};
@@ -57,7 +57,7 @@ macro_rules! io_guard {
     };
 }
 
-/// 发布一条 `pwv:self`（四挂点共用）。
+/// 发布一条 `pwv:self`（取当前时刻为 changedAt；unlock 懒发布等独立挂点用）。
 ///
 /// 调用方已持 `io_lock`；本函数不重复上锁。
 pub(crate) fn publish_pw_value(
@@ -65,8 +65,22 @@ pub(crate) fn publish_pw_value(
     password: &str,
     reason: RotationReason,
 ) -> Result<()> {
-    let node_id = kernel.sync_node_id();
     let now_ms = system_now_ms();
+    publish_pw_value_at(kernel, password, reason, now_ms)
+}
+
+/// 以指定时戳发布 `pwv:self`。
+///
+/// 口令驱动的轮换必须满足时戳同源（规格 §13.5：`pwv.changedAt == epoch:state.
+/// rotatedAt`），且**先于 rotate 发布**——rotate 的逐设备门控以「最新 V」为水位，
+/// 先发布新 V 门控才能正确暂扣超 grace 的陈旧设备（否则门控读到旧 V 空转）。
+pub(crate) fn publish_pw_value_at(
+    kernel: &mut Kernel,
+    password: &str,
+    reason: RotationReason,
+    now_ms: i64,
+) -> Result<()> {
+    let node_id = kernel.sync_node_id();
 
     let mut salt = [0u8; 16];
     let mut nonce = [0u8; 12];
@@ -90,42 +104,13 @@ pub(crate) fn publish_pw_value(
         now_ms,
     )?;
 
-    // E5 事件：改密/重置（用户主动换锁）才广播 `PasswordChangeObserved` 作 UI 提示；
-    // 创世（init/recover）与 unlock 懒发布（首次补 V）不属于「观察到的口令变更」。
-    if matches!(
-        reason,
-        RotationReason::PasswordChange | RotationReason::PasswordReset
-    ) {
-        emit_password_change_observed(kernel, &pwv, &node_id, reason);
-    }
+    // E5 事件（A45 裁定）：`PasswordChangeObserved` 只在**接收端** pwv 入站
+    // 分支广播（「观察到它端口令变更」的语义）。改密端本机不自报——本机发布
+    // 的 V 已推进本机 applied，pdsync 回环到达只判回放忽略，天然到不了事件
+    // 分支；创世（init/recover）与 unlock 懒发布（首次补 V）同样不属于
+    // 「观察到的口令变更」。
 
     Ok(())
-}
-
-/// 广播 `PasswordChangeObserved`（E5）：载荷字段由 pwv + 设备清单装配。
-fn emit_password_change_observed(
-    kernel: &Kernel,
-    pwv: &crate::pw::PasswordVerifier,
-    node_id: &str,
-    reason: RotationReason,
-) {
-    let rotated_by_device = kernel
-        .require_storage()
-        .ok()
-        .and_then(|storage| DeviceService::list(storage.raw()).ok())
-        .and_then(|records| {
-            records
-                .iter()
-                .find(|r: &&DeviceRecord| r.peer_id == pwv.changed_by)
-                .map(|r| r.device_name.clone())
-        })
-        .unwrap_or_else(|| node_id.to_string());
-    let _ = kernel.event_tx.send(P2pEvent::PasswordChangeObserved {
-        rotated_at: pwv.changed_at,
-        rotated_by: pwv.changed_by.clone(),
-        rotated_by_device,
-        reason: reason.as_str().to_string(),
-    });
 }
 
 /// unlock 时：若本地尚无 `pwv:self`（存量账号），用手持口令就地计算 V 并静默迁移。
@@ -166,6 +151,13 @@ pub(crate) fn maybe_ack_on_unlock(kernel: &mut Kernel, password: &str) -> Result
 
     let applied = pw::get_applied_vts(storage)?;
     if pwv.changed_at <= applied {
+        // 水位已覆盖 → ack 不重复发；但本机自锚要补齐：口令刚通过验证，
+        // 「本机验证过当前 V」这一事实不该随跳过 ack 丢失（懒发布路径
+        // publish 先推进 applied，自锚若恒为 0，本机侧门控判定——A45
+        // profile 通道 / DeviceOutOfGrace——会把合法设备误判为从未验证）。
+        if pw::get_last_verified_vts(storage, &node_id)? < pwv.changed_at {
+            put_last_verified_vts(storage, &node_id, pwv.changed_at)?;
+        }
         return Ok(());
     }
 
@@ -236,12 +228,14 @@ pub(crate) fn unify_password(
             other => KernelError::Identity(other),
         })?;
 
-    // 内核复验 V：防止本地会话口令与全局 V 不一致时被绕过。
+    // 内核复验 V：契约 m45 §13.1「newPassword 必须刚通过 verify_ticket，内核复验
+    // 一次防绕过」——复验对象是**新口令**（V 由设密设备用账号新口令封存；分叉场景
+    // 本机旧口令 ≠ 账号新口令，验旧口令必误判）。
     {
         let storage = kernel.require_storage()?;
         match pw::get_pwv(storage)? {
             Some(pwv) => {
-                if !pw::verify_value(&pwv, old_password) {
+                if !pw::verify_value(&pwv, new_password) {
                     return Err(KernelError::TicketMismatch);
                 }
             }
@@ -256,6 +250,8 @@ pub(crate) fn unify_password(
         new_password,
         Some(new_key),
     );
+    // 密码考试（§4.2）：unify = 真实密码验证事件，刷新 lastPasswordAuth。
+    record_password_auth(kernel);
 
     // 刷新会话后：水位推进 + ack + 清 stale。
     {
@@ -268,7 +264,9 @@ pub(crate) fn unify_password(
             .map_err(|e| KernelError::Internal(format!("pwv salt decode: {e}")))?
             .try_into()
             .map_err(|_| KernelError::Internal("pwv salt length".into()))?;
-        let kverify = pw::derive_kverify(old_password, &salt)?;
+        // ack 的口令知识证明必须对新口令派生（V 由新口令封存；对端 writer 用
+        // 其会话新口令派的 kverify 校验 MAC，用旧口令派生则对端永不锚定）。
+        let kverify = pw::derive_kverify(new_password, &salt)?;
         let ack = pw::build_ack(&kverify, &node_id, pwv.changed_at);
 
         let now_ms = system_now_ms();
@@ -378,6 +376,54 @@ pub(crate) fn password_unify_status(kernel: &Kernel) -> Result<PasswordUnifyStat
     })
 }
 
+// ── 密码考试（identity.md §4.2，A6）──────────────────────────────────────
+
+/// 密码考试状态查询返回。
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct PasswordExamStatus {
+    /// 本机最近一次真实密码验证时间戳（毫秒）。
+    pub last_password_auth: u64,
+    /// 是否已超考试间隔（7 天）未真实输密。
+    pub overdue: bool,
+}
+
+/// 真实密码验证成功后的时间戳刷新。挂在所有「用户亲手输入了正确密码」的
+/// 路径（unlock/init/recover/change/reset/unify）；bioSourced 解锁走
+/// `Kernel::unlock_bio_sourced` 不经此函数（只认密码输入，§4.2 冻结口径）。
+/// 失败仅记日志——时间戳缺失最坏后果是考试提前触发（偏安全侧）。
+pub(crate) fn record_password_auth(kernel: &Kernel) {
+    let Some(storage) = &kernel.storage else {
+        return;
+    };
+    let mut raw = storage.raw().clone();
+    let now = crate::p2p::node::system_now_ms() as u64;
+    if let Err(e) = pw::put_last_password_auth(&mut raw, now) {
+        log::error!("[pw-exam] record lastPasswordAuth failed: {e}");
+    }
+}
+
+/// 密码考试状态（`root_password_exam_status` 内核语义；锁定态/未解锁均可调——
+/// `Kernel::init` 已按活动身份预开存储）。
+///
+/// 键缺失 = 功能启用前的老账号：以首次查询时刻为初始值写入（§五.2「首次启用
+/// 以启用时刻为初始值，避免老用户当场被拦」），返回非 overdue。
+pub(crate) fn password_exam_status(kernel: &Kernel) -> Result<PasswordExamStatus> {
+    let storage = kernel.require_storage()?;
+    let now = crate::p2p::node::system_now_ms() as u64;
+    let last = match pw::get_last_password_auth(storage)? {
+        Some(ts) => ts,
+        None => {
+            let mut raw = storage.raw().clone();
+            pw::put_last_password_auth(&mut raw, now)?;
+            now
+        }
+    };
+    Ok(PasswordExamStatus {
+        last_password_auth: last,
+        overdue: now.saturating_sub(last) > pw::PASSWORD_EXAM_INTERVAL_MS,
+    })
+}
+
 fn has_ikey_for_epoch<S: crate::storage::StorageBackend>(
     storage: &S,
     epoch: u64,
@@ -432,9 +478,10 @@ pub(crate) fn maybe_heal(kernel: &mut Kernel, password: &str) -> Result<bool> {
         return Ok(false);
     }
 
-    // 执行 Heal 轮换并重新发布 V。
-    crate::kernel::epoch_ops::rotate(kernel, RotationReason::Heal)?;
-    publish_pw_value(kernel, password, RotationReason::Heal)?;
+    // 执行 Heal 轮换并重新发布 V：先发布（门控见新水位）再同一时戳轮换（§13.5 同源）。
+    let heal_now_ms = system_now_ms();
+    publish_pw_value_at(kernel, password, RotationReason::Heal, heal_now_ms)?;
+    crate::kernel::epoch_ops::rotate_at(kernel, RotationReason::Heal, heal_now_ms)?;
 
     Ok(true)
 }
@@ -464,6 +511,11 @@ impl Kernel {
     /// 查询口令统一状态（`root_password_unify_status` 内核语义）。
     pub fn password_unify_status(&self) -> Result<PasswordUnifyStatus> {
         password_unify_status(self)
+    }
+
+    /// 查询密码考试状态（`root_password_exam_status` 内核语义；锁定态可调）。
+    pub fn password_exam_status(&self) -> Result<PasswordExamStatus> {
+        password_exam_status(self)
     }
 
     /// unlock 后自动完成 ack 与懒发布。

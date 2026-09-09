@@ -622,7 +622,21 @@ fn publish_signs_draft_into_shared_key_domain() {
     let out = kernel.policy_publish(&org_id).unwrap();
     let doc_hash = out["policyDocHash"].as_str().expect("hash").to_string();
     assert_eq!(doc_hash.len(), 64);
-    assert_eq!(out["signer"], root_id, "签名主体 = 本机 root 身份（admin）");
+    // A16 签名面：signer = org_user_id（org-access 域公钥的 sha256hex），不再
+    // 出示 rootId；与本机成员条目 accessKey 派生值一致。
+    let my_uid = {
+        let s = kernel.__test_storage().expect("storage");
+        let rec = spark_core::org::OrganizationService::get_record(&s, &org_id)
+            .unwrap()
+            .unwrap();
+        rec.members
+            .iter()
+            .find(|m| m.root_id == root_id)
+            .and_then(|m| m.org_user_id())
+            .expect("创建即发布 accessKey")
+    };
+    assert_eq!(out["signer"], my_uid, "签名主体 = 本机 org_user_id（A16）");
+    assert_ne!(out["signer"], root_id, "公共面不出示 rootId");
     assert_eq!(out["degraded"], false, "创世哈希型组织不降级");
 
     // 发布件落 org:policydoc: 键域，携带 OrgSigSet 且 subject 绑定文档哈希
@@ -635,7 +649,15 @@ fn publish_signs_draft_into_shared_key_domain() {
     let sig_set = published.sig_set.clone().expect("sigSet attached");
     assert_eq!(sig_set.subject, doc_hash);
     assert_eq!(sig_set.signatures.len(), 1);
-    assert_eq!(sig_set.signatures[0].signer, root_id);
+    assert_eq!(sig_set.signatures[0].signer, my_uid);
+    // 名册快照双写：成员条目携带 orgUserId（验证端双键兼容的前提）。
+    let snapshot = sig_set.roster.snapshot.as_ref().expect("snapshot");
+    assert!(
+        snapshot
+            .iter()
+            .any(|m| m.org_user_id.as_deref() == Some(my_uid.as_str())),
+        "名册快照携带 orgUserId"
+    );
 
     // 入站合入裁决：同值重放 Accept/KeepCurrent；篡改 sigSet subject → Rejected
     let value = serde_json::to_value(&published).unwrap();
@@ -666,6 +688,374 @@ fn publish_rejects_non_admin_and_missing_chain() {
         .unwrap();
     let err = kernel.policy_publish(ORG).unwrap_err();
     assert!(err.to_string().contains("no policy chain"), "{err}");
+}
+
+// ------------------------------------------------------------------
+// disclosure_publish（A15 / membership §4.3：名册开放声明发布 + 公示延迟）
+// ------------------------------------------------------------------
+
+#[test]
+fn disclosure_publish_pub_delay_and_merge() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut kernel = fresh_kernel(dir.path());
+    let (_root_id, _) = init_identity(&mut kernel);
+    let org_id = create_community_with_anchor(&mut kernel, "阳光共同体");
+    let target = ORG; // 上级目标域（线形合法的创世哈希型 orgId 替身）
+
+    // 首个非全隐开放声明 = 暴露面扩大：未显式确认 → 如实报错，不落库
+    let err = kernel
+        .disclosure_publish(
+            &org_id,
+            target,
+            spark_core::policy::RosterTier::Representatives,
+            vec![],
+            vec![],
+            false,
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("暴露面扩大"), "{err}");
+    let storage = kernel.__test_storage().expect("storage");
+    assert!(
+        storage
+            .get(&spark_core::policy::disclosure_key(&org_id, target))
+            .unwrap()
+            .is_none(),
+        "未确认的扩大发布不得落库"
+    );
+
+    // 确认后发布：公示延迟（effectiveAt = updatedAt + 24h），version = 1
+    let out = kernel
+        .disclosure_publish(
+            &org_id,
+            target,
+            spark_core::policy::RosterTier::Representatives,
+            vec![],
+            vec!["finance:monthly@v1".to_string()],
+            true,
+        )
+        .unwrap();
+    assert_eq!(out["version"], 1);
+    assert_eq!(out["widening"], true);
+    let updated_at = out["updatedAt"].as_i64().expect("updatedAt");
+    assert_eq!(
+        out["effectiveAt"].as_i64().unwrap(),
+        updated_at + spark_core::policy::DISCLOSURE_PUB_PERIOD_MS,
+        "扩大方向公示延迟 24h 生效"
+    );
+    let hash = out["disclosureHash"].as_str().expect("hash").to_string();
+    assert_eq!(hash.len(), 64);
+
+    // 落库线形：sigSet.subject 绑定 disclosureHash，签名者 = org_user_id（A16）
+    let storage = kernel.__test_storage().expect("storage");
+    let raw = storage
+        .get(&spark_core::policy::disclosure_key(&org_id, target))
+        .unwrap()
+        .expect("disclosure stored");
+    let published: spark_core::policy::DisclosureRecord = serde_json::from_str(&raw).unwrap();
+    spark_core::policy::validate_disclosure(&published).expect("published record valid");
+    let sig_set = published.sig_set.clone().expect("sigSet attached");
+    assert_eq!(sig_set.subject, hash);
+    assert_eq!(sig_set.signatures.len(), 1);
+
+    // 公示延迟窗口内：求值不装配（发布即公示 ≠ 即时生效）
+    let view = spark_core::policy::eval_disclosure(&[&published], target, updated_at);
+    assert_eq!(view, spark_core::policy::DisclosureView::default());
+    // 生效时刻起：视图 = 声明内容
+    let view = spark_core::policy::eval_disclosure(
+        &[&published],
+        target,
+        updated_at + spark_core::policy::DISCLOSURE_PUB_PERIOD_MS,
+    );
+    assert_eq!(view.tier, spark_core::policy::RosterTier::Representatives);
+    assert_eq!(view.collections, vec!["finance:monthly@v1".to_string()]);
+
+    // 收窄（档位降回仅组织）即时生效：version 2，effectiveAt == updatedAt
+    let out2 = kernel
+        .disclosure_publish(
+            &org_id,
+            target,
+            spark_core::policy::RosterTier::OrgOnly,
+            vec![],
+            vec![],
+            false, // 收窄无需确认
+        )
+        .unwrap();
+    assert_eq!(out2["version"], 2);
+    assert_eq!(out2["widening"], false);
+    assert_eq!(
+        out2["effectiveAt"], out2["updatedAt"],
+        "收窄即时生效（无公示延迟）"
+    );
+
+    // 入站合入裁决（orgsync-data `org:disclosure:` 键分支同一函数）：
+    let storage = kernel.__test_storage().expect("storage");
+    let v2: spark_core::policy::DisclosureRecord = serde_json::from_str(
+        &storage
+            .get(&spark_core::policy::disclosure_key(&org_id, target))
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    let value = serde_json::to_value(&v2).unwrap();
+    // 同版本重放 → KeepCurrent（幂等不放大）
+    let verdict = spark_core::org::service::adjudicate_incoming_disclosure(
+        &storage, &org_id, target, &value,
+    )
+    .unwrap();
+    assert_eq!(verdict, spark_core::org::service::DisclosureMerge::KeepCurrent);
+    // 篡改 sigSet subject（搬签）→ Rejected
+    let mut tampered = value.clone();
+    tampered["sigSet"]["subject"] = json!("00".repeat(32));
+    let verdict = spark_core::org::service::adjudicate_incoming_disclosure(
+        &storage, &org_id, target, &tampered,
+    )
+    .unwrap();
+    assert_eq!(verdict, spark_core::org::service::DisclosureMerge::Rejected);
+    // 键域与记录错位（targetDomain 不符）→ Rejected
+    let verdict = spark_core::org::service::adjudicate_incoming_disclosure(
+        &storage,
+        &org_id,
+        "org_ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        &value,
+    )
+    .unwrap();
+    assert_eq!(verdict, spark_core::org::service::DisclosureMerge::Rejected);
+    // 高版本发布件（取首个声明 v1 对本地 v2 属旧版 → KeepCurrent）
+    let v1_value = serde_json::to_value(&published).unwrap();
+    let verdict = spark_core::org::service::adjudicate_incoming_disclosure(
+        &storage, &org_id, target, &v1_value,
+    )
+    .unwrap();
+    assert_eq!(
+        verdict,
+        spark_core::org::service::DisclosureMerge::KeepCurrent,
+        "旧版本入站不覆盖本地新版（version LWW）"
+    );
+    // 全新键域的 Accept：换 targetDomain 的 v1 发布件本地缺席 → Accept
+    let fresh_target =
+        "org_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    let out3 = kernel
+        .disclosure_publish(
+            &org_id,
+            fresh_target,
+            spark_core::policy::RosterTier::OrgOnly,
+            vec![],
+            vec![],
+            false,
+        )
+        .unwrap();
+    assert_eq!(out3["widening"], false, "全隐首声明不算扩大");
+    let storage = kernel.__test_storage().expect("storage");
+    let v1_fresh: spark_core::policy::DisclosureRecord = serde_json::from_str(
+        &storage
+            .get(&spark_core::policy::disclosure_key(&org_id, fresh_target))
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    // 未发布前的本地缺席场景：先删掉再裁决（Accept 路径）
+    let mut storage2 = kernel.__test_storage().expect("storage");
+    storage2
+        .delete(&spark_core::policy::disclosure_key(&org_id, fresh_target))
+        .unwrap();
+    let verdict = spark_core::org::service::adjudicate_incoming_disclosure(
+        &storage2,
+        &org_id,
+        fresh_target,
+        &serde_json::to_value(&v1_fresh).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(verdict, spark_core::org::service::DisclosureMerge::Accept);
+
+    kernel.shutdown().unwrap();
+}
+
+#[test]
+fn disclosure_publish_rejects_bad_org_id_and_missing_chain() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut kernel = fresh_kernel(dir.path());
+    init_identity(&mut kernel);
+
+    let err = kernel
+        .disclosure_publish(
+            "org_xyz",
+            ORG,
+            spark_core::policy::RosterTier::OrgOnly,
+            vec![],
+            vec![],
+            false,
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("invalid orgId"), "{err}");
+    // 无策略链（legacy 组织未发布创世记录）→ 如实报错
+    let err = kernel
+        .disclosure_publish(
+            ORG,
+            "org_ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            spark_core::policy::RosterTier::OrgOnly,
+            vec![],
+            vec![],
+            false,
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("no policy chain"), "{err}");
+}
+
+// ------------------------------------------------------------------
+// accept_policy_publish（A17 / membership §4.5：准入策略声明发布 + 公示延迟）
+// ------------------------------------------------------------------
+
+fn accept_rule(cred_type: &str, issuer_trust: &str) -> spark_core::policy::AcceptCredentialRule {
+    spark_core::policy::AcceptCredentialRule {
+        cred_type: cred_type.to_string(),
+        issuer_trust: issuer_trust.to_string(),
+    }
+}
+
+#[test]
+fn accept_policy_publish_pub_delay_and_merge() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut kernel = fresh_kernel(dir.path());
+    let (_root_id, _) = init_identity(&mut kernel);
+    let org_id = create_community_with_anchor(&mut kernel, "阳光共同体");
+
+    // 首个非空准入声明 = 准入面扩大：未显式确认 → 如实报错，不落库
+    let err = kernel
+        .accept_policy_publish(&org_id, vec![accept_rule("member", ORG)], false)
+        .unwrap_err();
+    assert!(err.to_string().contains("准入面扩大"), "{err}");
+    let storage = kernel.__test_storage().expect("storage");
+    assert!(
+        storage
+            .get(&spark_core::policy::accept_policy_key(&org_id))
+            .unwrap()
+            .is_none(),
+        "未确认的扩大发布不得落库"
+    );
+
+    // 确认后发布：公示延迟（effectiveAt = updatedAt + 24h），version = 1
+    let out = kernel
+        .accept_policy_publish(&org_id, vec![accept_rule("member", ORG)], true)
+        .unwrap();
+    assert_eq!(out["version"], 1);
+    assert_eq!(out["widening"], true);
+    let updated_at = out["updatedAt"].as_i64().expect("updatedAt");
+    assert_eq!(
+        out["effectiveAt"].as_i64().unwrap(),
+        updated_at + spark_core::policy::ACCEPT_POLICY_PUB_PERIOD_MS,
+        "首个策略声明公示延迟 24h 生效"
+    );
+    let hash = out["acceptPolicyHash"].as_str().expect("hash").to_string();
+    assert_eq!(hash.len(), 64);
+
+    // 落库线形：sigSet.subject 绑定 acceptPolicyHash；公示延迟窗口内不采信
+    let storage = kernel.__test_storage().expect("storage");
+    let raw = storage
+        .get(&spark_core::policy::accept_policy_key(&org_id))
+        .unwrap()
+        .expect("accept policy stored");
+    let published: spark_core::policy::AcceptPolicyRecord = serde_json::from_str(&raw).unwrap();
+    spark_core::policy::validate_accept_policy(&published).expect("published record valid");
+    assert_eq!(published.sig_set.as_ref().expect("sigSet").subject, hash);
+    assert!(
+        spark_core::policy::effective_accept_policy(Some(&published), updated_at).is_none(),
+        "公示延迟窗口内不采信（发布即公示 ≠ 即时生效）"
+    );
+    assert!(
+        spark_core::policy::effective_accept_policy(
+            Some(&published),
+            updated_at + spark_core::policy::ACCEPT_POLICY_PUB_PERIOD_MS,
+        )
+        .is_some(),
+        "生效时刻起采信"
+    );
+
+    // 收窄（移除全部规则）即时生效：version 2，effectiveAt == updatedAt
+    let out2 = kernel
+        .accept_policy_publish(&org_id, vec![], false)
+        .unwrap();
+    assert_eq!(out2["version"], 2);
+    assert_eq!(out2["widening"], false);
+    assert_eq!(
+        out2["effectiveAt"], out2["updatedAt"],
+        "收窄即时生效（无公示延迟）"
+    );
+
+    // 入站合入裁决（orgsync-data `org:accept:` 键分支同一函数）：
+    let storage = kernel.__test_storage().expect("storage");
+    let v2: spark_core::policy::AcceptPolicyRecord = serde_json::from_str(
+        &storage
+            .get(&spark_core::policy::accept_policy_key(&org_id))
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    let value = serde_json::to_value(&v2).unwrap();
+    // 同版本重放 → KeepCurrent（幂等不放大）
+    let verdict = spark_core::org::service::adjudicate_incoming_accept_policy(
+        &storage, &org_id, &value,
+    )
+    .unwrap();
+    assert_eq!(
+        verdict,
+        spark_core::org::service::AcceptPolicyMerge::KeepCurrent
+    );
+    // 篡改 sigSet subject（搬签）→ Rejected
+    let mut tampered = value.clone();
+    tampered["sigSet"]["subject"] = json!("00".repeat(32));
+    let verdict = spark_core::org::service::adjudicate_incoming_accept_policy(
+        &storage, &org_id, &tampered,
+    )
+    .unwrap();
+    assert_eq!(verdict, spark_core::org::service::AcceptPolicyMerge::Rejected);
+    // 键域与记录错位（orgId 不符）→ Rejected
+    let verdict = spark_core::org::service::adjudicate_incoming_accept_policy(
+        &storage,
+        "org_ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        &value,
+    )
+    .unwrap();
+    assert_eq!(verdict, spark_core::org::service::AcceptPolicyMerge::Rejected);
+    // 旧版本入站不覆盖本地新版（version LWW）
+    let v1_value = serde_json::to_value(&published).unwrap();
+    let verdict = spark_core::org::service::adjudicate_incoming_accept_policy(
+        &storage, &org_id, &v1_value,
+    )
+    .unwrap();
+    assert_eq!(
+        verdict,
+        spark_core::org::service::AcceptPolicyMerge::KeepCurrent
+    );
+    // 本地缺席场景 → Accept（先删掉再裁决）
+    let mut storage2 = kernel.__test_storage().expect("storage");
+    storage2
+        .delete(&spark_core::policy::accept_policy_key(&org_id))
+        .unwrap();
+    let verdict = spark_core::org::service::adjudicate_incoming_accept_policy(
+        &storage2, &org_id, &v1_value,
+    )
+    .unwrap();
+    assert_eq!(verdict, spark_core::org::service::AcceptPolicyMerge::Accept);
+
+    kernel.shutdown().unwrap();
+}
+
+#[test]
+fn accept_policy_publish_rejects_bad_org_id_and_missing_chain() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut kernel = fresh_kernel(dir.path());
+    init_identity(&mut kernel);
+
+    let err = kernel
+        .accept_policy_publish("org_xyz", vec![], false)
+        .unwrap_err();
+    assert!(err.to_string().contains("invalid orgId"), "{err}");
+    // 无策略链（legacy 组织未发布创世记录）→ 如实报错
+    let err = kernel
+        .accept_policy_publish(ORG, vec![], false)
+        .unwrap_err();
+    assert!(err.to_string().contains("no policy chain"), "{err}");
+    // 空规则首声明不算扩大（无需确认即可发布）——但也需真实组织与策略链
 }
 
 #[test]

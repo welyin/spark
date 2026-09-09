@@ -600,8 +600,8 @@ impl OrgSyncContext {
         }
     }
 
-    /// 网关职责检测（org.md §14 + O1 账号角色模型）：本机账号是**活跃网关**
-    /// （显式指定或缺省全员候选的确定性轮换活跃集，见
+    /// 网关职责检测（org.md §14 + O1 账号角色模型 + network §4.2）：本机账号
+    /// 是**活跃网关**（全员候选计分推导活跃集，见
     /// [`crate::org::roles::is_gateway_active`]）且持有 orgSecret → 在
     /// `org_members_dht_key` 上 start_providing + 发布成员提示记录。
     /// 节点侧幂等去重，每 tick 调用一次即可；周期重发由节点挂 tick 计数完成。
@@ -611,7 +611,7 @@ impl OrgSyncContext {
         let now = self.now();
         let keys: Vec<String> = records
             .iter()
-            .filter(|record| crate::org::roles::is_gateway_active(record, root_id, now))
+            .filter(|record| crate::org::roles::is_gateway_active(&self.storage, record, root_id, now))
             .filter_map(|record| record.org_secret().map(org_members_dht_key))
             .collect();
         if keys.is_empty() {
@@ -644,10 +644,10 @@ impl OrgSyncContext {
     /// [`Self::refresh_gateway_providing`] 同落点：
     ///
     /// - **持钥节点**（本机为成员且 extra 中有可解密的 `orgRootSecret`）：无缓存
-    ///   记录 / 展示名或网关变更 / 到达重发间隔时，以 `seq+1` 新签记录 →
+    ///   记录 / 展示名或履职集变更 / 到达重发间隔时，以 `seq+1` 新签记录 →
     ///   `dht_put_record`（key = sha256(orgPublicKey) 字节，TTL 8h）→
     ///   gossip 扩散（spark-overlay 信封 `type='org-address'`）→ 沉淀本地缓存
-    /// - **非持钥网关**（本机在 `gateways` 列表但不持根私钥）：按同一间隔重发
+    /// - **非持钥网关**（本机在履职集但不持根私钥）：按同一间隔重发
     ///   缓存中仍有效的记录（不重签、不 gossip）
     /// - 展示名取 `orgDisplayName` 覆盖，缺省用组织名；全部失败静默（下轮重试）
     async fn refresh_org_address_publishing(&self, root_id: &str) {
@@ -664,8 +664,8 @@ impl OrgSyncContext {
                 continue;
             };
             let signing = oa::org_root_signing_key(&record);
-            // O1：活跃网关判定（显式指定或缺省活跃集自荐）
-            let is_gateway = crate::org::roles::is_gateway_active(&record, root_id, now);
+            // O1 + A9：活跃网关判定（全员候选计分推导活跃集）
+            let is_gateway = crate::org::roles::is_gateway_active(&self.storage, &record, root_id, now);
             if signing.is_none() && !is_gateway {
                 continue;
             }
@@ -688,8 +688,13 @@ impl OrgSyncContext {
             let cached = oa::read_cached_org_address_record(&self.storage, &org_address);
 
             if let Some(signing_key) = signing {
+                // A9（network §4.2）：地址记录 gateways = 当前计分推导履职集
+                // （线形不变、语义从「指定名单」转为「履职集快照」）——发送方
+                // 据地址记录解析的是目标组织当下实际履职的网关
+                let active_gateways =
+                    crate::org::roles::gateway_active_set(&self.storage, &record, Some(root_id), now);
                 let changed = cached.as_ref().is_none_or(|c| {
-                    c.gateways != record.gateways || c.display_name != display_name
+                    c.gateways != active_gateways || c.display_name != display_name
                 });
                 if cached.is_none() || changed || due {
                     let seq = cached.as_ref().map(|c| c.seq).unwrap_or(0) + 1;
@@ -697,7 +702,7 @@ impl OrgSyncContext {
                         &signing_key,
                         &record.org_id,
                         display_name,
-                        record.gateways.clone(),
+                        active_gateways,
                         seq,
                         now,
                         oa::ORG_ADDRESS_RECORD_DEFAULT_TTL_MS,

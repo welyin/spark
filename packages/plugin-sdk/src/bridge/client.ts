@@ -436,6 +436,53 @@ export function connectPluginBridge(options: ConnectPluginBridgeOptions): Promis
           call('identity', 'verify', [payload, signature, publicKey]) as Promise<{ valid: boolean }>
       },
       messages: {
+        // ── IM 数据面（A18，communication §4.1）：space 由桥绑定注入；
+        // 权限（messages:read/write）由桥 dispatcher 强制
+        conversations: () =>
+          call('messages', 'conversations', []) as Promise<import('../index').PluginConversation[]>,
+        list: (convId) =>
+          call('messages', 'list', [convId]) as Promise<import('../index').PluginChatMessage[]>,
+        send: (convId, text, quote, messageId) =>
+          call('messages', 'send', [convId, text, quote ?? null, messageId ?? null]) as Promise<import('../index').PluginChatMessage>,
+        recall: (convId, messageId) =>
+          call('messages', 'recall', [convId, messageId]) as Promise<{ success: boolean }>,
+        markConversationRead: (convId) =>
+          call('messages', 'markConversationRead', [convId]) as Promise<{ success: boolean }>,
+        // 订阅新消息：经 events.subscribe 通道订阅 ChatReceived（内核
+        // P2pEvent::ChatReceived → 壳层 p2p-event → 宿主桥按绑定 space 过滤转发）
+        onNewMessage: async (handler) => {
+          await events.subscribe('ChatReceived', handler as PluginEventHandler);
+        },
+        onStatus: async (handler) => {
+          await events.subscribe('ChatStatus', handler as PluginEventHandler);
+        },
+        onConversationsSynced: async (handler) => {
+          await events.subscribe('ConversationsSynced', handler as PluginEventHandler);
+        },
+        onPeerPresence: async (handler) => {
+          const wrapped = (payload: unknown): void => {
+            handler(payload as import('../index').PluginPeerPresenceEvent);
+          };
+          await events.subscribe('PeerConnected', wrapped);
+          await events.subscribe('PeerDisconnected', wrapped);
+        },
+        // A19 写面补全（等语义移植；权限由桥 dispatcher 强制）
+        ensureDirect: (peerId, title) =>
+          call('messages', 'ensureDirect', [peerId, title]) as Promise<import('../index').PluginConversation>,
+        resend: (convId, messageId) =>
+          call('messages', 'resend', [convId, messageId]) as Promise<import('../index').PluginChatMessage>,
+        deleteMessage: (convId, messageId) =>
+          call('messages', 'deleteMessage', [convId, messageId]) as Promise<{ success: boolean }>,
+        setDraft: (convId, draft) =>
+          call('messages', 'setDraft', [convId, draft]) as Promise<{ success: boolean }>,
+        togglePin: (convId) =>
+          call('messages', 'togglePin', [convId]) as Promise<{ success: boolean }>,
+        toggleMute: (convId) =>
+          call('messages', 'toggleMute', [convId]) as Promise<{ success: boolean }>,
+        clear: (convId) =>
+          call('messages', 'clear', [convId]) as Promise<{ success: boolean }>,
+        deleteConversation: (convId) =>
+          call('messages', 'deleteConversation', [convId]) as Promise<{ success: boolean }>,
         // pluginId/space 由桥按已认证身份注入，插件侧不传（自报一律被忽略）
         sendAppMessage: (payload: Record<string, unknown>, card?: PluginAppMessageCard) =>
           call('messages', 'sendAppMessage', card === undefined ? [payload] : [payload, card]) as Promise<PluginAppMessage>,
@@ -468,14 +515,77 @@ export function connectPluginBridge(options: ConnectPluginBridgeOptions): Promis
         sendResponse: (convId, contactId, displayName, messageId, text) =>
           call('messages', 'sendResponse', [convId, contactId, displayName, messageId, text])
       },
-      // 通讯录只读模块（social-feed §9.4 contact:read；权限由桥 dispatcher 强制）
+      // 通讯录模块（social-feed §9.4 contact:read 只读门面 + A18 §4.1 数据面；
+      // 权限 contacts:read/contacts:write 由桥 dispatcher 强制；space 由桥绑定注入）
       contacts: {
         listFriends: () =>
           call('contacts', 'listFriends', []) as Promise<import('../index').PluginFriendSummary[]>,
         listGroups: () =>
           call('contacts', 'listGroups', []) as Promise<import('../index').PluginContactGroup[]>,
         listTags: () =>
-          call('contacts', 'listTags', []) as Promise<import('../index').PluginContactTag[]>
+          call('contacts', 'listTags', []) as Promise<import('../index').PluginContactTag[]>,
+        overview: () =>
+          call('contacts', 'overview', []) as Promise<import('../index').PluginContactOverview>,
+        updateProfile: (rootId, patch) =>
+          call('contacts', 'updateProfile', [rootId, patch]) as Promise<{ success: boolean }>,
+        setBlocked: (rootId, blocked) =>
+          call('contacts', 'setBlocked', [rootId, blocked]) as Promise<{ success: boolean }>,
+        removeFriend: (rootId, block) =>
+          call('contacts', 'removeFriend', block === undefined ? [rootId] : [rootId, block]) as Promise<{ success: boolean }>,
+        sendRequest: (input) =>
+          call('contacts', 'sendRequest', [input]) as Promise<import('../index').PluginFriendRequest>,
+        replyRequest: (requestId, text) =>
+          call('contacts', 'replyRequest', [requestId, text]) as Promise<import('../index').PluginFriendRequest>,
+        askRequest: (requestId, text) =>
+          call('contacts', 'askRequest', [requestId, text]) as Promise<import('../index').PluginFriendRequest>,
+        resolveRequest: (requestId, accept, permission) =>
+          call('contacts', 'resolveRequest', [requestId, accept, permission]) as Promise<{ success: boolean }>,
+        tagCreate: (id, name) =>
+          call('contacts', 'tagCreate', [id, name]) as Promise<import('../index').PluginContactTag>,
+        tagRename: (tagId, name) =>
+          call('contacts', 'tagRename', [tagId, name]) as Promise<{ success: boolean }>,
+        tagDelete: (tagId) =>
+          call('contacts', 'tagDelete', [tagId]) as Promise<{ success: boolean }>,
+        groupCreate: (id, name) =>
+          call('contacts', 'groupCreate', [id, name]) as Promise<import('../index').PluginContactGroup>,
+        groupRename: (groupId, name) =>
+          call('contacts', 'groupRename', [groupId, name]) as Promise<{ success: boolean }>,
+        groupDelete: (groupId) =>
+          call('contacts', 'groupDelete', [groupId]) as Promise<{ success: boolean }>,
+        groupMove: (groupId, toIndex) =>
+          call('contacts', 'groupMove', [groupId, toIndex]) as Promise<{ success: boolean }>,
+        setGroup: (rootId, groupId) =>
+          call('contacts', 'setGroup', [rootId, groupId]) as Promise<{ success: boolean }>,
+        orgGroupCreate: (parentId, id, name) =>
+          call('contacts', 'orgGroupCreate', [parentId, id, name]) as Promise<import('../index').PluginOrgGroupNode | null>,
+        orgGroupRename: (id, name) =>
+          call('contacts', 'orgGroupRename', [id, name]) as Promise<{ success: boolean }>,
+        orgGroupDelete: (id) =>
+          call('contacts', 'orgGroupDelete', [id]) as Promise<{ success: boolean }>,
+        orgGroupMove: (id, toIndex, newParentId) =>
+          call('contacts', 'orgGroupMove', newParentId === undefined ? [id, toIndex] : [id, toIndex, newParentId]) as Promise<{ success: boolean }>,
+        // 变更订阅：经 events.subscribe 通道订阅 ContactsSynced + OrgSynced
+        // （轻量通知，收到后重读 overview 收敛，与 data.onChange 同口径）
+        onChanged: async (handler) => {
+          await events.subscribe('ContactsSynced', handler as PluginEventHandler);
+          await events.subscribe('OrgSynced', handler as PluginEventHandler);
+        },
+        onRequestChanged: async (handler) => {
+          type RequestPayload = { request?: import('../index').PluginFriendRequest };
+          const wrap = (kind: 'FriendRequestReceived' | 'FriendRequestSent' | 'FriendRequestAccepted') =>
+            (payload: unknown): void => {
+              const request = (payload as RequestPayload | undefined)?.request;
+              if (request) {
+                handler({ kind, request });
+              }
+            };
+          await events.subscribe('FriendRequestReceived', wrap('FriendRequestReceived'));
+          await events.subscribe('FriendRequestSent', wrap('FriendRequestSent'));
+          await events.subscribe('FriendRequestAccepted', wrap('FriendRequestAccepted'));
+        },
+        onFriendProfileUpdated: async (handler) => {
+          await events.subscribe('FriendProfileUpdated', handler as PluginEventHandler);
+        }
       },
       // 社交投递模块（social-feed §9.1 sdk.feed；deliver 需 feed:deliver 权限，
       // onReceive/pull 接收侧免权限；topic 前缀出站由桥 dispatcher 校验）
@@ -622,7 +732,9 @@ export function connectPluginBridge(options: ConnectPluginBridgeOptions): Promis
                       return;
                     }
                     settled = true;
-                    void events.unsubscribe(event);
+                    // fire-and-forget 退订：宿主可能已销毁（测试/熔断竞态），
+                    // 拒绝静默吞掉，避免游离 Promise 未处理拒绝
+                    void events.unsubscribe(event).catch(() => {});
                     if (c.status === 0) {
                       // status:0 哨兵 = 内核侧请求失败（错误文案在 text 中）
                       reject(new Error(c.text));
@@ -640,8 +752,8 @@ export function connectPluginBridge(options: ConnectPluginBridgeOptions): Promis
                 },
                 cancel() {
                   // 取消：退订桥事件；若 done 尚未 settle，以取消语义拒绝之
-                  // （调用方 await done 得以结束，不悬挂）
-                  void events.unsubscribe(event);
+                  // （调用方 await done 得以结束，不悬挂）。退订拒绝静默（同上行注）
+                  void events.unsubscribe(event).catch(() => {});
                   if (!settled) {
                     doneReject?.(new Error('fetchStream cancelled'));
                   }

@@ -9,13 +9,17 @@
   - 变更订阅走 sdk.affairs.onChange（AffairChanged 事件驱动重载本事务），
     手动刷新/提交后重载仍保留为兜底（通知非可靠队列）；
   - 操作者身份 id 为协议 actor（本参考实现 = 操作方插件域身份，非个人身份）。
+
+  窗口化适配（ui-architecture §4.2）：元信息 el-descriptions 窄窗单列堆叠
+  （ui-layout.isNarrowLayout）；本组件在 el-drawer 内渲染，超高时间线由抽屉
+  自带滚动体承载，根节点不设 height/overflow。
 -->
 <template>
   <div class="affair-detail" v-loading="loading">
     <el-alert v-if="message" :title="message" :type="messageType" :closable="false" show-icon class="message" />
 
     <template v-if="detail">
-      <el-descriptions :column="2" border size="small" class="rules">
+      <el-descriptions :column="isNarrowLayout ? 1 : 2" border size="small" class="rules">
         <el-descriptions-item label="发起人">{{ shortId(detail.originator) }}</el-descriptions-item>
         <el-descriptions-item label="发起时间">{{ formatDate(detail.createdAt) }}（声明值）</el-descriptions-item>
         <el-descriptions-item label="通过阈值">{{ Math.round(detail.rules.passThreshold * 100) }}%</el-descriptions-item>
@@ -229,6 +233,7 @@
 import { computed, onMounted, ref } from 'vue';
 import type { AffairRefRel } from '../../packages/plugin-sdk/src/affair-wire';
 import type { AffairsService } from './service';
+import { isNarrowLayout } from './ui-layout';
 import {
   canSubmitContribution,
   canVote,
@@ -549,6 +554,9 @@ onMounted(async () => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  /* 窄窗标题与操作区（身份开关 + 计数 + 刷新）换行堆叠 */
+  flex-wrap: wrap;
+  row-gap: 4px;
 }
 .ladder-card h4,
 .composer-card h4 {
@@ -580,6 +588,8 @@ onMounted(async () => {
   gap: 8px;
   font-size: 12px;
   color: var(--el-text-color-secondary);
+  /* 窄窗多标签 + 长身份 id 换行堆叠 */
+  flex-wrap: wrap;
 }
 .op-content {
   margin: 6px 0;
@@ -589,6 +599,8 @@ onMounted(async () => {
 .op-actions {
   display: flex;
   gap: 8px;
+  /* 窄窗赞成/反对/弃权三钮换行 */
+  flex-wrap: wrap;
 }
 .ref-tag {
   margin-right: 6px;
@@ -598,8 +610,12 @@ onMounted(async () => {
   gap: 8px;
   align-items: center;
   margin-bottom: 8px;
+  /* 窄窗组织 id 输入框与两个按钮换行堆叠 */
+  flex-wrap: wrap;
 }
 .effects-org-input {
+  flex: 1 1 200px;
+  min-width: 0;
   max-width: 360px;
 }
 </style>

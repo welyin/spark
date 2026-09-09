@@ -9,6 +9,10 @@
 //! 注：rust-libp2p relay client 在 circuit listener 存活期间会自动续期
 //! 预约，无需实现续期逻辑；只需在 `ReservationReqFailed`/连接断开时移除
 //! 并重选候选（§6 WP1.4）。
+//!
+//! A44 tier4 收敛：已连接全集兜底会对无 hop 能力的 peer 周期性发起预约，
+//! 对端明确回 Unsupported（无 relay hop 能力）后记本地黑名单抑制重试——
+//! 见 [`crate::p2p::relay_blacklist`]（本地观测优化，非协议惩罚）。
 
 use libp2p::multiaddr::Protocol;
 use libp2p::{Multiaddr, PeerId, autonat, kad};
@@ -78,6 +82,8 @@ impl<S: StorageBackend> EventLoop<S> {
     /// ③④ 既有兜底（保留原行为）：其他已连接 + hop，再已连接全集。
     /// 跨层不混排；层内按 peer_activity last_seen 降序、`stability_low` 垫底；
     /// 目标数沿用 [`RELAY_RESERVATION_TARGET`]（1 主 1 备）。
+    /// 出口统一过滤：Unsupported 黑名单（A44，[`crate::p2p::relay_blacklist`]）
+    /// 命中的 peer 不入候选，已 in-flight / 已预约的排除。
     pub(super) fn select_relay_candidates(&mut self) -> Vec<PeerId> {
         let connected = self.connected_peers();
         let is_hop = |p: &PeerId| {
@@ -118,6 +124,14 @@ impl<S: StorageBackend> EventLoop<S> {
         let tier4: Vec<PeerId> = connected.iter().filter(|p| !is_hop(p)).copied().collect();
 
         let mut out = assemble_relay_tiers([tier1, tier2, tier3, tier4], &last_seen, &is_low);
+        // Unsupported 黑名单抑制（A44）：明确回「无 hop 能力」的 peer 在 TTL 内
+        // 不再发起预约；存储读失败不误伤（返回 false 照常入选）
+        let now = self.now();
+        {
+            let mut store =
+                crate::p2p::relay_blacklist::RelayUnsupportedStore::new(&mut self.storage);
+            out.retain(|p| !store.is_blocked(&p.to_base58(), now).unwrap_or(false));
+        }
         // 排除已 in-flight 或已预约的
         out.retain(|p| {
             !self.relay_reservations_inflight.contains(p)
@@ -151,11 +165,18 @@ impl<S: StorageBackend> EventLoop<S> {
             return;
         }
         eprintln!("[p2p] relay reservation request -> {relay_peer} addr={circuit_addr}");
-        if self.swarm.listen_on(circuit_addr).is_err() {
-            self.emit(super::P2pEvent::Warning(format!(
-                "relay listen failed for {relay_peer}"
-            )));
-            return;
+        match self.swarm.listen_on(circuit_addr) {
+            Ok(listener_id) => {
+                // 登记 listener_id → relay peer：被拒/失败的 ListenerClosed
+                // addresses 为空，反查只能走这条映射（见字段注释）
+                self.circuit_listeners.insert(listener_id, relay_peer);
+            }
+            Err(_) => {
+                self.emit(super::P2pEvent::Warning(format!(
+                    "relay listen failed for {relay_peer}"
+                )));
+                return;
+            }
         }
         self.relay_reservations_inflight.insert(relay_peer);
     }
@@ -170,6 +191,13 @@ impl<S: StorageBackend> EventLoop<S> {
         eprintln!("[p2p] relay reservation accepted from {relay_peer}");
         // 预约确认：结束 in-flight
         self.relay_reservations_inflight.remove(&relay_peer);
+        // 成功证据解锁（A44）：曾被 Unsupported 黑名单的 peer 预约成功 =
+        // hop 能力已就位（如对端升级开启 relay server），立即移出黑名单
+        {
+            let mut store =
+                crate::p2p::relay_blacklist::RelayUnsupportedStore::new(&mut self.storage);
+            let _ = store.unblock(&relay_peer.to_base58());
+        }
         let circuit_addr = self.build_circuit_address(relay_peer);
         let now = self.now();
         self.relay_reservations
@@ -313,16 +341,48 @@ impl<S: StorageBackend> EventLoop<S> {
     /// 没有 ReservationReqFailed/Denied 事件，预约被拒/失败/过期由 transport
     /// 关闭对应电路监听上行。此处清理该 relay 的预约与 in-flight 标记使其可
     /// 被重选；重选交给周期 tick 的 ensure_relay_reservations（不引入新定时器）。
-    pub(super) fn on_circuit_listener_closed(&mut self, addresses: &[Multiaddr]) {
+    ///
+    /// 归属 relay 反查双通道：错误关闭（被拒/失败，如配额满载
+    /// ResourceLimitExceeded）时 `addresses` 为**空集**（配额测试实测），
+    /// 必须经 `listener_id` 查 [`EventLoop::circuit_listeners`]；正常关闭
+    /// 路径保留地址解析兜底。
+    ///
+    /// A44：关闭原因为 `ReserveError::Unsupported`（对端无 hop 能力，预约
+    /// 子流协商失败）时记本地黑名单长退避——这是「能力不存在」的确定性信号；
+    /// 配额拒绝、超时等其它失败不进黑名单，保持既有重试语义（见
+    /// [`crate::p2p::relay_blacklist`] 头注的诚实口径）。
+    pub(super) fn on_circuit_listener_closed(
+        &mut self,
+        listener_id: libp2p::core::transport::ListenerId,
+        addresses: &[Multiaddr],
+        reason: &Result<(), std::io::Error>,
+    ) {
+        let mut peers: Vec<PeerId> = Vec::new();
+        if let Some(relay_peer) = self.circuit_listeners.remove(&listener_id) {
+            peers.push(relay_peer);
+        }
         for addr in addresses {
-            let Some(relay_peer) = circuit_addr_relay_peer(addr) else {
-                continue;
-            };
+            if let Some(relay_peer) = circuit_addr_relay_peer(addr) {
+                peers.push(relay_peer);
+            }
+        }
+        peers.dedup();
+        let unsupported = crate::p2p::relay_blacklist::is_unsupported_hop_close(reason);
+        for relay_peer in peers {
             let was_inflight = self.relay_reservations_inflight.remove(&relay_peer);
             let before = self.relay_reservations.len();
             self.relay_reservations
                 .retain(|r| r.relay_peer != relay_peer);
-            if was_inflight || self.relay_reservations.len() != before {
+            let attempted = was_inflight || self.relay_reservations.len() != before;
+            if unsupported && attempted {
+                // 我方确曾发起预约且对端回 Unsupported → 记黑名单（TTL 内候选
+                // 选择不再返回该 peer）；存储写失败仅丢失本次观测，静默即可
+                let now = self.now();
+                let mut store =
+                    crate::p2p::relay_blacklist::RelayUnsupportedStore::new(&mut self.storage);
+                let _ = store.block(&relay_peer.to_base58(), now);
+            }
+            if attempted {
                 self.emit(super::P2pEvent::Warning(format!(
                     "relay circuit listener closed for {relay_peer}"
                 )));
@@ -358,7 +418,10 @@ impl<S: StorageBackend> EventLoop<S> {
                     let local = self.self_peer_id();
                     self.swarm.behaviour_mut().relay_server =
                         libp2p::swarm::behaviour::toggle::Toggle::from(Some(
-                            crate::p2p::behaviour::build_relay_server(local),
+                            crate::p2p::behaviour::build_relay_server(
+                                local,
+                                self.relay_max_reservations,
+                            ),
                         ));
                 }
                 // 预约响应地址来源：登记 external address（含判定地址本身）

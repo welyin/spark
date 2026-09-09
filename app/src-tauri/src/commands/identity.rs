@@ -71,8 +71,15 @@ pub(crate) fn unlock_inner(
     kernel: &mut Kernel,
     password: &str,
     root_id: Option<&str>,
+    bio_sourced: bool,
 ) -> Result<RootIdResultDto, String> {
-    let root_id = kernel.unlock(password, root_id).map_err(err)?;
+    // 密码考试（identity.md §4.2）：生物识别取回 blob 口令的解锁不刷新
+    // lastPasswordAuth（只认真实密码输入）。
+    let root_id = if bio_sourced {
+        kernel.unlock_bio_sourced(password, root_id).map_err(err)?
+    } else {
+        kernel.unlock(password, root_id).map_err(err)?
+    };
     Ok(RootIdResultDto { root_id })
 }
 
@@ -230,9 +237,15 @@ pub async fn root_unlock(
     state: tauri::State<'_, KernelState>,
     password: String,
     root_id: Option<String>,
+    bio_sourced: Option<bool>,
 ) -> Result<RootIdResultDto, String> {
     run_kernel(state, move |kernel| {
-        unlock_inner(kernel, &password, root_id.as_deref())
+        unlock_inner(
+            kernel,
+            &password,
+            root_id.as_deref(),
+            bio_sourced.unwrap_or(false),
+        )
     })
     .await
 }

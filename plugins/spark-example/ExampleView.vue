@@ -51,7 +51,9 @@
       />
 
       <div v-if="activeOrg" class="meta-row">
-        <el-tag type="info">当前 RootID: {{ currentRootId || '-' }}</el-tag>
+        <el-tag type="info" class="root-id-tag">
+          <span class="root-id-text">当前 RootID: {{ currentRootId || '-' }}</span>
+        </el-tag>
         <el-tag :type="canPost ? 'danger' : 'warning'">
           {{ canPost ? '组织管理员' : '组织成员' }}
         </el-tag>
@@ -719,9 +721,23 @@ h3 {
   margin-top: 12px;
 }
 
+/* 窄窗（窗口最小宽 320）下两个 tag 放不下时换行，不横向挤出卡片 */
 .meta-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
+}
+
+/* RootID 是长字符串：tag 限宽 + 内层文本截断省略
+   （text-overflow 对 el-tag 的 inline-flex 容器不生效，须落在内层 span 上） */
+.root-id-tag {
+  max-width: 100%;
+}
+
+.root-id-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .counter {
@@ -760,6 +776,18 @@ h3 {
   font-size: 12px;
 }
 
+/* 作者 RootID 是长字符串：窄窗下截断省略，日期保持完整不被挤压 */
+.post-meta strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.post-meta span {
+  flex-shrink: 0;
+}
+
 .post-content,
 .comment-content {
   margin: 8px 0;
@@ -767,8 +795,10 @@ h3 {
   word-break: break-word;
 }
 
+/* 徽标/验签钮/验签结果在窄窗下放不下时换行 */
 .post-flags {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
@@ -808,6 +838,17 @@ h3 {
   display: flex;
   gap: 8px;
   align-items: center;
+}
+
+/* 窄窗下输入框弹性收缩（min-width:0 否则 flex 项按内容最小宽撑开），
+   按钮不收缩保持可点 */
+.reply-editor .el-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.reply-editor .el-button {
+  flex-shrink: 0;
 }
 
 .reply-editor.small {

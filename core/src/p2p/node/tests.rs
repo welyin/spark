@@ -102,7 +102,9 @@ async fn test_loop_with(
         pending_rediscovery_confirm: HashMap::new(),
         relay_reservations: Vec::new(),
         relay_reservations_inflight: std::collections::HashSet::new(),
+        circuit_listeners: HashMap::new(),
         enable_relay_server,
+        relay_max_reservations: None,
         relay_pool_queries: std::collections::HashSet::new(),
         relay_pool_candidates: Vec::new(),
         relay_pool_stability: std::collections::HashMap::new(),
@@ -532,13 +534,182 @@ async fn circuit_listener_closed_clears_reservation_state() {
         created_at: 0,
     });
     // 非电路地址：不影响
-    el.on_circuit_listener_closed(&["/ip4/127.0.0.1/tcp/15002".parse().unwrap()]);
+    el.on_circuit_listener_closed(
+        libp2p::core::transport::ListenerId::next(),
+        &["/ip4/127.0.0.1/tcp/15002".parse().unwrap()],
+        &Ok(()),
+    );
     assert!(el.relay_reservations_inflight.contains(&relay));
     assert_eq!(el.relay_reservations.len(), 1);
     // 电路地址：预约与 in-flight 都清理
-    el.on_circuit_listener_closed(&[circuit]);
+    el.on_circuit_listener_closed(
+        libp2p::core::transport::ListenerId::next(),
+        &[circuit],
+        &Ok(()),
+    );
     assert!(el.relay_reservations_inflight.is_empty());
     assert!(el.relay_reservations.is_empty());
+}
+
+/// 电路监听错误关闭（预约被拒/失败，如配额满载 ResourceLimitExceeded）：
+/// addresses 为**空集**（配额集成测试实测），必须经 listener_id 反查
+/// `circuit_listeners` 归属 relay 并清理 in-flight——否则 in-flight 泄漏、
+/// 该 relay 永不重试（A8 配额测试暴露的真 bug）。
+#[tokio::test]
+async fn circuit_listener_error_close_resolves_by_listener_id() {
+    let mut el = test_loop().await;
+    let relay = PeerId::random();
+    let listener_id = libp2p::core::transport::ListenerId::next();
+    el.circuit_listeners.insert(listener_id, relay);
+    el.relay_reservations_inflight.insert(relay);
+    // 错误关闭：addresses 空集，仅靠 listener_id 反查
+    let reason: Result<(), std::io::Error> = Err(std::io::Error::other("boom"));
+    el.on_circuit_listener_closed(listener_id, &[], &reason);
+    assert!(
+        el.relay_reservations_inflight.is_empty(),
+        "in-flight 必须经 listener_id 反查清理"
+    );
+    assert!(
+        !el.circuit_listeners.contains_key(&listener_id),
+        "映射一次性消费"
+    );
+    // 普通错误不是 Unsupported 能力信号：不进黑名单（A44 不误伤兜底）
+    let mut store = crate::p2p::relay_blacklist::RelayUnsupportedStore::new(&mut el.storage);
+    assert!(
+        !store.is_blocked(&relay.to_base58(), 0).unwrap(),
+        "普通 IO 错误不得触发黑名单"
+    );
+}
+
+/// 构造 Unsupported 关闭原因（生产形态：transport Error 包裹
+/// ReserveError::Unsupported，经 boxed transport 转为 io::Error）。
+fn unsupported_close_reason() -> Result<(), std::io::Error> {
+    Err(std::io::Error::other(
+        libp2p::relay::client::transport::Error::Reservation(
+            libp2p::relay::outbound::hop::ReserveError::Unsupported,
+        ),
+    ))
+}
+
+/// A44：预约因 Unsupported（对端无 relay hop 能力）失败 → 记本地黑名单，
+/// 候选选择不再返回该 peer——tier4 全集兜底对无能力 peer 的每 tick 周期
+/// 重试就此收敛（黑名单是本地观测优化，非协议惩罚）。
+#[tokio::test]
+async fn unsupported_close_blacklists_and_suppresses_candidate() {
+    let mut el = test_loop().await;
+    let relay = PeerId::random();
+    // tier2 共享池候选（黑名单过滤在候选选择出口统一生效，与各梯队无关）
+    el.relay_pool_candidates.push(relay);
+    let listener_id = libp2p::core::transport::ListenerId::next();
+    el.circuit_listeners.insert(listener_id, relay);
+    el.relay_reservations_inflight.insert(relay);
+    el.on_circuit_listener_closed(listener_id, &[], &unsupported_close_reason());
+    // 既有清理语义不动：in-flight 移除
+    assert!(el.relay_reservations_inflight.is_empty());
+    // 黑名单记取 + 候选抑制（test_loop now_fn 恒 0，TTL 内必命中）
+    {
+        let mut store =
+            crate::p2p::relay_blacklist::RelayUnsupportedStore::new(&mut el.storage);
+        assert!(
+            store.is_blocked(&relay.to_base58(), 0).unwrap(),
+            "Unsupported 失败必须记黑名单"
+        );
+    }
+    assert!(
+        el.select_relay_candidates().is_empty(),
+        "黑名单命中：候选选择不再返回该 peer（不再发起预约）"
+    );
+}
+
+/// A44 不误伤：配额拒绝（ResourceLimitExceeded）与正常关闭都不是能力信号——
+/// 不进黑名单、候选照常返回，既有重试语义保持。
+#[tokio::test]
+async fn non_unsupported_close_does_not_blacklist() {
+    // 配额满载拒绝（p2p_relay_quota 实测路径）
+    let mut el = test_loop().await;
+    let relay = PeerId::random();
+    el.relay_pool_candidates.push(relay);
+    let listener_id = libp2p::core::transport::ListenerId::next();
+    el.circuit_listeners.insert(listener_id, relay);
+    el.relay_reservations_inflight.insert(relay);
+    let reason: Result<(), std::io::Error> = Err(std::io::Error::other(
+        libp2p::relay::client::transport::Error::Reservation(
+            libp2p::relay::outbound::hop::ReserveError::ResourceLimitExceeded,
+        ),
+    ));
+    el.on_circuit_listener_closed(listener_id, &[], &reason);
+    {
+        let mut store =
+            crate::p2p::relay_blacklist::RelayUnsupportedStore::new(&mut el.storage);
+        assert!(
+            !store.is_blocked(&relay.to_base58(), 0).unwrap(),
+            "配额拒绝不得进黑名单（名额释放后应能补位）"
+        );
+    }
+    assert_eq!(
+        el.select_relay_candidates(),
+        vec![relay],
+        "配额拒绝照既有语义重试：候选不抑制"
+    );
+
+    // 正常关闭（Ok）同理
+    let mut el = test_loop().await;
+    let relay = PeerId::random();
+    el.relay_pool_candidates.push(relay);
+    let listener_id = libp2p::core::transport::ListenerId::next();
+    el.circuit_listeners.insert(listener_id, relay);
+    el.relay_reservations_inflight.insert(relay);
+    el.on_circuit_listener_closed(listener_id, &[], &Ok(()));
+    assert_eq!(
+        el.select_relay_candidates(),
+        vec![relay],
+        "正常关闭不得触发黑名单"
+    );
+}
+
+/// A44 过期边界：黑名单 TTL（24h）到期后 peer 恢复候选资格——长退避而非
+/// 永久封禁（对端升级开启 relay server 后自然复活）。
+#[tokio::test]
+async fn blacklist_ttl_expiry_restores_candidate() {
+    let mut el = test_loop().await;
+    let relay = PeerId::random();
+    el.relay_pool_candidates.push(relay);
+    {
+        let mut store =
+            crate::p2p::relay_blacklist::RelayUnsupportedStore::new(&mut el.storage);
+        store.block(&relay.to_base58(), 0).unwrap();
+    }
+    assert!(
+        el.select_relay_candidates().is_empty(),
+        "TTL 内（now=0）候选被抑制"
+    );
+    // 越过 TTL：恢复候选
+    el.now_fn = std::sync::Arc::new(|| crate::p2p::constants::RELAY_UNSUPPORTED_TTL_MS + 1);
+    assert_eq!(
+        el.select_relay_candidates(),
+        vec![relay],
+        "TTL 过期后恢复候选资格"
+    );
+}
+
+/// A44 成功证据解锁：曾被黑名单的 peer 预约成功（能力就位）→ 立即移出
+/// 黑名单，不等 TTL。
+#[tokio::test]
+async fn reservation_accepted_unblocks_peer() {
+    let mut el = test_loop().await;
+    let relay = PeerId::random();
+    {
+        let mut store =
+            crate::p2p::relay_blacklist::RelayUnsupportedStore::new(&mut el.storage);
+        store.block(&relay.to_base58(), 0).unwrap();
+        assert!(store.is_blocked(&relay.to_base58(), 0).unwrap());
+    }
+    el.on_reservation_accepted(relay);
+    let mut store = crate::p2p::relay_blacklist::RelayUnsupportedStore::new(&mut el.storage);
+    assert!(
+        !store.is_blocked(&relay.to_base58(), 0).unwrap(),
+        "预约成功应立即移出黑名单"
+    );
 }
 
 /// 单目标应用层拨号超时（与 OutgoingConnectionError 同路径）：黑洞目标

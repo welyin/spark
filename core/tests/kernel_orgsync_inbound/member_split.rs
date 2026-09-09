@@ -14,6 +14,7 @@ fn ak(tag: &str) -> spark_core::org::types::OrganizationAccessKey {
     spark_core::org::types::OrganizationAccessKey {
         public_key: format!("pk-{tag}"),
         bind_sig: "bind".to_string(),
+        root_pubkey: None,
     }
 }
 

@@ -684,27 +684,8 @@ fn archived_domain_rejects_writes_and_keeps_reads() {
         ),
         Err(OrgError::CommunityDomainArchived)
     ));
-    // 网关/数据账号/公开标志
-    assert!(matches!(
-        OrganizationService::set_org_gateways(
-            &mut storage,
-            &community.org_id,
-            &[admin.clone()],
-            &admin,
-            NOW + 3,
-        ),
-        Err(OrgError::CommunityDomainArchived)
-    ));
-    assert!(matches!(
-        OrganizationService::set_org_data_accounts(
-            &mut storage,
-            &community.org_id,
-            &[admin.clone()],
-            &admin,
-            NOW + 3,
-        ),
-        Err(OrgError::CommunityDomainArchived)
-    ));
+    // 公开标志（A9/A14：setOrgGateways/setOrgDataAccounts/setMemberRole 指定
+    // 通路已移除，不再有此写路径）
     assert!(matches!(
         OrganizationService::set_org_public(
             &mut storage,
@@ -716,20 +697,9 @@ fn archived_domain_rejects_writes_and_keeps_reads() {
         ),
         Err(OrgError::CommunityDomainArchived)
     ));
-    // 成员变更（移除/角色/自写身份）
+    // 成员变更（移除/自写身份；A14：setMemberRole 指定通路已移除，无此写路径）
     assert!(matches!(
         OrganizationService::remove_member(&mut storage, &community.org_id, &admin, &admin, NOW + 3,),
-        Err(OrgError::CommunityDomainArchived)
-    ));
-    assert!(matches!(
-        OrganizationService::set_member_role(
-            &mut storage,
-            &community.org_id,
-            &admin,
-            OrganizationRole::Member,
-            &admin,
-            NOW + 3,
-        ),
         Err(OrgError::CommunityDomainArchived)
     ));
     assert!(matches!(

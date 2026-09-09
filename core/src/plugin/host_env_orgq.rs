@@ -37,7 +37,7 @@ impl PluginHostShared {
         let Ok(Some(record)) = crate::org::OrganizationService::get_record(&storage, oid) else {
             return Ok(false);
         };
-        Ok(crate::org::roles::is_data_account(&record, &my_root))
+        Ok(crate::org::roles::is_data_node(&record, &my_root))
     }
 
     /// O3 读路径（QuickJS 通路）：非数据账号成员读 org data-accounts 集合时

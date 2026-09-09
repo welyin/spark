@@ -5,6 +5,7 @@
 
 pub mod affairsync;
 pub mod apply;
+pub mod blob;
 pub mod dlog;
 pub mod meta;
 pub mod orgsync;
@@ -47,6 +48,10 @@ pub enum SyncError {
     /// 存储后端错误。
     #[error(transparent)]
     Storage(#[from] crate::storage::StorageError),
+
+    /// A1 blob 层错误（manifest 校验/完整性/本地损坏）。
+    #[error(transparent)]
+    Blob(#[from] blob::BlobError),
 
     /// 集合适配器错误。
     #[error("collection adapter error: {0}")]

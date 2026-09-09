@@ -406,7 +406,7 @@ fn k_sufficient_one_pc_per_account() {
     let overview = overview_of(&members, None, None, no_state(), &duty, true, NOW);
     assert!(overview.k_applicable);
     assert_eq!(overview.synced_peers, 3, "去重 PC 履职对合计");
-    assert!(overview.data_accounts.iter().all(|a| a.pc_synced));
+    assert!(overview.member_replicas.iter().all(|a| a.pc_synced));
     assert!(overview.is_replica_sufficient(), "(1,1,1) 合格");
 }
 
@@ -436,7 +436,7 @@ fn k_insufficient_hollow_account() {
     let overview = overview_of(&members, None, None, no_state(), &duty, true, NOW);
     assert_eq!(overview.synced_peers, 2, "空心账号不计");
     let b = overview
-        .data_accounts
+        .member_replicas
         .iter()
         .find(|a| a.root_id == rid('b'))
         .unwrap();
@@ -451,7 +451,55 @@ fn k_not_applicable_for_all_members_org() {
     let overview = overview_of(&members, None, None, no_state(), &[], false, NOW);
     assert!(!overview.k_applicable, "无 data-accounts 集合 → 无 K");
     assert!(overview.is_replica_sufficient(), "无 K 不提醒（恒达标）");
-    assert!(overview.data_accounts.is_empty());
+    assert!(overview.member_replicas.is_empty());
+}
+
+/// A16 标识面随迁（membership §4.4 公共面去 rootId）：已发布 accessKey 的
+/// 成员在概览（成员级 members 与第二级 memberReplicas）携带 org_user_id；
+/// 未发布成员为 None（双写过渡）。
+#[test]
+fn overview_carries_org_user_id_when_published() {
+    let mut m_a = admin('a');
+    let access_key = spark_core::org::access_key::derive_access_key(&[7u8; 32], "org_x");
+    let expected_uid = spark_core::org::access_key::member_org_user_id(&access_key).unwrap();
+    m_a.access_key = Some(access_key);
+    let members = vec![m_a, admin('b')];
+    let duty = vec![duty_of('a', "p-a", "pc", NOW)];
+    let overview = overview_of(&members, None, None, no_state(), &duty, true, NOW);
+
+    let a = overview
+        .members
+        .iter()
+        .find(|m| m.root_id == rid('a'))
+        .unwrap();
+    assert_eq!(
+        a.org_user_id.as_deref(),
+        Some(expected_uid.as_str()),
+        "成员级概览携带 org_user_id"
+    );
+    let b = overview
+        .members
+        .iter()
+        .find(|m| m.root_id == rid('b'))
+        .unwrap();
+    assert_eq!(b.org_user_id, None, "未发布成员为 None");
+
+    let ra = overview
+        .member_replicas
+        .iter()
+        .find(|r| r.root_id == rid('a'))
+        .unwrap();
+    assert_eq!(
+        ra.org_user_id.as_deref(),
+        Some(expected_uid.as_str()),
+        "memberReplicas 面随迁 org_user_id"
+    );
+    let rb = overview
+        .member_replicas
+        .iter()
+        .find(|r| r.root_id == rid('b'))
+        .unwrap();
+    assert_eq!(rb.org_user_id, None);
 }
 
 /// 窗口外履职不计；mobile 不计；去重（同账号同设备重复观测算一对）。

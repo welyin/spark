@@ -1,16 +1,23 @@
 <template>
-  <div class="shell">
+  <div
+    class="shell"
+    :class="{
+      'shell-desktop': !isMobileLayout,
+      'shell-rail-expanded': railExpanded,
+      'shell-no-topbar': !isMobileLayout && activeTab !== 'space'
+    }"
+  >
     <!-- 顶部导航（最外层，横跨全宽）：
          桌面端=TopNavbar（左侧空间切换+中间搜索+右侧网络状态+「⋯」菜单）；
          移动端=MobileTopBar，仅四个主 tab 且栈深=1（一级列表页）时显示，
          切到二级页/其它 tab 时直接不渲染（无位移动画，Android 前端改造） -->
-    <header class="topbar" :class="{ 'topbar-collapsed': isMobileLayout && !mobileTopBarVisible }">
-      <TopNavbar
-        v-if="!isMobileLayout"
-        @switch-account="handleSwitchAccount"
-        @logout="handleLogout"
-        @open-tab="handleMenuSelect"
-      />
+    <header
+      v-if="isMobileLayout || activeTab === 'space'"
+      class="topbar"
+      :class="{ 'topbar-collapsed': isMobileLayout && !mobileTopBarVisible }"
+    >
+      <!-- 桌面端：顶栏（空间上下文条）仅在「空间」桌面出现；我的/消息/事务为整页无顶栏 -->
+      <TopNavbar v-if="!isMobileLayout && activeTab === 'space'" />
       <MobileTopBar
         v-else-if="mobileTopBarVisible"
         :title="mobileTopBarTitle"
@@ -27,70 +34,92 @@
            点右侧分隔线（col-resize 光标）切换，选择持久化在 localStorage；
            窄屏（≤768px）下不渲染，导航由底部 MobileTabBar 接管（ui-layout 断点） -->
       <nav v-if="!isMobileLayout" class="rail" :class="{ expanded: railExpanded }">
-        <div class="rail-identity">
-          <UserAvatarMenu
-            :avatar-size="36"
-            @open-profile="handleMenuSelect('mine')"
-          />
-        </div>
-
         <div class="rail-main">
+          <template v-for="item in navItems" :key="item.id">
           <button
-            v-for="item in navItems"
-            :key="item.id"
             class="rail-item"
-            :class="{ active: activeTab === item.id }"
-            @click="handleMenuSelect(item.id)"
+            :title="item.label"
+            :class="{ active: isNavActive(item.id) }"
+            @click="item.id === 'search' ? openDesktopSearch() : handleMenuSelect(item.id)"
           >
             <!-- 消息入口挂当前空间未读总数角标（免打扰不计入，>99 显示 99+），品牌红 -->
             <el-badge v-if="item.id === 'messages'" :value="messagesBadge" :max="99" :hidden="messagesBadge === 0">
               <el-icon :size="20"><component :is="item.icon" /></el-icon>
             </el-badge>
-            <!-- 通讯录入口挂「新的朋友/成员」未读角标（当前空间） -->
-            <el-badge
-              v-else-if="item.id === 'contacts'"
-              :value="contactsBadge"
-              :max="99"
-              :hidden="contactsBadge === 0"
-            >
+            <!-- 事务入口挂「待我处理」角标（G7，非全部进行中数） -->
+            <el-badge v-else-if="item.id === 'affairs'" :value="affairsBadge" :max="99" :hidden="affairsBadge === 0">
               <el-icon :size="20"><component :is="item.icon" /></el-icon>
             </el-badge>
             <el-icon v-else :size="20"><component :is="item.icon" /></el-icon>
             <span class="rail-label">{{ item.label }}</span>
+            <!-- 空间行右侧：「＋」创建/加入组织菜单（弹层内容同原二级菜单底部入口，用户评审决策） -->
+            <el-dropdown
+              v-if="item.id === 'space'"
+              trigger="click"
+              placement="right-start"
+              @command="onSpaceMembershipCommand"
+            >
+              <span class="rail-space-plus" title="创建 / 加入组织" @click.stop>
+                <el-icon :size="13"><Plus /></el-icon>
+              </span>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="create">创建组织</el-dropdown-item>
+                  <el-dropdown-item command="join">加入组织</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
           </button>
 
-          <button
-            v-for="tab in pluginTabs"
-            :key="tab.id"
-            class="rail-item rail-plugin"
-            :class="{ active: activeTab === tab.id }"
-            :title="tab.title"
-            @click="handleMenuSelect(tab.id)"
-          >
-            <span class="rail-plugin-icon">{{ tab.icon }}</span>
-            <span class="rail-label">{{ tab.title }}</span>
-          </button>
+          <!-- 「空间」二级列表：宽栏下常驻展示（用户决策），不随当前 tab 显隐 -->
+          <RailSpaceList
+            v-if="item.id === 'space' && railExpanded"
+            ref="railSpaceListRef"
+          />
+          </template>
         </div>
 
         <div class="rail-divider" aria-hidden="true" />
         <div class="rail-bottom">
-          <!-- TODO: 测试入口仅开发/调试构建显示，正式发版通过构建配置隐藏（ui-space-navbar §6.4） -->
+          <!-- 设置 / 测试：从「⋯」更多菜单拿出，固定显示在「我的」上方（用户评审决策 2026-09-09） -->
           <button
             class="rail-item"
-            :class="{ active: activeTab === 'test' }"
-            @click="handleMenuSelect('test')"
-          >
-            <el-icon :size="20"><Cpu /></el-icon>
-            <span class="rail-label">测试</span>
-          </button>
-          <button
-            class="rail-item"
+            title="设置"
             :class="{ active: activeTab === 'settings' }"
             @click="handleMenuSelect('settings')"
           >
             <el-icon :size="20"><Setting /></el-icon>
             <span class="rail-label">设置</span>
           </button>
+          <button
+            v-if="isDevelopment"
+            class="rail-item"
+            title="测试"
+            :class="{ active: activeTab === 'test' }"
+            @click="handleMenuSelect('test')"
+          >
+            <el-icon :size="20"><Cpu /></el-icon>
+            <span class="rail-label">测试</span>
+          </button>
+          <!-- 当前身份（=「我的」入口）：头像 + 名字，名字下方为网络状态行；
+               右侧「⋯」更多菜单（切换账号/退出登录；设置/测试已拿出为独立按钮） -->
+          <div class="rail-identity">
+            <UserAvatarMenu :avatar-size="36" @open-profile="handleMenuSelect('mine')">
+              <template #subtitle><NetworkStatusBar variant="line" /></template>
+            </UserAvatarMenu>
+            <el-dropdown v-if="railExpanded" trigger="click" @command="onRailMoreCommand">
+              <button class="rail-more" title="更多">
+                <el-icon :size="16"><MoreFilled /></el-icon>
+              </button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="switch-account">切换账号</el-dropdown-item>
+                  <el-dropdown-item command="logout" class="rail-more-danger">退出登录</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </div>
+          <NetworkStatusBar v-if="!railExpanded" compact />
         </div>
 
         <!-- 宽窄切换把手：覆盖在右侧 2px 分隔线上（热区 10px，col-resize 光标），点击切换 rail 状态 -->
@@ -106,9 +135,21 @@
              栈内 push/pop 转场在各页面内部（MobilePageTransition） -->
         <Transition v-if="isMobileLayout" name="mobile-tab-fade">
           <div :key="activeTab" class="mobile-tab-page">
-            <MessagesPage v-if="activeTab === 'messages'" />
-            <ContactsPage v-else-if="activeTab === 'contacts'" />
+            <!-- 聊天：灰度开关（旧内置 UI ⇄ 默认内置插件版，stores/builtin-apps）；
+                 通讯录已转为空间桌面插件窗口（docs/ui 阶段 3），不再有壳层主 tab 灰度面 -->
+            <BuiltinAppHost
+              v-if="activeTab === 'messages'"
+              tab-id="messages"
+              :space="pluginSpace"
+              @fallback="onBuiltinPluginClose('messages')"
+            >
+              <template #legacy><MessagesPage /></template>
+            </BuiltinAppHost>
             <AppsPage v-else-if="activeTab === 'apps'" @open-plugin-tab="openPluginTab" />
+            <!-- 手机端空间（阶段 1）：两级结构 域列表→域桌面；点图标 open-app 走 openPluginTab 全屏 App -->
+            <SpaceMobile v-else-if="activeTab === 'space'" @open-app="openPluginTab" @open-market="handleMenuSelect('apps')" />
+            <!-- 事务（阶段 3，移动端共用 AffairsPage 列表形态） -->
+            <AffairsPage v-else-if="activeTab === 'affairs'" />
             <TestPage v-else-if="activeTab === 'test'" @back-root="backFromSecondaryTab('test')" />
             <SettingsPage
               v-else-if="activeTab === 'settings'"
@@ -139,6 +180,7 @@
                 :plugin-id="activePluginTab.pluginDomain.slice('plugin:'.length)"
                 :view-id="activePluginTab.pluginView"
                 :space="pluginSpace"
+                :view-bootstrap="activePluginTab.viewBootstrap"
                 @close="closePluginTab"
                 @manifest="onPluginManifest"
               />
@@ -148,9 +190,19 @@
 
         <!-- 桌面端（≥769px）：渲染逻辑不变，无任何切换动画 -->
         <template v-else>
-          <MessagesPage v-if="activeTab === 'messages'" />
-          <ContactsPage v-else-if="activeTab === 'contacts'" />
+          <!-- 聊天/通讯录：灰度开关（旧内置 UI ⇄ 默认内置插件版，stores/builtin-apps） -->
+          <BuiltinAppHost
+            v-if="activeTab === 'messages'"
+            tab-id="messages"
+            :space="pluginSpace"
+            @fallback="onBuiltinPluginClose('messages')"
+          >
+            <template #legacy><MessagesPage /></template>
+          </BuiltinAppHost>
           <AppsPage v-else-if="activeTab === 'apps'" @open-plugin-tab="openPluginTab" />
+          <!-- 桌面端空间（阶段 2）：PC 多窗口桌面；移动端走上方 SpaceMobile -->
+          <!-- 事务（阶段 3）：跨域「与我相关」事务列表；点卡片按类型分发到类型插件 -->
+          <AffairsPage v-else-if="activeTab === 'affairs'" />
           <TestPage v-else-if="activeTab === 'test'" @back-root="backFromSecondaryTab('test')" />
           <SettingsPage
             v-else-if="activeTab === 'settings'"
@@ -184,10 +236,12 @@
               :plugin-id="activePluginTab.pluginDomain.slice('plugin:'.length)"
               :view-id="activePluginTab.pluginView"
               :space="pluginSpace"
+              :view-bootstrap="activePluginTab.viewBootstrap"
               @close="closePluginTab"
               @manifest="onPluginManifest"
             />
           </el-card>
+          <PcDesktop v-if="desktopVisited" v-show="activeTab === 'space'" @open-market="handleMenuSelect('apps')" @open-app="openPluginTab" />
         </template>
       </main>
     </div>
@@ -199,7 +253,6 @@
       v-if="mobileTabBarVisible"
       :active-tab="activeTab"
       :messages-badge="messagesBadge"
-      :contacts-badge="contactsBadge"
       @select="handleMenuSelect"
     />
 
@@ -210,19 +263,29 @@
       @open-settings="handleMenuSelect('settings')"
     />
 
+    <DesktopSearch v-if="!isMobileLayout" />
   </div>
 </template>
 
 <script lang="ts">
-import { computed, defineComponent, onMounted, onUnmounted, ref } from 'vue';
-import { ElMessage } from 'element-plus';
+import { computed, defineComponent, onMounted, onUnmounted, ref, watch } from 'vue';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { onBackButtonPress } from '@tauri-apps/api/app';
-import { ChatDotRound, Cpu, Grid, Notebook, Setting } from '@element-plus/icons-vue';
+import { listen as listenTauriEvent } from '@tauri-apps/api/event';
+import { ChatDotRound, Cpu, Document, Grid, MoreFilled, Notebook, Setting, Search, Plus } from '@element-plus/icons-vue';
+import DesktopSearch from './components/desktop/DesktopSearch.vue';
+import NetworkStatusBar from './components/NetworkStatusBar.vue';
+import { activeWinKey, closeAppWindows, openWindow, openNewWindow, windows as desktopWindows } from './stores/desktop/window-manager';
+import { getApp, refreshAppRegistry } from './stores/desktop/app-registry';
 import type { PluginManifest, PluginSpaceContext } from '../../packages/plugin-sdk/src';
 import PluginIframeHost from './components/plugin/PluginIframeHost.vue';
+import BuiltinAppHost from './components/plugin/BuiltinAppHost.vue';
+import { setBuiltinImpl } from './stores/builtin-apps';
 import { fetchPluginManifest } from './plugin/source';
 import { unreadCountOf } from './stores/messages';
-import { requestBadgeCount, spaceKeyOf } from './mock/contacts';
+import { spaceKeyOf } from './mock/contacts';
+import { actionableCount, refreshAffairFeed } from './stores/affairs/affair-feed';
+import { OPEN_PLUGIN_DEEPLINK_EVENT, openPluginDeepLink, type OpenPluginDeepLink } from './services/deep-link';
 import {
   currentSpace,
   validateCurrentSpace
@@ -232,8 +295,8 @@ import { refreshProfileExtraFromKernel } from './stores/profile-extra';
 import { refreshOrgIdentity } from './stores/org-identity';
 import { refreshOrganizations } from './stores/org-membership';
 import { requestOpenChat } from './stores/pending-chat';
-import { requestOpenContact } from './stores/pending-contact';
-import { requestAddContact, type AddContactKind } from './stores/pending-add-contact';
+import { type AddContactKind } from './stores/pending-add-contact';
+import { CONTACT_INTENT_ADD } from './components/contacts/open-intents';
 import { requestOpenAppDetail } from './stores/pending-app';
 import TopNavbar from './components/TopNavbar.vue';
 import UserAvatarMenu from './components/UserAvatarMenu.vue';
@@ -241,7 +304,7 @@ import MobileTabBar from './components/MobileTabBar.vue';
 import MobileTopBar from './components/MobileTopBar.vue';
 import MobileSpaceDrawer from './components/MobileSpaceDrawer.vue';
 import { isMobileLayout, MOBILE_TABS } from './stores/ui-layout';
-import { listenP2pEvents } from './api';
+import { listenP2pEvents, isTauri } from './api';
 import { initNotify } from './stores/notify';
 import { currentPage, popPage, resetStack } from './stores/mobile-nav';
 import { hasOverlay, requestCloseOverlay } from './stores/overlay-stack';
@@ -253,11 +316,16 @@ import { handlePasswordUnifyEvent, hydratePasswordUnify } from './stores/passwor
 import { useUpdaterReadyPrompt } from './components/updater/use-updater';
 import { lockAndReload } from './utils/identity-lock';
 import MessagesPage from './pages/MessagesPage.vue';
-import ContactsPage from './pages/ContactsPage.vue';
+
 import AppsPage, { type OpenPluginTabPayload } from './pages/AppsPage.vue';
 import TestPage from './pages/TestPage.vue';
 import SettingsPage from './pages/SettingsPage.vue';
 import MinePage from './pages/MinePage.vue';
+import PlaceholderPage from './pages/PlaceholderPage.vue';
+import AffairsPage from './pages/AffairsPage.vue';
+import SpaceMobile from './components/SpaceMobile.vue';
+import PcDesktop from './components/desktop/PcDesktop.vue';
+import RailSpaceList from './components/desktop/RailSpaceList.vue';
 
 type PluginTab = {
   id: string;
@@ -269,17 +337,27 @@ type PluginTab = {
   pluginContext?: {
     orgId?: string;
   };
+  /** 视图引导（事务深链等）：注入插件 window.__sparkPluginView.cardData（如 affairId） */
+  viewBootstrap?: { cardData?: unknown };
 };
 
 export default defineComponent({
   name: 'App',
   components: {
+    DesktopSearch,
+    NetworkStatusBar,
+    Search,
     MessagesPage,
-    ContactsPage,
     AppsPage,
     TestPage,
     SettingsPage,
     MinePage,
+    PlaceholderPage,
+    AffairsPage,
+    SpaceMobile,
+    PcDesktop,
+    RailSpaceList,
+    BuiltinAppHost,
     TopNavbar,
     UserAvatarMenu,
     MobileTabBar,
@@ -289,16 +367,42 @@ export default defineComponent({
     ChatDotRound,
     Notebook,
     Grid,
+    Document,
     Cpu,
-    Setting
+    Setting,
+    Plus,
+    MoreFilled
   },
   setup() {
-    const activeTab = ref<string>('messages');
+    const openDesktopSearch = () => window.dispatchEvent(new Event('spark:search'));
+    /** 空间行右侧「＋」菜单：转发给 RailSpaceList 的创建/加入对话框（经模板 ref） */
+    const railSpaceListRef = ref<InstanceType<typeof RailSpaceList> | null>(null);
+    const onSpaceMembershipCommand = (command: string) => {
+      railSpaceListRef.value?.openMembership(command === 'create' ? 'create' : 'join');
+    };
+    // rail 底部身份块右侧「⋯」菜单（原顶栏菜单迁入）：设置/测试切 tab，切换账号/退出走锁定重载
+    const isDevelopment = import.meta.env.DEV;
+    const onRailMoreCommand = (command: string) => {
+      if (command === 'settings' || command === 'test') {
+        handleMenuSelect(command);
+        return;
+      }
+      if (command === 'logout') {
+        handleLogout();
+      } else if (command === 'switch-account') {
+        handleSwitchAccount();
+      }
+    };
+    // PC：桌面常驻（activeTab 恒为 space，壳层页面全部窗口化）；移动端仍为 tab 切页
+    const activeTab = ref<string>(isMobileLayout.value ? 'messages' : 'space');
+    const desktopVisited = ref(activeTab.value === 'space');
+    watch(activeTab, (tab) => { if (tab === 'space') desktopVisited.value = true; });
     // 移动端左滑侧边栏可见性（Android 前端改造）
     const mobileDrawerVisible = ref(false);
     const pluginTabs = ref<PluginTab[]>([]);
-    // rail 宽窄状态（持久化）：false=64px 窄栏（图标+小字），true=155px 宽栏（左图标右文字）
-    const railExpanded = ref(localStorage.getItem('spark:rail-expanded') === '1');
+    // rail 宽窄状态（持久化）：false=64px 窄栏，true=155px 宽栏。
+    // 新 UI（shell-desktop §六决策 1）默认展开 240px 宽栏，用户可折叠、选择被记忆
+    const railExpanded = ref(localStorage.getItem('spark:rail-expanded') !== '0');
     const toggleRail = () => {
       railExpanded.value = !railExpanded.value;
       localStorage.setItem('spark:rail-expanded', railExpanded.value ? '1' : '0');
@@ -307,12 +411,34 @@ export default defineComponent({
     // 主窗口挂载时读取一次，资料更新（profile-updated）后重新读取
     const loadCurrentUser = refreshCurrentUser;
 
-    // rail 主导航：消息固定为第一个入口（ui-space-navbar §14）
+    // rail 一级入口：搜索（浮层）· 全部消息 · 空间 · 所有事务；
+    // PC 上消息/事务是跨空间全局窗口，在当前桌面弹出；「我的」入口 = 底部头像
     const navItems = [
-      { id: 'messages', label: '消息', icon: ChatDotRound },
-      { id: 'contacts', label: '通讯录', icon: Notebook },
-      { id: 'apps', label: '应用', icon: Grid }
+      { id: 'search', label: '搜索', icon: Search },
+      { id: 'messages', label: '全部消息', icon: ChatDotRound },
+      { id: 'space', label: '空间', icon: Grid },
+      { id: 'affairs', label: '所有事务', icon: Document }
     ];
+
+    /** 壳层页面 → 桌面窗口 id（PC 上这些 tab 不再整页切换，在当前空间桌面开窗） */
+    const SHELL_WINDOW_TABS: Record<string, string> = {
+      messages: 'spark:messages',
+      affairs: 'spark:affairs',
+      mine: 'spark:mine',
+      settings: 'spark:settings',
+      test: 'spark:test',
+      apps: 'spark:market'
+    };
+
+    /** rail 高亮：空间恒亮（桌面常驻）；消息/事务看前台窗口是否为对应壳窗 */
+    const isNavActive = (id: string) => {
+      if (isMobileLayout.value) return activeTab.value === id;
+      if (id === 'space') return activeTab.value === 'space';
+      const shellId = SHELL_WINDOW_TABS[id];
+      if (!shellId) return false;
+      const front = desktopWindows.value.find((w) => w.key === activeWinKey.value);
+      return !!front && !front.minimized && front.appId === shellId;
+    };
 
     /** 移动端顶部导航仅四个主 tab（底部 tab 对应的一级页）显示；进入二级页（栈深>1）时整体隐藏 */
     const MAIN_TAB_IDS: string[] = MOBILE_TABS.map((tab) => tab.id);
@@ -347,18 +473,18 @@ export default defineComponent({
       handleMenuSelect('settings');
     };
 
-    /** 移动端顶栏「+」菜单：先写添加请求（pending-add-contact，同 pending-chat 模式），
-        再切到通讯录 tab——ContactsPage 挂载/监听后消费并打开对应添加对话框 */
+    /** 移动端顶栏「+」菜单：经统一深链打开空间通讯录插件的添加对话框（0.3：
+        通讯录是空间插件，docs/ui §八决策 1；cardData.intent=__add__ 由插件侧消费，
+        插件按当前空间区分「添加朋友/添加成员」） */
     const onMobileAddContact = (kind: AddContactKind) => {
-      requestAddContact(kind);
-      handleMenuSelect('contacts');
+      openPluginDeepLink({ pluginId: 'spark-contacts', cardData: { intent: CONTACT_INTENT_ADD, kind } });
     };
 
-    /** 通讯录入口角标：当前空间「新的朋友/成员」未读条目数 */
-    const contactsBadge = computed(() => requestBadgeCount(spaceKeyOf(currentSpace.value)));
-
-    /** 消息入口角标：当前空间未读消息总数（与通讯录角标一样按空间隔离） */
+    /** 消息入口角标：当前空间未读消息总数（按空间隔离） */
     const messagesBadge = computed(() => unreadCountOf(spaceKeyOf(currentSpace.value)));
+
+    /** 事务入口角标（G7）：「待我处理」数（affair-feed 近似：进行中且我关注，ui-architecture §七风险 4） */
+    const affairsBadge = computed(() => actionableCount.value);
 
     const activePluginTab = computed(() => {
       return pluginTabs.value.find((tab) => tab.id === activeTab.value) ?? null;
@@ -396,6 +522,8 @@ export default defineComponent({
       if (!detail?.pluginDomain) {
         return;
       }
+      closeAppWindows(detail.pluginDomain.replace(/^plugin:/, ''));
+      void refreshAppRegistry();
       const closing = pluginTabs.value.filter((tab) => tab.pluginDomain === detail.pluginDomain);
       if (closing.length === 0) {
         return;
@@ -413,6 +541,12 @@ export default defineComponent({
     const secondaryTabReturnTo: Record<string, string> = {};
 
     const handleMenuSelect = (index: string) => {
+      // PC：壳层页面统一窗口化——桌面常驻，在当前空间桌面弹出对应窗口
+      if (!isMobileLayout.value && SHELL_WINDOW_TABS[index]) {
+        activeTab.value = 'space';
+        openWindow(SHELL_WINDOW_TABS[index]);
+        return;
+      }
       // 移动端（波次 2/Android 改造）：切 tab 一律回到该 tab 导航栈底（列表页）——
       // 底部导航切换应展示该页的首页内容，而非离开时停留的二级页
       if (isMobileLayout.value) {
@@ -435,11 +569,27 @@ export default defineComponent({
       }
     };
 
-    const openPluginTab = (payload: OpenPluginTabPayload) => {
+    const openPluginTab = async (payload: OpenPluginTabPayload) => {
       const pluginDomain = payload.pluginDomain.trim();
       const pluginView = payload.pluginView.trim() || 'default';
       if (!pluginDomain.startsWith('plugin:')) {
         ElMessage.error(`无效插件域：${pluginDomain}`);
+        return;
+      }
+
+      if (!isMobileLayout.value) {
+        await refreshAppRegistry();
+        const appId = pluginDomain.slice('plugin:'.length);
+        if (!getApp(appId)) {
+          ElMessage.warning('该应用未安装或不支持当前空间');
+          return;
+        }
+        activeTab.value = 'space';
+        if (payload.viewBootstrap || pluginView !== getApp(appId)?.view) {
+          openNewWindow(appId, { viewId: pluginView, viewBootstrap: payload.viewBootstrap });
+        } else {
+          openWindow(appId);
+        }
         return;
       }
 
@@ -457,7 +607,8 @@ export default defineComponent({
           title: payload.title || `${pluginDomain}/${pluginView}`,
           icon: payload.icon || 'P',
           sourceTab,
-          pluginContext
+          pluginContext,
+          viewBootstrap: payload.viewBootstrap
         });
       }
       // 切插件前重置 manifest（新插件顶栏决策待 PluginIframeHost 重新上报）
@@ -471,6 +622,11 @@ export default defineComponent({
       activeTab.value = tab?.sourceTab ?? fallback;
     };
 
+    /** 默认内置插件版加载失败/被关闭：回退该 tab 的旧内置 UI（灰度兜底，开关持久化回 legacy） */
+    const onBuiltinPluginClose = (tabId: string) => {
+      setBuiltinImpl(tabId, 'legacy');
+    };
+
     // 锁定身份后整窗重载回登录/选择账号页（RootGate 接管）；统一走 identity-lock 收敛点
     const handleLogout = () => lockAndReload('已退出登录');
     const handleSwitchAccount = () => lockAndReload('已退出当前账号');
@@ -482,17 +638,7 @@ export default defineComponent({
         return;
       }
       requestOpenChat({ rootId: detail.rootId, name: detail.name ?? '', conversationId: detail.conversationId });
-      activeTab.value = 'messages';
-    };
-
-    // 全局搜索请求打开联系人资料：记录请求并切到通讯录页（ContactsPage 消费）
-    const onOpenContactEvent = (event: Event) => {
-      const detail = (event as CustomEvent<{ rootId?: string }>).detail;
-      if (!detail?.rootId) {
-        return;
-      }
-      requestOpenContact({ rootId: detail.rootId });
-      activeTab.value = 'contacts';
+      handleMenuSelect('messages');
     };
 
     // 全局搜索请求打开应用详情：记录请求并切到应用页（AppsPage 消费）
@@ -502,12 +648,39 @@ export default defineComponent({
         return;
       }
       requestOpenAppDetail(detail.id);
-      activeTab.value = 'apps';
+      handleMenuSelect('apps');
     };
 
-    // 设置页「个人资料」入口卡请求打开个人设置：直接切到 mine tab（参照 spark:open-chat 模式）
+    // 设置页「个人资料」入口卡请求打开个人设置（PC 开窗，移动切 tab）
     const onOpenMineEvent = () => {
-      activeTab.value = 'mine';
+      handleMenuSelect('mine');
+    };
+
+    // 统一深链（services/deep-link）：消息卡片回退 / 事务分发 / 通知中心共用——
+    // 查 pluginMarket 拿 domain → openPluginTab 渲染 PluginIframeHost，viewBootstrap.cardData 注入插件
+    const onOpenPluginDeepLink = async (event: Event) => {
+      const detail = (event as CustomEvent<OpenPluginDeepLink>).detail;
+      if (!detail?.pluginId) {
+        return;
+      }
+      try {
+        const items = await window.electronAPI.pluginMarket.list();
+        const item = items.find((entry) => entry.id === detail.pluginId);
+        if (!item) {
+          return;
+        }
+        openPluginTab({
+          pluginDomain: item.domain,
+          pluginView: detail.viewId ?? item.views[0] ?? 'default',
+          title: item.name,
+          icon: item.name.slice(0, 1),
+          pluginContext: currentSpace.value.type === 'org' ? { orgId: currentSpace.value.orgId } : undefined,
+          // 深链：cardData（如 affairId）经 viewBootstrap 注入插件（主视图读取定位详情）
+          viewBootstrap: detail.cardData ? { cardData: detail.cardData } : undefined
+        });
+      } catch {
+        // 插件清单读取失败静默（调用方已给未装引导）
+      }
     };
 
     // p2p 事件退订器收集（SelfProfileSynced 等；卸载时统一退订）
@@ -587,6 +760,18 @@ export default defineComponent({
     // 主程序更新：后台自动检查+下载就绪后弹重启确认（取消后可去 设置→关于 手动安装）
     useUpdaterReadyPrompt();
 
+    // A7 数据目录迁移失败提示（identity.md §4.3「移动失败回退旧布局并提示」）：
+    // 壳层已回退旧布局继续使用，此处一次性告知原因，不阻断。
+    // 仅 Tauri 运行时挂监听（测试环境无 __TAURI_INTERNALS__）。
+    if (isTauri()) {
+      void listenTauriEvent<string>('layout-migration-failed', (e) => {
+        ElMessageBox.alert(e.payload, '数据目录迁移未完成', {
+          confirmButtonText: '知道了',
+          type: 'warning'
+        });
+      });
+    }
+
     // Android 系统返回键（Android 前端改造）。原生层语义（tauri AppPlugin）：
     // 存在 JS 监听时按返回键只发事件、不执行任何默认动作——handler 返回值无意义，
     // 「退出应用」必须由前端显式调用 system_exit_app（plugin:app|exit 不在 ACL 命令清单内，
@@ -625,9 +810,33 @@ export default defineComponent({
     });
 
     onMounted(() => window.addEventListener('spark:open-chat', onOpenChatEvent));
-    onMounted(() => window.addEventListener('spark:open-contact', onOpenContactEvent));
     onMounted(() => window.addEventListener('spark:open-app', onOpenAppEvent));
+    // 空间二级菜单点击请求切页（RailSpaceList 派发）
+    const onSwitchTabEvent = (event: Event) => {
+      const tab = (event as CustomEvent<string>).detail;
+      if (typeof tab === 'string') {
+        handleMenuSelect(tab);
+      }
+    };
+    onMounted(() => window.addEventListener('spark:switch-tab', onSwitchTabEvent));
+    const onDesktopShortcut = (event: KeyboardEvent) => {
+      if (isMobileLayout.value || !(event.ctrlKey || event.metaKey) || event.altKey) return;
+      // ⌘/Ctrl+1~4 固定映射四个一级入口（与 rail 顶部项解耦，「我的」走头像）
+      const SHORTCUT_TABS = ['mine', 'messages', 'space', 'affairs'];
+      const index = Number(event.key) - 1;
+      if (Number.isInteger(index) && index >= 0 && index < SHORTCUT_TABS.length) {
+        event.preventDefault();
+        handleMenuSelect(SHORTCUT_TABS[index]);
+      }
+    };
+    onMounted(() => window.addEventListener('keydown', onDesktopShortcut));
+
     onMounted(() => window.addEventListener('spark:open-mine', onOpenMineEvent));
+    onMounted(() => window.addEventListener(OPEN_PLUGIN_DEEPLINK_EVENT, onOpenPluginDeepLink));
+    // 事务角标数据源：进入主界面拉一次「与我相关」列表（affair-feed 水合，G7 角标随之亮起）
+    onMounted(() => {
+      void refreshAffairFeed();
+    });
     onMounted(() => window.addEventListener('spark:close-plugin', onClosePluginEvent));
     // 网络变化重连（A 秒级感知）：window online/offline 事件 → 通知内核
     // p2p-network-changed（command-map 已有映射，前端调用点缺失）。内核启动
@@ -643,10 +852,12 @@ export default defineComponent({
       window.addEventListener('offline', onNetOffline);
     });
     onUnmounted(() => {
+      window.removeEventListener('keydown', onDesktopShortcut);
+      window.removeEventListener('spark:switch-tab', onSwitchTabEvent);
       window.removeEventListener('spark:open-chat', onOpenChatEvent);
-      window.removeEventListener('spark:open-contact', onOpenContactEvent);
       window.removeEventListener('spark:open-app', onOpenAppEvent);
       window.removeEventListener('spark:open-mine', onOpenMineEvent);
+      window.removeEventListener(OPEN_PLUGIN_DEEPLINK_EVENT, onOpenPluginDeepLink);
       window.removeEventListener('spark:close-plugin', onClosePluginEvent);
       window.removeEventListener('online', onNetOnline);
       window.removeEventListener('offline', onNetOffline);
@@ -654,14 +865,21 @@ export default defineComponent({
     });
 
     return {
+      desktopVisited,
+      openDesktopSearch,
+      railSpaceListRef,
+      onSpaceMembershipCommand,
+      isDevelopment,
+      onRailMoreCommand,
       activeTab,
       pluginTabs,
       railExpanded,
       isMobileLayout,
       toggleRail,
       navItems,
+      isNavActive,
       messagesBadge,
-      contactsBadge,
+      affairsBadge,
       activePluginTab,
       pluginSpace,
       pluginManifest,
@@ -672,6 +890,7 @@ export default defineComponent({
       backFromSecondaryTab,
       openPluginTab,
       goBackFromPlugin,
+      onBuiltinPluginClose,
       loadCurrentUser,
       handleSwitchAccount,
       handleLogout,

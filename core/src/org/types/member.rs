@@ -311,6 +311,15 @@ pub struct OrganizationAccessKey {
     /// 根密钥对绑定载荷 `org-access:{orgId}:{publicKey}` 的签名（base64）。
     #[serde(rename = "bindSig")]
     pub bind_sig: String,
+    /// 根公钥（base64，A16 验绑锚点）：合入侧以 `sha256hex(rootPubkey) == 名册键
+    /// rootId` 锚定到成员后再验绑定签名。`None` = A16 前存量/旧版发布（不采信，
+    /// 本人设备重新发布即补齐）。根公钥是公开信息，随记录携带无泄露增量。
+    #[serde(
+        rename = "rootPubkey",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub root_pubkey: Option<String>,
 }
 
 /// `OrganizationAccessKey` 的绑定签名载荷：`org-access:{orgId}:{publicKeyB64}`。
@@ -389,6 +398,16 @@ impl OrganizationMember {
     /// 成员种类（键缺失 = person，org-genesis §3.2 缺省向后兼容）。
     pub fn member_kind(&self) -> MemberKind {
         self.kind.unwrap_or_default()
+    }
+
+    /// 成员的 org_user_id（A16 标识面）：由已发布的 accessKey 域公钥派生
+    /// （`sha256hex(域公钥)`）；未发布 accessKey → `None`（旧版/未迁移成员，
+    /// 消费方回退 rootId 口径）。双写过渡期的 rootId ↔ org_user_id 映射即
+    /// 本字段（accessKey 自带根绑定证明，仅组织内可见）。
+    pub fn org_user_id(&self) -> Option<String> {
+        self.access_key
+            .as_ref()
+            .and_then(crate::org::access_key::member_org_user_id)
     }
 }
 

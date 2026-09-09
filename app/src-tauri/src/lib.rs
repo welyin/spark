@@ -21,6 +21,8 @@ mod android_native;
 mod biometric_android;
 pub mod commands;
 pub mod domain_guard;
+// 桌面数据目录布局（OS 用户目录 + 存量一次性迁移，identity.md §4.3）
+mod layout;
 // 全局 log 门面注册（Android logcat / 桌面 stderr），见 logging.rs
 mod logging;
 pub mod market;
@@ -107,10 +109,38 @@ pub(crate) fn resolve_data_dir<R: tauri::Runtime, M: tauri::Manager<R>>(app: &M)
                 .map_err(|e| std::io::Error::other(format!("SPARK_DATA_DIR create failed: {e}")))?;
             Ok(dir)
         }
-        _ => app
-            .path()
-            .app_data_dir()
-            .map_err(|e| std::io::Error::other(format!("app_data_dir unavailable: {e}"))),
+        _ => {
+            let legacy = app
+                .path()
+                .app_data_dir()
+                .map_err(|e| std::io::Error::other(format!("app_data_dir unavailable: {e}")))?;
+            // 移动端沙箱天然满足 §4.3（零工作）；桌面走 OS 用户目录布局 + 一次性迁移。
+            #[cfg(any(target_os = "android", target_os = "ios"))]
+            {
+                Ok(legacy)
+            }
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            {
+                let (dir, outcome) = layout::resolve_desktop_cached(&legacy);
+                match outcome {
+                    layout::MigrateOutcome::Moved => {
+                        log::info!("[layout] 数据目录已迁移至 {}", dir.display());
+                    }
+                    layout::MigrateOutcome::Failed(msg) => {
+                        log::error!("[layout] {msg}（回退旧布局）");
+                        // 提示前端（延迟发，等 App.vue 监听器就位）；前端据此弹一次性提示。
+                        let handle = app.app_handle().clone();
+                        let msg = msg.clone();
+                        std::thread::spawn(move || {
+                            std::thread::sleep(std::time::Duration::from_secs(5));
+                            let _ = handle.emit("layout-migration-failed", msg);
+                        });
+                    }
+                    _ => {}
+                }
+                Ok(dir.clone())
+            }
+        }
     }
 }
 
@@ -130,17 +160,16 @@ pub fn run() {
         // 见 plugin_src.rs 的 URL 形态说明）。只服务已安装包（app_data_dir/plugins/
         // <id>/packages/*.spkg），未安装一律 404（解耦后无内置开发插件 dist 兜底）。
         .register_uri_scheme_protocol("plugin", |ctx, request| {
-            let data_dir = match std::env::var("SPARK_DATA_DIR") {
-                Ok(dir) if !dir.trim().is_empty() => PathBuf::from(dir),
-                _ => match ctx.app_handle().path().app_data_dir() {
-                    Ok(dir) => dir,
-                    Err(_) => {
-                        return tauri::http::Response::builder()
-                            .status(tauri::http::StatusCode::INTERNAL_SERVER_ERROR)
-                            .body(b"app_data_dir unavailable".to_vec())
-                            .expect("plugin:// error response build failed");
-                    }
-                },
+            // 与 setup 共用同一目录解析（含 A7 桌面新布局缓存），保证内核数据、
+            // 市场状态与插件源服务读同一目录。
+            let data_dir = match resolve_data_dir(ctx.app_handle()) {
+                Ok(dir) => dir,
+                Err(_) => {
+                    return tauri::http::Response::builder()
+                        .status(tauri::http::StatusCode::INTERNAL_SERVER_ERROR)
+                        .body(b"app_data_dir unavailable".to_vec())
+                        .expect("plugin:// error response build failed");
+                }
             };
             plugin_src::handle_plugin_request(&data_dir, request.uri())
         })
@@ -211,6 +240,25 @@ pub fn run() {
             market
                 .initialize()
                 .map_err(|e| std::io::Error::other(format!("plugin market init failed: {e}")))?;
+            // A19 默认内置插件预装（communication §4.2）：资源目录
+            // builtin-plugins/*.spkg 存在时安装/升级 spark-chat/spark-contacts
+            // （trust="builtin"；用户卸载墓碑/自行安装优先）。失败不阻断启动
+            // （旧内置 UI 灰度兜底），仅记录日志。
+            let builtin_resource_dir = app.path().resource_dir().ok().filter(|dir| {
+                dir.join(market::builtin::BUILTIN_PLUGINS_DIR).is_dir()
+            });
+            #[cfg(debug_assertions)]
+            let builtin_resource_dir = builtin_resource_dir.or_else(|| {
+                // dev 链路：resource_dir 不含打包资源，回退源码树资源目录
+                // （plugins `package:builtin` 直出到这里；市场记录是桥授权数据源）
+                let dev_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources");
+                dev_dir.join(market::builtin::BUILTIN_PLUGINS_DIR).is_dir().then_some(dev_dir)
+            });
+            if let Some(resource_dir) = builtin_resource_dir {
+                if let Err(e) = market.ensure_builtin_plugins(&resource_dir) {
+                    eprintln!("builtin plugins preinstall: {e}");
+                }
+            }
             app.manage(MarketState::new(Mutex::new(market)));
             // 懒惰核查队列（plugin-dist §8.8）：新声明后台 resolve_repo_plugin 核查，
             // verified 终态回写内核索引；worker 需在 KernelState/MarketState 就位后启动
@@ -251,6 +299,10 @@ pub fn run() {
             commands::identity::root_sign,
             commands::identity::root_derive_domain,
             commands::identity::root_mnemonic_check,
+            // blob 层（A3）：副本健康度 + 配额配置
+            commands::blob::root_blob_health,
+            commands::blob::root_get_blob_quota,
+            commands::blob::root_set_blob_quota,
             // 文档
             commands::docs::doc_get,
             commands::docs::doc_put,
@@ -273,12 +325,10 @@ pub fn run() {
             commands::org::org_join_by_invite,
             commands::org::org_check_join,
             commands::org::org_sync_overview,
-            commands::org::org_delete,
+            commands::org::org_leave,
             commands::org::org_add_member,
             commands::org::org_remove_member,
-            commands::org::org_set_gateways,
-            commands::org::org_set_data_accounts,
-            commands::org::org_set_member_role,
+            commands::org::org_gateway_active_set,
             commands::org::org_set_public,
             commands::org::org_update_info,
             commands::org::org_update_my_identity,
@@ -453,10 +503,11 @@ pub fn run() {
             commands::recovery::root_recovery_initiate,
             commands::recovery::root_recovery_confirm,
             commands::recovery::root_recovery_veto,
-            // M3 乙+校验器：口令统一（验票/重封/状态查询）
+            // M3 乙+校验器：口令统一（验票/重封/状态查询）+ 密码考试状态（A6）
             commands::pw::root_verify_password_ticket,
             commands::pw::root_unify_password,
             commands::pw::root_password_unify_status,
+            commands::pw::root_password_exam_status,
             // 生物识别解锁（M4；桌面构建四命令恒 unsupported）
             commands::biometric::biometric_status,
             commands::biometric::biometric_store_password,

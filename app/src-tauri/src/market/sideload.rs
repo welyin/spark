@@ -19,7 +19,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
-use super::catalog::PluginRequires;
+use super::catalog::{normalize_window, PluginRequires, PluginWindow};
 use super::permissions::{normalize_declared_permissions, resolve_granted_permissions};
 use super::sources::{file_size, now_millis};
 use super::types::{InstalledPluginState, PluginUpdateProbe};
@@ -41,21 +41,28 @@ pub(crate) struct SpkgFileEntry {
 pub(crate) struct SpkgContainer {
     pub(crate) plugin_id: String,
     domain: String,
-    version: String,
-    files: Vec<SpkgFileEntry>,
+    /// pub(crate)：builtin.rs 预装版本对账复用
+    pub(crate) version: String,
+    /// pub(crate)：builtin.rs 逐文件完整性校验复用
+    pub(crate) files: Vec<SpkgFileEntry>,
 }
 
 /// 包内 manifest.json 消费字段（名称/权限用于预览与授权；supportedSpaces 用于
-/// 市场按空间过滤；requires 用于平台约束校验与展示；其余字段忽略）。
+/// 市场按空间过滤；requires 用于平台约束校验与展示；window 为 PC 窗口默认尺寸；
+/// 其余字段忽略）。
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SpkgInnerManifest {
     name: Option<String>,
-    permissions: Option<Vec<String>>,
+    /// pub(crate)：builtin.rs 预装授权计算复用
+    pub(crate) permissions: Option<Vec<String>>,
     pub(crate) supported_spaces: Option<Vec<String>>,
     /// 运行时前提（平台/能力约束；可选，缺省 = 无约束全平台可装）
     #[serde(default)]
     pub(crate) requires: Option<PluginRequires>,
+    /// PC 窗口默认尺寸（可选，缺省/非法值 = 前端默认 880×620）
+    #[serde(default)]
+    pub(crate) window: Option<PluginWindow>,
 }
 
 /// supportedSpaces 归一化（宽进）：只保留 personal/org，去重；空结果按未声明
@@ -191,7 +198,8 @@ fn trust_rank(trust: &str) -> u8 {
 }
 
 /// 解码单个文件条目并校验 sha256/size（逐文件完整性，对齐打包脚本记录口径）。
-fn decode_and_verify_entry(entry: &SpkgFileEntry) -> Result<Vec<u8>, String> {
+/// pub(crate)：builtin.rs 默认内置预装复用同一逐文件校验。
+pub(crate) fn decode_and_verify_entry(entry: &SpkgFileEntry) -> Result<Vec<u8>, String> {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(&entry.content_base64)
         .map_err(|e| sideload_invalid(&format!("file {}: {e}", entry.path)))?;
@@ -305,8 +313,11 @@ impl PluginMarketService {
         let supported_spaces = normalize_supported_spaces(inner.as_ref().and_then(|m| m.supported_spaces.clone()));
         // 包内 manifest 自证的 requires 宽进归一化后落库（与 inspect 预览同口径）
         let requires = inner
-            .and_then(|m| m.requires)
+            .as_ref()
+            .and_then(|m| m.requires.clone())
             .and_then(normalize_requires);
+        // window 同宽进口径：非法值归一化为未声明，落库供市场合成条目回落
+        let window = normalize_window(inner.and_then(|m| m.window));
 
         // 平台约束强制点（规格 §2.1 安装时校验口径；侧载同为安装通路不豁免）
         if let Some(requires) = &requires {
@@ -341,6 +352,7 @@ impl PluginMarketService {
             trust: Some("sideloaded".to_string()),
             supported_spaces,
             requires,
+            window,
         };
         self.state
             .installed

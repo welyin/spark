@@ -310,12 +310,10 @@ export function createTauriApi(): ElectronAPI {
     organization: {
       listMine: () => call('org-list-mine'),
       create: (input) => call('org-create', input),
-      delete: (orgId) => call('org-delete', orgId),
+      leave: (orgId) => call('org-leave', orgId),
       addMember: (orgId, input) => call('org-add-member', orgId, input),
       removeMember: (orgId, memberRootId) => call('org-remove-member', orgId, memberRootId),
-      setGateways: (orgId, gateways) => call('org-set-gateways', orgId, gateways),
-      setDataAccounts: (orgId, dataAccounts) => call('org-set-data-accounts', orgId, dataAccounts),
-      setMemberRole: (orgId, memberRootId, role) => call('org-set-member-role', orgId, memberRootId, role),
+      getGatewayActiveSet: (orgId) => call('org-gateway-active-set', orgId),
       createInvite: (orgId) => call('org-invite-create', orgId),
       // 内核 accept_invite 已编排全段：解码邀请 → 连接邀请人 → stub 自举 +
       // orgsync 收敛 → 成员确认（对齐 TS service.ts acceptOrgInvite）。
@@ -475,8 +473,10 @@ export function createTauriApi(): ElectronAPI {
     rootIdentity: {
       status: () => call('root-status'),
       initialize: (password, nickname, avatar) => call('root-init', password, nickname, avatar ?? null),
-      unlock: (password, rootId) => call('root-unlock', password, rootId),
+      unlock: (password, rootId, bioSourced) => call('root-unlock', password, rootId, bioSourced ?? null),
       lock: () => call('root-lock'),
+      // 密码考试（A6，identity.md §4.2）：超 7 天未输密码 → 移动端挂起生物识别
+      passwordExamStatus: () => call('root-password-exam-status'),
       sign: (payload) => call('root-sign', payload),
       deriveDomain: (domain) => call('root-derive-domain', domain),
       listIdentities: () => call('root-list-identities'),
@@ -535,6 +535,12 @@ export function createTauriApi(): ElectronAPI {
       initiate: (op, delayHours) => call('root-recovery-initiate', op, delayHours ?? undefined),
       confirm: (requestId, newPassword) => call('root-recovery-confirm', requestId, newPassword),
       veto: (requestId) => call('root-recovery-veto', requestId)
+    },
+    blob: {
+      // blob 层（A3）：副本健康度（只提醒不处置）+ 配额配置（null 清除回落默认）
+      health: () => call('root-blob-health'),
+      getQuota: () => call('root-get-blob-quota'),
+      setQuota: (bytes) => call('root-set-blob-quota', bytes)
     },
     devices: {
       // 设备清单（多设备同步）：本机采集 + 自设备 device-sync 同步的全量记录

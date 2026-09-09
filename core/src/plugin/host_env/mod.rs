@@ -376,9 +376,10 @@ fn capability_permission(capability: &str) -> Option<&'static str> {
         "message.replyStreamStart" | "message.replyStreamChunk" | "message.replyStreamEnd" => {
             Some("message:app")
         }
-        // 社交定向投递（social-feed §9.3）：deliver 需 feed:deliver（高级 + 内核
-        // 限流）；pull 接收侧免权限——不在本表即放行。
-        "feed.deliver" => Some("feed:deliver"),
+        // 社交定向投递（social-feed §9.3 + A18 §4.1 权限归一）：deliver 需
+        // feed:write（高级 + 内核限流）；pull/订阅收件需 feed:read。
+        "feed.deliver" => Some("feed:write"),
+        "feed.pull" => Some("feed:read"),
         // 身份验签（基础权限 identity:verify，免使用时询问——对齐桥 dispatcher
         // 的 message-card 视图白名单口径）；域身份签名 identity:sign 高级 + 使用时
         // 询问（对齐桥 CALL_PERMISSIONS）。
@@ -428,16 +429,12 @@ mod tests {
         }
     }
 
-    /// S9：feed.deliver 归入 feed:deliver 权限；feed.pull 接收侧免权限（不在
-    /// 表内放行）。与桥 dispatcher 的 CALL_PERMISSIONS 逐字对齐（social-feed §9.3）。
+    /// S9 + A18 §4.1 权限归一：feed.deliver 归入 feed:write；feed.pull 归入
+    /// feed:read。与桥 dispatcher 的 CALL_PERMISSIONS 逐字对齐。
     #[test]
-    fn feed_deliver_requires_feed_deliver_pull_exempt() {
-        assert_eq!(capability_permission("feed.deliver"), Some("feed:deliver"));
-        assert_eq!(
-            capability_permission("feed.pull"),
-            None,
-            "pull 接收侧免权限——不在表内即放行"
-        );
+    fn feed_deliver_requires_feed_write_pull_requires_feed_read() {
+        assert_eq!(capability_permission("feed.deliver"), Some("feed:write"));
+        assert_eq!(capability_permission("feed.pull"), Some("feed:read"));
     }
 
     /// S9 补：identity.verify 归入基础权限 identity:verify；identity.sign 归入

@@ -10,6 +10,7 @@
   "views": [
     { "id": "default", "type": "app", "title": "业主验证" }
   ],
+  "window": { "defaultWidth": 720, "defaultHeight": 600 },
   "permissions": ["storage:read", "storage:write", "identity:sign", "credentials:read"],
   "sdkVersion": "1",
   "package": {

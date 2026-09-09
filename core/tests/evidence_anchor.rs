@@ -20,7 +20,7 @@ use common::*;
 fn governance_collection_anchor_export_verify_chain() {
     let dir = tempfile::tempdir().unwrap();
     let mut kernel = fresh_kernel(dir.path());
-    let (_root_id, _) = init_identity(&mut kernel);
+    let (root_id, _) = init_identity(&mut kernel);
 
     // 组织 + 治理集合声明（投票集合形态：append-only + governance）
     let view = kernel
@@ -73,7 +73,9 @@ fn governance_collection_anchor_export_verify_chain() {
     // 幂等：链头未变显式再锚 → false
     assert!(!kernel.evidence_anchor(&org_id).unwrap(), "链头未变不重锚");
 
-    // 导出包：按治理集合 scope 声明 → 五步核验全过
+    // 导出包：按治理集合 scope 声明（orgId 携带 → A11 roster 段编排：
+    // 名册承诺先写条目（seq=4）后锚（覆盖锚 head=4）→ 六步核验全过、
+    // ② 层 Pass、签名清单导出者在册 admin）
     let pkg = kernel
         .evidence_export(ExportScope {
             domain: Some("plugin:vote".to_string()),
@@ -81,15 +83,67 @@ fn governance_collection_anchor_export_verify_chain() {
             org_id: Some(org_id.clone()),
         })
         .unwrap();
-    assert_eq!(pkg.head.seq, 3);
-    assert_eq!(pkg.entries.len(), 3);
+    assert_eq!(pkg.format_version, 2, "含 roster 段为 v2 包");
+    assert_eq!(pkg.head.seq, 4, "3 选票 + 1 名册承诺条目");
+    assert_eq!(pkg.entries.len(), 4);
     assert_eq!(pkg.anchors.len(), 1, "导出时刻已知本机锚");
     assert!(pkg.anchor_root.is_some());
+    let roster = pkg.roster.as_ref().expect("org scope 导出携带 roster 段");
+    assert_eq!(roster.snapshot.len(), 1, "单成员组织名册");
+    assert_eq!(roster.snapshot[0].role, "admin");
+    assert_eq!(roster.anchor.org_id, org_id);
+    // A16 双写（导出接触面）：identity 保持 rootId（② 层签名回查锚点——
+    // exporter 即本机 root 身份），orgUserId additive 携带（创建即发布
+    // accessKey）
+    {
+        let record = spark_core::org::OrganizationService::get_record(
+            &kernel.__test_storage().unwrap(),
+            &org_id,
+        )
+        .unwrap()
+        .expect("组织记录存在");
+        let expected_uid = record.members[0]
+            .org_user_id()
+            .expect("创建即发布 accessKey（A16）");
+        assert_eq!(
+            roster.snapshot[0].identity, root_id,
+            "identity = rootId（签名回查零依赖锚点）"
+        );
+        assert_eq!(
+            roster.snapshot[0].org_user_id.as_deref(),
+            Some(expected_uid.as_str()),
+            "orgUserId additive 携带"
+        );
+    }
+    // memberSetHash 与 affair member_set_hash 一致（构建一致性）
+    let recomputed = spark_core::affair::snapshot::member_set_hash(&serde_json::json!([
+        { "identity": roster.snapshot[0].identity, "role": "admin" }
+    ]).as_array().unwrap().clone())
+    .unwrap();
+    assert_eq!(roster.member_set_hash, recomputed);
     let raw = serde_json::to_string_pretty(&pkg).unwrap();
     let report = spark_core::evidence::verify_export_package(&raw);
-    assert!(report.ok(), "五步核验全过: {:?}", report.failures);
-    assert_eq!(report.height, 3);
+    assert!(report.ok(), "六步核验全过: {:?}", report.failures);
+    assert_eq!(report.height, 4);
     assert_eq!(report.anchor_count, 1);
+    assert_eq!(
+        report.membership,
+        spark_core::evidence::MembershipOutcome::Pass,
+        "② 层名册回查通过: {:?}",
+        report.membership_notes
+    );
+    assert!(report.signer_checks.iter().all(|c| c.ok));
+    assert_eq!(report.signer_checks[0].role.as_deref(), Some("admin"));
+
+    // 幂等：名册未变再次导出 → 不重写承诺条目（payloadHash 幂等扫描）
+    let pkg2 = kernel
+        .evidence_export(ExportScope {
+            domain: Some("plugin:vote".to_string()),
+            collection: Some("ballots".to_string()),
+            org_id: Some(org_id.clone()),
+        })
+        .unwrap();
+    assert_eq!(pkg2.head.seq, 4, "名册未变链不再增长");
 
     // 再写入 → 链头变化 → 锚前进（LWW 自覆盖）
     kernel
@@ -103,7 +157,7 @@ fn governance_collection_anchor_export_verify_chain() {
         .unwrap();
     let anchors = kernel.evidence_anchors(&org_id).unwrap();
     assert_eq!(anchors.len(), 1, "LWW 自覆盖仍单条");
-    assert_eq!(anchors[0].head_seq, 4, "链头变化锚前进");
+    assert_eq!(anchors[0].head_seq, 5, "链头变化锚前进");
     assert!(verify_anchor(&anchors[0]));
 }
 

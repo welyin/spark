@@ -190,7 +190,9 @@ export default defineComponent({
 </script>
 
 <style scoped>
-.composer { height: 100vh; overflow: hidden; background: var(--spark-bg-page, #f5f5f5); display: flex; flex-direction: column; }
+/* 页栈子页：高度取父容器 .moments-root（定高）的 100%——与根容器 100% 口径统一；
+   内部 .body 独立滚动，顶栏固定 */
+.composer { height: 100%; overflow: hidden; background: var(--spark-bg-page, #f5f5f5); display: flex; flex-direction: column; }
 .composer-top { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: var(--spark-bg-card, #fff); }
 .cancel { border: none; background: none; color: var(--spark-text-2, #475569); font-size: 14px; cursor: pointer; }
 .title { font-weight: 600; }

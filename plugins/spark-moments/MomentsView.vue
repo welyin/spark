@@ -18,8 +18,10 @@
       <!-- 插件自接管顶栏（chrome.hostTitleBar:false）：标题「朋友圈」+ 右上角发表按钮；
            顶部固定占位（sticky），不随内容浮动，始终占据标题栏高度 -->
       <header class="moments-topbar">
-        <!-- 左上角返回按钮：退出朋友圈插件 -->
-        <button type="button" class="back-fab" title="返回" @click="closePlugin">
+        <!-- 左上角返回按钮：退出朋友圈插件。仅触屏移动形态（全屏 App）渲染——
+             移动全屏下壳层沉浸式无可见返回（仅 Android 硬件返回键），此钮是唯一可见出口；
+             PC 窗口模式 WindowFrame 自带关闭钮，插件内退出钮语义重复，不渲染（ui-layout） -->
+        <button v-if="isTouchLayout" type="button" class="back-fab" title="返回" @click="closePlugin">
           <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M15 18l-6-6 6-6" />
           </svg>
@@ -90,6 +92,7 @@ import { computed, defineComponent, onMounted, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { usePageStack } from './composables/usePageStack';
 import { useMoments } from './composables/useMoments';
+import { isTouchLayout } from './ui-layout';
 import { ensurePluginSDK } from '../../packages/plugin-sdk/src';
 import TimelineItem from './components/TimelineItem.vue';
 import type { MomentsPost } from './model';
@@ -120,7 +123,7 @@ export default defineComponent({
       });
     };
 
-    // 左上角返回：退出朋友圈插件（请求壳层关闭当前插件 tab）
+    // 左上角返回（仅触屏移动形态渲染）：退出朋友圈插件（请求壳层关闭当前插件 tab/窗口）
     const closePlugin = async () => {
       try {
         const sdk = await ensurePluginSDK();
@@ -192,6 +195,7 @@ export default defineComponent({
       pageSize,
       avatarFallback,
       contacts,
+      isTouchLayout,
       openComposer,
       openMyPosts,
       openDetail,
@@ -207,9 +211,10 @@ export default defineComponent({
 
 <style scoped>
 .moments-root {
-  /* 用 100vh 锁定 iframe 视口高度（不依赖 html/body 高度设置）；overflow hidden
-     使整页不滚动，只有内部 .timeline 独立滚动 */
-  height: 100vh;
+  /* 高度沿 html/body/#app 链取 100%（同 spark-chat/spark-minichat 先例口径；
+     iframe 内等同窗口内容高）；overflow hidden 使整页不滚动，
+     只有内部 .moments-scroll / 页栈子页各自独立滚动 */
+  height: 100%;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -307,6 +312,11 @@ export default defineComponent({
   font-weight: 600;
   font-size: 18px;
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  /* 窄窗（320 最小窗）长昵称防溢出：左侧留白 12px，超出省略 */
+  max-width: calc(100% - 104px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .compose-fab {
   position: absolute;
@@ -375,10 +385,11 @@ export default defineComponent({
 
 <style>
 /* 全局 reset（非 scoped）：iframe 宿主文档禁止整页滚动。
-   否则 html/body 默认 margin + 非 100% 高度会让 .moments-root(100vh) 超出视口，
-   导致标题栏跟着整页滚动。锁定后只有内部 .timeline 独立滚动。 */
+   宿主 srcdoc 只给空 #app（无预设样式），html/body/#app 高度链由插件自给
+   （同 spark-minichat 先例）。锁定后整页不滚，只有内部各滚动区独立滚动。 */
 html,
-body {
+body,
+#app {
   margin: 0;
   height: 100%;
   overflow: hidden;

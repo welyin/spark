@@ -17,13 +17,27 @@
 
   <!-- 正常态 -->
   <div v-else class="ai-chat-root" :class="{ dark: isDark }">
-    <!-- 左侧：Bot 列表 -->
-    <aside class="sidebar">
+    <!-- 左侧：Bot 列表（宽窗常驻两栏；窄窗折叠为覆盖抽屉，顶栏 ☰ 打开） -->
+    <aside
+      class="sidebar"
+      :class="{ 'sidebar--overlay': isNarrowLayout, 'sidebar--open': sidebarOpen }"
+      @click.self="closeSidebar"
+    >
       <div class="sidebar-header">
         <h2 class="sidebar-title">AI 聊天</h2>
-        <button class="btn-add-bot" @click="openBotForm()" title="新建 Bot">
-          <span class="btn-add-icon">+</span>
-        </button>
+        <div class="sidebar-header-actions">
+          <button
+            v-if="isNarrowLayout"
+            class="btn-sidebar-close"
+            @click="closeSidebar"
+            title="收起列表"
+          >
+            &times;
+          </button>
+          <button class="btn-add-bot" @click="openBotForm()" title="新建 Bot">
+            <span class="btn-add-icon">+</span>
+          </button>
+        </div>
       </div>
       <div class="bot-list" v-if="bots.length > 0">
         <div
@@ -56,10 +70,26 @@
       </div>
     </aside>
 
+    <!-- 窄窗抽屉遮罩：点击空白处收起侧栏 -->
+    <div
+      v-if="isNarrowLayout && sidebarOpen"
+      class="sidebar-backdrop"
+      @click="closeSidebar"
+    ></div>
+
     <!-- 右侧：聊天区 -->
     <main class="chat-area" v-if="activeBotId">
       <!-- 聊天头部 -->
       <header class="chat-header">
+        <button
+          v-if="isNarrowLayout"
+          class="btn-sidebar-toggle"
+          @click="openSidebar"
+          title="Bot 列表"
+          aria-label="打开 Bot 列表"
+        >
+          ☰
+        </button>
         <div class="chat-header-info">
           <strong>{{ activeBot?.name ?? '...' }}</strong>
           <span class="chat-header-type">{{ backendLabel(activeBot?.backendType) }}</span>
@@ -134,6 +164,15 @@
 
     <!-- 未选择 Bot -->
     <main v-else class="chat-area chat-area--empty">
+      <button
+        v-if="isNarrowLayout"
+        class="btn-sidebar-toggle btn-sidebar-toggle--empty"
+        @click="openSidebar"
+        title="Bot 列表"
+        aria-label="打开 Bot 列表"
+      >
+        ☰
+      </button>
       <div class="no-bot-selected">
         <p class="no-bot-icon">🤖</p>
         <p>选择一个 Bot 开始聊天</p>
@@ -426,6 +465,7 @@ import {
 } from './service';
 import type { BackendType, BotInstance, ChatMessageRecord } from './model';
 import { renderMarkdown, validateMessage } from './model';
+import { isNarrowLayout } from './ui-layout';
 
 // ------------------------------------------------------------------
 // 状态
@@ -447,6 +487,22 @@ const messages = ref<ChatMessageRecord[]>([]);
 const inputText = ref('');
 const thinking = ref(false);
 const loadingMessages = ref(false);
+
+/** 窄窗抽屉开态（宽窗下无意义：侧栏常驻，--overlay 类不生效） */
+const sidebarOpen = ref(false);
+
+function openSidebar(): void {
+  sidebarOpen.value = true;
+}
+
+function closeSidebar(): void {
+  sidebarOpen.value = false;
+}
+
+// 宽窄模式切换时复位抽屉：切宽窗抽屉状态无意义，切窄窗默认收起
+watch(isNarrowLayout, () => {
+  sidebarOpen.value = false;
+});
 
 /** OpenAI / Ollama / CodeBuddy 可用模型列表（datalist 候选） */
 const openaiModels = ref<string[]>([]);
@@ -749,6 +805,8 @@ async function loadBots(): Promise<void> {
 function selectBot(botId: string): void {
   activeBotId.value = botId;
   activeBot.value = bots.value.find((b: BotInstance) => b.id === botId) ?? null;
+  // 窄窗：选中 Bot 后收起抽屉，聊天区全宽展示
+  closeSidebar();
   loadChatHistory();
 }
 
@@ -1034,9 +1092,10 @@ html, body {
    目标：简洁、现代、与 Element Plus 宿主主题兼容
    ================================================================ */
 
-/* 根容器 */
+/* 根容器（position:relative：窄窗抽屉/遮罩绝对定位的锚点） */
 .ai-chat-root {
   display: flex;
+  position: relative;
   height: 100%;
   width: 100%;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -1251,6 +1310,88 @@ html, body {
 
 .sidebar-empty-hint {
   font-size: 11px;
+}
+
+/* ----------------------------------------------------------------
+   窄窗布局（≤600px，ui-layout.isNarrowLayout）：
+   侧栏折叠为覆盖抽屉，聊天区全宽；顶栏 ☰ 打开，
+   遮罩点击 / 头部 × / 选中 Bot 均可收起
+   ---------------------------------------------------------------- */
+
+/* 顶栏 ☰ 打开侧栏 */
+.btn-sidebar-toggle {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  margin-right: 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #475569;
+  font-size: 16px;
+  line-height: 32px;
+  cursor: pointer;
+}
+
+.btn-sidebar-toggle:hover {
+  background: #f1f5f9;
+}
+
+/* 未选 Bot 空态的 ☰：钉在窗口左上角 */
+.btn-sidebar-toggle--empty {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 5;
+  margin-right: 0;
+}
+
+.sidebar-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 抽屉头部 × 收起按钮 */
+.btn-sidebar-close {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 16px;
+  line-height: 28px;
+  cursor: pointer;
+}
+
+.btn-sidebar-close:hover {
+  background: #f1f5f9;
+  color: #475569;
+}
+
+/* 覆盖抽屉形态：绝对定位滑入滑出；宽窗无 --overlay 类，样式不生效 */
+.sidebar--overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  z-index: 30;
+  max-width: 85vw;
+  box-shadow: 8px 0 24px rgba(15, 23, 42, 0.12);
+  transform: translateX(-105%);
+  transition: transform 0.2s ease;
+}
+
+.sidebar--overlay.sidebar--open {
+  transform: translateX(0);
+}
+
+.sidebar-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  background: rgba(15, 23, 42, 0.25);
 }
 
 /* ----------------------------------------------------------------

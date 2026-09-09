@@ -109,19 +109,51 @@
           </div>
         </div>
 
+        <!-- A41 核对修正：kApplicable=false = 纯 all-members 组织无 K
+             （membership §4.1 / batch2 §1.2），只做信息性呈现，
+             不做达标判定、不提醒 -->
         <div v-if="currentOverview" class="replica-row">
-          <el-tag :type="replicaTagType(currentOverview)">{{ replicaLabel(currentOverview) }}</el-tag>
-          <span class="replica-hint">
-            {{ currentOverview.syncedPeers >= currentOverview.replicaTarget ? '副本充足' : '副本不足，建议成员保持在线或邀请更多节点' }}
-            （已同步节点 {{ currentOverview.syncedPeers }} / 成员 {{ currentOverview.totalMembers }}）
-          </span>
+          <template v-if="currentOverview.kApplicable">
+            <el-tag :type="replicaTagType(currentOverview)">{{ replicaLabel(currentOverview) }}</el-tag>
+            <span class="replica-hint">
+              {{ currentOverview.syncedPeers >= currentOverview.replicaTarget ? '副本充足' : '副本不足，建议成员保持在线或邀请更多节点' }}
+              （已同步节点 {{ currentOverview.syncedPeers }} / 成员 {{ currentOverview.totalMembers }}）
+            </span>
+          </template>
+          <template v-else>
+            <el-tag type="info">全员持有</el-tag>
+            <span class="replica-hint">
+              本组织数据全员持有，无副本目标（已同步节点 {{ currentOverview.syncedPeers }} / 成员 {{ currentOverview.totalMembers }}）
+            </span>
+          </template>
         </div>
 
-        <!-- O1 两级记账：逐数据账号 PC 达标状态（不达标仅提醒，无自动处置） -->
-        <div v-if="currentOverview && currentOverview.dataAccounts && currentOverview.dataAccounts.length" class="replica-row">
-          <span class="replica-hint">数据账号：</span>
+        <!-- A47：当前履职网关（只读；全员候选计分推导自动轮换，无设置入口） -->
+        <div class="replica-row">
+          <span class="replica-hint">当前履职网关：</span>
+          <template v-if="gatewayActiveSet.length">
+            <el-tag
+              v-for="rootId in gatewayActiveSet"
+              :key="rootId"
+              size="small"
+              type="info"
+              class="data-account-tag"
+            >
+              {{ shortRootId(rootId) }}
+            </el-tag>
+          </template>
+          <span v-else class="replica-hint replica-hint-warn">
+            暂无（组织缺 PC 类成员时为空，建议常备一台常开桌面设备）
+          </span>
+          <span class="replica-hint">全员候选按在线与活跃自动推导，每小时轮换，无需设置</span>
+        </div>
+
+        <!-- A14 全员数据节点：逐成员 PC 副本状态（集体口径 ≥3 即达标，
+             逐成员展示为信息性提醒，无自动处置） -->
+        <div v-if="currentOverview && currentOverview.memberReplicas && currentOverview.memberReplicas.length" class="replica-row">
+          <span class="replica-hint">成员副本：</span>
           <el-tag
-            v-for="account in currentOverview.dataAccounts"
+            v-for="account in currentOverview.memberReplicas"
             :key="account.rootId"
             :type="account.pcSynced ? 'success' : 'warning'"
             size="small"
@@ -129,30 +161,18 @@
           >
             {{ shortRootId(account.rootId) }}{{ account.deviceClass === 'mobile' ? '（手机）' : '' }}
           </el-tag>
-          <span v-if="!dataAccountsOk" class="replica-hint replica-hint-warn">
-            有数据账号缺少 PC 设备副本，请为其配置桌面端
+          <span v-if="!memberReplicasOk" class="replica-hint replica-hint-warn">
+            成员 PC 副本合计不足 3 份，建议成员常备桌面端在线
           </span>
         </div>
 
-        <div v-if="organization.isCurrentUserAdmin" class="org-actions">
-          <el-button type="danger" plain :loading="deleting" @click="deleteOrganization">
-            {{ deleting ? '删除中...' : '删除组织' }}
+        <!-- A13（community-model #18）：删除通路已整体移除——域只可退出，
+             不可解散；原「删除组织」位置替换为「退出组织」引导 -->
+        <div class="org-actions">
+          <el-button type="danger" plain :loading="leaving" @click="leaveOrganization">
+            {{ leaving ? '退出中...' : '退出组织' }}
           </el-button>
         </div>
-      </el-card>
-
-      <!-- 网关设置：网关编辑（GatewayManager 复用） -->
-      <el-card v-else-if="activeSection === 'gateway'" shadow="never" class="panel-card">
-        <GatewayManager
-          v-model="gatewaySelection"
-          :org-id="organization.orgId"
-          :members="organization.members"
-          :gateways="organization.gateways ?? []"
-          :is-admin="organization.isCurrentUserAdmin"
-          :saving="savingGateways"
-          :valid="gatewaySelectionValid"
-          @save="saveGateways"
-        />
       </el-card>
 
       <!-- 找回组织：节点名片分享/导入（RecoverConnectionPanel 复用） -->
@@ -191,7 +211,7 @@
 <script lang="ts">
 import { computed, defineComponent, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Brush, Connection, OfficeBuilding, Refresh, Search, Share } from '@element-plus/icons-vue';
+import { Brush, OfficeBuilding, Refresh, Search, Share } from '@element-plus/icons-vue';
 import { isMobileLayout } from '../../stores/ui-layout';
 import { isOverlayCloseTarget, popOverlay, pushOverlay } from '../../stores/overlay-stack';
 import MobileBackBar from '../MobileBackBar.vue';
@@ -203,19 +223,19 @@ import OrgAvatar from '../OrgAvatar.vue';
 import AvatarPicker from '../AvatarPicker.vue';
 import DiscoverOrgsPanel from './DiscoverOrgsPanel.vue';
 import PurgeDataPanel from './PurgeDataPanel.vue';
-import GatewayManager from './GatewayManager.vue';
 import PublicOrgPanel from './PublicOrgPanel.vue';
 import RecoverConnectionPanel from './RecoverConnectionPanel.vue';
 import type { OrganizationView } from './types';
 
-type SectionKey = 'info' | 'gateway' | 'recover' | 'purge' | 'public' | 'discover';
+// A9（network §4.2）：网关指定通路已移除（活跃集全员候选计分推导，无设置入口）
+type SectionKey = 'info' | 'recover' | 'purge' | 'public' | 'discover';
 
 export default defineComponent({
   name: 'OrgSettingsPanel',
   components: {
     DiscoverOrgsPanel,
+    MobileBackBar,
     PurgeDataPanel,
-    GatewayManager,
     PublicOrgPanel,
     RecoverConnectionPanel,
     OrgAvatar,
@@ -261,9 +281,10 @@ export default defineComponent({
     const editInfoValue = ref('');
     const savingInfo = ref(false);
 
-    const deleting = ref(false);
-    const gatewaySelection = ref<string[]>([]);
-    const savingGateways = ref(false);
+    const leaving = ref(false);
+
+    // A47：当前履职网关（只读查询，reload 时刷新）
+    const gatewayActiveSet = ref<string[]>([]);
 
     // 公开组织（§15/§16）：管理员开关 + 展示名；组织地址全成员可见可复制
     const publicEnabled = ref(false);
@@ -276,7 +297,6 @@ export default defineComponent({
     // color 为菜单图标色（微信式每项一色，取色与 utils/palette 品牌色板同源，移动端与桌面端统一上色）
     const sections: Array<{ key: SectionKey; label: string; icon: Component; color: string }> = [
       { key: 'info', label: '组织信息', icon: OfficeBuilding, color: '#00b8a9' },
-      { key: 'gateway', label: '网关设置', icon: Connection, color: '#3296fa' },
       { key: 'recover', label: '找回组织', icon: Refresh, color: '#34c19b' },
       { key: 'purge', label: '数据治理', icon: Brush, color: '#7b61ff' },
       { key: 'public', label: '公开设置', icon: Share, color: '#ff7d00' },
@@ -289,18 +309,6 @@ export default defineComponent({
     );
 
     const currentOverview = computed(() => overview.value);
-
-    const gatewaySelectionValid = computed(() => {
-      if (!organization.value) {
-        return false;
-      }
-      const memberIds = new Set(organization.value.members.map((member) => member.rootId));
-      // O1：空选择 = 清除显式指定（回落缺省全员候选），合法；显式指定限 1–3
-      return (
-        gatewaySelection.value.length <= 3 &&
-        gatewaySelection.value.every((rootId) => memberIds.has(rootId))
-      );
-    });
 
     // 只加载当前空间组织：org-membership 缓存里找对应 orgId，顺带取同步概览
     const reload = async () => {
@@ -316,8 +324,7 @@ export default defineComponent({
         const found = findOrg(orgId);
         organization.value = found;
         if (found) {
-          // 初始化网关选择/公开设置，避免残留上一个组织的数据
-          gatewaySelection.value = [...(found.gateways ?? [])];
+          // 初始化公开设置，避免残留上一个组织的数据
           publicEnabled.value = found.isPublic ?? false;
           publicDisplayName.value = found.orgDisplayName ?? '';
           try {
@@ -325,8 +332,15 @@ export default defineComponent({
           } catch {
             overview.value = null;
           }
+          try {
+            gatewayActiveSet.value =
+              await window.electronAPI.organization.getGatewayActiveSet(found.orgId);
+          } catch {
+            gatewayActiveSet.value = [];
+          }
         } else {
           overview.value = null;
+          gatewayActiveSet.value = [];
         }
       } catch (error) {
         ElMessage.error(`加载组织失败：${error}`);
@@ -369,14 +383,14 @@ export default defineComponent({
       return item.syncedPeers >= item.replicaTarget ? 'success' : 'warning';
     };
 
-    // O1 两级记账：全体数据账号 PC 副本合计 ≥3 且每账号 ≥1（org-data-sync §4）
-    const dataAccountsOk = computed(() => {
-      const accounts = currentOverview.value?.dataAccounts;
+    // A14 全员数据节点：全体成员 PC 副本合计 ≥3（集体口径，membership §4.1）
+    const memberReplicasOk = computed(() => {
+      const accounts = currentOverview.value?.memberReplicas;
       if (!accounts || accounts.length === 0) {
         return true;
       }
       const pcTotal = accounts.filter((a) => a.pcSynced).length;
-      return pcTotal >= 3 && accounts.every((a) => a.pcSynced);
+      return pcTotal >= 3;
     });
 
     const shortRootId = (rootId: string) =>
@@ -440,24 +454,6 @@ export default defineComponent({
       }
     };
 
-    const saveGateways = async () => {
-      if (!organization.value || !gatewaySelectionValid.value) {
-        ElMessage.warning('请选择最多 3 名本组织成员作为网关（清空 = 全员候选缺省）');
-        return;
-      }
-      savingGateways.value = true;
-      try {
-        await notifyIfNetworkUnavailable();
-        await window.electronAPI.organization.setGateways(organization.value.orgId, gatewaySelection.value);
-        ElMessage.success('网关设置已保存');
-        await reload();
-      } catch (error) {
-        ElMessage.error(`保存网关设置失败：${error}`);
-      } finally {
-        savingGateways.value = false;
-      }
-    };
-
     const savePublic = async () => {
       if (!organization.value) {
         return;
@@ -478,31 +474,37 @@ export default defineComponent({
       }
     };
 
-    const deleteOrganization = async () => {
+    // A13：退出组织（删除语义消失后的承接）。留史语义：组织历史原样保留，
+    // 自己设备上的组织数据转为只读档案；全员退出后组织成空域（无人能再写入）。
+    const leaveOrganization = async () => {
       if (!organization.value) {
         return;
       }
+      const isLastMember = organization.value.memberCount <= 1;
+      const message = isLastMember
+        ? `你是「${organization.value.name}」最后一名成员，退出后组织即成为空域：历史保留为只读档案，无人能再写入。确认退出？`
+        : `确认退出组织「${organization.value.name}」？退出后组织历史原样保留，本机上的组织数据转为只读档案。`;
 
       try {
-        await ElMessageBox.confirm(`确认删除组织「${organization.value.name}」？`, '删除确认', {
+        await ElMessageBox.confirm(message, '退出确认', {
           type: 'warning',
-          confirmButtonText: '确认删除',
+          confirmButtonText: '确认退出',
           cancelButtonText: '取消'
         });
       } catch {
         return;
       }
 
-      deleting.value = true;
+      leaving.value = true;
       try {
-        await window.electronAPI.organization.delete(organization.value.orgId);
-        ElMessage.success('组织已删除');
-        // 本组织已消失：reload 后找不到记录，第四栏自然落入空态
+        await window.electronAPI.organization.leave(organization.value.orgId);
+        ElMessage.success('已退出组织');
+        // 已退出：reload 后本组织不在「我的组织」列表，第四栏自然落入空态
         await reload();
       } catch (error) {
-        ElMessage.error(`删除组织失败：${error}`);
+        ElMessage.error(`退出组织失败：${error}`);
       } finally {
-        deleting.value = false;
+        leaving.value = false;
       }
     };
 
@@ -538,25 +540,22 @@ export default defineComponent({
       editingInfo,
       editInfoValue,
       savingInfo,
-      deleting,
-      gatewaySelection,
-      savingGateways,
+      leaving,
+      gatewayActiveSet,
       publicEnabled,
       publicDisplayName,
       savingPublic,
       recoverPanelRef,
-      gatewaySelectionValid,
       reload,
       replicaLabel,
       replicaTagType,
-      dataAccountsOk,
+      memberReplicasOk,
       shortRootId,
       startEditInfo,
       cancelEditInfo,
       saveInfo,
-      saveGateways,
       savePublic,
-      deleteOrganization,
+      leaveOrganization,
       formatDate
     };
   }

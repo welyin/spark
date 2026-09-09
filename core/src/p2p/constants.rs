@@ -232,6 +232,15 @@ pub const RELAY_STABILITY_WINDOW_MS: i64 = 3_600_000;
 /// 动态 IP 降权变化次数阈值（R1 粗略口径）。
 pub const RELAY_STABILITY_LOW_CHANGES: usize = 3;
 
+/// relay Unsupported 黑名单前缀（A44，relay_blacklist.rs）：本地观测状态，
+/// 独立 prefix、不进任何同步/交换路径（同 overlay 地址黑名单口径）。
+pub const P2P_RELAY_UNSUPPORTED_PREFIX: &str = "p2p:relay:unsupported:";
+/// relay Unsupported 黑名单 TTL（24h）：「无 hop 能力」是确定性信号故长退避；
+/// 自动过期防永久误伤（对端升级开启 relay server 后自然恢复候选资格）。
+pub const RELAY_UNSUPPORTED_TTL_MS: i64 = 24 * 60 * 60 * 1000;
+/// relay Unsupported 黑名单容量上限（超限逐出最早过期者）。
+pub const RELAY_UNSUPPORTED_MAX_ENTRIES: usize = 256;
+
 /// 网络切换 debounce（5s）。
 pub const NETWORK_CHANGE_DEBOUNCE_MS: i64 = 5_000;
 /// 网络变更触发的全局最小间隔（60s）：online/offline 抖动环境下防抖定时器会

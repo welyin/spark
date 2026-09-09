@@ -430,10 +430,10 @@ mod tests {
         payload
     }
 
-    /// onlineSave：无在线数据账号（无节点）→ 回退离线入队（queued:true），
-    /// 队列有条目（不丢写）。
+    /// onlineSave：本机是数据节点（A14 全员数据节点：成员即驻留）→ 本地写
+    /// `accepted:true` 并落 orgd 副本（无「数据账号全离线入队」旧分支）。
     #[tokio::test(flavor = "multi_thread")]
-    async fn online_save_falls_back_to_queue_when_offline() {
+    async fn online_save_local_resident_writes_local() {
         let (host, rx, _dir) = test_host();
         let (tx, _) = std::sync::mpsc::channel::<PluginEvent>();
         let org_id = seed_org_decl(&host);
@@ -448,35 +448,37 @@ mod tests {
         .unwrap();
         let payload = recv_result(&rx2);
         assert_eq!(
-            payload["queued"],
+            payload["accepted"],
             serde_json::json!(true),
-            "全离线 → 入队确认"
+            "本地驻留 → accepted（全员数据节点）"
+        );
+        let s = host.require_storage().unwrap();
+        assert!(
+            s.get(&format!("orgd:{org_id}:testplug:col@v1:k1"))
+                .unwrap()
+                .is_some(),
+            "落 orgd 本地副本"
         );
         assert!(
-            crate::sync::orgsync::orgq_queue_has_data(&host.require_storage().unwrap(), &org_id),
-            "离线队列有条目（不丢写）"
+            !crate::sync::orgsync::orgq_queue_has_data(&s, &org_id),
+            "本地驻留不入队"
         );
         drop(rx);
     }
 
-    /// onlineGet：非驻留 + 无在线目标 → 回退成员侧缓存（缓存有值返回缓存值）。
+    /// onlineGet：本机是数据节点（A14）→ 本地 orgd 直读（无缓存回退旧分支）。
     #[tokio::test(flavor = "multi_thread")]
-    async fn online_get_falls_back_to_member_cache() {
+    async fn online_get_local_resident_reads_orgd() {
         let (host, _rx, _dir) = test_host();
         let org_id = seed_org_decl(&host);
-        // 预制成员侧缓存
-        let rec = crate::sync::orgsync::OrgqRespRecord {
-            key: format!("orgd:{org_id}:testplug:col@v1:k1"),
-            value: serde_json::json!({"v": 42}),
-            meta: Default::default(),
-        };
-        let mut s = host.require_storage().unwrap();
-        s.put(
-            &crate::sync::orgsync::orgq_cache_key(&org_id, "testplug:col@v1", "k1"),
-            &serde_json::to_string(&rec).unwrap(),
-        )
-        .unwrap();
-        drop(s);
+        // 预制本地 orgd 副本
+        {
+            let mut s = host.require_storage().unwrap();
+            let decl = crate::plugindata::get_declaration_org(&s, &org_id, "testplug:col", "1")
+                .unwrap()
+                .expect("声明存在");
+            crate::plugindata::save(&mut s, &decl, "k1", "{\"v\":42}").unwrap();
+        }
         let (tx2, rx2) = std::sync::mpsc::channel::<PluginEvent>();
         host.data_online_get(
             &rtx(tx2),
@@ -487,7 +489,7 @@ mod tests {
         assert_eq!(
             payload["value"]["v"],
             serde_json::json!(42),
-            "回退缓存返回缓存值"
+            "本地 orgd 直读（全员数据节点）"
         );
     }
 

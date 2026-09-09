@@ -148,8 +148,8 @@ pub(crate) fn orgq_online_target<S: StorageBackend>(
     let record = crate::org::OrganizationService::get_record(storage, org_id)
         .ok()
         .flatten()?;
-    if crate::org::roles::is_data_account(&record, my_root_id) {
-        return None; // 本机是数据账号 → 本地直读，不投递
+    if crate::org::roles::is_data_node(&record, my_root_id) {
+        return None; // 本机是数据节点（A14：成员）→ 本地直读，不投递
     }
     let degraded = crate::sync::orgsync::orgq_degraded_for_collection(storage, org_id, col_full);
     select_online_data_account(&record, online_peer_ids, my_root_id, &degraded)
@@ -372,8 +372,8 @@ impl Kernel {
         else {
             return Ok(WriteRoute::Local);
         };
-        // 本机是数据账号 → 直接落库（本地驻留）
-        if crate::org::roles::is_data_account(&record, &my_root) {
+        // 本机是数据节点（A14：成员）→ 直接落库（本地驻留）
+        if crate::org::roles::is_data_node(&record, &my_root) {
             return Ok(WriteRoute::Local);
         }
         // 在线数据账号集合（连接层 peer 在线，与读路由同口径）→ 在线投递

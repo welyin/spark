@@ -35,6 +35,37 @@ fn org_create_invite_and_overview() {
     assert_eq!(view.member_count, 1);
     let org_id = view.record.org_id.clone();
 
+    // A16：创建者即发布 accessKey（写一次），org_user_id 可派生且 ≠ rootId。
+    {
+        let s = kernel.__test_storage().unwrap();
+        let record = OrganizationService::get_record(&s, &org_id).unwrap().unwrap();
+        let me = &record.members[0];
+        let access_key = me.access_key.as_ref().expect("创建即发布 accessKey");
+        let uid = me.org_user_id().expect("org_user_id 可派生");
+        assert_eq!(uid.len(), 64);
+        assert_ne!(uid, root_id, "org_user_id 不泄露 rootId 关联");
+        assert!(
+            spark_core::org::access_key::verify_access_key_binding(
+                &org_id,
+                &root_id,
+                access_key
+            ),
+            "自发布验绑通过"
+        );
+        // 幂等：重复发布不覆盖（写一次）。
+        assert!(
+            !OrganizationService::publish_access_key(
+                &mut s.clone(),
+                &org_id,
+                &root_id,
+                access_key.clone(),
+                system_now_ms(),
+            )
+            .unwrap(),
+            "已存在不覆盖"
+        );
+    }
+
     assert_eq!(kernel.list_orgs().unwrap().len(), 1);
 
     // 副本概览：本机恒算 1 个副本
@@ -176,12 +207,13 @@ fn org_member_management() {
         "Organization not found"
     );
 
-    // 删除组织
-    kernel.org_delete(&org_id).unwrap();
+    // 退出组织（A13：删除通路已移除，域只可退出）——最后一名成员退出
+    // 即成空域：组织记录保留（只读档案），本机「我的组织」列表为空
+    kernel.org_leave(&org_id).unwrap();
     assert!(kernel.list_orgs().unwrap().is_empty());
     assert_eq!(
-        kernel.org_delete(&org_id).unwrap_err().to_string(),
-        "Organization not found"
+        kernel.org_leave(&org_id).unwrap_err().to_string(),
+        "Member not found"
     );
 
     kernel.shutdown().unwrap();
@@ -488,6 +520,91 @@ fn org_update_info_avatar_patch() {
         .org_update_info(&org_id, None, None, Some(""))
         .unwrap();
     assert_eq!(view.record.avatar, "");
+
+    kernel.shutdown().unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// A16 切片三（membership §4.4-4）：存量迁移执行——unlock 时 accessKey 补齐
+// ---------------------------------------------------------------------------
+
+/// 存量形态（whole 与条目均无 accessKey）经 unlock 迁移补齐：seed 确定性
+/// 派生 + 写一次发布（whole 与 per-member 条目双写），验绑通过、org_user_id
+/// 双键可解析；再次 unlock 幂等不放大。
+#[test]
+fn access_key_backfill_on_unlock_restores_legacy_member() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut kernel = fresh_kernel(dir.path());
+    let (root_id, _) = init_identity(&mut kernel);
+    let view = kernel
+        .create_org(CreateOrganizationInput {
+            name: "迁移组织".to_string(),
+            description: None,
+            avatar: None,
+            base_plugin_domain: None,
+            ..Default::default()
+        })
+        .unwrap();
+    let org_id = view.record.org_id.clone();
+
+    // 模拟存量形态：whole 与 per-member 条目都剥掉 accessKey（A16 前成员）
+    {
+        let mut s = kernel.__test_storage().unwrap();
+        let mut record = OrganizationService::get_record(&s, &org_id)
+            .unwrap()
+            .expect("组织记录存在");
+        record.members[0].access_key = None;
+        OrganizationService::save_record(&mut s, &record).unwrap();
+        s.put(
+            &spark_core::org::types::org_member_key(&org_id, &root_id),
+            &serde_json::to_string(&record.members[0]).unwrap(),
+        )
+        .unwrap();
+    }
+
+    // unlock 触发存量迁移（lock 后重解，幂等路径同生产）
+    kernel.lock();
+    kernel.unlock(PASSWORD, None).unwrap();
+
+    let s = kernel.__test_storage().unwrap();
+    let record = OrganizationService::get_record(&s, &org_id)
+        .unwrap()
+        .expect("组织记录存在");
+    let me = &record.members[0];
+    let access_key = me.access_key.as_ref().expect("unlock 迁移补齐 accessKey");
+    assert!(
+        spark_core::org::access_key::verify_access_key_binding(&org_id, &root_id, access_key),
+        "补齐的 accessKey 验绑通过"
+    );
+    let uid = me.org_user_id().expect("org_user_id 可派生");
+    assert!(
+        record.find_member_any_key(&uid).is_some(),
+        "org_user_id 双键命中名册"
+    );
+    // per-member 条目双写同步补齐
+    let raw = s
+        .get(&spark_core::org::types::org_member_key(&org_id, &root_id))
+        .unwrap()
+        .expect("成员条目存在");
+    let entry: spark_core::org::types::OrganizationMember =
+        serde_json::from_str(&raw).unwrap();
+    assert_eq!(
+        entry.access_key.as_ref(),
+        Some(access_key),
+        "条目与 whole 同步补齐"
+    );
+
+    // 再次 unlock 幂等（写一次，不放大不覆盖）
+    let published = access_key.clone();
+    kernel.lock();
+    kernel.unlock(PASSWORD, None).unwrap();
+    let s = kernel.__test_storage().unwrap();
+    let record = OrganizationService::get_record(&s, &org_id).unwrap().unwrap();
+    assert_eq!(
+        record.members[0].access_key.as_ref(),
+        Some(&published),
+        "再次 unlock 幂等不覆盖"
+    );
 
     kernel.shutdown().unwrap();
 }

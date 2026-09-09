@@ -374,7 +374,9 @@ impl KernelDmHandler {
                 | crate::kernel::inbound_dm::PdsyncOut::Data { body } => body_max_dseq(body),
                 crate::kernel::inbound_dm::PdsyncOut::Need { .. }
                 | crate::kernel::inbound_dm::PdsyncOut::AttachReq { .. }
-                | crate::kernel::inbound_dm::PdsyncOut::AttachResp { .. } => None,
+                | crate::kernel::inbound_dm::PdsyncOut::AttachResp { .. }
+                | crate::kernel::inbound_dm::PdsyncOut::BlobFetch { .. }
+                | crate::kernel::inbound_dm::PdsyncOut::BlobChunk { .. } => None,
             })
             .max();
         let wm_peer_id = target.peer_id.clone();
@@ -649,6 +651,12 @@ async fn send_pdsync_outputs(
             }
             crate::kernel::inbound_dm::PdsyncOut::AttachResp { .. } => {
                 crate::kernel::dm_envelope::KIND_PDSYNC_ATTACHMENT_RESP
+            }
+            crate::kernel::inbound_dm::PdsyncOut::BlobFetch { .. } => {
+                crate::kernel::dm_envelope::KIND_BLOB_FETCH
+            }
+            crate::kernel::inbound_dm::PdsyncOut::BlobChunk { .. } => {
+                crate::kernel::dm_envelope::KIND_BLOB_CHUNK
             }
         };
         let envelope = dm_envelope::build_envelope(

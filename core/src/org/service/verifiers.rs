@@ -87,6 +87,9 @@ pub fn sigset_storage_closures<'a, S: StorageBackend>(
                 .map(|m| RosterMember {
                     identity: m.root_id.clone(),
                     role: m.role.as_str().to_string(),
+                    // A16 双写：名册投影携带 org_user_id（未发布的成员为 None，
+                    // 名册回查双键兼容不受影响）。
+                    org_user_id: m.org_user_id(),
                 })
                 .collect(),
         )

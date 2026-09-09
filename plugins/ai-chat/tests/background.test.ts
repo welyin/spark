@@ -159,6 +159,8 @@ type FakeHost = ReturnType<typeof createFakeHost>;
 async function loadBackground(host: FakeHost): Promise<void> {
   (globalThis as Record<string, unknown>).spark = host.fake;
   vi.resetModules();
+  // @ts-expect-error background.ts 是 QuickJS 非模块脚本（零依赖约束，无
+  // import/export），此处动态 import 仅取运行时顶层副作用，类型层面视作非模块
   await import('../background');
 }
 

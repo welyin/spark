@@ -90,7 +90,7 @@ pub struct OrganizationRecord {
     pub description: String,
     /// 组织 logo（`data:image/` data URL；空串 = 无 logo，旧记录缺省为空串，
     /// 经快照 summary 在成员间同步）。空串丢键：保持与 TS golden 向量及旧线形
-    /// 的字节一致（对齐 gateways/isPublic 的缺省丢键口径）。
+    /// 的字节一致（对齐 isPublic 的缺省丢键口径）。
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub avatar: String,
     /// 基础插件域（`plugin:` 前缀；旧记录可缺省）。
@@ -115,19 +115,16 @@ pub struct OrganizationRecord {
     /// 同步状态（本地新建后即存在）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sync: Option<OrganizationSyncState>,
-    /// 组织网关 rootId 列表（org.md §14，保留键：管理员显式指定时生效，
-    /// 经快照同步；**空 = 未指定**，此时缺省全体成员候选、活跃集自荐限流——
-    /// 见 [`crate::org::roles`]，O1 账号角色模型）。
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// 【已退役，A9 / network §4.2】组织网关指定通路已移除——指定能力不是
+    /// 被禁用而是不存在：活跃集全员候选计分推导（见 [`crate::org::roles`]）。
+    /// 字段仅解析兼容存量记录（读取即忽略、任何落库保存即丢键老化——
+    /// `skip_serializing` 也防止其经 `extra` flatten 成僵尸键随快照流动）。
+    #[serde(default, skip_serializing)]
     pub gateways: Vec<String>,
-    /// 数据账号 rootId 列表（O1 账号角色模型，保留键：管理员显式指定时生效，
-    /// 经快照同步；**空 = 未指定**，此时缺省全体管理员担责——见
-    /// [`crate::org::roles::data_account_set`]）。
-    #[serde(
-        rename = "dataAccounts",
-        default,
-        skip_serializing_if = "Vec::is_empty"
-    )]
+    /// 【已退役，A14 / membership §4.1】数据账号角色已移除——**全员数据节点**
+    /// （副本池 = 全体成员账号），指定能力不存在。字段仅解析兼容存量记录
+    /// （读取即忽略、任何落库保存即丢键老化——同 gateways 的 A9 手法）。
+    #[serde(rename = "dataAccounts", default, skip_serializing)]
     pub data_accounts: Vec<String>,
     /// 自认证组织地址（org.md §15，保留键：创建时由组织根公钥派生，经快照同步）。
     #[serde(
@@ -153,7 +150,7 @@ pub struct OrganizationRecord {
     pub extra: serde_json::Map<String, Value>,
 }
 
-/// `isPublic` 缺省（false）时丢键的 serde 辅助（对齐 gateways 的缺省丢键口径）。
+/// `isPublic` 缺省（false）时丢键的 serde 辅助。
 pub(super) fn is_false(value: &bool) -> bool {
     !*value
 }
@@ -250,16 +247,19 @@ impl OrganizationRecord {
         }
     }
 
-    /// 某 rootId 是否在显式网关列表中（org.md §14）。
-    /// **注意**：O1 账号角色模型的活跃判定（含缺省推导）请用
-    /// [`crate::org::roles::is_gateway_active`]——本方法只看显式列表。
-    pub fn is_gateway(&self, root_id: &str) -> bool {
-        self.gateways.iter().any(|g| g == root_id)
-    }
-
     /// 按 rootId 查成员。
     pub fn find_member(&self, root_id: &str) -> Option<&OrganizationMember> {
         self.members.iter().find(|m| m.root_id == root_id)
+    }
+
+    /// 双键兼容查成员（A16 双写过渡）：identity 按 rootId 或 org_user_id
+    /// 命中任一即在册——与 sigset 名册回查（sigset.rs 第 4 步）同一口径。
+    /// 城门名册回查（read-gate A15）等「当时确为成员」判定用本访问器，
+    /// 双写期持任一形态身份的凭证持有者均可命中。
+    pub fn find_member_any_key(&self, identity: &str) -> Option<&OrganizationMember> {
+        self.members.iter().find(|m| {
+            m.root_id == identity || m.org_user_id().as_deref() == Some(identity)
+        })
     }
 
     /// 某 rootId 是否为 admin。

@@ -860,7 +860,7 @@
     ]
   },
   "readGate.verifyChain": {
-    "desc": "readAuth 验证链（read-gate §4 第 1–4 步，fail-closed）：ok 通过；逐环失败用例（凭证篡改/类型不符/验证人不受信任/已注销/proof 绑定错请求/呈现过期）→ 对应错误名。policyRef 求值归 C5，不在本组。生成器：core/examples/gen_credential_vectors.rs（C2）",
+    "desc": "readAuth 验证链（read-gate §4 第 1–4 步 + A15 城门名册回查，fail-closed）：ok 通过；逐环失败用例（凭证篡改/类型不符/验证人不受信任/已注销/proof 绑定错请求/呈现过期/持有者退队/名册不可用）→ 对应错误名。policyRef 求值归 C5，不在本组。生成器：core/examples/gen_credential_vectors.rs（C2）",
     "context": {
       "requestId": "req-78377b525757b494",
       "collection": "hoa:ledger@v1.0.0",
@@ -1261,6 +1261,82 @@
           "presentedAt": 1719999340000
         },
         "expect": "stale-timestamp"
+      },
+      {
+        "name": "roster-non-member",
+        "readAuth": {
+          "gateV": 1,
+          "credentials": [
+            {
+              "credV": 1,
+              "credType": "household-owner",
+              "issuer": {
+                "identity": "4b735ac174e40636507716ed5c9a8a75fbf6f462357fabb71ac42b7bd502c64a",
+                "publicKey": "wFDFY3pE+oYp//PMzOIwDLNipj2Z2V/FQUUmb0MyRFo="
+              },
+              "holder": {
+                "kind": "org",
+                "identity": "9e94854ed86d2356005ffd19a2255dc82d1d854606ac50c19f32eb3df58b59ca",
+                "publicKey": "eqlD/pVSiDu+GeFtCQAx7qkkeGjkBV0gc+f0yQrhmjI="
+              },
+              "subjectDomain": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+              "claims": {
+                "household": "3-502"
+              },
+              "method": "plugin:hoa-verify:manual-property-cert",
+              "linkRef": null,
+              "issuedAt": 1720000000000,
+              "sig": "2jgjqBToiejIk2eioJcxkuKvoH8Ri5Ry1hNgDRXv94IiC1C5c9Qt4ix0610mLrojqZsoHUa4RxcRvRa7Vs2RCA=="
+            }
+          ],
+          "holderProofs": [
+            {
+              "credId": "5ca1b3b7e2521cc6da78de5472e76efd367c401b0ab689a21048487e2816871a",
+              "sig": "J5M1kEGAvjDKhslTFu9Qw0rPrxh6rCOG0eGIXjZ4FTZUM5dldheOP6zugi5uOI+2XytCJW+OnOqnAUgr9b8EAQ=="
+            }
+          ],
+          "presentedAt": 1720000000000
+        },
+        "roster": "non-member",
+        "expect": "not-subject-domain-member"
+      },
+      {
+        "name": "roster-unavailable",
+        "readAuth": {
+          "gateV": 1,
+          "credentials": [
+            {
+              "credV": 1,
+              "credType": "household-owner",
+              "issuer": {
+                "identity": "4b735ac174e40636507716ed5c9a8a75fbf6f462357fabb71ac42b7bd502c64a",
+                "publicKey": "wFDFY3pE+oYp//PMzOIwDLNipj2Z2V/FQUUmb0MyRFo="
+              },
+              "holder": {
+                "kind": "org",
+                "identity": "9e94854ed86d2356005ffd19a2255dc82d1d854606ac50c19f32eb3df58b59ca",
+                "publicKey": "eqlD/pVSiDu+GeFtCQAx7qkkeGjkBV0gc+f0yQrhmjI="
+              },
+              "subjectDomain": "org_f4cd5e6b94d892589a9226441445d14ecd4525059ac3efd37eec83d6c9b44587",
+              "claims": {
+                "household": "3-502"
+              },
+              "method": "plugin:hoa-verify:manual-property-cert",
+              "linkRef": null,
+              "issuedAt": 1720000000000,
+              "sig": "2jgjqBToiejIk2eioJcxkuKvoH8Ri5Ry1hNgDRXv94IiC1C5c9Qt4ix0610mLrojqZsoHUa4RxcRvRa7Vs2RCA=="
+            }
+          ],
+          "holderProofs": [
+            {
+              "credId": "5ca1b3b7e2521cc6da78de5472e76efd367c401b0ab689a21048487e2816871a",
+              "sig": "J5M1kEGAvjDKhslTFu9Qw0rPrxh6rCOG0eGIXjZ4FTZUM5dldheOP6zugi5uOI+2XytCJW+OnOqnAUgr9b8EAQ=="
+            }
+          ],
+          "presentedAt": 1720000000000
+        },
+        "roster": "unavailable",
+        "expect": "not-subject-domain-member"
       }
     ]
   },
@@ -4108,5 +4184,642 @@
         }
       ]
     }
+  },
+  "policy.disclosure": {
+    "desc": "名册开放声明（A15 / membership §4.3，policy §8）：线形 canonical → disclosureHash 固定值（sigSet 剔除自认证）；暴露面扩大静态分析（disclosure_widening）真值表——公示延迟触发条件；求值（eval_disclosure）——生效门控（公示延迟窗口内不装配）/ 最高 version 胜 / 无声明默认仅组织档。生成器：core/examples/gen_disclosure_vectors.rs",
+    "context": {
+      "ownerOrgId": "org_dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "targetDomain": "org_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "thirdDomain": "org_ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "nowMs": 1720000000000,
+      "pubPeriodMs": 86400000
+    },
+    "records": {
+      "v1Full": {
+        "disclosureV": 1,
+        "orgId": "org_dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "targetDomain": "org_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "tier": "representatives",
+        "fields": [
+          {
+            "field": "phone",
+            "audience": "representatives"
+          }
+        ],
+        "collections": [
+          "finance:monthly@v1"
+        ],
+        "version": 1,
+        "updatedAt": 1720000000000,
+        "effectiveAt": 1720086400000
+      },
+      "v1Minimal": {
+        "disclosureV": 1,
+        "orgId": "org_dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "targetDomain": "org_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "tier": "org-only",
+        "version": 1,
+        "updatedAt": 1720000000000,
+        "effectiveAt": 1720000000000
+      },
+      "v2Narrowed": {
+        "disclosureV": 1,
+        "orgId": "org_dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "targetDomain": "org_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "tier": "org-only",
+        "version": 2,
+        "updatedAt": 1720086400000,
+        "effectiveAt": 1720086400000
+      },
+      "v2Widened": {
+        "disclosureV": 1,
+        "orgId": "org_dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "targetDomain": "org_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "tier": "public",
+        "fields": [
+          {
+            "field": "phone",
+            "audience": "public"
+          }
+        ],
+        "collections": [
+          "finance:monthly@v1",
+          "finance:yearly@v1"
+        ],
+        "version": 2,
+        "updatedAt": 1720086400000,
+        "effectiveAt": 1720172800000
+      }
+    },
+    "expect": {
+      "disclosureHash": {
+        "v1Full": "4cdd195fa481e4d3caa0a1d9293571ea24bd018c5850c312214b4c862fdf36d8",
+        "v1Minimal": "716f2c9a876adb193f74d9f2cf49c458547c321cfd70d496c76821cb7c3ee248",
+        "v2Narrowed": "2df04013b2311299acede40f0d554334839d274141bea9ef8297e1f344dd8704",
+        "v2Widened": "1e6226372f184176f79d226fad3c5d5b30e9123a5f42dc6588089050b3bfba84"
+      }
+    },
+    "wideningCases": [
+      {
+        "name": "first-default-not-widening",
+        "prev": null,
+        "next": "v1Minimal",
+        "expect": false
+      },
+      {
+        "name": "first-non-default-widening",
+        "prev": null,
+        "next": "v1Full",
+        "expect": true
+      },
+      {
+        "name": "unchanged-not-widening",
+        "prev": "v1Full",
+        "next": "v1Full",
+        "expect": false
+      },
+      {
+        "name": "narrowed-not-widening",
+        "prev": "v1Full",
+        "next": "v2Narrowed",
+        "expect": false
+      },
+      {
+        "name": "tier-raised-widening",
+        "prev": "v1Full",
+        "next": "v2Widened",
+        "expect": true
+      }
+    ],
+    "evalCases": [
+      {
+        "name": "no-record-default-org-only",
+        "records": [],
+        "targetDomain": "org_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "nowMs": 1720000000000,
+        "expect": {
+          "tier": "org-only",
+          "fields": [],
+          "collections": []
+        }
+      },
+      {
+        "name": "pending-not-assembled",
+        "records": [
+          "v1Full"
+        ],
+        "targetDomain": "org_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "nowMs": 1720000000000,
+        "expect": {
+          "tier": "org-only",
+          "fields": [],
+          "collections": []
+        }
+      },
+      {
+        "name": "effective-full-view",
+        "records": [
+          "v1Full"
+        ],
+        "targetDomain": "org_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "nowMs": 1720086400000,
+        "expect": {
+          "tier": "representatives",
+          "fields": [
+            {
+              "field": "phone",
+              "audience": "representatives"
+            }
+          ],
+          "collections": [
+            "finance:monthly@v1"
+          ]
+        }
+      },
+      {
+        "name": "highest-effective-version-wins",
+        "records": [
+          "v1Full",
+          "v2Narrowed"
+        ],
+        "targetDomain": "org_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "nowMs": 1720086400000,
+        "expect": {
+          "tier": "org-only",
+          "fields": [],
+          "collections": []
+        }
+      },
+      {
+        "name": "other-domain-untouched",
+        "records": [
+          "v1Full"
+        ],
+        "targetDomain": "org_ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "nowMs": 1720172800000,
+        "expect": {
+          "tier": "org-only",
+          "fields": [],
+          "collections": []
+        }
+      }
+    ]
+  },
+  "policy.acceptCredentials": {
+    "desc": "准入策略声明（A17 / membership §4.5，policy §9）：线形 canonical → acceptPolicyHash 固定值（sigSet 剔除自认证）；准入面扩大判定（accept_policy_widening）真值表——公示延迟触发条件；生效门控（公示延迟窗口内不采信）与规则匹配。生成器：core/examples/gen_accept_vectors.rs",
+    "context": {
+      "orgId": "org_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "trustDomain": "org_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nowMs": 1720000000000,
+      "pubPeriodMs": 86400000
+    },
+    "records": {
+      "v1Empty": {
+        "acceptV": 1,
+        "orgId": "org_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": 1,
+        "updatedAt": 1720000000000,
+        "effectiveAt": 1720000000000
+      },
+      "v1Rules": {
+        "acceptV": 1,
+        "orgId": "org_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "acceptCredentials": [
+          {
+            "credType": "household-owner",
+            "issuerTrust": "org_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        ],
+        "version": 1,
+        "updatedAt": 1720000000000,
+        "effectiveAt": 1720086400000
+      },
+      "v2Narrowed": {
+        "acceptV": 1,
+        "orgId": "org_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "version": 2,
+        "updatedAt": 1720086400000,
+        "effectiveAt": 1720086400000
+      },
+      "v2Widened": {
+        "acceptV": 1,
+        "orgId": "org_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "acceptCredentials": [
+          {
+            "credType": "household-owner",
+            "issuerTrust": "org_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          },
+          {
+            "credType": "resident",
+            "issuerTrust": "org_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        ],
+        "version": 2,
+        "updatedAt": 1720086400000,
+        "effectiveAt": 1720172800000
+      }
+    },
+    "expect": {
+      "acceptPolicyHash": {
+        "v1Empty": "e414862db419a2132ce3894b63df4adb9af81ffc7e15c80bcfd4799cf1a75176",
+        "v1Rules": "fbbfa0a73a27d4f976ab2fa52578098f7ff1dd45651f02af7ab0bc2dffa0b0df",
+        "v2Narrowed": "1b283763b3441051e79c0ead91fcdf50d48c81fa926fa40cc724adff2e9dd1fa",
+        "v2Widened": "0bb12722439fcaae0bbbe12fba2628552ecc13a8f163126baca541e3110b7635"
+      }
+    },
+    "wideningCases": [
+      {
+        "name": "first-empty-not-widening",
+        "prev": null,
+        "next": "v1Empty",
+        "expect": false
+      },
+      {
+        "name": "first-rules-widening",
+        "prev": null,
+        "next": "v1Rules",
+        "expect": true
+      },
+      {
+        "name": "unchanged-not-widening",
+        "prev": "v1Rules",
+        "next": "v1Rules",
+        "expect": false
+      },
+      {
+        "name": "narrowed-not-widening",
+        "prev": "v1Rules",
+        "next": "v2Narrowed",
+        "expect": false
+      },
+      {
+        "name": "rule-added-widening",
+        "prev": "v1Rules",
+        "next": "v2Widened",
+        "expect": true
+      }
+    ],
+    "effectiveCases": [
+      {
+        "name": "no-record-not-effective",
+        "record": null,
+        "nowMs": 1720000000000,
+        "expectEffective": false
+      },
+      {
+        "name": "pending-not-effective",
+        "record": "v1Rules",
+        "nowMs": 1720000000000,
+        "expectEffective": false
+      },
+      {
+        "name": "effective-after-pub-period",
+        "record": "v1Rules",
+        "nowMs": 1720086400000,
+        "expectEffective": true,
+        "expectAdmits": [
+          {
+            "credType": "household-owner",
+            "subjectDomain": "org_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "expect": true
+          },
+          {
+            "credType": "resident",
+            "subjectDomain": "org_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "expect": false
+          },
+          {
+            "credType": "household-owner",
+            "subjectDomain": "org_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "expect": false
+          }
+        ]
+      }
+    ]
+  },
+  "joinRequest.merge": {
+    "desc": "免预录合入双路径验证（A17 / org-join §8.2，adjudicate_join_request）：认领受理 / 有效凭证受理 / 已注销 / 签发者不受信任 / 类型不匹配 / 策略缺失 / 未附凭证各必败。夹具真实 ed25519 签名：申请人根 0x42、org-access 域 0x43、签发者 0x07、不受信任签发者 0x09。生成器：core/examples/gen_accept_vectors.rs",
+    "context": {
+      "orgId": "org_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "trustDomain": "org_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nowMs": 1720000000000
+    },
+    "fixtures": {
+      "policy": {
+        "acceptV": 1,
+        "orgId": "org_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "acceptCredentials": [
+          {
+            "credType": "member",
+            "issuerTrust": "org_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        ],
+        "version": 1,
+        "updatedAt": 1720000000000,
+        "effectiveAt": 1720000000000
+      },
+      "trustDecl": {
+        "trustV": 1,
+        "orgId": "org_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "verifiers": [
+          {
+            "identity": "fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889",
+            "publicKey": "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=",
+            "credTypes": [
+              "member"
+            ],
+            "methods": [
+              "plugin:test:*"
+            ]
+          }
+        ],
+        "effectiveFrom": 0,
+        "seq": 1,
+        "updatedAt": 0,
+        "sigSet": {
+          "sigSetV": 1,
+          "orgId": "org_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "subject": "0000000000000000000000000000000000000000000000000000000000000000",
+          "policyHash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "roster": {
+            "memberSetHash": "0000000000000000000000000000000000000000000000000000000000000000",
+            "anchor": {
+              "orgId": "org_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "anchorRoot": "0000000000000000000000000000000000000000000000000000000000000000",
+              "ts": 0
+            }
+          },
+          "signedAt": 0,
+          "signatures": []
+        }
+      },
+      "revocationClean": {
+        "entries": [
+          {
+            "revV": 1,
+            "issuer": "fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889",
+            "seq": 1,
+            "prevHash": null,
+            "credId": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "revokedAt": 1720000000000,
+            "reason": null,
+            "sig": "pT24aN08XnSV6JpXZuwKQtl493BQreBhSTqQWn96GHSgQmWK/GQ7bRrZwL6nd7FfUk+AFG/1ZD6MHsf+PO8YAw=="
+          }
+        ],
+        "head": {
+          "revHeadV": 1,
+          "issuer": "fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889",
+          "headSeq": 1,
+          "headHash": "40aaed3785828721985fc9f454e30ef9ae47cf8d16d6cde1b8c5927581124230",
+          "asOf": 1720000000000,
+          "sig": "77Oc0FXNY2kgaL3P0oB/4bWLr9NQPF4RwlD0NPLPHDfvww5mqHV1SeAPano+xabg6I4PT3axFrn9YLFM+XghBg=="
+        }
+      },
+      "revocationRevoked": {
+        "entries": [
+          {
+            "revV": 1,
+            "issuer": "fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889",
+            "seq": 1,
+            "prevHash": null,
+            "credId": "83333bb0a2a47bc59bfc355d6667cd6536dbf71039aed3b8bb91126a5f9826fa",
+            "revokedAt": 1720000000000,
+            "reason": null,
+            "sig": "pJAi0OrflqcNMSZRAaAeVk8lYu1ulT2e1xQ/6Fe/llxRRIU26xpH7UM+PvGUuynCISxgTVXM75qhixheU4qbDQ=="
+          }
+        ],
+        "head": {
+          "revHeadV": 1,
+          "issuer": "fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889",
+          "headSeq": 1,
+          "headHash": "1fd59831ba850f5f2f13ad63ee8a63baa8177e0bbd634ee546c30caffbfda185",
+          "asOf": 1720000000000,
+          "sig": "zcUF+KlNhwb9c9fRjqbNzfLbSYrZCsCzRGXvNEpSMNes0j/K0Q4Cdup+WjIjclRguuz17taAg/Ivl8LmuGQVCQ=="
+        }
+      },
+      "revocationStranger": {
+        "entries": [
+          {
+            "revV": 1,
+            "issuer": "dbc298251c51321b7266e78d1c151c2b62aff8cb95b293096d3463018544face",
+            "seq": 1,
+            "prevHash": null,
+            "credId": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "revokedAt": 1720000000000,
+            "reason": null,
+            "sig": "7mPz65BOKYnU19mK/xJcjoIBxQHyiYLe3yNEZPM/kpwQKae8rElgAOSaZDBfB4IQxoJMdoWZiWhs/sMTGP1kAA=="
+          }
+        ],
+        "head": {
+          "revHeadV": 1,
+          "issuer": "dbc298251c51321b7266e78d1c151c2b62aff8cb95b293096d3463018544face",
+          "headSeq": 1,
+          "headHash": "88c6beeb3f929c7dfa717b2125334e8319fb4409c5893e8905b5780210bb4d6d",
+          "asOf": 1720000000000,
+          "sig": "T9fi3QOHxLpADt5prmbwOSWZ4kFeTpMIlCgtkUdPZEuMwnM6wGvF+tvphdGQFhFgb09JHuckbMCwQqhumsEpAw=="
+        }
+      },
+      "requests": {
+        "claim": {
+          "joinV": 1,
+          "type": "org-join-request",
+          "orgId": "org_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "applicant": {
+            "identity": "3097e2dee2cb4a34b53840cdb705aed71067c36f68db0e0f559c3f3fa043315f",
+            "publicKey": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI="
+          },
+          "accessKey": {
+            "publicKey": "Ivwpd5Lwtv/Av8/bftsMCqFOAlo2XsDjQuhuOCnLdLY=",
+            "bindSig": "Q5zHvHSqostuEkI5f+iZOjftiIoimpGYHC8mWSda1cAI+jPrt3L8Bn034kH5nqekP5I2fIqONuTZkpKyV9J2AQ==",
+            "rootPubkey": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI="
+          },
+          "credential": null,
+          "nodeInfo": null,
+          "declaredAt": 1720000000000,
+          "sig": "TOO2QzZ8c0WjCnUVnWZsilHg8ppNY9gOKl1ul+qW4c2/OsHa3eSJKAk20r1Wo0zCC6iG0KF5HMuExDraLiWOBA=="
+        },
+        "valid": {
+          "joinV": 1,
+          "type": "org-join-request",
+          "orgId": "org_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "applicant": {
+            "identity": "3097e2dee2cb4a34b53840cdb705aed71067c36f68db0e0f559c3f3fa043315f",
+            "publicKey": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI="
+          },
+          "accessKey": {
+            "publicKey": "Ivwpd5Lwtv/Av8/bftsMCqFOAlo2XsDjQuhuOCnLdLY=",
+            "bindSig": "Q5zHvHSqostuEkI5f+iZOjftiIoimpGYHC8mWSda1cAI+jPrt3L8Bn034kH5nqekP5I2fIqONuTZkpKyV9J2AQ==",
+            "rootPubkey": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI="
+          },
+          "credential": {
+            "credV": 1,
+            "credType": "member",
+            "issuer": {
+              "identity": "fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889",
+              "publicKey": "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw="
+            },
+            "holder": {
+              "kind": "person",
+              "identity": "3097e2dee2cb4a34b53840cdb705aed71067c36f68db0e0f559c3f3fa043315f",
+              "publicKey": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI="
+            },
+            "subjectDomain": "org_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "claims": {},
+            "method": "plugin:test:manual",
+            "linkRef": null,
+            "issuedAt": 1720000000000,
+            "sig": "WQ5kyFR5qCvDJC68uBSzfEJLE4d7zkCGMZnkZjXE8/ANqZ6GGERPKYA5PJol9/hZuxdLIrKNiyhuVC03P+GDBA=="
+          },
+          "nodeInfo": null,
+          "declaredAt": 1720000000000,
+          "sig": "ZUiGtG2afo3VDTwqEEqT6aRApSPmzXQzN8jw/ZbnADTE7CuYZ6soKIKB57UxgsXnSZpMORd47ULqi5ztAlJLDw=="
+        },
+        "typeMismatch": {
+          "joinV": 1,
+          "type": "org-join-request",
+          "orgId": "org_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "applicant": {
+            "identity": "3097e2dee2cb4a34b53840cdb705aed71067c36f68db0e0f559c3f3fa043315f",
+            "publicKey": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI="
+          },
+          "accessKey": {
+            "publicKey": "Ivwpd5Lwtv/Av8/bftsMCqFOAlo2XsDjQuhuOCnLdLY=",
+            "bindSig": "Q5zHvHSqostuEkI5f+iZOjftiIoimpGYHC8mWSda1cAI+jPrt3L8Bn034kH5nqekP5I2fIqONuTZkpKyV9J2AQ==",
+            "rootPubkey": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI="
+          },
+          "credential": {
+            "credV": 1,
+            "credType": "resident",
+            "issuer": {
+              "identity": "fe812c12f3ab4ce6ac5db69ac352f906cb1b11ef43fb33e252ef7ff552263889",
+              "publicKey": "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw="
+            },
+            "holder": {
+              "kind": "person",
+              "identity": "3097e2dee2cb4a34b53840cdb705aed71067c36f68db0e0f559c3f3fa043315f",
+              "publicKey": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI="
+            },
+            "subjectDomain": "org_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "claims": {},
+            "method": "plugin:test:manual",
+            "linkRef": null,
+            "issuedAt": 1720000000000,
+            "sig": "HhhkPmzkE0A++KNs1K0jISX87DSGfAiqgG1+Xv5n7SdGtjn3zx+0eWs25a89v2MOwS3TVKAOhtmN5UgIYCzKBw=="
+          },
+          "nodeInfo": null,
+          "declaredAt": 1720000000000,
+          "sig": "eJ7Y2hxIWf5sB0qnRkyqne4yP9pDqU9XsN6J6a0NYaoZy/BUHkqKi4sGhN6vyW6dco5IVBBB5fxiTNN5jL9kCQ=="
+        },
+        "untrustedIssuer": {
+          "joinV": 1,
+          "type": "org-join-request",
+          "orgId": "org_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "applicant": {
+            "identity": "3097e2dee2cb4a34b53840cdb705aed71067c36f68db0e0f559c3f3fa043315f",
+            "publicKey": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI="
+          },
+          "accessKey": {
+            "publicKey": "Ivwpd5Lwtv/Av8/bftsMCqFOAlo2XsDjQuhuOCnLdLY=",
+            "bindSig": "Q5zHvHSqostuEkI5f+iZOjftiIoimpGYHC8mWSda1cAI+jPrt3L8Bn034kH5nqekP5I2fIqONuTZkpKyV9J2AQ==",
+            "rootPubkey": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI="
+          },
+          "credential": {
+            "credV": 1,
+            "credType": "member",
+            "issuer": {
+              "identity": "dbc298251c51321b7266e78d1c151c2b62aff8cb95b293096d3463018544face",
+              "publicKey": "/RckOFqgx1tk+3jNYC+h2ZH96/drE8WO1wLqyDXp9hg="
+            },
+            "holder": {
+              "kind": "person",
+              "identity": "3097e2dee2cb4a34b53840cdb705aed71067c36f68db0e0f559c3f3fa043315f",
+              "publicKey": "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI="
+            },
+            "subjectDomain": "org_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "claims": {},
+            "method": "plugin:test:manual",
+            "linkRef": null,
+            "issuedAt": 1720000000000,
+            "sig": "zZg+z9EMB3zfe02aXBfXYS78BNzpeSJ0zZDvFEUXDE8JVSujmzaZY8oBQ1RvmtgHZZ5L8uGsXI0XqAj3q2eaDA=="
+          },
+          "nodeInfo": null,
+          "declaredAt": 1720000000000,
+          "sig": "tolqEUuIhylsxy01HpE1qVGkuVynaXKXlOZ1NAB5oyv70fGk80w/5DILix4gTTPMmuNw01W4URQpx4OCaXn3Bw=="
+        }
+      }
+    },
+    "cases": [
+      {
+        "name": "claim-accepted",
+        "request": "claim",
+        "preRegistered": true,
+        "policy": true,
+        "revocation": "revocationClean",
+        "expect": {
+          "path": "claim"
+        }
+      },
+      {
+        "name": "credential-accepted",
+        "request": "valid",
+        "preRegistered": false,
+        "policy": true,
+        "revocation": "revocationClean",
+        "expect": {
+          "path": "credential",
+          "credId": "83333bb0a2a47bc59bfc355d6667cd6536dbf71039aed3b8bb91126a5f9826fa"
+        }
+      },
+      {
+        "name": "revoked-rejected",
+        "request": "valid",
+        "preRegistered": false,
+        "policy": true,
+        "revocation": "revocationRevoked",
+        "expect": {
+          "reject": "revoked"
+        }
+      },
+      {
+        "name": "issuer-not-trusted-rejected",
+        "request": "untrustedIssuer",
+        "preRegistered": false,
+        "policy": true,
+        "revocation": "revocationStranger",
+        "expect": {
+          "reject": "issuer-not-trusted"
+        }
+      },
+      {
+        "name": "type-mismatch-rejected",
+        "request": "typeMismatch",
+        "preRegistered": false,
+        "policy": true,
+        "revocation": "revocationClean",
+        "expect": {
+          "reject": "cred-type-not-accepted"
+        }
+      },
+      {
+        "name": "policy-missing-rejected",
+        "request": "valid",
+        "preRegistered": false,
+        "policy": false,
+        "revocation": "revocationClean",
+        "expect": {
+          "reject": "accept-policy-missing"
+        }
+      },
+      {
+        "name": "credential-required-rejected",
+        "request": "claim",
+        "preRegistered": false,
+        "policy": true,
+        "revocation": "revocationClean",
+        "expect": {
+          "reject": "credential-required"
+        }
+      }
+    ]
   }
 }

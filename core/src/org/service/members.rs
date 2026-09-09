@@ -53,7 +53,6 @@ impl OrganizationService {
                 created_by: record.created_by.clone(),
                 updated_at: record.updated_at,
                 sync: record.sync.clone(),
-                gateways: record.gateways.clone(),
                 org_address: record.org_address.clone(),
                 is_public: record.is_public,
                 extra: record.extra.clone(),
@@ -226,6 +225,42 @@ impl OrganizationService {
         )?;
         Self::rebuild_sync_after_mutation(record, previous_last_synced_at, transaction.created_at);
         Ok(())
+    }
+
+    /// A16（membership §4.4）：发布本机成员的 accessKey（org_user_id 地基）。
+    ///
+    /// 写一次语义：已存在不覆盖（accessKey 由 `org-access:{orgId}` 域从 seed
+    /// 确定性派生，同账号恒同值，重写无意义）；非本组织成员 → `Ok(false)`。
+    /// 与 `update_my_identity` 同模式：变更后 bump `updatedAt` 落库，经既有
+    /// 快照同步扩散（仅本人可写字段，无需 admin）。
+    pub fn publish_access_key<S: StorageBackend>(
+        storage: &mut S,
+        org_id: &str,
+        current_root_id: &str,
+        access_key: crate::org::types::OrganizationAccessKey,
+        now_ms: i64,
+    ) -> Result<bool> {
+        let mut record = Self::require_organization(storage, org_id)?;
+        let Some(index) = record
+            .members
+            .iter()
+            .position(|m| m.root_id == current_root_id)
+        else {
+            return Ok(false);
+        };
+        if record.members[index].access_key.is_some() {
+            return Ok(false);
+        }
+        record.members[index].access_key = Some(access_key);
+        record.updated_at = now_ms;
+        // 双写：whole org:meta（混跑期旧端读）+ per-member 条目（P1 装配视图
+        // 的权威源——只写 whole 会被条目覆盖读回 None）。
+        Self::save_record(storage, &record)?;
+        storage.put(
+            &crate::org::types::org_member_key(org_id, current_root_id),
+            &serde_json::to_string(&record.members[index])?,
+        )?;
+        Ok(true)
     }
 
     /// `updateMyIdentity`：成员更新自己的组织内身份字段（昵称/头像/签名/性别/
@@ -446,33 +481,7 @@ impl OrganizationService {
         }
 
         record.members.remove(index);
-        // O1：角色列表随成员移除自动剔除（显式指定引用已退出成员无意义；
-        // roles 解析层本就有非成员过滤，这里是落库层的主动清理）
-        record.gateways.retain(|g| *g != normalized_root_id);
-        record
-            .data_accounts
-            .retain(|rid| *rid != normalized_root_id);
-        // 卫生批项3：已退出成员的 org dlog 水位/已收键（wm/seen，设备粒度）
-        // 随移除清理——残留键虽已被 GC 阈值计算排除（F8 修正：min 只取等待
-        // 集合），但随成员更替累积。清理失败不阻断移除（残留仅积累噪音）。
-        if let Err(e) =
-            crate::sync::orgsync::org_dlog_remove_member_marks(storage, org_id, &normalized_root_id)
-        {
-            log::warn!("[ORG] remove member dlog marks cleanup failed: {e}");
-        }
-        // batch3 §2：成员移除 → 其相关管理面邀请投影（inviter 或 invitee
-        // 维度）墓碑化（org 域 dlog 既有机制传播；版本化句柄删除即自动墓碑，
-        // raw 句柄为裸删）
-        let invpub_prefix = format!("org:invpub:{org_id}:");
-        for (key, _) in storage.scan(&crate::storage::ScanOptions::prefix(&invpub_prefix))? {
-            let Some(rest) = key.strip_prefix(&invpub_prefix) else {
-                continue;
-            };
-            // 键形 {inviterRoot}:{inviteeRoot}（rootId 无冒号）
-            if rest.split(':').any(|seg| seg == normalized_root_id) {
-                storage.delete(&key)?;
-            }
-        }
+        Self::member_removal_cleanup(storage, record, org_id, &normalized_root_id)?;
         record.updated_at = now_ms;
         let previous_last_synced_at = record.sync.as_ref().map(|s| s.last_synced_at).unwrap_or(0);
         let transaction = append_organization_transaction(
@@ -496,78 +505,73 @@ impl OrganizationService {
         Ok(())
     }
 
-    /// `setMemberRole`（O1 账号角色模型）：晋升/降级成员角色。
-    ///
-    /// - 仅管理员可执行；降级最后一个管理员拒绝（MustKeepAdmin，与移除同口径）
-    /// - 幂等：角色无变化直接返回（不 bump 版本、不追加事务）
-    /// - **数据职责随角色自动进出**：缺省数据账号 = 全体管理员（
-    ///   [`crate::org::roles::data_account_set`]），晋升即担责、降级即退出；
-    ///   显式 `data_accounts` 指定不受本操作影响（指定权在管理员，独立维护）
-    pub fn set_member_role<S: StorageBackend>(
+    /// 成员出册后的清理链（remove/leave 共用）：org dlog 水位/已收键清理 +
+    /// 管理面邀请投影墓碑化。（A9/A14：gateways/dataAccounts 指定通路已移除，
+    /// 活跃集/数据节点推导天然随成员表变化，无需角色列表清理。）
+    fn member_removal_cleanup<S: StorageBackend>(
         storage: &mut S,
+        record: &mut OrganizationRecord,
         org_id: &str,
-        member_root_id: &str,
-        role: OrganizationRole,
-        current_root_id: &str,
-        now_ms: i64,
-    ) -> Result<OrganizationRecord> {
-        let mut record = Self::require_organization(storage, org_id)?;
-        if Self::set_member_role_mutate(
-            storage,
-            &mut record,
-            org_id,
-            member_root_id,
-            role,
-            current_root_id,
-            now_ms,
-        )? {
-            Self::save_record(storage, &record)?;
+        removed_root_id: &str,
+    ) -> Result<()> {
+        let _ = record;
+        // 卫生批项3：已退出成员的 org dlog 水位/已收键（wm/seen，设备粒度）
+        // 随出册清理——残留键虽已被 GC 阈值计算排除（F8 修正：min 只取等待
+        // 集合），但随成员更替累积。清理失败不阻断（残留仅积累噪音）。
+        if let Err(e) =
+            crate::sync::orgsync::org_dlog_remove_member_marks(storage, org_id, removed_root_id)
+        {
+            log::warn!("[ORG] member removal dlog marks cleanup failed: {e}");
         }
-        Ok(record)
+        // batch3 §2：成员出册 → 其相关管理面邀请投影（inviter 或 invitee
+        // 维度）墓碑化（org 域 dlog 既有机制传播；版本化句柄删除即自动墓碑，
+        // raw 句柄为裸删）
+        let invpub_prefix = format!("org:invpub:{org_id}:");
+        for (key, _) in storage.scan(&crate::storage::ScanOptions::prefix(&invpub_prefix))? {
+            let Some(rest) = key.strip_prefix(&invpub_prefix) else {
+                continue;
+            };
+            // 键形 {inviterRoot}:{inviteeRoot}（rootId 无冒号）
+            if rest.split(':').any(|seg| seg == removed_root_id) {
+                storage.delete(&key)?;
+            }
+        }
+        Ok(())
     }
 
-    /// pdsync 感知的 [`Self::set_member_role`]：组织记录落库走原子段原语
-    /// [`Self::update_record_atomic`]（F8）。
-    pub fn set_member_role_pdsync<S: StorageBackend>(
+    /// `leaveOrganization`（A13 / community-model §4.3）：**成员自退出**——
+    /// 操作者即目标成员（不需 admin 校验；语义是「我退出」而非「移除他人」）。
+    /// 唯一 admin 且还有其他成员时仍拒绝（MustKeepAdmin：须先晋升他人）；
+    /// **最后一名成员退出放行**——组织成为空域：成员表为空、历史保留为
+    /// 只读档案（无成员即无 admin，写路径自然封死；「域只可退出，不可
+    /// 解散」的退出侧落点）。清理链与移除一致（[`Self::member_removal_cleanup`]），
+    /// 事务审计 `member-leave`，落库走原子段原语（F8）。
+    pub fn leave_organization_pdsync<S: StorageBackend>(
         storage: &mut S,
         io_lock: &super::OrgMetaWriteLock,
         org_id: &str,
-        member_root_id: &str,
-        role: OrganizationRole,
         current_root_id: &str,
         now_ms: i64,
         node_id: &str,
     ) -> Result<OrganizationRecord> {
         let _ = node_id; // 记账由中间件完成，参数保留以稳定签名
         Self::update_record_atomic(storage, io_lock, org_id, |storage, record| {
-            Self::set_member_role_mutate(
-                storage,
-                record,
-                org_id,
-                member_root_id,
-                role,
-                current_root_id,
-                now_ms,
-            )
+            Self::leave_organization_mutate(storage, record, org_id, current_root_id, now_ms)?;
+            Ok(true)
         })
     }
 
-    /// `setMemberRole` 的纯变更段（F8 拆段）：返回是否发生变更（角色无变化
-    /// → Ok(false) 幂等无写）。
-    fn set_member_role_mutate<S: StorageBackend>(
+    /// [`Self::leave_organization_pdsync`] 的纯变更段（F8 拆段）。
+    fn leave_organization_mutate<S: StorageBackend>(
         storage: &mut S,
         record: &mut OrganizationRecord,
         org_id: &str,
-        member_root_id: &str,
-        role: OrganizationRole,
         current_root_id: &str,
         now_ms: i64,
-    ) -> Result<bool> {
-        Self::require_admin(record, current_root_id)?;
-        // 空域只读档案：共同体全员退出后无人能写入（角色变更也是写路径）。
+    ) -> Result<()> {
+        // 空域只读档案：共同体全员退出后无人能写入（自退出也是写路径）
         Self::require_community_writable(storage, record)?;
-
-        let normalized_root_id = normalize_root_id(member_root_id)?;
+        let normalized_root_id = normalize_root_id(current_root_id)?;
         let Some(index) = record
             .members
             .iter()
@@ -575,18 +579,18 @@ impl OrganizationService {
         else {
             return Err(OrgError::MemberNotFound);
         };
-        let old_role = record.members[index].role;
-        if old_role == role {
-            return Ok(false);
-        }
-        if old_role == OrganizationRole::Admin
-            && role == OrganizationRole::Member
+        let member = record.members[index].clone();
+        // 唯一 admin 且组织还有其他成员：须先晋升他人（与移除同口径）；
+        // 但最后一名成员（单成员组织）退出放行 → 空域
+        if member.role == OrganizationRole::Admin
             && record.admin_count() <= 1
+            && record.members.len() > 1
         {
             return Err(OrgError::MustKeepAdmin);
         }
 
-        record.members[index].role = role;
+        record.members.remove(index);
+        Self::member_removal_cleanup(storage, record, org_id, &normalized_root_id)?;
         record.updated_at = now_ms;
         let previous_last_synced_at = record.sync.as_ref().map(|s| s.last_synced_at).unwrap_or(0);
         let transaction = append_organization_transaction(
@@ -594,26 +598,20 @@ impl OrganizationService {
             OrganizationTransactionRecord {
                 tx_id: String::new(),
                 org_id: org_id.to_string(),
-                type_: OrganizationTransactionType::MemberUpdate,
+                type_: OrganizationTransactionType::MemberLeave,
                 created_at: now_ms,
                 actor_root_id: current_root_id.to_string(),
                 target_root_id: Some(normalized_root_id.clone()),
-                summary: match role {
-                    OrganizationRole::Admin => format!("晋升 {normalized_root_id} 为管理员"),
-                    OrganizationRole::Member => format!("降级 {normalized_root_id} 为成员"),
-                },
+                summary: format!("退出组织 {}", record.name),
                 payload: Some(
-                    [
-                        ("fromRole".to_string(), Value::from(old_role.as_str())),
-                        ("toRole".to_string(), Value::from(role.as_str())),
-                    ]
-                    .into_iter()
-                    .collect(),
+                    [("leftRole".to_string(), Value::from(member.role.as_str()))]
+                        .into_iter()
+                        .collect(),
                 ),
             },
         )?;
         Self::rebuild_sync_after_mutation(record, previous_last_synced_at, transaction.created_at);
-        Ok(true)
+        Ok(())
     }
 
     /// 变更后需要推送快照的接收方（`syncOrganizationToKnownMembers` 的筛选逻辑，

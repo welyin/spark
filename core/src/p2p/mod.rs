@@ -24,6 +24,7 @@ pub mod peer_activity;
 pub mod peer_targets;
 pub mod plugin_announce;
 pub mod priority_peers;
+pub mod relay_blacklist;
 
 pub use addr_blacklist::AddrBlacklistStore;
 pub use announce::{

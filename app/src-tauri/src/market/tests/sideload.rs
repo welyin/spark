@@ -171,6 +171,7 @@ fn import_overwrite_higher_trust_requires_confirmation() {
             trust: Some("repo-anchored".to_string()),
             supported_spaces: None,
             requires: None,
+            window: None,
         },
     );
     let spkg = good_spkg(&fixture);
@@ -316,6 +317,80 @@ fn inspect_reads_supported_spaces_and_initialize_backfills_legacy_records() {
         persisted.installed["todo-local"].supported_spaces,
         Some(vec!["personal".to_string()])
     );
+}
+
+#[test]
+fn import_persists_window_and_initialize_backfills_legacy_records() {
+    use crate::market::catalog::PluginWindow;
+
+    // 包内 manifest 声明合法 window → import 落库；非法值归一化为未声明
+    let fixture = Fixture::new();
+    let manifest = r#"{"id":"todo-local","name":"本地待办","window":{"defaultWidth":480,"defaultHeight":680}}"#;
+    let spkg = write_spkg(
+        &fixture,
+        "spark-plugin-todo-local-1.0.0.spkg",
+        &spkg_text(
+            "todo-local",
+            &[("manifest.json", manifest.as_bytes()), ("views/main.js", b"hello")],
+        ),
+    );
+    let mut service = fixture.service();
+    let preview = service.inspect_local_package(spkg.to_str().unwrap()).unwrap();
+    let state = service
+        .import_local_package(spkg.to_str().unwrap(), &preview.sha256, false)
+        .unwrap();
+    assert_eq!(state.window, Some(PluginWindow { default_width: 480, default_height: 680 }));
+    // 市场合成条目回落安装态落库值（侧载插件无声明缓存）
+    let entry = service
+        .list_market()
+        .into_iter()
+        .find(|i| i.catalog.id == "todo-local")
+        .unwrap();
+    assert_eq!(
+        entry.catalog.window,
+        Some(PluginWindow { default_width: 480, default_height: 680 })
+    );
+
+    let bad = write_spkg(
+        &fixture,
+        "spark-plugin-badwin-local-1.0.0.spkg",
+        &spkg_text(
+            "badwin-local",
+            &[
+                (
+                    "manifest.json",
+                    r#"{"id":"badwin-local","name":"坏窗口","window":{"defaultWidth":100,"defaultHeight":680}}"#
+                        .as_bytes(),
+                ),
+                ("views/main.js", b"hi"),
+            ],
+        ),
+    );
+    let bad_preview = service.inspect_local_package(bad.to_str().unwrap()).unwrap();
+    let bad_state = service
+        .import_local_package(bad.to_str().unwrap(), &bad_preview.sha256, false)
+        .unwrap();
+    assert_eq!(bad_state.window, None);
+
+    // 模拟旧版状态文件：抹掉 window 字段，启动对账应从包内 manifest 回填
+    let raw = fs::read_to_string(&fixture.state_file).unwrap();
+    let mut value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    for id in ["todo-local", "badwin-local"] {
+        value["installed"][id]
+            .as_object_mut()
+            .unwrap()
+            .remove("window");
+    }
+    fs::write(&fixture.state_file, value.to_string()).unwrap();
+
+    let mut reloaded = fixture.service();
+    reloaded.initialize().unwrap();
+    assert_eq!(
+        reloaded.state.installed["todo-local"].window,
+        Some(PluginWindow { default_width: 480, default_height: 680 })
+    );
+    // 包内声明非法的记录回填后仍为 None（未声明口径）
+    assert_eq!(reloaded.state.installed["badwin-local"].window, None);
 }
 
 /// 当前平台之外的另一个平台（测试环境恒为 desktop/mobile 二值口径）。

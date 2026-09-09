@@ -207,7 +207,9 @@ export default defineComponent({
 </script>
 
 <style scoped>
-.detail { min-height: 100%; background: var(--spark-bg-page, #f5f5f5); padding-bottom: 72px; }
+/* 页栈子页根 = iframe 内独立滚动容器（父级 .moments-root overflow:hidden 不滚动；
+   长评论区在窗口最小高 220 下必超高，须自滚动）。padding-bottom 为 fixed 底栏留位 */
+.detail { height: 100%; overflow-y: auto; background: var(--spark-bg-page, #f5f5f5); padding-bottom: 72px; }
 .top { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: var(--spark-bg-card, #fff); position: sticky; top: 0; z-index: 5; }
 .back { border: none; background: none; color: var(--spark-text-2, #475569); font-size: 16px; cursor: pointer; }
 .title { font-weight: 600; }

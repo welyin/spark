@@ -23,7 +23,7 @@ describe('MobileTabBar 点击切换', () => {
     for (const button of buttons) {
       button.dispatchEvent(new Event('click', { bubbles: true }));
     }
-    expect(selected).toEqual(['messages', 'contacts', 'apps', 'mine']);
+    expect(selected).toEqual(['messages', 'space', 'affairs', 'mine']);
 
     app.unmount();
     el.remove();

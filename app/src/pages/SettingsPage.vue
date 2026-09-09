@@ -91,6 +91,7 @@
             <BackupModule v-else-if="activeModule === 'backup'" detail-mode="drawer" :root-id="rootStatus.rootId" />
             <SecurityModule v-else-if="activeModule === 'security'" detail-mode="drawer" :root-id="rootStatus.rootId ?? ''" />
             <DevicesModule v-else-if="activeModule === 'devices'" detail-mode="drawer" :root-id="rootStatus.rootId ?? ''" />
+            <StorageModule v-else-if="activeModule === 'storage'" />
             <!-- 未选模块时的占位 -->
             <div v-else class="mine-detail settings-module-empty">
               <el-empty description="选择左侧模块查看" />
@@ -184,6 +185,7 @@
           <BackupModule v-else-if="activeModule === 'backup'" detail-mode="drawer" :root-id="rootStatus.rootId" />
           <SecurityModule v-else-if="activeModule === 'security'" detail-mode="drawer" />
           <DevicesModule v-else-if="activeModule === 'devices'" detail-mode="drawer" :root-id="rootStatus.rootId ?? ''" />
+          <StorageModule v-else-if="activeModule === 'storage'" />
           <!-- 未选模块时的占位 -->
           <div v-else class="mine-detail settings-module-empty">
             <el-empty description="选择左侧模块查看" />
@@ -204,6 +206,7 @@
 import { computed, defineComponent, onMounted, ref, watch, type Component } from 'vue';
 import {
   CircleCloseFilled,
+  Coin,
   Cpu,
   Key,
   Lock,
@@ -234,6 +237,7 @@ import ProfileModule from '../components/mine/ProfileModule.vue';
 import MyCardModule from '../components/mine/MyCardModule.vue';
 import BackupModule from '../components/mine/BackupModule.vue';
 import DevicesModule from '../components/mine/DevicesModule.vue';
+import StorageModule from '../components/mine/StorageModule.vue';
 import PermissionModule from '../components/mine/PermissionModule.vue';
 import SecurityModule from '../components/mine/SecurityModule.vue';
 import OrgSettingsPanel from '../components/org/OrgSettingsPanel.vue';
@@ -242,7 +246,7 @@ import SystemSettingsPanel from '../components/settings/SystemSettingsPanel.vue'
 type MenuKey = 'mine' | 'space' | 'system';
 
 /** 个人设置下的模块（第三栏菜单，点击后右侧展开；设备管理由系统设置迁入，网络状态仍在系统设置） */
-type PersonalModuleKey = 'profile' | 'card' | 'permission' | 'backup' | 'devices' | 'security';
+type PersonalModuleKey = 'profile' | 'card' | 'permission' | 'backup' | 'devices' | 'security' | 'storage';
 
 /** 本页在导航栈中的 tab 键（设置不在底部 tab，经顶栏「⋯」进入，键与 App.vue activeTab 一致） */
 const MOBILE_TAB = 'settings';
@@ -258,6 +262,7 @@ export default defineComponent({
     MyCardModule,
     BackupModule,
     DevicesModule,
+    StorageModule,
     PermissionModule,
     SecurityModule,
     OrgSettingsPanel,
@@ -305,7 +310,8 @@ export default defineComponent({
       { key: 'permission', label: '朋友权限', icon: Lock, color: '#ff7d00' },
       { key: 'security', label: '安全设置', icon: Unlock, color: '#7b61ff' },
       { key: 'backup', label: '账号备份', icon: Key, color: '#7b61ff' },
-      { key: 'devices', label: '设备管理', icon: Monitor, color: '#3296fa' }
+      { key: 'devices', label: '设备管理', icon: Monitor, color: '#3296fa' },
+      { key: 'storage', label: '存储与副本', icon: Coin, color: '#34c19b' }
     ];
 
     // 空间切换（个人↔组织及组织 A→B）：菜单项集合变化，重置选中到各空间默认项，并清掉模块选中；移动端同步回栈底

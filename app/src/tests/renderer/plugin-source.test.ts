@@ -127,3 +127,19 @@ describe('buildPluginHostSrcdoc（生产 wire 形态）', () => {
     expect(() => buildPluginHostSrcdoc('../etc')).toThrow('Invalid plugin id');
   });
 });
+
+describe('buildPluginHostSrcdoc（Tauri+dev vite 中间件形态）', () => {
+  // 2026-09-09 实机 bug：Tauri+dev 分支 base 带 /plugin/ 前缀，CSP 来源只去 id 段
+  // 会把 /plugin 残留进路径——/plugin 不匹配 /plugin/<id>/main.js，插件脚本与样式
+  // 被全量拦截（加载失败）。CSP 来源必须是真 origin（scheme+host）。
+  it('dev 分支 CSP 来源为真 origin，不残留 /plugin 路径段', () => {
+    const srcdoc = buildPluginHostSrcdoc('spark-chat', undefined, true);
+    // vitest jsdom origin = http://localhost:3000（或 1420 等 dev origin），base 带 /plugin/ 前缀
+    expect(pluginSourceBaseUrl('spark-chat', true)).toMatch(/^https?:\/\/[^/]+\/plugin\/spark-chat$/);
+    expect(srcdoc).toMatch(/script-src https?:\/\/[^/]+;/);
+    expect(srcdoc).not.toContain('/plugin;');
+    expect(srcdoc).not.toContain('/plugin \'unsafe-inline\'');
+    // bundle/css 引用仍带完整 /plugin/<id> 路径
+    expect(srcdoc).toMatch(/src="https?:\/\/[^/]+\/plugin\/spark-chat\/views\/main\.js"/);
+  });
+});

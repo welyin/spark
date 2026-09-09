@@ -221,6 +221,7 @@ pub fn test_config(now_ms: i64) -> P2pConfig {
         plugin_announce_relay_tenure_ms: None,
         dht_republish_ticks: None,
         enable_relay_server: false,
+        relay_max_reservations: None,
         enable_dcutr: true,
         now_fn: Arc::new(move || now_ms),
     }

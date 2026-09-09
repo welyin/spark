@@ -899,7 +899,9 @@ impl Kernel {
     /// 待应用效力事件的消费编排（任务 3 最小可用实现）：对
     /// `affair_org_effects` 判定为 Apply 的 (声明 × 决议) 写回执
     /// （`org:effectrcpt:` 键，线形见 effect.rs `EffectReceipt`）并逐条存证
-    /// 锚定（domain = orgId，collection = "effectrcpt"）。
+    /// 锚定（domain = orgId，collection = "effectrcpt"）；收尾按 affair.md
+    /// §6.3 对每条 Apply 生效决议封存 evi:resolution 条目（先条目后锚，
+    /// 编排见 kernel/affair_evi_ops.rs）。
     ///
     /// 语义（协议未钉死处的最小可用判定，如实登记）：
     /// - 同一 scope 多条生效决议并存时，回执只跟踪**最新**决议（按决议锚定
@@ -996,11 +998,39 @@ impl Kernel {
                 "receiptKey": receipt_key,
             }));
         }
+        // evi:resolution 条目（affair.md §6.3，A21）：生效判定路径「先条目
+        // 后锚」——本组织每条 Apply 生效决议（三线齐备 = 生效 × 事先声明 ×
+        // 事先性）向本机链确定性自写同内容条目，再触发锚；无声明组织效力的
+        // 事务（纯讨论）无 Apply 行，自然不写。
+        let mut seals = Vec::new();
+        let mut seen = HashSet::new();
+        for row in &rows {
+            if !matches!(row.outcome, EffectHookOutcome::Apply(_))
+                || !seen.insert(row.resolution_op_hash.as_str())
+            {
+                continue;
+            }
+            let (Some(op), Some(effective_ts)) = (
+                eval.ops.iter().find(|op| op.op_hash == row.resolution_op_hash),
+                row.resolution_anchored_ms,
+            ) else {
+                continue; // Apply 行必有决议锚定时刻；防御分支
+            };
+            seals.push(crate::kernel::affair_evi_ops::ResolutionSeal {
+                resolution_op_hash: row.resolution_op_hash.clone(),
+                payload: op.parsed.payload.clone(),
+                sig_set: op.parsed.actor.org_sig.clone(),
+                effective_ts,
+            });
+        }
+        let resolution_evidence =
+            self.seal_resolution_entries(org_id, &eval.affair_id, now, &seals)?;
         Ok(json!({
             "orgId": org_id,
             "affairId": affair_id,
             "nowMs": now,
             "actions": actions,
+            "resolutionEvidence": resolution_evidence,
             "invalidResolutions": invalid,
         }))
     }

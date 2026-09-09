@@ -123,6 +123,7 @@
 import { computed, defineComponent, onMounted, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { PluginMarketItemDto, RepoPluginDeclarationDto } from '../api/types';
+import type { PropType } from 'vue';
 import { currentSpace } from '../stores/current-space';
 import { enablePluginInstance, isPluginInstanceDisabled, pluginInstanceKey } from '../plugin/disabled';
 import { isAdmin, refreshOrganizations } from '../stores/org-membership';
@@ -155,6 +156,8 @@ export type OpenPluginTabPayload = {
   pluginContext?: {
     orgId?: string;
   };
+  /** 视图引导（事务深链等）：注入插件 window.__sparkPluginView.cardData */
+  viewBootstrap?: { cardData?: unknown };
 };
 
 type ViewName = 'list' | 'market';
@@ -165,13 +168,14 @@ const MOBILE_TAB = 'apps';
 
 export default defineComponent({
   name: 'AppsPage',
+  props: { initialView: { type: String as PropType<ViewName>, default: 'list' } },
   components: { AppListPanel, AppMarketPanel, AppDetailPanel, MobileBackBar, MobilePageTransition },
-  emits: ['open-plugin-tab'],
-  setup(_, { emit }) {
+  emits: ['open-plugin-tab', 'changed'],
+  setup(props, { emit }) {
     const items = ref<PluginMarketItemDto[]>([]);
     const realItems = ref<PluginMarketItemDto[]>([]);
     const loadError = ref('');
-    const view = ref<ViewName>('list');
+    const view = ref<ViewName>(props.initialView);
     /** 应用详情抽屉（点击卡片不再整页切换） */
     const detailVisible = ref(false);
     const selectedId = ref<string | null>(null);
@@ -251,6 +255,7 @@ export default defineComponent({
     // 扫描 code/plugins/*/manifest.json）合并进来，生产构建不进 bundle（§5）
     const mergeItems = () => {
       items.value = [...realItems.value, ...(mockMode() ? listMockApps() : []), ...listDevPlugins()];
+      emit('changed');
     };
 
     const refresh = async () => {

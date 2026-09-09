@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 
 use crate::org::OrganizationRecord;
-use crate::org::roles::{data_account_set, is_data_account};
+use crate::org::roles::{data_node_set, is_data_node};
 use crate::plugindata::{
     Accounts, org_dlog_entry_prefix, org_dlog_seen_key, org_dlog_seq_key, org_dlog_wm_key,
     org_dlog_wm_prefix,
@@ -33,7 +33,9 @@ pub fn is_in_replication_group(
 ) -> bool {
     match accounts {
         Accounts::AllMembers => record.find_member(from).is_some(),
-        Accounts::DataAccounts => is_data_account(record, from),
+        // A14 全员数据节点：data-accounts 集合复制组 = 全体成员（与
+        // all-members 趋同；accounts 轴取值语义改「按 K 目标分布」）
+        Accounts::DataAccounts => is_data_node(record, from),
     }
 }
 
@@ -41,7 +43,7 @@ pub fn is_in_replication_group(
 pub fn replication_group_members(record: &OrganizationRecord, accounts: Accounts) -> Vec<String> {
     match accounts {
         Accounts::AllMembers => record.members.iter().map(|m| m.root_id.clone()).collect(),
-        Accounts::DataAccounts => data_account_set(record),
+        Accounts::DataAccounts => data_node_set(record),
     }
 }
 

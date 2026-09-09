@@ -5,6 +5,7 @@
 //! 不依赖 Tauri State，单元测试直调。
 
 pub mod biometric;
+pub mod blob;
 pub mod contact;
 pub mod content;
 pub mod data;

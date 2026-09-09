@@ -61,3 +61,91 @@ fn p2p_info_dto_stopped_shape() {
     assert_eq!(text["peerId"], serde_json::Value::Null);
     assert_eq!(text["error"], serde_json::Value::Null);
 }
+
+/// A41 核对补测：OrgSyncOverviewDto 两级呈现映射（K=3 组织级合计 +
+/// 逐成员 PC 明细）与 camelCase 形状；kApplicable 必须如实透传
+/// （前端据它区分「无 K 不提醒」的 all-members 组织）。
+#[test]
+fn org_sync_overview_dto_maps_two_level_replica_fields() {
+    let overview = spark_core::org::OrgSyncOverview {
+        org_id: "org_x".into(),
+        replica_target: 3,
+        synced_peers: 2,
+        total_members: 3,
+        members: vec![spark_core::org::MemberSyncOverview {
+            root_id: "r-a".into(),
+            org_user_id: Some("uid-a".into()),
+            peer_id: None,
+            is_self: true,
+            ever_synced: true,
+            last_synced_at: None,
+        }],
+        connected_peers: 1,
+        recovery_state: spark_core::p2p::RecoveryState::Idle,
+        last_connected_at: None,
+        dht_mode: spark_core::p2p::DhtMode::default(),
+        status: spark_core::org::OrgNetworkStatus::LocalOnly,
+        k_applicable: true,
+        member_replicas: vec![
+            spark_core::org::MemberReplicaOverview {
+                root_id: "r-a".into(),
+                org_user_id: Some("uid-a".into()),
+                pc_synced: true,
+                device_class: "pc",
+            },
+            spark_core::org::MemberReplicaOverview {
+                root_id: "r-b".into(),
+                org_user_id: None,
+                pc_synced: false,
+                device_class: "mobile",
+            },
+        ],
+    };
+    let dto = OrgSyncOverviewDto::from(overview);
+    assert!(dto.k_applicable);
+    assert_eq!(dto.member_replicas.len(), 2);
+
+    let value = serde_json::to_value(&dto).unwrap();
+    // 组织级：合计 / 目标两级呈现的第一级
+    assert_eq!(value["replicaTarget"], serde_json::json!(3));
+    assert_eq!(value["syncedPeers"], serde_json::json!(2));
+    assert_eq!(value["kApplicable"], serde_json::json!(true));
+    // 第二级：逐成员 PC 明细（手机不计入口径随 deviceClass 如实透传）
+    assert_eq!(value["memberReplicas"][0]["pcSynced"], serde_json::json!(true));
+    assert_eq!(value["memberReplicas"][0]["deviceClass"], serde_json::json!("pc"));
+    assert_eq!(
+        value["memberReplicas"][1]["deviceClass"],
+        serde_json::json!("mobile")
+    );
+    // orgUserId 缺省键不出现（双写过渡未发布成员）
+    assert!(value["memberReplicas"][1].get("orgUserId").is_none());
+    assert_eq!(
+        value["memberReplicas"][0]["orgUserId"],
+        serde_json::json!("uid-a")
+    );
+    assert_eq!(value["members"][0]["orgUserId"], serde_json::json!("uid-a"));
+    assert_eq!(value["status"], serde_json::json!("localOnly"));
+}
+
+/// 无 K 组织（纯 all-members）：kApplicable=false 如实透传，
+/// 前端据此不做达标判定、不提醒。
+#[test]
+fn org_sync_overview_dto_carries_k_not_applicable() {
+    let overview = spark_core::org::OrgSyncOverview {
+        org_id: "org_y".into(),
+        replica_target: 3,
+        synced_peers: 1,
+        total_members: 2,
+        members: vec![],
+        connected_peers: 0,
+        recovery_state: spark_core::p2p::RecoveryState::Idle,
+        last_connected_at: None,
+        dht_mode: spark_core::p2p::DhtMode::default(),
+        status: spark_core::org::OrgNetworkStatus::LocalOnly,
+        k_applicable: false,
+        member_replicas: vec![],
+    };
+    let value = serde_json::to_value(OrgSyncOverviewDto::from(overview)).unwrap();
+    assert_eq!(value["kApplicable"], serde_json::json!(false));
+    assert_eq!(value["memberReplicas"], serde_json::json!([]));
+}

@@ -1,0 +1,25 @@
+{
+  "id": "spark-minichat",
+  "domain": "plugin:spark-minichat",
+  "name": "最小聊天",
+  "version": "0.1.0",
+  "entryView": "default",
+  "description": "第三方最小聊天插件示例（communication §六验收样例）：仅 sdk.messages 四调用——会话列表/读消息/发消息/订阅新消息，证明换前端后同一消息数据（sled）原样在。",
+  "category": "social",
+  "supportedSpaces": ["personal", "org"],
+  "views": [
+    { "id": "default", "type": "app", "title": "最小聊天" }
+  ],
+  "chrome": {
+    "hostTitleBar": false
+  },
+  "permissions": [
+    "messages:read",
+    "messages:write"
+  ],
+  "sdkVersion": "1",
+  "package": {
+    "updateManifestUrl": "",
+    "packageName": "spark-plugin-spark-minichat-0.1.0.spkg"
+  }
+}

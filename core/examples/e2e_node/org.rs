@@ -96,16 +96,6 @@ pub fn update_info(kernel: &mut Kernel, params: &Params) -> Result<Value, String
     ))
 }
 
-/// `org-set-member-role`：晋升/降级成员角色（"admin"/"member"；仅 admin）。
-pub fn set_member_role(kernel: &mut Kernel, params: &Params) -> Result<Value, String> {
-    let role = match params.need_str("role")? {
-        "admin" => spark_core::org::OrganizationRole::Admin,
-        "member" => spark_core::org::OrganizationRole::Member,
-        other => return Err(format!("unknown role: {other}")),
-    };
-    to_json(kernel.org_set_member_role(params.need_str("orgId")?, params.need_str("rootId")?, role))
-}
-
 /// `org-remove-member`：移除成员（仅 admin；落库后向被移除者发
 /// org-member-removed 定向通知，失败入 org 域 pending 补投）。
 pub fn remove_member(kernel: &mut Kernel, params: &Params) -> Result<Value, String> {

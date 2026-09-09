@@ -158,6 +158,20 @@
             <el-radio-button value="dark">深色</el-radio-button>
           </el-radio-group>
         </div>
+        <!-- 聊天界面版本（A19 灰度，communication §五.3）：旧内置 UI 与
+             默认内置插件版并存一个版本，数据源同一套（sled），切换零迁移。
+             通讯录已转为空间桌面插件窗口（docs/ui 阶段 3），无壳层灰度面 -->
+        <div class="settings-row">
+          <span>聊天界面</span>
+          <el-radio-group
+            size="small"
+            :model-value="builtinImpl('messages')"
+            @update:model-value="setBuiltinImpl('messages', $event as 'legacy' | 'plugin')"
+          >
+            <el-radio-button value="legacy">内置</el-radio-button>
+            <el-radio-button value="plugin">插件版</el-radio-button>
+          </el-radio-group>
+        </div>
         <!-- TODO(mock): 以下开关仅本地展示不生效，待偏好持久化方案落地 -->
         <div v-for="item in generalItems" :key="item.key" class="settings-row">
           <span>{{ item.label }}</span>
@@ -225,6 +239,7 @@ import type { DataUsageReportDto, P2pInfoDto as P2PInfo, RelayStatusDto } from '
 import { formatBytes } from '../../utils/format';
 import { DISCLAIMER_PARAGRAPHS } from '../../utils/disclaimer';
 import { themeMode } from '../../stores/theme';
+import { builtinImpl, setBuiltinImpl } from '../../stores/builtin-apps';
 import { isMobileLayout } from '../../stores/ui-layout';
 import { isOverlayCloseTarget, popOverlay, pushOverlay } from '../../stores/overlay-stack';
 import MobileBackBar from '../MobileBackBar.vue';
@@ -586,6 +601,8 @@ export default defineComponent({
       inboundLabel,
       wizardTips,
       themeMode,
+      builtinImpl,
+      setBuiltinImpl,
       disclaimerParagraphs: DISCLAIMER_PARAGRAPHS,
       generalStates,
       generalItems: GENERAL_ITEMS,

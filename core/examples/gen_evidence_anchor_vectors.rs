@@ -142,6 +142,7 @@ fn main() {
         },
         &key(0xEE),
         TS_BASE + 5000,
+        None,
     )
     .expect("build package");
     let canonical_full = normalize_object(&serde_json::to_value(&pkg).unwrap());
