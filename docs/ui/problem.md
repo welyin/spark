@@ -348,7 +348,7 @@
 - **待后端 / 协议**：组织启用清单同步（app-enablement 过渡 store 的内核接管，含 trust 字段透出以区分内置件）；A3 设备副本角色 / 中继字段；A7 计票快照（tally）出口；A8/M29 affair 锚定域 / 来源域字段；M15 逐设备副本角色查询；M35 事务卡片的域 / 类型元数据；M31 信任级 L0/L1/L2 数据来源；X1 插件 SDK 拖出协议与投递消费方；X5/X7 内核文件应用（导入收件箱 / 进度 / 哈希去重 / file-export 明文导出）；G10 内核只消费模式 API。
 - **待原生工程**：X8 外部唤起 / 单实例（tauri-plugin-deep-link＋single-instance）；M32 投射系统主屏幕（Android pin / iOS Web Clip）；M33 系统分享 Sheet。
 - **待真机走查**：M14/M27 手势手感、M18 断网入队补发链路、W6 动效锚点、D16 水印观感。
-- **插件图标标准（2026-09-10 定稿并落地）**：规格＝wiki/protocol/plugin-dist/plugin-dist.md §2.3（两个载体同图：包内 manifest.json `icon`＝包内相对路径经 plugin:// 读取＝权威源；声明文件 icon＝市场层未安装也可展示；壳层统一回退链 包内图标→声明图标→首字符哈希渐变，由 AppIcon 组件承载）。已落地：SDK PluginManifest 加 `icon` 字段；Rust 目录透传 icon（PluginCatalogItem／声明缓存 corrected 同源）；壳层 AppIcon 组件接线全部展示位（桌面/Dock/Launchpad/窗口标题栏/市场/详情/属性/手机桌面/全局搜索）；9 个内置插件各配一张自含底色 SVG。遗留：plugin:// fail-closed 查内核全局 enabled 与 per-space 启用存在双口径缝隙（组织空间"本机启用但内核全局关"的包图标 404 → 优雅落回退，不绕过 fail-closed）；dist/.spkg 为 gitignored 产物，发布/CI 需重跑构建脚本。
+- **插件图标标准（2026-09-10 定稿并落地）**：规格＝docs/protocol/plugin-dist/plugin-dist.md §2.3（两个载体同图：包内 manifest.json `icon`＝包内相对路径经 plugin:// 读取＝权威源；声明文件 icon＝市场层未安装也可展示；壳层统一回退链 包内图标→声明图标→首字符哈希渐变，由 AppIcon 组件承载）。已落地：SDK PluginManifest 加 `icon` 字段；Rust 目录透传 icon（PluginCatalogItem／声明缓存 corrected 同源）；壳层 AppIcon 组件接线全部展示位（桌面/Dock/Launchpad/窗口标题栏/市场/详情/属性/手机桌面/全局搜索）；9 个内置插件各配一张自含底色 SVG。遗留：plugin:// fail-closed 查内核全局 enabled 与 per-space 启用存在双口径缝隙（组织空间"本机启用但内核全局关"的包图标 404 → 优雅落回退，不绕过 fail-closed）；dist/.spkg 为 gitignored 产物，发布/CI 需重跑构建脚本。
 
 ---
 

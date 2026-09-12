@@ -2,7 +2,7 @@
 
 > 状态：定稿 ｜ 分册：第三层 · 事务
 >
-> 上游：`wiki/product/community-model.md` §四、§六；`wiki/protocol/community/org-signature.md`、`wiki/protocol/org/org-recovery.md`
+> 上游：`wiki/product/community-model.md` §四、§六；`wiki/protocol/community/org-signature.md`、`docs/protocol/org/org-recovery.md`
 
 ## 一句话
 

@@ -2,7 +2,7 @@
 
 > 状态：定稿 ｜ 分册：第一层 · 底座
 >
-> 上游实现：`wiki/architecture/p2p/*`、`wiki/product/relay-strategy.md`、`wiki/product/mobile-leaf-mode.md`、`wiki/protocol/p2p/*`
+> 上游实现：`wiki/architecture/p2p/*`、`wiki/product/relay-strategy.md`、`wiki/product/mobile-leaf-mode.md`、`docs/protocol/p2p/*`
 
 ## 一句话
 

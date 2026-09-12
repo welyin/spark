@@ -26,4 +26,4 @@
 - **向下**：复用底座的身份派生（每入一个域派生一个不可关联的域身份）、个人 / 组织两条同步通道、P2P 与网关暂存、链式存证；
 - **向上**：为第三层事务提供"可以被决议改变的成员结构"——事务的决议能改组、创设、撤换一个组织，前提是该组织**事先声明**了效力来源。
 
-> 工程实现（创世、邀请 / 加入 / 认领协议、组织同步与账号角色、读授权策略引擎）见 `wiki/protocol/community/`、`wiki/protocol/org/`、`wiki/architecture/sync/org-data-sync.md`。
+> 工程实现（创世、邀请 / 加入 / 认领协议、组织同步与账号角色、读授权策略引擎）见 `docs/protocol/community/` 与 `docs/protocol/org/`（已定稿部分）；org-genesis、org-signature、org-join 等待 A53/C3 的规格暂存 `wiki/protocol/`，工程现状见 `wiki/architecture/sync/org-data-sync.md`。

@@ -31,4 +31,4 @@
 - 底座向上只提供"**一个主权个体 + 其可信设备 + 可靠加密通道 + 可证明的历史**"；
 - "个人 / 家庭 / 组织"的数据区隔发生在更上层的[共同体模型](../community/model.md)；底座只保证"个人域"这条最内的边界是密封的。
 
-> 工程实现（存储布局、同步协议、密钥派生、libp2p 配置等）见 `wiki/architecture/{sync,identity,p2p}` 与 `wiki/protocol/`，本分册只讲产品规则与边界，不复制实现。
+> 工程实现（存储布局、同步协议、密钥派生、libp2p 配置等）见 `wiki/architecture/{sync,identity,p2p}` 与 `docs/protocol/`，本分册只讲产品规则与边界，不复制实现。

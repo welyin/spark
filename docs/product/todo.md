@@ -104,12 +104,12 @@
 | # | 影响面（wiki 规格 / 代码模块） |
 | --- | --- |
 | 1 | `wiki/architecture/sync/org-data-sync.md`；`core/src/sync/`、`kernel/`（pdsync 通路、配额与清理） |
-| 2 | `wiki/protocol/community/org-genesis.md` §4、`credential.md`；`core/src/org/types/member.rs`（rootId→org_user_id）、`org/service/*`、`kernel/contact_ops.rs`、`kernel/community_ops.rs`（邀请定向分离、复活 `OrganizationAccessKey`） |
+| 2 | `wiki/protocol/community/org-genesis.md` §4、`docs/protocol/community/credential.md`；`core/src/org/types/member.rs`（rootId→org_user_id）、`org/service/*`、`kernel/contact_ops.rs`、`kernel/community_ops.rs`（邀请定向分离、复活 `OrganizationAccessKey`） |
 | 3 | `wiki/architecture/identity/password-change-propagation.md`（契约已冻结）；kernel epoch 系列（E/F 派工中） |
 | 4 | `wiki/ui/`（登录）；`code/app` 移动端登录 / 锁定流程 |
 | 5 | 桌面安装器与数据目录布局（`code/app/src-tauri`）；移动端天然已有 |
 | 6 | `core/src/affair/snapshot.rs`（`verify_ladder_roster` 已有、零调用）；导出包 + `evidence-verify` CLI |
-| 7 | `wiki/protocol/community/affair*`；`core/src/affair/`、组织存证链（`org/`） |
+| 7 | `docs/protocol/community/affair*`；`core/src/affair/`、组织存证链（`org/`） |
 | 8 | 母稿 §9（技术落点）；新建 `wiki/protocol/economy/` 与 `core` 经济模块（代码为零） |
 | 9 | `wiki/architecture/plugins/`（plugin-data-api、契约格式）；插件 SDK / bridge |
 | 10 | `plugins/catalog.md` 各行；新插件仓库（spark-* 系列） |
@@ -122,9 +122,9 @@
 | 17 | `code/app/src`（IM / 通讯录 / 组织管理 / 文件 / 市场五个界面）；`wiki/architecture/plugins/`（SDK / bridge）、`code/app/src-tauri`（插件宿主） |
 | 18 | `OrgSettingsPanel.vue`、`commands/org.rs`（org_delete）、`kernel/org_ops.rs:346`、`org/service/create.rs`（守卫扩域）、`org/mod.rs:191`、pdsync 墓碑（`sync/versioned.rs`） |
 | 19 | 组织管理应用·策略配置界面（`code/app/src`） |
-| 20 | `wiki/architecture/community-affairs.md` §4.5、`wiki/protocol/community/org-signature.md`、`affair*`；`core/src/org/sigset.rs`、`policy/`、合入侧校验（`org/service/*`） |
+| 20 | `wiki/architecture/community-affairs.md` §4.5、`wiki/protocol/community/org-signature.md`、`docs/protocol/community/affair*`；`core/src/org/sigset.rs`、`policy/`、合入侧校验（`org/service/*`） |
 | 21 | `wiki/protocol/community/org-signature.md`（sigSetV 版本位）；可识别门限方案选型 + `org/sigset.rs` 扩展 + 向量测试 |
 | 22 | 聊天应用（个人过滤规则）、`core/src/index/`（indexer 过滤）、内核域内容处置操作（新增，走公示延迟） |
 | 23 | `core/src/policy/eval.rs`、`kernel/policy_ops.rs`、plugin-data-api（契约发布物格式）、`core/src/affair/`（决议开始时点快照锚） |
 | 24 | wiki Git over P2P 传输层（**作废重订**）；`core/src/sync/`（blob 分发）、代码仓库应用插件、PR 子事务（`core/src/affair/`） |
-| 25 | 插件 SDK / CLI、`wiki/protocol/plugin-dist`（manifest 依赖声明与哈希锁定）、打包格式与 SBOM |
+| 25 | 插件 SDK / CLI、`docs/protocol/plugin-dist`（manifest 依赖声明与哈希锁定）、打包格式与 SBOM |

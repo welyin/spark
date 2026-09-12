@@ -2,7 +2,7 @@
 
 > 状态：定稿 ｜ 分册：第五层 · 插件
 >
-> 上游：`wiki/protocol/community/policy.md`（声明式策略求值）、`wiki/architecture/community-affairs.md`（插件分工）。
+> 上游：`docs/protocol/community/policy.md`（声明式策略求值）、`wiki/architecture/community-affairs.md`（插件分工）。
 
 ## 定义权与解释权
 

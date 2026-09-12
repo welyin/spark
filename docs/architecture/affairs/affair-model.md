@@ -13,7 +13,7 @@
 
 ## 二、现状（核实日期：2026-09-08）
 
-**wiki**：`wiki/protocol/community/affair*`（容器线形、规则文档与集体决策机制、决议产物、时间语义）；`affair-metadata.md`；`wiki/architecture/community-affairs.md`。
+**wiki**：`docs/protocol/community/affair*`（容器线形、规则文档与集体决策机制、决议产物、时间语义）；`docs/protocol/community/affair-metadata.md`；`wiki/architecture/community-affairs.md`。
 
 **代码**：`core/src/affair/` 已按域成体系——`actor.rs`（操作与 org_sig 结构）、`decide.rs`（vote / multisig / delayed-veto 三形态求值）、`rules.rs`（规则校验）、`rulechain.rs`（规则修订链，`evaluate_rule_change` 两处生产调用）、`meta.rs`（元数据修订 delayed-veto 固定）、`ladder.rs`（参与阶梯推导）、`profile.rs`（公开履历推导）、`exec.rs`（执行核查三形态）、`snapshot.rs`（法定人数/名册快照）、`core/src/sync/affairsync/`（C4 元数据面 gossip + 白名单整批拒收 + 关注门槛）、`core/src/index/`（C10 indexer，健康信号确定性计算已实现）。
 

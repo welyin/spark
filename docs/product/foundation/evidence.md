@@ -2,7 +2,7 @@
 
 > 状态：定稿 ｜ 分册：第一层 · 底座
 >
-> 上游实现：`wiki/architecture/sync/evidence-anchoring-export.md`、`wiki/architecture/sync/sync-and-evidence.md`、`wiki/protocol/sync-evidence.md`
+> 上游实现：`wiki/architecture/sync/evidence-anchoring-export.md`、`wiki/architecture/sync/sync-and-evidence.md`、`docs/protocol/sync-evidence.md`
 
 ## 一句话
 

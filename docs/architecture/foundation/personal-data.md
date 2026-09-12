@@ -22,7 +22,7 @@
 - **删除日志**（dlog，2026-08 联调后取代墓碑增量方案）：`dlog:entry:{seq}` + `dlogAck` 回执 + 严格 GC，墓碑 pmeta 永久保留防复活；
 - **附件策略已有雏形**：hello 携带 `attachmentPolicy: eager | lazy`（PC 默认 eager 全量拉附件，手机默认 lazy 点击才拉）与 `msgWindow`（每设备可配）；
 - **设备清单即副本组成员列表**（`device:*` 纳入同步，`DeviceRecord.deviceUid` 标识物理设备）；
-- **blob 层已落地（A1，2026-09-08）**：`core/src/sync/blob/`（mod / presence / fetch）——内容寻址分块（1MiB 阈值 / 256KiB 块）、manifest 与 `blob:presence:{cid}:{deviceUid}` 位图账本纳入 pdsync（`GATED_PUSH_CATEGORIES` 灰度门控）、`blob-fetch`/`blob-chunk` 回补信封（offset 续拉、收齐 sha256 校验）、确定性副本计数（`replica_summary`）、三态诚实降级；规格 `wiki/protocol/p2p/personal-data-sync.md` §14（字节级权威）+ golden vectors `spec/vectors/blob.json`（8 用例）+ 三设备 loopback 集成（`kernel_blob_sync.rs`）。
+- **blob 层已落地（A1，2026-09-08）**：`core/src/sync/blob/`（mod / presence / fetch）——内容寻址分块（1MiB 阈值 / 256KiB 块）、manifest 与 `blob:presence:{cid}:{deviceUid}` 位图账本纳入 pdsync（`GATED_PUSH_CATEGORIES` 灰度门控）、`blob-fetch`/`blob-chunk` 回补信封（offset 续拉、收齐 sha256 校验）、确定性副本计数（`replica_summary`）、三态诚实降级；规格 `docs/protocol/p2p/personal-data-sync.md` §14（字节级权威）+ golden vectors `spec/vectors/blob.json`（8 用例）+ 三设备 loopback 集成（`kernel_blob_sync.rs`）。
 
 - **配额与驱逐已落地（A2，2026-09-08）**：`sync/blob/quota.rs`（`blob:quota` 配置 PC 10GiB/移动 1GiB、`blob:access:{cid}` LRU、水位、`k_target=min(3,未撤销设备数)`）+ `sync/blob/evict.rs`（`plan_eviction` 纯函数、GC `plan_gc`/`gc_unreferenced`）——**位次规则**（完整持有者按 deviceUid 升序，`rank ≥ K` 才可驱逐，`rank < K` 或账本未覆盖永不驱逐）使「副本 ≤K 永不驱逐」被蕴含且全设备并发驱逐无需协调即精确收敛 K；hello 扩展 `blobQuota`（老端不读兼容）；规格 §15 + `blob_quota.json` 6 向量。GC 周期接线待 A4 定义引用形态（§15.5，防空引用集误清）。
 

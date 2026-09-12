@@ -2,7 +2,7 @@
 
 > 状态：定稿 ｜ 分册：第二层 · 共同体
 >
-> 上游：`wiki/protocol/p2p/p2p-dm.md`、`wiki/ui/messages/*`、`wiki/ui/contacts/*`、`wiki/architecture/plugins/social-feed.md`、`wiki/architecture/identity/organization.md`
+> 上游：`docs/protocol/p2p/p2p-dm.md`、`wiki/ui/messages/*`、`wiki/ui/contacts/*`、`wiki/architecture/plugins/social-feed.md`、`wiki/architecture/identity/organization.md`
 
 ## 一句话
 

@@ -12,7 +12,7 @@
 
 ## 二、现状（核实日期：2026-09-08）
 
-**wiki**：`wiki/protocol/community/policy.md`（声明式策略求值规格）；`community-affairs.md` §7 方案 B（B1 最小声明式规则集选型已定：零新依赖、覆盖名册三档 / 开放矩阵 / 字段掩码，`engine` 字段预留换 Cedar）。
+**wiki**：`docs/protocol/community/policy.md`（声明式策略求值规格）；`community-affairs.md` §7 方案 B（B1 最小声明式规则集选型已定：零新依赖、覆盖名册三档 / 开放矩阵 / 字段掩码，`engine` 字段预留换 Cedar）。
 
 **代码**：
 

@@ -12,7 +12,7 @@
 |---|---|
 | **想快速看懂 Spark** | [愿景与非目标](vision.md) → [产品全景](product-map.md) |
 | **关心组织、治理与经济设计** | [产品全景](product-map.md) → `community/`（共同体）→ `affairs/`（事务）→ `economy/`（经济）→ `plugins/`（解释权如何下放） |
-| **想参与开发 / 贡献代码** | 先读 [产品全景](product-map.md) 与 `plugins/`（内核与插件的边界），再按各篇末尾链接进入 `wiki/architecture`、`wiki/protocol`——**本目录不讲字节级实现** |
+| **想参与开发 / 贡献代码** | 先读 [产品全景](product-map.md) 与 `plugins/`（内核与插件的边界），再按各篇末尾链接进入 [`../architecture/`](../architecture/)、[`../protocol/`](../protocol/) 与 [`../dev/`](../dev/)——**本目录不讲字节级实现** |
 
 ---
 

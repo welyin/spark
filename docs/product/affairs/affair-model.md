@@ -2,7 +2,7 @@
 
 > 状态：定稿 ｜ 分册：第三层 · 事务
 >
-> 上游：`wiki/product/community-model.md` §六；`wiki/protocol/community/affair*.md`
+> 上游：`wiki/product/community-model.md` §六；`docs/protocol/community/affair*.md`
 
 ## 一句话
 

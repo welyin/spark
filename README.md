@@ -29,7 +29,7 @@
 
 ```
 ├── core/      # spark-core：Rust 内核（身份/存储/集合同步/存证/组织/数据治理/P2P）
-├── spec/      # golden vectors（协议规格文档在 wiki protocol/ 专区）
+├── spec/      # golden vectors（协议规格文档在 docs/protocol/）
 ├── docs/      # 目标文档与权威定稿：产品/架构/UI/协议/测试/安全/开发者/用户（总纲见 docs/README.md）
 ├── app/       # 应用壳（Tauri 2.x，PC 与移动端同一工程 + Vue 3 前端）
 ├── plugins/   # 插件（spark-example 示例插件：组织微博）与打包签名脚本

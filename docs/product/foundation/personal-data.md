@@ -2,7 +2,7 @@
 
 > 状态：定稿 ｜ 分册：第一层 · 底座
 >
-> 上游实现：`wiki/architecture/sync/personal-data-sync*.md`、`wiki/protocol/data-mgmt.md`
+> 上游实现：`wiki/architecture/sync/personal-data-sync*.md`、`docs/protocol/data-mgmt.md`
 
 ## 一句话
 
