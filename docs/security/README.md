@@ -4,4 +4,6 @@
 > 安全评审报告、已知风险的过程登记留在 wiki `security/` 区。
 > 归属裁决见 [../README.md](../README.md) §三。
 
-（内容待从 wiki `security/` 区迁入）
+## 索引
+
+- [password-unify-auto-trigger.md](password-unify-auto-trigger.md) —— 自动密码统一触发的威胁模型：攻击者能力假设、攻击树与守卫、与既有安全不变式的关系
