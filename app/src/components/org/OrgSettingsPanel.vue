@@ -116,7 +116,7 @@
           <template v-if="currentOverview.kApplicable">
             <el-tag :type="replicaTagType(currentOverview)">{{ replicaLabel(currentOverview) }}</el-tag>
             <span class="replica-hint">
-              {{ currentOverview.syncedPeers >= currentOverview.replicaTarget ? '副本充足' : '副本不足，建议成员保持在线或邀请更多节点' }}
+              {{ currentOverview.syncedPeers >= currentOverview.replicaTarget ? '副本充足' : '副本暂不足：待其他成员上线补齐副本，无需额外操作' }}
               （已同步节点 {{ currentOverview.syncedPeers }} / 成员 {{ currentOverview.totalMembers }}）
             </span>
           </template>

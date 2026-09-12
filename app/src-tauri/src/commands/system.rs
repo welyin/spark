@@ -5,6 +5,10 @@
 //! 需 overlay_icon、Android 不支持）。平台不支持或内部错误一律静默降级
 //! （命令返回单位，错误不冒泡）——徽标是装饰性反馈，前端 fire-and-forget。
 
+// 桌面端显示模式命令需要 Manager::get_webview_window；移动端无窗口语义不引用
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use tauri::Manager as _;
+
 /// 未读数 → 徽标值：<=0 清除徽标（None），正数收敛到 1..=999（极端值不把
 /// 大数字直接贴上 dock；前端 title 侧 >99 已显示「…」，徽标只是装饰性近似）。
 #[cfg(not(target_os = "android"))]
@@ -109,6 +113,46 @@ pub fn system_set_proxy(app: tauri::AppHandle, proxy: String) -> Result<(), Stri
     let data_dir = crate::resolve_data_dir(&app).map_err(|e| e.to_string())?;
     crate::proxy::save_proxy(&data_dir, validated.as_deref())?;
     crate::proxy::apply_proxy_env(validated.as_deref());
+    Ok(())
+}
+
+// ------------------------------------------------------------------
+// 显示模式（display_mode.rs）：窗口模式＝最大化锁定 / 全屏，二选一，
+// 不允许还原成可拖拉的小窗。持久化 <data_dir>/spark-display-mode.json；
+// 窗口模式的事件锁定（脱离最大化即重新最大化）在 lib.rs 的
+// RunEvent::WindowEvent::Resized 分支。移动端无窗口语义：恒 windowed、设置 no-op。
+// ------------------------------------------------------------------
+
+/// 查询当前显示模式（"windowed" / "fullscreen"）。
+#[tauri::command]
+pub fn system_get_display_mode(
+    state: tauri::State<'_, crate::display_mode::DisplayModeState>,
+) -> String {
+    state
+        .0
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_str()
+        .to_string()
+}
+
+/// 设置显示模式：校验 → 持久化 → 更新共享状态 → 应用到主窗口（桌面端）。
+/// 顺序上状态先更新再应用：apply 引发的 Resized 事件按目标态收敛，不会被
+/// 事件锁定误判回旧模式。
+#[tauri::command]
+pub fn system_set_display_mode(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::display_mode::DisplayModeState>,
+    mode: String,
+) -> Result<(), String> {
+    let parsed = crate::display_mode::parse_mode(&mode)?;
+    let data_dir = crate::resolve_data_dir(&app).map_err(|e| e.to_string())?;
+    crate::display_mode::save_display_mode(&data_dir, parsed)?;
+    *state.0.lock().unwrap_or_else(|e| e.into_inner()) = parsed;
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    if let Some(window) = app.get_webview_window(crate::display_mode::MAIN_WINDOW_LABEL) {
+        crate::display_mode::apply_display_mode(&window, parsed);
+    }
     Ok(())
 }
 

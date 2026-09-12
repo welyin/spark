@@ -53,7 +53,8 @@ pub(crate) struct SpkgContainer {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SpkgInnerManifest {
-    name: Option<String>,
+    /// pub(crate)：builtin.rs 预装与 repo.rs 合成条目的名称回填复用
+    pub(crate) name: Option<String>,
     /// pub(crate)：builtin.rs 预装授权计算复用
     pub(crate) permissions: Option<Vec<String>>,
     pub(crate) supported_spaces: Option<Vec<String>>,
@@ -316,6 +317,12 @@ impl PluginMarketService {
             .as_ref()
             .and_then(|m| m.requires.clone())
             .and_then(normalize_requires);
+        // 插件名落库（市场条目名称回落链的一环：声明缓存 → 本字段 → 包内回填 → pluginId）
+        let name = inner
+            .as_ref()
+            .and_then(|m| m.name.clone())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| container.plugin_id.clone());
         // window 同宽进口径：非法值归一化为未声明，落库供市场合成条目回落
         let window = normalize_window(inner.and_then(|m| m.window));
 
@@ -342,6 +349,7 @@ impl PluginMarketService {
 
         let installed_state = InstalledPluginState {
             plugin_id: container.plugin_id.clone(),
+            name,
             version: container.version.clone(),
             package_path: file_path.to_string_lossy().to_string(),
             sha256: digest,

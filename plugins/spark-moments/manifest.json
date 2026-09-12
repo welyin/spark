@@ -6,6 +6,7 @@
   "entryView": "default",
   "description": "Spark 个人空间社交插件：与个人联系人分享文字与图片动态，互赞互评。对标微信朋友圈核心体验，数据去中心化（P2P 定向投递）。",
   "category": "social",
+  "icon": "assets/icon.svg",
   "supportedSpaces": ["personal"],
   "views": [
     { "id": "default", "type": "app", "title": "朋友圈" },

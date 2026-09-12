@@ -279,6 +279,10 @@ export type PluginMarketItemDto = {
   id: string;
   domain: string;
   name: string;
+  /** 声明图标（plugin-dist §2.3 ②：spark-plugin.json `icon`，data: ≤20KB 或 https URL；
+   *  空串 = 无图标。渲染前过 https/data:image 白名单；壳层统一回退链：
+   *  包内图标（已安装且已启用）→ 声明图标 → 首字符+哈希渐变，由 AppIcon 组件实现） */
+  icon: string;
   description: string;
   category: 'ai-assistant' | 'social' | 'tool' | 'game' | 'foundation';
   version: string;
@@ -1229,6 +1233,10 @@ export type ElectronAPI = {
     getProxy: () => Promise<string | null>;
     /** 设置 HTTP 代理（host:port，空串关闭）；已建立的连接需重启应用后生效 */
     setProxy: (proxy: string) => Promise<void>;
+    /** 当前主窗口显示模式（桌面）：窗口模式＝最大化锁定 / 全屏 */
+    getDisplayMode: () => Promise<'windowed' | 'fullscreen'>;
+    /** 设置主窗口显示模式（桌面）：切换即生效并持久化；移动端无此语义（UI 不渲染） */
+    setDisplayMode: (mode: 'windowed' | 'fullscreen') => Promise<void>;
     /** 移动端返回键在一级页（栈底）时显式退出应用（原生默认动作已被 JS 监听拦截） */
     exitApp: () => Promise<void>;
     /** 聊天消息系统通知（Android 真弹；桌面 no-op——阶段四C） */

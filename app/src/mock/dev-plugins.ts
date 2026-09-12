@@ -15,27 +15,40 @@ import type { PluginMarketItemDto } from '../api/types';
 /** 由 vite 插件 devPluginDiscovery 注入的开发插件元数据（生产为空数组）。 */
 declare const __DEV_PLUGINS__: ReadonlyArray<{ id: string; name: string; version: string; icon?: string }>;
 
-/** 开发插件市场条目：未安装、未启用，仅供市场/列表展示，打开走 dev 链路。 */
+/** 开发插件市场条目：代码就在本机（vite dev 链路直接可跑），故为「已安装（本地开发）」
+ *  而非市场可装条目——未启用（启用是空间层动作，走 per-space 事实源）。
+ *  走查修正：此前 installed:false 导致市场里出现无法安装的「安装」按钮（它们不从仓库来）。 */
 function toDevMarketItem(plugin: { id: string; name: string; version: string }): PluginMarketItemDto {
   return {
     id: plugin.id,
     domain: `plugin:${plugin.id}`,
     name: plugin.name,
-    description: `本地开发插件「${plugin.name}」（dev 自动扫描，生产不可见）`,
+    description: `本地开发插件「${plugin.name}」（dev 自动扫描，代码在本机，生产不可见）`,
     category: 'tool',
+    // dev 条目无声明图标（manifest.json 的 icon 是包内相对路径而非声明图标，
+    // 不回填本字段；未安装条目按 fail-closed 口径走首字符回退，plugin-dist §2.3）
+    icon: '',
     version: plugin.version,
     views: ['default'],
     permissions: [],
     package: { updateManifestUrl: '', signatureUrl: '', packageName: '', installCommand: '' },
-    installed: false,
+    installed: true,
     enabled: false,
-    installedVersion: null,
+    installedVersion: plugin.version,
     latestVersion: plugin.version,
     updateAvailable: false,
     lastCheckedAt: null,
     lastCheckReason: 'not-checked',
     grantedPermissions: []
   };
+}
+
+/** 是否本地开发插件（dev 注入；生产恒 false） */
+export function isDevPlugin(pluginId: string): boolean {
+  if (!import.meta.env.DEV || typeof __DEV_PLUGINS__ === 'undefined') {
+    return false;
+  }
+  return __DEV_PLUGINS__.some((plugin) => plugin.id === pluginId);
 }
 
 /** 开发插件市场条目列表（仅 dev；生产返回空）。 */

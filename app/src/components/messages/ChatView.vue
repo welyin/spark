@@ -81,16 +81,50 @@
       @cancel-quote="quote = null"
     />
 
-    <teleport to="body">
-      <div v-if="msgMenu.visible" class="ctx-mask" @click="closeMsgMenu" @contextmenu.prevent="closeMsgMenu">
-        <ul class="ctx-menu" :style="{ left: `${msgMenu.x}px`, top: `${msgMenu.y}px` }">
-          <li v-if="canCopy" @click="onCopy">复制</li>
-          <li @click="onQuote">引用回复</li>
-          <li v-if="canRecall" @click="onRecall">撤回</li>
-          <li class="danger" @click="onDeleteMsg">删除</li>
-        </ul>
+    <!-- 消息右键菜单（G3：统一 Element dropdown，virtual-ref 锚定被点气泡；
+         原手写 ctx-menu teleport 已移除） -->
+    <el-dropdown
+      ref="msgMenuRef"
+      trigger="contextmenu"
+      virtual-triggering
+      :virtual-ref="msgMenuAnchor"
+      placement="bottom-start"
+      popper-class="spark-ctx-popper"
+      @command="onMsgMenuCommand"
+    >
+      <span class="msg-menu-anchor" aria-hidden="true" />
+      <template #dropdown>
+        <el-dropdown-menu>
+          <el-dropdown-item v-if="canCopy" command="copy">复制</el-dropdown-item>
+          <!-- M17 次级动作：转发（文本/链接，选会话发送）/ 收藏（本机持久化，内核无收藏存储）/
+               引用发起事务（事务插件暂无引用建事务契约，如实置灰标注） -->
+          <el-dropdown-item v-if="canForward" command="forward">转发</el-dropdown-item>
+          <el-dropdown-item command="favorite">
+            {{ isMenuMsgFavorited ? '取消收藏' : '收藏（仅本机）' }}
+          </el-dropdown-item>
+          <el-dropdown-item command="quote">引用回复</el-dropdown-item>
+          <el-dropdown-item command="quote-affair" disabled>引用发起事务（待事务插件支持）</el-dropdown-item>
+          <el-dropdown-item v-if="canRecall" command="recall">撤回</el-dropdown-item>
+          <el-dropdown-item command="delete" divided class="ctx-item-danger">删除</el-dropdown-item>
+        </el-dropdown-menu>
+      </template>
+    </el-dropdown>
+
+    <!-- M17 转发：选择本会话所在空间的单聊会话，以文本/链接形式发送（复用既有发送管线） -->
+    <el-dialog v-model="forwardVisible" title="转发到会话" width="min(420px, 92vw)" class="forward-dialog">
+      <div v-if="forwardTargets.length" class="forward-list">
+        <button
+          v-for="conv in forwardTargets"
+          :key="conv.id"
+          type="button"
+          class="forward-item"
+          @click="doForward(conv.id)"
+        >
+          {{ conv.title }}
+        </button>
       </div>
-    </teleport>
+      <el-empty v-else :image-size="80" description="没有可转发的会话" />
+    </el-dialog>
 
     <!-- 联系人资料卡抽屉：聊天气泡头像 / 聊天头点击弹出（复用通讯录 ContactPanel） -->
     <ContactCardDrawer v-model="profileCardVisible" :root-id="profileCardRootId" :space-key="spaceKey" />
@@ -108,7 +142,7 @@
 
 <script lang="ts">
 import { computed, defineComponent, nextTick, onBeforeUnmount, ref, watch } from 'vue';
-import { ElMessage } from 'element-plus';
+import { ElMessage, type DropdownInstance } from 'element-plus';
 import { Close, WarningFilled } from '@element-plus/icons-vue';
 import type { PluginSpaceContext } from '../../../../packages/plugin-sdk/src';
 import ChatHeader from './ChatHeader.vue';
@@ -127,6 +161,8 @@ import {
   getAppMessages,
   getConversation,
   getMessages,
+  isFavoriteMessage,
+  listConversations,
   markRead,
   openConversation,
   previewText,
@@ -134,6 +170,7 @@ import {
   resendMessage,
   sendText,
   setDraft,
+  toggleFavoriteMessage,
   formatDividerTime,
   type ChatMessage,
   type QuoteRef,
@@ -279,13 +316,10 @@ export default defineComponent({
       scrollToBottom();
     }
 
-    // ---- 消息右键菜单（§5.2）：复制 / 引用回复 / 撤回（2 分钟内）/ 删除（本地） ----
-    const msgMenu = ref<{ visible: boolean; x: number; y: number; msg: ChatMessage | null }>({
-      visible: false,
-      x: 0,
-      y: 0,
-      msg: null
-    });
+    // ---- 消息右键菜单（§5.2 / G3 Element dropdown）：复制 / 引用回复 / 撤回（2 分钟内）/ 删除（本地） ----
+    const msgMenu = ref<{ msg: ChatMessage | null }>({ msg: null });
+    const msgMenuAnchor = ref<HTMLElement | null>(null);
+    const msgMenuRef = ref<DropdownInstance | null>(null);
 
     const canCopy = computed(() => msgMenu.value.msg?.type === 'text' || msgMenu.value.msg?.type === 'link');
     const canRecall = computed(() => {
@@ -293,18 +327,61 @@ export default defineComponent({
       return !!msg && msg.senderId === 'me' && !msg.recalled && Date.now() - msg.createdAt < RECALL_WINDOW;
     });
 
-    function openMsgMenu(payload: { event: MouseEvent; message: ChatMessage }) {
-      msgMenu.value = { visible: true, x: payload.event.clientX, y: payload.event.clientY, msg: payload.message };
+    function openMsgMenu(payload: { event: MouseEvent | TouchEvent; message: ChatMessage }) {
+      msgMenu.value = { msg: payload.message };
+      msgMenuAnchor.value = payload.event.currentTarget as HTMLElement;
+      // 等 anchor 更新后再开（首次打开时 virtual-ref 尚未指向目标气泡）
+      void nextTick(() => msgMenuRef.value?.handleOpen());
     }
 
-    function closeMsgMenu() {
-      msgMenu.value = { ...msgMenu.value, visible: false, msg: null };
-    }
-
-    async function onCopy() {
+    const canForward = computed(() => msgMenu.value.msg?.type === 'text' || msgMenu.value.msg?.type === 'link');
+    /** 当前菜单目标消息的收藏态（M17；本机持久化，详见 stores/messages） */
+    const isMenuMsgFavorited = computed(() => {
       const msg = msgMenu.value.msg;
-      closeMsgMenu();
+      return !!msg && isFavoriteMessage(props.spaceKey, props.conversationId, msg.id);
+    });
+
+    // ---- M17 转发：选择会话后以文本/链接形式发送 ----
+    const forwardVisible = ref(false);
+    const forwardText = ref('');
+    /** 可转发目标：本空间单聊会话（应用/系统会话不支持回复，与输入区禁用口径一致） */
+    const forwardTargets = computed(() =>
+      listConversations(props.spaceKey).filter((conv) => conv.kind === 'direct')
+    );
+
+    function onForward(msg: ChatMessage) {
+      forwardText.value = msg.type === 'link' ? (msg.link?.url ?? msg.content) : msg.content;
+      forwardVisible.value = true;
+    }
+
+    function doForward(convId: string) {
+      if (!sendText(props.spaceKey, convId, forwardText.value)) {
+        ElMessage.error('转发失败');
+        return;
+      }
+      forwardVisible.value = false;
+      ElMessage.success('已转发');
+    }
+
+    function onToggleFavorite(msg: ChatMessage) {
+      const favorited = toggleFavoriteMessage(props.spaceKey, props.conversationId, msg.id);
+      ElMessage.success(favorited ? '已收藏（仅本机）' : '已取消收藏');
+    }
+
+    /** 菜单命令分发（dropdown 选择后自动关闭；msg 先捕获再清，避免异步读到空） */
+    function onMsgMenuCommand(command: string) {
+      const msg = msgMenu.value.msg;
+      msgMenu.value = { msg: null };
       if (!msg) return;
+      if (command === 'copy') void onCopy(msg);
+      else if (command === 'forward') onForward(msg);
+      else if (command === 'favorite') onToggleFavorite(msg);
+      else if (command === 'quote') onQuote(msg);
+      else if (command === 'recall') onRecall(msg);
+      else if (command === 'delete') onDeleteMsg(msg);
+    }
+
+    async function onCopy(msg: ChatMessage) {
       try {
         await navigator.clipboard.writeText(msg.type === 'link' ? (msg.link?.url ?? msg.content) : msg.content);
         ElMessage.success('已复制');
@@ -313,26 +390,18 @@ export default defineComponent({
       }
     }
 
-    function onQuote() {
-      const msg = msgMenu.value.msg;
-      closeMsgMenu();
-      if (!msg) return;
+    function onQuote(msg: ChatMessage) {
       quote.value = { messageId: msg.id, senderName: msg.senderName, preview: previewText(msg) };
     }
 
-    function onRecall() {
-      const msg = msgMenu.value.msg;
-      closeMsgMenu();
-      if (!msg) return;
+    function onRecall(msg: ChatMessage) {
       if (!recallMessage(props.spaceKey, props.conversationId, msg.id)) {
         ElMessage.warning('发送超过 2 分钟，无法撤回');
       }
     }
 
-    function onDeleteMsg() {
-      const msg = msgMenu.value.msg;
-      closeMsgMenu();
-      if (msg) deleteMessage(props.spaceKey, props.conversationId, msg.id);
+    function onDeleteMsg(msg: ChatMessage) {
+      deleteMessage(props.spaceKey, props.conversationId, msg.id);
     }
 
     function onResend(msg: ChatMessage) {
@@ -378,14 +447,17 @@ export default defineComponent({
       localOnlyHintDismissed,
       recallName,
       msgMenu,
+      msgMenuAnchor,
+      msgMenuRef,
       canCopy,
       canRecall,
+      canForward,
+      isMenuMsgFavorited,
+      forwardVisible,
+      forwardTargets,
+      doForward,
       openMsgMenu,
-      closeMsgMenu,
-      onCopy,
-      onQuote,
-      onRecall,
-      onDeleteMsg,
+      onMsgMenuCommand,
       onSend,
       onResend,
       profileCardVisible,

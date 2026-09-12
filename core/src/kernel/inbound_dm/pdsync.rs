@@ -861,6 +861,21 @@ pub(super) fn handle_pdsync_data<S: StorageBackend>(
                 // 是 DeviceDto，null 载荷违约，跳过（删除随下次清单加载显现；
                 // 前端监听仅触发整表刷新，不消费 payload）。
                 if !crate::sync::is_tombstone(&record.meta) {
+                    // 同 deviceUid 替换（与 device-sync 通道 `apply_remote` 同口径）：
+                    // 当前版本设备间设备记录主走 pdsync 反熵（保活对 pdsync 设备不再
+                    // 回退 device-sync 旧快照，org_sync/tick §7.1），本通道缺墓碑化
+                    // 会让对端 peerId 漂移后的旧条目永久残留（清单累积重复设备）。
+                    // 新鲜度门槛在 DeviceService 内：stale 回灌不反杀更新记录。
+                    if let Ok(applied) = serde_json::from_str::<DeviceRecord>(&value_str) {
+                        DeviceService::tombstone_same_device_peers(
+                            storage,
+                            applied.device_uid.as_deref(),
+                            &applied.peer_id,
+                            applied.updated_at,
+                            ctx.now_ms,
+                            ctx.node_id,
+                        )?;
+                    }
                     events.push(P2pEvent::DeviceUpdated(record.value.clone()));
                 }
             } else if record.key.starts_with("ct:org:") {

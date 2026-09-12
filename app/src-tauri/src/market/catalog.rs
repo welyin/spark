@@ -72,6 +72,10 @@ pub struct PluginCatalogItem {
     pub id: String,
     pub domain: String,
     pub name: String,
+    /// 声明图标（plugin-dist §2.3 ②：spark-plugin.json `icon`，data: ≤20KB 或
+    /// https URL；空串 = 无图标）。市场条目展示回退链的一级（包内图标 → 声明
+    /// 图标 → 首字符+哈希渐变），合成源见 repo.rs synthesize_catalog_entry
+    pub icon: String,
     pub description: String,
     /// 展示分类：'ai-assistant' | 'social' | 'tool' | 'game' | 'foundation'
     /// （字符串对齐 TS，未用枚举以免破坏线形）

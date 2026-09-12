@@ -49,6 +49,11 @@ impl PluginReleaseManifest {
 #[serde(rename_all = "camelCase")]
 pub struct InstalledPluginState {
     pub plugin_id: String,
+    /// 安装时记录的插件名（包内 manifest.json `name`）：市场列表合成条目的名称
+    /// 回落数据源（声明文件缓存优先 → 本字段 → 包内 manifest 回填 → pluginId）。
+    /// 空串 = 旧记录未知，由合成处读包回填（repo.rs synthesize_catalog_entry）
+    #[serde(default)]
+    pub name: String,
     pub version: String,
     pub package_path: String,
     pub sha256: String,

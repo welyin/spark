@@ -6,6 +6,7 @@
   "entryView": "default",
   "description": "Spark 默认内置聊天应用（communication §4.2）：会话列表 / 聊天视图，数据经 sdk.messages 访问（换插件数据原样还在）；个人过滤规则（§4.3）本地生效，存插件数据域可导入导出。",
   "category": "social",
+  "icon": "assets/icon.svg",
   "supportedSpaces": ["personal", "org"],
   "views": [
     { "id": "default", "type": "app", "title": "聊天" }

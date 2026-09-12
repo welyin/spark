@@ -2,20 +2,26 @@
   <div class="apps-market">
     <!-- 固定头部（滚动不随动）：大标题居中（返回按钮左浮）+ 收录/探索/开发者分区 + 收录搜索与分类页签 -->
     <div class="market-head">
-      <header class="apps-market-header">
+      <header v-if="mode === 'system'" class="apps-market-header">
         <el-button text :icon="ArrowLeft" class="market-back" @click="emit('back')">返回</el-button>
         <h1 class="apps-title market-title">应用市场</h1>
       </header>
+      <!-- 空间模式（空间的应用市场，spark:space-market 窗口/移动端视图）：
+           目录版式与系统层一致，动作只有启用/停用（详情页操作），装卸在系统层应用管理 -->
+      <p v-else class="apps-space-note">
+        这里只决定要不要在当前空间启用；启用未安装的应用，打开时会提示安装到本机。装卸在系统层应用管理。
+      </p>
 
       <!-- 默认视图 = 收录层（官方收录 + 组织白名单）；探索页 = 已验证全网广播；
-           开发者页 = 我发布过的应用 + 发布新应用入口（plugin-dist §8，阶段 C 波次 4） -->
-      <el-radio-group v-model="marketTab" class="market-view-switch">
+           开发者页 = 我发布过的应用 + 发布新应用入口（plugin-dist §8，阶段 C 波次 4）。
+           空间模式只有收录层（探索/发布＝系统层获取代码，不在此列） -->
+      <el-radio-group v-if="mode === 'system'" v-model="marketTab" class="market-view-switch">
         <el-radio-button value="collection">收录</el-radio-button>
         <el-radio-button value="explore">探索</el-radio-button>
         <el-radio-button value="developer">开发者</el-radio-button>
       </el-radio-group>
 
-      <template v-if="marketTab === 'collection'">
+      <template v-if="effectiveTab === 'collection'">
         <el-input
           v-model="keyword"
           class="apps-search market-search"
@@ -23,6 +29,10 @@
           clearable
           :prefix-icon="Search"
         />
+        <!-- 空间模式：「只看已启用」筛选（走查修正） -->
+        <el-checkbox v-if="mode === 'space'" v-model="onlyEnabled" class="market-only-enabled">
+          只看已启用
+        </el-checkbox>
 
         <el-tabs v-model="activeCategory" class="market-tabs">
           <el-tab-pane v-for="category in categoryTabs" :key="category" :label="category" :name="category" />
@@ -74,13 +84,13 @@
 
     <!-- 探索页：已验证全网广播（随机排序 + 换一批 + 搜索直达） -->
     <AppExplorePanel
-      v-if="marketTab === 'explore'"
+      v-if="effectiveTab === 'explore'"
       :installed-ids="installedIds"
       @install-repo="(declaration) => emit('install-repo', declaration)"
     />
 
     <!-- 开发者页：我发布过的应用（本地索引 publisher==我的 rootId）+ 顶部「发布新应用」入口 -->
-    <template v-else-if="marketTab === 'developer'">
+    <template v-else-if="effectiveTab === 'developer'">
       <div class="market-developer-toolbar">
         <el-button type="primary" size="small" @click="openAnnounceDialog">发布新应用</el-button>
       </div>
@@ -128,18 +138,20 @@
               class="market-featured-card"
               @click="emit('detail', item)"
             >
-              <span class="market-featured-icon" :style="{ background: appIconBackground(item) }">{{ item.name.slice(0, 1) }}</span>
+              <AppIcon class="market-featured-icon" :item="item" />
               <div class="market-featured-info">
                 <h3>{{ item.name }}</h3>
                 <p>{{ item.description }}</p>
                 <div class="market-card-tags">
                   <el-tag size="small" effect="plain">{{ marketCategoryOf(item) }}</el-tag>
                   <el-tag v-if="isMockApp(item)" size="small" type="info">演示数据</el-tag>
-                  <el-tag v-if="item.installed" size="small" type="success">已安装</el-tag>
+                  <el-tag v-if="mode === 'space' && enabledInSpace(item)" size="small" type="success">已启用</el-tag>
+                  <el-tag v-if="mode === 'space' && !item.installed" size="small" type="info" effect="plain">未安装</el-tag>
+                  <el-tag v-if="mode === 'system' && item.installed" size="small" type="success">已安装</el-tag>
                   <el-tag v-if="item.updateAvailable" size="small" type="danger">可更新</el-tag>
                 </div>
               </div>
-              <div class="market-card-action">
+              <div v-if="mode === 'system'" class="market-card-action">
                 <el-button v-if="item.installed" size="small" disabled>已安装</el-button>
                 <el-button v-else size="small" type="primary" @click.stop="emit('install', item)">安装</el-button>
               </div>
@@ -156,17 +168,19 @@
               class="market-card"
               @click="emit('detail', item)"
             >
-              <span class="market-card-icon" :style="{ background: appIconBackground(item) }">{{ item.name.slice(0, 1) }}</span>
+              <AppIcon class="market-card-icon" :item="item" />
               <div class="market-card-info">
                 <h3>{{ item.name }}</h3>
                 <p>{{ item.description }}</p>
                 <div class="market-card-tags">
                   <el-tag size="small" effect="plain">{{ marketCategoryOf(item) }}</el-tag>
                   <el-tag v-if="isMockApp(item)" size="small" type="info">演示数据</el-tag>
+                  <el-tag v-if="mode === 'space' && enabledInSpace(item)" size="small" type="success">已启用</el-tag>
+                  <el-tag v-if="mode === 'space' && !item.installed" size="small" type="info" effect="plain">未安装</el-tag>
                   <el-tag v-if="item.updateAvailable" size="small" type="danger">可更新</el-tag>
                 </div>
               </div>
-              <div class="market-card-action">
+              <div v-if="mode === 'system'" class="market-card-action">
                 <el-button v-if="item.installed" size="small" disabled>已安装</el-button>
                 <el-button v-else size="small" type="primary" @click.stop="emit('install', item)">安装</el-button>
               </div>
@@ -186,12 +200,12 @@
             class="market-card"
             @click="emit('detail', item)"
           >
-            <span class="market-card-icon" :style="{ background: appIconBackground(item) }">{{ item.name.slice(0, 1) }}</span>
+            <AppIcon class="market-card-icon" :item="item" />
             <div class="market-card-info">
               <h3>{{ item.name }}</h3>
               <p>{{ item.description }}</p>
             </div>
-            <div class="market-card-action">
+            <div v-if="mode === 'system'" class="market-card-action">
               <el-button v-if="item.installed" size="small" disabled>已安装</el-button>
               <el-button v-else size="small" type="primary" @click.stop="emit('install', item)">安装</el-button>
             </div>
@@ -213,8 +227,10 @@ import type {
 } from '../../api/types';
 import { isMockApp } from '../../mock/apps';
 import { currentUser } from '../../stores/current-user';
+import { currentSpace } from '../../stores/current-space';
+import { isAppEnabledInSpace, isAppEnableableInSpace, type EnablementSpace } from '../../stores/app-enablement';
 import { hashGradient } from '../../utils/palette';
-import { MARKET_CATEGORIES, appIconBackground, marketCategoryOf, marketItemMatches } from './apps-store';
+import { MARKET_CATEGORIES, marketCategoryOf, marketItemMatches } from './apps-store';
 import {
   announceCategoryLabel,
   announceDisplayIcon,
@@ -225,12 +241,16 @@ import {
   sortAnnouncesByUpdated
 } from './apps-explore';
 import AppExplorePanel from './AppExplorePanel.vue';
+import AppIcon from './AppIcon.vue';
 
 export default defineComponent({
   name: 'AppMarketPanel',
-  components: { AppExplorePanel },
+  components: { AppExplorePanel, AppIcon },
   props: {
-    items: { type: Array as PropType<PluginMarketItemDto[]>, required: true }
+    items: { type: Array as PropType<PluginMarketItemDto[]>, required: true },
+    /** system＝系统层应用管理（装卸/探索/发布）；space＝空间的应用市场（只读目录＋启用状态，
+     *  启停在详情页操作；只看当前空间适用的应用，install-and-enable §一形式化定义） */
+    mode: { type: String as PropType<'system' | 'space'>, default: 'system' }
   },
   emits: ['back', 'detail', 'install', 'install-repo'],
   setup(props, { emit }) {
@@ -239,6 +259,19 @@ export default defineComponent({
     const marketTab = ref<'collection' | 'explore' | 'developer'>('collection');
     const keyword = ref('');
     const activeCategory = ref<string>('全部');
+    /** 空间模式：「只看已启用」筛选 */
+    const onlyEnabled = ref(false);
+    /** 空间模式恒为收录层（探索/发布＝系统层动作，不在空间市场出现） */
+    const effectiveTab = computed(() => (props.mode === 'space' ? 'collection' : marketTab.value));
+
+    /** 当前空间启用判定（per-space 事实源）与适用域判定 */
+    const enableSpace = computed<EnablementSpace>(() =>
+      currentSpace.value.type === 'org'
+        ? { type: 'org', orgId: currentSpace.value.orgId }
+        : { type: 'personal' }
+    );
+    const enabledInSpace = (item: PluginMarketItemDto) =>
+      isAppEnabledInSpace(enableSpace.value, item);
 
     // TODO(mock): 组织白名单数据结构预留——来源待组织管理接口（管理员推荐清单下发），先空清单占位
     const orgWhitelistItems = ref<PluginMarketItemDto[]>([]);
@@ -362,7 +395,11 @@ export default defineComponent({
       props.items.filter(
         (item) =>
           marketItemMatches(item, keyword.value) &&
-          (activeCategory.value === '全部' || marketCategoryOf(item) === activeCategory.value)
+          (activeCategory.value === '全部' || marketCategoryOf(item) === activeCategory.value) &&
+          // 空间模式：只列当前空间适用的应用；「只看已启用」再收一道
+          (props.mode !== 'space' ||
+            (isAppEnableableInSpace(enableSpace.value, item) &&
+              (!onlyEnabled.value || enabledInSpace(item))))
       )
     );
 
@@ -386,6 +423,9 @@ export default defineComponent({
 
     return {
       marketTab,
+      effectiveTab,
+      onlyEnabled,
+      enabledInSpace,
       keyword,
       activeCategory,
       categoryTabs,
@@ -395,7 +435,6 @@ export default defineComponent({
       orgWhitelistItems,
       installedIds,
       marketCategoryOf,
-      appIconBackground,
       isMockApp,
       announceDialogVisible,
       announceIdInput,

@@ -17,17 +17,16 @@
   margin-top: var(--spark-padding-page);
 }
 
-.apps-title {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--spark-text-1);
-  white-space: nowrap;
-}
-
 .apps-search {
   flex: 1;
-  max-width: 320px;
+  min-width: 0;
+}
+
+/* 筛选/排序下拉：窄、不挤压搜索框（走查修正：搜索长、筛选排序短） */
+.apps-filter,
+.apps-sort {
+  flex: none;
+  width: 92px;
 }
 
 /* ---------- 应用列表（§2） ---------- */
@@ -44,6 +43,14 @@
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+/* 系统层口径说明行（L4/M4：全量已装清单 + 当前空间启用口径；过渡期本机生效标注） */
+.apps-space-note {
+  margin: 0;
+  font-size: var(--spark-font-size-secondary);
+  color: var(--spark-text-3);
+  line-height: 1.6;
 }
 
 .app-group {
@@ -574,6 +581,65 @@
   margin: 0;
   font-size: 13px;
   color: var(--spark-text-3);
+}
+
+/* 空间启用情况（install-and-enable §一：安装系统层、启用按空间各自生效） */
+.app-detail-spaces {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.app-detail-space-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--spark-text-2);
+}
+
+.app-detail-space-row--current .app-detail-space-name {
+  color: var(--spark-text-1);
+  font-weight: 600;
+}
+
+.app-detail-space-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-detail-space-side {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.app-detail-space-used {
+  font-size: var(--spark-font-size-secondary);
+  color: var(--spark-text-3);
+}
+
+/* 过渡期诚实标注：组织启用清单待内核接管前仅本机生效 */
+.app-detail-space-note {
+  margin: 10px 0 0;
+  font-size: var(--spark-font-size-secondary);
+  color: var(--spark-text-3);
+  line-height: 1.6;
+}
+
+/* 详情操作栏内的只读说明（组织空间非管理员的启用口径） */
+.action-hint {
+  flex: 1;
+  font-size: var(--spark-font-size-secondary);
+  color: var(--spark-text-3);
+  line-height: 1.6;
 }
 
 /* 签名与来源 */

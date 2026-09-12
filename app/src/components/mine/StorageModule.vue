@@ -5,6 +5,22 @@
 <template>
   <div class="mine-list storage-module">
     <h2 class="mine-list-title">存储与副本</h2>
+    <!-- M15：手机端如实标注叶子模式——本机只作暂存缓存，不对外提供副本、不承诺 K 副本；
+         「哪些设备持有完整副本」入口跳设备管理（逐设备副本角色内核暂无查询接口，如实注明） -->
+    <el-alert
+      v-if="isMobileLayout"
+      type="info"
+      :closable="false"
+      show-icon
+      class="storage-alert"
+      title="本机为手机端（叶子模式）：数据仅作本机暂存缓存，不承诺为他人提供副本、不承诺 K 副本；副本承诺由你的 PC / 常在线设备承担。"
+    />
+    <div v-if="isMobileLayout" class="storage-leaf-link">
+      <el-button native-type="button" size="small" @click="emit('open-devices')">
+        哪些设备持有完整副本（设备管理）
+      </el-button>
+      <p class="storage-note">逐设备副本角色内核暂无查询接口，暂以设备列表为准。</p>
+    </div>
     <div v-if="health" class="storage-body">
       <el-alert
         v-if="health.underKBlobs > 0"
@@ -18,32 +34,78 @@
         <h3 class="storage-card-title">副本健康度</h3>
         <p class="storage-headline">你当前只有 {{ replicaHeadline }} 份副本</p>
         <ul class="storage-facts">
-          <li>设备：{{ health.deviceCount }} 台（核心数据全量 {{ health.deviceCount }} 份副本）</li>
-          <li>副本目标：K = {{ health.kTarget }}（设备不超过 3 台时退化为全量）</li>
           <li>
-            blob 数据：{{ health.totalBlobs }} 个（{{ fmtBytes(health.totalBytes) }}），
-            <template v-if="health.underKBlobs > 0">{{ health.underKBlobs }} 个副本不足 K；</template>
+            设备：{{ health.deviceCount }} 台（核心数据全量
+            {{ health.deviceCount }} 份副本）
+          </li>
+          <li>
+            副本目标：K = {{ health.kTarget }}（设备不超过 3 台时退化为全量）
+          </li>
+          <li>
+            blob 数据：{{ health.totalBlobs }} 个（{{
+              fmtBytes(health.totalBytes)
+            }}），
+            <template v-if="health.underKBlobs > 0"
+              >{{ health.underKBlobs }} 个副本不足 K；</template
+            >
             <template v-else>副本均达标；</template>
-            <template v-if="health.minFullReplicas !== null">最差副本水位 {{ health.minFullReplicas }} 份</template>
+            <template v-if="health.minFullReplicas !== null"
+              >最差副本水位 {{ health.minFullReplicas }} 份</template
+            >
           </li>
         </ul>
-        <p class="storage-note">数据只存于你自己的设备；副本数随设备上下线如实变化，系统不做任何机制性干预。</p>
+        <p class="storage-note">
+          数据只存于你自己的设备；副本数随设备上下线如实变化，系统不做任何机制性干预。
+        </p>
+        <!-- G7：个人数据不承诺组织级「永不丢」，引导设备信任与导出备份 -->
+        <p class="storage-note">
+          个人空间数据为自有设备副本：设备全部丢失即不可恢复，我们不承诺「永不丢」。
+          建议保持多台可信设备在线（设备管理），并定期导出备份。
+        </p>
+        <div class="storage-backup-link">
+          <el-button
+            native-type="button"
+            size="small"
+            @click="emit('open-backup')"
+            >前往账号备份</el-button
+          >
+        </div>
       </div>
       <div class="storage-card">
         <h3 class="storage-card-title">存储配额</h3>
         <p class="storage-facts">
-          当前水位 {{ fmtBytes(health.quota.usedBytes) }} / {{ fmtBytes(health.quota.quotaBytes) }}
+          当前水位 {{ fmtBytes(health.quota.usedBytes) }} /
+          {{ fmtBytes(health.quota.quotaBytes) }}
           <span v-if="health.quota.overBytes > 0" class="storage-over">
-            （已超出 {{ fmtBytes(health.quota.overBytes) }}；超出副本目标的富余副本将按「最久未访问」自动驱逐，绝不删除最后副本）
+            （已超出
+            {{
+              fmtBytes(health.quota.overBytes)
+            }}；超出副本目标的富余副本将按「最久未访问」自动驱逐，绝不删除最后副本）
           </span>
         </p>
         <div class="storage-quota-form">
-          <el-input-number v-model="quotaGb" :min="1" :max="4096" :step="1" controls-position="right" />
+          <el-input-number
+            v-model="quotaGb"
+            :min="1"
+            :max="4096"
+            :step="1"
+            controls-position="right"
+          />
           <span class="storage-quota-unit">GB</span>
-          <el-button type="primary" native-type="button" :loading="saving" @click="saveQuota">保存</el-button>
-          <el-button native-type="button" :disabled="saving" @click="resetQuota">恢复默认</el-button>
+          <el-button
+            type="primary"
+            native-type="button"
+            :loading="saving"
+            @click="saveQuota"
+            >保存</el-button
+          >
+          <el-button native-type="button" :disabled="saving" @click="resetQuota"
+            >恢复默认</el-button
+          >
         </div>
-        <p class="storage-note">默认 PC 10 GB / 移动 1 GB；恢复默认即清除自定义配置。</p>
+        <p class="storage-note">
+          默认 PC 10 GB / 移动 1 GB；恢复默认即清除自定义配置。
+        </p>
       </div>
     </div>
     <el-empty v-else-if="loadError" :description="loadError" />
@@ -55,6 +117,7 @@ import { computed, defineComponent, onMounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import type { BlobHealthDto } from '../../api/types';
 import { errorMessage } from '../../utils/ipc';
+import { isMobileLayout } from '../../stores/ui-layout';
 
 const GIB = 1024 * 1024 * 1024;
 
@@ -72,16 +135,21 @@ type BlobApi = {
 };
 
 function blobApi(): BlobApi | null {
-  return (window as unknown as { electronAPI?: { blob?: BlobApi } }).electronAPI?.blob ?? null;
+  return (
+    (window as unknown as { electronAPI?: { blob?: BlobApi } }).electronAPI
+      ?.blob ?? null
+  );
 }
 
 export default defineComponent({
   name: 'StorageModule',
-  setup() {
+  emits: ['open-backup', 'open-devices'],
+  setup(_, { emit }) {
     const health = ref<BlobHealthDto | null>(null);
     const quotaGb = ref(10);
     const saving = ref(false);
     const loadError = ref('');
+    const isMobile = isMobileLayout;
 
     /** 头部副本数：有 blob 取最差副本水位，无 blob 按核心数据口径（= 设备数） */
     const replicaHeadline = computed(() => {
@@ -138,8 +206,19 @@ export default defineComponent({
 
     onMounted(load);
 
-    return { health, quotaGb, saving, loadError, replicaHeadline, fmtBytes, saveQuota, resetQuota };
-  }
+    return {
+      health,
+      quotaGb,
+      saving,
+      loadError,
+      replicaHeadline,
+      fmtBytes,
+      saveQuota,
+      resetQuota,
+      emit,
+      isMobileLayout: isMobile,
+    };
+  },
 });
 </script>
 
@@ -188,5 +267,14 @@ export default defineComponent({
 }
 .storage-quota-unit {
   color: var(--el-text-color-regular, #606266);
+}
+/* G7 备份引导入口 */
+.storage-backup-link {
+  margin-top: 8px;
+}
+
+/* M15 叶子模式（仅移动端渲染）：设备管理入口行 */
+.storage-leaf-link {
+  padding: 0 16px 12px;
 }
 </style>

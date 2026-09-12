@@ -2,8 +2,12 @@
  * 应用页共享常量、展示助手与本地 mock 存储（ui-apps-market §2/§3）。
  *
  * 真实数据一律来自 window.electronAPI.pluginMarket；内核尚未提供的
- * 归属/状态字段（分组归属、组织启用状态等）在此用 localStorage 模拟，
- * 每处都有 TODO(mock) 标注，待内核接口就绪后替换。
+ * 归属字段（分组归属等）在此用 localStorage 模拟，每处都有 TODO(mock) 标注，
+ * 待内核接口就绪后替换。
+ *
+ * 启用状态不在此处：per-space 启用事实源已收敛到 stores/app-enablement.ts
+ * （install-and-enable §一/§二；旧组织启用 mock `spark:apps-org-enabled:*`
+ * 由该 store 一次性迁移读取）。
  */
 import { computed, ref, watch, type Ref } from 'vue';
 import type { PluginMarketItemDto } from '../../api/types';
@@ -209,25 +213,11 @@ export function useRecentApps(spaceKey: Ref<string>) {
     saveJson(storageKey.value, recentIds.value);
   };
 
-  return { recentIds, recordOpen };
-}
-
-// TODO(mock): 组织空间应用启用状态内核没有接口（设计 §4.2 由管理员统一管理），先按 orgId 存 localStorage
-export function useOrgEnabled(spaceKey: Ref<string>) {
-  const enabledMap = ref<Record<string, boolean>>({});
-  const storageKey = computed(() => `spark:apps-org-enabled:${spaceKey.value}`);
-
-  const load = () => {
-    enabledMap.value = loadJson<Record<string, boolean>>(storageKey.value, {});
-  };
-  watch(spaceKey, load, { immediate: true });
-
-  const isOrgEnabled = (pluginId: string): boolean => enabledMap.value[pluginId] ?? false;
-
-  const setOrgEnabled = (pluginId: string, enabled: boolean) => {
-    enabledMap.value = { ...enabledMap.value, [pluginId]: enabled };
-    saveJson(storageKey.value, enabledMap.value);
+  /** 从最近使用移除（M27 移动端最近应用卡片栈「上滑关闭」：同时清记录，下次不再出现） */
+  const removeRecent = (pluginId: string) => {
+    recentIds.value = recentIds.value.filter((id) => id !== pluginId);
+    saveJson(storageKey.value, recentIds.value);
   };
 
-  return { isOrgEnabled, setOrgEnabled };
+  return { recentIds, recordOpen, removeRecent };
 }

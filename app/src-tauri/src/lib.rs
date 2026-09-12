@@ -21,6 +21,7 @@ mod android_native;
 mod biometric_android;
 pub mod commands;
 pub mod domain_guard;
+mod display_mode;
 // 桌面数据目录布局（OS 用户目录 + 存量一次性迁移，identity.md §4.3）
 mod layout;
 // 全局 log 门面注册（Android logcat / 桌面 stderr），见 logging.rs
@@ -180,6 +181,15 @@ pub fn run() {
             // 的 reqwest 客户端在首次创建时定型读取 SPARK_PROXY/HTTPS_PROXY/
             // ALL_PROXY（见 proxy.rs），晚于任一客户端创建注入则不生效
             proxy::init_proxy_from_disk(&data_dir);
+            // 显示模式（display_mode.rs）：读取持久化模式并 manage 共享状态
+            //（命令层读写、事件锁定只读）；桌面端在窗口创建后立即应用——
+            // 窗口模式＝最大化锁定，全屏＝set_fullscreen(true)
+            let display_mode_value = display_mode::load_display_mode(&data_dir);
+            app.manage(display_mode::DisplayModeState(Mutex::new(display_mode_value)));
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            if let Some(window) = app.get_webview_window(display_mode::MAIN_WINDOW_LABEL) {
+                display_mode::apply_display_mode(&window, display_mode_value);
+            }
             let app_version = app.package_info().version.to_string();
             let mut kernel = Kernel::init(KernelConfig {
                 data_dir: data_dir.clone(),
@@ -485,6 +495,9 @@ pub fn run() {
             // HTTP 代理设置（updater/市场链路 GitHub 直连失败的规避，见 proxy.rs）
             commands::system::system_get_proxy,
             commands::system::system_set_proxy,
+            // 显示模式（窗口模式＝最大化锁定 / 全屏；事件锁定见 app.run 的 Resized 分支）
+            commands::system::system_get_display_mode,
+            commands::system::system_set_display_mode,
             // 退出应用（Android 系统返回键在一级页时由前端调用；plugin:app|exit 不在 ACL 内不可用）
             commands::system::system_exit_app,
             // 阶段四C：系统通知（Android JNI 发通知；桌面 no-op）
@@ -527,6 +540,22 @@ pub fn run() {
         .expect("error while building spark desktop");
 
     app.run(|app_handle, event| {
+        // 窗口模式＝最大化锁定（display_mode.rs）：任何让主窗口脱离最大化的通路
+        //（双击标题栏还原、Windows 从最大化拖标题栏还原、Win+方向键还原/贴靠）都会触发
+        // Resized，此处立即重新最大化；重新最大化的 Resized 回环被 is_maximized 守卫挡掉。
+        // 最小化是合法形态（is_minimized 守卫放行）；全屏模式下被 OS 层退出全屏时重新拉起。
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        if let RunEvent::WindowEvent { label, event: tauri::WindowEvent::Resized(_), .. } = &event {
+            if label == display_mode::MAIN_WINDOW_LABEL {
+                if let (Some(state), Some(window)) = (
+                    app_handle.try_state::<display_mode::DisplayModeState>(),
+                    app_handle.get_webview_window(display_mode::MAIN_WINDOW_LABEL),
+                ) {
+                    let mode = *state.0.lock().unwrap_or_else(|e| e.into_inner());
+                    display_mode::enforce_display_mode(&window, mode);
+                }
+            }
+        }
         // 退出前优雅关闭内核（停 P2P、flush sled，释放文件锁）。
         if let RunEvent::ExitRequested { .. } = event {
             if let Some(state) = app_handle.try_state::<KernelState>() {

@@ -1,7 +1,8 @@
-<!-- 当前身份头像按钮（rail 顶部第一项）：个人空间=个人身份，组织空间=组织身份（随空间切换）。
-     点击直接把内容区切到「我的资料」页；组织身份的编辑入口在 MinePage「组织身份」模块（OrgIdentityModule）。
+<!-- 当前身份头像按钮（rail 底部「我的」入口）：**始终展示根身份（个人身份），不随空间切换**
+     （走查决策：rail 是系统根级区域——切空间时「我的」不要变化）。组织空间下的域内身份入口在
+     顶栏「当前身份」菜单的组织身份对话框（D2，OrgIdentityDialog）。
      头像取数统一走 stores/avatar-sources（与个人设置页头/空间切换器等同源）。
-     宽栏（.rail.expanded）时头像右侧显示昵称+副标题（个人设置/组织身份），窄栏只显示头像 -->
+     宽栏（.rail.expanded）时头像右侧显示昵称+副标题（个人设置），窄栏只显示头像 -->
 <template>
   <button class="identity-trigger" :title="`${source.name}：我的资料`" @click="emit('open-profile')">
     <UserAvatar :root-id="source.seed" :nickname="source.name" :avatar="source.image" :size="avatarSize" />
@@ -15,9 +16,7 @@
 <script lang="ts">
 import { computed, defineComponent } from 'vue';
 import UserAvatar from './UserAvatar.vue';
-import { currentSpace, currentSpaceOrgId } from '../stores/current-space';
-import { getOrgIdentity } from '../stores/org-identity';
-import { orgIdentityAvatarSource, personalAvatarSource } from '../stores/avatar-sources';
+import { personalAvatarSource } from '../stores/avatar-sources';
 
 export default defineComponent({
   name: 'UserAvatarMenu',
@@ -30,18 +29,9 @@ export default defineComponent({
   },
   emits: ['open-profile'],
   setup(_, { emit }) {
-    /** 组织空间且未开「使用个人身份」时展示组织身份，否则展示个人身份 */
-    const isOrgIdentity = computed(
-      () => currentSpace.value.type === 'org' && !getOrgIdentity(currentSpaceOrgId.value).usePersonalIdentity
-    );
-    const source = computed(() => {
-      if (isOrgIdentity.value) {
-        return orgIdentityAvatarSource(currentSpaceOrgId.value);
-      }
-      return personalAvatarSource();
-    });
-    // 宽栏副标题：与 MinePage 页头口径一致
-    const subtitle = computed(() => (isOrgIdentity.value ? '组织身份' : '个人设置'));
+    /** 恒为根身份：切空间不变（组织身份不再随空间顶替此位） */
+    const source = computed(() => personalAvatarSource());
+    const subtitle = computed(() => '个人设置');
 
     return {
       source,

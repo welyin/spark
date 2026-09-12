@@ -16,6 +16,8 @@ const MOCK_APPS: PluginMarketItemDto[] = [
     name: '论坛',
     description: '组织内部讨论区：发帖、回帖、按版块浏览，支持置顶与精华。',
     category: 'tool',
+    // mock 条目无声明图标（icon=''），展示走首字符+哈希渐变回退（plugin-dist §2.3）
+    icon: '',
     version: '1.2.0',
     supportedSpaces: ['org'],
     views: ['default'],
@@ -36,6 +38,8 @@ const MOCK_APPS: PluginMarketItemDto[] = [
     name: '投票',
     description: '快速发起单选/多选投票，实时统计结果，支持匿名与截止提醒。',
     category: 'tool',
+    // mock 条目无声明图标（icon=''），展示走首字符+哈希渐变回退（plugin-dist §2.3）
+    icon: '',
     version: '0.9.1',
     supportedSpaces: ['org'],
     views: ['default'],
@@ -56,6 +60,8 @@ const MOCK_APPS: PluginMarketItemDto[] = [
     name: '日历',
     description: '团队共享日历：会议排期、订阅组织日程、冲突检测与提醒。',
     category: 'tool',
+    // mock 条目无声明图标（icon=''），展示走首字符+哈希渐变回退（plugin-dist §2.3）
+    icon: '',
     version: '2.0.3',
     // 双空间插件：演示「个人/组织空间都可见」（spaces-and-plugins §4）
     supportedSpaces: ['personal', 'org'],
@@ -77,6 +83,8 @@ const MOCK_APPS: PluginMarketItemDto[] = [
     name: '任务看板',
     description: '拖拽式任务看板：自定义泳道、负责人与截止日期，进度一目了然。',
     category: 'tool',
+    // mock 条目无声明图标（icon=''），展示走首字符+哈希渐变回退（plugin-dist §2.3）
+    icon: '',
     version: '1.5.0',
     supportedSpaces: ['org'],
     views: ['default'],
@@ -97,6 +105,8 @@ const MOCK_APPS: PluginMarketItemDto[] = [
     name: '朋友圈',
     description: '个人动态圈：分享图文动态，点赞与评论，仅个人联系人可见。',
     category: 'tool',
+    // mock 条目无声明图标（icon=''），展示走首字符+哈希渐变回退（plugin-dist §2.3）
+    icon: '',
     version: '1.0.6',
     // 纯个人插件：演示「组织空间不展示 supportedSpaces 仅 ['personal'] 的插件」
     supportedSpaces: ['personal'],
@@ -119,6 +129,8 @@ const MOCK_APPS: PluginMarketItemDto[] = [
     name: '文件',
     description: '团队文件柜：目录共享、版本历史与在线预览，断点续传。',
     category: 'tool',
+    // mock 条目无声明图标（icon=''），展示走首字符+哈希渐变回退（plugin-dist §2.3）
+    icon: '',
     version: '3.1.2',
     supportedSpaces: ['org'],
     views: ['default'],

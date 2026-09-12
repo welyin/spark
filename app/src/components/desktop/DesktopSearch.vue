@@ -33,7 +33,16 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+/* L1：结果区约束在弹层背景框内——清掉顶栏下拉形态遗留的 translateX(-50%)/min-width
+   （否则结果区横向溢出弹层背景框），纵向限高 + 内部滚动 */
 .desktop-search { min-height: 300px; }
 .desktop-search :deep(.global-search) { width: 100%; max-width: none; }
-.desktop-search :deep(.global-search-dropdown) { position: static; max-height: 50vh; box-shadow: none; }
+.desktop-search :deep(.global-search-dropdown) {
+  position: static;
+  transform: none;
+  min-width: 0;
+  max-height: min(50vh, 420px);
+  overflow-y: auto;
+  box-shadow: none;
+}
 </style>

@@ -6,6 +6,7 @@
   "entryView": "default",
   "description": "Spark 插件体系参考实现：组织微博（管理员发帖、成员评论），演示存储/签名/应用消息/消息卡片等核心能力。",
   "category": "social",
+  "icon": "assets/icon.svg",
   "supportedSpaces": ["org", "personal"],
   "views": [
     { "id": "default", "type": "app", "title": "微博" },

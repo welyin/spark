@@ -98,6 +98,7 @@ fn uninstall_keeps_package_path_outside_plugins_dir() {
         "todo-local".to_string(),
         InstalledPluginState {
             plugin_id: "todo-local".to_string(),
+            name: String::new(),
             version: "0.1.0".to_string(),
             package_path: outside_pkg.to_string_lossy().to_string(),
             sha256: "00".repeat(32),
@@ -142,6 +143,7 @@ fn uninstall_refuses_symlink_escape() {
         "todo-local".to_string(),
         InstalledPluginState {
             plugin_id: "todo-local".to_string(),
+            name: String::new(),
             version: "0.1.0".to_string(),
             package_path: escaped_path.to_string_lossy().to_string(),
             sha256: "00".repeat(32),

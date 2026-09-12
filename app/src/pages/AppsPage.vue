@@ -1,5 +1,5 @@
 <template>
-  <section class="apps-page" :class="{ 'apps-page-mobile-stack': isMobileLayout && (detailVisible || view === 'market') }">
+  <section class="apps-page" :class="{ 'apps-page-mobile-stack': isMobileLayout && (detailVisible || view === 'market' || view === 'enable') }">
     <el-alert
       v-if="loadError"
       class="apps-load-error"
@@ -20,18 +20,20 @@
         <div class="mobile-stack-body app-drawer-body">
           <AppDetailPanel
             :item="selectedItem"
-            :enabled="isEnabled(selectedItem)"
-            :is-org-space="isOrgSpace"
-            :is-admin="isCurrentUserAdmin"
             :busy="busyByPlugin[selectedItem.id] ?? ''"
             @back="onMobileBack"
-            @open="openApp"
             @install="installApp"
             @upgrade="upgradeApp"
-            @toggle="toggleEnabled"
             @uninstall="uninstallApp"
-            @request-enable="requestEnable"
           />
+        </div>
+      </div>
+
+      <!-- 「为本空间启用」：空间的应用市场（整页栈帧，同市场），只在空间上下文入口进入 -->
+      <div v-else-if="view === 'enable'" class="mobile-stack-layer">
+        <MobileBackBar title="应用市场 · 本空间" @back="onMobileBack" />
+        <div class="mobile-stack-body">
+          <SpaceMarketView />
         </div>
       </div>
 
@@ -52,14 +54,7 @@
       <AppListPanel
         v-else
         :installed-items="installedItems"
-        :recent-items="recentItems"
-        :is-enabled="isEnabled"
-        :is-suspended="isSuspended"
-        :groups="groups"
-        :is-org-space="isOrgSpace"
-        :is-admin="isCurrentUserAdmin"
         :busy-by-plugin="busyByPlugin"
-        @open="openApp"
         @detail="(item) => openDetail(item)"
         @add-app="openMarket"
         @install-repo="installRepoPlugin"
@@ -68,17 +63,13 @@
     </MobilePageTransition>
 
     <template v-else>
+      <!-- 「为本空间启用」：空间的应用市场（页内切换，返回回系统层清单） -->
+      <SpaceMarketView v-if="view === 'enable'" />
+
       <AppListPanel
-        v-if="view === 'list'"
+        v-else-if="view === 'list'"
         :installed-items="installedItems"
-        :recent-items="recentItems"
-        :is-enabled="isEnabled"
-        :is-suspended="isSuspended"
-        :groups="groups"
-        :is-org-space="isOrgSpace"
-        :is-admin="isCurrentUserAdmin"
         :busy-by-plugin="busyByPlugin"
-        @open="openApp"
         @detail="(item) => openDetail(item)"
         @add-app="openMarket"
         @install-repo="installRepoPlugin"
@@ -102,17 +93,11 @@
         <AppDetailPanel
           v-if="selectedItem"
           :item="selectedItem"
-          :enabled="isEnabled(selectedItem)"
-          :is-org-space="isOrgSpace"
-          :is-admin="isCurrentUserAdmin"
           :busy="busyByPlugin[selectedItem.id] ?? ''"
           @back="detailVisible = false"
-          @open="openApp"
           @install="installApp"
           @upgrade="upgradeApp"
-          @toggle="toggleEnabled"
           @uninstall="uninstallApp"
-          @request-enable="requestEnable"
         />
       </div>
     </el-drawer>
@@ -125,10 +110,11 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import type { PluginMarketItemDto, RepoPluginDeclarationDto } from '../api/types';
 import type { PropType } from 'vue';
 import { currentSpace } from '../stores/current-space';
-import { enablePluginInstance, isPluginInstanceDisabled, pluginInstanceKey } from '../plugin/disabled';
+import { installPluginItem } from '../components/apps/app-actions';
+import { isDevPlugin } from '../mock/dev-plugins';
 import { isAdmin, refreshOrganizations } from '../stores/org-membership';
-import { consumePendingAppDetail, pendingAppDetail } from '../stores/pending-app';
-import { isMockApp, listMockApps, setMockAppEnabled, setMockAppInstalled } from '../mock/apps';
+import { consumePendingAppDetail, consumePendingAppsView, pendingAppDetail, pendingAppsView } from '../stores/pending-app';
+import { isMockApp, listMockApps, setMockAppInstalled } from '../mock/apps';
 import { listDevPlugins } from '../mock/dev-plugins';
 import { mockMode } from '../mock/mode';
 import { spaceKeyOf } from '../mock/space-key';
@@ -140,13 +126,8 @@ import MobilePageTransition from '../components/MobilePageTransition.vue';
 import AppListPanel from '../components/apps/AppListPanel.vue';
 import AppMarketPanel from '../components/apps/AppMarketPanel.vue';
 import AppDetailPanel from '../components/apps/AppDetailPanel.vue';
-import {
-  permissionLabel,
-  useAppGroups,
-  useOrgEnabled,
-  useRecentApps
-} from '../components/apps/apps-store';
-import { isPluginVisibleInSpace } from '../components/apps/space-visibility';
+import SpaceMarketView from '../components/apps/SpaceMarketView.vue';
+import { permissionLabel } from '../components/apps/apps-store';
 
 export type OpenPluginTabPayload = {
   pluginDomain: string;
@@ -160,7 +141,7 @@ export type OpenPluginTabPayload = {
   viewBootstrap?: { cardData?: unknown };
 };
 
-type ViewName = 'list' | 'market';
+type ViewName = 'list' | 'market' | 'enable';
 type BusyAction = '' | 'install' | 'upgrade' | 'toggle' | 'uninstall';
 
 /** 本页在导航栈中的 tab 键（与 App.vue activeTab 一致） */
@@ -169,7 +150,7 @@ const MOBILE_TAB = 'apps';
 export default defineComponent({
   name: 'AppsPage',
   props: { initialView: { type: String as PropType<ViewName>, default: 'list' } },
-  components: { AppListPanel, AppMarketPanel, AppDetailPanel, MobileBackBar, MobilePageTransition },
+  components: { AppListPanel, AppMarketPanel, AppDetailPanel, SpaceMarketView, MobileBackBar, MobilePageTransition },
   emits: ['open-plugin-tab', 'changed'],
   setup(props, { emit }) {
     const items = ref<PluginMarketItemDto[]>([]);
@@ -181,38 +162,19 @@ export default defineComponent({
     const selectedId = ref<string | null>(null);
     const busyByPlugin = ref<Record<string, BusyAction>>({});
 
-    // 空间上下文：个人空间=安装/启用/禁用；组织空间=只暴露启用/禁用（ui-apps-market §4.2）
+    // 空间上下文：本页为系统层（列出全部已装应用，不按空间过滤，L4/M4）
     const isOrgSpace = computed(() => currentSpace.value.type === 'org');
     const spaceKey = computed(() =>
       currentSpace.value.type === 'org' ? currentSpace.value.orgId : 'personal'
     );
 
-    /** 插件按空间可见性（spaces-and-plugins §4）：supportedSpaces 缺省按 ['org']；
-     *  仅 UI 展示过滤，已装但当前空间不可见的插件其会话/消息链路不受影响 */
-    const isVisibleInCurrentSpace = (item: PluginMarketItemDto): boolean =>
-      isPluginVisibleInSpace(item.supportedSpaces, currentSpace.value.type);
-
-    /** 空间守卫提示（spaces-and-plugins §4）：打开/安装/详情直达各入口同一文案口径 */
-    const spaceGuardToast = (name: string) => {
-      ElMessage.warning(
-        currentSpace.value.type === 'personal'
-          ? `「${name}」仅支持组织空间，请切换到组织后使用`
-          : `「${name}」仅支持个人空间，请切换到个人空间后使用`
-      );
-    };
-
-    const groups = useAppGroups(spaceKey);
-    const recent = useRecentApps(spaceKey);
-    const orgEnabled = useOrgEnabled(spaceKey);
-
-    // 是否当前组织管理员：org-membership 共享缓存的成员角色判断（§4.2/§5.2）
+    // 是否当前组织管理员：org-membership 共享缓存的成员角色判断（§4.2/§5.2）。
+    // 管理员角色仅用于组织空间的启用切换（装卸为系统层本机动作，不按角色设卡）；
+    // 组织列表缓存同时供应用详情「空间启用情况」分区列出各组织空间
     const isCurrentUserAdmin = computed(() =>
       currentSpace.value.type === 'org' ? isAdmin(currentSpace.value.orgId) : false
     );
     const refreshAdminRole = async () => {
-      if (currentSpace.value.type !== 'org') {
-        return;
-      }
       try {
         await refreshOrganizations();
       } catch {
@@ -220,31 +182,14 @@ export default defineComponent({
       }
     };
 
-    const isEnabled = (item: PluginMarketItemDto): boolean =>
-      isOrgSpace.value ? orgEnabled.isOrgEnabled(item.id) : item.enabled;
+    /** 已安装清单＝系统层全量（L4/M4：应用管理不按空间过滤、不出现当前空间关系提示；
+     *  「在哪些空间启用」进应用详情（只列已启用空间）；启用动作在空间的应用市场
+     * （SpaceMarketView → 详情页 mode="space"，共享逻辑 app-actions.toggleAppEnablement），本页不操作启停） */
+    const installedItems = computed(() => items.value.filter((item) => item.installed));
 
-    /** 熔断实例键：卡片置灰与打开拦截同一口径（plugin/disabled.ts） */
-    const instanceKeyOf = (item: PluginMarketItemDto) =>
-      pluginInstanceKey(item.id, {
-        type: currentSpace.value.type,
-        id: currentSpace.value.type === 'org' ? currentSpace.value.orgId : 'personal'
-      });
-
-    /** 崩溃环自动停用（卡片级置灰 + 「已停用」徽标）；localStorage 读取，页面重进时刷新 */
-    const isSuspended = (item: PluginMarketItemDto): boolean => isPluginInstanceDisabled(instanceKeyOf(item));
-
-    const installedItems = computed(() =>
-      items.value.filter((item) => item.installed && isVisibleInCurrentSpace(item))
-    );
-
-    /** 市场收录层条目：与已安装列表同口径按当前空间过滤（纯组织插件不进个人空间市场） */
-    const visibleItems = computed(() => items.value.filter(isVisibleInCurrentSpace));
-
-    const recentItems = computed(() =>
-      recent.recentIds.value
-        .map((id) => installedItems.value.find((item) => item.id === id))
-        .filter((item): item is PluginMarketItemDto => Boolean(item))
-    );
+    /** 市场条目＝系统层全量（获取代码是本机动作，install-and-enable §一①；
+     *  安装/启用权限与适用域在详情与启用环节体现，不在市场层过滤） */
+    const visibleItems = computed(() => items.value);
 
     const selectedItem = computed(
       () => items.value.find((item) => item.id === selectedId.value) ?? null
@@ -252,9 +197,23 @@ export default defineComponent({
 
     // mock 模式（npm run tauri:mock）把 mock 应用（src/mock/apps.ts）合并进真实市场结果；
     // dev 链路（npm run dev / tauri:mock）把本地开发插件（src/mock/dev-plugins.ts，自动
-    // 扫描 code/plugins/*/manifest.json）合并进来，生产构建不进 bundle（§5）
+    // 扫描 code/plugins/*/manifest.json）合并进来，生产构建不进 bundle（§5）。
+    // 按 id 去重：同一插件的内核条目（内置包/仓库安装）优先于 dev 注入条目——
+    // 否则同一插件会以两个条目（英文名内核条目 + 中文名 dev 条目）重复出现
     const mergeItems = () => {
-      items.value = [...realItems.value, ...(mockMode() ? listMockApps() : []), ...listDevPlugins()];
+      const merged = new Map<string, PluginMarketItemDto>();
+      for (const item of listDevPlugins()) {
+        merged.set(item.id, item);
+      }
+      if (mockMode()) {
+        for (const item of listMockApps()) {
+          merged.set(item.id, item);
+        }
+      }
+      for (const item of realItems.value) {
+        merged.set(item.id, item);
+      }
+      items.value = [...merged.values()];
       emit('changed');
     };
 
@@ -295,6 +254,15 @@ export default defineComponent({
       }
     };
 
+    /** 进入「为本空间启用」（空间层视图）：入口在空间上下文（桌面引导卡 / Launchpad 空态 /
+        手机桌面「添加应用」瓦片）；移动端压入导航栈，桌面端页内切换 */
+    const openEnable = () => {
+      view.value = 'enable';
+      if (isMobileLayout.value) {
+        pushPage(MOBILE_TAB, 'enable');
+      }
+    };
+
     // 移动端：栈顶帧变化（重进 tab 按栈恢复 / 返回 pop / 重按 tab 复位）时同步市场/详情显隐
     const mobileFrame = computed(() => currentPage(MOBILE_TAB));
     watch(
@@ -308,8 +276,9 @@ export default defineComponent({
           detailVisible.value = true;
         } else {
           detailVisible.value = false;
-          // 市场整页帧与列表栈底帧同步到视图态（桌面端 view 由按钮直改，不受栈影响）
-          view.value = frame.page === 'market' ? 'market' : 'list';
+          // 市场 / 为本空间启用整页帧与列表栈底帧同步到视图态（桌面端 view 由按钮直改，不受栈影响）
+          view.value =
+            frame.page === 'market' ? 'market' : frame.page === 'enable' ? 'enable' : 'list';
         }
       },
       { immediate: true }
@@ -321,7 +290,8 @@ export default defineComponent({
       detailVisible.value = false;
     };
 
-    // 消费「打开应用详情」请求（全局搜索跳转）：市场条目加载完成后找到该应用进入详情
+    // 消费「打开应用详情」请求（全局搜索跳转）：市场条目加载完成后找到该应用进入详情。
+    // 详情属系统层（全量清单），不做空间可见性拦截——空间过滤只约束「打开/启用」等空间层动作
     const openPendingAppDetail = () => {
       const id = pendingAppDetail.value;
       if (!id) {
@@ -332,111 +302,28 @@ export default defineComponent({
         return;
       }
       consumePendingAppDetail();
-      // 空间守卫（spaces-and-plugins §4）：全局搜索已按空间过滤，此处兜底拦截
-      // 过滤生效前派发的直达请求——toast 提示而非静默打开详情
-      if (!isVisibleInCurrentSpace(item)) {
-        spaceGuardToast(item.name);
-        return;
-      }
       openDetail(item);
     };
     watch([pendingAppDetail, items], openPendingAppDetail);
 
-    const openApp = async (item: PluginMarketItemDto) => {
-      // 空间直达守卫（spaces-and-plugins §4）：UI 已按空间过滤，此处兜底拦截
-      // 经其他入口（如全局搜索详情页「打开」）触达的隐藏项
-      if (!isVisibleInCurrentSpace(item)) {
-        spaceGuardToast(item.name);
-        return;
-      }
-      if (!isEnabled(item)) {
-        openDetail(item);
-        return;
-      }
-      // mock 应用无真实插件可加载，打开以 toast 占位（真实插件链路不受影响）
-      if (isMockApp(item)) {
-        recent.recordOpen(item.id);
-        ElMessage.info(`「${item.name}」为演示应用，暂无真实插件视图`);
-        return;
-      }
-      // 熔断自动停用（崩溃环）：入口拦截 + 提示，确认后手动重新启用（清零计数）
-      const instanceKey = instanceKeyOf(item);
-      if (isPluginInstanceDisabled(instanceKey)) {
-        try {
-          await ElMessageBox.confirm(
-            `「${item.name}」在当前空间因多次异常已自动停用。重新启用将清零异常计数。`,
-            '应用已自动停用',
-            { confirmButtonText: '重新启用', cancelButtonText: '取消', type: 'warning' }
-          );
-        } catch {
-          return; // 用户取消，保持停用
-        }
-        enablePluginInstance(instanceKey);
-      }
-      recent.recordOpen(item.id);
-      emit('open-plugin-tab', {
-        pluginDomain: item.domain,
-        pluginView: item.views[0] ?? 'default',
-        title: item.name,
-        icon: item.name.slice(0, 1),
-        pluginContext: currentSpace.value.type === 'org' ? { orgId: currentSpace.value.orgId } : undefined
-      } satisfies OpenPluginTabPayload);
-    };
-
     const installApp = async (item: PluginMarketItemDto) => {
-      // 空间守卫（spaces-and-plugins §4）：与 openApp 同口径，拦截不可见项的安装直达
-      if (!isVisibleInCurrentSpace(item)) {
-        spaceGuardToast(item.name);
-        return;
-      }
-      // 安装前明确展示所需权限（设计 §6.1），授权后才调真实安装接口
-      if (item.permissions.length > 0) {
-        const labels = item.permissions
-          .map((permission) => `${permissionLabel(permission)}（${permission}）`)
-          .join('、');
-        try {
-          await ElMessageBox.confirm(
-            `该应用声明以下权限：${labels}。安装即视为授权，运行时可越权调用将被系统拦截。`,
-            `授权安装 ${item.name}`,
-            { confirmButtonText: '授权并安装', cancelButtonText: '取消', type: 'warning' }
-          );
-        } catch {
-          return; // 用户取消授权
-        }
-      }
+      // 安装是系统层本机动作（install-and-enable §一①：拿到代码≠任何空间启用），
+      // 不做空间守卫；核心流程（权限确认→安装→通知）在共享动作 app-actions.installPluginItem
       setBusy(item.id, 'install');
-      // mock 应用：权限确认流程保留，安装只写 localStorage 状态（见 src/mock/apps.ts）；
-      // 系统通知走同一入口（纯浏览器下由内存镜像入账，便于演示应用会话链路）
-      if (isMockApp(item)) {
-        setMockAppInstalled(item.id, true);
-        mergeItems();
-        setBusy(item.id, '');
-        ElMessage.success('应用安装成功，启用后即可使用');
-        notifyPluginInstalled(spaceKeyOf(currentSpace.value), item.name);
-        return;
-      }
       try {
-        // 目录驱动 install 已退役（plugin_decoupling.md §4）：市场项 id 即仓库规范化
-        // 地址，等价替换为 installFromRepo
-        await window.electronAPI.pluginMarket.installFromRepo(item.id);
-        await refresh();
-        ElMessage.success('应用安装成功，启用后即可使用');
-        // 系统通知样板（app:system 内置应用会话，按当前空间隔离）
-        notifyPluginInstalled(spaceKeyOf(currentSpace.value), item.name);
-      } catch (error) {
-        ElMessage.error(`应用安装失败：${error}`);
+        const installed = await installPluginItem(item);
+        if (installed) {
+          await refresh();
+          mergeItems();
+        }
       } finally {
         setBusy(item.id, '');
       }
     };
 
-    // 仓库锚定安装（plugin-dist）：声明文件已在前置解析中展示，此处做权限确认后安装
+    // 仓库锚定安装（plugin-dist）：声明文件已在前置解析中展示，此处做权限确认后安装；
+    // 同为系统层本机动作，不做空间守卫（supportedSpaces 仅约束启用，见 toggleEnabled）
     const installRepoPlugin = async (declaration: RepoPluginDeclarationDto) => {
-      // 空间守卫（spaces-and-plugins §4）：声明文件 supportedSpaces 缺省按 ['org']
-      if (!isPluginVisibleInSpace(declaration.supportedSpaces, currentSpace.value.type)) {
-        spaceGuardToast(declaration.name);
-        return;
-      }
       if (declaration.permissions.length > 0) {
         const labels = declaration.permissions
           .map((permission) => `${permissionLabel(permission)}（${permission}）`)
@@ -492,13 +379,13 @@ export default defineComponent({
       }
     };
 
-    // 卸载：确认框明示「仅移除插件程序，数据保留在本机」；已打开的插件 tab
+    // 卸载：系统层本机动作（组织空间也不设卡——治理留给「启用」环节，install-and-enable §二）；
+    // 确认框明示「仅移除插件程序，数据保留在本机」；已打开的插件 tab
     // 由 App.vue 监听 spark:close-plugin 事件联动关闭（复用 spark:open-* 同款事件模式）
     const uninstallApp = async (item: PluginMarketItemDto) => {
-      // 组织空间权限守卫（与 toggleEnabled 的 isOrgSpace 口径一致）：
-      // 仅管理员可卸载；入口按钮已按角色隐藏，此处兜底拒绝直达调用
-      if (isOrgSpace.value && !isCurrentUserAdmin.value) {
-        ElMessage.warning('只有组织管理员可以卸载应用');
+      // 本地开发插件：代码由 dev 链路直接服务、内核无安装记录，不可经市场卸载
+      if (isDevPlugin(item.id)) {
+        ElMessage.info('本地开发插件的代码在本机开发目录，不提供卸载（停止 dev 服务即不可用）');
         return;
       }
       try {
@@ -535,49 +422,12 @@ export default defineComponent({
       }
     };
 
-    const toggleEnabled = async (item: PluginMarketItemDto) => {
-      if (isOrgSpace.value) {
-        // 组织空间：仅管理员可操作，启用状态为本地 mock（见 apps-store.ts TODO(mock)；mock 应用同走此路径）
-        if (!isCurrentUserAdmin.value) {
-          await requestEnable(item);
-          return;
-        }
-        orgEnabled.setOrgEnabled(item.id, !orgEnabled.isOrgEnabled(item.id));
-        return;
-      }
-      // mock 应用：启停只写 localStorage 状态
-      if (isMockApp(item)) {
-        setMockAppEnabled(item.id, !item.enabled);
-        mergeItems();
-        return;
-      }
-      setBusy(item.id, 'toggle');
-      try {
-        await window.electronAPI.pluginMarket.setEnabled(item.id, !item.enabled);
-        await refresh();
-      } catch (error) {
-        ElMessage.error(`应用启停失败：${error}`);
-      } finally {
-        setBusy(item.id, '');
-      }
-    };
+    // 启用/停用已迁出：空间层动作唯一操作面＝空间的应用市场（SpaceMarketView，
+    // 共享逻辑 components/apps/app-actions.ts 的 toggleAppEnablement，含先启用后安装、
+    // 组织管理员守卫与内核回写）；本页（系统层应用管理）不操作启停
 
-    // 非管理员请求启用流程（ui-apps-market §5.2）
-    const requestEnable = async (item: PluginMarketItemDto) => {
-      try {
-        await ElMessageBox.confirm(
-          `只有组织管理员可以启用应用。你可以联系管理员请求启用“${item.name}”。`,
-          '请求启用应用',
-          { confirmButtonText: '联系管理员', cancelButtonText: '取消', type: 'info' }
-        );
-      } catch {
-        return; // 用户取消
-      }
-      // TODO(mock): 消息模块并行开发中，先以 toast 占位；后续应打开与组织管理员的 1:1 聊天并自动发送应用链接卡片（设计 §5.2 第 4-5 步）
-      ElMessage.info('消息功能开发中，暂时无法联系管理员');
-    };
-
-    // 切换空间时回到列表主视图并刷新管理员角色；移动端同步回栈底（应用按空间隔离）
+    // 切换空间时回到列表主视图并刷新组织缓存（管理员角色随空间而变）；
+    // 移动端同步回栈底。清单本身为系统层全量、不随空间变化
     watch(spaceKey, () => {
       view.value = 'list';
       selectedId.value = null;
@@ -589,6 +439,10 @@ export default defineComponent({
       void refreshAdminRole();
       // 先展示应用列表：list() 是本地目录+安装态聚合，快；不等待网络更新探测。
       await refreshSafe();
+      // 空间上下文入口（桌面引导卡 / 手机桌面「添加应用」）：直达「为本空间启用」视图
+      if (consumePendingAppsView() === 'enable') {
+        openEnable();
+      }
       openPendingAppDetail();
       // 本地定期检测更新（设计 §4.4）：进入应用页时检测一次，发现新版本显示「可更新」角标。
       // checkUpdates 会对每个插件串行拉取 GitHub 远端 manifest+签名验签（connect 5s/总超时
@@ -610,19 +464,12 @@ export default defineComponent({
       busyByPlugin,
       isOrgSpace,
       isCurrentUserAdmin,
-      groups,
       installedItems,
-      recentItems,
-      isEnabled,
-      isSuspended,
-      openApp,
       openDetail,
       installApp,
       installRepoPlugin,
       upgradeApp,
       uninstallApp,
-      toggleEnabled,
-      requestEnable,
       refreshSafe,
       isMobileLayout,
       MOBILE_TAB,

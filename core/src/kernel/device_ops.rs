@@ -65,43 +65,50 @@ impl Kernel {
         let root_id = self.require_unlocked_root_id().ok();
         // app_version 先取出再借 storage：避免与 require_storage_mut 的互斥借用冲突
         let app_version = self.config.app_version.clone();
-        // D2：在取 storage 可变借用前先派生会话 Kverify（需要读 self.unlocked + storage）。
-        let kverify = crate::kernel::pw_ops::derive_session_kverify(self)
-            .ok()
-            .flatten();
-        {
+        // 本机记录兜底判定先走只读借用：记录存在（常态）时完全不派生会话
+        // Kverify——derive_session_kverify 是 scrypt(N=32768) 级 CPU 操作，
+        // 此前每次清单查询都无条件派生一次，叠加 Tauri 同步命令主线程执行
+        // 与 DeviceUpdated 整单重载，是设备管理页卡顿的主因；仅记录缺失
+        // 需兜底落库（冷启动一次性）时才派生。
+        let self_record_missing = match &local_peer_id {
+            Some(peer_id) => {
+                crate::device::DeviceService::get(self.require_storage()?, peer_id)?.is_none()
+            }
+            None => false,
+        };
+        if self_record_missing {
+            // D2：在取 storage 可变借用前先派生会话 Kverify（需要读 self.unlocked + storage）。
+            let kverify = crate::kernel::pw_ops::derive_session_kverify(self)
+                .ok()
+                .flatten();
+            let peer_id = local_peer_id.clone().expect("missing implies p2p started");
             let storage = self.require_storage_mut()?;
-            // 本机记录兜底：p2p 已启动但清单无本机条目时采集落库
-            if let Some(peer_id) = &local_peer_id {
-                if crate::device::DeviceService::get(storage, peer_id)?.is_none() {
-                    let device_pub_key = crate::p2p::identity_store::load_libp2p_pub_key(storage);
-                    let record = crate::device::DeviceService::upsert_self(
-                        storage,
-                        peer_id,
-                        now,
-                        &node_id,
-                        &app_version,
-                        device_pub_key,
-                    )?;
-                    if let Some(ref root_id) = root_id {
-                        let _ = crate::epoch::EpochService::maybe_grant_epoch_key(
-                            storage,
-                            root_id,
-                            &node_id,
-                            &node_id,
-                            now,
-                            &record.peer_id,
-                            record.device_pub_key.as_deref(),
-                            record.revoked_at,
-                            kverify.as_ref(),
-                        );
-                    }
-                    if let Ok(data) = serde_json::to_value(&record) {
-                        let _ = self
-                            .event_tx
-                            .send(crate::p2p::P2pEvent::DeviceUpdated(data));
-                    }
-                }
+            let device_pub_key = crate::p2p::identity_store::load_libp2p_pub_key(storage);
+            let record = crate::device::DeviceService::upsert_self(
+                storage,
+                &peer_id,
+                now,
+                &node_id,
+                &app_version,
+                device_pub_key,
+            )?;
+            if let Some(ref root_id) = root_id {
+                let _ = crate::epoch::EpochService::maybe_grant_epoch_key(
+                    storage,
+                    root_id,
+                    &node_id,
+                    &node_id,
+                    now,
+                    &record.peer_id,
+                    record.device_pub_key.as_deref(),
+                    record.revoked_at,
+                    kverify.as_ref(),
+                );
+            }
+            if let Ok(data) = serde_json::to_value(&record) {
+                let _ = self
+                    .event_tx
+                    .send(crate::p2p::P2pEvent::DeviceUpdated(data));
             }
         }
         let records = crate::device::DeviceService::list(self.require_storage()?)?;

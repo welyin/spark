@@ -130,16 +130,17 @@ describe('移动端整页 + 导航栈（波次 2）', () => {
     unmount();
   });
 
-  it('我的页：栈1 功能菜单 → 点开模块整页（栈2 带返回栏）→ 返回栏回菜单', async () => {
+  it('我的页（M9 起为设置 Tab 的「个人设置」二级页）：栈1 功能菜单（顶部返回栏）→ 点开模块整页（栈2）→ 返回栏回菜单', async () => {
     const { el, errors, unmount } = await mountPage(MinePage);
     expect(errors.map(String)).toEqual([]);
 
-    // 栈1：仅功能菜单整页（模块区与返回栏不渲染）
+    // 栈1：功能菜单整页 + 顶部返回栏（M9：MinePage 不再是主 tab，返回栏回设置列表）
     expect(el.querySelector('.mine-menu')).toBeTruthy();
+    expect(el.querySelector('.mobile-back-bar')).toBeTruthy();
+    expect(el.querySelector('.mobile-back-title')?.textContent).toBe('个人设置');
     expect(el.querySelector('.mine-list')).toBeFalsy();
-    expect(el.querySelector('.mobile-back-bar')).toBeFalsy();
 
-    // 点开「我的资料」→ 栈2：返回栏 + 模块整页，菜单不渲染（等滑动转场结束、退场层移除后断言）
+    // 点开「我的资料」→ 栈2：返回栏标题换为模块名，菜单不渲染（等滑动转场结束、退场层移除后断言）
     await click(el, '.mine-menu-item');
     await settleTransition();
     expect(el.querySelector('.mobile-back-bar')).toBeTruthy();
@@ -147,11 +148,11 @@ describe('移动端整页 + 导航栈（波次 2）', () => {
     expect(el.querySelector('.mine-menu')).toBeFalsy();
     expect(el.querySelector('.mine-list')).toBeTruthy();
 
-    // 返回栏 ‹ 返回 → 回栈1 菜单
+    // 返回栏 ‹ 返回 → 回栈1 菜单（返回栏恢复「个人设置」）
     await click(el, '.mobile-back-btn');
     await settleTransition();
     expect(el.querySelector('.mine-menu')).toBeTruthy();
-    expect(el.querySelector('.mobile-back-bar')).toBeFalsy();
+    expect(el.querySelector('.mobile-back-title')?.textContent).toBe('个人设置');
     expect(el.querySelector('.mine-list')).toBeFalsy();
     unmount();
   });

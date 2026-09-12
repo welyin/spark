@@ -559,6 +559,10 @@ export function createTauriApi(): ElectronAPI {
       // 连接（市场 OnceLock 客户端、updater 客户端）需重启应用才生效
       getProxy: () => call('system-get-proxy'),
       setProxy: (proxy) => call('system-set-proxy', proxy),
+      // 显示模式（桌面）：窗口模式＝最大化锁定（不可还原小窗）/ 全屏；
+      // 切换即生效并持久化（src-tauri display_mode.rs），移动端无此语义
+      getDisplayMode: () => call('system-get-display-mode'),
+      setDisplayMode: (mode) => call('system-set-display-mode', mode),
       // 移动端返回键在一级页（栈底）时退出应用；桌面无系统返回键，不会触达
       exitApp: () => call('system-exit-app'),
       // 阶段四C 系统通知：Android 经 JNI 发系统通知；桌面命令侧 no-op

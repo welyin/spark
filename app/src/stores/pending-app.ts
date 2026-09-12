@@ -21,3 +21,16 @@ export function consumePendingAppDetail(): string | null {
   pendingAppDetail.value = null;
   return id;
 }
+
+/** 待消费的「为本空间启用」视图请求（空间上下文入口：桌面引导卡 / 手机桌面「添加应用」） */
+export const pendingAppsView = ref<'enable' | null>(null);
+
+export function requestOpenAppsView(view: 'enable'): void {
+  pendingAppsView.value = view;
+}
+
+export function consumePendingAppsView(): 'enable' | null {
+  const view = pendingAppsView.value;
+  pendingAppsView.value = null;
+  return view;
+}

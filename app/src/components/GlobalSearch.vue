@@ -20,11 +20,27 @@
     />
 
     <!-- mousedown.prevent 阻止输入框失焦，保证 item 的 click 先于 blur 触发 -->
-    <div v-if="open && keyword.trim()" class="global-search-dropdown" @mousedown.prevent>
-      <template v-if="groups.length > 0">
+    <div
+      v-if="open && keyword.trim()"
+      class="global-search-dropdown"
+      @mousedown.prevent
+    >
+      <!-- G1 加载态：索引（组织/应用清单）尚未就绪时如实提示，而非误报「无匹配」 -->
+      <div v-if="loading" class="gs-empty">索引加载中…</div>
+      <template v-else-if="groups.length > 0">
         <div v-for="group in groups" :key="group.label" class="gs-group">
-          <div class="gs-group-title">{{ group.label }}</div>
-          <button v-for="item in group.items" :key="item.key" type="button" class="gs-item" @click="select(item)">
+          <!-- G1：每组标明索引源（只搜元数据面，不搜内容） -->
+          <div class="gs-group-title">
+            {{ group.label
+            }}<span class="gs-group-source">{{ group.source }}</span>
+          </div>
+          <button
+            v-for="item in group.items"
+            :key="item.key"
+            type="button"
+            class="gs-item"
+            @click="select(item)"
+          >
             <UserAvatar
               v-if="item.kind === 'contact' || item.kind === 'conversation'"
               :root-id="item.avatarSeed ?? item.rootId ?? ''"
@@ -32,8 +48,23 @@
               :avatar="item.avatarImage ?? ''"
               :size="28"
             />
-            <OrgAvatar v-else-if="item.kind === 'org'" :org-id="item.orgId ?? ''" :name="item.name" :size="28" />
-            <span v-else class="gs-app-icon" :style="{ background: item.iconBackground }">{{ item.name.slice(0, 1) }}</span>
+            <OrgAvatar
+              v-else-if="item.kind === 'org'"
+              :org-id="item.orgId ?? ''"
+              :name="item.name"
+              :size="28"
+            />
+            <AppIcon
+              v-else-if="item.kind === 'app'"
+              class="gs-app-icon"
+              :item="item.app ?? null"
+            />
+            <span
+              v-else
+              class="gs-app-icon"
+              :style="{ background: item.iconBackground }"
+              >{{ item.name.slice(0, 1) }}</span
+            >
             <span class="gs-item-main">
               <span class="gs-item-name">{{ item.name }}</span>
               <span class="gs-item-subtitle">{{ item.subtitle }}</span>
@@ -41,31 +72,51 @@
           </button>
         </div>
       </template>
-      <div v-else class="gs-empty">无匹配结果</div>
+      <!-- G1 空态：如实列出已检索的索引面与未覆盖面（文件内容索引暂无数据源，不虚构） -->
+      <div v-else class="gs-empty">
+        <p class="gs-empty-title">无匹配结果</p>
+        <p class="gs-empty-note">
+          已检索本机索引：联系人 / 会话元数据 / 应用清单 / 组织 / 事务元数据。
+        </p>
+        <p class="gs-empty-note">文件内容索引尚未建立（暂无数据源）。</p>
+      </div>
     </div>
   </div>
 </template>
 
 <script lang="ts">
 import { computed, defineComponent, onMounted, ref } from 'vue';
+import { ElMessage } from 'element-plus';
 import { Search } from '@element-plus/icons-vue';
 import type { PluginMarketItemDto } from '../api/types';
-import { currentSpace, switchSpace, type CurrentSpace } from '../stores/current-space';
+import {
+  currentSpace,
+  switchSpace,
+  type CurrentSpace,
+} from '../stores/current-space';
 import { organizations, refreshOrganizations } from '../stores/org-membership';
+import { personalSpaceName } from '../stores/personal-space';
 import {
   orgMemberAvatarSource,
   personAvatarSource,
-  personDisplayName
+  personDisplayName,
 } from '../stores/avatar-sources';
 import { contactsOf } from '../mock/contacts';
 import { listConversations, spaceKeyOf } from '../stores/messages';
 import { appConversationName } from '../stores/app-conversations';
 import { listMockApps } from '../mock/apps';
 import { mockMode } from '../mock/mode';
-import { appIconBackground, marketItemMatches } from './apps/apps-store';
+import { marketItemMatches } from './apps/apps-store';
 import { isPluginVisibleInSpace } from './apps/space-visibility';
+import AppIcon from './apps/AppIcon.vue';
 import { openChat } from './contacts/open-intents';
 import { openPluginDeepLink } from '../services/deep-link';
+import {
+  affairFeed,
+  refreshAffairFeed,
+  type AffairFeedItem,
+} from '../stores/affairs/affair-feed';
+import { openAffairInPlugin } from '../stores/affairs/affair-open';
 import UserAvatar from './UserAvatar.vue';
 import OrgAvatar from './OrgAvatar.vue';
 
@@ -74,7 +125,7 @@ const GROUP_LIMIT = 5;
 
 type SearchItem = {
   key: string;
-  kind: 'contact' | 'conversation' | 'app' | 'org';
+  kind: 'contact' | 'conversation' | 'app' | 'org' | 'affair';
   name: string;
   subtitle: string;
   /** 联系人/会话所属空间（跳转前先切空间） */
@@ -83,6 +134,10 @@ type SearchItem = {
   conversationId?: string;
   pluginId?: string;
   orgId?: string;
+  /** 事务条目：打开时分发到类型插件 */
+  affair?: AffairFeedItem;
+  /** 应用条目：完整市场条目（AppIcon 回退链消费，plugin-dist §2.3） */
+  app?: PluginMarketItemDto;
   iconBackground?: string;
   /** 头像配色种子：组织成员=rootId@orgId；缺省=rootId */
   avatarSeed?: string;
@@ -90,7 +145,7 @@ type SearchItem = {
   avatarImage?: string;
 };
 
-type SearchGroup = { label: string; items: SearchItem[] };
+type SearchGroup = { label: string; source: string; items: SearchItem[] };
 
 const shortRootId = (rootId: string) => `${rootId.slice(0, 10)}...`;
 const matches = (keyword: string, ...fields: string[]) =>
@@ -98,13 +153,15 @@ const matches = (keyword: string, ...fields: string[]) =>
 
 export default defineComponent({
   name: 'GlobalSearch',
-  components: { UserAvatar, OrgAvatar },
+  components: { UserAvatar, OrgAvatar, AppIcon },
   // select：选中任一搜索结果后触发（移动端全屏搜索层借此关闭自身；桌面端无监听，行为不变）
   emits: ['select'],
   setup(_, { emit }) {
     const keyword = ref('');
     const open = ref(false);
     const appItems = ref<PluginMarketItemDto[]>([]);
+    /** G1 加载态：组织/应用清单/事务索引任一未就绪即视为加载中 */
+    const loading = ref(true);
     /** 输入框引用：移动端全屏搜索层打开时主动聚焦（弹键盘） */
     const inputRef = ref<{ focus: () => void } | null>(null);
     const focusInput = () => inputRef.value?.focus();
@@ -124,6 +181,13 @@ export default defineComponent({
       if (mockMode()) {
         appItems.value = [...appItems.value, ...listMockApps()];
       }
+      // 事务元数据索引（与我相关列表）：失败不阻断其余分组
+      try {
+        await refreshAffairFeed();
+      } catch {
+        // 事务接口不可用时事务组为空
+      }
+      loading.value = false;
     });
 
     // ---------------- 分组结果 ----------------
@@ -142,10 +206,10 @@ export default defineComponent({
             key: `friend:${friend.rootId}`,
             kind: 'contact',
             name,
-            subtitle: friend.remark ? friend.nickname : '个人空间 · 朋友',
+            subtitle: friend.remark ? friend.nickname : `${personalSpaceName.value} · 朋友`,
             space: { type: 'personal' },
             rootId: friend.rootId,
-            avatarImage: personAvatarSource('personal', friend.rootId).image
+            avatarImage: personAvatarSource('personal', friend.rootId).image,
           });
         }
       }
@@ -153,7 +217,9 @@ export default defineComponent({
         const space: CurrentSpace = { type: 'org', orgId: org.orgId };
         for (const member of org.members) {
           // 统一组织成员入口（备注 > 组织身份昵称），种子 rootId@orgId
-          const avatar = orgMemberAvatarSource(org.orgId, member.rootId, { name: shortRootId(member.rootId) });
+          const avatar = orgMemberAvatarSource(org.orgId, member.rootId, {
+            name: shortRootId(member.rootId),
+          });
           if (matches(kw, avatar.name, member.rootId, org.name)) {
             items.push({
               key: `member:${org.orgId}:${member.rootId}`,
@@ -163,7 +229,7 @@ export default defineComponent({
               space,
               rootId: member.rootId,
               avatarSeed: avatar.seed,
-              avatarImage: avatar.image
+              avatarImage: avatar.image,
             });
           }
         }
@@ -178,7 +244,10 @@ export default defineComponent({
       }
       const spaces: CurrentSpace[] = [
         { type: 'personal' },
-        ...organizations.value.map((org): CurrentSpace => ({ type: 'org', orgId: org.orgId }))
+        ...organizations.value.map((org): CurrentSpace => ({
+          type: 'org',
+          orgId: org.orgId,
+        })),
       ];
       const items: SearchItem[] = [];
       for (const space of spaces) {
@@ -194,8 +263,9 @@ export default defineComponent({
           if (matches(kw, name, conv.peerId)) {
             const orgName =
               space.type === 'org'
-                ? organizations.value.find((org) => org.orgId === space.orgId)?.name ?? '组织空间'
-                : '个人空间';
+                ? (organizations.value.find((org) => org.orgId === space.orgId)
+                    ?.name ?? '组织空间')
+                : personalSpaceName.value;
             items.push({
               key: `conv:${spaceKeyOf(space)}:${conv.id}`,
               kind: 'conversation',
@@ -204,7 +274,10 @@ export default defineComponent({
               space,
               rootId: conv.peerId,
               conversationId: conv.id,
-              avatarImage: conv.kind === 'direct' ? personAvatarSource(spaceKeyOf(space), conv.peerId).image : ''
+              avatarImage:
+                conv.kind === 'direct'
+                  ? personAvatarSource(spaceKeyOf(space), conv.peerId).image
+                  : '',
             });
           }
         }
@@ -217,19 +290,26 @@ export default defineComponent({
       if (!kw) {
         return [];
       }
-      return appItems.value
-        .filter((item) => marketItemMatches(item, kw))
-        // 与应用页同口径按当前空间过滤（spaces-and-plugins §4）：缺省按 ['org']
-        .filter((item) => isPluginVisibleInSpace(item.supportedSpaces, currentSpace.value.type))
-        .slice(0, GROUP_LIMIT)
-        .map((item) => ({
-          key: `app:${item.id}`,
-          kind: 'app' as const,
-          name: item.name,
-          subtitle: item.installed ? '已安装' : '未安装',
-          pluginId: item.id,
-          iconBackground: appIconBackground(item)
-        }));
+      return (
+        appItems.value
+          .filter((item) => marketItemMatches(item, kw))
+          // 与应用页同口径按当前空间过滤（spaces-and-plugins §4）：缺省按 ['org']
+          .filter((item) =>
+            isPluginVisibleInSpace(
+              item.supportedSpaces,
+              currentSpace.value.type,
+            ),
+          )
+          .slice(0, GROUP_LIMIT)
+          .map((item) => ({
+            key: `app:${item.id}`,
+            kind: 'app' as const,
+            name: item.name,
+            subtitle: item.installed ? '已安装' : '未安装',
+            pluginId: item.id,
+            app: item,
+          }))
+      );
     });
 
     const orgItems = computed<SearchItem[]>(() => {
@@ -245,17 +325,61 @@ export default defineComponent({
           kind: 'org' as const,
           name: org.name,
           subtitle: `${org.memberCount} 名成员`,
-          orgId: org.orgId
+          orgId: org.orgId,
+        }));
+    });
+
+    /** G1 事务类目：affair-feed 本机缓存的元数据面（标题/摘要/标签），不搜内容 */
+    const affairItems = computed<SearchItem[]>(() => {
+      const kw = keyword.value.trim().toLowerCase();
+      if (!kw) {
+        return [];
+      }
+      return affairFeed.value
+        .filter((item) =>
+          matches(kw, item.title, item.summary, item.tags.join(' ')),
+        )
+        .slice(0, GROUP_LIMIT)
+        .map((item) => ({
+          key: `affair:${item.affairId}`,
+          kind: 'affair' as const,
+          name: item.title,
+          subtitle: item.closed ? '事务 · 已关闭' : '事务 · 进行中',
+          affair: item,
+          iconBackground: '#64748b',
         }));
     });
 
     const groups = computed<SearchGroup[]>(() =>
       [
-        { label: '联系人', items: contactItems.value },
-        { label: '会话', items: conversationItems.value },
-        { label: '应用', items: appResultItems.value },
-        { label: '组织', items: orgItems.value }
-      ].filter((group) => group.items.length > 0)
+        {
+          label: '联系人',
+          source: '本机索引 · 通讯录元数据',
+          items: contactItems.value,
+        },
+        {
+          label: '会话',
+          source: '本机索引 · 会话元数据',
+          items: conversationItems.value,
+        },
+        // G1 事务类目：只搜元数据面（标题/摘要/标签），点击按类型分发到承接插件
+        {
+          label: '事务',
+          source: '本机索引 · 事务元数据',
+          items: affairItems.value,
+        },
+        {
+          label: '应用',
+          source: '本机索引 · 应用清单',
+          items: appResultItems.value,
+        },
+        // G1「域」类目：组织空间即域
+        {
+          label: '组织（域）',
+          source: '本机索引 · 组织列表',
+          items: orgItems.value,
+        },
+      ].filter((group) => group.items.length > 0),
     );
 
     // ---------------- 跳转 ----------------
@@ -266,7 +390,10 @@ export default defineComponent({
 
     /** 目标在别的空间时先切空间，再派发事件（App.vue 消费并切 tab） */
     const ensureSpace = (space?: CurrentSpace) => {
-      if (space && JSON.stringify(space) !== JSON.stringify(currentSpace.value)) {
+      if (
+        space &&
+        JSON.stringify(space) !== JSON.stringify(currentSpace.value)
+      ) {
         switchSpace(space);
       }
     };
@@ -278,12 +405,31 @@ export default defineComponent({
       if (item.kind === 'contact') {
         ensureSpace(item.space);
         // 0.3：通讯录是空间插件，经统一深链打开并定位该联系人（cardData.rootId 注入插件消费）
-        openPluginDeepLink({ pluginId: 'spark-contacts', cardData: { rootId: item.rootId } });
+        openPluginDeepLink({
+          pluginId: 'spark-contacts',
+          cardData: { rootId: item.rootId },
+          space: item.space,
+        });
       } else if (item.kind === 'conversation') {
         ensureSpace(item.space);
-        openChat({ rootId: item.rootId ?? '', name: item.name, conversationId: item.conversationId });
+        openChat({
+          rootId: item.rootId ?? '',
+          name: item.name,
+          conversationId: item.conversationId,
+        });
       } else if (item.kind === 'app') {
-        window.dispatchEvent(new CustomEvent('spark:open-app', { detail: { id: item.pluginId } }));
+        window.dispatchEvent(
+          new CustomEvent('spark:open-app', { detail: { id: item.pluginId } }),
+        );
+      } else if (item.kind === 'affair' && item.affair) {
+        // 事务条目：按类型分发到承接插件（同事务页点卡片）；未装承接插件如实提示
+        void openAffairInPlugin(item.affair).then((result) => {
+          if (!result.ok) {
+            ElMessage.warning(
+              '本机未安装能处理该事务的应用，可前往应用市场安装',
+            );
+          }
+        });
       } else if (item.kind === 'org' && item.orgId) {
         switchSpace({ type: 'org', orgId: item.orgId });
       }
@@ -297,8 +443,19 @@ export default defineComponent({
       }
     };
 
-    return { SearchIcon: Search, keyword, open, groups, close, select, pickFirst, inputRef, focusInput };
-  }
+    return {
+      SearchIcon: Search,
+      keyword,
+      open,
+      loading,
+      groups,
+      close,
+      select,
+      pickFirst,
+      inputRef,
+      focusInput,
+    };
+  },
 });
 </script>
 
@@ -325,13 +482,23 @@ export default defineComponent({
   border: 1px solid var(--spark-border-light);
   border-radius: var(--spark-radius-l);
   box-shadow: var(--spark-shadow-pop);
-  z-index: 3000;
+  z-index: var(--spark-z-search);
 }
 
 .gs-group-title {
   padding: 6px 10px 2px;
   font-size: var(--spark-font-size-secondary);
   color: var(--spark-text-3);
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+/* G1 索引源标注：弱于组名一级 */
+.gs-group-source {
+  font-size: 11px;
+  color: var(--spark-text-3);
+  opacity: 0.8;
 }
 
 .gs-item {
@@ -393,5 +560,17 @@ export default defineComponent({
   text-align: center;
   font-size: var(--spark-font-size-placeholder);
   color: var(--spark-text-3);
+}
+
+/* G1 空态注记：列出已检索索引面与未覆盖面 */
+.gs-empty-title {
+  margin: 0 0 6px;
+}
+
+.gs-empty-note {
+  margin: 0;
+  padding: 0 24px;
+  font-size: var(--spark-font-size-secondary);
+  line-height: 1.6;
 }
 </style>

@@ -481,7 +481,14 @@ impl DeviceService {
     ) -> crate::contact::Result<DeviceRecord> {
         let info = collect_local_device_info();
         let device_uid = get_or_create_device_uid(storage)?;
-        Self::tombstone_same_device_peers(storage, Some(&device_uid), peer_id, now_ms, node_id)?;
+        Self::tombstone_same_device_peers(
+            storage,
+            Some(&device_uid),
+            peer_id,
+            now_ms,
+            now_ms,
+            node_id,
+        )?;
         // 撤销粘性：本地已有本机记录时，保留 revoked_at，防止同步/重采集把
         // 已撤销设备「洗白」。
         let existing = Self::get(storage, peer_id)?;
@@ -513,10 +520,15 @@ impl DeviceService {
 
     /// 同 deviceUid 替换：清单中同 deviceUid 但 peerId 不同的记录墓碑化
     /// （对端 peerId 漂移后的旧身份；无 deviceUid 的旧版本记录无法归属，不动）。
-    fn tombstone_same_device_peers<S: StorageBackend>(
+    ///
+    /// 新鲜度门槛：只淘汰 `updated_at` 不新于 incoming 记录（`incoming_updated_at`）
+    /// 的旧条目——迟到/回灌的 stale 记录（dm 退避重投、离线队列补投、第三台
+    /// 设备的 pdsync 快照）不得反杀已就位的更新记录（防 inversion）。
+    pub(crate) fn tombstone_same_device_peers<S: StorageBackend>(
         storage: &mut S,
         device_uid: Option<&str>,
         keep_peer_id: &str,
+        incoming_updated_at: i64,
         now_ms: i64,
         node_id: &str,
     ) -> crate::contact::Result<()> {
@@ -527,7 +539,10 @@ impl DeviceService {
             let Ok(existing) = serde_json::from_str::<DeviceRecord>(&value) else {
                 continue;
             };
-            if existing.device_uid.as_deref() == Some(uid) && existing.peer_id != keep_peer_id {
+            if existing.device_uid.as_deref() == Some(uid)
+                && existing.peer_id != keep_peer_id
+                && existing.updated_at <= incoming_updated_at
+            {
                 let stale_key = format!("{DEVICE_PREFIX}{}", existing.peer_id);
                 crate::sync::delete_personal(storage, node_id, &stale_key, now_ms)
                     .map_err(crate::contact::sync_err_to_contact)?;
@@ -548,10 +563,30 @@ impl DeviceService {
         remote_node_id: &str,
         local_node_id: &str,
     ) -> crate::contact::Result<(DeviceRecord, bool)> {
+        // 复活守卫：本键已被同 deviceUid 替换墓碑化（该 peerId 已漂移废弃），
+        // 且本地已就位同 uid 的更新记录时，迟到的旧 device-sync（dm 退避重投 /
+        // 离线队列补投，信封不绑定 record.peerId==连接层对端）不得复活旧条目，
+        // 也不得进入替换流程反杀新记录。
+        if let Some(uid) = record.device_uid.as_deref()
+            && Self::get(storage, &record.peer_id)?.is_none()
+        {
+            let key = format!("{DEVICE_PREFIX}{}", record.peer_id);
+            let meta = crate::sync::get_personal_meta(storage, &key)
+                .map_err(crate::contact::sync_err_to_contact)?;
+            if let Some(meta) = meta
+                && crate::sync::is_tombstone(&meta)
+                && meta.ts >= record.updated_at
+                && let Some(replacement) = Self::get_by_device_uid(storage, uid)?
+                && replacement.updated_at >= record.updated_at
+            {
+                return Ok((replacement, false));
+            }
+        }
         Self::tombstone_same_device_peers(
             storage,
             record.device_uid.as_deref(),
             &record.peer_id,
+            record.updated_at,
             now_ms,
             remote_node_id,
         )?;
@@ -681,6 +716,138 @@ mod tests {
         assert!(changed);
         assert!(DeviceService::get(&storage, "peer-old").unwrap().is_none());
         assert!(DeviceService::get(&storage, "peer-new").unwrap().is_some());
+    }
+
+    /// 复活守卫：旧 peerId 已被同 deviceUid 替换墓碑化后，迟到的旧
+    /// device-sync（dm 退避重投/离线队列补投）既不得复活旧条目，也不得
+    /// 墓碑化已就位的新记录（防 inversion）。
+    #[test]
+    fn apply_remote_stale_replay_does_not_resurrect_or_invert() {
+        let mut storage = crate::storage::MemoryStorage::new();
+        let old = DeviceRecord {
+            peer_id: "peer-old".to_string(),
+            device_uid: Some("uid-x".to_string()),
+            device_name: "手机".to_string(),
+            os: "Android".to_string(),
+            os_version: "14".to_string(),
+            arch: "aarch64".to_string(),
+            macs: vec![],
+            app_version: String::new(),
+            updated_at: 100,
+            last_seen_at: 100,
+            revoked_at: None,
+            device_pub_key: None,
+        };
+        DeviceService::upsert_pdsync(&mut storage, &old, 100, "node-a").unwrap();
+        // 新 peerId 记录到达（now=250：peer-old 的墓碑 ts=250）
+        let drifted = DeviceRecord {
+            peer_id: "peer-new".to_string(),
+            updated_at: 200,
+            ..old.clone()
+        };
+        DeviceService::apply_remote(&mut storage, drifted, 250, "node-b", "node-a").unwrap();
+
+        // 迟到的旧记录重放（updated_at=100 < 墓碑 ts=250）
+        let (applied, changed) =
+            DeviceService::apply_remote(&mut storage, old.clone(), 300, "node-b", "node-a")
+                .unwrap();
+        assert!(!changed, "stale 重放不得判为内容变更");
+        assert_eq!(applied.peer_id, "peer-new", "返回值应为就位的替换记录");
+        assert!(
+            DeviceService::get(&storage, "peer-old").unwrap().is_none(),
+            "旧条目不得复活"
+        );
+        assert!(
+            crate::sync::is_tombstone(
+                &crate::sync::get_personal_meta(&storage, "device:peer-old")
+                    .unwrap()
+                    .unwrap()
+            ),
+            "旧条目墓碑保留"
+        );
+        assert!(
+            DeviceService::get(&storage, "peer-new").unwrap().is_some(),
+            "新记录不得被反杀"
+        );
+    }
+
+    /// 新鲜度门槛：同 deviceUid 两条记录并存（不一致中间态）时，较旧
+    /// updated_at 的 incoming 不得墓碑化较新的同 uid 记录。
+    #[test]
+    fn apply_remote_older_incoming_does_not_tombstone_newer_same_uid() {
+        let mut storage = crate::storage::MemoryStorage::new();
+        let older = DeviceRecord {
+            peer_id: "peer-old".to_string(),
+            device_uid: Some("uid-x".to_string()),
+            device_name: "手机".to_string(),
+            os: "Android".to_string(),
+            os_version: "14".to_string(),
+            arch: "aarch64".to_string(),
+            macs: vec![],
+            app_version: String::new(),
+            updated_at: 100,
+            last_seen_at: 100,
+            revoked_at: None,
+            device_pub_key: None,
+        };
+        let newer = DeviceRecord {
+            peer_id: "peer-new".to_string(),
+            updated_at: 200,
+            last_seen_at: 200,
+            ..older.clone()
+        };
+        DeviceService::upsert_pdsync(&mut storage, &older, 100, "node-a").unwrap();
+        DeviceService::upsert_pdsync(&mut storage, &newer, 200, "node-a").unwrap();
+
+        // 较旧的 peer-old 自己的记录重投（内容不变）：不得反杀 peer-new
+        let (_, changed) =
+            DeviceService::apply_remote(&mut storage, older, 300, "node-b", "node-a").unwrap();
+        assert!(!changed);
+        assert!(
+            DeviceService::get(&storage, "peer-new").unwrap().is_some(),
+            "较新的同 uid 记录不得被 stale incoming 墓碑化"
+        );
+    }
+
+    /// 墓碑后若有真正更新（updated_at 晚于墓碑 ts）的同 peerId 记录到达，
+    /// 允许复活（守卫只挡 stale 重放，不钉死该键）。
+    #[test]
+    fn apply_remote_newer_than_tombstone_may_resurrect() {
+        let mut storage = crate::storage::MemoryStorage::new();
+        let old = DeviceRecord {
+            peer_id: "peer-old".to_string(),
+            device_uid: Some("uid-x".to_string()),
+            device_name: "手机".to_string(),
+            os: "Android".to_string(),
+            os_version: "14".to_string(),
+            arch: "aarch64".to_string(),
+            macs: vec![],
+            app_version: String::new(),
+            updated_at: 100,
+            last_seen_at: 100,
+            revoked_at: None,
+            device_pub_key: None,
+        };
+        DeviceService::upsert_pdsync(&mut storage, &old, 100, "node-a").unwrap();
+        let drifted = DeviceRecord {
+            peer_id: "peer-new".to_string(),
+            updated_at: 200,
+            ..old.clone()
+        };
+        DeviceService::apply_remote(&mut storage, drifted, 250, "node-b", "node-a").unwrap();
+
+        // peer-old 携更晚内容回归（updated_at=400 > 墓碑 ts=250）→ 允许落库；
+        // 替换规则随后正常淘汰 peer-new（200 <= 400）
+        let back = DeviceRecord {
+            updated_at: 400,
+            ..old.clone()
+        };
+        let (applied, changed) =
+            DeviceService::apply_remote(&mut storage, back, 400, "node-b", "node-a").unwrap();
+        assert!(changed);
+        assert_eq!(applied.peer_id, "peer-old");
+        assert!(DeviceService::get(&storage, "peer-old").unwrap().is_some());
+        assert!(DeviceService::get(&storage, "peer-new").unwrap().is_none());
     }
 
     /// 无 deviceUid 的旧版本记录不参与替换（无法归属，防误删）。

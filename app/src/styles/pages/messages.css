@@ -648,6 +648,18 @@
   color: var(--spark-danger);
 }
 
+/* G3：会话/消息右键菜单统一为 Element dropdown（popper 挂 body，popper-class 定位）；
+   危险项红色语义与原 .ctx-menu li.danger 一致；.conv-menu-anchor 为 virtual-ref 占位（不可见） */
+.spark-ctx-popper .ctx-item-danger,
+.spark-ctx-popper .ctx-item-danger .el-icon {
+  color: var(--spark-danger);
+}
+
+.conv-menu-anchor,
+.msg-menu-anchor {
+  display: none;
+}
+
 /* ---------- 应用会话（服务号模型 §20） ---------- */
 
 /* 应用会话头像：插件名首字 + pluginId 哈希渐变（与应用列表图标同口径） */
@@ -803,4 +815,28 @@
   .messages-page .conv-item {
     padding: 0 16px;
   }
+}
+
+/* M17 转发对话框：会话选择列表（el-dialog 挂载在 body，用 .forward-dialog 限定作用域） */
+.forward-dialog .forward-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.forward-dialog .forward-item {
+  padding: 12px 8px;
+  border: 0;
+  border-bottom: 1px solid var(--spark-border-light);
+  background: transparent;
+  text-align: left;
+  font-family: inherit;
+  font-size: 15px;
+  color: var(--spark-text-1);
+  cursor: pointer;
+}
+
+.forward-dialog .forward-item:hover {
+  background: var(--spark-bg-hover);
 }

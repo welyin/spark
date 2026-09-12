@@ -999,3 +999,105 @@ fn pdsync_device_unparseable_remote_does_not_advance_pmeta_or_overwrite_local() 
     let local = DeviceService::get(&s, peer_id).unwrap().unwrap();
     assert_eq!(local.revoked_at, Some(200), "本地 revokedAt 不得被覆盖");
 }
+
+// ---------------------------------------------------------------------------
+// pdsync 通道同 deviceUid 替换（与 device-sync `apply_remote` 同口径）：
+// 当前版本设备间设备记录主走 pdsync 反熵，本通道此前缺墓碑化，peerId 漂移
+// 后旧条目永久残留（清单累积重复设备）。
+// ---------------------------------------------------------------------------
+
+/// 构造 pdsync-data 信封（device category 单记录）。
+fn pdsync_device_envelope(
+    key: &SigningKey,
+    my_root: &str,
+    record: &DeviceRecord,
+    meta_ts: i64,
+) -> Value {
+    let meta = DocMeta {
+        vv: [(NODE.to_string(), 5)].into_iter().collect(),
+        ts: meta_ts,
+        node_id: Some(NODE.to_string()),
+        tombstone: None,
+    };
+    let record = PdsyncRecord {
+        key: format!("device:{}", record.peer_id),
+        value: serde_json::to_value(record).unwrap(),
+        meta,
+        dseq: None,
+    };
+    let body = build_data_batch("device", &[record], 0, 1);
+    dm_envelope::build_envelope(dm_envelope::KIND_PDSYNC_DATA, my_root, my_root, NOW, body, key)
+}
+
+#[test]
+fn pdsync_device_new_peer_tombstones_same_uid_stale_record() {
+    let mut s = MemoryStorage::new();
+    let (key, my_root) = peer_root(7);
+
+    // 本地已有旧 peerId 记录（uid-x，updated_at=100）。
+    let old = device_record("peer-old", "uid-x", 100, None);
+    DeviceService::upsert_pdsync(&mut s, &old, 100, NODE).unwrap();
+
+    // 对端 peerId 漂移后的新记录（uid-x，updated_at=200）经 pdsync 到达。
+    let drifted = device_record("peer-new", "uid-x", 200, None);
+    let envelope = pdsync_device_envelope(&key, &my_root, &drifted, 200);
+    let result = handle_inbound_dm(
+        &mut s,
+        &my_root,
+        "",
+        envelope,
+        "peer-new",
+        &HashSet::new(),
+        NOW,
+        NODE,
+        None,
+    )
+    .expect("pdsync-data 应 Ok");
+    assert_eq!(result.response, json!({ "ok": true }));
+
+    assert!(
+        DeviceService::get(&s, "peer-new").unwrap().is_some(),
+        "新记录落库"
+    );
+    assert!(
+        DeviceService::get(&s, "peer-old").unwrap().is_none(),
+        "同 deviceUid 旧 peerId 记录应被墓碑化（pdsync 通道同 device-sync 口径）"
+    );
+    let meta = spark_core::sync::get_personal_meta(&s, "device:peer-old")
+        .unwrap()
+        .expect("旧记录墓碑保留");
+    assert!(spark_core::sync::is_tombstone(&meta));
+}
+
+/// 新鲜度门槛：第三台设备回灌的 stale 记录（updated_at 较旧）即使胜出
+/// 仲裁（本地本无该键），也不得反杀已就位的更新同 uid 记录。
+#[test]
+fn pdsync_device_stale_incoming_does_not_tombstone_newer_same_uid() {
+    let mut s = MemoryStorage::new();
+    let (key, my_root) = peer_root(8);
+
+    // 本地已就位新 peerId 记录（uid-x，updated_at=200）。
+    let new = device_record("peer-new", "uid-x", 200, None);
+    DeviceService::upsert_pdsync(&mut s, &new, 200, NODE).unwrap();
+
+    // stale 旧记录（uid-x，updated_at=100）经 pdsync 回灌（本地无该键 → Applied）。
+    let stale = device_record("peer-old", "uid-x", 100, None);
+    let envelope = pdsync_device_envelope(&key, &my_root, &stale, 100);
+    handle_inbound_dm(
+        &mut s,
+        &my_root,
+        "",
+        envelope,
+        "peer-relay",
+        &HashSet::new(),
+        NOW,
+        NODE,
+        None,
+    )
+    .expect("pdsync-data 应 Ok");
+
+    assert!(
+        DeviceService::get(&s, "peer-new").unwrap().is_some(),
+        "stale 回灌不得反杀更新的同 uid 记录"
+    );
+}

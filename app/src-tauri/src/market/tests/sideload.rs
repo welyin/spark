@@ -161,6 +161,7 @@ fn import_overwrite_higher_trust_requires_confirmation() {
         "todo-local".to_string(),
         InstalledPluginState {
             plugin_id: "todo-local".to_string(),
+            name: String::new(),
             version: "1.0.0".to_string(),
             package_path: String::new(),
             sha256: String::new(),

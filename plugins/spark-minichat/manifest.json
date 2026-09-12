@@ -6,6 +6,7 @@
   "entryView": "default",
   "description": "第三方最小聊天插件示例（communication §六验收样例）：仅 sdk.messages 四调用——会话列表/读消息/发消息/订阅新消息，证明换前端后同一消息数据（sled）原样在。",
   "category": "social",
+  "icon": "assets/icon.svg",
   "supportedSpaces": ["personal", "org"],
   "views": [
     { "id": "default", "type": "app", "title": "最小聊天" }

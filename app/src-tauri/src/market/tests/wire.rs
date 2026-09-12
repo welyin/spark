@@ -75,6 +75,7 @@ fn wire_shapes_match_preload_declarations() {
     // InstalledPluginState / PluginUpdateProbe 键名
     let state = serde_json::to_value(InstalledPluginState {
         plugin_id: "spark-example".to_string(),
+        name: String::new(),
         version: "0.1.0".to_string(),
         package_path: "/tmp/x".to_string(),
         sha256: "aa".to_string(),
@@ -105,6 +106,7 @@ fn wire_shapes_match_preload_declarations() {
     // supportedSpaces：Some 出现
     let state_with_spaces = serde_json::to_value(InstalledPluginState {
         plugin_id: "spark-example".to_string(),
+        name: String::new(),
         version: "0.1.0".to_string(),
         package_path: "/tmp/x".to_string(),
         sha256: "aa".to_string(),

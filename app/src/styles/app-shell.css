@@ -49,8 +49,9 @@
   /* 安全区：下 padding 叠加 env(safe-area-inset-bottom)（桌面端恒为 0 无影响；
      窄屏下 rail 整体不渲染，底部安全区由 MobileTabBar 承担） */
   padding: 12px 0 calc(12px + var(--spark-safe-bottom, env(safe-area-inset-bottom, 0px)));
+  /* 与系统窗口融为一体（走查修正）：rail 底色＝窗口底色（--el-bg-color，同原生标题栏），
+     去掉右侧分隔缝（2px 边框移除） */
   background: var(--spark-rail-bg);
-  border-right: 2px solid var(--spark-border-light);
   transition: width 0.2s ease;
   -webkit-app-region: drag; /* 栏体可拖动窗口（按钮内已禁用） */
 }
@@ -134,7 +135,7 @@
   width: 0;
 }
 
-/* rail 底部工具组（身份块 + 「⋯」）与上方功能导航之间的分隔线 */
+/* rail 底部工具组（身份块）与上方功能导航之间的分隔线 */
 .rail-divider {
   width: 32px;
   height: 1px;
@@ -150,32 +151,6 @@
   align-items: center;
   gap: 4px;
   padding-top: 8px;
-}
-
-/* 身份块（头像+名字+网络状态行）右侧的「⋯」菜单：仅宽栏展示，位于身份行尾 */
-.rail-identity .rail-more {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  margin-left: auto;
-  border: 0;
-  border-radius: var(--spark-radius-m);
-  background: transparent;
-  color: var(--spark-text-3);
-  cursor: pointer;
-  flex-shrink: 0;
-}
-
-.rail-identity .rail-more:hover {
-  background: var(--spark-bg-hover);
-  color: var(--spark-text-1);
-}
-
-/* 下拉挂在 body，scoped 样式够不到：危险项用全局类 */
-.rail-more-danger {
-  color: var(--spark-danger) !important;
 }
 
 .rail-item {
@@ -220,22 +195,45 @@
   text-overflow: ellipsis;
 }
 
-/* 「空间」行右侧的创建/加入「＋」按钮：宽栏下可见，靠右虚线框（用户评审决策） */
+/* 左栏入口图标强调色（problem L8）：逐项按语义取 --spark-icon-* 令牌，不写死颜色 */
+.rail-icon--search { color: var(--spark-icon-search); }
+.rail-icon--messages { color: var(--spark-icon-messages); }
+.rail-icon--affairs { color: var(--spark-icon-affairs); }
+.rail-icon--space { color: var(--spark-icon-space); }
+.rail-icon--apps { color: var(--spark-icon-apps); }
+.rail-icon--settings { color: var(--spark-icon-settings); }
+.rail-icon--test { color: var(--spark-icon-test); }
+
+/* 「空间」区块（L2/L4）：相对定位容器，「＋」定位于区块右上角（靠右靠顶） */
+.rail-space-block {
+  position: relative;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* 「空间」区块右缘的创建/加入「＋」按钮（L2 走查修正）：仅宽栏展示，
+   与「空间」标题同一行高（行高 40、按钮 22 → top 9px 垂直居中），
+   横向顶到 rail 内容区右缘（right:0＝rail 自身 6px 内边距处，与栏内其他内容右缘对齐）；
+   二级菜单的弹出定位见 App.vue（virtual-ref 锚定整行＋offset [32,4]） */
 .rail-space-plus {
   display: none;
 }
 
 .rail.expanded .rail-space-plus {
   display: inline-flex;
+  position: absolute;
+  top: 9px;
+  right: 0;
+  z-index: var(--spark-z-base);
   align-items: center;
   justify-content: center;
-  margin-left: auto;
   width: 22px;
   height: 22px;
   border: 1px dashed var(--spark-border);
   border-radius: var(--spark-radius-s);
   color: var(--spark-text-3);
-  flex-shrink: 0;
 }
 
 .rail.expanded .rail-space-plus:hover {
@@ -266,8 +264,8 @@
   display: flex;
   align-items: center;
   padding: var(--spark-safe-top, env(safe-area-inset-top, 0px)) 12px 0 16px;
+  /* 与系统窗口融为一体（走查修正）：顶栏底色＝窗口底色（同原生标题栏），去掉底部分隔缝 */
   background: var(--spark-topbar-bg);
-  border-bottom: 2px solid var(--spark-border);
   -webkit-app-region: drag; /* 栏体可拖动窗口（内部按钮已禁用） */
 }
 
@@ -554,7 +552,7 @@
 
   .mobile-nav-push-enter-active {
     z-index: 2;
-    box-shadow: -12px 0 24px rgba(0, 0, 0, 0.12);
+    box-shadow: var(--spark-shadow-page);
   }
 
   /* push 旧层：无任何动画（无 transition、无位移） */
@@ -571,7 +569,7 @@
     position: fixed;
     inset: 0;
     z-index: 2;
-    box-shadow: -12px 0 24px rgba(0, 0, 0, 0.12);
+    box-shadow: var(--spark-shadow-page);
   }
 
   .mobile-nav-pop-leave-to {
@@ -640,4 +638,12 @@
   .plugin-tab-card .el-card__header {
     padding-top: calc(var(--el-card-padding, 18px) + var(--spark-safe-top, env(safe-area-inset-top, 0px)));
   }
+}
+
+/* X4 拖放态禁止光标（problem X4「不可承接处显示禁止光标」）：
+   OS 文件拖入期间指针不在可承接落点（应用窗口 / 桌面空白 / 空间导航项）上时，
+   PcDesktop 给 body 挂此类；可承接落点自身保持默认/拷贝光标 */
+body.spark-drop-denied,
+body.spark-drop-denied * {
+  cursor: no-drop !important;
 }

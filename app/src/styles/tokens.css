@@ -35,6 +35,17 @@
   --spark-cat-4: #64748b;
   --spark-cat-5: #34c19b;
 
+  /* 左栏入口图标强调色（problem L8）：语义化命名、按入口语义取用，取值收敛到
+     既有语义色 / 分类色板，禁止逐图标写死 rgb；深色随所别名令牌随动。
+     settings 用产品紫（与「我的」安全设置等图标同色系）：原 cat-4 石板灰在栏内观感等同无色 */
+  --spark-icon-search: var(--spark-primary);
+  --spark-icon-messages: var(--spark-cat-5);
+  --spark-icon-affairs: var(--spark-cat-1);
+  --spark-icon-space: var(--spark-cat-2);
+  --spark-icon-apps: var(--spark-cat-3);
+  --spark-icon-settings: #7b61ff;
+  --spark-icon-test: var(--spark-service);
+
   /* 中性色 */
   --spark-bg-page: var(--el-bg-color-page);
   --spark-bg-card: var(--el-bg-color);
@@ -57,7 +68,7 @@
 
   /* 顶栏（浅色模式下 #f8fafc + 底部细分隔线，见 app-shell.css）与主内容区底色 */
   --spark-topbar-height: 44px;
-  --spark-topbar-bg: #f8fafc;
+  --spark-topbar-bg: var(--el-bg-color);
   --spark-main-bg: var(--spark-bg-page);
 
   /* 圆角（各司其职：s=标签/小元素，m=按钮/输入框/菜单项，l=卡片/面板，xl=弹窗） */
@@ -76,6 +87,8 @@
   --spark-shadow-card: 0 1px 2px rgba(31, 35, 41, 0.04);
   --spark-shadow-hover: 0 4px 16px rgba(31, 35, 41, 0.1);
   --spark-shadow-pop: 0 6px 24px rgba(31, 35, 41, 0.12);
+  /* 页面滑入/滑出层的侧向投影（移动端栈转场） */
+  --spark-shadow-page: -12px 0 24px rgba(0, 0, 0, 0.12);
 
   /* 间距 */
   --spark-gap-page: 16px;
@@ -88,11 +101,21 @@
   --spark-ease-standard: ease;
   --spark-ease-ios: cubic-bezier(0.25, 0.46, 0.45, 0.94);
 
-  /* 层级（映射现状语义，新代码一律用令牌，不再随手写数字） */
-  --spark-z-base: 2;        /* 页内浮起元素 */
-  --spark-z-nav: 10;        /* rail / topbar 内部件 */
+  /* 层级统一序（problem V3，新代码一律用令牌，不再随手写数字）：
+     桌面画布（0，桌面工作区为隔离层叠上下文） < 窗口（1+，工作区内按激活序动态递增）
+     < 页内浮起元素（z-base） < Dock / 顶栏内部件（z-nav） < 下拉/弹层（z-dropdown，对齐 Element popper 档位）
+     < 右键菜单遮罩（z-overlay） < 壳层模态（z-modal） < 全局搜索（z-search） < 通知（z-notify） < RootGate（z-gate）。
+     注：Element 弹层（dialog/popover）由库内部 z-index 计数器管理，落在 z-dropdown~z-overlay 区间；
+     壳层自绘浮层按上述档位取用。 */
+  --spark-z-desktop: 0;   /* 桌面画布（图标/壁纸/水印） */
+  --spark-z-window: 1;    /* 桌面窗口基准（实际层级 = 窗口管理器动态 zIndex） */
+  --spark-z-base: 2;      /* 页内浮起元素 */
+  --spark-z-nav: 10;      /* rail / topbar / Dock */
   --spark-z-dropdown: 2000; /* 下拉 / 弹层（对齐 Element Plus popper 档位） */
   --spark-z-overlay: 3000;  /* 全局遮罩（右键菜单级） */
+  --spark-z-modal: 3100;    /* 壳层顶级对话框 */
+  --spark-z-search: 3200;   /* 全局搜索浮层 */
+  --spark-z-notify: 3300;   /* 通知中心 / 系统级提示 */
   --spark-z-gate: 4000;     /* RootGate 等最高层 */
 
   /* 空间桌面 / 窗口结构常量（新 UI 用；窗口标题栏高复用 topbar 44） */
@@ -101,6 +124,21 @@
   --spark-window-titlebar-height: var(--spark-topbar-height);
   --spark-window-cascade-offset: 20px;
   --spark-dock-height: 56px;
+
+  /* D7 桌面图标 / 图标文字投影（problem D7，参考 macOS / Windows）：
+     图标用柔和双层 box-shadow；文字走查修正为 Windows 式——固定白色 + 深色描边感阴影，
+     与壁纸/主题解耦，保证任何壁纸下清晰可辨；深色模式阴影参数见 html.dark（颜色不变）。
+     投影参数对照 Windows 桌面图标截图调校：贴字近影（1px、高不透明）形成描边感，
+     中距柔影过渡，远距光晕聚拢（Windows 的文字阴影偏"硬"，弱光晕） */
+  --spark-desktop-icon-shadow: 0 1px 3px rgba(0, 0, 0, 0.28), 0 4px 12px rgba(0, 0, 0, 0.14);
+  --spark-desktop-icon-text-color: #ffffff;
+  --spark-desktop-icon-text-shadow: 0 1px 1px rgba(0, 0, 0, 0.85), 0 1px 3px rgba(0, 0, 0, 0.5), 0 0 6px rgba(0, 0, 0, 0.35);
+
+  /* D4 所有应用 Launchpad 铺层毛玻璃（problem D4，参考 macOS Launchpad）：
+     backdrop-filter 模糊半径 + 深色半透明底（走查修正：浅底与白色图标文字叠加晃眼，
+     Launchpad 参照 macOS 恒为深色铺层，两种主题一致） */
+  --spark-launchpad-blur: 28px;
+  --spark-launchpad-bg: rgba(15, 17, 21, 0.6);
 }
 
 /* 深色模式：顶栏/阴影跟随组件库深色底（rail 固定深色，两种模式一致） */
@@ -109,4 +147,11 @@ html.dark {
   --spark-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3);
   --spark-shadow-hover: 0 4px 16px rgba(0, 0, 0, 0.4);
   --spark-shadow-pop: 0 6px 24px rgba(0, 0, 0, 0.45);
+
+  /* D7 深色：投影加重（深底上需要更强的分离感；文字恒白不变） */
+  --spark-desktop-icon-shadow: 0 1px 3px rgba(0, 0, 0, 0.55), 0 4px 14px rgba(0, 0, 0, 0.4);
+  --spark-desktop-icon-text-shadow: 0 1px 1px rgba(0, 0, 0, 0.95), 0 1px 3px rgba(0, 0, 0, 0.6), 0 0 8px rgba(0, 0, 0, 0.45);
+
+  /* D4 深色：Launchpad 毛玻璃底色转深、保持半透明 */
+  --spark-launchpad-bg: rgba(20, 22, 26, 0.66);
 }

@@ -4,7 +4,8 @@
  * - 显示名解析：应用会话内核标题缺省为 pluginId，壳层按插件清单名称展示
  *   （pluginMarket.list 聚合，含未安装条目；内置 'system' 恒为「系统通知」）；
  * - 安装/启用状态：卡片是否走 iframe 富渲染的判定数据源（未安装/未启用 →
- *   原生摘要降级）；组织空间启用状态读 apps-store 的 localStorage 口径；
+ *   原生摘要降级）；启用状态读 per-space 事实源（stores/app-enablement，
+ *   install-and-enable §一②，个人/组织同一判定）；
  * - 屏蔽状态：按空间 localStorage 持久化（spark:app-conv-blocked），被屏蔽会话
  *   未读角标与未读聚合一律抑制，列表仍可见（可就地取消屏蔽）。
  *
@@ -12,6 +13,7 @@
  */
 import { ref } from 'vue';
 import { isTauri, type ElectronAPI, type PluginMarketItemDto } from '../api';
+import { isAppEnabledInSpace, type EnablementSpace } from './app-enablement';
 
 /** 内置系统应用会话 pluginId（系统通知写入入口，plugin/messages.ts） */
 export const SYSTEM_APP_PLUGIN_ID = 'system';
@@ -59,15 +61,10 @@ export function isAppInstalled(pluginId: string): boolean {
   return marketItems.value.find((item) => item.id === pluginId)?.installed ?? false;
 }
 
-/** 组织空间启用状态存储键（与 apps-store useOrgEnabled 同一 localStorage 口径） */
-function orgEnabledKey(spaceKey: string): string {
-  return `spark:apps-org-enabled:${spaceKey}`;
-}
-
 /**
- * 插件是否「已安装且启用」（卡片 iframe 富渲染判定）：
- * 个人空间取市场条目 enabled；组织空间取管理员启用状态（localStorage 口径，
- * 与 apps-store useOrgEnabled 同源，best-effort 读取）。
+ * 插件是否「已安装且当前空间已启用」（卡片 iframe 富渲染判定）：
+ * 启用判定读 per-space 事实源（app-enablement；旧组织 localStorage mock 由该
+ * store 一次性迁移）。spaceKey 沿用消息链路约定：'personal' / 'org:<orgId>'。
  */
 export function isAppUsable(pluginId: string, spaceKey: string): boolean {
   ensureMarketLoaded();
@@ -75,16 +72,11 @@ export function isAppUsable(pluginId: string, spaceKey: string): boolean {
   if (!item?.installed) {
     return false;
   }
-  if (spaceKey === 'personal') {
-    return item.enabled;
-  }
-  try {
-    const raw = localStorage.getItem(orgEnabledKey(spaceKey));
-    const map = raw ? (JSON.parse(raw) as Record<string, boolean>) : {};
-    return map[pluginId] ?? false;
-  } catch {
-    return false;
-  }
+  const space: EnablementSpace =
+    spaceKey === 'personal'
+      ? { type: 'personal' }
+      : { type: 'org', orgId: spaceKey.startsWith('org:') ? spaceKey.slice(4) : spaceKey };
+  return isAppEnabledInSpace(space, item);
 }
 
 // ------------------------------------------------------------------

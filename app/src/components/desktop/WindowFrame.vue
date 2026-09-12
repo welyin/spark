@@ -3,20 +3,21 @@
      关键算法（ark 已验证，直接用）：
        - iframe 遮罩：非激活 / 拖动缩放中给 iframe 盖透明 mask（iframe 吞鼠标事件的必踩坑）；
        - rect 本地持有（不进全局表），最小化 v-show 保活插件运行态；
-       - Pointer Events（兼容触屏/触控板），右/下边界夹取，贴边磁吸（2.4 增强）。
+       - Pointer Events（兼容触屏/触控板），移动不设边界（D5：仅兜底标题栏留一小段可抓回），贴边磁吸（2.4 增强）。
      Spark 不采用 ark 的「iframe 固定宽再 scale」兜底——要求插件响应式，只留最小宽夹取。 -->
 <template>
   <div v-if="isVisible && snapPreview !== 'free'" class="window-snap-preview" :style="previewStyle" />
   <div
+    ref="frameEl"
     v-show="isVisible && !inst.minimized"
     class="window-frame"
-    :class="{ active: isActive, dragging: interacting }"
-    :style="frameStyle"
+    :class="{ active: isActive, dragging: interacting, leaving, entering }"
+    :style="[frameStyle, originStyle]"
     @pointerdown="focusSelf"
   >
     <!-- 标题栏（高 44 复用 topbar）：拖动区 + 控制钮 -->
     <div class="window-titlebar" @pointerdown="onTitlePointerDown" @dblclick="toggleMaximize">
-      <span class="window-title-icon" :style="{ background: iconBg }">{{ def?.icon ?? '?' }}</span>
+      <AppIcon class="window-title-icon" :item="iconItem" />
       <span class="window-title">{{ def?.name ?? inst.appId }}</span>
       <span class="window-space" :title="spaceLabel">{{ spaceLabel }}</span>
       <div class="window-controls">
@@ -63,6 +64,10 @@
         @back-root="closeSelf"
       />
       <TestPage v-else-if="inst.appId === 'spark:test'" @back-root="closeSelf" />
+      <!-- 应用属性窗口（图标右键「属性」，桌面窗口而非对话框）：目标应用经 viewBootstrap.cardData.appId 传入 -->
+      <AppPropertiesPanel v-else-if="inst.appId === 'spark:app-properties'" :app-id="propsTargetAppId" />
+      <!-- 空间的应用市场（桌面窗口，与系统层应用管理完全分开）：目录＋详情内启用/停用 -->
+      <SpaceMarketView v-else-if="inst.appId === 'spark:space-market'" />
       <PluginIframeHost
         v-else-if="def"
         :key="inst.key"
@@ -93,7 +98,7 @@
 </template>
 
 <script lang="ts">
-import { computed, defineComponent, onUnmounted, reactive, ref, watch, type PropType } from 'vue';
+import { computed, defineComponent, onMounted, onUnmounted, reactive, ref, watch, type PropType } from 'vue';
 import { Close, CopyDocument, FullScreen, Minus, Grid } from '@element-plus/icons-vue';
 import PluginIframeHost from '../plugin/PluginIframeHost.vue';
 import AppsPage from '../../pages/AppsPage.vue';
@@ -103,14 +108,18 @@ import AffairsPage from '../../pages/AffairsPage.vue';
 import MinePage from '../../pages/MinePage.vue';
 import SettingsPage from '../../pages/SettingsPage.vue';
 import TestPage from '../../pages/TestPage.vue';
+import AppPropertiesPanel from './AppPropertiesPanel.vue';
+import SpaceMarketView from '../apps/SpaceMarketView.vue';
 import { setBuiltinImpl } from '../../stores/builtin-apps';
 import { refreshCurrentUser } from '../../stores/current-user';
 import { findOrg } from '../../stores/org-membership';
-import { clampRect, placedRect, snapAt, type Placement, type Rect } from '../../stores/desktop/geometry';
+import { personalSpaceName } from '../../stores/personal-space';
+import { keepTitlebarGrabbable, placedRect, snapAt, type Placement, type Rect } from '../../stores/desktop/geometry';
 import type { PluginSpaceContext } from '../../../../packages/plugin-sdk/src';
-import { getApp, refreshAppRegistry, type AppDef } from '../../stores/desktop/app-registry';
+import { getApp, getMarketItem, refreshAppRegistry, type AppDef } from '../../stores/desktop/app-registry';
 import { cascadeIndex, closeWindow, focusWindow, minimizeWindow, openWindow, type WinInst } from '../../stores/desktop/window-manager';
-import { hashGradient } from '../../utils/palette';
+import AppIcon from '../apps/AppIcon.vue';
+import type { AppIconItem } from '../apps/app-icon';
 
 type ResizeDir = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
 
@@ -121,22 +130,33 @@ const SNAP = 16;
 
 export default defineComponent({
   name: 'WindowFrame',
-  components: { PluginIframeHost, AppsPage, BuiltinAppHost, MessagesPage, AffairsPage, MinePage, SettingsPage, TestPage, Minus, FullScreen, CopyDocument, Close, Grid },
+  components: { PluginIframeHost, AppsPage, BuiltinAppHost, MessagesPage, AffairsPage, MinePage, SettingsPage, TestPage, AppPropertiesPanel, SpaceMarketView, Minus, FullScreen, CopyDocument, Close, Grid, AppIcon },
   emits: ['open-app'],
   props: {
     isVisible: { type: Boolean, default: true },
     inst: { type: Object as PropType<WinInst>, required: true },
     isActive: { type: Boolean, default: false },
     space: { type: Object as PropType<PluginSpaceContext>, required: true },
-    /** 桌面容器尺寸（边界夹取依据），由桌面层传入 */
+    /** 桌面容器尺寸（抓回兜底 / 贴边磁吸依据），由桌面层传入 */
     bounds: { type: Object as PropType<{ width: number; height: number }>, required: true }
   },
   setup(props, { emit }) {
     const def = computed<AppDef | null>(() => getApp(props.inst.appId, props.space.type));
     const pluginId = computed(() => def.value?.pluginDomain.slice('plugin:'.length) ?? '');
-    const spaceLabel = computed(() => (props.space.type === 'personal' ? '个人空间' : findOrg(props.space.id)?.name ?? '组织空间'));
-    const iconBg = computed(() => hashGradient(def.value?.name ?? props.inst.appId));
-
+    const spaceLabel = computed(() => (props.space.type === 'personal' ? personalSpaceName.value : findOrg(props.space.id)?.name ?? '组织空间'));
+    /** 属性窗口的目标应用 id（viewBootstrap.cardData.appId；缺失回退空串→面板显示读取失败） */
+    const propsTargetAppId = computed(() => {
+      const cardData = props.inst.viewBootstrap?.cardData;
+      if (cardData && typeof cardData === 'object' && typeof (cardData as { appId?: unknown }).appId === 'string') {
+        return (cardData as { appId: string }).appId;
+      }
+      return '';
+    });
+    /** 标题栏图标条目：优先市场条目（含声明图标/安装态），壳层内置窗口（spark:*）
+        无市场条目退化为最小形状走首字符回退（plugin-dist §2.3 回退链） */
+    const iconItem = computed<AppIconItem>(() =>
+      getMarketItem(props.inst.appId) ?? { id: props.inst.appId, name: def.value?.name ?? props.inst.appId }
+    );
     // rect 本地持有（参照 ark：不进全局表）
     const initW = () => Math.min(def.value?.defaultWidth ?? 880, Math.max(MIN_W, props.bounds.width - 48));
     const initH = () => Math.min(def.value?.defaultHeight ?? 620, Math.max(MIN_H, props.bounds.height - 48));
@@ -170,16 +190,70 @@ export default defineComponent({
     let endInteraction: (() => void) | null = null;
 
     const focusSelf = () => focusWindow(props.inst.key);
-    const minimizeSelf = () => minimizeWindow(props.inst.key);
-    const closeSelf = () => closeWindow(props.inst.key);
+    const closeSelf = () => animateOut(() => closeWindow(props.inst.key));
 
-    const clampToBounds = () => {
-      if (props.bounds.width > 0 && props.bounds.height > 0) Object.assign(rect, clampRect(rect, props.bounds));
+    /* ---- W6 开/收窗 0.15s scale 动效，锚定 Dock 图标位置（transform-origin 指向 Dock 图标中心） ----
+       动效时长与 --spark-dur-fast（150ms）一致；离场动画播完再真正最小化/关窗（v-show/移除）。 */
+    const ANIM_MS = 150;
+    const frameEl = ref<HTMLElement | null>(null);
+    const leaving = ref(false);
+    /** W6 入场动效改为一次性 class（entering）：只在挂载与最小化还原时播放——
+        之前动画挂在 .window-frame 基类上，拖动时 .dragging 置 animation:none、
+        松手移除该类导致 pop-in 重播（移动后窗口"重新从小变大"的走查缺陷） */
+    const entering = ref(false);
+    const playEnter = () => {
+      entering.value = true;
+      setTimeout(() => {
+        entering.value = false;
+      }, ANIM_MS);
     };
-    watch(() => [props.bounds.width, props.bounds.height], clampToBounds, { immediate: true });
+    const originStyle = ref<Record<string, string>>({});
+    onMounted(() => {
+      playEnter();
+      const frame = frameEl.value;
+      const dockIcon = document.querySelector(`[data-dock-app="${props.inst.appId}"]`);
+      if (!frame || !dockIcon) {
+        return;
+      }
+      const fr = frame.getBoundingClientRect();
+      const dr = dockIcon.getBoundingClientRect();
+      if (fr.width <= 0 || fr.height <= 0) {
+        return;
+      }
+      const ox = (((dr.left + dr.width / 2 - fr.left) / fr.width) * 100).toFixed(1);
+      const oy = (((dr.top + dr.height / 2 - fr.top) / fr.height) * 100).toFixed(1);
+      originStyle.value = { '--window-dock-origin': `${ox}% ${oy}%` };
+    });
+    // 最小化 → 还原（v-show 恢复）时重播入场动效（锚点仍指向 Dock 图标）
+    watch(
+      () => props.inst.minimized,
+      (minimized, was) => {
+        if (was && !minimized) {
+          playEnter();
+        }
+      }
+    );
+    function animateOut(action: () => void) {
+      if (leaving.value) {
+        return;
+      }
+      leaving.value = true;
+      setTimeout(() => {
+        leaving.value = false;
+        action();
+      }, ANIM_MS);
+    }
+    const minimizeSelf = () => animateOut(() => minimizeWindow(props.inst.key));
+
+    /** D5 窗口移动不设边界：不再夹取进桌面，仅兜底「标题栏至少留一小段在屏内可抓回」。
+        工作区尺寸变化 / 切换布局 / 缩放后同样只套这层兜底，不把窗口强行拉回屏内。 */
+    const keepGrabbable = () => {
+      if (props.bounds.width > 0 && props.bounds.height > 0) Object.assign(rect, keepTitlebarGrabbable(rect, props.bounds));
+    };
+    watch(() => [props.bounds.width, props.bounds.height], keepGrabbable, { immediate: true });
     const setPlacement = (value: Placement) => {
       placement.value = value;
-      clampToBounds();
+      keepGrabbable();
       focusSelf();
       saveGeometry();
     };
@@ -207,21 +281,22 @@ export default defineComponent({
           placement.value = 'free';
           rect.x = ev.clientX - area.left - rect.w / 2;
           rect.y = ev.clientY - area.top - 22;
-          clampToBounds();
+          keepGrabbable();
           origX = rect.x - (ev.clientX - startX);
           origY = rect.y - (ev.clientY - startY);
         }
         snapPreview.value = snapAt(ev.clientX - area.left, ev.clientY - area.top, props.bounds);
         let nx = origX + (ev.clientX - startX);
         let ny = origY + (ev.clientY - startY);
-        // 贴边磁吸（2.4 半屏/四分屏的基础；当前先吸边界）
+        // 贴边磁吸（2.4 半屏/四分屏的基础；当前先吸边界）。D5：拖动不设边界，
+        // 磁吸与自由拖出不冲突（只在靠近边 16px 内生效），保留。
         if (Math.abs(nx) < SNAP) nx = 0;
         if (Math.abs(ny) < SNAP) ny = 0;
         if (Math.abs(props.bounds.width - (nx + rect.w)) < SNAP) nx = props.bounds.width - rect.w;
         if (Math.abs(props.bounds.height - (ny + rect.h)) < SNAP) ny = props.bounds.height - rect.h;
         rect.x = nx;
         rect.y = ny;
-        clampToBounds();
+        keepGrabbable();
       };
       const onUp = () => {
         if (snapPreview.value !== 'free') setPlacement(snapPreview.value);
@@ -278,7 +353,7 @@ export default defineComponent({
           if (dir.includes('n')) rect.y = orig.y + (orig.h - MIN_H);
           rect.h = MIN_H;
         }
-        clampToBounds();
+        keepGrabbable();
       };
       const onUp = () => {
         interacting.value = false;
@@ -315,13 +390,18 @@ export default defineComponent({
       def,
       pluginId,
       spaceLabel,
-      iconBg,
+      iconItem,
       rect,
       maximized,
       interacting,
       frameStyle,
       snapPreview,
       previewStyle,
+      frameEl,
+      leaving,
+      entering,
+      propsTargetAppId,
+      originStyle,
       setPlacement,
       resizeDirs: ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'] as ResizeDir[],
       focusSelf,
@@ -350,11 +430,52 @@ export default defineComponent({
   box-shadow: var(--spark-shadow-hover);
   overflow: hidden;
   transition: box-shadow var(--spark-dur-fast) var(--spark-ease-standard);
+  /* W6：开/收窗 0.15s scale 动效，锚点 = Dock 图标中心（--window-dock-origin 由脚本按 data-dock-app 实测注入，缺省底边中点）；
+     入场动效只在 .entering（挂载 / 最小化还原）时播放，拖动 / 缩放不再触发重播 */
+  transform-origin: var(--window-dock-origin, 50% 100%);
+}
+
+.window-frame.entering {
+  animation: window-pop-in var(--spark-dur-fast) var(--spark-ease-standard);
+}
+
+.window-frame.leaving {
+  animation: window-pop-out var(--spark-dur-fast) var(--spark-ease-standard) forwards;
+}
+
+@keyframes window-pop-in {
+  from { transform: scale(0.85); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+@keyframes window-pop-out {
+  from { transform: scale(1); opacity: 1; }
+  to { transform: scale(0.85); opacity: 0; }
 }
 
 .window-frame.active {
   box-shadow: var(--spark-shadow-pop);
   border-color: var(--spark-border);
+}
+
+/* 非激活窗口（Windows/macOS 式退后感）：投影减弱、标题栏文字与控件降灰，
+   与激活窗口一眼可辨；内容区不动（不遮罩、不降透明度，保持可读可操作） */
+.window-frame:not(.active) {
+  box-shadow: var(--spark-shadow-card);
+}
+
+.window-frame:not(.active) .window-titlebar {
+  color: var(--spark-text-3);
+}
+
+.window-frame:not(.active) .window-title,
+.window-frame:not(.active) .window-space {
+  color: var(--spark-text-3);
+}
+
+.window-frame:not(.active) .window-title-icon {
+  filter: saturate(0.6);
+  opacity: 0.85;
 }
 
 .window-frame.dragging {

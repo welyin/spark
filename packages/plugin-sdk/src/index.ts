@@ -1424,6 +1424,11 @@ export type PluginManifest = {
   description: string;
   /** 展示分类（市场筛选用） */
   category: PluginCategory;
+  /** 包内图标（可选，plugin-dist §2.3 ①）：包内相对路径（推荐 "assets/icon.svg"；
+   *  SVG 优先或 PNG 512×512，内容画在方形安全区内、自含底色）。壳层经
+   *  plugin://localhost/<id>/<path> 以 <img> 引用读取（该协议只服务已安装且
+   *  已启用的包）；与仓库声明文件 spark-plugin.json 的 icon 必须同图 */
+  icon?: string;
   /** 默认入口视图 id，必须存在于 views 中 */
   entryView: string;
   /** 插件可运行的空间类型 */

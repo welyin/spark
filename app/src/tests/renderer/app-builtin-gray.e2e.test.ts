@@ -43,7 +43,6 @@ vi.mock('../../components/TopNavbar.vue', () => ({ default: { name: 'TopNavbarSt
 vi.mock('../../components/UserAvatarMenu.vue', () => ({ default: { name: 'UserAvatarMenuStub', template: '<div />' } }));
 vi.mock('../../components/MobileTabBar.vue', () => ({ default: { name: 'MobileTabBarStub', template: '<div />' } }));
 vi.mock('../../components/MobileTopBar.vue', () => ({ default: { name: 'MobileTopBarStub', template: '<div />' } }));
-vi.mock('../../components/MobileSpaceDrawer.vue', () => ({ default: { name: 'MobileSpaceDrawerStub', template: '<div />' } }));
 // 插件宿主打占位：记录 props 与暴露 close 触发（模板标记 pluginId 便于断言）
 vi.mock('../../components/plugin/PluginIframeHost.vue', () => ({
   default: {
@@ -111,7 +110,7 @@ async function flush(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-/** PC 壳层页面已窗口化：点 rail「全部消息」在当前桌面开消息窗口 */
+/** PC 左栏入口统一顶级对话框＋遮罩（problem L12）：点 rail「全部消息」开消息模态对话框 */
 async function openMessagesWindow(host: HTMLElement): Promise<void> {
   const btn = host.querySelector<HTMLElement>('.rail-main .rail-item[title="全部消息"]');
   expect(btn).not.toBeNull();
@@ -120,17 +119,17 @@ async function openMessagesWindow(host: HTMLElement): Promise<void> {
 }
 
 describe('App.vue 默认内置应用灰度切换（A19）', () => {
-  it('默认渲染旧内置 UI（消息窗口 = MessagesPage）', async () => {
+  it('默认渲染旧内置 UI（消息模态 = MessagesPage）', async () => {
     const host = mountApp();
     await flush();
-    // PC 默认落桌面（无消息页），点「全部消息」后窗口内为 legacy 消息页
+    // PC 默认落桌面（无消息页），点「全部消息」后顶级对话框内为 legacy 消息页（L12）
     expect(host.querySelector('.stub-messages-page')).toBeNull();
     await openMessagesWindow(host);
-    expect(host.querySelector('.window-frame .stub-messages-page')).not.toBeNull();
+    expect(host.querySelector('.shell-modal .stub-messages-page')).not.toBeNull();
     expect(host.querySelector('.stub-plugin-host')).toBeNull();
   });
 
-  it('切到插件版：消息窗口改挂 spark-chat 插件宿主，切回 legacy 恢复旧 UI', async () => {
+  it('切到插件版：消息模态改挂 spark-chat 插件宿主，切回 legacy 恢复旧 UI', async () => {
     const host = mountApp();
     await flush();
     await openMessagesWindow(host);

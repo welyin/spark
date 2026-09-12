@@ -102,6 +102,12 @@ impl PluginMarketService {
             .unwrap_or_default();
         let supported_spaces = normalize_supported_spaces(inner.as_ref().and_then(|m| m.supported_spaces.clone()));
         let window = super::catalog::normalize_window(inner.as_ref().and_then(|m| m.window));
+        // 插件名落库（市场条目名称回落链的一环：声明缓存 → 本字段 → 包内回填 → pluginId）
+        let name = inner
+            .as_ref()
+            .and_then(|m| m.name.clone())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| plugin_id.clone());
         let requires = inner.and_then(|m| m.requires).and_then(normalize_requires);
 
         let plugin_dir = self.paths.packages_root.join(&plugin_id).join("packages");
@@ -112,6 +118,7 @@ impl PluginMarketService {
 
         let installed_state = InstalledPluginState {
             plugin_id: plugin_id.clone(),
+            name,
             version: container.version.clone(),
             package_path: file_path.to_string_lossy().to_string(),
             sha256: digest,
@@ -265,6 +272,7 @@ mod tests {
             "spark-contacts".to_string(),
             InstalledPluginState {
                 plugin_id: "spark-contacts".to_string(),
+                name: String::new(),
                 version: "9.9.9".to_string(),
                 package_path: "user-package.spkg".to_string(),
                 sha256: "x".to_string(),

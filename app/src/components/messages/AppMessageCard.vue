@@ -159,7 +159,16 @@ export default defineComponent({
             // 深链统一（3.5 / README §6.2）：主实例未运行时动作不丢弃——经统一深链
             // 拉起该插件主视图并携带卡片上下文（affair 类卡片带 affairId 定位详情）
             if (!delivered) {
-              openPluginDeepLink({ pluginId: props.pluginId, cardData: props.cardData, actionId });
+              openPluginDeepLink({
+                pluginId: props.pluginId,
+                cardData: props.cardData,
+                actionId,
+                // D9：卡片所在域随深链携带，主实例拉起前先切到该域
+                space:
+                  props.space.type === 'personal'
+                    ? { type: 'personal' }
+                    : { type: 'org', orgId: props.space.id },
+              });
             }
           }
         });

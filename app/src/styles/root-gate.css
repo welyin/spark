@@ -1,7 +1,10 @@
-/* RootGate 登录门：居中品牌区 + 白色登录面板 */
+/* RootGate 登录门：居中品牌区 + 登录面板。
+   底色＝窗口底色（--el-bg-color，同系统原生标题栏），与系统窗口融为一体；
+   深浅色随 OS 主题（跟随系统为本应用默认，stores/theme） */
 
 .root-gate {
   min-height: 100vh;
+  background: var(--spark-bg-card);
 }
 
 .gate-wrap {

@@ -2,7 +2,8 @@
  * PC 空间桌面 · 应用注册表（阶段 2 / ui-architecture §4.2 两级状态分离之「应用注册表」）。
  *
  * 当前空间已装插件 → Map<appId, AppDef>。数据源 = pluginMarket.list() 过滤
- * 「installed && 本空间可见（supportedSpaces）」，与 AppsPage / SpaceDesktop 同口径。
+ * 「installed && 本空间可见（supportedSpaces）&& 本空间已启用（app-enablement）」，
+ * 与 AppsPage / SpaceDesktop 同口径（启用为 per-space 事实源，install-and-enable §一②）。
  * 模块级单例 ref，按当前空间（current-space）变化自动重建。
  *
  * appId 取插件 id（仓库规范化地址），一插件一应用；窗口实例（多开）由
@@ -11,8 +12,10 @@
 import { computed, ref, watch } from 'vue';
 import type { PluginMarketItemDto } from '../../api/types';
 import { currentSpace } from '../current-space';
+import { isAppEnabledInSpace } from '../app-enablement';
 import { isPluginVisibleInSpace } from '../../components/apps/space-visibility';
 import { listMockApps } from '../../mock/apps';
+import { listDevPlugins } from '../../mock/dev-plugins';
 import { mockMode } from '../../mock/mode';
 
 /** 应用定义：桌面图标与开窗所需的最小描述（参照 ark AppDef，载体恒为插件 iframe） */
@@ -23,7 +26,8 @@ export interface AppDef {
   pluginDomain: string;
   /** 名称（图标下文字 / 窗口标题） */
   name: string;
-  /** 图标文本（首字符，图标着色由 appIconBackground 按 id 哈希） */
+  /** 图标首字符文本（plugin-dist §2.3 起图标渲染统一由 AppIcon 组件的回退链承担，
+   *  本字段仅作数据保留，展示位不再直接消费） */
   icon: string;
   /** 默认打开的视图（manifest views[0]，缺省 'default'） */
   view: string;
@@ -92,18 +96,27 @@ async function refresh(): Promise<void> {
   }
 }
 
-/** 应用注册表：当前空间已装且本空间可见的应用（Map<appId, AppDef>），随空间切换重建 */
+/** 应用注册表：当前空间可见且本空间已启用的应用（Map<appId, AppDef>），随空间切换重建。
+ *  启用判定读 per-space 事实源（app-enablement，install-and-enable §一②）。
+ *  2026-09-10 形式化定义后：启用＝空间层纯逻辑状态，**不要求代码在场**——
+ *  已启用未安装的应用照常出现在桌面/启动器（空间的逻辑构成），代码在打开时就地获取
+ *  （WindowFrame 缺代码时提示安装，install-and-enable §一"打开 / 运行"节）。 */
 export const appRegistry = computed<Map<string, AppDef>>(() => {
   const map = new Map<string, AppDef>();
   const items = new Map([
     ...(mockMode() ? listMockApps() : []),
+    ...listDevPlugins(),
     ...allItems.value
   ].map((item) => [item.id, item]));
+  const space =
+    currentSpace.value.type === 'org'
+      ? { type: 'org', orgId: currentSpace.value.orgId } as const
+      : { type: 'personal' } as const;
   for (const item of items.values()) {
-    if (!item.installed) {
+    if (!isPluginVisibleInSpace(item.supportedSpaces, currentSpace.value.type)) {
       continue;
     }
-    if (!isPluginVisibleInSpace(item.supportedSpaces, currentSpace.value.type)) {
+    if (!isAppEnabledInSpace(space, item)) {
       continue;
     }
     map.set(item.id, toAppDef(item));
@@ -125,17 +138,32 @@ const SHELL_APPS: Record<string, AppDef> = {
   'spark:affairs': { id: 'spark:affairs', pluginDomain: '', name: '所有事务', icon: '事', view: '', defaultWidth: 960, defaultHeight: 660 },
   'spark:mine': { id: 'spark:mine', pluginDomain: '', name: '我的', icon: '我', view: '', defaultWidth: 1000, defaultHeight: 680 },
   'spark:settings': { id: 'spark:settings', pluginDomain: '', name: '设置', icon: '设', view: '', defaultWidth: 1000, defaultHeight: 680 },
-  'spark:test': { id: 'spark:test', pluginDomain: '', name: '测试', icon: '测', view: '', defaultWidth: 960, defaultHeight: 660 }
+  'spark:test': { id: 'spark:test', pluginDomain: '', name: '测试', icon: '测', view: '', defaultWidth: 960, defaultHeight: 660 },
+  'spark:app-properties': { id: 'spark:app-properties', pluginDomain: '', name: '属性', icon: '性', view: '', defaultWidth: 520, defaultHeight: 640 },
+  'spark:space-market': { id: 'spark:space-market', pluginDomain: '', name: '应用市场', icon: '市', view: '', defaultWidth: 900, defaultHeight: 620 }
 };
 
-/** 按 appId 查应用定义（开窗时取标题/尺寸/视图） */
+/** 按 appId 查应用定义（开窗时取标题/尺寸/视图）。
+ *  有意不查安装态与启用态：运行中窗口/Dock 标签在应用被停用/卸载后仍需可解析标题；
+ *  「当前空间已启用」过滤只作用于 appRegistry/appList（桌面图标与启动器入口）。
+ *  已启用未安装的应用（启用＝逻辑状态，2026-09-10 形式化定义）同样可解析，
+ *  缺代码的打开提示由 WindowFrame 承担。 */
 export function getApp(appId: string, spaceType = currentSpace.value.type): AppDef | null {
   if (SHELL_APPS[appId]) {
     return SHELL_APPS[appId];
   }
-  const item = allItems.value.find((entry) => entry.id === appId)
-    ?? (mockMode() ? listMockApps().find((entry) => entry.id === appId) : undefined);
-  return item?.installed && isPluginVisibleInSpace(item.supportedSpaces, spaceType) ? toAppDef(item) : null;
+  const item = getMarketItem(appId);
+  return item && isPluginVisibleInSpace(item.supportedSpaces, spaceType) ? toAppDef(item) : null;
+}
+
+/** 按 appId 取市场条目（含安装态/权限/签名；mock 模式含 mock 应用，dev 链路含本地开发插件） */
+export function getMarketItem(appId: string): PluginMarketItemDto | null {
+  return (
+    allItems.value.find((entry) => entry.id === appId) ??
+    (mockMode() ? listMockApps().find((entry) => entry.id === appId) : undefined) ??
+    listDevPlugins().find((entry) => entry.id === appId) ??
+    null
+  );
 }
 
 /** 手动刷新（安装/卸载/启停后由调用方触发；桌面挂载时也会调一次兜底） */

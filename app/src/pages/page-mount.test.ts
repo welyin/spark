@@ -44,7 +44,7 @@ const click = async (el: HTMLElement, selector: string) => {
 };
 
 describe('主页面挂载冒烟', () => {
-  it('App 外壳：rail 导航 + 桌面常驻；壳层页面在桌面窗口内打开（shell-desktop §一）', async () => {
+  it('App 外壳：rail 导航 + 桌面常驻；左栏入口开顶级对话框＋遮罩（problem L12 / shell-desktop §一）', async () => {
     const { el, errors, unmount } = await mountPage(App);
     expect(errors.map(String)).toEqual([]);
     expect(el.querySelector('.rail')).toBeTruthy();
@@ -52,9 +52,12 @@ describe('主页面挂载冒烟', () => {
     expect(el.querySelector('.topbar')).toBeTruthy();
     expect(el.querySelector('.pc-desktop')).toBeTruthy();
     expect(el.querySelector('.messages-page')).toBeFalsy();
-    // 点「全部消息」：当前桌面弹出消息窗口（窗口内为消息页）
+    // 点「全部消息」：开顶级对话框（L12），对话框内为消息页；不再以桌面窗口打开
     await click(el, '.rail-main .rail-item[title="全部消息"]');
-    expect(el.querySelector('.window-frame .messages-page')).toBeTruthy();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await nextTick();
+    expect(el.querySelector('.shell-modal .messages-page')).toBeTruthy();
+    expect(el.querySelector('.window-frame .messages-page')).toBeFalsy();
     // 桌面端反断言：移动端底部 tab 导航不渲染（仅窄屏 ≤768px 出现）
     expect(el.querySelector('.mobile-tab-bar')).toBeFalsy();
     unmount();

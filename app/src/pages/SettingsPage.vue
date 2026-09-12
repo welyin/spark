@@ -21,7 +21,12 @@
             :class="{ active: activeMenu === item.key }"
             @click="onSelectMenu(item.key)"
           >
-            <el-icon class="mine-menu-icon" :size="17" :style="{ color: item.color }"><component :is="item.icon" /></el-icon>
+            <el-icon
+              class="mine-menu-icon"
+              :size="17"
+              :style="{ color: item.color }"
+              ><component :is="item.icon"
+            /></el-icon>
             <span class="mine-menu-label">{{ item.label }}</span>
           </button>
         </nav>
@@ -29,15 +34,31 @@
         <!-- 账号操作（Android 前端改造）：原顶栏「⋯」菜单下放，退出登录位于设置最底层 -->
         <div class="mine-menu-account">
           <button type="button" class="mine-menu-item" @click="goTest">
-            <el-icon class="mine-menu-icon" :size="17" :style="{ color: '#94a3b8' }"><Cpu /></el-icon>
+            <el-icon
+              class="mine-menu-icon"
+              :size="17"
+              :style="{ color: '#94a3b8' }"
+              ><Cpu
+            /></el-icon>
             <span class="mine-menu-label">测试</span>
           </button>
           <button type="button" class="mine-menu-item" @click="switchAccount">
-            <el-icon class="mine-menu-icon" :size="17" :style="{ color: '#f7b500' }"><SwitchButton /></el-icon>
+            <el-icon
+              class="mine-menu-icon"
+              :size="17"
+              :style="{ color: '#f7b500' }"
+              ><SwitchButton
+            /></el-icon>
             <span class="mine-menu-label">切换账号</span>
           </button>
-          <button type="button" class="mine-menu-item mine-menu-danger" @click="logout">
-            <el-icon class="mine-menu-icon" :size="17"><CircleCloseFilled /></el-icon>
+          <button
+            type="button"
+            class="mine-menu-item mine-menu-danger"
+            @click="logout"
+          >
+            <el-icon class="mine-menu-icon" :size="17"
+              ><CircleCloseFilled
+            /></el-icon>
             <span class="mine-menu-label">退出登录</span>
           </button>
         </div>
@@ -46,12 +67,19 @@
       <!-- 栈2/栈3：顶部返回栏 + 分组页/模块页（面板 section 打开时其覆盖层以页面为基准整页盖住本栏，
            无需再隐藏——隐藏/复现会导致面板 reflow、离场动画起始位置偏下） -->
       <template v-else>
-        <MobileBackBar v-if="mobileCanBack" :title="mobileTitle" @back="onMobileBack" />
+        <MobileBackBar
+          v-if="mobileCanBack"
+          :title="mobileTitle"
+          @back="onMobileBack"
+        />
 
         <!-- 个人设置（个人/组织空间均有）：栈2=模块菜单分组页；个人空间另有系统设置 -->
         <template v-if="isPersonal || activeMenu === 'mine'">
           <!-- 栈2：个人设置的模块菜单 -->
-          <div v-if="activeMenu === 'mine' && mobileFrame.page === 'section'" class="mine-list">
+          <div
+            v-if="activeMenu === 'mine' && mobileFrame.page === 'section'"
+            class="mine-list"
+          >
             <h2 class="mine-list-title">个人设置</h2>
             <div class="mine-list-items">
               <button
@@ -62,9 +90,17 @@
                 :class="{ active: activeModule === item.key }"
                 @click="onSelectModule(item.key)"
               >
-                <el-icon class="mine-list-item-icon" :size="17" :style="{ color: item.color }"><component :is="item.icon" /></el-icon>
+                <el-icon
+                  class="mine-list-item-icon"
+                  :size="17"
+                  :style="{ color: item.color }"
+                  ><component :is="item.icon"
+                /></el-icon>
                 <!-- M1 新设备通知红点：设备管理项有待看通知时挂小红点（进设备管理页即清） -->
-                <el-badge v-if="item.key === 'devices' && pendingDeviceNotices.length" is-dot>
+                <el-badge
+                  v-if="item.key === 'devices' && pendingDeviceNotices.length"
+                  is-dot
+                >
                   <b class="settings-module-label">{{ item.label }}</b>
                 </el-badge>
                 <b v-else class="settings-module-label">{{ item.label }}</b>
@@ -72,12 +108,16 @@
             </div>
           </div>
           <SystemSettingsPanel
-            v-else-if="activeMenu === 'system' && mobileFrame.page === 'section'"
+            v-else-if="
+              activeMenu === 'system' && mobileFrame.page === 'section'
+            "
             :initial-section="systemInitialSection ?? undefined"
           />
 
           <!-- 栈3：选中模块的列表栏（模块编辑页以抽屉打开，不占第五栏） -->
-          <template v-if="activeMenu === 'mine' && mobileFrame.page === 'module'">
+          <template
+            v-if="activeMenu === 'mine' && mobileFrame.page === 'module'"
+          >
             <ProfileModule
               v-if="activeModule === 'profile'"
               detail-mode="drawer"
@@ -86,12 +126,34 @@
               :avatar="currentUser.avatar"
               @profile-updated="onProfileUpdated"
             />
-            <MyCardModule v-else-if="activeModule === 'card'" detail-mode="drawer" />
-            <PermissionModule v-else-if="activeModule === 'permission'" detail-mode="drawer" mode="personal" />
-            <BackupModule v-else-if="activeModule === 'backup'" detail-mode="drawer" :root-id="rootStatus.rootId" />
-            <SecurityModule v-else-if="activeModule === 'security'" detail-mode="drawer" :root-id="rootStatus.rootId ?? ''" />
-            <DevicesModule v-else-if="activeModule === 'devices'" detail-mode="drawer" :root-id="rootStatus.rootId ?? ''" />
-            <StorageModule v-else-if="activeModule === 'storage'" />
+            <MyCardModule
+              v-else-if="activeModule === 'card'"
+              detail-mode="drawer"
+            />
+            <PermissionModule
+              v-else-if="activeModule === 'permission'"
+              detail-mode="drawer"
+              mode="personal"
+            />
+            <BackupModule
+              v-else-if="activeModule === 'backup'"
+              detail-mode="drawer"
+              :root-id="rootStatus.rootId"
+            />
+            <SecurityModule
+              v-else-if="activeModule === 'security'"
+              detail-mode="drawer"
+              :root-id="rootStatus.rootId ?? ''"
+            />
+            <DevicesModule
+              v-else-if="activeModule === 'devices'"
+              detail-mode="drawer"
+              :root-id="rootStatus.rootId ?? ''"
+            />
+            <StorageModule
+              v-else-if="activeModule === 'storage'"
+              @open-backup="onSelectModule('backup')"
+            />
             <!-- 未选模块时的占位 -->
             <div v-else class="mine-detail settings-module-empty">
               <el-empty description="选择左侧模块查看" />
@@ -105,7 +167,9 @@
             v-if="activeMenu === 'space' && mobileFrame.page === 'section'"
           />
           <SystemSettingsPanel
-            v-else-if="activeMenu === 'system' && mobileFrame.page === 'section'"
+            v-else-if="
+              activeMenu === 'system' && mobileFrame.page === 'section'
+            "
             :initial-section="systemInitialSection ?? undefined"
           />
         </template>
@@ -124,10 +188,17 @@
             :avatar="headerAvatar.image"
             :size="44"
           />
-          <OrgAvatar v-else :org-id="currentSpaceOrgId" :name="currentOrgName" :size="44" />
+          <OrgAvatar
+            v-else
+            :org-id="currentSpaceOrgId"
+            :name="currentOrgName"
+            :size="44"
+          />
           <div class="mine-menu-user">
             <b>设置</b>
-            <span>{{ isPersonal ? `${headerAvatar.name}的个人空间` : currentOrgName }}</span>
+            <span>{{
+              isPersonal ? personalSpaceName : currentOrgName
+            }}</span>
           </div>
         </header>
         <nav class="mine-menu-list">
@@ -139,7 +210,12 @@
             :class="{ active: activeMenu === item.key }"
             @click="onSelectMenu(item.key)"
           >
-            <el-icon class="mine-menu-icon" :size="17" :style="{ color: item.color }"><component :is="item.icon" /></el-icon>
+            <el-icon
+              class="mine-menu-icon"
+              :size="17"
+              :style="{ color: item.color }"
+              ><component :is="item.icon"
+            /></el-icon>
             <span class="mine-menu-label">{{ item.label }}</span>
           </button>
         </nav>
@@ -159,9 +235,17 @@
               :class="{ active: activeModule === item.key }"
               @click="onSelectModule(item.key)"
             >
-              <el-icon class="mine-list-item-icon" :size="17" :style="{ color: item.color }"><component :is="item.icon" /></el-icon>
+              <el-icon
+                class="mine-list-item-icon"
+                :size="17"
+                :style="{ color: item.color }"
+                ><component :is="item.icon"
+              /></el-icon>
               <!-- M1 新设备通知红点：设备管理项有待看通知时挂小红点（进设备管理页即清） -->
-              <el-badge v-if="item.key === 'devices' && pendingDeviceNotices.length" is-dot>
+              <el-badge
+                v-if="item.key === 'devices' && pendingDeviceNotices.length"
+                is-dot
+              >
                 <b class="settings-module-label">{{ item.label }}</b>
               </el-badge>
               <b v-else class="settings-module-label">{{ item.label }}</b>
@@ -180,12 +264,33 @@
             :avatar="currentUser.avatar"
             @profile-updated="onProfileUpdated"
           />
-          <MyCardModule v-else-if="activeModule === 'card'" detail-mode="drawer" />
-          <PermissionModule v-else-if="activeModule === 'permission'" detail-mode="drawer" mode="personal" />
-          <BackupModule v-else-if="activeModule === 'backup'" detail-mode="drawer" :root-id="rootStatus.rootId" />
-          <SecurityModule v-else-if="activeModule === 'security'" detail-mode="drawer" />
-          <DevicesModule v-else-if="activeModule === 'devices'" detail-mode="drawer" :root-id="rootStatus.rootId ?? ''" />
-          <StorageModule v-else-if="activeModule === 'storage'" />
+          <MyCardModule
+            v-else-if="activeModule === 'card'"
+            detail-mode="drawer"
+          />
+          <PermissionModule
+            v-else-if="activeModule === 'permission'"
+            detail-mode="drawer"
+            mode="personal"
+          />
+          <BackupModule
+            v-else-if="activeModule === 'backup'"
+            detail-mode="drawer"
+            :root-id="rootStatus.rootId"
+          />
+          <SecurityModule
+            v-else-if="activeModule === 'security'"
+            detail-mode="drawer"
+          />
+          <DevicesModule
+            v-else-if="activeModule === 'devices'"
+            detail-mode="drawer"
+            :root-id="rootStatus.rootId ?? ''"
+          />
+          <StorageModule
+            v-else-if="activeModule === 'storage'"
+            @open-backup="onSelectModule('backup')"
+          />
           <!-- 未选模块时的占位 -->
           <div v-else class="mine-detail settings-module-empty">
             <el-empty description="选择左侧模块查看" />
@@ -203,7 +308,14 @@
 </template>
 
 <script lang="ts">
-import { computed, defineComponent, onMounted, ref, watch, type Component } from 'vue';
+import {
+  computed,
+  defineComponent,
+  onMounted,
+  ref,
+  watch,
+  type Component,
+} from 'vue';
 import {
   CircleCloseFilled,
   Coin,
@@ -216,18 +328,28 @@ import {
   Setting,
   SwitchButton,
   Unlock,
-  User
+  User,
 } from '@element-plus/icons-vue';
 import { currentSpace, currentSpaceOrgId } from '../stores/current-space';
 import { spaceKeyOf } from '../mock/space-key';
 import { nameOf, refreshOrganizations } from '../stores/org-membership';
 import { isMobileLayout } from '../stores/ui-layout';
-import { canBack, currentPage, popPage, pushPage, resetStack } from '../stores/mobile-nav';
-import { consumePendingSystemSection, type SystemSectionKey } from '../stores/pending-system-section';
+import {
+  canBack,
+  currentPage,
+  popPage,
+  pushPage,
+  resetStack,
+} from '../stores/mobile-nav';
+import {
+  consumePendingSystemSection,
+  type SystemSectionKey,
+} from '../stores/pending-system-section';
 import { pendingDeviceNotices } from '../stores/device-notices';
 import type { RootStatusDto as RootStatus } from '../api';
 import { currentUser } from '../stores/current-user';
 import { personalAvatarSource } from '../stores/avatar-sources';
+import { personalSpaceName } from '../stores/personal-space';
 import { lockAndReload } from '../utils/identity-lock';
 import UserAvatar from '../components/UserAvatar.vue';
 import OrgAvatar from '../components/OrgAvatar.vue';
@@ -246,7 +368,14 @@ import SystemSettingsPanel from '../components/settings/SystemSettingsPanel.vue'
 type MenuKey = 'mine' | 'space' | 'system';
 
 /** 个人设置下的模块（第三栏菜单，点击后右侧展开；设备管理由系统设置迁入，网络状态仍在系统设置） */
-type PersonalModuleKey = 'profile' | 'card' | 'permission' | 'backup' | 'devices' | 'security' | 'storage';
+type PersonalModuleKey =
+  | 'profile'
+  | 'card'
+  | 'permission'
+  | 'backup'
+  | 'devices'
+  | 'security'
+  | 'storage';
 
 /** 本页在导航栈中的 tab 键（设置不在底部 tab，经顶栏「⋯」进入，键与 App.vue activeTab 一致） */
 const MOBILE_TAB = 'settings';
@@ -270,48 +399,70 @@ export default defineComponent({
     Cpu,
     SwitchButton,
     CircleCloseFilled,
-    Monitor
+    Monitor,
   },
   emits: ['profile-updated', 'open-tab', 'back-root'],
   setup(_, { emit }) {
-    const activeMenu = ref<MenuKey>(currentSpace.value.type === 'org' ? 'space' : 'mine');
+    const activeMenu = ref<MenuKey>(
+      currentSpace.value.type === 'org' ? 'space' : 'mine',
+    );
     const activeModule = ref<PersonalModuleKey | null>(null);
-    const rootStatus = ref<RootStatus>({ initialized: false, unlocked: false, rootId: null, nickname: null, avatar: null });
+    const rootStatus = ref<RootStatus>({
+      initialized: false,
+      unlocked: false,
+      rootId: null,
+      nickname: null,
+      avatar: null,
+    });
     // 系统设置深链初始 section（移动端网络状态点直达 netStatus；消费后保持，仅首次挂载生效）
     const systemInitialSection = ref<SystemSectionKey | null>(null);
 
     const isPersonal = computed(() => currentSpace.value.type === 'personal');
     // 空间 key（'personal' / 'org:<orgId>'）：组织 A→B 切换时 isPersonal 不变，watch 须以 spaceKey 为口径
     const spaceKey = computed(() => spaceKeyOf(currentSpace.value));
-    const currentOrgName = computed(() => nameOf(currentSpaceOrgId.value) ?? '组织空间');
+    const currentOrgName = computed(
+      () => nameOf(currentSpaceOrgId.value) ?? '组织空间',
+    );
     // 页头个人头像：统一取数（stores/avatar-sources），与 rail/空间切换器同源
     const headerAvatar = computed(() => personalAvatarSource());
 
     // color 为菜单图标色（微信式每项一色，取色与 utils/palette 品牌色板同源，移动端与桌面端统一上色）
-    const menuItems = computed<Array<{ key: MenuKey; label: string; icon: Component; color: string }>>(() => {
+    const menuItems = computed<
+      Array<{ key: MenuKey; label: string; icon: Component; color: string }>
+    >(() => {
       if (isPersonal.value) {
         return [
           { key: 'mine', label: '个人设置', icon: User, color: '#3296fa' },
-          { key: 'system', label: '系统设置', icon: Setting, color: '#64748b' }
+          { key: 'system', label: '系统设置', icon: Setting, color: '#64748b' },
         ];
       }
       return [
-        { key: 'space', label: '组织设置', icon: OfficeBuilding, color: '#00b8a9' },
+        {
+          key: 'space',
+          label: '组织设置',
+          icon: OfficeBuilding,
+          color: '#00b8a9',
+        },
         { key: 'mine', label: '个人设置', icon: User, color: '#3296fa' },
-        { key: 'system', label: '系统设置', icon: Setting, color: '#64748b' }
+        { key: 'system', label: '系统设置', icon: Setting, color: '#64748b' },
       ];
     });
 
     // 个人设置的模块：第二栏「个人设置」下第三栏的菜单项（color 同上，全端图标统一上色；
     // 设备管理由系统设置迁入）
-    const personalModules: Array<{ key: PersonalModuleKey; label: string; icon: Component; color: string }> = [
+    const personalModules: Array<{
+      key: PersonalModuleKey;
+      label: string;
+      icon: Component;
+      color: string;
+    }> = [
       { key: 'profile', label: '我的资料', icon: User, color: '#3296fa' },
       { key: 'card', label: '我的名片', icon: Postcard, color: '#34c19b' },
       { key: 'permission', label: '朋友权限', icon: Lock, color: '#ff7d00' },
       { key: 'security', label: '安全设置', icon: Unlock, color: '#7b61ff' },
       { key: 'backup', label: '账号备份', icon: Key, color: '#7b61ff' },
       { key: 'devices', label: '设备管理', icon: Monitor, color: '#3296fa' },
-      { key: 'storage', label: '存储与副本', icon: Coin, color: '#34c19b' }
+      { key: 'storage', label: '存储与副本', icon: Coin, color: '#34c19b' },
     ];
 
     // 空间切换（个人↔组织及组织 A→B）：菜单项集合变化，重置选中到各空间默认项，并清掉模块选中；移动端同步回栈底
@@ -351,9 +502,15 @@ export default defineComponent({
     const mobileTitle = computed(() => {
       const frame = mobileFrame.value;
       if (frame.page === 'module') {
-        return personalModules.find((item) => item.key === frame.params?.key)?.label ?? '个人设置';
+        return (
+          personalModules.find((item) => item.key === frame.params?.key)
+            ?.label ?? '个人设置'
+        );
       }
-      return menuItems.value.find((item) => item.key === frame.params?.key)?.label ?? '设置';
+      return (
+        menuItems.value.find((item) => item.key === frame.params?.key)?.label ??
+        '设置'
+      );
     });
 
     // 栈顶帧变化（重进按栈恢复 / 返回 pop / 复位）时同步选中分组与模块
@@ -363,18 +520,31 @@ export default defineComponent({
         if (!mobile) {
           return;
         }
-        if (frame.page === 'section' && menuItems.value.some((item) => item.key === frame.params?.key)) {
+        if (
+          frame.page === 'section' &&
+          menuItems.value.some((item) => item.key === frame.params?.key)
+        ) {
           activeMenu.value = frame.params?.key as MenuKey;
-        } else if (frame.page === 'module' && personalModules.some((item) => item.key === frame.params?.key)) {
+        } else if (
+          frame.page === 'module' &&
+          personalModules.some((item) => item.key === frame.params?.key)
+        ) {
           activeMenu.value = 'mine';
           activeModule.value = frame.params?.key as PersonalModuleKey;
         }
       },
-      { immediate: true }
+      { immediate: true },
     );
 
-    const onProfileUpdated = (result: { nickname: string | null; avatar: string | null }) => {
-      rootStatus.value = { ...rootStatus.value, nickname: result.nickname, avatar: result.avatar };
+    const onProfileUpdated = (result: {
+      nickname: string | null;
+      avatar: string | null;
+    }) => {
+      rootStatus.value = {
+        ...rootStatus.value,
+        nickname: result.nickname,
+        avatar: result.avatar,
+      };
       // 通知外壳刷新顶栏身份头像
       emit('profile-updated');
     };
@@ -426,6 +596,7 @@ export default defineComponent({
       // 本地 rootStatus 只在挂载/本页保存时更新，跨设备同步到的昵称进不来）
       currentUser,
       headerAvatar,
+      personalSpaceName,
       rootStatus,
       onProfileUpdated,
       isMobileLayout,
@@ -435,9 +606,9 @@ export default defineComponent({
       mobileTitle,
       onSelectMenu,
       onSelectModule,
-      onMobileBack
+      onMobileBack,
     };
-  }
+  },
 });
 </script>
 

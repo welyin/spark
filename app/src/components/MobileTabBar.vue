@@ -1,7 +1,12 @@
 <!-- 移动端底部 tab 导航（窄屏 ≤768px 时替代左侧 rail，由 App.vue 按 ui-layout 断点渲染）：
-     新 UI 四一级入口 消息/空间/事务/我的（docs/ui/README §五），「我的」固定最右；
+     五一级入口 消息/事务/空间/应用/设置（M4/M9，docs/ui/problem.md），「设置」固定最右；
      激活态与 rail 同一状态源（App.vue activeTab）；
-     底部 padding 吃 env(safe-area-inset-bottom)，内容避开 Android 手势导航条（桌面端 env() 为 0） -->
+     底部 padding 吃 env(safe-area-inset-bottom)，内容避开 Android 手势导航条（桌面端 env() 为 0）。
+     M11 角标口径：消息=未读会话数（unreadConversationCountOf，免打扰/已屏蔽不计）、
+     事务=「待我处理」数（affair-feed actionableCount，非全部进行中数）；
+     角标由本组件直连 store 自算（App.vue 不再经 props 传入）。
+     M13：再点一次当前 Tab——除 emit('select')（App.vue 重置该 tab 导航栈回列表页）外，
+     另派发 spark:tab-reselect 事件，列表页据以滚动回顶并触发刷新（同下拉刷新数据源）。 -->
 <template>
   <nav class="mobile-tab-bar">
     <button
@@ -9,10 +14,13 @@
       :key="tab.id"
       class="mobile-tab-item"
       :class="{ active: activeTab === tab.id }"
-      @click="emit('select', tab.id)"
+      @click="onSelect(tab.id)"
     >
-      <!-- 与 rail 一致：消息入口挂未读角标（>99 显示 99+） -->
+      <!-- M11：消息=未读会话数角标；事务=待我处理数角标（>99 显示 99+） -->
       <el-badge v-if="tab.id === 'messages'" :value="messagesBadge" :max="99" :hidden="messagesBadge === 0">
+        <el-icon :size="22"><component :is="tab.icon" /></el-icon>
+      </el-badge>
+      <el-badge v-else-if="tab.id === 'affairs'" :value="affairsBadge" :max="99" :hidden="affairsBadge === 0">
         <el-icon :size="22"><component :is="tab.icon" /></el-icon>
       </el-badge>
       <el-icon v-else :size="22"><component :is="tab.icon" /></el-icon>
@@ -22,26 +30,46 @@
 </template>
 
 <script lang="ts">
-import { defineComponent } from 'vue';
-import { ChatDotRound, Document, Grid, User } from '@element-plus/icons-vue';
+import { computed, defineComponent } from 'vue';
+import { Box, ChatDotRound, Document, Grid, Setting } from '@element-plus/icons-vue';
 import { MOBILE_TABS } from '../stores/ui-layout';
+import { unreadConversationCountOf } from '../stores/messages';
+import { spaceKeyOf } from '../mock/contacts';
+import { currentSpace } from '../stores/current-space';
+import { actionableCount } from '../stores/affairs/affair-feed';
+
+/** M13：重按当前 tab 事件（detail = tab id），列表页据以回顶 + 刷新 */
+export const TAB_RESELECT_EVENT = 'spark:tab-reselect';
 
 export default defineComponent({
   name: 'MobileTabBar',
-  components: { ChatDotRound, Grid, Document, User },
+  components: { ChatDotRound, Document, Grid, Box, Setting },
   props: {
     /** 当前激活 tab（App.vue activeTab，与 rail 同源；插件 tab 打开时无激活项） */
-    activeTab: { type: String, required: true },
-    messagesBadge: { type: Number, default: 0 }
+    activeTab: { type: String, required: true }
   },
   emits: ['select'],
-  setup(_, { emit }) {
+  setup(props, { emit }) {
     // 图标映射留在组件内：ui-layout 保持纯逻辑（tab 定义）便于单测；
     // emit 必须从 setup 上下文解构返回，模板里才能用 emit('select', id)
     // （裸 setup() 时模板中的 emit 是 undefined，点击静默无效）
-    const icons = { messages: ChatDotRound, space: Grid, affairs: Document, mine: User };
+    const icons = { messages: ChatDotRound, affairs: Document, space: Grid, apps: Box, settings: Setting };
     const tabs = MOBILE_TABS.map((tab) => ({ ...tab, icon: icons[tab.id] }));
-    return { tabs, emit };
+
+    // M11 角标口径：消息=未读会话数（不是未读消息总数）；事务=待我处理数（affair-feed 近似谓词）
+    const messagesBadge = computed(() => unreadConversationCountOf(spaceKeyOf(currentSpace.value)));
+    const affairsBadge = computed(() => actionableCount.value);
+
+    const onSelect = (id: string) => {
+      emit('select', id);
+      // M13：再点当前 tab——App.vue 的 handleMenuSelect 已把该 tab 栈重置回列表页，
+      // 这里补发 reselect 事件驱动「回顶部 + 刷新」（消息/事务页各自监听）
+      if (id === props.activeTab) {
+        window.dispatchEvent(new CustomEvent(TAB_RESELECT_EVENT, { detail: id }));
+      }
+    };
+
+    return { tabs, messagesBadge, affairsBadge, onSelect };
   }
 });
 </script>

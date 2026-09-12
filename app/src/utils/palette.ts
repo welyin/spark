@@ -13,11 +13,21 @@ const PALETTES: Array<[string, string]> = [
   ['#ff7d00', '#e56a00']
 ];
 
-export function hashGradient(seed: string): string {
+function hashOf(seed: string): number {
   let hash = 0;
   for (const char of seed || 'spark') {
     hash = (hash * 31 + (char.codePointAt(0) ?? 0)) >>> 0;
   }
-  const [from, to] = PALETTES[hash % PALETTES.length];
+  return hash;
+}
+
+export function hashGradient(seed: string): string {
+  const [from, to] = PALETTES[hashOf(seed) % PALETTES.length];
   return `linear-gradient(135deg, ${from}, ${to})`;
+}
+
+/** D16 每空间默认主题色：同一 seed 恒得同一色（取渐变板主色），
+    空间未自定义主题色时按 spaceId 派生，保证每空间独立且稳定 */
+export function hashColor(seed: string): string {
+  return PALETTES[hashOf(seed) % PALETTES.length][0];
 }

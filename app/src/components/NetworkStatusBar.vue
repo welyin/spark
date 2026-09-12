@@ -25,12 +25,24 @@
         <b>{{ statusLabel }}</b>
       </div>
       <p class="net-status-desc">{{ statusDescription }}</p>
+      <!-- G9：连接方式三态（P2P 直连 / 走中继 / 离线）在左栏状态点弹层可辨；
+           走中继如实说明「中继只见密文」（AutoNAT 推断，只读口径） -->
+      <div class="net-status-row">
+        <span>连接方式</span>
+        <b>{{ transportText }}</b>
+      </div>
+      <p v-if="transportText.includes('中继')" class="net-status-hint">中继节点只转发端到端密文，看不到消息内容。</p>
+      <!-- G6：副本不足 K 的非焦虑提示（不假装已冗余，也不催处置） -->
+      <p v-if="underKHint" class="net-status-hint">{{ underKHint }}</p>
     </div>
   </el-popover>
 
+  <!-- variant="full"（桌面顶栏右上，problem D3）：当前空间维度的网络状态胶囊。
+       弹层顶部标明口径（当前空间 · 空间名），底部注明与左栏「我的」里
+       全局/设备维度状态的区分，避免与全局 P2P 混淆 -->
   <el-popover v-else placement="bottom-end" :width="330" trigger="hover">
     <template #reference>
-      <button class="net-status-tag" :class="`is-${statusKind}`" :title="statusLabel">
+      <button class="net-status-tag" :class="`is-${statusKind}`" :title="`当前空间网络状态：${statusLabel}`">
         <span class="net-status-dot" :class="`is-${statusKind}`" />
         <span v-if="!compact" class="net-status-label">{{ statusLabel }}</span>
         <span v-if="!compact" class="net-status-count">{{ peerCountText }}</span>
@@ -38,6 +50,7 @@
     </template>
 
     <div class="net-status-panel">
+      <div class="net-status-scope">当前空间 · {{ spaceScopeText }}</div>
       <div class="net-status-panel-title">
         <span class="net-status-dot" :class="`is-${statusKind}`" />
         <b>{{ statusLabel }}</b>
@@ -45,10 +58,6 @@
       <p class="net-status-desc">{{ statusDescription }}</p>
 
       <template v-if="overview">
-        <div class="net-status-row">
-          <span>组织</span>
-          <b>{{ currentOrgName }}</b>
-        </div>
         <div class="net-status-row">
           <span>已连接副本</span>
           <b>{{ overview.connectedPeers + 1 }}/{{ overview.replicaTarget }}（含本机）</b>
@@ -76,17 +85,20 @@
           <span>网络连接</span>
           <b>{{ p2pInfo?.started ? `${p2pInfo.connectedPeers.length} 个节点` : '未启动' }}</b>
         </div>
-        <p class="net-status-hint">加入或切换到组织空间后，这里显示副本级状态。</p>
+        <p class="net-status-hint">个人空间无副本同步；加入或切换到组织空间后，此处显示该空间的副本级状态。</p>
       </template>
+
+      <p class="net-status-hint">此处仅反映当前空间；全局 / 设备维度网络状态见左栏「我的」。</p>
     </div>
   </el-popover>
 </template>
 
 <script lang="ts">
 import { computed, defineComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { listenP2pEvents, type OrgNetworkStatus, type OrgSyncOverviewDto, type OrgView, type P2pEventDto } from '../api';
+import { listenP2pEvents, type OrgNetworkStatus, type OrgSyncOverviewDto, type OrgView, type P2pEventDto, type RelayStatusDto } from '../api';
 import { currentOrgId } from '../stores/current-org';
 import { findOrg, refreshOrganizations } from '../stores/org-membership';
+import { personalSpaceName } from '../stores/personal-space';
 import { refreshNetworkStatus, useNetworkStatus } from '../stores/network-status';
 
 const STATUS_LABELS: Record<OrgNetworkStatus, string> = {
@@ -112,6 +124,8 @@ export default defineComponent({
   emits: ['open-network-status'],
   setup(props, { emit }) {
     const overview = ref<OrgSyncOverviewDto | null>(null);
+    // G9 连接方式三态数据源（仅 line 变体拉取；relay 快照只读）
+    const relayStatus = ref<RelayStatusDto | null>(null);
     // 全局 P2P 状态共享自 network-status store（统一轮询，避免与消息页等各自调接口）
     const { p2pInfoSnapshot: p2pInfo, connectedPeerCount } = useNetworkStatus();
     let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -119,11 +133,14 @@ export default defineComponent({
     let lastEventRefreshAt = 0;
 
     // 当前组织：只跟随当前空间（currentOrgId 由 currentSpace 派生）；
-    // 个人空间（空串）不再回退第一个组织，弹层显示全局 P2P 状态（ui-space-navbar §4.1）
+    // 个人空间（空串）不回退第一个组织，弹层按「当前空间=个人空间」口径展示（problem D3）。
+    // line 变体（rail「我的」名字下方）例外：rail 是系统根级区域，该状态恒为全局/设备维度，
+    // 不随空间切换（走查修正）——refreshOverview 对 line 变体直接跳过组织 overview
     const currentOrg = computed<OrgView | null>(() => {
       return findOrg(currentOrgId.value);
     });
-    const currentOrgName = computed(() => currentOrg.value?.name ?? '-');
+    /** 弹层口径行：组织空间=组织名，个人空间=个人空间名（可自定义，stores/personal-space） */
+    const spaceScopeText = computed(() => currentOrg.value?.name ?? personalSpaceName.value);
 
     const statusKind = computed<OrgNetworkStatus>(() => {
       if (overview.value) {
@@ -213,7 +230,39 @@ export default defineComponent({
       return `${connectedPeerCount.value} 节点`;
     });
 
+    /** G9 连接方式三态（line 变体弹层）：离线 / 经中继（AutoNAT 私有或有活跃预约）/ P2P 直连 */
+    const transportText = computed(() => {
+      const info = p2pInfo.value;
+      if (!info?.started || info.connectedPeers.length === 0) {
+        return '离线';
+      }
+      const relay = relayStatus.value;
+      if (relay && (relay.autonat === 'private' || relay.reservations.length > 0)) {
+        return '经中继';
+      }
+      if (relay && relay.autonat === 'public') {
+        return 'P2P 直连';
+      }
+      return 'P2P 直连（判定中）';
+    });
+
+    /** G6 副本不足 K 的非焦虑提示（仅组织空间且 K 口径适用时） */
+    const underKHint = computed(() => {
+      const o = overview.value;
+      if (!o || !o.kApplicable) {
+        return '';
+      }
+      return o.connectedPeers + 1 < o.replicaTarget
+        ? '副本暂不足目标数：待其他成员上线后自动补齐，无需额外操作。'
+        : '';
+    });
+
     const refreshOverview = async () => {
+      // line 变体（rail）恒为全局/设备维度：不拉组织 overview，状态只由全局 P2P 推导
+      if (props.variant === 'line') {
+        overview.value = null;
+        return;
+      }
       const org = currentOrg.value;
       if (!org) {
         overview.value = null;
@@ -234,6 +283,14 @@ export default defineComponent({
       }
       await refreshNetworkStatus();
       await refreshOverview();
+      // G9：仅 line 变体需要 relay 快照（连接方式三态）；其余变体不多发调用
+      if (props.variant === 'line') {
+        try {
+          relayStatus.value = await window.electronAPI.p2p.relayStatus();
+        } catch {
+          // 读取失败保持上一帧/空值，三态按「判定中」降级
+        }
+      }
     };
 
     const onP2pEvent = (_event: P2pEventDto) => {
@@ -272,10 +329,12 @@ export default defineComponent({
       overview,
       p2pInfo,
       peerCountText,
-      currentOrgName,
+      spaceScopeText,
       statusKind,
       statusLabel,
       statusDescription,
+      transportText,
+      underKHint,
       lastSyncedText,
       dhtModeText,
       recoveryText,
@@ -401,6 +460,13 @@ export default defineComponent({
   align-items: center;
   gap: 6px;
   font-size: var(--spark-font-size-placeholder);
+}
+
+/* D3 口径行：弹层顶部标明「当前空间 · 空间名」，与全局/设备维度区分 */
+.net-status-scope {
+  font-size: var(--spark-font-size-secondary);
+  color: var(--spark-text-3);
+  margin-bottom: 4px;
 }
 
 .net-status-desc {

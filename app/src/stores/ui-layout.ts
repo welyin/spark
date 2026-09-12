@@ -18,16 +18,17 @@ media.addEventListener('change', (event) => {
 
 /**
  * 底部 tab 定义：激活态与 rail 共用 App.vue 的 activeTab（同一状态源）。
- * 新 UI 四一级入口（docs/ui/README §五）：消息 · 空间 · 事务 · 我的，「我的」固定最右第四位。
- * 阶段 0：space / affairs 为占位页（建设中），正式形态按 todo 阶段 1/3 补齐；
- * 通讯录退出一级（转空间插件），应用市场收进空间（docs/ui §八决策 1/2）。
- * 设置/测试不在底部 tab，挪至顶栏右上角「⋯」菜单。
+ * M4/M9 走查定稿（docs/ui/problem.md）：五一级入口 消息 · 事务 · 空间 · 应用 · 设置——
+ * 「应用」＝系统层应用管理（AppsPage 升格一级 Tab）；第 5 位「设置」＝设置列表页
+ * （个人设置｜系统设置｜测试｜退出登录，原「我的」内容并入个人设置，MinePage 不再作独立 Tab）。
+ * 通讯录退出一级（转空间插件，docs/ui §八决策 1）。
  */
 export const MOBILE_TABS = [
   { id: 'messages', label: '消息' },
-  { id: 'space', label: '空间' },
   { id: 'affairs', label: '事务' },
-  { id: 'mine', label: '我的' }
+  { id: 'space', label: '空间' },
+  { id: 'apps', label: '应用' },
+  { id: 'settings', label: '设置' }
 ] as const;
 
 export type MobileTabId = (typeof MOBILE_TABS)[number]['id'];

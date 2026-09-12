@@ -37,7 +37,10 @@ export async function openAffairInPlugin(item: AffairFeedItem): Promise<OpenAffa
     return { ok: false, reason: 'no-plugin' };
   }
 
-  // 切域（当前 spark-affairs 为 personal 空间插件；锚定域语义就绪后按 item 所属域切换）
+  // 切域兜底：spark-affairs 适用域为组织域（manifest supportedSpaces:['org']，事务类型插件
+  // 典型适用域，install-and-enable §三）；但事务锚定域字段（A8/M35 待后端）就绪前无法得知
+  // 目标组织，暂保持既有个人域兜底不改——个人空间打开会被桥 dispatcher 的 supportedSpaces
+  // 校验拒绝，属已知过渡缺口（不虚构切到任一组织），待锚定域落地后按 item 所属域切换
   if (currentSpace.value.type !== 'personal') {
     switchToPersonal();
   }

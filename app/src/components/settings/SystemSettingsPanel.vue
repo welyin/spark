@@ -3,9 +3,9 @@
      账号与安全已移除（资料修改在「我的资料」、账号备份在「账号备份」模块），隐私组已删除（朋友权限模块覆盖） -->
 <template>
   <div class="system-settings-panel">
-  <!-- 第三栏：子菜单（移动端选中 section 时隐藏，内容整页覆盖） -->
+  <!-- 第三栏：子菜单（移动端选中 section 时隐藏，内容整页覆盖）；
+       不再带「系统设置」标题——宿主（壳层对话框 / 设置页分组页）已有标题，避免重复 -->
   <div class="mine-list panel-submenu" v-if="activeSection === null || !isMobileLayout">
-    <h2 class="mine-list-title">系统设置</h2>
     <div class="mine-list-items">
       <button
         v-for="item in sections"
@@ -158,6 +158,33 @@
             <el-radio-button value="dark">深色</el-radio-button>
           </el-radio-group>
         </div>
+        <!-- 显示模式（仅桌面；display_mode.rs）：窗口模式＝最大化锁定（不可还原小窗）/ 全屏，
+             切换即生效并持久化；移动端无窗口语义不渲染 -->
+        <div v-if="!isMobileLayout" class="settings-row">
+          <span>显示模式</span>
+          <el-radio-group
+            size="small"
+            :model-value="displayMode"
+            @update:model-value="setDisplayMode($event as 'windowed' | 'fullscreen')"
+          >
+            <el-radio-button value="windowed">窗口模式</el-radio-button>
+            <el-radio-button value="fullscreen">全屏</el-radio-button>
+          </el-radio-group>
+        </div>
+        <p v-if="!isMobileLayout" class="hint display-mode-hint">窗口模式为最大化锁定，不可还原为小窗口；切换即生效。</p>
+        <!-- G10 副本模式（仅桌面）：PC 默认完整副本、可手动设为只消费（叶子）。
+             内核暂无副本模式开关：此项为本机偏好（localStorage），说明文案如实注明生效时机 -->
+        <div v-if="!isMobileLayout" class="settings-row">
+          <span>副本模式</span>
+          <el-radio-group v-model="replicaMode" size="small">
+            <el-radio-button value="full">完整副本（默认）</el-radio-button>
+            <el-radio-button value="consume">只消费（叶子）</el-radio-button>
+          </el-radio-group>
+        </div>
+        <p v-if="!isMobileLayout" class="hint display-mode-hint">
+          完整副本：本机保存所属域数据并为他人提供副本；只消费：只拉取所需数据、不留整域副本（省磁盘，离线不可用）。
+          当前版本内核始终保存完整副本——此项为本机偏好记录，待内核支持只消费模式后生效。
+        </p>
         <!-- 聊天界面版本（A19 灰度，communication §五.3）：旧内置 UI 与
              默认内置插件版并存一个版本，数据源同一套（sled），切换零迁移。
              通讯录已转为空间桌面插件窗口（docs/ui 阶段 3），无壳层灰度面 -->
@@ -179,7 +206,7 @@
         </div>
       </div>
     </el-card>
-    <MockSettingGroup v-else-if="activeSection === 'notify'" title="消息通知" :items="notifyItems" hint="消息声音、桌面通知与免打扰。" />
+    <MockSettingGroup v-else-if="activeSection === 'notify'" title="消息通知" :items="notifyItems" :hint="notifyHint" />
 
     <!-- 生物识别解锁：移动端系统级能力，仅在移动端展示 -->
     <el-card v-else-if="activeSection === 'biometric'" shadow="never" class="panel-card">
@@ -235,6 +262,7 @@
 <script lang="ts">
 import { computed, defineComponent, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue';
 import { Bell, Coin, Connection, Document, InfoFilled, SetUp, Share, Unlock } from '@element-plus/icons-vue';
+import { ElMessage } from 'element-plus';
 import type { DataUsageReportDto, P2pInfoDto as P2PInfo, RelayStatusDto } from '../../api';
 import { formatBytes } from '../../utils/format';
 import { DISCLAIMER_PARAGRAPHS } from '../../utils/disclaimer';
@@ -282,7 +310,6 @@ const NOTIFY_ITEMS: MockSettingItem[] = [
   { key: 'badge', label: '桌面角标' },
   { key: 'dnd', label: '免打扰时段' }
 ];
-
 export default defineComponent({
   name: 'SystemSettingsPanel',
   components: {
@@ -340,6 +367,38 @@ export default defineComponent({
     const dataMessage = ref('');
     const dataActionRunning = ref(false);
     const generalStates = ref<Record<string, boolean>>({});
+    // G10 副本模式本机偏好（仅桌面）：'full'=完整副本（默认）/ 'consume'=只消费（叶子）；
+    // 内核暂无开关，先持久化偏好并如实注明（待内核支持后生效）
+    const replicaMode = ref<'full' | 'consume'>(
+      localStorage.getItem('spark:replica-mode') === 'consume' ? 'consume' : 'full'
+    );
+    watch(replicaMode, (mode) => localStorage.setItem('spark:replica-mode', mode));
+    // 显示模式（仅桌面；src-tauri display_mode.rs）：窗口模式＝最大化锁定 / 全屏；
+    // 面板打开回显当前模式，切换即调 Rust 命令生效并持久化
+    const displayMode = ref<'windowed' | 'fullscreen'>('windowed');
+    const loadDisplayMode = async () => {
+      if (isMobileLayout.value) {
+        return;
+      }
+      try {
+        const mode = await window.electronAPI.system.getDisplayMode();
+        if (mode === 'windowed' || mode === 'fullscreen') {
+          displayMode.value = mode;
+        }
+      } catch {
+        // 无桥接环境（测试/纯 Web）保留默认回显
+      }
+    };
+    const setDisplayMode = async (mode: 'windowed' | 'fullscreen') => {
+      const prev = displayMode.value;
+      displayMode.value = mode;
+      try {
+        await window.electronAPI.system.setDisplayMode(mode);
+      } catch (error) {
+        displayMode.value = prev;
+        ElMessage.error(`显示模式切换失败：${error}`);
+      }
+    };
     // U1/U2（relay-implementation §3）：relay 状态快照（只读；null = P2P 未启动）
     const relayStatus = ref<RelayStatusDto | null>(null);
     const relayLoading = ref(false);
@@ -360,6 +419,13 @@ export default defineComponent({
     /** 当前选中子菜单的标题（移动端整页返回栏标题） */
     const activeSectionLabel = computed(
       () => sections.value.find((sec) => sec.key === activeSection.value)?.label ?? ''
+    );
+
+    // M18 弱网/离线诚实（docs/ui/problem.md）：移动端如实说明第一版无系统通知栏推送
+    const notifyHint = computed(() =>
+      isMobileLayout.value
+        ? '消息声音、震动与免打扰。当前版本无系统通知栏推送：新消息在应用内「消息」列表与未读角标呈现，锁屏 / 后台不弹系统通知。'
+        : '消息声音、桌面通知与免打扰。'
     );
 
     const usageRows = computed(() =>
@@ -572,6 +638,7 @@ export default defineComponent({
       await refreshDataUsage();
       await refreshRelayStatus();
       await refreshUpdater();
+      void loadDisplayMode();
     });
 
     return {
@@ -584,6 +651,8 @@ export default defineComponent({
       dataUsage,
       dataMessage,
       dataActionRunning,
+      displayMode,
+      setDisplayMode,
       usageRows,
       formatBytes,
       refreshNodeInfo,
@@ -601,12 +670,14 @@ export default defineComponent({
       inboundLabel,
       wizardTips,
       themeMode,
+      replicaMode,
       builtinImpl,
       setBuiltinImpl,
       disclaimerParagraphs: DISCLAIMER_PARAGRAPHS,
       generalStates,
       generalItems: GENERAL_ITEMS,
       notifyItems: NOTIFY_ITEMS,
+      notifyHint,
       appVersion,
       updaterAvailable,
       updateChecking,
@@ -661,6 +732,11 @@ export default defineComponent({
 
 .settings-row + .settings-row {
   border-top: 1px solid var(--spark-border-light);
+}
+
+/* 显示模式说明（桌面）：贴在选项行下的弱提示 */
+.display-mode-hint {
+  margin: 4px 0 0;
 }
 
 /* 免责声明段落：行距放宽便于阅读 */

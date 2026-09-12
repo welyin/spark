@@ -11,18 +11,30 @@
         :key="item.key"
         type="button"
         class="mine-list-item"
-        :class="{ active: activeItem === item.key }"
+        :class="{
+          active: activeItem === item.key,
+          'security-item-danger': item.danger,
+        }"
         @click="activeItem = item.key"
       >
         <el-icon
           class="mine-list-item-icon"
           :size="17"
           :style="{ color: item.color }"
-        ><component :is="item.icon" /></el-icon>
+          ><component :is="item.icon"
+        /></el-icon>
         <span class="mine-list-item-text">
           <b>{{ item.label }}</b>
           <span>{{ item.desc }}</span>
         </span>
+        <!-- A1：高危操作视觉加重（危险色标签 + 左侧危险色边条） -->
+        <el-tag
+          v-if="item.danger"
+          type="danger"
+          size="small"
+          class="security-danger-tag"
+          >高危 · 需密码</el-tag
+        >
       </button>
     </div>
   </div>
@@ -52,7 +64,13 @@
 </template>
 
 <script lang="ts">
-import { computed, defineComponent, ref, type Component, type PropType } from 'vue';
+import {
+  computed,
+  defineComponent,
+  ref,
+  type Component,
+  type PropType,
+} from 'vue';
 import { ElMessage } from 'element-plus';
 import { Key, Lock, WarningFilled } from '@element-plus/icons-vue';
 import { isMobileLayout } from '../../stores/ui-layout';
@@ -69,31 +87,60 @@ export default defineComponent({
     MineDetailContainer,
     SecurityPasswordPanel,
     SecurityAutoLockPanel,
-    SecurityRecoveryPanel
+    SecurityRecoveryPanel,
   },
   props: {
     /** 详情展示方式：column=第四栏（个人中心），drawer=抽屉（设置页） */
-    detailMode: { type: String as PropType<'column' | 'drawer'>, default: 'column' },
+    detailMode: {
+      type: String as PropType<'column' | 'drawer'>,
+      default: 'column',
+    },
     /** 当前活动身份 rootId； SecurityModule 所在页面通常已持有 */
-    rootId: { type: String, default: '' }
+    rootId: { type: String, default: '' },
   },
   setup(props) {
-    type Item = { key: 'password' | 'autolock' | 'recovery'; label: string; desc: string; icon: Component; color: string };
+    // A1：danger=高危操作（强制输密码、不提供生物识别通道），列表视觉加重
+    type Item = {
+      key: 'password' | 'autolock' | 'recovery';
+      label: string;
+      desc: string;
+      icon: Component;
+      color: string;
+      danger?: boolean;
+    };
 
-    const activeItem = ref<'password' | 'autolock' | 'recovery' | null>(props.detailMode === 'drawer' ? null : 'password');
+    const activeItem = ref<'password' | 'autolock' | 'recovery' | null>(
+      props.detailMode === 'drawer' ? null : 'password',
+    );
 
-    const effectiveRootId = computed(() => props.rootId || currentUser.rootId || '');
+    const effectiveRootId = computed(
+      () => props.rootId || currentUser.rootId || '',
+    );
 
     const recoveryDesc = computed(() => {
-      if (inboundRecovery.value) return `来自 ${inboundRecovery.value.fromDevice} 的恢复请求`;
+      if (inboundRecovery.value)
+        return `来自 ${inboundRecovery.value.fromDevice} 的恢复请求`;
       if (pendingRecovery.value) return '重置等待确认中';
       return '忘记密码时延迟重置';
     });
 
     const securityItems = computed<Item[]>(() => {
       const items: Item[] = [
-        { key: 'password', label: '修改密码', desc: '需验证当前密码', icon: Key, color: '#3296fa' },
-        { key: 'autolock', label: '自动锁定', desc: 'N 天未使用后需重新输密码', icon: Lock, color: '#ff7d00' }
+        {
+          key: 'password',
+          label: '修改密码',
+          desc: '需验证当前密码',
+          icon: Key,
+          color: '#3296fa',
+          danger: true,
+        },
+        {
+          key: 'autolock',
+          label: '自动锁定',
+          desc: 'N 天未使用后需重新输密码',
+          icon: Lock,
+          color: '#ff7d00',
+        },
       ];
       // 生物识别解锁已迁到「系统设置」，安全设置只保留 M5 延迟恢复入口
       if (isMobileLayout.value) {
@@ -102,7 +149,8 @@ export default defineComponent({
           label: inboundRecovery.value ? '延迟恢复请求' : '忘记密码重置',
           desc: recoveryDesc.value,
           icon: WarningFilled,
-          color: inboundRecovery.value ? '#f54a45' : '#f7b500'
+          color: inboundRecovery.value ? '#f54a45' : '#f7b500',
+          danger: true,
         });
       }
       return items;
@@ -123,14 +171,28 @@ export default defineComponent({
       activeItem,
       activeItemLabel,
       effectiveRootId,
-      onPasswordChanged
+      onPasswordChanged,
     };
-  }
+  },
 });
 </script>
 
 <style scoped>
 .mine-list-item-text b {
   display: block;
+}
+
+/* A1 高危操作视觉加重：左侧危险色边条 + 危险浅底（与普通项区分，不依赖选中态） */
+.security-item-danger {
+  border-left: 3px solid var(--spark-danger);
+  padding-left: 13px;
+}
+
+.security-item-danger:hover {
+  background: var(--spark-danger-bg);
+}
+
+.security-danger-tag {
+  flex-shrink: 0;
 }
 </style>

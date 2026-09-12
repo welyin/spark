@@ -257,6 +257,8 @@ export function persistWindows(spaceId?: string): void {
 /**
  * 进入空间时恢复窗口（每应用单实例）：先清桶再按持久化的 appId 各开一窗。
  * 无持久化记录则为空桌面。仅对当前空间生效（PcDesktop 挂载/切空间时调用）。
+ * L12 起左栏壳层入口（spark:messages 等）改走顶级对话框、不再以桌面窗口存在，
+ * 旧版本持久化里的壳层 appId（`spark:` 前缀）在恢复时丢弃，避免升级后冒出壳层窗口。
  */
 export function restorePersistedWindows(spaceId?: string): void {
   const sid = spaceId ?? desktopSpaceId.value;
@@ -265,7 +267,7 @@ export function restorePersistedWindows(spaceId?: string): void {
     return;
   }
   restoredSpaces.add(sid);
-  restoreWindows(loadPersistedOpenApps(sid), sid);
+  restoreWindows(loadPersistedOpenApps(sid).filter((appId) => !appId.startsWith('spark:')), sid);
 }
 
 const restoredSpaces = new Set<string>();

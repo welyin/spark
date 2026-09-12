@@ -18,7 +18,7 @@
  * （域名白名单站点名 + 空描述），抓取结果随 sendText 的 dto.link 回来后替换；
  * 非 Tauri/demo 环境就停留在诚实占位。
  */
-import { computed, reactive, watch } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import { isTauri, listenP2pEvents, type AppMessageCardDto, type AppMessageDto, type ElectronAPI } from '../api';
 import { isAppConversationBlocked, SYSTEM_APP_PLUGIN_ID } from './app-conversations';
 
@@ -183,9 +183,17 @@ export function resetMessagesCache(): void {
 
 /** 首次进入空间时拉取会话列表水合缓存；按 id merge，保留水合期间本地新建的会话 */
 function hydrateConversations(key: SpaceKey): void {
+  void refreshConversations(key);
+}
+
+/**
+ * 主动刷新会话列表（M8 下拉刷新手势等入口）：复用水合的按 id merge 逻辑，幂等。
+ * 非 Tauri 环境（纯内存模式）无内核可拉，直接 resolve。
+ */
+export function refreshConversations(key: SpaceKey): Promise<void> {
   const api = messagesApi();
-  if (!api) return;
-  void api
+  if (!api) return Promise.resolve();
+  return api
     .listConversations(key)
     .then((dtos) => {
       const space = spaces[key];
@@ -868,6 +876,76 @@ export function unreadCountOf(key: SpaceKey): number {
     if (!isUnreadSuppressed(key, conv)) total += conv.unreadCount;
   }
   return total;
+}
+
+/** 某空间未读会话数（M11 移动端角标口径：消息 Tab 角标 = 有未读的会话条数，
+ *  不是未读消息总数，避免高频会话刷出夸张数字；免打扰/已屏蔽会话不计） */
+export function unreadConversationCountOf(key: SpaceKey): number {
+  let total = 0;
+  for (const conv of ensureSpace(key).conversations) {
+    if (!isUnreadSuppressed(key, conv) && conv.unreadCount > 0) total += 1;
+  }
+  return total;
+}
+
+// ------------------------------------------------------------------
+// M17 长按次级动作「收藏」：内核暂无收藏存储，先本机持久化（localStorage，
+// 按 空间+会话+消息 定位），仅作标记数据源（暂无收藏清单页）；
+// 待内核收藏能力就绪后迁移，UI 文案不承诺云端同步。
+// ------------------------------------------------------------------
+const FAVORITES_STORAGE_KEY = 'spark:message-favorites';
+
+/** 变更计数：收藏读写经它驱动响应式（模板 isFavoriteMessage 调用随之刷新） */
+export const messageFavoritesVersion = ref(0);
+
+function favoriteId(key: SpaceKey, convId: string, messageId: string): string {
+  return `${key}|${convId}|${messageId}`;
+}
+
+function loadFavorites(): Record<string, true> {
+  try {
+    const raw = localStorage.getItem(FAVORITES_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const result: Record<string, true> = {};
+      for (const [id, value] of Object.entries(parsed)) {
+        if (value === true) result[id] = true;
+      }
+      return result;
+    }
+  } catch {
+    // 本地存储不可读时按空表处理
+  }
+  return {};
+}
+
+let favorites: Record<string, true> = loadFavorites();
+
+function persistFavorites(): void {
+  try {
+    localStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify(favorites));
+  } catch {
+    // 持久化失败不阻断标记
+  }
+}
+
+/** 消息是否已收藏（渲染中调用：依赖 messageFavoritesVersion 保持响应式） */
+export function isFavoriteMessage(key: SpaceKey, convId: string, messageId: string): boolean {
+  void messageFavoritesVersion.value;
+  return favorites[favoriteId(key, convId, messageId)] === true;
+}
+
+/** 切换收藏态，返回切换后的状态（true=已收藏） */
+export function toggleFavoriteMessage(key: SpaceKey, convId: string, messageId: string): boolean {
+  const id = favoriteId(key, convId, messageId);
+  if (favorites[id]) {
+    delete favorites[id];
+  } else {
+    favorites[id] = true;
+  }
+  persistFavorites();
+  messageFavoritesVersion.value += 1;
+  return favorites[id] === true;
 }
 
 // 未读数对外双通道（§7.1）：document.title 前缀 + 系统徽标（F4，

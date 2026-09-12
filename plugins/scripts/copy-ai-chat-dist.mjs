@@ -2,7 +2,7 @@
 
 /**
  * ai-chat 产物收尾脚本（vite build 之后运行，build:ai-chat 串联第二步）：
- * 1. 拷贝 manifest.json 到 dist/；
+ * 1. 拷贝 manifest.json 与静态资源（assets/，若存在，含 §2.3 包内图标）到 dist/；
  * 2. lib 模式抽出的样式表（dist/style.css）归入 dist/assets/main.css；
  * 3. dist 结构自检：views/main.js 为非空 ESM、manifest.json 存在且可解析。
  */
@@ -55,6 +55,12 @@ async function main() {
   const manifestTarget = path.join(distDir, 'manifest.json');
   await mkdir(distDir, { recursive: true });
   await cp(manifestSource, manifestTarget);
+
+  // 1b. 静态资源目录（可选，含 plugin-dist §2.3 包内图标）→ dist/assets/
+  const assetsSource = path.join(pluginRoot, 'assets');
+  if (await exists(assetsSource)) {
+    await cp(assetsSource, path.join(distDir, 'assets'), { recursive: true });
+  }
 
   // 2. lib 模式抽出的样式表归入 dist/assets/main.css
   const extractedCss = path.join(distDir, 'style.css');

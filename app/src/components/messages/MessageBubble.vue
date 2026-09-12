@@ -18,7 +18,15 @@
       <!-- Bot 消息：无气泡，纯文本块（ChatGPT/Claude 风格）。
            流式回复的逐字渲染走这条（AI bot），光标挂这里——普通气泡分支的光标
            覆盖不到 bot 消息 -->
-      <div v-if="isBot" class="bot-msg-content" @contextmenu.prevent="onMenu">
+      <div
+        v-if="isBot"
+        class="bot-msg-content"
+        @contextmenu.prevent="onMenu"
+        @touchstart="lp.start($event, null)"
+        @touchmove="lp.move"
+        @touchend="lp.end"
+        @touchcancel="lp.end"
+      >
         <span class="msg-text">{{ message.content }}<span v-if="message.status === 'streaming'" class="streaming-cursor">▌</span></span>
         <a
           v-if="message.link"
@@ -37,7 +45,16 @@
         </a>
       </div>
       <!-- 普通人际消息：带气泡容器 -->
-      <div v-else class="msg-bubble" :class="`is-${message.type}`" @contextmenu.prevent="onMenu">
+      <div
+        v-else
+        class="msg-bubble"
+        :class="`is-${message.type}`"
+        @contextmenu.prevent="onMenu"
+        @touchstart="lp.start($event, null)"
+        @touchmove="lp.move"
+        @touchend="lp.end"
+        @touchcancel="lp.end"
+      >
         <div v-if="message.quote" class="msg-quote">
           <span class="msg-quote-name">{{ message.quote.senderName }}：</span>
           <span>{{ message.quote.preview }}</span>
@@ -109,6 +126,7 @@
 import { computed, defineComponent, type PropType } from 'vue';
 import { Document, Link, Microphone, Picture } from '@element-plus/icons-vue';
 import UserAvatar from '../UserAvatar.vue';
+import { createLongPress } from '../mobile-long-press';
 import { formatBytes } from '../../utils/format';
 import { personalAvatarSource, personAvatarSource, personDisplayName } from '../../stores/avatar-sources';
 import type { ChatMessage, SpaceKey } from '../../stores/messages';
@@ -154,9 +172,12 @@ export default defineComponent({
       return personAvatarSource(props.spaceKey, props.message.senderId).image;
     });
 
-    function onMenu(event: MouseEvent) {
+    function onMenu(event: MouseEvent | TouchEvent) {
       emit('menu', { event, message: props.message });
     }
+
+    /** 移动端长按（M17：气泡次级动作——转发/收藏/引用回复等，与右键同一菜单） */
+    const lp = createLongPress<null>((_, event) => onMenu(event));
 
     // 点头像看资料卡：rootId 取现成口径（对方=senderId；自己=personalAvatarSource().seed 即 currentUser.rootId）
     function onAvatarClick() {
@@ -178,7 +199,7 @@ export default defineComponent({
         description: link.description
       });
     }
-    return { onMenu, onAvatarClick, onLinkClick, formatBytes, avatarSeed, avatarName, avatarImage };
+    return { onMenu, onAvatarClick, onLinkClick, formatBytes, avatarSeed, avatarName, avatarImage, lp };
   }
 });
 </script>

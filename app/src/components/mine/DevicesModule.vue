@@ -19,26 +19,45 @@
         v-for="device in devices"
         :key="device.peerId"
         class="mine-list-item"
-        :class="{ active: activePeerId === device.peerId, 'device-revoked': isRevoked(device) }"
+        :class="{
+          active: activePeerId === device.peerId,
+          'device-revoked': isRevoked(device),
+        }"
         role="button"
         tabindex="0"
         @click="activePeerId = device.peerId"
         @keydown.enter="activePeerId = device.peerId"
         @keydown.space.prevent="activePeerId = device.peerId"
       >
-        <el-icon class="mine-list-item-icon" :size="17" :style="{ color: isRevoked(device) ? 'var(--spark-text-3)' : '#3296fa' }"><Monitor /></el-icon>
+        <el-icon
+          class="mine-list-item-icon"
+          :size="17"
+          :style="{
+            color: isRevoked(device) ? 'var(--spark-text-3)' : '#3296fa',
+          }"
+          ><Monitor
+        /></el-icon>
         <span class="mine-list-item-text">
           <b>{{ device.isSelf ? '本机设备' : device.deviceName }}</b>
           <span>{{ deviceSummary(device) }}</span>
         </span>
         <!-- 已撤销行：仅「已撤销」标签（不再显示在线/可更新/新加入），无操作 -->
-        <el-tag v-if="isRevoked(device)" type="info" size="small">已撤销</el-tag>
+        <el-tag v-if="isRevoked(device)" type="info" size="small"
+          >已撤销</el-tag
+        >
         <template v-else>
-          <el-tag v-if="newJoinedPeerIds.includes(device.peerId)" type="warning" size="small">新加入</el-tag>
+          <el-tag
+            v-if="newJoinedPeerIds.includes(device.peerId)"
+            type="warning"
+            size="small"
+            >新加入</el-tag
+          >
           <el-tag :type="device.online ? 'success' : 'info'" size="small">
             {{ device.online ? '在线' : '离线' }}
           </el-tag>
-          <el-tag v-if="hasUpdate(device)" type="warning" size="small">可更新</el-tag>
+          <el-tag v-if="hasUpdate(device)" type="warning" size="small"
+            >可更新</el-tag
+          >
           <!-- M2 撤销：仅非本机行显示（本机不可用走「锁定设备」）；stop 不触发行选中 -->
           <el-button
             v-if="canRevoke(device)"
@@ -60,12 +79,18 @@
   <MineDetailContainer
     :drawer="detailMode === 'drawer'"
     :open="activeDevice !== null"
-    :title="activeDevice?.isSelf ? '本机设备' : (activeDevice?.deviceName ?? '设备详情')"
+    :title="
+      activeDevice?.isSelf
+        ? '本机设备'
+        : (activeDevice?.deviceName ?? '设备详情')
+    "
     @close="activePeerId = null"
   >
     <el-card v-if="activeDevice" shadow="never" class="panel-card">
       <template #header>
-        <h2>{{ activeDevice.isSelf ? '本机设备' : activeDevice.deviceName }}</h2>
+        <h2>
+          {{ activeDevice.isSelf ? '本机设备' : activeDevice.deviceName }}
+        </h2>
       </template>
       <div class="device-status">
         <el-tag v-if="isRevoked(activeDevice)" type="info">已撤销</el-tag>
@@ -73,7 +98,13 @@
           {{ activeDevice.online ? '在线' : '离线' }}
         </el-tag>
         <span class="device-status-text">
-          {{ isRevoked(activeDevice) ? '该设备已被撤销，无法连接本账号' : activeDevice.isSelf ? '这是当前正在使用的设备' : '同一账号登录的设备' }}
+          {{
+            isRevoked(activeDevice)
+              ? '该设备已被撤销，无法连接本账号'
+              : activeDevice.isSelf
+                ? '这是当前正在使用的设备'
+                : '同一账号登录的设备'
+          }}
         </span>
       </div>
       <div class="device-rows">
@@ -89,24 +120,37 @@
           <span class="device-row-label">软件版本</span>
           <span class="device-row-value">
             {{ versionText(activeDevice) }}
-            <el-tag v-if="hasUpdate(activeDevice) && !isRevoked(activeDevice)" type="warning" size="small">可更新</el-tag>
+            <el-tag
+              v-if="hasUpdate(activeDevice) && !isRevoked(activeDevice)"
+              type="warning"
+              size="small"
+              >可更新</el-tag
+            >
           </span>
         </div>
         <div v-if="activeDevice.macs.length" class="device-row">
           <span class="device-row-label">物理地址</span>
-          <span class="device-row-value">{{ activeDevice.macs.join('、') }}</span>
+          <span class="device-row-value">{{
+            activeDevice.macs.join('、')
+          }}</span>
         </div>
         <div class="device-row">
           <span class="device-row-label">设备标识</span>
-          <span class="device-row-value device-row-mono">{{ shortPeerId(activeDevice.peerId) }}</span>
+          <span class="device-row-value device-row-mono">{{
+            shortPeerId(activeDevice.peerId)
+          }}</span>
         </div>
         <div v-if="!activeDevice.isSelf" class="device-row">
           <span class="device-row-label">最近同步</span>
-          <span class="device-row-value">{{ formatTime(activeDevice.lastSeenAt) }}</span>
+          <span class="device-row-value">{{
+            formatTime(activeDevice.lastSeenAt)
+          }}</span>
         </div>
         <div v-if="isRevoked(activeDevice)" class="device-row">
           <span class="device-row-label">撤销时间</span>
-          <span class="device-row-value">{{ formatTime(activeDevice.revokedAt ?? 0) }}</span>
+          <span class="device-row-value">{{
+            formatTime(activeDevice.revokedAt ?? 0)
+          }}</span>
         </div>
       </div>
       <p class="hint">设备信息经端到端签名通道在同账号设备间自动同步。</p>
@@ -115,10 +159,21 @@
 </template>
 
 <script lang="ts">
-import { computed, defineComponent, onBeforeUnmount, onMounted, ref, type PropType } from 'vue';
+import {
+  computed,
+  defineComponent,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  type PropType,
+} from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Monitor } from '@element-plus/icons-vue';
-import { listenP2pEvents, type DeviceDto, type P2pInfoDto as P2PInfo } from '../../api';
+import {
+  listenP2pEvents,
+  type DeviceDto,
+  type P2pInfoDto as P2PInfo,
+} from '../../api';
 import { compareVersions } from '../../utils/version';
 import { currentSpace } from '../../stores/current-space';
 import { spaceKeyOf } from '../../mock/space-key';
@@ -126,7 +181,7 @@ import { notifyDeviceRevoked } from '../../plugin/messages';
 import {
   markDeviceNoticesSeen,
   pendingDeviceNotices,
-  setCurrentDevicePeerId
+  setCurrentDevicePeerId,
 } from '../../stores/device-notices';
 import type { UnlistenFn } from '@tauri-apps/api/event';
 import MineDetailContainer from './MineDetailContainer.vue';
@@ -139,7 +194,10 @@ export default defineComponent({
     // p2pInfo 当前仅作占位（设备在线状态来自内核设备清单），保留可选以免调用方强依赖
     p2pInfo: { type: Object as PropType<P2PInfo>, default: null },
     /** 详情展示方式：column=第四栏（个人中心），drawer=抽屉（设置页） */
-    detailMode: { type: String as PropType<'column' | 'drawer'>, default: 'column' }
+    detailMode: {
+      type: String as PropType<'column' | 'drawer'>,
+      default: 'column',
+    },
   },
   setup(props) {
     const devices = ref<DeviceDto[]>([]);
@@ -155,13 +213,19 @@ export default defineComponent({
       try {
         devices.value = await window.electronAPI.devices.list();
         // M1 本机 peerId 回写：本机的加入通知到达本机时直接忽略（stores/device-notices）
-        setCurrentDevicePeerId(devices.value.find((d) => d.isSelf)?.peerId ?? null);
+        setCurrentDevicePeerId(
+          devices.value.find((d) => d.isSelf)?.peerId ?? null,
+        );
         // 默认选中：column 模式选中本机；已选中设备仍在清单则保持
-        if (activePeerId.value && !devices.value.some((d) => d.peerId === activePeerId.value)) {
+        if (
+          activePeerId.value &&
+          !devices.value.some((d) => d.peerId === activePeerId.value)
+        ) {
           activePeerId.value = null;
         }
         if (!activePeerId.value && props.detailMode === 'column') {
-          activePeerId.value = devices.value.find((d) => d.isSelf)?.peerId ?? null;
+          activePeerId.value =
+            devices.value.find((d) => d.isSelf)?.peerId ?? null;
         }
       } catch (e) {
         console.warn('[DevicesModule] 加载设备清单失败', e);
@@ -169,6 +233,19 @@ export default defineComponent({
     };
 
     let unlisten: UnlistenFn | undefined;
+    // DeviceUpdated 事件去抖：device-sync 握手/pdsync 合入会在短时间内触发
+    // 多次事件，整单重载（devices.list 走内核锁 + 在线快照）逐事件执行会
+    // 造成事件风暴期反复加载——300ms 尾沿去抖合并为一次。
+    let reloadTimer: ReturnType<typeof setTimeout> | undefined;
+    const scheduleReload = () => {
+      if (reloadTimer !== undefined) {
+        clearTimeout(reloadTimer);
+      }
+      reloadTimer = setTimeout(() => {
+        reloadTimer = undefined;
+        void load();
+      }, 300);
+    };
     /** 拉取 updater 最近一次检查结果：availableVersion 仅在有更新时存在（commands/updater.rs） */
     const loadUpdater = async () => {
       try {
@@ -181,7 +258,9 @@ export default defineComponent({
 
     onMounted(async () => {
       // M1：先捕获本次查看的「新加入」快照，再标记已读清入口红点（顺序不可换）
-      newJoinedPeerIds.value = pendingDeviceNotices.value.map((notice) => notice.deviceId);
+      newJoinedPeerIds.value = pendingDeviceNotices.value.map(
+        (notice) => notice.deviceId,
+      );
       markDeviceNoticesSeen(props.rootId);
       await load();
       await loadUpdater();
@@ -189,21 +268,28 @@ export default defineComponent({
       try {
         unlisten = await listenP2pEvents((event) => {
           if (event.kind === 'DeviceUpdated') {
-            void load();
+            scheduleReload();
           }
         });
       } catch {
         // 单测/mock 环境无事件桥
       }
     });
-    onBeforeUnmount(() => unlisten?.());
+    onBeforeUnmount(() => {
+      unlisten?.();
+      if (reloadTimer !== undefined) {
+        clearTimeout(reloadTimer);
+      }
+    });
 
     const activeDevice = computed(
-      () => devices.value.find((d) => d.peerId === activePeerId.value) ?? null
+      () => devices.value.find((d) => d.peerId === activePeerId.value) ?? null,
     );
 
     const deviceSummary = (device: DeviceDto) =>
-      device.isSelf ? `${device.deviceName} · ${device.os}` : `${device.os} · ${device.arch}`;
+      device.isSelf
+        ? `${device.deviceName} · ${device.os}`
+        : `${device.os} · ${device.arch}`;
 
     /** 操作系统行：有 OS 版本则并入（如 Windows（10.0.22631 · x86_64）） */
     const osLine = (device: DeviceDto) =>
@@ -212,7 +298,8 @@ export default defineComponent({
         : `${device.os}（${device.arch}）`;
 
     /** 软件版本行：空值（旧记录/旧版本对端）展示「—」 */
-    const versionText = (device: DeviceDto) => (device.appVersion ? `v${device.appVersion}` : '—');
+    const versionText = (device: DeviceDto) =>
+      device.appVersion ? `v${device.appVersion}` : '—';
 
     /** 该设备是否有可用更新：仅本地提示（不控制对端），与 updater 最近一次检查结果对比 */
     const hasUpdate = (device: DeviceDto) =>
@@ -224,12 +311,15 @@ export default defineComponent({
     const isRevoked = (device: DeviceDto) => device.revokedAt != null;
 
     /** M2 撤销入口仅非本机且未撤销行可见（本机不可用走「锁定设备」；内核另有 peerId/deviceUid 双重硬拒） */
-    const canRevoke = (device: DeviceDto) => !device.isSelf && !isRevoked(device);
+    const canRevoke = (device: DeviceDto) =>
+      !device.isSelf && !isRevoked(device);
 
     /**
      * M2 撤销设备：确认对话框三条口径（m1-m2-implementation-plan §4.3，逐字稳定）→
+     * A1 高危操作密码门（device-trust-and-biometric §2：验密码、不提供生物识别通道）→
      * devices.revoke；成功后列表经既有 DeviceUpdated 监听刷新（事件携带带 revokedAt
      * 的记录，监听为整单重载，灰态即时生效）。
+     * 验密走 password-unify 的 verifyTicket（对内核已发布校验值 V 验票，不动身份文件）。
      */
     const confirmRevoke = async (device: DeviceDto) => {
       try {
@@ -240,11 +330,43 @@ export default defineComponent({
             type: 'warning',
             confirmButtonText: '撤销',
             cancelButtonText: '取消',
-            confirmButtonType: 'danger'
-          }
+            confirmButtonType: 'danger',
+          },
         );
       } catch {
         return; // 用户取消/关闭
+      }
+      // A1 密码门：高危操作强制输密码（禁生物识别），验票失败不执行撤销
+      let password = '';
+      try {
+        const result = await ElMessageBox.prompt(
+          '撤销设备属于高危操作，请输入登录密码确认（不支持生物识别替代）。',
+          '验证登录密码',
+          {
+            confirmButtonText: '验证并撤销',
+            cancelButtonText: '取消',
+            inputType: 'password',
+            inputPlaceholder: '登录密码',
+            inputValidator: (value: string) =>
+              value ? true : '请输入登录密码',
+          },
+        );
+        password = result.value;
+      } catch {
+        return; // 用户取消/关闭
+      }
+      try {
+        await window.electronAPI.passwordUnify.verifyTicket(password);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.toLowerCase().includes('ticket unavailable')) {
+          ElMessage.error(
+            '本机尚未发布密码校验值，暂无法在线验密；请先执行一次「修改密码」后再试',
+          );
+        } else {
+          ElMessage.error('密码不正确，已取消撤销');
+        }
+        return;
       }
       try {
         await window.electronAPI.devices.revoke(device.peerId);
@@ -289,9 +411,9 @@ export default defineComponent({
       canRevoke,
       confirmRevoke,
       shortPeerId,
-      formatTime
+      formatTime,
     };
-  }
+  },
 });
 </script>
 

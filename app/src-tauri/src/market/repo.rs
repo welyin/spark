@@ -704,6 +704,7 @@ impl PluginMarketService {
         let (file_path, digest, size) = self.save_verified_package_bytes(&asset, &plugin_id, &bytes)?;
         let installed_state = InstalledPluginState {
             plugin_id: plugin_id.clone(),
+            name: declaration.name.clone(),
             version: manifest.version.clone(),
             package_path: file_path.to_string_lossy().to_string(),
             sha256: digest,
@@ -744,6 +745,28 @@ impl PluginMarketService {
 /// 已安装插件合成市场目录条目（updates.rs 用）。
 /// 仓库锚定插件取声明文件缓存合成；包 URL 从声明派生（updates.rs 更新探测走
 /// 与仓库锚定一致的清单拉取），无声明缓存的插件（如侧载）包 URL 置空。
+/// 名称回落链（2026-09-10 走查修正：前端不应显示英文代号 pluginId）：
+/// 声明文件缓存 → 安装时落库的 name → 读包内 manifest.json 回填（旧记录 name 为空）→ pluginId。
+/// 回填只读不写（list 为本地调用、条目少，逐条读小包可接受；新安装已直接落库 name）。
+fn resolve_display_name(
+    declaration: Option<&SparkPluginDeclaration>,
+    installed: &InstalledPluginState,
+) -> String {
+    if let Some(d) = declaration {
+        return d.name.clone();
+    }
+    if !installed.name.is_empty() {
+        return installed.name.clone();
+    }
+    let inner_name = std::fs::read(&installed.package_path)
+        .ok()
+        .and_then(|bytes| super::sideload::parse_container(&bytes).ok())
+        .and_then(|container| super::sideload::read_inner_manifest(&container))
+        .and_then(|manifest| manifest.name)
+        .filter(|name| !name.is_empty());
+    inner_name.unwrap_or_else(|| installed.plugin_id.clone())
+}
+
 pub(crate) fn synthesize_catalog_entry(
     service: &PluginMarketService,
     installed: &InstalledPluginState,
@@ -763,10 +786,14 @@ pub(crate) fn synthesize_catalog_entry(
     super::catalog::PluginCatalogItem {
         id: installed.plugin_id.clone(),
         domain: format!("plugin:{}", installed.plugin_id),
-        name: declaration
+        name: resolve_display_name(declaration.as_ref(), installed),
+        // 声明图标（规格 §2.3 ②）：与 corrected 其它字段同口径——以仓库声明文件
+        // 缓存为准（announce 自报不作数）；无声明缓存（如侧载）= 空串，
+        // 前端回退链落到包内图标或首字符+哈希渐变
+        icon: declaration
             .as_ref()
-            .map(|d| d.name.clone())
-            .unwrap_or_else(|| installed.plugin_id.clone()),
+            .map(|d| d.icon.clone())
+            .unwrap_or_default(),
         description: declaration
             .as_ref()
             .map(|d| d.summary.clone())

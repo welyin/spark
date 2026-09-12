@@ -1,18 +1,15 @@
 <!-- 空间域列表页（手机端 space tab 的 root，一级）：个人空间置顶 + 已加入组织列表。
-     出处 shell-mobile §3.1：第一级「我的手机桌面列表」，个人空间置顶、各域带待办角标、
-     右上角 ＋ 创建/加入组织；点某域 push 进该域手机桌面（两级结构第二级）。
+     出处 shell-mobile §3.1：第一级「我的手机桌面列表」，个人空间置顶、各域带待办角标；
+     点某域 push 进该域手机桌面（两级结构第二级）。
+     M6 走查修正：页面自带二级头部（标题+＋）整条移除——创建/加入组织由顶导航右上 ＋ 承担（M2）。
      数据源复用：org-membership（organizations）、current-space（切换）、
-     space-notifications（域角标）、CreateOrgDialog/JoinOrgDialog（创建/加入）。 -->
+     space-notifications（域角标）、CreateOrgDialog/JoinOrgDialog（空态创建/加入）。 -->
 <template>
   <div class="space-list-page">
-    <!-- 顶部标题栏 + ＋（创建/加入） -->
-    <header class="space-list-header">
-      <h1 class="space-list-title">空间</h1>
-      <button type="button" class="space-list-add" title="创建 / 加入组织" @click="joinCreateVisible = true">
-        <el-icon :size="20"><Plus /></el-icon>
-      </button>
-    </header>
-
+    <!-- M24：搜索过滤（按组织名 / 我的域内昵称过滤；个人空间恒置顶不参与过滤） -->
+    <div v-if="organizations.length > 0" class="space-list-search">
+      <el-input v-model="keyword" placeholder="搜索空间" clearable :prefix-icon="Search" />
+    </div>
     <div class="space-list-body">
       <!-- 个人空间（固定置顶） -->
       <button
@@ -21,19 +18,19 @@
         @click="openSpace({ type: 'personal' })"
       >
         <span class="space-item-avatar" :class="{ 'has-badge': personalBadge > 0 }">
-          <UserAvatar :root-id="personalSource.seed" :nickname="personalSource.name" :avatar="personalSource.image" :size="44" />
+          <UserAvatar :root-id="personalSource.seed" :nickname="personalSpaceName" :avatar="personalSpaceLogo || personalSource.image" :size="44" />
           <el-badge v-if="personalBadge > 0" :value="personalBadge" :max="99" class="space-item-badge" />
         </span>
         <span class="space-item-main">
-          <span class="space-item-name">个人空间</span>
+          <span class="space-item-name">{{ personalSpaceName }}</span>
           <span class="space-item-sub">我的私人桌面</span>
         </span>
         <el-icon class="space-item-arrow"><ArrowRight /></el-icon>
       </button>
 
-      <!-- 组织空间列表 -->
+      <!-- 组织空间列表（M24：头像 / 组织名 / 域内昵称 / 待办角标；个人空间置顶不可删/退） -->
       <button
-        v-for="org in organizations"
+        v-for="org in filteredOrganizations"
         :key="org.orgId"
         type="button"
         class="space-item"
@@ -45,10 +42,15 @@
         </span>
         <span class="space-item-main">
           <span class="space-item-name">{{ org.name }}</span>
-          <span class="space-item-sub">组织空间</span>
+          <span class="space-item-sub">{{ orgSubline(org.orgId) }}</span>
         </span>
         <el-icon class="space-item-arrow"><ArrowRight /></el-icon>
       </button>
+
+      <!-- 搜索无结果（与空态区分：有组织但过滤后为空） -->
+      <div v-if="organizations.length > 0 && filteredOrganizations.length === 0" class="space-list-empty">
+        <el-empty :image-size="80" description="未找到相关空间" />
+      </div>
 
       <!-- 空态：无组织时引导创建/加入 -->
       <div v-if="organizations.length === 0" class="space-list-empty">
@@ -91,12 +93,14 @@
 <script lang="ts">
 import { computed, defineComponent, onMounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
-import { ArrowRight, Connection, OfficeBuilding, Plus } from '@element-plus/icons-vue';
+import { ArrowRight, Connection, OfficeBuilding, Search } from '@element-plus/icons-vue';
 import { organizations, refreshOrganizations } from '../stores/org-membership';
 import { switchToOrg, switchToPersonal, type CurrentSpace } from '../stores/current-space';
 import { unreadCountOf } from '../stores/messages';
 import { spaceKeyOf } from '../mock/contacts';
 import { personalAvatarSource } from '../stores/avatar-sources';
+import { personalSpaceLogo, personalSpaceName } from '../stores/personal-space';
+import { getOrgIdentity } from '../stores/org-identity';
 import { setOrgAvatar } from '../stores/org-avatars';
 import { pushPage } from '../stores/mobile-nav';
 import UserAvatar from './UserAvatar.vue';
@@ -114,7 +118,6 @@ export default defineComponent({
     OrgAvatar,
     CreateOrgDialog,
     JoinOrgDialog,
-    Plus,
     ArrowRight,
     Connection,
     OfficeBuilding
@@ -127,6 +130,25 @@ export default defineComponent({
     const joining = ref(false);
 
     const personalSource = computed(() => personalAvatarSource());
+
+    // M24：搜索关键字（按组织名 / 域内昵称模糊过滤）与副标题（域内昵称优先，未设置显示「组织空间」）
+    const keyword = ref('');
+    const orgSubline = (orgId: string): string => {
+      const nickname = getOrgIdentity(orgId).nickname;
+      return nickname ? `我在此域：${nickname}` : '组织空间';
+    };
+    const filteredOrganizations = computed(() => {
+      const kw = keyword.value.trim().toLowerCase();
+      if (!kw) {
+        return organizations.value;
+      }
+      return organizations.value.filter((org) => {
+        if (org.name.toLowerCase().includes(kw)) {
+          return true;
+        }
+        return getOrgIdentity(org.orgId).nickname.toLowerCase().includes(kw);
+      });
+    });
 
     // 域待办角标（第一版近似：未读消息数；「待我处理事务数」待 affairs 数据源接入，见 ui-architecture §七）
     const personalBadge = computed(() => unreadCountOf(spaceKeyOf({ type: 'personal' })));
@@ -196,8 +218,14 @@ export default defineComponent({
     return {
       organizations,
       personalSource,
+      personalSpaceName,
+      personalSpaceLogo,
       personalBadge,
       orgBadge,
+      keyword,
+      orgSubline,
+      filteredOrganizations,
+      Search,
       joinCreateVisible,
       createVisible,
       creating,
@@ -221,43 +249,16 @@ export default defineComponent({
   background: var(--spark-bg-page);
 }
 
-.space-list-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px var(--spark-padding-page);
-  background: var(--spark-bg-card);
-  border-bottom: 1px solid var(--spark-border-light);
-}
-
-.space-list-title {
-  margin: 0;
-  font-size: var(--spark-font-size-title);
-  font-weight: 600;
-  color: var(--spark-text-1);
-}
-
-.space-list-add {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border: 0;
-  border-radius: var(--spark-radius-m);
-  background: transparent;
-  color: var(--spark-text-1);
-  cursor: pointer;
-}
-
-.space-list-add:hover {
-  background: var(--spark-bg-hover);
-}
-
 .space-list-body {
   flex: 1;
   overflow-y: auto;
   padding: 8px 0;
+}
+
+/* M24 搜索框：与消息列表搜索（.conv-search）同一版式 */
+.space-list-search {
+  flex-shrink: 0;
+  padding: 8px var(--spark-padding-page);
 }
 
 .space-item {
@@ -319,7 +320,7 @@ export default defineComponent({
   padding: 40px 0;
 }
 
-/* 上滑菜单（与 MobileSpaceDrawer 同套样式语义） */
+/* 上滑菜单（与顶栏 ＋ 下拉卡片同套样式语义） */
 .space-sheet-root {
   position: fixed;
   inset: 0;

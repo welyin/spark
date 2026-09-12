@@ -347,6 +347,7 @@ fn synthesize_catalog_entry_supported_spaces_two_level() {
     let fixture = Fixture::new();
     let installed = InstalledPluginState {
         plugin_id: REPO_ID.to_string(),
+        name: String::new(),
         version: "0.2.0".to_string(),
         package_path: String::new(),
         sha256: String::new(),
@@ -396,6 +397,7 @@ fn synthesize_catalog_entry_window_two_level() {
     let fixture = Fixture::new();
     let installed = InstalledPluginState {
         plugin_id: REPO_ID.to_string(),
+        name: String::new(),
         version: "0.2.0".to_string(),
         package_path: String::new(),
         sha256: String::new(),

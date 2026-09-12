@@ -203,6 +203,9 @@ export const COMMAND_MAP: Record<string, string> = {
   // HTTP 代理设置（updater/市场链路 GitHub 直连失败的规避，见 src-tauri proxy.rs）
   'system-get-proxy': 'system_get_proxy',
   'system-set-proxy': 'system_set_proxy',
+  // 显示模式（窗口模式＝最大化锁定 / 全屏；见 src-tauri display_mode.rs）
+  'system-get-display-mode': 'system_get_display_mode',
+  'system-set-display-mode': 'system_set_display_mode',
   // 移动端返回键栈底退出应用（App.vue 一级页返回处理）
   'system-exit-app': 'system_exit_app',
   // 阶段四C 系统通知（Android 系统通知；桌面 no-op，见 src-tauri commands/system.rs）
@@ -372,6 +375,7 @@ export const ARG_NAMES: Record<string, string[]> = {
   'system-notify-chat': ['spaceKey', 'convId', 'title', 'body', 'unread'],
   'system-notify-generic': ['title', 'body'],
   'system-set-proxy': ['proxy'],
+  'system-set-display-mode': ['mode'],
   'sys-exec': ['program', 'args', 'workdir'],
   'sys-fetch': ['url', 'options'],
   'sys-fetch-stream': ['url', 'options']

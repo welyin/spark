@@ -2,18 +2,20 @@
      移动端（波次 2，窄屏 ≤768px）：整页 + 导航栈——栈1 会话列表，点开会话 push 聊天页（栈2）整页，
      返回用聊天头已有的 ‹ 按钮（pop）；桌面端渲染逻辑不变 -->
 <template>
-  <section class="messages-page">
+  <section ref="rootEl" class="messages-page">
     <!-- 移动端（波次 2/3）：整页 + 导航栈——栈1 会话列表，点开会话 push 聊天页（栈2）整页，
          栈帧切换经 MobilePageTransition 滑动转场（微信式） -->
     <MobilePageTransition v-if="isMobileLayout" :tab="MOBILE_TAB">
-      <ConversationList
-        v-if="!activeId"
-        :space-key="spaceKey"
-        :space-type="spaceType"
-        :active-id="activeId"
-        @select="onSelectConversation"
-        @removed="onRemoved"
-      />
+      <!-- 栈1 会话列表包下拉刷新容器（M8：微博式手势，列表滚到顶部时下拉触发重新拉取） -->
+      <PullRefresh v-if="!activeId" :on-refresh="refreshList">
+        <ConversationList
+          :space-key="spaceKey"
+          :space-type="spaceType"
+          :active-id="activeId"
+          @select="onSelectConversation"
+          @removed="onRemoved"
+        />
+      </PullRefresh>
       <ChatView
         v-else
         :key="`${spaceKey}:${activeId}`"
@@ -56,15 +58,16 @@
 </template>
 
 <script lang="ts">
-import { computed, defineComponent, onMounted, ref, watch } from 'vue';
+import { computed, defineComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import ConversationList from '../components/messages/ConversationList.vue';
 import ChatView from '../components/messages/ChatView.vue';
 import MobilePageTransition from '../components/MobilePageTransition.vue';
+import PullRefresh from '../components/PullRefresh.vue';
 import { currentSpace, currentSpaceType } from '../stores/current-space';
 import { consumePendingChat, pendingChat } from '../stores/pending-chat';
 import { isMobileLayout } from '../stores/ui-layout';
 import { currentPage, popPage, pushPage, removeFrames, resetStack } from '../stores/mobile-nav';
-import { ensureDirectConversation, spaceKeyOf } from '../stores/messages';
+import { ensureDirectConversation, refreshConversations, spaceKeyOf } from '../stores/messages';
 import { CONTACT_INTENT_ADD, CONTACT_INTENT_BROWSE, openContacts } from '../components/contacts/open-intents';
 
 /** 本页在导航栈中的 tab 键（与 App.vue activeTab 一致） */
@@ -72,11 +75,30 @@ const MOBILE_TAB = 'messages';
 
 export default defineComponent({
   name: 'MessagesPage',
-  components: { ConversationList, ChatView, MobilePageTransition },
+  components: { ConversationList, ChatView, MobilePageTransition, PullRefresh },
   setup() {
     const spaceKey = computed(() => spaceKeyOf(currentSpace.value));
     const spaceType = computed(() => currentSpaceType.value);
     const activeId = ref('');
+
+    /** 下拉刷新（M8）：重新从内核拉取会话列表（merge 幂等，详见 stores/messages） */
+    const refreshList = () => refreshConversations(spaceKey.value);
+
+    // M13：再点一次当前 tab（MobileTabBar 派发 spark:tab-reselect）——
+    // 栈已被 App.vue 重置回列表页；此处把列表滚动回顶并顺带刷新（同下拉刷新数据源）
+    const rootEl = ref<HTMLElement | null>(null);
+    const onTabReselect = (event: Event) => {
+      if ((event as CustomEvent<string>).detail !== MOBILE_TAB) {
+        return;
+      }
+      if (currentPage(MOBILE_TAB).page !== 'root') {
+        return;
+      }
+      rootEl.value?.querySelector('.conv-scroll')?.scrollTo({ top: 0 });
+      void refreshList();
+    };
+    onMounted(() => window.addEventListener('spark:tab-reselect', onTabReselect));
+    onBeforeUnmount(() => window.removeEventListener('spark:tab-reselect', onTabReselect));
 
     // 切换空间后重选会话（两个空间的会话数据互相隔离）；移动端同步回栈底（会话不跨空间）
     watch(spaceKey, () => {
@@ -148,7 +170,7 @@ export default defineComponent({
     const goBrowseContacts = () => openContacts(CONTACT_INTENT_BROWSE);
     const goAddContact = () => openContacts(CONTACT_INTENT_ADD);
 
-    return { MOBILE_TAB, spaceKey, spaceType, activeId, isMobileLayout, onSelectConversation, onChatBack, onRemoved, goBrowseContacts, goAddContact };
+    return { MOBILE_TAB, spaceKey, spaceType, activeId, isMobileLayout, rootEl, refreshList, onSelectConversation, onChatBack, onRemoved, goBrowseContacts, goAddContact };
   }
 });
 </script>

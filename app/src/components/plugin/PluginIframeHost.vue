@@ -4,7 +4,7 @@
          localStorage/IndexedDB 与壳层天然隔离；桥握手 expectedOrigin 因此恒为 'null'）。
          宿主 HTML 由 srcdoc 内联生成（plugin/source.ts），bundle/css 经插件源加载 -->
     <iframe
-      v-if="status !== 'disabled'"
+      v-if="status !== 'disabled' && status !== 'not-installed'"
       :key="reloadToken"
       ref="iframeEl"
       class="plugin-iframe-frame"
@@ -34,6 +34,16 @@
       <p v-if="disabledReason" class="plugin-iframe-overlay-reason">原因：{{ disabledReasonText }}</p>
       <div class="plugin-iframe-overlay-actions">
         <el-button type="primary" @click="reenable">重新启用</el-button>
+        <el-button @click="emit('close')">关闭</el-button>
+      </div>
+    </div>
+
+    <!-- 已启用但未安装到本机（启用＝空间层逻辑状态，不要求代码在场；打开时就地安装，
+         install-and-enable §一 形式化定义 + §五③ 按需获取） -->
+    <div v-else-if="status === 'not-installed'" class="plugin-iframe-overlay">
+      <p>「{{ notInstalledName }}」在本空间已启用，但还没安装到本机</p>
+      <div class="plugin-iframe-overlay-actions">
+        <el-button type="primary" :loading="installing" @click="installAndOpen">安装到本机并使用</el-button>
         <el-button @click="emit('close')">关闭</el-button>
       </div>
     </div>
@@ -70,8 +80,11 @@ import {
   pluginInstanceKey
 } from '../../plugin/disabled';
 import { themeMode } from '../../stores/theme';
+import { installPluginItem } from '../apps/app-actions';
+import { getMarketItem } from '../../stores/desktop/app-registry';
+import type { PluginMarketItemDto } from '../../api/types';
 
-type HostStatus = 'loading' | 'ready' | 'failed' | 'disabled';
+type HostStatus = 'loading' | 'ready' | 'failed' | 'disabled' | 'not-installed';
 
 /** 壳层主题 → 插件 ctx theme（与 stores/theme.ts apply 同一判定） */
 function resolveTheme(): 'light' | 'dark' {
@@ -101,6 +114,26 @@ export default defineComponent({
     const unresponsive = ref(false);
     const runtimeErrorCount = ref(0);
     const reloadToken = ref(0);
+    /** 「已启用未安装」打开时就地安装（install-and-enable §一/§五③） */
+    const notInstalledName = ref('');
+    const installing = ref(false);
+    let marketItemRef: PluginMarketItemDto | null = null;
+    const installAndOpen = async () => {
+      const item = marketItemRef;
+      if (!item || installing.value) {
+        return;
+      }
+      installing.value = true;
+      try {
+        const ok = await installPluginItem(item);
+        if (ok) {
+          marketItemRef = { ...item, installed: true };
+          await init();
+        }
+      } finally {
+        installing.value = false;
+      }
+    };
 
     const srcdoc = computed(() =>
       buildPluginHostSrcdoc(props.pluginId, props.viewBootstrap ? { viewId: props.viewId, viewType: 'app', cardData: props.viewBootstrap.cardData } : undefined)
@@ -182,6 +215,19 @@ export default defineComponent({
         disabledReason.value = getDisabledPluginInstance(instanceKey)?.reason ?? '';
         status.value = 'disabled';
         return;
+      }
+      // 启用≠安装（install-and-enable §一 形式化定义）：已启用未安装的应用可出现在
+      // 桌面/启动器，打开时在此就地安装（代码按需获取，§五③）。
+      // 判定读注册表缓存的市场条目（同步，不阻塞加载链路；缓存未至时按已装继续，
+      // 宿主加载链自行报错——桌面挂载时 PcDesktop 已兜底 refreshAppRegistry）
+      if (!props.pluginId.startsWith('spark:')) {
+        const found = getMarketItem(props.pluginId);
+        if (found && !found.installed) {
+          notInstalledName.value = found.name;
+          marketItemRef = found;
+          status.value = 'not-installed';
+          return;
+        }
       }
       status.value = 'loading';
       unresponsive.value = false;
@@ -498,6 +544,9 @@ export default defineComponent({
       srcdoc,
       reload,
       reenable,
+      notInstalledName,
+      installing,
+      installAndOpen,
       emit
     };
   }

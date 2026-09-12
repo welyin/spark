@@ -1,25 +1,21 @@
-<!-- 移动端顶部导航（Android 前端改造）：
-     左侧=菜单图标（打开左滑侧边栏 MobileSpaceDrawer）；中间=当前页名（消息/通讯录/应用/我的）+
-     页名右侧紧贴网络状态点（点击直达系统设置→网络状态）；
-     右侧=搜索（全屏搜索层，复用 GlobalSearch）+ 圆圈加号（下拉菜单，微信式：
-     个人空间「添加朋友」/ 组织空间「添加成员」（仅组织管理员），经 App.vue 接到通讯录现有添加流程）。
-     仅在四个主 tab 且栈深=1（currentPage(tab).page==='root'）时由 App.vue 渲染，
+<!-- 移动端顶部导航（Android 前端改造 / M1·M2·M5 走查修正）：
+     左侧=网络状态点（M5：挪到左上角，点击直达系统设置→网络状态）；中间=当前页名；
+     右侧=搜索（全屏搜索层，复用 GlobalSearch）+ 圆圈加号（下拉卡片，微信式：
+     个人空间「添加朋友」/ 组织空间「添加成员」（仅组织管理员），另含「创建组织」「加入组织」
+     （M2：原底部抽屉入口并入，走 App 根级 MembershipDialogs 顶级对话框））。
+     左上角侧边栏抽屉已取消（M1：入口迁到底部 tab 与本 ＋ 菜单）。
+     仅在五个主 tab 且栈深=1（currentPage(tab).page==='root'）时由 App.vue 渲染，
      进入二级页（聊天/详情等）时顶部导航整体不渲染（App.vue）。 -->
 <template>
   <header class="mobile-top-bar">
-    <button type="button" class="mobile-top-bar-btn" title="切换空间" @click="emit('open-drawer')">
-      <!-- 抽屉图标：内联 SVG 自绘「上长下短」两根横线（企业微信风格，1.6px 粗、圆角线帽；
-           两端各留 1px 避免圆角线帽被视口裁切），不用 element-plus 菜单图标 -->
-      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-        <path d="M1 5.9h18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-        <path d="M1 14.1h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-      </svg>
-    </button>
+    <!-- 左上角：网络状态点（M5，原抽屉按钮位置区域） -->
+    <div class="mobile-top-bar-status">
+      <NetworkStatusBar variant="dot" @open-network-status="emit('open-network-status')" />
+    </div>
 
-    <!-- 中间：页名 + 网络状态点（点紧贴文字右侧，随文字长度自适应） -->
+    <!-- 中间：页名 -->
     <div class="mobile-top-bar-title">
       <span class="mobile-top-bar-title-text">{{ title }}</span>
-      <NetworkStatusBar variant="dot" @open-network-status="emit('open-network-status')" />
     </div>
 
     <!-- 右侧：搜索 + 加号（仅一级页顶栏） -->
@@ -44,7 +40,7 @@
   </Teleport>
 
   <!-- 加号下拉菜单（微信式：从右上角加号按钮向下展开的卡片，小三角指向加号）：
-       按空间区分入口；点击遮罩/外部收起（下拉卡片无「取消」按钮） -->
+       添加朋友/添加成员按空间区分入口；创建/加入组织恒显（M2）；点击遮罩/外部收起 -->
   <Teleport to="body">
     <Transition name="mobile-add-sheet">
       <div v-if="addSheetVisible" class="mobile-add-sheet-root" @click="addSheetVisible = false">
@@ -65,6 +61,21 @@
               <span>生成邀请码，邀请加入当前组织</span>
             </div>
           </button>
+          <!-- 创建 / 加入组织（M2：原左侧抽屉底部入口并入此处，承载同 PC L10 顶级对话框） -->
+          <button type="button" class="mobile-add-sheet-item" @click="pickCreateOrg">
+            <el-icon :size="18"><OfficeBuilding /></el-icon>
+            <div class="mobile-add-sheet-item-text">
+              <b>创建组织</b>
+              <span>创建一个新的组织空间</span>
+            </div>
+          </button>
+          <button type="button" class="mobile-add-sheet-item" @click="pickJoinOrg">
+            <el-icon :size="18"><Connection /></el-icon>
+            <div class="mobile-add-sheet-item-text">
+              <b>加入组织</b>
+              <span>通过邀请码加入已有组织</span>
+            </div>
+          </button>
         </div>
       </div>
     </Transition>
@@ -73,7 +84,7 @@
 
 <script lang="ts">
 import { computed, defineComponent, nextTick, ref } from 'vue';
-import { Avatar, CirclePlus, Search, User } from '@element-plus/icons-vue';
+import { Avatar, CirclePlus, Connection, OfficeBuilding, Search, User } from '@element-plus/icons-vue';
 import { currentSpace, currentSpaceOrgId } from '../stores/current-space';
 import { isAdmin } from '../stores/org-membership';
 import NetworkStatusBar from './NetworkStatusBar.vue';
@@ -81,12 +92,12 @@ import GlobalSearch from './GlobalSearch.vue';
 
 export default defineComponent({
   name: 'MobileTopBar',
-  components: { Search, CirclePlus, User, Avatar, NetworkStatusBar, GlobalSearch },
+  components: { Search, CirclePlus, User, Avatar, OfficeBuilding, Connection, NetworkStatusBar, GlobalSearch },
   props: {
-    /** 当前页名（消息/通讯录/应用/我的） */
+    /** 当前页名（消息/事务/空间/应用/设置） */
     title: { type: String, required: true }
   },
-  emits: ['open-drawer', 'open-network-status', 'add-friend', 'add-member'],
+  emits: ['open-network-status', 'add-friend', 'add-member', 'create-org', 'join-org'],
   setup(_, { emit }) {
     // 全屏搜索层
     const searchVisible = ref(false);
@@ -98,7 +109,7 @@ export default defineComponent({
       searchRef.value?.focusInput?.();
     };
 
-    // 加号下拉菜单：菜单项按当前空间区分（个人=添加朋友；组织=添加成员）
+    // 加号下拉菜单：添加朋友/添加成员按当前空间区分（个人=添加朋友；组织=添加成员）
     const addSheetVisible = ref(false);
     const isPersonal = computed(() => currentSpace.value.type === 'personal');
     // 「添加成员」仅组织管理员可见（org-membership 缓存口径，同 use-contacts-data 的 isOrgAdmin；
@@ -112,6 +123,14 @@ export default defineComponent({
       addSheetVisible.value = false;
       emit('add-member');
     };
+    const pickCreateOrg = () => {
+      addSheetVisible.value = false;
+      emit('create-org');
+    };
+    const pickJoinOrg = () => {
+      addSheetVisible.value = false;
+      emit('join-org');
+    };
 
     return {
       emit,
@@ -122,7 +141,9 @@ export default defineComponent({
       isPersonal,
       isOrgAdmin,
       pickAddFriend,
-      pickAddMember
+      pickAddMember,
+      pickCreateOrg,
+      pickJoinOrg
     };
   }
 });
@@ -160,7 +181,14 @@ export default defineComponent({
   background: var(--spark-bg-hover);
 }
 
-/* 中间：页名 + 网络点同一行，点紧贴文字右侧（gap 小、不固定宽度） */
+/* 左上角：网络状态点（M5） */
+.mobile-top-bar-status {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* 中间：页名 */
 .mobile-top-bar-title {
   justify-self: center;
   display: inline-flex;

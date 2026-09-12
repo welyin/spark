@@ -14,7 +14,11 @@
           class="conv-item"
           :class="{ active: conv.id === activeId, pinned: conv.pinnedAt > 0 }"
           @click="$emit('select', conv.id)"
-          @contextmenu.prevent="openMenu($event, conv)"
+          @contextmenu.prevent="onContextMenu($event, conv)"
+          @touchstart="lp.start($event, conv)"
+          @touchmove="lp.move"
+          @touchend="lp.end"
+          @touchcancel="lp.end"
         >
           <div class="conv-avatar">
             <!-- 系统通知会话（含内置系统应用会话 app:system）用 Bell 图标头像区分；
@@ -60,41 +64,47 @@
 
     <el-empty v-else :image-size="90" :description="emptyText" class="conv-empty" />
 
-    <teleport to="body">
-      <div v-if="menu.visible" class="ctx-mask" @click="closeMenu" @contextmenu.prevent="closeMenu">
-        <ul class="ctx-menu" :style="{ left: `${menu.x}px`, top: `${menu.y}px` }">
-          <li @click="onPin">
-            <el-icon :size="14"><Top /></el-icon>
+    <!-- 右键菜单（G3：弹层体系统一 Element dropdown，virtual-ref 锚定被点行；
+         原手写 ctx-menu teleport 已移除） -->
+    <el-dropdown
+      ref="menuRef"
+      trigger="contextmenu"
+      virtual-triggering
+      :virtual-ref="menuAnchor"
+      placement="bottom-start"
+      popper-class="spark-ctx-popper"
+      @command="onMenuCommand"
+      @visible-change="onMenuVisibleChange"
+    >
+      <span class="conv-menu-anchor" aria-hidden="true" />
+      <template #dropdown>
+        <el-dropdown-menu>
+          <el-dropdown-item command="pin" :icon="Top">
             {{ menu.conv?.pinnedAt ? '取消置顶' : '置顶聊天' }}
-          </li>
-          <li @click="onMute">
-            <el-icon :size="14"><MuteNotification /></el-icon>
+          </el-dropdown-item>
+          <el-dropdown-item command="mute" :icon="MuteNotification">
             {{ menu.conv?.muted ? '取消免打扰' : '消息免打扰' }}
-          </li>
+          </el-dropdown-item>
           <!-- 应用会话：屏蔽为本地持久化状态（抑制未读角标与聚合，列表仍可见可取消） -->
-          <li v-if="menu.conv?.kind === 'app'" @click="onBlock">
-            <el-icon :size="14"><Remove /></el-icon>
+          <el-dropdown-item v-if="menu.conv?.kind === 'app'" command="block" :icon="Remove">
             {{ menu.conv && isBlockedApp(menu.conv) ? '取消屏蔽' : '屏蔽应用消息' }}
-          </li>
-          <li class="ctx-divider" />
+          </el-dropdown-item>
           <!-- 应用消息内核无「清空」接口（仅删除会话），应用会话不展示清空项 -->
-          <li v-if="menu.conv?.kind !== 'app'" class="danger" @click="onClear">
-            <el-icon :size="14"><Brush /></el-icon>
+          <el-dropdown-item v-if="menu.conv?.kind !== 'app'" command="clear" :icon="Brush" divided class="ctx-item-danger">
             清空聊天记录
-          </li>
-          <li class="danger" @click="onDelete">
-            <el-icon :size="14"><Delete /></el-icon>
+          </el-dropdown-item>
+          <el-dropdown-item command="delete" :icon="Delete" :divided="menu.conv?.kind === 'app'" class="ctx-item-danger">
             删除会话
-          </li>
-        </ul>
-      </div>
-    </teleport>
+          </el-dropdown-item>
+        </el-dropdown-menu>
+      </template>
+    </el-dropdown>
   </aside>
 </template>
 
 <script lang="ts">
-import { computed, defineComponent, reactive, ref } from 'vue';
-import { ElMessageBox } from 'element-plus';
+import { computed, defineComponent, nextTick, reactive, ref } from 'vue';
+import { ElMessageBox, type DropdownInstance } from 'element-plus';
 import { BellFilled, Brush, Delete, MuteNotification, Remove, Search, Top } from '@element-plus/icons-vue';
 import UserAvatar from '../UserAvatar.vue';
 import { personAvatarSource, personDisplayName } from '../../stores/avatar-sources';
@@ -104,6 +114,7 @@ import {
   toggleAppConversationBlocked
 } from '../../stores/app-conversations';
 import { hashGradient } from '../../utils/palette';
+import { createLongPress } from '../mobile-long-press';
 import {
   clearMessages,
   deleteConversation,
@@ -188,33 +199,50 @@ export default defineComponent({
       return groups.map((group) => ({ ...group, showLabel }));
     });
 
-    const menu = reactive<{ visible: boolean; x: number; y: number; conv: Conversation | null }>({
-      visible: false,
-      x: 0,
-      y: 0,
-      conv: null
-    });
+    // 右键菜单状态（G3：Element dropdown virtual-ref 锚定；conv 为当前菜单目标会话）
+    const menu = reactive<{ conv: Conversation | null }>({ conv: null });
+    const menuAnchor = ref<HTMLElement | null>(null);
+    const menuRef = ref<DropdownInstance | null>(null);
 
-    function openMenu(event: MouseEvent, conv: Conversation) {
-      menu.visible = true;
-      menu.x = event.clientX;
-      menu.y = event.clientY;
+    function openMenu(anchor: HTMLElement | null, conv: Conversation) {
+      if (!anchor) return;
       menu.conv = conv;
+      menuAnchor.value = anchor;
+      // 等 anchor 更新后再开（首次打开时 virtual-ref 尚未指向目标行）
+      void nextTick(() => menuRef.value?.handleOpen());
     }
 
-    function closeMenu() {
-      menu.visible = false;
-      menu.conv = null;
+    /** 桌面端右键：锚定被点行 */
+    function onContextMenu(event: MouseEvent, conv: Conversation) {
+      openMenu(event.currentTarget as HTMLElement, conv);
+    }
+
+    /** 移动端长按（M23：会话项次级操作——置顶/免打扰/删除等，与右键同一菜单） */
+    const lp = createLongPress<Conversation>((conv, event) => {
+      openMenu((event.target as HTMLElement).closest('.conv-item'), conv);
+    });
+
+    function onMenuVisibleChange(visible: boolean) {
+      if (!visible) {
+        menu.conv = null;
+      }
+    }
+
+    /** 菜单命令分发（dropdown 选择后自动关闭，无需手动 close） */
+    function onMenuCommand(command: string) {
+      if (command === 'pin') onPin();
+      else if (command === 'mute') onMute();
+      else if (command === 'block') onBlock();
+      else if (command === 'clear') void onClear();
+      else if (command === 'delete') void onDelete();
     }
 
     function onPin() {
       if (menu.conv) togglePin(props.spaceKey, menu.conv.id);
-      closeMenu();
     }
 
     function onMute() {
       if (menu.conv) toggleMute(props.spaceKey, menu.conv.id);
-      closeMenu();
     }
 
     /** 屏蔽/取消屏蔽应用会话（本地持久化，stores/app-conversations） */
@@ -222,12 +250,10 @@ export default defineComponent({
       if (menu.conv?.kind === 'app') {
         toggleAppConversationBlocked(props.spaceKey, menu.conv.peerId);
       }
-      closeMenu();
     }
 
     async function onClear() {
       const conv = menu.conv;
-      closeMenu();
       if (!conv) return;
       try {
         await ElMessageBox.confirm('仅删除本地消息记录，不影响对方设备。', `清空与「${convName(conv)}」的聊天记录？`, {
@@ -243,7 +269,6 @@ export default defineComponent({
 
     async function onDelete() {
       const conv = menu.conv;
-      closeMenu();
       if (!conv) return;
       try {
         await ElMessageBox.confirm('仅删除会话列表入口。', `删除与「${convName(conv)}」的会话？`, {
@@ -264,23 +289,28 @@ export default defineComponent({
       sections,
       emptyText,
       menu,
+      menuAnchor,
+      menuRef,
       peerAvatar,
       convName,
       appAvatarBg,
       appAvatarLetter,
       isBlockedApp,
       openMenu,
-      closeMenu,
-      onPin,
-      onMute,
-      onBlock,
-      onClear,
-      onDelete,
+      onContextMenu,
+      lp,
+      onMenuCommand,
+      onMenuVisibleChange,
       lastMessage,
       lastAppSummary,
       previewText,
       formatConvTime,
       Search,
+      Top,
+      MuteNotification,
+      Remove,
+      Brush,
+      Delete,
       unreadLabel: (n: number) => (n > 99 ? '…' : String(n))
     };
   }

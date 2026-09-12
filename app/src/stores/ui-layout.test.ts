@@ -7,9 +7,9 @@ import { describe, expect, it } from 'vitest';
 import { isMobileLayout, MOBILE_TABS } from './ui-layout';
 
 describe('ui-layout 移动端断点', () => {
-  it('底部 tab 固定为 消息/空间/事务/我的 四项（新 UI 四一级入口，docs/ui README §五）', () => {
-    expect(MOBILE_TABS.map((tab) => tab.id)).toEqual(['messages', 'space', 'affairs', 'mine']);
-    expect(MOBILE_TABS.map((tab) => tab.label)).toEqual(['消息', '空间', '事务', '我的']);
+  it('底部 tab 固定为 消息/事务/空间/应用/设置 五项（M4/M9 走查定稿，docs/ui/problem.md）', () => {
+    expect(MOBILE_TABS.map((tab) => tab.id)).toEqual(['messages', 'affairs', 'space', 'apps', 'settings']);
+    expect(MOBILE_TABS.map((tab) => tab.label)).toEqual(['消息', '事务', '空间', '应用', '设置']);
   });
 
   it('jsdom 环境（matchMedia 桩未命中窄屏）默认桌面布局', () => {

@@ -44,7 +44,6 @@ vi.mock('../../components/TopNavbar.vue', () => ({ default: { name: 'TopNavbarSt
 vi.mock('../../components/UserAvatarMenu.vue', () => ({ default: { name: 'UserAvatarMenuStub', template: '<div />' } }));
 vi.mock('../../components/MobileTabBar.vue', () => ({ default: { name: 'MobileTabBarStub', template: '<div />' } }));
 vi.mock('../../components/MobileTopBar.vue', () => ({ default: { name: 'MobileTopBarStub', template: '<div />' } }));
-vi.mock('../../components/MobileSpaceDrawer.vue', () => ({ default: { name: 'MobileSpaceDrawerStub', template: '<div />' } }));
 vi.mock('../../components/plugin/PluginIframeHost.vue', () => ({ default: { name: 'PluginIframeHostStub', template: '<div />' } }));
 vi.mock('../../plugin/source', () => ({ fetchPluginManifest: vi.fn(async () => null) }));
 vi.mock('../../stores/current-user', async (importOriginal) => {

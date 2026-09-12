@@ -83,7 +83,9 @@ function mountApp(overrides: Partial<Record<'list' | 'revoke', ReturnType<typeof
   const revoke = overrides.revoke ?? vi.fn().mockResolvedValue({ success: true });
   (window as any).electronAPI = {
     devices: { list, revoke },
-    updater: { status: vi.fn().mockResolvedValue(null) }
+    updater: { status: vi.fn().mockResolvedValue(null) },
+    // A1 密码门：验票走 password-unify（默认验票通过；专项用例可覆盖）
+    passwordUnify: { verifyTicket: vi.fn().mockResolvedValue({ ok: true }) }
   };
   const host = document.createElement('div');
   document.body.appendChild(host);
@@ -174,6 +176,11 @@ describe('DevicesModule 设备列表渲染（M2）', () => {
 });
 
 describe('DevicesModule 撤销确认与错误映射（M2）', () => {
+  // A1 密码门：确认框之后还有密码输入框（ElMessageBox.prompt）；缺省验票通过
+  beforeEach(() => {
+    vi.spyOn(ElMessageBox, 'prompt').mockResolvedValue({ value: 'pw' } as never);
+  });
+
   it('点击撤销弹出 ElMessageBox 确认框：标题/正文/确认钮逐字', async () => {
     const confirmMock = vi
       .spyOn(ElMessageBox, 'confirm')
@@ -196,14 +203,64 @@ describe('DevicesModule 撤销确认与错误映射（M2）', () => {
     expect(options.type).toBe('warning');
   });
 
-  it('确认后调用 devices.revoke(peerId)', async () => {
-    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never);
+  it('确认后先过密码门（prompt + verifyTicket），再调用 devices.revoke(peerId)', async () => {
+    const confirmMock = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never);
+    const promptMock = vi.spyOn(ElMessageBox, 'prompt').mockResolvedValue({ value: 'pw-secret' } as never);
     const { host, revoke } = mountApp({});
     await flush();
 
     revokeBtn(rowByText(host, '我的手机'))!.click();
     await flush();
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    // 密码门：prompt 输入类型为 password（不提供生物识别通道）
+    const promptOptions = promptMock.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(promptOptions.inputType).toBe('password');
+    expect(
+      (window as any).electronAPI.passwordUnify.verifyTicket
+    ).toHaveBeenCalledWith('pw-secret');
     expect(revoke).toHaveBeenCalledWith('peer-phone');
+  });
+
+  it('密码验票失败：提示密码不正确，不调用 devices.revoke', async () => {
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never);
+    const errorSpy = vi.spyOn(ElMessage, 'error').mockImplementation(() => ({}) as never);
+    const mounted = mountApp({});
+    (window as any).electronAPI.passwordUnify.verifyTicket = vi
+      .fn()
+      .mockRejectedValue(new Error('Error: Ticket mismatch'));
+    await flush();
+
+    revokeBtn(rowByText(mounted.host, '我的手机'))!.click();
+    await flush();
+    expect(errorSpy).toHaveBeenCalledWith('密码不正确，已取消撤销');
+    expect(mounted.revoke).not.toHaveBeenCalled();
+  });
+
+  it('密码门处取消（关闭 prompt）：不验票、不撤销', async () => {
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never);
+    vi.spyOn(ElMessageBox, 'prompt').mockRejectedValue('cancel' as never);
+    const mounted = mountApp({});
+    await flush();
+
+    revokeBtn(rowByText(mounted.host, '我的手机'))!.click();
+    await flush();
+    expect((window as any).electronAPI.passwordUnify.verifyTicket).not.toHaveBeenCalled();
+    expect(mounted.revoke).not.toHaveBeenCalled();
+  });
+
+  it('验票不可用（Ticket unavailable）：给出门路提示，不撤销', async () => {
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never);
+    const errorSpy = vi.spyOn(ElMessage, 'error').mockImplementation(() => ({}) as never);
+    const mounted = mountApp({});
+    (window as any).electronAPI.passwordUnify.verifyTicket = vi
+      .fn()
+      .mockRejectedValue(new Error('Error: Ticket unavailable'));
+    await flush();
+
+    revokeBtn(rowByText(mounted.host, '我的手机'))!.click();
+    await flush();
+    expect(errorSpy).toHaveBeenCalledWith('本机尚未发布密码校验值，暂无法在线验密；请先执行一次「修改密码」后再试');
+    expect(mounted.revoke).not.toHaveBeenCalled();
   });
 
   it("revoke reject 'Cannot revoke current device' → 错误映射：提示本机锁定", async () => {

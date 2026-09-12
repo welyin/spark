@@ -1,6 +1,6 @@
 // OrgSettingsPanel 组织副本健康度（A41 核对 / product/todo #16，Q06「只告知、不干涉」）渲染回归：
 // - 达标态：副本 3/3 + 「副本充足」，成员副本行无不足提醒；
-// - 不达标态：副本 2/3 + 「副本不足」只提醒文案 + 成员副本行「合计不足 3 份」提醒，
+// - 不达标态：副本 2/3 + G6 非焦虑提醒（「待其他成员上线补齐副本」）+ 成员副本行「合计不足 3 份」提醒，
 //   手机设备如实标注（不计入 K）；
 // - 无 K 组织（kApplicable=false，纯 all-members）：不做达标判定、不提醒，
 //   只信息性呈现「全员持有」（membership §4.1 / batch2 §1.2）。
@@ -124,13 +124,14 @@ describe('OrgSettingsPanel 组织副本健康度（只告知）', () => {
     ({ host, app } = mount());
     await flush();
     expect(host.textContent).toContain('副本 2/3');
-    expect(host.textContent).toContain('副本不足，建议成员保持在线或邀请更多节点');
+    // G6 非焦虑口径：待其他成员上线补齐副本，不做处置引导
+    expect(host.textContent).toContain('副本暂不足：待其他成员上线补齐副本，无需额外操作');
     expect(host.textContent).toContain('成员 PC 副本合计不足 3 份，建议成员常备桌面端在线');
     // 手机叶子如实标注、不计入 K
     expect(host.textContent).toContain('（手机）');
-    // 不达标只提醒不处置：两处提醒均为「建议…」句式，面板不提供任何副本处置按钮
+    // 不达标只提醒不处置：提醒文案为「待…补齐/建议…」句式，面板不提供任何副本处置按钮
     const replicaRows = Array.from(host.querySelectorAll('.replica-row'));
-    expect(replicaRows.some((row) => row.textContent?.includes('副本不足'))).toBe(true);
+    expect(replicaRows.some((row) => row.textContent?.includes('副本暂不足'))).toBe(true);
     for (const row of replicaRows.filter((r) => r.textContent?.includes('副本'))) {
       expect(row.querySelector('button')).toBeNull();
     }

@@ -23,7 +23,7 @@ afterEach(() => {
 });
 
 describe('listDevPlugins（dev 自动扫描注入）', () => {
-  it('dev 下把注入的开发插件映射为未安装市场条目', () => {
+  it('dev 下把注入的开发插件映射为「已安装（本地开发）」条目', () => {
     setDevPlugins([
       { id: 'spark-moments', name: '朋友圈', version: '0.2.0', icon: '' },
       { id: 'ai-chat', name: 'AI 聊天', version: '0.1.5' }
@@ -34,7 +34,10 @@ describe('listDevPlugins（dev 自动扫描注入）', () => {
     expect(moments.domain).toBe('plugin:spark-moments');
     expect(moments.name).toBe('朋友圈');
     expect(moments.version).toBe('0.2.0');
-    expect(moments.installed).toBe(false);
+    // 走查修正：dev 插件代码在本机（vite dev 直接服务），为「已安装（本地开发）」，
+    // 不再是市场里无法安装的「安装」按钮；未启用（启用走 per-space 事实源）
+    expect(moments.installed).toBe(true);
+    expect(moments.installedVersion).toBe('0.2.0');
     expect(moments.enabled).toBe(false);
     expect(moments.permissions).toEqual([]);
     // 描述含 dev 标记，生产不可见的语义写入描述

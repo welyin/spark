@@ -6,6 +6,7 @@
   "entryView": "default",
   "description": "Spark 默认内置通讯录应用（communication §4.2）：朋友/分组/标签/申请管理，数据经 sdk.contacts 访问（换插件数据原样还在）。",
   "category": "social",
+  "icon": "assets/icon.svg",
   "supportedSpaces": ["personal", "org"],
   "views": [
     { "id": "default", "type": "app", "title": "通讯录" }
