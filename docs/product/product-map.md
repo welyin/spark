@@ -159,11 +159,11 @@ Spark 不是一堆功能的并列，而是四个逐层建立、缺一不可的�
 
 | 产品概念 | 工程细节去向 |
 |---|---|
-| 个人数据同步 / 副本 / 数据管理 | `wiki/architecture/sync/`（personal-data-sync*）、`docs/protocol/data-mgmt.md`、`docs/protocol/p2p/personal-data-sync.md` |
-| 存证锚定 / 导出 / 独立核验 | `wiki/architecture/sync/evidence-anchoring-export.md`、`docs/protocol/sync-evidence.md` |
-| 身份 / 设备信任 / 生物识别 / 恢复 | `wiki/architecture/identity/`、`docs/protocol/identity.md`、`wiki/security/` |
-| P2P / 打洞 / 中继 / 网关邮箱 / 叶子模式 | `wiki/architecture/p2p/`、`docs/protocol/p2p/`、`wiki/product/*relay*` |
-| 共同体 / 事务 / 凭证 / 策略 / 组织协议 | `docs/protocol/community/`、`docs/protocol/org/`（已定稿部分；待 A53/C3 者暂存 `wiki/protocol/`）、`wiki/architecture/community-affairs.md` |
-| 插件运行时 / 分发 / 社交投递 | `wiki/architecture/plugins/`、`docs/protocol/plugin-dist/`、`wiki/ui/apps-market/`（基础插件清单见 `plugins/catalog.md`） |
+| 个人数据同步 / 副本 / 数据管理 | `wiki/architecture/sync/`（personal-data-sync*）、`docs/protocol/foundation/data-mgmt.md`、`docs/protocol/foundation/p2p/personal-data-sync.md` |
+| 存证锚定 / 导出 / 独立核验 | `wiki/architecture/sync/evidence-anchoring-export.md`、`docs/protocol/foundation/sync-evidence.md` |
+| 身份 / 设备信任 / 生物识别 / 恢复 | `wiki/architecture/identity/`、`docs/protocol/foundation/identity.md`、`wiki/security/` |
+| P2P / 打洞 / 中继 / 网关邮箱 / 叶子模式 | `wiki/architecture/p2p/`、`docs/protocol/foundation/p2p/`、`wiki/product/*relay*` |
+| 共同体 / 事务 / 凭证 / 策略 / 组织协议 | `docs/protocol/community/`（含 `community/org/` 子目录；已定稿部分，待 A53/C3 者暂存 `wiki/protocol/`）、`wiki/architecture/community-affairs.md` |
+| 插件运行时 / 分发 / 社交投递 | `wiki/architecture/plugins/`、`docs/protocol/plugins/`、`wiki/ui/apps-market/`（基础插件清单见 `plugins/catalog.md`） |
 | 功能界面（IM/通讯录/朋友圈/导航设置） | `wiki/ui/`（messages、contacts、moments、space-navbar） |
 | 经济系统 | 根目录《共同体经济系统设计.md》v0.10（完整单页版，原地保留）；结构化分册见 `economy/` 五篇 |

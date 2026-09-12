@@ -11,11 +11,11 @@
 - **同步**：仅随组织同步链路（管理员推送/claim 落库后的快照广播、org-pull 拉取）在成员间流动——
   extra 非保留键经 `summary.metadata` 承载（§4.1）
 - **用途**：派生组织级私有 DHT key `sha256hex(orgSecret + ":members")`
-  （[p2p-dht](../p2p/p2p-dht.md) §15），仅此
+  （[p2p-dht](../../foundation/p2p/p2p-dht.md) §15），仅此
 - **与 recoverySecret 的语义区别**：recoverySecret 派生的 token 进入半公开协议面（org-recovery
   查询，§10——任何持 token 者可向任意节点询问成员线索）；orgSecret 不进入任何面向非成员的
   协议面，仅在成员间同步链路内流动，用于计算私有 DHT key——非持密者无法计算 key、
-  无法枚举组织成员（[p2p-dht](../p2p/p2p-dht.md) §15）
+  无法枚举组织成员（[p2p-dht](../../foundation/p2p/p2p-dht.md) §15）
 
 
 ## 14. gateways 字段（组织网关）
@@ -24,8 +24,8 @@
   属**保留键**（不进 `summary.metadata`，§4.1）
 - 管理员指定 **2–3 个**（`set_org_gateways`，code/core/src/org/service.rs），写入记录后走既有
   快照同步广播（§7/§9）扩散
-- 职责：组织级私有 DHT 的 provider（[p2p-dht](../p2p/p2p-dht.md) §15）、公开组织的地址记录
-  发布（[p2p-dht](../p2p/p2p-dht.md) §16）、未来的组织邮箱（本期不做——组织网关暂存转发
+- 职责：组织级私有 DHT 的 provider（[p2p-dht](../../foundation/p2p/p2p-dht.md) §15）、公开组织的地址记录
+  发布（[p2p-dht](../../foundation/p2p/p2p-dht.md) §16）、未来的组织邮箱（本期不做——组织网关暂存转发
   离线消息已列入消息专项待办，见 code/app/TODO.md 消息章节）
 - 网关角色是记录字段而非成员 role；role 仍仅 `admin` / `member`（§3.2）
 
@@ -68,7 +68,7 @@
 
 - `seq`：同一根密钥下单调递增的发布序号；`publishedAt` 为毫秒
 - `ttl`：毫秒，`0 < ttl ≤ 7 天`，发布方默认 24h；DHT 层记录 TTL 8h 独立，
-  由网关周期重发续期（[p2p-dht](../p2p/p2p-dht.md) §16）；本地缓存尊重 ttl，过期即失效
+  由网关周期重发续期（[p2p-dht](../../foundation/p2p/p2p-dht.md) §16）；本地缓存尊重 ttl，过期即失效
 
 ### 16.2 签名
 
@@ -94,6 +94,6 @@
 
 ### 16.4 发布与解析
 
-- 承载（DHT key、gossip 信封、冲突裁决）见 [p2p-dht](../p2p/p2p-dht.md) §16
+- 承载（DHT key、gossip 信封、冲突裁决）见 [p2p-dht](../../foundation/p2p/p2p-dht.md) §16
 - `resolve_org_address(orgAddress)`：本地缓存 → gossip 副本 → DHT；
   `search_known_orgs(keyword)`：本地缓存按 displayName/本地备注子串匹配，纯本地查询

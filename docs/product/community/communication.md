@@ -2,7 +2,7 @@
 
 > 状态：定稿 ｜ 分册：第二层 · 共同体
 >
-> 上游：`docs/protocol/p2p/p2p-dm.md`、`wiki/ui/messages/*`、`wiki/ui/contacts/*`、`wiki/architecture/plugins/social-feed.md`、`wiki/architecture/identity/organization.md`
+> 上游：`docs/protocol/foundation/p2p/p2p-dm.md`、`wiki/ui/messages/*`、`wiki/ui/contacts/*`、`wiki/architecture/plugins/social-feed.md`、`wiki/architecture/identity/organization.md`
 
 ## 一句话
 
@@ -53,4 +53,4 @@
 - 内核**不做聊天应用、不内置多人群组 / 频道 / 论坛 / 朋友圈模型**：默认聊天应用是可替换的独立插件（群聊未来在它里面实现，属该插件自身的演进，不进 Spark 里程碑）；论坛、朋友圈等由各自插件复用 DM 底座与组织同步实现（见 [../plugins](../plugins/README.md)）；
 - 不做服务端消息历史云存储：历史只在设备副本上，遵循个人同步的"最近窗口"与副本规则；
 - 中继 / 网关不接触明文、不做内容审核（类型级管控是组织 / 插件的事）；
-- 不保证离线消息无限期留存：暂存队列有 TTL，长期留存依赖双方设备上的副本（呼应 [open-questions](../open-questions.md) Q01 的数据持久性问题）。
+- 不保证离线消息无限期留存：暂存队列有 TTL，长期留存依赖双方设备上的副本（呼应 `open-questions`（wiki product/open-questions.md） Q01 的数据持久性问题）。

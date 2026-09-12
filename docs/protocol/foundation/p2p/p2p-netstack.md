@@ -45,7 +45,7 @@
 |---|---|---|
 | `spark-sync` | 业务数据与组织同步（update/delete/history-response/org-share/org-share-ack，以及插件经 IPC 的自定义广播） | p2p-node.ts:770、org-share-sync.ts:390 |
 | `spark-overlay` | 覆盖网控制面：node-announce，以及组织地址记录（org-address 信封，§16） | constants.ts:76、p2p-node.ts:775 |
-| `spark-affair-meta` | 议题元数据公告（type='affair-meta'，[affair-metadata](../community/affair-metadata.md) §2/§6） | core/p2p/constants.rs（C4） |
+| `spark-affair-meta` | 议题元数据公告（type='affair-meta'，[affair-metadata](../../affairs/affair-metadata.md) §2/§6） | core/p2p/constants.rs（C4） |
 
 `spark-sync`/`spark-overlay` 两主题在节点启动时均订阅（p2p-node.ts:771-776）；`spark-affair-meta` 同条件订阅（leaf 模式全砍，同既有三主题口径；affair-metadata §2「订阅与否由角色决定」的落点是宿主/内核层不订阅即可）。入站按 topic 分流：
 `spark-overlay` 中线形为 §3 信封且 `type='org-address'` 的消息 → 组织地址记录校验链（§16），

@@ -2,7 +2,7 @@
 
 > 状态：定稿 ｜ 分册：第一层 · 底座
 >
-> 上游实现：`wiki/architecture/identity/*`、`docs/protocol/identity.md`
+> 上游实现：`wiki/architecture/identity/*`、`docs/protocol/foundation/identity.md`
 
 ## 一句话
 
@@ -83,4 +83,4 @@ Spark 没有中心服务器，"登录"不是服务器签发的会话，而是**�
 
 ---
 
-> 工程实现：密钥派生路径、身份文件加密格式、设备撤销 / 恢复契约、epoch 选择性密钥轮换见 `wiki/architecture/identity/` 与 `docs/protocol/identity.md`。
+> 工程实现：密钥派生路径、身份文件加密格式、设备撤销 / 恢复契约、epoch 选择性密钥轮换见 `wiki/architecture/identity/` 与 `docs/protocol/foundation/identity.md`。

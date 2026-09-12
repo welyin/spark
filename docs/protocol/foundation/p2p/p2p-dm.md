@@ -18,7 +18,7 @@ friend-accept 同族先例）org-invite-reply/org-member-removed——join 编�
 attachment-req/attachment-resp/contact-sync/conv-sync/profile-sync/
 device-sync；组织同步类 orgsync-hello/need/data（~~orgkey-deliver~~
 已随 C7 encrypted 轴退役删除）；
-事务复制面反熵类（C4，[affair-sync](../community/affair-sync.md) §2）affairsync-hello/need/data——
+事务复制面反熵类（C4，[affair-sync](../../affairs/affair-sync.md) §2）affairsync-hello/need/data——
 关注者反熵 hello→need→多批 data 与 orgsync 同构，豁免口径同族；
 **orgq 应答 orgq-resp**（P3 起豁免——应答由请求方主动拉起，洪泛面由
 orgq-req 侧限流守住，orgq-req 不豁免口径不动）；

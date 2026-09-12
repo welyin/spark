@@ -51,7 +51,7 @@ Rust 侧 `JsonFrameCodec` 模式，behaviour.rs 先例）。rootId 不出本协�
 | 字段 | 类型 | 语义与约束 |
 | --- | --- | --- |
 | `id` | string | 24 位小写 hex（12B 随机）；投递幂等键（同 id 去重） |
-| `to.orgAddress` | string | 收件方组织地址（[org-address](../org/org-address.md) 自认证地址记录线形）；网关据此判定「是否本组织的信」 |
+| `to.orgAddress` | string | 收件方组织地址（[org-address](../../community/org/org-address.md) 自认证地址记录线形）；网关据此判定「是否本组织的信」 |
 | `to.domainId` | string | 收件人域身份公钥 b64（路由键；拉取侧域名匹配依据） |
 | `from.domainId` | string | 发送方域身份公钥 b64（验签键 + 投递限流键） |
 | `from.orgAddress` | string，可省 | 发送方组织地址（展示/回信寻址提示，不参与授权） |

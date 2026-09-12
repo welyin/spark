@@ -63,7 +63,7 @@ credId = sha256hex(normalizeObject(凭证剔除 sig))   // 64 hex；注销/呈�
 }
 ```
 
-- 链规则：`seq` 从 1 递增，`prevHash` 指向前一条目 `entryHash`，首条 `null`；`entryHash = sha256hex(normalizeObject(条目剔除 sig))`——每验证人一条独立链（语义同 [sync-evidence](../sync-evidence.md) §2 的迷你版，作用域 = issuer）；
+- 链规则：`seq` 从 1 递增，`prevHash` 指向前一条目 `entryHash`，首条 `null`；`entryHash = sha256hex(normalizeObject(条目剔除 sig))`——每验证人一条独立链（语义同 [sync-evidence](../foundation/sync-evidence.md) §2 的迷你版，作用域 = issuer）；
 - `reason` 可空（展示用，无协议语义）；
 - 注销列表**公开可复制**（验证人经 gossip/indexer 渠道公布；承载面随 C10 定，线形先行）。
 

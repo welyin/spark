@@ -2,7 +2,7 @@
 
 > 状态：草稿 v0.7 ｜ 分册：UI 设计（架构与落地篇；…v0.6 卡片栈预览按内存自适应；v0.7 对齐 shell-desktop v0.7 / L12：PC 左栏入口（消息/事务/我的/设置/应用管理）由"整页 tab"改为盖在常驻桌面上的全局模态层——顶级对话框＋遮罩、单实例，桌面窗口只承载业务插件，手机端仍全屏 tab）
 >
-> 本篇回答一个问题：**[README](README.md) / [domain-space](domain-space.md) / [shell-desktop](shell-desktop.md) / [shell-mobile](shell-mobile.md) 定义的新 UI，在现有代码（`code/app`）上怎么长出来。** 前三篇讲"长什么样"，[visual-style](visual-style.md) 讲"用什么皮"，本篇讲"用什么骨架、按什么顺序改"。开发任务拆解见 [todo](todo.md)。
+> 本篇回答一个问题：**[README](README.md) / [domain-space](domain-space.md) / [shell-desktop](shell-desktop.md) / [shell-mobile](shell-mobile.md) 定义的新 UI，在现有代码（`code/app`）上怎么长出来。** 前三篇讲"长什么样"，[visual-style](visual-style.md) 讲"用什么皮"，本篇讲"用什么骨架、按什么顺序改"。开发任务拆解见 `todo`（wiki ui/todo.md）。
 >
 > 事实来源：`code/app/src` 现状（见 §2）、[wiki/ui](../../wiki/ui/README.md) 的现行实现记录、[ark-desktop-main](../../ark-desktop-main) 的窗口模型蓝本（已被 [shell-desktop §3.5](shell-desktop.md) 论证采用）。
 
@@ -122,7 +122,7 @@ stores/desktop/
 不另造机制，复用 mobile-nav 栈：
 
 - `space` tab 的 root = **域列表**（一级）；`pushPage` 进**某域手机桌面**（图标网格/分页/文件夹，长按编辑）；再 `pushPage` 进**全屏 App**（`PluginIframeHost` 全屏 + 沉浸式 chrome，已有能力）；
-- 最近任务卡片栈：第一版用"域桌面 → 返回即回栈顶 App"的栈行为近似（App 在栈中保活）；真正的卡片式多任务预览列为二期（概念见 §八问题 3，任务见 [todo 二期](todo.md)）；
+- 最近任务卡片栈：第一版用"域桌面 → 返回即回栈顶 App"的栈行为近似（App 在栈中保活）；真正的卡片式多任务预览列为二期（概念见 §八问题 3，任务见 `todo` 二期（wiki ui/todo.md））；
 - Android 返回键逻辑天然兼容（栈 pop 已有）。
 
 ### 4.4 事务入口与类型插件分发（G1/G5）

@@ -23,7 +23,7 @@ token      = sha256hex(`${orgId}:${recoverySecret}:${timeBucket}`)
 1. 读请求超时 3000ms；type/token 校验（token 必须匹配 `^[0-9a-f]{64}$`），不符回 `ok:false`
 2. 同一请求方服务间隔 ≥ 30s（`RECOVERY_QUERY_MIN_INTERVAL_MS`，constants.ts:135），命中回 `ok:false, reason:"rate-limited"`
 3. want 归一：缺省/非法 → 8，上限 8（`RECOVERY_QUERY_WANT`，constants.ts:130）
-4. 命中：遍历本机恢复视图（当前身份为成员的组织，见 [org-recovery](../org/org-recovery.md) §10），
+4. 命中：遍历本机恢复视图（当前身份为成员的组织，见 [org-recovery](../../community/org/org-recovery.md) §10），
    token ∈ activeRecoveryTokens 即返回该组织 `memberNodeInfos` 前 want 条（仅含有地址的成员）
 5. 未命中且 `min(max(0,ttl), RECOVERY_TTL=2) > 0`：向**除请求方外**的已连接邻居取前 2 个，
    以 `ttl-1` 转发查询，结果按 peerId 去重合并地址后截断到 want；ttl≤0 回空

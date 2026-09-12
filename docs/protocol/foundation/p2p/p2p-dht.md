@@ -120,8 +120,8 @@
 ## 15. 组织级私有 DHT（网关代理）
 
 - **key 派生**：`H(orgSecret + ":members")` = sha256(`orgSecret + ":members"` 拼接字符串的 UTF-8)
-  （code/core/src/org/recovery.rs 的 sha256hex 模式；orgSecret 见 [org-address](../org/org-address.md) §13）
-- **网关节点**（[org-address](../org/org-address.md) §14 `gateways` 字段指定的成员节点）：检测到本机是某组织网关 →
+  （code/core/src/org/recovery.rs 的 sha256hex 模式；orgSecret 见 [org-address](../../community/org/org-address.md) §13）
+- **网关节点**（[org-address](../../community/org/org-address.md) §14 `gateways` 字段指定的成员节点）：检测到本机是某组织网关 →
   在该 key 上 `start_providing` + 周期重发（节奏同 §13.2，挂 keepalive tick 计数）
 - **查询响应**：响应成员地址查询时只返回 `{peerId, addresses}` 条目，
   不含 orgId、组织名等任何组织语义
@@ -134,15 +134,15 @@
 
 ## 16. 自认证组织地址记录的 DHT 与 gossip 承载
 
-记录线形、签名与五步校验链见 [org-address](../org/org-address.md) §16；本节只定承载方式。
+记录线形、签名与五步校验链见 [org-address](../../community/org/org-address.md) §16；本节只定承载方式。
 
 - **DHT key** = sha256(orgPublicKey 原始 32 字节)——即 orgAddress 内嵌的哈希本体
-  （orgAddress 与该 key 一一对应，[org-address](../org/org-address.md) §15）
+  （orgAddress 与该 key 一一对应，[org-address](../../community/org/org-address.md) §15）
 - **发布**：**公开组织**（org 记录 `isPublic` 标志 + 组织设置开关）的网关节点 `put_record`，
   记录 TTL 8h、周期重发同 §13.2
 - **gossip 扩散**：作为 §3 信封载荷随 `spark-overlay` 主题低频发布、随连接捎带：
   - 信封 `type='org-address'`（§3.1 枚举新增）、`domain='system'`、
-    `payload` = 组织地址记录线形（[org-address](../org/org-address.md) §16）
+    `payload` = 组织地址记录线形（[org-address](../../community/org/org-address.md) §16）
   - 信封**不强制签名**（§3.4「其余类型」口径）；记录的权威防伪是其自身的组织根密钥签名；
     信封层既有规则不变（携带 pubKey+signature 则必须验签通过，否则丢弃）
   - `spark-overlay` 入站分流见 §2

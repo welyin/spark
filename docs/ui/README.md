@@ -166,7 +166,7 @@ Spark 不把用户关在应用内，提供三类与底层系统（Windows/macOS/
 | [shell-mobile.md](shell-mobile.md) | 手机端外壳：底部 Tab、微信式消息、手机桌面与全屏 App、主屏幕快捷入口（§3.4）、线框 |
 | [visual-style.md](visual-style.md) | 视觉基线与设计令牌：抽取自现有前端（Element Plus + tokens.css），新 UI 复用、最小改动 |
 | [ui-architecture.md](ui-architecture.md) | 新 UI 架构设计：现状盘点与缺口 G1–G10、目标分层架构、窗口管理器/深链/事务分发、与 Tauri 的 OS 对接（§4.7）、迁移路径 |
-| [todo.md](todo.md) | 新 UI 落地 TODO：四阶段任务拆解与验收纪律 |
+| `todo.md`（工作记录，wiki ui/） | 新 UI 落地 TODO：四阶段任务拆解与验收纪律 |
 
 ## 八、设计决策记录（原待决问题，均已落定）
 

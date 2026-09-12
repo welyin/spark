@@ -62,11 +62,10 @@ docs/
 │
 ├── roadmap.md                 # 分期（v1/v2/远期）、阶段进展、自举与第一验证场景
 │
-├── open-questions.md          # 工作记录（非正式分册）：悬而未决问题登记（拍板后归档至 todo 附录）
-└── todo.md                    # 工作记录（非正式分册）：需求清单 + 已决与不要做 + 影响面映射（交架构师任务包）
+└── （工作记录已移出：需求清单 todo 与悬而未决问题 open-questions 见 wiki `product/` 区）
 ```
 
-> 相关：`../ai.md`（docs/ 根）= AI 协作规则，约束 `product/` 与 `architecture/` 两个子树；`../architecture/` = 目标架构与迁移设计（以本目录产品文档为目标态）。
+> 相关：`../ai.md`（docs/ 根）= wiki→docs 迁移规范；`../architecture/` = 目标架构与迁移设计（以本目录产品文档为目标态）。
 
 ### 每一篇要回答的核心问题（写作蓝图）
 

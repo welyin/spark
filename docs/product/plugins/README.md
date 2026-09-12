@@ -44,4 +44,4 @@
 - 对[经济层](../economy/README.md)：贡献怎么记、积分怎么发兑、汇率怎么算，由**经济规则包插件**解释；
 - 对[底座层](../foundation/personal-data.md)：数据怎么呈现、做成什么应用，由**应用视图插件**解释；而同步、存证、身份、网络这些机制本身不是插件、不可替换。
 
-> 运行时、SDK、协议与打包分发的工程细节见 `wiki/architecture/plugins`、`docs/protocol/plugin-dist`，不进产品说明书。
+> 运行时、SDK、协议与打包分发的工程细节见 `wiki/architecture/plugins`、`docs/protocol/plugins`，不进产品说明书。

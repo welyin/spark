@@ -2,7 +2,7 @@
 
 > 状态：定稿 ｜ 分册：第三层 · 事务
 >
-> 上游：`wiki/product/community-model.md` §四、§六；`wiki/protocol/community/org-signature.md`、`docs/protocol/org/org-recovery.md`
+> 上游：`wiki/product/community-model.md` §四、§六；`wiki/protocol/community/org-signature.md`、`docs/protocol/community/org/org-recovery.md`
 
 ## 一句话
 
@@ -14,7 +14,7 @@
 
 - 默认"**任一现任管理员签名**"，验证时回查历史名册、确认签名者当时确为管理员；
 - 可选 **m-of-n 多签**；
-- 可选**门限签名**（分片合成一把对外公钥）——与上两种并列的可选形式，组织策略自选；**硬前提 = 签名者可溯**：只采用可识别门限方案，谁参与了签名必须永远可查，不满足此点宁可不做（设计一次到位，实现排期见 [todo](../todo.md)）。
+- 可选**门限签名**（分片合成一把对外公钥）——与上两种并列的可选形式，组织策略自选；**硬前提 = 签名者可溯**：只采用可识别门限方案，谁参与了签名必须永远可查，不满足此点宁可不做（设计一次到位，实现排期见 `todo`（wiki product/todo.md））。
 
 这一层解决的是**日常代表行为**（加入、退出、表态、邀请成员）；下面的透明与延迟禁令管的是**章程级效力**。
 

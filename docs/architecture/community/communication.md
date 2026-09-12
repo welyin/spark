@@ -12,7 +12,7 @@
 
 ## 二、现状（核实日期：2026-09-08；A19 落地状态见文末注记）
 
-**wiki**：`docs/protocol/p2p/p2p-dm.md`（统一 DM 信封族；§19.6 `feed` 信封供社交插件定向投递）；`wiki/architecture/plugins/`（plugin_system / plugin-runtime / plugin-data-api）。
+**wiki**：`docs/protocol/foundation/p2p/p2p-dm.md`（统一 DM 信封族；§19.6 `feed` 信封供社交插件定向投递）；`wiki/architecture/plugins/`（plugin_system / plugin-runtime / plugin-data-api）。
 
 **代码**：
 

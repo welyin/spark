@@ -2,7 +2,7 @@
 
 > 状态：定稿 ｜ 分册：第五层 · 插件
 >
-> 上游：`wiki/architecture/plugins/plugin_system.md`、`plugin-runtime.md`、`plugin-data-api.md`、`docs/protocol/plugin-dist`。本篇讲产品层面的隔离与信任，不讲 SDK / 协议实现。
+> 上游：`wiki/architecture/plugins/plugin_system.md`、`plugin-runtime.md`、`plugin-data-api.md`、`docs/protocol/plugins`。本篇讲产品层面的隔离与信任，不讲 SDK / 协议实现。
 
 ## 一句话
 

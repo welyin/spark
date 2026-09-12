@@ -12,7 +12,7 @@
 
 ## 二、现状（核实日期：2026-09-08）
 
-**wiki**：`wiki/product/public-topics.md`、`docs/protocol/community/affair-metadata.md`（元数据面与健康信号字段级；§6 组织名片"收录即接通"、扩展可选段归组织名片插件定义）。Git over P2P 无独立设计文档，仅存一行式表述（`wiki/product/development_plan.md:72`、`wiki/product/public-topics.md:87`），且 `docs/product/roadmap.md` 与 `docs/product/README.md` 仍称其为"内核能力"——与 #24 拍板冲突（见 §五.2 待修订清单）。
+**wiki**：`wiki/product/public-topics.md`、`docs/protocol/affairs/affair-metadata.md`（元数据面与健康信号字段级；§6 组织名片"收录即接通"、扩展可选段归组织名片插件定义）。Git over P2P 无独立设计文档，仅存一行式表述（`wiki/product/development_plan.md:72`、`wiki/product/public-topics.md:87`），且 `docs/product/roadmap.md` 与 `docs/product/README.md` 仍称其为"内核能力"——与 #24 拍板冲突（见 §五.2 待修订清单）。
 
 **代码**：
 

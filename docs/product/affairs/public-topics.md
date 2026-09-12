@@ -2,7 +2,7 @@
 
 > 状态：定稿 ｜ 分册：第三层 · 事务
 >
-> 上游：`wiki/product/public-topics.md`、`docs/protocol/community/affair-metadata.md`
+> 上游：`wiki/product/public-topics.md`、`docs/protocol/affairs/affair-metadata.md`
 
 ## 一句话
 

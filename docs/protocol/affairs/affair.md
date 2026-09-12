@@ -8,7 +8,7 @@
 事务容器 = 以 affairId 为作用域的 **append-only 签名操作日志 + 创世规则**。内核保证：容器结构、签名验证、日志完整性、关闭条件的确定性求值、法定人数快照；内容语义（选票/帖子/文件）由插件定义为签名操作的载荷，**无协议地位**。
 
 - **非装机持有者可验证**签名链与完整性，**不能验证类型语义**——有意诚实边界（总体方案 §3.2）；
-- 集合策略：append-only、签名强制、逐条存证（`governance: true` 铁则，[sync-evidence](../sync-evidence.md) §3）；
+- 集合策略：append-only、签名强制、逐条存证（`governance: true` 铁则，[sync-evidence](../foundation/sync-evidence.md) §3）；
 - 事务**没有托管域**（产品第七节）：由关注者复制保存，复制面（动态复制组 hello/need/data）归 C4，本文只定容器线形与本地存储键。
 
 ## 2. affairId 与创世记录
@@ -51,7 +51,7 @@
 
 - `identity` 必须满足 `identity == sha256hex(base64decode(publicKey))`（验签前置，公钥-身份绑定，同 nodeInfoClaim 口径）；
 - `kind: 'person'`：个人参与者。身份两种（用户自选，产品第六节）：
-  - **上下文身份**（默认）：域身份派生（[identity](../identity.md) §4），域串 = `affair:{affairId}`，跨事务不可关联；
+  - **上下文身份**（默认）：域身份派生（[identity](../foundation/identity.md) §4），域串 = `affair:{affairId}`，跨事务不可关联；
   - **公共身份**：一个稳定的公开账号（opt-in），其全部参与构成公开履历；
 - `kind: 'org'`：组织**表态**（展示级立场，不爬阶梯、不表决、无票权——产品第六节）；必须携带 `orgSig` = 满足该组织策略的签名集合（`org-signature`（待 C3，wiki protocol/community/）），`identity`/`publicKey` = 该组织在本事务上下文的展示身份（可为 `affair:{affairId}` 域串按 `org-genesis`（待 A53 改写，wiki protocol/community/） §4 派生的组织域身份）；
 - **创世自举例外**：创世记录的 initiator 派生域由实现自选（affairId 未定，`affair:{affairId}` 域串不可用——sha256 不动点不可计算）；协议只约束 §2.1 验签与 affairId 计算。创世之后的一切操作可用 `affair:{affairId}` 上下文身份。
@@ -113,7 +113,7 @@ opHash = sha256hex(normalizeObject(操作条目全文含 sig))   // 含签名：
 | `affair:follow:{affairId}` | 本地关注状态 | **本地键，不进任何同步流量** |
 
 - 键前缀 `affair:` 与 `org:tx:`/`org:` 分域；orgsync-data 白名单（`org-orgsync`（待 A53 改写，wiki protocol/org/） §20.1 第 3 条）**拒收** affair 键，affair 复制面（[affair-sync](affair-sync.md) §3.3）likewise 拒收 `org:` 键；复制面线形（affairsync-hello/need/data）与关注者发现归 [affair-sync](affair-sync.md)（C4）。
-- 逐条存证：每条操作入本机存证链，条目字段 `domain = "affair:{affairId}"`、`collection = "ops"`、`id = opHash`、`op = 'put'`；创世记录 `collection = "genesis"`、`id = affairId`。链规则同 [sync-evidence](../sync-evidence.md) §2（每节点本地链，无全局全序——见 §7）。
+- 逐条存证：每条操作入本机存证链，条目字段 `domain = "affair:{affairId}"`、`collection = "ops"`、`id = opHash`、`op = 'put'`；创世记录 `collection = "genesis"`、`id = affairId`。链规则同 [sync-evidence](../foundation/sync-evidence.md) §2（每节点本地链，无全局全序——见 §7）。
 
 ## 4. opType 枚举（内核识别面）
 
@@ -214,7 +214,7 @@ opHash = sha256hex(normalizeObject(操作条目全文含 sig))   // 含签名：
 }
 ```
 
-- 门槛必须**可验证**（产品铁律）；基础件两类：**账龄/阶梯**（内核从日志+存证链确定性推导，插件伪造不了链上时间）与**凭证**（[credential](credential.md)，插件签发、内核验证产物）；
+- 门槛必须**可验证**（产品铁律）；基础件两类：**账龄/阶梯**（内核从日志+存证链确定性推导，插件伪造不了链上时间）与**凭证**（[credential](../community/credential.md)，插件签发、内核验证产物）；
 - `ladder` 取值 `observer`/`contributor`/`voter`（观察/评论层永远零门槛——`observer` 为缺省，门槛只卡贡献与表决）；
 - 阶梯参数（在级天数、采纳次数、活跃窗口）可在 participation 内以 `ladderParams: { "contributorAccepts": 1, "voterDays": 30, "voterAccepts": 3, "activeWindowMs": 7776000000, "decayMs": 7776000000 }` 覆盖默认值（缺省值即产品默认值：1 次采纳 / 在级 30 天 + 累计 3 次采纳 + 近 90 天活跃 / 90 天衰减）；
 - `combine`：`all`（缺省）| `any`；平台不设任何层级默认门槛（原则 1）。
@@ -261,7 +261,7 @@ opHash = sha256hex(normalizeObject(操作条目全文含 sig))   // 含签名：
 
 ### 6.3 决议结论存证条目（evi:resolution，A21）
 
-**生效决议**（§6.2 两态之「生效」——公示窗无阈值异议后生效判定通过，**非**关闭条件初通过的「待确认」态）由**每个求值到该生效判定的节点**在**本机存证链**确定性自写自锚（写入点 = 组织效力钩子消费编排，与 §6.2-4 治理钩子同点；条目不流动、锚经 orgsync 全员流动——存证链本地性见 [sync-evidence](../sync-evidence.md) §6）：
+**生效决议**（§6.2 两态之「生效」——公示窗无阈值异议后生效判定通过，**非**关闭条件初通过的「待确认」态）由**每个求值到该生效判定的节点**在**本机存证链**确定性自写自锚（写入点 = 组织效力钩子消费编排，与 §6.2-4 治理钩子同点；条目不流动、锚经 orgsync 全员流动——存证链本地性见 [sync-evidence](../foundation/sync-evidence.md) §6）：
 
 ```json
 { "kind": "evi:resolution", "affairId": "<64hex>", "subject": "<决议 id = resolution opHash>",
@@ -284,7 +284,7 @@ opHash = sha256hex(normalizeObject(操作条目全文含 sig))   // 含签名：
 
 ### 7.1 无全局权威时钟
 
-存证链是**每节点本地链**（条目时间戳 = 写入节点本地时钟 + nodeId），跨节点只有默克尔根锚定做完整性互证（[sync-evidence](../sync-evidence.md) §2/§6–§8）。**本协议不假设全局全序与权威墙钟。**
+存证链是**每节点本地链**（条目时间戳 = 写入节点本地时钟 + nodeId），跨节点只有默克尔根锚定做完整性互证（[sync-evidence](../foundation/sync-evidence.md) §2/§6–§8）。**本协议不假设全局全序与权威墙钟。**
 
 ### 7.2 三条可实现语义
 
@@ -355,7 +355,7 @@ sortKey(op) = opHash 的 hex 字符串字典序（UTF-8 字节序）
 ```
 
 - 仅主持人可提议；生效机制固定为 delayed-veto（防操纵发现面；阈值可配）；
-- 缺省字段 = 不变（三态口径同 [identity](../identity.md) §6 updateProfile）；**title 不允许清除：显式 `title: null` 在解析期即整条拒收**（`bad-meta-revise-title`）——标题是必备元数据，「清除标题」语义不成立，不得应用期静默吞掉；
+- 缺省字段 = 不变（三态口径同 [identity](../foundation/identity.md) §6 updateProfile）；**title 不允许清除：显式 `title: null` 在解析期即整条拒收**（`bad-meta-revise-title`）——标题是必备元数据，「清除标题」语义不成立，不得应用期静默吞掉；
 - 生效后元数据代际 metaSeq+1，经元数据面公告扩散（[affair-metadata](affair-metadata.md)）；修订历史在日志内留痕可验。
 
 ## 12. 验收向量（登记：`code/spec/vectors/community.json`）

@@ -1,6 +1,6 @@
 # 插件开发指南
 
-> 面向新 monorepo（[welyin/spark](https://github.com/welyin/spark)）的插件开发指南。设计背景见 `插件体系`（wiki architecture/plugins/plugin_system.md）；同步策略语义见 `同步与存证`（wiki architecture/sync/sync-and-evidence.md）；分发协议见 [插件分发规格](../protocol/plugin-dist/plugin-dist.md)；应用消息协议见 [p2p 消息规格](../protocol/)。
+> 面向新 monorepo（[welyin/spark](https://github.com/welyin/spark)）的插件开发指南。设计背景见 `插件体系`（wiki architecture/plugins/plugin_system.md）；同步策略语义见 `同步与存证`（wiki architecture/sync/sync-and-evidence.md）；分发协议见 [插件分发规格](../protocol/plugins/plugin-dist.md)；应用消息协议见 [p2p 消息规格](../protocol/)。
 >
 > **本文档是活体文档**：随插件体系里程碑逐步补全，只描述当前真实可用的能力。
 
@@ -108,13 +108,13 @@ async function bootstrapMainView(): Promise<void> {
 - `supportedSpaces`：插件支持的容器类型（`'personal'` / `'org'`），未声明默认 `['org']`；
 - `category`：插件分类，用于市场展示分组，可选值：`"ai-assistant"`（AI 助手）、`"social"`（社交）、`"tool"`（工具）、`"game"`（游戏）、`"foundation"`（基础/框架）。该字段与 `supportedSpaces` 正交——category 决定展示分组，supportedSpaces 决定数据作用域；
 - `requires`：运行时平台约束，可选。`requires.platforms` 声明支持的平台列表（`"desktop"` / `"mobile"`），不声明则全平台可用。安装时内核校验：当前平台不在声明列表中则阻止安装；
-- `window`：PC 窗口默认尺寸，可选（插件级，不做 per-view）。PC 端插件在可拖动/缩放的桌面窗口中打开（最小夹取 320×220，**插件须响应式**），`window.defaultWidth` / `window.defaultHeight` 声明初始尺寸（px，合法范围宽 320–3840 / 高 220–2160），不声明或越界按壳层默认 880×620；移动端全屏打开，忽略本字段。声明示例（窄高形的 AI 聊天插件）：`"window": { "defaultWidth": 480, "defaultHeight": 680 }`。仓库锚定分发的插件在 `spark-plugin.json` 声明同名字段（[插件分发规格](../protocol/plugin-dist/plugin-dist.md) §2.1）；
+- `window`：PC 窗口默认尺寸，可选（插件级，不做 per-view）。PC 端插件在可拖动/缩放的桌面窗口中打开（最小夹取 320×220，**插件须响应式**），`window.defaultWidth` / `window.defaultHeight` 声明初始尺寸（px，合法范围宽 320–3840 / 高 220–2160），不声明或越界按壳层默认 880×620；移动端全屏打开，忽略本字段。声明示例（窄高形的 AI 聊天插件）：`"window": { "defaultWidth": 480, "defaultHeight": 680 }`。仓库锚定分发的插件在 `spark-plugin.json` 声明同名字段（[插件分发规格](../protocol/plugins/plugin-dist.md) §2.1）；
 - `views`：槽位渲染件声明，两种类型均已生效——`app` 主视图（全页 iframe）与 `message-card` 消息卡片（聊天内限定区域 iframe，能力面按 view 裁剪）；`entryView` 必须存在于 `views` 中；
 - `permissions`：权限声明，语义见 `插件体系·权限模型`（wiki architecture/plugins/plugin_system.md）（伞权限按容器分解）。`message:app`（应用会话读写）与 `identity:sign`（域身份签名，使用时询问）均已生效，安装授权后落 `grantedPermissions`；
 - `sdkVersion`：SDK 契约版本，桥握手时协商（v1 协议下要求与宿主精确一致，不兼容拒绝加载）；
-- `id` 将随分发模型迁移为规范化仓库地址（见 `spark-plugin.json` 的 comment 字段与 [插件分发规格](../protocol/plugin-dist/plugin-dist.md) §1）。
+- `id` 将随分发模型迁移为规范化仓库地址（见 `spark-plugin.json` 的 comment 字段与 [插件分发规格](../protocol/plugins/plugin-dist.md) §1）。
 
-`spark-plugin.json`（仓库声明文件）是市场广播/验证的信任锚点，字段规范见 [插件分发规格](../protocol/plugin-dist/plugin-dist.md) §2。
+`spark-plugin.json`（仓库声明文件）是市场广播/验证的信任锚点，字段规范见 [插件分发规格](../protocol/plugins/plugin-dist.md) §2。
 
 ## 5. SDK 接口
 

@@ -2,7 +2,7 @@
 
 > 状态：定稿 ｜ 分册：第一层 · 底座
 >
-> 上游实现：`wiki/architecture/sync/evidence-anchoring-export.md`、`wiki/architecture/sync/sync-and-evidence.md`、`docs/protocol/sync-evidence.md`
+> 上游实现：`wiki/architecture/sync/evidence-anchoring-export.md`、`wiki/architecture/sync/sync-and-evidence.md`、`docs/protocol/foundation/sync-evidence.md`
 
 ## 一句话
 
@@ -51,4 +51,4 @@
 
 ---
 
-> 实现状态：锚定、导出包、独立核验 CLI 已于阶段四F 落地（2026-09）；"导出包内附成员名册快照"已拍板前置到里程碑二前（Q05，登记于 ../todo.md）。核验工具的网页版为远期可达性增强、不排期——里程碑二的现实路径是懂技术的成员运行 CLI 核验、打印报告提交街道办。
+> 实现状态：锚定、导出包、独立核验 CLI 已于阶段四F 落地（2026-09）；"导出包内附成员名册快照"已拍板前置到里程碑二前（Q05，登记于 wiki `product/todo.md`）。核验工具的网页版为远期可达性增强、不排期——里程碑二的现实路径是懂技术的成员运行 CLI 核验、打印报告提交街道办。

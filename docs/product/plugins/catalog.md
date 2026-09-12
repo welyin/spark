@@ -2,7 +2,7 @@
 
 > 状态：定稿（随里程碑滚动更新）
 >
-> 本篇只登记**两个里程碑分别需要哪些基础插件、各自做什么、当前什么状态**，不记录任何插件的具体实现（运行时、协议、SDK 见 `wiki/architecture/plugins`、`docs/protocol/plugin-dist`）。
+> 本篇只登记**两个里程碑分别需要哪些基础插件、各自做什么、当前什么状态**，不记录任何插件的具体实现（运行时、协议、SDK 见 `wiki/architecture/plugins`、`docs/protocol/plugins`）。
 >
 > **状态三档**：计划 / 开发中 / 已开发版本。
 >

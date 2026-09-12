@@ -15,8 +15,8 @@
 | --- | --- |
 | `spark-affair-meta` | 议题元数据公告（本文）；全网公共主题，任何节点可订阅 |
 
-- 新主题与既有 `spark-sync`/`spark-overlay`（[p2p-netstack](../p2p/p2p-netstack.md) §2）并列；节点启动时订阅与否由角色决定（轻客户端可不订阅，只向 indexer 查询）；
-- 信封沿用 pubsub 信封规则（[p2p-envelope](../p2p/p2p-envelope.md) §3）：`type: 'affair-meta'`、`domain: 'affair'`、`id: <affairId>`、`payload` = §3 公告；**不强制签名**（与 org-share 同档——§4 的可验证性由 payload 内嵌的修订链指针承担，信封临时钥签名只提供完整性/反垃圾门槛，p2p-envelope §3.3 自证式口径）；
+- 新主题与既有 `spark-sync`/`spark-overlay`（[p2p-netstack](../foundation/p2p/p2p-netstack.md) §2）并列；节点启动时订阅与否由角色决定（轻客户端可不订阅，只向 indexer 查询）；
+- 信封沿用 pubsub 信封规则（[p2p-envelope](../foundation/p2p/p2p-envelope.md) §3）：`type: 'affair-meta'`、`domain: 'affair'`、`id: <affairId>`、`payload` = §3 公告；**不强制签名**（与 org-share 同档——§4 的可验证性由 payload 内嵌的修订链指针承担，信封临时钥签名只提供完整性/反垃圾门槛，p2p-envelope §3.3 自证式口径）；
 - 入站分流：topic == `spark-affair-meta` 且 type == 'affair-meta' → 元数据公告处理器；**不落业务库**（与 update/delete 路径隔离），只进元数据暂存区（§5）。
 
 ## 3. 元数据公告线形（payload）
@@ -67,7 +67,7 @@
 
 ## 6. 组织公开名片（公共目录的另一收录类）
 
-组织可发布签名的公开名片进入公共目录（产品第四节，字段逐个可选、粒度自决）——名片线形复用 [org-address](../org/org-address.md) §16 组织地址记录（`displayName`/gateways 已含），扩展可选段归组织名片插件（C11）的产品文档定义；本面只做一件事：**`spark-affair-meta` 主题同时承载 `type: 'org-card'` 信封**（domain `'affair'`、id = orgAddress），payload = 地址记录全文（§16 校验链五步在收录点执行——该记录本就自认证签名，无需新机制）。
+组织可发布签名的公开名片进入公共目录（产品第四节，字段逐个可选、粒度自决）——名片线形复用 [org-address](../community/org/org-address.md) §16 组织地址记录（`displayName`/gateways 已含），扩展可选段归组织名片插件（C11）的产品文档定义；本面只做一件事：**`spark-affair-meta` 主题同时承载 `type: 'org-card'` 信封**（domain `'affair'`、id = orgAddress），payload = 地址记录全文（§16 校验链五步在收录点执行——该记录本就自认证签名，无需新机制）。
 
 - 实现（C11 收录面）：gossip 入站 `core/src/p2p/node/gossip.rs::handle_inbound_org_card`——信封 id 须等于记录 orgAddress → §16.3 五步校验链 → seq/publishedAt 冲突裁决后沉淀 `p2p:org-address:` 本地缓存（与 spark-overlay `org-address` 入站同径同库）；查询路径 = kernel `resolve_org_address` / `search_known_orgs`（org.md §16.4，读同一缓存），收录即接通。
 

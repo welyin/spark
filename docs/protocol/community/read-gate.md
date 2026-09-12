@@ -43,7 +43,7 @@
 ```
 
 - **holderProof**：逐凭证证明请求者持有 holder 私钥——签名密钥 = 凭证 `holder.publicKey` 对应私钥，载荷 = `canonical({ "credId":…, "requestId":…, "orgId":…, "collection":…, "presentedAt":… })`（绑定本次请求，防重放转投）；
-- readAuth 段随 orgq-req body 入 **dm 信封既有签名面**（信封由 from root 身份签，[p2p-dm](../p2p/p2p-dm.md)），不再独立签名；`presentedAt` ±10 min 新鲜度门槛同总约；
+- readAuth 段随 orgq-req body 入 **dm 信封既有签名面**（信封由 from root 身份签，[p2p-dm](../foundation/p2p/p2p-dm.md)），不再独立签名；`presentedAt` ±10 min 新鲜度门槛同总约；
 - 持有证明与信封身份解耦是有意的：住户以其**在共同体的域身份**持证读取，不暴露 rootId 与户号的关联（资格可验、行为匿名，产品第九节）。
 
 ## 4. 数据账号侧验证链（内核，fail-closed）
@@ -65,7 +65,7 @@
 | --- | --- |
 | 组织内部集合（现状） | `members` 缺省，零变化 |
 | 共同体托管集合（业委会账本托管小区域） | `credential`：住户持成员资格凭证读，无需加入来源组织；写权限仍属来源组织（orgq 写入路径不变） |
-| 全网公开集合 | `public`：无需凭证；发现面归 [affair-metadata](affair-metadata.md) 公共目录 |
+| 全网公开集合 | `public`：无需凭证；发现面归 [affair-metadata](../affairs/affair-metadata.md) 公共目录 |
 | 名册三档 / 字段级掩码 / 向上开放矩阵 | A15 起 = 名册开放声明（`org:disclosure:`，[policy](policy.md) §8：档位 + 字段授权 + 开放集合并入同一发布物）；B1 策略文档与 `evaluate_read` 保留（求值器重排归 A30），orgq 读取点不再消费 |
 
 ## 6. 验收向量（登记：`code/spec/vectors/community.json`）

@@ -23,4 +23,4 @@
 - **向下**：用 [存证链](../foundation/evidence.md)固定操作先后与决议、用[身份](../foundation/identity.md)签名、用[共同体名册与凭证](../community/membership.md)判定参与资格；
 - **向上**：为经济层提供"积分发行 / 红冲 / 争议授权"的**唯一合法来源**（经济层不接受任何单点指令）；为插件层提供可被类型插件解释的统一容器。
 
-> 工程实现（事务容器线形、元数据面 gossip、反熵同步、签名策略）见 `docs/protocol/community/affair*.md`、`wiki/architecture/community-affairs.md`。
+> 工程实现（事务容器线形、元数据面 gossip、反熵同步、签名策略）见 `docs/protocol/affairs/affair*.md`、`wiki/architecture/community-affairs.md`。
