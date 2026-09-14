@@ -73,19 +73,35 @@ cd app && npm run tauri build
 
 ## 文档
 
-详细文档见 [GitHub Wiki](https://github.com/welyin/spark/wiki)，主要入口：
+文档分两处，**一处事实一处权威，不重复存放同一内容**：
 
-- [架构设计](https://github.com/welyin/spark/wiki/architecture)
-- [协议规格（字节级权威）](https://github.com/welyin/spark/wiki/协议规格)
-- [插件开发指南](https://github.com/welyin/spark/wiki/plugin_development)
-- [开发计划](https://github.com/welyin/spark/wiki/development_plan)
-- [测试体系](https://github.com/welyin/spark/wiki/testing)
+| | 内容 | 去向 |
+| --- | --- | --- |
+| **目标与规则（权威）** | 产品说明书、目标架构、界面设计、已定稿协议规格、各类规范、用户/开发者文档 | 本仓库 [`docs/`](docs/README.md)，随代码版本演进、随提交评审 |
+| **现状与记录** | 实现记录、fix 链、评审打回、发版记录、排障案例、已被取代的旧草案 | [Spark Wiki](https://github.com/welyin/spark/wiki)，随工作实时回写 |
+
+### docs/ 入口索引
+
+| 找什么 | 入口 |
+| --- | --- |
+| 做什么、为什么、规则与边界 | [`docs/product/`](docs/product/README.md) 产品说明书（权威） |
+| 怎么做、放哪层、怎么迁移 | [`docs/architecture/`](docs/architecture/README.md) 目标架构与迁移设计 |
+| 界面长什么样、为什么 | [`docs/ui/`](docs/ui/README.md) 界面设计与视觉基线 |
+| 字节级线形、存储键、签名/信封 | [`docs/protocol/`](docs/protocol/README.md) 已定稿协议规格 |
+| 测试分几层、怎么写 | [`docs/testing/`](docs/testing/README.md) 测试体系与方法规范 |
+| 威胁模型与安全约定 | [`docs/security/`](docs/security/README.md) 安全规范 |
+| 环境搭建、编码规范、写插件 | [`docs/dev/`](docs/dev/README.md) 开发者文档 |
+| 安装、使用手册、FAQ | [`docs/user/`](docs/user/README.md) 用户文档 |
+
+一篇速览：先看 [`docs/product/product-map.md`](docs/product/product-map.md)（产品全景与术语表），再按上表进对应区。
+
+> 迁移纪律：wiki 中「已实现且已稳定」的内容（协议线形规格、测试体系、编码规范等）迁入 docs 后，wiki 原文删除、引用更新，不留跳转空壳。AI 协作者在本目录工作前须读 [`docs/ai.md`](docs/ai.md)。
 
 ## 插件开发
 
 星火采用「核心骨架 + 插件应用」的开放架构，所有业务功能均可通过插件扩展。插件基于 TypeScript + Vue 3 开发，运行于独立插件域，通过标准化 SDK 调用底层能力；插件包经 Ed25519 签名后通过插件市场发布与安装。
 
-详细开发规范请参考 [插件开发指南](https://github.com/welyin/spark/wiki/plugin_development)。
+详见 [插件开发指南](docs/dev/plugin-development-guide.md)（含 SDK 接口、manifest 清单、打包签名）与 [编码规范](docs/dev/coding-standards.md)。
 
 ## 参与贡献
 
