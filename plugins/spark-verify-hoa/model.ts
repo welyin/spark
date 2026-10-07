@@ -178,6 +178,44 @@ export function buildRevocationSignPayload(credentialId: string, reason: string)
   return `revocation:${credentialId}:${hashMaterialContent(reason)}`;
 }
 
+/**
+ * 验证人授权条目（结构性子集，与 sdk.credentials 的 VerifierGrant 对齐；
+ * model 层不依赖 SDK，故以结构类型声明）。
+ */
+export type VerifierGrantLike = {
+  identity: string;
+  credTypes: string[];
+  methods: string[];
+};
+
+/**
+ * 方法模式匹配：尾部 `*` 为前缀通配，其余精确相等——逐字对齐内核口径
+ * （core/src/credential/trust.rs method_matches）。
+ */
+export function methodPatternMatches(pattern: string, method: string): boolean {
+  return pattern.endsWith('*') ? method.startsWith(pattern.slice(0, -1)) : pattern === method;
+}
+
+/**
+ * 验证人软闸门判定（签发/注销前置，对齐内核 verifier_granted 口径）：
+ * 身份命中信任声明 verifiers，且 credType 精确命中、method 命中授权模式集。
+ * 软闸门防误操作不防恶意（签名主体仍是插件域钥匙），但让「不具备验证人
+ * 资格」在流程层被如实拒绝，而不是静默放行。
+ */
+export function verifierGrantCovers(
+  grants: readonly VerifierGrantLike[],
+  identity: string,
+  credentialType: string,
+  method: string
+): boolean {
+  return grants.some(
+    (grant) =>
+      grant.identity === identity &&
+      grant.credTypes.includes(credentialType) &&
+      grant.methods.some((pattern) => methodPatternMatches(pattern, method))
+  );
+}
+
 /** 申请状态推导：append-only 集合不允许覆盖状态，由凭证/注销记录推导（诚实口径） */
 export type ApplicationStatus = 'pending' | 'issued' | 'revoked';
 

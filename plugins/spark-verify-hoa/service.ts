@@ -3,7 +3,10 @@
  *
  * 职责边界（community-model.md §十 + 已落地 SDK 面）：
  * - 申请人侧：材料提交引导（校验 + 敏感字段禁令 + 材料摘要入同步集合）；
- * - 验证人侧：审核申请、签发凭证（identity:sign）、主动注销；
+ * - 验证人侧：审核申请、签发凭证（identity:sign）、主动注销；签发/注销
+ *   前置验证人软闸门——queryVerifiers 核对当前身份在组织信任声明内且
+ *   credType/method 在授权范围，不命中则拒绝（流程层防误操作，非密码学
+ *   约束，见 assertVerifierGranted）；
  * - 内核凭证面：sdk.credentials 只读五方法（listHeld / presentHolderProof /
  *   queryVerifiers / verify / queryRevocations，credentials:read，对接见
  *   sdk-credentials.ts）。协议线形凭证的验证与注销查询走内核验证链，
@@ -41,6 +44,7 @@ import {
   buildRevocationSignPayload,
   hashMaterialContent,
   validateApplicationInput,
+  verifierGrantCovers,
   type CredentialRevocation,
   type HoaCredential,
   type MaterialDraft,
@@ -174,10 +178,19 @@ export class HoaVerifyService {
    * 插件开放）：签发 = 本插件的人机审核流程（线下核对材料）+ identity:sign。
    * 签名主体是插件域身份（不证明验证人个人身份，issuerRootId 为自报文本），
    * 产物是演示级线形（不过内核验证链）——如实标注，不冒充协议凭证。
+   * 前置验证人软闸门（见 assertVerifierGranted）：当前身份不在组织信任声明
+   * 内或 credType/method 超授权范围时拒绝签发。
    * 用户拒绝签名时直接报错：不产出无签名凭证。
    */
   async issueCredential(application: VerificationApplication, verifierRootId: string): Promise<HoaCredential> {
     await this.ensureCollectionsDeclared();
+    await this.assertVerifierGranted(
+      application.orgId,
+      verifierRootId,
+      application.credentialType,
+      application.method,
+      '签发凭证'
+    );
     const credential: HoaCredential = {
       credentialId: newId('cred'),
       applicationId: application.applicationId,
@@ -210,13 +223,22 @@ export class HoaVerifyService {
     return credential;
   }
 
-  /** 注销凭证（演示级记录；签名主体同为插件域身份，revokedBy 为自报文本） */
+  /** 注销凭证（演示级记录；签名主体同为插件域身份，revokedBy 为自报文本）。
+   * 前置验证人软闸门（见 assertVerifierGranted）：当前身份不在组织信任声明
+   * 内或 credType/method 超授权范围时拒绝注销。 */
   async revokeCredential(credential: HoaCredential, reason: string, verifierRootId: string): Promise<CredentialRevocation> {
     const trimmed = reason.trim();
     if (!trimmed) {
       throw new Error('注销理由不能为空');
     }
     await this.ensureCollectionsDeclared();
+    await this.assertVerifierGranted(
+      credential.orgId,
+      verifierRootId,
+      credential.credentialType,
+      credential.method,
+      '注销凭证'
+    );
     const payload = buildRevocationSignPayload(credential.credentialId, trimmed);
     const signed = await this.sdk.identity.sign(payload);
     const revocation: CredentialRevocation = {
@@ -233,6 +255,30 @@ export class HoaVerifyService {
       revocation as unknown as Record<string, unknown>
     );
     return revocation;
+  }
+
+  /**
+   * 验证人软闸门（签发/注销共用前置）：查询组织验证人信任声明
+   * （sdk.credentials.queryVerifiers），要求当前身份命中 verifiers 且
+   * credType/method 在其授权范围内（判定口径对齐内核 verifier_granted，
+   * 见 model.verifierGrantCovers）；不命中则拒绝。诚实边界：这是流程层
+   * 软闸门——防误操作、让「不具备验证人资格」如实呈现，但不构成密码学
+   * 约束（签名主体仍是插件域钥匙，防不了恶意绕过）。queryVerifiers 的
+   * 失败（权限拒绝/结构损坏）如实上抛，按 fail-closed 处理。
+   */
+  private async assertVerifierGranted(
+    orgId: string,
+    verifierRootId: string,
+    credentialType: HoaCredentialType,
+    method: VerificationMethod,
+    action: string
+  ): Promise<void> {
+    const trust = await requireCredentialsModule(this.sdk).queryVerifiers(orgId);
+    if (!verifierGrantCovers(trust.verifiers, verifierRootId, credentialType, method)) {
+      throw new Error(
+        `当前身份不在本组织验证人信任声明内（或授权范围不含 ${credentialType}/${method}），不具备${action}资格`
+      );
+    }
   }
 
   // ------------------------------------------------------------------

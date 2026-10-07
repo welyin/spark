@@ -5,7 +5,9 @@ import {
   buildRevocationSignPayload,
   deriveApplicationStatus,
   hashMaterialContent,
+  methodPatternMatches,
   validateApplicationInput,
+  verifierGrantCovers,
   type CredentialRevocation,
   type HoaCredential,
   type VerificationApplication
@@ -91,5 +93,30 @@ describe('spark-verify-hoa model', () => {
       signature: { payload: 'p', signature: 's', publicKey: 'k' }
     };
     expect(deriveApplicationStatus(application, [credential], [revocation])).toBe('revoked');
+  });
+
+  it('matches method patterns with trailing-* prefix wildcard (kernel method_matches semantics)', () => {
+    expect(methodPatternMatches('vouch-*', 'vouch-2')).toBe(true);
+    expect(methodPatternMatches('vouch-*', 'vouch-')).toBe(true);
+    expect(methodPatternMatches('*', 'deed-manual')).toBe(true);
+    expect(methodPatternMatches('deed-manual', 'deed-manual')).toBe(true);
+    expect(methodPatternMatches('vouch-*', 'deed-manual')).toBe(false);
+    expect(methodPatternMatches('deed-manual', 'deed-manual-2')).toBe(false);
+    expect(methodPatternMatches('deed-*manual', 'deed-manual')).toBe(false); // 仅尾部 * 是通配
+  });
+
+  it('verifierGrantCovers requires identity + exact credType + method pattern (kernel verifier_granted semantics)', () => {
+    const grants = [
+      { identity: 'root-v', credTypes: ['owner'], methods: ['deed-manual', 'vouch-*'] },
+      { identity: 'root-w', credTypes: ['resident'], methods: ['gov-realname'] }
+    ];
+    expect(verifierGrantCovers(grants, 'root-v', 'owner', 'deed-manual')).toBe(true);
+    expect(verifierGrantCovers(grants, 'root-v', 'owner', 'vouch-2')).toBe(true);
+    expect(verifierGrantCovers(grants, 'root-w', 'resident', 'gov-realname')).toBe(true);
+    // 身份不在声明内 / credType 超范围 / method 超范围 / 空声明一律不覆盖
+    expect(verifierGrantCovers(grants, 'root-x', 'owner', 'deed-manual')).toBe(false);
+    expect(verifierGrantCovers(grants, 'root-v', 'resident', 'deed-manual')).toBe(false);
+    expect(verifierGrantCovers(grants, 'root-v', 'owner', 'gov-realname')).toBe(false);
+    expect(verifierGrantCovers([], 'root-v', 'owner', 'deed-manual')).toBe(false);
   });
 });

@@ -84,6 +84,25 @@ function pendingApplication(): VerificationApplication {
   };
 }
 
+/** 信任声明中覆盖 root-verifier 的授权条目（credTypes 精确 + methods 含前缀通配） */
+const VERIFIER_GRANT = {
+  identity: 'root-verifier',
+  publicKey: 'pk-verifier',
+  credTypes: ['owner', 'resident'],
+  methods: ['deed-manual', 'vouch-*', 'gov-realname']
+};
+
+/** 让 mock 的 queryVerifiers 返回给定授权条目集（默认覆盖 root-verifier） */
+function mockTrustDecl(sdk: any, verifiers: unknown[] = [VERIFIER_GRANT]) {
+  sdk.credentials.queryVerifiers.mockResolvedValue({
+    orgId: 'org-1',
+    effectiveFrom: 0,
+    seq: 1,
+    updatedAt: 0,
+    verifiers
+  });
+}
+
 describe('spark-verify-hoa service: applications & demo credentials', () => {
   it('declares append-only collections before first write', async () => {
     const { sdk, docs } = createMockSdk();
@@ -150,11 +169,13 @@ describe('spark-verify-hoa service: applications & demo credentials', () => {
   });
 
   it('issues demo credential signed with the plugin domain identity (payload binds qualification fields)', async () => {
-    const { sdk, store } = createMockSdk();
+    const { sdk, store } = createMockSdk(true);
+    mockTrustDecl(sdk);
     const service = new HoaVerifyService(sdk);
 
     const credential = await service.issueCredential(pendingApplication(), 'root-verifier');
 
+    expect(sdk.credentials.queryVerifiers).toHaveBeenCalledWith('org-1');
     expect(sdk.identity.sign).toHaveBeenCalledWith(
       buildCredentialSignPayload('org-1', credential.credentialId, 'root-a', 'owner', '3-502', 'deed-manual')
     );
@@ -163,15 +184,51 @@ describe('spark-verify-hoa service: applications & demo credentials', () => {
   });
 
   it('does not issue unsigned credential when identity:sign is rejected (signature IS the product)', async () => {
-    const { sdk } = createMockSdk();
+    const { sdk } = createMockSdk(true);
+    mockTrustDecl(sdk);
     sdk.identity.sign.mockRejectedValueOnce(new Error('Access denied: identity:sign rejected by user'));
     const service = new HoaVerifyService(sdk);
 
     await expect(service.issueCredential(pendingApplication(), 'root-verifier')).rejects.toThrow(/identity:sign/);
   });
 
+  it('rejects issue when the current identity is not in the verifier trust declaration (soft gate)', async () => {
+    const { sdk, store } = createMockSdk(true);
+    mockTrustDecl(sdk); // 声明里只有 root-verifier
+    const service = new HoaVerifyService(sdk);
+
+    await expect(service.issueCredential(pendingApplication(), 'root-stranger')).rejects.toThrow(
+      /不在本组织验证人信任声明内/
+    );
+    expect(sdk.identity.sign).not.toHaveBeenCalled();
+    expect(store.get(HOA_COLLECTIONS.credentials)?.size ?? 0).toBe(0);
+  });
+
+  it('rejects issue when credType/method is outside the granted scope (soft gate)', async () => {
+    const { sdk } = createMockSdk(true);
+    // 身份在声明内，但授权范围只含 resident + gov-realname，不覆盖 owner/deed-manual
+    mockTrustDecl(sdk, [
+      { identity: 'root-verifier', publicKey: 'pk-verifier', credTypes: ['resident'], methods: ['gov-realname'] }
+    ]);
+    const service = new HoaVerifyService(sdk);
+
+    await expect(service.issueCredential(pendingApplication(), 'root-verifier')).rejects.toThrow(
+      /授权范围不含 owner\/deed-manual/
+    );
+    expect(sdk.identity.sign).not.toHaveBeenCalled();
+  });
+
+  it('rejects issue fail-closed when sdk.credentials is unavailable (gate cannot be evaluated)', async () => {
+    const { sdk } = createMockSdk(); // 无 credentials 模块：软闸门无从核对，不得静默放行
+    const service = new HoaVerifyService(sdk);
+
+    await expect(service.issueCredential(pendingApplication(), 'root-verifier')).rejects.toThrow(/sdk\.credentials/);
+    expect(sdk.identity.sign).not.toHaveBeenCalled();
+  });
+
   it('revokes credential with signed revocation record', async () => {
-    const { sdk, store } = createMockSdk();
+    const { sdk, store } = createMockSdk(true);
+    mockTrustDecl(sdk);
     const service = new HoaVerifyService(sdk);
     const credential = await service.issueCredential(pendingApplication(), 'root-verifier');
 
@@ -180,6 +237,18 @@ describe('spark-verify-hoa service: applications & demo credentials', () => {
     expect(revocation.credentialId).toBe(credential.credentialId);
     expect(store.get(HOA_COLLECTIONS.revocations)?.get(revocation.revocationId)).toBeDefined();
     await expect(service.revokeCredential(credential, '   ', 'root-verifier')).rejects.toThrow(/理由不能为空/);
+  });
+
+  it('rejects revoke when the current identity is not a granted verifier (soft gate)', async () => {
+    const { sdk, store } = createMockSdk(true);
+    mockTrustDecl(sdk);
+    const service = new HoaVerifyService(sdk);
+    const credential = await service.issueCredential(pendingApplication(), 'root-verifier');
+
+    await expect(service.revokeCredential(credential, '房屋已出售', 'root-stranger')).rejects.toThrow(
+      /不具备注销凭证资格/
+    );
+    expect(store.get(HOA_COLLECTIONS.revocations)?.size ?? 0).toBe(0);
   });
 });
 
@@ -266,6 +335,7 @@ describe('spark-verify-hoa service: kernel credential surface (sdk.credentials r
 describe('spark-verify-hoa service: demo-grade self-check (HoaCredential is NOT a protocol credential)', () => {
   it('self-checks locally: recomputed payload + identity.verify + local revocation list, honestly labeled', async () => {
     const { sdk } = createMockSdk(true); // 即使有 credentials 模块，演示凭证也只能本地自查（演示线形不过内核验证链）
+    mockTrustDecl(sdk);
     const service = new HoaVerifyService(sdk);
     const credential = await service.issueCredential(pendingApplication(), 'root-verifier');
 

@@ -25,6 +25,11 @@ C11 验证插件参考实现（业主场景）：申请人材料提交引导 + �
    插件域钥匙，密码学上不证明验证人个人身份；`issuerRootId` / `revokedBy`
    只是自报文本。信任声明绑定、按验证人的注销链、既往不咎时间线在此模型下
    均不成立——需平台层提供个人身份签名路径后方可重做。
+   在此之上，签发/注销前置一道**流程层软闸门**：先查 `queryVerifiers` 信任
+   声明，当前身份不在声明 verifiers 内、或 credType/method 超出其授权范围时
+   拒绝（判定口径对齐内核 verifier_granted：credType 精确匹配、method 尾部
+   `*` 前缀通配）。软闸门防误操作并让「不具备验证人资格」如实呈现，但不构成
+   密码学约束（签名仍是插件域钥匙，防不了恶意绕过）。
 2. **HoaCredential 不是协议凭证。** 其线形（credentialId/subjectRootId/
    issuerRootId/unitNo/自定义拼接签名载荷）与 credential §2 协议线形不同：
    不进 `cred:held:` 键域、过不了内核验证链（结构→credId 复算→验签→信任
