@@ -9,8 +9,8 @@
  * 1) grantedPermissions：读市场安装状态（pluginMarket.list 聚合的
  *    grantedPermissions，内核侧持久化，渲染进程不可自报）；读取失败按空清单
  *    （最小授权，仅免权限基础调用放行）；
- * 2) view type 裁剪：app 主视图全量、message-card 仅 docs 只读与验签类
- *    （VIEW_ALLOWED_CALLS 映射表，后续按 view 扩充）；
+ * 2) view type 裁剪：app 主视图全量、message-card 仅 docs/data 只读、验签类
+ *    与 affairs 只读（VIEW_ALLOWED_CALLS 映射表，后续按 view 扩充）；
  * 3) 当前 space：manifest supportedSpaces 不含当前 space 类型时整域拒绝；
  *    org 域调用（runtime.syncOrganizationData/listMineOrganizations）在 personal
  *    空间下一律拒绝；org 空间下 syncOrganizationData 的 org 实参必须与当前 space 一致。
@@ -33,6 +33,7 @@ import { createPluginBackend } from './sdk-browser';
 import { listAppMessages, markAppMessagesRead, sendAppMessage } from './messages';
 import type { AppMessageCardDto, ElectronAPI } from '../api/types';
 import { refreshContacts, ensurePluginContactTag } from '../mock/contacts';
+import { OPEN_PLUGIN_DEEPLINK_EVENT } from '../services/deep-link';
 
 /** 桥事件泵：由外部（PluginIframeHost）注入，用于将 Tauri 事件转发为桥 event。 */
 export interface BridgeEventPump {
@@ -200,6 +201,75 @@ function nextBridgeMessageId(): string {
   return `m${Date.now()}-${++bridgeMessageSeq}`;
 }
 
+// ------------------------------------------------------------------
+// navigation 域参数白名单（sdk.navigation：插件 → 壳层纯 UI 导航意图，
+// 免权限；校验失败即拒，不产出任何跳转）
+// ------------------------------------------------------------------
+
+/** openChat 会话名长度上限（防止插件注入超长标题撑破壳层 UI） */
+const NAV_CHAT_NAME_MAX = 100;
+/** openPlugin 的 cardData 序列化上限（视图引导只承载小型定位参数，如 affairId） */
+const NAV_CARD_DATA_MAX_BYTES = 16 * 1024;
+
+function assertNavChatInput(raw: unknown): { rootId: string; name?: string; conversationId?: string } {
+  const input = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
+  const rootId = input.rootId;
+  if (typeof rootId !== 'string' || !/^[0-9a-f]{64}$/.test(rootId)) {
+    throw new Error('InvalidArgs: navigation.openChat requires rootId as 64-char lowercase hex');
+  }
+  const name = input.name;
+  if (name !== undefined && (typeof name !== 'string' || name.length > NAV_CHAT_NAME_MAX)) {
+    throw new Error(`InvalidArgs: navigation.openChat name must be a string of at most ${NAV_CHAT_NAME_MAX} chars`);
+  }
+  const conversationId = input.conversationId;
+  if (conversationId !== undefined && (typeof conversationId !== 'string' || conversationId.length > 128)) {
+    throw new Error('InvalidArgs: navigation.openChat conversationId must be a string of at most 128 chars');
+  }
+  return {
+    rootId,
+    ...(typeof name === 'string' ? { name } : {}),
+    ...(typeof conversationId === 'string' ? { conversationId } : {})
+  };
+}
+
+async function assertNavPluginInput(
+  raw: unknown
+): Promise<{ pluginId: string; viewId?: string; cardData?: unknown }> {
+  const input = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
+  const pluginId = input.pluginId;
+  if (typeof pluginId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9-]{0,127}$/.test(pluginId)) {
+    throw new Error('InvalidArgs: navigation.openPlugin pluginId must be a plugin id string');
+  }
+  // 目标插件不得由调用方任意伪造：只接受市场注册表内的插件 id（安装/启用/
+  // 当前空间适配由深链既有链路处理：未装就地安装、不支持当前空间被 openPluginTab 拦）
+  const items = await window.electronAPI.pluginMarket.list();
+  if (!items.some((item) => item.id === pluginId)) {
+    throw new Error(`Access denied: plugin ${pluginId} is not registered in the marketplace`);
+  }
+  const viewId = input.viewId;
+  if (viewId !== undefined && (typeof viewId !== 'string' || viewId.length > 64)) {
+    throw new Error('InvalidArgs: navigation.openPlugin viewId must be a string of at most 64 chars');
+  }
+  let cardData = input.cardData;
+  if (cardData !== undefined) {
+    let serialized: string;
+    try {
+      serialized = JSON.stringify(cardData) ?? '';
+    } catch {
+      throw new Error('InvalidArgs: navigation.openPlugin cardData must be JSON-serializable');
+    }
+    if (serialized.length > NAV_CARD_DATA_MAX_BYTES) {
+      throw new Error(`InvalidArgs: navigation.openPlugin cardData exceeds ${NAV_CARD_DATA_MAX_BYTES} bytes`);
+    }
+    cardData = JSON.parse(serialized) as unknown;
+  }
+  return {
+    pluginId,
+    ...(typeof viewId === 'string' ? { viewId } : {}),
+    ...(cardData !== undefined ? { cardData } : {})
+  };
+}
+
 /** view type 裁剪表：null = 全量（仅 grantedPermissions 过滤）；未列出的 view type 整域拒绝 */
 const VIEW_ALLOWED_CALLS: Record<PluginViewType, ReadonlySet<string> | null> = {
   app: null,
@@ -207,8 +277,10 @@ const VIEW_ALLOWED_CALLS: Record<PluginViewType, ReadonlySet<string> | null> = {
   // 见 plugin_system.md「后台运行时」）；类型保留仅为兼容历史清单的解析
   background: null,
   // 消息卡片：docs/data 只读 + 验签/存证读取（无网络、无签名，设计文档「UI 集成点」）；
-  // 不含 messages.*——卡片视图无应用会话写权限，卡片回调只经 action 上行（triggerCardAction）
-  'message-card': new Set(['docs.get', 'docs.query', 'data.get', 'data.query', 'data.readBlob', 'identity.verify', 'evidence.headHash', 'evidence.verify'])
+  // 不含 messages.*——卡片视图无应用会话写权限，卡片回调只经 action 上行（triggerCardAction）。
+  // affairs.readLog/readResolution：议题卡片正文经 sdk.affairs 读本机副本的正当通道
+  // （只读、不触网，affairs:read 授权仍由 CALL_PERMISSIONS 强制；写面一律不放行）
+  'message-card': new Set(['docs.get', 'docs.query', 'data.get', 'data.query', 'data.readBlob', 'identity.verify', 'evidence.headHash', 'evidence.verify', 'affairs.readLog', 'affairs.readResolution'])
 };
 
 /** org 域调用：需组织空间上下文，personal 空间下一律拒绝（无 org 实参可校验） */
@@ -302,6 +374,20 @@ export async function createPluginBridgeDispatcher(identity: PluginBridgeIdentit
     app: {
       close: async () => {
         identity.onClose?.();
+      }
+    },
+    // 导航意图（免权限基础调用，纯 UI 跳转无数据面暴露）：沙箱 iframe 内
+    // CustomEvent 不出浏览上下文，插件「发消息/打开其他插件」意图必须经此
+    // 上行。参数白名单校验后路由到壳层既有链路（spark:open-chat 事件 /
+    // 统一深链事件保留为壳内机制，壳层监听方不变）
+    navigation: {
+      openChat: async (input: unknown) => {
+        const detail = assertNavChatInput(input);
+        window.dispatchEvent(new CustomEvent('spark:open-chat', { detail }));
+      },
+      openPlugin: async (input: unknown) => {
+        const detail = await assertNavPluginInput(input);
+        window.dispatchEvent(new CustomEvent(OPEN_PLUGIN_DEEPLINK_EVENT, { detail }));
       }
     },
     docs: {

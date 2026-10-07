@@ -128,10 +128,30 @@
         </div>
       </el-card>
 
-      <el-card v-if="resolutions.length > 0" shadow="never">
+      <el-card shadow="never">
         <template #header>
-          <h4>决议（{{ resolutions.length }}）</h4>
+          <div class="header-row">
+            <h4>决议（{{ resolutions.length }}）</h4>
+            <el-button v-if="!detail.closed" size="small" type="primary" plain
+              :disabled="!resolutionPlan" :loading="resolving" @click="submitResolution">
+              发起决议（结案）
+            </el-button>
+          </div>
         </template>
+        <p class="hint" v-if="!detail.closed">
+          <template v-if="resolutionPlan">
+            当前计票（阶梯名册内一人一票，非投票者票不计入）：赞成 {{ resolutionPlan.tally.for }} /
+            反对 {{ resolutionPlan.tally.against }} / 弃权 {{ resolutionPlan.tally.abstain }}。
+            关闭条件已满足（投票操作达法定人数 {{ detail.rules.minQuorum }}），可发起决议——
+            按当前计票结果为「{{ resolutionPlan.result === 'passed' ? '通过' : '未通过' }}」；
+            决议落日志后进入公示期，内核逐副本复算关闭条件与计入操作，复算不符将如实标为无效决议。
+          </template>
+          <template v-else>
+            关闭条件未满足：本议题的投票操作（针对任意贡献的赞成/反对/弃权票）达到法定人数
+            {{ detail.rules.minQuorum }} 条后可发起决议。2026-10-07 前创建的旧议题未声明关闭条件，
+            无法产生决议。
+          </template>
+        </p>
         <div v-for="resolution in resolutions" :key="resolution.opHash" class="op-item">
           <div class="op-meta">
             <el-tag size="small" :type="resolutionTagType(resolution.state)">{{ resolutionStateText(resolution.state) }}</el-tag>
@@ -250,6 +270,7 @@ import {
   type LadderState,
   type OrgEffectOutcome,
   type OrgEffectsView,
+  type ResolutionPlan,
   type RulesChainView,
   type VotePayload
 } from './model';
@@ -267,6 +288,9 @@ const operations = ref<AffairOperation[]>([]);
 const roster = ref<{ entries: LadderEntryView[]; voters: string[] } | null>(null);
 const myLadder = ref<LadderState | null>(null);
 const resolutions = ref<AffairResolutionView[]>([]);
+/** 决议计划（关闭条件满足判定 + 计票预览；null = 暂不能发起决议） */
+const resolutionPlan = ref<ResolutionPlan | null>(null);
+const resolving = ref(false);
 const rulesChain = ref<RulesChainView | null>(null);
 const execStates = ref<ExecStateView[]>([]);
 const effectsOrgId = ref('');
@@ -413,14 +437,15 @@ function operationText(op: AffairOperation): string {
 async function reload(): Promise<void> {
   loading.value = true;
   try {
-    const [nextDetail, nextOps, nextRoster, nextMine, nextResolutions, nextRulesChain, nextExecStates] = await Promise.all([
+    const [nextDetail, nextOps, nextRoster, nextMine, nextResolutions, nextRulesChain, nextExecStates, nextPlan] = await Promise.all([
       props.service.getDetail(props.affairId),
       props.service.listOperations(props.affairId),
       props.service.getLadderRoster(props.affairId),
       props.service.getMyLadderState(props.affairId),
       props.service.listResolutions(props.affairId),
       props.service.getRulesChain(props.affairId),
-      props.service.getExecStates(props.affairId)
+      props.service.getExecStates(props.affairId),
+      props.service.getResolutionPlan(props.affairId)
     ]);
     detail.value = nextDetail;
     operations.value = nextOps;
@@ -429,10 +454,25 @@ async function reload(): Promise<void> {
     resolutions.value = nextResolutions;
     rulesChain.value = nextRulesChain;
     execStates.value = nextExecStates;
+    resolutionPlan.value = nextPlan;
   } catch (error) {
     show(`加载失败：${(error as Error).message}`, 'error');
   } finally {
     loading.value = false;
+  }
+}
+
+/** 发起决议（结案）：构造 resolution 操作签名提交，内核逐副本复算把关有效性 */
+async function submitResolution(): Promise<void> {
+  resolving.value = true;
+  try {
+    await props.service.submitResolution(props.affairId);
+    show('决议已提交：进入公示期，期内无阈值异议即生效；复算不符将如实标为无效决议。', 'success');
+    await reload();
+  } catch (error) {
+    show(`发起决议失败：${(error as Error).message}`, 'error');
+  } finally {
+    resolving.value = false;
   }
 }
 

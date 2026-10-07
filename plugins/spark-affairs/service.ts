@@ -6,6 +6,11 @@
  *   线形构造 + 插件域身份签名 + follow 全链校验；refs 走 §10 类型化暴露，
  *   不再硬编码空数组）→ submitOp 把议题说明作为首条内容操作入日志；
  *   决议/阶梯由内核从日志 + 存证链确定性推导；
+ * - 决议闭环（§6）：创世规则文档声明内核可判定的 op-count 投票关闭条件
+ *   （wire.buildRulesDoc）；条件满足后 submitResolution 构造 resolution
+ *   操作签名提交，内核逐副本复算（condition ∈ 规则 + countedOps 匹配 +
+ *   公示期一致）把关有效性，复算不符进 invalidResolutions 如实呈现——
+ *   条件未满足时在签名前拒绝，不产出无效操作（判定口径 model.planResolution）；
  * - 变更订阅走 sdk.affairs.onChange（AffairChanged 事件）——视图不再靠
  *   手动刷新兜底（变更通知非可靠队列，收到后重读 readLog 收敛）；
  * - 本插件只承载客户端解释层：表单校验、规则文档映射与操作线形构造
@@ -23,6 +28,7 @@ import { hasAffairsModule, requireAffairsModule } from './sdk-affairs';
 import {
   AFFAIR_TYPE,
   buildOpDraft,
+  buildResolutionDraft,
   buildRulesDoc,
   deriveIdentity,
   signPayload,
@@ -30,8 +36,11 @@ import {
 } from './wire';
 import {
   buildAffairSummary,
+  planResolution,
+  pubPeriodMsFromDoc,
   readGenesisMeta,
   rulesFromGenesis,
+  rulesParamsFromDoc,
   sortOperations,
   toAffairOperation,
   toExecStateViews,
@@ -55,6 +64,7 @@ import {
   type OrgEffectApplyReport,
   type OrgEffectView,
   type OrgEffectsView,
+  type ResolutionPlan,
   type RulesChainView
 } from './model';
 
@@ -381,6 +391,52 @@ export class AffairsService {
       throw new Error(verdict.reason);
     }
     return this.submitOperation(affairId, { kind: 'comment', payload: { text: text.trim() } });
+  }
+
+  /**
+   * 决议计划（§6 投票 → 决议闭环）：对当前本地副本计算关闭条件满足情况与
+   * 决议载荷计划。返回 null = 暂不能发起决议（旧创世未声明可判定关闭条件，
+   * 或闭包内投票操作不足法定人数）。判定口径见 model.planResolution——
+   * 内核可复算字段与内核逐字一致，tally 为名册过滤 + 一人一票的诚实计票。
+   */
+  async getResolutionPlan(affairId: string): Promise<ResolutionPlan | null> {
+    const [log, rulesView, ladder] = await Promise.all([
+      this.affairs.readLog(affairId),
+      this.affairs.readRules(affairId),
+      this.affairs.ladderStatus(affairId)
+    ]);
+    const rulesDoc = rulesView.current?.rules;
+    const pubPeriodMs = pubPeriodMsFromDoc(rulesDoc);
+    const rulesHash = typeof rulesView.current?.rulesHash === 'string' ? rulesView.current.rulesHash : null;
+    if (!rulesDoc || pubPeriodMs === null || rulesHash === null) {
+      return null;
+    }
+    return planResolution({
+      ops: log.ops,
+      heads: log.heads,
+      closeConditions: Array.isArray(rulesDoc.closeConditions) ? rulesDoc.closeConditions : [],
+      voters: ladder.voters,
+      rules: rulesParamsFromDoc(rulesDoc),
+      rulesHash,
+      pubPeriodMs
+    });
+  }
+
+  /**
+   * 发起决议（affairs:write）：关闭条件满足后构造 opType=resolution 操作
+   * 签名提交。内核逐副本复算（condition ∈ 规则版本 + countedOps 匹配 +
+   * 公示期一致）把关有效性——复算不符进 invalidResolutions 如实呈现，
+   * 本路径不降级、不伪造。条件未满足时在签名前拒绝（不产出无效操作）。
+   */
+  async submitResolution(affairId: string): Promise<{ opHash: string; status: AffairOpStatus }> {
+    const plan = await this.getResolutionPlan(affairId);
+    if (!plan) {
+      throw new Error('关闭条件未满足：闭包内投票操作未达法定人数，或本议题规则未声明可判定关闭条件（2026-10-07 前创建的旧议题关闭条件为空，无法产生决议）');
+    }
+    const actor = await this.ensureActor();
+    const draft = buildResolutionDraft(affairId, actor, plan, Date.now());
+    const result = await this.affairs.submitOp(await this.signRecord(draft));
+    return { opHash: result.opHash, status: result.status };
   }
 
   /**

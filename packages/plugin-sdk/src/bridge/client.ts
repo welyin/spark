@@ -352,6 +352,11 @@ export function connectPluginBridge(options: ConnectPluginBridgeOptions): Promis
     return {
       domain: ctx.domain,
       close: () => call('app', 'close', []) as Promise<void>,
+      // 导航意图（插件 → 壳层纯 UI 跳转；免权限，参数白名单由壳层 dispatcher 强制）
+      navigation: {
+        openChat: (input) => call('navigation', 'openChat', [input]) as Promise<void>,
+        openPlugin: (input) => call('navigation', 'openPlugin', [input]) as Promise<void>
+      },
       evidence: {
         headHash: () => call('evidence', 'headHash', []) as Promise<{ hash: string | null }>,
         verify: () => call('evidence', 'verify', []) as Promise<{ valid: boolean; height: number }>

@@ -371,6 +371,162 @@ export function evaluateTally(
   return tally.for / ballots >= rules.passThreshold ? 'passed' : 'rejected';
 }
 
+// ------------------------------------------------------------------
+// 决议闭环（affair.md §6）：关闭条件满足判定 + 决议载荷计划
+// ------------------------------------------------------------------
+
+/** 决议计票明细（插件结构，随决议载荷入日志；内核只承诺字节） */
+export type ResolutionTally = { for: number; against: number; abstain: number };
+
+/**
+ * 决议计划（planResolution 的输出；service.submitResolution 的输入）：
+ * 内核可复算字段（condition/countedOps/rulesHash/pubPeriodMs/prevOpHash）
+ * 按决议因果闭包确定性计算，与内核复算（core affair/resolution.rs
+ * replay_resolution）逐字一致；result/tally 为插件语义字节。
+ */
+export type ResolutionPlan = {
+  /** 因果见证（决议 prevOpHash）：本地观察到的 DAG 头，opHash 升序最小者 */
+  prevOpHash: string;
+  /** 被满足的关闭条件原文（逐字回自现行规则文档 closeConditions） */
+  condition: Record<string, unknown>;
+  /** 计入关闭判定的操作 opHash（§8 升序；= 闭包内 vote 操作序前缀，内核复算口径） */
+  countedOps: string[];
+  /** 名册过滤 + 一人一票去重后的诚实计票（插件语义，内核不解释） */
+  tally: ResolutionTally;
+  /** 决议结果（由 tally 与规则参数经 evaluateTally 确定性推出） */
+  result: 'passed' | 'rejected';
+  /** 判定所用规则文档版本哈希（readRules current.rulesHash） */
+  rulesHash: string;
+  /** 公示期毫秒（与判定所用规则版本的 pubPeriod.delayMs 逐字一致） */
+  pubPeriodMs: number;
+};
+
+/**
+ * 决议计划计算（纯函数）。返回 null = 关闭条件未满足（不能发起决议）。
+ *
+ * 与内核复算对齐的三条纪律：
+ * 1. 闭包 = 从所选 DAG 头沿 prevOpHash 单链回溯的操作集合（与内核
+ *    ancestor_op_hashes 同口径；prevOpHash 是单父因果见证）；
+ * 2. 关闭门槛按内核 op-count 求值口径：闭包内 opType=content 且
+ *    payload.kind='vote' 的操作按 opHash 升序，前 count 条即 countedOps
+ *    （内核不按人去重、不校验 choice 形状——content 载荷内核不解释）；
+ * 3. tally 是插件语义层：只计入 ladderStatus 投票者名册内身份的票、
+ *    每人取 opHash 最小的一票（§5.5 一人一票，与内核 threshold 去重先例
+ *    同口径），非投票者票留在日志但不计入。
+ */
+export function planResolution(input: {
+  /** readLog 返回的已接受操作（opHash + op 原文） */
+  ops: Array<{ opHash: string; op: Record<string, unknown> }>;
+  /** readLog 返回的 DAG 头 */
+  heads: string[];
+  /** 现行规则文档的 closeConditions 原文数组（readRules current.rules.closeConditions） */
+  closeConditions: unknown[];
+  /** 阶梯投票者名册（ladderStatus.voters，内核确定性推导） */
+  voters: string[];
+  /** 插件语义计票参数（现行规则 sparkAffairs：passThreshold / minQuorum） */
+  rules: Pick<AffairRules, 'passThreshold' | 'minQuorum'>;
+  rulesHash: string;
+  pubPeriodMs: number;
+}): ResolutionPlan | null {
+  // 规则文档须声明本插件的 op-count 投票关闭条件（旧创世 closeConditions=[]
+  // 的议题永远没有可判定条件，诚实返回 null 而非伪造条件）
+  const condition = input.closeConditions
+    .map((raw) => asRecord(raw))
+    .find(
+      (raw) =>
+        raw &&
+        asString(raw.type) === 'op-count' &&
+        asString(raw.opType) === 'content' &&
+        asString(raw.filter) === 'vote' &&
+        asNumber(raw.count) !== null &&
+        (asNumber(raw.count) as number) >= 1
+    );
+  if (!condition) {
+    return null;
+  }
+  const requiredCount = asNumber(condition.count) as number;
+
+  const head = [...input.heads].sort()[0];
+  if (!head) {
+    return null;
+  }
+  // 闭包：从头沿 prevOpHash 单链回溯（防环：已访集合截断）
+  const prevByHash = new Map<string, string>();
+  for (const entry of input.ops) {
+    const prev = asString(asRecord(entry.op)?.prevOpHash);
+    if (prev) {
+      prevByHash.set(entry.opHash, prev);
+    }
+  }
+  const closure = new Set<string>();
+  let cursor: string | undefined = head;
+  while (cursor !== undefined && prevByHash.has(cursor) && !closure.has(cursor)) {
+    closure.add(cursor);
+    cursor = prevByHash.get(cursor);
+  }
+
+  // 内核 op-count 求值口径：opType=content 且 payload.kind='vote'，opHash 升序
+  const opByHash = new Map(input.ops.map((entry) => [entry.opHash, entry]));
+  const voteOps = input.ops
+    .filter((entry) => {
+      if (!closure.has(entry.opHash)) {
+        return false;
+      }
+      const op = asRecord(entry.op);
+      return asString(op?.opType) === 'content' && asString(asRecord(op?.payload)?.kind) === 'vote';
+    })
+    .map((entry) => entry.opHash)
+    .sort();
+  if (voteOps.length < requiredCount) {
+    return null;
+  }
+  const countedOps = voteOps.slice(0, requiredCount);
+
+  // 插件语义计票：名册过滤 + 一人一票（按 opHash 升序迭代，每人取最小有效票；
+  // choice 非法不计票），不依赖调用方传入顺序
+  const voterSet = new Set(input.voters);
+  const seenActors = new Set<string>();
+  const tally: ResolutionTally = { for: 0, against: 0, abstain: 0 };
+  for (const opHash of voteOps) {
+    const op = asRecord(opByHash.get(opHash)?.op);
+    const payload = asRecord(op?.payload);
+    const actor = asString(asRecord(op?.actor)?.identity);
+    const choice = asString(payload?.choice);
+    if (!actor || !voterSet.has(actor) || seenActors.has(actor)) {
+      continue;
+    }
+    if (choice !== 'for' && choice !== 'against' && choice !== 'abstain') {
+      continue;
+    }
+    seenActors.add(actor);
+    tally[choice] += 1;
+  }
+
+  return {
+    prevOpHash: head,
+    condition,
+    countedOps,
+    tally,
+    result: evaluateTally(tally, input.rules),
+    rulesHash: input.rulesHash,
+    pubPeriodMs: input.pubPeriodMs
+  };
+}
+
+/** 现行规则文档（readRules current.rules）→ 插件语义计票参数（缺席回退产品默认值，与 rulesFromGenesis 同口径） */
+export function rulesParamsFromDoc(rulesDoc: unknown): Pick<AffairRules, 'passThreshold' | 'minQuorum'> {
+  const pluginParams = asRecord(asRecord(rulesDoc)?.sparkAffairs);
+  return {
+    passThreshold: asNumber(pluginParams?.passThreshold) ?? 0.67,
+    minQuorum: asNumber(pluginParams?.minQuorum) ?? 1
+  };
+}
+
+/** 现行规则文档 → 公示期毫秒（pubPeriod.delayMs；形状不符返回 null） */
+export function pubPeriodMsFromDoc(rulesDoc: unknown): number | null {
+  return asNumber(asRecord(asRecord(rulesDoc)?.pubPeriod)?.delayMs);
+}
+
 /** 应用消息摘要（p2p-messages §20 强制 summary；未装插件设备原生渲染此文本） */
 export function buildAffairSummary(title: string): string {
   const preview = title.trim().slice(0, 40);

@@ -110,6 +110,7 @@ async function bootstrapMainView(): Promise<void> {
 - `requires`：运行时平台约束，可选。`requires.platforms` 声明支持的平台列表（`"desktop"` / `"mobile"`），不声明则全平台可用。安装时内核校验：当前平台不在声明列表中则阻止安装；
 - `window`：PC 窗口默认尺寸，可选（插件级，不做 per-view）。PC 端插件在可拖动/缩放的桌面窗口中打开（最小夹取 320×220，**插件须响应式**），`window.defaultWidth` / `window.defaultHeight` 声明初始尺寸（px，合法范围宽 320–3840 / 高 220–2160），不声明或越界按壳层默认 880×620；移动端全屏打开，忽略本字段。声明示例（窄高形的 AI 聊天插件）：`"window": { "defaultWidth": 480, "defaultHeight": 680 }`。仓库锚定分发的插件在 `spark-plugin.json` 声明同名字段（[插件分发规格](../protocol/plugins/plugin-dist.md) §2.1）；
 - `views`：槽位渲染件声明，两种类型均已生效——`app` 主视图（全页 iframe）与 `message-card` 消息卡片（聊天内限定区域 iframe，能力面按 view 裁剪）；`entryView` 必须存在于 `views` 中；
+- `deviceCapabilities`：设备能力声明，可选（最小化下发）。插件沙箱 iframe 默认无 `allow` 属性，Permissions Policy 拒绝一切设备能力（`getUserMedia` 等必被拒）；声明后壳层仅为声明了对应能力的插件 iframe 下发同名 `allow` 令牌——目前仅支持 `"camera"`（如扫码取景），声明示例：`"deviceCapabilities": ["camera"]`。未声明的插件一律不放开；声明不豁免运行时向用户请求许可；
 - `permissions`：权限声明，语义见 `插件体系·权限模型`（wiki architecture/plugins/plugin_system.md）（伞权限按容器分解）。`message:app`（应用会话读写）与 `identity:sign`（域身份签名，使用时询问）均已生效，安装授权后落 `grantedPermissions`；
 - `sdkVersion`：SDK 契约版本，桥握手时协商（v1 协议下要求与宿主精确一致，不兼容拒绝加载）；
 - `id` 将随分发模型迁移为规范化仓库地址（见 `spark-plugin.json` 的 comment 字段与 [插件分发规格](../protocol/plugins/plugin-dist.md) §1）。
@@ -130,12 +131,13 @@ const sdk = await ensurePluginSDK();
 - `sdk.runtime` —— `currentRoot()` / `listMineOrganizations()` / `syncOrganizationData(orgId)`（高级权限 `org:sync`）；
 - `sdk.identity` —— `sign(payload)`（高级权限 `identity:sign`，使用时询问；返回 `{domain, domainId, publicKey, signature, payloadHash}`）/ `verify(payload, signature, publicKey)`（纯函数免权限）；
 - `sdk.messages` —— 应用会话（高级权限 `message:app`）：`sendAppMessage(payload, card?)` / `listAppMessages()` / `markRead()` / `onCardAction(handler)`，卡片侧 `triggerCardAction(actionId, data?)` / `requestCardHeight(height)`，详见 `应用会话与消息卡片`（wiki architecture/plugins/plugin-app-messages.md）；
+- `sdk.navigation` —— 导航意图（**免权限**基础调用，纯 UI 跳转无数据面暴露）：`openChat({ rootId, name?, conversationId? })`（壳层切到消息页打开/创建 1:1 会话）/ `openPlugin({ pluginId, viewId?, cardData? })`（经统一深链打开其他已注册插件）。沙箱 iframe 内 `window.dispatchEvent` 的 CustomEvent 不出浏览上下文，插件 → 壳层的任何跳转意图必须走本模块；壳层 dispatcher 做参数白名单校验（rootId 64hex 形态、名称长度上限、目标插件须在市场注册表内）。message-card 视图裁剪不放行；
 - `sdk.p2p` —— `start()` / `stop()` / `broadcast(topic, message)`（高级权限 `network:broadcast`；多数业务不需要，优先用 docs 自动同步）；
 - `sdk.evidence` —— `headHash()` / `verify()`（只读核验）；
 - `sdk.events` —— `subscribe(event, handler)` / `unsubscribe(event, handler?)`（桥事件订阅）；
 - `sdk.sys` —— 系统能力代理（内核外呼，desktop 限定的高危权限）：`exec(program, args, workdir?)`（`system:exec`）/ `fetch(url, opts)`（`network:fetch`）/ `fetchStream(url, opts)`（流式 HTTP，同 `network:fetch`；返回 `FetchStreamHandle`：`onChunk` 逐块回调、`done` 完成 Promise、`cancel` 退订；五层管道与边界见 `插件流式输出管道`（wiki architecture/plugins/plugin-streaming.md））。
 
-`sdk.messages` 与 `sdk.events` 仅 iframe 桥模式注入（`PluginSDK` 上为可选字段）；`sdk.space` 空间上下文（type/id/orgId）已实现，当前 space 经桥握手 ctx（`PluginContext.space`）注入。
+`sdk.messages`、`sdk.events` 与 `sdk.navigation` 仅 iframe 桥模式注入（`PluginSDK` 上为可选字段）；`sdk.space` 空间上下文（type/id/orgId）已实现，当前 space 经桥握手 ctx（`PluginContext.space`）注入。
 
 SDK 调用经 postMessage 桥到宿主，再经 invoke 适配层桥到内核；权限过滤在壳层桥分发器逐调用执行（三重过滤：grantedPermissions ∩ view 裁剪 ∩ 当前空间），域隔离与持久化在内核侧，渲染端与插件均无法伪造身份。
 

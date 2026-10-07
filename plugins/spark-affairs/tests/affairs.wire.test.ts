@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   base64Decode,
   buildOpDraft,
+  buildResolutionDraft,
   buildRulesDoc,
+  buildVoteCloseCondition,
   deriveIdentity,
   normalizeObject,
   sha256Hex,
@@ -10,7 +12,7 @@ import {
   signPayload,
   type AffairActor
 } from '../wire';
-import type { AffairCreateInput } from '../model';
+import type { AffairCreateInput, ResolutionPlan } from '../model';
 
 /**
  * 固定测试向量：Ed25519 种子 0x11*32 的公钥与身份 id（协议 §2.2 绑定：
@@ -84,6 +86,48 @@ describe('spark-affairs wire: genesis / op drafts', () => {
     expect(doc.ruleChange.kind).toBe('delayed-veto');
     expect(doc.sparkAffairs).toEqual({ passThreshold: 0.67, minQuorum: 3 });
     expect(doc.participation).toBeUndefined();
+  });
+
+  it('buildRulesDoc declares a kernel-decidable op-count vote close condition from minQuorum (单源)', () => {
+    // 决议闭环（§6 前置）：关闭条件必须 ∈ 规则文档，否则内核复算 condition-not-in-rules
+    const doc = buildRulesDoc(validInput().rules) as any;
+    expect(doc.closeConditions).toEqual([{ type: 'op-count', opType: 'content', filter: 'vote', count: 3 }]);
+
+    // 法定人数与关闭条件同一份 draft 单源生成（不存在两处参数漂移）
+    const other = validInput();
+    other.rules.minQuorum = 5;
+    expect((buildRulesDoc(other.rules) as any).closeConditions).toEqual([
+      { type: 'op-count', opType: 'content', filter: 'vote', count: 5 }
+    ]);
+    expect(buildVoteCloseCondition(0)).toEqual({ type: 'op-count', opType: 'content', filter: 'vote', count: 1 });
+  });
+
+  it('buildResolutionDraft uses resolution opType with the §6.1 payload shape', () => {
+    const affairId = 'ab'.repeat(32);
+    const plan: ResolutionPlan = {
+      prevOpHash: 'cd'.repeat(32),
+      condition: { type: 'op-count', opType: 'content', filter: 'vote', count: 2 },
+      countedOps: ['11'.repeat(32), '22'.repeat(32)],
+      tally: { for: 2, against: 1, abstain: 0 },
+      result: 'passed',
+      rulesHash: 'ef'.repeat(32),
+      pubPeriodMs: 24 * 3600 * 1000
+    };
+    const draft = buildResolutionDraft(affairId, ACTOR, plan, 1000) as any;
+    expect(draft.opV).toBe(1);
+    expect(draft.opType).toBe('resolution');
+    expect(draft.prevOpHash).toBe('cd'.repeat(32));
+    expect(draft.payload).toEqual({
+      result: 'passed',
+      condition: { type: 'op-count', opType: 'content', filter: 'vote', count: 2 },
+      countedOps: ['11'.repeat(32), '22'.repeat(32)],
+      tally: { for: 2, against: 1, abstain: 0 },
+      rulesHash: 'ef'.repeat(32),
+      pubPeriod: { delayMs: 24 * 3600 * 1000 }
+    });
+    expect(draft.actor).toEqual({ kind: 'person', identity: IDENTITY, publicKey: PUB_KEY });
+    // 签名载荷 = canonical(剔除 sig 全文)，与内容操作同规约
+    expect(signPayload({ ...draft, sig: 'sig-1' })).toBe(normalizeObject(draft));
   });
 
   it('buildRulesDoc maps ladder entry requirement to participation and rejects credential kind', () => {

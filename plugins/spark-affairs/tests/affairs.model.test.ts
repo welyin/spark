@@ -7,6 +7,7 @@ import {
   canSubmitContribution,
   canVote,
   evaluateTally,
+  planResolution,
   readGenesisMeta,
   rulesFromGenesis,
   sortOperations,
@@ -137,6 +138,126 @@ describe('spark-affairs model: capability gates and tally', () => {
 
   it('builds app message summary with mandatory prefix', () => {
     expect(buildAffairSummary('绿植补种预算表决')).toBe('【新议题】绿植补种预算表决');
+  });
+});
+
+describe('spark-affairs model: resolution planning (§6 closure)', () => {
+  const CONDITION = { type: 'op-count', opType: 'content', filter: 'vote', count: 2 };
+  const RULES = { passThreshold: 0.67, minQuorum: 2 };
+  const RULES_HASH = 'ef'.repeat(32);
+  const PUB_MS = 24 * 3600 * 1000;
+  const VOTERS = ['aa'.repeat(32), 'bb'.repeat(32), 'cc'.repeat(32)];
+
+  function voteOp(opHash: string, actor: string, choice: string, prevOpHash: string) {
+    return {
+      opHash,
+      op: {
+        opV: 1,
+        affairId: 'af',
+        opType: 'content',
+        prevOpHash,
+        payload: { kind: 'vote', targetOpHash: 'dd'.repeat(32), choice, identityMode: 'contextual' },
+        actor: { kind: 'person', identity: actor, publicKey: 'k' },
+        declaredAt: 1
+      } as Record<string, unknown>
+    };
+  }
+
+  function planWith(ops: Array<{ opHash: string; op: Record<string, unknown> }>, heads: string[]) {
+    return planResolution({
+      ops,
+      heads,
+      closeConditions: [CONDITION],
+      voters: VOTERS,
+      rules: RULES,
+      rulesHash: RULES_HASH,
+      pubPeriodMs: PUB_MS
+    });
+  }
+
+  it('returns a kernel-recomputable plan when the vote quorum is met', () => {
+    // 线性链：v1 ← v2 ← c9（opHash 升序 11 < 22 < 99）；heads 只有一个
+    const ops = [
+      voteOp('11'.repeat(32), VOTERS[0], 'for', 'af'),
+      voteOp('22'.repeat(32), VOTERS[1], 'for', '11'.repeat(32)),
+      {
+        opHash: '99'.repeat(32),
+        op: {
+          opV: 1, affairId: 'af', opType: 'content', prevOpHash: '22'.repeat(32),
+          payload: { kind: 'comment', text: '附议' },
+          actor: { kind: 'person', identity: VOTERS[2], publicKey: 'k' }, declaredAt: 2
+        } as Record<string, unknown>
+      }
+    ];
+    const plan = planWith(ops, ['99'.repeat(32)]);
+    expect(plan).not.toBeNull();
+    // countedOps = 闭包内 vote 操作 opHash 升序前 minQuorum 条（内核 op-count 复算口径；
+    // 评论不参与 filter 'vote' 匹配）
+    expect(plan?.countedOps).toEqual(['11'.repeat(32), '22'.repeat(32)]);
+    expect(plan?.condition).toEqual(CONDITION);
+    expect(plan?.prevOpHash).toBe('99'.repeat(32));
+    expect(plan?.tally).toEqual({ for: 2, against: 0, abstain: 0 });
+    expect(plan?.result).toBe('passed'); // 2/2 = 1 ≥ 0.67
+    expect(plan?.rulesHash).toBe(RULES_HASH);
+    expect(plan?.pubPeriodMs).toBe(PUB_MS);
+  });
+
+  it('returns null when votes are below quorum or no decidable condition is declared', () => {
+    const oneVote = [voteOp('11'.repeat(32), VOTERS[0], 'for', 'af')];
+    expect(planWith(oneVote, ['11'.repeat(32)])).toBeNull();
+
+    // 旧创世 closeConditions=[] 的议题：诚实返回 null（不可伪造条件）
+    const twoVotes = [
+      voteOp('11'.repeat(32), VOTERS[0], 'for', 'af'),
+      voteOp('22'.repeat(32), VOTERS[1], 'for', '11'.repeat(32))
+    ];
+    expect(
+      planResolution({
+        ops: twoVotes,
+        heads: ['22'.repeat(32)],
+        closeConditions: [],
+        voters: VOTERS,
+        rules: RULES,
+        rulesHash: RULES_HASH,
+        pubPeriodMs: PUB_MS
+      })
+    ).toBeNull();
+  });
+
+  it('keeps kernel gate on raw vote ops while tally filters roster + dedupes per actor', () => {
+    const outsider = 'dd'.repeat(32); // 非投票者名册成员
+    const ops = [
+      voteOp('11'.repeat(32), outsider, 'for', 'af'), // 非名册票：计入内核门槛，不计 tally
+      voteOp('22'.repeat(32), VOTERS[0], 'against', '11'.repeat(32)),
+      voteOp('33'.repeat(32), VOTERS[0], 'for', '22'.repeat(32)) // 同一人第二票：tally 不重复计
+    ];
+    const plan = planWith(ops, ['33'.repeat(32)]);
+    // 内核门槛按原始 vote 操作计数（不按人去重）：3 ≥ 2 满足
+    expect(plan?.countedOps).toEqual(['11'.repeat(32), '22'.repeat(32)]);
+    // tally 只计名册内一人一票（取 opHash 最小的有效票：VOTERS[0] 的 22 票）
+    expect(plan?.tally).toEqual({ for: 0, against: 1, abstain: 0 });
+    expect(plan?.result).toBe('rejected');
+  });
+
+  it('counts only votes inside the resolution causal closure (side branch excluded)', () => {
+    // 主链：v1 ← c9；侧分支：v2（prev 同为 af，不在所选头的祖先链上）
+    const ops = [
+      voteOp('11'.repeat(32), VOTERS[0], 'for', 'af'),
+      voteOp('22'.repeat(32), VOTERS[1], 'for', 'af'),
+      {
+        opHash: '99'.repeat(32),
+        op: {
+          opV: 1, affairId: 'af', opType: 'content', prevOpHash: '11'.repeat(32),
+          payload: { kind: 'comment', text: 'x' },
+          actor: { kind: 'person', identity: VOTERS[2], publicKey: 'k' }, declaredAt: 2
+        } as Record<string, unknown>
+      }
+    ];
+    // 头取 opHash 最小者 11：闭包只含 11（99 分支上的评论不算 vote；22 不在 11 的祖先链）
+    const plan = planWith(ops, ['99'.repeat(32), '11'.repeat(32)]);
+    expect(plan).toBeNull();
+    // 头为 99 的副本视角：闭包 11←99 只含 1 条 vote，仍不足法定人数
+    expect(planWith(ops, ['99'.repeat(32)])).toBeNull();
   });
 });
 

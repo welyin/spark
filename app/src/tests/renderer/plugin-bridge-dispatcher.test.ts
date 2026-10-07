@@ -401,11 +401,20 @@ describe('affairs 域（community-affairs §7.2 sdk.affairs：读须 affairs:rea
     await expect(handler('affairs', 'readLog', ['af_x'])).rejects.toThrow(/Access denied/);
   });
 
-  it('message-card 视图无 affairs 域（有授权也拒绝）', async () => {
+  it('message-card 视图仅 affairs 只读（readLog/readResolution 需 affairs:read；写面有授权也拒绝）', async () => {
     mockGrantedPermissions(['affairs:read', 'affairs:write']);
     const handler = await createPluginBridgeDispatcher({ ...BASE_IDENTITY, viewType: 'message-card' });
-    await expect(handler('affairs', 'readLog', ['af_x'])).rejects.toThrow(/Access denied/);
+    await expect(handler('affairs', 'readLog', ['af_x'])).resolves.toBeNull();
+    await expect(handler('affairs', 'readResolution', ['af_x'])).resolves.toBeNull();
+    await expect(handler('affairs', 'readRules', ['af_x'])).rejects.toThrow(/Access denied/);
     await expect(handler('affairs', 'follow', [{ kind: 'affair-genesis' }])).rejects.toThrow(/Access denied/);
+    await expect(handler('affairs', 'submitOp', [{ affairId: 'af_x', opType: 'vote' }])).rejects.toThrow(/Access denied/);
+  });
+
+  it('message-card 视图 affairs 只读仍受 affairs:read 授权门控', async () => {
+    mockGrantedPermissions(['affairs:write']);
+    const handler = await createPluginBridgeDispatcher({ ...BASE_IDENTITY, viewType: 'message-card' });
+    await expect(handler('affairs', 'readLog', ['af_x'])).rejects.toThrow(/Access denied/);
   });
 
   it('未知 affairs 方法拒绝（未知调用）', async () => {
@@ -698,5 +707,53 @@ describe('A18 sdk.contacts 数据面（§4.1：等语义移植 + space 桥注入
     const handler = await createPluginBridgeDispatcher({ ...BASE_IDENTITY, viewType: 'message-card' });
     await expect(handler('contacts', 'overview', [])).rejects.toThrow(/Access denied/);
     await expect(handler('contacts', 'setBlocked', ['r1', true])).rejects.toThrow(/Access denied/);
+  });
+});
+
+describe('navigation 域（sdk.navigation：免权限纯 UI 导航意图 + 参数白名单）', () => {
+  const ROOT_ID = 'ab'.repeat(32);
+
+  it('空授权下合法 openChat 放行并派发壳内 spark:open-chat 事件', async () => {
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    const seen: unknown[] = [];
+    const listener = (event: Event) => seen.push((event as CustomEvent).detail);
+    window.addEventListener('spark:open-chat', listener);
+    try {
+      await expect(handler('navigation', 'openChat', [{ rootId: ROOT_ID, name: '张三' }])).resolves.toBeUndefined();
+      expect(seen).toEqual([{ rootId: ROOT_ID, name: '张三' }]);
+    } finally {
+      window.removeEventListener('spark:open-chat', listener);
+    }
+  });
+
+  it('openChat 参数白名单：rootId 非 64hex / name 超长一律拒绝（不产出跳转）', async () => {
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    await expect(handler('navigation', 'openChat', [{ rootId: 'not-hex' }])).rejects.toThrow(/InvalidArgs/);
+    await expect(handler('navigation', 'openChat', [{ rootId: ROOT_ID.toUpperCase() }])).rejects.toThrow(/InvalidArgs/);
+    await expect(handler('navigation', 'openChat', [{ rootId: ROOT_ID, name: 'x'.repeat(101) }])).rejects.toThrow(/InvalidArgs/);
+    await expect(handler('navigation', 'openChat', [{}])).rejects.toThrow(/InvalidArgs/);
+  });
+
+  it('openPlugin 只接受市场注册表内的插件 id，合法调用派发统一深链事件', async () => {
+    mockGrantedPermissions([], 'spark-example');
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    const seen: unknown[] = [];
+    const listener = (event: Event) => seen.push((event as CustomEvent).detail);
+    window.addEventListener('spark:open-plugin', listener);
+    try {
+      await expect(
+        handler('navigation', 'openPlugin', [{ pluginId: 'spark-example', cardData: { affairId: 'af_1' } }])
+      ).resolves.toBeUndefined();
+      expect(seen).toEqual([{ pluginId: 'spark-example', cardData: { affairId: 'af_1' } }]);
+      await expect(handler('navigation', 'openPlugin', [{ pluginId: 'evil-plugin' }])).rejects.toThrow(/Access denied/);
+    } finally {
+      window.removeEventListener('spark:open-plugin', listener);
+    }
+  });
+
+  it('message-card 视图裁剪不放行 navigation（卡片不得驱动壳层跳转）', async () => {
+    const handler = await createPluginBridgeDispatcher({ ...BASE_IDENTITY, viewType: 'message-card' });
+    await expect(handler('navigation', 'openChat', [{ rootId: ROOT_ID }])).rejects.toThrow(/Access denied/);
+    await expect(handler('navigation', 'openPlugin', [{ pluginId: 'spark-example' }])).rejects.toThrow(/Access denied/);
   });
 });

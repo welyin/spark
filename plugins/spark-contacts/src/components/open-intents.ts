@@ -1,20 +1,38 @@
 /**
- * 消息页空状态跳转通讯录的意图哨兵。
- * App.vue 的 `spark:open-contact` 事件要求 detail.rootId 非空才会切 tab，
- * 因此用哨兵值表达「仅跳转通讯录 / 跳转并打开添加对话框」两种意图，
+ * 消息页空状态跳转通讯录的意图哨兵（壳层 → 插件方向：经 viewBootstrap.cardData
+ * 注入，pending-contact 消费；与壳层 components/contacts/open-intents 同值）。
  * ContactsPage 消费后按意图处理，不做联系人匹配。
  */
 export const CONTACT_INTENT_BROWSE = '__browse__';
 export const CONTACT_INTENT_ADD = '__add__';
 
-/** 切到通讯录页并携带意图（App.vue 切 tab，ContactsPage 消费意图） */
+import { hostSdk } from '../sdk-host';
+
+/** 切到通讯录页并携带意图（壳层深链打开本插件主视图，意图经 cardData 注入）。
+ *  插件 → 壳层方向导航统一走 sdk.navigation（沙箱 iframe 内 CustomEvent 不出
+ *  浏览上下文，裸 dispatchEvent 是死通道） */
 export function openContacts(intent: string): void {
-  window.dispatchEvent(new CustomEvent('spark:open-contact', { detail: { rootId: intent } }));
+  const navigation = hostSdk()?.navigation;
+  if (!navigation) {
+    console.warn('[spark-contacts] sdk.navigation 不可用，打开通讯录意图丢失：', intent);
+    return;
+  }
+  void navigation.openPlugin({ pluginId: 'spark-contacts', cardData: { intent } }).catch((error) => {
+    console.warn('[spark-contacts] 打开通讯录导航失败：', error);
+  });
 }
 
-/** 打开/创建 1:1 会话（App.vue 消费 `spark:open-chat`：记录请求并切到消息页，§5.3）。
- *  所有「去找他聊天」的入口（通讯录资料卡/新朋友面板/全局搜索）统一从这里派发，
- *  不再各自裸写 CustomEvent。name 为首建会话的兜底标题，conversationId 用于定位已存在的会话。 */
+/** 打开/创建 1:1 会话（§5.3）：经 sdk.navigation.openChat 上行导航意图，
+ *  壳层 dispatcher 校验参数后路由到 pending-chat 既有过渡链路（切到消息页
+ *  找到或创建会话并选中）。name 为首建会话的兜底标题，conversationId 用于
+ *  定位已存在的会话。 */
 export function openChat(detail: { rootId: string; name?: string; conversationId?: string }): void {
-  window.dispatchEvent(new CustomEvent('spark:open-chat', { detail }));
+  const navigation = hostSdk()?.navigation;
+  if (!navigation) {
+    console.warn('[spark-contacts] sdk.navigation 不可用，发消息意图丢失：', detail.rootId);
+    return;
+  }
+  void navigation.openChat(detail).catch((error) => {
+    console.warn('[spark-contacts] 发消息导航失败：', error);
+  });
 }

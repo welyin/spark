@@ -2,13 +2,17 @@
   <div class="plugin-iframe-host">
     <!-- 沙箱 iframe：allow-scripts，不给 allow-same-origin（opaque origin，
          localStorage/IndexedDB 与壳层天然隔离；桥握手 expectedOrigin 因此恒为 'null'）。
-         宿主 HTML 由 srcdoc 内联生成（plugin/source.ts），bundle/css 经插件源加载 -->
+         宿主 HTML 由 srcdoc 内联生成（plugin/source.ts），bundle/css 经插件源加载。
+         allow（Permissions-Policy）按 manifest.deviceCapabilities 最小化下发——
+         iframe 须等 manifest 就绪后再创建：allow 只在 iframe 导航时生效，
+         事后改属性不会回溯应用于已加载文档 -->
     <iframe
-      v-if="status !== 'disabled' && status !== 'not-installed'"
+      v-if="manifestLoaded && status !== 'disabled' && status !== 'not-installed'"
       :key="reloadToken"
       ref="iframeEl"
       class="plugin-iframe-frame"
       sandbox="allow-scripts"
+      :allow="iframeAllow"
       :srcdoc="srcdoc"
       :title="`${pluginId}/${viewId}`"
     />
@@ -65,7 +69,7 @@
 <script lang="ts">
 import { computed, defineComponent, nextTick, onMounted, onUnmounted, ref, type PropType } from 'vue';
 import { Loading } from '@element-plus/icons-vue';
-import type { PluginContext, PluginSpaceContext } from '../../../../packages/plugin-sdk/src';
+import type { PluginContext, PluginManifest, PluginSpaceContext } from '../../../../packages/plugin-sdk/src';
 import { createBridgeHost, type BridgeHost } from '../../../../packages/plugin-sdk/src/bridge/host';
 import { buildPluginHostSrcdoc, fetchPluginManifest } from '../../plugin/source';
 import { createPluginBridgeDispatcher, setBridgeEventPump, type BridgeEventPump } from '../../plugin/bridge-dispatcher';
@@ -114,6 +118,14 @@ export default defineComponent({
     const unresponsive = ref(false);
     const runtimeErrorCount = ref(0);
     const reloadToken = ref(0);
+    /** manifest 就绪标记：iframe 延迟到 manifest 拉取后创建（allow 属性只在
+     *  iframe 导航时生效；读取失败按 null manifest = 无设备能力放开降级） */
+    const manifestLoaded = ref(false);
+    const manifestRef = ref<PluginManifest | null>(null);
+    /** Permissions-Policy allow：仅 manifest 声明的设备能力放行（最小化） */
+    const iframeAllow = computed(() =>
+      (manifestRef.value?.deviceCapabilities ?? []).includes('camera') ? 'camera' : ''
+    );
     /** 「已启用未安装」打开时就地安装（install-and-enable §一/§五③） */
     const notInstalledName = ref('');
     const installing = ref(false);
@@ -233,6 +245,18 @@ export default defineComponent({
       unresponsive.value = false;
       runtimeErrorCount.value = 0;
 
+      // manifest（best-effort）：supportedSpaces/显示名/设备能力声明；读取失败按无声明降级。
+      // 必须先于 iframe 创建：Permissions-Policy allow 只在 iframe 导航时生效，
+      // iframe 渲染由 manifestLoaded 门控
+      const manifest = await fetchPluginManifest(props.pluginId);
+      if (isStale(gen)) {
+        return;
+      }
+      manifestRef.value = manifest;
+      manifestLoaded.value = true;
+      // 透传 manifest 给壳层（供顶栏按 chrome.hostTitleBar 决策隐藏/自接管）
+      emit('manifest', manifest ?? null);
+
       // reload 后 iframe 经 :key 重建，等 DOM 更新再取 contentWindow
       await nextTick();
       if (isStale(gen)) {
@@ -244,13 +268,6 @@ export default defineComponent({
         return;
       }
 
-      // manifest（best-effort）：supportedSpaces 与显示名；读取失败按无声明降级
-      const manifest = await fetchPluginManifest(props.pluginId);
-      if (isStale(gen)) {
-        return;
-      }
-      // 透传 manifest 给壳层（供顶栏按 chrome.hostTitleBar 决策隐藏/自接管）
-      emit('manifest', manifest ?? null);
       const domain = `plugin:${props.pluginId}`;
 
       watchdog = createPluginWatchdog({
@@ -541,6 +558,8 @@ export default defineComponent({
       unresponsive,
       runtimeErrorCount,
       reloadToken,
+      manifestLoaded,
+      iframeAllow,
       srcdoc,
       reload,
       reenable,

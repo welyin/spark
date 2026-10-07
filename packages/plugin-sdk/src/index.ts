@@ -39,6 +39,20 @@ export interface PluginP2PAPI {
   broadcast: (topic: string, message: Record<string, any>) => Promise<{ success: boolean }>;
 }
 
+/**
+ * 导航意图 API（插件 → 壳层的纯 UI 跳转请求，免权限基础调用）：
+ * 沙箱 iframe 内的 CustomEvent 不出浏览上下文，插件的任何「跳到壳层某页」
+ * 意图必须经本模块上行；壳层 dispatcher 校验参数白名单（rootId 64hex 形态、
+ * 名称长度上限、目标插件须在市场注册表内）后路由到既有跳转链路，
+ * 无任何数据面暴露。仅 iframe 桥模式可用；message-card 视图裁剪不放行。
+ */
+export interface PluginNavigationAPI {
+  /** 打开/创建与某联系人的 1:1 会话（壳层切到消息页消费；rootId 须为 64 位小写 hex） */
+  openChat: (input: { rootId: string; name?: string; conversationId?: string }) => Promise<void>;
+  /** 经统一深链打开另一个已注册插件的主视图（cardData 经 viewBootstrap 注入目标插件） */
+  openPlugin: (input: { pluginId: string; viewId?: string; cardData?: unknown }) => Promise<void>;
+}
+
 export interface PluginRuntimeAPI {
   currentRoot: () => Promise<{
     unlocked: boolean;
@@ -1313,6 +1327,8 @@ export interface PluginSDK {
   domain: string;
   /** 请求壳层关闭当前插件视图（退出插件返回来源页）。仅 iframe 桥模式可用 */
   close: () => Promise<void>;
+  /** 导航意图模块（插件 → 壳层纯 UI 跳转，免权限）：仅 iframe 桥模式可用 */
+  navigation?: PluginNavigationAPI;
   evidence: PluginEvidenceAPI;
   p2p: PluginP2PAPI;
   runtime: PluginRuntimeAPI;
@@ -1460,6 +1476,14 @@ export type PluginManifest = {
     defaultWidth?: number;
     defaultHeight?: number;
   };
+  /**
+   * 设备能力声明（可选，最小化下发）：插件沙箱 iframe 默认无 `allow` 属性，
+   * Permissions Policy 拒绝一切设备能力；声明后壳层仅为声明了对应能力的插件
+   * iframe 下发同名 allow 令牌（目前仅支持 "camera"，如扫码取景）。
+   * 未声明的插件一律不放开；声明不构成授权弹窗豁免，取流仍由 WebView 运行时
+   * 向用户请求许可。
+   */
+  deviceCapabilities?: Array<'camera'>;
   /**
    * 事务类型承接声明（可选，纯增量，README §4.4 / ui-architecture §4.4）：
    * 本插件能作为「默认打开程序」处理的事务类型标识清单（如 'vote' / 'budget' / 'discussion'）。

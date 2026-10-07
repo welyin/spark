@@ -298,6 +298,117 @@ describe('spark-affairs service: follow / read paths', () => {
   });
 });
 
+describe('spark-affairs service: resolution closure (§6 vote → resolution)', () => {
+  const VOTER_A = 'aa'.repeat(32);
+  const VOTER_B = 'bb'.repeat(32);
+  const CLOSE_CONDITION = { type: 'op-count', opType: 'content', filter: 'vote', count: 2 };
+
+  function voteOp(opHash: string, actor: string, choice: string, prevOpHash: string) {
+    return {
+      opHash,
+      op: {
+        opV: 1,
+        affairId: AFFAIR_ID,
+        opType: 'content',
+        prevOpHash,
+        payload: { kind: 'vote', targetOpHash: 'dd'.repeat(32), choice, identityMode: 'contextual' },
+        actor: { kind: 'person', identity: actor, publicKey: 'k' },
+        declaredAt: 1
+      }
+    };
+  }
+
+  function mockRulesDoc(rules: Record<string, unknown>) {
+    return {
+      affairId: AFFAIR_ID,
+      nowMs: 1_700_000_000_000,
+      current: { seq: 0, rulesHash: 'rh-0', rules },
+      versions: [],
+      changes: []
+    };
+  }
+
+  const RULES_DOC = {
+    engine: 'b1',
+    closeConditions: [CLOSE_CONDITION],
+    pubPeriod: { delayMs: 86_400_000, vetoThreshold: { count: 1 } },
+    sparkAffairs: { passThreshold: 0.5, minQuorum: 2 }
+  };
+
+  it('submits a signed resolution op with kernel-recomputable fields once the quorum is met', async () => {
+    const { sdk, affairs } = createMockSdk();
+    const v1 = voteOp('11'.repeat(32), VOTER_A, 'for', AFFAIR_ID);
+    const v2 = voteOp('22'.repeat(32), VOTER_B, 'against', '11'.repeat(32));
+    affairs.readLog.mockResolvedValue({ affairId: AFFAIR_ID, genesis: GENESIS, ops: [v1, v2], heads: ['22'.repeat(32)], followedAt: 1 });
+    affairs.readRules.mockResolvedValue(mockRulesDoc(RULES_DOC));
+    affairs.ladderStatus.mockResolvedValue({ affairId: AFFAIR_ID, nowMs: 1, entries: [], voters: [VOTER_A, VOTER_B] });
+    const service = new AffairsService(sdk as any);
+
+    const result = await service.submitResolution(AFFAIR_ID);
+
+    expect(result.status).toBe('accepted');
+    const op = affairs.submitOp.mock.calls[0][0] as Record<string, any>;
+    expect(op.opV).toBe(1);
+    expect(op.opType).toBe('resolution');
+    expect(op.prevOpHash).toBe('22'.repeat(32));
+    expect(op.payload).toEqual({
+      result: 'passed', // 1:1，passThreshold 0.5 → for/ballots = 0.5 ≥ 0.5
+      condition: CLOSE_CONDITION,
+      countedOps: ['11'.repeat(32), '22'.repeat(32)],
+      tally: { for: 1, against: 1, abstain: 0 },
+      rulesHash: 'rh-0',
+      pubPeriod: { delayMs: 86_400_000 }
+    });
+    expect(op.sig).toBe('sig-1');
+    // 签名载荷 = canonical(剔除 sig 全文)，协议验签复算比对
+    const sansSig = { ...op };
+    delete sansSig.sig;
+    expect(sdk.identity.sign).toHaveBeenCalledWith(signPayload(sansSig));
+  });
+
+  it('getResolutionPlan mirrors the same plan for UI preview', async () => {
+    const { sdk, affairs } = createMockSdk();
+    const v1 = voteOp('11'.repeat(32), VOTER_A, 'for', AFFAIR_ID);
+    const v2 = voteOp('22'.repeat(32), VOTER_B, 'abstain', '11'.repeat(32));
+    affairs.readLog.mockResolvedValue({ affairId: AFFAIR_ID, genesis: GENESIS, ops: [v1, v2], heads: ['22'.repeat(32)], followedAt: 1 });
+    affairs.readRules.mockResolvedValue(mockRulesDoc(RULES_DOC));
+    affairs.ladderStatus.mockResolvedValue({ affairId: AFFAIR_ID, nowMs: 1, entries: [], voters: [VOTER_A, VOTER_B] });
+    const service = new AffairsService(sdk as any);
+
+    const plan = await service.getResolutionPlan(AFFAIR_ID);
+    // 唯一有效票为弃权 → 有效票 0 < minQuorum 2 → rejected（门槛满足但表决未通过）
+    expect(plan?.tally).toEqual({ for: 1, against: 0, abstain: 1 });
+    expect(plan?.result).toBe('rejected');
+  });
+
+  it('refuses before signing when the close condition is not met or not declared (no garbage ops)', async () => {
+    const { sdk, affairs } = createMockSdk();
+    // 仅 1 条投票（法定人数 2 未达）
+    affairs.readLog.mockResolvedValue({
+      affairId: AFFAIR_ID,
+      genesis: GENESIS,
+      ops: [voteOp('11'.repeat(32), VOTER_A, 'for', AFFAIR_ID)],
+      heads: ['11'.repeat(32)],
+      followedAt: 1
+    });
+    affairs.readRules.mockResolvedValue(mockRulesDoc(RULES_DOC));
+    affairs.ladderStatus.mockResolvedValue({ affairId: AFFAIR_ID, nowMs: 1, entries: [], voters: [VOTER_A] });
+    const service = new AffairsService(sdk as any);
+
+    await expect(service.submitResolution(AFFAIR_ID)).rejects.toThrow(/关闭条件未满足/);
+    expect(affairs.submitOp).not.toHaveBeenCalled();
+    expect(sdk.identity.sign).not.toHaveBeenCalled();
+
+    // 旧创世（closeConditions 为空）：同样拒绝且如实说明
+    const legacy = createMockSdk();
+    legacy.affairs.readRules.mockResolvedValue(mockRulesDoc({ engine: 'b1', closeConditions: [], pubPeriod: { delayMs: 86_400_000 } }));
+    const legacyService = new AffairsService(legacy.sdk as any);
+    await expect(legacyService.getResolutionPlan(AFFAIR_ID)).resolves.toBeNull();
+    await expect(legacyService.submitResolution(AFFAIR_ID)).rejects.toThrow(/关闭条件未满足/);
+    expect(legacy.affairs.submitOp).not.toHaveBeenCalled();
+  });
+});
+
 describe('spark-affairs service: app-session notification (degradable)', () => {
   it('sends app message with mandatory summary and affair-card reference', async () => {
     const { sdk } = createMockSdk();

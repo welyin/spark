@@ -10,12 +10,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp, h, nextTick, type App } from 'vue';
 import { ElButton, ElIcon } from 'element-plus';
 import PluginIframeHost from '../../components/plugin/PluginIframeHost.vue';
-import {
-  disablePluginInstance,
-  isPluginInstanceDisabled,
-  pluginInstanceKey
-} from '../../plugin/disabled';
+import { disablePluginInstance, isPluginInstanceDisabled, pluginInstanceKey } from '../../plugin/disabled';
 import { getWatchdogCounters } from '../../plugin/watchdog';
+import { fetchPluginManifest } from '../../plugin/source';
 
 type FakeHost = {
   ready: Promise<unknown>;
@@ -166,5 +163,25 @@ describe('PluginIframeHost', () => {
     expect(createdHosts).toHaveLength(1);
 
     app.unmount();
+  });
+
+  it('设备能力最小化：manifest 声明 camera 的 iframe 带 allow="camera"，未声明不带 allow', async () => {
+    // 默认（manifest 读取失败按无声明降级）：不放开任何设备能力
+    const first = mountHost();
+    await flush();
+    expect(first.el.querySelector('iframe')?.getAttribute('allow') ?? '').toBe('');
+    first.app.unmount();
+
+    // 声明 deviceCapabilities: ["camera"] 的插件：iframe 创建即带 allow="camera"
+    // （allow 只在 iframe 导航时生效，故 iframe 等 manifest 就绪后才渲染）
+    vi.mocked(fetchPluginManifest).mockResolvedValueOnce({
+      deviceCapabilities: ['camera']
+    } as never);
+    const second = mountHost();
+    await flush();
+    const iframe = second.el.querySelector('iframe');
+    expect(iframe).not.toBeNull();
+    expect(iframe!.getAttribute('allow')).toBe('camera');
+    second.app.unmount();
   });
 });
