@@ -1,6 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import { MomentsService, MOMENTS_TOPICS } from '../service';
-import { buildPostSignPayload, type MomentsPost, type MomentsProfile } from '../model';
+import {
+  buildDeleteSignPayload,
+  buildInteractionForwardSignPayload,
+  buildInteractionSignPayload,
+  buildPostSignPayload,
+  type MomentsInteraction,
+  type MomentsPost,
+  type MomentsProfile
+} from '../model';
 
 /**
  * mock SDK：覆盖本插件用到的全部域（data / feed / identity / contacts / messages），
@@ -141,18 +149,32 @@ describe('spark-moments service', () => {
   });
 
   // ------------------------------------------------------------------
-  // 收动态：验签硬约束（防伪造）
+  // 收动态：验签硬约束（防伪造）；按 deliver 的真实线形（信封 {post}）驱动
   // ------------------------------------------------------------------
 
-  it('receives a signed post and stores it', async () => {
+  it('receives a signed post envelope and stores it', async () => {
     const sdk = createMockSdk();
     const service = new MomentsService(sdk);
     const post = makeSignedPost('root-a');
-    await expect(service.receivePost(post)).resolves.toBe(true);
+    // 真实线形：deliverPost 以信封 {post} 投递，receivePost 必须拆封
+    await expect(service.receivePost({ post })).resolves.toBe(true);
     // verify 收到的是从帖子当前字段重算的期望载荷，而非随帖回放
     const expected = buildPostSignPayload(post);
     expect(sdk.identity.verify).toHaveBeenCalledWith(expected, 'sig-1', 'pk-1');
     expect(sdk.data.save).toHaveBeenCalledWith('spark-moments:posts', post.id, post);
+  });
+
+  it('accepts a bare post payload as well (compat)', async () => {
+    const sdk = createMockSdk();
+    const service = new MomentsService(sdk);
+    await expect(service.receivePost(makeSignedPost('root-a'))).resolves.toBe(true);
+  });
+
+  it('rejects envelope whose post is missing id/authorRootId', async () => {
+    const sdk = createMockSdk();
+    const service = new MomentsService(sdk);
+    await expect(service.receivePost({ post: { text: 'no-id' } })).resolves.toBe(false);
+    expect(sdk.data.save).not.toHaveBeenCalled();
   });
 
   it('rejects unsigned post', async () => {
@@ -160,7 +182,7 @@ describe('spark-moments service', () => {
     const service = new MomentsService(sdk);
     const post: MomentsPost = makeSignedPost('root-a');
     delete post.signature;
-    await expect(service.receivePost(post)).resolves.toBe(false);
+    await expect(service.receivePost({ post })).resolves.toBe(false);
     expect(sdk.data.save).not.toHaveBeenCalled();
   });
 
@@ -169,7 +191,7 @@ describe('spark-moments service', () => {
     const service = new MomentsService(sdk);
     const post = makeSignedPost('root-a');
     const tampered = { ...post, text: '被篡改' };
-    await expect(service.receivePost(tampered)).resolves.toBe(false);
+    await expect(service.receivePost({ post: tampered })).resolves.toBe(false);
     expect(sdk.identity.verify).not.toHaveBeenCalled();
     expect(sdk.data.save).not.toHaveBeenCalled();
   });
@@ -178,7 +200,7 @@ describe('spark-moments service', () => {
     const sdk = createMockSdk();
     sdk.identity.verify.mockResolvedValueOnce({ valid: false });
     const service = new MomentsService(sdk);
-    await expect(service.receivePost(makeSignedPost('root-a'))).resolves.toBe(false);
+    await expect(service.receivePost({ post: makeSignedPost('root-a') })).resolves.toBe(false);
     expect(sdk.data.save).not.toHaveBeenCalled();
   });
 
@@ -193,7 +215,7 @@ describe('spark-moments service', () => {
     await service.interact({ post, type: 'like', action: 'add', myRootId: 'root-me' });
     // 落库 key 复合
     expect(sdk.data.save.mock.calls[0][1]).toBe('post-1:like:root-me');
-    // 广播给名单（除自己）
+    // 广播给名单（除自己），携带互动签名 + 作者转发签名双重证据
     expect(sdk.feed.deliver).toHaveBeenCalledWith(
       expect.objectContaining({
         topic: MOMENTS_TOPICS.interaction,
@@ -201,6 +223,10 @@ describe('spark-moments service', () => {
         replyTo: 'post-1'
       })
     );
+    const broadcastPayload = sdk.feed.deliver.mock.calls[0][0].payload;
+    expect(broadcastPayload.broadcast).toBe(true);
+    expect(broadcastPayload.signature.payload).toBe(buildInteractionSignPayload('post-1', 'like', 'root-me', '', 'add'));
+    expect(broadcastPayload.forward.payload).toBe(buildInteractionForwardSignPayload('post-1', 'like', 'root-me', '', 'add'));
   });
 
   it('non-author interacting delivers to author only (first hop)', async () => {
@@ -217,6 +243,17 @@ describe('spark-moments service', () => {
     expect(deliverCall.payload.signature).toBeDefined();
   });
 
+  it('does not deliver interaction when signing is rejected (hard constraint)', async () => {
+    const sdk = createMockSdk();
+    sdk.identity.sign.mockRejectedValueOnce(new Error('denied'));
+    const service = new MomentsService(sdk);
+    const post: MomentsPost = makeSignedPost('root-a', { recipients: ['root-b'] });
+    await service.interact({ post, type: 'like', action: 'add', myRootId: 'root-b' });
+    // 本地落库照做，但无签名不投递
+    expect(sdk.data.save).toHaveBeenCalled();
+    expect(sdk.feed.deliver).not.toHaveBeenCalled();
+  });
+
   // ------------------------------------------------------------------
   // 互动广播接收与再广播（产品 §6.2 第二跳）
   // ------------------------------------------------------------------
@@ -226,41 +263,125 @@ describe('spark-moments service', () => {
     // 作者 root-me 有 post-1，recipients=[b,c,d]；B 点赞
     sdk.data.get.mockResolvedValue(makeSignedPost('root-me', { id: 'post-1', recipients: ['root-b', 'root-c', 'root-d'] }));
     const service = new MomentsService(sdk);
-    const accepted = await service.receiveInteraction({
-      postId: 'post-1',
-      type: 'like',
-      rootId: 'root-b',
-      interaction: { type: 'like', action: 'add', ts: 1 },
-      signature: { payload: buildInteractionPayload('post-1', 'like', 'root-b'), signature: 'sig-1', publicKey: 'pk-1' }
-    });
+    const accepted = await service.receiveInteraction(
+      {
+        postId: 'post-1',
+        type: 'like',
+        rootId: 'root-b',
+        interaction: { type: 'like', action: 'add', ts: 1 },
+        signature: { payload: buildInteractionPayload('post-1', 'like', 'root-b'), signature: 'sig-1', publicKey: 'pk-1' }
+      },
+      'root-me'
+    );
     expect(accepted).toBe(true);
-    // 广播给名单（除 B 外）
+    // 广播给名单（除 B 外），携带双重签名证据
     const broadcastCall = sdk.feed.deliver.mock.calls[0][0];
     expect(broadcastCall.topic).toBe(MOMENTS_TOPICS.interaction);
     expect(broadcastCall.recipients).toEqual(['root-c', 'root-d']);
     expect(broadcastCall.payload.broadcast).toBe(true);
+    expect(broadcastCall.payload.signature.payload).toBe(buildInteractionPayload('post-1', 'like', 'root-b'));
+    expect(broadcastCall.payload.forward.payload).toBe(buildInteractionForwardSignPayload('post-1', 'like', 'root-b', '', 'add'));
+  });
+
+  it('non-author receiving first-hop interaction stores locally but does NOT broadcast (no amplification)', async () => {
+    const sdk = createMockSdk();
+    // 受害机不是作者（myRootId=root-x，post 作者 root-me）
+    sdk.data.get.mockResolvedValue(makeSignedPost('root-me', { id: 'post-1', recipients: ['root-b', 'root-c'] }));
+    const service = new MomentsService(sdk);
+    const accepted = await service.receiveInteraction(
+      {
+        postId: 'post-1',
+        type: 'like',
+        rootId: 'root-b',
+        interaction: { type: 'like', action: 'add', ts: 1 },
+        signature: { payload: buildInteractionPayload('post-1', 'like', 'root-b'), signature: 'sig-1', publicKey: 'pk-1' }
+      },
+      'root-x'
+    );
+    expect(accepted).toBe(true);
+    expect(sdk.data.save).toHaveBeenCalledWith('spark-moments:interactions', 'post-1:like:root-b', expect.anything());
+    expect(sdk.feed.deliver).not.toHaveBeenCalled();
   });
 
   it('rejects interaction with invalid signature (no broadcast)', async () => {
     const sdk = createMockSdk();
     sdk.identity.verify.mockResolvedValueOnce({ valid: false });
     const service = new MomentsService(sdk);
-    const accepted = await service.receiveInteraction({
-      postId: 'post-1',
-      type: 'like',
-      rootId: 'root-b',
-      interaction: { type: 'like', action: 'add', ts: 1 },
-      signature: { payload: buildInteractionPayload('post-1', 'like', 'root-b'), signature: 'sig-bad', publicKey: 'pk-bad' }
-    });
+    const accepted = await service.receiveInteraction(
+      {
+        postId: 'post-1',
+        type: 'like',
+        rootId: 'root-b',
+        interaction: { type: 'like', action: 'add', ts: 1 },
+        signature: { payload: buildInteractionPayload('post-1', 'like', 'root-b'), signature: 'sig-bad', publicKey: 'pk-bad' }
+      },
+      'root-me'
+    );
     expect(accepted).toBe(false);
     expect(sdk.feed.deliver).not.toHaveBeenCalled();
   });
 
   // ------------------------------------------------------------------
-  // 删除动态（产品 §6.5）
+  // 互动广播接收（非作者，双重签名证据验签硬约束）
   // ------------------------------------------------------------------
 
-  it('author deletes post marking deletedAt and notifying original recipients', async () => {
+  it('accepts broadcast with both interactor signature and author forward signature', async () => {
+    const sdk = createMockSdk();
+    // 本机有该动态（作者 root-me，域公钥 pk-1）
+    sdk.data.get.mockResolvedValue(makeSignedPost('root-me', { id: 'post-1' }));
+    const service = new MomentsService(sdk);
+    const interaction: MomentsInteraction = { type: 'comment', action: 'add', text: '真好看', ts: 2 };
+    const accepted = await service.receiveInteractionBroadcast({
+      postId: 'post-1',
+      type: 'comment',
+      rootId: 'root-b',
+      interaction,
+      broadcast: true,
+      signature: { payload: buildInteractionSignPayload('post-1', 'comment', 'root-b', '真好看', 'add'), signature: 'sig-b', publicKey: 'pk-b' },
+      forward: { payload: buildInteractionForwardSignPayload('post-1', 'comment', 'root-b', '真好看', 'add'), signature: 'sig-f', publicKey: 'pk-1' }
+    });
+    expect(accepted).toBe(true);
+    expect(sdk.data.save).toHaveBeenCalledWith('spark-moments:interactions', 'post-1:comment:root-b', interaction);
+  });
+
+  it('rejects broadcast without forward signature (forged amplification)', async () => {
+    const sdk = createMockSdk();
+    sdk.data.get.mockResolvedValue(makeSignedPost('root-me', { id: 'post-1' }));
+    const service = new MomentsService(sdk);
+    const accepted = await service.receiveInteractionBroadcast({
+      postId: 'post-1',
+      type: 'like',
+      rootId: 'root-b',
+      interaction: { type: 'like', action: 'add', ts: 1 },
+      broadcast: true,
+      signature: { payload: buildInteractionPayload('post-1', 'like', 'root-b'), signature: 'sig-b', publicKey: 'pk-b' }
+    });
+    expect(accepted).toBe(false);
+    expect(sdk.data.save).not.toHaveBeenCalled();
+  });
+
+  it('rejects broadcast whose forward public key does not match the post author key', async () => {
+    const sdk = createMockSdk();
+    sdk.data.get.mockResolvedValue(makeSignedPost('root-me', { id: 'post-1' }));
+    const service = new MomentsService(sdk);
+    const accepted = await service.receiveInteractionBroadcast({
+      postId: 'post-1',
+      type: 'like',
+      rootId: 'root-b',
+      interaction: { type: 'like', action: 'add', ts: 1 },
+      broadcast: true,
+      signature: { payload: buildInteractionPayload('post-1', 'like', 'root-b'), signature: 'sig-b', publicKey: 'pk-b' },
+      forward: { payload: buildInteractionForwardSignPayload('post-1', 'like', 'root-b', '', 'add'), signature: 'sig-f', publicKey: 'pk-evil' }
+    });
+    expect(accepted).toBe(false);
+    expect(sdk.data.save).not.toHaveBeenCalled();
+  });
+
+  // ------------------------------------------------------------------
+  // 删除动态（产品 §6.5：签名投递 + 接收方验签硬约束）
+  // ------------------------------------------------------------------
+
+  it('author deletes post marking deletedAt and delivering signed notification', async () => {
     const sdk = createMockSdk();
     const service = new MomentsService(sdk);
     const post: MomentsPost = makeSignedPost('root-me', { recipients: ['root-b', 'root-c'] });
@@ -268,21 +389,78 @@ describe('spark-moments service', () => {
     // 本地标记 deletedAt
     const stored = sdk.data.save.mock.calls[0][2] as MomentsPost;
     expect(stored.deletedAt).toBeDefined();
-    // 投递删除通知给原名单
+    // 投递删除通知给原名单，载荷带作者签名（buildDeleteSignPayload 绑定 postId+authorRootId）
     expect(sdk.feed.deliver).toHaveBeenCalledWith(
       expect.objectContaining({ topic: MOMENTS_TOPICS.delete, recipients: ['root-b', 'root-c'] })
     );
+    const payload = sdk.feed.deliver.mock.calls[0][0].payload;
+    expect(payload.postId).toBe('post-1');
+    expect(payload.authorRootId).toBe('root-me');
+    expect(payload.signature.payload).toBe(buildDeleteSignPayload('post-1', 'root-me'));
   });
 
-  it('receiver marks post deleted on delete notification', async () => {
+  it('does not deliver delete notification when signing is rejected (local delete still applies)', async () => {
+    const sdk = createMockSdk();
+    sdk.identity.sign.mockRejectedValueOnce(new Error('denied'));
+    const service = new MomentsService(sdk);
+    const post: MomentsPost = makeSignedPost('root-me', { recipients: ['root-b'] });
+    await service.deletePost(post);
+    const stored = sdk.data.save.mock.calls[0][2] as MomentsPost;
+    expect(stored.deletedAt).toBeDefined();
+    expect(sdk.feed.deliver).not.toHaveBeenCalled();
+  });
+
+  it('receiver marks post deleted on verified delete notification', async () => {
     const sdk = createMockSdk();
     sdk.data.get.mockResolvedValueOnce(makeSignedPost('root-a'));
     const service = new MomentsService(sdk);
-    await service.receiveDelete({ postId: 'post-1', deletedAt: 500 });
+    const accepted = await service.receiveDelete({
+      postId: 'post-1',
+      authorRootId: 'root-a',
+      deletedAt: 500,
+      signature: { payload: buildDeleteSignPayload('post-1', 'root-a'), signature: 'sig-1', publicKey: 'pk-1' }
+    });
+    expect(accepted).toBe(true);
     const stored = sdk.data.save.mock.calls[0][1] as string;
     expect(stored).toBe('post-1');
     const saved = sdk.data.save.mock.calls[0][2] as MomentsPost;
     expect(saved.deletedAt).toBe(500);
+  });
+
+  it('rejects unsigned delete notification (no legacy downgrade)', async () => {
+    const sdk = createMockSdk();
+    sdk.data.get.mockResolvedValueOnce(makeSignedPost('root-a'));
+    const service = new MomentsService(sdk);
+    await expect(service.receiveDelete({ postId: 'post-1', deletedAt: 500 })).resolves.toBe(false);
+    expect(sdk.data.save).not.toHaveBeenCalled();
+  });
+
+  it('rejects delete notification whose authorRootId does not match the local post', async () => {
+    const sdk = createMockSdk();
+    sdk.data.get.mockResolvedValueOnce(makeSignedPost('root-a'));
+    const service = new MomentsService(sdk);
+    const accepted = await service.receiveDelete({
+      postId: 'post-1',
+      authorRootId: 'root-evil',
+      deletedAt: 500,
+      signature: { payload: buildDeleteSignPayload('post-1', 'root-evil'), signature: 'sig-1', publicKey: 'pk-evil' }
+    });
+    expect(accepted).toBe(false);
+    expect(sdk.data.save).not.toHaveBeenCalled();
+  });
+
+  it('rejects delete notification whose signer key differs from the post author key', async () => {
+    const sdk = createMockSdk();
+    sdk.data.get.mockResolvedValueOnce(makeSignedPost('root-a'));
+    const service = new MomentsService(sdk);
+    const accepted = await service.receiveDelete({
+      postId: 'post-1',
+      authorRootId: 'root-a',
+      deletedAt: 500,
+      signature: { payload: buildDeleteSignPayload('post-1', 'root-a'), signature: 'sig-1', publicKey: 'pk-evil' }
+    });
+    expect(accepted).toBe(false);
+    expect(sdk.data.save).not.toHaveBeenCalled();
   });
 
   // ------------------------------------------------------------------

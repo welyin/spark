@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildDeleteSignPayload,
+  buildInteractionForwardSignPayload,
   buildInteractionSignPayload,
   buildPostSignPayload,
   type MomentsInteraction,
@@ -154,7 +155,7 @@ describe('spark-moments background script', () => {
 
   it('互动第一跳：验签 → 落库 → 广播名单（除互动者）→ 写应用会话通知', async () => {
     await loadBackground(host);
-    // 本机是作者（post 已在 spark-moments:posts），recipients=[b,c]
+    // 本机是作者（post 已在 spark-moments:posts，签名公钥 pk-1 == 假宿主域公钥），recipients=[b,c]
     const post = makePost('root-me', { recipients: ['root-b', 'root-c'] });
     host.store.posts.set(post.id, post);
     const interaction: MomentsInteraction = { type: 'like', action: 'add', ts: 200 };
@@ -176,11 +177,20 @@ describe('spark-moments background script', () => {
 
     // 落库 key 复合
     expect(host.store.interactions.get('post-1:like:root-b')).toEqual(interaction);
-    // 广播给名单除 B 外（recipients 除 root-b）
+    // 广播给名单除 B 外（recipients 除 root-b），携带原互动签名 + 作者转发签名双重证据
     const broadcast = host.calls.delivers.find((d) => d.topic === 'spark-moments:interaction');
     expect(broadcast).toBeDefined();
     expect(broadcast!.recipients).toEqual(['root-c']);
     expect(broadcast!.replyTo).toBe('post-1');
+    const broadcastPayload = broadcast!.payload as {
+      broadcast?: boolean;
+      signature?: { payload?: string };
+      forward?: { payload?: string; publicKey?: string };
+    };
+    expect(broadcastPayload.broadcast).toBe(true);
+    expect(broadcastPayload.signature?.payload).toBe(buildInteractionSignPayload(post.id, 'like', 'root-b', '', 'add'));
+    expect(broadcastPayload.forward?.payload).toBe(buildInteractionForwardSignPayload(post.id, 'like', 'root-b', '', 'add'));
+    expect(broadcastPayload.forward?.publicKey).toBe('pk-1');
     // 应用会话通知
     expect(host.calls.appMessages).toHaveLength(1);
     expect(host.calls.appMessages[0].summary).toContain('赞了你的动态');
@@ -212,18 +222,114 @@ describe('spark-moments background script', () => {
     expect(host.calls.appMessages).toHaveLength(0);
   });
 
-  it('互动广播（broadcast=true）：本地增删互动，不广播不通知', async () => {
+  it('互动第一跳：本机非作者设备（动态签名公钥不符）→ 只落库，不广播不通知（防伪造放大）', async () => {
     await loadBackground(host);
-    // 非作者（本机无该动态或非作者），收到作者广播 → 只落库
+    // 动态签名公钥 pk-other ≠ 本机域公钥 pk-1 → 本机不是作者设备
+    const post = makePost('root-me', { recipients: ['root-b', 'root-c'] });
+    post.signature = { payload: buildPostSignPayload(post), signature: 'sig-x', publicKey: 'pk-other' };
+    host.store.posts.set(post.id, post);
+    const interaction: MomentsInteraction = { type: 'like', action: 'add', ts: 200 };
+    host.emit(
+      'spark-moments:interaction',
+      {
+        postId: post.id,
+        type: 'like',
+        rootId: 'root-b',
+        interaction,
+        signature: {
+          payload: buildInteractionSignPayload(post.id, 'like', 'root-b', '', 'add'),
+          signature: 'sig-1',
+          publicKey: 'pk-1'
+        }
+      },
+      'root-b'
+    );
+    expect(host.store.interactions.get('post-1:like:root-b')).toEqual(interaction);
+    expect(host.calls.delivers.filter((d) => d.topic === 'spark-moments:interaction')).toHaveLength(0);
+    expect(host.calls.appMessages).toHaveLength(0);
+  });
+
+  it('互动广播（broadcast=true）：双重签名证据 + 作者绑定验签通过 → 本地落库，不广播不通知', async () => {
+    await loadBackground(host);
+    // 本机有该动态（作者 root-me，域公钥 pk-1）；收到作者广播 → 只落库
+    const post = makePost('root-me');
+    host.store.posts.set(post.id, post);
     const interaction: MomentsInteraction = { type: 'comment', action: 'add', text: '真好看', ts: 300 };
     host.emit(
       'spark-moments:interaction',
-      { postId: 'post-1', type: 'comment', rootId: 'root-b', interaction, broadcast: true },
+      {
+        postId: 'post-1',
+        type: 'comment',
+        rootId: 'root-b',
+        interaction,
+        broadcast: true,
+        signature: {
+          payload: buildInteractionSignPayload('post-1', 'comment', 'root-b', '真好看', 'add'),
+          signature: 'sig-b',
+          publicKey: 'pk-b'
+        },
+        forward: {
+          payload: buildInteractionForwardSignPayload('post-1', 'comment', 'root-b', '真好看', 'add'),
+          signature: 'sig-f',
+          publicKey: 'pk-1'
+        }
+      },
       'root-me'
     );
     expect(host.store.interactions.get('post-1:comment:root-b')).toEqual(interaction);
     expect(host.calls.delivers).toHaveLength(0);
     expect(host.calls.appMessages).toHaveLength(0);
+  });
+
+  it('互动广播：缺作者转发签名 → 拒收不落库（防伪造广播）', async () => {
+    await loadBackground(host);
+    const post = makePost('root-me');
+    host.store.posts.set(post.id, post);
+    host.emit(
+      'spark-moments:interaction',
+      {
+        postId: 'post-1',
+        type: 'like',
+        rootId: 'root-b',
+        interaction: { type: 'like', action: 'add', ts: 300 },
+        broadcast: true,
+        signature: {
+          payload: buildInteractionSignPayload('post-1', 'like', 'root-b', '', 'add'),
+          signature: 'sig-b',
+          publicKey: 'pk-b'
+        }
+      },
+      'root-me'
+    );
+    expect(host.store.interactions.size).toBe(0);
+  });
+
+  it('互动广播：转发公钥与本地动态签名公钥不符 → 拒收不落库', async () => {
+    await loadBackground(host);
+    const post = makePost('root-me');
+    host.store.posts.set(post.id, post);
+    host.emit(
+      'spark-moments:interaction',
+      {
+        postId: 'post-1',
+        type: 'like',
+        rootId: 'root-b',
+        interaction: { type: 'like', action: 'add', ts: 300 },
+        broadcast: true,
+        signature: {
+          payload: buildInteractionSignPayload('post-1', 'like', 'root-b', '', 'add'),
+          signature: 'sig-b',
+          publicKey: 'pk-b'
+        },
+        forward: {
+          payload: buildInteractionForwardSignPayload('post-1', 'like', 'root-b', '', 'add'),
+          signature: 'sig-f',
+          publicKey: 'pk-evil'
+        }
+      },
+      'root-me'
+    );
+    expect(host.store.interactions.size).toBe(0);
   });
 
   // ------------------------------------------------------------------
@@ -238,11 +344,11 @@ describe('spark-moments background script', () => {
     const expected = buildDeleteSignPayload(post.id, authorRootId);
     host.emit(
       'spark-moments:delete',
-      { postId: post.id, authorRootId, sig: 'sig-1', pubKey: 'pk-1', signature: { payload: expected, signature: 'sig-1', publicKey: 'pk-1' } },
+      { postId: post.id, authorRootId, deletedAt: 500, signature: { payload: expected, signature: 'sig-1', publicKey: 'pk-1' } },
       authorRootId
     );
     const stored = host.store.posts.get(post.id) as MomentsPost;
-    expect(stored.deletedAt).toBeDefined();
+    expect(stored.deletedAt).toBe(500);
   });
 
   it('删除通知（带签名）：验签失败 → 不标记', async () => {
@@ -258,11 +364,36 @@ describe('spark-moments background script', () => {
     expect((host.store.posts.get(post.id) as MomentsPost).deletedAt).toBeUndefined();
   });
 
-  it('删除通知（旧版无签名）：降级标记 deletedAt', async () => {
+  it('删除通知：payload 作者与本地动态作者不符 → 不标记', async () => {
+    await loadBackground(host);
+    const post = makePost('root-a');
+    host.store.posts.set(post.id, post);
+    // 验签本身通过（载荷自洽），但 authorRootId 与本地 post.authorRootId 不一致
+    host.emit(
+      'spark-moments:delete',
+      { postId: post.id, authorRootId: 'root-evil', signature: { payload: buildDeleteSignPayload(post.id, 'root-evil'), signature: 'sig-1', publicKey: 'pk-evil' } },
+      'root-evil'
+    );
+    expect((host.store.posts.get(post.id) as MomentsPost).deletedAt).toBeUndefined();
+  });
+
+  it('删除通知：签名公钥与动态作者公钥不符 → 不标记', async () => {
+    await loadBackground(host);
+    const post = makePost('root-a');
+    host.store.posts.set(post.id, post);
+    host.emit(
+      'spark-moments:delete',
+      { postId: post.id, authorRootId: 'root-a', signature: { payload: buildDeleteSignPayload(post.id, 'root-a'), signature: 'sig-1', publicKey: 'pk-evil' } },
+      'root-a'
+    );
+    expect((host.store.posts.get(post.id) as MomentsPost).deletedAt).toBeUndefined();
+  });
+
+  it('删除通知（旧版无签名）：一律拒收不标记（无降级）', async () => {
     await loadBackground(host);
     const post = makePost('root-a');
     host.store.posts.set(post.id, post);
     host.emit('spark-moments:delete', { postId: post.id, deletedAt: 500 }, 'root-a');
-    expect((host.store.posts.get(post.id) as MomentsPost).deletedAt).toBe(500);
+    expect((host.store.posts.get(post.id) as MomentsPost).deletedAt).toBeUndefined();
   });
 });

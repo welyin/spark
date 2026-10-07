@@ -4,6 +4,7 @@ import {
   MOMENTS_MAX_COMMENT_LENGTH,
   MOMENTS_MAX_IMAGES,
   buildDeleteSignPayload,
+  buildInteractionForwardSignPayload,
   buildInteractionSignPayload,
   buildMomentId,
   buildPostSignPayload,
@@ -212,6 +213,18 @@ describe('spark-moments model · 追加层（id/校验/勾选项展开/payload �
     expect(p).toBe('moments:delete:post-1:root-a');
     expect(buildDeleteSignPayload('post-2', 'root-a')).not.toBe(p);
     expect(buildDeleteSignPayload('post-1', 'root-b')).not.toBe(p);
+  });
+
+  // ------------------------------------------------------------------
+  // 互动广播作者转发签名载荷
+  // ------------------------------------------------------------------
+
+  it('builds interaction forward sign payload binding postId + type + rootId + text + action', () => {
+    const p = buildInteractionForwardSignPayload('post-1', 'comment', 'root-b', '真好看', 'add');
+    expect(p).toBe(`moments:interaction:forward:post-1:comment:root-b:${hashContent('真好看')}:add`);
+    // 与互动签名载荷不同前缀（防跨用途回放）
+    expect(p).not.toBe(buildInteractionSignPayload('post-1', 'comment', 'root-b', '真好看', 'add'));
+    expect(buildInteractionForwardSignPayload('post-1', 'comment', 'root-b', '真好看', 'remove')).not.toBe(p);
   });
 
   // ------------------------------------------------------------------

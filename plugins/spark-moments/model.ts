@@ -273,6 +273,22 @@ export function buildDeleteSignPayload(postId: string, authorRootId: string): st
   return `moments:delete:${postId}:${authorRootId}`;
 }
 
+/**
+ * 互动广播的作者转发签名载荷：
+ * `moments:interaction:forward:{postId}:{type}:{rootId}:{文本哈希}:{action}`。
+ * 第二跳广播携带双重证据（原互动者签名 + 作者转发签名）；接收方验作者转发签名
+ * 以证明「该动态作者认可此广播」，并把转发公钥与本地动态的签名公钥比对绑定作者身份。
+ */
+export function buildInteractionForwardSignPayload(
+  postId: string,
+  type: 'like' | 'comment',
+  rootId: string,
+  text: string,
+  action: 'add' | 'remove'
+): string {
+  return `moments:interaction:forward:${postId}:${type}:${rootId}:${hashContent(text)}:${action}`;
+}
+
 // ---------------------------------------------------------------------------
 // 纯函数：可见性四选一展开（发送方裁决，对齐产品 §5.3）
 // ---------------------------------------------------------------------------

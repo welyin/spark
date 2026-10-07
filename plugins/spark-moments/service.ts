@@ -11,9 +11,10 @@
  * - 存储走**声明式数据 API**（sdk.data：declareCollection/save/get/query/saveBlob/readBlob），
  *   区别于 spark-example 的旧 sdk.docs——spark-moments 是 personal 空间插件，
  *   用新 API 声明 personal scope 同步集合（social-feed §10 偏差表第 1 条：scope "sync"）；
- * - 投递走 sdk.feed（feed:deliver 高级权限 + 内核限流 10 次/60s）；收件 onReceive/pull 免权限；
- * - 验签走 sdk.identity.verify（免权限）；发动态签名 identity:sign（使用时询问高危权限，
- *   拒绝时降级为不签名——但互动投递必须验签，签名是投递链路的一部分）；
+ * - 投递走 sdk.feed（feed:write 高级权限 + 内核限流 10 次/60s；feed:read 收件拉取）；
+ * - 验签走 sdk.identity.verify（免权限）；发动态/删除/互动签名 identity:sign（使用时询问
+ *   高危权限）。动态签名拒绝时降级为不签名（本地照发，接收方会拒收）；**删除通知与互动
+ *   投递的签名是投递链路的一部分——签名失败则不投递**（防伪造硬约束优于可达性）；
  * - 通讯录走 sdk.contacts（contact:read 高级 + 使用时询问）：仅用于发动态时展开可见名单，
  *   不用于可见性裁决（裁决在发送方过滤 + 内核 DM 过滤）。
  *
@@ -41,6 +42,8 @@
 
 import type { PluginSDK, PluginFriendSummary } from '../../packages/plugin-sdk/src';
 import {
+  buildDeleteSignPayload,
+  buildInteractionForwardSignPayload,
   buildInteractionSignPayload,
   buildPostSignPayload,
   buildCommentExcerpt,
@@ -236,12 +239,14 @@ export class MomentsService {
 
   /**
    * 收到动态（sdk.feed.onReceive / pull 补读路径），先验签后落库。
+   * 投递线形是信封 `{post}`（见 deliverPost），此处必须拆封；兼容裸 post（旧路径/测试直调）。
    * 验签失败（签名无效 / payload 与当前内容不符 / authorRootId 与签名公钥不一致）→ 拒收。
    * @returns 是否接受落库
    */
   async receivePost(payload: unknown): Promise<boolean> {
     await this.ensureCollectionsDeclared();
-    const post = payload as MomentsPost;
+    const envelope = (payload ?? {}) as { post?: MomentsPost };
+    const post = envelope.post ?? (payload as MomentsPost);
     if (!post || !post.id || !post.authorRootId) {
       return false;
     }
@@ -296,9 +301,15 @@ export class MomentsService {
     // 落本地（key 复合：postId:type:rootId）
     await this.sdk.data.save(MOMENTS_COLLECTIONS.interactions, interactionKey(input.post.id, input.type, input.myRootId), interaction);
 
-    // 作者自己的互动：直接按投递名单广播（A 也是名单里隐含的「可见者」）
+    // 作者自己的互动：签名后直接按投递名单广播（广播须带互动签名 + 作者转发签名双重证据，
+    // 接收方验签硬约束；签名被拒则只落本地不广播）
     if (input.post.authorRootId === input.myRootId) {
-      await this.broadcastInteraction(input.post, input.type, input.myRootId, interaction);
+      const signature = await this.signInteraction(input.post.id, input.type, input.myRootId, interaction);
+      if (signature && this.sdk.feed) {
+        await this.broadcastInteraction(input.post, input.type, input.myRootId, interaction, signature);
+      } else if (!signature) {
+        console.warn('[spark-moments] 互动签名被拒，本次互动仅本地落库不广播');
+      }
       return interaction;
     }
 
@@ -309,7 +320,7 @@ export class MomentsService {
     return interaction;
   }
 
-  /** 互动投递作者（第一跳：互动者 → 作者） */
+  /** 互动投递作者（第一跳：互动者 → 作者）；签名失败则不投递（防伪造硬约束） */
   private async deliverInteractionToAuthor(
     post: MomentsPost,
     type: 'like' | 'comment',
@@ -318,6 +329,10 @@ export class MomentsService {
   ): Promise<void> {
     // 互动投递必须带签名（作者验签后才会落库并广播）——签名拒绝则不投递
     const signature = await this.signInteraction(post.id, type, rootId, interaction);
+    if (!signature) {
+      console.warn('[spark-moments] 互动签名被拒，互动不投递（仅本地落库）');
+      return;
+    }
     await this.sdk.feed!.deliver({
       topic: MOMENTS_TOPICS.interaction,
       payload: { postId: post.id, type, rootId, interaction, signature },
@@ -343,16 +358,39 @@ export class MomentsService {
     }
   }
 
+  /**
+   * 作者转发签名（第二跳广播用）：作者以本机域身份签「我认可把这条互动广播给名单」。
+   * 接收方验此签名 + 比对转发公钥与本地动态签名公钥，确认广播出自作者设备。
+   */
+  private async signInteractionForward(
+    postId: string,
+    type: 'like' | 'comment',
+    rootId: string,
+    interaction: MomentsInteraction
+  ): Promise<MomentsSignature | undefined> {
+    try {
+      const payload = buildInteractionForwardSignPayload(postId, type, rootId, interaction.text ?? '', interaction.action);
+      const result = await this.sdk.identity.sign(payload);
+      return { payload, signature: result.signature, publicKey: result.publicKey };
+    } catch (error) {
+      console.warn('[spark-moments] 转发签名被拒，互动广播不投递：', error);
+      return undefined;
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // 互动接收与广播（产品 §6.2 第二跳：作者 → 投递名单）
   // ---------------------------------------------------------------------------
 
   /**
-   * 收到互动（作为作者）。验签通过后落库，然后读该 post 的 recipients 广播给名单
-   * （除互动发起者）。
-   * @returns 是否处理（验签通过 + post 存在）
+   * 收到互动（第一跳，互动者 → 作者投递）。验签通过后落库；
+   * 仅当本机确为该动态作者（post.authorRootId === myRootId）时才广播名单——
+   * 非本人动态的第一跳互动只落库不广播（防伪造放大：攻击者把第一跳直接投递给
+   * 非作者收件人时，受害本机不得按 post.recipients 放大转发）。
+   * @param myRootId 当前用户 rootId（作者判定依据；未注入时一律视为非作者，不广播）
+   * @returns 是否处理（验签通过 + 字段齐全）
    */
-  async receiveInteraction(payload: unknown): Promise<boolean> {
+  async receiveInteraction(payload: unknown, myRootId?: string): Promise<boolean> {
     await this.ensureCollectionsDeclared();
     const msg = payload as { postId?: string; type?: 'like' | 'comment'; rootId?: string; interaction?: MomentsInteraction; signature?: MomentsSignature };
     if (!msg?.postId || !msg.type || !msg.rootId || !msg.interaction) {
@@ -371,34 +409,43 @@ export class MomentsService {
       return false;
     }
 
-    // 读取对应动态（须为本机已有，且确由本人所发——广播名单来源）
+    // 读取对应动态（广播名单来源）；作者判定用注入的 myRootId——
+    // 不可用 sdk.domain（插件域身份字符串，与 rootId 永远不等，守卫会形同虚设）
     const post = await this.sdk.data.get<MomentsPost>(MOMENTS_COLLECTIONS.posts, msg.postId);
-    if (!post || post.authorRootId !== this.sdk.domain) {
-      // 无该动态（可能已删）或非本人动态：落库但仍尽力广播名单
-    }
+    const isAuthor = !!post && typeof myRootId === 'string' && post.authorRootId === myRootId;
 
     // 落库
     await this.sdk.data.save(MOMENTS_COLLECTIONS.interactions, interactionKey(msg.postId, msg.type, msg.rootId), msg.interaction);
 
-    // 广播给名单（除发起者）；广播 payload 携带原始互动，接收方本地增删
-    if (post && this.sdk.feed) {
-      await this.broadcastInteraction(post, msg.type, msg.rootId, msg.interaction);
+    // 仅作者广播给名单（除发起者）；广播携带原互动签名 + 作者转发签名双重证据
+    if (isAuthor && this.sdk.feed) {
+      await this.broadcastInteraction(post, msg.type, msg.rootId, msg.interaction, msg.signature);
     }
     return true;
   }
 
-  /** 广播互动给动态投递名单（除发起者外）；广播 payload 不携带签名（接收方本地记录即可） */
+  /**
+   * 广播互动给动态投递名单（除发起者外）。
+   * 广播 payload 携带双重签名证据：`signature` = 原互动者签名（第一跳签名原样携带），
+   * `forward` = 作者转发签名（证明「该动态作者认可此广播」）——接收方验签后才落库。
+   */
   private async broadcastInteraction(
     post: MomentsPost,
     type: 'like' | 'comment',
     interactionRootId: string,
-    interaction: MomentsInteraction
+    interaction: MomentsInteraction,
+    interactionSignature: MomentsSignature
   ): Promise<void> {
     const recipients = computeInteractionBroadcast(post.recipients, interactionRootId);
     if (recipients.length === 0) return;
+    const forward = await this.signInteractionForward(post.id, type, interactionRootId, interaction);
+    if (!forward) {
+      // 转发签名失败则不广播（接收方免验签时代已结束，无签名广播会被一律拒收）
+      return;
+    }
     await this.sdk.feed!.deliver({
       topic: MOMENTS_TOPICS.interaction,
-      payload: { postId: post.id, type, rootId: interactionRootId, interaction, broadcast: true },
+      payload: { postId: post.id, type, rootId: interactionRootId, interaction, broadcast: true, signature: interactionSignature, forward },
       recipients,
       replyTo: post.id
     });
@@ -409,16 +456,52 @@ export class MomentsService {
   // ---------------------------------------------------------------------------
 
   /**
-   * 收到互动广播（作为非作者）。本地增删互动记录。
-   * 广播是「收到过这条动态的人」才收到，本机天然满足可见性，无需额外裁决。
+   * 收到互动广播（作为非作者）。验签硬约束：
+   * ① 原互动者签名（重算载荷比对 + 密码学验签）；
+   * ② 作者转发签名（证明作者认可此广播）；
+   * ③ 本机确有该动态且其签名公钥与转发公钥一致（作者身份绑定）。
+   * 任一失败即拒收不落库（「收到过这条动态的人才会收到广播」只是可见性事实，
+   * 不是防伪依据——recipients 由发送方指定，内核不做作者过滤）。
+   * @returns 是否接受落库
    */
-  async receiveInteractionBroadcast(payload: unknown): Promise<void> {
-    const msg = payload as { postId?: string; type?: 'like' | 'comment'; rootId?: string; interaction?: MomentsInteraction; broadcast?: boolean };
+  async receiveInteractionBroadcast(payload: unknown): Promise<boolean> {
+    const msg = payload as {
+      postId?: string;
+      type?: 'like' | 'comment';
+      rootId?: string;
+      interaction?: MomentsInteraction;
+      broadcast?: boolean;
+      signature?: MomentsSignature;
+      forward?: MomentsSignature;
+    };
     if (!msg?.postId || !msg.type || !msg.rootId || !msg.interaction || msg.broadcast !== true) {
-      return;
+      return false;
     }
     await this.ensureCollectionsDeclared();
+
+    // ① 原互动者签名
+    if (!msg.signature) return false;
+    const expectedInteraction = buildInteractionSignPayload(msg.postId, msg.type, msg.rootId, msg.interaction.text ?? '', msg.interaction.action);
+    if (msg.signature.payload !== expectedInteraction) return false;
+    const interactionVerify = await this.sdk.identity.verify(expectedInteraction, msg.signature.signature, msg.signature.publicKey);
+    if (!interactionVerify.valid) return false;
+
+    // ② 作者转发签名
+    if (!msg.forward) return false;
+    const expectedForward = buildInteractionForwardSignPayload(msg.postId, msg.type, msg.rootId, msg.interaction.text ?? '', msg.interaction.action);
+    if (msg.forward.payload !== expectedForward) return false;
+    const forwardVerify = await this.sdk.identity.verify(expectedForward, msg.forward.signature, msg.forward.publicKey);
+    if (!forwardVerify.valid) return false;
+
+    // ③ 作者身份绑定：本机确有该动态，且动态签名公钥 == 转发公钥
+    const post = await this.sdk.data.get<MomentsPost>(MOMENTS_COLLECTIONS.posts, msg.postId);
+    if (!post || !post.signature || post.signature.publicKey !== msg.forward.publicKey) {
+      console.warn('[spark-moments] 拒收作者身份无法绑定的互动广播', msg.postId);
+      return false;
+    }
+
     await this.sdk.data.save(MOMENTS_COLLECTIONS.interactions, interactionKey(msg.postId, msg.type, msg.rootId), msg.interaction);
+    return true;
   }
 
   // ---------------------------------------------------------------------------
@@ -426,8 +509,10 @@ export class MomentsService {
   // ---------------------------------------------------------------------------
 
   /**
-   * 删除动态（作者）：本地标记 deletedAt + 向原收件人名单投递删除通知。
-   * 接收方收到后本地标记删除（见 receiveDelete）。
+   * 删除动态（作者）：本地标记 deletedAt + 向原收件人名单投递**带签名**的删除通知。
+   * 删除通知必须带作者签名（buildDeleteSignPayload 绑定 postId + authorRootId）——
+   * 签名被拒则不投递（仅本地删除；防伪造硬约束优于远端一致性）。
+   * 接收方收到后验签 + 作者一致性校验才标记删除（见 receiveDelete）。
    */
   async deletePost(post: MomentsPost): Promise<void> {
     await this.ensureCollectionsDeclared();
@@ -435,24 +520,70 @@ export class MomentsService {
     await this.sdk.data.save(MOMENTS_COLLECTIONS.posts, post.id, deleted);
 
     if (this.sdk.feed && post.recipients.length > 0) {
+      const signature = await this.signDelete(post.id, post.authorRootId);
+      if (!signature) {
+        console.warn('[spark-moments] 删除签名被拒，删除通知不投递（仅本地删除）：', post.id);
+        return;
+      }
       const recipients = computeDeleteBroadcast(post.recipients);
       // 删除通知复用 sdk.feed.deliver（topic 区分），走同样内核过滤链路
       await this.sdk.feed.deliver({
         topic: MOMENTS_TOPICS.delete,
-        payload: { postId: post.id, deletedAt: deleted.deletedAt },
+        payload: { postId: post.id, authorRootId: post.authorRootId, deletedAt: deleted.deletedAt, signature },
         recipients
       });
     }
   }
 
-  /** 收到删除通知（接收方）：本地标记 deletedAt */
-  async receiveDelete(payload: unknown): Promise<void> {
-    const msg = payload as { postId?: string; deletedAt?: number };
-    if (!msg?.postId) return;
+  /** 删除通知签名（identity:sign；删除投递链路必需，签名失败不投递） */
+  private async signDelete(postId: string, authorRootId: string): Promise<MomentsSignature | undefined> {
+    try {
+      const payload = buildDeleteSignPayload(postId, authorRootId);
+      const result = await this.sdk.identity.sign(payload);
+      return { payload, signature: result.signature, publicKey: result.publicKey };
+    } catch (error) {
+      console.warn('[spark-moments] 删除签名被拒或不可用：', error);
+      return undefined;
+    }
+  }
+
+  /**
+   * 收到删除通知（接收方）：验签硬约束——
+   * ① 必须带作者签名（无签名一律拒收，不再有旧版降级）；
+   * ② 重算 buildDeleteSignPayload 比对 + 密码学验签；
+   * ③ 作者一致性：payload.authorRootId 须等于本地 post.authorRootId，
+   *    且本地动态有签名时其公钥须与删除签名公钥一致（作者身份绑定）。
+   * 任一失败即拒收，不标记删除。
+   * @returns 是否接受（标记删除）
+   */
+  async receiveDelete(payload: unknown): Promise<boolean> {
+    const msg = payload as { postId?: string; authorRootId?: string; deletedAt?: number; signature?: MomentsSignature };
+    if (!msg?.postId || !msg.authorRootId || !msg.signature) {
+      return false;
+    }
     await this.ensureCollectionsDeclared();
+
+    const expected = buildDeleteSignPayload(msg.postId, msg.authorRootId);
+    if (msg.signature.payload !== expected) {
+      return false;
+    }
+    const result = await this.sdk.identity.verify(expected, msg.signature.signature, msg.signature.publicKey);
+    if (!result.valid) {
+      return false;
+    }
+
     const post = await this.sdk.data.get<MomentsPost>(MOMENTS_COLLECTIONS.posts, msg.postId);
-    if (!post) return;
+    if (!post) return false;
+    if (post.authorRootId !== msg.authorRootId) {
+      console.warn('[spark-moments] 拒收作者不符的删除通知', msg.postId);
+      return false;
+    }
+    if (post.signature && post.signature.publicKey !== msg.signature.publicKey) {
+      console.warn('[spark-moments] 拒收签名公钥与动态作者不符的删除通知', msg.postId);
+      return false;
+    }
     await this.sdk.data.save(MOMENTS_COLLECTIONS.posts, msg.postId, { ...post, deletedAt: msg.deletedAt ?? Date.now() });
+    return true;
   }
 
   // ---------------------------------------------------------------------------

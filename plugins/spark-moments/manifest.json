@@ -17,6 +17,8 @@
     "hostTitleBar": false
   },
   "permissions": [
+    "storage:read",
+    "storage:write",
     "identity:sign",
     "identity:verify",
     "contact:read",

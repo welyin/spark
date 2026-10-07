@@ -101,6 +101,17 @@ function buildDeleteSignPayload(postId: string, authorRootId: string): string {
   return `moments:delete:${postId}:${authorRootId}`;
 }
 
+/** 互动广播的作者转发签名载荷（与 model.ts buildInteractionForwardSignPayload 逐字一致） */
+function buildInteractionForwardSignPayload(
+  postId: string,
+  type: 'like' | 'comment',
+  rootId: string,
+  text: string,
+  action: 'add' | 'remove'
+): string {
+  return `moments:interaction:forward:${postId}:${type}:${rootId}:${hashContent(text)}:${action}`;
+}
+
 /** 互动集合键：`{postId}:{type}:{rootId}` */
 function interactionKey(postId: string, type: 'like' | 'comment', rootId: string): string {
   return `${postId}:${type}:${rootId}`;
@@ -198,6 +209,25 @@ function verifyInteraction(payload: { postId?: string; type?: 'like' | 'comment'
   return spark.identity.verify({ payload: expected, sig: sig.signature, pubKey: sig.publicKey });
 }
 
+/** 验签作者转发签名（广播第二跳证据）：重算载荷比对 + 密码学验签。 */
+function verifyInteractionForward(payload: { postId?: string; type?: 'like' | 'comment'; rootId?: string; interaction?: { text?: string; action?: 'add' | 'remove' }; forward?: { payload?: string; signature?: string; publicKey?: string } }): boolean {
+  const fwd = payload?.forward;
+  if (!fwd || !fwd.payload || !fwd.signature || !fwd.publicKey || !payload?.interaction) {
+    return false;
+  }
+  const expected = buildInteractionForwardSignPayload(
+    payload.postId ?? '',
+    payload.type ?? 'like',
+    payload.rootId ?? '',
+    payload.interaction.text ?? '',
+    payload.interaction.action ?? 'add'
+  );
+  if (fwd.payload !== expected) {
+    return false;
+  }
+  return spark.identity.verify({ payload: expected, sig: fwd.signature, pubKey: fwd.publicKey });
+}
+
 /** 收动态（验签 → 落库；硬约束） */
 function handlePost(msg: { payload: unknown; from: string }): void {
   const envelope = (msg.payload ?? {}) as { post?: unknown };
@@ -221,7 +251,7 @@ function handlePost(msg: { payload: unknown; from: string }): void {
   spark.log(`[spark-moments][post] accepted ${post.id} from=${msg.from}`);
 }
 
-/** 收互动（第一跳=作者收件带签名；广播=共同好友可见本地增删，无签名不可验） */
+/** 收互动（第一跳=作者收件带签名，验签 + 作者守卫后才广播；广播=双重签名证据验签后才落库） */
 function handleInteraction(msg: { payload: unknown; from: string }): void {
   const payload = (msg.payload ?? {}) as {
     postId?: string;
@@ -230,14 +260,28 @@ function handleInteraction(msg: { payload: unknown; from: string }): void {
     interaction?: { type?: 'like' | 'comment'; text?: string; action?: 'add' | 'remove'; ts?: number };
     broadcast?: boolean;
     signature?: { payload?: string; signature?: string; publicKey?: string };
+    forward?: { payload?: string; signature?: string; publicKey?: string };
   };
   if (!payload.postId || !payload.type || !payload.rootId || !payload.interaction) {
     spark.log(`[spark-moments][interaction] drop: missing fields`);
     return;
   }
 
-  // 广播型（非作者共同好友可见）：本地增删互动记录，无签名（作者广播不带签），只落库不广播
+  // 广播型（非作者共同好友可见）：双重签名证据（原互动者签名 + 作者转发签名）
+  // 验签硬约束 + 作者身份绑定（本地动态签名公钥须 == 转发公钥），任一失败即拒收；
+  // 只落库不广播。
   if (payload.broadcast === true) {
+    if (!verifyInteraction(payload) || !verifyInteractionForward(payload)) {
+      console.warn(`[spark-moments][interaction] 拒收验签失败的互动广播 ${payload.postId} from=${msg.from}`);
+      return;
+    }
+    const localPost = spark.data.get(COLLECTIONS.posts, payload.postId) as {
+      signature?: { publicKey?: string };
+    } | null;
+    if (!localPost || !localPost.signature?.publicKey || localPost.signature.publicKey !== payload.forward?.publicKey) {
+      console.warn(`[spark-moments][interaction] 拒收作者身份无法绑定的互动广播 ${payload.postId} from=${msg.from}`);
+      return;
+    }
     spark.data.save(
       COLLECTIONS.interactions,
       interactionKey(payload.postId, payload.type, payload.rootId),
@@ -258,8 +302,10 @@ function handleInteraction(msg: { payload: unknown; from: string }): void {
     payload.interaction
   );
 
-  // 第一跳由内核定向投递到作者 rootId（recipients:[post.authorRootId]），故本机即作者。
-  // 读本机该动态的投递名单，广播给名单（除互动者）+ 写应用会话通知。
+  // 第一跳 recipients 由发送方指定，内核只做形态/收件人过滤——「内核定向投递到作者
+  // 故本机即作者」的假设不成立（攻击者可把第一跳直接投递给非作者受害机）。作者守卫：
+  // 以本机域身份签转发载荷，比较签名公钥与本地动态签名公钥——相等即本机是作者设备
+  // （域身份签名无法反推 rootId，公钥比对是沙箱内可用的作者判定）。
   const post = spark.data.get(COLLECTIONS.posts, payload.postId) as {
     id?: string;
     authorRootId?: string;
@@ -267,19 +313,41 @@ function handleInteraction(msg: { payload: unknown; from: string }): void {
     images?: Array<{ hash: string }>;
     recipients?: string[];
     authorSnapshot?: { nickname?: string; avatar?: string | null };
+    signature?: { payload?: string; signature?: string; publicKey?: string };
   } | null;
   if (!post) {
     spark.log(`[spark-moments][interaction] post not found locally ${payload.postId}; skip broadcast/notify`);
     return;
   }
 
-  // 广播名单（除互动发起者；与 service.broadcastInteraction 同口径）
+  const forwardPayload = buildInteractionForwardSignPayload(
+    payload.postId,
+    payload.type,
+    payload.rootId,
+    payload.interaction.text ?? '',
+    payload.interaction.action ?? 'add'
+  );
+  let forward: { payload: string; signature: string; publicKey: string } | null = null;
+  try {
+    const signed = spark.identity.sign(forwardPayload);
+    forward = { payload: forwardPayload, signature: signed.signature, publicKey: signed.publicKey };
+  } catch (err) {
+    spark.log(`[spark-moments][interaction] forward sign error: ${String(err)}`);
+  }
+  if (!forward || !post.signature?.publicKey || post.signature.publicKey !== forward.publicKey) {
+    // 本机不是作者设备（或动态无签名/签名被拒）：只落库，不广播不通知（防伪造放大）
+    spark.log(`[spark-moments][interaction] not author device for ${payload.postId}; skip broadcast/notify`);
+    return;
+  }
+
+  // 广播名单（除互动发起者；与 service.broadcastInteraction 同口径）：
+  // 携带原互动者签名 + 作者转发签名双重证据，接收方验签后才落库
   const recipients = computeInteractionBroadcast(post.recipients ?? [], payload.rootId);
   if (recipients.length > 0) {
     try {
       spark.feed.deliver({
         topic: TOPICS.interaction,
-        payload: { postId: payload.postId, type: payload.type, rootId: payload.rootId, interaction: payload.interaction, broadcast: true },
+        payload: { postId: payload.postId, type: payload.type, rootId: payload.rootId, interaction: payload.interaction, broadcast: true, signature: payload.signature, forward },
         recipients,
         replyTo: payload.postId
       });
@@ -328,7 +396,7 @@ function notifyAuthor(
   }
 }
 
-/** 收删除通知（作者删 → 本地标记 deletedAt）。签名格式验签；旧版无签名降级标记。 */
+/** 收删除通知（作者删 → 本地标记 deletedAt）。签名验签 + 作者一致性硬约束；无签名一律拒收。 */
 function handleDelete(msg: { payload: unknown; from: string }): void {
   const payload = (msg.payload ?? {}) as {
     postId?: string;
@@ -338,30 +406,47 @@ function handleDelete(msg: { payload: unknown; from: string }): void {
     pubKey?: string;
     signature?: { payload?: string; signature?: string; publicKey?: string };
   };
-  if (!payload.postId) {
-    spark.log(`[spark-moments][delete] drop: missing postId`);
+  if (!payload.postId || !payload.authorRootId) {
+    spark.log(`[spark-moments][delete] drop: missing postId/authorRootId`);
     return;
   }
 
-  // 签名格式（模型 MomentsDeletePayload 形态）：验签 + 作者一致性（authorRootId 绑载荷）
-  if (payload.authorRootId && (payload.sig || payload.signature)) {
-    const sig = payload.signature ?? { payload: buildDeleteSignPayload(payload.postId, payload.authorRootId), signature: payload.sig ?? '', publicKey: payload.pubKey ?? '' };
-    const expected = buildDeleteSignPayload(payload.postId, payload.authorRootId);
-    if (!sig.payload || !sig.signature || !sig.publicKey || sig.payload !== expected) {
-      console.warn(`[spark-moments][delete] 拒收验签失败的删除 ${payload.postId} from=${msg.from}`);
-      return;
-    }
-    if (!spark.identity.verify({ payload: expected, sig: sig.signature, pubKey: sig.publicKey })) {
-      console.warn(`[spark-moments][delete] 拒收验签失败的删除 ${payload.postId} from=${msg.from}`);
-      return;
-    }
-  } else {
-    // 旧版无签名删除（当前 iframe deletePost 形态）：降级标记（与 service.receiveDelete 同口径）
-    console.warn(`[spark-moments][delete] 无签名的删除 ${payload.postId} from=${msg.from}（旧版降级）`);
+  // 验签硬约束：删除通知必须带作者签名（无签名的旧版删除一律拒收——
+  // 跨版本兼容以「旧版删除不生效 + 日志」为代价换安全）。
+  // 兼容两种签名形态：signature 对象（service.deletePost 线形）或 sig/pubKey 扁平字段
+  // （模型 MomentsDeletePayload 形态）。
+  const sig = payload.signature
+    ? payload.signature
+    : payload.sig && payload.pubKey
+      ? { payload: buildDeleteSignPayload(payload.postId, payload.authorRootId), signature: payload.sig, publicKey: payload.pubKey }
+      : undefined;
+  if (!sig || !sig.payload || !sig.signature || !sig.publicKey) {
+    console.warn(`[spark-moments][delete] 拒收无签名的删除 ${payload.postId} from=${msg.from}`);
+    return;
+  }
+  const expected = buildDeleteSignPayload(payload.postId, payload.authorRootId);
+  if (sig.payload !== expected) {
+    console.warn(`[spark-moments][delete] 拒收验签失败的删除 ${payload.postId} from=${msg.from}`);
+    return;
+  }
+  if (!spark.identity.verify({ payload: expected, sig: sig.signature, pubKey: sig.publicKey })) {
+    console.warn(`[spark-moments][delete] 拒收验签失败的删除 ${payload.postId} from=${msg.from}`);
+    return;
   }
 
   const post = spark.data.get(COLLECTIONS.posts, payload.postId) as Record<string, unknown> | null;
   if (!post) return;
+  // 作者一致性：payload.authorRootId 须等于本地动态作者；动态有签名时其公钥
+  // 须与删除签名公钥一致（作者身份绑定，防伪造者冒签他人 postId）
+  if (post.authorRootId !== payload.authorRootId) {
+    console.warn(`[spark-moments][delete] 拒收作者不符的删除 ${payload.postId} from=${msg.from}`);
+    return;
+  }
+  const postSig = post.signature as { publicKey?: string } | undefined;
+  if (postSig?.publicKey && postSig.publicKey !== sig.publicKey) {
+    console.warn(`[spark-moments][delete] 拒收签名公钥与动态作者不符的删除 ${payload.postId} from=${msg.from}`);
+    return;
+  }
   spark.data.save(COLLECTIONS.posts, payload.postId, { ...post, deletedAt: payload.deletedAt ?? Date.now() });
   spark.log(`[spark-moments][delete] marked deletedAt ${payload.postId}`);
 }

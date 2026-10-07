@@ -130,7 +130,9 @@ export function useMoments() {
           void refreshTimeline();
         });
       } else {
-        void service.receiveInteraction(msg.payload).then((accepted) => {
+        // 第一跳（作者收件）：注入当前用户 rootId 供 service 做作者判定——
+        // 非本人动态的第一跳互动只落库不广播（防伪造放大）
+        void service.receiveInteraction(msg.payload, myRootId.value ?? undefined).then((accepted) => {
           if (accepted) {
             void refreshTimeline();
             void notifyAuthor(msg.payload);
@@ -189,7 +191,7 @@ export function useMoments() {
           else if (topic === MOMENTS_TOPICS.interaction) {
             const payload = item.payload as { broadcast?: boolean };
             if (payload.broadcast === true) await service.receiveInteractionBroadcast(item.payload);
-            else await service.receiveInteraction(item.payload);
+            else await service.receiveInteraction(item.payload, myRootId.value ?? undefined);
           } else if (topic === MOMENTS_TOPICS.delete) await service.receiveDelete(item.payload);
         }
         if (!res.nextCursor) break;

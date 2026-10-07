@@ -7,10 +7,13 @@
   "version": "0.1.0",
   "releaseAssetPattern": "spark-plugin-spark-moments-<version>.spkg",
   "permissions": [
+    "storage:read",
+    "storage:write",
     "identity:sign",
     "identity:verify",
     "contact:read",
-    "feed:deliver",
+    "feed:read",
+    "feed:write",
     "message:app"
   ],
   "mirrors": [],
