@@ -22,6 +22,12 @@
 /** Bot 实例集合名（与 model.ts `BOTS_COLLECTION` 逐字一致；零依赖约束故内联） */
 const BOTS_COLLECTION = 'ai_chat_bots';
 
+/**
+ * Bot 机密配置集合名（与 model.ts `SECRETS_COLLECTION` 逐字一致；零依赖约束故内联）。
+ * 新数据 API，scope: local —— apiKey 不离开本机、不参与 pdsync 同步（评审 H1 · R1）。
+ */
+const SECRETS_COLLECTION = 'ai-chat:ai_chat_secrets';
+
 // ── 与 model.ts 同形的类型（本地声明，避免运行时 import） ──
 
 type BackendType = 'codebuddy' | 'openai' | 'ollama' | 'custom';
@@ -71,6 +77,12 @@ declare const spark: {
       domain?: string
     ) => { items: Array<{ id: string; data: Record<string, unknown> }> };
     defineCollection: (collection: string, schema: unknown) => void;
+  };
+  /** P6 声明式数据 API（同步调用语义；get 未命中返回 null） */
+  data: {
+    declareCollection: (decl: Record<string, unknown>) => Record<string, unknown>;
+    save: (name: string, key: string, value: unknown) => void;
+    get: (name: string, key: string) => unknown;
   };
   sys: {
     exec: (program: string, args: string[], workdir?: string) => Promise<SparkExecResult>;
@@ -181,6 +193,46 @@ function getBot(botId: string): BotInstance | null {
     if (doc) return unwrapBotDoc({ id: botId, data: doc });
   }
   return null;
+}
+
+// ------------------------------------------------------------------
+// Bot 机密配置（apiKey）：local scope 机密集合现取（评审 H1 · R1.2）
+// ------------------------------------------------------------------
+
+/** 机密集合声明（与 UI 侧 service.ts ensureSecretsCollection 同口径） */
+let secretsDeclared = false;
+function ensureSecretsCollection(): void {
+  if (secretsDeclared) return;
+  try {
+    spark.data.declareCollection({ name: SECRETS_COLLECTION, scope: 'local' });
+  } catch {
+    // 已声明则忽略（重复声明策略一致幂等，不一致才抛错——本插件策略恒定）
+  }
+  secretsDeclared = true;
+}
+
+/**
+ * 取 bot 的 apiKey：优先本机机密集合；兜底存量明文文档（UI 侧迁移完成前的
+ * 过渡期），读到旧位置明文时顺手搬入机密集合（UI 侧迁移随后会清除文档字段）。
+ */
+function loadBotApiKey(bot: BotInstance): string | undefined {
+  ensureSecretsCollection();
+  try {
+    const rec = spark.data.get(SECRETS_COLLECTION, bot.id) as { apiKey?: string } | null;
+    if (rec && typeof rec.apiKey === 'string' && rec.apiKey) return rec.apiKey;
+  } catch {
+    // 机密集合不可用则走存量明文兜底
+  }
+  const legacy = bot.backendConfig?.apiKey;
+  if (typeof legacy === 'string' && legacy) {
+    try {
+      spark.data.save(SECRETS_COLLECTION, bot.id, { apiKey: legacy });
+    } catch {
+      // 搬迁失败不阻塞本次调用（下次消息仍会重试）
+    }
+    return legacy;
+  }
+  return undefined;
 }
 
 // ------------------------------------------------------------------
@@ -416,6 +468,16 @@ async function callCodebuddy(
   }
 }
 
+/**
+ * OpenAI 类后端传输加固（与 model.ts validateBackendUrl 同口径，QuickJS 无 URL
+ * 全局对象，零依赖约束故用正则内联）：强制 https；http 仅放行回环地址
+ * （localhost/127.0.0.1/::1，本机 Ollama 类场景）——Bearer key 不走明文链路。
+ */
+function isSecureBackendUrl(url: string): boolean {
+  if (/^https:\/\//i.test(url)) return true;
+  return /^http:\/\/(localhost|127\.0\.0\.1|\[::1\]|::1)(:\d+)?(\/|$)/i.test(url);
+}
+
 async function callOpenai(
   config: Record<string, unknown>,
   messages: Array<{ role: string; content: string }>,
@@ -425,6 +487,12 @@ async function callOpenai(
   const apiKey = config.apiKey as string;
   const model = (config.model as string) || 'gpt-4o';
   const startTime = Date.now();
+  if (!isSecureBackendUrl(baseUrl ?? '')) {
+    return {
+      text: 'Base URL 必须使用 https（API Key 随请求头发送，明文 http 会泄露密钥）；仅 localhost/127.0.0.1/::1 本机服务允许 http。请在插件中修改该 Bot 的 Base URL。',
+      durationMs: 0,
+    };
+  }
   // 流式模式：主聊天窗口逐字上屏
   if (onToken) {
     try {
@@ -519,7 +587,8 @@ async function handleBotMessage(bot: BotInstance, text: string, onToken?: Stream
       result = await callCodebuddy(bot.backendConfig, text, onToken, convId);
       break;
     case 'openai':
-      result = await callOpenai(bot.backendConfig, context, onToken);
+      // apiKey 不入同步文档：从本机机密集合现取合并（存量明文兜底见 loadBotApiKey）
+      result = await callOpenai({ ...bot.backendConfig, apiKey: loadBotApiKey(bot) }, context, onToken);
       break;
     case 'ollama':
       result = await callOllama(bot.backendConfig, context, onToken);

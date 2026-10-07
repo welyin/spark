@@ -18,6 +18,27 @@ export const BOTS_COLLECTION = 'ai_chat_bots' as const;
 /** 聊天历史消息（lww 策略：按 bot 实例分桶，query 按 botInstanceId 过滤） */
 export const CHAT_HISTORY_COLLECTION = 'ai_chat_messages' as const;
 
+/**
+ * Bot 机密配置集合（新数据 API，`scope: "local"` —— 数据不离开本机，
+ * 不参与 pdsync 自设备同步）。apiKey 等机密字段只存这里，绝不写入
+ * 同步集合 {BOTS_COLLECTION}。background.ts 内联同名字符串，改动需同步。
+ */
+export const SECRETS_COLLECTION = 'ai-chat:ai_chat_secrets' as const;
+
+/** backendConfig 中的机密字段名（只在 local scope 机密集合存放） */
+export const SECRET_FIELD_API_KEY = 'apiKey' as const;
+
+/**
+ * 从 backendConfig 剥离机密字段（apiKey）。
+ * 写入同步集合 / 返回给 UI 前必须过此函数——机密字段不进同步文档。
+ */
+export function stripSecretFields(
+  config: Record<string, unknown>,
+): Record<string, unknown> {
+  const { [SECRET_FIELD_API_KEY]: _stripped, ...rest } = config;
+  return rest;
+}
+
 // ------------------------------------------------------------------
 // 后端提供者类型
 // ------------------------------------------------------------------
@@ -392,4 +413,45 @@ export function validateMessage(content: string): ValidationResult {
     };
   }
   return { ok: true };
+}
+
+// ------------------------------------------------------------------
+// 后端地址传输加固（评审 H1 · R1.5）
+// ------------------------------------------------------------------
+
+/**
+ * OpenAI 类后端 baseUrl 校验：强制 https——`Authorization: Bearer <key>`
+ * 随请求头发送，明文 http 会把密钥泄露给链路监听者。
+ * 仅回环地址（localhost / 127.0.0.1 / ::1）放行 http（本机 Ollama 等场景）。
+ * background.ts 内有同口径内联实现（QuickJS 零依赖约束），改动需同步。
+ */
+export function validateBackendUrl(url: string): ValidationResult {
+  const trimmed = url.trim();
+  if (!trimmed) {
+    return { ok: false, reason: 'Base URL 不能为空' };
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return { ok: false, reason: 'Base URL 格式无效' };
+  }
+  if (parsed.protocol === 'https:') {
+    return { ok: true };
+  }
+  if (parsed.protocol === 'http:' && isLoopbackHost(parsed.hostname)) {
+    return { ok: true };
+  }
+  return {
+    ok: false,
+    reason:
+      'Base URL 必须使用 https（API Key 随请求头发送，明文 http 会泄露密钥）；' +
+      '仅 localhost/127.0.0.1/::1 本机服务允许 http',
+  };
+}
+
+/** 回环主机名（http 豁免名单）。URL.hostname 对 IPv6 字面量返回带括号形式 */
+function isLoopbackHost(hostname: string): boolean {
+  const h = hostname.toLowerCase();
+  return h === 'localhost' || h === '127.0.0.1' || h === '[::1]' || h === '::1';
 }

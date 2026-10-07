@@ -13,7 +13,7 @@
  * 与本文件无共享代码——两侧的后端调用参数口径需保持一致。
  */
 
-import type { PluginDocAPI, PluginMessagesAPI, PluginSDK } from '../../packages/plugin-sdk/src/index';
+import type { PluginDataAPI, PluginDocAPI, PluginMessagesAPI, PluginSDK } from '../../packages/plugin-sdk/src/index';
 import { getPluginSDK } from '../../packages/plugin-sdk/src/index';
 import type {
   BackendCallContext,
@@ -26,6 +26,9 @@ import type {
 import {
   BOTS_COLLECTION,
   CHAT_HISTORY_COLLECTION,
+  SECRETS_COLLECTION,
+  stripSecretFields,
+  validateBackendUrl,
 } from './model';
 
 // ------------------------------------------------------------------
@@ -167,7 +170,7 @@ export function registerBuiltinProviders(): void {
       const args = model
         ? ['--model', model, '--print', '--', lastMsg?.content ?? '']
         : ['--print', '--', lastMsg?.content ?? ''];
-      console.log(`[ai-chat][provider] ctx.config=${JSON.stringify(ctx.config)}`);
+      // 日志纪律（评审 H1 · R1.4）：ctx.config 含 apiKey 等机密字段，禁止整体进日志
       const startTime = Date.now();
       try {
         console.log(`[ai-chat][provider] sys.exec 调用 cliPath=${cliPath} workdir=${workdir ?? '(继承)'} model=${model ?? '(默认)'}`);
@@ -229,6 +232,11 @@ export function registerBuiltinProviders(): void {
       const apiKey = ctx.config.apiKey as string;
       const model = (ctx.config.model as string) || 'gpt-4o';
       const messages = ctx.messages.map((m) => ({ role: m.role, content: m.content }));
+      // 传输加固（评审 H1 · R1.5）：Bearer key 不走明文 http（回环地址除外）
+      const urlCheck = validateBackendUrl(baseUrl ?? '');
+      if (!urlCheck.ok) {
+        return { text: urlCheck.reason, durationMs: 0, error: urlCheck.reason };
+      }
       const startTime = Date.now();
 
       // 流式模式：使用 fetchStream + SSE 解析
@@ -552,6 +560,107 @@ export async function installBackendEnv(
 }
 
 // ------------------------------------------------------------------
+// Bot 机密配置（apiKey）——local scope 集合，不离开本机、不参与同步（评审 H1 · R1）
+// ------------------------------------------------------------------
+
+/** 声明只需一次（进程内缓存；declareCollection 幂等，重复声明抛错仅当策略冲突） */
+let secretsDeclared: Promise<void> | null = null;
+
+function ensureSecretsCollection(dataApi: PluginDataAPI): Promise<void> {
+  if (!secretsDeclared) {
+    secretsDeclared = dataApi
+      .declareCollection({ name: SECRETS_COLLECTION, scope: 'local' })
+      .then(() => undefined)
+      .catch(() => undefined); // 已声明/重复声明忽略
+  }
+  return secretsDeclared;
+}
+
+/** 取数据 API；不可用时抛错——绝不降级把 key 写进同步集合 */
+function requireDataApi(): PluginDataAPI {
+  const dataApi = getPluginSDK()?.data;
+  if (!dataApi) {
+    throw new Error('内核数据能力（data API）不可用，无法安全保存 API Key');
+  }
+  return dataApi;
+}
+
+/** 保存 bot 的 apiKey 到本机机密集合 */
+export async function saveBotApiKey(
+  dataApi: PluginDataAPI,
+  botId: string,
+  apiKey: string,
+): Promise<void> {
+  await ensureSecretsCollection(dataApi);
+  await dataApi.save(SECRETS_COLLECTION, botId, { apiKey });
+}
+
+/** 读取 bot 的 apiKey（未保存 → null） */
+export async function loadBotApiKey(
+  dataApi: PluginDataAPI,
+  botId: string,
+): Promise<string | null> {
+  await ensureSecretsCollection(dataApi);
+  const rec = await dataApi.get<{ apiKey?: string }>(SECRETS_COLLECTION, botId);
+  return typeof rec?.apiKey === 'string' && rec.apiKey ? rec.apiKey : null;
+}
+
+/** 删除 bot 的 apiKey（bot 删除时清理；失败不阻塞主流程） */
+export async function deleteBotApiKey(
+  dataApi: PluginDataAPI,
+  botId: string,
+): Promise<void> {
+  await ensureSecretsCollection(dataApi);
+  await dataApi.delete(SECRETS_COLLECTION, botId);
+}
+
+/** backendConfig 中含 apiKey 时拆存到机密集合；返回不含机密的 config */
+async function persistExtractedSecret(
+  botId: string,
+  config: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const key = config.apiKey;
+  const stripped = stripSecretFields(config);
+  if (typeof key === 'string' && key) {
+    await saveBotApiKey(requireDataApi(), botId, key);
+  }
+  return stripped;
+}
+
+/**
+ * 存量迁移（评审 H1 · R1.3）：把 `ai_chat_bots` 文档 backendConfig 里的明文
+ * apiKey 搬入 local scope 机密集合，并从同步文档中清除。
+ * 幂等：每次启动重扫，无机密字段的文档直接跳过（扫描即标记，无需额外标记位）。
+ */
+export async function migrateLegacyApiKeys(sdk: PluginSDK): Promise<number> {
+  if (!sdk.data) return 0;
+  await ensureBotsCollection(sdk.docs);
+  const result = await sdk.docs.query(BOTS_COLLECTION, {});
+  let migrated = 0;
+  for (const item of result.items) {
+    const doc = item.data as Record<string, unknown>;
+    const cfg = doc.backendConfig as Record<string, unknown> | undefined;
+    if (!cfg) continue;
+    const key = cfg.apiKey;
+    if (typeof key !== 'string' || !key) continue;
+    try {
+      await saveBotApiKey(sdk.data, item.id, key);
+      await sdk.docs.put(BOTS_COLLECTION, item.id, {
+        ...doc,
+        backendConfig: stripSecretFields(cfg),
+      });
+      migrated += 1;
+    } catch (err) {
+      console.warn(`[ai-chat] bot ${item.id} 的 API Key 迁移失败:`, err);
+    }
+  }
+  if (migrated > 0) {
+    console.info(`[ai-chat] 已将 ${migrated} 个 bot 的 API Key 迁移到本机机密存储`);
+  }
+  return migrated;
+}
+
+// ------------------------------------------------------------------
 // Bot 实例管理
 // ------------------------------------------------------------------
 
@@ -567,7 +676,9 @@ function unwrapBotDoc(doc: { id: string; data: Record<string, unknown> }): BotIn
     name: (d.name as string) ?? 'Untitled Bot',
     avatarUrl: d.avatarUrl as string | undefined,
     backendType: (d.backendType as BackendType) ?? 'codebuddy',
-    backendConfig: (d.backendConfig as Record<string, unknown>) ?? {},
+    // 机密字段（apiKey）不出现在内存模型中：存量明文由迁移流程清除，
+    // 迁移完成前的窗口期也在这里剥离，保证 UI/日志永远拿不到 key
+    backendConfig: stripSecretFields((d.backendConfig as Record<string, unknown>) ?? {}),
     systemPrompt: d.systemPrompt as string | undefined,
     createdAt: (d.createdAt as number) ?? Date.now(),
   };
@@ -578,7 +689,8 @@ function wrapBotDoc(bot: BotInstance): Record<string, unknown> {
     name: bot.name,
     avatarUrl: bot.avatarUrl,
     backendType: bot.backendType,
-    backendConfig: bot.backendConfig,
+    // 防御性剥离：同步集合任何路径都不写入机密字段
+    backendConfig: stripSecretFields(bot.backendConfig),
     systemPrompt: bot.systemPrompt,
     createdAt: bot.createdAt,
   };
@@ -616,21 +728,23 @@ export async function getBot(
   return unwrapBotDoc({ id: botId, data: doc });
 }
 
-/** 创建 Bot 实例 */
+/** 创建 Bot 实例（backendConfig 中的 apiKey 拆存到本机机密集合，不入同步文档） */
 export async function createBot(
   docsApi: PluginDocAPI,
   bot: Omit<BotInstance, 'createdAt'>,
 ): Promise<BotInstance> {
   await ensureBotsCollection(docsApi);
+  const cleanConfig = await persistExtractedSecret(bot.id, bot.backendConfig);
   const instance: BotInstance = {
     ...bot,
+    backendConfig: cleanConfig,
     createdAt: Date.now(),
   };
   await docsApi.put(BOTS_COLLECTION, bot.id, wrapBotDoc(instance));
   return instance;
 }
 
-/** 更新 Bot 实例 */
+/** 更新 Bot 实例（patch.backendConfig 带 apiKey = 更换密钥；不带 = 密钥不变） */
 export async function updateBot(
   docsApi: PluginDocAPI,
   botId: string,
@@ -640,21 +754,31 @@ export async function updateBot(
   if (!existing) {
     return null;
   }
+  const cleanPatch = { ...patch };
+  if (patch.backendConfig) {
+    cleanPatch.backendConfig = await persistExtractedSecret(botId, patch.backendConfig);
+  }
   const updated: BotInstance = {
     ...existing,
-    ...patch,
+    ...cleanPatch,
   };
   await docsApi.put(BOTS_COLLECTION, botId, wrapBotDoc(updated));
   return updated;
 }
 
-/** 删除 Bot 实例 */
+/** 删除 Bot 实例（连同本机机密配置一起清理） */
 export async function deleteBot(
   docsApi: PluginDocAPI,
   botId: string,
 ): Promise<boolean> {
   await ensureBotsCollection(docsApi);
   await docsApi.delete(BOTS_COLLECTION, botId);
+  try {
+    const dataApi = getPluginSDK()?.data;
+    if (dataApi) await deleteBotApiKey(dataApi, botId);
+  } catch (err) {
+    console.warn(`[ai-chat] 清理 bot ${botId} 的机密配置失败:`, err);
+  }
   return true;
 }
 
@@ -723,8 +847,20 @@ async function callBackend(
     };
   }
 
+  // 机密字段不进 BotInstance（见 unwrapBotDoc）——调用时从本机机密集合现取合并
+  const config = { ...bot.backendConfig };
+  if (!config.apiKey) {
+    try {
+      const dataApi = getPluginSDK()?.data;
+      const key = dataApi ? await loadBotApiKey(dataApi, bot.id) : null;
+      if (key) config.apiKey = key;
+    } catch (err) {
+      console.warn(`[ai-chat] 读取 bot ${bot.id} 的 API Key 失败:`, err);
+    }
+  }
+
   const ctx: BackendCallContext = {
-    config: bot.backendConfig,
+    config,
     messages,
     onToken,
   };

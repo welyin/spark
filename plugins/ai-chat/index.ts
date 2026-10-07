@@ -14,7 +14,7 @@ import { createApp } from 'vue';
 import { connectPluginBridge } from '../../packages/plugin-sdk/src/bridge/client';
 import ChatView from './ChatView.vue';
 import manifestJson from './manifest.json';
-import { registerBuiltinProviders } from './service';
+import { registerBuiltinProviders, migrateLegacyApiKeys } from './service';
 
 export async function bootstrapChat(): Promise<void> {
   const container = document.getElementById('app');
@@ -37,6 +37,11 @@ export async function bootstrapChat(): Promise<void> {
     // 注入 SDK 到全局注入点（模型、服务层均通过 ensurePluginSDK 读取）
     window.__sparkPluginSDK = sdk;
     registerBuiltinProviders();
+    // 存量迁移（评审 H1 · R1.3）：ai_chat_bots 文档中的明文 apiKey 搬入
+    // local scope 机密集合并从同步文档清除。幂等，失败不阻塞启动
+    migrateLegacyApiKeys(sdk).catch((err) => {
+      console.warn('[ai-chat] API Key 存量迁移失败:', err);
+    });
   } catch (error) {
     console.error('[ai-chat] Bootstrap failed:', error);
     window.dispatchEvent(

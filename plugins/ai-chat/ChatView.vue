@@ -349,7 +349,7 @@
               class="form-input"
               type="password"
               v-model="botForm.config.openai.apiKey"
-              placeholder="sk-xxx"
+              :placeholder="apiKeySaved ? '已保存（留空则不修改）' : 'sk-xxx'"
             />
           </label>
           <label class="form-field">
@@ -461,10 +461,11 @@ import {
   verifyManualCommand,
   installBackendEnv,
   getBackendProvider,
+  loadBotApiKey,
   type EnvCandidate,
 } from './service';
 import type { BackendType, BotInstance, ChatMessageRecord } from './model';
-import { renderMarkdown, validateMessage } from './model';
+import { renderMarkdown, validateMessage, validateBackendUrl } from './model';
 import { isNarrowLayout } from './ui-layout';
 
 // ------------------------------------------------------------------
@@ -516,7 +517,15 @@ async function fetchOpenaiModels(): Promise<void> {
   if (!provider?.listModels) return;
   const cfg: Record<string, unknown> = {};
   if (botForm.config.openai.baseUrl) cfg.baseUrl = botForm.config.openai.baseUrl;
-  if (botForm.config.openai.apiKey) cfg.apiKey = botForm.config.openai.apiKey;
+  // 表单 key 优先；编辑已保存 key 的 bot 且表单留空时回退本机机密集合
+  if (botForm.config.openai.apiKey) {
+    cfg.apiKey = botForm.config.openai.apiKey;
+  } else if (botForm.editingId && sdk?.data) {
+    try {
+      const saved = await loadBotApiKey(sdk.data, botForm.editingId);
+      if (saved) cfg.apiKey = saved;
+    } catch { /* 探测失败按无 key 处理 */ }
+  }
   if (!cfg.baseUrl) {
     openaiModels.value = [];
     return;
@@ -797,9 +806,6 @@ onMounted(async () => {
 async function loadBots(): Promise<void> {
   if (!sdk) return;
   bots.value = await listBots(sdk.docs);
-  for (const b of bots.value) {
-    console.log(`[ai-chat][loadBots] bot=${b.id} backendConfig=${JSON.stringify(b.backendConfig)}`);
-  }
 }
 
 function selectBot(botId: string): void {
@@ -825,7 +831,11 @@ async function loadChatHistory(): Promise<void> {
 // Bot 表单
 // ------------------------------------------------------------------
 
+/** 当前编辑的 bot 是否已保存 API Key（控制输入框占位提示；key 不回显） */
+const apiKeySaved = ref(false);
+
 function openBotForm(existing?: BotInstance): void {
+  apiKeySaved.value = false;
   if (existing) {
     botForm.editing = true;
     botForm.editingId = existing.id;
@@ -833,16 +843,28 @@ function openBotForm(existing?: BotInstance): void {
     botForm.backendType = existing.backendType;
     botForm.systemPrompt = existing.systemPrompt ?? '';
 
-    // 从后端配置中恢复对应字段
+    // 从后端配置中恢复对应字段。apiKey 属机密（存本机机密集合）——不回显，
+    // 输入框留空表示不修改（评审 H1 · R1.2）；是否有已保存 key 只查存在性
     const cfg = existing.backendConfig as Record<string, unknown>;
     botForm.config.codebuddy.cliPath = (cfg.cliPath as string) ?? '';
     botForm.config.codebuddy.workdir = (cfg.workdir as string) ?? '';
     botForm.config.codebuddy.model = (cfg.model as string) ?? '';
     botForm.config.openai.baseUrl = (cfg.baseUrl as string) ?? '';
-    botForm.config.openai.apiKey = (cfg.apiKey as string) ?? '';
+    botForm.config.openai.apiKey = '';
     botForm.config.openai.model = (cfg.model as string) ?? '';
     botForm.config.ollama.endpoint = (cfg.endpoint as string) ?? 'http://localhost:11434';
     botForm.config.ollama.model = (cfg.model as string) ?? '';
+
+    if (sdk?.data) {
+      const dataApi = sdk.data;
+      const botId = existing.id;
+      void loadBotApiKey(dataApi, botId)
+        .then((key) => {
+          // 对话框可能已切换到另一个 bot：只在仍是同一编辑目标时应用
+          if (botForm.editingId === botId) apiKeySaved.value = !!key;
+        })
+        .catch(() => { /* 存在性探测失败按"未保存"处理 */ });
+    }
   } else {
     Object.assign(botForm, defaultBotForm());
     botForm.visible = true;
@@ -876,10 +898,12 @@ function buildBackendConfig(): Record<string, unknown> {
         model: botForm.config.codebuddy.model || undefined,
       };
     case 'openai':
+      // apiKey 为空 = 不修改（编辑已保存 key 的 bot）——service 层只在非空时
+      // 拆存到本机机密集合；同步文档任何情况下都不携带 apiKey
       return {
         type: 'openai',
         baseUrl: botForm.config.openai.baseUrl,
-        apiKey: botForm.config.openai.apiKey,
+        apiKey: botForm.config.openai.apiKey || undefined,
         model: botForm.config.openai.model,
       };
     case 'ollama':
@@ -896,8 +920,16 @@ function buildBackendConfig(): Record<string, unknown> {
 async function handleSaveBot(): Promise<void> {
   if (!sdk || !botForm.name.trim()) return;
 
+  // 传输加固（评审 H1 · R1.5）：OpenAI 类后端 baseUrl 强制 https（回环地址豁免）
+  if (botForm.backendType === 'openai') {
+    const urlCheck = validateBackendUrl(botForm.config.openai.baseUrl);
+    if (!urlCheck.ok) {
+      alert(urlCheck.reason);
+      return;
+    }
+  }
+
   let botId: string;
-  console.log(`[ai-chat][save] 保存配置=${JSON.stringify(buildBackendConfig())}`);
 
   if (botForm.editing && botForm.editingId) {
     botId = botForm.editingId;

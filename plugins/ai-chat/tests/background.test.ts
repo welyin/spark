@@ -20,6 +20,8 @@ type FakePayload = {
 /** 假宿主：内核 plugin/runtime.rs PRELUDE 的 spark API 契约的内存实现 */
 function createFakeHost() {
   const docsStore = new Map<string, Map<string, Record<string, unknown>>>();
+  /** data API（机密集合）存储：键 `${name}::${key}` */
+  const dataStore = new Map<string, Map<string, unknown>>();
   const calls = {
     ensureBot: [] as Array<{ botId: string; displayName: string }>,
     replies: [] as Array<{ payload: FakePayload; text: string }>,
@@ -81,6 +83,15 @@ function createFakeHost() {
         return { items };
       },
     },
+    // P6 声明式数据 API（机密集合走这里；与 PRELUDE 同步调用语义一致）
+    data: {
+      declareCollection: vi.fn(),
+      save: (name: string, key: string, value: unknown) => {
+        if (!dataStore.has(name)) dataStore.set(name, new Map());
+        dataStore.get(name)!.set(key, value);
+      },
+      get: (name: string, key: string) => dataStore.get(name)?.get(key) ?? null,
+    },
     sys: {
       exec: vi.fn(async () => ({ exitCode: 0, stdout: 'REPLY-OK', stderr: '' })),
       fetch: vi.fn(async () => ({
@@ -141,6 +152,16 @@ function createFakeHost() {
       const key = bucketKey(domain, BOTS_COLLECTION);
       if (!docsStore.has(key)) docsStore.set(key, new Map());
       docsStore.get(key)!.set(id, doc);
+    },
+    /** 预置机密集合中的 apiKey（模拟 UI 侧已拆存的状态） */
+    seedSecret(botId: string, apiKey: string) {
+      const coll = 'ai-chat:ai_chat_secrets';
+      if (!dataStore.has(coll)) dataStore.set(coll, new Map());
+      dataStore.get(coll)!.set(botId, { apiKey });
+    },
+    /** 读机密集合内容（断言用） */
+    getSecret(botId: string): unknown {
+      return dataStore.get('ai-chat:ai_chat_secrets')?.get(botId) ?? null;
     },
     /** 模拟内核推送一条会话消息 */
     emit(payload: FakePayload) {
@@ -285,6 +306,8 @@ describe('ai-chat background script', () => {
   });
 
   it('openai 后端：消息 → /chat/completions（带鉴权与 system prompt）→ 回复', async () => {
+    // 存量明文兼容：迁移完成前 apiKey 仍在 bot 文档里，后台兜底读取
+    // （新写入的配置 key 只在本机机密集合，见下方专项用例）
     host.seedBot('oa', {
       name: 'GPT Bot',
       backendType: 'openai',
@@ -314,6 +337,91 @@ describe('ai-chat background script', () => {
     // 流式回复折叠：SSE 解析出 OPENAI-OK 经逐 chunk 累积，end 折叠为一条 reply
     expect(host.calls.streamStarts).toHaveLength(1);
     expect(host.calls.replies[0].text).toBe('OPENAI-OK');
+  });
+
+  it('openai 后端：apiKey 从本机机密集合读取（同步文档不含 key）', async () => {
+    host.seedBot('oa', {
+      name: 'GPT Bot',
+      backendType: 'openai',
+      backendConfig: { baseUrl: 'https://api.example.com/v1', model: 'gpt-4o-mini' },
+      createdAt: 1,
+    });
+    host.seedSecret('oa', 'sk-local-only');
+    await loadBackground(host);
+
+    host.emit(messagePayload('oa', '你好'));
+    await flush();
+
+    expect(host.fake.sys.fetchStream).toHaveBeenCalledWith(
+      'https://api.example.com/v1/chat/completions',
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer sk-local-only' }),
+      }),
+      expect.any(Function)
+    );
+    expect(host.calls.replies[0].text).toBe('OPENAI-OK');
+  });
+
+  it('openai 后端：存量文档明文 key 兜底读取时顺手搬入机密集合', async () => {
+    host.seedBot('oa', {
+      name: 'GPT Bot',
+      backendType: 'openai',
+      backendConfig: { baseUrl: 'https://api.example.com/v1', apiKey: 'sk-legacy' },
+      createdAt: 1,
+    });
+    await loadBackground(host);
+
+    host.emit(messagePayload('oa', 'hi'));
+    await flush();
+
+    expect(host.fake.sys.fetchStream).toHaveBeenCalledWith(
+      'https://api.example.com/v1/chat/completions',
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer sk-legacy' }),
+      }),
+      expect.any(Function)
+    );
+    //  Opportunistic 搬迁：key 已写入机密集合（UI 侧迁移随后清除文档字段）
+    expect(host.getSecret('oa')).toEqual({ apiKey: 'sk-legacy' });
+  });
+
+  it('openai 后端：非 https 且非回环地址的 baseUrl 拒绝调用（key 不走明文链路）', async () => {
+    host.seedBot('oa', {
+      name: 'GPT Bot',
+      backendType: 'openai',
+      backendConfig: { baseUrl: 'http://api.example.com/v1' },
+      createdAt: 1,
+    });
+    host.seedSecret('oa', 'sk-test');
+    await loadBackground(host);
+
+    host.emit(messagePayload('oa', 'hi'));
+    await flush();
+
+    expect(host.fake.sys.fetchStream).not.toHaveBeenCalled();
+    expect(host.fake.sys.fetch).not.toHaveBeenCalled();
+    const lastReply = host.calls.replies[host.calls.replies.length - 1].text;
+    expect(lastReply).toContain('https');
+  });
+
+  it('openai 后端：回环地址的 http baseUrl 放行（本机服务场景）', async () => {
+    host.seedBot('oa', {
+      name: 'GPT Bot',
+      backendType: 'openai',
+      backendConfig: { baseUrl: 'http://127.0.0.1:8080/v1' },
+      createdAt: 1,
+    });
+    host.seedSecret('oa', 'sk-test');
+    await loadBackground(host);
+
+    host.emit(messagePayload('oa', 'hi'));
+    await flush();
+
+    expect(host.fake.sys.fetchStream).toHaveBeenCalledWith(
+      'http://127.0.0.1:8080/v1/chat/completions',
+      expect.anything(),
+      expect.any(Function)
+    );
   });
 
   it('未知 bot 的消息：不调用后端也不回复（联系人孤儿）', async () => {
