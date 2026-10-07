@@ -20,8 +20,11 @@
            覆盖不到 bot 消息 -->
       <div v-if="isBot" class="bot-msg-content" @contextmenu.prevent="onMenu">
         <span class="msg-text">{{ message.content }}<span v-if="message.status === 'streaming'" class="streaming-cursor">▌</span></span>
+        <!-- 链接卡片 URL 白名单（H2）：仅 http/https 可渲染为可点链接；
+             spark-org-invite:// 为组织邀请卡片（无 href，点击走拦截分支弹抽屉）；
+             其余 scheme 降级为纯文本展示 -->
         <a
-          v-if="message.link"
+          v-if="message.link && linkUrlSafe"
           class="link-card"
           :href="message.link.url"
           target="_blank"
@@ -35,6 +38,19 @@
           <p class="link-card-desc">{{ message.link.description }}</p>
           <p class="link-card-source">来自：{{ message.link.siteName }} / {{ message.link.domain }}</p>
         </a>
+        <a
+          v-else-if="message.link && isOrgInviteLink"
+          class="link-card link-card-no-href"
+          @click.stop="onLinkClick"
+        >
+          <div class="link-card-head">
+            <el-icon :size="16" class="link-card-icon"><Link /></el-icon>
+            <span class="link-card-title">{{ message.link.title }}</span>
+          </div>
+          <p class="link-card-desc">{{ message.link.description }}</p>
+          <p class="link-card-source">来自：{{ message.link.siteName }} / {{ message.link.domain }}</p>
+        </a>
+        <span v-else-if="message.link" class="link-plain-text">{{ message.link.url }}</span>
       </div>
       <!-- 普通人际消息：带气泡容器 -->
       <div v-else class="msg-bubble" :class="`is-${message.type}`" @contextmenu.prevent="onMenu">
@@ -73,9 +89,11 @@
         </template>
 
         <!-- 链接预览卡片（设计 §6）：标题 + 图标 + 描述 + 来源；
-             spark-org-invite:// 为组织邀请卡片，拦截跳转改为弹出确认抽屉 -->
+             spark-org-invite:// 为组织邀请卡片，拦截跳转改为弹出确认抽屉。
+             URL 白名单（H2）：仅 http/https 可点；组织邀请卡片无 href 走拦截分支；
+             其余 scheme 降级为纯文本展示 -->
         <a
-          v-if="message.link"
+          v-if="message.link && linkUrlSafe"
           class="link-card"
           :href="message.link.url"
           target="_blank"
@@ -89,6 +107,19 @@
           <p class="link-card-desc">{{ message.link.description }}</p>
           <p class="link-card-source">来自：{{ message.link.siteName }} / {{ message.link.domain }}</p>
         </a>
+        <a
+          v-else-if="message.link && isOrgInviteLink"
+          class="link-card link-card-no-href"
+          @click.stop="onLinkClick"
+        >
+          <div class="link-card-head">
+            <el-icon :size="16" class="link-card-icon"><Link /></el-icon>
+            <span class="link-card-title">{{ message.link.title }}</span>
+          </div>
+          <p class="link-card-desc">{{ message.link.description }}</p>
+          <p class="link-card-source">来自：{{ message.link.siteName }} / {{ message.link.domain }}</p>
+        </a>
+        <span v-else-if="message.link" class="link-plain-text">{{ message.link.url }}</span>
       </div>
 
       <!-- 消息状态（§3.3）：⌛ 发送中 / ✓ 已发送 / ✓✓ 已送达 / 已读 / ⚠ 失败 -->
@@ -115,6 +146,9 @@ import type { ChatMessage, SpaceKey } from '../store';
 
 /** 组织邀请链接协议（内核系统会话卡片消息：url = spark-org-invite://{inviteId}） */
 const ORG_INVITE_SCHEME = 'spark-org-invite://';
+
+/** 链接卡片可渲染为可点链接的 scheme 白名单（H2：link.url 为对端可控输入） */
+const SAFE_LINK_URL = /^https?:\/\//i;
 
 export default defineComponent({
   name: 'MessageBubble',
@@ -154,6 +188,12 @@ export default defineComponent({
       return personAvatarSource(props.spaceKey, props.message.senderId).image;
     });
 
+    // 链接卡片 URL 消毒（H2）：link.url 由发送方构造随消息携带（对端可控），
+    // 仅 http/https 渲染为可点链接；组织邀请卡片无 href 走拦截分支；其余 scheme
+    // 降级为纯文本展示（模板三分支）
+    const linkUrlSafe = computed(() => SAFE_LINK_URL.test(props.message.link?.url ?? ''));
+    const isOrgInviteLink = computed(() => (props.message.link?.url ?? '').startsWith(ORG_INVITE_SCHEME));
+
     function onMenu(event: MouseEvent) {
       emit('menu', { event, message: props.message });
     }
@@ -178,7 +218,17 @@ export default defineComponent({
         description: link.description
       });
     }
-    return { onMenu, onAvatarClick, onLinkClick, formatBytes, avatarSeed, avatarName, avatarImage };
+    return {
+      onMenu,
+      onAvatarClick,
+      onLinkClick,
+      formatBytes,
+      avatarSeed,
+      avatarName,
+      avatarImage,
+      linkUrlSafe,
+      isOrgInviteLink
+    };
   }
 });
 </script>

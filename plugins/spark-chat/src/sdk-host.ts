@@ -12,7 +12,7 @@
  * - 应用会话（`app:` 前缀）：会话列表适配层过滤；壳层应用会话挂载区呈现；
  * - 系统徽标（systemApi）：壳层职责，插件内返回 undefined。
  */
-import type { PluginContext, PluginDataAPI, PluginSDK } from '../../../packages/plugin-sdk/src';
+import type { PluginContactsAPI, PluginContext, PluginDataAPI, PluginSDK } from '../../../packages/plugin-sdk/src';
 import type { HostMessagesApi, HostSystemApi } from './host-types';
 
 // store 的类型来源（type-only，构建期擦除；本地同形拷贝，见 host-types.ts 头注）
@@ -93,6 +93,11 @@ export function messagesApi(): MessagesApi | undefined {
 /** 插件数据域 API（communication §4.3 过滤规则持久化面；未绑定 SDK 为 undefined → 纯内存模式） */
 export function dataApi(): PluginDataAPI | undefined {
   return _sdk?.data;
+}
+
+/** 通讯录只读面（social-feed §9.4 `contact:read`）；未绑定 SDK / 桥未注入时为 undefined */
+export function contactsApi(): PluginContactsAPI | undefined {
+  return _sdk?.contacts;
 }
 
 type SystemApi = HostSystemApi;

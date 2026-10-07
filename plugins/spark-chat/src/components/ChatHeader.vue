@@ -91,7 +91,7 @@ import {
 } from '@element-plus/icons-vue';
 import UserAvatar from './UserAvatar.vue';
 import { isLocalOnly } from '../network-status';
-import { friendOf } from '../contacts';
+import { isContactDeleted } from '../contacts';
 import { personAvatarSource, personDisplayName } from '../avatar-sources';
 import { appConversationName, isAppConversationBlocked, toggleAppConversationBlocked } from '../app-conversations';
 import {
@@ -120,11 +120,12 @@ export default defineComponent({
         emit('show-profile');
       }
     }
-    // 联系人是否已被删除：direct 会话且 peerId 已不在通讯录。已删除仅可查看历史
+    // 联系人是否已被删除：direct 会话且 peerId 已不在通讯录（contact:read 名单水合后判定；
+    // 未知态不误判已删除）。已删除仅可查看历史
     const contactDeleted = computed(() => {
       const conv = props.conversation;
       if (conv.kind !== 'direct' || !conv.peerId) return false;
-      return friendOf(props.spaceKey, conv.peerId) === undefined;
+      return isContactDeleted(props.spaceKey, conv.peerId);
     });
     // bot 会话（peerId 以 bot: 开头）的"在线"= 插件后台运行时存活——该状态面在
     // 壳层（pluginRuntime.isBackgroundRunning 命令），插件 v1 未接（恒 false，

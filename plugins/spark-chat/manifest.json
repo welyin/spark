@@ -18,7 +18,8 @@
     "storage:read",
     "storage:write",
     "messages:read",
-    "messages:write"
+    "messages:write",
+    "contact:read"
   ],
   "sdkVersion": "1",
   "package": {

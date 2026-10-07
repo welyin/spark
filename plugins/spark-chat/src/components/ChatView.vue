@@ -92,7 +92,7 @@ import MessageBubble from './MessageBubble.vue';
 import MessageInput from './MessageInput.vue';
 import { useNetworkStatus } from '../network-status';
 import { personDisplayName } from '../avatar-sources';
-import { friendOf } from '../contacts';
+import { isContactDeleted } from '../contacts';
 import { isMessageFiltered } from '../filter-rules';
 import {
   closeConversation,
@@ -142,14 +142,14 @@ export default defineComponent({
     });
     const messages = computed(() => getMessages(props.spaceKey, props.conversationId));
 
-    // 联系人是否已被删除：direct 会话且 peerId 已不在通讯录（friendOf 返回 undefined）。
-    // 已删除联系人的会话只用于查看历史消息，禁止再发送
+    // 联系人是否已被删除：direct 会话且 peerId 已不在通讯录（contact:read 名单水合后判定；
+    // 加载中/未授权等未知态不误判已删除）。已删除联系人的会话只用于查看历史消息，禁止再发送
     const contactDeleted = computed(() => {
       const conv = conversation.value;
       if (!conv || conv.kind !== 'direct') return false;
       const peerId = conv.peerId;
       if (!peerId) return false;
-      return friendOf(props.spaceKey, peerId) === undefined;
+      return isContactDeleted(props.spaceKey, peerId);
     });
 
     // 应用会话：v1 由壳层挂载区呈现（列表已过滤，正常路径不可达；模板占位）

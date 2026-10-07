@@ -461,6 +461,18 @@
 
 .messages-page .link-card-source { margin-top: 4px; font-size: 12px; color: var(--spark-text-3); }
 
+/* 组织邀请卡片无 href（点击走拦截分支），保持指针手势 */
+.messages-page .link-card-no-href { cursor: pointer; }
+
+/* 非白名单 scheme 的链接降级为纯文本展示（H2） */
+.messages-page .link-plain-text {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--spark-text-2);
+  word-break: break-all;
+}
+
 /* 消息状态（§3.3） */
 .messages-page .msg-status {
   flex-shrink: 0;
