@@ -1,0 +1,33 @@
+{
+  "id": "spark-release-manager",
+  "domain": "plugin:spark-release-manager",
+  "name": "发布管理",
+  "version": "0.1.0",
+  "entryView": "default",
+  "description": "构建产物登记、签名核验编排、渠道与更新跟踪：发布单与包哈希入存证链，发布全程可核验、可追责。",
+  "category": "foundation",
+  "icon": "assets/icon.svg",
+  "supportedSpaces": ["org"],
+  "views": [
+    { "id": "default", "type": "app", "title": "发布" },
+    { "id": "release-card", "type": "message-card", "title": "发布卡片" }
+  ],
+  "requires": {
+    "platforms": ["desktop", "mobile"]
+  },
+  "permissions": [
+    "storage:read",
+    "storage:write",
+    "org:read",
+    "org:sync",
+    "message:app",
+    "identity:sign",
+    "market:read"
+  ],
+  "sdkVersion": "1",
+  "window": { "defaultWidth": 960, "defaultHeight": 640 },
+  "package": {
+    "updateManifestUrl": "https://github.com/welyin/spark/releases/latest/download/spark-plugin-spark-release-manager-manifest.json",
+    "packageName": "spark-plugin-spark-release-manager-0.1.0.spkg"
+  }
+}

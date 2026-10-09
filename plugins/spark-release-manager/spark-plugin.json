@@ -1,0 +1,16 @@
+{
+  "comment": "id 暂用插件短名；随分发模型迁移后改为规范化仓库地址（档一-5 已拍板转正 spark-release-manager）。自举插件：发布管理（release-management.md v0.2）——发布单/状态事件走 governance append-only 集合（包哈希天然入存证链），渠道 lww-record，发布权配置 lww（档三-23 管理员直改初始化），版本上报 append-only 骨架（档三-25）；MVP 版本卡片由本插件唯一推送（档一-2：releaseRef/版本号幂等键，经 sdk.messages 本地生成）；核验 = 本机导入复算（档一-6，sdk.market inspectLocal 内核复算哈希 + update-manifest 三方比对），在线抓取复算排档二-8（MVP 不声明 network:fetch——未使用且授权层无桌面门控，落地时再按桌面限定重新申请；移动端降级只做登记、委托桌面端成员核验）；撤回 = 组织内登记 + 公告告知（档三-26，不回滚已安装）。边界：构建在 CI，本插件只登记/编排/跟踪，只验不签、不持有私钥。双产物：安装包 + 库包（lib.ts 纯逻辑/视图分离，随 A33 CLI 可被「项目」插件构建期组合）。",
+  "id": "spark-release-manager",
+  "name": "发布管理",
+  "icon": "",
+  "summary": "构建产物登记、签名核验编排、渠道与更新跟踪：发布单与包哈希入存证链，发布全程可核验、可追责。",
+  "category": "foundation",
+  "version": "0.1.0",
+  "release": {
+    "assetNaming": "spark-plugin-spark-release-manager-<version>.spkg",
+    "updateManifestAsset": "spark-plugin-spark-release-manager-manifest.json",
+    "signatureAsset": "spark-plugin-spark-release-manager-manifest.sig"
+  },
+  "permissions": ["storage:read", "storage:write", "org:read", "org:sync", "message:app", "identity:sign", "market:read"],
+  "mirrors": []
+}

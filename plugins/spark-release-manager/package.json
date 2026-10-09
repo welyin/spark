@@ -1,0 +1,12 @@
+{
+  "name": "@spark/plugin-spark-release-manager",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "发布管理插件（自举）：构建产物登记、签名核验编排、渠道与更新跟踪——发布单与包哈希入存证链（governance append-only），版本卡片本插件唯一推送（档一-2），可独立安装亦可作为库被「项目」插件组合。",
+  "scripts": {
+    "build": "node ../../app/node_modules/vite/bin/vite.js build --config vite.config.ts",
+    "typecheck": "node ../../app/node_modules/vue-tsc/bin/vue-tsc.js --noEmit -p tsconfig.json || node ../../app/node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
+    "test": "cd ../../app && node node_modules/vitest/vitest.mjs run spark-release-manager"
+  }
+}
