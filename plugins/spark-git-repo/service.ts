@@ -17,6 +17,11 @@
  * - 写路径（发布镜像/发起 PR/合并/物化）仅桌面：sdk.sys 缺席或 UA 移动端 →
  *   视图层隐藏入口（mobileReadonly 口径；壳层 enforcement 线形未落地，插件自查）；
  * - 签名主体诚实口径（同 spark-affairs）：actor 为本插件域身份，不代表个人身份。
+ *
+ * 库包形态（档二-3 组合纪律）：本层不假设自身插件域身份——本机集合名经
+ * gitRepoCollections(namespace) 构造；被「项目」等组合者构建期复用时，组合者
+ * 以自身插件 id 作 namespace 构造 GitRepoService，数据写组合者命名空间
+ * （内核 plugindata 强制集合名前缀 == 调用方插件 id）。
  */
 
 import type {
@@ -134,11 +139,31 @@ export function probeCapabilities(sdk: PluginSDK): PluginCapabilities {
   };
 }
 
-/** 项目议题绑定（sdk.data 声明式集合，lww；本机偏好，非共享数据） */
-const BINDING_COLLECTION = 'spark-git-repo:bindings';
+/**
+ * 集合名工厂（库包形态，档二-3 组合纪律）。内核 plugindata 强制集合名前缀 ==
+ * 调用方插件 id，故前缀不能硬编码：独立安装形态 = 'spark-git-repo'（缺省）；
+ * 被「项目」等插件构建期组合（库包形态）时组合者须以其自身插件 id 构造
+ * GitRepoService（如 namespace='spark-project'），数据落到组合者命名空间——
+ * 库无自己的数据域（sdk.domain 为组合者域）。
+ */
+export type GitRepoCollections = {
+  /** 项目议题绑定（lww；本机偏好，非共享数据） */
+  bindings: string;
+  /** 已知 PR 登记（本机再发现兜底；SDK 无子事务发现面，见报告缺口） */
+  knownPrs: string;
+};
+
+export function gitRepoCollections(namespace: string): GitRepoCollections {
+  return {
+    bindings: `${namespace}:bindings`,
+    knownPrs: `${namespace}:known-prs`
+  };
+}
+
+/** 独立安装形态的缺省集合名（本插件域上下文使用） */
+export const GIT_REPO_COLLECTIONS: GitRepoCollections = gitRepoCollections('spark-git-repo');
+
 const BINDING_DOC_ID = 'current';
-/** 已知 PR 登记（本机再发现兜底；SDK 无子事务发现面，见报告缺口） */
-const KNOWN_PR_COLLECTION = 'spark-git-repo:known-prs';
 
 export type ProjectBinding = { projectAffairId: string; repoName: string };
 
@@ -165,8 +190,10 @@ export class GitRepoService {
   private readonly execFn: ExecFn | null;
   private actor: AffairActor | null = null;
   private collectionsReady = false;
+  /** 集合名（按命名空间构造；被组合时 = 组合者插件 id，见 gitRepoCollections） */
+  private readonly collections: GitRepoCollections;
 
-  constructor(private readonly sdk: PluginSDK, execOverride?: ExecFn) {
+  constructor(private readonly sdk: PluginSDK, execOverride?: ExecFn, namespace = 'spark-git-repo') {
     if (!hasModule<PluginAffairsAPI>(sdk.affairs, REQUIRED_AFFAIRS_METHODS)) {
       throw new Error(AFFAIRS_MODULE_MISSING);
     }
@@ -176,6 +203,7 @@ export class GitRepoService {
     this.affairs = sdk.affairs;
     this.content = sdk.content;
     this.execFn = execOverride ?? (sdk.sys ? (program, args, workdir) => sdk.sys!.exec(program, args, workdir) : null);
+    this.collections = gitRepoCollections(namespace);
   }
 
   static capabilities(sdk: PluginSDK): PluginCapabilities {
@@ -275,8 +303,8 @@ export class GitRepoService {
     if (this.collectionsReady) {
       return;
     }
-    await this.sdk.data.declareCollection({ name: BINDING_COLLECTION, merge: 'lww-record' });
-    await this.sdk.data.declareCollection({ name: KNOWN_PR_COLLECTION, merge: 'lww-record' });
+    await this.sdk.data.declareCollection({ name: this.collections.bindings, merge: 'lww-record' });
+    await this.sdk.data.declareCollection({ name: this.collections.knownPrs, merge: 'lww-record' });
     this.collectionsReady = true;
   }
 
@@ -286,7 +314,7 @@ export class GitRepoService {
 
   async getBinding(): Promise<ProjectBinding | null> {
     await this.ensureCollections();
-    const doc = await this.sdk.data.get<Record<string, unknown>>(BINDING_COLLECTION, BINDING_DOC_ID);
+    const doc = await this.sdk.data.get<Record<string, unknown>>(this.collections.bindings, BINDING_DOC_ID);
     if (!doc || typeof doc.projectAffairId !== 'string' || !/^[0-9a-f]{64}$/.test(doc.projectAffairId)) {
       return null;
     }
@@ -298,7 +326,7 @@ export class GitRepoService {
       throw new Error('项目议题 affairId 形状非法（须为 64 位小写 hex）');
     }
     await this.ensureCollections();
-    await this.sdk.data.save(BINDING_COLLECTION, BINDING_DOC_ID, { projectAffairId, repoName });
+    await this.sdk.data.save(this.collections.bindings, BINDING_DOC_ID, { projectAffairId, repoName });
   }
 
   /** 本机关注的事务清单（绑定选择器用；创世未同步的跳过不编造） */
@@ -914,6 +942,6 @@ export class GitRepoService {
 
   private async registerKnownPr(prAffairId: string, projectAffairId: string): Promise<void> {
     await this.ensureCollections();
-    await this.sdk.data.save(KNOWN_PR_COLLECTION, prAffairId, { prAffairId, projectAffairId, seenAt: Date.now() });
+    await this.sdk.data.save(this.collections.knownPrs, prAffairId, { prAffairId, projectAffairId, seenAt: Date.now() });
   }
 }

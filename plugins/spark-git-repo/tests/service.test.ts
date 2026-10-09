@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { GitRepoService, probeCapabilities } from '../service';
+import { GIT_REPO_COLLECTIONS, GitRepoService, gitRepoCollections, probeCapabilities } from '../service';
 import { resetShellCacheForTest, type ExecFn } from '../git';
 import { utf8ToBytes, bytesToBase64, type MirrorManifest } from '../model';
 import { buildMirrorManifestPayload, deriveIdentity } from '../wire';
@@ -76,6 +76,8 @@ type MockOptions = {
   maintainers?: string[];
   /** readRules 抛错（fail-closed 路径） */
   rulesError?: boolean;
+  /** 内核 plugindata 集合名前缀防线（NamePrefixMismatch）：声明名须以该插件 id 为前缀 */
+  enforcePrefix?: string;
 };
 
 function createMockSdk(options: MockOptions = {}) {
@@ -154,7 +156,13 @@ function createMockSdk(options: MockOptions = {}) {
     affairs,
     content,
     data: {
-      declareCollection: vi.fn().mockResolvedValue({}),
+      declareCollection: vi.fn().mockImplementation(async (decl: { name: string }) => {
+        // mock enforce：内核 plugindata 强制集合名前缀 == 调用方插件 id（防 mock 过松掩盖违规声明）
+        if (options.enforcePrefix && !decl.name.startsWith(`${options.enforcePrefix}:`)) {
+          throw new Error(`NamePrefixMismatch: collection ${decl.name} must start with ${options.enforcePrefix}:（mock enforce）`);
+        }
+        return {};
+      }),
       get: vi.fn().mockImplementation(async (collection: string, id: string) => dataDocs.get(`${collection}/${id}`) ?? null),
       save: vi.fn().mockImplementation(async (collection: string, id: string, doc: Record<string, unknown>) => {
         dataDocs.set(`${collection}/${id}`, doc);
@@ -231,6 +239,27 @@ describe('绑定与关注', () => {
     await service.bindProject(PROJECT_ID, 'spark');
     expect(await service.getBinding()).toEqual({ projectAffairId: PROJECT_ID, repoName: 'spark' });
     await expect(service.bindProject('not-hex', 'x')).rejects.toThrow('形状非法');
+  });
+
+  it('组合域（namespace=spark-project）下集合声明落到组合者前缀（库包形态回归）', async () => {
+    // 库包形态：被 spark-project 构建期组合后，集合名前缀必须是组合者插件 id
+    // （内核 plugindata NamePrefixMismatch 防线），数据落组合者命名空间
+    expect(gitRepoCollections('spark-project')).toEqual({
+      bindings: 'spark-project:bindings',
+      knownPrs: 'spark-project:known-prs'
+    });
+    const { sdk } = createMockSdk({ enforcePrefix: 'spark-project' });
+    const service = new GitRepoService(sdk as never, undefined, 'spark-project');
+    await service.bindProject(PROJECT_ID, 'spark');
+    const names = sdk.data.declareCollection.mock.calls.map((call: any[]) => call[0].name);
+    expect(names).toEqual(['spark-project:bindings', 'spark-project:known-prs']);
+    expect(sdk.data.save.mock.calls[0][0]).toBe('spark-project:bindings');
+    expect(await service.getBinding()).toEqual({ projectAffairId: PROJECT_ID, repoName: 'spark' });
+    // 反例：缺省命名空间（独立安装形态）在组合者域下会被前缀防线拒绝
+    const standalone = new GitRepoService(sdk as never);
+    await expect(standalone.bindProject(PROJECT_ID, 'spark')).rejects.toThrow('NamePrefixMismatch');
+    // 缺省命名空间 = 独立安装形态
+    expect(gitRepoCollections('spark-git-repo')).toEqual(GIT_REPO_COLLECTIONS);
   });
 
   it('listFollowedTopics 跳过创世未同步的事务', async () => {

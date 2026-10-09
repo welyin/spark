@@ -4,7 +4,8 @@
  * 对齐 spark-affairs/vite.config.ts（插件体系统一构建约定）：
  * - vite lib 模式多入口 ESM：dist/views/main.js（主入口，内部按
  *   __sparkPluginView 分发）+ dist/views/pr-card.js（message-card 卡片，
- *   为壳层按 view 直载预留）；
+ *   为壳层按 view 直载预留）+ dist/views/lib.js（库包入口——「项目」等组合者
+ *   构建期依赖本件时的引入面，纯导出、不握手不挂载，档二-3 组合纪律）；
  * - vue / element-plus / @spark/plugin-sdk 全部打进 bundle（框架自包含，
  *   无 external），共享代码自动切 dist/chunks/*.js；
  * - plugins 目录不持有 node_modules：vite 本体与框架依赖副本经绝对路径
@@ -35,7 +36,8 @@ export default {
     lib: {
       entry: {
         main: here('./index.ts'),
-        'pr-card': here('./pr-card.ts')
+        'pr-card': here('./pr-card.ts'),
+        lib: here('./lib.ts')
       },
       formats: ['es']
     },
