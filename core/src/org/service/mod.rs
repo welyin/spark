@@ -26,6 +26,7 @@ mod invites;
 mod join;
 mod member_entries;
 mod members;
+mod pin;
 mod policy_doc;
 mod settings;
 mod verifiers;
@@ -60,6 +61,9 @@ pub use policy_doc::{
 };
 /// A15 名册开放声明发布承载（org:disclosure: 键域 + orgsync-data 入站合入裁决）。
 pub use disclosure::{DisclosureMerge, adjudicate_incoming_disclosure};
+/// A22 事务本体 org-pinned 保留的组织侧 pin 接受声明（org:pin: 键域 +
+/// orgsync-data 入站合入裁决，affair-model §4.2）。
+pub use pin::{PinMerge, adjudicate_incoming_pin};
 /// A17 免预录凭证入册（org-join §8）：加入声明合入（双路径验证 + 入册）。
 pub use join::JoinOutcome;
 /// A17 准入策略声明发布承载（org:accept: 键域 + orgsync-data 入站合入裁决）。

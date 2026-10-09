@@ -37,6 +37,9 @@
 //!   prevOpHash 因果闭包（op.rs `ancestor_op_hashes`，乱序补齐稳定）；
 //! - 效力回执（PendingEffect 消费留痕）线形为最小可用自设计，见 effect.rs
 //!   `EffectReceipt` 头注。
+//! - 本体保留策略（A22）：rules.retention 两档（followers 缺省 / org-pinned）
+//!   与组织侧 pin 接受声明 `org:pin:{orgId}:{affairId}` 线形（公示延迟
+//!   24h、version LWW、双条件复制组并集）见 rules.rs / retention.rs 头注。
 
 pub mod actor;
 pub mod close;
@@ -51,6 +54,7 @@ pub mod op;
 pub mod profile;
 pub mod refs;
 pub mod resolution;
+pub mod retention;
 pub mod rulechain;
 pub mod rules;
 pub mod snapshot;
@@ -106,13 +110,18 @@ pub use resolution::{
     ReplayOutcome, ResolutionPayload, ResolutionState, parse_resolution_payload, replay_resolution,
     resolution_state,
 };
+pub use retention::{
+    ORG_PIN_PREFIX, OrgPinRecord, PIN_PUB_PERIOD_MS, PIN_V, PinReject, effective_pin_orgs,
+    org_pin_key, parse_pin_record, pin_effective, pin_hash, pin_widening, validate_pin_fields,
+};
 pub use rulechain::{
     AnchoredBallot, RuleChain, RuleChangeEntry, RuleChangeFate, RulesVersion, replay_rule_chain,
 };
 pub use rules::{
-    CloseCondition, DEFAULT_PUB_PERIOD_MS, Fraction, MIN_PUB_PERIOD_MS, Mechanism, RulesDoc,
-    StaticCheckReject, ThresholdBase, apply_rule_patch, parse_close_condition, parse_mechanism,
-    rules_hash, static_check_rules,
+    CloseCondition, DEFAULT_PUB_PERIOD_MS, Fraction, MAX_RETENTION_ORGS, MIN_PUB_PERIOD_MS,
+    Mechanism, RetentionDecl, RetentionPolicy, RulesDoc, StaticCheckReject, ThresholdBase,
+    apply_rule_patch, parse_close_condition, parse_mechanism, parse_retention, rules_hash,
+    static_check_rules,
 };
 pub use snapshot::{
     SnapshotPayload, member_set_hash, parse_snapshot_payload, roster_hash, verify_ladder_roster,

@@ -95,12 +95,12 @@ impl ResolutionEval {
 }
 
 /// 门面求值上下文：一次装载供各读路径复用。
-struct AffairEval {
+pub(crate) struct AffairEval {
     affair_id: String,
     genesis: AffairGenesis,
     ops: Vec<EvalOp>,
     anchors: HashMap<AnchorKey, i64>,
-    now_ms: i64,
+    pub(crate) now_ms: i64,
     /// (opHash, prevOpHash) 边集（因果闭包推导用）。
     edges: Vec<(String, String)>,
     /// 有效异议计数索引（objection.target → 计数）。
@@ -110,7 +110,7 @@ struct AffairEval {
     /// rulechain.rs 头注登记）。
     ladder_params: LadderParams,
     /// 规则链 replay 终态（vote 形态名册注入后的全形态）。
-    chain: RuleChain,
+    pub(crate) chain: RuleChain,
 }
 
 impl AffairEval {
@@ -1130,7 +1130,7 @@ impl Kernel {
     /// 求值上下文装配（各读/写路径共享）：创世 + 已接受操作 + 锚定表 →
     /// 规则链 replay（两阶段：先无名册 backbone 定阶梯参数，再注入投票前
     /// 快照名册全形态 replay）。
-    fn affair_eval(&self, affair_id: &str) -> Result<AffairEval> {
+    pub(crate) fn affair_eval(&self, affair_id: &str) -> Result<AffairEval> {
         let (genesis_value, raw_ops) = self.load_affair_genesis_ops(affair_id)?;
         let genesis = parse_genesis(&genesis_value)
             .map_err(|e| KernelError::Internal(format!("corrupted genesis: {}", e.reason())))?;

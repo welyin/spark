@@ -689,6 +689,8 @@ fn builtin_collection_key_domains() {
     // 并入——全员流动。
     // 退出留史：`org:cleave:`（共同体退出留史记录，append-only）并入——
     // 全员流动，各节点据此确定性推导空域只读档案状态。
+    // A22：`org:pin:`（事务本体 org-pinned 保留的组织侧接受声明，发布即
+    // 公示、生效由 effectiveAt 门控）并入——全员流动。
     assert_eq!(
         BuiltinOrgCollection::Structure.data_prefixes(org),
         vec![
@@ -702,7 +704,8 @@ fn builtin_collection_key_domains() {
             "org:policydoc:org_0000000000000001",
             "org:disclosure:org_0000000000000001:",
             "org:accept:org_0000000000000001",
-            "org:cleave:org_0000000000000001:"
+            "org:cleave:org_0000000000000001:",
+            "org:pin:org_0000000000000001:"
         ]
     );
     assert_eq!(

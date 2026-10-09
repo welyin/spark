@@ -334,6 +334,50 @@ pub(crate) fn handle_orgsync_data<S: StorageBackend>(
             continue;
         }
 
+        // A22 事务本体 org-pinned 保留的组织侧 pin 接受声明（org:pin:）合入走
+        // adjudicate_incoming_pin（结构 + 键-文一致 + sigSet subject 绑定 +
+        // OrgSigSet 五步链 + version LWW）——裁决 Accept 才落地；发布即公示
+        // （本键域随 org:structure 全员流动），生效由记录 effectiveAt 门控
+        // （接受 = updatedAt + 24h 公示延迟；撤销即时）。
+        if record_item
+            .key
+            .starts_with(crate::affair::ORG_PIN_PREFIX)
+            && !crate::sync::is_tombstone(&record_item.meta)
+        {
+            let pin_affair = record_item
+                .key
+                .strip_prefix(&format!("{}{org_id}:", crate::affair::ORG_PIN_PREFIX));
+            let merge = match pin_affair {
+                Some(affair) => crate::org::service::adjudicate_incoming_pin(
+                    storage,
+                    &org_id,
+                    affair,
+                    &record_item.value,
+                )?,
+                // 键形错位（他组织的 pin 键混入本组织流量）→ 拒收
+                None => crate::org::service::PinMerge::Rejected,
+            };
+            match merge {
+                crate::org::service::PinMerge::Accept => {
+                    let value_str = serde_json::to_string(&record_item.value)?;
+                    crate::sync::apply_personal_remote_no_dlog(
+                        storage,
+                        &record_item.key,
+                        &value_str,
+                        &record_item.meta,
+                    )?;
+                }
+                crate::org::service::PinMerge::KeepCurrent => {}
+                crate::org::service::PinMerge::Rejected => {
+                    log::info!(
+                        "[ORGSYNC] orgPin rejected | org={org_id} key={}",
+                        record_item.key
+                    );
+                }
+            }
+            continue;
+        }
+
         // A17 准入策略声明（org:accept:）合入走
         // adjudicate_incoming_accept_policy（结构 + sigSet subject 绑定 +
         // OrgSigSet 五步链 + version LWW）——裁决 Accept 才落地；发布即公示

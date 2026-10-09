@@ -108,6 +108,10 @@ impl BuiltinOrgCollection {
             // 退出留史：org:cleave:{orgId}:（共同体退出留史记录，append-only，
             // community-model「退出留史」）同集合全员流动——各节点由名册 +
             // 留史记录确定性推导空域只读档案状态。
+            // A22：org:pin:{orgId}:（事务本体 org-pinned 保留的组织侧接受
+            // 声明，affair-model §4.2——发布即公示随全员流动，生效由记录
+            // effectiveAt 门控；入站合入 adjudicate_incoming_pin 五步链把关）
+            // 同集合全员流动。
             BuiltinOrgCollection::Structure => vec![
                 format!("org:meta:{org_id}"),
                 format!("org:coll:{org_id}:"),
@@ -120,6 +124,7 @@ impl BuiltinOrgCollection {
                 format!("org:disclosure:{org_id}:"),
                 format!("org:accept:{org_id}"),
                 format!("org:cleave:{org_id}:"),
+                format!("org:pin:{org_id}:"),
             ],
             BuiltinOrgCollection::Contacts => vec![format!("ct:org:{org_id}:")],
             BuiltinOrgCollection::Invitations => vec![format!("org:invpub:{org_id}:")],

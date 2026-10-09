@@ -29,6 +29,7 @@
 mod affair_evi_ops;
 mod affair_ops;
 mod affair_profile_ops;
+mod affair_retention_ops;
 mod community_ops;
 mod contact_group_ops;
 mod contact_ops;

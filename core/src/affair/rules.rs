@@ -9,6 +9,7 @@
 use serde_json::Value;
 
 use super::actor::is_valid_identity_id;
+use super::effect::is_valid_org_id;
 use crate::evidence::{normalize_object, sha256_hex};
 
 /// 公示期缺省值 = 24h（§5.1）。
@@ -117,6 +118,92 @@ impl Mechanism {
     }
 }
 
+/// 事务本体保留策略（affair-model §4.2，A22）：决议结论锚定组织存证链之外，
+/// 事务**本体**去留的组织自选声明。内核只提供字段与复制组语义，不评估
+/// 「该不该保留」。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RetentionPolicy {
+    /// 关注即保留（缺省，现状语义）：无人持有即消亡。
+    Followers,
+    /// 声明组织的数据节点将本体纳入长期副本——组织级自选动作，须配对组织侧
+    /// pin 接受声明（`org:pin:{orgId}:{affairId}`，见 retention.rs）双条件生效。
+    OrgPinned,
+}
+
+impl RetentionPolicy {
+    /// 线形字符串。
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Followers => "followers",
+            Self::OrgPinned => "org-pinned",
+        }
+    }
+}
+
+/// retention 声明的组织列表上限（防超大声明撑爆规则文档）。
+pub const MAX_RETENTION_ORGS: usize = 64;
+
+/// retention 字段解析结果（缺省 = followers + 空组织列表）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RetentionDecl {
+    /// 保留策略档位。
+    pub policy: RetentionPolicy,
+    /// org-pinned 档的意向组织列表（非空、去重、字典序）；followers 档恒空。
+    pub orgs: Vec<String>,
+}
+
+impl Default for RetentionPolicy {
+    fn default() -> Self {
+        Self::Followers
+    }
+}
+
+/// 解析 retention 字段（缺省 = followers；形状非法 fail-closed，不静默回退）。
+pub fn parse_retention(value: Option<&Value>) -> Result<RetentionDecl, StaticCheckReject> {
+    let obj = match value {
+        None | Some(Value::Null) => return Ok(RetentionDecl::default()),
+        Some(v) => v.as_object().ok_or(StaticCheckReject::InvalidRetention)?,
+    };
+    let policy = match obj.get("policy").and_then(Value::as_str) {
+        Some("followers") => RetentionPolicy::Followers,
+        Some("org-pinned") => RetentionPolicy::OrgPinned,
+        _ => return Err(StaticCheckReject::InvalidRetention),
+    };
+    let orgs = match obj.get("orgs") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(v) => {
+            let arr = v.as_array().ok_or(StaticCheckReject::InvalidRetention)?;
+            if arr.len() > MAX_RETENTION_ORGS {
+                return Err(StaticCheckReject::InvalidRetention);
+            }
+            let mut orgs = Vec::with_capacity(arr.len());
+            for org in arr {
+                let id = org
+                    .as_str()
+                    .filter(|s| is_valid_org_id(s))
+                    .ok_or(StaticCheckReject::InvalidRetention)?;
+                if orgs.contains(&id.to_string()) {
+                    return Err(StaticCheckReject::InvalidRetention);
+                }
+                orgs.push(id.to_string());
+            }
+            orgs.sort();
+            orgs
+        }
+    };
+    match policy {
+        // followers 档携带意向组织 = 自相矛盾声明，拒绝（不猜着执行）
+        RetentionPolicy::Followers if !orgs.is_empty() => {
+            Err(StaticCheckReject::InvalidRetention)
+        }
+        // org-pinned 档必须点名至少一个意向组织（否则与 followers 无异）
+        RetentionPolicy::OrgPinned if orgs.is_empty() => {
+            Err(StaticCheckReject::InvalidRetention)
+        }
+        _ => Ok(RetentionDecl { policy, orgs }),
+    }
+}
+
 /// 静态检查拒绝原因（§5.6；reason 字符串稳定，golden vectors 可依赖）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StaticCheckReject {
@@ -148,6 +235,8 @@ pub enum StaticCheckReject {
     InvalidParticipation,
     /// exec 声明非法（非 null 且 verify.kind 非三枚举）。
     InvalidExec,
+    /// retention 声明非法（policy 非两枚举 / orgs 形状与档位矛盾）。
+    InvalidRetention,
 }
 
 impl StaticCheckReject {
@@ -168,6 +257,7 @@ impl StaticCheckReject {
             Self::InvalidDelayedVeto => "invalid-delayed-veto",
             Self::InvalidParticipation => "invalid-participation",
             Self::InvalidExec => "invalid-exec",
+            Self::InvalidRetention => "invalid-retention",
         }
     }
 }
@@ -183,6 +273,8 @@ pub struct RulesDoc {
     pub pub_period_veto_count: u64,
     /// 规则修改的集体决策机制。
     pub rule_change: Mechanism,
+    /// 本体保留策略（affair-model §4.2；缺省 followers）。
+    pub retention: RetentionDecl,
     /// 规则文档原文（canonical/rulesHash 与 patch 应用都在原文上进行）。
     pub raw: Value,
 }
@@ -469,11 +561,13 @@ pub fn static_check_rules(value: &Value) -> Result<RulesDoc, StaticCheckReject> 
     if let Some(exec) = obj.get("exec") {
         check_exec(exec)?;
     }
+    let retention = parse_retention(obj.get("retention"))?;
     Ok(RulesDoc {
         close_conditions,
         pub_period_ms,
         pub_period_veto_count,
         rule_change,
+        retention,
         raw: value.clone(),
     })
 }
@@ -520,6 +614,61 @@ mod tests {
         assert_eq!(doc.pub_period_ms, DEFAULT_PUB_PERIOD_MS);
         assert_eq!(doc.pub_period_veto_count, 1);
         assert!(matches!(doc.rule_change, Mechanism::DelayedVeto { .. }));
+        // retention 缺省 = followers（旧事务无感知，A22）
+        assert_eq!(doc.retention, RetentionDecl::default());
+    }
+
+    #[test]
+    fn retention_two_tiers_and_default() {
+        let org_a = format!("org_{}", "aa".repeat(32));
+        let org_b = format!("org_{}", "bb".repeat(32));
+        // 显式 followers
+        let mut r = baseline_rules();
+        r["retention"] = json!({ "policy": "followers" });
+        let doc = static_check_rules(&r).unwrap();
+        assert_eq!(doc.retention.policy, RetentionPolicy::Followers);
+        assert!(doc.retention.orgs.is_empty());
+        // org-pinned：意向组织列表解析 + 字典序
+        let mut r = baseline_rules();
+        r["retention"] = json!({ "policy": "org-pinned", "orgs": [org_b, org_a.clone()] });
+        let doc = static_check_rules(&r).unwrap();
+        assert_eq!(doc.retention.policy, RetentionPolicy::OrgPinned);
+        assert_eq!(doc.retention.orgs, vec![org_a.clone(), format!("org_{}", "bb".repeat(32))]);
+        // retention 经规则 patch 修改后重过静态检查（§5.4 顶层键覆盖）
+        let patched = apply_rule_patch(&r, &json!({ "retention": { "policy": "followers" } }));
+        let doc = static_check_rules(&patched).unwrap();
+        assert_eq!(doc.retention.policy, RetentionPolicy::Followers);
+        // patch 删除 retention 键 → 回缺省
+        let patched = apply_rule_patch(&r, &json!({ "retention": null }));
+        assert_eq!(
+            static_check_rules(&patched).unwrap().retention,
+            RetentionDecl::default()
+        );
+    }
+
+    #[test]
+    fn retention_rejects_bad_shapes() {
+        let org_a = format!("org_{}", "aa".repeat(32));
+        let cases: Vec<Value> = vec![
+            json!("org-pinned"),                                          // 非对象
+            json!({ "policy": "forever" }),                               // 未知档位
+            json!({ "orgs": [org_a] }),                                   // 缺 policy
+            json!({ "policy": "org-pinned" }),                            // org-pinned 缺 orgs
+            json!({ "policy": "org-pinned", "orgs": [] }),                // org-pinned 空 orgs
+            json!({ "policy": "followers", "orgs": [org_a] }),            // followers 带 orgs
+            json!({ "policy": "org-pinned", "orgs": ["org_xyz"] }),       // 非法 orgId
+            json!({ "policy": "org-pinned", "orgs": [org_a, org_a] }),    // 重复组织
+            json!({ "policy": "org-pinned", "orgs": "org_abc" }),         // orgs 非数组
+        ];
+        for (i, retention) in cases.iter().enumerate() {
+            let mut r = baseline_rules();
+            r["retention"] = retention.clone();
+            assert_eq!(
+                static_check_rules(&r).unwrap_err(),
+                StaticCheckReject::InvalidRetention,
+                "case {i} 必败"
+            );
+        }
     }
 
     #[test]

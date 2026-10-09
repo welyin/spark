@@ -284,11 +284,11 @@ impl Kernel {
     }
 
     /// 组织签名包构建（policy_publish / disclosure_publish /
-    /// accept_policy_publish 共用段）：策略链
+    /// accept_policy_publish / org_pin_publish 共用段）：策略链
     /// 定位（空链 / m>1 多签如实报错）→ 名册快照 + 本机 admin 校验 → A16
     /// 域私钥签名（signer = org_user_id）→ OrgSigSet 构造 + 自检（不通 =
     /// 实现 bug，不落库）。返回 (sigSet, signerId, degraded)。
-    fn build_signed_org_sig_set(
+    pub(crate) fn build_signed_org_sig_set(
         &self,
         org_id: &str,
         subject: &str,

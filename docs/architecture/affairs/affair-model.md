@@ -24,7 +24,7 @@
 | # | 差距 | 出处 |
 | --- | --- | --- |
 | G1 | **决议结论存证条目缺失**：决议产物未作为显式条目写入存证链（现状关闭路径只经通用挂钩刷组织锚根，治理侧无 evi:resolution 条目与触发接线）——事务本体消亡后，链上找不到"为什么这么改"的结论记录 | product/todo #7 |
-| G2 | 事务本体**可选保留策略**机制未定义（组织自选保留的组织级声明） | product/todo #7 |
+| G2 | 事务本体**可选保留策略**机制未定义（组织自选保留的组织级声明）——**A22 已落地**（2026-10-09，见 §4.2 落地口径） | product/todo #7 |
 | G3 | 执行型核查已实现（exec.rs）但"核查方式由事务规则声明"的产品语义需与规则文档对齐核验 | 本篇验收节 |
 
 ## 四、目标设计
@@ -49,6 +49,13 @@
   - `org-pinned`：声明的组织的数据节点将该事务本体纳入长期副本（组织级自选动作——**是组织自己的选择，不是内核强制**，与 Q10 拍板一致）；
 - **防摊派双条件（本篇裁定）**：事务声明只是意向，须配对**组织侧 pin 接受声明记录**（`org:pin:{orgId}:{affairId}`，组织级动作、走公示延迟，与 `org:disclosure` 同族）——复制组并集以"事务声明 ∧ 组织接受"双条件生效，防止垃圾事务向任意组织摊派长期副本；
 - 内核只提供字段与复制组语义（双条件满足时 affairsync 复制组 ∪= 该组织数据节点），不评估"该不该保留"。
+
+**A22 落地口径**（2026-10-09 实现）：
+
+- **线形**：`retention` 经 §5.6 静态检查把关（fail-closed：`org-pinned` 必须点名非空去重组织列表（≤64），`followers` 不得携带 orgs；非法即拒，不静默回退缺省）；字段缺席/null = followers，旧事务零感知；修改走事务自身 ruleChange 机制（patch 顶层键覆盖后重过静态检查）。实现：`core/src/affair/rules.rs`（`RetentionPolicy` / `RetentionDecl` / `parse_retention`）。
+- **pin 接受声明线形**：`org:pin:{orgId}:{affairId}` = `{ pinV: 1, orgId, affairId, version, updatedAt, effectiveAt, revoked?, sigSet }`——组织级动作（OrgSigSet 背书、subject 绑定 pinHash 防搬签），**发布即公示**（键域并入 orgsync `org:structure@v1` 内建集合全员流动），**生效由 `effectiveAt` 门控**：接受（首次 / 撤销后再接受）= 副本摊派面扩大 → `effectiveAt = updatedAt + 24h` 且发布须显式确认；撤销 = 收窄即时生效；version 单调 LWW。入站合入 `adjudicate_incoming_pin` 以 disclosure 同一五步链把关。实现：`core/src/affair/retention.rs`（纯逻辑）+ `core/src/org/service/pin.rs`（合入裁决）+ `Kernel::org_pin_publish`。
+- **复制组并集求值**：`Kernel::affair_retention_status` 输出逐声明组织 pin 状态（none / pending / effective / revoked）与 `effectivePinOrgs` = 声明 ∧ 接受 ∧ 已生效（`effective_pin_orgs` 纯函数）——双条件满足时该组织数据节点（A14 全员数据节点：成员即数据节点）将本体纳入长期副本。
+- **GC/清理面联动（不杀最后副本原则）**：`Kernel::affair_body_hold` 是清扫事务本体前的必查挂钩——followers 档只看关注副本（取关即可回收）；org-pinned 档 = 关注 ∨（双条件生效 ∧ 本机是任一生效 pin 组织的数据节点）；生效 pin 在手但组织记录缺失（无法证伪成员资格）按保守分支保留；判定报错（锁定/存储故障）时清理面须 fail-safe 跳过回收。
 
 ### 4.3 执行核查对齐（G3）
 
