@@ -18,6 +18,7 @@
     "package:example": "node scripts/build-example-package.mjs",
     "package:ai-chat": "node scripts/build-plugin-package.mjs --pluginId ai-chat",
     "package:moments": "node scripts/build-plugin-package.mjs --pluginId spark-moments",
-    "package:plugin": "node scripts/build-plugin-package.mjs"
+    "package:plugin": "node scripts/build-plugin-package.mjs",
+    "plugin:cli": "node ../packages/spark-plugin-cli/bin/spark-plugin-cli.mjs"
   }
 }

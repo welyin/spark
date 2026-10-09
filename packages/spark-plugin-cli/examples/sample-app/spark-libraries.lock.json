@@ -1,0 +1,13 @@
+{
+  "lockfileVersion": 1,
+  "generatedAt": "2026-10-09T03:57:15.048Z",
+  "libraries": [
+    {
+      "repo": "github.com/spark-samples/sample-lib",
+      "commit": "0123456789abcdef0123456789abcdef01234567",
+      "hash": "dcc287518f3ea8499990e4fd6ed6429e0f867f3efb0bb49221557d6c7ea812f7",
+      "vendorPath": "vendor/github.com/spark-samples/sample-lib",
+      "files": 2
+    }
+  ]
+}

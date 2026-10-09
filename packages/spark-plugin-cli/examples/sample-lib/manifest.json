@@ -1,0 +1,10 @@
+{
+  "id": "sample-lib",
+  "domain": "plugin:sample-lib",
+  "name": "样例库包",
+  "version": "0.1.0",
+  "kind": "library",
+  "description": "spark-plugin-cli 双产物验证用最小库包：纯代码（UI 辅助函数），不单独运行、无数据域。",
+  "category": "foundation",
+  "sdkVersion": "1"
+}

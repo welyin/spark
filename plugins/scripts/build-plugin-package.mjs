@@ -24,7 +24,11 @@
  * - --version / --pluginDomain 可选覆盖（不传则取自 <pluginId>/manifest.json）；
  * - --repository / --releaseTag 提供时，manifest 资产 url 指向 GitHub release
  *   asset（https://github.com/<repository>/releases/download/<releaseTag>/<file>）；
- *   缺省则回落到 file:// 本地路径（本地联调）。
+ *   缺省则回落到 file:// 本地路径（本地联调）；
+ * - --pluginDir 可选：指向任意插件工程目录（缺省按 --pluginId 解析 code/plugins/<id>），
+ *   spark-plugin-cli 样例/第三方工程构建用；
+ * - --sbom <path> 可选：SBOM 文件打进安装包（files[] 内 path 固定 sbom.json）并在
+ *   更新清单登记 kind:"sbom" 资产（plugin-dist §9.3；由 spark-plugin-cli 生成传入）。
  *
  * 签名私钥（按优先级）：
  * 1. 环境变量 SPARK_PLUGIN_SIGNING_PRIVATE_KEY（PEM 内容）
@@ -53,8 +57,8 @@ const OFFICIAL_PLUGIN_IDS = ['spark-moments', 'ai-chat'];
  * dist 由 build:<id> 生成（vite ESM bundle + manifest.json + assets/），
  * 本脚本不再直接收集 TS/Vue 源码。
  */
-async function collectDistFiles(pluginId) {
-  const distDir = path.join(pluginsRoot, pluginId, 'dist');
+async function collectDistFiles(pluginRoot) {
+  const distDir = path.join(pluginRoot, 'dist');
   if (!fs.existsSync(path.join(distDir, 'manifest.json'))) {
     throw new Error(
       `缺少 ${distDir}（含 manifest.json），请先运行对应插件的 build 脚本（如 npm run build:moments）生成插件产物`
@@ -128,8 +132,8 @@ async function readSigningPrivateKey() {
   );
 }
 
-async function readPluginManifest(pluginId) {
-  const manifestPath = path.join(pluginsRoot, pluginId, 'manifest.json');
+async function readPluginManifest(pluginRoot) {
+  const manifestPath = path.join(pluginRoot, 'manifest.json');
   if (!fs.existsSync(manifestPath)) {
     throw new Error(`缺少插件清单 ${manifestPath}`);
   }
@@ -139,18 +143,20 @@ async function readPluginManifest(pluginId) {
 async function main() {
   const args = parseArgs(process.argv);
 
-  const pluginId = args.pluginId;
+  // --pluginDir 可指向任意插件工程目录（spark-plugin-cli 用，如样例/第三方工程）；
+  // 缺省按 --pluginId 解析到 code/plugins/<pluginId>
+  const pluginDirOverride = args.pluginDir ? path.resolve(args.pluginDir) : null;
+  const pluginId = args.pluginId ?? (pluginDirOverride ? path.basename(pluginDirOverride) : undefined);
   if (!pluginId) {
     throw new Error('Missing --pluginId. 示例：--pluginId spark-moments（或 ai-chat）');
   }
-  if (!fs.existsSync(path.join(pluginsRoot, pluginId))) {
-    throw new Error(`插件目录不存在：code/plugins/${pluginId}`);
+  const pluginRoot = pluginDirOverride ?? path.join(pluginsRoot, pluginId);
+  if (!fs.existsSync(pluginRoot)) {
+    throw new Error(`插件目录不存在：${pluginRoot}`);
   }
 
-  const pluginRoot = path.join(pluginsRoot, pluginId);
-
   // 从插件清单兜底 id / domain / version，避免与清单脱钩（manifest.json 为唯一事实源）
-  const manifest = await readPluginManifest(pluginId);
+  const manifest = await readPluginManifest(pluginRoot);
   const effectiveId = manifest.id || pluginId;
   const domain = args.pluginDomain ?? (manifest.domain ?? `plugin:${effectiveId}`);
   const version = normalizeVersion(args.version) || normalizeVersion(manifest.version);
@@ -174,7 +180,7 @@ async function main() {
 
   await mkdir(outputDir, { recursive: true });
 
-  const sourceFiles = await collectDistFiles(pluginId);
+  const sourceFiles = await collectDistFiles(pluginRoot);
   const distDir = path.join(pluginRoot, 'dist');
 
   const bundledFiles = [];
@@ -193,6 +199,39 @@ async function main() {
       size: content.byteLength,
       contentBase64: content.toString('base64')
     });
+  }
+
+  // --sbom <path>（spark-plugin-cli 传入）：SBOM 打进安装包（files[] 内 path 固定
+  // sbom.json，随包落盘，供安装时依赖树展示）并在更新清单登记 kind:"sbom" 资产，
+  // 市场/壳层可不下载整包先行展示（plugin-dist §9.3）
+  let sbomAsset = null;
+  if (args.sbom) {
+    const sbomSourcePath = path.resolve(args.sbom);
+    const sbomContent = await readFile(sbomSourcePath);
+    const sbomDigest = sha256(sbomContent);
+    const sbomTargetPath = path.join(outputDir, 'sbom.json');
+    await writeFile(sbomTargetPath, sbomContent);
+    const sbomIndex = bundledFiles.findIndex((entry) => entry.path === 'sbom.json');
+    const sbomEntry = {
+      path: 'sbom.json',
+      sha256: sbomDigest,
+      size: sbomContent.byteLength,
+      contentBase64: sbomContent.toString('base64')
+    };
+    if (sbomIndex >= 0) {
+      bundledFiles[sbomIndex] = sbomEntry;
+    } else {
+      bundledFiles.push(sbomEntry);
+    }
+    sbomAsset = {
+      kind: 'sbom',
+      fileName: 'sbom.json',
+      url: repository && releaseTag
+        ? buildReleaseAssetUrl(repository, releaseTag, 'sbom.json')
+        : `file://${sbomTargetPath}`,
+      sha256: sbomDigest,
+      size: sbomContent.byteLength
+    };
   }
 
   const packageFileName = `spark-plugin-${effectiveId}-${version}.spkg`;
@@ -225,7 +264,8 @@ async function main() {
         url: packageUrl,
         sha256: packageDigest,
         size: packageSize
-      }
+      },
+      ...(sbomAsset ? [sbomAsset] : [])
     ]
   };
 
@@ -242,7 +282,8 @@ async function main() {
 
   const checksums = [
     `${packageDigest}  ${packageFileName}`,
-    `${sha256(Buffer.from(manifestText, 'utf8'))}  update-manifest.json`
+    `${sha256(Buffer.from(manifestText, 'utf8'))}  update-manifest.json`,
+    ...(sbomAsset ? [`${sbomAsset.sha256}  sbom.json`] : [])
   ];
   await writeFile(path.join(outputDir, 'plugin-checksums.txt'), `${checksums.join('\n')}\n`, 'utf8');
 

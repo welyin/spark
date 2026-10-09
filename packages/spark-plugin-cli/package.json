@@ -1,0 +1,13 @@
+{
+  "name": "spark-plugin-cli",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Spark 插件工具链：双产物构建（安装包/库包）+ manifest kind/libraries 校验 + SBOM + 依赖哈希锁定（plugin-dist §9）",
+  "bin": {
+    "spark-plugin-cli": "./bin/spark-plugin-cli.mjs"
+  },
+  "scripts": {
+    "test": "cd ../../app && node node_modules/vitest/vitest.mjs run spark-plugin-cli"
+  }
+}

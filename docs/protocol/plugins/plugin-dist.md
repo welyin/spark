@@ -228,3 +228,103 @@ release 资产（`{tag}` 见 §2.2，`{asset}` 为派生资产名）：
 广播索引已落地（§8，`/spark/plugin-announce/1.0.0` topic）。索引条目只携带 id 与
 展示摘要，**验证锚仍是本规格**：消费侧对每条索引执行 §4.1（可直接复用 §4.4 缓存），
 通过后才进入市场视图。安装入口复用 §4.2，索引层不得绕过。
+
+## 9. 库包机制：manifest 扩展（kind / libraries）与 SBOM
+
+> 来源：architecture/plugins/runtime-and-trust §4.1（product/todo #25）+
+> 2026-10-09 decisions 档二-3 拍板。工具链实现：`packages/spark-plugin-cli/`
+> （命令面见 §9.5）。安装时依赖树展示属壳层后续工作，本篇只定线形。
+
+### 9.1 包内 manifest.json 扩展字段
+
+| 字段 | 类型 | 必填 | 定义 |
+| --- | --- | --- | --- |
+| `kind` | string | 否 | `"app"` \| `"library"`，缺省 `"app"`；`library` = 纯代码库（UI 组件 / 领域逻辑 / schema），不单独运行、**无数据域**、不可安装（市场只对 app 类目展示），其代码操作的数据写入组合它的 app 的命名空间 |
+| `libraries` | object[] | 否 | 构建期依赖的库包清单，元素 `{ repo, commit, hash }`，三项**均必填**；缺省 / 空数组 = 无依赖。仅构建期解析，运行时禁止外部拉取代码的既有红线不变 |
+
+`libraries[]` 条目字段：
+
+| 字段 | 定义 |
+| --- | --- |
+| `repo` | 库仓库地址，语法与规范化**逐条沿用 §1.1/§1.2**（host ∈ github.com / gitlab.com / gitee.com，可带 sub-path）。依赖以仓库地址为准，**不接受包注册中心名为准的引用**（名字可抢注，URL 不可抢注）；npm registry 只作传输缓存 |
+| `commit` | 40 位小写 hex 精确提交；**分支 / 标签 / 短哈希等浮动引用一律拒绝**（升级依赖是显式动作、留痕） |
+| `hash` | 64 位小写 hex，vendor 树 sha256（算法 §9.2）。作者先写 repo+commit，由 `spark-plugin-cli lock` 计算回填 |
+
+校验失败码（工具链与后续壳层 / SDK 识别统一沿用）：`E_MANIFEST_KIND`（kind 非法）、
+`E_LIBRARIES_TYPE`（libraries 非数组或条目非对象）、`E_LIB_REPO`（repo 语法）、
+`E_LIB_COMMIT` / `E_LIB_COMMIT_FLOAT`（commit 缺失 / 浮动引用）、`E_LIB_HASH`
+（hash 缺失或格式非法）、`E_LIB_DUP`（规范化后 repo 重复）。
+
+### 9.2 依赖哈希锁定：vendor 目录 + spark-libraries.lock.json
+
+- **vendor 约定**：库源码按 repo+commit 锚定置于插件工程内
+  `vendor/<规范化 repo id>/`（工具不做网络抓取，只核验内容；拉取方式不限——
+  git subtree / 手工拷贝 / npm 缓存展开均可，进入 vendor 即与来源脱钩、以哈希为准）；
+- **vendor 树哈希（字节级）**：递归收集全部文件，相对路径统一 `/` 分隔、按码位
+  升序排序；逐行拼接 `<文件 sha256 hex>␣␣<相对路径>\n`，整体再做 sha256（hex 小写）
+  即树哈希；空目录 = sha256(空串)；
+- **锁文件**：插件工程根 `spark-libraries.lock.json`，线形
+  `{ "lockfileVersion": 1, "generatedAt": "<ISO8601>", "libraries": [{ "repo", "commit", "hash", "vendorPath", "files" }] }`，
+  由 `lock` 命令生成，随工程入库（构建期解析记录的留痕）；
+- **构建期核验（integrity 不符必拒）**：manifest `libraries` 与锁文件按
+  repo+commit+hash 逐条相等（集合一致，多 / 少条目即 `E_LOCK_MISMATCH`）；
+  重算每个 vendor 树哈希，不等于声明 hash 即 `E_LIB_INTEGRITY`，构建中止；
+  锁文件缺失即 `E_LOCK_MISSING`。
+
+### 9.3 SBOM（sbom.json）线形与位置
+
+安装包内**必须**携带 SBOM，无依赖时 `libraries` 为空数组（不省略文件）：
+
+```jsonc
+{
+  "sbomVersion": 1,
+  "plugin": { "id": "<pluginId>", "version": "<version>" },
+  "generatedAt": "<ISO8601>",
+  "tool": { "name": "spark-plugin-cli", "version": "<semver>" },
+  "libraries": [
+    { "repo": "<规范化 repo>", "commit": "<40hex>", "hash": "<64hex>", "files": <int> }
+  ]
+}
+```
+
+两个载体（同一份内容）：
+
+1. **包内**：.spkg `files[]` 中 `path == "sbom.json"` 的条目——随包落盘到插件
+   安装目录，安装确认页依赖树展示的数据源（壳层后续工作）；
+2. **更新清单资产**：`assets[]` 增 `kind == "sbom"` 条目
+   （`fileName` 固定 `sbom.json`，`url` / `sha256` / `size` 规则同 §5）——
+   市场 / 壳层可不下载整包先行展示依赖树；下载后逐字节校验同 §5。
+
+### 9.4 工具链双产物
+
+同一源码工程经 `spark-plugin-cli` 产出两类产物：
+
+- **安装包（--mode app）**：依赖全量打进（库代码经构建期内联进 app bundle，
+  与"运行时禁止外部拉取代码"一致）+ SBOM（§9.3 两载体）+ 锚定签名材料
+  （`update-manifest.sig` / `.pub.pem`，与 §4.3 签名层衔接），.spkg 其余线形不变；
+- **库包（--mode library）**：可发布目录 `<slug>-<version>/`（`package.json`
+  限定发布面 + `manifest.json`（kind:"library"）+ `sbom.json` + `dist/**`）
+  与同级 `<slug>-<version>-checksums.txt` 校验清单；发布形态为 **npm 包或
+  git 仓库 release/tag 引用，Spark 不自建包仓库**。
+
+mode 与 kind 必须一致（app 走安装包、library 走库包），不符即 `E_KIND_MISMATCH`。
+
+**构建期自洽校验（fail-closed）**：两类产物均只分发 dist——构建前扫描 dist 文本
+产物（.js/.mjs/.cjs/.jsx/.ts/.tsx/.vue/.html）中的相对路径引用（静态 import /
+export-from / 动态 `import()` / `require()`），命中对 `vendor/` 的引用、越过
+dist 根目录的引用、或 dist 内不存在的目标，即 `E_DIST_NOT_SELFCONTAINED`，
+构建中止。"依赖全量打进"由工具链强制，而非仅靠作者自觉。
+
+### 9.5 工具链命令面（packages/spark-plugin-cli）
+
+```
+spark-plugin-cli lock   [--pluginId <id> | --dir <path>]
+spark-plugin-cli build  [--pluginId <id> | --dir <path>] --mode app|library \
+    [--outputDir <dir>] [--repository <owner/repo> --releaseTag <tag>]
+spark-plugin-cli verify [--pluginId <id> | --dir <path>]
+```
+
+- `lock`：计算各 library vendor 树哈希 → 写锁文件并回填 manifest `libraries[].hash`；
+- `build --mode app`：preflight（§9.1 校验 + §9.2 核验）→ dist 自洽扫描（§9.4）→
+  生成 sbom.json → 调起 `plugins/scripts/build-plugin-package.mjs`（`--sbom` 注入两载体）；
+- `verify`：只跑 preflight（CI 用）。

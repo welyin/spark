@@ -41,10 +41,10 @@
 ```jsonc
 {
   "kind": "app" | "library",          // 默认 app；library = 纯代码库，不单独运行
-  "dependencies": [                    // 仅 app；构建期解析
+  "libraries": [                       // 仅 app；构建期解析
     { "repo": "github.com/acme/spark-kanban-lib",
       "commit": "<40hex>",             // 精确提交锁定（哈希必验，不接受分支/标签浮动引用）
-      "integrity": "<sha256>" }
+      "hash": "<sha256>" }             // vendor 树 sha256，由 spark-plugin-cli lock 回填
   ]
 }
 ```
@@ -52,11 +52,11 @@
 规则（与产品 §五逐条对应）：
 
 1. **library 角色**：无数据域、无实例、不可安装运行（市场只对 app 类目展示）；可含 UI 组件 / 领域逻辑 / schema；
-2. **依赖以仓库 + commit 为准**：构建工具从仓库锚定拉取并核对 integrity；**不接受包注册中心名为准的引用**（名字可抢注，URL 不可抢注）——npm registry 只作传输缓存；
-3. **全量打进安装包**：构建产物 = app 代码 + 依赖树全量内联 + **SBOM**（`sbom.json`：每个依赖的 repo / commit / integrity）；运行时禁止外部拉取代码的既有红线不变；
+2. **依赖以仓库 + commit 为准**：构建工具从仓库锚定拉取并核对 hash；**不接受包注册中心名为准的引用**（名字可抢注，URL 不可抢注）——npm registry 只作传输缓存；
+3. **全量打进安装包**：构建产物 = app 代码 + 依赖树全量内联 + **SBOM**（`sbom.json`：每个依赖的 repo / commit / hash）；运行时禁止外部拉取代码的既有红线不变；
 4. **数据域归组合者**：library 内代码操作的数据写入宿主 app 的命名空间（library 自身无域）；
 5. **安装时 SBOM 展示**：安装确认页列出完整依赖树（各库仓库地址 + commit）——供应链透明；
-6. **工具链**：`spark-plugin-cli`（新组件）双产物——`build --app`（安装包 = 内联依赖 + SBOM + manifest + **锚定签名材料**，与 plugin-release 仓库锚定规格衔接：构建产出声明文件与签名，发布时锚定仓库地址）与 `build --library`（库包 = 源码包 + 版本 tag；发布形式为 git 仓库 release 或 npm 包，Spark 不自建包仓库）。安装时 SBOM 展示落点：壳层安装确认页先行，A34 市场插件化后归市场插件呈现。
+6. **工具链**：`spark-plugin-cli`（新组件）双产物——`build --mode app`（安装包 = 内联依赖 + SBOM + manifest + **锚定签名材料**，与 plugin-release 仓库锚定规格衔接：构建产出声明文件与签名，发布时锚定仓库地址）与 `build --mode library`（库包 = 源码包 + 版本 tag；发布形式为 git 仓库 release 或 npm 包，Spark 不自建包仓库）。安装时 SBOM 展示落点：壳层安装确认页先行，A34 市场插件化后归市场插件呈现。字段名与命令面以 protocol/plugins/plugin-dist §9 为准。
 
 ### 4.2 市场界面插件化（G2）
 
@@ -68,14 +68,14 @@ blob API（foundation/personal-data 篇 §4.2 落地后）按插件命名空间�
 
 ## 五、迁移路径
 
-1. manifest 新字段向后兼容（无 kind = app、无 dependencies = 无依赖，行为不变）；
+1. manifest 新字段向后兼容（无 kind = app、无 libraries = 无依赖，行为不变）；
 2. 库包机制随 `spark-plugin-cli` 首个版本交付；catalog「项目」插件为第一个组合应用（其 SBOM 即验收样例）；
 3. 市场插件化在 A19/A42（聊天、通讯录、组织管理、文件界面插件化）之后（architecture/todo 批次三）；blob 命名空间随 blob 层（A1）一并落地。
 
 ## 六、验收
 
-- **向量**：manifest 新字段解析（kind / dependencies / integrity 校验失败必拒）；SBOM 线形；发布物之外的打包格式（安装包内联完整性）；
-- **单测**：依赖解析（commit 锁定、浮动引用拒绝、integrity 不符必拒）、library 不可安装 / 无数据域、blob API 命名空间越界拒绝；
+- **向量**：manifest 新字段解析（kind / libraries / hash 校验失败必拒）；SBOM 线形；发布物之外的打包格式（安装包内联完整性）；
+- **单测**：依赖解析（commit 锁定、浮动引用拒绝、hash 不符必拒）、library 不可安装 / 无数据域、blob API 命名空间越界拒绝；
 - **集成**：`spark-plugin-cli` 构建「项目」组合应用 → SBOM 展示 → 安装运行（单实例沙箱）；第三方市场前端（示例）经 market 命令面完成浏览 / 安装 / 验签全流程；
 - **回归**：iframe / QuickJS 隔离、能力三重过滤、trust.rs L0/L1/L2 判定、三个既有插件功能全绿。
 

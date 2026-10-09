@@ -1,0 +1,29 @@
+{
+  "id": "sample-app",
+  "domain": "plugin:sample-app",
+  "name": "样例组合应用",
+  "version": "0.1.0",
+  "kind": "app",
+  "description": "spark-plugin-cli 双产物验证用最小组合应用：构建期依赖 sample-lib（vendor 锚定 + 哈希锁定）。",
+  "category": "tool",
+  "entryView": "default",
+  "supportedSpaces": [
+    "org"
+  ],
+  "views": [
+    {
+      "id": "default",
+      "type": "app",
+      "title": "样例"
+    }
+  ],
+  "permissions": [],
+  "sdkVersion": "1",
+  "libraries": [
+    {
+      "repo": "github.com/spark-samples/sample-lib",
+      "commit": "0123456789abcdef0123456789abcdef01234567",
+      "hash": "dcc287518f3ea8499990e4fd6ed6429e0f867f3efb0bb49221557d6c7ea812f7"
+    }
+  ]
+}
