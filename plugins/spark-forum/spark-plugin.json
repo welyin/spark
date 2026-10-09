@@ -1,0 +1,16 @@
+{
+  "comment": "id 暂用插件短名；随分发模型迁移后改为规范化仓库地址（档一-5 已拍板转正 spark-forum）。自举插件：论坛/讨论板（forum.md v0.2）——板块/主题帖/楼中楼回复三层结构，forum_boards lww + forum_topics/forum_replies/forum_topic_events append-only；编辑=新版本（supersedesId）、状态走事件流派生；板块治理读名册管理员角色（档三-11）；回复不通知、仅新主题通知（档三-12）；删除诉求=关闭+隐藏事件（档三-14）。",
+  "id": "spark-forum",
+  "name": "论坛",
+  "icon": "",
+  "summary": "组织主题讨论区：板块、主题帖与楼中楼回复，签名防抵赖与链式存证，面向开发讨论与方案沉淀。",
+  "category": "foundation",
+  "version": "0.1.0",
+  "release": {
+    "assetNaming": "spark-plugin-spark-forum-<version>.spkg",
+    "updateManifestAsset": "spark-plugin-spark-forum-manifest.json",
+    "signatureAsset": "spark-plugin-spark-forum-manifest.sig"
+  },
+  "permissions": ["storage:read", "storage:write", "org:read", "org:sync", "message:app", "identity:sign"],
+  "mirrors": []
+}

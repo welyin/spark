@@ -1,0 +1,22 @@
+{
+  "id": "spark-forum",
+  "domain": "plugin:spark-forum",
+  "name": "论坛",
+  "version": "0.1.0",
+  "entryView": "default",
+  "description": "组织主题讨论区：板块、主题帖与楼中楼回复，签名防抵赖与链式存证，面向开发讨论与方案沉淀。",
+  "category": "foundation",
+  "icon": "assets/icon.svg",
+  "supportedSpaces": ["org"],
+  "views": [
+    { "id": "default", "type": "app", "title": "论坛" },
+    { "id": "topic-card", "type": "message-card", "title": "主题卡片" }
+  ],
+  "permissions": ["storage:read", "storage:write", "org:read", "org:sync", "message:app", "identity:sign"],
+  "sdkVersion": "1",
+  "window": { "defaultWidth": 1080, "defaultHeight": 720 },
+  "package": {
+    "updateManifestUrl": "https://github.com/welyin/spark/releases/latest/download/spark-plugin-spark-forum-manifest.json",
+    "packageName": "spark-plugin-spark-forum-0.1.0.spkg"
+  }
+}

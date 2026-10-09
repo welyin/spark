@@ -1,0 +1,12 @@
+{
+  "name": "@spark/plugin-spark-forum",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "论坛插件：板块/主题帖/楼中楼回复三层结构，签名防抵赖与链式存证，面向开发讨论与方案沉淀。",
+  "scripts": {
+    "build": "node ../../app/node_modules/vite/bin/vite.js build --config vite.config.ts && node ../scripts/copy-plugin-dist.mjs --pluginId spark-forum --views main,topic-card",
+    "typecheck": "node ../../app/node_modules/vue-tsc/bin/vue-tsc.js --noEmit -p tsconfig.json || node ../../app/node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
+    "test": "cd ../../app && node node_modules/vitest/vitest.mjs run spark-forum"
+  }
+}

@@ -21,6 +21,8 @@
     "package:moments": "node scripts/build-plugin-package.mjs --pluginId spark-moments",
     "package:plugin": "node scripts/build-plugin-package.mjs",
     "plugin:cli": "node ../packages/spark-plugin-cli/bin/spark-plugin-cli.mjs",
+    "build:feedback": "node ../app/node_modules/vite/bin/vite.js build --config spark-feedback/vite.config.ts && node scripts/copy-plugin-dist.mjs --pluginId spark-feedback --views main,feedback-card",
+    "build:forum": "node ../app/node_modules/vite/bin/vite.js build --config spark-forum/vite.config.ts && node scripts/copy-plugin-dist.mjs --pluginId spark-forum --views main,topic-card",
     "build:market": "node ../app/node_modules/vite/bin/vite.js build --config spark-market/vite.config.ts && node scripts/copy-plugin-dist.mjs --pluginId spark-market --views main"
   }
 }
