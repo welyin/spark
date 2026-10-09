@@ -3,6 +3,7 @@
  * - ChatReceived：绑定 space 匹配 + messages:read 授权 → 桥事件（否则不推）；
  * - ContactsSynced：contacts:read 授权 → 桥事件（否则不推）；
  * - FeedReceived：topic 前缀匹配 + feed:read 授权 → 桥事件（A18 前免权限，现门控）；
+ * - AffairChanged：affairs:read 授权 → 桥事件（sdk.affairs.onChange，订阅归 affairs:read）；
  * - PluginDataChanged：pluginId 匹配 → 桥事件（既有行为回归）。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -207,6 +208,34 @@ describe('PluginIframeHost 事件转发（A18）', () => {
     lastHost().resolveReady();
     await flush();
     fire({ kind: 'FeedReceived', data: { topic: 'spark-example:posts', feedId: 'f1' } });
+    expect(lastHost().pushEvent).not.toHaveBeenCalled();
+  });
+
+  it('AffairChanged：affairs:read 授权 → 推送；未授权 → 不推（订阅归 affairs:read）', async () => {
+    mockGranted(['affairs:read']);
+    mountHost();
+    await flush();
+    lastHost().resolveReady();
+    await flush();
+    const push = lastHost().pushEvent;
+    const submitted = { kind: 'AffairChanged', data: { affairId: 'af_x', change: 'submitted', opHash: 'op_1', status: 'accepted' } };
+    fire(submitted);
+    expect(push).toHaveBeenCalledWith('AffairChanged', submitted.data);
+    push.mockClear();
+    // replicated（复制面入站合入）同样转发
+    fire({ kind: 'AffairChanged', data: { affairId: 'af_x', change: 'replicated', accepted: 2, drained: 1 } });
+    expect(push).toHaveBeenCalledWith('AffairChanged', { affairId: 'af_x', change: 'replicated', accepted: 2, drained: 1 });
+
+    // 未授权场景：重挂一个独立插件
+    document.body.innerHTML = '';
+    createdHosts.length = 0;
+    p2pHandlers.length = 0;
+    mockGranted([], 'spark-other');
+    mountHost('spark-other');
+    await flush();
+    lastHost().resolveReady();
+    await flush();
+    fire({ kind: 'AffairChanged', data: { affairId: 'af_x', change: 'submitted' } });
     expect(lastHost().pushEvent).not.toHaveBeenCalled();
   });
 

@@ -203,9 +203,11 @@ export default defineComponent({
     // 事件，按 topic 前缀（== pluginId）过滤后推给插件 sdk.feed.onReceive 订阅
     let unlistenFeedReceived: (() => void) | null = null;
     // 事务副本变更推送（sdk.affairs.onChange）：内核 AffairChanged → 桥事件。
-    // 载荷只含 affairId 与变更类别（无插件归属维度），订阅了的插件实例都收
-    // （host.pushEvent 内部按订阅集合过滤；与 PluginDataChanged 同口径的
-    // 轻量通知，插件收到后重读 readLog 收敛）
+    // 载荷为 affairId + 变更类别 + opHash/status（submitted）或 accepted/
+    // drained 计数（replicated），均为哈希/计数无事务内容、无插件归属维度，
+    // 经 affairs:read 授权门控后推给订阅了的实例（host.pushEvent 内部按
+    // 订阅集合过滤；与 PluginDataChanged 同口径的轻量通知，插件收到后
+    // 重读 readLog 收敛）
     let unlistenAffairChanged: (() => void) | null = null;
     // A18 IM 数据面（communication §4.1）：ChatReceived 按绑定 space 过滤 +
     // messages:read 授权门控后推给 sdk.messages.onNewMessage 订阅
@@ -498,10 +500,15 @@ export default defineComponent({
           })
           .catch(() => {});
         // 事务副本变更推送（sdk.affairs.onChange）：AffairChanged → 桥事件。
-        // 无插件归属维度（affair 不属于任何插件），凡订阅的实例都推——
+        // 无插件归属维度（affair 不属于任何插件），但按拍板口径「订阅归
+        // affairs:read」（community-affairs §7.2 权限表）做授权门控——未授权
+        // affairs:read 的插件连 affairId 变更通知也不应收（与读面同权限位）。
         // host.pushEvent 按订阅集合过滤，未订阅的实例零开销。
         void listenP2pEvents((event) => {
           if (event.kind !== 'AffairChanged') {
+            return;
+          }
+          if (!grantedPermissions.value.has('affairs:read')) {
             return;
           }
           host?.pushEvent('AffairChanged', event.data);

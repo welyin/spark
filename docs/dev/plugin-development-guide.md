@@ -136,10 +136,55 @@ const sdk = await ensurePluginSDK();
 - `sdk.evidence` —— `headHash()` / `verify()`（只读核验）；
 - `sdk.events` —— `subscribe(event, handler)` / `unsubscribe(event, handler?)`（桥事件订阅）；
 - `sdk.sys` —— 系统能力代理（内核外呼，desktop 限定的高危权限）：`exec(program, args, workdir?)`（`system:exec`）/ `fetch(url, opts)`（`network:fetch`）/ `fetchStream(url, opts)`（流式 HTTP，同 `network:fetch`；返回 `FetchStreamHandle`：`onChunk` 逐块回调、`done` 完成 Promise、`cancel` 退订；五层管道与边界见 `插件流式输出管道`（wiki architecture/plugins/plugin-streaming.md））。
+- `sdk.affairs` —— 共同体事务（community-affairs §7.2，仅 iframe 桥模式）：创建/关注/提交操作/读日志/决议/阶梯/公开履历/变更订阅，用法示例见 §5.1。
 
-`sdk.messages`、`sdk.events` 与 `sdk.navigation` 仅 iframe 桥模式注入（`PluginSDK` 上为可选字段）；`sdk.space` 空间上下文（type/id/orgId）已实现，当前 space 经桥握手 ctx（`PluginContext.space`）注入。
+`sdk.messages`、`sdk.events`、`sdk.navigation` 与 `sdk.affairs` 仅 iframe 桥模式注入（`PluginSDK` 上为可选字段）；`sdk.space` 空间上下文（type/id/orgId）已实现，当前 space 经桥握手 ctx（`PluginContext.space`）注入。
 
 SDK 调用经 postMessage 桥到宿主，再经 invoke 适配层桥到内核；权限过滤在壳层桥分发器逐调用执行（三重过滤：grantedPermissions ∩ view 裁剪 ∩ 当前空间），域隔离与持久化在内核侧，渲染端与插件均无法伪造身份。
+
+### 5.1 sdk.affairs 共同体事务（创建 / 变更订阅 / 公开履历）
+
+事务（affair）是自由漂浮、关注即副本的公共事务容器（community-affairs §7.2）。类型语义（project / bug / 投票议题……）由插件自定义——内核不解释 `type` 与载荷，只保证签名链与日志完整性可验证。权限：创建/关注/取关/提交操作须高级权限 `affairs:write`，只读查询与变更订阅须 `affairs:read`（manifest 声明 + 安装授权）。
+
+**创建事务**（`affairs:write` + `identity:sign`）：`sdk.affairs.create` 按类型化描述构造创世记录 → 插件域身份签名 → 内核全链校验（affairId 由创世记录自认证复算，插件不传不猜）。create 内部经两次 `identity.sign` 完成签名（探测取公钥 + 创世记录签名），桥 dispatcher 对 `identity.sign` 单独强制 `identity:sign`（使用时询问）——只声明 `affairs:write` 未授权 `identity:sign` 会在签名步被拒：
+
+```typescript
+const { affairId, genesis } = await sdk.affairs!.create({
+  type: 'project',                       // 事务类型标识（插件命名空间）
+  title: '星火桌面 2.0 发布',
+  summary: '版本发布协调事务',
+  tags: ['release'],
+  rules: {                               // 创世规则文档（内核做静态检查）
+    engine: 'b1',
+    pubPeriod: { delayMs: 86400000, vetoThreshold: { count: 1 } },
+    participation: {},                   // 阶梯参数缺省 = 产品默认值
+    exec: null
+  },
+  extra: { regionCode: 'cn-east' }       // 插件语义顶层字段（随 affairId 被承诺）
+});
+// genesis 可转发给其他用户，对方经 sdk.affairs.follow(genesis) 关注同一事务
+```
+
+**提交操作 / 读取**（写须 `affairs:write`，读须 `affairs:read`）：
+
+```typescript
+const { affairId: aId, opHash, status } = await sdk.affairs!.submitOp(signedOp); // status: accepted / pending / duplicate
+const log = await sdk.affairs!.readLog(affairId);          // 创世 + 已接受操作 + DAG 头
+const rules = await sdk.affairs!.readRules(affairId);      // 规则文档版本链（现行 + 未生效归宿）
+const res = await sdk.affairs!.readResolution(affairId);   // 决议 + 公示期状态（链上锚定时间推导）
+const ladder = await sdk.affairs!.ladderStatus(affairId);  // 阶梯/账龄状态
+```
+
+**变更订阅**（`affairs:read`）：替代轮询——本地副本在关注/取关/提交/复制面入站合入后推送 `AffairChanged` 桥事件。变更通知不是可靠队列（重启/慢订阅会丢），收到后重读 `readLog` 收敛：
+
+```typescript
+await sdk.affairs!.onChange((event) => {
+  // event: { affairId, change: 'followed' | 'unfollowed' | 'submitted' | 'replicated', opHash?, status?, accepted?, drained? }
+  void refreshAffairView(event.affairId);   // 重读 readLog / readResolution 收敛
+});
+```
+
+**公开履历**（`affairs:read`）：`sdk.affairs.publicProfile(identity)` 返回公共身份的跨事务聚合视图（账龄/提议/采纳/投票历史，内核确定性推导，同查询任何节点复算一致）。诚实边界：只聚合本机副本所见的事务（未关注/未复制到的不参与）。
 
 ## 6. 存储与同步声明（必填）
 

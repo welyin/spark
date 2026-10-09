@@ -165,7 +165,10 @@ const CALL_PERMISSIONS: Record<string, string> = {
   'policy.publish': 'policy:write'
   // 注：affairs.create 是桥 client 侧组合（identity.sign + affairs.follow，
   // 逐调用各自由本表强制）；affairs.onChange 走事件订阅通道（subscribe
-  // 不经 call 表，与 data.onChange 同口径，事件载荷仅 affairId+变更类别）
+  // 不经 call 表，与 data.onChange 同口径，事件载荷仅 affairId+变更类别
+  // +opHash/status（submitted）或 accepted/drained 计数（replicated），
+  // 均为哈希/计数，无事务内容），其 affairs:read 门控在 PluginIframeHost
+  // 的 AffairChanged 转发处强制
 };
 
 /**
