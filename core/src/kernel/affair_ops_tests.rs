@@ -1050,3 +1050,47 @@ fn receipt_to_value(receipt: &crate::affair::EffectReceipt) -> Value {
         "recordedAtMs": receipt.recorded_at_ms,
     })
 }
+
+/// 公开发布声明位（sdk.affairs.create 的 `publish` 参数 → 创世记录
+/// `publish: true`，随 affairId 承诺）：声明公开的关注/创世入站后触发 C10
+/// indexer_publish_meta 元数据公告通路。p2p 缺席（未启动）时发布 best-effort
+/// 跳过、关注不阻断；未声明/非严格 true 不触发发布分支。
+#[test]
+fn follow_publish_declaration() {
+    let (_dir, mut kernel) = unlocked_kernel();
+    let initiator = fixed_key(0x71);
+    let genesis_with = |publish: Value| {
+        let mut genesis = json!({
+            "affairV": 1, "type": "forum", "title": "公开发布声明测试", "summary": "", "tags": [],
+            "initiator": actor_json(&initiator),
+            "rules": baseline_rules(),
+            "refs": [], "createdAt": T0,
+            "publish": publish,
+        });
+        let payload = genesis_sign_payload(&genesis).expect("genesis payload");
+        genesis["sig"] = json!(sign(&initiator, &payload));
+        genesis
+    };
+
+    // 公开路径：publish=true 入站成功（p2p 缺席时公告发布跳过，不阻断关注），
+    // publish 字段随 affairId 被承诺（复算通过即证明签名覆盖该字段）
+    let public_genesis = genesis_with(json!(true));
+    let public_id = kernel.affair_follow(&public_genesis).unwrap();
+    assert_eq!(
+        public_id,
+        compute_affair_id(&public_genesis).expect("affair id")
+    );
+    assert!(kernel.affair_list_followed().unwrap().contains(&public_id));
+
+    // 不公开路径：无 publish 字段的创世走同一关注链路
+    let (plain, plain_id) = make_genesis(&initiator);
+    kernel.affair_follow(&plain).unwrap();
+    assert!(kernel.affair_list_followed().unwrap().contains(&plain_id));
+    assert_ne!(public_id, plain_id);
+
+    // 非严格 true 不视为声明（fail-closed：字符串 "true" 不触发发布分支），
+    // 但仍是一条合法创世记录（内核不解释未知字段但承诺之）
+    let weird = genesis_with(json!("true"));
+    let weird_id = kernel.affair_follow(&weird).unwrap();
+    assert!(kernel.affair_list_followed().unwrap().contains(&weird_id));
+}

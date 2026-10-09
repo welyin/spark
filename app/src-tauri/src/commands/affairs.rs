@@ -435,4 +435,44 @@ mod tests {
         let err = affairs_indexer_query_inner(&kernel, "12D3KooWUnknown", "{}").unwrap_err();
         assert!(!err.is_empty());
     }
+
+    /// 公开发布声明位（sdk.affairs.create publish:true → 创世记录
+    /// `publish: true`）：同一 follow 薄壳透传，内核入站后触发 C10 元数据
+    /// 公告通路；p2p 未启动时发布 best-effort 跳过，关注照常成功且
+    /// affairId 自认证复算一致（publish 字段随 affairId 被承诺）。
+    #[test]
+    fn follow_with_publish_declaration_succeeds_offline() {
+        use base64::Engine as _;
+        use ed25519_dalek::{Signer, SigningKey};
+        use sha2::Digest as _;
+
+        let (_dir, mut kernel) = temp_kernel();
+        kernel
+            .init_identity("pw-test-affairs", "alice", None)
+            .unwrap();
+
+        let signing_key = SigningKey::from_bytes(&[0x42; 32]);
+        let public_key_bytes = signing_key.verifying_key().to_bytes();
+        let public_key = base64::engine::general_purpose::STANDARD.encode(public_key_bytes);
+        let identity = hex::encode(sha2::Sha256::digest(public_key_bytes));
+        let mut genesis = serde_json::json!({
+            "affairV": 1, "type": "forum", "title": "壳层发布声明测试", "summary": "", "tags": [],
+            "initiator": { "kind": "person", "identity": identity, "publicKey": public_key },
+            "rules": {
+                "engine": "b1",
+                "closeConditions": [{ "type": "op-count", "opType": "content", "count": 1 }],
+                "pubPeriod": { "delayMs": 86400000, "vetoThreshold": { "count": 1 } },
+                "ruleChange": { "kind": "delayed-veto", "delayMs": 259200000, "vetoThreshold": { "count": 1 } },
+                "exec": null
+            },
+            "refs": [], "createdAt": 1_720_000_000_000i64,
+            "publish": true,
+        });
+        let payload = spark_core::affair::genesis_sign_payload(&genesis).unwrap();
+        genesis["sig"] = serde_json::json!(base64::engine::general_purpose::STANDARD
+            .encode(signing_key.sign(payload.as_bytes()).to_bytes()));
+        let expected = spark_core::affair::compute_affair_id(&genesis).unwrap();
+        let followed = affairs_follow_inner(&mut kernel, &genesis).unwrap();
+        assert_eq!(followed, expected);
+    }
 }

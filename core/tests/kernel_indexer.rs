@@ -257,3 +257,162 @@ fn indexer_card_directory_and_query_e2e() {
     kernel_a.shutdown().unwrap();
     kernel_b.shutdown().unwrap();
 }
+
+// ------------------------------------------------------------------
+// 公开发布声明位 e2e（sdk.affairs.create 的 publish:true → affair_follow
+// 入站后自动经 C10 indexer_publish_meta 通路洪泛元数据公告）
+// ------------------------------------------------------------------
+
+use ed25519_dalek::{Signer, SigningKey};
+use spark_core::affair::{compute_affair_id, genesis_sign_payload};
+
+struct FixedKey {
+    signing_key: SigningKey,
+    public_key: String,
+    identity: String,
+}
+
+fn key_from_seed(seed_byte: u8) -> FixedKey {
+    let signing_key = SigningKey::from_bytes(&[seed_byte; 32]);
+    let public_key_bytes = signing_key.verifying_key().to_bytes();
+    FixedKey {
+        signing_key,
+        public_key: base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            public_key_bytes,
+        ),
+        identity: hex::encode(<sha2::Sha256 as sha2::Digest>::digest(public_key_bytes)),
+    }
+}
+
+fn actor_json(key: &FixedKey) -> Value {
+    json!({ "kind": "person", "identity": key.identity, "publicKey": key.public_key })
+}
+
+fn sign(key: &FixedKey, payload: &str) -> String {
+    base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        key.signing_key.sign(payload.as_bytes()).to_bytes(),
+    )
+}
+
+/// 带公开发布声明位的创世记录（publish 入记录则随 affairId 被承诺）。
+fn make_genesis_with_publish(initiator: &FixedKey, title: &str, publish: bool) -> (Value, String) {
+    let mut genesis = json!({
+        "affairV": 1, "type": "forum", "title": title, "summary": "e2e", "tags": ["hoa"],
+        "initiator": actor_json(initiator),
+        "rules": {
+            "engine": "b1",
+            "closeConditions": [{ "type": "op-count", "opType": "content", "count": 100 }],
+            "pubPeriod": { "delayMs": 86400000 },
+            "participation": { "combine": "all" },
+            "ruleChange": { "kind": "delayed-veto", "delayMs": 259200000, "vetoThreshold": { "count": 3 } },
+            "exec": null
+        },
+        "initialVoters": [initiator.identity], "refs": [],
+        "createdAt": system_now_ms(),
+    });
+    if publish {
+        genesis["publish"] = json!(true);
+    }
+    let payload = genesis_sign_payload(&genesis).expect("genesis payload");
+    genesis["sig"] = json!(sign(initiator, &payload));
+    let affair_id = compute_affair_id(&genesis).expect("affair id");
+    (genesis, affair_id)
+}
+
+/// e2e：A 创建声明公开的事务（genesis publish:true）→ affair_follow 自动
+/// 洪泛元数据公告 → B（indexer）收录可搜；同节点未声明公开的事务不出现。
+#[test]
+fn publish_declaration_auto_announce_e2e() {
+    let dir_a = tempfile::tempdir().unwrap();
+    let dir_b = tempfile::tempdir().unwrap();
+    let mut kernel_a = fresh_kernel(dir_a.path());
+    let mut kernel_b = fresh_kernel(dir_b.path());
+    init_identity(&mut kernel_a);
+    init_identity(&mut kernel_b);
+    kernel_a.start_p2p().unwrap();
+    kernel_b.start_p2p().unwrap();
+    let a_peer = kernel_a.p2p_status().unwrap().unwrap().peer_id.unwrap();
+    let b_peer = kernel_b.p2p_status().unwrap().unwrap().peer_id.unwrap();
+
+    // 互连
+    let card_a = kernel_a.make_node_card(None).unwrap();
+    assert_eq!(kernel_b.import_node_card(&card_a).unwrap().connect_error, None);
+    let card_b = kernel_b.make_node_card(None).unwrap();
+    assert_eq!(kernel_a.import_node_card(&card_b).unwrap().connect_error, None);
+    wait_until(
+        || {
+            kernel_a
+                .p2p_status()
+                .map(|s| s.unwrap().connected_peers.contains(&b_peer))
+                .unwrap_or(false)
+                && kernel_b
+                    .p2p_status()
+                    .map(|s| s.unwrap().connected_peers.contains(&a_peer))
+                    .unwrap_or(false)
+        },
+        10_000,
+        "A/B 互连",
+    );
+
+    kernel_b.set_indexer_enabled(true);
+    let search_hit = |kernel: &spark_core::kernel::Kernel, text: &str| -> Vec<String> {
+        let frame = build_query(
+            "qp",
+            &SearchQuery {
+                text: text.to_string(),
+                limit: 10,
+                ..SearchQuery::plain("", 0)
+            },
+        );
+        let resp = kernel.indexer_search(&frame).unwrap();
+        parse_result(&resp).unwrap()["results"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|r| r["affairId"].as_str().map(ToString::to_string))
+            .collect()
+    };
+
+    // mesh 预热：一条无关公告重发至 B 收录，证明 spark-affair-meta 主题
+    // gossipsub 网格已建立（后续正式公告只发一次，不再重发）
+    let warm_id = "cc".repeat(32);
+    wait_until(
+        || {
+            kernel_a
+                .p2p_broadcast(AFFAIR_META_TOPIC, meta_announce_body(&warm_id, "预热公告", "110105"))
+                .ok();
+            std::thread::sleep(Duration::from_millis(300));
+            search_hit(&kernel_b, "预热").contains(&warm_id)
+        },
+        15_000,
+        "B 收录预热公告（mesh 就绪）",
+    );
+
+    let initiator = key_from_seed(0x81);
+    // 负面对照先行：未声明公开的事务只关注、不公告
+    let (private_genesis, private_id) =
+        make_genesis_with_publish(&initiator, "私有事务不出现", false);
+    assert_eq!(kernel_a.affair_follow(&private_genesis).unwrap(), private_id);
+
+    // 正式路径：声明公开 → affair_follow 内部触发 indexer_publish_meta 通路
+    let (public_genesis, public_id) =
+        make_genesis_with_publish(&initiator, "公开发布声明位议题", true);
+    assert_eq!(kernel_a.affair_follow(&public_genesis).unwrap(), public_id);
+
+    // 不再重发：单次公告须送达（mesh 已预热）
+    wait_until(
+        || search_hit(&kernel_b, "公开发布").contains(&public_id),
+        10_000,
+        "B 收录公开事务的元数据公告",
+    );
+    assert!(
+        !search_hit(&kernel_b, "私有事务").contains(&private_id),
+        "未声明公开的事务不得出现在公共索引"
+    );
+
+    kernel_a.shutdown().unwrap();
+    kernel_b.shutdown().unwrap();
+}

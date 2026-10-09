@@ -636,6 +636,9 @@ export function connectPluginBridge(options: ConnectPluginBridgeOptions): Promis
         // 创建事务（插件内嵌创建流的 SDK 承载）：本地构造创世记录（线形
         // 见 affair-wire）→ 两次 identity.sign（探测取公钥 + 记录签名）→
         // follow。签名是内核入站校验硬要求，用户拒绝即整体上抛（不降级）。
+        // input.publish=true 时创世记录携带公开发布声明位（随 affairId 承诺），
+        // 内核创世入站后走 C10 indexer_publish_meta 通路洪泛元数据公告；
+        // 发布是创建的伴随语义，与 follow 同权限位（affairs:write），不新增权限。
         create: async (input) => {
           const probe = (await call('identity', 'sign', ['spark:affair-actor-probe'])) as {
             publicKey: string;

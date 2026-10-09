@@ -125,4 +125,34 @@ describe('affair-wire: 创世草稿构造', () => {
     expect(signPayload(signed)).toBe(normalizeObject(draft));
     expect(signPayload(draft)).not.toContain('sig-1');
   });
+
+  it('publish declaration: only explicit true lands in the record and is committed by signPayload', () => {
+    // 公开发布声明位：置 true 时创世记录携带 publish: true（随 affairId 承诺）
+    const pub = buildGenesisDraft(
+      { type: 't', title: 'a', summary: 'b', rules: {}, publish: true },
+      ACTOR,
+      1
+    );
+    expect(pub.publish).toBe(true);
+    expect(signPayload(pub)).toContain('"publish":"true"');
+
+    // 缺省 / 显式 false 均不携带（canonical 保持最小，与存量线形逐字节一致）
+    const absent = buildGenesisDraft({ type: 't', title: 'a', summary: 'b', rules: {} }, ACTOR, 1);
+    expect('publish' in absent).toBe(false);
+    const explicitFalse = buildGenesisDraft(
+      { type: 't', title: 'a', summary: 'b', rules: {}, publish: false },
+      ACTOR,
+      1
+    );
+    expect('publish' in explicitFalse).toBe(false);
+    expect(normalizeObject(explicitFalse)).toBe(normalizeObject(absent));
+
+    // 专用字段优先于 extra 同名键
+    const override = buildGenesisDraft(
+      { type: 't', title: 'a', summary: 'b', rules: {}, extra: { publish: false }, publish: true },
+      ACTOR,
+      1
+    );
+    expect(override.publish).toBe(true);
+  });
 });

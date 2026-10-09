@@ -1376,7 +1376,9 @@ export type PluginSpaceContext = {
 
 /** 视图挂载信息（壳层分配；挂载区域矩形随宿主组件波次补充） */
 export type PluginMountInfo = {
-  /** 视图类型，对齐 manifest.views[].type；background 为隐藏常驻后台视图（无 UI，随插件启用启动） */
+  /** 视图类型，对齐 manifest.views[].type；background 视图（A56 线形）实例
+   *  跑在内核 QuickJS 后台运行时，不经 iframe 桥挂载——桥上下文不会携带该值，
+   *  枚举保留仅为线形完整与历史清单兼容 */
   viewType: 'app' | 'message-card' | 'background';
   /** 卡片 id（仅 message-card 视图）：壳层分配，动作回调与归属校验的凭据 */
   cardId?: string;
@@ -1412,7 +1414,9 @@ export type PluginContext = {
 /** 插件视图声明（manifest.views 元素） */
 export type PluginViewDeclaration = {
   id: string;
-  /** background：隐藏常驻后台视图，无 UI，随插件启用即启动（用于常驻任务如消息监听） */
+  /** background：后台视图（无 UI 面，A56 合法化线形）——声明即接入内核
+   *  QuickJS 后台运行时（随插件启用拉起、停用销毁），脚本入口须配套 manifest
+   *  顶层 `background` 字段；不得作为 entryView（无界面可打开） */
   type: 'app' | 'message-card' | 'background';
   title?: string;
 };
@@ -1452,7 +1456,10 @@ export type PluginManifest = {
   views: PluginViewDeclaration[];
   /** 后台入口（可选）：包内 JS 文件相对路径（如 "background.js"），内容跑在
    *  内核 QuickJS 沙箱（无 DOM），随插件启用由内核拉起常驻线程；
-   *  承载 bot 消息监听等无界面逻辑（plugin_system.md「后台运行时」） */
+   *  承载 bot 消息监听等无界面逻辑（plugin_system.md「后台运行时」）。
+   *  A56 线形：views 中声明 `{ "type": "background" }` 的视图即接入该运行时，
+   *  此时本字段必填（壳层校验强制配对）；仅声明本字段而无 background 视图
+   *  为历史线形（ai-chat 先例），兼容放行 */
   background?: string;
   /** 权限声明（如 storage:read / storage:write / org:read / org:sync） */
   permissions: string[];

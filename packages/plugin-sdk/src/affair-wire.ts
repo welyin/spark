@@ -199,6 +199,19 @@ export type AffairGenesisInput = {
   rules: Record<string, unknown>;
   /** 插件语义顶层字段（原样并入创世记录，随 affairId 被承诺） */
   extra?: Record<string, unknown>;
+  /**
+   * 公开发布声明位（公共议题平台：事务打开公开发布即进全网公共目录）：
+   * 显式置 true 时创世记录顶层携带 `publish: true`（随 affairId 被承诺、
+   * 签名留痕），内核关注/创世入站后复用 C10 indexer_publish_meta 通路向
+   * `spark-affair-meta` 洪泛本代际元数据公告。缺省/false 时本参数不写入
+   * 记录（canonical 保持最小，存量线形逐字节兼容）。
+   * 门控在记录层：内核判定看的是创世记录顶层的严格布尔 `publish: true`
+   * （affair §2.1），而非本 SDK 参数——经 extra 显式注入同名键同样触发
+   * 发布（extra 本就是显式逃生舱，任何顶层字段均可经其注入）。优先级
+   * 非对称：本参数显式 true 时覆盖 extra 同名键；false/缺省时既不写入
+   * 也不擦除 extra 已注入的 `publish`。
+   */
+  publish?: boolean;
 };
 
 /**
@@ -227,7 +240,10 @@ export function buildGenesisDraft(
     refs: refs.map((ref) => ({ target: ref.target, rel: ref.rel })),
     createdAt,
     rules: input.rules,
-    ...(input.extra ?? {})
+    ...(input.extra ?? {}),
+    // 公开发布声明位仅在显式置 true 时入记录（缺省不携带，canonical 保持最小）；
+    // 置于 extra 之后：显式 true 覆盖 extra 同名键，false/缺省既不写入也不擦除
+    ...(input.publish === true ? { publish: true } : {})
   };
 }
 

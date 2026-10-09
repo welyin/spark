@@ -394,6 +394,9 @@ impl Kernel {
     /// 关注事务（sdk.affairs.follow）：创世记录全链校验（含 §5.6 静态检查），
     /// 落关注簿记并把创世作为本地首条记录自举（存证锚定 + pmeta，与 C4
     /// 复制面落库同路径）。affairId 由创世记录自认证复算，不信调用方自报。
+    /// 创世记录声明 `publish: true`（公开发布声明位，sdk.affairs.create 的
+    /// `publish` 参数）时顺带经 indexer_publish_meta 洪泛元数据公告（C10），
+    /// 发布失败不阻断关注。
     pub fn affair_follow(&mut self, genesis: &Value) -> Result<String> {
         let (_, affair_id, _) = crate::affair::verify_genesis(genesis)
             .map_err(|e| KernelError::Internal(e.reason()))?;
@@ -412,6 +415,14 @@ impl Kernel {
         // 关注即副本（affair-sync §5）：关注后主动向已知关注者交换摘要——
         // 本机多为空副本，hello 触发对端回推 data 完成首轮收敛
         self.affair_hello_now(&affair_id);
+        // 公开发布声明位（创世记录 `publish: true`，随 affairId 被承诺）：
+        // 复用 C10 indexer_publish_meta 通路向 spark-affair-meta 洪泛本代际
+        // 元数据公告。发布是关注/创世的伴随副作用，失败不阻断主流程——
+        // p2p 未启动时公告可由本门面事后重发，关注者副本亦可转发（affair-
+        // metadata §4 多源洪泛口径，重复发布无害、收录方按 §5 裁决去重）。
+        if genesis.get("publish").and_then(Value::as_bool) == Some(true) {
+            let _ = self.indexer_publish_meta(&affair_id);
+        }
         // sdk.affairs.onChange 事件源（变更通知非可靠队列，插件重读收敛）
         let _ = self.event_tx.send(crate::p2p::P2pEvent::AffairChanged(json!({
             "affairId": affair_id,
