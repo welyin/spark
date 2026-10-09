@@ -94,6 +94,7 @@ type FakeHost = ReturnType<typeof createFakeHost>;
 async function loadBackground(host: FakeHost): Promise<void> {
   (globalThis as Record<string, unknown>).spark = host.fake;
   vi.resetModules();
+  // @ts-expect-error background.ts 是顶层执行脚本（无导出），非 ES 模块
   await import('../background');
 }
 

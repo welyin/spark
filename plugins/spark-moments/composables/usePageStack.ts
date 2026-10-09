@@ -20,7 +20,7 @@ export type PageStackEntry = {
 
 /** 把 async loader 包成合法组件；真实组件原样返回 */
 function toComponent(c: PageComponent): Component {
-  if (typeof c === 'function' && !(c as Component).render) {
+  if (typeof c === 'function' && !(c as unknown as { render?: unknown }).render) {
     return defineAsyncComponent(c as () => Promise<{ default: Component }>);
   }
   return c as Component;

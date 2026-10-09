@@ -6,7 +6,7 @@
   "description": "Spark 默认内置通讯录应用插件（communication §4.2，功能对等迁移自壳层内置 UI）",
   "scripts": {
     "build": "node ../app/node_modules/vite/bin/vite.js build --config vite.config.ts",
-    "typecheck": "vue-tsc --noEmit -p tsconfig.json || tsc --noEmit -p tsconfig.json",
+    "typecheck": "node ../../app/node_modules/vue-tsc/bin/vue-tsc.js --noEmit -p tsconfig.json || node ../../app/node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
     "test": "cd ../../app && node node_modules/vitest/vitest.mjs run spark-contacts"
   }
 }

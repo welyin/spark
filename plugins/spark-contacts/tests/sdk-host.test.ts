@@ -154,7 +154,7 @@ describe('sdk-host 适配层（HostContactsApi → sdk.contacts 等语义映射�
     );
     const received: Array<{ kind: string; data: unknown }> = [];
     await listenP2pEvents((event) => received.push(event));
-    handlers.changed();
+    handlers.changed(undefined as never);
     handlers.request({ kind: 'FriendRequestReceived', request: { id: 'r1' } } as never);
     handlers.profile({ rootId: 'root-1', nickname: '新昵称' } as never);
     expect(received.map((e) => e.kind)).toEqual([
