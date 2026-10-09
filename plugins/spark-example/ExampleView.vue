@@ -353,7 +353,7 @@ export default defineComponent({
 
       // 成员侧「本地生成」通知（服务号模型 §20.4.3）：应用消息不走网络，
       // 发帖者的通知只到发帖者本机；本机作为成员设备，同步后出现的新帖
-      // 由本机插件实例各自生成本机应用消息（localStorage 台账去重）。
+      // 由本机插件实例各自生成本机应用消息（sdk.data 持久台账去重，localStorage 仅兜底）。
       // 通知失败不影响时间线，仅降级少一条本机通知。
       try {
         await service.value.notifyTimelinePosts(selectedOrgId.value, posts.value);

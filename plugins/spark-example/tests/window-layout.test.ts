@@ -91,6 +91,13 @@ function createMockSdk() {
     messages: {
       sendAppMessage: vi.fn().mockResolvedValue({ id: 'm1' }),
       onCardAction: vi.fn(() => () => {})
+    },
+    // sdk.data 持久面（通知台账 scope:'local' 集合）：内存 Map 模拟
+    data: {
+      declareCollection: vi.fn().mockResolvedValue({ name: 'spark-example:notified', scope: 'local' }),
+      save: vi.fn().mockResolvedValue({ success: true }),
+      query: vi.fn().mockResolvedValue({ items: [], nextCursor: undefined }),
+      get: vi.fn().mockResolvedValue(null)
     }
   } as unknown as PluginSDK;
 }

@@ -1,13 +1,15 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ForumService, FORUM_COLLECTIONS } from '../service';
 import { buildForumSignPayload } from '../model';
 import type { ForumBoard, ForumTopic } from '../model';
 
 /**
- * mock SDK：覆盖本插件用到的全部域（docs / identity / messages），
+ * mock SDK：覆盖本插件用到的全部域（docs / identity / messages / data），
  * 与插件能力面一一对应——新加 SDK 调用时先在这里补 mock。
+ * dataStore 可跨实例共享：模拟 iframe 销毁重建（新 service + 新 mock）后
+ * 持久台账仍在（H1 验收路径）。
  */
-function createMockSdk() {
+function createMockSdk(dataStore: Map<string, unknown> = new Map()) {
   return {
     docs: {
       // 默认返回一个未归档板块（createTopic 的板块存在性/归档校验用）；
@@ -47,6 +49,22 @@ function createMockSdk() {
       sendAppMessage: vi.fn().mockResolvedValue({ id: 'm1' }),
       listAppMessages: vi.fn(),
       markRead: vi.fn()
+    },
+    // sdk.data 持久面（通知台账 scope:'local' 集合）：内存 Map 模拟
+    data: {
+      declareCollection: vi.fn().mockResolvedValue({ name: 'spark-forum:notified', scope: 'local' }),
+      save: vi.fn(async (name: string, key: string, value: unknown) => {
+        dataStore.set(`${name}${key}`, value);
+        return { success: true };
+      }),
+      query: vi.fn(async (name: string, options?: { prefix?: string; limit?: number }) => {
+        const prefix = `${name}${options?.prefix ?? ''}`;
+        const items = [...dataStore.keys()]
+          .filter((key) => key.startsWith(prefix))
+          .map((key) => ({ key: key.slice(name.length), value: dataStore.get(key) }));
+        return { items, nextCursor: undefined };
+      }),
+      get: vi.fn(async () => null)
     }
   } as any;
 }
@@ -64,6 +82,11 @@ const mkTopic = (overrides: Partial<ForumTopic> = {}): ForumTopic => ({
 });
 
 describe('spark-forum service', () => {
+  beforeEach(() => {
+    // 通知台账 localStorage 缓存按 orgId 存：用例间互不相染
+    globalThis.localStorage?.clear();
+  });
+
   it('declares collection sync strategies before writing (lww config/boards, append-only content/events)', async () => {
     const sdk = createMockSdk();
     sdk.docs.get.mockResolvedValueOnce(null);
@@ -451,6 +474,73 @@ describe('spark-forum service', () => {
     await expect(service.notifyNewTopics('org-rl', [t1, t2], boards)).resolves.toBe(1);
     expect(sdk.messages.sendAppMessage).toHaveBeenCalledTimes(3);
     expect(sdk.messages.sendAppMessage.mock.calls[2][0].topicId).toBe('t2');
+  });
+
+  // ------------------------------------------------------------------
+  // 通知台账持久面（H1：opaque origin 沙箱 localStorage 恒抛，台账以 sdk.data 为准）
+  // ------------------------------------------------------------------
+
+  it('persists notified ledger in sdk.data local collection (survives iframe rebuild)', async () => {
+    const store = new Map<string, unknown>();
+    const boards = new Map([['board-1', '内核']]);
+    const sdk1 = createMockSdk(store);
+    const service1 = new ForumService(sdk1);
+
+    const t1 = mkTopic({ id: 'p1', orgId: 'org-persist' });
+    await expect(service1.notifyNewTopics('org-persist', [t1], boards)).resolves.toBe(1);
+    expect(sdk1.messages.sendAppMessage).toHaveBeenCalledTimes(1);
+    // 台账声明为 scope:'local' 集合并写入持久面（键 {orgId}:{topicId}，值带 createdAt 水位）
+    expect(sdk1.data.declareCollection).toHaveBeenCalledWith({ name: 'spark-forum:notified', scope: 'local' });
+    expect(sdk1.data.save).toHaveBeenCalledWith('spark-forum:notified', 'org-persist:p1', { createdAt: 1 });
+
+    // iframe 销毁重建：全新 service 实例 + 全新 messages mock，共享同一 data 存储——不重发
+    const sdk2 = createMockSdk(store);
+    const service2 = new ForumService(sdk2);
+    await expect(service2.notifyNewTopics('org-persist', [t1], boards)).resolves.toBe(0);
+    expect(sdk2.messages.sendAppMessage).not.toHaveBeenCalled();
+  });
+
+  it('dedups via persistent ledger even when localStorage is unavailable (opaque origin sandbox)', async () => {
+    // 模拟 opaque origin iframe：访问 localStorage 恒抛 SecurityError
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      get() {
+        throw new Error('SecurityError: opaque origin');
+      }
+    });
+    try {
+      const store = new Map<string, unknown>();
+      const boards = new Map([['board-1', '内核']]);
+      const sdk = createMockSdk(store);
+      const service = new ForumService(sdk);
+
+      const t1 = mkTopic({ id: 's1', orgId: 'org-nols' });
+      await expect(service.notifyNewTopics('org-nols', [t1], boards)).resolves.toBe(1);
+      expect(sdk.messages.sendAppMessage).toHaveBeenCalledTimes(1);
+
+      // 再次加载（localStorage 仍不可用）：持久台账去重，不重发
+      await expect(service.notifyNewTopics('org-nols', [t1], boards)).resolves.toBe(0);
+      expect(sdk.messages.sendAppMessage).toHaveBeenCalledTimes(1);
+    } finally {
+      if (descriptor) {
+        Object.defineProperty(globalThis, 'localStorage', descriptor);
+      }
+    }
+  });
+
+  it('falls back to localStorage cache when the data plane fails (session-scoped dedup)', async () => {
+    const sdk = createMockSdk();
+    sdk.data.query.mockRejectedValue(new Error('data plane down'));
+    sdk.data.save.mockRejectedValue(new Error('data plane down'));
+    const boards = new Map([['board-1', '内核']]);
+    const service = new ForumService(sdk);
+
+    const t1 = mkTopic({ id: 'c1', orgId: 'org-cache' });
+    await expect(service.notifyNewTopics('org-cache', [t1], boards)).resolves.toBe(1);
+    // 缓存记账生效：同实例再次加载不重发（读侧降级到缓存）
+    await expect(service.notifyNewTopics('org-cache', [t1], boards)).resolves.toBe(0);
+    expect(sdk.messages.sendAppMessage).toHaveBeenCalledTimes(1);
   });
 
   // ------------------------------------------------------------------

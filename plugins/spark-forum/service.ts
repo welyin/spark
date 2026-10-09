@@ -82,11 +82,20 @@ function newId(prefix: string): string {
 }
 
 /**
- * 「已通知主题」去重台账：按空间（orgId）记录在 localStorage。应用消息是
- * 「本地生成、本地消费」（§20.4.3）——消息本身不同步，去重状态因此也只须是
- * 本机状态；localStorage 不可用（存储被禁的沙箱、隐私模式）时降级为进程内
- * 记忆：去重窗口缩小为当前会话，刷新后可能补发一次，属可接受降级。
+ * 「已通知主题」去重台账（H1 评审修复，对齐 spark-announcement 送达台账范式）：
+ * 按空间（orgId）记录本机已为哪些主题 id 生成过应用消息（去重键 = 主题 id，
+ * 值携带 createdAt 水位），防重启后重复推通知。应用消息是「本地生成、本地
+ * 消费」（§20.4.3）——消息本身不同步，去重状态因此也只须是本机状态。
+ *
+ * 持久面选型（H1）：插件沙箱 iframe 是 opaque origin（壳层
+ * sandbox="allow-scripts"），localStorage 恒抛 SecurityError，且 iframe 随
+ * 标签切换销毁重建、进程内兜底一并清零——只用 localStorage 会导致每次打开
+ * 插件为全部历史主题重发通知。故台账迁到 sdk.data 持久面：
+ * `spark-forum:notified`（declareCollection scope:'local'，键
+ * `{orgId}:{topicId}`）；localStorage 仅作缓存/兜底（持久面读写失败时降级），
+ * 读侧以持久台账为准。
  */
+const NOTIFIED_COLLECTION = 'spark-forum:notified';
 const NOTIFIED_KEY_PREFIX = 'spark-forum:notified-topics:';
 const memoryNotifiedFallback = new Map<string, Set<string>>();
 
@@ -94,7 +103,8 @@ function notifiedStorageKey(orgId: string): string {
   return `${NOTIFIED_KEY_PREFIX}${orgId}`;
 }
 
-function loadNotifiedTopicIds(orgId: string): Set<string> {
+/** localStorage 缓存读（含进程内兜底；仅作持久面不可用时的降级来源） */
+function loadNotifiedCache(orgId: string): Set<string> {
   const key = notifiedStorageKey(orgId);
   try {
     const raw = globalThis.localStorage?.getItem(key);
@@ -102,12 +112,13 @@ function loadNotifiedTopicIds(orgId: string): Set<string> {
       return new Set(JSON.parse(raw) as string[]);
     }
   } catch {
-    /* 存储不可用或数据损坏：走进程内兜底 */
+    /* opaque origin 沙箱恒抛 SecurityError、隐私模式或数据损坏：走进程内兜底 */
   }
   return new Set(memoryNotifiedFallback.get(key) ?? []);
 }
 
-function saveNotifiedTopicIds(orgId: string, ids: Set<string>): void {
+/** localStorage 缓存写（best-effort；进程内兜底先行，存储不可用不阻塞） */
+function saveNotifiedCache(orgId: string, ids: Set<string>): void {
   const key = notifiedStorageKey(orgId);
   memoryNotifiedFallback.set(key, new Set(ids));
   try {
@@ -119,6 +130,7 @@ function saveNotifiedTopicIds(orgId: string, ids: Set<string>): void {
 
 export class ForumService {
   private collectionsReady: Promise<void> | null = null;
+  private notifiedCollectionReady: Promise<void> | null = null;
 
   constructor(private readonly sdk: PluginSDK) {}
 
@@ -130,6 +142,47 @@ export class ForumService {
       }
     })();
     return this.collectionsReady;
+  }
+
+  /** 声明通知台账集合（sdk.data scope:'local'，幂等；代际内策略冲突报错） */
+  private ensureNotifiedCollection(): Promise<void> {
+    this.notifiedCollectionReady ??= this.sdk.data
+      .declareCollection({ name: NOTIFIED_COLLECTION, scope: 'local' })
+      .then(() => undefined);
+    return this.notifiedCollectionReady;
+  }
+
+  /**
+   * 读通知台账：以 sdk.data 持久面为准；持久面不可用（声明/查询失败）时降级
+   * localStorage 缓存 + 进程内兜底。读成功后回写缓存，供降级路径使用。
+   */
+  private async loadNotifiedTopicIds(orgId: string): Promise<Set<string>> {
+    try {
+      await this.ensureNotifiedCollection();
+      const response = await this.sdk.data.query<{ createdAt?: number }>(NOTIFIED_COLLECTION, {
+        prefix: `${orgId}:`,
+        limit: 2000
+      });
+      const ids = new Set(response.items.map((item) => item.key.slice(orgId.length + 1)));
+      saveNotifiedCache(orgId, ids);
+      return ids;
+    } catch (error) {
+      console.warn('[spark-forum] 通知台账持久面读取失败，降级缓存（本次会话内去重）：', error);
+      return loadNotifiedCache(orgId);
+    }
+  }
+
+  /** 记通知台账：持久面为主，缓存兜底同步刷新（持久面写失败不阻塞通知流程） */
+  private async markNotified(orgId: string, topic: ForumTopic): Promise<void> {
+    const cached = loadNotifiedCache(orgId);
+    cached.add(topic.id);
+    saveNotifiedCache(orgId, cached);
+    try {
+      await this.ensureNotifiedCollection();
+      await this.sdk.data.save(NOTIFIED_COLLECTION, `${orgId}:${topic.id}`, { createdAt: topic.createdAt });
+    } catch (error) {
+      console.warn('[spark-forum] 通知台账持久面写入失败（缓存已记，降级为会话内去重）：', error);
+    }
   }
 
   async ensureOrgConfig(orgId: string, rootId: string): Promise<ForumOrgConfig> {
@@ -446,10 +499,8 @@ export class ForumService {
         { summary: buildTopicSummary(boardName, topic.title), topicId: topic.id, orgId: topic.orgId },
         { viewId: 'topic-card', data: { topicId: topic.id, orgId: topic.orgId } }
       );
-      // 记入已通知台账：成员侧本地生成路径（notifyNewTopics）不会补发重复通知
-      const notified = loadNotifiedTopicIds(topic.orgId);
-      notified.add(topic.id);
-      saveNotifiedTopicIds(topic.orgId, notified);
+      // 记入已通知台账（sdk.data 持久面为准）：成员侧本地生成路径（notifyNewTopics）不会补发重复通知
+      await this.markNotified(topic.orgId, topic);
       return true;
     } catch (error) {
       console.warn('[spark-forum] 应用消息发送失败（权限/限流降级）：', error);
@@ -460,8 +511,9 @@ export class ForumService {
   /**
    * 成员侧「本地生成」通知（服务号模型 §20.4.3）：应用消息不走网络，发帖者
    * 的通知只到发帖者本机；主题数据经 org 同步到达每台成员设备后，各设备上
-   * 的插件实例从本机数据各自算出通知写入本机会话。去重靠 localStorage 台账；
-   * 遇内核限流即中止本轮，未记账的留待下次加载补齐。
+   * 的插件实例从本机数据各自算出通知写入本机会话。去重靠 sdk.data 持久台账
+   * （`spark-forum:notified` scope:'local'，去重键 = 主题 id），重启/iframe
+   * 重建后不重复；遇内核限流即中止本轮，未记账的留待下次加载补齐。
    *
    * 只对新主题生成通知（档三-12）；编辑新版本（supersedesId 非空）不重复通知。
    */
@@ -469,7 +521,7 @@ export class ForumService {
     if (!this.sdk.messages || topics.length === 0) {
       return 0;
     }
-    const notified = loadNotifiedTopicIds(orgId);
+    const notified = await this.loadNotifiedTopicIds(orgId);
     let sent = 0;
     for (const topic of topics) {
       // 编辑产生的新版本不是「新主题」，不通知

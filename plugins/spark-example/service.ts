@@ -60,12 +60,20 @@ function newId(prefix: string): string {
 }
 
 /**
- * 「已通知帖子」去重台账：按空间（orgId）记录在 localStorage。
- * 应用消息是「本地生成、本地消费」（§20.4.3）——消息本身不同步，去重状态
- * 因此也只须是本机状态；localStorage 足够，无需为此占用 docs 集合。
- * localStorage 不可用（存储被禁的沙箱、隐私模式）时降级为进程内记忆：
- * 去重窗口缩小为当前会话，刷新后可能补发一次，属可接受降级。
+ * 「已通知帖子」去重台账（H1 评审修复，对齐 spark-announcement 送达台账范式）：
+ * 按空间（orgId）记录本机已为哪些帖子 id 生成过应用消息（去重键 = 帖子 id，
+ * 值携带 createdAt 水位）。应用消息是「本地生成、本地消费」（§20.4.3）——
+ * 消息本身不同步，去重状态因此也只须是本机状态，无需为此占用 docs 集合。
+ *
+ * 持久面选型（H1）：插件沙箱 iframe 是 opaque origin（壳层
+ * sandbox="allow-scripts"），localStorage 恒抛 SecurityError，且 iframe 随
+ * 标签切换销毁重建、进程内兜底一并清零——只用 localStorage 会导致每次打开
+ * 插件为全部历史帖子重发通知。故台账迁到 sdk.data 持久面：
+ * `spark-example:notified`（declareCollection scope:'local'，键
+ * `{orgId}:{postId}`）；localStorage 仅作缓存/兜底（持久面读写失败时降级，
+ * 去重窗口缩小为当前会话），读侧以持久台账为准。
  */
+const NOTIFIED_COLLECTION = 'spark-example:notified';
 const NOTIFIED_KEY_PREFIX = 'spark-example:notified-posts:';
 const memoryNotifiedFallback = new Map<string, Set<string>>();
 
@@ -73,7 +81,8 @@ function notifiedStorageKey(orgId: string): string {
   return `${NOTIFIED_KEY_PREFIX}${orgId}`;
 }
 
-function loadNotifiedPostIds(orgId: string): Set<string> {
+/** localStorage 缓存读（含进程内兜底；仅作持久面不可用时的降级来源） */
+function loadNotifiedCache(orgId: string): Set<string> {
   const key = notifiedStorageKey(orgId);
   try {
     const raw = globalThis.localStorage?.getItem(key);
@@ -81,12 +90,13 @@ function loadNotifiedPostIds(orgId: string): Set<string> {
       return new Set(JSON.parse(raw) as string[]);
     }
   } catch {
-    /* 存储不可用或数据损坏：走进程内兜底 */
+    /* opaque origin 沙箱恒抛 SecurityError、隐私模式或数据损坏：走进程内兜底 */
   }
   return new Set(memoryNotifiedFallback.get(key) ?? []);
 }
 
-function saveNotifiedPostIds(orgId: string, ids: Set<string>): void {
+/** localStorage 缓存写（best-effort；进程内兜底先行，存储不可用不阻塞） */
+function saveNotifiedCache(orgId: string, ids: Set<string>): void {
   const key = notifiedStorageKey(orgId);
   memoryNotifiedFallback.set(key, new Set(ids));
   try {
@@ -98,6 +108,7 @@ function saveNotifiedPostIds(orgId: string, ids: Set<string>): void {
 
 export class WeiboService {
   private collectionsReady: Promise<void> | null = null;
+  private notifiedCollectionReady: Promise<void> | null = null;
 
   constructor(private readonly sdk: PluginSDK) {}
 
@@ -109,6 +120,47 @@ export class WeiboService {
       }
     })();
     return this.collectionsReady;
+  }
+
+  /** 声明通知台账集合（sdk.data scope:'local'，幂等；代际内策略冲突报错） */
+  private ensureNotifiedCollection(): Promise<void> {
+    this.notifiedCollectionReady ??= this.sdk.data
+      .declareCollection({ name: NOTIFIED_COLLECTION, scope: 'local' })
+      .then(() => undefined);
+    return this.notifiedCollectionReady;
+  }
+
+  /**
+   * 读通知台账：以 sdk.data 持久面为准；持久面不可用（声明/查询失败）时降级
+   * localStorage 缓存 + 进程内兜底。读成功后回写缓存，供降级路径使用。
+   */
+  private async loadNotifiedPostIds(orgId: string): Promise<Set<string>> {
+    try {
+      await this.ensureNotifiedCollection();
+      const response = await this.sdk.data.query<{ createdAt?: number }>(NOTIFIED_COLLECTION, {
+        prefix: `${orgId}:`,
+        limit: 2000
+      });
+      const ids = new Set(response.items.map((item) => item.key.slice(orgId.length + 1)));
+      saveNotifiedCache(orgId, ids);
+      return ids;
+    } catch (error) {
+      console.warn('[spark-example] 通知台账持久面读取失败，降级缓存（本次会话内去重）：', error);
+      return loadNotifiedCache(orgId);
+    }
+  }
+
+  /** 记通知台账：持久面为主，缓存兜底同步刷新（持久面写失败不阻塞通知流程） */
+  private async markNotified(orgId: string, post: WeiboPost): Promise<void> {
+    const cached = loadNotifiedCache(orgId);
+    cached.add(post.id);
+    saveNotifiedCache(orgId, cached);
+    try {
+      await this.ensureNotifiedCollection();
+      await this.sdk.data.save(NOTIFIED_COLLECTION, `${orgId}:${post.id}`, { createdAt: post.createdAt });
+    } catch (error) {
+      console.warn('[spark-example] 通知台账持久面写入失败（缓存已记，降级为会话内去重）：', error);
+    }
   }
 
   async ensureOrgConfig(orgId: string, rootId: string): Promise<WeiboOrgConfig> {
@@ -157,7 +209,8 @@ export class WeiboService {
    * （§20.4.3：本地生成、本地消费，同步的是数据不是消息），因此这条
    * 通知只到**发帖者本机**的应用会话，作用是让发帖者立即看到自己的
    * 操作回音；组织其他成员的设备要靠各自插件实例在同步后本地生成
-   * 通知（见 notifyTimelinePosts），两条路径靠 localStorage 台账去重。
+   * 通知（见 notifyTimelinePosts），两条路径靠 sdk.data 持久台账去重
+   * （`spark-example:notified` scope:'local'，重启/iframe 重建后不重复）。
    *
    * SDK 用法：sdk.messages.sendAppMessage(payload, card)——
    * - payload.summary 是强制的声明式摘要：未装插件的成员设备上壳层原生
@@ -183,10 +236,8 @@ export class WeiboService {
         { summary: buildPostSummary(post.content), postId: post.id, orgId: post.orgId },
         { viewId: 'post-card', data: { postId: post.id, orgId: post.orgId } }
       );
-      // 记入已通知台账：成员侧本地生成路径（notifyTimelinePosts）不会补发重复通知
-      const notified = loadNotifiedPostIds(post.orgId);
-      notified.add(post.id);
-      saveNotifiedPostIds(post.orgId, notified);
+      // 记入已通知台账（sdk.data 持久面为准）：成员侧本地生成路径（notifyTimelinePosts）不会补发重复通知
+      await this.markNotified(post.orgId, post);
       return true;
     } catch (error) {
       console.warn('[spark-example] 应用消息发送失败（权限/限流降级）：', error);
@@ -205,9 +256,9 @@ export class WeiboService {
    * 本机尚未通知过的帖子逐条生成本机应用消息。
    *
    * 调用时机（视图层）：时间线加载完成后（loadTimeline / 手动同步后）。
-   * 去重靠 localStorage 台账（loadNotifiedPostIds），重复加载/重复同步
-   * 不会重复通知；发帖者本机的发帖即时通知（notifyNewPost）已先记账，
-   * 此处自然跳过，两条路径不打架。
+   * 去重靠 sdk.data 持久台账（loadNotifiedPostIds，localStorage 仅兜底），
+   * 重复加载/重复同步不会重复通知；发帖者本机的发帖即时通知（notifyNewPost）
+   * 已先记账，此处自然跳过，两条路径不打架。
    *
    * 限流配合：内核应用消息限流 10 条/60s（§20.5）。一次同步涌入大量
    * 新帖时逐条发送会触发限流——遇失败即中止本轮（已成功的不重发，
@@ -219,7 +270,7 @@ export class WeiboService {
     if (!this.sdk.messages || posts.length === 0) {
       return 0;
     }
-    const notified = loadNotifiedPostIds(orgId);
+    const notified = await this.loadNotifiedPostIds(orgId);
     let sent = 0;
     for (const post of posts) {
       if (notified.has(post.id)) {
