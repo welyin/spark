@@ -1,0 +1,34 @@
+{
+  "id": "spark-kanban",
+  "domain": "plugin:spark-kanban",
+  "name": "任务看板",
+  "version": "0.1.0",
+  "entryView": "default",
+  "description": "开发任务与缺陷的看板跟踪：可独立使用的轻量看板，亦可作为库被「项目」插件组合——卡片即事务子事务的视图与操作入口。",
+  "category": "foundation",
+  "icon": "assets/icon.svg",
+  "supportedSpaces": ["org", "personal"],
+  "views": [
+    { "id": "default", "type": "app", "title": "看板" },
+    { "id": "card-notify", "type": "message-card", "title": "看板动态卡片" }
+  ],
+  "requires": {
+    "platforms": ["desktop", "mobile"]
+  },
+  "permissions": [
+    "storage:read",
+    "storage:write",
+    "identity:sign",
+    "message:app",
+    "org:read",
+    "org:sync",
+    "affairs:read",
+    "affairs:write"
+  ],
+  "sdkVersion": "1",
+  "window": { "defaultWidth": 1080, "defaultHeight": 720 },
+  "package": {
+    "updateManifestUrl": "https://github.com/welyin/spark/releases/latest/download/spark-plugin-spark-kanban-manifest.json",
+    "packageName": "spark-plugin-spark-kanban-0.1.0.spkg"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "comment": "id 暂用插件短名；随分发模型迁移后改为规范化仓库地址（档一-5 已拍板转正 spark-kanban）。自举插件：任务看板（kanban.md v0.2）——看板配置 lww-record（列定义与列—状态映射，档三-21）+ 卡片操作流/绑定记录 append-only + 视图偏好 local（档三-22）；中间态权威源 = 子事务内签名状态操作（档三-1），终态取自内核决议（公示期内显示「待确认」）；状态操作权限 MVP = 写权集合成员（档三-19）；通知最少事件集（档三-12：仅被指派）。双产物：安装包 + 库包（lib.ts 纯逻辑/视图分离，随 A33 CLI 可被「项目」插件构建期组合）。",
+  "id": "spark-kanban",
+  "name": "任务看板",
+  "icon": "",
+  "summary": "开发任务与缺陷的看板跟踪：可独立使用的轻量看板，亦可作为库被「项目」插件组合——卡片即事务子事务的视图与操作入口。",
+  "category": "foundation",
+  "version": "0.1.0",
+  "release": {
+    "assetNaming": "spark-plugin-spark-kanban-<version>.spkg",
+    "updateManifestAsset": "spark-plugin-spark-kanban-manifest.json",
+    "signatureAsset": "spark-plugin-spark-kanban-manifest.sig"
+  },
+  "permissions": ["storage:read", "storage:write", "identity:sign", "message:app", "org:read", "org:sync", "affairs:read", "affairs:write"],
+  "mirrors": []
+}
