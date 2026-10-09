@@ -205,7 +205,8 @@ describe('spark-kanban service · 集合与看板配置', () => {
       boards: 'spark-project:boards',
       cardOps: 'spark-project:card-ops',
       bindings: 'spark-project:bindings',
-      viewPrefs: 'spark-project:view-prefs'
+      viewPrefs: 'spark-project:view-prefs',
+      notifyLedger: 'spark-project:notify-ledger'
     });
     const { sdk } = createMockSdk();
     const service = new KanbanService(sdk, 'spark-project');
@@ -439,6 +440,71 @@ describe('spark-kanban service · 指派通知（档三-12 最少事件集）', 
     const again = await service.notifyAssignedToMe('org-1', 'root-me', ops, board.name);
     expect(again).toBe(0);
     expect(assignMe.assigneeRootId).toBe('root-me');
+    // 台账持久面：懒声明 scope:'local' append-only 集合并按 {orgId}:{opId} 写入
+    const ledgerDecl = sdk.data.declareCollection.mock.calls.find((call: any[]) => call[0].name === KANBAN_COLLECTIONS.notifyLedger);
+    expect(ledgerDecl?.[0]).toMatchObject({ merge: 'append-only', scope: 'local' });
+    expect(sdk.data.save.mock.calls.some((call: any[]) => call[0] === KANBAN_COLLECTIONS.notifyLedger && String(call[1]).startsWith('org-1:'))).toBe(true);
+  });
+
+  it('dedups via persistent ledger across instances when localStorage is unavailable（A61：opaque origin 沙箱）', async () => {
+    // 模拟 opaque origin iframe：访问 localStorage 恒抛 SecurityError
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+    Object.defineProperty(globalThis, 'localStorage', {
+      get() {
+        throw new Error('SecurityError: opaque origin');
+      },
+      configurable: true
+    });
+    try {
+      const { sdk } = createMockSdk();
+      const board = mkBoard();
+      // 实例 A：建卡 + 指派 + 通知（台账写 sdk.data 持久面）
+      const serviceA = new KanbanService(sdk);
+      const create = await serviceA.createCard('org-1', 'root-1', board, { title: '修崩溃' }, 'admin');
+      await serviceA.assignCard('org-1', 'root-1', board.id, create.cardId, 'root-me', 'admin');
+      const ops = await serviceA.loadCardOps('org-1');
+      expect(await serviceA.notifyAssignedToMe('org-1', 'root-me', ops, board.name)).toBe(1);
+
+      // 实例 B（模拟插件重开：进程内兜底已清零）：持久台账去重，不重发
+      const serviceB = new KanbanService(sdk);
+      expect(await serviceB.notifyAssignedToMe('org-1', 'root-me', ops, board.name)).toBe(0);
+    } finally {
+      if (descriptor) {
+        Object.defineProperty(globalThis, 'localStorage', descriptor);
+      }
+    }
+  });
+
+  it('falls back to localStorage cache when the ledger plane fails (会话内去重降级)', async () => {
+    const { sdk } = createMockSdk();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    // 持久面故障：台账集合查询/写入恒失败
+    sdk.data.query.mockImplementation(async (name: string, opts?: { prefix?: string }) => {
+      if (name === KANBAN_COLLECTIONS.notifyLedger) {
+        throw new Error('数据面不可用（mock）');
+      }
+      return { items: [] };
+    });
+    sdk.data.save.mockImplementation(async (name: string) => {
+      if (name === KANBAN_COLLECTIONS.notifyLedger) {
+        throw new Error('数据面不可用（mock）');
+      }
+      return { success: true };
+    });
+    const service = new KanbanService(sdk);
+    const board = mkBoard();
+    const createOp: KanbanCardOp = {
+      id: 'op-create-1', orgId: 'org-1', boardId: board.id, cardId: 'card-1',
+      kind: 'create', title: '修崩溃', operatorRootId: 'root-1', createdAt: 1
+    };
+    const assignOp: KanbanCardOp = {
+      id: 'op-assign-1', orgId: 'org-1', boardId: board.id, cardId: 'card-1',
+      kind: 'assign', assigneeRootId: 'root-me', operatorRootId: 'root-1', createdAt: 2
+    };
+    expect(await service.notifyAssignedToMe('org-1', 'root-me', [createOp, assignOp], board.name)).toBe(1);
+    // 持久面写失败但缓存已记：同实例（进程内兜底）不重复通知
+    expect(await service.notifyAssignedToMe('org-1', 'root-me', [createOp, assignOp], board.name)).toBe(0);
+    warn.mockRestore();
   });
 
   it('degrades silently when messages module is absent', async () => {

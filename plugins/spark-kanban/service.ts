@@ -7,7 +7,9 @@
  *   boards（lww-record/sync，列定义与列—状态映射，档三-21）、
  *   card-ops（append-only/sync，原生卡片操作流）、
  *   bindings（append-only/sync，卡片 ↔ 子事务绑定/解绑，档三-20）、
- *   view-prefs（lww-record/local，列内手动排序，档三-22 不进同步流量）；
+ *   view-prefs（lww-record/local，列内手动排序，档三-22 不进同步流量）、
+ *   notify-ledger（append-only/local，懒声明：指派通知去重台账，A61——
+ *   opaque origin 沙箱 localStorage 恒不可用，台账以 sdk.data 持久面为准）；
  * - 权威层走 sdk.affairs：子事务聚合（listFollowed + readLog 创世 refs parent
  *   匹配 = 自动绑定主路径，反馈回流对看板零成本）、状态操作提交（submitOp，
  *   签名入事务日志，档三-1）、决议读取（readResolution，公示期诚实边界）；
@@ -16,7 +18,7 @@
  *   拒绝并如实说明（与 spark-git-repo 终态写权同约定；内核侧门槛算术把关，
  *   本层是客户端前置拦截，不替代内核判定）；
  * - 通知（档三-12 最少事件集）：只做「被指派」——assign 操作经同步到达本机后
- *   本地生成应用消息（服务号模型 §20.4.3），localStorage 台账去重；
+ *   本地生成应用消息（服务号模型 §20.4.3），持久台账去重、缓存兜底；
  * - 能力缺失一律降级不报错：无 sdk.affairs（独立使用/移动端只读形态）→
  *   绑定相关入口隐藏、看板降级为纯原生卡片模式（§4 降级纪律）。
  *
@@ -70,6 +72,8 @@ export type KanbanCollections = {
   cardOps: string;
   bindings: string;
   viewPrefs: string;
+  /** 指派通知去重台账（scope:'local' + append-only；懒声明，仅通知路径使用） */
+  notifyLedger: string;
 };
 
 export function kanbanCollections(namespace: string): KanbanCollections {
@@ -77,7 +81,8 @@ export function kanbanCollections(namespace: string): KanbanCollections {
     boards: `${namespace}:boards`,
     cardOps: `${namespace}:card-ops`,
     bindings: `${namespace}:bindings`,
-    viewPrefs: `${namespace}:view-prefs`
+    viewPrefs: `${namespace}:view-prefs`,
+    notifyLedger: `${namespace}:notify-ledger`
   };
 }
 
@@ -121,11 +126,22 @@ function newId(prefix: string): string {
 
 type KanbanRole = 'admin' | 'member' | null | undefined;
 
-/** 「已通知指派」去重台账（localStorage；通知本地生成本地消费，去重即本机状态） */
+/**
+ * 「已通知指派」去重台账（档三-12 通知本地生成、本地消费，去重即本机状态）。
+ *
+ * 持久面选型（A61 系统性问题修复，对齐 spark-announcement 既定范式）：插件
+ * 沙箱 iframe 是 opaque origin（壳层 sandbox="allow-scripts"），localStorage
+ * 恒抛 SecurityError，且 iframe 随标签切换销毁重建、进程内兜底一并清零——
+ * 只用 localStorage 会导致每次打开插件为全部历史指派重发卡片。故台账迁到
+ * sdk.data 持久面：`{namespace}:notify-ledger`（declareCollection scope:'local'
+ * + append-only，键 `{orgId}:{opId}`）；localStorage 仅作缓存/兜底（持久面
+ * 读写失败时降级为会话内去重），读侧以持久台账为准。
+ */
 const NOTIFIED_KEY_PREFIX = 'spark-kanban:notified-assign:';
 const memoryNotifiedFallback = new Map<string, Set<string>>();
 
-function loadNotifiedIds(orgId: string): Set<string> {
+/** localStorage 缓存读（含进程内兜底；仅作持久面不可用时的降级来源） */
+function loadNotifiedCache(orgId: string): Set<string> {
   const key = `${NOTIFIED_KEY_PREFIX}${orgId}`;
   try {
     const raw = globalThis.localStorage?.getItem(key);
@@ -133,18 +149,19 @@ function loadNotifiedIds(orgId: string): Set<string> {
       return new Set(JSON.parse(raw) as string[]);
     }
   } catch {
-    /* 存储不可用/数据损坏：进程内兜底 */
+    /* opaque origin 沙箱恒抛 SecurityError、隐私模式或数据损坏：走进程内兜底 */
   }
   return new Set(memoryNotifiedFallback.get(key) ?? []);
 }
 
-function saveNotifiedIds(orgId: string, ids: Set<string>): void {
+/** localStorage 缓存写（best-effort；进程内兜底先行，存储不可用不阻塞） */
+function saveNotifiedCache(orgId: string, ids: Set<string>): void {
   const key = `${NOTIFIED_KEY_PREFIX}${orgId}`;
   memoryNotifiedFallback.set(key, new Set(ids));
   try {
     globalThis.localStorage?.setItem(key, JSON.stringify([...ids]));
   } catch {
-    /* 进程内兜底已记录 */
+    /* 存储不可用时进程内兜底已记录，忽略 */
   }
 }
 
@@ -153,6 +170,7 @@ export class KanbanService {
   /** 集合名（按命名空间构造；被组合时 = 组合者插件 id，见 kanbanCollections） */
   private readonly collections: KanbanCollections;
   private collectionsReady: Promise<void> | null = null;
+  private notifyLedgerReady: Promise<void> | null = null;
   /** 本插件域身份 actor（首次写操作时经 identity.sign 取回公钥后缓存） */
   private actor: AffairActor | null = null;
 
@@ -725,13 +743,15 @@ export class KanbanService {
   /**
    * 成员侧「本地生成」指派通知（服务号模型 §20.4.3）：assign 操作经同步到达
    * 本机后，指派给当前身份的卡片在本机应用会话生成一条通知（含卡片视图）。
-   * localStorage 台账去重；权限被拒/内核限流即中止本轮，未记账的下次补齐。
+   * 幂等去重靠 sdk.data 持久台账（notify-ledger，scope:'local'，opaque origin
+   * 沙箱下 localStorage 恒不可用，A61）；权限被拒/内核限流即中止本轮，未记账
+   * 的下次补齐。
    */
   async notifyAssignedToMe(orgId: string, myRootId: string, ops: KanbanCardOp[], boardName: string): Promise<number> {
     if (!this.sdk.messages || !myRootId) {
       return 0;
     }
-    const notified = loadNotifiedIds(orgId);
+    const notified = await this.loadNotifiedIds(orgId);
     let sent = 0;
     const ordered = [...ops].sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1));
     for (const op of ordered) {
@@ -751,12 +771,52 @@ export class KanbanService {
         console.warn('[spark-kanban] 指派通知发送失败（权限/限流降级）：', error);
         break;
       }
+      // 逐条记账（持久面为准 + 缓存兜底）：发送成功即入账，避免本轮后段失败丢账
+      await this.markNotified(orgId, op.id, op.createdAt);
       notified.add(op.id);
       sent += 1;
     }
-    if (sent > 0) {
-      saveNotifiedIds(orgId, notified);
-    }
     return sent;
+  }
+
+  /** 声明指派通知台账集合（sdk.data scope:'local' + append-only，幂等，懒声明） */
+  private ensureNotifyLedger(): Promise<void> {
+    this.notifyLedgerReady ??= this.sdk.data
+      .declareCollection({ name: this.collections.notifyLedger, merge: 'append-only', scope: 'local' })
+      .then(() => undefined);
+    return this.notifyLedgerReady;
+  }
+
+  /**
+   * 读指派通知台账：以 sdk.data 持久面为准；持久面不可用（声明/查询失败）时
+   * 降级 localStorage 缓存 + 进程内兜底（会话内去重）。读成功后回写缓存。
+   */
+  private async loadNotifiedIds(orgId: string): Promise<Set<string>> {
+    try {
+      await this.ensureNotifyLedger();
+      const response = await this.sdk.data.query<unknown>(this.collections.notifyLedger, {
+        prefix: `${orgId}:`,
+        limit: 2000
+      });
+      const ids = new Set(response.items.map((item) => item.key.slice(orgId.length + 1)));
+      saveNotifiedCache(orgId, ids);
+      return ids;
+    } catch (error) {
+      console.warn('[spark-kanban] 指派台账持久面读取失败，降级缓存（本次会话内去重）：', error);
+      return loadNotifiedCache(orgId);
+    }
+  }
+
+  /** 记指派通知台账：持久面为主，缓存兜底同步刷新（持久面写失败不阻塞通知流程） */
+  private async markNotified(orgId: string, opId: string, opCreatedAt: number): Promise<void> {
+    const cached = loadNotifiedCache(orgId);
+    cached.add(opId);
+    saveNotifiedCache(orgId, cached);
+    try {
+      await this.ensureNotifyLedger();
+      await this.sdk.data.save(this.collections.notifyLedger, `${orgId}:${opId}`, { opCreatedAt });
+    } catch (error) {
+      console.warn('[spark-kanban] 指派台账持久面写入失败（缓存已记，降级为会话内去重）：', error);
+    }
   }
 }
