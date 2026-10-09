@@ -26,6 +26,7 @@
     "build:announcement": "node ../app/node_modules/vite/bin/vite.js build --config spark-announcement/vite.config.ts && node scripts/copy-plugin-dist.mjs --pluginId spark-announcement --views main,announce-card",
     "build:kanban": "node ../app/node_modules/vite/bin/vite.js build --config spark-kanban/vite.config.ts && node scripts/copy-plugin-dist.mjs --pluginId spark-kanban --views main,card-notify,lib",
     "build:release-manager": "node ../app/node_modules/vite/bin/vite.js build --config spark-release-manager/vite.config.ts && node scripts/copy-plugin-dist.mjs --pluginId spark-release-manager --views main,release-card,lib",
+    "build:project": "node ../app/node_modules/vite/bin/vite.js build --config spark-project/vite.config.ts && node scripts/copy-plugin-dist.mjs --pluginId spark-project --views main,affair-card,release-card",
     "build:market": "node ../app/node_modules/vite/bin/vite.js build --config spark-market/vite.config.ts && node scripts/copy-plugin-dist.mjs --pluginId spark-market --views main",
     "build:org-admin": "node ../app/node_modules/vite/bin/vite.js build --config spark-org-admin/vite.config.ts && node scripts/copy-plugin-dist.mjs --pluginId spark-org-admin --views main",
     "build:files": "node ../app/node_modules/vite/bin/vite.js build --config spark-files/vite.config.ts && node scripts/copy-plugin-dist.mjs --pluginId spark-files --views main"

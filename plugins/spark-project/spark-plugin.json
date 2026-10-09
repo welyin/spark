@@ -1,0 +1,16 @@
+{
+  "comment": "id 暂用插件短名；随分发模型迁移后改为规范化仓库地址（档一-5 已拍板转正 spark-project）。自举第一插件：项目（议题）——「项目」类型事务容器（sdk.affairs 承载），bug/建议/PR 走父子引用（rel=parent），以库依赖组合代码仓库/看板/发布管理三基础件成统一工作区。类型注册独占 project/bug/proposal/pr（X8）；公开发布走 sdk.affairs.create publish 位（档二-2，创建表单显式确认）；PR 治理 = 单维护者合并回执 + 禁非快进（档一-3）；maintainers 登记插件域身份 id（实施期补录）。库依赖按档二-3 锚定：vendor/ 锚定 welyin/spark 单调仓库对应子路径（commit 锁定 + spark-plugin-cli lock 哈希回填）；spark-git-repo 缺库包形态（无 lib.ts / 无 namespace 参数化），MVP 未组合，代码视图诚实降级「未启用」。background 视图线形未确认（档二-4），MVP 用「加载时补发 + 节流」降级，未声明 watcher。",
+  "id": "spark-project",
+  "name": "项目",
+  "icon": "",
+  "summary": "项目即议题：讨论、子事务（bug/建议/PR）、文档、成员与发布的统一工作区；议题驱动开发与公共议题平台参考实现。",
+  "category": "foundation",
+  "version": "0.1.0",
+  "release": {
+    "assetNaming": "spark-plugin-spark-project-<version>.spkg",
+    "updateManifestAsset": "spark-plugin-spark-project-manifest.json",
+    "signatureAsset": "spark-plugin-spark-project-manifest.sig"
+  },
+  "permissions": ["storage:read", "storage:write", "affairs:read", "affairs:write", "message:app", "identity:sign", "org:read", "contacts:read", "system:exec"],
+  "mirrors": []
+}

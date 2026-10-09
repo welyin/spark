@@ -1,0 +1,13 @@
+{
+  "name": "@spark/plugin-spark-project",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "项目（议题）插件（自举第一插件）：项目类型事务容器 + 子事务（bug/建议/PR）父子引用 + 库依赖组合看板/发布管理成统一工作区，可公开发布进公共目录。",
+  "comment": "构建顺序约定（R2）：库依赖/vendor 变更后先跑 spark-plugin-cli lock（回填 manifest libraries[].hash 并更新 spark-libraries.lock.json），再跑 build——dist 内嵌的 manifest.json 须含回填后的哈希，顺序反了 dist 会带空 hash。",
+  "scripts": {
+    "build": "node ../../app/node_modules/vite/bin/vite.js build --config vite.config.ts && node ../scripts/copy-plugin-dist.mjs --pluginId spark-project --views main,affair-card,release-card",
+    "typecheck": "node ../../app/node_modules/vue-tsc/bin/vue-tsc.js --noEmit -p tsconfig.json || node ../../app/node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
+    "test": "cd ../../app && node node_modules/vitest/vitest.mjs run spark-project"
+  }
+}

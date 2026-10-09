@@ -1,0 +1,27 @@
+{
+  "lockfileVersion": 1,
+  "generatedAt": "2026-10-09T15:31:08.118Z",
+  "libraries": [
+    {
+      "repo": "github.com/welyin/spark/plugins/spark-kanban",
+      "commit": "9e8c8767d4e0fdc2b08fa2f832c103bb60af11be",
+      "hash": "8518ca0a8282fd23d625260ecb08c56ed546886c2228f9ae217e8510eeaf56be",
+      "vendorPath": "vendor/github.com/welyin/spark/plugins/spark-kanban",
+      "files": 3
+    },
+    {
+      "repo": "github.com/welyin/spark/plugins/spark-release-manager",
+      "commit": "f2b3bedd71458b6f662e9f90243be47394fcf62f",
+      "hash": "26e87c6e6dbc486ee13f826c2e125b903204a949320b85636edf681bb5e3c031",
+      "vendorPath": "vendor/github.com/welyin/spark/plugins/spark-release-manager",
+      "files": 2
+    },
+    {
+      "repo": "github.com/welyin/spark/packages/plugin-sdk",
+      "commit": "b5cd1e9e1705195ceaca72e8d8054755c0f90afc",
+      "hash": "c3abb163eb55791e7ad147e1dd82ef35591e93fa7f46f01021971a65ecc2fcd8",
+      "vendorPath": "vendor/github.com/welyin/spark/packages/plugin-sdk",
+      "files": 2
+    }
+  ]
+}
