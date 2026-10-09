@@ -707,6 +707,40 @@ export function connectPluginBridge(options: ConnectPluginBridgeOptions): Promis
         publish: (orgId) =>
           call('policy', 'publish', [orgId]) as Promise<import('../index').PolicyPublishResult>
       },
+      // 市场模块（A34 sdk.market；权限由桥 dispatcher 强制 market:read/
+      // market:write）。checkUpdates/resolveRepo/installFromRepo/upgrade/
+      // importLocal/announcePublish 是网络下载或 PoW 计算等长时调用（最坏
+      // 数十秒），与 sys 长时外呼同口径放宽超时
+      market: {
+        list: () => call('market', 'list', []) as Promise<import('../index').PluginMarketItem[]>,
+        checkUpdates: (pluginId) =>
+          call('market', 'checkUpdates', pluginId === undefined ? [] : [pluginId], SYS_CALL_TIMEOUT_MS) as Promise<import('../index').PluginMarketUpdateProbe[]>,
+        upgrade: (pluginId) =>
+          call('market', 'upgrade', [pluginId], SYS_CALL_TIMEOUT_MS) as Promise<import('../index').PluginMarketInstalledState>,
+        setEnabled: (pluginId, enabled) =>
+          call('market', 'setEnabled', [pluginId, enabled]) as Promise<import('../index').PluginMarketInstalledState>,
+        uninstall: (pluginId) => call('market', 'uninstall', [pluginId]) as Promise<void>,
+        resolveRepo: (id) =>
+          call('market', 'resolveRepo', [id], SYS_CALL_TIMEOUT_MS) as Promise<import('../index').PluginMarketRepoDeclaration>,
+        installFromRepo: (id) =>
+          call('market', 'installFromRepo', [id], SYS_CALL_TIMEOUT_MS) as Promise<import('../index').PluginMarketInstalledState>,
+        inspectLocal: (path) =>
+          call('market', 'inspectLocal', [path]) as Promise<import('../index').PluginMarketSideloadPreview>,
+        importLocal: (path, expectedSha256, confirmOverwrite) =>
+          call('market', 'importLocal', confirmOverwrite === undefined ? [path, expectedSha256] : [path, expectedSha256, confirmOverwrite], SYS_CALL_TIMEOUT_MS) as Promise<import('../index').PluginMarketInstalledState>,
+        announcePublish: (input) =>
+          call('market', 'announcePublish', [input], SYS_CALL_TIMEOUT_MS) as Promise<import('../index').PluginMarketAnnounceEntry>,
+        announceList: () => call('market', 'announceList', []) as Promise<import('../index').PluginMarketAnnounceEntry[]>,
+        announceGet: (id) => call('market', 'announceGet', [id]) as Promise<import('../index').PluginMarketAnnounceEntry | null>,
+        pickSpkg: () => call('market', 'pickSpkg', []) as Promise<string | null>,
+        // 广播索引变更：经 events.subscribe 通道订阅壳层转发的
+        // MarketAnnounceReceived / MarketAnnounceVerified（market:read 门控在
+        // PluginIframeHost 转发处强制），与 data.onChange 同口径的轻量通知
+        onAnnounceChanged: async (handler) => {
+          await events.subscribe('MarketAnnounceReceived', handler as PluginEventHandler);
+          await events.subscribe('MarketAnnounceVerified', handler as PluginEventHandler);
+        }
+      },
       events,
       onHostCall: (event: string, handler: (payload: unknown) => unknown | Promise<unknown>) => {
         hostCallHandlers.set(event, handler);

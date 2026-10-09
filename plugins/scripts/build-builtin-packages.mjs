@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 
 /**
- * 默认内置插件打包（communication §4.2，A19）：把 spark-chat / spark-contacts
- * 的 dist 打成 .spkg 直出到 code/app/src-tauri/resources/builtin-plugins/——
+ * 默认内置插件打包（communication §4.2，A19/A34）：把 spark-chat / spark-contacts /
+ * spark-market 的 dist 打成 .spkg 直出到 code/app/src-tauri/resources/builtin-plugins/——
  * 生产构建经 tauri.conf bundle.resources 打入应用资源目录，首跑由
  * src-tauri market/builtin.rs 预装为市场记录（trust="builtin"）；
  * dev 链路同目录被启动对账直接读取（市场记录是桥授权的数据源）。
  *
- * 前置：先跑 npm run build:chat / build:contacts 生成各插件 dist。
+ * 前置：先跑 npm run build:chat / build:contacts / build:market 生成各插件 dist。
  * 产物为构建中间物（.gitignore），不签名——信任模型 trust="builtin"
  * （与应用同体分发，无需发布侧签名链）。
  */
@@ -22,7 +22,7 @@ const __dirname = path.dirname(__filename);
 const pluginsRoot = path.resolve(__dirname, '..');
 const outputDir = path.resolve(pluginsRoot, '../app/src-tauri/resources/builtin-plugins');
 
-const BUILTIN_PLUGIN_IDS = ['spark-chat', 'spark-contacts'];
+const BUILTIN_PLUGIN_IDS = ['spark-chat', 'spark-contacts', 'spark-market'];
 
 async function collectDistFiles(pluginId) {
   const distDir = path.join(pluginsRoot, pluginId, 'dist');

@@ -925,8 +925,8 @@ export type ElectronAPI = {
       pluginDomain?: string
     ) => Promise<{ items: Array<{ key: string; value: T }>; nextCursor?: string }>;
     dataDropVersion: (name: string, version: string, pluginDomain?: string) => Promise<{ success: boolean }>;
-    dataSaveBlob: (dataBase64: string) => Promise<{ hash: string; size: number }>;
-    dataReadBlob: (hash: string) => Promise<{ status: 'ready'; data: string } | { status: 'pending' }>;
+    dataSaveBlob: (dataBase64: string, pluginDomain?: string) => Promise<{ hash: string; size: number }>;
+    dataReadBlob: (hash: string, pluginDomain?: string) => Promise<{ status: 'ready'; data: string } | { status: 'pending' }>;
   };
   pluginMarket: {
     list: () => Promise<PluginMarketItemDto[]>;

@@ -7,7 +7,7 @@
 //! 集合运算保持 TS Set 的插入序语义（基础权限在前，高级权限按声明序追加）。
 
 /// 全部合法权限（TS `PLUGIN_PERMISSIONS`）。
-pub const PLUGIN_PERMISSIONS: [&str; 24] = [
+pub const PLUGIN_PERMISSIONS: [&str; 26] = [
     "storage:read",
     "storage:write",
     "org:read",
@@ -41,6 +41,10 @@ pub const PLUGIN_PERMISSIONS: [&str; 24] = [
     "contacts:write",
     "feed:read",
     "feed:write",
+    // A34 市场模块（sdk.market）：市场目录/索引只读与安装状态变更
+    // （与桥 dispatcher CALL_PERMISSIONS 逐字对齐）
+    "market:read",
+    "market:write",
 ];
 
 /// 基础权限：默认授予所有插件，无需声明（TS `BASIC_PERMISSIONS`）。
@@ -55,7 +59,7 @@ pub const BASIC_PERMISSIONS: [&str; 5] = [
 ];
 
 /// 高级权限：必须声明并经安装时授权（TS `ADVANCED_PERMISSIONS`）。
-pub const ADVANCED_PERMISSIONS: [&str; 19] = [
+pub const ADVANCED_PERMISSIONS: [&str; 21] = [
     "org:sync",
     "network:broadcast",
     "identity:sign",
@@ -79,6 +83,10 @@ pub const ADVANCED_PERMISSIONS: [&str; 19] = [
     "contacts:write",
     "feed:read",
     "feed:write",
+    // A34 市场模块（sdk.market）：读位列目录/索引查询，写位安装/更新/启停/
+    // 卸载/侧载导入/发布声明（均为高级权限，须 manifest 声明并经安装授权）
+    "market:read",
+    "market:write",
 ];
 
 pub fn is_plugin_permission(value: &str) -> bool {

@@ -1,23 +1,26 @@
 /**
- * 默认内置应用灰度（communication §4.2 / §五.3，A19）：聊天界面在「旧内置 UI」
- * 与「默认内置插件版」之间切换。并存一个版本，用户无感切换后旧 UI 在后续版本
- * 移除（移除动作不在本期）。
+ * 默认内置应用灰度（communication §4.2 / §五.3，A19/A34）：聊天与市场界面在
+ * 「旧内置 UI」与「默认内置插件版」之间切换。并存一个版本，用户无感切换后旧 UI
+ * 在后续版本移除（移除动作不在本期）。
  *
- * - 数据源同一套（消息在 sled，插件经 sdk.messages 访问），切换实现零迁移、
- *   数据原样在；
+ * - 数据源同一套（消息在 sled；市场安装状态在内核市场服务，插件经 sdk.market
+ *   访问），切换实现零迁移、数据原样在；
  * - 选择持久化在 localStorage（每 tab 独立键），默认 legacy（旧内置 UI）；
  * - 插件版经 PluginIframeHost 挂载（与插件 tab 同一沙箱链路）；加载失败
  *   「关闭」回退 legacy（App.vue onBuiltinPluginClose）。
  *
  * 注：通讯录已转为空间桌面插件窗口（docs/ui 阶段 3，经 openPluginTab 全屏
  * 打开 spark-contacts），不再是壳层主 tab，无灰度面，故不在注册表内。
+ * 市场（A34）：'apps' tab（应用管理）与桌面窗口 spark:market 共用同一注册项；
+ * 空间的应用市场（spark:space-market，per-space 启停依赖壳层 app-enablement
+ * 事实源）本期不迁移，恒 legacy（见任务报告遗留）。
  */
 import { ref } from 'vue';
 
 export type BuiltinImpl = 'legacy' | 'plugin';
 
 export interface BuiltinAppDef {
-  /** 壳层主 tab id（'messages'） */
+  /** 壳层主 tab id（'messages' / 'apps'） */
   tabId: string;
   /** 默认内置插件 id（壳层预装，市场安装状态由 src-tauri 首跑写入） */
   pluginId: string;
@@ -27,7 +30,8 @@ export interface BuiltinAppDef {
 
 /** 默认内置插件注册表（壳层侧唯一事实源；插件工程在 code/plugins/<id>） */
 export const BUILTIN_APPS: BuiltinAppDef[] = [
-  { tabId: 'messages', pluginId: 'spark-chat', viewId: 'default' }
+  { tabId: 'messages', pluginId: 'spark-chat', viewId: 'default' },
+  { tabId: 'apps', pluginId: 'spark-market', viewId: 'default' }
 ];
 
 const storageKey = (tabId: string): string => `spark:builtin-impl:${tabId}`;

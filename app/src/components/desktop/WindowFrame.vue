@@ -51,7 +51,13 @@
 
     <!-- 内容：内置壳层页面（spark:*）或插件 iframe（遮罩在非激活/交互中盖上，防吞事件） -->
     <div class="window-body">
-      <AppsPage v-if="inst.appId === 'spark:market'" initial-view="market" @open-plugin-tab="emit('open-app', $event)" @changed="refreshAppRegistry" />
+      <!-- 应用市场窗口（A34 灰度）：旧内置 UI ⇄ 默认内置插件版（spark-market，与 apps tab 同一注册项）；
+           initial-view="market" 直达市场页（与 legacy 同口径，插件版经 viewId 透传） -->
+      <BuiltinAppHost v-if="inst.appId === 'spark:market'" tab-id="apps" :space="space" initial-view="market" @fallback="onAppsFallback">
+        <template #legacy>
+          <AppsPage initial-view="market" @open-plugin-tab="emit('open-app', $event)" @changed="refreshAppRegistry" />
+        </template>
+      </BuiltinAppHost>
       <BuiltinAppHost v-else-if="inst.appId === 'spark:messages'" tab-id="messages" :space="space" @fallback="onMessagesFallback">
         <template #legacy><MessagesPage /></template>
       </BuiltinAppHost>
@@ -380,12 +386,15 @@ export default defineComponent({
       openWindow(`spark:${tab}`);
     };
     const onMessagesFallback = () => setBuiltinImpl('messages', 'legacy');
+    // 市场插件版加载失败/被关闭：回退该 tab 的旧内置 UI（与 messages 同口径灰度兜底）
+    const onAppsFallback = () => setBuiltinImpl('apps', 'legacy');
 
     return {
       refreshAppRegistry,
       refreshCurrentUser,
       openShellWindow,
       onMessagesFallback,
+      onAppsFallback,
       emit,
       def,
       pluginId,

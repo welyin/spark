@@ -22,7 +22,29 @@
 
     <el-dialog v-model="appsVisible" title="应用管理" width="min(1000px, 92vw)" class="shell-modal">
       <div class="shell-modal-body">
+        <!-- 应用管理（A34 灰度，与消息同口径）：旧内置 UI ⇄ 默认内置插件版
+             （spark-market；appsView==='market' 经 initial-view 透传直达市场页）。
+             例外：'enable'（为本空间启用）是空间层视图，
+             per-space 启停事实源在壳层 app-enablement（桥面无此数据面），
+             插件版不承载，恒 legacy -->
+        <BuiltinAppHost
+          v-if="appsView !== 'enable'"
+          tab-id="apps"
+          :space="pluginSpace"
+          :initial-view="appsView === 'market' ? 'market' : ''"
+          @fallback="onAppsFallback"
+        >
+          <template #legacy>
+            <AppsPage
+              :key="appsView"
+              :initial-view="appsView"
+              @open-plugin-tab="onOpenPluginTab"
+              @changed="refreshAppRegistry"
+            />
+          </template>
+        </BuiltinAppHost>
         <AppsPage
+          v-else
           :key="appsView"
           :initial-view="appsView"
           @open-plugin-tab="onOpenPluginTab"
@@ -114,6 +136,8 @@ export default defineComponent({
     }));
 
     const onMessagesFallback = () => setBuiltinImpl('messages', 'legacy');
+    // 市场插件版加载失败/被关闭：回退该 tab 的旧内置 UI（与 messages 同口径灰度兜底）
+    const onAppsFallback = () => setBuiltinImpl('apps', 'legacy');
     const onProfileUpdated = () => refreshCurrentUser();
     const onOpenPluginTab = (payload: OpenPluginTabPayload) => {
       // 应用管理里打开插件＝桌面窗口（桌面多窗口例外，不套模态）；先关掉模态让桌面露出
@@ -138,6 +162,7 @@ export default defineComponent({
       refreshAppRegistry,
       closeShellModal,
       onMessagesFallback,
+      onAppsFallback,
       onProfileUpdated,
       onOpenPluginTab
     };

@@ -266,10 +266,12 @@ export function createTauriApi(): ElectronAPI {
         }),
       dataDropVersion: (name, version, pluginDomain) =>
         invoke('data_drop_version', { domain: requireDomain(pluginDomain), name, version: String(version) }),
-      dataSaveBlob: (dataBase64) =>
-        invoke('data_save_blob', { dataBase64 }),
-      dataReadBlob: (hash) =>
-        invoke('data_read_blob', { hash })
+      // blob 命名空间隔离（A34）：域由桥绑定身份注入（sdk-browser 透传），
+      // 命令侧按域登记归属并门禁读取
+      dataSaveBlob: (dataBase64, pluginDomain) =>
+        invoke('data_save_blob', { domain: requireDomain(pluginDomain), dataBase64 }),
+      dataReadBlob: (hash, pluginDomain) =>
+        invoke('data_read_blob', { domain: requireDomain(pluginDomain), hash })
     },
     pluginMarket: {
       // 市场服务在 src-tauri market 模块（验签/下载/落状态/对账）；

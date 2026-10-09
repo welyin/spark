@@ -1,0 +1,31 @@
+{
+  "id": "spark-market",
+  "domain": "plugin:spark-market",
+  "name": "应用市场",
+  "version": "0.1.0",
+  "entryView": "default",
+  "description": "Spark 默认内置应用市场（A34）：已装应用管理 / 收录目录 / 全网广播探索 / 开发者发布，市场操作经 sdk.market 访问（等语义移植 plugin-market-* 命令；换插件数据原样还在——安装状态在内核市场服务）。",
+  "category": "foundation",
+  "icon": "assets/icon.svg",
+  "supportedSpaces": ["personal", "org"],
+  "views": [
+    { "id": "default", "type": "app", "title": "应用市场" },
+    { "id": "market", "type": "app", "title": "应用市场" }
+  ],
+  "chrome": {
+    "hostTitleBar": false
+  },
+  "window": {
+    "defaultWidth": 960,
+    "defaultHeight": 640
+  },
+  "permissions": [
+    "market:read",
+    "market:write"
+  ],
+  "sdkVersion": "1",
+  "package": {
+    "updateManifestUrl": "",
+    "packageName": "spark-plugin-spark-market-0.1.0.spkg"
+  }
+}

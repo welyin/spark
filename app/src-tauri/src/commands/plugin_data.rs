@@ -150,17 +150,122 @@ pub(crate) fn data_drop_version_inner(
 
 pub(crate) fn data_save_blob_inner(
     kernel: &mut Kernel,
+    domain: &str,
     data_base64: &str,
 ) -> Result<Value, String> {
     let info = kernel.data_save_blob(data_base64).map_err(err)?;
+    // 命名空间隔离（A34）：保存即登记调用域为归属者（幂等）
+    blob_ns_add_owner(kernel, &info.hash, domain)?;
     serde_json::to_value(&info).map_err(|e| e.to_string())
 }
 
-pub(crate) fn data_read_blob_inner(kernel: &mut Kernel, hash: &str) -> Result<Value, String> {
+pub(crate) fn data_read_blob_inner(
+    kernel: &mut Kernel,
+    domain: &str,
+    hash: &str,
+) -> Result<Value, String> {
+    // 命名空间隔离（A34）：登记在册的 blob 仅归属域可读；无登记记录的历史
+    // blob（迁移前保存）放行（存量「哈希即能力」语义不变，向后兼容）
+    if let Some(owners) = blob_ns_owners(kernel, hash)? {
+        if !owners.iter().any(|owner| owner == domain) {
+            return Err(format!(
+                "Access denied: blob {hash} is not owned by domain {domain}"
+            ));
+        }
+    }
     match kernel.data_read_blob(hash).map_err(err)? {
         Some(data) => Ok(serde_json::json!({ "status": "ready", "data": data })),
         None => Ok(serde_json::json!({ "status": "pending" })),
     }
+}
+
+// ------------------------------------------------------------------
+// blob 插件命名空间隔离（A34）
+//
+// blob 本体仍按内容哈希存全局池（跨插件去重语义保留），但归属按调用方
+// 域登记：data_save_blob 把调用域追加进归属簿记；data_read_blob 仅对
+// 在册域放行。簿记存 plugindata 本地 scope 集合（ldoc: 键域，不进任何
+// 同步流量），归属域为保留域 `spark:blob-registry`，key = blob 哈希。
+// （集合名 `spark:blob-registry:owners` 的前缀形态是内核校验要求：
+// plugindata 强制集合前缀 == 域去 plugin: 前缀后的 plugin_id。）
+//
+// 簿记域刻意取**非 `plugin:` 可推导形态**（A34 评审问题 1）：桥绑定域恒
+// 为 `plugin:{pluginId}`（PluginIframeHost 按插件 id 推导，插件不可自报），
+// 若簿记域也是该形态，名为 blob-registry 的插件（域 plugin:blob-registry）
+// 即可经普通 data_save 在自域冒写归属簿记（追加自己为归属域突破越域门禁，
+// 或清空他人归属 DoS）；`spark:` 前缀与一切插件绑定域结构性错开，封死此面。
+//
+// 边界如实说明：本隔离覆盖 iframe 桥面（桥按绑定身份注入域，插件不可
+// 自报）；内核 QuickJS 后台运行时的 host_env blob 面在 core/ 内，本期
+// 不改 core/，该面仍为全局池（见任务报告遗留）。
+// ------------------------------------------------------------------
+
+const BLOB_NS_DOMAIN: &str = "spark:blob-registry";
+const BLOB_NS_COLLECTION: &str = "spark:blob-registry:owners";
+
+/// 归属集合声明（幂等；本地 scope，不随 pdsync 扩散）
+fn blob_ns_ensure_declared(kernel: &mut Kernel) -> Result<(), String> {
+    kernel
+        .data_declare_collection(
+            BLOB_NS_DOMAIN,
+            spark_core::plugindata::DeclareInput {
+                name: BLOB_NS_COLLECTION.to_string(),
+                version: None,
+                scope: Some(spark_core::plugindata::Scope::Local),
+                space: None,
+                accounts: None,
+                devices: None,
+                confidentiality: None,
+                sensitivity: None,
+                merge: None,
+                declared_by: None,
+                read_policy: None,
+            },
+            None,
+        )
+        .map_err(err)?;
+    Ok(())
+}
+
+/// 读某 blob 的归属域清单（无登记记录 → None）
+fn blob_ns_owners(kernel: &Kernel, hash: &str) -> Result<Option<Vec<String>>, String> {
+    let record = kernel
+        .data_get(BLOB_NS_DOMAIN, BLOB_NS_COLLECTION, hash, None, None)
+        .map_err(err)?;
+    let Some(record) = record else {
+        return Ok(None);
+    };
+    let owners = record
+        .get("owners")
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    Ok(Some(owners))
+}
+
+/// 追加归属域（已登记则幂等跳过）
+fn blob_ns_add_owner(kernel: &mut Kernel, hash: &str, domain: &str) -> Result<(), String> {
+    blob_ns_ensure_declared(kernel)?;
+    let mut owners = blob_ns_owners(kernel, hash)?.unwrap_or_default();
+    if owners.iter().any(|owner| owner == domain) {
+        return Ok(());
+    }
+    owners.push(domain.to_string());
+    kernel
+        .data_save(
+            BLOB_NS_DOMAIN,
+            BLOB_NS_COLLECTION,
+            hash,
+            serde_json::json!({ "owners": owners }),
+            None,
+            None,
+        )
+        .map_err(err)
 }
 
 // ------------------------------------------------------------------
@@ -271,17 +376,19 @@ pub fn data_drop_version(
 #[tauri::command]
 pub fn data_save_blob(
     state: tauri::State<'_, KernelState>,
+    domain: String,
     data_base64: String,
 ) -> Result<Value, String> {
-    data_save_blob_inner(&mut *lock_kernel(&state)?, &data_base64)
+    data_save_blob_inner(&mut *lock_kernel(&state)?, &domain, &data_base64)
 }
 
 #[tauri::command]
 pub fn data_read_blob(
     state: tauri::State<'_, KernelState>,
+    domain: String,
     hash: String,
 ) -> Result<Value, String> {
-    data_read_blob_inner(&mut *lock_kernel(&state)?, &hash)
+    data_read_blob_inner(&mut *lock_kernel(&state)?, &domain, &hash)
 }
 
 // ------------------------------------------------------------------
@@ -520,13 +627,107 @@ mod tests {
         let (_dir, mut kernel) = unlocked_kernel();
         use base64::Engine as _;
         let b64 = base64::engine::general_purpose::STANDARD.encode(b"blob-bytes");
-        let info = data_save_blob_inner(&mut kernel, &b64).unwrap();
+        let info = data_save_blob_inner(&mut kernel, "plugin:spark-chat", &b64).unwrap();
         let hash = info["hash"].as_str().unwrap().to_string();
-        let read = data_read_blob_inner(&mut kernel, &hash).unwrap();
+        let read = data_read_blob_inner(&mut kernel, "plugin:spark-chat", &hash).unwrap();
         assert_eq!(read["status"], json!("ready"));
         assert_eq!(read["data"], json!(b64));
-        // 未命中 → pending（want 标记已置）
-        let missing = data_read_blob_inner(&mut kernel, &"0".repeat(64)).unwrap();
+        // 未命中 → pending（want 标记已置；未登记归属的哈希不设门禁）
+        let missing = data_read_blob_inner(&mut kernel, "plugin:spark-chat", &"0".repeat(64)).unwrap();
         assert_eq!(missing["status"], json!("pending"));
+    }
+
+    /// 命名空间隔离（A34）：登记在册的 blob 仅归属域可读；越域读取拒绝；
+    /// 归属幂等（同域重复保存不重复登记）；第二持有方保存后获得读取权。
+    #[test]
+    fn blob_namespace_isolation() {
+        let (_dir, mut kernel) = unlocked_kernel();
+        use base64::Engine as _;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(b"chat-image");
+        let info = data_save_blob_inner(&mut kernel, "plugin:spark-chat", &b64).unwrap();
+        let hash = info["hash"].as_str().unwrap().to_string();
+
+        // 归属域可读
+        let read = data_read_blob_inner(&mut kernel, "plugin:spark-chat", &hash).unwrap();
+        assert_eq!(read["status"], json!("ready"));
+        // 越域读取拒绝（ Access denied 文案与桥权限中间件同前缀）
+        let denied = data_read_blob_inner(&mut kernel, "plugin:spark-moments", &hash).unwrap_err();
+        assert!(
+            denied.starts_with("Access denied:"),
+            "越域读取须拒绝，实际：{denied}"
+        );
+        // 同域重复保存幂等（归属清单不膨胀）
+        data_save_blob_inner(&mut kernel, "plugin:spark-chat", &b64).unwrap();
+        assert_eq!(
+            blob_ns_owners(&kernel, &hash).unwrap(),
+            Some(vec!["plugin:spark-chat".to_string()])
+        );
+        // 第二插件持有同内容并保存 → 追加为归属域后可读（内容即持有证明）
+        data_save_blob_inner(&mut kernel, "plugin:spark-moments", &b64).unwrap();
+        let read2 = data_read_blob_inner(&mut kernel, "plugin:spark-moments", &hash).unwrap();
+        assert_eq!(read2["status"], json!("ready"));
+        // 无关第三方仍被拒
+        assert!(data_read_blob_inner(&mut kernel, "plugin:evil", &hash).is_err());
+    }
+
+    /// 冒名面负例（A34 评审问题 1）：簿记域是非 `plugin:` 可推导形态
+    /// （spark:blob-registry），与桥绑定域（恒 plugin:{id}）结构性错开——
+    /// 名为 blob-registry 的插件在自域写同名集合不污染簿记、不获得读取权。
+    #[test]
+    fn blob_namespace_registry_not_spoofable() {
+        let (_dir, mut kernel) = unlocked_kernel();
+        use base64::Engine as _;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(b"chat-image");
+        let info = data_save_blob_inner(&mut kernel, "plugin:spark-chat", &b64).unwrap();
+        let hash = info["hash"].as_str().unwrap().to_string();
+
+        // 前提断言：簿记域不可由任何插件 id 推导（桥绑定域恒为 plugin:{id}）
+        assert!(!BLOB_NS_DOMAIN.starts_with("plugin:"));
+
+        // 攻击重放（旧方案形态）：恶意 .spkg 以 pluginId "blob-registry" 侧载，
+        // 其绑定域 plugin:blob-registry 即旧簿记域——在自域声明旧簿记集合名
+        // （"blob-registry:owners" 前缀校验在自域通过）并伪造自己为归属域；
+        // 新簿记域 spark:blob-registry 与该域结构性错开，写入落在无关记录上
+        kernel
+            .data_declare_collection(
+                "plugin:blob-registry",
+                spark_core::plugindata::DeclareInput {
+                    name: "blob-registry:owners".to_string(),
+                    version: None,
+                    scope: Some(spark_core::plugindata::Scope::Local),
+                    space: None,
+                    accounts: None,
+                    devices: None,
+                    confidentiality: None,
+                    sensitivity: None,
+                    merge: None,
+                    declared_by: None,
+                    read_policy: None,
+                },
+                None,
+            )
+            .unwrap();
+        kernel
+            .data_save(
+                "plugin:blob-registry",
+                "blob-registry:owners",
+                &hash,
+                serde_json::json!({ "owners": ["plugin:blob-registry"] }),
+                None,
+                None,
+            )
+            .unwrap();
+
+        // 簿记不受自域写入污染：真实归属仍只有保存域
+        assert_eq!(
+            blob_ns_owners(&kernel, &hash).unwrap(),
+            Some(vec!["plugin:spark-chat".to_string()])
+        );
+        // 冒名者读取仍被拒
+        let denied = data_read_blob_inner(&mut kernel, "plugin:blob-registry", &hash).unwrap_err();
+        assert!(
+            denied.starts_with("Access denied:"),
+            "冒名插件读他人 blob 须拒绝，实际：{denied}"
+        );
     }
 }

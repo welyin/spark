@@ -1,4 +1,5 @@
-// App.vue 默认内置应用灰度切换 e2e（communication §五.3，A19 验收：灰度切换 e2e）。
+// App.vue 默认内置应用灰度切换 e2e（communication §五.3，A19 验收：灰度切换 e2e；
+// A34 扩展：apps tab 应用市场/应用管理 ⇄ spark-market 插件版，含「为本空间启用」恒 legacy 例外）。
 //
 // 覆盖：
 // - 默认（无持久化选择）渲染旧内置 UI（MessagesPage/ContactsPage）；
@@ -35,7 +36,9 @@ vi.mock('../../pages/MessagesPage.vue', () => ({
 vi.mock('../../pages/ContactsPage.vue', () => ({
   default: { name: 'ContactsPageStub', template: '<div class="stub-contacts-page" />' }
 }));
-vi.mock('../../pages/AppsPage.vue', () => ({ default: { name: 'AppsPageStub', template: '<div />' } }));
+vi.mock('../../pages/AppsPage.vue', () => ({
+  default: { name: 'AppsPageStub', template: '<div class="stub-apps-page" />' }
+}));
 vi.mock('../../pages/TestPage.vue', () => ({ default: { name: 'TestPageStub', template: '<div />' } }));
 vi.mock('../../pages/SettingsPage.vue', () => ({ default: { name: 'SettingsPageStub', template: '<div />' } }));
 vi.mock('../../pages/MinePage.vue', () => ({ default: { name: 'MinePageStub', template: '<div />' } }));
@@ -43,13 +46,13 @@ vi.mock('../../components/TopNavbar.vue', () => ({ default: { name: 'TopNavbarSt
 vi.mock('../../components/UserAvatarMenu.vue', () => ({ default: { name: 'UserAvatarMenuStub', template: '<div />' } }));
 vi.mock('../../components/MobileTabBar.vue', () => ({ default: { name: 'MobileTabBarStub', template: '<div />' } }));
 vi.mock('../../components/MobileTopBar.vue', () => ({ default: { name: 'MobileTopBarStub', template: '<div />' } }));
-// 插件宿主打占位：记录 props 与暴露 close 触发（模板标记 pluginId 便于断言）
+// 插件宿主打占位：记录 props 与暴露 close 触发（模板标记 pluginId/viewId 便于断言）
 vi.mock('../../components/plugin/PluginIframeHost.vue', () => ({
   default: {
     name: 'PluginIframeHostStub',
     props: ['pluginId', 'viewId', 'space'],
     emits: ['close', 'manifest'],
-    template: '<div class="stub-plugin-host" :data-plugin-id="pluginId" />'
+    template: '<div class="stub-plugin-host" :data-plugin-id="pluginId" :data-view-id="viewId" />'
   }
 }));
 vi.mock('../../plugin/source', () => ({ fetchPluginManifest: vi.fn(async () => null) }));
@@ -62,11 +65,13 @@ import ElementPlus from 'element-plus';
 import App from '../../App.vue';
 import { currentUser } from '../../stores/current-user';
 import { builtinImpl, setBuiltinImpl } from '../../stores/builtin-apps';
+import { closeShellModal, openShellModal } from '../../stores/shell-modal';
 
 beforeEach(() => {
   localStorage.clear();
   setBuiltinImpl('messages', 'legacy');
   setBuiltinImpl('contacts', 'legacy');
+  setBuiltinImpl('apps', 'legacy');
   currentUser.rootId = 'root-gray';
   vi.clearAllMocks();
   (window as any).electronAPI = {
@@ -88,6 +93,7 @@ beforeEach(() => {
 let mountedApp: ReturnType<typeof createApp> | null = null;
 
 afterEach(() => {
+  closeShellModal();
   mountedApp?.unmount();
   mountedApp = null;
   currentUser.rootId = null;
@@ -113,6 +119,14 @@ async function flush(): Promise<void> {
 /** PC 左栏入口统一顶级对话框＋遮罩（problem L12）：点 rail「全部消息」开消息模态对话框 */
 async function openMessagesWindow(host: HTMLElement): Promise<void> {
   const btn = host.querySelector<HTMLElement>('.rail-main .rail-item[title="全部消息"]');
+  expect(btn).not.toBeNull();
+  btn!.click();
+  await flush();
+}
+
+/** PC 左栏「应用管理」（L12）：点 rail 开应用管理模态对话框 */
+async function openAppsWindow(host: HTMLElement): Promise<void> {
+  const btn = host.querySelector<HTMLElement>('.rail-main .rail-item[title="应用管理"]');
   expect(btn).not.toBeNull();
   btn!.click();
   await flush();
@@ -183,5 +197,84 @@ describe('App.vue 默认内置应用灰度切换（A19）', () => {
     expect(host.querySelector('.stub-messages-page')).not.toBeNull();
     expect(builtinImpl('messages')).toBe('legacy');
     expect(localStorage.getItem('spark:builtin-impl:messages')).toBe('legacy');
+  });
+});
+
+describe('App.vue 应用市场灰度切换（A34：apps tab 与 spark:market 窗口共用注册项）', () => {
+  it('默认渲染旧内置应用管理 UI（apps 模态 = AppsPage）', async () => {
+    const host = mountApp();
+    await flush();
+    await openAppsWindow(host);
+    expect(host.querySelector('.shell-modal .stub-apps-page')).not.toBeNull();
+    expect(host.querySelector('.stub-plugin-host')).toBeNull();
+  });
+
+  it('切到插件版：应用管理模态改挂 spark-market 插件宿主，切回 legacy 恢复旧 UI', async () => {
+    const host = mountApp();
+    await flush();
+    await openAppsWindow(host);
+    setBuiltinImpl('apps', 'plugin');
+    await flush();
+    const pluginHost = host.querySelector('.stub-plugin-host');
+    expect(pluginHost?.getAttribute('data-plugin-id')).toBe('spark-market');
+    expect(host.querySelector('.stub-apps-page')).toBeNull();
+    // 切回旧 UI
+    setBuiltinImpl('apps', 'legacy');
+    await flush();
+    expect(host.querySelector('.shell-modal .stub-apps-page')).not.toBeNull();
+    expect(host.querySelector('.stub-plugin-host')).toBeNull();
+  });
+
+  it('市场插件版加载失败「关闭」：回退旧 UI 且持久化回 legacy（apps）', async () => {
+    const host = mountApp();
+    await flush();
+    await openAppsWindow(host);
+    setBuiltinImpl('apps', 'plugin');
+    await flush();
+    const stub = host.querySelector('.stub-plugin-host');
+    expect(stub?.getAttribute('data-plugin-id')).toBe('spark-market');
+    // 模拟 PluginIframeHost 发 close（加载失败「关闭」按钮）→ ShellModals onAppsFallback
+    const vueInstance = (stub as any).__vueParentComponent;
+    vueInstance.emit('close');
+    await flush();
+    expect(host.querySelector('.shell-modal .stub-apps-page')).not.toBeNull();
+    expect(builtinImpl('apps')).toBe('legacy');
+    expect(localStorage.getItem('spark:builtin-impl:apps')).toBe('legacy');
+  });
+
+  it('「为本空间启用」直达视图恒 legacy（空间层启停未迁移，插件版不承载）', async () => {
+    const host = mountApp();
+    await flush();
+    setBuiltinImpl('apps', 'plugin');
+    // Dock/桌面引导卡的 appsView:'enable' 入口（openShellModal 选项）
+    openShellModal('apps', { appsView: 'enable' });
+    await flush();
+    expect(host.querySelector('.shell-modal .stub-apps-page')).not.toBeNull();
+    expect(host.querySelector('.stub-plugin-host')).toBeNull();
+    // 灰度开关本身不被该入口改动
+    expect(builtinImpl('apps')).toBe('plugin');
+  });
+
+  it('initial-view 透传（A34 评审问题 2）：Dock「应用市场」入口插件版直达 market 视图', async () => {
+    const host = mountApp();
+    await flush();
+    setBuiltinImpl('apps', 'plugin');
+    // Dock「应用市场」入口（openShellModal('apps', { appsView: 'market' })）
+    openShellModal('apps', { appsView: 'market' });
+    await flush();
+    const stub = host.querySelector('.stub-plugin-host');
+    expect(stub?.getAttribute('data-plugin-id')).toBe('spark-market');
+    expect(stub?.getAttribute('data-view-id')).toBe('market');
+    expect(host.querySelector('.stub-apps-page')).toBeNull();
+  });
+
+  it('无直达意图时插件版按注册表入口视图（default）起步', async () => {
+    const host = mountApp();
+    await flush();
+    await openAppsWindow(host);
+    setBuiltinImpl('apps', 'plugin');
+    await flush();
+    const stub = host.querySelector('.stub-plugin-host');
+    expect(stub?.getAttribute('data-view-id')).toBe('default');
   });
 });

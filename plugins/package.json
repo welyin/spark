@@ -11,7 +11,7 @@
     "build:chat": "node ../app/node_modules/vite/bin/vite.js build --config spark-chat/vite.config.ts && node scripts/copy-plugin-dist.mjs --pluginId spark-chat --views main",
     "build:contacts": "node ../app/node_modules/vite/bin/vite.js build --config spark-contacts/vite.config.ts && node scripts/copy-plugin-dist.mjs --pluginId spark-contacts --views main",
     "build:minichat": "node ../app/node_modules/vite/bin/vite.js build --config spark-minichat/vite.config.ts && node scripts/copy-plugin-dist.mjs --pluginId spark-minichat --views main",
-    "package:builtin": "npm run build:chat && npm run build:contacts && node scripts/build-builtin-packages.mjs",
+    "package:builtin": "npm run build:chat && npm run build:contacts && npm run build:market && node scripts/build-builtin-packages.mjs",
     "build:affairs": "node ../app/node_modules/vite/bin/vite.js build --config spark-affairs/vite.config.ts && node scripts/copy-plugin-dist.mjs --pluginId spark-affairs --views main,affair-card",
     "build:verify-hoa": "node ../app/node_modules/vite/bin/vite.js build --config spark-verify-hoa/vite.config.ts && node scripts/copy-plugin-dist.mjs --pluginId spark-verify-hoa --views main",
     "build:threshold-vouch": "node ../app/node_modules/vite/bin/vite.js build --config spark-threshold-vouch/vite.config.ts && node scripts/copy-plugin-dist.mjs --pluginId spark-threshold-vouch --views main",
@@ -20,6 +20,7 @@
     "package:ai-chat": "node scripts/build-plugin-package.mjs --pluginId ai-chat",
     "package:moments": "node scripts/build-plugin-package.mjs --pluginId spark-moments",
     "package:plugin": "node scripts/build-plugin-package.mjs",
-    "plugin:cli": "node ../packages/spark-plugin-cli/bin/spark-plugin-cli.mjs"
+    "plugin:cli": "node ../packages/spark-plugin-cli/bin/spark-plugin-cli.mjs",
+    "build:market": "node ../app/node_modules/vite/bin/vite.js build --config spark-market/vite.config.ts && node scripts/copy-plugin-dist.mjs --pluginId spark-market --views main"
   }
 }

@@ -725,6 +725,89 @@ describe('community-affairs §7.2 新模块（affairs / credentials / policy）'
   });
 });
 
+describe('bridge market 域（A34 sdk.market：plugin-market-* 命令等语义移植）', () => {
+  it('sdk.market 各方法序列化为 call（module=market，参数透传）', async () => {
+    const harness = createHarness();
+    const { sdk } = await connect(harness);
+
+    await sdk.market!.list();
+    expect(harness.handler).toHaveBeenCalledWith('market', 'list', []);
+
+    // checkUpdates：pluginId 缺省不占用参数位，携带时按位置透传
+    await sdk.market!.checkUpdates();
+    expect(harness.handler).toHaveBeenCalledWith('market', 'checkUpdates', []);
+    await sdk.market!.checkUpdates('spark-chat');
+    expect(harness.handler).toHaveBeenCalledWith('market', 'checkUpdates', ['spark-chat']);
+
+    await sdk.market!.upgrade('spark-chat');
+    expect(harness.handler).toHaveBeenCalledWith('market', 'upgrade', ['spark-chat']);
+
+    await sdk.market!.setEnabled('spark-chat', false);
+    expect(harness.handler).toHaveBeenCalledWith('market', 'setEnabled', ['spark-chat', false]);
+
+    await sdk.market!.uninstall('spark-chat');
+    expect(harness.handler).toHaveBeenCalledWith('market', 'uninstall', ['spark-chat']);
+
+    await sdk.market!.resolveRepo('github.com/acme/todo');
+    expect(harness.handler).toHaveBeenCalledWith('market', 'resolveRepo', ['github.com/acme/todo']);
+
+    await sdk.market!.installFromRepo('github.com/acme/todo');
+    expect(harness.handler).toHaveBeenCalledWith('market', 'installFromRepo', ['github.com/acme/todo']);
+
+    await sdk.market!.inspectLocal('/tmp/todo.spkg');
+    expect(harness.handler).toHaveBeenCalledWith('market', 'inspectLocal', ['/tmp/todo.spkg']);
+
+    // importLocal：confirmOverwrite 缺省不占用参数位
+    await sdk.market!.importLocal('/tmp/todo.spkg', 'ab12');
+    expect(harness.handler).toHaveBeenCalledWith('market', 'importLocal', ['/tmp/todo.spkg', 'ab12']);
+    await sdk.market!.importLocal('/tmp/todo.spkg', 'ab12', true);
+    expect(harness.handler).toHaveBeenCalledWith('market', 'importLocal', ['/tmp/todo.spkg', 'ab12', true]);
+
+    const announce = { id: 'github.com/acme/todo', name: '待办', icon: '', summary: 's', category: 'tool', version: '0.1.0', releaseUrl: '' };
+    await sdk.market!.announcePublish(announce);
+    expect(harness.handler).toHaveBeenCalledWith('market', 'announcePublish', [announce]);
+
+    await sdk.market!.announceList();
+    expect(harness.handler).toHaveBeenCalledWith('market', 'announceList', []);
+
+    await sdk.market!.announceGet('github.com/acme/todo');
+    expect(harness.handler).toHaveBeenCalledWith('market', 'announceGet', ['github.com/acme/todo']);
+
+    await sdk.market!.pickSpkg();
+    expect(harness.handler).toHaveBeenCalledWith('market', 'pickSpkg', []);
+    harness.bridge.destroy();
+  });
+
+  it('market.call 的错误面：handler 抛错带 code 拒绝（与既有模块同口径）', async () => {
+    const harness = createHarness({
+      handler: async () => {
+        throw new Error('Access denied: permission "market:write" is not granted');
+      }
+    });
+    const { sdk } = await connect(harness);
+    await expect(sdk.market!.uninstall('spark-chat')).rejects.toMatchObject({
+      message: expect.stringContaining('Access denied'),
+      code: 'call-failed'
+    });
+    harness.bridge.destroy();
+  });
+
+  it('sdk.market.onAnnounceChanged 经事件订阅通道（received/verified 两路）', async () => {
+    const harness = createHarness();
+    const { sdk } = await connect(harness);
+    const received: unknown[] = [];
+    await sdk.market!.onAnnounceChanged((event) => received.push(event));
+    // 订阅请求经 subscribe 消息上行（不是 call）
+    // 宿主推送桥事件 → 插件 handler 收到
+    harness.bridge.pushEvent('MarketAnnounceVerified', { kind: 'verified', id: 'github.com/acme/todo', verified: true });
+    harness.bridge.pushEvent('MarketAnnounceReceived', { kind: 'received', id: 'github.com/acme/todo', publisher: 'root_x' });
+    await waitFor(() => received.length === 2);
+    expect(received[0]).toMatchObject({ kind: 'verified', id: 'github.com/acme/todo' });
+    expect(received[1]).toMatchObject({ kind: 'received', publisher: 'root_x' });
+    harness.bridge.destroy();
+  });
+});
+
 describe('bridge 握手 ctx 环境信息（A57）', () => {
   it('壳层注入 appVersion/platform/shellVersion 时握手透传', async () => {
     const envCtx: PluginContext = {

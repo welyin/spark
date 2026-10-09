@@ -199,6 +199,20 @@
             <el-radio-button value="plugin">插件版</el-radio-button>
           </el-radio-group>
         </div>
+        <!-- 市场界面版本（A34 灰度，与聊天同口径）：旧内置 UI 与默认内置插件版
+             （spark-market，sdk.market 数据面）并存一个版本；空间的应用市场
+             （spark:space-market）本期恒为旧内置 UI -->
+        <div class="settings-row">
+          <span>应用市场界面</span>
+          <el-radio-group
+            size="small"
+            :model-value="builtinImpl('apps')"
+            @update:model-value="setBuiltinImpl('apps', $event as 'legacy' | 'plugin')"
+          >
+            <el-radio-button value="legacy">内置</el-radio-button>
+            <el-radio-button value="plugin">插件版</el-radio-button>
+          </el-radio-group>
+        </div>
         <!-- TODO(mock): 以下开关仅本地展示不生效，待偏好持久化方案落地 -->
         <div v-for="item in generalItems" :key="item.key" class="settings-row">
           <span>{{ item.label }}</span>

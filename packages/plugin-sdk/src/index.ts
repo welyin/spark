@@ -1247,6 +1247,203 @@ export interface PluginPolicyAPI {
 }
 
 // ------------------------------------------------------------------
+// 市场模块（A34，sdk.market：发现/安装/更新/启停/侧载/广播索引——
+// 既有 plugin-market-* Tauri 命令的等语义移植；类型与壳层 api/types.ts
+// 的 PluginMarketItemDto 等逐字段同形，权限位 market:read / market:write）
+// ------------------------------------------------------------------
+
+/** 市场条目（与壳层 PluginMarketItemDto 同形；permissions 为字符串清单） */
+export type PluginMarketItem = {
+  id: string;
+  domain: string;
+  name: string;
+  /** 声明图标（data: ≤20KB 或 https URL；空串 = 无图标。渲染前过 https/data:image 白名单） */
+  icon: string;
+  description: string;
+  category: PluginCategory;
+  version: string;
+  views: string[];
+  permissions: string[];
+  /** 插件支持的空间类型；缺省按 ['org'] 处理 */
+  supportedSpaces?: Array<'personal' | 'org'>;
+  /** 运行时前提（平台/能力约束；缺省 = 全平台可装） */
+  requires?: PluginRequires;
+  /** PC 窗口默认尺寸（缺省 = 壳层默认 880×620） */
+  window?: { defaultWidth: number; defaultHeight: number };
+  package: {
+    updateManifestUrl: string;
+    signatureUrl: string;
+    packageName: string;
+    installCommand: string;
+  };
+  installed: boolean;
+  enabled: boolean;
+  installedVersion: string | null;
+  latestVersion: string | null;
+  updateAvailable: boolean;
+  lastCheckedAt: number | null;
+  lastCheckReason: string;
+  /** 已授权权限清单（未安装时为空） */
+  grantedPermissions: string[];
+  /** 安装通路信任级展示（'L0' | 'L1' | 'L2'；signed=L2 / repo-anchored=L1 / sideloaded·builtin=L0） */
+  trustLevel?: string;
+};
+
+/** 更新探测结果（plugin-market-check-updates 出参） */
+export type PluginMarketUpdateProbe = {
+  pluginId: string;
+  checkedAt: number;
+  latestVersion: string | null;
+  updateAvailable: boolean;
+  reason: string;
+};
+
+/** 已安装插件状态（install/upgrade/setEnabled 出参） */
+export type PluginMarketInstalledState = {
+  pluginId: string;
+  version: string;
+  packagePath: string;
+  sha256: string;
+  size: number;
+  installedAt: number;
+  enabled: boolean;
+  grantedPermissions: string[];
+  /** 信任层级：'signed' | 'repo-anchored' | 'sideloaded' | 'builtin' */
+  trust?: string;
+  requires?: PluginRequires;
+  window?: { defaultWidth: number; defaultHeight: number };
+};
+
+/** .spkg 侧载预览（inspectLocal 出参；含整包 sha256 供核对） */
+export type PluginMarketSideloadPreview = {
+  pluginId: string;
+  domain: string;
+  version: string;
+  name: string;
+  permissions: string[];
+  supportedSpaces?: Array<'personal' | 'org'>;
+  requires?: PluginRequires;
+  sha256: string;
+  size: number;
+  fileName: string;
+};
+
+/** 仓库声明文件 spark-plugin.json（resolveRepo 出参，id 已规范化） */
+export type PluginMarketRepoDeclaration = {
+  id: string;
+  name: string;
+  icon: string;
+  summary: string;
+  category: string;
+  version: string;
+  releaseAssetPattern: string;
+  permissions: string[];
+  mirrors: string[];
+  supportedSpaces?: Array<'personal' | 'org'>;
+  requires?: PluginRequires;
+  window?: { defaultWidth: number; defaultHeight: number };
+  sdkVersion: string;
+};
+
+/** 广播索引声明发布输入（plugin-dist §8.2） */
+export type PluginMarketAnnounceInput = {
+  id: string;
+  name: string;
+  icon: string;
+  summary: string;
+  category: string;
+  version: string;
+  releaseUrl: string;
+};
+
+/** 广播索引完整声明消息（plugin-dist §8.2；发布输入 + 签名/PoW Envelope） */
+export type PluginMarketAnnounce = PluginMarketAnnounceInput & {
+  type: string;
+  timestamp: number;
+  ttl: number;
+  publisher: string;
+  pubKey: string;
+  pow: { bits: number; nonce: number };
+  signature: string;
+};
+
+/** 懒惰核查通过时回写的校正展示字段（索引是提示层，展示一律以 corrected 为准） */
+export type PluginMarketAnnounceCorrected = {
+  name: string;
+  icon: string;
+  summary: string;
+  version: string;
+  supportedSpaces?: Array<'personal' | 'org'>;
+  supportedSpacesChecked?: boolean;
+};
+
+/** 本地广播索引条目（announceList/announceGet 出参） */
+export type PluginMarketAnnounceEntry = {
+  announce: PluginMarketAnnounce;
+  firstSeenAt: number;
+  updatedAt: number;
+  verified: 'pending' | 'verified' | 'failed';
+  verifyError: string;
+  verifiedAt: number;
+  corrected?: PluginMarketAnnounceCorrected;
+};
+
+/**
+ * 市场模块（A34 sdk.market）：既有 plugin-market-* Tauri 命令的等语义移植，
+ * 插件化后市场界面（默认内置插件 spark-market）经本面工作。
+ *
+ * 权限位（桥 dispatcher 强制，与 app/src-tauri market/permissions.rs 逐字对齐）：
+ * - `market:read`：list / checkUpdates / resolveRepo / inspectLocal /
+ *   announceList / announceGet（只读目录与索引查询）；
+ * - `market:write`：upgrade / setEnabled / uninstall / installFromRepo /
+ *   importLocal / announcePublish（变更本机安装状态或对外发布，高危确认）。
+ *
+ * 注意边界：市场操作是**系统层本机动作**（装卸/更新不按空间设卡，与壳层
+ * 应用管理同口径）；per-space 启停是壳层空间层事实源，不在本面。仅 iframe
+ * 桥模式可用，故在 PluginSDK 上为可选字段（同 events/messages）。
+ */
+export interface PluginMarketAPI {
+  /** 市场条目列表（已安装 + 目录/广播索引聚合；`market:read`） */
+  list: () => Promise<PluginMarketItem[]>;
+  /** 检测更新（pluginId 缺省 = 全部已安装；`market:read`，网络长时调用） */
+  checkUpdates: (pluginId?: string) => Promise<PluginMarketUpdateProbe[]>;
+  /** 升级到最新版本（`market:write`） */
+  upgrade: (pluginId: string) => Promise<PluginMarketInstalledState>;
+  /** 内核全局启停开关（`market:write`；个人空间启用事实源的内核回写） */
+  setEnabled: (pluginId: string, enabled: boolean) => Promise<PluginMarketInstalledState>;
+  /** 卸载：移除插件程序（包文件 + 状态记录），插件数据保留在本机（`market:write`） */
+  uninstall: (pluginId: string) => Promise<void>;
+  /** 仓库锚定安装前置解析：拉取并校验 spark-plugin.json 供确认前展示（`market:read`，网络调用） */
+  resolveRepo: (id: string) => Promise<PluginMarketRepoDeclaration>;
+  /** 仓库锚定安装（`market:write`）：声明验证 → 派生资产 → 可选验签 → 下载落状态 */
+  installFromRepo: (id: string) => Promise<PluginMarketInstalledState>;
+  /** .spkg 侧载预览：解析容器 + 整包 sha256/size 供核对（`market:read`） */
+  inspectLocal: (path: string) => Promise<PluginMarketSideloadPreview>;
+  /** .spkg 侧载导入：复核整包哈希 → 逐文件校验 → 落状态（trust="sideloaded"；`market:write`） */
+  importLocal: (path: string, expectedSha256: string, confirmOverwrite?: boolean) => Promise<PluginMarketInstalledState>;
+  /** 发布插件声明（开发者）：字段校验 → 根身份签名 → PoW → 广播 → 入本地索引（`market:write`，秒级 CPU） */
+  announcePublish: (input: PluginMarketAnnounceInput) => Promise<PluginMarketAnnounceEntry>;
+  /** 本地广播索引列表（含 verified 状态；`market:read`） */
+  announceList: () => Promise<PluginMarketAnnounceEntry[]>;
+  /** 单条索引查询（`market:read`；id 为规范化线形，未命中为 null） */
+  announceGet: (id: string) => Promise<PluginMarketAnnounceEntry | null>;
+  /**
+   * .spkg 侧载文件选择对话框（`market:read`）：插件沙箱 iframe 无系统对话框
+   * 能力，由壳层代开（tauri-plugin-dialog，.spkg 过滤）；用户取消返回 null。
+   * 返回路径供 inspectLocal / importLocal 使用。
+   */
+  pickSpkg: () => Promise<string | null>;
+  /**
+   * 订阅广播索引变更（`market:read`，壳层转发门控）：新声明到达
+   * （received）/ 懒惰核查结论回写（verified）时推送。轻量通知，
+   * 收到后按需 announceGet/announceList 收敛。
+   */
+  onAnnounceChanged: (
+    handler: (event: { kind: 'received' | 'verified'; id: string; publisher?: string; verified?: boolean; error?: string | null }) => void
+  ) => Promise<void>;
+}
+
+// ------------------------------------------------------------------
 // 事件模块（随桥协议落地，见 bridge/client.ts）
 // ------------------------------------------------------------------
 
@@ -1354,6 +1551,8 @@ export interface PluginSDK {
   policy?: PluginPolicyAPI;
   /** 系统代理模块（sys.exec / sys.fetch）：仅 iframe 桥模式可用 */
   sys?: PluginSysAPI;
+  /** 市场模块（A34 sdk.market：发现/安装/更新/启停/侧载/广播索引）：仅 iframe 桥模式可用 */
+  market?: PluginMarketAPI;
   /**
    * 注册宿主反向调用处理器：宿主经 host.request(event, payload) 主动查询插件时，
    * 由本处注册的 handler 应答（返回值即答复，可返回 Promise）。

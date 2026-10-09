@@ -76,7 +76,7 @@ import { createPluginBridgeDispatcher, setBridgeEventPump, type BridgeEventPump 
 import { createPluginWatchdog, type PluginWatchdog } from '../../plugin/watchdog';
 import { withPluginShellEnv } from '../../plugin/shell-env';
 import { pluginSpaceKey, registerMainViewInstance, unregisterMainViewInstance } from '../../plugin/card-actions';
-import { listenP2pEvents } from '../../api';
+import { listenP2pEvents, listenPluginAnnounceEvents } from '../../api';
 import {
   disablePluginInstance,
   enablePluginInstance,
@@ -183,6 +183,8 @@ export default defineComponent({
       unlistenChatStatus = null;
       unlistenFriendRequests?.();
       unlistenFriendRequests = null;
+      unlistenMarketAnnounce?.();
+      unlistenMarketAnnounce = null;
       // 主视图实例登记清理（仅清自己：同插件新实例已接管时不误删）
       if (host) {
         unregisterMainViewInstance(props.pluginId, pluginSpaceKey(props.space), host);
@@ -219,6 +221,9 @@ export default defineComponent({
     // A19 聊天/通讯录迁移事件面：ChatStatus 系与 FriendRequest 系监听
     let unlistenChatStatus: (() => void) | null = null;
     let unlistenFriendRequests: (() => void) | null = null;
+    // A34 市场模块（sdk.market.onAnnounceChanged）：广播索引 received/verified
+    // Tauri 事件 → 桥 MarketAnnounceReceived/MarketAnnounceVerified（market:read 门控）
+    let unlistenMarketAnnounce: (() => void) | null = null;
     // A18 事件门控的授权清单数据源（与 bridge-dispatcher 同格：市场安装
     // 状态 grantedPermissions，渲染进程不可自报；读取失败按空清单 = 不推）
     const grantedPermissions = ref<Set<string>>(new Set());
@@ -523,6 +528,28 @@ export default defineComponent({
               return;
             }
             unlistenAffairChanged = un;
+          })
+          .catch(() => {});
+        // A34 市场模块事件面（sdk.market.onAnnounceChanged）：广播索引
+        // received/verified Tauri 事件 → 桥 MarketAnnounceReceived /
+        // MarketAnnounceVerified，market:read 授权门控（与读面同权限位；
+        // 载荷为 id/publisher/verified 等索引元数据，无插件内容）
+        void listenPluginAnnounceEvents((event) => {
+          if (!grantedPermissions.value.has('market:read')) {
+            return;
+          }
+          if (event.kind === 'received') {
+            host?.pushEvent('MarketAnnounceReceived', event);
+          } else {
+            host?.pushEvent('MarketAnnounceVerified', event);
+          }
+        })
+          .then((un) => {
+            if (isStale(gen)) {
+              un();
+              return;
+            }
+            unlistenMarketAnnounce = un;
           })
           .catch(() => {});
         watchdog?.startHeartbeat();

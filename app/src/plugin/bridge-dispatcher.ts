@@ -34,6 +34,7 @@ import { listAppMessages, markAppMessagesRead, sendAppMessage } from './messages
 import type { AppMessageCardDto, ElectronAPI } from '../api/types';
 import { refreshContacts, ensurePluginContactTag } from '../mock/contacts';
 import { OPEN_PLUGIN_DEEPLINK_EVENT } from '../services/deep-link';
+import { pickSpkgFile } from '../api';
 
 /** 桥事件泵：由外部（PluginIframeHost）注入，用于将 Tauri 事件转发为桥 event。 */
 export interface BridgeEventPump {
@@ -162,7 +163,25 @@ const CALL_PERMISSIONS: Record<string, string> = {
   'policy.read': 'policy:read',
   'policy.submitDraft': 'policy:write',
   // 发布合入（org:policydoc: 同步键域，管理员授权面）与草稿提交同写位
-  'policy.publish': 'policy:write'
+  'policy.publish': 'policy:write',
+  // A34 市场模块（sdk.market）：市场命令等语义移植。读位 market:read
+  // （目录/更新探测/仓库解析/侧载预览/广播索引查询），写位 market:write
+  // （安装/更新/启停/卸载/侧载导入/发布声明）；与内核 market/permissions.rs
+  // 逐字对齐
+  'market.list': 'market:read',
+  'market.checkUpdates': 'market:read',
+  'market.resolveRepo': 'market:read',
+  'market.inspectLocal': 'market:read',
+  'market.announceList': 'market:read',
+  'market.announceGet': 'market:read',
+  'market.upgrade': 'market:write',
+  'market.setEnabled': 'market:write',
+  'market.uninstall': 'market:write',
+  'market.installFromRepo': 'market:write',
+  'market.importLocal': 'market:write',
+  'market.announcePublish': 'market:write',
+  // .spkg 文件选择对话框（壳层代开，用户主动行为，只回路径）归读位
+  'market.pickSpkg': 'market:read'
   // 注：affairs.create 是桥 client 侧组合（identity.sign + affairs.follow，
   // 逐调用各自由本表强制）；affairs.onChange 走事件订阅通道（subscribe
   // 不经 call 表，与 data.onChange 同口径，事件载荷仅 affairId+变更类别
@@ -613,6 +632,30 @@ export async function createPluginBridgeDispatcher(identity: PluginBridgeIdentit
       read: (orgId: string) => backend.policy!.read(orgId),
       submitDraft: (doc: Record<string, unknown>) => backend.policy!.submitDraft(doc),
       publish: (orgId: string) => backend.policy!.publish(orgId)
+    },
+    // A34 市场模块（sdk.market）：plugin-market-* 命令等语义移植，壳层主窗口
+    // 为系统域，domain_guard 放行；权限经 CALL_PERMISSIONS 强制 market:read/
+    // market:write。市场操作是系统层本机动作，不按 space 设卡（与壳层应用管理同口径）
+    market: {
+      list: () => window.electronAPI.pluginMarket.list(),
+      checkUpdates: (pluginId?: string | null) =>
+        window.electronAPI.pluginMarket.checkUpdates(typeof pluginId === 'string' && pluginId ? pluginId : undefined),
+      upgrade: (pluginId: string) => window.electronAPI.pluginMarket.upgrade(pluginId),
+      setEnabled: (pluginId: string, enabled: boolean) =>
+        window.electronAPI.pluginMarket.setEnabled(pluginId, enabled),
+      uninstall: (pluginId: string) => window.electronAPI.pluginMarket.uninstall(pluginId),
+      resolveRepo: (id: string) => window.electronAPI.pluginMarket.resolveRepo(id),
+      installFromRepo: (id: string) => window.electronAPI.pluginMarket.installFromRepo(id),
+      inspectLocal: (path: string) => window.electronAPI.pluginMarket.inspectLocal(path),
+      importLocal: (path: string, expectedSha256: string, confirmOverwrite?: boolean) =>
+        window.electronAPI.pluginMarket.importLocal(path, expectedSha256, confirmOverwrite),
+      announcePublish: (input: Parameters<typeof window.electronAPI.pluginMarket.announcePublish>[0]) =>
+        window.electronAPI.pluginMarket.announcePublish(input),
+      announceList: () => window.electronAPI.pluginMarket.announceList(),
+      announceGet: (id: string) => window.electronAPI.pluginMarket.announceGet(id),
+      // 插件沙箱 iframe 无系统对话框能力：.spkg 文件选择由壳层代开
+      // （tauri-plugin-dialog，与旧侧载入口同链路），用户取消返回 null
+      pickSpkg: () => pickSpkgFile()
     },
     // sys 代理（内核外呼）：仅代理不加工；插件享有完整权限，内核命令侧负责业务安全
     sys: {

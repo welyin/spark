@@ -214,10 +214,17 @@
             >
               <template #legacy><MessagesPage /></template>
             </BuiltinAppHost>
-            <AppsPage
+            <!-- 应用市场/应用管理（A34 灰度）：旧内置 UI ⇄ 默认内置插件版（spark-market） -->
+            <BuiltinAppHost
               v-else-if="activeTab === 'apps'"
-              @open-plugin-tab="openPluginTab"
-            />
+              tab-id="apps"
+              :space="pluginSpace"
+              @fallback="onBuiltinPluginClose('apps')"
+            >
+              <template #legacy>
+                <AppsPage @open-plugin-tab="openPluginTab" />
+              </template>
+            </BuiltinAppHost>
             <!-- 手机端空间（阶段 1）：两级结构 域列表→域桌面；点图标 open-app 走 openPluginTab 全屏 App -->
             <SpaceMobile
               v-else-if="activeTab === 'space'"
@@ -307,10 +314,17 @@
           >
             <template #legacy><MessagesPage /></template>
           </BuiltinAppHost>
-          <AppsPage
+          <!-- 应用市场/应用管理（A34 灰度）：旧内置 UI ⇄ 默认内置插件版（spark-market） -->
+          <BuiltinAppHost
             v-else-if="activeTab === 'apps'"
-            @open-plugin-tab="openPluginTab"
-          />
+            tab-id="apps"
+            :space="pluginSpace"
+            @fallback="onBuiltinPluginClose('apps')"
+          >
+            <template #legacy>
+              <AppsPage @open-plugin-tab="openPluginTab" />
+            </template>
+          </BuiltinAppHost>
           <!-- 桌面端空间（阶段 2）：PC 多窗口桌面；移动端走上方 SpaceMobile -->
           <!-- 事务（阶段 3）：跨域「与我相关」事务列表；点卡片按类型分发到类型插件 -->
           <AffairsPage v-else-if="activeTab === 'affairs'" />

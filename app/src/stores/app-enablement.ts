@@ -38,7 +38,7 @@ const STORAGE_PREFIX = 'spark:apps-enabled:';
 const LEGACY_ORG_MOCK_PREFIX = 'spark:apps-org-enabled:';
 
 /** 随发行包预装的内置件（见模块头注释；trust="builtin" 的 renderer 侧镜像） */
-const BUILTIN_PLUGIN_IDS: ReadonlySet<string> = new Set(['spark-chat', 'spark-contacts']);
+const BUILTIN_PLUGIN_IDS: ReadonlySet<string> = new Set(['spark-chat', 'spark-contacts', 'spark-market']);
 
 export function isBuiltinApp(pluginId: string): boolean {
   return BUILTIN_PLUGIN_IDS.has(pluginId);

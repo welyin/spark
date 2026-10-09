@@ -17,6 +17,7 @@
  */
 
 import type { ElectronAPI } from '../api';
+import { pickSpkgFile } from '../api';
 import type { FetchStreamHandle, PluginSDK, SysFetchChunk } from '../../../packages/plugin-sdk/src';
 import { buildGenesisDraft, deriveIdentity, signPayload } from '../../../packages/plugin-sdk/src/affair-wire';
 
@@ -35,6 +36,15 @@ export type {
   PluginAffairsAPI,
   PluginCredentialsAPI,
   PluginPolicyAPI,
+  // A34 市场模块类型
+  PluginMarketAPI,
+  PluginMarketItem,
+  PluginMarketUpdateProbe,
+  PluginMarketInstalledState,
+  PluginMarketRepoDeclaration,
+  PluginMarketSideloadPreview,
+  PluginMarketAnnounceInput,
+  PluginMarketAnnounceEntry,
   PluginSDK
 } from '../../../packages/plugin-sdk/src';
 
@@ -142,10 +152,11 @@ export function createPluginBackend(
         electronAPI.plugin.dataQuery(name, options, version, boundOrgId, pluginDomain),
       dropVersion: (name, version) =>
         electronAPI.plugin.dataDropVersion(name, version, pluginDomain),
+      // blob 命名空间隔离（A34）：域按桥绑定身份注入，命令侧按域门禁
       saveBlob: (dataBase64) =>
-        electronAPI.plugin.dataSaveBlob(dataBase64),
+        electronAPI.plugin.dataSaveBlob(dataBase64, pluginDomain),
       readBlob: (hash) =>
-        electronAPI.plugin.dataReadBlob(hash),
+        electronAPI.plugin.dataReadBlob(hash, pluginDomain),
       // iframe 侧远端合入通知由 PluginIframeHost 经桥事件通道实现；
       // 本后端（宿主内嵌 QuickJS 等直连接口）无该通路，以 no-op 满足契约
       onChange: async () => {}
@@ -281,6 +292,28 @@ export function createPluginBackend(
       read: (orgId) => electronAPI.policy.read(orgId),
       submitDraft: (doc) => electronAPI.policy.submitDraft(doc),
       publish: (orgId) => electronAPI.policy.publish(orgId)
+    },
+    // A34 市场模块（sdk.market）：直连 electronAPI.pluginMarket（命令侧
+    // domain_guard 要求系统域，壳层主窗口满足）；权限由桥 dispatcher 强制
+    market: {
+      list: () => electronAPI.pluginMarket.list(),
+      checkUpdates: (pluginId?: string) => electronAPI.pluginMarket.checkUpdates(pluginId),
+      upgrade: (pluginId: string) => electronAPI.pluginMarket.upgrade(pluginId),
+      setEnabled: (pluginId: string, enabled: boolean) =>
+        electronAPI.pluginMarket.setEnabled(pluginId, enabled),
+      uninstall: (pluginId: string) => electronAPI.pluginMarket.uninstall(pluginId),
+      resolveRepo: (id: string) => electronAPI.pluginMarket.resolveRepo(id),
+      installFromRepo: (id: string) => electronAPI.pluginMarket.installFromRepo(id),
+      inspectLocal: (path: string) => electronAPI.pluginMarket.inspectLocal(path),
+      importLocal: (path: string, expectedSha256: string, confirmOverwrite?: boolean) =>
+        electronAPI.pluginMarket.importLocal(path, expectedSha256, confirmOverwrite),
+      announcePublish: (input) => electronAPI.pluginMarket.announcePublish(input),
+      announceList: () => electronAPI.pluginMarket.announceList(),
+      announceGet: (id: string) => electronAPI.pluginMarket.announceGet(id),
+      pickSpkg: () => pickSpkgFile(),
+      // 广播索引变更订阅经桥事件通道（PluginIframeHost 转发）实现；
+      // 本后端（宿主内嵌直连接口）无该通路，以 no-op 满足契约（同 data.onChange）
+      onAnnounceChanged: async () => {}
     },
     sys: electronAPI.sys
       ? {

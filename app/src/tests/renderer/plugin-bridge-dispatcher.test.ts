@@ -12,6 +12,13 @@ vi.mock('element-plus', async (importOriginal) => {
   return { ...actual, ElMessageBox: { confirm: vi.fn() } };
 });
 
+// market.pickSpkg 走壳层代开文件对话框（api.pickSpkgFile → tauri dialog）；
+// jsdom 无对话框运行时，打桩为固定路径以验证桥面路由
+vi.mock('../../api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../api')>();
+  return { ...actual, pickSpkgFile: vi.fn(async () => '/tmp/todo.spkg') };
+});
+
 import { ElMessageBox } from 'element-plus';
 import { createPluginBridgeDispatcher, type PluginBridgeIdentity } from '../../plugin/bridge-dispatcher';
 import { getAppMessages, getConversation } from '../../stores/messages';
@@ -483,6 +490,124 @@ describe('policy 域（community-affairs §7.2 sdk.policy：读须 policy:read�
     const handler = await createPluginBridgeDispatcher({ ...BASE_IDENTITY, viewType: 'message-card' });
     await expect(handler('policy', 'read', ['org_1'])).rejects.toThrow(/Access denied/);
     await expect(handler('policy', 'submitDraft', [{ policyV: 1 }])).rejects.toThrow(/Access denied/);
+  });
+});
+
+// ------------------------------------------------------------------
+// A34 市场模块（sdk.market）：plugin-market-* 命令等语义移植。
+// 读位 market:read（list/checkUpdates/resolveRepo/inspectLocal/
+// announceList/announceGet/pickSpkg），写位 market:write（upgrade/
+// setEnabled/uninstall/installFromRepo/importLocal/announcePublish）
+// ------------------------------------------------------------------
+
+/** 记录型市场命令桩（vi.fn 记录调用参数；list 兼任 grantedPermissions 数据源） */
+function mockMarketApi(granted: string[]) {
+  const api = {
+    list: vi.fn(async () => [{ id: 'spark-example', grantedPermissions: granted }]),
+    checkUpdates: vi.fn(async () => []),
+    upgrade: vi.fn(async () => null),
+    setEnabled: vi.fn(async () => null),
+    uninstall: vi.fn(async () => undefined),
+    resolveRepo: vi.fn(async () => null),
+    installFromRepo: vi.fn(async () => null),
+    inspectLocal: vi.fn(async () => null),
+    importLocal: vi.fn(async () => null),
+    announcePublish: vi.fn(async () => null),
+    announceList: vi.fn(async () => []),
+    announceGet: vi.fn(async () => null)
+  };
+  (window.electronAPI as any).pluginMarket = api;
+  return api;
+}
+
+describe('market 域（A34 sdk.market：读须 market:read，写须 market:write）', () => {
+  it('未授权：读面与写面一律拒绝', async () => {
+    mockMarketApi([]);
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    await expect(handler('market', 'list', [])).rejects.toThrow(/Access denied/);
+    await expect(handler('market', 'checkUpdates', [])).rejects.toThrow(/Access denied/);
+    await expect(handler('market', 'resolveRepo', ['github.com/acme/todo'])).rejects.toThrow(/Access denied/);
+    await expect(handler('market', 'inspectLocal', ['/tmp/todo.spkg'])).rejects.toThrow(/Access denied/);
+    await expect(handler('market', 'announceList', [])).rejects.toThrow(/Access denied/);
+    await expect(handler('market', 'announceGet', ['github.com/acme/todo'])).rejects.toThrow(/Access denied/);
+    await expect(handler('market', 'pickSpkg', [])).rejects.toThrow(/Access denied/);
+    await expect(handler('market', 'upgrade', ['spark-chat'])).rejects.toThrow(/Access denied/);
+    await expect(handler('market', 'setEnabled', ['spark-chat', false])).rejects.toThrow(/Access denied/);
+    await expect(handler('market', 'uninstall', ['spark-chat'])).rejects.toThrow(/Access denied/);
+    await expect(handler('market', 'installFromRepo', ['github.com/acme/todo'])).rejects.toThrow(/Access denied/);
+    await expect(handler('market', 'importLocal', ['/tmp/todo.spkg', 'ab12'])).rejects.toThrow(/Access denied/);
+    await expect(handler('market', 'announcePublish', [{ id: 'github.com/acme/todo' }])).rejects.toThrow(/Access denied/);
+  });
+
+  it('market:read 授权：读面放行（含 pickSpkg 壳层代开对话框），写面仍拒绝', async () => {
+    const api = mockMarketApi(['market:read']);
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    // 构造时已调一次 list 读授权清单；清零后只观察桥面调用
+    api.list.mockClear();
+
+    await handler('market', 'list', []);
+    expect(api.list).toHaveBeenCalledTimes(1);
+
+    await handler('market', 'checkUpdates', []);
+    expect(api.checkUpdates).toHaveBeenCalledWith(undefined);
+    await handler('market', 'checkUpdates', ['spark-chat']);
+    expect(api.checkUpdates).toHaveBeenCalledWith('spark-chat');
+
+    await handler('market', 'resolveRepo', ['github.com/acme/todo']);
+    expect(api.resolveRepo).toHaveBeenCalledWith('github.com/acme/todo');
+    await handler('market', 'inspectLocal', ['/tmp/todo.spkg']);
+    expect(api.inspectLocal).toHaveBeenCalledWith('/tmp/todo.spkg');
+    await handler('market', 'announceList', []);
+    expect(api.announceList).toHaveBeenCalledTimes(1);
+    await handler('market', 'announceGet', ['github.com/acme/todo']);
+    expect(api.announceGet).toHaveBeenCalledWith('github.com/acme/todo');
+
+    // pickSpkg 不进 electronAPI.pluginMarket：壳层代开系统对话框（打桩路径）
+    await expect(handler('market', 'pickSpkg', [])).resolves.toBe('/tmp/todo.spkg');
+
+    await expect(handler('market', 'upgrade', ['spark-chat'])).rejects.toThrow(/Access denied/);
+    await expect(handler('market', 'uninstall', ['spark-chat'])).rejects.toThrow(/Access denied/);
+    await expect(handler('market', 'installFromRepo', ['github.com/acme/todo'])).rejects.toThrow(/Access denied/);
+    await expect(handler('market', 'importLocal', ['/tmp/todo.spkg', 'ab12'])).rejects.toThrow(/Access denied/);
+    await expect(handler('market', 'announcePublish', [{ id: 'github.com/acme/todo' }])).rejects.toThrow(/Access denied/);
+    expect(api.upgrade).not.toHaveBeenCalled();
+    expect(api.uninstall).not.toHaveBeenCalled();
+  });
+
+  it('market:write 授权：写面放行（参数透传），读面仍拒绝', async () => {
+    const api = mockMarketApi(['market:write']);
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    api.list.mockClear();
+
+    await handler('market', 'upgrade', ['spark-chat']);
+    expect(api.upgrade).toHaveBeenCalledWith('spark-chat');
+    await handler('market', 'setEnabled', ['spark-chat', false]);
+    expect(api.setEnabled).toHaveBeenCalledWith('spark-chat', false);
+    await handler('market', 'uninstall', ['spark-chat']);
+    expect(api.uninstall).toHaveBeenCalledWith('spark-chat');
+    await handler('market', 'installFromRepo', ['github.com/acme/todo']);
+    expect(api.installFromRepo).toHaveBeenCalledWith('github.com/acme/todo');
+
+    // importLocal：confirmOverwrite 可选位透传
+    await handler('market', 'importLocal', ['/tmp/todo.spkg', 'ab12']);
+    expect(api.importLocal).toHaveBeenCalledWith('/tmp/todo.spkg', 'ab12', undefined);
+    await handler('market', 'importLocal', ['/tmp/todo.spkg', 'ab12', true]);
+    expect(api.importLocal).toHaveBeenCalledWith('/tmp/todo.spkg', 'ab12', true);
+
+    const announce = { id: 'github.com/acme/todo', name: '待办', version: '0.1.0' };
+    await handler('market', 'announcePublish', [announce]);
+    expect(api.announcePublish).toHaveBeenCalledWith(announce);
+
+    await expect(handler('market', 'announceList', [])).rejects.toThrow(/Access denied/);
+    await expect(handler('market', 'pickSpkg', [])).rejects.toThrow(/Access denied/);
+    expect(api.announceList).not.toHaveBeenCalled();
+  });
+
+  it('message-card 视图无 market 域（有授权也整域拒绝）', async () => {
+    mockMarketApi(['market:read', 'market:write']);
+    const handler = await createPluginBridgeDispatcher({ ...BASE_IDENTITY, viewType: 'message-card' });
+    await expect(handler('market', 'list', [])).rejects.toThrow(/Access denied/);
+    await expect(handler('market', 'uninstall', ['spark-chat'])).rejects.toThrow(/Access denied/);
   });
 });
 
