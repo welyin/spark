@@ -15,6 +15,7 @@
     "build:affairs": "node ../app/node_modules/vite/bin/vite.js build --config spark-affairs/vite.config.ts && node scripts/copy-plugin-dist.mjs --pluginId spark-affairs --views main,affair-card",
     "build:verify-hoa": "node ../app/node_modules/vite/bin/vite.js build --config spark-verify-hoa/vite.config.ts && node scripts/copy-plugin-dist.mjs --pluginId spark-verify-hoa --views main",
     "build:threshold-vouch": "node ../app/node_modules/vite/bin/vite.js build --config spark-threshold-vouch/vite.config.ts && node scripts/copy-plugin-dist.mjs --pluginId spark-threshold-vouch --views main",
+    "build:git-repo": "node ../app/node_modules/vite/bin/vite.js build --config spark-git-repo/vite.config.ts && node scripts/copy-plugin-dist.mjs --pluginId spark-git-repo --views main,pr-card",
     "package:example": "node scripts/build-example-package.mjs",
     "package:ai-chat": "node scripts/build-plugin-package.mjs --pluginId ai-chat",
     "package:moments": "node scripts/build-plugin-package.mjs --pluginId spark-moments",

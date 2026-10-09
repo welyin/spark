@@ -1,0 +1,31 @@
+{
+  "id": "spark-git-repo",
+  "domain": "plugin:spark-git-repo",
+  "name": "代码仓库",
+  "version": "0.1.0",
+  "entryView": "default",
+  "description": "仓库浏览、提交历史、分支与 diff 视图；PR 子事务 + bundle/patch 附件协作流（桌面 git CLI，移动端只读）。",
+  "category": "foundation",
+  "icon": "assets/icon.svg",
+  "supportedSpaces": ["org"],
+  "views": [
+    { "id": "default", "type": "app", "title": "代码仓库" },
+    { "id": "pr-card", "type": "message-card", "title": "PR 卡片" }
+  ],
+  "window": { "defaultWidth": 1100, "defaultHeight": 760 },
+  "permissions": [
+    "storage:read",
+    "storage:write",
+    "affairs:read",
+    "affairs:write",
+    "identity:sign",
+    "message:app",
+    "system:exec"
+  ],
+  "requires": { "mobileReadonly": true },
+  "sdkVersion": "1",
+  "package": {
+    "updateManifestUrl": "https://github.com/welyin/spark/releases/latest/download/spark-plugin-spark-git-repo-manifest.json",
+    "packageName": "spark-plugin-spark-git-repo-0.1.0.spkg"
+  }
+}

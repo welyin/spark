@@ -1,0 +1,16 @@
+{
+  "comment": "id 暂用插件短名；随分发模型迁移后改为仓库地址（见插件分发规格 §1）。自举插件：代码仓库应用（git-repo.md v0.2）——只读镜像浏览 + PR 子事务 + bundle 附件协作流；镜像清单 = 项目议题内签名事务操作（档二-5）；单维护者合并回执即生效、禁止非快进写回（档一-3）；system:exec 仅桌面视图调用本地 git CLI（档二-6，安装授权时明示）；requires.mobileReadonly 声明移动端只读（壳层 enforcement 线形随分发规格补，落地前插件自查降级）。affairTypes 只生产不注册（X8）：PR 子事务类型由「项目」插件独占注册。",
+  "id": "spark-git-repo",
+  "name": "代码仓库",
+  "icon": "",
+  "summary": "仓库浏览（提交历史/分支/文件树/diff）与 PR 协作流（子事务 + bundle 附件，sdk.affairs + sdk.content）。",
+  "category": "foundation",
+  "version": "0.1.0",
+  "release": {
+    "assetNaming": "spark-plugin-spark-git-repo-<version>.spkg",
+    "updateManifestAsset": "spark-plugin-spark-git-repo-manifest.json",
+    "signatureAsset": "spark-plugin-spark-git-repo-manifest.sig"
+  },
+  "permissions": ["storage:read", "storage:write", "affairs:read", "affairs:write", "identity:sign", "message:app", "system:exec"],
+  "mirrors": []
+}
