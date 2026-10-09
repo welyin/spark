@@ -66,6 +66,28 @@
 
 blob API（foundation/personal-data 篇 §4.2 落地后）按插件命名空间隔离：`blob:put` 写入即在本插件命名空间登记簿登记 cid 引用，`blob:get` 仅能读本插件登记簿内的 cid（cid 本身无前缀，隔离落在登记簿）；内核在 API 边界强制（与 declareCollection 的数据域隔离同层实现）；跨插件文件访问只有契约接口一条路（plugin-types 篇）。
 
+### 4.4 background 视图类型线形（A56，2026-10-09 拍板）
+
+manifest 视图类型在 `app` / `message-card` 之外增加第三种合法线形 **`background`**：
+
+```jsonc
+{
+  "views": [
+    { "id": "main", "type": "app", "title": "主界面" },
+    { "id": "bg", "type": "background" }        // 无 UI 面，声明即接入内核 QuickJS 后台运行时
+  ],
+  "background": "views/background.js"           // 脚本入口：background 视图声明的必填配套
+}
+```
+
+规则：
+
+1. **语义**：background 视图无 UI 面，不产 iframe；声明即接入内核 QuickJS 后台沙箱（一插件一线程一实例，资源上限、超时可杀——既有运行时不变）。承载消息监听等常驻无界面逻辑；
+2. **配对**：声明 background 视图必须配套顶层 `background` 入口字段（内核对账只认该字段，壳层校验配对 fail-closed——声明级，见规则 5）；反向不强制——仅顶层 `background` 而无 background 视图为历史线形（ai-chat 先例），兼容放行。`entryView` 必须存在于 views 且不得指向 background 视图（无界面可打开）；
+3. **生命周期**：按 QuickJS 运行时既有对账惯例（`plugin_runtime.rs`）——插件启用即拉起常驻线程、停用/卸载即销毁、登录/身份切换后前端 `plugin-background-sync` 重对账；本线形只新增清单声明形态，不改变对账语义；
+4. **能力面**：background 实例的 capability 权限由内核分发层逐调用强制（随启动传入 grantedPermissions 快照），不经 iframe 桥——桥 dispatcher 的 view 裁剪表保留 `background` 项仅为兼容历史清单解析，正常路径无桥绑定携带该 viewType；
+5. **落点**：SDK 类型（`PluginViewDeclaration.type`）+ 壳层校验（`app/src/plugin/manifest.ts`，经 `fetchPluginManifest` 统一入口，非法 manifest 按「无 manifest」降级）；内核侧（src-tauri / core）零改动。注意壳层校验是**声明级拒绝、非加载门**：校验只挂在 best-effort 的 manifest ctx 组装上，非法 manifest 降级 null 后插件仍照常加载运行（manifest null 不阻断 iframe 创建），不存在安装/加载闸；真正的 fail-closed 闭环靠内核侧兜底——无顶层 `background` 入口字段即无后台脚本可拉起（`plugin_runtime.rs` 只认该字段），声明了 background 视图却缺入口的插件其空诺物理上无法兑现。
+
 ## 五、迁移路径
 
 1. manifest 新字段向后兼容（无 kind = app、无 libraries = 无依赖，行为不变）；

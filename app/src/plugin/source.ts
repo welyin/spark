@@ -16,6 +16,7 @@
 
 import { isTauri } from '../api';
 import type { PluginManifest, PluginViewBootstrap } from '../../../packages/plugin-sdk/src';
+import { validatePluginManifest } from './manifest';
 
 /** 插件 id 白名单（与内核 §20 规格一致）：小写字母/数字/连字符，首字符非连字符，最长 64 */
 const PLUGIN_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -152,7 +153,8 @@ export function buildPluginHostSrcdoc(pluginId: string, mount?: PluginViewBootst
 
 /**
  * 读插件 manifest（best-effort）：宿主组装 ctx（supportedSpaces、显示名）用；
- * 读取失败返回 null，调用方按「无 manifest」降级处理。
+ * 读取失败或视图线形校验不通过（validatePluginManifest，A56）返回 null，
+ * 调用方按「无 manifest」降级处理。
  */
 export async function fetchPluginManifest(pluginId: string): Promise<PluginManifest | null> {
   try {
@@ -160,7 +162,7 @@ export async function fetchPluginManifest(pluginId: string): Promise<PluginManif
     if (!response.ok) {
       return null;
     }
-    return (await response.json()) as PluginManifest;
+    return validatePluginManifest((await response.json()) as PluginManifest);
   } catch {
     return null;
   }

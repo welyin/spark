@@ -8,6 +8,7 @@
  * 拒绝用例直接注入消息。
  */
 
+import { describe, expect, it, vi } from 'vitest';
 import { connectPluginBridge, type WindowMessageEndpoint } from '../src/bridge/client';
 import { createBridgeHost, type BridgeHost, type BridgeHostHandler } from '../src/bridge/host';
 import {

@@ -103,7 +103,7 @@ describe('AppIcon 回退链（plugin-dist §2.3）', () => {
   });
 
   it('① 已安装且当前空间已启用：异步解析包内 manifest icon，经插件源基址拼接', async () => {
-    stubManifestFetch({ icon: 'assets/icon.svg' });
+    stubManifestFetch({ icon: 'assets/icon.svg', entryView: 'main', views: [{ id: 'main', type: 'app' }] });
     const id = nextId();
     const host = mountIcon(makeItem(id, { installed: true, enabled: true }));
     // 挂载瞬间 manifest 未就位：先显示回退首字符
@@ -154,7 +154,7 @@ describe('AppIcon 回退链（plugin-dist §2.3）', () => {
   });
 
   it('③ <img> 加载失败（onerror）直落首字符回退，不再回落声明图标', async () => {
-    stubManifestFetch({ icon: 'assets/icon.svg' });
+    stubManifestFetch({ icon: 'assets/icon.svg', entryView: 'main', views: [{ id: 'main', type: 'app' }] });
     const id = nextId();
     const host = mountIcon(
       makeItem(id, { installed: true, enabled: true, icon: 'https://cdn.example.com/fallback.png' })

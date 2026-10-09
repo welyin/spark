@@ -276,9 +276,11 @@ async function assertNavPluginInput(
 /** view type 裁剪表：null = 全量（仅 grantedPermissions 过滤）；未列出的 view type 整域拒绝 */
 const VIEW_ALLOWED_CALLS: Record<PluginViewType, ReadonlySet<string> | null> = {
   app: null,
-  // background 视图已下线（插件常驻逻辑迁往内核 QuickJS 后台运行时，
-  // 见 plugin_system.md「后台运行时」）；类型保留仅为兼容历史清单的解析
-  background: null,
+  // background 视图线形已合法化（A56）：无 UI 面，实例跑在内核 QuickJS 后台
+  // 运行时（capability 由内核分发层强制），不经 iframe 桥——正常路径不会有
+  // 桥绑定携带该 viewType；表项置空集 deny-by-default（纵深防御：异常绑定
+  // 出现时 null 等价全量能力面，空集则整域拒绝）
+  background: new Set(),
   // 消息卡片：docs/data 只读 + 验签/存证读取（无网络、无签名，设计文档「UI 集成点」）；
   // 不含 messages.*——卡片视图无应用会话写权限，卡片回调只经 action 上行（triggerCardAction）。
   // affairs.readLog/readResolution：议题卡片正文经 sdk.affairs 读本机副本的正当通道
