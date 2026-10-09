@@ -7,6 +7,6 @@
   "scripts": {
     "build": "node ../app/node_modules/vite/bin/vite.js build --config vite.config.ts",
     "typecheck": "vue-tsc --noEmit -p tsconfig.json || tsc --noEmit -p tsconfig.json",
-    "test": "node ../app/node_modules/vitest/vitest.mjs run --config ../app/vitest.config.ts tests"
+    "test": "cd ../../app && node node_modules/vitest/vitest.mjs run spark-chat"
   }
 }
