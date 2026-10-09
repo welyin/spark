@@ -1,0 +1,29 @@
+{
+  "id": "spark-feedback",
+  "domain": "plugin:spark-feedback",
+  "name": "问题反馈",
+  "version": "0.1.0",
+  "entryView": "default",
+  "description": "对运行版本提交缺陷与建议，一键回流为目标项目议题的子事务（bug/proposal，父子引用）。",
+  "category": "foundation",
+  "icon": "assets/icon.svg",
+  "supportedSpaces": ["personal", "org"],
+  "views": [
+    { "id": "default", "type": "app", "title": "问题反馈" },
+    { "id": "feedback-card", "type": "message-card", "title": "反馈回执卡片" }
+  ],
+  "window": { "defaultWidth": 720, "defaultHeight": 640 },
+  "permissions": [
+    "storage:read",
+    "storage:write",
+    "affairs:read",
+    "affairs:write",
+    "identity:sign",
+    "message:app"
+  ],
+  "sdkVersion": "1",
+  "package": {
+    "updateManifestUrl": "https://github.com/welyin/spark/releases/latest/download/spark-plugin-spark-feedback-manifest.json",
+    "packageName": "spark-plugin-spark-feedback-0.1.0.spkg"
+  }
+}

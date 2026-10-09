@@ -1,0 +1,16 @@
+{
+  "comment": "id 暂用插件短名；随分发模型迁移后改为仓库地址（见插件分发规格 §1）。自举插件：问题反馈应用（feedback.md v0.2）——反馈直建子事务（sdk.affairs.create + refs parent 指向目标项目议题）为 MVP 主路径，手动导出预填草稿为兜底（档一-1）；环境信息经桥握手 ctx 注入（appVersion/platform/shellVersion，档二-9，免权限低敏字段，用户可见可关）；默认目标议题冷启动 = 内置 Spark 议题 affairId 常量 + 关注列表选择 + 创世记录/邀请粘贴三路兜底（档三-15；公共目录搜索面 SDK 未暴露，降级见实现报告）；每日提交数温馨提示（档三-18，客户端自律不设硬门槛）。affairTypes 只生产不注册（X8）：bug/proposal 子事务类型由「项目」插件独占注册。不申请 system:exec / network:*——本插件无任何外呼需要。",
+  "id": "spark-feedback",
+  "name": "问题反馈",
+  "icon": "assets/icon.svg",
+  "summary": "对运行版本提交缺陷/建议，回流为目标项目议题的子事务（sdk.affairs.create + parent 引用）；手动导出兜底；公开性逐次明示；附件 opt-in 入内容面。",
+  "category": "foundation",
+  "version": "0.1.0",
+  "release": {
+    "assetNaming": "spark-plugin-spark-feedback-<version>.spkg",
+    "updateManifestAsset": "spark-plugin-spark-feedback-manifest.json",
+    "signatureAsset": "spark-plugin-spark-feedback-manifest.sig"
+  },
+  "permissions": ["storage:read", "storage:write", "affairs:read", "affairs:write", "identity:sign", "message:app"],
+  "mirrors": []
+}

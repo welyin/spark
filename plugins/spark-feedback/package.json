@@ -1,0 +1,12 @@
+{
+  "name": "@spark/plugin-spark-feedback",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "问题反馈插件（自举）：缺陷/建议表单 → 目标项目议题子事务（bug/proposal，父子引用）回流；手动导出兜底；台账与回执卡片。",
+  "scripts": {
+    "build": "node ../../app/node_modules/vite/bin/vite.js build --config vite.config.ts",
+    "typecheck": "node ../../app/node_modules/vue-tsc/bin/vue-tsc.js --noEmit -p tsconfig.json || node ../../app/node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
+    "test": "cd ../../app && node node_modules/vitest/vitest.mjs run spark-feedback"
+  }
+}
