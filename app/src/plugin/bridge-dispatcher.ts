@@ -12,8 +12,9 @@
  * 2) view type 裁剪：app 主视图全量、message-card 仅 docs/data 只读、验签类
  *    与 affairs 只读（VIEW_ALLOWED_CALLS 映射表，后续按 view 扩充）；
  * 3) 当前 space：manifest supportedSpaces 不含当前 space 类型时整域拒绝；
- *    org 域调用（runtime.syncOrganizationData/listMineOrganizations）在 personal
- *    空间下一律拒绝；org 空间下 syncOrganizationData 的 org 实参必须与当前 space 一致。
+ *    org 域调用（runtime.syncOrganizationData/listMineOrganizations、
+ *    org.listMine）在 personal 空间下一律拒绝；org 空间下
+ *    syncOrganizationData 的 org 实参必须与当前 space 一致。
  *
  * 未授权一律抛 `Access denied: ...`（与 TS 旧权限中间件文案同前缀）。
  *
@@ -34,7 +35,7 @@ import { listAppMessages, markAppMessagesRead, sendAppMessage } from './messages
 import type { AppMessageCardDto, ElectronAPI } from '../api/types';
 import { refreshContacts, ensurePluginContactTag } from '../mock/contacts';
 import { OPEN_PLUGIN_DEEPLINK_EVENT } from '../services/deep-link';
-import { pickSpkgFile } from '../api';
+import { pickSpkgFile, saveFileWithDialog } from '../api';
 
 /** 桥事件泵：由外部（PluginIframeHost）注入，用于将 Tauri 事件转发为桥 event。 */
 export interface BridgeEventPump {
@@ -79,6 +80,9 @@ const CALL_PERMISSIONS: Record<string, string> = {
   'sys.fetch': 'network:fetch',
   'sys.fetchStream': 'network:fetch',
   'sys.pickFolder': 'system:exec',
+  // 壳层代存文件（保存对话框为用户主动行为，路径由用户选定）归 storage:read，
+  // 与 org.exportData（org:read）/ market.pickSpkg（market:read）壳层对话框先例同口径
+  'sys.saveFile': 'storage:read',
   // 插件联系人消息方法（统一在 messages 命名空间下）
   'messages.registerAsContact': 'message:app',
   'messages.unregisterAsContact': 'message:app',
@@ -181,7 +185,33 @@ const CALL_PERMISSIONS: Record<string, string> = {
   'market.importLocal': 'market:write',
   'market.announcePublish': 'market:write',
   // .spkg 文件选择对话框（壳层代开，用户主动行为，只回路径）归读位
-  'market.pickSpkg': 'market:read'
+  'market.pickSpkg': 'market:read',
+  // A42 组织管理模块（sdk.org）：org-* 命令等语义移植。读位 org:read
+  // （基础权限——组织列表/同步概览/网关活跃集/邀请记录/地址解析/节点名片/
+  // 数据治理预览/导出），写位 org:write（高级——创建/退出/名册/邀请/公开/
+  // 信息更新/导入名片/数据治理执行）；空间门控见 ORG_ID_SCOPED_CALLS
+  'org.listMine': 'org:read',
+  'org.getSyncOverview': 'org:read',
+  'org.getGatewayActiveSet': 'org:read',
+  'org.inviteRecords': 'org:read',
+  'org.resolveAddress': 'org:read',
+  'org.searchKnown': 'org:read',
+  'org.makeNodeCard': 'org:read',
+  'org.purgePreview': 'org:read',
+  'org.exportData': 'org:read',
+  'org.create': 'org:write',
+  'org.leave': 'org:write',
+  'org.addMember': 'org:write',
+  'org.removeMember': 'org:write',
+  'org.createInvite': 'org:write',
+  'org.acceptInvite': 'org:write',
+  'org.setPublic': 'org:write',
+  'org.updateInfo': 'org:write',
+  'org.updateMyIdentity': 'org:write',
+  'org.sendInvite': 'org:write',
+  'org.respondInvite': 'org:write',
+  'org.importNodeCard': 'org:write',
+  'org.purgeExecute': 'org:write'
   // 注：affairs.create 是桥 client 侧组合（identity.sign + affairs.follow，
   // 逐调用各自由本表强制）；affairs.onChange 走事件订阅通道（subscribe
   // 不经 call 表，与 data.onChange 同口径，事件载荷仅 affairId+变更类别
@@ -292,6 +322,37 @@ async function assertNavPluginInput(
   };
 }
 
+// ------------------------------------------------------------------
+// sys.saveFile 入参白名单（壳层代存：插件沙箱 iframe 无对话框/文件写能力，
+// 壳层代开保存对话框并代写用户所选路径——spark-files 下载通路，A42 修复）
+// ------------------------------------------------------------------
+
+/** 建议文件名长度上限（对话框 defaultPath） */
+const SAVEFILE_NAME_MAX = 255;
+/** 代存数据上限（base64 字符串长度；≈192MiB 解码后，防插件经桥灌爆主进程内存） */
+const SAVEFILE_BASE64_MAX = 256 * 1024 * 1024;
+
+function assertSaveFileInput(raw: unknown): { name: string; dataBase64: string } {
+  const input = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
+  const name = input.name;
+  if (
+    typeof name !== 'string' ||
+    name.length === 0 ||
+    name.length > SAVEFILE_NAME_MAX ||
+    // 仅文件名，不得携带路径分隔/控制字符，纯点名（"." / ".."）同拒
+    // （它只是对话框建议名，不表达任何目录语义）
+    /[/\\\u0000-\u001f]/.test(name) ||
+    /^\.+$/.test(name)
+  ) {
+    throw new Error('InvalidArgs: sys.saveFile name must be a plain file name (no path separators/control chars, ≤255 chars)');
+  }
+  const dataBase64 = input.dataBase64;
+  if (typeof dataBase64 !== 'string' || dataBase64.length > SAVEFILE_BASE64_MAX) {
+    throw new Error(`InvalidArgs: sys.saveFile dataBase64 must be a base64 string of at most ${SAVEFILE_BASE64_MAX} chars`);
+  }
+  return { name, dataBase64 };
+}
+
 /** view type 裁剪表：null = 全量（仅 grantedPermissions 过滤）；未列出的 view type 整域拒绝 */
 const VIEW_ALLOWED_CALLS: Record<PluginViewType, ReadonlySet<string> | null> = {
   app: null,
@@ -307,8 +368,50 @@ const VIEW_ALLOWED_CALLS: Record<PluginViewType, ReadonlySet<string> | null> = {
   'message-card': new Set(['docs.get', 'docs.query', 'data.get', 'data.query', 'data.readBlob', 'identity.verify', 'evidence.headHash', 'evidence.verify', 'affairs.readLog', 'affairs.readResolution'])
 };
 
-/** org 域调用：需组织空间上下文，personal 空间下一律拒绝（无 org 实参可校验） */
-const ORG_SPACE_CALLS = new Set(['runtime.syncOrganizationData', 'runtime.listMineOrganizations']);
+/**
+ * org 域调用：需组织空间上下文，personal 空间下一律拒绝（无 org 实参可校验）。
+ * A42 评审决议（口径统一）：org.listMine 与老面 runtime.listMineOrganizations
+ * 同口径——personal 空间无组织可管，不向插件枚举本机组织名册（成员 rootId/
+ * 角色/昵称）；插件 personal 视图据此不调 listMine，如实提示用户切换空间。
+ */
+const ORG_SPACE_CALLS = new Set([
+  'runtime.syncOrganizationData',
+  'runtime.listMineOrganizations',
+  'org.listMine'
+]);
+
+/**
+ * sdk.org 的 orgId 作用域调用（A42）：org 空间下 orgId 实参必须等于当前空间
+ * id（防插件操作当前空间之外的组织数据），personal 空间一律拒绝。
+ * org.sendInvite 的 orgId 在 input 对象内（args[0].orgId），其余在 args[0]。
+ * 空间无关面（create/acceptInvite/resolveAddress/searchKnown/
+ * respondInvite/importNodeCard/exportData、无 orgId 实参的 makeNodeCard）
+ * 两空间放行——创建/加入/发现是身份级动作，不绑空间。
+ * listMine 不在放行面：personal 空间拒（见 ORG_SPACE_CALLS 决议注释）。
+ */
+const ORG_ID_SCOPED_CALLS = new Set([
+  'org.leave',
+  'org.addMember',
+  'org.removeMember',
+  'org.createInvite',
+  'org.getGatewayActiveSet',
+  'org.getSyncOverview',
+  'org.setPublic',
+  'org.updateInfo',
+  'org.updateMyIdentity',
+  'org.sendInvite',
+  'org.inviteRecords',
+  'org.purgePreview',
+  'org.purgeExecute'
+]);
+
+/** 提取 org 作用域调用的 orgId 实参（sendInvite 在 input 内，其余为首参） */
+function orgIdArgOf(callKey: string, args: unknown[]): unknown {
+  if (callKey === 'org.sendInvite') {
+    return (args[0] as { orgId?: unknown } | undefined)?.orgId;
+  }
+  return args[0];
+}
 
 export type PluginBridgeIdentity = {
   pluginId: string;
@@ -657,6 +760,40 @@ export async function createPluginBridgeDispatcher(identity: PluginBridgeIdentit
       // （tauri-plugin-dialog，与旧侧载入口同链路），用户取消返回 null
       pickSpkg: () => pickSpkgFile()
     },
+    // A42 组织管理模块（sdk.org）：org-* 命令等语义移植（backend.org 透传
+    // electronAPI.organization / p2p / dataManagement）；权限经
+    // CALL_PERMISSIONS 强制 org:read/org:write，orgId 作用域调用的空间
+    // 门控在下方返回的 handler 内统一强制（ORG_ID_SCOPED_CALLS）
+    org: {
+      listMine: () => backend.org!.listMine(),
+      create: (input: Parameters<NonNullable<PluginSDK['org']>['create']>[0]) => backend.org!.create(input),
+      leave: (orgId: string) => backend.org!.leave(orgId),
+      addMember: (orgId: string, input: { rootId: string; nodeInfo?: unknown }) =>
+        backend.org!.addMember(orgId, input as Parameters<NonNullable<PluginSDK['org']>['addMember']>[1]),
+      removeMember: (orgId: string, memberRootId: string) => backend.org!.removeMember(orgId, memberRootId),
+      getGatewayActiveSet: (orgId: string) => backend.org!.getGatewayActiveSet(orgId),
+      createInvite: (orgId: string) => backend.org!.createInvite(orgId),
+      acceptInvite: (code: string) => backend.org!.acceptInvite(code),
+      getSyncOverview: (orgId: string) => backend.org!.getSyncOverview(orgId),
+      setPublic: (orgId: string, isPublic: boolean, displayName?: string) =>
+        backend.org!.setPublic(orgId, isPublic, displayName),
+      updateInfo: (orgId: string, patch: { name?: string; description?: string; avatar?: string }) =>
+        backend.org!.updateInfo(orgId, patch),
+      updateMyIdentity: (orgId: string, patch: Parameters<NonNullable<PluginSDK['org']>['updateMyIdentity']>[1]) =>
+        backend.org!.updateMyIdentity(orgId, patch),
+      resolveAddress: (orgAddress: string) => backend.org!.resolveAddress(orgAddress),
+      searchKnown: (keyword: string) => backend.org!.searchKnown(keyword),
+      sendInvite: (input: Parameters<NonNullable<PluginSDK['org']>['sendInvite']>[0]) =>
+        backend.org!.sendInvite(input),
+      respondInvite: (input: { inviteId: string; accept: boolean }) => backend.org!.respondInvite(input),
+      inviteRecords: (orgId: string) => backend.org!.inviteRecords(orgId),
+      makeNodeCard: (orgId?: string) => backend.org!.makeNodeCard(typeof orgId === 'string' && orgId ? orgId : undefined),
+      importNodeCard: (card: string) => backend.org!.importNodeCard(card),
+      purgePreview: (orgId: string, beforeTs: number) => backend.org!.purgePreview(orgId, beforeTs),
+      purgeExecute: (orgId: string, beforeTs: number, confirmExported: boolean) =>
+        backend.org!.purgeExecute(orgId, beforeTs, confirmExported),
+      exportData: () => backend.org!.exportData()
+    },
     // sys 代理（内核外呼）：仅代理不加工；插件享有完整权限，内核命令侧负责业务安全
     sys: {
       exec: (program: string, execArgs: string[], workdir?: string) => {
@@ -667,6 +804,13 @@ export async function createPluginBridgeDispatcher(identity: PluginBridgeIdentit
         backend.sys!.fetch(url, options) as Promise<unknown>,
       pickFolder: (title?: string) =>
         backend.sys!.pickFolder!(title) as Promise<unknown>,
+      // 壳层代存（A42 修复：spark-files 下载通路）：沙箱 iframe 无 allow-downloads，
+      // Blob 锚点下载各 WebView 口径不一——改为壳层代开保存对话框 + 代写用户所选
+      // 路径（同 market.pickSpkg / org.exportData 先例）。入参白名单校验后转发
+      saveFile: (input: unknown) => {
+        const { name, dataBase64 } = assertSaveFileInput(input);
+        return saveFileWithDialog(name, dataBase64);
+      },
       fetchStream: async (url: string, options?: Record<string, unknown>) => {
         // 1. 发起流式请求，取得 streamId
         const { streamId } = await backend.sys!.fetchStream!(url, options) as { streamId: string };
@@ -723,6 +867,20 @@ export async function createPluginBridgeDispatcher(identity: PluginBridgeIdentit
       args[0] !== identity.space.id
     ) {
       throw new Error(`Access denied: org ${String(args[0])} is outside current space ${identity.space.id}`);
+    }
+    // sdk.org 的 orgId 作用域调用（A42）：personal 空间整组拒绝；org 空间下
+    // orgId 实参须等于当前空间 id。makeNodeCard 仅在带 orgId 实参时按作用域校验
+    const orgScoped =
+      ORG_ID_SCOPED_CALLS.has(callKey) ||
+      (callKey === 'org.makeNodeCard' && typeof args[0] === 'string' && args[0].length > 0);
+    if (orgScoped) {
+      if (identity.space.type !== 'org') {
+        throw new Error(`Access denied: ${callKey} requires org space`);
+      }
+      const orgIdArg = orgIdArgOf(callKey, args);
+      if (orgIdArg !== identity.space.id) {
+        throw new Error(`Access denied: org ${String(orgIdArg)} is outside current space ${identity.space.id}`);
+      }
     }
 
     // 使用时询问：identity:sign 首次确认（会话级记忆，并发首调复用同一确认）

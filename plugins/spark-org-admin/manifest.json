@@ -1,0 +1,32 @@
+{
+  "id": "spark-org-admin",
+  "domain": "plugin:spark-org-admin",
+  "name": "组织管理",
+  "version": "0.1.0",
+  "entryView": "default",
+  "description": "Spark 默认内置组织管理（A42）：组织创建/加入、名册管理（预录/移除/邀请）、策略配置（sdk.policy 复用）、副本健康度与履职网关展示、公开设置与公开组织发现、节点名片找回、数据治理——组织数据与操作经 sdk.org 访问（等语义移植 org-* 命令；换插件数据原样还在——名册在内核组织域）。",
+  "category": "foundation",
+  "icon": "assets/icon.svg",
+  "supportedSpaces": ["personal", "org"],
+  "views": [
+    { "id": "default", "type": "app", "title": "组织管理" }
+  ],
+  "chrome": {
+    "hostTitleBar": false
+  },
+  "window": {
+    "defaultWidth": 960,
+    "defaultHeight": 640
+  },
+  "permissions": [
+    "org:read",
+    "org:write",
+    "policy:read",
+    "policy:write"
+  ],
+  "sdkVersion": "1",
+  "package": {
+    "updateManifestUrl": "",
+    "packageName": "spark-plugin-spark-org-admin-0.1.0.spkg"
+  }
+}

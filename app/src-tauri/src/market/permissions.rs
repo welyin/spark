@@ -7,11 +7,14 @@
 //! 集合运算保持 TS Set 的插入序语义（基础权限在前，高级权限按声明序追加）。
 
 /// 全部合法权限（TS `PLUGIN_PERMISSIONS`）。
-pub const PLUGIN_PERMISSIONS: [&str; 26] = [
+pub const PLUGIN_PERMISSIONS: [&str; 27] = [
     "storage:read",
     "storage:write",
     "org:read",
     "org:sync",
+    // A42 组织管理模块（sdk.org）：组织创建/名册/邀请/公开/数据治理等写面
+    // （读面归基础位 org:read，与桥 dispatcher CALL_PERMISSIONS 逐字对齐）
+    "org:write",
     "network:broadcast",
     "proof:verify",
     "identity:verify",
@@ -59,8 +62,10 @@ pub const BASIC_PERMISSIONS: [&str; 5] = [
 ];
 
 /// 高级权限：必须声明并经安装时授权（TS `ADVANCED_PERMISSIONS`）。
-pub const ADVANCED_PERMISSIONS: [&str; 21] = [
+pub const ADVANCED_PERMISSIONS: [&str; 22] = [
     "org:sync",
+    // A42 组织管理模块（sdk.org）写面
+    "org:write",
     "network:broadcast",
     "identity:sign",
     "message:app",

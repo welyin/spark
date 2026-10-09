@@ -507,6 +507,8 @@ pub fn run() {
             commands::sys::sys_exec,
             commands::sys::sys_fetch,
             commands::sys::sys_fetch_stream,
+            // 壳层代存（A42 修复：spark-files 下载通路；路径来自用户保存对话框）
+            commands::sys::sys_save_file,
             // 设备管理（多设备清单：本机采集 + 自设备 device-sync 同步）
             commands::device::devices_list,
             commands::device::root_revoke_device,

@@ -1,0 +1,12 @@
+{
+  "name": "@spark/plugin-spark-files",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Spark 默认内置文件管理插件（A42：个人空间与组织域统一文件/照片管理，sdk.content 本体 + sdk.data 元数据）",
+  "scripts": {
+    "build": "node ../../app/node_modules/vite/bin/vite.js build --config vite.config.ts",
+    "typecheck": "node ../../app/node_modules/vue-tsc/bin/vue-tsc.js --noEmit -p tsconfig.json || node ../../app/node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
+    "test": "cd ../../app && node node_modules/vitest/vitest.mjs run spark-files"
+  }
+}

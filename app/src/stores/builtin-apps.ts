@@ -14,6 +14,10 @@
  * 市场（A34）：'apps' tab（应用管理）与桌面窗口 spark:market 共用同一注册项；
  * 空间的应用市场（spark:space-market，per-space 启停依赖壳层 app-enablement
  * 事实源）本期不迁移，恒 legacy（见任务报告遗留）。
+ * 组织管理（A42）：'org' 不是主 tab——组织设置界面的宿主是顶栏空间设置对话框
+ * （SpaceSettingsDialog）与设置页组织空间栏（SettingsPage 'space' 菜单），
+ * 两处均经 BuiltinAppHost 灰度；组织创建/加入对话框（MembershipDialogs）
+ * 是壳层入口动作不在灰度面（插件版内含创建/加入面板，两通路并存一个版本）。
  */
 import { ref } from 'vue';
 
@@ -31,7 +35,9 @@ export interface BuiltinAppDef {
 /** 默认内置插件注册表（壳层侧唯一事实源；插件工程在 code/plugins/<id>） */
 export const BUILTIN_APPS: BuiltinAppDef[] = [
   { tabId: 'messages', pluginId: 'spark-chat', viewId: 'default' },
-  { tabId: 'apps', pluginId: 'spark-market', viewId: 'default' }
+  { tabId: 'apps', pluginId: 'spark-market', viewId: 'default' },
+  // A42 组织管理：非主 tab——宿主为 SpaceSettingsDialog 与 SettingsPage 组织栏
+  { tabId: 'org', pluginId: 'spark-org-admin', viewId: 'default' }
 ];
 
 const storageKey = (tabId: string): string => `spark:builtin-impl:${tabId}`;

@@ -31,6 +31,8 @@ export const PERMISSION_LABELS: Record<string, string> = {
   'storage:write': '写入本域数据',
   'org:read': '读取组织信息',
   'org:sync': '同步组织数据',
+  // A42 组织管理模块（sdk.org）写面
+  'org:write': '管理组织（名册/邀请/设置）',
   'network:broadcast': '网络广播',
   'proof:verify': '存证核验',
   'identity:sign': '域身份签名',

@@ -861,3 +861,111 @@ describe('bridge 握手 ctx 环境信息（A57）', () => {
     expect(parseBridgeMessage(roundTripped)).toEqual(message);
   });
 });
+
+describe('bridge org 域（A42 sdk.org：org-* 命令等语义移植）', () => {
+  // 接线覆盖钉住（A34 教训 #1）：client 侧一度缺失 org 模块导致 sdk.org
+  // 运行时 undefined——此处逐方法钉序列化口径
+  it('sdk.org 各方法序列化为 call（module=org，参数透传）', async () => {
+    const harness = createHarness();
+    const { sdk } = await connect(harness);
+
+    await sdk.org!.listMine();
+    expect(harness.handler).toHaveBeenCalledWith('org', 'listMine', []);
+
+    await sdk.org!.create({ name: '新组织', domainType: 'leaf' });
+    expect(harness.handler).toHaveBeenCalledWith('org', 'create', [{ name: '新组织', domainType: 'leaf' }]);
+
+    await sdk.org!.leave('org_1');
+    expect(harness.handler).toHaveBeenCalledWith('org', 'leave', ['org_1']);
+
+    await sdk.org!.addMember('org_1', { rootId: 'r'.repeat(64) });
+    expect(harness.handler).toHaveBeenCalledWith('org', 'addMember', ['org_1', { rootId: 'r'.repeat(64) }]);
+
+    await sdk.org!.removeMember('org_1', 'm1');
+    expect(harness.handler).toHaveBeenCalledWith('org', 'removeMember', ['org_1', 'm1']);
+
+    await sdk.org!.getGatewayActiveSet('org_1');
+    expect(harness.handler).toHaveBeenCalledWith('org', 'getGatewayActiveSet', ['org_1']);
+
+    await sdk.org!.createInvite('org_1');
+    expect(harness.handler).toHaveBeenCalledWith('org', 'createInvite', ['org_1']);
+
+    await sdk.org!.acceptInvite('code-x');
+    expect(harness.handler).toHaveBeenCalledWith('org', 'acceptInvite', ['code-x']);
+
+    await sdk.org!.getSyncOverview('org_1');
+    expect(harness.handler).toHaveBeenCalledWith('org', 'getSyncOverview', ['org_1']);
+
+    // setPublic：displayName 缺省不占参数位，携带时按位透传
+    await sdk.org!.setPublic('org_1', true);
+    expect(harness.handler).toHaveBeenCalledWith('org', 'setPublic', ['org_1', true]);
+    await sdk.org!.setPublic('org_1', true, '展示名');
+    expect(harness.handler).toHaveBeenCalledWith('org', 'setPublic', ['org_1', true, '展示名']);
+
+    await sdk.org!.updateInfo('org_1', { name: '改名' });
+    expect(harness.handler).toHaveBeenCalledWith('org', 'updateInfo', ['org_1', { name: '改名' }]);
+
+    await sdk.org!.updateMyIdentity('org_1', { nickname: '组织内昵称' });
+    expect(harness.handler).toHaveBeenCalledWith('org', 'updateMyIdentity', ['org_1', { nickname: '组织内昵称' }]);
+
+    await sdk.org!.resolveAddress('addr');
+    expect(harness.handler).toHaveBeenCalledWith('org', 'resolveAddress', ['addr']);
+
+    await sdk.org!.searchKnown('关键词');
+    expect(harness.handler).toHaveBeenCalledWith('org', 'searchKnown', ['关键词']);
+
+    // sendInvite：orgId 在 input 内（桥侧空间门控取 input.orgId）
+    const invite = { orgId: 'org_1', targetRootId: 't'.repeat(64) };
+    await sdk.org!.sendInvite(invite);
+    expect(harness.handler).toHaveBeenCalledWith('org', 'sendInvite', [invite]);
+
+    await sdk.org!.respondInvite({ inviteId: 'i1', accept: true });
+    expect(harness.handler).toHaveBeenCalledWith('org', 'respondInvite', [{ inviteId: 'i1', accept: true }]);
+
+    await sdk.org!.inviteRecords('org_1');
+    expect(harness.handler).toHaveBeenCalledWith('org', 'inviteRecords', ['org_1']);
+
+    // makeNodeCard：orgId 缺省不占参数位（桥侧据此判定空间无关的无参名片）
+    await sdk.org!.makeNodeCard();
+    expect(harness.handler).toHaveBeenCalledWith('org', 'makeNodeCard', []);
+    await sdk.org!.makeNodeCard('org_1');
+    expect(harness.handler).toHaveBeenCalledWith('org', 'makeNodeCard', ['org_1']);
+
+    await sdk.org!.importNodeCard('card-x');
+    expect(harness.handler).toHaveBeenCalledWith('org', 'importNodeCard', ['card-x']);
+
+    await sdk.org!.purgePreview('org_1', 100);
+    expect(harness.handler).toHaveBeenCalledWith('org', 'purgePreview', ['org_1', 100]);
+
+    await sdk.org!.purgeExecute('org_1', 100, true);
+    expect(harness.handler).toHaveBeenCalledWith('org', 'purgeExecute', ['org_1', 100, true]);
+
+    await sdk.org!.exportData();
+    expect(harness.handler).toHaveBeenCalledWith('org', 'exportData', []);
+    harness.bridge.destroy();
+  });
+
+  it('org.call 错误面：personal 空间拒绝透传带 code（与既有模块同口径）', async () => {
+    const harness = createHarness({
+      handler: async () => {
+        throw new Error('Access denied: org.listMine requires org space');
+      }
+    });
+    const { sdk } = await connect(harness);
+    await expect(sdk.org!.listMine()).rejects.toMatchObject({
+      message: expect.stringContaining('Access denied'),
+      code: 'call-failed'
+    });
+    harness.bridge.destroy();
+  });
+});
+
+describe('bridge sys.saveFile（A42 修复：spark-files 下载壳层代存通路）', () => {
+  it('sdk.sys.saveFile 序列化为 sys.saveFile call（input 透传）', async () => {
+    const harness = createHarness();
+    const { sdk } = await connect(harness);
+    await sdk.sys!.saveFile({ name: 'a.txt', dataBase64: 'QUJD' });
+    expect(harness.handler).toHaveBeenCalledWith('sys', 'saveFile', [{ name: 'a.txt', dataBase64: 'QUJD' }]);
+    harness.bridge.destroy();
+  });
+});

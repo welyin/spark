@@ -741,6 +741,53 @@ export function connectPluginBridge(options: ConnectPluginBridgeOptions): Promis
           await events.subscribe('MarketAnnounceVerified', handler as PluginEventHandler);
         }
       },
+      // 组织管理模块（A42 sdk.org；权限 org:read/org:write 与空间门控由桥
+      // dispatcher 强制——personal 空间 listMine 与 orgId 作用域调用整组拒绝，
+      // org 空间 orgId 实参须等于当前空间 id）
+      org: {
+        listMine: () => call('org', 'listMine', []) as Promise<import('../index').PluginOrgView[]>,
+        create: (input) => call('org', 'create', [input]) as Promise<import('../index').PluginOrgView>,
+        leave: (orgId) => call('org', 'leave', [orgId]) as Promise<import('../index').PluginOrgView>,
+        addMember: (orgId, input) =>
+          call('org', 'addMember', [orgId, input]) as Promise<import('../index').PluginOrgView>,
+        removeMember: (orgId, memberRootId) =>
+          call('org', 'removeMember', [orgId, memberRootId]) as Promise<import('../index').PluginOrgView>,
+        getGatewayActiveSet: (orgId) =>
+          call('org', 'getGatewayActiveSet', [orgId]) as Promise<string[]>,
+        createInvite: (orgId) =>
+          call('org', 'createInvite', [orgId]) as Promise<{ invite: string; orgId: string; orgName: string }>,
+        acceptInvite: (code) =>
+          call('org', 'acceptInvite', [code]) as Promise<{ orgId: string; orgName: string; memberCount: number }>,
+        getSyncOverview: (orgId) =>
+          call('org', 'getSyncOverview', [orgId]) as Promise<import('../index').PluginOrgSyncOverview | null>,
+        // displayName 缺省不占用参数位（与 market.checkUpdates 同口径）
+        setPublic: (orgId, isPublic, displayName) =>
+          call('org', 'setPublic', displayName === undefined ? [orgId, isPublic] : [orgId, isPublic, displayName]) as Promise<import('../index').PluginOrgView>,
+        updateInfo: (orgId, patch) =>
+          call('org', 'updateInfo', [orgId, patch]) as Promise<import('../index').PluginOrgView>,
+        updateMyIdentity: (orgId, patch) =>
+          call('org', 'updateMyIdentity', [orgId, patch]) as Promise<import('../index').PluginOrgView>,
+        resolveAddress: (orgAddress) =>
+          call('org', 'resolveAddress', [orgAddress]) as Promise<import('../index').PluginOrgAddressRecord | null>,
+        searchKnown: (keyword) =>
+          call('org', 'searchKnown', [keyword]) as Promise<import('../index').PluginOrgAddressRecord[]>,
+        sendInvite: (input) =>
+          call('org', 'sendInvite', [input]) as Promise<import('../index').PluginOrgInviteRecord>,
+        respondInvite: (input) =>
+          call('org', 'respondInvite', [input]) as Promise<import('../index').PluginOrgInviteRecord>,
+        inviteRecords: (orgId) =>
+          call('org', 'inviteRecords', [orgId]) as Promise<import('../index').PluginOrgInviteRecord[]>,
+        // orgId 缺省不占用参数位（桥侧据此判定为空间无关的无参名片）
+        makeNodeCard: (orgId) =>
+          call('org', 'makeNodeCard', orgId === undefined ? [] : [orgId]) as Promise<{ card: string }>,
+        importNodeCard: (card) =>
+          call('org', 'importNodeCard', [card]) as Promise<{ peerId: string; hasRecoveryToken: boolean; connectError: string | null }>,
+        purgePreview: (orgId, beforeTs) =>
+          call('org', 'purgePreview', [orgId, beforeTs]) as Promise<import('../index').PluginOrgPurgePreview>,
+        purgeExecute: (orgId, beforeTs, confirmExported) =>
+          call('org', 'purgeExecute', [orgId, beforeTs, confirmExported]) as Promise<import('../index').PluginOrgPurgeResult>,
+        exportData: () => call('org', 'exportData', []) as Promise<import('../index').PluginOrgExportResult>
+      },
       events,
       onHostCall: (event: string, handler: (payload: unknown) => unknown | Promise<unknown>) => {
         hostCallHandlers.set(event, handler);
@@ -755,6 +802,10 @@ export function connectPluginBridge(options: ConnectPluginBridgeOptions): Promis
         /** 目录选择对话框：非长时外呼，走普通 call 默认超时 */
         pickFolder: (title) =>
           call('sys', 'pickFolder', title === undefined ? [] : [title]) as Promise<string | null>,
+        // 壳层代存（A42 修复：spark-files 下载通路）：保存对话框等待用户操作 +
+        // 大文件代写可能超过普通 call 的 10s 默认超时，与长时外呼同口径放宽
+        saveFile: (input) =>
+          call('sys', 'saveFile', [input], SYS_CALL_TIMEOUT_MS) as Promise<import('../index').SysSaveFileResult>,
         fetchStream: (url, options) =>
           call('sys', 'fetchStream', options === undefined ? [url] : [url, options], SYS_CALL_TIMEOUT_MS)
             .then(async (result) => {

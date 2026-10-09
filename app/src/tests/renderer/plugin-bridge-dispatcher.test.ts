@@ -12,14 +12,19 @@ vi.mock('element-plus', async (importOriginal) => {
   return { ...actual, ElMessageBox: { confirm: vi.fn() } };
 });
 
-// market.pickSpkg 走壳层代开文件对话框（api.pickSpkgFile → tauri dialog）；
-// jsdom 无对话框运行时，打桩为固定路径以验证桥面路由
+// market.pickSpkg / sys.saveFile 走壳层代开文件对话框（api.pickSpkgFile /
+// saveFileWithDialog → tauri dialog）；jsdom 无对话框运行时，打桩以验证桥面路由
 vi.mock('../../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../api')>();
-  return { ...actual, pickSpkgFile: vi.fn(async () => '/tmp/todo.spkg') };
+  return {
+    ...actual,
+    pickSpkgFile: vi.fn(async () => '/tmp/todo.spkg'),
+    saveFileWithDialog: vi.fn(async () => ({ cancelled: false as const, path: '/tmp/out.txt' }))
+  };
 });
 
 import { ElMessageBox } from 'element-plus';
+import { saveFileWithDialog } from '../../api';
 import { createPluginBridgeDispatcher, type PluginBridgeIdentity } from '../../plugin/bridge-dispatcher';
 import { getAppMessages, getConversation } from '../../stores/messages';
 import type { AppMessageDto } from '../../api/types';
@@ -140,6 +145,8 @@ describe('三重过滤：当前 space', () => {
     await expect(handler('runtime', 'syncOrganizationData', ['org_1'])).rejects.toThrow(/Access denied/);
     await expect(handler('runtime', 'syncOrganizationData', ['personal'])).rejects.toThrow(/Access denied/);
     await expect(handler('runtime', 'listMineOrganizations', [])).rejects.toThrow(/Access denied/);
+    // A42 评审决议：新面 org.listMine 与老面口径统一——personal 空间同样拒绝
+    await expect(handler('org', 'listMine', [])).rejects.toThrow(/Access denied/);
   });
 });
 
@@ -880,5 +887,227 @@ describe('navigation 域（sdk.navigation：免权限纯 UI 导航意图 + 参�
     const handler = await createPluginBridgeDispatcher({ ...BASE_IDENTITY, viewType: 'message-card' });
     await expect(handler('navigation', 'openChat', [{ rootId: ROOT_ID }])).rejects.toThrow(/Access denied/);
     await expect(handler('navigation', 'openPlugin', [{ pluginId: 'spark-example' }])).rejects.toThrow(/Access denied/);
+  });
+});
+
+// ------------------------------------------------------------------
+// A42 组织管理模块（sdk.org）：org-* 命令等语义移植。
+// 读位 org:read（基础位，granted 清单恒含；空授权测试仍按表拒绝），
+// 写位 org:write（高级）；orgId 作用域调用的空间门控
+// （ORG_ID_SCOPED_CALLS + makeNodeCard 带实参）
+// ------------------------------------------------------------------
+
+/** 记录型组织命令桩（organization/p2p/dataManagement 三路） */
+function mockOrgApi(granted: string[]) {
+  mockGrantedPermissions(granted);
+  const api = {
+    organization: {
+      listMine: vi.fn(async () => []),
+      create: vi.fn(async (input: unknown) => input),
+      leave: vi.fn(async () => null),
+      addMember: vi.fn(async () => null),
+      removeMember: vi.fn(async () => null),
+      getGatewayActiveSet: vi.fn(async () => []),
+      createInvite: vi.fn(async () => ({ invite: 'code', orgId: 'org_1', orgName: '组织' })),
+      acceptInvite: vi.fn(async () => ({ orgId: 'org_1', orgName: '组织', memberCount: 2 })),
+      getSyncOverview: vi.fn(async () => null),
+      setPublic: vi.fn(async () => null),
+      updateInfo: vi.fn(async () => null),
+      updateMyIdentity: vi.fn(async () => null),
+      resolveAddress: vi.fn(async () => null),
+      searchKnown: vi.fn(async () => []),
+      sendInvite: vi.fn(async (input: unknown) => input),
+      respondInvite: vi.fn(async (input: unknown) => input),
+      inviteRecords: vi.fn(async () => [])
+    },
+    p2p: {
+      makeNodeCard: vi.fn(async () => ({ card: 'node-card' })),
+      importNodeCard: vi.fn(async () => ({ peerId: 'peer', hasRecoveryToken: false, connectError: null }))
+    },
+    dataManagement: {
+      purgePreview: vi.fn(async () => null),
+      purgeExecute: vi.fn(async () => null),
+      exportData: vi.fn(async () => ({ cancelled: true }))
+    }
+  };
+  (window.electronAPI as any).organization = api.organization;
+  (window.electronAPI as any).p2p = api.p2p;
+  (window.electronAPI as any).dataManagement = api.dataManagement;
+  return api;
+}
+
+describe('org 域（A42 sdk.org：读须 org:read，写须 org:write + orgId 空间门控）', () => {
+  it('未授权：读面与写面一律拒绝', async () => {
+    mockOrgApi([]);
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    await expect(handler('org', 'listMine', [])).rejects.toThrow(/Access denied/);
+    await expect(handler('org', 'getSyncOverview', ['org_1'])).rejects.toThrow(/Access denied/);
+    await expect(handler('org', 'resolveAddress', ['addr'])).rejects.toThrow(/Access denied/);
+    await expect(handler('org', 'exportData', [])).rejects.toThrow(/Access denied/);
+    await expect(handler('org', 'create', [{ name: 'x' }])).rejects.toThrow(/Access denied/);
+    await expect(handler('org', 'addMember', ['org_1', { rootId: 'r' }])).rejects.toThrow(/Access denied/);
+    await expect(handler('org', 'purgeExecute', ['org_1', 1, true])).rejects.toThrow(/Access denied/);
+  });
+
+  it('org:read 授权：读面放行（参数透传到 electronAPI），写面仍拒绝', async () => {
+    const api = mockOrgApi(['org:read']);
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+
+    await handler('org', 'listMine', []);
+    expect(api.organization.listMine).toHaveBeenCalledTimes(1);
+    await handler('org', 'getSyncOverview', ['org_1']);
+    expect(api.organization.getSyncOverview).toHaveBeenCalledWith('org_1');
+    await handler('org', 'getGatewayActiveSet', ['org_1']);
+    expect(api.organization.getGatewayActiveSet).toHaveBeenCalledWith('org_1');
+    await handler('org', 'inviteRecords', ['org_1']);
+    expect(api.organization.inviteRecords).toHaveBeenCalledWith('org_1');
+    await handler('org', 'resolveAddress', ['addr']);
+    expect(api.organization.resolveAddress).toHaveBeenCalledWith('addr');
+    await handler('org', 'searchKnown', ['关键词']);
+    expect(api.organization.searchKnown).toHaveBeenCalledWith('关键词');
+    // 节点名片读面：无实参放行（空间无关）
+    await handler('org', 'makeNodeCard', []);
+    expect(api.p2p.makeNodeCard).toHaveBeenCalledWith(undefined);
+    await handler('org', 'purgePreview', ['org_1', 100]);
+    expect(api.dataManagement.purgePreview).toHaveBeenCalledWith('org_1', 100);
+    await handler('org', 'exportData', []);
+    expect(api.dataManagement.exportData).toHaveBeenCalledTimes(1);
+
+    await expect(handler('org', 'create', [{ name: 'x' }])).rejects.toThrow(/Access denied/);
+    await expect(handler('org', 'leave', ['org_1'])).rejects.toThrow(/Access denied/);
+    await expect(handler('org', 'importNodeCard', ['card'])).rejects.toThrow(/Access denied/);
+    expect(api.organization.create).not.toHaveBeenCalled();
+    expect(api.p2p.importNodeCard).not.toHaveBeenCalled();
+  });
+
+  it('org:write 授权：写面放行（含 sendInvite/respondInvite 对象实参），读面仍拒绝', async () => {
+    const api = mockOrgApi(['org:write']);
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+
+    await handler('org', 'create', [{ name: '新组织', domainType: 'leaf' }]);
+    expect(api.organization.create).toHaveBeenCalledWith({ name: '新组织', domainType: 'leaf' });
+    await handler('org', 'leave', ['org_1']);
+    expect(api.organization.leave).toHaveBeenCalledWith('org_1');
+    await handler('org', 'addMember', ['org_1', { rootId: 'r'.repeat(64) }]);
+    expect(api.organization.addMember).toHaveBeenCalledWith('org_1', { rootId: 'r'.repeat(64) });
+    await handler('org', 'removeMember', ['org_1', 'm1']);
+    expect(api.organization.removeMember).toHaveBeenCalledWith('org_1', 'm1');
+    await handler('org', 'createInvite', ['org_1']);
+    expect(api.organization.createInvite).toHaveBeenCalledWith('org_1');
+    await handler('org', 'acceptInvite', ['code-x']);
+    expect(api.organization.acceptInvite).toHaveBeenCalledWith('code-x');
+    await handler('org', 'setPublic', ['org_1', true, '展示名']);
+    expect(api.organization.setPublic).toHaveBeenCalledWith('org_1', true, '展示名');
+    await handler('org', 'updateInfo', ['org_1', { name: '改名' }]);
+    expect(api.organization.updateInfo).toHaveBeenCalledWith('org_1', { name: '改名' });
+    await handler('org', 'updateMyIdentity', ['org_1', { nickname: '组织内昵称' }]);
+    expect(api.organization.updateMyIdentity).toHaveBeenCalledWith('org_1', { nickname: '组织内昵称' });
+    const invite = { orgId: 'org_1', targetRootId: 't'.repeat(64), targetPeerId: null, targetAddresses: null };
+    await handler('org', 'sendInvite', [invite]);
+    expect(api.organization.sendInvite).toHaveBeenCalledWith(invite);
+    await handler('org', 'respondInvite', [{ inviteId: 'i1', accept: true }]);
+    expect(api.organization.respondInvite).toHaveBeenCalledWith({ inviteId: 'i1', accept: true });
+    await handler('org', 'importNodeCard', ['card-x']);
+    expect(api.p2p.importNodeCard).toHaveBeenCalledWith('card-x');
+    await handler('org', 'purgeExecute', ['org_1', 100, true]);
+    expect(api.dataManagement.purgeExecute).toHaveBeenCalledWith('org_1', 100, true);
+
+    await expect(handler('org', 'listMine', [])).rejects.toThrow(/Access denied/);
+    await expect(handler('org', 'getSyncOverview', ['org_1'])).rejects.toThrow(/Access denied/);
+  });
+
+  it('orgId 作用域：org 空间实参须等于当前空间，越域拒绝（含 sendInvite 的 input.orgId）', async () => {
+    const api = mockOrgApi(['org:read', 'org:write']);
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    await expect(handler('org', 'getSyncOverview', ['org_2'])).rejects.toThrow(/Access denied/);
+    await expect(handler('org', 'leave', ['org_2'])).rejects.toThrow(/Access denied/);
+    await expect(handler('org', 'sendInvite', [{ orgId: 'org_2', targetRootId: 't' }])).rejects.toThrow(/Access denied/);
+    await expect(handler('org', 'makeNodeCard', ['org_2'])).rejects.toThrow(/Access denied/);
+    // 命中当前空间放行
+    await handler('org', 'getSyncOverview', ['org_1']);
+    expect(api.organization.getSyncOverview).toHaveBeenCalledWith('org_1');
+    await handler('org', 'makeNodeCard', ['org_1']);
+    expect(api.p2p.makeNodeCard).toHaveBeenCalledWith('org_1');
+  });
+
+  it('personal 空间：orgId 作用域调用与 listMine 一律拒绝，空间无关面放行', async () => {
+    const api = mockOrgApi(['org:read', 'org:write']);
+    const handler = await createPluginBridgeDispatcher({
+      ...BASE_IDENTITY,
+      space: { type: 'personal', id: 'personal' },
+      supportedSpaces: ['personal', 'org']
+    });
+    // orgId 作用域（含带实参的 makeNodeCard）拒绝
+    await expect(handler('org', 'getSyncOverview', ['org_1'])).rejects.toThrow(/Access denied/);
+    await expect(handler('org', 'leave', ['org_1'])).rejects.toThrow(/Access denied/);
+    await expect(handler('org', 'sendInvite', [{ orgId: 'org_1', targetRootId: 't' }])).rejects.toThrow(/Access denied/);
+    await expect(handler('org', 'makeNodeCard', ['org_1'])).rejects.toThrow(/Access denied/);
+    await expect(handler('org', 'purgeExecute', ['org_1', 1, true])).rejects.toThrow(/Access denied/);
+    // listMine 与老面 runtime.listMineOrganizations 口径统一：personal 拒绝
+    // （A42 评审决议：personal 空间无组织可管，不向插件枚举本机组织名册）
+    await expect(handler('org', 'listMine', [])).rejects.toThrow(/Access denied/);
+    expect(api.organization.listMine).not.toHaveBeenCalled();
+    // 空间无关面（创建/加入/发现/导出/无参名片）放行
+    await handler('org', 'create', [{ name: 'x' }]);
+    await handler('org', 'acceptInvite', ['code']);
+    await handler('org', 'searchKnown', ['k']);
+    await handler('org', 'makeNodeCard', []);
+    await handler('org', 'exportData', []);
+    expect(api.organization.create).toHaveBeenCalledTimes(1);
+    expect(api.p2p.makeNodeCard).toHaveBeenCalledWith(undefined);
+  });
+
+  it('message-card 视图无 org 域（有授权也整域拒绝）', async () => {
+    mockOrgApi(['org:read', 'org:write']);
+    const handler = await createPluginBridgeDispatcher({ ...BASE_IDENTITY, viewType: 'message-card' });
+    await expect(handler('org', 'listMine', [])).rejects.toThrow(/Access denied/);
+    await expect(handler('org', 'leave', ['org_1'])).rejects.toThrow(/Access denied/);
+  });
+});
+
+// ------------------------------------------------------------------
+// sys.saveFile（A42 修复：spark-files 下载壳层代存通路）：storage:read
+// 权限 + 文件名/体积白名单（assertSaveFileInput）+ 转发壳层保存对话框
+// ------------------------------------------------------------------
+
+describe('sys.saveFile（壳层代存：storage:read + 入参白名单）', () => {
+  it('未授权拒绝；授权后转发 saveFileWithDialog 并返回壳层结果', async () => {
+    mockGrantedPermissions([]);
+    let handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    await expect(handler('sys', 'saveFile', [{ name: 'a.txt', dataBase64: 'QUJD' }])).rejects.toThrow(/Access denied/);
+
+    mockGrantedPermissions(['storage:read']);
+    handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    const result = await handler('sys', 'saveFile', [{ name: 'a.txt', dataBase64: 'QUJD' }]);
+    expect(saveFileWithDialog).toHaveBeenCalledWith('a.txt', 'QUJD');
+    expect(result).toEqual({ cancelled: false, path: '/tmp/out.txt' });
+  });
+
+  it('文件名白名单：路径分隔/控制字符/纯点名/超长一律 InvalidArgs（不触达壳层）', async () => {
+    mockGrantedPermissions(['storage:read']);
+    const handler = await createPluginBridgeDispatcher(BASE_IDENTITY);
+    const bad = ['a/b.txt', 'a\\b.txt', 'a\u0000b', '.', '..', 'x'.repeat(256)];
+    for (const name of bad) {
+      await expect(handler('sys', 'saveFile', [{ name, dataBase64: 'QUJD' }])).rejects.toThrow(/InvalidArgs/);
+    }
+    await expect(handler('sys', 'saveFile', [{ name: 'a.txt' }])).rejects.toThrow(/InvalidArgs/);
+    await expect(handler('sys', 'saveFile', [{ name: 'a.txt', dataBase64: 42 }])).rejects.toThrow(/InvalidArgs/);
+    expect(saveFileWithDialog).not.toHaveBeenCalled();
+  });
+
+  it('message-card 视图不放行 sys.saveFile；personal 空间放行（空间无关）', async () => {
+    mockGrantedPermissions(['storage:read']);
+    const cardHandler = await createPluginBridgeDispatcher({ ...BASE_IDENTITY, viewType: 'message-card' });
+    await expect(cardHandler('sys', 'saveFile', [{ name: 'a.txt', dataBase64: 'QUJD' }])).rejects.toThrow(/Access denied/);
+
+    const personalHandler = await createPluginBridgeDispatcher({
+      ...BASE_IDENTITY,
+      space: { type: 'personal', id: 'personal' },
+      supportedSpaces: ['personal', 'org']
+    });
+    await expect(personalHandler('sys', 'saveFile', [{ name: 'a.txt', dataBase64: 'QUJD' }])).resolves.toEqual({
+      cancelled: false,
+      path: '/tmp/out.txt'
+    });
   });
 });

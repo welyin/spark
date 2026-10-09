@@ -1,0 +1,30 @@
+{
+  "id": "spark-files",
+  "domain": "plugin:spark-files",
+  "name": "文件",
+  "version": "0.1.0",
+  "entryView": "default",
+  "description": "Spark 默认内置文件管理（A42）：个人空间与组织域统一的文件/照片管理——文件本体走 sdk.content 内容面（内容寻址 + 持有即做种），元数据走 sdk.data 声明式集合（写库即同步；空间边界由桥按绑定空间注入，各走各的域）。",
+  "category": "foundation",
+  "icon": "assets/icon.svg",
+  "supportedSpaces": ["personal", "org"],
+  "views": [
+    { "id": "default", "type": "app", "title": "文件" }
+  ],
+  "chrome": {
+    "hostTitleBar": false
+  },
+  "window": {
+    "defaultWidth": 880,
+    "defaultHeight": 620
+  },
+  "permissions": [
+    "storage:read",
+    "storage:write"
+  ],
+  "sdkVersion": "1",
+  "package": {
+    "updateManifestUrl": "",
+    "packageName": "spark-plugin-spark-files-0.1.0.spkg"
+  }
+}

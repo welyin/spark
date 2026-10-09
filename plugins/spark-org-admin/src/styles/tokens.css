@@ -1,0 +1,30 @@
+/* Spark 设计令牌（插件自足子集，与 spark-chat src/styles/tokens.css 同口径：
+   颜色别名到 Element Plus 变量，深色由组件库 dark 变量接管） */
+:root {
+  --spark-primary: var(--el-color-primary);
+  --spark-primary-hover: var(--el-color-primary-light-3);
+  --spark-success: var(--el-color-success);
+  --spark-warning: var(--el-color-warning);
+  --spark-danger: var(--el-color-danger);
+  --spark-bg-page: var(--el-bg-color-page);
+  --spark-bg-card: var(--el-bg-color);
+  --spark-bg-hover: var(--el-fill-color-light);
+  --spark-text-1: var(--el-text-color-primary);
+  --spark-text-2: var(--el-text-color-secondary);
+  --spark-text-3: var(--el-text-color-placeholder);
+  --spark-border: var(--el-border-color);
+  --spark-border-light: var(--el-border-color-light);
+  --spark-radius-s: 4px;
+  --spark-radius-m: 8px;
+  --spark-radius-l: 12px;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  background: var(--spark-bg-card);
+  color: var(--spark-text-1);
+  font-size: 14px;
+}

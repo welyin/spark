@@ -11,20 +11,29 @@
     class="topnav-space-settings"
   >
     <div class="topnav-space-settings-body">
-      <OrgSettingsPanel v-if="orgId" :key="orgId" />
+      <!-- 组织管理（A42 灰度，与消息/市场同口径）：旧内置 UI ⇄ 默认内置插件版
+           （spark-org-admin，sdk.org 数据面）；加载失败「关闭」回退 legacy -->
+      <BuiltinAppHost v-if="orgId" :key="orgId" tab-id="org" :space="pluginSpace" @fallback="onOrgFallback">
+        <template #legacy>
+          <OrgSettingsPanel />
+        </template>
+      </BuiltinAppHost>
     </div>
   </el-dialog>
 </template>
 
 <script lang="ts">
 import { computed, defineComponent, watch } from 'vue';
-import { currentSpaceOrgId } from '../../stores/current-space';
+import { currentSpace, currentSpaceOrgId } from '../../stores/current-space';
 import { findOrg } from '../../stores/org-membership';
+import { setBuiltinImpl } from '../../stores/builtin-apps';
+import type { PluginSpaceContext } from '../../../../packages/plugin-sdk/src';
+import BuiltinAppHost from '../plugin/BuiltinAppHost.vue';
 import OrgSettingsPanel from '../org/OrgSettingsPanel.vue';
 
 export default defineComponent({
   name: 'SpaceSettingsDialog',
-  components: { OrgSettingsPanel },
+  components: { BuiltinAppHost, OrgSettingsPanel },
   props: {
     modelValue: { type: Boolean, required: true }
   },
@@ -44,7 +53,16 @@ export default defineComponent({
       }
     });
 
-    return { visible, orgId, orgName };
+    /** 插件运行 space 上下文（透传 BuiltinAppHost；本对话框仅组织空间可打开） */
+    const pluginSpace = computed<PluginSpaceContext>(() => ({
+      type: currentSpace.value.type,
+      id: currentSpace.value.type === 'org' ? currentSpace.value.orgId : 'personal'
+    }));
+
+    // 插件版加载失败/被关闭：回退旧内置 UI（与 messages/apps 同口径灰度兜底）
+    const onOrgFallback = () => setBuiltinImpl('org', 'legacy');
+
+    return { visible, orgId, orgName, pluginSpace, onOrgFallback };
   }
 });
 </script>

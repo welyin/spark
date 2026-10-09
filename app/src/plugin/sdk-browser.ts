@@ -17,7 +17,7 @@
  */
 
 import type { ElectronAPI } from '../api';
-import { pickSpkgFile } from '../api';
+import { pickSpkgFile, saveFileWithDialog } from '../api';
 import type { FetchStreamHandle, PluginSDK, SysFetchChunk } from '../../../packages/plugin-sdk/src';
 import { buildGenesisDraft, deriveIdentity, signPayload } from '../../../packages/plugin-sdk/src/affair-wire';
 
@@ -45,6 +45,16 @@ export type {
   PluginMarketSideloadPreview,
   PluginMarketAnnounceInput,
   PluginMarketAnnounceEntry,
+  // A42 组织管理模块类型
+  PluginOrgAPI,
+  PluginOrgView,
+  PluginOrgMember,
+  PluginOrgNodeInfo,
+  PluginOrgSyncOverview,
+  PluginOrgAddressRecord,
+  PluginOrgInviteRecord,
+  PluginOrgPurgePreview,
+  PluginOrgPurgeResult,
   PluginSDK
 } from '../../../packages/plugin-sdk/src';
 
@@ -315,6 +325,35 @@ export function createPluginBackend(
       // 本后端（宿主内嵌直连接口）无该通路，以 no-op 满足契约（同 data.onChange）
       onAnnounceChanged: async () => {}
     },
+    // A42 组织管理模块（sdk.org）：直连 electronAPI.organization（org-* 命令
+    // 等语义移植；节点名片走 electronAPI.p2p，数据治理/导出走
+    // electronAPI.dataManagement）；权限与空间门控由桥 dispatcher 强制
+    org: {
+      listMine: () => electronAPI.organization.listMine(),
+      create: (input) => electronAPI.organization.create(input),
+      leave: (orgId) => electronAPI.organization.leave(orgId),
+      addMember: (orgId, input) => electronAPI.organization.addMember(orgId, input),
+      removeMember: (orgId, memberRootId) => electronAPI.organization.removeMember(orgId, memberRootId),
+      getGatewayActiveSet: (orgId) => electronAPI.organization.getGatewayActiveSet(orgId),
+      createInvite: (orgId) => electronAPI.organization.createInvite(orgId),
+      acceptInvite: (code) => electronAPI.organization.acceptInvite(code),
+      getSyncOverview: (orgId) => electronAPI.organization.getSyncOverview(orgId),
+      setPublic: (orgId, isPublic, displayName) =>
+        electronAPI.organization.setPublic(orgId, isPublic, displayName),
+      updateInfo: (orgId, patch) => electronAPI.organization.updateInfo(orgId, patch),
+      updateMyIdentity: (orgId, patch) => electronAPI.organization.updateMyIdentity(orgId, patch),
+      resolveAddress: (orgAddress) => electronAPI.organization.resolveAddress(orgAddress),
+      searchKnown: (keyword) => electronAPI.organization.searchKnown(keyword),
+      sendInvite: (input) => electronAPI.organization.sendInvite(input),
+      respondInvite: (input) => electronAPI.organization.respondInvite(input),
+      inviteRecords: (orgId) => electronAPI.organization.inviteRecords(orgId),
+      makeNodeCard: (orgId?: string) => electronAPI.p2p.makeNodeCard(orgId),
+      importNodeCard: (card: string) => electronAPI.p2p.importNodeCard(card),
+      purgePreview: (orgId, beforeTs) => electronAPI.dataManagement.purgePreview(orgId, beforeTs),
+      purgeExecute: (orgId, beforeTs, confirmExported) =>
+        electronAPI.dataManagement.purgeExecute(orgId, beforeTs, confirmExported),
+      exportData: () => electronAPI.dataManagement.exportData()
+    },
     sys: electronAPI.sys
       ? {
           exec: (program: string, args: string[], workdir?: string) =>
@@ -323,6 +362,10 @@ export function createPluginBackend(
             electronAPI.sys.fetch(url, options as { method?: string; headers?: Record<string, string>; body?: string } | undefined),
           // 目录选择对话框（纯前端 tauri-plugin-dialog，宿主 api.sys.pickFolder）
           pickFolder: (title?: string) => electronAPI.sys.pickFolder(title),
+          // 壳层代存（A42 修复：插件沙箱 iframe 无 allow-downloads；宿主侧直开
+          // 保存对话框 + sys_save_file 代写，桥路径由 dispatcher 白名单后走同一函数）
+          saveFile: (input: { name: string; dataBase64: string }) =>
+            saveFileWithDialog(input.name, input.dataBase64),
           // 内嵌后端（非 iframe 桥，无桥 events 通道）的 fetchStream：直接
           // 用 Tauri listen 订阅 `sys-stream:{streamId}` 事件实现完整 handle
           // （done/onChunk/cancel），不再返回只含 streamId 的残次对象。

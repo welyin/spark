@@ -38,7 +38,14 @@ const STORAGE_PREFIX = 'spark:apps-enabled:';
 const LEGACY_ORG_MOCK_PREFIX = 'spark:apps-org-enabled:';
 
 /** 随发行包预装的内置件（见模块头注释；trust="builtin" 的 renderer 侧镜像） */
-const BUILTIN_PLUGIN_IDS: ReadonlySet<string> = new Set(['spark-chat', 'spark-contacts', 'spark-market']);
+const BUILTIN_PLUGIN_IDS: ReadonlySet<string> = new Set([
+  'spark-chat',
+  'spark-contacts',
+  'spark-market',
+  // A42：组织管理（灰度宿主外也作为空间桌面应用出现）与文件管理
+  'spark-org-admin',
+  'spark-files'
+]);
 
 export function isBuiltinApp(pluginId: string): boolean {
   return BUILTIN_PLUGIN_IDS.has(pluginId);

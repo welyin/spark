@@ -161,11 +161,19 @@
           </template>
         </template>
 
-        <!-- 组织空间：组织设置（当前空间组织的信息/成员/网关/公开/发现）/ 系统设置 -->
+        <!-- 组织空间：组织设置（当前空间组织的信息/成员/网关/公开/发现）/ 系统设置；
+             组织管理 A42 灰度：旧内置 UI ⇄ 默认内置插件版（spark-org-admin） -->
         <template v-else>
-          <OrgSettingsPanel
+          <BuiltinAppHost
             v-if="activeMenu === 'space' && mobileFrame.page === 'section'"
-          />
+            tab-id="org"
+            :space="pluginSpace"
+            @fallback="onOrgFallback"
+          >
+            <template #legacy>
+              <OrgSettingsPanel />
+            </template>
+          </BuiltinAppHost>
           <SystemSettingsPanel
             v-else-if="
               activeMenu === 'system' && mobileFrame.page === 'section'
@@ -298,9 +306,19 @@
         </template>
       </template>
 
-      <!-- 组织空间：组织设置（当前空间组织的信息/成员/网关/公开/发现）/ 系统设置 -->
+      <!-- 组织空间：组织设置（当前空间组织的信息/成员/网关/公开/发现）/ 系统设置；
+           组织管理 A42 灰度：旧内置 UI ⇄ 默认内置插件版（spark-org-admin） -->
       <template v-else>
-        <OrgSettingsPanel v-if="activeMenu === 'space'" />
+        <BuiltinAppHost
+          v-if="activeMenu === 'space'"
+          tab-id="org"
+          :space="pluginSpace"
+          @fallback="onOrgFallback"
+        >
+          <template #legacy>
+            <OrgSettingsPanel />
+          </template>
+        </BuiltinAppHost>
         <SystemSettingsPanel v-else-if="activeMenu === 'system'" />
       </template>
     </template>
@@ -364,6 +382,9 @@ import PermissionModule from '../components/mine/PermissionModule.vue';
 import SecurityModule from '../components/mine/SecurityModule.vue';
 import OrgSettingsPanel from '../components/org/OrgSettingsPanel.vue';
 import SystemSettingsPanel from '../components/settings/SystemSettingsPanel.vue';
+import BuiltinAppHost from '../components/plugin/BuiltinAppHost.vue';
+import { setBuiltinImpl } from '../stores/builtin-apps';
+import type { PluginSpaceContext } from '../../../packages/plugin-sdk/src';
 
 type MenuKey = 'mine' | 'space' | 'system';
 
@@ -396,6 +417,7 @@ export default defineComponent({
     SecurityModule,
     OrgSettingsPanel,
     SystemSettingsPanel,
+    BuiltinAppHost,
     Cpu,
     SwitchButton,
     CircleCloseFilled,
@@ -418,6 +440,13 @@ export default defineComponent({
     const systemInitialSection = ref<SystemSectionKey | null>(null);
 
     const isPersonal = computed(() => currentSpace.value.type === 'personal');
+    /** 插件运行 space 上下文（透传 BuiltinAppHost 组织管理灰度；个人空间 id 恒 'personal'） */
+    const pluginSpace = computed<PluginSpaceContext>(() => ({
+      type: currentSpace.value.type,
+      id: currentSpace.value.type === 'org' ? currentSpace.value.orgId : 'personal',
+    }));
+    // 组织管理插件版加载失败/被关闭：回退旧内置 UI（与 messages/apps 同口径灰度兜底）
+    const onOrgFallback = () => setBuiltinImpl('org', 'legacy');
     // 空间 key（'personal' / 'org:<orgId>'）：组织 A→B 切换时 isPersonal 不变，watch 须以 spaceKey 为口径
     const spaceKey = computed(() => spaceKeyOf(currentSpace.value));
     const currentOrgName = computed(
@@ -586,6 +615,8 @@ export default defineComponent({
       pendingDeviceNotices,
       menuItems,
       isPersonal,
+      pluginSpace,
+      onOrgFallback,
       currentOrgName,
       systemInitialSection,
       goTest,

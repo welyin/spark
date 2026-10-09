@@ -88,6 +88,27 @@ export function pickSpkgFile(): Promise<string | null> {
   });
 }
 
+/**
+ * 壳层代存文件（A42 修复：插件下载通路）：插件沙箱 iframe 无 allow-downloads，
+ * Blob 锚点下载被静默拦截——改为壳层代开保存对话框（tauri-plugin-dialog，
+ * defaultPath 为建议文件名），用户确认后由 sys_save_file 命令把 base64 数据
+ * 写入所选路径。用户取消返回 { cancelled: true }。
+ */
+export async function saveFileWithDialog(
+  name: string,
+  dataBase64: string
+): Promise<{ cancelled: true } | { cancelled: false; path: string }> {
+  const filePath = await saveDialog({
+    title: '保存文件',
+    defaultPath: name
+  });
+  if (!filePath) {
+    return { cancelled: true as const };
+  }
+  await invoke('sys_save_file', { path: filePath, dataBase64 });
+  return { cancelled: false as const, path: filePath };
+}
+
 /** 通用调用：channel + 位置参数 → command + 命名参数。 */
 async function call<T>(channel: string, ...args: unknown[]): Promise<T> {
   const command = COMMAND_MAP[channel] ?? channel;

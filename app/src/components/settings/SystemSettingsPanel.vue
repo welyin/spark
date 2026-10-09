@@ -213,6 +213,20 @@
             <el-radio-button value="plugin">插件版</el-radio-button>
           </el-radio-group>
         </div>
+        <!-- 组织管理界面版本（A42 灰度，与聊天/市场同口径）：旧内置组织设置面板
+             与默认内置插件版（spark-org-admin，sdk.org 数据面）并存一个版本；
+             宿主为顶栏空间设置对话框与设置页组织栏（两处均接线） -->
+        <div class="settings-row">
+          <span>组织管理界面</span>
+          <el-radio-group
+            size="small"
+            :model-value="builtinImpl('org')"
+            @update:model-value="setBuiltinImpl('org', $event as 'legacy' | 'plugin')"
+          >
+            <el-radio-button value="legacy">内置</el-radio-button>
+            <el-radio-button value="plugin">插件版</el-radio-button>
+          </el-radio-group>
+        </div>
         <!-- TODO(mock): 以下开关仅本地展示不生效，待偏好持久化方案落地 -->
         <div v-for="item in generalItems" :key="item.key" class="settings-row">
           <span>{{ item.label }}</span>

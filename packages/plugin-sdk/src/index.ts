@@ -1444,6 +1444,244 @@ export interface PluginMarketAPI {
 }
 
 // ------------------------------------------------------------------
+// 组织管理模块（A42，sdk.org：组织创建/名册/邀请/公开设置/副本健康度/
+// 节点名片/数据治理——既有 org-* / data-purge-* / p2p-make-node-card 等
+// Tauri 命令的等语义移植；类型与壳层 api/types.ts 的 OrgView 等逐字段同形。
+// 权限位：读面 org:read（基础权限），写面 org:write（高级，安装授权）。
+// orgId 作用域调用由桥按绑定空间门控（org 空间实参须等于当前空间；
+// personal 空间整组拒绝），空间无关面（create/acceptInvite/resolveAddress/
+// searchKnown/respondInvite/importNodeCard/exportData）两空间放行；
+// listMine 两空间口径统一为 personal 拒绝（与老面 runtime.listMineOrganizations
+// 一致：personal 空间无组织可管，不枚举本机组织名册——A42 评审决议）
+// ------------------------------------------------------------------
+
+/** 组织成员设备端点（按 deviceUid 聚合的端点集之一；deviceUid 缺省 = 旧声明） */
+export type PluginOrgNodeInfo = {
+  deviceUid?: string;
+  peerId?: string;
+  addresses: string[];
+};
+
+/** 组织成员（OrgView.members 元素；与壳层 OrgView['members'][number] 同形） */
+export type PluginOrgMember = {
+  rootId: string;
+  role: 'admin' | 'member';
+  joinedAt: number;
+  addedBy: string;
+  /** 端点化：单设备退化为对象，多设备为数组 */
+  nodeInfo?: PluginOrgNodeInfo | PluginOrgNodeInfo[];
+  /** 组织身份字段（仅本人可改，未设置时键不出现） */
+  nickname?: string;
+  avatar?: string;
+  signature?: string;
+  gender?: string;
+  region?: string;
+  /** true = 组织内展示个人身份；缺省视为 false */
+  usePersonalIdentity?: boolean;
+  /** 成员种类：缺省 'person'；'org' 时 rootId 槽位承载该组织在本域的域身份 id */
+  kind?: 'person' | 'org';
+  /** opt-in 公开组织绑定（仅 kind='org' 有意义） */
+  orgBinding?: { orgId?: string; orgAddress?: string };
+};
+
+/** 组织视图（与壳层 OrgView 逐字段同形） */
+export type PluginOrgView = {
+  orgId: string;
+  name: string;
+  description: string;
+  /** 组织 logo（data URL）；可能缺省/空串 */
+  avatar?: string;
+  basePluginDomain?: string;
+  createdAt: number;
+  createdBy: string;
+  updatedAt: number;
+  members: PluginOrgMember[];
+  currentUserRole: 'admin' | 'member' | null;
+  isCurrentUserAdmin: boolean;
+  memberCount: number;
+  adminCount: number;
+  orgAddress?: string;
+  isPublic?: boolean;
+  orgDisplayName?: string;
+};
+
+/** 组织网络状态（内核 OrgNetworkStatus::as_str） */
+export type PluginOrgNetworkStatus = 'good' | 'unstable' | 'lost' | 'recovering' | 'localOnly';
+
+/** 组织同步概览（副本健康度；与壳层 OrgSyncOverviewDto 同形） */
+export type PluginOrgSyncOverview = {
+  orgId: string;
+  replicaTarget: number;
+  syncedPeers: number;
+  totalMembers: number;
+  members: Array<{
+    rootId: string;
+    orgUserId?: string;
+    peerId?: string;
+    isSelf: boolean;
+    everSynced: boolean;
+    lastSyncedAt: number | null;
+  }>;
+  connectedPeers: number;
+  recoveryState: 'idle' | 'recovering' | 'failed';
+  recoveryStartedAt: number | null;
+  lastConnectedAt: number | null;
+  dhtMode: 'off' | 'client' | 'server';
+  status: PluginOrgNetworkStatus;
+  /** K 口径是否适用；false = 纯 all-members 组织无 K，不做达标判定 */
+  kApplicable: boolean;
+  /** 逐成员 PC 设备副本状态（全员数据节点） */
+  memberReplicas: Array<{
+    rootId: string;
+    orgUserId?: string;
+    pcSynced: boolean;
+    deviceClass: string;
+  }>;
+};
+
+/** 组织地址记录（公开组织 DHT 记录；与壳层 OrgAddressRecordDto 同形） */
+export type PluginOrgAddressRecord = {
+  orgAddress: string;
+  orgId: string;
+  orgPublicKey: string;
+  displayName?: string;
+  gateways: string[];
+  seq: number;
+  publishedAt: number;
+  ttl: number;
+  signature: string;
+};
+
+/** 组织邀请记录（出/入站共用；与壳层 OrgInviteRecordDto 同形） */
+export type PluginOrgInviteRecord = {
+  id: string;
+  orgId: string;
+  orgName: string;
+  orgAvatar?: string;
+  /** 对端 rootId（outgoing=被邀请人；incoming=邀请人） */
+  peerRootId: string;
+  peerNickname: string;
+  direction: 'outgoing' | 'incoming';
+  status: 'pending' | 'accepted' | 'declined';
+  /** 邀请码（仅 incoming 记录携带） */
+  inviteCode?: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
+/** 数据治理预览（data-purge-preview 出参） */
+export type PluginOrgPurgePreview = {
+  domain: string;
+  beforeTs: number;
+  preview: { collections: string[]; affectedDocs: number; affectedBytes: number };
+  replica: PluginOrgSyncOverview | null;
+  isCurrentUserAdmin: boolean;
+};
+
+/** 数据治理执行结果（data-purge-execute 出参） */
+export type PluginOrgPurgeResult = {
+  removedDocs: number;
+  freedBytes: number;
+};
+
+/** 数据导出结果（壳层代开保存对话框；用户取消 cancelled=true） */
+export type PluginOrgExportResult =
+  | { cancelled: true }
+  | { cancelled: false; path: string; entries: number; bytes: number };
+
+/**
+ * 组织管理模块（A42 sdk.org）：org-* 命令等语义移植，组织管理界面
+ * （默认内置插件 spark-org-admin）经本面工作。
+ *
+ * 权限位（桥 dispatcher 强制）：
+ * - `org:read`（基础权限，全插件默认授予）：listMine / getSyncOverview /
+ *   getGatewayActiveSet / inviteRecords / resolveAddress / searchKnown /
+ *   makeNodeCard / purgePreview / exportData；
+ * - `org:write`（高级，安装授权）：create / leave / addMember / removeMember /
+ *   createInvite / acceptInvite / setPublic / updateInfo / updateMyIdentity /
+ *   sendInvite / respondInvite / importNodeCard / purgeExecute。
+ *
+ * 空间门控（桥强制）：orgId 作用域调用（leave/addMember/removeMember/
+ * createInvite/getGatewayActiveSet/getSyncOverview/setPublic/updateInfo/
+ * updateMyIdentity/sendInvite/inviteRecords/purgePreview/purgeExecute，
+ * 及带 orgId 实参的 makeNodeCard）在 personal 空间一律拒绝；org 空间下
+ * orgId 实参必须等于当前空间 id。listMine 同样在 personal 空间拒绝（与
+ * 老面 runtime.listMineOrganizations 口径统一，A42 评审决议：personal
+ * 空间无组织可管，不枚举本机组织名册）。其余方法两空间放行（创建/加入/
+ * 发现是身份级动作，不绑空间）。
+ * 仅 iframe 桥模式可用，故在 PluginSDK 上为可选字段（同 market）。
+ */
+export interface PluginOrgAPI {
+  /** 我所在的组织列表（含名册与我的角色；`org:read`；personal 空间拒绝——口径同老面 runtime.listMineOrganizations） */
+  listMine: () => Promise<PluginOrgView[]>;
+  /** 创建组织（创建人自动成为管理员与首位成员；`org:write`） */
+  create: (input: {
+    name: string;
+    description?: string;
+    avatar?: string;
+    basePluginDomain?: string;
+    /** 域类型：leaf 普通组织（默认）/ community 共同体域；创建后不可变更 */
+    domainType?: 'leaf' | 'community';
+  }) => Promise<PluginOrgView>;
+  /** 退出组织（最后一名成员退出即成空域只读档案；`org:write`） */
+  leave: (orgId: string) => Promise<PluginOrgView>;
+  /** 预录成员（rootId + 可选名片寻址线索；`org:write`） */
+  addMember: (orgId: string, input: { rootId: string; nodeInfo?: PluginOrgNodeInfo }) => Promise<PluginOrgView>;
+  /** 移除成员（`org:write`） */
+  removeMember: (orgId: string, memberRootId: string) => Promise<PluginOrgView>;
+  /** 当前履职网关活跃集（只读；全员候选计分推导；`org:read`） */
+  getGatewayActiveSet: (orgId: string) => Promise<string[]>;
+  /** 创建邀请码（24 小时有效；`org:write`） */
+  createInvite: (orgId: string) => Promise<{ invite: string; orgId: string; orgName: string }>;
+  /** 邀请码加入组织（内核编排全段：解码 → 连接邀请人 → 自举收敛；`org:write`） */
+  acceptInvite: (code: string) => Promise<{ orgId: string; orgName: string; memberCount: number }>;
+  /** 同步概览（副本健康度；未启动 P2P 等为 null；`org:read`） */
+  getSyncOverview: (orgId: string) => Promise<PluginOrgSyncOverview | null>;
+  /** 公开开关 + 展示名（`org:write`） */
+  setPublic: (orgId: string, isPublic: boolean, displayName?: string) => Promise<PluginOrgView>;
+  /** 更新组织信息（字段缺省 = 不变，avatar 空串 = 清除 logo；`org:write`） */
+  updateInfo: (orgId: string, patch: { name?: string; description?: string; avatar?: string }) => Promise<PluginOrgView>;
+  /** 成员更新自己的组织内身份（`org:write`） */
+  updateMyIdentity: (
+    orgId: string,
+    patch: {
+      nickname?: string;
+      avatar?: string | null;
+      gender?: string;
+      region?: string;
+      signature?: string;
+      usePersonalIdentity?: boolean;
+    }
+  ) => Promise<PluginOrgView>;
+  /** 按 DHT 组织地址解析（找到组织并与网关建立联系；未命中 null；`org:read`） */
+  resolveAddress: (orgAddress: string) => Promise<PluginOrgAddressRecord | null>;
+  /** 搜索本机已缓存的公开组织记录（`org:read`） */
+  searchKnown: (keyword: string) => Promise<PluginOrgAddressRecord[]>;
+  /** 定向 DM 邀请（仅管理员；寻址 显式参数 → 预录成员 nodeInfo → 朋友记录；`org:write`） */
+  sendInvite: (input: {
+    orgId: string;
+    targetRootId: string;
+    targetPeerId?: string | null;
+    targetAddresses?: string[] | null;
+    targetNickname?: string | null;
+  }) => Promise<PluginOrgInviteRecord>;
+  /** 被邀请人确认/拒绝（幂等；`org:write`） */
+  respondInvite: (input: { inviteId: string; accept: boolean }) => Promise<PluginOrgInviteRecord>;
+  /** 某组织的邀请记录（出/入站合并；`org:read`） */
+  inviteRecords: (orgId: string) => Promise<PluginOrgInviteRecord[]>;
+  /** 节点名片（org.md §17）：orgId 缺省 = 不附恢复 token（`org:read`） */
+  makeNodeCard: (orgId?: string) => Promise<{ card: string }>;
+  /** 导入节点名片（按未验证处理，成员资格仍走原有校验；`org:write`） */
+  importNodeCard: (card: string) => Promise<{ peerId: string; hasRecoveryToken: boolean; connectError: string | null }>;
+  /** 数据治理预览（`org:read`） */
+  purgePreview: (orgId: string, beforeTs: number) => Promise<PluginOrgPurgePreview>;
+  /** 数据治理执行（服务端仍校验管理员身份；`org:write`） */
+  purgeExecute: (orgId: string, beforeTs: number, confirmExported: boolean) => Promise<PluginOrgPurgeResult>;
+  /** 导出数据（壳层代开保存对话框；`org:read`） */
+  exportData: () => Promise<PluginOrgExportResult>;
+}
+
+// ------------------------------------------------------------------
 // 事件模块（随桥协议落地，见 bridge/client.ts）
 // ------------------------------------------------------------------
 
@@ -1502,6 +1740,9 @@ export interface FetchStreamHandle {
   cancel: () => void;
 }
 
+/** sys.saveFile 返回：用户在保存对话框取消 cancelled=true；否则为已写入的绝对路径 */
+export type SysSaveFileResult = { cancelled: true } | { cancelled: false; path: string };
+
 /** 系统代理 API：插件通过内核代理执行外部命令 / 发起 HTTP 请求，绕过浏览器沙箱限制 */
 export interface PluginSysAPI {
   /**
@@ -1517,6 +1758,15 @@ export interface PluginSysAPI {
    * 用于让用户图形化选目录（如 CLI 工作目录），替代手动输入路径。
    */
   pickFolder: (title?: string) => Promise<string | null>;
+  /**
+   * 壳层代存文件（`storage:read`，与 market.pickSpkg / org.exportData 壳层对话框
+   * 先例同口径，A42 修复）：插件沙箱 iframe 无 allow-downloads，Blob 锚点下载
+   * 各 WebView 口径不一——由壳层代开保存对话框（defaultPath 为建议文件名），
+   * 用户确认后由壳层把 base64 数据写入所选路径。
+   * name 仅纯文件名（桥白名单拒绝路径分隔符/控制字符/纯点名，≤255 字符），
+   * 不表达任何目录语义；dataBase64 上限见桥 dispatcher（约 192MiB 解码后）。
+   */
+  saveFile: (input: { name: string; dataBase64: string }) => Promise<SysSaveFileResult>;
 }
 
 export interface PluginSDK {
@@ -1553,6 +1803,8 @@ export interface PluginSDK {
   sys?: PluginSysAPI;
   /** 市场模块（A34 sdk.market：发现/安装/更新/启停/侧载/广播索引）：仅 iframe 桥模式可用 */
   market?: PluginMarketAPI;
+  /** 组织管理模块（A42 sdk.org：组织创建/名册/邀请/公开/副本健康度/数据治理）：仅 iframe 桥模式可用 */
+  org?: PluginOrgAPI;
   /**
    * 注册宿主反向调用处理器：宿主经 host.request(event, payload) 主动查询插件时，
    * 由本处注册的 handler 应答（返回值即答复，可返回 Promise）。

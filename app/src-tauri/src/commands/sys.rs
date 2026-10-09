@@ -44,6 +44,23 @@ pub struct SysFetchOptions {
     pub body: Option<String>,
 }
 
+/// 壳层代存文件（A42 修复：spark-files 下载通路）。前端已代开保存对话框取得
+/// 用户所选路径（见 api/index.ts saveFileWithDialog），本命令仅解码 base64 并写盘。
+/// 路径由用户经系统对话框选定，不经插件桥自报；桥 dispatcher 侧另有文件名/体积
+/// 白名单（assertSaveFileInput）。spawn_blocking：大文件写盘不占用主事件循环。
+#[tauri::command]
+pub async fn sys_save_file(path: String, data_base64: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use base64::Engine as _;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&data_base64)
+            .map_err(|e| format!("sys_save_file base64 解码失败: {e}"))?;
+        std::fs::write(&path, &bytes).map_err(|e| format!("sys_save_file 写入 {path} 失败: {e}"))
+    })
+    .await
+    .map_err(|e| format!("sys_save_file 任务执行失败: {e}"))?
+}
+
 /// 执行外部命令。async 命令 + spawn_blocking：wait_with_output 是同步阻塞调用，
 /// 若为同步 fn 会跑在 Tauri 主线程上——CLI 类命令（如 codebuddy 生成回复数秒）会冻结
 /// 整个应用 UI。spawn_blocking 移入阻塞线程池，主事件循环不被占用。
