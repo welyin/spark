@@ -55,6 +55,12 @@ export type BridgeReadyMessage = {
   type: 'ready';
   /** 宿主实际提供的 SDK 契约版本 */
   sdkVersion: string;
+  /**
+   * 运行上下文（壳层生成，插件只读）。A57 起壳层注入环境信息
+   * （ctx.appVersion/platform/shellVersion，低敏免权限）；三字段均为可选，
+   * 接收侧按不透明对象透传（此处仅校验 isRecord），旧壳层缺省不注入、
+   * 新插件按 undefined 降级——不在信封层做必填校验，保证新旧壳/插件互通。
+   */
   ctx: PluginContext;
 };
 

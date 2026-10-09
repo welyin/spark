@@ -1395,6 +1395,9 @@ export type PluginViewBootstrap = {
   cardData?: unknown;
 };
 
+/** 运行平台（壳层 userAgent 判定口径，A57 ctx 注入） */
+export type PluginPlatform = 'windows' | 'macos' | 'linux' | 'android' | 'ios' | 'unknown';
+
 /** 桥握手 ready 下发的插件运行上下文 */
 export type PluginContext = {
   pluginId: string;
@@ -1405,6 +1408,17 @@ export type PluginContext = {
   /** 壳层当前主题（变更经事件桥推送） */
   theme: 'light' | 'dark';
   mount: PluginMountInfo;
+  // ---- 运行环境信息（A57，壳层注入、插件只读） ----
+  // 三字段一律由壳层在握手时生成（hello 只携 sdkVersion/pluginId/viewId 做一致性
+  // 核对，插件无上报通道，不可伪造）；低敏环境信息，免权限（不占权限位）。
+  // 向后兼容：旧壳层不注入时字段缺省——插件读取须按 undefined 兼容降级，
+  // 不得视为必填。
+  /** 应用分发版本（如 "0.2.1"，与 tauri.conf.json / updater currentVersion 同源） */
+  appVersion?: string;
+  /** 运行平台 */
+  platform?: PluginPlatform;
+  /** 壳层插件宿主契约版本（宿主 SDK 契约版本，如 "1"；桥能力面标识） */
+  shellVersion?: string;
 };
 
 // ------------------------------------------------------------------

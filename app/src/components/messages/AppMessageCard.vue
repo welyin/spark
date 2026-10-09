@@ -28,6 +28,7 @@ import { createBridgeHost, type BridgeHost } from '../../../../packages/plugin-s
 import { buildPluginHostSrcdoc, fetchPluginManifest } from '../../plugin/source';
 import { createPluginBridgeDispatcher } from '../../plugin/bridge-dispatcher';
 import { pluginSpaceKey, registerCard, routeCardAction, unregisterCard } from '../../plugin/card-actions';
+import { withPluginShellEnv } from '../../plugin/shell-env';
 import { openPluginDeepLink } from '../../services/deep-link';
 import { themeMode } from '../../stores/theme';
 
@@ -113,14 +114,17 @@ export default defineComponent({
       }
       const domain = `plugin:${props.pluginId}`;
       try {
-        const ctx: PluginContext = {
+        // 契约版本单源：同一值同时进握手 ready.sdkVersion 与 ctx.shellVersion
+        // （A57 评审问题 1，与 PluginIframeHost 同口径）
+        const sdkVersion = manifest?.sdkVersion ?? '1';
+        const ctx: PluginContext = withPluginShellEnv({
           pluginId: props.pluginId,
           viewId: props.viewId,
           domain,
           space: props.space,
           theme: resolveTheme(),
           mount: { viewType: 'message-card', cardId, cardData: props.cardData }
-        };
+        }, sdkVersion);
         // 与 PluginIframeHost 同口径：createBridgeHost 同步注册 message 监听，
         // handler 懒解析（避免 dispatcher 的 Tauri invoke 推迟监听注册导致握手超时）
         host = createBridgeHost({
@@ -130,7 +134,7 @@ export default defineComponent({
           // 沙箱 iframe 为 opaque origin（同 PluginIframeHost 口径）
           expectedOrigin: 'null',
           targetOrigin: '*',
-          sdkVersion: manifest?.sdkVersion ?? '1',
+          sdkVersion,
           ctx,
           handler: () =>
             createPluginBridgeDispatcher({

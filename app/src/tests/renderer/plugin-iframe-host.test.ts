@@ -13,6 +13,8 @@ import PluginIframeHost from '../../components/plugin/PluginIframeHost.vue';
 import { disablePluginInstance, isPluginInstanceDisabled, pluginInstanceKey } from '../../plugin/disabled';
 import { getWatchdogCounters } from '../../plugin/watchdog';
 import { fetchPluginManifest } from '../../plugin/source';
+import { createBridgeHost } from '../../../../packages/plugin-sdk/src/bridge/host';
+import pkg from '../../../package.json';
 
 type FakeHost = {
   ready: Promise<unknown>;
@@ -183,5 +185,17 @@ describe('PluginIframeHost', () => {
     expect(iframe).not.toBeNull();
     expect(iframe!.getAttribute('allow')).toBe('camera');
     second.app.unmount();
+  });
+
+  it('握手 ctx 注入壳层环境信息（appVersion/platform/shellVersion，A57）', async () => {
+    const { app } = mountHost();
+    await flush();
+    expect(createdHosts).toHaveLength(1);
+    // 下发给 createBridgeHost 的 ctx 必须携带壳层生成的环境字段（插件只读）
+    const options = vi.mocked(createBridgeHost).mock.calls[0][0];
+    expect(options.ctx.appVersion).toBe(pkg.version);
+    expect(options.ctx.shellVersion).toBe('1');
+    expect(['windows', 'macos', 'linux', 'android', 'ios', 'unknown']).toContain(options.ctx.platform);
+    app.unmount();
   });
 });

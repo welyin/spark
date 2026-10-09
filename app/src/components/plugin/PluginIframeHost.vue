@@ -74,6 +74,7 @@ import { createBridgeHost, type BridgeHost } from '../../../../packages/plugin-s
 import { buildPluginHostSrcdoc, fetchPluginManifest } from '../../plugin/source';
 import { createPluginBridgeDispatcher, setBridgeEventPump, type BridgeEventPump } from '../../plugin/bridge-dispatcher';
 import { createPluginWatchdog, type PluginWatchdog } from '../../plugin/watchdog';
+import { withPluginShellEnv } from '../../plugin/shell-env';
 import { pluginSpaceKey, registerMainViewInstance, unregisterMainViewInstance } from '../../plugin/card-actions';
 import { listenP2pEvents } from '../../api';
 import {
@@ -287,14 +288,17 @@ export default defineComponent({
       });
 
       try {
-        const ctx: PluginContext = {
+        // 契约版本单源：同一值同时进握手 ready.sdkVersion 与 ctx.shellVersion
+        // （A57 评审问题 1，避免两处独立字面量漂移）
+        const sdkVersion = manifest?.sdkVersion ?? '1';
+        const ctx: PluginContext = withPluginShellEnv({
           pluginId: props.pluginId,
           viewId: props.viewId,
           domain,
           space: props.space,
           theme: resolveTheme(),
           mount: { viewType: 'app' }
-        };
+        }, sdkVersion);
 
         // 关键时序：createBridgeHost 必须同步执行——它内部注册 message 监听接收
         // 插件 hello。若先 await createPluginBridgeDispatcher（内含 Tauri invoke
@@ -309,7 +313,7 @@ export default defineComponent({
           // opaque origin 下 postMessage targetOrigin 只能为 '*'
           expectedOrigin: 'null',
           targetOrigin: '*',
-          sdkVersion: manifest?.sdkVersion ?? '1',
+          sdkVersion,
           ctx,
           handler: () =>
             createPluginBridgeDispatcher({

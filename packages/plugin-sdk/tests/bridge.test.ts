@@ -724,3 +724,57 @@ describe('community-affairs §7.2 新模块（affairs / credentials / policy）'
     harness.bridge.destroy();
   });
 });
+
+describe('bridge 握手 ctx 环境信息（A57）', () => {
+  it('壳层注入 appVersion/platform/shellVersion 时握手透传', async () => {
+    const envCtx: PluginContext = {
+      ...TEST_CTX,
+      appVersion: '0.2.1',
+      platform: 'windows',
+      shellVersion: '1'
+    };
+    const harness = createHarness({ ctx: envCtx });
+    const connection = await connect(harness);
+    expect(connection.ctx.appVersion).toBe('0.2.1');
+    expect(connection.ctx.platform).toBe('windows');
+    expect(connection.ctx.shellVersion).toBe('1');
+    await expect(harness.bridge.ready).resolves.toMatchObject({
+      appVersion: '0.2.1',
+      platform: 'windows',
+      shellVersion: '1'
+    });
+    // 环境字段不影响握手后的调用链路
+    await expect(connection.sdk.evidence.headHash()).resolves.toEqual({
+      module: 'evidence',
+      method: 'headHash',
+      args: []
+    });
+    harness.bridge.destroy();
+  });
+
+  it('兼容降级：旧壳层 ready ctx 无环境字段时不崩溃（字段 undefined，SDK 照常可用）', async () => {
+    // TEST_CTX 即旧壳层形态（无 appVersion/platform/shellVersion）
+    const harness = createHarness();
+    const connection = await connect(harness);
+    expect(connection.ctx.appVersion).toBeUndefined();
+    expect(connection.ctx.platform).toBeUndefined();
+    expect(connection.ctx.shellVersion).toBeUndefined();
+    await expect(connection.sdk.evidence.headHash()).resolves.toEqual({
+      module: 'evidence',
+      method: 'headHash',
+      args: []
+    });
+    harness.bridge.destroy();
+  });
+
+  it('ready 信封携带环境字段经 JSON 往返仍可解析（信封层不透明透传）', () => {
+    const message = {
+      v: BRIDGE_PROTOCOL_VERSION,
+      type: 'ready',
+      sdkVersion: '1',
+      ctx: { ...TEST_CTX, appVersion: '0.2.1', platform: 'linux', shellVersion: '1' }
+    };
+    const roundTripped: unknown = JSON.parse(JSON.stringify(message));
+    expect(parseBridgeMessage(roundTripped)).toEqual(message);
+  });
+});

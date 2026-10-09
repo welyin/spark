@@ -143,6 +143,8 @@ const sdk = await ensurePluginSDK();
 
 `sdk.messages`、`sdk.events`、`sdk.navigation` 与 `sdk.affairs` 仅 iframe 桥模式注入（`PluginSDK` 上为可选字段）；`sdk.space` 空间上下文（type/id/orgId）已实现，当前 space 经桥握手 ctx（`PluginContext.space`）注入。
 
+握手 ctx 环境信息（A57）：`ctx.appVersion` / `ctx.platform` / `ctx.shellVersion` —— 壳层握手时注入的运行环境信息，插件只读、不可伪造（hello 只携 sdkVersion/pluginId/viewId 做一致性核对，无环境信息上报通道，三字段一律由壳层生成）。`appVersion` 为应用分发版本（与 tauri.conf.json / updater currentVersion 同源，如 `"0.2.1"`）；`platform` 为运行平台（`'windows' | 'macos' | 'linux' | 'android' | 'ios' | 'unknown'`，壳层 userAgent 判定口径——**UA 粗判，仅作反馈采集参考，不得用于功能门控**：iPadOS 13+ 桌面模式 UA 为 `Macintosh; Intel Mac OS X…` 会被判为 `macos` 而非 `ios`，且 Tauri 各端 WebView 的 UA 口径随系统/版本变化）；`shellVersion` 为壳层插件宿主契约版本（宿主 SDK 契约版本，当前 `'1'`，标识桥能力面）。权限口径：环境信息属低敏，**免权限、不占权限位**（不进 manifest `permissions`，不经桥 dispatcher 权限表）。兼容性：三字段均为可选，旧壳层不注入——插件读取须按 `undefined` 兼容降级，不得视为必填；典型用途是问题反馈类插件采集运行环境信息（注入前 MVP 由用户手填）。
+
 SDK 调用经 postMessage 桥到宿主，再经 invoke 适配层桥到内核；权限过滤在壳层桥分发器逐调用执行（三重过滤：grantedPermissions ∩ view 裁剪 ∩ 当前空间），域隔离与持久化在内核侧，渲染端与插件均无法伪造身份。
 
 ### 5.1 sdk.affairs 共同体事务（创建 / 变更订阅 / 公开履历）
