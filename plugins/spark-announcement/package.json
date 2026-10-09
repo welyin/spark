@@ -1,0 +1,12 @@
+{
+  "name": "@spark/plugin-spark-announcement",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "公告通知插件：版本公告/团队通知经组织同步数据分发，各成员本机实例生成应用会话消息卡片（服务号模型），签名防抵赖、append-only 撤回留痕。",
+  "scripts": {
+    "build": "node ../../app/node_modules/vite/bin/vite.js build --config vite.config.ts && node ../scripts/copy-plugin-dist.mjs --pluginId spark-announcement --views main,announce-card",
+    "typecheck": "node ../../app/node_modules/vue-tsc/bin/vue-tsc.js --noEmit -p tsconfig.json || node ../../app/node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
+    "test": "cd ../../app && node node_modules/vitest/vitest.mjs run spark-announcement"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "comment": "id 暂用插件短名；随分发模型迁移后改为规范化仓库地址（档一-5 已拍板转正 spark-announcement）。自举插件：公告通知（announcement.md v0.2）——版本公告/团队通知，announcement_items/announcement_retractions append-only + announcement_config lww；公告本体走组织同步数据，各成员本机实例按 p2p-messages §20 本地生成应用会话消息卡片（同步的是数据不是消息）；撤回=追加撤回记录（不回滚已送达）；MVP 只做手动公告（档一-2：版本卡片由发布管理件唯一推送，契约落地后收敛）；发布权集合 MVP 管理员直改初始化（档三-23）；卡片生成走「插件加载时补发+节流」降级（档二-4），后台常驻监听排后续迭代。",
+  "id": "spark-announcement",
+  "name": "公告通知",
+  "icon": "",
+  "summary": "版本公告与团队通知：公告数据经组织同步，各成员本机实例生成为应用会话消息卡片（服务号模型）。",
+  "category": "foundation",
+  "version": "0.1.0",
+  "release": {
+    "assetNaming": "spark-plugin-spark-announcement-<version>.spkg",
+    "updateManifestAsset": "spark-plugin-spark-announcement-manifest.json",
+    "signatureAsset": "spark-plugin-spark-announcement-manifest.sig"
+  },
+  "permissions": ["storage:read", "storage:write", "org:read", "org:sync", "message:app", "identity:sign"],
+  "mirrors": []
+}

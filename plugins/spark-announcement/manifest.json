@@ -1,0 +1,22 @@
+{
+  "id": "spark-announcement",
+  "domain": "plugin:spark-announcement",
+  "name": "公告通知",
+  "version": "0.1.0",
+  "entryView": "default",
+  "description": "版本公告与团队通知：公告数据经组织同步，各成员本机实例生成为应用会话消息卡片（服务号模型）。",
+  "category": "foundation",
+  "icon": "assets/icon.svg",
+  "supportedSpaces": ["org"],
+  "views": [
+    { "id": "default", "type": "app", "title": "公告" },
+    { "id": "announce-card", "type": "message-card", "title": "公告卡片" }
+  ],
+  "permissions": ["storage:read", "storage:write", "org:read", "org:sync", "message:app", "identity:sign"],
+  "sdkVersion": "1",
+  "window": { "defaultWidth": 880, "defaultHeight": 620 },
+  "package": {
+    "updateManifestUrl": "https://github.com/welyin/spark/releases/latest/download/spark-plugin-spark-announcement-manifest.json",
+    "packageName": "spark-plugin-spark-announcement-0.1.0.spkg"
+  }
+}
