@@ -23,7 +23,8 @@
  * - 错误纪律：sdk.credentials 调用的失败（权限拒绝、接口错位、内核校验失败）
  *   一律如实上抛，不按「权限降级」静默吞掉（评审阻塞 2 的错误吞噬路径已拆）。
  *
- * 数据面（全部 append-only——资格与注销必须留痕可审计，录入人留痕）：
+ * 数据面（全部 append-only——资格与注销必须留痕可审计，录入人留痕；
+ * 记录 id 内容寻址：同一语义内容复算同一 id，见 contentId）：
  * - hoa_applications：申请材料**摘要**（标签+哈希+大小），原文永不同步；
  * - hoa_materials：材料原文，显式 __sync:false 本地留存（证据最小披露）；
  * - hoa_credentials / hoa_revocations：演示级凭证与注销记录（插件域身份签名）。
@@ -68,9 +69,13 @@ const COLLECTION_SCHEMAS = {
   [HOA_COLLECTIONS.materials]: { syncStrategy: 'append-only' as const }
 };
 
-/** 演示用途 id（Date.now + 随机）：演示数据可接受；正式数据 id 应内容寻址或单调序号 */
-function newId(prefix: string): string {
-  return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2, 10)}`;
+/**
+ * 内容寻址 id（对齐 credential §2 credId = canonical 复算口径的演示级落法）：
+ * 同一语义内容在任何节点复算同一 id，重复提交/重复签发幂等归并到同一条
+ * append-only 记录，取代 Date.now+随机的演示 id。
+ */
+function contentId(prefix: string, canonical: string): string {
+  return `${prefix}_${hashMaterialContent(canonical)}`;
 }
 
 export class HoaVerifyService {
@@ -115,18 +120,29 @@ export class HoaVerifyService {
     }
     await this.ensureCollectionsDeclared();
 
+    const materials = input.materials.map((material) => ({
+      label: material.label.trim(),
+      contentHash: hashMaterialContent(material.content),
+      byteSize: new Blob([material.content]).size
+    }));
     const application: VerificationApplication = {
-      applicationId: newId('app'),
+      applicationId: contentId(
+        'app',
+        [
+          orgId,
+          applicantRootId,
+          input.method,
+          input.credentialType,
+          input.unitNo.trim(),
+          ...materials.map((material) => `${material.label}:${material.contentHash}:${material.byteSize}`)
+        ].join('|')
+      ),
       orgId,
       applicantRootId,
       method: input.method,
       credentialType: input.credentialType,
       unitNo: input.unitNo.trim(),
-      materials: input.materials.map((material) => ({
-        label: material.label.trim(),
-        contentHash: hashMaterialContent(material.content),
-        byteSize: new Blob([material.content]).size
-      })),
+      materials,
       createdAt: Date.now()
     };
     assertNoSensitiveFields(application);
@@ -192,7 +208,17 @@ export class HoaVerifyService {
       '签发凭证'
     );
     const credential: HoaCredential = {
-      credentialId: newId('cred'),
+      credentialId: contentId(
+        'cred',
+        [
+          application.orgId,
+          application.applicationId,
+          application.applicantRootId,
+          application.credentialType,
+          application.unitNo,
+          application.method
+        ].join('|')
+      ),
       applicationId: application.applicationId,
       orgId: application.orgId,
       subjectRootId: application.applicantRootId,
@@ -242,7 +268,7 @@ export class HoaVerifyService {
     const payload = buildRevocationSignPayload(credential.credentialId, trimmed);
     const signed = await this.sdk.identity.sign(payload);
     const revocation: CredentialRevocation = {
-      revocationId: newId('rev'),
+      revocationId: contentId('rev', [credential.credentialId, trimmed, verifierRootId].join('|')),
       credentialId: credential.credentialId,
       reason: trimmed,
       revokedBy: verifierRootId,

@@ -11,9 +11,15 @@
  * 诚实口径（评审阻塞 3 的降级处理，README 同步声明）：identity:sign 只有
  * 插件域签名面——所有担保与组装签名的主体都是本插件域身份
  * （plugin:spark-threshold-vouch 派生钥匙），密码学上不证明担保人/组装人
- * 个人身份；voucherRootId / assembledBy 为自报文本，恶意用户可为任意
- * 「担保人」伪造担保且验签通过——「免权限可验」验的只是插件域钥匙与载荷
+ * 个人身份；assembledBy 为自报文本。「免权限可验」验的只是插件域钥匙与载荷
  * 完整性，不是担保人本人。平台层提供个人身份签名路径后应迁移。
+ *
+ * 担保人防伪加固（演示线形内可做的真实强度，已落地）：addVouch 不接受
+ * 手填担保人——voucherRootId 取自担保操作者的 sdk.runtime.currentRoot()
+ * （仅展示，无密码学绑定），门槛计数与去重按**担保签名公钥**（域身份按
+ * 根身份 × 域串派生，不同根身份 ⇒ 不同域公钥）。一人签 N 份只计一次，
+ * 伪造 rootId 文本凑数在计数层不成立。残余口径：同一根身份多设备派生
+ * 公钥是否恒定未冻结（平台域身份口径问题）。
  */
 import type { PluginSDK } from '../../packages/plugin-sdk/src';
 import {
@@ -108,25 +114,28 @@ export class VouchService {
     return response.items.map((item) => item.data).sort((a, b) => b.assembledAt - a.assembledAt);
   }
 
-  /** 同一担保人重复担保时保留最早一份（一人一票，重复只计一次） */
+  /** 同一担保人（同一签名公钥）重复担保时保留最早一份（一人一票，重复只计一次） */
   async listDistinctVouches(requestId: string): Promise<Vouch[]> {
     const byVoucher = new Map<string, Vouch>();
     for (const vouch of await this.listVouches(requestId)) {
-      if (!byVoucher.has(vouch.voucherRootId)) {
-        byVoucher.set(vouch.voucherRootId, vouch);
+      if (!byVoucher.has(vouch.publicKey)) {
+        byVoucher.set(vouch.publicKey, vouch);
       }
     }
     return [...byVoucher.values()];
   }
 
   /**
-   * 签名担保（担保人侧）：identity:sign 签名，载荷绑定请求/上下文/被担保人/
-   * 担保人。签名主体是插件域身份（不证明担保人个人身份，voucherRootId 为
-   * 自报文本——见文件头诚实口径）。签名是担保的全部意义——拒绝授权时报错，
-   * 不产出无签名担保。
+   * 签名担保（担保人侧）：担保人身份**不从 UI 输入**——voucherRootId 取
+   * 担保操作者的 sdk.runtime.currentRoot()（本机当前根身份，仅展示），
+   * identity:sign 返回的 publicKey 才是「不同担保人」的计数基准（见文件头
+   * 加固口径）。identity:sign 载荷绑定请求/上下文/被担保人/担保人。签名是
+   * 担保的全部意义——拒绝授权时报错，不产出无签名担保。
    */
-  async addVouch(request: VouchRequest, voucherRootId: string): Promise<Vouch> {
+  async addVouch(request: VouchRequest): Promise<Vouch> {
     await this.ensureCollectionsDeclared();
+    const root = await this.sdk.runtime.currentRoot();
+    const voucherRootId = root.rootId ?? 'unknown';
     const payload = buildVouchPayload(request.requestId, request.context, request.subjectRootId, voucherRootId);
     const signed = await this.sdk.identity.sign(payload);
     const vouch: Vouch = {

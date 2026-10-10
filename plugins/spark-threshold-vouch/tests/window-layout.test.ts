@@ -4,8 +4,8 @@
  * 主视图为单列卡片流（头卡/发起表单/担保请求列表/门槛证明列表纵向堆叠、
  * 无宽度断点），320/480/880 三档同构——断言聚焦结构不变量而非像素
  * （jsdom 不做排版）：
- * 1. 三档视口下头卡/发起表单/请求条目（担保输入 + 签名担保 + 组装证明）/
- *    证明条目结构完整，长 rootId（自报文本）全文渲染、折行样式静态锁定；
+ * 1. 三档视口下头卡/发起表单/请求条目（以当前身份签名担保 + 组装证明）/
+ *    证明条目结构完整，长 rootId 全文渲染、折行样式静态锁定；
  * 2. 验签（免权限）展开逐项检查结论，检查项名含长担保人 id 仍完整渲染；
  * 3. 重复壳检查：本插件非沉浸式（manifest 未声明 chrome.hostTitleBar:false，
  *    移动全屏由壳层顶栏提供返回），视图内不得出现「关闭应用/返回桌面/退出」
@@ -13,7 +13,7 @@
  * 4. 滚动契约：主视图根节点不设 height/overflow，全文无 100vh——超高请求/
  *    证明列表由 iframe 原生文档滚动承载（源码静态断言，moments 修过的
  *    「overflow:hidden 父级裁切超高内容」bug 类在本插件不适用）；
- * 5. 窄窗适配样式静态锁定：操作行 flex-wrap（担保输入 + 两按钮换行不溢出）、
+ * 5. 窄窗适配样式静态锁定：操作行 flex-wrap（两按钮换行不溢出）、
  *    长 rootId/context 任意断行（overflow-wrap）——jsdom 不排版，锁规则存在。
  */
 import { readFileSync } from 'node:fs';
@@ -33,7 +33,7 @@ import { buildProofPayload, buildVouchPayload, type ThresholdProof, type Vouch, 
 const NOW_MS = 1_700_000_000_000;
 const REQUEST_ID = 'req_1';
 const PROOF_ID = 'proof_1';
-const CONTEXT = 'affair_' + 'ab'.repeat(16);
+const CONTEXT = 'affair:' + 'ab'.repeat(16);
 const SUBJECT_ROOT = 'root-subject-' + 'cd'.repeat(24);
 const VOUCHER_1 = 'root-voucher-' + 'ef'.repeat(24);
 const VOUCHER_2 = 'root-voucher-' + 'ab'.repeat(24);
@@ -163,12 +163,11 @@ describe('spark-threshold-vouch 窗口化布局三档断言', () => {
     const requestItem = host.querySelector('.request-item')!;
     const requestHint = requestItem.querySelector('.hint')?.textContent ?? '';
     expect(requestHint).toContain(SUBJECT_ROOT);
-    // 操作行：担保输入框 + 签名担保 + 组装门槛证明（门槛已满足，组装钮可用）
-    expect(requestItem.querySelector('.voucher-input input')).not.toBeNull();
+    // 操作行：以当前身份签名担保（担保人身份不手填）+ 组装门槛证明（门槛已满足，组装钮可用）
     const actionTexts = [...requestItem.querySelectorAll<HTMLButtonElement>('.actions .el-button')].map((b) =>
       b.textContent?.trim()
     );
-    expect(actionTexts).toEqual(['签名担保（插件域身份）', '组装门槛证明']);
+    expect(actionTexts).toEqual(['以当前身份签名担保', '组装门槛证明']);
 
     // 证明条目：担保份数 tag + 验证状态 + 长组装人 id 自报文本 + 验签钮
     expect(host.textContent ?? '').toContain('2 份担保 / 门槛 2');
@@ -216,13 +215,10 @@ describe('spark-threshold-vouch 滚动契约与窄窗适配静态断言', () => 
   });
 
   it('窄窗适配规则存在：操作行 flex-wrap 换行、长 rootId/context/检查项任意断行', () => {
-    // 担保输入框 + 签名担保 + 组装证明三件套在 320 窗口一行放不下，必须允许换行
+    // 签名担保 + 组装证明两按钮在 320 窗口一行放不下，必须允许换行
     const actionsRule = source.match(/\.actions\s*\{([^}]*)\}/);
     expect(actionsRule?.[1] ?? '').toMatch(/flex-wrap:\s*wrap/);
-    // 输入框弹性收缩（否则 flex 项按内容最小宽撑开，窄窗仍溢出）
-    const inputRule = source.match(/\.voucher-input\s*\{([^}]*)\}/);
-    expect(inputRule?.[1] ?? '').toMatch(/min-width:\s*0/);
-    // 长 rootId（自报文本，无空格）/ 长 context / 检查项名任意断行
+    // 长 rootId / 长 context / 检查项名任意断行
     for (const pattern of [/\.hint\s*\{([^}]*)\}/, /\.request-meta strong\s*\{([^}]*)\}/, /\.checks li\s*\{([^}]*)\}/]) {
       const rule = source.match(pattern);
       expect(rule?.[1] ?? '').toMatch(/overflow-wrap:\s*anywhere/);

@@ -168,6 +168,33 @@ describe('spark-verify-hoa service: applications & demo credentials', () => {
     expect(JSON.stringify(application)).not.toContain('张三');
   });
 
+  it('derives content-addressed ids: same semantic content recomputes the same id', async () => {
+    const { sdk } = createMockSdk();
+    const service = new HoaVerifyService(sdk);
+    const input = {
+      method: 'deed-manual' as const,
+      credentialType: 'owner' as const,
+      unitNo: '3-502',
+      materials: [{ label: '房产证照片', content: '内容' }]
+    };
+
+    const first = await service.submitApplication('org-1', 'root-a', input);
+    const second = await service.submitApplication('org-1', 'root-a', input);
+    expect(first.applicationId).toBe(second.applicationId);
+    expect(first.applicationId).toMatch(/^app_[0-9a-f]{64}$/);
+
+    // 语义内容不同（户号变更）→ id 不同
+    const other = await service.submitApplication('org-1', 'root-a', { ...input, unitNo: '3-503' });
+    expect(other.applicationId).not.toBe(first.applicationId);
+
+    // 凭证 id 同样内容寻址（随申请内容稳定复算）
+    const { sdk: sdk2 } = createMockSdk(true);
+    mockTrustDecl(sdk2);
+    const service2 = new HoaVerifyService(sdk2);
+    const credential = await service2.issueCredential(pendingApplication(), 'root-verifier');
+    expect(credential.credentialId).toMatch(/^cred_[0-9a-f]{64}$/);
+  });
+
   it('issues demo credential signed with the plugin domain identity (payload binds qualification fields)', async () => {
     const { sdk, store } = createMockSdk(true);
     mockTrustDecl(sdk);

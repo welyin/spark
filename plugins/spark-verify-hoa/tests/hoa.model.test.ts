@@ -36,8 +36,11 @@ describe('spark-verify-hoa model', () => {
     expect(validateApplicationInput({ ...validInput(), materials: [{ label: '', content: 'x' }] }).ok).toBe(false);
   });
 
-  it('hashes material content deterministically', () => {
-    expect(hashMaterialContent('abc')).toBe(hashMaterialContent('abc'));
+  it('hashes material content with SHA-256 (known vectors, deterministic across nodes)', () => {
+    expect(hashMaterialContent('abc')).toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+    expect(hashMaterialContent('')).toBe('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
+    // 多字节 UTF-8 口径（中文按 UTF-8 字节哈希，任何节点复算一致）
+    expect(hashMaterialContent('已出售')).toBe(hashMaterialContent('已出售'));
     expect(hashMaterialContent('abc')).not.toBe(hashMaterialContent('abd'));
   });
 

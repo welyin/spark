@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { VouchService, VOUCH_COLLECTIONS } from '../service';
 import { buildProofPayload, buildVouchPayload, type VouchRequest } from '../model';
 
-/** mock SDK：内存 docs + 可控 identity.sign/verify（对齐 spark-example mock 形态） */
+/** mock SDK：内存 docs + 可控 identity.sign/verify + runtime.currentRoot（对齐 spark-example mock 形态） */
 function createMockSdk() {
   const store = new Map<string, Map<string, Record<string, unknown>>>();
   const docs = {
@@ -31,6 +31,9 @@ function createMockSdk() {
     })
   };
   const sdk = {
+    runtime: {
+      currentRoot: vi.fn().mockResolvedValue({ rootId: 'voucher-1', unlocked: true })
+    },
     docs,
     identity: {
       sign: vi.fn().mockResolvedValue({ signature: 'sig-signed', publicKey: 'pk-1', payloadHash: 'ph' }),
@@ -40,62 +43,84 @@ function createMockSdk() {
   return { sdk: sdk as any, docs, store };
 }
 
+/** 以指定身份担保一次：currentRoot 给展示 rootId，identity.sign 给该身份的域公钥（计数基准） */
+async function vouchAs(sdk: any, service: VouchService, request: VouchRequest, rootId: string, publicKey: string) {
+  sdk.runtime.currentRoot.mockResolvedValueOnce({ rootId, unlocked: true });
+  sdk.identity.sign.mockResolvedValueOnce({ signature: `sig-${publicKey}`, publicKey, payloadHash: 'ph' });
+  return service.addVouch(request);
+}
+
 describe('spark-threshold-vouch service', () => {
   it('declares append-only collections before first write', async () => {
     const { sdk, docs } = createMockSdk();
     const service = new VouchService(sdk);
 
-    await service.createRequest({ context: 'ctx-1', subjectRootId: 'subject-1', requiredCount: 2, note: '' });
+    await service.createRequest({ context: 'org:ctx-1', subjectRootId: 'subject-1', requiredCount: 2, note: '' });
 
     const declared = docs.defineCollection.mock.calls.map((call: any[]) => call[0]);
     expect(declared).toEqual([VOUCH_COLLECTIONS.requests, VOUCH_COLLECTIONS.vouches, VOUCH_COLLECTIONS.proofs]);
   });
 
-  it('vouches with domain signature binding request/context/subject/voucher', async () => {
+  it('rejects free-text governance context (restricted lexicon affair:/org:)', async () => {
     const { sdk } = createMockSdk();
     const service = new VouchService(sdk);
-    const request = await service.createRequest({ context: 'ctx-1', subjectRootId: 'subject-1', requiredCount: 2, note: '' });
 
-    const vouch = await service.addVouch(request, 'voucher-1');
-
-    expect(sdk.identity.sign).toHaveBeenCalledWith(buildVouchPayload(request.requestId, 'ctx-1', 'subject-1', 'voucher-1'));
-    expect(vouch.payload).toBe(buildVouchPayload(request.requestId, 'ctx-1', 'subject-1', 'voucher-1'));
-    await expect(service.addVouch(request, 'voucher-2')).resolves.toMatchObject({ voucherRootId: 'voucher-2' });
+    await expect(
+      service.createRequest({ context: 'ctx-1', subjectRootId: 'subject-1', requiredCount: 2, note: '' })
+    ).rejects.toThrow(/affair:<事务id> 或 org:<组织id>/);
   });
 
-  it('refuses to assemble proof before the threshold is met', async () => {
+  it('vouches as the current identity: rootId from currentRoot (display), publicKey from the signature', async () => {
     const { sdk } = createMockSdk();
     const service = new VouchService(sdk);
-    const request = await service.createRequest({ context: 'ctx-1', subjectRootId: 'subject-1', requiredCount: 2, note: '' });
-    await service.addVouch(request, 'voucher-1');
+    const request = await service.createRequest({ context: 'org:ctx-1', subjectRootId: 'subject-1', requiredCount: 2, note: '' });
 
+    const vouch = await vouchAs(sdk, service, request, 'voucher-1', 'pk-v1');
+
+    // 担保人身份不经调用方传入：rootId 取 currentRoot，载荷随之绑定
+    expect(sdk.runtime.currentRoot).toHaveBeenCalled();
+    expect(sdk.identity.sign).toHaveBeenCalledWith(buildVouchPayload(request.requestId, 'org:ctx-1', 'subject-1', 'voucher-1'));
+    expect(vouch.voucherRootId).toBe('voucher-1');
+    expect(vouch.publicKey).toBe('pk-v1');
+  });
+
+  it('refuses to assemble proof before the threshold is met (counted by distinct publicKeys)', async () => {
+    const { sdk } = createMockSdk();
+    const service = new VouchService(sdk);
+    const request = await service.createRequest({ context: 'org:ctx-1', subjectRootId: 'subject-1', requiredCount: 2, note: '' });
+    await vouchAs(sdk, service, request, 'voucher-1', 'pk-v1');
+
+    await expect(service.assembleProof(request, 'me')).rejects.toThrow(/担保不足/);
+
+    // 同一操作者再签一份（同一域公钥）仍只计一次——伪造文本凑数不成立
+    await vouchAs(sdk, service, request, 'voucher-1', 'pk-v1');
     await expect(service.assembleProof(request, 'me')).rejects.toThrow(/担保不足/);
   });
 
   it('assembles signed proof once threshold met (self-vouch excluded)', async () => {
     const { sdk, store } = createMockSdk();
     const service = new VouchService(sdk);
-    const request = await service.createRequest({ context: 'ctx-1', subjectRootId: 'subject-1', requiredCount: 2, note: '' });
-    await service.addVouch(request, 'subject-1'); // 自查担保不计
-    await service.addVouch(request, 'voucher-1');
-    await service.addVouch(request, 'voucher-2');
+    const request = await service.createRequest({ context: 'org:ctx-1', subjectRootId: 'subject-1', requiredCount: 2, note: '' });
+    await vouchAs(sdk, service, request, 'subject-1', 'pk-subject'); // 自查担保不计
+    await vouchAs(sdk, service, request, 'voucher-1', 'pk-v1');
+    await vouchAs(sdk, service, request, 'voucher-2', 'pk-v2');
 
     const proof = await service.assembleProof(request, 'me');
 
     expect(proof.vouches).toHaveLength(3);
     expect(sdk.identity.sign).toHaveBeenLastCalledWith(
-      buildProofPayload(proof.proofId, request.requestId, 'ctx-1', 'subject-1', proof.vouches)
+      buildProofPayload(proof.proofId, request.requestId, 'org:ctx-1', 'subject-1', proof.vouches)
     );
     expect(store.get(VOUCH_COLLECTIONS.proofs)?.get(proof.proofId)).toBeDefined();
   });
 
-  it('dedups repeated vouchers when listing distinct set', async () => {
+  it('dedups repeated signer publicKeys when listing distinct set', async () => {
     const { sdk } = createMockSdk();
     const service = new VouchService(sdk);
-    const request = await service.createRequest({ context: 'ctx-1', subjectRootId: 'subject-1', requiredCount: 2, note: '' });
-    await service.addVouch(request, 'voucher-1');
-    await service.addVouch(request, 'voucher-1');
-    await service.addVouch(request, 'voucher-2');
+    const request = await service.createRequest({ context: 'org:ctx-1', subjectRootId: 'subject-1', requiredCount: 2, note: '' });
+    await vouchAs(sdk, service, request, 'voucher-1', 'pk-v1');
+    await vouchAs(sdk, service, request, 'voucher-1', 'pk-v1');
+    await vouchAs(sdk, service, request, 'voucher-2', 'pk-v2');
 
     const distinct = await service.listDistinctVouches(request.requestId);
     expect(distinct.map((v) => v.voucherRootId)).toEqual(['voucher-1', 'voucher-2']);
@@ -104,9 +129,9 @@ describe('spark-threshold-vouch service', () => {
   it('verifies proof product: recomputed payloads, per-vouch signatures, threshold', async () => {
     const { sdk } = createMockSdk();
     const service = new VouchService(sdk);
-    const request = await service.createRequest({ context: 'ctx-1', subjectRootId: 'subject-1', requiredCount: 2, note: '' });
-    await service.addVouch(request, 'voucher-1');
-    await service.addVouch(request, 'voucher-2');
+    const request = await service.createRequest({ context: 'org:ctx-1', subjectRootId: 'subject-1', requiredCount: 2, note: '' });
+    await vouchAs(sdk, service, request, 'voucher-1', 'pk-v1');
+    await vouchAs(sdk, service, request, 'voucher-2', 'pk-v2');
     const proof = await service.assembleProof(request, 'me');
 
     const result = await service.verifyProof(proof);
@@ -121,18 +146,18 @@ describe('spark-threshold-vouch service', () => {
     ]);
     // 每份担保的验签都收到重算载荷（免权限 identity.verify）
     expect(sdk.identity.verify).toHaveBeenCalledWith(
-      buildVouchPayload(request.requestId, 'ctx-1', 'subject-1', 'voucher-1'),
+      buildVouchPayload(request.requestId, 'org:ctx-1', 'subject-1', 'voucher-1'),
       expect.any(String),
-      'pk-1'
+      'pk-v1'
     );
   });
 
   it('fails verification when a vouch payload is swapped after assembly', async () => {
     const { sdk } = createMockSdk();
     const service = new VouchService(sdk);
-    const request = await service.createRequest({ context: 'ctx-1', subjectRootId: 'subject-1', requiredCount: 2, note: '' });
-    await service.addVouch(request, 'voucher-1');
-    await service.addVouch(request, 'voucher-2');
+    const request = await service.createRequest({ context: 'org:ctx-1', subjectRootId: 'subject-1', requiredCount: 2, note: '' });
+    await vouchAs(sdk, service, request, 'voucher-1', 'pk-v1');
+    await vouchAs(sdk, service, request, 'voucher-2', 'pk-v2');
     const proof = await service.assembleProof(request, 'me');
 
     // 组装后偷换一份担保人的身份：该份担保的载荷与字段失配（证明载荷
@@ -150,8 +175,8 @@ describe('spark-threshold-vouch service', () => {
   it('fails verification when a signature does not verify', async () => {
     const { sdk } = createMockSdk();
     const service = new VouchService(sdk);
-    const request: VouchRequest = await service.createRequest({ context: 'ctx-1', subjectRootId: 'subject-1', requiredCount: 1, note: '' });
-    await service.addVouch(request, 'voucher-1');
+    const request: VouchRequest = await service.createRequest({ context: 'org:ctx-1', subjectRootId: 'subject-1', requiredCount: 1, note: '' });
+    await vouchAs(sdk, service, request, 'voucher-1', 'pk-v1');
     const proof = await service.assembleProof(request, 'me');
 
     sdk.identity.verify.mockResolvedValueOnce({ valid: true }); // 证明签名

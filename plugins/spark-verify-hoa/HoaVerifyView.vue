@@ -276,7 +276,7 @@ function statusText(status: ApplicationStatus): string {
 }
 
 function statusTagType(status: ApplicationStatus): 'warning' | 'success' | 'danger' {
-  return { pending: 'warning', issued: 'success', revoked: 'danger' }[status];
+  return { pending: 'warning', issued: 'success', revoked: 'danger' }[status] as 'warning' | 'success' | 'danger';
 }
 
 function isRevoked(credential: HoaCredential): boolean {

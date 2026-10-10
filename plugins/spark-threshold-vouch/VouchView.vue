@@ -6,8 +6,10 @@
   检查结论——「内核只验证产物」的演示闭环。
 
   诚实口径（评审阻塞 3）：所有担保/组装签名的主体是插件域身份
-  （plugin:spark-threshold-vouch），密码学上不证明担保人/组装人个人身份；
-  担保人 rootId 为自报文本。验签通过 = 载荷完整且插件域签名有效，验的不是个人。
+  （plugin:spark-threshold-vouch），密码学上不证明担保人/组装人个人身份。
+  担保人侧已加固：担保操作自动以当前身份签名（rootId 取 currentRoot，仅
+  展示），门槛按**不同担保签名公钥**计数——域身份按根身份派生，一人签
+  N 份只计一次，手填/伪造担保人文本无法凑数。
 -->
 <template>
   <section class="spark-threshold-vouch">
@@ -23,7 +25,7 @@
         <el-button @click="reload" :loading="loading">刷新</el-button>
       </div>
       <el-alert type="warning" :closable="false" show-icon class="message"
-        title="演示级实现：担保与组装签名均以本插件域身份出具，不证明担保人/组装人个人身份；担保人 rootId 为自报文本，恶意用户可为任意「担保人」伪造担保且验签通过（详见插件 README）。" />
+        title="演示级实现：担保与组装签名均以本插件域身份出具，不证明担保人/组装人个人身份。担保操作自动以当前身份签名，门槛按不同担保签名公钥计数（一人签多份只计一次）；仍待平台个人身份签名路径落地后迁移（详见插件 README）。" />
     </el-card>
 
     <el-card shadow="never" class="composer-card">
@@ -31,8 +33,8 @@
         <h3>发起担保请求</h3>
       </template>
       <el-form label-position="top">
-        <el-form-item label="治理上下文（如事务 id，证明只在此上下文内有效）">
-          <el-input v-model="draft.context" maxlength="120" placeholder="affair_xxx / 项目空间标识" />
+        <el-form-item label="治理上下文（受限词法，证明只在此上下文内有效）">
+          <el-input v-model="draft.context" maxlength="120" placeholder="affair:<事务id> 或 org:<组织id>" />
         </el-form-item>
         <el-form-item label="被担保人">
           <el-input v-model="draft.subjectRootId" placeholder="被担保人 rootId" />
@@ -64,9 +66,8 @@
         </div>
         <p class="hint">被担保人（自报）{{ request.subjectRootId }} · {{ request.note || '（无说明）' }}</p>
         <div class="actions">
-          <el-input v-model="voucherInputs[request.requestId]" size="small" placeholder="担保人 rootId（自报文本）" class="voucher-input" />
           <el-button size="small" type="primary" :loading="vouchingId === request.requestId" @click="vouch(request)">
-            签名担保（插件域身份）
+            以当前身份签名担保
           </el-button>
           <el-button size="small" :disabled="!metMap[request.requestId]" :loading="assemblingId === request.requestId"
             @click="assemble(request)">
@@ -123,7 +124,6 @@ const requests = ref<VouchRequest[]>([]);
 const proofs = ref<ThresholdProof[]>([]);
 const vouchCountMap = reactive<Record<string, number>>({});
 const metMap = reactive<Record<string, boolean>>({});
-const voucherInputs = reactive<Record<string, string>>({});
 const proofResults = reactive<Record<string, { valid: boolean; checks: Array<{ name: string; ok: boolean; detail?: string }> }>>({});
 
 const draft = reactive({
@@ -181,16 +181,11 @@ async function createRequest(): Promise<void> {
 }
 
 async function vouch(request: VouchRequest): Promise<void> {
-  const voucher = voucherInputs[request.requestId]?.trim();
-  if (!voucher) {
-    show('请填写担保人 rootId。', 'error');
-    return;
-  }
   vouchingId.value = request.requestId;
   try {
-    await service.addVouch(request, voucher);
-    show('担保签名已记录（插件域身份签名，担保人 rootId 为自报文本）。', 'success');
-    voucherInputs[request.requestId] = '';
+    // 担保人身份不手填：service 内部取 currentRoot（展示）+ 签名公钥（计数基准）
+    const vouchRecord = await service.addVouch(request);
+    show(`担保签名已记录（当前身份 ${vouchRecord.voucherRootId} 的插件域钥匙签名，按公钥计数）。`, 'success');
     await reload();
   } catch (error) {
     show(`担保失败：${(error as Error).message}`, 'error');
@@ -270,7 +265,7 @@ onMounted(async () => {
 h3 {
   margin: 0;
 }
-/* 窄窗（窗口最小宽 320）下担保输入框 + 两个按钮一行放不下时换行，不横向挤出卡片 */
+/* 窄窗（窗口最小宽 320）下两个按钮一行放不下时换行，不横向挤出卡片 */
 .actions {
   display: flex;
   justify-content: flex-end;
@@ -278,14 +273,6 @@ h3 {
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 8px;
-}
-/* 输入框弹性收缩（min-width:0 否则 flex 项按内容最小宽撑开）：
-   宽窗受 max-width 限制右对齐，窄窗换行后独占一行占满可用宽 */
-.voucher-input {
-  flex: 1;
-  min-width: 0;
-  max-width: 240px;
-  margin-left: auto;
 }
 .request-item {
   padding: 10px 0;

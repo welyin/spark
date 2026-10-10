@@ -10,11 +10,11 @@
  * spark-plugin.json 的 comment 字段；L1 级别的实际校验在分发/市场侧，
  * 插件自身无法自证。
  *
- * 能力面：sdk.credentials 只读三方法（listHeld / presentHolderProof /
- * queryVerifiers，credentials:read，类型对接见 sdk-credentials.ts）+
- * identity:sign（签发/注销签名——签名主体为插件域身份，产物为演示级
- * 线形，诚实口径见 service.ts 头注与 README.md）+ docs（申请/凭证/注销
- * 记录，append-only）。
+ * 能力面：sdk.credentials 只读五方法（listHeld / presentHolderProof /
+ * queryVerifiers / verify / queryRevocations，credentials:read，类型对接见
+ * sdk-credentials.ts）+ identity:sign（签发/注销签名——签名主体为插件域
+ * 身份，产物为演示级线形，诚实口径见 service.ts 头注与 README.md）+
+ * docs（申请/凭证/注销记录，append-only）。
  */
 import { createApp } from 'vue';
 import ElementPlus from 'element-plus';
