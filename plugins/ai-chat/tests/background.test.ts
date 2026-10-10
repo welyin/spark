@@ -199,7 +199,8 @@ function messagePayload(botId: string, text: string): FakePayload {
 }
 
 function codebuddyDoc(cliPath = 'codebuddy'): Record<string, unknown> {
-  return { name: 'Echo Bot', backendType: 'codebuddy', backendConfig: { cliPath }, createdAt: 1 };
+  // workdir 必填（评审 S2）：未配置的 codebuddy bot 调用会被拒绝
+  return { name: 'Echo Bot', backendType: 'codebuddy', backendConfig: { cliPath, workdir: 'C:/work' }, createdAt: 1 };
 }
 
 describe('ai-chat background script', () => {
@@ -224,26 +225,19 @@ describe('ai-chat background script', () => {
     ]);
   });
 
-  it('历史空间域兜底：bot 文档沉在 space:personal 域时仍能读写', async () => {
-    // 旧 UI 桥把 docs 绑定到会话空间根域（历史缺陷），已有用户的 bot 数据在
-    // space:personal——后台应兜底读到（注册 + 应答 + 查询都说 bot 存在）
+  it('历史遗留域不再由插件读取：内核迁移器在启动前已把旧档搬入自身域', async () => {
+    // 评审 U1 · R3：四域探测随内核白名单一起退役。plugin: 根域 / 空间根域
+    // 的存量 bot 文档由内核一次性迁移器（host_env/docs.rs LEGACY_DOC_MIGRATIONS）
+    // 搬迁并删除；插件侧只读自身域，不再触碰任何遗留域
     host.seedBot('cb', codebuddyDoc(), 'space:personal');
+    host.seedBot('cb2', codebuddyDoc(), 'plugin:ai-chat');
     await loadBackground(host);
 
-    expect(host.calls.ensureBot).toEqual([{ botId: 'cb', displayName: 'Echo Bot' }]);
-    expect(host.query('bot:query', { contactId: 'bot:ai-chat:cb' })).toEqual({ exists: true });
-
-    host.emit(messagePayload('cb', 'hi'));
-    await flush();
-    expect(host.calls.replies[0].text).toBe('REPLY-OK');
-  });
-
-  it('自身域与历史域同时有数据：合并去重（自身域优先）', async () => {
-    host.seedBot('a', codebuddyDoc());
-    host.seedBot('b', { ...codebuddyDoc(), name: '旧 Bot' }, 'space:personal');
-    await loadBackground(host);
-
-    expect(host.calls.ensureBot.map((c) => c.botId)).toEqual(['a', 'b']);
+    expect(host.calls.ensureBot).toEqual([]);
+    expect(host.query('bot:query', { contactId: 'bot:ai-chat:cb' })).toEqual({ exists: false });
+    // 自身域有数据时正常可见（迁移后的形态）
+    host.seedBot('own', codebuddyDoc());
+    expect(host.query('bot:query', { contactId: 'bot:ai-chat:own' })).toEqual({ exists: true });
   });
 
   it('codebuddy 后端：消息 → CLI（stream-json 流式）→ 回复', async () => {
@@ -255,16 +249,119 @@ describe('ai-chat background script', () => {
 
     expect(host.fake.sys.execStream).toHaveBeenCalledWith(
       'C:/tools/codebuddy.exe',
-      // 会话续接：convId=dm:bot:ai-chat:cb → 首次 --session-id 建立（含流式参数）
+      // 会话续接（评审 S5）：convId=dm:bot:ai-chat:cb → 一律先 --resume 续接
       ['--print', '--output-format', 'stream-json', '--include-partial-messages',
-        '--session-id', 'aichat-dm-bot-ai-chat-cb', '--', '帮我看看这段代码'],
-      undefined,
+        '--resume', 'aichat-dm-bot-ai-chat-cb', '--', '帮我看看这段代码'],
+      'C:/work',
       expect.any(Function)
     );
     expect(host.calls.streamStarts).toHaveLength(1);
     expect(host.calls.replies).toHaveLength(1);
     expect(host.calls.replies[0].text).toBe('REPLY-OK');
     expect(host.calls.replies[0].payload.conversation.id).toBe('dm:bot:ai-chat:cb');
+  });
+
+  it('codebuddy 未配置工作目录：拒绝调用并提示配置（评审 S2）', async () => {
+    host.seedBot('cb', {
+      name: 'No Dir Bot',
+      backendType: 'codebuddy',
+      backendConfig: { cliPath: 'codebuddy' },
+      createdAt: 1,
+    });
+    await loadBackground(host);
+
+    host.emit(messagePayload('cb', 'hi'));
+    await flush();
+
+    expect(host.fake.sys.execStream).not.toHaveBeenCalled();
+    expect(host.fake.sys.exec).not.toHaveBeenCalled();
+    const lastReply = host.calls.replies[host.calls.replies.length - 1].text;
+    expect(lastReply).toContain('工作目录');
+  });
+
+  it('codebuddy resume 会话级失败：回退 --session-id 重建重试一次（评审 S5）', async () => {
+    host.seedBot('cb', codebuddyDoc());
+    // 第一次（--resume）：会话文件丢失，exitCode=1 且无 token 产出；
+    // 第二次（--session-id 重建）：正常流式
+    host.fake.sys.execStream.mockImplementationOnce(async (_p: string, _a?: string[], _w?: string, onChunk?: (c: { text: string; done: boolean; exitCode: number | null }) => void) => {
+      onChunk?.({ text: '', done: true, exitCode: 1 });
+      return { exitCode: 1, stdout: '', stderr: 'Error: session not found' };
+    });
+    await loadBackground(host);
+
+    host.emit(messagePayload('cb', 'hi'));
+    await flush();
+
+    expect(host.fake.sys.execStream).toHaveBeenCalledTimes(2);
+    const firstArgs = host.fake.sys.execStream.mock.calls[0][1] as string[];
+    const secondArgs = host.fake.sys.execStream.mock.calls[1][1] as string[];
+    expect(firstArgs).toContain('--resume');
+    expect(secondArgs).toContain('--session-id');
+    expect(host.calls.replies[host.calls.replies.length - 1].text).toBe('REPLY-OK');
+  });
+
+  it('codebuddy resume 已产出 token 的失败不回退重试（部分内容已上屏）', async () => {
+    host.seedBot('cb', codebuddyDoc());
+    host.fake.sys.execStream.mockImplementationOnce(async (_p: string, _a?: string[], _w?: string, onChunk?: (c: { text: string; done: boolean; exitCode: number | null }) => void) => {
+      onChunk?.({
+        text: '{"type":"assistant","message":{"content":[{"type":"text","text":"PART"}]}}',
+        done: false,
+        exitCode: null,
+      });
+      onChunk?.({ text: '', done: true, exitCode: 1 });
+      return { exitCode: 1, stdout: '', stderr: 'boom' };
+    });
+    await loadBackground(host);
+
+    host.emit(messagePayload('cb', 'hi'));
+    await flush();
+
+    expect(host.fake.sys.execStream).toHaveBeenCalledTimes(1);
+    // 已产出 token 的流按干净终态收尾：已上屏的部分内容保留（fake 把逐 chunk
+    // 折叠为一条 reply），不回退重发（重发会与已上屏内容重复）
+    const lastReply = host.calls.replies[host.calls.replies.length - 1].text;
+    expect(lastReply).toBe('PART');
+  });
+
+  it('超长/空消息：主聊天窗口路径拦截（评审 S3），不调用后端', async () => {
+    host.seedBot('oa', {
+      name: 'GPT Bot',
+      backendType: 'openai',
+      backendConfig: { baseUrl: 'https://api.example.com/v1' },
+      createdAt: 1,
+    });
+    host.seedSecret('oa', 'sk-test');
+    await loadBackground(host);
+
+    host.emit(messagePayload('oa', 'x'.repeat(4001)));
+    host.emit(messagePayload('oa', '   '));
+    await flush();
+
+    expect(host.fake.sys.fetchStream).not.toHaveBeenCalled();
+    expect(host.fake.sys.fetch).not.toHaveBeenCalled();
+    expect(host.calls.replies.map((r) => r.text)).toEqual([
+      '消息长度不能超过 4000 字',
+      '消息不能为空',
+    ]);
+  });
+
+  it('孤儿 bot 告警日志只带摘要：不含消息内容与发送者昵称（评审 S1）', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await loadBackground(host);
+      const payload = messagePayload('ghost', 'SECRET-CONTENT');
+      payload.message.senderName = 'SECRET-NAME';
+      host.emit(payload);
+      await flush();
+
+      expect(warnSpy).toHaveBeenCalled();
+      const logged = warnSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      expect(logged).toContain('ghost');
+      expect(logged).not.toContain('SECRET-CONTENT');
+      expect(logged).not.toContain('SECRET-NAME');
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it('codebuddy 未登录：stderr 含 Authentication required 时回复登录指引', async () => {
@@ -293,11 +390,11 @@ describe('ai-chat background script', () => {
     await flush();
 
     // 流式路径：codebuddy 走 execStream（stream-json），workdir 透传第三参；
-    // 首次调用带 --session-id（会话续接建立）
+    // 会话一律先 --resume 续接（评审 S5）
     expect(host.fake.sys.execStream).toHaveBeenCalledWith(
       'codebuddy',
       ['--print', '--output-format', 'stream-json', '--include-partial-messages',
-        '--session-id', 'aichat-dm-bot-ai-chat-cb', '--', 'hi'],
+        '--resume', 'aichat-dm-bot-ai-chat-cb', '--', 'hi'],
       'D:/proj',
       expect.any(Function)
     );

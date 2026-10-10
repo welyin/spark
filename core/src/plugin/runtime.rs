@@ -95,6 +95,10 @@ pub(crate) fn spawn_plugin_runtime(
     };
     let plugin_id_owned = plugin_id.to_string();
     let script_owned = script.to_string();
+    // 遗留数据迁移（ai-chat 评审 U1 · R3）：后台脚本启动前把历史缺陷域的
+    // 存量文档搬入插件自身域——脚本跑起来后空间根域已不可达（白名单退役），
+    // 迁移只能在此之前由内核完成
+    host.migrate_legacy_docs(&plugin_id_owned);
     let rtx = super::host_env::PluginRuntimeContext {
         plugin_id: plugin_id_owned.clone(),
         event_tx: handle.event_tx.clone(),

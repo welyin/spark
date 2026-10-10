@@ -288,9 +288,11 @@ spark.onMessage(function () {});
 }
 
 #[test]
-fn docs_domain_whitelist() {
-    // 域约束：缺省/自身域/plugin: 根域可读写；空间根域仅限白名单遗留集合
-    // 的只读（写一律拒，防伪造共享空间数据）；其他插件域、组织域拒绝
+fn docs_domain_rules() {
+    // 域约束：缺省/自身域/plugin: 根域可读写；空间根域一律拒绝（ai_chat_bots
+    // 遗留只读白名单已随一次性迁移退役——ai-chat 评审 U1 · R3，存量文档由
+    // 内核迁移器搬入插件自身域，见 legacy_ai_chat_bot_docs_migrated_into_plugin_domain）；
+    // 其他插件域、组织域拒绝
     let (_dir, mut kernel, _root) = kernel_with_identity();
     let script = r#"
 function tryQuery(domain, collection) {
@@ -305,10 +307,10 @@ var report = [
     tryQuery(null),                          // 缺省 → 插件自身域
     tryQuery('echo-plugin'),                 // 自身域
     tryQuery('plugin:echo-plugin'),          // plugin: 根域（UI 桥历史数据面）
-    tryQuery('space:personal', 'ai_chat_bots'), // 空间域遗留集合 → 只读放行
+    tryQuery('space:personal', 'ai_chat_bots'), // 空间域（原白名单集合）→ 拒
     tryQuery('space:org', 'ai_chat_bots'),
-    tryQuery('space:personal'),              // 空间域非白名单集合 → 拒
-    tryPut('space:personal', 'ai_chat_bots'),   // 空间域写（白名单集合也拒）
+    tryQuery('space:personal'),              // 空间域 → 拒
+    tryPut('space:personal', 'ai_chat_bots'),   // 空间域写 → 拒
     tryPut('space:org'),                     // 空间域写 → 拒
     tryPut(null),                            // 自身域写 → 放行
     tryQuery('other-plugin'),                // 他插件域 → 拒
@@ -331,12 +333,78 @@ spark.onMessage(function (payload) { spark.reply(payload, report); });
                 .iter()
                 .any(|m| {
                     m.sender_id == "bot:echo-plugin:d-bot"
-                        && m.content == "ok,ok,ok,ok,ok,err,err,err,ok,err,err,err"
+                        && m.content == "ok,ok,ok,err,err,err,err,err,ok,err,err,err"
                 })
         },
         5_000,
-        "域白名单判定回传",
+        "域约束判定回传",
     );
+}
+
+#[test]
+fn legacy_ai_chat_bot_docs_migrated_into_plugin_domain() {
+    // ai-chat 评审 U1 · R3：内核迁移器在 ai-chat 后台启动前把遗留域
+    // （plugin:ai-chat 根域 / 空间根域）的存量 bot 文档搬入插件自身域并
+    // 删除旧文档；自身域已有同 id 文档时不覆盖（自身域优先）
+    let (_dir, mut kernel, _root) = kernel_with_identity();
+    let cfg = spark_core::collection::CollectionConfig::default();
+    kernel
+        .doc_put(
+            "space:personal",
+            "ai_chat_bots",
+            "bot-dup",
+            serde_json::json!({"name": "空间旧档"}),
+            cfg.clone(),
+        )
+        .unwrap();
+    kernel
+        .doc_put(
+            "plugin:ai-chat",
+            "ai_chat_bots",
+            "bot-root",
+            serde_json::json!({"name": "根域旧档"}),
+            cfg.clone(),
+        )
+        .unwrap();
+    kernel
+        .doc_put(
+            "space:org",
+            "ai_chat_bots",
+            "bot-org",
+            serde_json::json!({"name": "组织空间旧档"}),
+            cfg.clone(),
+        )
+        .unwrap();
+    // 自身域已有同 id 文档：迁移不得覆盖（旧合并口径自身域优先）
+    kernel
+        .doc_put(
+            "ai-chat",
+            "ai_chat_bots",
+            "bot-dup",
+            serde_json::json!({"name": "自身域新档"}),
+            cfg,
+        )
+        .unwrap();
+
+    kernel
+        .plugin_start_background("ai-chat", "spark.onMessage(function () {});", &test_permissions())
+        .unwrap();
+
+    // 迁移在 spawn 前同步完成（plugin_start_background 返回即已落地）
+    let own = |id: &str| kernel.doc_get("ai-chat", "ai_chat_bots", id).unwrap();
+    assert_eq!(own("bot-root").unwrap()["name"], "根域旧档");
+    assert_eq!(own("bot-org").unwrap()["name"], "组织空间旧档");
+    assert_eq!(own("bot-dup").unwrap()["name"], "自身域新档", "自身域文档不被旧档覆盖");
+    for (domain, id) in [
+        ("space:personal", "bot-dup"),
+        ("plugin:ai-chat", "bot-root"),
+        ("space:org", "bot-org"),
+    ] {
+        assert!(
+            kernel.doc_get(domain, "ai_chat_bots", id).unwrap().is_none(),
+            "遗留域旧文档已删除: {domain}/{id}"
+        );
+    }
 }
 
 #[test]

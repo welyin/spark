@@ -163,9 +163,17 @@ export function registerBuiltinProviders(): void {
       if (!sdk?.sys) return { text: '错误：内核 sys 能力不可用', durationMs: 0 };
       const cliPath = (ctx.config.cliPath as string) || 'codebuddy';
       const lastMsg = ctx.messages[ctx.messages.length - 1];
-      // 工作目录：CLI 读取代码/文档上下文的根。用户显式配置；留空则 CLI 继承宿主
-      // 进程 cwd（不可控），故强烈建议配置
-      const workdir = (ctx.config.workdir as string) || undefined;
+      // 工作目录（评审 S2）：CLI 读取代码/文档上下文的根，须用户显式配置；
+      // 未配置拒绝调用——缺省会继承宿主进程 cwd（GUI 安装目录，读写不可控）。
+      // 与后台侧 background.ts callCodebuddy 同一口径
+      const workdir = ((ctx.config.workdir as string) || '').trim();
+      if (!workdir) {
+        return {
+          text: 'CodeBuddy 后端未配置工作目录：未配置时 CLI 会继承宿主进程的当前目录（GUI 安装目录，读写不可控），因此拒绝调用。请在上方「工作目录」填写 CLI 读取代码/文档上下文的根目录后再试。',
+          durationMs: 0,
+          error: '未配置工作目录',
+        };
+      }
       const model = (ctx.config.model as string) || undefined;
       const args = model
         ? ['--model', model, '--print', '--', lastMsg?.content ?? '']
@@ -173,7 +181,7 @@ export function registerBuiltinProviders(): void {
       // 日志纪律（评审 H1 · R1.4）：ctx.config 含 apiKey 等机密字段，禁止整体进日志
       const startTime = Date.now();
       try {
-        console.log(`[ai-chat][provider] sys.exec 调用 cliPath=${cliPath} workdir=${workdir ?? '(继承)'} model=${model ?? '(默认)'}`);
+        console.log(`[ai-chat][provider] sys.exec 调用 cliPath=${cliPath} workdir=${workdir} model=${model ?? '(默认)'}`);
         const result = await sdk.sys.exec(cliPath, args, workdir);
         console.log(`[ai-chat][provider] sys.exec 返回 exitCode=${result.exitCode} stdout=${result.stdout?.slice(0, 50) ?? ''}`);
         const durationMs = Date.now() - startTime;

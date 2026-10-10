@@ -252,7 +252,7 @@
             </div>
           </label>
           <p class="form-hint">
-            执行 <code>codebuddy --print -- "..."</code>（<code>--</code> 终止选项解析，消息以 <code>-</code> 开头也不会被当成 CLI 标志），stdout 即为回复。模型从 <code>codebuddy --help</code> 的 <code>--model</code> 枚举解析（点 ↻ 刷新），留空用 CLI 内置默认模型，也可手填。工作目录是 CLI 读取代码/文档上下文的根路径，留空则继承宿主进程目录（不可控，不建议）。
+            执行 <code>codebuddy --print -- "..."</code>（<code>--</code> 终止选项解析，消息以 <code>-</code> 开头也不会被当成 CLI 标志），stdout 即为回复。模型从 <code>codebuddy --help</code> 的 <code>--model</code> 枚举解析（点 ↻ 刷新），留空用 CLI 内置默认模型，也可手填。工作目录是 CLI 读取代码/文档上下文的根路径，<strong>必填</strong>——留空会让 CLI 继承宿主进程当前目录（不可控），未配置时对话调用会被拒绝。
           </p>
 
           <!-- 环境检测与一键安装 -->
@@ -927,6 +927,12 @@ async function handleSaveBot(): Promise<void> {
       alert(urlCheck.reason);
       return;
     }
+  }
+  // 评审 S2：codebuddy 工作目录必填——留空会让 CLI 继承宿主进程 cwd（GUI
+  // 安装目录，读写不可控）；调用侧（本视图与主聊天窗口后台）对未配置一律拒绝
+  if (botForm.backendType === 'codebuddy' && !botForm.config.codebuddy.workdir.trim()) {
+    alert('请填写工作目录（CLI 读取代码/文档上下文的根目录）。未配置时为避免 CLI 在宿主进程当前目录读写文件，对话调用会被拒绝。');
+    return;
   }
 
   let botId: string;

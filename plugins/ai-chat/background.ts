@@ -23,6 +23,13 @@
 const BOTS_COLLECTION = 'ai_chat_bots';
 
 /**
+ * 用户消息最大长度（与 model.ts `MAX_MESSAGE_LENGTH` 逐字一致；零依赖约束故
+ * 内联）。主聊天窗口路径的消息校验（评审 S3）：内核只有 16KiB 传输上限，
+ * 语义校验（空消息 / 超长）由这里补齐。
+ */
+const MAX_MESSAGE_LENGTH = 4000;
+
+/**
  * Bot 机密配置集合名（与 model.ts `SECRETS_COLLECTION` 逐字一致；零依赖约束故内联）。
  * 新数据 API，scope: local —— apiKey 不离开本机、不参与 pdsync 同步（评审 H1 · R1）。
  */
@@ -105,50 +112,13 @@ declare const spark: {
 };
 
 // ------------------------------------------------------------------
-// Bot 实例读取（docs 域 = 插件 id；配置每次现读，增删改即时生效）
+// Bot 实例读取（docs 域恒为插件 id——内核强制，历史缺陷域的存量文档已由
+// 内核一次性迁移器在后台启动前搬入本域并删除旧档，见 host_env/docs.rs
+// LEGACY_DOC_MIGRATIONS；配置每次现读，增删改即时生效）
 // ------------------------------------------------------------------
 
 /** 集合兜底声明（与 UI 侧 defineCollection 的口径一致；已持久化声明优先） */
 const COLLECTION_CONFIG = { syncStrategy: 'lww', enableEvidence: false };
-
-/**
- * 插件 bot 数据的 docs 域：
- * - 首选插件自身域（`spark.pluginId`，正常场景）；
- * - 兼容历史数据：旧 UI 桥曾把 docs 请求绑定到会话空间根域
- *   （`space:<spaceKey>`，壳层 derivePluginDomain 的历史缺陷），已有用户的
- *   bot 文档沉在那个域里——自身域查不到时回扫空间域兜底（两域是同一
- *   插件的可信数据面，不属于跨插件访问）。
- */
-function botDataSpaces(): string[] {
-  // 域候选：自身域（新数据）→ plugin: 根域（UI 桥历史数据面，存量 bot 文档
-  // 的真实落点）→ 空间根域（更早的历史遗留）。逐域探测，有数据才纳入。
-  const candidates = [
-    spark.pluginId,
-    `plugin:${spark.pluginId}`,
-    'space:personal',
-    'space:org',
-  ];
-  const active: string[] = [];
-  const report: string[] = [];
-  for (const domain of candidates) {
-    try {
-      const result = spark.docs.query(BOTS_COLLECTION, { limit: 1 }, COLLECTION_CONFIG, domain);
-      report.push(`${domain}=${result.items.length > 0 ? '>=1' : '0'}`);
-      if (result.items.length > 0 || domain === spark.pluginId) active.push(domain);
-    } catch (e) {
-      report.push(`${domain}=err`);
-    }
-  }
-  console.log(`[ai-chat][bg] bot 数据域探测: ${report.join(' ')}`);
-  return active;
-}
-
-/** 探测一次并缓存有效域列表（兜底域只承载历史数据的读） */
-let cachedSpaces: string[] | null = null;
-function dataSpaces(): string[] {
-  if (!cachedSpaces) cachedSpaces = botDataSpaces();
-  return cachedSpaces;
-}
 
 function ensureBotsCollection(): void {
   try {
@@ -173,26 +143,14 @@ function unwrapBotDoc(doc: { id: string; data: Record<string, unknown> }): BotIn
 
 function listBots(): BotInstance[] {
   ensureBotsCollection();
-  const seen = new Set<string>();
-  const bots: BotInstance[] = [];
-  for (const domain of dataSpaces()) {
-    const result = spark.docs.query(BOTS_COLLECTION, { reverse: true }, COLLECTION_CONFIG, domain);
-    for (const item of result.items) {
-      if (seen.has(item.id)) continue;
-      seen.add(item.id);
-      bots.push(unwrapBotDoc(item));
-    }
-  }
-  return bots;
+  const result = spark.docs.query(BOTS_COLLECTION, { reverse: true }, COLLECTION_CONFIG);
+  return result.items.map(unwrapBotDoc);
 }
 
 function getBot(botId: string): BotInstance | null {
   ensureBotsCollection();
-  for (const domain of dataSpaces()) {
-    const doc = spark.docs.get(BOTS_COLLECTION, botId, domain);
-    if (doc) return unwrapBotDoc({ id: botId, data: doc });
-  }
-  return null;
+  const doc = spark.docs.get(BOTS_COLLECTION, botId);
+  return doc ? unwrapBotDoc({ id: botId, data: doc }) : null;
 }
 
 // ------------------------------------------------------------------
@@ -372,15 +330,6 @@ function makeCodebuddyPush(
 }
 
 /**
- * 已建立的 codebuddy 会话集合（codebuddy sessionId）。同一 bot 会话映射到同一
- * codebuddy 会话：首次用 --session-id 建立，后续 --resume 续接——codebuddy 自动
- * 携带完整历史（实测验证：resume 后 AI 记得前轮内容），实现"有记忆"的多轮对话。
- * 进程内记录；重启后若 sessionId 未在此集合会误判为首次走 --session-id，
- * codebuddy 对已存在的 session-id 重复建立是幂等的（沿用原会话），无害。
- */
-const establishedSessions = new Set<string>();
-
-/**
  * bot 会话 → codebuddy sessionId。codebuddy 把 session-id 当 `.jsonl` 文件名存盘，
  * Windows 下 `:` 是盘符/流分隔符、非法进文件名（实测 ENOENT）——尽管 --help 声称
  * `:` 合法（Unix 语义）。为跨平台安全，只保留字母数字 + `-` + `_`，其余全替换。
@@ -389,24 +338,34 @@ function codebuddySessionId(convId: string): string {
   return `aichat-${convId.replace(/[^a-zA-Z0-9\-_]/g, '-')}`;
 }
 
-async function callCodebuddy(
-  config: Record<string, unknown>,
-  text: string,
-  onToken?: StreamSink,
-  convId?: string,
-): Promise<BackendCallResult> {
-  const cliPath = (config.cliPath as string) || 'codebuddy';
-  // 工作目录：CLI 读取代码/文档上下文的根，用户显式配置
-  const workdir = (config.workdir as string) || undefined;
-  const model = (config.model as string) || undefined;
-  const startTime = Date.now();
+/** 未登录引导文本（stderr 命中 authentication 特征时的统一回复） */
+const CODEBUDDY_AUTH_HINT =
+  'CodeBuddy CLI 尚未登录。\n\n请在终端中运行 codebuddy 进入交互模式，输入 /login 完成浏览器授权后，再回来对话。';
 
-  // 会话续接：同一 bot 会话绑定稳定 sessionId，首次 --session-id 建立、后续
-  // --resume 续接（codebuddy 自动带历史）。无 convId（调用方未传）退化为无状态单轮。
-  const sessionId = convId ? codebuddySessionId(convId) : undefined;
-  const sessionArgs: string[] = sessionId
-    ? (establishedSessions.has(sessionId) ? ['--resume', sessionId] : ['--session-id', sessionId])
-    : [];
+/** 未配置工作目录时的拒绝文案（评审 S2；与 UI 侧 service.ts 同口径） */
+const CODEBUDDY_WORKDIR_HINT =
+  'CodeBuddy 后端未配置工作目录：未配置时 CLI 会继承宿主进程的当前目录（GUI 安装目录，读写不可控），' +
+  '因此拒绝调用。请在插件中编辑该 Bot，填写「工作目录」（CLI 读取代码/文档上下文的根目录）后再试。';
+
+/** 单次 codebuddy 调用结果 + 是否可回退重建会话重试 */
+type CodebuddyAttempt = {
+  result: BackendCallResult;
+  /**
+   * 会话级失败（exitCode 非 0 且非未登录）：--resume 续接的会话文件可能已
+   * 丢失，调用方据此回退 --session-id 重建重试一次（评审 S5）
+   */
+  sessionFailure: boolean;
+};
+
+async function callCodebuddyOnce(
+  cliPath: string,
+  model: string | undefined,
+  workdir: string,
+  text: string,
+  sessionArgs: string[],
+  onToken?: StreamSink,
+): Promise<CodebuddyAttempt> {
+  const startTime = Date.now();
 
   // 流式模式：`--output-format stream-json` 逐事件 NDJSON 输出，增量 token 在
   // stream_event.delta.text——主聊天窗口逐字上屏（sys.execStream 按行回流）。
@@ -425,47 +384,97 @@ async function callCodebuddy(
       spark.log('[stream-dbg] cb execStream result exitCode=' + result.exitCode + ' stderr=' + result.stderr.slice(0, 80));
       const durationMs = Date.now() - startTime;
       if (/authentication required|please use \/login/i.test(result.stderr)) {
-        return {
-          text: 'CodeBuddy CLI 尚未登录。\n\n请在终端中运行 codebuddy 进入交互模式，输入 /login 完成浏览器授权后，再回来对话。',
-          durationMs,
-        };
+        return { result: { text: CODEBUDDY_AUTH_HINT, durationMs }, sessionFailure: false };
       }
       // 流式模式全文经 onToken 推送；exitCode 非 0 视为失败
       if (result.exitCode !== 0) {
-        return { text: '', durationMs, error: result.stderr || `codebuddy 退出码 ${result.exitCode}` };
+        return {
+          result: { text: '', durationMs, error: result.stderr || `codebuddy 退出码 ${result.exitCode}` },
+          sessionFailure: true,
+        };
       }
-      if (sessionId) establishedSessions.add(sessionId); // 成功则标记已建立，后续 resume
-      return { text: '', durationMs };
+      return { result: { text: '', durationMs }, sessionFailure: false };
     } catch (err) {
+      // spawn 失败（CLI 不存在等）：与会话状态无关，不回退重试
       return {
-        text: `调用 CodeBuddy CLI 失败：${err instanceof Error ? err.message : String(err)}`,
-        durationMs: Date.now() - startTime,
+        result: {
+          text: `调用 CodeBuddy CLI 失败：${err instanceof Error ? err.message : String(err)}`,
+          durationMs: Date.now() - startTime,
+        },
+        sessionFailure: false,
       };
     }
   }
 
   try {
     // `--` 终止 CLI 选项解析：用户消息以 `-` 开头不会被误判为标志位。
-    // 非流式分支同样带会话续接参数（保持"有记忆"一致）。
     const baseArgs = ['--print', ...sessionArgs];
     const args = model ? ['--model', model, ...baseArgs, '--', text] : [...baseArgs, '--', text];
     const result = await spark.sys.exec(cliPath, args, workdir);
     const durationMs = Date.now() - startTime;
     const combined = [result.stdout, result.stderr].filter(Boolean).join('\n');
     if (/authentication required|please use \/login/i.test(combined)) {
+      return { result: { text: CODEBUDDY_AUTH_HINT, durationMs }, sessionFailure: false };
+    }
+    // 与流式路径同口径：退出码非 0 视为失败（stderr 透出），不当作正常回复
+    if (result.exitCode !== 0) {
       return {
-        text: 'CodeBuddy CLI 尚未登录。\n\n请在终端中运行 codebuddy 进入交互模式，输入 /login 完成浏览器授权后，再回来对话。',
-        durationMs,
+        result: { text: '', durationMs, error: result.stderr || `codebuddy 退出码 ${result.exitCode}` },
+        sessionFailure: true,
       };
     }
-    if (sessionId && result.exitCode === 0) establishedSessions.add(sessionId);
-    return { text: result.stdout || result.stderr || '(无输出)', durationMs };
+    return { result: { text: result.stdout || '(无输出)', durationMs }, sessionFailure: false };
   } catch (err) {
     return {
-      text: `调用 CodeBuddy CLI 失败：${err instanceof Error ? err.message : String(err)}`,
-      durationMs: Date.now() - startTime,
+      result: {
+        text: `调用 CodeBuddy CLI 失败：${err instanceof Error ? err.message : String(err)}`,
+        durationMs: Date.now() - startTime,
+      },
+      sessionFailure: false,
     };
   }
+}
+
+/**
+ * CodeBuddy CLI 后端。
+ *
+ * - 工作目录（评审 S2）：须用户显式配置；未配置拒绝调用（缺省会继承宿主
+ *   进程 cwd——GUI 安装目录，CLI 读写不可控）。
+ * - 会话续接（评审 S5）：同一 bot 会话绑定稳定 sessionId，一律先 `--resume`
+ *   续接（codebuddy 自动带历史）；会话级失败且未产出任何 token 时回退
+ *   `--session-id` 重建重试一次——无进程内/落盘状态、自愈，不再依赖
+ *   「重启后重复 --session-id 幂等沿用原会话」的脆弱假设。无 convId
+ *   （调用方未传）退化为无状态单轮。
+ */
+async function callCodebuddy(
+  config: Record<string, unknown>,
+  text: string,
+  onToken?: StreamSink,
+  convId?: string,
+): Promise<BackendCallResult> {
+  const cliPath = (config.cliPath as string) || 'codebuddy';
+  const workdir = ((config.workdir as string) || '').trim();
+  if (!workdir) {
+    return { text: CODEBUDDY_WORKDIR_HINT, durationMs: 0 };
+  }
+  const model = (config.model as string) || undefined;
+
+  const sessionId = convId ? codebuddySessionId(convId) : undefined;
+  if (!sessionId) {
+    return (await callCodebuddyOnce(cliPath, model, workdir, text, [], onToken)).result;
+  }
+  // 先 --resume；已产出 token 的失败不能重试（部分内容已上屏，重发会重复）
+  let sawToken = false;
+  const probe: StreamSink | undefined = onToken
+    ? (token, accumulated) => {
+        sawToken = true;
+        onToken(token, accumulated);
+      }
+    : undefined;
+  const attempt = await callCodebuddyOnce(cliPath, model, workdir, text, ['--resume', sessionId], probe);
+  if (!attempt.sessionFailure || sawToken) return attempt.result;
+  spark.log(`[ai-chat][bg] codebuddy resume 失败，回退 --session-id 重建会话 ${sessionId}`);
+  return (await callCodebuddyOnce(cliPath, model, workdir, text, ['--session-id', sessionId], onToken)).result;
 }
 
 /**
@@ -624,8 +633,21 @@ spark.onMessage((payload) => {
   if (!botId) return;
   const bot = getBot(botId);
   if (!bot) {
+    // 日志纪律（评审 S1）：孤儿消息告警只带摘要（botId/发送者 id/长度），
+    // 消息内容与发送者昵称不进日志
     console.warn(
-      `[ai-chat][bg] 收到未知 bot 的消息（孤儿），忽略 | botId=${botId} sender=${payload.message.senderName} content="${payload.message.content}"`,
+      `[ai-chat][bg] 收到未知 bot 的消息（孤儿），忽略 | botId=${botId} senderId=${payload.message.senderId} len=${(payload.message.content ?? '').length}`,
+    );
+    return;
+  }
+  // 消息校验（评审 S3，与 model.ts validateMessage 同口径）：主聊天窗口
+  // 路径此前只靠内核 16KiB 传输上限，空/超长消息在这里拦截
+  const content = payload.message.content ?? '';
+  const trimmed = content.trim();
+  if (!trimmed || trimmed.length > MAX_MESSAGE_LENGTH) {
+    spark.reply(
+      payload,
+      !trimmed ? '消息不能为空' : `消息长度不能超过 ${MAX_MESSAGE_LENGTH} 字`,
     );
     return;
   }
