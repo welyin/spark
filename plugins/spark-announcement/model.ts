@@ -338,6 +338,19 @@ export function isAnnouncementRetracted(
   return retractionMap.has(announcementId);
 }
 
+/**
+ * orgId 复核防御：撤回记录的 orgId 是自报字段，派生映射不过滤目标组织——
+ * 应用撤回标注前必须复核撤回记录与公告同属一个组织（跨组织伪造撤回无法
+ * 给本组织公告盖章）。查不到/不匹配返回 undefined（fail-closed）。
+ */
+export function findApplicableRetraction(
+  announcement: Pick<Announcement, 'id' | 'orgId'>,
+  retractionMap: ReadonlyMap<string, AnnouncementRetraction>
+): AnnouncementRetraction | undefined {
+  const retraction = retractionMap.get(announcement.id);
+  return retraction && retraction.orgId === announcement.orgId ? retraction : undefined;
+}
+
 /** 列表项（视图层用：公告 + 撤回标注） */
 export type AnnouncementListItem = {
   announcement: Announcement;
@@ -362,7 +375,7 @@ export function buildAnnouncementList(
     )
     .map((announcement) => ({
       announcement,
-      retraction: retractionMap.get(announcement.id)
+      retraction: findApplicableRetraction(announcement, retractionMap)
     }));
 }
 

@@ -283,6 +283,7 @@ export function validateColumns(columns: KanbanColumn[]): { ok: boolean; reason?
     return { ok: false, reason: `列数不能超过${KANBAN_MAX_COLUMNS}` };
   }
   const ids = new Set<string>();
+  const statusKeys = new Set<string>();
   for (const column of columns) {
     if (!column.id || ids.has(column.id)) {
       return { ok: false, reason: '列 id 不能为空且不能重复' };
@@ -299,6 +300,14 @@ export function validateColumns(columns: KanbanColumn[]): { ok: boolean; reason?
     }
     if (column.kind === 'stage' && !normalizeKanbanText(column.statusKey ?? '')) {
       return { ok: false, reason: `中间态列「${column.title}」必须声明列—状态映射（statusKey）` };
+    }
+    // statusKey 判重：同一状态值映射到多列会让落列解析歧义（取首个命中），配置期拒掉
+    const statusKey = column.kind !== 'terminal' ? normalizeKanbanText(column.statusKey ?? '') : '';
+    if (statusKey) {
+      if (statusKeys.has(statusKey)) {
+        return { ok: false, reason: `列—状态映射「${statusKey}」重复：同一状态值只能映射到一列` };
+      }
+      statusKeys.add(statusKey);
     }
   }
   if (!columns.some((column) => column.kind === 'triage')) {
@@ -432,7 +441,8 @@ export function resolveActiveBindings(boardId: string, records: KanbanBinding[])
   );
   const latestByKey = new Map<string, KanbanBinding>();
   for (const record of ordered) {
-    latestByKey.set(`${record.cardRef}${record.affairId}`, record);
+    // 折叠键带分隔符：cardRef 自身含 ':'，无分隔符拼合有跨字段歧义
+    latestByKey.set(`${record.cardRef}\n${record.affairId}`, record);
   }
   return [...latestByKey.values()].filter((record) => record.kind === 'bind');
 }
@@ -715,6 +725,18 @@ export function cardOpSignContent(op: Pick<KanbanCardOp, 'kind' | 'cardId'> & Pa
     case 'comment':
       return `comment:${op.cardId}:${op.text ?? ''}`;
   }
+}
+
+/**
+ * 绑定记录的签名内容（验签侧按同一函数重算）。
+ * 字段间用 \n 分隔：cardRef 自身含 ':'（'native:{cardId}'），冒号分隔会有
+ * 拼合歧义（'bind:native:a' + 'b1' 与 'bind:native:a:b' + '1' 同文）；
+ * kind/cardRef/affairId 均不含换行，\n 分隔无歧义。
+ */
+export function bindingSignContent(
+  binding: Pick<KanbanBinding, 'kind' | 'cardRef' | 'affairId'>
+): string {
+  return `${binding.kind}\n${binding.cardRef}\n${binding.affairId}`;
 }
 
 /** 「被指派」通知摘要（档三-12 最少事件集；summary 强制 ≤200 字符、自成一体） */

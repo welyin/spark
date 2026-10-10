@@ -66,6 +66,7 @@ import App from '../../App.vue';
 import { currentUser } from '../../stores/current-user';
 import { builtinImpl, setBuiltinImpl } from '../../stores/builtin-apps';
 import { closeShellModal, openShellModal } from '../../stores/shell-modal';
+import { closeWindow, openWindow, windows } from '../../stores/desktop/window-manager';
 
 beforeEach(() => {
   localStorage.clear();
@@ -276,5 +277,55 @@ describe('App.vue 应用市场灰度切换（A34：apps tab 与 spark:market 窗
     await flush();
     const stub = host.querySelector('.stub-plugin-host');
     expect(stub?.getAttribute('data-view-id')).toBe('default');
+  });
+});
+
+describe('WindowFrame 桌面窗口市场灰度切换（A34 评审建议：窗口接线覆盖）', () => {
+  // 窗口管理器是模块级状态：用例结束清窗，避免串扰其他用例
+  afterEach(() => {
+    for (const w of [...windows.value]) {
+      closeWindow(w.key);
+    }
+  });
+
+  it('默认 legacy：spark:market 桌面窗口渲染旧内置 AppsPage', async () => {
+    const host = mountApp();
+    await flush();
+    openWindow('spark:market');
+    await flush();
+    expect(host.querySelector('.window-frame .stub-apps-page')).not.toBeNull();
+    expect(host.querySelector('.window-frame .stub-plugin-host')).toBeNull();
+  });
+
+  it('切到插件版：窗口改挂 spark-market 宿主且 initial-view=market 直达，切回 legacy 恢复', async () => {
+    const host = mountApp();
+    await flush();
+    openWindow('spark:market');
+    setBuiltinImpl('apps', 'plugin');
+    await flush();
+    const stub = host.querySelector('.window-frame .stub-plugin-host');
+    expect(stub?.getAttribute('data-plugin-id')).toBe('spark-market');
+    // WindowFrame 接线恒传 initial-view="market"（Dock 直达与 legacy 同口径）
+    expect(stub?.getAttribute('data-view-id')).toBe('market');
+    expect(host.querySelector('.window-frame .stub-apps-page')).toBeNull();
+    setBuiltinImpl('apps', 'legacy');
+    await flush();
+    expect(host.querySelector('.window-frame .stub-apps-page')).not.toBeNull();
+    expect(host.querySelector('.window-frame .stub-plugin-host')).toBeNull();
+  });
+
+  it('窗口内插件版加载失败「关闭」：回退旧 UI 且持久化回 legacy（WindowFrame onAppsFallback）', async () => {
+    const host = mountApp();
+    await flush();
+    openWindow('spark:market');
+    setBuiltinImpl('apps', 'plugin');
+    await flush();
+    const stub = host.querySelector('.window-frame .stub-plugin-host');
+    expect(stub?.getAttribute('data-plugin-id')).toBe('spark-market');
+    (stub as any).__vueParentComponent.emit('close');
+    await flush();
+    expect(host.querySelector('.window-frame .stub-apps-page')).not.toBeNull();
+    expect(builtinImpl('apps')).toBe('legacy');
+    expect(localStorage.getItem('spark:builtin-impl:apps')).toBe('legacy');
   });
 });

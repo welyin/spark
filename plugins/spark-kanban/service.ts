@@ -32,6 +32,7 @@ import type {
   PluginSDK
 } from '../../packages/plugin-sdk/src';
 import {
+  bindingSignContent,
   buildAssignSummary,
   buildKanbanSignPayload,
   boundAffairIds,
@@ -354,7 +355,7 @@ export class KanbanService {
       binding.orgId,
       binding.id,
       binding.boundBy,
-      `${binding.kind}:${binding.cardRef}:${binding.affairId}`,
+      bindingSignContent(binding),
       binding.signature
     );
   }
@@ -476,7 +477,7 @@ export class KanbanService {
       orgId,
       binding.id,
       rootId,
-      `${binding.kind}:${binding.cardRef}:${binding.affairId}`
+      bindingSignContent(binding)
     );
     if (signature) {
       binding.signature = signature;
@@ -681,7 +682,9 @@ export class KanbanService {
    * 回退取其自身规则文档。规则不可读 / 集合为空 / 当前身份 ∉ 集合 →
    * fail-closed 上抛，如实说明（不产出伪造状态操作）。
    */
-  private async requireStatusOpMembership(affairId: string): Promise<{ actor: AffairActor; writeSet: ReadonlySet<string> }> {
+  private async requireStatusOpMembership(
+    affairId: string
+  ): Promise<{ actor: AffairActor; writeSet: ReadonlySet<string>; log: Awaited<ReturnType<PluginAffairsAPI['readLog']>> }> {
     const affairs = this.requireAffairs();
     const actor = await this.ensureActor();
     const log = await affairs.readLog(affairId);
@@ -702,7 +705,7 @@ export class KanbanService {
         `状态操作被拒绝：当前身份 ${actor.identity.slice(0, 12)}… 不在议题规则声明的写权集合（rules.maintainers）中${empty}`
       );
     }
-    return { actor, writeSet };
+    return { actor, writeSet, log };
   }
 
   /**
@@ -720,9 +723,9 @@ export class KanbanService {
     statusKey: string,
     note?: string
   ): Promise<{ opHash: string; status: AffairOpStatus }> {
-    const { actor, writeSet } = await this.requireStatusOpMembership(affairId);
+    // 写权校验与草稿构造共用一次 readLog（写权校验已读日志，不再重复拉取）
+    const { actor, writeSet, log } = await this.requireStatusOpMembership(affairId);
     const affairs = this.requireAffairs();
-    const log = await affairs.readLog(affairId);
     // prevStatus 与读侧同一推导口径（写权过滤 + 因果序），保证捎带值诚实
     const prevStatus = deriveStatusKeyFromLog(log.ops, writeSet);
     const draft = buildOpDraft(

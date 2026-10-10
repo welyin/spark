@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   RESOLUTION_BADGE_LABELS,
+  bindingSignContent,
   buildAssignSummary,
   buildBoardView,
   buildKanbanSignPayload,
@@ -104,6 +105,30 @@ describe('spark-kanban model · 看板与列（§3.2）', () => {
         { id: 'a', title: 'B', kind: 'terminal', order: 1 }
       ]).ok
     ).toBe(false); // id 重复
+    expect(
+      validateColumns([
+        { id: 't', title: 'T', kind: 'triage', order: 0 },
+        { id: 'a', title: 'A', kind: 'stage', order: 1, statusKey: 'doing' },
+        { id: 'b', title: 'B', kind: 'stage', order: 2, statusKey: 'doing' },
+        { id: 'd', title: 'D', kind: 'terminal', order: 3 }
+      ]).ok
+    ).toBe(false); // statusKey 判重：同一状态值只能映射一列
+    expect(
+      validateColumns([
+        { id: 't', title: 'T', kind: 'triage', order: 0, statusKey: 'doing' },
+        { id: 'a', title: 'A', kind: 'stage', order: 1, statusKey: 'doing' },
+        { id: 'd', title: 'D', kind: 'terminal', order: 2 }
+      ]).ok
+    ).toBe(false); // triage 与 stage 之间同样判重
+  });
+
+  it('binding sign content uses unambiguous separators (cardRef 自身含冒号)', () => {
+    const a = bindingSignContent({ kind: 'bind', cardRef: 'native:a', affairId: 'b1' });
+    const b = bindingSignContent({ kind: 'bind', cardRef: 'native:a:b', affairId: '1' });
+    expect(a).not.toBe(b);
+    expect(bindingSignContent({ kind: 'bind', cardRef: 'affair', affairId: 'x'.repeat(64) })).toBe(
+      `bind\naffair\n${'x'.repeat(64)}`
+    );
   });
 
   it('validates board name and card fields', () => {

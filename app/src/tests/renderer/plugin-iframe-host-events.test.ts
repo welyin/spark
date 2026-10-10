@@ -239,6 +239,16 @@ describe('PluginIframeHost 事件转发（A18）', () => {
     expect(lastHost().pushEvent).not.toHaveBeenCalled();
   });
 
+  it('AffairChanged：仅 affairs:write 无 affairs:read → 不推（读写位分离，A54 评审建议）', async () => {
+    mockGranted(['affairs:write']);
+    mountHost();
+    await flush();
+    lastHost().resolveReady();
+    await flush();
+    fire({ kind: 'AffairChanged', data: { affairId: 'af_x', change: 'submitted', opHash: 'op_1', status: 'accepted' } });
+    expect(lastHost().pushEvent).not.toHaveBeenCalled();
+  });
+
   it('PluginDataChanged：pluginId 匹配 → 推送（既有行为回归）', async () => {
     mockGranted([]);
     mountHost();

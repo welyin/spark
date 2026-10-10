@@ -18,6 +18,7 @@ import {
   pluginDisplayName,
   releaseEventOperatorSet,
   releaseEventSignContent,
+  releaseIdOf,
   releaseSignContent,
   selectReleaseBackfillBatch,
   validateArtifacts,
@@ -54,6 +55,18 @@ const mkEvent = (overrides: Partial<ReleaseEvent> = {}): ReleaseEvent => ({
   operatorRootId: 'root-pub',
   at: 100,
   ...overrides
+});
+
+describe('spark-release-manager model · 发布单 id 确定性派生（档一-2 幂等键硬约束）', () => {
+  it('is stable per (org, plugin, version) and shaped as rel_<sha256>', () => {
+    const id = releaseIdOf('org-1', 'spark-foo', '0.1.0');
+    expect(id).toMatch(/^rel_[0-9a-f]{64}$/);
+    expect(releaseIdOf('org-1', 'spark-foo', '0.1.0')).toBe(id);
+    // 任一字段不同 → 不同 id；字段间 \n 分隔无拼合歧义
+    expect(releaseIdOf('org-1', 'spark-foo', '0.2.0')).not.toBe(id);
+    expect(releaseIdOf('org-2', 'spark-foo', '0.1.0')).not.toBe(id);
+    expect(releaseIdOf('org-1\nspark-foo', '0.1.0', '')).not.toBe(id);
+  });
 });
 
 describe('spark-release-manager model · update-manifest 解析', () => {

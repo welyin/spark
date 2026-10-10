@@ -25,7 +25,7 @@
 | # | 差距 | 出处 |
 | --- | --- | --- |
 | — | 插件数据 API 面已由 A18 落地（2026-09-08：sdk.messages/contacts/feed 三模块 + 6 权限位三重过滤对齐 + feed 权限归一[feed.deliver→feed:write、pull/订阅→feed:read] + ChatReceived/ContactsSynced 事件门控推送；等语义对照与权限拒绝测试全覆盖，spark-moments/ai-chat 回归绿）——G1/G2 的地基就绪 | — |
-| — | G1/G2 已由 A19 落地（插件版默认内置 + 灰度开关可用；SDK 等语义补 `messages.send` 的 messageId 透传与 overview 的 groupTree/memberExtras 类型）。**v1 记录在案的缺口**（code/app/TODO.md「默认内置插件」节）：organization 域 SDK 面（邀请/成员管理/bot 求证）、壳层→插件意图通道（全局搜索跳转、顶栏 +、host.request 反向面）、identity 域扩展字段、应用会话挂载区仍在壳层、移动端壳层导航栈语义不接、头像/网络状态面桩——均不影响消息/通讯录数据面等价 | — |
+| — | G1/G2 已由 A19 落地（插件版默认内置 + 灰度开关可用；SDK 等语义补 `messages.send` 的 messageId 透传与 overview 的 groupTree/memberExtras 类型）。**v1 记录在案的缺口**（code/app/TODO.md「默认内置插件」节）：organization 域 SDK 面（邀请/成员管理/bot 求证）、壳层→插件意图通道（全局搜索跳转、顶栏 +、host.request 反向面）、identity 域扩展字段、应用会话挂载区仍在壳层、移动端壳层导航栈语义不接、头像/网络状态面桩、**系统未读徽标/标题前缀聚合面未上移壳层**（评审 2026-10-07 U3：iframe 内 document.title 不可见、插件无 system 桥面，插件版迁移期角标行为差异，待壳层基于内核会话快照自行聚合）——其余均不影响消息/通讯录数据面等价 | — |
 | G3 | 群聊不存在（聊天插件内演进项，需插件层群协议设计） | catalog 聊天应用行 |
 | — | G4 已由 A20 落地（2026-09-08：spark-chat 插件内本地过滤——关键词/来源屏蔽规则存插件自身数据域 `declareCollection`（`spark-chat:filter-rules`，scope:local 数据不离开本机），渲染前过滤纯本地行为内核零改动；规则 JSON 导入导出（导入校验结构，畸形拒绝）；UI 如实标注「本地过滤只影响自己的视图，不影响他人与网络」） | — |
 

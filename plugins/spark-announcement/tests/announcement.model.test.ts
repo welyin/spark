@@ -13,6 +13,7 @@ import {
   canPublishAnnouncement,
   canRetractAnnouncement,
   deriveRetractionMap,
+  findApplicableRetraction,
   hashAnnouncementContent,
   isAnnouncementRetracted,
   retractionSignContent,
@@ -202,6 +203,21 @@ describe('spark-announcement model', () => {
 
     // 合法撤回人集合为空 = 全部忽略（fail-closed）
     expect(deriveRetractionMap([legit], new Set()).size).toBe(0);
+  });
+
+  it('findApplicableRetraction rejects cross-org forged retraction (orgId self-reported)', () => {
+    // 撤回人合法但 orgId 指向别的组织：不得给本组织公告盖「已撤回」章
+    const crossOrg = mkRetraction({ id: 'r9', orgId: 'org-other', retractorRootId: 'root-admin' });
+    const map = deriveRetractionMap([crossOrg], new Set(['root-admin']));
+    expect(map.has('ann-1')).toBe(true);
+    expect(findApplicableRetraction(mkAnnouncement(), map)).toBeUndefined();
+    const list = buildAnnouncementList([mkAnnouncement()], map);
+    expect(list[0]?.retraction).toBeUndefined();
+
+    // 同组织撤回正常生效
+    const sameOrg = mkRetraction({ id: 'r10', retractorRootId: 'root-admin' });
+    const okMap = deriveRetractionMap([sameOrg], new Set(['root-admin']));
+    expect(findApplicableRetraction(mkAnnouncement(), okMap)?.id).toBe('r10');
   });
 
   it('keeps the latest retraction per target (deterministic tie-break by id)', () => {

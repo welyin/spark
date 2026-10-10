@@ -8,6 +8,7 @@ import {
   dailyLimitNotice,
   hasBridgeEnvironment,
   isValidAffairId,
+  isValidCid,
   localDayRange,
   parseDraft,
   parseLedgerEntry,
@@ -38,6 +39,16 @@ describe('isValidAffairId', () => {
     expect(isValidAffairId('ab'.repeat(31))).toBe(false);
     expect(isValidAffairId(null)).toBe(false);
     expect(isValidAffairId(42)).toBe(false);
+  });
+});
+
+describe('isValidCid', () => {
+  it('与 affairId 同形状但语义独立（cid = 内容寻址）', () => {
+    expect(isValidCid(AFFAIR_ID)).toBe(true);
+    expect(isValidCid(AFFAIR_ID.toUpperCase())).toBe(false);
+    expect(isValidCid('ab'.repeat(31))).toBe(false);
+    expect(isValidCid(null)).toBe(false);
+    expect(isValidCid(42)).toBe(false);
   });
 });
 

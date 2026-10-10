@@ -92,3 +92,37 @@ describe('lock 写入 / 读取 / 核验', () => {
     ).rejects.toThrowError(/E_LOCK_MISMATCH/);
   });
 });
+
+describe('A33 评审下批项（U4/S1）', () => {
+  it('路径按码位升序参与哈希（非 BMP 字符与 UTF-16 码元序分歧场景）', async () => {
+    // U+20BB7（𠮷，增补平面）码位 0x20BB7 > U+FF21（Ａ）0xFF21，码位序 Ａ.js 在前；
+    // 但 𠮷 的 UTF-16 首码元 0xD842 < 0xFF21，码元序相反——两序分歧，
+    // 哈希须按码位序复算，跨实现一致
+    const vendorDir = await makeVendorTree({ '\u{20BB7}.js': 'X', '\uFF21.js': 'A' });
+    const { createHash } = await import('crypto');
+    const sha = (s: string) => createHash('sha256').update(s).digest('hex');
+    const expected = sha(`${sha('A')}  \uFF21.js\n${sha('X')}  \u{20BB7}.js\n`);
+    const { hash } = await hashVendorTree(vendorDir);
+    expect(hash).toBe(expected);
+  });
+
+  it('vendor 内含符号链接必拒（E_VENDOR_SYMLINK，不静默跳过）', async () => {
+    const vendorDir = await makeVendorTree({ 'index.js': 'x\n' });
+    const { symlink } = await import('fs/promises');
+    await symlink(path.join(vendorDir, 'index.js'), path.join(vendorDir, 'link.js'));
+    await expect(hashVendorTree(vendorDir)).rejects.toThrowError(/E_VENDOR_SYMLINK/);
+  });
+
+  it('writeLock 幂等：libraries 不变保留 generatedAt，变化才刷新', async () => {
+    const entry = { repo: REPO, commit: COMMIT, hash: 'a'.repeat(64), vendorPath: vendorPathForRepo(REPO), files: 1 };
+    const first = await writeLock(dir, [entry]);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const second = await writeLock(dir, [entry]);
+    expect(second.generatedAt).toBe(first.generatedAt);
+    // 落盘内容逐字节一致（无谓 diff 消除）
+    const onDisk = JSON.parse(await readFile(path.join(dir, 'spark-libraries.lock.json'), 'utf8'));
+    expect(onDisk.generatedAt).toBe(first.generatedAt);
+    const third = await writeLock(dir, [{ ...entry, hash: 'b'.repeat(64) }]);
+    expect(third.generatedAt).not.toBe(first.generatedAt);
+  });
+});

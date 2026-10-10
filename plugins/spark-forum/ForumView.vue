@@ -118,6 +118,10 @@
 
       <el-empty v-if="topicList.length === 0" description="暂无主题，来发第一帖" />
 
+      <p v-if="topicListTruncated" class="truncation-hint">
+        仅显示最近 {{ FORUM_QUERY_LIMITS.topics }} 条主题（更早的主题仍在链上，后续版本将提供分页/检索）
+      </p>
+
       <div
         v-for="item in topicList"
         :key="item.topic.id"
@@ -368,6 +372,7 @@ import {
   validateTopicContent,
   validateTopicTitle,
   DEFAULT_TOPIC_STATE,
+  FORUM_QUERY_LIMITS,
   type ForumBoard,
   type ForumReply,
   type ForumReplyNode,
@@ -490,6 +495,9 @@ export default defineComponent({
     const activeBoard = computed(() => boards.value.find((board) => board.id === selectedBoardId.value) ?? null);
 
     const latestTopics = computed(() => resolveLatestTopics(topics.value));
+
+    // 查询上限静默截断提示：topics 拉取达上限即视为「可能还有更多」，如实标注
+    const topicListTruncated = computed(() => topics.value.length >= FORUM_QUERY_LIMITS.topics);
 
     const topicList = computed<ForumTopicListItem[]>(() => {
       if (!selectedBoardId.value) {
@@ -1023,6 +1031,8 @@ export default defineComponent({
       visibleBoards,
       activeBoard,
       topicList,
+      topicListTruncated,
+      FORUM_QUERY_LIMITS,
       activeTopic,
       activeTopicState,
       activeTopicSegments,
@@ -1230,6 +1240,12 @@ h3 {
   margin: 6px 0;
   color: #64748b;
   font-size: 13px;
+}
+
+.truncation-hint {
+  margin: 4px 0 10px;
+  color: #b45309;
+  font-size: 12px;
 }
 
 .topic-detail-title {

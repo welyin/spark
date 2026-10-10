@@ -142,6 +142,16 @@ describe('spark-forum model', () => {
     expect(buildTopicSummary('  ', '标题')).toBe('【新主题·未分板块】标题');
   });
 
+  it('caps summary at 200 chars even with overlong dirty board name (synced data)', () => {
+    const dirtyBoard = '脏'.repeat(400);
+    const withLongTitle = buildTopicSummary(dirtyBoard, '标'.repeat(300));
+    expect(withLongTitle.length).toBeLessThanOrEqual(200);
+    expect(withLongTitle.endsWith('…')).toBe(true);
+    const withShortTitle = buildTopicSummary(dirtyBoard, '短标题');
+    expect(withShortTitle.length).toBeLessThanOrEqual(200);
+    expect(withShortTitle).toContain('短标题');
+  });
+
   // ------------------------------------------------------------------
   // 两级楼中楼（直接复用 buildCommentThread 逻辑，字段改名）
   // ------------------------------------------------------------------

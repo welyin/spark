@@ -183,6 +183,18 @@ describe('spark-forum service', () => {
     expect(archived.archived).toBe(true);
   });
 
+  it('validates board name/intro length at service layer (fail-closed beyond view)', async () => {
+    const sdk = createMockSdk();
+    const service = new ForumService(sdk);
+
+    const board = await service.createBoard('org-1', 'root-admin', { name: '内核', intro: '' }, 'admin');
+    await expect(
+      service.createBoard('org-1', 'root-admin', { name: 'a'.repeat(41), intro: '' }, 'admin')
+    ).rejects.toThrow(/板块名称不能超过/);
+    await expect(service.updateBoard(board, { name: 'b'.repeat(41) }, 'admin')).rejects.toThrow(/板块名称不能超过/);
+    await expect(service.updateBoard(board, { intro: 'c'.repeat(201) }, 'admin')).rejects.toThrow(/板块简介不能超过/);
+  });
+
   // ------------------------------------------------------------------
   // 主题（全员可发；编辑=新版本）
   // ------------------------------------------------------------------

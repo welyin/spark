@@ -45,7 +45,7 @@ import { computed, defineComponent, onMounted, ref, type PropType } from 'vue';
 import { ensurePluginSDK } from '../../packages/plugin-sdk/src';
 import type { PluginSDK } from '../../packages/plugin-sdk/src';
 import { ANNOUNCEMENT_COLLECTIONS, AnnouncementService } from './service';
-import { deriveRetractionMap } from './model';
+import { deriveRetractionMap, findApplicableRetraction } from './model';
 import type { Announcement, AnnouncementConfig, AnnouncementRetraction } from './model';
 
 export default defineComponent({
@@ -112,7 +112,8 @@ export default defineComponent({
               retractions.items.map((item) => item.data),
               new Set(config.publisherRootIds)
             );
-            retraction.value = map.get(announcementId) ?? null;
+            // orgId 复核防御（findApplicableRetraction）：撤回 orgId 自报，须与公告同组织
+            retraction.value = findApplicableRetraction(announcement.value, map) ?? null;
           }
 
           // 免权限验签：任何人可校验发布者签名

@@ -32,6 +32,7 @@ import {
   canPublishAnnouncement,
   canRetractAnnouncement,
   deriveRetractionMap,
+  findApplicableRetraction,
   normalizeAnnouncementText,
   retractionSignContent,
   selectBackfillBatch,
@@ -517,7 +518,7 @@ export class AnnouncementService {
       const retractionMap = deriveRetractionMap(retractions, retractorRootIds);
       const delivered = await this.loadDeliveredIds(orgId);
       const pending = announcements
-        .filter((item) => !delivered.has(item.id) && !retractionMap.has(item.id))
+        .filter((item) => !delivered.has(item.id) && !findApplicableRetraction(item, retractionMap))
         .sort((a, b) => a.publishedAt - b.publishedAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
       if (pending.length === 0) {
         return 0;

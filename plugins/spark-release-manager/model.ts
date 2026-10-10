@@ -11,7 +11,8 @@
  *
  * 拍板落点：
  * - 档一-2：MVP 版本卡片由本插件唯一推送，releaseRef（= 发布单记录 id，档三-24）
- *   /版本号为幂等键，经 sdk.messages 本机生成（与 spark-announcement 同范式）；
+ *   /版本号为幂等键（id 由「组织, 插件, 版本」确定性派生，append-only 拒重兜底），
+ *   经 sdk.messages 本机生成（与 spark-announcement 同范式）；
  * - 档一-6：核验 MVP = 本机导入复算（sdk.market.inspectLocal 内核复算整包
  *   sha256/size + 与发布单登记值/update-manifest 资产三方比对）；验签信任链沿用
  *   内核市场通路（本插件不重实现，证据如实标注）；在线抓取复算非验收要件；
@@ -23,6 +24,8 @@
  *
  * 本文件不依赖 SDK 运行时/Vue，全部可单测。
  */
+
+import { sha256Hex } from '../../packages/plugin-sdk/src/affair-wire';
 
 /** 版本号上限（semver 形态校验 + 长度卫生边界） */
 export const RELEASE_MAX_VERSION_LENGTH = 40;
@@ -49,6 +52,13 @@ export const RELEASE_MAX_PUBLISHERS = 100;
 export const RELEASE_SUMMARY_LIMIT = 200;
 /** 版本卡片补发阈值（同公告插件限流预算口径：超出只补最新一条 + 汇总消息） */
 export const RELEASE_BACKFILL_FULL_THRESHOLD = 5;
+
+/** 查询上限（无分页的 MVP 口径；达到上限时视图层提示「仅显示最近 N 条」） */
+export const RELEASE_QUERY_LIMITS = {
+  releases: 1000,
+  events: 2000,
+  reports: 2000
+} as const;
 
 // ------------------------------------------------------------------
 // 发布单（releases，governance append-only + sync；§3 数据模型）
@@ -96,6 +106,16 @@ export type ReleaseRecord = {
   signature?: ReleaseSignature;
 };
 
+/**
+ * 发布单 id 确定性派生（档一-2 幂等键的硬约束形态）：同（组织, 插件, 版本）
+ * 重复登记派生同一 id，由 governance append-only 集合的拒重语义兜底——幂等从
+ * 「先查后写尽力而为」升级为存储层硬约束（竞态 / 跨设备未同步窗口同样安全）。
+ * 字段间 \n 分隔（pluginId 为仓库地址形态含 ':'，冒号分隔有拼合歧义）。
+ */
+export function releaseIdOf(orgId: string, pluginId: string, version: string): string {
+  return `rel_${sha256Hex(`${orgId}\n${pluginId}\n${version}`)}`;
+}
+
 /** CI 产出的 update-manifest.json 线形（plugins/scripts/build-plugin-package.mjs） */
 export type UpdateManifest = {
   pluginId?: string;
@@ -118,7 +138,7 @@ export type UpdateManifest = {
 
 /**
  * 状态事件类型（§3）：状态机由事件流派生，不改原发布单。
- * verified（核验通过）/ published（签名发布推进）/ channel-pushed（渠道推送登记）/
+ * verified（哈希核验通过）/ published（签名发布推进）/ channel-pushed（渠道推送登记）/
  * verify-failed（核验失败，原因原样）/ retracted（撤回，append-only 不回滚）。
  */
 export type ReleaseEventType = 'verified' | 'published' | 'channel-pushed' | 'verify-failed' | 'retracted';
@@ -168,7 +188,9 @@ export type ReleaseState = 'registered' | 'verified' | 'published' | 'verify-fai
 
 export const RELEASE_STATE_LABELS: Record<ReleaseState, string> = {
   registered: '已登记',
-  verified: '核验通过',
+  // 「核验通过」易被误读为「签名已验」——如实标注核验证据 = 哈希三方比对
+  // （签名验签在内核市场通路，trustNote 随证据入链）
+  verified: '哈希核验通过',
   published: '已发布',
   'verify-failed': '核验失败',
   retracted: '已撤回'
@@ -212,6 +234,9 @@ export type ReleaseChannel = {
 
 /** 安装信任级（内核市场口径，原样展示不美化） */
 export type ReleaseTrustLevel = 'signed' | 'repo-anchored' | 'sideloaded' | 'builtin';
+
+/** 信任级枚举（服务层校验同一口径：自由字符串一律拒收，防污染分布视图） */
+export const RELEASE_TRUST_LEVELS: ReleaseTrustLevel[] = ['signed', 'repo-anchored', 'sideloaded', 'builtin'];
 
 /**
  * 版本上报记录（成员 opt-in；最小字段，不含设备指纹）。

@@ -25,7 +25,8 @@
  *
  * 拍板口径落点：
  * - 档一-2：MVP 版本卡片由本插件唯一推送，releaseRef（= 发布单记录 id，档三-24）
- *   为幂等键；契约落地后收敛到公告插件统一通道；
+ *   为幂等键——id 由（组织, 插件, 版本）确定性派生（releaseIdOf），重复登记由
+ *   append-only 集合拒重兜底；契约落地后收敛到公告插件统一通道；
  * - 档一-6：核验 = 本机导入复算覆盖；在线抓取复算（network:fetch）非验收要件；
  * - 档二-8：在线抓取复算（network:fetch，桌面限定）排后续迭代——MVP 不声明
  *   network:fetch（未使用且授权层无平台门控）；移动端（或 market 模块缺席）
@@ -57,6 +58,7 @@ import {
   normalizeReleaseText,
   parseUpdateManifest,
   releaseEventSignContent,
+  releaseIdOf,
   releaseSignContent,
   selectReleaseBackfillBatch,
   validateArtifacts,
@@ -68,6 +70,8 @@ import {
   RELEASE_CHANNEL_KIND_LABELS,
   RELEASE_MAX_CHANNEL_NOTE_LENGTH,
   RELEASE_MAX_CHANNEL_TARGET_LENGTH,
+  RELEASE_QUERY_LIMITS,
+  RELEASE_TRUST_LEVELS,
   type RecomputedPackage,
   type ReleaseArtifact,
   type ReleaseChannel,
@@ -78,6 +82,7 @@ import {
   type ReleaseRecord,
   type ReleaseSignature,
   type ReleaseState,
+  type ReleaseTrustLevel,
   type ReleaseVerificationDetail,
   type VersionReport
 } from './model';
@@ -155,7 +160,13 @@ export class ReleaseManagerService {
 
   constructor(
     private readonly sdk: PluginSDK,
-    namespace = 'spark-release-manager'
+    namespace = 'spark-release-manager',
+    /**
+     * 运行平台上下文（可选）。桥握手 ctx 注入平台信息前（todo #31）由视图层
+     * 从 pluginContext 透传；库形态由组合者注入。移动端（android/ios）服务层
+     * 直接拒核验编排（档二-8「只做登记」不依赖视图层隐藏入口兜底）。
+     */
+    private readonly options: { platform?: string } = {}
   ) {
     this.deliveryCollection = deliveryCollectionName(namespace);
   }
@@ -357,9 +368,11 @@ export class ReleaseManagerService {
     input: {
       pluginId: string;
       version: string;
-      /** CI 产出的 update-manifest.json 原文（提供则解析覆盖 artifacts） */
+      /** CI 产出的 update-manifest.json 原文（提供则解析为资产清单基底） */
       updateManifestJson?: string;
       artifacts?: ReleaseArtifact[];
+      /** manifest 之外追加登记的资产（CI 产物集的 .sig/.pub.pem/checksums 不在 update-manifest assets 内，由发布者手工补登） */
+      extraArtifacts?: ReleaseArtifact[];
       changelog?: string;
       changelogRef?: string;
       decisionRef?: string;
@@ -383,12 +396,13 @@ export class ReleaseManagerService {
       throw new Error(changelogCheck.reason ?? '变更说明不合法');
     }
 
-    // 登记向导主路径：导入 update-manifest.json 解析资产清单（人工核对后提交）
+    // 登记向导主路径：导入 update-manifest.json 解析资产清单（人工核对后提交）；
+    // manifest 之外的 CI 产物（.sig/.pub.pem/checksums）经 extraArtifacts 追加登记
     let artifacts = input.artifacts ?? [];
     let updateManifest: ReleaseRecord['updateManifest'];
     if (input.updateManifestJson !== undefined) {
       const parsed = parseUpdateManifest(input.updateManifestJson);
-      artifacts = parsed.artifacts;
+      artifacts = [...parsed.artifacts, ...(input.extraArtifacts ?? [])];
       updateManifest = parsed.manifest;
     }
     const artifactCheck = validateArtifacts(artifacts);
@@ -400,14 +414,16 @@ export class ReleaseManagerService {
     const pluginId = normalizeReleaseText(input.pluginId);
     const version = normalizeReleaseText(input.version);
 
-    // 登记幂等键（档一-2：releaseRef/版本号幂等）：（组织, 插件, 版本）唯一
+    // 登记幂等键（档一-2：releaseRef/版本号幂等）：（组织, 插件, 版本）唯一。
+    // 双保险：先查后写给出友好报错；id 确定性派生（releaseIdOf）使竞态/跨设备
+    // 未同步窗口的重复登记由 append-only 集合拒重兜底。
     const existing = await this.loadReleases(orgId);
     if (existing.some((release) => release.pluginId === pluginId && release.version === version)) {
       throw new Error(`发布单已存在：${pluginId} v${version}（releaseRef/版本号为幂等键，重复登记被拒绝）`);
     }
 
     const release: ReleaseRecord = {
-      id: newId('rel'),
+      id: releaseIdOf(orgId, pluginId, version),
       orgId,
       pluginId,
       version,
@@ -434,7 +450,7 @@ export class ReleaseManagerService {
     await this.ensureCollectionsDeclared();
     const response = await this.sdk.docs.query<ReleaseRecord>(RELEASE_COLLECTIONS.releases, {
       filter: [{ field: 'orgId', value: orgId }],
-      limit: 1000
+      limit: RELEASE_QUERY_LIMITS.releases
     });
     return response.items
       .map((item) => item.data)
@@ -455,7 +471,7 @@ export class ReleaseManagerService {
     await this.ensureCollectionsDeclared();
     const response = await this.sdk.docs.query<ReleaseEvent>(RELEASE_COLLECTIONS.events, {
       filter: [{ field: 'orgId', value: orgId }],
-      limit: 2000
+      limit: RELEASE_QUERY_LIMITS.events
     });
     return response.items
       .map((item) => item.data)
@@ -528,8 +544,13 @@ export class ReleaseManagerService {
     if (!canPublishRelease(config, rootId)) {
       throw new Error('仅发布权集合成员可以执行核验编排');
     }
+    // 档二-8 服务层降级：移动端只做登记（视图层隐藏入口只是第一道的表象，
+    // 库形态组合者直调服务层亦不得绕过）；平台未知时维持现状放行
+    if (this.options.platform === 'android' || this.options.platform === 'ios') {
+      throw new Error('移动端只做登记（档二-8）：本机导入复算为桌面限定能力，请委托桌面端成员核验');
+    }
     if (!this.sdk.market) {
-      throw new Error('当前环境无市场模块（移动端或桌面限定能力未授权）——本机导入复算不可用，请只做登记并委托桌面端成员核验（档二-8 降级口径）');
+      throw new Error('当前环境无市场模块（market 能力不可用）——本机导入复算不可用，请只做登记并委托桌面端成员核验（档二-8 降级口径）');
     }
     const spkgPath = normalizeReleaseText(input.spkgPath);
     if (!spkgPath) {
@@ -769,6 +790,10 @@ export class ReleaseManagerService {
     if (!trust) {
       throw new Error('信任级不能为空（signed / repo-anchored / sideloaded / builtin，原样上报不美化）');
     }
+    // 服务层收敛到内核市场口径枚举：自由字符串会污染分布视图（视图层枚举只是第一道）
+    if (!RELEASE_TRUST_LEVELS.includes(trust as ReleaseTrustLevel)) {
+      throw new Error(`信任级必须是 ${RELEASE_TRUST_LEVELS.join(' / ')} 之一（内核市场口径枚举）`);
+    }
     await this.ensureCollectionsDeclared();
     const report: VersionReport = {
       id: newId('vrpt'),
@@ -787,7 +812,7 @@ export class ReleaseManagerService {
     await this.ensureCollectionsDeclared();
     const response = await this.sdk.docs.query<VersionReport>(RELEASE_COLLECTIONS.reports, {
       filter: [{ field: 'orgId', value: orgId }],
-      limit: 2000
+      limit: RELEASE_QUERY_LIMITS.reports
     });
     return response.items
       .map((item) => item.data)

@@ -46,13 +46,24 @@ const toolVersion = JSON.parse(
   fs.readFileSync(path.resolve(__dirname, '..', 'package.json'), 'utf8')
 ).version;
 
+/** 布尔旗（不取值的 --flag）：显式集合，避免吞掉下一个参数（A33 评审 S3） */
+const BOOLEAN_FLAGS = new Set(['help']);
+
 function parseArgs(argv) {
   const args = { _: [] };
   for (let i = 0; i < argv.length; i += 1) {
     const part = argv[i];
     if (part.startsWith('--')) {
-      args[part.slice(2)] = argv[i + 1];
-      i += 1;
+      const key = part.slice(2);
+      if (BOOLEAN_FLAGS.has(key)) {
+        args[key] = true;
+      } else if (i + 1 < argv.length && !argv[i + 1].startsWith('--')) {
+        args[key] = argv[i + 1];
+        i += 1;
+      } else {
+        // 末尾无值 / 后随另一旗：置 undefined，不把下一旗误吞为值
+        args[key] = undefined;
+      }
     } else {
       args._.push(part);
     }
@@ -245,7 +256,7 @@ async function main() {
   throw new ManifestError('E_COMMAND_INVALID', `unknown command: ${command}（lock|build|verify）`);
 }
 
-export { main };
+export { main, parseArgs };
 
 export function runCli() {
   main().catch((error) => {

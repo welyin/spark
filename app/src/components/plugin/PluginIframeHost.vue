@@ -538,9 +538,11 @@ export default defineComponent({
           if (!grantedPermissions.value.has('market:read')) {
             return;
           }
+          // kind 显式白名单（A34 评审建议）：未知 kind 不转发，
+          // 避免上游事件面扩展时被默认落入 Verified 分支
           if (event.kind === 'received') {
             host?.pushEvent('MarketAnnounceReceived', event);
-          } else {
+          } else if (event.kind === 'verified') {
             host?.pushEvent('MarketAnnounceVerified', event);
           }
         })

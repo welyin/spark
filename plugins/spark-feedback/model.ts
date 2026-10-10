@@ -148,6 +148,15 @@ export function isValidAffairId(value: unknown): value is string {
   return typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
 }
 
+/**
+ * cid 形状校验（SHA-256 内容寻址，64 位小写 hex）。
+ * 与 isValidAffairId 形状相同但语义不同（内容寻址 vs 事务标识），独立成函数：
+ * 任一侧形状规则演进（如 cid 换多基编码）不影响另一侧。
+ */
+export function isValidCid(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
+}
+
 /** 表单输入校验（提交与导出同一道关；返回首个失败原因） */
 export function validateFeedbackInput(input: FeedbackInput): { ok: boolean; reason?: string } {
   if (!FEEDBACK_TYPES.includes(input.type)) {
@@ -169,7 +178,7 @@ export function validateFeedbackInput(input: FeedbackInput): { ok: boolean; reas
     return { ok: false, reason: `附件最多 ${ATTACHMENT_MAX} 件` };
   }
   for (const attachment of input.attachments) {
-    if (!isValidAffairId(attachment.cid)) {
+    if (!isValidCid(attachment.cid)) {
       return { ok: false, reason: `附件 ${attachment.name} 的 cid 形状非法（须为 64 位小写 hex）` };
     }
   }
@@ -298,7 +307,7 @@ export function parseDraft(id: string, value: unknown): FeedbackDraft | null {
   const attachments = Array.isArray(record.attachments)
     ? record.attachments.filter(
         (a): a is FeedbackAttachment =>
-          typeof a === 'object' && a !== null && isValidAffairId((a as FeedbackAttachment).cid)
+          typeof a === 'object' && a !== null && isValidCid((a as FeedbackAttachment).cid)
           && typeof (a as FeedbackAttachment).name === 'string' && typeof (a as FeedbackAttachment).size === 'number'
       )
     : [];

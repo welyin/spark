@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ReleaseManagerService, RELEASE_COLLECTIONS } from '../service';
-import { deriveReleaseState, filterAuthorizedReleaseEvents, type ReleaseManagerConfig, type ReleaseRecord } from '../model';
+import {
+  deriveReleaseState,
+  filterAuthorizedReleaseEvents,
+  hasSignatureMaterial,
+  releaseIdOf,
+  type ReleaseManagerConfig,
+  type ReleaseRecord
+} from '../model';
 
 /**
  * mock SDK：docs 为内存集合后端（defineCollection/put/get/query，按声明 enforce
@@ -191,6 +198,54 @@ describe('spark-release-manager service · 集合声明与发布单登记', () =
     await expect(service.registerRelease('org-1', PUBLISHER, { ...REGISTER_INPUT, version: '0.2.0' }, mkConfig())).resolves.toBeTruthy();
   });
 
+  it('derives release id deterministically from (org, plugin, version)（竞态/跨设备窗口由 append-only 拒重兜底）', async () => {
+    const { sdk } = createMockSdk();
+    const { release } = await registerFixture(sdk);
+
+    expect(release.id).toBe(releaseIdOf('org-1', 'spark-foo', '0.1.0'));
+    expect(release.id).toMatch(/^rel_[0-9a-f]{64}$/);
+    // 任一字段不同 → 不同 id
+    expect(releaseIdOf('org-1', 'spark-foo', '0.2.0')).not.toBe(release.id);
+    expect(releaseIdOf('org-2', 'spark-foo', '0.1.0')).not.toBe(release.id);
+    expect(releaseIdOf('org-1', 'spark-bar', '0.1.0')).not.toBe(release.id);
+  });
+
+  it('merges extraArtifacts with manifest-parsed assets（签名材料手工补登随发布单入链）', async () => {
+    const { sdk } = createMockSdk();
+    const service = new ReleaseManagerService(sdk);
+    const release = await service.registerRelease(
+      'org-1',
+      PUBLISHER,
+      {
+        ...REGISTER_INPUT,
+        extraArtifacts: [
+          { kind: 'sig', fileName: 'spark-plugin-spark-foo-0.1.0.spkg.sig', sha256: SHA_B, size: 128 },
+          { kind: 'pubkey', fileName: 'spark-plugin-spark-foo-0.1.0.pub.pem', sha256: SHA_B, size: 256 }
+        ]
+      },
+      mkConfig()
+    );
+
+    expect(release.artifacts).toHaveLength(3);
+    expect(release.artifacts[1]).toMatchObject({ kind: 'sig', fileName: 'spark-plugin-spark-foo-0.1.0.spkg.sig' });
+    expect(hasSignatureMaterial(release.artifacts)).toBe(true);
+    // updateManifest 原文仍随发布单留存（核验时双向比对）
+    expect(release.updateManifest?.version).toBe('0.1.0');
+    // extraArtifacts 与 manifest 资产同受 validateArtifacts 把关（fileName 撞车即拒）
+    await expect(
+      service.registerRelease(
+        'org-1',
+        PUBLISHER,
+        {
+          ...REGISTER_INPUT,
+          version: '0.3.0',
+          extraArtifacts: [{ kind: 'signature', fileName: 'spark-plugin-spark-foo-0.1.0.spkg', sha256: SHA_B, size: 128 }]
+        },
+        mkConfig()
+      )
+    ).rejects.toThrow(/fileName 重复/);
+  });
+
   it('degrades to unsigned record when identity:sign is refused（不阻断主流程）', async () => {
     const { sdk } = createMockSdk({ signError: true });
     const { release } = await registerFixture(sdk);
@@ -208,6 +263,15 @@ describe('spark-release-manager service · 集合声明与发布单登记', () =
 });
 
 describe('spark-release-manager service · 核验编排（档一-6 本机导入复算）', () => {
+  it('rejects verify orchestration on mobile at service layer（档二-8 只做登记，不依赖视图层隐藏入口）', async () => {
+    const { sdk } = createMockSdk();
+    const service = new ReleaseManagerService(sdk, undefined, { platform: 'android' });
+    const release = await service.registerRelease('org-1', PUBLISHER, REGISTER_INPUT, mkConfig());
+    await expect(
+      service.verifyRelease('org-1', PUBLISHER, release.id, { spkgPath: '/tmp/pkg.spkg' }, mkConfig())
+    ).rejects.toThrow(/只做登记/);
+  });
+
   it('appends verified event when recompute matches（核验证据入链）', async () => {
     const { sdk } = createMockSdk();
     const { service, release } = await registerFixture(sdk);
@@ -465,6 +529,10 @@ describe('spark-release-manager service · 版本上报骨架与存证状态', (
     expect(Object.keys(report).sort()).toEqual(['at', 'id', 'orgId', 'pluginId', 'reporterRootId', 'trust', 'version']);
     await expect(
       service.reportVersion('org-1', 'a'.repeat(64), { pluginId: 'spark-foo', version: '0.1.0', trust: '' }, 'member')
+    ).rejects.toThrow(/信任级/);
+    // 服务层枚举收敛：自由字符串拒收（防污染分布视图）
+    await expect(
+      service.reportVersion('org-1', 'a'.repeat(64), { pluginId: 'spark-foo', version: '0.1.0', trust: 'totally-legit' }, 'member')
     ).rejects.toThrow(/信任级/);
     await expect(
       service.reportVersion('org-1', 'a'.repeat(64), { pluginId: 'spark-foo', version: '0.1.0', trust: 'signed' }, null)

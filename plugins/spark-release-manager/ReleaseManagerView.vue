@@ -70,6 +70,9 @@
       <!-- 版本列表 -->
       <el-tab-pane label="版本列表" name="releases">
         <el-empty v-if="releaseRows.length === 0" description="暂无发布单，请发布权集合成员登记" />
+        <p v-if="releasesTruncated" class="truncation-hint">
+          仅显示最近 {{ RELEASE_QUERY_LIMITS.releases }} 条发布单（更早的发布单仍在链上，后续版本将提供分页/检索）
+        </p>
         <div v-for="row in releaseRows" :key="row.release.id" class="release-row" @click="openDetail(row.release.id)">
           <div class="release-main">
             <div class="release-title-row">
@@ -112,6 +115,9 @@
           <template #header>
             版本分布
             <span class="honest-note">仅含 opt-in 上报成员，非全量（档三-25）</span>
+            <span v-if="reportsTruncated" class="honest-note">
+              上报记录已达 {{ RELEASE_QUERY_LIMITS.reports }} 条上限，分布基于截断数据
+            </span>
           </template>
           <div class="report-row">
             <el-select v-model="distributionPluginId" placeholder="选择目标插件" size="small" class="report-plugin">
@@ -184,6 +190,29 @@
           </div>
         </template>
 
+        <el-divider content-position="left">
+          ③ 追加签名材料资产（可选：.sig / .pub.pem / checksums 等 CI 产物不在 update-manifest assets 内，手工补登后随发布单入链）
+        </el-divider>
+        <div v-for="(asset, index) in registerDraft.extraArtifacts" :key="`extra-${index}`" class="artifact-row">
+          <el-tag size="small" type="warning">{{ asset.kind }}</el-tag>
+          <span class="artifact-name">{{ asset.fileName }}</span>
+          <span class="artifact-hash">{{ shortHash(asset.sha256) }}</span>
+          <span>{{ asset.size }} B</span>
+          <el-button size="small" text type="danger" @click="removeExtraArtifact(index)">删除</el-button>
+        </div>
+        <div class="artifact-add-row">
+          <el-select v-model="artifactDraft.kind" size="small" class="artifact-kind">
+            <el-option label="sig（.sig 签名）" value="sig" />
+            <el-option label="pubkey（.pub.pem 公钥）" value="pubkey" />
+            <el-option label="checksums（校验清单）" value="checksums" />
+            <el-option label="sbom（SBOM 清单）" value="sbom" />
+          </el-select>
+          <el-input v-model="artifactDraft.fileName" size="small" placeholder="文件名" class="artifact-input" />
+          <el-input v-model="artifactDraft.sha256" size="small" placeholder="sha256（64 位 hex）" class="artifact-input" />
+          <el-input v-model="artifactDraft.size" size="small" placeholder="size（字节）" class="artifact-size" />
+          <el-button size="small" @click="addExtraArtifact">追加</el-button>
+        </div>
+
         <el-form-item label="目标插件（仓库地址形态，名字可抢注 URL 不可抢注）">
           <el-input v-model="registerDraft.pluginId" :maxlength="200" placeholder="如 https://github.com/org/repo" />
         </el-form-item>
@@ -209,7 +238,7 @@
       </el-form>
       <p class="hint">
         登记即域身份签名（防抵赖）并写入 governance append-only 集合——发布单内容（含包哈希）随之进入存证链，不可编辑；
-        纠错 = 追加状态事件或撤回。签名材料（sig/pubkey 资产）随 update-manifest 之外的 CI 产物由发布者核对后经后续迭代补登。
+        纠错 = 追加状态事件或撤回。签名材料（sig/pubkey/checksums 资产）经上方 ③ 手工补登后随发布单一并入链。
         登记幂等键 = （组织, 插件, 版本号），重复登记将被拒绝。
       </p>
       <template #footer>
@@ -296,6 +325,9 @@
         </p>
 
         <el-divider content-position="left">状态事件时间线（{{ detailTimeline.length }}）</el-divider>
+        <p v-if="eventsTruncated" class="hint">
+          事件流已达 {{ RELEASE_QUERY_LIMITS.events }} 条查询上限，时间线与状态派生基于截断数据（后续版本将提供分页）
+        </p>
         <p v-if="detailUnfilteredEventCount > 0" class="hint">
           其中 {{ detailUnfilteredEventCount }} 条事件的操作者不在发布权集合 ∪ 名册管理员内（或为配置未初始化期间的留痕），
           仅留痕展示、不参与状态派生。
@@ -378,6 +410,7 @@ import {
   releaseEventOperatorSet,
   RELEASE_CHANNEL_KIND_LABELS,
   RELEASE_CHANNEL_KINDS,
+  RELEASE_QUERY_LIMITS,
   RELEASE_STATE_LABELS,
   type ReleaseArtifact,
   type ReleaseChannel,
@@ -446,12 +479,15 @@ export default defineComponent({
     const registerDraft = ref({
       updateManifestJson: '',
       parsedArtifacts: [] as ReleaseArtifact[],
+      extraArtifacts: [] as ReleaseArtifact[],
       pluginId: '',
       version: '',
       changelog: '',
       decisionRef: '',
       channels: [] as string[]
     });
+    // 追加资产录入草稿（签名材料：.sig/.pub.pem/checksums 等不在 update-manifest assets 内的 CI 产物）
+    const artifactDraft = ref({ kind: 'sig', fileName: '', sha256: '', size: '' });
 
     // 发布权配置
     const configDialogVisible = ref(false);
@@ -532,6 +568,11 @@ export default defineComponent({
       distributionPluginId.value ? deriveVersionDistribution(distributionPluginId.value, reports.value) : null
     );
 
+    // 查询上限静默截断提示（无分页的 MVP 口径）：拉取达上限即视为「可能还有更多」，如实标注
+    const releasesTruncated = computed(() => releases.value.length >= RELEASE_QUERY_LIMITS.releases);
+    const eventsTruncated = computed(() => events.value.length >= RELEASE_QUERY_LIMITS.events);
+    const reportsTruncated = computed(() => reports.value.length >= RELEASE_QUERY_LIMITS.reports);
+
     const detailState = computed<ReleaseState>(() =>
       detailRelease.value ? deriveReleaseState(detailRelease.value.id, authorizedEvents.value) : 'registered'
     );
@@ -557,7 +598,9 @@ export default defineComponent({
     const ensureSdk = async () => {
       if (!sdk.value) {
         sdk.value = await ensurePluginSDK();
-        service.value = new ReleaseManagerService(sdk.value);
+        // 平台上下文透传（桥注入前来自 pluginContext prop；库形态由组合者注入）——
+        // 移动端服务层拒核验编排（档二-8 只做登记不依赖视图层隐藏入口）
+        service.value = new ReleaseManagerService(sdk.value, undefined, { platform: props.pluginContext?.platform });
       }
       return sdk.value;
     };
@@ -659,12 +702,14 @@ export default defineComponent({
       registerDraft.value = {
         updateManifestJson: '',
         parsedArtifacts: [],
+        extraArtifacts: [],
         pluginId: '',
         version: '',
         changelog: '',
         decisionRef: '',
         channels: []
       };
+      artifactDraft.value = { kind: 'sig', fileName: '', sha256: '', size: '' };
       registerDialogVisible.value = true;
     };
 
@@ -685,6 +730,23 @@ export default defineComponent({
       }
     };
 
+    /** 追加签名材料资产（视图层轻校验；服务层 validateArtifacts 提交时 fail-closed 复核） */
+    const addExtraArtifact = () => {
+      const fileName = artifactDraft.value.fileName.trim();
+      const sha256 = artifactDraft.value.sha256.trim().toLowerCase();
+      const size = Number(artifactDraft.value.size);
+      if (!fileName || !sha256 || !Number.isSafeInteger(size) || size <= 0) {
+        ElMessage.error('请完整填写资产文件名 / sha256（64 位 hex）/ size（正整数）');
+        return;
+      }
+      registerDraft.value.extraArtifacts.push({ kind: artifactDraft.value.kind, fileName, sha256, size });
+      artifactDraft.value = { kind: 'sig', fileName: '', sha256: '', size: '' };
+    };
+
+    const removeExtraArtifact = (index: number) => {
+      registerDraft.value.extraArtifacts.splice(index, 1);
+    };
+
     const submitRegister = async () => {
       registerSaving.value = true;
       try {
@@ -698,8 +760,11 @@ export default defineComponent({
             pluginId: registerDraft.value.pluginId,
             version: registerDraft.value.version,
             ...(registerDraft.value.updateManifestJson.trim()
-              ? { updateManifestJson: registerDraft.value.updateManifestJson }
-              : { artifacts: registerDraft.value.parsedArtifacts }),
+              ? {
+                  updateManifestJson: registerDraft.value.updateManifestJson,
+                  extraArtifacts: registerDraft.value.extraArtifacts
+                }
+              : { artifacts: [...registerDraft.value.parsedArtifacts, ...registerDraft.value.extraArtifacts] }),
             changelog: registerDraft.value.changelog || undefined,
             decisionRef: registerDraft.value.decisionRef || undefined,
             channels: registerDraft.value.channels
@@ -980,7 +1045,7 @@ export default defineComponent({
           : 'info';
     const eventLabel = (type: ReleaseEventType) =>
       type === 'verified'
-        ? '核验通过'
+        ? '哈希核验通过'
         : type === 'published'
           ? '已发布'
           : type === 'channel-pushed'
@@ -1056,6 +1121,10 @@ export default defineComponent({
       registerDialogVisible,
       registerSaving,
       registerDraft,
+      artifactDraft,
+      releasesTruncated,
+      eventsTruncated,
+      reportsTruncated,
       configDialogVisible,
       configSaving,
       configDraft,
@@ -1079,11 +1148,14 @@ export default defineComponent({
       RELEASE_STATE_LABELS,
       RELEASE_CHANNEL_KINDS,
       RELEASE_CHANNEL_KIND_LABELS,
+      RELEASE_QUERY_LIMITS,
       pluginDisplayName,
       reloadAll,
       onOrgChange,
       openRegisterDialog,
       parseManifestDraft,
+      addExtraArtifact,
+      removeExtraArtifact,
       submitRegister,
       submitConfig,
       openChannelDialog,
@@ -1314,6 +1386,33 @@ export default defineComponent({
   gap: 10px;
   align-items: center;
   padding: 4px 0;
+  font-size: 12px;
+}
+
+.artifact-add-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 6px;
+}
+
+.artifact-kind {
+  width: 180px;
+  flex: none;
+}
+
+.artifact-input {
+  flex: 1;
+}
+
+.artifact-size {
+  width: 110px;
+  flex: none;
+}
+
+.truncation-hint {
+  margin: 4px 0 10px;
+  color: #b45309;
   font-size: 12px;
 }
 

@@ -28,14 +28,14 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { ElMessageBox } from 'element-plus';
-import type { PluginCredentialsAPI, PluginSDK, PluginSpaceContext } from '../../../packages/plugin-sdk/src';
+import type { PluginCredentialsAPI, PluginMarketAPI, PluginSDK, PluginSpaceContext } from '../../../packages/plugin-sdk/src';
 import type { BridgeHostHandler } from '../../../packages/plugin-sdk/src/bridge/host';
 import { createPluginBackend } from './sdk-browser';
 import { listAppMessages, markAppMessagesRead, sendAppMessage } from './messages';
 import type { AppMessageCardDto, ElectronAPI } from '../api/types';
 import { refreshContacts, ensurePluginContactTag } from '../mock/contacts';
 import { OPEN_PLUGIN_DEEPLINK_EVENT } from '../services/deep-link';
-import { pickSpkgFile, saveFileWithDialog } from '../api';
+import { saveFileWithDialog } from '../api';
 
 /** 桥事件泵：由外部（PluginIframeHost）注入，用于将 Tauri 事件转发为桥 event。 */
 export interface BridgeEventPump {
@@ -736,29 +736,31 @@ export async function createPluginBridgeDispatcher(identity: PluginBridgeIdentit
       submitDraft: (doc: Record<string, unknown>) => backend.policy!.submitDraft(doc),
       publish: (orgId: string) => backend.policy!.publish(orgId)
     },
-    // A34 市场模块（sdk.market）：plugin-market-* 命令等语义移植，壳层主窗口
-    // 为系统域，domain_guard 放行；权限经 CALL_PERMISSIONS 强制 market:read/
-    // market:write。市场操作是系统层本机动作，不按 space 设卡（与壳层应用管理同口径）
+    // A34 市场模块（sdk.market）：backend.market 为唯一事实源（sdk-browser
+    // createPluginBackend 直连 electronAPI.pluginMarket；命令侧 domain_guard
+    // 要求系统域，壳层主窗口满足），此处仅按桥入参收口 null→undefined。
+    // 权限经 CALL_PERMISSIONS 强制 market:read/market:write；市场操作是
+    // 系统层本机动作，不按 space 设卡（与壳层应用管理同口径）。
+    // onAnnounceChanged 不经后端：事件面由 PluginIframeHost 转发（A34）
     market: {
-      list: () => window.electronAPI.pluginMarket.list(),
+      list: () => backend.market!.list(),
       checkUpdates: (pluginId?: string | null) =>
-        window.electronAPI.pluginMarket.checkUpdates(typeof pluginId === 'string' && pluginId ? pluginId : undefined),
-      upgrade: (pluginId: string) => window.electronAPI.pluginMarket.upgrade(pluginId),
-      setEnabled: (pluginId: string, enabled: boolean) =>
-        window.electronAPI.pluginMarket.setEnabled(pluginId, enabled),
-      uninstall: (pluginId: string) => window.electronAPI.pluginMarket.uninstall(pluginId),
-      resolveRepo: (id: string) => window.electronAPI.pluginMarket.resolveRepo(id),
-      installFromRepo: (id: string) => window.electronAPI.pluginMarket.installFromRepo(id),
-      inspectLocal: (path: string) => window.electronAPI.pluginMarket.inspectLocal(path),
+        backend.market!.checkUpdates(typeof pluginId === 'string' && pluginId ? pluginId : undefined),
+      upgrade: (pluginId: string) => backend.market!.upgrade(pluginId),
+      setEnabled: (pluginId: string, enabled: boolean) => backend.market!.setEnabled(pluginId, enabled),
+      uninstall: (pluginId: string) => backend.market!.uninstall(pluginId),
+      resolveRepo: (id: string) => backend.market!.resolveRepo(id),
+      installFromRepo: (id: string) => backend.market!.installFromRepo(id),
+      inspectLocal: (path: string) => backend.market!.inspectLocal(path),
       importLocal: (path: string, expectedSha256: string, confirmOverwrite?: boolean) =>
-        window.electronAPI.pluginMarket.importLocal(path, expectedSha256, confirmOverwrite),
-      announcePublish: (input: Parameters<typeof window.electronAPI.pluginMarket.announcePublish>[0]) =>
-        window.electronAPI.pluginMarket.announcePublish(input),
-      announceList: () => window.electronAPI.pluginMarket.announceList(),
-      announceGet: (id: string) => window.electronAPI.pluginMarket.announceGet(id),
+        backend.market!.importLocal(path, expectedSha256, confirmOverwrite),
+      announcePublish: (input: Parameters<PluginMarketAPI['announcePublish']>[0]) =>
+        backend.market!.announcePublish(input),
+      announceList: () => backend.market!.announceList(),
+      announceGet: (id: string) => backend.market!.announceGet(id),
       // 插件沙箱 iframe 无系统对话框能力：.spkg 文件选择由壳层代开
       // （tauri-plugin-dialog，与旧侧载入口同链路），用户取消返回 null
-      pickSpkg: () => pickSpkgFile()
+      pickSpkg: () => backend.market!.pickSpkg()
     },
     // A42 组织管理模块（sdk.org）：org-* 命令等语义移植（backend.org 透传
     // electronAPI.organization / p2p / dataManagement）；权限经

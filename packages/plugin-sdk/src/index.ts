@@ -992,11 +992,14 @@ export type AffairPublicProfile = {
  */
 export interface PluginAffairsAPI {
   /**
-   * 创建事务（affairs:write；插件内嵌创建流的 SDK 承载）：按类型化描述
+   * 创建事务（affairs:write + identity:sign；插件内嵌创建流的 SDK 承载）：按类型化描述
    * 构造创世记录（线形见 affair-wire 模块）→ 插件域身份签名 → follow
    * （内核全链校验 + affairId 自认证复算）。返回 affairId 与已落库的
    * 签名创世记录（供调用方展示/转发关注）。refs 走 §10 类型化枚举，
    * 形状非法在签名前拒绝；自指禁令由内核 enforced。
+   * 注意：create 内部经两次 identity.sign（探测取公钥 + 创世记录签名），
+   * 桥 dispatcher 对 identity.sign 单独强制 `identity:sign`（使用时询问）——
+   * 只声明 affairs:write 未授权 identity:sign 会在签名步被拒。
    */
   create: (input: AffairGenesisInput) => Promise<{ affairId: string; genesis: Record<string, unknown> }>;
   /** 关注事务（genesis 创世记录全链校验；返回自认证 affairId） */
@@ -1864,9 +1867,12 @@ export type PluginContext = {
   // 核对，插件无上报通道，不可伪造）；低敏环境信息，免权限（不占权限位）。
   // 向后兼容：旧壳层不注入时字段缺省——插件读取须按 undefined 兼容降级，
   // 不得视为必填。
-  /** 应用分发版本（如 "0.2.1"，与 tauri.conf.json / updater currentVersion 同源） */
+  /** 应用分发版本（如 "0.2.1"；壳层取 app/package.json version，发版时须与
+      tauri.conf.json version / updater currentVersion 手工同步保持同值——A57
+      评审口径：同值约定而非构建期同源，漂移时反馈采集版本与 updater 口径脱节） */
   appVersion?: string;
-  /** 运行平台 */
+  /** 运行平台（壳层 userAgent 粗判：iPadOS 桌面模式 UA 判为 macos 等已知边界；
+      仅作反馈采集参考，不得用于功能门控） */
   platform?: PluginPlatform;
   /** 壳层插件宿主契约版本（宿主 SDK 契约版本，如 "1"；桥能力面标识） */
   shellVersion?: string;

@@ -23,6 +23,7 @@
  */
 import type { PluginSDK } from '../../packages/plugin-sdk/src';
 import {
+  FORUM_QUERY_LIMITS,
   buildForumSignPayload,
   buildTopicSummary,
   canManageBoards,
@@ -31,6 +32,7 @@ import {
   canReplyTopic,
   deriveTopicState,
   normalizeForumText,
+  validateBoardInput,
   type ForumBoard,
   type ForumReply,
   type ForumSignature,
@@ -253,6 +255,11 @@ export class ForumService {
     if (!canManageBoards(role)) {
       throw new Error('仅组织管理员可以创建板块');
     }
+    // 服务层纵深校验（视图层单点把关可被绕过；板块名长度同时是摘要 200 字符约束的前置）
+    const validation = validateBoardInput(input.name, input.intro);
+    if (!validation.ok) {
+      throw new Error(validation.reason);
+    }
     await this.ensureCollectionsDeclared();
     const now = Date.now();
     const board: ForumBoard = {
@@ -277,6 +284,11 @@ export class ForumService {
   ): Promise<ForumBoard> {
     if (!canManageBoards(role)) {
       throw new Error('仅组织管理员可以修改板块');
+    }
+    // 服务层纵深校验（同 createBoard）
+    const validation = validateBoardInput(patch.name ?? board.name, patch.intro ?? board.intro);
+    if (!validation.ok) {
+      throw new Error(validation.reason);
     }
     await this.ensureCollectionsDeclared();
     const updated: ForumBoard = {
@@ -543,7 +555,7 @@ export class ForumService {
     const response = await this.sdk.docs.query<ForumBoard>(FORUM_COLLECTIONS.boards, {
       filter: [{ field: 'orgId', value: orgId }],
       reverse: false,
-      limit: 200
+      limit: FORUM_QUERY_LIMITS.boards
     });
 
     return response.items
@@ -555,7 +567,7 @@ export class ForumService {
     const response = await this.sdk.docs.query<ForumTopic>(FORUM_COLLECTIONS.topics, {
       filter: [{ field: 'orgId', value: orgId }],
       reverse: true,
-      limit: 1000
+      limit: FORUM_QUERY_LIMITS.topics
     });
 
     return response.items.map((item) => item.data).sort((a, b) => b.createdAt - a.createdAt);
@@ -565,7 +577,7 @@ export class ForumService {
     const response = await this.sdk.docs.query<ForumReply>(FORUM_COLLECTIONS.replies, {
       filter: [{ field: 'orgId', value: orgId }],
       reverse: false,
-      limit: 5000
+      limit: FORUM_QUERY_LIMITS.replies
     });
 
     return response.items.map((item) => item.data).sort((a, b) => a.createdAt - b.createdAt);
@@ -575,7 +587,7 @@ export class ForumService {
     const response = await this.sdk.docs.query<ForumTopicEvent>(FORUM_COLLECTIONS.topicEvents, {
       filter: [{ field: 'orgId', value: orgId }],
       reverse: false,
-      limit: 2000
+      limit: FORUM_QUERY_LIMITS.topicEvents
     });
 
     return response.items.map((item) => item.data).sort((a, b) => a.createdAt - b.createdAt);

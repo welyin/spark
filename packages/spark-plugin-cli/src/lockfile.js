@@ -36,12 +36,37 @@ export function vendorPathForRepo(repo) {
   return `vendor/${repo}`;
 }
 
+/** 码位（Unicode code point）升序比较器：与文档「按码位升序」口径一致——
+ *  默认 Array.sort 是 UTF-16 码元序，含非 BMP 字符的路径两者序不同，
+ *  跨实现复算会分歧（A33 评审 U4） */
+export function compareCodePoints(a, b) {
+  const ai = Array.from(a);
+  const bi = Array.from(b);
+  const n = Math.min(ai.length, bi.length);
+  for (let i = 0; i < n; i += 1) {
+    const ac = ai[i].codePointAt(0);
+    const bc = bi[i].codePointAt(0);
+    if (ac !== bc) {
+      return ac - bc;
+    }
+  }
+  return ai.length - bi.length;
+}
+
 async function walkFiles(rootDir) {
   const walk = async (dir) => {
     const entries = await readdir(dir, { withFileTypes: true });
     const files = [];
     for (const entry of entries) {
       const fullPath = path.join(dir, entry.name);
+      // vendor 内含符号链接即拒（A33 评审 U4）：symlink 不参与哈希会让
+      // 哈希覆盖不完整且无任何提示，fail-closed 优于静默跳过
+      if (entry.isSymbolicLink()) {
+        throw new LockError(
+          'E_VENDOR_SYMLINK',
+          `vendor tree contains symbolic link: ${path.relative(rootDir, fullPath)}（vendor 必须为实体文件树）`
+        );
+      }
       if (entry.isDirectory()) {
         files.push(...(await walk(fullPath)));
       } else if (entry.isFile()) {
@@ -50,7 +75,7 @@ async function walkFiles(rootDir) {
     }
     return files;
   };
-  return (await walk(rootDir)).sort();
+  return (await walk(rootDir)).sort(compareCodePoints);
 }
 
 /** 计算 vendor 树哈希；返回 { hash, files }（files 为参与计数的文件数） */
@@ -92,12 +117,26 @@ export async function readLock(pluginDir) {
 }
 
 export async function writeLock(pluginDir, libraries) {
+  // 幂等写（A33 评审 S1）：libraries 内容不变时保留既有 generatedAt，
+  // 重复 lock 不产生无谓 diff；仅在依赖集变化时刷新时间戳
+  let generatedAt = new Date().toISOString();
+  const lockPath = lockPathForPlugin(pluginDir);
+  if (fs.existsSync(lockPath)) {
+    try {
+      const existing = JSON.parse(await readFile(lockPath, 'utf8'));
+      if (JSON.stringify(existing?.libraries) === JSON.stringify(libraries) && typeof existing?.generatedAt === 'string') {
+        generatedAt = existing.generatedAt;
+      }
+    } catch {
+      // 既有锁文件不可解析：按全新写入处理
+    }
+  }
   const lock = {
     lockfileVersion: LOCK_VERSION,
-    generatedAt: new Date().toISOString(),
+    generatedAt,
     libraries
   };
-  await writeFile(lockPathForPlugin(pluginDir), JSON.stringify(lock, null, 2) + '\n', 'utf8');
+  await writeFile(lockPath, JSON.stringify(lock, null, 2) + '\n', 'utf8');
   return lock;
 }
 

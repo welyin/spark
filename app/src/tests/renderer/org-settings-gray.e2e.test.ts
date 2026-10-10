@@ -29,11 +29,32 @@ vi.mock('../../components/plugin/PluginIframeHost.vue', () => ({
     template: '<div class="stub-plugin-host" :data-plugin-id="pluginId" :data-view-id="viewId" />'
   }
 }));
+// SettingsPage 的重依赖打占位（本文件只验组织管理灰度接线，不验个人设置各模块）
+vi.mock('../../components/mine/ProfileModule.vue', () => ({ default: { name: 'ProfileModuleStub', template: '<div />' } }));
+vi.mock('../../components/mine/MyCardModule.vue', () => ({ default: { name: 'MyCardModuleStub', template: '<div />' } }));
+vi.mock('../../components/mine/BackupModule.vue', () => ({ default: { name: 'BackupModuleStub', template: '<div />' } }));
+vi.mock('../../components/mine/DevicesModule.vue', () => ({ default: { name: 'DevicesModuleStub', template: '<div />' } }));
+vi.mock('../../components/mine/StorageModule.vue', () => ({ default: { name: 'StorageModuleStub', template: '<div />' } }));
+vi.mock('../../components/mine/PermissionModule.vue', () => ({ default: { name: 'PermissionModuleStub', template: '<div />' } }));
+vi.mock('../../components/mine/SecurityModule.vue', () => ({ default: { name: 'SecurityModuleStub', template: '<div />' } }));
+vi.mock('../../components/settings/SystemSettingsPanel.vue', () => ({
+  default: { name: 'SystemSettingsPanelStub', template: '<div />' }
+}));
+vi.mock('../../components/UserAvatar.vue', () => ({ default: { name: 'UserAvatarStub', template: '<div />' } }));
+vi.mock('../../components/OrgAvatar.vue', () => ({ default: { name: 'OrgAvatarStub', template: '<div />' } }));
+vi.mock('../../components/MobileBackBar.vue', () => ({ default: { name: 'MobileBackBarStub', template: '<div />' } }));
+// 移动导航栈转场容器：须渲染默认插槽，移动端分支才可见
+vi.mock('../../components/MobilePageTransition.vue', () => ({
+  default: { name: 'MobilePageTransitionStub', template: '<div><slot /></div>' }
+}));
 
 import ElementPlus from 'element-plus';
 import SpaceSettingsDialog from '../../components/topnav/SpaceSettingsDialog.vue';
+import SettingsPage from '../../pages/SettingsPage.vue';
 import { BUILTIN_APPS, builtinImpl, builtinPluginFor, setBuiltinImpl } from '../../stores/builtin-apps';
 import { switchToOrg, switchToPersonal } from '../../stores/current-space';
+import { isMobileLayout } from '../../stores/ui-layout';
+import { pushPage, resetStack } from '../../stores/mobile-nav';
 
 beforeEach(() => {
   localStorage.clear();
@@ -126,5 +147,74 @@ describe('SpaceSettingsDialog 组织管理灰度切换（A42）', () => {
     await flush();
     expect(document.querySelector('.stub-org-settings-panel')).toBeNull();
     expect(document.querySelector('.stub-plugin-host')).toBeNull();
+  });
+});
+
+describe('SettingsPage 组织管理灰度切换（A42 评审建议：mobile/desktop 两模板分支覆盖）', () => {
+  function mountSettings(): HTMLElement {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const app = createApp({ render: () => h(SettingsPage) });
+    app.use(ElementPlus);
+    app.mount(host);
+    mountedApp = app;
+    return host;
+  }
+
+  afterEach(() => {
+    resetStack('settings');
+    isMobileLayout.value = false;
+  });
+
+  it('desktop 分支：默认 legacy 旧面板；切插件版改挂 spark-org-admin，切回恢复', async () => {
+    const host = mountSettings();
+    await flush();
+    // 组织空间默认选中「组织设置」（activeMenu='space'），desktop 分支直接渲染
+    expect(host.querySelector('.stub-org-settings-panel')).not.toBeNull();
+    expect(host.querySelector('.stub-plugin-host')).toBeNull();
+    setBuiltinImpl('org', 'plugin');
+    await flush();
+    const stub = host.querySelector('.stub-plugin-host');
+    expect(stub?.getAttribute('data-plugin-id')).toBe('spark-org-admin');
+    expect(stub?.getAttribute('data-view-id')).toBe('default');
+    expect(host.querySelector('.stub-org-settings-panel')).toBeNull();
+    setBuiltinImpl('org', 'legacy');
+    await flush();
+    expect(host.querySelector('.stub-org-settings-panel')).not.toBeNull();
+    expect(host.querySelector('.stub-plugin-host')).toBeNull();
+  });
+
+  it('desktop 分支：插件版加载失败「关闭」回退旧 UI 且持久化回 legacy（onOrgFallback）', async () => {
+    const host = mountSettings();
+    await flush();
+    setBuiltinImpl('org', 'plugin');
+    await flush();
+    const stub = host.querySelector('.stub-plugin-host');
+    expect(stub).not.toBeNull();
+    (stub as any).__vueParentComponent.emit('close');
+    await flush();
+    expect(host.querySelector('.stub-org-settings-panel')).not.toBeNull();
+    expect(builtinImpl('org')).toBe('legacy');
+    expect(localStorage.getItem('spark:builtin-impl:org')).toBe('legacy');
+  });
+
+  it('mobile 分支：导航栈进「组织设置」分组页后同一灰度接线生效', async () => {
+    isMobileLayout.value = true;
+    const host = mountSettings();
+    await flush();
+    // 栈1 菜单页不渲染设置面板；压入「组织设置」分组页（栈2）后出现
+    pushPage('settings', 'section', { key: 'space' });
+    await flush();
+    expect(host.querySelector('.stub-org-settings-panel')).not.toBeNull();
+    setBuiltinImpl('org', 'plugin');
+    await flush();
+    const stub = host.querySelector('.stub-plugin-host');
+    expect(stub?.getAttribute('data-plugin-id')).toBe('spark-org-admin');
+    expect(host.querySelector('.stub-org-settings-panel')).toBeNull();
+    // mobile 分支同一回退：close → 写回 legacy
+    (stub as any).__vueParentComponent.emit('close');
+    await flush();
+    expect(host.querySelector('.stub-org-settings-panel')).not.toBeNull();
+    expect(builtinImpl('org')).toBe('legacy');
   });
 });

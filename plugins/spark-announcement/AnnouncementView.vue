@@ -170,6 +170,14 @@
         :title="`本公告已于 ${formatDate(activeRetraction.retractedAt)} 撤回${activeRetraction.reason ? `：${activeRetraction.reason}` : '。'}`"
         description="撤回为追加记录，不删除原公告；已送达的消息卡片不回滚，仅标注「已撤回」。"
       />
+      <!-- 撤回验签入口（免权限）：撤回记录带签名时可校验「确为撤回人域身份签发」 -->
+      <div v-if="activeRetraction?.signature" class="retraction-verify-row">
+        <el-tag type="success" size="small">撤回已签名</el-tag>
+        <el-button size="small" text :loading="retractionVerifying" @click="verifyActiveRetraction">
+          撤回验签
+        </el-button>
+        <span v-if="retractionVerifyResult" class="verify-result">{{ retractionVerifyResult }}</span>
+      </div>
 
       <div class="post-meta">
         <span class="author">发布者：{{ activeAnnouncement.publisherRootId }}</span>
@@ -234,6 +242,9 @@
 
     <!-- 撤回对话框 -->
     <el-dialog v-model="retractDialogVisible" title="撤回公告" width="420px">
+      <p v-if="activeAnnouncement" class="retract-target">
+        撤回对象：<strong>{{ activeAnnouncement.title }}</strong>
+      </p>
       <el-alert
         type="warning"
         :closable="false"
@@ -287,6 +298,7 @@ import {
   canPublishAnnouncement,
   canRetractAnnouncement,
   deriveRetractionMap,
+  findApplicableRetraction,
   validateAnnouncementBody,
   validateAnnouncementTitle,
   validateRetractReason,
@@ -362,6 +374,9 @@ export default defineComponent({
     // 验签
     const verifying = ref(false);
     const verifyResult = ref('');
+    // 撤回验签（与公告验签相互独立的结果槽）
+    const retractionVerifying = ref(false);
+    const retractionVerifyResult = ref('');
 
     const highlightedId = ref('');
 
@@ -400,7 +415,7 @@ export default defineComponent({
     );
 
     const activeRetraction = computed(() =>
-      activeAnnouncement.value ? retractionMap.value.get(activeAnnouncement.value.id) ?? null : null
+      activeAnnouncement.value ? findApplicableRetraction(activeAnnouncement.value, retractionMap.value) ?? null : null
     );
 
     const canRetractActive = computed(() =>
@@ -518,6 +533,7 @@ export default defineComponent({
     const enterDetail = (announcementId: string) => {
       selectedAnnouncementId.value = announcementId;
       verifyResult.value = '';
+      retractionVerifyResult.value = '';
       view.value = 'detail';
     };
 
@@ -691,6 +707,26 @@ export default defineComponent({
       }
     };
 
+    /** 撤回验签（免权限）：校验撤回记录确为撤回人域身份签发 */
+    const verifyActiveRetraction = async () => {
+      if (!activeRetraction.value) {
+        return;
+      }
+      await ensureSdk();
+      if (!service.value) {
+        return;
+      }
+      retractionVerifying.value = true;
+      try {
+        const valid = await service.value.verifyRetractionSignature(activeRetraction.value);
+        retractionVerifyResult.value = valid ? '验签通过：确为撤回人域身份签发' : '验签失败：签名与撤回内容不符';
+      } catch (error) {
+        retractionVerifyResult.value = `验签出错：${error}`;
+      } finally {
+        retractionVerifying.value = false;
+      }
+    };
+
     /**
      * 卡片回调（messages.onCardAction）：公告卡片「查看全文」经壳层归属校验
      * 后路由到这里。card.data 捎带 orgId——卡片可能属于非当前选中组织的应用
@@ -803,6 +839,8 @@ export default defineComponent({
       canRetractActive,
       verifying,
       verifyResult,
+      retractionVerifying,
+      retractionVerifyResult,
       highlightedId,
       publishDialogVisible,
       publishing,
@@ -823,6 +861,7 @@ export default defineComponent({
       openConfigDialog,
       submitConfig,
       verifyActiveAnnouncement,
+      verifyActiveRetraction,
       bodyPreview,
       formatDate
     };
@@ -1014,6 +1053,20 @@ h3 {
 .verify-result {
   color: #64748b;
   font-size: 12px;
+}
+
+.retraction-verify-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.retract-target {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: #334155;
+  word-break: break-all;
 }
 
 .hint {

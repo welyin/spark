@@ -31,6 +31,17 @@ export const FORUM_MAX_EVENT_REASON_LENGTH = 200;
 /** 应用消息摘要中标题预览的最大字数（summary 上限 200 字符，留足前缀余量） */
 export const TOPIC_SUMMARY_PREVIEW_LENGTH = 80;
 
+/** 应用消息摘要硬性上限（壳层 summary 约束；板块名脏数据超长时也不得突破） */
+export const TOPIC_SUMMARY_MAX_LENGTH = 200;
+
+/** 查询上限（无分页的 MVP 口径；达到上限时视图层提示「仅显示最近 N 条」） */
+export const FORUM_QUERY_LIMITS = {
+  boards: 200,
+  topics: 1000,
+  replies: 5000,
+  topicEvents: 2000
+} as const;
+
 /** 正文格式（档三-9：MVP 仅纯文本；markdown 随渲染选型后续加） */
 export type ForumContentFormat = 'plain';
 
@@ -269,8 +280,17 @@ export function buildForumSignPayload(
 export function buildTopicSummary(boardName: string, title: string): string {
   const normalizedBoard = normalizeForumText(boardName) || '未分板块';
   const normalizedTitle = normalizeForumText(title);
-  const prefix = `【新主题·${normalizedBoard}】`;
-  const budget = Math.max(TOPIC_SUMMARY_PREVIEW_LENGTH, 200 - prefix.length - 1);
+  // 板块名来自同步面（脏数据可能超长）：先给标题预览留预算，板块名按余量截断，
+  // 保证摘要总长恒 ≤ TOPIC_SUMMARY_MAX_LENGTH（壳层 summary 硬约束）。
+  const affixLength = '【新主题·】'.length + 1; // 前缀固定字符 + 省略号余量
+  const boardBudget = Math.max(
+    1,
+    TOPIC_SUMMARY_MAX_LENGTH - affixLength - Math.min(TOPIC_SUMMARY_PREVIEW_LENGTH, normalizedTitle.length)
+  );
+  const board =
+    normalizedBoard.length > boardBudget ? `${normalizedBoard.slice(0, boardBudget - 1)}…` : normalizedBoard;
+  const prefix = `【新主题·${board}】`;
+  const budget = Math.max(0, TOPIC_SUMMARY_MAX_LENGTH - prefix.length - 1);
   const preview = normalizedTitle.slice(0, budget);
   const ellipsis = normalizedTitle.length > budget ? '…' : '';
   return `${prefix}${preview}${ellipsis}`;
