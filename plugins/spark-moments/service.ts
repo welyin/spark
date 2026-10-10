@@ -33,7 +33,8 @@
  * - 删动态   ：deletePost(post)（作者权限校验在调用方，本地标记 deletedAt + 投递删除通知）。
  * - 删评论   ：deleteComment(post, commentRootId, myRootId)。
  * - 时间线   ：loadTimeline() / loadMyPosts() / loadPostsByAuthor() / getPost() / loadInteractions()。
- * - 互动通知 ：notifyInteraction({...}) 作者收到互动后写应用会话（message:app，限流降级）。
+ * - 互动通知 ：notifyInteraction({...}) 作者收到互动后写应用会话（message:app，限流降级；
+ *   sdk.data scope:'local' 台账去重，与 QuickJS 后台双写者不重复）。
  * - 通讯录   ：resolveContactsSelection({contactRootIds, groupIds, tagIds}) 展开名单；
  *   displayNameOf(friends, rootId, snapshot) 展示名解析。
  * feed topic（MOMENTS_TOPICS）：post / interaction / delete 三通道；interaction 通道用
@@ -57,6 +58,7 @@ import {
   newId,
   sortTimeline,
   MOMENTS_COLLECTIONS,
+  MOMENTS_NOTIFIED_COLLECTION,
   type MomentsImage,
   type MomentsInteraction,
   type MomentsPost,
@@ -82,9 +84,44 @@ const MOMENTS_DECLARATIONS = [
 /** 我的 profile 集合键（恒 "self"） */
 const PROFILE_KEY = 'self';
 
+/**
+ * 「已通知互动」去重台账的 localStorage 缓存键与进程内兜底（U4 评审修复，
+ * 对齐 spark-announcement/spark-kanban 台账范式）：持久面是 sdk.data
+ * scope:'local' 集合 MOMENTS_NOTIFIED_COLLECTION（键 = interactionNotifyKey，
+ * 值携带 ts 水位）；iframe 沙箱为 opaque origin，localStorage 恒抛
+ * SecurityError，故缓存仅作持久面读写失败时的会话内兜底，读侧以持久台账为准。
+ */
+const NOTIFIED_CACHE_KEY = 'spark-moments:notified-interactions';
+const memoryNotifiedFallback = new Set<string>();
+
+/** localStorage 缓存读（含进程内兜底；仅作持久面不可用时的降级来源） */
+function loadNotifiedCache(): Set<string> {
+  try {
+    const raw = globalThis.localStorage?.getItem(NOTIFIED_CACHE_KEY);
+    if (raw) {
+      return new Set(JSON.parse(raw) as string[]);
+    }
+  } catch {
+    /* opaque origin 沙箱恒抛 SecurityError、隐私模式或数据损坏：走进程内兜底 */
+  }
+  return new Set(memoryNotifiedFallback);
+}
+
+/** localStorage 缓存写（best-effort；进程内兜底先行，存储不可用不阻塞） */
+function saveNotifiedCache(ids: Set<string>): void {
+  memoryNotifiedFallback.clear();
+  for (const id of ids) memoryNotifiedFallback.add(id);
+  try {
+    globalThis.localStorage?.setItem(NOTIFIED_CACHE_KEY, JSON.stringify([...ids]));
+  } catch {
+    /* 存储不可用时进程内兜底已记录，忽略 */
+  }
+}
+
 /** 公开可见：需要全部联系人名单（contact:read 展开） */
 export class MomentsService {
   private collectionsReady: Promise<void> | null = null;
+  private notifiedCollectionReady: Promise<void> | null = null;
 
   constructor(private readonly sdk: PluginSDK) {}
 
@@ -99,6 +136,50 @@ export class MomentsService {
       }
     })();
     return this.collectionsReady;
+  }
+
+  // ---------------------------------------------------------------------------
+  // 互动通知去重台账（sdk.data scope:'local' 持久面 + localStorage 兜底）
+  // ---------------------------------------------------------------------------
+
+  /** 声明通知台账集合（sdk.data scope:'local'，幂等；代际内策略冲突报错） */
+  private ensureNotifiedCollection(): Promise<void> {
+    this.notifiedCollectionReady ??= this.sdk.data
+      .declareCollection({ name: MOMENTS_NOTIFIED_COLLECTION, scope: 'local' })
+      .then(() => undefined);
+    return this.notifiedCollectionReady;
+  }
+
+  /**
+   * 查通知台账：以 sdk.data 持久面为准；持久面不可用（声明/读取失败）时降级
+   * localStorage 缓存 + 进程内兜底。命中后回写缓存，供降级路径使用。
+   */
+  private async hasInteractionNotified(key: string): Promise<boolean> {
+    try {
+      await this.ensureNotifiedCollection();
+      const record = await this.sdk.data.get(MOMENTS_NOTIFIED_COLLECTION, key);
+      if (!record) return false;
+      const cached = loadNotifiedCache();
+      cached.add(key);
+      saveNotifiedCache(cached);
+      return true;
+    } catch (error) {
+      console.warn('[spark-moments] 通知台账持久面读取失败，降级缓存（本次会话内去重）：', error);
+      return loadNotifiedCache().has(key);
+    }
+  }
+
+  /** 记通知台账：持久面为主，缓存兜底同步刷新（持久面写失败不阻塞通知流程） */
+  private async markInteractionNotified(key: string, ts: number): Promise<void> {
+    const cached = loadNotifiedCache();
+    cached.add(key);
+    saveNotifiedCache(cached);
+    try {
+      await this.ensureNotifiedCollection();
+      await this.sdk.data.save(MOMENTS_NOTIFIED_COLLECTION, key, { ts });
+    } catch (error) {
+      console.warn('[spark-moments] 通知台账持久面写入失败（缓存已记，降级为会话内去重）：', error);
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -644,7 +725,12 @@ export class MomentsService {
   /**
    * 生成互动通知应用消息（message:app 高级 + 限流）。
    * payload.summary 强制（未装插件时壳层原生渲染）；card 富渲染互动卡片。
-   * @returns 是否成功写入应用会话
+   *
+   * 去重（U4）：视图与 QuickJS 后台都会为同一互动事件调本路径/写同类消息，
+   * feed 重复投递亦会重复触发——发送前查 sdk.data 持久台账（scope:'local'），
+   * 已通知则跳过；发送成功后记账。dedupKey 由调用方用 model.interactionNotifyKey
+   * 生成（与 background.ts 内联副本同口径）。
+   * @returns 是否成功写入应用会话（已通知去重跳过返回 false）
    */
   async notifyInteraction(input: {
     kind: 'like' | 'comment';
@@ -657,8 +743,11 @@ export class MomentsService {
     postThumbHash?: string | null;
     commentExcerpt?: string;
     ts: number;
+    /** 去重台账键（interactionNotifyKey 产物） */
+    dedupKey: string;
   }): Promise<boolean> {
     if (!this.sdk.messages) return false;
+    if (await this.hasInteractionNotified(input.dedupKey)) return false;
     try {
       const summary = buildInteractionSummary(input.kind, input.fromName, input.count, input.postExcerpt, input.commentExcerpt);
       await this.sdk.messages.sendAppMessage(
@@ -679,6 +768,8 @@ export class MomentsService {
           }
         }
       );
+      // 记入已通知台账（sdk.data 持久面为准）：后台/视图另一路径不会补发重复通知
+      await this.markInteractionNotified(input.dedupKey, input.ts);
       return true;
     } catch (error) {
       console.warn('[spark-moments] 互动通知发送失败（权限/限流降级）：', error);

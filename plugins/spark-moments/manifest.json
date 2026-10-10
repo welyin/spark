@@ -20,7 +20,6 @@
     "storage:read",
     "storage:write",
     "identity:sign",
-    "identity:verify",
     "contact:read",
     "feed:read",
     "feed:write",

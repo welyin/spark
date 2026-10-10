@@ -25,8 +25,10 @@ type FeedMsg = { topic: string; payload: unknown; from: string; ts: number };
 function createFakeHost() {
   const postsStore = new Map<string, Record<string, unknown>>();
   const interactionsStore = new Map<string, unknown>();
+  const notifiedStore = new Map<string, unknown>();
   const calls = {
     logs: [] as string[],
+    declaredCollections: [] as Array<{ name: string; scope?: string }>,
     savedPosts: [] as Array<{ key: string; value: unknown }>,
     savedInteractions: [] as Array<{ key: string; value: unknown }>,
     delivers: [] as Array<{ topic: string; payload: unknown; recipients: string[]; replyTo?: string }>,
@@ -40,7 +42,10 @@ function createFakeHost() {
       calls.logs.push(msg);
     },
     data: {
-      declareCollection: () => ({}),
+      declareCollection: (decl: { name: string; scope?: string }) => {
+        calls.declaredCollections.push(decl);
+        return {};
+      },
       save: (name: string, key: string, value: unknown) => {
         if (name === 'spark-moments:posts') {
           postsStore.set(key, value as Record<string, unknown>);
@@ -48,11 +53,14 @@ function createFakeHost() {
         } else if (name === 'spark-moments:interactions') {
           interactionsStore.set(key, value);
           calls.savedInteractions.push({ key, value });
+        } else if (name === 'spark-moments:notified') {
+          notifiedStore.set(key, value);
         }
       },
       get: (name: string, key: string) => {
         if (name === 'spark-moments:posts') return postsStore.get(key) ?? null;
         if (name === 'spark-moments:interactions') return interactionsStore.get(key) ?? null;
+        if (name === 'spark-moments:notified') return notifiedStore.get(key) ?? null;
         return null;
       }
     },
@@ -80,7 +88,7 @@ function createFakeHost() {
   return {
     fake,
     calls,
-    store: { posts: postsStore, interactions: interactionsStore },
+    store: { posts: postsStore, interactions: interactionsStore, notified: notifiedStore },
     /** 向订阅的 onReceive 处理器推送一条 feed 消息 */
     emit(topic: string, payload: unknown, from = 'root-b', ts = 1000) {
       receiveHandlers.get(topic)?.({ topic, payload, from, ts });
@@ -196,6 +204,41 @@ describe('spark-moments background script', () => {
     expect(host.calls.appMessages).toHaveLength(1);
     expect(host.calls.appMessages[0].summary).toContain('赞了你的动态');
     expect(host.calls.appMessages[0].card?.viewId).toBe('notify-card');
+    // 去重台账：记入 sdk.data scope:'local' 持久面（键 = interactionNotifyKey）
+    expect(host.store.notified.get('post-1:like:root-b:add:200')).toBeDefined();
+  });
+
+  it('互动通知去重（U4）：同一事件重复投递只写一次应用会话，台账集合声明为 scope:local', async () => {
+    await loadBackground(host);
+    // 台账集合随启动声明为 scope:'local'（不参与同步）
+    expect(host.calls.declaredCollections).toContainEqual({ name: 'spark-moments:notified', scope: 'local' });
+
+    const post = makePost('root-me', { recipients: ['root-b', 'root-c'] });
+    host.store.posts.set(post.id, post);
+    const interaction: MomentsInteraction = { type: 'comment', action: 'add', text: '真好看', ts: 200 };
+    const payload = {
+      postId: post.id,
+      type: 'comment',
+      rootId: 'root-b',
+      interaction,
+      signature: {
+        payload: buildInteractionSignPayload(post.id, 'comment', 'root-b', '真好看', 'add'),
+        signature: 'sig-1',
+        publicKey: 'pk-1'
+      }
+    };
+    // 同一互动事件重复投递（feed 重投 / onReceive 与 pull 双路径）：落库幂等，通知去重
+    host.emit('spark-moments:interaction', payload, 'root-b');
+    host.emit('spark-moments:interaction', payload, 'root-b');
+    expect(host.store.interactions.get('post-1:comment:root-b')).toEqual(interaction);
+    expect(host.calls.appMessages).toHaveLength(1);
+    // 新事件（新 ts → 新去重键）：照常通知
+    host.emit(
+      'spark-moments:interaction',
+      { ...payload, interaction: { type: 'comment', action: 'add', text: '真好看', ts: 300 } },
+      'root-b'
+    );
+    expect(host.calls.appMessages).toHaveLength(2);
   });
 
   it('互动第一跳：验签失败 → 拒收不落库不广播不通知', async () => {

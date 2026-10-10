@@ -12,11 +12,11 @@
     "isolatedModules": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "types": ["vite/client"],
     "baseUrl": ".",
     "paths": {
       "vue": ["../../app/node_modules/vue"],
-      "element-plus": ["../../app/node_modules/element-plus"]
+      "element-plus": ["../../app/node_modules/element-plus"],
+      "vitest": ["../../app/node_modules/vitest/dist/index.d.ts"]
     }
   },
   "include": [

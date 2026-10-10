@@ -14,7 +14,7 @@
 import { computed, readonly, ref } from 'vue';
 import { ensurePluginSDK, type PluginSDK } from '../../../packages/plugin-sdk/src';
 import { MomentsService, MOMENTS_TOPICS } from '../service';
-import type { MomentsInteraction, MomentsPost, MomentsProfile } from '../model';
+import { interactionNotifyKey, type MomentsInteraction, type MomentsPost, type MomentsProfile } from '../model';
 
 export type InteractionEntry = { key: string; postId: string; type: 'like' | 'comment'; rootId: string; interaction: MomentsInteraction };
 
@@ -148,7 +148,7 @@ export function useMoments() {
     });
   }
 
-  /** 作者收到互动后生成应用通知（message:app，限流降级） */
+  /** 作者收到互动后生成应用通知（message:app，限流降级；service 内台账去重） */
   async function notifyAuthor(payload: unknown): Promise<void> {
     const msg = payload as {
       postId?: string;
@@ -172,7 +172,8 @@ export function useMoments() {
       postExcerpt: post.text ? buildExcerpt(post.text) : '[图片]',
       postThumbHash: post.images[0]?.thumbHash ?? null,
       commentExcerpt: msg.type === 'comment' ? (msg.interaction.text ?? '') : undefined,
-      ts: msg.interaction.ts
+      ts: msg.interaction.ts,
+      dedupKey: interactionNotifyKey(msg.postId, msg.type, msg.rootId ?? '', msg.interaction.action, msg.interaction.ts)
     });
   }
 

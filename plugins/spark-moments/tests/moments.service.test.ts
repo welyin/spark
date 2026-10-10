@@ -481,6 +481,75 @@ describe('spark-moments service', () => {
     const posts = await service.loadTimeline();
     expect(posts.map((p) => p.id)).toEqual(['p3', 'p1']);
   });
+
+  // ------------------------------------------------------------------
+  // 互动通知去重台账（U4：sdk.data scope:'local' 持久面为准，localStorage 仅兜底）
+  // ------------------------------------------------------------------
+
+  const NOTIFY_INPUT = {
+    kind: 'like' as const,
+    fromRootIds: ['root-b'],
+    fromName: '张三',
+    count: 1,
+    postId: 'post-1',
+    postExcerpt: '正文',
+    ts: 200,
+    dedupKey: 'post-1:like:root-b:add:200'
+  };
+
+  it('互动通知：懒声明 scope:local 台账集合，发送成功后记账（持久面）', async () => {
+    const sdk = createMockSdk();
+    const service = new MomentsService(sdk);
+    expect(await service.notifyInteraction({ ...NOTIFY_INPUT })).toBe(true);
+    expect(sdk.messages.sendAppMessage).toHaveBeenCalledTimes(1);
+    // 台账集合声明为 scope:'local'（不参与同步）
+    const decl = sdk.data.declareCollection.mock.calls.find((c: any[]) => c[0].name === 'spark-moments:notified');
+    expect(decl?.[0]).toEqual({ name: 'spark-moments:notified', scope: 'local' });
+    // 台账写入持久面：键 = dedupKey，值携带 ts 水位
+    expect(sdk.data.save).toHaveBeenCalledWith('spark-moments:notified', 'post-1:like:root-b:add:200', { ts: 200 });
+  });
+
+  it('互动通知去重：同一事件重复触发只写一次应用会话（持久台账，跨实例/双写者）', async () => {
+    const sdk = createMockSdk();
+    // 台账持久面的内存实现（模拟 sdk.data scope:'local' 集合）
+    const ledger = new Map<string, unknown>();
+    sdk.data.get.mockImplementation((name: string, key: string) =>
+      Promise.resolve(name === 'spark-moments:notified' ? ledger.get(key) ?? null : null)
+    );
+    sdk.data.save.mockImplementation((name: string, key: string, value: unknown) => {
+      if (name === 'spark-moments:notified') ledger.set(key, value);
+      return Promise.resolve({});
+    });
+    // 实例 A：首次通知成功并记账（模拟 QuickJS 后台先写）
+    const serviceA = new MomentsService(sdk);
+    expect(await serviceA.notifyInteraction({ ...NOTIFY_INPUT })).toBe(true);
+    // 实例 B（模拟 iframe 视图重开/双写者另一侧）：持久台账命中，不重复写应用会话
+    const serviceB = new MomentsService(sdk);
+    expect(await serviceB.notifyInteraction({ ...NOTIFY_INPUT })).toBe(false);
+    expect(sdk.messages.sendAppMessage).toHaveBeenCalledTimes(1);
+    // 取消后重新点赞是新事件（新 ts → 新键）：照常通知
+    expect(await serviceB.notifyInteraction({ ...NOTIFY_INPUT, ts: 300, dedupKey: 'post-1:like:root-b:add:300' })).toBe(true);
+    expect(sdk.messages.sendAppMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it('互动通知：台账持久面故障时降级 localStorage/进程内兜底（会话内去重）', async () => {
+    const sdk = createMockSdk();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    // 持久面故障：台账集合声明恒失败
+    sdk.data.declareCollection.mockImplementation((decl: { name: string }) =>
+      decl.name === 'spark-moments:notified' ? Promise.reject(new Error('数据面不可用（mock）')) : Promise.resolve({})
+    );
+    try {
+      const service = new MomentsService(sdk);
+      const input = { ...NOTIFY_INPUT, ts: 900, dedupKey: 'post-9:comment:root-c:add:900' };
+      expect(await service.notifyInteraction(input)).toBe(true);
+      // 持久面写失败但缓存已记：同会话重复触发不重复通知
+      expect(await service.notifyInteraction(input)).toBe(false);
+      expect(sdk.messages.sendAppMessage).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

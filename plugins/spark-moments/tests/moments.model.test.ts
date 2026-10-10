@@ -22,6 +22,7 @@ import {
   formatRelativeTime,
   hashContent,
   interactionKey,
+  interactionNotifyKey,
   sortTimeline,
   validateCommentText,
   validateImages,
@@ -142,6 +143,14 @@ describe('spark-moments model', () => {
   it('builds composite interaction key', () => {
     expect(interactionKey('post-1', 'like', 'root-b')).toBe('post-1:like:root-b');
     expect(interactionKey('post-1', 'comment', 'root-b')).toBe('post-1:comment:root-b');
+  });
+
+  it('builds interaction notify dedup key identifying the exact event', () => {
+    expect(interactionNotifyKey('post-1', 'like', 'root-b', 'add', 100)).toBe('post-1:like:root-b:add:100');
+    // 同一事件重复投递 → 同键（去重）；新 ts / 不同 action → 新键（照常通知）
+    expect(interactionNotifyKey('post-1', 'like', 'root-b', 'add', 100)).toBe(interactionNotifyKey('post-1', 'like', 'root-b', 'add', 100));
+    expect(interactionNotifyKey('post-1', 'like', 'root-b', 'add', 100)).not.toBe(interactionNotifyKey('post-1', 'like', 'root-b', 'add', 200));
+    expect(interactionNotifyKey('post-1', 'like', 'root-b', 'add', 100)).not.toBe(interactionNotifyKey('post-1', 'like', 'root-b', 'remove', 100));
   });
 
   it('dedupes preserving order', () => {

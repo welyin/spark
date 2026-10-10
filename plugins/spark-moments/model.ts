@@ -8,8 +8,8 @@
  * - 本文件不依赖 SDK / Vue，全部是可单测的纯函数与类型——插件业务规则
  *   （长度约束、可见性四选一展开、互动广播名单计算、删除级联、签名载荷、
  *   消息摘要、互动 key）尽量沉淀在这一层，service/视图只做编排与呈现；
- * - 集合名 `moments:*`（插件前缀须与 id `spark-moments` 一致，内核强制），
- *   与 manifest 权限声明一一对应（storage/identity/contact/feed/message）。
+ * - 集合名 `spark-moments:*`（插件前缀须与 id 一致，内核强制）；storage 为基础权限
+ *   恒授予无需声明，manifest 声明的是 identity/contact/feed/message 高级权限位。
  *
  * 产品修正（对齐架构师 [social-feed] §10 偏差表第 1 条）：
  * 三个集合 scope 一律 "sync"（personal 空间 = 自设备间 pdsync 全量同步），
@@ -51,6 +51,15 @@ export const MOMENTS_COLLECTIONS = {
   /** 本地 profile（E6 降级：我的昵称/头像，pdsync 自设备同步） */
   profile: 'spark-moments:profile'
 } as const;
+
+/**
+ * 互动通知去重台账集合（scope:'local'，不参与同步；懒声明，仅通知路径使用）。
+ * 应用消息「本地生成、本地消费」，去重状态只需本机状态——但插件沙箱 iframe 是
+ * opaque origin（localStorage 恒抛 SecurityError），故台账以 sdk.data 持久面为准，
+ * localStorage 仅作持久面故障时的会话内兜底（对齐 spark-announcement/spark-kanban
+ * 台账范式；U4 评审修复：视图与 QuickJS 后台双写者、feed 重复投递共台账去重）。
+ */
+export const MOMENTS_NOTIFIED_COLLECTION = 'spark-moments:notified';
 
 // ---------------------------------------------------------------------------
 // 类型
@@ -338,6 +347,22 @@ export function dedupe<T>(list: T[]): T[] {
 /** 互动集合键：`{postId}:{type}:{rootId}` */
 export function interactionKey(postId: string, type: 'like' | 'comment', rootId: string): string {
   return `${postId}:${type}:${rootId}`;
+}
+
+/**
+ * 互动通知去重键（MOMENTS_NOTIFIED_COLLECTION 台账键）：
+ * `{postId}:{type}:{rootId}:{action}:{ts}`——同一互动事件的重复触发（feed 重复投递、
+ * onReceive 与 pull 补读双路径、视图与 QuickJS 后台双写者）共享同键，只通知一次；
+ * 取消后重新点赞/评论是新事件（新 ts），键不同，照常通知。
+ */
+export function interactionNotifyKey(
+  postId: string,
+  type: 'like' | 'comment',
+  rootId: string,
+  action: 'add' | 'remove',
+  ts: number
+): string {
+  return `${postId}:${type}:${rootId}:${action}:${ts}`;
 }
 
 // ---------------------------------------------------------------------------

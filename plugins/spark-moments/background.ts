@@ -4,6 +4,9 @@
  * 设计职责（产品 §七/§十三）：feed 收件（三通道验签落库）+ 互动通知生成。
  * 与 iframe 主视图（useMoments.subscribeFeed/pullInbox）同口径：post/interaction/delete
  * 三 topic 均先验签后落库（防伪造硬约束），互动第一跳作者侧广播名单 + 写应用会话通知。
+ * 双侧都会生成互动通知（双写者），去重靠 sdk.data scope:'local' 持久台账
+ * `spark-moments:notified`（键 = interactionNotifyKey；QuickJS 无 localStorage，
+ * 持久面故障时进程内 Set 兜底）——feed 重复投递 / 视图与后台并发触发不重复写应用会话。
  *
  * 当前能力（内核已补齐 background PRELUDE）：
  * - `spark.identity.verify/sign`：验签 / 域身份签名（免 import，宿主注入）；
@@ -25,7 +28,7 @@ declare const spark: {
   readonly pluginId: string;
   log: (msg: string) => void;
   data: {
-    declareCollection: (decl: { name: string }) => unknown;
+    declareCollection: (decl: { name: string; scope?: 'sync' | 'local' }) => unknown;
     save: (name: string, key: string, value: unknown) => unknown;
     get: (name: string, key: string) => Record<string, unknown> | null;
   };
@@ -43,10 +46,12 @@ declare const spark: {
   };
 };
 
-/** 集合名内联（与 model.ts MOMENTS_COLLECTIONS 逐字一致；零依赖约束故内联） */
+/** 集合名内联（与 model.ts MOMENTS_COLLECTIONS / MOMENTS_NOTIFIED_COLLECTION 逐字一致；零依赖约束故内联） */
 const COLLECTIONS = {
   posts: 'spark-moments:posts',
-  interactions: 'spark-moments:interactions'
+  interactions: 'spark-moments:interactions',
+  /** 互动通知去重台账（scope:'local'，不参与同步；与 iframe 视图侧共用同一持久面） */
+  notified: 'spark-moments:notified'
 } as const;
 
 /** topic（与 service.ts MOMENTS_TOPICS 逐字一致） */
@@ -117,6 +122,15 @@ function interactionKey(postId: string, type: 'like' | 'comment', rootId: string
   return `${postId}:${type}:${rootId}`;
 }
 
+/**
+ * 互动通知去重键（与 model.ts interactionNotifyKey 逐字一致）：
+ * `{postId}:{type}:{rootId}:{action}:{ts}`——同一互动事件的重复触发共键只通知一次，
+ * 取消后重新互动是新事件（新 ts）照常通知。
+ */
+function interactionNotifyKey(postId: string, type: 'like' | 'comment', rootId: string, action: 'add' | 'remove', ts: number): string {
+  return `${postId}:${type}:${rootId}:${action}:${ts}`;
+}
+
 /** 数组去重（保序） */
 function dedupe<T>(list: T[]): T[] {
   return [...new Set(list)];
@@ -166,9 +180,41 @@ function ensureCollections(): void {
   try {
     spark.data.declareCollection({ name: COLLECTIONS.posts });
     spark.data.declareCollection({ name: COLLECTIONS.interactions });
+    // 通知去重台账：scope:'local'（不参与同步；U4，与视图侧 service.ts 同口径）
+    spark.data.declareCollection({ name: COLLECTIONS.notified, scope: 'local' });
   } catch (err) {
     // 重复声明忽略（幂等）
     spark.log(`declare collection: ${String(err)}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 互动通知去重台账（U4 评审修复，对齐 spark-announcement/spark-kanban 台账范式）：
+// 后台与 iframe 视图（service.notifyInteraction）是双写者，feed 重复投递 /
+// onReceive 与 pull 补读双路径也会重复触发——台账以 sdk.data scope:'local'
+// 持久面为准（与视图侧同一集合，跨写者去重）；QuickJS 无 localStorage，
+// 持久面故障时退化为进程内 Set 会话级兜底。
+// ---------------------------------------------------------------------------
+
+const notifiedFallback = new Set<string>();
+
+/** 查台账：持久面为准；读失败降级进程内兜底 */
+function alreadyNotified(key: string): boolean {
+  try {
+    return !!spark.data.get(COLLECTIONS.notified, key);
+  } catch (err) {
+    spark.log(`[spark-moments][notify] ledger read error: ${String(err)}`);
+    return notifiedFallback.has(key);
+  }
+}
+
+/** 记台账：持久面为主，进程内兜底同步记录（写失败不阻塞通知流程） */
+function markNotified(key: string, ts: number): void {
+  notifiedFallback.add(key);
+  try {
+    spark.data.save(COLLECTIONS.notified, key, { ts });
+  } catch (err) {
+    spark.log(`[spark-moments][notify] ledger write error: ${String(err)}`);
   }
 }
 
@@ -360,15 +406,22 @@ function handleInteraction(msg: { payload: unknown; from: string }): void {
   notifyAuthor(payload, post);
 }
 
-/** 写互动通知应用消息（summary + notify-card 卡片；权限/限流降级 try/catch） */
+/** 写互动通知应用消息（summary + notify-card 卡片；权限/限流降级 try/catch；台账去重） */
 function notifyAuthor(
-  payload: { postId?: string; type?: 'like' | 'comment'; rootId?: string; interaction?: { text?: string; ts?: number } },
+  payload: { postId?: string; type?: 'like' | 'comment'; rootId?: string; interaction?: { text?: string; action?: 'add' | 'remove'; ts?: number } },
   post: { text?: string; images?: Array<{ hash: string }> }
 ): void {
   const kind = payload.type ?? 'like';
   const fromRootId = payload.rootId ?? '';
   const fromName = fromRootId || '(未知)';
   const interaction = payload.interaction ?? {};
+  // 去重（U4）：同一互动事件视图侧/后台重复触发只通知一次（台账为持久面，
+  // 先于发送判定，发送成功后记账——与 service.notifyInteraction 同口径）
+  const dedupKey = interactionNotifyKey(payload.postId ?? '', kind, fromRootId, interaction.action ?? 'add', interaction.ts ?? 0);
+  if (alreadyNotified(dedupKey)) {
+    spark.log(`[spark-moments][notify] dedup skip ${dedupKey}`);
+    return;
+  }
   const postExcerpt = buildPostExcerpt(post);
   const commentExcerpt = kind === 'comment' ? buildCommentExcerpt(interaction.text ?? '') : undefined;
   const summary = buildInteractionSummary(kind, fromName, 1, postExcerpt, commentExcerpt);
@@ -391,6 +444,7 @@ function notifyAuthor(
         }
       }
     });
+    markNotified(dedupKey, interaction.ts ?? Date.now());
   } catch (err) {
     spark.log(`[spark-moments][notify] app message failed: ${String(err)}`);
   }
