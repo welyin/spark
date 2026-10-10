@@ -1,14 +1,20 @@
 /**
  * 空间状态与内核接入（spark-contacts 插件版，功能对等迁移自壳层 mock/contacts/store）：
  * 模块级响应式单例 spaces（唯一一份，经 contactsOf 访问）、overview 水合、
- * fire-and-forget 持久化（deep watch 兜底）、通讯录事件订阅。
+ * 函数级持久化（动作函数直写内核，见下）、通讯录事件订阅。
  * 数据源经 sdk-host 适配层（sdk.contacts，A18/A19 communication §4.1 数据面）；
  * 依赖方向：只依赖 types 与 seed，不 import 任何上层业务模块。
+ *
+ * 持久化纪律（评审 U1 重设计 R4）：所有资料写路径一律经动作函数
+ * （queries.updateProfile / setContactGroup / 标签分组动作等），动作函数内
+ * 本地生效 + 内核直写，只写脏项。组件不得绕过函数直改响应式对象——此前
+ * 「deep watch 全量回写兜底」（任一变更 debounce 后全空间逐条 updateProfile）
+ * 已随封装修复删除，不再有写放大兜底。
  */
-import { reactive, watch } from 'vue';
+import { reactive } from 'vue';
 import { contactsApi, isTauri, listenP2pEvents, organizationApi } from '../sdk-host';
 import type { FriendDto, FriendRequestDto, OrgInviteRecordDto, P2pEventDto, SpaceContactsDto } from '../host-types';
-import type { ContactProfile, FriendRequest, MockFriend, SpaceContacts } from './types';
+import type { FriendRequest, MockFriend, SpaceContacts } from './types';
 import { emptyProfile } from './types';
 import { seedOrg, seedPersonal } from './seed';
 
@@ -18,9 +24,6 @@ export { contactsApi, organizationApi } from '../sdk-host';
 
 /** 全部空间的通讯录缓存：同一空间 key 恒得同一响应式对象（模块级唯一单例） */
 export const spaces = reactive<Record<string, SpaceContacts>>({});
-
-/** 正在水合的空间：水合赋值期间跳过兜底 watch 回写，避免写风暴 */
-const hydrating = new Set<string>();
 
 /** DTO → 缓存模型（字段同形，显式拷贝避免引用内核线形对象） */
 function toFriend(dto: FriendDto): MockFriend {
@@ -86,15 +89,10 @@ async function hydrateOrgInvites(spaceKey: string, space: SpaceContacts): Promis
   }
   try {
     const records = await api.inviteRecords(spaceKey.slice('org:'.length));
-    hydrating.add(spaceKey);
-    try {
-      for (const record of records) {
-        if (record.direction === 'outgoing') {
-          upsertOrgOutgoingInvite(space, record);
-        }
+    for (const record of records) {
+      if (record.direction === 'outgoing') {
+        upsertOrgOutgoingInvite(space, record);
       }
-    } finally {
-      hydrating.delete(spaceKey);
     }
   } catch {
     // 邀请记录拉取失败不打扰：面板退化为仅 overview 数据
@@ -121,91 +119,32 @@ function hydrate(spaceKey: string, space: SpaceContacts): Promise<void> {
   return api
     .overview(spaceKey)
     .then((dto: SpaceContactsDto) => {
-      hydrating.add(spaceKey);
-      try {
-        space.friends = dto.friends.map(toFriend);
-        // 内核不持久化已读状态：重启后待处理的收到申请按未读恢复（仍待我处理，
-        // 需要角标/红点提示；查看详情后清除，与在线到达的申请同口径）；
-        // 与本地按 id 合并（水合窗口内事件已先落的记录不被抹掉）
-        space.requests = mergeRequestsById(
-          dto.requests.map((item) => {
-            const request = toRequest(item);
-            if (request.status === 'pending') {
-              request.unread = true;
-            }
-            return request;
-          }),
-          space.requests
-        );
-        space.outgoing = mergeRequestsById(dto.outgoing.map(toRequest), space.outgoing);
-        space.tags = dto.tags.map((tag) => ({ ...tag }));
-        space.groups = dto.groups.map((group) => ({ ...group }));
-        space.groupTree = dto.groupTree;
-        for (const [rootId, profile] of Object.entries(dto.memberExtras)) {
-          space.memberExtras[rootId] = { ...emptyProfile(), ...profile };
-        }
-      } finally {
-        hydrating.delete(spaceKey);
+      space.friends = dto.friends.map(toFriend);
+      // 内核不持久化已读状态：重启后待处理的收到申请按未读恢复（仍待我处理，
+      // 需要角标/红点提示；查看详情后清除，与在线到达的申请同口径）；
+      // 与本地按 id 合并（水合窗口内事件已先落的记录不被抹掉）
+      space.requests = mergeRequestsById(
+        dto.requests.map((item) => {
+          const request = toRequest(item);
+          if (request.status === 'pending') {
+            request.unread = true;
+          }
+          return request;
+        }),
+        space.requests
+      );
+      space.outgoing = mergeRequestsById(dto.outgoing.map(toRequest), space.outgoing);
+      space.tags = dto.tags.map((tag) => ({ ...tag }));
+      space.groups = dto.groups.map((group) => ({ ...group }));
+      space.groupTree = dto.groupTree;
+      for (const [rootId, profile] of Object.entries(dto.memberExtras)) {
+        space.memberExtras[rootId] = { ...emptyProfile(), ...profile };
       }
     })
     .catch(() => {})
     // 组织空间邀请合入排在 overview 覆盖之后（组织空间 overview 恒空，
     // 个人空间此调用为 no-op），两套水合互不覆盖
     .then(() => hydrateOrgInvites(spaceKey, space));
-}
-
-/**
- * 直写路径兜底：组件存在绕过函数直改响应式对象的情况（TagManager 直接
- * push/filter profileOf(...).tagIds），函数级持久化覆盖不到。对每个空间挂一次
- * deep watch，debounce 500ms 后把该空间全部 friend 与 memberExtras 的资料整体
- * updateProfile 持久化（量级每空间几十条内）。
- * 水合赋值期间（hydrating 标志）跳过，避免水合触发的回写风暴。
- */
-const watchedSpaces = new Set<string>();
-
-function ensurePersistWatch(spaceKey: string): void {
-  if (watchedSpaces.has(spaceKey)) {
-    return;
-  }
-  watchedSpaces.add(spaceKey);
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  watch(
-    () => spaces[spaceKey],
-    () => {
-      if (!isTauri() || hydrating.has(spaceKey)) {
-        return;
-      }
-      if (timer) {
-        clearTimeout(timer);
-      }
-      timer = setTimeout(() => {
-        timer = undefined;
-        const api = contactsApi();
-        const space = spaces[spaceKey];
-        if (!api || !space || hydrating.has(spaceKey)) {
-          return;
-        }
-        const persist = (rootId: string, profile: ContactProfile) => {
-          const { remark, phones, tagIds, groupId, memo, photos, permission, blocked } = profile;
-          api.updateProfile(spaceKey, rootId, {
-            remark,
-            phones: [...phones],
-            tagIds: [...tagIds],
-            groupId,
-            memo,
-            photos: [...photos],
-            permission,
-            blocked
-          }).catch(() => {});
-        };
-        space.friends.forEach((friend) => persist(friend.rootId, friend));
-        Object.entries(space.memberExtras).forEach(([rootId, profile]) => persist(rootId, profile));
-      }, 500);
-    },
-    // flush: 'sync' 让回调在水合赋值的同一同步段内触发，hydrating 标志才能
-    // 真正拦住水合引发的回写（默认 pre flush 异步执行时标志已复位）
-    { deep: true, flush: 'sync' }
-  );
 }
 
 // ------------------------------------------------------------------
@@ -235,7 +174,7 @@ function ensureEventSubscription(): void {
  *   置未读（失败提醒可重试 / 对方新询问=未读新变化）。
  * - FriendRequestAccepted：outbox 置 accepted + 未读，朋友按 rootId 去重落本地。
  * - FriendProfileUpdated：对端资料同步（昵称/头像），按 rootId 就地更新朋友条目；
- *   仅改 nickname/avatar（持久化兜底 watch 只回写本地资料字段，不会把头像写回内核）。
+ *   仅改 nickname/avatar（入站同步不回写内核——函数级持久化只覆盖本地资料动作）。
  * - OrgInviteUpdated（组织空间）：管理员收到对方回执，按 record.orgId 解析空间
  *   （`org:{orgId}`）upsert 我发出的邀请，置未读。
  */
@@ -359,8 +298,7 @@ export function refreshContacts(spaceKey: string): Promise<void> {
  * 登录态切换时清空通讯录缓存（RootGate 登出/切换账号时调用）。
  * 模块级 spaces 为窗口会话级单例，contactsOf 仅在首次访问时水合；登出
  * 不刷新页面的场景下旧账号的内存数据会带进新登录会话——清空后下次
- * contactsOf 重新从内核水合。watchedSpaces 保留：既有 watcher 监听的是
- * spaces[spaceKey] 取值器，空间对象重建后依然生效。
+ * contactsOf 重新从内核水合。
  */
 export function resetContactsCache(): void {
   for (const key of Object.keys(spaces)) {
@@ -386,7 +324,6 @@ export function contactsOf(spaceKey: string): SpaceContacts {
       memberExtras: {}
     };
     ensureEventSubscription();
-    ensurePersistWatch(spaceKey);
     hydrate(spaceKey, spaces[spaceKey]);
   }
   return spaces[spaceKey];

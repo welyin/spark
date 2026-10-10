@@ -10,6 +10,7 @@ import type { PluginContext, PluginMessagesAPI, PluginSDK } from '../../../packa
 import { bindPluginRuntime } from '../src/sdk-host';
 import {
   closeConversation,
+  deleteConversation,
   getConversation,
   getMessages,
   listConversations,
@@ -178,5 +179,57 @@ describe('数据面经 sdk.messages 通路', () => {
     // 另一读取方（换前端场景的最小聊天插件视角）经同一 sdk.messages 面读到同一条数据
     const reread = await backend.api.list('dm:peer-s1');
     expect(reread.map((m) => m.id)).toEqual([local?.id]);
+  });
+});
+
+describe('写路径内核确认优先（评审 U1）：内核未确认即回滚本地态', () => {
+  it('删除会话内核失败：回滚会话与消息，不静默分歧（下次水合不会复活）', async () => {
+    const backend = fakeBackend();
+    backend.conversations.push(makeConversation({ id: 'dm:peer-d1', peerId: 'peer-d1' }));
+    const failing = {
+      ...backend.api,
+      deleteConversation: () => Promise.reject(new Error('kernel down'))
+    } as unknown as PluginMessagesAPI;
+    bindPluginRuntime({ messages: failing } as unknown as PluginSDK, fakeCtx());
+    // 模块级缓存跨用例共享：换绑定后端后清缓存触发重新水合
+    resetMessagesCache();
+
+    const key = 'personal';
+    listConversations(key);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(listConversations(key).map((c) => c.id)).toEqual(['dm:peer-d1']);
+    // 本地先删（同步语义），内核拒绝后回滚
+    deleteConversation(key, 'dm:peer-d1');
+    expect(listConversations(key)).toEqual([]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(listConversations(key).map((c) => c.id)).toEqual(['dm:peer-d1']);
+  });
+
+  it('水合以内核快照为权威：仅保留请求在途期间本地新建的会话', async () => {
+    const backend = fakeBackend();
+    const stale = makeConversation({ id: 'dm:peer-stale', peerId: 'peer-stale' });
+    backend.conversations.push(stale);
+    let release!: (value: Conversation[]) => void;
+    const pending = new Promise<Conversation[]>((resolve) => {
+      release = resolve;
+    });
+    const gated = {
+      ...backend.api,
+      conversations: () => pending
+    } as unknown as PluginMessagesAPI;
+    bindPluginRuntime({ messages: gated } as unknown as PluginSDK, fakeCtx());
+    resetMessagesCache();
+
+    const key = 'personal';
+    listConversations(key); // 触发水合（请求在途）
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // 在途期间：内核事件带来一条新会话（本地新建）
+    const fresh = makeConversation({ id: 'dm:peer-fresh', peerId: 'peer-fresh', unreadCount: 1 });
+    onChatReceived({ spaceKey: key, conversation: fresh, message: makeMessage(fresh) });
+    // 内核回包： stale 已被对端删除（不在快照中）
+    release([]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // stale 不复活；在途新建的 fresh 保留
+    expect(listConversations(key).map((c) => c.id)).toEqual(['dm:peer-fresh']);
   });
 });

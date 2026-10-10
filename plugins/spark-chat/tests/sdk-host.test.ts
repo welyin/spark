@@ -12,8 +12,7 @@ import {
   bindPluginRuntime,
   boundSpaceKey,
   listenP2pEvents,
-  messagesApi,
-  systemApi
+  messagesApi
 } from '../src/sdk-host';
 
 function fakeCtx(space: PluginContext['space'] = { type: 'personal', id: 'personal' }): PluginContext {
@@ -142,12 +141,15 @@ describe('sdk-host 适配层（HostMessagesApi → sdk.messages 等语义映射�
     expect(calls[0].args).toEqual(['dm:p1', '你好', { messageId: 'm0', senderName: '对方', preview: '原消息' }, 'm1700-1']);
   });
 
-  it('应用消息面 v1 为桩（appList 恒空、appSend 拒绝），systemApi 恒不可用', async () => {
+  it('应用消息面与系统徽标面不在插件接口内（v1 壳层职责，评审 U3/U4 已清算桩）', async () => {
     bind(fakeMessages([]));
     const api = messagesApi()!;
-    await expect(api.appList('personal', 'spark-moments')).resolves.toEqual([]);
-    await expect(api.appSend('personal', 'spark-moments', { summary: 'x' })).rejects.toThrow(/shell mount area/);
-    expect(systemApi()).toBeUndefined();
+    // HostMessagesApi 不再携带 app*/system 桩：应用会话由壳层挂载区呈现，
+    // 未读徽标为壳层聚合面；插件侧只保留列表适配层过滤（见上一用例）
+    expect('appList' in api).toBe(false);
+    expect('appSend' in api).toBe(false);
+    expect('appMarkRead' in api).toBe(false);
+    expect('appDeleteConversation' in api).toBe(false);
   });
 
   it('事件订阅经桥事件面：ChatReceived/ChatStatus/Presence 事件形状与壳层 P2pEventDto 同口径', async () => {

@@ -21,6 +21,9 @@
     "messages:write",
     "contact:read"
   ],
+  "requires": {
+    "platforms": ["desktop"]
+  },
   "sdkVersion": "1",
   "package": {
     "updateManifestUrl": "",

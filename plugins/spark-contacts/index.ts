@@ -13,7 +13,7 @@ import type { PluginManifest } from '../../packages/plugin-sdk/src';
 import { connectPluginBridge } from '../../packages/plugin-sdk/src/bridge/client';
 import ContactsApp from './src/ContactsApp.vue';
 import manifestJson from './manifest.json';
-import { bindPluginRuntime, currentRoot } from './src/sdk-host';
+import { bindPluginRuntime, currentRoot, pluginSpace } from './src/sdk-host';
 import { refreshCurrentUser } from './src/current-user';
 import { setSelfProfileExtra } from './src/profile-extra';
 import { refreshOrganizations } from './src/org-membership';
@@ -46,8 +46,12 @@ async function bootstrap(): Promise<void> {
       // 扩展字段缺失仅影响签名/性别展示，不阻断
     }
   });
-  // 组织成员缓存预拉（组织空间通讯录列表数据源；个人空间为空列表，无害）
-  void refreshOrganizations().catch(() => {});
+  // 组织成员缓存预拉（组织空间通讯录列表数据源）：仅组织空间实例预拉——
+  // 个人空间 listMineOrganizations 属 ORG_SPACE_CALLS 整域被拒（bridge-dispatcher），
+  // 无条件预拉必发一次注定被拒的调用（评审 U4）
+  if (pluginSpace().type === 'org') {
+    void refreshOrganizations().catch(() => {});
+  }
 
   const container = document.getElementById('app');
   if (!container) {

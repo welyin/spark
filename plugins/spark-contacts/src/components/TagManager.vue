@@ -72,7 +72,7 @@ import { computed, defineComponent, ref, watch, type PropType } from 'vue';
 import { ElMessageBox } from 'element-plus';
 import { CollectionTag, Plus } from '@element-plus/icons-vue';
 import UserAvatar from './UserAvatar.vue';
-import { createTag, deleteTag, profileOf, renameTag, type ContactTag } from '../store';
+import { createTag, deleteTag, profileOf, renameTag, updateProfile, type ContactTag } from '../store';
 import type { ContactItem } from './types';
 
 export default defineComponent({
@@ -132,7 +132,10 @@ export default defineComponent({
       if (!tag || !picked.value.length) return;
       for (const rootId of picked.value) {
         const profile = profileOf(props.spaceKey, rootId);
-        if (!profile.tagIds.includes(tag.id)) profile.tagIds.push(tag.id);
+        // 一律经动作函数写资料（函数级持久化，只写脏项）；不得直改响应式对象
+        if (!profile.tagIds.includes(tag.id)) {
+          updateProfile(props.spaceKey, rootId, { tagIds: [...profile.tagIds, tag.id] });
+        }
       }
       picked.value = [];
     };
@@ -141,7 +144,7 @@ export default defineComponent({
       const tag = activeTag.value;
       if (!tag) return;
       const profile = profileOf(props.spaceKey, rootId);
-      profile.tagIds = profile.tagIds.filter((id) => id !== tag.id);
+      updateProfile(props.spaceKey, rootId, { tagIds: profile.tagIds.filter((id) => id !== tag.id) });
     };
 
     const createTagRow = () => {

@@ -10,7 +10,11 @@
       :class="{ 'minichat-convs--overlay': isNarrowLayout, 'minichat-convs--open': sidebarOpen }"
     >
       <div class="minichat-side-head">
-        <h2 class="minichat-title">最小聊天（{{ spaceLabel }}）</h2>
+        <div>
+          <h2 class="minichat-title">最小聊天·验收样例（{{ spaceLabel }}）</h2>
+          <!-- 身份钉死（评审 2026-10-07）：验收对照件，不作为产品聊天应用维护 -->
+          <p class="minichat-subtitle">验收样例，不作为产品聊天应用维护</p>
+        </div>
         <button
           v-if="isNarrowLayout"
           type="button"
@@ -58,6 +62,8 @@
             <span v-else>{{ msg.content }}</span>
           </li>
         </ul>
+        <!-- 发送失败提示（样例即规范：SDK 拒绝必须浮面） -->
+        <p v-if="sendError" class="minichat-error">{{ sendError }}</p>
         <form class="minichat-input" @submit.prevent="onSend">
           <input v-model="draft" placeholder="输入消息，回车发送" />
           <button type="submit">发送</button>
@@ -77,6 +83,7 @@ import {
   minichatSpace,
   openConversation,
   refreshConversations,
+  sendError,
   sendText,
   subscribeNewMessages
 } from './sdk-access';
@@ -117,6 +124,7 @@ export default defineComponent({
       activeConvId,
       activeMessages,
       draft,
+      sendError,
       spaceLabel,
       isNarrowLayout,
       sidebarOpen,
@@ -138,6 +146,7 @@ html, body, #app { height: 100%; margin: 0; }
 .minichat-convs { width: 240px; border-right: 1px solid #ddd; overflow-y: auto; }
 .minichat-side-head { display: flex; align-items: center; justify-content: space-between; padding: 12px; }
 .minichat-title { font-size: 14px; margin: 0; }
+.minichat-subtitle { font-size: 11px; color: #999; margin: 2px 0 0; }
 .minichat-conv { display: flex; justify-content: space-between; width: 100%; padding: 10px 12px; border: 0; background: none; cursor: pointer; text-align: left; }
 .minichat-conv.active { background: #ecf5ff; }
 .minichat-unread { background: #f56c6c; color: #fff; border-radius: 8px; padding: 0 6px; font-size: 12px; }
@@ -145,6 +154,7 @@ html, body, #app { height: 100%; margin: 0; }
 .minichat-msgs { flex: 1; overflow-y: auto; list-style: none; margin: 0; padding: 12px; }
 .minichat-msgs li { margin-bottom: 8px; }
 .minichat-msgs li.mine { text-align: right; }
+.minichat-error { color: #f56c6c; font-size: 12px; margin: 0; padding: 4px 12px 0; }
 .minichat-input { display: flex; gap: 8px; padding: 12px; border-top: 1px solid #ddd; }
 .minichat-input input { flex: 1; padding: 6px 8px; min-width: 0; }
 .minichat-empty { padding: 12px; color: #999; }

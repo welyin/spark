@@ -18,8 +18,8 @@
  * 一次解码成功（882 字符紧凑备份 JSON）。管线：面积平均缩放档
  * [0.5, 0.35, 0.25, 0.15, 0.1] × 阈值档 [无, 128, 150, 170]，首个成功即返回。
  *
- * 三个调用点共用：名片二维码（utils/card.ts）、扫码迁移（pages/auth/AddAccountPage.vue）、
- * 连接名片（components/org/RecoverConnectionPanel.vue）。
+ * 插件内两个调用点共用：名片二维码识别（card.ts → decodeCardImage）、
+ * 摄像头逐帧扫码（useQrCameraScan.ts → decodeQrTextFromCanvas，经 CardInput.vue 接入）。
  */
 import jsQR from 'jsqr';
 

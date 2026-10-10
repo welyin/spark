@@ -1,7 +1,7 @@
 /**
  * spark-chat 数据面适配层：把壳层 `stores/messages.ts` 依赖的宿主接口
- * （`messagesApi()` / `systemApi()` / `listenP2pEvents()` / `isTauri()`）
- * 以 **同签名** 桥接到插件 SDK（A18/A19 sdk.messages），store 主体零改动
+ * （`messagesApi()` / `listenP2pEvents()` / `isTauri()`）以 **同签名**
+ * 桥接到插件 SDK（A18/A19 sdk.messages），store 主体零改动
  * （功能对等迁移的关键：同一组件树，只换数据源）。
  *
  * space 由桥绑定（插件实例按空间创建，壳层切换空间时重建实例并注入新
@@ -9,14 +9,16 @@
  * 不一致按绑定值执行（与桥「插件自报一律忽略」同口径）。
  *
  * v1 边界（communication §4.2 壳层保留面，插件内不实现）：
- * - 应用会话（`app:` 前缀）：会话列表适配层过滤；壳层应用会话挂载区呈现；
- * - 系统徽标（systemApi）：壳层职责，插件内返回 undefined。
+ * - 应用会话（`app:` 前缀）：会话列表适配层过滤，壳层应用会话挂载区呈现；
+ * - 系统未读徽标/标题前缀：壳层职责（评审 U3——iframe 内 document.title
+ *   不可见、无 system 桥面，插件内不残留半条通道；缺口见 communication §三
+ *   与 wiki/product/todo.md 登记）。
  */
 import type { PluginContactsAPI, PluginContext, PluginDataAPI, PluginSDK } from '../../../packages/plugin-sdk/src';
-import type { HostMessagesApi, HostSystemApi } from './host-types';
+import type { HostMessagesApi } from './host-types';
 
 // store 的类型来源（type-only，构建期擦除；本地同形拷贝，见 host-types.ts 头注）
-export type { HostMessagesApi, HostSystemApi } from './host-types';
+export type { HostMessagesApi } from './host-types';
 
 let _sdk: PluginSDK | null = null;
 let _ctx: PluginContext | null = null;
@@ -81,12 +83,7 @@ export function messagesApi(): MessagesApi | undefined {
     togglePin: (_spaceKey: string, convId: string) => m.togglePin(convId),
     toggleMute: (_spaceKey: string, convId: string) => m.toggleMute(convId),
     clear: (_spaceKey: string, convId: string) => m.clear(convId),
-    deleteConversation: (_spaceKey: string, convId: string) => m.deleteConversation(convId),
-    // 应用消息（服务号）：v1 不在插件内呈现（壳层挂载区），桩实现
-    appSend: () => Promise.reject(new Error('app conversations are rendered by the shell mount area')),
-    appList: async () => [],
-    appMarkRead: async () => ({ success: true }),
-    appDeleteConversation: async () => ({ success: true })
+    deleteConversation: (_spaceKey: string, convId: string) => m.deleteConversation(convId)
   } as MessagesApi;
 }
 
@@ -98,13 +95,6 @@ export function dataApi(): PluginDataAPI | undefined {
 /** 通讯录只读面（social-feed §9.4 `contact:read`）；未绑定 SDK / 桥未注入时为 undefined */
 export function contactsApi(): PluginContactsAPI | undefined {
   return _sdk?.contacts;
-}
-
-type SystemApi = HostSystemApi;
-
-/** 系统桥接（徽标等）：壳层职责，插件内恒不可用（watch 的 ?. 链静默跳过） */
-export function systemApi(): SystemApi | undefined {
-  return undefined;
 }
 
 /** 壳层 P2pEventDto 的最小同形（store 按 kind 判别联合消费；data 形状随 kind 定） */

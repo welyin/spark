@@ -43,7 +43,6 @@
             <div class="conv-line2">
               <span class="conv-preview">
                 <span v-if="conv.draft" class="conv-draft">[草稿] </span>
-                <template v-else-if="conv.kind === 'app'">{{ lastAppSummary(spaceKey, conv.id) }}</template>
                 <template v-else>{{ previewText(lastMessage(spaceKey, conv.id)) }}</template>
               </span>
             </div>
@@ -113,7 +112,6 @@ import { hashGradient } from '../palette';
 import {
   clearMessages,
   deleteConversation,
-  lastAppSummary,
   lastMessage,
   listConversations,
   previewText,
@@ -167,13 +165,13 @@ export default defineComponent({
       return conv.kind === 'app' && isAppConversationBlocked(props.spaceKey, conv.peerId);
     }
 
-    // 按名称/最新消息内容模糊搜索（设计 §2.5；应用会话匹配最新摘要）
+    // 按名称/最新消息内容模糊搜索（设计 §2.5）
     const filtered = computed(() => {
       const kw = keyword.value.trim().toLowerCase();
       if (!kw) return sorted.value;
       return sorted.value.filter((conv) => {
         if (convName(conv).toLowerCase().includes(kw)) return true;
-        const preview = conv.kind === 'app' ? lastAppSummary(props.spaceKey, conv.id) : previewText(lastMessage(props.spaceKey, conv.id));
+        const preview = previewText(lastMessage(props.spaceKey, conv.id));
         return preview.toLowerCase().includes(kw);
       });
     });
@@ -285,7 +283,6 @@ export default defineComponent({
       onClear,
       onDelete,
       lastMessage,
-      lastAppSummary,
       previewText,
       formatConvTime,
       Search,

@@ -49,15 +49,19 @@
 
 <script lang="ts">
 import { computed, defineComponent, ref } from 'vue';
+import { ElMessage } from 'element-plus';
 import ConversationList from './components/ConversationList.vue';
 import ChatView from './components/ChatView.vue';
 import { boundSpaceKey, pluginSpace } from './sdk-host';
+import { setWriteErrorNotifier } from './store';
 import { isMobileLayout } from './ui-layout';
 
 export default defineComponent({
   name: 'ChatApp',
   components: { ConversationList, ChatView },
   setup() {
+    // store 写路径内核未确认时的用户提示出口（store 不直接依赖组件库）
+    setWriteErrorNotifier((message) => ElMessage.error(message));
     const spaceKey = computed(() => boundSpaceKey());
     const spaceType = computed(() => pluginSpace().type);
     const activeId = ref('');

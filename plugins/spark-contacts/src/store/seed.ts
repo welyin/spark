@@ -1,7 +1,7 @@
 /**
  * 非 Tauri 环境（单测/纯前端开发）的本地种子数据。
  * Tauri 环境不使用：空间一律从空状态建、经 overview 水合为内核真实数据。
- * 注意：渲染单测（contact-groups.test.ts 等）直接依赖种子朋友与分组树，勿删。
+ * 注意：插件单测（tests/store.test.ts）经 contactsOf 退化路径消费种子，勿删。
  */
 import type { MockFriend, SpaceContacts } from './types';
 import { emptyProfile } from './types';

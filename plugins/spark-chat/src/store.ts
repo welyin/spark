@@ -8,8 +8,14 @@
  * 删除/撤回等），组件零改动：
  * - 读：同步返回缓存；桥上下文首次访问时异步水合（conversations / list），
  *   完成后响应式自动刷新。
- * - 写：本地缓存同步更新（保持组件的同步语义），随后 fire-and-forget 调内核
- *   持久化（静默 catch，失败不回滚本地态）。
+ * - 写：本地缓存同步更新（保持组件的同步语义），随后调内核持久化。
+ *   破坏性/状态类写（置顶/免打扰/清空/删除会话/删除消息/撤回）内核未确认
+ *   即回滚本地态并经 notifyWriteError 提示——不回滚则本地与内核持久分歧
+ *   （删除会话内核失败后，下次水合以内核快照为准会把会话静默复活）。
+ *   草稿/已读为自愈态（连续改写、下次水合或同步事件自然对齐），失败静默
+ *   回滚不提示。乐观更新仅 sendText/resend 保留（有 'failed' 终态语义）。
+ * - 水合 merge：内核快照为权威——请求发出前已在本地的条目以内核回包为准
+ *   覆盖，仅保留请求在途期间本地新建的条目（乐观创建的会话/刚入列的消息）。
  * - 远端推送：经 listenP2pEvents（桥事件面）订阅 ChatReceived（新消息）/
  *   ChatStatus（已读/撤回/状态流转）事件就地合并进缓存。
  * 未绑定 SDK（vitest / 纯前端预览）不发任何调用，退化为纯内存 store。
@@ -19,16 +25,8 @@
  * （域名白名单站点名 + 空描述），抓取结果随 sendText 的 dto.link 回来后替换；
  * 非 Tauri/demo 环境就停留在诚实占位。
  */
-import { computed, reactive, watch } from 'vue';
-import { isTauri, listenP2pEvents, messagesApi, systemApi } from './sdk-host';
-import type { AppMessageCardDto, AppMessageDto } from './host-types';
-
-// 应用会话（服务号）：v1 由壳层挂载区呈现（communication §4.2），插件列表
-// 适配层过滤；屏蔽态为壳层本地状态，插件内恒 false
-const SYSTEM_APP_PLUGIN_ID = 'system';
-function isAppConversationBlocked(_key: SpaceKey, _pluginId: string): boolean {
-  return false;
-}
+import { computed, reactive } from 'vue';
+import { boundSpaceKey, isTauri, listenP2pEvents, messagesApi } from './sdk-host';
 
 /** 空间 key：个人空间为 'personal'，组织空间为 'org:<orgId>' */
 export type SpaceKey = string;
@@ -97,14 +95,22 @@ export interface Conversation {
 interface SpaceData {
   conversations: Conversation[];
   messages: Record<string, ChatMessage[]>;
-  /** 应用消息（§20）：键为应用会话 id（`app:{pluginId}`），与人际消息分开存储 */
-  appMessages: Record<string, AppMessageDto[]>;
 }
 
 const MIN = 60_000;
 
 /** 本地生成消息 id 的自增序号（id 形如 `m${Date.now()}-${seq}`，前端生成后随发送传入内核落库） */
 let seq = 0;
+
+/**
+ * 写失败通知出口：store 不直接依赖 UI 组件库（保持 vitest 纯内存可测），
+ * 由根视图（ChatApp）注入 ElMessage.error；缺省退化为 console.warn。
+ */
+let notifyWriteError: (message: string) => void = (message) => console.warn(`[spark-chat] ${message}`);
+
+export function setWriteErrorNotifier(notify: (message: string) => void): void {
+  notifyWriteError = notify;
+}
 
 function makeConversation(
   partial: Pick<Conversation, 'kind' | 'title' | 'peerId' | 'updatedAt'> & Partial<Conversation>
@@ -153,7 +159,7 @@ export function spaceKeyOf(space: { type: string; id: string }): string {
 
 function ensureSpace(key: SpaceKey): SpaceData {
   if (!spaces[key]) {
-    spaces[key] = { conversations: [], messages: {}, appMessages: {} };
+    spaces[key] = { conversations: [], messages: {} };
     subscribeP2pEvents();
     hydrateConversations(key);
   }
@@ -161,9 +167,9 @@ function ensureSpace(key: SpaceKey): SpaceData {
 }
 
 /**
- * 登录态切换时清空消息缓存（RootGate 登出/切换账号时调用）。
- * spaces/hydratedMessages 为窗口会话级单例，登出不刷新页面时旧账号的
- * 会话与消息会带进新登录会话——清空后重新从内核水合。
+ * 登录态切换时清空消息缓存（测试隔离同用）。运行态跨账号清理依赖壳层
+ * 在登出/切换账号时销毁并重建插件 iframe（模块级单例随浏览上下文消亡）——
+ * 该前提见评审待核登记（wiki/product/todo.md）。
  */
 export function resetMessagesCache(): void {
   for (const key of Object.keys(spaces)) {
@@ -175,65 +181,48 @@ export function resetMessagesCache(): void {
   hydratedMessages.clear();
 }
 
-/** 首次进入空间时拉取会话列表水合缓存；按 id merge，保留水合期间本地新建的会话 */
+/**
+ * 首次进入空间时拉取会话列表水合缓存。内核快照为权威：请求发出前已在本地的
+ * 会话以内核回包为准覆盖（内核未确认的删除不会借「保留本地新建」复活）；
+ * 仅保留请求在途期间本地新建的会话（乐观创建/新消息事件）。
+ */
 function hydrateConversations(key: SpaceKey): void {
   const api = messagesApi();
   if (!api) return;
+  const knownIds = new Set((spaces[key]?.conversations ?? []).map((c) => c.id));
   void api
     .listConversations(key)
     .then((dtos) => {
       const space = spaces[key];
       if (!space) return;
-      const localOnly = space.conversations.filter((c) => !dtos.some((d) => d.id === c.id));
+      const localOnly = space.conversations.filter((c) => !knownIds.has(c.id) && !dtos.some((d) => d.id === c.id));
       space.conversations = [...dtos.map((d) => ({ ...d })), ...localOnly];
     })
     .catch(() => {});
 }
 
-/** 应用会话 id 前缀（§20.1：会话 id = `app:{pluginId}`） */
-const APP_CONV_PREFIX = 'app:';
-
-/** 应用会话 id → pluginId；非应用会话返回 null */
-export function appConversationPluginId(convId: string): string | null {
-  return convId.startsWith(APP_CONV_PREFIX) ? convId.slice(APP_CONV_PREFIX.length) : null;
-}
-
-/** 首次读取某会话消息时拉取历史水合缓存；按 id merge，保留水合期间本地新增的消息 */
+/**
+ * 首次读取某会话消息时拉取历史水合缓存。与 hydrateConversations 同口径：
+ * 内核快照为权威，仅保留请求在途期间本地新入列的消息（乐观发送等）。
+ */
 function hydrateMessages(key: SpaceKey, convId: string): void {
   const loadedKey = `${key}\n${convId}`;
   if (hydratedMessages.has(loadedKey)) return;
   hydratedMessages.add(loadedKey);
   const api = messagesApi();
   if (!api) return;
-  const pluginId = appConversationPluginId(convId);
-  if (pluginId !== null) {
-    // 应用会话：消息在 `msg:app:` 键空间，走 appList 水合（§20.6）
-    void api
-      .appList(key, pluginId)
-      .then((dtos) => mergeAppMessages(key, convId, dtos))
-      .catch(() => {});
-    return;
-  }
+  const knownIds = new Set((spaces[key]?.messages[convId] ?? []).map((m) => m.id));
   void api
     .listMessages(key, convId)
     .then((dtos) => {
       const space = spaces[key];
       if (!space) return;
-      const localOnly = (space.messages[convId] ?? []).filter((m) => !dtos.some((d) => d.id === m.id));
+      const localOnly = (space.messages[convId] ?? []).filter(
+        (m) => !knownIds.has(m.id) && !dtos.some((d) => d.id === m.id)
+      );
       space.messages[convId] = [...dtos.map((d) => ({ ...d })), ...localOnly];
     })
     .catch(() => {});
-}
-
-/** 内核 appList 结果按 id merge 进缓存（水合与桥 listAppMessages 调用共用）；
- *  合并后按 createdAt 升序归位：水合期间本地新增的消息可能晚于内核快照尾部 */
-export function mergeAppMessages(key: SpaceKey, convId: string, dtos: AppMessageDto[]): void {
-  const space = spaces[key];
-  if (!space) return;
-  const localOnly = (space.appMessages[convId] ?? []).filter((m) => !dtos.some((d) => d.id === m.id));
-  space.appMessages[convId] = [...dtos.map((d) => ({ ...d })), ...localOnly].sort(
-    (a, b) => a.createdAt - b.createdAt
-  );
 }
 
 // ---------- 内核事件订阅（与 network-status 消费同一 p2p-event 通道） ----------
@@ -245,7 +234,8 @@ function subscribeP2pEvents(): void {
     // 判别联合按 kind 收窄后 data 形状确定（与壳层 P2pEventDto 同口径）
     if (event.kind === 'ChatReceived') onChatReceived(event.data);
     else if (event.kind === 'ChatStatus') onChatStatus(event.data);
-    else if (event.kind === 'ConversationsSynced') hydrateConversations('personal');
+    // 空间键单一事实源：实例由桥按空间绑定，同步事件只刷新本空间
+    else if (event.kind === 'ConversationsSynced') hydrateConversations(boundSpaceKey());
     else if (event.kind === 'PeerConnected' || event.kind === 'PeerDisconnected') scheduleOnlineRefresh();
   }).catch(() => {});
 }
@@ -303,7 +293,7 @@ interface TypewriterState {
 const typewriters = new Map<string, TypewriterState>();
 
 function typewriterKey(convId: string, messageId: string): string {
-  return `${convId}${messageId}`;
+  return `${convId}\n${messageId}`;
 }
 
 /**
@@ -462,116 +452,6 @@ export function getMessages(key: SpaceKey, convId: string): ChatMessage[] {
   return space.messages[convId] ?? [];
 }
 
-/** 应用会话消息（首次访问触发 appList 水合，与 getMessages 同模式） */
-export function getAppMessages(key: SpaceKey, convId: string): AppMessageDto[] {
-  const space = ensureSpace(key);
-  hydrateMessages(key, convId);
-  return space.appMessages[convId] ?? [];
-}
-
-/** 应用会话最新摘要（会话列表预览；无消息时空串） */
-export function lastAppSummary(key: SpaceKey, convId: string): string {
-  const list = getAppMessages(key, convId);
-  return list.length > 0 ? list[list.length - 1].summary : '';
-}
-
-/**
- * 应用消息就地入账（§20）：桥 dispatcher/系统通知经壳层服务（plugin/messages.ts）
- * 写入内核后调用，保证打开的会话与会话列表实时刷新，不必等下次水合。
- * 未读语义与 onChatReceived 同口径：活跃会话清零并回读，否则本地 +1
- * （内核侧已权威计数，下次水合自动对齐）。
- */
-export function ingestAppMessage(key: SpaceKey, dto: AppMessageDto): void {
-  const space = ensureSpace(key);
-  const convId = `${APP_CONV_PREFIX}${dto.pluginId}`;
-  let conv = findConversation(space, convId);
-  if (!conv) {
-    conv = {
-      id: convId,
-      kind: 'app',
-      title: dto.pluginId,
-      peerId: dto.pluginId,
-      unreadCount: 0,
-      pinnedAt: 0,
-      muted: false,
-      online: false,
-      draft: '',
-      updatedAt: dto.createdAt
-    };
-    space.conversations.push(conv);
-  }
-  conv.updatedAt = Math.max(conv.updatedAt, dto.createdAt);
-  const list = (space.appMessages[convId] ??= []);
-  if (list.some((m) => m.id === dto.id)) return;
-  list.push({ ...dto });
-  if (activeConversation[key] === convId) {
-    conv.unreadCount = 0;
-    const stored = list.find((m) => m.id === dto.id);
-    if (stored) stored.read = true;
-    void messagesApi()
-      ?.appMarkRead(key, dto.pluginId)
-      .catch(() => {});
-  } else {
-    conv.unreadCount += 1;
-  }
-}
-
-// ---- 非 Tauri 环境的应用消息内存镜像（与内核 §20 语义对齐，mock 链路可演示） ----
-
-const APP_SUMMARY_MAX_CHARS = 200;
-const APP_MSG_RATE_LIMIT = 10;
-const APP_MSG_RATE_WINDOW_MS = 60_000;
-/** 应用消息 pluginId 白名单（与内核 §20.1 同规格，错误串前缀一致：invalid-plugin-id） */
-const APP_PLUGIN_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
-/** 限流记账：key = `${spaceKey}\n${pluginId}` → 窗口内写入时间戳（内存态，进程重启清零） */
-const appRateLog = new Map<string, number[]>();
-
-/**
- * 内存版应用消息写入：校验链（按序，先于限流，与内核口径一致）——
- * summary 非空且 ≤200（missing-summary/summary-too-long）→ pluginId 字符集
- * （invalid-plugin-id）→ 限流（rate-limited；内置 system 会话豁免，同内核
- * message_app_send：限流防插件刷会话，system 为壳层可信写入方）
- */
-export function sendAppMessageLocal(
-  key: SpaceKey,
-  pluginId: string,
-  payload: Record<string, unknown>,
-  card?: AppMessageCardDto
-): AppMessageDto {
-  const summary = typeof payload.summary === 'string' ? payload.summary.trim() : '';
-  if (!summary) {
-    throw new Error('missing-summary: app message payload requires a non-empty summary');
-  }
-  if (summary.length > APP_SUMMARY_MAX_CHARS) {
-    throw new Error('summary-too-long: app message summary exceeds 200 chars');
-  }
-  if (!APP_PLUGIN_ID_PATTERN.test(pluginId)) {
-    throw new Error('invalid-plugin-id');
-  }
-  const now = Date.now();
-  if (pluginId !== SYSTEM_APP_PLUGIN_ID) {
-    const rateKey = `${key}\n${pluginId}`;
-    const windowLog = (appRateLog.get(rateKey) ?? []).filter((ts) => now - ts < APP_MSG_RATE_WINDOW_MS);
-    if (windowLog.length >= APP_MSG_RATE_LIMIT) {
-      throw new Error('rate-limited: app message rate limit exceeded (10/60s)');
-    }
-    windowLog.push(now);
-    appRateLog.set(rateKey, windowLog);
-  }
-  const dto: AppMessageDto = {
-    id: `m${now}-${++seq}`,
-    pluginId,
-    summary,
-    payload,
-    createdAt: now,
-    status: 'local',
-    read: false,
-    ...(card ? { card } : {})
-  };
-  ingestAppMessage(key, dto);
-  return dto;
-}
-
 export function lastMessage(key: SpaceKey, convId: string): ChatMessage | undefined {
   const list = getMessages(key, convId);
   return list[list.length - 1];
@@ -593,75 +473,111 @@ export function isConversationActive(key: SpaceKey, convId: string): boolean {
   return activeConversation[key] === convId;
 }
 
+/** 已读为自愈态：内核未确认时静默回滚未读数（下次水合/同步事件亦会对齐），不提示 */
 export function markRead(key: SpaceKey, convId: string): void {
   const conv = findConversation(ensureSpace(key), convId);
-  if (conv) conv.unreadCount = 0;
-  const pluginId = appConversationPluginId(convId);
-  if (pluginId !== null) {
-    // 应用会话：消息 read 批量置真 + 内核 appMarkRead（§20.3）
-    for (const msg of spaces[key]?.appMessages[convId] ?? []) msg.read = true;
-    void messagesApi()
-      ?.appMarkRead(key, pluginId)
-      .catch(() => {});
-    return;
-  }
+  if (!conv) return;
+  const prev = conv.unreadCount;
+  conv.unreadCount = 0;
   void messagesApi()
     ?.markRead(key, convId)
-    .catch(() => {});
+    .catch(() => {
+      const cur = spaces[key]?.conversations.find((c) => c.id === convId);
+      // 期间新到的消息会抬高未读：回滚取较大者，不吞新未读
+      if (cur) cur.unreadCount = Math.max(cur.unreadCount, prev);
+    });
 }
 
+/** 草稿为连续改写态：仅当用户未继续输入（本地值仍为本次写入）才回滚，不提示 */
 export function setDraft(key: SpaceKey, convId: string, draft: string): void {
   const conv = findConversation(ensureSpace(key), convId);
-  if (conv) conv.draft = draft;
+  if (!conv) return;
+  const prev = conv.draft;
+  conv.draft = draft;
   void messagesApi()
     ?.setDraft(key, convId, draft)
-    .catch(() => {});
+    .catch(() => {
+      if (conv.draft === draft) conv.draft = prev;
+    });
 }
 
 export function togglePin(key: SpaceKey, convId: string): void {
   const conv = findConversation(ensureSpace(key), convId);
-  if (conv) conv.pinnedAt = conv.pinnedAt > 0 ? 0 : Date.now();
+  if (!conv) return;
+  const prev = conv.pinnedAt;
+  conv.pinnedAt = prev > 0 ? 0 : Date.now();
   void messagesApi()
     ?.togglePin(key, convId)
-    .catch(() => {});
+    .catch(() => {
+      const cur = spaces[key]?.conversations.find((c) => c.id === convId);
+      if (cur) cur.pinnedAt = prev;
+      notifyWriteError('置顶操作失败，请重试');
+    });
 }
 
 export function toggleMute(key: SpaceKey, convId: string): void {
   const conv = findConversation(ensureSpace(key), convId);
-  if (conv) conv.muted = !conv.muted;
+  if (!conv) return;
+  const prev = conv.muted;
+  conv.muted = !prev;
   void messagesApi()
     ?.toggleMute(key, convId)
-    .catch(() => {});
+    .catch(() => {
+      const cur = spaces[key]?.conversations.find((c) => c.id === convId);
+      if (cur) cur.muted = prev;
+      notifyWriteError('免打扰设置失败，请重试');
+    });
 }
 
-/** 清空聊天记录：仅删本地消息，保留会话入口（§5.1） */
+/** 清空聊天记录：仅删本地消息，保留会话入口（§5.1）；内核未确认即回滚 */
 export function clearMessages(key: SpaceKey, convId: string): void {
   const space = ensureSpace(key);
-  space.messages[convId] = [];
+  const prevMessages = space.messages[convId] ?? [];
   const conv = findConversation(space, convId);
+  const prevUnread = conv?.unreadCount ?? 0;
+  space.messages[convId] = [];
   if (conv) conv.unreadCount = 0;
   void messagesApi()
     ?.clear(key, convId)
-    .catch(() => {});
+    .catch(() => {
+      const cur = spaces[key];
+      if (cur) {
+        // 回滚与期间新到的消息合并（按 id 去重，原消息在前）
+        const existing = cur.messages[convId] ?? [];
+        const existingIds = new Set(existing.map((m) => m.id));
+        cur.messages[convId] = [...prevMessages.filter((m) => !existingIds.has(m.id)), ...existing];
+        const curConv = cur.conversations.find((c) => c.id === convId);
+        if (curConv) curConv.unreadCount = Math.max(curConv.unreadCount, prevUnread);
+      }
+      notifyWriteError('清空聊天记录失败，请重试');
+    });
 }
 
-/** 删除会话：仅删除列表入口，消息随会话一并移除（§5.1；应用会话走 appDeleteConversation，§20.7） */
+/**
+ * 删除会话：仅删除列表入口，消息随会话一并移除（§5.1）。
+ * 内核未确认即回滚——否则本地已删、内核仍在，下次水合（内核快照为权威）
+ * 会把会话静默复活且无任何提示。
+ */
 export function deleteConversation(key: SpaceKey, convId: string): void {
   const space = ensureSpace(key);
+  const index = space.conversations.findIndex((c) => c.id === convId);
+  const removed = index >= 0 ? space.conversations[index] : undefined;
+  const removedMessages = space.messages[convId];
+  const wasActive = activeConversation[key] === convId;
   space.conversations = space.conversations.filter((c) => c.id !== convId);
   delete space.messages[convId];
-  delete space.appMessages[convId];
-  if (activeConversation[key] === convId) delete activeConversation[key];
-  const pluginId = appConversationPluginId(convId);
-  if (pluginId !== null) {
-    void messagesApi()
-      ?.appDeleteConversation(key, pluginId)
-      .catch(() => {});
-    return;
-  }
+  if (wasActive) delete activeConversation[key];
   void messagesApi()
     ?.deleteConversation(key, convId)
-    .catch(() => {});
+    .catch(() => {
+      const cur = spaces[key];
+      if (cur && removed && !cur.conversations.some((c) => c.id === convId)) {
+        cur.conversations.splice(Math.min(index, cur.conversations.length), 0, removed);
+      }
+      if (cur && removedMessages && !cur.messages[convId]) cur.messages[convId] = removedMessages;
+      if (wasActive && !activeConversation[key]) activeConversation[key] = convId;
+      notifyWriteError('删除会话失败，请重试');
+    });
 }
 
 /** 找到或创建与 peerId 的 1:1 会话（通讯录「发送消息」跳转用），返回会话 id（确定性 `dm:{peerId}`） */
@@ -741,24 +657,37 @@ export function resendMessage(key: SpaceKey, convId: string, messageId: string):
     .catch(() => setStatus(space, convId, messageId, 'failed'));
 }
 
-/** 撤回：仅发送后 2 分钟内允许（§9.1），返回是否成功 */
+/** 撤回：仅发送后 2 分钟内允许（§9.1），返回是否成功；内核未确认即回滚 */
 export function recallMessage(key: SpaceKey, convId: string, messageId: string): boolean {
   const msg = ensureSpace(key).messages[convId]?.find((m) => m.id === messageId);
   if (!msg || msg.recalled || Date.now() - msg.createdAt > 2 * MIN) return false;
   msg.recalled = true;
   void messagesApi()
     ?.recall(key, convId, messageId)
-    .catch(() => {});
+    .catch(() => {
+      const cur = spaces[key]?.messages[convId]?.find((m) => m.id === messageId);
+      if (cur) cur.recalled = false;
+      notifyWriteError('撤回失败，请重试');
+    });
   return true;
 }
 
-/** 删除消息：仅本地删除（§5.2） */
+/** 删除消息：仅本地删除（§5.2）；内核未确认即回滚（与期间新到消息按时间归位） */
 export function deleteMessage(key: SpaceKey, convId: string, messageId: string): void {
   const space = ensureSpace(key);
-  space.messages[convId] = (space.messages[convId] ?? []).filter((m) => m.id !== messageId);
+  const prev = space.messages[convId] ?? [];
+  const removed = prev.find((m) => m.id === messageId);
+  space.messages[convId] = prev.filter((m) => m.id !== messageId);
   void messagesApi()
     ?.deleteMessage(key, convId, messageId)
-    .catch(() => {});
+    .catch(() => {
+      const cur = spaces[key];
+      if (!cur || !removed) return;
+      const existing = cur.messages[convId] ?? [];
+      if (existing.some((m) => m.id === messageId)) return;
+      cur.messages[convId] = [...existing, removed].sort((a, b) => a.createdAt - b.createdAt);
+      notifyWriteError('删除消息失败，请重试');
+    });
 }
 
 // ---------- 展示辅助 ----------
@@ -816,49 +745,28 @@ export function formatDividerTime(ts: number): string {
   return `${d.getMonth() + 1}月${d.getDate()}日 ${hhmm}`;
 }
 
-/** 未读聚合口径：免打扰会话不计；被屏蔽的应用会话同样抑制（屏蔽为本地持久化状态） */
-function isUnreadSuppressed(key: SpaceKey, conv: Conversation): boolean {
-  if (conv.muted) return true;
-  const pluginId = appConversationPluginId(conv.id);
-  return pluginId !== null && isAppConversationBlocked(key, pluginId);
-}
-
-/** 全部空间未读总数（免打扰/已屏蔽会话不计入角标，§5.1） */
+/** 全部空间未读总数（免打扰会话不计入角标，§5.1；供插件内列表 UI 使用） */
 export const totalUnread = computed(() => {
   let total = 0;
   for (const key of Object.keys(spaces)) {
     for (const conv of spaces[key].conversations) {
-      if (!isUnreadSuppressed(key, conv)) total += conv.unreadCount;
+      if (!conv.muted) total += conv.unreadCount;
     }
   }
   return total;
 });
 
-/** 某空间是否有未读消息（免打扰/已屏蔽会话不计；首次访问触发该空间水合，
+/** 某空间是否有未读消息（免打扰会话不计；首次访问触发该空间水合，
  *  与 contactsOf 同模式——在 computed/渲染中调用即可保持响应式） */
 export function hasUnreadMessages(key: SpaceKey): boolean {
-  return ensureSpace(key).conversations.some((conv) => !isUnreadSuppressed(key, conv) && conv.unreadCount > 0);
+  return ensureSpace(key).conversations.some((conv) => !conv.muted && conv.unreadCount > 0);
 }
 
-/** 某空间未读总数（免打扰/已屏蔽会话不计；角标按空间隔离，不用全局 totalUnread） */
+/** 某空间未读总数（免打扰会话不计；角标按空间隔离，不用全局 totalUnread） */
 export function unreadCountOf(key: SpaceKey): number {
   let total = 0;
   for (const conv of ensureSpace(key).conversations) {
-    if (!isUnreadSuppressed(key, conv)) total += conv.unreadCount;
+    if (!conv.muted) total += conv.unreadCount;
   }
   return total;
 }
-
-// 未读数对外双通道（§7.1）：document.title 前缀 + 系统徽标（F4，
-// 经 system-set-badge 命令桥到 dock/任务栏；非 Tauri 或平台不支持时静默跳过）
-watch(
-  totalUnread,
-  (n) => {
-    if (typeof document !== 'undefined') {
-      document.title = n > 0 ? `(${n > 99 ? '…' : n}) 星火 Spark` : '星火 Spark';
-    }
-    // 运行期静默（平台不支持为 no-op）；开发期 bug（命令未注册/参数错）留线索
-    void systemApi()?.setBadge(n).catch((e) => console.warn('[badge] setBadge 失败', e));
-  },
-  { immediate: true }
-);

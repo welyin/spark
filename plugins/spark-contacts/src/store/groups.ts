@@ -1,20 +1,20 @@
 /**
  * 分组（个人空间扁平一层；组织空间树形，仅管理员改结构、任何人同级拖拽排序）。
- * 依赖 store（contactsOf/contactsApi）与 queries（profileOf）。
+ * 依赖 store（contactsOf/contactsApi）与 queries（profileOf/updateProfile）。
  */
 import type { ContactGroupDef, ContactProfile, OrgGroupNode, SpaceContacts } from './types';
 import { contactsApi, contactsOf } from './store';
-import { profileOf } from './queries';
+import { profileOf, updateProfile } from './queries';
 
-/** 把空间内所有资料中指向 groupId 的分组归属重置为未分组 */
-const resetGroupMembership = (space: SpaceContacts, groupIds: string[]): void => {
-  const strip = (profile: ContactProfile) => {
+/** 把空间内所有资料中指向 groupIds 的分组归属重置为未分组（逐脏项经 updateProfile 持久化） */
+const resetGroupMembership = (spaceKey: string, space: SpaceContacts, groupIds: string[]): void => {
+  const strip = (rootId: string, profile: ContactProfile) => {
     if (groupIds.includes(profile.groupId)) {
-      profile.groupId = '';
+      updateProfile(spaceKey, rootId, { groupId: '' });
     }
   };
-  space.friends.forEach(strip);
-  Object.values(space.memberExtras).forEach(strip);
+  space.friends.forEach((friend) => strip(friend.rootId, friend));
+  Object.entries(space.memberExtras).forEach(([rootId, profile]) => strip(rootId, profile));
 };
 
 /** 设置联系人所属分组（'' = 未分组） */
@@ -55,7 +55,7 @@ export function renameGroup(spaceKey: string, groupId: string, name: string): vo
 export function deleteGroup(spaceKey: string, groupId: string): void {
   const space = contactsOf(spaceKey);
   space.groups = space.groups.filter((item) => item.id !== groupId);
-  resetGroupMembership(space, [groupId]);
+  resetGroupMembership(spaceKey, space, [groupId]);
   contactsApi()
     ?.groupDelete(spaceKey, groupId)
     .catch(() => {});
@@ -145,7 +145,7 @@ export function deleteOrgGroup(spaceKey: string, id: string): void {
   }
   const index = found.siblings.findIndex((item) => item.id === id);
   found.siblings.splice(index, 1, ...found.node.children);
-  resetGroupMembership(space, collectOrgIds(found.node));
+  resetGroupMembership(spaceKey, space, collectOrgIds(found.node));
   contactsApi()
     ?.orgGroupDelete(spaceKey, id)
     .catch(() => {});
