@@ -8,7 +8,7 @@
   "category": "social",
   "icon": "assets/icon.svg",
   "supportedSpaces": ["personal"],
-  "affairTypes": ["discussion", "vote", "budget", "topic"],
+  "affairTypes": ["spark-affairs:topic"],
   "views": [
     { "id": "default", "type": "app", "title": "公共议题" },
     { "id": "affair-card", "type": "message-card", "title": "议题卡片" }

@@ -371,16 +371,15 @@ export class AffairsService {
     return this.submitOperation(affairId, { kind: 'contribution', payload: { text: text.trim() } });
   }
 
-  /** 投票（插件语义载荷；一人一票不加权，identityMode 由用户自选） */
+  /** 投票（插件语义载荷；一人一票不加权） */
   async submitVote(
     affairId: string,
     targetOpHash: string,
-    choice: 'for' | 'against' | 'abstain',
-    identityMode: 'contextual' | 'public'
+    choice: 'for' | 'against' | 'abstain'
   ): Promise<{ opHash: string; status: AffairOpStatus }> {
     return this.submitOperation(affairId, {
       kind: 'vote',
-      payload: { targetOpHash, choice, identityMode }
+      payload: { targetOpHash, choice }
     });
   }
 

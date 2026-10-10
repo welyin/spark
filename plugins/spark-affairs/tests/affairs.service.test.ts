@@ -204,15 +204,15 @@ describe('spark-affairs service: operations', () => {
     expect(affairs.submitOp).not.toHaveBeenCalled();
   });
 
-  it('submits vote carrying target hash, choice and identity mode', async () => {
+  it('submits vote carrying target hash and choice', async () => {
     const { sdk, affairs } = createMockSdk();
     const service = new AffairsService(sdk as any);
 
-    await service.submitVote(AFFAIR_ID, 'cd'.repeat(32), 'for', 'public');
+    await service.submitVote(AFFAIR_ID, 'cd'.repeat(32), 'for');
 
     const op = affairs.submitOp.mock.calls[0][0] as Record<string, any>;
     expect(op.opType).toBe('content');
-    expect(op.payload).toEqual({ kind: 'vote', targetOpHash: 'cd'.repeat(32), choice: 'for', identityMode: 'public' });
+    expect(op.payload).toEqual({ kind: 'vote', targetOpHash: 'cd'.repeat(32), choice: 'for' });
   });
 });
 

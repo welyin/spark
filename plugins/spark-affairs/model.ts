@@ -113,8 +113,12 @@ export type VotePayload = {
   /** 投票对象：目标贡献或决议提议的操作哈希 */
   targetOpHash: string;
   choice: 'for' | 'against' | 'abstain';
-  /** 票权身份：上下文身份（默认，跨事务不可关联）或公共身份（opt-in 公开履历） */
-  identityMode: 'contextual' | 'public';
+  /**
+   * 历史遗留自报标签（2026-10-10 前的投票载荷携带）：无密码学效力——协议
+   * actor 恒为插件域身份，平台无个人/公共身份签名面，不据此计入任何公开
+   * 履历。新投票不再携带本字段，仅为读取旧日志保留。
+   */
+  identityMode?: 'contextual' | 'public';
 };
 
 export type CommentPayload = {
@@ -717,14 +721,15 @@ export function toRulesChainView(raw: unknown): RulesChainView | null {
       ? [{ seq, basisOpHash, rulesHash, effectiveMs: asNumber(entry.effectiveMs) }]
       : [];
   });
-  const changes = (Array.isArray(record.changes) ? record.changes : []).flatMap((item) => {
+  const changes = (Array.isArray(record.changes) ? record.changes : []).flatMap((item): RuleChangeView[] => {
     const entry = asRecord(item);
     const opHash = asString(entry?.opHash);
     const fate = asString(entry?.fate);
     const reason = asString(entry?.reason);
-    return entry && opHash !== null && (fate === 'pending' || fate === 'rejected') && reason !== null
-      ? [{ opHash, fate, reason }]
-      : [];
+    if (!entry || opHash === null || reason === null || (fate !== 'pending' && fate !== 'rejected')) {
+      return [];
+    }
+    return [{ opHash, fate, reason }];
   });
   return { currentSeq, currentRulesHash, versions, changes };
 }
